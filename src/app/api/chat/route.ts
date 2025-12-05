@@ -2,6 +2,9 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 import { NextRequest, NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
+import { verifyIdToken, extractBearerToken } from '@/lib/firebase-admin';
+import { getUserDocument, incrementMessageCount, createUserDocument } from '@/lib/firestore';
+import { SUBSCRIPTION_TIERS, canUseModel, canSendMessage } from '@/config/subscription';
 
 // Initialize AI clients lazily
 let geminiClient: GoogleGenerativeAI | null = null;
@@ -52,14 +55,15 @@ interface ChatRequest {
     role: 'user' | 'assistant';
     content: string;
   }>;
-  aiProvider?: 'gemini' | 'claude' | 'openai' | 'deepseek';
+  aiProvider?: 'deepseek' | 'gemini' | 'claude' | 'openai';
   aiModel?: string;
 }
 
 export async function POST(request: NextRequest) {
   try {
+    // Parse request body first
     const body: ChatRequest = await request.json();
-    const { message, systemPrompt, conversationHistory, aiProvider = 'gemini', aiModel } = body;
+    const { message, systemPrompt, conversationHistory, aiProvider = 'deepseek', aiModel } = body;
 
     if (!message) {
       return NextResponse.json(
@@ -68,24 +72,81 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    console.log(`Using AI provider: ${aiProvider}, model: ${aiModel || 'default'}`);
+    // Check for authentication (optional - allows anonymous users with free tier)
+    const token = extractBearerToken(request.headers.get('Authorization'));
+    let userId: string | null = null;
+    let tier: 'free' | 'pro' | 'max' = 'free';
+    let messagesUsedToday = 0;
+
+    if (token) {
+      const decodedToken = await verifyIdToken(token);
+      if (decodedToken) {
+        userId = decodedToken.uid;
+
+        // Get or create user document
+        let userDoc = await getUserDocument(userId);
+        if (!userDoc && decodedToken.email) {
+          await createUserDocument(userId, decodedToken.email, decodedToken.name || '');
+          userDoc = await getUserDocument(userId);
+        }
+
+        if (userDoc) {
+          tier = userDoc.subscription.tier;
+          messagesUsedToday = userDoc.usage.messagesUsedToday;
+        }
+      }
+    }
+
+    // Check daily message limit
+    const modelToUse = aiModel || getDefaultModel(aiProvider);
+    if (!canSendMessage(tier, messagesUsedToday)) {
+      return NextResponse.json(
+        {
+          error: 'Daily message limit reached',
+          code: 'LIMIT_REACHED',
+          limit: SUBSCRIPTION_TIERS[tier].features.dailyMessageLimit,
+          used: messagesUsedToday,
+        },
+        { status: 429 }
+      );
+    }
+
+    // Check model access
+    if (!canUseModel(tier, modelToUse)) {
+      return NextResponse.json(
+        {
+          error: 'This model requires a Pro or Max subscription',
+          code: 'MODEL_RESTRICTED',
+          model: modelToUse,
+          requiredTier: 'pro',
+        },
+        { status: 403 }
+      );
+    }
+
+    console.log(`Using AI provider: ${aiProvider}, model: ${modelToUse}, tier: ${tier}`);
 
     let responseText: string;
 
     switch (aiProvider) {
       case 'claude':
-        responseText = await handleClaudeChat(message, systemPrompt, conversationHistory, aiModel);
+        responseText = await handleClaudeChat(message, systemPrompt, conversationHistory, modelToUse);
         break;
       case 'openai':
-        responseText = await handleOpenAIChat(message, systemPrompt, conversationHistory, aiModel);
+        responseText = await handleOpenAIChat(message, systemPrompt, conversationHistory, modelToUse);
         break;
       case 'deepseek':
-        responseText = await handleDeepSeekChat(message, systemPrompt, conversationHistory, aiModel);
+        responseText = await handleDeepSeekChat(message, systemPrompt, conversationHistory, modelToUse);
         break;
       case 'gemini':
       default:
-        responseText = await handleGeminiChat(message, systemPrompt, conversationHistory, aiModel);
+        responseText = await handleGeminiChat(message, systemPrompt, conversationHistory, modelToUse);
         break;
+    }
+
+    // Increment message count for authenticated users
+    if (userId) {
+      await incrementMessageCount(userId);
     }
 
     return NextResponse.json({
@@ -102,6 +163,20 @@ export async function POST(request: NextRequest) {
       isMock: true,
       error: errorMessage,
     });
+  }
+}
+
+function getDefaultModel(provider: string): string {
+  switch (provider) {
+    case 'claude':
+      return 'claude-3-5-haiku-20241022';
+    case 'openai':
+      return 'gpt-4o-mini';
+    case 'deepseek':
+      return 'deepseek-chat';
+    case 'gemini':
+    default:
+      return 'gemini-2.0-flash';
   }
 }
 

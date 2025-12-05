@@ -1,7 +1,50 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { verifyIdToken, extractBearerToken } from '@/lib/firebase-admin';
+import { getUserDocument, createUserDocument } from '@/lib/firestore';
+import { SUBSCRIPTION_TIERS } from '@/config/subscription';
 
 export async function POST(request: NextRequest) {
   try {
+    // Check for authentication
+    const token = extractBearerToken(request.headers.get('Authorization'));
+    if (!token) {
+      return NextResponse.json(
+        { error: 'Authentication required', code: 'AUTH_REQUIRED' },
+        { status: 401 }
+      );
+    }
+
+    const decodedToken = await verifyIdToken(token);
+    if (!decodedToken) {
+      return NextResponse.json(
+        { error: 'Invalid token', code: 'INVALID_TOKEN' },
+        { status: 401 }
+      );
+    }
+
+    const userId = decodedToken.uid;
+
+    // Get or create user document
+    let userDoc = await getUserDocument(userId);
+    if (!userDoc && decodedToken.email) {
+      await createUserDocument(userId, decodedToken.email, decodedToken.name || '');
+      userDoc = await getUserDocument(userId);
+    }
+
+    const tier = userDoc?.subscription.tier || 'free';
+
+    // Check if user's tier allows voice cloning
+    if (!SUBSCRIPTION_TIERS[tier].features.voiceCloning) {
+      return NextResponse.json(
+        {
+          error: 'Voice cloning requires a Pro or Max subscription',
+          code: 'FEATURE_RESTRICTED',
+          requiredTier: 'pro',
+        },
+        { status: 403 }
+      );
+    }
+
     const formData = await request.formData();
     const name = formData.get('name') as string;
     const description = formData.get('description') as string;

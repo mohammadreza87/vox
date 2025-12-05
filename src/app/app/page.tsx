@@ -28,9 +28,14 @@ import {
   RotateCcw,
   Trash2,
   Pencil,
-  MoreVertical,
+  Settings,
+  CreditCard,
+  ChevronUp,
 } from 'lucide-react';
 import { cn } from '@/shared/utils/cn';
+import { useSubscription } from '@/contexts/SubscriptionContext';
+import { useCustomContacts } from '@/contexts/CustomContactsContext';
+import { auth } from '@/lib/firebase';
 
 type TabType = 'contacts' | 'chats';
 
@@ -45,6 +50,8 @@ export default function AppPage() {
 function AppContent() {
   const { user, logout } = useAuth();
   const { chats, activeChat, setActiveChat, startChat, addMessage, updateMessage, deleteChat, getChatByContactId } = useChat();
+  const { canEditDefaultBots, showUpgradeModal, tier } = useSubscription();
+  const { customContacts, deleteContact: deleteCustomContact, addContact } = useCustomContacts();
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -56,22 +63,10 @@ function AppContent() {
   const [autoSpeak, setAutoSpeak] = useState(true);
   const [showMobileSidebar, setShowMobileSidebar] = useState(true);
   const [initialContactLoaded, setInitialContactLoaded] = useState(false);
+  const [showUserMenu, setShowUserMenu] = useState(false);
+  const userMenuRef = useRef<HTMLDivElement>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
-
-  // Load custom contacts from localStorage
-  const [customContacts, setCustomContacts] = useState<PreMadeContactConfig[]>([]);
-
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const saved = JSON.parse(localStorage.getItem('customContacts') || '[]');
-        setCustomContacts(saved);
-      } catch (e) {
-        console.error('Error loading custom contacts:', e);
-      }
-    }
-  }, []);
 
   const allContacts = [...PRE_MADE_CONTACTS, ...customContacts];
 
@@ -120,6 +115,17 @@ function AppContent() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  // Close user menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (userMenuRef.current && !userMenuRef.current.contains(event.target as Node)) {
+        setShowUserMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   // Handle transcript from voice recording
   useEffect(() => {
@@ -221,9 +227,15 @@ function AppContent() {
         content: msg.content,
       }));
 
+      // Get auth token for subscription validation
+      const token = await auth.currentUser?.getIdToken();
+
       const response = await fetch('/api/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token && { 'Authorization': `Bearer ${token}` }),
+        },
         body: JSON.stringify({
           message: content,
           contactId: selectedContact.id,
@@ -319,24 +331,19 @@ function AppContent() {
   const handleDeleteContact = useCallback((contactId: string, e: React.MouseEvent) => {
     e.stopPropagation();
     if (confirm('Are you sure you want to delete this contact? This will also delete all associated chats.')) {
-      // Remove from localStorage
-      const updatedContacts = customContacts.filter(c => c.id !== contactId);
-      localStorage.setItem('customContacts', JSON.stringify(updatedContacts));
-      setCustomContacts(updatedContacts);
+      deleteCustomContact(contactId);
 
-      // Clear selection if this contact was selected
       if (selectedContact?.id === contactId) {
         setSelectedContact(null);
         setMessages([]);
       }
 
-      // Delete associated chat
       const associatedChat = getChatByContactId(contactId);
       if (associatedChat) {
         deleteChat(associatedChat.id);
       }
     }
-  }, [customContacts, selectedContact, getChatByContactId, deleteChat]);
+  }, [selectedContact, getChatByContactId, deleteChat, deleteCustomContact]);
 
   // Handle edit custom contact
   const handleEditContact = useCallback((contactId: string, e: React.MouseEvent) => {
@@ -350,14 +357,15 @@ function AppContent() {
   }, []);
 
   // Handle edit for both custom and pre-made contacts
-  // Pre-made contacts will be copied to custom contacts when edited
   const handleEditAnyContact = useCallback((contact: PreMadeContactConfig, e: React.MouseEvent) => {
     e.stopPropagation();
     if (isCustomContact(contact.id)) {
-      // Direct edit for custom contacts
       router.push(`/create?edit=${contact.id}`);
     } else {
-      // Copy pre-made contact to custom and edit
+      if (!canEditDefaultBots) {
+        showUpgradeModal('edit-default-bots');
+        return;
+      }
       const customId = `custom-${Date.now()}`;
       const customContact = {
         ...contact,
@@ -365,13 +373,10 @@ function AppContent() {
         isPreMade: false,
         createdAt: new Date().toISOString(),
       };
-      const existingContacts = JSON.parse(localStorage.getItem('customContacts') || '[]');
-      existingContacts.push(customContact);
-      localStorage.setItem('customContacts', JSON.stringify(existingContacts));
-      setCustomContacts(existingContacts);
+      addContact(customContact);
       router.push(`/create?edit=${customId}`);
     }
-  }, [router, isCustomContact]);
+  }, [router, isCustomContact, canEditDefaultBots, showUpgradeModal, addContact]);
 
   const handleStartRecording = () => {
     if (isVoiceSupported) {
@@ -399,341 +404,391 @@ function AppContent() {
   };
 
   return (
-    <div className="h-full flex bg-[var(--background)] transition-colors overflow-hidden" style={{ height: '100dvh' }}>
+    <div className="h-full flex overflow-hidden relative" style={{ height: '100dvh' }}>
+      {/* Animated gradient background */}
+      <div className="glass-background" />
+
       {/* Sidebar */}
       <div className={cn(
-        "w-full md:w-80 lg:w-96 border-r border-[var(--foreground)]/10 flex flex-col bg-[var(--background)] transition-all",
+        "w-full md:w-80 lg:w-96 flex flex-col transition-all z-10",
         showMobileSidebar ? "flex" : "hidden md:flex"
       )}>
-        {/* Sidebar Header */}
-        <div className="p-4 border-b border-[var(--foreground)]/10">
-          <div className="flex items-center justify-between mb-4">
-            <Link href="/" className="flex items-center gap-2">
-              <div className="w-10 h-10 bg-[#FF6D1F] rounded-xl flex items-center justify-center">
-                <Volume2 className="w-6 h-6 text-white" />
-              </div>
-              <span className="text-xl font-bold text-[var(--foreground)]">Vox</span>
-            </Link>
-            <div className="flex items-center gap-2">
+        {/* Sidebar Glass Panel */}
+        <div className="m-2 md:m-3 flex-1 flex flex-col glass rounded-2xl overflow-hidden">
+          {/* Sidebar Header */}
+          <div className="p-4 border-b border-white/10">
+            <div className="flex items-center justify-between mb-4">
+              <Link href="/" className="flex items-center gap-2 group">
+                <div className="w-10 h-10 bg-gradient-to-br from-[#FF6D1F] to-[#ff8a4c] rounded-xl flex items-center justify-center shadow-lg shadow-[#FF6D1F]/30 group-hover:shadow-[#FF6D1F]/50 transition-shadow">
+                  <Volume2 className="w-6 h-6 text-white" />
+                </div>
+                <span className="text-xl font-bold text-[var(--foreground)]">Vox</span>
+              </Link>
               <ThemeToggle />
+            </div>
+
+            {/* Tabs */}
+            <div className="flex glass-light rounded-xl p-1">
               <button
-                onClick={logout}
-                className="w-10 h-10 rounded-full bg-[var(--color-beige)] flex items-center justify-center hover:opacity-80 transition-all"
-                title="Sign out"
+                onClick={() => setActiveTab('chats')}
+                className={cn(
+                  "flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg font-medium transition-all",
+                  activeTab === 'chats'
+                    ? "btn-primary"
+                    : "text-[var(--foreground)]/60 hover:text-[var(--foreground)] hover:bg-white/10"
+                )}
               >
-                <LogOut className="w-5 h-5 text-[var(--foreground)]" />
+                <MessageCircle className="w-4 h-4" />
+                Chats
+                {chats.length > 0 && (
+                  <span className={cn(
+                    "text-xs px-2 py-0.5 rounded-full",
+                    activeTab === 'chats' ? "bg-white/20 text-white" : "bg-[var(--foreground)]/10 text-[var(--foreground)]"
+                  )}>
+                    {chats.length}
+                  </span>
+                )}
+              </button>
+              <button
+                onClick={() => setActiveTab('contacts')}
+                className={cn(
+                  "flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg font-medium transition-all",
+                  activeTab === 'contacts'
+                    ? "btn-primary"
+                    : "text-[var(--foreground)]/60 hover:text-[var(--foreground)] hover:bg-white/10"
+                )}
+              >
+                <Users className="w-4 h-4" />
+                Contacts
               </button>
             </div>
           </div>
 
-          {/* Tabs */}
-          <div className="flex bg-[var(--color-beige)] rounded-xl p-1">
-            <button
-              onClick={() => setActiveTab('chats')}
-              className={cn(
-                "flex-1 flex items-center justify-center gap-2 py-2 px-4 rounded-lg font-medium transition-all",
-                activeTab === 'chats'
-                  ? "bg-[#FF6D1F] text-white"
-                  : "text-[var(--foreground)]/60 hover:text-[var(--foreground)]"
-              )}
-            >
-              <MessageCircle className="w-4 h-4" />
-              Chats
-              {chats.length > 0 && (
-                <span className={cn(
-                  "text-xs px-2 py-0.5 rounded-full",
-                  activeTab === 'chats' ? "bg-white/20 text-white" : "bg-[var(--foreground)]/20 text-[var(--foreground)]"
-                )}>
-                  {chats.length}
-                </span>
-              )}
-            </button>
-            <button
-              onClick={() => setActiveTab('contacts')}
-              className={cn(
-                "flex-1 flex items-center justify-center gap-2 py-2 px-4 rounded-lg font-medium transition-all",
-                activeTab === 'contacts'
-                  ? "bg-[#FF6D1F] text-white"
-                  : "text-[var(--foreground)]/60 hover:text-[var(--foreground)]"
-              )}
-            >
-              <Users className="w-4 h-4" />
-              Contacts
-            </button>
+          {/* Search */}
+          <div className="p-4">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-[var(--foreground)]/40" />
+              <input
+                type="text"
+                placeholder={activeTab === 'contacts' ? "Search contacts..." : "Search chats..."}
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full pl-10 pr-4 py-2.5 glass-input rounded-xl focus:outline-none text-[var(--foreground)] placeholder-[var(--foreground)]/40 text-sm"
+              />
+            </div>
           </div>
-        </div>
 
-        {/* Search */}
-        <div className="p-4">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-[var(--foreground)]/40" />
-            <input
-              type="text"
-              placeholder={activeTab === 'contacts' ? "Search contacts..." : "Search chats..."}
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-10 pr-4 py-2.5 bg-[var(--color-beige)] border border-[var(--foreground)]/10 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#FF6D1F] text-[var(--foreground)] placeholder-[var(--foreground)]/40 text-sm transition-colors"
-            />
-          </div>
-        </div>
-
-        {/* List */}
-        <div className="flex-1 overflow-y-auto">
-          {activeTab === 'contacts' ? (
-            <div className="px-4 pb-4 space-y-2">
-              {/* Create New Contact Button */}
-              <Link
-                href="/create"
-                className="flex items-center gap-3 p-3 rounded-xl bg-[var(--color-beige)] border border-dashed border-[var(--foreground)]/20 hover:border-[#FF6D1F] transition-all"
-              >
-                <div className="w-12 h-12 rounded-full bg-[#FF6D1F]/10 flex items-center justify-center">
-                  <Plus className="w-6 h-6 text-[#FF6D1F]" />
-                </div>
-                <div>
-                  <p className="font-medium text-[var(--foreground)]">Create Contact</p>
-                  <p className="text-sm text-[var(--foreground)]/60">Add custom AI assistant</p>
-                </div>
-              </Link>
-
-              {/* Contacts List */}
-              {filteredContacts.map(contact => (
-                <div
-                  key={contact.id}
-                  className={cn(
-                    "group w-full flex items-center gap-3 p-3 rounded-xl transition-all",
-                    selectedContact?.id === contact.id
-                      ? "bg-[#FF6D1F]/10 border border-[#FF6D1F]/30"
-                      : "bg-[var(--color-beige)] border border-transparent hover:border-[var(--foreground)]/10"
-                  )}
+          {/* List */}
+          <div className="flex-1 overflow-y-auto px-4 pb-4">
+            {activeTab === 'contacts' ? (
+              <div className="space-y-2">
+                {/* Create New Contact Button */}
+                <Link
+                  href="/create"
+                  className="flex items-center gap-3 p-3 rounded-xl glass-light border border-dashed border-white/20 hover:border-[#FF6D1F]/50 hover:bg-white/10 transition-all group"
                 >
-                  <button
-                    onClick={() => handleSelectContact(contact)}
-                    className="flex items-center gap-3 flex-1 min-w-0 text-left"
+                  <div className="w-12 h-12 rounded-full bg-gradient-to-br from-[#FF6D1F]/20 to-[#ff8a4c]/20 flex items-center justify-center group-hover:from-[#FF6D1F]/30 group-hover:to-[#ff8a4c]/30 transition-colors">
+                    <Plus className="w-6 h-6 text-[#FF6D1F]" />
+                  </div>
+                  <div>
+                    <p className="font-medium text-[var(--foreground)]">Create Contact</p>
+                    <p className="text-sm text-[var(--foreground)]/60">Add custom AI assistant</p>
+                  </div>
+                </Link>
+
+                {/* Contacts List */}
+                {filteredContacts.map(contact => (
+                  <div
+                    key={contact.id}
+                    className={cn(
+                      "group w-full flex items-center gap-3 p-3 rounded-xl transition-all",
+                      selectedContact?.id === contact.id
+                        ? "glass-dark border border-[#FF6D1F]/30 shadow-lg shadow-[#FF6D1F]/10"
+                        : "glass-light hover:bg-white/20"
+                    )}
                   >
-                    <Avatar src={contact.avatarImage} fallback={contact.avatarEmoji} size="md" />
-                    <div className="flex-1 min-w-0">
-                      <p className="font-medium text-[var(--foreground)] truncate">{contact.name}</p>
-                      <p className="text-sm text-[#FF6D1F] truncate">{contact.purpose}</p>
-                    </div>
-                  </button>
-                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                     <button
-                      onClick={(e) => handleEditAnyContact(contact, e)}
-                      className="p-2 rounded-full hover:bg-[var(--foreground)]/10 text-[var(--foreground)]/40 hover:text-[#FF6D1F] transition-all"
-                      title={isCustomContact(contact.id) ? "Edit contact" : "Customize contact"}
+                      onClick={() => handleSelectContact(contact)}
+                      className="flex items-center gap-3 flex-1 min-w-0 text-left"
                     >
-                      <Pencil className="w-4 h-4" />
+                      <Avatar src={contact.avatarImage} fallback={contact.avatarEmoji} size="md" />
+                      <div className="flex-1 min-w-0">
+                        <p className="font-medium text-[var(--foreground)] truncate">{contact.name}</p>
+                        <p className="text-sm text-[#FF6D1F] truncate">{contact.purpose}</p>
+                      </div>
                     </button>
-                    {isCustomContact(contact.id) && (
+                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                       <button
-                        onClick={(e) => handleDeleteContact(contact.id, e)}
-                        className="p-2 rounded-full hover:bg-red-100 dark:hover:bg-red-900/20 text-[var(--foreground)]/40 hover:text-red-500 transition-all"
-                        title="Delete contact"
+                        onClick={(e) => handleEditAnyContact(contact, e)}
+                        className="p-2 rounded-full hover:bg-white/20 text-[var(--foreground)]/40 hover:text-[#FF6D1F] transition-all"
+                        title={isCustomContact(contact.id) ? "Edit contact" : "Customize contact"}
+                      >
+                        <Pencil className="w-4 h-4" />
+                      </button>
+                      {isCustomContact(contact.id) && (
+                        <button
+                          onClick={(e) => handleDeleteContact(contact.id, e)}
+                          className="p-2 rounded-full hover:bg-red-500/20 text-[var(--foreground)]/40 hover:text-red-500 transition-all"
+                          title="Delete contact"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {filteredChats.length === 0 ? (
+                  <div className="text-center py-12">
+                    <div className="w-16 h-16 glass-light rounded-full flex items-center justify-center mx-auto mb-3">
+                      <MessageCircle className="w-8 h-8 text-[var(--foreground)]/30" />
+                    </div>
+                    <p className="text-[var(--foreground)]/60 font-medium">No chats yet</p>
+                    <p className="text-sm text-[var(--foreground)]/40 mt-1">Start a conversation with a contact</p>
+                  </div>
+                ) : (
+                  filteredChats.map(chat => (
+                    <div
+                      key={chat.id}
+                      className={cn(
+                        "group w-full flex items-center gap-3 p-3 rounded-xl transition-all",
+                        activeChat?.id === chat.id
+                          ? "glass-dark border border-[#FF6D1F]/30 shadow-lg shadow-[#FF6D1F]/10"
+                          : "glass-light hover:bg-white/20"
+                      )}
+                    >
+                      <button
+                        onClick={() => handleSelectChat(chat)}
+                        className="flex items-center gap-3 flex-1 min-w-0 text-left"
+                      >
+                        <div className="relative">
+                          <Avatar src={chat.contactImage} fallback={chat.contactEmoji} size="md" />
+                          <div className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 bg-gradient-to-br from-[#FF6D1F] to-[#ff8a4c] rounded-full border-2 border-[var(--glass-bg)]" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between">
+                            <p className="font-medium text-[var(--foreground)] truncate">{chat.contactName}</p>
+                            <span className="text-xs text-[var(--foreground)]/40">{formatTime(chat.lastMessageAt)}</span>
+                          </div>
+                          <p className="text-sm text-[var(--foreground)]/60 truncate">{chat.lastMessage || 'Start chatting...'}</p>
+                        </div>
+                      </button>
+                      <button
+                        onClick={(e) => handleDeleteChat(chat.id, e)}
+                        className="opacity-0 group-hover:opacity-100 p-2 rounded-full hover:bg-red-500/20 text-[var(--foreground)]/40 hover:text-red-500 transition-all"
+                        title="Delete chat"
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="px-4 pb-4 space-y-2">
-              {filteredChats.length === 0 ? (
-                <div className="text-center py-12">
-                  <MessageCircle className="w-12 h-12 text-[var(--foreground)]/20 mx-auto mb-3" />
-                  <p className="text-[var(--foreground)]/60">No chats yet</p>
-                  <p className="text-sm text-[var(--foreground)]/40 mt-1">Start a conversation with a contact</p>
-                </div>
-              ) : (
-                filteredChats.map(chat => (
-                  <div
-                    key={chat.id}
-                    className={cn(
-                      "group w-full flex items-center gap-3 p-3 rounded-xl transition-all",
-                      activeChat?.id === chat.id
-                        ? "bg-[#FF6D1F]/10 border border-[#FF6D1F]/30"
-                        : "bg-[var(--color-beige)] border border-transparent hover:border-[var(--foreground)]/10"
-                    )}
-                  >
-                    <button
-                      onClick={() => handleSelectChat(chat)}
-                      className="flex items-center gap-3 flex-1 min-w-0 text-left"
-                    >
-                      <div className="relative">
-                        <Avatar src={chat.contactImage} fallback={chat.contactEmoji} size="md" />
-                        <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-[#FF6D1F] rounded-full border-2 border-[var(--background)]" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center justify-between">
-                          <p className="font-medium text-[var(--foreground)] truncate">{chat.contactName}</p>
-                          <span className="text-xs text-[var(--foreground)]/40">{formatTime(chat.lastMessageAt)}</span>
-                        </div>
-                        <p className="text-sm text-[var(--foreground)]/60 truncate">{chat.lastMessage || 'Start chatting...'}</p>
-                      </div>
-                    </button>
-                    <button
-                      onClick={(e) => handleDeleteChat(chat.id, e)}
-                      className="opacity-0 group-hover:opacity-100 p-2 rounded-full hover:bg-red-100 dark:hover:bg-red-900/20 text-[var(--foreground)]/40 hover:text-red-500 transition-all"
-                      title="Delete chat"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                ))
-              )}
-            </div>
-          )}
-        </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+          </div>
 
-        {/* User Info */}
-        <div className="p-4 border-t border-[var(--foreground)]/10">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-[var(--color-beige)] flex items-center justify-center">
-              <span className="text-lg">{user?.displayName?.[0] || user?.email?.[0] || '?'}</span>
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="font-medium text-[var(--foreground)] truncate">{user?.displayName || 'User'}</p>
-              <p className="text-xs text-[var(--foreground)]/60 truncate">{user?.email}</p>
-            </div>
+          {/* User Info with Dropdown */}
+          <div className="p-4 border-t border-white/10 relative" ref={userMenuRef}>
+            {/* Dropdown Menu (opens upward) */}
+            {showUserMenu && (
+              <div className="absolute bottom-full left-4 right-4 mb-2 glass-dark rounded-xl shadow-xl overflow-hidden z-50">
+                <button
+                  onClick={() => {
+                    setShowUserMenu(false);
+                    router.push('/settings');
+                  }}
+                  className="w-full flex items-center gap-3 px-4 py-3 hover:bg-white/10 transition-colors text-left"
+                >
+                  <Settings className="w-5 h-5 text-[var(--foreground)]/60" />
+                  <span className="text-[var(--foreground)]">Settings</span>
+                </button>
+                <button
+                  onClick={() => {
+                    setShowUserMenu(false);
+                    router.push('/pricing');
+                  }}
+                  className="w-full flex items-center gap-3 px-4 py-3 hover:bg-white/10 transition-colors text-left border-t border-white/5"
+                >
+                  <CreditCard className="w-5 h-5 text-[var(--foreground)]/60" />
+                  <div className="flex-1">
+                    <span className="text-[var(--foreground)]">Plans</span>
+                    <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-[#FF6D1F]/20 text-[#FF6D1F] capitalize">{tier}</span>
+                  </div>
+                </button>
+                <button
+                  onClick={() => {
+                    setShowUserMenu(false);
+                    logout();
+                  }}
+                  className="w-full flex items-center gap-3 px-4 py-3 hover:bg-red-500/10 transition-colors text-left border-t border-white/5"
+                >
+                  <LogOut className="w-5 h-5 text-red-500" />
+                  <span className="text-red-500">Logout</span>
+                </button>
+              </div>
+            )}
+
+            {/* User Info Button */}
+            <button
+              onClick={() => setShowUserMenu(!showUserMenu)}
+              className="w-full flex items-center gap-3 p-2 rounded-xl hover:bg-white/10 transition-colors"
+            >
+              <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#FF6D1F] to-[#ff8a4c] flex items-center justify-center text-white font-medium shadow-lg shadow-[#FF6D1F]/20">
+                {user?.displayName?.[0] || user?.email?.[0] || '?'}
+              </div>
+              <div className="flex-1 min-w-0 text-left">
+                <p className="font-medium text-[var(--foreground)] truncate">{user?.displayName || 'User'}</p>
+                <p className="text-xs text-[var(--foreground)]/60 truncate">{user?.email}</p>
+              </div>
+              <ChevronUp className={cn(
+                "w-5 h-5 text-[var(--foreground)]/40 transition-transform",
+                showUserMenu && "rotate-180"
+              )} />
+            </button>
           </div>
         </div>
       </div>
 
       {/* Chat Area */}
       <div className={cn(
-        "flex-1 flex flex-col bg-[var(--background)]",
+        "flex-1 flex flex-col z-10",
         !showMobileSidebar ? "flex" : "hidden md:flex"
       )}>
-        {selectedContact ? (
-          <>
-            {/* Chat Header */}
-            <div className="p-4 border-b border-[var(--foreground)]/10 flex items-center gap-3">
-              <button
-                onClick={() => setShowMobileSidebar(true)}
-                className="md:hidden w-10 h-10 rounded-full bg-[var(--color-beige)] flex items-center justify-center"
-              >
-                <ArrowLeft className="w-5 h-5 text-[var(--foreground)]" />
-              </button>
-              <Avatar src={selectedContact.avatarImage} fallback={selectedContact.avatarEmoji} size="md" />
-              <button
-                onClick={(e) => handleEditAnyContact(selectedContact, e)}
-                className="flex-1 text-left hover:opacity-70 transition-opacity group"
-                title={isCustomContact(selectedContact.id) ? "Click to edit" : "Click to customize"}
-              >
-                <div className="flex items-center gap-2">
-                  <h2 className="font-bold text-[var(--foreground)]">{selectedContact.name}</h2>
-                  <Pencil className="w-3 h-3 text-[var(--foreground)]/40 opacity-0 group-hover:opacity-100 transition-opacity" />
-                </div>
-                <p className="text-sm text-[#FF6D1F]">{selectedContact.purpose}</p>
-              </button>
-              <button
-                onClick={() => setAutoSpeak(!autoSpeak)}
-                className={cn(
-                  "flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium transition-colors",
-                  autoSpeak ? "bg-[#FF6D1F]/10 text-[#FF6D1F]" : "bg-[var(--color-beige)] text-[var(--foreground)]/60"
-                )}
-              >
-                {autoSpeak ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
-                {autoSpeak ? 'On' : 'Off'}
-              </button>
-            </div>
-
-            {/* Messages */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-4">
-              {messages.map(message => (
-                <div
-                  key={message.id}
+        <div className="m-2 md:m-3 md:ml-0 flex-1 flex flex-col glass rounded-2xl overflow-hidden">
+          {selectedContact ? (
+            <>
+              {/* Chat Header */}
+              <div className="p-4 border-b border-white/10 flex items-center gap-3">
+                <button
+                  onClick={() => setShowMobileSidebar(true)}
+                  className="md:hidden w-10 h-10 rounded-full glass-light flex items-center justify-center hover:bg-white/20 transition-colors"
+                >
+                  <ArrowLeft className="w-5 h-5 text-[var(--foreground)]" />
+                </button>
+                <Avatar src={selectedContact.avatarImage} fallback={selectedContact.avatarEmoji} size="md" />
+                <button
+                  onClick={(e) => handleEditAnyContact(selectedContact, e)}
+                  className="flex-1 text-left hover:opacity-70 transition-opacity group"
+                  title={isCustomContact(selectedContact.id) ? "Click to edit" : "Click to customize"}
+                >
+                  <div className="flex items-center gap-2">
+                    <h2 className="font-bold text-[var(--foreground)]">{selectedContact.name}</h2>
+                    <Pencil className="w-3 h-3 text-[var(--foreground)]/40 opacity-0 group-hover:opacity-100 transition-opacity" />
+                  </div>
+                  <p className="text-sm text-[#FF6D1F]">{selectedContact.purpose}</p>
+                </button>
+                <button
+                  onClick={() => setAutoSpeak(!autoSpeak)}
                   className={cn(
-                    "flex gap-3 group",
-                    message.role === 'user' ? "flex-row-reverse" : "flex-row"
+                    "flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-all",
+                    autoSpeak
+                      ? "btn-primary"
+                      : "glass-light text-[var(--foreground)]/60 hover:bg-white/20"
                   )}
                 >
-                  {message.role === 'user' ? (
-                    <div className="w-10 h-10 rounded-full bg-[var(--color-beige)] flex items-center justify-center flex-shrink-0">
-                      <span className="text-sm">{user?.displayName?.[0] || '?'}</span>
-                    </div>
-                  ) : (
-                    <Avatar src={selectedContact.avatarImage} fallback={selectedContact.avatarEmoji} size="sm" className="flex-shrink-0" />
-                  )}
-                  <div className="flex flex-col gap-1 max-w-[75%]">
-                    <div
-                      className={cn(
-                        "rounded-2xl px-4 py-3",
-                        message.role === 'user'
-                          ? "bg-[#FF6D1F] text-white rounded-br-md"
-                          : "bg-[var(--color-beige)] text-[var(--foreground)] rounded-bl-md"
-                      )}
-                    >
-                      <p className="text-sm leading-relaxed whitespace-pre-wrap">{message.content}</p>
-                    </div>
-                    {/* Replay button for assistant messages */}
-                    {message.role === 'assistant' && (
-                      <button
-                        onClick={() => handleReplayAudio(message)}
-                        disabled={isSpeaking && playingMessageId !== message.id}
-                        className={cn(
-                          "self-start flex items-center gap-1.5 px-2 py-1 rounded-full text-xs transition-all",
-                          playingMessageId === message.id
-                            ? "bg-[#FF6D1F] text-white"
-                            : "opacity-0 group-hover:opacity-100 bg-[var(--color-beige)] text-[var(--foreground)]/60 hover:text-[#FF6D1F]",
-                          message.audioUrl && "border border-[#FF6D1F]/30"
-                        )}
-                        title={message.audioUrl ? "Replay audio (cached)" : "Play audio"}
-                      >
-                        {playingMessageId === message.id ? (
-                          <>
-                            <VolumeX className="w-3 h-3" />
-                            Stop
-                          </>
-                        ) : (
-                          <>
-                            <RotateCcw className="w-3 h-3" />
-                            {message.audioUrl ? "Replay" : "Play"}
-                          </>
-                        )}
-                      </button>
-                    )}
-                  </div>
-                </div>
-              ))}
-
-              {isLoading && (
-                <div className="flex items-center gap-3">
-                  <Avatar src={selectedContact.avatarImage} fallback={selectedContact.avatarEmoji} size="sm" />
-                  <div className="bg-[var(--color-beige)] rounded-2xl rounded-bl-md px-4 py-3">
-                    <div className="flex items-center gap-1">
-                      <span className="w-2 h-2 bg-[#FF6D1F] rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                      <span className="w-2 h-2 bg-[#FF6D1F] rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                      <span className="w-2 h-2 bg-[#FF6D1F] rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              <div ref={messagesEndRef} />
-            </div>
-
-            {/* Input */}
-            <ChatInputArea
-              onSendMessage={handleSendMessage}
-              onStartRecording={handleStartRecording}
-              onStopRecording={handleStopRecording}
-              isRecording={isRecording}
-              isLoading={isLoading}
-            />
-          </>
-        ) : (
-          <div className="flex-1 flex items-center justify-center">
-            <div className="text-center">
-              <div className="w-24 h-24 bg-[var(--color-beige)] rounded-full flex items-center justify-center mx-auto mb-4">
-                <MessageCircle className="w-12 h-12 text-[var(--foreground)]/20" />
+                  {autoSpeak ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+                  {autoSpeak ? 'On' : 'Off'}
+                </button>
               </div>
-              <h2 className="text-xl font-bold text-[var(--foreground)] mb-2">Select a conversation</h2>
-              <p className="text-[var(--foreground)]/60">Choose a contact to start chatting</p>
+
+              {/* Messages */}
+              <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                {messages.map(message => (
+                  <div
+                    key={message.id}
+                    className={cn(
+                      "flex gap-3 group",
+                      message.role === 'user' ? "flex-row-reverse" : "flex-row"
+                    )}
+                  >
+                    {message.role === 'user' ? (
+                      <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#FF6D1F] to-[#ff8a4c] flex items-center justify-center flex-shrink-0 text-white font-medium shadow-lg shadow-[#FF6D1F]/20">
+                        {user?.displayName?.[0] || '?'}
+                      </div>
+                    ) : (
+                      <Avatar src={selectedContact.avatarImage} fallback={selectedContact.avatarEmoji} size="sm" className="flex-shrink-0" />
+                    )}
+                    <div className="flex flex-col gap-1 max-w-[75%]">
+                      <div
+                        className={cn(
+                          "px-4 py-3",
+                          message.role === 'user'
+                            ? "msg-sent"
+                            : "msg-received"
+                        )}
+                      >
+                        <p className="text-sm leading-relaxed whitespace-pre-wrap">{message.content}</p>
+                      </div>
+                      {/* Replay button for assistant messages */}
+                      {message.role === 'assistant' && (
+                        <button
+                          onClick={() => handleReplayAudio(message)}
+                          disabled={isSpeaking && playingMessageId !== message.id}
+                          className={cn(
+                            "self-start flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs transition-all",
+                            playingMessageId === message.id
+                              ? "btn-primary"
+                              : "opacity-0 group-hover:opacity-100 glass-light text-[var(--foreground)]/60 hover:text-[#FF6D1F] hover:bg-white/20",
+                            message.audioUrl && "border border-[#FF6D1F]/30"
+                          )}
+                          title={message.audioUrl ? "Replay audio (cached)" : "Play audio"}
+                        >
+                          {playingMessageId === message.id ? (
+                            <>
+                              <VolumeX className="w-3 h-3" />
+                              Stop
+                            </>
+                          ) : (
+                            <>
+                              <RotateCcw className="w-3 h-3" />
+                              {message.audioUrl ? "Replay" : "Play"}
+                            </>
+                          )}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+
+                {isLoading && (
+                  <div className="flex items-center gap-3">
+                    <Avatar src={selectedContact.avatarImage} fallback={selectedContact.avatarEmoji} size="sm" />
+                    <div className="msg-received px-4 py-3">
+                      <div className="flex items-center gap-1.5">
+                        <span className="w-2 h-2 bg-[#FF6D1F] rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                        <span className="w-2 h-2 bg-[#FF6D1F] rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                        <span className="w-2 h-2 bg-[#FF6D1F] rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <div ref={messagesEndRef} />
+              </div>
+
+              {/* Input */}
+              <ChatInputArea
+                onSendMessage={handleSendMessage}
+                onStartRecording={handleStartRecording}
+                onStopRecording={handleStopRecording}
+                isRecording={isRecording}
+                isLoading={isLoading}
+              />
+            </>
+          ) : (
+            <div className="flex-1 flex items-center justify-center">
+              <div className="text-center">
+                <div className="w-24 h-24 glass-light rounded-full flex items-center justify-center mx-auto mb-4">
+                  <MessageCircle className="w-12 h-12 text-[var(--foreground)]/20" />
+                </div>
+                <h2 className="text-xl font-bold text-[var(--foreground)] mb-2">Select a conversation</h2>
+                <p className="text-[var(--foreground)]/60">Choose a contact to start chatting</p>
+              </div>
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
     </div>
   );
@@ -803,21 +858,22 @@ function ChatInputArea({
   }, [onStartRecording, onStopRecording]);
 
   return (
-    <div className="p-4 border-t border-[var(--foreground)]/10" style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom))' }}>
+    <div className="p-4 border-t border-white/10" style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom))' }}>
       <form onSubmit={handleSubmit} className="flex items-center gap-3">
         <button
           ref={micButtonRef}
           type="button"
           disabled={isLoading}
           className={cn(
-            "w-12 h-12 rounded-full flex items-center justify-center transition-all select-none",
+            "w-12 h-12 rounded-full flex items-center justify-center transition-all select-none relative",
             isRecording
-              ? "bg-[var(--foreground)] text-[var(--background)] animate-pulse"
-              : "bg-[var(--color-beige)] text-[var(--foreground)] hover:opacity-80"
+              ? "btn-primary animate-pulse"
+              : "glass-light text-[var(--foreground)] hover:bg-white/20"
           )}
           style={{ touchAction: 'none', WebkitTouchCallout: 'none', WebkitUserSelect: 'none', userSelect: 'none' }}
         >
-          {isRecording ? <MicOff className="w-6 h-6" /> : <Mic className="w-6 h-6" />}
+          {isRecording && <span className="absolute inset-0 rounded-full bg-[#FF6D1F] animate-ping opacity-75" />}
+          {isRecording ? <MicOff className="w-6 h-6 relative z-10" /> : <Mic className="w-6 h-6" />}
         </button>
 
         <input
@@ -826,7 +882,7 @@ function ChatInputArea({
           onChange={(e) => setMessage(e.target.value)}
           placeholder={isRecording ? 'Listening...' : 'Type a message...'}
           disabled={isLoading || isRecording}
-          className="flex-1 px-4 py-3 bg-[var(--color-beige)] border border-[var(--foreground)]/10 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#FF6D1F] text-[var(--foreground)] placeholder-[var(--foreground)]/40 transition-colors"
+          className="flex-1 px-4 py-3 glass-input rounded-xl focus:outline-none text-[var(--foreground)] placeholder-[var(--foreground)]/40"
         />
 
         <button
@@ -835,8 +891,8 @@ function ChatInputArea({
           className={cn(
             "w-12 h-12 rounded-full flex items-center justify-center transition-all",
             message.trim() && !isLoading
-              ? "bg-[#FF6D1F] text-white hover:bg-[#e5621b]"
-              : "bg-[var(--color-beige)] text-[var(--foreground)]/40"
+              ? "btn-primary"
+              : "glass-light text-[var(--foreground)]/40"
           )}
         >
           {isLoading ? <Loader2 className="w-6 h-6 animate-spin" /> : <Send className="w-5 h-5" />}

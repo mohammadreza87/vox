@@ -30,14 +30,14 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files
+# env files (IMPORTANT: contains API keys and secrets)
 .env
 .env.local
 .env.development
 .env.production
 .env*.local
 
-# keep example file
+# keep example file for reference
 !.env.example
 
 # vercel
@@ -46,3 +46,16 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Firebase
+.firebase/
+.firebaserc
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+Thumbs.db

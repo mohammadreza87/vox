@@ -1,15 +1,62 @@
 @import "tailwindcss";
 
 :root {
+  /* Original color palette */
+  --color-primary: #FF6D1F;
+  --color-primary-light: #ff8a4c;
+  --color-accent: #FF6D1F;
+
+  /* Glass colors - Light theme */
+  --glass-bg: rgba(255, 255, 255, 0.7);
+  --glass-bg-light: rgba(255, 255, 255, 0.5);
+  --glass-bg-dark: rgba(255, 255, 255, 0.85);
+  --glass-border: rgba(255, 255, 255, 0.3);
+  --glass-shadow: rgba(0, 0, 0, 0.1);
+
+  /* Background gradient - warm orange/beige tones */
+  --gradient-start: #FAF3E1;
+  --gradient-mid: #F5E7C6;
+  --gradient-end: #ffe4c4;
+
+  /* Legacy variables for compatibility */
   --color-cream: #FAF3E1;
-  --color-beige: #F5E7C6;
+  --color-beige: rgba(255, 255, 255, 0.6);
   --color-orange: #FF6D1F;
   --color-dark: #222222;
-  --background: #FAF3E1;
+  --background: transparent;
   --foreground: #222222;
+
+  /* Message bubbles */
+  --msg-sent-bg: linear-gradient(135deg, #FF6D1F 0%, #ff8a4c 100%);
+  --msg-received-bg: rgba(255, 255, 255, 0.8);
+  --msg-sent-text: #ffffff;
+  --msg-received-text: #222222;
 }
 
-/* Mobile viewport height fix - use dynamic viewport height */
+/* Dark theme */
+.dark {
+  --glass-bg: rgba(30, 30, 30, 0.7);
+  --glass-bg-light: rgba(30, 30, 30, 0.5);
+  --glass-bg-dark: rgba(30, 30, 30, 0.85);
+  --glass-border: rgba(255, 255, 255, 0.1);
+  --glass-shadow: rgba(0, 0, 0, 0.3);
+
+  --gradient-start: #1a1a1a;
+  --gradient-mid: #2d2d2d;
+  --gradient-end: #3d3d3d;
+
+  --color-cream: #222222;
+  --color-beige: rgba(50, 50, 50, 0.6);
+  --color-dark: #FAF3E1;
+  --foreground: #FAF3E1;
+
+  --msg-sent-bg: linear-gradient(135deg, #FF6D1F 0%, #ff8a4c 100%);
+  --msg-received-bg: rgba(50, 50, 50, 0.8);
+  --msg-sent-text: #ffffff;
+  --msg-received-text: #FAF3E1;
+}
+
+/* Mobile viewport height fix */
 html {
   height: 100%;
 }
@@ -20,21 +67,19 @@ body {
   overflow-y: auto;
 }
 
-/* Use dvh for proper mobile viewport handling */
 @supports (height: 100dvh) {
   html, body {
     height: 100dvh;
   }
 }
 
-/* Fallback for browsers that don't support dvh */
 @supports not (height: 100dvh) {
   html, body {
     height: -webkit-fill-available;
   }
 }
 
-/* Safe area insets for iOS devices with notches */
+/* Safe area insets for iOS */
 :root {
   --safe-area-inset-top: env(safe-area-inset-top, 0px);
   --safe-area-inset-bottom: env(safe-area-inset-bottom, 0px);
@@ -42,26 +87,14 @@ body {
   --safe-area-inset-right: env(safe-area-inset-right, 0px);
 }
 
-/* Prevent pull-to-refresh on mobile */
 body {
   overscroll-behavior: none;
 }
 
-/* Prevent text selection on buttons and interactive elements */
 button, [role="button"] {
   -webkit-user-select: none;
   user-select: none;
   -webkit-touch-callout: none;
-}
-
-/* Dark theme - reversed colors */
-.dark {
-  --color-cream: #222222;
-  --color-beige: #333333;
-  --color-orange: #FF6D1F;
-  --color-dark: #FAF3E1;
-  --background: #222222;
-  --foreground: #FAF3E1;
 }
 
 @theme inline {
@@ -76,15 +109,274 @@ button, [role="button"] {
 }
 
 body {
-  background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
-  transition: background-color 0.3s ease, color 0.3s ease;
+  background: linear-gradient(
+    135deg,
+    var(--gradient-start) 0%,
+    var(--gradient-mid) 50%,
+    var(--gradient-end) 100%
+  );
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  transition: color 0.3s ease, background 0.3s ease;
 }
 
-/* Dark mode specific overrides */
-.dark body,
-body.dark {
-  background: #222222;
-  color: #FAF3E1;
+/* Animated gradient background */
+.glass-background {
+  position: fixed;
+  inset: 0;
+  background: linear-gradient(
+    135deg,
+    var(--gradient-start) 0%,
+    var(--gradient-mid) 50%,
+    var(--gradient-end) 100%
+  );
+  background-size: 400% 400%;
+  animation: gradientShift 15s ease infinite;
+  z-index: -1;
+}
+
+@keyframes gradientShift {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+/* Glassmorphism utilities */
+.glass {
+  background: var(--glass-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--glass-border);
+  box-shadow: 0 8px 32px var(--glass-shadow);
+}
+
+.glass-light {
+  background: var(--glass-bg-light);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--glass-border);
+}
+
+.glass-dark {
+  background: var(--glass-bg-dark);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid var(--glass-border);
+  box-shadow: 0 8px 32px var(--glass-shadow);
+}
+
+.glass-input {
+  background: var(--glass-bg);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid var(--glass-border);
+  transition: all 0.2s ease;
+}
+
+.glass-input:focus {
+  background: var(--glass-bg-dark);
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px rgba(255, 109, 31, 0.2);
+}
+
+/* Message bubble styles */
+.msg-sent {
+  background: var(--msg-sent-bg);
+  color: var(--msg-sent-text);
+  border-radius: 20px 20px 4px 20px;
+  box-shadow: 0 2px 8px rgba(255, 109, 31, 0.3);
+}
+
+.msg-received {
+  background: var(--msg-received-bg);
+  color: var(--msg-received-text);
+  border-radius: 20px 20px 20px 4px;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  box-shadow: 0 2px 8px var(--glass-shadow);
+}
+
+/* Button styles */
+.btn-primary {
+  background: linear-gradient(135deg, #FF6D1F 0%, #ff8a4c 100%);
+  color: white;
+  border: none;
+  box-shadow: 0 4px 15px rgba(255, 109, 31, 0.4);
+  transition: all 0.2s ease;
+}
+
+.btn-primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px rgba(255, 109, 31, 0.5);
+}
+
+.btn-primary:active {
+  transform: translateY(0);
+}
+
+.btn-glass {
+  background: var(--glass-bg-light);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid var(--glass-border);
+  transition: all 0.2s ease;
+}
+
+.btn-glass:hover {
+  background: var(--glass-bg);
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 3px;
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+/* Floating animation for decorative elements */
+@keyframes float {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-10px); }
+}
+
+.float-animation {
+  animation: float 6s ease-in-out infinite;
+}
+
+/* Pulse animation for recording */
+@keyframes pulse-ring {
+  0% { transform: scale(1); opacity: 1; }
+  100% { transform: scale(1.5); opacity: 0; }
+}
+
+.pulse-ring::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: inherit;
+  animation: pulse-ring 1.5s ease-out infinite;
+}
+
+/* Tab indicator animation */
+.tab-indicator {
+  position: relative;
+}
+
+.tab-indicator::after {
+  content: '';
+  position: absolute;
+  bottom: -2px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 0;
+  height: 3px;
+  background: var(--color-primary);
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+
+.tab-indicator.active::after {
+  width: 100%;
+}
+
+/* Contact avatar ring */
+.avatar-ring {
+  position: relative;
+}
+
+.avatar-ring::before {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-accent) 100%);
+  z-index: -1;
+}
+
+/* Shine effect on hover */
+.shine-effect {
+  position: relative;
+  overflow: hidden;
+}
+
+.shine-effect::after {
+  content: '';
+  position: absolute;
+  top: -50%;
+  left: -50%;
+  width: 200%;
+  height: 200%;
+  background: linear-gradient(
+    to right,
+    transparent 0%,
+    rgba(255, 255, 255, 0.1) 50%,
+    transparent 100%
+  );
+  transform: rotate(30deg);
+  transition: transform 0.6s ease;
+}
+
+.shine-effect:hover::after {
+  transform: rotate(30deg) translateX(100%);
+}
+
+/* Simple fade animations */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.6s ease-out forwards;
+}
+
+.animate-fade-in-up {
+  animation: fadeInUp 0.6s ease-out forwards;
+}
+
+.animation-delay-200 {
+  animation-delay: 0.2s;
+  opacity: 0;
+}
+
+.animation-delay-300 {
+  animation-delay: 0.3s;
+  opacity: 0;
+}
+
+.animation-delay-400 {
+  animation-delay: 0.4s;
+  opacity: 0;
 }

@@ -28,6 +28,33 @@ export const viewport = {
   viewportFit: 'cover',
 };
 
+// Inline script to prevent dark mode flash - runs before React hydrates
+// This MUST set the class before any CSS loads to prevent flash
+const themeScript = `
+  (function() {
+    function getTheme() {
+      try {
+        var stored = localStorage.getItem('theme');
+        if (stored === 'dark' || stored === 'light') return stored;
+      } catch (e) {}
+      // Default to system preference
+      return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    }
+    var theme = getTheme();
+    if (theme === 'dark') {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+    // Store in localStorage if not already set
+    try {
+      if (!localStorage.getItem('theme')) {
+        localStorage.setItem('theme', theme);
+      }
+    } catch (e) {}
+  })();
+`;
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -35,6 +62,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+      </head>
       <body className={`${inter.variable} font-sans antialiased`}>
         <Providers>
           {children}

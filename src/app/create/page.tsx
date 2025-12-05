@@ -4,12 +4,17 @@ import { useState, useRef, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { Button, Card } from '@/shared/components';
-import { ArrowLeft, Volume2, Sparkles, Check, Mic, Square, Shuffle, Upload, Camera, Image as ImageIcon, Trash2, Play, Loader2, Brain } from 'lucide-react';
+import { ArrowLeft, Volume2, Sparkles, Check, Mic, Square, Shuffle, Upload, Camera, Image as ImageIcon, Trash2, Play, Loader2, Brain, Lock, Crown } from 'lucide-react';
 import { ContactCategory, AIProvider, AI_MODELS, ClonedVoice } from '@/shared/types';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { storage } from '@/lib/firebase';
+import { storage, auth } from '@/lib/firebase';
 import { useAuth } from '@/contexts/AuthContext';
+import { useSubscription } from '@/contexts/SubscriptionContext';
+import { useCustomContacts } from '@/contexts/CustomContactsContext';
+import { getClonedVoicesKey } from '@/shared/utils/storage';
+import { getModelTier } from '@/config/subscription';
+import { PreMadeContactConfig } from '@/shared/types';
 
 // Pre-made voice options from ElevenLabs
 const VOICE_OPTIONS = [
@@ -56,6 +61,8 @@ function CreateContactPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { user } = useAuth();
+  const { tier, canUseVoiceCloning, canUseModel, canCreateCustomContact, showUpgradeModal, customContactsUsed, customContactsLimit } = useSubscription();
+  const { getContact, addContact, updateContact } = useCustomContacts();
 
   // Check if editing existing contact
   const editContactId = searchParams.get('edit');
@@ -83,60 +90,69 @@ function CreateContactPageContent() {
   const [avatarImage, setAvatarImage] = useState<string | null>(null);
   const [isUploadingImage, setIsUploadingImage] = useState(false);
 
-  // AI Model state
-  const [aiProvider, setAiProvider] = useState<AIProvider>('gemini');
-  const [aiModel, setAiModel] = useState('gemini-2.0-flash');
+  // AI Model state - defaults set by useEffect based on tier
+  const [aiProvider, setAiProvider] = useState<AIProvider>('deepseek');
+  const [aiModel, setAiModel] = useState('deepseek-chat');
 
   const [isCreating, setIsCreating] = useState(false);
 
   // Saved cloned voices
   const [savedVoices, setSavedVoices] = useState<ClonedVoice[]>([]);
 
-  // Load saved voices from localStorage
+  // Load saved voices from localStorage (user-specific)
   useEffect(() => {
     if (typeof window !== 'undefined') {
       try {
-        const saved = JSON.parse(localStorage.getItem('clonedVoices') || '[]');
+        const storageKey = getClonedVoicesKey(user?.uid || null);
+        const saved = JSON.parse(localStorage.getItem(storageKey) || '[]');
         setSavedVoices(saved);
       } catch (e) {
         console.error('Error loading saved voices:', e);
       }
     }
-  }, []);
+  }, [user]);
 
-  // Load contact data for editing
+  // Load contact data for editing (from context)
   useEffect(() => {
-    if (editContactId && typeof window !== 'undefined') {
-      try {
-        const contacts = JSON.parse(localStorage.getItem('customContacts') || '[]');
-        const contactToEdit = contacts.find((c: { id: string }) => c.id === editContactId);
-        if (contactToEdit) {
-          setIsEditMode(true);
-          setName(contactToEdit.name || '');
-          setPurpose(contactToEdit.purpose || '');
-          setPersonality(contactToEdit.personality || '');
-          setCategory(contactToEdit.category || 'custom');
-          setVoiceId(contactToEdit.voiceId || VOICE_OPTIONS[0].id);
-          setVoiceName(contactToEdit.voiceName || VOICE_OPTIONS[0].name);
-          setEmoji(contactToEdit.avatarEmoji || '🤖');
-          if (contactToEdit.avatarImage) {
-            setAvatarImage(contactToEdit.avatarImage);
-            setAvatarType('image');
-          }
-          if (contactToEdit.aiProvider) {
-            setAiProvider(contactToEdit.aiProvider);
-          }
-          if (contactToEdit.aiModel) {
-            setAiModel(contactToEdit.aiModel);
-          }
-          // Always set to premade since cloned voices are now shown in the premade list
-          setVoiceSelectionType('premade');
+    if (editContactId) {
+      const contactToEdit = getContact(editContactId);
+      if (contactToEdit) {
+        setIsEditMode(true);
+        setName(contactToEdit.name || '');
+        setPurpose(contactToEdit.purpose || '');
+        setPersonality(contactToEdit.personality || '');
+        setCategory(contactToEdit.category || 'custom');
+        setVoiceId(contactToEdit.voiceId || VOICE_OPTIONS[0].id);
+        setVoiceName(contactToEdit.voiceName || VOICE_OPTIONS[0].name);
+        setEmoji(contactToEdit.avatarEmoji || '🤖');
+        if (contactToEdit.avatarImage) {
+          setAvatarImage(contactToEdit.avatarImage);
+          setAvatarType('image');
         }
-      } catch (e) {
-        console.error('Error loading contact for editing:', e);
+        if (contactToEdit.aiProvider) {
+          setAiProvider(contactToEdit.aiProvider);
+        }
+        if (contactToEdit.aiModel) {
+          setAiModel(contactToEdit.aiModel);
+        }
+        // Always set to premade since cloned voices are now shown in the premade list
+        setVoiceSelectionType('premade');
       }
     }
-  }, [editContactId]);
+  }, [editContactId, getContact]);
+
+  // Set default model based on subscription tier (only when not editing)
+  const [hasSetTierDefault, setHasSetTierDefault] = useState(false);
+  useEffect(() => {
+    // Only set default if not editing and haven't set it yet
+    if (!editContactId && !hasSetTierDefault && tier) {
+      const defaultProvider: AIProvider = tier === 'free' ? 'deepseek' : 'openai';
+      const defaultModel = tier === 'free' ? 'deepseek-chat' : 'gpt-4o';
+      setAiProvider(defaultProvider);
+      setAiModel(defaultModel);
+      setHasSetTierDefault(true);
+    }
+  }, [tier, editContactId, hasSetTierDefault]);
 
   // Get models for selected provider
   const availableModels = AI_MODELS.filter(m => m.provider === aiProvider);
@@ -220,6 +236,14 @@ function CreateContactPageContent() {
 
     setIsCloning(true);
     try {
+      // Get auth token for the API call
+      const token = await auth.currentUser?.getIdToken();
+      if (!token) {
+        alert('You must be logged in to clone a voice');
+        setIsCloning(false);
+        return;
+      }
+
       const voiceName = name.trim() ? `${name}'s Voice` : `Cloned Voice ${Date.now()}`;
       const formData = new FormData();
       formData.append('name', voiceName);
@@ -228,6 +252,9 @@ function CreateContactPageContent() {
 
       const response = await fetch('/api/clone-voice', {
         method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
         body: formData,
       });
 
@@ -240,16 +267,17 @@ function CreateContactPageContent() {
       setVoiceId(data.voice_id);
       setVoiceName(voiceName);
 
-      // Save the cloned voice to localStorage
+      // Save the cloned voice to localStorage (user-specific)
       const newClonedVoice: ClonedVoice = {
         id: `cloned-${Date.now()}`,
         voiceId: data.voice_id,
         name: voiceName,
         createdAt: new Date().toISOString(),
       };
-      const existingVoices = JSON.parse(localStorage.getItem('clonedVoices') || '[]');
+      const voicesStorageKey = getClonedVoicesKey(user?.uid || null);
+      const existingVoices = JSON.parse(localStorage.getItem(voicesStorageKey) || '[]');
       existingVoices.push(newClonedVoice);
-      localStorage.setItem('clonedVoices', JSON.stringify(existingVoices));
+      localStorage.setItem(voicesStorageKey, JSON.stringify(existingVoices));
       setSavedVoices(existingVoices);
 
       alert('Voice cloned and saved successfully!');
@@ -269,11 +297,12 @@ function CreateContactPageContent() {
     setVoiceName(randomVoice.name);
   };
 
-  // Delete a saved cloned voice
+  // Delete a saved cloned voice (user-specific)
   const deleteSavedVoice = (voiceIdToDelete: string) => {
     const deletedVoice = savedVoices.find(v => v.id === voiceIdToDelete);
     const updatedVoices = savedVoices.filter(v => v.id !== voiceIdToDelete);
-    localStorage.setItem('clonedVoices', JSON.stringify(updatedVoices));
+    const voicesStorageKey = getClonedVoicesKey(user?.uid || null);
+    localStorage.setItem(voicesStorageKey, JSON.stringify(updatedVoices));
     setSavedVoices(updatedVoices);
     // Reset selection if the deleted voice was selected
     if (deletedVoice && voiceId === deletedVoice.voiceId) {
@@ -329,6 +358,12 @@ function CreateContactPageContent() {
   };
 
   const handleCreate = async () => {
+    // Check if user can create a new contact (only for new contacts, not edits)
+    if (!isEditMode && !canCreateCustomContact) {
+      showUpgradeModal('custom-contacts');
+      return;
+    }
+
     setIsCreating(true);
 
     // Determine final voice ID
@@ -355,8 +390,10 @@ Guidelines:
 - Keep responses concise (2-3 sentences) unless more detail is needed
 - Remember the context of the conversation`;
 
-    // For now, store in localStorage (replace with Firestore)
-    const contactData = {
+    // Get existing contact for createdAt preservation
+    const existingContact = isEditMode && editContactId ? getContact(editContactId) : null;
+
+    const contactData: PreMadeContactConfig = {
       id: isEditMode && editContactId ? editContactId : `custom-${Date.now()}`,
       name,
       purpose,
@@ -364,36 +401,25 @@ Guidelines:
       systemPrompt,
       voiceId: finalVoiceId,
       voiceName: finalVoiceName,
-      avatarEmoji: avatarType === 'emoji' ? emoji : undefined,
-      avatarImage: avatarType === 'image' ? avatarImage : undefined,
+      avatarEmoji: emoji, // Always include emoji as fallback
+      avatarImage: avatarType === 'image' ? avatarImage || undefined : undefined,
       category,
       isPreMade: false,
       gradient: 'from-violet-500 to-indigo-600',
       aiProvider,
       aiModel,
-      createdAt: isEditMode ? undefined : new Date().toISOString(),
+      createdAt: isEditMode && existingContact?.createdAt ? existingContact.createdAt : new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
 
-    // Store in localStorage
-    const existingContacts = JSON.parse(localStorage.getItem('customContacts') || '[]');
-
+    // Use context methods for cloud-synced storage
     if (isEditMode && editContactId) {
-      // Update existing contact
-      const contactIndex = existingContacts.findIndex((c: { id: string }) => c.id === editContactId);
-      if (contactIndex !== -1) {
-        // Preserve original createdAt
-        contactData.createdAt = existingContacts[contactIndex].createdAt;
-        existingContacts[contactIndex] = contactData;
-      }
+      updateContact(editContactId, contactData);
     } else {
-      // Add new contact
-      existingContacts.push(contactData);
+      addContact(contactData);
     }
 
-    localStorage.setItem('customContacts', JSON.stringify(existingContacts));
-
-    // Small delay to ensure localStorage is synced before navigation
+    // Small delay to ensure sync before navigation
     await new Promise(resolve => setTimeout(resolve, 100));
 
     // Navigate to app with contact selected
@@ -422,31 +448,36 @@ Guidelines:
   };
 
   return (
-    <div className="min-h-full bg-[var(--background)] overflow-auto" style={{ minHeight: '100dvh' }}>
+    <div className="min-h-full overflow-auto relative" style={{ minHeight: '100dvh' }}>
+      {/* Animated gradient background */}
+      <div className="glass-background" />
+
       {/* Header */}
-      <header className="sticky top-0 z-50 bg-[var(--background)] border-b border-[var(--foreground)]/10">
-        <div className="max-w-2xl mx-auto px-6 py-4 flex items-center gap-4">
-          <Link
-            href="/app"
-            className="w-10 h-10 rounded-full bg-[var(--color-beige)] flex items-center justify-center hover:opacity-80 transition-colors"
-          >
-            <ArrowLeft className="w-5 h-5 text-[var(--foreground)]" />
-          </Link>
-          <div>
-            <h1 className="font-bold text-[var(--foreground)]">{isEditMode ? 'Edit AI Contact' : 'Create AI Contact'}</h1>
-            <p className="text-sm text-[var(--foreground)]/60">Step {step} of 3</p>
+      <header className="fixed top-0 left-0 right-0 z-50">
+        <div className="mx-4 mt-4">
+          <div className="max-w-2xl mx-auto glass rounded-2xl px-6 py-4 flex items-center gap-4">
+            <Link
+              href="/app"
+              className="w-10 h-10 rounded-full glass-light flex items-center justify-center hover:opacity-80 transition-colors"
+            >
+              <ArrowLeft className="w-5 h-5 text-[var(--foreground)]" />
+            </Link>
+            <div>
+              <h1 className="font-bold text-[var(--foreground)]">{isEditMode ? 'Edit AI Contact' : 'Create AI Contact'}</h1>
+              <p className="text-sm text-[var(--foreground)]/60">Step {step} of 3</p>
+            </div>
           </div>
         </div>
       </header>
 
       {/* Progress Bar */}
-      <div className="max-w-2xl mx-auto px-6 pt-4">
+      <div className="max-w-2xl mx-auto px-6 pt-28 relative z-10">
         <div className="flex gap-2">
           {[1, 2, 3].map((s) => (
             <div
               key={s}
               className={`h-2 flex-1 rounded-full transition-colors ${
-                s <= step ? 'bg-[#FF6D1F]' : 'bg-[var(--color-beige)]'
+                s <= step ? 'bg-[#FF6D1F] shadow-lg shadow-[#FF6D1F]/30' : 'glass-light'
               }`}
             />
           ))}
@@ -454,7 +485,7 @@ Guidelines:
       </div>
 
       {/* Form */}
-      <main className="max-w-2xl mx-auto px-6 py-8">
+      <main className="max-w-2xl mx-auto px-6 py-8 relative z-10">
         {/* Step 1: Basic Info */}
         {step === 1 && (
           <div className="space-y-6">
@@ -477,7 +508,7 @@ Guidelines:
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   placeholder="e.g., Alex, Coach Smith, Professor Oak"
-                  className="w-full px-4 py-3 bg-[var(--color-beige)] border border-[var(--foreground)]/10 rounded-2xl focus:outline-none focus:ring-2 focus:ring-[#FF6D1F] text-[var(--foreground)]"
+                  className="w-full px-4 py-3 glass-input rounded-2xl focus:outline-none text-[var(--foreground)]"
                 />
               </div>
 
@@ -490,7 +521,7 @@ Guidelines:
                   value={purpose}
                   onChange={(e) => setPurpose(e.target.value)}
                   placeholder="e.g., Interview Coach, Spanish Tutor, Fitness Trainer"
-                  className="w-full px-4 py-3 bg-[var(--color-beige)] border border-[var(--foreground)]/10 rounded-2xl focus:outline-none focus:ring-2 focus:ring-[#FF6D1F] text-[var(--foreground)]"
+                  className="w-full px-4 py-3 glass-input rounded-2xl focus:outline-none text-[var(--foreground)]"
                 />
               </div>
 
@@ -506,7 +537,7 @@ Guidelines:
                       className={`flex items-center gap-2 px-4 py-3 rounded-2xl border transition-colors ${
                         category === cat.value
                           ? 'border-[#FF6D1F] bg-[#FF6D1F]/10 text-[var(--foreground)]'
-                          : 'border-[var(--foreground)]/10 bg-[var(--color-beige)] text-[var(--foreground)]/70 hover:border-[var(--foreground)]/20'
+                          : 'glass-light text-[var(--foreground)]/70 hover:bg-white/30'
                       }`}
                     >
                       <span>{cat.emoji}</span>
@@ -543,7 +574,7 @@ Guidelines:
                 onChange={(e) => setPersonality(e.target.value)}
                 placeholder={`Example: ${name} is patient and encouraging. They explain complex topics simply and always celebrate small wins. They use analogies to help understand difficult concepts and ask follow-up questions to ensure understanding.`}
                 rows={6}
-                className="w-full px-4 py-3 bg-[var(--color-beige)] border border-[var(--foreground)]/10 rounded-2xl focus:outline-none focus:ring-2 focus:ring-[#FF6D1F] text-[var(--foreground)] resize-none"
+                className="w-full px-4 py-3 glass-input rounded-2xl focus:outline-none text-[var(--foreground)] resize-none"
               />
               <p className="text-sm text-[var(--foreground)]/60 mt-2">
                 Tip: Be specific! Include communication style, tone, and any special behaviors.
@@ -563,7 +594,7 @@ Guidelines:
                   <button
                     key={template}
                     onClick={() => setPersonality(template + '. ' + personality)}
-                    className="px-3 py-1.5 bg-[var(--color-beige)] text-[var(--foreground)] text-sm rounded-full hover:opacity-80 transition-colors"
+                    className="px-3 py-1.5 glass-light text-[var(--foreground)] text-sm rounded-full hover:bg-white/30 transition-colors"
                   >
                     + {template}
                   </button>
@@ -596,20 +627,31 @@ Guidelines:
                   className={`flex flex-col items-center gap-2 px-2 py-3 rounded-2xl border transition-colors ${
                     voiceSelectionType === 'premade'
                       ? 'border-[#FF6D1F] bg-[#FF6D1F]/10'
-                      : 'border-[var(--foreground)]/10 bg-[var(--color-beige)] hover:border-[var(--foreground)]/20'
+                      : 'glass-light hover:bg-white/30'
                   }`}
                 >
                   <Volume2 className="w-5 h-5 text-[#FF6D1F]" />
                   <span className="text-xs font-medium text-[var(--foreground)]">Select Voice</span>
                 </button>
                 <button
-                  onClick={() => setVoiceSelectionType('record')}
-                  className={`flex flex-col items-center gap-2 px-2 py-3 rounded-2xl border transition-colors ${
+                  onClick={() => {
+                    if (!canUseVoiceCloning) {
+                      showUpgradeModal('voice-cloning');
+                      return;
+                    }
+                    setVoiceSelectionType('record');
+                  }}
+                  className={`flex flex-col items-center gap-2 px-2 py-3 rounded-2xl border transition-colors relative ${
                     voiceSelectionType === 'record'
                       ? 'border-[#FF6D1F] bg-[#FF6D1F]/10'
-                      : 'border-[var(--foreground)]/10 bg-[var(--color-beige)] hover:border-[var(--foreground)]/20'
-                  }`}
+                      : 'glass-light hover:bg-white/30'
+                  } ${!canUseVoiceCloning ? 'opacity-70' : ''}`}
                 >
+                  {!canUseVoiceCloning && (
+                    <div className="absolute -top-1 -right-1 bg-[#FF6D1F] rounded-full p-0.5">
+                      <Crown className="w-3 h-3 text-white" />
+                    </div>
+                  )}
                   <Mic className="w-5 h-5 text-[#FF6D1F]" />
                   <span className="text-xs font-medium text-[var(--foreground)]">Clone New</span>
                 </button>
@@ -621,7 +663,7 @@ Guidelines:
                   className={`flex flex-col items-center gap-2 px-2 py-3 rounded-2xl border transition-colors ${
                     voiceSelectionType === 'random'
                       ? 'border-[#FF6D1F] bg-[#FF6D1F]/10'
-                      : 'border-[var(--foreground)]/10 bg-[var(--color-beige)] hover:border-[var(--foreground)]/20'
+                      : 'glass-light hover:bg-white/30'
                   }`}
                 >
                   <Shuffle className="w-5 h-5 text-[#FF6D1F]" />
@@ -646,7 +688,7 @@ Guidelines:
                           className={`flex items-center gap-4 px-4 py-3 rounded-2xl border transition-colors ${
                             voiceId === voice.voiceId
                               ? 'border-[#FF6D1F] bg-[#FF6D1F]/10'
-                              : 'border-[var(--foreground)]/10 bg-[var(--color-beige)] hover:border-[var(--foreground)]/20'
+                              : 'glass-light hover:bg-white/30'
                           }`}
                         >
                           <div className="w-10 h-10 rounded-full bg-green-500 flex items-center justify-center">
@@ -676,7 +718,7 @@ Guidelines:
                       className={`flex items-center gap-4 px-4 py-3 rounded-2xl border transition-colors ${
                         voiceId === voice.id
                           ? 'border-[#FF6D1F] bg-[#FF6D1F]/10'
-                          : 'border-[var(--foreground)]/10 bg-[var(--color-beige)] hover:border-[var(--foreground)]/20'
+                          : 'glass-light hover:bg-white/30'
                       }`}
                     >
                       <div className="w-10 h-10 rounded-full bg-[#FF6D1F] flex items-center justify-center">
@@ -699,7 +741,7 @@ Guidelines:
               {/* Voice Recording (Clone) */}
               {voiceSelectionType === 'record' && (
                 <div className="space-y-4">
-                  <div className="bg-[var(--color-beige)] rounded-2xl p-4 border border-[var(--foreground)]/10">
+                  <div className="glass-light rounded-2xl p-4">
                     <p className="text-sm text-[var(--foreground)]/70 mb-4">
                       Record at least 30 seconds of clear speech to clone a voice. Speak naturally in a quiet environment.
                     </p>
@@ -780,7 +822,7 @@ Guidelines:
 
               {/* Random Voice */}
               {voiceSelectionType === 'random' && (
-                <div className="bg-[var(--color-beige)] rounded-2xl p-4 border border-[var(--foreground)]/10">
+                <div className="glass-light rounded-2xl p-4">
                   <div className="flex items-center gap-4">
                     <div className="w-12 h-12 rounded-full bg-[#FF6D1F] flex items-center justify-center">
                       <Shuffle className="w-6 h-6 text-white" />
@@ -813,7 +855,7 @@ Guidelines:
                   className={`flex flex-col items-center gap-2 px-4 py-3 rounded-2xl border transition-colors ${
                     avatarType === 'emoji'
                       ? 'border-[#FF6D1F] bg-[#FF6D1F]/10'
-                      : 'border-[var(--foreground)]/10 bg-[var(--color-beige)] hover:border-[var(--foreground)]/20'
+                      : 'glass-light hover:bg-white/30'
                   }`}
                 >
                   <span className="text-2xl">😊</span>
@@ -824,7 +866,7 @@ Guidelines:
                   className={`flex flex-col items-center gap-2 px-4 py-3 rounded-2xl border transition-colors ${
                     avatarType === 'image'
                       ? 'border-[#FF6D1F] bg-[#FF6D1F]/10'
-                      : 'border-[var(--foreground)]/10 bg-[var(--color-beige)] hover:border-[var(--foreground)]/20'
+                      : 'glass-light hover:bg-white/30'
                   }`}
                 >
                   <ImageIcon className="w-6 h-6 text-[#FF6D1F]" />
@@ -842,7 +884,7 @@ Guidelines:
                       className={`w-12 h-12 text-2xl rounded-xl border transition-all ${
                         emoji === e
                           ? 'border-[#FF6D1F] bg-[#FF6D1F]/10 scale-110'
-                          : 'border-[var(--foreground)]/10 bg-[var(--color-beige)] hover:border-[var(--foreground)]/20'
+                          : 'glass-light hover:bg-white/30'
                       }`}
                     >
                       {e}
@@ -918,7 +960,7 @@ Guidelines:
                     className={`flex flex-col items-center gap-1 px-2 py-3 rounded-xl border transition-colors ${
                       aiProvider === provider
                         ? 'border-[#FF6D1F] bg-[#FF6D1F]/10'
-                        : 'border-[var(--foreground)]/10 bg-[var(--color-beige)] hover:border-[var(--foreground)]/20'
+                        : 'glass-light hover:bg-white/30'
                     }`}
                   >
                     <span className="text-lg">
@@ -934,30 +976,51 @@ Guidelines:
 
               {/* Model Selection */}
               <div className="space-y-2">
-                {availableModels.map((model) => (
-                  <button
-                    key={model.model}
-                    onClick={() => setAiModel(model.model)}
-                    className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl border transition-colors ${
-                      aiModel === model.model
-                        ? 'border-[#FF6D1F] bg-[#FF6D1F]/10'
-                        : 'border-[var(--foreground)]/10 bg-[var(--color-beige)] hover:border-[var(--foreground)]/20'
-                    }`}
-                  >
-                    <div className="flex-1 text-left">
-                      <p className="font-medium text-[var(--foreground)]">{model.name}</p>
-                      <p className="text-sm text-[var(--foreground)]/60">{model.description}</p>
-                    </div>
-                    {aiModel === model.model && (
-                      <Check className="w-5 h-5 text-[#FF6D1F]" />
-                    )}
-                  </button>
-                ))}
+                {availableModels.map((model) => {
+                  const isLocked = !canUseModel(model.model);
+                  const modelTier = getModelTier(model.model);
+                  return (
+                    <button
+                      key={model.model}
+                      onClick={() => {
+                        if (isLocked) {
+                          showUpgradeModal('advanced-models');
+                          return;
+                        }
+                        setAiModel(model.model);
+                      }}
+                      className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl border transition-colors ${
+                        aiModel === model.model
+                          ? 'border-[#FF6D1F] bg-[#FF6D1F]/10'
+                          : 'glass-light hover:bg-white/30'
+                      } ${isLocked ? 'opacity-60' : ''}`}
+                    >
+                      <div className="flex-1 text-left">
+                        <div className="flex items-center gap-2">
+                          <p className="font-medium text-[var(--foreground)]">{model.name}</p>
+                          {isLocked && modelTier && (
+                            <span className="text-xs px-2 py-0.5 bg-[#FF6D1F]/20 text-[#FF6D1F] rounded-full flex items-center gap-1">
+                              <Crown className="w-3 h-3" />
+                              {modelTier === 'max' ? 'Max' : 'Pro'}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-sm text-[var(--foreground)]/60">{model.description}</p>
+                      </div>
+                      {aiModel === model.model && !isLocked && (
+                        <Check className="w-5 h-5 text-[#FF6D1F]" />
+                      )}
+                      {isLocked && (
+                        <Lock className="w-5 h-5 text-[var(--foreground)]/40" />
+                      )}
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
             {/* Preview */}
-            <Card className="bg-[var(--color-beige)] border-[var(--foreground)]/10">
+            <Card className="glass-light">
               <div className="flex items-center gap-4">
                 {avatarType === 'emoji' || !avatarImage ? (
                   <div className="w-16 h-16 rounded-full bg-[#FF6D1F] flex items-center justify-center text-3xl">

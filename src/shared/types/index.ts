@@ -43,18 +43,18 @@ export interface AIModelConfig {
 }
 
 export const AI_MODELS: AIModelConfig[] = [
+  // DeepSeek Models (Free tier default)
+  { provider: 'deepseek', model: 'deepseek-chat', name: 'DeepSeek Chat', description: 'Open-source power' },
+  { provider: 'deepseek', model: 'deepseek-reasoner', name: 'DeepSeek Reasoner', description: 'Deep reasoning (Max)' },
+  // OpenAI Models (Pro tier default)
+  { provider: 'openai', model: 'gpt-4o', name: 'GPT-4o', description: 'Most capable' },
+  { provider: 'openai', model: 'gpt-4o-mini', name: 'GPT-4o Mini', description: 'Fast and affordable' },
   // Gemini Models
   { provider: 'gemini', model: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', description: 'Fast and efficient' },
   { provider: 'gemini', model: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro', description: 'Advanced reasoning' },
   // Claude Models
   { provider: 'claude', model: 'claude-sonnet-4-20250514', name: 'Claude Sonnet 4', description: 'Balanced performance' },
   { provider: 'claude', model: 'claude-3-5-haiku-20241022', name: 'Claude 3.5 Haiku', description: 'Fast responses' },
-  // OpenAI Models
-  { provider: 'openai', model: 'gpt-4o', name: 'GPT-4o', description: 'Most capable' },
-  { provider: 'openai', model: 'gpt-4o-mini', name: 'GPT-4o Mini', description: 'Fast and affordable' },
-  // DeepSeek Models
-  { provider: 'deepseek', model: 'deepseek-chat', name: 'DeepSeek Chat', description: 'Open-source power' },
-  { provider: 'deepseek', model: 'deepseek-reasoner', name: 'DeepSeek Reasoner', description: 'Deep reasoning' },
 ];
 
 export interface Message {
@@ -118,6 +118,10 @@ export interface PreMadeContactConfig {
   // AI Model configuration
   aiProvider?: AIProvider;
   aiModel?: string;
+  // Custom contact fields
+  isPreMade?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 // API Response types

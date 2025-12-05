@@ -45,21 +45,37 @@ export default function LoginPage() {
 
     try {
       await signInWithGoogle();
+      // Note: If using redirect, the page will navigate away
+      // The redirect result is handled in AuthContext
       router.push('/app');
     } catch (err: unknown) {
-      const errorMessage = err instanceof Error ? err.message : 'An error occurred';
-      setError(errorMessage.replace('Firebase: ', '').replace(/\(auth\/.*\)/, ''));
-    } finally {
+      console.error('Google Sign-In Error:', err);
+      // Get more specific error information
+      const firebaseError = err as { code?: string; message?: string };
+      let errorMessage = firebaseError.message || 'An error occurred';
+
+      // Handle specific Firebase auth errors
+      if (firebaseError.code === 'auth/unauthorized-domain') {
+        errorMessage = 'This domain is not authorized for sign-in. Please contact support.';
+      } else {
+        errorMessage = errorMessage.replace('Firebase: ', '').replace(/\(auth\/.*\)/, '');
+      }
+
+      setError(errorMessage);
       setLoading(false);
     }
+    // Don't set loading to false here - redirect will navigate away
   };
 
   return (
-    <div className="min-h-full bg-[var(--background)] flex flex-col transition-colors overflow-auto" style={{ minHeight: '100dvh' }}>
+    <div className="min-h-full flex flex-col transition-colors overflow-auto relative" style={{ minHeight: '100dvh' }}>
+      {/* Animated gradient background */}
+      <div className="glass-background" />
+
       {/* Header */}
-      <header className="p-6 flex items-center justify-between">
+      <header className="p-6 flex items-center justify-between relative z-10">
         <Link href="/" className="flex items-center gap-2 w-fit">
-          <div className="w-10 h-10 bg-[#FF6D1F] rounded-xl flex items-center justify-center">
+          <div className="w-10 h-10 bg-gradient-to-br from-[#FF6D1F] to-[#ff8a4c] rounded-xl flex items-center justify-center shadow-lg shadow-[#FF6D1F]/30">
             <Volume2 className="w-6 h-6 text-white" />
           </div>
           <span className="text-2xl font-bold text-[var(--foreground)]">Vox</span>
@@ -68,9 +84,9 @@ export default function LoginPage() {
       </header>
 
       {/* Main Content */}
-      <main className="flex-1 flex items-center justify-center px-6 pb-12">
+      <main className="flex-1 flex items-center justify-center px-6 pb-12 relative z-10">
         <div className="w-full max-w-md">
-          <div className="bg-[var(--color-beige)] rounded-3xl p-8 shadow-lg border border-[var(--foreground)]/10 transition-colors">
+          <div className="glass-dark rounded-3xl p-8 shadow-2xl transition-colors">
             <h1 className="text-2xl font-bold text-[var(--foreground)] text-center mb-2">
               {isSignUp ? 'Create Account' : 'Welcome Back'}
             </h1>
@@ -91,7 +107,7 @@ export default function LoginPage() {
             <button
               onClick={handleGoogleSignIn}
               disabled={loading}
-              className="w-full flex items-center justify-center gap-3 px-4 py-3 bg-[var(--background)] border border-[var(--foreground)]/10 rounded-2xl hover:opacity-80 transition-all mb-6 disabled:opacity-50"
+              className="w-full flex items-center justify-center gap-3 px-4 py-3 glass-light rounded-2xl hover:bg-white/30 transition-all mb-6 disabled:opacity-50"
             >
               <svg className="w-5 h-5" viewBox="0 0 24 24">
                 <path
@@ -136,7 +152,7 @@ export default function LoginPage() {
                       onChange={(e) => setDisplayName(e.target.value)}
                       placeholder="Your name"
                       required={isSignUp}
-                      className="w-full pl-12 pr-4 py-3 bg-[var(--background)] border border-[var(--foreground)]/10 rounded-2xl focus:outline-none focus:ring-2 focus:ring-[#FF6D1F] text-[var(--foreground)] transition-colors"
+                      className="w-full pl-12 pr-4 py-3 glass-input rounded-2xl focus:outline-none text-[var(--foreground)] transition-colors"
                     />
                   </div>
                 </div>
@@ -154,7 +170,7 @@ export default function LoginPage() {
                     onChange={(e) => setEmail(e.target.value)}
                     placeholder="you@example.com"
                     required
-                    className="w-full pl-12 pr-4 py-3 bg-[var(--background)] border border-[var(--foreground)]/10 rounded-2xl focus:outline-none focus:ring-2 focus:ring-[#FF6D1F] text-[var(--foreground)] transition-colors"
+                    className="w-full pl-12 pr-4 py-3 glass-input rounded-2xl focus:outline-none text-[var(--foreground)] transition-colors"
                   />
                 </div>
               </div>
@@ -172,7 +188,7 @@ export default function LoginPage() {
                     placeholder="Enter your password"
                     required
                     minLength={6}
-                    className="w-full pl-12 pr-4 py-3 bg-[var(--background)] border border-[var(--foreground)]/10 rounded-2xl focus:outline-none focus:ring-2 focus:ring-[#FF6D1F] text-[var(--foreground)] transition-colors"
+                    className="w-full pl-12 pr-4 py-3 glass-input rounded-2xl focus:outline-none text-[var(--foreground)] transition-colors"
                   />
                 </div>
               </div>
