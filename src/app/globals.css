@@ -1,60 +1,221 @@
 @import "tailwindcss";
 
+/* ============================================
+   Design System CSS Variables
+   Generated from design-system/tokens
+   ============================================ */
+
 :root {
-  /* Original color palette */
+  /* ========== Primary Colors ========== */
   --color-primary: #FF6D1F;
   --color-primary-light: #ff8a4c;
+  --color-primary-dark: #e5621b;
   --color-accent: #FF6D1F;
 
-  /* Glass colors - Light theme */
-  --glass-bg: rgba(255, 255, 255, 0.7);
-  --glass-bg-light: rgba(255, 255, 255, 0.5);
-  --glass-bg-dark: rgba(255, 255, 255, 0.85);
-  --glass-border: rgba(255, 255, 255, 0.3);
-  --glass-shadow: rgba(0, 0, 0, 0.1);
+  /* ========== Semantic Colors ========== */
+  --color-success: #10b981;
+  --color-success-light: #34d399;
+  --color-success-dark: #059669;
+  --color-success-bg: rgba(16, 185, 129, 0.1);
 
-  /* Background gradient - warm orange/beige tones */
+  --color-error: #ef4444;
+  --color-error-light: #f87171;
+  --color-error-dark: #dc2626;
+  --color-error-bg: rgba(239, 68, 68, 0.1);
+
+  --color-warning: #f59e0b;
+  --color-warning-light: #fbbf24;
+  --color-warning-dark: #d97706;
+  --color-warning-bg: rgba(245, 158, 11, 0.1);
+
+  --color-info: #3b82f6;
+  --color-info-light: #60a5fa;
+  --color-info-dark: #2563eb;
+  --color-info-bg: rgba(59, 130, 246, 0.1);
+
+  /* ========== Background & Surface Colors ========== */
+  --color-background: transparent;
+  --color-background-primary: #FAF3E1;
+  --color-background-secondary: #F5E7C6;
+  --color-background-tertiary: #ffe4c4;
+
+  /* ========== Gradient Colors ========== */
   --gradient-start: #FAF3E1;
   --gradient-mid: #F5E7C6;
   --gradient-end: #ffe4c4;
 
-  /* Legacy variables for compatibility */
+  /* ========== Text Colors ========== */
+  --color-foreground: #222222;
+  --color-text-primary: #222222;
+  --color-text-secondary: rgba(34, 34, 34, 0.7);
+  --color-text-tertiary: rgba(34, 34, 34, 0.5);
+  --color-text-disabled: rgba(34, 34, 34, 0.3);
+
+  /* ========== Legacy Neutral Colors ========== */
   --color-cream: #FAF3E1;
-  --color-beige: rgba(255, 255, 255, 0.6);
+  --color-beige: #F5E7C6;
   --color-orange: #FF6D1F;
   --color-dark: #222222;
   --background: transparent;
   --foreground: #222222;
 
-  /* Message bubbles */
+  /* ========== Glass Morphism ========== */
+  --glass-bg: rgba(255, 255, 255, 0.7);
+  --glass-bg-subtle: rgba(255, 255, 255, 0.5);
+  --glass-bg-strong: rgba(255, 255, 255, 0.85);
+  --glass-border: rgba(255, 255, 255, 0.3);
+  --glass-border-strong: rgba(255, 255, 255, 0.5);
+  --glass-shadow: rgba(0, 0, 0, 0.1);
+  --glass-shadow-strong: rgba(0, 0, 0, 0.15);
+
+  /* ========== Shadows ========== */
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.08);
+  --shadow-default: 0 4px 15px rgba(0, 0, 0, 0.1);
+  --shadow-md: 0 8px 25px rgba(0, 0, 0, 0.12);
+  --shadow-lg: 0 15px 35px rgba(0, 0, 0, 0.15);
+  --shadow-xl: 0 20px 40px rgba(0, 0, 0, 0.18);
+  --shadow-inner: inset 0 1px 1px rgba(255, 255, 255, 0.4);
+  --shadow-glow: 0 0 40px rgba(255, 109, 31, 0.15);
+
+  --shadow-card: 0 4px 20px rgba(0, 0, 0, 0.08);
+  --shadow-card-hover: 0 8px 30px rgba(0, 0, 0, 0.12);
+  --shadow-card-active: 0 2px 10px rgba(0, 0, 0, 0.1);
+
+  --shadow-button-primary: 0 4px 14px rgba(255, 109, 31, 0.4);
+  --shadow-button-primary-hover: 0 6px 20px rgba(255, 109, 31, 0.5);
+  --shadow-button-primary-active: 0 2px 8px rgba(255, 109, 31, 0.4);
+
+  --shadow-input-focus: 0 0 0 3px rgba(255, 109, 31, 0.2);
+  --shadow-input-error: 0 0 0 3px rgba(239, 68, 68, 0.2);
+  --shadow-input-success: 0 0 0 3px rgba(16, 185, 129, 0.2);
+
+  --shadow-modal: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+  --shadow-floating: 0 10px 40px rgba(0, 0, 0, 0.15);
+
+  /* ========== Message Bubbles ========== */
   --msg-sent-bg: linear-gradient(135deg, #FF6D1F 0%, #ff8a4c 100%);
-  --msg-received-bg: rgba(255, 255, 255, 0.8);
   --msg-sent-text: #ffffff;
+  --msg-received-bg: rgba(255, 255, 255, 0.8);
   --msg-received-text: #222222;
+
+  /* ========== Overlay ========== */
+  --color-overlay: rgba(0, 0, 0, 0.5);
+  --color-overlay-blur: rgba(0, 0, 0, 0.3);
+
+  /* ========== Border Radii ========== */
+  --radius-sm: 0.25rem;
+  --radius-default: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+  --radius-2xl: 1.5rem;
+  --radius-3xl: 2rem;
+  --radius-full: 9999px;
+
+  /* ========== Animation Durations ========== */
+  --duration-fast: 150ms;
+  --duration-normal: 200ms;
+  --duration-slow: 300ms;
+  --duration-slower: 400ms;
+  --duration-slowest: 500ms;
+
+  /* ========== Animation Easings ========== */
+  --easing-default: cubic-bezier(0.4, 0, 0.2, 1);
+  --easing-spring: cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  --easing-bounce: cubic-bezier(0.68, -0.55, 0.265, 1.55);
+  --easing-smooth: cubic-bezier(0.25, 0.1, 0.25, 1);
+
+  /* ========== Safe Area Insets ========== */
+  --safe-area-inset-top: env(safe-area-inset-top, 0px);
+  --safe-area-inset-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-area-inset-left: env(safe-area-inset-left, 0px);
+  --safe-area-inset-right: env(safe-area-inset-right, 0px);
 }
 
-/* Dark theme */
+/* ============================================
+   Dark Theme Overrides
+   ============================================ */
 .dark {
-  --glass-bg: rgba(30, 30, 30, 0.7);
-  --glass-bg-light: rgba(30, 30, 30, 0.5);
-  --glass-bg-dark: rgba(30, 30, 30, 0.85);
-  --glass-border: rgba(255, 255, 255, 0.1);
-  --glass-shadow: rgba(0, 0, 0, 0.3);
+  /* Background & Surface */
+  --color-background-primary: #1a1a1a;
+  --color-background-secondary: #2d2d2d;
+  --color-background-tertiary: #3d3d3d;
 
+  /* Gradient */
   --gradient-start: #1a1a1a;
   --gradient-mid: #2d2d2d;
   --gradient-end: #3d3d3d;
 
+  /* Text */
+  --color-foreground: #FAF3E1;
+  --color-text-primary: #FAF3E1;
+  --color-text-secondary: rgba(250, 243, 225, 0.7);
+  --color-text-tertiary: rgba(250, 243, 225, 0.5);
+  --color-text-disabled: rgba(250, 243, 225, 0.3);
+
+  /* Legacy (inverted) */
   --color-cream: #222222;
-  --color-beige: rgba(50, 50, 50, 0.6);
+  --color-beige: #1f2937;
   --color-dark: #FAF3E1;
   --foreground: #FAF3E1;
 
-  --msg-sent-bg: linear-gradient(135deg, #FF6D1F 0%, #ff8a4c 100%);
+  /* Glass Morphism */
+  --glass-bg: rgba(30, 30, 30, 0.7);
+  --glass-bg-subtle: rgba(30, 30, 30, 0.5);
+  --glass-bg-strong: rgba(30, 30, 30, 0.85);
+  --glass-border: rgba(255, 255, 255, 0.1);
+  --glass-border-strong: rgba(255, 255, 255, 0.2);
+  --glass-shadow: rgba(0, 0, 0, 0.3);
+  --glass-shadow-strong: rgba(0, 0, 0, 0.4);
+
+  /* Shadows */
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.2);
+  --shadow-default: 0 4px 15px rgba(0, 0, 0, 0.25);
+  --shadow-md: 0 8px 25px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 15px 35px rgba(0, 0, 0, 0.35);
+  --shadow-xl: 0 20px 40px rgba(0, 0, 0, 0.4);
+  --shadow-inner: inset 0 1px 1px rgba(255, 255, 255, 0.1);
+  --shadow-glow: 0 0 40px rgba(255, 109, 31, 0.25);
+
+  --shadow-card: 0 4px 20px rgba(0, 0, 0, 0.3);
+  --shadow-card-hover: 0 8px 30px rgba(0, 0, 0, 0.4);
+  --shadow-card-active: 0 2px 10px rgba(0, 0, 0, 0.35);
+
+  --shadow-modal: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+  --shadow-floating: 0 10px 40px rgba(0, 0, 0, 0.4);
+
+  /* Messages */
   --msg-received-bg: rgba(50, 50, 50, 0.8);
-  --msg-sent-text: #ffffff;
   --msg-received-text: #FAF3E1;
+
+  /* Overlay */
+  --color-overlay: rgba(0, 0, 0, 0.7);
 }
+
+/* ============================================
+   Tailwind Theme Extension
+   ============================================ */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-cream: var(--color-cream);
+  --color-beige: var(--color-beige);
+  --color-orange: var(--color-orange);
+  --color-dark: var(--color-dark);
+  --color-primary: var(--color-primary);
+  --color-primary-light: var(--color-primary-light);
+  --color-primary-dark: var(--color-primary-dark);
+  --color-success: var(--color-success);
+  --color-error: var(--color-error);
+  --color-warning: var(--color-warning);
+  --color-info: var(--color-info);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+/* ============================================
+   Base Styles
+   ============================================ */
 
 /* Mobile viewport height fix */
 html {
@@ -65,6 +226,17 @@ body {
   height: 100%;
   overflow-x: hidden;
   overflow-y: auto;
+  color: var(--color-foreground);
+  background: linear-gradient(
+    135deg,
+    var(--gradient-start) 0%,
+    var(--gradient-mid) 50%,
+    var(--gradient-end) 100%
+  );
+  font-family: var(--font-geist-sans), -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  transition: color var(--duration-slow) var(--easing-default),
+              background var(--duration-slow) var(--easing-default);
+  overscroll-behavior: none;
 }
 
 @supports (height: 100dvh) {
@@ -79,48 +251,15 @@ body {
   }
 }
 
-/* Safe area insets for iOS */
-:root {
-  --safe-area-inset-top: env(safe-area-inset-top, 0px);
-  --safe-area-inset-bottom: env(safe-area-inset-bottom, 0px);
-  --safe-area-inset-left: env(safe-area-inset-left, 0px);
-  --safe-area-inset-right: env(safe-area-inset-right, 0px);
-}
-
-body {
-  overscroll-behavior: none;
-}
-
 button, [role="button"] {
   -webkit-user-select: none;
   user-select: none;
   -webkit-touch-callout: none;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --color-cream: #FAF3E1;
-  --color-beige: #F5E7C6;
-  --color-orange: #FF6D1F;
-  --color-dark: #222222;
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-body {
-  color: var(--foreground);
-  background: linear-gradient(
-    135deg,
-    var(--gradient-start) 0%,
-    var(--gradient-mid) 50%,
-    var(--gradient-end) 100%
-  );
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-  transition: color 0.3s ease, background 0.3s ease;
-}
-
-/* Animated gradient background */
+/* ============================================
+   Animated Background
+   ============================================ */
 .glass-background {
   position: fixed;
   inset: 0;
@@ -141,28 +280,30 @@ body {
   100% { background-position: 0% 50%; }
 }
 
-/* Glassmorphism utilities */
+/* ============================================
+   Glass Morphism Utilities
+   ============================================ */
 .glass {
   background: var(--glass-bg);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
   border: 1px solid var(--glass-border);
-  box-shadow: 0 8px 32px var(--glass-shadow);
+  box-shadow: var(--shadow-md);
 }
 
 .glass-light {
-  background: var(--glass-bg-light);
+  background: var(--glass-bg-subtle);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
   border: 1px solid var(--glass-border);
 }
 
 .glass-dark {
-  background: var(--glass-bg-dark);
+  background: var(--glass-bg-strong);
   backdrop-filter: blur(24px);
   -webkit-backdrop-filter: blur(24px);
   border: 1px solid var(--glass-border);
-  box-shadow: 0 8px 32px var(--glass-shadow);
+  box-shadow: var(--shadow-md);
 }
 
 .glass-input {
@@ -170,63 +311,70 @@ body {
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
   border: 1px solid var(--glass-border);
-  transition: all 0.2s ease;
+  transition: all var(--duration-normal) var(--easing-default);
 }
 
 .glass-input:focus {
-  background: var(--glass-bg-dark);
+  background: var(--glass-bg-strong);
   border-color: var(--color-primary);
-  box-shadow: 0 0 0 3px rgba(255, 109, 31, 0.2);
+  box-shadow: var(--shadow-input-focus);
 }
 
-/* Message bubble styles */
+/* ============================================
+   Message Bubble Styles
+   ============================================ */
 .msg-sent {
   background: var(--msg-sent-bg);
   color: var(--msg-sent-text);
-  border-radius: 20px 20px 4px 20px;
+  border-radius: var(--radius-2xl) var(--radius-2xl) var(--radius-sm) var(--radius-2xl);
   box-shadow: 0 2px 8px rgba(255, 109, 31, 0.3);
 }
 
 .msg-received {
   background: var(--msg-received-bg);
   color: var(--msg-received-text);
-  border-radius: 20px 20px 20px 4px;
+  border-radius: var(--radius-2xl) var(--radius-2xl) var(--radius-2xl) var(--radius-sm);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
   box-shadow: 0 2px 8px var(--glass-shadow);
 }
 
-/* Button styles */
+/* ============================================
+   Button Styles
+   ============================================ */
 .btn-primary {
-  background: linear-gradient(135deg, #FF6D1F 0%, #ff8a4c 100%);
+  background: var(--msg-sent-bg);
   color: white;
   border: none;
-  box-shadow: 0 4px 15px rgba(255, 109, 31, 0.4);
-  transition: all 0.2s ease;
+  box-shadow: var(--shadow-button-primary);
+  transition: all var(--duration-normal) var(--easing-default);
 }
 
 .btn-primary:hover {
   transform: translateY(-1px);
-  box-shadow: 0 6px 20px rgba(255, 109, 31, 0.5);
+  box-shadow: var(--shadow-button-primary-hover);
 }
 
 .btn-primary:active {
   transform: translateY(0);
+  box-shadow: var(--shadow-button-primary-active);
 }
 
 .btn-glass {
-  background: var(--glass-bg-light);
+  background: var(--glass-bg-subtle);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
   border: 1px solid var(--glass-border);
-  transition: all 0.2s ease;
+  transition: all var(--duration-normal) var(--easing-default);
 }
 
 .btn-glass:hover {
   background: var(--glass-bg);
 }
 
-/* Scrollbar styling */
+/* ============================================
+   Scrollbar Styling
+   ============================================ */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -237,38 +385,132 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.2);
-  border-radius: 3px;
-}
-
-.dark ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.2);
+  background: var(--color-text-disabled);
+  border-radius: var(--radius-full);
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 0, 0, 0.3);
+  background: var(--color-text-tertiary);
 }
 
-.dark ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.3);
-}
-
-/* Floating animation for decorative elements */
+/* ============================================
+   Animation Keyframes
+   ============================================ */
 @keyframes float {
   0%, 100% { transform: translateY(0px); }
   50% { transform: translateY(-10px); }
 }
 
-.float-animation {
-  animation: float 6s ease-in-out infinite;
-}
-
-/* Pulse animation for recording */
 @keyframes pulse-ring {
   0% { transform: scale(1); opacity: 1; }
   100% { transform: scale(1.5); opacity: 0; }
 }
 
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes scaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes slideInUp {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes liquid-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(255, 109, 31, 0.4);
+  }
+  70% {
+    box-shadow: 0 0 0 20px rgba(255, 109, 31, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(255, 109, 31, 0);
+  }
+}
+
+@keyframes liquid-shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+/* ============================================
+   Animation Utility Classes
+   ============================================ */
+.float-animation {
+  animation: float 6s ease-in-out infinite;
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.6s var(--easing-default) forwards;
+}
+
+.animate-fade-in-up {
+  animation: fadeInUp 0.6s var(--easing-default) forwards;
+}
+
+.animate-scale-in {
+  animation: scaleIn 0.3s var(--easing-spring) forwards;
+}
+
+.animate-slide-in-up {
+  animation: slideInUp 0.35s var(--easing-smooth) forwards;
+}
+
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
+
+.liquid-recording {
+  animation: liquid-pulse 1.5s infinite;
+}
+
+.liquid-shimmer {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 255, 255, 0.4) 50%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  background-size: 200% 100%;
+  animation: liquid-shimmer 1.5s infinite;
+}
+
+.animation-delay-100 { animation-delay: 0.1s; opacity: 0; }
+.animation-delay-200 { animation-delay: 0.2s; opacity: 0; }
+.animation-delay-300 { animation-delay: 0.3s; opacity: 0; }
+.animation-delay-400 { animation-delay: 0.4s; opacity: 0; }
+.animation-delay-500 { animation-delay: 0.5s; opacity: 0; }
+
+/* ============================================
+   Decorative Effects
+   ============================================ */
 .pulse-ring::before {
   content: '';
   position: absolute;
@@ -278,7 +520,6 @@ body {
   animation: pulse-ring 1.5s ease-out infinite;
 }
 
-/* Tab indicator animation */
 .tab-indicator {
   position: relative;
 }
@@ -292,15 +533,14 @@ body {
   width: 0;
   height: 3px;
   background: var(--color-primary);
-  border-radius: 2px;
-  transition: width 0.3s ease;
+  border-radius: var(--radius-full);
+  transition: width var(--duration-slow) var(--easing-default);
 }
 
 .tab-indicator.active::after {
   width: 100%;
 }
 
-/* Contact avatar ring */
 .avatar-ring {
   position: relative;
 }
@@ -309,12 +549,11 @@ body {
   content: '';
   position: absolute;
   inset: -3px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-accent) 100%);
+  border-radius: var(--radius-full);
+  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-light) 100%);
   z-index: -1;
 }
 
-/* Shine effect on hover */
 .shine-effect {
   position: relative;
   overflow: hidden;
@@ -334,49 +573,442 @@ body {
     transparent 100%
   );
   transform: rotate(30deg);
-  transition: transform 0.6s ease;
+  transition: transform 0.6s var(--easing-default);
 }
 
 .shine-effect:hover::after {
   transform: rotate(30deg) translateX(100%);
 }
 
-/* Simple fade animations */
-@keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
+/* ============================================
+   Apple Liquid Glass Effects (iOS 26 Inspired)
+   ============================================ */
+
+/* Liquid Glass Container */
+.liquid-glass {
+  background: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.25) 0%,
+    rgba(255, 255, 255, 0.1) 50%,
+    rgba(255, 255, 255, 0.25) 100%
+  );
+  backdrop-filter: blur(40px) saturate(180%);
+  -webkit-backdrop-filter: blur(40px) saturate(180%);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-3xl);
+  box-shadow:
+    var(--shadow-md),
+    inset 0 1px 0 rgba(255, 255, 255, 0.4),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.05);
+  transition: all var(--duration-slower) var(--easing-default);
 }
 
-@keyframes fadeInUp {
-  from {
-    opacity: 0;
-    transform: translateY(20px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+.liquid-glass:hover {
+  box-shadow:
+    var(--shadow-lg),
+    inset 0 1px 0 rgba(255, 255, 255, 0.5),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.05);
+  transform: translateY(-2px);
 }
 
-.animate-fade-in {
-  animation: fadeIn 0.6s ease-out forwards;
+.dark .liquid-glass {
+  background: linear-gradient(
+    135deg,
+    rgba(60, 60, 60, 0.4) 0%,
+    rgba(40, 40, 40, 0.3) 50%,
+    rgba(60, 60, 60, 0.4) 100%
+  );
+  border-color: var(--glass-border);
+  box-shadow:
+    var(--shadow-md),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.2);
 }
 
-.animate-fade-in-up {
-  animation: fadeInUp 0.6s ease-out forwards;
+/* Liquid Glass Card */
+.liquid-card {
+  background: rgba(255, 255, 255, 0.6);
+  backdrop-filter: blur(20px) saturate(150%);
+  -webkit-backdrop-filter: blur(20px) saturate(150%);
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  border-radius: var(--radius-2xl);
+  box-shadow:
+    var(--shadow-card),
+    inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  transition: all var(--duration-slow) var(--easing-default);
 }
 
-.animation-delay-200 {
-  animation-delay: 0.2s;
+.liquid-card:hover {
+  background: rgba(255, 255, 255, 0.7);
+  box-shadow:
+    var(--shadow-card-hover),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+
+.dark .liquid-card {
+  background: rgba(50, 50, 50, 0.6);
+  border-color: var(--glass-border);
+  box-shadow:
+    var(--shadow-card),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.dark .liquid-card:hover {
+  background: rgba(60, 60, 60, 0.7);
+}
+
+/* Liquid Button */
+.liquid-button {
+  background: linear-gradient(
+    135deg,
+    rgba(255, 109, 31, 0.9) 0%,
+    rgba(255, 138, 76, 0.9) 100%
+  );
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: none;
+  border-radius: var(--radius-xl);
+  color: white;
+  font-weight: 600;
+  box-shadow:
+    var(--shadow-button-primary),
+    inset 0 1px 0 rgba(255, 255, 255, 0.3);
+  transition: all var(--duration-slow) var(--easing-default);
+  position: relative;
+  overflow: hidden;
+}
+
+.liquid-button::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.2) 0%,
+    transparent 50%
+  );
+  border-radius: inherit;
+}
+
+.liquid-button:hover {
+  transform: scale(1.02) translateY(-1px);
+  box-shadow:
+    var(--shadow-button-primary-hover),
+    inset 0 1px 0 rgba(255, 255, 255, 0.4);
+}
+
+.liquid-button:active {
+  transform: scale(0.98);
+  box-shadow:
+    var(--shadow-button-primary-active),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+}
+
+/* Liquid Input */
+.liquid-input {
+  background: rgba(255, 255, 255, 0.5);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  border-radius: var(--radius-xl);
+  padding: 12px 16px;
+  font-size: 16px;
+  color: var(--color-foreground);
+  transition: all var(--duration-slow) var(--easing-default);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+.liquid-input:focus {
+  outline: none;
+  background: rgba(255, 255, 255, 0.7);
+  border-color: rgba(255, 109, 31, 0.5);
+  box-shadow:
+    var(--shadow-input-focus),
+    inset 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+.liquid-input::placeholder {
+  color: var(--color-text-tertiary);
+}
+
+.dark .liquid-input {
+  background: rgba(50, 50, 50, 0.5);
+  border-color: var(--glass-border);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.dark .liquid-input:focus {
+  background: rgba(60, 60, 60, 0.7);
+}
+
+/* Liquid Tab Bar */
+.liquid-tabs {
+  background: rgba(255, 255, 255, 0.4);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-radius: var(--radius-xl);
+  padding: 4px;
+  display: flex;
+  gap: 4px;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+.liquid-tab {
+  flex: 1;
+  padding: 10px 12px;
+  border-radius: var(--radius-lg);
+  font-weight: 500;
+  font-size: 13px;
+  color: var(--color-foreground);
+  opacity: 0.7;
+  transition: all var(--duration-slow) var(--easing-default);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.liquid-tab:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.liquid-tab.active {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.8);
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+
+.dark .liquid-tabs {
+  background: rgba(50, 50, 50, 0.4);
+}
+
+.dark .liquid-tab:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.dark .liquid-tab.active {
+  background: rgba(60, 60, 60, 0.8);
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+/* Liquid List Item */
+.liquid-list-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-radius: var(--radius-xl);
+  transition: all var(--duration-normal) var(--easing-default);
+  cursor: pointer;
+}
+
+.liquid-list-item:hover {
+  background: rgba(255, 255, 255, 0.4);
+}
+
+.liquid-list-item:active {
+  background: rgba(255, 255, 255, 0.6);
+  transform: scale(0.98);
+}
+
+.liquid-list-item.selected {
+  background: rgba(255, 109, 31, 0.1);
+  box-shadow: inset 0 0 0 1px rgba(255, 109, 31, 0.3);
+}
+
+.dark .liquid-list-item:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.dark .liquid-list-item:active {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.dark .liquid-list-item.selected {
+  background: rgba(255, 109, 31, 0.15);
+}
+
+/* Liquid Avatar */
+.liquid-avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius-full);
+  background: linear-gradient(
+    135deg,
+    rgba(255, 109, 31, 0.8) 0%,
+    rgba(255, 138, 76, 0.8) 100%
+  );
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  color: white;
+  box-shadow:
+    0 4px 12px rgba(255, 109, 31, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.3);
+  flex-shrink: 0;
+}
+
+.liquid-avatar img {
+  width: 100%;
+  height: 100%;
+  border-radius: var(--radius-full);
+  object-fit: cover;
+}
+
+/* Liquid Badge */
+.liquid-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: var(--radius-full);
+  font-size: 12px;
+  font-weight: 600;
+  background: linear-gradient(
+    135deg,
+    rgba(255, 109, 31, 0.9) 0%,
+    rgba(255, 138, 76, 0.9) 100%
+  );
+  color: white;
+  box-shadow: 0 2px 8px rgba(255, 109, 31, 0.3);
+}
+
+/* Liquid Message Bubbles */
+.liquid-msg-sent {
+  background: linear-gradient(
+    135deg,
+    rgba(255, 109, 31, 0.95) 0%,
+    rgba(255, 138, 76, 0.95) 100%
+  );
+  color: white;
+  border-radius: var(--radius-2xl) var(--radius-2xl) var(--radius-md) var(--radius-2xl);
+  padding: 12px 16px;
+  box-shadow:
+    0 4px 16px rgba(255, 109, 31, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  max-width: 75%;
+}
+
+.liquid-msg-received {
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  color: var(--color-foreground);
+  border-radius: var(--radius-2xl) var(--radius-2xl) var(--radius-2xl) var(--radius-md);
+  padding: 12px 16px;
+  box-shadow:
+    0 2px 12px rgba(0, 0, 0, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  max-width: 75%;
+}
+
+.dark .liquid-msg-received {
+  background: rgba(60, 60, 60, 0.7);
+  box-shadow:
+    0 2px 12px rgba(0, 0, 0, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+/* Liquid FAB (Floating Action Button) */
+.liquid-fab {
+  width: 56px;
+  height: 56px;
+  border-radius: var(--radius-full);
+  background: linear-gradient(
+    135deg,
+    rgba(255, 109, 31, 0.95) 0%,
+    rgba(255, 138, 76, 0.95) 100%
+  );
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  border: none;
+  box-shadow:
+    0 8px 24px rgba(255, 109, 31, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.3);
+  transition: all var(--duration-slow) var(--easing-default);
+  position: relative;
+  overflow: hidden;
+}
+
+.liquid-fab::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.25) 0%,
+    transparent 50%
+  );
+  border-radius: inherit;
+}
+
+.liquid-fab:hover {
+  transform: scale(1.08) translateY(-2px);
+  box-shadow:
+    0 12px 32px rgba(255, 109, 31, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.4);
+}
+
+.liquid-fab:active {
+  transform: scale(0.95);
+}
+
+/* Liquid Divider */
+.liquid-divider {
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--color-text-disabled) 20%,
+    var(--color-text-disabled) 80%,
+    transparent 100%
+  );
+  margin: 8px 0;
+}
+
+/* Liquid Glow Effect */
+.liquid-glow {
+  position: relative;
+}
+
+.liquid-glow::after {
+  content: '';
+  position: absolute;
+  inset: -20px;
+  background: radial-gradient(
+    circle at center,
+    rgba(255, 109, 31, 0.15) 0%,
+    transparent 70%
+  );
+  z-index: -1;
   opacity: 0;
+  transition: opacity var(--duration-slow) var(--easing-default);
+  pointer-events: none;
 }
 
-.animation-delay-300 {
-  animation-delay: 0.3s;
-  opacity: 0;
+.liquid-glow:hover::after {
+  opacity: 1;
 }
 
-.animation-delay-400 {
-  animation-delay: 0.4s;
-  opacity: 0;
+/* ============================================
+   Telegram UI Overrides
+   ============================================ */
+.tgui {
+  --tgui-bg-color: transparent !important;
+}
+
+.tgui-cell {
+  background: transparent !important;
+}
+
+.tgui-section {
+  background: transparent !important;
 }

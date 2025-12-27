@@ -9,6 +9,7 @@ type Theme = 'light' | 'dark';
 interface ThemeContextType {
   theme: Theme;
   toggleTheme: () => void;
+  setTheme: (theme: Theme) => void;
 }
 
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
@@ -130,6 +131,13 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       document.documentElement.classList.remove('dark');
     }
 
+    // Update theme-color meta tag for browser UI
+    const themeColor = theme === 'dark' ? '#0a0a0a' : '#f5f5f7';
+    const metaThemeColor = document.querySelector('meta[name="theme-color"]');
+    if (metaThemeColor) {
+      metaThemeColor.setAttribute('content', themeColor);
+    }
+
     // Save to localStorage
     localStorage.setItem('theme', theme);
   }, [theme, mounted]);
@@ -145,9 +153,17 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     });
   }, [user, saveThemeToCloud]);
 
+  const setThemeValue = useCallback((newTheme: Theme) => {
+    setTheme(newTheme);
+    // Save to cloud when user sets theme
+    if (user) {
+      saveThemeToCloud(newTheme);
+    }
+  }, [user, saveThemeToCloud]);
+
   // Always render children - the blocking script prevents flash
   return (
-    <ThemeContext.Provider value={{ theme, toggleTheme }}>
+    <ThemeContext.Provider value={{ theme, toggleTheme, setTheme: setThemeValue }}>
       {children}
     </ThemeContext.Provider>
   );

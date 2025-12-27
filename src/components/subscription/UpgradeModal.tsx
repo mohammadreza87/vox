@@ -62,11 +62,11 @@ export function UpgradeModal() {
       />
 
       {/* Modal */}
-      <div className="relative glass-dark rounded-3xl shadow-2xl max-w-md w-full p-8 animate-in fade-in zoom-in-95 duration-200">
+      <div className="relative liquid-glass rounded-3xl shadow-2xl max-w-md w-full p-8 animate-in fade-in zoom-in-95 duration-200">
         {/* Close button */}
         <button
           onClick={hideUpgradeModal}
-          className="absolute top-4 right-4 p-2 rounded-full glass-light hover:bg-white/30 transition-colors"
+          className="absolute top-4 right-4 p-2 rounded-full liquid-card hover:bg-white/30 transition-colors"
         >
           <X className="w-5 h-5 text-[var(--foreground)]/60" />
         </button>
@@ -91,7 +91,7 @@ export function UpgradeModal() {
           </p>
 
           {/* Tier badge */}
-          <div className="inline-flex items-center gap-2 px-4 py-2 glass-light rounded-full mb-6">
+          <div className="inline-flex items-center gap-2 px-4 py-2 liquid-card rounded-full mb-6">
             <Crown className="w-4 h-4 text-[#FF6D1F]" />
             <span className="text-sm font-semibold text-[#FF6D1F]">
               Available on {tierConfig.name} and above
@@ -118,14 +118,14 @@ export function UpgradeModal() {
 
           {/* CTA Buttons */}
           <div className="flex flex-col gap-3">
-            <Button onClick={handleViewPlans} size="lg" className="w-full btn-primary rounded-xl">
+            <Button onClick={handleViewPlans} size="lg" className="w-full liquid-button rounded-xl">
               View Plans
             </Button>
             <Button
               onClick={hideUpgradeModal}
               variant="ghost"
               size="lg"
-              className="w-full glass-light rounded-xl"
+              className="w-full liquid-card rounded-xl hover:bg-white/20"
             >
               Maybe Later
             </Button>

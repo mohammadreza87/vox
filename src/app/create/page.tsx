@@ -1,10 +1,10 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { Button, Card } from '@/shared/components';
-import { ArrowLeft, Volume2, Sparkles, Check, Mic, Square, Shuffle, Upload, Camera, Image as ImageIcon, Trash2, Play, Loader2, Brain, Lock, Crown } from 'lucide-react';
+import { ArrowLeft, Volume2, Sparkles, Check, Mic, Square, Shuffle, Upload, Camera, Image as ImageIcon, Trash2, Play, Loader2, Brain, Lock, Crown, StopCircle } from 'lucide-react';
 import { ContactCategory, AIProvider, AI_MODELS, ClonedVoice } from '@/shared/types';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
@@ -16,15 +16,25 @@ import { getClonedVoicesKey } from '@/shared/utils/storage';
 import { getModelTier } from '@/config/subscription';
 import { PreMadeContactConfig } from '@/shared/types';
 
-// Pre-made voice options from ElevenLabs
-const VOICE_OPTIONS = [
-  { id: 'EXAVITQu4vr4xnSDxMaL', name: 'Rachel', gender: 'female', accent: 'American', description: 'Warm and professional' },
-  { id: 'pNInz6obpgDQGcFmaJgB', name: 'Adam', gender: 'male', accent: 'American', description: 'Deep and authoritative' },
-  { id: 'VR6AewLTigWG4xSOukaG', name: 'Arnold', gender: 'male', accent: 'American', description: 'Friendly and casual' },
-  { id: 'ThT5KcBeYPX3keUQqHPh', name: 'Dorothy', gender: 'female', accent: 'British', description: 'Calm and soothing' },
-  { id: 'AZnzlk1XvdvUeBnXmlld', name: 'Domi', gender: 'female', accent: 'American', description: 'Energetic and enthusiastic' },
-  { id: '21m00Tcm4TlvDq8ikWAM', name: 'Bella', gender: 'female', accent: 'American', description: 'Soft and gentle' },
+// Default voice options (used as fallback before API loads)
+const DEFAULT_VOICE_OPTIONS = [
+  { id: 'EXAVITQu4vr4xnSDxMaL', name: 'Sarah', gender: 'Female', accent: 'American', description: 'Confident and warm' },
+  { id: 'pNInz6obpgDQGcFmaJgB', name: 'Adam', gender: 'Male', accent: 'American', description: 'Deep and confident' },
+  { id: 'CwhRBWXzGAHq8TQ4Fs17', name: 'Roger', gender: 'Male', accent: 'American', description: 'Easy going, casual' },
+  { id: 'FGY2WhTYpPnrIDTdsKH5', name: 'Laura', gender: 'Female', accent: 'American', description: 'Sunny and quirky' },
+  { id: 'IKne3meq5aSn9XLyUdCD', name: 'Charlie', gender: 'Male', accent: 'Australian', description: 'Confident and energetic' },
+  { id: 'JBFqnCBsd6RMkjVDRZzb', name: 'George', gender: 'Male', accent: 'British', description: 'Warm and captivating' },
 ];
+
+// Voice option type
+interface VoiceOption {
+  id: string;
+  name: string;
+  gender: string;
+  accent: string;
+  description: string;
+  previewUrl?: string;
+}
 
 // Helper to convert saved cloned voices to voice options format
 const clonedVoiceToOption = (voice: { voiceId: string; name: string }) => ({
@@ -76,8 +86,8 @@ function CreateContactPageContent() {
 
   // Voice state
   const [voiceSelectionType, setVoiceSelectionType] = useState<VoiceSelectionType>('premade');
-  const [voiceId, setVoiceId] = useState(VOICE_OPTIONS[0].id);
-  const [voiceName, setVoiceName] = useState(VOICE_OPTIONS[0].name);
+  const [voiceId, setVoiceId] = useState(DEFAULT_VOICE_OPTIONS[0].id);
+  const [voiceName, setVoiceName] = useState(DEFAULT_VOICE_OPTIONS[0].name);
   const [isRecording, setIsRecording] = useState(false);
   const [recordedAudio, setRecordedAudio] = useState<Blob | null>(null);
   const [recordingDuration, setRecordingDuration] = useState(0);
@@ -99,6 +109,15 @@ function CreateContactPageContent() {
   // Saved cloned voices
   const [savedVoices, setSavedVoices] = useState<ClonedVoice[]>([]);
 
+  // Voice options from API
+  const [voiceOptions, setVoiceOptions] = useState<VoiceOption[]>(DEFAULT_VOICE_OPTIONS);
+  const [isLoadingVoices, setIsLoadingVoices] = useState(true);
+
+  // Voice preview state
+  const [previewingVoiceId, setPreviewingVoiceId] = useState<string | null>(null);
+  const [isLoadingPreview, setIsLoadingPreview] = useState(false);
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+
   // Load saved voices from localStorage (user-specific)
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -112,6 +131,28 @@ function CreateContactPageContent() {
     }
   }, [user]);
 
+  // Fetch voice options from API (with real preview URLs)
+  useEffect(() => {
+    const fetchVoices = async () => {
+      try {
+        const response = await fetch('/api/voices');
+        if (response.ok) {
+          const data = await response.json();
+          if (data.voices && data.voices.length > 0) {
+            setVoiceOptions(data.voices);
+          }
+        }
+      } catch (error) {
+        console.error('Error fetching voices:', error);
+        // Keep default voices on error
+      } finally {
+        setIsLoadingVoices(false);
+      }
+    };
+
+    fetchVoices();
+  }, []);
+
   // Load contact data for editing (from context)
   useEffect(() => {
     if (editContactId) {
@@ -122,8 +163,8 @@ function CreateContactPageContent() {
         setPurpose(contactToEdit.purpose || '');
         setPersonality(contactToEdit.personality || '');
         setCategory(contactToEdit.category || 'custom');
-        setVoiceId(contactToEdit.voiceId || VOICE_OPTIONS[0].id);
-        setVoiceName(contactToEdit.voiceName || VOICE_OPTIONS[0].name);
+        setVoiceId(contactToEdit.voiceId || DEFAULT_VOICE_OPTIONS[0].id);
+        setVoiceName(contactToEdit.voiceName || DEFAULT_VOICE_OPTIONS[0].name);
         setEmoji(contactToEdit.avatarEmoji || '🤖');
         if (contactToEdit.avatarImage) {
           setAvatarImage(contactToEdit.avatarImage);
@@ -163,7 +204,7 @@ function CreateContactPageContent() {
   const recordingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const selectedVoice = VOICE_OPTIONS.find((v) => v.id === voiceId);
+  const selectedVoice = voiceOptions.find((v) => v.id === voiceId);
 
   // Clean up recording interval
   useEffect(() => {
@@ -174,8 +215,12 @@ function CreateContactPageContent() {
     };
   }, []);
 
+  // Recording error state
+  const [recordingError, setRecordingError] = useState<string | null>(null);
+
   // Voice Recording Functions
   const startRecording = async () => {
+    setRecordingError(null);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mediaRecorder = new MediaRecorder(stream);
@@ -201,9 +246,19 @@ function CreateContactPageContent() {
       recordingIntervalRef.current = setInterval(() => {
         setRecordingDuration(d => d + 1);
       }, 1000);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error starting recording:', error);
-      alert('Could not access microphone. Please allow microphone access.');
+
+      // Provide helpful error messages based on error type
+      if (error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError') {
+        setRecordingError('No microphone found. Please connect a microphone and try again.');
+      } else if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+        setRecordingError('Microphone access denied. Please allow microphone access in your browser settings.');
+      } else if (error.name === 'NotReadableError' || error.name === 'TrackStartError') {
+        setRecordingError('Microphone is in use by another app. Please close other apps using the microphone.');
+      } else {
+        setRecordingError('Could not access microphone. Please check your device settings.');
+      }
     }
   };
 
@@ -228,6 +283,132 @@ function CreateContactPageContent() {
     setRecordedAudio(null);
     setRecordingDuration(0);
     setClonedVoiceId(null);
+  };
+
+  // Voice Preview Functions
+  const stopPreview = useCallback(() => {
+    if (previewAudioRef.current) {
+      previewAudioRef.current.pause();
+      previewAudioRef.current = null;
+    }
+    setPreviewingVoiceId(null);
+    setIsLoadingPreview(false);
+  }, []);
+
+  const previewVoice = useCallback(async (voiceIdToPreview: string, voiceNameToPreview: string, previewUrl?: string) => {
+    // If already previewing this voice, stop it
+    if (previewingVoiceId === voiceIdToPreview) {
+      stopPreview();
+      return;
+    }
+
+    // Stop any current preview
+    stopPreview();
+
+    setIsLoadingPreview(true);
+    setPreviewingVoiceId(voiceIdToPreview);
+
+    try {
+      // For pre-made voices with preview URL, use the direct URL (instant!)
+      if (previewUrl) {
+        const audio = new Audio(previewUrl);
+        previewAudioRef.current = audio;
+
+        audio.oncanplaythrough = () => {
+          setIsLoadingPreview(false);
+        };
+
+        audio.onended = () => {
+          setPreviewingVoiceId(null);
+        };
+
+        audio.onerror = () => {
+          // Fallback to TTS API if preview URL fails
+          previewVoiceWithTTS(voiceIdToPreview, voiceNameToPreview);
+        };
+
+        await audio.play();
+        setIsLoadingPreview(false);
+        return;
+      }
+
+      // For cloned voices, use TTS API
+      await previewVoiceWithTTS(voiceIdToPreview, voiceNameToPreview);
+    } catch (error) {
+      console.error('Voice preview error:', error);
+      setPreviewingVoiceId(null);
+      setIsLoadingPreview(false);
+    }
+  }, [previewingVoiceId, stopPreview]);
+
+  // Helper function for TTS-based preview (used for cloned voices or fallback)
+  const previewVoiceWithTTS = useCallback(async (voiceIdToPreview: string, voiceNameToPreview: string) => {
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      const sampleText = `Hi, I'm ${voiceNameToPreview}. This is a preview of how I sound.`;
+
+      const response = await fetch('/api/tts', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token && { Authorization: `Bearer ${token}` }),
+        },
+        body: JSON.stringify({
+          text: sampleText,
+          voiceId: voiceIdToPreview,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (data.audio) {
+        const audioBlob = base64ToBlob(data.audio, 'audio/mpeg');
+        const audioUrl = URL.createObjectURL(audioBlob);
+
+        const audio = new Audio(audioUrl);
+        previewAudioRef.current = audio;
+
+        audio.onended = () => {
+          setPreviewingVoiceId(null);
+          URL.revokeObjectURL(audioUrl);
+        };
+
+        audio.onerror = () => {
+          setPreviewingVoiceId(null);
+          URL.revokeObjectURL(audioUrl);
+        };
+
+        setIsLoadingPreview(false);
+        await audio.play();
+      } else {
+        // Fallback to browser TTS
+        if ('speechSynthesis' in window) {
+          const utterance = new SpeechSynthesisUtterance(`Hi, I'm ${voiceNameToPreview}. This is a preview.`);
+          utterance.onend = () => setPreviewingVoiceId(null);
+          utterance.onerror = () => setPreviewingVoiceId(null);
+          setIsLoadingPreview(false);
+          window.speechSynthesis.speak(utterance);
+        } else {
+          setPreviewingVoiceId(null);
+          setIsLoadingPreview(false);
+        }
+      }
+    } catch (error) {
+      console.error('TTS preview error:', error);
+      setPreviewingVoiceId(null);
+      setIsLoadingPreview(false);
+    }
+  }, []);
+
+  // Helper function to convert base64 to Blob
+  const base64ToBlob = (base64: string, mimeType: string): Blob => {
+    const byteCharacters = atob(base64);
+    const byteNumbers = new Array(byteCharacters.length);
+    for (let i = 0; i < byteCharacters.length; i++) {
+      byteNumbers[i] = byteCharacters.charCodeAt(i);
+    }
+    const byteArray = new Uint8Array(byteNumbers);
+    return new Blob([byteArray], { type: mimeType });
   };
 
   // Clone voice using ElevenLabs API
@@ -280,7 +461,10 @@ function CreateContactPageContent() {
       localStorage.setItem(voicesStorageKey, JSON.stringify(existingVoices));
       setSavedVoices(existingVoices);
 
-      alert('Voice cloned and saved successfully!');
+      // Auto-preview the newly cloned voice
+      setTimeout(() => {
+        previewVoice(data.voice_id, voiceName);
+      }, 500);
     } catch (error) {
       console.error('Error cloning voice:', error);
       alert('Failed to clone voice. This feature requires an ElevenLabs paid plan.');
@@ -291,8 +475,8 @@ function CreateContactPageContent() {
 
   // Random voice selection
   const selectRandomVoice = () => {
-    const randomIndex = Math.floor(Math.random() * VOICE_OPTIONS.length);
-    const randomVoice = VOICE_OPTIONS[randomIndex];
+    const randomIndex = Math.floor(Math.random() * voiceOptions.length);
+    const randomVoice = voiceOptions[randomIndex];
     setVoiceId(randomVoice.id);
     setVoiceName(randomVoice.name);
   };
@@ -306,8 +490,8 @@ function CreateContactPageContent() {
     setSavedVoices(updatedVoices);
     // Reset selection if the deleted voice was selected
     if (deletedVoice && voiceId === deletedVoice.voiceId) {
-      setVoiceId(VOICE_OPTIONS[0].id);
-      setVoiceName(VOICE_OPTIONS[0].name);
+      setVoiceId(voiceOptions[0]?.id || DEFAULT_VOICE_OPTIONS[0].id);
+      setVoiceName(voiceOptions[0]?.name || DEFAULT_VOICE_OPTIONS[0].name);
     }
   };
 
@@ -371,9 +555,9 @@ function CreateContactPageContent() {
     let finalVoiceName = voiceName;
 
     if (voiceSelectionType === 'random') {
-      const randomIndex = Math.floor(Math.random() * VOICE_OPTIONS.length);
-      finalVoiceId = VOICE_OPTIONS[randomIndex].id;
-      finalVoiceName = VOICE_OPTIONS[randomIndex].name;
+      const randomIndex = Math.floor(Math.random() * voiceOptions.length);
+      finalVoiceId = voiceOptions[randomIndex].id;
+      finalVoiceName = voiceOptions[randomIndex].name;
     } else if (voiceSelectionType === 'record' && clonedVoiceId) {
       finalVoiceId = clonedVoiceId;
       finalVoiceName = `${name}'s Voice`;
@@ -679,61 +863,111 @@ Guidelines:
                     <>
                       <p className="text-xs font-medium text-[var(--foreground)]/60 px-1">Your Cloned Voices</p>
                       {savedVoices.map((voice) => (
-                        <button
+                        <div
                           key={voice.id}
-                          onClick={() => {
-                            setVoiceId(voice.voiceId);
-                            setVoiceName(voice.name);
-                          }}
                           className={`flex items-center gap-4 px-4 py-3 rounded-2xl border transition-colors ${
                             voiceId === voice.voiceId
                               ? 'border-[#FF6D1F] bg-[#FF6D1F]/10'
                               : 'glass-light hover:bg-white/30'
                           }`}
                         >
-                          <div className="w-10 h-10 rounded-full bg-green-500 flex items-center justify-center">
-                            <Mic className="w-5 h-5 text-white" />
-                          </div>
-                          <div className="flex-1 text-left">
-                            <p className="font-medium text-[var(--foreground)]">{voice.name}</p>
-                            <p className="text-sm text-[var(--foreground)]/60">
-                              Cloned • Your voice
-                            </p>
-                          </div>
+                          <button
+                            onClick={() => {
+                              setVoiceId(voice.voiceId);
+                              setVoiceName(voice.name);
+                            }}
+                            className="flex items-center gap-4 flex-1"
+                          >
+                            <div className="w-10 h-10 rounded-full bg-green-500 flex items-center justify-center">
+                              <Mic className="w-5 h-5 text-white" />
+                            </div>
+                            <div className="flex-1 text-left">
+                              <p className="font-medium text-[var(--foreground)]">{voice.name}</p>
+                              <p className="text-sm text-[var(--foreground)]/60">
+                                Cloned • Your voice
+                              </p>
+                            </div>
+                          </button>
+                          {/* Preview button */}
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              previewVoice(voice.voiceId, voice.name);
+                            }}
+                            className={`w-9 h-9 rounded-full flex items-center justify-center transition-colors ${
+                              previewingVoiceId === voice.voiceId
+                                ? 'bg-green-500 text-white'
+                                : 'bg-[var(--foreground)]/10 hover:bg-[var(--foreground)]/20 text-[var(--foreground)]'
+                            }`}
+                            title="Preview voice"
+                          >
+                            {isLoadingPreview && previewingVoiceId === voice.voiceId ? (
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                            ) : previewingVoiceId === voice.voiceId ? (
+                              <StopCircle className="w-4 h-4" />
+                            ) : (
+                              <Play className="w-4 h-4" />
+                            )}
+                          </button>
                           {voiceId === voice.voiceId && (
                             <Check className="w-5 h-5 text-[#FF6D1F]" />
                           )}
-                        </button>
+                        </div>
                       ))}
                       <p className="text-xs font-medium text-[var(--foreground)]/60 px-1 mt-2">Pre-made Voices</p>
                     </>
                   )}
-                  {VOICE_OPTIONS.map((voice) => (
-                    <button
+                  {voiceOptions.map((voice) => (
+                    <div
                       key={voice.id}
-                      onClick={() => {
-                        setVoiceId(voice.id);
-                        setVoiceName(voice.name);
-                      }}
                       className={`flex items-center gap-4 px-4 py-3 rounded-2xl border transition-colors ${
                         voiceId === voice.id
                           ? 'border-[#FF6D1F] bg-[#FF6D1F]/10'
                           : 'glass-light hover:bg-white/30'
                       }`}
                     >
-                      <div className="w-10 h-10 rounded-full bg-[#FF6D1F] flex items-center justify-center">
-                        <Volume2 className="w-5 h-5 text-white" />
-                      </div>
-                      <div className="flex-1 text-left">
-                        <p className="font-medium text-[var(--foreground)]">{voice.name}</p>
-                        <p className="text-sm text-[var(--foreground)]/60">
-                          {voice.gender} • {voice.accent} • {voice.description}
-                        </p>
-                      </div>
+                      <button
+                        onClick={() => {
+                          setVoiceId(voice.id);
+                          setVoiceName(voice.name);
+                        }}
+                        className="flex items-center gap-4 flex-1"
+                      >
+                        <div className="w-10 h-10 rounded-full bg-[#FF6D1F] flex items-center justify-center">
+                          <Volume2 className="w-5 h-5 text-white" />
+                        </div>
+                        <div className="flex-1 text-left">
+                          <p className="font-medium text-[var(--foreground)]">{voice.name}</p>
+                          <p className="text-sm text-[var(--foreground)]/60">
+                            {voice.gender} • {voice.accent} • {voice.description}
+                          </p>
+                        </div>
+                      </button>
+                      {/* Preview button */}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          previewVoice(voice.id, voice.name, voice.previewUrl);
+                        }}
+                        className={`w-9 h-9 rounded-full flex items-center justify-center transition-colors ${
+                          previewingVoiceId === voice.id
+                            ? 'bg-green-500 text-white'
+                            : 'bg-[var(--foreground)]/10 hover:bg-[var(--foreground)]/20 text-[var(--foreground)]'
+                        }`}
+                        title="Preview voice"
+                      >
+                        {isLoadingPreview && previewingVoiceId === voice.id ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : previewingVoiceId === voice.id ? (
+                          <StopCircle className="w-4 h-4" />
+                        ) : (
+                          <Play className="w-4 h-4" />
+                        )}
+                      </button>
                       {voiceId === voice.id && (
                         <Check className="w-5 h-5 text-[#FF6D1F]" />
                       )}
-                    </button>
+                    </div>
                   ))}
                 </div>
               )}
@@ -742,9 +976,16 @@ Guidelines:
               {voiceSelectionType === 'record' && (
                 <div className="space-y-4">
                   <div className="glass-light rounded-2xl p-4">
-                    <p className="text-sm text-[var(--foreground)]/70 mb-4">
-                      Record at least 30 seconds of clear speech to clone a voice. Speak naturally in a quiet environment.
+                    <p className="text-sm text-[var(--foreground)]/70 mb-3">
+                      Read the following text aloud to clone your voice. Speak naturally in a quiet environment.
                     </p>
+
+                    {/* Sample text to read */}
+                    <div className="bg-[var(--foreground)]/5 rounded-xl p-4 mb-4 border border-[var(--foreground)]/10">
+                      <p className="text-sm text-[var(--foreground)]/80 leading-relaxed italic">
+                        &quot;The quick brown fox jumps over the lazy dog, while a clever zebra gazes quietly across the field. Small waves ripple under the bright evening sky, and mixed voices echo through the open air. Every unique sound shapes the way we speak, from sharp consonants to warm vowels. As you read this passage, try to keep a steady pace and clear tone so the system can capture your natural voice.&quot;
+                      </p>
+                    </div>
 
                     {!recordedAudio ? (
                       <div className="flex flex-col items-center gap-4">
@@ -770,6 +1011,11 @@ Guidelines:
                         <p className="text-sm text-[var(--foreground)]/60">
                           {isRecording ? 'Recording... Click to stop' : 'Click to start recording'}
                         </p>
+                        {recordingError && (
+                          <div className="mt-3 p-3 rounded-xl bg-red-500/10 border border-red-500/20">
+                            <p className="text-sm text-red-500 text-center">{recordingError}</p>
+                          </div>
+                        )}
                       </div>
                     ) : (
                       <div className="space-y-4">

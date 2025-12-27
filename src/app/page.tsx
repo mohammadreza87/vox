@@ -1,10 +1,22 @@
 'use client';
 
 import Link from 'next/link';
+import { useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { Button } from '@/shared/components';
+import { useAuth } from '@/contexts/AuthContext';
 import { Mic, Brain, Sparkles, ArrowRight, Volume2, Globe, Fingerprint, MessageSquare, Palette, Cpu } from 'lucide-react';
 
 export default function LandingPage() {
+  const { user, loading } = useAuth();
+  const router = useRouter();
+
+  // Redirect to app if user is already logged in
+  useEffect(() => {
+    if (!loading && user) {
+      router.push('/app');
+    }
+  }, [user, loading, router]);
   return (
     <div className="min-h-full overflow-auto relative" style={{ minHeight: '100dvh' }}>
       {/* Animated gradient background */}

@@ -1,8 +1,10 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
+import { usePlatformStore } from '@/stores/platformStore';
+import { isTelegramMiniApp } from '@/lib/platform';
 import { Loader2 } from 'lucide-react';
 
 interface ProtectedRouteProps {
@@ -10,16 +12,48 @@ interface ProtectedRouteProps {
 }
 
 export function ProtectedRoute({ children }: ProtectedRouteProps) {
-  const { user, loading } = useAuth();
+  const { user, loading: authLoading } = useAuth();
+  const { telegramSession } = usePlatformStore();
   const router = useRouter();
+  const [isTelegram, setIsTelegram] = useState(false);
+  const [checkingTelegram, setCheckingTelegram] = useState(true);
+
+  // Check if in Telegram Mini App
+  useEffect(() => {
+    const inTelegram = isTelegramMiniApp();
+    setIsTelegram(inTelegram);
+
+    // Give TelegramProvider time to authenticate
+    if (inTelegram) {
+      const timer = setTimeout(() => {
+        setCheckingTelegram(false);
+      }, 2000);
+      return () => clearTimeout(timer);
+    } else {
+      setCheckingTelegram(false);
+    }
+  }, []);
+
+  // Check if Telegram session is valid
+  const hasTelegramSession = telegramSession && telegramSession.exp > Date.now();
+
+  // Determine if user is authenticated (either Firebase or Telegram)
+  const isAuthenticated = user || hasTelegramSession;
 
   useEffect(() => {
-    if (!loading && !user) {
+    // Wait for both auth checks to complete
+    if (authLoading || (isTelegram && checkingTelegram)) {
+      return;
+    }
+
+    // Redirect to login if not authenticated
+    if (!isAuthenticated) {
       router.push('/login');
     }
-  }, [user, loading, router]);
+  }, [user, authLoading, isTelegram, checkingTelegram, isAuthenticated, router]);
 
-  if (loading) {
+  // Show loading while checking auth
+  if (authLoading || (isTelegram && checkingTelegram)) {
     return (
       <div className="min-h-screen bg-[var(--background)] flex items-center justify-center transition-colors">
         <div className="text-center">
@@ -30,7 +64,8 @@ export function ProtectedRoute({ children }: ProtectedRouteProps) {
     );
   }
 
-  if (!user) {
+  // Show nothing while redirecting
+  if (!isAuthenticated) {
     return null;
   }
 

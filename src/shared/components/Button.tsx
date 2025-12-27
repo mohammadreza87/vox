@@ -11,13 +11,13 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 
 const Button = forwardRef<HTMLButtonElement, ButtonProps>(
   ({ className, variant = 'primary', size = 'md', isLoading, children, disabled, ...props }, ref) => {
-    const baseStyles = 'inline-flex items-center justify-center font-semibold rounded-2xl transition-all duration-200 cursor-pointer focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed';
+    const baseStyles = 'inline-flex items-center justify-center font-semibold rounded-2xl transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed';
 
     const variants = {
-      primary: 'bg-[#FF6D1F] text-white hover:bg-[#e5621b] focus:ring-[#FF6D1F] shadow-lg hover:shadow-xl',
-      secondary: 'bg-[var(--color-beige)] text-[var(--foreground)] border-2 border-[var(--foreground)]/10 hover:border-[var(--foreground)]/20 hover:opacity-80 focus:ring-[#FF6D1F] transition-colors',
-      ghost: 'bg-transparent text-[var(--foreground)] hover:bg-[var(--color-beige)] focus:ring-[#FF6D1F] transition-colors',
-      danger: 'bg-[var(--foreground)] text-[var(--background)] hover:opacity-80 focus:ring-[var(--foreground)] transition-colors',
+      primary: 'bg-[var(--color-primary)] text-white hover:bg-[var(--color-primary-dark)] focus:ring-[var(--color-primary)] shadow-[var(--shadow-button-primary)] hover:shadow-[var(--shadow-button-primary-hover)]',
+      secondary: 'bg-[var(--color-beige)] text-[var(--color-foreground)] border-2 border-[var(--color-foreground)]/10 hover:border-[var(--color-foreground)]/20 hover:opacity-80 focus:ring-[var(--color-primary)] transition-colors',
+      ghost: 'bg-transparent text-[var(--color-foreground)] hover:bg-[var(--color-beige)] focus:ring-[var(--color-primary)] transition-colors',
+      danger: 'bg-[var(--color-error)] text-white hover:bg-[var(--color-error-dark)] focus:ring-[var(--color-error)] transition-colors',
     };
 
     const sizes = {

@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useCallback, useRef } from 'react';
+import { auth } from '@/lib/firebase';
 
 interface UseTextToSpeechOptions {
   voiceId?: string;
@@ -34,11 +35,15 @@ export function useTextToSpeech({
       setIsLoading(true);
 
       try {
+        // Get auth token for authenticated request
+        const token = await auth.currentUser?.getIdToken();
+
         // Call our TTS API
         const response = await fetch('/api/tts', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            ...(token && { 'Authorization': `Bearer ${token}` }),
           },
           body: JSON.stringify({
             text,

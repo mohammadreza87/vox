@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { Check, ArrowLeft, Sparkles, Crown, Zap } from 'lucide-react';
 import { Button } from '@/shared/components/Button';
@@ -13,6 +13,9 @@ import {
   getAnnualSavings,
 } from '@/config/subscription';
 import { auth } from '@/lib/firebase';
+import { useEntranceAnimation } from '@/hooks/useAnimations';
+import { useTelegramPayment } from '@/hooks/useTelegramPayment';
+import { isTelegramMiniApp } from '@/lib/platform';
 
 type BillingInterval = 'monthly' | 'annual';
 
@@ -63,6 +66,18 @@ export default function PricingPage() {
   const { tier: currentTier, isLoading } = useSubscription();
   const [billingInterval, setBillingInterval] = useState<BillingInterval>('monthly');
   const [loadingTier, setLoadingTier] = useState<SubscriptionTier | null>(null);
+  const [isTelegram, setIsTelegram] = useState(false);
+
+  // Telegram payment hook
+  const { openPayment: openTelegramPayment, loading: telegramLoading, error: telegramError } = useTelegramPayment();
+
+  // Check if in Telegram Mini App
+  useEffect(() => {
+    setIsTelegram(isTelegramMiniApp());
+  }, []);
+
+  // GSAP Animation refs - single page entrance
+  const { ref: pageRef } = useEntranceAnimation('fadeUp', { delay: 0 });
 
   const handleSubscribe = async (tier: SubscriptionTier) => {
     if (tier === 'free') {
@@ -78,6 +93,18 @@ export default function PricingPage() {
     setLoadingTier(tier);
 
     try {
+      // Use Telegram payments if in Mini App
+      if (isTelegram) {
+        const telegramPriceId = billingInterval === 'monthly'
+          ? `${tier}_monthly` as const
+          : `${tier}_annual` as const;
+
+        await openTelegramPayment(telegramPriceId);
+        setLoadingTier(null);
+        return;
+      }
+
+      // Otherwise use Stripe
       const token = await auth.currentUser?.getIdToken();
       if (!token) throw new Error('Not authenticated');
 
@@ -111,7 +138,7 @@ export default function PricingPage() {
       }
     } catch (error) {
       console.error('Error creating checkout:', error);
-      alert('Failed to start checkout. Please try again.');
+      alert(telegramError || 'Failed to start checkout. Please try again.');
     } finally {
       setLoadingTier(null);
     }
@@ -131,7 +158,7 @@ export default function PricingPage() {
   };
 
   return (
-    <div className="min-h-full overflow-auto relative" style={{ minHeight: '100dvh' }}>
+    <div ref={pageRef} className="min-h-full overflow-auto relative" style={{ minHeight: '100dvh' }}>
       {/* Animated gradient background */}
       <div className="glass-background" />
 

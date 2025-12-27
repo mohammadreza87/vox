@@ -1,4 +1,4 @@
-import { initializeApp, getApps, cert, App } from 'firebase-admin/app';
+import { initializeApp, getApps, cert, applicationDefault, App } from 'firebase-admin/app';
 import { getAuth, Auth } from 'firebase-admin/auth';
 import { getFirestore, Firestore } from 'firebase-admin/firestore';
 
@@ -16,24 +16,32 @@ function getFirebaseAdminApp(): App {
     return _app;
   }
 
-  // Parse service account from environment variable
-  // Use SERVICE_ACCOUNT_KEY to avoid Firebase reserved prefix restriction
+  const projectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || 'vox-aicontact-fe0e3';
   const serviceAccountJson = process.env.SERVICE_ACCOUNT_KEY;
 
-  if (!serviceAccountJson) {
-    throw new Error('SERVICE_ACCOUNT_KEY environment variable is not set');
+  // Always try to use the service account key first if available
+  // This ensures we can sign custom tokens
+  if (serviceAccountJson) {
+    let serviceAccount;
+    try {
+      serviceAccount = JSON.parse(serviceAccountJson);
+      console.log('Using Service Account Key');
+      _app = initializeApp({
+        credential: cert(serviceAccount),
+        projectId,
+      });
+      return _app;
+    } catch (e) {
+      console.error('Failed to parse SERVICE_ACCOUNT_KEY:', e);
+    }
   }
 
-  let serviceAccount;
-  try {
-    serviceAccount = JSON.parse(serviceAccountJson);
-  } catch {
-    throw new Error('SERVICE_ACCOUNT_KEY is not valid JSON');
-  }
-
+  // Fallback to application default credentials
+  console.log('Using Application Default Credentials');
   _app = initializeApp({
-    credential: cert(serviceAccount),
-    projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+    credential: applicationDefault(),
+    projectId,
+    serviceAccountId: 'firebase-adminsdk-fbsvc@vox-aicontact-fe0e3.iam.gserviceaccount.com',
   });
 
   return _app;

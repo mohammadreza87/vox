@@ -280,3 +280,98 @@ function isNewDay(lastReset: Date, now: Date): boolean {
 
   return nowDate.getTime() > lastResetDate.getTime();
 }
+
+// ============================================
+// TRANSLATOR HISTORY FUNCTIONS
+// ============================================
+
+export interface TranslatorMessage {
+  id: string;
+  sourceText: string;
+  translatedText: string;
+  sourceLanguage: string;
+  targetLanguage: string;
+  speaker: 'me' | 'other';
+  timestamp: Date;
+}
+
+// Save a translator message
+export async function saveTranslatorMessage(
+  userId: string,
+  message: Omit<TranslatorMessage, 'id'>
+): Promise<string> {
+  try {
+    const db = getAdminDb();
+    const messagesRef = db.collection('users').doc(userId).collection('translatorMessages');
+
+    const docRef = await messagesRef.add({
+      ...message,
+      timestamp: dateToTimestamp(message.timestamp),
+    });
+
+    return docRef.id;
+  } catch (error) {
+    console.error('Error saving translator message:', error);
+    throw error;
+  }
+}
+
+// Get translator messages for a user (paginated)
+export async function getTranslatorMessages(
+  userId: string,
+  limit: number = 100,
+  beforeTimestamp?: Date
+): Promise<TranslatorMessage[]> {
+  try {
+    const db = getAdminDb();
+    const messagesRef = db.collection('users').doc(userId).collection('translatorMessages');
+
+    let query = messagesRef.orderBy('timestamp', 'desc').limit(limit);
+
+    if (beforeTimestamp) {
+      query = query.where('timestamp', '<', dateToTimestamp(beforeTimestamp));
+    }
+
+    const snapshot = await query.get();
+
+    const messages: TranslatorMessage[] = [];
+    snapshot.forEach((doc) => {
+      const data = doc.data();
+      messages.push({
+        id: doc.id,
+        sourceText: data.sourceText,
+        translatedText: data.translatedText,
+        sourceLanguage: data.sourceLanguage,
+        targetLanguage: data.targetLanguage,
+        speaker: data.speaker,
+        timestamp: timestampToDate(data.timestamp) || new Date(),
+      });
+    });
+
+    // Return in chronological order (oldest first)
+    return messages.reverse();
+  } catch (error) {
+    console.error('Error getting translator messages:', error);
+    throw error;
+  }
+}
+
+// Clear all translator messages for a user
+export async function clearTranslatorMessages(userId: string): Promise<void> {
+  try {
+    const db = getAdminDb();
+    const messagesRef = db.collection('users').doc(userId).collection('translatorMessages');
+
+    const snapshot = await messagesRef.get();
+    const batch = db.batch();
+
+    snapshot.docs.forEach((doc) => {
+      batch.delete(doc.ref);
+    });
+
+    await batch.commit();
+  } catch (error) {
+    console.error('Error clearing translator messages:', error);
+    throw error;
+  }
+}

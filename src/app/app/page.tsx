@@ -4,14 +4,26 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
-import { ThemeToggle } from '@/components/ThemeToggle';
 import { useAuth } from '@/contexts/AuthContext';
 import { useChat } from '@/contexts/ChatContext';
 import { PRE_MADE_CONTACTS, getPreMadeContact } from '@/features/contacts/data/premade-contacts';
 import { useVoiceRecording } from '@/features/voice/hooks/useVoiceRecording';
 import { useTextToSpeech } from '@/features/voice/hooks/useTextToSpeech';
+import { useStreamingChat } from '@/hooks/useStreamingChat';
+import { ChatErrorBoundary } from '@/components/ChatErrorBoundary';
 import { Avatar } from '@/shared/components';
 import { Message, PreMadeContactConfig, Chat } from '@/shared/types';
+import {
+  Cell,
+  Section,
+  List,
+  Avatar as TgAvatar,
+  Badge,
+  IconButton,
+  Placeholder,
+  SegmentedControl,
+  Input,
+} from '@telegram-apps/telegram-ui';
 import {
   Volume2,
   LogOut,
@@ -31,13 +43,17 @@ import {
   Settings,
   CreditCard,
   ChevronUp,
+  Languages,
 } from 'lucide-react';
+// ThemeToggle removed - now only in settings
 import { cn } from '@/shared/utils/cn';
 import { useSubscription } from '@/contexts/SubscriptionContext';
 import { useCustomContacts } from '@/contexts/CustomContactsContext';
 import { auth } from '@/lib/firebase';
+import { useEntranceAnimation, useTabAnimation } from '@/hooks/useAnimations';
+import gsap from 'gsap';
 
-type TabType = 'contacts' | 'chats';
+type TabType = 'contacts' | 'chats' | 'translator';
 
 export default function AppPage() {
   return (
@@ -49,7 +65,7 @@ export default function AppPage() {
 
 function AppContent() {
   const { user, logout } = useAuth();
-  const { chats, activeChat, setActiveChat, startChat, addMessage, updateMessage, deleteChat, getChatByContactId } = useChat();
+  const { chats, activeChat, setActiveChat, startChat, addMessage, updateMessage, deleteChat, getChatByContactId, isLoading: isLoadingChats } = useChat();
   const { canEditDefaultBots, showUpgradeModal, tier } = useSubscription();
   const { customContacts, deleteContact: deleteCustomContact, addContact } = useCustomContacts();
   const router = useRouter();
@@ -59,7 +75,7 @@ function AppContent() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedContact, setSelectedContact] = useState<PreMadeContactConfig | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
+  // isLoading state removed - now using isStreaming from useStreamingChat hook
   const [autoSpeak, setAutoSpeak] = useState(true);
   const [showMobileSidebar, setShowMobileSidebar] = useState(true);
   const [initialContactLoaded, setInitialContactLoaded] = useState(false);
@@ -67,6 +83,12 @@ function AppContent() {
   const userMenuRef = useRef<HTMLDivElement>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // GSAP Animation refs - single page entrance
+  const { ref: pageRef } = useEntranceAnimation('fadeIn', { delay: 0 });
+
+  // Tab content animation - triggers on tab change
+  const tabContentRef = useTabAnimation(activeTab, { animation: 'fadeUp' });
 
   const allContacts = [...PRE_MADE_CONTACTS, ...customContacts];
 
@@ -106,6 +128,29 @@ function AppContent() {
   } = useTextToSpeech({
     voiceId: selectedContact?.voiceId,
     onEnd: () => console.log('Finished speaking'),
+  });
+
+  // Streaming chat hook
+  const streamingMessageIdRef = useRef<string | null>(null);
+  const { streamingText, isStreaming, startStream, cancelStream } = useStreamingChat({
+    onComplete: async (fullText) => {
+      // Generate TTS after streaming completes
+      if (autoSpeak && selectedContact && activeChat && streamingMessageIdRef.current) {
+        const messageId = streamingMessageIdRef.current;
+        const audioData = await speak(fullText);
+        if (audioData) {
+          updateMessage(activeChat.id, messageId, { audioUrl: audioData });
+          setMessages((prev) =>
+            prev.map((msg) => (msg.id === messageId ? { ...msg, audioUrl: audioData } : msg))
+          );
+        }
+      }
+      streamingMessageIdRef.current = null;
+    },
+    onError: (error) => {
+      console.error('Streaming error:', error);
+      streamingMessageIdRef.current = null;
+    },
   });
 
   // State for tracking which message is currently playing
@@ -207,6 +252,7 @@ function AppContent() {
     if (!selectedContact || !content.trim() || !activeChat) return;
 
     stopSpeaking();
+    cancelStream();
 
     const userMessage: Message = {
       id: `user-${Date.now()}`,
@@ -217,76 +263,64 @@ function AppContent() {
       createdAt: new Date(),
     };
 
-    setMessages(prev => [...prev, userMessage]);
+    setMessages((prev) => [...prev, userMessage]);
     addMessage(activeChat.id, userMessage);
-    setIsLoading(true);
 
-    try {
-      const conversationHistory = messages.map(msg => ({
-        role: msg.role,
-        content: msg.content,
-      }));
+    // Create placeholder AI message for streaming
+    const messageId = `ai-${Date.now()}`;
+    streamingMessageIdRef.current = messageId;
 
-      // Get auth token for subscription validation
-      const token = await auth.currentUser?.getIdToken();
+    const aiPlaceholder: Message = {
+      id: messageId,
+      contactId: selectedContact.id,
+      role: 'assistant',
+      content: '', // Will be filled by streaming
+      audioUrl: null,
+      createdAt: new Date(),
+    };
 
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token && { 'Authorization': `Bearer ${token}` }),
-        },
-        body: JSON.stringify({
-          message: content,
-          contactId: selectedContact.id,
-          systemPrompt: selectedContact.systemPrompt,
-          conversationHistory,
-          aiProvider: selectedContact.aiProvider,
-          aiModel: selectedContact.aiModel,
-        }),
-      });
+    setMessages((prev) => [...prev, aiPlaceholder]);
 
-      const data = await response.json();
-      const messageId = `ai-${Date.now()}`;
+    const conversationHistory = messages.map((msg) => ({
+      role: msg.role,
+      content: msg.content,
+    }));
 
-      const aiResponse: Message = {
+    // Start streaming
+    startStream({
+      message: content,
+      contactId: selectedContact.id,
+      systemPrompt: selectedContact.systemPrompt,
+      conversationHistory,
+      aiProvider: selectedContact.aiProvider,
+      aiModel: selectedContact.aiModel,
+    });
+  }, [selectedContact, activeChat, messages, stopSpeaking, cancelStream, addMessage, startStream]);
+
+  // Update AI message content as streaming chunks arrive
+  useEffect(() => {
+    if (!isStreaming && !streamingText) return;
+
+    const messageId = streamingMessageIdRef.current;
+    if (!messageId) return;
+
+    setMessages((prev) =>
+      prev.map((msg) => (msg.id === messageId ? { ...msg, content: streamingText } : msg))
+    );
+
+    // When streaming completes, save the final message
+    if (!isStreaming && streamingText && activeChat) {
+      const finalMessage = {
         id: messageId,
-        contactId: selectedContact.id,
-        role: 'assistant',
-        content: data.content,
+        contactId: activeChat.contactId,
+        role: 'assistant' as const,
+        content: streamingText,
         audioUrl: null,
         createdAt: new Date(),
       };
-
-      setMessages(prev => [...prev, aiResponse]);
-      addMessage(activeChat.id, aiResponse);
-
-      if (autoSpeak) {
-        // Get audio and save it with the message
-        const audioData = await speak(data.content);
-        if (audioData) {
-          // Update the message with audio data
-          updateMessage(activeChat.id, messageId, { audioUrl: audioData });
-          setMessages(prev => prev.map(msg =>
-            msg.id === messageId ? { ...msg, audioUrl: audioData } : msg
-          ));
-        }
-      }
-    } catch (error) {
-      console.error('Chat error:', error);
-      const errorMessage: Message = {
-        id: `error-${Date.now()}`,
-        contactId: selectedContact.id,
-        role: 'assistant',
-        content: "I'm sorry, I'm having trouble connecting right now. Please try again.",
-        audioUrl: null,
-        createdAt: new Date(),
-      };
-      setMessages(prev => [...prev, errorMessage]);
-    } finally {
-      setIsLoading(false);
+      addMessage(activeChat.id, finalMessage);
     }
-  }, [selectedContact, activeChat, messages, autoSpeak, speak, stopSpeaking, addMessage, updateMessage]);
+  }, [streamingText, isStreaming, activeChat, addMessage]);
 
   // Handle replay of cached audio
   const handleReplayAudio = useCallback(async (message: Message) => {
@@ -404,93 +438,87 @@ function AppContent() {
   };
 
   return (
-    <div className="h-full flex overflow-hidden relative" style={{ height: '100dvh' }}>
+    <div ref={pageRef} className="h-full flex overflow-hidden relative" style={{ height: '100dvh' }}>
       {/* Animated gradient background */}
       <div className="glass-background" />
 
       {/* Sidebar */}
-      <div className={cn(
-        "w-full md:w-80 lg:w-96 flex flex-col transition-all z-10",
-        showMobileSidebar ? "flex" : "hidden md:flex"
-      )}>
+      <div
+        className={cn(
+          "w-full md:w-[340px] lg:w-[400px] xl:w-[440px] flex flex-col transition-all z-10",
+          showMobileSidebar ? "flex" : "hidden md:flex"
+        )}
+      >
         {/* Sidebar Glass Panel */}
-        <div className="m-2 md:m-3 flex-1 flex flex-col glass rounded-2xl overflow-hidden">
+        <div className="m-2 md:m-3 flex-1 flex flex-col liquid-glass overflow-hidden">
           {/* Sidebar Header */}
           <div className="p-4 border-b border-white/10">
             <div className="flex items-center justify-between mb-4">
-              <Link href="/" className="flex items-center gap-2 group">
-                <div className="w-10 h-10 bg-gradient-to-br from-[#FF6D1F] to-[#ff8a4c] rounded-xl flex items-center justify-center shadow-lg shadow-[#FF6D1F]/30 group-hover:shadow-[#FF6D1F]/50 transition-shadow">
-                  <Volume2 className="w-6 h-6 text-white" />
+              <div className="flex items-center gap-2">
+                <div className="w-10 h-10 liquid-avatar">
+                  <Volume2 className="w-5 h-5" />
                 </div>
                 <span className="text-xl font-bold text-[var(--foreground)]">Vox</span>
-              </Link>
-              <ThemeToggle />
+              </div>
             </div>
 
             {/* Tabs */}
-            <div className="flex glass-light rounded-xl p-1">
+            <div className="liquid-tabs">
               <button
                 onClick={() => setActiveTab('chats')}
-                className={cn(
-                  "flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg font-medium transition-all",
-                  activeTab === 'chats'
-                    ? "btn-primary"
-                    : "text-[var(--foreground)]/60 hover:text-[var(--foreground)] hover:bg-white/10"
-                )}
+                className={cn("liquid-tab", activeTab === 'chats' && "active")}
               >
                 <MessageCircle className="w-4 h-4" />
                 Chats
                 {chats.length > 0 && (
-                  <span className={cn(
-                    "text-xs px-2 py-0.5 rounded-full",
-                    activeTab === 'chats' ? "bg-white/20 text-white" : "bg-[var(--foreground)]/10 text-[var(--foreground)]"
-                  )}>
+                  <span className="liquid-badge text-[10px] py-0.5 px-1.5 ml-1">
                     {chats.length}
                   </span>
                 )}
               </button>
               <button
                 onClick={() => setActiveTab('contacts')}
-                className={cn(
-                  "flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg font-medium transition-all",
-                  activeTab === 'contacts'
-                    ? "btn-primary"
-                    : "text-[var(--foreground)]/60 hover:text-[var(--foreground)] hover:bg-white/10"
-                )}
+                className={cn("liquid-tab", activeTab === 'contacts' && "active")}
               >
                 <Users className="w-4 h-4" />
                 Contacts
               </button>
+              <button
+                onClick={() => setActiveTab('translator')}
+                className={cn("liquid-tab", activeTab === 'translator' && "active")}
+              >
+                <Languages className="w-4 h-4" />
+                Translate
+              </button>
             </div>
           </div>
 
-          {/* Search */}
-          <div className="p-4">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-[var(--foreground)]/40" />
-              <input
-                type="text"
-                placeholder={activeTab === 'contacts' ? "Search contacts..." : "Search chats..."}
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-10 pr-4 py-2.5 glass-input rounded-xl focus:outline-none text-[var(--foreground)] placeholder-[var(--foreground)]/40 text-sm"
-              />
+          {/* Search - hide for translator tab */}
+          {activeTab !== 'translator' && (
+            <div className="p-4">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-[var(--foreground)]/40 z-10" />
+                <input
+                  type="text"
+                  placeholder={activeTab === 'contacts' ? "Search contacts..." : "Search chats..."}
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full pl-10 pr-4 py-3 liquid-input"
+                />
+              </div>
             </div>
-          </div>
+          )}
 
           {/* List */}
-          <div className="flex-1 overflow-y-auto px-4 pb-4">
+          <div ref={tabContentRef} className="flex-1 overflow-y-auto px-3 pb-4">
             {activeTab === 'contacts' ? (
-              <div className="space-y-2">
+              <div className="space-y-1">
                 {/* Create New Contact Button */}
-                <Link
-                  href="/create"
-                  className="flex items-center gap-3 p-3 rounded-xl glass-light border border-dashed border-white/20 hover:border-[#FF6D1F]/50 hover:bg-white/10 transition-all group"
-                >
-                  <div className="w-12 h-12 rounded-full bg-gradient-to-br from-[#FF6D1F]/20 to-[#ff8a4c]/20 flex items-center justify-center group-hover:from-[#FF6D1F]/30 group-hover:to-[#ff8a4c]/30 transition-colors">
+                <Link href="/create" className="liquid-list-item group">
+                  <div className="w-12 h-12 rounded-full liquid-card flex items-center justify-center group-hover:scale-105 transition-transform">
                     <Plus className="w-6 h-6 text-[#FF6D1F]" />
                   </div>
-                  <div>
+                  <div className="flex-1">
                     <p className="font-medium text-[var(--foreground)]">Create Contact</p>
                     <p className="text-sm text-[var(--foreground)]/60">Add custom AI assistant</p>
                   </div>
@@ -501,10 +529,8 @@ function AppContent() {
                   <div
                     key={contact.id}
                     className={cn(
-                      "group w-full flex items-center gap-3 p-3 rounded-xl transition-all",
-                      selectedContact?.id === contact.id
-                        ? "glass-dark border border-[#FF6D1F]/30 shadow-lg shadow-[#FF6D1F]/10"
-                        : "glass-light hover:bg-white/20"
+                      "liquid-list-item group",
+                      selectedContact?.id === contact.id && "selected"
                     )}
                   >
                     <button
@@ -520,7 +546,7 @@ function AppContent() {
                     <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                       <button
                         onClick={(e) => handleEditAnyContact(contact, e)}
-                        className="p-2 rounded-full hover:bg-white/20 text-[var(--foreground)]/40 hover:text-[#FF6D1F] transition-all"
+                        className="p-2 rounded-full liquid-card text-[var(--foreground)]/60 hover:text-[#FF6D1F] transition-all"
                         title={isCustomContact(contact.id) ? "Edit contact" : "Customize contact"}
                       >
                         <Pencil className="w-4 h-4" />
@@ -528,7 +554,7 @@ function AppContent() {
                       {isCustomContact(contact.id) && (
                         <button
                           onClick={(e) => handleDeleteContact(contact.id, e)}
-                          className="p-2 rounded-full hover:bg-red-500/20 text-[var(--foreground)]/40 hover:text-red-500 transition-all"
+                          className="p-2 rounded-full liquid-card text-[var(--foreground)]/60 hover:text-red-500 transition-all"
                           title="Delete contact"
                         >
                           <Trash2 className="w-4 h-4" />
@@ -538,11 +564,26 @@ function AppContent() {
                   </div>
                 ))}
               </div>
-            ) : (
-              <div className="space-y-2">
-                {filteredChats.length === 0 ? (
+            ) : activeTab === 'chats' ? (
+              <div className="space-y-1">
+                {isLoadingChats ? (
+                  /* Loading skeleton for chats */
+                  <div className="space-y-2 animate-pulse">
+                    {[1, 2, 3, 4].map((i) => (
+                      <div key={i} className="liquid-list-item">
+                        <div className="flex items-center gap-3 w-full">
+                          <div className="w-12 h-12 rounded-full bg-[var(--foreground)]/10" />
+                          <div className="flex-1 space-y-2">
+                            <div className="h-4 bg-[var(--foreground)]/10 rounded w-1/3" />
+                            <div className="h-3 bg-[var(--foreground)]/10 rounded w-2/3" />
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : filteredChats.length === 0 ? (
                   <div className="text-center py-12">
-                    <div className="w-16 h-16 glass-light rounded-full flex items-center justify-center mx-auto mb-3">
+                    <div className="w-16 h-16 liquid-card rounded-full flex items-center justify-center mx-auto mb-3">
                       <MessageCircle className="w-8 h-8 text-[var(--foreground)]/30" />
                     </div>
                     <p className="text-[var(--foreground)]/60 font-medium">No chats yet</p>
@@ -553,10 +594,8 @@ function AppContent() {
                     <div
                       key={chat.id}
                       className={cn(
-                        "group w-full flex items-center gap-3 p-3 rounded-xl transition-all",
-                        activeChat?.id === chat.id
-                          ? "glass-dark border border-[#FF6D1F]/30 shadow-lg shadow-[#FF6D1F]/10"
-                          : "glass-light hover:bg-white/20"
+                        "liquid-list-item group",
+                        activeChat?.id === chat.id && "selected"
                       )}
                     >
                       <button
@@ -565,7 +604,7 @@ function AppContent() {
                       >
                         <div className="relative">
                           <Avatar src={chat.contactImage} fallback={chat.contactEmoji} size="md" />
-                          <div className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 bg-gradient-to-br from-[#FF6D1F] to-[#ff8a4c] rounded-full border-2 border-[var(--glass-bg)]" />
+                          <div className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 liquid-fab" style={{ width: '14px', height: '14px' }} />
                         </div>
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center justify-between">
@@ -577,7 +616,7 @@ function AppContent() {
                       </button>
                       <button
                         onClick={(e) => handleDeleteChat(chat.id, e)}
-                        className="opacity-0 group-hover:opacity-100 p-2 rounded-full hover:bg-red-500/20 text-[var(--foreground)]/40 hover:text-red-500 transition-all"
+                        className="opacity-0 group-hover:opacity-100 p-2 rounded-full liquid-card text-[var(--foreground)]/60 hover:text-red-500 transition-all"
                         title="Delete chat"
                       >
                         <Trash2 className="w-4 h-4" />
@@ -586,6 +625,24 @@ function AppContent() {
                   ))
                 )}
               </div>
+            ) : (
+              /* Translator Tab Content */
+              <div className="flex flex-col items-center justify-center h-full py-8 px-4">
+                <div className="w-20 h-20 liquid-card rounded-full flex items-center justify-center mb-4">
+                  <Languages className="w-10 h-10 text-[#FF6D1F]" />
+                </div>
+                <h3 className="text-xl font-bold text-[var(--foreground)] mb-2">Voice Translator</h3>
+                <p className="text-[var(--foreground)]/60 text-center mb-6 max-w-xs">
+                  Speak in any language and hear the translation in your own cloned voice
+                </p>
+                <Link
+                  href="/translator"
+                  className="liquid-button px-6 py-3 rounded-xl font-medium flex items-center gap-2"
+                >
+                  <Languages className="w-5 h-5" />
+                  Open Translator
+                </Link>
+              </div>
             )}
           </div>
 
@@ -593,7 +650,7 @@ function AppContent() {
           <div className="p-4 border-t border-white/10 relative" ref={userMenuRef}>
             {/* Dropdown Menu (opens upward) */}
             {showUserMenu && (
-              <div className="absolute bottom-full left-4 right-4 mb-2 glass-dark rounded-xl shadow-xl overflow-hidden z-50">
+              <div className="absolute bottom-full left-4 right-4 mb-2 liquid-glass overflow-hidden z-50">
                 <button
                   onClick={() => {
                     setShowUserMenu(false);
@@ -614,7 +671,7 @@ function AppContent() {
                   <CreditCard className="w-5 h-5 text-[var(--foreground)]/60" />
                   <div className="flex-1">
                     <span className="text-[var(--foreground)]">Plans</span>
-                    <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-[#FF6D1F]/20 text-[#FF6D1F] capitalize">{tier}</span>
+                    <span className="ml-2 liquid-badge text-[10px]">{tier}</span>
                   </div>
                 </button>
                 <button
@@ -633,9 +690,9 @@ function AppContent() {
             {/* User Info Button */}
             <button
               onClick={() => setShowUserMenu(!showUserMenu)}
-              className="w-full flex items-center gap-3 p-2 rounded-xl hover:bg-white/10 transition-colors"
+              className="w-full liquid-list-item"
             >
-              <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#FF6D1F] to-[#ff8a4c] flex items-center justify-center text-white font-medium shadow-lg shadow-[#FF6D1F]/20">
+              <div className="liquid-avatar text-sm">
                 {user?.displayName?.[0] || user?.email?.[0] || '?'}
               </div>
               <div className="flex-1 min-w-0 text-left">
@@ -652,18 +709,20 @@ function AppContent() {
       </div>
 
       {/* Chat Area */}
-      <div className={cn(
-        "flex-1 flex flex-col z-10",
-        !showMobileSidebar ? "flex" : "hidden md:flex"
-      )}>
-        <div className="m-2 md:m-3 md:ml-0 flex-1 flex flex-col glass rounded-2xl overflow-hidden">
+      <div
+        className={cn(
+          "flex-1 flex flex-col z-10",
+          !showMobileSidebar ? "flex" : "hidden md:flex"
+        )}
+      >
+        <div className="m-2 md:m-3 md:ml-0 flex-1 flex flex-col liquid-glass overflow-hidden">
           {selectedContact ? (
             <>
               {/* Chat Header */}
               <div className="p-4 border-b border-white/10 flex items-center gap-3">
                 <button
                   onClick={() => setShowMobileSidebar(true)}
-                  className="md:hidden w-10 h-10 rounded-full glass-light flex items-center justify-center hover:bg-white/20 transition-colors"
+                  className="md:hidden w-10 h-10 rounded-full liquid-card flex items-center justify-center hover:scale-105 transition-transform"
                 >
                   <ArrowLeft className="w-5 h-5 text-[var(--foreground)]" />
                 </button>
@@ -684,8 +743,8 @@ function AppContent() {
                   className={cn(
                     "flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-all",
                     autoSpeak
-                      ? "btn-primary"
-                      : "glass-light text-[var(--foreground)]/60 hover:bg-white/20"
+                      ? "liquid-button"
+                      : "liquid-card text-[var(--foreground)]/60"
                   )}
                 >
                   {autoSpeak ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
@@ -704,21 +763,14 @@ function AppContent() {
                     )}
                   >
                     {message.role === 'user' ? (
-                      <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#FF6D1F] to-[#ff8a4c] flex items-center justify-center flex-shrink-0 text-white font-medium shadow-lg shadow-[#FF6D1F]/20">
+                      <div className="liquid-avatar text-sm flex-shrink-0" style={{ width: '40px', height: '40px' }}>
                         {user?.displayName?.[0] || '?'}
                       </div>
                     ) : (
                       <Avatar src={selectedContact.avatarImage} fallback={selectedContact.avatarEmoji} size="sm" className="flex-shrink-0" />
                     )}
                     <div className="flex flex-col gap-1 max-w-[75%]">
-                      <div
-                        className={cn(
-                          "px-4 py-3",
-                          message.role === 'user'
-                            ? "msg-sent"
-                            : "msg-received"
-                        )}
-                      >
+                      <div className={message.role === 'user' ? "liquid-msg-sent" : "liquid-msg-received"}>
                         <p className="text-sm leading-relaxed whitespace-pre-wrap">{message.content}</p>
                       </div>
                       {/* Replay button for assistant messages */}
@@ -729,9 +781,8 @@ function AppContent() {
                           className={cn(
                             "self-start flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs transition-all",
                             playingMessageId === message.id
-                              ? "btn-primary"
-                              : "opacity-0 group-hover:opacity-100 glass-light text-[var(--foreground)]/60 hover:text-[#FF6D1F] hover:bg-white/20",
-                            message.audioUrl && "border border-[#FF6D1F]/30"
+                              ? "liquid-button"
+                              : "opacity-0 group-hover:opacity-100 liquid-card text-[var(--foreground)]/60 hover:text-[#FF6D1F]"
                           )}
                           title={message.audioUrl ? "Replay audio (cached)" : "Play audio"}
                         >
@@ -752,10 +803,11 @@ function AppContent() {
                   </div>
                 ))}
 
-                {isLoading && (
+                {/* Show typing indicator only when streaming starts with empty content */}
+                {isStreaming && !streamingText && (
                   <div className="flex items-center gap-3">
                     <Avatar src={selectedContact.avatarImage} fallback={selectedContact.avatarEmoji} size="sm" />
-                    <div className="msg-received px-4 py-3">
+                    <div className="liquid-msg-received">
                       <div className="flex items-center gap-1.5">
                         <span className="w-2 h-2 bg-[#FF6D1F] rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
                         <span className="w-2 h-2 bg-[#FF6D1F] rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
@@ -774,13 +826,13 @@ function AppContent() {
                 onStartRecording={handleStartRecording}
                 onStopRecording={handleStopRecording}
                 isRecording={isRecording}
-                isLoading={isLoading}
+                isLoading={isStreaming}
               />
             </>
           ) : (
             <div className="flex-1 flex items-center justify-center">
               <div className="text-center">
-                <div className="w-24 h-24 glass-light rounded-full flex items-center justify-center mx-auto mb-4">
+                <div className="w-24 h-24 liquid-card rounded-full flex items-center justify-center mx-auto mb-4">
                   <MessageCircle className="w-12 h-12 text-[var(--foreground)]/20" />
                 </div>
                 <h2 className="text-xl font-bold text-[var(--foreground)] mb-2">Select a conversation</h2>
@@ -867,12 +919,11 @@ function ChatInputArea({
           className={cn(
             "w-12 h-12 rounded-full flex items-center justify-center transition-all select-none relative",
             isRecording
-              ? "btn-primary animate-pulse"
-              : "glass-light text-[var(--foreground)] hover:bg-white/20"
+              ? "liquid-fab liquid-recording"
+              : "liquid-card text-[var(--foreground)] hover:scale-105"
           )}
           style={{ touchAction: 'none', WebkitTouchCallout: 'none', WebkitUserSelect: 'none', userSelect: 'none' }}
         >
-          {isRecording && <span className="absolute inset-0 rounded-full bg-[#FF6D1F] animate-ping opacity-75" />}
           {isRecording ? <MicOff className="w-6 h-6 relative z-10" /> : <Mic className="w-6 h-6" />}
         </button>
 
@@ -882,7 +933,7 @@ function ChatInputArea({
           onChange={(e) => setMessage(e.target.value)}
           placeholder={isRecording ? 'Listening...' : 'Type a message...'}
           disabled={isLoading || isRecording}
-          className="flex-1 px-4 py-3 glass-input rounded-xl focus:outline-none text-[var(--foreground)] placeholder-[var(--foreground)]/40"
+          className="flex-1 px-4 py-3 liquid-input"
         />
 
         <button
@@ -891,8 +942,8 @@ function ChatInputArea({
           className={cn(
             "w-12 h-12 rounded-full flex items-center justify-center transition-all",
             message.trim() && !isLoading
-              ? "btn-primary"
-              : "glass-light text-[var(--foreground)]/40"
+              ? "liquid-fab hover:scale-105"
+              : "liquid-card text-[var(--foreground)]/40"
           )}
         >
           {isLoading ? <Loader2 className="w-6 h-6 animate-spin" /> : <Send className="w-5 h-5" />}

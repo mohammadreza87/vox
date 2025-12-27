@@ -5,6 +5,9 @@ import OpenAI from 'openai';
 import { verifyIdToken, extractBearerToken } from '@/lib/firebase-admin';
 import { getUserDocument, incrementMessageCount, createUserDocument } from '@/lib/firestore';
 import { SUBSCRIPTION_TIERS, canUseModel, canSendMessage } from '@/config/subscription';
+import { chatRequestSchema } from '@/lib/validation/schemas';
+import { sanitizeForAI } from '@/lib/validation/sanitize';
+import { getChatRateLimiter, applyRateLimit } from '@/lib/ratelimit';
 
 // Initialize AI clients lazily
 let geminiClient: GoogleGenerativeAI | null = null;
@@ -47,31 +50,8 @@ function getDeepSeekClient() {
   return deepseekClient;
 }
 
-interface ChatRequest {
-  message: string;
-  contactId: string;
-  systemPrompt: string;
-  conversationHistory: Array<{
-    role: 'user' | 'assistant';
-    content: string;
-  }>;
-  aiProvider?: 'deepseek' | 'gemini' | 'claude' | 'openai';
-  aiModel?: string;
-}
-
 export async function POST(request: NextRequest) {
   try {
-    // Parse request body first
-    const body: ChatRequest = await request.json();
-    const { message, systemPrompt, conversationHistory, aiProvider = 'deepseek', aiModel } = body;
-
-    if (!message) {
-      return NextResponse.json(
-        { error: 'Message is required' },
-        { status: 400 }
-      );
-    }
-
     // Check for authentication (optional - allows anonymous users with free tier)
     const token = extractBearerToken(request.headers.get('Authorization'));
     let userId: string | null = null;
@@ -96,6 +76,35 @@ export async function POST(request: NextRequest) {
         }
       }
     }
+
+    // Apply rate limiting
+    const rateLimitResponse = await applyRateLimit(request, getChatRateLimiter(), userId ?? undefined);
+    if (rateLimitResponse) {
+      return rateLimitResponse;
+    }
+
+    // Parse and validate request body
+    const rawBody = await request.json();
+    const parseResult = chatRequestSchema.safeParse(rawBody);
+
+    if (!parseResult.success) {
+      return NextResponse.json(
+        {
+          error: 'Validation failed',
+          code: 'VALIDATION_ERROR',
+          details: parseResult.error.issues.map((issue) => ({
+            path: issue.path.join('.'),
+            message: issue.message,
+          })),
+        },
+        { status: 400 }
+      );
+    }
+
+    const { message, systemPrompt, conversationHistory, aiProvider = 'deepseek', aiModel } = parseResult.data;
+
+    // Sanitize message for AI
+    const sanitizedMessage = sanitizeForAI(message);
 
     // Check daily message limit
     const modelToUse = aiModel || getDefaultModel(aiProvider);
@@ -130,17 +139,17 @@ export async function POST(request: NextRequest) {
 
     switch (aiProvider) {
       case 'claude':
-        responseText = await handleClaudeChat(message, systemPrompt, conversationHistory, modelToUse);
+        responseText = await handleClaudeChat(sanitizedMessage, systemPrompt || '', conversationHistory, modelToUse);
         break;
       case 'openai':
-        responseText = await handleOpenAIChat(message, systemPrompt, conversationHistory, modelToUse);
+        responseText = await handleOpenAIChat(sanitizedMessage, systemPrompt || '', conversationHistory, modelToUse);
         break;
       case 'deepseek':
-        responseText = await handleDeepSeekChat(message, systemPrompt, conversationHistory, modelToUse);
+        responseText = await handleDeepSeekChat(sanitizedMessage, systemPrompt || '', conversationHistory, modelToUse);
         break;
       case 'gemini':
       default:
-        responseText = await handleGeminiChat(message, systemPrompt, conversationHistory, modelToUse);
+        responseText = await handleGeminiChat(sanitizedMessage, systemPrompt || '', conversationHistory, modelToUse);
         break;
     }
 
