@@ -38,7 +38,7 @@ function dateToTimestamp(date: Date | null | undefined): Timestamp | null {
 // Get user document from Firestore
 export async function getUserDocument(userId: string): Promise<UserDocument | null> {
   try {
-    const db = getAdminDb();
+    const db = await getAdminDb();
     const docRef = db.collection('users').doc(userId);
     const docSnap = await docRef.get();
 
@@ -82,7 +82,7 @@ export async function createUserDocument(
   displayName: string
 ): Promise<void> {
   try {
-    const db = getAdminDb();
+    const db = await getAdminDb();
     const docRef = db.collection('users').doc(userId);
 
     // Check if document already exists
@@ -119,7 +119,7 @@ export async function updateUserSubscription(
   subscription: Partial<UserSubscription>
 ): Promise<void> {
   try {
-    const db = getAdminDb();
+    const db = await getAdminDb();
     const docRef = db.collection('users').doc(userId);
 
     const updateData: Record<string, unknown> = {};
@@ -142,7 +142,7 @@ export async function updateUserSubscription(
 // Increment message count
 export async function incrementMessageCount(userId: string): Promise<void> {
   try {
-    const db = getAdminDb();
+    const db = await getAdminDb();
     const docRef = db.collection('users').doc(userId);
 
     // First check if we need to reset daily count
@@ -181,7 +181,7 @@ export async function resetDailyUsageIfNeeded(userId: string): Promise<boolean> 
     const now = new Date();
 
     if (isNewDay(lastReset, now)) {
-      const db = getAdminDb();
+      const db = await getAdminDb();
       const docRef = db.collection('users').doc(userId);
       await docRef.update({
         'usage.messagesUsedToday': 0,
@@ -203,7 +203,7 @@ export async function updateCustomContactsCount(
   count: number
 ): Promise<void> {
   try {
-    const db = getAdminDb();
+    const db = await getAdminDb();
     const docRef = db.collection('users').doc(userId);
     await docRef.update({
       'usage.customContactsCount': count,
@@ -220,7 +220,7 @@ export async function updateClonedVoicesCount(
   count: number
 ): Promise<void> {
   try {
-    const db = getAdminDb();
+    const db = await getAdminDb();
     const docRef = db.collection('users').doc(userId);
     await docRef.update({
       'usage.clonedVoicesCount': count,
@@ -237,7 +237,7 @@ export async function setStripeCustomerId(
   customerId: string
 ): Promise<void> {
   try {
-    const db = getAdminDb();
+    const db = await getAdminDb();
     const docRef = db.collection('users').doc(userId);
     await docRef.update({
       'subscription.stripeCustomerId': customerId,
@@ -301,7 +301,7 @@ export async function saveTranslatorMessage(
   message: Omit<TranslatorMessage, 'id'>
 ): Promise<string> {
   try {
-    const db = getAdminDb();
+    const db = await getAdminDb();
     const messagesRef = db.collection('users').doc(userId).collection('translatorMessages');
 
     const docRef = await messagesRef.add({
@@ -323,7 +323,7 @@ export async function getTranslatorMessages(
   beforeTimestamp?: Date
 ): Promise<TranslatorMessage[]> {
   try {
-    const db = getAdminDb();
+    const db = await getAdminDb();
     const messagesRef = db.collection('users').doc(userId).collection('translatorMessages');
 
     let query = messagesRef.orderBy('timestamp', 'desc').limit(limit);
@@ -359,7 +359,7 @@ export async function getTranslatorMessages(
 // Clear all translator messages for a user
 export async function clearTranslatorMessages(userId: string): Promise<void> {
   try {
-    const db = getAdminDb();
+    const db = await getAdminDb();
     const messagesRef = db.collection('users').doc(userId).collection('translatorMessages');
 
     const snapshot = await messagesRef.get();

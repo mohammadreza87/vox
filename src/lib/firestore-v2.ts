@@ -42,7 +42,7 @@ function toTimestamp(date: Date | string | null): Timestamp | null {
 
 export async function getUserPreferences(userId: string): Promise<UserPreferences | null> {
   try {
-    const db = getAdminDb();
+    const db = await getAdminDb();
     const doc = await db.collection('users').doc(userId).collection('profile').doc('preferences').get();
 
     if (!doc.exists) return null;
@@ -58,7 +58,7 @@ export async function setUserPreferences(
   preferences: Partial<UserPreferences>
 ): Promise<void> {
   try {
-    const db = getAdminDb();
+    const db = await getAdminDb();
     await db
       .collection('users')
       .doc(userId)
@@ -80,7 +80,7 @@ export async function setUserPreferences(
  */
 export async function getChats(userId: string): Promise<ChatDocument[]> {
   try {
-    const db = getAdminDb();
+    const db = await getAdminDb();
     const chatsRef = db.collection('users').doc(userId).collection('chats');
     const snapshot = await chatsRef.orderBy('lastMessageAt', 'desc').get();
 
@@ -114,7 +114,7 @@ export async function getChatsUpdatedSince(
   since: Date
 ): Promise<ChatDocument[]> {
   try {
-    const db = getAdminDb();
+    const db = await getAdminDb();
     const chatsRef = db.collection('users').doc(userId).collection('chats');
     const snapshot = await chatsRef
       .where('updatedAt', '>', toTimestamp(since))
@@ -148,7 +148,7 @@ export async function getChatsUpdatedSince(
  */
 export async function getChat(userId: string, chatId: string): Promise<ChatDocument | null> {
   try {
-    const db = getAdminDb();
+    const db = await getAdminDb();
     const doc = await db
       .collection('users')
       .doc(userId)
@@ -186,7 +186,7 @@ export async function getChatByContactId(
   contactId: string
 ): Promise<ChatDocument | null> {
   try {
-    const db = getAdminDb();
+    const db = await getAdminDb();
     const snapshot = await db
       .collection('users')
       .doc(userId)
@@ -226,7 +226,7 @@ export async function createChat(
   chat: Omit<ChatDocument, 'id' | 'messageCount' | 'createdAt' | 'updatedAt'>
 ): Promise<ChatDocument> {
   try {
-    const db = getAdminDb();
+    const db = await getAdminDb();
     const now = new Date();
 
     const chatData = {
@@ -270,7 +270,7 @@ export async function updateChat(
   updates: Partial<Omit<ChatDocument, 'id' | 'createdAt'>>
 ): Promise<void> {
   try {
-    const db = getAdminDb();
+    const db = await getAdminDb();
     const updateData: Record<string, unknown> = {
       updatedAt: toTimestamp(new Date()),
     };
@@ -300,7 +300,7 @@ export async function updateChat(
  */
 export async function deleteChat(userId: string, chatId: string): Promise<void> {
   try {
-    const db = getAdminDb();
+    const db = await getAdminDb();
     const chatRef = db.collection('users').doc(userId).collection('chats').doc(chatId);
 
     // Delete all messages first (Firestore doesn't auto-delete subcollections)
@@ -335,7 +335,7 @@ export async function getMessages(
   cursor?: string
 ): Promise<PaginatedMessages> {
   try {
-    const db = getAdminDb();
+    const db = await getAdminDb();
     const messagesRef = db
       .collection('users')
       .doc(userId)
@@ -389,7 +389,7 @@ export async function getAllMessages(
   chatId: string
 ): Promise<MessageDocument[]> {
   try {
-    const db = getAdminDb();
+    const db = await getAdminDb();
     const snapshot = await db
       .collection('users')
       .doc(userId)
@@ -424,7 +424,7 @@ export async function addMessage(
   message: Omit<MessageDocument, 'id' | 'createdAt'>
 ): Promise<MessageDocument> {
   try {
-    const db = getAdminDb();
+    const db = await getAdminDb();
     const now = new Date();
 
     const messageData = {
@@ -477,7 +477,7 @@ export async function updateMessage(
   updates: Partial<Omit<MessageDocument, 'id' | 'createdAt'>>
 ): Promise<void> {
   try {
-    const db = getAdminDb();
+    const db = await getAdminDb();
     await db
       .collection('users')
       .doc(userId)
@@ -501,7 +501,7 @@ export async function deleteMessage(
   messageId: string
 ): Promise<void> {
   try {
-    const db = getAdminDb();
+    const db = await getAdminDb();
 
     await db
       .collection('users')
@@ -537,7 +537,7 @@ export async function deleteMessage(
  */
 export async function getCustomContacts(userId: string): Promise<CustomContactDocument[]> {
   try {
-    const db = getAdminDb();
+    const db = await getAdminDb();
     const snapshot = await db
       .collection('users')
       .doc(userId)
@@ -579,7 +579,7 @@ export async function createCustomContact(
   contact: Omit<CustomContactDocument, 'id' | 'createdAt' | 'updatedAt'>
 ): Promise<CustomContactDocument> {
   try {
-    const db = getAdminDb();
+    const db = await getAdminDb();
     const now = new Date();
 
     const contactData = {
@@ -615,7 +615,7 @@ export async function updateCustomContact(
   updates: Partial<Omit<CustomContactDocument, 'id' | 'createdAt'>>
 ): Promise<void> {
   try {
-    const db = getAdminDb();
+    const db = await getAdminDb();
     await db
       .collection('users')
       .doc(userId)
@@ -636,7 +636,7 @@ export async function updateCustomContact(
  */
 export async function deleteCustomContact(userId: string, contactId: string): Promise<void> {
   try {
-    const db = getAdminDb();
+    const db = await getAdminDb();
     await db
       .collection('users')
       .doc(userId)

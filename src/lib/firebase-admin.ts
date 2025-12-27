@@ -1,15 +1,20 @@
-import { initializeApp, getApps, cert, applicationDefault, App } from 'firebase-admin/app';
-import { getAuth, Auth } from 'firebase-admin/auth';
-import { getFirestore, Firestore } from 'firebase-admin/firestore';
+// Firebase Admin SDK with dynamic imports to avoid Turbopack bundling issues
+import type { App } from 'firebase-admin/app';
+import type { Auth, DecodedIdToken } from 'firebase-admin/auth';
+import type { Firestore } from 'firebase-admin/firestore';
 
 let _app: App | null = null;
 let _auth: Auth | null = null;
 let _db: Firestore | null = null;
+let _initialized = false;
 
-function getFirebaseAdminApp(): App {
+async function initializeFirebaseAdmin(): Promise<App> {
   if (_app) {
     return _app;
   }
+
+  // Dynamic import to avoid bundling issues with Turbopack
+  const { initializeApp, getApps, cert, applicationDefault } = await import('firebase-admin/app');
 
   if (getApps().length > 0) {
     _app = getApps()[0];
@@ -20,16 +25,15 @@ function getFirebaseAdminApp(): App {
   const serviceAccountJson = process.env.SERVICE_ACCOUNT_KEY;
 
   // Always try to use the service account key first if available
-  // This ensures we can sign custom tokens
   if (serviceAccountJson) {
-    let serviceAccount;
     try {
-      serviceAccount = JSON.parse(serviceAccountJson);
+      const serviceAccount = JSON.parse(serviceAccountJson);
       console.log('Using Service Account Key');
       _app = initializeApp({
         credential: cert(serviceAccount),
         projectId,
       });
+      _initialized = true;
       return _app;
     } catch (e) {
       console.error('Failed to parse SERVICE_ACCOUNT_KEY:', e);
@@ -44,45 +48,37 @@ function getFirebaseAdminApp(): App {
     serviceAccountId: 'firebase-adminsdk-fbsvc@vox-aicontact-fe0e3.iam.gserviceaccount.com',
   });
 
+  _initialized = true;
   return _app;
 }
 
-// Lazy getters
-export function getAdminApp(): App {
-  return getFirebaseAdminApp();
+// Lazy async getters
+export async function getAdminApp(): Promise<App> {
+  return initializeFirebaseAdmin();
 }
 
-export function getAdminAuth(): Auth {
+export async function getAdminAuth(): Promise<Auth> {
   if (!_auth) {
-    _auth = getAuth(getFirebaseAdminApp());
+    const app = await initializeFirebaseAdmin();
+    const { getAuth } = await import('firebase-admin/auth');
+    _auth = getAuth(app);
   }
   return _auth;
 }
 
-export function getAdminDb(): Firestore {
+export async function getAdminDb(): Promise<Firestore> {
   if (!_db) {
-    _db = getFirestore(getFirebaseAdminApp());
+    const app = await initializeFirebaseAdmin();
+    const { getFirestore } = await import('firebase-admin/firestore');
+    _db = getFirestore(app);
   }
   return _db;
 }
 
-// For backward compatibility with existing code
-export const adminApp = { get: getAdminApp };
-export const adminAuth = new Proxy({} as Auth, {
-  get(_, prop) {
-    return getAdminAuth()[prop as keyof Auth];
-  },
-});
-export const adminDb = new Proxy({} as Firestore, {
-  get(_, prop) {
-    return getAdminDb()[prop as keyof Firestore];
-  },
-});
-
 // Helper to verify Firebase ID token
-export async function verifyIdToken(token: string) {
+export async function verifyIdToken(token: string): Promise<DecodedIdToken | null> {
   try {
-    const auth = getAdminAuth();
+    const auth = await getAdminAuth();
     const decodedToken = await auth.verifyIdToken(token);
     return decodedToken;
   } catch (error) {

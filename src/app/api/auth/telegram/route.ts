@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
-import { adminDb, adminAuth } from '@/lib/firebase-admin';
+import { getAdminDb } from '@/lib/firebase-admin';
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 
@@ -161,6 +161,7 @@ async function handleTelegramUser(
   source: 'miniapp' | 'widget'
 ) {
   const telegramUserId = `telegram_${telegramId}`;
+  const adminDb = await getAdminDb();
   const userRef = adminDb.collection('users').doc(telegramUserId);
   const userDoc = await userRef.get();
 

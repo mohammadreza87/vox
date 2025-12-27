@@ -16,7 +16,7 @@ export async function GET(request: NextRequest) {
     }
 
     const userId = decodedToken.uid;
-    const db = getAdminDb();
+    const db = await getAdminDb();
     const userDataRef = db.collection('users').doc(userId).collection('data').doc('app');
     const userDataSnap = await userDataRef.get();
 
@@ -72,7 +72,7 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const { chats, customContacts, preferences } = body;
 
-    const db = getAdminDb();
+    const db = await getAdminDb();
     const userDataRef = db.collection('users').doc(userId).collection('data').doc('app');
 
     const updateData: Record<string, unknown> = {};

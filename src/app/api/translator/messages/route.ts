@@ -16,7 +16,7 @@ async function verifyToken(request: NextRequest): Promise<string | null> {
 
   const token = authHeader.split('Bearer ')[1];
   try {
-    const adminAuth = getAdminAuth();
+    const adminAuth = await getAdminAuth();
     const decodedToken = await adminAuth.verifyIdToken(token);
     return decodedToken.uid;
   } catch (error) {

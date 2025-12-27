@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { adminDb } from '@/lib/firebase-admin';
+import { getAdminDb } from '@/lib/firebase-admin';
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_PAYMENT_TOKEN = process.env.TELEGRAM_PAYMENT_TOKEN;
@@ -150,6 +150,7 @@ export async function PUT(request: NextRequest) {
       const expiresAt = new Date(now.getTime() + durationDays * 24 * 60 * 60 * 1000);
 
       // Update user subscription in Firestore
+      const adminDb = await getAdminDb();
       const userRef = adminDb.collection('users').doc(userId);
       const subscriptionRef = userRef.collection('data').doc('subscription');
 

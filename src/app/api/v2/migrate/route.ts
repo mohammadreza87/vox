@@ -59,7 +59,7 @@ export async function POST(request: NextRequest) {
     }
 
     const userId = decodedToken.uid;
-    const db = getAdminDb();
+    const db = await getAdminDb();
 
     // Check migration status
     const migrationRef = db.collection('users').doc(userId).collection('metadata').doc('migration');
@@ -176,7 +176,7 @@ export async function POST(request: NextRequest) {
       if (token) {
         const decodedToken = await verifyIdToken(token);
         if (decodedToken) {
-          const db = getAdminDb();
+          const db = await getAdminDb();
           await db
             .collection('users')
             .doc(decodedToken.uid)
@@ -213,7 +213,7 @@ export async function GET(request: NextRequest) {
     }
 
     const userId = decodedToken.uid;
-    const db = getAdminDb();
+    const db = await getAdminDb();
 
     const migrationRef = db.collection('users').doc(userId).collection('metadata').doc('migration');
     const migrationDoc = await migrationRef.get();
