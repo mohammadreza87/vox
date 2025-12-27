@@ -93,6 +93,8 @@ function CreateContactPageContent() {
   const [recordingDuration, setRecordingDuration] = useState(0);
   const [isCloning, setIsCloning] = useState(false);
   const [clonedVoiceId, setClonedVoiceId] = useState<string | null>(null);
+  const [isPlayingRecording, setIsPlayingRecording] = useState(false);
+  const recordedAudioRef = useRef<HTMLAudioElement | null>(null);
 
   // Avatar state
   const [avatarType, setAvatarType] = useState<AvatarType>('emoji');
@@ -273,13 +275,44 @@ function CreateContactPageContent() {
   };
 
   const playRecordedAudio = () => {
-    if (recordedAudio) {
-      const audio = new Audio(URL.createObjectURL(recordedAudio));
-      audio.play();
+    if (!recordedAudio) return;
+
+    // If already playing, stop it
+    if (isPlayingRecording && recordedAudioRef.current) {
+      recordedAudioRef.current.pause();
+      recordedAudioRef.current = null;
+      setIsPlayingRecording(false);
+      return;
     }
+
+    // Create and play audio
+    const audio = new Audio(URL.createObjectURL(recordedAudio));
+    recordedAudioRef.current = audio;
+    setIsPlayingRecording(true);
+
+    audio.onended = () => {
+      setIsPlayingRecording(false);
+      recordedAudioRef.current = null;
+    };
+
+    audio.onerror = () => {
+      setIsPlayingRecording(false);
+      recordedAudioRef.current = null;
+    };
+
+    audio.play().catch(() => {
+      setIsPlayingRecording(false);
+      recordedAudioRef.current = null;
+    });
   };
 
   const deleteRecording = () => {
+    // Stop any playing audio first
+    if (recordedAudioRef.current) {
+      recordedAudioRef.current.pause();
+      recordedAudioRef.current = null;
+    }
+    setIsPlayingRecording(false);
     setRecordedAudio(null);
     setRecordingDuration(0);
     setClonedVoiceId(null);
@@ -1022,12 +1055,22 @@ Guidelines:
                         <div className="flex items-center gap-4">
                           <button
                             onClick={playRecordedAudio}
-                            className="w-12 h-12 rounded-full bg-[#FF6D1F] flex items-center justify-center hover:bg-[#e5621b]"
+                            className={`w-12 h-12 rounded-full flex items-center justify-center transition-all ${
+                              isPlayingRecording
+                                ? 'bg-green-500 hover:bg-green-600 animate-pulse'
+                                : 'bg-[#FF6D1F] hover:bg-[#e5621b]'
+                            }`}
                           >
-                            <Play className="w-6 h-6 text-white" />
+                            {isPlayingRecording ? (
+                              <StopCircle className="w-6 h-6 text-white" />
+                            ) : (
+                              <Play className="w-6 h-6 text-white" />
+                            )}
                           </button>
                           <div className="flex-1">
-                            <p className="font-medium text-[var(--foreground)]">Recording Complete</p>
+                            <p className="font-medium text-[var(--foreground)]">
+                              {isPlayingRecording ? 'Playing...' : 'Recording Complete'}
+                            </p>
                             <p className="text-sm text-[var(--foreground)]/60">
                               Duration: {formatDuration(recordingDuration)}
                             </p>

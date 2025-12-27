@@ -24,6 +24,8 @@ import {
   MessageSquare,
   History,
   AlertCircle,
+  Play,
+  StopCircle,
 } from 'lucide-react';
 import { cn } from '@/shared/utils/cn';
 import { useEntranceAnimation } from '@/hooks/useAnimations';
@@ -192,8 +194,10 @@ function SetupFlow({
   const [recordingDuration, setRecordingDuration] = useState(0);
   const [isCloning, setIsCloning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isPlayingRecording, setIsPlayingRecording] = useState(false);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordedAudioRef = useRef<HTMLAudioElement | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const recordingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -255,9 +259,47 @@ function SetupFlow({
   };
 
   const resetRecording = () => {
+    // Stop any playing audio first
+    if (recordedAudioRef.current) {
+      recordedAudioRef.current.pause();
+      recordedAudioRef.current = null;
+    }
+    setIsPlayingRecording(false);
     setRecordedAudio(null);
     setRecordingDuration(0);
     setError(null);
+  };
+
+  const playRecordedAudio = () => {
+    if (!recordedAudio) return;
+
+    // If already playing, stop it
+    if (isPlayingRecording && recordedAudioRef.current) {
+      recordedAudioRef.current.pause();
+      recordedAudioRef.current = null;
+      setIsPlayingRecording(false);
+      return;
+    }
+
+    // Create and play audio
+    const audio = new Audio(URL.createObjectURL(recordedAudio));
+    recordedAudioRef.current = audio;
+    setIsPlayingRecording(true);
+
+    audio.onended = () => {
+      setIsPlayingRecording(false);
+      recordedAudioRef.current = null;
+    };
+
+    audio.onerror = () => {
+      setIsPlayingRecording(false);
+      recordedAudioRef.current = null;
+    };
+
+    audio.play().catch(() => {
+      setIsPlayingRecording(false);
+      recordedAudioRef.current = null;
+    });
   };
 
   // Clone voice and complete setup
@@ -418,19 +460,31 @@ function SetupFlow({
               </>
             ) : (
               <div className="w-full space-y-4">
-                <div className="liquid-card rounded-xl p-4 flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="w-12 h-12 rounded-full bg-[#FF6D1F]/20 flex items-center justify-center">
-                      <Mic className="w-6 h-6 text-[#FF6D1F]" />
-                    </div>
-                    <div>
-                      <p className="font-medium text-[var(--foreground)]">Voice Sample</p>
-                      <p className="text-sm text-[var(--foreground)]/60">{formatDuration(recordingDuration)}</p>
-                    </div>
+                <div className="liquid-card rounded-xl p-4 flex items-center gap-3">
+                  <button
+                    onClick={playRecordedAudio}
+                    className={cn(
+                      "w-12 h-12 rounded-full flex items-center justify-center transition-all flex-shrink-0",
+                      isPlayingRecording
+                        ? "bg-green-500 hover:bg-green-600 animate-pulse"
+                        : "bg-[#FF6D1F] hover:bg-[#e5621b]"
+                    )}
+                  >
+                    {isPlayingRecording ? (
+                      <StopCircle className="w-6 h-6 text-white" />
+                    ) : (
+                      <Play className="w-6 h-6 text-white" />
+                    )}
+                  </button>
+                  <div className="flex-1 min-w-0">
+                    <p className="font-medium text-[var(--foreground)]">
+                      {isPlayingRecording ? 'Playing...' : 'Voice Sample'}
+                    </p>
+                    <p className="text-sm text-[var(--foreground)]/60">{formatDuration(recordingDuration)}</p>
                   </div>
                   <button
                     onClick={resetRecording}
-                    className="p-2 rounded-full liquid-card hover:bg-white/20 text-[var(--foreground)]/60 hover:text-red-500 transition-colors"
+                    className="p-2 rounded-full liquid-card hover:bg-white/20 text-[var(--foreground)]/60 hover:text-red-500 transition-colors flex-shrink-0"
                   >
                     <Trash2 className="w-5 h-5" />
                   </button>
