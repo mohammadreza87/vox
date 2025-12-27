@@ -71,7 +71,7 @@ function AppContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  const [activeTab, setActiveTab] = useState<TabType>('chats');
+  const [activeTab, setActiveTab] = useState<TabType>('contacts');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedContact, setSelectedContact] = useState<PreMadeContactConfig | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -94,18 +94,19 @@ function AppContent() {
 
   // Handle contact query parameter
   useEffect(() => {
-    if (initialContactLoaded) return;
-
     const contactId = searchParams.get('contact');
-    if (contactId && allContacts.length > 0) {
-      const contact = getPreMadeContact(contactId) ||
-        customContacts.find(c => c.id === contactId);
-      if (contact) {
-        handleSelectContact(contact);
-        setInitialContactLoaded(true);
-      }
+    if (!contactId) return;
+
+    // Skip if already loaded this contact
+    if (initialContactLoaded && selectedContact?.id === contactId) return;
+
+    const contact = getPreMadeContact(contactId) ||
+      customContacts.find(c => c.id === contactId);
+    if (contact) {
+      handleSelectContact(contact);
+      setInitialContactLoaded(true);
     }
-  }, [searchParams, allContacts, customContacts, initialContactLoaded]);
+  }, [searchParams, customContacts, initialContactLoaded, selectedContact]);
 
   // Voice recording hook
   const {
@@ -465,6 +466,13 @@ function AppContent() {
             {/* Tabs */}
             <div className="liquid-tabs">
               <button
+                onClick={() => setActiveTab('contacts')}
+                className={cn("liquid-tab", activeTab === 'contacts' && "active")}
+              >
+                <Users className="w-4 h-4" />
+                Contacts
+              </button>
+              <button
                 onClick={() => setActiveTab('chats')}
                 className={cn("liquid-tab", activeTab === 'chats' && "active")}
               >
@@ -475,13 +483,6 @@ function AppContent() {
                     {chats.length}
                   </span>
                 )}
-              </button>
-              <button
-                onClick={() => setActiveTab('contacts')}
-                className={cn("liquid-tab", activeTab === 'contacts' && "active")}
-              >
-                <Users className="w-4 h-4" />
-                Contacts
               </button>
               <button
                 onClick={() => setActiveTab('translator')}
