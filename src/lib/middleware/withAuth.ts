@@ -19,11 +19,16 @@ export interface AuthErrorResponse {
 }
 
 /**
+ * Route context type for Next.js 16 App Router
+ */
+type RouteContext = { params: Promise<Record<string, string>> };
+
+/**
  * Route handler type for authenticated routes
  */
 type AuthenticatedHandler = (
   request: AuthenticatedRequest,
-  context?: { params: Promise<Record<string, string>> }
+  context: RouteContext
 ) => Promise<NextResponse>;
 
 /**
@@ -31,7 +36,7 @@ type AuthenticatedHandler = (
  */
 type OptionalAuthHandler = (
   request: NextRequest & { user?: DecodedIdToken; userId?: string },
-  context?: { params: Promise<Record<string, string>> }
+  context: RouteContext
 ) => Promise<NextResponse>;
 
 /**
@@ -39,7 +44,7 @@ type OptionalAuthHandler = (
  */
 type RouteHandler = (
   request: NextRequest,
-  context?: { params: Promise<Record<string, string>> }
+  context: RouteContext
 ) => Promise<NextResponse>;
 
 /**
@@ -54,7 +59,7 @@ type RouteHandler = (
  * });
  */
 export function withAuth(handler: AuthenticatedHandler): RouteHandler {
-  return async (request: NextRequest, context?) => {
+  return async (request: NextRequest, context: RouteContext) => {
     const token = extractBearerToken(request.headers.get('Authorization'));
 
     if (!token) {
@@ -97,7 +102,7 @@ export function withAuth(handler: AuthenticatedHandler): RouteHandler {
  * });
  */
 export function withOptionalAuth(handler: OptionalAuthHandler): RouteHandler {
-  return async (request: NextRequest, context?) => {
+  return async (request: NextRequest, context: RouteContext) => {
     const token = extractBearerToken(request.headers.get('Authorization'));
 
     if (token) {
