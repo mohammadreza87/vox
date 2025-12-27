@@ -1666,7 +1666,7 @@ function LanguagePicker({
   const filteredLanguages = SUPPORTED_LANGUAGES.filter(l => l.code !== exclude);
 
   return (
-    <div className="absolute top-full left-0 right-0 mt-2 liquid-glass rounded-xl shadow-xl max-h-60 overflow-y-auto z-50">
+    <div className="absolute top-full left-0 mt-2 w-64 liquid-glass rounded-xl shadow-xl max-h-60 overflow-y-auto z-50 border border-white/10">
       {filteredLanguages.map((lang) => (
         <button
           key={lang.code}
@@ -1677,12 +1677,12 @@ function LanguagePicker({
           )}
         >
           <span className="text-xl">{lang.flag}</span>
-          <div className="flex-1">
-            <p className="font-medium text-[var(--foreground)]">{lang.name}</p>
-            <p className="text-xs text-[var(--foreground)]/60">{lang.nativeName}</p>
+          <div className="flex-1 min-w-0">
+            <p className="font-medium text-[var(--foreground)] truncate">{lang.name}</p>
+            <p className="text-xs text-[var(--foreground)]/60 truncate">{lang.nativeName}</p>
           </div>
           {selected === lang.code && (
-            <Check className="w-4 h-4 text-[#FF6D1F]" />
+            <Check className="w-4 h-4 text-[#FF6D1F] flex-shrink-0" />
           )}
         </button>
       ))}
