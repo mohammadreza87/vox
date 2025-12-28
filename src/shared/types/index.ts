@@ -100,6 +100,8 @@ export interface ClonedVoice {
   voiceId: string; // ElevenLabs voice ID
   name: string;
   createdAt: string;
+  source?: 'contact' | 'translator'; // Where the voice was created
+  sourceLanguage?: string; // For translator voices
 }
 
 // Pre-made contacts configuration
