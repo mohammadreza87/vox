@@ -88,7 +88,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
       if (!response.ok) return null;
 
-      const data = await response.json();
+      const responseData = await response.json();
+      // Handle standardized API response format
+      const data = responseData.data || responseData;
       if (data.chats && data.chats.length > 0) {
         // Convert date strings to Date objects
         return data.chats.map((chat: Chat) => ({

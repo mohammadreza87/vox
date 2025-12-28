@@ -16,6 +16,8 @@ const CSP_DIRECTIVES = {
     'https://js.stripe.com',
     'https://telegram.org',
     'https://oauth.telegram.org',
+    'https://apis.google.com', // Google APIs (Firebase Auth)
+    'https://www.gstatic.com', // Google static resources
   ],
   'style-src': ["'self'", "'unsafe-inline'"], // Required for styled-jsx and inline styles
   'img-src': [
@@ -46,6 +48,8 @@ const CSP_DIRECTIVES = {
     "'self'",
     'https://js.stripe.com',
     'https://oauth.telegram.org',
+    'https://*.firebaseapp.com', // Firebase Auth iframe
+    'https://*.firebase.com',
   ],
   'frame-ancestors': ["'none'"],
   'form-action': ["'self'"],

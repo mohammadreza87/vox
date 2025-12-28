@@ -21,9 +21,6 @@ import {
   Trash2,
   Square,
   ChevronDown,
-  MessageSquare,
-  History,
-  AlertCircle,
   Play,
   StopCircle,
 } from 'lucide-react';
@@ -719,11 +716,12 @@ interface TranslationMessage {
   sourceLanguage: LanguageCode;
   targetLanguage: LanguageCode;
   audioUrl?: string;
+  sourceAudioUrl?: string; // Audio in source language
   timestamp: Date;
   speaker: 'me' | 'other';
 }
 
-// Translator Interface Component - Split screen two-way conversation
+// Translator Interface Component - Simplified single message view
 function TranslatorInterface({
   sourceLanguage,
   targetLanguage,
@@ -737,56 +735,42 @@ function TranslatorInterface({
   setTargetLanguage: (lang: LanguageCode) => void;
   voiceId: string;
 }) {
-  // View mode: 'conversation' (split screen) or 'history' (unified chat)
-  const [viewMode, setViewMode] = useState<'conversation' | 'history'>('conversation');
+  // Recording state
+  const [isRecording, setIsRecording] = useState(false);
+  const [isTranslating, setIsTranslating] = useState(false);
+  const [currentText, setCurrentText] = useState('');
+  const [inputText, setInputText] = useState(''); // Text input fallback
 
-  // State for "me" side (bottom half - I speak my language)
-  const [isRecordingMe, setIsRecordingMe] = useState(false);
-  const [isTranslatingMe, setIsTranslatingMe] = useState(false);
-  const [currentTextMe, setCurrentTextMe] = useState('');
+  // Last translation result (only show the most recent)
+  const [lastTranslation, setLastTranslation] = useState<TranslationMessage | null>(null);
 
-  // State for "other" side (top half - other person speaks their language)
-  const [isRecordingOther, setIsRecordingOther] = useState(false);
-  const [isTranslatingOther, setIsTranslatingOther] = useState(false);
-  const [currentTextOther, setCurrentTextOther] = useState('');
-
-  // Unified conversation history (all messages from both sides)
-  const [allMessages, setAllMessages] = useState<TranslationMessage[]>([]);
-  const [isLoadingHistory, setIsLoadingHistory] = useState(true);
-  const [isClearingHistory, setIsClearingHistory] = useState(false);
-
-  // Shared state
+  // Audio playback state
   const [isPlaying, setIsPlaying] = useState(false);
-  const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
+  const [playingLang, setPlayingLang] = useState<'source' | 'target' | null>(null);
+  const [isGeneratingAudio, setIsGeneratingAudio] = useState<'source' | 'target' | null>(null);
+
+  // Language picker state
   const [showSourcePicker, setShowSourcePicker] = useState(false);
   const [showTargetPicker, setShowTargetPicker] = useState(false);
 
+  // Speech recognition support
+  const [speechSupported, setSpeechSupported] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
   // Refs
-  const recognitionMeRef = useRef<SpeechRecognitionInstance | null>(null);
-  const recognitionOtherRef = useRef<SpeechRecognitionInstance | null>(null);
+  const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const currentTextMeRef = useRef<string>('');
-  const currentTextOtherRef = useRef<string>('');
+  const currentTextRef = useRef<string>('');
 
   const sourceLang = SUPPORTED_LANGUAGES.find(l => l.code === sourceLanguage);
   const targetLang = SUPPORTED_LANGUAGES.find(l => l.code === targetLanguage);
 
-  // Auto-scroll when new messages arrive
+  // Keep ref in sync
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [allMessages]);
+    currentTextRef.current = currentText;
+  }, [currentText]);
 
-  // Keep refs in sync
-  useEffect(() => {
-    currentTextMeRef.current = currentTextMe;
-  }, [currentTextMe]);
-
-  useEffect(() => {
-    currentTextOtherRef.current = currentTextOther;
-  }, [currentTextOther]);
-
-  // Initialize speech recognition instances
+  // Initialize speech recognition
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const windowWithSpeech = window as typeof window & {
@@ -795,110 +779,19 @@ function TranslatorInterface({
       };
       const SpeechRecognitionAPI = windowWithSpeech.SpeechRecognition || windowWithSpeech.webkitSpeechRecognition;
       if (SpeechRecognitionAPI) {
-        recognitionMeRef.current = new SpeechRecognitionAPI();
-        recognitionMeRef.current.continuous = true;
-        recognitionMeRef.current.interimResults = true;
-
-        recognitionOtherRef.current = new SpeechRecognitionAPI();
-        recognitionOtherRef.current.continuous = true;
-        recognitionOtherRef.current.interimResults = true;
-      }
-    }
-  }, []);
-
-  // Load conversation history from server
-  useEffect(() => {
-    const loadHistory = async () => {
-      try {
-        const token = await getAuthToken();
-        if (!token) {
-          setIsLoadingHistory(false);
-          return;
+        try {
+          recognitionRef.current = new SpeechRecognitionAPI();
+          recognitionRef.current.continuous = true;
+          recognitionRef.current.interimResults = true;
+          console.log('Speech recognition initialized');
+        } catch (e) {
+          console.error('Failed to init speech recognition:', e);
+          setSpeechSupported(false);
         }
-
-        const response = await fetch('/api/translator/messages?limit=100', {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        });
-
-        if (response.ok) {
-          const data = await response.json();
-          const messages: TranslationMessage[] = data.messages.map((m: {
-            id: string;
-            sourceText: string;
-            translatedText: string;
-            sourceLanguage: string;
-            targetLanguage: string;
-            speaker: 'me' | 'other';
-            timestamp: string;
-          }) => ({
-            ...m,
-            timestamp: new Date(m.timestamp),
-          }));
-          setAllMessages(messages);
-        }
-      } catch (error) {
-        console.error('Error loading translator history:', error);
-      } finally {
-        setIsLoadingHistory(false);
+      } else {
+        console.log('Speech recognition not supported');
+        setSpeechSupported(false);
       }
-    };
-
-    loadHistory();
-  }, []);
-
-  // Save message to server
-  const saveMessageToServer = useCallback(async (message: TranslationMessage) => {
-    try {
-      const token = await getAuthToken();
-      if (!token) return;
-
-      await fetch('/api/translator/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          sourceText: message.sourceText,
-          translatedText: message.translatedText,
-          sourceLanguage: message.sourceLanguage,
-          targetLanguage: message.targetLanguage,
-          speaker: message.speaker,
-          timestamp: message.timestamp.toISOString(),
-        }),
-      });
-    } catch (error) {
-      console.error('Error saving message to server:', error);
-    }
-  }, []);
-
-  // Clear all history
-  const clearHistory = useCallback(async () => {
-    if (!confirm('Are you sure you want to clear all conversation history? This cannot be undone.')) {
-      return;
-    }
-
-    setIsClearingHistory(true);
-    try {
-      const token = await getAuthToken();
-      if (!token) return;
-
-      const response = await fetch('/api/translator/messages', {
-        method: 'DELETE',
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
-
-      if (response.ok) {
-        setAllMessages([]);
-      }
-    } catch (error) {
-      console.error('Error clearing history:', error);
-    } finally {
-      setIsClearingHistory(false);
     }
   }, []);
 
@@ -908,90 +801,159 @@ function TranslatorInterface({
       audioRef.current.pause();
       audioRef.current = null;
       setIsPlaying(false);
-      setPlayingMessageId(null);
+      setPlayingLang(null);
     }
   }, []);
 
-  // Play audio helper
-  const playAudio = useCallback(async (audioUrl: string, messageId: string) => {
+  // Play audio from URL
+  const playAudioUrl = useCallback(async (audioUrl: string, lang: 'source' | 'target') => {
     stopAudio();
 
-    const audioElement = new Audio(audioUrl);
-    audioRef.current = audioElement;
-    setIsPlaying(true);
-    setPlayingMessageId(messageId);
-
-    audioElement.onended = () => {
-      setIsPlaying(false);
-      setPlayingMessageId(null);
-    };
-
-    audioElement.onerror = () => {
-      setIsPlaying(false);
-      setPlayingMessageId(null);
-    };
-
     try {
+      const audioElement = new Audio();
+      audioElement.src = audioUrl;
+      audioElement.preload = 'auto';
+      audioRef.current = audioElement;
+      setIsPlaying(true);
+      setPlayingLang(lang);
+
+      audioElement.onended = () => {
+        setIsPlaying(false);
+        setPlayingLang(null);
+      };
+
+      audioElement.onerror = (e) => {
+        console.error('Audio playback error:', e);
+        setIsPlaying(false);
+        setPlayingLang(null);
+      };
+
+      // Wait for audio to be ready
+      await new Promise<void>((resolve, reject) => {
+        audioElement.oncanplaythrough = () => resolve();
+        audioElement.onerror = () => reject(new Error('Failed to load audio'));
+        // Timeout after 10 seconds
+        setTimeout(() => reject(new Error('Audio load timeout')), 10000);
+      });
+
       await audioElement.play();
-    } catch (playError) {
-      console.warn('Auto-play blocked:', playError);
+    } catch (error) {
+      console.error('Audio play error:', error);
       setIsPlaying(false);
-      setPlayingMessageId(null);
+      setPlayingLang(null);
     }
   }, [stopAudio]);
 
-  // Start recording for "me" side (I speak in my language -> translated to their language)
-  const startRecordingMe = useCallback(() => {
-    if (!recognitionMeRef.current || isRecordingOther) return;
+  // Generate and play audio for a specific language
+  const playInLanguage = useCallback(async (text: string, language: LanguageCode, langType: 'source' | 'target') => {
+    if (isPlaying && playingLang === langType) {
+      stopAudio();
+      return;
+    }
+
+    // Check if we already have this audio cached
+    if (langType === 'target' && lastTranslation?.audioUrl) {
+      await playAudioUrl(lastTranslation.audioUrl, 'target');
+      return;
+    }
+    if (langType === 'source' && lastTranslation?.sourceAudioUrl) {
+      await playAudioUrl(lastTranslation.sourceAudioUrl, 'source');
+      return;
+    }
+
+    // Generate new audio
+    setIsGeneratingAudio(langType);
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      const response = await fetch('/api/tts', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token && { Authorization: `Bearer ${token}` }),
+        },
+        body: JSON.stringify({
+          text,
+          voiceId,
+        }),
+      });
+
+      if (!response.ok) throw new Error('TTS failed');
+
+      const responseData = await response.json();
+      // Handle standardized response format
+      const data = responseData.data || responseData;
+      if (data.audio) {
+        const audioBlob = base64ToBlob(data.audio, 'audio/mpeg');
+        const audioUrl = URL.createObjectURL(audioBlob);
+
+        // Cache the audio URL
+        if (lastTranslation) {
+          setLastTranslation(prev => prev ? {
+            ...prev,
+            [langType === 'source' ? 'sourceAudioUrl' : 'audioUrl']: audioUrl
+          } : prev);
+        }
+
+        await playAudioUrl(audioUrl, langType);
+      }
+    } catch (error) {
+      console.error('TTS error:', error);
+    } finally {
+      setIsGeneratingAudio(null);
+    }
+  }, [isPlaying, playingLang, lastTranslation, voiceId, stopAudio, playAudioUrl]);
+
+  // Start recording
+  const startRecording = useCallback(() => {
+    if (!recognitionRef.current) return;
 
     stopAudio();
-    setCurrentTextMe('');
-    currentTextMeRef.current = '';
+    setCurrentText('');
+    currentTextRef.current = '';
 
-    recognitionMeRef.current.lang = sourceLanguage;
+    recognitionRef.current.lang = sourceLanguage;
 
-    recognitionMeRef.current.onresult = (event) => {
+    recognitionRef.current.onresult = (event) => {
       let transcript = '';
       for (let i = 0; i < event.results.length; i++) {
         transcript += event.results[i][0].transcript;
       }
-      setCurrentTextMe(transcript);
-      currentTextMeRef.current = transcript;
+      setCurrentText(transcript);
+      currentTextRef.current = transcript;
     };
 
-    recognitionMeRef.current.onerror = (event) => {
-      console.error('Speech recognition error (me):', event.error);
-      setIsRecordingMe(false);
+    recognitionRef.current.onerror = (event) => {
+      console.error('Speech recognition error:', event.error);
+      setIsRecording(false);
     };
 
     try {
-      recognitionMeRef.current.start();
-      setIsRecordingMe(true);
-    } catch (err) {
+      recognitionRef.current.start();
+      setIsRecording(true);
+    } catch {
       try {
-        recognitionMeRef.current.abort();
-        recognitionMeRef.current.start();
-        setIsRecordingMe(true);
+        recognitionRef.current.abort();
+        recognitionRef.current.start();
+        setIsRecording(true);
       } catch {
-        console.error('Could not start recognition (me)');
+        console.error('Could not start recognition');
       }
     }
-  }, [sourceLanguage, isRecordingOther, stopAudio]);
+  }, [sourceLanguage, stopAudio]);
 
-  // Stop recording for "me" side
-  const stopRecordingMe = useCallback(async () => {
-    if (!recognitionMeRef.current) return;
+  // Stop recording and translate
+  const stopRecording = useCallback(async () => {
+    if (!recognitionRef.current) return;
 
-    recognitionMeRef.current.stop();
-    setIsRecordingMe(false);
+    recognitionRef.current.stop();
+    setIsRecording(false);
 
     await new Promise(resolve => setTimeout(resolve, 100));
 
-    const text = currentTextMeRef.current;
+    const text = currentTextRef.current;
     if (!text.trim()) return;
 
-    setIsTranslatingMe(true);
-    const messageId = Date.now().toString();
+    setIsTranslating(true);
 
     try {
       const token = await auth.currentUser?.getIdToken();
@@ -1009,17 +971,25 @@ function TranslatorInterface({
         }),
       });
 
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Translation failed');
+      const responseData = await response.json();
+      console.log('Translate response:', responseData);
+      if (!response.ok) throw new Error(responseData.error || 'Translation failed');
+
+      // Handle both direct and standardized response formats
+      const data = responseData.data || responseData;
 
       let audioUrl: string | undefined;
       if (data.audio) {
+        console.log('Audio data received, length:', data.audio.length);
         const audioBlob = base64ToBlob(data.audio, 'audio/mpeg');
         audioUrl = URL.createObjectURL(audioBlob);
+        console.log('Audio URL created:', audioUrl);
+      } else {
+        console.warn('No audio in response');
       }
 
-      const newMessage: TranslationMessage = {
-        id: messageId,
+      const newTranslation: TranslationMessage = {
+        id: Date.now().toString(),
         sourceText: text,
         translatedText: data.translatedText,
         sourceLanguage,
@@ -1029,78 +999,33 @@ function TranslatorInterface({
         speaker: 'me',
       };
 
-      setAllMessages(prev => [...prev, newMessage]);
-      setCurrentTextMe('');
-      currentTextMeRef.current = '';
+      setLastTranslation(newTranslation);
+      setCurrentText('');
+      currentTextRef.current = '';
 
-      // Save to server (don't await to not block playback)
-      saveMessageToServer(newMessage);
-
+      // Auto-play the translated audio
       if (audioUrl) {
-        await playAudio(audioUrl, messageId);
+        await playAudioUrl(audioUrl, 'target');
       }
     } catch (error) {
-      console.error('Translation error (me):', error);
+      console.error('Translation error:', error);
     } finally {
-      setIsTranslatingMe(false);
+      setIsTranslating(false);
     }
-  }, [sourceLanguage, targetLanguage, voiceId, sourceLang, targetLang, playAudio, saveMessageToServer]);
+  }, [sourceLanguage, targetLanguage, voiceId, sourceLang, targetLang, playAudioUrl]);
 
-  // Start recording for "other" side (they speak in their language -> translated to my language)
-  const startRecordingOther = useCallback(() => {
-    if (!recognitionOtherRef.current || isRecordingMe) return;
+  // Translate from text input (fallback for when speech doesn't work)
+  const translateText = useCallback(async (text: string) => {
+    if (!text.trim() || isTranslating) return;
 
-    stopAudio();
-    setCurrentTextOther('');
-    currentTextOtherRef.current = '';
-
-    recognitionOtherRef.current.lang = targetLanguage;
-
-    recognitionOtherRef.current.onresult = (event) => {
-      let transcript = '';
-      for (let i = 0; i < event.results.length; i++) {
-        transcript += event.results[i][0].transcript;
-      }
-      setCurrentTextOther(transcript);
-      currentTextOtherRef.current = transcript;
-    };
-
-    recognitionOtherRef.current.onerror = (event) => {
-      console.error('Speech recognition error (other):', event.error);
-      setIsRecordingOther(false);
-    };
-
-    try {
-      recognitionOtherRef.current.start();
-      setIsRecordingOther(true);
-    } catch (err) {
-      try {
-        recognitionOtherRef.current.abort();
-        recognitionOtherRef.current.start();
-        setIsRecordingOther(true);
-      } catch {
-        console.error('Could not start recognition (other)');
-      }
-    }
-  }, [targetLanguage, isRecordingMe, stopAudio]);
-
-  // Stop recording for "other" side
-  const stopRecordingOther = useCallback(async () => {
-    if (!recognitionOtherRef.current) return;
-
-    recognitionOtherRef.current.stop();
-    setIsRecordingOther(false);
-
-    await new Promise(resolve => setTimeout(resolve, 100));
-
-    const text = currentTextOtherRef.current;
-    if (!text.trim()) return;
-
-    setIsTranslatingOther(true);
-    const messageId = Date.now().toString();
+    setError(null);
+    setIsTranslating(true);
+    setCurrentText(text);
 
     try {
       const token = await auth.currentUser?.getIdToken();
+      console.log('Translating text:', text);
+
       const response = await fetch('/api/translate', {
         method: 'POST',
         headers: {
@@ -1109,471 +1034,314 @@ function TranslatorInterface({
         },
         body: JSON.stringify({
           text,
-          sourceLanguage: targetLang?.name || targetLanguage,
-          targetLanguage: sourceLang?.name || sourceLanguage,
+          sourceLanguage: sourceLang?.name || sourceLanguage,
+          targetLanguage: targetLang?.name || targetLanguage,
           voiceId,
         }),
       });
 
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Translation failed');
+      const responseData = await response.json();
+      console.log('Translate response:', responseData);
+
+      if (!response.ok) {
+        throw new Error(responseData.error || 'Translation failed');
+      }
+
+      const data = responseData.data || responseData;
 
       let audioUrl: string | undefined;
       if (data.audio) {
+        console.log('Audio received, creating blob...');
         const audioBlob = base64ToBlob(data.audio, 'audio/mpeg');
         audioUrl = URL.createObjectURL(audioBlob);
+        console.log('Audio URL:', audioUrl);
       }
 
-      const newMessage: TranslationMessage = {
-        id: messageId,
+      const newTranslation: TranslationMessage = {
+        id: Date.now().toString(),
         sourceText: text,
         translatedText: data.translatedText,
-        sourceLanguage: targetLanguage,
-        targetLanguage: sourceLanguage,
+        sourceLanguage,
+        targetLanguage,
         audioUrl,
         timestamp: new Date(),
-        speaker: 'other',
+        speaker: 'me',
       };
 
-      setAllMessages(prev => [...prev, newMessage]);
-      setCurrentTextOther('');
-      currentTextOtherRef.current = '';
+      setLastTranslation(newTranslation);
+      setInputText('');
+      setCurrentText('');
 
-      // Save to server (don't await to not block playback)
-      saveMessageToServer(newMessage);
-
+      // Auto-play the translated audio
       if (audioUrl) {
-        await playAudio(audioUrl, messageId);
+        console.log('Playing audio...');
+        await playAudioUrl(audioUrl, 'target');
       }
-    } catch (error) {
-      console.error('Translation error (other):', error);
+    } catch (err) {
+      console.error('Translation error:', err);
+      setError(err instanceof Error ? err.message : 'Translation failed');
     } finally {
-      setIsTranslatingOther(false);
+      setIsTranslating(false);
     }
-  }, [sourceLanguage, targetLanguage, voiceId, sourceLang, targetLang, playAudio, saveMessageToServer]);
+  }, [sourceLanguage, targetLanguage, voiceId, sourceLang, targetLang, playAudioUrl, isTranslating]);
 
   // Swap languages
   const swapLanguages = () => {
     const temp = sourceLanguage;
     setSourceLanguage(targetLanguage);
     setTargetLanguage(temp);
+    setLastTranslation(null); // Clear when swapping
+    setError(null);
   };
-
-  // Filter messages by speaker for split view
-  const messagesMe = allMessages.filter(m => m.speaker === 'me');
-  const messagesOther = allMessages.filter(m => m.speaker === 'other');
 
   return (
     <div className="h-full flex flex-col">
-      {/* Tab switcher */}
-      <div className="p-2 border-b border-white/10">
-        <div className="max-w-2xl mx-auto flex gap-2">
+      {/* Language selector bar */}
+      <div className="p-4 border-b border-white/10">
+        <div className="max-w-2xl mx-auto flex items-center justify-center gap-4">
+          {/* Source language */}
+          <div className="relative">
+            <button
+              onClick={() => {
+                setShowSourcePicker(!showSourcePicker);
+                setShowTargetPicker(false);
+              }}
+              className="flex items-center gap-2 px-4 py-3 rounded-xl liquid-card hover:bg-white/20 transition-colors"
+            >
+              <span className="text-2xl">{sourceLang?.flag}</span>
+              <span className="font-medium text-[var(--foreground)]">{sourceLang?.name}</span>
+              <ChevronDown className={cn("w-4 h-4 text-[var(--foreground)]/60 transition-transform", showSourcePicker && "rotate-180")} />
+            </button>
+            {showSourcePicker && (
+              <LanguagePicker
+                selected={sourceLanguage}
+                onSelect={(lang) => {
+                  setSourceLanguage(lang);
+                  setShowSourcePicker(false);
+                  setLastTranslation(null);
+                }}
+                exclude={targetLanguage}
+              />
+            )}
+          </div>
+
+          {/* Swap button */}
           <button
-            onClick={() => setViewMode('conversation')}
-            className={cn(
-              "flex-1 flex items-center justify-center gap-2 py-2 px-4 rounded-xl transition-all",
-              viewMode === 'conversation'
-                ? "liquid-button"
-                : "liquid-card hover:bg-white/20"
-            )}
+            onClick={swapLanguages}
+            className="w-12 h-12 rounded-full liquid-button flex items-center justify-center hover:scale-105 transition-transform"
           >
-            <MessageSquare className="w-4 h-4" />
-            <span className="text-sm font-medium">Conversation</span>
+            <ArrowRightLeft className="w-5 h-5" />
           </button>
-          <button
-            onClick={() => setViewMode('history')}
-            className={cn(
-              "flex-1 flex items-center justify-center gap-2 py-2 px-4 rounded-xl transition-all",
-              viewMode === 'history'
-                ? "liquid-button"
-                : "liquid-card hover:bg-white/20"
+
+          {/* Target language */}
+          <div className="relative">
+            <button
+              onClick={() => {
+                setShowTargetPicker(!showTargetPicker);
+                setShowSourcePicker(false);
+              }}
+              className="flex items-center gap-2 px-4 py-3 rounded-xl liquid-card hover:bg-white/20 transition-colors"
+            >
+              <span className="text-2xl">{targetLang?.flag}</span>
+              <span className="font-medium text-[var(--foreground)]">{targetLang?.name}</span>
+              <ChevronDown className={cn("w-4 h-4 text-[var(--foreground)]/60 transition-transform", showTargetPicker && "rotate-180")} />
+            </button>
+            {showTargetPicker && (
+              <LanguagePicker
+                selected={targetLanguage}
+                onSelect={(lang) => {
+                  setTargetLanguage(lang);
+                  setShowTargetPicker(false);
+                  setLastTranslation(null);
+                }}
+                exclude={sourceLanguage}
+              />
             )}
-          >
-            <History className="w-4 h-4" />
-            <span className="text-sm font-medium">History</span>
-            {allMessages.length > 0 && (
-              <span className="text-xs bg-white/20 px-1.5 py-0.5 rounded-full">{allMessages.length}</span>
-            )}
-          </button>
+          </div>
         </div>
       </div>
 
-      {viewMode === 'history' ? (
-        /* HISTORY VIEW - Chat-like unified conversation */
-        <div className="flex-1 flex flex-col">
-          {/* Language bar with clear button */}
-          <div className="p-3 border-b border-white/10">
-            <div className="max-w-2xl mx-auto flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span className="text-lg">{sourceLang?.flag}</span>
-                <ArrowRightLeft className="w-4 h-4 text-[var(--foreground)]/40" />
-                <span className="text-lg">{targetLang?.flag}</span>
+      {/* Main content area - shows last translation only */}
+      <div className="flex-1 overflow-y-auto p-4">
+        <div className="max-w-2xl mx-auto h-full flex flex-col justify-center">
+          {!lastTranslation && !isRecording && !currentText && !isTranslating ? (
+            /* Empty state */
+            <div className="text-center py-8">
+              <div className="w-24 h-24 liquid-card rounded-full flex items-center justify-center mx-auto mb-6">
+                <Languages className="w-12 h-12 text-[#FF6D1F]" />
               </div>
-              <div className="flex items-center gap-3">
-                <span className="text-xs text-[var(--foreground)]/50">
-                  {allMessages.length} message{allMessages.length !== 1 ? 's' : ''}
-                </span>
-                {allMessages.length > 0 && (
-                  <button
-                    onClick={clearHistory}
-                    disabled={isClearingHistory}
-                    className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs text-red-500 hover:bg-red-500/10 transition-colors disabled:opacity-50"
-                  >
-                    {isClearingHistory ? (
-                      <Loader2 className="w-3 h-3 animate-spin" />
-                    ) : (
-                      <Trash2 className="w-3 h-3" />
-                    )}
-                    Clear
-                  </button>
-                )}
-              </div>
+              <h3 className="text-xl font-bold text-[var(--foreground)] mb-2">Ready to Translate</h3>
+              <p className="text-[var(--foreground)]/60 max-w-xs mx-auto">
+                {speechSupported
+                  ? `Type or speak in ${sourceLang?.name}`
+                  : `Type in ${sourceLang?.name} to translate`
+                }
+              </p>
             </div>
-          </div>
-
-          {/* Messages */}
-          <div className="flex-1 overflow-y-auto p-4">
-            <div className="max-w-2xl mx-auto space-y-4">
-              {isLoadingHistory ? (
-                <div className="flex flex-col items-center justify-center h-full py-16 text-center">
-                  <Loader2 className="w-8 h-8 text-[#FF6D1F] animate-spin mb-4" />
-                  <p className="text-[var(--foreground)]/60 text-sm">Loading history...</p>
-                </div>
-              ) : allMessages.length === 0 ? (
-                <div className="flex flex-col items-center justify-center h-full py-16 text-center">
-                  <div className="w-16 h-16 liquid-card rounded-full flex items-center justify-center mb-4">
-                    <History className="w-8 h-8 text-[#FF6D1F]" />
+          ) : (
+            <div className="space-y-6">
+              {/* Source text (what you said) */}
+              {(currentText || lastTranslation?.sourceText) && (
+                <div className="liquid-card rounded-2xl p-5 bg-[#FF6D1F]/10 border border-[#FF6D1F]/30">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xl">{sourceLang?.flag}</span>
+                      <span className="text-sm font-medium text-[var(--foreground)]">{sourceLang?.name}</span>
+                    </div>
+                    {lastTranslation && (
+                      <button
+                        onClick={() => playInLanguage(lastTranslation.sourceText, sourceLanguage, 'source')}
+                        disabled={isGeneratingAudio === 'source'}
+                        className={cn(
+                          "flex items-center gap-2 px-3 py-1.5 rounded-full text-sm transition-all",
+                          playingLang === 'source'
+                            ? "bg-green-500/20 text-green-500"
+                            : "liquid-card hover:bg-white/20 text-[var(--foreground)]/70"
+                        )}
+                      >
+                        {isGeneratingAudio === 'source' ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <Volume2 className={cn("w-4 h-4", playingLang === 'source' && "animate-pulse")} />
+                        )}
+                        {playingLang === 'source' ? 'Stop' : 'Play'}
+                      </button>
+                    )}
                   </div>
-                  <h3 className="text-lg font-bold text-[var(--foreground)] mb-2">No History Yet</h3>
-                  <p className="text-[var(--foreground)]/60 text-sm max-w-xs">
-                    Start a conversation to see your translation history here.
+                  <p className="text-[var(--foreground)] text-lg leading-relaxed">
+                    {currentText || lastTranslation?.sourceText}
+                  </p>
+                  {isRecording && (
+                    <div className="flex items-center gap-2 mt-3">
+                      <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                      <span className="text-xs text-[var(--foreground)]/50">Listening...</span>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Translation loading */}
+              {isTranslating && (
+                <div className="liquid-card rounded-2xl p-5 flex items-center justify-center">
+                  <Loader2 className="w-6 h-6 animate-spin text-[#FF6D1F] mr-3" />
+                  <span className="text-[var(--foreground)]/60">Translating...</span>
+                </div>
+              )}
+
+              {/* Translated text */}
+              {lastTranslation && !isTranslating && (
+                <div className="liquid-card rounded-2xl p-5 border border-white/20">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xl">{targetLang?.flag}</span>
+                      <span className="text-sm font-medium text-[var(--foreground)]">{targetLang?.name}</span>
+                    </div>
+                    <button
+                      onClick={() => playInLanguage(lastTranslation.translatedText, targetLanguage, 'target')}
+                      disabled={isGeneratingAudio === 'target'}
+                      className={cn(
+                        "flex items-center gap-2 px-3 py-1.5 rounded-full text-sm transition-all",
+                        playingLang === 'target'
+                          ? "bg-green-500/20 text-green-500"
+                          : "liquid-button"
+                      )}
+                    >
+                      {isGeneratingAudio === 'target' ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Volume2 className={cn("w-4 h-4", playingLang === 'target' && "animate-pulse")} />
+                      )}
+                      {playingLang === 'target' ? 'Stop' : 'Play'}
+                    </button>
+                  </div>
+                  <p className="text-[var(--foreground)] text-xl font-medium leading-relaxed">
+                    {lastTranslation.translatedText}
                   </p>
                 </div>
-              ) : (
-                <>
-                  {allMessages.map((message) => {
-                    const msgSourceLang = SUPPORTED_LANGUAGES.find(l => l.code === message.sourceLanguage);
-                    const msgTargetLang = SUPPORTED_LANGUAGES.find(l => l.code === message.targetLanguage);
-                    const isCurrentlyPlaying = playingMessageId === message.id && isPlaying;
-                    const isFromMe = message.speaker === 'me';
-
-                    return (
-                      <div key={message.id} className={cn("flex", isFromMe ? "justify-end" : "justify-start")}>
-                        <div className={cn("max-w-[85%] space-y-2", isFromMe ? "items-end" : "items-start")}>
-                          {/* Speaker & time */}
-                          <div className={cn("flex items-center gap-2 text-xs text-[var(--foreground)]/50", isFromMe && "flex-row-reverse")}>
-                            <span>{isFromMe ? 'You' : 'Other'}</span>
-                            <span>•</span>
-                            <span>{message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                          </div>
-
-                          {/* Original message */}
-                          <div className={cn(
-                            "liquid-card rounded-2xl p-3",
-                            isFromMe
-                              ? "rounded-tr-sm bg-[#FF6D1F]/20"
-                              : "rounded-tl-sm bg-purple-500/20"
-                          )}>
-                            <div className="flex items-center gap-1.5 mb-1">
-                              <span className="text-sm">{msgSourceLang?.flag}</span>
-                              <span className="text-xs text-[var(--foreground)]/50">{msgSourceLang?.name}</span>
-                            </div>
-                            <p className="text-[var(--foreground)] text-sm">{message.sourceText}</p>
-                          </div>
-
-                          {/* Translation */}
-                          <div className={cn(
-                            "liquid-card rounded-2xl p-3",
-                            isFromMe ? "rounded-tr-sm" : "rounded-tl-sm"
-                          )}>
-                            <div className="flex items-center gap-1.5 mb-1">
-                              <span className="text-sm">{msgTargetLang?.flag}</span>
-                              <span className="text-xs text-[var(--foreground)]/50">{msgTargetLang?.name}</span>
-                            </div>
-                            <p className="text-[var(--foreground)] text-sm mb-2">{message.translatedText}</p>
-                            {message.audioUrl && (
-                              <button
-                                onClick={() => isCurrentlyPlaying ? stopAudio() : playAudio(message.audioUrl!, message.id)}
-                                className={cn(
-                                  "flex items-center gap-1.5 px-2 py-1 rounded-full text-xs transition-all",
-                                  isCurrentlyPlaying ? "bg-green-500/20 text-green-500" : "liquid-card hover:bg-white/20 text-[var(--foreground)]/70"
-                                )}
-                              >
-                                <Volume2 className={cn("w-3 h-3", isCurrentlyPlaying && "animate-pulse")} />
-                                {isCurrentlyPlaying ? 'Playing' : 'Play'}
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                  <div ref={messagesEndRef} />
-                </>
               )}
             </div>
-          </div>
+          )}
         </div>
-      ) : (
-        /* CONVERSATION VIEW - Split screen */
-        <>
-          {/* TOP HALF - Other person's side (rotated 180 degrees so they can read it) */}
-          <div className="flex-1 flex flex-col border-b-2 border-white/20 rotate-180">
-            {/* Other's language header */}
-            <div className="p-3 border-b border-white/10">
-              <div className="max-w-2xl mx-auto">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2 relative">
-                    <button
-                      onClick={() => {
-                        setShowTargetPicker(!showTargetPicker);
-                        setShowSourcePicker(false);
-                      }}
-                      className="flex items-center gap-2 px-3 py-2 rounded-xl liquid-card hover:bg-white/20 transition-colors"
-                    >
-                      <span className="text-lg">{targetLang?.flag}</span>
-                      <span className="font-medium text-sm text-[var(--foreground)]">{targetLang?.name}</span>
-                      <ChevronDown className={cn("w-4 h-4 text-[var(--foreground)]/60 transition-transform", showTargetPicker && "rotate-180")} />
-                    </button>
-                    {showTargetPicker && (
-                      <div className="absolute top-full left-0 mt-2 z-50 rotate-180">
-                        <LanguagePicker
-                          selected={targetLanguage}
-                          onSelect={(lang) => {
-                            setTargetLanguage(lang);
-                            setShowTargetPicker(false);
-                          }}
-                          exclude={sourceLanguage}
-                        />
-                      </div>
-                    )}
-                  </div>
-                  <button
-                    onClick={swapLanguages}
-                    className="w-8 h-8 rounded-full liquid-card hover:bg-white/20 flex items-center justify-center transition-colors"
-                  >
-                    <ArrowRightLeft className="w-4 h-4 text-[var(--foreground)]" />
-                  </button>
-                </div>
-              </div>
-            </div>
+      </div>
 
-            {/* Other's messages area */}
-            <div className="flex-1 overflow-y-auto p-3">
-              <div className="max-w-2xl mx-auto space-y-3">
-                {messagesOther.length === 0 && !isRecordingOther && !currentTextOther ? (
-                  <div className="flex flex-col items-center justify-center h-full py-8 text-center">
-                    <p className="text-[var(--foreground)]/40 text-sm">
-                      Press and hold to speak in {targetLang?.name}
-                    </p>
-                  </div>
-                ) : (
-                  <>
-                    {messagesOther.map((message) => {
-                      const isCurrentlyPlaying = playingMessageId === message.id && isPlaying;
-                      return (
-                        <div key={message.id} className="space-y-2">
-                          <div className="liquid-card rounded-2xl p-3 bg-purple-500/20">
-                            <p className="text-[var(--foreground)] text-sm">{message.sourceText}</p>
-                          </div>
-                          <div className="liquid-card rounded-2xl p-3">
-                            <p className="text-[var(--foreground)] text-sm mb-2">{message.translatedText}</p>
-                            {message.audioUrl && (
-                              <button
-                                onClick={() => isCurrentlyPlaying ? stopAudio() : playAudio(message.audioUrl!, message.id)}
-                                className={cn(
-                                  "flex items-center gap-1.5 px-2 py-1 rounded-full text-xs transition-all",
-                                  isCurrentlyPlaying ? "bg-green-500/20 text-green-500" : "liquid-card hover:bg-white/20 text-[var(--foreground)]/70"
-                                )}
-                              >
-                                <Volume2 className={cn("w-3 h-3", isCurrentlyPlaying && "animate-pulse")} />
-                                {isCurrentlyPlaying ? 'Playing' : 'Play'}
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
-
-                    {(isRecordingOther || currentTextOther) && (
-                      <div className="liquid-card rounded-2xl p-3 bg-purple-500/20">
-                        <p className={cn("text-[var(--foreground)] text-sm", !currentTextOther && "opacity-50 italic")}>
-                          {currentTextOther || 'Listening...'}
-                        </p>
-                        {isRecordingOther && (
-                          <div className="flex items-center gap-2 mt-2">
-                            <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-                            <span className="text-xs text-[var(--foreground)]/50">Recording</span>
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {isTranslatingOther && (
-                      <div className="liquid-card rounded-2xl p-3">
-                        <div className="flex items-center gap-2">
-                          <Loader2 className="w-4 h-4 animate-spin text-[#FF6D1F]" />
-                          <span className="text-[var(--foreground)]/60 text-sm">Translating...</span>
-                        </div>
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
-            </div>
-
-            {/* Other's mic button */}
-            <div className="p-3 flex justify-center">
-              <ConversationMicButton
-                isRecording={isRecordingOther}
-                isTranslating={isTranslatingOther}
-                isPlaying={isPlaying && messagesOther.some(m => m.id === playingMessageId)}
-                disabled={isRecordingMe || isTranslatingMe}
-                onStart={startRecordingOther}
-                onStop={stopRecordingOther}
-                onStopAudio={stopAudio}
-                color="purple"
-              />
-            </div>
-          </div>
-
-          {/* BOTTOM HALF - My side */}
-          <div className="flex-1 flex flex-col">
-            {/* My language header */}
-            <div className="p-3 border-b border-white/10">
-              <div className="max-w-2xl mx-auto">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2 relative">
-                    <button
-                      onClick={() => {
-                        setShowSourcePicker(!showSourcePicker);
-                        setShowTargetPicker(false);
-                      }}
-                      className="flex items-center gap-2 px-3 py-2 rounded-xl liquid-card hover:bg-white/20 transition-colors"
-                    >
-                      <span className="text-lg">{sourceLang?.flag}</span>
-                      <span className="font-medium text-sm text-[var(--foreground)]">{sourceLang?.name}</span>
-                      <ChevronDown className={cn("w-4 h-4 text-[var(--foreground)]/60 transition-transform", showSourcePicker && "rotate-180")} />
-                    </button>
-                    {showSourcePicker && (
-                      <LanguagePicker
-                        selected={sourceLanguage}
-                        onSelect={(lang) => {
-                          setSourceLanguage(lang);
-                          setShowSourcePicker(false);
-                        }}
-                        exclude={targetLanguage}
-                      />
-                    )}
-                  </div>
-                  <span className="text-xs text-[var(--foreground)]/50">You</span>
-                </div>
-              </div>
-            </div>
-
-            {/* My messages area */}
-            <div className="flex-1 overflow-y-auto p-3">
-              <div className="max-w-2xl mx-auto space-y-3">
-                {messagesMe.length === 0 && !isRecordingMe && !currentTextMe ? (
-                  <div className="flex flex-col items-center justify-center h-full py-8 text-center">
-                    <p className="text-[var(--foreground)]/40 text-sm">
-                      Press and hold to speak in {sourceLang?.name}
-                    </p>
-                  </div>
-                ) : (
-                  <>
-                    {messagesMe.map((message) => {
-                      const isCurrentlyPlaying = playingMessageId === message.id && isPlaying;
-                      return (
-                        <div key={message.id} className="space-y-2">
-                          <div className="liquid-card rounded-2xl p-3 bg-[#FF6D1F]/20">
-                            <p className="text-[var(--foreground)] text-sm">{message.sourceText}</p>
-                          </div>
-                          <div className="liquid-card rounded-2xl p-3">
-                            <p className="text-[var(--foreground)] text-sm mb-2">{message.translatedText}</p>
-                            {message.audioUrl && (
-                              <button
-                                onClick={() => isCurrentlyPlaying ? stopAudio() : playAudio(message.audioUrl!, message.id)}
-                                className={cn(
-                                  "flex items-center gap-1.5 px-2 py-1 rounded-full text-xs transition-all",
-                                  isCurrentlyPlaying ? "bg-green-500/20 text-green-500" : "liquid-card hover:bg-white/20 text-[var(--foreground)]/70"
-                                )}
-                              >
-                                <Volume2 className={cn("w-3 h-3", isCurrentlyPlaying && "animate-pulse")} />
-                                {isCurrentlyPlaying ? 'Playing' : 'Play'}
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
-
-                    {(isRecordingMe || currentTextMe) && (
-                      <div className="liquid-card rounded-2xl p-3 bg-[#FF6D1F]/20">
-                        <p className={cn("text-[var(--foreground)] text-sm", !currentTextMe && "opacity-50 italic")}>
-                          {currentTextMe || 'Listening...'}
-                        </p>
-                        {isRecordingMe && (
-                          <div className="flex items-center gap-2 mt-2">
-                            <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-                            <span className="text-xs text-[var(--foreground)]/50">Recording</span>
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {isTranslatingMe && (
-                      <div className="liquid-card rounded-2xl p-3">
-                        <div className="flex items-center gap-2">
-                          <Loader2 className="w-4 h-4 animate-spin text-[#FF6D1F]" />
-                          <span className="text-[var(--foreground)]/60 text-sm">Translating...</span>
-                        </div>
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
-            </div>
-
-            {/* My mic button */}
-            <div className="p-3 flex justify-center" style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom))' }}>
-              <ConversationMicButton
-                isRecording={isRecordingMe}
-                isTranslating={isTranslatingMe}
-                isPlaying={isPlaying && messagesMe.some(m => m.id === playingMessageId)}
-                disabled={isRecordingOther || isTranslatingOther}
-                onStart={startRecordingMe}
-                onStop={stopRecordingMe}
-                onStopAudio={stopAudio}
-                color="orange"
-              />
-            </div>
-          </div>
-        </>
+      {/* Error display */}
+      {error && (
+        <div className="mx-4 mb-2 p-3 rounded-xl bg-red-500/20 border border-red-500/30">
+          <p className="text-red-400 text-sm text-center">{error}</p>
+        </div>
       )}
+
+      {/* Input area - text input with optional mic */}
+      <div className="p-4 border-t border-white/10" style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom))' }}>
+        <div className="max-w-2xl mx-auto flex items-center gap-3">
+          {/* Text input */}
+          <div className="flex-1 relative">
+            <input
+              type="text"
+              value={inputText}
+              onChange={(e) => setInputText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  translateText(inputText);
+                }
+              }}
+              placeholder={`Type in ${sourceLang?.name || 'your language'}...`}
+              disabled={isTranslating}
+              className="w-full px-4 py-3 rounded-xl liquid-card bg-white/5 text-[var(--foreground)] placeholder-[var(--foreground)]/40 focus:outline-none focus:ring-2 focus:ring-[#FF6D1F]/50"
+            />
+          </div>
+
+          {/* Send button */}
+          <button
+            onClick={() => translateText(inputText)}
+            disabled={!inputText.trim() || isTranslating}
+            className={cn(
+              "w-12 h-12 rounded-full flex items-center justify-center transition-all",
+              inputText.trim() && !isTranslating
+                ? "liquid-button"
+                : "liquid-card opacity-50"
+            )}
+          >
+            {isTranslating ? (
+              <Loader2 className="w-5 h-5 animate-spin" />
+            ) : (
+              <ArrowRightLeft className="w-5 h-5" />
+            )}
+          </button>
+
+          {/* Mic button (if supported) */}
+          {speechSupported && (
+            <SimpleMicButton
+              isRecording={isRecording}
+              isTranslating={isTranslating}
+              onStart={startRecording}
+              onStop={stopRecording}
+            />
+          )}
+        </div>
+
+        {!speechSupported && (
+          <p className="text-center text-xs text-[var(--foreground)]/40 mt-2">
+            Voice input not available in this browser
+          </p>
+        )}
+      </div>
     </div>
   );
 }
 
-// Conversation Mic Button Component
-function ConversationMicButton({
+// Simple Mic Button Component
+function SimpleMicButton({
   isRecording,
   isTranslating,
-  isPlaying,
-  disabled,
   onStart,
   onStop,
-  onStopAudio,
-  color,
 }: {
   isRecording: boolean;
   isTranslating: boolean;
-  isPlaying: boolean;
-  disabled: boolean;
   onStart: () => void;
   onStop: () => void;
-  onStopAudio: () => void;
-  color: 'orange' | 'purple';
 }) {
   const buttonRef = useRef<HTMLButtonElement>(null);
 
@@ -1585,9 +1353,7 @@ function ConversationMicButton({
       e.preventDefault();
       e.stopPropagation();
       button.setPointerCapture(e.pointerId);
-      if (isPlaying) {
-        onStopAudio();
-      } else if (!isTranslating && !disabled) {
+      if (!isTranslating) {
         onStart();
       }
     };
@@ -1618,36 +1384,28 @@ function ConversationMicButton({
       button.removeEventListener('pointercancel', handlePointerUp);
       button.removeEventListener('contextmenu', handleContextMenu);
     };
-  }, [isRecording, isTranslating, isPlaying, disabled, onStart, onStop, onStopAudio]);
-
-  const bgColor = color === 'orange' ? 'from-[#FF6D1F] to-[#ff8a4c]' : 'from-purple-500 to-purple-600';
+  }, [isRecording, isTranslating, onStart, onStop]);
 
   return (
     <button
       ref={buttonRef}
-      disabled={isTranslating || disabled}
+      disabled={isTranslating}
       className={cn(
-        "w-16 h-16 rounded-full flex items-center justify-center transition-all select-none relative",
+        "w-20 h-20 rounded-full flex items-center justify-center transition-all select-none relative",
         isRecording
           ? "bg-red-500 liquid-recording"
-          : isPlaying
-          ? "bg-green-500"
           : isTranslating
           ? "liquid-card cursor-wait"
-          : disabled
-          ? "liquid-card opacity-50 cursor-not-allowed"
-          : `bg-gradient-to-br ${bgColor} shadow-lg`
+          : "liquid-button hover:scale-105"
       )}
       style={{ touchAction: 'none', WebkitTouchCallout: 'none', WebkitUserSelect: 'none', userSelect: 'none' }}
     >
       {isTranslating ? (
-        <Loader2 className="w-6 h-6 text-[var(--foreground)]/60 animate-spin" />
-      ) : isPlaying ? (
-        <Volume2 className="w-6 h-6 text-white relative z-10" />
+        <Loader2 className="w-8 h-8 text-[var(--foreground)]/60 animate-spin" />
       ) : isRecording ? (
-        <MicOff className="w-6 h-6 text-white relative z-10" />
+        <MicOff className="w-8 h-8 text-white relative z-10" />
       ) : (
-        <Mic className="w-6 h-6 text-white" />
+        <Mic className="w-8 h-8 text-white" />
       )}
     </button>
   );
@@ -1700,3 +1458,4 @@ function base64ToBlob(base64: string, mimeType: string): Blob {
   const byteArray = new Uint8Array(byteNumbers);
   return new Blob([byteArray], { type: mimeType });
 }
+

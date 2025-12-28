@@ -135,22 +135,27 @@ function AppContent() {
   const streamingMessageIdRef = useRef<string | null>(null);
   const { streamingText, isStreaming, startStream, cancelStream } = useStreamingChat({
     onComplete: async (fullText) => {
-      // Generate TTS after streaming completes
+      // Generate TTS and auto-play after streaming completes
       if (autoSpeak && selectedContact && activeChat && streamingMessageIdRef.current) {
         const messageId = streamingMessageIdRef.current;
+        setPlayingMessageId(messageId); // Show playing state
         const audioData = await speak(fullText);
         if (audioData) {
           updateMessage(activeChat.id, messageId, { audioUrl: audioData });
           setMessages((prev) =>
             prev.map((msg) => (msg.id === messageId ? { ...msg, audioUrl: audioData } : msg))
           );
+          // Auto-play the generated audio
+          await playAudio(audioData);
         }
+        setPlayingMessageId(null);
       }
       streamingMessageIdRef.current = null;
     },
     onError: (error) => {
       console.error('Streaming error:', error);
       streamingMessageIdRef.current = null;
+      setPlayingMessageId(null);
     },
   });
 
@@ -774,8 +779,8 @@ function AppContent() {
                       <div className={message.role === 'user' ? "liquid-msg-sent" : "liquid-msg-received"}>
                         <p className="text-sm leading-relaxed whitespace-pre-wrap">{message.content}</p>
                       </div>
-                      {/* Replay button for assistant messages */}
-                      {message.role === 'assistant' && (
+                      {/* Replay button for assistant messages - always visible for mobile */}
+                      {message.role === 'assistant' && message.content && (
                         <button
                           onClick={() => handleReplayAudio(message)}
                           disabled={isSpeaking && playingMessageId !== message.id}
@@ -783,7 +788,7 @@ function AppContent() {
                             "self-start flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs transition-all",
                             playingMessageId === message.id
                               ? "liquid-button"
-                              : "opacity-0 group-hover:opacity-100 liquid-card text-[var(--foreground)]/60 hover:text-[#FF6D1F]"
+                              : "liquid-card text-[var(--foreground)]/60 hover:text-[#FF6D1F]"
                           )}
                           title={message.audioUrl ? "Replay audio (cached)" : "Play audio"}
                         >
@@ -794,7 +799,7 @@ function AppContent() {
                             </>
                           ) : (
                             <>
-                              <RotateCcw className="w-3 h-3" />
+                              <Volume2 className="w-3 h-3" />
                               {message.audioUrl ? "Replay" : "Play"}
                             </>
                           )}
