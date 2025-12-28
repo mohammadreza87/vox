@@ -30,7 +30,9 @@ async function handler(request: AuthenticatedRequest) {
       );
     }
 
-    const { text, sourceLanguage, targetLanguage, voiceId } = parseResult.data;
+    const { text, sourceLanguage, targetLanguage, voiceId: providedVoiceId } = parseResult.data;
+    // Use default multilingual voice if none provided
+    const voiceId = providedVoiceId || 'EXAVITQu4vr4xnSDxMaL'; // Rachel - default ElevenLabs voice
 
     // Sanitize text for AI
     const sanitizedText = sanitizeForAI(text);
