@@ -8,9 +8,9 @@ import { auth } from '@/lib/firebase';
 
 interface CustomContactsContextType {
   customContacts: PreMadeContactConfig[];
-  addContact: (contact: PreMadeContactConfig) => void;
-  updateContact: (contactId: string, updates: Partial<PreMadeContactConfig>) => void;
-  deleteContact: (contactId: string) => void;
+  addContact: (contact: PreMadeContactConfig) => Promise<void>;
+  updateContact: (contactId: string, updates: Partial<PreMadeContactConfig>) => Promise<void>;
+  deleteContact: (contactId: string) => Promise<void>;
   getContact: (contactId: string) => PreMadeContactConfig | undefined;
   isLoading: boolean;
   refreshContacts: () => Promise<void>;
@@ -182,19 +182,52 @@ export function CustomContactsProvider({ children }: { children: ReactNode }) {
     }
   }, [customContacts, mounted, user, debouncedSaveToCloud]);
 
-  const addContact = useCallback((contact: PreMadeContactConfig) => {
-    setCustomContacts(prev => [...prev, contact]);
-  }, []);
+  // Add contact with immediate cloud sync (not debounced) to prevent race conditions
+  const addContact = useCallback(async (contact: PreMadeContactConfig) => {
+    const newContacts = [...customContacts, contact];
+    setCustomContacts(newContacts);
 
-  const updateContact = useCallback((contactId: string, updates: Partial<PreMadeContactConfig>) => {
-    setCustomContacts(prev => prev.map(contact =>
+    // Save to localStorage immediately
+    const storageKey = getCustomContactsKey(user?.uid || null);
+    localStorage.setItem(storageKey, JSON.stringify(newContacts));
+
+    // Save to cloud immediately (not debounced) for new contacts
+    if (user) {
+      await saveToCloud(newContacts);
+    }
+  }, [customContacts, user, saveToCloud]);
+
+  // Update contact with immediate cloud sync
+  const updateContact = useCallback(async (contactId: string, updates: Partial<PreMadeContactConfig>) => {
+    const newContacts = customContacts.map(contact =>
       contact.id === contactId ? { ...contact, ...updates } : contact
-    ));
-  }, []);
+    );
+    setCustomContacts(newContacts);
 
-  const deleteContact = useCallback((contactId: string) => {
-    setCustomContacts(prev => prev.filter(contact => contact.id !== contactId));
-  }, []);
+    // Save to localStorage immediately
+    const storageKey = getCustomContactsKey(user?.uid || null);
+    localStorage.setItem(storageKey, JSON.stringify(newContacts));
+
+    // Save to cloud immediately for updates
+    if (user) {
+      await saveToCloud(newContacts);
+    }
+  }, [customContacts, user, saveToCloud]);
+
+  // Delete contact with immediate cloud sync
+  const deleteContact = useCallback(async (contactId: string) => {
+    const newContacts = customContacts.filter(contact => contact.id !== contactId);
+    setCustomContacts(newContacts);
+
+    // Save to localStorage immediately
+    const storageKey = getCustomContactsKey(user?.uid || null);
+    localStorage.setItem(storageKey, JSON.stringify(newContacts));
+
+    // Save to cloud immediately for deletes
+    if (user) {
+      await saveToCloud(newContacts);
+    }
+  }, [customContacts, user, saveToCloud]);
 
   const getContact = useCallback((contactId: string) => {
     return customContacts.find(c => c.id === contactId);

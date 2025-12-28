@@ -29,6 +29,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/shared/utils/cn';
 import { useEntranceAnimation } from '@/hooks/useAnimations';
+import { ClonedVoice } from '@/shared/types';
 
 // Web Speech API types
 interface SpeechRecognitionEvent extends Event {
@@ -89,6 +90,8 @@ function TranslatorContent() {
     saveTranslatorVoice,
     clearTranslatorVoice,
     getSampleText,
+    availableClonedVoices,
+    useExistingVoice,
   } = useTranslator();
 
   const [showSetup, setShowSetup] = useState(!isSetupComplete);
@@ -145,6 +148,8 @@ function TranslatorContent() {
             setSourceLanguage={setSourceLanguage}
             getSampleText={getSampleText}
             saveTranslatorVoice={saveTranslatorVoice}
+            availableClonedVoices={availableClonedVoices}
+            useExistingVoice={useExistingVoice}
           />
         ) : showSettings ? (
           <SettingsView
@@ -180,15 +185,21 @@ function SetupFlow({
   setSourceLanguage,
   getSampleText,
   saveTranslatorVoice,
+  availableClonedVoices,
+  useExistingVoice,
 }: {
   onComplete: () => void;
   sourceLanguage: LanguageCode;
   setSourceLanguage: (lang: LanguageCode) => void;
   getSampleText: (lang: LanguageCode) => string;
   saveTranslatorVoice: (voice: { voiceId: string; name: string; sourceLanguage: LanguageCode; createdAt: string }) => void;
+  availableClonedVoices: ClonedVoice[];
+  useExistingVoice: (voice: ClonedVoice, sourceLanguage: LanguageCode) => void;
 }) {
   const { user } = useAuth();
   const [step, setStep] = useState(1);
+  const [voiceSelectionType, setVoiceSelectionType] = useState<'record' | 'existing'>('record');
+  const [selectedExistingVoice, setSelectedExistingVoice] = useState<ClonedVoice | null>(null);
   const [isRecording, setIsRecording] = useState(false);
   const [recordedAudio, setRecordedAudio] = useState<Blob | null>(null);
   const [recordingDuration, setRecordingDuration] = useState(0);
@@ -414,90 +425,157 @@ function SetupFlow({
             <div className="w-16 h-16 bg-gradient-to-br from-[#FF6D1F] to-[#ff8a4c] rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg shadow-[#FF6D1F]/30">
               <Mic className="w-8 h-8 text-white" />
             </div>
-            <h2 className="text-2xl font-bold text-[var(--foreground)] mb-2">Record Your Voice</h2>
-            <p className="text-[var(--foreground)]/60">Read the text below clearly (minimum 30 seconds)</p>
+            <h2 className="text-2xl font-bold text-[var(--foreground)] mb-2">Choose Your Voice</h2>
+            <p className="text-[var(--foreground)]/60">Record a new voice or use an existing one</p>
           </div>
 
-          {/* Sample text to read */}
-          <div className="liquid-card rounded-xl p-4">
-            <div className="flex items-center gap-2 mb-2">
-              <span className="text-xl">{selectedLang?.flag}</span>
-              <span className="text-sm font-medium text-[var(--foreground)]">{selectedLang?.name}</span>
+          {/* Voice selection type tabs - only show if there are existing voices */}
+          {availableClonedVoices.length > 0 && (
+            <div className="flex gap-2">
+              <button
+                onClick={() => setVoiceSelectionType('record')}
+                className={cn(
+                  "flex-1 py-3 px-4 rounded-xl font-medium transition-all flex items-center justify-center gap-2",
+                  voiceSelectionType === 'record'
+                    ? "liquid-button"
+                    : "liquid-card hover:bg-white/20"
+                )}
+              >
+                <Mic className="w-4 h-4" />
+                Record New
+              </button>
+              <button
+                onClick={() => setVoiceSelectionType('existing')}
+                className={cn(
+                  "flex-1 py-3 px-4 rounded-xl font-medium transition-all flex items-center justify-center gap-2",
+                  voiceSelectionType === 'existing'
+                    ? "liquid-button"
+                    : "liquid-card hover:bg-white/20"
+                )}
+              >
+                <Volume2 className="w-4 h-4" />
+                Use Existing ({availableClonedVoices.length})
+              </button>
             </div>
-            <p className="text-[var(--foreground)]/80 leading-relaxed">{sampleText}</p>
-          </div>
+          )}
 
-          {/* Recording controls */}
-          <div className="flex flex-col items-center gap-4">
-            {!recordedAudio ? (
-              <>
+          {voiceSelectionType === 'existing' && availableClonedVoices.length > 0 ? (
+            /* Existing voice selection */
+            <div className="space-y-3">
+              <p className="text-sm text-[var(--foreground)]/60 text-center">
+                Select a voice you've created before
+              </p>
+              {availableClonedVoices.map((voice) => (
                 <button
-                  onClick={isRecording ? stopRecording : startRecording}
+                  key={voice.id}
+                  onClick={() => setSelectedExistingVoice(voice)}
                   className={cn(
-                    "w-24 h-24 rounded-full flex items-center justify-center transition-all relative",
-                    isRecording
-                      ? "bg-red-500 hover:bg-red-600 liquid-recording"
-                      : "liquid-button"
+                    "w-full p-4 rounded-xl transition-all flex items-center gap-3 text-left",
+                    selectedExistingVoice?.id === voice.id
+                      ? "liquid-button"
+                      : "liquid-card hover:bg-white/20"
                   )}
                 >
-                  {isRecording ? (
-                    <Square className="w-10 h-10 text-white relative z-10" />
-                  ) : (
-                    <Mic className="w-10 h-10 text-white" />
+                  <div className="w-10 h-10 rounded-full bg-gradient-to-br from-purple-500 to-indigo-600 flex items-center justify-center flex-shrink-0">
+                    <Volume2 className="w-5 h-5 text-white" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="font-medium text-[var(--foreground)] truncate">{voice.name}</p>
+                    <p className="text-xs text-[var(--foreground)]/60">
+                      Created {new Date(voice.createdAt).toLocaleDateString()}
+                    </p>
+                  </div>
+                  {selectedExistingVoice?.id === voice.id && (
+                    <Check className="w-5 h-5 flex-shrink-0" />
                   )}
                 </button>
-                {isRecording && (
-                  <div className="text-center">
-                    <p className="text-2xl font-mono font-bold text-[var(--foreground)]">
-                      {formatDuration(recordingDuration)}
-                    </p>
-                    <p className="text-sm text-[var(--foreground)]/60">Recording...</p>
-                  </div>
-                )}
-                {!isRecording && (
-                  <p className="text-sm text-[var(--foreground)]/60">Tap to start recording</p>
-                )}
-              </>
-            ) : (
-              <div className="w-full space-y-4">
-                <div className="liquid-card rounded-xl p-4 flex items-center gap-3">
-                  <button
-                    onClick={playRecordedAudio}
-                    className={cn(
-                      "w-12 h-12 rounded-full flex items-center justify-center transition-all flex-shrink-0",
-                      isPlayingRecording
-                        ? "bg-green-500 hover:bg-green-600 animate-pulse"
-                        : "bg-[#FF6D1F] hover:bg-[#e5621b]"
-                    )}
-                  >
-                    {isPlayingRecording ? (
-                      <StopCircle className="w-6 h-6 text-white" />
-                    ) : (
-                      <Play className="w-6 h-6 text-white" />
-                    )}
-                  </button>
-                  <div className="flex-1 min-w-0">
-                    <p className="font-medium text-[var(--foreground)]">
-                      {isPlayingRecording ? 'Playing...' : 'Voice Sample'}
-                    </p>
-                    <p className="text-sm text-[var(--foreground)]/60">{formatDuration(recordingDuration)}</p>
-                  </div>
-                  <button
-                    onClick={resetRecording}
-                    className="p-2 rounded-full liquid-card hover:bg-white/20 text-[var(--foreground)]/60 hover:text-red-500 transition-colors flex-shrink-0"
-                  >
-                    <Trash2 className="w-5 h-5" />
-                  </button>
+              ))}
+            </div>
+          ) : (
+            /* Recording flow */
+            <>
+              {/* Sample text to read */}
+              <div className="liquid-card rounded-xl p-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="text-xl">{selectedLang?.flag}</span>
+                  <span className="text-sm font-medium text-[var(--foreground)]">{selectedLang?.name}</span>
                 </div>
+                <p className="text-[var(--foreground)]/80 leading-relaxed">{sampleText}</p>
+              </div>
 
-                {recordingDuration < 30 && (
-                  <p className="text-sm text-amber-500 text-center">
-                    Recording should be at least 30 seconds for best results
-                  </p>
+              {/* Recording controls */}
+              <div className="flex flex-col items-center gap-4">
+                {!recordedAudio ? (
+                  <>
+                    <button
+                      onClick={isRecording ? stopRecording : startRecording}
+                      className={cn(
+                        "w-24 h-24 rounded-full flex items-center justify-center transition-all relative",
+                        isRecording
+                          ? "bg-red-500 hover:bg-red-600 liquid-recording"
+                          : "liquid-button"
+                      )}
+                    >
+                      {isRecording ? (
+                        <Square className="w-10 h-10 text-white relative z-10" />
+                      ) : (
+                        <Mic className="w-10 h-10 text-white" />
+                      )}
+                    </button>
+                    {isRecording && (
+                      <div className="text-center">
+                        <p className="text-2xl font-mono font-bold text-[var(--foreground)]">
+                          {formatDuration(recordingDuration)}
+                        </p>
+                        <p className="text-sm text-[var(--foreground)]/60">Recording...</p>
+                      </div>
+                    )}
+                    {!isRecording && (
+                      <p className="text-sm text-[var(--foreground)]/60">Tap to start recording</p>
+                    )}
+                  </>
+                ) : (
+                  <div className="w-full space-y-4">
+                    <div className="liquid-card rounded-xl p-4 flex items-center gap-3">
+                      <button
+                        onClick={playRecordedAudio}
+                        className={cn(
+                          "w-12 h-12 rounded-full flex items-center justify-center transition-all flex-shrink-0",
+                          isPlayingRecording
+                            ? "bg-green-500 hover:bg-green-600 animate-pulse"
+                            : "bg-[#FF6D1F] hover:bg-[#e5621b]"
+                        )}
+                      >
+                        {isPlayingRecording ? (
+                          <StopCircle className="w-6 h-6 text-white" />
+                        ) : (
+                          <Play className="w-6 h-6 text-white" />
+                        )}
+                      </button>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-medium text-[var(--foreground)]">
+                          {isPlayingRecording ? 'Playing...' : 'Voice Sample'}
+                        </p>
+                        <p className="text-sm text-[var(--foreground)]/60">{formatDuration(recordingDuration)}</p>
+                      </div>
+                      <button
+                        onClick={resetRecording}
+                        className="p-2 rounded-full liquid-card hover:bg-white/20 text-[var(--foreground)]/60 hover:text-red-500 transition-colors flex-shrink-0"
+                      >
+                        <Trash2 className="w-5 h-5" />
+                      </button>
+                    </div>
+
+                    {recordingDuration < 30 && (
+                      <p className="text-sm text-amber-500 text-center">
+                        Recording should be at least 30 seconds for best results
+                      </p>
+                    )}
+                  </div>
                 )}
               </div>
-            )}
-          </div>
+            </>
+          )}
 
           {error && (
             <div className="p-4 rounded-xl bg-red-500/10 border border-red-500/30">
@@ -512,25 +590,45 @@ function SetupFlow({
             >
               Back
             </button>
-            <button
-              onClick={handleCloneVoice}
-              disabled={!recordedAudio || isCloning}
-              className={cn(
-                "flex-1 py-4 rounded-xl font-medium transition-all",
-                recordedAudio && !isCloning
-                  ? "liquid-button"
-                  : "liquid-card text-[var(--foreground)]/40 cursor-not-allowed"
-              )}
-            >
-              {isCloning ? (
-                <span className="flex items-center justify-center gap-2">
-                  <Loader2 className="w-5 h-5 animate-spin" />
-                  Cloning...
-                </span>
-              ) : (
-                'Create Voice'
-              )}
-            </button>
+            {voiceSelectionType === 'existing' ? (
+              <button
+                onClick={() => {
+                  if (selectedExistingVoice) {
+                    useExistingVoice(selectedExistingVoice, sourceLanguage);
+                    onComplete();
+                  }
+                }}
+                disabled={!selectedExistingVoice}
+                className={cn(
+                  "flex-1 py-4 rounded-xl font-medium transition-all",
+                  selectedExistingVoice
+                    ? "liquid-button"
+                    : "liquid-card text-[var(--foreground)]/40 cursor-not-allowed"
+                )}
+              >
+                Use This Voice
+              </button>
+            ) : (
+              <button
+                onClick={handleCloneVoice}
+                disabled={!recordedAudio || isCloning}
+                className={cn(
+                  "flex-1 py-4 rounded-xl font-medium transition-all",
+                  recordedAudio && !isCloning
+                    ? "liquid-button"
+                    : "liquid-card text-[var(--foreground)]/40 cursor-not-allowed"
+                )}
+              >
+                {isCloning ? (
+                  <span className="flex items-center justify-center gap-2">
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                    Cloning...
+                  </span>
+                ) : (
+                  'Create Voice'
+                )}
+              </button>
+            )}
           </div>
         </div>
       )}

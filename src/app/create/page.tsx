@@ -12,7 +12,7 @@ import { storage, auth } from '@/lib/firebase';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSubscription } from '@/contexts/SubscriptionContext';
 import { useCustomContacts } from '@/contexts/CustomContactsContext';
-import { getClonedVoicesKey } from '@/shared/utils/storage';
+import { getClonedVoicesKey, getAllClonedVoices } from '@/shared/utils/storage';
 import { getModelTier } from '@/config/subscription';
 import { PreMadeContactConfig } from '@/shared/types';
 
@@ -37,12 +37,14 @@ interface VoiceOption {
 }
 
 // Helper to convert saved cloned voices to voice options format
-const clonedVoiceToOption = (voice: { voiceId: string; name: string }) => ({
+const clonedVoiceToOption = (voice: ClonedVoice) => ({
   id: voice.voiceId,
   name: voice.name,
   gender: 'custom' as const,
-  accent: 'Cloned',
-  description: 'Your cloned voice',
+  accent: voice.source === 'translator' ? 'Translator' : 'Cloned',
+  description: voice.source === 'translator'
+    ? `From Translator${voice.sourceLanguage ? ` (${voice.sourceLanguage})` : ''}`
+    : 'Your cloned voice',
 });
 
 const EMOJI_OPTIONS = ['🤖', '🧠', '💼', '📚', '🎯', '💡', '🌟', '🎨', '🏋️', '🧘', '👨‍🍳', '🎵', '✈️', '💰', '🔬'];
@@ -120,13 +122,13 @@ function CreateContactPageContent() {
   const [isLoadingPreview, setIsLoadingPreview] = useState(false);
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
 
-  // Load saved voices from localStorage (user-specific)
+  // Load saved voices from localStorage (includes both contact and translator voices)
   useEffect(() => {
     if (typeof window !== 'undefined') {
       try {
-        const storageKey = getClonedVoicesKey(user?.uid || null);
-        const saved = JSON.parse(localStorage.getItem(storageKey) || '[]');
-        setSavedVoices(saved);
+        // Use getAllClonedVoices to get voices from both contact creation and translator
+        const allVoices = getAllClonedVoices(user?.uid || null);
+        setSavedVoices(allVoices);
       } catch (e) {
         console.error('Error loading saved voices:', e);
       }
@@ -630,14 +632,18 @@ Guidelines:
     };
 
     // Use context methods for cloud-synced storage
-    if (isEditMode && editContactId) {
-      updateContact(editContactId, contactData);
-    } else {
-      addContact(contactData);
+    // Await the save to ensure it completes before navigation
+    try {
+      if (isEditMode && editContactId) {
+        await updateContact(editContactId, contactData);
+      } else {
+        await addContact(contactData);
+      }
+    } catch (error) {
+      console.error('Error saving contact:', error);
+      setIsCreating(false);
+      return;
     }
-
-    // Small delay to ensure sync before navigation
-    await new Promise(resolve => setTimeout(resolve, 100));
 
     // Navigate to app with contact selected
     router.push(`/app?contact=${contactData.id}`);

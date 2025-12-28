@@ -89,6 +89,16 @@ export async function POST(request: NextRequest) {
 
     await userDataRef.set(updateData, { merge: true });
 
+    // Also update the customContactsCount in the main user document for subscription tracking
+    if (customContacts !== undefined) {
+      const userDocRef = db.collection('users').doc(userId);
+      await userDocRef.set({
+        usage: {
+          customContactsCount: Array.isArray(customContacts) ? customContacts.length : 0,
+        },
+      }, { merge: true });
+    }
+
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error('Error saving user data:', error);

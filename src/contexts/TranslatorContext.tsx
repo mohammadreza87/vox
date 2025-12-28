@@ -2,6 +2,8 @@
 
 import { createContext, useContext, useState, useCallback, useEffect, ReactNode } from 'react';
 import { useAuth } from './AuthContext';
+import { getClonedVoicesKey, getAllClonedVoices } from '@/shared/utils/storage';
+import { ClonedVoice } from '@/shared/types';
 
 // Supported languages by ElevenLabs multilingual model
 export const SUPPORTED_LANGUAGES = [
@@ -91,12 +93,16 @@ interface TranslatorContextType {
   sourceLanguage: LanguageCode;
   targetLanguage: LanguageCode;
 
+  // Available cloned voices from contact creation
+  availableClonedVoices: ClonedVoice[];
+
   // Actions
   setSourceLanguage: (lang: LanguageCode) => void;
   setTargetLanguage: (lang: LanguageCode) => void;
   saveTranslatorVoice: (voice: TranslatorVoice) => void;
   clearTranslatorVoice: () => void;
   getSampleText: (lang: LanguageCode) => string;
+  useExistingVoice: (voice: ClonedVoice, sourceLanguage: LanguageCode) => void;
 }
 
 const TranslatorContext = createContext<TranslatorContextType | undefined>(undefined);
@@ -110,10 +116,25 @@ export function TranslatorProvider({ children }: { children: ReactNode }) {
   const [sourceLanguage, setSourceLanguageState] = useState<LanguageCode>('en');
   const [targetLanguage, setTargetLanguageState] = useState<LanguageCode>('es');
   const [isLoaded, setIsLoaded] = useState(false);
+  const [availableClonedVoices, setAvailableClonedVoices] = useState<ClonedVoice[]>([]);
 
   // Get user-specific storage key
   const getStorageKey = useCallback((baseKey: string) => {
     return user?.uid ? `${baseKey}_${user.uid}` : baseKey;
+  }, [user?.uid]);
+
+  // Load available cloned voices from contact creation
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        // Get cloned voices that are NOT from translator (to avoid duplicates)
+        const allVoices = getAllClonedVoices(user?.uid || null);
+        const contactVoices = allVoices.filter(v => v.source !== 'translator');
+        setAvailableClonedVoices(contactVoices);
+      } catch (e) {
+        console.error('Error loading cloned voices:', e);
+      }
+    }
   }, [user?.uid]);
 
   // Load saved translator voice and settings from localStorage
@@ -157,6 +178,41 @@ export function TranslatorProvider({ children }: { children: ReactNode }) {
     if (typeof window !== 'undefined') {
       const voiceKey = getStorageKey(TRANSLATOR_VOICE_KEY);
       localStorage.setItem(voiceKey, JSON.stringify(voice));
+
+      // Also save to shared cloned voices storage so it appears in contact creation
+      const clonedVoicesKey = getClonedVoicesKey(user?.uid || null);
+      try {
+        const existingVoices: ClonedVoice[] = JSON.parse(localStorage.getItem(clonedVoicesKey) || '[]');
+        // Check if this voice already exists
+        if (!existingVoices.some(v => v.voiceId === voice.voiceId)) {
+          existingVoices.push({
+            id: `translator-${voice.voiceId}`,
+            voiceId: voice.voiceId,
+            name: voice.name,
+            createdAt: voice.createdAt,
+            source: 'translator',
+            sourceLanguage: voice.sourceLanguage,
+          });
+          localStorage.setItem(clonedVoicesKey, JSON.stringify(existingVoices));
+        }
+      } catch (e) {
+        console.error('Error saving to shared cloned voices:', e);
+      }
+    }
+  }, [getStorageKey, user?.uid]);
+
+  // Use an existing cloned voice from contact creation
+  const useExistingVoice = useCallback((voice: ClonedVoice, sourceLang: LanguageCode) => {
+    const translatorVoiceData: TranslatorVoice = {
+      voiceId: voice.voiceId,
+      name: voice.name,
+      sourceLanguage: sourceLang,
+      createdAt: voice.createdAt,
+    };
+    setTranslatorVoice(translatorVoiceData);
+    if (typeof window !== 'undefined') {
+      const voiceKey = getStorageKey(TRANSLATOR_VOICE_KEY);
+      localStorage.setItem(voiceKey, JSON.stringify(translatorVoiceData));
     }
   }, [getStorageKey]);
 
@@ -188,11 +244,13 @@ export function TranslatorProvider({ children }: { children: ReactNode }) {
       translatorVoice,
       sourceLanguage,
       targetLanguage,
+      availableClonedVoices,
       setSourceLanguage,
       setTargetLanguage,
       saveTranslatorVoice,
       clearTranslatorVoice,
       getSampleText,
+      useExistingVoice,
     }}>
       {children}
     </TranslatorContext.Provider>
