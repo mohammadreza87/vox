@@ -1,25 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyIdToken, extractBearerToken } from '@/lib/firebase-admin';
-import { getUserDocument, createUserDocument } from '@/lib/firestore';
+import { getUserDocument, createUserDocument, saveClonedVoiceToFirestore } from '@/lib/firestore';
 import { SUBSCRIPTION_TIERS } from '@/config/subscription';
+import { success, unauthorized, badRequest, forbidden, serverError } from '@/lib/api/response';
+import { logger } from '@/lib/logger';
 
 export async function POST(request: NextRequest) {
   try {
     // Check for authentication
     const token = extractBearerToken(request.headers.get('Authorization'));
     if (!token) {
-      return NextResponse.json(
-        { error: 'Authentication required', code: 'AUTH_REQUIRED' },
-        { status: 401 }
-      );
+      return unauthorized();
     }
 
     const decodedToken = await verifyIdToken(token);
     if (!decodedToken) {
-      return NextResponse.json(
-        { error: 'Invalid token', code: 'INVALID_TOKEN' },
-        { status: 401 }
-      );
+      return unauthorized('Invalid token');
     }
 
     const userId = decodedToken.uid;
@@ -35,34 +31,28 @@ export async function POST(request: NextRequest) {
 
     // Check if user's tier allows voice cloning
     if (!SUBSCRIPTION_TIERS[tier].features.voiceCloning) {
-      return NextResponse.json(
-        {
-          error: 'Voice cloning requires a Pro or Max subscription',
-          code: 'FEATURE_RESTRICTED',
-          requiredTier: 'pro',
-        },
-        { status: 403 }
-      );
+      return forbidden('Voice cloning requires a Pro or Max subscription');
     }
 
     const formData = await request.formData();
     const name = formData.get('name') as string;
     const description = formData.get('description') as string;
     const audioFile = formData.get('files') as File;
+    const source = (formData.get('source') as string) || 'contact';
+    const sourceLanguage = formData.get('sourceLanguage') as string | undefined;
+    const isDefaultTranslator = formData.get('isDefaultTranslator') === 'true';
 
     if (!audioFile || !name) {
-      return NextResponse.json(
-        { error: 'Audio file and name are required' },
-        { status: 400 }
-      );
+      return badRequest('Audio file and name are required');
+    }
+
+    if (source && !['contact', 'translator'].includes(source)) {
+      return badRequest('source must be "contact" or "translator"');
     }
 
     // Check if ElevenLabs API key is configured
     if (!process.env.ELEVENLABS_API_KEY) {
-      return NextResponse.json(
-        { error: 'ElevenLabs API key not configured' },
-        { status: 500 }
-      );
+      return serverError('ElevenLabs API key not configured');
     }
 
     // Create form data for ElevenLabs API
@@ -82,40 +72,57 @@ export async function POST(request: NextRequest) {
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
-      console.error('ElevenLabs API error:', errorData);
+      logger.error({ error: errorData, status: response.status }, 'ElevenLabs API error');
 
       // Check for specific error types
       if (response.status === 401) {
-        return NextResponse.json(
-          { error: 'Invalid ElevenLabs API key' },
-          { status: 401 }
-        );
+        return unauthorized('Invalid ElevenLabs API key');
       }
 
       if (response.status === 422) {
         return NextResponse.json(
-          { error: 'Voice cloning requires an ElevenLabs paid plan (Starter or higher)' },
+          {
+            success: false,
+            error: {
+              code: 'ELEVENLABS_PLAN_REQUIRED',
+              message: 'Voice cloning requires an ElevenLabs paid plan (Starter or higher)',
+            },
+          },
           { status: 422 }
         );
       }
 
-      return NextResponse.json(
-        { error: errorData.detail?.message || 'Failed to clone voice' },
-        { status: response.status }
-      );
+      return serverError(errorData.detail?.message || 'Failed to clone voice');
     }
 
     const data = await response.json();
+    const voiceId = data.voice_id;
 
-    return NextResponse.json({
-      voice_id: data.voice_id,
-      name: name,
-    });
-  } catch (error) {
-    console.error('Voice cloning error:', error);
-    return NextResponse.json(
-      { error: 'Failed to clone voice' },
-      { status: 500 }
+    // Save to Firestore for persistence
+    try {
+      await saveClonedVoiceToFirestore(userId, {
+        voiceId,
+        name,
+        source: source as 'contact' | 'translator',
+        sourceLanguage,
+        isDefaultTranslator,
+      });
+      logger.info({ userId, voiceId, source }, 'Cloned voice saved to Firestore');
+    } catch (firestoreError) {
+      // Log but don't fail - the voice was created successfully in ElevenLabs
+      logger.error({ error: firestoreError, userId, voiceId }, 'Failed to save cloned voice to Firestore');
+    }
+
+    return success(
+      {
+        voice_id: voiceId,
+        name: name,
+        source,
+      },
+      { status: 201 }
     );
+  } catch (error) {
+    logger.error({ error }, 'Voice cloning error');
+    return serverError('Failed to clone voice');
   }
 }

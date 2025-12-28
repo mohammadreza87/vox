@@ -4,6 +4,7 @@ import { createContext, useContext, useState, useCallback, useEffect, ReactNode 
 import { useAuth } from './AuthContext';
 import { getClonedVoicesKey, getAllClonedVoices } from '@/shared/utils/storage';
 import { ClonedVoice } from '@/shared/types';
+import { auth } from '@/lib/firebase';
 
 // Supported languages by ElevenLabs multilingual model
 export const SUPPORTED_LANGUAGES = [
@@ -123,21 +124,82 @@ export function TranslatorProvider({ children }: { children: ReactNode }) {
     return user?.uid ? `${baseKey}_${user.uid}` : baseKey;
   }, [user?.uid]);
 
-  // Load available cloned voices from contact creation
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        // Get cloned voices that are NOT from translator (to avoid duplicates)
-        const allVoices = getAllClonedVoices(user?.uid || null);
-        const contactVoices = allVoices.filter(v => v.source !== 'translator');
-        setAvailableClonedVoices(contactVoices);
-      } catch (e) {
-        console.error('Error loading cloned voices:', e);
+  // Load available cloned voices from Firestore (or localStorage as fallback)
+  const loadClonedVoices = useCallback(async () => {
+    if (!user?.uid) {
+      // Not logged in - use localStorage only
+      if (typeof window !== 'undefined') {
+        const allVoices = getAllClonedVoices(null);
+        setAvailableClonedVoices(allVoices);
       }
+      return;
     }
-  }, [user?.uid]);
 
-  // Load saved translator voice and settings from localStorage
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      if (!token) {
+        // Fallback to localStorage
+        const allVoices = getAllClonedVoices(user.uid);
+        setAvailableClonedVoices(allVoices);
+        return;
+      }
+
+      const response = await fetch('/api/user/voices', {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (response.ok) {
+        const responseData = await response.json();
+        const data = responseData.data || responseData;
+        const voices: ClonedVoice[] = (data.voices || []).map((v: { id: string; voiceId: string; name: string; source: string; sourceLanguage?: string; createdAt: string }) => ({
+          id: v.id,
+          voiceId: v.voiceId,
+          name: v.name,
+          source: v.source,
+          sourceLanguage: v.sourceLanguage,
+          createdAt: v.createdAt,
+        }));
+        setAvailableClonedVoices(voices);
+
+        // Set default translator voice if exists
+        if (data.defaultTranslatorVoiceId) {
+          const defaultVoice = voices.find(v => v.voiceId === data.defaultTranslatorVoiceId);
+          if (defaultVoice && !translatorVoice) {
+            setTranslatorVoice({
+              voiceId: defaultVoice.voiceId,
+              name: defaultVoice.name,
+              sourceLanguage: (defaultVoice.sourceLanguage || 'en') as LanguageCode,
+              createdAt: defaultVoice.createdAt,
+            });
+          }
+        }
+
+        // Also sync to localStorage for offline access
+        if (typeof window !== 'undefined') {
+          const clonedVoicesKey = getClonedVoicesKey(user.uid);
+          localStorage.setItem(clonedVoicesKey, JSON.stringify(voices));
+        }
+      } else {
+        // Fallback to localStorage
+        const allVoices = getAllClonedVoices(user.uid);
+        setAvailableClonedVoices(allVoices);
+      }
+    } catch (e) {
+      console.error('Error loading cloned voices from Firestore:', e);
+      // Fallback to localStorage
+      const allVoices = getAllClonedVoices(user?.uid || null);
+      setAvailableClonedVoices(allVoices);
+    }
+  }, [user?.uid, translatorVoice]);
+
+  // Load available cloned voices on mount
+  useEffect(() => {
+    loadClonedVoices();
+  }, [loadClonedVoices]);
+
+  // Load saved translator voice and settings from localStorage (as initial state before Firestore loads)
   useEffect(() => {
     if (typeof window !== 'undefined') {
       try {
@@ -173,7 +235,7 @@ export function TranslatorProvider({ children }: { children: ReactNode }) {
     }
   }, [sourceLanguage, targetLanguage, isLoaded, getStorageKey]);
 
-  const saveTranslatorVoice = useCallback((voice: TranslatorVoice) => {
+  const saveTranslatorVoice = useCallback(async (voice: TranslatorVoice) => {
     setTranslatorVoice(voice);
     if (typeof window !== 'undefined') {
       const voiceKey = getStorageKey(TRANSLATOR_VOICE_KEY);
@@ -198,11 +260,49 @@ export function TranslatorProvider({ children }: { children: ReactNode }) {
       } catch (e) {
         console.error('Error saving to shared cloned voices:', e);
       }
+
+      // Save to Firestore if logged in
+      if (user?.uid) {
+        try {
+          const token = await auth.currentUser?.getIdToken();
+          if (token) {
+            // Save voice to Firestore
+            await fetch('/api/user/voices', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${token}`,
+              },
+              body: JSON.stringify({
+                voiceId: voice.voiceId,
+                name: voice.name,
+                source: 'translator',
+                sourceLanguage: voice.sourceLanguage,
+                isDefaultTranslator: true,
+              }),
+            });
+
+            // Set as default translator voice
+            await fetch('/api/user/voices', {
+              method: 'PATCH',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${token}`,
+              },
+              body: JSON.stringify({
+                defaultTranslatorVoiceId: voice.voiceId,
+              }),
+            });
+          }
+        } catch (e) {
+          console.error('Error saving translator voice to Firestore:', e);
+        }
+      }
     }
   }, [getStorageKey, user?.uid]);
 
   // Use an existing cloned voice from contact creation
-  const useExistingVoice = useCallback((voice: ClonedVoice, sourceLang: LanguageCode) => {
+  const useExistingVoice = useCallback(async (voice: ClonedVoice, sourceLang: LanguageCode) => {
     const translatorVoiceData: TranslatorVoice = {
       voiceId: voice.voiceId,
       name: voice.name,
@@ -213,16 +313,58 @@ export function TranslatorProvider({ children }: { children: ReactNode }) {
     if (typeof window !== 'undefined') {
       const voiceKey = getStorageKey(TRANSLATOR_VOICE_KEY);
       localStorage.setItem(voiceKey, JSON.stringify(translatorVoiceData));
-    }
-  }, [getStorageKey]);
 
-  const clearTranslatorVoice = useCallback(() => {
+      // Set as default translator voice in Firestore
+      if (user?.uid) {
+        try {
+          const token = await auth.currentUser?.getIdToken();
+          if (token) {
+            await fetch('/api/user/voices', {
+              method: 'PATCH',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${token}`,
+              },
+              body: JSON.stringify({
+                defaultTranslatorVoiceId: voice.voiceId,
+              }),
+            });
+          }
+        } catch (e) {
+          console.error('Error setting default translator voice in Firestore:', e);
+        }
+      }
+    }
+  }, [getStorageKey, user?.uid]);
+
+  const clearTranslatorVoice = useCallback(async () => {
     setTranslatorVoice(null);
     if (typeof window !== 'undefined') {
       const voiceKey = getStorageKey(TRANSLATOR_VOICE_KEY);
       localStorage.removeItem(voiceKey);
+
+      // Clear default translator voice in Firestore
+      if (user?.uid) {
+        try {
+          const token = await auth.currentUser?.getIdToken();
+          if (token) {
+            await fetch('/api/user/voices', {
+              method: 'PATCH',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${token}`,
+              },
+              body: JSON.stringify({
+                defaultTranslatorVoiceId: null,
+              }),
+            });
+          }
+        } catch (e) {
+          console.error('Error clearing default translator voice in Firestore:', e);
+        }
+      }
     }
-  }, [getStorageKey]);
+  }, [getStorageKey, user?.uid]);
 
   const setSourceLanguage = useCallback((lang: LanguageCode) => {
     setSourceLanguageState(lang);

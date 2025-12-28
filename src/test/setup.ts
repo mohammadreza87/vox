@@ -67,6 +67,20 @@ Object.defineProperty(window, 'localStorage', {
   value: localStorageMock,
 });
 
+// Mock document.documentElement.classList
+Object.defineProperty(document.documentElement, 'classList', {
+  value: {
+    add: vi.fn(),
+    remove: vi.fn(),
+    contains: vi.fn(() => false),
+  },
+});
+
+// Mock document.querySelector for theme-color meta tag
+vi.spyOn(document, 'querySelector').mockImplementation(() => ({
+  setAttribute: vi.fn(),
+} as unknown as Element));
+
 // Mock ResizeObserver
 global.ResizeObserver = vi.fn().mockImplementation(() => ({
   observe: vi.fn(),

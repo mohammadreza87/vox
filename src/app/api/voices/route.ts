@@ -39,8 +39,22 @@ export async function GET(request: NextRequest) {
 
     const data = await response.json();
 
-    // Transform voices to our format
-    const voices = data.voices
+    // Separate cloned voices (user's own) from premade/professional
+    const clonedVoices = data.voices
+      .filter((v: any) => v.category === 'cloned')
+      .map((v: any) => ({
+        id: v.voice_id,
+        name: v.name,
+        gender: v.labels?.gender || 'Custom',
+        accent: v.labels?.accent || 'Cloned',
+        description: v.labels?.description || 'Your cloned voice',
+        previewUrl: v.preview_url,
+        category: 'cloned',
+        isCloned: true,
+      }));
+
+    // Transform premade/professional voices to our format
+    const premadeVoices = data.voices
       .filter((v: any) => v.category === 'premade' || v.category === 'professional')
       .map((v: any) => ({
         id: v.voice_id,
@@ -51,7 +65,10 @@ export async function GET(request: NextRequest) {
         previewUrl: v.preview_url,
         category: v.category,
       }))
-      .slice(0, 30); // Limit to 30 voices
+      .slice(0, 30); // Limit to 30 premade voices
+
+    // Combine with cloned voices first
+    const voices = [...clonedVoices, ...premadeVoices];
 
     // Cache the results
     cachedVoices = voices;

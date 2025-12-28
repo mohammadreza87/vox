@@ -1,8 +1,8 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { ArrowLeft, Save, User, Volume2, CreditCard, Crown, ExternalLink, Loader2, Sun, Moon, Palette } from 'lucide-react';
+import { ArrowLeft, Save, User, Volume2, CreditCard, Crown, ExternalLink, Loader2, Sun, Moon, Palette, Mic, Trash2, Check, Star } from 'lucide-react';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSubscription } from '@/contexts/SubscriptionContext';
@@ -11,6 +11,15 @@ import { Button } from '@/shared/components/Button';
 import { auth } from '@/lib/firebase';
 import { cn } from '@/shared/utils/cn';
 import { useEntranceAnimation } from '@/hooks/useAnimations';
+
+interface ClonedVoice {
+  id: string;
+  voiceId: string;
+  name: string;
+  source: 'contact' | 'translator';
+  sourceLanguage?: string;
+  createdAt: string;
+}
 
 // Storage key for user settings
 const getUserSettingsKey = (userId: string | null) =>
@@ -46,8 +55,127 @@ function SettingsContent() {
   const [isManagingSubscription, setIsManagingSubscription] = useState(false);
   const [saveMessage, setSaveMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
+  // Voice management state
+  const [clonedVoices, setClonedVoices] = useState<ClonedVoice[]>([]);
+  const [defaultTranslatorVoiceId, setDefaultTranslatorVoiceId] = useState<string | null>(null);
+  const [isLoadingVoices, setIsLoadingVoices] = useState(true);
+  const [deletingVoiceId, setDeletingVoiceId] = useState<string | null>(null);
+  const [settingDefaultId, setSettingDefaultId] = useState<string | null>(null);
+
   // GSAP Animation refs - single page entrance
   const { ref: pageRef } = useEntranceAnimation('fadeUp', { delay: 0 });
+
+  // Load cloned voices from API
+  const loadClonedVoices = useCallback(async () => {
+    if (!user) {
+      setIsLoadingVoices(false);
+      return;
+    }
+
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      if (!token) {
+        setIsLoadingVoices(false);
+        return;
+      }
+
+      const response = await fetch('/api/user/voices', {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (response.ok) {
+        const responseData = await response.json();
+        const data = responseData.data || responseData;
+        setClonedVoices(data.voices || []);
+        setDefaultTranslatorVoiceId(data.defaultTranslatorVoiceId || null);
+      }
+    } catch (error) {
+      console.error('Error loading cloned voices:', error);
+    } finally {
+      setIsLoadingVoices(false);
+    }
+  }, [user]);
+
+  // Load voices on mount
+  useEffect(() => {
+    loadClonedVoices();
+  }, [loadClonedVoices]);
+
+  // Delete a cloned voice
+  const handleDeleteVoice = async (voiceId: string) => {
+    if (!user) return;
+
+    setDeletingVoiceId(voiceId);
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      if (!token) throw new Error('Not authenticated');
+
+      const response = await fetch(`/api/user/voices?voiceId=${encodeURIComponent(voiceId)}`, {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (response.ok) {
+        setClonedVoices(prev => prev.filter(v => v.voiceId !== voiceId));
+        if (defaultTranslatorVoiceId === voiceId) {
+          setDefaultTranslatorVoiceId(null);
+        }
+        setSaveMessage({ type: 'success', text: 'Voice deleted successfully' });
+      } else {
+        const error = await response.json();
+        throw new Error(error.error?.message || 'Failed to delete voice');
+      }
+    } catch (error) {
+      console.error('Error deleting voice:', error);
+      setSaveMessage({ type: 'error', text: 'Failed to delete voice' });
+    } finally {
+      setDeletingVoiceId(null);
+      setTimeout(() => setSaveMessage(null), 3000);
+    }
+  };
+
+  // Set default translator voice
+  const handleSetDefaultVoice = async (voiceId: string) => {
+    if (!user) return;
+
+    setSettingDefaultId(voiceId);
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      if (!token) throw new Error('Not authenticated');
+
+      const response = await fetch('/api/user/voices', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          defaultTranslatorVoiceId: voiceId === defaultTranslatorVoiceId ? null : voiceId,
+        }),
+      });
+
+      if (response.ok) {
+        setDefaultTranslatorVoiceId(voiceId === defaultTranslatorVoiceId ? null : voiceId);
+        setSaveMessage({
+          type: 'success',
+          text: voiceId === defaultTranslatorVoiceId ? 'Default voice cleared' : 'Default translator voice set',
+        });
+      } else {
+        const error = await response.json();
+        throw new Error(error.error?.message || 'Failed to update default voice');
+      }
+    } catch (error) {
+      console.error('Error setting default voice:', error);
+      setSaveMessage({ type: 'error', text: 'Failed to update default voice' });
+    } finally {
+      setSettingDefaultId(null);
+      setTimeout(() => setSaveMessage(null), 3000);
+    }
+  };
 
   // Open Stripe Customer Portal
   const handleManageSubscription = async () => {
@@ -286,6 +414,109 @@ function SettingsContent() {
               </p>
             </div>
           </div>
+        </div>
+
+        {/* Cloned Voices Section */}
+        <div className="liquid-card rounded-2xl p-6 mb-6">
+          <div className="flex items-center gap-3 mb-6">
+            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#FF6D1F] to-[#ff8a4c] flex items-center justify-center shadow-lg shadow-[#FF6D1F]/30">
+              <Mic className="w-5 h-5 text-white" />
+            </div>
+            <div>
+              <h2 className="text-lg font-semibold text-[var(--foreground)]">Cloned Voices</h2>
+              <p className="text-xs text-[var(--foreground)]/50">Manage your cloned voices for contacts and translator</p>
+            </div>
+          </div>
+
+          {isLoadingVoices ? (
+            <div className="flex items-center justify-center py-8">
+              <Loader2 className="w-6 h-6 animate-spin text-[var(--foreground)]/50" />
+            </div>
+          ) : clonedVoices.length === 0 ? (
+            <div className="text-center py-8">
+              <Mic className="w-12 h-12 mx-auto text-[var(--foreground)]/30 mb-3" />
+              <p className="text-[var(--foreground)]/70 mb-2">No cloned voices yet</p>
+              <p className="text-xs text-[var(--foreground)]/50">
+                Clone voices when creating contacts or using the translator
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {clonedVoices.map((voice) => (
+                <div
+                  key={voice.id}
+                  className={cn(
+                    "flex items-center justify-between p-4 rounded-xl transition-all",
+                    defaultTranslatorVoiceId === voice.voiceId
+                      ? "bg-[#FF6D1F]/10 border border-[#FF6D1F]/30"
+                      : "liquid-card"
+                  )}
+                >
+                  <div className="flex items-center gap-3 min-w-0 flex-1">
+                    <div className={cn(
+                      "w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0",
+                      voice.source === 'translator' ? "bg-blue-500/20" : "bg-purple-500/20"
+                    )}>
+                      <Mic className={cn(
+                        "w-5 h-5",
+                        voice.source === 'translator' ? "text-blue-500" : "text-purple-500"
+                      )} />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <p className="font-medium text-[var(--foreground)] truncate">{voice.name}</p>
+                        {defaultTranslatorVoiceId === voice.voiceId && (
+                          <span className="flex-shrink-0 px-2 py-0.5 text-xs font-medium bg-[#FF6D1F]/20 text-[#FF6D1F] rounded-full">
+                            Default
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs text-[var(--foreground)]/50">
+                        {voice.source === 'translator' ? 'Translator' : 'Contact'}
+                        {voice.sourceLanguage && ` • ${voice.sourceLanguage.toUpperCase()}`}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 flex-shrink-0 ml-3">
+                    <button
+                      onClick={() => handleSetDefaultVoice(voice.voiceId)}
+                      disabled={settingDefaultId === voice.voiceId}
+                      className={cn(
+                        "p-2 rounded-lg transition-colors",
+                        defaultTranslatorVoiceId === voice.voiceId
+                          ? "bg-[#FF6D1F] text-white hover:bg-[#FF6D1F]/80"
+                          : "liquid-card hover:bg-white/20"
+                      )}
+                      title={defaultTranslatorVoiceId === voice.voiceId ? "Remove as default" : "Set as default translator voice"}
+                    >
+                      {settingDefaultId === voice.voiceId ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : defaultTranslatorVoiceId === voice.voiceId ? (
+                        <Check className="w-4 h-4" />
+                      ) : (
+                        <Star className="w-4 h-4" />
+                      )}
+                    </button>
+                    <button
+                      onClick={() => handleDeleteVoice(voice.voiceId)}
+                      disabled={deletingVoiceId === voice.voiceId}
+                      className="p-2 rounded-lg liquid-card hover:bg-red-500/20 hover:text-red-500 transition-colors"
+                      title="Delete voice"
+                    >
+                      {deletingVoiceId === voice.voiceId ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Trash2 className="w-4 h-4" />
+                      )}
+                    </button>
+                  </div>
+                </div>
+              ))}
+              <p className="text-xs text-[var(--foreground)]/50 text-center mt-4">
+                Set a default voice to automatically use it in the translator
+              </p>
+            </div>
+          )}
         </div>
 
         {/* Subscription Section */}

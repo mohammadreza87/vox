@@ -2,17 +2,20 @@
  * Individual Chat API v2
  * GET - Get chat with messages
  * PATCH - Update chat metadata
- * DELETE - Delete chat and all messages
+ * DELETE - Soft delete chat and all messages
  */
 
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest } from 'next/server';
 import { verifyIdToken, extractBearerToken } from '@/lib/firebase-admin';
 import {
   getChat,
   getChatWithMessages,
   updateChat,
-  deleteChat,
+  softDeleteChat,
 } from '@/lib/firestore-v2';
+import { success, unauthorized, notFound, serverError } from '@/lib/api/response';
+import { logger } from '@/lib/logger';
+import { logChatDeleted } from '@/lib/audit';
 
 interface RouteParams {
   params: Promise<{ chatId: string }>;
@@ -22,12 +25,12 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
   try {
     const token = extractBearerToken(request.headers.get('Authorization'));
     if (!token) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      return unauthorized();
     }
 
     const decodedToken = await verifyIdToken(token);
     if (!decodedToken) {
-      return NextResponse.json({ error: 'Invalid token' }, { status: 401 });
+      return unauthorized('Invalid token');
     }
 
     const userId = decodedToken.uid;
@@ -40,10 +43,10 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
     if (includeMessages) {
       const chat = await getChatWithMessages(userId, chatId);
       if (!chat) {
-        return NextResponse.json({ error: 'Chat not found' }, { status: 404 });
+        return notFound('Chat not found');
       }
 
-      return NextResponse.json({
+      return success({
         chat: {
           ...chat,
           lastMessageAt: chat.lastMessageAt.toISOString(),
@@ -59,10 +62,10 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
 
     const chat = await getChat(userId, chatId);
     if (!chat) {
-      return NextResponse.json({ error: 'Chat not found' }, { status: 404 });
+      return notFound('Chat not found');
     }
 
-    return NextResponse.json({
+    return success({
       chat: {
         ...chat,
         lastMessageAt: chat.lastMessageAt.toISOString(),
@@ -71,8 +74,8 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
       },
     });
   } catch (error) {
-    console.error('Error getting chat:', error);
-    return NextResponse.json({ error: 'Failed to get chat' }, { status: 500 });
+    logger.error({ error }, 'Error getting chat');
+    return serverError('Failed to get chat');
   }
 }
 
@@ -80,12 +83,12 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
   try {
     const token = extractBearerToken(request.headers.get('Authorization'));
     if (!token) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      return unauthorized();
     }
 
     const decodedToken = await verifyIdToken(token);
     if (!decodedToken) {
-      return NextResponse.json({ error: 'Invalid token' }, { status: 401 });
+      return unauthorized('Invalid token');
     }
 
     const userId = decodedToken.uid;
@@ -95,7 +98,7 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
     // Verify chat exists
     const existingChat = await getChat(userId, chatId);
     if (!existingChat) {
-      return NextResponse.json({ error: 'Chat not found' }, { status: 404 });
+      return notFound('Chat not found');
     }
 
     // Only allow updating certain fields
@@ -107,10 +110,10 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
 
     await updateChat(userId, chatId, allowedUpdates);
 
-    return NextResponse.json({ success: true });
+    return success({ updated: true });
   } catch (error) {
-    console.error('Error updating chat:', error);
-    return NextResponse.json({ error: 'Failed to update chat' }, { status: 500 });
+    logger.error({ error }, 'Error updating chat');
+    return serverError('Failed to update chat');
   }
 }
 
@@ -118,22 +121,26 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
   try {
     const token = extractBearerToken(request.headers.get('Authorization'));
     if (!token) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      return unauthorized();
     }
 
     const decodedToken = await verifyIdToken(token);
     if (!decodedToken) {
-      return NextResponse.json({ error: 'Invalid token' }, { status: 401 });
+      return unauthorized('Invalid token');
     }
 
     const userId = decodedToken.uid;
     const { chatId } = await params;
 
-    await deleteChat(userId, chatId);
+    // Use soft delete instead of permanent delete
+    await softDeleteChat(userId, chatId);
 
-    return NextResponse.json({ success: true });
+    // Log the deletion for audit
+    await logChatDeleted(userId, chatId, true);
+
+    return success({ deleted: true });
   } catch (error) {
-    console.error('Error deleting chat:', error);
-    return NextResponse.json({ error: 'Failed to delete chat' }, { status: 500 });
+    logger.error({ error }, 'Error deleting chat');
+    return serverError('Failed to delete chat');
   }
 }

@@ -83,7 +83,9 @@ export async function loadFromCloud<T>(
 
     if (!response.ok) return null;
 
-    const data = await response.json();
+    const responseData = await response.json();
+    // Handle both old format (data.key) and new standardized format (data.data.key)
+    const data = responseData.data || responseData;
     const rawData = data[dataKey];
 
     if (rawData === undefined) return null;

@@ -1,5 +1,5 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
 import { verifyIdToken, extractBearerToken } from '@/lib/firebase-admin';
@@ -8,6 +8,10 @@ import { SUBSCRIPTION_TIERS, canUseModel, canSendMessage } from '@/config/subscr
 import { chatRequestSchema } from '@/lib/validation/schemas';
 import { sanitizeForAI } from '@/lib/validation/sanitize';
 import { getChatRateLimiter, applyRateLimit } from '@/lib/ratelimit';
+import { success, badRequest, forbidden, tooManyRequests, serverError } from '@/lib/api/response';
+import { logger } from '@/lib/logger';
+import { withTimeout, TIMEOUTS } from '@/lib/api/timeout';
+import { withRetry } from '@/lib/retry';
 
 // Initialize AI clients lazily
 let geminiClient: GoogleGenerativeAI | null = null;
@@ -88,17 +92,12 @@ export async function POST(request: NextRequest) {
     const parseResult = chatRequestSchema.safeParse(rawBody);
 
     if (!parseResult.success) {
-      return NextResponse.json(
-        {
-          error: 'Validation failed',
-          code: 'VALIDATION_ERROR',
-          details: parseResult.error.issues.map((issue) => ({
-            path: issue.path.join('.'),
-            message: issue.message,
-          })),
-        },
-        { status: 400 }
-      );
+      return badRequest('Validation failed', {
+        issues: parseResult.error.issues.map((issue) => ({
+          path: issue.path.join('.'),
+          message: issue.message,
+        })),
+      });
     }
 
     const { message, systemPrompt, conversationHistory, aiProvider = 'deepseek', aiModel } = parseResult.data;
@@ -109,69 +108,68 @@ export async function POST(request: NextRequest) {
     // Check daily message limit
     const modelToUse = aiModel || getDefaultModel(aiProvider);
     if (!canSendMessage(tier, messagesUsedToday)) {
-      return NextResponse.json(
-        {
-          error: 'Daily message limit reached',
-          code: 'LIMIT_REACHED',
-          limit: SUBSCRIPTION_TIERS[tier].features.dailyMessageLimit,
-          used: messagesUsedToday,
-        },
-        { status: 429 }
-      );
+      return tooManyRequests('Daily message limit reached');
     }
 
     // Check model access
     if (!canUseModel(tier, modelToUse)) {
-      return NextResponse.json(
-        {
-          error: 'This model requires a Pro or Max subscription',
-          code: 'MODEL_RESTRICTED',
-          model: modelToUse,
-          requiredTier: 'pro',
-        },
-        { status: 403 }
-      );
+      return forbidden('This model requires a Pro or Max subscription');
     }
 
-    console.log(`Using AI provider: ${aiProvider}, model: ${modelToUse}, tier: ${tier}`);
+    logger.info({ aiProvider, model: modelToUse, tier }, 'Processing chat request');
 
-    let responseText: string;
-
-    switch (aiProvider) {
-      case 'claude':
-        responseText = await handleClaudeChat(sanitizedMessage, systemPrompt || '', conversationHistory, modelToUse);
-        break;
-      case 'openai':
-        responseText = await handleOpenAIChat(sanitizedMessage, systemPrompt || '', conversationHistory, modelToUse);
-        break;
-      case 'deepseek':
-        responseText = await handleDeepSeekChat(sanitizedMessage, systemPrompt || '', conversationHistory, modelToUse);
-        break;
-      case 'gemini':
-      default:
-        responseText = await handleGeminiChat(sanitizedMessage, systemPrompt || '', conversationHistory, modelToUse);
-        break;
-    }
+    // Execute AI call with timeout and retry
+    const responseText = await withRetry(
+      async () => {
+        return withTimeout(
+          executeAIChat(aiProvider, sanitizedMessage, systemPrompt || '', conversationHistory, modelToUse),
+          TIMEOUTS.CHAT,
+          `${aiProvider} chat completion`
+        );
+      },
+      { maxRetries: 2, baseDelay: 1000 }
+    );
 
     // Increment message count for authenticated users
     if (userId) {
       await incrementMessageCount(userId);
     }
 
-    return NextResponse.json({
+    return success({
       content: responseText,
       isMock: false,
       provider: aiProvider,
     });
   } catch (error) {
-    console.error('Chat API error:', error);
+    logger.error({ error }, 'Chat API error');
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
 
-    return NextResponse.json({
+    // Return mock response on error to maintain UX
+    return success({
       content: getMockResponse('default', 'error'),
       isMock: true,
       error: errorMessage,
     });
+  }
+}
+
+async function executeAIChat(
+  aiProvider: string,
+  message: string,
+  systemPrompt: string,
+  conversationHistory: Array<{ role: 'user' | 'assistant'; content: string }>,
+  model: string
+): Promise<string> {
+  switch (aiProvider) {
+    case 'claude':
+      return handleClaudeChat(message, systemPrompt, conversationHistory, model);
+    case 'openai':
+      return handleOpenAIChat(message, systemPrompt, conversationHistory, model);
+    case 'deepseek':
+      return handleDeepSeekChat(message, systemPrompt, conversationHistory, model);
+    case 'gemini':
+    default:
+      return handleGeminiChat(message, systemPrompt, conversationHistory, model);
   }
 }
 

@@ -1,8 +1,11 @@
-import { NextRequest, NextResponse } from 'next/server';
 import { withAuth, AuthenticatedRequest } from '@/lib/middleware';
 import { ttsRequestSchema } from '@/lib/validation/schemas';
 import { sanitizeForAI } from '@/lib/validation/sanitize';
 import { getApiRateLimiter, applyRateLimit } from '@/lib/ratelimit';
+import { success, badRequest, badGateway, serverError } from '@/lib/api/response';
+import { logger } from '@/lib/logger';
+import { fetchWithTimeout, TIMEOUTS } from '@/lib/api/timeout';
+import { withRetry } from '@/lib/retry';
 
 // ElevenLabs API endpoint
 const ELEVENLABS_API_URL = 'https://api.elevenlabs.io/v1/text-to-speech';
@@ -20,17 +23,12 @@ async function handler(request: AuthenticatedRequest) {
     const parseResult = ttsRequestSchema.safeParse(rawBody);
 
     if (!parseResult.success) {
-      return NextResponse.json(
-        {
-          error: 'Validation failed',
-          code: 'VALIDATION_ERROR',
-          details: parseResult.error.issues.map((issue) => ({
-            path: issue.path.join('.'),
-            message: issue.message,
-          })),
-        },
-        { status: 400 }
-      );
+      return badRequest('Validation failed', {
+        issues: parseResult.error.issues.map((issue) => ({
+          path: issue.path.join('.'),
+          message: issue.message,
+        })),
+      });
     }
 
     const { text, voiceId = 'EXAVITQu4vr4xnSDxMaL' } = parseResult.data; // Default to Rachel voice
@@ -41,55 +39,59 @@ async function handler(request: AuthenticatedRequest) {
     // Check if API key is configured
     const apiKey = process.env.ELEVENLABS_API_KEY;
     if (!apiKey) {
-      return NextResponse.json(
-        { error: 'ElevenLabs API key not configured', audioUrl: null },
-        { status: 200 } // Return 200 so frontend can handle gracefully
-      );
+      return success({ error: 'ElevenLabs API key not configured', audioUrl: null });
     }
 
-    // Call ElevenLabs API
-    const response = await fetch(`${ELEVENLABS_API_URL}/${voiceId}`, {
-      method: 'POST',
-      headers: {
-        'Accept': 'audio/mpeg',
-        'Content-Type': 'application/json',
-        'xi-api-key': apiKey,
+    // Call ElevenLabs API with timeout and retry
+    const audioBuffer = await withRetry(
+      async () => {
+        const response = await fetchWithTimeout(
+          `${ELEVENLABS_API_URL}/${voiceId}`,
+          {
+            method: 'POST',
+            headers: {
+              Accept: 'audio/mpeg',
+              'Content-Type': 'application/json',
+              'xi-api-key': apiKey,
+            },
+            body: JSON.stringify({
+              text: sanitizedText,
+              model_id: 'eleven_monolingual_v1',
+              voice_settings: {
+                stability: 0.5,
+                similarity_boost: 0.75,
+              },
+            }),
+          },
+          TIMEOUTS.TTS
+        );
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          logger.error({ status: response.status, error: errorText }, 'ElevenLabs API error');
+          throw new Error(`ElevenLabs API error: ${response.status}`);
+        }
+
+        return await response.arrayBuffer();
       },
-      body: JSON.stringify({
-        text: sanitizedText,
-        model_id: 'eleven_monolingual_v1',
-        voice_settings: {
-          stability: 0.5,
-          similarity_boost: 0.75,
-        },
-      }),
-    });
-
-    if (!response.ok) {
-      const error = await response.text();
-      console.error('ElevenLabs API error:', error);
-      return NextResponse.json(
-        { error: 'Failed to generate speech', details: error },
-        { status: response.status }
-      );
-    }
-
-    // Get audio buffer
-    const audioBuffer = await response.arrayBuffer();
+      { maxRetries: 2, baseDelay: 500 }
+    );
 
     // Convert to base64 for frontend
     const base64Audio = Buffer.from(audioBuffer).toString('base64');
 
-    return NextResponse.json({
+    return success({
       audio: base64Audio,
       contentType: 'audio/mpeg',
     });
   } catch (error) {
-    console.error('TTS API error:', error);
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Unknown error' },
-      { status: 500 }
-    );
+    logger.error({ error }, 'TTS API error');
+
+    if (error instanceof Error && error.message.includes('ElevenLabs API error')) {
+      return badGateway('Failed to generate speech');
+    }
+
+    return serverError(error instanceof Error ? error.message : 'Unknown error');
   }
 }
 

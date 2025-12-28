@@ -1,57 +1,69 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest } from 'next/server';
 import { verifyIdToken, extractBearerToken, getAdminDb } from '@/lib/firebase-admin';
 import { Chat, Message } from '@/shared/types';
+import { success, unauthorized, serverError } from '@/lib/api/response';
+import { logger } from '@/lib/logger';
+import { withCache, cacheKeys, CACHE_TTL, cacheDelete } from '@/lib/cache';
 
 // GET - Load user data (chats, preferences, custom contacts)
 export async function GET(request: NextRequest) {
   try {
     const token = extractBearerToken(request.headers.get('Authorization'));
     if (!token) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      return unauthorized();
     }
 
     const decodedToken = await verifyIdToken(token);
     if (!decodedToken) {
-      return NextResponse.json({ error: 'Invalid token' }, { status: 401 });
+      return unauthorized('Invalid token');
     }
 
     const userId = decodedToken.uid;
-    const db = await getAdminDb();
-    const userDataRef = db.collection('users').doc(userId).collection('data').doc('app');
-    const userDataSnap = await userDataRef.get();
 
-    if (!userDataSnap.exists) {
-      return NextResponse.json({
-        chats: [],
-        customContacts: [],
-        preferences: { theme: 'light' },
-      });
-    }
+    // Use cache for user preferences
+    const userData = await withCache(
+      cacheKeys.userPreferences(userId),
+      async () => {
+        const db = await getAdminDb();
+        const userDataRef = db.collection('users').doc(userId).collection('data').doc('app');
+        const userDataSnap = await userDataRef.get();
 
-    const data = userDataSnap.data()!;
+        if (!userDataSnap.exists) {
+          return {
+            chats: [],
+            customContacts: [],
+            preferences: { theme: 'light' },
+          };
+        }
 
-    // Convert Firestore timestamps to ISO strings for JSON serialization
-    const chats = (data.chats || []).map((chat: Chat) => ({
-      ...chat,
-      lastMessageAt: chat.lastMessageAt instanceof Date
-        ? chat.lastMessageAt.toISOString()
-        : chat.lastMessageAt,
-      messages: (chat.messages || []).map((msg: Message) => ({
-        ...msg,
-        createdAt: msg.createdAt instanceof Date
-          ? msg.createdAt.toISOString()
-          : msg.createdAt,
-      })),
-    }));
+        const data = userDataSnap.data()!;
 
-    return NextResponse.json({
-      chats,
-      customContacts: data.customContacts || [],
-      preferences: data.preferences || { theme: 'light' },
-    });
+        // Convert Firestore timestamps to ISO strings for JSON serialization
+        const chats = (data.chats || []).map((chat: Chat) => ({
+          ...chat,
+          lastMessageAt:
+            chat.lastMessageAt instanceof Date
+              ? chat.lastMessageAt.toISOString()
+              : chat.lastMessageAt,
+          messages: (chat.messages || []).map((msg: Message) => ({
+            ...msg,
+            createdAt: msg.createdAt instanceof Date ? msg.createdAt.toISOString() : msg.createdAt,
+          })),
+        }));
+
+        return {
+          chats,
+          customContacts: data.customContacts || [],
+          preferences: data.preferences || { theme: 'light' },
+        };
+      },
+      CACHE_TTL.USER_PREFERENCES
+    );
+
+    return success(userData);
   } catch (error) {
-    console.error('Error loading user data:', error);
-    return NextResponse.json({ error: 'Failed to load data' }, { status: 500 });
+    logger.error({ error }, 'Error loading user data');
+    return serverError('Failed to load data');
   }
 }
 
@@ -60,12 +72,12 @@ export async function POST(request: NextRequest) {
   try {
     const token = extractBearerToken(request.headers.get('Authorization'));
     if (!token) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      return unauthorized();
     }
 
     const decodedToken = await verifyIdToken(token);
     if (!decodedToken) {
-      return NextResponse.json({ error: 'Invalid token' }, { status: 401 });
+      return unauthorized('Invalid token');
     }
 
     const userId = decodedToken.uid;
@@ -92,16 +104,22 @@ export async function POST(request: NextRequest) {
     // Also update the customContactsCount in the main user document for subscription tracking
     if (customContacts !== undefined) {
       const userDocRef = db.collection('users').doc(userId);
-      await userDocRef.set({
-        usage: {
-          customContactsCount: Array.isArray(customContacts) ? customContacts.length : 0,
+      await userDocRef.set(
+        {
+          usage: {
+            customContactsCount: Array.isArray(customContacts) ? customContacts.length : 0,
+          },
         },
-      }, { merge: true });
+        { merge: true }
+      );
     }
 
-    return NextResponse.json({ success: true });
+    // Invalidate cache after update
+    await cacheDelete(cacheKeys.userPreferences(userId));
+
+    return success({ saved: true });
   } catch (error) {
-    console.error('Error saving user data:', error);
-    return NextResponse.json({ error: 'Failed to save data' }, { status: 500 });
+    logger.error({ error }, 'Error saving user data');
+    return serverError('Failed to save data');
   }
 }

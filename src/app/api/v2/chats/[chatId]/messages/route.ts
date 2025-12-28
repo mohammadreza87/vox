@@ -4,10 +4,13 @@
  * POST - Add a new message
  */
 
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest } from 'next/server';
 import { verifyIdToken, extractBearerToken } from '@/lib/firebase-admin';
-import { getMessages, addMessage, getChat } from '@/lib/firestore-v2';
+import { getActiveMessages, addMessage, getChat } from '@/lib/firestore-v2';
 import { AddMessageRequest } from '@/shared/types/database';
+import { success, unauthorized, notFound, badRequest, serverError } from '@/lib/api/response';
+import { logger } from '@/lib/logger';
+import { logMessageSent } from '@/lib/audit';
 
 interface RouteParams {
   params: Promise<{ chatId: string }>;
@@ -17,12 +20,12 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
   try {
     const token = extractBearerToken(request.headers.get('Authorization'));
     if (!token) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      return unauthorized();
     }
 
     const decodedToken = await verifyIdToken(token);
     if (!decodedToken) {
-      return NextResponse.json({ error: 'Invalid token' }, { status: 401 });
+      return unauthorized('Invalid token');
     }
 
     const userId = decodedToken.uid;
@@ -36,22 +39,29 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
     // Verify chat exists
     const chat = await getChat(userId, chatId);
     if (!chat) {
-      return NextResponse.json({ error: 'Chat not found' }, { status: 404 });
+      return notFound('Chat not found');
     }
 
-    const result = await getMessages(userId, chatId, limit, cursor);
+    // Use getActiveMessages to exclude soft-deleted messages
+    const result = await getActiveMessages(userId, chatId, limit, cursor);
 
-    return NextResponse.json({
-      messages: result.messages.map((msg) => ({
-        ...msg,
-        createdAt: msg.createdAt.toISOString(),
-      })),
-      hasMore: result.hasMore,
-      nextCursor: result.nextCursor,
-    });
+    return success(
+      {
+        messages: result.messages.map((msg) => ({
+          ...msg,
+          createdAt: msg.createdAt.toISOString(),
+        })),
+      },
+      {
+        pagination: {
+          hasMore: result.hasMore,
+          nextCursor: result.nextCursor,
+        },
+      }
+    );
   } catch (error) {
-    console.error('Error getting messages:', error);
-    return NextResponse.json({ error: 'Failed to get messages' }, { status: 500 });
+    logger.error({ error }, 'Error getting messages');
+    return serverError('Failed to get messages');
   }
 }
 
@@ -59,12 +69,12 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
   try {
     const token = extractBearerToken(request.headers.get('Authorization'));
     if (!token) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      return unauthorized();
     }
 
     const decodedToken = await verifyIdToken(token);
     if (!decodedToken) {
-      return NextResponse.json({ error: 'Invalid token' }, { status: 401 });
+      return unauthorized('Invalid token');
     }
 
     const userId = decodedToken.uid;
@@ -73,16 +83,15 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
 
     // Validate required fields
     if (!body.role || !body.content) {
-      return NextResponse.json(
-        { error: 'role and content are required' },
-        { status: 400 }
-      );
+      return badRequest('role and content are required', {
+        missingFields: [!body.role && 'role', !body.content && 'content'].filter(Boolean),
+      });
     }
 
     // Verify chat exists
     const chat = await getChat(userId, chatId);
     if (!chat) {
-      return NextResponse.json({ error: 'Chat not found' }, { status: 404 });
+      return notFound('Chat not found');
     }
 
     const message = await addMessage(userId, chatId, {
@@ -91,14 +100,20 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       audioUrl: body.audioUrl || null,
     });
 
-    return NextResponse.json({
-      message: {
-        ...message,
-        createdAt: message.createdAt.toISOString(),
+    // Log message for audit
+    await logMessageSent(userId, chatId, message.id, body.role);
+
+    return success(
+      {
+        message: {
+          ...message,
+          createdAt: message.createdAt.toISOString(),
+        },
       },
-    });
+      { status: 201 }
+    );
   } catch (error) {
-    console.error('Error adding message:', error);
-    return NextResponse.json({ error: 'Failed to add message' }, { status: 500 });
+    logger.error({ error }, 'Error adding message');
+    return serverError('Failed to add message');
   }
 }

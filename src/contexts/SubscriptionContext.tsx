@@ -88,7 +88,9 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
       });
 
       if (response.ok) {
-        const data = await response.json();
+        const responseData = await response.json();
+        // Handle both old format and new standardized format (data.data.subscription)
+        const data = responseData.data || responseData;
         setSubscription(data.subscription);
         setUsage({
           ...data.usage,

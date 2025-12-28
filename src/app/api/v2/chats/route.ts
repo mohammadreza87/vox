@@ -4,26 +4,28 @@
  * POST - Create a new chat
  */
 
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest } from 'next/server';
 import { verifyIdToken, extractBearerToken } from '@/lib/firebase-admin';
 import {
-  getChats,
+  getActiveChats,
   getChatsUpdatedSince,
   createChat,
   getChatByContactId,
 } from '@/lib/firestore-v2';
 import { CreateChatRequest } from '@/shared/types/database';
+import { success, unauthorized, badRequest, serverError } from '@/lib/api/response';
+import { logger } from '@/lib/logger';
 
 export async function GET(request: NextRequest) {
   try {
     const token = extractBearerToken(request.headers.get('Authorization'));
     if (!token) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      return unauthorized();
     }
 
     const decodedToken = await verifyIdToken(token);
     if (!decodedToken) {
-      return NextResponse.json({ error: 'Invalid token' }, { status: 401 });
+      return unauthorized('Invalid token');
     }
 
     const userId = decodedToken.uid;
@@ -37,8 +39,8 @@ export async function GET(request: NextRequest) {
       // Get only chats updated since the given timestamp
       chats = await getChatsUpdatedSince(userId, new Date(since));
     } else {
-      // Get all chats
-      chats = await getChats(userId);
+      // Get all active (non-deleted) chats
+      chats = await getActiveChats(userId);
     }
 
     // Convert dates to ISO strings for JSON
@@ -49,13 +51,13 @@ export async function GET(request: NextRequest) {
       updatedAt: chat.updatedAt.toISOString(),
     }));
 
-    return NextResponse.json({
+    return success({
       chats: serializedChats,
       syncedAt: new Date().toISOString(),
     });
   } catch (error) {
-    console.error('Error getting chats:', error);
-    return NextResponse.json({ error: 'Failed to get chats' }, { status: 500 });
+    logger.error({ error }, 'Error getting chats');
+    return serverError('Failed to get chats');
   }
 }
 
@@ -63,12 +65,12 @@ export async function POST(request: NextRequest) {
   try {
     const token = extractBearerToken(request.headers.get('Authorization'));
     if (!token) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      return unauthorized();
     }
 
     const decodedToken = await verifyIdToken(token);
     if (!decodedToken) {
-      return NextResponse.json({ error: 'Invalid token' }, { status: 401 });
+      return unauthorized('Invalid token');
     }
 
     const userId = decodedToken.uid;
@@ -76,16 +78,18 @@ export async function POST(request: NextRequest) {
 
     // Validate required fields
     if (!body.contactId || !body.contactName) {
-      return NextResponse.json(
-        { error: 'contactId and contactName are required' },
-        { status: 400 }
-      );
+      return badRequest('contactId and contactName are required', {
+        missingFields: [
+          !body.contactId && 'contactId',
+          !body.contactName && 'contactName',
+        ].filter(Boolean),
+      });
     }
 
     // Check if chat already exists for this contact
     const existingChat = await getChatByContactId(userId, body.contactId);
     if (existingChat) {
-      return NextResponse.json({
+      return success({
         chat: {
           ...existingChat,
           lastMessageAt: existingChat.lastMessageAt.toISOString(),
@@ -107,17 +111,20 @@ export async function POST(request: NextRequest) {
       lastMessageAt: new Date(),
     });
 
-    return NextResponse.json({
-      chat: {
-        ...chat,
-        lastMessageAt: chat.lastMessageAt.toISOString(),
-        createdAt: chat.createdAt.toISOString(),
-        updatedAt: chat.updatedAt.toISOString(),
+    return success(
+      {
+        chat: {
+          ...chat,
+          lastMessageAt: chat.lastMessageAt.toISOString(),
+          createdAt: chat.createdAt.toISOString(),
+          updatedAt: chat.updatedAt.toISOString(),
+        },
+        isExisting: false,
       },
-      isExisting: false,
-    });
+      { status: 201 }
+    );
   } catch (error) {
-    console.error('Error creating chat:', error);
-    return NextResponse.json({ error: 'Failed to create chat' }, { status: 500 });
+    logger.error({ error }, 'Error creating chat');
+    return serverError('Failed to create chat');
   }
 }

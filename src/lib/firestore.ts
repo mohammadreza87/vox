@@ -375,3 +375,187 @@ export async function clearTranslatorMessages(userId: string): Promise<void> {
     throw error;
   }
 }
+
+// ============================================
+// CLONED VOICES FUNCTIONS
+// ============================================
+
+export interface ClonedVoiceData {
+  id: string;
+  voiceId: string;           // ElevenLabs voice ID
+  name: string;
+  source: 'contact' | 'translator';
+  sourceLanguage?: string;   // For translator voices
+  isDefaultTranslator?: boolean;
+  createdAt: Date;
+}
+
+// Save a cloned voice to Firestore
+export async function saveClonedVoiceToFirestore(
+  userId: string,
+  voice: Omit<ClonedVoiceData, 'id' | 'createdAt'>
+): Promise<string> {
+  try {
+    const db = await getAdminDb();
+    const voicesRef = db.collection('users').doc(userId).collection('clonedVoices');
+
+    // Check if voice already exists by voiceId
+    const existingQuery = await voicesRef.where('voiceId', '==', voice.voiceId).get();
+    if (!existingQuery.empty) {
+      // Update existing voice
+      const existingDoc = existingQuery.docs[0];
+      await existingDoc.ref.update({
+        name: voice.name,
+        source: voice.source,
+        sourceLanguage: voice.sourceLanguage || null,
+        isDefaultTranslator: voice.isDefaultTranslator || false,
+      });
+      return existingDoc.id;
+    }
+
+    // Create new voice
+    const docRef = await voicesRef.add({
+      voiceId: voice.voiceId,
+      name: voice.name,
+      source: voice.source,
+      sourceLanguage: voice.sourceLanguage || null,
+      isDefaultTranslator: voice.isDefaultTranslator || false,
+      createdAt: dateToTimestamp(new Date()),
+    });
+
+    // Update voice count
+    const voicesSnapshot = await voicesRef.get();
+    await updateClonedVoicesCount(userId, voicesSnapshot.size);
+
+    return docRef.id;
+  } catch (error) {
+    console.error('Error saving cloned voice:', error);
+    throw error;
+  }
+}
+
+// Get all cloned voices for a user
+export async function getClonedVoicesFromFirestore(
+  userId: string
+): Promise<ClonedVoiceData[]> {
+  try {
+    const db = await getAdminDb();
+    const voicesRef = db.collection('users').doc(userId).collection('clonedVoices');
+
+    const snapshot = await voicesRef.orderBy('createdAt', 'desc').get();
+
+    const voices: ClonedVoiceData[] = [];
+    snapshot.forEach((doc) => {
+      const data = doc.data();
+      voices.push({
+        id: doc.id,
+        voiceId: data.voiceId,
+        name: data.name,
+        source: data.source || 'contact',
+        sourceLanguage: data.sourceLanguage || undefined,
+        isDefaultTranslator: data.isDefaultTranslator || false,
+        createdAt: timestampToDate(data.createdAt) || new Date(),
+      });
+    });
+
+    return voices;
+  } catch (error) {
+    console.error('Error getting cloned voices:', error);
+    throw error;
+  }
+}
+
+// Delete a cloned voice from Firestore
+export async function deleteClonedVoiceFromFirestore(
+  userId: string,
+  voiceId: string
+): Promise<void> {
+  try {
+    const db = await getAdminDb();
+    const voicesRef = db.collection('users').doc(userId).collection('clonedVoices');
+
+    // Find by voiceId (ElevenLabs ID)
+    const snapshot = await voicesRef.where('voiceId', '==', voiceId).get();
+
+    if (snapshot.empty) {
+      throw new Error('Voice not found');
+    }
+
+    const batch = db.batch();
+    snapshot.docs.forEach((doc) => {
+      batch.delete(doc.ref);
+    });
+    await batch.commit();
+
+    // Update voice count
+    const remainingVoices = await voicesRef.get();
+    await updateClonedVoicesCount(userId, remainingVoices.size);
+  } catch (error) {
+    console.error('Error deleting cloned voice:', error);
+    throw error;
+  }
+}
+
+// Set default translator voice
+export async function setDefaultTranslatorVoice(
+  userId: string,
+  voiceId: string | null
+): Promise<void> {
+  try {
+    const db = await getAdminDb();
+    const voicesRef = db.collection('users').doc(userId).collection('clonedVoices');
+
+    // Clear existing default
+    const existingDefault = await voicesRef.where('isDefaultTranslator', '==', true).get();
+    const batch = db.batch();
+
+    existingDefault.docs.forEach((doc) => {
+      batch.update(doc.ref, { isDefaultTranslator: false });
+    });
+
+    // Set new default if voiceId provided
+    if (voiceId) {
+      const newDefault = await voicesRef.where('voiceId', '==', voiceId).get();
+      newDefault.docs.forEach((doc) => {
+        batch.update(doc.ref, { isDefaultTranslator: true });
+      });
+    }
+
+    await batch.commit();
+  } catch (error) {
+    console.error('Error setting default translator voice:', error);
+    throw error;
+  }
+}
+
+// Get default translator voice
+export async function getDefaultTranslatorVoice(
+  userId: string
+): Promise<ClonedVoiceData | null> {
+  try {
+    const db = await getAdminDb();
+    const voicesRef = db.collection('users').doc(userId).collection('clonedVoices');
+
+    const snapshot = await voicesRef.where('isDefaultTranslator', '==', true).limit(1).get();
+
+    if (snapshot.empty) {
+      return null;
+    }
+
+    const doc = snapshot.docs[0];
+    const data = doc.data();
+
+    return {
+      id: doc.id,
+      voiceId: data.voiceId,
+      name: data.name,
+      source: data.source || 'contact',
+      sourceLanguage: data.sourceLanguage || undefined,
+      isDefaultTranslator: true,
+      createdAt: timestampToDate(data.createdAt) || new Date(),
+    };
+  } catch (error) {
+    console.error('Error getting default translator voice:', error);
+    return null;
+  }
+}

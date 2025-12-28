@@ -82,7 +82,9 @@ export function CustomContactsProvider({ children }: { children: ReactNode }) {
 
       if (!response.ok) return null;
 
-      const data = await response.json();
+      const responseData = await response.json();
+      // Handle both old format (data.customContacts) and new standardized format (data.data.customContacts)
+      const data = responseData.data || responseData;
       return data.customContacts || [];
     } catch (error) {
       console.error('Error loading contacts from cloud:', error);

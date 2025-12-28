@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
 import { getAdminDb } from '@/lib/firebase-admin';
+import { createSessionToken } from '@/lib/auth/jwt';
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 
@@ -206,14 +207,13 @@ async function handleTelegramUser(
     });
   }
 
-  // Generate a simple session token (base64 encoded user info + timestamp)
-  // This is validated by checking the Telegram hash, not Firebase
-  const sessionData = {
+  // Generate a signed JWT session token
+  const sessionToken = await createSessionToken({
+    userId: telegramUserId,
     telegramId,
-    oduserId: telegramUserId,
-    exp: Date.now() + 7 * 24 * 60 * 60 * 1000, // 7 days
-  };
-  const sessionToken = Buffer.from(JSON.stringify(sessionData)).toString('base64');
+    platform: source === 'miniapp' ? 'telegram_miniapp' : 'telegram_widget',
+    expiresIn: 7 * 24 * 60 * 60, // 7 days in seconds
+  });
 
   return {
     userId: telegramUserId,

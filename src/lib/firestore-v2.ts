@@ -699,3 +699,392 @@ export async function getAllChatsWithMessages(userId: string): Promise<ChatWithM
     throw error;
   }
 }
+
+// ============================================
+// SOFT DELETE
+// ============================================
+
+/**
+ * Soft delete fields added to documents
+ */
+export interface SoftDeleteFields {
+  deletedAt?: Date | null;
+  deletedBy?: string | null;
+}
+
+/**
+ * Soft delete a chat (mark as deleted without physical deletion)
+ * Messages are not individually marked - they're implicitly deleted with the chat
+ */
+export async function softDeleteChat(userId: string, chatId: string): Promise<void> {
+  try {
+    const db = await getAdminDb();
+    const now = new Date();
+
+    await db
+      .collection('users')
+      .doc(userId)
+      .collection('chats')
+      .doc(chatId)
+      .update({
+        deletedAt: toTimestamp(now),
+        deletedBy: userId,
+        updatedAt: toTimestamp(now),
+      });
+  } catch (error) {
+    console.error('Error soft deleting chat:', error);
+    throw error;
+  }
+}
+
+/**
+ * Soft delete a message
+ */
+export async function softDeleteMessage(
+  userId: string,
+  chatId: string,
+  messageId: string
+): Promise<void> {
+  try {
+    const db = await getAdminDb();
+    const now = new Date();
+
+    await db
+      .collection('users')
+      .doc(userId)
+      .collection('chats')
+      .doc(chatId)
+      .collection('messages')
+      .doc(messageId)
+      .update({
+        deletedAt: toTimestamp(now),
+        deletedBy: userId,
+      });
+
+    // Update message count (decrement for soft deleted messages)
+    await db
+      .collection('users')
+      .doc(userId)
+      .collection('chats')
+      .doc(chatId)
+      .update({
+        messageCount: FieldValue.increment(-1),
+        updatedAt: toTimestamp(now),
+      });
+  } catch (error) {
+    console.error('Error soft deleting message:', error);
+    throw error;
+  }
+}
+
+/**
+ * Restore a soft-deleted chat
+ */
+export async function restoreChat(userId: string, chatId: string): Promise<void> {
+  try {
+    const db = await getAdminDb();
+    const now = new Date();
+
+    await db
+      .collection('users')
+      .doc(userId)
+      .collection('chats')
+      .doc(chatId)
+      .update({
+        deletedAt: null,
+        deletedBy: null,
+        updatedAt: toTimestamp(now),
+      });
+  } catch (error) {
+    console.error('Error restoring chat:', error);
+    throw error;
+  }
+}
+
+/**
+ * Restore a soft-deleted message
+ */
+export async function restoreMessage(
+  userId: string,
+  chatId: string,
+  messageId: string
+): Promise<void> {
+  try {
+    const db = await getAdminDb();
+    const now = new Date();
+
+    await db
+      .collection('users')
+      .doc(userId)
+      .collection('chats')
+      .doc(chatId)
+      .collection('messages')
+      .doc(messageId)
+      .update({
+        deletedAt: null,
+        deletedBy: null,
+      });
+
+    // Restore message count
+    await db
+      .collection('users')
+      .doc(userId)
+      .collection('chats')
+      .doc(chatId)
+      .update({
+        messageCount: FieldValue.increment(1),
+        updatedAt: toTimestamp(now),
+      });
+  } catch (error) {
+    console.error('Error restoring message:', error);
+    throw error;
+  }
+}
+
+/**
+ * Get soft-deleted chats for a user (for restore/review)
+ */
+export async function getDeletedChats(userId: string): Promise<ChatDocument[]> {
+  try {
+    const db = await getAdminDb();
+    const snapshot = await db
+      .collection('users')
+      .doc(userId)
+      .collection('chats')
+      .where('deletedAt', '!=', null)
+      .orderBy('deletedAt', 'desc')
+      .get();
+
+    return snapshot.docs.map((doc) => {
+      const data = doc.data();
+      return {
+        id: doc.id,
+        contactId: data.contactId,
+        contactName: data.contactName,
+        contactEmoji: data.contactEmoji,
+        contactImage: data.contactImage,
+        contactPurpose: data.contactPurpose,
+        lastMessage: data.lastMessage,
+        lastMessageAt: toDate(data.lastMessageAt),
+        messageCount: data.messageCount || 0,
+        createdAt: toDate(data.createdAt),
+        updatedAt: toDate(data.updatedAt),
+        deletedAt: toDate(data.deletedAt),
+        deletedBy: data.deletedBy,
+      };
+    });
+  } catch (error) {
+    console.error('Error getting deleted chats:', error);
+    throw error;
+  }
+}
+
+/**
+ * Permanently delete soft-deleted items older than specified days
+ * This should be run periodically (e.g., daily cron job)
+ *
+ * @param userId - User ID to clean up, or null for all users
+ * @param retentionDays - Days to keep soft-deleted items (default: 30)
+ */
+export async function permanentlyDeleteOldItems(
+  userId: string | null,
+  retentionDays: number = 30
+): Promise<{ chatsDeleted: number; messagesDeleted: number }> {
+  const db = await getAdminDb();
+  const cutoffDate = new Date();
+  cutoffDate.setDate(cutoffDate.getDate() - retentionDays);
+  const cutoffTimestamp = toTimestamp(cutoffDate);
+
+  let chatsDeleted = 0;
+  let messagesDeleted = 0;
+
+  try {
+    if (userId) {
+      // Clean up for a specific user
+      const result = await cleanupUserDeletedItems(db, userId, cutoffTimestamp);
+      chatsDeleted += result.chatsDeleted;
+      messagesDeleted += result.messagesDeleted;
+    } else {
+      // Clean up for all users (admin operation)
+      const usersSnapshot = await db.collection('users').get();
+
+      for (const userDoc of usersSnapshot.docs) {
+        const result = await cleanupUserDeletedItems(db, userDoc.id, cutoffTimestamp);
+        chatsDeleted += result.chatsDeleted;
+        messagesDeleted += result.messagesDeleted;
+      }
+    }
+
+    console.log(`Permanent deletion complete: ${chatsDeleted} chats, ${messagesDeleted} messages`);
+    return { chatsDeleted, messagesDeleted };
+  } catch (error) {
+    console.error('Error in permanent deletion:', error);
+    throw error;
+  }
+}
+
+/**
+ * Helper function to clean up deleted items for a specific user
+ */
+async function cleanupUserDeletedItems(
+  db: FirebaseFirestore.Firestore,
+  userId: string,
+  cutoffTimestamp: Timestamp | null
+): Promise<{ chatsDeleted: number; messagesDeleted: number }> {
+  let chatsDeleted = 0;
+  let messagesDeleted = 0;
+
+  if (!cutoffTimestamp) {
+    return { chatsDeleted, messagesDeleted };
+  }
+
+  // Find and delete old soft-deleted chats
+  const deletedChatsSnapshot = await db
+    .collection('users')
+    .doc(userId)
+    .collection('chats')
+    .where('deletedAt', '<', cutoffTimestamp)
+    .get();
+
+  for (const chatDoc of deletedChatsSnapshot.docs) {
+    // Delete all messages in this chat
+    const messagesSnapshot = await chatDoc.ref.collection('messages').get();
+    const batch = db.batch();
+
+    messagesSnapshot.docs.forEach((msgDoc) => {
+      batch.delete(msgDoc.ref);
+      messagesDeleted++;
+    });
+
+    batch.delete(chatDoc.ref);
+    chatsDeleted++;
+
+    await batch.commit();
+  }
+
+  // Find and delete old soft-deleted messages in non-deleted chats
+  const activeChatsSnapshot = await db
+    .collection('users')
+    .doc(userId)
+    .collection('chats')
+    .where('deletedAt', '==', null)
+    .get();
+
+  for (const chatDoc of activeChatsSnapshot.docs) {
+    const deletedMessagesSnapshot = await chatDoc.ref
+      .collection('messages')
+      .where('deletedAt', '<', cutoffTimestamp)
+      .get();
+
+    if (!deletedMessagesSnapshot.empty) {
+      const batch = db.batch();
+      deletedMessagesSnapshot.docs.forEach((msgDoc) => {
+        batch.delete(msgDoc.ref);
+        messagesDeleted++;
+      });
+      await batch.commit();
+    }
+  }
+
+  return { chatsDeleted, messagesDeleted };
+}
+
+// ============================================
+// ACTIVE (NON-DELETED) QUERIES
+// ============================================
+
+/**
+ * Get all active (non-deleted) chats for a user
+ * This is the preferred method for normal operation
+ */
+export async function getActiveChats(userId: string): Promise<ChatDocument[]> {
+  try {
+    const db = await getAdminDb();
+    const chatsRef = db.collection('users').doc(userId).collection('chats');
+
+    // Query for chats where deletedAt is null or doesn't exist
+    const snapshot = await chatsRef
+      .where('deletedAt', '==', null)
+      .orderBy('lastMessageAt', 'desc')
+      .get();
+
+    return snapshot.docs.map((doc) => {
+      const data = doc.data();
+      return {
+        id: doc.id,
+        contactId: data.contactId,
+        contactName: data.contactName,
+        contactEmoji: data.contactEmoji,
+        contactImage: data.contactImage,
+        contactPurpose: data.contactPurpose,
+        lastMessage: data.lastMessage,
+        lastMessageAt: toDate(data.lastMessageAt),
+        messageCount: data.messageCount || 0,
+        createdAt: toDate(data.createdAt),
+        updatedAt: toDate(data.updatedAt),
+      };
+    });
+  } catch (error) {
+    console.error('Error getting active chats:', error);
+    throw error;
+  }
+}
+
+/**
+ * Get active (non-deleted) messages for a chat
+ */
+export async function getActiveMessages(
+  userId: string,
+  chatId: string,
+  limit: number = 50,
+  cursor?: string
+): Promise<PaginatedMessages> {
+  try {
+    const db = await getAdminDb();
+    const messagesRef = db
+      .collection('users')
+      .doc(userId)
+      .collection('chats')
+      .doc(chatId)
+      .collection('messages');
+
+    let query = messagesRef
+      .where('deletedAt', '==', null)
+      .orderBy('createdAt', 'desc')
+      .limit(limit + 1);
+
+    if (cursor) {
+      const cursorDoc = await messagesRef.doc(cursor).get();
+      if (cursorDoc.exists) {
+        query = query.startAfter(cursorDoc);
+      }
+    }
+
+    const snapshot = await query.get();
+    const hasMore = snapshot.docs.length > limit;
+    const docs = hasMore ? snapshot.docs.slice(0, -1) : snapshot.docs;
+
+    const messages: MessageDocument[] = docs.map((doc) => {
+      const data = doc.data();
+      return {
+        id: doc.id,
+        role: data.role,
+        content: data.content,
+        audioUrl: data.audioUrl || null,
+        createdAt: toDate(data.createdAt),
+      };
+    });
+
+    // Return in chronological order (oldest first)
+    messages.reverse();
+
+    return {
+      messages,
+      hasMore,
+      nextCursor: hasMore ? docs[docs.length - 1].id : undefined,
+    };
+  } catch (error) {
+    console.error('Error getting active messages:', error);
+    throw error;
+  }
+}
