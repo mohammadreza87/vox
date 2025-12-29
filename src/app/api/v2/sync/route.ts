@@ -41,7 +41,7 @@ export async function POST(request: NextRequest) {
     const rateResult = await checkRateLimitSecure(
       getSyncRateLimiter(),
       getRateLimitIdentifier(request, decodedToken.uid),
-      6,
+      60,
       60 * 60_000
     );
     if (!rateResult.success && rateResult.response) {
@@ -165,7 +165,7 @@ export async function GET(request: NextRequest) {
     const rateResult = await checkRateLimitSecure(
       getSyncRateLimiter(),
       getRateLimitIdentifier(request, decodedToken.uid),
-      6,
+      60,
       60 * 60_000
     );
     if (!rateResult.success && rateResult.response) {
