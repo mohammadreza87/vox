@@ -110,7 +110,7 @@ export async function POST(request: NextRequest) {
                 await addMessage(userId, serverChat.id, {
                   role: msg.role,
                   content: msg.content,
-                  audioUrl: msg.audioUrl,
+                  audioUrl: msg.audioUrl ?? null,
                 });
               }
             }
