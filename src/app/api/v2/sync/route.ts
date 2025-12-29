@@ -84,11 +84,11 @@ export async function POST(request: NextRequest) {
             serverChat = await createChat(userId, {
               contactId: localChat.contactId,
               contactName: localChat.contactName,
-              contactEmoji: localChat.contactEmoji,
+              contactEmoji: localChat.contactEmoji || '💬',
               contactImage: localChat.contactImage,
-              contactPurpose: localChat.contactPurpose,
-              lastMessage: localChat.lastMessage,
-              lastMessageAt: new Date(localChat.lastMessageAt),
+              contactPurpose: localChat.contactPurpose || '',
+              lastMessage: localChat.lastMessage || '',
+              lastMessageAt: localChat.lastMessageAt ? new Date(localChat.lastMessageAt) : new Date(),
             });
           }
 
