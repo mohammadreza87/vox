@@ -51,7 +51,7 @@ export const translateRequestSchema = z.object({
     .max(5000, 'Text too long (max 5,000 characters)'),
   sourceLanguage: z.string().max(50).optional(),
   targetLanguage: z.string().min(1, 'Target language is required').max(50),
-  voiceId: z.string().max(100).optional(), // Optional - will use default voice if not provided
+  voiceId: z.string().max(100), // Required for explicit voice selection
 });
 
 export type TranslateRequest = z.infer<typeof translateRequestSchema>;
@@ -164,3 +164,35 @@ export const syncQuerySchema = z.object({
 });
 
 export type SyncQueryParams = z.infer<typeof syncQuerySchema>;
+
+// ============================================
+// Sync Request Schemas
+// ============================================
+
+export const syncMessageSchema = z.object({
+  id: z.string().min(1),
+  role: z.enum(['user', 'assistant']),
+  content: z.string().min(1).max(10000),
+  audioUrl: z.string().url().nullable().optional(),
+  createdAt: z.string().min(1),
+});
+
+export const syncChatSchema = z.object({
+  id: z.string().min(1),
+  contactId: z.string().min(1),
+  contactName: z.string().min(1).max(100),
+  contactEmoji: z.string().max(10).optional(),
+  contactImage: z.string().url().optional(),
+  contactPurpose: z.string().max(500).optional(),
+  lastMessage: z.string().max(1000).optional(),
+  lastMessageAt: z.string().min(1).optional(),
+  messages: z.array(syncMessageSchema).max(500).default([]),
+  isDeleted: z.boolean().optional(),
+});
+
+export const syncRequestSchema = z.object({
+  lastSyncAt: z.string().datetime().optional(),
+  localChats: z.array(syncChatSchema).max(100).optional(),
+});
+
+export type SyncRequest = z.infer<typeof syncRequestSchema>;

@@ -13,9 +13,15 @@ import {
   updateChat,
   softDeleteChat,
 } from '@/lib/firestore-v2';
-import { success, unauthorized, notFound, serverError } from '@/lib/api/response';
+import { success, unauthorized, notFound, serverError, badRequest } from '@/lib/api/response';
 import { logger } from '@/lib/logger';
 import { logChatDeleted } from '@/lib/audit';
+import { updateChatRequestSchema } from '@/lib/validation/schemas';
+import {
+  getV2ApiRateLimiter,
+  getRateLimitIdentifier,
+  checkRateLimitSecure,
+} from '@/lib/ratelimit';
 
 interface RouteParams {
   params: Promise<{ chatId: string }>;
@@ -31,6 +37,16 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
     const decodedToken = await verifyIdToken(token);
     if (!decodedToken) {
       return unauthorized('Invalid token');
+    }
+
+    const rateResult = await checkRateLimitSecure(
+      getV2ApiRateLimiter(),
+      getRateLimitIdentifier(request, decodedToken.uid),
+      60,
+      60_000
+    );
+    if (!rateResult.success && rateResult.response) {
+      return rateResult.response;
     }
 
     const userId = decodedToken.uid;
@@ -91,9 +107,29 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
       return unauthorized('Invalid token');
     }
 
+    const rateResult = await checkRateLimitSecure(
+      getV2ApiRateLimiter(),
+      getRateLimitIdentifier(request, decodedToken.uid),
+      20,
+      60_000
+    );
+    if (!rateResult.success && rateResult.response) {
+      return rateResult.response;
+    }
+
     const userId = decodedToken.uid;
     const { chatId } = await params;
     const body = await request.json();
+
+    const parsed = updateChatRequestSchema.safeParse(body);
+    if (!parsed.success) {
+      return badRequest('Validation failed', {
+        issues: parsed.error.issues.map((issue) => ({
+          path: issue.path.join('.'),
+          message: issue.message,
+        })),
+      });
+    }
 
     // Verify chat exists
     const existingChat = await getChat(userId, chatId);
@@ -101,12 +137,12 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
       return notFound('Chat not found');
     }
 
-    // Only allow updating certain fields
+    // Only allow updating validated fields
     const allowedUpdates: Record<string, unknown> = {};
-    if (body.contactName !== undefined) allowedUpdates.contactName = body.contactName;
-    if (body.contactEmoji !== undefined) allowedUpdates.contactEmoji = body.contactEmoji;
-    if (body.contactImage !== undefined) allowedUpdates.contactImage = body.contactImage;
-    if (body.contactPurpose !== undefined) allowedUpdates.contactPurpose = body.contactPurpose;
+    if (parsed.data.contactName !== undefined) allowedUpdates.contactName = parsed.data.contactName;
+    if (parsed.data.contactEmoji !== undefined) allowedUpdates.contactEmoji = parsed.data.contactEmoji;
+    if (parsed.data.contactImage !== undefined) allowedUpdates.contactImage = parsed.data.contactImage;
+    if (parsed.data.contactPurpose !== undefined) allowedUpdates.contactPurpose = parsed.data.contactPurpose;
 
     await updateChat(userId, chatId, allowedUpdates);
 
@@ -127,6 +163,16 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
     const decodedToken = await verifyIdToken(token);
     if (!decodedToken) {
       return unauthorized('Invalid token');
+    }
+
+    const rateResult = await checkRateLimitSecure(
+      getV2ApiRateLimiter(),
+      getRateLimitIdentifier(request, decodedToken.uid),
+      20,
+      60_000
+    );
+    if (!rateResult.success && rateResult.response) {
+      return rateResult.response;
     }
 
     const userId = decodedToken.uid;

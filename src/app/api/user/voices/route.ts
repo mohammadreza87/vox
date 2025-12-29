@@ -9,6 +9,11 @@ import {
 } from '@/lib/firestore';
 import { success, unauthorized, badRequest, notFound, serverError } from '@/lib/api/response';
 import { logger } from '@/lib/logger';
+import {
+  getV2ApiRateLimiter,
+  getRateLimitIdentifier,
+  checkRateLimitSecure,
+} from '@/lib/ratelimit';
 
 // GET - Get all cloned voices for the user
 export async function GET(request: NextRequest) {
@@ -21,6 +26,16 @@ export async function GET(request: NextRequest) {
     const decodedToken = await verifyIdToken(token);
     if (!decodedToken) {
       return unauthorized('Invalid token');
+    }
+
+    const rateResult = await checkRateLimitSecure(
+      getV2ApiRateLimiter(),
+      getRateLimitIdentifier(request, decodedToken.uid),
+      30,
+      60_000
+    );
+    if (!rateResult.success && rateResult.response) {
+      return rateResult.response;
     }
 
     const userId = decodedToken.uid;
@@ -51,6 +66,16 @@ export async function POST(request: NextRequest) {
     const decodedToken = await verifyIdToken(token);
     if (!decodedToken) {
       return unauthorized('Invalid token');
+    }
+
+    const rateResult = await checkRateLimitSecure(
+      getV2ApiRateLimiter(),
+      getRateLimitIdentifier(request, decodedToken.uid),
+      10,
+      60_000
+    );
+    if (!rateResult.success && rateResult.response) {
+      return rateResult.response;
     }
 
     const userId = decodedToken.uid;
@@ -101,6 +126,16 @@ export async function DELETE(request: NextRequest) {
       return unauthorized('Invalid token');
     }
 
+    const rateResult = await checkRateLimitSecure(
+      getV2ApiRateLimiter(),
+      getRateLimitIdentifier(request, decodedToken.uid),
+      20,
+      60_000
+    );
+    if (!rateResult.success && rateResult.response) {
+      return rateResult.response;
+    }
+
     const userId = decodedToken.uid;
     const { searchParams } = new URL(request.url);
     const voiceId = searchParams.get('voiceId');
@@ -136,6 +171,16 @@ export async function PATCH(request: NextRequest) {
     const decodedToken = await verifyIdToken(token);
     if (!decodedToken) {
       return unauthorized('Invalid token');
+    }
+
+    const rateResult = await checkRateLimitSecure(
+      getV2ApiRateLimiter(),
+      getRateLimitIdentifier(request, decodedToken.uid),
+      20,
+      60_000
+    );
+    if (!rateResult.success && rateResult.response) {
+      return rateResult.response;
     }
 
     const userId = decodedToken.uid;

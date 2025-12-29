@@ -4,6 +4,14 @@ import { getUserDocument, createUserDocument, saveClonedVoiceToFirestore } from 
 import { SUBSCRIPTION_TIERS } from '@/config/subscription';
 import { success, unauthorized, badRequest, forbidden, serverError } from '@/lib/api/response';
 import { logger } from '@/lib/logger';
+import {
+  getVoiceCloneRateLimiter,
+  getRateLimitIdentifier,
+  checkRateLimitSecure,
+} from '@/lib/ratelimit';
+
+const MAX_AUDIO_BYTES = 50 * 1024 * 1024; // 50 MB
+const ALLOWED_AUDIO_MIME_PREFIX = 'audio/';
 
 export async function POST(request: NextRequest) {
   try {
@@ -19,6 +27,16 @@ export async function POST(request: NextRequest) {
     }
 
     const userId = decodedToken.uid;
+
+    const rateResult = await checkRateLimitSecure(
+      getVoiceCloneRateLimiter(),
+      getRateLimitIdentifier(request, userId),
+      1,
+      10 * 60_000
+    );
+    if (!rateResult.success && rateResult.response) {
+      return rateResult.response;
+    }
 
     // Get or create user document
     let userDoc = await getUserDocument(userId);
@@ -44,6 +62,14 @@ export async function POST(request: NextRequest) {
 
     if (!audioFile || !name) {
       return badRequest('Audio file and name are required');
+    }
+
+    if (audioFile.size > MAX_AUDIO_BYTES) {
+      return badRequest('Audio file exceeds 50MB limit');
+    }
+
+    if (audioFile.type && !audioFile.type.startsWith(ALLOWED_AUDIO_MIME_PREFIX)) {
+      return badRequest('Unsupported file type. Please upload an audio file.');
     }
 
     if (source && !['contact', 'translator'].includes(source)) {

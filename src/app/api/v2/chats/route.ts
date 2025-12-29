@@ -15,6 +15,11 @@ import {
 import { CreateChatRequest } from '@/shared/types/database';
 import { success, unauthorized, badRequest, serverError } from '@/lib/api/response';
 import { logger } from '@/lib/logger';
+import {
+  getV2ApiRateLimiter,
+  getRateLimitIdentifier,
+  checkRateLimitSecure,
+} from '@/lib/ratelimit';
 
 export async function GET(request: NextRequest) {
   try {
@@ -26,6 +31,16 @@ export async function GET(request: NextRequest) {
     const decodedToken = await verifyIdToken(token);
     if (!decodedToken) {
       return unauthorized('Invalid token');
+    }
+
+    const rateResult = await checkRateLimitSecure(
+      getV2ApiRateLimiter(),
+      getRateLimitIdentifier(request, decodedToken.uid),
+      60,
+      60_000
+    );
+    if (!rateResult.success && rateResult.response) {
+      return rateResult.response;
     }
 
     const userId = decodedToken.uid;
@@ -71,6 +86,16 @@ export async function POST(request: NextRequest) {
     const decodedToken = await verifyIdToken(token);
     if (!decodedToken) {
       return unauthorized('Invalid token');
+    }
+
+    const rateResult = await checkRateLimitSecure(
+      getV2ApiRateLimiter(),
+      getRateLimitIdentifier(request, decodedToken.uid),
+      20,
+      60_000
+    );
+    if (!rateResult.success && rateResult.response) {
+      return rateResult.response;
     }
 
     const userId = decodedToken.uid;

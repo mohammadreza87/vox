@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { verifyTelegramWebhookToken, createWebhookForbiddenResponse } from '@/lib/telegram/verify';
+import {
+  getWebhookRateLimiter,
+  getRateLimitIdentifier,
+  checkRateLimitSecure,
+} from '@/lib/ratelimit';
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 
@@ -10,6 +15,16 @@ const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
  */
 export async function POST(request: NextRequest) {
   try {
+    const rateResult = await checkRateLimitSecure(
+      getWebhookRateLimiter(),
+      getRateLimitIdentifier(request, undefined),
+      60,
+      60_000
+    );
+    if (!rateResult.success && rateResult.response) {
+      return rateResult.response;
+    }
+
     // Verify webhook signature
     if (!verifyTelegramWebhookToken(request)) {
       console.error('Invalid Telegram webhook token');

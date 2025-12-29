@@ -11,6 +11,12 @@ import { AddMessageRequest } from '@/shared/types/database';
 import { success, unauthorized, notFound, badRequest, serverError } from '@/lib/api/response';
 import { logger } from '@/lib/logger';
 import { logMessageSent } from '@/lib/audit';
+import {
+  getV2ApiRateLimiter,
+  getRateLimitIdentifier,
+  checkRateLimitSecure,
+} from '@/lib/ratelimit';
+import { createMessageRequestSchema } from '@/lib/validation/schemas';
 
 interface RouteParams {
   params: Promise<{ chatId: string }>;
@@ -28,13 +34,25 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
       return unauthorized('Invalid token');
     }
 
+    const rateResult = await checkRateLimitSecure(
+      getV2ApiRateLimiter(),
+      getRateLimitIdentifier(request, decodedToken.uid),
+      60,
+      60_000
+    );
+    if (!rateResult.success && rateResult.response) {
+      return rateResult.response;
+    }
+
     const userId = decodedToken.uid;
     const { chatId } = await params;
 
     // Parse query params
     const { searchParams } = new URL(request.url);
-    const limit = parseInt(searchParams.get('limit') || '50', 10);
-    const cursor = searchParams.get('cursor') || undefined;
+    const limitParam = Number(searchParams.get('limit') ?? '50');
+    const limit =
+      Number.isFinite(limitParam) && limitParam >= 1 && limitParam <= 100 ? limitParam : 50;
+    const cursor = searchParams.get('cursor') ?? undefined;
 
     // Verify chat exists
     const chat = await getChat(userId, chatId);
@@ -77,14 +95,28 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       return unauthorized('Invalid token');
     }
 
+    const rateResult = await checkRateLimitSecure(
+      getV2ApiRateLimiter(),
+      getRateLimitIdentifier(request, decodedToken.uid),
+      30,
+      60_000
+    );
+    if (!rateResult.success && rateResult.response) {
+      return rateResult.response;
+    }
+
     const userId = decodedToken.uid;
     const { chatId } = await params;
-    const body: Omit<AddMessageRequest, 'chatId'> = await request.json();
 
-    // Validate required fields
-    if (!body.role || !body.content) {
+    const body: Omit<AddMessageRequest, 'chatId'> = await request.json();
+    const validation = createMessageRequestSchema.safeParse(body);
+
+    if (!validation.success) {
       return badRequest('role and content are required', {
-        missingFields: [!body.role && 'role', !body.content && 'content'].filter(Boolean),
+        issues: validation.error.issues.map((issue) => ({
+          path: issue.path.join('.'),
+          message: issue.message,
+        })),
       });
     }
 

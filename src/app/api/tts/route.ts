@@ -1,7 +1,11 @@
 import { withAuth, AuthenticatedRequest } from '@/lib/middleware';
 import { ttsRequestSchema } from '@/lib/validation/schemas';
 import { sanitizeForAI } from '@/lib/validation/sanitize';
-import { getApiRateLimiter, applyRateLimit } from '@/lib/ratelimit';
+import {
+  getApiRateLimiter,
+  getRateLimitIdentifier,
+  checkRateLimitSecure,
+} from '@/lib/ratelimit';
 import { success, badRequest, badGateway, serverError } from '@/lib/api/response';
 import { logger } from '@/lib/logger';
 import { fetchWithTimeout, TIMEOUTS } from '@/lib/api/timeout';
@@ -13,9 +17,14 @@ const ELEVENLABS_API_URL = 'https://api.elevenlabs.io/v1/text-to-speech';
 async function handler(request: AuthenticatedRequest) {
   try {
     // Apply rate limiting
-    const rateLimitResponse = await applyRateLimit(request, getApiRateLimiter(), request.userId);
-    if (rateLimitResponse) {
-      return rateLimitResponse;
+    const rateResult = await checkRateLimitSecure(
+      getApiRateLimiter(),
+      getRateLimitIdentifier(request, request.userId),
+      20,
+      60_000
+    );
+    if (!rateResult.success && rateResult.response) {
+      return rateResult.response;
     }
 
     // Parse and validate request body

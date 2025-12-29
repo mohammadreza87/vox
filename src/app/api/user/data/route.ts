@@ -4,6 +4,11 @@ import { Chat, Message } from '@/shared/types';
 import { success, unauthorized, serverError } from '@/lib/api/response';
 import { logger } from '@/lib/logger';
 import { withCache, cacheKeys, CACHE_TTL, cacheDelete } from '@/lib/cache';
+import {
+  getV2ApiRateLimiter,
+  getRateLimitIdentifier,
+  checkRateLimitSecure,
+} from '@/lib/ratelimit';
 
 // GET - Load user data (chats, preferences, custom contacts)
 export async function GET(request: NextRequest) {
@@ -16,6 +21,16 @@ export async function GET(request: NextRequest) {
     const decodedToken = await verifyIdToken(token);
     if (!decodedToken) {
       return unauthorized('Invalid token');
+    }
+
+    const rateResult = await checkRateLimitSecure(
+      getV2ApiRateLimiter(),
+      getRateLimitIdentifier(request, decodedToken.uid),
+      30,
+      60_000
+    );
+    if (!rateResult.success && rateResult.response) {
+      return rateResult.response;
     }
 
     const userId = decodedToken.uid;
@@ -78,6 +93,16 @@ export async function POST(request: NextRequest) {
     const decodedToken = await verifyIdToken(token);
     if (!decodedToken) {
       return unauthorized('Invalid token');
+    }
+
+    const rateResult = await checkRateLimitSecure(
+      getV2ApiRateLimiter(),
+      getRateLimitIdentifier(request, decodedToken.uid),
+      30,
+      60_000
+    );
+    if (!rateResult.success && rateResult.response) {
+      return rateResult.response;
     }
 
     const userId = decodedToken.uid;

@@ -19,28 +19,12 @@ import {
   getChatByContactId,
 } from '@/lib/firestore-v2';
 import { ChatDocument, MessageDocument } from '@/shared/types/database';
-
-interface SyncRequest {
-  lastSyncAt?: string;
-  localChats?: Array<{
-    id: string;
-    contactId: string;
-    contactName: string;
-    contactEmoji: string;
-    contactImage?: string;
-    contactPurpose: string;
-    lastMessage: string;
-    lastMessageAt: string;
-    messages: Array<{
-      id: string;
-      role: 'user' | 'assistant';
-      content: string;
-      audioUrl: string | null;
-      createdAt: string;
-    }>;
-    isDeleted?: boolean;
-  }>;
-}
+import {
+  getSyncRateLimiter,
+  getRateLimitIdentifier,
+  checkRateLimitSecure,
+} from '@/lib/ratelimit';
+import { syncRequestSchema } from '@/lib/validation/schemas';
 
 export async function POST(request: NextRequest) {
   try {
@@ -54,12 +38,37 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Invalid token' }, { status: 401 });
     }
 
+    const rateResult = await checkRateLimitSecure(
+      getSyncRateLimiter(),
+      getRateLimitIdentifier(request, decodedToken.uid),
+      6,
+      60 * 60_000
+    );
+    if (!rateResult.success && rateResult.response) {
+      return rateResult.response;
+    }
+
     const userId = decodedToken.uid;
-    const body: SyncRequest = await request.json();
+    const body = await request.json();
+    const parsed = syncRequestSchema.safeParse(body);
+
+    if (!parsed.success) {
+      return NextResponse.json(
+        {
+          error: 'Validation failed',
+          code: 'VALIDATION_ERROR',
+          details: parsed.error.issues.map((issue) => ({
+            path: issue.path.join('.'),
+            message: issue.message,
+          })),
+        },
+        { status: 400 }
+      );
+    }
 
     // Process local changes if provided
-    if (body.localChats && body.localChats.length > 0) {
-      for (const localChat of body.localChats) {
+    if (parsed.data.localChats && parsed.data.localChats.length > 0) {
+      for (const localChat of parsed.data.localChats) {
         if (localChat.isDeleted) {
           // Handle deletion
           const existingChat = await getChatByContactId(userId, localChat.contactId);
@@ -151,6 +160,16 @@ export async function GET(request: NextRequest) {
     const decodedToken = await verifyIdToken(token);
     if (!decodedToken) {
       return NextResponse.json({ error: 'Invalid token' }, { status: 401 });
+    }
+
+    const rateResult = await checkRateLimitSecure(
+      getSyncRateLimiter(),
+      getRateLimitIdentifier(request, decodedToken.uid),
+      6,
+      60 * 60_000
+    );
+    if (!rateResult.success && rateResult.response) {
+      return rateResult.response;
     }
 
     const userId = decodedToken.uid;

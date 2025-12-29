@@ -2,6 +2,12 @@ import { NextRequest, NextResponse } from 'next/server';
 import { verifyIdToken, extractBearerToken } from '@/lib/firebase-admin';
 import { stripe, getOrCreateCustomer } from '@/lib/stripe';
 import { getUserDocument, setStripeCustomerId } from '@/lib/firestore';
+import { SUBSCRIPTION_TIERS } from '@/config/subscription';
+import {
+  getV2ApiRateLimiter,
+  getRateLimitIdentifier,
+  checkRateLimitSecure,
+} from '@/lib/ratelimit';
 
 export async function POST(request: NextRequest) {
   try {
@@ -22,6 +28,16 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const rateResult = await checkRateLimitSecure(
+      getV2ApiRateLimiter(),
+      getRateLimitIdentifier(request, decodedToken.uid),
+      10,
+      60_000
+    );
+    if (!rateResult.success && rateResult.response) {
+      return rateResult.response;
+    }
+
     const userId = decodedToken.uid;
     const email = decodedToken.email;
 
@@ -35,9 +51,23 @@ export async function POST(request: NextRequest) {
     // Get request body
     const { priceId, successUrl, cancelUrl } = await request.json();
 
+    const allowedPriceIds = [
+      SUBSCRIPTION_TIERS.pro.stripePriceIds?.monthly,
+      SUBSCRIPTION_TIERS.pro.stripePriceIds?.annual,
+      SUBSCRIPTION_TIERS.max.stripePriceIds?.monthly,
+      SUBSCRIPTION_TIERS.max.stripePriceIds?.annual,
+    ].filter((id): id is string => Boolean(id));
+
     if (!priceId) {
       return NextResponse.json(
         { error: 'Price ID is required' },
+        { status: 400 }
+      );
+    }
+
+    if (allowedPriceIds.length > 0 && !allowedPriceIds.includes(priceId)) {
+      return NextResponse.json(
+        { error: 'Invalid price ID' },
         { status: 400 }
       );
     }

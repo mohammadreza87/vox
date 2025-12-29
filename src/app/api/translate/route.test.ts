@@ -9,7 +9,8 @@ vi.mock('@/lib/middleware', () => ({
 
 vi.mock('@/lib/ratelimit', () => ({
   getApiRateLimiter: vi.fn().mockReturnValue(null),
-  applyRateLimit: vi.fn().mockResolvedValue(null),
+  getRateLimitIdentifier: vi.fn().mockReturnValue('user:test'),
+  checkRateLimitSecure: vi.fn().mockResolvedValue({ success: true, response: null }),
 }));
 
 // Mock global fetch
@@ -22,7 +23,7 @@ vi.stubEnv('ELEVENLABS_API_KEY', 'test-elevenlabs-key');
 
 // Import after mocks
 const { POST } = await import('./route');
-const { applyRateLimit } = await import('@/lib/ratelimit');
+const { checkRateLimitSecure } = await import('@/lib/ratelimit');
 
 describe('POST /api/translate', () => {
   beforeEach(() => {
@@ -108,11 +109,10 @@ describe('POST /api/translate', () => {
 
   describe('Rate Limiting', () => {
     it('returns rate limit response when exceeded', async () => {
-      const rateLimitResponse = new Response(
-        JSON.stringify({ error: 'Rate limit exceeded' }),
-        { status: 429 }
-      );
-      vi.mocked(applyRateLimit).mockResolvedValueOnce(rateLimitResponse as never);
+      vi.mocked(checkRateLimitSecure).mockResolvedValueOnce({
+        success: false,
+        response: new Response(JSON.stringify({ error: 'Rate limit exceeded' }), { status: 429 }),
+      } as never);
 
       const request = createRequest({
         text: 'Hello',

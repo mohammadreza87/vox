@@ -2,6 +2,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import { stripe, getTierFromPriceId } from '@/lib/stripe';
 import { updateUserSubscription, createUserDocument, getUserDocument } from '@/lib/firestore';
 import Stripe from 'stripe';
+import {
+  getWebhookRateLimiter,
+  getRateLimitIdentifier,
+  checkRateLimitSecure,
+} from '@/lib/ratelimit';
 
 // Disable body parsing for webhook signature verification
 export const runtime = 'nodejs';
@@ -20,6 +25,16 @@ function getSubscriptionDates(subscription: Stripe.Subscription) {
 }
 
 export async function POST(request: NextRequest) {
+  const rateResult = await checkRateLimitSecure(
+    getWebhookRateLimiter(),
+    getRateLimitIdentifier(request, undefined),
+    50,
+    60_000
+  );
+  if (!rateResult.success && rateResult.response) {
+    return rateResult.response;
+  }
+
   const body = await request.text();
   const signature = request.headers.get('stripe-signature');
 

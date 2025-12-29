@@ -1,13 +1,16 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import { NextRequest } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
-import { verifyIdToken, extractBearerToken } from '@/lib/firebase-admin';
 import { getUserDocument, incrementMessageCount, createUserDocument } from '@/lib/firestore';
 import { SUBSCRIPTION_TIERS, canUseModel, canSendMessage } from '@/config/subscription';
 import { chatRequestSchema } from '@/lib/validation/schemas';
 import { sanitizeForAI } from '@/lib/validation/sanitize';
-import { getChatRateLimiter, applyRateLimit } from '@/lib/ratelimit';
+import {
+  getChatRateLimiter,
+  getRateLimitIdentifier,
+  checkRateLimitSecure,
+} from '@/lib/ratelimit';
+import { withAuth, type AuthenticatedRequest } from '@/lib/middleware';
 
 // Initialize AI clients lazily
 let geminiClient: GoogleGenerativeAI | null = null;
@@ -81,35 +84,16 @@ function formatSSE(data: object): string {
   return `data: ${JSON.stringify(data)}\n\n`;
 }
 
-export async function POST(request: NextRequest) {
-  // Check for authentication
-  const token = extractBearerToken(request.headers.get('Authorization'));
-  let userId: string | null = null;
-  let tier: 'free' | 'pro' | 'max' = 'free';
-  let messagesUsedToday = 0;
-
-  if (token) {
-    const decodedToken = await verifyIdToken(token);
-    if (decodedToken) {
-      userId = decodedToken.uid;
-
-      let userDoc = await getUserDocument(userId);
-      if (!userDoc && decodedToken.email) {
-        await createUserDocument(userId, decodedToken.email, decodedToken.name || '');
-        userDoc = await getUserDocument(userId);
-      }
-
-      if (userDoc) {
-        tier = userDoc.subscription.tier;
-        messagesUsedToday = userDoc.usage.messagesUsedToday;
-      }
-    }
-  }
-
-  // Apply rate limiting
-  const rateLimitResponse = await applyRateLimit(request, getChatRateLimiter(), userId ?? undefined);
-  if (rateLimitResponse) {
-    return rateLimitResponse;
+export const POST = withAuth(async (request: AuthenticatedRequest, _context) => {
+  const userId = request.userId;
+  const rateResult = await checkRateLimitSecure(
+    getChatRateLimiter(),
+    getRateLimitIdentifier(request, userId),
+    20,
+    60_000
+  );
+  if (!rateResult.success && rateResult.response) {
+    return rateResult.response;
   }
 
   // Parse and validate request body
@@ -133,6 +117,14 @@ export async function POST(request: NextRequest) {
   const { message, systemPrompt, conversationHistory, aiProvider = 'deepseek', aiModel } = parseResult.data;
   const sanitizedMessage = sanitizeForAI(message);
   const modelToUse = aiModel || getDefaultModel(aiProvider);
+
+  let userDoc = await getUserDocument(userId);
+  if (!userDoc && request.user.email) {
+    await createUserDocument(userId, request.user.email, request.user.name || '');
+    userDoc = await getUserDocument(userId);
+  }
+  const tier = userDoc?.subscription.tier ?? 'free';
+  const messagesUsedToday = userDoc?.usage.messagesUsedToday ?? 0;
 
   // Check daily message limit
   if (!canSendMessage(tier, messagesUsedToday)) {
@@ -218,10 +210,8 @@ export async function POST(request: NextRequest) {
             break;
         }
 
-        // Increment message count after successful stream
-        if (userId) {
-          await incrementMessageCount(userId);
-        }
+    // Increment message count after successful stream
+    await incrementMessageCount(userId);
 
         // Send done message
         controller.enqueue(encoder.encode(formatSSE({ done: true })));
@@ -242,7 +232,7 @@ export async function POST(request: NextRequest) {
   });
 
   return createSSEResponse(stream);
-}
+});
 
 // Streaming functions for each provider
 

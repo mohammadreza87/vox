@@ -4,6 +4,11 @@ import { getUserDocument, createUserDocument, resetDailyUsageIfNeeded } from '@/
 import { success, unauthorized, serverError } from '@/lib/api/response';
 import { logger } from '@/lib/logger';
 import { withCache, cacheKeys, CACHE_TTL, invalidateSubscriptionCache } from '@/lib/cache';
+import {
+  getV2ApiRateLimiter,
+  getRateLimitIdentifier,
+  checkRateLimitSecure,
+} from '@/lib/ratelimit';
 
 export async function GET(request: NextRequest) {
   try {
@@ -16,6 +21,16 @@ export async function GET(request: NextRequest) {
     const decodedToken = await verifyIdToken(token);
     if (!decodedToken) {
       return unauthorized('Invalid token');
+    }
+
+    const rateResult = await checkRateLimitSecure(
+      getV2ApiRateLimiter(),
+      getRateLimitIdentifier(request, decodedToken.uid),
+      30,
+      60_000
+    );
+    if (!rateResult.success && rateResult.response) {
+      return rateResult.response;
     }
 
     const userId = decodedToken.uid;

@@ -10,6 +10,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import { verifyIdToken, extractBearerToken, getAdminDb } from '@/lib/firebase-admin';
 import { createChat, addMessage, getChatByContactId } from '@/lib/firestore-v2';
 import { Timestamp } from 'firebase-admin/firestore';
+import {
+  getSyncRateLimiter,
+  getRateLimitIdentifier,
+  checkRateLimitSecure,
+} from '@/lib/ratelimit';
 
 interface LegacyMessage {
   id: string;
@@ -56,6 +61,16 @@ export async function POST(request: NextRequest) {
     const decodedToken = await verifyIdToken(token);
     if (!decodedToken) {
       return NextResponse.json({ error: 'Invalid token' }, { status: 401 });
+    }
+
+    const rateResult = await checkRateLimitSecure(
+      getSyncRateLimiter(),
+      getRateLimitIdentifier(request, decodedToken.uid),
+      1,
+      60_000
+    );
+    if (!rateResult.success && rateResult.response) {
+      return rateResult.response;
     }
 
     const userId = decodedToken.uid;
@@ -210,6 +225,16 @@ export async function GET(request: NextRequest) {
     const decodedToken = await verifyIdToken(token);
     if (!decodedToken) {
       return NextResponse.json({ error: 'Invalid token' }, { status: 401 });
+    }
+
+    const rateResult = await checkRateLimitSecure(
+      getSyncRateLimiter(),
+      getRateLimitIdentifier(request, decodedToken.uid),
+      1,
+      60_000
+    );
+    if (!rateResult.success && rateResult.response) {
+      return rateResult.response;
     }
 
     const userId = decodedToken.uid;

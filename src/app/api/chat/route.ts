@@ -1,17 +1,26 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import { NextRequest } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
-import { verifyIdToken, extractBearerToken } from '@/lib/firebase-admin';
 import { getUserDocument, incrementMessageCount, createUserDocument } from '@/lib/firestore';
-import { SUBSCRIPTION_TIERS, canUseModel, canSendMessage } from '@/config/subscription';
+import { canUseModel, canSendMessage } from '@/config/subscription';
 import { chatRequestSchema } from '@/lib/validation/schemas';
 import { sanitizeForAI } from '@/lib/validation/sanitize';
-import { getChatRateLimiter, applyRateLimit } from '@/lib/ratelimit';
-import { success, badRequest, forbidden, tooManyRequests, serverError } from '@/lib/api/response';
+import {
+  getChatRateLimiter,
+  getRateLimitIdentifier,
+  checkRateLimitSecure,
+} from '@/lib/ratelimit';
+import {
+  success,
+  badRequest,
+  forbidden,
+  tooManyRequests,
+  unauthorized,
+} from '@/lib/api/response';
 import { logger } from '@/lib/logger';
 import { withTimeout, TIMEOUTS } from '@/lib/api/timeout';
 import { withRetry } from '@/lib/retry';
+import { withAuth, type AuthenticatedRequest } from '@/lib/middleware';
 
 // Initialize AI clients lazily
 let geminiClient: GoogleGenerativeAI | null = null;
@@ -54,37 +63,17 @@ function getDeepSeekClient() {
   return deepseekClient;
 }
 
-export async function POST(request: NextRequest) {
+export const POST = withAuth(async (request: AuthenticatedRequest, _context) => {
   try {
-    // Check for authentication (optional - allows anonymous users with free tier)
-    const token = extractBearerToken(request.headers.get('Authorization'));
-    let userId: string | null = null;
-    let tier: 'free' | 'pro' | 'max' = 'free';
-    let messagesUsedToday = 0;
-
-    if (token) {
-      const decodedToken = await verifyIdToken(token);
-      if (decodedToken) {
-        userId = decodedToken.uid;
-
-        // Get or create user document
-        let userDoc = await getUserDocument(userId);
-        if (!userDoc && decodedToken.email) {
-          await createUserDocument(userId, decodedToken.email, decodedToken.name || '');
-          userDoc = await getUserDocument(userId);
-        }
-
-        if (userDoc) {
-          tier = userDoc.subscription.tier;
-          messagesUsedToday = userDoc.usage.messagesUsedToday;
-        }
-      }
-    }
-
-    // Apply rate limiting
-    const rateLimitResponse = await applyRateLimit(request, getChatRateLimiter(), userId ?? undefined);
-    if (rateLimitResponse) {
-      return rateLimitResponse;
+    const userId = request.userId;
+    const rateResult = await checkRateLimitSecure(
+      getChatRateLimiter(),
+      getRateLimitIdentifier(request, userId),
+      30,
+      60_000
+    );
+    if (!rateResult.success && rateResult.response) {
+      return rateResult.response;
     }
 
     // Parse and validate request body
@@ -104,6 +93,21 @@ export async function POST(request: NextRequest) {
 
     // Sanitize message for AI
     const sanitizedMessage = sanitizeForAI(message);
+
+    // Get or create user document
+    const decodedUser = request.user;
+    let userDoc = await getUserDocument(userId);
+    if (!userDoc && decodedUser.email) {
+      await createUserDocument(userId, decodedUser.email, decodedUser.name || '');
+      userDoc = await getUserDocument(userId);
+    }
+
+    if (!userDoc) {
+      return unauthorized('User record not found');
+    }
+
+    const tier = userDoc.subscription.tier;
+    const messagesUsedToday = userDoc.usage.messagesUsedToday;
 
     // Check daily message limit
     const modelToUse = aiModel || getDefaultModel(aiProvider);
@@ -131,9 +135,7 @@ export async function POST(request: NextRequest) {
     );
 
     // Increment message count for authenticated users
-    if (userId) {
-      await incrementMessageCount(userId);
-    }
+    await incrementMessageCount(userId);
 
     return success({
       content: responseText,
@@ -151,7 +153,7 @@ export async function POST(request: NextRequest) {
       error: errorMessage,
     });
   }
-}
+});
 
 async function executeAIChat(
   aiProvider: string,

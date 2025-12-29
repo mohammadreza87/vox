@@ -18,7 +18,8 @@ vi.mock('@/lib/firestore', () => ({
 
 vi.mock('@/lib/ratelimit', () => ({
   getChatRateLimiter: vi.fn().mockReturnValue(null),
-  applyRateLimit: vi.fn().mockResolvedValue(null),
+  getRateLimitIdentifier: vi.fn().mockReturnValue('user:test'),
+  checkRateLimitSecure: vi.fn().mockResolvedValue({ success: true, response: null }),
 }));
 
 vi.mock('@/lib/logger', () => ({
@@ -86,7 +87,7 @@ vi.stubEnv('DEEPSEEK_API_KEY', 'test-deepseek-key');
 const { POST } = await import('./route');
 const { verifyIdToken } = await import('@/lib/firebase-admin');
 const { getUserDocument, incrementMessageCount } = await import('@/lib/firestore');
-const { applyRateLimit } = await import('@/lib/ratelimit');
+const { checkRateLimitSecure } = await import('@/lib/ratelimit');
 
 describe('POST /api/chat', () => {
   beforeEach(() => {
@@ -95,9 +96,16 @@ describe('POST /api/chat', () => {
 
   describe('Validation', () => {
     it('returns 400 for missing message field', async () => {
-      const request = createMockRequest('POST', '/api/chat', {
+      const request = createAuthenticatedRequest('POST', '/api/chat', {
         body: {},
       });
+      (request as any).userId = 'test-user-123';
+      (request as any).user = { uid: 'test-user-123', email: 'test@example.com' };
+      vi.mocked(verifyIdToken).mockResolvedValue({ uid: 'test-user-123', email: 'test@example.com' } as never);
+      vi.mocked(getUserDocument).mockResolvedValue({
+        subscription: { tier: 'free' },
+        usage: { messagesUsedToday: 0 },
+      } as never);
 
       const response = await POST(request);
       const { status, data } = await parseResponse(response);
@@ -109,9 +117,16 @@ describe('POST /api/chat', () => {
     });
 
     it('returns 400 for empty message', async () => {
-      const request = createMockRequest('POST', '/api/chat', {
+      const request = createAuthenticatedRequest('POST', '/api/chat', {
         body: { message: '' },
       });
+      (request as any).userId = 'test-user-123';
+      (request as any).user = { uid: 'test-user-123', email: 'test@example.com' };
+      vi.mocked(verifyIdToken).mockResolvedValue({ uid: 'test-user-123', email: 'test@example.com' } as never);
+      vi.mocked(getUserDocument).mockResolvedValue({
+        subscription: { tier: 'free' },
+        usage: { messagesUsedToday: 0 },
+      } as never);
 
       const response = await POST(request);
       const { status, data } = await parseResponse(response);
@@ -122,9 +137,16 @@ describe('POST /api/chat', () => {
     });
 
     it('returns 400 for invalid aiProvider', async () => {
-      const request = createMockRequest('POST', '/api/chat', {
+      const request = createAuthenticatedRequest('POST', '/api/chat', {
         body: { message: 'Hello', aiProvider: 'invalid-provider' },
       });
+      (request as any).userId = 'test-user-123';
+      (request as any).user = { uid: 'test-user-123', email: 'test@example.com' };
+      vi.mocked(verifyIdToken).mockResolvedValue({ uid: 'test-user-123', email: 'test@example.com' } as never);
+      vi.mocked(getUserDocument).mockResolvedValue({
+        subscription: { tier: 'free' },
+        usage: { messagesUsedToday: 0 },
+      } as never);
 
       const response = await POST(request);
       const { status, data } = await parseResponse(response);
@@ -135,13 +157,20 @@ describe('POST /api/chat', () => {
     });
 
     it('accepts valid request body', async () => {
-      const request = createMockRequest('POST', '/api/chat', {
+      const request = createAuthenticatedRequest('POST', '/api/chat', {
         body: {
           message: 'Hello, how are you?',
           contactId: 'test-contact',
           aiProvider: 'deepseek', // Free tier only allows deepseek
         },
       });
+      (request as any).userId = 'test-user-123';
+      (request as any).user = { uid: 'test-user-123', email: 'test@example.com' };
+      vi.mocked(verifyIdToken).mockResolvedValue({ uid: 'test-user-123', email: 'test@example.com' } as never);
+      vi.mocked(getUserDocument).mockResolvedValue({
+        subscription: { tier: 'free' },
+        usage: { messagesUsedToday: 0 },
+      } as never);
 
       const response = await POST(request);
       const { status, data } = await parseResponse(response);
@@ -153,7 +182,7 @@ describe('POST /api/chat', () => {
   });
 
   describe('Authentication', () => {
-    it('works without authentication (anonymous user)', async () => {
+    it('requires authentication', async () => {
       const request = createMockRequest('POST', '/api/chat', {
         body: { message: 'Hello there', contactId: 'test-contact' },
       });
@@ -161,8 +190,7 @@ describe('POST /api/chat', () => {
       const response = await POST(request);
       const { status } = await parseResponse(response);
 
-      expect(status).toBe(200);
-      expect(verifyIdToken).not.toHaveBeenCalled();
+      expect(status).toBe(401);
     });
 
     it('verifies token when Authorization header is present', async () => {
@@ -186,42 +214,25 @@ describe('POST /api/chat', () => {
       expect(status).toBe(200);
       expect(verifyIdToken).toHaveBeenCalledWith('valid-token');
     });
+  });
 
-    it('processes authenticated user requests', async () => {
-      vi.mocked(verifyIdToken).mockResolvedValueOnce({
-        uid: 'test-user-123',
-        email: 'test@example.com',
-      } as never);
-      vi.mocked(getUserDocument).mockResolvedValueOnce({
-        subscription: { tier: 'free' },
-        usage: { messagesUsedToday: 0 },
+  describe('Rate Limiting', () => {
+    it('returns rate limit response when exceeded', async () => {
+      vi.mocked(checkRateLimitSecure).mockResolvedValueOnce({
+        success: false,
+        response: new Response(JSON.stringify({ error: 'Rate limit exceeded' }), { status: 429 }),
       } as never);
 
       const request = createAuthenticatedRequest('POST', '/api/chat', {
         body: { message: 'Hello there', contactId: 'test-contact' },
       });
-
-      const response = await POST(request);
-      const { status, data } = await parseResponse(response);
-
-      // Route handles authenticated users and returns response
-      expect(status).toBe(200);
-      expect(data.success).toBe(true);
-      expect(data.data).toHaveProperty('content');
-    });
-  });
-
-  describe('Rate Limiting', () => {
-    it('returns rate limit response when exceeded', async () => {
-      const rateLimitResponse = new Response(
-        JSON.stringify({ error: 'Rate limit exceeded' }),
-        { status: 429 }
-      );
-      vi.mocked(applyRateLimit).mockResolvedValueOnce(rateLimitResponse as never);
-
-      const request = createMockRequest('POST', '/api/chat', {
-        body: { message: 'Hello there', contactId: 'test-contact' },
-      });
+      (request as any).userId = 'test-user-123';
+      (request as any).user = { uid: 'test-user-123', email: 'test@example.com' };
+      vi.mocked(verifyIdToken).mockResolvedValue({ uid: 'test-user-123', email: 'test@example.com' } as never);
+      vi.mocked(getUserDocument).mockResolvedValue({
+        subscription: { tier: 'free' },
+        usage: { messagesUsedToday: 0 },
+      } as never);
 
       const response = await POST(request);
       const { status, data } = await parseResponse(response);
@@ -245,6 +256,8 @@ describe('POST /api/chat', () => {
       const request = createAuthenticatedRequest('POST', '/api/chat', {
         body: { message: 'Hello there', contactId: 'test-contact' },
       });
+      (request as any).userId = 'test-user-123';
+      (request as any).user = { uid: 'test-user-123', email: 'test@example.com' };
 
       const response = await POST(request);
       const { status, data } = await parseResponse(response);
@@ -272,6 +285,8 @@ describe('POST /api/chat', () => {
           aiModel: 'claude-3-opus-20240229', // Premium model
         },
       });
+      (request as any).userId = 'test-user-123';
+      (request as any).user = { uid: 'test-user-123', email: 'test@example.com' };
 
       const response = await POST(request);
       const { status, data } = await parseResponse(response);
@@ -284,9 +299,19 @@ describe('POST /api/chat', () => {
 
   describe('AI Provider Fallback', () => {
     it('uses deepseek as default provider', async () => {
-      const request = createMockRequest('POST', '/api/chat', {
+      const request = createAuthenticatedRequest('POST', '/api/chat', {
         body: { message: 'Hello world test message', contactId: 'test-contact' },
       });
+      (request as any).userId = 'test-user-123';
+      (request as any).user = { uid: 'test-user-123', email: 'test@example.com' };
+      vi.mocked(verifyIdToken).mockResolvedValue({
+        uid: 'test-user-123',
+        email: 'test@example.com',
+      } as never);
+      vi.mocked(getUserDocument).mockResolvedValue({
+        subscription: { tier: 'free' },
+        usage: { messagesUsedToday: 0 },
+      } as never);
 
       const response = await POST(request);
       const { status, data } = await parseResponse(response);
@@ -305,9 +330,21 @@ describe('POST /api/chat', () => {
 
       const { POST: freshPOST } = await import('./route');
 
-      const request = createMockRequest('POST', '/api/chat', {
+      const request = createAuthenticatedRequest('POST', '/api/chat', {
         body: { message: 'Hello world test message', contactId: 'test-contact' },
       });
+      (request as any).userId = 'test-user-123';
+      (request as any).user = { uid: 'test-user-123', email: 'test@example.com' };
+      const { verifyIdToken: freshVerify } = await import('@/lib/firebase-admin');
+      vi.mocked(freshVerify).mockResolvedValue({
+        uid: 'test-user-123',
+        email: 'test@example.com',
+      } as never);
+      const { getUserDocument: gu } = await import('@/lib/firestore');
+      vi.mocked(gu).mockResolvedValue({
+        subscription: { tier: 'free' },
+        usage: { messagesUsedToday: 0 },
+      } as never);
 
       const response = await freshPOST(request);
       const { status, data } = await parseResponse(response);
@@ -324,7 +361,7 @@ describe('POST /api/chat', () => {
 
   describe('Success Cases', () => {
     it('returns response with correct format', async () => {
-      const request = createMockRequest('POST', '/api/chat', {
+      const request = createAuthenticatedRequest('POST', '/api/chat', {
         body: {
           message: 'Hello, how are you doing today?',
           contactId: 'test-contact',
@@ -332,6 +369,16 @@ describe('POST /api/chat', () => {
           aiProvider: 'deepseek', // Free tier only allows deepseek
         },
       });
+      vi.mocked(verifyIdToken).mockResolvedValueOnce({
+        uid: 'test-user-123',
+        email: 'test@example.com',
+      } as never);
+      vi.mocked(getUserDocument).mockResolvedValueOnce({
+        subscription: { tier: 'free' },
+        usage: { messagesUsedToday: 0 },
+      } as never);
+      (request as any).userId = 'test-user-123';
+      (request as any).user = { uid: 'test-user-123', email: 'test@example.com' };
 
       const response = await POST(request);
       const { status, data } = await parseResponse(response);
@@ -344,7 +391,7 @@ describe('POST /api/chat', () => {
     });
 
     it('handles conversation history', async () => {
-      const request = createMockRequest('POST', '/api/chat', {
+      const request = createAuthenticatedRequest('POST', '/api/chat', {
         body: {
           message: 'What did I say before in our conversation?',
           contactId: 'test-contact',
@@ -355,6 +402,16 @@ describe('POST /api/chat', () => {
           aiProvider: 'deepseek', // Free tier only allows deepseek
         },
       });
+      vi.mocked(verifyIdToken).mockResolvedValueOnce({
+        uid: 'test-user-123',
+        email: 'test@example.com',
+      } as never);
+      vi.mocked(getUserDocument).mockResolvedValueOnce({
+        subscription: { tier: 'free' },
+        usage: { messagesUsedToday: 0 },
+      } as never);
+      (request as any).userId = 'test-user-123';
+      (request as any).user = { uid: 'test-user-123', email: 'test@example.com' };
 
       const response = await POST(request);
       const { status, data } = await parseResponse(response);
