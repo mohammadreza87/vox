@@ -25,27 +25,30 @@ type RouteContext = { params: Promise<Record<string, string>> };
 
 /**
  * Route handler type for authenticated routes
+ * Supports both NextResponse and Response (for streaming)
  */
 type AuthenticatedHandler = (
   request: AuthenticatedRequest,
   context: RouteContext
-) => Promise<NextResponse>;
+) => Promise<NextResponse | Response>;
 
 /**
  * Route handler type for optionally authenticated routes
+ * Supports both NextResponse and Response (for streaming)
  */
 type OptionalAuthHandler = (
   request: NextRequest & { user?: DecodedIdToken; userId?: string },
   context: RouteContext
-) => Promise<NextResponse>;
+) => Promise<NextResponse | Response>;
 
 /**
  * Standard route handler type
+ * Supports both NextResponse and Response (for streaming)
  */
 type RouteHandler = (
   request: NextRequest,
   context: RouteContext
-) => Promise<NextResponse>;
+) => Promise<NextResponse | Response>;
 
 /**
  * Middleware wrapper that requires authentication
