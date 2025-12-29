@@ -1,5 +1,4 @@
-import { NextResponse } from 'next/server';
-import { withAuth, type AuthenticatedRequest } from '@/lib/middleware';
+import { NextRequest, NextResponse } from 'next/server';
 import {
   getVoicesRateLimiter,
   getRateLimitIdentifier,
@@ -11,11 +10,11 @@ let cachedVoices: any[] | null = null;
 let cacheTimestamp: number = 0;
 const CACHE_DURATION = 60 * 60 * 1000; // 1 hour
 
-async function handler(request: AuthenticatedRequest, _context?: unknown) {
+export async function GET(request: NextRequest) {
   try {
     const rateResult = await checkRateLimitSecure(
       getVoicesRateLimiter(),
-      getRateLimitIdentifier(request, request.userId),
+      getRateLimitIdentifier(request),
       10,
       60_000
     );
@@ -102,8 +101,6 @@ async function handler(request: AuthenticatedRequest, _context?: unknown) {
     });
   }
 }
-
-export const GET = withAuth(handler);
 
 // Default voices without preview URLs (will use TTS API for preview)
 function getDefaultVoices() {

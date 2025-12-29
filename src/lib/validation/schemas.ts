@@ -51,7 +51,7 @@ export const translateRequestSchema = z.object({
     .max(5000, 'Text too long (max 5,000 characters)'),
   sourceLanguage: z.string().max(50).optional(),
   targetLanguage: z.string().min(1, 'Target language is required').max(50),
-  voiceId: z.string().max(100), // Required for explicit voice selection
+  voiceId: z.string().max(100).optional(), // Optional - uses default if not provided
 });
 
 export type TranslateRequest = z.infer<typeof translateRequestSchema>;
