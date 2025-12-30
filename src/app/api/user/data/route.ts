@@ -1,7 +1,6 @@
-import { NextRequest } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { verifyIdToken, extractBearerToken, getAdminDb } from '@/lib/firebase-admin';
 import { Chat, Message } from '@/shared/types';
-import { success, unauthorized, serverError } from '@/lib/api/response';
 import { logger } from '@/lib/logger';
 import { withCache, cacheKeys, CACHE_TTL, cacheDelete } from '@/lib/cache';
 import {
@@ -15,12 +14,12 @@ export async function GET(request: NextRequest) {
   try {
     const token = extractBearerToken(request.headers.get('Authorization'));
     if (!token) {
-      return unauthorized();
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     const decodedToken = await verifyIdToken(token);
     if (!decodedToken) {
-      return unauthorized('Invalid token');
+      return NextResponse.json({ error: 'Invalid token' }, { status: 401 });
     }
 
     const rateResult = await checkRateLimitSecure(
@@ -75,10 +74,10 @@ export async function GET(request: NextRequest) {
       CACHE_TTL.USER_PREFERENCES
     );
 
-    return success(userData);
+    return NextResponse.json(userData);
   } catch (error) {
     logger.error({ error }, 'Error loading user data');
-    return serverError('Failed to load data');
+    return NextResponse.json({ error: 'Failed to load data' }, { status: 500 });
   }
 }
 
@@ -87,12 +86,12 @@ export async function POST(request: NextRequest) {
   try {
     const token = extractBearerToken(request.headers.get('Authorization'));
     if (!token) {
-      return unauthorized();
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     const decodedToken = await verifyIdToken(token);
     if (!decodedToken) {
-      return unauthorized('Invalid token');
+      return NextResponse.json({ error: 'Invalid token' }, { status: 401 });
     }
 
     const rateResult = await checkRateLimitSecure(
@@ -142,9 +141,9 @@ export async function POST(request: NextRequest) {
     // Invalidate cache after update
     await cacheDelete(cacheKeys.userPreferences(userId));
 
-    return success({ saved: true });
+    return NextResponse.json({ saved: true });
   } catch (error) {
     logger.error({ error }, 'Error saving user data');
-    return serverError('Failed to save data');
+    return NextResponse.json({ error: 'Failed to save data' }, { status: 500 });
   }
 }
