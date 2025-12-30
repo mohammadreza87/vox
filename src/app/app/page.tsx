@@ -81,6 +81,7 @@ function AppContent() {
   const [initialContactLoaded, setInitialContactLoaded] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
+  const recoveredContactsRef = useRef<Set<string>>(new Set());
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -248,8 +249,11 @@ function AppContent() {
 
     // Create fallback contact from chat data for custom contacts
     // This handles cases where customContacts haven't loaded yet or contact was lost
-    if (!contact && chat.contactId.startsWith('custom-')) {
-      const recoveredContact: PreMadeContactConfig = {
+    // Use ref to prevent infinite loop - only recover once per session
+    if (!contact && chat.contactId.startsWith('custom-') && !recoveredContactsRef.current.has(chat.contactId)) {
+      recoveredContactsRef.current.add(chat.contactId);
+
+      contact = {
         id: chat.contactId,
         name: chat.contactName,
         purpose: chat.contactPurpose || 'Custom Assistant',
@@ -268,8 +272,7 @@ function AppContent() {
       };
 
       // Add recovered contact to customContacts so it shows in Contacts tab
-      addContact(recoveredContact);
-      contact = recoveredContact;
+      addContact(contact);
     }
 
     if (contact) {

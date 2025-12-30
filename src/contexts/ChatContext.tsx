@@ -198,7 +198,27 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (mounted) {
       const storageKey = getChatsKey(user?.uid || null);
-      localStorage.setItem(storageKey, JSON.stringify(chats));
+      // Strip audioUrl from messages before saving to localStorage to prevent quota exceeded
+      // Audio is base64 encoded and very large - it's regenerated on demand anyway
+      const chatsForStorage = chats.map(chat => ({
+        ...chat,
+        messages: chat.messages.map(msg => ({
+          ...msg,
+          audioUrl: null, // Don't store audio in localStorage
+        })),
+      }));
+      try {
+        localStorage.setItem(storageKey, JSON.stringify(chatsForStorage));
+      } catch (e) {
+        // If quota exceeded, try to clear old data and save again
+        console.warn('localStorage quota exceeded, clearing old chat data');
+        localStorage.removeItem(storageKey);
+        try {
+          localStorage.setItem(storageKey, JSON.stringify(chatsForStorage));
+        } catch {
+          console.error('Failed to save chats to localStorage');
+        }
+      }
 
       // Also sync to cloud (debounced)
       if (user && chats.length >= 0) {
