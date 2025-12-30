@@ -34,6 +34,27 @@ function debounce<T extends (...args: Parameters<T>) => void>(
   };
 }
 
+// Deduplicate messages by ID or by content+timestamp
+function deduplicateMessages(messages: Message[]): Message[] {
+  const seen = new Map<string, Message>();
+  for (const msg of messages) {
+    // Use message ID as primary key
+    const key = msg.id || `${msg.content}-${msg.role}-${new Date(msg.createdAt).getTime()}`;
+    if (!seen.has(key)) {
+      seen.set(key, msg);
+    }
+  }
+  return Array.from(seen.values());
+}
+
+// Deduplicate messages in all chats
+function deduplicateChats(chats: Chat[]): Chat[] {
+  return chats.map(chat => ({
+    ...chat,
+    messages: deduplicateMessages(chat.messages),
+  }));
+}
+
 export function ChatProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
   const [chats, setChats] = useState<Chat[]>([]);
@@ -92,8 +113,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       // Handle standardized API response format
       const data = responseData.data || responseData;
       if (data.chats && data.chats.length > 0) {
-        // Convert date strings to Date objects
-        return data.chats.map((chat: Chat) => ({
+        // Convert date strings to Date objects and deduplicate messages
+        const chatsWithDates = data.chats.map((chat: Chat) => ({
           ...chat,
           lastMessageAt: new Date(chat.lastMessageAt),
           messages: (chat.messages || []).map((msg: Message) => ({
@@ -101,6 +122,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             createdAt: new Date(msg.createdAt),
           })),
         }));
+        return deduplicateChats(chatsWithDates);
       }
       return [];
     } catch (error) {
@@ -142,16 +164,18 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                 const chatsWithDates = parsed.map((chat: Chat) => ({
                   ...chat,
                   lastMessageAt: new Date(chat.lastMessageAt),
-                  messages: chat.messages.map((msg: Message) => ({
+                  messages: (chat.messages || []).map((msg: Message) => ({
                     ...msg,
                     createdAt: new Date(msg.createdAt),
                   })),
                 }));
-                setChats(chatsWithDates);
+                // Deduplicate messages
+                const deduped = deduplicateChats(chatsWithDates);
+                setChats(deduped);
 
-                // Sync localStorage data to cloud if it exists
-                if (chatsWithDates.length > 0) {
-                  saveToCloud(chatsWithDates);
+                // Sync deduplicated data to cloud
+                if (deduped.length > 0) {
+                  saveToCloud(deduped);
                 }
               } catch (e) {
                 console.error('Error loading chats:', e);
@@ -174,12 +198,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               const chatsWithDates = parsed.map((chat: Chat) => ({
                 ...chat,
                 lastMessageAt: new Date(chat.lastMessageAt),
-                messages: chat.messages.map((msg: Message) => ({
+                messages: (chat.messages || []).map((msg: Message) => ({
                   ...msg,
                   createdAt: new Date(msg.createdAt),
                 })),
               }));
-              setChats(chatsWithDates);
+              // Deduplicate messages
+              setChats(deduplicateChats(chatsWithDates));
             } catch (e) {
               console.error('Error loading chats:', e);
               setChats([]);
