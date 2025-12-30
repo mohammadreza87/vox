@@ -13,6 +13,8 @@ const CSP_DIRECTIVES = {
     "'self'",
     "'unsafe-inline'", // Required for Next.js
     "'unsafe-eval'", // Required for Next.js in development
+    'blob:', // Required for ElevenLabs AudioWorklet modules
+    'data:', // Required for ElevenLabs AudioWorklet modules
     'https://js.stripe.com',
     'https://telegram.org',
     'https://oauth.telegram.org',
@@ -37,6 +39,7 @@ const CSP_DIRECTIVES = {
     'https://identitytoolkit.googleapis.com',
     'https://securetoken.googleapis.com',
     'https://api.elevenlabs.io',
+    'wss://api.elevenlabs.io', // ElevenLabs Conversational AI WebSocket
     'https://api.stripe.com',
     'https://api.openai.com',
     'https://api.anthropic.com',

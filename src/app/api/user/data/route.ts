@@ -25,7 +25,7 @@ export async function GET(request: NextRequest) {
     const rateResult = await checkRateLimitSecure(
       getV2ApiRateLimiter(),
       getRateLimitIdentifier(request, decodedToken.uid),
-      30,
+      120, // Increased from 30 - multiple contexts load data on mount
       60_000
     );
     if (!rateResult.success && rateResult.response) {
@@ -97,7 +97,7 @@ export async function POST(request: NextRequest) {
     const rateResult = await checkRateLimitSecure(
       getV2ApiRateLimiter(),
       getRateLimitIdentifier(request, decodedToken.uid),
-      30,
+      120, // Increased from 30 - debounced saves can still be frequent
       60_000
     );
     if (!rateResult.success && rateResult.response) {

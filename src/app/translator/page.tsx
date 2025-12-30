@@ -23,49 +23,15 @@ import {
   ChevronDown,
   Play,
   StopCircle,
+  Upload,
+  Phone,
 } from 'lucide-react';
 import { cn } from '@/shared/utils/cn';
+import { LiveTranslationModal } from '@/features/call';
 import { useEntranceAnimation } from '@/hooks/useAnimations';
 import { ClonedVoice } from '@/shared/types';
 
-// Web Speech API types
-interface SpeechRecognitionEvent extends Event {
-  resultIndex: number;
-  results: SpeechRecognitionResultList;
-}
-
-interface SpeechRecognitionResultList {
-  length: number;
-  [index: number]: SpeechRecognitionResult;
-}
-
-interface SpeechRecognitionResult {
-  isFinal: boolean;
-  length: number;
-  [index: number]: SpeechRecognitionAlternative;
-}
-
-interface SpeechRecognitionAlternative {
-  transcript: string;
-  confidence: number;
-}
-
-interface SpeechRecognitionErrorEvent extends Event {
-  error: string;
-  message: string;
-}
-
-interface SpeechRecognitionInstance extends EventTarget {
-  continuous: boolean;
-  interimResults: boolean;
-  lang: string;
-  start: () => void;
-  stop: () => void;
-  abort: () => void;
-  onresult: ((event: SpeechRecognitionEvent) => void) | null;
-  onerror: ((event: SpeechRecognitionErrorEvent) => void) | null;
-  onend: (() => void) | null;
-}
+// MediaRecorder state for Whisper-based speech-to-text
 
 export default function TranslatorPage() {
   return (
@@ -203,14 +169,22 @@ function SetupFlow({
   const [isCloning, setIsCloning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isPlayingRecording, setIsPlayingRecording] = useState(false);
+  const [showUploadOption, setShowUploadOption] = useState(false);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordedAudioRef = useRef<HTMLAudioElement | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const recordingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const sampleText = getSampleText(sourceLanguage);
   const selectedLang = SUPPORTED_LANGUAGES.find(l => l.code === sourceLanguage);
+
+  // Detect Telegram WebApp
+  const isInTelegram = typeof window !== 'undefined' && (
+    window.navigator.userAgent.includes('Telegram') ||
+    (window as any).Telegram?.WebApp
+  );
 
   // Recording functions
   const startRecording = async () => {
@@ -243,17 +217,42 @@ function SetupFlow({
     } catch (err: any) {
       console.error('Failed to start recording:', err);
 
+      // Show upload option as fallback
+      setShowUploadOption(true);
+
       // Provide helpful error messages based on error type
       if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
-        setError('No microphone found. Please connect a microphone and try again.');
+        setError('No microphone detected. Please check your device settings or upload an audio file instead.');
       } else if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-        setError('Microphone access denied. Please allow microphone access in your browser settings.');
+        setError('Microphone access denied. Please allow access in browser settings or upload an audio file.');
       } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
-        setError('Microphone is in use by another app. Please close other apps using the microphone.');
+        setError('Microphone is busy or unavailable. Try closing other apps or upload an audio file.');
       } else {
-        setError('Could not access microphone. Please check your device settings.');
+        setError('Could not access microphone. Please upload an audio file instead.');
       }
     }
+  };
+
+  // Handle file upload
+  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    // Check if it's an audio file
+    if (!file.type.startsWith('audio/')) {
+      setError('Please select an audio file (MP3, WAV, M4A, etc.)');
+      return;
+    }
+
+    // Check file size (max 25MB)
+    if (file.size > 25 * 1024 * 1024) {
+      setError('File too large. Maximum size is 25MB.');
+      return;
+    }
+
+    setError(null);
+    setRecordedAudio(file);
+    setRecordingDuration(30); // Assume uploaded files are adequate length
   };
 
   const stopRecording = () => {
@@ -332,11 +331,15 @@ function SetupFlow({
         body: formData,
       });
 
-      const data = await response.json();
+      const responseData = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error || 'Failed to clone voice');
+        throw new Error(responseData.error || 'Failed to clone voice');
       }
+
+      // Unwrap standardized API response format
+      const data = responseData.data || responseData;
+      console.log('Voice cloning response:', data);
 
       saveTranslatorVoice({
         voiceId: data.voice_id,
@@ -500,10 +503,20 @@ function SetupFlow({
                 <p className="text-[var(--foreground)]/80 leading-relaxed">{sampleText}</p>
               </div>
 
+              {/* Hidden file input for uploads */}
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="audio/*"
+                onChange={handleFileUpload}
+                className="hidden"
+              />
+
               {/* Recording controls */}
               <div className="flex flex-col items-center gap-4">
                 {!recordedAudio ? (
                   <>
+                    {/* Record button */}
                     <button
                       onClick={isRecording ? stopRecording : startRecording}
                       className={cn(
@@ -528,7 +541,25 @@ function SetupFlow({
                       </div>
                     )}
                     {!isRecording && (
-                      <p className="text-sm text-[var(--foreground)]/60">Tap to start recording</p>
+                      <>
+                        <p className="text-sm text-[var(--foreground)]/60">Tap to start recording</p>
+
+                        {/* Upload option - always available as alternative */}
+                        <div className="w-full mt-6 space-y-3">
+                          <div className="flex items-center gap-3">
+                            <div className="flex-1 h-px bg-white/10" />
+                            <span className="text-xs text-[var(--foreground)]/40">or</span>
+                            <div className="flex-1 h-px bg-white/10" />
+                          </div>
+                          <button
+                            onClick={() => fileInputRef.current?.click()}
+                            className="w-full flex items-center justify-center gap-2 py-3 rounded-xl liquid-card hover:bg-white/20 text-[var(--foreground)]/70 transition-colors"
+                          >
+                            <Upload className="w-4 h-4" />
+                            Upload Audio File
+                          </button>
+                        </div>
+                      </>
                     )}
                   </>
                 ) : (
@@ -744,6 +775,9 @@ function TranslatorInterface({
   // Last translation result (only show the most recent)
   const [lastTranslation, setLastTranslation] = useState<TranslationMessage | null>(null);
 
+  // Live translation modal state
+  const [isLiveTranslateOpen, setIsLiveTranslateOpen] = useState(false);
+
   // Audio playback state
   const [isPlaying, setIsPlaying] = useState(false);
   const [playingLang, setPlayingLang] = useState<'source' | 'target' | null>(null);
@@ -753,44 +787,27 @@ function TranslatorInterface({
   const [showSourcePicker, setShowSourcePicker] = useState(false);
   const [showTargetPicker, setShowTargetPicker] = useState(false);
 
-  // Speech recognition support
-  const [speechSupported, setSpeechSupported] = useState(true);
+  // Recording support (using MediaRecorder + Whisper)
+  const [recordingSupported, setRecordingSupported] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [isTranscribing, setIsTranscribing] = useState(false);
 
   // Refs
-  const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const currentTextRef = useRef<string>('');
+  const mediaStreamRef = useRef<MediaStream | null>(null);
 
   const sourceLang = SUPPORTED_LANGUAGES.find(l => l.code === sourceLanguage);
   const targetLang = SUPPORTED_LANGUAGES.find(l => l.code === targetLanguage);
 
-  // Keep ref in sync
-  useEffect(() => {
-    currentTextRef.current = currentText;
-  }, [currentText]);
-
-  // Initialize speech recognition
+  // Check if MediaRecorder is supported
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      const windowWithSpeech = window as typeof window & {
-        SpeechRecognition?: new () => SpeechRecognitionInstance;
-        webkitSpeechRecognition?: new () => SpeechRecognitionInstance;
-      };
-      const SpeechRecognitionAPI = windowWithSpeech.SpeechRecognition || windowWithSpeech.webkitSpeechRecognition;
-      if (SpeechRecognitionAPI) {
-        try {
-          recognitionRef.current = new SpeechRecognitionAPI();
-          recognitionRef.current.continuous = true;
-          recognitionRef.current.interimResults = true;
-          console.log('Speech recognition initialized');
-        } catch (e) {
-          console.error('Failed to init speech recognition:', e);
-          setSpeechSupported(false);
-        }
-      } else {
-        console.log('Speech recognition not supported');
-        setSpeechSupported(false);
+      const isSupported = typeof MediaRecorder !== 'undefined' && navigator.mediaDevices?.getUserMedia;
+      setRecordingSupported(!!isSupported);
+      if (!isSupported) {
+        console.log('MediaRecorder not supported');
       }
     }
   }, []);
@@ -903,150 +920,157 @@ function TranslatorInterface({
     }
   }, [isPlaying, playingLang, lastTranslation, voiceId, stopAudio, playAudioUrl]);
 
-  // Detect if running in Telegram WebApp
-  const isInTelegram = typeof window !== 'undefined' && (
-    window.navigator.userAgent.includes('Telegram') ||
-    (window as any).Telegram?.WebApp
-  );
-
-  // Start recording
+  // Start recording using MediaRecorder
   const startRecording = useCallback(async () => {
-    console.log('startRecording called, recognitionRef:', !!recognitionRef.current, 'isInTelegram:', isInTelegram);
+    console.log('startRecording called');
     setError(null);
-
-    // In Telegram WebApp, getUserMedia often fails - skip it and try SpeechRecognition directly
-    if (!isInTelegram) {
-      // For regular browsers, request mic permission first
-      try {
-        console.log('Requesting microphone permission...');
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        console.log('Microphone permission granted');
-        stream.getTracks().forEach(track => track.stop());
-      } catch (err: any) {
-        console.error('Microphone permission error:', err);
-        // Don't block - try SpeechRecognition anyway as it might work
-        console.log('Continuing to try SpeechRecognition...');
-      }
-    }
-
-    if (!recognitionRef.current) {
-      // Try to reinitialize if not available
-      const windowWithSpeech = window as typeof window & {
-        SpeechRecognition?: new () => SpeechRecognitionInstance;
-        webkitSpeechRecognition?: new () => SpeechRecognitionInstance;
-      };
-      const SpeechRecognitionAPI = windowWithSpeech.SpeechRecognition || windowWithSpeech.webkitSpeechRecognition;
-      if (SpeechRecognitionAPI) {
-        recognitionRef.current = new SpeechRecognitionAPI();
-        recognitionRef.current.continuous = true;
-        recognitionRef.current.interimResults = true;
-        console.log('Speech recognition re-initialized');
-      } else {
-        console.error('Speech recognition not available');
-        setError('Speech recognition is not available. Try using Chrome browser.');
-        return;
-      }
-    }
-
     stopAudio();
     setCurrentText('');
-    currentTextRef.current = '';
-
-    recognitionRef.current.lang = sourceLanguage;
-
-    recognitionRef.current.onresult = (event) => {
-      let transcript = '';
-      for (let i = 0; i < event.results.length; i++) {
-        transcript += event.results[i][0].transcript;
-      }
-      console.log('Transcript:', transcript);
-      setCurrentText(transcript);
-      currentTextRef.current = transcript;
-    };
-
-    recognitionRef.current.onerror = (event) => {
-      console.error('Speech recognition error:', event.error, event.message);
-      setIsRecording(false);
-      if (event.error === 'not-allowed') {
-        if (isInTelegram) {
-          setError('Voice input not supported in Telegram. Use text input below or open in Chrome browser.');
-        } else {
-          setError('Microphone blocked. Please allow access in browser settings.');
-        }
-      } else if (event.error === 'no-speech') {
-        // This is normal if user releases before speaking
-        console.log('No speech detected');
-      } else if (event.error !== 'aborted') {
-        setError(`Speech error: ${event.error}. Try using text input instead.`);
-      }
-    };
-
-    recognitionRef.current.onend = () => {
-      console.log('Speech recognition ended');
-    };
-
-    // Set recording state immediately so UI updates
-    setIsRecording(true);
+    audioChunksRef.current = [];
 
     try {
-      // Always try to abort first to ensure clean state
-      try {
-        recognitionRef.current.abort();
-      } catch {
-        // Ignore abort errors
+      console.log('Requesting microphone permission...');
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        }
+      });
+      console.log('Microphone permission granted');
+      mediaStreamRef.current = stream;
+
+      // Determine best supported format
+      let mimeType = 'audio/webm';
+      if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+        mimeType = 'audio/webm;codecs=opus';
+      } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
+        mimeType = 'audio/mp4';
+      } else if (MediaRecorder.isTypeSupported('audio/ogg')) {
+        mimeType = 'audio/ogg';
       }
 
-      // Small delay to ensure clean state after abort
-      setTimeout(() => {
-        try {
-          recognitionRef.current?.start();
-          console.log('Recording started successfully');
-        } catch (e) {
-          console.error('Failed to start recognition after delay:', e);
-          setIsRecording(false);
-          setError('Could not start speech recognition. Try Chrome browser.');
-        }
-      }, 50);
-    } catch (e) {
-      console.error('Could not start recognition:', e);
-      setIsRecording(false);
-      setError('Could not start speech recognition. Try Chrome browser.');
-    }
-  }, [sourceLanguage, stopAudio, isInTelegram]);
+      const mediaRecorder = new MediaRecorder(stream, { mimeType });
+      mediaRecorderRef.current = mediaRecorder;
 
-  // Stop recording and translate
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorder.onerror = (event) => {
+        console.error('MediaRecorder error:', event);
+        setIsRecording(false);
+        setError('Recording failed. Please try again.');
+      };
+
+      mediaRecorder.start(100); // Collect data every 100ms
+      setIsRecording(true);
+      console.log('Recording started successfully');
+    } catch (err: any) {
+      console.error('Failed to start recording:', err);
+      setIsRecording(false);
+
+      if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+        setError('No microphone found. Please connect a microphone.');
+      } else if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+        setError('Microphone access denied. Please allow microphone in browser settings.');
+      } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
+        setError('Microphone is in use by another app.');
+      } else {
+        setError('Could not access microphone. Please check your device settings.');
+      }
+    }
+  }, [stopAudio]);
+
+  // Stop recording and transcribe with Whisper, then translate
   const stopRecording = useCallback(async () => {
     console.log('stopRecording called');
 
-    if (!recognitionRef.current) {
-      console.log('No recognition ref');
+    if (!mediaRecorderRef.current) {
+      console.log('No media recorder ref');
       return;
     }
 
-    try {
-      recognitionRef.current.stop();
-    } catch (e) {
-      console.log('Error stopping recognition:', e);
-    }
     setIsRecording(false);
 
-    // Wait a bit for final results
-    await new Promise(resolve => setTimeout(resolve, 200));
+    // Stop the media recorder and wait for it to finish
+    const mediaRecorder = mediaRecorderRef.current;
+    const stream = mediaStreamRef.current;
 
-    const text = currentTextRef.current;
-    console.log('Captured text:', text);
+    await new Promise<void>((resolve) => {
+      mediaRecorder.onstop = () => resolve();
+      mediaRecorder.stop();
+    });
 
-    if (!text.trim()) {
-      console.log('No text captured');
-      setError('No speech detected. Hold the button and speak clearly.');
+    // Stop all tracks
+    if (stream) {
+      stream.getTracks().forEach(track => track.stop());
+      mediaStreamRef.current = null;
+    }
+
+    // Check if we have audio data
+    if (audioChunksRef.current.length === 0) {
+      console.log('No audio chunks');
+      setError('No audio recorded. Please try again.');
       return;
     }
 
-    setIsTranslating(true);
+    // Create audio blob
+    const audioBlob = new Blob(audioChunksRef.current, { type: mediaRecorder.mimeType });
+    console.log('Audio blob created, size:', audioBlob.size, 'type:', audioBlob.type);
+
+    if (audioBlob.size < 1000) {
+      console.log('Audio too short');
+      setError('Recording too short. Hold the button and speak.');
+      return;
+    }
+
+    // Transcribe with Whisper
+    setIsTranscribing(true);
+    setCurrentText('Transcribing...');
 
     try {
       const token = await auth.currentUser?.getIdToken();
-      const response = await fetch('/api/translate', {
+
+      // Send to STT API
+      const formData = new FormData();
+      formData.append('audio', audioBlob, 'recording.webm');
+      formData.append('language', sourceLang?.name || sourceLanguage);
+
+      console.log('Sending to STT API...');
+      const sttResponse = await fetch('/api/stt', {
+        method: 'POST',
+        headers: {
+          ...(token && { Authorization: `Bearer ${token}` }),
+        },
+        body: formData,
+      });
+
+      const sttData = await sttResponse.json();
+      console.log('STT response:', sttData);
+
+      if (!sttResponse.ok) {
+        throw new Error(sttData.error || 'Transcription failed');
+      }
+
+      const text = sttData.text?.trim();
+      if (!text) {
+        setCurrentText('');
+        setError('No speech detected. Hold the button and speak clearly.');
+        setIsTranscribing(false);
+        return;
+      }
+
+      console.log('Transcribed text:', text);
+      setCurrentText(text);
+      setIsTranscribing(false);
+
+      // Now translate
+      setIsTranslating(true);
+
+      const translateResponse = await fetch('/api/translate', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1060,19 +1084,19 @@ function TranslatorInterface({
         }),
       });
 
-      const responseData = await response.json();
+      const responseData = await translateResponse.json();
       console.log('Translate response:', responseData);
-      if (!response.ok) throw new Error(responseData.error || 'Translation failed');
+      if (!translateResponse.ok) throw new Error(responseData.error || 'Translation failed');
 
       // Handle both direct and standardized response formats
       const data = responseData.data || responseData;
 
-      let audioUrl: string | undefined;
+      let translatedAudioUrl: string | undefined;
       if (data.audio) {
         console.log('Audio data received, length:', data.audio.length);
-        const audioBlob = base64ToBlob(data.audio, 'audio/mpeg');
-        audioUrl = URL.createObjectURL(audioBlob);
-        console.log('Audio URL created:', audioUrl);
+        const audioB = base64ToBlob(data.audio, 'audio/mpeg');
+        translatedAudioUrl = URL.createObjectURL(audioB);
+        console.log('Audio URL created:', translatedAudioUrl);
       } else {
         console.warn('No audio in response');
       }
@@ -1083,22 +1107,24 @@ function TranslatorInterface({
         translatedText: data.translatedText,
         sourceLanguage,
         targetLanguage,
-        audioUrl,
+        audioUrl: translatedAudioUrl,
         timestamp: new Date(),
         speaker: 'me',
       };
 
       setLastTranslation(newTranslation);
       setCurrentText('');
-      currentTextRef.current = '';
 
       // Auto-play the translated audio
-      if (audioUrl) {
-        await playAudioUrl(audioUrl, 'target');
+      if (translatedAudioUrl) {
+        await playAudioUrl(translatedAudioUrl, 'target');
       }
-    } catch (error) {
-      console.error('Translation error:', error);
+    } catch (err) {
+      console.error('Error:', err);
+      setError(err instanceof Error ? err.message : 'Failed to process recording');
+      setCurrentText('');
     } finally {
+      setIsTranscribing(false);
       setIsTranslating(false);
     }
   }, [sourceLanguage, targetLanguage, voiceId, sourceLang, targetLang, playAudioUrl]);
@@ -1299,19 +1325,31 @@ function TranslatorInterface({
       {/* Main content area - shows last translation only */}
       <div className="flex-1 overflow-y-auto p-4">
         <div className="max-w-2xl mx-auto h-full flex flex-col justify-center">
-          {!lastTranslation && !isRecording && !currentText && !isTranslating ? (
+          {!lastTranslation && !isRecording && !currentText && !isTranslating && !isTranscribing ? (
             /* Empty state */
             <div className="text-center py-8">
               <div className="w-24 h-24 liquid-card rounded-full flex items-center justify-center mx-auto mb-6">
                 <Languages className="w-12 h-12 text-[#FF6D1F]" />
               </div>
               <h3 className="text-xl font-bold text-[var(--foreground)] mb-2">Ready to Translate</h3>
-              <p className="text-[var(--foreground)]/60 max-w-xs mx-auto">
-                {speechSupported
+              <p className="text-[var(--foreground)]/60 max-w-xs mx-auto mb-6">
+                {recordingSupported
                   ? `Type or speak in ${sourceLang?.name}`
                   : `Type in ${sourceLang?.name} to translate`
                 }
               </p>
+
+              {/* Live Translate Button */}
+              <button
+                onClick={() => setIsLiveTranslateOpen(true)}
+                className="inline-flex items-center gap-3 px-6 py-4 rounded-2xl bg-gradient-to-r from-[#FF6D1F] to-[#ff8a4c] text-white font-semibold shadow-lg shadow-[#FF6D1F]/30 hover:scale-105 transition-transform"
+              >
+                <Phone className="w-5 h-5" />
+                <div className="text-left">
+                  <div className="text-base">Live Translate</div>
+                  <div className="text-xs opacity-80">Real-time voice translation</div>
+                </div>
+              </button>
             </div>
           ) : (
             <div className="space-y-6">
@@ -1355,11 +1393,13 @@ function TranslatorInterface({
                 </div>
               )}
 
-              {/* Translation loading */}
-              {isTranslating && (
+              {/* Transcribing/Translation loading */}
+              {(isTranscribing || isTranslating) && (
                 <div className="liquid-card rounded-2xl p-5 flex items-center justify-center">
                   <Loader2 className="w-6 h-6 animate-spin text-[#FF6D1F] mr-3" />
-                  <span className="text-[var(--foreground)]/60">Translating...</span>
+                  <span className="text-[var(--foreground)]/60">
+                    {isTranscribing ? 'Transcribing...' : 'Translating...'}
+                  </span>
                 </div>
               )}
 
@@ -1446,22 +1486,32 @@ function TranslatorInterface({
           </button>
 
           {/* Mic button (if supported) */}
-          {speechSupported && (
+          {recordingSupported && (
             <SimpleMicButton
               isRecording={isRecording}
-              isTranslating={isTranslating}
+              isProcessing={isTranslating || isTranscribing}
               onStart={startRecording}
               onStop={stopRecording}
             />
           )}
         </div>
 
-        {!speechSupported && (
+        {!recordingSupported && (
           <p className="text-center text-xs text-[var(--foreground)]/40 mt-2">
             Voice input not available in this browser
           </p>
         )}
       </div>
+
+      {/* Live Translation Modal */}
+      <LiveTranslationModal
+        isOpen={isLiveTranslateOpen}
+        onClose={() => setIsLiveTranslateOpen(false)}
+        sourceLanguage={sourceLanguage}
+        targetLanguage={targetLanguage}
+        voiceId={voiceId}
+        onSwapLanguages={swapLanguages}
+      />
     </div>
   );
 }
@@ -1469,19 +1519,19 @@ function TranslatorInterface({
 // Simple Mic Button Component
 function SimpleMicButton({
   isRecording,
-  isTranslating,
+  isProcessing,
   onStart,
   onStop,
 }: {
   isRecording: boolean;
-  isTranslating: boolean;
+  isProcessing: boolean;
   onStart: () => void;
   onStop: () => void;
 }) {
   const buttonRef = useRef<HTMLButtonElement>(null);
   // Use refs to avoid stale closures in event handlers
   const isRecordingRef = useRef(isRecording);
-  const isTranslatingRef = useRef(isTranslating);
+  const isProcessingRef = useRef(isProcessing);
   const onStartRef = useRef(onStart);
   const onStopRef = useRef(onStop);
 
@@ -1491,8 +1541,8 @@ function SimpleMicButton({
   }, [isRecording]);
 
   useEffect(() => {
-    isTranslatingRef.current = isTranslating;
-  }, [isTranslating]);
+    isProcessingRef.current = isProcessing;
+  }, [isProcessing]);
 
   useEffect(() => {
     onStartRef.current = onStart;
@@ -1510,7 +1560,7 @@ function SimpleMicButton({
       e.preventDefault();
       e.stopPropagation();
       button.setPointerCapture(e.pointerId);
-      if (!isTranslatingRef.current) {
+      if (!isProcessingRef.current && !isRecordingRef.current) {
         console.log('Mic button: pointer down, starting...');
         onStartRef.current();
       }
@@ -1558,18 +1608,18 @@ function SimpleMicButton({
   return (
     <button
       ref={buttonRef}
-      disabled={isTranslating}
+      disabled={isProcessing}
       className={cn(
         "w-20 h-20 rounded-full flex items-center justify-center transition-all select-none relative",
         isRecording
           ? "bg-red-500 liquid-recording"
-          : isTranslating
+          : isProcessing
           ? "liquid-card cursor-wait"
           : "liquid-button hover:scale-105"
       )}
       style={{ touchAction: 'none', WebkitTouchCallout: 'none', WebkitUserSelect: 'none', userSelect: 'none' }}
     >
-      {isTranslating ? (
+      {isProcessing ? (
         <Loader2 className="w-8 h-8 text-[var(--foreground)]/60 animate-spin" />
       ) : isRecording ? (
         <MicOff className="w-8 h-8 text-white relative z-10" />

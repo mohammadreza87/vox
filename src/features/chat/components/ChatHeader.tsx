@@ -7,9 +7,10 @@ import { PreMadeContactConfig, Contact } from '@/shared/types';
 
 interface ChatHeaderProps {
   contact: PreMadeContactConfig | Contact;
+  onCallClick?: () => void;
 }
 
-export function ChatHeader({ contact }: ChatHeaderProps) {
+export function ChatHeader({ contact, onCallClick }: ChatHeaderProps) {
   return (
     <header className="sticky top-0 z-50 bg-[var(--background)] border-b border-[var(--foreground)]/10 transition-colors">
       <div className="flex items-center gap-3 px-4 py-3">
@@ -39,7 +40,11 @@ export function ChatHeader({ contact }: ChatHeaderProps) {
 
         {/* Action Buttons */}
         <div className="flex items-center gap-2">
-          <button className="w-10 h-10 rounded-full bg-[#FF6D1F]/10 flex items-center justify-center hover:bg-[#FF6D1F]/20 transition-colors">
+          <button
+            onClick={onCallClick}
+            className="w-10 h-10 rounded-full bg-[#FF6D1F]/10 flex items-center justify-center hover:bg-[#FF6D1F]/20 transition-colors"
+            title="Start voice call"
+          >
             <Phone className="w-5 h-5 text-[#FF6D1F]" />
           </button>
           <button className="w-10 h-10 rounded-full bg-[var(--color-beige)] flex items-center justify-center hover:opacity-80 transition-all">

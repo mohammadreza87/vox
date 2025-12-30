@@ -23,9 +23,9 @@ export const config = {
     modelId: 'eleven_monolingual_v1',
   },
 
-  // Gemini configuration
+  // Gemini configuration (Vertex AI)
   gemini: {
-    model: 'gemini-2.0-flash-exp',
+    model: 'gemini-2.0-flash-001',
     maxTokens: 1024,
     temperature: 0.7,
   },

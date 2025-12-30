@@ -105,8 +105,8 @@ function CreateContactPageContent() {
   const [isUploadingImage, setIsUploadingImage] = useState(false);
 
   // AI Model state - defaults set by useEffect based on tier
-  const [aiProvider, setAiProvider] = useState<AIProvider>('deepseek');
-  const [aiModel, setAiModel] = useState('deepseek-chat');
+  const [aiProvider, setAiProvider] = useState<AIProvider>('gemini');
+  const [aiModel, setAiModel] = useState('gemini-2.0-flash-001');
 
   const [isCreating, setIsCreating] = useState(false);
 
@@ -191,8 +191,8 @@ function CreateContactPageContent() {
   useEffect(() => {
     // Only set default if not editing and haven't set it yet
     if (!editContactId && !hasSetTierDefault && tier) {
-      const defaultProvider: AIProvider = tier === 'free' ? 'deepseek' : 'openai';
-      const defaultModel = tier === 'free' ? 'deepseek-chat' : 'gpt-4o';
+      const defaultProvider: AIProvider = 'gemini';
+      const defaultModel = 'gemini-2.0-flash-001';
       setAiProvider(defaultProvider);
       setAiModel(defaultModel);
       setHasSetTierDefault(true);

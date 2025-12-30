@@ -10,10 +10,10 @@ export const FREE_MODELS = [
 
 export const PRO_MODELS = [
   ...FREE_MODELS,
-  'gemini-2.0-flash',
+  'gemini-2.0-flash-001',
+  'gemini-2.0-pro-exp-02-05',
   'gpt-4o-mini',
   'claude-3-5-haiku-20241022',
-  'gemini-1.5-pro',
   'gpt-4o',
   'claude-sonnet-4-20250514',
 ];
@@ -48,11 +48,11 @@ export const SUBSCRIPTION_TIERS: Record<SubscriptionTier, TierConfig> = {
     monthlyPrice: 0,
     annualPrice: 0,
     features: {
-      dailyMessageLimit: 20,
-      customContactsLimit: 1,
-      voiceCloning: false,
-      editDefaultBots: false,
-      availableModels: FREE_MODELS,
+      dailyMessageLimit: Infinity, // Unlimited for now
+      customContactsLimit: Infinity, // Unlimited for now
+      voiceCloning: true,
+      editDefaultBots: true,
+      availableModels: MAX_MODELS, // All models available
     },
   },
   pro: {

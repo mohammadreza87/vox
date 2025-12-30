@@ -20,7 +20,7 @@ async function handler(request: AuthenticatedRequest) {
     const rateResult = await checkRateLimitSecure(
       getApiRateLimiter(),
       getRateLimitIdentifier(request, request.userId),
-      20,
+      60, // 60 TTS requests per minute
       60_000
     );
     if (!rateResult.success && rateResult.response) {

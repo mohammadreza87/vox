@@ -31,7 +31,7 @@ export async function POST(request: NextRequest) {
     const rateResult = await checkRateLimitSecure(
       getVoiceCloneRateLimiter(),
       getRateLimitIdentifier(request, userId),
-      1,
+      5, // Allow 5 voice clones per 10 minutes
       10 * 60_000
     );
     if (!rateResult.success && rateResult.response) {

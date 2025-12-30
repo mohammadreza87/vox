@@ -7,6 +7,7 @@ import { ProtectedRoute } from '@/components/ProtectedRoute';
 import { useAuth } from '@/contexts/AuthContext';
 import { useChat } from '@/contexts/ChatContext';
 import { PRE_MADE_CONTACTS, getPreMadeContact } from '@/features/contacts/data/premade-contacts';
+import { CallModal } from '@/features/call';
 import { useVoiceRecording } from '@/features/voice/hooks/useVoiceRecording';
 import { useTextToSpeech } from '@/features/voice/hooks/useTextToSpeech';
 import { useStreamingChat } from '@/hooks/useStreamingChat';
@@ -44,6 +45,7 @@ import {
   CreditCard,
   ChevronUp,
   Languages,
+  Phone,
 } from 'lucide-react';
 // ThemeToggle removed - now only in settings
 import { cn } from '@/shared/utils/cn';
@@ -80,6 +82,7 @@ function AppContent() {
   const [showMobileSidebar, setShowMobileSidebar] = useState(true);
   const [initialContactLoaded, setInitialContactLoaded] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
+  const [isCallModalOpen, setIsCallModalOpen] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
   const recoveredContactsRef = useRef<Set<string>>(new Set());
 
@@ -224,6 +227,13 @@ function AppContent() {
   };
 
   const handleSelectContact = (contact: PreMadeContactConfig) => {
+    // Cancel any ongoing operations before switching
+    cancelStream();
+    stopSpeaking();
+    streamingMessageIdRef.current = null;
+    streamingChatIdRef.current = null;
+    streamingContactIdRef.current = null;
+
     setSelectedContact(contact);
     setShowMobileSidebar(false);
 
@@ -249,6 +259,13 @@ function AppContent() {
   };
 
   const handleSelectChat = (chat: Chat) => {
+    // Cancel any ongoing operations before switching
+    cancelStream();
+    stopSpeaking();
+    streamingMessageIdRef.current = null;
+    streamingChatIdRef.current = null;
+    streamingContactIdRef.current = null;
+
     let contact = getPreMadeContact(chat.contactId) ||
       customContacts.find(c => c.id === chat.contactId);
 
@@ -786,6 +803,13 @@ function AppContent() {
                   <p className="text-sm text-[#FF6D1F]">{selectedContact.purpose}</p>
                 </button>
                 <button
+                  onClick={() => setIsCallModalOpen(true)}
+                  className="w-10 h-10 rounded-full bg-[#FF6D1F]/10 flex items-center justify-center hover:bg-[#FF6D1F]/20 transition-colors"
+                  title="Start voice call"
+                >
+                  <Phone className="w-5 h-5 text-[#FF6D1F]" />
+                </button>
+                <button
                   onClick={() => setAutoSpeak(!autoSpeak)}
                   className={cn(
                     "flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-all",
@@ -889,6 +913,13 @@ function AppContent() {
           )}
         </div>
       </div>
+
+      {/* Call Modal */}
+      <CallModal
+        contact={selectedContact}
+        isOpen={isCallModalOpen}
+        onClose={() => setIsCallModalOpen(false)}
+      />
     </div>
   );
 }

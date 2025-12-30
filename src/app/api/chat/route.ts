@@ -1,4 +1,4 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { VertexAI } from '@google-cloud/vertexai';
 import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
 import { getUserDocument, incrementMessageCount, createUserDocument } from '@/lib/firestore';
@@ -23,16 +23,19 @@ import { withRetry } from '@/lib/retry';
 import { withAuth, type AuthenticatedRequest } from '@/lib/middleware';
 
 // Initialize AI clients lazily
-let geminiClient: GoogleGenerativeAI | null = null;
+let vertexClient: VertexAI | null = null;
 let anthropicClient: Anthropic | null = null;
 let openaiClient: OpenAI | null = null;
 let deepseekClient: OpenAI | null = null;
 
-function getGeminiClient() {
-  if (!geminiClient && process.env.GEMINI_API_KEY) {
-    geminiClient = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+function getVertexClient() {
+  if (!vertexClient && process.env.GOOGLE_CLOUD_PROJECT) {
+    vertexClient = new VertexAI({
+      project: process.env.GOOGLE_CLOUD_PROJECT,
+      location: process.env.GOOGLE_CLOUD_LOCATION || 'us-central1',
+    });
   }
-  return geminiClient;
+  return vertexClient;
 }
 
 function getAnthropicClient() {
@@ -89,7 +92,7 @@ export const POST = withAuth(async (request: AuthenticatedRequest, _context) => 
       });
     }
 
-    const { message, systemPrompt, conversationHistory, aiProvider = 'deepseek', aiModel } = parseResult.data;
+    const { message, systemPrompt, conversationHistory, aiProvider = 'gemini', aiModel } = parseResult.data;
 
     // Sanitize message for AI
     const sanitizedMessage = sanitizeForAI(message);
@@ -185,7 +188,7 @@ function getDefaultModel(provider: string): string {
       return 'deepseek-chat';
     case 'gemini':
     default:
-      return 'gemini-2.0-flash';
+      return 'gemini-2.0-flash-001';
   }
 }
 
@@ -195,12 +198,12 @@ async function handleGeminiChat(
   conversationHistory: Array<{ role: 'user' | 'assistant'; content: string }>,
   model?: string
 ): Promise<string> {
-  const client = getGeminiClient();
+  const client = getVertexClient();
   if (!client) {
-    throw new Error('Gemini API key not configured');
+    throw new Error('Google Cloud Project not configured for Vertex AI');
   }
 
-  const modelName = model || 'gemini-2.0-flash';
+  const modelName = model || 'gemini-2.0-flash-001';
   const geminiModel = client.getGenerativeModel({
     model: modelName,
     systemInstruction: systemPrompt,
@@ -226,8 +229,9 @@ async function handleGeminiChat(
   });
 
   const result = await chat.sendMessage(message);
-  const response = await result.response;
-  return response.text();
+  const response = result.response;
+  const text = response.candidates?.[0]?.content?.parts?.[0]?.text;
+  return text || '';
 }
 
 async function handleClaudeChat(

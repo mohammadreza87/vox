@@ -63,6 +63,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(false);
   const previousUserIdRef = useRef<string | null>(null);
   const syncTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const initialLoadCompleteRef = useRef(false); // Track if initial load is done
 
   // Save chats to cloud (debounced)
   const saveToCloud = useCallback(async (chatsToSave: Chat[]) => {
@@ -187,6 +188,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           }
 
           setIsLoading(false);
+          // Mark initial load as complete after a short delay to avoid immediate sync
+          setTimeout(() => {
+            initialLoadCompleteRef.current = true;
+          }, 1000);
         } else {
           // Not logged in - use localStorage
           const storageKey = getChatsKey(null);
@@ -212,9 +217,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           } else {
             setChats([]);
           }
+          // Mark initial load complete for non-logged-in users
+          initialLoadCompleteRef.current = true;
         }
       };
 
+      // Reset initial load flag when user changes
+      initialLoadCompleteRef.current = false;
       loadChats();
     }
   }, [user, loadFromCloud, saveToCloud]);
@@ -245,8 +254,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         }
       }
 
-      // Also sync to cloud (debounced)
-      if (user && chats.length >= 0) {
+      // Also sync to cloud (debounced) - only after initial load is complete
+      // This prevents syncing immediately after loading, which would cause duplicate requests
+      if (user && chats.length > 0 && initialLoadCompleteRef.current) {
         debouncedSaveToCloud(chats);
       }
     }

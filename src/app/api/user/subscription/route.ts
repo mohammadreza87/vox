@@ -26,7 +26,7 @@ export async function GET(request: NextRequest) {
     const rateResult = await checkRateLimitSecure(
       getV2ApiRateLimiter(),
       getRateLimitIdentifier(request, decodedToken.uid),
-      30,
+      60, // Increased from 30 - called on page load
       60_000
     );
     if (!rateResult.success && rateResult.response) {
