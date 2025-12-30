@@ -40,6 +40,7 @@ export const SUPPORTED_LANGUAGES = [
   { code: 'hu', name: 'Hungarian', nativeName: 'Magyar', flag: '🇭🇺' },
   { code: 'no', name: 'Norwegian', nativeName: 'Norsk', flag: '🇳🇴' },
   { code: 'vi', name: 'Vietnamese', nativeName: 'Tiếng Việt', flag: '🇻🇳' },
+  { code: 'fa', name: 'Persian', nativeName: 'فارسی', flag: '🇮🇷' },
 ] as const;
 
 // Sample texts for voice cloning in different languages (~30 seconds when read aloud)
@@ -76,6 +77,7 @@ export const SAMPLE_TEXTS: Record<string, string> = {
   hu: "A gyors barna róka átugrik a lusta kutya felett, miközben egy okos zebra nyugodtan néz át a mezőn. Apró hullámok fodrozódnak a fényes esti ég alatt, és kevert hangok visszhangzanak a szabad levegőn. Minden egyedi hang formálja beszédünket, az éles mássalhangzóktól a meleg magánhangzókig. Miközben ezt a szöveget olvassa, próbáljon egyenletes tempót és tiszta hangot tartani, hogy a rendszer rögzíthesse természetes hangját.",
   no: "Den raske brune reven hopper over den late hunden, mens en klok sebra rolig ser utover jordet. Små bølger krusninger under den lyse kveldshimmelen, og blandede stemmer gir gjenklang gjennom den åpne luften. Hver unike lyd former måten vi snakker på, fra skarpe konsonanter til varme vokaler. Når du leser denne passasjen, prøv å holde et jevnt tempo og en klar tone slik at systemet kan fange din naturlige stemme.",
   vi: "Con cáo nâu nhanh nhẹn nhảy qua con chó lười, trong khi một con ngựa vằn thông minh lặng lẽ nhìn qua cánh đồng. Những con sóng nhỏ gợn lên dưới bầu trời tối sáng, và những giọng nói hỗn hợp vang vọng trong không khí mở. Mỗi âm thanh độc đáo định hình cách chúng ta nói, từ phụ âm sắc nét đến nguyên âm ấm áp. Khi bạn đọc đoạn văn này, hãy cố gắng duy trì nhịp độ ổn định và giọng nói rõ ràng để hệ thống có thể nắm bắt giọng nói tự nhiên của bạn.",
+  fa: "روباه قهوه‌ای چابک از روی سگ تنبل می‌پرد، در حالی که گورخر باهوش با آرامش به آن سوی مزرعه نگاه می‌کند. موج‌های کوچک زیر آسمان روشن غروب موج می‌زنند و صداهای مختلف در هوای آزاد طنین‌انداز می‌شوند. هر صدای منحصربه‌فرد شکل صحبت کردن ما را می‌سازد، از حروف صامت تیز گرفته تا حروف صدادار گرم. وقتی این متن را می‌خوانید، سعی کنید سرعت یکنواخت و لحن واضحی داشته باشید تا سیستم بتواند صدای طبیعی شما را ضبط کند. نور طلایی صبحگاهی بر خیابان‌های آرام می‌تابد و پرندگان آوازهای ملایم خود را در دوردست می‌خوانند.",
 };
 
 export type LanguageCode = typeof SUPPORTED_LANGUAGES[number]['code'];
