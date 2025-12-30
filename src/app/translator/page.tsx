@@ -903,9 +903,30 @@ function TranslatorInterface({
     }
   }, [isPlaying, playingLang, lastTranslation, voiceId, stopAudio, playAudioUrl]);
 
-  // Start recording
-  const startRecording = useCallback(() => {
+  // Start recording - first request mic permission explicitly
+  const startRecording = useCallback(async () => {
     console.log('startRecording called, recognitionRef:', !!recognitionRef.current);
+    setError(null);
+
+    // First, explicitly request microphone permission
+    // This is needed especially in Telegram WebApp where SpeechRecognition alone won't trigger permission prompt
+    try {
+      console.log('Requesting microphone permission...');
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      console.log('Microphone permission granted');
+      // Stop the stream immediately - we just needed it to trigger the permission prompt
+      stream.getTracks().forEach(track => track.stop());
+    } catch (err: any) {
+      console.error('Microphone permission denied:', err);
+      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+        setError('Microphone access denied. Please allow microphone in your browser/app settings and reload the page.');
+      } else if (err.name === 'NotFoundError') {
+        setError('No microphone found. Please connect a microphone.');
+      } else {
+        setError('Could not access microphone. Try opening in a regular browser.');
+      }
+      return;
+    }
 
     if (!recognitionRef.current) {
       // Try to reinitialize if not available
@@ -921,7 +942,7 @@ function TranslatorInterface({
         console.log('Speech recognition re-initialized');
       } else {
         console.error('Speech recognition not available');
-        setError('Speech recognition is not available in this browser');
+        setError('Speech recognition is not available. Try using Chrome browser.');
         return;
       }
     }
@@ -929,7 +950,6 @@ function TranslatorInterface({
     stopAudio();
     setCurrentText('');
     currentTextRef.current = '';
-    setError(null);
 
     recognitionRef.current.lang = sourceLanguage;
 
@@ -947,18 +967,17 @@ function TranslatorInterface({
       console.error('Speech recognition error:', event.error, event.message);
       setIsRecording(false);
       if (event.error === 'not-allowed') {
-        setError('Microphone permission denied. Please allow access in browser settings.');
+        setError('Microphone blocked. Open this page in Chrome browser instead of Telegram.');
       } else if (event.error === 'no-speech') {
         // This is normal if user releases before speaking
         console.log('No speech detected');
-      } else {
+      } else if (event.error !== 'aborted') {
         setError(`Speech recognition error: ${event.error}`);
       }
     };
 
     recognitionRef.current.onend = () => {
       console.log('Speech recognition ended');
-      // Don't auto-restart - let the component handle it
     };
 
     // Set recording state immediately so UI updates
@@ -980,13 +999,13 @@ function TranslatorInterface({
         } catch (e) {
           console.error('Failed to start recognition after delay:', e);
           setIsRecording(false);
-          setError('Could not start speech recognition. Please try again.');
+          setError('Could not start speech recognition. Try Chrome browser.');
         }
       }, 50);
     } catch (e) {
       console.error('Could not start recognition:', e);
       setIsRecording(false);
-      setError('Could not start speech recognition. Please try again.');
+      setError('Could not start speech recognition. Try Chrome browser.');
     }
   }, [sourceLanguage, stopAudio]);
 
