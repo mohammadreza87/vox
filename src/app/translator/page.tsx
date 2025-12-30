@@ -905,11 +905,31 @@ function TranslatorInterface({
 
   // Start recording
   const startRecording = useCallback(() => {
-    if (!recognitionRef.current) return;
+    console.log('startRecording called, recognitionRef:', !!recognitionRef.current);
+
+    if (!recognitionRef.current) {
+      // Try to reinitialize if not available
+      const windowWithSpeech = window as typeof window & {
+        SpeechRecognition?: new () => SpeechRecognitionInstance;
+        webkitSpeechRecognition?: new () => SpeechRecognitionInstance;
+      };
+      const SpeechRecognitionAPI = windowWithSpeech.SpeechRecognition || windowWithSpeech.webkitSpeechRecognition;
+      if (SpeechRecognitionAPI) {
+        recognitionRef.current = new SpeechRecognitionAPI();
+        recognitionRef.current.continuous = true;
+        recognitionRef.current.interimResults = true;
+        console.log('Speech recognition re-initialized');
+      } else {
+        console.error('Speech recognition not available');
+        setError('Speech recognition is not available in this browser');
+        return;
+      }
+    }
 
     stopAudio();
     setCurrentText('');
     currentTextRef.current = '';
+    setError(null);
 
     recognitionRef.current.lang = sourceLanguage;
 
@@ -918,26 +938,55 @@ function TranslatorInterface({
       for (let i = 0; i < event.results.length; i++) {
         transcript += event.results[i][0].transcript;
       }
+      console.log('Transcript:', transcript);
       setCurrentText(transcript);
       currentTextRef.current = transcript;
     };
 
     recognitionRef.current.onerror = (event) => {
-      console.error('Speech recognition error:', event.error);
+      console.error('Speech recognition error:', event.error, event.message);
       setIsRecording(false);
+      if (event.error === 'not-allowed') {
+        setError('Microphone permission denied. Please allow access in browser settings.');
+      } else if (event.error === 'no-speech') {
+        // This is normal if user releases before speaking
+        console.log('No speech detected');
+      } else {
+        setError(`Speech recognition error: ${event.error}`);
+      }
     };
 
+    recognitionRef.current.onend = () => {
+      console.log('Speech recognition ended');
+      // Don't auto-restart - let the component handle it
+    };
+
+    // Set recording state immediately so UI updates
+    setIsRecording(true);
+
     try {
-      recognitionRef.current.start();
-      setIsRecording(true);
-    } catch {
+      // Always try to abort first to ensure clean state
       try {
         recognitionRef.current.abort();
-        recognitionRef.current.start();
-        setIsRecording(true);
       } catch {
-        console.error('Could not start recognition');
+        // Ignore abort errors
       }
+
+      // Small delay to ensure clean state after abort
+      setTimeout(() => {
+        try {
+          recognitionRef.current?.start();
+          console.log('Recording started successfully');
+        } catch (e) {
+          console.error('Failed to start recognition after delay:', e);
+          setIsRecording(false);
+          setError('Could not start speech recognition. Please try again.');
+        }
+      }, 50);
+    } catch (e) {
+      console.error('Could not start recognition:', e);
+      setIsRecording(false);
+      setError('Could not start speech recognition. Please try again.');
     }
   }, [sourceLanguage, stopAudio]);
 
@@ -1118,6 +1167,7 @@ function TranslatorInterface({
                 onSelect={(lang) => {
                   setSourceLanguage(lang);
                   setShowSourcePicker(false);
+                  // Clear only when source language changes (source text won't match)
                   setLastTranslation(null);
                 }}
                 exclude={targetLanguage}
@@ -1149,10 +1199,55 @@ function TranslatorInterface({
             {showTargetPicker && (
               <LanguagePicker
                 selected={targetLanguage}
-                onSelect={(lang) => {
-                  setTargetLanguage(lang);
+                onSelect={async (lang) => {
                   setShowTargetPicker(false);
-                  setLastTranslation(null);
+                  setTargetLanguage(lang);
+                  // If there's existing source text, re-translate to new language
+                  if (lastTranslation?.sourceText) {
+                    // Clear the audio URL since it's for the old language
+                    setLastTranslation(prev => prev ? { ...prev, audioUrl: undefined, targetLanguage: lang } : null);
+                    // Re-translate
+                    const newTargetLang = SUPPORTED_LANGUAGES.find(l => l.code === lang);
+                    setIsTranslating(true);
+                    try {
+                      const token = await auth.currentUser?.getIdToken();
+                      const response = await fetch('/api/translate', {
+                        method: 'POST',
+                        headers: {
+                          'Content-Type': 'application/json',
+                          ...(token && { Authorization: `Bearer ${token}` }),
+                        },
+                        body: JSON.stringify({
+                          text: lastTranslation.sourceText,
+                          sourceLanguage: sourceLang?.name || sourceLanguage,
+                          targetLanguage: newTargetLang?.name || lang,
+                          voiceId,
+                        }),
+                      });
+                      const responseData = await response.json();
+                      if (response.ok) {
+                        const data = responseData.data || responseData;
+                        let audioUrl: string | undefined;
+                        if (data.audio) {
+                          const audioBlob = base64ToBlob(data.audio, 'audio/mpeg');
+                          audioUrl = URL.createObjectURL(audioBlob);
+                        }
+                        setLastTranslation(prev => prev ? {
+                          ...prev,
+                          translatedText: data.translatedText,
+                          targetLanguage: lang,
+                          audioUrl,
+                        } : null);
+                        if (audioUrl) {
+                          await playAudioUrl(audioUrl, 'target');
+                        }
+                      }
+                    } catch (err) {
+                      console.error('Re-translation error:', err);
+                    } finally {
+                      setIsTranslating(false);
+                    }
+                  }
                 }}
                 exclude={sourceLanguage}
               />
@@ -1344,6 +1439,28 @@ function SimpleMicButton({
   onStop: () => void;
 }) {
   const buttonRef = useRef<HTMLButtonElement>(null);
+  // Use refs to avoid stale closures in event handlers
+  const isRecordingRef = useRef(isRecording);
+  const isTranslatingRef = useRef(isTranslating);
+  const onStartRef = useRef(onStart);
+  const onStopRef = useRef(onStop);
+
+  // Keep refs in sync
+  useEffect(() => {
+    isRecordingRef.current = isRecording;
+  }, [isRecording]);
+
+  useEffect(() => {
+    isTranslatingRef.current = isTranslating;
+  }, [isTranslating]);
+
+  useEffect(() => {
+    onStartRef.current = onStart;
+  }, [onStart]);
+
+  useEffect(() => {
+    onStopRef.current = onStop;
+  }, [onStop]);
 
   useEffect(() => {
     const button = buttonRef.current;
@@ -1353,8 +1470,9 @@ function SimpleMicButton({
       e.preventDefault();
       e.stopPropagation();
       button.setPointerCapture(e.pointerId);
-      if (!isTranslating) {
-        onStart();
+      if (!isTranslatingRef.current) {
+        console.log('Starting recording...');
+        onStartRef.current();
       }
     };
 
@@ -1364,8 +1482,9 @@ function SimpleMicButton({
       if (button.hasPointerCapture(e.pointerId)) {
         button.releasePointerCapture(e.pointerId);
       }
-      if (isRecording) {
-        onStop();
+      if (isRecordingRef.current) {
+        console.log('Stopping recording...');
+        onStopRef.current();
       }
     };
 
@@ -1384,7 +1503,7 @@ function SimpleMicButton({
       button.removeEventListener('pointercancel', handlePointerUp);
       button.removeEventListener('contextmenu', handleContextMenu);
     };
-  }, [isRecording, isTranslating, onStart, onStop]);
+  }, []); // Empty deps - handlers use refs
 
   return (
     <button
