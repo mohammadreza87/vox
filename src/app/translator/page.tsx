@@ -1011,15 +1011,31 @@ function TranslatorInterface({
 
   // Stop recording and translate
   const stopRecording = useCallback(async () => {
-    if (!recognitionRef.current) return;
+    console.log('stopRecording called');
 
-    recognitionRef.current.stop();
+    if (!recognitionRef.current) {
+      console.log('No recognition ref');
+      return;
+    }
+
+    try {
+      recognitionRef.current.stop();
+    } catch (e) {
+      console.log('Error stopping recognition:', e);
+    }
     setIsRecording(false);
 
-    await new Promise(resolve => setTimeout(resolve, 100));
+    // Wait a bit for final results
+    await new Promise(resolve => setTimeout(resolve, 200));
 
     const text = currentTextRef.current;
-    if (!text.trim()) return;
+    console.log('Captured text:', text);
+
+    if (!text.trim()) {
+      console.log('No text captured');
+      setError('No speech detected. Hold the button and speak clearly.');
+      return;
+    }
 
     setIsTranslating(true);
 
@@ -1490,7 +1506,7 @@ function SimpleMicButton({
       e.stopPropagation();
       button.setPointerCapture(e.pointerId);
       if (!isTranslatingRef.current) {
-        console.log('Starting recording...');
+        console.log('Mic button: pointer down, starting...');
         onStartRef.current();
       }
     };
@@ -1498,11 +1514,13 @@ function SimpleMicButton({
     const handlePointerUp = (e: PointerEvent) => {
       e.preventDefault();
       e.stopPropagation();
+      console.log('Mic button: pointer up, isRecording:', isRecordingRef.current);
       if (button.hasPointerCapture(e.pointerId)) {
         button.releasePointerCapture(e.pointerId);
       }
+      // Always try to stop if we think we're recording
       if (isRecordingRef.current) {
-        console.log('Stopping recording...');
+        console.log('Mic button: stopping...');
         onStopRef.current();
       }
     };
@@ -1511,16 +1529,24 @@ function SimpleMicButton({
       e.preventDefault();
     };
 
+    // Also handle click for single tap (not press-and-hold)
+    const handleClick = (e: MouseEvent) => {
+      e.preventDefault();
+      console.log('Mic button: click detected');
+    };
+
     button.addEventListener('pointerdown', handlePointerDown);
     button.addEventListener('pointerup', handlePointerUp);
     button.addEventListener('pointercancel', handlePointerUp);
     button.addEventListener('contextmenu', handleContextMenu);
+    button.addEventListener('click', handleClick);
 
     return () => {
       button.removeEventListener('pointerdown', handlePointerDown);
       button.removeEventListener('pointerup', handlePointerUp);
       button.removeEventListener('pointercancel', handlePointerUp);
       button.removeEventListener('contextmenu', handleContextMenu);
+      button.removeEventListener('click', handleClick);
     };
   }, []); // Empty deps - handlers use refs
 
