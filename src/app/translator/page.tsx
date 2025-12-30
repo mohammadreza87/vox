@@ -903,29 +903,30 @@ function TranslatorInterface({
     }
   }, [isPlaying, playingLang, lastTranslation, voiceId, stopAudio, playAudioUrl]);
 
-  // Start recording - first request mic permission explicitly
+  // Detect if running in Telegram WebApp
+  const isInTelegram = typeof window !== 'undefined' && (
+    window.navigator.userAgent.includes('Telegram') ||
+    (window as any).Telegram?.WebApp
+  );
+
+  // Start recording
   const startRecording = useCallback(async () => {
-    console.log('startRecording called, recognitionRef:', !!recognitionRef.current);
+    console.log('startRecording called, recognitionRef:', !!recognitionRef.current, 'isInTelegram:', isInTelegram);
     setError(null);
 
-    // First, explicitly request microphone permission
-    // This is needed especially in Telegram WebApp where SpeechRecognition alone won't trigger permission prompt
-    try {
-      console.log('Requesting microphone permission...');
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      console.log('Microphone permission granted');
-      // Stop the stream immediately - we just needed it to trigger the permission prompt
-      stream.getTracks().forEach(track => track.stop());
-    } catch (err: any) {
-      console.error('Microphone permission denied:', err);
-      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-        setError('Microphone access denied. Please allow microphone in your browser/app settings and reload the page.');
-      } else if (err.name === 'NotFoundError') {
-        setError('No microphone found. Please connect a microphone.');
-      } else {
-        setError('Could not access microphone. Try opening in a regular browser.');
+    // In Telegram WebApp, getUserMedia often fails - skip it and try SpeechRecognition directly
+    if (!isInTelegram) {
+      // For regular browsers, request mic permission first
+      try {
+        console.log('Requesting microphone permission...');
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        console.log('Microphone permission granted');
+        stream.getTracks().forEach(track => track.stop());
+      } catch (err: any) {
+        console.error('Microphone permission error:', err);
+        // Don't block - try SpeechRecognition anyway as it might work
+        console.log('Continuing to try SpeechRecognition...');
       }
-      return;
     }
 
     if (!recognitionRef.current) {
@@ -967,12 +968,16 @@ function TranslatorInterface({
       console.error('Speech recognition error:', event.error, event.message);
       setIsRecording(false);
       if (event.error === 'not-allowed') {
-        setError('Microphone blocked. Open this page in Chrome browser instead of Telegram.');
+        if (isInTelegram) {
+          setError('Voice input not supported in Telegram. Use text input below or open in Chrome browser.');
+        } else {
+          setError('Microphone blocked. Please allow access in browser settings.');
+        }
       } else if (event.error === 'no-speech') {
         // This is normal if user releases before speaking
         console.log('No speech detected');
       } else if (event.error !== 'aborted') {
-        setError(`Speech recognition error: ${event.error}`);
+        setError(`Speech error: ${event.error}. Try using text input instead.`);
       }
     };
 
@@ -1007,7 +1012,7 @@ function TranslatorInterface({
       setIsRecording(false);
       setError('Could not start speech recognition. Try Chrome browser.');
     }
-  }, [sourceLanguage, stopAudio]);
+  }, [sourceLanguage, stopAudio, isInTelegram]);
 
   // Stop recording and translate
   const stopRecording = useCallback(async () => {
