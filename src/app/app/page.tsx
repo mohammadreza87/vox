@@ -243,8 +243,29 @@ function AppContent() {
   };
 
   const handleSelectChat = (chat: Chat) => {
-    const contact = getPreMadeContact(chat.contactId) ||
+    let contact = getPreMadeContact(chat.contactId) ||
       customContacts.find(c => c.id === chat.contactId);
+
+    // Create fallback contact from chat data for custom contacts
+    // This handles cases where customContacts haven't loaded yet
+    if (!contact && chat.contactId.startsWith('custom-')) {
+      contact = {
+        id: chat.contactId,
+        name: chat.contactName,
+        purpose: chat.contactPurpose || 'Custom Assistant',
+        personality: '',
+        systemPrompt: '',
+        voiceId: 'EXAVITQu4vr4xnSDxMaL', // Default voice
+        voiceName: 'Rachel',
+        avatarEmoji: chat.contactEmoji || '💬',
+        avatarImage: chat.contactImage,
+        category: 'custom' as const,
+        gradient: 'from-purple-500 to-indigo-600',
+        aiProvider: 'openai' as const,
+        aiModel: 'gpt-4o-mini',
+        isPreMade: false,
+      };
+    }
 
     if (contact) {
       setSelectedContact(contact);
