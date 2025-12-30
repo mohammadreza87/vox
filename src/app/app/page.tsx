@@ -134,15 +134,18 @@ function AppContent() {
 
   // Streaming chat hook
   const streamingMessageIdRef = useRef<string | null>(null);
+  const streamingChatIdRef = useRef<string | null>(null); // Track which chat the stream belongs to
+  const streamingContactIdRef = useRef<string | null>(null); // Track contact for the stream
   const { streamingText, isStreaming, startStream, cancelStream } = useStreamingChat({
     onComplete: async (fullText) => {
       // Generate TTS and auto-play after streaming completes
-      if (autoSpeak && selectedContact && activeChat && streamingMessageIdRef.current) {
-        const messageId = streamingMessageIdRef.current;
+      const chatId = streamingChatIdRef.current;
+      const messageId = streamingMessageIdRef.current;
+      if (autoSpeak && selectedContact && chatId && messageId) {
         setPlayingMessageId(messageId); // Show playing state
         const audioData = await speak(fullText);
         if (audioData) {
-          updateMessage(activeChat.id, messageId, { audioUrl: audioData });
+          updateMessage(chatId, messageId, { audioUrl: audioData });
           setMessages((prev) =>
             prev.map((msg) => (msg.id === messageId ? { ...msg, audioUrl: audioData } : msg))
           );
@@ -156,6 +159,8 @@ function AppContent() {
     onError: (error) => {
       console.error('Streaming error:', error);
       streamingMessageIdRef.current = null;
+      streamingChatIdRef.current = null;
+      streamingContactIdRef.current = null;
       setPlayingMessageId(null);
     },
   });
@@ -304,6 +309,8 @@ function AppContent() {
     // Create placeholder AI message for streaming
     const messageId = `ai-${Date.now()}`;
     streamingMessageIdRef.current = messageId;
+    streamingChatIdRef.current = activeChat.id; // Capture chat ID for when streaming completes
+    streamingContactIdRef.current = selectedContact.id;
 
     const aiPlaceholder: Message = {
       id: messageId,
@@ -343,19 +350,24 @@ function AppContent() {
       prev.map((msg) => (msg.id === messageId ? { ...msg, content: streamingText } : msg))
     );
 
-    // When streaming completes, save the final message
-    if (!isStreaming && streamingText && activeChat) {
+    // When streaming completes, save the final message to the ORIGINAL chat (not current activeChat)
+    const chatId = streamingChatIdRef.current;
+    const contactId = streamingContactIdRef.current;
+    if (!isStreaming && streamingText && chatId && contactId) {
       const finalMessage = {
         id: messageId,
-        contactId: activeChat.contactId,
+        contactId: contactId,
         role: 'assistant' as const,
         content: streamingText,
         audioUrl: null,
         createdAt: new Date(),
       };
-      addMessage(activeChat.id, finalMessage);
+      addMessage(chatId, finalMessage);
+      // Clear refs after saving
+      streamingChatIdRef.current = null;
+      streamingContactIdRef.current = null;
     }
-  }, [streamingText, isStreaming, activeChat, addMessage]);
+  }, [streamingText, isStreaming, addMessage]);
 
   // Handle replay of cached audio
   const handleReplayAudio = useCallback(async (message: Message) => {
