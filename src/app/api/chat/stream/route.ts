@@ -89,7 +89,7 @@ export const POST = withAuth(async (request: AuthenticatedRequest, _context) => 
   const rateResult = await checkRateLimitSecure(
     getChatRateLimiter(),
     getRateLimitIdentifier(request, userId),
-    20,
+    60, // Increased from 20 to allow for normal usage
     60_000
   );
   if (!rateResult.success && rateResult.response) {
