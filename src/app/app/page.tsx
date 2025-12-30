@@ -247,15 +247,15 @@ function AppContent() {
       customContacts.find(c => c.id === chat.contactId);
 
     // Create fallback contact from chat data for custom contacts
-    // This handles cases where customContacts haven't loaded yet
+    // This handles cases where customContacts haven't loaded yet or contact was lost
     if (!contact && chat.contactId.startsWith('custom-')) {
-      contact = {
+      const recoveredContact: PreMadeContactConfig = {
         id: chat.contactId,
         name: chat.contactName,
         purpose: chat.contactPurpose || 'Custom Assistant',
         personality: '',
         systemPrompt: '',
-        voiceId: 'EXAVITQu4vr4xnSDxMaL', // Default voice
+        voiceId: 'EXAVITQu4vr4xnSDxMaL', // Default voice - user can edit to restore their cloned voice
         voiceName: 'Rachel',
         avatarEmoji: chat.contactEmoji || '💬',
         avatarImage: chat.contactImage,
@@ -264,7 +264,12 @@ function AppContent() {
         aiProvider: 'openai' as const,
         aiModel: 'gpt-4o-mini',
         isPreMade: false,
+        createdAt: new Date().toISOString(),
       };
+
+      // Add recovered contact to customContacts so it shows in Contacts tab
+      addContact(recoveredContact);
+      contact = recoveredContact;
     }
 
     if (contact) {
