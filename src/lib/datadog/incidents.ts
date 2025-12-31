@@ -285,8 +285,8 @@ export const llmIncidents = {
       latencyMs,
       ...context,
     }, {
-      description: `LLM response latency (${latencyMs}ms) exceeded threshold (${threshold}ms) for ${provider}/${model}`,
-    });
+      description: `LLM response latency (${latencyMs}ms) exceeded threshold (${threshold}ms) for ${provider}/${model}` as const,
+    } as any);
   },
 
   /**
@@ -309,7 +309,7 @@ export const llmIncidents = {
     }, {
       severity,
       description: `Error rate for ${provider}/${model} is ${(errorRate * 100).toFixed(1)}% (${errorCount} errors)`,
-    });
+    } as any);
   },
 
   /**
@@ -328,7 +328,7 @@ export const llmIncidents = {
       ...context,
     }, {
       description: `${provider} has been unresponsive for ${downMinutes} minutes. Last successful request at ${lastSuccessTime.toISOString()}`,
-    });
+    } as any);
   },
 
   /**
@@ -368,7 +368,7 @@ export const llmIncidents = {
       ...context,
     }, {
       description: `LLM costs ($${currentCost.toFixed(2)}) exceeded budget ($${budget.toFixed(2)}) by ${overrunPercent}% for ${period}`,
-    });
+    } as any);
   },
 
   /**

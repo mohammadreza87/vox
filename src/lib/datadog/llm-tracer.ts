@@ -11,7 +11,9 @@
 
 import { getDatadogClient } from './client';
 import { getDatadogConfig, getModelPricing, isLLMObservabilityEnabled } from './config';
-import { v4 as uuidv4 } from 'crypto';
+import { randomUUID } from 'crypto';
+
+const uuidv4 = randomUUID;
 
 export interface LLMSpanAttributes {
   // Request metadata

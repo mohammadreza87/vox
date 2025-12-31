@@ -138,7 +138,7 @@ export async function initializeRUM(): Promise<boolean> {
       trackLongTasks: config.trackLongTasks,
       defaultPrivacyLevel: config.defaultPrivacyLevel,
       // LLM-specific context
-      beforeSend: (event) => {
+      beforeSend: (event: any) => {
         // Add custom context to all events
         event.context = {
           ...event.context,
