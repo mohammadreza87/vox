@@ -32,6 +32,10 @@ export function useTextToSpeech({
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
+  // Use ref to always get the latest voiceId (avoids stale closure issues)
+  const voiceIdRef = useRef(voiceId);
+  voiceIdRef.current = voiceId;
+
   // Streaming TTS - starts playing immediately as chunks arrive
   const speakStreaming = useCallback(
     async (text: string): Promise<void> => {
@@ -55,7 +59,7 @@ export function useTextToSpeech({
           },
           body: JSON.stringify({
             text,
-            voiceId,
+            voiceId: voiceIdRef.current, // Use ref for latest value
           }),
           signal: abortControllerRef.current.signal,
         });
@@ -161,7 +165,7 @@ export function useTextToSpeech({
           },
           body: JSON.stringify({
             text,
-            voiceId,
+            voiceId: voiceIdRef.current, // Use ref for latest value
           }),
         });
 
