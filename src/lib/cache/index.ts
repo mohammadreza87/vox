@@ -6,26 +6,32 @@
  */
 
 import { Redis } from '@upstash/redis';
-import { logger } from '../logger';
 
 // ============================================
 // Redis Client (Lazy Initialization)
 // ============================================
 
 let redis: Redis | null = null;
+let redisChecked = false;
 
 function getRedis(): Redis | null {
   if (redis) return redis;
+  if (redisChecked) return null;
 
   const url = process.env.UPSTASH_REDIS_REST_URL;
   const token = process.env.UPSTASH_REDIS_REST_TOKEN;
 
   if (!url || !token) {
-    logger.warn('Caching disabled: UPSTASH_REDIS_REST_URL or UPSTASH_REDIS_REST_TOKEN not configured');
+    // Only log once to avoid spam
+    if (!redisChecked) {
+      console.log('[Cache] Disabled: UPSTASH_REDIS not configured');
+    }
+    redisChecked = true;
     return null;
   }
 
   redis = new Redis({ url, token });
+  redisChecked = true;
   return redis;
 }
 
@@ -76,12 +82,9 @@ export async function cacheGet<T>(key: string): Promise<T | null> {
 
   try {
     const value = await client.get<T>(key);
-    if (value !== null) {
-      logger.debug({ key }, 'Cache hit');
-    }
     return value;
   } catch (error) {
-    logger.error({ key, error }, 'Cache get error');
+    console.error('[Cache] Get error:', key, error);
     return null;
   }
 }
@@ -99,9 +102,8 @@ export async function cacheSet<T>(key: string, value: T, ttl: number): Promise<v
 
   try {
     await client.set(key, value, { ex: ttl });
-    logger.debug({ key, ttl }, 'Cache set');
   } catch (error) {
-    logger.error({ key, error }, 'Cache set error');
+    console.error('[Cache] Set error:', key, error);
   }
 }
 
@@ -116,9 +118,8 @@ export async function cacheDelete(key: string): Promise<void> {
 
   try {
     await client.del(key);
-    logger.debug({ key }, 'Cache delete');
   } catch (error) {
-    logger.error({ key, error }, 'Cache delete error');
+    console.error('[Cache] Delete error:', key, error);
   }
 }
 
@@ -145,10 +146,9 @@ export async function cacheDeletePattern(pattern: string): Promise<void> {
     // Delete all matching keys
     if (keysToDelete.length > 0) {
       await Promise.all(keysToDelete.map((key) => client.del(key)));
-      logger.debug({ pattern, deletedCount: keysToDelete.length }, 'Cache delete pattern');
     }
   } catch (error) {
-    logger.error({ pattern, error }, 'Cache delete pattern error');
+    console.error('[Cache] Delete pattern error:', pattern, error);
   }
 }
 
@@ -187,7 +187,7 @@ export async function withCache<T>(
 
   // Cache it for next time (don't await, do it in background)
   cacheSet(key, value, ttl).catch((error) => {
-    logger.error({ key, error }, 'Failed to cache value');
+    console.error('[Cache] Failed to cache value:', key, error);
   });
 
   return value;

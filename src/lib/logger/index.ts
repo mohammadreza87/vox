@@ -38,6 +38,8 @@ const redactPaths = REDACTED_FIELDS.flatMap((field) => [
 ]);
 
 // Create the base logger
+// Note: pino-pretty transport with workers causes issues in Next.js dev mode
+// Using simple JSON logging instead - use pino-pretty CLI for local debugging if needed
 const baseLogger = pino({
   level: LOG_LEVEL,
   redact: {
@@ -54,18 +56,6 @@ const baseLogger = pino({
     }),
   },
   timestamp: pino.stdTimeFunctions.isoTime,
-  // In production, use JSON; in dev, use pino-pretty (if available)
-  transport:
-    process.env.NODE_ENV !== 'production'
-      ? {
-          target: 'pino-pretty',
-          options: {
-            colorize: true,
-            ignore: 'pid,hostname',
-            translateTime: 'SYS:standard',
-          },
-        }
-      : undefined,
 });
 
 /**
