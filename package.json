@@ -4,8 +4,10 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:dd": "DD_LLMOBS_ENABLED=1 DD_LLMOBS_ML_APP=vox NODE_OPTIONS='--import dd-trace/initialize.mjs' next dev",
     "build": "next build",
     "start": "next start",
+    "start:dd": "DD_LLMOBS_ENABLED=1 DD_LLMOBS_ML_APP=vox NODE_OPTIONS='--import dd-trace/initialize.mjs' next start",
     "lint": "eslint",
     "test": "vitest",
     "test:ui": "vitest --ui",
@@ -29,6 +31,7 @@
     "@upstash/ratelimit": "^2.0.7",
     "@upstash/redis": "^1.36.0",
     "clsx": "^2.1.1",
+    "dd-trace": "^5.81.0",
     "firebase": "^12.6.0",
     "firebase-admin": "^13.6.0",
     "framer-motion": "^12.23.26",
