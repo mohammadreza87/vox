@@ -11,6 +11,13 @@ import {
   checkRateLimitSecure,
 } from '@/lib/ratelimit';
 import { withAuth, type AuthenticatedRequest } from '@/lib/middleware';
+import {
+  createLLMSpan,
+  scanInput,
+  scanOutput,
+  isLLMObservabilityEnabled,
+  type LLMSpan,
+} from '@/lib/datadog';
 
 // Initialize AI clients lazily
 let vertexClient: VertexAI | null = null;
@@ -164,63 +171,130 @@ export const POST = withAuth(async (request: AuthenticatedRequest, _context) => 
 
   console.log(`[Stream] Using AI provider: ${aiProvider}, model: ${modelToUse}, tier: ${tier}`);
 
+  // Initialize Datadog LLM observability span
+  const llmSpan = isLLMObservabilityEnabled()
+    ? createLLMSpan('chat.stream', aiProvider as 'gemini' | 'claude' | 'openai' | 'deepseek', modelToUse, {
+        userId,
+        conversationTurn: conversationHistory.length + 1,
+        temperature: 0.7,
+        maxTokens: 1024,
+      })
+    : null;
+
+  // Set input for token estimation
+  if (llmSpan) {
+    llmSpan.setInput(sanitizedMessage, systemPrompt || '');
+    llmSpan.addEvent('request_started', { tier, messagesUsedToday });
+  }
+
+  // Security scan on input (async, non-blocking in production)
+  const securityScanPromise = isLLMObservabilityEnabled()
+    ? scanInput(sanitizedMessage, { userId, requestId: llmSpan?.getTraceId() })
+    : Promise.resolve({ safe: true, threats: [], riskScore: 0, scanDurationMs: 0 });
+
   const encoder = new TextEncoder();
+  let fullResponse = ''; // Collect full response for output scanning
 
   const stream = new ReadableStream({
     async start(controller) {
       try {
+        // Check security scan result
+        const securityResult = await securityScanPromise;
+        if (!securityResult.safe && securityResult.riskScore > 70) {
+          llmSpan?.addEvent('security_blocked', { riskScore: securityResult.riskScore });
+          llmSpan?.recordError('Request blocked due to security concerns');
+          await llmSpan?.finish();
+
+          controller.enqueue(
+            encoder.encode(
+              formatSSE({
+                error: 'Request blocked due to security concerns',
+                code: 'SECURITY_BLOCKED',
+                done: true,
+              })
+            )
+          );
+          controller.close();
+          return;
+        }
+
         switch (aiProvider) {
           case 'openai':
-            await streamOpenAI(
+            fullResponse = await streamOpenAI(
               controller,
               encoder,
               sanitizedMessage,
               systemPrompt || '',
               conversationHistory,
-              modelToUse
+              modelToUse,
+              llmSpan
             );
             break;
           case 'deepseek':
-            await streamDeepSeek(
+            fullResponse = await streamDeepSeek(
               controller,
               encoder,
               sanitizedMessage,
               systemPrompt || '',
               conversationHistory,
-              modelToUse
+              modelToUse,
+              llmSpan
             );
             break;
           case 'claude':
-            await streamClaude(
+            fullResponse = await streamClaude(
               controller,
               encoder,
               sanitizedMessage,
               systemPrompt || '',
               conversationHistory,
-              modelToUse
+              modelToUse,
+              llmSpan
             );
             break;
           case 'gemini':
           default:
-            await streamGemini(
+            fullResponse = await streamGemini(
               controller,
               encoder,
               sanitizedMessage,
               systemPrompt || '',
               conversationHistory,
-              modelToUse
+              modelToUse,
+              llmSpan
             );
             break;
         }
 
-    // Increment message count after successful stream
-    await incrementMessageCount(userId);
+        // Set output for token estimation and finish span
+        if (llmSpan) {
+          llmSpan.setOutput(fullResponse);
+          llmSpan.addEvent('stream_completed', { responseLength: fullResponse.length });
+        }
+
+        // Scan output for security issues (async)
+        if (isLLMObservabilityEnabled()) {
+          scanOutput(fullResponse, { userId, requestId: llmSpan?.getTraceId() }).catch(console.error);
+        }
+
+        // Increment message count after successful stream
+        await incrementMessageCount(userId);
+
+        // Finish the LLM span
+        await llmSpan?.finish();
 
         // Send done message
         controller.enqueue(encoder.encode(formatSSE({ done: true })));
         controller.close();
       } catch (error) {
         console.error('Stream error:', error);
+
+        // Record error in span
+        if (llmSpan) {
+          llmSpan.recordError(error instanceof Error ? error : new Error(String(error)));
+          await llmSpan.finish();
+        }
+
         controller.enqueue(
           encoder.encode(
             formatSSE({
@@ -245,8 +319,9 @@ async function streamOpenAI(
   message: string,
   systemPrompt: string,
   conversationHistory: Array<{ role: 'user' | 'assistant'; content: string }>,
-  model: string
-) {
+  model: string,
+  llmSpan: LLMSpan | null
+): Promise<string> {
   const client = getOpenAIClient();
   if (!client) {
     throw new Error('OpenAI API key not configured');
@@ -269,12 +344,17 @@ async function streamOpenAI(
     stream: true,
   });
 
+  let fullResponse = '';
   for await (const chunk of stream) {
     const content = chunk.choices[0]?.delta?.content;
     if (content) {
+      fullResponse += content;
+      llmSpan?.recordStreamedToken();
       controller.enqueue(encoder.encode(formatSSE({ content, done: false })));
     }
   }
+
+  return fullResponse;
 }
 
 async function streamDeepSeek(
@@ -283,8 +363,9 @@ async function streamDeepSeek(
   message: string,
   systemPrompt: string,
   conversationHistory: Array<{ role: 'user' | 'assistant'; content: string }>,
-  model: string
-) {
+  model: string,
+  llmSpan: LLMSpan | null
+): Promise<string> {
   const client = getDeepSeekClient();
   if (!client) {
     throw new Error('DeepSeek API key not configured');
@@ -307,12 +388,17 @@ async function streamDeepSeek(
     stream: true,
   });
 
+  let fullResponse = '';
   for await (const chunk of stream) {
     const content = chunk.choices[0]?.delta?.content;
     if (content) {
+      fullResponse += content;
+      llmSpan?.recordStreamedToken();
       controller.enqueue(encoder.encode(formatSSE({ content, done: false })));
     }
   }
+
+  return fullResponse;
 }
 
 async function streamClaude(
@@ -321,8 +407,9 @@ async function streamClaude(
   message: string,
   systemPrompt: string,
   conversationHistory: Array<{ role: 'user' | 'assistant'; content: string }>,
-  model: string
-) {
+  model: string,
+  llmSpan: LLMSpan | null
+): Promise<string> {
   const client = getAnthropicClient();
   if (!client) {
     throw new Error('Anthropic API key not configured');
@@ -349,11 +436,16 @@ async function streamClaude(
     messages,
   });
 
+  let fullResponse = '';
   for await (const event of stream) {
     if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
+      fullResponse += event.delta.text;
+      llmSpan?.recordStreamedToken();
       controller.enqueue(encoder.encode(formatSSE({ content: event.delta.text, done: false })));
     }
   }
+
+  return fullResponse;
 }
 
 async function streamGemini(
@@ -362,8 +454,9 @@ async function streamGemini(
   message: string,
   systemPrompt: string,
   conversationHistory: Array<{ role: 'user' | 'assistant'; content: string }>,
-  model: string
-) {
+  model: string,
+  llmSpan: LLMSpan | null
+): Promise<string> {
   const client = getVertexClient();
   if (!client) {
     throw new Error('Google Cloud Project not configured for Vertex AI');
@@ -395,10 +488,15 @@ async function streamGemini(
 
   const result = await chat.sendMessageStream(message);
 
+  let fullResponse = '';
   for await (const chunk of result.stream) {
     const text = chunk.candidates?.[0]?.content?.parts?.[0]?.text;
     if (text) {
+      fullResponse += text;
+      llmSpan?.recordStreamedToken();
       controller.enqueue(encoder.encode(formatSSE({ content: text, done: false })));
     }
   }
+
+  return fullResponse;
 }
