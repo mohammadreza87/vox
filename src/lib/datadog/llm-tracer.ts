@@ -359,35 +359,73 @@ export class LLMSpan {
     if (!config.apiKey) return;
 
     const site = config.site || 'datadoghq.com';
-    const llmObsEndpoint = `https://llm-intake.${site}/api/v2/llmobs`;
+    // Correct endpoint per Datadog docs: https://docs.datadoghq.com/llm_observability/instrumentation/api/
+    const llmObsEndpoint = `https://api.${site}/api/intake/llm-obs/v1/trace/spans`;
 
+    // Build tags as array of strings per API spec
+    const tags = [
+      `env:${config.env}`,
+      `service:${config.service}`,
+    ];
+
+    if (this.trace.attributes.userId) {
+      tags.push(`user_id:${this.trace.attributes.userId}`);
+    }
+
+    // Build the span in the correct format per Datadog LLM Observability API
     const span = {
-      trace_id: this.trace.traceId,
-      span_id: this.trace.spanId,
-      parent_id: this.trace.parentSpanId || '',
       name: this.trace.operationName,
-      tags: [
-        `env:${config.env}`,
-        `service:${config.service}`,
-        `ml_app:${process.env.DD_LLMOBS_ML_APP || 'vox'}`,
-      ],
-      start_ns: this.trace.startTime * 1_000_000,
-      duration: (this.trace.attributes.latencyMs || 0) * 1_000_000,
+      span_id: this.trace.spanId,
+      trace_id: this.trace.traceId,
+      parent_id: this.trace.parentSpanId || 'undefined', // 'undefined' for root spans
+      start_ns: this.trace.startTime * 1_000_000, // Convert ms to ns
+      duration: (this.trace.attributes.latencyMs || 0) * 1_000_000, // Convert ms to ns
       status: this.trace.attributes.status === 'error' ? 'error' : 'ok',
       meta: {
-        'span.kind': 'llm',
-        'model_name': this.trace.attributes.model,
-        'model_provider': this.trace.attributes.provider,
-        'input.value': '', // We don't store actual prompts for privacy
-        'output.value': '', // We don't store actual responses for privacy
+        kind: 'llm', // span kind: 'llm', 'agent', 'workflow', 'tool', 'task', 'embedding', 'retrieval'
+        input: {
+          // LLM spans require messages format, not value
+          messages: [
+            {
+              role: 'user',
+              content: `[Prompt - ${this.trace.attributes.promptLength || 0} chars, redacted for privacy]`,
+            },
+          ],
+        },
+        output: {
+          // LLM spans require messages format, not value
+          messages: [
+            {
+              role: 'assistant',
+              content: `[Response - ${this.trace.attributes.responseLength || 0} chars, redacted for privacy]`,
+            },
+          ],
+        },
+        metadata: {
+          model_name: this.trace.attributes.model,
+          model_provider: this.trace.attributes.provider,
+          temperature: this.trace.attributes.temperature,
+          max_tokens: this.trace.attributes.maxTokens,
+        },
+        ...(this.trace.attributes.status === 'error' && {
+          error: {
+            message: this.trace.attributes.errorMessage || 'Unknown error',
+            type: this.trace.attributes.errorType || 'Error',
+          },
+        }),
       },
       metrics: {
-        'input_tokens': this.trace.attributes.promptTokens || 0,
-        'output_tokens': this.trace.attributes.completionTokens || 0,
-        'total_tokens': this.trace.attributes.totalTokens || 0,
-        'time_to_first_token_ms': this.trace.attributes.timeToFirstToken || 0,
-        'tokens_per_second': this.trace.attributes.tokensPerSecond || 0,
+        input_tokens: this.trace.attributes.promptTokens || 0,
+        output_tokens: this.trace.attributes.completionTokens || 0,
+        total_tokens: this.trace.attributes.totalTokens || 0,
+        ...(this.trace.attributes.timeToFirstToken && {
+          time_to_first_token: this.trace.attributes.timeToFirstToken / 1000, // Convert ms to seconds
+        }),
+        ...(this.trace.attributes.estimatedCostUsd && {
+          total_cost: this.trace.attributes.estimatedCostUsd,
+        }),
       },
+      tags,
     };
 
     try {
@@ -403,7 +441,7 @@ export class LLMSpan {
             attributes: {
               ml_app: process.env.DD_LLMOBS_ML_APP || 'vox',
               session_id: this.trace.attributes.sessionId || this.trace.traceId,
-              tags: span.tags,
+              tags,
               spans: [span],
             },
           },
@@ -411,9 +449,10 @@ export class LLMSpan {
       });
 
       if (!response.ok) {
-        console.error('[Datadog LLM Obs] Failed to submit span:', response.status, await response.text());
+        const errorText = await response.text();
+        console.error('[Datadog LLM Obs] Failed to submit span:', response.status, errorText);
       } else {
-        console.log('[Datadog LLM Obs] Span submitted successfully');
+        console.log('[Datadog LLM Obs] Span submitted successfully (202)');
       }
     } catch (error) {
       console.error('[Datadog LLM Obs] Error submitting span:', error);
