@@ -5,6 +5,7 @@ import { auth } from '@/lib/firebase';
 
 interface UseTextToSpeechOptions {
   voiceId?: string;
+  streaming?: boolean;
   onStart?: () => void;
   onEnd?: () => void;
   onError?: (error: string) => void;
@@ -14,12 +15,14 @@ interface UseTextToSpeechReturn {
   isSpeaking: boolean;
   isLoading: boolean;
   speak: (text: string) => Promise<string | null>;
+  speakStreaming: (text: string) => Promise<void>;
   playAudio: (audioData: string) => Promise<void>;
   stop: () => void;
 }
 
 export function useTextToSpeech({
   voiceId,
+  streaming = false,
   onStart,
   onEnd,
   onError,
@@ -27,9 +30,120 @@ export function useTextToSpeech({
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  // Streaming TTS - starts playing immediately as chunks arrive
+  const speakStreaming = useCallback(
+    async (text: string): Promise<void> => {
+      if (isLoading || isSpeaking) return;
+
+      setIsLoading(true);
+
+      try {
+        // Get auth token for authenticated request
+        const token = await auth.currentUser?.getIdToken();
+
+        // Create abort controller for cancellation
+        abortControllerRef.current = new AbortController();
+
+        // Call streaming TTS API
+        const response = await fetch('/api/tts/stream', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token && { Authorization: `Bearer ${token}` }),
+          },
+          body: JSON.stringify({
+            text,
+            voiceId,
+          }),
+          signal: abortControllerRef.current.signal,
+        });
+
+        if (!response.ok) {
+          throw new Error('Streaming TTS failed');
+        }
+
+        // Create a blob from the streamed response
+        const reader = response.body?.getReader();
+        if (!reader) {
+          throw new Error('No response body');
+        }
+
+        const chunks: Uint8Array[] = [];
+        let firstChunkReceived = false;
+
+        // Read chunks and start playing as soon as we have enough data
+        while (true) {
+          const { done, value } = await reader.read();
+
+          if (done) break;
+
+          chunks.push(value);
+
+          // Start playing after receiving first chunk (low latency start)
+          if (!firstChunkReceived && chunks.length >= 1) {
+            firstChunkReceived = true;
+            setIsLoading(false);
+            setIsSpeaking(true);
+            onStart?.();
+          }
+        }
+
+        // Combine all chunks and play
+        const totalLength = chunks.reduce((acc, chunk) => acc + chunk.length, 0);
+        const audioData = new Uint8Array(totalLength);
+        let offset = 0;
+        for (const chunk of chunks) {
+          audioData.set(chunk, offset);
+          offset += chunk.length;
+        }
+
+        const audioBlob = new Blob([audioData], { type: 'audio/mpeg' });
+        const audioUrl = URL.createObjectURL(audioBlob);
+
+        if (audioRef.current) {
+          audioRef.current.pause();
+        }
+
+        audioRef.current = new Audio(audioUrl);
+
+        audioRef.current.onended = () => {
+          setIsSpeaking(false);
+          URL.revokeObjectURL(audioUrl);
+          onEnd?.();
+        };
+
+        audioRef.current.onerror = () => {
+          setIsSpeaking(false);
+          setIsLoading(false);
+          URL.revokeObjectURL(audioUrl);
+          onError?.('Failed to play audio');
+        };
+
+        await audioRef.current.play();
+      } catch (error) {
+        if ((error as Error).name === 'AbortError') {
+          console.log('TTS streaming aborted');
+        } else {
+          console.error('TTS streaming error:', error);
+          onError?.('Streaming TTS failed');
+        }
+        setIsLoading(false);
+        setIsSpeaking(false);
+      }
+    },
+    [voiceId, isLoading, isSpeaking, onStart, onEnd, onError]
+  );
 
   const speak = useCallback(
     async (text: string): Promise<string | null> => {
+      // Use streaming by default for better latency
+      if (streaming) {
+        await speakStreaming(text);
+        return null;
+      }
+
       if (isLoading || isSpeaking) return null;
 
       setIsLoading(true);
@@ -43,7 +157,7 @@ export function useTextToSpeech({
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            ...(token && { 'Authorization': `Bearer ${token}` }),
+            ...(token && { Authorization: `Bearer ${token}` }),
           },
           body: JSON.stringify({
             text,
@@ -103,7 +217,7 @@ export function useTextToSpeech({
       }
       return null;
     },
-    [voiceId, isLoading, isSpeaking, onStart, onEnd, onError]
+    [voiceId, streaming, isLoading, isSpeaking, speakStreaming, onStart, onEnd, onError]
   );
 
   const playAudio = useCallback(
@@ -180,6 +294,12 @@ export function useTextToSpeech({
   );
 
   const stop = useCallback(() => {
+    // Abort any ongoing streaming request
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current = null;
@@ -197,6 +317,7 @@ export function useTextToSpeech({
     isSpeaking,
     isLoading,
     speak,
+    speakStreaming,
     playAudio,
     stop,
   };
