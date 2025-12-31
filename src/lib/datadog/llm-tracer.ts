@@ -349,6 +349,75 @@ export class LLMSpan {
         events: this.trace.events,
       }
     );
+
+    // Also send to LLM Observability API
+    await this.submitToLLMObservability();
+  }
+
+  private async submitToLLMObservability(): Promise<void> {
+    const config = getDatadogConfig();
+    if (!config.apiKey) return;
+
+    const site = config.site || 'datadoghq.com';
+    const llmObsEndpoint = `https://llm-intake.${site}/api/v2/llmobs`;
+
+    const span = {
+      trace_id: this.trace.traceId,
+      span_id: this.trace.spanId,
+      parent_id: this.trace.parentSpanId || '',
+      name: this.trace.operationName,
+      tags: [
+        `env:${config.env}`,
+        `service:${config.service}`,
+        `ml_app:${process.env.DD_LLMOBS_ML_APP || 'vox'}`,
+      ],
+      start_ns: this.trace.startTime * 1_000_000,
+      duration: (this.trace.attributes.latencyMs || 0) * 1_000_000,
+      status: this.trace.attributes.status === 'error' ? 'error' : 'ok',
+      meta: {
+        'span.kind': 'llm',
+        'model_name': this.trace.attributes.model,
+        'model_provider': this.trace.attributes.provider,
+        'input.value': '', // We don't store actual prompts for privacy
+        'output.value': '', // We don't store actual responses for privacy
+      },
+      metrics: {
+        'input_tokens': this.trace.attributes.promptTokens || 0,
+        'output_tokens': this.trace.attributes.completionTokens || 0,
+        'total_tokens': this.trace.attributes.totalTokens || 0,
+        'time_to_first_token_ms': this.trace.attributes.timeToFirstToken || 0,
+        'tokens_per_second': this.trace.attributes.tokensPerSecond || 0,
+      },
+    };
+
+    try {
+      const response = await fetch(llmObsEndpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'DD-API-KEY': config.apiKey,
+        },
+        body: JSON.stringify({
+          data: {
+            type: 'span',
+            attributes: {
+              ml_app: process.env.DD_LLMOBS_ML_APP || 'vox',
+              session_id: this.trace.attributes.sessionId || this.trace.traceId,
+              tags: span.tags,
+              spans: [span],
+            },
+          },
+        }),
+      });
+
+      if (!response.ok) {
+        console.error('[Datadog LLM Obs] Failed to submit span:', response.status, await response.text());
+      } else {
+        console.log('[Datadog LLM Obs] Span submitted successfully');
+      }
+    } catch (error) {
+      console.error('[Datadog LLM Obs] Error submitting span:', error);
+    }
   }
 }
 
