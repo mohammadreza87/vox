@@ -63,7 +63,7 @@ Welcome them warmly and ask what they'd like to know about VOX!`,
     voiceId: VOICE_IDS.VOX_GUIDE,
     voiceName: 'Daniel',
     avatarEmoji: '🎙️',
-    category: 'utility',
+    category: 'productivity',
     gradient: 'from-[#FF6D1F] to-[#ff8a4c]',
   },
   {
