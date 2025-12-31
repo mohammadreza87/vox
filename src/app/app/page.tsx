@@ -87,6 +87,7 @@ function AppContent() {
   const recoveredContactsRef = useRef<Set<string>>(new Set());
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const hasSentTranscriptRef = useRef(false); // Prevent duplicate voice message sends
 
   // GSAP Animation refs - single page entrance
   const { ref: pageRef } = useEntranceAnimation('fadeIn', { delay: 0 });
@@ -187,13 +188,21 @@ function AppContent() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Handle transcript from voice recording
+  // Handle transcript from voice recording - only send once per recording session
   useEffect(() => {
-    if (transcript && !isRecording) {
+    if (transcript && !isRecording && !hasSentTranscriptRef.current) {
+      hasSentTranscriptRef.current = true; // Mark as sent to prevent duplicates
       handleSendMessage(transcript);
       resetTranscript();
     }
   }, [isRecording, transcript]);
+
+  // Reset the sent flag when starting a new recording
+  useEffect(() => {
+    if (isRecording) {
+      hasSentTranscriptRef.current = false;
+    }
+  }, [isRecording]);
 
   // Filter contacts by search
   const filteredContacts = allContacts.filter(contact =>
