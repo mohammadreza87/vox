@@ -1,0 +1,1398 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VOX - Investor Pitch Deck 2025</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        :root {
+            --primary: #FF6D1F;
+            --primary-light: #ff8a4c;
+            --primary-dark: #e5621b;
+            --cream: #FAF3E1;
+            --beige: #F5E7C6;
+            --dark: #222222;
+            --dark-secondary: #0f0f0f;
+            --dark-card: #1a1a1a;
+            --success: #10b981;
+            --error: #ef4444;
+            --warning: #f59e0b;
+            --info: #3b82f6;
+            --purple: #8b5cf6;
+            --cyan: #06b6d4;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html, body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--dark-secondary);
+            color: var(--cream);
+            overflow: hidden;
+            height: 100%;
+        }
+
+        /* Slide Container */
+        .deck-container {
+            width: 100%;
+            height: 100vh;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .slide {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            padding: 60px 100px;
+            opacity: 0;
+            visibility: hidden;
+            transform: scale(0.95);
+            transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .slide.active {
+            opacity: 1;
+            visibility: visible;
+            transform: scale(1);
+        }
+
+        /* Background - subtle gradient */
+        .slide::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background:
+                radial-gradient(ellipse at 20% 20%, rgba(255, 109, 31, 0.06) 0%, transparent 50%),
+                radial-gradient(ellipse at 80% 80%, rgba(139, 92, 246, 0.03) 0%, transparent 50%);
+            pointer-events: none;
+        }
+
+        /* Typography - 2025: Larger, bolder, cleaner */
+        h1 {
+            font-size: clamp(4rem, 8vw, 7rem);
+            font-weight: 900;
+            line-height: 0.95;
+            letter-spacing: -0.04em;
+        }
+
+        h2 {
+            font-size: clamp(2rem, 4vw, 3.2rem);
+            font-weight: 700;
+            line-height: 1.1;
+            letter-spacing: -0.02em;
+        }
+
+        h3 {
+            font-size: clamp(1.2rem, 2vw, 1.6rem);
+            font-weight: 600;
+            letter-spacing: -0.01em;
+            color: var(--cream);
+        }
+
+        p, li {
+            font-size: clamp(0.95rem, 1.5vw, 1.2rem);
+            line-height: 1.5;
+            color: rgba(250, 243, 225, 0.7);
+        }
+
+        .gradient-text {
+            background: linear-gradient(135deg, var(--primary) 0%, var(--primary-light) 40%, #ffd700 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .gradient-text-purple {
+            background: linear-gradient(135deg, var(--purple) 0%, var(--cyan) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        /* 2025 Trend: Mega numbers */
+        .mega-number {
+            font-size: clamp(4rem, 10vw, 8rem);
+            font-weight: 800;
+            line-height: 1;
+            letter-spacing: -0.04em;
+        }
+
+        .mega-label {
+            font-size: clamp(0.85rem, 1.5vw, 1.1rem);
+            text-transform: uppercase;
+            letter-spacing: 0.15em;
+            color: rgba(250, 243, 225, 0.4);
+            margin-top: 8px;
+        }
+
+        /* Slide Content */
+        .slide-content {
+            position: relative;
+            z-index: 1;
+            width: 100%;
+            max-width: 1400px;
+        }
+
+        .centered {
+            text-align: center;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        /* 2025 Trend: Clean grid layouts */
+        .grid-2 {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 60px;
+            align-items: center;
+        }
+
+        .grid-3 {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 32px;
+        }
+
+        .grid-4 {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 24px;
+        }
+
+        /* 2025 Cards - Glassmorphism */
+        .card {
+            background: rgba(255, 255, 255, 0.04);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 24px;
+            padding: 28px;
+            transition: all 0.3s ease;
+        }
+
+        .card:hover {
+            background: rgba(255, 255, 255, 0.07);
+            border-color: rgba(255, 255, 255, 0.12);
+        }
+
+        .card-glow {
+            background: rgba(255, 109, 31, 0.06);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border-color: rgba(255, 109, 31, 0.15);
+        }
+
+        /* 2025 Trend: Pill badges - glassmorphism */
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(255, 109, 31, 0.08);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 109, 31, 0.15);
+            padding: 8px 18px;
+            border-radius: 100px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            color: var(--primary-light);
+            margin-bottom: 28px;
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+        }
+
+        .badge-small {
+            padding: 5px 12px;
+            font-size: 0.7rem;
+            margin-bottom: 14px;
+        }
+
+        /* Feature list - 2025 style */
+        .feature-list {
+            list-style: none;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .feature-list li {
+            display: flex;
+            align-items: flex-start;
+            gap: 16px;
+        }
+
+        .feature-list .icon {
+            flex-shrink: 0;
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(255, 109, 31, 0.15);
+            border-radius: 10px;
+            font-size: 1rem;
+        }
+
+        .feature-list.green .icon {
+            background: rgba(16, 185, 129, 0.15);
+        }
+
+        .feature-list.red .icon {
+            background: rgba(239, 68, 68, 0.15);
+        }
+
+        /* Stats row - 2025 trend: horizontal metrics */
+        .stats-row {
+            display: flex;
+            gap: 40px;
+            justify-content: center;
+            margin: 40px 0;
+        }
+
+        .stat {
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 2.5rem;
+            font-weight: 700;
+            color: var(--primary);
+        }
+
+        .stat-label {
+            font-size: 0.7rem;
+            color: rgba(250, 243, 225, 0.4);
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+            margin-top: 4px;
+        }
+
+        /* Quote block - 2025 style */
+        .quote {
+            font-size: 1.4rem;
+            font-weight: 400;
+            font-style: italic;
+            color: rgba(250, 243, 225, 0.7);
+            max-width: 700px;
+            text-align: center;
+            line-height: 1.5;
+            position: relative;
+            padding: 0 32px;
+        }
+
+        .quote::before {
+            content: '"';
+            position: absolute;
+            left: 0;
+            top: -16px;
+            font-size: 3rem;
+            color: var(--primary);
+            opacity: 0.3;
+        }
+
+        /* Comparison matrix - 2025 trend */
+        .matrix {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+        }
+
+        .matrix th {
+            padding: 16px 20px;
+            text-align: left;
+            font-weight: 600;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: rgba(250, 243, 225, 0.5);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .matrix td {
+            padding: 20px;
+            font-size: 1rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .matrix tr:last-child td {
+            border-bottom: none;
+        }
+
+        .matrix .highlight {
+            background: rgba(255, 109, 31, 0.08);
+        }
+
+        .matrix .check {
+            color: var(--success);
+            font-weight: 700;
+        }
+
+        .matrix .cross {
+            color: rgba(250, 243, 225, 0.3);
+        }
+
+        /* Pricing cards - glassmorphism */
+        .pricing-card {
+            padding: 32px;
+            text-align: center;
+            border-radius: 24px;
+            background: rgba(255, 255, 255, 0.03);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+        }
+
+        .pricing-card.featured {
+            background: rgba(255, 109, 31, 0.06);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border-color: rgba(255, 109, 31, 0.2);
+            transform: scale(1.03);
+        }
+
+        .pricing-tier {
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.2em;
+            color: rgba(250, 243, 225, 0.4);
+        }
+
+        .pricing-price {
+            font-size: 3.5rem;
+            font-weight: 800;
+            margin: 16px 0;
+        }
+
+        /* Timeline - 2025 horizontal style */
+        .timeline-h {
+            display: flex;
+            gap: 32px;
+            width: 100%;
+        }
+
+        .timeline-item {
+            flex: 1;
+            position: relative;
+            padding: 28px;
+            background: rgba(255, 255, 255, 0.03);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border-radius: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.06);
+        }
+
+        .timeline-item::before {
+            display: none;
+        }
+
+        .timeline-phase {
+            display: inline-block;
+            padding: 6px 14px;
+            background: var(--primary);
+            border-radius: 100px;
+            font-size: 0.75rem;
+            font-weight: 700;
+            color: white;
+            margin-bottom: 16px;
+        }
+
+        /* Team cards - 2025 trend */
+        .team-card {
+            text-align: center;
+            padding: 32px;
+        }
+
+        .team-avatar {
+            width: 120px;
+            height: 120px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, var(--primary), var(--primary-light));
+            margin: 0 auto 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 3rem;
+            border: 4px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .team-name {
+            font-size: 1.3rem;
+            font-weight: 700;
+            margin-bottom: 4px;
+        }
+
+        .team-role {
+            font-size: 0.9rem;
+            color: var(--primary-light);
+            margin-bottom: 12px;
+        }
+
+        .team-bio {
+            font-size: 0.9rem;
+            color: rgba(250, 243, 225, 0.6);
+        }
+
+        /* Product mockup frame */
+        .phone-frame {
+            width: 280px;
+            height: 560px;
+            background: var(--dark-card);
+            border-radius: 40px;
+            border: 8px solid #2a2a2a;
+            padding: 12px;
+            box-shadow: 0 40px 80px rgba(0, 0, 0, 0.5);
+        }
+
+        .phone-screen {
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(135deg, var(--cream) 0%, var(--beige) 100%);
+            border-radius: 32px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .phone-header {
+            padding: 16px;
+            background: rgba(255, 109, 31, 0.1);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .phone-avatar {
+            width: 40px;
+            height: 40px;
+            background: var(--primary);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.2rem;
+        }
+
+        .phone-name {
+            font-weight: 600;
+            color: var(--dark);
+            font-size: 0.95rem;
+        }
+
+        .phone-status {
+            font-size: 0.75rem;
+            color: rgba(34, 34, 34, 0.5);
+        }
+
+        .phone-messages {
+            flex: 1;
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .msg {
+            max-width: 80%;
+            padding: 12px 16px;
+            border-radius: 18px;
+            font-size: 0.85rem;
+            line-height: 1.4;
+        }
+
+        .msg-received {
+            background: white;
+            color: var(--dark);
+            align-self: flex-start;
+            border-bottom-left-radius: 4px;
+        }
+
+        .msg-sent {
+            background: linear-gradient(135deg, var(--primary), var(--primary-light));
+            color: white;
+            align-self: flex-end;
+            border-bottom-right-radius: 4px;
+        }
+
+        /* Navigation - 2025 minimal glassmorphism */
+        .nav-controls {
+            position: fixed;
+            bottom: 32px;
+            left: 32px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            z-index: 100;
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(24px);
+            -webkit-backdrop-filter: blur(24px);
+            padding: 8px 16px;
+            border-radius: 50px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .nav-btn {
+            width: 32px;
+            height: 32px;
+            border: none;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 50%;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--cream);
+            font-size: 0.85rem;
+            transition: all 0.2s ease;
+        }
+
+        .nav-btn:hover {
+            background: rgba(255, 109, 31, 0.5);
+        }
+
+        .nav-btn:disabled {
+            opacity: 0.2;
+            cursor: not-allowed;
+        }
+
+        .slide-counter {
+            font-size: 0.75rem;
+            color: rgba(250, 243, 225, 0.4);
+            font-weight: 500;
+            min-width: 36px;
+            text-align: center;
+        }
+
+        .progress-bar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            height: 2px;
+            background: linear-gradient(90deg, var(--primary), var(--primary-light));
+            transition: width 0.3s ease;
+            z-index: 100;
+            opacity: 0.7;
+        }
+
+        /* Slide number indicator */
+        .slide-indicator {
+            position: fixed;
+            top: 32px;
+            right: 32px;
+            font-size: 0.7rem;
+            color: rgba(250, 243, 225, 0.2);
+            z-index: 100;
+        }
+
+        /* Animations */
+        .slide.active .animate-in {
+            animation: slideUp 0.6s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+            opacity: 0;
+        }
+
+        .slide.active .animate-in:nth-child(1) { animation-delay: 0.1s; }
+        .slide.active .animate-in:nth-child(2) { animation-delay: 0.2s; }
+        .slide.active .animate-in:nth-child(3) { animation-delay: 0.3s; }
+        .slide.active .animate-in:nth-child(4) { animation-delay: 0.4s; }
+        .slide.active .animate-in:nth-child(5) { animation-delay: 0.5s; }
+
+        @keyframes slideUp {
+            from { opacity: 0; transform: translateY(40px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .pulse {
+            animation: pulse 2s ease-in-out infinite;
+        }
+
+        /* Lucide Icons */
+        .icon-lg {
+            width: 48px;
+            height: 48px;
+            stroke-width: 1.5;
+            color: var(--primary);
+        }
+
+        .icon-md {
+            width: 32px;
+            height: 32px;
+            stroke-width: 1.5;
+        }
+
+        .icon-sm {
+            width: 24px;
+            height: 24px;
+            stroke-width: 2;
+        }
+
+        .icon-xl {
+            width: 64px;
+            height: 64px;
+            stroke-width: 1.25;
+            color: var(--primary);
+        }
+
+        .icon-hero {
+            width: 80px;
+            height: 80px;
+            stroke-width: 1;
+            color: var(--primary);
+        }
+
+        /* Responsive */
+        @media (max-width: 1200px) {
+            .slide { padding: 40px 60px; }
+            .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; gap: 24px; }
+            .timeline-h { flex-direction: column; }
+            .timeline-item::before { display: none; }
+            .stats-row { flex-wrap: wrap; gap: 32px; }
+        }
+
+        @media (max-width: 768px) {
+            .slide { padding: 32px; }
+            .phone-frame { transform: scale(0.8); }
+        }
+    </style>
+</head>
+<body>
+    <div class="progress-bar" id="progressBar"></div>
+    <div class="slide-indicator"><span id="slideNum">01</span></div>
+
+    <div class="deck-container">
+
+        <!-- SLIDE 1: HOOK (2025 - Lead with strongest metric) -->
+        <div class="slide active" data-slide="1">
+            <div class="slide-content centered">
+                <div class="animate-in" style="margin-bottom: 24px;"><i data-lucide="mic" class="icon-hero"></i></div>
+                <h1 class="animate-in gradient-text" style="margin-bottom: 24px;">VOX</h1>
+                <p class="animate-in" style="font-size: 1.8rem; color: rgba(250,243,225,0.7); max-width: 600px; margin-bottom: 48px;">
+                    One App. All AI Models. Every Voice.
+                </p>
+                <div class="stats-row animate-in">
+                    <div class="stat">
+                        <div class="stat-value">4</div>
+                        <div class="stat-label">AI Models</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-value">35+</div>
+                        <div class="stat-label">Languages</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-value">$0</div>
+                        <div class="stat-label">To Start</div>
+                    </div>
+                </div>
+                <p class="animate-in" style="font-size: 1rem; color: rgba(250,243,225,0.4); margin-top: 48px;">
+                    Built for Google Cloud + ElevenLabs Hackathon 2025
+                </p>
+            </div>
+        </div>
+
+        <!-- SLIDE 2: PROBLEM (2025 - One clear pain point) -->
+        <div class="slide" data-slide="2">
+            <div class="slide-content">
+                <div class="badge animate-in">The Problem</div>
+                <h2 class="animate-in" style="margin-bottom: 48px;">
+                    AI is <span style="color: var(--error);">fragmented.</span><br>
+                    Voice is an <span style="color: var(--error);">afterthought.</span>
+                </h2>
+                <div class="grid-3 animate-in">
+                    <div class="card" style="text-align: center;">
+                        <div style="margin-bottom: 16px;"><i data-lucide="message-square" class="icon-lg"></i></div>
+                        <h3 style="font-size: 1.3rem;">ChatGPT</h3>
+                        <p style="font-size: 1rem; margin-top: 12px;">1 model, 1 voice, text-first</p>
+                    </div>
+                    <div class="card" style="text-align: center;">
+                        <div style="margin-bottom: 16px;"><i data-lucide="brain" class="icon-lg"></i></div>
+                        <h3 style="font-size: 1.3rem;">Claude</h3>
+                        <p style="font-size: 1rem; margin-top: 12px;">1 model, no voice</p>
+                    </div>
+                    <div class="card" style="text-align: center;">
+                        <div style="margin-bottom: 16px;"><i data-lucide="sparkles" class="icon-lg"></i></div>
+                        <h3 style="font-size: 1.3rem;">Gemini</h3>
+                        <p style="font-size: 1rem; margin-top: 12px;">1 model, limited voice</p>
+                    </div>
+                </div>
+                <p class="quote animate-in" style="margin-top: 48px;">
+                    You can't use the best model for each task.<br>
+                    You can't personalize how AI sounds.<br>
+                    <strong style="color: var(--primary);">That's the gap.</strong>
+                </p>
+            </div>
+        </div>
+
+        <!-- SLIDE 3: SOLUTION (2025 - Show, don't tell) -->
+        <div class="slide" data-slide="3">
+            <div class="slide-content">
+                <div class="grid-2">
+                    <div>
+                        <div class="badge animate-in">The Solution</div>
+                        <h2 class="animate-in" style="margin-bottom: 32px;">
+                            Your AI contacts.<br>
+                            <span class="gradient-text">Their voices.</span>
+                        </h2>
+                        <ul class="feature-list animate-in">
+                            <li>
+                                <span class="icon"><i data-lucide="brain" class="icon-sm"></i></span>
+                                <span><strong>Multi-model</strong> — Gemini, Claude, GPT-4, DeepSeek in one app</span>
+                            </li>
+                            <li>
+                                <span class="icon"><i data-lucide="mic" class="icon-sm"></i></span>
+                                <span><strong>Voice cloning</strong> — Hear yourself speak any language</span>
+                            </li>
+                            <li>
+                                <span class="icon"><i data-lucide="user" class="icon-sm"></i></span>
+                                <span><strong>AI contacts</strong> — Each has unique voice, personality, purpose</span>
+                            </li>
+                            <li>
+                                <span class="icon"><i data-lucide="globe" class="icon-sm"></i></span>
+                                <span><strong>Real-time translation</strong> — 35+ languages, your voice</span>
+                            </li>
+                        </ul>
+                    </div>
+                    <div class="animate-in" style="display: flex; justify-content: center;">
+                        <div class="phone-frame">
+                            <div class="phone-screen">
+                                <div class="phone-header">
+                                    <div class="phone-avatar"><i data-lucide="briefcase" style="width: 20px; height: 20px; color: white;"></i></div>
+                                    <div>
+                                        <div class="phone-name">Alice</div>
+                                        <div class="phone-status">Interview Coach • GPT-4</div>
+                                    </div>
+                                </div>
+                                <div class="phone-messages">
+                                    <div class="msg msg-sent">I have a Google interview next week. Help me prep?</div>
+                                    <div class="msg msg-received">Great! Let's start with a behavioral question. Tell me about a time you led a project through ambiguity...</div>
+                                    <div class="msg msg-sent"><i data-lucide="mic" style="width: 14px; height: 14px; display: inline; vertical-align: middle;"></i> Voice message (0:23)</div>
+                                    <div class="msg msg-received">Good structure! I'd rate that 7/10. Let's work on adding more specific metrics...</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- SLIDE 4: WHY NOW (2025 - Critical slide, moved UP) -->
+        <div class="slide" data-slide="4">
+            <div class="slide-content centered">
+                <div class="badge animate-in">Timing</div>
+                <h2 class="animate-in" style="margin-bottom: 48px;">
+                    Why <span class="gradient-text">now?</span>
+                </h2>
+                <div class="grid-4 animate-in">
+                    <div class="card" style="text-align: center; padding: 32px 24px;">
+                        <div style="margin-bottom: 16px;"><i data-lucide="audio-waveform" class="icon-lg"></i></div>
+                        <h4 style="font-size: 1.1rem; margin-bottom: 8px;">Voice AI Got Good</h4>
+                        <p style="font-size: 0.9rem;">ElevenLabs is now indistinguishable from human</p>
+                    </div>
+                    <div class="card" style="text-align: center; padding: 32px 24px;">
+                        <div style="margin-bottom: 16px;"><i data-lucide="layers" class="icon-lg"></i></div>
+                        <h4 style="font-size: 1.1rem; margin-bottom: 8px;">Multi-Model Era</h4>
+                        <p style="font-size: 0.9rem;">No single AI wins everything. Users want choice.</p>
+                    </div>
+                    <div class="card" style="text-align: center; padding: 32px 24px;">
+                        <div style="margin-bottom: 16px;"><i data-lucide="smartphone" class="icon-lg"></i></div>
+                        <h4 style="font-size: 1.1rem; margin-bottom: 8px;">Gen Z is Voice-Native</h4>
+                        <p style="font-size: 0.9rem;">They grew up with Siri. Voice notes > texting.</p>
+                    </div>
+                    <div class="card" style="text-align: center; padding: 32px 24px;">
+                        <div style="margin-bottom: 16px;"><i data-lucide="trending-down" class="icon-lg"></i></div>
+                        <h4 style="font-size: 1.1rem; margin-bottom: 8px;">Costs Dropping</h4>
+                        <p style="font-size: 0.9rem;">Voice AI is finally economically viable</p>
+                    </div>
+                </div>
+                <div class="card card-glow animate-in" style="margin-top: 48px; padding: 32px 48px; text-align: center;">
+                    <p style="font-size: 1.3rem; color: var(--cream);">
+                        <span style="opacity: 0.4;">2 years ago: Too early</span>
+                        &nbsp;&nbsp;→&nbsp;&nbsp;
+                        <strong style="color: var(--primary);">Now: Window open</strong>
+                        &nbsp;&nbsp;→&nbsp;&nbsp;
+                        <span style="opacity: 0.4;">2 years later: Too late</span>
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <!-- SLIDE 5: SAM ALTMAN VALIDATION -->
+        <div class="slide" data-slide="5">
+            <div class="slide-content centered">
+                <div class="badge animate-in">Industry Validation</div>
+                <h2 class="animate-in" style="margin-bottom: 40px;">
+                    <span class="gradient-text">"Kids love Voice Mode"</span>
+                </h2>
+                <div class="grid-2 animate-in" style="max-width: 1000px; align-items: stretch; gap: 40px;">
+                    <div class="card" style="padding: 32px; display: flex; flex-direction: column;">
+                        <div style="display: flex; align-items: center; gap: 14px; margin-bottom: 20px;">
+                            <img src="public/images/sam-altman.png" alt="Sam Altman" style="width: 52px; height: 52px; border-radius: 50%; object-fit: cover; object-position: center top;">
+                            <div>
+                                <div style="font-weight: 600; font-size: 1rem;">Sam Altman</div>
+                                <div style="font-size: 0.75rem; opacity: 0.5;">CEO, OpenAI</div>
+                            </div>
+                        </div>
+                        <p style="font-size: 1.15rem; font-style: italic; line-height: 1.5; margin-bottom: 20px; opacity: 0.9;">
+                            "Kids love voice mode in ChatGPT."
+                        </p>
+                        <p style="font-size: 1rem; line-height: 1.5; opacity: 0.7; margin-top: auto;">
+                            "My kids will never be smarter than AI, but they will grow up <span style="color: var(--primary);">vastly more capable</span> than we grew up."
+                        </p>
+                    </div>
+                    <div class="card" style="padding: 32px; display: flex; flex-direction: column;">
+                        <h3 style="font-size: 1rem; margin-bottom: 16px; opacity: 0.9;">The Thomas the Train Story</h3>
+                        <p style="font-size: 0.9rem; line-height: 1.5; margin-bottom: 20px; opacity: 0.6;">
+                            A parent put ChatGPT in voice mode with his kid...
+                        </p>
+                        <div style="display: flex; gap: 24px; margin-bottom: 20px;">
+                            <div>
+                                <div style="font-size: 2rem; font-weight: 700; color: var(--primary);">2h</div>
+                                <div style="font-size: 0.75rem; opacity: 0.5;">Still talking</div>
+                            </div>
+                            <div>
+                                <div style="font-size: 2rem; font-weight: 700; color: var(--primary);">10K+</div>
+                                <div style="font-size: 0.75rem; opacity: 0.5;">Words</div>
+                            </div>
+                        </div>
+                        <p style="font-size: 0.9rem; font-style: italic; opacity: 0.6; margin-top: auto;">
+                            "My son thinks ChatGPT is the coolest train-loving person. I can never compete."
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- SLIDE 6: DIFFERENTIATION (2025 - Clear competitive edge) -->
+        <div class="slide" data-slide="6">
+            <div class="slide-content">
+                <div class="badge animate-in">Differentiation</div>
+                <h2 class="animate-in" style="margin-bottom: 48px;">
+                    What makes us <span class="gradient-text">different</span>
+                </h2>
+                <div class="grid-3 animate-in">
+                    <div class="card card-glow" style="padding: 40px;">
+                        <div style="font-size: 2rem; margin-bottom: 16px;">1</div>
+                        <h3 style="font-size: 1.4rem; margin-bottom: 12px;">Multi-Model</h3>
+                        <p>Use Claude for reasoning, Gemini for speed, GPT for coding. All in one interface.</p>
+                    </div>
+                    <div class="card card-glow" style="padding: 40px;">
+                        <div style="font-size: 2rem; margin-bottom: 16px;">2</div>
+                        <h3 style="font-size: 1.4rem; margin-bottom: 12px;">Voice-Per-Contact</h3>
+                        <p>Alice's voice = interview mode. Carlos = Spanish mode. Voice triggers instant context.</p>
+                    </div>
+                    <div class="card card-glow" style="padding: 40px;">
+                        <div style="font-size: 2rem; margin-bottom: 16px;">3</div>
+                        <h3 style="font-size: 1.4rem; margin-bottom: 12px;">Group AI Chat</h3>
+                        <p>Put Claude, GPT, Gemini in one chat. Watch them debate. Get the best answer.</p>
+                    </div>
+                </div>
+                <p class="animate-in" style="text-align: center; margin-top: 48px; font-size: 1.4rem;">
+                    <span style="opacity: 0.5;">No one else offers this combination.</span>
+                </p>
+            </div>
+        </div>
+
+        <!-- SLIDE 7: PRODUCT DEMO (2025 - Show the product) -->
+        <div class="slide" data-slide="7">
+            <div class="slide-content">
+                <div class="grid-2">
+                    <div>
+                        <div class="badge animate-in">Live Product</div>
+                        <h2 class="animate-in" style="margin-bottom: 32px;">
+                            What we <span class="gradient-text">built</span>
+                        </h2>
+                        <ul class="feature-list green animate-in">
+                            <li><span class="icon"><i data-lucide="check" class="icon-sm"></i></span> Multi-model AI (Gemini, Claude, GPT, DeepSeek)</li>
+                            <li><span class="icon"><i data-lucide="check" class="icon-sm"></i></span> Voice cloning (ElevenLabs integration)</li>
+                            <li><span class="icon"><i data-lucide="check" class="icon-sm"></i></span> Real-time translation (35+ languages)</li>
+                            <li><span class="icon"><i data-lucide="check" class="icon-sm"></i></span> Pre-made AI contacts (7 experts)</li>
+                            <li><span class="icon"><i data-lucide="check" class="icon-sm"></i></span> Custom contact creation</li>
+                            <li><span class="icon"><i data-lucide="check" class="icon-sm"></i></span> Subscription payments (Stripe)</li>
+                            <li><span class="icon"><i data-lucide="check" class="icon-sm"></i></span> Cloud sync across devices</li>
+                        </ul>
+                        <div class="animate-in" style="margin-top: 32px;">
+                            <a href="https://vox-aicontact-fe0e3.web.app" target="_blank"
+                               style="display: inline-flex; align-items: center; gap: 12px; padding: 16px 32px;
+                                      background: var(--primary); color: white; text-decoration: none;
+                                      border-radius: 100px; font-weight: 600; font-size: 1.1rem;">
+                                Try Live Demo →
+                            </a>
+                        </div>
+                    </div>
+                    <div class="animate-in" style="display: flex; gap: 24px; justify-content: center; align-items: flex-start;">
+                        <div class="phone-frame" style="transform: scale(0.85);">
+                            <div class="phone-screen">
+                                <div class="phone-header" style="background: rgba(139, 92, 246, 0.15);">
+                                    <div class="phone-avatar" style="background: var(--purple);"><i data-lucide="languages" style="width: 20px; height: 20px; color: white;"></i></div>
+                                    <div>
+                                        <div class="phone-name">Carlos</div>
+                                        <div class="phone-status">Spanish Tutor • Claude</div>
+                                    </div>
+                                </div>
+                                <div class="phone-messages">
+                                    <div class="msg msg-sent">¿Cómo estás hoy?</div>
+                                    <div class="msg msg-received">¡Muy bien! Tu pronunciación mejora cada día. Practiquemos el subjuntivo...</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="phone-frame" style="transform: scale(0.85);">
+                            <div class="phone-screen">
+                                <div class="phone-header" style="background: rgba(6, 182, 212, 0.15);">
+                                    <div class="phone-avatar" style="background: var(--cyan);"><i data-lucide="rocket" style="width: 20px; height: 20px; color: white;"></i></div>
+                                    <div>
+                                        <div class="phone-name">Marcus</div>
+                                        <div class="phone-status">Startup Mentor • Gemini</div>
+                                    </div>
+                                </div>
+                                <div class="phone-messages">
+                                    <div class="msg msg-sent">How should I price my SaaS?</div>
+                                    <div class="msg msg-received">Start with value-based pricing. What's the ROI for your customers?</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- SLIDE 8: MARKET (2025 - Bottom-up sizing) -->
+        <div class="slide" data-slide="8">
+            <div class="slide-content">
+                <div class="badge animate-in">Market</div>
+                <h2 class="animate-in" style="margin-bottom: 48px;">
+                    Market sizing
+                </h2>
+                <div class="grid-2 animate-in">
+                    <div>
+                        <h3 style="color: var(--success); margin-bottom: 24px;"><i data-lucide="check" style="width: 20px; height: 20px; display: inline; vertical-align: middle;"></i> Bottom-Up Calculation</h3>
+                        <table class="matrix">
+                            <tr>
+                                <td>People who pay for AI tools</td>
+                                <td style="text-align: right; font-weight: 600;">~50M globally</td>
+                            </tr>
+                            <tr>
+                                <td>× Want voice-first experience</td>
+                                <td style="text-align: right;">~10% = 5M</td>
+                            </tr>
+                            <tr>
+                                <td>× Will try a new app</td>
+                                <td style="text-align: right;">~20% = 1M</td>
+                            </tr>
+                            <tr>
+                                <td>× Will convert to paid</td>
+                                <td style="text-align: right;">~5% = 50K</td>
+                            </tr>
+                            <tr>
+                                <td>× Average revenue per user</td>
+                                <td style="text-align: right;">$15/month</td>
+                            </tr>
+                        </table>
+                    </div>
+                    <div style="display: flex; flex-direction: column; gap: 24px;">
+                        <div class="card card-glow" style="text-align: center; padding: 40px;">
+                            <div class="mega-label">Year 1</div>
+                            <div class="stat-value" style="font-size: 3rem;">$750K - $2M</div>
+                            <div style="color: var(--primary-light); font-weight: 600;">ARR</div>
+                        </div>
+                        <div class="card" style="text-align: center; padding: 40px;">
+                            <div class="mega-label">Year 3</div>
+                            <div class="stat-value" style="font-size: 3rem;">$20M - $50M</div>
+                            <div style="color: rgba(250,243,225,0.5); font-weight: 600;">ARR</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- SLIDE 9: BUSINESS MODEL -->
+        <div class="slide" data-slide="9">
+            <div class="slide-content centered">
+                <div class="badge animate-in">Revenue</div>
+                <h2 class="animate-in" style="margin-bottom: 48px;">
+                    How we <span class="gradient-text">make money</span>
+                </h2>
+                <div class="grid-3 animate-in" style="max-width: 1000px;">
+                    <div class="pricing-card">
+                        <div class="pricing-tier">Free</div>
+                        <div class="pricing-price">$0</div>
+                        <p style="font-size: 0.9rem;">Basic model<br>Limited contacts<br>Default presets only</p>
+                    </div>
+                    <div class="pricing-card featured">
+                        <div class="pricing-tier">Pro</div>
+                        <div class="pricing-price" style="color: var(--primary);">$20</div>
+                        <p style="font-size: 0.9rem;">All AI models<br>Unlimited contacts<br>Custom contacts</p>
+                    </div>
+                    <div class="pricing-card">
+                        <div class="pricing-tier">Max</div>
+                        <div class="pricing-price">$200</div>
+                        <p style="font-size: 0.9rem;">Unlimited everything<br>Priority access<br>Early features</p>
+                    </div>
+                </div>
+                <div class="card animate-in" style="margin-top: 48px; max-width: 700px; background: rgba(245, 158, 11, 0.08); border-color: rgba(245, 158, 11, 0.2);">
+                    <p style="color: var(--warning); font-weight: 600; margin-bottom: 8px;"><i data-lucide="alert-triangle" style="width: 18px; height: 18px; display: inline; vertical-align: middle;"></i> To be calculated</p>
+                    <p style="font-size: 1rem;">ElevenLabs cost per character, LLM API costs, free tier sustainability. This is MVP — we built the product, now we validate the business.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- SLIDE 10: COMPETITION (2025 - Feature matrix) -->
+        <div class="slide" data-slide="10">
+            <div class="slide-content">
+                <div class="badge animate-in">Competition</div>
+                <h2 class="animate-in" style="margin-bottom: 48px;">
+                    Competitive <span class="gradient-text">landscape</span>
+                </h2>
+                <table class="matrix animate-in">
+                    <thead>
+                        <tr>
+                            <th style="width: 25%;">Feature</th>
+                            <th>ChatGPT</th>
+                            <th>Claude</th>
+                            <th>Gemini</th>
+                            <th>Character.AI</th>
+                            <th style="background: rgba(255,109,31,0.1);">VOX</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>Multi-model access</td>
+                            <td class="cross">—</td>
+                            <td class="cross">—</td>
+                            <td class="cross">—</td>
+                            <td class="cross">—</td>
+                            <td class="check highlight"><i data-lucide="check" style="width: 18px; height: 18px;"></i></td>
+                        </tr>
+                        <tr>
+                            <td>Voice-per-contact</td>
+                            <td class="cross">—</td>
+                            <td class="cross">—</td>
+                            <td class="cross">—</td>
+                            <td class="cross">—</td>
+                            <td class="check highlight"><i data-lucide="check" style="width: 18px; height: 18px;"></i></td>
+                        </tr>
+                        <tr>
+                            <td>Voice cloning</td>
+                            <td class="cross">—</td>
+                            <td class="cross">—</td>
+                            <td class="cross">—</td>
+                            <td class="cross">—</td>
+                            <td class="check highlight"><i data-lucide="check" style="width: 18px; height: 18px;"></i></td>
+                        </tr>
+                        <tr>
+                            <td>Real-time translation</td>
+                            <td class="cross">—</td>
+                            <td class="cross">—</td>
+                            <td class="cross">Limited</td>
+                            <td class="cross">—</td>
+                            <td class="check highlight"><i data-lucide="check" style="width: 18px; height: 18px;"></i></td>
+                        </tr>
+                        <tr>
+                            <td>Group AI chat</td>
+                            <td class="cross">—</td>
+                            <td class="cross">—</td>
+                            <td class="cross">—</td>
+                            <td class="cross">—</td>
+                            <td class="check highlight">Soon</td>
+                        </tr>
+                    </tbody>
+                </table>
+                <p class="animate-in" style="text-align: center; margin-top: 32px; color: var(--warning);">
+                    Window: 12-18 months before big players catch up
+                </p>
+            </div>
+        </div>
+
+        <!-- SLIDE 11: TRACTION (2025 - Proof points) -->
+        <div class="slide" data-slide="11">
+            <div class="slide-content">
+                <div class="badge animate-in">Traction</div>
+                <h2 class="animate-in" style="margin-bottom: 48px;">
+                    What we need to <span class="gradient-text">prove</span>
+                </h2>
+                <div class="grid-3 animate-in">
+                    <div class="card card-glow" style="padding: 40px;">
+                        <div style="font-size: 2rem; margin-bottom: 16px; color: var(--primary);">01</div>
+                        <h3 style="font-size: 1.3rem; margin-bottom: 12px;">Voice-Per-Contact Aids Memory</h3>
+                        <p style="font-size: 0.95rem; margin-bottom: 16px;">Do users recall context faster with unique voices?</p>
+                        <div class="badge-small" style="margin: 0;">Validation: 100 user study</div>
+                    </div>
+                    <div class="card card-glow" style="padding: 40px;">
+                        <div style="font-size: 2rem; margin-bottom: 16px; color: var(--primary);">02</div>
+                        <h3 style="font-size: 1.3rem; margin-bottom: 12px;">Multi-Model Matters</h3>
+                        <p style="font-size: 0.95rem; margin-bottom: 16px;">Do users actually switch between models?</p>
+                        <div class="badge-small" style="margin: 0;">Validation: Usage analytics</div>
+                    </div>
+                    <div class="card card-glow" style="padding: 40px;">
+                        <div style="font-size: 2rem; margin-bottom: 16px; color: var(--primary);">03</div>
+                        <h3 style="font-size: 1.3rem; margin-bottom: 12px;">Users Will Pay</h3>
+                        <p style="font-size: 0.95rem; margin-bottom: 16px;">Free to paid conversion rate</p>
+                        <div class="badge-small" style="margin: 0;">Target: 5%+ conversion</div>
+                    </div>
+                </div>
+                <p class="animate-in" style="text-align: center; margin-top: 48px; font-size: 1.3rem; opacity: 0.7;">
+                    These aren't assumptions. These are experiments we're running.
+                </p>
+            </div>
+        </div>
+
+        <!-- SLIDE 12: TEAM -->
+        <div class="slide" data-slide="12">
+            <div class="slide-content centered">
+                <div class="badge animate-in">Team</div>
+                <h2 class="animate-in" style="margin-bottom: 16px;">
+                    Why <span class="gradient-text">us?</span>
+                </h2>
+                <p class="animate-in" style="opacity: 0.6; margin-bottom: 40px; max-width: 700px;">
+                    10+ years building products people actually use and return to
+                </p>
+                <div class="grid-4 animate-in" style="max-width: 1000px; gap: 20px;">
+                    <div class="card" style="padding: 24px; text-align: center;">
+                        <div style="font-size: 2rem; font-weight: 700; color: var(--primary); margin-bottom: 8px;">20M+</div>
+                        <div style="font-size: 0.85rem; opacity: 0.6;">Downloads</div>
+                    </div>
+                    <div class="card" style="padding: 24px; text-align: center;">
+                        <div style="font-size: 2rem; font-weight: 700; color: var(--primary); margin-bottom: 8px;">50%</div>
+                        <div style="font-size: 0.85rem; opacity: 0.6;">D1 Retention</div>
+                    </div>
+                    <div class="card" style="padding: 24px; text-align: center;">
+                        <div style="font-size: 2rem; font-weight: 700; color: var(--primary); margin-bottom: 8px;">#1</div>
+                        <div style="font-size: 0.85rem; opacity: 0.6;">US App Store</div>
+                    </div>
+                    <div class="card" style="padding: 24px; text-align: center;">
+                        <div style="font-size: 2rem; font-weight: 700; color: var(--primary); margin-bottom: 8px;">10+</div>
+                        <div style="font-size: 0.85rem; opacity: 0.6;">Years Experience</div>
+                    </div>
+                </div>
+                <div class="animate-in" style="display: flex; gap: 24px; margin-top: 32px; flex-wrap: wrap; justify-content: center;">
+                    <div class="card" style="padding: 16px 24px; display: flex; align-items: center; gap: 12px;">
+                        <i data-lucide="gamepad-2" class="icon-sm" style="color: var(--primary);"></i>
+                        <span style="font-size: 0.9rem;">Published with Voodoo</span>
+                    </div>
+                    <div class="card" style="padding: 16px 24px; display: flex; align-items: center; gap: 12px;">
+                        <i data-lucide="flask-conical" class="icon-sm" style="color: var(--primary);"></i>
+                        <span style="font-size: 0.9rem;">100+ prototypes tested in US</span>
+                    </div>
+                    <div class="card" style="padding: 16px 24px; display: flex; align-items: center; gap: 12px;">
+                        <i data-lucide="rocket" class="icon-sm" style="color: var(--primary);"></i>
+                        <span style="font-size: 0.9rem;">Zero to launch, multiple times</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- SLIDE 13: ROADMAP -->
+        <div class="slide" data-slide="13">
+            <div class="slide-content">
+                <div class="badge animate-in">Roadmap</div>
+                <h2 class="animate-in" style="margin-bottom: 48px;">
+                    What's <span class="gradient-text">next</span>
+                </h2>
+                <div class="timeline-h animate-in">
+                    <div class="timeline-item">
+                        <div class="timeline-phase">Month 1-3</div>
+                        <h3 style="font-size: 1.2rem; margin-bottom: 16px;">Validate</h3>
+                        <ul style="list-style: none; font-size: 0.95rem; line-height: 1.8;">
+                            <li>→ 100 user hypothesis testing</li>
+                            <li>→ Calculate unit economics</li>
+                            <li>→ Voice cloning safety features</li>
+                            <li>→ Security audit</li>
+                        </ul>
+                    </div>
+                    <div class="timeline-item">
+                        <div class="timeline-phase">Month 4-6</div>
+                        <h3 style="font-size: 1.2rem; margin-bottom: 16px;">Prove</h3>
+                        <ul style="list-style: none; font-size: 0.95rem; line-height: 1.8;">
+                            <li>→ Launch Group AI Chat</li>
+                            <li>→ D7 retention > 25%</li>
+                            <li>→ Free→paid > 5%</li>
+                            <li>→ Optimize API costs</li>
+                        </ul>
+                    </div>
+                    <div class="timeline-item">
+                        <div class="timeline-phase">Month 7-12</div>
+                        <h3 style="font-size: 1.2rem; margin-bottom: 16px;">Scale or Pivot</h3>
+                        <ul style="list-style: none; font-size: 0.95rem; line-height: 1.8;">
+                            <li>→ If metrics work: Scale</li>
+                            <li>→ If metrics fail: Pivot</li>
+                            <li>→ B2B only if B2C proven</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- SLIDE 14: THE ASK -->
+        <div class="slide" data-slide="14">
+            <div class="slide-content centered">
+                <div class="badge animate-in">Investment</div>
+                <h2 class="animate-in" style="margin-bottom: 16px;">
+                    Raising <span class="gradient-text">$500K</span>
+                </h2>
+                <p class="animate-in" style="opacity: 0.5; margin-bottom: 40px;">12 months runway to reach 1,000 paying users</p>
+                <div class="grid-2 animate-in" style="max-width: 900px; gap: 32px;">
+                    <div class="card" style="padding: 32px;">
+                        <h3 style="margin-bottom: 24px; font-size: 1rem; opacity: 0.7;">Use of Funds</h3>
+                        <div style="display: flex; flex-direction: column; gap: 16px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <span style="font-size: 0.95rem;">Production</span>
+                                <span style="font-weight: 600; color: var(--primary);">$200K</span>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <span style="font-size: 0.95rem;">AI & Voice API costs</span>
+                                <span style="font-weight: 600; color: var(--primary);">$150K</span>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <span style="font-size: 0.95rem;">User acquisition</span>
+                                <span style="font-weight: 600; color: var(--primary);">$100K</span>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <span style="font-size: 0.95rem;">Operations & legal</span>
+                                <span style="font-weight: 600; color: var(--primary);">$50K</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="card" style="padding: 32px;">
+                        <h3 style="margin-bottom: 24px; font-size: 1rem; opacity: 0.7;">Milestones</h3>
+                        <div style="display: flex; flex-direction: column; gap: 16px;">
+                            <div style="display: flex; align-items: center; gap: 12px;">
+                                <span style="color: var(--primary); font-weight: 600; min-width: 60px;">M3</span>
+                                <span style="font-size: 0.95rem;">Public launch, 100 paid users</span>
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 12px;">
+                                <span style="color: var(--primary); font-weight: 600; min-width: 60px;">M6</span>
+                                <span style="font-size: 0.95rem;">Group AI Chat, 500 paid users</span>
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 12px;">
+                                <span style="color: var(--primary); font-weight: 600; min-width: 60px;">M9</span>
+                                <span style="font-size: 0.95rem;">Mobile app, 750 paid users</span>
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 12px;">
+                                <span style="color: var(--primary); font-weight: 600; min-width: 60px;">M12</span>
+                                <span style="font-size: 0.95rem;">1,000 paid users, Series A ready</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- SLIDE 15: CLOSE -->
+        <div class="slide" data-slide="15">
+            <div class="slide-content centered">
+                <div class="animate-in" style="margin-bottom: 32px;"><i data-lucide="mic" class="icon-hero" style="width: 96px; height: 96px;"></i></div>
+                <h1 class="animate-in gradient-text" style="margin-bottom: 32px;">VOX</h1>
+                <div class="grid-2 animate-in" style="max-width: 700px; text-align: left; margin-bottom: 48px;">
+                    <div>
+                        <h3 style="color: var(--success); margin-bottom: 16px; font-size: 1.1rem;">What we know</h3>
+                        <ul class="feature-list green" style="gap: 12px;">
+                            <li><span class="icon"><i data-lucide="check" class="icon-sm"></i></span> <span style="font-size: 1rem;">The product works</span></li>
+                            <li><span class="icon"><i data-lucide="check" class="icon-sm"></i></span> <span style="font-size: 1rem;">The technology exists</span></li>
+                            <li><span class="icon"><i data-lucide="check" class="icon-sm"></i></span> <span style="font-size: 1rem;">The timing is right</span></li>
+                        </ul>
+                    </div>
+                    <div>
+                        <h3 style="color: var(--warning); margin-bottom: 16px; font-size: 1.1rem;">What we'll prove</h3>
+                        <ul class="feature-list" style="gap: 12px;">
+                            <li><span class="icon" style="background: rgba(245,158,11,0.15);"><i data-lucide="help-circle" class="icon-sm"></i></span> <span style="font-size: 1rem;">Users retain and pay</span></li>
+                            <li><span class="icon" style="background: rgba(245,158,11,0.15);"><i data-lucide="help-circle" class="icon-sm"></i></span> <span style="font-size: 1rem;">Voice-per-contact works</span></li>
+                            <li><span class="icon" style="background: rgba(245,158,11,0.15);"><i data-lucide="help-circle" class="icon-sm"></i></span> <span style="font-size: 1rem;">Unit economics viable</span></li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="card animate-in" style="padding: 32px 48px; max-width: 700px; text-align: center;">
+                    <p style="font-size: 1.3rem; color: var(--cream); line-height: 1.6;">
+                        We're not promising the next unicorn.<br>
+                        We're promising to find out if voice-first multi-model AI is a business.<br><br>
+                        <strong style="color: var(--primary);">If it is, we're first.</strong>
+                    </p>
+                </div>
+                <a href="https://vox-aicontact-fe0e3.web.app" target="_blank" class="animate-in"
+                   style="display: inline-flex; align-items: center; gap: 12px; padding: 20px 40px; margin-top: 48px;
+                          background: var(--primary); color: white; text-decoration: none;
+                          border-radius: 100px; font-weight: 600; font-size: 1.2rem;">
+                    Try the Demo →
+                </a>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- Navigation -->
+    <div class="nav-controls">
+        <button class="nav-btn" id="prevBtn" onclick="prevSlide()">←</button>
+        <span class="slide-counter"><span id="currentSlide">1</span>/<span id="totalSlides">15</span></span>
+        <button class="nav-btn" id="nextBtn" onclick="nextSlide()">→</button>
+    </div>
+
+    <script>
+        let currentSlide = 1;
+        const totalSlides = 15;
+
+        function updateSlide() {
+            document.querySelectorAll('.slide').forEach(s => s.classList.remove('active'));
+            const slide = document.querySelector(`[data-slide="${currentSlide}"]`);
+            if (slide) slide.classList.add('active');
+
+            document.getElementById('currentSlide').textContent = currentSlide;
+            document.getElementById('slideNum').textContent = String(currentSlide).padStart(2, '0');
+            document.getElementById('progressBar').style.width = `${(currentSlide / totalSlides) * 100}%`;
+
+            document.getElementById('prevBtn').disabled = currentSlide === 1;
+            document.getElementById('nextBtn').disabled = currentSlide === totalSlides;
+        }
+
+        function nextSlide() {
+            if (currentSlide < totalSlides) { currentSlide++; updateSlide(); }
+        }
+
+        function prevSlide() {
+            if (currentSlide > 1) { currentSlide--; updateSlide(); }
+        }
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowRight' || e.key === ' ') { e.preventDefault(); nextSlide(); }
+            else if (e.key === 'ArrowLeft') { e.preventDefault(); prevSlide(); }
+            else if (e.key === 'f' || e.key === 'F') {
+                e.preventDefault();
+                document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+            }
+            else if (e.key >= '1' && e.key <= '9') {
+                const num = parseInt(e.key);
+                if (num <= totalSlides) { currentSlide = num; updateSlide(); }
+            }
+        });
+
+        // Touch support
+        let touchStartX = 0;
+        document.addEventListener('touchstart', e => touchStartX = e.changedTouches[0].screenX);
+        document.addEventListener('touchend', e => {
+            const diff = touchStartX - e.changedTouches[0].screenX;
+            if (Math.abs(diff) > 50) diff > 0 ? nextSlide() : prevSlide();
+        });
+
+        updateSlide();
+
+        // Initialize Lucide icons
+        lucide.createIcons();
+    </script>
+</body>
+</html>

@@ -1,0 +1,1007 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VOX - ارائه به سرمایه‌گذاران ۲۰۲۵</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        :root {
+            --primary: #FF6D1F;
+            --primary-light: #ff8a4c;
+            --primary-dark: #e5621b;
+            --cream: #FAF3E1;
+            --beige: #F5E7C6;
+            --dark: #222222;
+            --dark-secondary: #0f0f0f;
+            --dark-card: #1a1a1a;
+            --success: #10b981;
+            --error: #ef4444;
+            --warning: #f59e0b;
+            --info: #3b82f6;
+            --purple: #8b5cf6;
+            --cyan: #06b6d4;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            direction: rtl;
+            text-align: inherit;
+        }
+
+        html, body {
+            font-family: 'Vazirmatn', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--dark-secondary);
+            color: var(--cream);
+            overflow: hidden;
+            height: 100%;
+            direction: rtl;
+            text-align: right;
+            font-feature-settings: "ss01";
+            line-height: 1.8;
+        }
+
+        /* Tables RTL */
+        table, td, th {
+            text-align: right;
+        }
+
+        /* Numbers in LTR for proper display */
+        .stat-value, .pricing-price {
+            direction: ltr;
+            unicode-bidi: isolate;
+        }
+
+        /* Slide Container */
+        .deck-container {
+            width: 100%;
+            height: 100vh;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .slide {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            padding: 60px 100px;
+            opacity: 0;
+            visibility: hidden;
+            transform: scale(0.95);
+            transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .slide.active {
+            opacity: 1;
+            visibility: visible;
+            transform: scale(1);
+        }
+
+        /* Background - subtle gradient */
+        .slide::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background:
+                radial-gradient(ellipse at 80% 20%, rgba(255, 109, 31, 0.06) 0%, transparent 50%),
+                radial-gradient(ellipse at 20% 80%, rgba(139, 92, 246, 0.03) 0%, transparent 50%);
+            pointer-events: none;
+        }
+
+        /* Typography */
+        h1 {
+            font-size: clamp(4rem, 8vw, 7rem);
+            font-weight: 900;
+            line-height: 1.2;
+        }
+
+        h2 {
+            font-size: clamp(1.8rem, 4vw, 3rem);
+            font-weight: 700;
+            line-height: 1.4;
+        }
+
+        h3 {
+            font-size: clamp(1.1rem, 2vw, 1.5rem);
+            font-weight: 600;
+            color: var(--cream);
+        }
+
+        p, li {
+            font-size: clamp(0.9rem, 1.5vw, 1.15rem);
+            line-height: 1.8;
+            color: rgba(250, 243, 225, 0.7);
+        }
+
+        .gradient-text {
+            background: linear-gradient(135deg, var(--primary) 0%, var(--primary-light) 40%, #ffd700 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        /* Slide Content */
+        .slide-content {
+            position: relative;
+            z-index: 1;
+            width: 100%;
+            max-width: 1400px;
+        }
+
+        .centered {
+            text-align: center;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        /* RTL flex for lists */
+        .feature-list li {
+            flex-direction: row-reverse;
+            text-align: right;
+        }
+
+        /* RTL for grids */
+        .grid-2, .grid-3, .grid-4 {
+            direction: rtl;
+        }
+
+        /* Grid layouts */
+        .grid-2 {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 60px;
+            align-items: center;
+        }
+
+        .grid-3 {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 32px;
+        }
+
+        .grid-4 {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 24px;
+        }
+
+        /* Cards - Glassmorphism */
+        .card {
+            background: rgba(255, 255, 255, 0.04);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 24px;
+            padding: 28px;
+            transition: all 0.3s ease;
+        }
+
+        .card:hover {
+            background: rgba(255, 255, 255, 0.07);
+            border-color: rgba(255, 255, 255, 0.12);
+        }
+
+        .card-glow {
+            background: rgba(255, 109, 31, 0.06);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border-color: rgba(255, 109, 31, 0.15);
+        }
+
+        /* Badges */
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(255, 109, 31, 0.08);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 109, 31, 0.15);
+            padding: 8px 18px;
+            border-radius: 100px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: var(--primary-light);
+            margin-bottom: 28px;
+        }
+
+        /* Feature list */
+        .feature-list {
+            list-style: none;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .feature-list li {
+            display: flex;
+            align-items: flex-start;
+            gap: 16px;
+        }
+
+        .feature-list .icon {
+            flex-shrink: 0;
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(255, 109, 31, 0.15);
+            border-radius: 10px;
+        }
+
+        .feature-list.green .icon {
+            background: rgba(16, 185, 129, 0.15);
+        }
+
+        /* Stats row */
+        .stats-row {
+            display: flex;
+            flex-direction: row-reverse;
+            gap: 40px;
+            justify-content: center;
+            margin: 40px 0;
+        }
+
+        .stat {
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 2.5rem;
+            font-weight: 700;
+            color: var(--primary);
+        }
+
+        .stat-label {
+            font-size: 0.75rem;
+            color: rgba(250, 243, 225, 0.4);
+            margin-top: 4px;
+        }
+
+        /* Quote block */
+        .quote {
+            font-size: 1.3rem;
+            font-weight: 400;
+            color: rgba(250, 243, 225, 0.7);
+            max-width: 700px;
+            text-align: center;
+            line-height: 1.8;
+            position: relative;
+            padding: 0 32px;
+        }
+
+        /* Pricing cards */
+        .pricing-card {
+            padding: 32px;
+            text-align: center;
+            border-radius: 24px;
+            background: rgba(255, 255, 255, 0.03);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+        }
+
+        .pricing-card.featured {
+            background: rgba(255, 109, 31, 0.06);
+            border-color: rgba(255, 109, 31, 0.2);
+            transform: scale(1.03);
+        }
+
+        .pricing-tier {
+            font-size: 0.85rem;
+            color: rgba(250, 243, 225, 0.4);
+        }
+
+        .pricing-price {
+            font-size: 3.5rem;
+            font-weight: 800;
+            margin: 16px 0;
+        }
+
+        /* Timeline */
+        .timeline-h {
+            display: flex;
+            flex-direction: row-reverse;
+            gap: 32px;
+            width: 100%;
+        }
+
+        .timeline-item {
+            flex: 1;
+            padding: 28px;
+            background: rgba(255, 255, 255, 0.03);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border-radius: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.06);
+        }
+
+        .timeline-phase {
+            display: inline-block;
+            padding: 6px 14px;
+            background: var(--primary);
+            border-radius: 100px;
+            font-size: 0.75rem;
+            font-weight: 700;
+            color: white;
+            margin-bottom: 16px;
+        }
+
+        /* Navigation - RTL position */
+        .nav-controls {
+            position: fixed;
+            bottom: 32px;
+            right: 32px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            z-index: 100;
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(24px);
+            -webkit-backdrop-filter: blur(24px);
+            padding: 8px 16px;
+            border-radius: 50px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .nav-btn {
+            width: 32px;
+            height: 32px;
+            border: none;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 50%;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--cream);
+            font-size: 0.85rem;
+            transition: all 0.2s ease;
+        }
+
+        .nav-btn:hover {
+            background: rgba(255, 109, 31, 0.5);
+        }
+
+        .nav-btn:disabled {
+            opacity: 0.2;
+            cursor: not-allowed;
+        }
+
+        .slide-counter {
+            font-size: 0.75rem;
+            color: rgba(250, 243, 225, 0.4);
+            font-weight: 500;
+            min-width: 36px;
+            text-align: center;
+        }
+
+        .progress-bar {
+            position: fixed;
+            top: 0;
+            right: 0;
+            height: 2px;
+            background: linear-gradient(270deg, var(--primary), var(--primary-light));
+            transition: width 0.3s ease;
+            z-index: 100;
+            opacity: 0.7;
+        }
+
+        .slide-indicator {
+            position: fixed;
+            top: 32px;
+            left: 32px;
+            font-size: 0.7rem;
+            color: rgba(250, 243, 225, 0.2);
+            z-index: 100;
+        }
+
+        /* Animations */
+        .slide.active .animate-in {
+            animation: slideUp 0.6s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+            opacity: 0;
+        }
+
+        .slide.active .animate-in:nth-child(1) { animation-delay: 0.1s; }
+        .slide.active .animate-in:nth-child(2) { animation-delay: 0.2s; }
+        .slide.active .animate-in:nth-child(3) { animation-delay: 0.3s; }
+        .slide.active .animate-in:nth-child(4) { animation-delay: 0.4s; }
+        .slide.active .animate-in:nth-child(5) { animation-delay: 0.5s; }
+
+        @keyframes slideUp {
+            from { opacity: 0; transform: translateY(40px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Lucide Icons */
+        .icon-lg { width: 48px; height: 48px; stroke-width: 1.5; color: var(--primary); }
+        .icon-md { width: 32px; height: 32px; stroke-width: 1.5; }
+        .icon-sm { width: 24px; height: 24px; stroke-width: 2; }
+        .icon-xl { width: 64px; height: 64px; stroke-width: 1.25; color: var(--primary); }
+        .icon-hero { width: 80px; height: 80px; stroke-width: 1; color: var(--primary); }
+
+        /* Responsive */
+        @media (max-width: 1200px) {
+            .slide { padding: 40px 60px; }
+            .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; gap: 24px; }
+            .timeline-h { flex-direction: column; }
+            .stats-row { flex-wrap: wrap; gap: 32px; }
+        }
+
+        @media (max-width: 768px) {
+            .slide { padding: 32px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="progress-bar" id="progressBar"></div>
+    <div class="slide-indicator"><span id="slideNum">۰۱</span></div>
+
+    <div class="deck-container">
+
+        <!-- اسلاید ۱: معرفی -->
+        <div class="slide active" data-slide="1">
+            <div class="slide-content centered">
+                <div class="animate-in" style="margin-bottom: 24px;"><i data-lucide="mic" class="icon-hero"></i></div>
+                <h1 class="animate-in gradient-text" style="margin-bottom: 24px;">VOX</h1>
+                <p class="animate-in" style="font-size: 1.6rem; color: rgba(250,243,225,0.7); max-width: 600px; margin-bottom: 48px;">
+                    یک اپلیکیشن. همه مدل‌های هوش مصنوعی. هر صدایی.
+                </p>
+                <div class="stats-row animate-in">
+                    <div class="stat">
+                        <div class="stat-value">۴</div>
+                        <div class="stat-label">مدل هوش مصنوعی</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-value">۳۵+</div>
+                        <div class="stat-label">زبان</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-value">$۰</div>
+                        <div class="stat-label">برای شروع</div>
+                    </div>
+                </div>
+                <p class="animate-in" style="font-size: 1rem; color: rgba(250,243,225,0.4); margin-top: 48px;">
+                    ساخته شده برای هکاتون Google Cloud + ElevenLabs ۲۰۲۵
+                </p>
+            </div>
+        </div>
+
+        <!-- اسلاید ۲: مشکل -->
+        <div class="slide" data-slide="2">
+            <div class="slide-content">
+                <div class="badge animate-in">مشکل</div>
+                <h2 class="animate-in" style="margin-bottom: 48px;">
+                    هوش مصنوعی <span style="color: var(--error);">پراکنده است.</span><br>
+                    صوت <span style="color: var(--error);">در اولویت نیست.</span>
+                </h2>
+                <div class="grid-3 animate-in">
+                    <div class="card" style="text-align: center;">
+                        <div style="margin-bottom: 16px;"><i data-lucide="message-square" class="icon-lg"></i></div>
+                        <h3 style="font-size: 1.3rem;">ChatGPT</h3>
+                        <p style="font-size: 1rem; margin-top: 12px;">یک مدل، یک صدا، متن‌محور</p>
+                    </div>
+                    <div class="card" style="text-align: center;">
+                        <div style="margin-bottom: 16px;"><i data-lucide="brain" class="icon-lg"></i></div>
+                        <h3 style="font-size: 1.3rem;">Claude</h3>
+                        <p style="font-size: 1rem; margin-top: 12px;">یک مدل، بدون صدا</p>
+                    </div>
+                    <div class="card" style="text-align: center;">
+                        <div style="margin-bottom: 16px;"><i data-lucide="sparkles" class="icon-lg"></i></div>
+                        <h3 style="font-size: 1.3rem;">Gemini</h3>
+                        <p style="font-size: 1rem; margin-top: 12px;">یک مدل، صدای محدود</p>
+                    </div>
+                </div>
+                <p class="quote animate-in" style="margin-top: 48px;">
+                    نمی‌توانید بهترین مدل را برای هر کار استفاده کنید.<br>
+                    نمی‌توانید صدای هوش مصنوعی را شخصی‌سازی کنید.<br>
+                    <strong style="color: var(--primary);">این شکاف بازار است.</strong>
+                </p>
+            </div>
+        </div>
+
+        <!-- اسلاید ۳: راه‌حل -->
+        <div class="slide" data-slide="3">
+            <div class="slide-content">
+                <div class="grid-2">
+                    <div>
+                        <div class="badge animate-in">راه‌حل</div>
+                        <h2 class="animate-in" style="margin-bottom: 32px;">
+                            مخاطبین هوش مصنوعی شما.<br>
+                            <span class="gradient-text">با صدای خودشان.</span>
+                        </h2>
+                        <ul class="feature-list animate-in">
+                            <li>
+                                <span class="icon"><i data-lucide="brain" class="icon-sm"></i></span>
+                                <span><strong>چند مدلی</strong> — Gemini، Claude، GPT-4، DeepSeek در یک اپ</span>
+                            </li>
+                            <li>
+                                <span class="icon"><i data-lucide="mic" class="icon-sm"></i></span>
+                                <span><strong>شبیه‌سازی صدا</strong> — صدای خودت رو به هر زبانی بشنو</span>
+                            </li>
+                            <li>
+                                <span class="icon"><i data-lucide="user" class="icon-sm"></i></span>
+                                <span><strong>مخاطبین هوشمند</strong> — هر کدوم صدا، شخصیت و هدف منحصربه‌فرد دارن</span>
+                            </li>
+                            <li>
+                                <span class="icon"><i data-lucide="globe" class="icon-sm"></i></span>
+                                <span><strong>ترجمه همزمان</strong> — بیش از ۳۵ زبان، با صدای خودت</span>
+                            </li>
+                        </ul>
+                    </div>
+                    <div class="animate-in" style="display: flex; justify-content: center;">
+                        <div class="card" style="padding: 40px; text-align: center;">
+                            <i data-lucide="smartphone" class="icon-xl" style="margin-bottom: 24px;"></i>
+                            <p style="font-size: 1.1rem;">تجربه مکالمه صوتی<br>با هوش مصنوعی</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- اسلاید ۴: چرا الان -->
+        <div class="slide" data-slide="4">
+            <div class="slide-content centered">
+                <div class="badge animate-in">زمان‌بندی</div>
+                <h2 class="animate-in" style="margin-bottom: 48px;">
+                    چرا <span class="gradient-text">الان؟</span>
+                </h2>
+                <div class="grid-4 animate-in">
+                    <div class="card" style="text-align: center; padding: 32px 24px;">
+                        <div style="margin-bottom: 16px;"><i data-lucide="audio-waveform" class="icon-lg"></i></div>
+                        <h4 style="font-size: 1rem; margin-bottom: 8px;">صدای هوشمند پیشرفت کرد</h4>
+                        <p style="font-size: 0.85rem;">ElevenLabs الان از انسان قابل تشخیص نیست</p>
+                    </div>
+                    <div class="card" style="text-align: center; padding: 32px 24px;">
+                        <div style="margin-bottom: 16px;"><i data-lucide="layers" class="icon-lg"></i></div>
+                        <h4 style="font-size: 1rem; margin-bottom: 8px;">عصر چند مدلی</h4>
+                        <p style="font-size: 0.85rem;">هیچ هوش مصنوعی‌ای همه کارها رو عالی انجام نمیده</p>
+                    </div>
+                    <div class="card" style="text-align: center; padding: 32px 24px;">
+                        <div style="margin-bottom: 16px;"><i data-lucide="smartphone" class="icon-lg"></i></div>
+                        <h4 style="font-size: 1rem; margin-bottom: 8px;">نسل Z صوت‌محوره</h4>
+                        <p style="font-size: 0.85rem;">با Siri بزرگ شدن. ویس بهتر از تایپه</p>
+                    </div>
+                    <div class="card" style="text-align: center; padding: 32px 24px;">
+                        <div style="margin-bottom: 16px;"><i data-lucide="trending-down" class="icon-lg"></i></div>
+                        <h4 style="font-size: 1rem; margin-bottom: 8px;">هزینه‌ها کم شدن</h4>
+                        <p style="font-size: 0.85rem;">صدای هوشمند بالاخره از نظر اقتصادی توجیه داره</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- اسلاید ۵: تأیید بازار -->
+        <div class="slide" data-slide="5">
+            <div class="slide-content centered">
+                <div class="badge animate-in">تأیید بازار</div>
+                <h2 class="animate-in" style="margin-bottom: 40px;">
+                    <span class="gradient-text">«بچه‌ها عاشق حالت صوتی هستن»</span>
+                </h2>
+                <div class="grid-2 animate-in" style="max-width: 1000px; align-items: stretch; gap: 40px;">
+                    <div class="card" style="padding: 32px; display: flex; flex-direction: column;">
+                        <div style="display: flex; align-items: center; gap: 14px; margin-bottom: 20px;">
+                            <img src="public/images/sam-altman.png" alt="Sam Altman" style="width: 52px; height: 52px; border-radius: 50%; object-fit: cover;">
+                            <div>
+                                <div style="font-weight: 600; font-size: 1rem;">سم آلتمن</div>
+                                <div style="font-size: 0.75rem; opacity: 0.5;">مدیرعامل OpenAI</div>
+                            </div>
+                        </div>
+                        <p style="font-size: 1.1rem; font-style: italic; line-height: 1.8; margin-bottom: 20px; opacity: 0.9;">
+                            «بچه‌ها عاشق حالت صوتی ChatGPT هستن.»
+                        </p>
+                        <p style="font-size: 0.95rem; line-height: 1.8; opacity: 0.7; margin-top: auto;">
+                            «بچه‌های من هیچوقت باهوش‌تر از هوش مصنوعی نمیشن، ولی <span style="color: var(--primary);">خیلی توانمندتر</span> از ما بزرگ میشن.»
+                        </p>
+                    </div>
+                    <div class="card" style="padding: 32px; display: flex; flex-direction: column;">
+                        <h3 style="font-size: 1rem; margin-bottom: 16px; opacity: 0.9;">داستان قطار توماس</h3>
+                        <p style="font-size: 0.85rem; line-height: 1.8; margin-bottom: 20px; opacity: 0.6;">
+                            یه پدر ChatGPT رو توی حالت صوتی با بچه‌اش گذاشت...
+                        </p>
+                        <div style="display: flex; gap: 24px; margin-bottom: 20px;">
+                            <div>
+                                <div style="font-size: 2rem; font-weight: 700; color: var(--primary);">۲ ساعت</div>
+                                <div style="font-size: 0.75rem; opacity: 0.5;">هنوز داره حرف میزنه</div>
+                            </div>
+                            <div>
+                                <div style="font-size: 2rem; font-weight: 700; color: var(--primary);">۱۰ هزار+</div>
+                                <div style="font-size: 0.75rem; opacity: 0.5;">کلمه</div>
+                            </div>
+                        </div>
+                        <p style="font-size: 0.85rem; font-style: italic; opacity: 0.6; margin-top: auto;">
+                            «پسرم فکر می‌کنه ChatGPT باحال‌ترین عاشق قطاره. من نمی‌تونم باهاش رقابت کنم.»
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- اسلاید ۶: محصول -->
+        <div class="slide" data-slide="6">
+            <div class="slide-content">
+                <div class="grid-2">
+                    <div>
+                        <div class="badge animate-in">محصول آماده</div>
+                        <h2 class="animate-in" style="margin-bottom: 32px;">
+                            چی <span class="gradient-text">ساختیم</span>
+                        </h2>
+                        <ul class="feature-list green animate-in">
+                            <li><span class="icon"><i data-lucide="check" class="icon-sm"></i></span> هوش مصنوعی چند مدلی (Gemini، Claude، GPT، DeepSeek)</li>
+                            <li><span class="icon"><i data-lucide="check" class="icon-sm"></i></span> شبیه‌سازی صدا (اتصال به ElevenLabs)</li>
+                            <li><span class="icon"><i data-lucide="check" class="icon-sm"></i></span> ترجمه همزمان (بیش از ۳۵ زبان)</li>
+                            <li><span class="icon"><i data-lucide="check" class="icon-sm"></i></span> مخاطبین هوشمند آماده (۷ متخصص)</li>
+                            <li><span class="icon"><i data-lucide="check" class="icon-sm"></i></span> ساخت مخاطب سفارشی</li>
+                            <li><span class="icon"><i data-lucide="check" class="icon-sm"></i></span> پرداخت اشتراک (Stripe)</li>
+                            <li><span class="icon"><i data-lucide="check" class="icon-sm"></i></span> همگام‌سازی ابری بین دستگاه‌ها</li>
+                        </ul>
+                        <div style="margin-top: 32px;">
+                            <a href="https://vox-aicontact-fe0e3.web.app" target="_blank" style="display: inline-block; padding: 14px 32px; background: var(--primary); color: white; text-decoration: none; border-radius: 100px; font-weight: 600; font-size: 1.1rem;">
+                                دمو رو امتحان کن ←
+                            </a>
+                        </div>
+                    </div>
+                    <div class="animate-in" style="display: flex; gap: 24px; justify-content: center; align-items: flex-start;">
+                        <div class="card" style="padding: 40px; text-align: center;">
+                            <i data-lucide="smartphone" class="icon-xl" style="margin-bottom: 16px;"></i>
+                            <p>وب‌اپلیکیشن کامل</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- اسلاید ۷: اندازه بازار -->
+        <div class="slide" data-slide="7">
+            <div class="slide-content">
+                <div class="badge animate-in">بازار</div>
+                <h2 class="animate-in" style="margin-bottom: 48px;">
+                    اندازه بازار
+                </h2>
+                <div class="grid-2 animate-in">
+                    <div>
+                        <h3 style="color: var(--success); margin-bottom: 24px;"><i data-lucide="check" style="width: 20px; height: 20px; display: inline; vertical-align: middle;"></i> محاسبه از پایین به بالا</h3>
+                        <div class="card" style="padding: 24px;">
+                            <div style="display: flex; flex-direction: column; gap: 16px;">
+                                <div style="display: flex; justify-content: space-between;">
+                                    <span>کسانی که برای ابزار AI پول میدن</span>
+                                    <span style="font-weight: 600;">~۵۰ میلیون جهانی</span>
+                                </div>
+                                <div style="display: flex; justify-content: space-between;">
+                                    <span>× تجربه صوت‌محور می‌خوان</span>
+                                    <span>~۱۰٪ = ۵ میلیون</span>
+                                </div>
+                                <div style="display: flex; justify-content: space-between;">
+                                    <span>× اپ جدید امتحان می‌کنن</span>
+                                    <span>~۲۰٪ = ۱ میلیون</span>
+                                </div>
+                                <div style="display: flex; justify-content: space-between;">
+                                    <span>× به پولی تبدیل میشن</span>
+                                    <span>~۵٪ = ۵۰ هزار</span>
+                                </div>
+                                <div style="display: flex; justify-content: space-between;">
+                                    <span>× میانگین درآمد هر کاربر</span>
+                                    <span>$۱۵/ماه</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div style="display: flex; flex-direction: column; gap: 24px;">
+                        <div class="card card-glow" style="padding: 32px; text-align: center;">
+                            <div style="font-size: 0.85rem; opacity: 0.5; margin-bottom: 8px;">سال اول</div>
+                            <div style="font-size: 2.2rem; font-weight: 700; color: var(--primary);">$۷۵۰ هزار - $۲ میلیون</div>
+                            <div style="font-size: 0.85rem; opacity: 0.5;">درآمد سالانه تکرارشونده</div>
+                        </div>
+                        <div class="card card-glow" style="padding: 32px; text-align: center;">
+                            <div style="font-size: 0.85rem; opacity: 0.5; margin-bottom: 8px;">سال سوم</div>
+                            <div style="font-size: 2.2rem; font-weight: 700; color: var(--primary);">$۲۰ میلیون - $۵۰ میلیون</div>
+                            <div style="font-size: 0.85rem; opacity: 0.5;">درآمد سالانه تکرارشونده</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- اسلاید ۸: مدل درآمدی -->
+        <div class="slide" data-slide="8">
+            <div class="slide-content centered">
+                <div class="badge animate-in">درآمد</div>
+                <h2 class="animate-in" style="margin-bottom: 48px;">
+                    چطور <span class="gradient-text">پول درمیاریم</span>
+                </h2>
+                <div class="grid-3 animate-in" style="max-width: 1000px;">
+                    <div class="pricing-card">
+                        <div class="pricing-tier">رایگان</div>
+                        <div class="pricing-price">$۰</div>
+                        <p style="font-size: 0.85rem;">مدل پایه<br>مخاطبین محدود<br>فقط تنظیمات پیش‌فرض</p>
+                    </div>
+                    <div class="pricing-card featured">
+                        <div class="pricing-tier">پرو</div>
+                        <div class="pricing-price" style="color: var(--primary);">$۲۰</div>
+                        <p style="font-size: 0.85rem;">همه مدل‌های هوش مصنوعی<br>مخاطبین نامحدود<br>مخاطب سفارشی</p>
+                    </div>
+                    <div class="pricing-card">
+                        <div class="pricing-tier">مکس</div>
+                        <div class="pricing-price">$۲۰۰</div>
+                        <p style="font-size: 0.85rem;">همه چیز نامحدود<br>دسترسی اولویت‌دار<br>ویژگی‌های زودتر</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- اسلاید ۹: تیم -->
+        <div class="slide" data-slide="9">
+            <div class="slide-content centered">
+                <div class="badge animate-in">تیم</div>
+                <h2 class="animate-in" style="margin-bottom: 16px;">
+                    چرا <span class="gradient-text">ما؟</span>
+                </h2>
+                <p class="animate-in" style="opacity: 0.6; margin-bottom: 40px; max-width: 700px;">
+                    بیش از ۱۰ سال ساختن محصولاتی که مردم واقعاً استفاده می‌کنن و برمی‌گردن
+                </p>
+                <div class="grid-4 animate-in" style="max-width: 1000px; gap: 20px;">
+                    <div class="card" style="padding: 24px; text-align: center;">
+                        <div style="font-size: 2rem; font-weight: 700; color: var(--primary); margin-bottom: 8px;">۲۰+ میلیون</div>
+                        <div style="font-size: 0.85rem; opacity: 0.6;">دانلود</div>
+                    </div>
+                    <div class="card" style="padding: 24px; text-align: center;">
+                        <div style="font-size: 2rem; font-weight: 700; color: var(--primary); margin-bottom: 8px;">۵۰٪</div>
+                        <div style="font-size: 0.85rem; opacity: 0.6;">ماندگاری روز اول</div>
+                    </div>
+                    <div class="card" style="padding: 24px; text-align: center;">
+                        <div style="font-size: 2rem; font-weight: 700; color: var(--primary); margin-bottom: 8px;">#۱</div>
+                        <div style="font-size: 0.85rem; opacity: 0.6;">اپ استور آمریکا</div>
+                    </div>
+                    <div class="card" style="padding: 24px; text-align: center;">
+                        <div style="font-size: 2rem; font-weight: 700; color: var(--primary); margin-bottom: 8px;">۱۰+</div>
+                        <div style="font-size: 0.85rem; opacity: 0.6;">سال تجربه</div>
+                    </div>
+                </div>
+                <div class="animate-in" style="display: flex; gap: 24px; margin-top: 32px; flex-wrap: wrap; justify-content: center;">
+                    <div class="card" style="padding: 16px 24px; display: flex; align-items: center; gap: 12px;">
+                        <i data-lucide="gamepad-2" class="icon-sm" style="color: var(--primary);"></i>
+                        <span style="font-size: 0.9rem;">منتشر شده با Voodoo</span>
+                    </div>
+                    <div class="card" style="padding: 16px 24px; display: flex; align-items: center; gap: 12px;">
+                        <i data-lucide="flask-conical" class="icon-sm" style="color: var(--primary);"></i>
+                        <span style="font-size: 0.9rem;">۱۰۰+ پروتوتایپ تست شده در آمریکا</span>
+                    </div>
+                    <div class="card" style="padding: 16px 24px; display: flex; align-items: center; gap: 12px;">
+                        <i data-lucide="rocket" class="icon-sm" style="color: var(--primary);"></i>
+                        <span style="font-size: 0.9rem;">از صفر تا لانچ، چندین بار</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- اسلاید ۱۰: نقشه راه -->
+        <div class="slide" data-slide="10">
+            <div class="slide-content">
+                <div class="badge animate-in">نقشه راه</div>
+                <h2 class="animate-in" style="margin-bottom: 48px;">
+                    قدم <span class="gradient-text">بعدی</span>
+                </h2>
+                <div class="timeline-h animate-in">
+                    <div class="timeline-item">
+                        <div class="timeline-phase">ماه ۱-۳</div>
+                        <h3 style="margin-bottom: 16px;">اعتبارسنجی</h3>
+                        <ul style="list-style: none; display: flex; flex-direction: column; gap: 8px;">
+                            <li style="font-size: 0.9rem;">← تست فرضیه با ۱۰۰ کاربر</li>
+                            <li style="font-size: 0.9rem;">← محاسبه اقتصاد واحد</li>
+                            <li style="font-size: 0.9rem;">← ویژگی‌های امنیتی شبیه‌سازی صدا</li>
+                            <li style="font-size: 0.9rem;">← ممیزی امنیتی</li>
+                        </ul>
+                    </div>
+                    <div class="timeline-item">
+                        <div class="timeline-phase">ماه ۴-۶</div>
+                        <h3 style="margin-bottom: 16px;">اثبات</h3>
+                        <ul style="list-style: none; display: flex; flex-direction: column; gap: 8px;">
+                            <li style="font-size: 0.9rem;">← راه‌اندازی چت گروهی هوشمند</li>
+                            <li style="font-size: 0.9rem;">← ماندگاری روز ۷ > ۲۵٪</li>
+                            <li style="font-size: 0.9rem;">← رایگان←پولی > ۵٪</li>
+                            <li style="font-size: 0.9rem;">← بهینه‌سازی هزینه API</li>
+                        </ul>
+                    </div>
+                    <div class="timeline-item">
+                        <div class="timeline-phase">ماه ۷-۱۲</div>
+                        <h3 style="margin-bottom: 16px;">رشد یا تغییر</h3>
+                        <ul style="list-style: none; display: flex; flex-direction: column; gap: 8px;">
+                            <li style="font-size: 0.9rem;">← اگه معیارها جواب دادن: رشد</li>
+                            <li style="font-size: 0.9rem;">← اگه معیارها جواب ندادن: تغییر</li>
+                            <li style="font-size: 0.9rem;">← B2B فقط اگه B2C ثابت شد</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- اسلاید ۱۱: درخواست سرمایه -->
+        <div class="slide" data-slide="11">
+            <div class="slide-content centered">
+                <div class="badge animate-in">سرمایه‌گذاری</div>
+                <h2 class="animate-in" style="margin-bottom: 16px;">
+                    جذب <span class="gradient-text">$۵۰۰ هزار</span>
+                </h2>
+                <p class="animate-in" style="opacity: 0.5; margin-bottom: 40px;">۱۲ ماه برای رسیدن به ۱۰۰۰ کاربر پولی</p>
+                <div class="grid-2 animate-in" style="max-width: 900px; gap: 32px;">
+                    <div class="card" style="padding: 32px;">
+                        <h3 style="margin-bottom: 24px; font-size: 1rem; opacity: 0.7;">استفاده از سرمایه</h3>
+                        <div style="display: flex; flex-direction: column; gap: 16px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <span style="font-size: 0.95rem;">تولید</span>
+                                <span style="font-weight: 600; color: var(--primary);">$۲۰۰ هزار</span>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <span style="font-size: 0.95rem;">هزینه API هوش مصنوعی و صدا</span>
+                                <span style="font-weight: 600; color: var(--primary);">$۱۵۰ هزار</span>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <span style="font-size: 0.95rem;">جذب کاربر</span>
+                                <span style="font-weight: 600; color: var(--primary);">$۱۰۰ هزار</span>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <span style="font-size: 0.95rem;">عملیات و حقوقی</span>
+                                <span style="font-weight: 600; color: var(--primary);">$۵۰ هزار</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="card" style="padding: 32px;">
+                        <h3 style="margin-bottom: 24px; font-size: 1rem; opacity: 0.7;">نقاط عطف</h3>
+                        <div style="display: flex; flex-direction: column; gap: 16px;">
+                            <div style="display: flex; align-items: center; gap: 12px;">
+                                <span style="color: var(--primary); font-weight: 600; min-width: 50px;">م۳</span>
+                                <span style="font-size: 0.95rem;">راه‌اندازی عمومی، ۱۰۰ کاربر پولی</span>
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 12px;">
+                                <span style="color: var(--primary); font-weight: 600; min-width: 50px;">م۶</span>
+                                <span style="font-size: 0.95rem;">چت گروهی هوشمند، ۵۰۰ کاربر پولی</span>
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 12px;">
+                                <span style="color: var(--primary); font-weight: 600; min-width: 50px;">م۹</span>
+                                <span style="font-size: 0.95rem;">اپ موبایل، ۷۵۰ کاربر پولی</span>
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 12px;">
+                                <span style="color: var(--primary); font-weight: 600; min-width: 50px;">م۱۲</span>
+                                <span style="font-size: 0.95rem;">۱۰۰۰ کاربر پولی، آماده سری A</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- اسلاید ۱۲: پایان -->
+        <div class="slide" data-slide="12">
+            <div class="slide-content centered">
+                <div class="animate-in" style="margin-bottom: 32px;"><i data-lucide="mic" class="icon-hero" style="width: 96px; height: 96px;"></i></div>
+                <h1 class="animate-in gradient-text" style="margin-bottom: 32px;">VOX</h1>
+                <div class="grid-2 animate-in" style="max-width: 700px; text-align: right; margin-bottom: 48px;">
+                    <div>
+                        <h3 style="color: var(--success); margin-bottom: 16px; font-size: 1.1rem;">چیزایی که می‌دونیم</h3>
+                        <ul class="feature-list green" style="gap: 12px;">
+                            <li><span class="icon"><i data-lucide="check" class="icon-sm"></i></span> <span style="font-size: 1rem;">محصول کار می‌کنه</span></li>
+                            <li><span class="icon"><i data-lucide="check" class="icon-sm"></i></span> <span style="font-size: 1rem;">تکنولوژی وجود داره</span></li>
+                            <li><span class="icon"><i data-lucide="check" class="icon-sm"></i></span> <span style="font-size: 1rem;">زمان‌بندی درسته</span></li>
+                        </ul>
+                    </div>
+                    <div>
+                        <h3 style="color: var(--warning); margin-bottom: 16px; font-size: 1.1rem;">چیزایی که ثابت می‌کنیم</h3>
+                        <ul class="feature-list" style="gap: 12px;">
+                            <li><span class="icon" style="background: rgba(245,158,11,0.15);"><i data-lucide="help-circle" class="icon-sm"></i></span> <span style="font-size: 1rem;">کاربرا می‌مونن و پول میدن</span></li>
+                            <li><span class="icon" style="background: rgba(245,158,11,0.15);"><i data-lucide="help-circle" class="icon-sm"></i></span> <span style="font-size: 1rem;">صدا برای هر مخاطب جواب میده</span></li>
+                            <li><span class="icon" style="background: rgba(245,158,11,0.15);"><i data-lucide="help-circle" class="icon-sm"></i></span> <span style="font-size: 1rem;">اقتصاد واحد توجیه داره</span></li>
+                        </ul>
+                    </div>
+                </div>
+                <p class="animate-in" style="font-size: 1.4rem; font-weight: 600; margin-bottom: 32px;">
+                    <span class="gradient-text">بیا با هم آینده هوش مصنوعی صوتی رو بسازیم.</span>
+                </p>
+                <div class="animate-in" style="display: flex; gap: 16px; flex-wrap: wrap; justify-content: center;">
+                    <a href="mailto:reza@ludaxis.io" style="padding: 14px 32px; background: var(--primary); color: white; text-decoration: none; border-radius: 100px; font-weight: 600;">
+                        reza@ludaxis.io
+                    </a>
+                    <a href="https://vox-aicontact-fe0e3.web.app" target="_blank" style="padding: 14px 32px; background: rgba(255,255,255,0.1); color: var(--cream); text-decoration: none; border-radius: 100px; font-weight: 600;">
+                        دمو رو ببین
+                    </a>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- Navigation -->
+    <nav class="nav-controls">
+        <button class="nav-btn" id="nextBtn"><i data-lucide="arrow-right" style="width: 16px; height: 16px;"></i></button>
+        <span class="slide-counter"><span id="currentSlide">۱</span>/<span id="totalSlides">۱۲</span></span>
+        <button class="nav-btn" id="prevBtn"><i data-lucide="arrow-left" style="width: 16px; height: 16px;"></i></button>
+    </nav>
+
+    <script>
+        // Initialize Lucide icons
+        lucide.createIcons();
+
+        // Slide navigation
+        const slides = document.querySelectorAll('.slide');
+        const totalSlides = slides.length;
+        let currentSlide = 1;
+
+        // Persian numerals
+        const persianNumerals = ['۰', '۱', '۲', '۳', '۴', '۵', '۶', '۷', '۸', '۹'];
+
+        function toPersianNumeral(num) {
+            return num.toString().split('').map(d => persianNumerals[parseInt(d)]).join('');
+        }
+
+        function updateSlide(n) {
+            slides.forEach(slide => slide.classList.remove('active'));
+            slides[n - 1].classList.add('active');
+
+            document.getElementById('currentSlide').textContent = toPersianNumeral(n);
+            document.getElementById('totalSlides').textContent = toPersianNumeral(totalSlides);
+            document.getElementById('slideNum').textContent = toPersianNumeral(n).padStart(2, '۰');
+            document.getElementById('progressBar').style.width = `${(n / totalSlides) * 100}%`;
+
+            document.getElementById('prevBtn').disabled = n === 1;
+            document.getElementById('nextBtn').disabled = n === totalSlides;
+        }
+
+        document.getElementById('nextBtn').addEventListener('click', () => {
+            if (currentSlide < totalSlides) {
+                currentSlide++;
+                updateSlide(currentSlide);
+            }
+        });
+
+        document.getElementById('prevBtn').addEventListener('click', () => {
+            if (currentSlide > 1) {
+                currentSlide--;
+                updateSlide(currentSlide);
+            }
+        });
+
+        // Keyboard navigation (reversed for RTL)
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowLeft' && currentSlide < totalSlides) {
+                currentSlide++;
+                updateSlide(currentSlide);
+            } else if (e.key === 'ArrowRight' && currentSlide > 1) {
+                currentSlide--;
+                updateSlide(currentSlide);
+            }
+        });
+
+        // Touch navigation (reversed for RTL)
+        let touchStartX = 0;
+        document.addEventListener('touchstart', (e) => touchStartX = e.touches[0].clientX);
+        document.addEventListener('touchend', (e) => {
+            const diff = touchStartX - e.changedTouches[0].clientX;
+            if (Math.abs(diff) > 50) {
+                if (diff < 0 && currentSlide < totalSlides) {
+                    currentSlide++;
+                    updateSlide(currentSlide);
+                } else if (diff > 0 && currentSlide > 1) {
+                    currentSlide--;
+                    updateSlide(currentSlide);
+                }
+            }
+        });
+
+        // Initialize
+        updateSlide(1);
+    </script>
+</body>
+</html>
