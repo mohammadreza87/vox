@@ -147,9 +147,9 @@
             align-items: center;
         }
 
-        /* RTL flex for lists */
+        /* RTL flex for lists - use row (not row-reverse) since RTL already flows right-to-left */
         .feature-list li {
-            flex-direction: row-reverse;
+            flex-direction: row;
             text-align: right;
         }
 
@@ -228,7 +228,7 @@
 
         .feature-list li {
             display: flex;
-            flex-direction: row-reverse;
+            flex-direction: row;
             align-items: flex-start;
             gap: 16px;
             text-align: right;
