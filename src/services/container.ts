@@ -8,8 +8,10 @@
 
 import { IChatRepository, IUserRepository } from '@/repositories/interfaces';
 import { FirestoreChatRepository, FirestoreUserRepository } from '@/repositories/firestore';
+import { CachedChatRepository, CachedUserRepository } from '@/repositories/cache';
 import { IChatService } from './interfaces/IChatService';
 import { ChatService } from './implementations/ChatService';
+import { isRedisAvailable } from '@/lib/cache';
 
 // Repository instances (singleton)
 let chatRepository: IChatRepository | null = null;
@@ -20,20 +22,36 @@ let chatService: IChatService | null = null;
 
 /**
  * Get Chat Repository instance
+ * Uses caching layer if Redis is configured
  */
 export function getChatRepository(): IChatRepository {
   if (!chatRepository) {
-    chatRepository = new FirestoreChatRepository();
+    const baseRepository = new FirestoreChatRepository();
+
+    // Wrap with caching if Redis is available
+    if (isRedisAvailable()) {
+      chatRepository = new CachedChatRepository(baseRepository);
+    } else {
+      chatRepository = baseRepository;
+    }
   }
   return chatRepository;
 }
 
 /**
  * Get User Repository instance
+ * Uses caching layer if Redis is configured
  */
 export function getUserRepository(): IUserRepository {
   if (!userRepository) {
-    userRepository = new FirestoreUserRepository();
+    const baseRepository = new FirestoreUserRepository();
+
+    // Wrap with caching if Redis is available
+    if (isRedisAvailable()) {
+      userRepository = new CachedUserRepository(baseRepository);
+    } else {
+      userRepository = baseRepository;
+    }
   }
   return userRepository;
 }
