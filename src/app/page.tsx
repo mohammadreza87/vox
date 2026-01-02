@@ -4,11 +4,13 @@ import Link from 'next/link';
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/shared/components';
-import { useAuth } from '@/contexts/AuthContext';
+import { useAuthStore } from '@/stores/authStore';
 import { Mic, Brain, Sparkles, ArrowRight, Volume2, Globe, Fingerprint, MessageSquare, Palette, Cpu } from 'lucide-react';
 
 export default function LandingPage() {
-  const { user, loading } = useAuth();
+  // Auth store
+  const user = useAuthStore((state) => state.user);
+  const loading = useAuthStore((state) => state.loading);
   const router = useRouter();
 
   // Redirect to app if user is already logged in

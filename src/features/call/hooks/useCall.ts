@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { useConversation } from '@elevenlabs/react';
-import { useAuth } from '@/contexts/AuthContext';
+import { useAuthStore } from '@/stores/authStore';
 
 export type CallStatus = 'idle' | 'connecting' | 'connected' | 'speaking' | 'listening' | 'ended' | 'error';
 
@@ -24,7 +24,7 @@ const MAX_CALL_DURATION = 5 * 60 * 1000; // 5 minutes
 const WARNING_TIME = 30 * 1000; // 30 seconds before end
 
 export function useCall(options: UseCallOptions = {}) {
-  const { user } = useAuth();
+  const user = useAuthStore((state) => state.user);
   const [callStatus, setCallStatus] = useState<CallStatus>('idle');
   const [currentContact, setCurrentContact] = useState<Contact | null>(null);
   const [callDuration, setCallDuration] = useState(0);

@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { useAuth } from '@/contexts/AuthContext';
+import { useAuthStore } from '@/stores/authStore';
 import { Button, LoadingScreen } from '@/shared/components';
 import { TelegramLoginButton, TelegramLoginUser } from '@/shared/components/TelegramLoginButton';
 import { Volume2, Mail, Lock, User, Loader2 } from 'lucide-react';
@@ -14,7 +14,11 @@ import { usePlatformStore } from '@/stores/platformStore';
 export default function LoginPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { user, loading: authLoading, signIn, signUp, signInWithGoogle } = useAuth();
+  const user = useAuthStore((state) => state.user);
+  const authLoading = useAuthStore((state) => state.loading);
+  const signIn = useAuthStore((state) => state.signIn);
+  const signUp = useAuthStore((state) => state.signUp);
+  const signInWithGoogle = useAuthStore((state) => state.signInWithGoogle);
   const { telegramSession, telegramUser } = usePlatformStore();
   const [isTelegram, setIsTelegram] = useState(false);
   const [checkingTelegram, setCheckingTelegram] = useState(true);

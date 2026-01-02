@@ -3,14 +3,18 @@
 import { useEffect } from 'react';
 import { X, Sparkles, Crown, Zap } from 'lucide-react';
 import { Button } from '@/shared/components/Button';
-import { useSubscription } from '@/contexts/SubscriptionContext';
+import { useSubscriptionStore } from '@/stores/subscriptionStore';
 import { SUBSCRIPTION_TIERS, formatPrice } from '@/config/subscription';
 import { FEATURE_GATE_INFO, GatedFeature } from '@/shared/types/subscription';
 import { useRouter } from 'next/navigation';
 
 export function UpgradeModal() {
   const router = useRouter();
-  const { upgradeModalFeature, hideUpgradeModal, tier } = useSubscription();
+
+  // Subscription store
+  const upgradeModalFeature = useSubscriptionStore((state) => state.upgradeModalFeature);
+  const hideUpgradeModal = useSubscriptionStore((state) => state.hideUpgradeModal);
+  const tier = useSubscriptionStore((state) => state.tier);
 
   // Close on escape key
   useEffect(() => {

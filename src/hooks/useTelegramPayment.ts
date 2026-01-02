@@ -1,14 +1,14 @@
 'use client';
 
 import { useState, useCallback } from 'react';
-import { useAuth } from '@/contexts/AuthContext';
+import { useAuthStore } from '@/stores/authStore';
 import { usePlatformStore } from '@/stores/platformStore';
 import { getTelegramWebApp } from '@/lib/platform';
 
 type PriceId = 'pro_monthly' | 'pro_annual' | 'max_monthly' | 'max_annual';
 
 export function useTelegramPayment() {
-  const { user } = useAuth();
+  const user = useAuthStore((state) => state.user);
   const { telegramUser } = usePlatformStore();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);

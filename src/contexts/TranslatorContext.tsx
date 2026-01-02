@@ -1,7 +1,7 @@
 'use client';
 
 import { createContext, useContext, useState, useCallback, useEffect, ReactNode } from 'react';
-import { useAuth } from './AuthContext';
+import { useAuthStore } from '@/stores/authStore';
 import { getClonedVoicesKey, getAllClonedVoices } from '@/shared/utils/storage';
 import { ClonedVoice } from '@/shared/types';
 import { auth } from '@/lib/firebase';
@@ -114,7 +114,7 @@ const TRANSLATOR_VOICE_KEY = 'vox_translator_voice';
 const TRANSLATOR_SETTINGS_KEY = 'vox_translator_settings';
 
 export function TranslatorProvider({ children }: { children: ReactNode }) {
-  const { user } = useAuth();
+  const user = useAuthStore((state) => state.user);
   const [translatorVoice, setTranslatorVoice] = useState<TranslatorVoice | null>(null);
   const [sourceLanguage, setSourceLanguageState] = useState<LanguageCode>('en');
   const [targetLanguage, setTargetLanguageState] = useState<LanguageCode>('es');

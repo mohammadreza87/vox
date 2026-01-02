@@ -4,8 +4,8 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { Check, ArrowLeft, Sparkles, Crown, Zap } from 'lucide-react';
 import { Button } from '@/shared/components/Button';
-import { useAuth } from '@/contexts/AuthContext';
-import { useSubscription } from '@/contexts/SubscriptionContext';
+import { useAuthStore } from '@/stores/authStore';
+import { useSubscriptionStore } from '@/stores/subscriptionStore';
 import {
   SUBSCRIPTION_TIERS,
   SubscriptionTier,
@@ -62,8 +62,13 @@ const FEATURES: Record<SubscriptionTier, string[]> = {
 
 export default function PricingPage() {
   const router = useRouter();
-  const { user } = useAuth();
-  const { tier: currentTier, isLoading } = useSubscription();
+
+  // Auth store
+  const user = useAuthStore((state) => state.user);
+
+  // Subscription store
+  const currentTier = useSubscriptionStore((state) => state.tier);
+  const isLoading = useSubscriptionStore((state) => state.isLoading);
   const [billingInterval, setBillingInterval] = useState<BillingInterval>('monthly');
   const [loadingTier, setLoadingTier] = useState<SubscriptionTier | null>(null);
   const [isTelegram, setIsTelegram] = useState(false);

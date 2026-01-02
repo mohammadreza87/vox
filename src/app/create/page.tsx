@@ -9,9 +9,9 @@ import { ContactCategory, AIProvider, AI_MODELS, ClonedVoice } from '@/shared/ty
 import { ProtectedRoute } from '@/components/ProtectedRoute';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { storage, auth } from '@/lib/firebase';
-import { useAuth } from '@/contexts/AuthContext';
-import { useSubscription } from '@/contexts/SubscriptionContext';
-import { useCustomContacts } from '@/contexts/CustomContactsContext';
+import { useAuthStore } from '@/stores/authStore';
+import { useSubscriptionStore, useSubscriptionSelectors } from '@/stores/subscriptionStore';
+import { useContactsStore } from '@/stores/contactsStore';
 import { getClonedVoicesKey, getAllClonedVoices } from '@/shared/utils/storage';
 import { getModelTier } from '@/config/subscription';
 import { PreMadeContactConfig } from '@/shared/types';
@@ -72,9 +72,19 @@ export default function CreateContactPage() {
 function CreateContactPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { user } = useAuth();
-  const { tier, canUseVoiceCloning, canUseModel, canCreateCustomContact, showUpgradeModal, customContactsUsed, customContactsLimit } = useSubscription();
-  const { getContact, addContact, updateContact } = useCustomContacts();
+
+  // Auth store
+  const user = useAuthStore((state) => state.user);
+
+  // Subscription store
+  const tier = useSubscriptionStore((state) => state.tier);
+  const showUpgradeModal = useSubscriptionStore((state) => state.showUpgradeModal);
+  const { canUseVoiceCloning, canUseModel, canCreateCustomContact, customContactsUsed, customContactsLimit } = useSubscriptionSelectors();
+
+  // Contacts store
+  const getContact = useContactsStore((state) => state.getContact);
+  const addContact = useContactsStore((state) => state.addContact);
+  const updateContact = useContactsStore((state) => state.updateContact);
 
   // Check if editing existing contact
   const editContactId = searchParams.get('edit');

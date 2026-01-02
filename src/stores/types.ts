@@ -10,25 +10,9 @@ import { UserSubscription, UsageData, GatedFeature } from '@/shared/types/subscr
 // Theme types
 export type Theme = 'light' | 'dark';
 
-// Auth Store Types
-export interface AuthState {
-  user: User | null;
-  loading: boolean;
-  initialized: boolean;
-}
-
-export interface AuthActions {
-  setUser: (user: User | null) => void;
-  setLoading: (loading: boolean) => void;
-  setInitialized: (initialized: boolean) => void;
-  signIn: (email: string, password: string) => Promise<void>;
-  signUp: (email: string, password: string, displayName: string) => Promise<void>;
-  signInWithGoogle: () => Promise<void>;
-  logout: () => Promise<void>;
-  updateUserProfile: (data: { displayName?: string; photoURL?: string }) => Promise<void>;
-}
-
-export type AuthStore = AuthState & AuthActions;
+// Auth Store Types - re-exported from authStore.ts for backwards compatibility
+// The canonical types are defined in authStore.ts
+export type { AuthState, AuthActions, AuthStore } from './authStore';
 
 // Theme Store Types
 export interface ThemeState {

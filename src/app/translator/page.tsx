@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
-import { useAuth } from '@/contexts/AuthContext';
+import { useAuthStore } from '@/stores/authStore';
 import { useTranslator, SUPPORTED_LANGUAGES, LanguageCode } from '@/contexts/TranslatorContext';
 import { auth } from '@/lib/firebase';
 import { getAuthToken } from '@/lib/auth-header';
@@ -42,7 +42,7 @@ export default function TranslatorPage() {
 }
 
 function TranslatorContent() {
-  const { user } = useAuth();
+  const user = useAuthStore((state) => state.user);
   const {
     isSetupComplete,
     translatorVoice,
@@ -159,7 +159,7 @@ function SetupFlow({
   availableClonedVoices: ClonedVoice[];
   useExistingVoice: (voice: ClonedVoice, sourceLanguage: LanguageCode) => void;
 }) {
-  const { user } = useAuth();
+  const user = useAuthStore((state) => state.user);
   const [step, setStep] = useState(1);
   const [voiceSelectionType, setVoiceSelectionType] = useState<'record' | 'existing'>('record');
   const [selectedExistingVoice, setSelectedExistingVoice] = useState<ClonedVoice | null>(null);

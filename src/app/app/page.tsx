@@ -4,8 +4,8 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
-import { useAuth } from '@/contexts/AuthContext';
-import { useChat } from '@/contexts/ChatContext';
+import { useAuthStore } from '@/stores/authStore';
+import { useChatStoreV2 } from '@/stores/chatStoreV2';
 import { PRE_MADE_CONTACTS, getPreMadeContact } from '@/features/contacts/data/premade-contacts';
 import { CallModal } from '@/features/call';
 import { useVoiceRecording } from '@/features/voice/hooks/useVoiceRecording';
@@ -49,8 +49,8 @@ import {
 } from 'lucide-react';
 // ThemeToggle removed - now only in settings
 import { cn } from '@/shared/utils/cn';
-import { useSubscription } from '@/contexts/SubscriptionContext';
-import { useCustomContacts } from '@/contexts/CustomContactsContext';
+import { useSubscriptionStore, useSubscriptionSelectors } from '@/stores/subscriptionStore';
+import { useContactsStore } from '@/stores/contactsStore';
 import { auth } from '@/lib/firebase';
 import { useEntranceAnimation, useTabAnimation } from '@/hooks/useAnimations';
 import gsap from 'gsap';
@@ -66,10 +66,31 @@ export default function AppPage() {
 }
 
 function AppContent() {
-  const { user, logout } = useAuth();
-  const { chats, activeChat, setActiveChat, startChat, addMessage, updateMessage, deleteChat, getChatByContactId, isLoading: isLoadingChats } = useChat();
-  const { canEditDefaultBots, showUpgradeModal, tier } = useSubscription();
-  const { customContacts, deleteContact: deleteCustomContact, addContact } = useCustomContacts();
+  // Auth store
+  const user = useAuthStore((state) => state.user);
+  const logout = useAuthStore((state) => state.logout);
+
+  // Chat store
+  const chats = useChatStoreV2((state) => state.chats);
+  const activeChat = useChatStoreV2((state) => state.activeChat);
+  const setActiveChat = useChatStoreV2((state) => state.setActiveChat);
+  const startChat = useChatStoreV2((state) => state.startChat);
+  const addMessage = useChatStoreV2((state) => state.addMessage);
+  const updateMessage = useChatStoreV2((state) => state.updateMessage);
+  const deleteChat = useChatStoreV2((state) => state.deleteChat);
+  const getChatByContactId = useChatStoreV2((state) => state.getChatByContactId);
+  const isLoadingChats = useChatStoreV2((state) => state.isLoading);
+
+  // Subscription store
+  const tier = useSubscriptionStore((state) => state.tier);
+  const showUpgradeModal = useSubscriptionStore((state) => state.showUpgradeModal);
+  const { canEditDefaultBots } = useSubscriptionSelectors();
+
+  // Contacts store
+  const customContacts = useContactsStore((state) => state.customContacts);
+  const deleteCustomContact = useContactsStore((state) => state.deleteContact);
+  const addContact = useContactsStore((state) => state.addContact);
+
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -235,7 +256,7 @@ function AppContent() {
     }
   };
 
-  const handleSelectContact = (contact: PreMadeContactConfig) => {
+  const handleSelectContact = async (contact: PreMadeContactConfig) => {
     // Cancel any ongoing operations before switching
     cancelStream();
     stopSpeaking();
@@ -253,7 +274,7 @@ function AppContent() {
       setMessages(existingChat.messages);
     } else {
       // Start new chat
-      const newChat = startChat(contact);
+      const newChat = await startChat(contact);
       const greeting: Message = {
         id: 'greeting',
         contactId: contact.id,
@@ -263,7 +284,7 @@ function AppContent() {
         createdAt: new Date(),
       };
       setMessages([greeting]);
-      addMessage(newChat.id, greeting);
+      await addMessage(newChat.id, greeting);
     }
   };
 

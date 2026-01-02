@@ -4,9 +4,9 @@ import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { ArrowLeft, Save, User, Volume2, CreditCard, Crown, ExternalLink, Loader2, Sun, Moon, Palette, Mic, Trash2, Check, Star } from 'lucide-react';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
-import { useAuth } from '@/contexts/AuthContext';
-import { useSubscription } from '@/contexts/SubscriptionContext';
-import { useTheme } from '@/contexts/ThemeContext';
+import { useAuthStore } from '@/stores/authStore';
+import { useSubscriptionStore } from '@/stores/subscriptionStore';
+import { useThemeStore } from '@/stores/themeStore';
 import { Button } from '@/shared/components/Button';
 import { auth } from '@/lib/firebase';
 import { cn } from '@/shared/utils/cn';
@@ -47,9 +47,20 @@ export default function SettingsPage() {
 
 function SettingsContent() {
   const router = useRouter();
-  const { user, updateUserProfile } = useAuth();
-  const { tier, subscription, isLoading: subscriptionLoading, refreshSubscription } = useSubscription();
-  const { theme, setTheme } = useTheme();
+
+  // Auth store
+  const user = useAuthStore((state) => state.user);
+  const updateUserProfile = useAuthStore((state) => state.updateUserProfile);
+
+  // Subscription store
+  const tier = useSubscriptionStore((state) => state.tier);
+  const subscription = useSubscriptionStore((state) => state.subscription);
+  const subscriptionLoading = useSubscriptionStore((state) => state.isLoading);
+  const refreshSubscription = useSubscriptionStore((state) => state.refreshSubscription);
+
+  // Theme store
+  const theme = useThemeStore((state) => state.theme);
+  const setTheme = useThemeStore((state) => state.setTheme);
   const [settings, setSettings] = useState<UserSettings>(DEFAULT_SETTINGS);
   const [isSaving, setIsSaving] = useState(false);
   const [isManagingSubscription, setIsManagingSubscription] = useState(false);

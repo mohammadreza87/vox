@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { useAuth } from '@/contexts/AuthContext';
+import { useAuthStore } from '@/stores/authStore';
 import { usePlatformStore } from '@/stores/platformStore';
 import { isTelegramMiniApp } from '@/lib/platform';
 import { Loader2 } from 'lucide-react';
@@ -12,7 +12,8 @@ interface ProtectedRouteProps {
 }
 
 export function ProtectedRoute({ children }: ProtectedRouteProps) {
-  const { user, loading: authLoading } = useAuth();
+  const user = useAuthStore((state) => state.user);
+  const authLoading = useAuthStore((state) => state.loading);
   const { telegramSession } = usePlatformStore();
   const router = useRouter();
   const [isTelegram, setIsTelegram] = useState(false);
