@@ -555,7 +555,76 @@
         }
 
         @media (max-width: 768px) {
-            .slide { padding: 32px; }
+            .slide { padding: 24px 20px; }
+            .phone-frame { transform: scale(0.7); }
+
+            h1 { font-size: clamp(2.2rem, 8vw, 3.5rem); }
+            h2 { font-size: clamp(1.4rem, 5vw, 2rem); }
+            h3 { font-size: clamp(1rem, 3vw, 1.2rem); }
+            p, li { font-size: clamp(0.85rem, 2.5vw, 1rem); }
+
+            .mega-number { font-size: clamp(2.5rem, 12vw, 4rem); }
+            .mega-label { font-size: 0.7rem; }
+
+            .badge { padding: 6px 12px; font-size: 0.75rem; margin-bottom: 16px; }
+
+            .card { padding: 20px; border-radius: 16px; }
+
+            .stats-row { gap: 20px; }
+            .stat-value { font-size: 1.8rem; }
+            .stat-label { font-size: 0.7rem; }
+
+            .feature-list { gap: 14px; }
+            .feature-list li { gap: 12px; }
+            .feature-list .icon { width: 28px; height: 28px; }
+            .feature-list .icon svg, .feature-list .icon i { width: 16px; height: 16px; }
+
+            .grid-4 { grid-template-columns: 1fr 1fr; }
+
+            .pricing-card { padding: 20px; }
+            .pricing-card .price { font-size: 2rem; }
+
+            .nav-controls {
+                bottom: 16px;
+                right: 16px;
+                padding: 6px 12px;
+                gap: 8px;
+            }
+            .nav-btn { width: 28px; height: 28px; font-size: 0.75rem; }
+            .slide-counter { font-size: 0.65rem; }
+
+            .top-controls {
+                top: 16px;
+                left: 16px;
+                gap: 8px;
+            }
+            .lang-switcher { padding: 4px 8px; }
+            .lang-btn { padding: 3px 8px; font-size: 0.65rem; }
+            .download-btn { padding: 6px 12px; font-size: 0.65rem; }
+
+            .icon-hero { width: 48px; height: 48px; }
+            .icon-xl { width: 40px; height: 40px; }
+            .icon-lg { width: 32px; height: 32px; }
+        }
+
+        @media (max-width: 480px) {
+            .slide { padding: 20px 16px; }
+
+            h1 { font-size: 1.8rem; }
+            h2 { font-size: 1.3rem; }
+
+            .grid-4 { grid-template-columns: 1fr; }
+            .grid-3 { grid-template-columns: 1fr; }
+
+            .stats-row {
+                flex-direction: column;
+                align-items: center;
+                gap: 16px;
+            }
+
+            .card { padding: 16px; }
+
+            .phone-frame { transform: scale(0.6); }
         }
     </style>
 </head>
