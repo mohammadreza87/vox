@@ -1,5 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { useAuthStore, initAuthListener, getCurrentUserId } from './authStore';
+import {
+  useAuthStore,
+  initAuthListener,
+  getCurrentUserId,
+  selectUser,
+  selectIsAuthenticated,
+  selectIsLoading,
+  selectIsInitialized,
+  selectAuthError,
+} from './authStore';
 
 // Mock Firebase Auth
 const mockSignInWithEmailAndPassword = vi.fn();
@@ -47,6 +56,7 @@ describe('authStore', () => {
       user: null,
       loading: true,
       initialized: false,
+      error: null,
     });
     mockGetRedirectResult.mockResolvedValue(null);
     mockOnAuthStateChanged.mockReturnValue(() => {});
@@ -58,6 +68,26 @@ describe('authStore', () => {
       expect(state.user).toBe(null);
       expect(state.loading).toBe(true);
       expect(state.initialized).toBe(false);
+      expect(state.error).toBe(null);
+    });
+  });
+
+  describe('Error State', () => {
+    it('sets error', () => {
+      useAuthStore.getState().setError('Test error');
+      expect(useAuthStore.getState().error).toBe('Test error');
+    });
+
+    it('clears error', () => {
+      useAuthStore.setState({ error: 'Existing error' });
+      useAuthStore.getState().clearError();
+      expect(useAuthStore.getState().error).toBe(null);
+    });
+
+    it('clears error when setting user', () => {
+      useAuthStore.setState({ error: 'Existing error' });
+      useAuthStore.getState().setUser(mockUser as never);
+      expect(useAuthStore.getState().error).toBe(null);
     });
   });
 
@@ -99,6 +129,44 @@ describe('authStore', () => {
         'test@example.com',
         'password123'
       );
+    });
+
+    it('clears error before signing in', async () => {
+      useAuthStore.setState({ error: 'Previous error' });
+      mockSignInWithEmailAndPassword.mockResolvedValueOnce({ user: mockUser });
+
+      await useAuthStore.getState().signIn('test@example.com', 'password123');
+
+      // Error should be cleared during sign in
+      expect(useAuthStore.getState().error).toBe(null);
+    });
+
+    it('sets error state on failure', async () => {
+      const firebaseError = { code: 'auth/wrong-password', message: 'Wrong password' };
+      mockSignInWithEmailAndPassword.mockRejectedValueOnce(firebaseError);
+
+      await expect(useAuthStore.getState().signIn('test@example.com', 'wrong')).rejects.toBeDefined();
+
+      expect(useAuthStore.getState().error).toBe('Incorrect password.');
+      expect(useAuthStore.getState().loading).toBe(false);
+    });
+
+    it('sets user-friendly error for invalid credentials', async () => {
+      const firebaseError = { code: 'auth/invalid-credential', message: 'Invalid' };
+      mockSignInWithEmailAndPassword.mockRejectedValueOnce(firebaseError);
+
+      await expect(useAuthStore.getState().signIn('test@example.com', 'wrong')).rejects.toBeDefined();
+
+      expect(useAuthStore.getState().error).toBe('Invalid email or password.');
+    });
+
+    it('sets user-friendly error for too many requests', async () => {
+      const firebaseError = { code: 'auth/too-many-requests', message: 'Too many' };
+      mockSignInWithEmailAndPassword.mockRejectedValueOnce(firebaseError);
+
+      await expect(useAuthStore.getState().signIn('test@example.com', 'wrong')).rejects.toBeDefined();
+
+      expect(useAuthStore.getState().error).toBe('Too many failed attempts. Please try again later.');
     });
 
     it('throws on error', async () => {
@@ -238,6 +306,74 @@ describe('authStore', () => {
       useAuthStore.setState({ user: null });
 
       expect(getCurrentUserId()).toBe(null);
+    });
+  });
+
+  describe('Selectors', () => {
+    it('selectUser returns user', () => {
+      useAuthStore.setState({ user: mockUser as never });
+      const state = useAuthStore.getState();
+      expect(selectUser(state)).toEqual(mockUser);
+    });
+
+    it('selectIsAuthenticated returns true when user exists', () => {
+      useAuthStore.setState({ user: mockUser as never });
+      const state = useAuthStore.getState();
+      expect(selectIsAuthenticated(state)).toBe(true);
+    });
+
+    it('selectIsAuthenticated returns false when no user', () => {
+      useAuthStore.setState({ user: null });
+      const state = useAuthStore.getState();
+      expect(selectIsAuthenticated(state)).toBe(false);
+    });
+
+    it('selectIsLoading returns loading state', () => {
+      useAuthStore.setState({ loading: true });
+      expect(selectIsLoading(useAuthStore.getState())).toBe(true);
+
+      useAuthStore.setState({ loading: false });
+      expect(selectIsLoading(useAuthStore.getState())).toBe(false);
+    });
+
+    it('selectIsInitialized returns initialized state', () => {
+      useAuthStore.setState({ initialized: false });
+      expect(selectIsInitialized(useAuthStore.getState())).toBe(false);
+
+      useAuthStore.setState({ initialized: true });
+      expect(selectIsInitialized(useAuthStore.getState())).toBe(true);
+    });
+
+    it('selectAuthError returns error state', () => {
+      useAuthStore.setState({ error: null });
+      expect(selectAuthError(useAuthStore.getState())).toBe(null);
+
+      useAuthStore.setState({ error: 'Test error' });
+      expect(selectAuthError(useAuthStore.getState())).toBe('Test error');
+    });
+  });
+
+  describe('signUp error handling', () => {
+    it('sets error state on email already in use', async () => {
+      const firebaseError = { code: 'auth/email-already-in-use', message: 'Email in use' };
+      mockCreateUserWithEmailAndPassword.mockRejectedValueOnce(firebaseError);
+
+      await expect(
+        useAuthStore.getState().signUp('test@example.com', 'password123', 'Test')
+      ).rejects.toBeDefined();
+
+      expect(useAuthStore.getState().error).toBe('This email is already registered. Please sign in instead.');
+    });
+
+    it('sets error state on weak password', async () => {
+      const firebaseError = { code: 'auth/weak-password', message: 'Weak password' };
+      mockCreateUserWithEmailAndPassword.mockRejectedValueOnce(firebaseError);
+
+      await expect(
+        useAuthStore.getState().signUp('test@example.com', '123', 'Test')
+      ).rejects.toBeDefined();
+
+      expect(useAuthStore.getState().error).toBe('Password is too weak. Please use at least 6 characters.');
     });
   });
 });
