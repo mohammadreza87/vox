@@ -780,86 +780,110 @@
         }
 
         @media (max-width: 768px) {
-            html, body { overflow-x: hidden; }
+            html, body { overflow: hidden; }
             .deck-container { overflow: hidden; }
             .slide {
-                padding: 24px 20px;
-                padding-top: 70px;
-                padding-bottom: 80px;
-                overflow-y: auto;
-                justify-content: flex-start;
+                padding: 16px;
+                padding-bottom: 70px;
+                overflow: hidden;
+                justify-content: center;
                 height: 100%;
             }
-            .slide-content { padding-bottom: 20px; }
-            .phone-frame { transform: scale(0.7); }
+            .slide-content {
+                max-height: calc(100vh - 90px);
+                overflow: hidden;
+            }
+            .phone-frame { transform: scale(0.5); }
 
-            h1 { font-size: clamp(2.2rem, 8vw, 3.5rem); }
-            h2 { font-size: clamp(1.4rem, 5vw, 2rem); }
-            h3 { font-size: clamp(1rem, 3vw, 1.2rem); }
-            p, li { font-size: clamp(0.85rem, 2.5vw, 1rem); }
+            h1 { font-size: 1.8rem; line-height: 1.1; margin-bottom: 8px !important; }
+            h2 { font-size: 1.2rem; line-height: 1.2; margin-bottom: 12px !important; }
+            h3 { font-size: 0.95rem; }
+            p, li { font-size: 0.8rem; line-height: 1.4; }
 
-            .mega-number { font-size: clamp(2.5rem, 12vw, 4rem); }
-            .mega-label { font-size: 0.7rem; }
+            .mega-number { font-size: 2rem; }
+            .mega-label { font-size: 0.6rem; letter-spacing: 0.1em; }
 
-            .badge { padding: 6px 12px; font-size: 0.75rem; margin-bottom: 16px; }
+            .badge { padding: 4px 10px; font-size: 0.65rem; margin-bottom: 10px; }
 
-            .card { padding: 20px; border-radius: 16px; }
+            .card { padding: 12px; border-radius: 12px; }
 
-            .stats-row { gap: 20px; }
-            .stat-value { font-size: 1.8rem; }
-            .stat-label { font-size: 0.7rem; }
+            .stats-row {
+                gap: 16px;
+                flex-direction: row;
+                flex-wrap: wrap;
+                justify-content: center;
+            }
+            .stat { min-width: 60px; }
+            .stat-value { font-size: 1.4rem; }
+            .stat-label { font-size: 0.55rem; }
 
-            .feature-list { gap: 14px; }
-            .feature-list li { gap: 12px; }
-            .feature-list .icon { width: 28px; height: 28px; }
-            .feature-list .icon svg, .feature-list .icon i { width: 16px; height: 16px; }
+            .feature-list { gap: 8px; }
+            .feature-list li { gap: 8px; }
+            .feature-list .icon { width: 24px; height: 24px; border-radius: 6px; }
+            .feature-list .icon svg, .feature-list .icon i { width: 14px; height: 14px; }
+            .feature-list span { font-size: 0.75rem; }
 
+            .grid-2, .grid-3, .grid-4 { gap: 12px; }
             .grid-4 { grid-template-columns: 1fr 1fr; }
 
-            .pricing-card { padding: 20px; }
-            .pricing-card .price { font-size: 2rem; }
+            .pricing-card { padding: 12px; }
+            .pricing-card .price { font-size: 1.5rem; }
+            .pricing-card h3 { font-size: 1rem; }
 
+            /* Bottom controls bar */
             .nav-controls {
-                bottom: 16px;
-                left: 16px;
+                bottom: 12px;
+                left: 50%;
+                transform: translateX(-50%);
                 padding: 6px 12px;
                 gap: 8px;
             }
-            .nav-btn { width: 28px; height: 28px; font-size: 0.75rem; }
-            .slide-counter { font-size: 0.65rem; }
+            .nav-btn { width: 28px; height: 28px; font-size: 0.7rem; }
+            .slide-counter { font-size: 0.6rem; min-width: 30px; }
 
             .top-controls {
-                top: 16px;
-                right: 16px;
-                gap: 8px;
+                top: auto;
+                bottom: 12px;
+                right: 12px;
+                gap: 6px;
             }
-            .lang-switcher { padding: 4px 8px; }
-            .lang-btn { padding: 3px 8px; font-size: 0.65rem; }
-            .download-btn { padding: 6px 12px; font-size: 0.65rem; }
+            .lang-switcher { padding: 4px 6px; gap: 2px; }
+            .lang-btn { padding: 2px 6px; font-size: 0.6rem; }
+            .download-btn { padding: 6px 10px; font-size: 0.6rem; gap: 4px; }
+            .download-btn svg { width: 12px; height: 12px; }
 
-            .icon-hero { width: 48px; height: 48px; }
-            .icon-xl { width: 40px; height: 40px; }
-            .icon-lg { width: 32px; height: 32px; }
+            .icon-hero { width: 36px; height: 36px; }
+            .icon-xl { width: 28px; height: 28px; }
+            .icon-lg { width: 24px; height: 24px; }
+            .icon-md { width: 20px; height: 20px; }
+            .icon-sm { width: 14px; height: 14px; }
+
+            .centered { gap: 8px; }
+            .animate-in { margin-bottom: 8px !important; }
         }
 
         @media (max-width: 480px) {
-            .slide { padding: 20px 16px; }
+            .slide { padding: 12px; padding-bottom: 65px; }
 
-            h1 { font-size: 1.8rem; }
-            h2 { font-size: 1.3rem; }
+            h1 { font-size: 1.5rem; }
+            h2 { font-size: 1.1rem; }
 
-            .grid-4 { grid-template-columns: 1fr; }
-            .grid-3 { grid-template-columns: 1fr; }
+            .grid-4 { grid-template-columns: 1fr 1fr; gap: 8px; }
+            .grid-3 { grid-template-columns: 1fr; gap: 8px; }
+            .grid-2 { gap: 10px; }
 
             .stats-row {
-                flex-direction: column;
-                align-items: center;
-                gap: 16px;
+                flex-direction: row;
+                gap: 12px;
             }
+            .stat-value { font-size: 1.2rem; }
 
-            .card { padding: 16px; }
+            .card { padding: 10px; }
 
-            .phone-frame { transform: scale(0.6); }
+            .phone-frame { transform: scale(0.4); }
+
+            .feature-list { gap: 6px; }
+            .feature-list span { font-size: 0.7rem; }
         }
     </style>
 </head>
