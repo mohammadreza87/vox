@@ -769,7 +769,7 @@ function AppContent() {
           <div className="p-4 border-t border-white/10 relative" ref={userMenuRef}>
             {/* Dropdown Menu (opens upward) */}
             {showUserMenu && (
-              <div className="absolute bottom-full left-4 right-4 mb-2 liquid-glass overflow-hidden z-50">
+              <div className="absolute bottom-full left-4 right-4 mb-2 rounded-xl overflow-hidden z-50 shadow-xl border border-white/10 bg-[var(--card-background)] backdrop-blur-xl">
                 <button
                   onClick={() => {
                     setShowUserMenu(false);
