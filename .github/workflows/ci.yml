@@ -60,7 +60,7 @@ jobs:
         run: npm ci
 
       - name: Run tests with coverage
-        run: npm run test:run -- --coverage
+        run: npm run test:coverage
         env:
           # Provide minimal env vars for tests
           NEXT_PUBLIC_FIREBASE_API_KEY: test-key
