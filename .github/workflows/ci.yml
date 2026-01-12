@@ -108,6 +108,18 @@ jobs:
           # Skip telemetry during CI
           NEXT_TELEMETRY_DISABLED: 1
 
+      - name: Verify build output
+        run: |
+          echo "Checking for .next directory..."
+          ls -la
+          if [ -d ".next" ]; then
+            echo ".next directory exists"
+            ls -la .next/
+          else
+            echo "ERROR: .next directory not found!"
+            exit 1
+          fi
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
