@@ -87,18 +87,18 @@ function StoreInitializer({ children }: { children: ReactNode }) {
  */
 function ThemeApplier({ children }: { children: ReactNode }) {
   const theme = useThemeStore((state) => state.theme);
-  const mounted = useThemeStore((state) => state.mounted);
   const setMounted = useThemeStore((state) => state.setMounted);
+  const applyTheme = useThemeStore((state) => state.applyTheme);
 
+  // Mark as mounted on first render
   useEffect(() => {
     setMounted(true);
   }, [setMounted]);
 
+  // Apply theme changes to document
   useEffect(() => {
-    if (mounted) {
-      document.documentElement.classList.toggle('dark', theme === 'dark');
-    }
-  }, [theme, mounted]);
+    applyTheme(theme);
+  }, [theme, applyTheme]);
 
   return <>{children}</>;
 }

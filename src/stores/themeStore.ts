@@ -10,9 +10,25 @@ import { getAuthToken } from './middleware/sync';
 
 const THEME_STORAGE_KEY = 'theme';
 
+// Get initial theme from localStorage or system preference
+function getInitialTheme(): Theme {
+  if (typeof window === 'undefined') return 'light';
+  try {
+    const stored = localStorage.getItem(THEME_STORAGE_KEY);
+    if (stored === 'dark' || stored === 'light') return stored;
+  } catch {
+    // localStorage not available
+  }
+  // Fall back to system preference
+  if (typeof window !== 'undefined' && window.matchMedia?.('(prefers-color-scheme: dark)').matches) {
+    return 'dark';
+  }
+  return 'light';
+}
+
 export const useThemeStore = create<ThemeStore>((set, get) => ({
-  // State
-  theme: 'light',
+  // State - initialize from localStorage to prevent flash
+  theme: getInitialTheme(),
   mounted: false,
 
   // Actions
