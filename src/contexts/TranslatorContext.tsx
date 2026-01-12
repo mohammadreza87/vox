@@ -133,7 +133,7 @@ export function TranslatorProvider({ children }: { children: ReactNode }) {
     }
 
     try {
-      const token = await auth.currentUser?.getIdToken();
+      const token = await auth?.currentUser?.getIdToken();
       if (!token) {
         // Fallback to localStorage
         const allVoices = getAllClonedVoices(user.uid);
@@ -261,7 +261,7 @@ export function TranslatorProvider({ children }: { children: ReactNode }) {
       // Save to Firestore if logged in
       if (user?.uid) {
         try {
-          const token = await auth.currentUser?.getIdToken();
+          const token = await auth?.currentUser?.getIdToken();
           if (token) {
             // Save voice to Firestore
             await fetch('/api/user/voices', {
@@ -314,7 +314,7 @@ export function TranslatorProvider({ children }: { children: ReactNode }) {
       // Set as default translator voice in Firestore
       if (user?.uid) {
         try {
-          const token = await auth.currentUser?.getIdToken();
+          const token = await auth?.currentUser?.getIdToken();
           if (token) {
             await fetch('/api/user/voices', {
               method: 'PATCH',
@@ -343,7 +343,7 @@ export function TranslatorProvider({ children }: { children: ReactNode }) {
       // Clear default translator voice in Firestore
       if (user?.uid) {
         try {
-          const token = await auth.currentUser?.getIdToken();
+          const token = await auth?.currentUser?.getIdToken();
           if (token) {
             await fetch('/api/user/voices', {
               method: 'PATCH',

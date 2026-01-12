@@ -33,7 +33,7 @@ export async function textToSpeech(text: string, voiceId: string): Promise<strin
  * Stream text to speech (returns audio blob)
  */
 export async function streamTTS(text: string, voiceId: string): Promise<Blob> {
-  const token = await auth.currentUser?.getIdToken();
+  const token = await auth?.currentUser?.getIdToken();
   const response = await fetch('/api/tts/stream', {
     method: 'POST',
     headers: {
@@ -113,7 +113,7 @@ export function streamResponse(
 
   (async () => {
     try {
-      const token = await auth.currentUser?.getIdToken();
+      const token = await auth?.currentUser?.getIdToken();
       const response = await fetch('/api/generate/stream', {
         method: 'POST',
         headers: {

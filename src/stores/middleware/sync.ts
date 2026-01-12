@@ -19,7 +19,7 @@ export interface SyncConfig {
  */
 export async function getAuthToken(): Promise<string | null> {
   try {
-    const token = await auth.currentUser?.getIdToken();
+    const token = await auth?.currentUser?.getIdToken();
     return token || null;
   } catch (error) {
     console.error('Error getting auth token:', error);

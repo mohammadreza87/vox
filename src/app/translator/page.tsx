@@ -351,7 +351,7 @@ function SetupFlow({
     setError(null);
 
     try {
-      const token = await auth.currentUser?.getIdToken();
+      const token = await auth?.currentUser?.getIdToken();
       const formData = new FormData();
       formData.append('name', `${user.displayName || 'User'}'s Translator Voice`);
       formData.append('description', `Translator voice for ${selectedLang?.name || sourceLanguage}`);
@@ -961,7 +961,7 @@ function TranslatorInterface({
     // Generate new audio
     setIsGeneratingAudio(langType);
     try {
-      const token = await auth.currentUser?.getIdToken();
+      const token = await auth?.currentUser?.getIdToken();
       const response = await fetch('/api/tts', {
         method: 'POST',
         headers: {
@@ -1112,7 +1112,7 @@ function TranslatorInterface({
     setCurrentText('Transcribing...');
 
     try {
-      const token = await auth.currentUser?.getIdToken();
+      const token = await auth?.currentUser?.getIdToken();
 
       // Send to STT API
       const formData = new FormData();
@@ -1218,7 +1218,7 @@ function TranslatorInterface({
     setCurrentText(text);
 
     try {
-      const token = await auth.currentUser?.getIdToken();
+      const token = await auth?.currentUser?.getIdToken();
       console.log('Translating text:', text);
 
       const response = await fetch('/api/translate', {
@@ -1357,7 +1357,7 @@ function TranslatorInterface({
                     const newTargetLang = SUPPORTED_LANGUAGES.find(l => l.code === lang);
                     setIsTranslating(true);
                     try {
-                      const token = await auth.currentUser?.getIdToken();
+                      const token = await auth?.currentUser?.getIdToken();
                       const response = await fetch('/api/translate', {
                         method: 'POST',
                         headers: {

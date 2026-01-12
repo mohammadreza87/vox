@@ -110,7 +110,7 @@ export default function PricingPage() {
       }
 
       // Otherwise use Stripe
-      const token = await auth.currentUser?.getIdToken();
+      const token = await auth?.currentUser?.getIdToken();
       if (!token) throw new Error('Not authenticated');
 
       const priceId = billingInterval === 'monthly'

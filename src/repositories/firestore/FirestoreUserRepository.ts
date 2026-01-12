@@ -26,8 +26,15 @@ export class FirestoreUserRepository implements IUserRepository {
   private readonly contactsSubcollection = 'customContacts';
   private readonly voicesSubcollection = 'clonedVoices';
 
+  private getDb() {
+    if (!db) {
+      throw new Error('Firestore is not initialized. Please check your Firebase configuration.');
+    }
+    return db;
+  }
+
   async getUser(userId: string): Promise<UserProfile | null> {
-    const userRef = doc(db, this.usersCollection, userId);
+    const userRef = doc(this.getDb(), this.usersCollection, userId);
     const userSnap = await getDoc(userRef);
 
     if (!userSnap.exists()) {
@@ -38,7 +45,7 @@ export class FirestoreUserRepository implements IUserRepository {
   }
 
   async upsertUser(userId: string, data: Partial<UserProfile>): Promise<UserProfile> {
-    const userRef = doc(db, this.usersCollection, userId);
+    const userRef = doc(this.getDb(), this.usersCollection, userId);
     const userSnap = await getDoc(userRef);
 
     if (userSnap.exists()) {
@@ -73,7 +80,7 @@ export class FirestoreUserRepository implements IUserRepository {
   }
 
   async getSettings(userId: string): Promise<UserSettings | null> {
-    const userRef = doc(db, this.usersCollection, userId);
+    const userRef = doc(this.getDb(), this.usersCollection, userId);
     const userSnap = await getDoc(userRef);
 
     if (!userSnap.exists()) {
@@ -89,7 +96,7 @@ export class FirestoreUserRepository implements IUserRepository {
   }
 
   async updateSettings(userId: string, settings: Partial<UserSettings>): Promise<void> {
-    const userRef = doc(db, this.usersCollection, userId);
+    const userRef = doc(this.getDb(), this.usersCollection, userId);
     await updateDoc(userRef, {
       settings: settings,
       updatedAt: serverTimestamp(),
@@ -97,7 +104,7 @@ export class FirestoreUserRepository implements IUserRepository {
   }
 
   async getSubscription(userId: string): Promise<UserSubscription | null> {
-    const userRef = doc(db, this.usersCollection, userId);
+    const userRef = doc(this.getDb(), this.usersCollection, userId);
     const userSnap = await getDoc(userRef);
 
     if (!userSnap.exists()) {
@@ -109,7 +116,7 @@ export class FirestoreUserRepository implements IUserRepository {
   }
 
   async updateSubscription(userId: string, subscription: Partial<UserSubscription>): Promise<void> {
-    const userRef = doc(db, this.usersCollection, userId);
+    const userRef = doc(this.getDb(), this.usersCollection, userId);
     await updateDoc(userRef, {
       subscription,
       tier: subscription.tier,
@@ -118,7 +125,7 @@ export class FirestoreUserRepository implements IUserRepository {
   }
 
   async getUsage(userId: string): Promise<UsageData | null> {
-    const userRef = doc(db, this.usersCollection, userId);
+    const userRef = doc(this.getDb(), this.usersCollection, userId);
     const userSnap = await getDoc(userRef);
 
     if (!userSnap.exists()) {
@@ -130,7 +137,7 @@ export class FirestoreUserRepository implements IUserRepository {
   }
 
   async incrementMessageCount(userId: string): Promise<void> {
-    const userRef = doc(db, this.usersCollection, userId);
+    const userRef = doc(this.getDb(), this.usersCollection, userId);
     await updateDoc(userRef, {
       'usage.messagesThisMonth': increment(1),
       updatedAt: serverTimestamp(),
@@ -138,7 +145,7 @@ export class FirestoreUserRepository implements IUserRepository {
   }
 
   async getCustomContacts(userId: string): Promise<PreMadeContactConfig[]> {
-    const contactsRef = collection(db, this.usersCollection, userId, this.contactsSubcollection);
+    const contactsRef = collection(this.getDb(), this.usersCollection, userId, this.contactsSubcollection);
     const snapshot = await getDocs(contactsRef);
 
     return snapshot.docs.map((docSnap) => ({
@@ -149,7 +156,7 @@ export class FirestoreUserRepository implements IUserRepository {
 
   async addCustomContact(userId: string, contact: PreMadeContactConfig): Promise<void> {
     const contactRef = doc(
-      db,
+      this.getDb(),
       this.usersCollection,
       userId,
       this.contactsSubcollection,
@@ -163,7 +170,7 @@ export class FirestoreUserRepository implements IUserRepository {
     });
 
     // Update contacts count
-    const userRef = doc(db, this.usersCollection, userId);
+    const userRef = doc(this.getDb(), this.usersCollection, userId);
     await updateDoc(userRef, {
       'usage.customContactsCount': increment(1),
     });
@@ -175,7 +182,7 @@ export class FirestoreUserRepository implements IUserRepository {
     updates: Partial<PreMadeContactConfig>
   ): Promise<void> {
     const contactRef = doc(
-      db,
+      this.getDb(),
       this.usersCollection,
       userId,
       this.contactsSubcollection,
@@ -190,7 +197,7 @@ export class FirestoreUserRepository implements IUserRepository {
 
   async deleteCustomContact(userId: string, contactId: string): Promise<void> {
     const contactRef = doc(
-      db,
+      this.getDb(),
       this.usersCollection,
       userId,
       this.contactsSubcollection,
@@ -200,14 +207,14 @@ export class FirestoreUserRepository implements IUserRepository {
     await deleteDoc(contactRef);
 
     // Update contacts count
-    const userRef = doc(db, this.usersCollection, userId);
+    const userRef = doc(this.getDb(), this.usersCollection, userId);
     await updateDoc(userRef, {
       'usage.customContactsCount': increment(-1),
     });
   }
 
   async getClonedVoices(userId: string): Promise<ClonedVoice[]> {
-    const voicesRef = collection(db, this.usersCollection, userId, this.voicesSubcollection);
+    const voicesRef = collection(this.getDb(), this.usersCollection, userId, this.voicesSubcollection);
     const snapshot = await getDocs(voicesRef);
 
     return snapshot.docs.map((docSnap) => ({
@@ -219,7 +226,7 @@ export class FirestoreUserRepository implements IUserRepository {
 
   async addClonedVoice(userId: string, voice: ClonedVoice): Promise<void> {
     const voiceRef = doc(
-      db,
+      this.getDb(),
       this.usersCollection,
       userId,
       this.voicesSubcollection,
@@ -234,7 +241,7 @@ export class FirestoreUserRepository implements IUserRepository {
 
   async deleteClonedVoice(userId: string, voiceId: string): Promise<void> {
     const voiceRef = doc(
-      db,
+      this.getDb(),
       this.usersCollection,
       userId,
       this.voicesSubcollection,
@@ -245,7 +252,7 @@ export class FirestoreUserRepository implements IUserRepository {
   }
 
   async setDefaultTranslatorVoice(userId: string, voiceId: string | null): Promise<void> {
-    const userRef = doc(db, this.usersCollection, userId);
+    const userRef = doc(this.getDb(), this.usersCollection, userId);
     await updateDoc(userRef, {
       defaultTranslatorVoiceId: voiceId,
       updatedAt: serverTimestamp(),

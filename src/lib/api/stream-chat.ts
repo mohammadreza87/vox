@@ -31,7 +31,7 @@ export function streamChat(request: ChatStreamRequest, callbacks: StreamCallback
 
   (async () => {
     try {
-      const token = await auth.currentUser?.getIdToken();
+      const token = await auth?.currentUser?.getIdToken();
 
       const response = await fetch('/api/chat/stream', {
         method: 'POST',

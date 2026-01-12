@@ -84,7 +84,7 @@ function SettingsContent() {
     }
 
     try {
-      const token = await auth.currentUser?.getIdToken();
+      const token = await auth?.currentUser?.getIdToken();
       if (!token) {
         setIsLoadingVoices(false);
         return;
@@ -120,7 +120,7 @@ function SettingsContent() {
 
     setDeletingVoiceId(voiceId);
     try {
-      const token = await auth.currentUser?.getIdToken();
+      const token = await auth?.currentUser?.getIdToken();
       if (!token) throw new Error('Not authenticated');
 
       const response = await fetch(`/api/user/voices?voiceId=${encodeURIComponent(voiceId)}`, {
@@ -155,7 +155,7 @@ function SettingsContent() {
 
     setSettingDefaultId(voiceId);
     try {
-      const token = await auth.currentUser?.getIdToken();
+      const token = await auth?.currentUser?.getIdToken();
       if (!token) throw new Error('Not authenticated');
 
       const response = await fetch('/api/user/voices', {
@@ -192,7 +192,7 @@ function SettingsContent() {
   const handleManageSubscription = async () => {
     setIsManagingSubscription(true);
     try {
-      const token = await auth.currentUser?.getIdToken();
+      const token = await auth?.currentUser?.getIdToken();
       if (!token) throw new Error('Not authenticated');
 
       const response = await fetch('/api/stripe/create-portal', {

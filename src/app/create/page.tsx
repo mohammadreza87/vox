@@ -389,7 +389,7 @@ function CreateContactPageContent() {
   // Helper function for TTS-based preview (used for cloned voices or fallback)
   const previewVoiceWithTTS = useCallback(async (voiceIdToPreview: string, voiceNameToPreview: string) => {
     try {
-      const token = await auth.currentUser?.getIdToken();
+      const token = await auth?.currentUser?.getIdToken();
       const sampleText = `Hi, I'm ${voiceNameToPreview}. This is a preview of how I sound.`;
 
       const response = await fetch('/api/tts', {
@@ -463,7 +463,7 @@ function CreateContactPageContent() {
     setIsCloning(true);
     try {
       // Get auth token for the API call
-      const token = await auth.currentUser?.getIdToken();
+      const token = await auth?.currentUser?.getIdToken();
       if (!token) {
         alert('You must be logged in to clone a voice');
         setIsCloning(false);
@@ -566,8 +566,8 @@ function CreateContactPageContent() {
       };
       reader.readAsDataURL(file);
 
-      // Upload to Firebase Storage if user is logged in
-      if (user) {
+      // Upload to Firebase Storage if user is logged in and storage is available
+      if (user && storage) {
         const storageRef = ref(storage, `avatars/${user.uid}/${Date.now()}_${file.name}`);
         await uploadBytes(storageRef, file);
         const downloadURL = await getDownloadURL(storageRef);

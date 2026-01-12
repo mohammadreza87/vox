@@ -22,6 +22,14 @@ import {
 } from 'firebase/auth';
 import { auth } from '@/lib/firebase';
 
+// Helper to get auth with null check
+function getAuth() {
+  if (!auth) {
+    throw new Error('Firebase Auth is not initialized. Please check your Firebase configuration.');
+  }
+  return auth;
+}
+
 // Types
 export interface AuthState {
   user: User | null;
@@ -64,7 +72,7 @@ export const useAuthStore = create<AuthStore>()(
       signIn: async (email: string, password: string) => {
         set({ loading: true, error: null });
         try {
-          await signInWithEmailAndPassword(auth, email, password);
+          await signInWithEmailAndPassword(getAuth(), email, password);
         } catch (error) {
           const message = getFirebaseErrorMessage(error);
           set({ error: message, loading: false });
@@ -75,7 +83,7 @@ export const useAuthStore = create<AuthStore>()(
       signUp: async (email: string, password: string, displayName: string) => {
         set({ loading: true, error: null });
         try {
-          const result = await createUserWithEmailAndPassword(auth, email, password);
+          const result = await createUserWithEmailAndPassword(getAuth(), email, password);
           await updateProfile(result.user, { displayName });
         } catch (error) {
           const message = getFirebaseErrorMessage(error);
@@ -88,7 +96,7 @@ export const useAuthStore = create<AuthStore>()(
         set({ loading: true, error: null });
         const provider = new GoogleAuthProvider();
         try {
-          await signInWithPopup(auth, provider);
+          await signInWithPopup(getAuth(), provider);
         } catch (error) {
           const firebaseError = error as { code?: string };
           // If popup fails, use redirect as fallback
@@ -97,7 +105,7 @@ export const useAuthStore = create<AuthStore>()(
             firebaseError.code === 'auth/popup-blocked' ||
             firebaseError.code === 'auth/cancelled-popup-request'
           ) {
-            await signInWithRedirect(auth, provider);
+            await signInWithRedirect(getAuth(), provider);
           } else {
             const message = getFirebaseErrorMessage(error);
             set({ error: message, loading: false });
@@ -109,7 +117,7 @@ export const useAuthStore = create<AuthStore>()(
       logout: async () => {
         set({ loading: true, error: null });
         try {
-          await signOut(auth);
+          await signOut(getAuth());
           set({ user: null, loading: false });
         } catch (error) {
           const message = getFirebaseErrorMessage(error);
@@ -119,15 +127,16 @@ export const useAuthStore = create<AuthStore>()(
       },
 
       updateUserProfile: async (data: { displayName?: string; photoURL?: string }) => {
-        if (!auth.currentUser) {
+        const firebaseAuth = getAuth();
+        if (!firebaseAuth.currentUser) {
           set({ error: 'No user logged in' });
           throw new Error('No user logged in');
         }
         set({ loading: true, error: null });
         try {
-          await updateProfile(auth.currentUser, data);
+          await updateProfile(firebaseAuth.currentUser, data);
           // Force refresh the user state
-          set({ user: { ...auth.currentUser } as User, loading: false });
+          set({ user: { ...firebaseAuth.currentUser } as User, loading: false });
         } catch (error) {
           const message = getFirebaseErrorMessage(error);
           set({ error: message, loading: false });
@@ -189,6 +198,14 @@ function getFirebaseErrorMessage(error: unknown): string {
  */
 export function initAuthListener(): () => void {
   const store = useAuthStore.getState();
+
+  // Skip if Firebase is not initialized
+  if (!auth) {
+    console.warn('Firebase Auth not initialized, skipping auth listener');
+    store.setLoading(false);
+    store.setInitialized(true);
+    return () => {};
+  }
 
   // Check for redirect result
   getRedirectResult(auth)

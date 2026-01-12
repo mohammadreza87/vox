@@ -31,8 +31,15 @@ export class FirestoreChatRepository implements IChatRepository {
   private readonly chatsCollection = 'chats';
   private readonly messagesSubcollection = 'messages';
 
+  private getDb() {
+    if (!db) {
+      throw new Error('Firestore is not initialized. Please check your Firebase configuration.');
+    }
+    return db;
+  }
+
   async getChats(userId: string): Promise<Chat[]> {
-    const chatsRef = collection(db, this.chatsCollection);
+    const chatsRef = collection(this.getDb(), this.chatsCollection);
     const q = query(
       chatsRef,
       where('userId', '==', userId),
@@ -53,7 +60,7 @@ export class FirestoreChatRepository implements IChatRepository {
   }
 
   async getChat(chatId: string): Promise<Chat | null> {
-    const chatRef = doc(db, this.chatsCollection, chatId);
+    const chatRef = doc(this.getDb(), this.chatsCollection, chatId);
     const chatSnap = await getDoc(chatRef);
 
     if (!chatSnap.exists()) {
@@ -65,7 +72,7 @@ export class FirestoreChatRepository implements IChatRepository {
   }
 
   async getChatByContactId(userId: string, contactId: string): Promise<Chat | null> {
-    const chatsRef = collection(db, this.chatsCollection);
+    const chatsRef = collection(this.getDb(), this.chatsCollection);
     const q = query(
       chatsRef,
       where('userId', '==', userId),
@@ -86,7 +93,7 @@ export class FirestoreChatRepository implements IChatRepository {
 
   async createChat(userId: string, input: CreateChatInput): Promise<Chat> {
     const chatId = `${userId}-${input.contactId}-${Date.now()}`;
-    const chatRef = doc(db, this.chatsCollection, chatId);
+    const chatRef = doc(this.getDb(), this.chatsCollection, chatId);
 
     const chatData = {
       userId,
@@ -117,7 +124,7 @@ export class FirestoreChatRepository implements IChatRepository {
   }
 
   async updateChat(chatId: string, updates: Partial<Chat>): Promise<void> {
-    const chatRef = doc(db, this.chatsCollection, chatId);
+    const chatRef = doc(this.getDb(), this.chatsCollection, chatId);
 
     const updateData: Record<string, unknown> = {
       updatedAt: serverTimestamp(),
@@ -135,20 +142,20 @@ export class FirestoreChatRepository implements IChatRepository {
 
   async deleteChat(chatId: string): Promise<void> {
     // Delete all messages first
-    const messagesRef = collection(db, this.chatsCollection, chatId, this.messagesSubcollection);
+    const messagesRef = collection(this.getDb(), this.chatsCollection, chatId, this.messagesSubcollection);
     const messagesSnap = await getDocs(messagesRef);
 
     const deletePromises = messagesSnap.docs.map((docSnap) =>
-      deleteDoc(doc(db, this.chatsCollection, chatId, this.messagesSubcollection, docSnap.id))
+      deleteDoc(doc(this.getDb(), this.chatsCollection, chatId, this.messagesSubcollection, docSnap.id))
     );
     await Promise.all(deletePromises);
 
     // Delete the chat
-    await deleteDoc(doc(db, this.chatsCollection, chatId));
+    await deleteDoc(doc(this.getDb(), this.chatsCollection, chatId));
   }
 
   async getMessages(chatId: string, options?: PaginationOptions): Promise<Message[]> {
-    const messagesRef = collection(db, this.chatsCollection, chatId, this.messagesSubcollection);
+    const messagesRef = collection(this.getDb(), this.chatsCollection, chatId, this.messagesSubcollection);
     let q = query(messagesRef, orderBy('createdAt', 'asc'));
 
     if (options?.limit) {
@@ -161,7 +168,7 @@ export class FirestoreChatRepository implements IChatRepository {
 
   async addMessage(chatId: string, input: CreateMessageInput): Promise<Message> {
     const messageId = `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-    const messageRef = doc(db, this.chatsCollection, chatId, this.messagesSubcollection, messageId);
+    const messageRef = doc(this.getDb(), this.chatsCollection, chatId, this.messagesSubcollection, messageId);
 
     const messageData = {
       role: input.role,
@@ -189,7 +196,7 @@ export class FirestoreChatRepository implements IChatRepository {
   }
 
   async updateMessage(chatId: string, messageId: string, updates: Partial<Message>): Promise<void> {
-    const messageRef = doc(db, this.chatsCollection, chatId, this.messagesSubcollection, messageId);
+    const messageRef = doc(this.getDb(), this.chatsCollection, chatId, this.messagesSubcollection, messageId);
 
     const updateData: Record<string, unknown> = {};
 
@@ -204,7 +211,7 @@ export class FirestoreChatRepository implements IChatRepository {
   }
 
   async deleteMessage(chatId: string, messageId: string): Promise<void> {
-    const messageRef = doc(db, this.chatsCollection, chatId, this.messagesSubcollection, messageId);
+    const messageRef = doc(this.getDb(), this.chatsCollection, chatId, this.messagesSubcollection, messageId);
     await deleteDoc(messageRef);
   }
 
@@ -238,7 +245,7 @@ export class FirestoreChatRepository implements IChatRepository {
   }
 
   private async createChatFromLocal(userId: string, chat: Chat): Promise<void> {
-    const chatRef = doc(db, this.chatsCollection, chat.id);
+    const chatRef = doc(this.getDb(), this.chatsCollection, chat.id);
 
     await setDoc(chatRef, {
       userId,
@@ -260,7 +267,7 @@ export class FirestoreChatRepository implements IChatRepository {
   private async syncMessages(chatId: string, messages: Message[]): Promise<void> {
     for (const message of messages) {
       const messageRef = doc(
-        db,
+        this.getDb(),
         this.chatsCollection,
         chatId,
         this.messagesSubcollection,

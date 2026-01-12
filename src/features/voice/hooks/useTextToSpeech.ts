@@ -45,7 +45,7 @@ export function useTextToSpeech({
 
       try {
         // Get auth token for authenticated request
-        const token = await auth.currentUser?.getIdToken();
+        const token = await auth?.currentUser?.getIdToken();
 
         // Create abort controller for cancellation
         abortControllerRef.current = new AbortController();
@@ -154,7 +154,7 @@ export function useTextToSpeech({
 
       try {
         // Get auth token for authenticated request
-        const token = await auth.currentUser?.getIdToken();
+        const token = await auth?.currentUser?.getIdToken();
 
         // Call our TTS API
         const response = await fetch('/api/tts', {
