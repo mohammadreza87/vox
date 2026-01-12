@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
 import { useAuthStore } from '@/stores/authStore';
 import { useTranslator, SUPPORTED_LANGUAGES, LanguageCode } from '@/contexts/TranslatorContext';
+import { getFavoriteLanguages, toggleFavoriteLanguage } from '@/stores/translatorStore';
 import { auth } from '@/lib/firebase';
 import { getAuthToken } from '@/lib/auth-header';
 import {
@@ -25,6 +26,8 @@ import {
   StopCircle,
   Upload,
   Phone,
+  Search,
+  Star,
 } from 'lucide-react';
 import { cn } from '@/shared/utils/cn';
 import { LiveTranslationModal } from '@/features/call';
@@ -134,6 +137,7 @@ function TranslatorContent() {
             setSourceLanguage={setSourceLanguage}
             setTargetLanguage={setTargetLanguage}
             voiceId={translatorVoice?.voiceId || ''}
+            userId={user?.uid}
           />
         )}
       </main>
@@ -170,6 +174,36 @@ function SetupFlow({
   const [error, setError] = useState<string | null>(null);
   const [isPlayingRecording, setIsPlayingRecording] = useState(false);
   const [showUploadOption, setShowUploadOption] = useState(false);
+
+  // Language search and favorites
+  const [langSearch, setLangSearch] = useState('');
+  const [langFavorites, setLangFavorites] = useState<string[]>(() => getFavoriteLanguages(user?.uid));
+  const langSearchInputRef = useRef<HTMLInputElement>(null);
+
+  const handleToggleLangFavorite = (e: React.MouseEvent, langCode: string) => {
+    e.stopPropagation();
+    const newFavorites = toggleFavoriteLanguage(langCode, user?.uid);
+    setLangFavorites(newFavorites);
+  };
+
+  // Filter and sort languages for step 1 grid
+  const searchLowerCase = langSearch.toLowerCase().trim();
+  const filteredLangs = SUPPORTED_LANGUAGES.filter(l => {
+    if (!searchLowerCase) return true;
+    return (
+      l.name.toLowerCase().includes(searchLowerCase) ||
+      l.nativeName.toLowerCase().includes(searchLowerCase) ||
+      l.code.toLowerCase().includes(searchLowerCase)
+    );
+  });
+
+  const sortedLangs = [...filteredLangs].sort((a, b) => {
+    const aFav = langFavorites.includes(a.code);
+    const bFav = langFavorites.includes(b.code);
+    if (aFav && !bFav) return -1;
+    if (!aFav && bFav) return 1;
+    return a.name.localeCompare(b.name);
+  });
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordedAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -388,28 +422,72 @@ function SetupFlow({
             <p className="text-[var(--foreground)]/60">Choose the language you'll speak in</p>
           </div>
 
+          {/* Search input */}
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-[var(--foreground)]/40" />
+            <input
+              ref={langSearchInputRef}
+              type="text"
+              value={langSearch}
+              onChange={(e) => setLangSearch(e.target.value)}
+              placeholder="Search language or country..."
+              className="w-full pl-10 pr-4 py-3 rounded-xl liquid-card bg-white/5 text-[var(--foreground)] placeholder-[var(--foreground)]/40 focus:outline-none focus:ring-2 focus:ring-[#FF6D1F]/50"
+            />
+          </div>
+
+          {/* Language grid */}
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-[400px] overflow-y-auto">
-            {SUPPORTED_LANGUAGES.map((lang) => (
-              <button
-                key={lang.code}
-                onClick={() => setSourceLanguage(lang.code)}
-                className={cn(
-                  "flex items-center gap-2 p-3 rounded-xl transition-all text-left",
-                  sourceLanguage === lang.code
-                    ? "liquid-button"
-                    : "liquid-card hover:bg-white/20"
-                )}
-              >
-                <span className="text-xl">{lang.flag}</span>
-                <div className="flex-1 min-w-0">
-                  <p className="font-medium text-sm truncate">{lang.name}</p>
-                  <p className="text-xs opacity-70 truncate">{lang.nativeName}</p>
-                </div>
-                {sourceLanguage === lang.code && (
-                  <Check className="w-4 h-4 flex-shrink-0" />
-                )}
-              </button>
-            ))}
+            {sortedLangs.length === 0 ? (
+              <div className="col-span-full p-4 text-center text-[var(--foreground)]/60">
+                No languages found
+              </div>
+            ) : (
+              sortedLangs.map((lang) => {
+                const isFavorite = langFavorites.includes(lang.code);
+                return (
+                  <div
+                    key={lang.code}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => setSourceLanguage(lang.code)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        setSourceLanguage(lang.code);
+                      }
+                    }}
+                    className={cn(
+                      "flex items-center gap-2 p-3 rounded-xl transition-all text-left relative group cursor-pointer",
+                      sourceLanguage === lang.code
+                        ? "liquid-button"
+                        : "liquid-card hover:bg-white/20"
+                    )}
+                  >
+                    {/* Star button */}
+                    <button
+                      onClick={(e) => handleToggleLangFavorite(e, lang.code)}
+                      className="absolute top-1 right-1 p-1 rounded transition-colors opacity-0 group-hover:opacity-100 hover:bg-white/10"
+                      style={{ opacity: isFavorite ? 1 : undefined }}
+                    >
+                      <Star
+                        className={cn(
+                          "w-3 h-3 transition-colors",
+                          isFavorite ? "fill-amber-400 text-amber-400" : "text-[var(--foreground)]/30"
+                        )}
+                      />
+                    </button>
+                    <span className="text-xl">{lang.flag}</span>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium text-sm truncate">{lang.name}</p>
+                      <p className="text-xs opacity-70 truncate">{lang.nativeName}</p>
+                    </div>
+                    {sourceLanguage === lang.code && (
+                      <Check className="w-4 h-4 flex-shrink-0" />
+                    )}
+                  </div>
+                );
+              })
+            )}
           </div>
 
           <button
@@ -759,12 +837,14 @@ function TranslatorInterface({
   setSourceLanguage,
   setTargetLanguage,
   voiceId,
+  userId,
 }: {
   sourceLanguage: LanguageCode;
   targetLanguage: LanguageCode;
   setSourceLanguage: (lang: LanguageCode) => void;
   setTargetLanguage: (lang: LanguageCode) => void;
   voiceId: string;
+  userId?: string;
 }) {
   // Recording state
   const [isRecording, setIsRecording] = useState(false);
@@ -1237,6 +1317,7 @@ function TranslatorInterface({
                   setLastTranslation(null);
                 }}
                 exclude={targetLanguage}
+                userId={userId}
               />
             )}
           </div>
@@ -1316,6 +1397,7 @@ function TranslatorInterface({
                   }
                 }}
                 exclude={sourceLanguage}
+                userId={userId}
               />
             )}
           </div>
@@ -1630,39 +1712,121 @@ function SimpleMicButton({
   );
 }
 
-// Language Picker Component
+// Language Picker Component with Search and Favorites
 function LanguagePicker({
   selected,
   onSelect,
   exclude,
+  userId,
 }: {
   selected: LanguageCode;
   onSelect: (lang: LanguageCode) => void;
   exclude?: LanguageCode;
+  userId?: string | null;
 }) {
-  const filteredLanguages = SUPPORTED_LANGUAGES.filter(l => l.code !== exclude);
+  const [search, setSearch] = useState('');
+  const [favorites, setFavorites] = useState<string[]>(() => getFavoriteLanguages(userId));
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // Focus search input when picker opens
+  useEffect(() => {
+    searchInputRef.current?.focus();
+  }, []);
+
+  const handleToggleFavorite = (e: React.MouseEvent, langCode: string) => {
+    e.stopPropagation();
+    const newFavorites = toggleFavoriteLanguage(langCode, userId);
+    setFavorites(newFavorites);
+  };
+
+  // Filter languages based on search (name, native name, or country code)
+  const searchLower = search.toLowerCase().trim();
+  const filteredLanguages = SUPPORTED_LANGUAGES.filter(l => {
+    if (l.code === exclude) return false;
+    if (!searchLower) return true;
+    return (
+      l.name.toLowerCase().includes(searchLower) ||
+      l.nativeName.toLowerCase().includes(searchLower) ||
+      l.code.toLowerCase().includes(searchLower)
+    );
+  });
+
+  // Sort: favorites first, then alphabetically
+  const sortedLanguages = [...filteredLanguages].sort((a, b) => {
+    const aFav = favorites.includes(a.code);
+    const bFav = favorites.includes(b.code);
+    if (aFav && !bFav) return -1;
+    if (!aFav && bFav) return 1;
+    return a.name.localeCompare(b.name);
+  });
 
   return (
-    <div className="absolute top-full left-0 mt-2 w-64 liquid-glass rounded-xl shadow-xl max-h-60 overflow-y-auto z-50 border border-white/10">
-      {filteredLanguages.map((lang) => (
-        <button
-          key={lang.code}
-          onClick={() => onSelect(lang.code)}
-          className={cn(
-            "w-full flex items-center gap-3 p-3 hover:bg-white/10 transition-colors text-left",
-            selected === lang.code && "bg-[#FF6D1F]/20"
-          )}
-        >
-          <span className="text-xl">{lang.flag}</span>
-          <div className="flex-1 min-w-0">
-            <p className="font-medium text-[var(--foreground)] truncate">{lang.name}</p>
-            <p className="text-xs text-[var(--foreground)]/60 truncate">{lang.nativeName}</p>
+    <div className="absolute top-full left-0 mt-2 w-72 liquid-glass rounded-xl shadow-xl z-50 border border-white/10 overflow-hidden">
+      {/* Search input */}
+      <div className="p-2 border-b border-white/10">
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--foreground)]/40" />
+          <input
+            ref={searchInputRef}
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search language..."
+            className="w-full pl-9 pr-3 py-2 rounded-lg bg-white/5 text-[var(--foreground)] text-sm placeholder-[var(--foreground)]/40 focus:outline-none focus:ring-1 focus:ring-[#FF6D1F]/50"
+          />
+        </div>
+      </div>
+
+      {/* Language list */}
+      <div className="max-h-52 overflow-y-auto">
+        {sortedLanguages.length === 0 ? (
+          <div className="p-4 text-center text-[var(--foreground)]/60 text-sm">
+            No languages found
           </div>
-          {selected === lang.code && (
-            <Check className="w-4 h-4 text-[#FF6D1F] flex-shrink-0" />
-          )}
-        </button>
-      ))}
+        ) : (
+          sortedLanguages.map((lang) => {
+            const isFavorite = favorites.includes(lang.code);
+            return (
+              <div
+                key={lang.code}
+                role="button"
+                tabIndex={0}
+                onClick={() => onSelect(lang.code)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    onSelect(lang.code);
+                  }
+                }}
+                className={cn(
+                  "w-full flex items-center gap-2 p-3 hover:bg-white/10 transition-colors text-left cursor-pointer",
+                  selected === lang.code && "bg-[#FF6D1F]/20"
+                )}
+              >
+                <button
+                  onClick={(e) => handleToggleFavorite(e, lang.code)}
+                  className="p-1 hover:bg-white/10 rounded transition-colors flex-shrink-0"
+                >
+                  <Star
+                    className={cn(
+                      "w-4 h-4 transition-colors",
+                      isFavorite ? "fill-amber-400 text-amber-400" : "text-[var(--foreground)]/30"
+                    )}
+                  />
+                </button>
+                <span className="text-xl">{lang.flag}</span>
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium text-[var(--foreground)] truncate">{lang.name}</p>
+                  <p className="text-xs text-[var(--foreground)]/60 truncate">{lang.nativeName}</p>
+                </div>
+                {selected === lang.code && (
+                  <Check className="w-4 h-4 text-[#FF6D1F] flex-shrink-0" />
+                )}
+              </div>
+            );
+          })
+        )}
+      </div>
     </div>
   );
 }

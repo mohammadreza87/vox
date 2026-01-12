@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, memo, useMemo } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
@@ -193,10 +193,29 @@ function AppContent() {
   // State for tracking which message is currently playing
   const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
 
-  // Scroll to bottom on new messages
+  // Track previous message count to detect new messages
+  const prevMessageCountRef = useRef(0);
+
+  // Scroll to bottom on new messages (not on every streaming update)
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+    const messageCount = messages.length;
+    // Only scroll if a new message was added (not just content update)
+    if (messageCount > prevMessageCountRef.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+    prevMessageCountRef.current = messageCount;
+  }, [messages.length]);
+
+  // Sync local messages state with activeChat from store
+  // This ensures messages stay in sync when activeChat is updated externally
+  useEffect(() => {
+    if (activeChat && activeChat.messages) {
+      // Only sync if not currently streaming (to avoid conflicts)
+      if (!isStreaming) {
+        setMessages(activeChat.messages);
+      }
+    }
+  }, [activeChat?.id, activeChat?.messages?.length, isStreaming]);
 
   // Close user menu when clicking outside
   useEffect(() => {
@@ -532,7 +551,12 @@ function AppContent() {
   };
 
   return (
-    <div ref={pageRef} className="h-full flex overflow-hidden relative" style={{ height: '100dvh' }}>
+    <div ref={pageRef} className="h-full flex overflow-hidden relative" style={{
+      height: '100dvh',
+      paddingTop: 'env(safe-area-inset-top)',
+      paddingLeft: 'env(safe-area-inset-left)',
+      paddingRight: 'env(safe-area-inset-right)',
+    }}>
       {/* Animated gradient background */}
       <div className="glass-background" />
 
@@ -591,13 +615,14 @@ function AppContent() {
           {activeTab !== 'translator' && (
             <div className="p-4">
               <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-[var(--foreground)]/40 z-10" />
+                <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-[var(--foreground)]/40 z-10 pointer-events-none" />
                 <input
                   type="text"
                   placeholder={activeTab === 'contacts' ? "Search contacts..." : "Search chats..."}
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-10 pr-4 py-3 liquid-input"
+                  className="w-full liquid-input"
+                  style={{ paddingLeft: '48px' }}
                 />
               </div>
             </div>
@@ -816,7 +841,7 @@ function AppContent() {
               <div className="p-4 border-b border-white/10 flex items-center gap-3">
                 <button
                   onClick={() => setShowMobileSidebar(true)}
-                  className="md:hidden w-10 h-10 rounded-full liquid-card flex items-center justify-center hover:scale-105 transition-transform"
+                  className="md:hidden w-11 h-11 min-w-[44px] min-h-[44px] rounded-full liquid-card flex items-center justify-center hover:scale-105 transition-transform"
                 >
                   <ArrowLeft className="w-5 h-5 text-[var(--foreground)]" />
                 </button>
@@ -834,7 +859,7 @@ function AppContent() {
                 </button>
                 <button
                   onClick={() => setIsCallModalOpen(true)}
-                  className="w-10 h-10 rounded-full bg-[#FF6D1F]/10 flex items-center justify-center hover:bg-[#FF6D1F]/20 transition-colors"
+                  className="w-11 h-11 min-w-[44px] min-h-[44px] rounded-full bg-[#FF6D1F]/10 flex items-center justify-center hover:bg-[#FF6D1F]/20 transition-colors"
                   title="Start voice call"
                 >
                   <Phone className="w-5 h-5 text-[#FF6D1F]" />
@@ -856,52 +881,17 @@ function AppContent() {
               {/* Messages */}
               <div className="flex-1 overflow-y-auto p-4 space-y-4">
                 {messages.map(message => (
-                  <div
+                  <MessageItem
                     key={message.id}
-                    className={cn(
-                      "flex gap-3 group",
-                      message.role === 'user' ? "flex-row-reverse" : "flex-row"
-                    )}
-                  >
-                    {message.role === 'user' ? (
-                      <div className="liquid-avatar text-sm flex-shrink-0" style={{ width: '40px', height: '40px' }}>
-                        {user?.displayName?.[0] || '?'}
-                      </div>
-                    ) : (
-                      <Avatar src={selectedContact.avatarImage} fallback={selectedContact.avatarEmoji} size="sm" className="flex-shrink-0" />
-                    )}
-                    <div className="flex flex-col gap-1 max-w-[75%]">
-                      <div className={message.role === 'user' ? "liquid-msg-sent" : "liquid-msg-received"}>
-                        <p className="text-sm leading-relaxed whitespace-pre-wrap">{message.content}</p>
-                      </div>
-                      {/* Replay button for assistant messages - always visible for mobile */}
-                      {message.role === 'assistant' && message.content && (
-                        <button
-                          onClick={() => handleReplayAudio(message)}
-                          disabled={isSpeaking && playingMessageId !== message.id}
-                          className={cn(
-                            "self-start flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs transition-all",
-                            playingMessageId === message.id
-                              ? "liquid-button"
-                              : "liquid-card text-[var(--foreground)]/60 hover:text-[#FF6D1F]"
-                          )}
-                          title={message.audioUrl ? "Replay audio (cached)" : "Play audio"}
-                        >
-                          {playingMessageId === message.id ? (
-                            <>
-                              <VolumeX className="w-3 h-3" />
-                              Stop
-                            </>
-                          ) : (
-                            <>
-                              <Volume2 className="w-3 h-3" />
-                              {message.audioUrl ? "Replay" : "Play"}
-                            </>
-                          )}
-                        </button>
-                      )}
-                    </div>
-                  </div>
+                    message={message}
+                    isUser={message.role === 'user'}
+                    userInitial={user?.displayName?.[0] || '?'}
+                    contactAvatarImage={selectedContact.avatarImage}
+                    contactAvatarEmoji={selectedContact.avatarEmoji}
+                    isPlaying={playingMessageId === message.id}
+                    isSpeaking={isSpeaking}
+                    onReplayAudio={handleReplayAudio}
+                  />
                 ))}
 
                 {/* Show typing indicator only when streaming starts with empty content */}
@@ -954,6 +944,77 @@ function AppContent() {
   );
 }
 
+// Memoized Message Item Component - prevents re-renders when other messages update
+interface MessageItemProps {
+  message: Message;
+  isUser: boolean;
+  userInitial: string;
+  contactAvatarImage?: string;
+  contactAvatarEmoji: string;
+  isPlaying: boolean;
+  isSpeaking: boolean;
+  onReplayAudio: (message: Message) => void;
+}
+
+const MessageItem = memo(function MessageItem({
+  message,
+  isUser,
+  userInitial,
+  contactAvatarImage,
+  contactAvatarEmoji,
+  isPlaying,
+  isSpeaking,
+  onReplayAudio,
+}: MessageItemProps) {
+  return (
+    <div
+      className={cn(
+        "flex gap-3 group",
+        isUser ? "flex-row-reverse" : "flex-row"
+      )}
+    >
+      {isUser ? (
+        <div className="liquid-avatar text-sm flex-shrink-0" style={{ width: '40px', height: '40px' }}>
+          {userInitial}
+        </div>
+      ) : (
+        <Avatar src={contactAvatarImage} fallback={contactAvatarEmoji} size="sm" className="flex-shrink-0" />
+      )}
+      <div className="flex flex-col gap-1 max-w-[85%] sm:max-w-[80%] md:max-w-[75%]">
+        <div className={isUser ? "liquid-msg-sent" : "liquid-msg-received"}>
+          <p className="text-[15px] sm:text-sm leading-relaxed whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{message.content}</p>
+        </div>
+        {/* Replay button for assistant messages - always visible for mobile */}
+        {!isUser && message.content && (
+          <button
+            onClick={() => onReplayAudio(message)}
+            disabled={isSpeaking && !isPlaying}
+            className={cn(
+              "self-start flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs transition-all",
+              isPlaying
+                ? "liquid-button"
+                : "liquid-card text-[var(--foreground)]/60 hover:text-[#FF6D1F]"
+            )}
+            title={message.audioUrl ? "Replay audio (cached)" : "Play audio"}
+          >
+            {isPlaying ? (
+              <>
+                <VolumeX className="w-3 h-3" />
+                Stop
+              </>
+            ) : (
+              <>
+                <Volume2 className="w-3 h-3" />
+                {message.audioUrl ? "Replay" : "Play"}
+              </>
+            )}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+});
+
 // Chat Input Component
 function ChatInputArea({
   onSendMessage,
@@ -970,12 +1031,34 @@ function ChatInputArea({
 }) {
   const [message, setMessage] = useState('');
   const micButtonRef = useRef<HTMLButtonElement>(null);
+  const isSubmittingRef = useRef(false);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (message.trim() && !isLoading) {
-      onSendMessage(message.trim());
-      setMessage('');
+
+    // Prevent duplicate submissions
+    if (isSubmittingRef.current || !message.trim() || isLoading) {
+      return;
+    }
+
+    isSubmittingRef.current = true;
+    const trimmedMessage = message.trim();
+    setMessage(''); // Clear immediately to prevent re-submission
+    onSendMessage(trimmedMessage);
+
+    // Reset after a short delay to allow next message
+    setTimeout(() => {
+      isSubmittingRef.current = false;
+    }, 300);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    // Handle Enter key - submit form (Shift+Enter for newline in textarea)
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      if (message.trim() && !isLoading && !isSubmittingRef.current) {
+        handleSubmit(e as unknown as React.FormEvent);
+      }
     }
   };
 
@@ -1039,6 +1122,7 @@ function ChatInputArea({
           type="text"
           value={message}
           onChange={(e) => setMessage(e.target.value)}
+          onKeyDown={handleKeyDown}
           placeholder={isRecording ? 'Listening...' : 'Type a message...'}
           disabled={isLoading || isRecording}
           className="flex-1 px-4 py-3 liquid-input"

@@ -53,14 +53,27 @@ export const useSubscriptionStore = create<SubscriptionStore>((set, get) => ({
 
       if (response.ok) {
         const data = await response.json();
-        set({
-          subscription: data.subscription,
-          tier: data.subscription.tier,
-          usage: {
-            ...data.usage,
-            messagesDailyReset: new Date(data.usage.messagesDailyReset),
-          },
-        });
+
+        // Handle cases where subscription data might be missing
+        if (data.subscription) {
+          set({
+            subscription: data.subscription,
+            tier: data.subscription.tier || 'free',
+            usage: data.usage ? {
+              ...data.usage,
+              messagesDailyReset: data.usage.messagesDailyReset
+                ? new Date(data.usage.messagesDailyReset)
+                : new Date(),
+            } : DEFAULT_USAGE,
+          });
+        } else {
+          // No subscription data - use defaults
+          set({
+            subscription: DEFAULT_SUBSCRIPTION,
+            usage: DEFAULT_USAGE,
+            tier: 'free',
+          });
+        }
       }
     } catch (error) {
       console.error('Error fetching subscription:', error);
