@@ -1,5 +1,8 @@
 // Core types for Vox
 
+// Re-export memory types
+export * from './memory';
+
 export interface User {
   id: string;
   email: string;

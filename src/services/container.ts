@@ -6,19 +6,23 @@
  * making it easy to swap implementations (e.g., for testing or migration)
  */
 
-import { IChatRepository, IUserRepository } from '@/repositories/interfaces';
-import { FirestoreChatRepository, FirestoreUserRepository } from '@/repositories/firestore';
+import { IChatRepository, IUserRepository, IMemoryRepository } from '@/repositories/interfaces';
+import { FirestoreChatRepository, FirestoreUserRepository, FirestoreMemoryRepository } from '@/repositories/firestore';
 import { CachedChatRepository, CachedUserRepository } from '@/repositories/cache';
 import { IChatService } from './interfaces/IChatService';
+import { IMemoryService } from './interfaces/IMemoryService';
 import { ChatService } from './implementations/ChatService';
+import { MemoryService } from './implementations/MemoryService';
 import { isRedisAvailable } from '@/lib/cache';
 
 // Repository instances (singleton)
 let chatRepository: IChatRepository | null = null;
 let userRepository: IUserRepository | null = null;
+let memoryRepository: IMemoryRepository | null = null;
 
 // Service instances (singleton)
 let chatService: IChatService | null = null;
+let memoryService: IMemoryService | null = null;
 
 /**
  * Get Chat Repository instance
@@ -67,12 +71,34 @@ export function getChatService(): IChatService {
 }
 
 /**
+ * Get Memory Repository instance
+ */
+export function getMemoryRepository(): IMemoryRepository {
+  if (!memoryRepository) {
+    memoryRepository = new FirestoreMemoryRepository();
+  }
+  return memoryRepository;
+}
+
+/**
+ * Get Memory Service instance
+ */
+export function getMemoryService(): IMemoryService {
+  if (!memoryService) {
+    memoryService = new MemoryService(getMemoryRepository());
+  }
+  return memoryService;
+}
+
+/**
  * Reset all services (useful for testing)
  */
 export function resetContainer(): void {
   chatRepository = null;
   userRepository = null;
+  memoryRepository = null;
   chatService = null;
+  memoryService = null;
 }
 
 /**
@@ -88,13 +114,21 @@ export function setUserRepository(repo: IUserRepository): void {
   userRepository = repo;
 }
 
+export function setMemoryRepository(repo: IMemoryRepository): void {
+  memoryRepository = repo;
+  // Reset dependent services
+  memoryService = null;
+}
+
 /**
  * Container type for type-safe access
  */
 export interface ServiceContainer {
   chatRepository: IChatRepository;
   userRepository: IUserRepository;
+  memoryRepository: IMemoryRepository;
   chatService: IChatService;
+  memoryService: IMemoryService;
 }
 
 /**
@@ -104,6 +138,8 @@ export function getContainer(): ServiceContainer {
   return {
     chatRepository: getChatRepository(),
     userRepository: getUserRepository(),
+    memoryRepository: getMemoryRepository(),
     chatService: getChatService(),
+    memoryService: getMemoryService(),
   };
 }

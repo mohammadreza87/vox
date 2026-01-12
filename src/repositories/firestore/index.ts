@@ -4,3 +4,4 @@
 
 export { FirestoreChatRepository } from './FirestoreChatRepository';
 export { FirestoreUserRepository } from './FirestoreUserRepository';
+export { FirestoreMemoryRepository } from './FirestoreMemoryRepository';

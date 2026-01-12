@@ -3,6 +3,8 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { useConversation } from '@elevenlabs/react';
 import { useAuthStore } from '@/stores/authStore';
+import { getMemoryService } from '@/services/container';
+import { buildPromptWithMemory, extractAndSaveMemory, shouldExtractMemory } from '@/lib/memory/context';
 
 export type CallStatus = 'idle' | 'connecting' | 'connected' | 'speaking' | 'listening' | 'ended' | 'error';
 
@@ -37,6 +39,10 @@ export function useCall(options: UseCallOptions = {}) {
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
   const warningTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
+  // Memory integration refs
+  const transcriptRef = useRef<{ role: 'user' | 'assistant'; content: string; timestamp: number }[]>([]);
+  const currentContactRef = useRef<Contact | null>(null);
+
   const conversation = useConversation({
     onConnect: () => {
       console.log('[Call] Connected');
@@ -63,14 +69,54 @@ export function useCall(options: UseCallOptions = {}) {
 
       options.onCallStart?.();
     },
-    onDisconnect: () => {
+    onDisconnect: async () => {
       console.log('[Call] Disconnected');
+
+      // Save memory from call transcript
+      const contact = currentContactRef.current;
+      const transcript = transcriptRef.current;
+      const duration = callStartTimeRef.current
+        ? Math.floor((Date.now() - callStartTimeRef.current) / 1000)
+        : 0;
+
+      if (contact && shouldExtractMemory(transcript)) {
+        try {
+          const token = await user?.getIdToken();
+          if (token) {
+            await extractAndSaveMemory({
+              contactId: contact.id,
+              messages: transcript,
+              type: 'call',
+              duration,
+              authToken: token,
+            });
+            console.log('[Call] Memory saved successfully');
+          }
+        } catch (err) {
+          console.error('[Call] Failed to save memory:', err);
+        }
+      }
+
+      // Reset transcript
+      transcriptRef.current = [];
+      currentContactRef.current = null;
+
       cleanup();
       setCallStatus('ended');
       options.onCallEnd?.();
     },
     onMessage: (message) => {
       console.log('[Call] Message:', message);
+      // Capture transcript for memory extraction
+      // ElevenLabs message format: { source: 'user' | 'ai', message: string }
+      const msg = message as { source?: string; message?: string };
+      if (msg.message) {
+        transcriptRef.current.push({
+          role: msg.source === 'user' ? 'user' : 'assistant',
+          content: msg.message,
+          timestamp: Date.now(),
+        });
+      }
     },
     onError: (error) => {
       console.error('[Call] Error:', error);
@@ -115,6 +161,8 @@ export function useCall(options: UseCallOptions = {}) {
     try {
       setCallStatus('connecting');
       setCurrentContact(contact);
+      currentContactRef.current = contact;
+      transcriptRef.current = []; // Reset transcript for new call
       setErrorMessage(null);
       setCallDuration(0);
 
@@ -122,6 +170,17 @@ export function useCall(options: UseCallOptions = {}) {
       const token = await user.getIdToken();
       if (!token) {
         throw new Error('Failed to get authentication token');
+      }
+
+      // Fetch memory context for this contact
+      let memoryContext = null;
+      let memoryGreeting = `Hi! I'm ${contact.name}. How can I help you today?`;
+      try {
+        const memoryService = getMemoryService();
+        memoryContext = await memoryService.buildContextForContact(contact.id);
+        memoryGreeting = await memoryService.generateGreeting(contact.id, contact.name);
+      } catch (err) {
+        console.warn('[Call] Failed to load memory context:', err);
       }
 
       // Get signed URL from our API
@@ -148,9 +207,14 @@ export function useCall(options: UseCallOptions = {}) {
       const { signedUrl } = await response.json();
 
       // Build full system prompt with personality
-      const fullSystemPrompt = contact.personality
+      let fullSystemPrompt = contact.personality
         ? `${contact.systemPrompt}\n\nPersonality: ${contact.personality}`
         : contact.systemPrompt;
+
+      // Enrich system prompt with memory context
+      if (memoryContext) {
+        fullSystemPrompt = buildPromptWithMemory(fullSystemPrompt || '', memoryContext);
+      }
 
       // Build overrides on client side - includes voice, prompt, and first message
       const overrides = {
@@ -158,14 +222,18 @@ export function useCall(options: UseCallOptions = {}) {
           prompt: {
             prompt: fullSystemPrompt,
           },
-          firstMessage: `Hi! I'm ${contact.name}. How can I help you today?`,
+          firstMessage: memoryGreeting,
         },
         tts: {
           voiceId: contact.voiceId,
         },
       };
 
-      console.log('[Call] Starting with overrides:', { voiceId: contact.voiceId, promptLength: fullSystemPrompt?.length });
+      console.log('[Call] Starting with memory-enriched overrides:', {
+        voiceId: contact.voiceId,
+        promptLength: fullSystemPrompt?.length,
+        hasMemory: !!memoryContext?.contextString,
+      });
 
       // Start the conversation with ElevenLabs
       await conversation.startSession({
@@ -178,6 +246,7 @@ export function useCall(options: UseCallOptions = {}) {
       setErrorMessage(error instanceof Error ? error.message : 'Failed to start call');
       setCallStatus('error');
       setCurrentContact(null);
+      currentContactRef.current = null;
     }
   }, [user, conversation]);
 

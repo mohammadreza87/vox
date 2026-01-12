@@ -5,3 +5,4 @@
 
 export * from './IChatRepository';
 export * from './IUserRepository';
+export * from './IMemoryRepository';

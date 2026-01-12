@@ -11,6 +11,7 @@ import { CallModal } from '@/features/call';
 import { useVoiceRecording } from '@/features/voice/hooks/useVoiceRecording';
 import { useTextToSpeech } from '@/features/voice/hooks/useTextToSpeech';
 import { useStreamingChat } from '@/hooks/useStreamingChat';
+import { useContactMemory } from '@/hooks/useContactMemory';
 import { ChatErrorBoundary } from '@/components/ChatErrorBoundary';
 import { Avatar } from '@/shared/components';
 import { Message, PreMadeContactConfig, Chat } from '@/shared/types';
@@ -109,6 +110,8 @@ function AppContent() {
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const hasSentTranscriptRef = useRef(false); // Prevent duplicate voice message sends
+  const previousContactIdRef = useRef<string | null>(null); // Track previous contact for memory extraction
+  const previousMessagesRef = useRef<Message[]>([]); // Track messages for memory extraction
 
   // GSAP Animation refs - single page entrance
   const { ref: pageRef } = useEntranceAnimation('fadeIn', { delay: 0 });
@@ -192,6 +195,40 @@ function AppContent() {
 
   // State for tracking which message is currently playing
   const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
+
+  // Contact memory hook for context engineering
+  const {
+    buildEnrichedPrompt,
+    saveMemory,
+    generateGreeting: generateMemoryGreeting,
+  } = useContactMemory({
+    contactId: selectedContact?.id ?? null,
+  });
+
+  // Save memory when switching contacts or unmounting
+  useEffect(() => {
+    const prevContactId = previousContactIdRef.current;
+    const prevMessages = previousMessagesRef.current;
+
+    // If we had a previous contact with messages, save memory
+    if (prevContactId && prevMessages.length > 2) {
+      // Extract user/assistant messages for memory
+      const memoryMessages = prevMessages
+        .filter((m) => m.role === 'user' || m.role === 'assistant')
+        .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content }));
+
+      saveMemory({ messages: memoryMessages, type: 'chat' }).catch(console.error);
+    }
+
+    // Update refs for next switch
+    previousContactIdRef.current = selectedContact?.id ?? null;
+    previousMessagesRef.current = messages;
+  }, [selectedContact?.id]); // Only run when contact changes
+
+  // Keep previous messages ref updated
+  useEffect(() => {
+    previousMessagesRef.current = messages;
+  }, [messages]);
 
   // Track previous message count to detect new messages
   const prevMessageCountRef = useRef(0);
@@ -292,13 +329,15 @@ function AppContent() {
       setActiveChat(existingChat);
       setMessages(existingChat.messages);
     } else {
-      // Start new chat
+      // Start new chat with memory-aware greeting
       const newChat = await startChat(contact);
+      // Try to generate a memory-based greeting, fallback to static greeting
+      const greetingContent = await generateMemoryGreeting(contact.name).catch(() => getGreeting(contact));
       const greeting: Message = {
         id: 'greeting',
         contactId: contact.id,
         role: 'assistant',
-        content: getGreeting(contact),
+        content: greetingContent,
         audioUrl: null,
         createdAt: new Date(),
       };
@@ -394,16 +433,17 @@ function AppContent() {
       content: msg.content,
     }));
 
-    // Start streaming
+    // Start streaming with memory-enriched prompt
+    const enrichedPrompt = buildEnrichedPrompt(selectedContact.systemPrompt);
     startStream({
       message: content,
       contactId: selectedContact.id,
-      systemPrompt: selectedContact.systemPrompt,
+      systemPrompt: enrichedPrompt,
       conversationHistory,
       aiProvider: selectedContact.aiProvider,
       aiModel: selectedContact.aiModel,
     });
-  }, [selectedContact, activeChat, messages, stopSpeaking, cancelStream, addMessage, startStream]);
+  }, [selectedContact, activeChat, messages, stopSpeaking, cancelStream, addMessage, startStream, buildEnrichedPrompt]);
 
   // Update AI message content as streaming chunks arrive
   useEffect(() => {

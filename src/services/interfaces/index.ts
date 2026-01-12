@@ -6,3 +6,4 @@
 export * from './IChatService';
 export * from './IVoiceService';
 export * from './ISubscriptionService';
+export * from './IMemoryService';
