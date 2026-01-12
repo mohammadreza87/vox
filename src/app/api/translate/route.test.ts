@@ -65,7 +65,20 @@ describe('POST /api/translate', () => {
       expect(data).toHaveProperty('code', 'VALIDATION_ERROR');
     });
 
-    it('returns 400 for missing voiceId', async () => {
+    it('accepts request without voiceId (uses default)', async () => {
+      // Mock OpenAI response
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          choices: [{ message: { content: 'Hola' } }],
+        }),
+      });
+      // Mock ElevenLabs response
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        arrayBuffer: () => Promise.resolve(new ArrayBuffer(100)),
+      });
+
       const request = createRequest({
         text: 'Hello',
         targetLanguage: 'es',
@@ -74,8 +87,8 @@ describe('POST /api/translate', () => {
       const response = await POST(request, { params: Promise.resolve({}) });
       const { status, data } = await parseResponse(response);
 
-      expect(status).toBe(400);
-      expect(data).toHaveProperty('code', 'VALIDATION_ERROR');
+      expect(status).toBe(200);
+      expect(data).toHaveProperty('translatedText');
     });
 
     it('accepts valid request', async () => {

@@ -243,14 +243,15 @@ describe('POST /api/chat', () => {
   });
 
   describe('Subscription Limits', () => {
-    it('returns 429 when daily message limit is reached', async () => {
+    it('allows messages for free tier (unlimited during beta)', async () => {
+      // Free tier currently has unlimited messages (dailyMessageLimit: Infinity)
       vi.mocked(verifyIdToken).mockResolvedValueOnce({
         uid: 'test-user-123',
         email: 'test@example.com',
       } as never);
       vi.mocked(getUserDocument).mockResolvedValueOnce({
         subscription: { tier: 'free' },
-        usage: { messagesUsedToday: 1000 }, // Exceeded limit
+        usage: { messagesUsedToday: 1000 },
       } as never);
 
       const request = createAuthenticatedRequest('POST', '/api/chat', {
@@ -260,11 +261,10 @@ describe('POST /api/chat', () => {
       (request as any).user = { uid: 'test-user-123', email: 'test@example.com' };
 
       const response = await POST(request);
-      const { status, data } = await parseResponse(response);
+      const { status } = await parseResponse(response);
 
-      expect(status).toBe(429);
-      expect(data.success).toBe(false);
-      expect(data.error.code).toBe('RATE_LIMITED');
+      // Free tier has unlimited messages, so this should succeed
+      expect(status).toBe(200);
     });
 
     it('returns 403 when trying to use restricted model', async () => {

@@ -62,8 +62,8 @@ describe('POST /api/tts', () => {
       const { status, data } = await parseResponse(response);
 
       expect(status).toBe(400);
-      expect(data.success).toBe(false);
-      expect(data.error.code).toBe('VALIDATION_ERROR');
+      expect(data).toHaveProperty('error', 'Validation failed');
+      expect(data).toHaveProperty('issues');
     });
 
     it('returns 400 for empty text', async () => {
@@ -77,8 +77,8 @@ describe('POST /api/tts', () => {
       const { status, data } = await parseResponse(response);
 
       expect(status).toBe(400);
-      expect(data.success).toBe(false);
-      expect(data.error.code).toBe('VALIDATION_ERROR');
+      expect(data).toHaveProperty('error', 'Validation failed');
+      expect(data).toHaveProperty('issues');
     });
 
     it('accepts valid request with default voice', async () => {
@@ -97,9 +97,8 @@ describe('POST /api/tts', () => {
       const { status, data } = await parseResponse(response);
 
       expect(status).toBe(200);
-      expect(data.success).toBe(true);
-      expect(data.data).toHaveProperty('audio');
-      expect(data.data).toHaveProperty('contentType', 'audio/mpeg');
+      expect(data).toHaveProperty('audio');
+      expect(data).toHaveProperty('contentType', 'audio/mpeg');
     });
 
     it('accepts custom voiceId', async () => {
@@ -148,7 +147,7 @@ describe('POST /api/tts', () => {
   });
 
   describe('API Key Configuration', () => {
-    it('returns success with error when API key not configured', async () => {
+    it('returns graceful error when API key not configured', async () => {
       vi.stubEnv('ELEVENLABS_API_KEY', '');
       vi.resetModules();
 
@@ -170,9 +169,8 @@ describe('POST /api/tts', () => {
       const { status, data } = await parseResponse(response);
 
       expect(status).toBe(200); // Returns 200 for graceful handling
-      expect(data.success).toBe(true);
-      expect(data.data).toHaveProperty('error', 'ElevenLabs API key not configured');
-      expect(data.data).toHaveProperty('audioUrl', null);
+      expect(data).toHaveProperty('error', 'ElevenLabs API key not configured');
+      expect(data).toHaveProperty('audioUrl', null);
 
       // Restore
       vi.stubEnv('ELEVENLABS_API_KEY', 'test-elevenlabs-key');
@@ -224,8 +222,7 @@ describe('POST /api/tts', () => {
       const { status, data } = await parseResponse(response);
 
       expect(status).toBe(502);
-      expect(data.success).toBe(false);
-      expect(data.error.message).toBe('Failed to generate speech');
+      expect(data).toHaveProperty('error', 'Failed to generate speech');
     });
 
     it('returns 500 on unexpected error', async () => {
@@ -241,8 +238,7 @@ describe('POST /api/tts', () => {
       const { status, data } = await parseResponse(response);
 
       expect(status).toBe(500);
-      expect(data.success).toBe(false);
-      expect(data.error.message).toBe('Network error');
+      expect(data).toHaveProperty('error', 'Network error');
     });
   });
 
@@ -264,10 +260,9 @@ describe('POST /api/tts', () => {
       const { status, data } = await parseResponse(response);
 
       expect(status).toBe(200);
-      expect(data.success).toBe(true);
-      expect(data.data).toHaveProperty('audio');
-      expect(data.data).toHaveProperty('contentType', 'audio/mpeg');
-      expect(typeof data.data.audio).toBe('string');
+      expect(data).toHaveProperty('audio');
+      expect(data).toHaveProperty('contentType', 'audio/mpeg');
+      expect(typeof data.audio).toBe('string');
     });
   });
 });

@@ -145,12 +145,12 @@ describe('translateRequestSchema', () => {
     expect(result.success).toBe(false);
   });
 
-  it('rejects missing voice ID', () => {
+  it('accepts missing voice ID (uses default)', () => {
     const result = translateRequestSchema.safeParse({
       text: 'Hello',
       targetLanguage: 'Spanish',
     });
-    expect(result.success).toBe(false);
+    expect(result.success).toBe(true);
   });
 });
 

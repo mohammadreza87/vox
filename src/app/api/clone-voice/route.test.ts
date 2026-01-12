@@ -119,7 +119,8 @@ describe('POST /api/clone-voice', () => {
   });
 
   describe('Subscription Validation', () => {
-    it('returns 403 for free tier users', async () => {
+    it('allows free tier users to clone voice (enabled during beta)', async () => {
+      // Voice cloning is currently enabled for all tiers (voiceCloning: true)
       vi.mocked(verifyIdToken).mockResolvedValueOnce({
         uid: 'test-user-123',
         email: 'test@example.com',
@@ -127,6 +128,10 @@ describe('POST /api/clone-voice', () => {
       vi.mocked(getUserDocument).mockResolvedValueOnce({
         subscription: { tier: 'free' },
       } as never);
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ voice_id: 'new-voice-123' }),
+      });
 
       const request = createFormDataRequest(
         { name: 'My Voice', audioFile: mockAudioFile },
@@ -134,11 +139,9 @@ describe('POST /api/clone-voice', () => {
       );
 
       const response = await POST(request as never);
-      const data = await response.json();
 
-      expect(response.status).toBe(403);
-      expect(data.success).toBe(false);
-      expect(data.error.code).toBe('FORBIDDEN');
+      // Free tier can clone voices during beta (201 Created)
+      expect(response.status).toBe(201);
     });
 
     it('allows pro tier users to clone voice', async () => {

@@ -59,8 +59,7 @@ describe('/api/user/data', () => {
         const { status, data } = await parseResponse(response);
 
         expect(status).toBe(401);
-        expect(data.success).toBe(false);
-        expect(data.error.message).toBe('Authentication required');
+        expect(data).toHaveProperty('error', 'Unauthorized');
       });
 
       it('returns 401 when token is invalid', async () => {
@@ -74,8 +73,7 @@ describe('/api/user/data', () => {
         const { status, data } = await parseResponse(response);
 
         expect(status).toBe(401);
-        expect(data.success).toBe(false);
-        expect(data.error.message).toBe('Invalid token');
+        expect(data).toHaveProperty('error', 'Invalid token');
       });
 
       it('verifies token from Authorization header', async () => {
@@ -112,8 +110,7 @@ describe('/api/user/data', () => {
         const { status, data } = await parseResponse(response);
 
         expect(status).toBe(200);
-        expect(data.success).toBe(true);
-        expect(data.data).toEqual({
+        expect(data).toEqual({
           chats: [],
           customContacts: [],
           preferences: { theme: 'light' },
@@ -147,11 +144,10 @@ describe('/api/user/data', () => {
         const { status, data } = await parseResponse(response);
 
         expect(status).toBe(200);
-        expect(data.success).toBe(true);
-        expect(data.data.chats).toHaveLength(1);
-        expect(data.data.chats[0].title).toBe('Test Chat');
-        expect(data.data.customContacts).toHaveLength(1);
-        expect(data.data.preferences.theme).toBe('dark');
+        expect(data.chats).toHaveLength(1);
+        expect(data.chats[0].title).toBe('Test Chat');
+        expect(data.customContacts).toHaveLength(1);
+        expect(data.preferences.theme).toBe('dark');
       });
 
       it('converts Firestore timestamps to ISO strings', async () => {
@@ -177,8 +173,8 @@ describe('/api/user/data', () => {
         const response = await GET(request);
         const { data } = await parseResponse(response);
 
-        expect(data.data.chats[0].lastMessageAt).toBe('2024-01-15T12:00:00.000Z');
-        expect(data.data.chats[0].messages[0].createdAt).toBe('2024-01-15T12:00:00.000Z');
+        expect(data.chats[0].lastMessageAt).toBe('2024-01-15T12:00:00.000Z');
+        expect(data.chats[0].messages[0].createdAt).toBe('2024-01-15T12:00:00.000Z');
       });
     });
 
@@ -195,8 +191,7 @@ describe('/api/user/data', () => {
         const { status, data } = await parseResponse(response);
 
         expect(status).toBe(500);
-        expect(data.success).toBe(false);
-        expect(data.error.message).toBe('Failed to load data');
+        expect(data).toHaveProperty('error', 'Failed to load data');
       });
     });
   });
@@ -212,8 +207,7 @@ describe('/api/user/data', () => {
         const { status, data } = await parseResponse(response);
 
         expect(status).toBe(401);
-        expect(data.success).toBe(false);
-        expect(data.error.message).toBe('Authentication required');
+        expect(data).toHaveProperty('error', 'Unauthorized');
       });
 
       it('returns 401 when token is invalid', async () => {
@@ -228,8 +222,7 @@ describe('/api/user/data', () => {
         const { status, data } = await parseResponse(response);
 
         expect(status).toBe(401);
-        expect(data.success).toBe(false);
-        expect(data.error.message).toBe('Invalid token');
+        expect(data).toHaveProperty('error', 'Invalid token');
       });
     });
 
@@ -253,8 +246,7 @@ describe('/api/user/data', () => {
         const { status, data } = await parseResponse(response);
 
         expect(status).toBe(200);
-        expect(data.success).toBe(true);
-        expect(data.data).toEqual({ saved: true });
+        expect(data).toHaveProperty('saved', true);
         expect(mockDb.set).toHaveBeenCalledWith(
           expect.objectContaining({ chats }),
           { merge: true }
@@ -272,8 +264,7 @@ describe('/api/user/data', () => {
         const { status, data } = await parseResponse(response);
 
         expect(status).toBe(200);
-        expect(data.success).toBe(true);
-        expect(data.data).toEqual({ saved: true });
+        expect(data).toHaveProperty('saved', true);
         expect(mockDb.set).toHaveBeenCalledWith(
           expect.objectContaining({ customContacts }),
           { merge: true }
@@ -291,8 +282,7 @@ describe('/api/user/data', () => {
         const { status, data } = await parseResponse(response);
 
         expect(status).toBe(200);
-        expect(data.success).toBe(true);
-        expect(data.data).toEqual({ saved: true });
+        expect(data).toHaveProperty('saved', true);
         expect(mockDb.set).toHaveBeenCalledWith(
           expect.objectContaining({ preferences }),
           { merge: true }
@@ -314,8 +304,7 @@ describe('/api/user/data', () => {
         const { status, data } = await parseResponse(response);
 
         expect(status).toBe(200);
-        expect(data.success).toBe(true);
-        expect(data.data).toEqual({ saved: true });
+        expect(data).toHaveProperty('saved', true);
         expect(mockDb.set).toHaveBeenCalledWith(
           expect.objectContaining({
             chats: body.chats,
@@ -356,8 +345,7 @@ describe('/api/user/data', () => {
         const { status, data } = await parseResponse(response);
 
         expect(status).toBe(200);
-        expect(data.success).toBe(true);
-        expect(data.data).toEqual({ saved: true });
+        expect(data).toHaveProperty('saved', true);
       });
     });
 
@@ -376,8 +364,7 @@ describe('/api/user/data', () => {
         const { status, data } = await parseResponse(response);
 
         expect(status).toBe(500);
-        expect(data.success).toBe(false);
-        expect(data.error.message).toBe('Failed to save data');
+        expect(data).toHaveProperty('error', 'Failed to save data');
       });
     });
   });
