@@ -2,7 +2,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   getChatRepository,
   getUserRepository,
+  getMemoryRepository,
   getChatService,
+  getMemoryService,
+  getIntentService,
+  getTokenBudgetService,
+  getEmbeddingService,
   resetContainer,
   setChatRepository,
   setUserRepository,
@@ -49,6 +54,14 @@ vi.mock('@/repositories/firestore', () => ({
     deleteClonedVoice = vi.fn();
     setDefaultTranslatorVoice = vi.fn();
   },
+  FirestoreMemoryRepository: class MockFirestoreMemoryRepository {
+    getMemory = vi.fn();
+    getMemoriesForContacts = vi.fn();
+    createMemory = vi.fn();
+    saveFacts = vi.fn();
+    saveSession = vi.fn();
+    updateLastInteraction = vi.fn();
+  },
 }));
 
 // Mock Cached repositories
@@ -71,6 +84,43 @@ vi.mock('../implementations/ChatService', () => ({
     sendMessage = vi.fn();
     updateChat = vi.fn();
     deleteChat = vi.fn();
+  },
+}));
+
+// Mock MemoryService
+vi.mock('../implementations/MemoryService', () => ({
+  MemoryService: class MockMemoryService {
+    constructor() {}
+    setEmbeddingService = vi.fn();
+    getMemory = vi.fn();
+    saveFacts = vi.fn();
+    saveSession = vi.fn();
+    updateLastInteraction = vi.fn();
+    searchFacts = vi.fn();
+  },
+}));
+
+// Mock IntentService
+vi.mock('../implementations/IntentService', () => ({
+  IntentService: class MockIntentService {
+    detectIntent = vi.fn();
+  },
+}));
+
+// Mock TokenBudgetService
+vi.mock('../implementations/TokenBudgetService', () => ({
+  TokenBudgetService: class MockTokenBudgetService {
+    calculateBudget = vi.fn();
+    allocateTokens = vi.fn();
+  },
+}));
+
+// Mock EmbeddingService
+vi.mock('../implementations/EmbeddingService', () => ({
+  EmbeddingService: class MockEmbeddingService {
+    generateEmbedding = vi.fn();
+    generateEmbeddings = vi.fn();
+    cosineSimilarity = vi.fn();
   },
 }));
 
@@ -198,19 +248,34 @@ describe('Service Container', () => {
 
       expect(container.chatRepository).toBeDefined();
       expect(container.userRepository).toBeDefined();
+      expect(container.memoryRepository).toBeDefined();
       expect(container.chatService).toBeDefined();
+      expect(container.memoryService).toBeDefined();
+      expect(container.intentService).toBeDefined();
+      expect(container.tokenBudgetService).toBeDefined();
+      expect(container.embeddingService).toBeDefined();
     });
 
     it('returns same instances as individual getters', () => {
       const chatRepo = getChatRepository();
       const userRepo = getUserRepository();
+      const memoryRepo = getMemoryRepository();
       const chatService = getChatService();
+      const memoryService = getMemoryService();
+      const intentService = getIntentService();
+      const tokenBudgetService = getTokenBudgetService();
+      const embeddingService = getEmbeddingService();
 
       const container = getContainer();
 
       expect(container.chatRepository).toBe(chatRepo);
       expect(container.userRepository).toBe(userRepo);
+      expect(container.memoryRepository).toBe(memoryRepo);
       expect(container.chatService).toBe(chatService);
+      expect(container.memoryService).toBe(memoryService);
+      expect(container.intentService).toBe(intentService);
+      expect(container.tokenBudgetService).toBe(tokenBudgetService);
+      expect(container.embeddingService).toBe(embeddingService);
     });
   });
 
