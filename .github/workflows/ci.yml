@@ -124,9 +124,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: build-output
-          path: |
-            .next/
-            !.next/cache
+          path: .next/
           retention-days: 7
           if-no-files-found: error
 
