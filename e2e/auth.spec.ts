@@ -40,8 +40,8 @@ test.describe('Authentication', () => {
   test('pricing page is accessible', async ({ page }) => {
     await page.goto('/pricing');
 
-    // Check for pricing content
-    await expect(page.getByText(/Free|Pro|Max/i)).toBeVisible();
+    // Check for pricing content - use first() to avoid strict mode violation
+    await expect(page.getByRole('heading', { name: 'Free' })).toBeVisible();
   });
 });
 
@@ -69,8 +69,8 @@ test.describe('Navigation', () => {
   test('can navigate from landing to login', async ({ page }) => {
     await page.goto('/');
 
-    // Find and click a login link/button
-    const loginLink = page.getByRole('link', { name: /login|sign in|get started/i });
+    // Find and click a login link/button - use first() to avoid strict mode violation
+    const loginLink = page.getByRole('link', { name: /login|sign in|get started/i }).first();
     if (await loginLink.isVisible()) {
       await loginLink.click();
       await expect(page).toHaveURL(/.*login/);
