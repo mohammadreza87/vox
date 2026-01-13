@@ -11,8 +11,14 @@ import { FirestoreChatRepository, FirestoreUserRepository, FirestoreMemoryReposi
 import { CachedChatRepository, CachedUserRepository } from '@/repositories/cache';
 import { IChatService } from './interfaces/IChatService';
 import { IMemoryService } from './interfaces/IMemoryService';
+import { IIntentService } from './interfaces/IIntentService';
+import { ITokenBudgetService } from './interfaces/ITokenBudgetService';
+import { IEmbeddingService } from './interfaces/IEmbeddingService';
 import { ChatService } from './implementations/ChatService';
 import { MemoryService } from './implementations/MemoryService';
+import { IntentService } from './implementations/IntentService';
+import { TokenBudgetService } from './implementations/TokenBudgetService';
+import { EmbeddingService } from './implementations/EmbeddingService';
 import { isRedisAvailable } from '@/lib/cache';
 
 // Repository instances (singleton)
@@ -23,6 +29,9 @@ let memoryRepository: IMemoryRepository | null = null;
 // Service instances (singleton)
 let chatService: IChatService | null = null;
 let memoryService: IMemoryService | null = null;
+let intentService: IIntentService | null = null;
+let tokenBudgetService: ITokenBudgetService | null = null;
+let embeddingService: IEmbeddingService | null = null;
 
 /**
  * Get Chat Repository instance
@@ -85,9 +94,49 @@ export function getMemoryRepository(): IMemoryRepository {
  */
 export function getMemoryService(): IMemoryService {
   if (!memoryService) {
-    memoryService = new MemoryService(getMemoryRepository());
+    const service = new MemoryService(getMemoryRepository());
+    // Wire up embedding service for semantic search indexing
+    // This enables automatic fact indexing when facts are saved
+    try {
+      service.setEmbeddingService(getEmbeddingService());
+    } catch {
+      // Embedding service may not be available (e.g., missing API key)
+      // Memory service will still work without semantic search
+      console.warn('[ServiceContainer] EmbeddingService not available, semantic search disabled');
+    }
+    memoryService = service;
   }
   return memoryService;
+}
+
+/**
+ * Get Intent Service instance
+ */
+export function getIntentService(): IIntentService {
+  if (!intentService) {
+    intentService = new IntentService();
+  }
+  return intentService;
+}
+
+/**
+ * Get Token Budget Service instance
+ */
+export function getTokenBudgetService(): ITokenBudgetService {
+  if (!tokenBudgetService) {
+    tokenBudgetService = new TokenBudgetService();
+  }
+  return tokenBudgetService;
+}
+
+/**
+ * Get Embedding Service instance
+ */
+export function getEmbeddingService(): IEmbeddingService {
+  if (!embeddingService) {
+    embeddingService = new EmbeddingService();
+  }
+  return embeddingService;
 }
 
 /**
@@ -99,6 +148,9 @@ export function resetContainer(): void {
   memoryRepository = null;
   chatService = null;
   memoryService = null;
+  intentService = null;
+  tokenBudgetService = null;
+  embeddingService = null;
 }
 
 /**
@@ -129,6 +181,9 @@ export interface ServiceContainer {
   memoryRepository: IMemoryRepository;
   chatService: IChatService;
   memoryService: IMemoryService;
+  intentService: IIntentService;
+  tokenBudgetService: ITokenBudgetService;
+  embeddingService: IEmbeddingService;
 }
 
 /**
@@ -141,5 +196,8 @@ export function getContainer(): ServiceContainer {
     memoryRepository: getMemoryRepository(),
     chatService: getChatService(),
     memoryService: getMemoryService(),
+    intentService: getIntentService(),
+    tokenBudgetService: getTokenBudgetService(),
+    embeddingService: getEmbeddingService(),
   };
 }

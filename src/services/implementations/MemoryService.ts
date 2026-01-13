@@ -14,6 +14,7 @@ import {
 } from '@/shared/types';
 import { IMemoryRepository } from '@/repositories/interfaces';
 import { IMemoryService, BuildContextOptions } from '../interfaces/IMemoryService';
+import { IEmbeddingService } from '../interfaces/IEmbeddingService';
 import { getCurrentUserId } from '@/stores/authStore';
 import { getAuthToken } from '@/stores/middleware/sync';
 
@@ -22,7 +23,17 @@ const DEFAULT_MAX_SESSIONS = 3;
 const DEFAULT_MAX_TOKENS = 500;
 
 export class MemoryService implements IMemoryService {
+  private embeddingService: IEmbeddingService | null = null;
+
   constructor(private readonly memoryRepository: IMemoryRepository) {}
+
+  /**
+   * Set the embedding service for semantic search indexing.
+   * Optional: if not set, facts won't be indexed for semantic search.
+   */
+  setEmbeddingService(embeddingService: IEmbeddingService): void {
+    this.embeddingService = embeddingService;
+  }
 
   private getUserId(): string {
     const userId = getCurrentUserId();
@@ -181,14 +192,22 @@ export class MemoryService implements IMemoryService {
   ): Promise<void> {
     const userId = this.getUserId();
 
-    // Save facts
+    // Save facts and index them for semantic search
     if (extraction.facts.length > 0) {
+      const factsWithSource: MemoryFact[] = extraction.facts.map((f) => ({
+        ...f,
+        source: type,
+        extractedAt: new Date(),
+      }));
+
       await this.memoryRepository.saveFacts(userId, contactId, {
-        facts: extraction.facts.map((f) => ({
-          ...f,
-          source: type,
-        })),
+        facts: factsWithSource,
       });
+
+      // Index facts for semantic search (non-blocking)
+      if (this.embeddingService) {
+        this.indexFactsAsync(userId, contactId, factsWithSource);
+      }
     }
 
     // Save session summary
@@ -207,6 +226,33 @@ export class MemoryService implements IMemoryService {
       lastTopic: extraction.lastInteraction.lastTopic,
       nextSteps: extraction.lastInteraction.nextSteps,
     });
+  }
+
+  /**
+   * Index facts asynchronously for semantic search.
+   * This runs in the background and doesn't block the main flow.
+   */
+  private async indexFactsAsync(
+    userId: string,
+    contactId: string,
+    facts: MemoryFact[]
+  ): Promise<void> {
+    if (!this.embeddingService) return;
+
+    try {
+      // Index each fact
+      const indexPromises = facts.map((fact) =>
+        this.embeddingService!.indexFact(userId, contactId, fact).catch((err) => {
+          console.warn(`Failed to index fact "${fact.key}":`, err);
+        })
+      );
+
+      await Promise.all(indexPromises);
+      console.log(`[MemoryService] Indexed ${facts.length} facts for semantic search`);
+    } catch (err) {
+      // Log but don't throw - indexing is non-critical
+      console.warn('[MemoryService] Failed to index facts:', err);
+    }
   }
 
   async processConversation(request: ExtractMemoryRequest): Promise<void> {
@@ -236,14 +282,36 @@ export class MemoryService implements IMemoryService {
     source: 'chat' | 'call'
   ): Promise<void> {
     const userId = this.getUserId();
+    const fact: MemoryFact = {
+      key,
+      value,
+      source,
+      confidence: 1,
+      extractedAt: new Date(),
+    };
+
     await this.memoryRepository.saveFacts(userId, contactId, {
-      facts: [{ key, value, source, confidence: 1 }],
+      facts: [fact],
     });
+
+    // Index fact for semantic search (non-blocking)
+    if (this.embeddingService) {
+      this.embeddingService.indexFact(userId, contactId, fact).catch((err) => {
+        console.warn(`Failed to index fact "${key}":`, err);
+      });
+    }
   }
 
   async deleteFact(contactId: string, factKey: string): Promise<void> {
     const userId = this.getUserId();
     await this.memoryRepository.deleteFact(userId, contactId, factKey);
+
+    // Delete embedding for semantic search (non-blocking)
+    if (this.embeddingService) {
+      this.embeddingService.deleteFactEmbedding(userId, contactId, factKey).catch((err) => {
+        console.warn(`Failed to delete embedding for fact "${factKey}":`, err);
+      });
+    }
   }
 
   async clearMemory(contactId: string): Promise<void> {

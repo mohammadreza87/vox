@@ -6,7 +6,7 @@
  * using LLM analysis.
  */
 
-import { VertexAI } from '@google-cloud/vertexai';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import { z } from 'zod';
 import { ExtractMemoryResponse, MemoryExtractionResult } from '@/shared/types';
 import {
@@ -18,17 +18,14 @@ import { logger } from '@/lib/logger';
 import { withTimeout, TIMEOUTS } from '@/lib/api/timeout';
 import { withAuth, type AuthenticatedRequest } from '@/lib/middleware';
 
-// Initialize Vertex AI client lazily
-let vertexClient: VertexAI | null = null;
+// Initialize Gemini client lazily
+let geminiClient: GoogleGenerativeAI | null = null;
 
-function getVertexClient() {
-  if (!vertexClient && process.env.GOOGLE_CLOUD_PROJECT) {
-    vertexClient = new VertexAI({
-      project: process.env.GOOGLE_CLOUD_PROJECT,
-      location: process.env.GOOGLE_CLOUD_LOCATION || 'us-central1',
-    });
+function getGeminiClient() {
+  if (!geminiClient && process.env.GEMINI_API_KEY) {
+    geminiClient = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
   }
-  return vertexClient;
+  return geminiClient;
 }
 
 // Request validation schema
@@ -158,9 +155,9 @@ export const POST = withAuth(async (request: AuthenticatedRequest, _context) => 
 });
 
 async function extractWithLLM(prompt: string): Promise<MemoryExtractionResult> {
-  const client = getVertexClient();
+  const client = getGeminiClient();
   if (!client) {
-    throw new Error('Google Cloud Project not configured for Vertex AI');
+    throw new Error('GEMINI_API_KEY not configured');
   }
 
   const model = client.getGenerativeModel({
@@ -173,7 +170,7 @@ async function extractWithLLM(prompt: string): Promise<MemoryExtractionResult> {
 
   const result = await model.generateContent(prompt);
   const response = result.response;
-  const text = response.candidates?.[0]?.content?.parts?.[0]?.text;
+  const text = response.text();
 
   if (!text) {
     throw new Error('No response from LLM');

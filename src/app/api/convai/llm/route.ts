@@ -1,18 +1,15 @@
 import { NextRequest } from 'next/server';
-import { VertexAI } from '@google-cloud/vertexai';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import { logger } from '@/lib/logger';
 
-// Initialize Vertex AI client
-let vertexClient: VertexAI | null = null;
+// Initialize Gemini client
+let geminiClient: GoogleGenerativeAI | null = null;
 
-function getVertexClient() {
-  if (!vertexClient && process.env.GOOGLE_CLOUD_PROJECT) {
-    vertexClient = new VertexAI({
-      project: process.env.GOOGLE_CLOUD_PROJECT,
-      location: process.env.GOOGLE_CLOUD_LOCATION || 'us-central1',
-    });
+function getGeminiClient() {
+  if (!geminiClient && process.env.GEMINI_API_KEY) {
+    geminiClient = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
   }
-  return vertexClient;
+  return geminiClient;
 }
 
 interface OpenAIMessage {
@@ -40,10 +37,10 @@ export async function POST(request: NextRequest) {
 
     logger.info({ messageCount: messages.length, stream }, '[ConvAI LLM] Request received');
 
-    const client = getVertexClient();
+    const client = getGeminiClient();
     if (!client) {
       return new Response(
-        JSON.stringify({ error: 'Vertex AI not configured' }),
+        JSON.stringify({ error: 'GEMINI_API_KEY not configured' }),
         { status: 500, headers: { 'Content-Type': 'application/json' } }
       );
     }
@@ -91,7 +88,7 @@ export async function POST(request: NextRequest) {
             const result = await chat.sendMessageStream(lastMessage.content);
 
             for await (const chunk of result.stream) {
-              const text = chunk.candidates?.[0]?.content?.parts?.[0]?.text;
+              const text = chunk.text();
               if (text) {
                 // OpenAI SSE format
                 const sseData = {
@@ -130,7 +127,7 @@ export async function POST(request: NextRequest) {
       // Non-streaming response
       const result = await chat.sendMessage(lastMessage.content);
       const response = result.response;
-      const text = response.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      const text = response.text() || '';
 
       return new Response(
         JSON.stringify({

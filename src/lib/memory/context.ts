@@ -4,7 +4,7 @@
  * Helper functions for building prompts with memory context
  */
 
-import { MemoryContext, ContactMemory } from '@/shared/types';
+import { MemoryContext, ContactMemory, SimilarFact, IntentClassification } from '@/shared/types';
 
 /**
  * Build a system prompt enriched with memory context
@@ -145,4 +145,73 @@ export function getMemorySummary(memory: ContactMemory | null): {
       : null,
     hasMemory: memory.facts.length > 0 || memory.sessions.length > 0,
   };
+}
+
+/**
+ * Build an enriched prompt with memory context, semantic search results, and intent info
+ *
+ * @param basePrompt - The contact's original system prompt
+ * @param memoryContext - The formatted memory context
+ * @param searchResults - Semantically similar facts from search
+ * @param intent - The classified intent of the user's message
+ * @returns Enriched system prompt with all context
+ */
+export function buildEnrichedPromptWithSearch(
+  basePrompt: string,
+  memoryContext: MemoryContext | null,
+  searchResults: SimilarFact[],
+  intent: IntentClassification
+): string {
+  const sections: string[] = [];
+
+  // Add memory context if available
+  if (memoryContext && memoryContext.contextString) {
+    sections.push(memoryContext.contextString);
+  }
+
+  // Add semantic search results if available
+  if (searchResults.length > 0) {
+    const relevantFacts = searchResults
+      .map((r) => `- ${r.fact.value} (relevance: ${Math.round(r.similarity * 100)}%)`)
+      .join('\n');
+
+    sections.push(`## Relevant Context (from semantic search)\n${relevantFacts}`);
+  }
+
+  // Add intent guidance based on classification
+  const intentGuidance = getIntentGuidance(intent);
+  if (intentGuidance) {
+    sections.push(`## Conversation Guidance\n${intentGuidance}`);
+  }
+
+  // Build final prompt
+  if (sections.length === 0) {
+    return basePrompt;
+  }
+
+  return `${sections.join('\n\n')}\n\n---\n\n${basePrompt}`;
+}
+
+/**
+ * Get guidance text based on intent classification
+ */
+function getIntentGuidance(intent: IntentClassification): string | null {
+  switch (intent.action) {
+    case 'learn':
+      return 'The user is sharing information about themselves. Acknowledge and remember this information for future conversations.';
+    case 'practice':
+      return 'The user wants to practice. Provide interactive exercises and give constructive feedback.';
+    case 'explain':
+      return 'The user is asking for an explanation. Provide a clear, educational response.';
+    case 'help':
+      return 'The user needs assistance. Be supportive and provide step-by-step guidance.';
+    case 'feedback':
+      return 'The user is asking for feedback. Provide constructive, specific feedback.';
+    case 'continue':
+      return 'The user wants to continue from where they left off. Reference previous context.';
+    case 'new_topic':
+      return 'The user is starting a new topic. Transition smoothly without over-referencing past context.';
+    default:
+      return null;
+  }
 }

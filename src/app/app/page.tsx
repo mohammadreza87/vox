@@ -10,6 +10,7 @@ import { PRE_MADE_CONTACTS, getPreMadeContact } from '@/features/contacts/data/p
 import { CallModal } from '@/features/call';
 import { useVoiceRecording } from '@/features/voice/hooks/useVoiceRecording';
 import { useTextToSpeech } from '@/features/voice/hooks/useTextToSpeech';
+import { useProgressiveTTS } from '@/features/voice/hooks/useProgressiveTTS';
 import { useStreamingChat } from '@/hooks/useStreamingChat';
 import { useContactMemory } from '@/hooks/useContactMemory';
 import { ChatErrorBoundary } from '@/components/ChatErrorBoundary';
@@ -149,40 +150,59 @@ function AppContent() {
     onError: (error) => console.error('Voice recording error:', error),
   });
 
-  // Text-to-speech hook
+  // Text-to-speech hook (fallback for non-streaming TTS)
   const {
-    isSpeaking,
+    isSpeaking: isSpeakingLegacy,
     speak,
     playAudio,
-    stop: stopSpeaking,
+    stop: stopSpeakingLegacy,
   } = useTextToSpeech({
     voiceId: selectedContact?.voiceId,
     onEnd: () => console.log('Finished speaking'),
   });
+
+  // Progressive TTS hook - enables sentence-by-sentence audio during streaming
+  const {
+    processChunk: processTTSChunk,
+    streamComplete: completeTTS,
+    stop: stopProgressiveTTS,
+    reset: resetProgressiveTTS,
+    sentences: ttsSentences,
+    speakingIndex: ttsSpeakingIndex,
+    isSpeaking: isProgressiveSpeaking,
+  } = useProgressiveTTS({
+    voiceId: selectedContact?.voiceId,
+    enabled: autoSpeak,
+    onStart: () => console.log('[Progressive TTS] Started'),
+    onComplete: () => console.log('[Progressive TTS] Complete'),
+  });
+
+  // Combined speaking state
+  const isSpeaking = isProgressiveSpeaking || isSpeakingLegacy;
+  const stopSpeaking = useCallback(() => {
+    stopProgressiveTTS();
+    stopSpeakingLegacy();
+  }, [stopProgressiveTTS, stopSpeakingLegacy]);
 
   // Streaming chat hook
   const streamingMessageIdRef = useRef<string | null>(null);
   const streamingChatIdRef = useRef<string | null>(null); // Track which chat the stream belongs to
   const streamingContactIdRef = useRef<string | null>(null); // Track contact for the stream
   const { streamingText, isStreaming, startStream, cancelStream } = useStreamingChat({
-    onComplete: async (fullText) => {
-      // Generate TTS and auto-play after streaming completes
-      const chatId = streamingChatIdRef.current;
-      const messageId = streamingMessageIdRef.current;
-      if (autoSpeak && selectedContact && chatId && messageId) {
-        setPlayingMessageId(messageId); // Show playing state
-        const audioData = await speak(fullText);
-        if (audioData) {
-          updateMessage(chatId, messageId, { audioUrl: audioData });
-          setMessages((prev) =>
-            prev.map((msg) => (msg.id === messageId ? { ...msg, audioUrl: audioData } : msg))
-          );
-          // Auto-play the generated audio
-          await playAudio(audioData);
-        }
-        setPlayingMessageId(null);
+    onChunk: (chunk) => {
+      // Feed chunks to progressive TTS for sentence-by-sentence audio
+      if (autoSpeak) {
+        processTTSChunk(chunk);
       }
-      streamingMessageIdRef.current = null;
+    },
+    onComplete: async (fullText) => {
+      // Flush any remaining text for TTS
+      if (autoSpeak) {
+        completeTTS();
+      }
+      // NOTE: Don't clear streamingMessageIdRef here!
+      // The useEffect needs it to save the final message to the store.
+      // Refs will be cleared in the useEffect after saving.
     },
     onError: (error) => {
       console.error('Streaming error:', error);
@@ -190,6 +210,7 @@ function AppContent() {
       streamingChatIdRef.current = null;
       streamingContactIdRef.current = null;
       setPlayingMessageId(null);
+      resetProgressiveTTS();
     },
   });
 
@@ -199,10 +220,13 @@ function AppContent() {
   // Contact memory hook for context engineering
   const {
     buildEnrichedPrompt,
+    buildSmartContext,
     saveMemory,
     generateGreeting: generateMemoryGreeting,
   } = useContactMemory({
     contactId: selectedContact?.id ?? null,
+    userId: user?.uid ?? null,
+    tier: tier || 'free',
   });
 
   // Save memory when switching contacts or unmounting
@@ -247,8 +271,9 @@ function AppContent() {
   // This ensures messages stay in sync when activeChat is updated externally
   useEffect(() => {
     if (activeChat && activeChat.messages) {
-      // Only sync if not currently streaming (to avoid conflicts)
-      if (!isStreaming) {
+      // Only sync if not currently streaming AND not in the middle of sending
+      // (to avoid conflicts with local optimistic updates)
+      if (!isStreaming && !isSendingRef.current) {
         setMessages(activeChat.messages);
       }
     }
@@ -316,6 +341,7 @@ function AppContent() {
     // Cancel any ongoing operations before switching
     cancelStream();
     stopSpeaking();
+    resetProgressiveTTS();
     streamingMessageIdRef.current = null;
     streamingChatIdRef.current = null;
     streamingContactIdRef.current = null;
@@ -350,6 +376,7 @@ function AppContent() {
     // Cancel any ongoing operations before switching
     cancelStream();
     stopSpeaking();
+    resetProgressiveTTS();
     streamingMessageIdRef.current = null;
     streamingChatIdRef.current = null;
     streamingContactIdRef.current = null;
@@ -393,11 +420,19 @@ function AppContent() {
     }
   };
 
+  // Track when we're preparing to send (prevents sync effect from overwriting local messages)
+  const isSendingRef = useRef(false);
+
   const handleSendMessage = useCallback(async (content: string) => {
     if (!selectedContact || !content.trim() || !activeChat) return;
 
+    // Mark that we're sending - prevents sync effect from overwriting local messages
+    isSendingRef.current = true;
+
+    // Stop any ongoing playback and reset progressive TTS for new message
     stopSpeaking();
     cancelStream();
+    resetProgressiveTTS();
 
     const userMessage: Message = {
       id: `user-${Date.now()}`,
@@ -407,9 +442,6 @@ function AppContent() {
       audioUrl: null,
       createdAt: new Date(),
     };
-
-    setMessages((prev) => [...prev, userMessage]);
-    addMessage(activeChat.id, userMessage);
 
     // Create placeholder AI message for streaming
     const messageId = `ai-${Date.now()}`;
@@ -426,40 +458,65 @@ function AppContent() {
       createdAt: new Date(),
     };
 
-    setMessages((prev) => [...prev, aiPlaceholder]);
+    // Add both messages to local state first
+    setMessages((prev) => [...prev, userMessage, aiPlaceholder]);
 
-    const conversationHistory = messages.map((msg) => ({
+    // Then add user message to store (don't await - let it happen in background)
+    addMessage(activeChat.id, userMessage);
+
+    // Build smart context with intent classification, token budgeting, and semantic search
+    const smartContext = await buildSmartContext({
+      message: content,
+      basePrompt: selectedContact.systemPrompt,
+      history: messages,
+      contactPurpose: selectedContact.purpose,
+    });
+
+    // Use the trimmed conversation history from smart context
+    const conversationHistory = smartContext.conversationHistory.map((msg) => ({
       role: msg.role,
       content: msg.content,
     }));
 
-    // Start streaming with memory-enriched prompt
-    const enrichedPrompt = buildEnrichedPrompt(selectedContact.systemPrompt);
+    // Clear sending flag now that we're about to start streaming
+    // (isStreaming will protect us from sync overwrites from here on)
+    isSendingRef.current = false;
+
+    // Start streaming with smart context-enriched prompt
     startStream({
       message: content,
       contactId: selectedContact.id,
-      systemPrompt: enrichedPrompt,
+      systemPrompt: smartContext.systemPrompt,
       conversationHistory,
       aiProvider: selectedContact.aiProvider,
       aiModel: selectedContact.aiModel,
     });
-  }, [selectedContact, activeChat, messages, stopSpeaking, cancelStream, addMessage, startStream, buildEnrichedPrompt]);
+  }, [selectedContact, activeChat, messages, stopSpeaking, cancelStream, addMessage, startStream, buildSmartContext, resetProgressiveTTS]);
 
   // Update AI message content as streaming chunks arrive
   useEffect(() => {
+    console.log('[StreamingUpdate] isStreaming:', isStreaming, 'streamingText:', streamingText?.substring(0, 50));
+
     if (!isStreaming && !streamingText) return;
 
     const messageId = streamingMessageIdRef.current;
+    console.log('[StreamingUpdate] messageId:', messageId);
     if (!messageId) return;
 
-    setMessages((prev) =>
-      prev.map((msg) => (msg.id === messageId ? { ...msg, content: streamingText } : msg))
-    );
+    console.log('[StreamingUpdate] Updating message content:', streamingText?.substring(0, 100));
+    setMessages((prev) => {
+      const messageIds = prev.map(m => m.id);
+      console.log('[StreamingUpdate] Current message IDs:', messageIds);
+      console.log('[StreamingUpdate] Looking for message ID:', messageId);
+      const found = prev.find(m => m.id === messageId);
+      console.log('[StreamingUpdate] Found message:', found ? 'yes' : 'no');
+      return prev.map((msg) => (msg.id === messageId ? { ...msg, content: streamingText } : msg));
+    });
 
     // When streaming completes, save the final message to the ORIGINAL chat (not current activeChat)
     const chatId = streamingChatIdRef.current;
     const contactId = streamingContactIdRef.current;
-    if (!isStreaming && streamingText && chatId && contactId) {
+    if (!isStreaming && streamingText && chatId && contactId && messageId) {
       const finalMessage = {
         id: messageId,
         contactId: contactId,
@@ -469,7 +526,8 @@ function AppContent() {
         createdAt: new Date(),
       };
       addMessage(chatId, finalMessage);
-      // Clear refs after saving
+      // Clear ALL refs after saving - this is critical!
+      streamingMessageIdRef.current = null;
       streamingChatIdRef.current = null;
       streamingContactIdRef.current = null;
     }
@@ -1006,6 +1064,7 @@ const MessageItem = memo(function MessageItem({
   isSpeaking,
   onReplayAudio,
 }: MessageItemProps) {
+  console.log('[MessageItem] Rendering:', message.id, 'content length:', message.content?.length);
   return (
     <div
       className={cn(

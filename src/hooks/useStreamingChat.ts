@@ -4,7 +4,11 @@ import { useState, useCallback, useRef } from 'react';
 import { streamChat, ChatStreamRequest } from '@/lib/api/stream-chat';
 
 export interface UseStreamingChatOptions {
+  /** Called for each text chunk received during streaming */
+  onChunk?: (chunk: string) => void;
+  /** Called when streaming completes with the full text */
   onComplete?: (fullText: string) => void;
+  /** Called when an error occurs */
   onError?: (error: Error) => void;
 }
 
@@ -57,7 +61,14 @@ export function useStreamingChat(options: UseStreamingChatOptions = {}): UseStre
 
       const { abort } = streamChat(request, {
         onChunk: (chunk) => {
-          setStreamingText((prev) => prev + chunk);
+          console.log('[useStreamingChat] Received chunk:', chunk?.substring(0, 30));
+          setStreamingText((prev) => {
+            const newText = prev + chunk;
+            console.log('[useStreamingChat] Accumulated text length:', newText.length);
+            return newText;
+          });
+          // Call external chunk handler for progressive TTS
+          options.onChunk?.(chunk);
         },
         onComplete: (fullText) => {
           setIsStreaming(false);

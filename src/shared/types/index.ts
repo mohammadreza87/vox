@@ -3,6 +3,15 @@
 // Re-export memory types
 export * from './memory';
 
+// Re-export intent types
+export * from './intent';
+
+// Re-export token types
+export * from './tokens';
+
+// Re-export embedding types
+export * from './embedding';
+
 export interface User {
   id: string;
   email: string;

@@ -1,4 +1,4 @@
-import { VertexAI } from '@google-cloud/vertexai';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
 import { getUserDocument, incrementMessageCount, createUserDocument } from '@/lib/firestore';
@@ -20,19 +20,16 @@ import {
 } from '@/lib/datadog';
 
 // Initialize AI clients lazily
-let vertexClient: VertexAI | null = null;
+let geminiClient: GoogleGenerativeAI | null = null;
 let anthropicClient: Anthropic | null = null;
 let openaiClient: OpenAI | null = null;
 let deepseekClient: OpenAI | null = null;
 
-function getVertexClient() {
-  if (!vertexClient && process.env.GOOGLE_CLOUD_PROJECT) {
-    vertexClient = new VertexAI({
-      project: process.env.GOOGLE_CLOUD_PROJECT,
-      location: process.env.GOOGLE_CLOUD_LOCATION || 'us-central1',
-    });
+function getGeminiClient() {
+  if (!geminiClient && process.env.GEMINI_API_KEY) {
+    geminiClient = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
   }
-  return vertexClient;
+  return geminiClient;
 }
 
 function getAnthropicClient() {
@@ -457,9 +454,9 @@ async function streamGemini(
   model: string,
   llmSpan: LLMSpan | null
 ): Promise<string> {
-  const client = getVertexClient();
+  const client = getGeminiClient();
   if (!client) {
-    throw new Error('Google Cloud Project not configured for Vertex AI');
+    throw new Error('GEMINI_API_KEY not configured');
   }
 
   const geminiModel = client.getGenerativeModel({
@@ -490,7 +487,7 @@ async function streamGemini(
 
   let fullResponse = '';
   for await (const chunk of result.stream) {
-    const text = chunk.candidates?.[0]?.content?.parts?.[0]?.text;
+    const text = chunk.text();
     if (text) {
       fullResponse += text;
       llmSpan?.recordStreamedToken();
