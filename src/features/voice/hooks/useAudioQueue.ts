@@ -185,12 +185,12 @@ export function useAudioQueue(options: UseAudioQueueOptions = {}): UseAudioQueue
       // when it becomes ready
     };
 
-    audioRef.current.onerror = (e) => {
-      const audio = e.target as HTMLAudioElement;
+    audioRef.current.onerror = () => {
+      const audio = audioRef.current;
 
       // Ignore errors from cleaned-up audio elements (happens during transitions)
-      if (audio !== audioRef.current) {
-        console.log('[AudioQueue] Ignoring error from old audio element');
+      if (!audio) {
+        console.log('[AudioQueue] Ignoring error from cleaned-up audio element');
         return;
       }
 
