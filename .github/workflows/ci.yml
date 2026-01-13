@@ -155,10 +155,21 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Download build artifacts
+        id: download-artifact
         uses: actions/download-artifact@v4
+        continue-on-error: true
         with:
           name: build-output
-          path: .
+          path: .next
+
+      - name: Build if no artifact
+        if: steps.download-artifact.outcome == 'failure'
+        run: npm run build
+        env:
+          NEXT_PUBLIC_FIREBASE_API_KEY: ${{ secrets.NEXT_PUBLIC_FIREBASE_API_KEY || 'test-key' }}
+          NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: ${{ secrets.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN || 'test.firebaseapp.com' }}
+          NEXT_PUBLIC_FIREBASE_PROJECT_ID: ${{ secrets.NEXT_PUBLIC_FIREBASE_PROJECT_ID || 'test-project' }}
+          NEXT_TELEMETRY_DISABLED: 1
 
       - name: Run E2E tests
         run: npx playwright test
