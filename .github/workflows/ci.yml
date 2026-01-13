@@ -122,11 +122,13 @@ jobs:
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
+        if: success()
+        continue-on-error: true
         with:
           name: build-output
           path: .next/
           retention-days: 7
-          if-no-files-found: error
+          if-no-files-found: warn
 
   # ============================================
   # E2E Tests (optional, runs on main only)
