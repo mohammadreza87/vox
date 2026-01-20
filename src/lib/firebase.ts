@@ -17,6 +17,15 @@ const canInitialize = (): boolean => {
   const apiKey = process.env.NEXT_PUBLIC_FIREBASE_API_KEY;
   // Skip initialization during build/SSR with missing or test API keys
   if (!apiKey || apiKey === 'test-key' || apiKey.length < 10) {
+    if (typeof window !== 'undefined') {
+      console.warn(
+        '[Firebase] Cannot initialize: NEXT_PUBLIC_FIREBASE_API_KEY is missing or invalid.\n' +
+        'This variable is inlined at BUILD TIME by Next.js.\n' +
+        'Fix: 1) Ensure .env.local has valid Firebase config\n' +
+        '     2) Clear cache: rm -rf .next\n' +
+        '     3) Restart dev server: npm run dev'
+      );
+    }
     return false;
   }
   return true;

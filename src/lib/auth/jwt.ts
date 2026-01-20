@@ -9,10 +9,17 @@ import { SignJWT, jwtVerify, JWTPayload } from 'jose';
 function getSecretKey(): Uint8Array {
   const secret = process.env.JWT_SECRET;
   if (!secret) {
-    throw new Error('JWT_SECRET environment variable is not set');
+    throw new Error(
+      '[JWT] JWT_SECRET environment variable is not set.\n' +
+      'Add JWT_SECRET to your .env.local file with at least 32 random characters.\n' +
+      'Example: JWT_SECRET=your-super-secret-key-at-least-32-chars'
+    );
   }
   if (secret.length < 32) {
-    throw new Error('JWT_SECRET must be at least 32 characters');
+    throw new Error(
+      `[JWT] JWT_SECRET must be at least 32 characters (currently ${secret.length}).\n` +
+      'Generate a longer secret for security.'
+    );
   }
   return new TextEncoder().encode(secret);
 }

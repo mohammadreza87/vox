@@ -28,7 +28,7 @@ async function initializeFirebaseAdmin(): Promise<App> {
   if (serviceAccountJson) {
     try {
       const serviceAccount = JSON.parse(serviceAccountJson);
-      console.log('Using Service Account Key');
+      console.log('[Firebase Admin] Using Service Account Key');
       _app = initializeApp({
         credential: cert(serviceAccount),
         projectId,
@@ -36,12 +36,19 @@ async function initializeFirebaseAdmin(): Promise<App> {
       _initialized = true;
       return _app;
     } catch (e) {
-      console.error('Failed to parse SERVICE_ACCOUNT_KEY:', e);
+      console.error('[Firebase Admin] Failed to parse SERVICE_ACCOUNT_KEY as JSON:', e);
+      console.error('[Firebase Admin] Ensure SERVICE_ACCOUNT_KEY contains valid JSON from Firebase Console');
     }
+  } else {
+    console.warn(
+      '[Firebase Admin] SERVICE_ACCOUNT_KEY not set.\n' +
+      'For local development, add SERVICE_ACCOUNT_KEY to .env.local with the JSON from:\n' +
+      'Firebase Console > Project Settings > Service Accounts > Generate new private key'
+    );
   }
 
-  // Fallback to application default credentials
-  console.log('Using Application Default Credentials');
+  // Fallback to application default credentials (only works in Google Cloud environments)
+  console.log('[Firebase Admin] Falling back to Application Default Credentials (ADC)');
   _app = initializeApp({
     credential: applicationDefault(),
     projectId,

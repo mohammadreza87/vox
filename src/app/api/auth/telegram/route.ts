@@ -36,7 +36,10 @@ interface TelegramLoginWidgetUser {
  */
 function validateMiniAppData(initData: string): TelegramAuthData | null {
   if (!TELEGRAM_BOT_TOKEN) {
-    console.error('TELEGRAM_BOT_TOKEN not configured');
+    console.error(
+      '[Telegram Auth] TELEGRAM_BOT_TOKEN not configured.\n' +
+      'Add TELEGRAM_BOT_TOKEN to .env.local (get it from @BotFather on Telegram)'
+    );
     return null;
   }
 
@@ -100,7 +103,10 @@ function validateMiniAppData(initData: string): TelegramAuthData | null {
  */
 function validateLoginWidgetData(user: TelegramLoginWidgetUser): boolean {
   if (!TELEGRAM_BOT_TOKEN) {
-    console.error('TELEGRAM_BOT_TOKEN not configured');
+    console.error(
+      '[Telegram Auth] TELEGRAM_BOT_TOKEN not configured.\n' +
+      'Add TELEGRAM_BOT_TOKEN to .env.local (get it from @BotFather on Telegram)'
+    );
     return false;
   }
 
