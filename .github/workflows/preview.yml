@@ -56,7 +56,7 @@ jobs:
           FIREBASE_CLI_EXPERIMENTS: webframeworks
 
       - name: Comment Preview URL
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const previewUrl = '${{ steps.preview.outputs.details_url }}';
