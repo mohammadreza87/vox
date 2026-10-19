@@ -1,0 +1,50 @@
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { MessageMemoryReview } from './MessageMemoryReview';
+import { ConversationPanel } from './ConversationPanel';
+const api = vi.hoisted(() => ({ messagePreview: vi.fn(), messageAccept: vi.fn() }));
+vi.mock('../_lib/adaptive-client', () => ({ adaptiveApi: api }));
+const preview = () => ({ claims: ['Ali reportedly said the date may be March 5.'], sourceTextHash: 'a'.repeat(64), receipt: 'signed-receipt', expiresAt: Date.now() + 120000 });
+const props = () => ({ text: '  SELECTED_ONLY_TEXT\n', agentId: 'agent', space: 'work' as const, locale: 'en' as const, disabled: false, onClose: vi.fn(), onSaved: vi.fn() });
+beforeEach(() => { vi.resetAllMocks(); api.messagePreview.mockResolvedValue(preview()); api.messageAccept.mockResolvedValue({ memoryIds: ['claim'] }); });
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); });
+it('displays exact source, requires explicit preview then separate save, and renders claims as plain text', async () => {
+  const p = props(), view = render(<MessageMemoryReview {...p} />);
+  expect(screen.getByLabelText('Exact selected text').textContent).toBe(p.text); expect(api.messagePreview).not.toHaveBeenCalled(); expect(screen.queryByRole('button', { name: 'Save reviewed claims' })).toBeNull();
+  api.messagePreview.mockResolvedValueOnce({ ...preview(), claims: ['<script>NOT_HTML</script>'] }); fireEvent.click(screen.getByRole('button', { name: 'Preview private claims' }));
+  await screen.findByText('<script>NOT_HTML</script>'); expect(view.container.querySelector('script')).toBeNull(); expect(api.messageAccept).not.toHaveBeenCalled();
+  expect(api.messagePreview).toHaveBeenCalledWith({ text: p.text, agentId: 'agent', space: 'work', locale: 'en' }, expect.any(AbortSignal));
+  fireEvent.click(screen.getByRole('button', { name: 'Save reviewed claims' })); await waitFor(() => expect(p.onSaved).toHaveBeenCalledWith(1));
+  expect(api.messageAccept).toHaveBeenCalledWith(expect.objectContaining({ claims: ['<script>NOT_HTML</script>'], sourceTextHash: 'a'.repeat(64), receipt: 'signed-receipt', space: 'work' }), expect.any(AbortSignal));
+});
+it.each(['close', 'space', 'agent', 'source', 'unmount'] as const)('aborts and discards a late preview after %s', async change => {
+  let finish!: (value: ReturnType<typeof preview>) => void; api.messagePreview.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+  const p = props(), view = render(<MessageMemoryReview {...p} />); fireEvent.click(screen.getByRole('button', { name: 'Preview private claims' }));
+  const signal = api.messagePreview.mock.calls[0][1] as AbortSignal;
+  if (change === 'close') fireEvent.click(screen.getByRole('button', { name: 'Discard and close' }));
+  if (change === 'space') view.rerender(<MessageMemoryReview {...p} space="personal" />);
+  if (change === 'agent') view.rerender(<MessageMemoryReview {...p} agentId="other" />);
+  if (change === 'source') view.rerender(<MessageMemoryReview {...p} text="Different selected text" />);
+  if (change === 'unmount') view.unmount();
+  expect(signal.aborted).toBe(true); await act(async () => { finish(preview()); });
+  expect(screen.queryByText(preview().claims[0])).toBeNull(); expect(api.messageAccept).not.toHaveBeenCalled(); expect(p.onSaved).not.toHaveBeenCalled();
+});
+it('ignores a late accepted response after scope switch and disables expired or empty previews', async () => {
+  let finish!: (value: { memoryIds: string[] }) => void; api.messageAccept.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+  const p = props(), view = render(<MessageMemoryReview {...p} />); fireEvent.click(screen.getByRole('button', { name: 'Preview private claims' }));
+  await screen.findByText(preview().claims[0]); fireEvent.click(screen.getByRole('button', { name: 'Save reviewed claims' })); view.rerender(<MessageMemoryReview {...p} space="personal" />);
+  await act(async () => { finish({ memoryIds: ['claim'] }); }); expect(p.onSaved).not.toHaveBeenCalled(); expect(screen.queryByLabelText('Temporary claim preview')).toBeNull();
+  api.messagePreview.mockResolvedValueOnce({ ...preview(), expiresAt: Date.now() - 1 }); fireEvent.click(screen.getByRole('button', { name: 'Preview private claims' }));
+  await screen.findByText('This preview expired. Request a new one.'); expect(screen.getByRole('button', { name: 'Save reviewed claims' })).toBeDisabled();
+  api.messagePreview.mockResolvedValueOnce({ ...preview(), claims: [] }); fireEvent.click(screen.getByRole('button', { name: 'Preview private claims' }));
+  await screen.findByText('No supported memory claim was proposed. Nothing was saved.'); expect(screen.queryByRole('button', { name: 'Save reviewed claims' })).toBeNull();
+});
+it('offers the action on sent own text only and clears selected source on a Conversation scope change', async () => {
+  const fetcher = vi.fn(async () => Response.json({ reply: 'ASSISTANT_CANARY' })); vi.stubGlobal('fetch', fetcher);
+  const view = render(<ConversationPanel agentId="agent" space="work" />);
+  fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'OWN_SENT_TEXT' } }); fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+  await screen.findByText('ASSISTANT_CANARY'); expect(screen.getAllByRole('button', { name: 'Review this text for memory' })).toHaveLength(1);
+  fireEvent.click(screen.getByRole('button', { name: 'Review this text for memory' })); expect(screen.getByLabelText('Exact selected text')).toHaveTextContent('OWN_SENT_TEXT');
+  expect(screen.getByLabelText('Exact selected text')).not.toHaveTextContent('ASSISTANT_CANARY'); expect(api.messagePreview).not.toHaveBeenCalled();
+  view.rerender(<ConversationPanel agentId="agent" space="personal" />); expect(screen.queryByLabelText('Exact selected text')).toBeNull(); expect(screen.queryByText('OWN_SENT_TEXT')).toBeNull();
+});

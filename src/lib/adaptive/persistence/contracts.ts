@@ -16,7 +16,7 @@ export interface AdaptiveSnapshot {
   space: AdaptiveSpace;
   revision: number;
   purposes: { purpose: AdaptiveOptionalPurpose; state: string; revision: number; available: boolean; reason?: string; notice: AdaptiveNotice }[];
-  memories: { id: string; revision: number; text: string; createdAt: number; expiresAt: number; sourceRefs?: { id: string; revision: number }[] }[];
+  memories: { id: string; revision: number; text: string; createdAt: number; expiresAt: number; origin?: 'user_reviewed_claim'; sourceRefs?: { id: string; revision: number }[] }[];
   agents: { agentId: string; allowed: boolean; revision: number }[];
   explicitMemoryAvailable: boolean;
   explicitMemoryValidUntil?: number;

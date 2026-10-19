@@ -2,12 +2,15 @@
 
 import type { AdaptiveOptionalPurpose, AdaptivePresentation, AdaptiveSnapshot, AdaptiveSpace } from '@/lib/adaptive/persistence/contracts';
 import { request } from './client';
+import type { MessageMemoryPreview, MessagePreviewInput, MessageAcceptInput } from '@/lib/adaptive/message-memory/contracts';
 import type { PrivacyLocale } from './adaptive-copy';
 import type { ReviewedMemoryPreview, ReviewedPreviewInput, ReviewedAcceptInput } from '@/lib/adaptive/reviewed-memory/contracts';
 
 export type { AdaptiveOptionalPurpose, AdaptivePresentation, AdaptiveSnapshot, AdaptiveSpace };
 const eventId = () => crypto.randomUUID();
 export const adaptiveApi = {
+  messagePreview: (input: MessagePreviewInput, signal?: AbortSignal) => request<MessageMemoryPreview>('POST', 'adaptive/message-memory/preview', input, 'json', signal),
+  messageAccept: (input: MessageAcceptInput, signal?: AbortSignal) => request<{ memoryIds: string[]; snapshot: AdaptiveSnapshot }>('POST', 'adaptive/message-memory/accept', input, 'json', signal),
   reviewedPreview: (input: ReviewedPreviewInput, signal?: AbortSignal) => request<ReviewedMemoryPreview>('POST', 'adaptive/reviewed/preview', input, 'json', signal),
   reviewedAccept: (input: ReviewedAcceptInput, signal?: AbortSignal) => request<{ memoryId: string; snapshot: AdaptiveSnapshot }>('POST', 'adaptive/reviewed/accept', input, 'json', signal),
   read: (space: AdaptiveSpace, locale: PrivacyLocale) => request<AdaptiveSnapshot>('GET', `adaptive?space=${space}&locale=${locale}`),

@@ -10,6 +10,8 @@ import { agentGrantInput, consentInput, deletionInput, identityInput, memoryInpu
 import { ReviewedMemoryService } from '../reviewed-memory/service';
 import { reviewedPreviewInputSchema, reviewedAcceptInputSchema } from '../reviewed-memory/contracts';
 import { digest } from './repository';
+import { MessageMemoryService } from '../message-memory/service';
+import { messagePreviewInputSchema, messageAcceptInputSchema } from '../message-memory/contracts';
 const response = (data: unknown, status = 200, headers: Record<string, string> = {}) => new Response(JSON.stringify(data), {
   status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...headers },
 });
@@ -36,10 +38,35 @@ export async function handleAdaptiveRequest(studio: Studio, service: AdaptiveSer
     if (request.headers.get('origin') !== url.origin || request.headers.get('sec-fetch-site') === 'cross-site') return response({ error: 'origin_denied' }, 403);
     if (request.headers.get('content-type')?.split(';')[0].trim().toLowerCase() !== 'application/json') return response({ error: 'json_required' }, 415);
     await limiter.consume('mutation', user.id);
-    const bounded = await boundedStudioRequest(request, path[0] === 'reviewed' ? 16_384 : 8192);
+    const bounded = await boundedStudioRequest(request, path[0] === 'message-memory' ? 20_480 : path[0] === 'reviewed' ? 16_384 : 8192);
     let body: unknown;
     try { body = await bounded.json(); } catch { return response({ error: 'invalid_json' }, 400); }
     const route = `${request.method} ${path.join('/')}`;
+    if (route === 'POST message-memory/preview' || route === 'POST message-memory/accept') {
+      const authority = (state: Awaited<ReturnType<Studio['deps']['store']['read']>>, agentId: string) => {
+        const actor = state.members.find(member => member.telegramId === user.id), agent = state.agents.find(agent => agent.id === agentId);
+        const validEpoch = (row: { learningAuthorityRevision?: number }) => row.learningAuthorityRevision === undefined ||
+          (Number.isSafeInteger(row.learningAuthorityRevision) && row.learningAuthorityRevision >= 0);
+        return actor && agent && validEpoch(actor) && validEpoch(agent) && !(agent.blocked ?? []).includes(user.id) && canUseAgent(actor, agent) ? digest([actor, agent]) : null;
+      };
+      const review = new MessageMemoryService(service, { llm: studio.deps.chatLLM, secret: studio.deps.secret,
+        now: () => studio.deps.now?.().getTime() ?? Date.now(),
+        agentAuthority: async (_id, agentId) => authority(await studio.deps.store.read(), agentId),
+        agentAuthorityNow: (_id, agentId) => { const state = studio.deps.store.readCommittedForEffect?.(); return state ? authority(state, agentId) : null; },
+      });
+      if (route === 'POST message-memory/preview') {
+        const input = messagePreviewInputSchema.parse(body);
+        await limiter.consume('expensive', user.id);
+        const preview = await review.preview(user.id, input, request.signal);
+        review.revalidateNow(user.id, { space: input.space, agentId: input.agentId, claims: preview.claims, sourceTextHash: preview.sourceTextHash, receipt: preview.receipt }, true);
+        return response(preview);
+      }
+      const input = messageAcceptInputSchema.parse(body), saved = await review.accept(user.id, input, request.signal);
+      const snapshot = await service.read(user.id, input.space, locale);
+      if (request.signal.aborted) throw new AdaptiveError(409, 'message_memory_changed');
+      review.revalidateNow(user.id, input);
+      return response({ ...saved, snapshot }, 201);
+    }
     if (route === 'POST reviewed/preview' || route === 'POST reviewed/accept') {
       const authority = (state: Awaited<ReturnType<Studio['deps']['store']['read']>>, agentId: string) => {
         const actor = state.members.find(member => member.telegramId === user.id), agent = state.agents.find(agent => agent.id === agentId);
