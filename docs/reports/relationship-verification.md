@@ -24,12 +24,22 @@ Date: 2026-10-19. Baseline: `68a1cd3`. Initial implementation: `776eae0`; the ca
 | Production build | `npm run build` passed; latest GitHub CI qualifies the pushed revision separately |
 | Browser | Chromium desktop and iPhone 13 WebKit: **2 passed**, including settings, selected-person sharing/revoke, mobile overflow and aggregate feedback display. Fixture APIs; isolated port 3100 refuses server reuse |
 | HTTP authorization | Real signed Telegram init-data through actual router/service/storage tests: unauthorized access, actor allowlist, timezone validation, actor-bound controls and admin-only observations |
-| Environment packaging / skill | Five production environment script tests and bundled skill validator passed earlier; the skill was subsequently updated to the v3 architecture |
+| Environment packaging / skill | 13 production-environment and HTTP-verifier tests passed, plus four Firebase config-packaging regressions. Independent review reran all eight new packaging/preview checks. The updated v3 skill passed the bundled validator |
 | Independent review | Stop-after-fence, voice forget, polite global stop, Telegram source-time provenance, policy versioning and long reschedule source retention were remediated; independent probes and focused reruns passed |
 
 The normal full suite skips database-only cases unless `FIRESTORE_EMULATOR_HOST` is set. Separate actual-emulator tests cover transactions, concurrent claims, privacy epochs, memory snapshots, legacy parentless history deletion and expiry/control behavior. They do not prove production IAM, indexes or asynchronous TTL deletion timing. The local emulator used a temporary Java runtime; no system Java installation or production project was changed.
 
 Browser checks verify visible controls and mutation bodies using fixture responses, not live authentication/Telegram. The first earlier attempt reached an unrelated pre-existing app on port 3000; it was neither modified nor stopped. Dedicated port 3100 now prevents that ambiguity.
+
+### Remote verification and preview packaging correction
+
+For `fc8f642`, [CI run 39295386682](https://github.com/mohammadreza87/vox/actions/runs/39295386682) passed lint/types, coverage tests, build and **11 browser tests**. Preview deployment also reported success, but direct HTTP checks found `/`, `/studio` and the unauthenticated worker returning plain 500 while a static JavaScript asset returned 200. The same standalone build locally returned 200 and the expected JSON 401. A successful upload was not a working preview.
+
+After the owner completed Google Cloud's passkey check, runtime logs established the cause: the generated `next.config.js` loaded bundled Sentry/OpenTelemetry code that required `import-in-the-middle` at a missing root dependency location. Firebase's production dependency list externalized that name because a nested copy existed under `dd-trace`, while the root copy was development-only. The eager Sentry import executed even with Sentry disabled. This packaging issue predates the relationship changes.
+
+The correction keeps Sentry loading lazy and limited to configured build/development phases; production server configuration returns before loading its build wrapper. A Firebase-style bundled-config regression and configured Sentry comparisons qualify the change separately. A new preview HTTP gate must pass before the workflow reports readiness: landing and Studio pages return HTML 200 and the unauthenticated worker returns JSON 401. This check cannot certify authenticated Studio providers, Telegram delivery or a production pilot. The PR records the latest pushed revision, CI and post-deploy results; the earlier `fc8f642` preview failure remains part of the evidence.
+
+The inherited dependency audit is also distinct from green CI: full audit reports six high development-tooling entries and eight moderate runtime entries; production-only audit reports zero high entries. The existing CI audit step uses `continue-on-error`. No dependency was added or force-downgraded for this feature.
 
 ## Provider and conversational evidence
 
