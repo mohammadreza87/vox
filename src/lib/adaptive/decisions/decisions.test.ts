@@ -103,3 +103,16 @@ describe('Decisions service', () => {
     expect(await active).toMatchObject({ reason: 'cancelled' });
   });
 });
+
+it('serializes only supported low-detail text/image evidence through SDK public post', async () => {
+  const { SYNTHETIC_IMAGE } = await import('../prediction/fixtures');
+  const fetch = vi.fn(async () => new Response(JSON.stringify(answer), { headers: { 'content-type': 'application/json' } }));
+  const client = new OpenAI({ apiKey: 'synthetic-not-a-secret', fetch, dangerouslyAllowBrowser: true });
+  const service = new DecisionService(new OpenAIDecisionProvider(client));
+  const evidence: DecisionInput = { ...input, input: [{ role: 'user', content: [{ type: 'input_text', text: 'Inspect explicitly shared image' }, { type: 'input_image', image_url: SYNTHETIC_IMAGE, detail: 'low' }] }] };
+  expect(await service.evaluate(context({ loadInput: async () => evidence }))).toMatchObject({ status: 'answered' });
+  const options = fetch.mock.calls[0][1] as RequestInit;
+  expect(JSON.parse(String(options.body)).input).toEqual(evidence.input);
+  expect(await service.evaluate(context({ loadInput: async () => ({ ...evidence, input: [{ role: 'user', content: [{ type: 'input_audio', data: 'RAW_AUDIO' }] }] } as unknown as DecisionInput) }))).toMatchObject({ reason: 'invalid_input' });
+  expect(fetch).toHaveBeenCalledOnce();
+});

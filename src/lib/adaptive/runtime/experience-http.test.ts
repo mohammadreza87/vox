@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { signInitData } from '../../studio/auth';
 import type { Studio } from '../../studio/service';
 import { AdaptiveService } from '../persistence/service';
@@ -58,4 +58,44 @@ describe('authenticated experience API', () => {
     expect((await (await request([])).json()).preferences).toHaveLength(1);
     expect((await (await request([], 'GET', undefined, { auth: signInitData({ id: 124, first_name: 'Other' }, TOKEN) })).json()).preferences).toEqual([]);
   });
+});
+
+it('exposes bounded signed cancellation and receipt validation without accepting client authority', async () => {
+  const { request } = setup();
+  const scope = { space: 'work', agentId: 'allowed-agent', sessionId: 'session1', turnId: 'turn1', revision: 2, contextKey: 'audience1' };
+  expect((await request(['prediction-cancel'], 'POST', scope, { auth: '' })).status).toBe(401);
+  expect((await request(['prediction-cancel'], 'POST', scope, { origin: 'https://evil.test' })).status).toBe(403);
+  const cancelled = await request(['prediction-cancel'], 'POST', scope);
+  expect(cancelled.status).toBe(200); expect(cancelled.headers.get('cache-control')).toBe('no-store');
+  expect(await cancelled.json()).toEqual({ cancelled: true });
+  const validation = await request(['prediction-validate'], 'POST', { ...scope, policyReceipt: 'client-invented' });
+  expect(validation.status).toBe(200); expect(await validation.json()).toEqual({ valid: false });
+  expect((await request(['prediction-cancel'], 'POST', { ...scope, personId: 'victim' })).status).toBe(400);
+  expect((await request(['predict'], 'POST', undefined, { raw: 'x'.repeat(96_001) })).status).toBe(413);
+  expect((await request(['prediction-cancel'], 'POST', undefined, { raw: 'x'.repeat(16_385) })).status).toBe(413);
+});
+
+it('prewarms only authorized read-only context and rechecks receipt after awaited preparation', async () => {
+  const { experience, studio, request } = setup();
+  const input = { space: 'work', agentId: 'allowed-agent', sessionId: 'session1', turnId: 'turn1', revision: 2, contextKey: 'audience1', text: 'Current draft', question: 'intent_route' };
+  vi.spyOn(experience, 'predict').mockResolvedValue({ status: 'answered', model: 'gpt-6-luna', answers: [], elapsedMs: 2, policyReceipt: 'receipt' });
+  const validation = vi.spyOn(experience, 'validatePrediction').mockResolvedValue({ valid: true });
+  const prepareContext = vi.fn(async () => true);
+  studio.gateway = vi.fn(async () => ({ gateway: { prepareContext }, state: {} })) as unknown as Studio['gateway'];
+  const result = await request(['predict'], 'POST', input);
+  expect(await result.json()).toMatchObject({ status: 'answered', preparedContext: true });
+  expect(prepareContext).toHaveBeenCalledWith('allowed-agent', expect.any(String), 'Current draft', expect.objectContaining({ space: 'work', authorize: expect.any(Function) }));
+  prepareContext.mockImplementation(async () => { validation.mockResolvedValue({ valid: false }); return true; });
+  const revoked = await request(['predict'], 'POST', input);
+  expect(await revoked.json()).toMatchObject({ status: 'unknown', reason: 'stale' });
+});
+it('bounds context prewarm time and leaves semantic/baseline flow available', async () => {
+  const { experience, studio, request } = setup();
+  const input = { space: 'work', agentId: 'allowed-agent', sessionId: 'session1', turnId: 'turn1', revision: 2, contextKey: 'audience1', text: 'Current draft', question: 'intent_route' };
+  vi.spyOn(experience, 'predict').mockResolvedValue({ status: 'answered', model: 'gpt-6-luna', answers: [], elapsedMs: 2, policyReceipt: 'receipt' });
+  vi.spyOn(experience, 'validatePrediction').mockResolvedValue({ valid: true });
+  const prepareContext = vi.fn(() => new Promise<boolean>(() => {}));
+  studio.gateway = vi.fn(async () => ({ gateway: { prepareContext }, state: {} })) as unknown as Studio['gateway'];
+  const result = await request(['predict'], 'POST', input);
+  expect(await result.json()).toMatchObject({ status: 'answered', preparedContext: false });
 });

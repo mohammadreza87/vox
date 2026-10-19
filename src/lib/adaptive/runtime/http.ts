@@ -1,11 +1,12 @@
 import { z } from 'zod';
+import { personId } from '../../studio/org-bridge';
 import { canUseAgent } from '../../studio/permissions';
 import { verifyInitData } from '../../studio/auth';
 import { boundedStudioRequest } from '../../studio/http';
 import { StudioError, type Studio } from '../../studio/service';
 import { StudioRateLimiter, StudioRateLimitError } from '../../studio/ratelimit';
 import { AdaptiveError } from '../persistence/service';
-import { experienceSpaceSchema, feedbackInputSchema, predictInputSchema, preferenceInputSchema, reminderInputSchema, settingsInputSchema, type ExperienceSnapshot } from './contracts';
+import { experienceSpaceSchema, feedbackInputSchema, predictionCancelSchema, predictionValidateSchema, predictInputSchema, preferenceInputSchema, reminderInputSchema, settingsInputSchema, type ExperienceSnapshot } from './contracts';
 import type { AdaptiveExperienceService } from './service';
 const json = (data: unknown, status = 200, headers: Record<string, string> = {}) => new Response(JSON.stringify(data), {
   status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...headers },
@@ -45,7 +46,7 @@ export async function handleExperienceRequest(studio: Studio, service: AdaptiveE
     if (request.headers.get('content-type')?.split(';')[0].trim().toLowerCase() !== 'application/json') return json({ error: 'json_required' }, 415);
     await limiter.consume('mutation', user.id);
     let body: unknown;
-    const bounded = await boundedStudioRequest(request, 16_384);
+    const bounded = await boundedStudioRequest(request, path.join('/') === 'predict' ? 96_000 : 16_384);
     try { body = await bounded.json(); } catch { return json({ error: 'invalid_json' }, 400); }
     const route = `${request.method} ${path.join('/')}`;
     if (route === 'PUT settings') return await snapshotResponse(await service.settings(user.id, settingsInputSchema.parse(body)));
@@ -60,11 +61,52 @@ export async function handleExperienceRequest(studio: Studio, service: AdaptiveE
       if (!await canAccess(input.agentId)) return json({ error: 'agent_access_denied' }, 403);
       return await snapshotResponse(await service.reminder(user.id, input), 201);
     }
+    if (route === 'POST prediction-validate') {
+      const input = predictionValidateSchema.parse(body);
+      return json(await service.validatePrediction(user.id, input, () => canAccess(input.agentId)));
+    }
+    if (route === 'POST prediction-cancel') {
+      return json(await service.cancelPrediction(user.id, predictionCancelSchema.parse(body)));
+    }
     if (route === 'POST predict') {
       const input = predictInputSchema.parse(body);
       if (!await canAccess(input.agentId)) return json({ error: 'agent_access_denied' }, 403);
       await limiter.consume('expensive', user.id);
-      return json(await service.predict(user.id, input, request.signal, () => canAccess(input.agentId)));
+      const result = await service.predict(user.id, input, request.signal, () => canAccess(input.agentId));
+      if (result.status !== 'answered' || !result.policyReceipt) return json(result);
+      const scope = { space: input.space, agentId: input.agentId, sessionId: input.sessionId, turnId: input.turnId,
+        revision: input.revision, contextKey: input.contextKey, policyReceipt: result.policyReceipt };
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      request.signal.addEventListener('abort', abort, { once: true });
+      if (request.signal.aborted) controller.abort();
+      const authorize = async () => {
+        if (controller.signal.aborted) return false;
+        const current = await service.validatePrediction(user.id, scope, () => canAccess(input.agentId));
+        return !controller.signal.aborted && current.valid;
+      };
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let preparedContext = false;
+      try {
+        const preparation = async () => {
+          if (!await authorize()) return false;
+          const { gateway } = await studio.gateway();
+          if (!await authorize()) return false;
+          return gateway.prepareContext(input.agentId, personId(user.id), input.text, { space: input.space, authorize });
+        };
+        preparedContext = await Promise.race([preparation().catch(() => false), new Promise<boolean>(resolve => {
+          timer = setTimeout(() => { controller.abort(); resolve(false); }, 250);
+        })]);
+      } finally {
+        if (timer) clearTimeout(timer);
+        request.signal.removeEventListener('abort', abort);
+      }
+      // Timeout disables preparation, while the original semantic result may
+      // remain usable. All awaited work precedes this authoritative final check.
+      if (request.signal.aborted || !(await service.validatePrediction(user.id, scope, () => canAccess(input.agentId))).valid) {
+        return json({ status: 'unknown', reason: 'stale', elapsedMs: result.elapsedMs, inputTokens: result.inputTokens });
+      }
+      return json({ ...result, preparedContext });
     }
     return json({ error: 'not_found' }, 404);
   } catch (error) {

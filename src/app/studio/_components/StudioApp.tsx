@@ -10,6 +10,7 @@ import { HomeScreen } from './screens/Home';
 import { AgentScreen } from './screens/Agent';
 import { SpawnScreen } from './screens/Spawn';
 import { CallScreen } from './screens/Call';
+import { ConversationScreen } from './screens/Conversation';
 import { MemoriesScreen } from './screens/Memories';
 import { FireScreen } from './screens/Fire';
 import { OrgScreen } from './screens/Org';
@@ -28,6 +29,7 @@ export type Route =
   | { name: 'agent'; id: string }
   | { name: 'spawn'; draftId?: string; successorOf?: string }
   | { name: 'call'; id: string }
+  | { name: 'conversation'; id: string }
   | { name: 'memories'; id: string }
   | { name: 'fire'; id: string };
 
@@ -157,6 +159,7 @@ export function StudioApp() {
               {route.name === 'agent' && <AgentScreen id={route.id} />}
               {route.name === 'spawn' && <SpawnScreen draftId={route.draftId} successorOf={route.successorOf} />}
               {route.name === 'call' && <CallScreen id={route.id} />}
+              {route.name === 'conversation' && <ConversationScreen id={route.id} />}
               {route.name === 'memories' && <MemoriesScreen id={route.id} />}
               {route.name === 'fire' && <FireScreen id={route.id} />}
             </motion.div>

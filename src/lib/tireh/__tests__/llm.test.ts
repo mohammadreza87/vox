@@ -38,6 +38,28 @@ beforeEach(() => {
 });
 
 describe('Anthropic request compatibility', () => {
+  it.each(['pause_turn', 'tool_unavailable'])('reauthorizes %s without hidden SDK retries', async kind => {
+    let allowed = true;
+    provider.create.mockImplementationOnce(async () => {
+      allowed = false;
+      if (kind === 'tool_unavailable') throw { status: 400, message: 'web_search unavailable' };
+      return { stop_reason: 'pause_turn', content: [{ type: 'text', text: 'Searching' }] };
+    });
+    await expect(new AnthropicLLM('fixture-key', 'claude-sonnet-5-5').completeWithWeb({ ...request,
+      maxSearches: 1, authorize: async () => allowed })).rejects.toThrow('llm_authority_changed');
+    expect(provider.create).toHaveBeenCalledTimes(1);
+    expect(provider.create.mock.calls[0][1]).toEqual({ maxRetries: 0 });
+    expect(provider.create.mock.calls[0][0]).not.toHaveProperty('authorize');
+  });
+  it('denies initial completion, stream and Gemini export on failed authority', async () => {
+    const denied = { ...request, authorize: async () => false };
+    const llm = new AnthropicLLM('fixture-key', 'claude-sonnet-5-5');
+    await expect(llm.complete(denied)).rejects.toThrow('llm_authority_changed');
+    await expect(llm.stream(denied).next()).rejects.toThrow('llm_authority_changed');
+    await expect(new GeminiLLM('fixture-key', 'fixture-model').complete(denied)).rejects.toThrow('llm_authority_changed');
+    expect(provider.create).not.toHaveBeenCalled(); expect(provider.stream).not.toHaveBeenCalled();
+    expect(provider.sendMessage).not.toHaveBeenCalled();
+  });
   it('rejects token-truncated output for a side-effecting caller', async () => {
     provider.create.mockResolvedValueOnce({ stop_reason: 'max_tokens', content: [{ type: 'text', text: 'How did your' }] });
     await expect(new AnthropicLLM('fixture-key', 'claude-haiku-5-5').complete({ ...request, requireComplete: true })).rejects.toThrow('completion truncated');
@@ -83,6 +105,18 @@ it('preserves Gemini sampling and output settings', async () => {
   });
   expect(provider.sendMessage).toHaveBeenCalledWith('A helpful teammate');
   expect(provider.create).not.toHaveBeenCalled();
+});
+
+it('serializes current-turn images in the provider wire format without exposing internal fields', async () => {
+  const images = [{ mimeType: 'image/png' as const, data: 'synthetic-image-bytes' }];
+  const multimodal = { ...request, messages: [{ role: 'user' as const, content: 'Describe this.', images }] };
+  await new AnthropicLLM('fixture-key', 'claude-sonnet-5-5').complete(multimodal);
+  expect(provider.create.mock.lastCall?.[0].messages).toEqual([{ role: 'user', content: [
+    { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'synthetic-image-bytes' } }, { type: 'text', text: 'Describe this.' },
+  ] }]);
+  await new GeminiLLM('fixture-key', 'gemini-test').complete(multimodal);
+  expect(provider.sendMessage).toHaveBeenLastCalledWith([{ text: 'Describe this.' }, { inlineData: { mimeType: 'image/png', data: 'synthetic-image-bytes' } }]);
+  expect(multimodal.messages[0].images).toEqual(images);
 });
 
 it('rejects Gemini token-truncated output for a side-effecting caller', async () => {

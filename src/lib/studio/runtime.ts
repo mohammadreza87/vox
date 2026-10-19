@@ -51,6 +51,8 @@ import { SharedMemoryRepository } from '../adaptive/shared/repository';
 import { SharedMemoryService } from '../adaptive/shared/service';
 import { AdaptiveExperienceService } from '../adaptive/runtime/service';
 import { DecisionService, OpenAIDecisionProvider } from '../adaptive/decisions';
+import { VoiceIdentityService } from '../adaptive/voice-identity/service';
+import { VoiceIdentityRepository } from '../adaptive/voice-identity/repository';
 import { canUseAgent } from './permissions';
 import { groupId } from './org-bridge';
 
@@ -135,13 +137,14 @@ async function toJpeg(data: Buffer): Promise<Buffer> {
 
 const g = globalThis as unknown as { __voxStudio?: Promise<Studio> };
 
-type RuntimeStorage = Pick<StudioDeps, 'store' | 'memory' | 'rateLimiter' | 'adaptive' | 'relationshipStore' | 'observations'> & { sharedStorage: AdaptiveStorage };
+type RuntimeStorage = Pick<StudioDeps, 'store' | 'memory' | 'rateLimiter' | 'adaptive' | 'relationshipStore' | 'observations'> & { sharedStorage: AdaptiveStorage; voiceIdentityStorage: AdaptiveStorage };
 function fileStorage(dir: string, scopedRelationshipsEnabled: boolean): RuntimeStorage {
   return { store: new StudioStore(dir), memory: createFileStores(join(dir, 'memory.json')),
     relationshipStore: new FileRelationshipStore(join(dir, 'scoped-relationships-v1.json')), observations: new FileObservationStore(join(dir, 'scoped-relationship-observations-v1.json')),
     adaptive: new AdaptiveService(new AdaptiveRepository(new FileAdaptiveStorage(join(dir, 'adaptive'))),
       { ...adaptiveOptionsFromManifest(process.env.STUDIO_ADAPTIVE_POLICY_JSON), scopedRelationshipsEnabled }),
-    sharedStorage: new FileAdaptiveStorage(join(dir, 'shared-memory')) };
+    sharedStorage: new FileAdaptiveStorage(join(dir, 'shared-memory')),
+    voiceIdentityStorage: new FileAdaptiveStorage(join(dir, 'voice-identity')) };
 }
 
 async function firestoreStorage(bucketName: string, scopedRelationshipsEnabled: boolean): Promise<RuntimeStorage> {
@@ -154,6 +157,7 @@ async function firestoreStorage(bucketName: string, scopedRelationshipsEnabled: 
     adaptive: new AdaptiveService(new AdaptiveRepository(new FirestoreAdaptiveStorage(db)),
       { ...adaptiveOptionsFromManifest(process.env.STUDIO_ADAPTIVE_POLICY_JSON), scopedRelationshipsEnabled }),
     sharedStorage: new FirestoreAdaptiveStorage(db, 'adaptiveSharedMemory'),
+    voiceIdentityStorage: new FirestoreAdaptiveStorage(db, 'adaptiveVoiceIdentity'),
     rateLimiter: new FirestoreStudioRateLimiter(db),
     relationshipStore: new FirestoreRelationshipStore(db, 'vox_scoped_relationships_v1'),
     observations: new FirestoreObservationStore(db, 'vox_scoped_relationship_observations_v1'),
@@ -271,6 +275,12 @@ async function create(): Promise<Studio> {
     ...(env.STUDIO_DECISIONS_ENABLED === '1' && env.OPENAI_API_KEY ? {
       decisions: new DecisionService(new OpenAIDecisionProvider(new OpenAI({ apiKey: env.OPENAI_API_KEY, maxRetries: 0 }))),
     } : {}),
+  });
+  // No matching provider is qualified by this release. Status/delete remain
+  // reachable, while every capture/enrollment operation fails before audio.
+  studio.deps.voiceIdentity = new VoiceIdentityService(storage.adaptive!, new VoiceIdentityRepository(storage.voiceIdentityStorage), { enabled: false });
+  storage.adaptive!.setVoiceIdentityInvalidator(async ({ telegramId, space }) => {
+    await studio.deps.voiceIdentity!.invalidate(telegramId, space);
   });
   return studio;
 }
