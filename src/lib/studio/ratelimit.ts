@@ -1,4 +1,5 @@
 /** Process-local limits for Studio's single persistent server process. */
+import { brandError, namedError } from '../error-contract';
 export type StudioRateScope = 'ingress' | 'api' | 'mutation' | 'expensive' | 'avatar' | 'voice' | 'call';
 
 export interface StudioRatePolicy {
@@ -50,6 +51,14 @@ export class StudioRateLimitError extends Error {
   constructor(readonly retryAfterSeconds: number) {
     super('Too many requests. Please try again shortly.');
     this.name = 'StudioRateLimitError';
+    brandError(this, 'StudioRateLimitError');
+  }
+  static is(error: unknown): error is StudioRateLimitError {
+    try {
+      if (!namedError(error, 'StudioRateLimitError')) return false;
+      const retry: unknown = Object.getOwnPropertyDescriptor(error, 'retryAfterSeconds')?.value;
+      return typeof retry === 'number' && Number.isSafeInteger(retry) && retry >= 1;
+    } catch { return false; }
   }
 }
 

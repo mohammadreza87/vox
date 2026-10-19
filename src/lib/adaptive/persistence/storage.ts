@@ -1,6 +1,6 @@
 /** Separate account documents; never shares the administrator-readable Studio state. */
 import { createHash, randomUUID } from 'crypto';
-import { promises as fs } from 'fs';
+import { promises as fs, existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import type { Firestore } from 'firebase-admin/firestore';
 import { FieldPath } from 'firebase-admin/firestore';
@@ -11,6 +11,8 @@ export interface AdaptiveAccountPageInput { after?: string; limit: number }
 export interface AdaptiveStorage {
   /** Callback must be synchronous and retry safe. A throw commits nothing. */
   transact<T>(accountId: string, mutate: (current: unknown | null) => { document: unknown; result: T }): Promise<T>;
+  /** File-only effect fence; synchronous committed snapshot, no writer in progress. */
+  readCommittedForEffect?(accountId: string): { status: 'ready'; document: unknown | null } | { status: 'busy' };
   /** Server maintenance only. Opaque stable key cursor; never returns document payloads.
    * Concurrent inserts before a cursor are visited on the next full sweep. */
   listAccounts?(input: AdaptiveAccountPageInput): Promise<AdaptiveAccountPage>;
@@ -38,6 +40,12 @@ function encode(document: unknown): string {
  * an operator must inspect/remove it after verifying no writer still owns it. */
 export class FileAdaptiveStorage implements AdaptiveStorage {
   constructor(readonly directory: string) {}
+  readCommittedForEffect(accountId: string): { status: 'ready'; document: unknown | null } | { status: 'busy' } {
+    const file = join(this.directory, `${key(accountId)}.json`);
+    if (existsSync(`${file}.lock`)) return { status: 'busy' };
+    try { return { status: 'ready', document: JSON.parse(readFileSync(file, 'utf8')) }; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { status: 'ready', document: null }; throw error; }
+  }
   async listAccounts(input: AdaptiveAccountPageInput): Promise<AdaptiveAccountPage> {
     pageInput(input);
     // Streaming directory scan bounds retained keys and payload reads to limit+1.

@@ -29,6 +29,7 @@ const production = (): NodeJS.ProcessEnv => ({
   STUDIO_RELATIONSHIP_ROLES: '',
   STUDIO_RELATIONSHIP_WORKER_SECRET: '',
   STUDIO_MAINTENANCE: '',
+  STUDIO_REMINDER_DELIVERY: '',
   STUDIO_IMPROVEMENT_TRUST_JSON: '',
   OPENAI_API_KEY: '',
   K_SERVICE: '',
@@ -113,6 +114,14 @@ describe('Studio production initialization', () => {
       expect(firebase.getAdminDb).not.toHaveBeenCalled();
       expect(existsSync(join(dir, 'studio.json'))).toBe(false);
     });
+  });
+
+  it('rejects enabled reminder delivery without the persistent maintenance worker before provider IO', async () => {
+    const dir = configure({ STUDIO_REMINDER_DELIVERY: '1' });
+    const fetchMock = vi.fn(); vi.stubGlobal('fetch', fetchMock);
+    await expect(getStudio()).rejects.toThrow('STUDIO_REMINDER_DELIVERY=1 requires STUDIO_MAINTENANCE=1');
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(existsSync(join(dir, 'studio.json'))).toBe(false);
   });
 
   it('wires maintenance into a separate durable file namespace only under its explicit switch', async () => {

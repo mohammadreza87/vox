@@ -22,11 +22,12 @@ function fixture(run) {
 test('prepare imports reviewed feature settings, round trips JSON and keeps the private file mode', () => fixture(f => {
   const trust = JSON.stringify({ author: 'synthetic-public-key', note: 'quote " and slash \\n' });
   const manifest = JSON.stringify({ schemaVersion: 1, syntheticOnly: true });
-  writeFileSync(f.source, f.base + `STUDIO_MAINTENANCE='1'\nSTUDIO_IMPROVEMENT_TRUST_JSON='${trust}'\nSTUDIO_ADAPTIVE_POLICY_JSON='${manifest}'\nSTUDIO_SCOPED_RELATIONSHIPS='1'\nSTUDIO_RELATIONSHIP_ROLES='owner,superadmin'\nSTUDIO_RELATIONSHIP_AGENTS='*'\nUNLISTED_SOURCE_VALUE='must-not-import'\n`);
+  writeFileSync(f.source, f.base + `STUDIO_MAINTENANCE='1'\nSTUDIO_REMINDER_DELIVERY='1'\nSTUDIO_IMPROVEMENT_TRUST_JSON='${trust}'\nSTUDIO_ADAPTIVE_POLICY_JSON='${manifest}'\nSTUDIO_SCOPED_RELATIONSHIPS='1'\nSTUDIO_RELATIONSHIP_ROLES='owner,superadmin'\nSTUDIO_RELATIONSHIP_AGENTS='*'\nUNLISTED_SOURCE_VALUE='must-not-import'\n`);
   const result = f.prepare();
   assert.equal(result.status, 0, result.stderr);
   const env = parseEnv(readFileSync(f.destination, 'utf8'));
   assert.equal(env.STUDIO_MAINTENANCE, '1');
+  assert.equal(env.STUDIO_REMINDER_DELIVERY, '1');
   assert.equal(env.STUDIO_IMPROVEMENT_TRUST_JSON, trust);
   assert.equal(env.STUDIO_ADAPTIVE_POLICY_JSON, manifest);
   assert.equal(env.STUDIO_SCOPED_RELATIONSHIPS, '1');
@@ -38,12 +39,13 @@ test('prepare imports reviewed feature settings, round trips JSON and keeps the 
 }));
 
 test('repeated prepare preserves current disabled flags, blank trust, credentials and private extensions', () => fixture(f => {
-  writeFileSync(f.destination, f.base + "STUDIO_MAINTENANCE='0'\nSTUDIO_IMPROVEMENT_TRUST_JSON=''\nOPENAI_API_KEY=''\nSTUDIO_RELATIONSHIPS='off'\nSTUDIO_RELATIONSHIP_ROLES='owner,superadmin'\nPRIVATE_EXTENSION='preserve-this'\n");
-  writeFileSync(f.source, f.base + "STUDIO_MAINTENANCE='1'\nSTUDIO_IMPROVEMENT_TRUST_JSON='new-trust'\nOPENAI_API_KEY='synthetic-key'\nSTUDIO_RELATIONSHIPS='live'\nSTUDIO_RELATIONSHIP_ROLES='owner'\nPRIVATE_EXTENSION='overwrite-attempt'\n");
+  writeFileSync(f.destination, f.base + "STUDIO_MAINTENANCE='0'\nSTUDIO_REMINDER_DELIVERY=''\nSTUDIO_IMPROVEMENT_TRUST_JSON=''\nOPENAI_API_KEY=''\nSTUDIO_RELATIONSHIPS='off'\nSTUDIO_RELATIONSHIP_ROLES='owner,superadmin'\nPRIVATE_EXTENSION='preserve-this'\n");
+  writeFileSync(f.source, f.base + "STUDIO_MAINTENANCE='1'\nSTUDIO_REMINDER_DELIVERY='1'\nSTUDIO_IMPROVEMENT_TRUST_JSON='new-trust'\nOPENAI_API_KEY='synthetic-key'\nSTUDIO_RELATIONSHIPS='live'\nSTUDIO_RELATIONSHIP_ROLES='owner'\nPRIVATE_EXTENSION='overwrite-attempt'\n");
   for (let i = 0; i < 2; i++) {
     const result = f.prepare(); assert.equal(result.status, 0, result.stderr);
     const env = parseEnv(readFileSync(f.destination, 'utf8'));
     assert.equal(env.STUDIO_MAINTENANCE, '0');
+    assert.equal(env.STUDIO_REMINDER_DELIVERY, '');
     assert.equal(env.STUDIO_IMPROVEMENT_TRUST_JSON, '');
     assert.equal(env.OPENAI_API_KEY, '');
     assert.equal(env.STUDIO_RELATIONSHIPS, 'off');

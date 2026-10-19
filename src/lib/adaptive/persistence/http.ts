@@ -56,9 +56,9 @@ export async function handleAdaptiveRequest(studio: Studio, service: AdaptiveSer
     return response({ error: 'not_found' }, 404);
   } catch (error) {
     if (error instanceof z.ZodError) return response({ error: 'invalid_request' }, 400);
-    if (error instanceof AdaptiveError) return response({ error: error.code }, error.status);
+    if (AdaptiveError.is(error)) return response({ error: error.code }, error.status);
     if (StudioError.is(error)) return response({ error: 'invalid_request' }, error.status);
-    if (error instanceof StudioRateLimitError) return response({ error: 'rate_limited' }, 429, { 'Retry-After': String(error.retryAfterSeconds) });
+    if (StudioRateLimitError.is(error)) return response({ error: 'rate_limited' }, 429, { 'Retry-After': String(error.retryAfterSeconds) });
     // Never return datastore errors, payloads, private text or validation internals.
     return response({ error: 'adaptive_unavailable' }, 503);
   }

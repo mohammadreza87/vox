@@ -57,6 +57,7 @@ export function LearningPanel({ space, locale = 'en', showOperations = false }: 
     [t('Playback completed', 'پخش‌های کامل‌شده'), number(p?.playbackCompleted)],
     [t('Playback failures', 'پخش‌های ناموفق'), number(p?.playbackFailed)],
   ];
+  const stageCopy = { stt: t('Listening', 'شنیدن'), retrieval: t('Memory lookup', 'بازیابی حافظه'), decisions: t('Preparation', 'آماده‌سازی'), generation: t('Writing a response', 'نوشتن پاسخ'), tts: t('Preparing speech', 'آماده‌سازی گفتار') };
   const findingCopy = {
     response_failure: t('Some responses were reported as failed by the server.', 'سرور ناموفق بودن برخی پاسخ‌ها را گزارش کرده است.'),
     playback_failure: t('Playback failures were reported by the client.', 'برخی خطاهای پخش از سوی مرورگر گزارش شده‌اند.'),
@@ -79,11 +80,16 @@ export function LearningPanel({ space, locale = 'en', showOperations = false }: 
         <p>{t('Waiting to process', 'در انتظار پردازش')}: {number(data.queue.pending + data.queue.leased)} · {t('Processing failures', 'خطاهای پردازش')}: {number(data.queue.failed)}</p>
         <p>{t('Playback not reported', 'پخش گزارش‌نشده')}: {number(p?.playbackUnknown)} · {t('Interrupted playback', 'پخش قطع‌شده')}: {number(p?.interruptions)}</p>
         <p>{t('Average response time', 'میانگین زمان پاسخ')}: {available && p?.meanResponseMs != null ? `${Math.round(p.meanResponseMs).toLocaleString(fa ? 'fa-IR' : 'en-US')} ${t('ms', 'میلی‌ثانیه')}` : t('Unavailable', 'در دسترس نیست')}</p>
+        <p>{t('Client-reported time to playback', 'زمان پخش گزارش‌شدهٔ مرورگر')}: {number(p?.telemetry?.clientMeanTimeToPlaybackMs)} {t('ms', 'میلی‌ثانیه')}</p>
+        <p>{t('Reported task success / failure', 'موفقیت / شکست گزارش‌شدهٔ کار')}: {number(p?.telemetry?.reportedTaskSucceeded)} / {number(p?.telemetry?.reportedTaskFailed)}</p>
+        <p>{t('Provider input / output tokens observed', 'توکن‌های ورودی / خروجی مشاهده‌شدهٔ ارائه‌دهنده')}: {number(p?.telemetry?.inputTokens)} / {number(p?.telemetry?.outputTokens)}</p>
+        <p>{t('Usage complete', 'کامل بودن مصرف')}: {p?.telemetry?.usageComplete ? t('Yes', 'بله') : t('No; missing usage is unknown', 'خیر؛ مصرف ثبت‌نشده نامشخص است')} · {t('Billed cost unavailable', 'هزینهٔ صورتحساب در دسترس نیست')}</p>
+        {p?.telemetry?.stages.map(stage => <p key={stage.stage}>{stageCopy[stage.stage]}: {number(stage.meanMs)} {t('ms', 'میلی‌ثانیه')} ({number(stage.samples)} {t('samples', 'نمونه')})</p>)}
         <p>{t('Last measurement update', 'آخرین به‌روزرسانی اندازه‌گیری‌ها')}: {available && data.queue.lastProcessedAt != null ? new Date(data.queue.lastProcessedAt).toLocaleString(fa ? 'fa-IR' : 'en-US') : t('Unavailable', 'در دسترس نیست')}</p>
       </div>
       <div className="vx-privacy-note">
         <p className="vx-small">{t('Playback is client reported. Verified task success is unknown.', 'پخش توسط مرورگر گزارش شده است. موفقیت تأییدشدهٔ کار نامشخص است.')}</p>
-        <p className="vx-small vx-2">{t('Coverage is limited to instrumented responses and browser playback. Language, release and provider usage are unavailable.', 'پوشش به پاسخ‌های ثبت‌شده و پخش مرورگر محدود است. زبان، نسخه و مصرف ارائه‌دهنده در دسترس نیستند.')}</p>
+        <p className="vx-small vx-2">{t('Coverage includes instrumented stages and returned provider usage only; partial or missing usage is unknown. Live provider audio and verified task outcomes are unavailable.', 'پوشش شامل مرحله‌های ثبت‌شده و مصرف بازگشتی ارائه‌دهنده است؛ مصرف ناقص یا ثبت‌نشده نامشخص است. صدای ارائه‌دهندهٔ زنده و نتیجهٔ تأییدشدهٔ کار در دسترس نیستند.')}</p>
         {available && data.findings.map(finding => <p className="vx-small" key={finding.rule}>{findingCopy[finding.rule]} <span className="vx-2">({number(finding.count)})</span></p>)}
         {available && !data.findings.length && <p className="vx-small vx-2">{t('No findings in the processed evidence yet.', 'هنوز یافته‌ای در شواهد پردازش‌شده وجود ندارد.')}</p>}
       </div>

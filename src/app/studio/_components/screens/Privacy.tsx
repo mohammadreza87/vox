@@ -76,6 +76,8 @@ export function PrivacyScreen({ onShared, onExperience, onConnections }: { onSha
     {status && <p className="vx-banner info" role="status">{status}</p>}
     {!snapshot && !error && <p role="status"><Spinner /> {c.loading}</p>}
     <div className="vx-card vx-privacy-card"><h2 className="vx-head">{c.ai}</h2><p className="vx-small vx-2">{c.aiBody}</p></div>
+    <p className="vx-small vx-2">{c.operator} · {c.privacyContact}: <a href="mailto:info@joyixir.com" dir="ltr">info@joyixir.com</a></p>
+    <p className="vx-small vx-2">{c.registeredAddress}: <span dir="ltr">Harju maakond, Tallinn, Kesklinna linnaosa, Narva mnt 7-652, 10117, Estonia</span></p>
     {snapshot && <>
       <div className="vx-card vx-privacy-card">
         <h2 className="vx-head">{c.identity}</h2><p className="vx-small vx-2">{c.identityBody}</p>

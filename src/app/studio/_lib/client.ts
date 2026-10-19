@@ -204,6 +204,7 @@ export const api = {
 
 export type LiveCall =
   | { live: false }
-  | { live: true; signedUrl: string; callToken: string; voiceId: string; language?: string; firstMessage: string };
+  | { live: true; signedUrl: string; callToken: string; voiceId: string; language?: string; firstMessage: string;
+      partialPrediction?: import('@/lib/adaptive/prediction/voice-client').VoicePartialCapability };
 
 export const mediaUrl = (file: string) => `/api/studio/media/${encodeURIComponent(file)}`;

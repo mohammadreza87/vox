@@ -86,23 +86,23 @@ export async function handleConversationRequest(studio: Studio, request: Request
     if (request.signal.aborted || await authority() !== before) {
       await observe('cancelled'); return json({ error: 'conversation_changed' }, 409);
     }
-    const reply = await gateway.converse(input.agentId, personId(user.id), input.text, { space: input.space, images,
-      authorize: async () => !request.signal.aborted && await authority() === before });
+    const reply = await observe.run(() => gateway.converse(input.agentId, personId(user.id), input.text, { space: input.space, images,
+      authorize: async () => !request.signal.aborted && await authority() === before }));
     // Gateway also checks memory/source policy around provider export and output.
     if (request.signal.aborted || await authority() !== before) {
       await observe('cancelled'); return json({ error: 'conversation_changed' }, 409);
     }
-    await observe('responded');
+    const correlation = await observe('responded');
     if (request.signal.aborted || await authority() !== before) {
       await observe('cancelled'); return json({ error: 'conversation_changed' }, 409);
     }
-    return json({ reply });
+    return json({ reply, ...(correlation ? { turnId: correlation } : {}) });
   } catch (error) {
-    await observe?.(request.signal.aborted || error instanceof LLMAuthorizationError ? 'cancelled' : 'failed');
-    if (error instanceof LLMAuthorizationError) return json({ error: 'conversation_changed' }, 409);
+    await observe?.(request.signal.aborted || LLMAuthorizationError.is(error) ? 'cancelled' : 'failed');
+    if (LLMAuthorizationError.is(error)) return json({ error: 'conversation_changed' }, 409);
     if (error instanceof z.ZodError) return json({ error: 'invalid_request' }, 400);
-    if (error instanceof AdaptiveError) return json({ error: error.code }, error.status);
-    if (error instanceof StudioRateLimitError) return json({ error: 'rate_limited' }, 429, { 'Retry-After': String(error.retryAfterSeconds) });
+    if (AdaptiveError.is(error)) return json({ error: error.code }, error.status);
+    if (StudioRateLimitError.is(error)) return json({ error: 'rate_limited' }, 429, { 'Retry-After': String(error.retryAfterSeconds) });
     if (StudioError.is(error)) return json({ error: 'invalid_request' }, error.status);
     return json({ error: 'conversation_unavailable' }, 503);
   }

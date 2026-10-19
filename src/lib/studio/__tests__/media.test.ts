@@ -1,3 +1,4 @@
+import { TurnTrace } from '../../adaptive/observation/trace';
 import { describe, expect, it, vi } from 'vitest';
 import { avatarPrompt, ElevenLabsSpeechError, ElevenLabsStudio, OpenAIMedia, StudioVoiceService } from '../media';
 import { personaSpec } from './helpers';
@@ -181,4 +182,19 @@ describe('ElevenLabs speech-to-text and live-call agents', () => {
     expect(fetchFn.mock.calls[2][0]).toBe('https://api.elevenlabs.io/v1/convai/conversation/get-signed-url?agent_id=a1');
     await expect(xi.updateAgent('a1', { name: 'n', llmUrl: 'u', llmSecretId: 's', maxCallSeconds: 1 })).rejects.toBeInstanceOf(ElevenLabsSpeechError);
   });
+});
+
+
+it('records returned STT/Decisions tokens and leaves audio-provider usage unavailable without estimating cost', async () => {
+  const trace = new TurnTrace(true);
+  const openai = new OpenAIMedia('test', fakeFetch({ json: { text: 'PRIVATE_TRANSCRIPT_CANARY', usage: { type: 'tokens', input_tokens: 9, output_tokens: 3 } } },
+    { json: { answers: [{ name: 'route', type: 'predicate', probability: 0.8 }], usage: { input_tokens: 7 } } }));
+  await trace.run(() => openai.transcribe(new ArrayBuffer(4)));
+  await trace.run(() => openai.decide('PRIVATE_DRAFT_CANARY', [{ type: 'predicate', name: 'route', instructions: 'synthetic' }]));
+  const eleven = new ElevenLabsStudio('test', fakeFetch({ body: new Uint8Array([1, 2]).buffer }));
+  await trace.run(() => eleven.speak('PRIVATE_SPEECH_CANARY', 'synthetic-voice'));
+  expect(trace.snapshot()?.stages.map(stage => stage.stage)).toEqual(['stt', 'decisions', 'tts']);
+  expect(trace.snapshot()?.usage).toMatchObject([{ provider: 'openai', inputTokens: 9, outputTokens: 3 }, { provider: 'openai', inputTokens: 7, outputTokens: null },
+    { provider: 'elevenlabs', inputTokens: null, outputTokens: null, status: 'unavailable' }]);
+  for (const canary of ['PRIVATE_TRANSCRIPT_CANARY', 'PRIVATE_DRAFT_CANARY', 'PRIVATE_SPEECH_CANARY']) expect(JSON.stringify(trace.snapshot())).not.toContain(canary);
 });
