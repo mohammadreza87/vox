@@ -127,6 +127,8 @@ jobs:
         with:
           name: build-output
           path: .next/
+          # upload-artifact v4.4+ skips hidden paths by default, and .next is one.
+          include-hidden-files: true
           retention-days: 7
           if-no-files-found: warn
 
