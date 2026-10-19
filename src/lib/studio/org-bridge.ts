@@ -12,7 +12,7 @@ export const personId = (telegramId: number) => `tg-${telegramId}`;
 export const groupId = (chatId: number) => `chat-${Math.abs(chatId)}`;
 
 const ROLE_LABEL: Record<Member['role'], string> = {
-  superadmin: 'Super Admin', admin: 'Admin', member: 'Member', pending: 'Pending',
+  owner: 'Owner', superadmin: 'Super Admin', admin: 'Admin', member: 'Member', pending: 'Pending',
 };
 
 export function agentToPersona(agent: Agent, ownerId: string): Persona {
@@ -43,7 +43,7 @@ export function studioToOrgConfig(state: StudioState, orgName = 'HOOR'): OrgConf
     projectIds: [],
   }));
   const known = new Set(people.map((p) => p.id));
-  const fallbackOwner = approved.find((m) => m.role === 'superadmin');
+  const fallbackOwner = approved.find((m) => m.role === 'owner') ?? approved.find((m) => m.role === 'superadmin');
 
   const personas: Persona[] = state.agents
     .filter((a) => a.status === 'active' && a.bot)

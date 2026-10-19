@@ -41,15 +41,15 @@ beforeEach(async () => {
 
 // ============================================================================
 describe('members and roles', () => {
-  it('bootstraps superadmins from superadminIds; everyone else starts pending', async () => {
-    expect(org.superadmin.role).toBe('superadmin');
+  it('bootstraps founding owners from superadminIds; everyone else starts pending', async () => {
+    expect(org.superadmin.role).toBe('owner');
     const newcomer = await h.studio.ensureMember({ id: 4242, first_name: 'New', last_name: 'Person', username: 'np' });
     expect(newcomer).toMatchObject({ role: 'pending', name: 'New Person', username: 'np' });
   });
 
-  it('keeps a bootstrap id superadmin even if their stored role was changed', async () => {
+  it('keeps a bootstrap id owner even if their stored role was changed', async () => {
     await h.store.update((s) => { s.members.find((m) => m.telegramId === ID.superadmin)!.role = 'member'; });
-    expect((await h.studio.ensureMember({ id: ID.superadmin, first_name: 'Reza' })).role).toBe('superadmin');
+    expect((await h.studio.ensureMember({ id: ID.superadmin, first_name: 'Reza' })).role).toBe('owner');
   });
 
   it('admins approve pending people and record who approved them', async () => {
@@ -69,18 +69,29 @@ describe('members and roles', () => {
     await expectStudioError(h.studio.setRole(org.superadmin, ID.superadmin, 'admin'), 403, /own role/);
   });
 
-  it('never removes the last superadmin', async () => {
-    await h.studio.setRole(org.superadmin, ID.admin, 'superadmin');
-    const second = await h.studio.ensureMember({ id: ID.admin, first_name: 'Parastoo' });
-    expect((await h.studio.setRole(second, ID.superadmin, 'admin')).role).toBe('admin');
-    const demoted = { ...org.superadmin, role: 'admin' as const };
-    await expectStudioError(h.studio.setRole(demoted, ID.admin, 'admin'), 403);
-    // A forged actor that claims superadmin still cannot remove the only remaining one.
-    await expectStudioError(h.studio.setRole(fakeMember(1, 'superadmin'), ID.admin, 'member'), 403, /at least one superadmin/);
+  it('owners make owners, superadmins and admins; superadmins never touch owners', async () => {
+    expect((await h.studio.setRole(org.superadmin, ID.admin, 'superadmin')).role).toBe('superadmin');
+    const superadmin = await h.studio.ensureMember({ id: ID.admin, first_name: 'Parastoo' });
+    expect((await h.studio.setRole(superadmin, ID.alice, 'superadmin')).role).toBe('superadmin');
+    expect((await h.studio.setRole(superadmin, ID.alice, 'admin')).role).toBe('admin');
+    await expectStudioError(h.studio.setRole(superadmin, ID.bob, 'owner'), 403, /Only an owner/);
+    await expectStudioError(h.studio.setRole(superadmin, ID.superadmin, 'admin'), 403, /Only an owner/);
+    expect((await h.studio.setRole(org.superadmin, ID.bob, 'owner')).role).toBe('owner');
+    const bob = await h.studio.ensureMember({ id: ID.bob, first_name: 'Bob' });
+    expect((await h.studio.setRole(bob, ID.admin, 'member')).role).toBe('member');
+  });
+
+  it('never removes the last owner or the last superadmin-level person', async () => {
+    // A forged actor that claims owner still cannot remove the only owner.
+    await expectStudioError(h.studio.setRole(fakeMember(1, 'owner'), ID.superadmin, 'superadmin'), 403, /at least one owner/);
+    await expectStudioError(h.studio.setRole(fakeMember(1, 'owner'), ID.superadmin, 'member'), 403, /at least one owner/);
+    // With a second owner, the first can step down to superadmin.
+    await h.studio.setRole(org.superadmin, ID.admin, 'owner');
+    expect((await h.studio.setRole(fakeMember(1, 'owner'), ID.superadmin, 'superadmin')).role).toBe('superadmin');
   });
 
   it('rejects unknown roles and unknown people', async () => {
-    await expectStudioError(h.studio.setRole(org.superadmin, ID.alice, 'owner' as never), 400, /Unknown role/);
+    await expectStudioError(h.studio.setRole(org.superadmin, ID.alice, 'god' as never), 400, /Unknown role/);
     await expectStudioError(h.studio.setRole(org.superadmin, ID.alice, undefined as never), 400);
     await expectStudioError(h.studio.setRole(org.superadmin, 31337, 'member'), 404);
     expect((await h.store.read()).members.find((m) => m.telegramId === ID.alice)?.role).toBe('member');
@@ -90,7 +101,7 @@ describe('members and roles', () => {
     const forMember = await h.studio.listMembers(org.alice);
     expect(forMember.people.some((m) => m.role === 'pending')).toBe(false);
     const forAdmin = await h.studio.listMembers(org.admin);
-    expect(forAdmin.people.map((m) => m.role)).toEqual(['superadmin', 'admin', 'member', 'member', 'pending']);
+    expect(forAdmin.people.map((m) => m.role)).toEqual(['owner', 'admin', 'member', 'member', 'pending']);
     await expectStudioError(h.studio.listMembers(org.pending), 403);
   });
 

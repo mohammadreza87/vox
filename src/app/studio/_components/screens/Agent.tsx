@@ -60,7 +60,7 @@ export function AgentScreen({ id }: { id: string }) {
   if (!agent) return <><TopBar onBack={nav.back} backLabel="Agents" /><LoadingFill /></>;
 
   const pal = PALETTE[agent.look.hue];
-  const isSuper = nav.me.member.role === 'superadmin';
+  const isSuper = nav.me.member.role === 'superadmin' || nav.me.member.role === 'owner';
   const active = agent.status === 'active';
   const fired = agent.status === 'fired';
   const p = agent.persona;

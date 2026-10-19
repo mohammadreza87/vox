@@ -5,7 +5,7 @@
  *   STUDIO_SECRET            ≥32 chars; encrypts agent bot tokens at rest
  *   VOXX_BOT_TOKEN           the manager bot (@VoxxBot), with bot management
  *                            enabled in @BotFather's Mini App
- *   STUDIO_SUPERADMIN_IDS    comma-separated Telegram user ids (bootstrap)
+ *   STUDIO_SUPERADMIN_IDS    comma-separated Telegram user ids of the founding owners
  *   ANTHROPIC_API_KEY        Claude: persona design and every reply
  * Optional:
  *   OPENAI_API_KEY           avatars (gpt-image) and speech-to-text

@@ -30,7 +30,7 @@ Telegram ── @VoxxBot (Mini App: /studio) ──┐
 | **Memories** | See what an agent remembers that you're allowed to see. You can delete anything you said. |
 | **Org** | Superadmins grant or remove admin rights for people and agents. Admins approve new people. Everyone approved can use every shared agent. |
 
-Roles: `superadmin > admin > member > pending`. New people who press /start in @VoxxBot are `pending` until an admin approves them. The first superadmins come from `STUDIO_SUPERADMIN_IDS`.
+Roles: `owner > superadmin > admin > member > pending`. New people who press /start in @VoxxBot are `pending` until an admin approves them. The Telegram IDs in `STUDIO_SUPERADMIN_IDS` are the founding **owners**: they always stay owners and can make other owners, superadmins and admins. Superadmins can grant up to superadmin but never make or change owners. The last owner can't be removed.
 
 ## Production (Firebase)
 
@@ -46,7 +46,7 @@ One-time setup, all in GitHub → repo **Settings → Secrets and variables → 
 | Secret | `OPENAI_API_KEY` | avatars + speech-to-text |
 | Secret | `ELEVENLABS_API_KEY` | voices |
 | Variable | `VOXX_BOT_USERNAME` | `VoxxBot` |
-| Variable | `STUDIO_SUPERADMIN_IDS` | your Telegram user id |
+| Variable | `STUDIO_SUPERADMIN_IDS` | your Telegram user id (founding owner) |
 | Variable | `STUDIO_PUBLIC_URL` | the production URL, e.g. `https://vox-aicontact-fe0e3.web.app` |
 | Variable (optional) | `STUDIO_MEDIA_BUCKET` | defaults to the Firebase storage bucket |
 

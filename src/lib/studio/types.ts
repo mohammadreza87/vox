@@ -8,7 +8,7 @@
  * fire & re-hire.
  */
 
-export type Role = 'superadmin' | 'admin' | 'member' | 'pending';
+export type Role = 'owner' | 'superadmin' | 'admin' | 'member' | 'pending';
 
 export interface Member {
   telegramId: number;

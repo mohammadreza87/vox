@@ -46,7 +46,7 @@ export class StudioError extends Error {
 const forbidden = (msg = "You don't have permission to do that.") => new StudioError(403, msg);
 const notFound = (msg = 'Not found') => new StudioError(404, msg);
 const bad = (msg: string) => new StudioError(400, msg);
-const ROLES: Role[] = ['superadmin', 'admin', 'member', 'pending'];
+const ROLES: Role[] = ['owner', 'superadmin', 'admin', 'member', 'pending'];
 const lockedMessage = (agent: Agent) => `${agent.persona.name}'s personality is locked. To change it, fire and hire a successor.`;
 
 export interface StudioDeps {
@@ -118,12 +118,13 @@ export class Studio {
       let member = s.members.find((m) => m.telegramId === user.id);
       const bootstrap = this.deps.superadminIds.includes(user.id);
       if (!member) {
-        member = { telegramId: user.id, name, username: user.username, role: bootstrap ? 'superadmin' : 'pending', joinedAt: this.now().toISOString() };
+        // Bootstrap ids are the founding owners.
+        member = { telegramId: user.id, name, username: user.username, role: bootstrap ? 'owner' : 'pending', joinedAt: this.now().toISOString() };
         s.members.push(member);
       } else {
         member.name = name;
         member.username = user.username;
-        if (bootstrap && member.role !== 'superadmin') member.role = 'superadmin';
+        if (bootstrap && member.role !== 'owner') member.role = 'owner';
       }
       return { ...member };
     });
@@ -134,7 +135,7 @@ export class Studio {
     const s = await this.deps.store.read();
     const people = s.members
       .filter((m) => m.role !== 'pending' || atLeast(actor, 'admin'))
-      .sort((a, b) => ['superadmin', 'admin', 'member', 'pending'].indexOf(a.role) - ['superadmin', 'admin', 'member', 'pending'].indexOf(b.role));
+      .sort((a, b) => ROLES.indexOf(a.role) - ROLES.indexOf(b.role));
     const agentAdmins = s.agents.filter((a) => a.isAdmin && a.status === 'active').map((a) => this.view(a, actor, s.members));
     return { people, agentAdmins };
   }
