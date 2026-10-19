@@ -100,6 +100,8 @@ for (const kind of ['indexed', 'file'] as const) {
     const f = await serviceFixture();
     for (const make of [() => Promise.reject(new Error('synthetic-invalid-wrapper')),
       () => ({ value: Promise.reject(new Error('synthetic-invalid-value')) }),
+      () => ({ value: [Promise.reject(new Error('synthetic-invalid-first')), Promise.reject(new Error('synthetic-invalid-sibling'))] }),
+      () => ({ value: true, unknown: Promise.reject(new Error('synthetic-invalid-extra')) }),
       () => ({ value: { nested: Promise.reject(new Error('synthetic-invalid-nested-value')) } })]) {
       const result = f.adaptive.readRuntimeControlsForEffect(123, 'work', () => make() as unknown as RuntimeControlEvaluation<boolean>);
       expect(result.status).toBe('busy');

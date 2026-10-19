@@ -32,38 +32,40 @@ function freezeControls<T>(value: T): T {
  * inside its result wrapper. Inspect data descriptors, never execute getters or
  * arbitrary thenables. Observe genuine rejected promises before failing closed. */
 export function validateRuntimeControlEvaluation<T>(raw: unknown): RuntimeControlEvaluation<T> {
-  const invalid = () => { throw new Error('Invalid synchronous authority evaluation'); };
-  const inspectPromise = (value: unknown) => {
+  let invalid = false, nodes = 0;
+  const seen = new Set<object>();
+  // Complete the bounded data walk before rejecting: throwing at the first bad
+  // value would leave a sibling rejected Promise unobserved. Unknown wrapper
+  // fields are inspected too, but are never accepted as evaluation controls.
+  const checkValue = (value: unknown, depth = 0): void => {
     if (utilTypes.isPromise(value)) {
       void Promise.prototype.then.call(value, undefined, () => undefined);
-      invalid();
+      invalid = true; return;
     }
-  };
-  inspectPromise(raw);
-  if (!raw || typeof raw !== 'object' || ![Object.prototype, null].includes(Object.getPrototypeOf(raw))) return invalid();
-  const fields = Object.getOwnPropertyDescriptors(raw);
-  if (Reflect.ownKeys(raw).some(key => typeof key !== 'string' || !['value', 'deadline', 'denied'].includes(key)) ||
-      !Object.hasOwn(fields, 'value') || Object.values(fields).some(d => !('value' in d))) return invalid();
-  const deadline = fields.deadline?.value, denied = fields.denied?.value;
-  if ((deadline !== undefined && (!Number.isSafeInteger(deadline) || deadline < 0)) ||
-      (denied !== undefined && typeof denied !== 'boolean')) return invalid();
-  const seen = new Set<object>(); let nodes = 0;
-  const checkValue = (value: unknown, depth = 0): void => {
-    inspectPromise(value);
-    if (++nodes > 100_000 || depth > 32) return invalid();
+    if (++nodes > 100_000 || depth > 32) { invalid = true; return; }
     if (value === null || value === undefined || typeof value === 'string' || typeof value === 'boolean' ||
         (typeof value === 'number' && Number.isFinite(value))) return;
-    if (typeof value !== 'object' || (!Array.isArray(value) && ![Object.prototype, null].includes(Object.getPrototypeOf(value)))) return invalid();
-    if (seen.has(value)) return invalid();
+    if (typeof value !== 'object') { invalid = true; return; }
+    if (!Array.isArray(value) && ![Object.prototype, null].includes(Object.getPrototypeOf(value))) invalid = true;
+    if (seen.has(value)) { invalid = true; return; }
     seen.add(value);
     for (const key of Reflect.ownKeys(value)) {
       const descriptor = Object.getOwnPropertyDescriptor(value, key)!;
-      if (typeof key !== 'string' || key === 'then' || !('value' in descriptor)) return invalid();
-      checkValue(descriptor.value, depth + 1);
+      if (typeof key !== 'string' || key === 'then' || !('value' in descriptor)) invalid = true;
+      if ('value' in descriptor) checkValue(descriptor.value, depth + 1);
     }
     seen.delete(value);
   };
-  checkValue(fields.value.value);
+  checkValue(raw);
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw) || utilTypes.isPromise(raw) ||
+      ![Object.prototype, null].includes(Object.getPrototypeOf(raw))) throw new Error('Invalid synchronous authority evaluation');
+  const fields = Object.getOwnPropertyDescriptors(raw);
+  if (Reflect.ownKeys(raw).some(key => typeof key !== 'string' || !['value', 'deadline', 'denied'].includes(key)) ||
+      !Object.hasOwn(fields, 'value') || Object.values(fields).some(d => !('value' in d))) invalid = true;
+  const deadline = fields.deadline?.value, denied = fields.denied?.value;
+  if ((deadline !== undefined && (!Number.isSafeInteger(deadline) || deadline < 0)) ||
+      (denied !== undefined && typeof denied !== 'boolean')) invalid = true;
+  if (invalid) throw new Error('Invalid synchronous authority evaluation');
   return { value: fields.value.value as T, ...(deadline === undefined ? {} : { deadline }), ...(denied === undefined ? {} : { denied }) };
 }
 
