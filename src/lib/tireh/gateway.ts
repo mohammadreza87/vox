@@ -94,6 +94,7 @@ export type HandleResult =
 
 const HISTORY_LIMIT = 20;
 const EXTRACTION_WINDOW = 6;
+const GROUP_FORMAT_FOLLOWUP_MS = 2 * 60_000;
 const NO_MEMORY = /(?:do not|don't|don’t)\s+(?:remember|save|store)|forget (?:this|that)|ذخیره نکن|به خاطر نسپار|یادت نماند|فراموش کن/iu;
 
 export class PersonaGateway {
@@ -278,7 +279,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     if (!boundary.audienceValid) return 'ignored';
     const userMessage: ChatMessage = {
       role: 'user', personId: speaker.id, text, at: sourceAt, telegramMessageId: message.message_id,
-      ...(chat.kind === 'group' ? { groupPolicyVersion: 1 as const } : {}),
+      ...(chat.kind === 'group' ? { groupPolicyVersion: 1 as const, groupOtherTarget: targeting.otherTarget } : {}),
     };
     if (!(await this.groupAllowed(persona, chat, speaker.id, addressed ? 'reply' : 'observe'))) return 'ignored';
     userMessage.privacy = this.stamp(boundary, [randomUUID()]);
@@ -298,7 +299,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
       shouldReply = await this.deps.claimGroupReply?.(persona.id, message.chat.id, message.message_id) ?? false;
     }
     if (shouldReply && await this.groupAllowed(persona, chat, speaker.id, addressed ? 'reply' : 'proactive')) {
-      const format = explicitReplyFormat(text);
+      const format = await this.replyFormat(persona, chat, speaker.id, message, text, boundary);
       const voiceWanted = format !== 'text' && (format === 'voice' || isVoice || persona.replyWithVoice === 'always' || settled?.wantsVoice === true);
       const canSpeak = this.canSpeak(persona);
       await bot.sendChatAction(message.chat.id, voiceWanted && canSpeak ? 'record_voice' : 'typing').catch(() => undefined);
@@ -354,6 +355,27 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     const recent = await this.recent(persona.id, chat, limit);
     return chat.kind === 'private' ? recent : recent.filter((m) => m.groupPolicyVersion === 1
       && (messageId === undefined || (m.telegramMessageId !== undefined && m.telegramMessageId <= messageId)));
+  }
+
+  /** A separate @mention can address the speaker's immediately preceding request.
+   * Keep its delivery preference only while that request is recent and unanswered.
+   */
+  private async replyFormat(persona: Persona, chat: ChatContext, speakerId: string, message: TelegramMessage, text: string, boundary: TurnBoundary): Promise<'voice' | 'text' | undefined> {
+    const explicit = explicitReplyFormat(text);
+    if (explicit || chat.kind !== 'group') return explicit;
+    if (!boundary.historyEnabled) return undefined;
+    const label = text.trim().replace(/^[\s,.!?:;،؟…]+|[\s,.!?:;،؟…]+$/g, '').normalize('NFC').toLowerCase();
+    const name = persona.name.trim().normalize('NFC').toLowerCase();
+    const username = persona.telegramUsername?.replace(/^@/, '').toLowerCase();
+    if (label !== name && (!username || label !== `@${username}`)) return undefined;
+
+    const recent = await this.historyAt(persona, chat, boundary, 6);
+    if (!await this.unchanged(persona, chat, speakerId, boundary)) return undefined;
+    const prior = recent.filter((item) => item.groupPolicyVersion === 1 && item.telegramMessageId !== undefined && item.telegramMessageId < message.message_id).at(-1);
+    if (!prior || prior.role !== 'user' || prior.personId !== speakerId || prior.groupOtherTarget !== false) return undefined;
+    const age = this.now().getTime() - prior.at.getTime();
+    if (age < 0 || age > GROUP_FORMAT_FOLLOWUP_MS) return undefined;
+    return explicitReplyFormat(prior.text);
   }
 
   /**

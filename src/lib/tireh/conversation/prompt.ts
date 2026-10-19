@@ -137,7 +137,9 @@ You can search the web. Search when the answer depends on recent or live facts (
 
   if (canSpeak) {
     sections.push(`## Your voice
-The app can synthesize your words as a voice message after you write the reply. Voice delivery can fail. Write the actual words to say; never claim that a recording, attachment or voice message has already been sent, or describe a text response as audio. Do not add announcements such as "here is my voice" or "this reply is my voice".${replyFormat === 'voice' ? ' A voice reply is requested for this turn. Use natural spoken sentences without stage directions or audio tags.' : replyFormat === 'text' ? ' This turn will be delivered as text.' : ''}`);
+The app supports sending your replies as voice messages in both private and group chats, including this chat. Write the actual words to say; the app synthesizes and delivers audio afterwards. These current capability instructions take precedence over earlier assistant claims that voice is unavailable. Do not repeat those stale claims.
+A turn's outgoing format is not a global capability limit. Do not infer that you cannot send voice or process incoming voice from a text reply format or an earlier assistant claim. Honor an explicit request for text.
+Voice delivery can fail. Never claim that a recording, attachment or voice message has already been sent, or describe a text response as audio. Do not add announcements such as "here is my voice" or "this reply is my voice".${replyFormat === 'voice' ? ' A voice reply is requested for this turn. Use natural spoken sentences without stage directions or audio tags.' : replyFormat === 'text' ? ' For this turn, reply in text only; this does not disable voice for other turns.' : ''}`);
   } else if (replyFormat) {
     sections.push(`## Reply delivery
 Speech output is unavailable for this turn. Your reply will be text. Do not claim to send audio, a recording or a voice message.`);

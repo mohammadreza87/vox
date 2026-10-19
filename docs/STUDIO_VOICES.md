@@ -4,6 +4,8 @@
 
 Ask an agent to “send a voice message” or “با ویس جواب بده”. Explicit requests for voice or text take precedence over the routing classifier. Incoming voice messages get voice replies unless the speaker asks for text. If audio generation or delivery fails, the bot labels its response as text; conversation history records that fallback. A failed transcript after successful audio delivery does not resend the voice or report that the audio failed.
 
+Voice replies also work in registered groups that allow voice messages. Mention the agent or reply to it when requesting speech. If someone sends a voice request and then a separate `@bot_username` or full agent name, that mention keeps the same speaker’s immediately preceding, unanswered delivery preference for up to two minutes. It does not copy preferences across people, chats, answered turns or intervening messages. A new explicit text request takes precedence. The agent’s capability instructions distinguish a text turn from an inability to send audio, and override older incorrect claims about voice availability.
+
 ### Models and languages
 
 Telegram voice messages use **Eleven v4** (`eleven_v4`) by default, supporting English, Persian and Vietnamese among its languages. `ELEVENLABS_TTS_MODEL` is an optional server override. The voice picker reads the connected account’s model catalogue and labels Persian support from the provider’s language list.
@@ -34,6 +36,8 @@ OpenAI supports Persian TTS, but an ElevenLabs voice ID cannot be passed to Open
 ## فارسی
 
 برای گرفتن پیام صوتی، از عامل بخواهید «با ویس جواب بده». درخواست صریح صوت یا متن بر تصمیم دسته‌بند اولویت دارد. پیام صوتی ورودی هم با صوت پاسخ داده می‌شود، مگر اینکه گوینده متن بخواهد. اگر ساخت یا ارسال صوت شکست بخورد، عامل روشن می‌گوید که پاسخ فعلاً متنی است و همین وضعیت در سابقهٔ گفتگو ثبت می‌شود. شکست ارسال متنِ همراهِ صوت باعث ارسال دوبارهٔ صوت یا اعلام اشتباه شکست آن نمی‌شود.
+
+پاسخ صوتی در گروه‌های ثبت‌شده‌ای که ارسال ویس را مجاز می‌دانند هم فعال است. هنگام درخواست، عامل را منشن کنید یا به پیامش پاسخ بدهید. اگر همان شخص ابتدا درخواست صوت بدهد و بلافاصله در پیام جداگانه فقط نام کامل عامل یا `@bot_username` را بفرستد، ترجیح صوت یا متنِ درخواست بی‌پاسخ قبلی تا دو دقیقه حفظ می‌شود. این ترجیح بین اشخاص، گفتگوها، نوبت‌های پاسخ‌داده‌شده یا پیام‌های واسطه منتقل نمی‌شود و درخواست صریح جدید برای متن اولویت دارد. متنی بودن یک نوبت به معنی ناتوانی عامل در ارسال صوت نیست و ادعاهای اشتباه قبلی دربارهٔ این قابلیت نباید تکرار شوند.
 
 مدل پیش‌فرض پیام‌های صوتی تلگرام و نمونهٔ صدا **Eleven v4** است که انگلیسی، فارسی و ویتنامی را در کنار زبان‌های دیگر پشتیبانی می‌کند. v4 Turbo، v3 و v3 Conversational نیز در فهرست مدل‌ها با پشتیبانی فارسی مشخص می‌شوند؛ Multilingual v2 و Flash v2.5 فارسی را پشتیبانی نمی‌کنند. مدل زبان‌ها را تعیین می‌کند، ولی صدا روی لهجه و شخصیت اثر دارد؛ پشتیبانی فارسی تضمین لهجهٔ طبیعی تهرانی نیست. تنظیمات تماس زنده در این تغییر عوض نشده و برای فارسی تأیید نشده است. طراحی صدا از مدل جدید `eleven_ttv_v3` استفاده می‌کند.
 

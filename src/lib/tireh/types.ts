@@ -191,6 +191,8 @@ export interface ChatMessage {
   relationshipIntentionId?: string;
   audiencePersonIds?: string[];
   privacyEpoch?: number;
+  /** Addressing result captured with Telegram entity/reply metadata intact. */
+  groupOtherTarget?: boolean;
 }
 
 /** Where a conversation happens and who can read it */
