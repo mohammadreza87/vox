@@ -260,6 +260,13 @@ function PersonaStep({ agent, names, busy, run, onUpdate, onNext }: StepProps & 
   const save = async (patch: Record<string, unknown>) => {
     const r = await run('save', () => api.updatePersona(agent.id, patch));
     if (r) { onUpdate(r.agent); setEditing(null); haptic.success(); }
+    return !!r;
+  };
+
+  const next = async () => {
+    if (busy || (editing !== null && !draft.trim())) return;
+    if (editing !== null && !(await save({ [editing]: draft }))) return;
+    onNext();
   };
 
   return (
@@ -320,7 +327,9 @@ function PersonaStep({ agent, names, busy, run, onUpdate, onNext }: StepProps & 
         )}
       </div>
       <Dock>
-        <button className="vx-btn vx-btn-primary vx-btn-block" onClick={onNext} disabled={!!busy}>Looks good — next</button>
+        <button className="vx-btn vx-btn-primary vx-btn-block" onClick={next} disabled={!!busy || (editing !== null && !draft.trim())}>
+          {busy === 'save' ? <Spinner /> : editing !== null ? 'Save & next' : 'Looks good — next'}
+        </button>
       </Dock>
     </>
   );
@@ -716,40 +725,64 @@ function HireStep({ agent, busy, run, onUpdate }: Omit<StepProps, 'onNext'>) {
   const [link, setLink] = useState<string | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
   const awaiting = agent.status === 'awaiting_bot';
+  const active = agent.status === 'active';
+  const profileReady = agent.profileSync?.status === 'synced';
+  const checking = awaiting || (active && !profileReady);
 
-  // While waiting for the human to confirm the bot in Telegram, poll for it.
+  // Creation and applying the selected profile finish separately in Telegram.
   useEffect(() => {
-    if (!awaiting) return;
+    if (!checking) return;
     let cancelled = false;
+    let inFlight = false;
     const t = setInterval(async () => {
+      if (inFlight) return;
+      inFlight = true;
       try {
         const r = await api.agent(agent.id);
         if (cancelled) return;
         setStatusError(null);
-        if (r.agent.status === 'active') {
-          haptic.success();
-          onUpdate(r.agent);
-        }
+        if (r.agent.status === 'active' && r.agent.profileSync?.status === 'synced') haptic.success();
+        onUpdate(r.agent);
       } catch (e) {
         if (!cancelled) setStatusError(errorMessage(e));
+      } finally {
+        inFlight = false;
       }
     }, 3000);
     return () => { cancelled = true; clearInterval(t); };
-  }, [awaiting, agent.id, onUpdate]);
+  }, [checking, agent.id, onUpdate]);
 
   const publish = async () => {
     const r = await run('publish', () => api.publish(agent.id));
     if (r) { setLink(r.link); onUpdate(r.agent); openTelegram(r.link); }
   };
 
-  if (agent.status === 'active') {
+  const retryProfile = async () => {
+    const r = await run('profile', () => api.syncProfile(agent.id));
+    if (r) { setStatusError(null); onUpdate(r.agent); }
+  };
+
+  if (active) {
     return (
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 18, padding: 24, textAlign: 'center' }}>
         <motion.div initial={{ scale: 0, rotate: -20 }} animate={{ scale: 1, rotate: 0 }} transition={{ type: 'spring', stiffness: 260, damping: 12 }}>
-          <AgentFace look={agent.look} size={160} expr="happy" stage={1} label={agent.persona.name} preferCloud />
+          <AgentFace look={agent.look} size={160} expr={profileReady ? 'happy' : 'listening'} stage={1} label={agent.persona.name} />
         </motion.div>
-        <h1 className="vx-title">{agent.persona.name} is hired</h1>
+        <h1 className="vx-title">{profileReady ? `${agent.persona.name} is hired` : `${agent.persona.name}’s bot is created`}</h1>
         <p className="vx-2" style={{ margin: 0, maxWidth: 300 }}>Live as @{agent.bot?.username}. For the next 7 days their personality can still be tuned; after that it’s locked for good.</p>
+        {!profileReady && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'center', maxWidth: 320 }}>
+            {agent.profileSync?.status === 'error'
+              ? <p role="alert" style={{ margin: 0, color: '#FF6B5E' }}>Bot created. Telegram profile still needs {agent.profileSync.failed.join(', ') || 'an update'}.</p>
+              : <div role="status" style={{ display: 'flex', gap: 8, alignItems: 'center' }}><Spinner size={14} />Finishing Telegram profile…</div>}
+            {agent.profileSync?.status === 'error' && (agent.canManageAccess || agent.canEdit) && (
+              <button className="vx-btn vx-btn-secondary vx-btn-sm" onClick={retryProfile} disabled={!!busy}>
+                {busy === 'profile' ? <Spinner /> : 'Retry Telegram profile'}
+              </button>
+            )}
+            {statusError && <p role="alert" style={{ margin: 0, color: '#FF6B5E' }}>Can’t check the bot’s status: {statusError}</p>}
+          </div>
+        )}
         <div style={{ display: 'flex', gap: 10, width: '100%', maxWidth: 340 }}>
           <button className="vx-btn vx-btn-secondary" style={{ flex: 1 }} onClick={() => agent.bot && openTelegram(`https://t.me/${agent.bot.username}`)}>Message</button>
           <button className="vx-btn vx-btn-primary" style={{ flex: 1 }} onClick={() => nav.reset({ name: 'home' }, { name: 'agent', id: agent.id })}>Open</button>
@@ -765,7 +798,7 @@ function HireStep({ agent, busy, run, onUpdate }: Omit<StepProps, 'onNext'>) {
         <h1 className="vx-title">{awaiting ? 'Confirm in Telegram' : `Hire ${agent.persona.name}`}</h1>
         <p className="vx-2" style={{ margin: 0, maxWidth: 320 }}>
           {awaiting
-            ? `Telegram opened a “Create bot” screen. If the name is blank, enter ${agent.persona.name}. Confirm the username and tap Create — this page updates when it’s done.`
+            ? `Telegram opened a “Create bot” screen. The name is filled in where supported; if it’s blank, enter ${agent.persona.name}. Confirm the username and tap Create. Vox then applies the chosen name and photo — this page updates when they’re ready.`
             : `${agent.persona.name} becomes a real Telegram bot. It starts private (you, people you pick, and admins); you can open it to ${nav.me.org} or make it public later.`}
         </p>
         <div className="vx-group" style={{ width: '100%', textAlign: 'left' }}>
