@@ -6,6 +6,7 @@ import { privacyCopy, purposeCopy, type PrivacyLocale } from '../../_lib/adaptiv
 import { Icon, Spinner } from '../ui';
 import { api, type AgentView } from '../../_lib/client';
 import { VoiceRecognitionPanel } from '../VoiceRecognitionPanel';
+import { ReviewedMemoryPanel } from '../ReviewedMemoryPanel';
 
 export function PrivacyScreen({ onShared, onExperience }: { onShared?: () => void; onExperience?: () => void }) {
   const [locale, setLocale] = useState<PrivacyLocale>('en');
@@ -120,6 +121,7 @@ export function PrivacyScreen({ onShared, onExperience }: { onShared?: () => voi
         {!snapshot.memories.length && <p className="vx-small vx-2">{c.empty}</p>}
         {snapshot.memories.map(m => <article key={m.id} className="vx-privacy-note">
           <p style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{m.text}</p>
+          {m.sourceRefs && <p className="vx-small">{locale === 'fa' ? `خلاصهٔ بررسی‌شده از ${m.sourceRefs.length} یادداشت؛ حذف خلاصه، اصل یادداشت‌ها را نگه می‌دارد.` : `Reviewed summary of ${m.sourceRefs.length} notes; deleting this summary keeps the originals.`}</p>}
           <p className="vx-small vx-2">{c.expires}: {new Date(m.expiresAt).toLocaleDateString(locale === 'fa' ? 'fa-IR' : 'en-GB')}</p>
           {removing === m.id ? <div>
             <h3 className="vx-small">{c.deleteTitle}</h3><p className="vx-small vx-2">{c.deleteBody}</p>
@@ -127,6 +129,7 @@ export function PrivacyScreen({ onShared, onExperience }: { onShared?: () => voi
           </div> : <button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy} onClick={() => setRemoving(m.id)}>{c.remove}</button>}
         </article>)}
       </div>
+      <ReviewedMemoryPanel key={`${space}:${locale}:${snapshot.identity.bindingId ?? 'unconfirmed'}`} snapshot={snapshot} agents={agents} locale={locale} disabled={busy || !snapshot.explicitMemoryAvailable} onSaved={result => { setSnapshot(result); setStatus(c.saved); }} />
       <div className="vx-card vx-privacy-card">
         <h2 className="vx-head">{c.agents}</h2><p className="vx-small vx-2">{c.agentsBody}</p>
         {!agents.length && <p className="vx-small vx-2">{c.noAgents}</p>}

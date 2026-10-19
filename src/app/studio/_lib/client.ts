@@ -76,7 +76,7 @@ export class ApiError extends Error {
   }
 }
 
-export async function request<T>(method: string, path: string, body?: unknown, responseType: 'json' | 'blob' = 'json'): Promise<T> {
+export async function request<T>(method: string, path: string, body?: unknown, responseType: 'json' | 'blob' = 'json', signal?: AbortSignal): Promise<T> {
   const headers: Record<string, string> = {
     'X-Telegram-Init-Data': tg()?.initData ?? '',
     Accept: responseType === 'blob' ? 'audio/*' : 'application/json',
@@ -87,7 +87,7 @@ export async function request<T>(method: string, path: string, body?: unknown, r
     headers['Content-Type'] = 'application/json';
     payload = JSON.stringify(body);
   }
-  const res = await fetch(`/api/studio/${path}`, { method, headers, body: payload });
+  const res = await fetch(`/api/studio/${path}`, { method, headers, body: payload, ...(signal ? { signal } : {}) });
   if (!res.ok) {
     const err: unknown = await res.json().catch(() => null);
     const message = err && typeof err === 'object' && 'error' in err && typeof err.error === 'string'
