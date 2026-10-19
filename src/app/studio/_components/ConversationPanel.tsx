@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { LivePredictionConsumer, predictionHttpTransport } from '@/lib/adaptive/prediction/client';
 import { prepareSharedImage } from '@/lib/adaptive/prediction/image-browser';
 import { TaskOutcome } from './TaskOutcome';
+import { MessageMemoryReview } from './MessageMemoryReview';
 import { tg } from '../_lib/client';
 
 /** Typed fallback and explicit image sharing use the same scoped agent context
@@ -20,6 +21,7 @@ export function ConversationPanel({ agentId, space, locale = 'en', disabled = fa
   const [loadingImage, setLoadingImage] = useState(false);
   const [error, setError] = useState('');
   const [lastTurnId, setLastTurnId] = useState<string>();
+  const [reviewText, setReviewText] = useState<{ text: string; agentId: string; space: 'work' | 'personal' } | null>(null), [memoryStatus, setMemoryStatus] = useState('');
   const [lines, setLines] = useState<Array<{ role: 'you' | 'agent'; text: string }>>([]);
   const consumer = useRef<LivePredictionConsumer | null>(null);
   const request = useRef<AbortController | null>(null);
@@ -35,11 +37,13 @@ export function ConversationPanel({ agentId, space, locale = 'en', disabled = fa
     const current = new LivePredictionConsumer({ ...predictionHttpTransport(() => tg()?.initData ?? ''),
       onPrepared: result => setPrepared(result?.preparedContext === true), debounceMs: 350 });
     consumer.current = current;
-    setDraft(''); setImage(undefined); setLastTurnId(undefined); setLines([]); setPrepare(false); setPrepared(false); setBusy(false); setError('');
+    setDraft(''); setImage(undefined); setReviewText(null); setMemoryStatus(''); setLastTurnId(undefined); setLines([]); setPrepare(false); setPrepared(false); setBusy(false); setError('');
+    // Cleanup invalidates the current request epoch rather than an old captured value.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     return () => { generation.current++; current.cancel(); request.current?.abort(); imageRequest.current?.abort(); consumer.current = null; };
   }, [agentId, space]);
   useEffect(() => {
-    if (disabled) { consumer.current?.cancel(); request.current?.abort(); imageRequest.current?.abort(); setPrepare(false); setPrepared(false); }
+    if (disabled) { setReviewText(null); setMemoryStatus(''); consumer.current?.cancel(); request.current?.abort(); imageRequest.current?.abort(); setPrepare(false); setPrepared(false); }
   }, [disabled]);
   const updatePrediction = (text: string, selected = image) => {
     if (latest.current.prepare && !latest.current.disabled) consumer.current?.update({ text, image: selected,
@@ -87,8 +91,12 @@ export function ConversationPanel({ agentId, space, locale = 'en', disabled = fa
     <h2 className="vx-head">{t('Type or share an image', 'تایپ یا اشتراک تصویر')}</h2>
     <p className="vx-small vx-2">{t('Uses the memories allowed in this space. Images are sent only for this turn; Vox does not save the image.', 'از حافظه‌های مجاز این فضا استفاده می‌کند. تصویر فقط برای همین نوبت ارسال می‌شود؛ وکس تصویر را ذخیره نمی‌کند.')}</p>
     <div role="log" aria-label={t('Conversation', 'گفتگو')} aria-live="polite" style={{ maxHeight: 220, overflowY: 'auto', overflowWrap: 'anywhere' }}>
-      {lines.map((line, i) => <p key={i} className="vx-small"><strong>{line.role === 'you' ? t('You: ', 'شما: ') : t('Agent: ', 'عامل: ')}</strong>{line.text}</p>)}
+      {lines.map((line, i) => <div key={i}><p className="vx-small"><strong>{line.role === 'you' ? t('You: ', 'شما: ') : t('Agent: ', 'عامل: ')}</strong>{line.text}</p>
+        {line.role === 'you' && <button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy || disabled} onClick={() => { setMemoryStatus(''); setReviewText({ text: line.text, agentId, space }); }}>{t('Review this text for memory', 'بررسی این متن برای حافظه')}</button>}</div>)}
     </div>
+    {reviewText !== null && reviewText.agentId === agentId && reviewText.space === space && <MessageMemoryReview key={`${agentId}:${space}`} text={reviewText.text} agentId={agentId} space={space} locale={locale} disabled={disabled}
+      onClose={() => setReviewText(null)} onSaved={count => { setReviewText(null); setMemoryStatus(t(`Saved ${count} private user-reviewed claims. Manage them in Privacy.`, `${count} ادعای خصوصیِ بررسی‌شده ذخیره شد. در حریم خصوصی مدیریت کنید.`)); }} />}
+    {memoryStatus && <p role="status">{memoryStatus}</p>}
     <label className="vx-small">{t('Message', 'پیام')}<textarea className="vx-textarea" value={draft} rows={3} maxLength={4096} disabled={busy || disabled}
       onChange={e => { setDraft(e.target.value); updatePrediction(e.target.value); }} /></label>
     <label className="vx-small">{t('Image (optional)', 'تصویر (اختیاری)')}<input type="file" accept="image/png,image/jpeg,image/webp" disabled={busy || disabled || loadingImage}

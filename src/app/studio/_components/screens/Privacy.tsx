@@ -122,6 +122,7 @@ export function PrivacyScreen({ onShared, onExperience, onConnections }: { onSha
         {!snapshot.memories.length && <p className="vx-small vx-2">{c.empty}</p>}
         {snapshot.memories.map(m => <article key={m.id} className="vx-privacy-note">
           <p style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{m.text}</p>
+          {m.origin && <p className="vx-small">{locale === 'fa' ? 'ادعای بررسی‌شدهٔ شما؛ به‌طور مستقل تأیید نشده است.' : 'User-reviewed claim; not independently verified.'}</p>}
           {m.sourceRefs && <p className="vx-small">{locale === 'fa' ? `خلاصهٔ بررسی‌شده از ${m.sourceRefs.length} یادداشت؛ حذف خلاصه، اصل یادداشت‌ها را نگه می‌دارد.` : `Reviewed summary of ${m.sourceRefs.length} notes; deleting this summary keeps the originals.`}</p>}
           <p className="vx-small vx-2">{c.expires}: {new Date(m.expiresAt).toLocaleDateString(locale === 'fa' ? 'fa-IR' : 'en-GB')}</p>
           {removing === m.id ? <div>

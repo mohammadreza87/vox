@@ -286,7 +286,7 @@ export class AdaptiveService {
           ...(!confirmed ? { reason: 'profile_confirmation_required' } : !eligibility.eligible ? { reason: eligibility.reason } : {}), notice: adaptiveNotice(purpose, locale) };
       }),
       memories: confirmed && includeMemories ? d.memories.filter(m => m.space === space && validMemoryLineage(d, m, now))
-        .filter(m => this.authorized(d, space, m, 'read', now)).map(m => ({ id: m.id, revision: m.revision, text: m.text!, createdAt: m.createdAt, expiresAt: m.expiresAt, ...(m.sourceRefs ? { sourceRefs: m.sourceRefs } : {}) })) : [],
+        .filter(m => this.authorized(d, space, m, 'read', now)).map(m => ({ id: m.id, revision: m.revision, text: m.text!, createdAt: m.createdAt, expiresAt: m.expiresAt, ...(m.origin ? { origin: m.origin } : {}), ...(m.sourceRefs ? { sourceRefs: m.sourceRefs } : {}) })) : [],
       agents: confirmed ? d.agentGrants.filter(g => g.space === space).map(g => ({ agentId: g.agentId, allowed: g.allowed, revision: g.revision })) : [],
       explicitMemoryAvailable: confirmed && memory.eligible,
       ...(memory.eligible && memory.validUntil !== undefined ? { explicitMemoryValidUntil: memory.validUntil } : {}),
@@ -489,19 +489,24 @@ export class AdaptiveService {
       const confirmed = this.confirmed(d, now);
       const allowed = confirmed && permission.state === 'granted' && permission.expiresAt > now && eligibility.eligible;
       const authorized = allowed ? d.memories.filter(m => this.authorized(d, space, m, 'read', now, agentId)) : [];
+      const byId = new Map(authorized.map(memory => [memory.id, memory]));
       const ancestors = (memory: StoredMemory, ids = new Set<string>()): string[] => {
         for (const ref of memory.sourceRefs ?? []) {
           if (ids.has(ref.id)) continue;
           ids.add(ref.id);
-          const source = authorized.find(row => row.id === ref.id);
+          const source = byId.get(ref.id);
           if (source) ancestors(source, ids);
         }
         return [...ids];
       };
       return { revision: digest([d.accountId, d.personId, space, agentId, d.binding, confirmed, permission, allowed, eligibility,
         d.agentGrants.filter(g => g.space === space && g.agentId === agentId),
-        authorized.map(m => [m.id, m.revision, m.expiresAt, m.revocationEpoch, m.sourceRefs])]),
-        memories: authorized.map(m => ({ id: m.id, text: m.text!, ...(m.sourceRefs ? { sourceIds: ancestors(m) } : {}) })) };
+        authorized.map(m => [m.id, m.revision, m.expiresAt, m.revocationEpoch, m.sourceRefs, m.origin])]),
+        memories: authorized.map(m => {
+          const sourceIds = m.sourceRefs ? ancestors(m) : undefined;
+          const claim = m.origin || sourceIds?.some(id => byId.get(id)?.origin);
+          return { id: m.id, text: claim ? `User-reviewed claim (not independently verified): ${m.text!}` : m.text!, ...(sourceIds ? { sourceIds } : {}) };
+        }) };
     });
   }
 }

@@ -31,6 +31,7 @@ const bindingSchema = z.object({ ...base, accountId: id, personId: id, status: z
 }).strict();
 const memorySchema = z.object({ id, revision, space, text: z.string().max(2000).optional(), status: z.enum(['active', 'deleted']),
   createdAt: integer, updatedAt: integer, expiresAt: integer, revocationEpoch: integer,
+  origin: z.literal('user_reviewed_claim').optional(),
   sourceRefs: z.array(z.object({ id, revision }).strict()).min(1).max(8).refine(refs => new Set(refs.map(ref => ref.id)).size === refs.length).optional(),
 }).strict();
 export type StoredMemory = z.infer<typeof memorySchema>;
