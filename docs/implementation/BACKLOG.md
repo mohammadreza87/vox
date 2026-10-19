@@ -1,8 +1,8 @@
 # Vox implementation backlog
 
-Generated from [BACKLOG.json](/Volumes/Workspace/Ludaxis/vox/docs/implementation/BACKLOG.json). All task status comes from that canonical file. Creating a plan does not implement it. Sizes describe complexity, not elapsed days. P0 is foundation; P1 is required before its associated capability is enabled; P2 is a follow-up.
+Generated from [BACKLOG.json](BACKLOG.json). All task status comes from that canonical file. Creating a plan does not implement it. Sizes describe complexity, not elapsed days. P0 is foundation; P1 is required before its associated capability is enabled; P2 is a follow-up.
 
-Every task has an independent reviewer. Capability dependencies apply only when enabling that capability; disabled features must be explicit in a release. Core device/provider qualification remains mandatory. Evidence stays empty until work is verified. Follow [QA_AND_RELEASE.md](/Volumes/Workspace/Ludaxis/vox/docs/implementation/QA_AND_RELEASE.md) for release gates.
+Every task has an independent reviewer. Capability dependencies apply only when enabling that capability; disabled features must be explicit in a release. Core device/provider qualification remains mandatory. Evidence stays empty until work is verified. Follow [QA_AND_RELEASE.md](QA_AND_RELEASE.md) for release gates.
 
 ## P0 — Define and design
 

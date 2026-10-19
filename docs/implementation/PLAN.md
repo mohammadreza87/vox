@@ -8,21 +8,21 @@ Prepared 19 October 2026 for Joyixir OÜ. Product scope: adults in the EU/EEA an
 
 | Read this | Purpose |
 |---|---|
-| [Task backlog](/Volumes/Workspace/Ludaxis/vox/docs/implementation/BACKLOG.md) | Detailed tasks, dependencies, owners, reviewers and acceptance criteria |
-| [Machine-readable backlog](/Volumes/Workspace/Ludaxis/vox/docs/implementation/BACKLOG.json) | Canonical task data for dispatch and progress tracking |
-| [Architecture and Decisions contract](/Volumes/Workspace/Ludaxis/vox/docs/implementation/ARCHITECTURE.md) | Components, data contracts, prediction and notification behavior |
-| [Privacy and consent](/Volumes/Workspace/Ludaxis/vox/docs/implementation/PRIVACY_AND_CONSENT.md) | Jurisdiction requirements, consent lifecycle, draft English/Persian copy and legal launch decisions |
-| [QA and release](/Volumes/Workspace/Ludaxis/vox/docs/implementation/QA_AND_RELEASE.md) | Test matrix, independent evaluation, device proof and release gates |
-| [Product team](/Volumes/Workspace/Ludaxis/vox/docs/implementation/TEAM.md) | Skills, agent definitions, model routing and handoffs |
-| [Package validation](/Volumes/Workspace/Ludaxis/vox/docs/implementation/PACKAGE_VALIDATION.md) | Checks performed on the plan and skills, plus remaining runtime evidence boundaries |
-| [Implementation start and decisions](/Volumes/Workspace/Ludaxis/vox/docs/implementation/STARTER_SLICE.md) | Active work, concrete decisions, metric contract and remaining foundation gaps |
+| [Task backlog](BACKLOG.md) | Detailed tasks, dependencies, owners, reviewers and acceptance criteria |
+| [Machine-readable backlog](BACKLOG.json) | Canonical task data for dispatch and progress tracking |
+| [Architecture and Decisions contract](ARCHITECTURE.md) | Components, data contracts, prediction and notification behavior |
+| [Privacy and consent](PRIVACY_AND_CONSENT.md) | Jurisdiction requirements, consent lifecycle, draft English/Persian copy and legal launch decisions |
+| [QA and release](QA_AND_RELEASE.md) | Test matrix, independent evaluation, device proof and release gates |
+| [Product team](TEAM.md) | Skills, agent definitions, model routing and handoffs |
+| [Package validation](PACKAGE_VALIDATION.md) | Checks performed on the plan and skills, plus remaining runtime evidence boundaries |
+| [Implementation start and decisions](STARTER_SLICE.md) | Active work, concrete decisions, metric contract and remaining foundation gaps |
 | [Production release receipt](RELEASE_2026_10_19.md) | Exact develop/CI/build/deployment evidence and activation limits |
 | [Communication diagnostics](OBSERVATION_DIAGNOSTICS.md) | Next source slice, independent review and remaining observation scope |
 | [Adaptive runtime integration](ADAPTIVE_RUNTIME_RESULT.md) | Reminder delivery, stage and usage diagnostics, partial voice preparation and exact qualification limits |
 | [Observation and lifecycle delivery](OBSERVATION_LEARNING.md) | Durable observer, scoped export, maintenance and local routing workflow; activation limits |
 | [Integrated local delivery](DELIVERY_RESULT.md) | Historical local foundation, evidence and remaining gates |
-| [First foundation result](/Volumes/Workspace/Ludaxis/vox/docs/implementation/FOUNDATION_RESULT.md) | Implemented code, independent acceptance, 480-test evidence and remaining integration |
-| [Prior memory strategy](/Volumes/Workspace/Ludaxis/vox/docs/AGENT_MEMORY_STRATEGY.md) and [research](/Volumes/Workspace/Ludaxis/vox/docs/SELF_DEVELOPMENT_RESEARCH.md) | Research rationale and source findings |
+| [First foundation result](FOUNDATION_RESULT.md) | Implemented code, independent acceptance, 480-test evidence and remaining integration |
+| [Prior memory strategy](../AGENT_MEMORY_STRATEGY.md) and [research](../SELF_DEVELOPMENT_RESEARCH.md) | Research rationale and source findings |
 
 **Agreed product decisions.** Work and Personal are separate spaces. Each contains private memory per person, group memory, and memory shared with an exact set of selected people independently of a chat group. Agent ownership never grants access to everyone's private memory. Prediction can prepare reversible work; permission checks remain deterministic. Voice recognition is optional and must not unlock private data. The user confirmed **Joyixir OÜ** as the registered operator name. The user confirmed **info@joyixir.com** as the privacy contact on 19 October 2026; mailbox operation and legal approval remain unverified. The [registered address is verified from the official Estonian register](OPERATOR_DETAILS.md); the complete notice still needs legal approval.
 

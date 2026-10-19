@@ -20,7 +20,7 @@ The following checks passed against the local files:
 | Local Codex CLI discovery check | `codex-cli 0.163.0` ran `codex debug prompt-input` successfully with empty stderr. All 11 skill names appeared in the generated model-visible prompt. The debug command did not establish runtime custom-agent selection. |
 | Source boundary | No tracked application code, dependency or deployment configuration changed. Package files are local and uncommitted; HEAD alone does not identify their contents. |
 
-The validator is [available here](/Volumes/Workspace/Ludaxis/vox/scripts/validate-vox-plan.py). Python 3.11+ is needed for full TOML parsing; earlier Python versions explicitly report that check unavailable.
+The validator is [available here](../../scripts/validate-vox-plan.py). Python 3.11+ is needed for full TOML parsing; earlier Python versions explicitly report that check unavailable.
 
 ## Independent role checks
 
@@ -42,4 +42,4 @@ Independent integration review identified and corrected notification disclosure 
 - All backlog tasks remain `planned`. Provider performance, voice recognition error rates, notification delivery, privacy controls and improvement-loop isolation remain to be implemented and measured.
 - Joyixir's registered entity/address/privacy contact, jurisdiction review, provider contracts/settings, retention schedule and biometric qualification remain owned launch decisions in the plan.
 
-Start from the [implementation plan](/Volumes/Workspace/Ludaxis/vox/docs/implementation/PLAN.md), use the [team dispatch contract](/Volumes/Workspace/Ludaxis/vox/docs/implementation/TEAM.md), and record implementation evidence against the exact future candidate.
+Start from the [implementation plan](PLAN.md), use the [team dispatch contract](TEAM.md), and record implementation evidence against the exact future candidate.

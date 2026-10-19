@@ -1,6 +1,6 @@
 # Vox implementation contracts
 
-19 October 2026. Proposed contracts supporting [the plan](/Volumes/Workspace/Ludaxis/vox/docs/implementation/PLAN.md). Names and field envelopes below are Vox application contracts, not claims that OpenAI exposes those fields. Final schemas are versioned in code during implementation.
+19 October 2026. Proposed contracts supporting [the plan](PLAN.md). Names and field envelopes below are Vox application contracts, not claims that OpenAI exposes those fields. Final schemas are versioned in code during implementation.
 
 **Extend the active Studio/Tireh path.** Put policy and orchestration behind `src/lib/studio/service.ts`, `src/lib/tireh/gateway.ts` and their injected dependencies. Evolve `src/lib/tireh/llm.ts` to return usage/model/finish metadata and support streaming/cancellation. Instrument `src/app/studio/_components/screens/Call.tsx` for first audio and actual playback. Keep HTTP handlers thin. Existing legacy `/app` telemetry and flags are not proof of Studio coverage.
 
