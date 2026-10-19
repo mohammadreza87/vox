@@ -1,0 +1,9 @@
+# Live voice access correction
+
+This small release follows PR #52. Starting a live call now checks the current stored member and agent block, then checks again before returning a signed provider URL. Streaming checks current Studio access after asynchronous context loading, immediately before each model request and before each emitted chunk. The central private-audience check also respects agent blocks. Authorized deletion can finish, but its spoken confirmation is suppressed if access changes while it runs. Legacy call-end reflection passes the same authority through extraction, memory writes and private sharing offers; adaptive deployments continue to skip that legacy reflection.
+
+These checks protect the live-call path with and without adaptive context. They do not undo a provider request or audio already dispatched before a block, and they do not provide a transaction across independent stores and providers. No provider configuration, optional feature flag, reminder delivery or biometric processing is enabled.
+
+Independent review confirmed the isolated port matches the separately developed runtime authorization logic. The final focused source suite passed 87 tests across four files, including 13 dedicated access regressions. An earlier independent voice/runtime selection passed 28 tests before the four call-end regressions were added; the extended final port is receiving its own independent check. TypeScript and scoped lint passed. Exact CI, artifact and production evidence are recorded at release time; these local tests use synthetic providers.
+
+**فارسی:** شروع تماس و هر بخش تازهٔ پاسخ زنده، دسترسی فعلی و مسدود بودن فرد را بررسی می‌کند. اگر دسترسی هنگام آماده‌سازی یا تولید پاسخ تغییر کند، نشانی جلسه یا بخش تازهٔ پاسخ منتشر نمی‌شود. داده یا صدایی که پیش‌تر ارسال شده قابل بازگرداندن نیست. این اصلاح هیچ قابلیت اختیاری یا تشخیص صدایی را فعال نمی‌کند.
