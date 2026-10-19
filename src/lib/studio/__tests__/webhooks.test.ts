@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { FirestoreStudioStore } from '../firestore-store';
-import { AGENT_UPDATES, isValidWebhookSecret, MANAGER_UPDATES, registerWebhooks, webhookSecret } from '../updates';
+import { AGENT_UPDATES, handleManagerUpdate, isValidWebhookSecret, MANAGER_UPDATES, registerWebhooks, webhookSecret } from '../updates';
 import { hire, makeStudio, SECRET, seedOrg, type Harness } from './helpers';
 
 describe('webhook secrets', () => {
@@ -17,6 +17,39 @@ describe('webhook secrets', () => {
     expect(isValidWebhookSecret(SECRET, 'ag-1', webhookSecret(SECRET, 'manager'))).toBe(false);
     expect(isValidWebhookSecret(SECRET, 'ag-1', null)).toBe(false);
     expect(isValidWebhookSecret(SECRET, 'ag-1', '')).toBe(false);
+  });
+});
+
+describe('manager onboarding', () => {
+  it.each(['/start', 'Hello, can I get access?'])('shows an unapproved person their User ID and how to request access after %s', async (text) => {
+    const h = makeStudio();
+    await handleManagerUpdate(h.studio, {
+      update_id: 1,
+      message: {
+        message_id: 1, date: 0, text, chat: { id: 7070, type: 'private' },
+        from: { id: 7070, is_bot: false, first_name: 'Neda', last_name: 'Karimi', username: 'neda' },
+      },
+    });
+    expect(h.manager.sendMessage).toHaveBeenCalledWith(7070, expect.stringContaining('Share your User ID with an admin to get access.'), {});
+    const reply = h.manager.sendMessage.mock.calls[0][1];
+    expect(reply).toContain('Username: @neda\nFirst name: Neda\nLast name: Karimi\nUser ID: 7070');
+    expect((await h.store.read()).members[0].role).toBe('pending');
+  });
+
+  it('keeps showing approved people their own account details on ordinary private messages', async () => {
+    const h = makeStudio();
+    const { alice } = await seedOrg(h);
+    await handleManagerUpdate(h.studio, {
+      update_id: 1,
+      message: {
+        message_id: 1, date: 0, text: 'Hello', chat: { id: alice.telegramId, type: 'private' },
+        from: { id: alice.telegramId, is_bot: false, first_name: 'Alice' },
+      },
+    });
+    const reply = h.manager.sendMessage.mock.calls[0][1];
+    expect(reply).toContain('Spawn, call and manage');
+    expect(reply).toContain(`User ID: ${alice.telegramId}`);
+    expect((await h.store.read()).members.find(member => member.telegramId === alice.telegramId)?.role).toBe('member');
   });
 });
 

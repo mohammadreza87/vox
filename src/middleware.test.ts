@@ -4,7 +4,7 @@ import { config, middleware } from './middleware';
 
 const request = (path: string) => new NextRequest(`https://studio.example.com${path}`);
 
-beforeEach(() => { vi.stubEnv('NODE_ENV', 'production'); vi.stubEnv('STUDIO_ONLY', '1'); });
+beforeEach(() => { vi.stubEnv('NODE_ENV', 'production'); vi.stubEnv('STUDIO_ONLY', '1'); vi.stubEnv('STUDIO_WEBAPP_URL', ''); });
 afterEach(() => vi.unstubAllEnvs());
 
 describe('Studio production routes', () => {
@@ -12,6 +12,23 @@ describe('Studio production routes', () => {
     const response = middleware(request('/?startapp=welcome'));
     expect(response.status).toBe(307);
     expect(response.headers.get('location')).toBe('https://studio.example.com/studio?startapp=welcome');
+  });
+
+  it('uses the configured public URL behind a localhost tunnel and ignores forwarded hosts', () => {
+    vi.stubEnv('STUDIO_WEBAPP_URL', 'https://vox.joyixir.com/studio');
+    const response = middleware(new NextRequest('http://localhost:3107/?startapp=welcome', {
+      headers: { 'x-forwarded-host': 'attacker.example', 'x-forwarded-proto': 'http' },
+    }));
+    expect(response.status).toBe(307);
+    expect(response.headers.get('location')).toBe('https://vox.joyixir.com/studio?startapp=welcome');
+  });
+
+  it.each(['not-a-url', 'http://vox.joyixir.com/studio', 'javascript:alert(1)',
+    'https://user:password@vox.joyixir.com/studio', 'https://vox.joyixir.com/login',
+    'https://vox.joyixir.com/studio?override=yes', 'https://vox.joyixir.com/studio#override'])
+  ('fails closed for an invalid configured Mini App URL: %s', (url) => {
+    vi.stubEnv('STUDIO_WEBAPP_URL', url);
+    expect(middleware(request('/')).status).toBe(503);
   });
 
   it.each(['/studio', '/studio/', '/studio/agents', '/api/studio/me', '/api/studio/media/avatar.jpg', '/_next/static/chunks/app.js', '/favicon.ico'])

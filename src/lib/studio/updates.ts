@@ -25,7 +25,7 @@ export async function handleManagerUpdate(studio: Studio, update: TelegramUpdate
   const webAppUrl = studio.deps.webAppUrl;
   const open = webAppUrl ? { inline_keyboard: [[{ text: 'Open Vox Studio', web_app: { url: webAppUrl } }]] } : undefined;
   const text = member.role === 'pending'
-    ? `Hi ${member.name}. You're on the list for ${studio.deps.orgName}; an admin will approve you shortly.`
+    ? `Hi ${member.name}. You're on the list for ${studio.deps.orgName}.\n\nShare your User ID with an admin to get access.`
     : `Hi ${member.name}. Spawn, call and manage your ${studio.deps.orgName} agents in Vox Studio.`;
   const who = msg.from;
   const account = [

@@ -1,7 +1,7 @@
 'use client';
 
-import { useState } from 'react';
-import { haptic, telegramUser, type Member } from '../_lib/client';
+import { useEffect, useState } from 'react';
+import { haptic, telegramUser, type Member, type TelegramUserInfo } from '../_lib/client';
 import { Icon } from './ui';
 
 /**
@@ -10,15 +10,16 @@ import { Icon } from './ui';
  * user data, so it works even before the server is configured.
  */
 export function UserInfo({ member }: { member?: Member }) {
-  const tgUser = telegramUser();
+  const [tgUser, setTgUser] = useState<TelegramUserInfo | null>(null);
   const [copied, setCopied] = useState(false);
+  useEffect(() => { setTgUser(telegramUser()); }, []);
   const id = tgUser?.id ?? member?.telegramId;
   const username = tgUser?.username ?? member?.username;
   const first = tgUser?.first_name ?? member?.name;
   const last = tgUser ? tgUser.last_name : undefined;
 
   if (!id) {
-    return <p className="vx-small vx-2" style={{ margin: 0 }}>Open Vox Studio from @VoxxBot in Telegram to see your account.</p>;
+    return <p className="vx-small vx-2" style={{ margin: 0 }}>Open Vox Studio from Telegram to see your User ID, then share it with an admin.</p>;
   }
 
   const copy = async () => {
@@ -51,6 +52,7 @@ export function UserInfo({ member }: { member?: Member }) {
           {copied ? <><Icon name="check" size={16} width={2.5} />Copied</> : 'Copy'}
         </button>
       </div>
+      <p className="vx-small vx-2" style={{ margin: 0, padding: '12px 16px' }}>Share your User ID with an admin.</p>
     </div>
   );
 }
