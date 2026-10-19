@@ -1,7 +1,7 @@
 'use client';
 
-import { useState } from 'react';
-import { haptic, telegramUser, type Member } from '../_lib/client';
+import { useEffect, useState } from 'react';
+import { haptic, telegramUser, type Member, type TelegramUserInfo } from '../_lib/client';
 import { Icon } from './ui';
 
 /**
@@ -10,8 +10,9 @@ import { Icon } from './ui';
  * user data, so it works even before the server is configured.
  */
 export function UserInfo({ member }: { member?: Member }) {
-  const tgUser = telegramUser();
+  const [tgUser, setTgUser] = useState<TelegramUserInfo | null>(null);
   const [copied, setCopied] = useState(false);
+  useEffect(() => { setTgUser(telegramUser()); }, []);
   const id = tgUser?.id ?? member?.telegramId;
   const username = tgUser?.username ?? member?.username;
   const first = tgUser?.first_name ?? member?.name;
