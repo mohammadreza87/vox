@@ -3,25 +3,11 @@
 import { useId } from 'react';
 import type { AgentLook } from '../_lib/client';
 import { mediaUrl } from '../_lib/client';
+import { FAMILIES, PALETTE } from '@/lib/studio/cloud-art';
 
 export type Expression = 'idle' | 'listening' | 'thinking' | 'speaking' | 'happy' | 'sleeping';
 
-export const PALETTE: Record<string, { base: string; light: string; shadow: string; glow: string; name: string }> = {
-  apricot: { base: '#FFB38A', light: '#FFD9C2', shadow: '#E5835A', glow: '#FF9E6B', name: 'Apricot' },
-  rose: { base: '#FF9DB5', light: '#FFD1DD', shadow: '#E06A8A', glow: '#FF7FA3', name: 'Rosé' },
-  butter: { base: '#FFE07A', light: '#FFF1BF', shadow: '#E0B23E', glow: '#FFD84D', name: 'Butter' },
-  matcha: { base: '#A8E07A', light: '#D7F5BF', shadow: '#6FB247', glow: '#9BF06A', name: 'Matcha' },
-  lagoon: { base: '#6FE0D0', light: '#BFF5EE', shadow: '#34AFA0', glow: '#4FF2DC', name: 'Lagoon' },
-  sky: { base: '#8CC8FF', light: '#CFE6FF', shadow: '#5294DC', glow: '#6BB8FF', name: 'Sky' },
-  lilac: { base: '#C3A6FF', light: '#E6DBFF', shadow: '#8D6BDB', glow: '#B08CFF', name: 'Lilac' },
-  ash: { base: '#B9BEC8', light: '#E3E6EB', shadow: '#868C99', glow: '#D5DAE3', name: 'Ash' },
-};
-
-const FAMILIES = {
-  puff: { c: [[100, 112, 52], [62, 118, 34], [138, 118, 34], [78, 82, 30], [122, 80, 34]], b: [100, 140, 70, 26], fx: 0, fy: 0 },
-  tower: { c: [[100, 108, 44], [64, 128, 30], [136, 128, 30], [100, 62, 32], [128, 88, 24]], b: [100, 146, 64, 18], fx: 0, fy: -4 },
-  drift: { c: [[96, 112, 48], [54, 124, 28], [146, 116, 36], [112, 74, 30], [74, 84, 22]], b: [100, 142, 72, 20], fx: -4, fy: 0 },
-} as const;
+export { PALETTE };
 
 interface CloudProps {
   look: Pick<AgentLook, 'hue' | 'family' | 'features'>;

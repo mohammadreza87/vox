@@ -9,7 +9,7 @@
  *          → extract new memories → scope them → offer to share private work facts
  */
 
-import type { LLM } from './llm';
+import type { LLM, WebSource } from './llm';
 import type { OrgDirectory } from './org/directory';
 import type { ChatContext, ChatMessage, MemoryRecord, MemoryScope, Persona } from './types';
 import type { ChatHistoryStore, MemoryStore, ShareOfferStore, UpdateDeduper } from './memory/store';
@@ -148,8 +148,8 @@ export class PersonaGateway {
 
     await bot.sendChatAction(message.chat.id, isVoice ? 'record_voice' : 'typing').catch(() => undefined);
 
-    const reply = await this.generateReply(persona, chat, speaker.id, text);
-    await this.sendReply(persona, chat, message, reply, isVoice);
+    const { text: reply, sources } = await this.composeReply(persona, chat, speaker.id, text);
+    await this.sendReply(persona, chat, message, reply, isVoice, sources);
 
     const assistantMessage: ChatMessage = { role: 'assistant', text: reply, at: this.now() };
     await this.deps.history.append(persona.id, chat.chatKey, assistantMessage);
@@ -222,6 +222,11 @@ export class PersonaGateway {
   }
 
   async generateReply(persona: Persona, chat: ChatContext, speakerId: string, text: string): Promise<string> {
+    return (await this.composeReply(persona, chat, speakerId, text)).text;
+  }
+
+  /** The reply plus the web pages it cites, when the persona searched. */
+  private async composeReply(persona: Persona, chat: ChatContext, speakerId: string, text: string): Promise<{ text: string; sources: WebSource[] }> {
     const { org } = this.deps;
     const all = await this.deps.memories.listActive(persona.id);
     const memories = selectMemories(org, all, chat, { query: text, now: this.now() });
@@ -236,8 +241,14 @@ export class PersonaGateway {
           : m.text,
     }));
 
-    const reply = await this.deps.llm.complete({ system, messages, maxTokens: 700 });
-    return reply || "Sorry, I lost my train of thought. Could you say that again?";
+    const request = { system, messages, maxTokens: 700 };
+    const { llm } = this.deps;
+    // Strangers get fewer searches: each one costs money.
+    const maxSearches = org.getPerson(speakerId)?.guest ? 1 : 3;
+    const { text: reply, sources } = persona.webSearch && llm.completeWithWeb
+      ? await llm.completeWithWeb({ ...request, maxSearches })
+      : { text: await llm.complete(request), sources: [] };
+    return { text: reply || "Sorry, I lost my train of thought. Could you say that again?", sources: reply ? sources : [] };
   }
 
   private async sendReply(
@@ -245,7 +256,8 @@ export class PersonaGateway {
     chat: ChatContext,
     message: TelegramMessage,
     reply: string,
-    inputWasVoice: boolean
+    inputWasVoice: boolean,
+    sources: WebSource[] = []
   ): Promise<void> {
     const bot = this.deps.botFor(persona.id);
     const replyTo = chat.kind === 'group' ? message.message_id : undefined;
@@ -258,13 +270,13 @@ export class PersonaGateway {
         const { audio, mimeType, filename } = await this.deps.voice!.synthesize(reply, persona.voice.elevenLabsVoiceId);
         await bot.sendVoice(message.chat.id, audio, { mimeType, filename, replyTo });
         // The transcript goes as its own message: captions are capped at 1024 chars.
-        await bot.sendMessage(message.chat.id, reply);
+        await bot.sendMessage(message.chat.id, withSources(reply, sources));
         return;
       } catch (error) {
         this.log.error(`[tireh] ${persona.id}: voice reply failed, sending text`, error);
       }
     }
-    await bot.sendMessage(message.chat.id, reply, { replyTo });
+    await bot.sendMessage(message.chat.id, withSources(reply, sources), { replyTo });
   }
 
   // ============================================
@@ -496,4 +508,10 @@ export class PersonaGateway {
       .filter((m) => isVisibleToAudience(this.deps.org, m, [personId]))
       .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
   }
+}
+
+/** Web pages behind a reply, as plain links Telegram makes clickable. */
+export function withSources(reply: string, sources: WebSource[]): string {
+  const links = sources.slice(0, 3).map((s) => s.url);
+  return links.length ? `${reply}\n\nSources:\n${links.join('\n')}` : reply;
 }

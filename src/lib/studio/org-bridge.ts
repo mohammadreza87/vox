@@ -15,7 +15,12 @@ const ROLE_LABEL: Record<Member['role'], string> = {
   owner: 'Owner', superadmin: 'Super Admin', admin: 'Admin', member: 'Member', pending: 'Pending',
 };
 
-export function agentToPersona(agent: Agent, ownerId: string): Persona {
+export interface OrgOptions {
+  /** The chat model can search the web (agents may still turn it off) */
+  webSearch?: boolean;
+}
+
+export function agentToPersona(agent: Agent, ownerId: string, { webSearch = true }: OrgOptions = {}): Persona {
   const runtime = personaToRuntime(agent.persona);
   const p = agent.persona;
   return {
@@ -31,10 +36,11 @@ export function agentToPersona(agent: Agent, ownerId: string): Persona {
     telegramUsername: agent.bot?.username,
     identityVersion: agent.identityVersion,
     replyWithVoice: agent.voice ? 'mirror' : 'never',
+    webSearch: webSearch && agent.liveWeb !== false,
   };
 }
 
-export function studioToOrgConfig(state: StudioState, orgName = 'HOOR'): OrgConfig {
+export function studioToOrgConfig(state: StudioState, orgName = 'HOOR', options: OrgOptions = {}): OrgConfig {
   const approved = state.members.filter((m) => m.role !== 'pending');
   const people: Person[] = approved.map((m) => ({
     id: personId(m.telegramId),
@@ -63,7 +69,7 @@ export function studioToOrgConfig(state: StudioState, orgName = 'HOOR'): OrgConf
     .filter((a) => a.status === 'active' && a.bot)
     .map((a) => {
       const owner = members.has(personId(a.createdBy)) ? personId(a.createdBy) : fallbackOwner ? personId(fallbackOwner.telegramId) : '';
-      return agentToPersona(a, owner);
+      return agentToPersona(a, owner, options);
     });
 
   const groups: Group[] = state.groups.map((g: StudioGroup) => ({
@@ -87,6 +93,6 @@ export function studioToOrgConfig(state: StudioState, orgName = 'HOOR'): OrgConf
   };
 }
 
-export function studioToOrg(state: StudioState, orgName?: string): OrgDirectory {
-  return new OrgDirectory(studioToOrgConfig(state, orgName));
+export function studioToOrg(state: StudioState, orgName?: string, options?: OrgOptions): OrgDirectory {
+  return new OrgDirectory(studioToOrgConfig(state, orgName, options));
 }

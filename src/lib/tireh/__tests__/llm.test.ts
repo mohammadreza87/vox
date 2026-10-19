@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AnthropicLLM, GeminiLLM } from '../llm';
+import { withSources } from '../gateway';
 
 const provider = vi.hoisted(() => ({
   create: vi.fn(),
@@ -76,4 +77,52 @@ it('preserves Gemini sampling and output settings', async () => {
   });
   expect(provider.sendMessage).toHaveBeenCalledWith('A helpful teammate');
   expect(provider.create).not.toHaveBeenCalled();
+});
+
+describe('live web search', () => {
+  const cite = (url: string) => ({ type: 'web_search_result_location', url, title: url, cited_text: '', encrypted_index: '' });
+  const searched = {
+    stop_reason: 'end_turn',
+    content: [
+      { type: 'text', text: 'Let me check.' },
+      { type: 'server_tool_use', id: 's1', name: 'web_search', input: { query: 'Tehran weather' } },
+      { type: 'web_search_tool_result', tool_use_id: 's1', content: [] },
+      { type: 'text', text: 'It is 18°C and sunny ', citations: [cite('https://weather.example/teh'), cite('https://weather.example/teh')] },
+      { type: 'text', text: 'right now.', citations: [cite('https://news.example/a')] },
+    ],
+  };
+
+  it('offers the search tool, keeps only the answer after the results and collects unique sources', async () => {
+    provider.create.mockResolvedValueOnce(searched);
+    const reply = await new AnthropicLLM('fixture-key', 'claude-haiku-5-5').completeWithWeb({ ...request, maxSearches: 3 });
+    expect(provider.create.mock.lastCall?.[0].tools).toEqual([{ type: 'web_search_20250305', name: 'web_search', max_uses: 3 }]);
+    expect(reply).toEqual({
+      text: 'It is 18°C and sunny right now.',
+      sources: [{ url: 'https://weather.example/teh', title: 'https://weather.example/teh' }, { url: 'https://news.example/a', title: 'https://news.example/a' }],
+    });
+    expect(withSources(reply.text, reply.sources)).toBe('It is 18°C and sunny right now.\n\nSources:\nhttps://weather.example/teh\nhttps://news.example/a');
+  });
+
+  it('continues a paused search turn with the partial answer', async () => {
+    const paused = { stop_reason: 'pause_turn', content: [{ type: 'server_tool_use', id: 's1', name: 'web_search', input: {} }] };
+    provider.create.mockResolvedValueOnce(paused).mockResolvedValueOnce(searched);
+    const { text } = await new AnthropicLLM('fixture-key', 'claude-haiku-5-5').completeWithWeb({ ...request, maxSearches: 1 });
+    expect(text).toBe('It is 18°C and sunny right now.');
+    const second = provider.create.mock.calls[1][0];
+    expect(second.messages.at(-1)).toEqual({ role: 'assistant', content: paused.content });
+  });
+
+  it('answers without the web, and stops offering it, when the model refuses the tool', async () => {
+    const llm = new AnthropicLLM('fixture-key', 'claude-haiku-5-5');
+    provider.create.mockRejectedValueOnce(Object.assign(new Error('web_search is not supported on this model'), { status: 400 }));
+    expect(await llm.completeWithWeb({ ...request, maxSearches: 3 })).toEqual({ text: 'fixture answer', sources: [] });
+    await llm.completeWithWeb({ ...request, maxSearches: 3 });
+    expect(provider.create).toHaveBeenCalledTimes(3);
+    expect(provider.create.mock.lastCall?.[0]).not.toHaveProperty('tools');
+  });
+
+  it('does not swallow other failures', async () => {
+    provider.create.mockRejectedValueOnce(Object.assign(new Error('overloaded'), { status: 529 }));
+    await expect(new AnthropicLLM('fixture-key', 'claude-haiku-5-5').completeWithWeb({ ...request, maxSearches: 3 })).rejects.toThrow('overloaded');
+  });
 });
