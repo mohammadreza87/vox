@@ -67,3 +67,13 @@ Author follow-up qualification: **104 tests/12files**, TypeScript, scoped ESLint
 خطای جداگانهٔ ۵۰۳ از نمونه‌برداری زمان پیش از انتظار قفل بود. زمان اکنون پس از خواندن فایل قفل‌شده گرفته می‌شود و همان زمان تازه برای اعتبارسنجی و بررسی پایان مهلت استفاده می‌شود. دادهٔ واقعاً آینده یا خراب همچنان رد می‌شود؛ ساختار داده و اختیار ذخیره‌شده تغییر نکرده‌اند. آزمون‌های متمرکز مسیر واقعی احراز هویت و فایل، تکرار محدود و لغو را پوشش می‌دهند. پنج آزمون مرورگر رابطه با پاسخ‌های API مصنوعی روی ساخت قبلی موفق شدند؛ ساخت تازه، فراخوانی ارائه‌دهنده و انتشار انجام نشده است.
 
 در این اصلاح، ۱۰۴ آزمون در ۱۲ فایل، بررسی TypeScript، lint متمرکز و بررسی تفاوت‌ها موفق شدند؛ پذیرش مستقل هنوز لازم است.
+
+### Queued deliberate commands
+
+Compiled candidate `943e4e6` passed 3,044 tests (13 skipped) and built successfully, but its learning browser attempt exposed another concurrency failure: opening the consent notice could return `503 preference_learning_unavailable` while an unrelated account projection held the FILE lock. The command's synchronous pre-lock authority read treated that temporary writer as an unavailable store.
+
+Deliberate learning commands now acquire the normal account transaction before reading canonical authority. Studio authority is pinned before queueing and compared again under the lock and immediately before commit. Existing expected-revision, receipt, candidate, expiry and cancellation checks remain; no mutation retry or provider call is added. Five deterministic FILE-lock regressions cover successful serialization, queued cancellation, Studio block/restore, canonical expiry and stale CAS. Those regressions and the existing race/authority/HTTP suites passed **32 tests in four files**. Independent review and rebuilt compiled acceptance remain pending for this fix. Both earlier browser failures are retained; the first was an exact-text selector mismatch and the second was this real 503.
+
+### فارسی: تغییرهای صریح در صف
+
+نسخهٔ `943e4e6` در ۳۰۴۴ آزمون موفق شد و ساخت آن کامل شد؛ ۱۳ آزمون اجرا نشد. آزمون مرورگر نشان داد بازکردن متن رضایت هنگام قفل بودن فایل توسط یک خواندن دیگر ممکن است خطای ۵۰۳ بدهد. اکنون تغییر صریح ابتدا وارد تراکنش عادی حساب می‌شود و سپس اختیار همان حساب را می‌خواند. اختیار استودیو پیش از انتظار ثبت و درون قفل و پیش از ثبت نهایی دوباره مقایسه می‌شود. بررسی نسخه، رسید، مهلت و لغو حفظ شده‌اند و هیچ تغییر یا فراخوانی ارائه‌دهنده خودکار تکرار نمی‌شود. ۳۲ آزمون در چهار فایل موفق شدند؛ بررسی مستقل و آزمون مرورگرِ ساخت تازه هنوز لازم است. شواهد هر دو اجرای ناموفق قبلی نگه داشته شده‌اند.
