@@ -75,6 +75,32 @@ export class AdaptiveService {
   setRelationshipInvalidator(handler: (input: RelationshipInvalidation) => Promise<void>): void { this.relationshipInvalidator = handler; }
   async notifyRelationshipInvalidation(input: RelationshipInvalidation): Promise<void> { await this.relationshipInvalidator?.(input); }
   constructor(readonly repository: AdaptiveRepository, private readonly options: AdaptiveServiceOptions = {}) { this.now = options.now ?? Date.now; }
+  /** Record a trusted clock observation, never a deadline or document timestamp.
+   * Managed writers latch this without I/O; original FILE behavior is unchanged. */
+  sampleClock(clock: () => number): number { return this.repository.storage.sampleClock?.(clock) ?? clock(); }
+  /** Opt-in pure authority evaluation after clock publication. Unlike a bare
+   * clock read, the declared deadline fences publication and evaluation time. */
+  evaluateAuthorityClock<T>(clock: () => number, evaluate: (now: number) => RuntimeControlEvaluation<T>): T {
+    let observed = this.sampleClock(clock);
+    const publish = () => { this.sampleClock(() => observed); };
+    const fresh = () => {
+      let value: number;
+      try { value = clock(); } catch (error) { publish(); throw error; }
+      if (!Number.isSafeInteger(value) || value < observed) { publish(); return fail(503, 'adaptive_controls_unavailable'); }
+      observed = value; return value;
+    };
+    let result: RuntimeControlEvaluation<T>;
+    try { result = validateRuntimeControlEvaluation<T>(evaluate(fresh())); }
+    catch (error) { publish(); throw error; }
+    const after = fresh();
+    if (!result.denied && result.deadline !== undefined && result.deadline <= after) { publish(); return fail(503, 'adaptive_controls_unavailable'); }
+    if (result.denied || result.observedDenial) {
+      publish();
+      const final = fresh();
+      if (!result.denied && result.deadline !== undefined && result.deadline <= final) { publish(); return fail(503, 'adaptive_controls_unavailable'); }
+    }
+    return result.value;
+  }
   /** Stable receipt namespace, safe inside a writer. This is not access authority. */
   get storeIdentity(): string {
     const identity = this.repository.storage.identity ?? this.repository.storage.indexed?.identity;
@@ -265,21 +291,10 @@ export class AdaptiveService {
     { status: 'ready'; value: T } | { status: 'busy' | 'unsupported' | 'missing' } {
     const indexed = this.repository.storage.indexed;
     if (!indexed) {
-      let evaluated: RuntimeControlEvaluation<T> | undefined; let observedAt = 0;
       try {
-        const result = this.readCommittedForEffect(telegramId, (d, now) => {
-          observedAt = now;
-          evaluated = validateRuntimeControlEvaluation<T>(fn(runtimeControlsFromDocument(d), now, this.storeIdentity, undefined));
-          return evaluated.value;
-        });
-        if (result.status === 'ready') this.checkRuntimeEvaluation(evaluated!, observedAt, true);
-        return result;
-      } catch {
-        // A rejected evaluator can have observed expiry too. Persist the time
-        // without re-entering a writer or retrying the evaluator.
-        try { this.repository.storage.observeLifecycleTime?.(this.now()); } catch { /* unavailable */ }
-        return { status: 'busy' };
-      }
+        return this.readCommittedAuthorityForEffect(telegramId, this.now,
+          (d, now) => fn(runtimeControlsFromDocument(d), now, this.storeIdentity, undefined));
+      } catch { return { status: 'busy' }; }
     }
     let evaluation: RuntimeControlEvaluation<T> | undefined;
     const snapshot = indexed.readControls(this.account(telegramId), space, (controls, now, stamp) => {
@@ -293,10 +308,10 @@ export class AdaptiveService {
     return { status: 'ready', value: evaluation.value };
   }
   private checkRuntimeEvaluation<T>(evaluation: RuntimeControlEvaluation<T>, observedAt: number, publish = false): void {
-    const observed = this.now();
+    const observed = publish ? this.now() : this.sampleClock(this.now);
     if (!Number.isSafeInteger(observed) || observed < observedAt) fail(503, 'adaptive_controls_unavailable');
     if (publish) this.repository.storage.observeLifecycleTime?.(observed);
-    const fresh = this.now();
+    const fresh = publish ? this.now() : this.sampleClock(this.now);
     if (!Number.isSafeInteger(fresh) || fresh < observed ||
         (!evaluation.denied && evaluation.deadline !== undefined && evaluation.deadline <= fresh)) {
       // Publication itself may cross a deadline. Retain that denial observation
@@ -313,6 +328,13 @@ export class AdaptiveService {
     if (!snapshot.document) return { status: 'missing' };
     // Synchronous disk/schema work can itself cross an authority deadline.
     return { status: 'ready', value: fn(snapshot.document, this.now()) };
+  }
+  /** Explicit complete-document authority seam. Generic committed reads never
+   * infer denial or deadlines from an arbitrary return value. */
+  readCommittedAuthorityForEffect<T>(telegramId: number, clock: (() => number) | undefined,
+    evaluate: (document: AdaptiveDocument, now: number) => RuntimeControlEvaluation<T>):
+    { status: 'ready'; value: T } | { status: 'busy' | 'unsupported' | 'missing' } {
+    return this.readCommittedForEffect(telegramId, document => this.evaluateAuthorityClock(clock ?? this.now, now => evaluate(document, now)));
   }
   isProfileConfirmed(d: AdaptiveAuthorityDocument, now: number): boolean { return this.confirmed(d, now); }
   isCoreAllowed(d: AdaptiveAuthorityDocument, now: number): boolean { return this.confirmed(d, now) && this.eligible(d, 'core_text', now).eligible; }
@@ -595,7 +617,7 @@ export class AdaptiveService {
       return this.snapshot(d, input.space, now);
     }, () => {
       // Studio I/O precedes fresh canonical deadlines immediately before rename.
-      const authority = options.authorizeNow(), now = this.now();
+      const authority = options.authorizeNow(), now = this.sampleClock(this.now);
       if (!draft || !authority || options.signal?.aborted || !this.isCoreAllowed(draft, now) || this.coreFingerprint(draft, now) !== core) return fail(409, 'memory_correction_changed');
       if (!replay) {
         const memory = draft.memories.find(row => row.id === memoryId && row.space === input.space);
@@ -604,7 +626,13 @@ export class AdaptiveService {
     });
   }
   memorySnapshotCurrentNow(telegramId: number, snapshot: AdaptiveSnapshot, locale: 'en' | 'fa'): boolean {
-    const current = this.readCommittedForEffect(telegramId, (d, now) => digest(this.snapshot(d, snapshot.space, now, locale)) === digest(snapshot));
+    const current = this.readCommittedAuthorityForEffect(telegramId, this.now, (d, now) => {
+      const authority = this.authorityEvaluation(d, snapshot.space, now, locale);
+      const value = digest(this.snapshot(d, snapshot.space, now, locale)) === digest(snapshot);
+      const expiries = d.memories.filter(m => m.space === snapshot.space && m.status === 'active').map(m => m.expiresAt);
+      return { ...authority, value, observedDenial: authority.observedDenial || !value || expiries.some(at => at <= now),
+        ...(authority.deadline === undefined ? {} : { deadline: Math.min(authority.deadline, ...expiries.filter(at => at > now)) }) };
+    });
     return current.status === 'ready' && current.value;
   }
   private tombstone(d: AdaptiveDocument, memory: StoredMemory, now: number, eventId: string): void {
@@ -717,15 +745,13 @@ export class AdaptiveService {
   }
   readPrivateContextAuthorityNow(telegramId: number, space: SpaceKind, agentId: string): { revision: string; validUntil: number } {
     if (!this.repository.storage.indexed) {
-      let observedAt = 0;
-      const result = this.readCommittedForEffect(telegramId, (d, now) => {
-        observedAt = now;
+      const result = this.readCommittedAuthorityForEffect(telegramId, this.now, (d, now) => {
         const authority = this.authorityEvaluation(d, space, now, 'en');
-        return { revision: this.canonicalPrivateContext(d, now, space, agentId).revision,
-          validUntil: Math.min(authority.deadline ?? INFINITY, ...d.memories.filter(m => m.space === space && m.status === 'active' && m.expiresAt > now).map(m => m.expiresAt)) };
+        const deadline = Math.min(authority.deadline ?? INFINITY, ...d.memories.filter(m => m.space === space && m.status === 'active' && m.expiresAt > now).map(m => m.expiresAt));
+        return { ...authority, deadline, observedDenial: authority.observedDenial || d.memories.some(m => m.space === space && m.status === 'active' && m.expiresAt <= now),
+          value: { revision: this.canonicalPrivateContext(d, now, space, agentId).revision, validUntil: deadline } };
       });
       if (result.status !== 'ready') return fail(503, 'adaptive_context_unavailable');
-      this.checkRuntimeEvaluation({ value: result.value, deadline: result.value.validUntil }, observedAt, true);
       return result.value;
     }
     try {

@@ -2,6 +2,7 @@ import { createHmac, randomUUID } from 'node:crypto';
 import type { DecisionInput, DecisionService } from '../../decisions';
 import { AdaptiveError, type AdaptiveService } from '../../persistence/service';
 import { digest, type AdaptiveAuthorityDocument, type AdaptiveDocument, type SpaceKind } from '../../persistence/repository';
+import type { RuntimeControlEvaluation } from '../../persistence/authority';
 import { reserveDecision, sealDecisionTurn } from '../../runtime/decision-budget';
 import { applyExplicitPreference } from '../explicit';
 import type { PreferenceValue } from '..';
@@ -55,7 +56,9 @@ export class PreferenceLearningService {
       return result.value;
     }
     const studio = this.studio(telegramId, scope);
-    const result = this.adaptive.readCommittedForEffect(telegramId, (d, now) => this.state(d, scope, now, studio));
+    const result = this.adaptive.readCommittedAuthorityForEffect(telegramId, this.now, (d, now) => {
+      const value = this.state(d, scope, now, studio); return { value, deadline: value.expiresAt };
+    });
     if (result.status !== 'ready') return fail('preference_learning_unavailable', 503);
     return result.value;
   }
@@ -81,14 +84,34 @@ export class PreferenceLearningService {
       ...(intent ? { intentExpiresAt: intent.expiresAt } : {}), candidates: candidates.map(({ id, revision, setting, reason, createdAt, expiresAt }) => ({ id, revision, setting, reason, createdAt, expiresAt })),
       receipt: digest([d.revision, authority, studio, intent, presentation, candidates]) };
   }
+  private viewEvaluation(d: AdaptiveDocument, scope: Scope, now: number, studio: string | null): RuntimeControlEvaluation<LearningView> {
+    const value = this.buildView(d, scope, now, studio), learning = d.experience.preferenceLearning;
+    const rows = learning ? [...learning.presentations, ...learning.intents, ...learning.candidates, ...learning.suppressions]
+      .filter(row => row.space === scope.space && row.agentId === scope.agentId) : [];
+    const turns = d.experience.predictionTurns.filter(row => row.space === scope.space && row.agentId === scope.agentId && row.learningEvidenceId);
+    const times = [...rows.map(row => row.expiresAt), ...turns.map(row => row.expiresAt)];
+    const permission = d.permissions.find(p => p.id === `permission:${scope.space}:optional.personalization`)!;
+    const deadline = Math.min(Number.MAX_SAFE_INTEGER, ...times.filter(at => at > now),
+      ...(d.binding && d.binding.expiresAt > now ? [d.binding.expiresAt] : []),
+      ...(permission.state === 'granted' && permission.expiresAt > now ? [permission.expiresAt] : []),
+      ...(['core_text', 'personalization'] as const).flatMap(capability => {
+        const status = this.adaptive.capabilityStatus(d, capability, now); return status.eligible && status.validUntil !== undefined ? [status.validUntil] : [];
+      }));
+    return { value, deadline, denied: !this.adaptive.isProfileConfirmed(d, now),
+      observedDenial: !value.available || !value.enabled || times.some(at => at <= now) };
+  }
   async view(telegramId: number, scope: Scope): Promise<LearningView> {
     return this.adaptive.withAccountDocument(telegramId, (d, now) => this.buildView(d, scope, now, learningStudioFingerprint(this.adaptive, this.options.agentAuthorityNow(telegramId, scope.agentId))));
   }
   revalidateViewNow(telegramId: number, view: LearningView): void {
     if (!this.available()) { if (view.enabled || view.candidates.length || view.presentation) return fail(); return; }
     const studio = learningStudioFingerprint(this.adaptive, this.options.agentAuthorityNow(telegramId, view.agentId));
-    const current = this.adaptive.readCommittedForEffect(telegramId, (d, now) => this.buildView(d, view, now, studio));
-    if (current.status !== 'ready' || current.value.receipt !== view.receipt) return fail();
+    const current = this.adaptive.readCommittedAuthorityForEffect(telegramId, this.now, (d, now) => {
+      const result = this.viewEvaluation(d, view, now, studio);
+      if (result.value.receipt !== view.receipt) return fail();
+      return result;
+    });
+    if (current.status !== 'ready') return fail();
   }
   private async mutate(telegramId: number, scope: Scope, fn: (d: AdaptiveDocument, now: number) => void, requirePermission = true,
     signal?: AbortSignal, check?: () => boolean): Promise<void> {
@@ -105,7 +128,7 @@ export class PreferenceLearningService {
       initial = requirePermission ? this.state(d, scope, now, initialStudio) : undefined;
       draft = d; fn(d, now);
     }, () => {
-      const studio = this.studio(telegramId, scope), now = this.now();
+      const studio = this.studio(telegramId, scope), now = this.adaptive.sampleClock(this.now);
       if (!draft || studio !== initialStudio || signal?.aborted || check && !check() || initial && this.state(draft, scope, now, studio).fingerprint !== initial.fingerprint) return fail();
     });
   }
@@ -147,7 +170,7 @@ export class PreferenceLearningService {
       }
       learning.presentations = learning.presentations.filter(p => p.space !== input.space || p.agentId !== input.agentId);
       d.revision++; d.updatedAt = now;
-    }, input.enabled, signal, () => presentationDeadline === undefined || presentationDeadline > this.now());
+    }, input.enabled, signal, () => presentationDeadline === undefined || presentationDeadline > this.adaptive.sampleClock(this.now));
     this.tasks.cancel(telegramId, input.space, input.agentId);
   }
   async review(telegramId: number, value: LearningReviewInput, signal?: AbortSignal): Promise<void> {
@@ -164,7 +187,7 @@ export class PreferenceLearningService {
       suppressLearningScope(d, input, now, candidate.evidenceIds);
       if (input.action === 'use') applyExplicitPreference(d, { ...input, action: 'set', setting: candidate.setting }, now);
       d.revision++; d.updatedAt = now;
-    }, true, signal, () => deadline === undefined || deadline > this.now());
+    }, true, signal, () => deadline === undefined || deadline > this.adaptive.sampleClock(this.now));
   }
   enqueue(input: LearningTaskInput, signal?: AbortSignal): boolean {
     if (!this.available() || signal?.aborted) return false;
@@ -185,10 +208,11 @@ export class PreferenceLearningService {
         return this.tasks.enqueue(retained, signal);
       }
       const studio = this.studio(input.telegramId, input);
-      const current = this.adaptive.readCommittedForEffect(input.telegramId, (d, now) => {
+      const current = this.adaptive.readCommittedAuthorityForEffect(input.telegramId, this.now, (d, now) => {
         const authority = this.state(d, input, now, studio);
         const intent = d.experience.preferenceLearning?.intents.find(i => i.space === input.space && i.agentId === input.agentId && i.studioFingerprint === studio && sameLearningAuthority(i, authority, now));
-        return intent ? { storeIdentity: this.adaptive.storeIdentity, fingerprint: authority.fingerprint, intentId: intent.id, intentRevision: intent.revision } : undefined;
+        return { value: intent ? { storeIdentity: this.adaptive.storeIdentity, fingerprint: authority.fingerprint, intentId: intent.id, intentRevision: intent.revision } : undefined,
+          denied: !intent, ...(intent ? { deadline: Math.min(authority.expiresAt, intent.expiresAt) } : {}) };
       });
       if (current.status !== 'ready' || !current.value) return false;
       if (this.adaptive.storeIdentity === 'canonical') return this.tasks.enqueue(input, signal);
@@ -223,7 +247,7 @@ export class PreferenceLearningService {
       if ('reason' in reserved) return undefined;
       return { intent: structuredClone(intent), keys, preferences: digest(d.experience.preferences.filter(p => p.space === task.space && p.agentId === task.agentId)) };
     }, () => {
-      const studio = this.studio(task.telegramId, task), now = this.now();
+      const studio = this.studio(task.telegramId, task), now = this.adaptive.sampleClock(this.now);
       if (!draft || task.signal.aborted || this.state(draft, task, now, studio).fingerprint !== initial.fingerprint) return fail();
     });
     if (!prepared || task.signal.aborted || !task.text) return;
@@ -250,7 +274,11 @@ export class PreferenceLearningService {
           });
           return result.status === 'ready' && result.value;
         }
-        const result = this.adaptive.readCommittedForEffect(task.telegramId, (d, now) => valid(d, now) && this.state(d, task, now, studio).fingerprint === initial.fingerprint);
+        const result = this.adaptive.readCommittedAuthorityForEffect(task.telegramId, this.now, (d, now) => {
+          const authority = this.state(d, task, now, studio), allowed = !!valid(d, now) && authority.fingerprint === initial.fingerprint;
+          const turn = d.experience.predictionTurns.find(t => t.learningReservation === reservation);
+          return { value: allowed, denied: !allowed, ...(allowed ? { deadline: Math.min(authority.expiresAt, prepared.intent.expiresAt, turn!.expiresAt) } : {}) };
+        });
         return result.status === 'ready' && result.value === true;
       } catch { return false; }
     };
@@ -280,7 +308,7 @@ export class PreferenceLearningService {
         if (candidate.expiresAt <= now) return;
         learning.candidates.push(candidate); d.revision++; d.updatedAt = now;
       }, () => {
-        const studio = this.studio(task.telegramId, task), now = this.now();
+        const studio = this.studio(task.telegramId, task), now = this.adaptive.sampleClock(this.now);
         if (!commitDraft || !valid(commitDraft, now) || this.state(commitDraft, task, now, studio).fingerprint !== initial.fingerprint) return fail();
       });
     } finally {

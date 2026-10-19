@@ -16,6 +16,10 @@ export interface AdaptiveStorage {
   readonly indexed?: IndexedAdaptiveQueries;
   /** Managed FILE lifecycle observation, outside writers; durable monotonic metadata only. */
   observeLifecycleTime?(observedAt: number): void;
+  /** Trusted server clock only, never a draft/deadline timestamp. Canonical
+   * writers latch the sample; outside writers it is durable before return.
+   * This clock observation is not an access grant or an effect deadline check. */
+  sampleClock?(clock: () => number): number;
   /** Callback must be synchronous and retry safe. A throw commits nothing. */
   transact<T>(accountId: string, mutate: (current: unknown | null) => { document: unknown; result: T }, beforeCommit?: () => void): Promise<T>;
   readonly supportsCommittedWriteFence?: true;

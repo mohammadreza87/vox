@@ -43,6 +43,7 @@ export interface SqliteAdaptiveStorageOptions {
   newStoreSeed?: { generation: number; lifecycleWatermark: number };
 }
 export class SqliteAdaptiveStorage implements AdaptiveStorage {
+  private transactionClock?: (clock: () => number) => number;
   readonly supportsCommittedWriteFence = true as const;
   readonly indexed: IndexedQueryEngine;
   readonly identity: Readonly<Pick<IndexedStoreMetadata, 'incarnation' | 'generation'>>;
@@ -102,6 +103,14 @@ export class SqliteAdaptiveStorage implements AdaptiveStorage {
     return new IndexedStorageError(code.startsWith('SQLITE_BUSY') || code.startsWith('SQLITE_LOCKED') ? 'busy' : 'corrupt', committed);
   }
   assertAvailable(): void { if (this.closed) throw new IndexedStorageError('closed'); if (this.writer) throw new IndexedStorageError('busy'); }
+  sampleClock(clock: () => number): number {
+    if (this.transactionClock) return this.transactionClock(clock);
+    this.assertAvailable(); this.writer = true;
+    try {
+      const observed = this.sampleTime(0, clock());
+      this.publishObservation(observed, this.io); return observed;
+    } finally { this.writer = false; }
+  }
   sampleTime(watermark: number, at?: number): number {
     const now = at ?? this.clock();
     if (!Number.isSafeInteger(now) || now < 0 || now < watermark) throw new IndexedStorageError('clock_regression');
@@ -144,43 +153,41 @@ export class SqliteAdaptiveStorage implements AdaptiveStorage {
    * measured durable write. Constant time does not issue an UPDATE. */
   readWindow<T>(io: IndexedIoCounters, read: (now: number, meta: IndexedStoreMetadata) => T,
     checkFresh: (value: T, now: number) => void | { denied?: boolean; deadline?: number; observedDenial?: boolean }, at?: number, options?: { publishFresh: true }): T {
-    this.assertAvailable(); this.writer = true; let committed = false, committing = false;
+    this.assertAvailable(); this.writer = true; let committed = false, committing = false, observedTime: number | undefined;
+    const sample = (floor: number, override?: number) => {
+      const value = this.sampleTime(Math.max(floor, observedTime ?? floor), override); observedTime = value; return value;
+    };
     try {
       this.database.exec('BEGIN IMMEDIATE'); const meta = this.readMetadata();
-      const now = this.sampleTime(meta.lifecycleWatermark, at);
-      // Controls with a fresh external evaluator publish the post-I/O sample
-      // instead. Their first transaction is a lock-held read, not a fsync.
+      const now = sample(meta.lifecycleWatermark, at);
       if (!options?.publishFresh) this.advance(meta, now, io);
       const value = read(now, meta);
-      // Even canonical expiry denials are returned as values so their observation
-      // watermark commits before the denial is released.
-      this.sampleTime(meta.lifecycleWatermark);
+      sample(meta.lifecycleWatermark);
       committing = true; this.database.exec('COMMIT'); committed = true;
-      let fresh = this.sampleTime(meta.lifecycleWatermark);
-      if (options?.publishFresh) { this.publishObservation(fresh, io); meta.lifecycleWatermark = fresh; fresh = this.sampleTime(meta.lifecycleWatermark); }
-      try {
-        const evaluation = checkFresh(value, fresh);
-        const afterEvaluation = this.sampleTime(meta.lifecycleWatermark);
-        if (!evaluation?.denied && evaluation?.deadline !== undefined && evaluation.deadline <= afterEvaluation) throw new IndexedStorageError('expired');
-        if (evaluation?.denied || evaluation?.observedDenial) {
-          this.publishObservation(afterEvaluation, io);
-          // A mixed authority snapshot still contains positive permissions.
-          // Publishing a negative observation cannot waive their deadline.
-          if (!evaluation.denied && evaluation.deadline !== undefined && evaluation.deadline <= this.sampleTime(afterEvaluation)) throw new IndexedStorageError('expired');
-        }
-      } catch (error) {
-        if (error instanceof IndexedStorageError && (error.reason === 'expired' || error.reason === 'denied')) {
-          // Expiry can first be observed during native durability. Publish that
-          // later observation before returning an expiry denial, or fail closed
-          // as unavailable; the initial watermark alone would permit revival.
-          this.publishObservation(this.sampleTime(meta.lifecycleWatermark), io);
-        }
-        throw error;
+      let fresh = sample(meta.lifecycleWatermark);
+      if (options?.publishFresh) { this.publishObservation(fresh, io); fresh = sample(fresh); }
+      const evaluation = checkFresh(value, fresh);
+      const afterEvaluation = sample(meta.lifecycleWatermark);
+      if (!evaluation?.denied && evaluation?.deadline !== undefined && evaluation.deadline <= afterEvaluation) throw new IndexedStorageError('expired');
+      if (evaluation?.denied || evaluation?.observedDenial) {
+        this.publishObservation(afterEvaluation, io);
+        const afterPublication = sample(afterEvaluation);
+        if (!evaluation.denied && evaluation.deadline !== undefined && evaluation.deadline <= afterPublication) throw new IndexedStorageError('expired');
       }
       return value;
     } catch (error) {
       if (this.database.inTransaction) this.database.exec('ROLLBACK');
       if (committing && !committed) throw new IndexedStorageError('commit_uncertain', 'unknown');
+      if (observedTime !== undefined) {
+        // Keep the actual argument supplied to a denying evaluator, even if its
+        // clock regresses before it returns/throws. Never infer it by resampling.
+        try {
+          const floor = this.readMetadata().lifecycleWatermark;
+          let publicationAt = Math.max(floor, observedTime);
+          try { publicationAt = Math.max(publicationAt, this.sampleTime(0)); } catch { /* Preserve the last valid sample. */ }
+          this.publishObservation(publicationAt, io);
+        } catch (publicationError) { throw this.error(publicationError, committed); }
+      }
       throw this.error(error, committed);
     } finally { this.writer = false; }
   }
@@ -190,15 +197,16 @@ export class SqliteAdaptiveStorage implements AdaptiveStorage {
     try {
       this.database.exec('BEGIN IMMEDIATE'); const meta = this.readMetadata(), now = this.sampleTime(meta.lifecycleWatermark);
       observedTime = now;
+      this.transactionClock = clock => { observedTime = this.sampleTime(observedTime!, clock()); return observedTime; };
       const key = accountKey(accountId), current = this.database.prepare('SELECT canonical,canonical_digest FROM accounts WHERE account_key=?').get(key) as { canonical: string; canonical_digest: string } | undefined;
       if (current) { this.io.canonicalImageReads++; if (digest(JSON.parse(current.canonical)) !== current.canonical_digest) throw new IndexedStorageError('corrupt'); this.validator(JSON.parse(current.canonical), accountId, now); }
       const output = mutate(current ? JSON.parse(current.canonical) : null);
       if (output && typeof output === 'object' && 'then' in output) throw new IndexedStorageError('corrupt');
       // Mutation callbacks sample current business time after acquiring storage.
       // Validate against fresh time, never the earlier input-read sample.
-      const outputAt = this.sampleTime(now); observedTime = outputAt;
+      const outputAt = this.sampleTime(observedTime); observedTime = outputAt;
       const document = this.validator(output.document, accountId, outputAt), canonical = JSON.stringify(output.document);
-      const serializedAt = this.sampleTime(outputAt); observedTime = serializedAt;
+      const serializedAt = this.sampleTime(observedTime); observedTime = serializedAt;
       const serializedDocument = this.validator(JSON.parse(canonical), accountId, serializedAt);
       if (digest(document) !== digest(serializedDocument)) throw new IndexedStorageError('corrupt');
       const p = projectDocument(serializedDocument, canonical);
@@ -218,7 +226,7 @@ export class SqliteAdaptiveStorage implements AdaptiveStorage {
       this.database.prepare('DELETE FROM outbox WHERE account_key=?').run(key);
       for (const row of p.outbox) this.database.prepare('INSERT INTO outbox VALUES(?,?,?)').run(key, row.eventId, JSON.stringify(row));
       this.advance(meta, serializedAt, this.io);
-      observedTime = this.sampleTime(serializedAt);
+      observedTime = this.sampleTime(observedTime);
       beforeCommit?.(); // Last user operation immediately before synchronous COMMIT.
       committing = true; this.database.exec('COMMIT'); committed = true;
       const result = output.result === undefined ? output.result : structuredClone(output.result);
@@ -243,7 +251,7 @@ export class SqliteAdaptiveStorage implements AdaptiveStorage {
       if (committed && (!(error instanceof IndexedStorageError) || error.committed !== true))
         throw new IndexedStorageError(error instanceof IndexedStorageError ? error.reason : 'denied', true);
       throw error;
-    } finally { this.writer = false; }
+    } finally { this.transactionClock = undefined; this.writer = false; }
   }
   readCommittedForEffect(accountId: string): { status: 'ready'; document: unknown | null } | { status: 'busy' } {
     validateAccountId(accountId);

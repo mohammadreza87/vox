@@ -382,11 +382,17 @@ export class AdaptiveExperienceService {
       }) };
   }
   preferenceStateCurrentNow(telegramId: number, state: PreferenceState) {
-    return this.adaptive.readCommittedForEffect(telegramId, (d, now) => {
+    return this.adaptive.readCommittedAuthorityForEffect(telegramId, undefined, (d, now) => {
+      const expiries = (d.experience.preferenceUndo ?? []).filter(row => row.space === state.space && row.agentId === state.agentId).map(row => row.expiresAt);
       // Prune the detached snapshot only; maintenance owns durable expiry purge.
       prunePreferenceUndo(d, now);
       const current = explicitPreferenceSnapshot(this.adaptive, d, state.space, state.agentId, now);
-      return current.confirmed && current.receipt === state.receipt;
+      const value = current.confirmed && current.receipt === state.receipt;
+      const permission = d.permissions.find(p => p.id === `permission:${state.space}:optional.personalization`)!;
+      return { value, denied: !current.confirmed, observedDenial: !value || !current.allowed || expiries.some(at => at <= now),
+        ...(current.confirmed ? { deadline: Math.min(d.binding!.expiresAt, ...expiries.filter(at => at > now),
+          ...(permission.state === 'granted' && permission.expiresAt > now ? [permission.expiresAt] : []),
+          ...(['core_text', 'personalization'] as const).flatMap(c => { const status = this.adaptive.capabilityStatus(d, c, now); return status.eligible && status.validUntil !== undefined ? [status.validUntil] : []; })) } : {}) };
     });
   }
   /** Cancellation writes content-free tombstones so a delayed request or another

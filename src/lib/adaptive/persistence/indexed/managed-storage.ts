@@ -150,6 +150,7 @@ export interface ManagedFileOptions { now?: () => number; newStoreSeed?: { gener
  * couples current canonical account image and durable lifecycle time. This is
  * intentionally not an indexed query adapter and makes no no-body-load claim. */
 export class ManagedFileV2Storage implements AdaptiveStorage {
+  private transactionClock?: (clock: () => number) => number;
   readonly supportsCommittedWriteFence = true as const;
   readonly identity: Readonly<{ incarnation: string; generation: number }>;
   readonly io = { canonicalImageReads: 0, watermarkWrites: 0 };
@@ -203,24 +204,33 @@ export class ManagedFileV2Storage implements AdaptiveStorage {
   observeLifecycleTime(observedAt: number): void {
     this.assert(); this.writer = true; try { this.publishTime(observedAt); } finally { this.writer = false; }
   }
+  sampleClock(clock: () => number): number {
+    if (this.transactionClock) return this.transactionClock(clock);
+    this.assert(); this.writer = true;
+    let observed: number;
+    try { observed = this.sample(0, clock()); }
+    finally { this.writer = false; }
+    this.observeLifecycleTime(observed); return observed;
+  }
   async transact<T>(accountId: string, mutate: (current: unknown | null) => { document: unknown; result: T }, beforeCommit?: () => void): Promise<T> {
     validateAccountId(accountId); this.assert(); this.writer = true;
     let published = false, recordFile: string | undefined, observedTime: number | undefined;
     try {
       const head = this.head(), now = this.sample(head.lifecycleWatermark);
       observedTime = now;
+      this.transactionClock = clock => { observedTime = this.sample(observedTime!, clock()); return observedTime; };
       const current = this.record(head, accountId, now);
-      const output = mutate(current), outputAt = this.sample(now); observedTime = outputAt;
+      const output = mutate(current), outputAt = this.sample(observedTime); observedTime = outputAt;
       const document = validateAdaptiveDocument(output.document, accountId, outputAt);
       const canonical = JSON.stringify(output.document);
-      const serializedAt = this.sample(outputAt); observedTime = serializedAt;
+      const serializedAt = this.sample(observedTime); observedTime = serializedAt;
       if (Buffer.byteLength(canonical) > INDEXED_LIMITS.canonicalBytes || digest(document) !== digest(validateAdaptiveDocument(JSON.parse(canonical), accountId, serializedAt))) throw new IndexedStorageError('capacity');
       const prior = head.accounts.find(row => row.key === accountKey(accountId)), file = randomUUID();
       recordFile = join(this.directory, 'records', `${file}.json`); writeDurableJson(recordFile, output.document);
       head.accounts = [...head.accounts.filter(row => row.key !== accountKey(accountId)), { key: accountKey(accountId), accountId, file, digest: digest(output.document) }].sort((a, b) => a.key < b.key ? -1 : 1);
       if (head.accounts.length > MAX_MANAGED_ACCOUNTS || Buffer.byteLength(JSON.stringify(head)) > MAX_HEAD_BYTES) throw new IndexedStorageError('capacity');
       head.lifecycleWatermark = serializedAt;
-      writeDurableJson(join(this.directory, 'head.json'), head, () => { observedTime = this.sample(serializedAt); beforeCommit?.(); }, () => { published = true; });
+      writeDurableJson(join(this.directory, 'head.json'), head, () => { observedTime = this.sample(observedTime!); beforeCommit?.(); }, () => { published = true; });
       this.io.watermarkWrites++;
       if (prior) { unlinkSync(join(this.directory, 'records', `${prior.file}.json`)); syncDirectory(join(this.directory, 'records')); }
       const result = output.result === undefined ? output.result : structuredClone(output.result);
@@ -239,7 +249,7 @@ export class ManagedFileV2Storage implements AdaptiveStorage {
       if (error instanceof IndexedStorageError && error.committed === 'unknown') throw error;
       if (published && (!(error instanceof IndexedStorageError) || error.committed !== true)) throw new IndexedStorageError(error instanceof IndexedStorageError ? error.reason : 'corrupt', true);
       throw error;
-    } finally { this.writer = false; }
+    } finally { this.transactionClock = undefined; this.writer = false; }
   }
   readCommittedForEffect(accountId: string): { status: 'ready'; document: unknown | null } | { status: 'busy' } {
     validateAccountId(accountId); if (this.writer) return { status: 'busy' }; this.assert(); this.writer = true;
