@@ -520,9 +520,10 @@
       ],
       "evidence": [
         "docs/implementation/DELIVERY_RESULT.md",
-        "docs/implementation/MEMORY_RETRIEVAL_RESULT.md"
+        "docs/implementation/MEMORY_RETRIEVAL_RESULT.md",
+        "docs/implementation/REVIEWED_PRIVATE_MEMORY_RESULT.md"
       ],
-      "progress_note": "Added EN/FA lexical ranking, trusted explicit-preference priority, whole-record 12-item/8192-byte packing and content-free scoped LRU prewarming. Both streaming and completed turns use current authorized projections and full receipt rechecks. Account/container aggregates are still loaded; indexed retrieval, calibrated semantic ranking and generalized automatic extraction/consolidation remain open."
+      "progress_note": "Explicit private note review now supports selected-only ephemeral summary previews, deliberate save, signed source revisions, descendant invalidation and guarded FILE commits. Retrieval ranks individual notes and summaries by current query relevance and retains originals unless exact statement coverage is established. Author132/11 and independent112/8 plus exact prior-schema rollback passed. Aggregate loading, indexed retrieval and generalized automatic extraction remain open."
     },
     {
       "id": "VOX-014",
@@ -1017,9 +1018,10 @@
         "Attribution fixtures"
       ],
       "evidence": [
-        "docs/implementation/DELIVERY_RESULT.md"
+        "docs/implementation/DELIVERY_RESULT.md",
+        "docs/implementation/PERSONALIZATION_CONTROLS_RESULT.md"
       ],
-      "progress_note": "Durable explicit response preferences/reset integrated with scoped consent and per-agent grants; pure expiring hypothesis resolver tested. Learning/inference producer and evidence lifecycle remain open."
+      "progress_note": "Explicit response length/language/format choices feed the scoped resolver only under current permission and agent grant. The reviewed learning producer remains a separate in-progress slice; this release adds no automatic inference or analytics reuse."
     },
     {
       "id": "VOX-028",
@@ -1053,9 +1055,10 @@
         "UX evidence"
       ],
       "evidence": [
-        "docs/implementation/DELIVERY_RESULT.md"
+        "docs/implementation/DELIVERY_RESULT.md",
+        "docs/implementation/PERSONALIZATION_CONTROLS_RESULT.md"
       ],
-      "progress_note": "Work/Personal call selector, preferences controls and shared audience preview implemented. Broader UX variants and why-this/undo for inferred adaptation remain open."
+      "progress_note": "EN/FA choices show coded reasons for saved, applied, reset, missing grant and unavailable permission. One-step CAS/idempotent Undo restores the prior explicit enum row or true absence, expires within ten minutes/current binding and never restores rights. Author124/14 and independent44/4 passed. Learned-candidate explanations/suppression and broader UX variants remain open."
     },
     {
       "id": "VOX-029",
