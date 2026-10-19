@@ -453,13 +453,20 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
    * One private exchange outside Telegram (e.g. a voice call in the Mini App):
    * same memory, same privacy rules, same persona.
    */
-  async converse(personaId: string, speakerId: string, text: string, options: { space?: 'work' | 'personal'; images?: LLMMessage['images']; authorize?: () => Promise<boolean>; authorizeNow?: () => boolean } = {}): Promise<string> {
+  async converse(personaId: string, speakerId: string, text: string, options: { space?: 'work' | 'personal'; images?: LLMMessage['images']; authorize?: () => Promise<boolean>; authorizeNow?: () => boolean; onBoundaryFence?: (fence: () => boolean) => void } = {}): Promise<string> {
     const persona = this.deps.org.getPersona(personaId);
     if (!persona) throw new Error(`Unknown persona ${personaId}`);
     if (!this.deps.org.getPerson(speakerId)) throw new Error('Unknown speaker');
     if (!await this.requestAuthorized(options.authorize)) return this.changedReply;
-    if (parseExplicitControl(text) === 'forget') return this.forgetOwnedContext(persona.id, speakerId, options.space);
     const chat: ChatContext = { kind: 'private', chatKey: `private-${speakerId}`, personId: speakerId };
+    if (parseExplicitControl(text) === 'forget') {
+      const reply = await this.forgetOwnedContext(persona.id, speakerId, options.space);
+      if (this.compactPrivacy()) {
+        const after = await this.boundary(persona, chat, speakerId, options.space, '', true);
+        options.onBoundaryFence?.(() => this.exportAuthorizedNow(persona, chat, speakerId, after, options.authorizeNow));
+      }
+      return reply;
+    }
     let boundary = await measureStage('retrieval', () => this.boundary(persona, chat, speakerId, options.space, text, this.compactPrivacy()));
     if (!await this.requestAuthorized(options.authorize)) return this.changedReply;
     const user: ChatMessage = { role: 'user', personId: speakerId, text, at: this.now(), privacy: this.stamp(boundary, [randomUUID()]) };
@@ -467,6 +474,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     if (!await this.requestAuthorized(options.authorize)) return this.changedReply;
     await this.observeRelationship(persona.id, chat, speakerId, text, `call:${randomUUID()}`, 'call', this.now(), boundary.space);
     if (this.deps.relationshipAuthority || boundary.compact) boundary = await this.boundary(persona, chat, speakerId, boundary.space, text);
+    if (boundary.compact) options.onBoundaryFence?.(() => this.exportAuthorizedNow(persona, chat, speakerId, boundary, options.authorizeNow));
     const reply = await this.generateReplyAt(persona, chat, speakerId, text, boundary, options.images, options.authorize, options.authorizeNow);
     if (!(await this.unchanged(persona, chat, speakerId, boundary)) || !await this.requestAuthorized(options.authorize)) return this.changedReply;
     const assistant: ChatMessage = { role: 'assistant', text: reply, at: this.now(), privacy: this.stamp(boundary, user.privacy!.sourceEventIds) };
@@ -791,9 +799,8 @@ You are on a live voice call. Answer in one to three short spoken sentences. No 
 
   /** The reply plus the web pages it cites, when the persona searched. */
   private canSpeak(persona: Persona, boundary?: TurnBoundary): boolean {
-    // Indexed private context requires a qualified final TTS transport fence.
-    // Current synthesis adapters provide none; retain text until that seam exists.
-    if (boundary?.compact) return false;
+    // Scoped speech may export saved context only through a qualified adapter.
+    if (boundary?.compact && this.deps.voice?.committedExportFence !== true) return false;
     return !!this.deps.voice && this.deps.voice.canSynthesize !== false && persona.replyWithVoice !== 'never';
   }
 
@@ -868,6 +875,7 @@ You are on a live voice call. Answer in one to three short spoken sentences. No 
     canDeliverNow?: () => boolean
   ): Promise<string | null> {
     const bot = this.deps.botFor(persona.id);
+    if (canDeliverNow && bot.committedSendFence !== true) return null;
     const canSend = async () => {
       await this.deps.beforeSend?.(persona.id, chat);
       if (!await canDeliver() || (privacyEpoch !== undefined && await this.deps.history.getEpoch(persona.id) !== privacyEpoch)) return false;
@@ -875,16 +883,17 @@ You are on a live voice call. Answer in one to three short spoken sentences. No 
       return !!speaker && await this.groupAllowed(persona, chat, speaker.id, action);
     };
     const replyTo = chat.kind === 'group' ? message.message_id : undefined;
-    const speak = !canDeliverNow && this.canSpeak(persona) && voiceWanted;
+    const speak = this.canSpeak(persona) && voiceWanted && (!canDeliverNow || this.deps.voice?.committedExportFence === true);
     let audioSent = false;
 
     if (!await canSend()) return null;
     if (speak) {
       try {
-        const { audio, mimeType, filename } = await this.deps.voice!.synthesize(reply, persona.voice.elevenLabsVoiceId);
+        const { audio, mimeType, filename } = await (canDeliverNow ? this.deps.voice!.synthesize(reply, persona.voice.elevenLabsVoiceId, {authorizeNow: canDeliverNow})
+          : this.deps.voice!.synthesize(reply, persona.voice.elevenLabsVoiceId));
         if (!audio.byteLength) throw new Error('Empty speech audio');
         if (!await canSend()) return null;
-        await bot.sendVoice(message.chat.id, audio, { mimeType, filename, replyTo });
+        await bot.sendVoice(message.chat.id, audio, { mimeType, filename, replyTo, ...(canDeliverNow ? {authorizeNow: canDeliverNow} : {}) });
         audioSent = true;
       } catch (error) {
         logTelegramDiagnostic(this.log, voiceFailureDiagnostic(error));
@@ -894,7 +903,7 @@ You are on a live voice call. Answer in one to three short spoken sentences. No 
     if (audioSent) {
       // A failed transcript must not report that an already-delivered voice failed.
       if (canDeliverNow && !canDeliverNow()) return null;
-      try { await bot.sendMessage(message.chat.id, withSources(reply, sources), { replyTo }); }
+      try { await bot.sendMessage(message.chat.id, withSources(reply, sources), { replyTo, ...(canDeliverNow ? {authorizeNow: canDeliverNow} : {}) }); }
       catch { logTelegramDiagnostic(this.log, 'voice_transcript_failed'); }
       return reply;
     }
@@ -903,7 +912,7 @@ You are on a live voice call. Answer in one to three short spoken sentences. No 
       : "I couldn't send the voice message. Here's the text instead:";
     const delivered = voiceWanted ? `${fallback}\n\n${reply}` : reply;
     if (canDeliverNow && !canDeliverNow()) return null;
-    await bot.sendMessage(message.chat.id, withSources(delivered, sources), { replyTo });
+    await bot.sendMessage(message.chat.id, withSources(delivered, sources), { replyTo, ...(canDeliverNow ? {authorizeNow: canDeliverNow} : {}) });
     return delivered;
   }
 

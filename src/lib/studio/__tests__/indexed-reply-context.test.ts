@@ -18,21 +18,27 @@ import {FileAdaptiveStorage} from '../../adaptive/persistence/storage';
 import {SharedMemoryRepository} from '../../adaptive/shared/repository';
 import {SharedMemoryService} from '../../adaptive/shared/service';
 import {sharedAuthorityFromStudioStore} from '../shared-authority';
+import {ElevenLabsStudio} from '../media';
+import {TelegramBotClient} from '../../tireh/telegram/client';
+import {privateText} from '../../tireh/__tests__/fixtures';
+import {AdaptiveRelationshipService} from '../../adaptive/relationships/service';
+import {InMemoryRelationshipStore, RelationshipLoop} from '../../relationships';
 
 const NOW = T0.getTime(), TOKEN = '123:synthetic-manager';
 const paths: string[] = [], stores: SqliteAdaptiveStorage[] = [];
 afterEach(() => {vi.restoreAllMocks(); vi.unstubAllGlobals(); for (const store of stores.splice(0)) store.close(); for (const path of paths.splice(0)) rmSync(path, {recursive: true, force: true});});
-async function fixture(personalization = true, consent = true) {
+async function fixture(personalization = true, consent = true, relationships = false) {
   const h = makeStudio(), users = await seedOrg(h), {agent} = await hire(h, users.alice);
   let now = NOW;
   const directory = mkdtempSync(join(tmpdir(), 'vox-indexed-reply-')); paths.push(directory);
   const capabilities = personalization ? ['core_text', 'personalization'] : ['core_text'];
+  if (relationships) capabilities.push('auto_memory', 'proactive_suggestions');
   const options = adaptiveOptionsFromManifest(JSON.stringify({schemaVersion: 1, configurationVersion: 'synthetic', enabledCapabilities: capabilities,
-    accounts: [{accountId: accountIdFor(ID.alice), jurisdictionKeys: ['SYNTHETIC'], allowDeclaredAdult: true}],
+    accounts: [ID.alice, ID.bob].map(id => ({accountId: accountIdFor(id), jurisdictionKeys: ['SYNTHETIC'], allowDeclaredAdult: true})),
     approvals: capabilities.map((capability, i) => ({schemaVersion: 1, id: `approval-${i}`, revision: 1, createdAt: NOW, updatedAt: NOW,
       jurisdiction: 'SYNTHETIC', capability, state: 'approved', configurationVersion: 'synthetic', effectiveAt: NOW, reviewExpiresAt: NOW + 86_400_000, owner: 'synthetic', approvalReference: 'synthetic-only'}))}));
   const storage = new SqliteAdaptiveStorage(join(directory, 'synthetic.sqlite'), {now: () => now}); stores.push(storage);
-  const adaptive = new AdaptiveService(new AdaptiveRepository(storage), {...options, now: () => now});
+  const adaptive = new AdaptiveService(new AdaptiveRepository(storage), {...options, scopedRelationshipsEnabled: relationships, now: () => now});
   Object.defineProperty(h.chatLLM, 'committedExportFence', {value: true});
   h.studio.deps.adaptive = adaptive; h.studio.deps.experience = new AdaptiveExperienceService(adaptive);
   await adaptive.confirm(ID.alice, {confirm: true, adultConfirmed: true});
@@ -66,6 +72,22 @@ function attachShared(f: Awaited<ReturnType<typeof fixture>>) {
     sharedAuthorityFromStudioStore(f.h.store), () => f.h.clock.now.getTime());
   f.h.studio.deps.shared = shared;
   return shared;
+}
+
+async function attachRelationship(f: Awaited<ReturnType<typeof fixture>>) {
+  await f.adaptive.withAccountDocument(ID.alice, (d, now) => {
+    for (const permission of d.permissions) if (permission.id.startsWith('permission:work:')) {permission.state = 'granted'; permission.expiresAt = NOW + 80_000;}
+    d.relationships.bindings = [{id: 'synthetic-durable', revision: 1, accountId: d.accountId, personId: d.personId, space: 'work', status: 'active', confirmedAt: now, expiresAt: NOW + 80_000, originBindingId: d.binding!.id}]; d.revision++;
+  });
+  const authority = new AdaptiveRelationshipService(f.adaptive), store = new InMemoryRelationshipStore();
+  const loop = new RelationshipLoop({store, mode: 'live', now: () => f.h.clock.now, assessor: {assess: async () => ({})},
+    authorize: input => authority.authorize(input.key, input.sourceIds, input.phase, input.expectedFingerprint)});
+  Object.assign(f.h.studio.deps, {relationshipAuthority: authority, relationships: loop, relationshipStore: store,
+    relationshipConfig: {mode: 'live', agentIds: [f.agent.id], personIds: [personId(ID.alice)]}});
+  const permit = (await authority.resolve(ID.alice, f.agent.id, 'work'))!; expect(permit).not.toBeNull();
+  await authority.acceptSource(permit, {id: 'synthetic-style-source', at: f.h.clock.now.getTime(), channel: 'telegram'});
+  await store.update(permit.key, state => {state.preferences.push({key: 'style', value: 'SYNTHETIC_LIVE_RELATIONSHIP_STYLE', sourceId: 'synthetic-style-source', updatedAt: f.h.clock.now.toISOString()}); state.revision++;});
+  return {authority, store, permit};
 }
 
 describe('real indexed Studio reply acquisition and compact rechecks', () => {
@@ -300,6 +322,75 @@ describe('real indexed Studio reply acquisition and compact rechecks', () => {
     expect(await gateway.converse(f.agent.id, personId(ID.alice), 'Synthetic core only question')).toBe('CORE_NO_OPTIONAL_REPLY');
     expect(transport).toHaveBeenCalledTimes(1); expect(String(transport.mock.calls[0][1]?.body)).not.toContain('Launchcodename is Sapphire.');
     expect(f.storage.io.bodyRowsRead).toBe(0); expect(f.storage.io.canonicalImageReads).toBe(0);
+  });
+
+  it.each([false, true])('qualified tap-to-talk speech rechecks after adapter preparation: revoked=%s', async revoke => {
+    const f = await fixture(); f.h.openai.transcribe.mockResolvedValue('launchcodename');
+    vi.spyOn(f.h.chatLLM, 'complete').mockResolvedValue('SYNTHETIC_SAVED_FACT_VOICE_REPLY');
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(new Uint8Array([1, 2, 3]), {headers: {'content-type': 'audio/mpeg'}}));
+    const eleven = new ElevenLabsStudio('synthetic-key', fetcher); f.h.studio.deps.eleven = eleven;
+    const adapter = eleven as unknown as {request(url: string, init: RequestInit, authority?: {authorizeNow?: () => boolean; signal?: AbortSignal}): Promise<Response>};
+    const request = adapter.request.bind(adapter); let prepared = false;
+    adapter.request = async (...args) => {
+      prepared = true;
+      if (revoke) await f.adaptive.correctMemory(ID.alice, 'memory-0', {space: 'work', text: 'Corrected before TTS export.', expectedRevision: 1, eventId: randomUUID()}, {authorizeNow: () => true});
+      return request(...args);
+    };
+    const result = f.h.studio.callTurn(f.users.alice, f.agent.id, new ArrayBuffer(3), 'audio/webm');
+    if (revoke) {await expect(result).rejects.toMatchObject({status: 409}); expect(fetcher).not.toHaveBeenCalled();}
+    else {expect((await result).audio).toBe('AQID'); expect(fetcher).toHaveBeenCalledTimes(1); expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body)).text).toBe('SYNTHETIC_SAVED_FACT_VOICE_REPLY');}
+    expect(prepared).toBe(true);
+  });
+  it('actual indexed Telegram voice uses qualified synthesis and send guards end to end', async () => {
+    const f = await fixture(); vi.spyOn(f.h.chatLLM, 'complete').mockResolvedValue('SYNTHETIC_TELEGRAM_SAVED_REPLY');
+    const speech = vi.fn<typeof fetch>(async () => new Response(new Uint8Array([1, 2, 3]), {headers: {'content-type': 'audio/mpeg'}}));
+    f.h.studio.deps.eleven = new ElevenLabsStudio('synthetic-key', speech);
+    const methods: string[] = [];
+    const telegram = vi.fn<typeof fetch>(async (url, init) => {
+      const method = String(url).split('/').at(-1)!; methods.push(method);
+      if (typeof init?.body === 'string') expect(init.body).not.toMatch(/authorizeNow|signal/);
+      return new Response(JSON.stringify({ok: true, result: method === 'sendChatAction' ? true : {message_id: 900, chat: {id: ID.alice, type: 'private'}}}), {headers: {'content-type': 'application/json'}});
+    });
+    const bot = new TelegramBotClient('synthetic-bot-token', telegram); f.h.studio.deps.botFor = () => bot;
+    const {gateway} = await f.h.studio.gateway();
+    expect(await gateway.handleUpdate(f.agent.id, privateText(ID.alice, 'Please reply as a voice message: launchcodename'))).toBe('replied');
+    expect(speech).toHaveBeenCalledTimes(1); expect(JSON.parse(String(speech.mock.calls[0][1]?.body)).text).toBe('SYNTHETIC_TELEGRAM_SAVED_REPLY');
+    expect(methods.filter(m => m === 'sendVoice')).toHaveLength(1); expect(methods.filter(m => m === 'sendMessage')).toHaveLength(1);
+  });
+
+  it.each(['positive', 'epoch', 'correction'] as const)('real relationship reservation is compatible with the complete SDK fence: %s', async mode => {
+    const f = await fixture(true, true, true), relation = await attachRelationship(f), shared = attachShared(f);
+    await f.adaptive.confirm(ID.bob, {confirm: true, adultConfirmed: true});
+    await f.adaptive.withAccountDocument(ID.bob, d => {const permission = d.permissions.find(p => p.id === 'permission:work:optional.personalization')!; permission.state = 'granted'; permission.expiresAt = NOW + 80_000; d.revision++;});
+    const preview = await shared.preview(ID.alice, {space: 'work', kind: 'selected', recipientTelegramIds: [ID.bob]});
+    await shared.create(ID.alice, {space: 'work', expectedRevision: 0, eventId: randomUUID(), previewToken: preview.previewToken, agentIds: [f.agent.id], text: 'SYNTHETIC_SELECTED_SHARED_FACT'});
+    const prefs = await f.h.studio.deps.experience!.readPreferenceState(ID.alice, 'work', f.agent.id);
+    await f.h.studio.deps.experience!.savePreference(ID.alice, {space: 'work', agentId: f.agent.id, expectedRevision: prefs.revision, eventId: randomUUID(), action: 'set', setting: {key: 'response_length', value: 'brief'}});
+    vi.stubGlobal('window', undefined);
+    const transport = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({id: 'synthetic', type: 'message', role: 'assistant', model: 'synthetic', content: [{type: 'text', text: 'LIVE_RELATIONSHIP_REPLY'}], stop_reason: 'end_turn', usage: {input_tokens: 1, output_tokens: 1}}), {headers: {'content-type': 'application/json'}}));
+    const llm = new AnthropicLLM('synthetic-key', 'synthetic-model', transport); f.h.studio.deps.chatLLM = llm;
+    const client = (llm as unknown as {getClient(): {prepareOptions(options: unknown): Promise<void>}}).getClient(), prepare = client.prepareOptions.bind(client); let prepared = false;
+    client.prepareOptions = async options => {
+      prepared = true;
+      if (mode === 'epoch') await relation.store.bumpEpoch(f.agent.id);
+      if (mode === 'correction') await f.adaptive.correctMemory(ID.alice, 'memory-0', {space: 'work', text: 'External correction after observation.', expectedRevision: 1, eventId: randomUUID()}, {authorizeNow: () => true});
+      await prepare(options);
+    };
+    const response = await handleConversationRequest(f.h.studio, f.request('launchcodename'), TOKEN);
+    expect(prepared).toBe(true);
+    if (mode === 'positive') {
+      expect(response.status).toBe(200); expect(transport).toHaveBeenCalledTimes(1);
+      const payload = String(transport.mock.calls[0][1]?.body);
+      for (const text of ['Launchcodename is Sapphire.', 'SYNTHETIC_SELECTED_SHARED_FACT', 'SYNTHETIC_LIVE_RELATIONSHIP_STYLE', 'response_length']) expect(payload).toContain(text);
+    } else {expect(response.status).not.toBe(200); expect(transport).not.toHaveBeenCalled();}
+    const sources = await f.adaptive.withAccountDocument(ID.alice, d => d.relationships.sources.map(source => source.id));
+    expect(sources.some(id => id.startsWith('call:'))).toBe(true);
+  });
+  it('real tap-to-talk relationship reservation returns a response rather than invalidating its own admission', async () => {
+    const f = await fixture(true, true, true); await attachRelationship(f); f.h.openai.transcribe.mockResolvedValue('launchcodename');
+    const result = await f.h.studio.callTurn(f.users.alice, f.agent.id, new ArrayBuffer(3), 'audio/webm');
+    expect(result.reply).toBe('Sure.'); expect(f.h.chatLLM.replyRequests).toHaveLength(1);
+    expect(JSON.stringify(f.h.chatLLM.replyRequests[0])).toContain('SYNTHETIC_LIVE_RELATIONSHIP_STYLE');
   });
 
 });

@@ -65,8 +65,13 @@ export async function handleConversationRequest(studio: Studio, request: Request
         return digest([adaptive.coreFingerprint(d, now), d.agentGrants.filter(g => g.agentId === input.agentId && g.space === input.space), imagePolicy]);
       });
       const scope = await currentScope();
-      const context = scope ? await (indexed ? studio.adaptiveContextAuthority(input.agentId, personId(user.id), input.space)
-        : studio.adaptiveContext(input.agentId, personId(user.id), input.space)) : null;
+      if (indexed) {
+        if (!scope) return null;
+        const studioAuthority = await studio.replyAuthority(input.agentId, user.id);
+        if (await currentScope() !== scope || await studio.replyAuthority(input.agentId, user.id) !== studioAuthority) return null;
+        return digest([scope, studioAuthority]);
+      }
+      const context = scope ? await studio.adaptiveContext(input.agentId, personId(user.id), input.space) : null;
       const studioAllowed = async () => {
         const state = await studio.deps.store.read();
         return state.agents.some(a => a.id === input.agentId && a.status === 'active' &&
@@ -85,13 +90,9 @@ export async function handleConversationRequest(studio: Studio, request: Request
       if (!indexed) return null;
       const scope = adaptive.readRuntimeControlsForEffect(user.id, input.space, scopeEvaluation);
       if (scope.status !== 'ready' || !scope.value) return null;
-      const context = studio.adaptiveContextAuthorityNow(input.agentId, personId(user.id), input.space);
-      // Canonical controls are sampled again after the other committed stores.
-      const current = adaptive.readRuntimeControlsForEffect(user.id, input.space, (...args) => {
-        const evaluated = scopeEvaluation(...args);
-        return {...evaluated, deadline: Math.min(evaluated.deadline ?? Number.MAX_SAFE_INTEGER, context.validUntil)};
-      });
-      return current.status === 'ready' && current.value === scope.value ? digest([scope.value, context.revision]) : null;
+      const studioAuthority = studio.replyAuthorityNow(input.agentId, user.id);
+      const current = adaptive.readRuntimeControlsForEffect(user.id, input.space, scopeEvaluation);
+      return current.status === 'ready' && current.value === scope.value ? digest([scope.value, studioAuthority]) : null;
     };
     const before = await authority();
     if (!before) return json({ error: 'conversation_not_permitted' }, 403);
@@ -111,9 +112,11 @@ export async function handleConversationRequest(studio: Studio, request: Request
     if (request.signal.aborted || await authority() !== before) {
       await observe('cancelled'); return json({ error: 'conversation_changed' }, 409);
     }
+    let contextFence: (() => boolean) | undefined;
     const reply = await observe.run(() => gateway.converse(input.agentId, personId(user.id), input.text, { space: input.space, images,
       authorize: async () => !request.signal.aborted && await authority() === before,
-      ...(indexed ? {authorizeNow: () => !request.signal.aborted && authorityNow() === before} : {}) }));
+      ...(indexed ? {authorizeNow: () => !request.signal.aborted && authorityNow() === before,
+        onBoundaryFence: (fence: () => boolean) => {contextFence = fence;}} : {}) }));
     // Gateway also checks memory/source policy around provider export and output.
     if (request.signal.aborted || await authority() !== before) {
       await observe('cancelled'); return json({ error: 'conversation_changed' }, 409);
@@ -124,7 +127,7 @@ export async function handleConversationRequest(studio: Studio, request: Request
     }
     if (input.turn && !input.image) studio.deps.preferenceLearning?.enqueue({ telegramId: user.id, agentId: input.agentId,
       space: input.space, turn: input.turn, text: input.text }, request.signal);
-    if (indexed && (request.signal.aborted || authorityNow() !== before)) return json({error: 'conversation_changed'}, 409);
+    if (indexed && (request.signal.aborted || !contextFence || !contextFence())) return json({error: 'conversation_changed'}, 409);
     return json({ reply, ...(correlation ? { turnId: correlation } : {}) });
   } catch (error) {
     await observe?.(request.signal.aborted || LLMAuthorizationError.is(error) ? 'cancelled' : 'failed');
