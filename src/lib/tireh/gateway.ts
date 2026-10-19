@@ -898,14 +898,15 @@ You are on a live voice call. Answer in one to three short spoken sentences. No 
         authorizedPersonIds: decision.authorizedPersonIds,
       }, { expectedRevision });
       if (replaced) {
-        if (!await this.requestAuthorized(authorize)) return;
-        await memories.update(replaced.id, { supersededBy: record.id, shareVersion: (replaced.shareVersion ?? 0) + 1 }, { expectedRevision });
+        // The store committed both sides of the correction atomically. Revocation
+        // after that commit may suppress further work, never strand two active rows.
         expectedRevision += 1;
         // Only our own known correction may advance this turn's fence.
         // An unrelated concurrent update/delete must still cancel delivery.
         boundary.memoryRevision = expectedRevision;
+        existing = existing.filter(memory => memory.id !== replaced.id);
       }
-
+      if (!await this.requestAuthorized(authorize)) return;
       if (decision.offerScope) await this.offerShare(persona, chat, sourceId, record, decision.offerScope, authorize);
       existing.push(record);
     }
