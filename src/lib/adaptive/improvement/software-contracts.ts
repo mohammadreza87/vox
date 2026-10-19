@@ -10,10 +10,18 @@ export const softwareIdentitySchema = z.object({
   baseSourceDigest: sha256, patchDigest: sha256, resultSourceDigest: sha256, policyDigest: sha256,
 }).strict();
 export type SoftwareIdentity = z.infer<typeof softwareIdentitySchema>;
-export const softwarePatchArtifactSchema = z.object({ identity: softwareIdentitySchema,
+export const syntheticSoftwarePatchArtifactSchema = z.object({ identity: softwareIdentitySchema,
   authorMode: z.literal('deterministic_synthetic'), patch: z.string().min(1).max(32768),
 }).strict();
+/** Explicit v2 provenance wrapper; v1 remains byte-for-byte schema compatible. */
+export const modelSoftwarePatchArtifactSchema = z.object({ schemaVersion: z.literal(2),
+  identity: softwareIdentitySchema, authorMode: z.literal('openai_responses'),
+  patch: z.string().min(1).max(32768), authorReceiptDigest: sha256,
+}).strict();
+export const softwarePatchArtifactSchema = z.union([syntheticSoftwarePatchArtifactSchema, modelSoftwarePatchArtifactSchema]);
+export type SyntheticSoftwarePatchArtifact = z.infer<typeof syntheticSoftwarePatchArtifactSchema>;
 export type SoftwarePatchArtifact = z.infer<typeof softwarePatchArtifactSchema>;
+export type ModelSoftwarePatchArtifact = z.infer<typeof modelSoftwarePatchArtifactSchema>;
 export interface FrozenSoftwareBase {
   repositoryCommit: string; repositoryTreeOid: string; targetPath: typeof SOFTWARE_TARGET_PATH;
   baseBlobOid: string; baseSourceDigest: string; source: string;

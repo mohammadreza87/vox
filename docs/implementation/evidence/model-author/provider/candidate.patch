@@ -1,0 +1,9 @@
+--- a/src/lib/utils/sentence-detector.ts
++++ b/src/lib/utils/sentence-detector.ts
+@@ -54,5 +54,5 @@
+   // Sentence ending patterns - handles ., !, ? followed by space or end
+   // Uses a more robust pattern that handles common abbreviations
+-  private static SENTENCE_END = /([.!?]+)(?:\s+|$)/g;
++  private static SENTENCE_END = /([.!?؟]+)(?:\s+|$)/g;
+   private static MIN_SENTENCE_LENGTH = 10;
+ 
