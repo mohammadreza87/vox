@@ -14,6 +14,12 @@ export class StaleMemoryWriteError extends Error {
   constructor() { super('Memory context was invalidated'); this.name = 'StaleMemoryWriteError'; }
 }
 
+/** A correction must replace one still-active memory owned by the same source. */
+export function assertReplacementTarget(memory: NewMemory, target: MemoryRecord | null | undefined): asserts target is MemoryRecord {
+  if (!target || target.id !== memory.supersedes || target.personaId !== memory.personaId ||
+      target.source.personId !== memory.source.personId || target.supersededBy || memory.supersededBy) throw new StaleMemoryWriteError();
+}
+
 /** Stable legacy fallback uses provenance metadata only, never content. */
 export function sourceEventIds(memory: Pick<MemoryRecord, 'source'>): string[] {
   return memory.source.eventIds?.length ? memory.source.eventIds : [
@@ -55,6 +61,8 @@ export interface MemoryStore {
   addIfEpoch(memory: NewMemory, expectedEpoch: number): Promise<MemoryRecord | null>;
   updateIfShareVersion(id: string, expectedVersion: number, patch: Partial<Omit<MemoryRecord, 'id' | 'personaId'>>, guard?: MemoryWriteGuard): Promise<boolean>;
   invalidate(personaId: string): Promise<void>;
+  /** With supersedes: atomically inserts the correction, retires its active
+   * predecessor, invalidates old share offers and advances safetyRevision once. */
   add(memory: NewMemory, guard?: MemoryWriteGuard): Promise<MemoryRecord>;
   get(id: string): Promise<MemoryRecord | null>;
   /** All live (not superseded) memories for a persona */
@@ -114,8 +122,14 @@ export class InMemoryMemoryStore implements MemoryStore {
   async add(memory: NewMemory, guard?: MemoryWriteGuard): Promise<MemoryRecord> {
     this.check(memory.personaId, guard);
     if (lineageEventIds(memory).some((e) => this.tombstones.get(memory.personaId)?.has(e))) throw new StaleMemoryWriteError();
+    const predecessor = memory.supersedes ? this.records.get(memory.supersedes) : undefined;
+    if (memory.supersedes) assertReplacementTarget(memory, predecessor);
     const now = new Date();
     const record: MemoryRecord = { ...memory, id: randomUUID(), createdAt: now, updatedAt: now };
+    if (predecessor) {
+      this.records.set(predecessor.id, { ...predecessor, supersededBy: record.id, shareVersion: (predecessor.shareVersion ?? 0) + 1, updatedAt: now });
+      this.revisions.set(memory.personaId, (this.revisions.get(memory.personaId) ?? 0) + 1);
+    }
     this.records.set(record.id, record);
     return record;
   }
