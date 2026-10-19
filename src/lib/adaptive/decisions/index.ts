@@ -1,5 +1,6 @@
 import type OpenAI from 'openai';
 import { z } from 'zod';
+import { MAX_IMAGE_URL_LENGTH, minimizeImageDataUrl } from '../prediction/image';
 
 /** Verified against OpenAI's Decisions guide/API reference on 2026-10-19.
  * SDK 6.9.1 has no decisions resource. Its public post() supports the documented
@@ -17,7 +18,14 @@ export const questionSchema = z.discriminatedUnion('type', [
   z.object({ ...base, type: z.literal('score'), levels: z.array(z.object({ label: text, description: text }).strict()).min(2).max(8) }).strict(),
 ]);
 export type DecisionQuestion = z.infer<typeof questionSchema>;
-const requestSchema = z.object({ input: z.string().min(1).max(8192), questions: z.array(questionSchema).min(1).max(7) }).strict()
+const imageUrl = z.string().max(MAX_IMAGE_URL_LENGTH).transform((v, ctx) => {
+  try { return minimizeImageDataUrl(v); } catch { ctx.addIssue({ code: 'custom', message: 'invalid_image' }); return z.NEVER; }
+});
+export const decisionEvidenceSchema = z.union([z.string().min(1).max(8192), z.array(z.object({
+  role: z.literal('user'), content: z.tuple([z.object({ type: z.literal('input_text'), text: z.string().min(1).max(4096) }).strict(),
+    z.object({ type: z.literal('input_image'), image_url: imageUrl, detail: z.literal('low') }).strict()]),
+}).strict()).length(1)]);
+const requestSchema = z.object({ input: decisionEvidenceSchema, questions: z.array(questionSchema).min(1).max(7) }).strict()
   .refine(r => new Set(r.questions.map(q => q.name)).size === r.questions.length)
   .refine(r => r.questions.every(q => q.type !== 'choice' || new Set(q.choices.map(c => c.value)).size === q.choices.length));
 export type DecisionInput = z.infer<typeof requestSchema>;

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readdir, readFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -12,12 +12,12 @@ import { MemoryAdaptiveStorage } from './storage';
 const NOW = Date.UTC(2026, 9, 19, 12);
 const directories: string[] = [];
 afterEach(async () => { await Promise.all(directories.splice(0).map(d => rm(d, { recursive: true, force: true }))); });
-const capabilities = ['core_text', 'personalization', 'product_analytics', 'reminder_delivery', 'proactive_suggestions'];
+const capabilities = ['single_party_image', 'core_text', 'personalization', 'product_analytics', 'reminder_delivery', 'proactive_suggestions'];
 const manifest = JSON.stringify({ schemaVersion: 1, configurationVersion: 'synthetic-config', enabledCapabilities: capabilities,
   accounts: [{ accountId: accountIdFor(123), jurisdictionKeys: ['SYNTHETIC'], allowDeclaredAdult: true }],
   approvals: capabilities.map((capability, i) => ({ schemaVersion: 1, id: `synthetic-${i}`, revision: 1, createdAt: NOW, updatedAt: NOW,
     jurisdiction: 'SYNTHETIC', capability, state: 'approved', configurationVersion: 'synthetic-config', effectiveAt: NOW,
-    reviewExpiresAt: NOW + 400 * 86_400_000, owner: 'synthetic-owner', approvalReference: 'synthetic-only' })) });
+    reviewExpiresAt: capability === 'single_party_image' ? NOW + 2000 : NOW + 400 * 86_400_000, owner: 'synthetic-owner', approvalReference: 'synthetic-only' })) });
 async function setup(file = false) {
   let now = NOW;
   let storage: AdaptiveStorage = new MemoryAdaptiveStorage();
@@ -164,4 +164,119 @@ describe('durable experience runtime', () => {
     } }), decisionsEnabled: true });
     expect(await blocked.predict(123, { ...input, turnId: 'turn2' })).toMatchObject({ reason: 'stale' });
   });
+});
+
+const syntheticImage = { sourceId: 'explicit-shared', revision: 1, dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==' };
+const predictionInput = { space: 'work' as const, agentId: 'agent1', sessionId: 'live-session', turnId: 'turn-1', revision: 1, contextKey: 'audience1', text: 'Synthetic current draft', question: 'explicit_correction' as const };
+const syntheticAnswer = { model: 'gpt-6-luna', answers: [{ type: 'predicate', name: 'explicit_correction', probability: 0.8 }], usage: { input_tokens: 12 } };
+describe('live prediction session delivery guards', () => {
+  it('does not export to Decisions when access is blocked during its final canonical authority read', async () => {
+    const { adaptive, agent } = await setup(); await agent();
+    let allowed = true, checks = 0;
+    const evaluate = vi.fn(async () => syntheticAnswer);
+    const decisions = new DecisionService({ evaluate });
+    const run = decisions.evaluate.bind(decisions);
+    vi.spyOn(decisions, 'evaluate').mockImplementation(context => run({ ...context, authorize: async () => {
+      // DecisionService checks again after loading evidence, immediately before
+      // the real provider seam. Block while that check awaits canonical state.
+      if (++checks === 2) {
+        const read = adaptive.withAccountDocument.bind(adaptive);
+        const spy = vi.spyOn(adaptive, 'withAccountDocument').mockImplementationOnce(async (id, fn) => {
+          allowed = false;
+          return read(id, fn);
+        });
+        try { return await context.authorize(); } finally { spy.mockRestore(); }
+      }
+      return context.authorize();
+    } }));
+    const experience = new AdaptiveExperienceService(adaptive, { decisionsEnabled: true, decisions });
+    expect(await experience.predict(123, predictionInput, undefined, async () => allowed)).toMatchObject({ status: 'unknown' });
+    expect(evaluate).not.toHaveBeenCalled();
+  });
+  it('invalidates a prediction receipt when access is blocked during canonical receipt validation', async () => {
+    const { adaptive, agent } = await setup(); await agent();
+    const experience = new AdaptiveExperienceService(adaptive, { decisionsEnabled: true,
+      decisions: new DecisionService({ evaluate: async () => syntheticAnswer }) });
+    const result = await experience.predict(123, predictionInput);
+    let allowed = true;
+    const read = adaptive.withAccountDocument.bind(adaptive);
+    const spy = vi.spyOn(adaptive, 'withAccountDocument').mockImplementationOnce(async (id, fn) => {
+      allowed = false;
+      return read(id, fn);
+    });
+    try {
+      expect(await experience.validatePrediction(123, { agentId: predictionInput.agentId, space: predictionInput.space,
+        sessionId: predictionInput.sessionId, turnId: predictionInput.turnId, revision: predictionInput.revision,
+        contextKey: predictionInput.contextKey, policyReceipt: result.policyReceipt! }, async () => allowed)).toEqual({ valid: false });
+    } finally { spy.mockRestore(); }
+  });
+  it('cancels active provider and rejects delayed request behind a tombstone across service instances', async () => {
+    const { adaptive, agent } = await setup(); await agent();
+    let started!: () => void; const began = new Promise<void>(r => { started = r; }); let providerSignal!: AbortSignal;
+    const decisions = new DecisionService({ evaluate: async (_input, signal) => { providerSignal = signal; started(); return new Promise(() => {}); } });
+    const experience = new AdaptiveExperienceService(adaptive, { decisions, decisionsEnabled: true });
+    const pending = experience.predict(123, predictionInput); await began;
+    const scope = { space: predictionInput.space, agentId: predictionInput.agentId, sessionId: predictionInput.sessionId, turnId: predictionInput.turnId, revision: predictionInput.revision, contextKey: predictionInput.contextKey };
+    await experience.cancelPrediction(123, scope);
+    expect(await pending).toMatchObject({ status: 'unknown' }); expect(providerSignal.aborted).toBe(true);
+    const restarted = new AdaptiveExperienceService(adaptive, { decisions, decisionsEnabled: true });
+    expect(await restarted.predict(123, predictionInput)).toMatchObject({ reason: 'stale' });
+    await restarted.cancelPrediction(123, { ...scope, turnId: 'late-turn' });
+    expect(await restarted.predict(123, { ...predictionInput, turnId: 'late-turn' })).toMatchObject({ reason: 'stale' });
+  });
+  it('new turn permanently supersedes old turn even if provider completes out of order', async () => {
+    const { adaptive, agent } = await setup(); await agent();
+    let resolve!: (value: unknown) => void, started!: () => void;
+    const began = new Promise<void>(r => { started = r; });
+    const decisions = new DecisionService({ evaluate: () => { started(); return new Promise(r => { resolve = r; }); } });
+    const experience = new AdaptiveExperienceService(adaptive, { decisions, decisionsEnabled: true });
+    const pending = experience.predict(123, predictionInput); await began;
+    expect(await experience.predict(123, { ...predictionInput, turnId: 'turn-2' })).toMatchObject({ reason: 'busy' });
+    resolve(syntheticAnswer); expect(await pending).toMatchObject({ status: 'unknown' });
+    expect(await experience.predict(123, { ...predictionInput, revision: 100 })).toMatchObject({ reason: 'stale' });
+  });
+  it('validates the same short-lived receipt and invalidates it on scope, revocation or expiry', async () => {
+    const { adaptive, agent, setNow } = await setup(); await agent();
+    const experience = new AdaptiveExperienceService(adaptive, { decisionsEnabled: true, decisions: new DecisionService({ evaluate: async () => syntheticAnswer }) });
+    const result = await experience.predict(123, predictionInput);
+    const receipt = { ...predictionInput, policyReceipt: result.policyReceipt! }; delete (receipt as Partial<typeof predictionInput>).text; delete (receipt as Partial<typeof predictionInput>).question;
+    expect(await experience.validatePrediction(123, receipt)).toEqual({ valid: true });
+    expect(await experience.validatePrediction(123, { ...receipt, contextKey: 'audience2' })).toEqual({ valid: false });
+    expect(await experience.validatePrediction(123, receipt, async () => false)).toEqual({ valid: false });
+    setNow(NOW + 1500); expect(await experience.validatePrediction(123, receipt)).toEqual({ valid: false });
+    setNow(NOW); await agent('work', false); expect(await experience.validatePrediction(123, receipt)).toEqual({ valid: false });
+  });
+  it('rejects unapproved images, binds image policy and strips media bytes from durable budget records', async () => {
+    const { adaptive, agent, setNow } = await setup(); await agent();
+    const evaluate = vi.fn(async () => syntheticAnswer);
+    const experience = new AdaptiveExperienceService(adaptive, { decisionsEnabled: true, decisions: new DecisionService({ evaluate }) });
+    const input = { ...predictionInput, image: syntheticImage };
+    const original = adaptive.capabilityStatus.bind(adaptive);
+    const policy = vi.spyOn(adaptive, 'capabilityStatus').mockImplementation((d, capability, now) => capability === 'single_party_image' ? { eligible: false } : original(d, capability, now));
+    await expect(experience.predict(123, input)).rejects.toMatchObject({ code: 'image_capability_unavailable' }); expect(evaluate).not.toHaveBeenCalled(); policy.mockRestore();
+    expect(await experience.predict(123, input)).toMatchObject({ status: 'answered' });
+    expect(evaluate.mock.calls[0][0].input).toEqual([{ role: 'user', content: [{ type: 'input_text', text: input.text }, { type: 'input_image', image_url: syntheticImage.dataUrl, detail: 'low' }] }]);
+    const stored = JSON.stringify(await adaptive.withAccountDocument(123, d => d.experience)); expect(stored).not.toContain(syntheticImage.dataUrl); expect(stored).not.toContain(input.text);
+    const expiring = new AdaptiveExperienceService(adaptive, { decisionsEnabled: true, decisions: new DecisionService({ evaluate: async () => { setNow(NOW + 2001); return syntheticAnswer; } }) });
+    expect(await expiring.predict(123, { ...input, turnId: 'expires-inflight' })).toMatchObject({ reason: 'stale' });
+  });
+  it('rechecks Studio permission before model export and returns baseline if it is revoked while loading', async () => {
+    const { adaptive, agent } = await setup(); await agent();
+    const evaluate = vi.fn(async () => syntheticAnswer);
+    const experience = new AdaptiveExperienceService(adaptive, { decisionsEnabled: true, decisions: new DecisionService({ evaluate }) });
+    let checks = 0;
+    expect(await experience.predict(123, predictionInput, undefined, async () => ++checks < 2)).toMatchObject({ status: 'unknown' });
+    expect(evaluate).not.toHaveBeenCalled();
+  });
+});
+
+it('disabled prediction cancellation never introduces extended-schema records, and denied scopes cannot seed tombstones', async () => {
+  const { adaptive, experience, agent } = await setup(); await agent();
+  const scope = { space: predictionInput.space, agentId: predictionInput.agentId, sessionId: predictionInput.sessionId, turnId: predictionInput.turnId, revision: predictionInput.revision };
+  const before = await adaptive.withAccountDocument(123, d => structuredClone(d.experience.predictionTurns));
+  expect(await experience.cancelPrediction(123, scope)).toEqual({ cancelled: true });
+  expect(await adaptive.withAccountDocument(123, d => d.experience.predictionTurns)).toEqual(before);
+  const enabled = new AdaptiveExperienceService(adaptive, { decisionsEnabled: true, decisions: new DecisionService({ evaluate: async () => syntheticAnswer }) });
+  await enabled.cancelPrediction(123, { ...scope, agentId: 'not-granted' });
+  expect(await adaptive.withAccountDocument(123, d => d.experience.predictionTurns)).toEqual(before);
 });

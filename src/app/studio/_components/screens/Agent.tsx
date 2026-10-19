@@ -171,6 +171,7 @@ export function AgentScreen({ id }: { id: string }) {
   };
 
   const actions = [
+    { label: 'Chat here', icon: 'chat', run: () => nav.push({ name: 'conversation', id: agent.id }) },
     { label: 'Chat', icon: 'chat', run: () => agent.bot && openTelegram(`https://t.me/${agent.bot.username}`) },
     { label: 'Call', icon: 'phone', run: () => nav.push({ name: 'call', id: agent.id }) },
     { label: 'Group', icon: 'groups', run: addToGroup },

@@ -18,9 +18,16 @@ function isUnavailableWebTool(error: unknown): boolean {
   } catch { return false; }
 }
 
+export interface LLMImage {
+  mimeType: 'image/jpeg' | 'image/png' | 'image/webp';
+  /** Validated, minimized current-turn bytes. Never a remote URL or retained history. */
+  data: string;
+}
+
 export interface LLMMessage {
   role: 'user' | 'assistant';
   content: string;
+  images?: LLMImage[];
 }
 
 export interface LLMRequest {
@@ -30,6 +37,17 @@ export interface LLMRequest {
   temperature?: number;
   /** Side-effecting callers must not deliver a provider-truncated completion. */
   requireComplete?: boolean;
+  /** Server-only fence, rechecked before every provider request/retry. Never serialized. */
+  authorize?: () => Promise<boolean>;
+}
+
+export class LLMAuthorizationError extends Error {
+  constructor() { super('llm_authority_changed'); this.name = 'LLMAuthorizationError'; }
+}
+async function authorizeRequest(request: Pick<LLMRequest, 'authorize'>): Promise<void> {
+  if (!request.authorize) return;
+  try { if (await request.authorize() === true) return; } catch { /* Fail closed. */ }
+  throw new LLMAuthorizationError();
 }
 
 export interface WebSource {
@@ -58,16 +76,32 @@ export async function* streamText(llm: LLM, request: LLMRequest): AsyncIterable<
 export function normalizeTurns(messages: LLMMessage[]): LLMMessage[] {
   const merged: LLMMessage[] = [];
   for (const message of messages) {
-    if (!message.content.trim()) continue;
+    if (!message.content.trim() && !message.images?.length) continue;
     const last = merged[merged.length - 1];
     if (last && last.role === message.role) {
       last.content = `${last.content}\n${message.content}`;
+      if (message.role === 'user' && message.images?.length) last.images = [...(last.images ?? []), ...message.images];
     } else {
-      merged.push({ ...message });
+      merged.push({ role: message.role, content: message.content,
+        ...(message.role === 'user' && message.images?.length ? { images: [...message.images] } : {}) });
     }
   }
   while (merged.length > 0 && merged[0].role === 'assistant') merged.shift();
   return merged;
+}
+
+/** Provider wire formats contain only the explicit current user's attachments. */
+export function anthropicTurns(messages: LLMMessage[]): Anthropic.MessageParam[] {
+  return normalizeTurns(messages).map(message => ({ role: message.role,
+    content: message.images?.length ? [
+      ...message.images.map(image => ({ type: 'image' as const, source: { type: 'base64' as const, media_type: image.mimeType, data: image.data } })),
+      { type: 'text' as const, text: message.content || 'Describe the shared image.' },
+    ] : message.content,
+  }));
+}
+
+export function geminiParts(message: LLMMessage) {
+  return [{ text: message.content }, ...(message.role === 'user' ? message.images ?? [] : []).map(image => ({ inlineData: { mimeType: image.mimeType, data: image.data } }))];
 }
 
 function supportsCustomSampling(model: string): boolean {
@@ -116,9 +150,16 @@ export class AnthropicLLM implements LLM {
     };
   }
 
-  async complete(request: LLMRequest): Promise<string> {
+  private async create(request: LLMRequest, body: Anthropic.MessageCreateParamsNonStreaming): Promise<Anthropic.Message> {
     this.client ??= new Anthropic({ apiKey: this.apiKey });
-    const response = await this.client.messages.create({ ...this.params(request), messages: normalizeTurns(request.messages) });
+    await authorizeRequest(request);
+    // Hidden SDK retries cannot recheck current authority. Scoped requests use
+    // no automatic retry; explicit web continuations pass through this fence.
+    return request.authorize ? this.client.messages.create(body, { maxRetries: 0 }) : this.client.messages.create(body);
+  }
+
+  async complete(request: LLMRequest): Promise<string> {
+    const response = await this.create(request, { ...this.params(request), messages: anthropicTurns(request.messages) });
     if (request.requireComplete && response.stop_reason === 'max_tokens') throw new Error('LLM completion truncated');
     return response.content
       .flatMap((block) => (block.type === 'text' ? [block.text] : []))
@@ -128,7 +169,9 @@ export class AnthropicLLM implements LLM {
 
   async *stream(request: LLMRequest): AsyncIterable<string> {
     this.client ??= new Anthropic({ apiKey: this.apiKey });
-    const stream = this.client.messages.stream({ ...this.params(request), messages: normalizeTurns(request.messages) });
+    await authorizeRequest(request);
+    const body = { ...this.params(request), messages: anthropicTurns(request.messages) };
+    const stream = request.authorize ? this.client.messages.stream(body, { maxRetries: 0 }) : this.client.messages.stream(body);
     for await (const event of stream) {
       if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') yield event.delta.text;
     }
@@ -137,13 +180,13 @@ export class AnthropicLLM implements LLM {
   async completeWithWeb(request: LLMRequest & { maxSearches: number }): Promise<{ text: string; sources: WebSource[] }> {
     if (this.webUnavailable || request.maxSearches < 1) return { text: await this.complete(request), sources: [] };
     this.client ??= new Anthropic({ apiKey: this.apiKey });
-    const messages: Anthropic.MessageParam[] = normalizeTurns(request.messages);
+    const messages: Anthropic.MessageParam[] = anthropicTurns(request.messages);
     const tools: Anthropic.ToolUnion[] = [{ type: 'web_search_20250305', name: 'web_search', max_uses: request.maxSearches }];
     try {
-      let response = await this.client.messages.create({ ...this.params(request), messages, tools });
+      let response = await this.create(request, { ...this.params(request), messages, tools });
       for (let i = 0; response.stop_reason === 'pause_turn' && i < MAX_WEB_CONTINUATIONS; i++) {
         messages.push({ role: 'assistant', content: response.content });
-        response = await this.client.messages.create({ ...this.params(request), messages, tools });
+        response = await this.create(request, { ...this.params(request), messages, tools });
       }
       return webAnswer(response.content);
     } catch (error) {
@@ -163,17 +206,18 @@ export class GeminiLLM implements LLM {
 
   constructor(private readonly apiKey: string, private readonly model: string) {}
 
-  async complete({ system, messages, maxTokens = 1024, temperature = 0.7, requireComplete }: LLMRequest): Promise<string> {
+  async complete({ system, messages, maxTokens = 1024, temperature = 0.7, requireComplete, authorize }: LLMRequest): Promise<string> {
     const turns = normalizeTurns(messages);
     const last = turns.pop();
     if (!last) return '';
     this.client ??= new GoogleGenerativeAI(this.apiKey);
     const model = this.client.getGenerativeModel({ model: this.model, systemInstruction: system });
     const chat = model.startChat({
-      history: turns.map((m) => ({ role: m.role === 'user' ? 'user' : 'model', parts: [{ text: m.content }] })),
+      history: turns.map((m) => ({ role: m.role === 'user' ? 'user' : 'model', parts: geminiParts(m) })),
       generationConfig: { maxOutputTokens: maxTokens, temperature },
     });
-    const result = await chat.sendMessage(last.content);
+    await authorizeRequest({ authorize });
+    const result = await chat.sendMessage(last.images?.length ? geminiParts(last) : last.content);
     if (requireComplete && result.response.candidates?.some((candidate) => candidate.finishReason === 'MAX_TOKENS')) throw new Error('LLM completion truncated');
     return result.response.text().trim();
   }
