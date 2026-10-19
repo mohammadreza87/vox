@@ -1,5 +1,7 @@
 # Software patch evaluation
 
+The original deterministic-author evidence below describes v1. The additive [model author](MODEL_PATCH_AUTHOR.md) documents v2 separately; its receipts do not replace the historical v1 source manifest. شواهد نویسندهٔ قطعی این سند متعلق به نسخهٔ اول است؛ پیوند نویسندهٔ مدل‌محور، نسخهٔ دوم و رسید مستقل آن را توضیح می‌دهد.
+
 VOX-045 adds a local, reviewable software patch workflow alongside the existing routing experiment. It starts from a signed synthetic defect, freezes a Git commit and target blob, produces a bounded patch, executes the baseline and candidate in Docker, and generates a review packet. It does not activate a production developer agent or deploy its own changes.
 
 The first reproduction is concrete: `SentenceDetector.addChunk()` emits an English question ending in `?`, but retains a Persian question ending in `؟` until the stream is flushed. The candidate adds Persian punctuation to the existing streaming boundary expression. This module serves progressive TTS; this experiment does not establish improvements to every Studio voice path.

@@ -7,7 +7,8 @@ import { attest, canonical, hash, type Authority, type TrustStore } from './cont
 import { SOFTWARE_TARGET_PATH, type FrozenSoftwareBase, type SoftwareEvaluation } from './software-contracts';
 import { createSyntheticPersianPatch, materializeSoftwarePatch } from './software-patch';
 import { SOFTWARE_EVALUATOR_DIGEST, SOFTWARE_IMAGE_DIGEST, SOFTWARE_POLICY_DIGEST } from './software-sandbox';
-import { SoftwareImprovementWorkflow, softwareBaseBinding, type SoftwareFinding, type SoftwareProposal } from './software-workflow';
+import { SOFTWARE_AUTHOR_MODEL, SOFTWARE_AUTHOR_POLICY_DIGEST, softwareAuthorInputDigest, type SoftwareAuthorAttempt } from './software-author-contracts';
+import { SoftwareImprovementWorkflow, softwareBaseBinding, type SoftwareFinding, type SoftwareProposal, type ModelSoftwareProposal } from './software-workflow';
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => fs.rm(root, { recursive: true, force: true }))); });
@@ -215,5 +216,146 @@ describe('local durable software improvement workflow', () => {
     await expect(s.workflow.review('private-review', s.sign('human', 'software_release_review', { ...s.approval, reason: privateText }))).rejects.toThrow();
     const auditBytes = await Promise.all((await fs.readdir(join(s.root, 'audit'))).map(file => fs.readFile(join(s.root, 'audit', file), 'utf8')));
     expect(auditBytes.join('')).not.toContain(privateText); expect((await s.workflow.report()).auditEvents).toBe(4);
+  });
+});
+
+
+/** All receipts below are signed workflow fixtures, never provider/Docker proof. */
+async function modelSetup(reserve=true) {
+  const s = await setup();
+  const finding:SoftwareFinding = {...s.finding,id:'model_finding',issueId:'model_issue'};
+  const signedFinding = s.sign('analyst','software_finding',finding);
+  await s.workflow.importFinding('model-finding',signedFinding);
+  const proposal:ModelSoftwareProposal = {...s.proposal,schemaVersion:2,id:'model_proposal',findingId:finding.id,
+    authorMode:'openai_responses',authorPolicyDigest:SOFTWARE_AUTHOR_POLICY_DIGEST};
+  const signedProposal = s.sign('author','software_proposal',proposal);
+  await s.workflow.propose('model-proposal',signedProposal);
+  const reservation = reserve ? await s.workflow.reserveAuthorAttempt('model-reservation',proposal.id) : {reservationDigest:hash('unreserved'),issuedAt:s.clock.now};
+  const synthetic = createSyntheticPersianPatch(s.base,finding.issueId,SOFTWARE_POLICY_DIGEST);
+  const patch = synthetic.patch.replace('[.!?؟]+','[.!?؟]{1,}');
+  const materialized = materializeSoftwarePatch(s.base,patch);
+  const attempt:SoftwareAuthorAttempt = {schemaVersion:1,reservationDigest:reservation.reservationDigest,
+    findingDigest:hash(canonical(signedFinding)),proposalDigest:hash(canonical(signedProposal)),inputDigest:softwareAuthorInputDigest(s.base.source),
+    sourceDigest:s.base.baseSourceDigest,authorPolicyDigest:SOFTWARE_AUTHOR_POLICY_DIGEST,requestedModel:SOFTWARE_AUTHOR_MODEL,returnedModel:SOFTWARE_AUTHOR_MODEL,
+    responseId:'response_model_1',status:'completed',inputTokens:10,outputTokens:20,totalTokens:30,patchDigest:materialized.patchDigest,
+    startedAt:s.clock.now,finishedAt:s.clock.now};
+  const authorReceipt = s.sign('author','software_author_attempt',attempt);
+  const artifact = {schemaVersion:2 as const,authorMode:'openai_responses' as const,identity:{...synthetic.identity,patchDigest:materialized.patchDigest,resultSourceDigest:materialized.resultSourceDigest},
+    patch,authorReceiptDigest:hash(canonical(authorReceipt))};
+  const candidate = {schemaVersion:2 as const,id:'model_candidate',proposalId:proposal.id,createdAt:s.clock.now,artifact,authorReceipt};
+  const registration = s.sign('author','software_candidate',candidate);
+  return {...s,modelFinding:finding,signedFinding,modelProposal:proposal,signedProposal,reservation,attempt,authorReceipt,modelArtifact:artifact,modelCandidate:candidate,registration};
+}
+function changedModel(s:Awaited<ReturnType<typeof modelSetup>>, attempt:SoftwareAuthorAttempt) {
+  const authorReceipt=s.sign('author','software_author_attempt',attempt);
+  return s.sign('author','software_candidate',{...s.modelCandidate,authorReceipt,
+    artifact:{...s.modelArtifact,authorReceiptDigest:hash(canonical(authorReceipt))}});
+}
+describe('versioned model author provenance registry',()=>{
+  it('preserves exact v1 schemas and accepts bounded noncanonical model patch with independent review',async()=>{
+    const s=await modelSetup();
+    await s.workflow.registerCandidate('model-register',s.registration);
+    const evaluation={...s.evaluation,identity:s.modelArtifact.identity,datasetDigest:hash('model-final-set')};
+    const evaluated=s.sign('evaluator','software_protected_evaluation',evaluation);
+    await s.workflow.attachEvaluation('model-evaluate',s.modelCandidate.id,evaluated);
+    expect(await s.workflow.readiness(s.modelCandidate.id)).toEqual({ready:false,reason:'human_release_required'});
+    await s.workflow.review('model-review',s.sign('human','software_release_review',{...s.approval,candidateId:s.modelCandidate.id,
+      artifactDigest:hash(canonical(s.modelArtifact)),evaluationDigest:hash(canonical(evaluated))}));
+    expect(await s.workflow.readiness(s.modelCandidate.id)).toEqual({ready:true,reason:'local_pr_review_ready'});
+    const packet=await s.workflow.reviewPacket(s.modelCandidate.id);
+    expect(packet.body).toContain('Model-authored patch (OpenAI Responses)');
+    expect(packet.evidence).toMatchObject({authorMode:'openai_responses',authorReceipt:s.authorReceipt});
+    expect(packet.patch).not.toEqual(createSyntheticPersianPatch(s.base,s.modelFinding.issueId,SOFTWARE_POLICY_DIGEST).patch);
+    const restarted=new SoftwareImprovementWorkflow(s.options);
+    expect(await restarted.readArtifact(s.modelCandidate.id)).toEqual(s.modelArtifact);
+    await restarted.registerCandidate('model-register',s.registration);
+  });
+  it('requires explicit v2 proposal, artifact and candidate versions without widening v1',async()=>{
+    const s=await modelSetup();
+    const unversioned={id:s.modelCandidate.id,proposalId:s.modelCandidate.proposalId,createdAt:s.modelCandidate.createdAt,artifact:s.modelCandidate.artifact,authorReceipt:s.modelCandidate.authorReceipt};
+    await expect(s.workflow.registerCandidate('unversioned',s.sign('author','software_candidate',unversioned) as never)).rejects.toThrow();
+    await expect(s.workflow.registerCandidate('bogus-mode',s.sign('author','software_candidate',{...s.modelCandidate,artifact:{...s.modelArtifact,authorMode:'model'}}) as never)).rejects.toThrow();
+    await expect(s.workflow.propose('unversioned-proposal',s.sign('author','software_proposal',{...s.modelProposal,schemaVersion:undefined}) as never)).rejects.toThrow();
+    await expect(s.workflow.registerCandidate('v1-model-proposal',s.sign('author','software_candidate',{...s.modelCandidate,proposalId:s.proposal.id}))).rejects.toThrow('author_mode_mismatch');
+    await expect(s.workflow.registerCandidate('v2-synthetic',s.sign('author','software_candidate',{...s.candidate,id:'wrong_mode',proposalId:s.modelProposal.id}))).rejects.toThrow('author_mode_mismatch');
+  });
+  it('requires a durable reservation, including failed/crashed attempts, and denies all redispatch replay',async()=>{
+    const s=await modelSetup(false);
+    await expect(s.workflow.registerCandidate('unreserved',s.registration)).rejects.toThrow('model_author_reservation_required');
+    const [first,second]=await Promise.allSettled([s.workflow.reserveAuthorAttempt('reserve-a',s.modelProposal.id),s.workflow.reserveAuthorAttempt('reserve-b',s.modelProposal.id)]);
+    expect([first,second].filter(result=>result.status==='fulfilled')).toHaveLength(1);
+    await expect(s.workflow.reserveAuthorAttempt('reserve-a',s.modelProposal.id)).rejects.toThrow('author_attempt_already_reserved');
+    const restarted=new SoftwareImprovementWorkflow(s.options);
+    await expect(restarted.reserveAuthorAttempt('another-reserve',s.modelProposal.id)).rejects.toThrow('author_attempt_already_reserved');
+  });
+  it('binds receipt to finding/proposal/source/input/patch/policy/model/reservation and time',async()=>{
+    const s=await modelSetup();
+    const changes=[{findingDigest:hash('wrong')},{proposalDigest:hash('wrong')},{sourceDigest:hash('wrong')},{inputDigest:hash('wrong')},
+      {patchDigest:hash('wrong')},{reservationDigest:hash('wrong')},{startedAt:s.clock.now-1},{finishedAt:s.clock.now+1},
+      {status:'incomplete',patchDigest:null},{returnedModel:null},{authorPolicyDigest:hash('wrong')},{requestedModel:'another_model'},
+      {totalTokens:31}];
+    for(const change of changes) await expect(s.workflow.registerCandidate('bad-binding',changedModel(s,{...s.attempt,...change} as SoftwareAuthorAttempt))).rejects.toThrow();
+    const tampered={...s.authorReceipt,payload:{...s.attempt,responseId:'response_tampered'}};
+    await expect(s.workflow.registerCandidate('tampered',s.sign('author','software_candidate',{...s.modelCandidate,authorReceipt:tampered,
+      artifact:{...s.modelArtifact,authorReceiptDigest:hash(canonical(tampered))}}))).rejects.toThrow('untrusted_software_author_attempt');
+    await expect(s.workflow.registerCandidate('wrong-receipt-digest',s.sign('author','software_candidate',{...s.modelCandidate,
+      artifact:{...s.modelArtifact,authorReceiptDigest:hash('wrong')}}))).rejects.toThrow('author_receipt_binding_mismatch');
+  });
+  it('requires the proposal, candidate and author receipt to share the same trusted author key',async()=>{
+    const s=await modelSetup();const pair=generateKeyPairSync('ed25519');
+    s.trust.author2={role:'author',publicKey:pair.publicKey.export({type:'spki',format:'pem'}).toString()};
+    const key=pair.privateKey.export({type:'pkcs8',format:'pem'}).toString();
+    const receipt=attest('author2',key,'software_author_attempt',s.attempt);
+    await expect(s.workflow.registerCandidate('alternate-author',s.sign('author','software_candidate',{...s.modelCandidate,authorReceipt:receipt,
+      artifact:{...s.modelArtifact,authorReceiptDigest:hash(canonical(receipt))}}))).rejects.toThrow('author_receipt_binding_mismatch');
+    await expect(s.workflow.registerCandidate('alternate-candidate-author',attest('author2',key,'software_candidate',s.modelCandidate))).rejects.toThrow('candidate_binding_mismatch');
+  });
+  it('does not allow old synthetic approvals or evaluations for different code to authorize model output',async()=>{
+    const s=await modelSetup();await s.workflow.registerCandidate('model-register',s.registration);
+    await expect(s.workflow.attachEvaluation('v1-eval',s.modelCandidate.id,s.evaluated)).rejects.toThrow('evaluation_binding_mismatch');
+    const evaluated=s.sign('evaluator','software_protected_evaluation',{...s.evaluation,identity:s.modelArtifact.identity,datasetDigest:hash('model-final')});
+    await s.workflow.attachEvaluation('model-eval',s.modelCandidate.id,evaluated);
+    await expect(s.workflow.review('v1-review',s.sign('human','software_release_review',{...s.approval,candidateId:s.modelCandidate.id,evaluationDigest:hash(canonical(evaluated))}))).rejects.toThrow('approval_binding_mismatch');
+  });
+  it.each(['refused','incomplete','timeout','provider_error','invalid_patch'] as const)('rejects signed %s attempt as candidate provenance',async status=>{
+    const s=await modelSetup();
+    const attempt={...s.attempt,status,patchDigest:null,inputTokens:null,outputTokens:null,totalTokens:null};
+    await expect(s.workflow.registerCandidate('failed-author',changedModel(s,attempt))).rejects.toThrow('author_receipt_binding_mismatch');
+  });
+  it('rechecks model provenance and authority after registration base I/O',async()=>{
+    for(const change of ['trust','revoke','expiry','base'] as const){
+      const s=await modelSetup();let release!:()=>void;let entered!:()=>void;
+      const gate=new Promise<void>(resolve=>{release=resolve;});const started=new Promise<void>(resolve=>{entered=resolve;});
+      const slow=new SoftwareImprovementWorkflow({...s.options,currentBase:async()=>{entered();await gate;return s.current.base;}});
+      const pending=slow.registerCandidate('slow-register',s.registration);const rejected=expect(pending).rejects.toThrow();await started;
+      if(change==='trust'){const pair=generateKeyPairSync('ed25519');s.trust.author.publicKey=pair.publicKey.export({type:'spki',format:'pem'}).toString();}
+      if(change==='revoke')await s.workflow.revokeLineage('model-revoke',s.sign('human','software_revoke_lineage',{lineageId:s.modelFinding.lineageIds[0]}));
+      if(change==='expiry')s.clock.now=s.modelFinding.expiresAt;
+      if(change==='base')s.current.base={...s.base,repositoryCommit:'f'.repeat(40)};
+      release();await rejected;
+    }
+  });
+  it.each(['authorContext','reserveAuthorAttempt'] as const)('rechecks trust, revocation, expiry and baseline at %s before dispatch',async method=>{
+    for(const change of ['trust','revoke','expiry','base'] as const){
+      const s=await modelSetup(false);let release!:()=>void;let entered!:()=>void;
+      const gate=new Promise<void>(resolve=>{release=resolve;});const started=new Promise<void>(resolve=>{entered=resolve;});
+      const slow=new SoftwareImprovementWorkflow({...s.options,currentBase:async()=>{entered();await gate;return s.current.base;}});
+      const pending=method==='authorContext'?slow.authorContext(s.modelProposal.id):slow.reserveAuthorAttempt('slow-reserve',s.modelProposal.id);
+      const rejected=expect(pending).rejects.toThrow();await started;
+      if(change==='trust'){const pair=generateKeyPairSync('ed25519');s.trust.author.publicKey=pair.publicKey.export({type:'spki',format:'pem'}).toString();}
+      if(change==='revoke')await s.workflow.revokeLineage('model-revoke',s.sign('human','software_revoke_lineage',{lineageId:s.modelFinding.lineageIds[0]}));
+      if(change==='expiry')s.clock.now=s.modelFinding.expiresAt;
+      if(change==='base')s.current.base={...s.base,repositoryCommit:'f'.repeat(40)};
+      release();await rejected;
+    }
+  });
+  it('rechecks completed provenance after restart, expiry and key revocation',async()=>{
+    const s=await modelSetup();await s.workflow.registerCandidate('model-register',s.registration);
+    const restarted=new SoftwareImprovementWorkflow(s.options);
+    const pair=generateKeyPairSync('ed25519');s.trust.author.publicKey=pair.publicKey.export({type:'spki',format:'pem'}).toString();
+    await expect(restarted.readArtifact(s.modelCandidate.id)).rejects.toThrow('untrusted_software_candidate');
+    const expired=await modelSetup();await expired.workflow.registerCandidate('model-register',expired.registration);
+    expired.clock.now=expired.modelFinding.expiresAt;
+    await expect(expired.workflow.readArtifact(expired.modelCandidate.id)).rejects.toThrow('finding_ineligible');
   });
 });
