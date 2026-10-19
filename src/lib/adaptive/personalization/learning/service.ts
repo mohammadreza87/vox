@@ -79,11 +79,19 @@ export class PreferenceLearningService {
     signal?: AbortSignal, check?: () => boolean): Promise<void> {
     if (signal?.aborted) return fail();
     if (this.adaptive.repository.storage.supportsCommittedWriteFence !== true) return fail('preference_learning_unavailable', 503);
-    const initial = requirePermission ? this.currentNow(telegramId, scope) : undefined;
+    // A command waits for the account transaction instead of treating another
+    // legitimate writer as unavailable. Pin external Studio authority before
+    // queueing; canonical authority and CAS are checked under the account lock.
+    const initialStudio = this.studio(telegramId, scope);
+    let initial: ReturnType<PreferenceLearningService['state']> | undefined;
     let draft: AdaptiveDocument | undefined;
-    await this.adaptive.withAccountDocument(telegramId, (d, now) => { draft = d; fn(d, now); }, () => {
+    await this.adaptive.withAccountDocument(telegramId, (d, now) => {
+      if (signal?.aborted || this.studio(telegramId, scope) !== initialStudio) return fail();
+      initial = requirePermission ? this.state(d, scope, now, initialStudio) : undefined;
+      draft = d; fn(d, now);
+    }, () => {
       const studio = this.studio(telegramId, scope), now = this.now();
-      if (!draft || signal?.aborted || check && !check() || initial && this.state(draft, scope, now, studio).fingerprint !== initial.fingerprint) return fail();
+      if (!draft || studio !== initialStudio || signal?.aborted || check && !check() || initial && this.state(draft, scope, now, studio).fingerprint !== initial.fingerprint) return fail();
     });
   }
   async present(telegramId: number, value: LearningPresentInput, signal?: AbortSignal): Promise<void> {
