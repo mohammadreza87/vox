@@ -17,7 +17,9 @@ const ROLE_LABEL: Record<Member['role'], string> = {
 
 export function agentToPersona(agent: Agent, ownerId: string): Persona {
   const runtime = personaToRuntime(agent.persona);
+  const p = agent.persona;
   return {
+    strangerPolicy: [p.withStrangers, p.openness !== undefined ? `Openness to strangers: ${p.openness}/100.` : ''].filter(Boolean).join(' ') || undefined,
     id: agent.id,
     name: agent.persona.name,
     role: agent.persona.role,
@@ -42,13 +44,25 @@ export function studioToOrgConfig(state: StudioState, orgName = 'HOOR'): OrgConf
     companyIds: ['hoor'],
     projectIds: [],
   }));
+  const members = new Set(people.map((p) => p.id));
+  // Outsiders (guests of public agents or group chats, and people still
+  // waiting for approval) are people too, flagged so they only ever see their
+  // own private memories and their groups' memories.
+  const outsiders = [
+    ...(state.guests ?? []).map((g) => ({ id: g.telegramId, name: g.name })),
+    ...state.members.filter((m) => m.role === 'pending').map((m) => ({ id: m.telegramId, name: m.name })),
+  ];
+  for (const o of outsiders) {
+    if (members.has(personId(o.id)) || people.some((p) => p.id === personId(o.id))) continue;
+    people.push({ id: personId(o.id), name: o.name, role: 'Guest', telegramUserId: o.id, companyIds: [], projectIds: [], guest: true });
+  }
   const known = new Set(people.map((p) => p.id));
   const fallbackOwner = approved.find((m) => m.role === 'owner') ?? approved.find((m) => m.role === 'superadmin');
 
   const personas: Persona[] = state.agents
     .filter((a) => a.status === 'active' && a.bot)
     .map((a) => {
-      const owner = known.has(personId(a.createdBy)) ? personId(a.createdBy) : fallbackOwner ? personId(fallbackOwner.telegramId) : '';
+      const owner = members.has(personId(a.createdBy)) ? personId(a.createdBy) : fallbackOwner ? personId(fallbackOwner.telegramId) : '';
       return agentToPersona(a, owner);
     });
 
@@ -57,9 +71,9 @@ export function studioToOrgConfig(state: StudioState, orgName = 'HOOR'): OrgConf
     name: g.title,
     telegramChatId: g.chatId,
     memberIds: g.memberIds.map(personId).filter((id) => known.has(id)),
-    // A known reader who is no longer approved (e.g. demoted to pending) still
-    // reads the group but is not part of the audience: treat them as a guest.
-    hasGuests: g.hasGuests || g.memberIds.some((id) => !known.has(personId(id))),
+    // Anyone reading who isn't an approved member makes it a guest group:
+    // only the group's own memories are safe there.
+    hasGuests: g.hasGuests || g.memberIds.some((id) => !members.has(personId(id))),
   }));
 
   return {

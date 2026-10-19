@@ -25,6 +25,8 @@ const personaSchema = z.object({
   accent: z.string().max(80).default(''),
   voiceBrief: z.string().max(400),
   avatarHint: z.string().max(160).default(''),
+  withStrangers: z.string().max(400).default(''),
+  openness: z.number().int().min(0).max(100).default(50),
 });
 
 const lookSchema = z.object({
@@ -48,6 +50,8 @@ const PERSONA_RULES = `Rules:
 - Personality must fit the role and the requested traits, and include at least one constructive edge (they push back when it matters).
 - "wontDo" states honest limits (what they defer to humans or specialists).
 - "voiceBrief" is a description for a voice designer: gender presentation, age range, timbre, pace, energy, and accent with the language it applies to. Max 2 sentences.
+- "withStrangers" is how they treat people outside the company if they are made public, in their own character: what they happily talk about, what they keep private, and when they politely end a conversation (spam, abuse, endless requests). Max 2 sentences.
+- "openness" (0-100) is how readily they engage strangers: guarded personalities are low, sociable ones high.
 - "avatarHint" is one small respectful accessory or detail for a cute cloud mascot (e.g. "tiny headphones", "a small notebook"). Never national flags, religious symbols or costumes.
 - Keep every field concise. Respond with JSON only.`;
 
@@ -87,7 +91,7 @@ export async function draftPersona(llm: LLM, brief: SpawnBrief, orgName: string)
     system: `You design AI colleagues for ${orgName}, a small company building games and AI products. Given a brief, propose a complete persona.
 ${PERSONA_RULES}
 Also design their cloud mascot "look": pick a colour (hue) that suits their energy, a shape family ("puff": wide and round, "tower": tall with broad shoulders, "drift": asymmetric lens) and face features. Surprise us: vary looks between agents; presentation may inform but never dictate the shape.
-Shape: {"names": [3 name options, the first is your pick], "persona": {"name", "role", "tagline", "backstory", "personality", "communicationStyle", "values": [], "expertise": [], "wontDo", "languages": [], "culture", "presentation": "feminine"|"masculine"|"neutral", "age", "accent", "voiceBrief", "avatarHint"}, "look": {"hue": "apricot"|"rose"|"butter"|"matcha"|"lagoon"|"sky"|"lilac"|"ash", "family": "puff"|"tower"|"drift", "features": {"cheeks": bool, "lashes": bool, "brows": bool}}}
+Shape: {"names": [3 name options, the first is your pick], "persona": {"name", "role", "tagline", "backstory", "personality", "communicationStyle", "values": [], "expertise": [], "wontDo", "languages": [], "culture", "presentation": "feminine"|"masculine"|"neutral", "age", "accent", "voiceBrief", "avatarHint", "withStrangers", "openness": 0-100}, "look": {"hue": "apricot"|"rose"|"butter"|"matcha"|"lagoon"|"sky"|"lilac"|"ash", "family": "puff"|"tower"|"drift", "features": {"cheeks": bool, "lashes": bool, "brows": bool}}}
 Seed for variety (use it to vary colour and shape): ${Math.floor(Math.random() * 1e6)}`,
     messages: [{ role: 'user', content: briefToText(brief) }],
     maxTokens: 1500,

@@ -25,10 +25,13 @@ Telegram ── @VoxxBot (Mini App: /studio) ──┐
 | **Test** | A sandbox chat. Nothing said there becomes a memory. |
 | **Hire** | Opens Telegram's "Create bot" screen (managed bots). One tap creates the bot. Studio stores its token encrypted, then sets the name, description, commands and photo. |
 | **Forming → locked** | For 7 days after hire, the personality and look can still be tuned. After that they are fixed for good. To change who an agent is, **fire** it and **hire a successor**. Its memories can pass to the successor, be archived or be deleted. |
-| **Groups** | Add an agent to any Telegram group from its page. In a group with people outside HOOR, agents only use that group's memories. |
+| **Who can talk** | Every agent is **Private** by default: its creator, people they pick, and admins. It can be opened to **Everyone in HOOR**, or made **Public** so anyone on Telegram can message it. A public agent decides in character how to treat strangers (its `withStrangers` style and `openness` score, drafted by Claude): answer, politely decline, ignore spam, or block. Strangers get a daily message limit; blocks can be lifted from the agent's page. |
+| **Groups** | Add an agent to a Telegram group from its page (people it works with can, or anyone for a public agent). Everyone in that group can then talk to it, even if it's private. With people outside HOOR present, it only uses that group's memories. |
 | **Calls** | Talk to an agent in the Mini App. Each turn goes your voice → OpenAI STT → Claude (with memories) → ElevenLabs. |
 | **Memories** | See what an agent remembers that you're allowed to see. You can delete anything you said. |
-| **Org** | Superadmins grant or remove admin rights for people and agents. Admins approve new people. Everyone approved can use every shared agent. |
+| **Org** | Superadmins grant or remove admin rights for people and agents. Admins approve new people. Who can use each agent is set per agent (see *Who can talk*). |
+
+People outside HOOR are **guests**: they only ever see their own private memories and their groups' memories, never HOOR's org chart, projects or company knowledge.
 
 Roles: `owner > superadmin > admin > member > pending`. New people who press /start in @VoxxBot are `pending` until an admin approves them. The Telegram IDs in `STUDIO_SUPERADMIN_IDS` are the founding **owners**: they always stay owners and can make other owners, superadmins and admins. Superadmins can grant up to superadmin but never make or change owners. The last owner can't be removed.
 

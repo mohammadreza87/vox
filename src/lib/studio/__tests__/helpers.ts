@@ -18,7 +18,7 @@ import { FakeLLM } from '../../tireh/__tests__/fixtures';
 import type { ElevenLabsStudio, OpenAIMedia } from '../media';
 import { Studio } from '../service';
 import { StudioStore } from '../store';
-import type { Member, PersonaSpec, Role } from '../types';
+import type { AgentVisibility, Member, PersonaSpec, Role } from '../types';
 
 export const SECRET = 'test-secret-that-is-at-least-32-characters-long';
 export const ID = { superadmin: 100, admin: 200, alice: 300, bob: 400, pending: 500, stranger: 999 };
@@ -224,7 +224,11 @@ export function fakeMember(id: number, role: Role): Member {
 let nextBotId = 7000;
 
 /** draft → publish → managed bot update: an active agent in its forming period. */
-export async function hire(h: Harness, creator: Member, persona: Partial<PersonaSpec> = {}, successorOf?: string) {
+/**
+ * Draft → publish → managed bot. New agents are private by default; most
+ * tests are about other behaviour, so `visibility` defaults to 'org' here.
+ */
+export async function hire(h: Harness, creator: Member, persona: Partial<PersonaSpec> = {}, successorOf?: string, visibility: AgentVisibility = 'org') {
   h.personaLLM.push(draftJson(persona));
   const { agent } = await h.studio.draft(creator, {}, successorOf);
   const { link } = await h.studio.publish(creator, agent.id);
@@ -235,5 +239,9 @@ export async function hire(h: Harness, creator: Member, persona: Partial<Persona
     bot: { id: botId, is_bot: true, first_name: persona.name ?? 'Nova', username },
   });
   if (!hired) throw new Error('hire failed');
+  if (visibility !== 'private') {
+    await h.store.update((st) => { st.agents.find((x) => x.id === hired.id)!.visibility = visibility; });
+    hired.visibility = visibility;
+  }
   return { agent: hired, botId, token: `token-${botId}`, bot: () => h.bots.get(`token-${botId}`)! };
 }

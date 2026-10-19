@@ -12,7 +12,7 @@
  * bot is created). After that it is locked for good: change means fire & re-hire.
  */
 
-import type { Agent, Member, Role, StudioState } from './types';
+import type { Agent, AgentVisibility, Member, Role, StudioState } from './types';
 
 const RANK: Record<Role, number> = { pending: 0, member: 1, admin: 2, superadmin: 3, owner: 4 };
 
@@ -31,9 +31,15 @@ export function formingDay(agent: Agent, now = new Date()): number | null {
   return Math.min(7, Math.floor(days) + 1);
 }
 
+export function visibilityOf(agent: Agent): AgentVisibility {
+  return agent.visibility ?? (agent.access === 'everyone' ? 'org' : 'private');
+}
+
+/** May this member use the agent in Studio and in direct messages? */
 export function canUseAgent(member: Member | undefined, agent: Agent): boolean {
   if (!atLeast(member, 'member') || agent.status !== 'active') return false;
-  return agent.access === 'everyone' || agent.access.includes(member!.telegramId) || atLeast(member, 'admin');
+  if (visibilityOf(agent) !== 'private' || atLeast(member, 'admin') || agent.createdBy === member!.telegramId) return true;
+  return Array.isArray(agent.access) && agent.access.includes(member!.telegramId);
 }
 
 export function canSpawn(member: Member | undefined): boolean {

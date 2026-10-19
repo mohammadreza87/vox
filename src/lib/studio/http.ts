@@ -6,7 +6,7 @@
 import { verifyInitData } from './auth';
 import { StudioRateLimiter, StudioRateLimitError, type StudioRequestRateLimiter } from './ratelimit';
 import { Studio, StudioError } from './service';
-import type { Member, MemoryPolicy, Role, SpawnBrief } from './types';
+import type { AgentVisibility, Member, MemoryPolicy, Role, SpawnBrief } from './types';
 
 type Json = Record<string, unknown>;
 
@@ -200,6 +200,15 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
           case 'PUT access': {
             const b = await body(req);
             return json({ agent: await studio.setAccess(me, id, b.access === 'everyone' ? 'everyone' : (b.access as number[])) });
+          }
+          case 'PUT visibility': {
+            const b = await body(req);
+            return json({ agent: await studio.setVisibility(me, id, str(b.visibility, 10) as AgentVisibility) });
+          }
+          case 'DELETE blocked': {
+            const telegramId = Number(new URL(req.url).searchParams.get('telegramId'));
+            if (!Number.isSafeInteger(telegramId) || telegramId <= 0) throw new StudioError(400, 'Invalid Telegram id');
+            return json({ agent: await studio.unblock(me, id, telegramId) });
           }
           case 'PUT admin': return json({ agent: await studio.setAgentAdmin(me, id, (await body(req)).isAdmin === true) });
           case 'POST fire': {

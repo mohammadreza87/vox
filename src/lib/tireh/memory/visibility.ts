@@ -16,7 +16,14 @@ import type { ChatContext, MemoryRecord, MemoryScope } from '../types';
 import type { OrgDirectory } from '../org/directory';
 
 export function canPersonSee(org: OrgDirectory, personId: string, scope: MemoryScope): boolean {
-  if (!org.getPerson(personId)) return false;
+  const person = org.getPerson(personId);
+  if (!person) return false;
+  if (person.guest) {
+    // Outsiders never see project, company or organization knowledge.
+    if (scope.kind === 'private') return scope.personId === personId;
+    if (scope.kind === 'group') return org.isGroupMember(personId, scope.groupId);
+    return false;
+  }
   switch (scope.kind) {
     case 'private':
       return scope.personId === personId;

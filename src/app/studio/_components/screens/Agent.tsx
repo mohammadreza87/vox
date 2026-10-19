@@ -2,7 +2,7 @@
 
 import { motion } from 'framer-motion';
 import { useEffect, useState } from 'react';
-import { api, haptic, openTelegram, type AgentView } from '../../_lib/client';
+import { api, haptic, openTelegram, type AgentView, type AgentVisibility, type Member } from '../../_lib/client';
 import { AgentFace, PALETTE, stageFor } from '../Cloud';
 import { errorMessage, LoadingFill, useNav } from '../StudioApp';
 import { Icon, Sheet, TopBar } from '../ui';
@@ -49,7 +49,8 @@ function timeLeft(lockAt?: string): string {
 export function AgentScreen({ id }: { id: string }) {
   const nav = useNav();
   const [agent, setAgent] = useState<AgentView | null>(null);
-  const [sheet, setSheet] = useState<'admin' | null>(null);
+  const [sheet, setSheet] = useState<'admin' | 'visibility' | null>(null);
+  const [people, setPeople] = useState<Member[] | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -83,13 +84,35 @@ export function AgentScreen({ id }: { id: string }) {
     } catch (e) { nav.toast(errorMessage(e), 'error'); } finally { setBusy(false); }
   };
 
-  const toggleAccess = async () => {
+  const openVisibility = () => {
+    setSheet('visibility');
+    if (!people) api.members().then((r) => setPeople(r.people)).catch(() => setPeople([]));
+  };
+
+  const chooseVisibility = async (v: AgentVisibility) => {
+    if (v === agent.visibility) return;
+    setBusy(true);
     try {
-      const next = agent.access === 'everyone' ? [nav.me.member.telegramId] : 'everyone';
+      const r = await api.setVisibility(agent.id, v);
+      setAgent(r.agent);
+      haptic.success();
+    } catch (e) { nav.toast(errorMessage(e), 'error'); } finally { setBusy(false); }
+  };
+
+  const allowList = Array.isArray(agent.access) ? agent.access : [];
+  const toggleAllowed = async (telegramId: number) => {
+    const next = allowList.includes(telegramId) ? allowList.filter((x) => x !== telegramId) : [...allowList, telegramId];
+    try {
       const r = await api.setAccess(agent.id, next);
       setAgent(r.agent);
-      setSheet(null);
-      nav.toast(next === 'everyone' ? `Everyone in ${nav.me.org} can use ${p.name}` : `Only you (and admins) can use ${p.name}`);
+      haptic.select();
+    } catch (e) { nav.toast(errorMessage(e), 'error'); }
+  };
+
+  const unblock = async (telegramId: number) => {
+    try {
+      setAgent((await api.unblock(agent.id, telegramId)).agent);
+      haptic.success();
     } catch (e) { nav.toast(errorMessage(e), 'error'); }
   };
 
@@ -172,7 +195,7 @@ export function AgentScreen({ id }: { id: string }) {
           <div className="vx-group">
             <div className="vx-row"><span className="vx-2" style={{ flex: 1 }}>Voice</span><span>{agent.voice?.label ?? 'Text only'}</span></div>
             <div className="vx-row"><span className="vx-2" style={{ flex: 1 }}>Languages</span><span>{p.languages.join(', ')}</span></div>
-            <div className="vx-row"><span className="vx-2" style={{ flex: 1 }}>Who can use</span><span>{agent.access === 'everyone' ? `Everyone in ${nav.me.org}` : 'Selected people'}</span></div>
+            <div className="vx-row"><span className="vx-2" style={{ flex: 1 }}>Who can talk</span><span>{visibilityLabel(agent, nav.me.org)}</span></div>
             <div className="vx-row"><span className="vx-2" style={{ flex: 1 }}>Hired by</span><span>{agent.creatorName ?? '—'}</span></div>
           </div>
 
@@ -192,8 +215,9 @@ export function AgentScreen({ id }: { id: string }) {
         <h2 className="vx-title-m" style={{ marginBottom: 12 }}>Manage {p.name}</h2>
         <div className="vx-group">
           {agent.canManageAccess && (
-            <button className="vx-row" onClick={toggleAccess} style={{ width: '100%', background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left' }}>
-              <span style={{ flex: 1 }}>{agent.access === 'everyone' ? 'Limit to me and admins' : `Open to everyone in ${nav.me.org}`}</span>
+            <button className="vx-row" onClick={openVisibility} style={{ width: '100%', background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left' }}>
+              <span style={{ flex: 1 }}>Who can talk to {p.name}</span>
+              <span className="vx-small vx-2">{visibilityLabel(agent, nav.me.org)}</span>
             </button>
           )}
           {isSuper && (
@@ -209,6 +233,85 @@ export function AgentScreen({ id }: { id: string }) {
           )}
         </div>
       </Sheet>
+
+      <Sheet open={sheet === 'visibility'} onClose={() => setSheet(null)} label={`Who can talk to ${p.name}`}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <h2 className="vx-title-m" style={{ margin: 0 }}>Who can talk to {p.name}</h2>
+          <div className="vx-group" role="radiogroup">
+            {VISIBILITY_OPTIONS.map((o) => {
+              const on = agent.visibility === o.value;
+              return (
+                <button key={o.value} role="radio" aria-checked={on} className="vx-row" disabled={busy} onClick={() => chooseVisibility(o.value)}
+                  style={{ width: '100%', background: 'none', border: 'none', borderTop: '1px solid rgba(255,255,255,.08)', textAlign: 'left', cursor: 'pointer', color: 'inherit', alignItems: 'flex-start' }}>
+                  <span style={{ width: 20, height: 20, marginTop: 2, borderRadius: '50%', flexShrink: 0, border: `2px solid ${on ? '#D6FF5C' : '#7D828C'}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    {on && <span style={{ width: 10, height: 10, borderRadius: '50%', background: '#D6FF5C' }} />}
+                  </span>
+                  <span style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    <span>{o.title(nav.me.org)}</span>
+                    <span className="vx-small vx-2">{o.body(p.name, nav.me.org, p.openness)}</span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          <p className="vx-small vx-3" style={{ margin: 0 }}>Groups you add {p.name} to are always open to everyone in them. People outside {nav.me.org} never see internal memories.</p>
+
+          {agent.visibility === 'private' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <span className="vx-over">People who can talk to {p.name}</span>
+              {people === null ? <div className="vx-skeleton" style={{ height: 56 }} /> : (
+                <div className="vx-group">
+                  {people.filter((m) => m.role !== 'pending').map((m) => {
+                    const always = m.telegramId === agent.createdBy || ['admin', 'superadmin', 'owner'].includes(m.role);
+                    const on = always || allowList.includes(m.telegramId);
+                    return (
+                      <button key={m.telegramId} className="vx-row" disabled={always} onClick={() => toggleAllowed(m.telegramId)} aria-pressed={on}
+                        style={{ width: '100%', background: 'none', border: 'none', borderTop: '1px solid rgba(255,255,255,.08)', textAlign: 'left', cursor: always ? 'default' : 'pointer', color: 'inherit' }}>
+                        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name}</span>
+                        {always
+                          ? <span className="vx-small vx-3">{m.telegramId === agent.createdBy ? 'Creator' : 'Admin'}</span>
+                          : <span style={{ width: 22, height: 22, borderRadius: 7, border: `2px solid ${on ? '#D6FF5C' : '#7D828C'}`, background: on ? '#D6FF5C' : 'transparent', color: '#0E1013', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                              {on && <Icon name="check" size={14} width={3} />}
+                            </span>}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+          {(agent.blocked?.length ?? 0) > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <span className="vx-over">Blocked by {p.name} · {agent.blocked!.length}</span>
+              <div className="vx-group">
+                {agent.blocked!.map((tgId) => (
+                  <div key={tgId} className="vx-row">
+                    <span className="vx-num" style={{ flex: 1 }}>Telegram ID {tgId}</span>
+                    <button className="vx-btn vx-btn-secondary vx-btn-sm" style={{ height: 32 }} onClick={() => unblock(tgId)}>Unblock</button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </Sheet>
     </>
   );
+}
+
+const VISIBILITY_OPTIONS: Array<{ value: AgentVisibility; title: (org: string) => string; body: (name: string, org: string, openness?: number) => string }> = [
+  { value: 'private', title: () => 'Private', body: (name) => `Only you, the people you pick, and admins can message ${name}.` },
+  { value: 'org', title: (org) => `Everyone in ${org}`, body: (name, org) => `Any approved ${org} member can message ${name}.` },
+  {
+    value: 'public', title: () => 'Public',
+    body: (name, org, openness) => `Anyone on Telegram can message ${name}. ${name} decides in character how to treat strangers${openness !== undefined ? ` (openness ${openness}/100)` : ''}, and never shares ${org}'s internal memories.`,
+  },
+];
+
+function visibilityLabel(agent: AgentView, org: string): string {
+  if (agent.visibility === 'public') return 'Public';
+  if (agent.visibility === 'org') return `Everyone in ${org}`;
+  const extra = Array.isArray(agent.access) ? agent.access.length : 0;
+  return extra ? `Private · ${extra + 1} people` : 'Private';
 }
