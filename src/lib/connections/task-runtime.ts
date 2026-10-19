@@ -86,7 +86,9 @@ Reviewed task guidance: ${skill?.instructions ?? 'Complete the explicit task usi
       let timer: ReturnType<typeof setTimeout> | undefined;
       let raw: string;
       try {
-        raw = await Promise.race([this.llm.complete({ system, messages, maxTokens: 1800, requireComplete: true, signal: controller.signal }),
+        raw = await Promise.race([this.llm.complete({ system, messages, maxTokens: 1800, requireComplete: true, signal: controller.signal,
+          authorize: async () => { await assertCurrent(); await service.lineage.assertUse(actor, { space: input.space, sourceIds,
+            agentId: input.agentId, destinationId: 'model:studio', purpose: 'explicit.connection_task' }); return true; } }),
           new Promise<never>((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new Error('task_deadline_expired')); }, Math.max(1, deadlineAt - this.now())); })]);
       } finally { if (timer) clearTimeout(timer); }
       await assertCurrent();

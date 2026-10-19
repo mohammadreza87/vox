@@ -28,7 +28,7 @@ export function createStudioConnectionAuthority(studio: Studio, now: () => numbe
         scope: { tenantId: tenantIdFor(actor.accountId), spaceId: spaceIdFor(actor.accountId, space), spaceKind: space,
           containerId: containerIdFor(actor.accountId, space), audiencePersonIds: [document.personId],
           audienceRevision: digest([document.personId, binding.id, binding.revision]) },
-        currentAgentIds: state.agents.filter(agent => canUseAgent(member, agent)).map(agent => agent.id),
+        currentAgentIds: state.agents.filter(agent => canUseAgent(member, agent) && !(agent.blocked ?? []).includes(telegramId)).map(agent => agent.id),
       };
     });
   };
