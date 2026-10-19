@@ -155,6 +155,8 @@ Define synthetic and permitted realistic datasets, person/group/conversation/tim
 
 **Requirements:** REQ-06, REQ-12, REQ-16, REQ-22. **Depends on:** VOX-001, VOX-002.
 
+**Implementation progress:** Documented installed SDK 6.9.1 public post compatibility with Decisions; account/model/device/residency qualification remains open.
+
 Check selected account access to Decisions, SDK migration, regional processing/retention, voice candidates, Telegram delivery and browser/device limits.
 
 **Acceptance:**
@@ -176,7 +178,7 @@ Check selected account access to Decisions, SDK migration, regional processing/r
 
 **Requirements:** REQ-02, REQ-03, REQ-19. **Depends on:** VOX-004, VOX-006.
 
-**Implementation progress:** Person/account/space/container model and explicit identity selection implemented as pure functions; durable repositories, authentication ceremony and migration remain outstanding.
+**Implementation progress:** Durable account-confirmed private profiles, Work/Personal scopes, group and selected-recipient containers. Cross-account identity linking and authenticated multi-person switching remain open.
 
 Add normalized person-account bindings, Work/Personal spaces, private/group/exact-recipient containers, memberships and explicit history policy.
 
@@ -197,7 +199,7 @@ Add normalized person-account bindings, Work/Personal spaces, private/group/exac
 
 **Requirements:** REQ-02, REQ-15. **Depends on:** VOX-009.
 
-**Implementation progress:** Bounded reply/extractor guest filtering and no automatic group-to-project promotion implemented; pure authorization engine accepted. Raw-history suppression and final audience freshness remain open.
+**Implementation progress:** Runtime private/shared authorization, agent grants, whole-group projection, delivery rechecks and staged shared publication integrated. Distributed authority/transport atomicity and live Telegram audience completeness remain open.
 
 Apply one server policy to retrieval, directory context, history, summaries, extraction, tool results and exports; fix guest prompt and scope-expansion gaps.
 
@@ -218,7 +220,7 @@ Apply one server policy to retrieval, directory context, history, summaries, ext
 
 **Requirements:** REQ-01, REQ-04, REQ-17, REQ-22. **Depends on:** VOX-002, VOX-006, VOX-009.
 
-**Implementation progress:** Pure consent transitions and eligibility implemented and independently accepted. Durable ledger, notice-presentation binding, endpoints and runtime collection gates remain outstanding.
+**Implementation progress:** Versioned consent receipts, explicit presentation, durable transitions, expiry and server manifest eligibility wired to Studio API. Legal approval of actual notices remains open.
 
 Create purpose-specific consent/notice receipts, current epochs, withdrawal and enforcement API; distinguish notice acceptance from optional processing permission. Enforce the versioned country/state/feature release registry, adult-entry state and participant/session processing grants at every capture/provider boundary.
 
@@ -241,6 +243,8 @@ Create purpose-specific consent/notice receipts, current epochs, withdrawal and 
 
 **Requirements:** REQ-01, REQ-08, REQ-09, REQ-20. **Depends on:** VOX-003, VOX-004, VOX-011.
 
+**Implementation progress:** EN/FA Privacy screen, profile declaration, optional choices/withdrawal, private notes and per-agent grants implemented. Guest entry and complete user-rights/status journeys remain open.
+
 Implement scoped settings, AI disclosure, optional consent choices, why-this/undo/reset and request-status UX in Studio. Include a proportionate 18+ entry gate, no-account guest notice/choice and accidental-participant reporting without collecting a full birth date by default.
 
 **Acceptance:**
@@ -261,6 +265,8 @@ Implement scoped settings, AI disclosure, optional consent choices, why-this/und
 
 **Requirements:** REQ-02, REQ-08, REQ-16, REQ-17. **Depends on:** VOX-010, VOX-011.
 
+**Implementation progress:** Added EN/FA lexical ranking, trusted explicit-preference priority, whole-record 12-item/8192-byte packing and content-free scoped LRU prewarming. Both streaming and completed turns use current authorized projections and full receipt rechecks. Account/container aggregates are still loaded; indexed retrieval, calibrated semantic ranking and generalized automatic extraction/consolidation remain open.
+
 Add provenance/claims/supersession, token-budgeted retrieval, indexed candidate queries and background extraction with scope checks at execution.
 
 **Acceptance:**
@@ -272,13 +278,15 @@ Add provenance/claims/supersession, token-budgeted retrieval, indexed candidate 
 
 **Deliverables:** Memory lifecycle jobs; Bounded retrieval implementation.
 
-**Evidence:** ["docs/implementation/DELIVERY_RESULT.md"]
+**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/MEMORY_RETRIEVAL_RESULT.md"]
 
 ### VOX-014 — Implement deletion, revocation and scheduled retention expiry
 
 **Owner:** `vox_architect` · **Reviewer:** `vox_privacy_security` · **Model:** `gpt-6.1-sol` · **Size:** L · **Priority:** P0 · **Status:** in_progress
 
 **Requirements:** REQ-02, REQ-17. **Depends on:** VOX-010, VOX-011, VOX-013.
+
+**Implementation progress:** Account/shared scheduled cleanup now has durable paginated leases, restart recovery and expiry tests; observer consent revocation purges journal and derived findings in the same transaction. Maintenance release switch remains off. Provider/backup residual retention and production restore qualification remain open.
 
 Propagate revocation/deletion across history projections, summaries, cache/search, evidence, queues and permitted downstream datasets; maintain minimal tombstones. Implement versioned class-specific expiry and inactivity sweeps, provider residual tracking and backup expiration with the approved numeric schedule.
 
@@ -301,6 +309,8 @@ Propagate revocation/deletion across history projections, summaries, cache/searc
 
 **Requirements:** REQ-03, REQ-19. **Depends on:** VOX-009, VOX-010, VOX-011, VOX-014.
 
+**Implementation progress:** Legacy unscoped history/auto-memory is denied in new runtime, preserving source data without silent consent migration. Explicit migration/reconciliation/rollback tooling remains open.
+
 Create dry-run inventory/mapping for Studio and older app memory, identity and notifications flags; quarantine ambiguous ownership/purpose/history.
 
 **Acceptance:**
@@ -320,6 +330,8 @@ Create dry-run inventory/mapping for Studio and older app memory, identity and n
 
 **Requirements:** REQ-02, REQ-15, REQ-17, REQ-22. **Depends on:** VOX-006, VOX-009, VOX-010, VOX-011.
 
+**Implementation progress:** Separate account/shared/maintenance namespaces and restricted file modes implemented. Local improvement roles use distinct Ed25519 authorities and a pinned Docker evaluator with no network or secrets. Production service IAM, protected datasets and separate worker credentials remain open.
+
 Implement database/IAM rules, restricted evidence and future biometric storage boundaries, secret handling, key rotation and audit access.
 
 **Acceptance:**
@@ -338,6 +350,8 @@ Implement database/IAM rules, restricted evidence and future biometric storage b
 **Owner:** `vox_architect` · **Reviewer:** `vox_privacy_security` · **Model:** `gpt-6.1-sol` · **Size:** L · **Priority:** P0 · **Status:** in_progress
 
 **Requirements:** REQ-01, REQ-02, REQ-03, REQ-09, REQ-17, REQ-22. **Depends on:** VOX-002, VOX-009, VOX-010, VOX-011, VOX-014, VOX-016.
+
+**Implementation progress:** Confirmed own-account Work/Personal JSON export now includes allowlisted account records and currently authorized published shared content; exports are not persisted. Provider/backups explicitly unavailable. Guest request verification and broader rights orchestration remain open.
 
 Implement accessible EN/FA access/export, correction, erasure, restriction, objection, portability and withdrawal requests with proportionate requester verification, a no-account guest route, operator queue, jurisdiction deadlines and status receipts. Wire the privacy center to these real handlers.
 
@@ -362,6 +376,8 @@ Implement accessible EN/FA access/export, correction, erasure, restriction, obje
 
 **Requirements:** REQ-04, REQ-05. **Depends on:** VOX-006, VOX-010, VOX-011.
 
+**Implementation progress:** Strict bounded server/client observation envelopes now serve authenticated Studio ingress with server-derived identity, exact agent/space receipt, revision and QA-origin exclusion. Real voice/private Telegram producers retain no conversation content. Wider channel/usage/version coverage remains open.
+
 Wire approved schemas with server-derived scope/identity, occurrence/receipt times, origin, revisions, versions and bounded properties. Schema changes escalate to architect.
 
 **Acceptance:**
@@ -380,6 +396,8 @@ Wire approved schemas with server-derived scope/identity, occurrence/receipt tim
 **Owner:** `vox_architect` · **Reviewer:** `vox_qa_evaluator` · **Model:** `gpt-6.1-sol` · **Size:** L · **Priority:** P0 · **Status:** in_progress
 
 **Requirements:** REQ-04, REQ-16, REQ-17. **Depends on:** VOX-017, VOX-016.
+
+**Implementation progress:** Bounded durable observer journal includes deduplication, replacement revisions, leases, three-attempt backoff, failure state and explicit retry service; maintenance checkpoints recover after restart. Consent outbox consumers beyond this slice and production-scale transport remain open.
 
 Add state-plus-outbox writes, idempotent consumers, bounded backoff, dead-letter handling, lag/freshness metrics and repair workflow.
 
@@ -400,6 +418,8 @@ Add state-plus-outbox writes, idempotent consumers, bounded backoff, dead-letter
 
 **Requirements:** REQ-05, REQ-16. **Depends on:** VOX-017, VOX-008.
 
+**Implementation progress:** Actual voice response and private Telegram terminal outcomes now feed the new observer. Voice playback is correlated by server-issued turn ID. Provider usage, token cost and stage-level latency remain unavailable.
+
 Add turn trace correlation across STT/retrieval/decision/generation/TTS and actual provider metadata via an architect-approved LLM interface change.
 
 **Acceptance:**
@@ -418,6 +438,8 @@ Add turn trace correlation across STT/retrieval/decision/generation/TTS and actu
 **Owner:** `vox_data_engineer` · **Reviewer:** `vox_qa_evaluator` · **Model:** `gpt-6-luna` · **Size:** M · **Priority:** P0 · **Status:** in_progress
 
 **Requirements:** REQ-05, REQ-09, REQ-16. **Depends on:** VOX-017, VOX-012.
+
+**Implementation progress:** Tap-to-talk client hooks report playing, completed, failed and interrupted outcomes using accepted server correlation. Events remain unverified and never certify task success. Live ElevenLabs, correction and experiment-exposure coverage remain open.
 
 Wire first audio, interruption, playback failure, cancellation, correction, feedback and experiment exposure with approved event names.
 
@@ -438,6 +460,8 @@ Wire first audio, interruption, playback failure, cancellation, correction, feed
 
 **Requirements:** REQ-04, REQ-15, REQ-22. **Depends on:** VOX-017.
 
+**Implementation progress:** Active Studio/Tireh polling, webhook, gateway, provider fallback, live call and Mini App HTTP diagnostics now emit fixed catalog fields without raw exceptions, arbitrary codes, content or identity IDs. Independent canary/getter/proxy and real Pino serialization checks passed. Historical/platform logs, sinks/IAM/retention and full export/replay coverage remain open.
+
 Replace raw STT/call/extraction logs and block audit text with reason codes/restricted evidence refs; keep sensitive replay disabled or explicitly masked.
 
 **Acceptance:**
@@ -457,6 +481,8 @@ Replace raw STT/call/extraction logs and block audit text with reason codes/rest
 
 **Requirements:** REQ-05, REQ-16. **Depends on:** VOX-018, VOX-019, VOX-020, VOX-021.
 
+**Implementation progress:** Own-space Studio measurements show response/playback denominators, queue lag/failure, deterministic findings and explicit unavailable task success/usage. Owner/superadmin operations view shows local workflow metadata only. Organization/cohort dashboards remain open.
+
 Produce scoped views for task outcome, latency/cost, correction, queue lag, permission/consent failures and notification outcomes with compatible cohorts.
 
 **Acceptance:**
@@ -475,6 +501,8 @@ Produce scoped views for task outcome, latency/cost, correction, queue lag, perm
 **Owner:** `vox_architect` · **Reviewer:** `vox_privacy_security` · **Model:** `gpt-6.1-sol` · **Size:** M · **Priority:** P0 · **Status:** in_progress
 
 **Requirements:** REQ-05, REQ-14, REQ-15. **Depends on:** VOX-022, VOX-016, VOX-007.
+
+**Implementation progress:** Deterministic read-only observer reconstructs findings from a bounded content-free journal with unknown causes and alternative explanations. No message/code/provider capability exists in its consumer. Semantic clustering and production worker isolation remain open.
 
 Use rules first and sampled semantic analysis to cluster failures into findings with evidence, alternative explanations and confidence.
 
@@ -497,6 +525,8 @@ Use rules first and sampled semantic analysis to cluster failures into findings 
 
 **Requirements:** REQ-06, REQ-16, REQ-22. **Depends on:** VOX-008, VOX-016, VOX-019.
 
+**Implementation progress:** Decisions text/image adapter and bounded real HTTP consumer are integrated, with unknown/timeout fallback and no permission authority. Existing supported SDK generic transport is used; synthetic wire tests pass. Real-account performance/retention qualification remains open.
+
 Upgrade isolated OpenAI dependency; implement typed question/result/usage/refusal adapter and scripted fake, with an explicit versioned schema.
 
 **Acceptance:**
@@ -508,13 +538,15 @@ Upgrade isolated OpenAI dependency; implement typed question/result/usage/refusa
 
 **Deliverables:** DecisionProvider implementation; SDK compatibility tests.
 
-**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/evidence/decisions-provider/RESULT.md"]
+**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/evidence/decisions-provider/RESULT.md", "src/lib/adaptive/prediction/RESULT.md"]
 
 ### VOX-025 — Define and calibrate question catalog and policies
 
 **Owner:** `vox_qa_evaluator` · **Reviewer:** `vox_architect` · **Model:** `gpt-6.1-sol` · **Size:** M · **Priority:** P1 · **Status:** in_progress
 
 **Requirements:** REQ-06, REQ-07, REQ-16. **Depends on:** VOX-007, VOX-024.
+
+**Implementation progress:** Three versioned fixed questions wired to prediction endpoint. Held-out calibration and supported language/cohort efficacy remain open.
 
 Implement DEC-01–07 catalog with supported choices, unknown path, task-specific thresholds and evidence scope; compare with deterministic rules.
 
@@ -535,6 +567,8 @@ Implement DEC-01–07 catalog with supported choices, unknown path, task-specifi
 
 **Requirements:** REQ-06, REQ-07, REQ-17. **Depends on:** VOX-013, VOX-014, VOX-024, VOX-025.
 
+**Implementation progress:** Real off-by-default Studio draft consumer debounces edits, caps two evaluations per turn, cancels and supersedes durable revisions, checks fresh receipts and performs read-only gateway context preparation. Scope/correction/cancel/provider-late-result tests pass. Actual early partial-voice producer and end-to-end speed qualification remain open.
+
 Bind predictions to turn/source/scope/policy revisions, cap speculative calls and cancel stale results; prefetch only authorized candidates.
 
 **Acceptance:**
@@ -546,13 +580,15 @@ Bind predictions to turn/source/scope/policy revisions, cap speculative calls an
 
 **Deliverables:** Session prediction controller; Race/cancellation suite.
 
-**Evidence:** ["docs/implementation/DELIVERY_RESULT.md"]
+**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "src/lib/adaptive/prediction/RESULT.md"]
 
 ### VOX-027 — Implement explicit preferences and scoped hypotheses
 
 **Owner:** `vox_architect` · **Reviewer:** `vox_privacy_security` · **Model:** `gpt-6.1-sol` · **Size:** M · **Priority:** P1 · **Status:** in_progress
 
 **Requirements:** REQ-03, REQ-08, REQ-17. **Depends on:** VOX-011, VOX-013, VOX-014, VOX-025.
+
+**Implementation progress:** Durable explicit response preferences/reset integrated with scoped consent and per-agent grants; pure expiring hypothesis resolver tested. Learning/inference producer and evidence lifecycle remain open.
 
 Add preference precedence, hypothesis evidence/expiry, bounded effects and user correction/reset; no hidden sensitive-trait inference.
 
@@ -573,6 +609,8 @@ Add preference precedence, hypothesis evidence/expiry, bounded effects and user 
 
 **Requirements:** REQ-08, REQ-09, REQ-20. **Depends on:** VOX-004, VOX-012, VOX-026, VOX-027.
 
+**Implementation progress:** Work/Personal call selector, preferences controls and shared audience preview implemented. Broader UX variants and why-this/undo for inferred adaptation remain open.
+
 Apply approved length/language/format/suggested-action and component-schema variants with why-this, undo and stable navigation.
 
 **Acceptance:**
@@ -591,6 +629,8 @@ Apply approved length/language/format/suggested-action and component-schema vari
 **Owner:** `vox_architect` · **Reviewer:** `vox_qa_evaluator` · **Model:** `gpt-6.1-sol` · **Size:** L · **Priority:** P1 · **Status:** in_progress
 
 **Requirements:** REQ-16, REQ-18, REQ-21. **Depends on:** VOX-009, VOX-018, VOX-020, VOX-025.
+
+**Implementation progress:** Server manifest and Decisions switch fail closed; no experiment assignment/exposure worker enabled.
 
 Add server-enforced flags/kill switches, stable assignments/exposure and isolated variant memory for private/person or shared-container experiments.
 
@@ -611,6 +651,8 @@ Add server-enforced flags/kill switches, stable assignments/exposure and isolate
 
 **Requirements:** REQ-06, REQ-07, REQ-16. **Depends on:** VOX-024, VOX-025, VOX-026, VOX-028, VOX-029.
 
+**Implementation progress:** Local timeout/refusal/revocation/budget fallback tests passed. One live synthetic sample took1087ms and134 input tokens; it exceeded the production500ms deadline and cannot establish a latency distribution, cost baseline or speed improvement. Held-out quality, load, cold/warm caching and real conversation measurements remain open.
+
 Benchmark baseline versus candidate using the fixed workload, uncertainty intervals and matched quality; evaluate circuit break/budget/outage behavior.
 
 **Acceptance:**
@@ -626,9 +668,11 @@ Benchmark baseline versus candidate using the fixed workload, uncertainty interv
 
 ### VOX-031 — Integrate supported voice/image input prediction path
 
-**Owner:** `vox_voice_engineer` · **Reviewer:** `vox_architect` · **Model:** `gpt-6.1-sol` · **Size:** L · **Priority:** P1 · **Status:** planned
+**Owner:** `vox_voice_engineer` · **Reviewer:** `vox_architect` · **Model:** `gpt-6.1-sol` · **Size:** L · **Priority:** P1 · **Status:** in_progress
 
 **Requirements:** REQ-06, REQ-07, REQ-09, REQ-16, REQ-01, REQ-03, REQ-22. **Depends on:** VOX-024, VOX-026, VOX-030, VOX-011.
+
+**Implementation progress:** Added actual Studio text/image conversation and opt-in draft/image prediction, with browser metadata-stripping JPEG re-encoding, server raster limits, separate image capability, and fresh consent at each provider request/continuation/fallback and delivery. Live-call SDK currently exposes final transcripts; true partial-voice prediction remains unimplemented and is not claimed.
 
 Add capability-gated partial-transcript and minimized shared-image prediction; compare current streaming path with GPT-Live integration where available. Own session audio eligibility before capture: notice/required participant choice, guest flow, current audience and jurisdiction rechecks, and pause-on-join handling.
 
@@ -643,6 +687,8 @@ Add capability-gated partial-transcript and minimized shared-image prediction; c
 
 **Deliverables:** Input/prediction adapter; Mode/device compatibility evidence.
 
+**Evidence:** ["docs/implementation/ADAPTIVE_COMPLETION_RESULT.md"]
+
 ## P4 — Notifications
 
 ### VOX-032 — Implement notification categories, preferences and inbox
@@ -650,6 +696,8 @@ Add capability-gated partial-transcript and minimized shared-image prediction; c
 **Owner:** `vox_frontend_engineer` · **Reviewer:** `vox_privacy_security` · **Model:** `gpt-6.1-sol` · **Size:** M · **Priority:** P1 · **Status:** in_progress
 
 **Requirements:** REQ-01, REQ-09, REQ-10, REQ-11. **Depends on:** VOX-005, VOX-011, VOX-012.
+
+**Implementation progress:** Authenticated EN/FA inbox, category/settings controls, requested reminders and feedback implemented. Snooze, Telegram channel controls and external receipts remain open.
 
 Create authenticated inbox and purpose/category/channel choices with snooze/mute/why-this; keep proactive off and marketing disabled.
 
@@ -670,6 +718,8 @@ Create authenticated inbox and purpose/category/channel choices with snooze/mute
 
 **Requirements:** REQ-02, REQ-10, REQ-11. **Depends on:** VOX-025, VOX-027, VOX-032, VOX-014.
 
+**Implementation progress:** Pure deterministic eligibility and generic candidate policy plus durable generic inbox candidates implemented. Learned ranking/calibration remains open.
+
 Generate evidence-linked candidates, optionally rank using DEC-05, then enforce exact recipient/source rights, purpose, freshness and eligibility.
 
 **Acceptance:**
@@ -688,6 +738,8 @@ Generate evidence-linked candidates, optionally rank using DEC-05, then enforce 
 **Owner:** `vox_architect` · **Reviewer:** `vox_qa_evaluator` · **Model:** `gpt-6.1-sol` · **Size:** L · **Priority:** P1 · **Status:** in_progress
 
 **Requirements:** REQ-10, REQ-16, REQ-17. **Depends on:** VOX-018, VOX-033.
+
+**Implementation progress:** Durable atomic cross-space cap and chosen-timezone quiet-hour checks implemented; due reminders appear on authenticated inbox reads. External scheduler/worker remains open.
 
 Schedule using explicit IANA timezone, DST handling, rolling per-person cross-space caps, dedupe and atomic budget reservation.
 
@@ -708,6 +760,8 @@ Schedule using explicit IANA timezone, DST handling, rolling per-person cross-sp
 
 **Requirements:** REQ-10, REQ-11, REQ-17. **Depends on:** VOX-016, VOX-032, VOX-034.
 
+**Implementation progress:** Prior scoped relationship release includes generic opted-in Telegram alerts, fresh authority checks and private inbox content. Live cohort activation, provider/device delivery proof and pilot outcomes remain open.
+
 Deliver only to an explicitly opted-in, authenticated existing Telegram DM. Send generic text plus an opaque reference; render details inside the authenticated inbox only after current recipient/source authorization. Recheck policy immediately before send.
 
 **Acceptance:**
@@ -727,6 +781,8 @@ Deliver only to an explicitly opted-in, authenticated existing Telegram DM. Send
 **Owner:** `vox_data_engineer` · **Reviewer:** `vox_qa_evaluator` · **Model:** `gpt-6-luna` · **Size:** M · **Priority:** P1 · **Status:** in_progress
 
 **Requirements:** REQ-05, REQ-10, REQ-18. **Depends on:** VOX-020, VOX-032, VOX-035.
+
+**Implementation progress:** Private useful/dismiss feedback endpoint and UI implemented. Cohort-level reporting and real usefulness measurements remain open.
 
 Instrument explicit useful/not-useful, snooze/mute, suppression, opt-out and verified task outcomes with compatible exposure.
 
@@ -779,9 +835,11 @@ Compare local-first and cloud speaker recognition for permitted candidate sets, 
 
 ### VOX-039 — Implement optional enrollment and template lifecycle
 
-**Owner:** `vox_voice_engineer` · **Reviewer:** `vox_privacy_security` · **Model:** `gpt-6.1-sol` · **Size:** L · **Priority:** P1 · **Status:** planned
+**Owner:** `vox_voice_engineer` · **Reviewer:** `vox_privacy_security` · **Model:** `gpt-6.1-sol` · **Size:** L · **Priority:** P1 · **Status:** in_progress
 
 **Requirements:** REQ-01, REQ-12, REQ-17. **Depends on:** VOX-011, VOX-014, VOX-016, VOX-038.
+
+**Implementation progress:** Canonical biometric opt-in plus separate own-voice disclosure, one-use intent, isolated encrypted opaque templates, bounded provider deadlines, canonical withdrawal and replay-safe all-device space deletion implemented with synthetic protocol tests. Provider is deliberately not configured in production; actual cryptographic access, provider behavior, retention and legal qualification remain open.
 
 Enroll only an authenticated adult with separate explicit biometric choice; use restricted templates, short-lived buffers, deletion and re-enrollment controls.
 
@@ -795,11 +853,15 @@ Enroll only an authenticated adult with separate explicit biometric choice; use 
 
 **Deliverables:** Enrollment APIs/store; Lifecycle tests.
 
+**Evidence:** ["docs/implementation/VOICE_IDENTITY_RESULT.md"]
+
 ### VOX-040 — Implement speaker hints and authenticated person switching
 
-**Owner:** `vox_voice_engineer` · **Reviewer:** `vox_privacy_security` · **Model:** `gpt-6.1-sol` · **Size:** L · **Priority:** P1 · **Status:** planned
+**Owner:** `vox_voice_engineer` · **Reviewer:** `vox_privacy_security` · **Model:** `gpt-6.1-sol` · **Size:** L · **Priority:** P1 · **Status:** in_progress
 
 **Requirements:** REQ-03, REQ-12, REQ-13. **Depends on:** VOX-009, VOX-010, VOX-026, VOX-039.
+
+**Implementation progress:** Implemented self-only possible_self/unknown test hint; it never changes identity or private access. Cross-account speaker matching and authenticated person-switch flow are not implemented; communication style is not an identity credential.
 
 Return recognized hint/unknown within permitted candidates; segment overlapping speakers; require authenticated person confirmation for private-context switch. Treat segment labels as transient and unverified; enable query-template extraction only in a session whose present participants have the required processing permission.
 
@@ -814,11 +876,15 @@ Return recognized hint/unknown within permitted candidates; segment overlapping 
 
 **Deliverables:** Speaker hint adapter; Profile-switch integration.
 
+**Evidence:** ["docs/implementation/VOICE_IDENTITY_RESULT.md"]
+
 ### VOX-041 — Build enrollment, status, test and deletion UX
 
-**Owner:** `vox_frontend_engineer` · **Reviewer:** `vox_ux_designer` · **Model:** `gpt-6.1-sol` · **Size:** M · **Priority:** P1 · **Status:** planned
+**Owner:** `vox_frontend_engineer` · **Reviewer:** `vox_ux_designer` · **Model:** `gpt-6.1-sol` · **Size:** M · **Priority:** P1 · **Status:** in_progress
 
 **Requirements:** REQ-09, REQ-12, REQ-13, REQ-20. **Depends on:** VOX-005, VOX-039, VOX-040.
+
+**Implementation progress:** English/Persian disclosure, enrollment, status, test, cancellation, deletion and unavailable-provider UI implemented. Microphone starts only after server capture intent. Physical-device/browser qualification remains open.
 
 Implement separate biometric disclosure, jurisdiction gating, enrollment/test feedback, visible recognition status and non-biometric fallback in EN/FA.
 
@@ -830,6 +896,8 @@ Implement separate biometric disclosure, jurisdiction gating, enrollment/test fe
 **Verification:** Accessibility/RTL journey and actual microphone-denial testing.
 
 **Deliverables:** Voice controls UI; Consent/status UX evidence.
+
+**Evidence:** ["docs/implementation/VOICE_IDENTITY_RESULT.md"]
 
 ### VOX-042 — Qualify voice accuracy, spoofing and device behavior
 
@@ -856,6 +924,8 @@ Run independent consented/synthetic voice corpus across languages, devices, nois
 
 **Requirements:** REQ-04, REQ-14, REQ-17. **Depends on:** VOX-007, VOX-014, VOX-016, VOX-023.
 
+**Implementation progress:** Signed minimized synthetic/approved aggregate finding import, lineage expiry/revocation and private-content rejection implemented for local routing workflow. No automatic export of real user observations; production curation/rights integration remains open.
+
 Turn permitted findings into minimized reproductions/evaluation cases with lineage, data-purpose eligibility, retention and review.
 
 **Acceptance:**
@@ -874,6 +944,8 @@ Turn permitted findings into minimized reproductions/evaluation cases with linea
 **Owner:** `vox_architect` · **Reviewer:** `vox_qa_evaluator` · **Model:** `gpt-6.1-sol` · **Size:** L · **Priority:** P1 · **Status:** in_progress
 
 **Requirements:** REQ-06, REQ-14, REQ-16. **Depends on:** VOX-025, VOX-030, VOX-043.
+
+**Implementation progress:** Fixed-budget offline cancellation-routing search and immutable JSON candidate registry implemented. Small synthetic corpus only; prompt optimization, representative train/validation data and provider quality evaluation remain open.
 
 Generate versioned GEPA-style prompt/query/routing candidates offline with fixed budgets and incumbent comparisons; preserve serving path.
 
@@ -911,6 +983,8 @@ Convert reviewed defects into isolated worktrees/branches with small diffs, repr
 
 **Requirements:** REQ-14, REQ-16, REQ-18. **Depends on:** VOX-007, VOX-029, VOX-043, VOX-044, VOX-045.
 
+**Implementation progress:** Pinned Docker evaluator and separate signed evaluator/human receipts bind exact artifacts/data/policy; malformed payload, budget bypass and counterfeit evidence regressions covered. Synthetic role keys do not qualify production IAM; protected service deployment and representative corpus remain open.
+
 Run Promptfoo and deterministic tests in a protected environment against exact candidate/model/prompt/data versions; calibrate judge to human examples.
 
 **Acceptance:**
@@ -930,6 +1004,8 @@ Run Promptfoo and deterministic tests in a protected environment against exact c
 
 **Requirements:** REQ-14, REQ-17, REQ-18, REQ-21. **Depends on:** VOX-029, VOX-046.
 
+**Implementation progress:** Local comparison-only rollback rehearsal binds candidate and baseline artifacts, and explicitly makes no deployment or candidate-disable claim. Controlled production experiments, derived-state rollback and kill-switch qualification remain open.
+
 Promote from offline to side-effect-free shadow then bounded pilot; isolate experimental memory writes and rollback code/config/derived state together.
 
 **Acceptance:**
@@ -948,6 +1024,8 @@ Promote from offline to side-effect-free shadow then bounded pilot; isolate expe
 **Owner:** `vox_docs_analyst` · **Reviewer:** `vox_product_lead` · **Model:** `gpt-6-luna` · **Size:** S · **Priority:** P1 · **Status:** in_progress
 
 **Requirements:** REQ-05, REQ-14, REQ-16. **Depends on:** VOX-022, VOX-036, VOX-046.
+
+**Implementation progress:** Sanitized local improvement report and read-only owner/superadmin status view distinguish local tests from unavailable CI/deployment/measured effect. Real product outcomes and costs remain unavailable.
 
 Produce compact reports linking verified outcome changes to versions/cohorts, uncertainty, costs and decisions; keep private narratives out.
 
@@ -970,6 +1048,8 @@ Produce compact reports linking verified outcome changes to versions/cohorts, un
 
 **Requirements:** REQ-02, REQ-03, REQ-04, REQ-06, REQ-10, REQ-14, REQ-17, REQ-01, REQ-22. **Depends on:** VOX-015, VOX-016, VOX-018, VOX-021, VOX-030, VOX-035, VOX-046, VOX-056, VOX-031.
 
+**Implementation progress:** Combined source suite, independent cross-review and consent/cancellation/transport regression checks are recorded in the completion receipt. Synthetic evidence does not close protected semantic/provider/device cases.
+
 Execute QA matrix across consent, memory scopes, event ordering, decisions, notifications, evaluation authority and provider failures.
 
 **Acceptance:**
@@ -983,13 +1063,15 @@ Execute QA matrix across consent, memory scopes, event ordering, decisions, noti
 
 **Deliverables:** Regression evidence packet; Open-defect register.
 
-**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/INTEGRATION_RELEASE.md", "docs/implementation/RELEASE_2026_10_19.md", "docs/implementation/OBSERVATION_LEARNING.md"]
+**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/INTEGRATION_RELEASE.md", "docs/implementation/RELEASE_2026_10_19.md", "docs/implementation/OBSERVATION_LEARNING.md", "docs/implementation/ADAPTIVE_COMPLETION_RESULT.md"]
 
 ### VOX-050 — Run Studio browser journeys and accessibility checks
 
 **Owner:** `vox_e2e_runner` · **Reviewer:** `vox_qa_evaluator` · **Model:** `gpt-6-luna` · **Size:** M · **Priority:** P1 · **Status:** in_progress
 
 **Requirements:** REQ-01, REQ-08, REQ-09, REQ-10, REQ-20. **Depends on:** VOX-012, VOX-028, VOX-032, VOX-035, VOX-049.
+
+**Implementation progress:** New compiled Studio browser journey covers text/image chat, Work/Personal clearing, EN/FA and default-off unavailable recognition. Evidence and real-device distinction are recorded in the completion receipt.
 
 Execute QA-approved Studio journeys using synthetic fixtures in Chromium/WebKit/mobile emulation, EN/FA and RTL; record exact evidence.
 
@@ -1002,7 +1084,7 @@ Execute QA-approved Studio journeys using synthetic fixtures in Chromium/WebKit/
 
 **Deliverables:** Browser evidence bundle; Accessibility findings.
 
-**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/INTEGRATION_RELEASE.md", "docs/implementation/RELEASE_2026_10_19.md", "docs/implementation/OBSERVATION_LEARNING.md"]
+**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/INTEGRATION_RELEASE.md", "docs/implementation/RELEASE_2026_10_19.md", "docs/implementation/OBSERVATION_LEARNING.md", "docs/implementation/ADAPTIVE_COMPLETION_RESULT.md"]
 
 ### VOX-051 — Run real provider and physical-device E2E
 
@@ -1031,6 +1113,8 @@ Execute approved core test-account journeys on actual supported Telegram/mobile/
 **Owner:** `vox_release_engineer` · **Reviewer:** `vox_qa_evaluator` · **Model:** `gpt-6.1-sol` · **Size:** L · **Priority:** P1 · **Status:** in_progress
 
 **Requirements:** REQ-04, REQ-16, REQ-17, REQ-21. **Depends on:** VOX-018, VOX-014, VOX-030, VOX-035, VOX-047, VOX-049.
+
+**Implementation progress:** Local account sweep pagination, competing leases, crash recovery, expiry, snapshot reconciliation and bounded observer retries tested. Production load/SLOs, full backup restoration and provider residual deletion remain open.
 
 Load-test approved synthetic workloads, queue/provider outage, lost receipts, restore/tombstones and incident kill switches; set alert owners.
 

@@ -6,6 +6,8 @@ import { AdaptiveService } from '../../adaptive/persistence/service';
 import { AdaptiveRepository, accountIdFor } from '../../adaptive/persistence/repository';
 import { adaptiveOptionsFromManifest } from '../../adaptive/persistence/config';
 import { MemoryAdaptiveStorage } from '../../adaptive/runtime/storage';
+import { AdaptiveObserverService } from '../../adaptive/observation/service';
+import { randomUUID } from 'crypto';
 
 const TOKEN = '123:synthetic-manager';
 const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC';
@@ -16,7 +18,7 @@ function request(body: unknown, extras: Record<string, string> = {}, signal?: Ab
 }
 async function setup() {
   const h = makeStudio(), users = await seedOrg(h), { agent } = await hire(h, users.alice);
-  const now = Date.now(), capabilities = ['core_text', 'single_party_image'];
+  const now = Date.now(), capabilities = ['core_text', 'single_party_image', 'product_analytics'];
   const options = adaptiveOptionsFromManifest(JSON.stringify({ schemaVersion: 1, configurationVersion: 'test', enabledCapabilities: capabilities,
     accounts: [{ accountId: accountIdFor(ID.alice), jurisdictionKeys: ['SYNTHETIC'], allowDeclaredAdult: true }],
     approvals: capabilities.map((capability, i) => ({ schemaVersion: 1, id: `approval${i}`, revision: 1, createdAt: now, updatedAt: now,
@@ -32,6 +34,30 @@ async function setup() {
   return { h, adaptive, input, setImageAllowed: (allowed: boolean) => { imageAllowed = allowed; } };
 }
 describe('scoped current-turn conversations', () => {
+  it('observes consented outcomes without text/images and purges them on withdrawal', async () => {
+    const { h, adaptive, input, setImageAllowed } = await setup();
+    const observer = new AdaptiveObserverService(adaptive); h.studio.deps.observer = observer;
+    await handleConversationRequest(h.studio, request(input), TOKEN);
+    expect(await adaptive.withAccountDocument(ID.alice, d => d.observer.events.length)).toBe(0);
+    const before = await adaptive.read(ID.alice, 'work');
+    const shown = await adaptive.present(ID.alice, { space: 'work', purpose: 'optional.product_analytics', locale: 'en',
+      expectedRevision: before.purposes.find(p => p.purpose === 'optional.product_analytics')!.revision, eventId: randomUUID() });
+    await adaptive.changeConsent(ID.alice, { space: 'work', purpose: 'optional.product_analytics', state: 'granted',
+      expectedRevision: shown.purposes.find(p => p.purpose === 'optional.product_analytics')!.revision, eventId: randomUUID(), receipt: shown.receipt });
+    expect((await handleConversationRequest(h.studio, request({ ...input, image: PNG }), TOKEN)).status).toBe(200);
+    await observer.process(ID.alice);
+    expect((await observer.snapshot(ID.alice, 'work')).projection).toMatchObject({ responseTurns: 1, responded: 1 });
+    const stored = JSON.stringify(await adaptive.withAccountDocument(ID.alice, d => d.observer));
+    expect(stored).not.toContain(input.text); expect(stored).not.toContain(PNG.split(',')[1]);
+    expect((await observer.snapshot(ID.alice, 'personal')).projection.responseTurns).toBe(0);
+    const record = observer.recordServer.bind(observer);
+    vi.spyOn(observer, 'recordServer').mockImplementationOnce(async (...args) => { setImageAllowed(false); return record(...args); });
+    expect((await handleConversationRequest(h.studio, request({ ...input, image: PNG }), TOKEN)).status).toBe(409);
+    const current = await adaptive.read(ID.alice, 'work');
+    await adaptive.changeConsent(ID.alice, { space: 'work', purpose: 'optional.product_analytics', state: 'withdrawn',
+      expectedRevision: current.purposes.find(p => p.purpose === 'optional.product_analytics')!.revision, eventId: randomUUID() });
+    expect(await adaptive.withAccountDocument(ID.alice, d => d.observer.events.length)).toBe(0);
+  });
   it('requires real authentication, same origin and exact agent/space grants', async () => {
     const { h, input } = await setup();
     for (const [body, headers, status] of [

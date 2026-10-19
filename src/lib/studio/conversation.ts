@@ -5,6 +5,7 @@ import { boundedStudioRequest } from './http';
 import { StudioError, type Studio } from './service';
 import { StudioRateLimiter, StudioRateLimitError } from './ratelimit';
 import { personId } from './org-bridge';
+import { beginObservation } from './observation';
 import { digest } from '../adaptive/persistence/repository';
 import { AdaptiveError } from '../adaptive/persistence/service';
 import { minimizeImageDataUrl, MAX_IMAGE_URL_LENGTH } from '../adaptive/prediction/image';
@@ -22,6 +23,7 @@ const limiters = new WeakMap<Studio, StudioRateLimiter>();
 /** A current-turn text/image surface. The client cannot submit history, identity,
  * model instructions, a predicted route, or a memory access decision. */
 export async function handleConversationRequest(studio: Studio, request: Request, botToken: string): Promise<Response> {
+  let observe: Awaited<ReturnType<typeof beginObservation>> | undefined;
   try {
     if (!botToken.trim() || !studio.deps.adaptive) return json({ error: 'conversation_unavailable' }, 503);
     let limiter = studio.deps.rateLimiter ?? limiters.get(studio);
@@ -72,14 +74,24 @@ export async function handleConversationRequest(studio: Studio, request: Request
       images = [{ mimeType: image.slice(5, image.indexOf(';')) as LLMImage['mimeType'], data: image.slice(comma + 1) }];
     }
     await limiter.consume('expensive', user.id);
+    observe = await beginObservation(studio, user.id, input.agentId, input.space, 'text');
     const { gateway } = await studio.gateway();
-    if (request.signal.aborted || await authority() !== before) return json({ error: 'conversation_changed' }, 409);
+    if (request.signal.aborted || await authority() !== before) {
+      await observe('cancelled'); return json({ error: 'conversation_changed' }, 409);
+    }
     const reply = await gateway.converse(input.agentId, personId(user.id), input.text, { space: input.space, images,
       authorize: async () => !request.signal.aborted && await authority() === before });
     // Gateway also checks memory/source policy around provider export and output.
-    if (request.signal.aborted || await authority() !== before) return json({ error: 'conversation_changed' }, 409);
+    if (request.signal.aborted || await authority() !== before) {
+      await observe('cancelled'); return json({ error: 'conversation_changed' }, 409);
+    }
+    await observe('responded');
+    if (request.signal.aborted || await authority() !== before) {
+      await observe('cancelled'); return json({ error: 'conversation_changed' }, 409);
+    }
     return json({ reply });
   } catch (error) {
+    await observe?.(request.signal.aborted || error instanceof LLMAuthorizationError ? 'cancelled' : 'failed');
     if (error instanceof LLMAuthorizationError) return json({ error: 'conversation_changed' }, 409);
     if (error instanceof z.ZodError) return json({ error: 'invalid_request' }, 400);
     if (error instanceof AdaptiveError) return json({ error: error.code }, error.status);

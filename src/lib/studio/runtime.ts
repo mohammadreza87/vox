@@ -312,8 +312,15 @@ async function create(): Promise<Studio> {
         const state = await storage.store.read();
         const member = state.members.find(m => m.telegramId === telegramId && m.role !== 'pending');
         const allowedAgentIds = member ? state.agents.filter(a => a.status === 'active' && canUseAgent(member, a) && !(a.blocked ?? []).includes(telegramId)).map(a => a.id) : [];
-        const result = await studio.deps.observer!.process(telegramId, { limit: 20, allowedAgentIds });
-        if (result.failed) throw new Error('Observer maintenance failed');
+        // Independent cleanup must still run when observation processing fails.
+        // A pending provider purge keeps the page retryable and visibly failed.
+        const results = await Promise.allSettled([
+          studio.deps.observer!.process(telegramId, { limit: 20, allowedAgentIds }),
+          studio.deps.voiceIdentity!.maintenanceAccount(telegramId),
+        ]);
+        if (results.some(result => result.status === 'rejected') ||
+            results[0].status === 'fulfilled' && results[0].value.failed ||
+            results[1].status === 'fulfilled' && results[1].value.pending) throw new Error('Adaptive maintenance incomplete');
       },
     });
   if (config.trustedImprovementKeys) {
