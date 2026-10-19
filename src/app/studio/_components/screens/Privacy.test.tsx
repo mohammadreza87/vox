@@ -20,10 +20,12 @@ describe('Privacy and memory controls', () => {
   it('does not grant anything on load or on a space switch and clears previous-space text immediately', async () => {
     mocks.read.mockResolvedValueOnce(snapshot({ memories: [{ id: 'private-note', text: 'WORK_ONLY_SECRET', revision: 1, createdAt: 1, expiresAt: 2_000_000_000_000 }] }));
     render(<PrivacyScreen />);
-    await screen.findByText('WORK_ONLY_SECRET');
+    expect(await screen.findAllByText('WORK_ONLY_SECRET')).toHaveLength(2);
+    expect(screen.getByRole('checkbox', { name: 'WORK_ONLY_SECRET' })).toBeVisible();
     mocks.read.mockImplementation(() => new Promise(() => undefined));
     fireEvent.click(screen.getByRole('button', { name: 'Personal', exact: true }));
-    await waitFor(() => expect(screen.queryByText('WORK_ONLY_SECRET')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryAllByText('WORK_ONLY_SECRET')).toHaveLength(0));
+    expect(screen.queryByRole('checkbox', { name: 'WORK_ONLY_SECRET' })).not.toBeInTheDocument();
     expect(mocks.consent).not.toHaveBeenCalled(); expect(mocks.confirm).not.toHaveBeenCalled();
   });
   it('presents server receipt copy before grant and offers an equal keep-off action', async () => {
@@ -45,7 +47,8 @@ describe('Privacy and memory controls', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Delete', exact: true }));
     fireEvent.click(screen.getByRole('button', { name: 'Delete', exact: true }));
     await screen.findByRole('alert');
-    expect(screen.getByText('A synthetic note')).toBeInTheDocument();
+    expect(screen.getAllByText('A synthetic note')).toHaveLength(2);
+    expect(screen.getByRole('checkbox', { name: 'A synthetic note' })).toBeVisible();
     expect(screen.queryByText('The saved memory was deleted.')).not.toBeInTheDocument();
   });
   it('renders Persian RTL with the same server purposes and no automatic consent', async () => {

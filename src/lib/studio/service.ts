@@ -4,6 +4,7 @@
  */
 
 import { createHash, createHmac, randomUUID } from 'crypto';
+import { brandError, namedError } from '../error-contract';
 import type { RelationshipLoop, RelationshipStore, ObservationStore, RelationshipKey, Intention } from '../relationships';
 import { composeFollowUp } from '../relationships/compose';
 import type { RelationshipConfig } from './relationship-config';
@@ -51,6 +52,7 @@ export class StudioError extends Error {
 
   constructor(readonly status: number, message: string) {
     super(message);
+    brandError(this, this.name);
   }
 
   /**
@@ -59,8 +61,13 @@ export class StudioError extends Error {
    * errors whose class is not the one the router imported.
    */
   static is(error: unknown): error is StudioError {
-    return error instanceof StudioError ||
-      (error instanceof Error && error.name === 'StudioError' && typeof (error as { status?: unknown }).status === 'number');
+    try {
+      if (!namedError(error, 'StudioError')) return false;
+      const status: unknown = Object.getOwnPropertyDescriptor(error, 'status')?.value;
+      const message: unknown = Object.getOwnPropertyDescriptor(error, 'message')?.value;
+      return typeof status === 'number' && [400, 401, 403, 404, 409, 413, 415, 422, 429, 500, 502, 503, 504].includes(status) &&
+        typeof message === 'string';
+    } catch { return false; }
   }
 }
 

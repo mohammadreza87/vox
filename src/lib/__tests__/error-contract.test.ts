@@ -1,11 +1,13 @@
 import { expect, it, vi } from 'vitest';
 import { runInNewContext } from 'node:vm';
+import { z } from 'zod';
+import { isSchemaValidationError } from '../error-contract';
 import { AdaptiveError, type AdaptiveService } from '../adaptive/persistence/service';
 import { SharedMemoryError, type SharedMemoryService } from '../adaptive/shared/service';
 import { StudioRateLimitError } from '../studio/ratelimit';
 import { LLMAuthorizationError } from '../tireh/llm';
 import { signInitData } from '../studio/auth';
-import type { Studio } from '../studio/service';
+import { StudioError, type Studio } from '../studio/service';
 import { handleAdaptiveRequest } from '../adaptive/persistence/http';
 import { handleSharedRequest } from '../adaptive/shared/http';
 import { handleExperienceRequest } from '../adaptive/runtime/http';
@@ -47,6 +49,8 @@ it('recognizes branded errors from an independent constructor without exposing t
   expect(SharedMemoryError.is(otherBundleError('SharedMemoryError'))).toBe(true);
   expect(ConnectionsError.is(otherBundleError('ConnectionsError'))).toBe(true);
   expect(ConnectionsError.is(new ConnectionsError(409, 'operation_changed'))).toBe(true);
+  expect(StudioError.is(otherBundleError('StudioError', { status: 403 }))).toBe(true);
+  expect(StudioError.is(new StudioError(403, 'Not permitted.'))).toBe(true);
   expect(StudioRateLimitError.is(otherBundleError('StudioRateLimitError', { retryAfterSeconds: 4 }))).toBe(true);
   const denied = otherBundleError('LLMAuthorizationError', {}); Object.defineProperty(denied, 'message', { value: 'llm_authority_changed' });
   expect(LLMAuthorizationError.is(denied)).toBe(true);
@@ -128,4 +132,34 @@ it('Connections preserves duplicate-bundle conflicts and rate limits without exp
     const response = await invoke(error); expect(response.status).toBe(503); expect(await response.json()).toEqual({ error: 'connections_unavailable' });
   }
   expect(touched).not.toHaveBeenCalled();
+});
+
+it('all adaptive HTTP boundaries reject hostile legacy Studio error metadata without invoking accessors', async () => {
+  const touched = vi.fn(() => { throw new Error('PRIVATE_GETTER_CANARY'); });
+  const errors = ['name', 'status', 'message'].map(field => {
+    const error = otherBundleError('StudioError', { status: 403 }); Object.defineProperty(error, field, { get: touched }); return error;
+  });
+  errors.push(new Proxy(otherBundleError('StudioError', { status: 403 }), { get: touched, getOwnPropertyDescriptor: touched }));
+  errors.push(otherBundleError('StudioError', { status: 200 }));
+  errors.push(Object.assign(new Error('PRIVATE_CANARY'), { name: 'StudioError', status: 403 }));
+  const zodGetter = Object.assign(new Error('PRIVATE_CANARY'), { name: 'ZodError' });
+  Object.defineProperty(zodGetter, '_zod', { get: touched }); errors.push(zodGetter);
+  for (const error of errors) {
+    expect(StudioError.is(error)).toBe(false);
+    for (const route of [...Object.values(routes), (s: Studio, r: Request) => handleConnectionsRequest(s, {} as ConnectionsApplication, r, [], TOKEN)]) {
+      const response = await route(studio(error), request()); expect(response.status).toBe(503);
+      expect(await response.text()).not.toContain('PRIVATE');
+    }
+  }
+  expect(touched).not.toHaveBeenCalled();
+});
+
+it('recognizes the installed real schema error and returns only invalid_request across HTTP boundaries', async () => {
+  const parsed = z.object({ allowed: z.boolean() }).strict().safeParse({ allowed: 'PRIVATE_INPUT_CANARY' });
+  if (parsed.success) throw new Error('Invalid synthetic schema fixture');
+  expect(isSchemaValidationError(parsed.error)).toBe(true);
+  for (const route of [...Object.values(routes), (s: Studio, r: Request) => handleConnectionsRequest(s, {} as ConnectionsApplication, r, [], TOKEN)]) {
+    const response = await route(studio(parsed.error), request()); expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: 'invalid_request' });
+  }
 });

@@ -1,3 +1,4 @@
+import { isSchemaValidationError } from '../../error-contract';
 import { z } from 'zod';
 import { reminderChannelPresentSchema, reminderChannelInputSchema, reminderActionInputSchema } from './reminder-contracts';
 import { beginObservation } from '../../studio/observation';
@@ -166,7 +167,7 @@ export async function handleExperienceRequest(studio: Studio, service: AdaptiveE
     }
     return json({ error: 'not_found' }, 404);
   } catch (error) {
-    if (error instanceof z.ZodError) return json({ error: 'invalid_request' }, 400);
+    if (isSchemaValidationError(error)) return json({ error: 'invalid_request' }, 400);
     if (AdaptiveError.is(error)) return json({ error: error.code }, error.status);
     if (StudioError.is(error)) return json({ error: 'invalid_request' }, error.status);
     if (StudioRateLimitError.is(error)) return json({ error: 'rate_limited' }, 429, { 'Retry-After': String(error.retryAfterSeconds) });

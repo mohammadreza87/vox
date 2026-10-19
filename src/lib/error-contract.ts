@@ -26,3 +26,18 @@ export function publicDomainError(error: unknown, name: string): boolean {
       typeof code === 'string' && /^[a-z][a-z0-9_]{0,95}$/.test(code);
   } catch { return false; }
 }
+
+/** Zod 4's Symbol.hasInstance reads `_zod.traits.has` on arbitrary input.
+ * Validate its own data descriptors and use the native Set operation instead,
+ * so HTTP classification never executes accessors or proxy traps. No issues or
+ * validation input is returned. Keep the real-schema regression when upgrading. */
+export function isSchemaValidationError(error: unknown): boolean {
+  try {
+    if (types.isProxy(error) || !(error instanceof Error)) return false;
+    if (Object.getOwnPropertyDescriptor(error, 'name')?.value !== 'ZodError') return false;
+    const internal: unknown = Object.getOwnPropertyDescriptor(error, '_zod')?.value;
+    if (!internal || typeof internal !== 'object' || types.isProxy(internal)) return false;
+    const traits: unknown = Object.getOwnPropertyDescriptor(internal, 'traits')?.value;
+    return types.isSet(traits) && !types.isProxy(traits) && Set.prototype.has.call(traits, 'ZodError') && Set.prototype.has.call(traits, '$ZodError');
+  } catch { return false; }
+}
