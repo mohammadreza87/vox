@@ -47,8 +47,8 @@ export async function handleManagerUpdate(studio: Studio, update: TelegramUpdate
 
 /**
  * Who an agent talks to:
- *  - groups it was added to: everyone in them (outsiders as guests, who only
- *    ever see that group's memories);
+ *  - groups it was added to: everyone in them; remembered group context is
+ *    available only when its captured audience still authorizes all readers;
  *  - direct messages: members who may use it (private: creator, allow-list,
  *    admins; org: every member); for public agents also anyone else, after the
  *    agent decides in character whether to answer, decline, ignore or block.

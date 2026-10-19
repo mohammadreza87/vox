@@ -35,6 +35,7 @@ export interface PromptInput {
   canSpeak?: boolean;
   /** The requested delivery format for this turn; audio is produced afterwards. */
   replyFormat?: 'voice' | 'text';
+  /** Private proactive relationship integration is active for this person. */
   canFollowUp?: boolean;
   followUpChannel?: 'chat' | 'inbox';
 }

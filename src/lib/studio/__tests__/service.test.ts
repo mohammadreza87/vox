@@ -728,9 +728,11 @@ describe('groups', () => {
 
     const roster = [ID.alice, ID.bob, botId];
     bot().getChatMemberCount.mockResolvedValue(roster.length);
-    Object.assign(bot(), { getChatMember: vi.fn(async (_chatId: number, id: number) => ({
-      status: roster.includes(id) ? 'member' : 'left', user: { id, is_bot: id === botId, first_name: 'Synthetic reader' },
-    })) });
+    Object.assign(bot(), { getChatMember: vi.fn(async (chatId: number, id: number) => {
+      expect(chatId).toBe(chat.id);
+      expect(roster).toContain(id);
+      return { status: roster.includes(id) ? 'member' : 'left', user: { id, is_bot: id === botId, first_name: 'Synthetic reader' } };
+    }) });
     await h.store.update((s) => { s.groups[0].hasGuests = false; });
     const fresh = await h.studio.gateway();
     expect(await fresh.gateway.handleUpdate(a.id, groupText(chat.id, ID.bob, 'Nova, and now?'))).toBe('replied');

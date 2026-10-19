@@ -5,7 +5,7 @@
  *   build private memories with her, she knows how people relate, she builds
  *   shared memory with groups and projects, and nothing leaks between them.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   callback,
   fakeVoice,
@@ -189,7 +189,16 @@ describe('sharing private work memories', () => {
 });
 
 describe('shared group memory', () => {
-  it('decisions in the GameEnd group remain group memory for its members', async () => {
+  it('does not persist personal or confidential group remarks into either group or private memory', async () => {
+    const { gateway, llm, memories } = makeGateway();
+    for (const details of [{ kind: 'personal', confidential: false }, { kind: 'work', confidential: true }]) {
+      llm.nextExtraction = extraction({ content: 'Milad has a private appointment on Friday', type: 'event', ...details, saidBy: 'milad' });
+      await gateway.handleUpdate('aria', groupText(GAMEEND_CHAT, TG.milad, 'Aria, I have a private appointment on Friday'));
+    }
+    expect([...memories.records.values()]).toEqual([]);
+  });
+
+  it('decisions stay with the original group and its captured members', async () => {
     const { gateway, llm, memories } = makeGateway();
     llm.nextExtraction = extraction({
       content: 'The GameEnd team decided to cut the tutorial to 3 steps',
@@ -200,6 +209,7 @@ describe('shared group memory', () => {
     await gateway.handleUpdate('aria', groupText(GAMEEND_CHAT, TG.parastoo, 'Aria, we agreed: tutorial is 3 steps max'));
     const [stored] = [...memories.records.values()];
     expect(stored.scope).toEqual({ kind: 'group', groupId: 'gameend-team' });
+    expect(stored.authorizedPersonIds?.sort()).toEqual(['milad', 'parastoo', 'reza']);
     expect(stored.source).toMatchObject({ personId: 'parastoo', chatKind: 'group', groupId: 'gameend-team' });
 
     // Milad was in the original group, so Aria may repeat its memory privately.
@@ -485,7 +495,23 @@ describe('memory formation quality', () => {
 
 
 describe('privacy mutation fences', () => {
-  it('does not send or retain an answer generated before an authorized history reset', async () => {
+  it.each(['private', 'group'])('suppresses a %s reply if its speaker disappears before delivery', async (kind) => {
+    const { gateway, org, bot, history, memories } = makeGateway();
+    const speaker = org.getPersonByTelegramId(TG.reza)!;
+    const lookup = vi.spyOn(org, 'getPersonByTelegramId')
+      .mockReturnValueOnce(speaker).mockReturnValue(undefined);
+    try {
+      const update = kind === 'group' ? groupText(GAMEEND_CHAT, TG.reza, 'Aria, hello') : privateText(TG.reza, 'Hello');
+      await expect(gateway.handleUpdate('aria', update)).resolves.toBe('ignored');
+      expect(lookup).toHaveBeenCalledTimes(2);
+      expect(bot.sent).toEqual([]);
+      expect((await history.recent('aria', kind === 'group' ? 'group-gameend-team' : 'private-reza', 20))
+        .filter((message) => message.role === 'assistant')).toEqual([]);
+      expect(await memories.listActive('aria')).toEqual([]);
+    } finally { lookup.mockRestore(); }
+  });
+
+  it.each(['private', 'group'])('does not send or retain a %s answer generated before an authorized history reset', async (kind) => {
     const { gateway, llm, history, bot } = makeGateway();
     let started!: () => void;
     const atModel = new Promise<void>((resolve) => { started = resolve; });
@@ -496,7 +522,7 @@ describe('privacy mutation fences', () => {
       if (request.system.startsWith('You extract')) return original(request);
       started(); return generated;
     };
-    const running = gateway.handleUpdate('aria', privateText(TG.reza, 'Can you remind me?'));
+    const running = gateway.handleUpdate('aria', kind === 'group' ? groupText(GAMEEND_CHAT, TG.reza, 'Aria, can you remind me?') : privateText(TG.reza, 'Can you remind me?'));
     await atModel;
     await history.clearPersona('aria');
     finish('REVOKED_OUTPUT_CANARY');
@@ -505,7 +531,7 @@ describe('privacy mutation fences', () => {
     expect(await history.recent('aria', 'private-reza', 10)).toEqual([]);
   });
 
-  it('does not retain extraction that finishes after authorized forgetting', async () => {
+  it.each(['private', 'group'])('does not retain %s extraction that finishes after authorized forgetting', async (kind) => {
     const { gateway, llm, history, memories } = makeGateway();
     let started!: () => void;
     const atExtractor = new Promise<void>((resolve) => { started = resolve; });
@@ -516,10 +542,10 @@ describe('privacy mutation fences', () => {
       if (!request.system.startsWith('You extract')) return original(request);
       started(); return extracted;
     };
-    const running = gateway.handleUpdate('aria', privateText(TG.reza, 'Remember my appointment on Friday'));
+    const running = gateway.handleUpdate('aria', kind === 'group' ? groupText(GAMEEND_CHAT, TG.reza, 'Aria, remember my appointment on Friday') : privateText(TG.reza, 'Remember my appointment on Friday'));
     await atExtractor;
     await history.clearPersona('aria');
-    finish(JSON.stringify(extraction({ content: 'Reza has an appointment Friday', type: 'event', kind: 'personal' })));
+    finish(JSON.stringify(extraction({ content: 'Reza has an appointment Friday', type: 'event', kind: 'work' })));
     await running;
     expect(await memories.listActive('aria')).toEqual([]);
   });

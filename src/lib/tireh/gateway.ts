@@ -537,7 +537,8 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
 
   private async historyAt(persona: Persona, chat: ChatContext, boundary: TurnBoundary, limit: number): Promise<ChatMessage[]> {
     if (!boundary.historyEnabled) return [];
-    return (await this.deps.history.recent(persona.id, chat.chatKey, limit)).filter((m) =>
+    const messages = await this.deps.history.recent(persona.id, chat.chatKey, limit);
+    return selectHistoryForChat(this.deps.org, messages, chat).filter((m) =>
       m.privacy?.policyKey === boundary.key && m.privacy.memoryRevision === boundary.memoryRevision);
   }
 
@@ -780,8 +781,9 @@ You are on a live voice call. Answer in one to three short spoken sentences. No 
     const bot = this.deps.botFor(persona.id);
     const canSend = async () => {
       await this.deps.beforeSend?.(persona.id, chat);
-      return await canDeliver() && (privacyEpoch === undefined || await this.deps.history.getEpoch(persona.id) === privacyEpoch) &&
-        await this.groupAllowed(persona, chat, this.deps.org.getPersonByTelegramId(message.from!.id)!.id, action);
+      if (!await canDeliver() || (privacyEpoch !== undefined && await this.deps.history.getEpoch(persona.id) !== privacyEpoch)) return false;
+      const speaker = message.from && this.deps.org.getPersonByTelegramId(message.from.id);
+      return !!speaker && await this.groupAllowed(persona, chat, speaker.id, action);
     };
     const replyTo = chat.kind === 'group' ? message.message_id : undefined;
     const speak = this.canSpeak(persona) && voiceWanted;
@@ -823,6 +825,7 @@ You are on a live voice call. Answer in one to three short spoken sentences. No 
     if ((!boundary.memoryEnabled && this.deps.runtimePrivacy) || !(await this.unchanged(persona, chat, speakerId, boundary))) return;
     const retained = await this.historyAt(persona, chat, boundary, EXTRACTION_WINDOW);
     const transcript = chat.kind === 'group' ? currentTurn.filter(m => m.role === 'user') : retained.length ? retained : currentTurn;
+    if (!transcript.some((m) => m.role === 'user')) return;
     let existing = await memories.listActive(persona.id);
     // Only memories this audience may see are shown to the extractor.
     const known = selectMemories(org, existing, chat, {

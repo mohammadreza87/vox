@@ -63,6 +63,10 @@ describe('synthetic PersonaGateway session', () => {
       expect(answerPrompt()).not.toContain('Asha likes jasmine tea.');
       expect(answerPrompt()).not.toContain('ashas-secret-code-8142');
       expect(await session.stores.memories.get(canary.result.memoryId)).not.toBeNull();
+      await session.execute({ op: 'turn', personId: 'marco', audience: { kind: 'group', groupId: 'book-club' }, text: 'When is the meetup?' });
+      expect(answerPrompt()).toContain('Book club meets on Saturday.');
+      expect(answerPrompt()).not.toContain('Asha likes jasmine tea.');
+      expect(answerPrompt()).not.toContain('ashas-secret-code-8142');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

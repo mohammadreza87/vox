@@ -209,32 +209,75 @@ describe('group voice request followed by a separate mention', () => {
     expect(ctx.bot.sendMessage).toHaveBeenCalledTimes(1);
   });
 
-  const prior: ChatMessage = {
-    role: 'user', personId: 'reza', text: 'Please send a voice message.',
-    at: new Date('2026-10-19T09:59:45Z'), telegramMessageId: 1, groupPolicyVersion: 1, groupOtherTarget: false,
-  };
-  it.each([
-    ['another speaker', { ...prior, personId: 'parastoo' }, 'group-gameend-team', '@hoor_aria_bot'],
-    ['an old request', { ...prior, at: new Date('2026-10-19T09:57:00Z') }, 'group-gameend-team', '@hoor_aria_bot'],
-    ['future history', { ...prior, telegramMessageId: 999999 }, 'group-gameend-team', '@hoor_aria_bot'],
-    ['legacy group history', { ...prior, groupPolicyVersion: undefined }, 'group-gameend-team', '@hoor_aria_bot'],
-    ['another group', prior, 'group-leads', '@hoor_aria_bot'],
-    ['a private chat', prior, 'private-reza', '@hoor_aria_bot'],
-    ['unknown target provenance', { ...prior, groupOtherTarget: undefined }, 'group-gameend-team', '@hoor_aria_bot'],
-    ['another bot target', { ...prior, text: '@another_bot, send a voice message.', groupOtherTarget: true }, 'group-gameend-team', '@hoor_aria_bot'],
-    ['an unrelated new question', prior, 'group-gameend-team', '@hoor_aria_bot, what time is the meeting?'],
-  ] as const)('does not inherit voice format from %s', async (_label, message, chatKey, followup) => {
+  async function setupWithPrior(patch: Partial<ChatMessage> = {}, chatKey = 'group-gameend-team') {
+    const source = setup({ decision: 'no' });
+    expect(await source.gateway.handleUpdate('aria', groupText(GAMEEND_CHAT, TG.reza, 'Please send a voice message.', {
+      message_id: 1, date: Math.floor(new Date('2026-10-19T09:59:45Z').getTime() / 1000),
+    }))).toBe('ignored');
+    const retained = await source.history.recent('aria', 'group-gameend-team', 20);
+    expect(retained).toHaveLength(1);
+    expect(retained[0].privacy).toEqual(expect.objectContaining({ policyKey: expect.any(String), memoryRevision: expect.any(Number) }));
+    expect(retained[0].audiencePersonIds?.sort()).toEqual(['milad', 'parastoo', 'reza']);
+    expect(source.bot.sent).toEqual([]);
+
+    // An equivalent fresh gateway has the same authority boundary. Copy through
+    // the public store API so only the varied record exists: no older valid
+    // request can mask a rejection by becoming the next carryover candidate.
     const ctx = setup({ decision: 'no' });
-    await ctx.history.append('aria', chatKey, message);
+    const prior = { ...retained[0], ...patch };
+    await ctx.history.append('aria', chatKey, prior);
+    expect(await ctx.history.recent('aria', chatKey, 20)).toEqual([prior]);
+    return { ...ctx, prior };
+  }
+
+  it('carries voice format from the otherwise valid stamped fixture', async () => {
+    const ctx = await setupWithPrior();
+    await ctx.gateway.handleUpdate('aria', groupText(GAMEEND_CHAT, TG.reza, '@hoor_aria_bot'));
+    expect(ctx.bot.sendVoice).toHaveBeenCalledTimes(1);
+    expect(ctx.bot.sent.map((item) => item.method)).toEqual(['sendVoice', 'sendMessage']);
+  });
+
+  it.each([
+    ['another speaker', { personId: 'parastoo' }, 'group-gameend-team', '@hoor_aria_bot'],
+    ['an old request', { at: new Date('2026-10-19T09:57:00Z') }, 'group-gameend-team', '@hoor_aria_bot'],
+    ['future history', { telegramMessageId: 999999 }, 'group-gameend-team', '@hoor_aria_bot'],
+    ['missing audience snapshot', { audiencePersonIds: undefined }, 'group-gameend-team', '@hoor_aria_bot'],
+    ['legacy group history', { groupPolicyVersion: undefined }, 'group-gameend-team', '@hoor_aria_bot'],
+    ['another group', {}, 'group-leads', '@hoor_aria_bot'],
+    ['a private chat', {}, 'private-reza', '@hoor_aria_bot'],
+    ['unknown target provenance', { groupOtherTarget: undefined }, 'group-gameend-team', '@hoor_aria_bot'],
+    ['another bot target', { text: '@another_bot, send a voice message.', groupOtherTarget: true }, 'group-gameend-team', '@hoor_aria_bot'],
+    ['an unrelated new question', {}, 'group-gameend-team', '@hoor_aria_bot, what time is the meeting?'],
+  ] as const)('does not inherit voice format from %s', async (_label, message, chatKey, followup) => {
+    const ctx = await setupWithPrior(message, chatKey);
     await ctx.gateway.handleUpdate('aria', groupText(GAMEEND_CHAT, TG.reza, followup));
     expect(ctx.bot.sendVoice).not.toHaveBeenCalled();
     expect(ctx.bot.sendMessage).toHaveBeenCalledTimes(1);
   });
 
-  it('does not reuse a voice request that already received an answer', async () => {
+  it.each(['expanded', 'unknown', 'reset'] as const)('does not inherit a request after audience or privacy changes: %s', async (change) => {
+    const ctx = await setupWithPrior();
+    if (change === 'expanded') ctx.org.getGroupByChatId(GAMEEND_CHAT)!.memberIds.push('sina');
+    if (change === 'unknown') ctx.org.getGroupByChatId(GAMEEND_CHAT)!.hasGuests = true;
+    if (change === 'reset') await ctx.history.clearPersona('aria');
+    await ctx.gateway.handleUpdate('aria', groupText(GAMEEND_CHAT, TG.reza, '@hoor_aria_bot'));
+    expect(ctx.bot.sendVoice).not.toHaveBeenCalled();
+    expect(ctx.bot.sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not refresh a delayed request age when Telegram delivers it later', async () => {
     const ctx = setup({ decision: 'no' });
-    await ctx.history.append('aria', 'group-gameend-team', prior);
-    await ctx.history.append('aria', 'group-gameend-team', { ...prior, role: 'assistant', text: 'Already answered.', telegramMessageId: 1 });
+    await ctx.gateway.handleUpdate('aria', groupText(GAMEEND_CHAT, TG.reza, 'Please send a voice message.', {
+      date: Math.floor(new Date('2026-10-19T09:57:00Z').getTime() / 1000),
+    }));
+    await ctx.gateway.handleUpdate('aria', groupText(GAMEEND_CHAT, TG.reza, '@hoor_aria_bot'));
+    expect(ctx.bot.sendVoice).not.toHaveBeenCalled();
+    expect(ctx.bot.sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not reuse a voice request that already received an answer', async () => {
+    const ctx = await setupWithPrior();
+    await ctx.history.append('aria', 'group-gameend-team', { ...ctx.prior, role: 'assistant', text: 'Already answered.', telegramMessageId: 1 });
     await ctx.gateway.handleUpdate('aria', groupText(GAMEEND_CHAT, TG.reza, '@hoor_aria_bot'));
     expect(ctx.bot.sendVoice).not.toHaveBeenCalled();
   });
@@ -253,9 +296,8 @@ describe('group voice request followed by a separate mention', () => {
   });
 
   it('does not reach back across another participant’s intervening message', async () => {
-    const ctx = setup({ decision: 'no' });
-    await ctx.history.append('aria', 'group-gameend-team', prior);
-    await ctx.history.append('aria', 'group-gameend-team', { ...prior, personId: 'parastoo', text: 'A different topic.', telegramMessageId: 2 });
+    const ctx = await setupWithPrior();
+    await ctx.history.append('aria', 'group-gameend-team', { ...ctx.prior, personId: 'parastoo', text: 'A different topic.', telegramMessageId: 2 });
     await ctx.gateway.handleUpdate('aria', groupText(GAMEEND_CHAT, TG.reza, '@hoor_aria_bot'));
     expect(ctx.bot.sendVoice).not.toHaveBeenCalled();
   });
@@ -341,6 +383,50 @@ describe('truthful voice failures and delivery history', () => {
     expect(ctx.bot.sendMessage).not.toHaveBeenCalled();
     const history = await ctx.history.recent('aria', 'group-gameend-team', 20);
     expect(history.filter((message) => message.role === 'assistant')).toEqual([]);
+    expect(ctx.llm.extractionCalls).toBe(0);
+  });
+});
+
+describe('combined voice delivery and privacy epoch fences', () => {
+  it.each(['resolve', 'reject'] as const)('suppresses audio and fallback after an authorized reset during TTS: %s', async (finish) => {
+    const voice = fakeVoice();
+    let started!: () => void;
+    const atTTS = new Promise<void>((done) => { started = done; });
+    let resolve!: (audio: { audio: ArrayBuffer; mimeType: string; filename: string }) => void;
+    let reject!: (error: Error) => void;
+    voice.synthesize.mockImplementationOnce(async () => {
+      started();
+      return new Promise((done, fail) => {
+        resolve = done;
+        reject = fail;
+      });
+    });
+    const ctx = setup({ voice });
+    const handling = ctx.gateway.handleUpdate('aria', privateText(TG.reza, 'Please send a voice message.'));
+    await atTTS;
+    await ctx.history.clearPersona('aria');
+    if (finish === 'resolve') resolve({ audio: new ArrayBuffer(4), mimeType: 'audio/mpeg', filename: 'voice.mp3' });
+    else reject(new Error('synthetic TTS failure after reset'));
+    expect(await handling).toBe('ignored');
+    expect(ctx.bot.sendVoice).not.toHaveBeenCalled();
+    expect(ctx.bot.sendMessage).not.toHaveBeenCalled();
+    expect(await ctx.history.recent('aria', 'private-reza', 20)).toEqual([]);
+  });
+
+  it('suppresses the transcript and retained history if privacy changes after audio delivery', async () => {
+    const ctx = setup();
+    const sendVoice = ctx.bot.sendVoice.getMockImplementation()!;
+    ctx.bot.sendVoice.mockImplementationOnce(async (...args) => {
+      const result = await sendVoice(...args);
+      await ctx.history.clearPersona('aria');
+      return result;
+    });
+    expect(await ctx.gateway.handleUpdate('aria', privateText(TG.reza, 'Please send a voice message.'))).toBe('ignored');
+    // Audio already sent cannot be recalled; no transcript or history may follow.
+    expect(ctx.bot.sendVoice).toHaveBeenCalledTimes(1);
+    expect(ctx.bot.sendMessage).not.toHaveBeenCalled();
+    expect(ctx.bot.sent.map((item) => item.method)).toEqual(['sendVoice']);
+    expect(await ctx.history.recent('aria', 'private-reza', 20)).toEqual([]);
     expect(ctx.llm.extractionCalls).toBe(0);
   });
 });
