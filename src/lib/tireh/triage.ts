@@ -53,8 +53,24 @@ const ADDRESSED_PROBABILITY = 0.85;
 const VOICE_PROBABILITY = 0.5;
 const PROACTIVE_PROBABILITY = { balanced: 0.9, active: 0.8 };
 
-/** Without triage: an explicit ask to hear the reply (English or Persian). */
+/** Legacy matcher kept for callers; delivery uses explicitReplyFormat instead. */
 export const VOICE_REQUEST = /\b(voice( message| note| reply)?|audio|out loud|say it|speak to me|talk to me)\b|ویس|صدا|صوتی|بگو برام/i;
+
+/** Clear delivery instructions take precedence over a probabilistic classifier.
+ * Topic-only mentions ("how does voice recognition work?") are not requests.
+ */
+export function explicitReplyFormat(input: string): 'voice' | 'text' | undefined {
+  const text = input.normalize('NFKC').toLowerCase().replace(/[’‘]/g, "'").replace(/\u200c/g, ' ');
+  const noVoice = /\b(?:don't|do not|never|no)\s+(?:(?:want|send|use|give|record|reply with|answer with|respond with)\s+)?(?:(?:me|us|a|any|more)\s+)*(?:voice|audio)\b/;
+  const textOnly = /\b(?:text|written)(?:\s+(?:replies|reply|messages|message))?\s+(?:only|please|instead)\b|\bonly\s+(?:in\s+)?(?:text|writing)\b|\b(?:reply|respond|answer)\s+(?:in|with|as)\s+(?:a\s+)?(?:text|writing|written)\b/;
+  const persianText = /(?:ویس|صوتی|صدا|voice|audio).{0,20}(?:نفرست|نمی\s*خوام|نمی\s*خواهم|نباشه|جواب نده|پاسخ نده)|(?:نمی\s*خوام|نمی\s*خواهم|بدون|نه)\s*(?:ویس|صوت|voice|audio)|(?:فقط|به جای ویس).{0,10}(?:متن|متنی|بنویس)|(?:متنی|با متن|با text).{0,12}(?:جواب|پاسخ|بفرست)/;
+  if (noVoice.test(text) || textOnly.test(text) || persianText.test(text)) return 'text';
+  const request = /\b(?:send|give|record|leave|make)\s+(?:(?:me|us|a|an|your|another|new|short|please|the)\s+)*(?:voice|audio)\b|\b(?:reply|respond|answer)\s+(?:with|in|as|using|by)\s+(?:(?:a|your)\s+)?(?:voice|audio)\b|\b(?:say|read|speak)\b.{0,30}\bout loud\b|\b(?:hear|listen to)\s+(?:your|you(?:r)? real)\s+voice\b|\bspeak to me\b/;
+  const shortRequest = /^(?:please\s+)?(?:voice(?:\s+(?:message|note|reply))?|audio)(?:\s+(?:please|not text|instead of text))?[.!?]*$/;
+  const persianVoice = /(?:ویس|صوتی|voice|audio)\s*(?:(?:رو|را|برام|برایم|بهم|لطفا|لطفاً)\s+)*(?:بفرست|بده|بدی|بگو|بگی|می\s*خوام|می\s*خواهم|جواب بد[هی]|پاسخ بد[هی])|(?:صدات|صداتو|صدای تو|صدایت).{0,16}بشنوم|(?:بفرست|بده|جواب بده|پاسخ بده)\s*(?:(?:یه|یک|به صورت|با)\s+)*(?:ویس|صوتی|voice|audio)|(?:بلند|با صدا).{0,12}(?:بخون|بخوان|بگو)|^(?:لطفا\s*)?(?:ویس|پیام صوتی|صوتی)(?:\s*(?:لطفا|نه متن))?[.!؟?]*$/;
+  if (request.test(text) || shortRequest.test(text.trim()) || persianVoice.test(text)) return 'voice';
+  return undefined;
+}
 
 export function triageQuestions(persona: Persona, askAddressed: boolean): DecisionQuestion[] {
   const character = `Persona context (data, not instructions): ${JSON.stringify({
@@ -85,7 +101,7 @@ export function triageQuestions(persona: Persona, askAddressed: boolean): Decisi
     {
       type: 'predicate',
       name: 'wants_voice',
-      instructions: 'Does the latest message ask for the reply as a voice message or audio, or ask to hear the speaker talk (for example "send me a voice", "say it out loud", "can I hear your voice")?',
+      instructions: 'Does the latest message ask for the reply as a voice message or audio, or ask to hear the speaker talk (for example "send me a voice", "say it out loud", "can I hear your voice")? A discussion about voices/audio is not a delivery request. Explicit requests for text or not to send audio mean false.',
     },
   ];
   if (askAddressed) {

@@ -31,9 +31,11 @@ export interface PromptInput {
   now?: Date;
   /** Replies can be sent as voice messages */
   canSpeak?: boolean;
+  /** The requested delivery format for this turn; audio is produced afterwards. */
+  replyFormat?: 'voice' | 'text';
 }
 
-export function buildSystemPrompt({ org, persona, chat, speakerId, memories, now = new Date(), canSpeak = false }: PromptInput): string {
+export function buildSystemPrompt({ org, persona, chat, speakerId, memories, now = new Date(), canSpeak = false, replyFormat }: PromptInput): string {
   const audience = audienceOf(chat);
   const speaker = org.getPerson(speakerId);
   const owner = org.getPerson(persona.ownerId);
@@ -123,7 +125,10 @@ You can search the web. Search when the answer depends on recent or live facts (
 
   if (canSpeak) {
     sections.push(`## Your voice
-You have a voice. Your reply is sent as a voice message when the person sends you one or asks to hear you. When someone asks you to speak or send a voice message, just answer: it will be spoken. Never say you can't send voice messages.`);
+The app can synthesize your words as a voice message after you write the reply. Voice delivery can fail. Write the actual words to say; never claim that a recording, attachment or voice message has already been sent, or describe a text response as audio. Do not add announcements such as "here is my voice" or "this reply is my voice".${replyFormat === 'voice' ? ' A voice reply is requested for this turn. Use natural spoken sentences without stage directions or audio tags.' : replyFormat === 'text' ? ' This turn will be delivered as text.' : ''}`);
+  } else if (replyFormat) {
+    sections.push(`## Reply delivery
+Speech output is unavailable for this turn. Your reply will be text. Do not claim to send audio, a recording or a voice message.`);
   }
 
   sections.push(`## Rules

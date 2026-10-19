@@ -5,9 +5,11 @@
  */
 
 import type { AgentView } from '@/lib/studio/service';
+import type { DefaultVoice, LibraryVoice, VoiceOptions } from '@/lib/studio/media';
 import type { AgentLook, AgentVisibility, GroupBehavior, Member, PersonaSpec, Role, SpawnBrief } from '@/lib/studio/types';
 
 export type { AgentView, AgentLook, AgentVisibility, GroupBehavior, Member, PersonaSpec, Role, SpawnBrief };
+export type { DefaultVoice, LibraryVoice, VoiceOptions };
 
 interface TelegramWebApp {
   initData: string;
@@ -111,7 +113,6 @@ export interface Me {
   features: { avatars: boolean; voices: boolean; calls: boolean; liveCalls?: boolean };
 }
 
-export interface LibraryVoice { voiceId: string; publicOwnerId: string; name: string; accent: string; gender: string; age: string; descriptive: string; language?: string; previewUrl?: string }
 export interface MemoryItem { id: string; content: string; type: string; scope: string; scopeLabel: string; from: string; mine: boolean; at: string; sensitivity: string }
 export interface GroupItem { chatId: number; title: string; hasGuests: boolean; memberCount: number; agents: Array<{ id: string; name: string; look: AgentLook }> }
 
@@ -137,6 +138,9 @@ export const api = {
   designVoices: (id: string, description?: string) => request<{ agent: AgentView }>('POST', `agents/${enc(id)}/voice`, { action: 'design', description }),
   chooseDesignedVoice: (id: string, generatedVoiceId: string) =>
     request<{ agent: AgentView }>('POST', `agents/${enc(id)}/voice`, { action: 'choose-design', generatedVoiceId }),
+  voiceOptions: () => request<VoiceOptions>('GET', 'voices/options'),
+  chooseDefaultVoice: (id: string, voiceId: string) =>
+    request<{ agent: AgentView }>('POST', `agents/${enc(id)}/voice`, { action: 'choose-default', voiceId }),
   chooseLibraryVoice: (id: string, v: LibraryVoice) =>
     request<{ agent: AgentView }>('POST', `agents/${enc(id)}/voice`, { action: 'choose-library', publicOwnerId: v.publicOwnerId, voiceId: v.voiceId, name: v.name }),
   searchVoices: (filters: Record<string, string>) =>

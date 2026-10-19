@@ -14,7 +14,7 @@ import type { TelegramBotClient, TelegramChatMemberUpdated, TelegramManagedBotUp
 import { decryptSecret, encryptSecret } from './crypto';
 import { cloudSvg } from './cloud-art';
 import { callToken, MAX_CALL_SECONDS, voiceLlmKey, voiceLlmKeyId } from './voice-call';
-import { avatarPrompt, defaultVoiceId, type ElevenLabsStudio, type LibraryVoice, type OpenAIMedia, StudioVoiceService } from './media';
+import { avatarPrompt, defaultVoiceId, type ElevenLabsStudio, type LibraryVoice, type OpenAIMedia, type VoiceOptions, StudioVoiceService } from './media';
 import { personId, studioToOrg } from './org-bridge';
 import { draftPersona, randomLook, refinePersona, suggestUsername, validatePersona } from './persona';
 import {
@@ -431,15 +431,38 @@ export class Studio {
     return this.present(updated, actor);
   }
 
-  async searchVoices(actor: Member, filters: { gender?: string; age?: string; accent?: string; language?: string; search?: string }): Promise<LibraryVoice[]> {
+  async searchVoices(actor: Member, filters: { gender?: string; age?: string; accent?: string; language?: string; search?: string; category?: string }): Promise<LibraryVoice[]> {
     if (!canSpawn(actor)) throw forbidden();
     if (!this.deps.eleven) throw new StudioError(503, 'The voice library needs ELEVENLABS_API_KEY.');
     return this.deps.eleven.searchLibrary(filters);
   }
 
+  async voiceOptions(actor: Member): Promise<VoiceOptions> {
+    if (!canSpawn(actor)) throw forbidden();
+    if (!this.deps.eleven) throw new StudioError(503, 'Voices are unavailable on this server.');
+    return this.deps.eleven.getVoiceOptions();
+  }
+
+  async chooseDefaultVoice(actor: Member, id: string, voiceId: string): Promise<AgentView> {
+    if (!this.deps.eleven) throw new StudioError(503, 'Voices are unavailable on this server.');
+    await this.requireEditable(actor, id);
+    const options = await this.deps.eleven.getVoiceOptions();
+    const voice = options.defaultVoices.find((v) => v.voiceId === voiceId);
+    if (!voice) throw bad('Choose a built-in voice from the list.');
+    const updated = await this.mutateAgent(actor, id, (a) => canEditPersona(actor, a, this.now()), (a) => {
+      a.voice = { provider: 'elevenlabs', voiceId: voice.voiceId, label: `${voice.name} · built-in`, source: 'default' };
+      return { ...a };
+    });
+    return this.present(updated, actor);
+  }
+
   async chooseLibraryVoice(actor: Member, id: string, v: { publicOwnerId: string; voiceId: string; name: string }): Promise<AgentView> {
     if (!this.deps.eleven) throw new StudioError(503, 'The voice library needs ELEVENLABS_API_KEY.');
     await this.requireEditable(actor, id);
+    const options = await this.deps.eleven.getVoiceOptions();
+    if (!options.libraryAllowed) throw new StudioError(options.tier === 'free' ? 402 : 503, options.tier === 'free'
+      ? 'Voice library voices require a paid ElevenLabs plan for API use. Choose a built-in voice or upgrade the server’s ElevenLabs subscription.'
+      : 'The server’s ElevenLabs subscription could not be checked. Try again before choosing a library voice.');
     const voiceId = await this.deps.eleven.addLibraryVoice(v.publicOwnerId, v.voiceId, `${this.deps.orgName} ${v.name}`.slice(0, 60));
     const updated = await this.mutateAgent(actor, id, (a) => canEditPersona(actor, a, this.now()), (a) => {
       a.voice = { provider: 'elevenlabs', voiceId, label: `${v.name} · voice library`, source: 'library' };
