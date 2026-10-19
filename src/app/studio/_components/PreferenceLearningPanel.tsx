@@ -23,6 +23,9 @@ export function PreferenceLearningPanel({ agentId, space, confirmed, revisionHin
   const invalidate = useCallback(() => { generation.current++; changing.current = null; loadingRequest.current?.abort(); commandRequest.current?.abort(); }, []);
   useEffect(() => () => { invalidate(); if (agentId) void preferenceLearningApi.cancel(space, agentId); }, [agentId, space, confirmed, invalidate]);
   const load = useCallback(async () => {
+    // A replacement view owns the new generation, including when only the
+    // aggregate revision or a deadline changed within the same scope.
+    commandRequest.current?.abort(); commandRequest.current = null; changing.current = null;
     const controller = new AbortController(); loadingRequest.current?.abort(); loadingRequest.current = controller;
     const epoch = ++generation.current; setBusy(true); setError(false); setStatus('');
     try { const view = await preferenceLearningApi.read(space, agentId, controller.signal); if (epoch === generation.current) { current.current = view; setState(view); } }

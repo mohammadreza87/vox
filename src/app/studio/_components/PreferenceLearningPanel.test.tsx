@@ -55,3 +55,26 @@ it('refreshes an unchanged past client deadline only once and hides its Use cont
   await act(async () => { await new Promise(r => setTimeout(r, 40)); });
   expect(api.read).toHaveBeenCalledTimes(2); expect(screen.queryByRole('button', { name: 'Use preference' })).not.toBeInTheDocument();
 });
+it.each(['revision', 'expiry'] as const)('a same-scope %s replacement load releases the old command lock without letting its late finally release a newer command', async cause => {
+  if (cause === 'expiry') vi.useFakeTimers();
+  const p = props(), deadline = Date.now() + 1000;
+  api.read.mockResolvedValueOnce(state(cause === 'expiry' ? { presentation: { receipt: 'expired-other-locale', locale: 'fa', copyHash: 'hash', expiresAt: deadline } } : {}))
+    .mockResolvedValue(state({ revision: 11 }));
+  let finishOld!: (value: LearningPublicView) => void, finishNext!: (value: LearningPublicView) => void;
+  api.present.mockReturnValueOnce(new Promise(resolve => { finishOld = resolve; }))
+    .mockReturnValueOnce(new Promise(resolve => { finishNext = resolve; }));
+  const view = render(<PreferenceLearningPanel {...p} />); await act(async () => {});
+  fireEvent.click(screen.getByRole('button', { name: 'Review suggestion learning' })); expect(api.present).toHaveBeenCalledTimes(1);
+  const oldSignal = api.present.mock.calls[0][1] as AbortSignal;
+  if (cause === 'revision') { view.rerender(<PreferenceLearningPanel {...p} revisionHint={11} />); await act(async () => {}); }
+  else await act(async () => { await vi.advanceTimersByTimeAsync(1001); });
+  expect(api.read).toHaveBeenCalledTimes(2); expect(oldSignal.aborted).toBe(true);
+  const button = screen.getByRole('button', { name: 'Review suggestion learning' }); expect(button).toBeEnabled(); fireEvent.click(button);
+  expect(api.present).toHaveBeenCalledTimes(2); expect(api.present.mock.calls[1][0]).toMatchObject({ expectedRevision: 11, agentId: 'agent1', space: 'work' });
+  await act(async () => finishOld(state({ revision: 50, enabled: true, intentExpiresAt: Date.now() + 60_000 })));
+  expect(button).toBeDisabled(); expect(button.closest('section')).toHaveAttribute('aria-busy', 'true');
+  expect(screen.queryByRole('button', { name: 'Turn suggestion learning off' })).not.toBeInTheDocument(); expect(p.onRevision).not.toHaveBeenCalled();
+  fireEvent.click(button); expect(api.present).toHaveBeenCalledTimes(2);
+  await act(async () => finishNext(state({ revision: 12, presentation: { receipt: 'current', locale: 'en', copyHash: 'hash', expiresAt: Date.now() + 60_000 } })));
+  expect(screen.getByRole('button', { name: 'Enable suggestions' })).toBeEnabled(); expect(p.onRevision).toHaveBeenCalledExactlyOnceWith(12);
+});
