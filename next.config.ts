@@ -2,6 +2,8 @@ import type { NextConfig } from "next";
 import { withSentryConfig } from '@sentry/nextjs';
 
 const nextConfig: NextConfig = {
+  // Keep each production release independent of the working checkout.
+  output: 'standalone',
   // Mark firebase-admin as external to prevent bundling issues
   serverExternalPackages: ['firebase-admin'],
 

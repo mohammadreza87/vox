@@ -36,6 +36,10 @@ Roles: `superadmin > admin > member > pending`. New people who press /start in @
 
 ## Setup on the Mac Studio
 
+For the supervised production release, private secrets, backups, HTTPS routing and
+rollback, follow [PRODUCTION.md](./PRODUCTION.md). The commands below are a manual
+setup reference; they do not install a production service.
+
 1. **Enable bot management for @VoxxBot.** In Telegram, open @BotFather → *Open* (the Mini App) → your bot → *Bot Settings*, and turn on **Bot Management**. This lets VoxxBot create agent bots for you.
 2. **Get a public HTTPS URL** for the Mac (Telegram Mini Apps require HTTPS). Cloudflare Tunnel is the simplest:
    ```sh
