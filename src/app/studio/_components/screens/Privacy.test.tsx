@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PrivacyScreen } from './Privacy';
 import type { AdaptiveSnapshot } from '../../_lib/adaptive-client';
 
-const mocks = vi.hoisted(() => ({ read: vi.fn(), confirm: vi.fn(), present: vi.fn(), consent: vi.fn(), save: vi.fn(), remove: vi.fn(), agent: vi.fn(), agents: vi.fn() }));
+const mocks = vi.hoisted(() => ({ read: vi.fn(), confirm: vi.fn(), present: vi.fn(), consent: vi.fn(), save: vi.fn(), correct: vi.fn(), remove: vi.fn(), agent: vi.fn(), agents: vi.fn() }));
 vi.mock('../../_lib/adaptive-client', () => ({ adaptiveApi: mocks }));
 vi.mock('../../_lib/client', () => ({ api: { agents: mocks.agents } }));
 const snapshot = (extra: Partial<AdaptiveSnapshot> = {}): AdaptiveSnapshot => ({
@@ -74,4 +74,27 @@ it('renders an inherited unverified claim caveat alongside summary provenance in
   await screen.findByText('ادعای بررسی‌شدهٔ شما؛ به‌طور مستقل تأیید نشده است.'); article = view.container.querySelector('article')!;
   expect(within(article).getByText('خلاصهٔ بررسی‌شده از 2 یادداشت؛ حذف خلاصه، اصل یادداشت‌ها را نگه می‌دارد.')).toBeVisible();
   expect(summary.revision).toBe(1); expect(mocks.save).not.toHaveBeenCalled(); expect(mocks.consent).not.toHaveBeenCalled();
+});
+
+it('retains the newer authoritative snapshot when two own-note correction responses arrive out of order', async () => {
+  const notes = ['First own note', 'Second own note'].map((text, index) => ({ id: `note-${index}`, text, revision: 1, createdAt: 1, expiresAt: 2_000_000_000_000 }));
+  const initial = snapshot({ memories: notes, memoryCorrectionAvailable: true }); mocks.read.mockResolvedValue(initial);
+  const release: Array<(value: AdaptiveSnapshot) => void> = [];
+  mocks.correct.mockImplementation(() => new Promise(resolve => release.push(resolve)));
+  const view = render(<PrivacyScreen />); await screen.findAllByRole('button', { name: 'Edit note' });
+  for (let index = 0; index < 2; index++) {
+    const article = view.container.querySelectorAll('.vx-privacy-note')[index] as HTMLElement;
+    fireEvent.click(within(article).getByRole('button', { name: 'Edit note' }));
+    fireEvent.change(within(article).getByRole('textbox'), { target: { value: `Corrected ${index}` } });
+    fireEvent.click(within(article).getByRole('button', { name: 'Review correction' }));
+    fireEvent.click(within(article).getByRole('button', { name: 'Save correction' }));
+  }
+  await waitFor(() => expect(mocks.correct).toHaveBeenCalledTimes(2));
+  const current = notes.map((m, index) => ({ ...m, revision: 2, text: `Corrected ${index}` }));
+  release[1]({ ...initial, revision: 4, memories: current });
+  await waitFor(() => expect(view.container.querySelectorAll('.vx-privacy-note')[1]).toHaveTextContent('Corrected 1'));
+  release[0]({ ...initial, revision: 3, memories: [current[0], notes[1]] });
+  await waitFor(() => expect(view.container.querySelectorAll('.vx-privacy-note')[0]).toHaveTextContent('Corrected 0'));
+  expect(view.container.querySelectorAll('.vx-privacy-note')[1]).toHaveTextContent('Corrected 1');
+  expect(mocks.correct).toHaveBeenCalledTimes(2);
 });

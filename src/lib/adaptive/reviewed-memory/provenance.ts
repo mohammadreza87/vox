@@ -44,11 +44,12 @@ export function validMemoryLineage(d: AdaptiveDocument, memory: StoredMemory, no
 
 /** Compute invalids against one immutable snapshot, then mutate. No memo may
  * outlive a mutation. Deleting a summary never deletes its authored sources. */
-export function purgeInvalidDerivedMemory(d: AdaptiveDocument, now: number): boolean {
+export function purgeInvalidDerivedMemory(d: AdaptiveDocument, now: number, onTombstone?: (memory: StoredMemory) => void): boolean {
   const valid = validationPass(d, now);
   const invalid = d.memories.filter(memory => memory.sourceRefs && memory.status === 'active' && !valid(memory));
   for (const memory of invalid) {
     memory.status = 'deleted'; delete memory.text; memory.revision++; memory.revocationEpoch++; memory.updatedAt = now;
+    onTombstone?.(memory);
   }
   return invalid.length > 0;
 }

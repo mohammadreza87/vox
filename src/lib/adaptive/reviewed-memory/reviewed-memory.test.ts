@@ -247,3 +247,21 @@ it('bounds a stalled preview and signals cancellation without saving or deliveri
   expect(await pending).toMatchObject({ code: 'reviewed_memory_changed' });
   vi.useRealTimers(); expect((await f.adaptive.read(123, 'work')).memories).toHaveLength(3);
 });
+
+it('a corrected source atomically retires accepted summaries and their descendants and old receipts cannot resurrect them', async () => {
+  const f = await setup(), preview = await f.service.preview(123, f.input), first = await f.service.accept(123, f.accept(preview));
+  const secondPreview = await f.service.preview(123, { ...f.input, sourceRefs: [{ id: first.memoryId, revision: 1 }, f.sourceRefs[1]] });
+  const second = await f.service.accept(123, f.accept(secondPreview));
+  const original = (await f.adaptive.read(123, 'work')).memories.find(m => m.id === f.sourceRefs[0].id)!;
+  await f.adaptive.correctMemory(123, original.id, { space: 'work', text: 'Launch is March 8; date remains tentative.', expectedRevision: 1, eventId: randomUUID() }, { authorizeNow: () => true });
+  const raw = JSON.parse(await readFile(await f.file(), 'utf8'));
+  for (const id of [first.memoryId, second.memoryId]) {
+    expect(raw.memories.find((m: { id: string }) => m.id === id)).toMatchObject({ status: 'deleted', revision: 2, revocationEpoch: 1 });
+    expect(raw.memories.find((m: { id: string }) => m.id === id).text).toBeUndefined();
+    expect(raw.outbox.some((e: { memoryId: string; kind: string }) => e.memoryId === id && e.kind === 'memory_deleted')).toBe(true);
+  }
+  await expect(f.service.accept(123, f.accept(preview))).rejects.toMatchObject({ code: 'reviewed_memory_changed' });
+  await expect(f.service.accept(123, f.accept(secondPreview))).rejects.toMatchObject({ code: 'reviewed_memory_changed' });
+  expect((await f.adaptive.read(123, 'work')).memories.find(m => m.id === original.id)).toMatchObject({ revision: 2, expiresAt: original.expiresAt, createdAt: original.createdAt });
+  expect(f.create).toHaveBeenCalledTimes(2);
+});

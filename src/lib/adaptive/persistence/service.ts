@@ -9,6 +9,7 @@ import type { AccessRequest, ConsentPermission, IdentityContext, PolicySnapshot,
 import { ADAPTIVE_POLICY_VERSION, OPTIONAL_PURPOSES, AdaptiveRepository, accountIdFor, containerIdFor, digest,
   spaceIdFor, tenantIdFor, type AdaptiveDocument, type OptionalPurpose, type SpaceKind, type StoredMemory } from './repository';
 import type { AdaptiveNotice, AdaptiveSnapshot, AdaptivePresentation } from './contracts';
+import { correctionInput, type CorrectionInput } from './validation';
 import type { AgentGrantInput, ConsentInput, DeletionInput, IdentityInput, MemoryInput, PresentInput } from './validation';
 import { sweepObserverDocument } from '../observation/helpers';
 import { pruneLearningDocument } from '../personalization/learning/state';
@@ -118,7 +119,7 @@ export class AdaptiveService {
         this.bump(d, now); this.record(d, eventId, digest(['relationship-reconsent', p.id, p.epoch]), 'relationship_reconsent', p.id);
       }
       const priorGrants = new Map(d.agentGrants.map(g => [`${g.space}:${g.agentId}`, g.revision]));
-      const priorMemories = new Map(d.memories.map(m => [m.id, m.status]));
+      const priorMemories = new Map(d.memories.map(m => [m.id, { status: m.status, revision: m.revision }]));
       const priorSources = structuredClone(d.relationships.sources);
       // System expiry is authoritative; a UI must not see an expired choice that cannot reopen.
       for (let index = 0; index < d.permissions.length; index++) {
@@ -171,7 +172,10 @@ export class AdaptiveService {
           enqueue(space, 'consent_changed');
         }
         for (const g of d.agentGrants) if (priorGrants.has(`${g.space}:${g.agentId}`) && priorGrants.get(`${g.space}:${g.agentId}`) !== g.revision) enqueue(g.space, 'agent_grant_changed', g.agentId);
-        for (const m of d.memories) if (priorMemories.get(m.id) === 'active' && m.status === 'deleted') enqueue(m.space, 'source_memory_deleted');
+        for (const m of d.memories) if (priorMemories.get(m.id)?.status === 'active') {
+          if (m.status === 'deleted' && !invalidations.some(i => i.space === m.space && i.reason === 'source_memory_deleted' && !i.agentId && !i.sourceIds)) enqueue(m.space, 'source_memory_deleted');
+          else if (m.status === 'active' && priorMemories.get(m.id)!.revision !== m.revision && !invalidations.some(i => i.space === m.space && i.reason === 'source_memory_corrected' && !i.agentId && !i.sourceIds)) enqueue(m.space, 'source_memory_corrected');
+        }
         const removed = new Map<string, { space: SpaceKind; agentId: string; ids: string[] }>();
         for (const source of priorSources) if (source.status === 'active' && !d.relationships.sources.some(s => s.id === source.id && digest(s.key) === digest(source.key) && s.status === 'active')) {
           const space = source.key.scope.space, agentId = source.key.personaId;
@@ -318,6 +322,7 @@ export class AdaptiveService {
         ...(claimOrigins.has(m.id) ? { origin: 'user_reviewed_claim' as const } : {}), ...(m.sourceRefs ? { sourceRefs: m.sourceRefs } : {}) })),
       agents: confirmed ? d.agentGrants.filter(g => g.space === space).map(g => ({ agentId: g.agentId, allowed: g.allowed, revision: g.revision })) : [],
       explicitMemoryAvailable: confirmed && memory.eligible,
+      memoryCorrectionAvailable: confirmed && memory.eligible && this.repository.storage.supportsCommittedWriteFence === true && !!this.repository.storage.readCommittedForEffect,
       ...(memory.eligible && memory.validUntil !== undefined ? { explicitMemoryValidUntil: memory.validUntil } : {}),
       ...(!confirmed ? { explicitMemoryReason: 'profile_confirmation_required' } : !memory.eligible ? { explicitMemoryReason: memory.reason } : {}),
     };
@@ -409,7 +414,7 @@ export class AdaptiveService {
       return this.snapshot(d, input.space, now);
     });
   }
-  private authorized(d: AdaptiveDocument, space: SpaceKind, memory: StoredMemory, operation: 'read' | 'contribute' | 'delete', now: number, agentId?: string): boolean {
+  private authorized(d: AdaptiveDocument, space: SpaceKind, memory: StoredMemory, operation: 'read' | 'contribute' | 'edit' | 'delete', now: number, agentId?: string): boolean {
     if (operation === 'read' && !validMemoryLineage(d, memory, now)) return false;
     const base = { schemaVersion: 1 as const, revision: d.revision, createdAt: d.createdAt, updatedAt: d.updatedAt };
     const tenantId = tenantIdFor(d.accountId), spaceId = spaceIdFor(d.accountId, space), containerId = containerIdFor(d.accountId, space);
@@ -429,7 +434,7 @@ export class AdaptiveService {
       memberships: [{ ...base, ...scope, id: `${containerId}:member`, containerId, personId: d.personId,
         status: 'active', joinedAt: d.createdAt, expiresAt: INFINITY, policyEpoch: 0 }],
       grants: [{ ...base, ...scope, id: `${containerId}:grant`, containerId, principal: { kind: 'person', id: d.personId },
-        operations: ['read', 'contribute', 'delete'], purpose: 'explicit.memory_request', purposeVersion: 1,
+        operations: ['read', 'contribute', 'edit', 'delete'], purpose: 'explicit.memory_request', purposeVersion: 1,
         status: 'active', expiresAt: INFINITY, policyEpoch: 0 },
         ...(agentId ? d.agentGrants.filter(g => g.agentId === agentId && g.space === space && g.allowed).map(g => ({
           ...base, ...scope, id: `${containerId}:agent:${g.agentId}`, revision: g.revision, updatedAt: g.updatedAt, containerId,
@@ -458,6 +463,50 @@ export class AdaptiveService {
       d.memories.push(memory); this.bump(d, now); this.record(d, input.eventId, fingerprint, 'memory', memory.id);
       return this.snapshot(d, input.space, now);
     });
+  }
+  /** Ordinary own notes and explicitly reviewed claims only. No supersession
+   * copy or retention extension; derived summaries are retired in this commit. */
+  correctMemory(telegramId: number, memoryId: string, value: CorrectionInput,
+    options: { authorizeNow(): boolean; signal?: AbortSignal }): Promise<AdaptiveSnapshot> {
+    const input = correctionInput.parse(value);
+    if (this.repository.storage.supportsCommittedWriteFence !== true || !this.repository.storage.readCommittedForEffect) return Promise.reject(new AdaptiveError(503, 'memory_correction_unavailable'));
+    let draft: AdaptiveDocument | undefined, core: string | undefined, replay = false;
+    return this.transact(telegramId, (d, now) => {
+      draft = d; this.requirePerson(d, now);
+      if (!this.isCoreAllowed(d, now) || options.signal?.aborted || !options.authorizeNow()) return fail(403, 'access_denied');
+      core = this.coreFingerprint(d, now);
+      const fingerprint = digest(['memory-correction-v1', memoryId, input]);
+      // A replay reports current state. It never replays the historical text,
+      // including after another correction, expiry or deletion.
+      if (this.event(d, input.eventId, fingerprint)) { replay = true; return this.snapshot(d, input.space, now); }
+      const memory = d.memories.find(row => row.id === memoryId && row.space === input.space);
+      if (!memory || memory.status !== 'active' || memory.expiresAt <= now) return fail(404, 'not_found');
+      if (memory.sourceRefs) return fail(409, 'derived_memory_not_editable');
+      if (memory.revision !== input.expectedRevision) return fail(409, 'revision_conflict');
+      if (!this.authorized(d, input.space, memory, 'edit', now)) return fail(403, 'access_denied');
+      if (memory.text === input.text) return fail(409, 'memory_unchanged');
+      this.requireCapacity(d);
+      memory.text = input.text; memory.revision++; memory.revocationEpoch++; memory.updatedAt = now;
+      this.bump(d, now);
+      purgeInvalidDerivedMemory(d, now, descendant => {
+        d.outbox.push({ eventId: `correction-derived:${digest([input.eventId, descendant.id])}`, kind: 'memory_deleted', space: descendant.space,
+          personId: d.personId, revision: d.revision, memoryId: descendant.id, epoch: descendant.revocationEpoch, createdAt: now });
+      });
+      this.record(d, input.eventId, fingerprint, 'memory_corrected', memory.id);
+      return this.snapshot(d, input.space, now);
+    }, () => {
+      // Studio I/O precedes fresh canonical deadlines immediately before rename.
+      const authority = options.authorizeNow(), now = this.now();
+      if (!draft || !authority || options.signal?.aborted || !this.isCoreAllowed(draft, now) || this.coreFingerprint(draft, now) !== core) return fail(409, 'memory_correction_changed');
+      if (!replay) {
+        const memory = draft.memories.find(row => row.id === memoryId && row.space === input.space);
+        if (!memory || !this.authorized(draft, input.space, memory, 'edit', now)) return fail(409, 'memory_correction_changed');
+      }
+    });
+  }
+  memorySnapshotCurrentNow(telegramId: number, snapshot: AdaptiveSnapshot, locale: 'en' | 'fa'): boolean {
+    const current = this.readCommittedForEffect(telegramId, (d, now) => digest(this.snapshot(d, snapshot.space, now, locale)) === digest(snapshot));
+    return current.status === 'ready' && current.value;
   }
   private tombstone(d: AdaptiveDocument, memory: StoredMemory, now: number, eventId: string): void {
     memory.status = 'deleted'; delete memory.text; memory.revision++; memory.revocationEpoch++; memory.updatedAt = now;

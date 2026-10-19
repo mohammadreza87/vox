@@ -14,6 +14,9 @@ export const consentInput = z.object({ space, purpose, state: z.enum(['granted',
   expectedRevision: revision, eventId, receipt: z.string().uuid().optional(),
 }).strict();
 export const memoryInput = z.object({ space, text: z.string().trim().min(1).max(2000), expectedRevision: revision, eventId }).strict();
+/** expectedRevision is the selected memory revision, never the aggregate. */
+export const correctionInput = memoryInput;
+export type CorrectionInput = z.infer<typeof correctionInput>;
 export const deletionInput = z.object({ space, expectedRevision: revision, eventId }).strict();
 export const spaceInput = space;
 export type PresentInput = z.infer<typeof presentInput>;
