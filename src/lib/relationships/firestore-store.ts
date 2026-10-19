@@ -28,6 +28,7 @@ export class FirestoreRelationshipStore implements RelationshipStore {
   }
   private restore(key: RelationshipKey, json: unknown, expiry: unknown, epoch: number, controlJson: unknown): RelationshipState {
     const state = typeof json === 'string' && expires(expiry) > this.now().getTime() ? JSON.parse(json) as RelationshipState : emptyRelationship(key);
+    if (relationshipId(state.key) !== relationshipId(key)) throw new Error('Invalid persisted relationship scope');
     const current = currentEpoch(state, epoch);
     // Only the control projection is copied: unvalidated arbitrary document fields cannot become context.
     if (typeof controlJson === 'string') Object.assign(current, controls(JSON.parse(controlJson) as RelationshipState));
@@ -47,7 +48,7 @@ export class FirestoreRelationshipStore implements RelationshipStore {
       const [snap, epoch, control] = await Promise.all([tx.get(ref), tx.get(this.epochRef(key.personaId)), tx.get(controlRef)]);
       const state = this.restore(key, snap.get('json'), snap.get('expiresAt'), epoch.get('epoch') ?? 0, control.get('json'));
       const result = fn(state); bounded(state);
-      tx.set(ref, { personaId: key.personaId, nextDueAt: nextDue(state), json: JSON.stringify(state), expiresAt: new Date(this.now().getTime() + DATA_RETENTION_MS) });
+      tx.set(ref, { personaId: key.personaId, accountId: key.scope?.accountId ?? null, nextDueAt: nextDue(state), json: JSON.stringify(state), expiresAt: new Date(this.now().getTime() + DATA_RETENTION_MS) });
       tx.set(controlRef, { json: JSON.stringify(controls(state)) });
       return result;
     });
@@ -61,5 +62,10 @@ export class FirestoreRelationshipStore implements RelationshipStore {
   async keysForPersona(personaId: string): Promise<RelationshipKey[]> {
     const snap = await this.db.collection(this.collection).where('personaId', '==', personaId).get();
     return snap.docs.map((doc) => (JSON.parse(doc.get('json')) as RelationshipState).key);
+  }
+  async keysForAccount(accountId: string): Promise<RelationshipKey[]> {
+    const snap = await this.db.collection(this.collection).where('accountId', '==', accountId).get();
+    return snap.docs.map((doc) => (JSON.parse(doc.get('json')) as RelationshipState).key)
+      .filter(key => key.scope?.accountId === accountId);
   }
 }

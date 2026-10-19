@@ -410,8 +410,8 @@ describe('authenticated relationship settings', () => {
     h.studio.deps.relationshipConfig = { mode: 'live', agentIds: [hired.agent.id], personIds: [`tg-${ID.alice}`] };
     const path = `agents/${hired.agent.id}/relationship`;
     expect((await call(req('GET', path, { as: null }))).status).toBe(401);
-    // Bob can use this fixture agent, but is outside the relationship pilot.
-    expect((await call(req('PUT', path, { as: ID.bob, body: { action: 'stop' } }))).status).toBe(503);
+    // Protective controls remain usable outside the pilot; they never grant feature access.
+    expect((await call(req('PUT', path, { as: ID.bob, body: { action: 'stop' } }))).status).toBe(200);
     const bad = await call(req('PUT', path, { body: { action: 'configure', timeZone: 'not-a-zone' } }));
     expect(bad.status).toBe(400);
     const paused = await call(req('PUT', path, { body: { action: 'pause', personId: `tg-${ID.bob}` } }));

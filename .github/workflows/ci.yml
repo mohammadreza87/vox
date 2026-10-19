@@ -176,6 +176,11 @@ jobs:
       - name: Run adaptive production browser journey
         run: npx playwright test --config=e2e/adaptive.config.ts
 
+      - name: Run scoped relationship production browser journeys
+        run: npx playwright test --config=playwright.relationships.config.ts --project=chromium
+        env:
+          RELATIONSHIP_E2E_PRODUCTION: '1'
+
       - name: Run E2E tests
         run: npx playwright test
         env:

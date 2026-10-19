@@ -91,7 +91,7 @@ export const PURPOSES = [
   'core.conversation', 'ops.security_reliability', 'explicit.memory_request',
   'optional.product_analytics', 'optional.personalization', 'optional.auto_memory',
   'optional.biometric_recognition', 'optional.reminder_delivery',
-  'optional.proactive_suggestions', 'optional.content_quality_review',
+  'optional.proactive_suggestions', 'optional.content_quality_review', 'optional.relationship_outreach',
   'optional.marketing', 'model_training',
 ] as const;
 export type Purpose = typeof PURPOSES[number];

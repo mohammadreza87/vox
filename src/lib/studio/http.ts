@@ -245,10 +245,17 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
             if (space !== 'work' && space !== 'personal') throw new StudioError(400, 'Choose Work or Personal.');
             return json(await studio.callTurn(me, id, await audio.arrayBuffer(), audio.type || 'audio/webm', space));
           }
-          case 'GET relationship': return json({ relationship: await studio.relationshipFor(me, id) });
+          case 'GET relationship': {
+            const space = new URL(req.url).searchParams.get('space') ?? 'work';
+            if (space !== 'work' && space !== 'personal') throw new StudioError(400, 'Choose Work or Personal.');
+            return json({ relationship: await studio.relationshipFor(me, id, space) });
+          }
           case 'PUT relationship': {
             const b = await body(req);
+            const space = b.space ?? 'work';
+            if (space !== 'work' && space !== 'personal') throw new StudioError(400, 'Choose Work or Personal.');
             return json({ relationship: await studio.updateRelationship(me, id, {
+              space, enabled: typeof b.enabled === 'boolean' ? b.enabled : undefined, sourceId: str(b.sourceId, 200), itemId: str(b.itemId, 200),
               action: str(b.action, 20) ?? '', until: str(b.until, 40), timeZone: str(b.timeZone, 80),
               quietHours: b.quietHours as { start: number; end: number } | undefined,
             }) });

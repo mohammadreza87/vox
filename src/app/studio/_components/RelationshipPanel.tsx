@@ -1,78 +1,67 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { api, type RelationshipView } from '../_lib/client';
-import { errorMessage } from './StudioApp';
+import { useEffect, useRef, useState } from 'react';
+import { api, type RelationshipSpace, type RelationshipView } from '../_lib/client';
 
-export function RelationshipPanel({ agentId, name }: { agentId: string; name: string }) {
-  const [value, setValue] = useState<RelationshipView | null>(null);
-  const [zone, setZone] = useState('UTC');
-  const [start, setStart] = useState('22:00');
-  const [end, setEnd] = useState('08:00');
-  const [busy, setBusy] = useState(false);
+type Props = { agentId: string; name: string; space?: RelationshipSpace; locale?: 'en' | 'fa'; identityConfirmed?: boolean };
+export function RelationshipPanel({ agentId, name, space = 'work', locale = 'en', identityConfirmed = false }: Props) {
+  const [stored, setStored] = useState<{ scope: string; value: RelationshipView } | null>(null);
   const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
   const [confirmForget, setConfirmForget] = useState(false);
+  const sequence = useRef(0);
+  const scope = `${space}:${agentId}`;
+  const value = stored?.scope === scope ? stored.value : null;
+  const fa = locale === 'fa';
+  const t = (en: string, persian: string) => fa ? persian : en;
 
   useEffect(() => {
-    try { setZone(Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'); } catch { /* Keep a safe editable default. */ }
-    api.relationship(agentId).then(({ relationship }) => {
-      setValue(relationship);
-      if (relationship.timeZone) setZone(relationship.timeZone);
-      setStart(`${String(relationship.quietHours.start).padStart(2, '0')}:00`); setEnd(`${String(relationship.quietHours.end).padStart(2, '0')}:00`);
-    }).catch(e => setError(errorMessage(e)));
-  }, [agentId]);
+    const current = ++sequence.current;
+    setStored(null); setError(''); setBusy(false); setConfirmForget(false);
+    Promise.resolve().then(() => api.relationship(agentId, space)).then(({ relationship }) => {
+      if (sequence.current === current) setStored({ scope, value: relationship });
+    }).catch(e => { if (sequence.current === current) setError(e instanceof Error ? e.message : 'Something went wrong'); });
+    return () => { if (sequence.current === current) sequence.current++; };
+  }, [agentId, space]);
 
   const update = async (input: Parameters<typeof api.updateRelationship>[1]) => {
+    if (busy) return;
+    const current = sequence.current;
     setBusy(true); setError('');
-    try { setValue((await api.updateRelationship(agentId, input)).relationship); setConfirmForget(false); }
-    catch (e) { setError(errorMessage(e)); }
-    finally { setBusy(false); }
+    try {
+      const { relationship } = await Promise.resolve().then(() => api.updateRelationship(agentId, { ...input, space }, space));
+      if (sequence.current === current) { setStored({ scope, value: relationship }); setConfirmForget(false); }
+    } catch (e) { if (sequence.current === current) setError(e instanceof Error ? e.message : 'Something went wrong'); }
+    finally { if (sequence.current === current) setBusy(false); }
   };
 
-  const unavailable = !value?.available || value.mode === 'off';
+  const stopped = !!value?.disabled;
   const paused = !!value?.pausedUntil && Date.parse(value.pausedUntil) > Date.now();
-  return (
-    <section className="vx-card" aria-labelledby="relationship-title" style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <div>
-        <h2 id="relationship-title" className="vx-title-m" style={{ margin: 0 }}>Staying in touch</h2>
-        <p className="vx-small vx-2" style={{ margin: '5px 0 0' }}>Choose when {name} may follow up. You can change this any time.</p>
+  const available = !!value?.available && value.mode !== 'off';
+  const allowManage = !!value;
+  return <section className="vx-card" dir={fa ? 'rtl' : 'ltr'} lang={fa ? 'fa' : 'en'} aria-labelledby="relationship-title" style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+    <div><h2 id="relationship-title" className="vx-title-m" style={{ margin: 0 }}>{t('Staying in touch', 'در ارتباط ماندن')}</h2>
+      <p className="vx-small vx-2" style={{ margin: '5px 0 0' }}>{t(`Manage ${name}’s follow-ups and private check-ins in your ${space} space.`, `پیگیری‌ها و بررسی‌های خصوصی ${name} را در فضای ${space === 'work' ? 'کاری' : 'شخصی'} مدیریت کنید.`)}</p></div>
+    {!value && !error && <p className="vx-small vx-2" role="status">{t('Loading relationship settings…', 'در حال دریافت تنظیمات ارتباط…')}</p>}
+    {error && <div className="vx-banner danger" role="alert">{error}</div>}
+    {value && <>
+      <p className="vx-small" style={{ margin: 0 }} role="status">{!available ? t('Follow-ups are unavailable in this space. You can still pause, stop, or clear existing context.', 'پیگیری در این فضا در دسترس نیست. همچنان می‌توانید آن را متوقف یا مکث کنید یا زمینهٔ موجود را پاک کنید.') : paused ? t('Follow-ups are paused.', 'پیگیری‌ها مکث شده‌اند.') : stopped ? t('Follow-ups are stopped.', 'پیگیری‌ها متوقف شده‌اند.') : t('Follow-ups are available for useful open conversations.', 'پیگیری برای گفتگوهای باز و مفید در دسترس است.')}</p>
+      {value.mode === 'off' && <p className="vx-small vx-2">{t('Relationship features are currently unavailable. Review Privacy and memory settings for prerequisites.', 'ویژگی‌های ارتباطی اکنون در دسترس نیستند. پیش‌نیازها را در تنظیمات حریم خصوصی و حافظه ببینید.')}</p>}
+      <div className="vx-group" style={{ padding: 12 }}><div className="vx-small" style={{ fontWeight: 600, marginBottom: 6 }}>{t('Communication preferences', 'ترجیح‌های ارتباطی')}</div>
+        {value.preferences.length ? <ul style={{ margin: 0, paddingInlineStart: 20 }}>{value.preferences.map((p, i) => <li key={`${p.key}-${i}`} className="vx-small">{p.value}</li>)}</ul> : <p className="vx-small vx-2" style={{ margin: 0 }}>{t('No preferences saved.', 'ترجیحی ذخیره نشده است.')}</p>}</div>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        {paused || stopped ? <button className="vx-btn vx-btn-primary vx-btn-sm" disabled={busy || !available} onClick={() => void update({ action: 'resume' })}>{t('Resume follow-ups', 'ازسرگیری پیگیری')}</button> : null}
+        <button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy} onClick={() => void update({ action: 'pause', until: new Date(Date.now() + 7 * 86_400_000).toISOString() })}>{t('Pause for 7 days', 'مکث برای ۷ روز')}</button>
+        <button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy || !allowManage} onClick={() => void update({ action: 'stop' })}>{t('Stop follow-ups', 'توقف پیگیری')}</button>
       </div>
-      {!value && !error && <p className="vx-small vx-2" role="status">Loading your settings…</p>}
-      {error && <div className="vx-banner danger" role="alert">{error}</div>}
-      {value && !value.available && <p className="vx-small vx-2" style={{ margin: 0 }}>Follow-ups aren’t available for {name} right now.</p>}
-      {value?.available && <>
-        <p className="vx-small" style={{ margin: 0 }} role="status">
-          {unavailable ? 'Follow-ups are turned off.' : paused ? `Follow-ups are paused until ${new Date(value.pausedUntil!).toLocaleString()}.` : value.disabled ? 'Follow-ups are stopped.' : !value.timeZone ? 'Save your time zone so check-ins arrive at a considerate time.' : value.mode === 'live' ? `${name} can follow up when there’s something useful to share.` : `${name} is quietly keeping track of open conversations.`}
-        </p>
-        <div className="vx-group" style={{ padding: 12, display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 10 }}>
-          <label className="vx-small">Your time zone
-            <input aria-label="Your time zone" value={zone} disabled={unavailable || busy} onChange={e => setZone(e.target.value)} placeholder="Europe/Tallinn" style={fieldStyle} />
-          </label>
-          <div className="vx-small" style={{ gridColumn: '1 / -1' }}>Quiet hours</div>
-          <label className="vx-small">From<input aria-label="Quiet hours start" type="time" step={3600} value={start} disabled={unavailable || busy} onChange={e => setStart(e.target.value)} style={fieldStyle} /></label>
-          <label className="vx-small">Until<input aria-label="Quiet hours end" type="time" step={3600} value={end} disabled={unavailable || busy} onChange={e => setEnd(e.target.value)} style={fieldStyle} /></label>
-        </div>
-        <button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={unavailable || busy || !zone.trim() || !/^([01]\d|2[0-3]):00$/.test(start) || !/^([01]\d|2[0-3]):00$/.test(end)} onClick={() => void update({ action: 'configure', timeZone: zone.trim(), quietHours: { start: Number(start.slice(0, 2)), end: Number(end.slice(0, 2)) } })}>Save quiet hours</button>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          {value.disabled || paused
-            ? <button className="vx-btn vx-btn-primary vx-btn-sm" disabled={unavailable || busy} onClick={() => void update({ action: 'resume' })}>Resume follow-ups</button>
-            : <button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={unavailable || busy} onClick={() => void update({ action: 'pause', until: new Date(Date.now() + 7 * 86_400_000).toISOString() })}>Pause for 7 days</button>}
-          <button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={unavailable || busy} onClick={() => void update({ action: 'stop' })}>Stop follow-ups</button>
-        </div>
-        <div className="vx-group" style={{ padding: 12 }}>
-          <div className="vx-small" style={{ fontWeight: 600, marginBottom: 6 }}>What {name} has learned about how you like to communicate</div>
-          {value.preferences.length ? <ul style={{ margin: 0, paddingLeft: 20 }}>{value.preferences.map((p, i) => <li key={`${p.key}-${i}`} className="vx-small">{p.value}</li>)}</ul> : <p className="vx-small vx-2" style={{ margin: 0 }}>No communication preferences saved yet.</p>}
-        </div>
-        <div>
-          {!confirmForget ? <button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={unavailable || busy} onClick={() => setConfirmForget(true)}>Reset working context</button> : <div role="group" aria-label="Reset working context confirmation" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-            <span className="vx-small">Clear open conversation context and start fresh?</span>
-            <button className="vx-btn vx-btn-danger vx-btn-sm" disabled={busy} onClick={() => void update({ action: 'forget' })}>Clear context</button>
-            <button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy} onClick={() => setConfirmForget(false)}>Keep it</button>
-          </div>}
-        </div>
-      </>}
-    </section>
-  );
+      <p className="vx-small vx-2" style={{ margin: '-8px 0 0' }}>{t('Resuming does not grant memory or notification permissions.', 'ازسرگیری، مجوز حافظه یا اعلان را فعال نمی‌کند.')}</p>
+      <label className="vx-privacy-checkbox"><input type="checkbox" checked={value.externalEnabled} disabled={busy || (!value.externalAvailable && !value.externalEnabled)} onChange={e => void update({ action: 'external', enabled: e.target.checked })} />{t('Generic Telegram alerts', 'اعلان عمومی تلگرام')}</label>
+      <p className="vx-small vx-2" style={{ margin: '-8px 0 0' }}>{t('Alerts say that a check-in is ready. They never include conversation content.', 'اعلان فقط می‌گوید بررسی آماده است و هرگز محتوای گفتگو را شامل نمی‌شود.')}</p>
+      {!identityConfirmed && <p className="vx-small vx-2">{t('Confirm your identity in Privacy and memory settings to view private check-ins.', 'برای دیدن بررسی‌های خصوصی، هویت خود را در تنظیمات حریم خصوصی و حافظه تأیید کنید.')}</p>}
+      <div><h3 className="vx-small" style={{ fontWeight: 600 }}>{t('Private check-ins', 'بررسی‌های خصوصی')}</h3>
+        {!identityConfirmed ? <p className="vx-small vx-2">{t('Private check-ins are hidden until identity is confirmed.', 'بررسی‌های خصوصی تا زمان تأیید هویت پنهان هستند.')}</p> : !value.inbox.length ? <p className="vx-small vx-2">{t('No check-ins right now.', 'اکنون بررسی‌ای وجود ندارد.')}</p> : value.inbox.map(item => <article className="vx-group" key={item.id} style={{ padding: 12, marginBottom: 8 }}><p className="vx-small" style={{ marginTop: 0 }}>{item.text}</p><div style={{ display: 'flex', gap: 8 }}>{item.status === 'unread' && <button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy} onClick={() => void update({ action: 'read', itemId: item.id })}>{t('Mark read', 'علامت‌گذاری به‌عنوان خوانده‌شده')}</button>}<button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy} onClick={() => void update({ action: 'dismiss', itemId: item.id })}>{t('Dismiss', 'بستن')}</button></div></article>)}</div>
+      {!!value.sources.length && <div><h3 className="vx-small" style={{ fontWeight: 600 }}>{t('Sources used for this relationship', 'منابع این ارتباط')}</h3>{value.sources.map(source => <div key={source.id} className="vx-group" style={{ padding: 8, marginBottom: 6 }}><span className="vx-small">{new Date(source.createdAt).toLocaleDateString(fa ? 'fa-IR' : 'en')}</span><button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy} onClick={() => void update({ action: 'source-delete', sourceId: source.id })}>{t('Remove source', 'حذف منبع')}</button></div>)}</div>}
+      {!confirmForget ? <button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy || !allowManage} onClick={() => setConfirmForget(true)}>{t('Forget relationship context', 'فراموش کردن زمینهٔ ارتباط')}</button> : <div role="group" aria-label={t('Forget relationship confirmation', 'تأیید فراموشی زمینه')} style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}><span className="vx-small">{t('Clear open situations and pending check-ins?', 'موقعیت‌های باز و بررسی‌های در انتظار پاک شوند؟')}</span><button className="vx-btn vx-btn-danger vx-btn-sm" disabled={busy} onClick={() => void update({ action: 'forget' })}>{t('Clear context', 'پاک کردن زمینه')}</button><button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy} onClick={() => setConfirmForget(false)}>{t('Keep it', 'نگه‌داشتن')}</button></div>}
+    </>}
+  </section>;
 }
-
-const fieldStyle: React.CSSProperties = { display: 'block', width: '100%', boxSizing: 'border-box', marginTop: 4, minHeight: 40, borderRadius: 10, border: '1px solid rgba(255,255,255,.12)', padding: '8px 10px', background: '#1E2228', color: 'inherit', font: 'inherit' };
