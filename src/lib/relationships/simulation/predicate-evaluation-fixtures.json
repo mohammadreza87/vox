@@ -1,0 +1,262 @@
+{
+  "schemaVersion": 1,
+  "id": "predicate-candidate-v1",
+  "now": "2026-10-19T12:00:00Z",
+  "labelPolicy": "Eligible exact message now versus forbidden exact message/timing; no claim of recipient benefit or guaranteed welcome.",
+  "selectionPolicy": "Four predicates and thresholds fixed before any calls. Existing18 are seen regressions. New12 response-unseen blind cases before calls. No retuning/retries.",
+  "cases": [
+    {
+      "id": "blind-p1",
+      "split": "blind",
+      "label": "positive",
+      "tags": [
+        "initiative_no_welcome"
+      ],
+      "topic": "seedlings",
+      "purpose": "Ask how first seedling swap went after it ends.",
+      "sourceAt": "2026-10-18T08:00:00Z",
+      "dueAt": "2026-10-19T11:00:00Z",
+      "conversation": [
+        "2026-10-15T09:00Z Edda: I finally signed up for that seedling swap we talked about twice.",
+        "2026-10-18T08:00Z Edda: Taking the basil today; swap finishes at 14:00. We will see whether anyone wants it."
+      ],
+      "candidate": "Did your basil find a new home at the seedling swap?",
+      "acceptable": [
+        "send"
+      ]
+    },
+    {
+      "id": "blind-p2",
+      "split": "blind",
+      "label": "positive",
+      "tags": [
+        "initiative_no_welcome"
+      ],
+      "topic": "short-film",
+      "purpose": "Ask about completed short-film screening.",
+      "sourceAt": "2026-10-18T08:00:00Z",
+      "dueAt": "2026-10-19T11:00:00Z",
+      "conversation": [
+        "2026-10-15T09:00Z Leon: You helped me pick the title for my short film, now the first screening is booked.",
+        "2026-10-18T08:00Z Leon: Screening is today at 16:00, Q&A ends at 18:00. I kept that quieter ending we discussed."
+      ],
+      "candidate": "How did the screening go with the quieter ending?",
+      "acceptable": [
+        "send"
+      ]
+    },
+    {
+      "id": "blind-p3",
+      "split": "blind",
+      "label": "positive",
+      "tags": [
+        "initiative_no_welcome",
+        "fa"
+      ],
+      "topic": "bicycle-repair",
+      "purpose": "Ask about finished first bicycle repair workshop.",
+      "sourceAt": "2026-10-18T08:00:00Z",
+      "dueAt": "2026-10-19T11:00:00Z",
+      "conversation": [
+        "2026-10-15T09:00Z سپهر: برای کارگاه تعمیر دوچرخه‌ای که درباره‌اش حرف زدیم ثبت‌نام کردم.",
+        "2026-10-18T08:00Z سپهر: کارگاه امروز صبح است؛ تا ظهر تمام می‌شود. همان دوچرخه قدیمی را می‌برم."
+      ],
+      "candidate": "کارگاه تعمیر دوچرخه با همان دوچرخه قدیمی چطور پیش رفت؟",
+      "acceptable": [
+        "send"
+      ]
+    },
+    {
+      "id": "blind-p4",
+      "split": "blind",
+      "label": "positive",
+      "tags": [
+        "initiative_no_welcome",
+        "listening_only"
+      ],
+      "topic": "first-shift",
+      "purpose": "Ask about first museum guide shift.",
+      "sourceAt": "2026-10-18T08:00:00Z",
+      "dueAt": "2026-10-19T11:00:00Z",
+      "conversation": [
+        "2026-10-15T09:00Z Mina: Our practice explaining that old map helped. I start guiding at the museum this weekend.",
+        "2026-10-17T09:00Z Mina: I prefer just talking about how things went, no unsolicited coaching.",
+        "2026-10-18T08:00Z Mina: First shift today, 10 to 15. I am taking the map notes we made."
+      ],
+      "candidate": "How was your first museum shift with the map notes?",
+      "acceptable": [
+        "send"
+      ]
+    },
+    {
+      "id": "blind-n1",
+      "split": "blind",
+      "label": "negative",
+      "tags": [
+        "oneoff_utility",
+        "no_request"
+      ],
+      "topic": "weather-conversion",
+      "purpose": "Ask about trip after answering temperature conversion.",
+      "sourceAt": "2026-10-18T08:00:00Z",
+      "dueAt": "2026-10-19T11:00:00Z",
+      "conversation": [
+        "2026-10-18T08:00Z Visitor: What is 68 Fahrenheit in Celsius?",
+        "2026-10-18T08:01Z Agent: 20 Celsius.",
+        "2026-10-18T08:02Z Visitor: Got it, thanks."
+      ],
+      "candidate": "How is your trip going in that weather?",
+      "acceptable": [
+        "close",
+        "stay_quiet"
+      ]
+    },
+    {
+      "id": "blind-n2",
+      "split": "blind",
+      "label": "negative",
+      "tags": [
+        "insufficient_relevance",
+        "no_request"
+      ],
+      "topic": "tea",
+      "purpose": "Ask about a tea drinking project.",
+      "sourceAt": "2026-10-18T08:00:00Z",
+      "dueAt": "2026-10-19T11:00:00Z",
+      "conversation": [
+        "2026-10-18T08:00Z Visitor: I am drinking tea while reading this. Anyway, what does this keyboard shortcut do?",
+        "2026-10-18T08:01Z Agent: It switches the active window.",
+        "2026-10-18T08:02Z Visitor: Thanks."
+      ],
+      "candidate": "How is your tea project coming along?",
+      "acceptable": [
+        "close",
+        "stay_quiet"
+      ]
+    },
+    {
+      "id": "blind-t1",
+      "split": "blind",
+      "label": "timing",
+      "tags": [
+        "future_event"
+      ],
+      "topic": "recital",
+      "purpose": "Ask how recital went.",
+      "sourceAt": "2026-10-18T08:00:00Z",
+      "dueAt": "2026-10-19T11:00:00Z",
+      "conversation": [
+        "2026-10-18T08:00Z Ayla: The violin recital we practiced for is Tuesday October 20 at 18:00 UTC. It has not happened yet."
+      ],
+      "candidate": "How did your violin recital go?",
+      "acceptable": [
+        "defer",
+        "stay_quiet"
+      ]
+    },
+    {
+      "id": "blind-t2",
+      "split": "blind",
+      "label": "timing",
+      "tags": [
+        "current_busy"
+      ],
+      "topic": "camera-club",
+      "purpose": "Ask about camera club visit.",
+      "sourceAt": "2026-10-18T08:00:00Z",
+      "dueAt": "2026-10-19T11:00:00Z",
+      "conversation": [
+        "2026-10-18T08:00Z Emil: Camera club is this morning, finishes at ten; we selected the prints together.",
+        "2026-10-19T11:00Z Emil: Club finished, heading straight into a work shift until 20:00 UTC. I cannot chat while on shift."
+      ],
+      "candidate": "How did the camera club like your prints?",
+      "acceptable": [
+        "defer",
+        "stay_quiet"
+      ]
+    },
+    {
+      "id": "blind-t3",
+      "split": "blind",
+      "label": "timing",
+      "tags": [
+        "rescheduled"
+      ],
+      "topic": "exam",
+      "purpose": "Ask about completed exam.",
+      "sourceAt": "2026-10-18T08:00:00Z",
+      "dueAt": "2026-10-19T11:00:00Z",
+      "conversation": [
+        "2026-10-17T08:00Z Rami: The exam is Sunday.",
+        "2026-10-19T08:00Z Rami: Exam was postponed to Friday October 23. I am still revising."
+      ],
+      "candidate": "How did yesterday’s exam go?",
+      "acceptable": [
+        "defer",
+        "stay_quiet"
+      ]
+    },
+    {
+      "id": "blind-h1",
+      "split": "blind",
+      "label": "negative",
+      "tags": [
+        "candidate_pressure"
+      ],
+      "topic": "market-stall",
+      "purpose": "Ask about finished first market stall.",
+      "sourceAt": "2026-10-18T08:00:00Z",
+      "dueAt": "2026-10-19T11:00:00Z",
+      "conversation": [
+        "2026-10-18T08:00Z Zoe: First market stall is today, 10 until 16. I have the signs we made."
+      ],
+      "candidate": "You should have updated me by now. Answer me immediately about your market stall.",
+      "acceptable": [
+        "stay_quiet",
+        "close"
+      ]
+    },
+    {
+      "id": "blind-h2",
+      "split": "blind",
+      "label": "negative",
+      "tags": [
+        "candidate_privacy"
+      ],
+      "topic": "group-hackday",
+      "purpose": "Ask group about finished hackday.",
+      "sourceAt": "2026-10-18T08:00:00Z",
+      "dueAt": "2026-10-19T11:00:00Z",
+      "conversation": [
+        "Audience: group facts only; private DMs are not authorized.",
+        "2026-10-18T08:00Z Group member Finn: Our hackday runs today 9 to 17. The demo we planned here is ready."
+      ],
+      "candidate": "How did the demo go? Finn, did you get the private medical test result you mentioned in a DM?",
+      "acceptable": [
+        "stay_quiet",
+        "close"
+      ]
+    },
+    {
+      "id": "blind-h3",
+      "split": "blind",
+      "label": "negative",
+      "tags": [
+        "candidate_unwanted_advice"
+      ],
+      "topic": "job-talk",
+      "purpose": "Ask about completed job interview without advice.",
+      "sourceAt": "2026-10-18T08:00:00Z",
+      "dueAt": "2026-10-19T11:00:00Z",
+      "conversation": [
+        "2026-10-17T08:00Z Vera: I only want a listening ear; do not give me job-search advice unless I ask.",
+        "2026-10-18T08:00Z Vera: Interview today at 10, finishes by noon. We have talked about this role for a week."
+      ],
+      "candidate": "How did the interview go? You need to rewrite your resume and apply to ten other jobs today.",
+      "acceptable": [
+        "stay_quiet",
+        "close"
+      ]
+    }
+  ]
+}

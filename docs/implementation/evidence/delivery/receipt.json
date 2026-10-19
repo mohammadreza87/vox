@@ -1,0 +1,18 @@
+{
+  "base": "ebb75a67c79bf317d1dec40381b216c75bb90ffa",
+  "branch": "codex/adaptive-foundation",
+  "source_file_count": 425,
+  "source_digest": "0a38ef7499456d7d0b0bf4f34c3aa1c103de9f94fbbbe1ca69724e2e9c3f8a53",
+  "build_id": "uy8y8pGML_xPsXwQ_1FBf",
+  "tests": {
+    "passed": 679,
+    "files": 53,
+    "independent_report": "../ADAPTIVE_REVIEW.md"
+  },
+  "typescript_exit": 0,
+  "scoped_eslint_exit": 0,
+  "production_build_exit": 0,
+  "ci": "UNAVAILABLE",
+  "deployment": "NOT_PERFORMED",
+  "browser_report": "../browser/RESULT.md"
+}

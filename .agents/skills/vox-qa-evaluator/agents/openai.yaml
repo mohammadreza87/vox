@@ -1,0 +1,4 @@
+interface:
+  display_name: "Vox Independent QA and evaluator"
+  short_description: "Independently evaluate Vox candidates"
+  default_prompt: "Use $vox-qa-evaluator to complete the assigned Vox task within its stated ownership and acceptance criteria."

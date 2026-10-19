@@ -51,6 +51,8 @@ export function startBots(studio: Studio): { stop: () => void } {
   const log = studio.deps.logger ?? console;
   const loops = new Map<string, Loop>();
   let stopped = false;
+  let refreshing = false;
+  let profilesRefreshing = false;
 
   const manager = studio.deps.managerBot;
   if (manager) {
@@ -60,7 +62,8 @@ export function startBots(studio: Studio): { stop: () => void } {
   }
 
   const refresh = async () => {
-    if (stopped) return;
+    if (stopped || refreshing) return;
+    refreshing = true;
     try {
       const state = await studio.deps.store.read();
       const active = state.agents.filter((a) => a.status === 'active' && a.tokenEnc);
@@ -79,17 +82,37 @@ export function startBots(studio: Studio): { stop: () => void } {
         loops.set(agent.id, { ...pollLoop(`@${agent.bot?.username}`, bot, AGENT_UPDATES, (update) => handleAgentUpdate(studio, agent.id, update), log), token });
         log.info(`[studio] ${agent.persona.name} online as @${agent.bot?.username}`);
       }
+      // Repairs legacy photos without delaying new/fired bot polling changes.
+      if (!profilesRefreshing) {
+        profilesRefreshing = true;
+        void studio.reconcileBotProfiles()
+          .catch(() => log.warn('[studio] profile reconciliation failed'))
+          .finally(() => { profilesRefreshing = false; });
+      }
     } catch (error) {
       log.error('[studio] bot refresh failed', error);
+    } finally {
+      refreshing = false;
     }
   };
 
   void refresh();
   const timer = setInterval(refresh, REFRESH_MS);
+  let draining = false;
+  const drain = async () => {
+    if (stopped || draining || studio.deps.relationships?.mode !== 'live') return;
+    draining = true;
+    try { await studio.drainRelationships(2); }
+    catch { log.warn('[studio] relationship worker unavailable'); }
+    finally { draining = false; }
+  };
+  void drain(); // Recover durable due work after restart.
+  const relationshipTimer = setInterval(drain, 60_000);
   return {
     stop: () => {
       stopped = true;
       clearInterval(timer);
+      clearInterval(relationshipTimer);
       for (const loop of loops.values()) loop.stop();
       loops.clear();
     },

@@ -31,6 +31,7 @@ export function CallScreen({ id }: { id: string }) {
   const [captions, setCaptions] = useState(true);
   const [level, setLevel] = useState(0);
   const [seconds, setSeconds] = useState(0);
+  const [space, setSpace] = useState<'work' | 'personal'>('work');
 
   const stream = useRef<MediaStream | null>(null);
   const recorder = useRef<MediaRecorder | null>(null);
@@ -110,7 +111,7 @@ export function CallScreen({ id }: { id: string }) {
     if (blob.size < 2000) { setPhase('ready'); return; }
     setPhase('thinking');
     try {
-      const r = await api.callTurn(id, blob);
+      const r = await api.callTurn(id, blob, space);
       if (cancelled.current) return;
       if (!r.transcript) { nav.toast("Didn't catch that — try again."); setPhase('ready'); return; }
       setLines((l) => [...l, { who: 'you', text: r.transcript }, { who: 'agent', text: r.reply }]);
@@ -136,8 +137,7 @@ export function CallScreen({ id }: { id: string }) {
     session.current = null;
     if (liveMeter.current) cancelAnimationFrame(liveMeter.current);
     await s.endSession().catch(() => undefined);
-    // What was said becomes memories, as in Telegram.
-    void api.callEnd(id).catch(() => undefined);
+    void api.callEnd(id, space).catch(() => undefined);
   };
 
   /** Opens a live call; returns false when the server only supports tap-to-talk. */
@@ -145,7 +145,7 @@ export function CallScreen({ id }: { id: string }) {
     if (liveUnavailable.current) return false;
     setPhase('thinking');
     try {
-      const call = await api.liveCall(id);
+      const call = await api.liveCall(id, space);
       if (!call.live) { liveUnavailable.current = true; setPhase('ready'); return false; }
       await navigator.mediaDevices.getUserMedia({ audio: true }).then((s) => s.getTracks().forEach((t) => t.stop()));
       const { Conversation } = await import('@elevenlabs/client');
@@ -156,7 +156,7 @@ export function CallScreen({ id }: { id: string }) {
         onModeChange: ({ mode }) => setPhase(mode === 'speaking' ? 'speaking' : 'listening'),
         onMessage: ({ message, role }) => { if (message.trim()) setLines((l) => [...l, { who: role === 'user' ? 'you' : 'agent', text: message }]); },
         onError: (message) => nav.toast(message || 'The call dropped.', 'error'),
-        onDisconnect: () => { if (session.current) { session.current = null; setPhase('ready'); void api.callEnd(id).catch(() => undefined); } },
+        onDisconnect: () => { if (session.current) { session.current = null; setPhase('ready'); void api.callEnd(id, space).catch(() => undefined); } },
       });
       if (cancelled.current) { await conv.endSession(); return true; }
       session.current = conv;
@@ -220,6 +220,10 @@ export function CallScreen({ id }: { id: string }) {
           style={{ color: captions ? '#D6FF5C' : undefined }}><Icon name="captions" /></button>
       </div>
 
+      <div role="group" aria-label="Conversation space" style={{ display: 'flex', gap: 8, justifyContent: 'center', padding: '12px 16px', position: 'relative' }}>
+        {(['work', 'personal'] as const).map(value => <button key={value} className="vx-chip" disabled={phase !== 'ready' || !!session.current} aria-pressed={space === value} onClick={() => { setSpace(value); setLines([]); setLive(false); liveUnavailable.current = false; }}>{value === 'work' ? 'Work' : 'Personal'}</button>)}
+        <button className="vx-chip" onClick={() => nav.push({ name: 'privacy' })}>Privacy</button>
+      </div>
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', position: 'relative', gap: 18 }}>
         <motion.div animate={{ scale: phase === 'listening' ? 1 + level * 0.08 : 1 }} transition={{ type: 'spring', stiffness: 400, damping: 20 }}>
           <Cloud look={agent.look} size={220} expr={EXPR[phase]} stage={stageFor(agent.formingDay, agent.status)} label={agent.persona.name} />

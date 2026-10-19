@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { avatarPrompt, ElevenLabsStudio, OpenAIMedia, StudioVoiceService } from '../media';
+import { avatarPrompt, ElevenLabsSpeechError, ElevenLabsStudio, OpenAIMedia, StudioVoiceService } from '../media';
 import { personaSpec } from './helpers';
 
 function fakeFetch(...responses: Array<{ status?: number; json?: unknown; body?: ArrayBuffer }>) {
@@ -9,6 +9,7 @@ function fakeFetch(...responses: Array<{ status?: number; json?: unknown; body?:
     return {
       ok: status >= 200 && status < 300,
       status,
+      headers: new Headers({ 'content-type': r.body ? 'audio/mpeg' : 'application/json' }),
       json: async () => r.json ?? {},
       arrayBuffer: async () => r.body ?? new ArrayBuffer(0),
     } as unknown as Response;
@@ -73,7 +74,7 @@ describe('ElevenLabsStudio', () => {
     const [url, init] = fetchFn.mock.calls[0];
     expect(url).toContain('/v1/text-to-voice/design');
     expect((init!.headers as Record<string, string>)['xi-api-key']).toBe('xi-key');
-    expect(JSON.parse(init!.body as string)).toEqual({ voice_description: 'warm voice', model_id: 'eleven_multilingual_ttv_v2', auto_generate_text: true });
+    expect(JSON.parse(init!.body as string)).toEqual({ voice_description: 'warm voice', model_id: 'eleven_ttv_v3', auto_generate_text: true });
 
     await xi.designVoices('warm', 'x'.repeat(150));
     expect(JSON.parse(fetchFn.mock.calls[1][1]!.body as string).text).toHaveLength(150);
@@ -106,7 +107,7 @@ describe('ElevenLabsStudio', () => {
     expect((await xi.speak('x'.repeat(3000), 'voice/1')).toString()).toBe('MP3');
     expect(fetchFn.mock.calls[0][0]).toContain('/text-to-speech/voice%2F1');
     expect(JSON.parse(fetchFn.mock.calls[0][1]!.body as string).text).toHaveLength(2500);
-    await expect(xi.speak('hi', 'v')).rejects.toThrow('HTTP 401');
+    await expect(xi.speak('hi', 'v')).rejects.toMatchObject({ name: 'ElevenLabsSpeechError', status: 401, code: 'permission_denied' });
   });
 });
 
@@ -178,6 +179,6 @@ describe('ElevenLabs speech-to-text and live-call agents', () => {
     expect(body.platform_settings.overrides.conversation_config_override).toEqual({ agent: { first_message: true, language: true }, tts: { voice_id: true } });
     expect(await xi.signedUrl('a1')).toBe('wss://x');
     expect(fetchFn.mock.calls[2][0]).toBe('https://api.elevenlabs.io/v1/convai/conversation/get-signed-url?agent_id=a1');
-    await expect(xi.updateAgent('a1', { name: 'n', llmUrl: 'u', llmSecretId: 's', maxCallSeconds: 1 })).rejects.toThrow(/HTTP 401.*missing_permissions/);
+    await expect(xi.updateAgent('a1', { name: 'n', llmUrl: 'u', llmSecretId: 's', maxCallSeconds: 1 })).rejects.toBeInstanceOf(ElevenLabsSpeechError);
   });
 });

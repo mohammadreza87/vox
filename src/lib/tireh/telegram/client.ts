@@ -24,9 +24,12 @@ export interface TelegramMessage {
   date: number;
   text?: string;
   caption?: string;
+  new_chat_members?: TelegramUser[];
+  left_chat_member?: TelegramUser;
   voice?: { file_id: string; duration: number; mime_type?: string; file_size?: number };
   reply_to_message?: TelegramMessage;
-  entities?: Array<{ type: string; offset: number; length: number }>;
+  entities?: Array<{ type: string; offset: number; length: number; user?: TelegramUser }>;
+  caption_entities?: Array<{ type: string; offset: number; length: number; user?: TelegramUser }>;
 }
 
 export interface TelegramCallbackQuery {
@@ -40,8 +43,8 @@ export interface TelegramChatMemberUpdated {
   chat: TelegramChat;
   from: TelegramUser;
   date: number;
-  old_chat_member: { status: string; user: TelegramUser };
-  new_chat_member: { status: string; user: TelegramUser };
+  old_chat_member: { status: string; user: TelegramUser; is_member?: boolean };
+  new_chat_member: { status: string; user: TelegramUser; is_member?: boolean };
 }
 
 export interface TelegramManagedBotUpdated {
@@ -54,6 +57,7 @@ export interface TelegramUpdate {
   message?: TelegramMessage;
   callback_query?: TelegramCallbackQuery;
   my_chat_member?: TelegramChatMemberUpdated;
+  chat_member?: TelegramChatMemberUpdated;
   managed_bot?: TelegramManagedBotUpdated;
 }
 
@@ -64,6 +68,15 @@ export interface InlineKeyboard {
 }
 
 type FetchFn = typeof fetch;
+
+const CONNECT_RETRY_DELAYS_MS = [250, 1000];
+
+function isConnectTimeout(error: unknown): boolean {
+  if (!(error instanceof TypeError)) return false;
+  const cause = error.cause;
+  return typeof cause === 'object' && cause !== null
+    && 'code' in cause && cause.code === 'UND_ERR_CONNECT_TIMEOUT';
+}
 
 export class TelegramApiError extends Error {
   constructor(readonly method: string, readonly description: string) {
@@ -80,13 +93,29 @@ export class TelegramBotClient {
     this.fileBase = `https://api.telegram.org/file/bot${token}`;
   }
 
-  private async call<T>(method: string, body: Record<string, unknown> | FormData): Promise<T> {
+  private async call<T>(method: string, body: Record<string, unknown> | FormData, signal?: AbortSignal): Promise<T> {
     const isForm = body instanceof FormData;
-    const response = await this.fetchFn(`${this.base}/${method}`, {
+    const options: RequestInit = {
       method: 'POST',
+      signal,
       headers: isForm ? undefined : { 'Content-Type': 'application/json' },
       body: isForm ? body : JSON.stringify(body),
-    });
+    };
+    let response: Response;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        response = await this.fetchFn(`${this.base}/${method}`, options);
+        break;
+      } catch (error) {
+        // A failed connection never sent the request. Retry only this known
+        // pre-send failure: socket/read timeouts can mean Telegram already
+        // accepted a message, so replaying those could send duplicate replies.
+        const delay = CONNECT_RETRY_DELAYS_MS[attempt];
+        if (delay === undefined || !isConnectTimeout(error)) throw error;
+        await new Promise<void>((resolve) => setTimeout(resolve, delay));
+      }
+    }
+    // Response/body errors must not replay a potentially accepted POST.
     const json = (await response.json().catch(() => ({}))) as { ok?: boolean; result?: T; description?: string };
     if (!json.ok) throw new TelegramApiError(method, json.description ?? `HTTP ${response.status}`);
     return json.result as T;
@@ -95,14 +124,14 @@ export class TelegramBotClient {
   sendMessage(
     chatId: number,
     text: string,
-    options: { replyTo?: number; keyboard?: InlineKeyboard } = {}
+    options: { replyTo?: number; keyboard?: InlineKeyboard; signal?: AbortSignal } = {}
   ): Promise<TelegramMessage> {
     return this.call('sendMessage', {
       chat_id: chatId,
       text: text.slice(0, 4096),
       ...(options.replyTo ? { reply_parameters: { message_id: options.replyTo, allow_sending_without_reply: true } } : {}),
       ...(options.keyboard ? { reply_markup: options.keyboard } : {}),
-    });
+    }, options.signal);
   }
 
   sendVoice(
@@ -198,6 +227,10 @@ export class TelegramBotClient {
 
   setChatMenuButton(text: string, webAppUrl: string): Promise<boolean> {
     return this.call('setChatMenuButton', { menu_button: { type: 'web_app', text, web_app: { url: webAppUrl } } });
+  }
+
+  getChatMember(chatId: number, userId: number): Promise<{ status: string; user: TelegramUser; is_member?: boolean }> {
+    return this.call('getChatMember', { chat_id: chatId, user_id: userId });
   }
 
   getChatMemberCount(chatId: number): Promise<number> {

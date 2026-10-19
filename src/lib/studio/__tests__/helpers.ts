@@ -15,7 +15,7 @@ import {
 } from '../../tireh/memory/store';
 import type { TelegramBotClient, TelegramMessage, TelegramUpdate } from '../../tireh/telegram/client';
 import { FakeLLM } from '../../tireh/__tests__/fixtures';
-import type { ElevenLabsStudio, OpenAIMedia } from '../media';
+import type { ElevenLabsStudio, OpenAIMedia, VoiceOptions } from '../media';
 import { Studio } from '../service';
 import { StudioStore } from '../store';
 import type { AgentVisibility, Member, PersonaSpec, Role } from '../types';
@@ -108,6 +108,11 @@ export function fakeOpenAI() {
 
 export function fakeEleven() {
   return {
+    getVoiceOptions: vi.fn<() => Promise<VoiceOptions>>(async () => ({
+      models: [{ id: 'eleven_v4', name: 'Eleven v4', languages: [{ code: 'en', name: 'English' }, { code: 'fa', name: 'Persian' }], persian: true, kind: 'quality' }],
+      defaultVoices: [{ voiceId: 'fixture-sarah', name: 'Sarah', gender: 'female', language: 'en' }],
+      tier: 'creator', libraryAllowed: true, ttsModel: 'eleven_v4',
+    })),
     designVoices: vi.fn(async () => [
       { generatedVoiceId: 'gen-1', audio: Buffer.from('mp3-1'), mediaType: 'audio/mpeg' },
       { generatedVoiceId: 'gen-2', audio: Buffer.from('mp3-2'), mediaType: 'audio/mpeg' },
@@ -162,10 +167,11 @@ export function makeStudio(options: { openai?: boolean; eleven?: boolean; manage
     if (!bots.has(token)) bots.set(token, fakeTelegram());
     return bots.get(token)! as unknown as TelegramBotClient;
   });
+  const epochs = new Map<string, number>();
   const memory = {
-    memories: new InMemoryMemoryStore(),
+    memories: new InMemoryMemoryStore(epochs),
     offers: new InMemoryShareOfferStore(),
-    history: new InMemoryChatHistoryStore(),
+    history: new InMemoryChatHistoryStore(epochs),
     deduper: new InMemoryUpdateDeduper(),
   };
   const imageToJpeg = vi.fn(async (data: Buffer) => Buffer.concat([Buffer.from('JPEG:'), data]));

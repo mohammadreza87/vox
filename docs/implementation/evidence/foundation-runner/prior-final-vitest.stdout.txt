@@ -1,0 +1,9 @@
+
+ RUN  v4.1.12 /Volumes/Workspace/Ludaxis/vox
+
+
+ Test Files  29 passed (29)
+      Tests  479 passed (479)
+   Start at  20:16:20
+   Duration  2.77s (transform 4.65s, setup 3.79s, import 6.38s, tests 1.62s, environment 22.14s)
+

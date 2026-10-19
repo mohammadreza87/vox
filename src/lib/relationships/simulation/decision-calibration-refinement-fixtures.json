@@ -1,0 +1,553 @@
+{
+  "schemaVersion": 1,
+  "id": "fictional-decisions-prompt-refinement-v1",
+  "now": "2026-10-19T12:00:00.000Z",
+  "evaluationMode": "fixed_cutoff",
+  "fixedCutoff": 0.7,
+  "labelPolicy": "Authored before refinement provider calls. The original 32 cases are now seen development data; six are selected regressions, never a fresh holdout. New 12 cases have labels frozen before calls: four no-welcome positives, two welcomed positives, six negative/timing. Single-author synthetic labels are not human outcomes.",
+  "candidateCutoffs": [],
+  "selectionPolicy": "No threshold selection or sweep. Production confidence cutoff remains 0.70. Evaluate development regressions separately from the new held-out set; do not tune on held-out results.",
+  "cases": [
+    {
+      "id": "reg-cal-p04",
+      "split": "development",
+      "label": "positive",
+      "acceptable": [
+        "send"
+      ],
+      "tags": [
+        "implicit",
+        "fa",
+        "milestone",
+        "initiative_no_welcome"
+      ],
+      "topic": "music-recital",
+      "purpose": "A short Persian check-in about the recital, with no assumption about success.",
+      "sourceAt": "2026-10-18T12:00:00Z",
+      "dueAt": "2026-10-19T12:00:00Z",
+      "preferences": [
+        {
+          "key": "language",
+          "value": "فارسی، کوتاه و صمیمی."
+        }
+      ],
+      "conversation": [
+        "کاربر دو هفته است درباره تمرین موسیقی و زندگی روزمره صحبت می‌کند.",
+        "کاربر دیروز: اجرای کوچکم امشب است. بالاخره قطعه را حفظ کردم ولی کمی هیجان دارم.",
+        "دستیار: امیدوارم از اجرا لذت ببری.",
+        "کاربر: مرسی، فردا ظهر دیگه سرم خلوت می‌شه."
+      ],
+      "sourceCaseId": "cal-p04"
+    },
+    {
+      "id": "reg-cal-p07",
+      "split": "development",
+      "label": "positive",
+      "acceptable": [
+        "send"
+      ],
+      "tags": [
+        "implicit",
+        "correction",
+        "neutral",
+        "initiative_no_welcome"
+      ],
+      "topic": "job-interview",
+      "purpose": "Ask neutrally about the interview without describing anxiety.",
+      "sourceAt": "2026-10-18T12:00:00Z",
+      "dueAt": "2026-10-19T12:00:00Z",
+      "preferences": [
+        {
+          "key": "correction",
+          "value": "Do not assume I am anxious; I enjoy interviews. Use brief neutral language."
+        }
+      ],
+      "conversation": [
+        "User and assistant have discussed career plans for a month.",
+        "User: The interview is Monday morning. I'm excited about meeting the team.",
+        "Assistant: Thanks for correcting my earlier anxiety assumption.",
+        "User: All good! I'll have something to tell you after lunch."
+      ],
+      "sourceCaseId": "cal-p07"
+    },
+    {
+      "id": "reg-hold-p01",
+      "split": "development",
+      "label": "positive",
+      "acceptable": [
+        "send"
+      ],
+      "tags": [
+        "implicit",
+        "work",
+        "established",
+        "initiative_no_welcome"
+      ],
+      "topic": "first-shift",
+      "purpose": "A brief check-in about the first café shift.",
+      "sourceAt": "2026-10-18T12:00:00Z",
+      "dueAt": "2026-10-19T12:00:00Z",
+      "preferences": [
+        {
+          "key": "style",
+          "value": "Friendly concise continuity, no pressure to reply."
+        }
+      ],
+      "conversation": [
+        "User has chatted weekly for two months about starting a small café job.",
+        "User Sunday: First shift is Monday 07:00-11:00. Finally getting to try the espresso machine.",
+        "Assistant: Hope the morning goes smoothly.",
+        "User: Thanks, I'll be back home by lunch."
+      ],
+      "sourceCaseId": "hold-p01"
+    },
+    {
+      "id": "reg-hold-p03",
+      "split": "development",
+      "label": "positive",
+      "acceptable": [
+        "send"
+      ],
+      "tags": [
+        "implicit",
+        "listening",
+        "no_advice",
+        "general_welcome"
+      ],
+      "topic": "friend-conversation",
+      "purpose": "Offer space to talk about the conversation, without suggesting solutions.",
+      "sourceAt": "2026-10-18T12:00:00Z",
+      "dueAt": "2026-10-19T12:00:00Z",
+      "preferences": [
+        {
+          "key": "support",
+          "value": "Listening only, please. I like a short follow-up on things I have shared."
+        }
+      ],
+      "conversation": [
+        "User has discussed friendship and daily life with the assistant for a month.",
+        "User: I'm meeting an old friend tonight after a long misunderstanding.",
+        "Assistant: I can listen without trying to fix it.",
+        "User: Thank you, that helps. Tomorrow afternoon I can process it a little."
+      ],
+      "sourceCaseId": "hold-p03"
+    },
+    {
+      "id": "reg-hold-p04",
+      "split": "development",
+      "label": "positive",
+      "acceptable": [
+        "send"
+      ],
+      "tags": [
+        "implicit",
+        "practical",
+        "established",
+        "initiative_no_welcome"
+      ],
+      "topic": "balcony-seeds",
+      "purpose": "Ask if the balcony seedlings have appeared.",
+      "sourceAt": "2026-10-16T12:00:00Z",
+      "dueAt": "2026-10-19T12:00:00Z",
+      "preferences": [
+        {
+          "key": "style",
+          "value": "Likes concise practical detail when discussing gardening."
+        }
+      ],
+      "conversation": [
+        "For a month user has returned to discuss the balcony garden.",
+        "User Friday: Three pots have sprouts; the last should appear by Sunday if it worked.",
+        "Assistant: You have kept the moisture steady.",
+        "User: I'm enjoying this! I'll look at that last pot again Monday morning."
+      ],
+      "sourceCaseId": "hold-p04"
+    },
+    {
+      "id": "reg-hold-t01",
+      "split": "development",
+      "label": "timing",
+      "acceptable": [
+        "defer",
+        "stay_quiet"
+      ],
+      "tags": [
+        "event_future"
+      ],
+      "topic": "audition",
+      "purpose": "Ask how the audition went.",
+      "sourceAt": "2026-10-18T12:00:00Z",
+      "dueAt": "2026-10-19T12:00:00Z",
+      "preferences": [
+        {
+          "key": "style",
+          "value": "A short check-in after the audition is welcome."
+        }
+      ],
+      "conversation": [
+        "User: The audition is Tuesday afternoon. I won't have a result until then.",
+        "Current time is Monday noon UTC."
+      ],
+      "sourceCaseId": "hold-t01"
+    },
+    {
+      "id": "fresh-p01",
+      "split": "fresh_holdout",
+      "label": "positive",
+      "acceptable": [
+        "send"
+      ],
+      "tags": [
+        "initiative_no_welcome",
+        "implicit",
+        "creative"
+      ],
+      "topic": "photo-archive",
+      "purpose": "Ask how the family photo-scanning weekend went.",
+      "sourceAt": "2026-10-17T12:00:00Z",
+      "dueAt": "2026-10-19T12:00:00Z",
+      "preferences": [
+        {
+          "key": "style",
+          "value": "Warm concise replies with concrete details."
+        }
+      ],
+      "conversation": [
+        "The user has chatted with this assistant twice a week for six weeks about digitizing their own family photo collection.",
+        "User Friday: This weekend I finally scan the last two albums. The handwriting on the backs has been the most interesting part.",
+        "Assistant: That sounds like a good piece of the archive to preserve.",
+        "User: Yes. Sunday evening should be the end of the scanning pile."
+      ]
+    },
+    {
+      "id": "fresh-p02",
+      "split": "fresh_holdout",
+      "label": "positive",
+      "acceptable": [
+        "send"
+      ],
+      "tags": [
+        "initiative_no_welcome",
+        "implicit",
+        "competition"
+      ],
+      "topic": "chess-club",
+      "purpose": "A brief neutral check-in on the weekend chess competition.",
+      "sourceAt": "2026-10-17T12:00:00Z",
+      "dueAt": "2026-10-19T12:00:00Z",
+      "preferences": [
+        {
+          "key": "style",
+          "value": "Avoid treating every hobby event as a test of success."
+        }
+      ],
+      "conversation": [
+        "For five weeks the user has discussed a local chess club and regular practice with this assistant.",
+        "User Friday: The club tournament is Saturday, all done by 17:00. I have been trying the new opening we talked about.",
+        "Assistant: You have had a few practice games with that opening now.",
+        "User: Exactly. Winning is not the point; I want to see what I learn."
+      ]
+    },
+    {
+      "id": "fresh-p03",
+      "split": "fresh_holdout",
+      "label": "positive",
+      "acceptable": [
+        "send"
+      ],
+      "tags": [
+        "initiative_no_welcome",
+        "implicit",
+        "fa"
+      ],
+      "topic": "game-jam",
+      "purpose": "پرسش کوتاه درباره تجربه ارائه بازی، بدون فرض موفقیت یا حال بد.",
+      "sourceAt": "2026-10-17T12:00:00Z",
+      "dueAt": "2026-10-19T12:00:00Z",
+      "preferences": [
+        {
+          "key": "language",
+          "value": "فارسی، یک یا دو جمله ساده."
+        }
+      ],
+      "conversation": [
+        "کاربر هفت هفته است درباره پروژه بازی کوچک خودش و علایق روزمره با دستیار گفتگو می‌کند.",
+        "کاربر شنبه: ارائه گیم‌جم یکشنبه عصر است، ساعت هشت تمام می‌شود. بالاخره بخش آخر مرحله را ساختم.",
+        "دستیار: رسیدن به یک نسخه قابل ارائه خودش یک قدم مشخص است.",
+        "کاربر: آره، بیشتر کنجکاوم ببینم مردم کدام بخش را امتحان می‌کنند."
+      ]
+    },
+    {
+      "id": "fresh-p04",
+      "split": "fresh_holdout",
+      "label": "positive",
+      "acceptable": [
+        "send"
+      ],
+      "tags": [
+        "initiative_no_welcome",
+        "implicit",
+        "social"
+      ],
+      "topic": "walking-group",
+      "purpose": "Ask about the first neighborhood walking-group outing.",
+      "sourceAt": "2026-10-17T12:00:00Z",
+      "dueAt": "2026-10-19T12:00:00Z",
+      "preferences": [
+        {
+          "key": "style",
+          "value": "Use a casual tone and at most one question."
+        }
+      ],
+      "conversation": [
+        "The user has chatted weekly with the assistant for two months about settling into a new neighborhood.",
+        "User Saturday: I found a neighborhood walking group. Their first walk for new people is Sunday morning, back before noon.",
+        "Assistant: That gives you a way to see a few local paths.",
+        "User: Yes, I am going. It sounds relaxed, which suits me."
+      ]
+    },
+    {
+      "id": "fresh-p05",
+      "split": "fresh_holdout",
+      "label": "positive",
+      "acceptable": [
+        "send"
+      ],
+      "tags": [
+        "explicit_request",
+        "welcomed"
+      ],
+      "topic": "volunteer-shift",
+      "purpose": "Check how the first volunteer shift went, as requested.",
+      "sourceAt": "2026-10-17T12:00:00Z",
+      "dueAt": "2026-10-19T12:00:00Z",
+      "preferences": [],
+      "conversation": [
+        "User Saturday: My first volunteer library shift is Monday from 08:00 to 10:00 UTC. Please check in at noon; I would like to tell you how it went.",
+        "Assistant: A brief question after the shift makes sense.",
+        "User: Thank you."
+      ]
+    },
+    {
+      "id": "fresh-p06",
+      "split": "fresh_holdout",
+      "label": "positive",
+      "acceptable": [
+        "send"
+      ],
+      "tags": [
+        "general_welcome",
+        "listening",
+        "no_advice"
+      ],
+      "topic": "housemate-chat",
+      "purpose": "Offer a short listening-only check-in after the housemate conversation.",
+      "sourceAt": "2026-10-17T12:00:00Z",
+      "dueAt": "2026-10-19T12:00:00Z",
+      "preferences": [
+        {
+          "key": "support",
+          "value": "Listening rather than suggestions; brief relevant follow-ups are welcome."
+        }
+      ],
+      "conversation": [
+        "User has been discussing daily life with the assistant for three weeks.",
+        "User Saturday: I talk to my housemate Sunday afternoon about the noise in the evenings.",
+        "Assistant: I can listen to what you want to say.",
+        "User: Thanks, I do not want advice. I appreciate when you later ask about things I have shared."
+      ]
+    },
+    {
+      "id": "fresh-t01",
+      "split": "fresh_holdout",
+      "label": "timing",
+      "acceptable": [
+        "defer",
+        "stay_quiet"
+      ],
+      "tags": [
+        "future_event",
+        "due_schedule_conflict"
+      ],
+      "topic": "cooking-course",
+      "purpose": "Ask how the first cooking course session went.",
+      "sourceAt": "2026-10-17T12:00:00Z",
+      "dueAt": "2026-10-19T12:00:00Z",
+      "preferences": [
+        {
+          "key": "style",
+          "value": "A brief check-in after the class would be welcome."
+        }
+      ],
+      "conversation": [
+        "User Saturday: I start the cooking course Tuesday 20 October at 18:00 UTC. The first lesson is not until Tuesday evening.",
+        "The current time is Monday 19 October at noon UTC. There is no course outcome yet."
+      ]
+    },
+    {
+      "id": "fresh-t02",
+      "split": "fresh_holdout",
+      "label": "timing",
+      "acceptable": [
+        "defer",
+        "stay_quiet"
+      ],
+      "tags": [
+        "busy",
+        "soft_timing"
+      ],
+      "topic": "shelf-building",
+      "purpose": "Ask how the shelf-building project is going.",
+      "sourceAt": "2026-10-17T12:00:00Z",
+      "dueAt": "2026-10-19T12:00:00Z",
+      "preferences": [
+        {
+          "key": "style",
+          "value": "Friendly concise check-ins on projects are usually welcome."
+        }
+      ],
+      "conversation": [
+        "User Saturday: I am building a shelf and I enjoy talking about the design.",
+        "User Monday at 11:55 UTC: In a training session until 18:00 today. Catch you after that."
+      ]
+    },
+    {
+      "id": "fresh-t03",
+      "split": "fresh_holdout",
+      "label": "timing",
+      "acceptable": [
+        "defer",
+        "stay_quiet"
+      ],
+      "tags": [
+        "rescheduled_event",
+        "latest_schedule"
+      ],
+      "topic": "choir-rehearsal",
+      "purpose": "Check how the first choir rehearsal went.",
+      "sourceAt": "2026-10-17T12:00:00Z",
+      "dueAt": "2026-10-19T12:00:00Z",
+      "preferences": [],
+      "conversation": [
+        "User Saturday: My first choir rehearsal was meant to be Sunday evening.",
+        "User Sunday: The conductor is away, so it has been postponed to Thursday 22 October at 19:00 UTC. We have not met yet.",
+        "User: I will still be going, but there is nothing to tell you about it until Thursday."
+      ]
+    },
+    {
+      "id": "fresh-n01",
+      "split": "fresh_holdout",
+      "label": "negative",
+      "acceptable": [
+        "close",
+        "stay_quiet"
+      ],
+      "tags": [
+        "resolved",
+        "fresh_history"
+      ],
+      "topic": "train-booking",
+      "purpose": "Ask whether the travel booking problem was solved.",
+      "sourceAt": "2026-10-17T12:00:00Z",
+      "dueAt": "2026-10-19T12:00:00Z",
+      "preferences": [],
+      "conversation": [
+        "User Saturday: I could not complete a train booking.",
+        "User Monday at 11:40 UTC: Booked it successfully this morning. That is solved and I do not need more help with it."
+      ]
+    },
+    {
+      "id": "fresh-n02",
+      "split": "fresh_holdout",
+      "label": "negative",
+      "acceptable": [
+        "close",
+        "stay_quiet"
+      ],
+      "tags": [
+        "topic_boundary",
+        "fa"
+      ],
+      "topic": "old-friend",
+      "purpose": "پیگیری درباره اختلاف با دوست قدیمی.",
+      "sourceAt": "2026-10-17T12:00:00Z",
+      "dueAt": "2026-10-19T12:00:00Z",
+      "preferences": [],
+      "conversation": [
+        "کاربر شنبه: با یک دوست قدیمی اختلاف پیدا کردم.",
+        "کاربر یکشنبه: درباره این دوستی دیگر سوال نکن. اگر بخواهم خودم مطرح می‌کنم.",
+        "دستیار: حتماً."
+      ]
+    },
+    {
+      "id": "fresh-n03",
+      "split": "fresh_holdout",
+      "label": "negative",
+      "acceptable": [
+        "close",
+        "stay_quiet"
+      ],
+      "tags": [
+        "cold_start",
+        "utility_complete"
+      ],
+      "topic": "file-conversion",
+      "purpose": "Check how the document conversion went.",
+      "sourceAt": "2026-10-17T12:00:00Z",
+      "dueAt": "2026-10-19T12:00:00Z",
+      "preferences": [],
+      "conversation": [
+        "Only interaction, Saturday: User: How do I convert a text file to PDF?",
+        "Assistant gave simple instructions.",
+        "User: It worked, thanks. That is all I needed."
+      ]
+    }
+  ],
+  "applicationGates": [
+    {
+      "id": "gate-stop",
+      "gate": "stop",
+      "expectedSends": 0
+    },
+    {
+      "id": "gate-resolved",
+      "gate": "resolved",
+      "expectedSends": 0
+    },
+    {
+      "id": "gate-unknown-audience",
+      "gate": "authorization_denied",
+      "expectedSends": 0
+    },
+    {
+      "id": "gate-revoked-source",
+      "gate": "forgotten",
+      "expectedSends": 0
+    },
+    {
+      "id": "gate-quiet-hours",
+      "gate": "quiet",
+      "expectedSends": 0
+    },
+    {
+      "id": "gate-unanswered",
+      "gate": "unanswered",
+      "expectedSends": 0
+    },
+    {
+      "id": "gate-unknown-timezone",
+      "gate": "missing_timezone",
+      "expectedSends": 0
+    },
+    {
+      "id": "gate-group-disabled",
+      "gate": "group",
+      "expectedSends": 0
+    },
+    {
+      "id": "gate-positive-control",
+      "gate": "none",
+      "expectedSends": 1
+    }
+  ]
+}

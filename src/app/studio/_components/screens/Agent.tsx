@@ -2,7 +2,7 @@
 
 import { motion } from 'framer-motion';
 import { useEffect, useState } from 'react';
-import { api, haptic, openTelegram, type AgentView, type AgentVisibility, type Member } from '../../_lib/client';
+import { api, haptic, openTelegram, type AgentView, type AgentVisibility, type GroupBehavior, type Member } from '../../_lib/client';
 import { AgentFace, PALETTE, stageFor } from '../Cloud';
 import { errorMessage, LoadingFill, useNav } from '../StudioApp';
 import { Icon, Sheet, Spinner, TopBar } from '../ui';
@@ -52,11 +52,32 @@ export function AgentScreen({ id }: { id: string }) {
   const [sheet, setSheet] = useState<'admin' | 'visibility' | null>(null);
   const [people, setPeople] = useState<Member[] | null>(null);
   const [busy, setBusy] = useState(false);
+  const [profileError, setProfileError] = useState<string | null>(null);
 
   useEffect(() => {
     api.agent(id).then((r) => setAgent(r.agent)).catch((e) => { nav.toast(errorMessage(e), 'error'); nav.back(); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
+
+  const checkingProfile = agent?.status === 'active' && agent.profileSync?.status !== 'synced';
+  useEffect(() => {
+    if (!checkingProfile) return;
+    let cancelled = false;
+    let inFlight = false;
+    const timer = setInterval(async () => {
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        const r = await api.agent(id);
+        if (cancelled) return;
+        setProfileError(null);
+        setAgent(r.agent);
+      } catch (e) {
+        if (!cancelled) setProfileError(`Can’t check the Telegram profile: ${errorMessage(e)}`);
+      } finally { inFlight = false; }
+    }, 3000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [checkingProfile, id]);
 
   if (!agent) return <><TopBar onBack={nav.back} backLabel="Agents" /><LoadingFill /></>;
 
@@ -65,6 +86,7 @@ export function AgentScreen({ id }: { id: string }) {
   const active = agent.status === 'active';
   const fired = agent.status === 'fired';
   const p = agent.persona;
+  const groupBehavior: GroupBehavior = agent.groupBehavior ?? { participation: 'balanced', remember: true };
 
   const addToGroup = async () => {
     try {
@@ -108,15 +130,27 @@ export function AgentScreen({ id }: { id: string }) {
     } catch (e) { nav.toast(errorMessage(e), 'error'); } finally { setBusy(false); }
   };
 
+  const updateGroupBehavior = async (behavior: GroupBehavior) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const r = await api.setGroupBehavior(agent.id, behavior);
+      setAgent(r.agent);
+      haptic.success();
+    } catch (e) { nav.toast(errorMessage(e), 'error'); } finally { setBusy(false); }
+  };
+
   const syncProfile = async () => {
+    if (busy) return;
+    setProfileError(null);
     setBusy(true);
     try {
       const r = await api.syncProfile(agent.id);
       setAgent(r.agent);
       if (r.failed.length) { haptic.error(); nav.toast(`Telegram refused: ${r.failed.join(', ')}. Try again in a minute.`, 'error'); }
-      else { haptic.success(); nav.toast(`@${agent.bot?.username} now has ${p.name}'s name and photo`); }
+      else if (r.agent.profileSync?.status === 'synced') { haptic.success(); nav.toast('Telegram profile updated'); }
       setSheet(null);
-    } catch (e) { nav.toast(errorMessage(e), 'error'); } finally { setBusy(false); }
+    } catch (e) { setProfileError(errorMessage(e)); nav.toast(errorMessage(e), 'error'); } finally { setBusy(false); }
   };
 
   const allowList = Array.isArray(agent.access) ? agent.access : [];
@@ -164,6 +198,19 @@ export function AgentScreen({ id }: { id: string }) {
         </div>
 
         <div style={{ position: 'relative', marginTop: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {active && agent.profileSync?.status !== 'synced' && (
+            <div className="vx-card" style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {agent.profileSync?.status === 'error'
+                ? <p role="alert" style={{ margin: 0, color: '#FF6B5E' }}>Telegram profile still needs {agent.profileSync.failed.join(', ') || 'an update'}.</p>
+                : <p role="status" style={{ margin: 0 }}>Finishing Telegram profile…</p>}
+              {profileError && <p role="alert" style={{ margin: 0, color: '#FF6B5E' }}>{profileError}</p>}
+              {(agent.canManageAccess || agent.canEdit) && (
+                <button className="vx-btn vx-btn-secondary vx-btn-sm" onClick={syncProfile} disabled={busy}>
+                  {busy ? <Spinner /> : 'Retry Telegram profile'}
+                </button>
+              )}
+            </div>
+          )}
           {active && !agent.locked && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 12px 12px 16px', borderRadius: 16, background: `${pal.base}1F` }}>
               <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -217,6 +264,8 @@ export function AgentScreen({ id }: { id: string }) {
             <div className="vx-row"><span className="vx-2" style={{ flex: 1 }}>Languages</span><span>{p.languages.join(', ')}</span></div>
             <div className="vx-row"><span className="vx-2" style={{ flex: 1 }}>Who can talk</span><span>{visibilityLabel(agent, nav.me.org)}</span></div>
             <div className="vx-row"><span className="vx-2" style={{ flex: 1 }}>Live web</span><span>{agent.liveWeb ? 'Searches when needed' : 'Off'}</span></div>
+            <div className="vx-row"><span className="vx-2" style={{ flex: 1 }}>Group replies</span><span>{GROUP_PARTICIPATION_OPTIONS.find((option) => option.value === groupBehavior.participation)?.label}</span></div>
+            <div className="vx-row"><span className="vx-2" style={{ flex: 1 }}>Group memory</span><span>{groupBehavior.remember ? 'Remembers useful facts' : 'Off'}</span></div>
             <div className="vx-row"><span className="vx-2" style={{ flex: 1 }}>Hired by</span><span>{agent.creatorName ?? '—'}</span></div>
           </div>
 
@@ -251,6 +300,38 @@ export function AgentScreen({ id }: { id: string }) {
                 <motion.span layout style={{ width: 20, height: 20, borderRadius: '50%', background: agent.liveWeb ? '#0E1013' : '#A9ADB5' }} />
               </span>
             </button>
+          )}
+          {agent.canManageAccess && (
+            <div style={{ padding: '16px', borderTop: '1px solid rgba(255,255,255,.08)', display: 'flex', flexDirection: 'column', gap: 12 }} aria-busy={busy}>
+              <fieldset disabled={busy} aria-describedby={`group-context-${agent.id}`} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+                <legend style={{ padding: 0, marginBottom: 8, fontWeight: 600 }}>Group replies</legend>
+                {GROUP_PARTICIPATION_OPTIONS.map((option) => (
+                  <label key={option.value} style={{ display: 'flex', alignItems: 'flex-start', gap: 12, minHeight: 48, padding: '8px 0', cursor: busy ? 'default' : 'pointer' }}>
+                    <input type="radio" name={`group-participation-${agent.id}`} value={option.value} checked={groupBehavior.participation === option.value}
+                      onChange={() => { void updateGroupBehavior({ ...groupBehavior, participation: option.value }); }}
+                      style={{ accentColor: '#D6FF5C', width: 20, height: 20, flexShrink: 0, margin: '2px 0 0' }} />
+                    <span style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                      <span>{option.label}</span>
+                      <span className="vx-small vx-2">{option.description}</span>
+                    </span>
+                  </label>
+                ))}
+              </fieldset>
+              <p id={`group-context-${agent.id}`} className="vx-small vx-2" style={{ margin: 0 }}>All modes can follow messages Telegram delivers. These options change when replies are sent.</p>
+              <button type="button" role="switch" aria-checked={groupBehavior.remember} aria-labelledby={`group-memory-label-${agent.id}`}
+                aria-describedby={`group-memory-help-${agent.id}`} disabled={busy}
+                onClick={() => { void updateGroupBehavior({ ...groupBehavior, remember: !groupBehavior.remember }); }}
+                style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', padding: '12px 0', background: 'none', border: 'none', borderTop: '1px solid rgba(255,255,255,.08)', color: 'inherit', cursor: busy ? 'default' : 'pointer', textAlign: 'left' }}>
+                <span id={`group-memory-label-${agent.id}`} style={{ flex: 1 }}>Remember useful group facts</span>
+                <span aria-hidden="true" style={{ width: 44, height: 26, borderRadius: 13, padding: 3, flexShrink: 0, background: groupBehavior.remember ? '#D6FF5C' : '#3A3F48', display: 'flex', justifyContent: groupBehavior.remember ? 'flex-end' : 'flex-start' }}>
+                  <span style={{ width: 20, height: 20, borderRadius: '50%', background: groupBehavior.remember ? '#0E1013' : '#A9ADB5' }} />
+                </span>
+              </button>
+              <p id={`group-memory-help-${agent.id}`} className="vx-small vx-2" style={{ margin: 0 }}>Useful group facts stay in that group. Private chats are not shared. Turning this off leaves recent context and existing memories in place.</p>
+              <p className="vx-small vx-2" style={{ margin: 0 }}>To follow ordinary group messages, disable Group Privacy in{' '}
+                <a href="https://t.me/BotFather" target="_blank" rel="noopener noreferrer" onClick={(event) => { event.preventDefault(); openTelegram('https://t.me/BotFather'); }} style={{ color: '#D6FF5C', textDecoration: 'underline' }}>BotFather</a>
+                {' '}and remove/re-add the bot, or make it a group admin.</p>
+            </div>
           )}
           {(agent.canManageAccess || agent.canEdit) && agent.bot && (
             <button className="vx-row" disabled={busy} onClick={syncProfile} style={{ width: '100%', background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left', borderTop: '1px solid rgba(255,255,255,.08)', color: 'inherit' }}>
@@ -337,6 +418,12 @@ export function AgentScreen({ id }: { id: string }) {
     </>
   );
 }
+
+const GROUP_PARTICIPATION_OPTIONS: Array<{ value: GroupBehavior['participation']; label: string; description: string }> = [
+  { value: 'mentions', label: 'Mentions only', description: 'Replies to mentions and direct replies.' },
+  { value: 'balanced', label: 'Balanced', description: 'Joins when a useful contribution is clear.' },
+  { value: 'active', label: 'Active', description: 'Joins relevant conversations more often.' },
+];
 
 const VISIBILITY_OPTIONS: Array<{ value: AgentVisibility; title: (org: string) => string; body: (name: string, org: string, openness?: number) => string }> = [
   { value: 'private', title: () => 'Private', body: (name) => `Only you, the people you pick, and admins can message ${name}.` },

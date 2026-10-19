@@ -2,7 +2,7 @@
 
 import { AnimatePresence, motion } from 'framer-motion';
 import { useEffect, useRef, useState } from 'react';
-import { api, haptic, mediaUrl, openTelegram, type AgentLook, type AgentView, type LibraryVoice, type SpawnBrief } from '../../_lib/client';
+import { api, haptic, mediaUrl, openTelegram, type AgentLook, type AgentView, type LibraryVoice, type SpawnBrief, type VoiceOptions } from '../../_lib/client';
 import { AgentFace, Cloud, PALETTE } from '../Cloud';
 import { errorMessage, LoadingFill, useNav } from '../StudioApp';
 import { Icon, Spinner, Steps, TopBar } from '../ui';
@@ -14,9 +14,16 @@ const PRESENTATIONS: Array<{ value: NonNullable<SpawnBrief['presentation']>; lab
   { value: 'neutral', label: 'Neutral' },
 ];
 const DOMAINS = ['Product', 'Engineering', 'Design', 'Marketing', 'Sales', 'Finance', 'People', 'Research', 'Legal', 'Support'];
-const LANGUAGES = ['English', 'Persian', 'Arabic', 'Turkish', 'French', 'German', 'Spanish'];
+const LANGUAGES = ['English', 'Persian', 'Vietnamese', 'Arabic', 'Turkish', 'French', 'German', 'Spanish'];
 const FAMILY_LABEL = { puff: 'Puff', tower: 'Tower', drift: 'Drift' } as const;
 const FEATURE_LABEL = { cheeks: 'Cheeks', lashes: 'Lashes', brows: 'Brows' } as const;
+const VOICE_LANGUAGE_CHOICES = [
+  { code: 'en', label: 'English' }, { code: 'fa', label: 'Persian' }, { code: 'vi', label: 'Vietnamese' },
+];
+const VOICE_LANGUAGE_CODES: Record<string, string> = {
+  english: 'en', en: 'en', persian: 'fa', farsi: 'fa', 'فارسی': 'fa', fa: 'fa', vietnamese: 'vi', 'tiếng việt': 'vi', vi: 'vi',
+  arabic: 'ar', turkish: 'tr', french: 'fr', german: 'de', spanish: 'es',
+};
 
 type Busy = null | string;
 
@@ -260,6 +267,13 @@ function PersonaStep({ agent, names, busy, run, onUpdate, onNext }: StepProps & 
   const save = async (patch: Record<string, unknown>) => {
     const r = await run('save', () => api.updatePersona(agent.id, patch));
     if (r) { onUpdate(r.agent); setEditing(null); haptic.success(); }
+    return !!r;
+  };
+
+  const next = async () => {
+    if (busy || (editing !== null && !draft.trim())) return;
+    if (editing !== null && !(await save({ [editing]: draft }))) return;
+    onNext();
   };
 
   return (
@@ -320,7 +334,9 @@ function PersonaStep({ agent, names, busy, run, onUpdate, onNext }: StepProps & 
         )}
       </div>
       <Dock>
-        <button className="vx-btn vx-btn-primary vx-btn-block" onClick={onNext} disabled={!!busy}>Looks good — next</button>
+        <button className="vx-btn vx-btn-primary vx-btn-block" onClick={next} disabled={!!busy || (editing !== null && !draft.trim())}>
+          {busy === 'save' ? <Spinner /> : editing !== null ? 'Save & next' : 'Looks good — next'}
+        </button>
       </Dock>
     </>
   );
@@ -520,20 +536,57 @@ function usePlayer() {
 
 function VoiceStep({ agent, busy, run, onUpdate, onNext }: StepProps) {
   const nav = useNav();
-  const [tab, setTab] = useState<'design' | 'library'>('design');
+  const [tab, setTab] = useState<'default' | 'design' | 'library'>('default');
   const [brief, setBrief] = useState(agent.persona.voiceBrief);
-  const [query, setQuery] = useState({ gender: agent.persona.presentation === 'feminine' ? 'female' : agent.persona.presentation === 'masculine' ? 'male' : '', accent: '', language: '', search: '' });
+  const firstLanguage = agent.persona.languages[0]?.trim().toLowerCase() ?? '';
+  const initialLanguage = VOICE_LANGUAGE_CODES[firstLanguage] ?? (/^[a-z]{2,3}(?:[-_]|$)/.test(firstLanguage) ? firstLanguage.split(/[-_]/)[0] : '');
+  const [query, setQuery] = useState({ gender: agent.persona.presentation === 'feminine' ? 'female' : agent.persona.presentation === 'masculine' ? 'male' : '', accent: '', language: initialLanguage, search: '' });
   const [results, setResults] = useState<LibraryVoice[] | null>(null);
+  const [options, setOptions] = useState<VoiceOptions | null>(null);
+  const [optionsError, setOptionsError] = useState<string | null>(null);
+  const [optionsLoading, setOptionsLoading] = useState(false);
+  const [optionsRetry, setOptionsRetry] = useState(0);
+  const libraryRequest = useRef(0);
   const player = usePlayer();
   const voicesOn = nav.me.features.voices;
 
-  const search = async () => {
-    const r = await run('search', () => api.searchVoices(query));
-    if (r) setResults(r.voices);
+  useEffect(() => {
+    if (!voicesOn) return;
+    let cancelled = false;
+    setOptionsLoading(true);
+    setOptionsError(null);
+    api.voiceOptions().then((r) => { if (!cancelled) setOptions(r); })
+      .catch((e) => { if (!cancelled) setOptionsError(errorMessage(e)); })
+      .finally(() => { if (!cancelled) setOptionsLoading(false); });
+    return () => { cancelled = true; };
+  }, [voicesOn, optionsRetry]);
+
+  const model = options?.models.find((m) => m.id === options.ttsModel);
+  const languageNames = new Map<string, string>([['en', 'English'], ['fa', 'Persian (فارسی)'], ['vi', 'Vietnamese (Tiếng Việt)']]);
+  for (const m of options?.models ?? []) for (const language of m.languages) {
+    if (language.code !== 'fa' && language.code !== 'vi') languageNames.set(language.code, language.name);
+  }
+
+  const searchWith = async (filters: typeof query) => {
+    const request = ++libraryRequest.current;
+    const r = await run('search', () => api.searchVoices(filters));
+    if (r && request === libraryRequest.current) setResults(r.voices);
+  };
+  const search = () => searchWith(query);
+  const chooseLanguage = (language: string) => {
+    const filters = { ...query, language };
+    setQuery(filters);
+    setResults(null);
+    if (tab === 'library') void searchWith(filters);
   };
 
   const sample = async () => {
-    const blob = await run('speak', () => api.speak(agent.id, `Hi, I'm ${agent.persona.name}. ${agent.persona.tagline}`));
+    const language = query.language || initialLanguage;
+    const text = language === 'fa'
+      ? `سلام، من ${agent.persona.name} هستم. خوشحالم که با هم صحبت می‌کنیم.`
+      : language === 'vi' ? `Xin chào, tôi là ${agent.persona.name}. Rất vui được trò chuyện với bạn.`
+        : `Hi, I'm ${agent.persona.name}. ${agent.persona.tagline}`;
+    const blob = await run('speak', () => api.speak(agent.id, text));
     if (blob) player.play('sample', URL.createObjectURL(blob));
   };
 
@@ -553,7 +606,29 @@ function VoiceStep({ agent, busy, run, onUpdate, onNext }: StepProps) {
           <span className="vx-over">Their voice</span>
           <h1 className="vx-title">How does {agent.persona.name} sound?</h1>
           <p className="vx-2" style={{ margin: 0 }}>Same voice for everyone in {nav.me.org}. Fixed once hired.</p>
+          {options && <p className="vx-small vx-2" style={{ margin: 0 }}>Voice messages: {model?.name ?? options.ttsModel}{query.language && model?.languages.some((l) => l.code === query.language) ? ` · ${VOICE_LANGUAGE_CHOICES.find((l) => l.code === query.language)?.label ?? languageNames.get(query.language) ?? query.language} supported` : ''}</p>}
         </div>
+        <div role="group" aria-label="Language shortcuts" style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+          {VOICE_LANGUAGE_CHOICES.map((language) => <button key={language.code} className="vx-chip" aria-pressed={query.language === language.code}
+            disabled={!!busy} onClick={() => chooseLanguage(language.code)}>{language.label}</button>)}
+        </div>
+
+        {optionsLoading && <div role="status" className="vx-small vx-2"><Spinner size={14} />Loading voice options…</div>}
+        {optionsError && <div className="vx-banner warn" style={{ flexDirection: 'column', alignItems: 'stretch' }}>
+          <span role="alert">Can’t load voice options: {optionsError}</span>
+          <button className="vx-btn vx-btn-secondary vx-btn-sm" onClick={() => setOptionsRetry((n) => n + 1)}>Retry voice options</button>
+        </div>}
+        {options && !options.libraryAllowed && <div className="vx-banner warn">
+          {options.tier === 'free'
+            ? 'The server uses ElevenLabs’ free plan. Library voices need a paid plan for API use. Built-in voices are available; an existing library voice stays selected until you change it.'
+            : 'The server’s ElevenLabs subscription could not be checked. Library selection is unavailable until it can be verified.'}
+        </div>}
+        {options && <details className="vx-small vx-2">
+          <summary>Available speech models</summary>
+          <ul style={{ paddingInlineStart: 20 }}>
+            {options.models.map((m) => <li key={m.id}>{m.name} · {m.kind === 'realtime' ? 'Real-time' : m.kind === 'quality' ? 'Quality' : 'Earlier model'}{VOICE_LANGUAGE_CHOICES.filter((l) => m.languages.some((supported) => supported.code === l.code)).map((l) => ` · ${l.label} supported`).join('')}{m.id === options.ttsModel ? ' · Used for voice messages' : ''}</li>)}
+          </ul>
+        </details>}
 
         {agent.voice && (
           <div className="vx-card" style={{ padding: 14, display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -566,11 +641,27 @@ function VoiceStep({ agent, busy, run, onUpdate, onNext }: StepProps) {
         )}
 
         <div style={{ display: 'flex', gap: 8 }}>
+          <button className="vx-chip" aria-pressed={tab === 'default'} onClick={() => setTab('default')}>Built-in voices</button>
           <button className="vx-chip" aria-pressed={tab === 'design'} onClick={() => setTab('design')}>Design new</button>
           <button className="vx-chip" aria-pressed={tab === 'library'} onClick={() => { setTab('library'); if (!results) void search(); }}>Voice library</button>
         </div>
 
-        {tab === 'design' ? (
+        {tab === 'default' ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <p className="vx-small vx-2" style={{ margin: 0 }}>One voice can speak the model’s supported languages. Accent and pronunciation vary; choose a voice, then hear an English, Persian or Vietnamese sample.</p>
+            {options?.defaultVoices.length === 0 && <p className="vx-small vx-2">No built-in voices are available from this account right now.</p>}
+            {options?.defaultVoices.map((v) => <div key={v.voiceId} className="vx-card" style={{ padding: 12, display: 'flex', alignItems: 'center', gap: 12 }}>
+              <button className="vx-icon-btn solid" aria-label={`Play ${v.name}`} disabled={!v.previewUrl} onClick={() => v.previewUrl && player.play(v.voiceId, v.previewUrl)}>
+                <Icon name={player.playing === v.voiceId ? 'pause' : 'play'} size={18} />
+              </button>
+              <div style={{ flex: 1, minWidth: 0 }}><div>{v.name}</div><div className="vx-small vx-2">{[v.gender, v.accent, 'Multilingual via speech model'].filter(Boolean).join(' · ')}</div></div>
+              <button className="vx-btn vx-btn-primary vx-btn-sm" disabled={!!busy} aria-label={`Use ${v.name}`} onClick={async () => {
+                const r = await run('choose', () => api.chooseDefaultVoice(agent.id, v.voiceId));
+                if (r) { onUpdate(r.agent); haptic.success(); }
+              }}>Use</button>
+            </div>)}
+          </div>
+        ) : tab === 'design' ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <Field label="Describe the voice" hint="Accent, age, pace, warmth. ElevenLabs creates three options.">
               <textarea className="vx-textarea" rows={3} value={brief} onChange={(e) => setBrief(e.target.value)} maxLength={1000} />
@@ -596,12 +687,16 @@ function VoiceStep({ agent, busy, run, onUpdate, onNext }: StepProps) {
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <p className="vx-small vx-2" style={{ margin: 0 }}>Language labels describe the library recording. Accent and pronunciation vary by voice; listen to the preview before choosing.</p>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0,1fr))', gap: 8 }}>
               <select className="vx-input" value={query.gender} onChange={(e) => setQuery({ ...query, gender: e.target.value })} aria-label="Gender">
-                <option value="">Any</option><option value="female">Female</option><option value="male">Male</option><option value="neutral">Neutral</option>
+                <option value="">Any gender</option><option value="female">Female</option><option value="male">Male</option><option value="neutral">Neutral</option>
               </select>
               <input className="vx-input" value={query.accent} onChange={(e) => setQuery({ ...query, accent: e.target.value })} placeholder="Accent" />
-              <input className="vx-input" value={query.language} onChange={(e) => setQuery({ ...query, language: e.target.value })} placeholder="Lang (fa)" />
+              <select className="vx-input" aria-label="Voice language" value={query.language} disabled={!!busy} onChange={(e) => chooseLanguage(e.target.value)}>
+                <option value="">Any language</option>
+                {[...languageNames].sort((a, b) => a[1].localeCompare(b[1])).map(([code, name]) => <option key={code} value={code}>{name}</option>)}
+              </select>
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
               <input className="vx-input" value={query.search} onChange={(e) => setQuery({ ...query, search: e.target.value })} placeholder="calm, narrator, young…"
@@ -611,14 +706,20 @@ function VoiceStep({ agent, busy, run, onUpdate, onNext }: StepProps) {
             {results?.length === 0 && <span className="vx-small vx-2">No voices match. Loosen a filter.</span>}
             {results?.map((v) => (
               <div key={`${v.publicOwnerId}-${v.voiceId}`} className="vx-card" style={{ padding: 12, display: 'flex', alignItems: 'center', gap: 12 }}>
-                <button className="vx-icon-btn solid" aria-label={`Play ${v.name}`} disabled={!v.previewUrl} onClick={() => v.previewUrl && player.play(v.voiceId, v.previewUrl)}>
+                <button className="vx-icon-btn solid" aria-label={`Play ${v.name}`} disabled={!v.previewUrl && !v.verifiedLanguages?.some((l) => l.language === query.language && l.previewUrl)} onClick={() => {
+                  const url = v.verifiedLanguages?.find((l) => l.language === query.language && l.previewUrl)?.previewUrl ?? v.previewUrl;
+                  if (url) player.play(v.voiceId, url);
+                }}>
                   <Icon name={player.playing === v.voiceId ? 'pause' : 'play'} size={18} />
                 </button>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{v.name}</div>
-                  <div className="vx-small vx-2" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{[v.gender, v.age, v.accent, v.descriptive].filter(Boolean).join(' · ')}</div>
+                  <div className="vx-small vx-2" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{[v.gender, v.age, v.accent, v.descriptive, v.category === 'generated' ? 'Generated voice' : ''].filter(Boolean).join(' · ')}</div>
+                  {v.language && <div className="vx-small vx-2">{v.category === 'professional' ? 'Native language: ' : 'Language: '}{languageNames.get(v.language) ?? v.language}</div>}
+                  {v.description && <div className="vx-small vx-3">{v.description}</div>}
+                  {typeof v.rate === 'number' && v.rate > 1 && <div className="vx-small vx-2">Voice price multiplier: {v.rate}×</div>}
                 </div>
-                <button className="vx-btn vx-btn-primary vx-btn-sm" disabled={!!busy}
+                <button className="vx-btn vx-btn-primary vx-btn-sm" disabled={!!busy || !options?.libraryAllowed} aria-label={`Use ${v.name}`}
                   onClick={async () => { const r = await run('choose', () => api.chooseLibraryVoice(agent.id, v)); if (r) { onUpdate(r.agent); haptic.success(); } }}>Use</button>
               </div>
             ))}
@@ -716,40 +817,64 @@ function HireStep({ agent, busy, run, onUpdate }: Omit<StepProps, 'onNext'>) {
   const [link, setLink] = useState<string | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
   const awaiting = agent.status === 'awaiting_bot';
+  const active = agent.status === 'active';
+  const profileReady = agent.profileSync?.status === 'synced';
+  const checking = awaiting || (active && !profileReady);
 
-  // While waiting for the human to confirm the bot in Telegram, poll for it.
+  // Creation and applying the selected profile finish separately in Telegram.
   useEffect(() => {
-    if (!awaiting) return;
+    if (!checking) return;
     let cancelled = false;
+    let inFlight = false;
     const t = setInterval(async () => {
+      if (inFlight) return;
+      inFlight = true;
       try {
         const r = await api.agent(agent.id);
         if (cancelled) return;
         setStatusError(null);
-        if (r.agent.status === 'active') {
-          haptic.success();
-          onUpdate(r.agent);
-        }
+        if (r.agent.status === 'active' && r.agent.profileSync?.status === 'synced') haptic.success();
+        onUpdate(r.agent);
       } catch (e) {
         if (!cancelled) setStatusError(errorMessage(e));
+      } finally {
+        inFlight = false;
       }
     }, 3000);
     return () => { cancelled = true; clearInterval(t); };
-  }, [awaiting, agent.id, onUpdate]);
+  }, [checking, agent.id, onUpdate]);
 
   const publish = async () => {
     const r = await run('publish', () => api.publish(agent.id));
     if (r) { setLink(r.link); onUpdate(r.agent); openTelegram(r.link); }
   };
 
-  if (agent.status === 'active') {
+  const retryProfile = async () => {
+    const r = await run('profile', () => api.syncProfile(agent.id));
+    if (r) { setStatusError(null); onUpdate(r.agent); }
+  };
+
+  if (active) {
     return (
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 18, padding: 24, textAlign: 'center' }}>
         <motion.div initial={{ scale: 0, rotate: -20 }} animate={{ scale: 1, rotate: 0 }} transition={{ type: 'spring', stiffness: 260, damping: 12 }}>
-          <AgentFace look={agent.look} size={160} expr="happy" stage={1} label={agent.persona.name} preferCloud />
+          <AgentFace look={agent.look} size={160} expr={profileReady ? 'happy' : 'listening'} stage={1} label={agent.persona.name} />
         </motion.div>
-        <h1 className="vx-title">{agent.persona.name} is hired</h1>
+        <h1 className="vx-title">{profileReady ? `${agent.persona.name} is hired` : `${agent.persona.name}’s bot is created`}</h1>
         <p className="vx-2" style={{ margin: 0, maxWidth: 300 }}>Live as @{agent.bot?.username}. For the next 7 days their personality can still be tuned; after that it’s locked for good.</p>
+        {!profileReady && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'center', maxWidth: 320 }}>
+            {agent.profileSync?.status === 'error'
+              ? <p role="alert" style={{ margin: 0, color: '#FF6B5E' }}>Bot created. Telegram profile still needs {agent.profileSync.failed.join(', ') || 'an update'}.</p>
+              : <div role="status" style={{ display: 'flex', gap: 8, alignItems: 'center' }}><Spinner size={14} />Finishing Telegram profile…</div>}
+            {agent.profileSync?.status === 'error' && (agent.canManageAccess || agent.canEdit) && (
+              <button className="vx-btn vx-btn-secondary vx-btn-sm" onClick={retryProfile} disabled={!!busy}>
+                {busy === 'profile' ? <Spinner /> : 'Retry Telegram profile'}
+              </button>
+            )}
+            {statusError && <p role="alert" style={{ margin: 0, color: '#FF6B5E' }}>Can’t check the bot’s status: {statusError}</p>}
+          </div>
+        )}
         <div style={{ display: 'flex', gap: 10, width: '100%', maxWidth: 340 }}>
           <button className="vx-btn vx-btn-secondary" style={{ flex: 1 }} onClick={() => agent.bot && openTelegram(`https://t.me/${agent.bot.username}`)}>Message</button>
           <button className="vx-btn vx-btn-primary" style={{ flex: 1 }} onClick={() => nav.reset({ name: 'home' }, { name: 'agent', id: agent.id })}>Open</button>
@@ -765,7 +890,7 @@ function HireStep({ agent, busy, run, onUpdate }: Omit<StepProps, 'onNext'>) {
         <h1 className="vx-title">{awaiting ? 'Confirm in Telegram' : `Hire ${agent.persona.name}`}</h1>
         <p className="vx-2" style={{ margin: 0, maxWidth: 320 }}>
           {awaiting
-            ? `Telegram opened a “Create bot” screen. If the name is blank, enter ${agent.persona.name}. Confirm the username and tap Create — this page updates when it’s done.`
+            ? `Telegram opened a “Create bot” screen. The name is filled in where supported; if it’s blank, enter ${agent.persona.name}. Confirm the username and tap Create. Vox then applies the chosen name and photo — this page updates when they’re ready.`
             : `${agent.persona.name} becomes a real Telegram bot. It starts private (you, people you pick, and admins); you can open it to ${nav.me.org} or make it public later.`}
         </p>
         <div className="vx-group" style={{ width: '100%', textAlign: 'left' }}>

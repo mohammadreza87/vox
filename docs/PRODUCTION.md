@@ -5,6 +5,34 @@ and Telegram webhooks. The alternative Mac Studio profile uses one persistent
 Node.js process, a private data directory and Telegram long polling. Never use
 file storage on an ephemeral server or run pollers and webhooks for the same bot.
 
+## Adaptive defaults and history transition
+
+For the default-disabled release, leave `STUDIO_ADAPTIVE_POLICY_JSON` absent and
+`STUDIO_DECISIONS_ENABLED` absent or `0`. Ordinary replies remain available;
+adaptive capability eligibility, saved-memory use, personalization, optional
+analytics and inbox delivery remain unavailable. Automatic memory, biometric
+recognition and content-quality review are unavailable in this slice even if a
+manifest requests them. No external notification sender or autonomous improvement
+worker is started.
+
+`STUDIO_ADAPTIVE_POLICY_JSON` is a private, server-owned reviewed manifest, parsed
+by [the configuration adapter](../src/lib/adaptive/persistence/config.ts). It
+resolves account-specific jurisdiction keys, enabled capabilities and current
+approval records. Invalid supplied configuration fails runtime initialization;
+parsing a manifest does not establish approval. `STUDIO_DECISIONS_ENABLED=1` also
+requires an OpenAI client and current endpoint eligibility, profile, consent and
+agent authority. Do not enable either setting as part of a default-disabled
+release. The current Mac `prepare` command rewrites only its listed configuration
+keys, and the Firebase environment writer does not export these adaptive settings;
+future enablement needs an explicit configuration-delivery change and verification.
+
+The Studio runtime stops reading and retaining legacy unscoped conversation
+history and stops legacy automatic memory extraction. Existing legacy stores are
+preserved for an explicit migration; confirming an account profile does not import
+or authorize them. Replies therefore use the current input and any separately
+authorized explicit context, without the old retained conversation history. This
+change also applies when optional adaptive capabilities are disabled.
+
 ## Firebase production
 
 The existing hostname is `https://vox-aicontact-fe0e3.web.app`; Studio opens at
@@ -38,6 +66,18 @@ successful deployment, verify owner/pending access, draft/test/hire, a real repl
 voice, and persistence from Telegram. Verify Firestore and Cloud Storage access
 policies and backups in the project; local backup commands below cover only the
 Mac profile. The Firestore state document has the platform's 1 MiB document limit.
+
+Adaptive persistence uses separate `adaptiveAccounts` and `adaptiveSharedMemory`
+collections through Firebase Admin transactions. Account metadata can be written
+by normal runtime authorization checks even with adaptive capabilities disabled.
+These documents contain application JSON; `STUDIO_SECRET` encrypts bot tokens and
+does not encrypt adaptive document payloads. Before using this profile, verify
+deployed Firestore rules deny direct client reads and writes to both collections,
+including authenticated clients, and verify backend IAM and operator access.
+Admin SDK access bypasses client rules. `firebase.json` currently configures
+hosting only: this deployment does not publish Firestore rules or establish IAM,
+backups or separate worker credentials. A passing application test is not evidence
+that these production boundaries are configured.
 
 To recover Firebase, redeploy the last tested revision while preserving its
 encryption secret and compatible data. Reconnect webhooks to that revision's
@@ -143,6 +183,17 @@ them for business-critical data. No automatic backup schedule is installed.
 To restore, stop the service, preserve current data, restore a matching `data/` and
 `production.env` from one backup, select a compatible release, and verify status
 and Telegram behavior. Rollback switches code; it does not revert user data.
+
+Adaptive file stores live under `STUDIO_DATA_DIR/adaptive/` and
+`STUDIO_DATA_DIR/shared-memory/`; keep them with the matching state backup and
+configuration. Preserve deletion tombstones, revoked grants and consent epochs
+when reconciling a restore so old snapshots cannot resurrect deleted content or
+permission. For Firebase, reconcile the corresponding collections as well.
+Rolling back to code from before the adaptive privacy boundary can resume legacy
+history and memory use; disabling the new flags does not constrain that older
+code. Verify the rollback candidate's privacy behavior and schema compatibility
+before serving it, or keep the service stopped until a compatible recovery is
+ready. Backup restoration and tombstone replay require their own qualification.
 
 Logs: `~/Library/Application Support/Vox Studio/logs/server.log` and `error.log`.
 Restrict access to these files; logs can contain provider and conversation metadata.

@@ -10,6 +10,11 @@
 
 export type Role = 'owner' | 'superadmin' | 'admin' | 'member' | 'pending';
 
+export interface GroupBehavior {
+  participation: 'mentions' | 'balanced' | 'active';
+  remember: boolean;
+}
+
 export interface Member {
   telegramId: number;
   name: string;
@@ -90,12 +95,22 @@ export interface AgentVoice {
   provider: 'elevenlabs';
   voiceId: string;
   label: string;
-  source: 'design' | 'library';
+  source: 'design' | 'library' | 'default';
 }
 
 export type AgentStatus = 'draft' | 'awaiting_bot' | 'active' | 'fired';
 
 export type MemoryPolicy = 'transfer' | 'archive' | 'delete';
+
+/** Durable delivery state; old agents without a receipt are reconciled on startup. */
+export interface TelegramProfileSync {
+  fingerprint: string;
+  status: 'pending' | 'synced' | 'error';
+  failed: string[];
+  attempts: number;
+  updatedAt: string;
+  retryAt?: string;
+}
 
 export interface Agent {
   id: string;
@@ -111,6 +126,7 @@ export interface Agent {
   hiredAt?: string;
   lockAt?: string;
   bot?: { id: number; username: string };
+  profileSync?: TelegramProfileSync;
   /** AES-GCM encrypted bot token */
   tokenEnc?: string;
   suggestedUsername?: string;
@@ -131,6 +147,7 @@ export interface Agent {
   identityVersion: number;
   /** Searches the web for live information when it helps (missing = on) */
   liveWeb?: boolean;
+  groupBehavior?: GroupBehavior;
   successorOf?: string;
   firedAt?: string;
   firedBy?: number;
@@ -155,9 +172,17 @@ export interface StudioGroup {
   memberIds: number[];
   /** True when the chat has more members than the HOOR people we know of */
   hasGuests: boolean;
+  /** Monotonic audience epoch; leave/rejoin must not restore old sharing rights. */
+  audienceEpoch?: number;
   agentIds: string[];
   addedBy?: number;
   addedAt: string;
+  /** Content-free throttle shared by all agents in this group. */
+  proactive?: { lastAt: string; messageId: number; windowAt: string; count: number };
+  /** Retired ID floor per agent; legacy max-watermarks stay permanently denied. */
+  memoryWatermarks?: Record<string, number>;
+  /** Claimed IDs above the floor, bounded to the most recent 256-message-ID range. */
+  memoryClaims?: Record<string, number[]>;
 }
 
 export interface AuditEntry {

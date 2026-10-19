@@ -3,17 +3,63 @@
  * webhook idempotency, plus in-memory implementations (tests, local dev).
  */
 
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import type { ChatMessage, MemoryRecord, ShareOffer } from '../types';
 
 export type NewMemory = Omit<MemoryRecord, 'id' | 'createdAt' | 'updatedAt'>;
 
+export interface MemoryWriteGuard { expectedRevision: number }
+
+export class StaleMemoryWriteError extends Error {
+  constructor() { super('Memory context was invalidated'); this.name = 'StaleMemoryWriteError'; }
+}
+
+/** Stable legacy fallback uses provenance metadata only, never content. */
+export function sourceEventIds(memory: Pick<MemoryRecord, 'source'>): string[] {
+  return memory.source.eventIds?.length ? memory.source.eventIds : [
+    createHash('sha256').update(JSON.stringify([memory.source.personId, memory.source.chatKind, memory.source.groupId ?? null, memory.source.telegramMessageId ?? null, memory.source.at.toISOString()])).digest('hex'),
+  ];
+}
+
+export function lineageEventIds(memory: Pick<MemoryRecord, 'source'>): string[] {
+  return [...new Set([...sourceEventIds(memory), ...(memory.source.derivedFromEventIds ?? [])])];
+}
+
+/** Conservative transitive purge of source-derived and supersession records. */
+export function forgetClosure(records: MemoryRecord[], id: string): MemoryRecord[] {
+  const target = records.find((r) => r.id === id);
+  if (!target) return [];
+  const selected = new Set([id]);
+  const events = new Set(sourceEventIds(target));
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const row of records) {
+      if (selected.has(row.id)) continue;
+      if (lineageEventIds(row).some((e) => events.has(e)) ||
+          (row.supersedes && selected.has(row.supersedes)) ||
+          (row.supersededBy && selected.has(row.supersededBy)) ||
+          records.some((other) => selected.has(other.id) && (other.supersedes === row.id || other.supersededBy === row.id))) {
+        selected.add(row.id);
+        sourceEventIds(row).forEach((e) => events.add(e));
+        changed = true;
+      }
+    }
+  }
+  return records.filter((r) => selected.has(r.id));
+}
+
 export interface MemoryStore {
-  add(memory: NewMemory): Promise<MemoryRecord>;
+  /** Increments on restriction, correction, supersession or deletion. */
+  safetyRevision(personaId: string): Promise<number>;
+  addIfEpoch(memory: NewMemory, expectedEpoch: number): Promise<MemoryRecord | null>;
+  updateIfShareVersion(id: string, expectedVersion: number, patch: Partial<Omit<MemoryRecord, 'id' | 'personaId'>>, guard?: MemoryWriteGuard): Promise<boolean>;
+  invalidate(personaId: string): Promise<void>;
+  add(memory: NewMemory, guard?: MemoryWriteGuard): Promise<MemoryRecord>;
   get(id: string): Promise<MemoryRecord | null>;
   /** All live (not superseded) memories for a persona */
   listActive(personaId: string): Promise<MemoryRecord[]>;
-  update(id: string, patch: Partial<Omit<MemoryRecord, 'id' | 'personaId'>>): Promise<void>;
+  update(id: string, patch: Partial<Omit<MemoryRecord, 'id' | 'personaId'>>, guard?: MemoryWriteGuard): Promise<void>;
   delete(id: string): Promise<void>;
 }
 
@@ -24,8 +70,14 @@ export interface ShareOfferStore {
 }
 
 export interface ChatHistoryStore {
-  append(personaId: string, chatKey: string, message: ChatMessage): Promise<void>;
+  /** Physical purge of all persona history; intentionally conservative. */
+  clear(personaId: string): Promise<void>;
+  bindMemoryStore?(memories: MemoryStore): void;
+  append(personaId: string, chatKey: string, message: ChatMessage, expectedEpoch?: number): Promise<void>;
+  getEpoch(personaId: string): Promise<number>;
   recent(personaId: string, chatKey: string, limit: number): Promise<ChatMessage[]>;
+  /** Purge retained source/derived turns after authorized forgetting or revocation. */
+  clearPersona(personaId: string): Promise<void>;
 }
 
 export interface UpdateDeduper {
@@ -38,9 +90,30 @@ export interface UpdateDeduper {
 // ============================================
 
 export class InMemoryMemoryStore implements MemoryStore {
-  readonly records = new Map<string, MemoryRecord>();
+  constructor(readonly epochs = new Map<string, number>()) {}
 
-  async add(memory: NewMemory): Promise<MemoryRecord> {
+  async addIfEpoch(memory: NewMemory, expectedEpoch: number): Promise<MemoryRecord | null> {
+    if ((this.epochs.get(memory.personaId) ?? 0) !== expectedEpoch) return null;
+    return InMemoryMemoryStore.prototype.add.call(this, memory);
+  }
+
+  readonly records = new Map<string, MemoryRecord>();
+  readonly revisions = new Map<string, number>();
+  readonly tombstones = new Map<string, Set<string>>();
+
+  async safetyRevision(personaId: string): Promise<number> { return this.revisions.get(personaId) ?? 0; }
+
+  async invalidate(personaId: string): Promise<void> {
+    this.revisions.set(personaId, (this.revisions.get(personaId) ?? 0) + 1);
+  }
+
+  private check(personaId: string, guard?: MemoryWriteGuard) {
+    if (guard && guard.expectedRevision !== (this.revisions.get(personaId) ?? 0)) throw new StaleMemoryWriteError();
+  }
+
+  async add(memory: NewMemory, guard?: MemoryWriteGuard): Promise<MemoryRecord> {
+    this.check(memory.personaId, guard);
+    if (lineageEventIds(memory).some((e) => this.tombstones.get(memory.personaId)?.has(e))) throw new StaleMemoryWriteError();
     const now = new Date();
     const record: MemoryRecord = { ...memory, id: randomUUID(), createdAt: now, updatedAt: now };
     this.records.set(record.id, record);
@@ -55,14 +128,34 @@ export class InMemoryMemoryStore implements MemoryStore {
     return [...this.records.values()].filter((m) => m.personaId === personaId && !m.supersededBy);
   }
 
-  async update(id: string, patch: Partial<Omit<MemoryRecord, 'id' | 'personaId'>>): Promise<void> {
+  async update(id: string, patch: Partial<Omit<MemoryRecord, 'id' | 'personaId'>>, guard?: MemoryWriteGuard): Promise<void> {
     const existing = this.records.get(id);
     if (!existing) return;
+    this.check(existing.personaId, guard);
+    this.revisions.set(existing.personaId, (this.revisions.get(existing.personaId) ?? 0) + 1);
     this.records.set(id, { ...existing, ...patch, updatedAt: new Date() });
   }
 
+  async updateIfShareVersion(id: string, expectedVersion: number, patch: Partial<Omit<MemoryRecord, 'id' | 'personaId'>>, guard?: MemoryWriteGuard): Promise<boolean> {
+    const memory = this.records.get(id);
+    if (!memory || (memory.shareVersion ?? 0) !== expectedVersion) return false;
+    this.check(memory.personaId, guard);
+    this.revisions.set(memory.personaId, (this.revisions.get(memory.personaId) ?? 0) + 1);
+    this.records.set(id, { ...memory, ...patch, updatedAt: new Date() });
+    return true;
+  }
+
   async delete(id: string): Promise<void> {
-    this.records.delete(id);
+    const target = this.records.get(id);
+    if (!target) return;
+    const rows = forgetClosure([...this.records.values()].filter((r) => r.personaId === target.personaId), id);
+    const tombstones = this.tombstones.get(target.personaId) ?? new Set<string>();
+    for (const row of rows) {
+      sourceEventIds(row).forEach((e) => tombstones.add(e));
+      this.records.delete(row.id);
+    }
+    this.tombstones.set(target.personaId, tombstones);
+    this.revisions.set(target.personaId, (this.revisions.get(target.personaId) ?? 0) + 1);
   }
 }
 
@@ -92,9 +185,30 @@ export class InMemoryShareOfferStore implements ShareOfferStore {
 }
 
 export class InMemoryChatHistoryStore implements ChatHistoryStore {
-  readonly chats = new Map<string, ChatMessage[]>();
+  constructor(readonly epochs = new Map<string, number>()) {}
 
-  async append(personaId: string, chatKey: string, message: ChatMessage): Promise<void> {
+  async getEpoch(personaId: string): Promise<number> { return this.epochs.get(personaId) ?? 0; }
+
+  async clearPersona(personaId: string): Promise<void> {
+    this.epochs.set(personaId, (this.epochs.get(personaId) ?? 0) + 1);
+    if (this.memories) await InMemoryMemoryStore.prototype.invalidate.call(this.memories, personaId);
+    for (const key of this.chats.keys()) if (key.startsWith(`${personaId}:`)) this.chats.delete(key);
+  }
+
+  readonly chats = new Map<string, ChatMessage[]>();
+  private memories?: InMemoryMemoryStore;
+
+  bindMemoryStore(memories: MemoryStore): void {
+    if (memories instanceof InMemoryMemoryStore) this.memories = memories;
+  }
+
+  async clear(personaId: string): Promise<void> { await this.clearPersona(personaId); }
+
+  async append(personaId: string, chatKey: string, message: ChatMessage, expectedEpoch?: number): Promise<void> {
+    const epoch = this.epochs.get(personaId) ?? 0;
+    if (expectedEpoch !== undefined && epoch !== expectedEpoch) return;
+    message = { ...message, privacyEpoch: epoch };
+    if (message.privacy && this.memories && message.privacy.memoryRevision !== (this.memories.revisions.get(personaId) ?? 0)) return;
     const key = `${personaId}:${chatKey}`;
     const list = this.chats.get(key) ?? [];
     list.push(message);
@@ -102,7 +216,7 @@ export class InMemoryChatHistoryStore implements ChatHistoryStore {
   }
 
   async recent(personaId: string, chatKey: string, limit: number): Promise<ChatMessage[]> {
-    return (this.chats.get(`${personaId}:${chatKey}`) ?? []).slice(-limit);
+    return (this.chats.get(`${personaId}:${chatKey}`) ?? []).filter((m) => (m.privacyEpoch ?? 0) === (this.epochs.get(personaId) ?? 0)).slice(-limit);
   }
 }
 
@@ -114,4 +228,18 @@ export class InMemoryUpdateDeduper implements UpdateDeduper {
     this.seen.add(key);
     return true;
   }
+}
+
+/** Shared revision state is mandatory for memory/history race fencing. */
+export function createInMemoryStores() {
+  const epochs = new Map<string, number>();
+  const memories = new InMemoryMemoryStore(epochs);
+  const history = new InMemoryChatHistoryStore(epochs);
+  history.bindMemoryStore(memories);
+  return {
+    memories,
+    history,
+    offers: new InMemoryShareOfferStore(),
+    deduper: new InMemoryUpdateDeduper(),
+  };
 }

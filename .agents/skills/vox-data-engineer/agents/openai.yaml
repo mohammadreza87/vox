@@ -1,0 +1,4 @@
+interface:
+  display_name: "Vox Observation data engineer"
+  short_description: "Wire approved Vox events and projections"
+  default_prompt: "Use $vox-data-engineer to complete the assigned Vox task within its stated ownership and acceptance criteria."

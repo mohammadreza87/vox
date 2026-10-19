@@ -105,7 +105,8 @@ describe('live calls', () => {
     const request = voice.stream.mock.calls[1][0];
     expect(request.system).toContain('## Live voice call');
     expect(request.system).not.toContain('## Live information');
-    expect(request.messages).toEqual(turns);
+    // Platform-supplied assistant history cannot reintroduce revoked context.
+    expect(request.messages).toEqual(turns.filter((turn) => turn.role === 'user'));
 
     const history = await h.memory.history.recent(agent.id, `private-${personId(ID.bob)}`, 5);
     expect(history.map((m) => [m.role, m.text])).toEqual([['user', 'How is the launch?'], ['assistant', 'Launch is on track.']]);

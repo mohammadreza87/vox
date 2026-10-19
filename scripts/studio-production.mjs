@@ -15,7 +15,7 @@ const envFile = join(base, 'production.env');
 const label = 'io.ludaxis.vox-studio';
 const domain = `gui/${process.getuid()}`;
 const plist = join(homedir(), 'Library', 'LaunchAgents', `${label}.plist`);
-const keys = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'ELEVENLABS_API_KEY', 'VOXX_BOT_TOKEN', 'VOXX_BOT_USERNAME', 'STUDIO_SECRET', 'STUDIO_SUPERADMIN_IDS', 'STUDIO_WEBAPP_URL', 'STUDIO_DATA_DIR', 'STUDIO_ORG_NAME', 'STUDIO_CHAT_MODEL', 'STUDIO_VOICE_MODEL', 'STUDIO_PERSONA_MODEL', 'STUDIO_DECISIONS', 'OPENAI_DECISION_MODEL'];
+const keys = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'ELEVENLABS_API_KEY', 'ELEVENLABS_TTS_MODEL', 'VOXX_BOT_TOKEN', 'VOXX_BOT_USERNAME', 'STUDIO_SECRET', 'STUDIO_SUPERADMIN_IDS', 'STUDIO_WEBAPP_URL', 'STUDIO_DATA_DIR', 'STUDIO_ORG_NAME', 'STUDIO_CHAT_MODEL', 'STUDIO_VOICE_MODEL', 'STUDIO_PERSONA_MODEL', 'STUDIO_DECISIONS', 'OPENAI_DECISION_MODEL', 'STUDIO_GROUP_OBSERVATION'];
 const readEnv = (file) => existsSync(file) ? parseEnv(readFileSync(file, 'utf8')) : {};
 const stamp = () => new Date().toISOString().replace(/[:.]/g, '-');
 function envLine(key, value) {
@@ -100,14 +100,19 @@ async function check() {
     const headers = { 'xi-api-key': env.ELEVENLABS_API_KEY };
     const response = await fetch('https://api.elevenlabs.io/v1/models', { headers, signal: AbortSignal.timeout(15_000) }).catch(() => null);
     if (!response?.ok) throw new Error(`ElevenLabs authentication failed${response ? ` (HTTP ${response.status})` : ''}. Check ELEVENLABS_API_KEY.`);
-    const ids = new Set(((await response.json().catch(() => null)) ?? []).map(m => m.model_id));
-    const tts = env.ELEVENLABS_TTS_MODEL || 'eleven_multilingual_v2';
-    if (!ids.has(tts)) throw new Error(`ElevenLabs model unavailable to this key: ${tts}`);
+    const models = (await response.json().catch(() => null)) ?? [];
+    const tts = env.ELEVENLABS_TTS_MODEL || 'eleven_v4';
+    const speechModel = models.find(m => m.model_id === tts && m.can_do_text_to_speech);
+    if (!speechModel) throw new Error(`ElevenLabs speech model unavailable to this key: ${tts}`);
+    if (!speechModel.languages?.some(language => language.language_id === 'fa')) {
+      console.log(`  ! ${tts} does not advertise Persian support. Set ELEVENLABS_TTS_MODEL=eleven_v4 for Persian agents.`);
+    }
     const user = await fetch('https://api.elevenlabs.io/v1/user/subscription', { headers, signal: AbortSignal.timeout(15_000) }).catch(() => null);
     const sub = user?.ok ? await user.json().catch(() => null) : null;
     if (sub && typeof sub.character_limit === 'number') {
       const left = sub.character_limit - (sub.character_count ?? 0);
       console.log(`✓ ElevenLabs: key valid, ${tts} available, ${left.toLocaleString('en-US')} characters left this period`);
+      if (sub.tier === 'free') console.log('  ! ElevenLabs free plans cannot use Voice Library voices through the API. Choose a default voice or upgrade.');
       if (left < 1000) console.log('  ! ElevenLabs is nearly out of characters: voice replies will fail soon.');
     } else console.log(`✓ ElevenLabs: key valid, ${tts} available (subscription details not readable with this key)`);
     // Live calls create and use an ElevenLabs agent: the key needs the Agents permission.

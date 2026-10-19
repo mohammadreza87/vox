@@ -22,6 +22,7 @@ function fakeFirestore() {
   function docRef(path: string) {
     return {
       id: path.split('/').pop()!,
+      path,
       async set(value: Record<string, unknown>) {
         assertNoUndefined(value);
         data.set(path, structuredClone(value));
@@ -48,6 +49,10 @@ function fakeFirestore() {
 
   function collectionRef(path: string, filters: Array<[string, unknown]> = [], order?: [string, 'asc' | 'desc'], max?: number) {
     return {
+      async listDocuments() {
+        const keys = new Set([...data.keys()].filter((key) => key.startsWith(`${path}/`)).map((key) => key.slice(0, path.length + 1) + key.slice(path.length + 1).split('/')[0]));
+        return [...keys].map(docRef);
+      },
       doc: (id?: string) => docRef(`${path}/${id ?? `auto${++auto}`}`),
       async add(value: Record<string, unknown>) {
         await docRef(`${path}/auto${++auto}`).set(value);
@@ -59,7 +64,7 @@ function fakeFirestore() {
         let docs = [...data.entries()]
           .filter(([key]) => key.startsWith(`${path}/`) && !key.slice(path.length + 1).includes('/'))
           .filter(([, value]) => filters.every(([f, v]) => value[f] === v))
-          .map(([key, value]) => ({ id: key.split('/').pop()!, data: () => value }));
+          .map(([key, value]) => ({ id: key.split('/').pop()!, ref: docRef(key), data: () => value }));
         if (order) {
           const [field, dir] = order;
           docs.sort((a, b) => {
@@ -74,7 +79,35 @@ function fakeFirestore() {
     };
   }
 
-  return { db: { collection: (name: string) => collectionRef(name) } as unknown as Firestore, data };
+  type Ref = ReturnType<typeof docRef>;
+  type Query = ReturnType<typeof collectionRef>;
+  let transactionQueue = Promise.resolve();
+  const db = {
+    collection: (name: string) => collectionRef(name),
+    async runTransaction<T>(operation: (tx: unknown) => Promise<T>): Promise<T> {
+      // Serialize synthetic commits and apply writes only after successful reads.
+      let release!: () => void;
+      const previous = transactionQueue;
+      transactionQueue = new Promise<void>((resolve) => { release = resolve; });
+      await previous;
+      const writes: Array<() => Promise<unknown>> = [];
+      try {
+        const result = await operation({
+          get: (ref: Ref | Query) => ref.get(),
+          set: (ref: Ref, value: Record<string, unknown>) => writes.push(() => ref.set(value)),
+          update: (ref: Ref, value: Record<string, unknown>) => writes.push(() => ref.update(value)),
+          delete: (ref: Ref) => writes.push(() => ref.delete()),
+        });
+        for (const write of writes) await write();
+        return result;
+      } finally { release(); }
+    },
+    batch() {
+      const writes: Array<() => Promise<unknown>> = [];
+      return { delete: (ref: Ref) => writes.push(() => ref.delete()), commit: async () => { for (const write of writes) await write(); } };
+    },
+  };
+  return { db: db as unknown as Firestore, data };
 }
 
 const baseMemory = {
@@ -101,6 +134,21 @@ describe('FirestoreMemoryStore', () => {
     const loaded = await store.get(saved.id);
     expect(loaded?.source.at).toBeInstanceOf(Date);
     expect(loaded?.content).toBe(baseMemory.content);
+  });
+
+  it('fences stale extraction and stale share approval across store instances', async () => {
+    const { db } = fakeFirestore();
+    const first = new FirestoreMemoryStore(db);
+    const second = new FirestoreMemoryStore(db);
+    const history = new FirestoreChatHistoryStore(db);
+    const epoch = await history.getEpoch('aria');
+    await history.clearPersona('aria');
+    expect(await first.addIfEpoch(baseMemory, epoch)).toBeNull();
+    const saved = await first.addIfEpoch(baseMemory, await history.getEpoch('aria'));
+    expect(saved).not.toBeNull();
+    expect(await first.updateIfShareVersion(saved!.id, 0, { shareVersion: 1, scope: { kind: 'private', personId: 'parastoo' } })).toBe(true);
+    expect(await second.updateIfShareVersion(saved!.id, 0, { shareVersion: 1, scope: { kind: 'org' } })).toBe(false);
+    expect((await second.get(saved!.id))?.scope.kind).toBe('private');
   });
 
   it('lists only active memories for the persona and tracks scope changes', async () => {
@@ -140,6 +188,19 @@ describe('FirestoreShareOfferStore', () => {
 });
 
 describe('FirestoreChatHistoryStore', () => {
+  it('clears all retained source and generated messages for one persona including legacy parents', async () => {
+    const { db } = fakeFirestore();
+    const store = new FirestoreChatHistoryStore(db);
+    const turn = { role: 'assistant' as const, text: 'derived secret', at: new Date() };
+    await store.append('aria', 'a', turn);
+    await store.append('aria', 'b', turn);
+    await store.append('other', 'a', turn);
+    await store.clearPersona('aria');
+    await store.append('aria', 'a', turn, 0);
+    expect(await store.recent('aria', 'a', 10)).toEqual([]);
+    expect(await store.recent('aria', 'b', 10)).toEqual([]);
+    expect(await store.recent('other', 'a', 10)).toHaveLength(1);
+  });
   it('returns the most recent messages in chronological order', async () => {
     const { db } = fakeFirestore();
     const store = new FirestoreChatHistoryStore(db);
@@ -159,5 +220,51 @@ describe('FirestoreUpdateDeduper', () => {
     expect(await deduper.firstSeen('aria__1')).toBe(true);
     expect(await deduper.firstSeen('aria__1')).toBe(false);
     expect(await deduper.firstSeen('aria__2')).toBe(true);
+  });
+});
+
+describe('Firestore synthetic transaction safety contract', () => {
+  it('durably rejects old source replay, while unrelated source memories survive', async () => {
+    const { db, data } = fakeFirestore();
+    const first = new FirestoreMemoryStore(db);
+    const source = { ...baseMemory, content: 'FORGOTTEN_CANARY', source: { ...baseMemory.source, eventIds: ['source-one'] } };
+    const record = await first.add(source);
+    await first.add({ ...baseMemory, source: { ...baseMemory.source, eventIds: ['source-two'] } });
+    const oldRevision = await first.safetyRevision('aria');
+    await first.delete(record.id);
+    const restarted = new FirestoreMemoryStore(db);
+    await expect(restarted.add(source)).rejects.toThrow('Memory context was invalidated');
+    await expect(restarted.add({ ...baseMemory, source: { ...baseMemory.source, eventIds: ['source-three'] } }, { expectedRevision: oldRevision })).rejects.toThrow('Memory context was invalidated');
+    expect((await restarted.listActive('aria')).map((r) => r.source.eventIds)).toEqual([['source-two']]);
+    expect(JSON.stringify([...data.values()])).not.toContain('FORGOTTEN_CANARY');
+    expect(data.get('tireh_memory_state/aria')?.tombstones).toContain('source-one');
+  });
+
+  it('blocks a stale stamped append after invalidation, and physically purges legacy orphan chats', async () => {
+    const { db, data } = fakeFirestore();
+    const memory = new FirestoreMemoryStore(db);
+    const history = new FirestoreChatHistoryStore(db);
+    const privacy = { policyKey: 'synthetic', memoryRevision: 0, sourceEventIds: ['one'], memoryIds: [] };
+    await memory.invalidate('aria');
+    await history.append('aria', 'private-reza', { role: 'user', text: 'STALE_CANARY', at: new Date(), privacy });
+    expect(await history.recent('aria', 'private-reza', 20)).toEqual([]);
+    data.set('tireh_chats/aria__orphan/messages/old', { role: 'user', text: 'LEGACY_CANARY', at: new Date() });
+    await history.append('aria', 'current', { role: 'user', text: 'CURRENT_CANARY', at: new Date() });
+    await history.append('other', 'current', { role: 'user', text: 'OTHER_PERSONA_SURVIVES', at: new Date() });
+    await history.clear('aria');
+    expect(JSON.stringify([...data.values()])).not.toContain('LEGACY_CANARY');
+    expect(JSON.stringify([...data.values()])).not.toContain('CURRENT_CANARY');
+    expect((await history.recent('other', 'current', 20))[0].text).toBe('OTHER_PERSONA_SURVIVES');
+  });
+
+  it('rejects derived-source replay after ancestor deletion', async () => {
+    const { db } = fakeFirestore();
+    const store = new FirestoreMemoryStore(db);
+    const parent = await store.add({ ...baseMemory, source: { ...baseMemory.source, eventIds: ['parent'] } });
+    const child = { ...baseMemory, content: 'child', source: { ...baseMemory.source, eventIds: ['child'], derivedFromEventIds: ['parent'] } };
+    await store.add(child);
+    await store.delete(parent.id);
+    expect(await store.listActive('aria')).toEqual([]);
+    await expect(store.add(child)).rejects.toThrow('Memory context was invalidated');
   });
 });

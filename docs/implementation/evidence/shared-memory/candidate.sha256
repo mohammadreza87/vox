@@ -1,0 +1,7 @@
+502c57cfe96676a52446bb3ece8ade1e0260f9175059b458d257bd917e94ba27  src/lib/adaptive/shared/contracts.ts
+4e697d2cd55fe5c6a69085947394865b387caf78d33278a20155256030ac3e36  src/lib/adaptive/shared/http.ts
+1f0d1c251fce410f586b36246ce6ee9797ffc96c3459bfff416daba78d9ae90d  src/lib/adaptive/shared/repository.ts
+e86d2ca008be326ad5ea13397e3f2471b2cb690bdedebd16ef6a484b6b047276  src/lib/adaptive/shared/service.ts
+c6cfe525a8b9c8e836f5e2d6cb4d1f302187774bfe87153dedbac9f16a78cb1b  src/lib/adaptive/__tests__/shared-memory.test.ts
+60a67fbf98365d48c314fc015db38323aeadf1b928b70a76b09deae5e7ea2875  src/lib/adaptive/__tests__/shared-http.test.ts
+0908d6340021a9f17effe34e6f94fb7190af42855619fd135386c0f7e157d8c1  src/app/api/studio/shared/[[...path]]/route.ts

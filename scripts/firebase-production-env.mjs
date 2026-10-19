@@ -48,8 +48,25 @@ export function firebaseProductionEnv(env) {
   const publicUrl = productionOrigin(env.STUDIO_PUBLIC_URL || DEFAULT_PUBLIC_URL);
   const mediaBucket = env.STUDIO_MEDIA_BUCKET || config.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET;
   if (!/^[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$/.test(mediaBucket)) throw new Error('Invalid STUDIO_MEDIA_BUCKET.');
+  const relationshipMode = env.STUDIO_RELATIONSHIPS || 'off';
+  if (!['off', 'shadow', 'live'].includes(relationshipMode)) throw new Error('STUDIO_RELATIONSHIPS must be off, shadow or live.');
+  const relationship = { STUDIO_RELATIONSHIPS: relationshipMode };
+  if (relationshipMode !== 'off') {
+    for (const key of ['STUDIO_RELATIONSHIP_AGENTS', 'STUDIO_RELATIONSHIP_WORKER_SECRET']) relationship[key] = required(env, key);
+    relationship.STUDIO_RELATIONSHIP_PEOPLE = env.STUDIO_RELATIONSHIP_PEOPLE || '';
+    relationship.STUDIO_RELATIONSHIP_ROLES = env.STUDIO_RELATIONSHIP_ROLES || '';
+    const roles = relationship.STUDIO_RELATIONSHIP_ROLES.split(/[,\s]+/).filter(Boolean);
+    if (roles.some(role => !['owner', 'superadmin'].includes(role))) throw new Error('STUDIO_RELATIONSHIP_ROLES permits only owner and superadmin.');
+    const people = relationship.STUDIO_RELATIONSHIP_PEOPLE.split(/[,\s]+/).filter(Boolean);
+    if ((!people.length && !roles.length) || people.some(id => !/^[1-9]\d*$/.test(id) || !Number.isSafeInteger(Number(id)))) throw new Error('STUDIO_RELATIONSHIP_PEOPLE must contain positive Telegram IDs.');
+    const agents = relationship.STUDIO_RELATIONSHIP_AGENTS.split(/[,\s]+/).filter(Boolean);
+    if (!agents.length) throw new Error('STUDIO_RELATIONSHIP_AGENTS cannot be empty.');
+    if (agents.includes('*') && (!roles.length || agents.length !== 1)) throw new Error('Wildcard agents require privileged relationship roles and no other agent IDs.');
+    if (relationship.STUDIO_RELATIONSHIP_WORKER_SECRET.length < 32) throw new Error('STUDIO_RELATIONSHIP_WORKER_SECRET must contain at least 32 characters.');
+  }
   return {
     ...config,
+    ...relationship,
     STUDIO_STORAGE: 'firestore',
     STUDIO_ONLY: '1',
     STUDIO_BOTS: '0',

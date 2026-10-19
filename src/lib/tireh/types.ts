@@ -48,15 +48,20 @@ export interface Project {
 
 /** A Telegram group registered with TIREH. Unregistered groups are refused. */
 export interface Group {
+  audienceEpoch?: number;
   id: string;                 // internal id, e.g. "gameend-team"
   name: string;
   telegramChatId: number;
   memberIds: string[];        // everyone who can read the group
-  projectId?: string;         // decisions here become project memory
+  projectId?: string;         // related project; sharing still requires explicit approval
   companyId?: string;
   /** People outside the organization can read this group: only its own memories are usable */
   hasGuests?: boolean;
+  /** Only these invited agents may observe this group (legacy config may omit). */
+  agentIds?: string[];
 }
+
+export type GroupParticipation = 'mentions' | 'balanced' | 'active';
 
 export interface PersonaVoice {
   elevenLabsVoiceId: string;
@@ -73,6 +78,10 @@ export interface Persona {
   voice: PersonaVoice;
   ownerId: string;            // accountable human (reporting parent)
   telegramUsername?: string;  // bot username without "@"
+  telegramId?: number;
+  groupParticipation?: GroupParticipation;
+  groupRemember?: boolean;
+  groupObservation?: boolean;
   identityVersion: number;    // bump only via an approved, versioned change
   replyWithVoice: 'never' | 'mirror' | 'always';
   /** How this persona treats people outside the organization (public personas) */
@@ -105,6 +114,7 @@ export interface OrgConfig {
  */
 export type MemoryScope =
   | { kind: 'private'; personId: string }
+  | { kind: 'people'; personIds: string[] }
   | { kind: 'group'; groupId: string }
   | { kind: 'project'; projectId: string }
   | { kind: 'company'; companyId: string }
@@ -116,6 +126,10 @@ export type MemoryType = 'fact' | 'decision' | 'preference' | 'event' | 'relatio
 export type MemorySensitivity = 'normal' | 'personal' | 'confidential';
 
 export interface MemorySource {
+  /** Opaque source event lineage; never source text. */
+  eventIds?: string[];
+  /** Context dependencies, distinct from this record's own source events. */
+  derivedFromEventIds?: string[];
   personId: string;           // who said it
   chatKind: 'private' | 'group';
   groupId?: string;
@@ -126,9 +140,14 @@ export interface MemorySource {
 export interface MemoryRecord {
   id: string;
   personaId: string;
+  /** Historical recipients fixed at explicit authorization; absence denotes legacy data. */
+  authorizedPersonIds?: string[];
   content: string;
   type: MemoryType;
   scope: MemoryScope;
+  /** Audience at creation/explicit sharing. Membership changes never widen it. */
+  /** Changes on every explicit sharing mutation, invalidating old offers. */
+  shareVersion?: number;
   sensitivity: MemorySensitivity;
   source: MemorySource;
   aboutPersonIds: string[];   // whom the memory is about
@@ -147,6 +166,9 @@ export interface ShareOffer {
   memoryId: string;
   ownerPersonId: string;      // only this person may approve
   proposedScope: MemoryScope;
+  /** Exact audience previewed when the offer was created. */
+  proposedAudiencePersonIds?: string[];
+  memoryShareVersion?: number;
   status: 'pending' | 'approved' | 'declined';
   createdAt: Date;
 }
@@ -156,11 +178,21 @@ export interface ShareOffer {
 // ============================================
 
 export interface ChatMessage {
+  /** Server-created boundary stamp. Unstamped legacy rows are never replayed. */
+  privacy?: { policyKey: string; memoryRevision: number; sourceEventIds: string[]; memoryIds: string[] };
   role: 'user' | 'assistant';
   personId?: string;          // set for user messages
   text: string;
   at: Date;
   telegramMessageId?: number;
+  /** Group context collected under the group-only memory policy. */
+  groupPolicyVersion?: 1;
+  /** Delivered follow-up correlation; never model authority. */
+  relationshipIntentionId?: string;
+  audiencePersonIds?: string[];
+  privacyEpoch?: number;
+  /** Addressing result captured with Telegram entity/reply metadata intact. */
+  groupOtherTarget?: boolean;
 }
 
 /** Where a conversation happens and who can read it */

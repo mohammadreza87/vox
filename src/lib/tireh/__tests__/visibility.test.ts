@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { audienceOf, canPersonSee, isVisibleToAudience, parseScopeKey, scopeKey } from '../memory/visibility';
+import { audienceOf, canPersonSee, isVisibleInChat, isVisibleToAudience, parseScopeKey, scopeKey } from '../memory/visibility';
 import { memory, testOrg, testOrgConfig } from './fixtures';
 import { OrgDirectory } from '../org/directory';
 import { buildSystemPrompt } from '../conversation/prompt';
@@ -76,6 +76,12 @@ describe('isVisibleToAudience', () => {
   it('an empty audience sees nothing', () => {
     expect(isVisibleToAudience(org, memory({ content: 'x', scope: { kind: 'org' } }), [])).toBe(false);
   });
+
+  it('a one-member group is still not a private conversation for personal memories', () => {
+    const personal = memory({ content: 'Private family detail', sensitivity: 'personal', scope: { kind: 'private', personId: 'reza' } });
+    expect(isVisibleInChat(org, personal, dm)).toBe(true);
+    expect(isVisibleInChat(org, personal, { ...group, group: { ...gameendGroup, memberIds: ['reza'] } })).toBe(false);
+  });
 });
 
 describe('scope keys', () => {
@@ -126,5 +132,81 @@ describe('guests (people outside the organization)', () => {
     const memberPrompt = buildSystemPrompt({ org: withGuest, persona, chat: { kind: 'private', personId: 'reza', chatKey: 'p:reza' } as ChatContext, speakerId: 'reza', memories: [] });
     expect(memberPrompt).toContain('## Organization');
     expect(memberPrompt).not.toContain('- Sam');
+  });
+});
+
+describe('group prompt boundaries', () => {
+  it.each([false, true])('uses participant names without directory or profile context (hasGuests=%s)', (hasGuests) => {
+    const config = testOrgConfig();
+    config.people.find((p) => p.id === 'milad')!.notes = 'PRIVATE_PROFILE_CANARY';
+    config.people.find((p) => p.id === 'sina')!.name = 'HIDDEN_DIRECTORY_CANARY';
+    config.projects[0].name = 'PROJECT_DIRECTORY_CANARY';
+    const room = { id: 'room', name: 'Room', telegramChatId: -7003, memberIds: ['milad'], projectId: 'gameend', hasGuests };
+    config.groups.push(room);
+    const directory = new OrgDirectory(config);
+    const prompt = buildSystemPrompt({
+      org: directory, persona: directory.getPersona('aria')!,
+      chat: { kind: 'group', chatKey: 'group-room', group: room }, speakerId: 'milad',
+      memories: [
+        memory({ content: 'DM_CANARY', scope: { kind: 'private', personId: 'milad' } }),
+        memory({ content: 'OTHER_GROUP_CANARY', scope: { kind: 'group', groupId: 'gameend-team' } }),
+        memory({ content: 'LOCAL_GROUP_FACT', authorizedPersonIds: [...room.memberIds], scope: { kind: 'group', groupId: room.id } }),
+      ],
+    });
+    expect(prompt).toContain('- Milad');
+    if (hasGuests) expect(prompt).not.toContain('LOCAL_GROUP_FACT');
+    else expect(prompt).toContain('LOCAL_GROUP_FACT');
+    for (const hidden of [
+      '## Organization', 'How people relate', 'You report to', 'reports to', 'Team member',
+      'Reza', 'Parastoo', 'PRIVATE_PROFILE_CANARY', 'HIDDEN_DIRECTORY_CANARY', 'PROJECT_DIRECTORY_CANARY',
+      'DM_CANARY', 'OTHER_GROUP_CANARY',
+    ]) expect(prompt).not.toContain(hidden);
+    if (hasGuests) expect(prompt).toContain('## People outside HOOR');
+  });
+});
+
+describe('voice capability and delivery prompts', () => {
+  const chats: Array<[string, ChatContext]> = [
+    ['private', { kind: 'private', chatKey: 'private-reza', personId: 'reza' }],
+    ['group', { kind: 'group', chatKey: 'group-gameend-team', group: gameendGroup }],
+  ];
+
+  it.each(chats)('makes enabled voice capability explicit in a %s chat without claiming completed delivery', (_kind, chat) => {
+    const prompt = buildSystemPrompt({ org, persona: org.getPersona('aria')!, chat, speakerId: 'reza', memories: [], canSpeak: true, replyFormat: 'voice' });
+
+    expect(prompt).toContain('supports sending your replies as voice messages in both private and group chats, including this chat');
+    expect(prompt).toContain('the app synthesizes and delivers audio afterwards');
+    expect(prompt).toContain('A voice reply is requested for this turn');
+    expect(prompt).toContain('natural spoken sentences without stage directions or audio tags');
+    expect(prompt).toContain('Never claim that a recording, attachment or voice message has already been sent');
+    expect(prompt).toContain('or describe a text response as audio');
+    expect(prompt).not.toContain('Speech output is unavailable');
+  });
+
+  it.each(chats)('honors text delivery in a %s chat without turning it into a permanent voice refusal', (_kind, chat) => {
+    const prompt = buildSystemPrompt({ org, persona: org.getPersona('aria')!, chat, speakerId: 'reza', memories: [], canSpeak: true, replyFormat: 'text' });
+
+    expect(prompt).toContain('Honor an explicit request for text');
+    expect(prompt).toContain('For this turn, reply in text only; this does not disable voice for other turns');
+    expect(prompt).toContain('current capability instructions take precedence over earlier assistant claims that voice is unavailable');
+    expect(prompt).toContain('Do not infer that you cannot send voice or process incoming voice from a text reply format or an earlier assistant claim');
+    expect(prompt).not.toContain('A voice reply is requested for this turn');
+    expect(prompt).not.toContain('Speech output is unavailable');
+  });
+
+  it('does not make voice capability depend on selecting a voice format for this turn', () => {
+    const prompt = buildSystemPrompt({ org, persona: org.getPersona('aria')!, chat: chats[1][1], speakerId: 'reza', memories: [], canSpeak: true });
+    expect(prompt).toContain('## Your voice');
+    expect(prompt).toContain('A turn\'s outgoing format is not a global capability limit');
+    expect(prompt).toContain('Do not repeat those stale claims');
+    expect(prompt).not.toContain('A voice reply is requested for this turn');
+  });
+
+  it.each(['text', 'voice'] as const)('does not promise voice when speech output is unavailable (requested %s)', (replyFormat) => {
+    const prompt = buildSystemPrompt({ org, persona: org.getPersona('aria')!, chat: chats[1][1], speakerId: 'reza', memories: [], canSpeak: false, replyFormat });
+    expect(prompt).toContain('Speech output is unavailable for this turn. Your reply will be text');
+    expect(prompt).toContain('Do not claim to send audio, a recording or a voice message');
+    expect(prompt).not.toContain('## Your voice');
+    expect(prompt).not.toContain('A voice reply is requested for this turn');
   });
 });
