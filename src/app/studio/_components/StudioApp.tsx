@@ -5,6 +5,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState } f
 import { api, ApiError, haptic, initTelegram, tg, type Me } from '../_lib/client';
 import { Cloud } from './Cloud';
 import { Icon, Spinner } from './ui';
+import { UserInfo } from './UserInfo';
 import { HomeScreen } from './screens/Home';
 import { AgentScreen } from './screens/Agent';
 import { SpawnScreen } from './screens/Spawn';
@@ -103,6 +104,7 @@ export function StudioApp() {
         <div className="vx-title-m">Can&apos;t reach Vox Studio</div>
         <p className="vx-2" style={{ margin: 0 }}>{error}</p>
         <button className="vx-btn vx-btn-secondary vx-btn-sm" onClick={() => void loadMe()}>Try again</button>
+        <div style={{ width: '100%', maxWidth: 360, marginTop: 8 }}><UserInfo /></div>
       </div>
     );
   }
@@ -121,6 +123,8 @@ export function StudioApp() {
         <p className="vx-2" style={{ margin: 0, maxWidth: 300 }}>
           You&apos;re on the list for {me.org}. An admin will approve you, then your agents appear here.
         </p>
+        <div style={{ width: '100%', maxWidth: 360, marginTop: 4 }}><UserInfo member={me.member} /></div>
+        <p className="vx-small vx-3" style={{ margin: 0, maxWidth: 300 }}>Share your User ID with an admin if they can’t find you.</p>
         <button className="vx-btn vx-btn-secondary vx-btn-sm" onClick={() => void loadMe()}>Check again</button>
       </div>
     );

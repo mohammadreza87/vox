@@ -5,7 +5,8 @@ import { useEffect, useState } from 'react';
 import { api, type AgentView } from '../../_lib/client';
 import { AgentFace, Cloud, PALETTE, stageFor } from '../Cloud';
 import { errorMessage, useNav } from '../StudioApp';
-import { Empty, Icon } from '../ui';
+import { Empty, Icon, Sheet } from '../ui';
+import { UserInfo } from '../UserInfo';
 
 const FILTERS = ['All', 'Mine', 'Forming', 'Drafts', 'Retired'] as const;
 type Filter = (typeof FILTERS)[number];
@@ -40,6 +41,7 @@ export function HomeScreen() {
   const nav = useNav();
   const [agents, setAgents] = useState<AgentView[] | null>(null);
   const [filter, setFilter] = useState<Filter>('All');
+  const [accountOpen, setAccountOpen] = useState(false);
 
   useEffect(() => {
     api.agents().then((r) => setAgents(r.agents)).catch((e) => nav.toast(errorMessage(e), 'error'));
@@ -66,7 +68,10 @@ export function HomeScreen() {
             <Cloud look={{ hue: 'butter', family: 'drift', features: { cheeks: true, lashes: false, brows: false } }} size={32} label="Vox" />
             <span style={{ fontFamily: 'var(--font-unbounded)', fontWeight: 600, fontSize: 18, letterSpacing: '-0.02em' }}>Vox Studio</span>
           </div>
-          <span className="vx-pill volt" style={{ textTransform: 'capitalize' }}>{nav.me.member.role}</span>
+          <button className="vx-pill volt" onClick={() => setAccountOpen(true)} aria-label="Your account"
+            style={{ textTransform: 'capitalize', border: 'none', cursor: 'pointer', height: 28, padding: '0 10px' }}>
+            <Icon name="user" size={13} width={2.25} />{nav.me.member.role}
+          </button>
         </div>
         <div style={{ marginTop: 16, display: 'flex', flexDirection: 'column', gap: 6 }}>
           <span className="vx-over">{nav.me.org} · {active.length} agent{active.length === 1 ? '' : 's'}{forming ? ` · ${forming} forming` : ''}</span>
@@ -117,6 +122,15 @@ export function HomeScreen() {
         style={{ position: 'absolute', right: 16, bottom: 'calc(92px + env(safe-area-inset-bottom))', height: 56, paddingLeft: 16, boxShadow: '0 12px 32px rgba(214,255,92,.22)', zIndex: 7 }}>
         <Icon name="plus" width={2} />Spawn
       </motion.button>
+      <Sheet open={accountOpen} onClose={() => setAccountOpen(false)} label="Your account">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div>
+            <div className="vx-title-m">You</div>
+            <div className="vx-small vx-2" style={{ textTransform: 'capitalize' }}>{nav.me.member.role} · {nav.me.org}</div>
+          </div>
+          <UserInfo member={nav.me.member} />
+        </div>
+      </Sheet>
     </>
   );
 }

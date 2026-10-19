@@ -11,6 +11,7 @@ export type { AgentView, AgentLook, Member, PersonaSpec, Role, SpawnBrief };
 
 interface TelegramWebApp {
   initData: string;
+  initDataUnsafe?: { user?: TelegramUserInfo };
   ready(): void;
   expand(): void;
   colorScheme?: 'light' | 'dark';
@@ -25,6 +26,13 @@ interface TelegramWebApp {
     notificationOccurred(type: 'error' | 'success' | 'warning'): void;
     selectionChanged(): void;
   };
+}
+
+export interface TelegramUserInfo { id: number; first_name: string; last_name?: string; username?: string }
+
+/** The signed-in Telegram user as the client sees it (available even if the server is down). */
+export function telegramUser(): TelegramUserInfo | null {
+  return tg()?.initDataUnsafe?.user ?? null;
 }
 
 export function tg(): TelegramWebApp | null {

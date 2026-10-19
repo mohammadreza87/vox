@@ -26,7 +26,14 @@ export async function handleManagerUpdate(studio: Studio, update: TelegramUpdate
   const text = member.role === 'pending'
     ? `Hi ${member.name}. You're on the list for ${studio.deps.orgName}; an admin will approve you shortly.`
     : `Hi ${member.name}. Spawn, call and manage your ${studio.deps.orgName} agents in Vox Studio.`;
-  await manager.sendMessage(msg.chat.id, text, open ? { keyboard: open } : {});
+  const who = msg.from;
+  const account = [
+    `Username: ${who.username ? `@${who.username}` : '—'}`,
+    `First name: ${who.first_name || '—'}`,
+    `Last name: ${who.last_name || '—'}`,
+    `User ID: ${who.id}`,
+  ].join('\n');
+  await manager.sendMessage(msg.chat.id, `${text}\n\n${account}`, open ? { keyboard: open } : {});
 }
 
 export async function handleAgentUpdate(studio: Studio, agentId: string, update: TelegramUpdate): Promise<void> {
