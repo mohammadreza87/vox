@@ -6,6 +6,7 @@ import { AdaptiveRepository, accountIdFor } from './repository';
 import { AdaptiveService } from './service';
 import { SqliteAdaptiveStorage } from './indexed/sqlite-storage';
 import { FileAdaptiveStorage } from './storage';
+import { ManagedFileV2Storage } from './indexed/managed-storage';
 import type { RuntimeControlEvaluation, RuntimeControlStamp } from './authority';
 
 const paths: string[] = [], stores: SqliteAdaptiveStorage[] = [];
@@ -138,4 +139,22 @@ it('FILE fallback suppresses a result if durability crosses the external deadlin
     expect(Object.isFrozen(controls)).toBe(true); expect(controls).not.toHaveProperty('memories');
     return { value: 'MUST_NOT_ESCAPE', deadline: 2000 };
   })).rejects.toMatchObject({ code: 'adaptive_controls_unavailable' });
+});
+
+
+it.each(['sync', 'async'] as const)('managed FILE %s persists a post-publication expiry before rejecting the result', async mode => {
+  const path = mkdtempSync(join(tmpdir(), 'vox-managed-service-clock-')); paths.push(path);
+  let now = 1000;
+  const storage = new ManagedFileV2Storage(path, { now: () => now, newStoreSeed: { generation: 1, lifecycleWatermark: 1000 } });
+  try {
+    const repository = new AdaptiveRepository(storage); await repository.transaction(accountIdFor(123), () => now, () => {});
+    const adaptive = new AdaptiveService(repository, { now: () => now });
+    const observe = storage.observeLifecycleTime.bind(storage); let crossed = false;
+    vi.spyOn(storage, 'observeLifecycleTime').mockImplementation(at => { observe(at); if (!crossed) { crossed = true; now = 2001; } });
+    const evaluate = () => ({ value: 'MUST_NOT_ESCAPE', deadline: 2000 });
+    if (mode === 'sync') expect(adaptive.readRuntimeControlsForEffect(123, 'work', evaluate).status).toBe('busy');
+    else await expect(adaptive.withRuntimeControls(123, 'work', evaluate)).rejects.toThrow();
+    expect(storage.readMetadata().lifecycleWatermark).toBeGreaterThanOrEqual(2001);
+    now = 1500; expect(adaptive.readRuntimeControlsForEffect(123, 'work', evaluate).status).toBe('busy');
+  } finally { storage.close(); }
 });

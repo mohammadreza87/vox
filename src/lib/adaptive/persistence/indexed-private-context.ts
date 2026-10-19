@@ -4,12 +4,14 @@ import type { IndexedControlStamp, IndexedScope, RuntimeAuthorityReceipt } from 
 
 export interface PrivateContextSnapshot {
   revision: string;
+  /** Fresh synchronous export deadline, never a grant by itself. */
+  validUntil?: number;
   memories: { id: string; text: string; sourceIds?: string[] }[];
   /** Indexed candidate/body limits are independent of the final prompt budget. */
   completion?: 'complete' | 'partial';
 }
 interface ControlState {
-  allowed: boolean; revision: string; scope: IndexedScope; stamp: Readonly<IndexedControlStamp>;
+  allowed: boolean; revision: string; validUntil: number; scope: IndexedScope; stamp: Readonly<IndexedControlStamp>;
 }
 const unavailable = (): never => { throw new Error('Indexed private context unavailable'); };
 const sameCatalog = (a: IndexedControlStamp, b: IndexedControlStamp) =>
@@ -37,19 +39,19 @@ export function readIndexedPrivateContext(adaptive: AdaptiveService, telegramId:
       const revision = digest(['indexed-private-context-v1', namespace, stamp, scope,
         adaptive.coreFingerprint(d, now), adaptive.purposeFingerprint(d, space, 'optional.personalization', now, agentId),
         allowed, receipt?.deadline ?? null]);
-      return { value: { allowed, revision, scope, stamp }, denied: !allowed,
-        ...(allowed ? { deadline: Math.min(d.binding!.expiresAt, permission.expiresAt, core.validUntil ?? Number.MAX_SAFE_INTEGER,
-          personalization.validUntil ?? Number.MAX_SAFE_INTEGER, receipt?.deadline ?? Number.MAX_SAFE_INTEGER) } : {}) };
+      const validUntil = allowed ? Math.min(d.binding!.expiresAt, permission.expiresAt, core.validUntil ?? Number.MAX_SAFE_INTEGER,
+        personalization.validUntil ?? Number.MAX_SAFE_INTEGER, receipt?.deadline ?? Number.MAX_SAFE_INTEGER) : Number.MAX_SAFE_INTEGER;
+      return { value: { allowed, revision, validUntil, scope, stamp }, denied: !allowed, ...(allowed ? { deadline: validUntil } : {}) };
     });
     if (result.status !== 'ready') return unavailable();
     return result.value;
   };
   const initial = controls();
-  if (!initial.allowed) return { revision: initial.revision, memories: [], completion: 'complete' };
+  if (!initial.allowed) return { revision: initial.revision, validUntil: initial.validUntil, memories: [], completion: 'complete' };
   const authority = indexed.readRuntimeAuthority(initial.scope);
   if (authority.status !== 'ready' || !sameCatalog(initial.stamp, authority.receipt)) return unavailable();
   const receipt = authority.receipt, before = controls(receipt);
-  if (authorityOnly) return { revision: before.revision, memories: [], completion: 'complete' };
+  if (authorityOnly) return { revision: before.revision, validUntil: before.validUntil, memories: [], completion: 'complete' };
   const candidates = indexed.queryCandidateIds(initial.scope, query, receipt);
   if (candidates.status !== 'ready') return unavailable();
   // A query's native I/O may cross an external-policy boundary. Check it before
@@ -57,7 +59,7 @@ export function readIndexedPrivateContext(adaptive: AdaptiveService, telegramId:
   if (controls(receipt).revision !== before.revision) return unavailable();
   const loaded = indexed.loadCandidateBodies(receipt, candidates.handles);
   if (loaded.status !== 'ready' || controls(receipt).revision !== before.revision) return unavailable();
-  return { revision: before.revision,
+  return { revision: before.revision, validUntil: before.validUntil,
     memories: loaded.bodies.map(({ handle, text, sourceIds }) => ({ id: handle.id, text, ...(sourceIds ? { sourceIds } : {}) })),
     completion: candidates.completion === 'partial' || loaded.completion === 'partial' ? 'partial' : 'complete' };
 }

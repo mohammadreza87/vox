@@ -14,6 +14,8 @@ export interface AdaptiveStorage {
   readonly identity?: Readonly<{ incarnation: string; generation: number }>;
   /** Optional server-only read model. Presence never selects or migrates a store. */
   readonly indexed?: IndexedAdaptiveQueries;
+  /** Managed FILE lifecycle observation, outside writers; durable monotonic metadata only. */
+  observeLifecycleTime?(observedAt: number): void;
   /** Callback must be synchronous and retry safe. A throw commits nothing. */
   transact<T>(accountId: string, mutate: (current: unknown | null) => { document: unknown; result: T }, beforeCommit?: () => void): Promise<T>;
   readonly supportsCommittedWriteFence?: true;

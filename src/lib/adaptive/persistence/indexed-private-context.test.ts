@@ -140,3 +140,37 @@ it('invalidates identical imported data under a fresh store namespace', async ()
   finally { Object.defineProperty(f.adaptive.repository, 'storage', { value: original, configurable: true }); }
   expect(storage.io.canonicalImageReads).toBe(0); expect(storage.io.bodyRowsRead).toBe(0);
 });
+
+
+it('pairs synchronous final authority with acquisition and carries the earliest full-catalog deadline', async () => {
+  const f = await fixture();
+  const context = await f.adaptive.readPrivateContext(123, 'work', 'agent', 'comet');
+  const authority = await f.adaptive.readAuthority(123, 'work');
+  const privacy = await f.adaptive.runtimePrivacy.read('agent', 'tg-123', 'work');
+  f.reset();
+  expect(f.adaptive.readPrivateContextAuthorityNow(123, 'work', 'agent')).toEqual({ revision: context.revision, validUntil: NOW + 60_000 });
+  const { validUntil, ...snapshot } = f.adaptive.readAuthorityNow(123, 'work');
+  expect(snapshot).toEqual(authority); expect(validUntil).toBe(NOW + 80_000);
+  expect(f.adaptive.runtimePrivacy.readNow('agent', 'tg-123', 'work')).toMatchObject(privacy);
+  expect(f.storage.io.bodyRowsRead).toBe(0); expect(f.storage.io.canonicalImageReads).toBe(0);
+  await f.write(d => { d.memories[299].revision++; d.memories[299].text = 'CORRECTED_UNSELECTED'; });
+  expect(f.adaptive.readPrivateContextAuthorityNow(123, 'work', 'agent').revision).not.toBe(context.revision);
+});
+
+it('synchronous authority rejects a native writer and preserves a crossed permission deadline', async () => {
+  const f = await fixture();
+  await f.storage.transact(ACCOUNT, raw => {
+    expect(() => f.adaptive.readAuthorityNow(123, 'work')).toThrow();
+    expect(() => f.adaptive.readPrivateContextAuthorityNow(123, 'work', 'agent')).toThrow();
+    return { document: raw, result: undefined };
+  });
+  const exec = f.storage.database.exec.bind(f.storage.database); let crossed = false;
+  vi.spyOn(f.storage.database, 'exec').mockImplementation(sql => {
+    const result = exec(sql);
+    if (sql === 'COMMIT' && !crossed) { crossed = true; f.setNow(NOW + 80_001); }
+    return result;
+  });
+  expect(() => f.adaptive.readAuthorityNow(123, 'work')).toThrow('adaptive_controls_unavailable');
+  expect(f.adaptive.readAuthorityNow(123, 'work').purposes.find(p => p.purpose === 'optional.personalization')?.state).toBe('expired');
+  expect(f.storage.readMetadata().lifecycleWatermark).toBeGreaterThanOrEqual(NOW + 80_001);
+});

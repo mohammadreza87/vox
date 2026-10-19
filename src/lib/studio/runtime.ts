@@ -34,7 +34,6 @@ import { createStudioPreferenceLearning } from './preference-learning';
 
 import { isAbsolute, join, parse, relative, resolve, sep } from 'path';
 import { AnthropicLLM, type LLM } from '../tireh/llm';
-import { createHash } from 'crypto';
 import { createFileStores } from '../tireh/memory/file-store';
 import { FirestoreChatHistoryStore, FirestoreMemoryStore, FirestoreShareOfferStore, FirestoreUpdateDeduper } from '../tireh/memory/firestore-store';
 import { TelegramBotClient } from '../tireh/telegram/client';
@@ -61,7 +60,7 @@ import { DecisionService, OpenAIDecisionProvider } from '../adaptive/decisions';
 import { VoiceIdentityService } from '../adaptive/voice-identity/service';
 import { VoiceIdentityRepository } from '../adaptive/voice-identity/repository';
 import { canUseAgent } from './permissions';
-import { groupId } from './org-bridge';
+import { sharedAuthorityFromStudioStore } from './shared-authority';
 import { z } from 'zod';
 import { ImprovementWorkflow } from '../adaptive/improvement/workflow';
 import { validateTrust, type TrustStore } from '../adaptive/improvement/contracts';
@@ -296,22 +295,7 @@ async function create(): Promise<Studio> {
       await studio.deps.relationships!.invalidate(key, { sourceIds, reason });
     }
   });
-  studio.deps.shared = new SharedMemoryService(new SharedMemoryRepository(storage.sharedStorage), storage.adaptive!, {
-    member: async telegramId => {
-      const state = await storage.store.read();
-      const member = state.members.find(m => m.telegramId === telegramId);
-      return { active: !!member && member.role !== 'pending', agentIds: member ? state.agents.filter(a => a.status === 'active' && canUseAgent(member, a)).map(a => a.id) : [] };
-    },
-    agent: async id => ({ active: (await storage.store.read()).agents.some(a => a.id === id && a.status === 'active') }),
-    group: async id => {
-      const state = await storage.store.read();
-      const group = state.groups.find(g => groupId(g.chatId) === id);
-      if (!group) return null;
-      const memberTelegramIds = [...group.memberIds].sort((a, b) => a - b);
-      const hasGuests = group.hasGuests || memberTelegramIds.some(id => !state.members.some(m => m.telegramId === id && m.role !== 'pending'));
-      return { memberTelegramIds, hasGuests, revision: createHash('sha256').update(JSON.stringify([id, memberTelegramIds, hasGuests, group.audienceEpoch ?? 0])).digest('hex') };
-    },
-  });
+  studio.deps.shared = new SharedMemoryService(new SharedMemoryRepository(storage.sharedStorage), storage.adaptive!, sharedAuthorityFromStudioStore(storage.store));
   const reminderEndpointId = config.reminderDeliveryEnabled && config.token ? studio.relationshipEndpointId(config.token) : undefined;
   studio.deps.experience = new AdaptiveExperienceService(storage.adaptive!, {
     notificationsEnabled: config.reminderDeliveryEnabled,

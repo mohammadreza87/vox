@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readdir, readFile, rm } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -38,6 +38,9 @@ async function setup(indexed = false) {
     member: async id => ({ active: active.get(id) === true, agentIds: ['aria', 'other-agent'] }),
     group: async id => id === 'chat--100' ? { memberTelegramIds: members, hasGuests: guests, revision: digest([members, guests]) } : null,
     agent: async id => ({ active: ['aria', 'other-agent'].includes(id) }),
+    memberNow: id => ({ active: active.get(id) === true, agentIds: ['aria', 'other-agent'] }),
+    groupNow: id => id === 'chat--100' ? { memberTelegramIds: members, hasGuests: guests, revision: digest([members, guests]) } : null,
+    agentNow: id => ({ active: ['aria', 'other-agent'].includes(id) }),
   };
   const factory = () => new SharedMemoryService(new SharedMemoryRepository(new FileAdaptiveStorage(sharedDirectory), 'synthetic'), adaptive, authority, () => now);
   const service = factory();
@@ -395,4 +398,40 @@ describe('durable explicit shared memory boundaries', () => {
     expect(raw).not.toContain('ORIGINAL_INTENT_CANARY'); expect(raw).not.toContain('TAMPERED_INTENT_CANARY');
   });
 
+});
+
+
+describe('shared committed transport authority', () => {
+  it('matches the async revision without private body reads and detects recipient/group changes', async () => {
+    const f = await setup(true); await f.personalize(101); await f.personalize(102); await f.create({ group: true, agents: ['aria'] });
+    const audience = { audienceTelegramIds: [101, 102], groupId: 'chat--100' };
+    const before = await f.service.readContext(101, 'work', 'aria', audience);
+    const storage = f.storage as SqliteAdaptiveStorage;
+    storage.io.canonicalImageReads = 0; storage.io.bodyRowsRead = 0;
+    expect(f.service.readContextAuthorityNow(101, 'work', 'aria', audience)).toMatchObject({ revision: before.revision });
+    expect(storage.io.canonicalImageReads).toBe(0); expect(storage.io.bodyRowsRead).toBe(0);
+    f.active.set(102, false); expect(() => f.service.readContextAuthorityNow(101, 'work', 'aria', audience)).toThrow('recipient_unavailable');
+    f.active.set(102, true); f.setGroup([101, 102, 103]);
+    expect(() => f.service.readContextAuthorityNow(101, 'work', 'aria', audience)).toThrow('audience_denied');
+  });
+  it('fails closed during a shared writer or unsupported Studio adapter', async () => {
+    const f = await setup(true), audience = { audienceTelegramIds: [101] };
+    await f.service.repository.transaction(() => {
+      expect(() => f.service.readContextAuthorityNow(101, 'work', 'aria', audience)).toThrow('Shared authority unavailable');
+    });
+    delete f.authority.memberNow;
+    expect(() => f.service.readContextAuthorityNow(101, 'work', 'aria', audience)).toThrow('authority_unavailable');
+  });
+  it('rejects expiry reached during shared parsing and exposes the earliest deadline', async () => {
+    const f = await setup(true); await f.personalize(101); const { container } = await f.create({ agents: ['aria'] });
+    await f.service.repository.transaction(d => { d.containers[0].memories[0].expiresAt = START + 10; });
+    const audience = { audienceTelegramIds: [101] };
+    await f.service.readContext(101, 'work', 'aria', audience);
+    expect(f.service.readContextAuthorityNow(101, 'work', 'aria', audience).validUntil).toBe(START + 10);
+    const read = f.service.repository.readCommittedForEffect.bind(f.service.repository);
+    const spy = vi.spyOn(f.service.repository, 'readCommittedForEffect').mockImplementation(() => { const d = read(); f.setNow(START + 11); return d; });
+    expect(() => f.service.readContextAuthorityNow(101, 'work', 'aria', audience)).toThrow('retention_changed');
+    spy.mockRestore();
+    expect((await f.service.list(101, 'work')).containers.find(c => c.id === container.id)?.memories).toEqual([]);
+  });
 });

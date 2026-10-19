@@ -26,11 +26,14 @@ const retention = 90 * 86400_000;
 const INFINITY = Number.MAX_SAFE_INTEGER;
 export interface SharedAuthority {
   /** Current approved Studio membership and agents this account may actually use. */
-  member(telegramId: number): Promise<{ active: boolean; agentIds: string[] }>;
+  member(telegramId: number): Promise<{ active: boolean; agentIds: string[]; revision?: string }>;
   group(groupId: string): Promise<{ memberTelegramIds: number[]; hasGuests: boolean; revision: string } | null>;
-  agent(agentId: string): Promise<{ active: boolean }>;
+  agent(agentId: string): Promise<{ active: boolean; revision?: string }>;
+  memberNow?(telegramId: number): { active: boolean; agentIds: string[]; revision?: string };
+  groupNow?(groupId: string): { memberTelegramIds: number[]; hasGuests: boolean; revision: string } | null;
+  agentNow?(agentId: string): { active: boolean; revision?: string };
 }
-interface Verified { telegramId: number; profile: AdaptiveSnapshot; agentIds: string[] }
+interface Verified { telegramId: number; profile: AdaptiveSnapshot; agentIds: string[]; validUntil?: number; authorityRevision?: string }
 interface StagedWrite { operationId: string; containerId: string; memoryId: string; revision: number; eventKey: string }
 /** Explicit authored sharing only. No extraction, implicit grants, or automatic recipient expansion. */
 export class SharedMemoryService {
@@ -45,11 +48,22 @@ export class SharedMemoryService {
     if (!profile.identity.confirmed || !profile.identity.personId || !profile.identity.bindingId || !profile.identity.bindingRevision) return fail(403, 'profile_confirmation_required');
     if (!profile.explicitMemoryAvailable) return fail(403, 'capability_unavailable');
     if (!Number.isSafeInteger(profile.identity.bindingExpiresAt) || profile.identity.bindingExpiresAt! <= this.now()) return fail(403, 'profile_confirmation_required');
-    return { telegramId, profile, agentIds: member.agentIds };
+    return { telegramId, profile, agentIds: member.agentIds, ...(member.revision === undefined ? {} : { authorityRevision: member.revision }) };
+  }
+  private verifiedNow(telegramId: number, space: SharedSpace): Verified {
+    tgSchema.parse(telegramId); spaceSchema.parse(space);
+    if (!this.authority.memberNow) return fail(503, 'authority_unavailable');
+    const member = this.authority.memberNow(telegramId);
+    if (!member.active) return fail(403, 'recipient_unavailable');
+    const profile = this.adaptive.readAuthorityNow(telegramId, space);
+    if (!profile.identity.confirmed || !profile.identity.personId || !profile.identity.bindingId || !profile.identity.bindingRevision ||
+        !Number.isSafeInteger(profile.identity.bindingExpiresAt) || profile.identity.bindingExpiresAt! <= this.now()) return fail(403, 'profile_confirmation_required');
+    if (!profile.explicitMemoryAvailable) return fail(403, 'capability_unavailable');
+    return { telegramId, profile, agentIds: member.agentIds, validUntil: profile.validUntil, ...(member.revision === undefined ? {} : { authorityRevision: member.revision }) };
   }
   private identityKey(people: Verified[]): string {
     return sharedDigest(people.map(v => [v.telegramId, v.profile.identity.accountId, v.profile.identity.personId,
-      v.profile.identity.bindingId, v.profile.identity.bindingRevision, v.profile.identity.bindingExpiresAt, v.profile.explicitMemoryAvailable, v.profile.explicitMemoryValidUntil, v.profile.purposes.filter(p => p.purpose === 'optional.personalization').map(p => [p.purpose, p.state, p.available, p.revision]), [...v.agentIds].sort()]));
+      v.profile.identity.bindingId, v.profile.identity.bindingRevision, v.profile.identity.bindingExpiresAt, v.profile.explicitMemoryAvailable, v.profile.explicitMemoryValidUntil, v.profile.purposes.filter(p => p.purpose === 'optional.personalization').map(p => [p.purpose, p.state, p.available, p.revision]), [...v.agentIds].sort(), ...(v.authorityRevision === undefined ? [] : [v.authorityRevision])]));
   }
   private async recheck(people: Verified[], space: SharedSpace): Promise<void> {
     const current = await Promise.all(people.map(v => this.verified(v.telegramId, space)));
@@ -148,7 +162,7 @@ export class SharedMemoryService {
       audience: { kind: 'known', personIds: audience.map(a => a.profile.identity.personId!) }, ...(agentId ? { agentId } : {}) }, snapshot, now).allowed;
   }
   private validUntil(people: Verified[]): number {
-    return Math.min(...people.flatMap(p => [p.profile.identity.bindingExpiresAt ?? 0, p.profile.explicitMemoryValidUntil ?? 0]));
+    return Math.min(...people.flatMap(p => [p.profile.identity.bindingExpiresAt ?? 0, p.profile.explicitMemoryValidUntil ?? 0, p.validUntil ?? INFINITY]));
   }
   private assertFresh(people: Verified[]): void {
     if (this.validUntil(people) <= this.now()) fail(403, 'authority_expired');
@@ -415,6 +429,45 @@ export class SharedMemoryService {
    * still loads its canonical document; this is not shared body indexing. */
   async readContextAuthority(telegramId: number, space: SharedSpace, agentId: string, audience: SharedContextAudience): Promise<{ revision: string }> {
     return { revision: (await this.contextProjection(telegramId, space, agentId, audience, false)).revision };
+  }
+  /** Final configured-fetch fence. Unsupported/writing stores and elapsed
+   * retention fail closed; cleanup remains on the normal lifecycle path. */
+  readContextAuthorityNow(telegramId: number, space: SharedSpace, agentId: string, audience: SharedContextAudience): { revision: string; validUntil: number } {
+    const startedAt = this.now();
+    idSchema.parse(agentId);
+    if (!this.authority.groupNow || !this.authority.agentNow) return fail(503, 'authority_unavailable');
+    const ids = z.array(tgSchema).min(1).max(12).parse(audience.audienceTelegramIds);
+    if (new Set(ids).size !== ids.length || !ids.includes(telegramId)) return fail(403, 'audience_denied');
+    const people = ids.map(id => this.verifiedNow(id, space));
+    if (ids.length > 1) {
+      const group = audience.groupId ? this.authority.groupNow(audience.groupId) : null;
+      if (!group || group.hasGuests || sharedDigest([...group.memberTelegramIds].sort((a,b) => a-b)) !== sharedDigest([...ids].sort((a,b) => a-b))) return fail(403, 'audience_denied');
+    }
+    const agentStamp = this.authority.agentNow(agentId);
+    if (!agentStamp.active || people.some(p => !p.agentIds.includes(agentId))) return fail(403, 'agent_access_denied');
+    const state = this.repository.readCommittedForEffect();
+    const relevant = state.containers.filter(c => c.space === space && c.members.some(m => m.telegramId === telegramId));
+    const groupIds = [...new Set([...relevant.flatMap(c => c.groupId ? [c.groupId] : []), ...(audience.groupId ? [audience.groupId] : [])])].sort();
+    const groupValues = groupIds.map(id => [id, this.authority.groupNow!(id)] as const);
+    const groupStamp = sharedDigest(groupValues);
+    for (const c of relevant) if (c.status === 'active' && c.kind === 'group' && c.audienceInvalidatedAt === undefined && c.members.some(m => m.telegramId === telegramId && m.status === 'active')) {
+      const group = groupValues.find(([id]) => id === c.groupId)?.[1];
+      if (!group || group.hasGuests || group.revision !== c.groupRevision || sharedDigest([...group.memberTelegramIds].sort((a,b) => a-b)) !== sharedDigest(c.members.map(m => m.telegramId).sort((a,b) => a-b))) return fail(409, 'authority_changed');
+    }
+    const personalized = people.every(p => p.profile.purposes.some(choice => choice.purpose === 'optional.personalization' && choice.state === 'granted' && choice.available));
+    // Re-read the small participant controls after all shared/native I/O. A
+    // deadline crossed during parsing cannot release a stale positive result.
+    const current = ids.map(id => this.verifiedNow(id, space));
+    if (this.identityKey(current) !== this.identityKey(people) || groupStamp !== sharedDigest(groupIds.map(id => [id, this.authority.groupNow!(id)])) ||
+        sharedDigest(agentStamp) !== sharedDigest(this.authority.agentNow(agentId))) return fail(409, 'authority_changed');
+    if (this.repository.readCommittedForEffect().revision !== state.revision) return fail(409, 'revision_conflict');
+    const fresh = this.now();
+    if (!Number.isSafeInteger(fresh) || fresh < startedAt || this.validUntil(current) <= fresh) return fail(403, 'authority_expired');
+    for (const c of state.containers) for (const m of c.memories) if (
+      (m.status === 'pending' && (!m.publication || m.publication.validUntil <= fresh)) || (m.status === 'active' && m.expiresAt <= fresh)) return fail(409, 'retention_changed');
+    const revision = sharedDigest([state.revision, space, agentId, this.identityKey(people), audience, personalized, groupStamp, agentStamp]);
+    return { revision: this.adaptive.storeIdentity === 'canonical' ? revision : sharedDigest([this.adaptive.storeIdentity, revision]),
+      validUntil: Math.min(this.validUntil(current), ...state.containers.flatMap(c => c.memories.flatMap(m => m.status === 'active' ? [m.expiresAt] : m.status === 'pending' ? [m.publication?.validUntil ?? 0] : []))) };
   }
   private async contextProjection(telegramId: number, space: SharedSpace, agentId: string,
     audience: SharedContextAudience, includeBodies: boolean): Promise<SharedContext> {
