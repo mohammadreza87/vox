@@ -59,15 +59,16 @@ async function nova(visibility: 'org' | 'private' = 'org') {
 
 describe('triage thresholds lean towards the full path', () => {
   it('needs a confident "quick", and asks about addressing only when told to', () => {
-    expect(readTriage(answers('quick', 0.1, 0.1), false)).toEqual({ effort: 'quick', needsWeb: false, memorable: false });
+    expect(readTriage(answers('quick', 0.1, 0.1), false)).toEqual({ effort: 'quick', needsWeb: false, memorable: false, wantsVoice: false });
     expect(readTriage(answers('quick', 0.1, 0.1, {}, 0.4), false)?.effort).toBe('thoughtful');
-    expect(readTriage(answers('thoughtful', 0.7, 0.3), false)).toEqual({ effort: 'thoughtful', needsWeb: true, memorable: true });
+    expect(readTriage(answers('thoughtful', 0.7, 0.3, { wants_voice: { type: 'predicate', probability: 0.8 } }), false))
+      .toEqual({ effort: 'thoughtful', needsWeb: true, memorable: true, wantsVoice: true });
     expect(readTriage(answers('quick', 0, 0, { addressed: { type: 'predicate', probability: 0.8 } }), true)?.addressed).toBe(false);
     expect(readTriage(answers('quick', 0, 0, { addressed: { type: 'predicate', probability: 0.9 } }), true)?.addressed).toBe(true);
     // A refused or missing answer means no triage at all.
     expect(readTriage({ effort: answers('quick', 0, 0).effort }, false)).toBeNull();
     const persona = { name: 'Nova', role: 'Producer' } as Parameters<typeof triageQuestions>[0];
-    expect(triageQuestions(persona, false).map((q) => q.name)).toEqual(['effort', 'live_info', 'memorable']);
+    expect(triageQuestions(persona, false).map((q) => q.name)).toEqual(['effort', 'live_info', 'memorable', 'wants_voice']);
     expect(triageQuestions(persona, true).map((q) => q.name)).toContain('addressed');
   });
 });
@@ -119,6 +120,31 @@ describe('replies routed by triage', () => {
     expect(fast.replyRequests).toHaveLength(0);
     expect(h.chatLLM.extractionCalls).toBe(1);
     expect(h.logger.warn).toHaveBeenCalledWith(expect.stringContaining('triage unavailable'), expect.anything());
+  });
+});
+
+describe('voice on request', () => {
+  it('a typed request for a voice message is answered with voice, and the agent knows it can speak', async () => {
+    const { agent, bot } = await nova();
+    models();
+    decider(answers('quick', 0, 0, { wants_voice: { type: 'predicate', probability: 0.9 } }));
+    await handleAgentUpdate(h.studio, agent.id, dm(ID.bob, 'can you answer me with your voice?'));
+    expect(bot().sendVoice).toHaveBeenCalledTimes(1);
+    expect(bot().sendMessage).toHaveBeenLastCalledWith(ID.bob, 'Hey!');
+    expect(h.studio.deps.fastLLM && (h.studio.deps.fastLLM as FakeLLM).lastPrompt).toContain('## Your voice');
+
+    decider(answers('quick', 0, 0, { wants_voice: { type: 'predicate', probability: 0.1 } }));
+    await handleAgentUpdate(h.studio, agent.id, dm(ID.bob, 'thanks'));
+    expect(bot().sendVoice).toHaveBeenCalledTimes(1);
+  });
+
+  it('without triage, an explicit ask in English or Persian still gets voice', async () => {
+    const { agent, bot } = await nova();
+    decider(new Error('down'));
+    await handleAgentUpdate(h.studio, agent.id, dm(ID.bob, 'send me a voice message please'));
+    await handleAgentUpdate(h.studio, agent.id, dm(ID.bob, 'با ویس جواب بده'));
+    await handleAgentUpdate(h.studio, agent.id, dm(ID.bob, 'what is the plan?'));
+    expect(bot().sendVoice).toHaveBeenCalledTimes(2);
   });
 });
 

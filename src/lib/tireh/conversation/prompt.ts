@@ -29,9 +29,11 @@ export interface PromptInput {
   speakerId: string;
   memories: MemoryRecord[];
   now?: Date;
+  /** Replies can be sent as voice messages */
+  canSpeak?: boolean;
 }
 
-export function buildSystemPrompt({ org, persona, chat, speakerId, memories, now = new Date() }: PromptInput): string {
+export function buildSystemPrompt({ org, persona, chat, speakerId, memories, now = new Date(), canSpeak = false }: PromptInput): string {
   const audience = audienceOf(chat);
   const speaker = org.getPerson(speakerId);
   const owner = org.getPerson(persona.ownerId);
@@ -106,6 +108,11 @@ Do not silently pick one. Mention both sources and ask which is current when it 
   if (persona.webSearch) {
     sections.push(`## Live information
 You can search the web. Search when the answer depends on recent or live facts (news, prices, weather, sports, releases, anything after your training) or when you'd otherwise guess; don't search for small talk or things you already know well. Say briefly where a fact came from, without pasting links (they are added for you). Never put private details about people you talk to${guestsPresent ? '' : ` or about ${orgName}`} into a search.`);
+  }
+
+  if (canSpeak) {
+    sections.push(`## Your voice
+You have a voice. Your reply is sent as a voice message when the person sends you one or asks to hear you. When someone asks you to speak or send a voice message, just answer: it will be spoken. Never say you can't send voice messages.`);
   }
 
   sections.push(`## Rules
