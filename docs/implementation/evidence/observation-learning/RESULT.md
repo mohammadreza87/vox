@@ -22,6 +22,10 @@ An independent rollback-compatibility probe loaded the actual repository impleme
 
 [improvement-report.json](improvement-report.json) binds exact source-file hashes, candidate, evaluator, data and policy digests and signed results. [improvement-public-trust.json](improvement-public-trust.json) contains only synthetic public verification keys. Fresh private demo keys were held in memory and never saved or mounted in Docker. Baseline failed 2 of 3 toy cancellation cases; candidate failed 0 of 3. Before synthetic human approval, readiness was denied. The resulting readiness and rollback comparison authorize no deployment.
 
+## Browser qualification
+
+The production build of `0266a3a7fb52ebdd50d680091e789bb9425c47d3` passed and its four synthetic browser journeys passed on Chromium and mobile WebKit. These cover EN/FA controls, Work/Personal isolation, export downloads and the read-only operations view. Visual inspection caught a Persian action label exceeding its fixed-height button; this candidate adds content-sized buttons and label-bounds assertions. The final build/browser/release receipt is collected separately against the final committed revision, so the earlier pass does not certify the later layout change. The LearningPanel component selection passed **8 tests** after that change.
+
 ## Remaining release levels
 
 Production build, browser screenshots, exact-head CI, preview HTTP and deployment records are collected separately after this source freeze. Optional production processing remains off. No real provider generation, microphone/speaker/device, product-quality improvement, production IAM isolation or live pilot outcome is certified here. Cross-store authorization is revalidated at delivery boundaries; these checks do not claim a distributed atomic transaction over external membership authorities.

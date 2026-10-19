@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page, type Locator } from '@playwright/test';
 
 const PERSON = 710001;
 const OTHER = 710002;
@@ -240,6 +240,19 @@ test('privacy, shared memory and experience controls stay explicit and isolated 
 });
 
 
+async function checkActionLabelsFit(region: Locator) {
+  const geometry = await region.locator('.vx-learning-actions > button').evaluateAll(buttons => buttons.map(button => {
+    const bounds = button.getBoundingClientRect();
+    const label = document.createRange();
+    label.selectNodeContents(button);
+    const text = label.getBoundingClientRect();
+    return { label: button.textContent, fits: text.top >= bounds.top && text.bottom <= bounds.bottom
+      && text.left >= bounds.left && text.right <= bounds.right };
+  }));
+  expect(geometry).toHaveLength(2);
+  for (const action of geometry) expect(action.fits, `Action label must fit inside its button: ${action.label}`).toBe(true);
+}
+
 test('learning evidence stays scoped, honest and downloadable in English and Persian', async ({ page }, testInfo) => {
   const h = makeHarness();
   await installFixtures(page, h);
@@ -256,6 +269,7 @@ test('learning evidence stays scoped, honest and downloadable in English and Per
   await expect(learning.getByText('Average response time: Unavailable')).toBeVisible();
   await expect(learning).not.toContainText('PRIVATE_');
   await checkNoHorizontalOverflow(page);
+  await checkActionLabelsFit(learning);
   await learning.screenshot({ path: testInfo.outputPath('learning-en.png') });
   await learning.getByRole('button', { name: 'Refresh measurements', exact: true }).click();
   await expect(learning.locator('dd').first()).toHaveText('13');
@@ -288,6 +302,7 @@ test('learning evidence stays scoped, honest and downloadable in English and Per
   await experience.getByRole('button', { name: 'کاری', exact: true }).click();
   await expect(persian.locator('dd').first()).toHaveText('۱۳');
   await expect(persian.getByText('پخش توسط مرورگر گزارش شده است. موفقیت تأییدشدهٔ کار نامشخص است.')).toBeVisible();
+  await checkActionLabelsFit(persian);
   await persian.screenshot({ path: testInfo.outputPath('learning-fa-work.png') });
   const operations = page.getByRole('region', { name: 'عملیات بهبود نرم‌افزار', exact: true });
   await expect(operations.getByText('گزارش روند محلی: در دسترس نیست.')).toBeVisible();

@@ -90,7 +90,7 @@ export function LearningPanel({ space, locale = 'en', showOperations = false }: 
     </>}
     {error && <div className="vx-banner danger" role="alert">{error === 'export' ? t('The export could not be downloaded. Try again.', 'بارگیری خروجی انجام نشد. دوباره تلاش کنید.') : t('Measurements could not be updated. Try again.', 'اندازه‌گیری‌ها به‌روز نشدند. دوباره تلاش کنید.')}</div>}
     {status && <p className="vx-small" role="status">{status === 'exported' ? t('Your JSON download is ready.', 'بارگیری JSON شما آماده است.') : t('Measurements refreshed. Some events may still be waiting.', 'اندازه‌گیری‌ها تازه شدند. ممکن است برخی رویدادها هنوز در انتظار باشند.')}</p>}
-    <div className="vx-privacy-actions">
+    <div className="vx-privacy-actions vx-learning-actions">
       <button className="vx-btn vx-btn-secondary" disabled={!!busy} onClick={() => void run('refresh')}>{busy === 'refresh' ? t('Refreshing…', 'در حال تازه‌سازی…') : error && error !== 'export' ? t('Retry measurements', 'تلاش دوباره برای اندازه‌گیری‌ها') : t('Refresh measurements', 'تازه‌سازی اندازه‌گیری‌ها')}</button>
       <button className="vx-btn vx-btn-secondary" disabled={!!busy} onClick={() => void run('export')}>{busy === 'export' ? t('Preparing…', 'در حال آماده‌سازی…') : t('Export my learning data', 'دریافت داده‌های یادگیری من')}</button>
     </div>
