@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
-import { accountIdFor, AdaptiveRepository, type SpaceKind } from '../persistence/repository';
+import { accountIdFor, AdaptiveRepository, digest, type SpaceKind } from '../persistence/repository';
 import { AdaptiveService } from '../persistence/service';
 import { FileAdaptiveStorage } from '../persistence/storage';
 import { adaptiveOptionsFromManifest } from '../persistence/config';
@@ -228,10 +228,30 @@ describe('private bounded observation journal', () => {
     expect((await observer.snapshot(123, 'work', { allowedAgentIds: ['agent'] })).findings).toHaveLength(1);
   });
   it('rejects capacity without evicting accepted or failed evidence', async () => {
-    const { observer, grant, input, raw } = await fixture(); await grant(); const base = await input();
-    for (let n = 0; n < OBSERVER_MAX_EVENTS; n++) await observer.recordServer(123, { ...base, eventId: `event${n}`, turnId: `turn${n}` });
-    await expect(observer.recordServer(123, { ...base, eventId: 'overflow' })).rejects.toMatchObject({ code: 'observer_capacity' });
-    expect((await raw()).events).toHaveLength(OBSERVER_MAX_EVENTS);
+    const { adaptive, observer, factory, grant, input, raw, setNow } = await fixture(); await grant();
+    await observer.recordServer(123, await input('processed', { turnId: 'processed' }));
+    expect(await observer.process(123)).toEqual({ processed: 1, failed: 0 });
+    await observer.recordServer(123, await input('failed', { turnId: 'failed' }));
+    const failing = factory({ beforeConsume: async () => { throw new Error('synthetic worker failure'); } }).observer;
+    await failing.process(123); setNow(NOW + 1000); await failing.process(123); setNow(NOW + 3000); await failing.process(123);
+    await observer.recordServer(123, await input('pending', { turnId: 'pending' }));
+    const admitted = await raw();
+    expect(admitted.events.map(event => event.state).sort()).toEqual(['failed', 'pending', 'processed']);
+    const pending = admitted.events.find(event => event.state === 'pending')!;
+    // Admission and processing are exercised above. Fill repetitive setup in
+    // one schema-validated FILE transaction; both boundary writes remain real.
+    await adaptive.withAccountDocument(123, (d, now) => {
+      for (let n = d.observer.events.length; n < OBSERVER_MAX_EVENTS - 1; n++) d.observer.events.push({ ...structuredClone(pending),
+        id: digest(['capacity-fixture', n]), turnKey: digest(['capacity-turn', n]), fingerprint: digest(['capacity-payload', n]) });
+      d.revision++; d.updatedAt = now;
+    });
+    expect((await raw()).events).toHaveLength(OBSERVER_MAX_EVENTS - 1);
+    const last = await input('last-slot', { turnId: 'last-slot' });
+    expect(await observer.recordServer(123, last)).toMatchObject({ recorded: true, duplicate: false });
+    const full = await raw(); expect(full.events).toHaveLength(OBSERVER_MAX_EVENTS);
+    expect(full.events).toEqual(expect.arrayContaining(admitted.events));
+    await expect(observer.recordServer(123, { ...last, eventId: 'overflow', turnId: 'overflow' })).rejects.toMatchObject({ code: 'observer_capacity' });
+    expect(await raw()).toEqual(full);
   });
 });
 
