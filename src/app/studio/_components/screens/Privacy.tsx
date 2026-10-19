@@ -9,7 +9,7 @@ import { VoiceRecognitionPanel } from '../VoiceRecognitionPanel';
 import { MemoryCorrectionEditor } from '../MemoryCorrectionEditor';
 import { ReviewedMemoryPanel } from '../ReviewedMemoryPanel';
 
-export function PrivacyScreen({ onShared, onExperience, onConnections }: { onShared?: () => void; onExperience?: () => void; onConnections?: () => void }) {
+export function PrivacyScreen({ onShared, onExperience, onConnections, onCorrectionPendingChange }: { onShared?: () => void; onExperience?: () => void; onConnections?: () => void; onCorrectionPendingChange?: (token: string, pending: boolean) => boolean }) {
   const [locale, setLocale] = useState<PrivacyLocale>('en');
   const [space, setSpace] = useState<AdaptiveSpace>('work');
   const [snapshot, setSnapshot] = useState<AdaptiveSnapshot | null>(null);
@@ -22,10 +22,24 @@ export function PrivacyScreen({ onShared, onExperience, onConnections }: { onSha
   const [jurisdiction, setJurisdiction] = useState('');
   const [note, setNote] = useState('');
   const [agents, setAgents] = useState<AgentView[]>([]);
-  const generation = useRef(0);
+  const generation = useRef(0), pendingCorrectionRef = useRef<string | null>(null), busyRef = useRef(false);
+  const [pendingCorrection, setPendingCorrection] = useState<string | null>(null);
+  busyRef.current = busy;
+  const correctionPending = useCallback((token: string, pending: boolean): boolean => {
+    if (pending) {
+      if (busyRef.current || pendingCorrectionRef.current && pendingCorrectionRef.current !== token) return false;
+      if (onCorrectionPendingChange?.(token, true) === false) return false;
+      pendingCorrectionRef.current = token; setPendingCorrection(token); setStatus('');
+    } else {
+      if (pendingCorrectionRef.current !== token) return false;
+      pendingCorrectionRef.current = null; setPendingCorrection(null); onCorrectionPendingChange?.(token, false);
+    }
+    return true;
+  }, [onCorrectionPendingChange]);
   const c = privacyCopy[locale];
 
   const load = useCallback(async () => {
+    if (pendingCorrectionRef.current) return;
     const current = ++generation.current;
     setSnapshot(null); setPresentation(null); setRemoving(null); setError(''); setStatus(''); setNote('');
     try {
@@ -39,40 +53,41 @@ export function PrivacyScreen({ onShared, onExperience, onConnections }: { onSha
   useEffect(() => { void load(); return invalidate; }, [load, invalidate]);
 
   const mutate = async (action: () => Promise<AdaptiveSnapshot>, message: string) => {
-    if (busy) return;
+    if (busyRef.current || pendingCorrectionRef.current) return;
     const current = generation.current;
-    setBusy(true); setError(''); setStatus('');
+    busyRef.current = true; setBusy(true); setError(''); setStatus('');
     try {
       const result = await action();
       if (generation.current !== current) return;
       setSnapshot(result); setStatus(message); setPresentation(null); setRemoving(null);
     } catch {
       if (generation.current === current) setError(locale === 'fa' ? 'تغییر تأیید نشد. تنظیمات را تازه کنید و دوباره تلاش کنید.' : 'The change was not confirmed. Refresh your settings before trying again.');
-    } finally { setBusy(false); }
+    } finally { busyRef.current = false; setBusy(false); }
   };
   const review = async (purpose: AdaptiveOptionalPurpose, revision: number) => {
-    if (busy) return;
+    if (busyRef.current || pendingCorrectionRef.current) return;
     const current = generation.current;
-    setBusy(true); setError(''); setStatus('');
+    busyRef.current = true; setBusy(true); setError(''); setStatus('');
     try {
       const data = await adaptiveApi.present(space, purpose, revision, locale);
       if (generation.current !== current) return;
       setSnapshot(data); setPresentation({ purpose, data });
     } catch { if (generation.current === current) setError(locale === 'fa' ? 'انتخاب دریافت نشد. تنظیمات را تازه کنید.' : 'This choice could not be opened. Refresh your settings.'); }
-    finally { setBusy(false); }
+    finally { busyRef.current = false; setBusy(false); }
   };
 
-  return <section className="vx-scroll vx-privacy" dir={locale === 'fa' ? 'rtl' : 'ltr'} lang={locale} aria-busy={busy}>
+  return <section className="vx-scroll vx-privacy" dir={locale === 'fa' ? 'rtl' : 'ltr'} lang={locale} aria-busy={busy || !!pendingCorrection}>
+    <fieldset disabled={!!pendingCorrection} onClickCapture={event => { if (pendingCorrectionRef.current) { event.preventDefault(); event.stopPropagation(); } }} onChangeCapture={event => { if (pendingCorrectionRef.current) { event.preventDefault(); event.stopPropagation(); } }} style={{ display: 'flex', flexDirection: 'column', gap: 16, border: 0, padding: 0, margin: 0, minWidth: 0 }}>
     <header className="vx-privacy-heading">
       <span className="vx-privacy-symbol"><Icon name="shield" size={28} /></span>
       <div><p className="vx-over">{c.subtitle}</p><h1 className="vx-title">{c.title}</h1></div>
-      <label className="vx-small">{c.language}<select className="vx-input" value={locale} disabled={busy} onChange={e => setLocale(e.target.value as PrivacyLocale)}><option value="en">English</option><option value="fa">فارسی</option></select></label>
+      <label className="vx-small">{c.language}<select className="vx-input" value={locale} disabled={busy} onChange={e => { if (!pendingCorrectionRef.current) setLocale(e.target.value as PrivacyLocale); }}><option value="en">English</option><option value="fa">فارسی</option></select></label>
     </header>
     <p className="vx-2">{c.intro}</p>
-    {onExperience && <button className="vx-btn vx-btn-secondary" onClick={onExperience}>{locale === 'fa' ? 'ترجیح‌ها و صندوق اعلان' : 'Preferences & notification inbox'}</button>}
-    {onConnections && <button className="vx-btn vx-btn-secondary" onClick={onConnections}>{locale === 'fa' ? 'اتصال‌ها و دسترسی عامل‌ها' : 'Connections & agent access'}</button>}
+    {onExperience && <button className="vx-btn vx-btn-secondary" onClick={() => { if (!pendingCorrectionRef.current) onExperience(); }}>{locale === 'fa' ? 'ترجیح‌ها و صندوق اعلان' : 'Preferences & notification inbox'}</button>}
+    {onConnections && <button className="vx-btn vx-btn-secondary" onClick={() => { if (!pendingCorrectionRef.current) onConnections(); }}>{locale === 'fa' ? 'اتصال‌ها و دسترسی عامل‌ها' : 'Connections & agent access'}</button>}
     <div className="vx-privacy-spaces" role="group" aria-label={c.space}>
-      {(['work', 'personal'] as const).map(value => <button key={value} className="vx-btn vx-btn-secondary" aria-pressed={space === value} disabled={busy} onClick={() => setSpace(value)}>{c[value]}</button>)}
+      {(['work', 'personal'] as const).map(value => <button key={value} className="vx-btn vx-btn-secondary" aria-pressed={space === value} disabled={busy} onClick={() => { if (!pendingCorrectionRef.current) setSpace(value); }}>{c[value]}</button>)}
     </div>
     {error && <div className="vx-banner danger" role="alert">{error}<button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy} onClick={() => void load()}>{c.refresh}</button></div>}
     {status && <p className="vx-banner info" role="status">{status}</p>}
@@ -126,7 +141,7 @@ export function PrivacyScreen({ onShared, onExperience, onConnections }: { onSha
           <p style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{m.text}</p>
           {m.origin && <p className="vx-small">{locale === 'fa' ? 'ادعای بررسی‌شدهٔ شما؛ به‌طور مستقل تأیید نشده است.' : 'User-reviewed claim; not independently verified.'}</p>}
           {m.sourceRefs && <p className="vx-small">{locale === 'fa' ? `خلاصهٔ بررسی‌شده از ${m.sourceRefs.length} یادداشت؛ حذف خلاصه، اصل یادداشت‌ها را نگه می‌دارد.` : `Reviewed summary of ${m.sourceRefs.length} notes; deleting this summary keeps the originals.`}</p>}
-          <MemoryCorrectionEditor key={`${space}:${locale}:${snapshot.identity.bindingId ?? 'unconfirmed'}:${m.id}:${m.revision}`} note={m} snapshot={snapshot} locale={locale} disabled={busy || removing === m.id} onSaved={result => { setSnapshot(current => current && current.revision > result.revision ? current : result); setStatus(c.saved); setRemoving(null); }} onRefresh={() => void load()} />
+          <MemoryCorrectionEditor key={`${space}:${locale}:${snapshot.identity.bindingId ?? 'unconfirmed'}:${m.id}:${m.revision}`} note={m} snapshot={snapshot} locale={locale} disabled={busy || removing === m.id} onSaved={result => { setSnapshot(current => current && current.revision > result.revision ? current : result); setStatus(c.saved); setRemoving(null); }} onRefresh={() => void load()} onPendingChange={correctionPending} onUnconfirmed={savedSpace => setStatus(savedSpace === 'work' ? (locale === 'fa' ? 'ممکن است اصلاح در فضای کاری ذخیره شده باشد. یادداشت‌ها را تازه‌سازی و بررسی کنید.' : 'The correction may have been saved in Work. Refresh notes to check.') : (locale === 'fa' ? 'ممکن است اصلاح در فضای شخصی ذخیره شده باشد. یادداشت‌ها را تازه‌سازی و بررسی کنید.' : 'The correction may have been saved in Personal. Refresh notes to check.'))} />
           <p className="vx-small vx-2">{c.expires}: {new Date(m.expiresAt).toLocaleDateString(locale === 'fa' ? 'fa-IR' : 'en-GB')}</p>
           {removing === m.id ? <div>
             <h3 className="vx-small">{c.deleteTitle}</h3><p className="vx-small vx-2">{c.deleteBody}</p>
@@ -143,8 +158,9 @@ export function PrivacyScreen({ onShared, onExperience, onConnections }: { onSha
           return <div className="vx-privacy-purpose-heading" key={agent.id}><span>{agent.persona.name}</span><button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy || !snapshot.identity.confirmed} aria-label={`${allowed ? c.revokeAgent : c.allowAgent}: ${agent.persona.name}`} onClick={() => void mutate(() => adaptiveApi.agent(space, agent.id, !allowed, snapshot.revision), c.saved)}>{allowed ? c.revokeAgent : c.allowAgent}</button></div>;
         })}
       </div>
-      <div className="vx-card vx-privacy-card"><h2 className="vx-head">{c.sharing}</h2><p className="vx-small vx-2">{c.sharingBody}</p>{onShared && <button className="vx-btn vx-btn-secondary" onClick={onShared}>{locale === 'fa' ? 'حافظه‌های مشترک' : 'Shared memories'}</button>}</div>
+      <div className="vx-card vx-privacy-card"><h2 className="vx-head">{c.sharing}</h2><p className="vx-small vx-2">{c.sharingBody}</p>{onShared && <button className="vx-btn vx-btn-secondary" onClick={() => { if (!pendingCorrectionRef.current) onShared(); }}>{locale === 'fa' ? 'حافظه‌های مشترک' : 'Shared memories'}</button>}</div>
       <div className="vx-card vx-privacy-card"><h2 className="vx-head">{c.voice}</h2><p className="vx-small vx-2">{c.voiceBody}</p></div>
     </>}
+    </fieldset>
   </section>;
 }
