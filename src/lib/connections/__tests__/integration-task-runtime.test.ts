@@ -44,7 +44,11 @@ async function fixture(decisions: unknown[]) {
     return { receipt, output: result.data, sourceIds: [label.id] };
   }) } as unknown as ConnectionsApplication;
   const modelInputs: LLMRequest[] = [];
-  const complete = vi.fn(async (request: LLMRequest) => { modelInputs.push(structuredClone(request)); return JSON.stringify(decisions.shift()); });
+  const complete = vi.fn(async (request: LLMRequest) => {
+    await request.authorize?.();
+    const serializable = { ...request }; delete serializable.authorize; delete serializable.signal;
+    modelInputs.push(structuredClone(serializable)); return JSON.stringify(decisions.shift());
+  });
   const runtime = new ConnectionTaskRuntime(app, { complete }, () => now);
   const input = { space: 'work', agentId: 'qa-agent', connectionId: pending.id, message: 'Read the selected QA issues.', requestId: randomUUID() };
   return { actor, context, repository, service, app, runtime, complete, modelInputs, input, outbound };
@@ -156,5 +160,15 @@ describe('independent isolated model→policy→ledger→typed adapter fixture l
       await vi.advanceTimersByTimeAsync(60_001); await rejected;
       expect(signal).toBeDefined(); expect(signal?.aborted).toBe(true); expect(f.outbound).toEqual([]);
     } finally { vi.useRealTimers(); }
+  });
+
+  it('passes a live authority fence to the SDK boundary before any model bytes transmit', async () => {
+    const f = await fixture([]); const modelWire = vi.fn();
+    f.complete.mockImplementationOnce(async request => {
+      expect(request.authorize).toBeTypeOf('function'); f.context.currentAgentIds = [];
+      await request.authorize!(); modelWire(); return JSON.stringify({ kind: 'answer', text: 'MUST_NOT_SEND' });
+    });
+    await expect(f.runtime.run(f.actor, f.input)).rejects.toMatchObject({ code: 'task_authority_changed' });
+    expect(modelWire).not.toHaveBeenCalled(); expect(f.outbound).toEqual([]);
   });
 });

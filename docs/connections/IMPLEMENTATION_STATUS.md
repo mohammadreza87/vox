@@ -1,6 +1,6 @@
 # Connections implementation status
 
-19 October 2026. Branch `codex/studio-connections`, implementation baseline `d8d6766f4e7148e83ec4f85208974e00e3570c34`. The candidate is uncommitted and still under independent integration review. The coordinator must freeze the final source/configuration/diff manifest before acceptance. Historical planning documents retain their original baseline and planning-only statements; the user subsequently authorized implementation in this chat.
+19 October 2026. Branch `codex/studio-connections`, implementation baseline `d8d6766f4e7148e83ec4f85208974e00e3570c34`. The combined runtime source is frozen at `cae9d1e84336959dbaa4f4ef8e50cb4204854ded`, integrating upstream `849e77bbbc84af8700287460c34269c251c22503`. Independent held-out tests are included in the final release commit; their exact non-document manifest is recorded in the review. Independent review accepts only a globally disabled source/UI rollout after final artifact verification. Historical planning documents retain their original baseline and planning-only statements; the user subsequently authorized implementation in this chat.
 
 The implemented release surface is **read-only, private, per verified person and Work/Personal space**. Every provider is disabled until an operator explicitly admits the exact account, native subject/tenant, endpoint, resources, tools, destinations, scope evidence and budget. A configured profile, working identity endpoint or passing fixture is not real provider qualification. **Provider writes, posting, sending, deployment, paid lifecycle actions and destructive/privileged effects are hard-disabled independently in both Studio and the production broker.** Effect adapters, exact approvals and the ledger remain source/fixture evidence for future qualification.
 
@@ -32,7 +32,10 @@ All keys, accounts, tokens, source text, provider responses, DNS answers, model 
 - Full TypeScript check: **PASS**, `node_modules/.bin/tsc --noEmit --pretty false`.
 - Owned foundation/broker/events/workflows/scheduler ESLint: **PASS, zero warnings**.
 - Independent provider/runner/identity, application/model/task, HTTP/UI, transport, budget and lifecycle suites have separate ownership. Their latest exact counts and candidate digest belong in [IMPLEMENTATION_REVIEW.md](evidence/IMPLEMENTATION_REVIEW.md).
-- The latest broad pre-merge checkpoint executed **375 cases in 25 suites: all PASS** with `node_modules/.bin/vitest run src/lib/connections/__tests__` (23:21 local test runner checkpoint). The independently owned workflow suite now has 14 passing cases, including owner-scoped GitHub hook namespaces and rejection of never-eligible schedules. This green checkpoint predates the coordinator's final upstream integration/freeze; repeat affected checks on that combined candidate before acceptance.
+- Combined full regression: **2,498 PASS, 10 skipped; 174 suites PASS, 2 skipped**, `npx vitest run --maxWorkers=4 --reporter=dot`. The initial unconstrained run exposed a stale scripted-model test snapshot and two resource-contention timeouts. The fixture now invokes the new SDK authorization callback and omits nonserializable callback/signal from snapshots; both slow suites passed separately, then the entire bounded-concurrency run passed. No timeout or product assertion was weakened.
+- Independent Connections acceptance: **203/203 PASS across 16 suites**, including current agent blocks, signed worker admission, final-use authorization and revoke suppression.
+- Full repository ESLint: **zero errors, 185 existing warnings**. TypeScript passes. Production configuration-preservation Node tests: **3/3 PASS**.
+- Actual local Chromium mobile EN/FA rendering journey: **1/1 PASS** on the combined source; screenshots reviewed. APIs are explicitly intercepted synthetic fixtures, not account/device proof.
 
 Commands:
 
@@ -42,7 +45,7 @@ node_modules/.bin/tsc --noEmit --pretty false
 node_modules/.bin/eslint src/lib/connections
 ```
 
-Broader existing Studio/adaptive/relationships tests, production build, browser journeys and regressions belong to the coordinator's final candidate packet. No unit/CI badge alone is deployment, provider, device or source-purge proof.
+The broad regression includes the existing Studio, voice, adaptive, learning and relationship suites. Exact production build, deployment and public-route evidence will be recorded separately in the release packet. No unit/CI badge alone is deployment, provider, device or source-purge proof.
 
 ## Current completion boundary
 
@@ -51,3 +54,9 @@ Broader existing Studio/adaptive/relationships tests, production build, browser 
 Readiness requires a frozen reviewed artifact, target-specific UID/IAM/vault/network/proxy checks, provider approval and native rights evidence, actual read/receipt/revoke/refresh journeys, current budgets/kill/retention configuration, and applicable physical-device proof. Existing production bot polling, Telegram webhooks, Studio credentials and service deployment were not changed by these fixture checks. No provider, device or production action is claimed complete.
 
 خلاصهٔ وضعیت: پیاده‌سازی و آزمون‌های محلی با حساب‌ها و داده‌های ساختگی انجام شده است. قابلیت تولیدی فقط خواندن در فضای خصوصی و با مجوز صریح هر حساب و عامل است. نوشتن، ارسال پیام و اقدامات مخرب در استودیو و بروکر غیرفعال‌اند. اتصال واقعی به ارائه‌دهنده، آزمون دستگاه تلگرام، استقرار، حذف کامل نسخه‌های پشتیبان و تأیید زیرساخت هنوز انجام نشده‌اند و آمادهٔ انتشار اعلام نمی‌شوند.
+
+## Disabled rollout target preflight
+
+An independent read-only check of the actual Mac Studio found the production env owned by UID501, mode0600, no symlink; the installed revision and local health agree on `9fb73d311753a461bd62e37ce3129b8a60c83d00`, bots enabled with one Studio launchd service. All three Connections settings are absent from production env, launchd globals and the service. No broker or runner process/service was observed. No `prepare` is needed. This admits an artifact-verified globally disabled source rollout only, preserving existing configuration and the single Telegram poller. It does not admit account activation.
+
+به‌روزرسانی آزمون نهایی: ۲۴۹۸ آزمون در مجموعهٔ کامل و ۲۰۳ آزمون مستقل اتصال‌ها موفق بودند. بررسی مرورگر انگلیسی و فارسی نیز موفق بود. انتشار کد با اتصال‌های کاملاً غیرفعال پس از تأیید ساخت مجاز است؛ فعال‌سازی حساب‌های واقعی، بروکر و عامل‌های اجرایی هنوز نیازمند پیکربندی و تأیید جداگانه است.

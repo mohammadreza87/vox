@@ -143,7 +143,7 @@
           "kind": "implementation_reference",
           "result": "SOURCE_AND_SYNTHETIC",
           "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
-          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "candidate": "cae9d1e plus independent held-out tests; exact non-document manifest in IMPLEMENTATION_REVIEW.md",
           "references": [
             "docs/connections/IMPLEMENTATION_CONTRACT.md",
             "docs/connections/IMPLEMENTATION_STATUS.md"
@@ -206,7 +206,7 @@
           "kind": "implementation_reference",
           "result": "SOURCE_AND_SYNTHETIC",
           "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
-          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "candidate": "cae9d1e plus independent held-out tests; exact non-document manifest in IMPLEMENTATION_REVIEW.md",
           "references": [
             "src/app/studio/_components/screens/Connections.tsx",
             "src/app/studio/_components/screens/ConnectionWorkflows.tsx"
@@ -290,7 +290,7 @@
           "kind": "implementation_reference",
           "result": "SOURCE_AND_SYNTHETIC",
           "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
-          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "candidate": "cae9d1e plus independent held-out tests; exact non-document manifest in IMPLEMENTATION_REVIEW.md",
           "references": [
             "docs/connections/evidence/IMPLEMENTATION_REVIEW.md"
           ],
@@ -354,7 +354,7 @@
           "kind": "implementation_reference",
           "result": "SOURCE_AND_SYNTHETIC",
           "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
-          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "candidate": "cae9d1e plus independent held-out tests; exact non-document manifest in IMPLEMENTATION_REVIEW.md",
           "references": [
             "src/lib/connections/storage.ts",
             "src/lib/connections/broker/",
@@ -426,7 +426,7 @@
           "kind": "implementation_reference",
           "result": "SOURCE_AND_SYNTHETIC",
           "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
-          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "candidate": "cae9d1e plus independent held-out tests; exact non-document manifest in IMPLEMENTATION_REVIEW.md",
           "references": [
             "src/lib/connections/contracts.ts",
             "src/lib/connections/repository.ts",
@@ -498,7 +498,7 @@
           "kind": "implementation_reference",
           "result": "SOURCE_AND_SYNTHETIC",
           "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
-          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "candidate": "cae9d1e plus independent held-out tests; exact non-document manifest in IMPLEMENTATION_REVIEW.md",
           "references": [
             "src/lib/connections/broker/",
             "scripts/connections-broker.mjs"
@@ -572,7 +572,7 @@
           "kind": "implementation_reference",
           "result": "SOURCE_AND_SYNTHETIC",
           "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
-          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "candidate": "cae9d1e plus independent held-out tests; exact non-document manifest in IMPLEMENTATION_REVIEW.md",
           "references": [
             "src/lib/connections/task-runtime.ts",
             "src/lib/connections/policy.ts",
@@ -644,7 +644,7 @@
           "kind": "implementation_reference",
           "result": "SOURCE_AND_SYNTHETIC",
           "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
-          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "candidate": "cae9d1e plus independent held-out tests; exact non-document manifest in IMPLEMENTATION_REVIEW.md",
           "references": [
             "src/lib/connections/lineage.ts",
             "src/lib/connections/service.ts"
@@ -723,7 +723,7 @@
           "kind": "implementation_reference",
           "result": "SOURCE_AND_SYNTHETIC",
           "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
-          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "candidate": "cae9d1e plus independent held-out tests; exact non-document manifest in IMPLEMENTATION_REVIEW.md",
           "references": [
             "e2e/connections/",
             "docs/connections/evidence/IMPLEMENTATION_REVIEW.md"
@@ -817,7 +817,7 @@
           "kind": "implementation_reference",
           "result": "SOURCE_AND_SYNTHETIC",
           "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
-          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "candidate": "cae9d1e plus independent held-out tests; exact non-document manifest in IMPLEMENTATION_REVIEW.md",
           "references": [
             "src/lib/connections/__tests__/integration-*.test.ts",
             "src/lib/connections/__tests__/security-*.test.ts",
@@ -899,7 +899,7 @@
           "kind": "implementation_reference",
           "result": "SOURCE_AND_SYNTHETIC",
           "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
-          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "candidate": "cae9d1e plus independent held-out tests; exact non-document manifest in IMPLEMENTATION_REVIEW.md",
           "references": [
             "src/lib/connections/providers/github.ts",
             "src/lib/connections/broker/provider-identity.ts"
@@ -980,7 +980,7 @@
           "kind": "implementation_reference",
           "result": "SOURCE_AND_SYNTHETIC",
           "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
-          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "candidate": "cae9d1e plus independent held-out tests; exact non-document manifest in IMPLEMENTATION_REVIEW.md",
           "references": [
             "src/lib/connections/providers/notion.ts",
             "src/lib/connections/broker/provider-identity.ts"
@@ -1052,7 +1052,7 @@
           "kind": "implementation_reference",
           "result": "SOURCE_AND_SYNTHETIC",
           "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
-          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "candidate": "cae9d1e plus independent held-out tests; exact non-document manifest in IMPLEMENTATION_REVIEW.md",
           "references": [
             "src/lib/connections/operations.ts",
             "src/lib/connections/service.ts"
@@ -1121,7 +1121,7 @@
           "kind": "implementation_reference",
           "result": "SOURCE_AND_SYNTHETIC",
           "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
-          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "candidate": "cae9d1e plus independent held-out tests; exact non-document manifest in IMPLEMENTATION_REVIEW.md",
           "references": [
             "src/lib/connections/http.ts",
             "src/app/studio/_components/screens/Connections.tsx"
@@ -1198,7 +1198,7 @@
           "kind": "implementation_reference",
           "result": "SOURCE_AND_SYNTHETIC",
           "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
-          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "candidate": "cae9d1e plus independent held-out tests; exact non-document manifest in IMPLEMENTATION_REVIEW.md",
           "references": [
             "src/lib/connections/providers/github.ts",
             "src/lib/connections/providers/notion.ts"
@@ -1280,7 +1280,7 @@
           "kind": "implementation_reference",
           "result": "SOURCE_AND_SYNTHETIC",
           "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
-          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "candidate": "cae9d1e plus independent held-out tests; exact non-document manifest in IMPLEMENTATION_REVIEW.md",
           "references": [
             "src/lib/connections/providers/google.ts"
           ],
@@ -1357,7 +1357,7 @@
           "kind": "implementation_reference",
           "result": "SOURCE_AND_SYNTHETIC",
           "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
-          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "candidate": "cae9d1e plus independent held-out tests; exact non-document manifest in IMPLEMENTATION_REVIEW.md",
           "references": [
             "src/lib/connections/providers/slack.ts"
           ],
@@ -1433,7 +1433,7 @@
           "kind": "implementation_reference",
           "result": "SOURCE_AND_SYNTHETIC",
           "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
-          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "candidate": "cae9d1e plus independent held-out tests; exact non-document manifest in IMPLEMENTATION_REVIEW.md",
           "references": [
             "src/lib/connections/providers/forgejo.ts"
           ],
@@ -1512,7 +1512,7 @@
           "kind": "implementation_reference",
           "result": "SOURCE_AND_SYNTHETIC",
           "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
-          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "candidate": "cae9d1e plus independent held-out tests; exact non-document manifest in IMPLEMENTATION_REVIEW.md",
           "references": [
             "src/lib/connections/providers/gamend.ts",
             "src/lib/connections/broker/provider-identity.ts"
@@ -1590,7 +1590,7 @@
           "kind": "implementation_reference",
           "result": "SOURCE_AND_SYNTHETIC",
           "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
-          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "candidate": "cae9d1e plus independent held-out tests; exact non-document manifest in IMPLEMENTATION_REVIEW.md",
           "references": [
             "src/lib/connections/providers/analytics.ts"
           ],
@@ -1674,7 +1674,7 @@
           "kind": "implementation_reference",
           "result": "SOURCE_AND_SYNTHETIC",
           "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
-          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "candidate": "cae9d1e plus independent held-out tests; exact non-document manifest in IMPLEMENTATION_REVIEW.md",
           "references": [
             "src/lib/connections/providers/gmail.ts"
           ],
@@ -1751,7 +1751,7 @@
           "kind": "implementation_reference",
           "result": "SOURCE_AND_SYNTHETIC",
           "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
-          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "candidate": "cae9d1e plus independent held-out tests; exact non-document manifest in IMPLEMENTATION_REVIEW.md",
           "references": [
             "src/lib/connections/providers/figma.ts"
           ],
@@ -1828,7 +1828,7 @@
           "kind": "implementation_reference",
           "result": "SOURCE_AND_SYNTHETIC",
           "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
-          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "candidate": "cae9d1e plus independent held-out tests; exact non-document manifest in IMPLEMENTATION_REVIEW.md",
           "references": [
             "src/lib/connections/providers/hetzner.ts",
             "src/lib/connections/broker/provider-identity.ts"
@@ -1915,7 +1915,7 @@
           "kind": "implementation_reference",
           "result": "SOURCE_AND_SYNTHETIC",
           "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
-          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "candidate": "cae9d1e plus independent held-out tests; exact non-document manifest in IMPLEMENTATION_REVIEW.md",
           "references": [
             "src/lib/connections/runners/",
             "services/connections-runner/",
@@ -2005,7 +2005,7 @@
           "kind": "implementation_reference",
           "result": "SOURCE_AND_SYNTHETIC",
           "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
-          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "candidate": "cae9d1e plus independent held-out tests; exact non-document manifest in IMPLEMENTATION_REVIEW.md",
           "references": [
             "src/lib/connections/runners/",
             "services/connections-runner/",
@@ -2086,7 +2086,7 @@
           "kind": "implementation_reference",
           "result": "SOURCE_AND_SYNTHETIC",
           "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
-          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "candidate": "cae9d1e plus independent held-out tests; exact non-document manifest in IMPLEMENTATION_REVIEW.md",
           "references": [
             "src/lib/connections/events/",
             "src/lib/connections/broker/service.ts"
@@ -2170,7 +2170,7 @@
           "kind": "implementation_reference",
           "result": "SOURCE_AND_SYNTHETIC",
           "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
-          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "candidate": "cae9d1e plus independent held-out tests; exact non-document manifest in IMPLEMENTATION_REVIEW.md",
           "references": [
             "src/lib/connections/workflows/",
             "src/lib/connections/triggers/",
@@ -2245,7 +2245,7 @@
           "kind": "implementation_reference",
           "result": "SOURCE_AND_SYNTHETIC",
           "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
-          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "candidate": "cae9d1e plus independent held-out tests; exact non-document manifest in IMPLEMENTATION_REVIEW.md",
           "references": [
             "src/lib/connections/budgets.ts",
             "src/lib/connections/runtime.ts",
@@ -2333,7 +2333,7 @@
           "kind": "implementation_reference",
           "result": "SOURCE_AND_SYNTHETIC",
           "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
-          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "candidate": "cae9d1e plus independent held-out tests; exact non-document manifest in IMPLEMENTATION_REVIEW.md",
           "references": [
             "src/lib/connections/skills.ts",
             "src/lib/connections/task-runtime.ts"
@@ -2434,7 +2434,7 @@
           "kind": "implementation_reference",
           "result": "SOURCE_AND_SYNTHETIC",
           "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
-          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "candidate": "cae9d1e plus independent held-out tests; exact non-document manifest in IMPLEMENTATION_REVIEW.md",
           "references": [
             "docs/connections/evidence/IMPLEMENTATION_REVIEW.md"
           ],
@@ -2513,7 +2513,7 @@
           "kind": "implementation_reference",
           "result": "SOURCE_ONLY",
           "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
-          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "candidate": "cae9d1e plus independent held-out tests; exact non-document manifest in IMPLEMENTATION_REVIEW.md",
           "references": [
             "docs/connections/IMPLEMENTATION_STATUS.md"
           ],
@@ -2592,7 +2592,7 @@
           "kind": "implementation_reference",
           "result": "SOURCE_ONLY",
           "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
-          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "candidate": "cae9d1e plus independent held-out tests; exact non-document manifest in IMPLEMENTATION_REVIEW.md",
           "references": [
             "docs/connections/BROKER_OPERATIONS.md",
             "docs/connections/IMPLEMENTATION_STATUS.md"

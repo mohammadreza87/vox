@@ -1,57 +1,74 @@
 # Independent Connections implementation review
 
-Task: Connections implementation independent security/QA (`CONN-010` synthetic scope and selected foundation/provider/UI checks), 19 October 2026. Evaluator: independent GPT-6.1 Sol/high agent using `vox-connection-security` and `vox-connection-qa`. Authors and evaluator have separate file ownership; this evaluation does not establish deployment IAM isolation.
+Evaluator: independent GPT-6.1 Sol/high security/QA agent using `vox-connection-security` and `vox-connection-qa`. Evaluation date: 19 October 2026. Authors and evaluator have separate file ownership. This report establishes source and bounded local fixture evidence; deployment IAM and native account qualification remain separate.
 
-Baseline: `d8d6766f4e7148e83ec4f85208974e00e3570c34`, branch `codex/studio-connections`. The candidate remains an uncommitted, changing implementation. A checkpoint manifest over changed `src/`, `scripts/connections*` and `services/connections-runner/` source, including independent tests and excluding docs, contained 79 files, SHA-256 `5f721fc162812229f7cd4d7b75add621f27752f05dc5368d7226d0b415cd0145`. This is a review checkpoint, not a frozen release artifact; later edits require affected checks and a fresh manifest.
+## Exact reviewed candidate
 
-## Evidence and boundaries
+Combined branch `codex/studio-connections`, HEAD `cae9d1e84336959dbaa4f4ef8e50cb4204854ded`, includes merge `f417c31` of exact `origin/develop` revision `849e77b` and current agent-block/provider-request authorization fixes. The final independent tests are uncommitted additions on this HEAD. The report was refreshed after the root owner declared source freeze.
 
-All accounts, signing/encryption keys, credentials, resources, models, DNS answers and provider responses used here are explicit synthetic fixtures. Real HTTP router, adaptive identity repository, connection policy/repository/ledger/lineage, filesystem persistence, encrypted file vault, typed provider registry and isolated model loop execute in the tests. Injected model, DNS and provider wire seams record calls without contacting a provider or reading production configuration. React tests render the real screen in jsdom. A real local Docker/Chromium worker was independently executed with an offline synthetic page. No provider OAuth, device login, live model call, real website/account browsing, SSH host, production data or deployment was exercised.
+Compared with baseline `e1186f258d38de538c8f20537ee7579f577f1269`, the final non-document changed-file manifest contains **194 files**, SHA-256 **`9c890bb050fa423653ff6e8461bf8e4726b1400b277f5547af42c74cbd7834ff`**. Reproduce by taking the sorted union of `git diff --name-only <baseline>` and `git ls-files --others --exclude-standard`, retaining existing files except `docs/**` and `README.md`; build ordered objects `{path,sha256}` using exact file bytes, serialize JSON with sorted keys and separators `(',', ':')`, then SHA-256 the JSON bytes. Documentation is excluded to avoid a self-referential report hash. Any code/configuration/test change after this snapshot invalidates the manifest and requires affected verification. This source manifest is not a compiled release artifact digest.
 
-| Evidence level | Result at this checkpoint |
+## Independent evidence
+
+All accounts, signing/encryption keys, credentials, resources, models, DNS answers and provider responses used here are explicit synthetic fixtures. Real authenticated routers, adaptive identity repositories, connection policy/repository/ledger/lineage, filesystem persistence, encrypted vault, typed provider registry, workflow scheduler, and isolated task runtime execute in tests. Injected model/DNS/provider seams record transmissions without accessing native providers or production configuration. React tests render real components in jsdom. Actual local broker HTTP and offline Docker/Chromium checks are identified separately below.
+
+| Independent suite | Cases | Result |
+|---|---:|---|
+| Core/ledger/lineage/filesystem (`integration-security`) | 35 | PASS |
+| Model → policy → ledger → typed adapter/skills (`integration-task-runtime`) | 16 | PASS |
+| Account-bound production application/inventory/model policy (`integration-application`) | 17 | PASS |
+| Real broker/OAuth/vault/core interfaces and loopback HTTP (`integration-broker`) | 13 | PASS |
+| Durable concurrent/restarted budget reservations (`integration-budgets`) | 10 | PASS |
+| Draft/review/pause, schedules/events/native evidence (`integration-workflows`) | 14 | PASS |
+| Signed worker → actual reverse-control handler (`integration-signed-worker`) | 2 | PASS |
+| DNS/HTTPS/dispatched uncertain outcomes (`security-transport`) | 19 | PASS |
+| Actual authenticated HTTP router (`security-http`) | 14 | PASS |
+| Real adaptive authority/current membership/agent blocks (`security-authority`) | 10 | PASS |
+| Actual Connections/workflow component render (`security-ui`) | 7 | PASS |
+| HMAC/key compatibility/encrypted vault/ambient credentials (`security-broker`) | 10 | PASS |
+| Browser/SSH/container source boundaries (`security-runners`) | 8 | PASS |
+| Native identity/explicit credential-resource admission (`security-provider-identity`) | 13 | PASS |
+| Raw signed minimized provider events (`security-events`) | 7 | PASS |
+| Signed runner deployment admission/final-use fences (`security-runner-admission`) | 8 | PASS |
+| **Consolidated independent result** | **203** | **PASS, 16 suites** |
+
+Commands: `node_modules/.bin/vitest run src/lib/connections/__tests__/integration-*.test.ts src/lib/connections/__tests__/security-*.test.ts`; `node_modules/.bin/tsc --noEmit --pretty false`; `node_modules/.bin/eslint src/lib/connections/__tests__/integration-*.test.ts src/lib/connections/__tests__/security-*.test.ts`. Consolidated independent **203/203 PASS**, full TypeScript **PASS**, independently owned tests ESLint **PASS with zero warnings/errors**. The last edit only removed unused local destructuring from the scripted-model snapshot helper; its affected 16-case suite was repeated and passed. The new SDK authorization function is invoked before recording model wire input; nonserializable callback/signal are excluded from snapshots, without weakening authority assertions.
+
+The private HTTP fixture starts the actual broker server on an ephemeral `127.0.0.1` port and uses its actual signed client with synthetic keys. Real broker/core/vault/executor interfaces complete a read. Unsigned/wrong-key execution cannot reach the executor, exact HMAC replay is denied, duplicate OAuth query keys fail, and no operator-token enrollment HTTP route exists. Output excludes credential canaries. The server is closed afterward. This is actual local HTTP, while implementations still share the test process/OS identity.
+
+The independent local Docker smoke used immutable image **`sha256:bac48b77b4c9c885ab076f689b318de31455fcf39b76a36b246da2f923c2c9ef`**, seccomp SHA-256 **`513c31efdc06215e0c5c84cc60cbef110ea619962df9e78d62a68633094cbeab`**, the existing local Docker Unix socket, and source network-none/nonroot/cap-drop/read-only/resource limits. The offline HTML included a visible canary, a script attempting page replacement, and an external iframe. Actual output was `title:"Independent QA", text:"OFFLINE_QA_CANARY_622", offline:true, javascript:false, interactive:false`. No script execution/external content appeared. This qualifies this exact local offline browser fixture; it does not qualify authenticated browsing, SSH, a production runner or host-escape resistance.
+
+## Findings resolved and independently regressed
+
+1. **Dispatched effects:** unusable write responses/redirects now preserve unknown outcome rather than offering safe retry. Held-out transport cases originally failed and now pass.
+2. **Source authority:** cached sources and every parent recheck live person binding, agent membership, grant expiry/revision, connection epoch, tombstones and destination restrictions. A derived cross-connector result cannot survive original-source revocation.
+3. **Consent usability:** server maximum grant expiry bounds real UI choices; initial choices exceeded the verified binding lifetime. Work/Personal transitions clear private labels, and Persian RTL plus disabled-provider state render correctly.
+4. **Generated input lineage:** code-owned generation source union prevents model omission; tainted generated arguments stay ephemeral. A second real typed read succeeds without retained source-derived arguments. Explicit model-processor destination consent is required independently of private reply permission.
+5. **Purge honesty:** source suppression/current payload deletion reports global purge pending. File generation cleanup removes unreferenced generations under lock. Fixture reconstruction verifies current and prior retained-file canary removal; this is not a production backup/restore drill.
+6. **Enrollment/broker lifecycle:** active-provider uniqueness is transactional. Pending/sealed OAuth revoke, late exchange, interrupted claim convergence, independent reads, grant-only abort, rotated-token cleanup, and persisted ambiguous-refresh revocation all have held-out regressions. Known pre-dispatch failure terminates fenced work safely without a provider call.
+7. **Budgets/model authority:** zero omitted caps deny spend; durable concurrent budgets and restart preserve caps. Authority rechecks after budget reservation and at the SDK transmission boundary. Current agent blocks deny use immediately. Kill switches, model-policy withdrawal/change, and hung-model cancellation suppress continuation/effects/output. Missing/unqualified/mismatched actual model identity cannot run a task.
+8. **Workflows/events:** exact draft review precedes activation; pause and expired authority suppress dispatch. A stale rule pauses quietly with zero calls rather than blocking unrelated rules. Stable occurrences deduplicate concurrent drains. All-day quiet/no eligible slot is rejected. Actual provider egress destinations and the central tool budget apply to scheduled reads. Signed raw event bodies deduplicate even when an unsigned delivery ID changes; normalized event metadata alone cannot authorize a subsequent step. Native readback mismatch suppresses later reads. GitHub App installation events remain unavailable pending a separate installation-identity proof; supported owner-scoped repository-hook events do not compare unrelated identifier namespaces.
+9. **Service authentication:** both services read separate owned 0600 copies of the same 64-hex key representation. Mode/owner/symlink checks, exact signatures, replay/body/path binding, and actual ambient VOXX/model credential variable rejection pass independent fixtures.
+10. **External effects:** production application discovery/grants/execute and the broker are read-only. Private Vox reply audience plus generic provider destination cannot establish native external recipient authorization. Sending/changing must remain blocked until a fresh provider-native audience/disclosure contract participates in preview, approval and pre-send checks. Synthetic effect ledger coverage does not enable production writes.
+11. **Worker admission:** signed per-account/space service inventory binds exact targets, image/socket/profile configuration, qualification evidence and expiry. Held-out changes to inventory/socket/evidence, a correctly signed wrong tenant/overlong approval, runtime seccomp mismatch, changed configuration, and revoke after worker completion all fail closed. Worker identity is explicitly a local service identity, never fabricated OAuth/native account authentication. SSH runbook input is bounded and fixed-command; actual SSH execution remains unavailable.
+
+## Disabled source rollout assessment
+
+**No source-level security blocker was found for deploying this combined candidate with Connections globally disabled**, subject to the root owner's complete build/regression and release checks. Missing `STUDIO_CONNECTIONS_CONFIG_FILE` resolves to `enabled:false, profiles:[]`; absent broker URL/key creates neither a broker client nor reverse-control authenticator. Dashboard is disabled. Setup/enrollment, grants/resources, model tasks, provider execution and workflow activation fail closed. No automatic broker, scheduler or worker startup occurs in Studio. Local revoke/cancel/pause remain available where authority/state exist.
+
+Before such a rollout, verify presence-only absence of all three Connections configuration/broker environment settings and absence of a broker/worker service or provider webhook ingress; bind deployment to the tested immutable build, then verify existing Studio/Telegram health and rollback. Deploying disabled source does **not** activate or qualify providers, model tasks, workflows/events, browser/SSH runners or real accounts. This evaluator did not access production environment values or deploy anything.
+
+## Unavailable activation/release evidence
+
+| Required evidence | Status |
 |---|---|
-| Independent core/ledger/lineage/filesystem fixtures | PASS: 35 assertions/cases in `integration-security.test.ts` |
-| Independent transport fixtures | PASS: 19 cases in `security-transport.test.ts` |
-| Actual authenticated HTTP router fixtures | PASS: 14 cases in `security-http.test.ts` |
-| Real adaptive profile → current Connections authority | PASS: 9 cases in `security-authority.test.ts` |
-| Real Connections component render | PASS: 6 cases in `security-ui.test.ts` |
-| Broker authentication/encrypted temporary vault | PASS: 5 cases in `security-broker.test.ts` |
-| Scripted model → real policy/ledger/typed adapter loop/skills | PASS: 14 cases in `integration-task-runtime.test.ts` |
-| Account-bound application/inventory configuration | PASS: 8 cases in `integration-application.test.ts` |
-| Real broker/OAuth/vault/core lifecycle interfaces and loopback HTTP | PASS: 13 cases in `integration-broker.test.ts` |
-| Browser/SSH/container source boundaries | PASS: 8 cases in `security-runners.test.ts` |
-| Durable model/tool budget reservations | PASS: 10 cases in `integration-budgets.test.ts` |
-| Actual local offline Chromium container | PASS: exact immutable rebuilt image and profile below |
-| Full TypeScript check | PASS: `tsc --noEmit --pretty false` |
-| Actual separately deployed broker/IAM/egress/vault isolation | UNAVAILABLE |
-| Real provider authorization/scope/identity/revoke/refresh | UNAVAILABLE |
-| Telegram iOS/Android/Desktop OAuth and private/group voice | UNAVAILABLE |
-| Deployed artifact, rollback and operator kill drill | UNAVAILABLE |
+| Exact native provider OAuth/account/scope/subject/tenant/revoke/refresh per enabled account | UNAVAILABLE |
+| Actual external model processor identity/account/privacy/retention qualification | UNAVAILABLE |
+| Separately deployed broker service UID, vault/key permissions, network/egress isolation | UNAVAILABLE |
+| Dedicated worker daemon/host or constrained orchestrator IAM unable to access Studio/vault/user files | UNAVAILABLE |
+| Disposable SSH host full execution and independent native host-key qualification | UNAVAILABLE |
+| Real Telegram EN/FA iOS/Android/Desktop OAuth, private/group voice and existing-agent flows | UNAVAILABLE |
+| Retention consumer acknowledgments and physical purge/history/vector/cache/backup/restore | UNAVAILABLE |
+| Exact deployed artifact, public endpoint, Telegram interaction, rollback and operator kill drill | UNAVAILABLE |
 
-Consolidated command: `node_modules/.bin/vitest run src/lib/connections/__tests__/integration-*.test.ts src/lib/connections/__tests__/security-*.test.ts`, followed by `node_modules/.bin/tsc --noEmit --pretty false`. Consolidated result before the final loopback addition: **140 tests PASS in 11 independent suites; TypeScript PASS**. The final broker suite separately passed **13 tests**, adding one case for **141 independent cases**. Individual suites were executed as each interface landed; repeat affected checks and refresh the digest after candidate freeze.
-
-The private HTTP fixture starts the actual broker server on an ephemeral `127.0.0.1` port and uses the actual signed broker client with synthetic keys. The real broker/core/vault/executor interfaces complete one read. Unsigned/wrong-key execution cannot reach the executor, exact HMAC replay is denied, duplicate OAuth query keys fail, and no operator-token enrollment route exists. Output excludes token/client-secret canaries. The server is closed after the fixture; this is an actual local transport boundary, while the broker/control implementations still share the test process and OS identity.
-
-The independent local Docker smoke used `DockerRunnerSandbox` with image `sha256:bac48b77b4c9c885ab076f689b318de31455fcf39b76a36b246da2f923c2c9ef`, seccomp SHA-256 `513c31efdc06215e0c5c84cc60cbef110ea619962df9e78d62a68633094cbeab`, the existing local Docker Unix socket, and the source's network-none/nonroot/cap-drop/read-only limits. An HTML fixture included a visible canary, a script attempting to replace the page and an external iframe. The actual result was `title:"Independent QA", text:"OFFLINE_QA_CANARY_622", offline:true, javascript:false, interactive:false`. The script did not execute and no external content appeared. This establishes the exact local offline browser image fixture, not arbitrary authenticated web workflows, a production deployment, SSH host identity or host-escape impossibility.
-
-## Security findings and regression evidence
-
-1. **P1, fixed and independently re-tested:** dispatched writes with unusable 2xx content types/encodings or redirects were reported as failed. The provider owner now preserves `unknown` when success cannot be proven after dispatch. Three held-out transport cases originally failed and now pass. A possibly completed external effect is never made safe to repeat by an invalid response.
-2. **P1, fixed and independently re-tested:** cached source use survived firing the original agent or changing the verified person binding. Current source resolution now checks live authority and every parent source. Held-out tests cover those changes and a derived result on another connection after original-source revocation.
-3. **P1 usability, fixed and independently re-tested:** both original UI expiry choices exceeded the twelve-hour profile binding, so all grants failed. The dashboard now supplies a maximum expiry, and UI submission stays within it. An independent component test verifies the actual submitted expiry and resource/agent selection.
-4. **P1 workflow, fixed and independently re-tested:** a second generated tool call attempted to retain arguments derived from a nonpersistent source. Source-tainted generated operations now use ephemeral payloads. A real two-read scripted-model/core/provider fixture proves both reads and the second operation's complete lineage without durable argument bytes.
-5. **Disclosure hardening, fixed and independently re-tested:** generation context is code-owned; omitted model source IDs do not remove trusted source lineage. Model processor permission (`model:studio`) is required before generation, in addition to provider and private delivery destinations. The runtime starts with a fresh isolated message context and sends provider results as untrusted data. This does not qualify an actual external model processor or its retention policy.
-6. **Deletion evidence, corrected:** source deletion returns global purge pending; label suppression and current payload deletion do not assert history/vector/cache/backup completion. File storage cleans unreferenced generations under its writer lock. The normal file reconstruction/revoke test confirms retained canaries disappear from current and retained generation files; an actual crash/restore drill remains unavailable.
-7. **P2, fixed and independently re-tested:** application-level “one active provider connection” was checked outside the enrollment transaction. The application now opts into atomic uniqueness; the generic core retains explicit multi-credential support. Concurrent enrollment admits one connection.
-8. **Broker lifecycle, fixed and independently re-tested:** pending-flow revocation previously allowed late OAuth exchange, staged credentials survived disconnect, a second read aborted the first, uncertain refresh failure allowed old-token reuse, and an interrupted claim receipt could strand a connected account. Held-out broker cases verify callback fresh checks, staged cleanup, independent reads, persisted refresh fencing/revocation and interrupted-claim convergence. Mid-exchange revocation, grant-only abort, active execution abort, and rotated-token cleanup after core revocation also pass.
-9. **P2, fixed and independently re-tested:** known catalog/credential/scope preflight failure left work queued and leased. A fenced `abandonClaim` now returns a safe failed receipt, removes pending payload work and makes no provider call.
-10. **P1, fixed and independently re-tested:** authority could change while awaiting a durable model-budget reservation and the model request still transmitted. The runtime now rechecks current authority after reservation immediately before model input. Cases also verify kill-switch change during inference suppresses effects/output, zero default spend, durable concurrent ceilings/restart, and reviewed skill IDs/versions/provider/space without granting additional authority.
-11. **Runner source hardening:** the provider owner bounded actual remote-runbook stdin bytes/time and removed unsupported RSA public-key formatting. Independent source fixtures and the exact rebuilt offline browser image pass; disposable SSH-server execution and a real remote host remain unavailable.
-
-## Coverage and remaining gates
-
-The held-out tests cover zero implicit grants, forged actor/role/scope input, distinct Work/Personal/tenant/container/person/agent authority, unknown/group audience denial, successor noninheritance, exact selected resources, strict schemas, source paraphrase/query exfiltration, nonpersistent data, parent restriction intersection, source tombstones/replay, exact approval digest/revision, concurrent deduplication and budgets, stale worker fencing, revoke before/after dispatch, unknown outcome recovery, ephemeral process loss, final-use checks, cross-origin mutations, real request body limits, private scope loading transitions, Persian RTL, and unavailable-provider UI.
-
-Two current review gates have been returned to the root owner. **External effect audience:** a private Vox reply audience plus generic `provider:X` destination does not prove Slack-channel/repository/email recipients may receive every source. Exact resource/content approval alone does not establish current external membership. Real effects must remain unavailable until a native fresh audience/disclosure contract participates in preview, approval and pre-send checks; a static qualified-read flag cannot enable writes. **Service key representation:** Studio's binary 32-byte HMAC key reader and the broker's 64-hex-character reader require one explicit compatible contract and ownership/symlink checks; separate copied files must derive identical signing bytes. These are pending root integration review and do not affect the synthetic tests' direct in-memory signing keys.
-
-Production remains gated on exact provider account/scope/subject/tenant evidence; actual broker service identities, secret/key permissions and network policy; supported OAuth issuer/state/PKCE/refresh races; retention consumers and physical purge/backup/restore; independent remote MCP qualification; bounded browser/SSH worker isolation; real Telegram EN/FA/device/voice regression; and an immutable artifact/configuration with release-owner rollout/rollback evidence. Provider metadata or an operator's `qualified` flag alone is not that evidence. The current private-only scope deliberately refuses group connection output.
+Docker daemon API access can confer host privileges despite distinct broker/Studio UIDs. Container flags, signatures and an offline image smoke do not prove safe daemon/host IAM. A dedicated worker host/daemon or constrained orchestrator and measured access controls remain an activation gate. Provider metadata, signed source configuration and operator `qualified` flags are not native account proof. Group connector output and all production external changes remain unavailable.

@@ -1,8 +1,8 @@
 # Connections delivery backlog
 
-Generated from [BACKLOG.json](BACKLOG.json), the canonical source. JSON SHA256: `07b1d9d0ef03462dd8bd9cbd1eca0df06d260bc76837e489eee779b4bc333796`.
+Generated from [BACKLOG.json](BACKLOG.json), the canonical source. JSON SHA256: `04acf92c3d21b6c905bed69283f352fec149efefcffa9b9c885567b19e669c9a`.
 
-Historical planning baseline `42a1a57113e655b6185ddc731b6f9617aaa4bb4e`. Current implementation baseline `d8d6766f4e7148e83ec4f85208974e00e3570c34`; candidate remains uncommitted and is not a release artifact.
+Historical planning baseline `42a1a57113e655b6185ddc731b6f9617aaa4bb4e`. Current implementation baseline `d8d6766f4e7148e83ec4f85208974e00e3570c34`; combined runtime source is frozen at `cae9d1e` with independent held-out tests and the exact manifest in [IMPLEMENTATION_REVIEW.md](evidence/IMPLEMENTATION_REVIEW.md). A separate compiled artifact is required for deployment.
 
 The user authorized end-to-end implementation in this chat, superseding the planning-only instruction. This candidate implements and tests synthetic source paths. No live provider account, private data access, real external effect, target administration, scheduled production worker or deployment was exercised or is claimed by these records.
 

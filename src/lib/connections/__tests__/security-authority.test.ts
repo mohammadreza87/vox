@@ -62,6 +62,15 @@ describe('independent real adaptive-profile to Connections authority integration
     expect(next.bindingRevision).toBeGreaterThan(initial.bindingRevision); expect(next.scope.audienceRevision).not.toBe(initial.scope.audienceRevision);
   });
 
+  it('a live per-account block removes an otherwise active owned agent immediately', async () => {
+    const f = await fixture(); await f.adaptive.confirm(1001, { confirm: true });
+    expect((await f.resolve({ accountId: 'telegram-account:1001' }, 'work')).currentAgentIds).toContain('qa-private-agent');
+    f.state.agents[0].blocked = [1001];
+    expect((await f.resolve({ accountId: 'telegram-account:1001' }, 'work')).currentAgentIds).not.toContain('qa-private-agent');
+    f.state.agents[0].blocked = [];
+    expect((await f.resolve({ accountId: 'telegram-account:1001' }, 'work')).currentAgentIds).toContain('qa-private-agent');
+  });
+
   it.each(['telegram-account:0', 'telegram-account:1e3', 'telegram-account:1001/other', 'forged-person:1001'])
     ('rejects malformed account identity %s', async accountId => {
       const f = await fixture(); await expect(f.resolve({ accountId }, 'work')).rejects.toMatchObject({ code: 'authentication_required' });
