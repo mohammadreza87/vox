@@ -6,6 +6,7 @@ import { promises as fs } from 'node:fs';
 import { resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { attest, canonical, hash, type Authority, type TrustStore } from '../src/lib/adaptive/improvement/contracts';
+import { createExternalEvidenceDirectory } from '../src/lib/adaptive/improvement/evidence-directory';
 import { authorSoftwarePatch, createOpenAISoftwareAuthorTransport, type SoftwareAuthorTransport } from '../src/lib/adaptive/improvement/software-author';
 import { SOFTWARE_AUTHOR_MODEL, SOFTWARE_AUTHOR_POLICY_DIGEST } from '../src/lib/adaptive/improvement/software-author-contracts';
 import { readFrozenSoftwareBase, createSyntheticPersianPatch } from '../src/lib/adaptive/improvement/software-patch';
@@ -19,15 +20,15 @@ async function main() {
   }
   if (process.env.VOX_IMPROVEMENT_IMAGE !== SOFTWARE_IMAGE_DIGEST) throw new Error('pinned_local_image_required');
   if (mode === 'provider' && !process.env.OPENAI_API_KEY?.trim()) throw new Error('provider_credential_required');
-  const root = resolve(outputDirectory);
-  await fs.mkdir(root, { mode: 0o700 }); // Deliberately refuses existing output, including crashed attempts.
   const repositoryRoot = process.cwd();
+  const root = await createExternalEvidenceDirectory(repositoryRoot, outputDirectory);
   const base = await readFrozenSoftwareBase(repositoryRoot, baselineCommit);
   const sourceRevision = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
   const paths = ['src/lib/adaptive/improvement/contracts.ts', 'src/lib/adaptive/improvement/software-contracts.ts',
     'src/lib/adaptive/improvement/software-patch.ts', 'src/lib/adaptive/improvement/software-sandbox.ts',
     'src/lib/adaptive/improvement/software-workflow.ts', 'src/lib/adaptive/improvement/software-author-contracts.ts',
-    'src/lib/adaptive/improvement/software-author.ts', 'scripts/software-model-author-demo.ts'];
+    'src/lib/adaptive/improvement/software-author.ts', 'src/lib/adaptive/improvement/evidence-directory.ts',
+    'scripts/software-model-author-demo.ts'];
   const readManifest = async () => ({ baseRevision: sourceRevision,
     files: Object.fromEntries(await Promise.all(paths.map(async path => [path, hash(await fs.readFile(resolve(repositoryRoot, path)))]))) });
   const sourceManifest = await readManifest();
