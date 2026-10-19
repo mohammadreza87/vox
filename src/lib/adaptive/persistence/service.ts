@@ -7,7 +7,7 @@ import { resolveVerifiedPerson } from '../identity';
 import { authorizeAccess } from '../policy';
 import type { AccessRequest, ConsentPermission, IdentityContext, PolicySnapshot, ResourceDescriptor } from '../types';
 import { ADAPTIVE_POLICY_VERSION, OPTIONAL_PURPOSES, AdaptiveRepository, accountIdFor, containerIdFor, digest,
-  spaceIdFor, tenantIdFor, type AdaptiveDocument, type OptionalPurpose, type SpaceKind, type StoredMemory } from './repository';
+  spaceIdFor, tenantIdFor, type AdaptiveAuthorityDocument, type AdaptiveDocument, type OptionalPurpose, type SpaceKind, type StoredMemory } from './repository';
 import type { AdaptiveNotice, AdaptiveSnapshot, AdaptivePresentation } from './contracts';
 import { correctionInput, type CorrectionInput } from './validation';
 import type { AgentGrantInput, ConsentInput, DeletionInput, IdentityInput, MemoryInput, PresentInput } from './validation';
@@ -201,20 +201,20 @@ export class AdaptiveService {
     if (failed) throw failed.reason;
     return result;
   }
-  private identity(d: AdaptiveDocument): IdentityContext {
+  private identity(d: AdaptiveAuthorityDocument): IdentityContext {
     const binding = d.binding;
     return { authenticatedAccountId: d.accountId, ...(binding ? { selectedPerson: {
       personId: d.personId, bindingId: binding.id, bindingRevision: binding.revision,
     } } : {}) };
   }
-  private confirmed(d: AdaptiveDocument, now: number): boolean {
+  private confirmed(d: AdaptiveAuthorityDocument, now: number): boolean {
     return !!resolveVerifiedPerson(this.identity(d), { schemaVersion: 1, id: d.accountId, revision: 1,
       createdAt: d.createdAt, updatedAt: d.createdAt, status: 'active', ownerPersonId: d.personId }, d.binding, now);
   }
-  private requirePerson(d: AdaptiveDocument, now: number): void {
+  private requirePerson(d: AdaptiveAuthorityDocument, now: number): void {
     if (!this.confirmed(d, now)) fail(403, 'profile_confirmation_required');
   }
-  private eligible(d: AdaptiveDocument, capability: Capability, now: number): { eligible: boolean; reason?: string; validUntil?: number; approvalVersions?: readonly string[] } {
+  private eligible(d: AdaptiveAuthorityDocument, capability: Capability, now: number): { eligible: boolean; reason?: string; validUntil?: number; approvalVersions?: readonly string[] } {
     // Enrollment/provider/communications release gates have no implementation in this slice.
     if (capability === 'content_quality_review' || (capability === 'biometric_recognition' && this.options.voiceRecognitionEnabled !== true) ||
         (['auto_memory', 'relationship_outreach'].includes(capability) && this.options.scopedRelationshipsEnabled !== true) ||
@@ -223,7 +223,7 @@ export class AdaptiveService {
     if (!policy || policy.request.personId !== d.personId || policy.request.capability !== capability) return { eligible: false, reason: 'approval_missing' };
     return evaluateCapability(policy.request, policy.approvals, now);
   }
-  capabilityStatus(d: AdaptiveDocument, capability: Capability, now: number): { eligible: boolean; reason?: string; validUntil?: number; approvalVersions?: readonly string[] } {
+  capabilityStatus(d: AdaptiveAuthorityDocument, capability: Capability, now: number): { eligible: boolean; reason?: string; validUntil?: number; approvalVersions?: readonly string[] } {
     return this.eligible(d, capability, now);
   }
   /** Trusted backend seam: same aggregate/expiry transaction as consent and memory. */
@@ -239,25 +239,25 @@ export class AdaptiveService {
     // Synchronous disk/schema work can itself cross an authority deadline.
     return { status: 'ready', value: fn(snapshot.document, this.now()) };
   }
-  isProfileConfirmed(d: AdaptiveDocument, now: number): boolean { return this.confirmed(d, now); }
-  isCoreAllowed(d: AdaptiveDocument, now: number): boolean { return this.confirmed(d, now) && this.eligible(d, 'core_text', now).eligible; }
-  purposeFingerprint(d: AdaptiveDocument, space: SpaceKind, purpose: OptionalPurpose, now: number, agentId?: string): string {
+  isProfileConfirmed(d: AdaptiveAuthorityDocument, now: number): boolean { return this.confirmed(d, now); }
+  isCoreAllowed(d: AdaptiveAuthorityDocument, now: number): boolean { return this.confirmed(d, now) && this.eligible(d, 'core_text', now).eligible; }
+  purposeFingerprint(d: AdaptiveAuthorityDocument, space: SpaceKind, purpose: OptionalPurpose, now: number, agentId?: string): string {
     return digest([d.accountId, d.binding, this.confirmed(d, now),
       space, purpose, agentId, this.permission(d, space, purpose), this.eligible(d, CAPABILITY[purpose], now),
       agentId ? d.agentGrants.filter(g => g.space === space && g.agentId === agentId) : null]);
   }
-  coreFingerprint(d: AdaptiveDocument, now: number): string {
+  coreFingerprint(d: AdaptiveAuthorityDocument, now: number): string {
     return digest([d.accountId, d.binding, this.confirmed(d, now), this.eligible(d, 'core_text', now)]);
   }
   /** Explicit preferences may be saved as a user directive. Applying them to an
    * agent still requires current optional purpose consent and an exact grant. */
-  isPurposeAllowed(d: AdaptiveDocument, space: SpaceKind, purpose: OptionalPurpose, now: number, agentId?: string): boolean {
+  isPurposeAllowed(d: AdaptiveAuthorityDocument, space: SpaceKind, purpose: OptionalPurpose, now: number, agentId?: string): boolean {
     const permission = this.permission(d, space, purpose);
     return this.confirmed(d, now) && this.eligible(d, CAPABILITY[purpose], now).eligible &&
       permission.state === 'granted' && permission.expiresAt > now &&
       (!agentId || d.agentGrants.some(g => g.space === space && g.agentId === agentId && g.allowed));
   }
-  private permission(d: AdaptiveDocument, space: SpaceKind, purpose: OptionalPurpose): ConsentPermission {
+  private permission(d: AdaptiveAuthorityDocument, space: SpaceKind, purpose: OptionalPurpose): ConsentPermission {
     return d.permissions.find(p => p.spaceId === spaceIdFor(d.accountId, space) && p.purpose === purpose)!;
   }
   private invalidateExperience(d: AdaptiveDocument, space: SpaceKind, purpose: OptionalPurpose): void {

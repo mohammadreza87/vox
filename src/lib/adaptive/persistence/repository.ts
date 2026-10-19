@@ -57,6 +57,10 @@ const documentSchema = z.object({ schemaVersion: z.literal(1), accountId: id, pe
 export type AdaptiveDocument = Omit<z.infer<typeof documentSchema>, 'permissions' | 'binding' | 'consentEvents'> & {
   permissions: ConsentPermission[]; binding?: PersonAccountBinding; consentEvents: ConsentEvent[];
 };
+/** Canonical facts needed to evaluate identity and current capability policy.
+ * A body-free projection is this type, never a fabricated AdaptiveDocument. */
+export type AdaptiveAuthorityDocument = Pick<AdaptiveDocument,
+  'accountId' | 'personId' | 'createdAt' | 'binding' | 'declaration' | 'permissions' | 'agentGrants'>;
 export function digest(value: unknown): string { return createHash('sha256').update(JSON.stringify(value)).digest('hex'); }
 export const accountIdFor = (telegramId: number) => `telegram-account:${telegramId}`;
 export const tenantIdFor = (accountId: string) => `private-tenant:${digest(accountId).slice(0, 24)}`;
