@@ -3,6 +3,8 @@ import { mkdtempSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import Database from 'better-sqlite3';
+import { spawnSync } from 'child_process';
+import { pathToFileURL } from 'url';
 import { AdaptiveRepository, accountIdFor, containerIdFor, digest, spaceIdFor, tenantIdFor, type AdaptiveDocument } from '../repository';
 import { SqliteAdaptiveStorage } from './sqlite-storage';
 import { IndexedStorageError, type CandidateHandle, type IndexedScope, type RuntimeAuthorityReceipt } from './contracts';
@@ -291,6 +293,51 @@ describe('staged SQLite adaptive storage — synthetic fixtures only', () => {
     expect(f.storage.readMetadata().lifecycleWatermark).toBe(3000);
     f.storage.close(); const reopen = new SqliteAdaptiveStorage(f.path, { now: () => 2500 }); stores.push(reopen);
     expect(reopen.indexed.readControls(f.scope.accountId, 'work')).toMatchObject({ status: 'unavailable', reason: 'clock_regression' });
+  });
+
+  it('gives evaluators deeply immutable canonical facts and stamps, including retained references after return', async () => {
+    const f = await fixture(); let capturedControls: unknown, capturedStamp: unknown;
+    const controls = f.storage.indexed.readControls(f.scope.accountId, 'work', (c, _now, stamp) => {
+      capturedControls = c; capturedStamp = stamp;
+      expect(Object.isFrozen(c)).toBe(true); expect(Object.isFrozen(c.permissions)).toBe(true);
+      expect(Object.isFrozen(c.permissions[0])).toBe(true); expect(Object.isFrozen(c.settings.work)).toBe(true);
+      expect(Object.isFrozen(stamp)).toBe(true);
+      expect(() => { c.permissions[0].state = 'withdrawn'; }).toThrow();
+      expect(() => { (stamp as { incarnation: string }).incarnation = 'forged'; }).toThrow();
+      return {};
+    });
+    expect(controls.status).toBe('ready'); if (controls.status !== 'ready') return;
+    expect(capturedControls).toBe(controls.controls); expect(capturedStamp).toBe(controls.stamp);
+    expect(() => { controls.controls.permissions[0].state = 'withdrawn'; }).toThrow();
+    expect(() => { controls.stamp.catalogVersion = 999; }).toThrow();
+    expect(f.storage.indexed.readRuntimeAuthority(f.scope).status).toBe('ready');
+    const denied = f.storage.indexed.readControls(f.scope.accountId, 'work', c => { c.agentGrants.splice(0); return {}; });
+    expect(denied.status).toBe('unavailable'); expect(denied.io.bodyRowsRead).toBe(0);
+  });
+
+  it('observes rejected asynchronous evaluators while failing closed without an unhandled Node rejection', async () => {
+    const f = await fixture();
+    const result = f.storage.indexed.readControls(f.scope.accountId, 'work', (() => Promise.reject(Error('synthetic rejected async evaluator'))) as never);
+    expect(result).toMatchObject({ status: 'unavailable', reason: 'invalid_controls' });
+    await new Promise(resolve => setImmediate(resolve));
+    expect(f.storage.indexed.readControls(f.scope.accountId, 'work').status).toBe('ready');
+  });
+
+  it('rejects arbitrary thenables without executing them and keeps rejected async callbacks safe in a real Node child', async () => {
+    const f = await fixture(); let executed = false;
+    expect(f.storage.indexed.readControls(f.scope.accountId, 'work', (() => ({ then: () => { executed = true; } })) as never))
+      .toMatchObject({ status: 'unavailable', reason: 'invalid_controls' });
+    await new Promise(resolve => setImmediate(resolve)); expect(executed).toBe(false);
+    f.storage.close();
+    const moduleUrl = pathToFileURL(join(process.cwd(), 'src/lib/adaptive/persistence/indexed/sqlite-storage.ts')).href;
+    const script = `import { SqliteAdaptiveStorage } from ${JSON.stringify(moduleUrl)};
+      const s = new SqliteAdaptiveStorage(${JSON.stringify(f.path)}, { now: () => 2000 });
+      const r = s.indexed.readControls(${JSON.stringify(f.scope.accountId)}, 'work', () => Promise.reject(Error('synthetic child rejection')));
+      if (r.status !== 'unavailable' || r.reason !== 'invalid_controls') process.exitCode = 2;
+      setImmediate(() => { s.close(); console.log('synthetic-child-safe'); });`;
+    const child = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], { encoding: 'utf8', timeout: 10_000 });
+    expect(child.error).toBeUndefined(); expect(child.status, child.stderr).toBe(0);
+    expect(child.stdout).toContain('synthetic-child-safe');
   });
 
 });

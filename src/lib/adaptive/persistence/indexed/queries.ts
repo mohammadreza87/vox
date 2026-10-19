@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { types as utilTypes } from 'util';
 import { digest, OPTIONAL_PURPOSES, tenantIdFor, spaceIdFor, containerIdFor } from '../repository';
 import { resolveVerifiedPerson } from '../../identity';
 import { accountKey, lexicalTerms, memoryMetadataSchema, parseControls, validateAccountId, type MemoryMetadata } from './projection';
@@ -9,6 +10,15 @@ import type { SqliteAdaptiveStorage } from './sqlite-storage';
 const id = z.string().min(1).max(200);
 const scopeSchema = z.object({ accountId: id, personId: id, tenantId: id, space: z.enum(['work', 'personal']),
   spaceId: id, containerId: id, agentId: id, purpose: z.enum(['core_text', ...OPTIONAL_PURPOSES]) }).strict();
+/** Controls contain only validated JSON trees. Freeze before exposing references
+ * to trusted evaluation code, including every nested array, key and enum row. */
+function freezeControlTree<T>(value: T): T {
+  if (value && typeof value === 'object' && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const child of Object.values(value)) freezeControlTree(child);
+  }
+  return value;
+}
 interface Catalog { version: number; digest: string }
 interface Authority { controls: IndexedControls; catalog: Catalog; deadline: number }
 const fail = (reason: IndexedFailure['reason'], io: IndexedIoCounters): IndexedFailure => ({ status: 'unavailable', reason, io });
@@ -119,10 +129,19 @@ export class IndexedQueryEngine implements IndexedAdaptiveQueries {
         stamp: { incarnation: meta.incarnation, generation: meta.generation, catalogVersion: catalog.version, catalogDigest: catalog.digest }, io };
     }, (value, now) => {
       if (value.status !== 'ready') return;
-      const evaluated = evaluateFresh?.(value.controls, now, value.stamp);
-      if (evaluateFresh && (!evaluated || typeof evaluated !== 'object' || 'then' in evaluated ||
-          !z.object({ deadline: z.number().int().nonnegative().safe().optional(), denied: z.boolean().optional() }).strict().safeParse(evaluated).success))
+      freezeControlTree(value.controls); freezeControlTree(value.stamp);
+      const rawEvaluation = evaluateFresh?.(value.controls, now, value.stamp);
+      if (utilTypes.isPromise(rawEvaluation)) {
+        // Observe only genuine native promises (including other realms), using
+        // the built-in operation rather than a user-supplied then/catch method.
+        void Promise.prototype.then.call(rawEvaluation, undefined, () => undefined);
         throw new IndexedStorageError('invalid_controls');
+      }
+      if (rawEvaluation && typeof rawEvaluation === 'object' && 'then' in rawEvaluation)
+        throw new IndexedStorageError('invalid_controls'); // Never execute a thenable.
+      const parsed = z.object({ deadline: z.number().int().nonnegative().safe().optional(), denied: z.boolean().optional() }).strict().safeParse(rawEvaluation);
+      if (evaluateFresh && !parsed.success) throw new IndexedStorageError('invalid_controls');
+      const evaluated = parsed.success ? parsed.data : undefined;
       const bound = Math.min(deadline, evaluated?.deadline ?? Number.MAX_SAFE_INTEGER);
       if (!evaluated?.denied && bound <= now) throw new IndexedStorageError('expired');
       value.observedAt = now;

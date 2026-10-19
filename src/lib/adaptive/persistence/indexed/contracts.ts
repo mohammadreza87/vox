@@ -59,7 +59,7 @@ export interface IndexedControlStamp { incarnation: string; generation: number; 
 export interface IndexedControlEvaluation { deadline?: number; denied?: boolean }
 /** Trusted synchronous, side-effect-free, body-free code only. No host reentry.
  * Denied data remains data; this evaluator never mints a memory access receipt. */
-export type IndexedControlEvaluator = (controls: IndexedControls, now: number, stamp: IndexedControlStamp) => IndexedControlEvaluation;
+export type IndexedControlEvaluator = (controls: Readonly<IndexedControls>, now: number, stamp: Readonly<IndexedControlStamp>) => IndexedControlEvaluation;
 export type ControlsResult = { status: 'ready'; controls: IndexedControls; observedAt: number;
   /** Data-only current-state stamp, never a body access receipt. */
   stamp: IndexedControlStamp;
