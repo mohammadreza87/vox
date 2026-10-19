@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import type { LearningPublicView } from '../src/lib/adaptive/personalization/learning/contracts';
 import type { PreferenceState } from '../src/lib/adaptive/runtime/contracts';
 
 const ownerId = 77001;
@@ -87,6 +88,12 @@ async function installStudioFixtures(page: Page, externalAvailable = false) {
           { setting: { key: 'formatting', value: 'plain' }, source: 'default', applied: false, explanation: 'default' },
         ] } satisfies PreferenceState;
     }
+    else if (path === 'experience/preference-learning' && method === 'GET') {
+      result = { schemaVersion: 1, version: 'preference-learning-v1', revision: 1,
+        space: url.searchParams.get('space') === 'personal' ? 'personal' : 'work', agentId: agent.id,
+        available: false, enabled: false, reason: 'unavailable', candidates: [] } satisfies LearningPublicView;
+    }
+    else if (path === 'experience/preference-learning/cancel' && method === 'POST') result = { cancelled: true };
     else if (path === 'experience' && method === 'GET') result = experience((new URLSearchParams(query).get('space') ?? 'work') as 'work' | 'personal');
     else if (path === 'adaptive' && method === 'GET') result = adaptive((new URLSearchParams(query).get('space') ?? 'work') as 'work' | 'personal');
     else if (path === 'members') result = { people: members, agentAdmins: [] };
@@ -104,6 +111,8 @@ async function enterExperience(page: Page) {
   await expect(page.getByText('Your experience', { exact: true })).toBeVisible();
   await page.getByRole('combobox', { name: 'Agent', exact: true }).selectOption(agent.id);
   await expect(page.getByRole('heading', { name: 'Staying in touch' })).toBeVisible();
+  await expect(page.getByText('Suggestion learning is unavailable here. Ordinary explicit preferences still work.')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Enable suggestions', exact: true })).toHaveCount(0);
 }
 
 test('scoped check-ins clear on Work/Personal switch, localize, and support inbox/source controls', async ({ page }) => {

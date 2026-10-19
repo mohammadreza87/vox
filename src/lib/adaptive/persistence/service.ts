@@ -76,11 +76,10 @@ export class AdaptiveService {
     return accountIdFor(telegramId);
   }
   private async transact<T>(telegramId: number, fn: (d: AdaptiveDocument, now: number) => T, beforeCommit?: () => void): Promise<T> {
-    const now = this.now();
     const invalidations: RelationshipInvalidation[] = [];
     const voiceInvalidations: Array<{ telegramId: number; space?: SpaceKind; reason: string }> = [];
     let learningChanged = false;
-    const result = await this.repository.transaction(this.account(telegramId), now, d => {
+    const result = await this.repository.transaction(this.account(telegramId), this.now, (d, now) => {
       invalidations.length = 0;
       voiceInvalidations.length = 0;
       const learningControl = () => digest([d.binding, d.permissions.filter(p => p.purpose === 'optional.personalization'),
@@ -230,8 +229,7 @@ export class AdaptiveService {
   /** Validated committed file snapshot only. No mutation or awaited work. */
   readCommittedForEffect<T>(telegramId: number, fn: (document: AdaptiveDocument, now: number) => T):
     { status: 'ready'; value: T } | { status: 'busy' | 'unsupported' | 'missing' } {
-    const now = this.now();
-    const snapshot = this.repository.readCommittedForEffect(this.account(telegramId), now);
+    const snapshot = this.repository.readCommittedForEffect(this.account(telegramId), this.now);
     if (snapshot.status !== 'ready') return snapshot;
     if (!snapshot.document) return { status: 'missing' };
     // Synchronous disk/schema work can itself cross an authority deadline.
