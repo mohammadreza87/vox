@@ -521,9 +521,10 @@
       "evidence": [
         "docs/implementation/DELIVERY_RESULT.md",
         "docs/implementation/MEMORY_RETRIEVAL_RESULT.md",
-        "docs/implementation/REVIEWED_PRIVATE_MEMORY_RESULT.md"
+        "docs/implementation/REVIEWED_PRIVATE_MEMORY_RESULT.md",
+        "docs/implementation/INDEXED_STORAGE.md"
       ],
-      "progress_note": "Explicit private note review now supports selected-only ephemeral summary previews, deliberate save, signed source revisions, descendant invalidation and guarded FILE commits. Retrieval ranks individual notes and summaries by current query relevance and retains originals unless exact statement coverage is established. Author132/11 and independent112/8 plus exact prior-schema rollback passed. Aggregate loading, indexed retrieval and generalized automatic extraction remain open."
+      "progress_note": "Explicit note/claim/summary review and same-ID correction are implemented. The opt-in local SQLite adapter now provides bounded physical private candidate queries, compact synchronous authority, durable expiry watermark and namespace-bound receipts; managed FILEv2 supplies current-state rollback. Independent source evidence and operation limits are in INDEXED_STORAGE.md. Final composed conversation/transport and compiled runtime qualification remain release gates. Canonical account writes, shared aggregate reads, generalized extraction/consolidation and measured quality/latency remain open."
     },
     {
       "id": "VOX-014",
@@ -593,9 +594,10 @@
         "Reconciliation report"
       ],
       "evidence": [
-        "docs/implementation/DELIVERY_RESULT.md"
+        "docs/implementation/DELIVERY_RESULT.md",
+        "docs/implementation/INDEXED_STORAGE.md"
       ],
-      "progress_note": "Legacy unscoped history/auto-memory is denied in new runtime, preserving source data without silent consent migration. Explicit migration/reconciliation/rollback tooling remains open."
+      "progress_note": "Legacy unscoped history/auto-memory remains denied without silent consent migration. Current adaptive FILE/SQLite/FILEv2 format transition, recovery and current-state rollback tooling is implemented and independently source-tested (INDEXED_STORAGE.md). Broader legacy application inventory, ownership/purpose reconciliation, quarantine mapping and production residual/restore qualification remain open; storage-format conversion does not grant historical data new consent."
     },
     {
       "id": "VOX-016",

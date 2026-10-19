@@ -265,7 +265,7 @@ Implement scoped settings, AI disclosure, optional consent choices, why-this/und
 
 **Requirements:** REQ-02, REQ-08, REQ-16, REQ-17. **Depends on:** VOX-010, VOX-011.
 
-**Implementation progress:** Added EN/FA lexical ranking, trusted explicit-preference priority, whole-record 12-item/8192-byte packing and content-free scoped LRU prewarming. Both streaming and completed turns use current authorized projections and full receipt rechecks. Account/container aggregates are still loaded; indexed retrieval, calibrated semantic ranking and generalized automatic extraction/consolidation remain open.
+**Implementation progress:** Explicit note/claim/summary review and same-ID correction are implemented. The opt-in local SQLite adapter now provides bounded physical private candidate queries, compact synchronous authority, durable expiry watermark and namespace-bound receipts; managed FILEv2 supplies current-state rollback. Independent source evidence and operation limits are in INDEXED_STORAGE.md. Final composed conversation/transport and compiled runtime qualification remain release gates. Canonical account writes, shared aggregate reads, generalized extraction/consolidation and measured quality/latency remain open.
 
 Add provenance/claims/supersession, token-budgeted retrieval, indexed candidate queries and background extraction with scope checks at execution.
 
@@ -278,7 +278,7 @@ Add provenance/claims/supersession, token-budgeted retrieval, indexed candidate 
 
 **Deliverables:** Memory lifecycle jobs; Bounded retrieval implementation.
 
-**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/MEMORY_RETRIEVAL_RESULT.md"]
+**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/MEMORY_RETRIEVAL_RESULT.md", "docs/implementation/REVIEWED_PRIVATE_MEMORY_RESULT.md", "docs/implementation/INDEXED_STORAGE.md"]
 
 ### VOX-014 — Implement deletion, revocation and scheduled retention expiry
 
@@ -309,7 +309,7 @@ Propagate revocation/deletion across history projections, summaries, cache/searc
 
 **Requirements:** REQ-03, REQ-19. **Depends on:** VOX-009, VOX-010, VOX-011, VOX-014.
 
-**Implementation progress:** Legacy unscoped history/auto-memory is denied in new runtime, preserving source data without silent consent migration. Explicit migration/reconciliation/rollback tooling remains open.
+**Implementation progress:** Legacy unscoped history/auto-memory remains denied without silent consent migration. Current adaptive FILE/SQLite/FILEv2 format transition, recovery and current-state rollback tooling is implemented and independently source-tested (INDEXED_STORAGE.md). Broader legacy application inventory, ownership/purpose reconciliation, quarantine mapping and production residual/restore qualification remain open; storage-format conversion does not grant historical data new consent.
 
 Create dry-run inventory/mapping for Studio and older app memory, identity and notifications flags; quarantine ambiguous ownership/purpose/history.
 
@@ -322,7 +322,7 @@ Create dry-run inventory/mapping for Studio and older app memory, identity and n
 
 **Deliverables:** Versioned migration and rollback; Reconciliation report.
 
-**Evidence:** ["docs/implementation/DELIVERY_RESULT.md"]
+**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/INDEXED_STORAGE.md"]
 
 ### VOX-016 — Enforce storage, key and service-account isolation
 
@@ -588,7 +588,7 @@ Bind predictions to turn/source/scope/policy revisions, cap speculative calls an
 
 **Requirements:** REQ-03, REQ-08, REQ-17. **Depends on:** VOX-011, VOX-013, VOX-014, VOX-025.
 
-**Implementation progress:** Durable explicit response preferences/reset integrated with scoped consent and per-agent grants; pure expiring hypothesis resolver tested. Learning/inference producer and evidence lifecycle remain open.
+**Implementation progress:** Reviewed preference learning now has separate versioned opt-in per confirmed account, agent and Work/Personal space. Final current text may create bounded enum proposals through guarded Decisions; Use is required, explicit choices win, and shared turn budgets, source suppression, expiry and authority revisions fence stale work. Independent 424/30 and composed 121/6 checks passed. Compiled browser, final CI, live provider quality and rollout remain pending; no sensitive-trait or identity inference.
 
 Add preference precedence, hypothesis evidence/expiry, bounded effects and user correction/reset; no hidden sensitive-trait inference.
 
@@ -601,7 +601,7 @@ Add preference precedence, hypothesis evidence/expiry, bounded effects and user 
 
 **Deliverables:** Preference/hypothesis service; Attribution fixtures.
 
-**Evidence:** ["docs/implementation/DELIVERY_RESULT.md"]
+**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/PERSONALIZATION_CONTROLS_RESULT.md", "docs/implementation/REVIEWED_PREFERENCE_LEARNING_RESULT.md"]
 
 ### VOX-028 — Build personalized UX with explanation and undo
 
@@ -609,7 +609,7 @@ Add preference precedence, hypothesis evidence/expiry, bounded effects and user 
 
 **Requirements:** REQ-08, REQ-09, REQ-20. **Depends on:** VOX-004, VOX-012, VOX-026, VOX-027.
 
-**Implementation progress:** Work/Personal call selector, preferences controls and shared audience preview implemented. Broader UX variants and why-this/undo for inferred adaptation remain open.
+**Implementation progress:** EN/FA explicit choices retain scoped explanations and genuine Undo. The composed review-only learning panel offers separate opt-in, uncertain candidate reasons, Use/dismiss, scope cancellation and suppression against immediate relearning after Undo/reset. Independent source and real-handler/file React journeys passed. Compiled browser acceptance and broader suggested-action/component variants remain open.
 
 Apply approved length/language/format/suggested-action and component-schema variants with why-this, undo and stable navigation.
 
@@ -622,7 +622,7 @@ Apply approved length/language/format/suggested-action and component-schema vari
 
 **Deliverables:** Personalized Studio components; UX evidence.
 
-**Evidence:** ["docs/implementation/DELIVERY_RESULT.md"]
+**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/PERSONALIZATION_CONTROLS_RESULT.md", "docs/implementation/REVIEWED_PREFERENCE_LEARNING_RESULT.md"]
 
 ### VOX-029 — Implement feature gates and shared-container experiments
 
@@ -979,7 +979,7 @@ Convert reviewed defects into isolated worktrees/branches with small diffs, repr
 
 **Deliverables:** Developer workflow; PR/evidence template.
 
-**Evidence:** ["docs/implementation/SOFTWARE_PATCH_WORKFLOW.md","docs/implementation/evidence/software-patch/RESULT.md","docs/implementation/MODEL_PATCH_AUTHOR.md","docs/implementation/evidence/model-author/RESULT.md"]
+**Evidence:** ["docs/implementation/SOFTWARE_PATCH_WORKFLOW.md", "docs/implementation/evidence/software-patch/RESULT.md", "docs/implementation/MODEL_PATCH_AUTHOR.md", "docs/implementation/evidence/model-author/RESULT.md"]
 
 ### VOX-046 — Implement independent evaluation and promotion receipts
 
