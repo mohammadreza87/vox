@@ -1,7 +1,8 @@
 import { Blob as NodeBlob } from 'node:buffer';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { signInitData } from '../auth';
-import { handleStudioRequest, type RouterOptions } from '../http';
+import { handleStudioRequest, MAX_STUDIO_JSON_BYTES, MAX_STUDIO_UPLOAD_BYTES, type RouterOptions } from '../http';
+import { StudioRateLimiter } from '../ratelimit';
 import { draftJson, hire, ID, makeStudio, seedOrg, type Harness } from './helpers';
 
 const BOT_TOKEN = '555:voxx-test-token';
@@ -45,6 +46,125 @@ function multipart(field: string, filename: string, type: string, content: strin
     rawBody: `--${boundary}\r\nContent-Disposition: form-data; name="${field}"; filename="${filename}"\r\nContent-Type: ${type}\r\n\r\n${content}\r\n--${boundary}--\r\n`,
   };
 }
+
+describe('request limits', () => {
+  it('awaits the runtime-injected shared limiter before touching persistence', async () => {
+    const ensure = vi.spyOn(h.studio, 'ensureMember');
+    h.studio.deps.rateLimiter = { consume: vi.fn(async (scope) => {
+      if (scope === 'api') throw new Error('Rate limit database unavailable');
+    }) };
+    expect((await call(req('GET', 'me'))).status).toBe(500);
+    expect(ensure).not.toHaveBeenCalled();
+    expect(h.studio.deps.rateLimiter.consume).toHaveBeenNthCalledWith(1, 'ingress', 'all');
+    expect(h.studio.deps.rateLimiter.consume).toHaveBeenNthCalledWith(2, 'api', ID.alice);
+  });
+
+  it('limits the shared entrance before authentication, regardless of forwarded IP headers', async () => {
+    let now = 0;
+    const options: RouterOptions = { ...opts, rateLimiter: new StudioRateLimiter({
+      now: () => now, policies: { ingress: { requests: 2, windowMs: 1000 } },
+    }) };
+    const ensure = vi.spyOn(h.studio, 'ensureMember');
+    expect((await call(req('GET', 'me', { as: null, headers: { 'x-forwarded-for': '1.1.1.1' } }), options)).status).toBe(401);
+    expect((await call(req('GET', 'me', { as: null, headers: { 'x-forwarded-for': '2.2.2.2' } }), options)).status).toBe(401);
+    const blocked = await call(req('GET', 'me'), options);
+    expect(blocked.status).toBe(429);
+    expect(blocked.res.headers.get('retry-after')).toBe('1');
+    expect(blocked.res.headers.get('cache-control')).toBe('no-store');
+    expect(ensure).not.toHaveBeenCalled();
+    now = 1000;
+    expect((await call(req('GET', 'me'), options)).status).toBe(200);
+  });
+
+  it('limits verified users before persistence and leaves other users their own budget', async () => {
+    const options: RouterOptions = { ...opts, rateLimiter: new StudioRateLimiter({
+      policies: { api: { requests: 1, windowMs: 60_000 } },
+    }) };
+    const ensure = vi.spyOn(h.studio, 'ensureMember');
+    expect((await call(req('GET', 'me'), options)).status).toBe(200);
+    expect((await call(req('GET', 'me'), options)).status).toBe(429);
+    expect(ensure).toHaveBeenCalledTimes(1);
+    expect((await call(req('GET', 'me', { as: ID.bob }), options)).status).toBe(200);
+  });
+
+  it('shares the expensive-operation budget across routes before invoking providers', async () => {
+    const options: RouterOptions = { ...opts, rateLimiter: new StudioRateLimiter({
+      policies: { expensive: { requests: 1, windowMs: 60_000 } },
+    }) };
+    h.personaLLM.push(draftJson());
+    const created = await call(req('POST', 'agents', { body: {} }), options);
+    expect(created.status).toBe(201);
+    expect((await call(req('POST', `agents/${created.json.agent.id}/avatars`, { body: { count: 1 } }), options)).status).toBe(429);
+    expect(h.openai.generateAvatar).not.toHaveBeenCalled();
+    expect((await call(req('GET', 'agents'), options)).status).toBe(200);
+  });
+
+  it.each([
+    ['avatar', 'avatars', { count: 1 }],
+    ['voice', 'voice', { action: 'design' }],
+    ['call', 'test', { messages: [{ role: 'user', content: 'hello' }] }],
+  ] as const)('enforces the %s budget separately', async (scope, action, payload) => {
+    const { agent } = await hire(h, org.alice);
+    const options: RouterOptions = { ...opts, rateLimiter: new StudioRateLimiter({
+      policies: { [scope]: { requests: 1, windowMs: 60_000 } },
+    }) };
+    // Budgeting happens before access/state validation, so failures cannot be used to bypass it.
+    await call(req('POST', `agents/${agent.id}/${action}`, { body: payload }), options);
+    expect((await call(req('POST', `agents/${agent.id}/${action}`, { body: payload }), options)).status).toBe(429);
+  });
+
+  it('limits ordinary mutations without restricting reads', async () => {
+    const { agent } = await hire(h, org.alice);
+    const options: RouterOptions = { ...opts, rateLimiter: new StudioRateLimiter({
+      policies: { mutation: { requests: 1, windowMs: 60_000 } },
+    }) };
+    await call(req('PUT', `agents/${agent.id}/access`, { body: { access: 'everyone' } }), options);
+    expect((await call(req('PUT', `agents/${agent.id}/access`, { body: { access: 'everyone' } }), options)).status).toBe(429);
+    expect((await call(req('GET', 'agents'), options)).status).toBe(200);
+  });
+
+  it('rejects declared oversize JSON before reading its body', async () => {
+    const r = await call(req('POST', 'agents', { body: {}, headers: { 'content-length': String(MAX_STUDIO_JSON_BYTES + 1) } }));
+    expect(r.status).toBe(413);
+    expect(h.personaLLM.requests).toHaveLength(0);
+  });
+
+  it.each([false, true])('counts streamed bytes when content-length is %s', async (misleadingLength) => {
+    const cancelled = vi.fn();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(MAX_STUDIO_JSON_BYTES));
+        controller.enqueue(new Uint8Array(1));
+      },
+      cancel: cancelled,
+    });
+    const headers: Record<string, string> = { 'x-telegram-init-data': initFor(ID.alice), 'content-type': 'application/json' };
+    if (misleadingLength) headers['content-length'] = '1';
+    const request = new Request('http://localhost/api/studio/agents', {
+      method: 'POST', headers, body: stream, duplex: 'half',
+    } as RequestInit);
+    expect((await call(request)).status).toBe(413);
+    expect(cancelled).toHaveBeenCalled();
+    expect(h.personaLLM.requests).toHaveLength(0);
+  });
+
+  it('bounds multipart uploads before parsing or provider calls', async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(MAX_STUDIO_UPLOAD_BYTES));
+        controller.enqueue(new Uint8Array(1));
+        controller.close();
+      },
+    });
+    const request = new Request('http://localhost/api/studio/agents/example/call', {
+      method: 'POST',
+      headers: { 'x-telegram-init-data': initFor(ID.alice), 'content-type': 'multipart/form-data; boundary=vox' },
+      body: stream, duplex: 'half',
+    } as RequestInit);
+    expect((await call(request)).status).toBe(413);
+    expect(h.openai.transcribe).not.toHaveBeenCalled();
+  });
+});
 
 describe('authentication', () => {
   it('401 without initData, or with initData signed for another bot', async () => {

@@ -4,13 +4,56 @@
  */
 
 import { verifyInitData } from './auth';
+import { StudioRateLimiter, StudioRateLimitError, type StudioRequestRateLimiter } from './ratelimit';
 import { Studio, StudioError } from './service';
 import type { Member, MemoryPolicy, Role, SpawnBrief } from './types';
 
 type Json = Record<string, unknown>;
 
-const json = (data: unknown, status = 200) =>
-  new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
+const json = (data: unknown, status = 200, headers: Record<string, string> = {}) =>
+  new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...headers } });
+
+export const MAX_STUDIO_JSON_BYTES = 256 * 1024;
+export const MAX_STUDIO_UPLOAD_BYTES = 12 * 1024 * 1024;
+
+/** Count actual bytes before JSON or multipart parsing, including chunked input. */
+export async function boundedStudioRequest(req: Request, maxBytes = req.headers.get('content-type')?.toLowerCase().startsWith('multipart/form-data')
+  ? MAX_STUDIO_UPLOAD_BYTES : MAX_STUDIO_JSON_BYTES): Promise<Request> {
+  if (!req.body) return req;
+  const tooLarge = () => new StudioError(413, 'That upload is too large.');
+  const length = req.headers.get('content-length');
+  if (length && /^\d+$/.test(length) && Number(length) > maxBytes) {
+    void req.body.cancel().catch(() => undefined);
+    throw tooLarge();
+  }
+  const reader = req.body.getReader();
+  let bytes = new Uint8Array(Math.min(maxBytes, 64 * 1024));
+  let size = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const nextSize = size + value.byteLength;
+      if (nextSize > maxBytes) {
+        void reader.cancel().catch(() => undefined);
+        throw tooLarge();
+      }
+      if (nextSize > bytes.byteLength) {
+        const larger = new Uint8Array(Math.min(maxBytes, Math.max(nextSize, bytes.byteLength * 2)));
+        larger.set(bytes.subarray(0, size));
+        bytes = larger;
+      }
+      bytes.set(value, size);
+      size = nextSize;
+    }
+  } catch (error) {
+    if (StudioError.is(error)) throw error;
+    throw new StudioError(400, 'The request body could not be read.');
+  } finally {
+    reader.releaseLock();
+  }
+  return new Request(req.url, { method: req.method, headers: req.headers, body: bytes.slice(0, size).buffer, signal: req.signal });
+}
 
 async function body(req: Request): Promise<Json> {
   try {
@@ -27,18 +70,38 @@ export interface RouterOptions {
   botToken: string;
   /** Local development only: act as this Telegram user without initData */
   devUser?: { id: number; first_name: string } | null;
+  /** Shared for the lifetime of this Studio; injectable for clock/policy tests. */
+  rateLimiter?: StudioRequestRateLimiter;
 }
 
-async function authenticate(studio: Studio, req: Request, opts: RouterOptions): Promise<Member> {
+const rateLimiters = new WeakMap<Studio, StudioRateLimiter>();
+
+function rateLimiterFor(studio: Studio, opts: RouterOptions): StudioRequestRateLimiter {
+  if (opts.rateLimiter) return opts.rateLimiter;
+  if (studio.deps.rateLimiter) return studio.deps.rateLimiter;
+  let limiter = rateLimiters.get(studio);
+  if (!limiter) {
+    limiter = new StudioRateLimiter();
+    rateLimiters.set(studio, limiter);
+  }
+  return limiter;
+}
+
+async function authenticate(studio: Studio, req: Request, opts: RouterOptions, limiter: StudioRequestRateLimiter): Promise<Member> {
   const initData = req.headers.get('x-telegram-init-data') ?? '';
+  if (initData.length > 16_384) throw new StudioError(401, 'Open Vox Studio from Telegram.');
   const user = verifyInitData(initData, opts.botToken) ?? (initData ? null : opts.devUser ?? null);
   if (!user) throw new StudioError(401, 'Open Vox Studio from Telegram.');
+  // Throttle verified identities before ensureMember can touch persistent state.
+  await limiter.consume('api', user.id);
   return studio.ensureMember(user);
 }
 
 export async function handleStudioRequest(studio: Studio, req: Request, path: string[], opts: RouterOptions): Promise<Response> {
   const method = req.method.toUpperCase();
   try {
+    const limiter = rateLimiterFor(studio, opts);
+    await limiter.consume('ingress', 'all');
     // Media is addressed by unguessable file names so <img>/<audio> can load it.
     if (method === 'GET' && path[0] === 'media' && path[1]) {
       const data = await studio.deps.store.readMedia(path[1]);
@@ -47,7 +110,7 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
       return new Response(new Uint8Array(data), { headers: { 'Content-Type': type, 'Cache-Control': 'private, max-age=31536000, immutable' } });
     }
 
-    const me = await authenticate(studio, req, opts);
+    const me = await authenticate(studio, req, opts, limiter);
     const [root, id, action] = path;
 
     if (root === 'me' && method === 'GET') {
@@ -56,6 +119,15 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
       } });
     }
     if (me.role === 'pending') throw new StudioError(403, 'Waiting for an admin to approve you.');
+
+    if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) await limiter.consume('mutation', me.telegramId);
+    const generation = root === 'agents' && method === 'POST' && (!id || ['refine', 'avatars', 'voice', 'speak', 'test', 'call'].includes(action));
+    const voiceSearch = root === 'voices' && method === 'GET';
+    if (generation || voiceSearch) await limiter.consume('expensive', me.telegramId);
+    if (generation && action === 'avatars') await limiter.consume('avatar', me.telegramId);
+    if (voiceSearch || (generation && ['voice', 'speak'].includes(action))) await limiter.consume('voice', me.telegramId);
+    if (generation && ['call', 'test'].includes(action)) await limiter.consume('call', me.telegramId);
+    req = await boundedStudioRequest(req);
 
     if (root === 'members') {
       if (!id && method === 'GET') return json(await studio.listMembers(me));
@@ -154,6 +226,7 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
     }
     return json({ error: 'Not found' }, 404);
   } catch (error) {
+    if (error instanceof StudioRateLimitError) return json({ error: error.message }, 429, { 'Retry-After': String(error.retryAfterSeconds) });
     if (StudioError.is(error)) return json({ error: error.message }, error.status);
     if (error && typeof error === 'object' && 'issues' in error) return json({ error: "Claude's answer didn't fit the persona format. Try again." }, 502);
     (studio.deps.logger ?? console).error('[studio] request failed', error);

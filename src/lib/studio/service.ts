@@ -19,6 +19,7 @@ import {
   checkRoleChange, formingDay, isLocked, visibleAgents,
 } from './permissions';
 import type { StudioStorage } from './store';
+import type { StudioRequestRateLimiter } from './ratelimit';
 import { AGENT_UPDATES, webhookSecret } from './updates';
 import {
   FORMING_DAYS, HUES, type Agent, type AgentLook, type Member, type MemoryPolicy, type PersonaSpec, type Role, type SpawnBrief,
@@ -50,6 +51,8 @@ const lockedMessage = (agent: Agent) => `${agent.persona.name}'s personality is 
 
 export interface StudioDeps {
   store: StudioStorage;
+  /** Shared across serverless instances; omitted for the local file runtime. */
+  rateLimiter?: StudioRequestRateLimiter;
   personaLLM: LLM;
   chatLLM: LLM;
   openai: OpenAIMedia | null;

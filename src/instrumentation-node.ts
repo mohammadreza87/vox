@@ -4,13 +4,14 @@ export async function startStudioBots() {
   const g = globalThis as unknown as { __voxBots?: boolean };
   if (g.__voxBots) return;
   g.__voxBots = true;
-  const { getStudio } = await import('./lib/studio/runtime');
-  const { startBots } = await import('./lib/studio/bots');
   try {
+    const { getStudio } = await import('./lib/studio/runtime');
+    const { startBots } = await import('./lib/studio/bots');
     startBots(await getStudio());
     console.log('[studio] bots started');
   } catch (error) {
     g.__voxBots = false;
-    console.error('[studio] bots not started:', (error as Error).message);
+    // Next must fail startup so a supervisor can restart an unavailable service.
+    throw error;
   }
 }

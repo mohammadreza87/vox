@@ -24,21 +24,77 @@
  *   STUDIO_ORG_NAME          default HOOR
  */
 
-import { join } from 'path';
+import { isAbsolute, join, parse, relative, resolve, sep } from 'path';
 import { AnthropicLLM } from '../tireh/llm';
 import { createFileStores } from '../tireh/memory/file-store';
 import { FirestoreChatHistoryStore, FirestoreMemoryStore, FirestoreShareOfferStore, FirestoreUpdateDeduper } from '../tireh/memory/firestore-store';
 import { TelegramBotClient } from '../tireh/telegram/client';
 import { ElevenLabsStudio, OpenAIMedia } from './media';
 import { FirestoreStudioStore } from './firestore-store';
+import { FirestoreStudioRateLimiter } from './firestore-ratelimit';
 import { Studio, type StudioDeps } from './service';
-import { StudioStore, type StudioStorage } from './store';
+import { StudioStore } from './store';
 
 export function parseIds(raw: string | undefined): number[] {
   return (raw ?? '')
     .split(/[,\s]+/)
     .map((x) => Number.parseInt(x, 10))
     .filter((n) => Number.isSafeInteger(n) && n > 0);
+}
+
+/** Validate deployment configuration without accessing disk or external services. */
+export function validateStudioConfig(env: NodeJS.ProcessEnv, cwd = process.cwd()) {
+  if (!env.STUDIO_SECRET || env.STUDIO_SECRET.trim().length < 32) throw new Error('STUDIO_SECRET (≥32 chars) is required');
+  if (!env.ANTHROPIC_API_KEY?.trim()) throw new Error('ANTHROPIC_API_KEY is required');
+
+  const production = env.NODE_ENV === 'production';
+  const token = env.VOXX_BOT_TOKEN?.trim();
+  const superadminIds = parseIds(env.STUDIO_SUPERADMIN_IDS);
+  const dataDir = env.STUDIO_DATA_DIR || join(cwd, '.vox-studio');
+  const webAppUrl = env.STUDIO_WEBAPP_URL?.trim();
+  const storage = env.STUDIO_STORAGE?.trim() || 'file';
+  if (storage !== 'file' && storage !== 'firestore') throw new Error('STUDIO_STORAGE must be file or firestore');
+  const mediaBucket = env.STUDIO_MEDIA_BUCKET?.trim() || env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET?.trim();
+  let publicUrl = env.STUDIO_PUBLIC_URL?.trim() || undefined;
+  if (publicUrl && env.STUDIO_BOTS === '1') throw new Error('STUDIO_PUBLIC_URL webhooks cannot run with STUDIO_BOTS=1 long polling');
+  if (storage === 'firestore' && !mediaBucket) throw new Error('STUDIO_MEDIA_BUCKET is required with STUDIO_STORAGE=firestore');
+
+  if (production) {
+    if (!token || !/^\d+:[A-Za-z0-9_-]{20,}$/.test(token)) throw new Error('A valid VOXX_BOT_TOKEN is required in production');
+    const rawIds = (env.STUDIO_SUPERADMIN_IDS ?? '').split(/[,\s]+/).filter(Boolean);
+    if (!rawIds.length || rawIds.some((id) => !/^\d+$/.test(id) || !Number.isSafeInteger(Number(id)) || Number(id) <= 0)) {
+      throw new Error('STUDIO_SUPERADMIN_IDS must contain positive Telegram user IDs in production');
+    }
+    let url: URL;
+    try { url = new URL(webAppUrl ?? ''); } catch { throw new Error('STUDIO_WEBAPP_URL must be an HTTPS /studio URL in production'); }
+    if (url.protocol !== 'https:' || url.username || url.password || url.pathname.replace(/\/$/, '') !== '/studio' || url.search || url.hash) {
+      throw new Error('STUDIO_WEBAPP_URL must be an HTTPS /studio URL in production');
+    }
+    const serverless = Boolean(env.K_SERVICE || env.FUNCTION_TARGET || env.FUNCTION_NAME || env.VERCEL === '1');
+    if (storage === 'file') {
+      if (serverless || publicUrl) throw new Error('Serverless and webhook deployments require STUDIO_STORAGE=firestore');
+      if (!env.STUDIO_DATA_DIR || !isAbsolute(dataDir)) throw new Error('STUDIO_DATA_DIR must be an explicit absolute persistent directory in production');
+      const resolvedDir = resolve(dataDir);
+      const within = (parent: string) => {
+        const path = relative(resolve(parent), resolvedDir);
+        return path === '' || (path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path));
+      };
+      if (resolvedDir === parse(resolvedDir).root || resolvedDir === resolve(cwd) || within(join(cwd, 'public')) || within(join(cwd, '.next'))) {
+        throw new Error('STUDIO_DATA_DIR must be a private data directory outside public and .next');
+      }
+    } else {
+      if (env.STUDIO_BOTS === '1') throw new Error('STUDIO_STORAGE=firestore production deployments require webhooks, not STUDIO_BOTS=1');
+      let base: URL;
+      try { base = new URL(publicUrl ?? ''); } catch { throw new Error('STUDIO_PUBLIC_URL must be an HTTPS origin with STUDIO_STORAGE=firestore'); }
+      if (base.protocol !== 'https:' || base.username || base.password || base.pathname !== '/' || base.search || base.hash) {
+        throw new Error('STUDIO_PUBLIC_URL must be an HTTPS origin with STUDIO_STORAGE=firestore');
+      }
+      publicUrl = base.origin;
+      if (!/^[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$/.test(mediaBucket!)) throw new Error('STUDIO_MEDIA_BUCKET must be a Cloud Storage bucket name');
+    }
+  }
+
+  return { production, token, superadminIds, dataDir, webAppUrl, storage, mediaBucket, publicUrl };
 }
 
 async function toJpeg(data: Buffer): Promise<Buffer> {
@@ -52,19 +108,18 @@ async function toJpeg(data: Buffer): Promise<Buffer> {
 
 const g = globalThis as unknown as { __voxStudio?: Promise<Studio> };
 
-function fileStorage(dir: string): { store: StudioStorage; memory: StudioDeps['memory'] } {
+function fileStorage(dir: string): Pick<StudioDeps, 'store' | 'memory' | 'rateLimiter'> {
   return { store: new StudioStore(dir), memory: createFileStores(join(dir, 'memory.json')) };
 }
 
-async function firestoreStorage(): Promise<{ store: StudioStorage; memory: StudioDeps['memory'] }> {
+async function firestoreStorage(bucketName: string): Promise<Pick<StudioDeps, 'store' | 'memory' | 'rateLimiter'>> {
   const { getAdminApp, getAdminDb } = await import('@/lib/firebase-admin');
   const { getStorage } = await import('firebase-admin/storage');
   const db = await getAdminDb();
-  const bucketName = process.env.STUDIO_MEDIA_BUCKET || process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET;
-  if (!bucketName) throw new Error('STUDIO_MEDIA_BUCKET is required with STUDIO_STORAGE=firestore');
   const bucket = getStorage(await getAdminApp()).bucket(bucketName);
   return {
     store: new FirestoreStudioStore(db, bucket),
+    rateLimiter: new FirestoreStudioRateLimiter(db),
     memory: {
       memories: new FirestoreMemoryStore(db),
       offers: new FirestoreShareOfferStore(db),
@@ -76,29 +131,45 @@ async function firestoreStorage(): Promise<{ store: StudioStorage; memory: Studi
 
 async function create(): Promise<Studio> {
   const env = process.env;
-  if (!env.STUDIO_SECRET || env.STUDIO_SECRET.length < 32) throw new Error('STUDIO_SECRET (≥32 chars) is required');
-  if (!env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY is required');
-  const storage = env.STUDIO_STORAGE === 'firestore' ? await firestoreStorage() : fileStorage(env.STUDIO_DATA_DIR ?? join(process.cwd(), '.vox-studio'));
-  const managerBot = env.VOXX_BOT_TOKEN ? new TelegramBotClient(env.VOXX_BOT_TOKEN) : null;
+  const config = validateStudioConfig(env);
+  const storage = config.storage === 'firestore' ? await firestoreStorage(config.mediaBucket!) : fileStorage(config.dataDir);
+  // Load and persist once so corrupt state or unwritable storage fails startup.
+  if (config.production) {
+    if (config.storage === 'file') await storage.store.update(() => undefined);
+    else await storage.store.read();
+  }
+  const managerBot = config.token ? new TelegramBotClient(config.token) : null;
   let managerUsername = env.VOXX_BOT_USERNAME ?? '';
-  if (managerBot && !managerUsername) {
+  if (managerBot && config.production) {
+    let manager;
+    // Bound the read-only credential probe; an unavailable Telegram connection
+    // must not leave server startup hanging indefinitely.
+    const probe = new TelegramBotClient(config.token!, (input, init) => fetch(input, { ...init, signal: AbortSignal.timeout(10_000) }));
+    try { manager = await probe.getMe(); } catch { throw new Error('VOXX_BOT_TOKEN authentication failed (Telegram getMe)'); }
+    if (!manager.is_bot || !manager.username) throw new Error('VOXX_BOT_TOKEN must identify a Telegram bot with a username');
+    if (managerUsername && managerUsername.replace(/^@/, '').toLowerCase() !== manager.username.toLowerCase()) {
+      throw new Error('VOXX_BOT_USERNAME does not match VOXX_BOT_TOKEN');
+    }
+    managerUsername = manager.username;
+  } else if (managerBot && !managerUsername) {
     managerUsername = (await managerBot.getMe().catch(() => null))?.username ?? '';
   }
   return new Studio({
     store: storage.store,
-    personaLLM: new AnthropicLLM(env.ANTHROPIC_API_KEY, env.STUDIO_PERSONA_MODEL ?? 'claude-sonnet-5-5'),
-    chatLLM: new AnthropicLLM(env.ANTHROPIC_API_KEY, env.STUDIO_CHAT_MODEL ?? 'claude-haiku-5-5'),
+    personaLLM: new AnthropicLLM(env.ANTHROPIC_API_KEY!, env.STUDIO_PERSONA_MODEL || 'claude-sonnet-5-5'),
+    chatLLM: new AnthropicLLM(env.ANTHROPIC_API_KEY!, env.STUDIO_CHAT_MODEL || 'claude-haiku-5-5'),
     openai: env.OPENAI_API_KEY ? new OpenAIMedia(env.OPENAI_API_KEY) : null,
     eleven: env.ELEVENLABS_API_KEY ? new ElevenLabsStudio(env.ELEVENLABS_API_KEY) : null,
     managerBot,
     managerUsername,
     botFor: (token) => new TelegramBotClient(token),
-    secret: env.STUDIO_SECRET,
+    secret: env.STUDIO_SECRET!,
     orgName: env.STUDIO_ORG_NAME ?? 'HOOR',
-    superadminIds: parseIds(env.STUDIO_SUPERADMIN_IDS),
-    webAppUrl: env.STUDIO_WEBAPP_URL,
-    webhookBase: env.STUDIO_PUBLIC_URL || undefined,
+    superadminIds: config.superadminIds,
+    webAppUrl: config.webAppUrl,
+    webhookBase: config.publicUrl,
     memory: storage.memory,
+    rateLimiter: storage.rateLimiter,
     imageToJpeg: toJpeg,
   });
 }

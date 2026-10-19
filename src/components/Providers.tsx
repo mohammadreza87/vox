@@ -1,6 +1,7 @@
 'use client';
 
 import { ReactNode, useEffect, useState } from 'react';
+import { usePathname } from 'next/navigation';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { initAuthListener, useAuthStore } from '@/stores/authStore';
 import { useThemeStore } from '@/stores/themeStore';
@@ -122,6 +123,9 @@ function ThemeApplier({ children }: { children: ReactNode }) {
  * - TranslatorContext -> translatorStore 🔄 IN PROGRESS
  */
 export function Providers({ children }: { children: ReactNode }) {
+  const pathname = usePathname();
+  // Studio owns its Telegram initData session and does not use Firebase stores.
+  if (pathname === '/studio' || pathname?.startsWith('/studio/')) return <>{children}</>;
   const client = getQueryClient();
 
   return (

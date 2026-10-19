@@ -4,13 +4,11 @@ Vox Studio is the Telegram Mini App inside **@VoxxBot** where everyone in HOOR s
 
 ```
 Telegram ── @VoxxBot (Mini App: /studio) ──┐
-        └─ @hoor_aria_bot, @hoor_…_bot ────┤  long polling
-                                           ▼
-            one Next.js process on the Mac Studio
-            ├─ /studio            Mini App UI
-            ├─ /api/studio/*      Mini App API (Telegram initData auth)
-            ├─ bot runner         VoxxBot + every hired agent bot
-            └─ .vox-studio/       studio.json, memory.json, media/
+        └─ @hoor_aria_bot, @hoor_…_bot ────┤
+                                         ▼
+            Next.js Studio UI + authenticated API
+            ├─ Firebase production: webhooks + Firestore + Cloud Storage
+            └─ Mac alternative: one poller process + private files
                  │
                  ├─ Claude        persona design (stronger model) + replies (fast model)
                  ├─ OpenAI        avatars (gpt-image-1) + speech-to-text
@@ -55,6 +53,10 @@ One-time setup, all in GitHub → repo **Settings → Secrets and variables → 
 Also turn on **Bot Management** for @VoxxBot in @BotFather's Mini App. After the next deploy, open @VoxxBot → /start → **Open Vox Studio**. To reconnect bots by hand: `curl -X POST $STUDIO_PUBLIC_URL/api/studio/telegram/setup -H "Authorization: Bearer $STUDIO_SECRET"`.
 
 ## Setup on the Mac Studio (alternative: one always-on server)
+
+For the supervised production release, private secrets, backups, HTTPS routing and
+rollback, follow [PRODUCTION.md](./PRODUCTION.md). The commands below are a manual
+setup reference; they do not install a production service.
 
 1. **Enable bot management for @VoxxBot.** In Telegram, open @BotFather → *Open* (the Mini App) → your bot → *Bot Settings*, and turn on **Bot Management**. This lets VoxxBot create agent bots for you.
 2. **Get a public HTTPS URL** for the Mac (Telegram Mini Apps require HTTPS). Cloudflare Tunnel is the simplest:

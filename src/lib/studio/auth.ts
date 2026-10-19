@@ -17,6 +17,10 @@ export interface InitDataUser {
 export function verifyInitData(initData: string, botToken: string, maxAgeSeconds = 86_400, nowSeconds = Math.floor(Date.now() / 1000)): InitDataUser | null {
   if (!initData || !botToken) return null;
   const params = new URLSearchParams(initData);
+  // Different parsers must never disagree about the authenticated identity.
+  for (const key of params.keys()) {
+    if (params.getAll(key).length !== 1) return null;
+  }
   const hash = params.get('hash');
   if (!hash || !/^[0-9a-f]{64}$/.test(hash)) return null;
   params.delete('hash');
@@ -30,10 +34,10 @@ export function verifyInitData(initData: string, botToken: string, maxAgeSeconds
   if (given.length !== expected.length || !timingSafeEqual(given, expected)) return null;
 
   const authDate = Number(params.get('auth_date'));
-  if (!Number.isFinite(authDate) || nowSeconds - authDate > maxAgeSeconds) return null;
+  if (!Number.isSafeInteger(authDate) || authDate <= 0 || authDate > nowSeconds + 30 || nowSeconds - authDate > maxAgeSeconds) return null;
   try {
     const user = JSON.parse(params.get('user') ?? 'null') as InitDataUser | null;
-    return user && Number.isSafeInteger(user.id) ? user : null;
+    return user && Number.isSafeInteger(user.id) && user.id > 0 && typeof user.first_name === 'string' ? user : null;
   } catch {
     return null;
   }
