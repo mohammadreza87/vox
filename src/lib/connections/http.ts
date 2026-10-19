@@ -75,8 +75,8 @@ export async function handleConnectionsRequest(studio: Studio, application: Conn
     }
   } catch (error) {
     if (error instanceof z.ZodError) return json({ error: 'invalid_request' }, 400);
-    if (error instanceof ConnectionsError) return json({ error: error.code }, error.status);
-    if (error instanceof StudioRateLimitError) return json({ error: 'rate_limited' }, 429, { 'Retry-After': String(error.retryAfterSeconds) });
+    if (ConnectionsError.is(error)) return json({ error: error.code }, error.status);
+    if (StudioRateLimitError.is(error)) return json({ error: 'rate_limited' }, 429, { 'Retry-After': String(error.retryAfterSeconds) });
     if (StudioError.is(error)) return json({ error: 'invalid_request' }, error.status);
     return json({ error: 'connections_unavailable' }, 503);
   }

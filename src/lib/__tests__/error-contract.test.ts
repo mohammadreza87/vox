@@ -15,6 +15,9 @@ import type { VoiceIdentityService } from '../adaptive/voice-identity/service';
 import { handleLearningRequest } from '../studio/learning-http';
 import { handleConversationRequest } from '../studio/conversation';
 import { handleStudioRequest } from '../studio/http';
+import { ConnectionsError } from '../connections/errors';
+import { handleConnectionsRequest } from '../connections/http';
+import type { ConnectionsApplication } from '../connections/application';
 
 /** Independent constructor models instrumentation's service copy, while Error
  * and the VM's shared Symbol registry remain the same as the route bundle. */
@@ -42,6 +45,8 @@ function studio(throwable?: unknown): Studio {
 it('recognizes branded errors from an independent constructor without exposing their message', async () => {
   const error = otherBundleError(); expect(error instanceof AdaptiveError).toBe(false); expect(AdaptiveError.is(error)).toBe(true);
   expect(SharedMemoryError.is(otherBundleError('SharedMemoryError'))).toBe(true);
+  expect(ConnectionsError.is(otherBundleError('ConnectionsError'))).toBe(true);
+  expect(ConnectionsError.is(new ConnectionsError(409, 'operation_changed'))).toBe(true);
   expect(StudioRateLimitError.is(otherBundleError('StudioRateLimitError', { retryAfterSeconds: 4 }))).toBe(true);
   const denied = otherBundleError('LLMAuthorizationError', {}); Object.defineProperty(denied, 'message', { value: 'llm_authority_changed' });
   expect(LLMAuthorizationError.is(denied)).toBe(true);
@@ -107,4 +112,20 @@ it('the standard Studio rate-limit boundary uses fixed copy without reading a pr
   const response = await handleStudioRequest(s, request(), [], { botToken: TOKEN });
   expect(response.status).toBe(429); expect(await response.json()).toEqual({ error: 'Too many requests. Please try again shortly.' });
   expect(message).not.toHaveBeenCalled();
+});
+
+it('Connections preserves duplicate-bundle conflicts and rate limits without exposing lookalikes or getters', async () => {
+  const invoke = (error: unknown) => handleConnectionsRequest(studio(error), {} as ConnectionsApplication, request(), [], TOKEN);
+  const conflict = await invoke(otherBundleError('ConnectionsError', { status: 409, code: 'operation_changed' }));
+  expect(conflict.status).toBe(409); expect(await conflict.json()).toEqual({ error: 'operation_changed' });
+  const limited = await invoke(otherBundleError('StudioRateLimitError', { retryAfterSeconds: 4 }));
+  expect(limited.status).toBe(429); expect(limited.headers.get('Retry-After')).toBe('4');
+  expect(await limited.json()).toEqual({ error: 'rate_limited' });
+  const touched = vi.fn(() => { throw new Error('PRIVATE_GETTER_CANARY'); });
+  const getter = otherBundleError('ConnectionsError'); Object.defineProperty(getter, 'code', { get: touched });
+  for (const error of [getter, Object.assign(new Error('PRIVATE_PROMPT_CANARY'), { name: 'ConnectionsError', status: 409, code: 'private_canary' }),
+    otherBundleError('ConnectionsError', { status: 200, code: 'invalid_status' }), new Proxy(otherBundleError('ConnectionsError'), { getOwnPropertyDescriptor: touched })]) {
+    const response = await invoke(error); expect(response.status).toBe(503); expect(await response.json()).toEqual({ error: 'connections_unavailable' });
+  }
+  expect(touched).not.toHaveBeenCalled();
 });
