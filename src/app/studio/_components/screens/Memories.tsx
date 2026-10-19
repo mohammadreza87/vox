@@ -7,7 +7,7 @@ import { AgentFace } from '../Cloud';
 import { errorMessage, LoadingFill, useNav } from '../StudioApp';
 import { Empty, Icon, TopBar } from '../ui';
 
-const FILTERS = ['All', 'Mine', 'Shared'] as const;
+const FILTERS = ['All', 'Private', 'Shared'] as const;
 
 function when(iso: string) {
   const d = new Date(iso);
@@ -33,7 +33,7 @@ export function MemoriesScreen({ id }: { id: string }) {
 
   if (!agent || !memories) return <><TopBar onBack={nav.back} /><LoadingFill /></>;
 
-  const shown = memories.filter((m) => filter === 'All' || (filter === 'Mine' ? m.scope === 'private' : m.scope !== 'private'));
+  const shown = memories.filter((m) => filter === 'All' || (filter === 'Private' ? m.scope === 'private' : m.scope !== 'private'));
 
   const forget = async (m: MemoryItem) => {
     if (!confirm(`${agent.persona.name} will forget this for good.`)) return;

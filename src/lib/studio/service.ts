@@ -166,6 +166,11 @@ export class Studio {
     };
   }
 
+  /** view() after a change: re-reads members so creatorName survives mutations. */
+  private async present(agent: Agent, actor: Member): Promise<AgentView> {
+    return this.view(agent, actor, (await this.deps.store.read()).members);
+  }
+
   async listAgents(actor: Member): Promise<AgentView[]> {
     const s = await this.deps.store.read();
     return visibleAgents(s, actor)
@@ -217,7 +222,7 @@ export class Studio {
       s.agents.push(agent);
       s.audit.push({ at: this.now().toISOString(), actor: actor.telegramId, action: 'agent.draft', target: agent.id });
     });
-    return { agent: this.view(agent, actor), names };
+    return { agent: await this.present(agent, actor), names };
   }
 
   async refine(actor: Member, id: string, instruction: string): Promise<AgentView> {
@@ -263,7 +268,7 @@ export class Studio {
       return { ...a };
     }, 'This personality can no longer be changed.');
     if (agent.status === 'active') await this.configureBotProfile(agent).catch((e) => this.log.warn('[studio] profile sync failed', e));
-    return this.view(agent, actor);
+    return this.present(agent, actor);
   }
 
   async setLook(actor: Member, id: string, patch: Partial<Pick<AgentLook, 'hue' | 'family' | 'features'>> | 'random'): Promise<AgentView> {
@@ -278,7 +283,7 @@ export class Studio {
       }
       return { ...a };
     }, 'The look can only change while the agent is forming.');
-    return this.view(agent, actor);
+    return this.present(agent, actor);
   }
 
   async generateAvatars(actor: Member, id: string, count = 2): Promise<AgentView> {
@@ -294,7 +299,7 @@ export class Studio {
       if (!a.look.avatar) { a.look.avatar = files[0]; a.look.avatarSource = 'generated'; }
       return { ...a };
     });
-    return this.view(updated, actor);
+    return this.present(updated, actor);
   }
 
   async chooseAvatar(actor: Member, id: string, file: string | null): Promise<AgentView> {
@@ -305,7 +310,7 @@ export class Studio {
       return { ...a };
     }, 'The avatar can only change while the agent is forming.');
     if (agent.status === 'active') await this.configureBotProfile(agent).catch((e) => this.log.warn('[studio] photo sync failed', e));
-    return this.view(agent, actor);
+    return this.present(agent, actor);
   }
 
   /** Custom image upload: re-encoded to a clean 640×640 JPEG (Telegram needs JPG). */
@@ -339,7 +344,7 @@ export class Studio {
       if (description) a.persona = { ...a.persona, voiceBrief: brief };
       return { ...a };
     });
-    return this.view(updated, actor);
+    return this.present(updated, actor);
   }
 
   async chooseDesignedVoice(actor: Member, id: string, generatedVoiceId: string): Promise<AgentView> {
@@ -351,7 +356,7 @@ export class Studio {
       a.voice = { provider: 'elevenlabs', voiceId, label: `Designed voice · ${a.persona.accent || 'custom'}`, source: 'design' };
       return { ...a };
     });
-    return this.view(updated, actor);
+    return this.present(updated, actor);
   }
 
   async searchVoices(actor: Member, filters: { gender?: string; age?: string; accent?: string; language?: string; search?: string }): Promise<LibraryVoice[]> {
@@ -368,7 +373,7 @@ export class Studio {
       a.voice = { provider: 'elevenlabs', voiceId, label: `${v.name} · voice library`, source: 'library' };
       return { ...a };
     });
-    return this.view(updated, actor);
+    return this.present(updated, actor);
   }
 
   async previewSpeech(actor: Member, id: string, text: string): Promise<Buffer> {
@@ -407,7 +412,7 @@ export class Studio {
       return { ...a };
     });
     const link = `https://t.me/newbot/${this.deps.managerUsername}/${agent.suggestedUsername}`;
-    return { link, agent: this.view(agent, actor) };
+    return { link, agent: await this.present(agent, actor) };
   }
 
   /**
@@ -492,7 +497,7 @@ export class Studio {
   async setAccess(actor: Member, id: string, access: 'everyone' | number[]): Promise<AgentView> {
     if (access !== 'everyone' && (!Array.isArray(access) || access.some((x) => !Number.isInteger(x)))) throw bad('Invalid access list');
     const agent = await this.mutateAgent(actor, id, (a) => canManageAccess(actor, a), (a) => { a.access = access; return { ...a }; });
-    return this.view(agent, actor);
+    return this.present(agent, actor);
   }
 
   async setAgentAdmin(actor: Member, id: string, isAdmin: boolean): Promise<AgentView> {
@@ -502,7 +507,7 @@ export class Studio {
       return { ...a };
     }, 'Only active agents can be admins.');
     await this.deps.store.audit({ actor: actor.telegramId, action: isAdmin ? 'agent.admin.grant' : 'agent.admin.revoke', target: id });
-    return this.view(agent, actor);
+    return this.present(agent, actor);
   }
 
   async deleteDraft(actor: Member, id: string): Promise<void> {
@@ -552,7 +557,7 @@ export class Studio {
     await this.deps.store.update((s) => {
       for (const g of s.groups) g.agentIds = g.agentIds.filter((a) => a !== id);
     });
-    return this.view(agent, actor);
+    return this.present(agent, actor);
   }
 
   /** Memories carry over to a successor when the predecessor was fired with "transfer". */

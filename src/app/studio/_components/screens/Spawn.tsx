@@ -97,13 +97,15 @@ function Dock({ children }: { children: React.ReactNode }) {
   return <div className="vx-dock">{children}</div>;
 }
 
-function Field({ label, children, hint }: { label: string; children: React.ReactNode; hint?: string }) {
+/** `group` for chip sets: a <label> around buttons would name (and click) the first chip. */
+function Field({ label, children, hint, group }: { label: string; children: React.ReactNode; hint?: string; group?: boolean }) {
+  const Tag = group ? 'div' : 'label';
   return (
-    <label style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+    <Tag role={group ? 'group' : undefined} aria-label={group ? label : undefined} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       <span className="vx-over">{label}</span>
       {children}
       {hint && <span className="vx-small vx-3">{hint}</span>}
-    </label>
+    </Tag>
   );
 }
 
@@ -173,13 +175,13 @@ function BriefStep({ busy, successorOf, onDraft }: { busy: Busy; successorOf?: s
           <textarea className="vx-textarea" rows={3} value={description} onChange={(e) => setDescription(e.target.value)} maxLength={600}
             placeholder="A calm product lead who asks sharp questions and remembers every decision" />
         </Field>
-        <Field label="Presents as">
+        <Field label="Presents as" group>
           <Chips options={PRESENTATIONS} value={presentation as NonNullable<SpawnBrief['presentation']>[]} onChange={(v) => setPresentation(v)} />
         </Field>
-        <Field label="Knowledge domain">
+        <Field label="Knowledge domain" group>
           <Chips options={DOMAINS.map((d) => ({ value: d, label: d }))} value={domain} onChange={setDomain} />
         </Field>
-        <Field label="Languages">
+        <Field label="Languages" group>
           <Chips multi options={LANGUAGES.map((l) => ({ value: l, label: l }))} value={languages} onChange={setLanguages} />
         </Field>
         <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)', gap: 12 }}>
