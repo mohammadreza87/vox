@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PrivacyScreen } from './Privacy';
 import type { AdaptiveSnapshot } from '../../_lib/adaptive-client';
@@ -60,4 +60,18 @@ describe('Privacy and memory controls', () => {
     expect(mocks.read).toHaveBeenLastCalledWith('work', 'fa');
     expect(mocks.consent).not.toHaveBeenCalled();
   });
+});
+
+it('renders an inherited unverified claim caveat alongside summary provenance in EN and FA', async () => {
+  const summary = { id: 'summary', text: 'Inherited summary claim', revision: 1, createdAt: 1, expiresAt: 2_000_000_000_000,
+    origin: 'user_reviewed_claim' as const, sourceRefs: [{ id: 'source-one', revision: 1 }, { id: 'source-two', revision: 1 }] };
+  mocks.read.mockResolvedValue(snapshot({ memories: [summary] }));
+  const view = render(<PrivacyScreen />); await screen.findAllByText(summary.text);
+  let article = view.container.querySelector('article')!;
+  expect(within(article).getByText('User-reviewed claim; not independently verified.')).toBeVisible();
+  expect(within(article).getByText('Reviewed summary of 2 notes; deleting this summary keeps the originals.')).toBeVisible();
+  fireEvent.change(screen.getByRole('combobox', { name: 'Language' }), { target: { value: 'fa' } });
+  await screen.findByText('ادعای بررسی‌شدهٔ شما؛ به‌طور مستقل تأیید نشده است.'); article = view.container.querySelector('article')!;
+  expect(within(article).getByText('خلاصهٔ بررسی‌شده از 2 یادداشت؛ حذف خلاصه، اصل یادداشت‌ها را نگه می‌دارد.')).toBeVisible();
+  expect(summary.revision).toBe(1); expect(mocks.save).not.toHaveBeenCalled(); expect(mocks.consent).not.toHaveBeenCalled();
 });

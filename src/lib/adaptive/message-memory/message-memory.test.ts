@@ -219,3 +219,30 @@ it.each([null, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])('refuses malformed Studio 
   const f = await setup(); await f.store.update(state => { state.agents[0].learningAuthorityRevision = value as number; });
   expect((await f.request('preview', f.input)).status).toBe(409); expect(f.create).not.toHaveBeenCalled();
 });
+it('projects inherited unverified labels into Privacy snapshots without changing valid summary rows or revisions', async () => {
+  const f = await setup(), p = await f.service.preview(123, f.input), claims = await f.service.accept(123, f.accept(p));
+  f.create.mockResolvedValueOnce({ content: [{ type: 'text', text: 'Ali reportedly suggested a tentative March 5 date; do not publish it.' }], stop_reason: 'end_turn', usage: { input_tokens: 8, output_tokens: 5 } });
+  const send = (route: string, body: unknown) => handleAdaptiveRequest(f.studio, f.adaptive, new Request(`https://vox.test/api/studio/adaptive/reviewed/${route}`, {
+    method: 'POST', headers: { origin: 'https://vox.test', 'content-type': 'application/json', 'x-telegram-init-data': signInitData({ id: 123, first_name: 'Synthetic' }, TOKEN) }, body: JSON.stringify(body),
+  }), ['reviewed', route], TOKEN);
+  const previewResponse = await send('preview', { space: 'work', agentId: 'agent1', locale: 'en', sourceRefs: claims.memoryIds.map(id => ({ id, revision: 1 })) });
+  expect(previewResponse.status).toBe(200); const proposed = await previewResponse.json();
+  const response = await send('accept', { space: 'work', agentId: 'agent1', text: proposed.text, receipt: proposed.receipt }); expect(response.status).toBe(201);
+  const saved = await response.json(), summaryId = saved.memoryId;
+  expect(saved.snapshot.memories.find((m: { id: string }) => m.id === summaryId)).toMatchObject({ origin: 'user_reviewed_claim', sourceRefs: expect.any(Array) });
+  await f.adaptive.withAccountDocument(123, d => {
+    const summary = d.memories.find(m => m.id === summaryId)!;
+    d.memories.push({ ...summary, id: 'nested-summary', text: 'Nested tentative summary.', sourceRefs: [{ id: summaryId, revision: 1 }] });
+    d.memories.push({ ...summary, id: 'ordinary-note', text: 'Unrelated ordinary note.', sourceRefs: undefined });
+    d.memories.reverse(); // Inherited labels must not depend on storage order.
+  });
+  const before = await readFile(await f.file(), 'utf8'), snapshot = await f.adaptive.read(123, 'work');
+  expect(snapshot.memories.filter(m => [summaryId, 'nested-summary'].includes(m.id)).map(m => m.origin)).toEqual(['user_reviewed_claim', 'user_reviewed_claim']);
+  expect(snapshot.memories.find(m => m.id === 'ordinary-note')?.origin).toBeUndefined();
+  expect(await readFile(await f.file(), 'utf8')).toBe(before);
+  const rows = JSON.parse(before).memories as Array<{ id: string; origin?: string; revision: number }>;
+  expect(rows.filter(m => [summaryId, 'nested-summary'].includes(m.id)).every(m => m.origin === undefined && m.revision === 1)).toBe(true);
+  await f.adaptive.deleteMemory(123, claims.memoryIds[0], { space: 'work', expectedRevision: 1, eventId: randomUUID() });
+  const afterDelete = await f.adaptive.read(123, 'work'); expect(afterDelete.memories.some(m => [summaryId, 'nested-summary'].includes(m.id))).toBe(false);
+  expect(afterDelete.memories.find(m => m.id === 'ordinary-note')?.origin).toBeUndefined();
+});
