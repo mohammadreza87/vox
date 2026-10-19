@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /** Single-host Vox Studio releases. Secrets stay in an owner-only env file. */
-import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync, symlinkSync, renameSync, realpathSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync, symlinkSync, renameSync, realpathSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -18,6 +18,16 @@ const plist = join(homedir(), 'Library', 'LaunchAgents', `${label}.plist`);
 const keys = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'ELEVENLABS_API_KEY', 'VOXX_BOT_TOKEN', 'VOXX_BOT_USERNAME', 'STUDIO_SECRET', 'STUDIO_SUPERADMIN_IDS', 'STUDIO_WEBAPP_URL', 'STUDIO_DATA_DIR', 'STUDIO_ORG_NAME', 'STUDIO_CHAT_MODEL', 'STUDIO_PERSONA_MODEL'];
 const readEnv = (file) => existsSync(file) ? parseEnv(readFileSync(file, 'utf8')) : {};
 const stamp = () => new Date().toISOString().replace(/[:.]/g, '-');
+function envLine(key, value) {
+  // Dotenv does not use JSON string escapes. Verify exact round trips before
+  // replacing a configuration containing the token encryption key.
+  for (const quote of ["'", '"', '`']) {
+    if (value.includes(quote)) continue;
+    const line = `${key}=${quote}${value}${quote}`;
+    if (parseEnv(line)[key] === value) return line;
+  }
+  throw new Error(`${key} cannot be safely encoded as dotenv; the existing file was preserved.`);
+}
 function privateDir(path) { mkdirSync(path, { recursive: true, mode: 0o700 }); chmodSync(path, 0o700); }
 function config() {
   if (!existsSync(envFile)) throw new Error('Run prepare first, then fill in production.env.');
@@ -32,7 +42,12 @@ function prepare() {
   env.STUDIO_DATA_DIR ||= join(base, 'data');
   env.VOXX_BOT_USERNAME ||= 'VoxxBot';
   env.STUDIO_ORG_NAME ||= 'HOOR';
-  writeFileSync(envFile, keys.map(k => `${k}=${JSON.stringify(env[k] ?? '')}`).join('\n') + '\n', { mode: 0o600 });
+  const contents = keys.map(k => envLine(k, env[k] ?? '')).join('\n') + '\n';
+  const temporary = `${envFile}.${process.pid}.tmp`;
+  try {
+    writeFileSync(temporary, contents, { mode: 0o600 });
+    renameSync(temporary, envFile);
+  } finally { rmSync(temporary, { force: true }); }
   chmodSync(envFile, 0o600);
   privateDir(env.STUDIO_DATA_DIR);
   console.log(`Production configuration prepared: ${envFile}`);
@@ -101,15 +116,17 @@ function snapshot() {
   console.log(`Stopped-process backup: ${dest}`);
 }
 function pointTo(path) {
-  const temp = join(base, `current-${process.pid}`);
-  symlinkSync(path, temp);
-  renameSync(temp, join(base, 'current'));
+  const temp = join(base, `current-${process.pid}-${randomBytes(8).toString('hex')}`);
+  try {
+    symlinkSync(path, temp);
+    renameSync(temp, join(base, 'current'));
+  } finally { rmSync(temp, { force: true }); }
 }
 function xml(value) { return String(value).replace(/[<>&"']/g, x => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&apos;' })[x]); }
 function installPlist() {
   privateDir(join(base, 'logs'));
   mkdirSync(dirname(plist), { recursive: true });
-  writeFileSync(plist, `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict>
+  const contents = `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict>
 <key>Label</key><string>${label}</string>
 <key>ProgramArguments</key><array><string>${xml(process.execPath)}</string><string>${xml(join(base, 'current', 'studio-runtime.mjs'))}</string><string>run</string></array>
 <key>EnvironmentVariables</key><dict><key>VOX_PRODUCTION_DIR</key><string>${xml(base)}</string></dict>
@@ -117,7 +134,12 @@ function installPlist() {
 <key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>15</integer><key>Umask</key><integer>63</integer>
 <key>StandardOutPath</key><string>${xml(join(base, 'logs', 'server.log'))}</string>
 <key>StandardErrorPath</key><string>${xml(join(base, 'logs', 'error.log'))}</string>
-</dict></plist>\n`, { mode: 0o600 });
+</dict></plist>\n`;
+  const temporary = `${plist}.${process.pid}.tmp`;
+  try {
+    writeFileSync(temporary, contents, { mode: 0o600 });
+    renameSync(temporary, plist);
+  } finally { rmSync(temporary, { force: true }); }
 }
 async function install() {
   await check();
