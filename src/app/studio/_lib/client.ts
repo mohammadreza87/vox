@@ -114,10 +114,24 @@ export interface Me {
 export interface LibraryVoice { voiceId: string; publicOwnerId: string; name: string; accent: string; gender: string; age: string; descriptive: string; language?: string; previewUrl?: string }
 export interface MemoryItem { id: string; content: string; type: string; scope: string; scopeLabel: string; from: string; mine: boolean; at: string; sensitivity: string }
 export interface GroupItem { chatId: number; title: string; hasGuests: boolean; memberCount: number; agents: Array<{ id: string; name: string; look: AgentLook }> }
+export type RelationshipMode = 'off' | 'shadow' | 'live';
+export interface RelationshipView {
+  available: boolean;
+  mode: RelationshipMode;
+  disabled: boolean;
+  pausedUntil?: string;
+  timeZone: string;
+  quietHours: { start: number; end: number };
+  preferences: Array<{ key: string; value: string }>;
+  openSituations: number;
+  pending: number;
+  unanswered: number;
+}
 
 const enc = encodeURIComponent;
 
 export const api = {
+  relationshipObservations: () => request<{ mode: 'off' | 'shadow' | 'live'; sampledEvents: number; counts: Record<string, number>; feedbackOutcomes?: Record<string, number>; windowStart: string | null; windowEnd: string | null; scope: string }>('GET', 'relationship-observations'),
   me: () => request<Me>('GET', 'me'),
   agents: () => request<{ agents: AgentView[] }>('GET', 'agents'),
   agent: (id: string) => request<{ agent: AgentView }>('GET', `agents/${enc(id)}`),
@@ -162,6 +176,13 @@ export const api = {
   liveCall: (id: string) => request<LiveCall>('POST', `agents/${enc(id)}/live-call`),
   callEnd: (id: string) => request<{ ok: true }>('POST', `agents/${enc(id)}/call-end`),
   memories: (id: string) => request<{ memories: MemoryItem[] }>('GET', `agents/${enc(id)}/memories`),
+  relationship: (id: string) => request<{ relationship: RelationshipView }>('GET', `agents/${enc(id)}/relationship`),
+  updateRelationship: (id: string, input: { action: 'configure' | 'pause' | 'resume' | 'stop' | 'forget'; until?: string; timeZone?: string; quietHours?: { start: number; end: number } }) =>
+    request<{ relationship: RelationshipView }>('PUT', `agents/${enc(id)}/relationship`, input),
+  shareMemory: (id: string, memoryId: string, recipients: number[]) =>
+    request<{ ok: true }>('PUT', `agents/${enc(id)}/memories`, { memoryId, recipients }),
+  revokeMemory: (id: string, memoryId: string) =>
+    request<{ ok: true }>('POST', `agents/${enc(id)}/revoke-memory`, { memoryId }),
   forget: (id: string, memoryId: string) => request<{ ok: true }>('DELETE', `agents/${enc(id)}/memories?memoryId=${enc(memoryId)}`),
   members: () => request<{ people: Member[]; agentAdmins: AgentView[] }>('GET', 'members'),
   setRole: (telegramId: number, role: Role) => request<{ member: Member }>('PUT', `members/${telegramId}`, { role }),

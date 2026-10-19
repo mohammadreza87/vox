@@ -1,3 +1,4 @@
+import { canPersonSee } from '../memory/visibility';
 import { vi } from 'vitest';
 import { parseOrgConfig } from '../org/config';
 import { OrgDirectory } from '../org/directory';
@@ -126,9 +127,10 @@ export function fakeVoice(transcript = 'transcribed words'): VoiceService & { tr
 export function makeGateway(options: { voice?: VoiceService | null } = {}) {
   const org = testOrg();
   const llm = new FakeLLM();
-  const memories = new InMemoryMemoryStore();
+  const epochs = new Map<string, number>();
+  const memories = new InMemoryMemoryStore(epochs);
   const offers = new InMemoryShareOfferStore();
-  const history = new InMemoryChatHistoryStore();
+  const history = new InMemoryChatHistoryStore(epochs);
   const bot = fakeBot();
   const silent = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   const gateway = new PersonaGateway({
@@ -210,6 +212,7 @@ export function memory(partial: Partial<MemoryRecord> & { content: string; scope
     sensitivity: 'normal',
     source: { personId: 'reza', chatKind: 'private', at },
     aboutPersonIds: [],
+    authorizedPersonIds: testOrg().listPeople().filter((p) => canPersonSee(testOrg(), p.id, partial.scope)).map((p) => p.id),
     confidence: 0.9,
     createdAt: at,
     updatedAt: at,

@@ -18,6 +18,8 @@ export interface LLMRequest {
   messages: LLMMessage[];
   maxTokens?: number;
   temperature?: number;
+  /** Side-effecting callers must not deliver a provider-truncated completion. */
+  requireComplete?: boolean;
 }
 
 export interface WebSource {
@@ -107,6 +109,7 @@ export class AnthropicLLM implements LLM {
   async complete(request: LLMRequest): Promise<string> {
     this.client ??= new Anthropic({ apiKey: this.apiKey });
     const response = await this.client.messages.create({ ...this.params(request), messages: normalizeTurns(request.messages) });
+    if (request.requireComplete && response.stop_reason === 'max_tokens') throw new Error('LLM completion truncated');
     return response.content
       .flatMap((block) => (block.type === 'text' ? [block.text] : []))
       .join('')
@@ -150,7 +153,7 @@ export class GeminiLLM implements LLM {
 
   constructor(private readonly apiKey: string, private readonly model: string) {}
 
-  async complete({ system, messages, maxTokens = 1024, temperature = 0.7 }: LLMRequest): Promise<string> {
+  async complete({ system, messages, maxTokens = 1024, temperature = 0.7, requireComplete }: LLMRequest): Promise<string> {
     const turns = normalizeTurns(messages);
     const last = turns.pop();
     if (!last) return '';
@@ -161,6 +164,7 @@ export class GeminiLLM implements LLM {
       generationConfig: { maxOutputTokens: maxTokens, temperature },
     });
     const result = await chat.sendMessage(last.content);
+    if (requireComplete && result.response.candidates?.some((candidate) => candidate.finishReason === 'MAX_TOKENS')) throw new Error('LLM completion truncated');
     return result.response.text().trim();
   }
 }

@@ -1,5 +1,5 @@
 import type { NextConfig } from "next";
-import { withSentryConfig } from '@sentry/nextjs';
+import { PHASE_PRODUCTION_SERVER } from 'next/constants';
 
 const nextConfig: NextConfig = {
   // Keep each production release independent of the working checkout.
@@ -38,9 +38,11 @@ const sentryWebpackPluginOptions = {
   tunnelRoute: '/monitoring',
 };
 
-// Wrap with Sentry only if DSN is configured
-const configWithSentry = process.env.NEXT_PUBLIC_SENTRY_DSN
-  ? withSentryConfig(nextConfig, sentryWebpackPluginOptions)
-  : nextConfig;
-
-export default configWithSentry;
+export default async function config(phase: string): Promise<NextConfig> {
+  // Firebase bundles this file again for its production-only Functions package.
+  // Sentry's build wrapper must not initialize there; Next serves the compiled
+  // rewrites and instrumentation produced during the build.
+  if (phase === PHASE_PRODUCTION_SERVER || !process.env.NEXT_PUBLIC_SENTRY_DSN) return nextConfig;
+  const { withSentryConfig } = await import('@sentry/nextjs');
+  return withSentryConfig({ ...nextConfig }, { ...sentryWebpackPluginOptions });
+}

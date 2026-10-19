@@ -4,6 +4,7 @@ import { motion } from 'framer-motion';
 import { useEffect, useState } from 'react';
 import { api, haptic, type AgentView, type Member, type Role } from '../../_lib/client';
 import { AgentFace } from '../Cloud';
+import { RelationshipObservations } from '../RelationshipObservations';
 import { errorMessage, useNav } from '../StudioApp';
 import { Icon, Sheet, Spinner } from '../ui';
 
@@ -114,6 +115,8 @@ export function OrgScreen() {
             </section>
           );
         })}
+
+        {['owner', 'superadmin', 'admin'].includes(me.role) && <RelationshipObservations />}
 
         <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <span className="vx-over">Agent admins · {agentAdmins.length}</span>
