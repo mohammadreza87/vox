@@ -51,6 +51,12 @@ reviewed the composed behavior. Independent review reproduced and closed:
    returns without introducing those records.
 6. A separate Studio-state read failure skipped biometric cleanup. Both cleanup
    paths now start independently; failed pages retain their checkpoint for retry.
+7. A persisted agent block was not checked by the new conversation route. Chat,
+   prediction, preparation and experience projections now check it alongside
+   current membership and grants, including after awaited provider work.
+8. Disabled voice status visits allocated a device row per browser session. Reads
+   no longer allocate; explicit enrollment can reclaim untouched legacy rows while
+   preserving templates, enrollment evidence, revocations and pending deletion.
 
 Author evidence: [memory](MEMORY_RETRIEVAL_RESULT.md),
 [prediction](../../src/lib/adaptive/prediction/RESULT.md),
@@ -87,8 +93,8 @@ self-deploying product changes. Browser push remains a later channel.
 
 Provider/physical-device E2E, held-out semantic quality, actual latency/cost,
 biometric accuracy/spoofing, deployed storage/key access and recovery qualification
-remain separate gates. Joyixir and info@joyixir.com are supplied; exact registered
-entity/address and qualified legal/privacy approval are still needed. A consent
+remain separate gates. The user supplied Joyixir OÜ and info@joyixir.com; the postal
+address and qualified legal/privacy approval are still needed. A consent
 paragraph does not establish compliance for an otherwise unqualified data flow.
 
 ## خلاصهٔ فارسی

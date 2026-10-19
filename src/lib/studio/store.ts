@@ -14,6 +14,8 @@ export const SAFE_FILE = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,120}$/;
 export interface StudioStorage {
   /** A deep copy of the current state. */
   read(): Promise<StudioState>;
+  /** File-only effect fence: latest committed state, no awaited work. */
+  readCommittedForEffect?(): StudioState;
   /** Apply `fn` to a draft and persist it; throwing inside `fn` changes nothing. `fn` may run more than once. */
   update<T>(fn: (state: StudioState) => T): Promise<T>;
   audit(entry: Omit<AuditEntry, 'at'>): Promise<void>;
@@ -57,6 +59,12 @@ export class StudioStore implements StudioStorage {
   async read(): Promise<StudioState> {
     await this.queue.catch(() => undefined);
     return structuredClone(this.load());
+  }
+
+  readCommittedForEffect(): StudioState {
+    const state: unknown = existsSync(this.file) ? JSON.parse(readFileSync(this.file, 'utf8')) : EMPTY_STATE;
+    if (!state || typeof state !== 'object' || !('members' in state) || !Array.isArray(state.members) || !('agents' in state) || !Array.isArray(state.agents) || !('groups' in state) || !Array.isArray(state.groups) || !('audit' in state) || !Array.isArray(state.audit)) throw new Error('Invalid Studio state');
+    return structuredClone(state) as StudioState;
   }
 
   /**

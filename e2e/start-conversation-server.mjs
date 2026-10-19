@@ -8,7 +8,7 @@ if (!existsSync(`${built}/server.js`)) throw new Error('Build the standalone app
 cpSync(`${root}/.next/static`, `${built}/.next/static`, { recursive: true });
 if (existsSync(`${root}/public`)) cpSync(`${root}/public`, `${built}/public`, { recursive: true });
 const child = spawn(process.execPath, [`${built}/server.js`], {
-  cwd: built, stdio: 'inherit', env: { ...process.env, HOSTNAME: '127.0.0.1', PORT: '3104' },
+  cwd: built, stdio: 'inherit', env: { ...process.env, HOSTNAME: '127.0.0.1', PORT: process.env.STUDIO_E2E_PORT ?? '3104' },
 });
 for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => child.kill(signal));
 child.on('error', () => process.exit(1));

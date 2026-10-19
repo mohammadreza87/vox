@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { LivePredictionConsumer, predictionHttpTransport } from '@/lib/adaptive/prediction/client';
 import { prepareSharedImage } from '@/lib/adaptive/prediction/image-browser';
+import { TaskOutcome } from './TaskOutcome';
 import { tg } from '../_lib/client';
 
 /** Typed fallback and explicit image sharing use the same scoped agent context
@@ -18,6 +19,7 @@ export function ConversationPanel({ agentId, space, locale = 'en', disabled = fa
   const [busy, setBusy] = useState(false);
   const [loadingImage, setLoadingImage] = useState(false);
   const [error, setError] = useState('');
+  const [lastTurnId, setLastTurnId] = useState<string>();
   const [lines, setLines] = useState<Array<{ role: 'you' | 'agent'; text: string }>>([]);
   const consumer = useRef<LivePredictionConsumer | null>(null);
   const request = useRef<AbortController | null>(null);
@@ -33,7 +35,7 @@ export function ConversationPanel({ agentId, space, locale = 'en', disabled = fa
     const current = new LivePredictionConsumer({ ...predictionHttpTransport(() => tg()?.initData ?? ''),
       onPrepared: result => setPrepared(result?.preparedContext === true), debounceMs: 350 });
     consumer.current = current;
-    setDraft(''); setImage(undefined); setLines([]); setPrepare(false); setPrepared(false); setBusy(false); setError('');
+    setDraft(''); setImage(undefined); setLastTurnId(undefined); setLines([]); setPrepare(false); setPrepared(false); setBusy(false); setError('');
     return () => { generation.current++; current.cancel(); request.current?.abort(); imageRequest.current?.abort(); consumer.current = null; };
   }, [agentId, space]);
   useEffect(() => {
@@ -71,6 +73,7 @@ export function ConversationPanel({ agentId, space, locale = 'en', disabled = fa
       if (!data || typeof data !== 'object' || !('reply' in data) || typeof data.reply !== 'string') throw new Error('invalid_reply');
       if (controller.signal.aborted || generation.current !== current) return;
       const reply = data.reply;
+      setLastTurnId('turnId' in data && typeof data.turnId === 'string' ? data.turnId : undefined);
       setLines(previous => [...previous, { role: 'you', text: draft }, { role: 'agent', text: reply }].slice(-20) as typeof previous);
       setDraft(''); setImage(undefined);
     } catch {
@@ -101,6 +104,7 @@ export function ConversationPanel({ agentId, space, locale = 'en', disabled = fa
       else { startPredictionTurn(); consumer.current?.update({ text: draft, image, stable: draft.trim().length >= 12 }); }
     }} />{t('Prepare while I type', 'آماده‌سازی هنگام تایپ')}</label>
     <p className="vx-small vx-2">{t('When selected, your draft and selected image may be sent to OpenAI before you press Send. Preparation stays off when unavailable and never sends a message for you.', 'با انتخاب این گزینه، پیش‌نویس و تصویر انتخاب‌شده ممکن است پیش از زدن ارسال به OpenAI فرستاده شوند. اگر آماده‌سازی در دسترس نباشد خاموش می‌ماند و هرگز از طرف شما پیامی ارسال نمی‌کند.')}</p>
+    {lastTurnId && <TaskOutcome key={`${agentId}:${space}:${lastTurnId}`} agentId={agentId} space={space} turnId={lastTurnId} locale={locale} />}
     {prepared && <p className="vx-small" role="status">{t('Context prepared for this draft. You can keep editing.', 'زمینهٔ این پیش‌نویس آماده شد. می‌توانید ویرایش را ادامه دهید.')}</p>}
     {error && <p className="vx-banner danger" role="alert">{error}</p>}
     <button className="vx-btn vx-btn-primary" disabled={busy || disabled || loadingImage || !draft.trim()} onClick={() => void send()}>{busy ? t('Replying…', 'در حال پاسخ…') : t('Send', 'ارسال')}</button>

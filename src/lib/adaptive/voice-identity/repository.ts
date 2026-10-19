@@ -1,5 +1,6 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'crypto';
 import { z } from 'zod';
+import { AdaptiveError } from '../persistence/service';
 import type { AdaptiveStorage } from '../persistence/storage';
 import type { VoiceScope } from './contracts';
 const time = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
@@ -28,14 +29,32 @@ export class VoiceIdentityRepository {
       return { document, result };
     });
   }
-  transaction<T>(accountId: string, personId: string, scope: VoiceScope, fn: (row: VoiceIdentityRow) => T): Promise<T> {
+  transaction<T>(accountId: string, personId: string, scope: VoiceScope, fn: (row: VoiceIdentityRow) => T, allocate = true): Promise<T> {
     return this.all(accountId, personId, rows => {
       let row = rows.find(r => r.space === scope.space && r.deviceId === scope.deviceId);
-      if (!row) { row = { ...scope, personId, revision: 0, epoch: 0, intent: 'not_asked', deletion: 'not_required' }; rows.push(row); }
+      if (!row) {
+        row = { ...scope, personId, revision: 0, epoch: 0, intent: 'not_asked', deletion: 'not_required' };
+        if (allocate) {
+          if (rows.length >= 20) {
+            // Earlier status reads created empty device rows. Reclaim only those
+            // untouched placeholders, never enrollment evidence, revocation
+            // epochs, accepted intent, captures, ciphertext or pending purge.
+            const unused = rows.findIndex(r => r.intent === 'not_asked' && r.epoch === 0 && r.revision === 0 &&
+              r.deletion === 'not_required' && !r.evidence && !r.receipt && !r.capture && !r.template && r.lastPurgeAt === undefined);
+            if (unused < 0) throw new AdaptiveError(409, 'storage_capacity');
+            rows.splice(unused, 1);
+          }
+          rows.push(row);
+        }
+      }
       return fn(row);
     });
   }
-
+  /** Inspect/update an existing scope without allocating a device placeholder.
+   * An absent row is an ephemeral empty projection and is never persisted. */
+  existing<T>(accountId: string, personId: string, scope: VoiceScope, fn: (row: VoiceIdentityRow) => T): Promise<T> {
+    return this.transaction(accountId, personId, scope, fn, false);
+  }
 }
 /** Separate encryption key supplied by reviewed runtime key management. It is
  * never derived from a bot token, account ID or provider credentials. */

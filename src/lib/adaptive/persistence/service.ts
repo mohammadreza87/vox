@@ -74,6 +74,18 @@ export class AdaptiveService {
     const result = await this.repository.transaction(this.account(telegramId), now, d => {
       invalidations.length = 0;
       voiceInvalidations.length = 0;
+      const revokeReminderIdentity = () => {
+        for (const space of ['work', 'personal'] as const) {
+          const channel = d.experience.reminderDelivery?.[space];
+          if (!channel?.authorization && !channel?.presentation) continue;
+          delete channel.authorization; delete channel.presentation; channel.enabled = false; channel.revision++;
+          for (const item of d.experience.inbox.filter(i => i.space === space && i.category === 'reminder')) { item.status = 'cancelled'; delete item.label; item.revision++; }
+          d.revision++; d.updatedAt = now;
+        }
+      };
+      // A previously cleared identity cannot acquire its old background grant
+      // again when confirmation creates a new interactive binding.
+      if (!d.binding || d.binding.accountId !== d.accountId || d.binding.personId !== d.personId) revokeReminderIdentity();
       const priorBinding = digest(d.binding ?? null);
       const priorRevision = d.revision;
       const priorRelationships = digest(d.relationships);
@@ -118,6 +130,7 @@ export class AdaptiveService {
       if (sweepObserverDocument(d, now, (doc, space, agentId, time) =>
         this.isPurposeAllowed(doc, space, 'optional.product_analytics', time, agentId))) this.bump(d, now);
       const value = fn(d, now);
+      if (!d.binding || d.binding.accountId !== d.accountId || d.binding.personId !== d.personId) revokeReminderIdentity();
       // The separate template store is suppressed/purged only after canonical
       // authority commits. Its invalidator never re-enters this transaction.
       if (priorBinding !== digest(d.binding ?? null) || (d.binding && d.binding.expiresAt <= now)) {

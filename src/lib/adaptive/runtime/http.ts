@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { reminderChannelPresentSchema, reminderChannelInputSchema, reminderActionInputSchema } from './reminder-contracts';
+import { beginObservation } from '../../studio/observation';
 import { personId } from '../../studio/org-bridge';
 import { canUseAgent } from '../../studio/permissions';
 import { verifyInitData } from '../../studio/auth';
@@ -28,18 +30,26 @@ export async function handleExperienceRequest(studio: Studio, service: AdaptiveE
     const url = new URL(request.url), space = experienceSpaceSchema.parse(url.searchParams.get('space') ?? 'work');
     const canAccess = async (agentId: string): Promise<boolean> => {
       const state = await studio.deps.store.read();
-      return state.agents.some(agent => agent.id === agentId && canUseAgent(state.members.find(m => m.telegramId === user.id), agent));
+      return state.agents.some(agent => agent.id === agentId && !(agent.blocked ?? []).includes(user.id) && canUseAgent(state.members.find(m => m.telegramId === user.id), agent));
     };
     const snapshotResponse = async (snapshot: ExperienceSnapshot, status = 200): Promise<Response> => {
       const current = await service.read(user.id, snapshot.space);
       const state = await studio.deps.store.read();
-      const ids = new Set(state.agents.filter(agent => canUseAgent(state.members.find(m => m.telegramId === user.id), agent)).map(a => a.id));
+      const ids = new Set(state.agents.filter(agent => !(agent.blocked ?? []).includes(user.id) && canUseAgent(state.members.find(m => m.telegramId === user.id), agent)).map(a => a.id));
       // Recheck Studio access after loading private content; serialize without
       // another awaited content load. Cross-store atomicity is a release gate.
       current.preferences = current.preferences.filter(p => ids.has(p.agentId));
       current.inbox = current.inbox.filter(i => ids.has(i.agentId));
+      current.reminders = current.reminders?.filter(i => ids.has(i.agentId));
       return json(current, status);
     };
+    if (request.method === 'GET' && path.length === 2 && path[0] === 'reminders') {
+      const itemId = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/).parse(path[1]);
+      const before = await service.resolveReminder(user.id, itemId);
+      if (!before || !await canAccess(before.agentId)) return json({ error: 'not_found' }, 404);
+      const current = await service.resolveReminder(user.id, itemId);
+      return current && current.space === before.space && current.agentId === before.agentId ? json({ space: current.space }) : json({ error: 'not_found' }, 404);
+    }
     if (request.method === 'GET' && path.length === 0) return await snapshotResponse(await service.read(user.id, space));
     if (!['POST', 'PUT'].includes(request.method)) return json({ error: 'not_found' }, 404);
     if (request.headers.get('origin') !== url.origin || request.headers.get('sec-fetch-site') === 'cross-site') return json({ error: 'origin_denied' }, 403);
@@ -54,6 +64,14 @@ export async function handleExperienceRequest(studio: Studio, service: AdaptiveE
       const input = preferenceInputSchema.parse(body);
       if (!await canAccess(input.agentId)) return json({ error: 'agent_access_denied' }, 403);
       return await snapshotResponse(await service.savePreference(user.id, input));
+    }
+    if (route === 'POST reminder-channel/present') return await snapshotResponse(await service.presentReminderChannel(user.id, reminderChannelPresentSchema.parse(body)));
+    if (route === 'PUT reminder-channel') return await snapshotResponse(await service.reminderChannel(user.id, reminderChannelInputSchema.parse(body)));
+    if (route === 'POST reminder-action') {
+      const input = reminderActionInputSchema.parse(body);
+      const item = await service.resolveReminder(user.id, input.itemId);
+      if (!item || item.space !== input.space || !await canAccess(item.agentId)) return json({ error: 'not_found' }, 404);
+      return await snapshotResponse(await service.reminderAction(user.id, input));
     }
     if (route === 'POST feedback') return await snapshotResponse(await service.feedback(user.id, feedbackInputSchema.parse(body)));
     if (route === 'POST reminders') {
@@ -72,7 +90,10 @@ export async function handleExperienceRequest(studio: Studio, service: AdaptiveE
       const input = predictInputSchema.parse(body);
       if (!await canAccess(input.agentId)) return json({ error: 'agent_access_denied' }, 403);
       await limiter.consume('expensive', user.id);
-      const result = await service.predict(user.id, input, request.signal, () => canAccess(input.agentId));
+      const measure = await beginObservation(studio, user.id, input.agentId, input.space, 'text', undefined, { operation: 'prediction' });
+      const result = await measure.run(() => service.predict(user.id, input, request.signal, () => canAccess(input.agentId)));
+      const outcome = result.status === 'answered' ? 'responded' : ['cancelled', 'stale'].includes(result.reason) ? 'cancelled' : 'unknown';
+      await measure(outcome);
       if (result.status !== 'answered' || !result.policyReceipt) return json(result);
       const scope = { space: input.space, agentId: input.agentId, sessionId: input.sessionId, turnId: input.turnId,
         revision: input.revision, contextKey: input.contextKey, policyReceipt: result.policyReceipt };
@@ -94,15 +115,21 @@ export async function handleExperienceRequest(studio: Studio, service: AdaptiveE
           if (!await authorize()) return false;
           return gateway.prepareContext(input.agentId, personId(user.id), input.text, { space: input.space, authorize });
         };
-        preparedContext = await Promise.race([preparation().catch(() => false), new Promise<boolean>(resolve => {
+        preparedContext = await measure.run(() => Promise.race([preparation().catch(() => false), new Promise<boolean>(resolve => {
           timer = setTimeout(() => { controller.abort(); resolve(false); }, 250);
-        })]);
+        })]));
       } finally {
         if (timer) clearTimeout(timer);
         request.signal.removeEventListener('abort', abort);
       }
       // Timeout disables preparation, while the original semantic result may
       // remain usable. All awaited work precedes this authoritative final check.
+      if (request.signal.aborted || !(await service.validatePrediction(user.id, scope, () => canAccess(input.agentId))).valid) {
+        await measure('cancelled');
+        return json({ status: 'unknown', reason: 'stale', elapsedMs: result.elapsedMs, inputTokens: result.inputTokens });
+      }
+      await measure(outcome);
+      // Observation may await storage; repeat final receipt validation afterwards.
       if (request.signal.aborted || !(await service.validatePrediction(user.id, scope, () => canAccess(input.agentId))).valid) {
         return json({ status: 'unknown', reason: 'stale', elapsedMs: result.elapsedMs, inputTokens: result.inputTokens });
       }

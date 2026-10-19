@@ -14,6 +14,8 @@
  *   STUDIO_DATA_DIR          default ./.vox-studio (file storage)
  *   STUDIO_MAINTENANCE=1     optional background sweep; requires file storage,
  *                            STUDIO_BOTS=1 and a persistent polling process
+ *   STUDIO_REMINDER_DELIVERY=1  optional Telegram reminders; requires maintenance
+ *                            and each person's separate channel confirmation
  *
  * Serverless production (Firebase):
  *   STUDIO_STORAGE=firestore  state in Firestore, media in Cloud Storage,
@@ -63,6 +65,7 @@ import { groupId } from './org-bridge';
 import { z } from 'zod';
 import { ImprovementWorkflow } from '../adaptive/improvement/workflow';
 import { validateTrust, type TrustStore } from '../adaptive/improvement/contracts';
+import { createStudioReminderDelivery } from './reminder-delivery';
 
 function improvementTrust(raw: string | undefined, storage: string): TrustStore | undefined {
   if (!raw?.trim()) return undefined;
@@ -138,14 +141,18 @@ export function validateStudioConfig(env: NodeJS.ProcessEnv, cwd = process.cwd()
   const relationships = relationshipConfig(env);
   const scopedRelationshipsEnabled = env.STUDIO_SCOPED_RELATIONSHIPS === '1';
   const maintenanceEnabled = env.STUDIO_MAINTENANCE === '1';
+  const reminderDeliveryEnabled = env.STUDIO_REMINDER_DELIVERY === '1';
   // The only scheduler is startBots' in-process interval. Webhooks/serverless
   // have no scheduled maintenance entrypoint and must not advertise activation.
   if (maintenanceEnabled && (env.STUDIO_BOTS !== '1' || storage !== 'file' || publicUrl ||
     env.K_SERVICE || env.FUNCTION_TARGET || env.FUNCTION_NAME || env.VERCEL === '1')) {
     throw new Error('STUDIO_MAINTENANCE=1 requires STUDIO_BOTS=1 with file storage in a persistent polling process; webhook and serverless maintenance are unsupported');
   }
+  if (reminderDeliveryEnabled && (!maintenanceEnabled || !token)) {
+    throw new Error('STUDIO_REMINDER_DELIVERY=1 requires STUDIO_MAINTENANCE=1 and a configured manager bot');
+  }
   const trustedImprovementKeys = improvementTrust(env.STUDIO_IMPROVEMENT_TRUST_JSON, storage);
-  return { production, token, superadminIds, dataDir, webAppUrl, storage, mediaBucket, publicUrl, relationships, scopedRelationshipsEnabled, maintenanceEnabled, trustedImprovementKeys };
+  return { production, token, superadminIds, dataDir, webAppUrl, storage, mediaBucket, publicUrl, relationships, scopedRelationshipsEnabled, maintenanceEnabled, reminderDeliveryEnabled, trustedImprovementKeys };
 }
 
 /** STUDIO_WEB_SEARCH=off keeps every agent offline (web searches are billed per search). */
@@ -300,12 +307,21 @@ async function create(): Promise<Studio> {
       return { memberTelegramIds, hasGuests, revision: createHash('sha256').update(JSON.stringify([id, memberTelegramIds, hasGuests, group.audienceEpoch ?? 0])).digest('hex') };
     },
   });
+  const reminderEndpointId = config.reminderDeliveryEnabled && config.token ? studio.relationshipEndpointId(config.token) : undefined;
   studio.deps.experience = new AdaptiveExperienceService(storage.adaptive!, {
+    notificationsEnabled: config.reminderDeliveryEnabled,
+    notificationEndpointId: reminderEndpointId,
     decisionsEnabled: env.STUDIO_DECISIONS_ENABLED === '1' && !!env.OPENAI_API_KEY,
     ...(env.STUDIO_DECISIONS_ENABLED === '1' && env.OPENAI_API_KEY ? {
       decisions: new DecisionService(new OpenAIDecisionProvider(new OpenAI({ apiKey: env.OPENAI_API_KEY, maxRetries: 0 }))),
     } : {}),
   });
+  if (reminderEndpointId && config.token) {
+    studio.deps.reminderEndpointId = reminderEndpointId;
+    studio.deps.reminderDelivery = createStudioReminderDelivery(studio, {
+      enabled: true, endpointId: reminderEndpointId, botToken: config.token, webAppUrl: config.webAppUrl,
+    });
+  }
   // No matching provider is qualified by this release. Status/delete remain
   // reachable, while every capture/enrollment operation fails before audio.
   studio.deps.voiceIdentity = new VoiceIdentityService(storage.adaptive!, new VoiceIdentityRepository(storage.voiceIdentityStorage), { enabled: false });
@@ -316,7 +332,7 @@ async function create(): Promise<Studio> {
   studio.deps.lifecycle = new AdaptiveLifecycleService(storage.adaptive!, { shared: studio.deps.shared });
   if (config.maintenanceEnabled) studio.deps.maintenance = new AdaptiveMaintenanceRunner(studio.deps.lifecycle,
     storage.adaptive!.repository.storage, storage.maintenanceStorage, {
-      afterAccount: telegramId => maintainAdaptiveAccount(studio, telegramId),
+      afterAccount: (telegramId, context) => maintainAdaptiveAccount(studio, telegramId, context.signal),
     });
   if (config.trustedImprovementKeys) {
     const workflow = new ImprovementWorkflow({ root: join(config.dataDir, 'improvement-review'), trust: config.trustedImprovementKeys });
@@ -327,7 +343,7 @@ async function create(): Promise<Studio> {
   return studio;
 }
 
-export async function maintainAdaptiveAccount(studio: Studio, telegramId: number): Promise<void> {
+export async function maintainAdaptiveAccount(studio: Studio, telegramId: number, signal?: AbortSignal): Promise<void> {
   const results = await Promise.allSettled([
       (async () => {
         const state = await studio.deps.store.read();
@@ -337,6 +353,7 @@ export async function maintainAdaptiveAccount(studio: Studio, telegramId: number
       })(),
       // No Studio read is a prerequisite for independent biometric cleanup.
       studio.deps.voiceIdentity!.maintenanceAccount(telegramId),
+      studio.deps.reminderDelivery?.drainAccount(telegramId, { signal }),
     ]);
   if (results.some(result => result.status === 'rejected') ||
       results[0].status === 'fulfilled' && results[0].value.failed ||

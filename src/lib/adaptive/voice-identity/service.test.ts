@@ -187,4 +187,49 @@ describe('optional voice identity lifecycle with synthetic provider protocol onl
     expect(provider.inspect).not.toHaveBeenCalled(); expect(provider.extract).not.toHaveBeenCalled(); expect(audio).toEqual(new Uint8Array(2));
   });
 
+  it('40 disabled device-session status visits and cancellations do not allocate durable rows', async () => {
+    const { service, repository, adaptive } = await setupVoiceIdentity(false);
+    const accountId = accountIdFor(123), personId = (await adaptive.read(123, 'work')).identity.personId!;
+    for (let i = 1; i <= 40; i++) {
+      const current = { ...scope, deviceId: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}` };
+      expect(await service.read(123, current)).toMatchObject({ available: false, reason: 'provider_unavailable', revision: 0 });
+      if (i % 10 === 0) expect((await service.cancel(123, current)).revision).toBe(0);
+    }
+    expect(await repository.all(accountId, personId, rows => rows.length)).toBe(0);
+  });
+  it('reclaims only legacy empty placeholders while preserving active templates, pending purge and revocation evidence', async () => {
+    const { service, repository, adaptive, consent, enroll } = await setupVoiceIdentity();
+    await consent(); await enroll();
+    const accountId = accountIdFor(123), personId = (await adaptive.read(123, 'work')).identity.personId!;
+    const pendingId = '22222222-2222-4222-8222-222222222222', revokedId = '33333333-3333-4333-8333-333333333333';
+    const before = await repository.all(accountId, personId, rows => {
+      rows.push({ ...structuredClone(rows[0]), deviceId: pendingId, intent: 'revoked', deletion: 'provider_pending' });
+      rows.push({ ...scope, deviceId: revokedId, personId, revision: 4, epoch: 7, intent: 'revoked', deletion: 'online_completed',
+        evidence: { copyHash: 'preserve-enrollment-evidence', locale: 'en', decidedAt: NOW, statement: 'enroll_my_voice' } });
+      for (let i = 1; i <= 17; i++) rows.push({ ...scope, deviceId: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`, personId,
+        revision: 0, epoch: 0, intent: 'not_asked', deletion: 'not_required' });
+      return structuredClone(rows.filter(r => [scope.deviceId, pendingId, revokedId].includes(r.deviceId)));
+    });
+    const next = { ...scope, deviceId: '44444444-4444-4444-8444-444444444444' };
+    expect((await service.read(123, next)).revision).toBe(0);
+    expect(await repository.all(accountId, personId, rows => rows.length)).toBe(20);
+    const presented = await service.present(123, next, 0, 'en'); expect(presented.receipt).toBeDefined();
+    const after = await repository.all(accountId, personId, rows => structuredClone(rows));
+    expect(after).toHaveLength(20);
+    expect(after.filter(r => [scope.deviceId, pendingId, revokedId].includes(r.deviceId))).toEqual(before);
+    expect(after.find(r => r.deviceId === next.deviceId)?.receipt).toBeDefined();
+  });
+  it('full protected capacity still permits unlimited status reads and refuses allocation without pruning revocations', async () => {
+    const { service, repository, adaptive, consent } = await setupVoiceIdentity(); await consent();
+    const accountId = accountIdFor(123), personId = (await adaptive.read(123, 'work')).identity.personId!;
+    const before = await repository.all(accountId, personId, rows => {
+      for (let i = 1; i <= 20; i++) rows.push({ ...scope, deviceId: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`, personId,
+        revision: 2, epoch: i, intent: 'revoked', deletion: 'online_completed' });
+      return structuredClone(rows);
+    });
+    for (let i = 21; i <= 50; i++) expect((await service.read(123, { ...scope, deviceId: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}` })).enrollment).toBe('none');
+    await expect(service.present(123, scope, 0, 'en')).rejects.toMatchObject({ status: 409, code: 'storage_capacity' });
+    expect(await repository.all(accountId, personId, rows => rows)).toEqual(before);
+  });
+
 });

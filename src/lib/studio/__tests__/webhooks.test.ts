@@ -2,6 +2,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { FirestoreStudioStore } from '../firestore-store';
 import { AGENT_UPDATES, handleManagerUpdate, isValidWebhookSecret, MANAGER_UPDATES, registerWebhooks, webhookSecret } from '../updates';
 import { hire, makeStudio, SECRET, seedOrg, type Harness } from './helpers';
+import type { AdaptiveExperienceService } from '../../adaptive/runtime/service';
 
 describe('webhook secrets', () => {
   it('derives a distinct, Telegram-safe secret per bot', () => {
@@ -21,6 +22,22 @@ describe('webhook secrets', () => {
 });
 
 describe('manager onboarding', () => {
+  it('records reminder reachability only from an approved member in their own private manager DM', async () => {
+    const h = makeStudio(), { alice } = await seedOrg(h);
+    const noteReminderRecipient = vi.fn(async () => undefined);
+    h.studio.deps.experience = { noteReminderRecipient } as unknown as AdaptiveExperienceService;
+    h.studio.deps.reminderEndpointId = 'credential-bound-endpoint';
+    const message = { message_id: 1, date: 0, text: 'Hello',
+      chat: { id: alice.telegramId, type: 'private' as const },
+      from: { id: alice.telegramId, is_bot: false, first_name: 'Alice' } };
+    await handleManagerUpdate(h.studio, { update_id: 1, message });
+    expect(noteReminderRecipient).toHaveBeenCalledWith(alice.telegramId, 'credential-bound-endpoint');
+    noteReminderRecipient.mockClear();
+    await handleManagerUpdate(h.studio, { update_id: 2, message: { ...message, chat: { id: -42, type: 'group' } } });
+    await handleManagerUpdate(h.studio, { update_id: 3, message: { ...message, chat: { id: alice.telegramId + 1, type: 'private' } } });
+    await handleManagerUpdate(h.studio, { update_id: 4, message: { ...message, chat: { id: 9090, type: 'private' }, from: { id: 9090, is_bot: false, first_name: 'Pending' } } });
+    expect(noteReminderRecipient).not.toHaveBeenCalled();
+  });
   it.each(['/start', 'Hello, can I get access?'])('shows an unapproved person their User ID and how to request access after %s', async (text) => {
     const h = makeStudio();
     await handleManagerUpdate(h.studio, {

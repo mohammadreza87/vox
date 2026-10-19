@@ -16,7 +16,7 @@ export interface MaintenanceOptions {
   now?: () => number;
   leaseMs?: number;
   /** Awaited before checkpoint advancement. Failure retries the same bounded page. */
-  afterAccount?: (telegramId: number) => Promise<void>;
+  afterAccount?: (telegramId: number, context: { signal?: AbortSignal }) => Promise<void>;
 }
 export type MaintenanceResult = { state: 'continued' | 'completed' | 'busy' | 'failed'; scanned: number; next?: string; failure?: 'sweep_failed' };
 
@@ -63,7 +63,7 @@ export class AdaptiveMaintenanceRunner {
         const match = /^telegram-account:([1-9]\d{0,15})$/.exec(accountId), telegramId = match ? Number(match[1]) : NaN;
         if (!Number.isSafeInteger(telegramId)) throw new Error('Invalid maintenance account');
         await this.lifecycle.sweepAccount(telegramId);
-        await this.options.afterAccount?.(telegramId);
+        await this.options.afterAccount?.(telegramId, { signal: input.signal });
         scanned++;
       }
       input.signal?.throwIfAborted();

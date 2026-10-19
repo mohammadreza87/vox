@@ -21,7 +21,7 @@ function setup() {
       ...(body !== undefined || options.raw !== undefined ? { body: options.raw ?? JSON.stringify(body) } : {}) });
     return handleExperienceRequest(studio, experience, req, path, TOKEN);
   };
-  return { adaptive, experience, studio, request };
+  return { adaptive, experience, studio, request, state };
 }
 describe('authenticated experience API', () => {
   it('requires signed Telegram auth and responds without caching', async () => {
@@ -58,6 +58,33 @@ describe('authenticated experience API', () => {
     expect((await (await request([])).json()).preferences).toHaveLength(1);
     expect((await (await request([], 'GET', undefined, { auth: signInitData({ id: 124, first_name: 'Other' }, TOKEN) })).json()).preferences).toEqual([]);
   });
+  it('excludes blocked agents from preference reads and speculative provider entry', async () => {
+    const { adaptive, experience, request, state } = setup();
+    const confirmed = await adaptive.confirm(123, { confirm: true });
+    await request(['preferences'], 'PUT', { space: 'work', expectedRevision: confirmed.revision, eventId: 'preference-before-block',
+      agentId: 'allowed-agent', setting: { key: 'language', value: 'fa' }, action: 'set' });
+    Object.assign(state.agents[0], { blocked: [123] });
+    expect((await (await request([])).json()).preferences).toEqual([]);
+    const predict = vi.spyOn(experience, 'predict');
+    expect((await request(['predict'], 'POST', { space: 'work', agentId: 'allowed-agent', sessionId: 'session1',
+      turnId: 'turn1', revision: 1, text: 'Private draft', question: 'intent_route' })).status).toBe(403);
+    expect(predict).not.toHaveBeenCalled();
+  });
+});
+
+it('suppresses prediction and prewarm when the agent blocks a person during evaluation', async () => {
+  const { experience, studio, request, state } = setup();
+  vi.spyOn(experience, 'predict').mockImplementation(async () => {
+    Object.assign(state.agents[0], { blocked: [123] });
+    return { status: 'answered', model: 'gpt-6-luna', answers: [], elapsedMs: 2, policyReceipt: 'receipt' };
+  });
+  vi.spyOn(experience, 'validatePrediction').mockImplementation(async (_id, _input, authorize) => ({ valid: !!authorize && await authorize() }));
+  const prepareContext = vi.fn(async () => true);
+  studio.gateway = vi.fn(async () => ({ gateway: { prepareContext }, state: {} })) as unknown as Studio['gateway'];
+  const result = await request(['predict'], 'POST', { space: 'work', agentId: 'allowed-agent', sessionId: 'session1',
+    turnId: 'turn1', revision: 1, text: 'Private draft', question: 'intent_route' });
+  expect(await result.json()).toMatchObject({ status: 'unknown', reason: 'stale' });
+  expect(prepareContext).not.toHaveBeenCalled();
 });
 
 it('exposes bounded signed cancellation and receipt validation without accepting client authority', async () => {

@@ -39,9 +39,9 @@ export class AdaptiveObserverService {
       this.clean(d, now);
       if (!this.allowed(d, input.space, input.agentId, now)) return { recorded: false, duplicate: false };
       const turnKey = digest([input.space, input.agentId, input.turnId]);
-      const server = d.observer.events.find(e => e.trust === 'server' && e.turnKey === turnKey && e.channel === 'voice' && e.outcome === 'responded');
+      const server = d.observer.events.find(e => e.trust === 'server' && e.turnKey === turnKey && e.operation !== 'prediction' && e.outcome === 'responded' && (input.outcome.startsWith('task_') || e.channel === 'voice'));
       if (!server) return { recorded: false, duplicate: false };
-      return this.append(d, now, input, 'client_unverified', 'voice', server.policyReceipt);
+      return this.append(d, now, input, 'client_unverified', server.channel, server.policyReceipt);
     });
   }
   private append(d: AdaptiveDocument, now: number, input: ReturnType<typeof serverObservationInputSchema.parse> | ReturnType<typeof clientObservationInputSchema.parse>, trust: ObserverEvent['trust'], channel: ObserverEvent['channel'], policyReceipt: string) {
@@ -63,7 +63,7 @@ export class AdaptiveObserverService {
       consentEpoch: permission.epoch, permissionRevision: permission.revision, grantRevision: grant.revision, bindingRevision: d.binding!.revision, schemaVersion: 1, version: OBSERVER_VERSION, id, fingerprint, revision: input.revision,
       turnKey: digest([input.space, input.agentId, input.turnId]), accountId: d.accountId, personId: d.personId,
       space: input.space, spaceId: spaceIdFor(d.accountId, input.space), agentId: input.agentId, policyReceipt, trust, channel,
-      outcome: input.outcome, ...('durationMs' in input && input.durationMs !== undefined ? { durationMs: input.durationMs } : {}),
+      outcome: input.outcome, ...('operation' in input && input.operation ? { operation: input.operation } : {}), ...('telemetry' in input && input.telemetry ? { telemetry: input.telemetry } : {}), ...('durationMs' in input && input.durationMs !== undefined ? { durationMs: input.durationMs } : {}),
       occurredAt: prior?.occurredAt ?? now, receivedAt: now, expiresAt: prior?.expiresAt ?? now + OBSERVER_RETENTION_MS,
       state: 'pending', attempts: 0, nextAttemptAt: now };
     if (prior) d.observer.events[d.observer.events.indexOf(prior)] = event; else d.observer.events.push(event);
@@ -132,7 +132,7 @@ export class AdaptiveObserverService {
           lastProcessedAt: times.length ? Math.max(...times) : null },
         completeness: { complete: false, acceptedEvents: events.length, processedEvents: projection.sourceEvents,
           pendingEvents: pending.length + leased.length, failedEvents: failed, samplingRate: 1, retentionMs: OBSERVER_RETENTION_MS,
-          coverage: 'instrumented_response_and_client_playback_only', playbackEvidence: 'client_unverified',
+          coverage: 'instrumented_response_and_client_playback_only', telemetryCoverage: 'supported_server_stages_and_reported_usage', playbackEvidence: 'client_unverified',
           verifiedTaskSuccess: null, providerUsage: null, language: null, release: null } };
     });
   }

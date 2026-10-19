@@ -25,7 +25,7 @@ export type Route =
   | { name: 'org' }
   | { name: 'privacy' }
   | { name: 'shared-memories' }
-  | { name: 'experience' }
+  | { name: 'experience'; notificationId?: string }
   | { name: 'agent'; id: string }
   | { name: 'spawn'; draftId?: string; successorOf?: string }
   | { name: 'call'; id: string }
@@ -67,6 +67,7 @@ export function StudioApp() {
   const [stack, setStack] = useState<Route[]>([{ name: 'home' }]);
   const [toast, setToast] = useState<{ message: string; tone: 'info' | 'error' } | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const notificationOpened = useRef(false);
 
   const loadMe = useCallback(async () => {
     try {
@@ -81,6 +82,22 @@ export function StudioApp() {
     initTelegram();
     void loadMe();
   }, [loadMe]);
+
+  useEffect(() => {
+    if (!me || me.member.role === 'pending' || notificationOpened.current) return;
+    notificationOpened.current = true;
+    const url = new URL(window.location.href);
+    const notificationId = url.searchParams.get('notification');
+    if (notificationId && /^[A-Za-z0-9_-]{1,128}$/.test(notificationId)) {
+      // An opaque link chooses a screen only. The inbox reloads current account,
+      // space, consent and agent authority before showing any notification.
+      setStack([{ name: 'home' }, { name: 'experience', notificationId }]);
+    }
+    if (notificationId !== null) {
+      url.searchParams.delete('notification');
+      window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
+    }
+  }, [me]);
 
   const nav: Nav | null = me && {
     me,
@@ -155,7 +172,7 @@ export function StudioApp() {
               {route.name === 'org' && <OrgScreen />}
               {route.name === 'privacy' && <PrivacyScreen onShared={() => nav.push({ name: 'shared-memories' })} onExperience={() => nav.push({ name: 'experience' })} />}
               {route.name === 'shared-memories' && <SharedMemoriesScreen selfId={me.member.telegramId} onBack={nav.back} />}
-              {route.name === 'experience' && <ExperienceScreen onBack={nav.back} role={me.member.role} />}
+              {route.name === 'experience' && <ExperienceScreen onBack={nav.back} role={me.member.role} notificationId={route.notificationId} />}
               {route.name === 'agent' && <AgentScreen id={route.id} />}
               {route.name === 'spawn' && <SpawnScreen draftId={route.draftId} successorOf={route.successorOf} />}
               {route.name === 'call' && <CallScreen id={route.id} />}

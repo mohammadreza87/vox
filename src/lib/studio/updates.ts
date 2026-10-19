@@ -5,10 +5,11 @@
  */
 
 import { createHash, createHmac, timingSafeEqual } from 'crypto';
-import { beginObservation } from './observation';
+import { beginObservation, observationCancelled } from './observation';
 import type { TelegramUpdate } from '../tireh/telegram/client';
 import { canUseAgent, visibilityOf } from './permissions';
 import type { Studio } from './service';
+import { logTelegramDiagnostic } from '../tireh/telegram/diagnostics';
 
 export const MANAGER_UPDATES = ['message', 'managed_bot'];
 export const AGENT_UPDATES = ['message', 'callback_query', 'my_chat_member', 'chat_member'];
@@ -23,6 +24,12 @@ export async function handleManagerUpdate(studio: Studio, update: TelegramUpdate
   const msg = update.message;
   if (!msg?.from || msg.from.is_bot || msg.chat.type !== 'private') return;
   const member = await studio.ensureMember(msg.from);
+  if (member.role !== 'pending' && msg.chat.id === msg.from.id && studio.deps.reminderEndpointId) {
+    // A verified private manager DM establishes this bot's reachable recipient.
+    // Mini App auth alone and messages from groups never establish a channel.
+    await studio.deps.experience?.noteReminderRecipient(member.telegramId, studio.deps.reminderEndpointId)
+      .catch(() => logTelegramDiagnostic(studio.deps.logger ?? console, 'update_failed'));
+  }
   const webAppUrl = studio.deps.webAppUrl;
   const open = webAppUrl ? { inline_keyboard: [[{ text: 'Open Vox Studio', web_app: { url: webAppUrl } }]] } : undefined;
   const text = member.role === 'pending'
@@ -86,11 +93,11 @@ export async function handleAgentUpdate(studio: Studio, agentId: string, update:
     const turnId = createHash('sha256').update(JSON.stringify([agentId, endpointId ?? '', update.update_id])).digest('hex');
     const observe = await beginObservation(studio, member.telegramId, agentId, 'work', 'telegram', turnId);
     try {
-      const result = await gateway.handleUpdate(agentId, update);
+      const result = await observe.run(() => gateway.handleUpdate(agentId, update));
       // Duplicate and command updates are not new conversation measurements.
       if (result === 'replied') await observe('responded');
       else if (result === 'ignored') await observe('unknown');
-    } catch (error) { await observe('failed'); throw error; }
+    } catch (error) { await observe(observationCancelled(error) ? 'cancelled' : 'failed'); throw error; }
     return;
   }
 
