@@ -77,8 +77,11 @@ not start before the user signs in after reboot.
    Do not paste these values into chat, commits, commands, or service plists.
    `prepare` can be rerun to import previously missing values from `.env.local`.
 
-3. Validate credentials and model access without sending messages or generating
-   billable content:
+3. Validate every credential and model without sending messages or generating
+   billable content. It checks the Telegram token, Anthropic, OpenAI (image and
+   transcription models) and ElevenLabs (TTS model and remaining characters), and
+   stops if @VoxxBot has a webhook, which means another deployment such as
+   Firebase owns the bot:
 
    ```sh
    node scripts/studio-production.mjs check
