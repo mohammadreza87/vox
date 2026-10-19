@@ -1,5 +1,10 @@
 /** Node-only half of instrumentation.ts (kept separate so the edge bundle never sees it). */
 export async function startStudioBots() {
+  // Validate the scheduler opt-in before the disabled-bots return: otherwise
+  // maintenance could appear enabled without ever constructing its runner.
+  if (process.env.STUDIO_MAINTENANCE === '1' && process.env.STUDIO_BOTS !== '1') {
+    throw new Error('STUDIO_MAINTENANCE=1 requires STUDIO_BOTS=1 in a persistent polling process');
+  }
   if (process.env.STUDIO_BOTS !== '1') return;
   const g = globalThis as unknown as { __voxBots?: boolean };
   if (g.__voxBots) return;

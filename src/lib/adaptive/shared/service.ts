@@ -94,9 +94,9 @@ export class SharedMemoryService {
     return current;
   }
   private async currentDocument(space: SharedSpace, telegramId: number): Promise<SharedDocument> {
-    const initial = await this.repository.transaction(d => { this.expire(d); return d; });
+    const initial = await this.repository.transaction(d => { this.pruneDocument(d); return d; });
     for (const c of initial.containers) if (c.space === space && c.status === 'active' && c.members.some(m => m.telegramId === telegramId && m.status === 'active')) await this.groupCurrent(c);
-    return this.repository.transaction(d => { this.expire(d); return d; });
+    return this.repository.transaction(d => { this.pruneDocument(d); return d; });
   }
   private async groupStamp(containers: SharedContainer[], extraGroupId?: string): Promise<string> {
     const ids = [...new Set([...containers.flatMap(c => c.groupId ? [c.groupId] : []), ...(extraGroupId ? [extraGroupId] : [])])].sort();
@@ -151,7 +151,7 @@ export class SharedMemoryService {
   private assertFresh(people: Verified[]): void {
     if (this.validUntil(people) <= this.now()) fail(403, 'authority_expired');
   }
-  private expire(d: SharedDocument): void {
+  pruneDocument(d: SharedDocument): void {
     for (const c of d.containers) for (const m of c.memories) if (
       (m.status === 'pending' && (!m.publication || m.publication.validUntil <= this.now())) ||
       (m.status === 'active' && m.expiresAt <= this.now())) {
@@ -206,7 +206,7 @@ export class SharedMemoryService {
       if (!(await this.groupCurrent(source))) fail(409, 'audience_changed');
       this.assertFresh(people);
       await this.repository.transaction(d => {
-        this.expire(d);
+        this.pruneDocument(d);
         this.assertFresh(people); // Real expiry checked inside the actual commit callback.
         const c = d.containers.find(c => c.id === write.containerId && c.space === source.space);
         const m = c?.memories.find(m => m.id === write.memoryId && m.status === 'pending');
@@ -267,7 +267,7 @@ export class SharedMemoryService {
     if (sharedDigest([this.identityKey(people), group?.revision]) !== preview.authorityRevision) return fail(409, 'preview_stale');
     const fingerprint = sharedDigest(['create', input]), containerId = randomUUID(), memoryId = randomUUID(), operationId = randomUUID();
     const staged = await this.stage({ operationId, containerId, memoryId, revision: 0, eventKey: sharedDigest([actor.profile.identity.personId, input.eventId]) }, d => {
-      this.expire(d);
+      this.pruneDocument(d);
       if (this.event(d, actor, input.eventId, fingerprint)) return null;
       this.assertFresh(people);
       this.capacity(d); if (input.expectedRevision !== 0) fail(409, 'revision_conflict');
@@ -290,6 +290,17 @@ export class SharedMemoryService {
     return this.list(telegramId, input.space);
   }
   async list(telegramId: number, space: SharedSpace): Promise<SharedSnapshot> {
+    return this.listCurrent(telegramId, space);
+  }
+  /** Trusted export delivery seam. Run the private account check before the
+   * final shared identity/group/revision checks, and reject a changed projection.
+   * External group revisions do not necessarily mutate this repository. */
+  async revalidateExport(telegramId: number, space: SharedSpace, expected: SharedSnapshot,
+    checkPrivateAccount: () => Promise<void>): Promise<void> {
+    const latest = await this.listCurrent(telegramId, space, checkPrivateAccount);
+    if (sharedDigest(latest) !== sharedDigest(expected)) fail(409, 'export_authority_changed');
+  }
+  private async listCurrent(telegramId: number, space: SharedSpace, beforeDelivery?: () => Promise<void>): Promise<SharedSnapshot> {
     const actor = await this.verified(telegramId, space);
     const state = await this.currentDocument(space, telegramId);
     const groupStamp = await this.groupStamp(state.containers.filter(c => c.space === space && c.members.some(m => m.telegramId === telegramId)));
@@ -302,9 +313,10 @@ export class SharedMemoryService {
         status: current ? 'active' : 'audience_changed', memories: current ? c.memories.filter(m => this.allowed(c, m, actor, [actor], 'read'))
           .map(m => ({ id: m.id, revision: m.revision, text: m.text!, authorPersonId: m.authorPersonId, createdAt: m.createdAt, expiresAt: m.expiresAt })) : [] });
     }
+    await beforeDelivery?.();
     await this.recheck([actor], space);
     if (groupStamp !== await this.groupStamp(state.containers.filter(c => c.space === space && c.members.some(m => m.telegramId === telegramId)))) return fail(409, 'audience_changed');
-    const latestRevision = await this.repository.transaction(d => d.revision);
+    const latestRevision = await this.repository.transaction(d => { this.pruneDocument(d); return d.revision; });
     if (latestRevision !== state.revision) return fail(409, 'revision_conflict');
     return { revision: state.revision, space, containers };
   }
@@ -315,7 +327,7 @@ export class SharedMemoryService {
     const people = await Promise.all(initial.members.filter(m => m.status === 'active').map(m => m.telegramId === telegramId ? actor : this.verified(m.telegramId, input.space)));
     const fingerprint = sharedDigest(['add', id, input]), memoryId = randomUUID(), operationId = randomUUID();
     const staged = await this.stage({ operationId, containerId: id, memoryId, revision: 0, eventKey: sharedDigest([actor.profile.identity.personId, input.eventId]) }, d => {
-      this.expire(d); if (this.event(d, actor, input.eventId, fingerprint)) return null;
+      this.pruneDocument(d); if (this.event(d, actor, input.eventId, fingerprint)) return null;
       this.assertFresh(people);
       this.capacity(d); const c = this.row(d, id, input.space); this.actorMember(c, actor);
       if (c.revision !== input.expectedRevision || c.revision !== initial.revision) fail(409, 'revision_conflict');

@@ -21,7 +21,7 @@ const telegramFor = (key: RelationshipKey): number | null => {
  * transaction as current identity, consent, source tombstones and agent grants. */
 export class AdaptiveRelationshipService {
   constructor(readonly adaptive: AdaptiveService, private readonly options: { now?: () => number } = {}) {}
-  private clean(d: AdaptiveDocument, now: number): void {
+  pruneDocument(d: AdaptiveDocument, now: number): void {
     for (const source of d.relationships.sources) if (source.status === 'active' && source.expiresAt <= now) { source.status = 'deleted'; source.revision++; }
     for (const item of d.relationships.inbox) if (item.expiresAt <= now || item.sourceIds.some(id => !d.relationships.sources.some(s => s.id === id && sameKey(s.key, item.key) && s.status === 'active' && s.expiresAt > now))) {
       item.status = 'cancelled'; item.text = '';
@@ -79,19 +79,19 @@ export class AdaptiveRelationshipService {
     return permit;
   }
   resolve(telegramId: number, agentId: string, space: SpaceKind): Promise<RelationshipPermit | null> {
-    return this.adaptive.withAccountDocument(telegramId, (d, now) => { this.clean(d, now); return this.permit(d, agentId, space, now); });
+    return this.adaptive.withAccountDocument(telegramId, (d, now) => { this.pruneDocument(d, now); return this.permit(d, agentId, space, now); });
   }
   async authorize(key: RelationshipKey, sourceIds: readonly string[], phase: RelationshipPhase, expectedFingerprint?: string): Promise<RelationshipPermit | null> {
     const telegramId = telegramFor(key);
     if (telegramId === null) return null;
-    return this.adaptive.withAccountDocument(telegramId, (d, now) => { this.clean(d, now); return this.authorized(d, key, sourceIds, phase, now, expectedFingerprint); });
+    return this.adaptive.withAccountDocument(telegramId, (d, now) => { this.pruneDocument(d, now); return this.authorized(d, key, sourceIds, phase, now, expectedFingerprint); });
   }
   async acceptSource(permit: RelationshipPermit, input: { id: string; at: number; channel: 'telegram' | 'call'; endpointId?: string }): Promise<RelationshipSource | null> {
     const telegramId = telegramFor(permit.key);
     if (telegramId === null || !validId(input.id) || !Number.isSafeInteger(input.at) || input.at < 0 || !['telegram', 'call'].includes(input.channel) ||
         (input.endpointId !== undefined && (!validId(input.endpointId) || input.channel !== 'telegram'))) return null;
     return this.adaptive.withAccountDocument(telegramId, (d, now) => {
-      this.clean(d, now);
+      this.pruneDocument(d, now);
       const current = this.authorized(d, permit.key, [], 'observe', now, permit.fingerprint);
       const binding = d.relationships.bindings.find(b => b.id === current?.key.scope?.bindingId);
       const captureStart = Math.max(binding?.confirmedAt ?? now, ...PURPOSES.map(p => d.permissions.find(c => c.spaceId === current?.key.scope?.spaceId && c.purpose === p)?.effectiveAt ?? now),
@@ -158,7 +158,7 @@ export class AdaptiveRelationshipService {
     const telegramId = telegramFor(key);
     if (telegramId === null || !validId(intentionId) || typeof text !== 'string' || !text.trim() || text.length > 1000) return null;
     return this.adaptive.withAccountDocument(telegramId, (d, now) => {
-      this.clean(d, now);
+      this.pruneDocument(d, now);
       const permit = this.authorized(d, key, sourceIds, 'inbox', now, expectedFingerprint);
       if (!permit) return null;
       const prior = d.relationships.inbox.find(i => i.id === intentionId);
@@ -180,7 +180,7 @@ export class AdaptiveRelationshipService {
   }
   inbox(telegramId: number, agentId: string, space: SpaceKind): Promise<RelationshipInboxItem[]> {
     return this.adaptive.withAccountDocument(telegramId, (d, now) => {
-      this.clean(d, now);
+      this.pruneDocument(d, now);
       if (!this.adaptive.isProfileConfirmed(d, now)) return [];
       return d.relationships.inbox.filter(i => i.key.personaId === agentId && i.key.scope.space === space && ['unread', 'read'].includes(i.status) &&
         !!this.authorized(d, i.key, i.sourceIds, 'inbox', now) && i.sourceFence === this.permit(d, agentId, space, now)?.sourceFence);
@@ -188,7 +188,7 @@ export class AdaptiveRelationshipService {
   }
   async feedback(telegramId: number, agentId: string, space: SpaceKind, id: string, action: 'read' | 'dismissed'): Promise<void> {
     await this.adaptive.withAccountDocument(telegramId, (d, now) => {
-      this.clean(d, now);
+      this.pruneDocument(d, now);
       if (!this.adaptive.isProfileConfirmed(d, now)) throw new AdaptiveError(403, 'profile_confirmation_required');
       if (!['read', 'dismissed'].includes(action)) throw new AdaptiveError(400, 'invalid_action');
       const item = d.relationships.inbox.find(i => i.id === id && i.key.personaId === agentId && i.key.scope.space === space && i.status !== 'cancelled');
@@ -200,7 +200,7 @@ export class AdaptiveRelationshipService {
     const telegramId = telegramFor(key); if (telegramId === null) return null;
     const reservationId = randomUUID();
     return this.adaptive.withAccountDocument(telegramId, (d, now) => {
-      this.clean(d, now);
+      this.pruneDocument(d, now);
       const item = d.relationships.inbox.find(i => i.id === id && sameKey(i.key, key) && ['unread', 'read'].includes(i.status));
       const entry = d.relationships.ledger.find(e => e.id === id && sameKey(e.key, key));
       if (!item || !entry || entry.state !== 'published' || !this.authorized(d, key, item.sourceIds, 'external', now, expectedFingerprint)) return null;
@@ -211,7 +211,7 @@ export class AdaptiveRelationshipService {
   async maySendExternal(key: RelationshipKey, id: string, reservationId: string): Promise<boolean> {
     const telegramId = telegramFor(key); if (telegramId === null) return false;
     return this.adaptive.withAccountDocument(telegramId, (d, now) => {
-      this.clean(d, now);
+      this.pruneDocument(d, now);
       const item = d.relationships.inbox.find(i => i.id === id && sameKey(i.key, key) && ['unread', 'read'].includes(i.status));
       const entry = d.relationships.ledger.find(e => e.id === id && sameKey(e.key, key));
       return !!item && !!entry && entry.state === 'reserved' && entry.reservationId === reservationId &&

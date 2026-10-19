@@ -126,3 +126,6 @@ export async function projectOutcomes(inputs: readonly unknown[], context: {
     unverifiedClientEvents: [...unique.values()].filter(e => e.trust === 'client_unverified').length,
     complete: context.complete && ![...unique.values()].some(e => conflicts.has(observationKey(e))) };
 }
+
+export * from './contracts';
+export * from './service';

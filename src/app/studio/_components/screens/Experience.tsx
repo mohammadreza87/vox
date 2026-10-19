@@ -1,11 +1,12 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api, type AgentView } from '../../_lib/client';
+import { api, type AgentView, type Role } from '../../_lib/client';
 import { experienceApi, type ExperienceSnapshot } from '../../_lib/experience-client';
 import { TopBar } from '../ui';
 import { RelationshipPanel } from '../RelationshipPanel';
+import { LearningPanel } from '../LearningPanel';
 
-export function ExperienceScreen({ onBack }: { onBack: () => void }) {
+export function ExperienceScreen({ onBack, role }: { onBack: () => void; role?: Role }) {
   const [space, setSpace] = useState<'work' | 'personal'>('work');
   const [fa, setFa] = useState(false);
   const [data, setData] = useState<ExperienceSnapshot | null>(null);
@@ -97,8 +98,9 @@ export function ExperienceScreen({ onBack }: { onBack: () => void }) {
         <h2 className="vx-title-m">{t('Your inbox', 'صندوق شما')}</h2>
         {!data.inbox.length && <p className="vx-small vx-2">{t('Nothing to show right now.', 'اکنون موردی برای نمایش نیست.')}</p>}
         {data.inbox.map(item => <article className="vx-card vx-privacy-card" key={item.id}><h3 className="vx-head">{item.kind === 'requested_reminder' ? item.label : t('A reply did not finish. You can try again when convenient.', 'یک پاسخ کامل نشد. هر زمان مناسب بود می‌توانید دوباره تلاش کنید.')}</h3><div className="vx-privacy-actions"><button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy} onClick={() => void mutate(() => experienceApi.feedback({ ...command(), itemId: item.id, action: 'useful' }))}>{t('Useful', 'مفید بود')}</button><button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy} onClick={() => void mutate(() => experienceApi.feedback({ ...command(), itemId: item.id, action: 'dismiss' }))}>{t('Dismiss', 'بستن')}</button></div></article>)}
-        <div className="vx-card vx-privacy-card"><h2 className="vx-head">{t('Your usage measurements', 'اندازه‌گیری‌های استفادهٔ شما')}</h2><p className="vx-small vx-2">{data.observations.available ? t(`${data.observations.total} recorded turns. Response completion is not proof that a task succeeded.`, `${data.observations.total} نوبت ثبت‌شده. کامل شدن پاسخ به معنی موفقیت کار نیست.`) : t('Optional usage analytics is off or unavailable.', 'تحلیل اختیاری استفاده خاموش است یا در دسترس نیست.')}</p></div>
+
       </>}
+      <LearningPanel space={space} locale={fa ? 'fa' : 'en'} showOperations={role === 'owner' || role === 'superadmin'} />
     </section>
   </>;
 }
