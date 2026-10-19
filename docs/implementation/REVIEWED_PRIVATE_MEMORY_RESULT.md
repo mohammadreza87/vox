@@ -1,5 +1,9 @@
 # Reviewed private memory / حافظهٔ خصوصیِ بررسی‌شده
 
+Release integration follow-up: at `5e8a0da`, disabling web search removed the qualified Anthropic adapter marker from the runtime wrapper, leaving reviewed summaries unavailable. `e77f1b7` preserves that underlying marker and forwards the unchanged request, including its authority callback. A regression first reproduced the missing marker and then verified that a denied export reaches no fetch. This does not qualify another provider or bypass the final transport check.
+
+اصلاح اتصال انتشار: در نسخهٔ `5e8a0da`، خاموش‌کردن جست‌وجوی وب نشانگر بررسی‌شدهٔ رابط Anthropic را از پوشش زمان اجرا حذف می‌کرد و خلاصه‌سازی در دسترس نبود. نسخهٔ `e77f1b7` همان نشانگر و درخواست، شامل بررسی مجوز، را حفظ می‌کند. آزمون ابتدا خطا را بازتولید کرد و سپس تأیید کرد درخواستِ بدون مجوز به انتقال شبکه نمی‌رسد. این تغییر تأیید ارائه‌دهندهٔ دیگر یا دورزدن بررسی نهایی مجوز نیست.
+
 ## Delivered / پیاده‌سازی
 
 EN: In Privacy, select 2–8 existing own saved notes in one Work/Personal space and one currently allowed agent. Create a proposed summary, inspect its ephemeral plain-text preview, then separately choose **Save reviewed summary**. The preview discloses export of only selected notes to the configured AI provider. Discard saves nothing. Existing delete controls delete a summary while preserving originals; deleting a source also invalidates and purges its derived summaries. No automatic collection, shared/group summary, publication, or optional consent is introduced. Existing `explicit.memory_request` authority governs this explicit request; relationship-only `optional.auto_memory` is never reused.

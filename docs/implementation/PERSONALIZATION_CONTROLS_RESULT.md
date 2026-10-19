@@ -1,5 +1,9 @@
 # Explicit personalization controls
 
+Release integration follow-up: a stalled Work save could leave newly loaded Personal controls appearing enabled while ignoring clicks. `e77f1b7` ties the command lock to its request generation. Loading or changing scope releases the obsolete lock; a late old completion cannot unlock or update a newer command. The regression reproduced the failure before the fix. The combined follow-up suite passed 144 tests across five files, plus TypeScript and focused lint; compiled validation remains separate.
+
+اصلاح اتصال انتشار: ذخیرهٔ معلق در فضای کاری می‌توانست کنترل‌های فضای شخصی را ظاهراً فعال نگه دارد، اما کلیک را نادیده بگیرد. در نسخهٔ `e77f1b7`، قفل فرمان به نسل همان درخواست تعلق دارد؛ تغییر یا تازه‌سازی دامنه قفل قدیمی را آزاد می‌کند و پاسخ دیرهنگام نمی‌تواند فرمان جدید را آزاد یا نمای آن را تغییر دهد. آزمون ابتدا خطا را بازتولید کرد. مجموعهٔ ترکیبی ۱۴۴ آزمون در پنج فایل، TypeScript و بررسی متمرکز کد را گذراند؛ تأیید مرورگر کامپایل‌شده جدا ثبت می‌شود.
+
 Candidate: `codex/vox-personalization-controls`, based on `50706f367ff88ef7e00ae00d904e8ddf1ab3a8ba`. This bounded slice is separate from PR55. No provider configuration, consent purpose, inference producer, deployment or live user data changed. Independent review and qualification against the lead's later integrated runtime are pending.
 
 ## Behavior
