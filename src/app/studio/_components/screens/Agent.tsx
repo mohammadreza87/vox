@@ -52,11 +52,32 @@ export function AgentScreen({ id }: { id: string }) {
   const [sheet, setSheet] = useState<'admin' | 'visibility' | null>(null);
   const [people, setPeople] = useState<Member[] | null>(null);
   const [busy, setBusy] = useState(false);
+  const [profileError, setProfileError] = useState<string | null>(null);
 
   useEffect(() => {
     api.agent(id).then((r) => setAgent(r.agent)).catch((e) => { nav.toast(errorMessage(e), 'error'); nav.back(); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
+
+  const checkingProfile = agent?.status === 'active' && agent.profileSync?.status !== 'synced';
+  useEffect(() => {
+    if (!checkingProfile) return;
+    let cancelled = false;
+    let inFlight = false;
+    const timer = setInterval(async () => {
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        const r = await api.agent(id);
+        if (cancelled) return;
+        setProfileError(null);
+        setAgent(r.agent);
+      } catch (e) {
+        if (!cancelled) setProfileError(`Can’t check the Telegram profile: ${errorMessage(e)}`);
+      } finally { inFlight = false; }
+    }, 3000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [checkingProfile, id]);
 
   if (!agent) return <><TopBar onBack={nav.back} backLabel="Agents" /><LoadingFill /></>;
 
@@ -120,14 +141,16 @@ export function AgentScreen({ id }: { id: string }) {
   };
 
   const syncProfile = async () => {
+    if (busy) return;
+    setProfileError(null);
     setBusy(true);
     try {
       const r = await api.syncProfile(agent.id);
       setAgent(r.agent);
       if (r.failed.length) { haptic.error(); nav.toast(`Telegram refused: ${r.failed.join(', ')}. Try again in a minute.`, 'error'); }
-      else { haptic.success(); nav.toast(`@${agent.bot?.username} now has ${p.name}'s name and photo`); }
+      else if (r.agent.profileSync?.status === 'synced') { haptic.success(); nav.toast('Telegram profile updated'); }
       setSheet(null);
-    } catch (e) { nav.toast(errorMessage(e), 'error'); } finally { setBusy(false); }
+    } catch (e) { setProfileError(errorMessage(e)); nav.toast(errorMessage(e), 'error'); } finally { setBusy(false); }
   };
 
   const allowList = Array.isArray(agent.access) ? agent.access : [];
@@ -175,6 +198,19 @@ export function AgentScreen({ id }: { id: string }) {
         </div>
 
         <div style={{ position: 'relative', marginTop: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {active && agent.profileSync?.status !== 'synced' && (
+            <div className="vx-card" style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {agent.profileSync?.status === 'error'
+                ? <p role="alert" style={{ margin: 0, color: '#FF6B5E' }}>Telegram profile still needs {agent.profileSync.failed.join(', ') || 'an update'}.</p>
+                : <p role="status" style={{ margin: 0 }}>Finishing Telegram profile…</p>}
+              {profileError && <p role="alert" style={{ margin: 0, color: '#FF6B5E' }}>{profileError}</p>}
+              {(agent.canManageAccess || agent.canEdit) && (
+                <button className="vx-btn vx-btn-secondary vx-btn-sm" onClick={syncProfile} disabled={busy}>
+                  {busy ? <Spinner /> : 'Retry Telegram profile'}
+                </button>
+              )}
+            </div>
+          )}
           {active && !agent.locked && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 12px 12px 16px', borderRadius: 16, background: `${pal.base}1F` }}>
               <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>

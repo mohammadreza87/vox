@@ -51,6 +51,8 @@ export function startBots(studio: Studio): { stop: () => void } {
   const log = studio.deps.logger ?? console;
   const loops = new Map<string, Loop>();
   let stopped = false;
+  let refreshing = false;
+  let profilesRefreshing = false;
 
   const manager = studio.deps.managerBot;
   if (manager) {
@@ -60,7 +62,8 @@ export function startBots(studio: Studio): { stop: () => void } {
   }
 
   const refresh = async () => {
-    if (stopped) return;
+    if (stopped || refreshing) return;
+    refreshing = true;
     try {
       const state = await studio.deps.store.read();
       const active = state.agents.filter((a) => a.status === 'active' && a.tokenEnc);
@@ -79,8 +82,17 @@ export function startBots(studio: Studio): { stop: () => void } {
         loops.set(agent.id, { ...pollLoop(`@${agent.bot?.username}`, bot, AGENT_UPDATES, (update) => handleAgentUpdate(studio, agent.id, update), log), token });
         log.info(`[studio] ${agent.persona.name} online as @${agent.bot?.username}`);
       }
+      // Repairs legacy photos without delaying new/fired bot polling changes.
+      if (!profilesRefreshing) {
+        profilesRefreshing = true;
+        void studio.reconcileBotProfiles()
+          .catch(() => log.warn('[studio] profile reconciliation failed'))
+          .finally(() => { profilesRefreshing = false; });
+      }
     } catch (error) {
       log.error('[studio] bot refresh failed', error);
+    } finally {
+      refreshing = false;
     }
   };
 

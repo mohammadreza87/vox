@@ -102,6 +102,16 @@ export type AgentStatus = 'draft' | 'awaiting_bot' | 'active' | 'fired';
 
 export type MemoryPolicy = 'transfer' | 'archive' | 'delete';
 
+/** Durable delivery state; old agents without a receipt are reconciled on startup. */
+export interface TelegramProfileSync {
+  fingerprint: string;
+  status: 'pending' | 'synced' | 'error';
+  failed: string[];
+  attempts: number;
+  updatedAt: string;
+  retryAt?: string;
+}
+
 export interface Agent {
   id: string;
   status: AgentStatus;
@@ -116,6 +126,7 @@ export interface Agent {
   hiredAt?: string;
   lockAt?: string;
   bot?: { id: number; username: string };
+  profileSync?: TelegramProfileSync;
   /** AES-GCM encrypted bot token */
   tokenEnc?: string;
   suggestedUsername?: string;

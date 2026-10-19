@@ -118,6 +118,7 @@ export interface AgentView {
   voice?: { label: string; source: string };
   voicePreviews?: Array<{ generatedVoiceId: string; file: string }>;
   bot?: { username: string };
+  profileSync?: { status: 'pending' | 'synced' | 'error'; failed: string[] };
   hiredAt?: string;
   lockAt?: string;
   locked: boolean;
@@ -141,6 +142,7 @@ export interface AgentView {
 
 export class Studio {
   private readonly log: Pick<Console, 'info' | 'warn' | 'error'>;
+  private readonly profileJobs = new Map<string, Promise<string[]>>();
 
   constructor(readonly deps: StudioDeps) {
     this.log = deps.logger ?? console;
@@ -215,6 +217,10 @@ export class Studio {
       voice: agent.voice ? { label: agent.voice.label, source: agent.voice.source } : undefined,
       voicePreviews: agent.status === 'draft' ? agent.voicePreviews : undefined,
       bot: agent.bot ? { username: agent.bot.username } : undefined,
+      profileSync: agent.status === 'active' ? {
+        status: agent.profileSync?.fingerprint === this.profileFingerprint(agent) ? agent.profileSync.status : 'pending',
+        failed: agent.profileSync?.fingerprint === this.profileFingerprint(agent) ? agent.profileSync.failed : [],
+      } : undefined,
       hiredAt: agent.hiredAt,
       lockAt: agent.lockAt,
       locked: isLocked(agent, now),
@@ -238,7 +244,8 @@ export class Studio {
 
   /** view() after a change: re-reads members so creatorName survives mutations. */
   private async present(agent: Agent, actor: Member): Promise<AgentView> {
-    return this.view(agent, actor, (await this.deps.store.read()).members);
+    const state = await this.deps.store.read();
+    return this.view(state.agents.find((a) => a.id === agent.id) ?? agent, actor, state.members);
   }
 
   async listAgents(actor: Member): Promise<AgentView[]> {
@@ -355,6 +362,7 @@ export class Studio {
       }
       return { ...a };
     }, 'The look can only change while the agent is forming.');
+    if (agent.status === 'active' && !agent.look.avatar) await this.configureBotProfile(agent);
     return this.present(agent, actor);
   }
 
@@ -371,6 +379,7 @@ export class Studio {
       if (!a.look.avatar) { a.look.avatar = files[0]; a.look.avatarSource = 'generated'; }
       return { ...a };
     });
+    if (updated.status === 'active' && updated.look.avatar !== agent.look.avatar) await this.configureBotProfile(updated);
     return this.present(updated, actor);
   }
 
@@ -555,21 +564,87 @@ export class Studio {
    * over-long text) can't skip the rest; returns the steps that failed.
    */
   async configureBotProfile(agent: Agent): Promise<string[]> {
-    const token = this.botToken(agent);
-    if (!token) return [];
-    const bot = this.deps.botFor(token);
-    // Wire delivery first so a failed cosmetic call can't leave the bot deaf.
-    if (this.deps.webhookBase) {
-      await bot.setWebhook(`${this.deps.webhookBase.replace(/\/+$/, '')}/api/studio/telegram/${agent.id}`, webhookSecret(this.deps.secret, agent.id), AGENT_UPDATES);
+    // Serialize profile writes per bot. An edit queued behind a slow upload must
+    // re-read the latest selection instead of restoring an earlier avatar/name.
+    const previous = this.profileJobs.get(agent.id);
+    const job = (previous ?? Promise.resolve()).catch(() => undefined)
+      .then(() => this.applyBotProfile(agent.id));
+    this.profileJobs.set(agent.id, job);
+    try { return await job; }
+    finally { if (this.profileJobs.get(agent.id) === job) this.profileJobs.delete(agent.id); }
+  }
+
+  private profileFingerprint(agent: Agent): string {
+    const { name, role, tagline } = agent.persona;
+    const { hue, family, features, avatar } = agent.look;
+    return createHash('sha256').update(JSON.stringify({
+      version: 1, bot: agent.bot?.id, credential: agent.tokenEnc, name, role, tagline, org: this.deps.orgName,
+      visibility: visibilityOf(agent), avatar: avatar ?? null,
+      cloud: avatar ? null : { hue, family, cheeks: features.cheeks, lashes: features.lashes, brows: features.brows },
+    })).digest('hex');
+  }
+
+  /** Repairs legacy profiles and failed/interrupted uploads in the polling runtime. */
+  async reconcileBotProfiles(): Promise<void> {
+    const { agents } = await this.deps.store.read();
+    for (const agent of agents) {
+      if (agent.status !== 'active' || !agent.bot || this.profileJobs.has(agent.id)) continue;
+      const receipt = agent.profileSync;
+      if (receipt?.fingerprint === this.profileFingerprint(agent)) {
+        if (receipt.status === 'synced') continue;
+        if (receipt.retryAt && new Date(receipt.retryAt).getTime() > this.now().getTime()) continue;
+      }
+      await this.configureBotProfile(agent);
     }
+  }
+
+  private async applyBotProfile(id: string): Promise<string[]> {
+    const agent = (await this.deps.store.read()).agents.find((a) => a.id === id);
+    if (!agent || agent.status !== 'active' || !agent.bot) return [];
+    const fingerprint = this.profileFingerprint(agent);
+    const prior = agent.profileSync;
+    const attempts = prior?.fingerprint === fingerprint && prior.status !== 'synced' ? prior.attempts + 1 : 1;
+    const retryAt = new Date(this.now().getTime() + Math.min(3_600_000, 60_000 * 2 ** Math.min(attempts - 1, 6))).toISOString();
+    await this.deps.store.update((s) => {
+      const current = s.agents.find((a) => a.id === id);
+      if (current?.status === 'active') current.profileSync = {
+        fingerprint, status: 'pending', failed: [], attempts, updatedAt: this.now().toISOString(), retryAt,
+      };
+    });
+    let failed: string[];
+    try {
+      const token = this.botToken(agent);
+      failed = token ? await this.pushBotProfile(agent, this.deps.botFor(token)) : ['token'];
+    } catch {
+      failed = ['profile'];
+      this.log.warn(`[studio] ${id}: Telegram profile setup failed`);
+    }
+    await this.deps.store.update((s) => {
+      const current = s.agents.find((a) => a.id === id);
+      // Edits and token refreshes during an upload still need their own sync.
+      if (current?.status !== 'active' || this.profileFingerprint(current) !== fingerprint || current.tokenEnc !== agent.tokenEnc) return;
+      current.profileSync = {
+        fingerprint, status: failed.length ? 'error' : 'synced', failed, attempts,
+        updatedAt: this.now().toISOString(), ...(failed.length ? { retryAt } : {}),
+      };
+    });
+    return failed;
+  }
+
+  private async pushBotProfile(agent: Agent, bot: TelegramBotClient): Promise<string[]> {
     const p = agent.persona;
     const org = this.deps.orgName;
     const who = { private: `${p.name} works with a few people at ${org}.`, org: `For the ${org} team.`, public: 'Anyone can say hi.' }[visibilityOf(agent)];
-    const steps: Array<[string, () => Promise<unknown>]> = [
+    const steps: Array<[string, () => Promise<unknown>]> = [];
+    if (this.deps.webhookBase) {
+      steps.push(['webhook', () => bot.setWebhook(`${this.deps.webhookBase!.replace(/\/+$/, '')}/api/studio/telegram/${agent.id}`, webhookSecret(this.deps.secret, agent.id), AGENT_UPDATES)]);
+    }
+    steps.push(
       ['name', () => bot.setMyName(p.name.slice(0, 64))],
       ['photo', async () => {
         const photo = agent.look.avatar ? await this.deps.store.readMedia(agent.look.avatar) : await this.cloudPhoto(agent);
-        if (photo) await bot.setMyProfilePhoto(photo);
+        if (!photo?.length) throw new Error('The selected profile image is unavailable.');
+        await bot.setMyProfilePhoto(photo);
       }],
       ['short description', () => bot.setMyShortDescription(`${p.role} at ${org}. ${p.tagline}`.trim().slice(0, 120))],
       ['description', () => bot.setMyDescription(`${p.name} · ${p.role}\n\n${p.tagline}\n\nTalk by text or voice. ${who}`.slice(0, 512))],
@@ -579,22 +654,25 @@ export class Studio {
         { command: 'forget', description: 'Delete something you told me' },
         { command: 'whoami', description: 'How I know you' },
       ])],
-    ];
+    );
     const failed: string[] = [];
     for (const [step, run] of steps) {
+      const current = (await this.deps.store.read()).agents.find((a) => a.id === agent.id);
+      if (current?.status !== 'active') return ['inactive'];
       try {
         await run();
-      } catch (e) {
+      } catch {
         failed.push(step);
-        this.log.warn(`[studio] ${agent.id}: Telegram ${step} update failed`, e);
+        // Provider error objects can include token-bearing request URLs.
+        this.log.warn(`[studio] ${agent.id}: Telegram ${step} update failed`, step);
       }
     }
     return failed;
   }
 
   /** The cloud character as a JPEG, for agents without a custom avatar. */
-  private async cloudPhoto(agent: Agent): Promise<Buffer | null> {
-    if (!this.deps.imageToJpeg) return null;
+  private async cloudPhoto(agent: Agent): Promise<Buffer> {
+    if (!this.deps.imageToJpeg) throw new Error('Profile image conversion is unavailable.');
     return this.deps.imageToJpeg(Buffer.from(cloudSvg(agent.look)));
   }
 

@@ -20,7 +20,7 @@ Telegram ── @VoxxBot (Mini App: /studio) ──┐
 | | |
 |---|---|
 | **Spawn** | Write a loose brief: presentation, domain, languages, culture, accent, age and temperament. Claude drafts the name, backstory, values, voice brief and a random cloud look. You can edit any field or ask Claude to change things. |
-| **Look** | 8 colours × 3 cloud shapes, plus cheeks, lashes and brows. A dice button gives a random look. Profile pictures are generated with OpenAI or uploaded (JPEG/PNG/WebP, cropped to 640px). |
+| **Look** | 8 colours × 3 cloud shapes, plus cheeks, lashes and brows. A dice button gives a random look. The chosen cloud becomes the Telegram profile photo unless you select a generated or uploaded picture (JPEG/PNG/WebP, cropped to 640px). |
 | **Voice** | ElevenLabs Voice Design creates three options from the voice brief, or you can search the voice library by gender, accent and language. |
 | **Test** | A sandbox chat. Nothing said there becomes a memory. |
 | **Hire** | Opens Telegram's "Create bot" screen (managed bots). One tap creates the bot. Studio stores its token encrypted, then sets the name, description, commands and photo. |
@@ -32,6 +32,16 @@ Telegram ── @VoxxBot (Mini App: /studio) ──┐
 | **Org** | Superadmins grant or remove admin rights for people and agents. Admins approve new people. Who can use each agent is set per agent (see *Who can talk*). |
 
 People outside HOOR are **guests**: they only ever see their own private memories and their groups' memories, never HOOR's org chart, projects or company knowledge.
+
+### Telegram name and profile photo
+
+The hire link includes the saved name and suggested username. Telegram's creation screen can prefill the name, but has no avatar parameter. After **Create**, Studio applies the saved name and the selected picture, or renders the cloud character as a 640×640 JPEG. Clicking **Next** while editing a name saves the edit before continuing.
+
+Bot creation and profile delivery have separate statuses. The final screen shows profile setup in progress or the fields Telegram refused, with a retry action. A missing image or failed conversion cannot count as success. Active cloud-look changes and automatically selected generated pictures also update the Telegram photo.
+
+The Mac polling runtime repairs active bots without a profile receipt at startup and retries failed or interrupted delivery after 1 minute, doubling to at most 1 hour. Successfully delivered, unchanged profiles are skipped. This does not recreate bots or change their username. Webhook deployments apply profiles when bots are created or edited and support manual sync; they do not run this background reconciliation loop.
+
+**فارسی:** لینک استخدام نام ذخیره‌شده و نام کاربری پیشنهادی را به تلگرام می‌فرستد. صفحهٔ ساخت ربات امکان دریافت آواتار از لینک را ندارد؛ پس از زدن **Create**، استودیو نام و تصویر انتخاب‌شده را اعمال می‌کند. اگر عکسی انتخاب نشده باشد، تصویر ابری به عکس پروفایل تبدیل می‌شود. زدن **Next** هنگام ویرایش نام، ابتدا تغییر را ذخیره می‌کند. صفحهٔ نهایی وضعیت تنظیم پروفایل و خطاهای احتمالی را همراه با امکان تلاش دوباره نشان می‌دهد. سرویس مک پروفایل ربات‌های قدیمی را نیز تکمیل می‌کند و خطاها را با فاصلهٔ یک دقیقه تا یک ساعت دوباره امتحان می‌کند؛ پروفایل موفق و بدون تغییر دوباره ارسال نمی‌شود. این کار ربات را دوباره نمی‌سازد و نام کاربری آن را تغییر نمی‌دهد. حالت وب‌هوک فقط هنگام ساخت، ویرایش یا درخواست همگام‌سازی دستی پروفایل را به‌روز می‌کند.
 
 Roles: `owner > superadmin > admin > member > pending`. New people who press /start in @VoxxBot are `pending` until an admin approves them. The Telegram IDs in `STUDIO_SUPERADMIN_IDS` are the founding **owners**: they always stay owners and can make other owners, superadmins and admins. Superadmins can grant up to superadmin but never make or change owners. The last owner can't be removed.
 
