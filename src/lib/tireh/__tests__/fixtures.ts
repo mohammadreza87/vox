@@ -2,7 +2,7 @@ import { canPersonSee } from '../memory/visibility';
 import { vi } from 'vitest';
 import { parseOrgConfig } from '../org/config';
 import { OrgDirectory } from '../org/directory';
-import type { LLM, LLMRequest } from '../llm';
+import { LLMAuthorizationError, type LLM, type LLMRequest } from '../llm';
 import type { TelegramBotClient, TelegramMessage, TelegramUpdate } from '../telegram/client';
 import type { VoiceService } from '../voice';
 import {
@@ -71,15 +71,19 @@ export class FakeLLM implements LLM {
   nextReply = 'Sure.';
 
   async complete(request: LLMRequest): Promise<string> {
+    const { authorize, ...payload } = request;
+    if (authorize && !await authorize()) throw new LLMAuthorizationError();
+    // Record provider data, not the local function identity. This preserves
+    // exact noninterference comparisons of every outgoing content field.
     if (request.system.startsWith('You extract long-term memories')) {
       this.extractionCalls++;
-      this.extractionRequests.push(request);
+      this.extractionRequests.push(payload);
       const out = this.nextExtraction;
       this.nextExtraction = { memories: [] };
       return typeof out === 'string' ? out : JSON.stringify(out);
     }
     this.replyPrompts.push(request.system);
-    this.replyRequests.push(request);
+    this.replyRequests.push(payload);
     return this.nextReply;
   }
 

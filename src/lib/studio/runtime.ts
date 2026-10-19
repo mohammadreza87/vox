@@ -308,20 +308,7 @@ async function create(): Promise<Studio> {
   studio.deps.lifecycle = new AdaptiveLifecycleService(storage.adaptive!, { shared: studio.deps.shared });
   if (config.maintenanceEnabled) studio.deps.maintenance = new AdaptiveMaintenanceRunner(studio.deps.lifecycle,
     storage.adaptive!.repository.storage, storage.maintenanceStorage, {
-      afterAccount: async telegramId => {
-        const state = await storage.store.read();
-        const member = state.members.find(m => m.telegramId === telegramId && m.role !== 'pending');
-        const allowedAgentIds = member ? state.agents.filter(a => a.status === 'active' && canUseAgent(member, a) && !(a.blocked ?? []).includes(telegramId)).map(a => a.id) : [];
-        // Independent cleanup must still run when observation processing fails.
-        // A pending provider purge keeps the page retryable and visibly failed.
-        const results = await Promise.allSettled([
-          studio.deps.observer!.process(telegramId, { limit: 20, allowedAgentIds }),
-          studio.deps.voiceIdentity!.maintenanceAccount(telegramId),
-        ]);
-        if (results.some(result => result.status === 'rejected') ||
-            results[0].status === 'fulfilled' && results[0].value.failed ||
-            results[1].status === 'fulfilled' && results[1].value.pending) throw new Error('Adaptive maintenance incomplete');
-      },
+      afterAccount: telegramId => maintainAdaptiveAccount(studio, telegramId),
     });
   if (config.trustedImprovementKeys) {
     const workflow = new ImprovementWorkflow({ root: join(config.dataDir, 'improvement-review'), trust: config.trustedImprovementKeys });
@@ -330,6 +317,22 @@ async function create(): Promise<Studio> {
     studio.deps.improvement = { report: () => workflow.report() };
   }
   return studio;
+}
+
+export async function maintainAdaptiveAccount(studio: Studio, telegramId: number): Promise<void> {
+  const results = await Promise.allSettled([
+      (async () => {
+        const state = await studio.deps.store.read();
+        const member = state.members.find(m => m.telegramId === telegramId && m.role !== 'pending');
+        const allowedAgentIds = member ? state.agents.filter(a => a.status === 'active' && canUseAgent(member, a) && !(a.blocked ?? []).includes(telegramId)).map(a => a.id) : [];
+        return studio.deps.observer!.process(telegramId, { limit: 20, allowedAgentIds });
+      })(),
+      // No Studio read is a prerequisite for independent biometric cleanup.
+      studio.deps.voiceIdentity!.maintenanceAccount(telegramId),
+    ]);
+  if (results.some(result => result.status === 'rejected') ||
+      results[0].status === 'fulfilled' && results[0].value.failed ||
+      results[1].status === 'fulfilled' && results[1].value.pending) throw new Error('Adaptive maintenance incomplete');
 }
 
 export function getStudio(): Promise<Studio> {
