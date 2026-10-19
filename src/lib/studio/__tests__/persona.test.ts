@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { briefToText, draftPersona, personaToRuntime, randomLook, refinePersona, suggestUsername, validatePersona } from '../persona';
+import { describe, expect, it, vi } from 'vitest';
+import { briefToText, draftPersona, PersonaGenerationError, personaToRuntime, randomLook, refinePersona, suggestUsername, validatePersona } from '../persona';
 import { HUES } from '../types';
 import { draftJson, personaSpec, ScriptedLLM } from './helpers';
 
@@ -8,6 +8,15 @@ const seq = (...values: number[]) => {
   let i = 0;
   return () => values[i++ % values.length];
 };
+
+const LANGUAGES = ['English', 'Persian', 'Arabic', 'Turkish', 'French', 'German', 'Spanish'];
+
+/** Inspect the actual schema sent to the provider, rather than a second copy of the schema. */
+function promptedSchema(system: string) {
+  const json = system.split('\n').find((line) => line.startsWith('{"$schema":'));
+  expect(json).toBeDefined();
+  return JSON.parse(json!);
+}
 
 describe('draftPersona', () => {
   it('parses Claude JSON (even fenced, with chatter) and keeps Claude\'s look', async () => {
@@ -23,10 +32,11 @@ describe('draftPersona', () => {
   });
 
   it('falls back to a random look when Claude omits it', async () => {
-    const llm = new ScriptedLLM().push(draftJson({ presentation: 'masculine' }, undefined));
+    const llm = new ScriptedLLM().push(JSON.stringify({ names: ['Nova'], persona: personaSpec({ presentation: 'masculine' }) }));
     const { look } = await draftPersona(llm, {}, 'HOOR');
     expect(HUES).toContain(look.hue);
     expect(['puff', 'tower', 'drift']).toContain(look.family);
+    expect(llm.requests).toHaveLength(1);
   });
 
   it('falls back to a random look when Claude\'s look is invalid instead of failing the whole draft', async () => {
@@ -34,6 +44,7 @@ describe('draftPersona', () => {
     const { look, persona } = await draftPersona(llm, {}, 'HOOR');
     expect(persona.name).toBe('Nova');
     expect(HUES).toContain(look.hue);
+    expect(llm.requests).toHaveLength(1);
   });
 
   it('applies schema defaults for optional fields', async () => {
@@ -44,9 +55,102 @@ describe('draftPersona', () => {
     expect(persona.values).toEqual([]);
   });
 
-  it('throws on non-JSON or schema-violating output', async () => {
-    await expect(draftPersona(new ScriptedLLM().push('I cannot help with that.'), {}, 'HOOR')).rejects.toThrow('did not return JSON');
-    await expect(draftPersona(new ScriptedLLM().push(JSON.stringify({ names: [], persona: {} })), {}, 'HOOR')).rejects.toHaveProperty('issues');
+  it('accepts all seven selectable languages and supplies the precise field limits to Claude', async () => {
+    const llm = new ScriptedLLM().push(draftJson({ languages: LANGUAGES }));
+    const draft = await draftPersona(llm, { languages: LANGUAGES }, 'HOOR');
+    expect(draft.persona.languages).toEqual(LANGUAGES);
+    expect(llm.requests).toHaveLength(1);
+    expect(llm.requests[0].maxTokens).toBe(4096);
+    expect(promptedSchema(llm.requests[0].system)).toMatchObject({
+      properties: {
+        persona: { properties: {
+          languages: { maxItems: 32, items: { maxLength: 40 } },
+          culture: { maxLength: 200 },
+          accent: { maxLength: 80 },
+        } },
+        look: { properties: { family: { enum: ['puff', 'tower', 'drift'] } } },
+      },
+    });
+  });
+
+  it('repairs overlong culture and accent without clipping identity or losing any languages', async () => {
+    const brief = {
+      description: 'A woman from Tehran: a broad-knowledge social companion, curious about people and everyday life.',
+      presentation: 'feminine' as const, culture: 'Iranian, raised in Tehran', accent: 'Tehrani Persian', languages: LANGUAGES,
+    };
+    const invalid = draftJson({
+      name: 'Leila', role: 'Companion', languages: LANGUAGES,
+      culture: 'Iranian, raised in Tehran with a warm, contemporary outlook. '.repeat(8),
+      accent: 'Natural Tehrani Persian, with clear pronunciation in her other languages. '.repeat(3),
+    });
+    const corrected = {
+      name: 'Leila', role: 'Companion', languages: LANGUAGES, culture: 'Iranian, raised in Tehran', accent: 'Tehrani Persian',
+    };
+    const llm = new ScriptedLLM().push(invalid, draftJson(corrected));
+    const draft = await draftPersona(llm, brief, 'HOOR');
+    expect(draft.persona).toMatchObject(corrected);
+    expect(llm.requests.map((request) => request.maxTokens)).toEqual([4096, 8192]);
+    const repair = llm.requests[1];
+    expect(repair.messages.map((message) => message.role)).toEqual(['user', 'assistant', 'user']);
+    expect(repair.messages[1].content).toBe(invalid);
+    expect(repair.messages[2].content).toContain(briefToText(brief));
+    expect(repair.messages[2].content).toMatch(/persona\.culture[^\n]*200/);
+    expect(repair.messages[2].content).toMatch(/persona\.accent[^\n]*80/);
+    expect(repair.messages[2].content).toMatch(/persona\.culture[^\n]*at most 120 characters/);
+    expect(repair.messages[2].content).toMatch(/persona\.accent[^\n]*at most 48 characters/);
+  });
+
+  it('repairs a valid-shaped answer that silently omits selected languages', async () => {
+    const llm = new ScriptedLLM().push(draftJson({ languages: ['English'] }), draftJson({ languages: LANGUAGES }));
+    const draft = await draftPersona(llm, { languages: LANGUAGES }, 'HOOR');
+    expect(draft.persona.languages).toEqual(LANGUAGES);
+    expect(llm.requests).toHaveLength(2);
+    const correction = llm.requests[1].messages[2].content;
+    expect(correction).toContain('persona.languages');
+    for (const language of LANGUAGES) expect(correction).toContain(language);
+  });
+
+  it('repairs truncated JSON using the original request and entire unfinished answer', async () => {
+    const truncated = '{"names":["Leila"],"persona":{"name":"Leila","backstory":"Grew up in Tehran';
+    const llm = new ScriptedLLM().push(truncated, draftJson({ name: 'Leila', culture: 'Iranian' }));
+    const draft = await draftPersona(llm, { description: 'A curious companion from Tehran' }, 'HOOR');
+    expect(draft.persona.name).toBe('Leila');
+    expect(llm.requests).toHaveLength(2);
+    expect(llm.requests[1].messages[1].content).toBe(truncated);
+    expect(llm.requests[1].messages[2].content).toContain('JSON');
+    expect(llm.requests[1].messages[2].content).toContain('A curious companion from Tehran');
+  });
+
+  it('ends after one failed JSON correction with a safe typed error', async () => {
+    const llm = new ScriptedLLM().push('I cannot help with that.', '{"names":[', draftJson());
+    const error = await draftPersona(llm, {}, 'HOOR').catch((error: unknown) => error);
+    expect(error).toBeInstanceOf(PersonaGenerationError);
+    expect(error).toMatchObject({
+      invalidFields: ['JSON'],
+      message: "Claude couldn't finish a valid profile after one correction. Your brief is kept; try drafting again.",
+    });
+    expect(llm.requests).toHaveLength(2);
+    expect(llm.queue).toHaveLength(1);
+  });
+
+  it('reports the final invalid field paths after one failed schema correction', async () => {
+    const invalid = draftJson({ culture: 'private-generated-content '.repeat(20), accent: 'x'.repeat(81) });
+    const llm = new ScriptedLLM().push(invalid, invalid, draftJson());
+    const error = await draftPersona(llm, {}, 'HOOR').catch((error: unknown) => error);
+    expect(error).toBeInstanceOf(PersonaGenerationError);
+    expect(error).toMatchObject({ invalidFields: ['persona.culture', 'persona.accent'] });
+    expect((error as Error).message).not.toContain('private-generated-content');
+    expect(llm.requests).toHaveLength(2);
+  });
+
+  it.each([
+    new Error('Provider authentication failed'),
+    new Error('Network connection reset'),
+    new SyntaxError('Provider response could not be decoded'),
+  ])('propagates provider failure without retrying: %s', async (failure) => {
+    const llm = { complete: vi.fn().mockRejectedValue(failure) };
+    await expect(draftPersona(llm, {}, 'HOOR')).rejects.toBe(failure);
+    expect(llm.complete).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -58,6 +162,31 @@ describe('refinePersona', () => {
     expect(llm.requests[0].messages[0].content).toContain('"name":"Nova"');
     expect(llm.requests[0].messages[0].content).toContain('make her more playful');
   });
+
+  it('uses the same bounded repair while preserving identity and explicit language changes', async () => {
+    const current = personaSpec({ name: 'Leila', role: 'Companion', languages: LANGUAGES, culture: 'Iranian, raised in Tehran' });
+    const requested = { ...current, personality: 'More playful', languages: ['Persian', 'Turkish'] };
+    const invalid = JSON.stringify({ ...requested, communicationStyle: 'Keep replies warm, natural, and conversational. '.repeat(12) });
+    const llm = new ScriptedLLM().push(invalid, JSON.stringify(requested));
+    const instruction = 'Make her more playful and change her languages to only Persian and Turkish.';
+    const refined = await refinePersona(llm, current, instruction);
+    expect(refined).toMatchObject(requested);
+    expect(llm.requests.map((request) => request.maxTokens)).toEqual([4096, 8192]);
+    expect(promptedSchema(llm.requests[0].system)).toMatchObject({ properties: { communicationStyle: { maxLength: 400 }, languages: { maxItems: 32 } } });
+    const repair = llm.requests[1].messages;
+    expect(repair[1].content).toBe(invalid);
+    expect(repair[2].content).toContain(JSON.stringify(current));
+    expect(repair[2].content).toContain(instruction);
+    expect(repair[2].content).toMatch(/communicationStyle[^\n]*400/);
+  });
+
+  it('does not make a third refinement attempt after the correction also fails', async () => {
+    const invalid = JSON.stringify(personaSpec({ accent: 'x'.repeat(81) }));
+    const llm = new ScriptedLLM().push(invalid, invalid, JSON.stringify(personaSpec()));
+    await expect(refinePersona(llm, personaSpec(), 'make her more playful')).rejects.toMatchObject({ invalidFields: ['accent'] });
+    expect(llm.requests).toHaveLength(2);
+    expect(llm.queue).toHaveLength(1);
+  });
 });
 
 describe('validatePersona', () => {
@@ -66,6 +195,14 @@ describe('validatePersona', () => {
     expect(validatePersona({ ...personaSpec(), values: 'not-a-list' }).ok).toBe(false);
     expect(validatePersona({ ...personaSpec(), presentation: 'robot' }).ok).toBe(false);
     expect(validatePersona({ ...personaSpec(), isAdmin: true }).ok).toBe(false);
+    expect(validatePersona(personaSpec({ culture: 'x'.repeat(201) })).ok).toBe(false);
+  });
+
+  it('allows up to 32 languages while keeping the manual edit count and item limits strict', () => {
+    const languages = Array.from({ length: 32 }, (_, index) => `Language ${index}`);
+    expect(validatePersona(personaSpec({ languages })).ok).toBe(true);
+    expect(validatePersona(personaSpec({ languages: [...languages, 'One too many'] })).ok).toBe(false);
+    expect(validatePersona(personaSpec({ languages: ['x'.repeat(41)] })).ok).toBe(false);
   });
 });
 

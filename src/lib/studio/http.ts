@@ -6,6 +6,7 @@
 import { verifyInitData } from './auth';
 import { StudioRateLimiter, StudioRateLimitError, type StudioRequestRateLimiter } from './ratelimit';
 import { Studio, StudioError } from './service';
+import { PersonaGenerationError } from './persona';
 import type { AgentVisibility, Member, MemoryPolicy, Role, SpawnBrief } from './types';
 
 type Json = Record<string, unknown>;
@@ -239,6 +240,10 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
   } catch (error) {
     if (error instanceof StudioRateLimitError) return json({ error: error.message }, 429, { 'Retry-After': String(error.retryAfterSeconds) });
     if (StudioError.is(error)) return json({ error: error.message }, error.status);
+    if (error instanceof PersonaGenerationError) {
+      (studio.deps.logger ?? console).warn('[studio] persona generation invalid', { invalidFields: error.invalidFields });
+      return json({ error: error.message }, 502);
+    }
     if (error && typeof error === 'object' && 'issues' in error) return json({ error: "Claude's answer didn't fit the persona format. Try again." }, 502);
     const provider = providerErrorMessage(error);
     (studio.deps.logger ?? console).error('[studio] request failed', error);

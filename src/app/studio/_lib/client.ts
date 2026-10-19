@@ -74,8 +74,11 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const headers: Record<string, string> = { 'X-Telegram-Init-Data': tg()?.initData ?? '' };
+async function request<T>(method: string, path: string, body?: unknown, responseType: 'json' | 'blob' = 'json'): Promise<T> {
+  const headers: Record<string, string> = {
+    'X-Telegram-Init-Data': tg()?.initData ?? '',
+    Accept: responseType === 'blob' ? 'audio/*' : 'application/json',
+  };
   let payload: BodyInit | undefined;
   if (body instanceof FormData) payload = body;
   else if (body !== undefined) {
@@ -84,11 +87,21 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   }
   const res = await fetch(`/api/studio/${path}`, { method, headers, body: payload });
   if (!res.ok) {
-    const err = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new ApiError(res.status, err.error ?? `Request failed (${res.status})`);
+    const err: unknown = await res.json().catch(() => null);
+    const message = err && typeof err === 'object' && 'error' in err && typeof err.error === 'string'
+      ? err.error : `Request failed (${res.status})`;
+    throw new ApiError(res.status, message);
   }
-  const type = res.headers.get('Content-Type') ?? '';
-  return (type.includes('application/json') ? await res.json() : await res.blob()) as T;
+  if (responseType === 'blob') return await res.blob() as T;
+  const type = (res.headers.get('Content-Type') ?? '').split(';', 1)[0].trim().toLowerCase();
+  if (type !== 'application/json' && !(type.startsWith('application/') && type.endsWith('+json'))) {
+    throw new ApiError(res.status, 'Vox Studio returned an unexpected page. Close and reopen the Mini App, then try again.');
+  }
+  try {
+    return await res.json() as T;
+  } catch {
+    throw new ApiError(res.status, 'Vox Studio returned unreadable data. Try again.');
+  }
 }
 
 export interface Me {
@@ -128,7 +141,7 @@ export const api = {
     request<{ agent: AgentView }>('POST', `agents/${enc(id)}/voice`, { action: 'choose-library', publicOwnerId: v.publicOwnerId, voiceId: v.voiceId, name: v.name }),
   searchVoices: (filters: Record<string, string>) =>
     request<{ voices: LibraryVoice[] }>('GET', `voices?${new URLSearchParams(Object.entries(filters).filter(([, v]) => v))}`),
-  speak: (id: string, text: string) => request<Blob>('POST', `agents/${enc(id)}/speak`, { text }),
+  speak: (id: string, text: string) => request<Blob>('POST', `agents/${enc(id)}/speak`, { text }, 'blob'),
   test: (id: string, messages: Array<{ role: 'user' | 'assistant'; content: string }>) =>
     request<{ reply: string }>('POST', `agents/${enc(id)}/test`, { messages }),
   publish: (id: string) => request<{ link: string; agent: AgentView }>('POST', `agents/${enc(id)}/publish`),

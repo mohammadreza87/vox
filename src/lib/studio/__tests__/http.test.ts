@@ -252,14 +252,34 @@ describe('agents', () => {
     expect((await call(req('GET', `agents/${id}`, { as: ID.bob }))).status).toBe(404);
   });
 
-  it('maps a schema-violating Claude answer to 502 and invalid JSON to 400', async () => {
-    h.personaLLM.push(JSON.stringify({ names: [], persona: {} }));
+  it('returns a useful 502 after bounded correction without saving a broken draft, and keeps invalid request JSON at 400', async () => {
+    const invalid = JSON.stringify({ names: [], persona: {} });
+    h.personaLLM.push(invalid, invalid);
     const bad = await call(req('POST', 'agents', { body: { brief: {} } }));
     expect(bad.status).toBe(502);
-    expect(bad.json.error).toMatch(/persona format/);
+    expect(bad.json.error).toMatch(/one correction.*brief is kept/i);
+    expect(h.personaLLM.requests).toHaveLength(2);
+    expect((await h.store.read()).agents).toHaveLength(0);
+    expect(h.logger.warn).toHaveBeenCalledWith('[studio] persona generation invalid', expect.objectContaining({ invalidFields: expect.any(Array) }));
     const r = await call(req('POST', 'agents', { rawBody: '{oops', headers: { 'content-type': 'application/json' } }));
     expect(r.status).toBe(400);
     expect(r.json.error).toBe('Invalid JSON body');
+  });
+
+  it('saves one complete multilingual Tehrani draft after correcting generated field lengths', async () => {
+    const languages = ['English', 'Persian', 'Arabic', 'Turkish', 'French', 'German', 'Spanish'];
+    h.personaLLM.push(
+      draftJson({ languages, culture: 'Tehrani '.repeat(30), accent: 'Tehrani Persian '.repeat(10) }),
+      draftJson({ languages, name: 'Raha', culture: 'Persian, Tehran', accent: 'Tehrani Persian', expertise: ['General knowledge', 'Languages', 'Culture', 'Science'] }),
+    );
+    const result = await call(req('POST', 'agents', { body: { brief: {
+      presentation: 'feminine', culture: 'Persian, Tehran', languages,
+      description: 'An adult Tehrani woman with broad general knowledge who talks naturally in many languages.',
+    } } }));
+    expect(result.status).toBe(201);
+    expect(result.json.agent.persona).toMatchObject({ name: 'Raha', languages, culture: 'Persian, Tehran', accent: 'Tehrani Persian' });
+    expect(h.personaLLM.requests).toHaveLength(2);
+    expect((await h.store.read()).agents).toHaveLength(1);
   });
 
   it('hides internal errors behind a 500 and logs them', async () => {
