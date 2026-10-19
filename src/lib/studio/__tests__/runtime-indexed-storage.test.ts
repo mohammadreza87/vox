@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, existsSync, realpathSync } from 'fs';
+import { mkdtempSync, rmSync, mkdirSync, existsSync, realpathSync, symlinkSync, lstatSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { getStudio, validateStudioConfig } from '../runtime';
@@ -43,6 +43,16 @@ it('never selects or creates an empty managed target and refuses legacy fallback
   const indexed = openLocalAdaptiveStorage(f.adaptive, 'sqlite-v1'); expect(indexed.storage.indexed).toBeDefined(); indexed.close();
   await rollbackAdaptiveStorage(f.adaptive, { quiesced: true });
   const file = openLocalAdaptiveStorage(f.adaptive, 'file-v2'); expect(file.storage.identity).toBeDefined(); expect(file.storage.indexed).toBeUndefined(); file.close();
+});
+it.each(['managed', 'legacy'] as const)('rejects dangling %s symlinks without creating a legacy store', async kind => {
+  const f = await prepare();
+  const missing = join(f.root, 'missing');
+  const path = kind === 'managed' ? managedDirectory(f.adaptive) : f.adaptive;
+  if (kind === 'legacy') rmSync(f.adaptive, { recursive: true });
+  symlinkSync(missing, path);
+  expect(() => openLocalAdaptiveStorage(f.adaptive, 'file')).toThrow('explicit current format');
+  expect(lstatSync(path).isSymbolicLink()).toBe(true);
+  expect(existsSync(missing)).toBe(false);
 });
 it('closes managed leases after failed production initialization and retries the same current store', async () => {
   const f = await prepare(); const migrated = await migrateAdaptiveStorage(f.adaptive, { quiesced: true });

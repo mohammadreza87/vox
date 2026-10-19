@@ -1,5 +1,5 @@
 /** Explicit local format selection. Opening never starts or repairs a transition. */
-import { existsSync, lstatSync } from 'fs';
+import { lstatSync } from 'fs';
 import { FileAdaptiveStorage, type AdaptiveStorage } from './storage';
 import { managedDirectory, openManagedAdaptiveStorage } from './indexed/managed-storage';
 export type AdaptiveStorageFormat = 'file' | 'sqlite-v1' | 'file-v2';
@@ -14,7 +14,9 @@ export function openLocalAdaptiveStorage(root: string, format: AdaptiveStorageFo
     const storage = openManagedAdaptiveStorage(root, { format, now });
     return { storage, close: () => storage.close() };
   }
-  if (existsSync(managedDirectory(root)) || existsSync(root) && (!lstatSync(root).isDirectory() || lstatSync(root).isSymbolicLink()))
+  const managed = lstatSync(managedDirectory(root), { throwIfNoEntry: false });
+  const legacy = lstatSync(root, { throwIfNoEntry: false });
+  if (managed || legacy && (!legacy.isDirectory() || legacy.isSymbolicLink()))
     throw new Error('Adaptive storage has managed state; select its explicit current format after verified transition');
   return { storage: new FileAdaptiveStorage(root), close: () => {} };
 }
