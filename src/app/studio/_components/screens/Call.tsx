@@ -38,6 +38,8 @@ export function CallScreen({ id }: { id: string }) {
   const cancelled = useRef(false);
 
   useEffect(() => {
+    // Reset on (re)mount: React StrictMode runs this effect's cleanup once in dev.
+    cancelled.current = false;
     api.agent(id).then((r) => setAgent(r.agent)).catch((e) => { nav.toast(errorMessage(e), 'error'); nav.back(); });
     const t = setInterval(() => setSeconds((s) => s + 1), 1000);
     return () => {
@@ -47,6 +49,9 @@ export function CallScreen({ id }: { id: string }) {
       stream.current?.getTracks().forEach((tr) => tr.stop());
       player.current?.pause();
       if (meter.current) { cancelAnimationFrame(meter.current.raf); void meter.current.ctx.close(); }
+      recorder.current = null;
+      stream.current = null;
+      meter.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
