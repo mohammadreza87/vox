@@ -55,9 +55,14 @@ export interface CandidateCursor {
   version: 1; incarnation: string; generation: number; catalogVersion: number; catalogDigest: string;
   scope: IndexedScope; deadline: number; queryDigest: string; offset: number; seal: string;
 }
+export interface IndexedControlStamp { incarnation: string; generation: number; catalogVersion: number; catalogDigest: string }
+export interface IndexedControlEvaluation { deadline?: number; denied?: boolean }
+/** Trusted synchronous, side-effect-free, body-free code only. No host reentry.
+ * Denied data remains data; this evaluator never mints a memory access receipt. */
+export type IndexedControlEvaluator = (controls: IndexedControls, now: number, stamp: IndexedControlStamp) => IndexedControlEvaluation;
 export type ControlsResult = { status: 'ready'; controls: IndexedControls; observedAt: number;
   /** Data-only current-state stamp, never a body access receipt. */
-  stamp: { incarnation: string; generation: number; catalogVersion: number; catalogDigest: string };
+  stamp: IndexedControlStamp;
   io: IndexedIoCounters } | IndexedFailure;
 export type AuthorityResult = { status: 'ready'; controls: IndexedControls; receipt: RuntimeAuthorityReceipt;
   /** Canonical identity/consent/grant checks only. Caller must evaluate current capability/Studio policy. */
@@ -68,7 +73,7 @@ export type BodyResult = { status: 'ready'; completion: 'complete' | 'partial';
   bodies: { handle: CandidateHandle; text: string; sourceIds?: string[] }[]; io: IndexedIoCounters } | IndexedFailure;
 export type ValidationResult = { status: 'ready'; io: IndexedIoCounters } | IndexedFailure;
 export interface IndexedAdaptiveQueries {
-  readControls(accountId: string, space: SpaceKind): ControlsResult;
+  readControls(accountId: string, space: SpaceKind, evaluateFresh?: IndexedControlEvaluator): ControlsResult;
   readRuntimeAuthority(scope: IndexedScope, now?: number): AuthorityResult;
   queryCandidateIds(scope: IndexedScope, query: string, receipt: RuntimeAuthorityReceipt, cursor?: CandidateCursor): CandidateResult;
   loadCandidateBodies(receipt: RuntimeAuthorityReceipt, handles: readonly CandidateHandle[]): BodyResult;

@@ -135,23 +135,32 @@ export class SqliteAdaptiveStorage implements AdaptiveStorage {
    * snapshot behind a live writer. The watermark publication is deliberately a
    * measured durable write. Constant time does not issue an UPDATE. */
   readWindow<T>(io: IndexedIoCounters, read: (now: number, meta: IndexedStoreMetadata) => T,
-    checkFresh: (value: T, now: number) => void, at?: number): T {
+    checkFresh: (value: T, now: number) => void | { denied?: boolean; deadline?: number }, at?: number, options?: { publishFresh: true }): T {
     this.assertAvailable(); this.writer = true; let committed = false, committing = false;
     try {
       this.database.exec('BEGIN IMMEDIATE'); const meta = this.readMetadata();
-      const now = this.sampleTime(meta.lifecycleWatermark, at); this.advance(meta, now, io);
+      const now = this.sampleTime(meta.lifecycleWatermark, at);
+      // Controls with a fresh external evaluator publish the post-I/O sample
+      // instead. Their first transaction is a lock-held read, not a fsync.
+      if (!options?.publishFresh) this.advance(meta, now, io);
       const value = read(now, meta);
       // Even canonical expiry denials are returned as values so their observation
       // watermark commits before the denial is released.
       this.sampleTime(meta.lifecycleWatermark);
       committing = true; this.database.exec('COMMIT'); committed = true;
-      const fresh = this.sampleTime(meta.lifecycleWatermark);
-      try { checkFresh(value, fresh); } catch (error) {
-        if (error instanceof IndexedStorageError && error.reason === 'expired') {
+      let fresh = this.sampleTime(meta.lifecycleWatermark);
+      if (options?.publishFresh) { this.publishObservation(fresh, io); meta.lifecycleWatermark = fresh; fresh = this.sampleTime(meta.lifecycleWatermark); }
+      try {
+        const evaluation = checkFresh(value, fresh);
+        const afterEvaluation = this.sampleTime(meta.lifecycleWatermark);
+        if (!evaluation?.denied && evaluation?.deadline !== undefined && evaluation.deadline <= afterEvaluation) throw new IndexedStorageError('expired');
+        if (evaluation?.denied) this.publishObservation(afterEvaluation, io);
+      } catch (error) {
+        if (error instanceof IndexedStorageError && (error.reason === 'expired' || error.reason === 'denied')) {
           // Expiry can first be observed during native durability. Publish that
           // later observation before returning an expiry denial, or fail closed
           // as unavailable; the initial watermark alone would permit revival.
-          this.publishObservation(fresh, io);
+          this.publishObservation(this.sampleTime(meta.lifecycleWatermark), io);
         }
         throw error;
       }

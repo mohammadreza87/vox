@@ -3,7 +3,7 @@ import { digest, OPTIONAL_PURPOSES, tenantIdFor, spaceIdFor, containerIdFor } fr
 import { resolveVerifiedPerson } from '../../identity';
 import { accountKey, lexicalTerms, memoryMetadataSchema, parseControls, validateAccountId, type MemoryMetadata } from './projection';
 import { INDEXED_LIMITS, IndexedStorageError, emptyIndexedIo, type AuthorityResult, type BodyResult, type CandidateCursor,
-  type CandidateHandle, type CandidateResult, type IndexedAdaptiveQueries, type IndexedControls, type ControlsResult, type IndexedFailure,
+  type CandidateHandle, type CandidateResult, type IndexedAdaptiveQueries, type IndexedControls, type IndexedControlEvaluator, type ControlsResult, type IndexedFailure,
   type IndexedIoCounters, type IndexedScope, type IndexedStoreMetadata, type RuntimeAuthorityReceipt, type ValidationResult } from './contracts';
 import type { SqliteAdaptiveStorage } from './sqlite-storage';
 const id = z.string().min(1).max(200);
@@ -89,12 +89,13 @@ export class IndexedQueryEngine implements IndexedAdaptiveQueries {
       return this.host.readWindow(io, fn, (value, now) => {
         const end = deadline(value);
         if (end !== undefined && end <= now) throw new IndexedStorageError('expired');
+        return { deadline: end };
       }, at);
     } catch (error) { return fail(error instanceof IndexedStorageError ? error.reason : 'corrupt', io); }
   }
-  readControls(accountId: string, space: 'work' | 'personal'): ControlsResult {
+  readControls(accountId: string, space: 'work' | 'personal', evaluateFresh?: IndexedControlEvaluator): ControlsResult {
     const io = emptyIndexedIo(); let deadline = Number.MAX_SAFE_INTEGER;
-    return this.run<ControlsResult>(io, (now, meta) => {
+    try { return this.host.readWindow<ControlsResult>(io, (now, meta) => {
       if (space !== 'work' && space !== 'personal') return fail('invalid_scope', io);
       const c = this.fetchControls(accountId, io); if (!c) return fail('missing', io);
       if (c.updatedAt > now || c.createdAt > now) return fail('clock_regression', io);
@@ -116,7 +117,18 @@ export class IndexedQueryEngine implements IndexedAdaptiveQueries {
       deadline = Math.min(Number.MAX_SAFE_INTEGER, ...times.filter(t => t > now));
       return { status: 'ready', controls: c, observedAt: now,
         stamp: { incarnation: meta.incarnation, generation: meta.generation, catalogVersion: catalog.version, catalogDigest: catalog.digest }, io };
-    }, value => value.status === 'ready' ? deadline : undefined);
+    }, (value, now) => {
+      if (value.status !== 'ready') return;
+      const evaluated = evaluateFresh?.(value.controls, now, value.stamp);
+      if (evaluateFresh && (!evaluated || typeof evaluated !== 'object' || 'then' in evaluated ||
+          !z.object({ deadline: z.number().int().nonnegative().safe().optional(), denied: z.boolean().optional() }).strict().safeParse(evaluated).success))
+        throw new IndexedStorageError('invalid_controls');
+      const bound = Math.min(deadline, evaluated?.deadline ?? Number.MAX_SAFE_INTEGER);
+      if (!evaluated?.denied && bound <= now) throw new IndexedStorageError('expired');
+      value.observedAt = now;
+      return { denied: evaluated?.denied, deadline: bound };
+    }, undefined, { publishFresh: true });
+    } catch (error) { return fail(error instanceof IndexedStorageError ? error.reason : 'corrupt', io); }
   }
   readRuntimeAuthority(scope: IndexedScope, now?: number): AuthorityResult {
     const io = emptyIndexedIo();

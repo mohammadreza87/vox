@@ -238,4 +238,59 @@ describe('staged SQLite adaptive storage — synthetic fixtures only', () => {
     expect((reopen.database.prepare('SELECT canonical FROM accounts').get() as { canonical: string }).canonical).not.toContain('must not commit');
   });
 
+  it('evaluates external policy at fresh time after native publication with the same data-only store stamp', async () => {
+    const f = await fixture(); const exec = f.storage.database.exec.bind(f.storage.database); let commits = 0, calls = 0;
+    f.storage.database.exec = ((sql: string) => { const result = exec(sql); if (sql === 'COMMIT') { commits++; f.setNow(commits === 1 ? 3000 : 4000); } return result; }) as typeof f.storage.database.exec;
+    const controls = f.storage.indexed.readControls(f.scope.accountId, 'work', (c, now, stamp) => {
+      calls++; expect(now).toBe(4000); expect(c.accountId).toBe(f.scope.accountId);
+      expect(stamp.incarnation).toBe(f.storage.readMetadata().incarnation);
+      expect(f.storage.indexed.readControls(f.scope.accountId, 'work')).toMatchObject({ status: 'unavailable', reason: 'busy' });
+      return { deadline: 5000 };
+    });
+    expect(controls.status).toBe('ready'); if (controls.status !== 'ready') return;
+    expect(controls.observedAt).toBe(4000); expect(calls).toBe(1); expect(commits).toBe(2);
+    expect(controls.io.canonicalImageReads).toBe(0); expect(controls.io.bodyRowsRead).toBe(0);
+    expect(controls.io.watermarkWrites).toBe(1);
+  });
+  it('durably publishes external-policy denial observed after COMMIT while returning data-only denied controls', async () => {
+    const f = await fixture(); const exec = f.storage.database.exec.bind(f.storage.database); let commits = 0;
+    f.storage.database.exec = ((sql: string) => { const result = exec(sql); if (sql === 'COMMIT') { commits++; f.setNow(commits === 1 ? 3000 : 4000); } return result; }) as typeof f.storage.database.exec;
+    const controls = f.storage.indexed.readControls(f.scope.accountId, 'work', (_c, now) => ({ denied: now >= 3500, deadline: 3500 }));
+    expect(controls.status).toBe('ready'); expect(f.storage.readMetadata().lifecycleWatermark).toBe(4000);
+    expect(controls).not.toHaveProperty('receipt');
+    f.storage.close(); const reopen = new SqliteAdaptiveStorage(f.path, { now: () => 3500 }); stores.push(reopen);
+    expect(reopen.indexed.readControls(f.scope.accountId, 'work')).toMatchObject({ status: 'unavailable', reason: 'clock_regression' });
+  });
+  it('suppresses expired external-policy controls and durably fences the later observation', async () => {
+    const f = await fixture(); const exec = f.storage.database.exec.bind(f.storage.database); let commits = 0;
+    f.storage.database.exec = ((sql: string) => { const result = exec(sql); if (sql === 'COMMIT') { commits++; f.setNow(commits === 1 ? 3000 : 4000); } return result; }) as typeof f.storage.database.exec;
+    const controls = f.storage.indexed.readControls(f.scope.accountId, 'work', () => { throw new IndexedStorageError('expired'); });
+    expect(controls).toMatchObject({ status: 'unavailable', reason: 'expired' });
+    expect(f.storage.readMetadata().lifecycleWatermark).toBe(4000);
+    f.storage.close(); const reopen = new SqliteAdaptiveStorage(f.path, { now: () => 3500 }); stores.push(reopen);
+    expect(reopen.indexed.readControls(f.scope.accountId, 'work').status).toBe('unavailable');
+  });
+  it('rejects malformed/asynchronous evaluator results and fails unavailable if denial publication cannot commit', async () => {
+    const f = await fixture();
+    expect(f.storage.indexed.readControls(f.scope.accountId, 'work', () => ({ deadline: Infinity }))).toMatchObject({ status: 'unavailable', reason: 'invalid_controls' });
+    expect(f.storage.indexed.readControls(f.scope.accountId, 'work', (() => Promise.resolve({})) as never)).toMatchObject({ status: 'unavailable', reason: 'invalid_controls' });
+    const prepare = f.storage.database.prepare.bind(f.storage.database); let failPublication = false;
+    f.storage.database.prepare = ((sql: string) => { if (failPublication && sql.startsWith('UPDATE store_meta')) throw Object.assign(Error('synthetic full'), { code: 'SQLITE_FULL' }); return prepare(sql); }) as typeof f.storage.database.prepare;
+    const controls = f.storage.indexed.readControls(f.scope.accountId, 'work', () => { f.setNow(3000); failPublication = true; throw new IndexedStorageError('expired'); });
+    // The later observed clock is sampled by the evaluator before this throw;
+    // no expired data or positive result may escape a failed durability write.
+    expect(controls).toMatchObject({ status: 'unavailable', reason: 'corrupt' }); expect(controls.io.bodyRowsRead).toBe(0);
+  });
+
+  it('rechecks the declared external deadline after evaluator work and persists expiry observed inside it', async () => {
+    const f = await fixture();
+    const controls = f.storage.indexed.readControls(f.scope.accountId, 'work', (_c, at) => {
+      expect(at).toBe(2000); f.setNow(3000); return { deadline: 2500 };
+    });
+    expect(controls).toMatchObject({ status: 'unavailable', reason: 'expired' });
+    expect(f.storage.readMetadata().lifecycleWatermark).toBe(3000);
+    f.storage.close(); const reopen = new SqliteAdaptiveStorage(f.path, { now: () => 2500 }); stores.push(reopen);
+    expect(reopen.indexed.readControls(f.scope.accountId, 'work')).toMatchObject({ status: 'unavailable', reason: 'clock_regression' });
+  });
+
 });
