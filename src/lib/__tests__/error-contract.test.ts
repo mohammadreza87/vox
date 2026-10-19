@@ -51,6 +51,7 @@ it('recognizes branded errors from an independent constructor without exposing t
   expect(ConnectionsError.is(new ConnectionsError(409, 'operation_changed'))).toBe(true);
   expect(StudioError.is(otherBundleError('StudioError', { status: 403 }))).toBe(true);
   expect(StudioError.is(new StudioError(403, 'Not permitted.'))).toBe(true);
+  expect(StudioError.is(new StudioError(402, 'This voice requires a paid plan.'))).toBe(true);
   expect(StudioRateLimitError.is(otherBundleError('StudioRateLimitError', { retryAfterSeconds: 4 }))).toBe(true);
   const denied = otherBundleError('LLMAuthorizationError', {}); Object.defineProperty(denied, 'message', { value: 'llm_authority_changed' });
   expect(LLMAuthorizationError.is(denied)).toBe(true);
@@ -162,4 +163,20 @@ it('recognizes the installed real schema error and returns only invalid_request 
     const response = await route(studio(parsed.error), request()); expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ error: 'invalid_request' });
   }
+});
+
+it('classifies native errors without traversing a hostile prototype', async () => {
+  const trap = vi.fn(() => { throw new Error('PRIVATE_PROTOTYPE_CANARY'); });
+  const prototype = new Proxy(Error.prototype, { getPrototypeOf: trap });
+  const domain = otherBundleError('ConnectionsError', { status: 409, code: 'operation_changed' });
+  Object.setPrototypeOf(domain, prototype);
+  expect(ConnectionsError.is(domain)).toBe(true);
+  const conflict = await handleConnectionsRequest(studio(domain), {} as ConnectionsApplication, request(), [], TOKEN);
+  expect(conflict.status).toBe(409); expect(await conflict.json()).toEqual({ error: 'operation_changed' });
+  const parsed = z.string().safeParse(1); if (parsed.success) throw new Error('Invalid synthetic schema fixture');
+  Object.setPrototypeOf(parsed.error, prototype);
+  expect(isSchemaValidationError(parsed.error)).toBe(true);
+  const invalid = await handleConnectionsRequest(studio(parsed.error), {} as ConnectionsApplication, request(), [], TOKEN);
+  expect(invalid.status).toBe(400); expect(await invalid.json()).toEqual({ error: 'invalid_request' });
+  expect(trap).not.toHaveBeenCalled();
 });

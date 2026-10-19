@@ -65,7 +65,7 @@ export class StudioError extends Error {
       if (!namedError(error, 'StudioError')) return false;
       const status: unknown = Object.getOwnPropertyDescriptor(error, 'status')?.value;
       const message: unknown = Object.getOwnPropertyDescriptor(error, 'message')?.value;
-      return typeof status === 'number' && [400, 401, 403, 404, 409, 413, 415, 422, 429, 500, 502, 503, 504].includes(status) &&
+      return typeof status === 'number' && [400, 401, 402, 403, 404, 409, 413, 415, 422, 429, 500, 502, 503, 504].includes(status) &&
         typeof message === 'string';
     } catch { return false; }
   }

@@ -10,7 +10,7 @@ export function brandError(error: Error, name: string): void {
 
 export function namedError(error: unknown, name: string): boolean {
   try {
-    if (types.isProxy(error) || !(error instanceof Error) || Object.getOwnPropertyDescriptor(error, 'name')?.value !== name) return false;
+    if (types.isProxy(error) || !types.isNativeError(error) || Object.getOwnPropertyDescriptor(error, 'name')?.value !== name) return false;
     const brand = Object.getOwnPropertyDescriptor(error, Symbol.for(`vox.${name}`));
     return brand?.value === true && brand.writable === false && brand.configurable === false;
   }
@@ -33,7 +33,7 @@ export function publicDomainError(error: unknown, name: string): boolean {
  * validation input is returned. Keep the real-schema regression when upgrading. */
 export function isSchemaValidationError(error: unknown): boolean {
   try {
-    if (types.isProxy(error) || !(error instanceof Error)) return false;
+    if (types.isProxy(error) || !types.isNativeError(error)) return false;
     if (Object.getOwnPropertyDescriptor(error, 'name')?.value !== 'ZodError') return false;
     const internal: unknown = Object.getOwnPropertyDescriptor(error, '_zod')?.value;
     if (!internal || typeof internal !== 'object' || types.isProxy(internal)) return false;
