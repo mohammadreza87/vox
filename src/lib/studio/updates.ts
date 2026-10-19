@@ -10,7 +10,7 @@ import { canUseAgent, visibilityOf } from './permissions';
 import type { Studio } from './service';
 
 export const MANAGER_UPDATES = ['message', 'managed_bot'];
-export const AGENT_UPDATES = ['message', 'callback_query', 'my_chat_member'];
+export const AGENT_UPDATES = ['message', 'callback_query', 'my_chat_member', 'chat_member'];
 
 export async function handleManagerUpdate(studio: Studio, update: TelegramUpdate): Promise<void> {
   const manager = studio.deps.managerBot;
@@ -39,8 +39,8 @@ export async function handleManagerUpdate(studio: Studio, update: TelegramUpdate
 
 /**
  * Who an agent talks to:
- *  - groups it was added to: everyone in them (outsiders as guests, who only
- *    ever see that group's memories);
+ *  - groups it was added to: everyone in them; remembered group context is
+ *    available only when its captured audience still authorizes all readers;
  *  - direct messages: members who may use it (private: creator, allow-list,
  *    admins; org: every member); for public agents also anyone else, after the
  *    agent decides in character whether to answer, decline, ignore or block.
@@ -55,6 +55,10 @@ export async function handleAgentUpdate(studio: Studio, agentId: string, update:
     await studio.onBotChatMember(live, update.my_chat_member);
     return;
   }
+  if (update.chat_member) {
+    await studio.noteGroupMembership(update.chat_member.chat.id, update.chat_member.new_chat_member.user, update.chat_member.new_chat_member.status);
+    return;
+  }
   const msg = update.message;
   if (!msg) {
     await gateway.handleUpdate(agentId, update);
@@ -64,8 +68,12 @@ export async function handleAgentUpdate(studio: Studio, agentId: string, update:
 
   if (msg.chat.type === 'group' || msg.chat.type === 'supergroup') {
     if (!state.groups.some((g) => g.chatId === msg.chat.id && g.agentIds.includes(agentId))) return;
+    for (const user of msg.new_chat_members ?? []) await studio.noteGroupMembership(msg.chat.id, user, 'member');
+    if (msg.left_chat_member) await studio.noteGroupMembership(msg.chat.id, msg.left_chat_member, 'left');
+    await studio.verifyGroupAudience(agentId, msg.chat.id);
     // Rebuild when the speaker is new to the group so they count in its audience right away.
-    if (await studio.noteGroupSpeaker(msg.chat.id, msg.from)) ({ gateway } = await studio.gateway());
+    await studio.noteGroupSpeaker(msg.chat.id, msg.from);
+    ({ gateway } = await studio.gateway());
     await gateway.handleUpdate(agentId, update);
     return;
   }

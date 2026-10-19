@@ -138,6 +138,7 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
       }
     }
     if (root === 'groups' && method === 'GET') return json({ groups: await studio.listGroups(me) });
+    if (root === 'relationship-observations' && method === 'GET') return json(await studio.relationshipObservations(me));
     if (root === 'audit' && method === 'GET') return json({ audit: await studio.auditLog(me) });
     if (root === 'voices' && method === 'GET') {
       const q = new URL(req.url).searchParams;
@@ -229,6 +230,24 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
             const audio = form.get('audio');
             if (!(audio instanceof Blob)) throw new StudioError(400, 'Expected audio');
             return json(await studio.callTurn(me, id, await audio.arrayBuffer(), audio.type || 'audio/webm'));
+          }
+          case 'GET relationship': return json({ relationship: await studio.relationshipFor(me, id) });
+          case 'PUT relationship': {
+            const b = await body(req);
+            return json({ relationship: await studio.updateRelationship(me, id, {
+              action: str(b.action, 20) ?? '', until: str(b.until, 40), timeZone: str(b.timeZone, 80),
+              quietHours: b.quietHours as { start: number; end: number } | undefined,
+            }) });
+          }
+          case 'PUT memories': {
+            const b = await body(req);
+            await studio.shareMemory(me, id, str(b.memoryId, 200) ?? '', b.recipients as number[]);
+            return json({ ok: true });
+          }
+          case 'POST revoke-memory': {
+            const b = await body(req);
+            await studio.revokeMemory(me, id, str(b.memoryId, 200) ?? '');
+            return json({ ok: true });
           }
           case 'GET memories': return json({ memories: await studio.memoriesFor(me, id) });
           case 'DELETE memories': {

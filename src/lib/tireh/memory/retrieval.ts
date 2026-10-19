@@ -4,7 +4,7 @@
 
 import type { ChatContext, MemoryRecord } from '../types';
 import type { OrgDirectory } from '../org/directory';
-import { audienceOf, isVisibleToAudience } from './visibility';
+import { audienceOf, isMemoryAllowedInChat } from './visibility';
 
 const STOPWORDS = new Set([
   'about', 'after', 'again', 'also', 'been', 'before', 'from', 'have', 'just', 'like', 'more',
@@ -36,14 +36,11 @@ export function selectMemories(
   const audience = audienceOf(chat);
   const queryTokens = tokens(query);
 
-  // Group membership does not grant permission to move knowledge from a DM,
-  // another group or a project into this conversation.
-  const inConversation = (m: MemoryRecord) =>
-    chat.kind !== 'group' ||
+  // Membership does not move DM, project or other-group knowledge here.
+  const inConversation = (m: MemoryRecord) => chat.kind !== 'group' ||
     (m.scope.kind === 'group' && m.scope.groupId === chat.group.id);
-
   const scored = memories
-    .filter((m) => !m.supersededBy && inConversation(m) && isVisibleToAudience(org, m, audience))
+    .filter((m) => inConversation(m) && isMemoryAllowedInChat(org, m, chat))
     .map((memory) => {
       const memoryTokens = tokens(`${memory.content} ${memory.topic ?? ''}`);
       let overlap = 0;
