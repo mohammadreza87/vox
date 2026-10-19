@@ -23,7 +23,7 @@ it('shows coded reasons for all three settings and saves only an explicit choice
   const p = props(); render(<PreferencePanel {...p} />);
   fireEvent.change(await screen.findByLabelText('Reply language'), { target: { value: 'fa' } });
   await act(async () => { fireEvent.click(within(screen.getByRole('article', { name: 'Reply language preference' })).getByRole('button', { name: 'Save preference' })); });
-  expect(mocks.preference).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'agent1', space: 'work', expectedRevision: 10, action: 'set', setting: { key: 'language', value: 'fa' } }));
+  expect(mocks.preference).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'agent1', space: 'work', expectedRevision: 10, action: 'set', setting: { key: 'language', value: 'fa' } }), expect.any(AbortSignal));
   expect(p.onSnapshot).toHaveBeenCalledWith(snapshot); expect(screen.getAllByText('No saved choice; the default style is used.')).toHaveLength(3);
 });
 it('shows an unapplied saved choice honestly and does not change consent', async () => {
@@ -39,7 +39,7 @@ it('explains what undo restores, sends one scoped command and waits for server c
   render(<PreferencePanel {...props()} />); const undo = await screen.findByRole('button', { name: 'Undo last change' });
   expect(screen.getByText(/Undo restores: Brief/)).toBeInTheDocument(); fireEvent.click(undo); fireEvent.click(undo);
   expect(mocks.preferenceUndo).toHaveBeenCalledOnce(); expect(screen.queryByText('Last change undone.')).not.toBeInTheDocument();
-  expect(mocks.preferenceUndo).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'agent1', space: 'work', expectedRevision: 10, changeId: 'change-1' }));
+  expect(mocks.preferenceUndo).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'agent1', space: 'work', expectedRevision: 10, changeId: 'change-1' }), expect.any(AbortSignal));
   await act(async () => complete(snapshot)); expect(await screen.findByText('Last change undone.')).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: 'Undo last change' })).not.toBeInTheDocument();
 });
@@ -57,7 +57,8 @@ it('suppresses stale source responses after switching agent and space', async ()
   let complete!: (value: PreferenceState) => void;
   mocks.preferenceState.mockReturnValueOnce(new Promise(resolve => { complete = resolve; })).mockImplementation(() => new Promise(() => {}));
   const p = props(), view = render(<PreferencePanel {...p} />);
-  view.rerender(<PreferencePanel {...p} agentId="agent2" space="personal" />);
+  const signal = mocks.preferenceState.mock.calls[0][2] as AbortSignal;
+  view.rerender(<PreferencePanel {...p} agentId="agent2" space="personal" />); expect(signal.aborted).toBe(true);
   await act(async () => complete(withUndo()));
   expect(screen.queryByLabelText('Reply length')).not.toBeInTheDocument(); expect(screen.queryByRole('button', { name: 'Undo last change' })).not.toBeInTheDocument();
 });
@@ -67,7 +68,7 @@ it('reloads a newly selected scope even when its aggregate revision is identical
   mocks.preferenceState.mockResolvedValue({ ...state(), space: 'personal', agentId: 'agent2' });
   view.rerender(<PreferencePanel {...p} agentId="agent2" space="personal" />);
   await screen.findByLabelText('Reply language');
-  expect(mocks.preferenceState).toHaveBeenLastCalledWith('personal', 'agent2');
+  expect(mocks.preferenceState).toHaveBeenLastCalledWith('personal', 'agent2', expect.any(AbortSignal));
   expect(mocks.preferenceState).toHaveBeenCalledTimes(2);
 });
 it('clears old status and loading controls when profile confirmation disappears', async () => {
@@ -83,7 +84,7 @@ it('does not report or refresh a late mutation after unmount', async () => {
   let complete!: (value: ExperienceSnapshot) => void;
   mocks.preference.mockReturnValue(new Promise(resolve => { complete = resolve; }));
   const p = props(), view = render(<PreferencePanel {...p} />); const row = await screen.findByRole('article', { name: 'Reply length preference' });
-  fireEvent.click(within(row).getByRole('button', { name: 'Save preference' })); view.unmount();
+  fireEvent.click(within(row).getByRole('button', { name: 'Save preference' })); const signal = mocks.preference.mock.calls[0][1] as AbortSignal; view.unmount(); expect(signal.aborted).toBe(true);
   await act(async () => complete(snapshot)); expect(p.onSnapshot).not.toHaveBeenCalled(); expect(mocks.preferenceState).toHaveBeenCalledTimes(1);
 });
 it('lets a newly loaded scope save while an old command hangs, without the old completion unlocking the new command', async () => {
@@ -133,4 +134,16 @@ it('exposes Persian RTL labels and a reset-preserving undo explanation', async (
   expect(await screen.findByLabelText('زبان پاسخ')).toBeInTheDocument(); expect(view.container.firstChild).toHaveAttribute('dir', 'rtl');
   expect(screen.getByText(/واگرد، بازنشانی قبلی را برمی‌گرداند/)).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'واگرد آخرین تغییر' })).toBeEnabled();
+});
+it('a same-scope replacement aborts the old command and lets a new command retain its generation ownership', async () => {
+  let finishOld!: (value: ExperienceSnapshot) => void, finishNext!: (value: ExperienceSnapshot) => void;
+  mocks.preference.mockReturnValueOnce(new Promise(resolve => { finishOld = resolve; })).mockReturnValueOnce(new Promise(resolve => { finishNext = resolve; }));
+  const p = props(), view = render(<PreferencePanel {...p} />);
+  fireEvent.click(within(await screen.findByRole('article', { name: 'Reply length preference' })).getByRole('button', { name: 'Save preference' }));
+  const oldSignal = mocks.preference.mock.calls[0][1] as AbortSignal;
+  mocks.preferenceState.mockResolvedValue({ ...state(), revision: 12 }); view.rerender(<PreferencePanel {...p} revisionHint={12} />); await act(async () => {});
+  expect(oldSignal.aborted).toBe(true); const save = within(screen.getByRole('article', { name: 'Reply length preference' })).getByRole('button', { name: 'Save preference' });
+  expect(save).toBeEnabled(); fireEvent.click(save); expect(mocks.preference).toHaveBeenCalledTimes(2);
+  await act(async () => finishOld(snapshot)); expect(save).toBeDisabled(); expect(p.onSnapshot).not.toHaveBeenCalled();
+  await act(async () => finishNext({ ...snapshot, revision: 13 })); expect(save).toBeEnabled(); expect(p.onSnapshot).toHaveBeenCalledExactlyOnceWith({ ...snapshot, revision: 13 });
 });

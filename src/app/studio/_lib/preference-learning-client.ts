@@ -1,8 +1,9 @@
 'use client';
 import { request, tg } from './client';
+import { readPreferenceProjection } from './preference-projection';
 import type { LearningPublicView, LearningPresentInput, LearningToggleInput, LearningReviewInput } from '@/lib/adaptive/personalization/learning/contracts';
 export const preferenceLearningApi = {
-  read: (space: 'work' | 'personal', agentId: string, signal?: AbortSignal) => request<LearningPublicView>('GET', `experience/preference-learning?space=${space}&agentId=${encodeURIComponent(agentId)}`, undefined, 'json', signal),
+  read: (space: 'work' | 'personal', agentId: string, signal?: AbortSignal) => readPreferenceProjection<LearningPublicView>(`experience/preference-learning?space=${space}&agentId=${encodeURIComponent(agentId)}`, signal),
   present: (input: LearningPresentInput, signal?: AbortSignal) => request<LearningPublicView>('POST', 'experience/preference-learning/present', input, 'json', signal),
   toggle: (input: LearningToggleInput, signal?: AbortSignal) => request<LearningPublicView>('PUT', 'experience/preference-learning', input, 'json', signal),
   review: (input: LearningReviewInput, signal?: AbortSignal) => request<LearningPublicView>('POST', 'experience/preference-learning/review', input, 'json', signal),
