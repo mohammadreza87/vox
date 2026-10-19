@@ -56,19 +56,29 @@ const PROACTIVE_PROBABILITY = { balanced: 0.9, active: 0.8 };
 /** Legacy matcher kept for callers; delivery uses explicitReplyFormat instead. */
 export const VOICE_REQUEST = /\b(voice( message| note| reply)?|audio|out loud|say it|speak to me|talk to me)\b|ویس|صدا|صوتی|بگو برام/i;
 
+// Keep the intervening words bounded: these are delivery instructions, not
+// arbitrary sentences that happen to discuss audio or someone's accent.
+const VOICE_DELIVERY_ACTION = String.raw`\b(?:send|say|read|speak|reply|respond|answer)\s+(?:(?:me|us|it|that|this|to|your|the|answer|reply|response|message)\s+){0,4}(?:by|in|as|with|using)\s+(?:(?:a|an|your)\s+)?(?:voice|audio)\b`;
+const NEGATED_VOICE_DELIVERY = new RegExp(String.raw`\b(?:don't|do not|never)\s+(?:(?:want|need)\s+(?:you\s+)?to\s+)?(?:please\s+)?${VOICE_DELIVERY_ACTION}`);
+const SELF_INSTRUCTION = /\b(?:how\s+(?:(?:can|could|do|would|should)\s+(?:i|we)|to)|(?:i|we)\s+(?:(?:can|could|will|would|should|might|may)|(?:want|need|would like)\s+to))\s*(?:please\s+)?$/;
+
 /** Clear delivery instructions take precedence over a probabilistic classifier.
  * Topic-only mentions ("how does voice recognition work?") are not requests.
  */
 export function explicitReplyFormat(input: string): 'voice' | 'text' | undefined {
   const text = input.normalize('NFKC').toLowerCase().replace(/[’‘]/g, "'").replace(/\u200c/g, ' ');
   const noVoice = /\b(?:don't|do not|never|no)\s+(?:(?:want|send|use|give|record|reply with|answer with|respond with)\s+)?(?:(?:me|us|a|any|more)\s+)*(?:voice|audio)\b/;
+  const noHearing = /\b(?:(?:don't|do not|never)\s+(?:let|allow)\s+(?:me|us)|(?:i|we)\s+(?:don't|do not)\s+want\s+to)\s+(?:hear|listen to)\s+your\s+(?:voice|accent)\b/;
   const textOnly = /\b(?:text|written)(?:\s+(?:replies|reply|messages|message))?\s+(?:only|please|instead)\b|\bonly\s+(?:in\s+)?(?:text|writing)\b|\b(?:reply|respond|answer)\s+(?:in|with|as)\s+(?:a\s+)?(?:text|writing|written)\b/;
   const persianText = /(?:ویس|صوتی|صدا|voice|audio).{0,20}(?:نفرست|نمی\s*خوام|نمی\s*خواهم|نباشه|جواب نده|پاسخ نده)|(?:نمی\s*خوام|نمی\s*خواهم|بدون|نه)\s*(?:ویس|صوت|voice|audio)|(?:فقط|به جای ویس).{0,10}(?:متن|متنی|بنویس)|(?:متنی|با متن|با text).{0,12}(?:جواب|پاسخ|بفرست)/;
-  if (noVoice.test(text) || textOnly.test(text) || persianText.test(text)) return 'text';
+  if (noVoice.test(text) || NEGATED_VOICE_DELIVERY.test(text) || noHearing.test(text) || textOnly.test(text) || persianText.test(text)) return 'text';
   const request = /\b(?:send|give|record|leave|make)\s+(?:(?:me|us|a|an|your|another|new|short|please|the)\s+)*(?:voice|audio)\b|\b(?:reply|respond|answer)\s+(?:with|in|as|using|by)\s+(?:(?:a|your)\s+)?(?:voice|audio)\b|\b(?:say|read|speak)\b.{0,30}\bout loud\b|\b(?:hear|listen to)\s+(?:your|you(?:r)? real)\s+voice\b|\bspeak to me\b/;
   const shortRequest = /^(?:please\s+)?(?:voice(?:\s+(?:message|note|reply))?|audio)(?:\s+(?:please|not text|instead of text))?[.!?]*$/;
   const persianVoice = /(?:ویس|صوتی|voice|audio)\s*(?:(?:رو|را|برام|برایم|بهم|لطفا|لطفاً)\s+)*(?:بفرست|بده|بدی|بگو|بگی|می\s*خوام|می\s*خواهم|جواب بد[هی]|پاسخ بد[هی])|(?:صدات|صداتو|صدای تو|صدایت).{0,16}بشنوم|(?:بفرست|بده|جواب بده|پاسخ بده)\s*(?:(?:یه|یک|به صورت|با)\s+)*(?:ویس|صوتی|voice|audio)|(?:بلند|با صدا).{0,12}(?:بخون|بخوان|بگو)|^(?:لطفا\s*)?(?:ویس|پیام صوتی|صوتی)(?:\s*(?:لطفا|نه متن))?[.!؟?]*$/;
-  if (request.test(text) || shortRequest.test(text.trim()) || persianVoice.test(text)) return 'voice';
+  const naturalDelivery = [...text.matchAll(new RegExp(VOICE_DELIVERY_ACTION, 'g'))]
+    .some((match) => !SELF_INSTRUCTION.test(text.slice(0, match.index)));
+  const hearAccent = /\b(?:let|allow)\s+(?:me|us)\s+(?:hear|listen to)\s+your\s+(?:voice|accent)\b|\b(?:can|could|may)\s+(?:i|we)\s+(?:please\s+)?(?:hear|listen to)\s+your\s+accent\b|\b(?:(?:i|we)\s+(?:want|would like)|(?:i|we)'d like)\s+to\s+(?:hear|listen to)\s+your\s+accent\b/;
+  if (request.test(text) || naturalDelivery || hearAccent.test(text) || shortRequest.test(text.trim()) || persianVoice.test(text)) return 'voice';
   return undefined;
 }
 
@@ -101,7 +111,7 @@ export function triageQuestions(persona: Persona, askAddressed: boolean): Decisi
     {
       type: 'predicate',
       name: 'wants_voice',
-      instructions: 'Does the latest message ask for the reply as a voice message or audio, or ask to hear the speaker talk (for example "send me a voice", "say it out loud", "can I hear your voice")? A discussion about voices/audio is not a delivery request. Explicit requests for text or not to send audio mean false.',
+      instructions: 'Does the latest message ask for the reply as a voice message or audio, or ask to hear the speaker talk (for example "send me a voice", "send it by voice", "say that in a voice message", "let me hear your accent", "say it out loud", "can I hear your voice")? A discussion about voices/audio or accents, or instructions for how the sender can record their own message, is not a delivery request. Explicit requests for text or not to send audio mean false.',
     },
   ];
   if (askAddressed) {

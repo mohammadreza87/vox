@@ -171,6 +171,8 @@ export interface ChatMessage {
   telegramMessageId?: number;
   /** Group context collected under the group-only memory policy. */
   groupPolicyVersion?: 1;
+  /** Addressing result captured with Telegram entity/reply metadata intact. */
+  groupOtherTarget?: boolean;
 }
 
 /** Where a conversation happens and who can read it */
