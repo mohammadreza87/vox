@@ -82,7 +82,7 @@ export const GUEST_DAILY_LIMIT = 40;
 
 /** Server-owned ABA barrier, changed in the same Studio commit as authority. */
 function advanceLearningAuthority(row: { learningAuthorityRevision?: number }): void {
-  const revision = row.learningAuthorityRevision ?? 0;
+  const revision = row.learningAuthorityRevision === undefined ? 0 : row.learningAuthorityRevision;
   if (!Number.isSafeInteger(revision) || revision < 0 || revision >= Number.MAX_SAFE_INTEGER) throw new StudioError(503, 'learning_authority_unavailable');
   row.learningAuthorityRevision = revision + 1;
 }

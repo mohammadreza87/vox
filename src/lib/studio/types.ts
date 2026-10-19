@@ -16,7 +16,7 @@ export interface GroupBehavior {
 }
 
 export interface Member {
-  /** Monotonic learning source authority; absent legacy value is zero. */
+  /** Monotonic source authority; absent legacy value is zero. */
   learningAuthorityRevision?: number;
   telegramId: number;
   name: string;
@@ -115,7 +115,7 @@ export interface TelegramProfileSync {
 }
 
 export interface Agent {
-  /** Monotonic learning source authority; never decrement or restore. */
+  /** Monotonic source authority; never decrement or restore. */
   learningAuthorityRevision?: number;
   id: string;
   status: AgentStatus;
