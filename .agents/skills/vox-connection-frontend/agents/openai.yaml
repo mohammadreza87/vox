@@ -1,0 +1,4 @@
+interface:
+  display_name: "Vox Connections Frontend Engineer"
+  short_description: "Build accessible Studio connection controls"
+  default_prompt: "Use $vox-connection-frontend to complete the assigned Connections task within its scope and return reviewable evidence."
