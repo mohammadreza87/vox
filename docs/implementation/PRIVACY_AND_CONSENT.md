@@ -1,8 +1,8 @@
 # Vox privacy, consent and voice recognition implementation requirements
 
-Planning review: **19 October 2026**. Status: **proposed requirements and bilingual draft copy; no implementation, collection, legal sign-off or deployment**. Product operator name supplied by the user: **Joyixir**. Intended launch audience: **adults only (18+) in the EU/EEA and US**. The user confirmed **info@joyixir.com** as Joyixir's privacy contact on 19 October 2026. Mailbox operation and legal approval have not been verified. Joyixir's exact registered entity and address remain unresolved; the operator name and contact email do not complete the legal controller block.
+Planning review: **19 October 2026**. Status: **proposed requirements and bilingual draft copy; no implementation, collection, legal sign-off or deployment**. Registered operator name supplied by the user: **Joyixir OÜ**. Intended launch audience: **adults only (18+) in the EU/EEA and US**. The user confirmed **info@joyixir.com** as Joyixir's privacy contact on 19 October 2026. Mailbox operation and legal approval have not been verified. The [registered address is verified from the official Estonian register](OPERATOR_DETAILS.md). Mailbox operation, processing roles and the full legal notice still require qualification.
 
-**اطلاعات تماس تأییدشده توسط کاربر:** کاربر در ۱۹ اکتبر ۲۰۲۶ نشانی **info@joyixir.com** را برای تماس دربارهٔ حریم خصوصی Joyixir تأیید کرد. کارکرد صندوق ایمیل و تأیید حقوقی بررسی نشده است. نام دقیق شخصیت حقوقی ثبت‌شده و نشانی آن هنوز مشخص نیست و بخش معرفی مسئول پردازش داده کامل نشده است.
+**اطلاعات تماس تأییدشده توسط کاربر:** کاربر در ۱۹ اکتبر ۲۰۲۶ نشانی **info@joyixir.com** را برای تماس دربارهٔ حریم خصوصی Joyixir تأیید کرد. کارکرد صندوق ایمیل و تأیید حقوقی بررسی نشده است. نام شخصیت حقوقی ثبت‌شده، **Joyixir OÜ**، توسط کاربر تأیید شد؛ نشانی ثبت‌شده از سامانهٔ رسمی شرکت‌های استونی بررسی شده است؛ نقش‌های پردازش و تأیید کامل متن حقوقی هنوز تکمیل نشده‌اند.
 
 This document complements [Agent memory strategy](../AGENT_MEMORY_STRATEGY.md) and [Self-development research](../SELF_DEVELOPMENT_RESEARCH.md). It governs behavioral observation, durable personalization, predictions, notifications and optional speaker recognition. Requirements marked `PRIV-*` are proposed Vox release criteria. They combine source-informed legal constraints with deliberately stricter product choices; they are not a legal guarantee or a complete jurisdiction survey.
 
@@ -191,9 +191,9 @@ All copy is **draft pending verified data flows and qualified legal/native-langu
 
 ### UX-01 — First interaction: disclosure, not consent (`PRIV-002`, `PRIV-036`)
 
-**EN:** “You’re talking with Vox, an AI assistant operated by Joyixir. It can make mistakes. Vox processes the messages you send to answer you. Optional memory, personalization and usage analytics are off until you choose them. [How your data is used]” Action: **Continue**. No “I consent to the privacy policy” checkbox.
+**EN:** “You’re talking with Vox, an AI assistant operated by Joyixir OÜ. It can make mistakes. Vox processes the messages you send to answer you. Optional memory, personalization and usage analytics are off until you choose them. [How your data is used]” Action: **Continue**. No “I consent to the privacy policy” checkbox.
 
-**FA:** «شما با Vox، یک دستیار هوش مصنوعی از Joyixir، گفتگو می‌کنید. ممکن است پاسخ‌های آن اشتباه باشد. Vox پیام‌هایی را که می‌فرستید پردازش می‌کند تا به شما پاسخ دهد. حافظهٔ اختیاری، شخصی‌سازی و تحلیل استفاده تا زمانی که خودتان فعالشان نکنید، خاموش هستند. [داده‌های شما چگونه استفاده می‌شوند]» دکمه: **ادامه**.
+**FA:** «شما با Vox، یک دستیار هوش مصنوعی از Joyixir OÜ، گفتگو می‌کنید. ممکن است پاسخ‌های آن اشتباه باشد. Vox پیام‌هایی را که می‌فرستید پردازش می‌کند تا به شما پاسخ دهد. حافظهٔ اختیاری، شخصی‌سازی و تحلیل استفاده تا زمانی که خودتان فعالشان نکنید، خاموش هستند. [داده‌های شما چگونه استفاده می‌شوند]» دکمه: **ادامه**.
 
 This summary must link to the approved core basis/history/provider notice; it cannot substitute for it.
 
@@ -295,7 +295,7 @@ Do not render this flow or enable marketing enrollment in the initial release. T
 
 **PRIV-037 — Publish only after factual verification.** The full EN/FA notice and any required US state supplement must cover:
 
-- Exact Joyixir legal entity, address, effective date/version, privacy contact (user-confirmed: **info@joyixir.com**; mailbox operation and legal approval remain unverified), applicable representative and DPO contact if required. The entity/address and full controller block remain unresolved.
+- User-confirmed legal entity **Joyixir OÜ**, postal address, effective date/version, privacy contact (user-confirmed: **info@joyixir.com**; mailbox operation and legal approval remain unverified), applicable representative and DPO contact if required. The registered address is recorded in [operator details](OPERATOR_DETAILS.md); the complete controller notice still needs legal approval.
 - Actual controller/processor or joint-controller role for consumer, Work and guest/group flows; who determines purposes and who handles rights. Workspace owners' administrative access and its limits.
 - Collected and inferred categories, source (direct, connector, participant, model), purpose-by-purpose basis and any special-category condition; legitimate interests identified where used. Required fields, consequences of refusal, optional choices and consent withdrawal.
 - Microphone/audio transport, transcripts, saved history, temporary mode, memories, predictions, templates, matching, provider-generated intermediates and notification tokens described separately; no implication all voices are enrolled.

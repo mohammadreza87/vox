@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { reminderDeliveryDocumentSchema, reminderItemDeliverySchema, type ReminderTelegramStatus } from './reminder-contracts';
 import { sharedImageDataUrlSchema } from '../prediction/image';
 const id = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/);
 const time = z.number().int().nonnegative().safe();
@@ -22,7 +23,7 @@ export const inboxItemSchema = z.object({ id, revision, space: experienceSpaceSc
   label: z.string().trim().min(1).max(160).optional(), sourceEventId: id,
   status: z.enum(['unread', 'read', 'dismissed', 'cancelled']), createdAt: time, dueAt: time, expiresAt: time,
   consentEpoch: z.number().int().nonnegative(), grantRevision: revision,
-  feedback: z.enum(['useful', 'not_useful']).optional(),
+  feedback: z.enum(['useful', 'not_useful']).optional(), delivery: reminderItemDeliverySchema.optional(),
 }).strict();
 export const experienceSettingsSchema = z.object({ revision,
   timezone: z.string().max(128).optional(), dailyCap: z.number().int().min(0).max(20),
@@ -33,7 +34,7 @@ export const experienceSettingsSchema = z.object({ revision,
 export const experienceDocumentSchema = z.object({
   preferences: z.array(storedPreferenceSchema).max(120), observations: z.array(storedObservationSchema).max(500),
   inbox: z.array(inboxItemSchema).max(100),
-  settings: experienceSettingsSchema,
+  settings: experienceSettingsSchema, reminderDelivery: reminderDeliveryDocumentSchema.optional(),
   /** Content-free dedupe tombstones retained independently of the observation opt-in. */
   turnKeys: z.array(z.object({ key: id, fingerprint: id.optional(), expiresAt: time }).strict()).max(1000),
   predictionTurns: z.array(z.object({ agentId: id, space: experienceSpaceSchema, sessionId: id,
@@ -56,7 +57,7 @@ export interface ExperienceSnapshot {
   schemaVersion: 1; revision: number; space: 'work' | 'personal'; confirmed: boolean;
   preferences: (StoredPreference & { applied: boolean })[];
   settings: ExperienceSettings;
-  inbox: InboxItem[];
+  inbox: InboxItem[]; reminders?: InboxItem[]; reminderTelegram?: ReminderTelegramStatus;
   observations: { available: boolean; responded: number; failed: number; cancelled: number;
     total: number; meanResponseMs: number | null; verifiedTaskSuccess: null; complete: false };
   capabilities: { personalization: boolean; productAnalytics: boolean; proactiveInbox: boolean; reminders: boolean; decisions: boolean };
@@ -69,7 +70,7 @@ export const settingsInputSchema = z.object({ ...command, timezone: z.string().m
 }).strict();
 export const feedbackInputSchema = z.object({ ...command, itemId: id,
   action: z.enum(['read', 'dismiss', 'useful', 'not_useful']) }).strict();
-export const reminderInputSchema = z.object({ ...command, agentId: id, label: z.string().trim().min(1).max(160), dueAt: time }).strict();
+export const reminderInputSchema = z.object({ ...command, agentId: id, label: z.string().trim().min(1).max(160), dueAt: time, quietHours: z.enum(['respect', 'allow_at_requested_time']).optional() }).strict();
 export const turnInputSchema = z.object({ space: experienceSpaceSchema, agentId: id, turnId: id,
   channel: z.enum(['voice', 'text', 'telegram']), durationMs: z.number().finite().min(0).max(86_400_000),
   status: z.enum(['responded', 'failed', 'cancelled']), origin: z.enum(['human', 'agent', 'system', 'qa']).default('human') }).strict();
@@ -87,7 +88,7 @@ export const predictInputSchema = z.object({ space: experienceSpaceSchema, agent
 export type PreferenceInput = z.infer<typeof preferenceInputSchema>;
 export type SettingsInput = z.infer<typeof settingsInputSchema>;
 export type FeedbackInput = z.infer<typeof feedbackInputSchema>;
-export type ReminderInput = z.infer<typeof reminderInputSchema>;
+export type ReminderInput = z.input<typeof reminderInputSchema>;
 export type TurnInput = z.input<typeof turnInputSchema>;
 export type PredictInput = z.infer<typeof predictInputSchema>;
 

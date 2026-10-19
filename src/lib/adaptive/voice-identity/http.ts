@@ -65,9 +65,9 @@ export async function handleVoiceIdentityRequest(studio: Studio, service: VoiceI
     return json({ error: 'not_found' }, 404);
   } catch (error) {
     if (error instanceof z.ZodError) return json({ error: 'invalid_request' }, 400);
-    if (error instanceof AdaptiveError) return json({ error: error.code }, error.status);
+    if (AdaptiveError.is(error)) return json({ error: error.code }, error.status);
     if (StudioError.is(error)) return json({ error: 'invalid_request' }, error.status);
-    if (error instanceof StudioRateLimitError) return json({ error: 'rate_limited' }, 429, { 'Retry-After': String(error.retryAfterSeconds) });
+    if (StudioRateLimitError.is(error)) return json({ error: 'rate_limited' }, 429, { 'Retry-After': String(error.retryAfterSeconds) });
     return json({ error: 'voice_identity_unavailable' }, 503);
   }
 }

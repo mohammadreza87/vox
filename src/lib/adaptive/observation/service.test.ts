@@ -234,3 +234,33 @@ describe('private bounded observation journal', () => {
     expect((await raw()).events).toHaveLength(OBSERVER_MAX_EVENTS);
   });
 });
+
+describe('stage/usage and explicit task outcome journal', () => {
+  it('persists numeric receipts only with current consent, correlates task feedback and purges all on withdrawal', async () => {
+    const { adaptive, observer, grant, withdraw, input, raw } = await fixture(); await grant();
+    const telemetry = { version: 1 as const, stages: [{ stage: 'generation' as const, outcome: 'succeeded' as const, durationMs: 24 }],
+      usage: [{ provider: 'anthropic' as const, modelFamily: 'claude' as const, inputTokens: 10, outputTokens: 4, cacheReadTokens: null, cacheWriteTokens: null, status: 'complete' as const }], truncated: false };
+    const captured = await input('telemetry', { channel: 'text', telemetry });
+    await observer.recordServer(123, captured); await observer.process(123);
+    expect(await observer.recordClient(124, { eventId: 'task-report', space: 'work', agentId: 'agent', turnId: 'turn', outcome: 'task_succeeded' })).toMatchObject({ recorded: false });
+    expect(await observer.recordClient(123, { eventId: 'task-report', space: 'personal', agentId: 'agent', turnId: 'turn', outcome: 'task_succeeded' })).toMatchObject({ recorded: false });
+    expect(await observer.recordClient(123, { eventId: 'task-report', space: 'work', agentId: 'agent', turnId: 'turn', outcome: 'task_succeeded' })).toMatchObject({ recorded: true });
+    await observer.process(123);
+    const snapshot = await observer.snapshot(123, 'work');
+    expect(snapshot.projection.telemetry).toMatchObject({ inputTokens: 10, outputTokens: 4, reportedTaskSucceeded: 1, billedCost: null });
+    expect(snapshot.completeness.verifiedTaskSuccess).toBeNull();
+    await withdraw(); expect(await raw()).toEqual({ schemaVersion: 1, events: [], projections: [] });
+    expect(await observer.recordServer(123, captured)).toMatchObject({ recorded: false });
+    expect(await adaptive.withAccountDocument(123, d => d.observer.events.length)).toBe(0);
+  });
+  it('retains cancelled usage, idempotently replaces a revised report and excludes prediction responses', async () => {
+    const { observer, grant, input } = await fixture(); await grant();
+    await observer.recordServer(123, await input('prediction', { operation: 'prediction', telemetry: { version: 1, stages: [{ stage: 'decisions', outcome: 'cancelled', durationMs: 400 }], usage: [], truncated: false } }));
+    await observer.recordServer(123, await input('cancelled', { turnId: 'cancelled-turn', outcome: 'cancelled' }));
+    await observer.process(123);
+    const result = await observer.snapshot(123, 'work');
+    expect(result.projection).toMatchObject({ responseTurns: 1, cancelled: 1, responded: 0 });
+    expect(result.projection.telemetry?.stages.find(s => s.stage === 'decisions')).toMatchObject({ cancelled: 1, samples: 1 });
+    expect(result.projection.telemetry?.inputTokens).toBeNull();
+  });
+});

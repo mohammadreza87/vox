@@ -1,3 +1,4 @@
+import { measureStage, observedUsage } from '../../adaptive/observation/trace';
 import { randomUUID } from 'crypto';
 import { rm } from 'fs/promises';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -133,4 +134,21 @@ describe('Studio observation producers and authenticated learning API', () => {
     }) };
     expect((await request('operations', 'GET', undefined, { id: ID.superadmin })).status).toBe(409);
   });
+});
+
+
+it('takes a real consented producer through numeric journal, own-space API projection and explicit feedback', async () => {
+  const { h, agent, observer, request } = await setup();
+  const observe = await beginObservation(h.studio, ID.alice, agent.id, 'work', 'text', 'correlated-turn');
+  await observe.run(() => measureStage('generation', async () => { observedUsage('anthropic', 'claude', { inputTokens: 31, outputTokens: 7 }); return 'PRIVATE_CONTENT_CANARY'; }));
+  expect(await observe('responded')).toBe('correlated-turn');
+  const report = { eventId: 'task-correlated-turn', agentId: agent.id, space: 'work', turnId: 'correlated-turn', outcome: 'task_succeeded' };
+  expect((await request('events', 'POST', report)).status).toBe(200);
+  expect((await request('events', 'POST', { ...report, telemetry: { text: 'PRIVATE_CONTENT_CANARY' } })).status).toBe(400);
+  await observer.process(ID.alice);
+  const response = await request('observations?space=work'); const body = await response.json();
+  expect(body.projection.telemetry).toMatchObject({ reportedTaskSucceeded: 1, inputTokens: 31, outputTokens: 7, billedCost: null });
+  expect(body.completeness.verifiedTaskSuccess).toBeNull();
+  expect(JSON.stringify(body)).not.toContain('PRIVATE_CONTENT_CANARY');
+  const personal = await request('observations?space=personal'); expect((await personal.json()).projection.telemetry.inputTokens).toBeNull();
 });

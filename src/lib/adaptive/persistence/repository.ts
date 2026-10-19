@@ -74,6 +74,20 @@ function create(accountId: string, now: number): AdaptiveDocument {
 
 export class AdaptiveRepository {
   constructor(readonly storage: AdaptiveStorage) {}
+  readCommittedForEffect(accountId: string, now: number): { status: 'ready'; document: AdaptiveDocument | null } | { status: 'busy' | 'unsupported' } {
+    if (!this.storage.readCommittedForEffect) return { status: 'unsupported' };
+    if (!/^telegram-account:[1-9]\d{0,15}$/.test(accountId) || !Number.isSafeInteger(now) || now < 0) throw new Error('Invalid adaptive account');
+    const result = this.storage.readCommittedForEffect(accountId);
+    if (result.status !== 'ready') return result;
+    if (result.document === null) return { status: 'ready', document: null };
+    const document = documentSchema.parse(result.document) as AdaptiveDocument;
+    if (document.accountId !== accountId || document.personId !== create(accountId, now).personId || document.updatedAt > now || document.permissions.length !== 16 || new Set(document.permissions.map(p => p.id)).size !== 16) throw new Error('Invalid adaptive document');
+    for (const space of ['work', 'personal'] as const) for (const purpose of OPTIONAL_PURPOSES) {
+      const p = document.permissions.find(p => p.id === `permission:${space}:${purpose}`);
+      if (!p || p.personId !== document.personId || p.purpose !== purpose || p.tenantId !== tenantIdFor(accountId) || p.spaceId !== spaceIdFor(accountId, space)) throw new Error('Invalid adaptive permission');
+    }
+    return { status: 'ready', document };
+  }
   transaction<T>(accountId: string, now: number, fn: (document: AdaptiveDocument) => T): Promise<T> {
     if (!/^telegram-account:[1-9]\d{0,15}$/.test(accountId) || !Number.isSafeInteger(now) || now < 0) throw new Error('Invalid adaptive account');
     return this.storage.transact(accountId, current => {

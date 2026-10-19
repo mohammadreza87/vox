@@ -4,9 +4,10 @@ import { api, type AgentView, type Role } from '../../_lib/client';
 import { experienceApi, type ExperienceSnapshot } from '../../_lib/experience-client';
 import { TopBar } from '../ui';
 import { RelationshipPanel } from '../RelationshipPanel';
+import { ReminderPanel } from '../ReminderPanel';
 import { LearningPanel } from '../LearningPanel';
 
-export function ExperienceScreen({ onBack, role }: { onBack: () => void; role?: Role }) {
+export function ExperienceScreen({ onBack, role, notificationId }: { onBack: () => void; role?: Role; notificationId?: string }) {
   const [space, setSpace] = useState<'work' | 'personal'>('work');
   const [fa, setFa] = useState(false);
   const [data, setData] = useState<ExperienceSnapshot | null>(null);
@@ -20,8 +21,8 @@ export function ExperienceScreen({ onBack, role }: { onBack: () => void; role?: 
   const [inbox, setInbox] = useState(false);
   const [proactive, setProactive] = useState(false);
   const [reminders, setReminders] = useState(false);
-  const [label, setLabel] = useState('');
-  const [due, setDue] = useState('');
+  const [notificationScope, setNotificationScope] = useState<'work' | 'personal' | null>(null);
+  const [notificationMissing, setNotificationMissing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [status, setStatus] = useState('');
@@ -34,7 +35,7 @@ export function ExperienceScreen({ onBack, role }: { onBack: () => void; role?: 
   };
   const load = useCallback(async () => {
     const current = ++generation.current;
-    setData(null); setError(''); setStatus(''); setLabel(''); setDue('');
+    setData(null); setError(''); setStatus('');
     try {
       const [snapshot, listed] = await Promise.all([experienceApi.read(space), api.agents()]);
       if (generation.current !== current) return;
@@ -43,6 +44,20 @@ export function ExperienceScreen({ onBack, role }: { onBack: () => void; role?: 
   }, [space]);
   const invalidate = useCallback(() => { generation.current++; }, []);
   useEffect(() => { void load(); return invalidate; }, [load, invalidate]);
+  useEffect(() => {
+    let active = true;
+    if (!notificationId || typeof experienceApi.resolveNotification !== 'function') return;
+    setNotificationMissing(false); setNotificationScope(null);
+    void experienceApi.resolveNotification(notificationId).then(result => { if (active) { setNotificationScope(result.space); setSpace(result.space); } }).catch(() => { if (active) setNotificationMissing(true); });
+    return () => { active = false; };
+  }, [notificationId]);
+  useEffect(() => {
+    if (!notificationId || !notificationScope || data?.space !== notificationScope) return;
+    const item = (data.reminders ?? data.inbox).find(item => item.id === notificationId);
+    if (!item) { setNotificationMissing(true); return; }
+    const element = document.getElementById(`reminder-${notificationId}`);
+    element?.scrollIntoView?.({ block: 'center' }); element?.focus();
+  }, [data, notificationId, notificationScope]);
   const mutate = async (action: () => Promise<ExperienceSnapshot>, refreshPreference = false) => {
     if (busy) return;
     const current = generation.current;
@@ -58,7 +73,13 @@ export function ExperienceScreen({ onBack, role }: { onBack: () => void; role?: 
         setStatus(t('Saved.', 'ذخیره شد.'));
       }
     }
-    catch { if (generation.current === current) setError(t('The change was not confirmed. Refresh before trying again.', 'تغییر تأیید نشد. پیش از تلاش دوباره صفحه را تازه کنید.')); }
+    catch (error) { if (generation.current === current) {
+      const code = error instanceof Error ? error.message : '';
+      setError(code === 'reminder_delivery_busy' ? t('A reminder is being dispatched. Wait a moment, refresh and review renewal again.', 'یک یادآور در حال ارسال است. کمی صبر کنید، صفحه را تازه و تمدید را دوباره بررسی کنید.') :
+        code === 'reminder_authorization_renewal_required' ? t('Renew Telegram authorization or turn Telegram reminders off before choosing this due time.', 'پیش از انتخاب این زمان مقرر، مجوز تلگرام را تمدید یا یادآورهای تلگرام را خاموش کنید.') :
+        code === 'reminder_disclosure_required' ? t('Review the Telegram reminder choice again before confirming.', 'پیش از تأیید، انتخاب یادآور تلگرام را دوباره بررسی کنید.') :
+        t('The change was not confirmed. Refresh before trying again.', 'تغییر تأیید نشد. پیش از تلاش دوباره صفحه را تازه کنید.'));
+    } }
     finally { setBusy(false); }
   };
   const command = () => ({ space, expectedRevision: data!.revision, eventId: crypto.randomUUID() });
@@ -84,7 +105,7 @@ export function ExperienceScreen({ onBack, role }: { onBack: () => void; role?: 
         </div>
         <div className="vx-card vx-privacy-card">
           <h2 className="vx-head">{t('Notification settings', 'تنظیمات اعلان')}</h2>
-          <p className="vx-small vx-2">{t('These settings control your private inbox. They do not enable email, SMS or Telegram delivery. The interruption limit applies across both spaces.', 'این تنظیمات برای صندوق خصوصی شما هستند و ارسال ایمیل، پیامک یا تلگرام را فعال نمی‌کنند. محدودیت مزاحمت در مجموع هر دو فضا اعمال می‌شود.')}</p>
+          <p className="vx-small vx-2">{t('These settings control your private inbox. Telegram reminders have a separate choice below. The suggestion limit applies across both spaces.', 'این تنظیمات برای صندوق خصوصی شما هستند. یادآور تلگرام در پایین انتخابی جدا دارد. محدودیت پیشنهاد در مجموع هر دو فضا اعمال می‌شود.')}</p>
           <label className="vx-privacy-checkbox"><input type="checkbox" checked={inbox} disabled={busy || !data.confirmed} onChange={e => setInbox(e.target.checked)} />{t('Enable inbox', 'فعال کردن صندوق')}</label>
           <label className="vx-privacy-checkbox"><input type="checkbox" checked={proactive} disabled={busy || (!proactive && !data.capabilities.proactiveInbox)} onChange={e => setProactive(e.target.checked)} />{t('Helpful suggestions', 'پیشنهادهای مفید')}</label>
           <label className="vx-privacy-checkbox"><input type="checkbox" checked={reminders} disabled={busy || (!reminders && !data.capabilities.reminders)} onChange={e => setReminders(e.target.checked)} />{t('Requested reminders', 'یادآورهای درخواستی')}</label>
@@ -93,11 +114,12 @@ export function ExperienceScreen({ onBack, role }: { onBack: () => void; role?: 
           <div className="vx-privacy-actions"><label>{t('Quiet hours start', 'شروع سکوت')}<input className="vx-input" type="number" min={0} max={23} value={quietStart} disabled={busy} onChange={e => setQuietStart(Number(e.target.value))} /></label><label>{t('Quiet hours end', 'پایان سکوت')}<input className="vx-input" type="number" min={0} max={23} value={quietEnd} disabled={busy} onChange={e => setQuietEnd(Number(e.target.value))} /></label></div>
           <button className="vx-btn vx-btn-secondary" disabled={busy || !data.confirmed} onClick={() => void mutate(() => experienceApi.settings({ ...command(), timezone: timezone.trim() || null, dailyCap: cap, quietStartHour: quietStart, quietEndHour: quietEnd, inboxEnabled: inbox, proactiveEnabled: proactive, reminderEnabled: reminders }))}>{t('Save notification settings', 'ذخیرهٔ تنظیمات اعلان')}</button>
         </div>
-        <div className="vx-card vx-privacy-card"><h2 className="vx-head">{t('Create a reminder', 'ایجاد یادآور')}</h2><p className="vx-small vx-2">{t('Choose an agent above. A reminder appears in your authenticated inbox when it is due; it does not send an external message.', 'یک عامل را در بالا انتخاب کنید. یادآور در زمان مقرر در صندوق احراز هویت‌شدهٔ شما نمایش داده می‌شود و پیام بیرونی نمی‌فرستد.')}</p><label>{t('Reminder', 'یادآور')}<input className="vx-input" value={label} maxLength={160} disabled={busy || !data.capabilities.reminders} onChange={e => setLabel(e.target.value)} /></label><label>{t('Due time (your device local time)', 'زمان مقرر (زمان محلی دستگاه)')}<input className="vx-input" type="datetime-local" value={due} disabled={busy || !data.capabilities.reminders} onChange={e => setDue(e.target.value)} /></label><button className="vx-btn vx-btn-secondary" disabled={busy || !agentId || !label.trim() || !due || !data.capabilities.reminders} onClick={() => void mutate(() => experienceApi.reminder({ ...command(), agentId, label, dueAt: new Date(due).getTime() }))}>{t('Create reminder', 'ایجاد یادآور')}</button></div>
+        {notificationMissing && <p role="status">{t('This reminder is not available.', 'این یادآور در دسترس نیست.')}</p>}
+        <ReminderPanel key={space} data={data} agentId={agentId} fa={fa} busy={busy} mutate={mutate} notificationId={notificationId} />
         {agentId && typeof api.relationship === 'function' && <RelationshipPanel key={`${space}:${agentId}`} agentId={agentId} name={agents.find(a => a.id === agentId)?.persona.name ?? ''} space={space} locale={fa ? 'fa' : 'en'} identityConfirmed={data.confirmed} />}
         <h2 className="vx-title-m">{t('Your inbox', 'صندوق شما')}</h2>
         {!data.inbox.length && <p className="vx-small vx-2">{t('Nothing to show right now.', 'اکنون موردی برای نمایش نیست.')}</p>}
-        {data.inbox.map(item => <article className="vx-card vx-privacy-card" key={item.id}><h3 className="vx-head">{item.kind === 'requested_reminder' ? item.label : t('A reply did not finish. You can try again when convenient.', 'یک پاسخ کامل نشد. هر زمان مناسب بود می‌توانید دوباره تلاش کنید.')}</h3><div className="vx-privacy-actions"><button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy} onClick={() => void mutate(() => experienceApi.feedback({ ...command(), itemId: item.id, action: 'useful' }))}>{t('Useful', 'مفید بود')}</button><button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy} onClick={() => void mutate(() => experienceApi.feedback({ ...command(), itemId: item.id, action: 'dismiss' }))}>{t('Dismiss', 'بستن')}</button></div></article>)}
+        {data.inbox.filter(item => item.kind !== 'requested_reminder').map(item => <article className="vx-card vx-privacy-card" key={item.id}><h3 className="vx-head">{item.kind === 'requested_reminder' ? item.label : t('A reply did not finish. You can try again when convenient.', 'یک پاسخ کامل نشد. هر زمان مناسب بود می‌توانید دوباره تلاش کنید.')}</h3><div className="vx-privacy-actions"><button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy} onClick={() => void mutate(() => experienceApi.feedback({ ...command(), itemId: item.id, action: 'useful' }))}>{t('Useful', 'مفید بود')}</button><button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy} onClick={() => void mutate(() => experienceApi.feedback({ ...command(), itemId: item.id, action: 'dismiss' }))}>{t('Dismiss', 'بستن')}</button></div></article>)}
 
       </>}
       <LearningPanel space={space} locale={fa ? 'fa' : 'en'} showOperations={role === 'owner' || role === 'superadmin'} />

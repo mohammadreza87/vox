@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ExperienceScreen } from './Experience';
 import { emptyExperience } from '@/lib/adaptive/runtime/contracts';
-const mocks = vi.hoisted(() => ({ read: vi.fn(), preference: vi.fn(), settings: vi.fn(), reminder: vi.fn(), feedback: vi.fn(), agents: vi.fn() }));
+const mocks = vi.hoisted(() => ({ read: vi.fn(), preference: vi.fn(), settings: vi.fn(), reminderChannelPresent: vi.fn(), reminder: vi.fn(), feedback: vi.fn(), agents: vi.fn() }));
 vi.mock('../LearningPanel', () => ({ LearningPanel: ({ space, locale }: { space: string; locale: string }) => <div data-testid="learning-panel" data-space={space} data-locale={locale} /> }));
 vi.mock('../../_lib/experience-client', () => ({ experienceApi: mocks }));
 vi.mock('../../_lib/client', () => ({ api: mocks }));
@@ -50,4 +50,13 @@ describe('Experience controls', () => {
     await waitFor(() => expect(screen.queryByText('WORK_REMINDER_CANARY')).not.toBeInTheDocument());
     expect(screen.getByTestId('learning-panel')).toHaveAttribute('data-space', 'personal');
   });
+});
+
+it('explains reminder renewal busy state without claiming the change was saved', async () => {
+  mocks.read.mockResolvedValue({ ...snapshot(), reminderTelegram: { available: true, connected: true, enabled: true } });
+  mocks.reminderChannelPresent.mockRejectedValue(new Error('reminder_delivery_busy'));
+  render(<ExperienceScreen onBack={() => undefined} />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Review 30-day renewal' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent('A reminder is being dispatched');
+  expect(screen.queryByText('Saved.')).not.toBeInTheDocument();
 });

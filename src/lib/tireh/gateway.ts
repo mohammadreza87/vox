@@ -9,6 +9,7 @@
  *          → extract new memories → scope them → offer to share private work facts
  */
 
+import { measureStage } from '../adaptive/observation/trace';
 import { createHash, randomUUID } from 'crypto';
 import { parseExplicitControl, type RelationshipLoop, type RelationshipKey } from '../relationships';
 import type { AdaptiveRelationshipService } from '../adaptive/relationships/service';
@@ -329,7 +330,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     const sourceAt = Number.isSafeInteger(message.date) && message.date > 0 && message.date * 1000 <= receivedAt.getTime() + 300_000
       ? new Date(message.date * 1000) : receivedAt;
     const privacyEpoch = await this.deps.history.getEpoch(persona.id);
-    let boundary = await this.boundary(persona, chat, speaker.id);
+    let boundary = await measureStage('retrieval', () => this.boundary(persona, chat, speaker.id));
     if (!boundary.audienceValid) return 'ignored';
     const userMessage: ChatMessage = {
       role: 'user', personId: speaker.id, text, at: sourceAt, telegramMessageId: message.message_id,
@@ -444,7 +445,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     if (!await this.requestAuthorized(options.authorize)) return this.changedReply;
     if (parseExplicitControl(text) === 'forget') return this.forgetOwnedContext(persona.id, speakerId, options.space);
     const chat: ChatContext = { kind: 'private', chatKey: `private-${speakerId}`, personId: speakerId };
-    let boundary = await this.boundary(persona, chat, speakerId, options.space);
+    let boundary = await measureStage('retrieval', () => this.boundary(persona, chat, speakerId, options.space));
     if (!await this.requestAuthorized(options.authorize)) return this.changedReply;
     const user: ChatMessage = { role: 'user', personId: speakerId, text, at: this.now(), privacy: this.stamp(boundary, [randomUUID()]) };
     await this.retain(persona, chat, speakerId, user, boundary);
@@ -557,7 +558,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
       if (await this.requestAuthorized(options.authorize)) yield reply;
       return;
     }
-    let boundary = await this.boundary(persona, chat, speakerId, options.space);
+    let boundary = await measureStage('retrieval', () => this.boundary(persona, chat, speakerId, options.space));
     if (!boundary.audienceValid) return;
     const user: ChatMessage = { role: 'user', personId: speakerId, text: said, at: this.now(), privacy: this.stamp(boundary, [randomUUID()]) };
     const recent = await this.historyAt(persona, chat, boundary, HISTORY_LIMIT);
@@ -645,6 +646,7 @@ You are on a live voice call. Answer in one to three short spoken sentences. No 
    * cannot retain turns, observe relationships, call a model or commit actions. */
   async prepareContext(personaId: string, speakerId: string, text: string,
     options: { space?: 'work' | 'personal'; authorize?: () => Promise<boolean> } = {}): Promise<boolean> {
+    return measureStage('retrieval', async () => {
     try {
       if (!await this.requestAuthorized(options.authorize)) return false;
       const persona = this.deps.org.getPersona(personaId);
@@ -657,6 +659,7 @@ You are on a live voice call. Answer in one to three short spoken sentences. No 
         authority: { scope: `${persona.id}:${chat.chatKey}:${boundary.space}`, revision: boundary.key } });
       return await this.requestAuthorized(options.authorize) && await this.unchanged(persona, chat, speakerId, boundary);
     } catch { return false; }
+    }, result => result ? 'succeeded' : 'unknown');
   }
 
   /** Current authorized grounding for an unsent private reconsideration. */

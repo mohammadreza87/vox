@@ -5,10 +5,13 @@ import type { Studio } from '../service';
 describe('independent maintenance cleanup', () => {
   it('attempts voice cleanup even if the separate Studio store is unavailable', async () => {
     const voice = vi.fn().mockResolvedValue({ pending: 0 });
+    const reminders = vi.fn().mockResolvedValue({ claimed: 0, accepted: 0 });
+    const controller = new AbortController();
     const studio = { deps: { store: { read: vi.fn().mockRejectedValue(new Error('store unavailable')) },
-      observer: { process: vi.fn() }, voiceIdentity: { maintenanceAccount: voice } } } as unknown as Studio;
-    await expect(maintainAdaptiveAccount(studio, 123)).rejects.toThrow('Adaptive maintenance incomplete');
+      observer: { process: vi.fn() }, voiceIdentity: { maintenanceAccount: voice }, reminderDelivery: { drainAccount: reminders } } } as unknown as Studio;
+    await expect(maintainAdaptiveAccount(studio, 123, controller.signal)).rejects.toThrow('Adaptive maintenance incomplete');
     expect(voice).toHaveBeenCalledWith(123);
+    expect(reminders).toHaveBeenCalledWith(123, { signal: controller.signal });
   });
   it('processes observations but retains a retryable failure while provider purge is pending', async () => {
     const observe = vi.fn().mockResolvedValue({ failed: 0 });

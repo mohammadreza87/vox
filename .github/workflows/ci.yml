@@ -199,6 +199,9 @@ jobs:
         env:
           CONNECTIONS_E2E_PRODUCTION: '1'
 
+      - name: Run reminder production browser journeys
+        run: npx playwright test --config=playwright.reminders.config.ts --project=chromium
+
       - name: Run E2E tests
         run: npx playwright test
         env:

@@ -1,3 +1,4 @@
+import { measureStage, observedUsage } from '../observation/trace';
 import type OpenAI from 'openai';
 import { z } from 'zod';
 import { MAX_IMAGE_URL_LENGTH, minimizeImageDataUrl } from '../prediction/image';
@@ -112,6 +113,9 @@ export class DecisionService {
   private blockedUntil = 0;
   constructor(private readonly provider: DecisionProvider, private readonly now: () => number = Date.now) {}
   async evaluate(context: DecisionContext): Promise<DecisionResult> {
+    return measureStage('decisions', () => this.evaluateObserved(context), result => result.status === 'answered' ? 'succeeded' : ['cancelled', 'stale'].includes(result.reason) ? 'cancelled' : 'unknown');
+  }
+  private async evaluateObserved(context: DecisionContext): Promise<DecisionResult> {
     const started = this.now();
     const unknown = (reason: DecisionUnknownReason, inputTokens?: number): DecisionResult =>
       ({ status: 'unknown', reason, elapsedMs: Math.max(0, this.now() - started), ...(inputTokens === undefined ? {} : { inputTokens }) });
@@ -146,6 +150,7 @@ export class DecisionService {
         if (controller.signal.aborted) return unknown(stopReason);
         const result = validateAnswers(raw, parsed.data);
         if (!result) return unknown('malformed');
+        observedUsage('openai', 'gpt', { inputTokens: result.inputTokens });
         if (context.currentRevision() !== context.revision || await context.authorize() !== before || context.currentRevision() !== context.revision) return unknown('stale', result.inputTokens);
         if (controller.signal.aborted) return unknown(stopReason, result.inputTokens);
         if (result.answers.some(a => a.type === 'refusal')) return unknown('refusal', result.inputTokens);

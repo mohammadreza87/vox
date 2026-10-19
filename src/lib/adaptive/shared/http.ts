@@ -43,9 +43,9 @@ export async function handleSharedRequest(studio: Studio, service: SharedMemoryS
     return response({ error: 'not_found' }, 404);
   } catch (error) {
     if (error instanceof z.ZodError) return response({ error: 'invalid_request' }, 400);
-    if (error instanceof SharedMemoryError || error instanceof AdaptiveError) return response({ error: error.code }, error.status);
+    if (SharedMemoryError.is(error) || AdaptiveError.is(error)) return response({ error: error.code }, error.status);
     if (StudioError.is(error)) return response({ error: 'invalid_request' }, error.status);
-    if (error instanceof StudioRateLimitError) return response({ error: 'rate_limited' }, 429, { 'Retry-After': String(error.retryAfterSeconds) });
+    if (StudioRateLimitError.is(error)) return response({ error: 'rate_limited' }, 429, { 'Retry-After': String(error.retryAfterSeconds) });
     return response({ error: 'shared_memory_unavailable' }, 503);
   }
 }

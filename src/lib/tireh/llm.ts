@@ -5,6 +5,8 @@
  *   TIREH_LLM_MODEL    = model id override
  */
 
+import { measureStage, captureUsage, observedUsage, recordStage, unavailableUsage } from '../adaptive/observation/trace';
+import { brandError, namedError } from '../error-contract';
 import Anthropic from '@anthropic-ai/sdk';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { logTelegramDiagnostic } from './telegram/diagnostics';
@@ -44,7 +46,11 @@ export interface LLMRequest {
 }
 
 export class LLMAuthorizationError extends Error {
-  constructor() { super('llm_authority_changed'); this.name = 'LLMAuthorizationError'; }
+  constructor() { super('llm_authority_changed'); this.name = 'LLMAuthorizationError'; brandError(this, 'LLMAuthorizationError'); }
+  static is(error: unknown): error is LLMAuthorizationError {
+    try { return namedError(error, 'LLMAuthorizationError') && Object.getOwnPropertyDescriptor(error, 'message')?.value === 'llm_authority_changed'; }
+    catch { return false; }
+  }
 }
 async function authorizeRequest(request: Pick<LLMRequest, 'authorize'>): Promise<void> {
   if (!request.authorize) return;
@@ -159,7 +165,16 @@ export class AnthropicLLM implements LLM {
     await authorizeRequest(request);
     // Hidden SDK retries cannot recheck current authority. Scoped requests use
     // no automatic retry; explicit web continuations pass through this fence.
-    return request.authorize || request.signal ? this.client.messages.create(body, { maxRetries: 0, ...(request.signal ? { signal: request.signal } : {}) }) : this.client.messages.create(body);
+    return measureStage('generation', async () => {
+      let returned = false;
+      try {
+      const response = await (request.authorize || request.signal ? this.client!.messages.create(body, { maxRetries: 0, ...(request.signal ? { signal: request.signal } : {}) }) : this.client!.messages.create(body));
+      returned = true;
+      captureUsage('anthropic', 'claude', () => ({ inputTokens: response.usage?.input_tokens, outputTokens: response.usage?.output_tokens,
+        cacheReadTokens: response.usage?.cache_read_input_tokens, cacheWriteTokens: response.usage?.cache_creation_input_tokens }));
+      return response;
+      } finally { if (!returned) unavailableUsage('anthropic', 'claude'); }
+    });
   }
 
   async complete(request: LLMRequest): Promise<string> {
@@ -176,8 +191,23 @@ export class AnthropicLLM implements LLM {
     await authorizeRequest(request);
     const body = { ...this.params(request), messages: anthropicTurns(request.messages) };
     const stream = request.authorize || request.signal ? this.client.messages.stream(body, { maxRetries: 0, ...(request.signal ? { signal: request.signal } : {}) }) : this.client.messages.stream(body);
-    for await (const event of stream) {
-      if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') yield event.delta.text;
+    const started = performance.now();
+    let completed = false;
+    let inputTokens: number | undefined, outputTokens: number | undefined, cacheReadTokens: number | null | undefined, cacheWriteTokens: number | null | undefined;
+    try {
+      for await (const event of stream) {
+        try {
+          if (event.type === 'message_start') { inputTokens = event.message?.usage?.input_tokens; outputTokens = event.message?.usage?.output_tokens;
+            cacheReadTokens = event.message?.usage?.cache_read_input_tokens; cacheWriteTokens = event.message?.usage?.cache_creation_input_tokens; }
+          if (event.type === 'message_delta' && event.usage?.output_tokens !== undefined) outputTokens = event.usage.output_tokens;
+        } catch { /* Optional measurement must not change content delivery. */ }
+        if (event.type === 'message_stop') completed = true;
+        if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') yield event.delta.text;
+      }
+    } finally {
+      // Streaming usage is cumulative, so emit one receipt rather than summing deltas.
+      observedUsage('anthropic', 'claude', { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens }, !completed);
+      recordStage('generation', completed ? 'succeeded' : 'unknown', performance.now() - started);
     }
   }
 
@@ -222,8 +252,17 @@ export class GeminiLLM implements LLM {
       generationConfig: { maxOutputTokens: maxTokens, temperature },
     });
     await authorizeRequest({ authorize });
-    const content = last.images?.length ? geminiParts(last) : last.content;
-    const result = await (signal ? chat.sendMessage(content, { signal }) : chat.sendMessage(content));
+    const result = await measureStage('generation', async () => {
+      let returned = false;
+      try {
+      const content = last.images?.length ? geminiParts(last) : last.content;
+      const result = await (signal ? chat.sendMessage(content, { signal }) : chat.sendMessage(content));
+      returned = true;
+      captureUsage('gemini', 'gemini', () => ({ inputTokens: result.response.usageMetadata?.promptTokenCount,
+        outputTokens: result.response.usageMetadata?.candidatesTokenCount, cacheReadTokens: result.response.usageMetadata?.cachedContentTokenCount }));
+      return result;
+      } finally { if (!returned) unavailableUsage('gemini', 'gemini'); }
+    });
     if (requireComplete && result.response.candidates?.some((candidate) => candidate.finishReason === 'MAX_TOKENS')) throw new Error('LLM completion truncated');
     return result.response.text().trim();
   }
