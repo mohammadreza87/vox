@@ -17,19 +17,26 @@ export class AdaptiveObserverService {
   constructor(readonly adaptive: AdaptiveService, private readonly options: ObserverServiceOptions = {}) {}
   private space(space: SpaceKind): void { if (space !== 'work' && space !== 'personal') throw new AdaptiveError(400, 'invalid_space'); }
   private allowed: ObserverAllowed = (d, space, agentId, now) => this.adaptive.isPurposeAllowed(d, space, PURPOSE, now, agentId);
-  private clean(d: AdaptiveDocument, now: number): void { if (sweepObserverDocument(d, now, this.allowed)) this.bump(d, now); }
+  private clean(d: AdaptiveDocument, now: number): void { if (sweepObserverDocument(d, now, this.allowed, this.adaptive.storeIdentity)) this.bump(d, now); }
   private bump(d: AdaptiveDocument, now: number): void { d.revision++; d.updatedAt = now; }
   authorize(telegramId: number, space: SpaceKind, agentId: string): Promise<string | null> {
     this.space(space);
+    if (this.adaptive.repository.storage.indexed) return this.adaptive.withRuntimeControls(telegramId, space, (d, now, storeIdentity) => {
+      const allowed = this.allowed(d, space, agentId, now);
+      const capability = this.adaptive.capabilityStatus(d, 'product_analytics', now);
+      const permission = d.permissions.find(p => p.id === `permission:${space}:${PURPOSE}`)!;
+      return { value: allowed ? observerPolicyReceipt(d, space, agentId, storeIdentity) : null, denied: !allowed,
+        ...(allowed ? { deadline: Math.min(d.binding!.expiresAt, permission.expiresAt, capability.validUntil ?? now) } : {}) };
+    });
     return this.adaptive.withAccountDocument(telegramId, (d, now) => {
-      this.clean(d, now); return this.allowed(d, space, agentId, now) ? observerPolicyReceipt(d, space, agentId) : null;
+      this.clean(d, now); return this.allowed(d, space, agentId, now) ? observerPolicyReceipt(d, space, agentId, this.adaptive.storeIdentity) : null;
     });
   }
   recordServer(telegramId: number, value: ServerObservationInput): Promise<{ recorded: boolean; duplicate: boolean; eventId?: string }> {
     const input = serverObservationInputSchema.parse(value);
     return this.adaptive.withAccountDocument(telegramId, (d, now) => {
       this.clean(d, now);
-      if (input.origin !== 'human' || !this.allowed(d, input.space, input.agentId, now) || input.policyReceipt !== observerPolicyReceipt(d, input.space, input.agentId)) return { recorded: false, duplicate: false };
+      if (input.origin !== 'human' || !this.allowed(d, input.space, input.agentId, now) || input.policyReceipt !== observerPolicyReceipt(d, input.space, input.agentId, this.adaptive.storeIdentity)) return { recorded: false, duplicate: false };
       return this.append(d, now, input, 'server', input.channel, input.policyReceipt);
     });
   }
