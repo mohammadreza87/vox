@@ -71,7 +71,7 @@ export function MemoriesScreen({ id }: { id: string }) {
                   <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
                     <p style={{ margin: 0, fontSize: 15, lineHeight: '21px' }}>{m.content}</p>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
-                      <span className={`vx-pill ${m.scope === 'private' ? 'lock' : 'volt'}`}>{m.scopeLabel}</span>
+                      <span className={`vx-pill ${m.scope === 'private' ? 'lock' : 'volt'}`} style={{ display: 'block', maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: '22px' }}>{m.scopeLabel}</span>
                       <span className="vx-small vx-3">{m.mine ? 'You' : m.from} · {when(m.at)}</span>
                     </div>
                   </div>
