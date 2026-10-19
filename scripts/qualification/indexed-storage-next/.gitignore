@@ -1,0 +1,6 @@
+# Synthetic build/install/run outputs; source and source-manifest.json are committed.
+/attempts/
+/node_modules/
+/npm-cache/
+/.next/
+/npm-debug.log*
