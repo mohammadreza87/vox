@@ -299,11 +299,23 @@ describe('spawn: draft, refine, look, avatars, voice, sandbox, publish', () => {
     const { agent } = await h.studio.draft(org.alice, {});
     await expectStudioError(h.studio.publish(org.bob, agent.id), 403);
     const { link, agent: published } = await h.studio.publish(org.alice, agent.id);
-    expect(link).toBe('https://t.me/newbot/VoxxBot/hoor_leyla_bot');
-    expect(link).toMatch(/_bot$/);
+    expect(link).toBe('https://t.me/newbot/VoxxBot/hoor_leyla_bot?name=Leyla');
+    expect(new URL(link).pathname).toMatch(/_bot$/);
     expect(published.status).toBe('awaiting_bot');
     // Re-opening the link is fine while waiting; the username is stable.
     expect((await h.studio.publish(org.alice, agent.id)).link).toBe(link);
+  });
+
+  it('prefills Telegram with a display name containing spaces, Unicode and query characters', async () => {
+    const name = 'لیلا & Co';
+    h.personaLLM.push(draftJson({ name }));
+    const { agent } = await h.studio.draft(org.alice, {});
+    const { link } = await h.studio.publish(org.alice, agent.id);
+    const target = new URL(link);
+    expect(target.origin).toBe('https://t.me');
+    expect(target.pathname).toMatch(/^\/newbot\/VoxxBot\/.+_bot$/);
+    expect(target.searchParams.get('name')).toBe(name);
+    expect([...target.searchParams.keys()]).toEqual(['name']);
   });
 
   it('publish needs the manager bot username (503) and refuses already-active agents', async () => {
