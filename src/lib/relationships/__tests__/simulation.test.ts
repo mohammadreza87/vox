@@ -87,7 +87,7 @@ describe('90-day relationship simulation scenario', () => {
       const storePath = join(root, 'relationship.json');
       const makeLoop = (store: FileRelationshipStore) => new RelationshipLoop({
         store, mode: 'live', now: () => new Date(now),
-        assessor: { async assess() { return { timeZone: 'UTC', followUp: { topic: 'test-topic', purpose: 'check in', dueAt: '2026-10-20T13:00:00.000Z' } }; } },
+        assessor: { async assess() { return { timeZone: 'UTC', followUp: { topic: 'test-topic', purpose: 'check in', timing: { kind: 'ongoing', evidenceQuote: 'I have a thing tomorrow.' }, dueAt: '2026-10-20T13:00:00.000Z' } }; } },
         decisions: { async choose() { return 'send'; } } satisfies DecisionProvider,
       });
       const firstLoop = makeLoop(new FileRelationshipStore(storePath));

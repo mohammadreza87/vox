@@ -8,6 +8,9 @@ describe('Decisions adapter', () => {
     const [url, init] = fetcher.mock.calls[0] as unknown as [string, RequestInit]; expect(url).toBe('https://api.openai.com/v1/decisions'); const data = JSON.parse(init.body as string); expect(data.model).toBe('gpt-6-luna'); expect(data.questions[0].type).toBe('choice'); expect(data.input.length).toBeLessThan(25000); expect(init.signal).toBeInstanceOf(AbortSignal);
   });
   it.each([{ answers: [{ type: 'refusal', name: 'outreach' }] }, { answers: [{ type: 'choice', name: 'outreach', choice: 'send', confidence: 0.3 }] }, { answers: [{ type: 'choice', name: 'outreach', choice: 'invented', confidence: 0.99 }] }])('fails quiet on refusal, uncertainty or unsupported action', async (data) => { expect(await new OpenAIDecisions('test', async () => Response.json(data)).choose(input)).toBe('stay_quiet'); });
+  it.each([{ choice: 'send', confidence: 0.63 }, { choice: 'defer', confidence: 0.51 }])('keeps moderate positive evidence available for bounded reconsideration: $choice', async (answer) => {
+    expect(await new OpenAIDecisions('test', async () => Response.json({ answers: [{ type: 'choice', name: 'outreach', ...answer }] })).choose(input)).toBe('defer');
+  });
   it('does not surface raw provider errors', async () => { await expect(new OpenAIDecisions('test', async () => new Response('sensitive provider error', { status: 429 })).choose(input)).rejects.toThrow('Decisions request failed (429)'); });
   it('bounds a fetch implementation that does not honor AbortSignal', async () => {
     await expect(new OpenAIDecisions('test', () => new Promise<Response>(() => undefined), 10).choose(input)).rejects.toThrow('timed out');

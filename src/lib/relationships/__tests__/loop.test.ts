@@ -7,7 +7,7 @@ import type { Assessment, DrainDeps, RelationshipKey } from '..';
 const key: RelationshipKey = { personaId: 'aria', chatKey: 'private-reza', audience: { kind: 'private', personId: 'reza' } };
 function harness(mode: 'off' | 'shadow' | 'live' = 'live', store = new InMemoryRelationshipStore()) {
   let now = new Date('2026-10-19T12:00:00Z');
-  const assess = vi.fn(async (): Promise<Assessment> => ({ timeZone: 'UTC', preferences: [{ key: 'style', value: 'concise' }], situations: [{ topic: 'boss', summary: 'Planning a difficult conversation', status: 'open' }], followUp: { topic: 'boss', purpose: 'Ask how the conversation went', dueAt: new Date(now.getTime() + 3600_000).toISOString() } }));
+  const assess = vi.fn(async ({ text }: { text: string }): Promise<Assessment> => ({ timeZone: 'UTC', preferences: [{ key: 'style', value: 'concise' }], situations: [{ topic: 'boss', summary: 'Planning a difficult conversation', status: 'open' }], followUp: { topic: 'boss', purpose: 'Ask how things are going', timing: { kind: 'ongoing', evidenceQuote: text }, dueAt: new Date(now.getTime() + 3600_000).toISOString() } }));
   const choose = vi.fn(async () => 'send' as const);
   const observations = new InMemoryObservationStore();
   const loop = new RelationshipLoop({ store, mode, assessor: { assess }, decisions: { choose }, observer: new SafeRelationshipObserver(observations, 'x'.repeat(32), () => now), now: () => now });
@@ -24,6 +24,26 @@ describe('relationship loop', () => {
   });
   it('keeps off provider-free and shadow free of personalization and job writes', async () => {
     for (const mode of ['off', 'shadow'] as const) { const h = harness(mode); expect((await h.turn()).context).toBe(''); h.advance(); await h.loop.drain(h.delivery); expect(h.send).not.toHaveBeenCalled(); expect((await h.loop.status(key)).revision).toBe(0); if (mode === 'off') expect(h.assess).not.toHaveBeenCalled(); }
+  });
+  it('preserves source timing across a day boundary and bounded context truncation', async () => {
+    const h = harness(); await h.turn(); h.advance(86400_000);
+    h.delivery.loadContext = async () => 'Long authorized history '.repeat(2000);
+    await h.loop.drain(h.delivery);
+    const decisionInput = h.choose.mock.calls[0] as unknown as [{ context: string; now: Date }];
+    expect(decisionInput[0].now.toISOString()).toBe('2026-10-20T12:00:00.000Z');
+    const pending = JSON.parse(decisionInput[0].context.split('\n')[0].replace('Pending purpose: ', ''));
+    expect(pending).toMatchObject({ sourceAt: '2026-10-19T12:00:00.000Z', dueAt: '2026-10-19T13:00:00.000Z', timeZone: 'UTC' });
+    expect(decisionInput[0].context).toContain('"updatedAt":"2026-10-19T12:00:00.000Z"');
+    expect(decisionInput[0].context.length).toBeLessThanOrEqual(24000);
+  });
+  it('bounds repeated model deferrals without sending or leaving an endless job', async () => {
+    const h = harness(); await h.turn(); h.choose.mockResolvedValue('defer' as 'send');
+    for (let attempt = 1; attempt <= h.loop.policy.maxAttempts; attempt++) {
+      h.advance(); const report = await h.loop.drain(h.delivery);
+      expect(report[attempt === h.loop.policy.maxAttempts ? 'closed' : 'deferred']).toBe(1);
+    }
+    h.advance(); expect((await h.loop.drain(h.delivery)).claimed).toBe(0);
+    expect(h.send).not.toHaveBeenCalled();
   });
   it('deduplicates events and separates people, personas and groups', async () => {
     const h = harness(); await h.turn(); expect((await h.turn()).duplicate).toBe(true); expect(h.assess).toHaveBeenCalledTimes(1);
@@ -62,7 +82,20 @@ describe('relationship loop', () => {
   });
   it('suppresses stale decisions when a new turn arrives during composition', async () => {
     const h = harness(); await h.turn(); h.advance(); h.delivery.compose = async () => { await h.turn('new', 'A new development'); return 'Stale follow-up'; };
-    const report = await h.loop.drain(h.delivery); expect(report.suppressed).toBe(1); expect(h.send).not.toHaveBeenCalled();
+    const report = await h.loop.drain(h.delivery); expect(report.suppressed).toBe(1); expect(h.send).not.toHaveBeenCalled(); expect(h.choose).not.toHaveBeenCalled();
+  });
+  it('reviews the identical complete message before delivering and retains a scoped feedback target', async () => {
+    const h = harness(); await h.turn(); h.advance(); await h.loop.drain(h.delivery);
+    expect(h.choose).toHaveBeenCalledWith(expect.objectContaining({ candidate: 'How did today go?', context: expect.stringContaining('Current time: 2026-10-19T13:00:00.000Z') }));
+    const state = await h.loop.status(key);
+    expect(state.lastOutreach).toMatchObject({ intentionId: state.intentions[0].id, messageId: 'telegram-123', topic: 'boss', sourceIds: ['one'] });
+    expect(JSON.stringify(state.lastOutreach)).not.toContain('How did today go?');
+  });
+  it('never forwards a composed draft after forgetting its grounding', async () => {
+    const h = harness(); await h.turn(); h.advance();
+    h.delivery.compose = async () => { await h.loop.invalidatePersona(key.personaId, { reason: 'revoked' }); return 'Old private fact'; };
+    await h.loop.drain(h.delivery);
+    expect(h.choose).not.toHaveBeenCalled(); expect(h.send).not.toHaveBeenCalled();
   });
   it('suppresses a revoked recipient immediately before send', async () => {
     const h = harness(); await h.turn(); h.advance(); h.delivery.authorize = vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false);
@@ -73,7 +106,7 @@ describe('relationship loop', () => {
   });
   it('serializes different due topics across workers while transport is in progress', async () => {
     const h = harness(); await h.turn();
-    h.assess.mockResolvedValueOnce({ timeZone: 'UTC', followUp: { topic: 'launch', purpose: 'Ask about launch', dueAt: '2026-10-19T13:00:00Z' } }); await h.turn('two', 'Launch is also happening');
+    h.assess.mockResolvedValueOnce({ timeZone: 'UTC', followUp: { topic: 'launch', purpose: 'Ask about launch', timing: { kind: 'ongoing', evidenceQuote: 'Launch is also happening' }, dueAt: '2026-10-19T13:00:00Z' } }); await h.turn('two', 'Launch is also happening');
     h.advance(); let release!: (value: string) => void;
     h.send.mockImplementationOnce(() => new Promise<string>((done) => { release = done; }));
     const first = h.loop.drain(h.delivery); await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(1));

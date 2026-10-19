@@ -114,14 +114,16 @@ async function main() {
       mode: 'deterministic_replay',
       evidenceKind: fake ? 'simulated_core_replay' : 'synthetic_real_provider_core_replay',
       virtualDays: scenario.virtualDays,
-      processedEvents: evidence.length,
+      timelineEntries: evidence.length,
+      executedCoreEvents: evidence.filter((event) => 'result' in event).length,
+      annotationsNotExecuted: evidence.filter((event) => !('result' in event)).map(({ index, kind }) => ({ index, kind })),
       events: evidence,
       syntheticDeliveryAttempts: sent,
       note: fake ? 'Fake assessor and selectable deterministic decisions; this is not model-quality or live-delivery evidence.' : 'Real model providers with fictional inputs and fake local transport; this is not real-user or live-delivery evidence.',
     };
     const reportPath = join(root, 'report.json');
     writeFileSync(reportPath, JSON.stringify(report, null, 2), { mode: 0o600 });
-    process.stdout.write(`${JSON.stringify({ ok: true, reportPath, processedEvents: evidence.length, syntheticDeliveryAttempts: sent.length })}\n`);
+    process.stdout.write(`${JSON.stringify({ ok: true, reportPath, timelineEntries: evidence.length, executedCoreEvents: evidence.filter((event) => 'result' in event).length, syntheticDeliveryAttempts: sent.length })}\n`);
     return;
   }
   if (mode !== 'interactive') throw new Error('mode must be interactive or replay');
@@ -132,4 +134,3 @@ main().catch((error) => {
   process.stderr.write(`${error instanceof Error ? error.message : 'simulation failed'}\n`);
   process.exitCode = 1;
 });
-

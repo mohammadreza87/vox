@@ -1,6 +1,7 @@
 import { Blob as NodeBlob } from 'node:buffer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { signInitData } from '../auth';
+import { InMemoryRelationshipStore, RelationshipLoop } from '../../relationships';
 import { handleStudioRequest, MAX_STUDIO_JSON_BYTES, MAX_STUDIO_UPLOAD_BYTES, type RouterOptions } from '../http';
 import { StudioRateLimiter } from '../ratelimit';
 import { draftJson, hire, ID, makeStudio, seedOrg, type Harness } from './helpers';
@@ -375,5 +376,31 @@ describe('agents', () => {
     expect((await call(req('GET', 'nothing'))).status).toBe(404);
     expect((await call(req('POST', 'agents/x/teleport', { body: {} }))).status).toBe(404);
     expect((await call(req('DELETE', 'members'))).status).toBe(404);
+  });
+});
+
+
+describe('authenticated relationship settings', () => {
+  it('binds settings to the signed actor and persists controls through the real router/service', async () => {
+    const hired = await hire(h, org.alice);
+    const loop = new RelationshipLoop({ store: new InMemoryRelationshipStore(), mode: 'live', now: () => h.clock.now, assessor: { assess: async () => ({}) } });
+    h.studio.deps.relationships = loop;
+    h.studio.deps.relationshipConfig = { mode: 'live', agentIds: [hired.agent.id], personIds: [`tg-${ID.alice}`] };
+    const path = `agents/${hired.agent.id}/relationship`;
+    expect((await call(req('GET', path, { as: null }))).status).toBe(401);
+    // Bob can use this fixture agent, but is outside the relationship pilot.
+    expect((await call(req('PUT', path, { as: ID.bob, body: { action: 'stop' } }))).status).toBe(503);
+    const bad = await call(req('PUT', path, { body: { action: 'configure', timeZone: 'not-a-zone' } }));
+    expect(bad.status).toBe(400);
+    const paused = await call(req('PUT', path, { body: { action: 'pause', personId: `tg-${ID.bob}` } }));
+    expect(paused.status).toBe(200);
+    expect(paused.json.relationship.disabled).toBe(false);
+    expect(Date.parse(paused.json.relationship.pausedUntil)).toBeGreaterThan(h.clock.now.getTime());
+    const alice = { personaId: hired.agent.id, chatKey: `private-tg-${ID.alice}`, audience: { kind: 'private' as const, personId: `tg-${ID.alice}` } };
+    expect((await loop.status(alice)).pausedUntil).toBe(paused.json.relationship.pausedUntil);
+    const bob = { ...alice, chatKey: `private-tg-${ID.bob}`, audience: { kind: 'private' as const, personId: `tg-${ID.bob}` } };
+    expect((await loop.status(bob)).pausedUntil).toBeUndefined();
+    expect((await call(req('GET', 'relationship-observations'))).status).toBe(403);
+    expect((await call(req('PUT', path, { body: { action: 'resume' } }))).json.relationship.pausedUntil).toBeUndefined();
   });
 });

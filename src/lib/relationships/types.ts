@@ -1,17 +1,34 @@
+import type { GroundedTiming, TimingProposal } from './temporal';
 /** Relationship data is scoped conversational state, never administrative configuration. */
 export type RelationshipMode = 'off' | 'shadow' | 'live';
 export type Audience = { kind: 'private'; personId: string } | { kind: 'group'; groupId: string };
 export interface RelationshipKey { personaId: string; chatKey: string; audience: Audience }
+/** Supplied only from the latest audience-authorized assistant turn, never persisted here. */
+export interface PreviousAssistant { text: string; at: Date; intentionId?: string }
 export interface TurnInput extends RelationshipKey {
   eventId: string; speakerId: string; text: string; source: 'telegram' | 'call'; at?: Date; memoryIds?: string[];
+  previousAssistant?: PreviousAssistant;
+  /** Relationship epoch captured before reading the authorized assistant history. */
+  contextEpoch?: number;
 }
 export interface Preference { key: string; value: string; sourceId: string; sourceIds?: string[]; updatedAt: string }
-export interface Situation { topic: string; summary: string; status: 'open' | 'closed'; sourceIds: string[]; updatedAt: string }
+export interface Situation { topic: string; summary: string; status: 'open' | 'closed'; sourceIds: string[]; updatedAt: string; timing?: GroundedTiming }
 export type IntentionStatus = 'pending' | 'evaluating' | 'sending' | 'sent' | 'closed' | 'cancelled' | 'delivery_unknown';
 export interface Intention {
   id: string; key: RelationshipKey; topic: string; purpose: string; sourceIds: string[];
-  dueAt: string; expiresAt: string; status: IntentionStatus; revision: number;
+  sourceAt?: string; dueAt: string; expiresAt: string; status: IntentionStatus; revision: number;
+  timing?: GroundedTiming;
   leaseOwner?: string; leaseUntil?: string; attempts: number; messageId?: string; reason?: string;
+}
+export type FeedbackOutcome = 'helpful' | 'unwanted' | 'correction' | 'neutral';
+export type FeedbackScope = 'message' | 'topic' | 'global';
+/** A short-lived delivery link, not a copy of the message or its generating prompt. */
+export interface OutreachFeedbackTarget {
+  intentionId: string; messageId?: string; topic: string; sourceIds: string[]; sentAt: string;
+}
+export interface RelationshipFeedback {
+  id: string; sourceId: string; sourceIds: string[]; intentionId: string; messageId?: string;
+  at: string; outcome: FeedbackOutcome; scope: FeedbackScope;
 }
 export interface RelationshipState {
   key: RelationshipKey; epoch: number; revision: number; disabled: boolean; pausedUntil?: string;
@@ -19,19 +36,23 @@ export interface RelationshipState {
   lastOutreachAt?: string; unansweredCount: number; preferences: Preference[];
   lastTelegramMessageId?: number;
   situations: Situation[]; intentions: Intention[]; eventIds: string[]; forgottenSourceIds: string[];
+  lastOutreach?: OutreachFeedbackTarget; feedback?: RelationshipFeedback[];
 }
 export interface Assessment {
   /** Direct global contact boundary; model output can never resume contact. */
   control?: { action: 'stop' | 'pause'; until?: string };
   preferences?: Array<{ key: string; value: string }>;
-  situations?: Array<{ topic: string; summary: string; status: 'open' | 'closed' }>;
-  followUp?: { topic: string; purpose: string; dueAt: string; expiresAt?: string };
+  situations?: Array<{ topic: string; summary: string; status: 'open' | 'closed'; timing?: TimingProposal }>;
+  followUp?: { topic: string; purpose: string; dueAt: string; expiresAt?: string; timing?: TimingProposal };
   /** Only explicit current-user statements may produce these fields. */
   timeZone?: string; quietHours?: { start: number; end: number };
 }
-export interface Assessor { assess(input: { key: RelationshipKey; text: string; context: string; now: Date }): Promise<Assessment> }
+export interface Assessor { assess(input: { key: RelationshipKey; text: string; context: string; now: Date; sourceAt?: Date; timeZone?: string; previousAssistant?: PreviousAssistant }): Promise<Assessment> }
+export interface FeedbackProvider {
+  classify(input: { text: string; previousAssistant: string; topic: string; now: Date }): Promise<{ outcome: FeedbackOutcome; scope: FeedbackScope }>;
+}
 export type DecisionAction = 'send' | 'defer' | 'close' | 'stay_quiet';
-export interface DecisionProvider { choose(input: { context: string; phase: 'observe' | 'reconsider'; now: Date }): Promise<DecisionAction> }
+export interface DecisionProvider { choose(input: { context: string; candidate?: string; phase: 'observe' | 'reconsider'; now: Date }): Promise<DecisionAction> }
 export interface RelationshipPolicy {
   minimumDelayMs: number; maximumDelayMs: number; expiryMs: number; cooldownMs: number;
   retryMs: number; leaseMs: number; maxAttempts: number; allowGroupOutreach: boolean;

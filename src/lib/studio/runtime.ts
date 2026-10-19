@@ -37,7 +37,7 @@ import { FirestoreStudioStore } from './firestore-store';
 import { FirestoreStudioRateLimiter } from './firestore-ratelimit';
 import { Studio, type StudioDeps } from './service';
 import { StudioStore } from './store';
-import { RelationshipLoop, FileRelationshipStore, FirestoreRelationshipStore, FileObservationStore, FirestoreObservationStore, SafeRelationshipObserver, OpenAIDecisions } from '../relationships';
+import { RelationshipLoop, FileRelationshipStore, FirestoreRelationshipStore, FileObservationStore, FirestoreObservationStore, SafeRelationshipObserver, OpenAIFollowUpReview, OpenAIRelationshipFeedback } from '../relationships';
 import { StudioRelationshipAssessor } from './relationship-assessor';
 import { relationshipConfig } from './relationship-config';
 
@@ -197,7 +197,8 @@ async function create(): Promise<Studio> {
       store: storage.relationshipStore!,
       mode: config.relationships.mode,
       assessor: new StudioRelationshipAssessor(new AnthropicLLM(env.ANTHROPIC_API_KEY!, env.STUDIO_VOICE_MODEL || 'claude-haiku-5-5')),
-      decisions: env.OPENAI_API_KEY ? new OpenAIDecisions(env.OPENAI_API_KEY) : undefined,
+      decisions: env.OPENAI_API_KEY ? new OpenAIFollowUpReview(env.OPENAI_API_KEY) : undefined,
+      feedback: env.OPENAI_API_KEY ? new OpenAIRelationshipFeedback(env.OPENAI_API_KEY) : undefined,
       observer: new SafeRelationshipObserver(storage.observations!, env.STUDIO_SECRET!),
     }),
   });

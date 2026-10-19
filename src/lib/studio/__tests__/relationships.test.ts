@@ -14,7 +14,7 @@ async function setup(mode: 'off' | 'shadow' | 'live' = 'live') {
   const observations = new InMemoryObservationStore();
   const assess = vi.fn(async ({ text }: { text: string }): Promise<Assessment> => /resolved/i.test(text)
     ? { situations: [{ topic: 'boss', summary: 'Resolved by the user.', status: 'closed' }] }
-    : { preferences: [{ key: 'detail', value: 'brief and gentle' }], situations: [{ topic: 'boss', summary: 'A difficult discussion with the boss.', status: 'open' }], followUp: { topic: 'boss', purpose: 'Check how the conversation went.', dueAt: new Date(h.clock.now.getTime() + 86400_000).toISOString() } });
+    : { preferences: [{ key: 'detail', value: 'brief and gentle' }], situations: [{ topic: 'boss', summary: 'A difficult discussion with the boss.', status: 'open' }], followUp: { topic: 'boss', purpose: 'Check how things are going.', timing: { kind: 'ongoing', evidenceQuote: text }, dueAt: new Date(h.clock.now.getTime() + 86400_000).toISOString() } });
   const loop = new RelationshipLoop({ store, mode, assessor: { assess }, decisions: { choose: async () => 'send' }, observer: new SafeRelationshipObserver(observations, SECRET, () => h.clock.now), now: () => h.clock.now });
   h.studio.deps.relationships = loop;
   h.studio.deps.relationshipStore = store;
@@ -30,6 +30,16 @@ async function setup(mode: 'off' | 'shadow' | 'live' = 'live') {
 }
 
 describe('relationship vertical slice', () => {
+  it('preserves a queued Telegram message source date across midnight in assessment and history', async () => {
+    const x = await setup();
+    x.h.clock.now = new Date('2026-10-20T00:10:00Z');
+    await handleAgentUpdate(x.h.studio, x.hired.agent.id, { update_id: 99001, message: { message_id: 99002, date: Date.parse('2026-10-19T23:50:00Z') / 1000, chat: { id: ID.alice, type: 'private' }, from: { id: ID.alice, is_bot: false, first_name: 'Synthetic' }, text: 'My interview is tomorrow.' } });
+    expect(x.assess).toHaveBeenCalledWith(expect.objectContaining({ now: new Date('2026-10-20T00:10:00Z'), sourceAt: new Date('2026-10-19T23:50:00Z'), timeZone: 'UTC' }));
+    expect((await x.loop.status(x.key)).intentions[0].sourceAt).toBe('2026-10-19T23:50:00.000Z');
+    const { gateway } = await x.h.studio.gateway();
+    const context = await gateway.proactiveContext(x.hired.agent.id, `tg-${ID.alice}`, 'Interview check-in');
+    expect(context).toContain('"text":"My interview is tomorrow.","at":"2026-10-19T23:50:00.000Z"');
+  });
   it('carries a Telegram preference into voice and sends one fresh private check-in', async () => {
     const x = await setup();
     await x.turn('My boss criticized my presentation. Keep replies brief.');
@@ -75,6 +85,19 @@ describe('relationship vertical slice', () => {
     });
     expect(await x.h.studio.drainRelationships()).toMatchObject({ sent: 0 });
     expect(x.hired.bot().sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('defers a truncated provider completion without sending any partial text', async () => {
+    const x = await setup(); await x.turn('My interview is tomorrow.'); x.h.advanceDays(1);
+    x.hired.bot().sendMessage.mockClear();
+    const original = x.h.chatLLM.complete.bind(x.h.chatLLM);
+    vi.spyOn(x.h.chatLLM, 'complete').mockImplementation(async (request) => {
+      if (request.requireComplete) throw new Error('LLM completion truncated');
+      return original(request);
+    });
+    expect(await x.h.studio.drainRelationships()).toMatchObject({ sent: 0, failed: 1, deferred: 1 });
+    expect(x.hired.bot().sendMessage).not.toHaveBeenCalled();
+    expect((await x.loop.status(x.key)).intentions[0].status).toBe('pending');
   });
 
   it('never shares private personalization with another user or exports its content to admins', async () => {

@@ -44,4 +44,3 @@ export async function replayScenario(scenario: RelationshipScenario, port: Relat
   }
   return evidence;
 }
-

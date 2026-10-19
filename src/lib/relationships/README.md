@@ -26,17 +26,23 @@ authorization, audience-filtered context, composition and Telegram transport.
   survive invalidation. Clearing relationship derivatives does not delete the
   independent memory/history stores; Studio must invalidate those as well.
 - `drain`: claims at most one job per selected relationship, reloads current
-  authorization/context, reconsiders with Decisions, composes only after send is
-  selected, then rechecks authorization and a revision/lease fence. Close and
-  stay_quiet are successful outcomes. Missing Decisions fails quiet.
+  authorization/context, applies deterministic gates, composes a fresh complete
+  draft, then reviews that exact draft with `OpenAIFollowUpReview`. Before sending
+  the same text it rechecks authorization and epoch/revision/lease fences. Missing,
+  malformed or refused review fails quiet.
 
 ## Modes and policy
 
-`off` avoids assessment/decision calls and automated jobs. `shadow` evaluates an
-incoming turn and an optional proposed intention but writes no relationship
-working data/jobs and returns no personalization context. It does not simulate a
-future scheduled delivery. `live` enables working state and due-job execution;
+`off` avoids assessment/decision calls and automated jobs. `shadow` assesses the supplied incoming turn only. It writes no relationship
+working data/jobs, changes no memory, shapes no foreground reply, and performs no
+complete fresh-draft review. It does not simulate a future scheduled delivery. `live` enables working state and due-job execution;
 Studio's allowlists and fresh authorization remain mandatory.
+
+The runtime composes a fresh complete draft with at most one question after deterministic gates, then asks `OpenAIFollowUpReview` two independent predicates: meaningful continuity ≥0.80 and observable content violation ≤0.10. It sends that exact draft only after fresh authorization, epoch/revision and transport fences. The older four-way `OpenAIDecisions` choice evaluator is retained as historical evaluation only, not current runtime.
+
+Temporal grounding requires a literal quote from the current source, caller-attached source ID, source time and timezone. Model-derived ISO date extraction is not independent date proof. `after_event` requires a known end; known future starts are preparatory; ongoing events do not assume completion. Reschedules refresh the window and preserve the old kind unless the purpose changes. Unknown timing fails quiet.
+
+Feedback classification is limited to the same private audience and the latest assistant exact intention marker plus matching epoch within seven days. Explicit helpful/unwanted/correction/neutral labels are eligible; malformed, refused or low-confidence classifications create no observation. Politeness, replies and silence do not imply success. Classification does not train models or change control; assessor preferences/corrections affect subsequent context. Receipts are bounded to 24 and 30 days with source fences for forget; last-target linkage expires after seven days.
 
 The default policy delays reconsideration by at least one hour, limits scheduling
 to thirty days ahead, expires an intention seven days after its due time, respects
@@ -102,12 +108,7 @@ on append. Firestore writes `expiresAt`; production must enable TTL for that fie
 Its read query independently enforces the thirty-day window. Detailed observation
 records are operational samples, not complete totals or a training corpus.
 
-`OpenAIDecisions` uses the REST choice contract at `/v1/decisions`, Luna, a six-second
-abort timeout, a bounded input and a 64 KiB actual-response limit. Refusal, low
-confidence and unsupported choices resolve to stay_quiet. SDK/model availability,
-account access, provider retention and production cost still require live
-qualification. Structured extraction/composition are injected adapters, separate
-from the Decisions choice endpoint.
+`OpenAIDecisions` is a historical four-way evaluator and is not on the current follow-up runtime path. `OpenAIFollowUpReview` reviews the exact freshly composed candidate using two independent typed predicates. Provider/account access and quality still require live qualification. Structured extraction/composition remain separate adapters.
 
 ## Verification boundary
 

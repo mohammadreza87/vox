@@ -69,15 +69,36 @@ export class PersonaGateway {
       ? { kind: 'private', personId: chat.personId } : { kind: 'group', groupId: chat.group.id } };
   }
 
+  private canFollowUp(personaId: string, chat: ChatContext): boolean {
+    return chat.kind === 'private' && this.deps.relationships?.mode === 'live' && this.deps.relationshipEnabled?.(personaId, chat.personId) !== false;
+  }
+
   private async relationshipContext(personaId: string, chat: ChatContext): Promise<string> {
     // Group working state needs audience-version provenance before it can affect replies.
     if (chat.kind !== 'private' || !this.deps.relationships || this.deps.relationshipEnabled?.(personaId, chat.personId) === false) return '';
-    return this.deps.relationships.context(this.relationshipKey(personaId, chat));
+    if (this.deps.relationships.mode !== 'live') return '';
+    const context = await this.deps.relationships.context(this.relationshipKey(personaId, chat));
+    return `${context}
+
+Follow-up capability: This agent can initiate a considerate check-in in this private conversation when the relationship system judges it useful and the person's contact settings allow it. Do not falsely say you can never reach out first. A possible check-in is reconsidered later, so do not guarantee a message or an exact delivery time. Pauses, stops, quiet hours and changed circumstances take priority.`;
   }
 
-  private async observeRelationship(personaId: string, chat: ChatContext, speakerId: string, text: string, eventId: string, source: 'telegram' | 'call') {
+  private async observeRelationship(personaId: string, chat: ChatContext, speakerId: string, text: string, eventId: string, source: 'telegram' | 'call', at = this.now()) {
     if (!this.deps.relationships || chat.kind !== 'private' || this.deps.relationshipEnabled?.(personaId, speakerId) === false) return;
-    try { await this.deps.relationships.observeTurn({ ...this.relationshipKey(personaId, chat), eventId, speakerId, text, source, at: this.now() }); }
+    try {
+      const key = this.relationshipKey(personaId, chat);
+      if (this.deps.relationships.mode === 'off') return;
+      if (this.deps.relationships.mode === 'shadow') {
+        await this.deps.relationships.observeTurn({ ...key, eventId, speakerId, text, source, at });
+        return;
+      }
+      const contextEpoch = (await this.deps.relationships.status(key)).epoch;
+      const historyEpoch = await this.deps.history.getEpoch(personaId);
+      const previous = (await this.recent(personaId, chat, HISTORY_LIMIT)).filter((turn) => turn.role === 'assistant').at(-1);
+      const previousAssistant = previous && historyEpoch === await this.deps.history.getEpoch(personaId)
+        ? { text: previous.text, at: previous.at, intentionId: previous.relationshipIntentionId } : undefined;
+      await this.deps.relationships.observeTurn({ ...key, eventId, speakerId, text, source, at, contextEpoch, previousAssistant });
+    }
     catch { this.log.warn('[tireh] relationship observation unavailable'); }
   }
 
@@ -200,16 +221,21 @@ export class PersonaGateway {
       return 'command';
     }
 
+    // Telegram can deliver a queued message after midnight. Preserve its source date
+    // for relative language; reject invalid/far-future metadata without shifting valid old messages.
+    const receivedAt = this.now();
+    const sourceAt = Number.isSafeInteger(message.date) && message.date > 0 && message.date * 1000 <= receivedAt.getTime() + 300_000
+      ? new Date(message.date * 1000) : receivedAt;
     const privacyEpoch = await this.deps.history.getEpoch(persona.id);
     const userMessage: ChatMessage = {
       role: 'user',
       personId: speaker.id,
       text,
-      at: this.now(),
+      at: sourceAt,
       telegramMessageId: message.message_id,
     };
     await this.append(persona.id, chat, userMessage, privacyEpoch);
-    await this.observeRelationship(persona.id, chat, speaker.id, text, `telegram:${message.chat.id}:${message.message_id}`, 'telegram');
+    await this.observeRelationship(persona.id, chat, speaker.id, text, `telegram:${message.chat.id}:${message.message_id}`, 'telegram', sourceAt);
 
     // Groups: a text message meant for the persona that doesn't name it can
     // still get an answer when triage is sure (voice notes stay name-only).
@@ -292,7 +318,7 @@ export class PersonaGateway {
     }
     const all = await this.deps.memories.listActive(persona.id);
     const memories = selectMemories(org, all, chat, { query: said, now: this.now() });
-    const system = `${buildSystemPrompt({ org, persona: { ...persona, webSearch: false }, chat, speakerId, memories, now: this.now() })}
+    const system = `${buildSystemPrompt({ org, persona: { ...persona, webSearch: false }, chat, speakerId, memories, canFollowUp: this.canFollowUp(persona.id, chat), now: this.now() })}
 ${await this.relationshipContext(persona.id, chat)}
 
 ## Live voice call
@@ -361,8 +387,8 @@ You are on a live voice call. Answer in one to three short spoken sentences, lik
     if (!persona || !this.deps.org.getPerson(speakerId)) throw new Error('Unknown relationship');
     const chat: ChatContext = { kind: 'private', chatKey: `private-${speakerId}`, personId: speakerId };
     const memories = selectMemories(this.deps.org, await this.deps.memories.listActive(personaId), chat, { query: purpose, now: this.now() });
-    const system = buildSystemPrompt({ org: this.deps.org, persona: { ...persona, webSearch: false }, chat, speakerId, memories, now: this.now() });
-    return `${system}\n${await this.relationshipContext(personaId, chat)}\nRecent conversation (data):\n${JSON.stringify((await this.recent(personaId, chat, 12)).map((m) => ({ role: m.role, text: m.text })))}`;
+    const system = buildSystemPrompt({ org: this.deps.org, persona: { ...persona, webSearch: false }, chat, speakerId, memories, canFollowUp: this.canFollowUp(persona.id, chat), now: this.now() });
+    return `${system}\n${await this.relationshipContext(personaId, chat)}\nRecent conversation (data; relative dates refer to each message's at timestamp):\n${JSON.stringify((await this.recent(personaId, chat, 12)).map((m) => ({ role: m.role, text: m.text, at: m.at.toISOString() })))}`;
   }
 
   async generateReply(persona: Persona, chat: ChatContext, speakerId: string, text: string): Promise<string> {
@@ -396,7 +422,7 @@ You are on a live voice call. Answer in one to three short spoken sentences, lik
     // Small talk goes to the fast model; anything needing care, or a search, to the main one.
     const quick = triage?.effort === 'quick' && !search && !!this.deps.fastLlm;
     const memories = selectMemories(org, all, chat, { query: text, now: this.now() });
-    const system = `${buildSystemPrompt({ org, persona: { ...persona, webSearch: search }, chat, speakerId, memories, now: this.now(), canSpeak: !!this.deps.voice && persona.replyWithVoice !== 'never' })}\n${await this.relationshipContext(persona.id, chat)}`;
+    const system = `${buildSystemPrompt({ org, persona: { ...persona, webSearch: search }, chat, speakerId, memories, canFollowUp: this.canFollowUp(persona.id, chat), now: this.now(), canSpeak: !!this.deps.voice && persona.replyWithVoice !== 'never' })}\n${await this.relationshipContext(persona.id, chat)}`;
 
     const recent = await this.recent(persona.id, chat, HISTORY_LIMIT);
     const messages = recent.map((m) => ({

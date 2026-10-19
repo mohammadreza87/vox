@@ -23,7 +23,8 @@
     "studio:build": "node scripts/studio-build.mjs",
     "studio:production": "node scripts/studio-production.mjs",
     "test:relationships": "vitest run src/lib/relationships src/lib/studio/__tests__/relationships.test.ts src/lib/tireh/__tests__/memory-privacy.test.ts src/app/api/studio/relationships/drain/route.test.ts src/app/studio/_components/RelationshipPanel.test.tsx",
-    "simulate:relationships": "tsx scripts/relationship-simulation.ts"
+    "simulate:relationships": "tsx scripts/relationship-simulation.ts",
+    "e2e:relationships": "playwright test --config=playwright.relationships.config.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.71.0",

@@ -169,6 +169,8 @@ export interface ChatMessage {
   text: string;
   at: Date;
   telegramMessageId?: number;
+  /** Internal correlation for feedback on a delivered follow-up; never model authority. */
+  relationshipIntentionId?: string;
   /** Audience allowed to reuse this turn; required for group history. */
   audiencePersonIds?: string[];
   privacyEpoch?: number;

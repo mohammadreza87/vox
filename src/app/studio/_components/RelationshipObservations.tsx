@@ -7,8 +7,9 @@ const labels: Record<string, string> = {
   turn: 'Interactions observed', planned: 'Situations to revisit', decision: 'Decisions made', sent: 'Check-ins delivered',
   deferred: 'Waiting for a better time', closed: 'Topics closed', suppressed: 'Contact avoided', stale: 'Outdated actions avoided',
   assessment_failed: 'Context assessments unavailable', delivery_unknown: 'Delivery unconfirmed', duplicate: 'Duplicate events avoided',
-  control: 'Preference changes', invalidated: 'Context cleared',
+  control: 'Preference changes', invalidated: 'Context cleared', feedback: 'Feedback observations',
 };
+const feedbackLabels: Record<string, string> = { helpful: 'Helpful check-ins', unwanted: 'Unwanted check-ins', correction: 'Corrections', neutral: 'Replies without explicit feedback' };
 
 /** Bounded content-free operational view; no administrator conversation feed. */
 export function RelationshipObservations() {
@@ -36,6 +37,12 @@ export function RelationshipObservations() {
         <dl style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: '8px 16px', margin: 0 }}>
           {Object.entries(value.counts).map(([key, count]) => <div key={key} style={{ display: 'contents' }}><dt className="vx-small vx-2">{labels[key] ?? 'Other activity'}</dt><dd style={{ margin: 0, fontVariantNumeric: 'tabular-nums' }}>{count}</dd></div>)}
         </dl>
+        {!!Object.keys(value.feedbackOutcomes ?? {}).length && <>
+          <p className="vx-small vx-2" style={{ margin: 0 }}>Detected feedback on delivered check-ins. These classifications can be mistaken; a reply alone does not count as helpful.</p>
+          <dl style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: '8px 16px', margin: 0 }}>
+            {Object.entries(value.feedbackOutcomes ?? {}).map(([key, count]) => <div key={key} style={{ display: 'contents' }}><dt className="vx-small vx-2">{feedbackLabels[key] ?? 'Other feedback'}</dt><dd style={{ margin: 0, fontVariantNumeric: 'tabular-nums' }}>{count}</dd></div>)}
+          </dl>
+        </>}
         <p className="vx-small vx-3" style={{ margin: 0 }}>{value.sampledEvents} recent events{value.windowEnd ? ` · Latest ${new Date(value.windowEnd).toLocaleString()}` : ''}. Up to 500 events are shown; these are not all-time totals.</p>
       </>}
     </>}

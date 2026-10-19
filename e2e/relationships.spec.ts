@@ -56,7 +56,7 @@ async function installStudioFixtures(page: Page) {
       result = { relationship: relationshipState };
     }
     else if (path === 'members') result = { people: members, agentAdmins: [] };
-    else if (path === 'relationship-observations') result = { mode: 'live', sampledEvents: 3, counts: { turn: 2, sent: 1 }, windowStart: '2026-10-19T07:00:00.000Z', windowEnd: '2026-10-19T09:00:00.000Z', scope: 'Counts only; no conversation content.' };
+    else if (path === 'relationship-observations') result = { mode: 'live', sampledEvents: 4, counts: { turn: 2, sent: 1, feedback: 1 }, feedbackOutcomes: { helpful: 1 }, windowStart: '2026-10-19T07:00:00.000Z', windowEnd: '2026-10-19T09:00:00.000Z', scope: 'Counts only; no conversation content.' };
     else result = { error: `Unhandled test fixture route: ${method} ${path}` };
     await route.fulfill({ status: path.includes('unhandled') ? 404 : 200, contentType: 'application/json', body: JSON.stringify(result) });
   });
@@ -107,6 +107,7 @@ test('relationship settings and memory sharing stay clear on desktop and mobile'
   await expect(page.getByRole('heading', { name: 'Conversation activity' })).toBeVisible();
   await expect(page.getByText('Interactions observed')).toBeVisible();
   await expect(page.getByText('Check-ins delivered')).toBeVisible();
+  await expect(page.getByText('Helpful check-ins', { exact: true })).toBeVisible();
   await expect(page.getByText(/Personal messages and memories stay private/)).toBeVisible();
   await expect(page.getByText(/Likes a concise design review/)).not.toBeVisible();
 });

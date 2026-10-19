@@ -6,6 +6,18 @@ import { loadRelationshipScenario } from '../simulation/scenario';
 import { SyntheticGatewaySession } from '../simulation/gateway-session';
 
 describe('synthetic PersonaGateway session', () => {
+  it('grounds yesterday\'s relative dates in the original message time during proactive reconsideration', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'vox-gateway-sim-time-'));
+    try {
+      let now = new Date('2026-10-20T12:00:00.000Z');
+      const session = new SyntheticGatewaySession(root, loadRelationshipScenario(), false, {}, () => now);
+      await session.execute({ op: 'turn', personId: 'asha', audience: { kind: 'private', personId: 'asha' }, text: 'My interview is tomorrow.' });
+      now = new Date('2026-10-21T15:00:00.000Z');
+      const context = await session.gateway.proactiveContext('tireh', 'asha', 'Interview check-in');
+      expect(context).toContain('"text":"My interview is tomorrow.","at":"2026-10-20T12:00:00.000Z"');
+      expect(context).toContain('relative dates refer to each message');
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
   it('routes natural replies through PersonaGateway and enforces share, revoke, and guest audience boundaries', async () => {
     const root = mkdtempSync(join(tmpdir(), 'vox-gateway-sim-'));
     try {

@@ -6,3 +6,7 @@ export * from './observer';
 export * from './policy';
 export * from './loop';
 export * from './decisions';
+export * from './compose';
+export * from './feedback';
+export * from './follow-up-review';
+export * from './temporal';

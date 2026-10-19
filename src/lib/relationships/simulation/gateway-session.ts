@@ -1,6 +1,6 @@
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { FileObservationStore, FileRelationshipStore, RelationshipLoop, SafeRelationshipObserver } from '..';
+import { composeFollowUp, FileObservationStore, FileRelationshipStore, OpenAIRelationshipFeedback, RelationshipLoop, SafeRelationshipObserver } from '..';
 import { AnthropicLLM, type LLM, type LLMRequest } from '../../tireh/llm';
 import { PersonaGateway } from '../../tireh/gateway';
 import { parseOrgConfig } from '../../tireh/org/config';
@@ -8,7 +8,7 @@ import { OrgDirectory } from '../../tireh/org/directory';
 import { createFileStores } from '../../tireh/memory/file-store';
 import { ownerRevokePatch, ownerSharePatch } from '../../tireh/memory/sharing';
 import type { TelegramBotClient, TelegramMessage } from '../../tireh/telegram/client';
-import { OpenAIDecisions } from '../decisions';
+import { OpenAIFollowUpReview } from '../follow-up-review';
 import { StudioRelationshipAssessor } from '../../studio/relationship-assessor';
 import type { RelationshipScenario, SyntheticPersona } from './scenario';
 
@@ -95,14 +95,15 @@ export class SyntheticGatewaySession {
       store: relationships, mode: 'live', now: () => this.now(),
       assessor: realModel ? new StudioRelationshipAssessor(new AnthropicLLM(env.anthropicApiKey!, env.voiceModel || 'claude-haiku-5-5')) : {
         async assess({ text, now }) {
-          if (/criticized the presentation/i.test(text)) return { timeZone: 'UTC', situations: [{ topic: 'boss-conflict', summary: 'The user says their boss criticized a presentation.', status: 'open' }], followUp: { topic: 'boss-conflict', purpose: 'Check in gently about the conversation.', dueAt: new Date(now.getTime() + 24 * 60 * 60_000).toISOString() } };
+          if (/criticized the presentation/i.test(text)) return { timeZone: 'UTC', situations: [{ topic: 'boss-conflict', summary: 'The user says their boss criticized a presentation.', status: 'open' }], followUp: { topic: 'boss-conflict', purpose: 'Check in gently about the situation.', timing: { kind: 'ongoing', evidenceQuote: text }, dueAt: new Date(now.getTime() + 24 * 60 * 60_000).toISOString() } };
           if (/talked it through|fine now/i.test(text)) return { situations: [{ topic: 'boss-conflict', summary: 'The user says the conflict is resolved.', status: 'closed' }] };
-          if (/interview is tomorrow/i.test(text)) return { timeZone: 'UTC', situations: [{ topic: 'interview', summary: 'The user has an interview tomorrow.', status: 'open' }], followUp: { topic: 'interview', purpose: 'Ask how the interview went.', dueAt: new Date(now.getTime() + 24 * 60 * 60_000).toISOString() } };
+          if (/interview is tomorrow/i.test(text)) return { timeZone: 'UTC', situations: [{ topic: 'interview', summary: 'The user has an interview tomorrow.', status: 'open' }], followUp: { topic: 'interview', purpose: 'Ask how preparations are going.', timing: { kind: 'ongoing', evidenceQuote: text }, dueAt: new Date(now.getTime() + 24 * 60 * 60_000).toISOString() } };
           if (/it went well/i.test(text)) return { situations: [{ topic: 'interview', summary: 'The user says the interview went well.', status: 'closed' }] };
           return {};
         },
       },
-      decisions: realModel ? new OpenAIDecisions(env.openaiApiKey!) : { async choose() { return env.decision ?? 'stay_quiet'; } },
+      decisions: realModel ? new OpenAIFollowUpReview(env.openaiApiKey!) : { async choose() { return env.decision ?? 'stay_quiet'; } },
+      feedback: realModel ? new OpenAIRelationshipFeedback(env.openaiApiKey!) : undefined,
       observer: new SafeRelationshipObserver(observer, 'synthetic-relationship-observer-secret-0001', () => this.now()),
       policy: { allowGroupOutreach: false },
     });
@@ -117,8 +118,9 @@ export class SyntheticGatewaySession {
       assistantModel: realModel ? env.chatModel || 'claude-sonnet-5-5' : 'scripted-fake',
       assessorModel: realModel ? env.voiceModel || 'claude-haiku-5-5' : 'scenario-fake',
       decisionModel: realModel ? 'gpt-6-luna' : 'scenario-configured',
+      relationshipPolicy: 'relationships-v3', decisionContract: 'typed-timing-and-exact-draft-predicates',
       maxUserTurns: Math.max(1, Math.min(20, env.maxTurns ?? 20)),
-      callConfig: { replyTokens: 700, proactiveTokens: 160, assessmentTimeoutMs: 12000, decisionsTimeoutMs: 6000 },
+      callConfig: { replyTokens: 700, proactiveTokens: 768, proactiveRequiresComplete: true, assessmentTimeoutMs: 12000, decisionsTimeoutMs: 6000 },
     };
     appendFileSync(join(directory, 'session.json'), JSON.stringify(metadata, null, 2), { mode: 0o600 });
     const fakeTelegram = this.telegram;
@@ -197,6 +199,9 @@ export class SyntheticGatewaySession {
       const group = this.org.getGroup(command.groupId);
       if (!group) throw new Error('unknown_synthetic_group');
       group.memberIds = command.op === 'group_join' ? [...new Set([...group.memberIds, command.personId])] : group.memberIds.filter((id) => id !== command.personId);
+      // Mirror Studio's membership boundary: discard derived conversation context.
+      await this.stores.history.clearPersona('tireh');
+      await this.relationships.invalidatePersona('tireh', { reason: 'synthetic_group_membership_changed' });
       return { groupId: group.id, memberIds: [...group.memberIds] };
     }, command);
     if (command.op === 'guest_join' || command.op === 'guest_leave') return this.capture(command.id, command.op, async () => {
@@ -205,15 +210,21 @@ export class SyntheticGatewaySession {
       group.hasGuests = command.op === 'guest_join';
       if (command.op === 'guest_join' && !group.memberIds.includes('guest-1')) group.memberIds.push('guest-1');
       if (command.op === 'guest_leave') group.memberIds = group.memberIds.filter((id) => id !== 'guest-1');
+      await this.stores.history.clearPersona('tireh');
+      await this.relationships.invalidatePersona('tireh', { reason: 'synthetic_guest_membership_changed' });
       return { groupId: group.id, hasGuests: group.hasGuests, memberIds: [...group.memberIds] };
     }, command);
     if (command.op === 'reconsider') return this.capture(command.id, command.op, async () => this.relationships.drain({
       authorize: async (job) => job.key.audience.kind === 'private' && Boolean(this.org.getPerson(job.key.audience.personId)),
       loadContext: async (job) => job.key.audience.kind === 'private' ? this.gateway.proactiveContext(job.key.personaId, job.key.audience.personId, job.purpose) : '',
-      compose: async (job, context) => this.llm.complete({ system: 'Write one short, warm, non-pressuring follow-up for a fictional Vox user. Use only the supplied authorized context. Never diagnose, guilt, reveal private context to a group, claim delivery, or ask permission for ordinary friendly conversation.', messages: [{ role: 'user', content: JSON.stringify({ purpose: job.purpose, context }) }], maxTokens: 160, temperature: 0.4 }),
+      compose: async (job, context) => composeFollowUp(this.llm, job.purpose, context, job.timing),
       send: async (job, text) => {
         const chatId = job.key.audience.kind === 'private' ? this.org.getPerson(job.key.audience.personId)!.telegramUserId! : this.org.getGroup(job.key.audience.groupId)!.telegramChatId;
-        return `synthetic-${(await this.telegram.sendMessage(chatId, text)).message_id}`;
+        const epoch = await this.stores.history.getEpoch(job.key.personaId);
+        const sent = await this.telegram.sendMessage(chatId, text);
+        // Match Studio: subsequent user turns can refer to the delivered check-in.
+        await this.stores.history.append(job.key.personaId, job.key.chatKey, { role: 'assistant', text, at: this.now(), telegramMessageId: sent.message_id, relationshipIntentionId: job.id }, epoch);
+        return `synthetic-${sent.message_id}`;
       },
     }), command);
     if (command.op === 'state') return this.capture(command.id, command.op, async () => this.relationships.status(keyFor('tireh', command.personId, command.audience)), command);
@@ -221,4 +232,3 @@ export class SyntheticGatewaySession {
     throw new Error('unsupported_simulation_command');
   }
 }
-

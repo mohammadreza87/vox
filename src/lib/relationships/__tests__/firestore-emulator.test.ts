@@ -32,7 +32,7 @@ describe.skipIf(!host)('real Firestore emulator relationship contracts', () => {
     const storeA = new FirestoreRelationshipStore(db, collection, () => now); const storeB = new FirestoreRelationshipStore(db, collection, () => now);
     const target = { ...key, chatKey: 'concurrent-topics' };
     let topic = 0;
-    const assessor = { assess: async (): Promise<Assessment> => ({ timeZone: 'UTC', followUp: { topic: `topic-${++topic}`, purpose: 'A grounded synthetic follow-up', dueAt: '2026-10-19T13:00:00Z' } }) };
+    const assessor = { assess: async ({ text }: { text: string }): Promise<Assessment> => ({ timeZone: 'UTC', followUp: { topic: `topic-${++topic}`, purpose: 'A grounded synthetic follow-up', timing: { kind: 'ongoing', evidenceQuote: text }, dueAt: '2026-10-19T13:00:00Z' } }) };
     const a = new RelationshipLoop({ store: storeA, mode: 'live', assessor, decisions: { choose: async () => 'send' }, now: () => now });
     const b = new RelationshipLoop({ store: storeB, mode: 'live', assessor, decisions: { choose: async () => 'send' }, now: () => now });
     for (const eventId of ['one', 'two']) await a.observeTurn({ ...target, eventId, speakerId: 'synthetic-person', source: 'telegram', text: 'Synthetic upcoming discussion' });

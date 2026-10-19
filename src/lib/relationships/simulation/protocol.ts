@@ -48,4 +48,3 @@ export async function dispatchSimulationCommand(
     return { id: command.id, ok: false, op: command.op, error: error instanceof Error ? error.message : 'simulation command failed' };
   }
 }
-

@@ -1,5 +1,6 @@
 import { createHash } from 'crypto';
 import type { RelationshipKey, RelationshipState } from './types';
+import { purgeTemporalEvidence } from './temporal';
 
 export function relationshipId(key: RelationshipKey): string {
   const owner = key.audience.kind === 'private' ? key.audience.personId : key.audience.groupId;
@@ -26,11 +27,13 @@ export function bounded(state: RelationshipState): void {
   state.forgottenSourceIds = state.forgottenSourceIds.slice(-256);
   state.preferences = state.preferences.slice(-24);
   state.situations = state.situations.slice(-24);
+  state.feedback = (state.feedback ?? []).slice(-24);
   const active = state.intentions.filter((j) => ['pending', 'evaluating', 'sending'].includes(j.status));
   if (active.length > 24) throw new Error('Relationship queue is full');
   // Terminal records are delivery receipts, not a second private evidence archive.
   for (const job of state.intentions) if (!['pending', 'evaluating', 'sending'].includes(job.status)) {
     job.purpose = ''; job.topic = ''; job.sourceIds = [];
+    purgeTemporalEvidence(job);
   }
   state.intentions = [...state.intentions.filter((j) => !['pending', 'evaluating', 'sending'].includes(j.status)).slice(-24), ...active];
   if (Buffer.byteLength(JSON.stringify(state)) > 200_000) throw new Error('Relationship state limit exceeded');

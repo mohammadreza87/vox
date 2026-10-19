@@ -37,6 +37,10 @@ beforeEach(() => {
 });
 
 describe('Anthropic request compatibility', () => {
+  it('rejects token-truncated output for a side-effecting caller', async () => {
+    provider.create.mockResolvedValueOnce({ stop_reason: 'max_tokens', content: [{ type: 'text', text: 'How did your' }] });
+    await expect(new AnthropicLLM('fixture-key', 'claude-haiku-5-5').complete({ ...request, requireComplete: true })).rejects.toThrow('completion truncated');
+  });
   it.each([
     'claude-sonnet-5', 'claude-sonnet-5-5', 'claude-sonnet-5-5-20260928',
     'claude-haiku-5-5', 'claude-haiku-5-5-20261014',
@@ -78,6 +82,11 @@ it('preserves Gemini sampling and output settings', async () => {
   });
   expect(provider.sendMessage).toHaveBeenCalledWith('A helpful teammate');
   expect(provider.create).not.toHaveBeenCalled();
+});
+
+it('rejects Gemini token-truncated output for a side-effecting caller', async () => {
+  provider.sendMessage.mockResolvedValueOnce({ response: { text: () => 'How did your', candidates: [{ finishReason: 'MAX_TOKENS' }] } });
+  await expect(new GeminiLLM('fixture-key', 'gemini-2.0-flash-001').complete({ ...request, requireComplete: true })).rejects.toThrow('completion truncated');
 });
 
 describe('live web search', () => {

@@ -131,7 +131,7 @@ export interface RelationshipView {
 const enc = encodeURIComponent;
 
 export const api = {
-  relationshipObservations: () => request<{ mode: 'off' | 'shadow' | 'live'; sampledEvents: number; counts: Record<string, number>; windowStart: string | null; windowEnd: string | null; scope: string }>('GET', 'relationship-observations'),
+  relationshipObservations: () => request<{ mode: 'off' | 'shadow' | 'live'; sampledEvents: number; counts: Record<string, number>; feedbackOutcomes?: Record<string, number>; windowStart: string | null; windowEnd: string | null; scope: string }>('GET', 'relationship-observations'),
   me: () => request<Me>('GET', 'me'),
   agents: () => request<{ agents: AgentView[] }>('GET', 'agents'),
   agent: (id: string) => request<{ agent: AgentView }>('GET', `agents/${enc(id)}`),
