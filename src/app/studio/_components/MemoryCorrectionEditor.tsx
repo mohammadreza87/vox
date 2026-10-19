@@ -1,5 +1,5 @@
 'use client';
-import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { adaptiveApi, type AdaptiveSnapshot, type AdaptiveSpace } from '../_lib/adaptive-client';
 import type { PrivacyLocale } from '../_lib/adaptive-copy';
 type Note = AdaptiveSnapshot['memories'][number];
@@ -24,7 +24,7 @@ export function MemoryCorrectionEditor({ note, snapshot, locale, disabled, onSav
     if (pending) { clearTimeout(pending.timer); pending.controller.abort(); pending.release(); }
   }, []);
   const clear = () => { if (request.current) return; invalidate(); setStage('closed'); setText(''); setPrepared(''); setBusy(false); setError(false); };
-  useEffect(() => {
+  useLayoutEffect(() => {
     invalidate(); setStage('closed'); setText(''); setPrepared(''); setBusy(false); setError(false);
     return invalidate;
   }, [invalidate, snapshot.space, snapshot.identity.accountId, snapshot.identity.personId, snapshot.identity.confirmed, snapshot.identity.bindingId, snapshot.identity.bindingRevision, snapshot.memoryCorrectionAvailable, snapshot.explicitMemoryValidUntil, note.id, note.revision, note.text, locale, disabled]);
