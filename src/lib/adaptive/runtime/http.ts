@@ -28,12 +28,12 @@ export async function handleExperienceRequest(studio: Studio, service: AdaptiveE
     const url = new URL(request.url), space = experienceSpaceSchema.parse(url.searchParams.get('space') ?? 'work');
     const canAccess = async (agentId: string): Promise<boolean> => {
       const state = await studio.deps.store.read();
-      return state.agents.some(agent => agent.id === agentId && canUseAgent(state.members.find(m => m.telegramId === user.id), agent));
+      return state.agents.some(agent => agent.id === agentId && !(agent.blocked ?? []).includes(user.id) && canUseAgent(state.members.find(m => m.telegramId === user.id), agent));
     };
     const snapshotResponse = async (snapshot: ExperienceSnapshot, status = 200): Promise<Response> => {
       const current = await service.read(user.id, snapshot.space);
       const state = await studio.deps.store.read();
-      const ids = new Set(state.agents.filter(agent => canUseAgent(state.members.find(m => m.telegramId === user.id), agent)).map(a => a.id));
+      const ids = new Set(state.agents.filter(agent => !(agent.blocked ?? []).includes(user.id) && canUseAgent(state.members.find(m => m.telegramId === user.id), agent)).map(a => a.id));
       // Recheck Studio access after loading private content; serialize without
       // another awaited content load. Cross-store atomicity is a release gate.
       current.preferences = current.preferences.filter(p => ids.has(p.agentId));

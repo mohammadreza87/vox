@@ -66,6 +66,31 @@ describe('scoped current-turn conversations', () => {
     ] as const) expect((await handleConversationRequest(h.studio, request(body, headers), TOKEN)).status).toBe(status);
     expect(h.chatLLM.replyRequests).toHaveLength(0);
   });
+  it('denies a blocked member despite an existing agent grant, before exporting text or images', async () => {
+    const { h, input } = await setup();
+    await h.store.update(s => { s.agents.find(a => a.id === input.agentId)!.blocked = [ID.alice]; });
+    for (const body of [input, { ...input, image: PNG }]) {
+      expect((await handleConversationRequest(h.studio, request(body), TOKEN)).status).toBe(403);
+    }
+    expect(h.chatLLM.replyRequests).toHaveLength(0);
+  });
+  it('rechecks a new block at provider entry and after provider completion', async () => {
+    const { h, input } = await setup();
+    const block = () => h.store.update(s => { s.agents.find(a => a.id === input.agentId)!.blocked = [ID.alice]; });
+    const original = h.studio.gateway.bind(h.studio);
+    const spy = vi.spyOn(h.studio, 'gateway').mockImplementation(async () => {
+      const built = await original(); const converse = built.gateway.converse.bind(built.gateway);
+      vi.spyOn(built.gateway, 'converse').mockImplementation(async (...args) => { await block(); return converse(...args); });
+      return built;
+    });
+    expect((await handleConversationRequest(h.studio, request({ ...input, image: PNG }), TOKEN)).status).toBe(409);
+    expect(h.chatLLM.replyRequests).toHaveLength(0);
+    spy.mockRestore();
+    await h.store.update(s => { s.agents.find(a => a.id === input.agentId)!.blocked = []; });
+    vi.spyOn(h.chatLLM, 'complete').mockImplementation(async () => { await block(); return 'BLOCKED_PROVIDER_CANARY'; });
+    const response = await handleConversationRequest(h.studio, request(input), TOKEN);
+    expect(response.status).toBe(409); expect(await response.text()).not.toContain('BLOCKED_PROVIDER_CANARY');
+  });
   it('exports the minimized current image only and never records its bytes in memory/history', async () => {
     const { h, input } = await setup();
     const response = await handleConversationRequest(h.studio, request({ ...input, image: PNG }), TOKEN);
@@ -117,6 +142,39 @@ describe('scoped current-turn conversations', () => {
               const result = await context(...args); setImageAllowed(false); return result;
             });
             try { return await options!.authorize!(); } finally { spy.mockRestore(); }
+          }
+          return await options!.authorize!();
+        } });
+      });
+      return built;
+    });
+    expect((await handleConversationRequest(h.studio, request({ ...input, image: PNG }), TOKEN)).status).toBe(409);
+    expect(h.chatLLM.replyRequests).toHaveLength(0);
+  });
+  it('denies export when a block commits during the final canonical read at transport entry', async () => {
+    const { h, adaptive, input } = await setup();
+    const originalGateway = h.studio.gateway.bind(h.studio);
+    vi.spyOn(h.studio, 'gateway').mockImplementation(async () => {
+      const built = await originalGateway();
+      const converse = built.gateway.converse.bind(built.gateway);
+      vi.spyOn(built.gateway, 'converse').mockImplementation((persona, speaker, text, options) => {
+        let checks = 0;
+        return converse(persona, speaker, text, { ...options, authorize: async () => {
+          // The fifth caller check is the LLM transport callback, after the
+          // gateway's own export check. A prior check would mask this race.
+          if (++checks === 5) {
+            const read = h.store.read.bind(h.store);
+            const readAccount = adaptive.withAccountDocument.bind(adaptive);
+            let accountSpy: ReturnType<typeof vi.spyOn> | undefined;
+            const storeSpy = vi.spyOn(h.store, 'read').mockImplementationOnce(async () => {
+              const snapshot = await read();
+              accountSpy = vi.spyOn(adaptive, 'withAccountDocument').mockImplementationOnce(async (id, fn) => {
+                await h.store.update(state => { state.agents.find(a => a.id === input.agentId)!.blocked = [ID.alice]; });
+                return readAccount(id, fn);
+              });
+              return snapshot;
+            });
+            try { return await options!.authorize!(); } finally { storeSpy.mockRestore(); accountSpy?.mockRestore(); }
           }
           return await options!.authorize!();
         } });

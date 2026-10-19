@@ -86,7 +86,7 @@ export class VoiceIdentityService {
     else row.deletion = 'online_completed';
   }
   private async purge(a: Pick<Authority, 'accountId' | 'personId'>, scope: VoiceScope, retry = false): Promise<void> {
-    const row = await this.repository.transaction(a.accountId, a.personId, scope, row => {
+    const row = await this.repository.existing(a.accountId, a.personId, scope, row => {
       if (row.deletion !== 'provider_pending' || !row.template || (!retry && row.lastPurgeAt !== undefined)) return null;
       row.lastPurgeAt = this.now(); return structuredClone(row);
     });
@@ -98,7 +98,7 @@ export class VoiceIdentityService {
       template = cipher.decrypt(row.template, { ...scope, ...a, epoch: row.templateEpoch });
       const signal = AbortSignal.timeout(5000);
       await boundedProvider(p.purge({ template, signal }), signal);
-      await this.repository.transaction(a.accountId, a.personId, scope, current => {
+      await this.repository.existing(a.accountId, a.personId, scope, current => {
         if (current.deletion !== 'provider_pending' || voiceDigest(current.template) !== voiceDigest(row.template)) return;
         delete current.template; delete current.templateEpoch; delete current.templateExpiresAt; delete current.providerId; delete current.providerVersion;
         current.deletion = 'online_completed'; current.revision++;
@@ -108,7 +108,7 @@ export class VoiceIdentityService {
   }
   async read(telegramId: number, scope: VoiceScope): Promise<VoiceIdentitySnapshot> {
     const a = await this.authority(telegramId, scope.space), now = this.now();
-    const revoked = await this.repository.transaction(a.accountId, a.personId, scope, row => {
+    const revoked = await this.repository.existing(a.accountId, a.personId, scope, row => {
       if (row.intent !== 'accepted') return false;
       if (!a.allowed || row.authority !== a.fingerprint || (row.intentExpiresAt ?? 0) <= now || row.template && (row.templateExpiresAt ?? 0) <= now) {
         this.revoke(row, (row.intentExpiresAt ?? 0) <= now ? 'expired' : 'revoked'); return true;
@@ -117,7 +117,7 @@ export class VoiceIdentityService {
     });
     if (revoked) this.stop(a.accountId, scope);
     if (revoked) await this.purge(a, scope);
-    return this.repository.transaction(a.accountId, a.personId, scope, row => this.snapshot(a, row));
+    return this.repository.existing(a.accountId, a.personId, scope, row => this.snapshot(a, row));
   }
   async present(telegramId: number, scope: VoiceScope, expectedRevision: number, locale: 'en' | 'fa'): Promise<VoiceIdentitySnapshot> {
     await this.read(telegramId, scope);
@@ -135,7 +135,7 @@ export class VoiceIdentityService {
   async acceptEnrollment(telegramId: number, scope: VoiceScope, expectedRevision: number, receipt: string): Promise<VoiceIdentitySnapshot> {
     const a = await this.authority(telegramId, scope.space), now = this.now();
     if (!a.allowed) return fail(403, a.reason ?? 'voice_unavailable');
-    return this.repository.transaction(a.accountId, a.personId, scope, row => {
+    return this.repository.existing(a.accountId, a.personId, scope, row => {
       if (row.revision !== expectedRevision) return fail(409, 'revision_conflict');
       const r = row.receipt;
       if (!r || r.id !== receipt || r.expiresAt <= now || r.authority !== a.fingerprint || r.copyHash !== this.notice(r.locale).copyHash) return fail(409, 'enrollment_disclosure_required');
@@ -152,7 +152,7 @@ export class VoiceIdentityService {
     await this.read(telegramId, scope);
     const a = await this.authority(telegramId, scope.space), now = this.now();
     if (!a.allowed) return fail(403, a.reason ?? 'voice_unavailable');
-    const result = await this.repository.transaction(a.accountId, a.personId, scope, row => {
+    const result = await this.repository.existing(a.accountId, a.personId, scope, row => {
       if (row.revision !== expectedRevision) return fail(409, 'revision_conflict');
       if (row.intent !== 'accepted' || row.authority !== a.fingerprint || row.deletion === 'provider_pending') return fail(403, 'enrollment_required');
       if (mode === 'test' && !row.template || mode === 'enroll' && row.template) return fail(409, 'enrollment_state_conflict');
@@ -168,13 +168,13 @@ export class VoiceIdentityService {
   async cancel(telegramId: number, scope: VoiceScope): Promise<VoiceIdentitySnapshot> {
     const a = await this.authority(telegramId, scope.space);
     this.stop(a.accountId, scope);
-    await this.repository.transaction(a.accountId, a.personId, scope, row => { delete row.capture; row.epoch++; row.revision++; });
+    await this.repository.existing(a.accountId, a.personId, scope, row => { delete row.capture; row.epoch++; row.revision++; });
     return this.read(telegramId, scope);
   }
   async preflight(telegramId: number, scope: VoiceScope, captureId: string): Promise<void> {
     const a = await this.authority(telegramId, scope.space);
     if (!a.allowed) return fail(403, a.reason ?? 'voice_unavailable');
-    await this.repository.transaction(a.accountId, a.personId, scope, row => {
+    await this.repository.existing(a.accountId, a.personId, scope, row => {
       if (row.intent !== 'accepted' || row.authority !== a.fingerprint || !row.capture || row.capture.id !== captureId || row.capture.epoch !== row.epoch || row.capture.expiresAt <= this.now()) return fail(409, 'capture_expired');
     });
   }
@@ -189,7 +189,7 @@ export class VoiceIdentityService {
       if (!audio.byteLength || audio.byteLength > MAX_VOICE_BYTES || !['audio/webm', 'audio/ogg', 'audio/mp4', 'audio/wav'].includes(mimeType.split(';')[0])) return fail(400, 'invalid_voice_sample');
       const a = await this.authority(telegramId, scope.space), now = this.now();
       if (!a.allowed) return fail(403, a.reason ?? 'voice_unavailable');
-      const row = await this.repository.transaction(a.accountId, a.personId, scope, row => {
+      const row = await this.repository.existing(a.accountId, a.personId, scope, row => {
         const c = row.capture;
         if (row.intent !== 'accepted' || row.authority !== a.fingerprint || !c || c.id !== captureId || c.expiresAt <= now || c.authority !== a.fingerprint || c.epoch !== row.epoch) return fail(409, 'capture_expired');
         const result = structuredClone(row); delete row.capture; row.revision++; return result;
@@ -201,7 +201,7 @@ export class VoiceIdentityService {
       const fresh = async () => {
         if (controller.signal.aborted) return fail(409, 'capture_cancelled');
         const latest = await this.authority(telegramId, scope.space);
-        const valid = await this.repository.transaction(a.accountId, a.personId, scope, r => r.intent === 'accepted' && r.epoch === row.epoch && r.authority === latest.fingerprint && (r.intentExpiresAt ?? 0) > this.now());
+        const valid = await this.repository.existing(a.accountId, a.personId, scope, r => r.intent === 'accepted' && r.epoch === row.epoch && r.authority === latest.fingerprint && (r.intentExpiresAt ?? 0) > this.now());
         if (!latest.allowed || !valid || row.capture!.expiresAt <= this.now() || controller.signal.aborted) return fail(409, 'capture_cancelled');
       };
       const provider = this.options.provider!;
@@ -215,7 +215,7 @@ export class VoiceIdentityService {
       if (row.capture!.mode === 'enroll') {
         const encrypted = this.options.cipher!.encrypt(query, { ...scope, accountId: a.accountId, personId: a.personId, epoch: row.epoch });
         await fresh();
-        await this.repository.transaction(a.accountId, a.personId, scope, current => {
+        await this.repository.existing(a.accountId, a.personId, scope, current => {
           if (current.epoch !== row.epoch || current.intent !== 'accepted' || current.template) return fail(409, 'capture_cancelled');
           current.template = encrypted; current.templateEpoch = row.epoch; current.templateExpiresAt = Math.min(current.intentExpiresAt!, this.now() + this.options.providerApproval!.templateTtlMs);
           current.providerId = provider.id; current.providerVersion = provider.version; current.deletion = 'not_required'; delete current.lastPurgeAt; current.revision++;

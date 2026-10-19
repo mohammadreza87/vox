@@ -54,12 +54,19 @@ export async function handleConversationRequest(studio: Studio, request: Request
       });
       const scope = await currentScope();
       const context = scope ? await studio.adaptiveContext(input.agentId, personId(user.id), input.space) : null;
-      const state = await studio.deps.store.read();
-      if (!scope || !state.agents.some(a => a.id === input.agentId && a.status === 'active' &&
-        canUseAgent(state.members.find(m => m.telegramId === user.id), a))) return null;
+      const studioAllowed = async () => {
+        const state = await studio.deps.store.read();
+        return state.agents.some(a => a.id === input.agentId && a.status === 'active' &&
+          !(a.blocked ?? []).includes(user.id) && canUseAgent(state.members.find(m => m.telegramId === user.id), a));
+      };
+      if (!scope || !await studioAllowed()) return null;
       // Context and Studio reads can await I/O. A withdrawal during those reads
       // must invalidate this authorization before the caller exports anything.
-      return await currentScope() === scope ? digest([scope, context?.revision]) : null;
+      if (await currentScope() !== scope) return null;
+      // The canonical store may itself await I/O. A block applied during that
+      // await must be seen at the provider callback, before any content export.
+      // These fresh fences do not make the two storage systems atomic.
+      return await studioAllowed() ? digest([scope, context?.revision]) : null;
     };
     const before = await authority();
     if (!before) return json({ error: 'conversation_not_permitted' }, 403);

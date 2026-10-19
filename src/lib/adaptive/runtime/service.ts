@@ -230,13 +230,15 @@ export class AdaptiveExperienceService {
   async validatePrediction(telegramId: number, value: PredictionValidateInput, authorizeDelivery?: () => Promise<boolean>): Promise<{ valid: boolean }> {
     const input = predictionValidateSchema.parse(value);
     try { if (authorizeDelivery && !await authorizeDelivery()) return { valid: false }; } catch { return { valid: false }; }
-    return this.adaptive.withAccountDocument(telegramId, (d, now) => {
+    const result = await this.adaptive.withAccountDocument(telegramId, (d, now) => {
       const turn = d.experience.predictionTurns.find(p => p.agentId === input.agentId && p.space === input.space && p.sessionId === input.sessionId && p.turnId === input.turnId);
       const grant = d.agentGrants.find(g => g.agentId === input.agentId && g.space === input.space && g.allowed);
       return { valid: !!turn && !!grant && this.options.decisionsEnabled === true && !!this.options.decisions && !turn.cancelled && !turn.superseded &&
         turn.revision === input.revision && turn.contextKey === input.contextKey && turn.policyReceipt === input.policyReceipt && (turn.receiptExpiresAt ?? 0) > now &&
         this.adaptive.isCoreAllowed(d, now) && (!turn.requiresImage || this.adaptive.capabilityStatus(d, 'single_party_image', now).eligible) && turn.authorizationFingerprint === digest([this.adaptive.coreFingerprint(d, now), grant.revision, turn.requiresImage ? this.adaptive.capabilityStatus(d, 'single_party_image', now) : null]) };
     });
+    try { if (authorizeDelivery && !await authorizeDelivery()) return { valid: false }; } catch { return { valid: false }; }
+    return result;
   }
   async predict(telegramId: number, value: PredictInput, signal?: AbortSignal, authorizeDelivery?: () => Promise<boolean>): Promise<PredictionReply> {
     const input = predictInputSchema.parse(value);
@@ -283,13 +285,17 @@ export class AdaptiveExperienceService {
     }
     const authorize = async () => {
       try { if (authorizeDelivery && !await authorizeDelivery()) return null; } catch { return null; }
-      return this.adaptive.withAccountDocument(telegramId, (d, now) => {
+      const receipt = await this.adaptive.withAccountDocument(telegramId, (d, now) => {
         const turn = d.experience.predictionTurns.find(p => p.agentId === input.agentId && p.space === input.space && p.sessionId === input.sessionId && p.turnId === input.turnId);
         return this.adaptive.isCoreAllowed(d, now) && this.adaptive.coreFingerprint(d, now) === prepared.coreFingerprint &&
           (!image || this.adaptive.capabilityStatus(d, 'single_party_image', now).eligible) && turn?.authorizationFingerprint === digest([this.adaptive.coreFingerprint(d, now), prepared.grantRevision, image ? this.adaptive.capabilityStatus(d, 'single_party_image', now) : null]) &&
           turn?.revision === input.revision && !turn.cancelled && !turn.superseded && turn.expiresAt > now && turn.reservation === reservation && turn.contextKey === input.contextKey &&
           d.agentGrants.some(g => g.agentId === input.agentId && g.space === input.space && g.allowed && g.revision === prepared.grantRevision) ? prepared.receipt! : null;
       });
+      // Studio membership/block state is a separate store and may change while
+      // the canonical account transaction waits. Fence it again before export.
+      try { if (authorizeDelivery && !await authorizeDelivery()) return null; } catch { return null; }
+      return receipt;
     };
     const controller = new AbortController();
     const abort = () => controller.abort();

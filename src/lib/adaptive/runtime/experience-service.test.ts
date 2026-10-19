@@ -170,6 +170,46 @@ const syntheticImage = { sourceId: 'explicit-shared', revision: 1, dataUrl: 'dat
 const predictionInput = { space: 'work' as const, agentId: 'agent1', sessionId: 'live-session', turnId: 'turn-1', revision: 1, contextKey: 'audience1', text: 'Synthetic current draft', question: 'explicit_correction' as const };
 const syntheticAnswer = { model: 'gpt-6-luna', answers: [{ type: 'predicate', name: 'explicit_correction', probability: 0.8 }], usage: { input_tokens: 12 } };
 describe('live prediction session delivery guards', () => {
+  it('does not export to Decisions when access is blocked during its final canonical authority read', async () => {
+    const { adaptive, agent } = await setup(); await agent();
+    let allowed = true, checks = 0;
+    const evaluate = vi.fn(async () => syntheticAnswer);
+    const decisions = new DecisionService({ evaluate });
+    const run = decisions.evaluate.bind(decisions);
+    vi.spyOn(decisions, 'evaluate').mockImplementation(context => run({ ...context, authorize: async () => {
+      // DecisionService checks again after loading evidence, immediately before
+      // the real provider seam. Block while that check awaits canonical state.
+      if (++checks === 2) {
+        const read = adaptive.withAccountDocument.bind(adaptive);
+        const spy = vi.spyOn(adaptive, 'withAccountDocument').mockImplementationOnce(async (id, fn) => {
+          allowed = false;
+          return read(id, fn);
+        });
+        try { return await context.authorize(); } finally { spy.mockRestore(); }
+      }
+      return context.authorize();
+    } }));
+    const experience = new AdaptiveExperienceService(adaptive, { decisionsEnabled: true, decisions });
+    expect(await experience.predict(123, predictionInput, undefined, async () => allowed)).toMatchObject({ status: 'unknown' });
+    expect(evaluate).not.toHaveBeenCalled();
+  });
+  it('invalidates a prediction receipt when access is blocked during canonical receipt validation', async () => {
+    const { adaptive, agent } = await setup(); await agent();
+    const experience = new AdaptiveExperienceService(adaptive, { decisionsEnabled: true,
+      decisions: new DecisionService({ evaluate: async () => syntheticAnswer }) });
+    const result = await experience.predict(123, predictionInput);
+    let allowed = true;
+    const read = adaptive.withAccountDocument.bind(adaptive);
+    const spy = vi.spyOn(adaptive, 'withAccountDocument').mockImplementationOnce(async (id, fn) => {
+      allowed = false;
+      return read(id, fn);
+    });
+    try {
+      expect(await experience.validatePrediction(123, { agentId: predictionInput.agentId, space: predictionInput.space,
+        sessionId: predictionInput.sessionId, turnId: predictionInput.turnId, revision: predictionInput.revision,
+        contextKey: predictionInput.contextKey, policyReceipt: result.policyReceipt! }, async () => allowed)).toEqual({ valid: false });
+    } finally { spy.mockRestore(); }
+  });
   it('cancels active provider and rejects delayed request behind a tombstone across service instances', async () => {
     const { adaptive, agent } = await setup(); await agent();
     let started!: () => void; const began = new Promise<void>(r => { started = r; }); let providerSignal!: AbortSignal;
