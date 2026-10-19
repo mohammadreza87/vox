@@ -55,7 +55,9 @@ export function SpawnScreen({ draftId, successorOf }: { draftId?: string; succes
   const steps = live ? STEPS.slice(0, 5) : STEPS;
   const next = () => { haptic.tap(); setStep((s) => (live && s === 2 ? 4 : Math.min(s + 1, steps.length - 1))); };
   const prev = () => {
-    if (step <= (draftId ? 1 : 0)) nav.back();
+    // Waiting on Telegram or already hired: Back leaves the wizard instead of stepping into it.
+    if (step === 5 && agent?.status === 'active') nav.reset({ name: 'home' }, { name: 'agent', id: agent.id });
+    else if (step <= (draftId ? 1 : 0) || (step === 5 && draftId && agent?.status === 'awaiting_bot')) nav.back();
     else setStep((s) => (live && s === 4 ? 2 : s - 1));
   };
 

@@ -578,7 +578,8 @@ export class Studio {
     const predecessor = s.agents.find((a) => a.id === agent.successorOf);
     if (!predecessor || predecessor.memoryPolicy !== 'transfer') return;
     for (const m of await this.deps.memory.memories.listActive(predecessor.id)) {
-      const { id: _id, createdAt: _c, updatedAt: _u, ...rest } = m;
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      const { id, createdAt, updatedAt, ...rest } = m;
       await this.deps.memory.memories.add({ ...rest, personaId: agent.id });
     }
   }
