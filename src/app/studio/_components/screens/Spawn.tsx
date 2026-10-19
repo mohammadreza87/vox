@@ -50,7 +50,8 @@ export function SpawnScreen({ draftId, successorOf }: { draftId?: string; succes
   const update = setAgent;
 
   // Live agents being refined skip voice (fixed at hire) and the hire step.
-  const live = agent?.status === 'active';
+  // Step 5 with an active agent is the "just hired" screen, not a refine.
+  const live = agent?.status === 'active' && step !== 5;
   const steps = live ? STEPS.slice(0, 5) : STEPS;
   const next = () => { haptic.tap(); setStep((s) => (live && s === 2 ? 4 : Math.min(s + 1, steps.length - 1))); };
   const prev = () => {
@@ -438,7 +439,7 @@ function LookStep({ agent, busy, run, onUpdate, onNext }: StepProps) {
               <div className="vx-small vx-2">Used as the Telegram bot photo. The cloud still animates in calls.</div>
             </div>
           </div>
-          <div style={{ display: 'flex', gap: 10, overflowX: 'auto', paddingBottom: 2 }}>
+          <div style={{ display: 'flex', gap: 10, overflowX: 'auto', padding: 6, margin: -6 }}>{/* room for the selection ring */}
             <AvatarOption selected={!look.avatar} label="Cloud" onClick={() => look.avatar && run('avatar', () => api.chooseAvatar(agent.id, null)).then((r) => r && onUpdate(r.agent))}>
               <Cloud look={look} size={64} label="Cloud" />
             </AvatarOption>

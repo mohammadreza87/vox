@@ -44,6 +44,8 @@
   padding: 12px 16px calc(120px + env(safe-area-inset-bottom));
   -webkit-overflow-scrolling: touch;
 }
+/* Flex-column scrollers must scroll, not squash children (overflow:hidden groups would shrink to 0). */
+.vx-scroll > * { flex-shrink: 0; }
 
 .vx-display { font-family: var(--font-unbounded), sans-serif; font-weight: 600; font-size: 32px; line-height: 36px; letter-spacing: -0.02em; margin: 0; }
 .vx-title { font-family: var(--font-unbounded), sans-serif; font-weight: 500; font-size: 24px; line-height: 28px; letter-spacing: -0.015em; margin: 0; }

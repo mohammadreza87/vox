@@ -54,7 +54,9 @@ export const haptic = {
 
 export function openTelegram(url: string) {
   const app = tg();
-  if (app) app.openTelegramLink(url);
+  // telegram-web-app.js defines WebApp in any browser; only a real Mini App
+  // has initData. Outside Telegram, openTelegramLink would navigate this page away.
+  if (app?.initData) app.openTelegramLink(url);
   else window.open(url, '_blank', 'noopener');
 }
 

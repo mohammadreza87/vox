@@ -24,8 +24,20 @@ import {
 } from './types';
 
 export class StudioError extends Error {
+  override readonly name = 'StudioError';
+
   constructor(readonly status: number, message: string) {
     super(message);
+  }
+
+  /**
+   * Prefer this to instanceof: Studio is cached on globalThis, and a second
+   * copy of this module (dev recompiles, the instrumentation bundle) throws
+   * errors whose class is not the one the router imported.
+   */
+  static is(error: unknown): error is StudioError {
+    return error instanceof StudioError ||
+      (error instanceof Error && error.name === 'StudioError' && typeof (error as { status?: unknown }).status === 'number');
   }
 }
 

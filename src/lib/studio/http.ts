@@ -154,7 +154,7 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
     }
     return json({ error: 'Not found' }, 404);
   } catch (error) {
-    if (error instanceof StudioError) return json({ error: error.message }, error.status);
+    if (StudioError.is(error)) return json({ error: error.message }, error.status);
     if (error && typeof error === 'object' && 'issues' in error) return json({ error: "Claude's answer didn't fit the persona format. Try again." }, 502);
     (studio.deps.logger ?? console).error('[studio] request failed', error);
     return json({ error: 'Something went wrong. Try again.' }, 500);
