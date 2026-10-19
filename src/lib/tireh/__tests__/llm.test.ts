@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AnthropicLLM, GeminiLLM } from '../llm';
 import { withSources } from '../gateway';
+import { expectContentFreeTelegramLogs, telegramCanary, telegramCanaryError } from '@/test/telegram-diagnostics';
 
 const provider = vi.hoisted(() => ({
   create: vi.fn(),
@@ -131,9 +132,33 @@ describe('live web search', () => {
     expect(provider.create.mock.lastCall?.[0]).not.toHaveProperty('tools');
   });
 
+  it('keeps fallback provider content and configured model identifiers out of diagnostic arguments', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const error = telegramCanaryError();
+      error.message += ' web_search is not supported';
+      provider.create.mockRejectedValueOnce(Object.assign(error, { status: 400 }));
+      const llm = new AnthropicLLM(telegramCanary.credential, telegramCanary.persona);
+      expect(await llm.completeWithWeb({ ...request, maxSearches: 3 })).toEqual({ text: 'fixture answer', sources: [] });
+      await llm.completeWithWeb({ ...request, maxSearches: 3 });
+      expect(provider.create).toHaveBeenCalledTimes(3);
+      expect(provider.create.mock.lastCall?.[0]).not.toHaveProperty('tools');
+      expect(warn).toHaveBeenCalledWith({ type: 'telegram_ingress', stage: 'web_search', reason: 'tool_unavailable', outcome: 'reply_without_search' });
+      expectContentFreeTelegramLogs(warn.mock.calls);
+    } finally { warn.mockRestore(); }
+  });
+
   it('does not swallow other failures', async () => {
     provider.create.mockRejectedValueOnce(Object.assign(new Error('overloaded'), { status: 529 }));
     await expect(new AnthropicLLM('fixture-key', 'claude-haiku-5-5').completeWithWeb({ ...request, maxSearches: 3 })).rejects.toThrow('overloaded');
+  });
+
+  it.each(['status', 'message'])('preserves the original provider exception when its %s accessor throws', async (property) => {
+    const error = Object.assign(telegramCanaryError(), { status: 400 });
+    Object.defineProperty(error, property, { get: () => { throw new Error('synthetic getter failure'); } });
+    provider.create.mockRejectedValueOnce(error);
+    await expect(new AnthropicLLM('fixture-key', 'claude-haiku-5-5').completeWithWeb({ ...request, maxSearches: 3 })).rejects.toBe(error);
+    expect(provider.create).toHaveBeenCalledTimes(1);
   });
 });
 

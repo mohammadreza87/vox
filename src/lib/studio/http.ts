@@ -8,6 +8,7 @@ import { StudioRateLimiter, StudioRateLimitError, type StudioRequestRateLimiter 
 import { Studio, StudioError } from './service';
 import { PersonaGenerationError } from './persona';
 import { ElevenLabsSpeechError } from './media';
+import { logTelegramDiagnostic, type TelegramDiagnostic } from '../tireh/telegram/diagnostics';
 import type { AgentVisibility, Member, MemoryPolicy, Role, SpawnBrief } from './types';
 
 type Json = Record<string, unknown>;
@@ -273,25 +274,34 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
     }
     return json({ error: 'Not found' }, 404);
   } catch (error) {
-    if (ElevenLabsSpeechError.is(error)) {
-      (studio.deps.logger ?? console).warn('[studio] voice provider unavailable', { code: error.code, status: error.status });
-      const status = error.code === 'payment_required' ? 402
-        : error.code === 'quota_exceeded' || error.code === 'rate_limited' ? 429
-          : error.code === 'permission_denied' ? 403 : error.code === 'unavailable' ? 503 : 502;
-      return json({ error: new ElevenLabsSpeechError(error.status, error.code).message, code: error.code }, status);
+    let failure: { response: Response; diagnostic?: TelegramDiagnostic };
+    try { failure = studioFailureResponse(error); }
+    catch {
+      // Error objects are untrusted too. Inspection must not escape the HTTP
+      // boundary or turn a hostile accessor into a second exported exception.
+      failure = { response: json({ error: 'Something went wrong. Try again.' }, 500), diagnostic: 'studio_http_failed' };
     }
-    if (error instanceof StudioRateLimitError) return json({ error: error.message }, 429, { 'Retry-After': String(error.retryAfterSeconds) });
-    if (StudioError.is(error)) return json({ error: error.message }, error.status);
-    if (error instanceof PersonaGenerationError) {
-      (studio.deps.logger ?? console).warn('[studio] persona generation invalid', { invalidFields: error.invalidFields });
-      return json({ error: error.message }, 502);
-    }
-    if (error && typeof error === 'object' && 'issues' in error) return json({ error: "Claude's answer didn't fit the persona format. Try again." }, 502);
-    const provider = providerErrorMessage(error);
-    (studio.deps.logger ?? console).error('[studio] request failed', error);
-    if (provider) return json({ error: provider }, 502);
-    return json({ error: 'Something went wrong. Try again.' }, 500);
+    // Emit once, only after classification/response formatting has succeeded.
+    if (failure.diagnostic) logTelegramDiagnostic(studio.deps.logger ?? console, failure.diagnostic);
+    return failure.response;
   }
+}
+
+function studioFailureResponse(error: unknown): { response: Response; diagnostic?: TelegramDiagnostic } {
+  if (ElevenLabsSpeechError.is(error)) {
+    const status = error.code === 'payment_required' ? 402
+      : error.code === 'quota_exceeded' || error.code === 'rate_limited' ? 429
+        : error.code === 'permission_denied' ? 403 : error.code === 'unavailable' ? 503 : 502;
+    return { response: json({ error: new ElevenLabsSpeechError(error.status, error.code).message, code: error.code }, status), diagnostic: 'studio_http_voice_failed' };
+  }
+  if (error instanceof StudioRateLimitError) return { response: json({ error: error.message }, 429, { 'Retry-After': String(error.retryAfterSeconds) }) };
+  if (StudioError.is(error)) return { response: json({ error: error.message }, error.status) };
+  if (error instanceof PersonaGenerationError) return { response: json({ error: error.message }, 502), diagnostic: 'studio_http_persona_failed' };
+  if (error && typeof error === 'object' && 'issues' in error) return { response: json({ error: "Claude's answer didn't fit the persona format. Try again." }, 502) };
+  const provider = providerErrorMessage(error);
+  return provider
+    ? { response: json({ error: provider }, 502), diagnostic: 'studio_http_provider_failed' }
+    : { response: json({ error: 'Something went wrong. Try again.' }, 500), diagnostic: 'studio_http_failed' };
 }
 
 /**

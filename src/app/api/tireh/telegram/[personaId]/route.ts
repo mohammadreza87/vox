@@ -13,6 +13,7 @@ import { getPersonaGateway } from '@/lib/tireh/runtime';
 import { logger } from '@/lib/logger';
 import type { TelegramUpdate } from '@/lib/tireh/telegram/client';
 import { isValidWebhookSecret } from '@/lib/tireh/telegram/webhook-auth';
+import { logTelegramDiagnostic } from '@/lib/tireh/telegram/diagnostics';
 
 interface RouteParams {
   params: Promise<{ personaId: string }>;
@@ -21,7 +22,7 @@ interface RouteParams {
 export async function POST(request: NextRequest, { params }: RouteParams) {
   const expected = process.env.TIREH_WEBHOOK_SECRET;
   if (!expected) {
-    logger.error('TIREH_WEBHOOK_SECRET is not set; persona webhook disabled');
+    logTelegramDiagnostic(logger, 'persona_webhook_disabled');
     return NextResponse.json({ error: 'Webhook not configured' }, { status: 503 });
   }
   if (!isValidWebhookSecret(request.headers.get('X-Telegram-Bot-Api-Secret-Token'), expected)) {
@@ -47,8 +48,8 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       return NextResponse.json({ error: 'Unknown persona' }, { status: 404 });
     }
     return NextResponse.json({ ok: true, result });
-  } catch (error) {
-    logger.error({ err: error, personaId, updateId: update.update_id }, 'TIREH persona update failed');
+  } catch {
+    logTelegramDiagnostic(logger, 'persona_webhook_failed');
     return NextResponse.json({ ok: false });
   }
 }

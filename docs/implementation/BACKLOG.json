@@ -8,7 +8,7 @@
     "US"
   ],
   "audience": "adults only",
-  "status": "bounded local core delivered and independently verified; full roadmap, live provider/device evidence, legal gates and production activation remain open",
+  "status": "adaptive integration merged to develop and deployed on the Mac Studio service; diagnostic hardening independently accepted locally; full roadmap and optional activation gates remain open",
   "size_legend": {
     "S": "bounded change/review",
     "M": "multi-file bounded slice",
@@ -767,7 +767,7 @@
       "id": "VOX-021",
       "phase": "P2",
       "title": "Remove private payloads from diagnostic and audit paths",
-      "status": "planned",
+      "status": "in_progress",
       "priority": "P0",
       "size": "M",
       "owner": "vox_architect",
@@ -791,7 +791,11 @@
         "Sanitized logging/audit changes",
         "Leak-canary report"
       ],
-      "evidence": []
+      "evidence": [
+        "docs/implementation/OBSERVATION_DIAGNOSTICS.md",
+        "docs/implementation/evidence/DIAGNOSTIC_REVIEW.md"
+      ],
+      "progress_note": "Active Studio/Tireh polling, webhook, gateway, provider fallback, live call and Mini App HTTP diagnostics now emit fixed catalog fields without raw exceptions, arbitrary codes, content or identity IDs. Independent canary/getter/proxy and real Pino serialization checks passed. Historical/platform logs, sinks/IAM/retention and full export/replay coverage remain open."
     },
     {
       "id": "VOX-022",
@@ -1769,7 +1773,9 @@
         "Open-defect register"
       ],
       "evidence": [
-        "docs/implementation/DELIVERY_RESULT.md"
+        "docs/implementation/DELIVERY_RESULT.md",
+        "docs/implementation/INTEGRATION_RELEASE.md",
+        "docs/implementation/RELEASE_2026_10_19.md"
       ],
       "progress_note": "Independent synthetic regressions cover consent/revocation/delete/identity expiry/group minimization and staged publication races. Full roadmap matrix, rights/backup/provider/worker isolation qualification remain open."
     },
@@ -1808,7 +1814,9 @@
         "Accessibility findings"
       ],
       "evidence": [
-        "docs/implementation/DELIVERY_RESULT.md"
+        "docs/implementation/DELIVERY_RESULT.md",
+        "docs/implementation/INTEGRATION_RELEASE.md",
+        "docs/implementation/RELEASE_2026_10_19.md"
       ],
       "progress_note": "Production-build-backed mobile Chromium synthetic flows passed in EN/FA: consent decline/grant, exact sharing preview/create, Work/Personal isolation, preferences/reset, notification settings and overflow. Screenshots/evidence recorded. Full WebKit/physical-device/accessibility/provider and remaining-roadmap journeys remain open."
     },
@@ -2063,6 +2071,21 @@
       "baseline": "ebb75a67c79bf317d1dec40381b216c75bb90ffa",
       "evidence": "docs/implementation/DELIVERY_RESULT.md",
       "note": "Source delivery slice only; parent task acceptance and production gates remain independent."
+    },
+    {
+      "id": "adaptive-develop-release",
+      "status": "deployed_core_optional_features_off",
+      "baseline": "c424dc6d9829540ad1e999a99efa824e9894dd66",
+      "deployed_revision": "523e9f040a08b574352e122322449d418076ca54",
+      "evidence": "docs/implementation/RELEASE_2026_10_19.md",
+      "note": "Exact local/public health and route checks; no physical-device, biometric, automatic-learning or proactive pilot qualification."
+    },
+    {
+      "id": "safe-communication-diagnostics",
+      "status": "complete_local",
+      "baseline": "c424dc6d9829540ad1e999a99efa824e9894dd66",
+      "evidence": "docs/implementation/OBSERVATION_DIAGNOSTICS.md",
+      "note": "Fixed catalog events in the active communication chain; independent source review passed. Wider VOX-021 export, platform and retention acceptance remains open."
     }
   ]
 }

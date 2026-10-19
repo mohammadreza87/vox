@@ -58,12 +58,8 @@ async function createGateway(): Promise<PersonaGateway> {
       }
       return bot;
     },
-    logger: {
-      info: (msg: string, ...rest: unknown[]) => logger.info({ details: rest }, msg),
-      warn: (msg: string, ...rest: unknown[]) => logger.warn({ details: rest }, msg),
-      // pino only serializes Error objects under `err`
-      error: (msg: string, err?: unknown) => logger.error({ err }, msg),
-    },
+    // Preserve the fixed structured diagnostic fields at the Pino destination.
+    logger,
   });
 }
 
