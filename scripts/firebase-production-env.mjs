@@ -64,6 +64,9 @@ export function firebaseProductionEnv(env) {
 
 export function dotenvLine(key, value) {
   if (value.includes('\0')) throw new Error(`${key} cannot contain a NUL character.`);
+  // Next's dotenv-expand interpolates even single-quoted values and existing
+  // process.env values. Reject literal dollars instead of corrupting a key.
+  if (value.includes('$')) throw new Error(`${key} cannot contain a literal dollar sign in Firebase dotenv configuration.`);
   // Node/Next and Firebase both support these quotes. Firebase additionally
   // expands double-quoted backslash escapes, so only use them when unchanged.
   const candidates = [];

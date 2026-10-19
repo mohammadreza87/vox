@@ -50,7 +50,7 @@ test('private atomic dotenv output round trips quotes, hashes, backslashes and l
   const dir = mkdtempSync(join(tmpdir(), 'vox-firebase-env-test-'));
   try {
     const path = join(dir, '.env');
-    for (const value of ['say "hello" # keep \\n literal', "a single ' quote", 'both\' and " quotes', 'line one\nline two', ' dollar $VALUE stays literal ']) {
+    for (const value of ['say "hello" # keep \\n literal', "a single ' quote", 'both\' and " quotes', 'line one\nline two', ' preserve outer spaces ']) {
       const config = firebaseProductionEnv({ ...fixture(), STUDIO_ORG_NAME: value });
       writeProductionEnv(path, config);
       assert.deepEqual(parseEnv(readFileSync(path, 'utf8')), config);
@@ -58,6 +58,8 @@ test('private atomic dotenv output round trips quotes, hashes, backslashes and l
     }
     writeFileSync(path, 'preserved');
     assert.throws(() => writeProductionEnv(path, { STUDIO_SECRET: 'all\' " quotes # prevent safe encoding' }), /encoded exactly/);
+    assert.equal(readFileSync(path, 'utf8'), 'preserved');
+    assert.throws(() => writeProductionEnv(path, { STUDIO_SECRET: 'literal$VALUE' }), /literal dollar/);
     assert.equal(readFileSync(path, 'utf8'), 'preserved');
     assert.throws(() => dotenvLine('SECRET', 'contains\0null'), /NUL/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
