@@ -69,7 +69,7 @@ export function HomeScreen() {
           <span className="vx-pill volt" style={{ textTransform: 'capitalize' }}>{nav.me.member.role}</span>
         </div>
         <div style={{ marginTop: 16, display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <span className="vx-over">{nav.me.org} · {active.length} agents{forming ? ` · ${forming} forming` : ''}</span>
+          <span className="vx-over">{nav.me.org} · {active.length} agent{active.length === 1 ? '' : 's'}{forming ? ` · ${forming} forming` : ''}</span>
           <h1 className="vx-display">Your agents</h1>
         </div>
         <div style={{ display: 'flex', gap: 8, overflowX: 'auto', margin: '16px -16px 0', padding: '0 16px' }}>
