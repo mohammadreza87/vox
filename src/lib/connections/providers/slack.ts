@@ -1,0 +1,16 @@
+import { z } from 'zod';
+import { defineTool, type ProviderToolDefinition } from './types';
+import { inputText, safeText, parse, object, segment } from './normalization';
+import { ProviderError } from '../transport';
+const channel = z.object({ channelId: z.string().regex(/^[CG][A-Z0-9]{8,20}$/) }).strict();
+const ts = z.string().regex(/^\d{10,16}\.\d{6}$/);
+const resource = (a: z.infer<typeof channel>) => [`slack:channel:${a.channelId}`];
+function ok(body: unknown) { const data = object(body); if (data.ok !== true) throw new ProviderError(data.error === 'ratelimited' ? 'provider_rate_limited' : 'provider_request_failed'); return data; }
+export const slackTools: readonly ProviderToolDefinition[] = [
+  defineTool({ id: 'slack.channel.get', providerId: 'slack', title: 'Read selected channel identity', description: 'Read native identity of one selected public/private channel for scoped event readback.', effect: 'read', schema: channel, requiredScopes: ['channels:read|groups:read'], resourceFormat: 'slack:channel:channelId', mapResources: resource,
+    request: a => ({ method: 'GET', path: `/api/conversations.info?channel=${segment(a.channelId)}` }), normalize: (r, a) => ({ data: parse(z.object({ channel: z.object({ id: z.literal(a.channelId), name: safeText(100).optional(), is_private: z.boolean().optional(), updated: z.number().int().nonnegative().optional(), context_team_id: z.string().regex(/^T[A-Z0-9]{8,20}$/).optional() }) }), ok(r.body)) }) }),
+  defineTool({ id: 'slack.channel.history', providerId: 'slack', title: 'Read selected channel', description: 'Read the latest 15 messages from one selected public/private channel; no DMs or search.', effect: 'read', schema: channel, requiredScopes: ['channels:history|groups:history'], resourceFormat: 'slack:channel:channelId', mapResources: resource,
+    request: a => ({ method: 'GET', path: `/api/conversations.history?channel=${segment(a.channelId)}&limit=15` }), normalize: r => { const data = parse(z.object({ messages: z.array(z.object({ ts, text: safeText(8000).optional(), user: z.string().regex(/^[UW][A-Z0-9]{8,20}$/).optional() })).max(15), has_more: z.boolean().optional() }), ok(r.body)); return { data: { messages: data.messages }, truncated: data.has_more ?? false }; } }),
+  defineTool({ id: 'slack.message.send', providerId: 'slack', title: 'Send channel message', description: 'Send exact reviewed plain text to one selected channel; links and mentions are not expanded.', effect: 'send', schema: channel.extend({ text: inputText(4000).refine(t => !/<!|<@[A-Z0-9]+>|<#/.test(t), 'Broadcasts and mentions are unsupported') }), requiredScopes: ['chat:write'], resourceFormat: 'slack:channel:channelId', mapResources: resource,
+    request: (a, context) => ({ method: 'POST', path: '/api/chat.postMessage', body: { channel: a.channelId, text: a.text, parse: 'none', link_names: false, unfurl_links: false, unfurl_media: false, ...(/^[0-9a-f-]{36}$/i.test(context.operationId) ? { client_msg_id: context.operationId } : {}) } }), normalize: (r, a) => { const data = parse(z.object({ channel: z.literal(a.channelId), ts }), ok(r.body)); return { data, receipt: `slack:message:${data.channel}:${data.ts}`, revision: data.ts }; } }),
+];

@@ -121,7 +121,7 @@ export function validateStudioConfig(env: NodeJS.ProcessEnv, cwd = process.cwd()
 /** STUDIO_WEB_SEARCH=off keeps every agent offline (web searches are billed per search). */
 function chatLLM(env: NodeJS.ProcessEnv): LLM {
   const llm = new AnthropicLLM(env.ANTHROPIC_API_KEY!, env.STUDIO_CHAT_MODEL || 'claude-sonnet-5-5');
-  return env.STUDIO_WEB_SEARCH === 'off' ? { complete: (request) => llm.complete(request) } : llm;
+  return env.STUDIO_WEB_SEARCH === 'off' ? { identity: llm.identity, complete: (request) => llm.complete(request) } : llm;
 }
 
 async function toJpeg(data: Buffer): Promise<Buffer> {

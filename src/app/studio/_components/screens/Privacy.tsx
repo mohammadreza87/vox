@@ -6,7 +6,7 @@ import { privacyCopy, purposeCopy, type PrivacyLocale } from '../../_lib/adaptiv
 import { Icon, Spinner } from '../ui';
 import { api, type AgentView } from '../../_lib/client';
 
-export function PrivacyScreen({ onShared, onExperience }: { onShared?: () => void; onExperience?: () => void }) {
+export function PrivacyScreen({ onShared, onExperience, onConnections }: { onShared?: () => void; onExperience?: () => void; onConnections?: () => void }) {
   const [locale, setLocale] = useState<PrivacyLocale>('en');
   const [space, setSpace] = useState<AdaptiveSpace>('work');
   const [snapshot, setSnapshot] = useState<AdaptiveSnapshot | null>(null);
@@ -67,6 +67,7 @@ export function PrivacyScreen({ onShared, onExperience }: { onShared?: () => voi
     </header>
     <p className="vx-2">{c.intro}</p>
     {onExperience && <button className="vx-btn vx-btn-secondary" onClick={onExperience}>{locale === 'fa' ? 'ترجیح‌ها و صندوق اعلان' : 'Preferences & notification inbox'}</button>}
+    {onConnections && <button className="vx-btn vx-btn-secondary" onClick={onConnections}>{locale === 'fa' ? 'اتصال‌ها و دسترسی عامل‌ها' : 'Connections & agent access'}</button>}
     <div className="vx-privacy-spaces" role="group" aria-label={c.space}>
       {(['work', 'personal'] as const).map(value => <button key={value} className="vx-btn vx-btn-secondary" aria-pressed={space === value} disabled={busy} onClick={() => setSpace(value)}>{c[value]}</button>)}
     </div>

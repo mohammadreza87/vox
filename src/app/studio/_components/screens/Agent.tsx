@@ -284,6 +284,7 @@ export function AgentScreen({ id }: { id: string }) {
       <Sheet open={sheet === 'admin'} onClose={() => setSheet(null)} label={`Manage ${p.name}`}>
         <h2 className="vx-title-m" style={{ marginBottom: 12 }}>Manage {p.name}</h2>
         <div className="vx-group">
+          <button className="vx-row" onClick={() => { setSheet(null); nav.push({ name: 'connections', agentId: id }); }} style={{ width: '100%', background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left', color: 'inherit' }}>Connections &amp; my access</button>
           {agent.canManageAccess && (
             <button className="vx-row" onClick={openVisibility} style={{ width: '100%', background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left' }}>
               <span style={{ flex: 1 }}>Who can talk to {p.name}</span>

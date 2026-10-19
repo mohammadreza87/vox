@@ -67,6 +67,9 @@ jobs:
           NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: test.firebaseapp.com
           NEXT_PUBLIC_FIREBASE_PROJECT_ID: test-project
 
+      - name: Verify Connections release configuration preservation
+        run: node --test scripts/connections-production-config.test.mjs
+
       - name: Upload coverage reports
         uses: codecov/codecov-action@v4
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -187,6 +190,11 @@ jobs:
           NEXT_PUBLIC_FIREBASE_API_KEY: ${{ secrets.NEXT_PUBLIC_FIREBASE_API_KEY }}
           NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: ${{ secrets.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN }}
           NEXT_PUBLIC_FIREBASE_PROJECT_ID: ${{ secrets.NEXT_PUBLIC_FIREBASE_PROJECT_ID }}
+
+      - name: Run Connections production browser fixtures
+        run: npm run e2e:connections
+        env:
+          CONNECTIONS_E2E_PRODUCTION: '1'
 
       - name: Upload Playwright report
         uses: actions/upload-artifact@v4

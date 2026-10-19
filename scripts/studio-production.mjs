@@ -16,6 +16,7 @@ const label = 'io.ludaxis.vox-studio';
 const domain = `gui/${process.getuid()}`;
 const plist = join(homedir(), 'Library', 'LaunchAgents', `${label}.plist`);
 const keys = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'ELEVENLABS_API_KEY', 'ELEVENLABS_TTS_MODEL', 'VOXX_BOT_TOKEN', 'VOXX_BOT_USERNAME', 'STUDIO_SECRET', 'STUDIO_SUPERADMIN_IDS', 'STUDIO_WEBAPP_URL', 'STUDIO_DATA_DIR', 'STUDIO_ORG_NAME', 'STUDIO_CHAT_MODEL', 'STUDIO_VOICE_MODEL', 'STUDIO_PERSONA_MODEL', 'STUDIO_DECISIONS', 'OPENAI_DECISION_MODEL', 'STUDIO_GROUP_OBSERVATION'];
+keys.push('STUDIO_CONNECTIONS_CONFIG_FILE', 'STUDIO_CONNECTIONS_BROKER_URL', 'STUDIO_CONNECTIONS_BROKER_AUTH_KEY_FILE');
 const readEnv = (file) => existsSync(file) ? parseEnv(readFileSync(file, 'utf8')) : {};
 const stamp = () => new Date().toISOString().replace(/[:.]/g, '-');
 function envLine(key, value) {
@@ -42,7 +43,8 @@ function prepare() {
   env.STUDIO_DATA_DIR ||= join(base, 'data');
   env.VOXX_BOT_USERNAME ||= 'VoxxBot';
   env.STUDIO_ORG_NAME ||= 'HOOR';
-  const contents = keys.map(k => envLine(k, env[k] ?? '')).join('\n') + '\n';
+  // Preparing a new release must retain existing reviewed feature configuration.
+  const contents = [...new Set([...keys, ...Object.keys(env)])].map(k => envLine(k, env[k] ?? '')).join('\n') + '\n';
   const temporary = `${envFile}.${process.pid}.tmp`;
   try {
     writeFileSync(temporary, contents, { mode: 0o600 });

@@ -30,6 +30,8 @@ export interface LLMRequest {
   temperature?: number;
   /** Side-effecting callers must not deliver a provider-truncated completion. */
   requireComplete?: boolean;
+  /** Request-scoped cancellation for bounded connection tasks. */
+  signal?: AbortSignal;
 }
 
 export interface WebSource {
@@ -38,6 +40,7 @@ export interface WebSource {
 }
 
 export interface LLM {
+  readonly identity?: { provider: string; model: string };
   complete(request: LLMRequest): Promise<string>;
   /**
    * Like `complete`, but the model may search the web for live information.
@@ -106,6 +109,7 @@ export class AnthropicLLM implements LLM {
   private webUnavailable = false;
 
   constructor(private readonly apiKey: string, private readonly model: string) {}
+  get identity() { return { provider: 'anthropic', model: this.model }; }
 
   private params({ system, maxTokens = 1024, temperature = 0.7 }: LLMRequest) {
     return {
@@ -118,7 +122,8 @@ export class AnthropicLLM implements LLM {
 
   async complete(request: LLMRequest): Promise<string> {
     this.client ??= new Anthropic({ apiKey: this.apiKey });
-    const response = await this.client.messages.create({ ...this.params(request), messages: normalizeTurns(request.messages) });
+    const parameters = { ...this.params(request), messages: normalizeTurns(request.messages) };
+    const response = await (request.signal ? this.client.messages.create(parameters, { signal: request.signal, maxRetries: 0 }) : this.client.messages.create(parameters));
     if (request.requireComplete && response.stop_reason === 'max_tokens') throw new Error('LLM completion truncated');
     return response.content
       .flatMap((block) => (block.type === 'text' ? [block.text] : []))
@@ -162,8 +167,9 @@ export class GeminiLLM implements LLM {
   private client: GoogleGenerativeAI | null = null;
 
   constructor(private readonly apiKey: string, private readonly model: string) {}
+  get identity() { return { provider: 'gemini', model: this.model }; }
 
-  async complete({ system, messages, maxTokens = 1024, temperature = 0.7, requireComplete }: LLMRequest): Promise<string> {
+  async complete({ system, messages, maxTokens = 1024, temperature = 0.7, requireComplete, signal }: LLMRequest): Promise<string> {
     const turns = normalizeTurns(messages);
     const last = turns.pop();
     if (!last) return '';
@@ -173,7 +179,7 @@ export class GeminiLLM implements LLM {
       history: turns.map((m) => ({ role: m.role === 'user' ? 'user' : 'model', parts: [{ text: m.content }] })),
       generationConfig: { maxOutputTokens: maxTokens, temperature },
     });
-    const result = await chat.sendMessage(last.content);
+    const result = await (signal ? chat.sendMessage(last.content, { signal }) : chat.sendMessage(last.content));
     if (requireComplete && result.response.candidates?.some((candidate) => candidate.finishReason === 'MAX_TOKENS')) throw new Error('LLM completion truncated');
     return result.response.text().trim();
   }

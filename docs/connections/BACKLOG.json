@@ -3,9 +3,9 @@
   "package": "Vox Studio Connections",
   "preparedAt": "2026-10-19",
   "sourceBaseline": "42a1a57113e655b6185ddc731b6f9617aaa4bb4e",
-  "status": "planning_only",
+  "status": "implementation_in_progress_fixture_only",
   "canonical": true,
-  "executionAuthorization": "This backlog is a plan, not permission to implement, connect accounts, access live data, spend, send messages, administer hosts or deploy. Future assignments determine authorized scope. Honor authorization already established in that assignment; do not invent extra approval ceremonies.",
+  "executionAuthorization": "The user authorized end-to-end implementation in this chat, superseding the planning-only instruction. This candidate implements and tests synthetic source paths. No live provider account, private data access, real external effect, target administration, scheduled production worker or deployment was exercised or is claimed by these records.",
   "sizeLegend": {
     "S": "bounded fixture/copy/adapter increment",
     "M": "cross-layer feature with established contract",
@@ -108,7 +108,7 @@
       "title": "Freeze pilot scope, resource/action catalogue and decision owners",
       "stage": "C0",
       "size": "M",
-      "status": "planned",
+      "status": "in_progress",
       "owner": "vox_connection_lead",
       "independentReviewer": "vox_connection_qa",
       "dependsOn": [],
@@ -138,14 +138,40 @@
         "Each unresolved CD decision identifies the dependent activation gate; later providers do not become prerequisites for the first pilot."
       ],
       "externalBoundary": "Local synthetic work only. Any provider account access, paid call, external effect, host access or deployment requires a separately scoped authorized assignment; this backlog grants none.",
-      "evidence": []
+      "evidence": [
+        {
+          "kind": "implementation_reference",
+          "result": "SOURCE_AND_SYNTHETIC",
+          "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
+          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "references": [
+            "docs/connections/IMPLEMENTATION_CONTRACT.md",
+            "docs/connections/IMPLEMENTATION_STATUS.md"
+          ],
+          "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
+          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+        }
+      ],
+      "implementation": {
+        "source": "partial",
+        "summary": "Planning contracts and read-only pilot boundaries documented; full provider/admission owner sign-offs remain open.",
+        "artifacts": [
+          "docs/connections/IMPLEMENTATION_CONTRACT.md",
+          "docs/connections/IMPLEMENTATION_STATUS.md"
+        ],
+        "syntheticEvidence": "See IMPLEMENTATION_STATUS.md and independent review for exact candidate/commands.",
+        "provider": "UNAVAILABLE",
+        "device": "UNAVAILABLE",
+        "deployment": "UNAVAILABLE",
+        "productionEffects": "DISABLED"
+      }
     },
     {
       "id": "CONN-002",
       "title": "Freeze Studio setup, grants and action-review experience",
       "stage": "C0",
       "size": "M",
-      "status": "planned",
+      "status": "in_progress",
       "owner": "vox_connection_designer",
       "independentReviewer": "vox_connection_qa",
       "dependsOn": [],
@@ -175,14 +201,40 @@
         "Wrong account, cancelled provider consent, failed return link, offline state and partial scopes have recoverable flows; accessibility and device cases are specified."
       ],
       "externalBoundary": "Local synthetic work only. Any provider account access, paid call, external effect, host access or deployment requires a separately scoped authorized assignment; this backlog grants none.",
-      "evidence": []
+      "evidence": [
+        {
+          "kind": "implementation_reference",
+          "result": "SOURCE_AND_SYNTHETIC",
+          "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
+          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "references": [
+            "src/app/studio/_components/screens/Connections.tsx",
+            "src/app/studio/_components/screens/ConnectionWorkflows.tsx"
+          ],
+          "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
+          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+        }
+      ],
+      "implementation": {
+        "source": "implemented",
+        "summary": "Connections and bounded workflow screens have EN/FA setup, grants, review, status and pause flows; real-device acceptance remains unavailable.",
+        "artifacts": [
+          "src/app/studio/_components/screens/Connections.tsx",
+          "src/app/studio/_components/screens/ConnectionWorkflows.tsx"
+        ],
+        "syntheticEvidence": "See IMPLEMENTATION_STATUS.md and independent review for exact candidate/commands.",
+        "provider": "UNAVAILABLE",
+        "device": "UNAVAILABLE",
+        "deployment": "UNAVAILABLE",
+        "productionEffects": "DISABLED"
+      }
     },
     {
       "id": "CONN-003",
       "title": "Freeze independent threat model, fixtures and outbound oracle",
       "stage": "C0",
       "size": "L",
-      "status": "planned",
+      "status": "in_progress",
       "owner": "vox_connection_security",
       "independentReviewer": "vox_connection_qa",
       "dependsOn": [],
@@ -233,14 +285,38 @@
         "Unknown outcomes, stale permissions and missing target-isolation evidence block the affected capability regardless of model quality."
       ],
       "externalBoundary": "Local synthetic work only. Any provider account access, paid call, external effect, host access or deployment requires a separately scoped authorized assignment; this backlog grants none.",
-      "evidence": []
+      "evidence": [
+        {
+          "kind": "implementation_reference",
+          "result": "SOURCE_AND_SYNTHETIC",
+          "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
+          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "references": [
+            "docs/connections/evidence/IMPLEMENTATION_REVIEW.md"
+          ],
+          "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
+          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+        }
+      ],
+      "implementation": {
+        "source": "partial",
+        "summary": "Independent adversarial fixtures and source review exist; no production IAM or complete protected admission oracle qualification is claimed.",
+        "artifacts": [
+          "docs/connections/evidence/IMPLEMENTATION_REVIEW.md"
+        ],
+        "syntheticEvidence": "See IMPLEMENTATION_STATUS.md and independent review for exact candidate/commands.",
+        "provider": "UNAVAILABLE",
+        "device": "UNAVAILABLE",
+        "deployment": "UNAVAILABLE",
+        "productionEffects": "DISABLED"
+      }
     },
     {
       "id": "CONN-004",
       "title": "Select broker, vault, normalized persistence and protocol topology",
       "stage": "C0",
       "size": "L",
-      "status": "planned",
+      "status": "in_progress",
       "owner": "vox_connection_platform",
       "independentReviewer": "vox_connection_security",
       "dependsOn": [],
@@ -273,14 +349,42 @@
         "Provider webhooks and broker startup do not start, configure or replace Telegram polling."
       ],
       "externalBoundary": "Local synthetic work only. Any provider account access, paid call, external effect, host access or deployment requires a separately scoped authorized assignment; this backlog grants none.",
-      "evidence": []
+      "evidence": [
+        {
+          "kind": "implementation_reference",
+          "result": "SOURCE_AND_SYNTHETIC",
+          "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
+          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "references": [
+            "src/lib/connections/storage.ts",
+            "src/lib/connections/broker/",
+            "docs/connections/BROKER_OPERATIONS.md"
+          ],
+          "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
+          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+        }
+      ],
+      "implementation": {
+        "source": "implemented",
+        "summary": "Normalized repositories, separate broker HTTP process, authenticated control channel, encrypted vault and UID startup checks implemented.",
+        "artifacts": [
+          "src/lib/connections/storage.ts",
+          "src/lib/connections/broker/",
+          "docs/connections/BROKER_OPERATIONS.md"
+        ],
+        "syntheticEvidence": "See IMPLEMENTATION_STATUS.md and independent review for exact candidate/commands.",
+        "provider": "UNAVAILABLE",
+        "device": "UNAVAILABLE",
+        "deployment": "UNAVAILABLE",
+        "productionEffects": "DISABLED"
+      }
     },
     {
       "id": "CONN-005",
       "title": "Implement normalized connection records and verified grant authority",
       "stage": "C1",
       "size": "L",
-      "status": "planned",
+      "status": "in_progress",
       "owner": "vox_connection_platform",
       "independentReviewer": "vox_connection_security",
       "dependsOn": [
@@ -317,14 +421,42 @@
         "Actual service rules deny direct client access to credentials, restricted metadata and internal receipt stores."
       ],
       "externalBoundary": "Local synthetic work only. Any provider account access, paid call, external effect, host access or deployment requires a separately scoped authorized assignment; this backlog grants none.",
-      "evidence": []
+      "evidence": [
+        {
+          "kind": "implementation_reference",
+          "result": "SOURCE_AND_SYNTHETIC",
+          "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
+          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "references": [
+            "src/lib/connections/contracts.ts",
+            "src/lib/connections/repository.ts",
+            "src/lib/connections/service.ts"
+          ],
+          "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
+          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+        }
+      ],
+      "implementation": {
+        "source": "implemented",
+        "summary": "Verified current-person/scope authority, strict normalized records, zero-grant enrollment and explicit exact agent grants implemented with transactional file/memory/Firestore paths.",
+        "artifacts": [
+          "src/lib/connections/contracts.ts",
+          "src/lib/connections/repository.ts",
+          "src/lib/connections/service.ts"
+        ],
+        "syntheticEvidence": "See IMPLEMENTATION_STATUS.md and independent review for exact candidate/commands.",
+        "provider": "UNAVAILABLE",
+        "device": "UNAVAILABLE",
+        "deployment": "UNAVAILABLE",
+        "productionEffects": "DISABLED"
+      }
     },
     {
       "id": "CONN-006",
       "title": "Implement isolated broker, vault enrollment and fenced refresh",
       "stage": "C1",
       "size": "L",
-      "status": "planned",
+      "status": "in_progress",
       "owner": "vox_connection_platform",
       "independentReviewer": "vox_connection_security",
       "dependsOn": [
@@ -361,14 +493,40 @@
         "Network policy blocks metadata/private/redirect/DNS-rebinding escapes; no ambient developer credentials, host sockets or bot polling."
       ],
       "externalBoundary": "Local synthetic work only. Any provider account access, paid call, external effect, host access or deployment requires a separately scoped authorized assignment; this backlog grants none.",
-      "evidence": []
+      "evidence": [
+        {
+          "kind": "implementation_reference",
+          "result": "SOURCE_AND_SYNTHETIC",
+          "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
+          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "references": [
+            "src/lib/connections/broker/",
+            "scripts/connections-broker.mjs"
+          ],
+          "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
+          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+        }
+      ],
+      "implementation": {
+        "source": "implemented",
+        "summary": "PKCE/state-bound GitHub/Google OAuth seal-and-claim, verified operator token enrollment, separate encrypted vault, fenced refresh/revoke and startup isolation checks implemented; actual provider and target identity remain unavailable.",
+        "artifacts": [
+          "src/lib/connections/broker/",
+          "scripts/connections-broker.mjs"
+        ],
+        "syntheticEvidence": "See IMPLEMENTATION_STATUS.md and independent review for exact candidate/commands.",
+        "provider": "UNAVAILABLE",
+        "device": "UNAVAILABLE",
+        "deployment": "UNAVAILABLE",
+        "productionEffects": "DISABLED"
+      }
     },
     {
       "id": "CONN-007",
       "title": "Implement pre-model tool and destination policy gates",
       "stage": "C1",
       "size": "L",
-      "status": "planned",
+      "status": "in_progress",
       "owner": "vox_connection_platform",
       "independentReviewer": "vox_connection_security",
       "dependsOn": [
@@ -409,14 +567,42 @@
         "Text-only chat fallback remains usable; no generic URL, headers, SQL, shell or generated-prose execution exists."
       ],
       "externalBoundary": "Local synthetic work only. Any provider account access, paid call, external effect, host access or deployment requires a separately scoped authorized assignment; this backlog grants none.",
-      "evidence": []
+      "evidence": [
+        {
+          "kind": "implementation_reference",
+          "result": "SOURCE_AND_SYNTHETIC",
+          "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
+          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "references": [
+            "src/lib/connections/task-runtime.ts",
+            "src/lib/connections/policy.ts",
+            "src/lib/connections/catalog.ts"
+          ],
+          "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
+          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+        }
+      ],
+      "implementation": {
+        "source": "partial",
+        "summary": "Code-owned catalog and isolated Studio model task bridge enforce per-generation source/destination policy; native provider effects are disabled and general Telegram/voice tool orchestration is not admitted.",
+        "artifacts": [
+          "src/lib/connections/task-runtime.ts",
+          "src/lib/connections/policy.ts",
+          "src/lib/connections/catalog.ts"
+        ],
+        "syntheticEvidence": "See IMPLEMENTATION_STATUS.md and independent review for exact candidate/commands.",
+        "provider": "UNAVAILABLE",
+        "device": "UNAVAILABLE",
+        "deployment": "UNAVAILABLE",
+        "productionEffects": "DISABLED"
+      }
     },
     {
       "id": "CONN-008",
       "title": "Implement source lineage, revoke suppression and deletion replay fences",
       "stage": "C1",
       "size": "L",
-      "status": "planned",
+      "status": "in_progress",
       "owner": "vox_connection_platform",
       "independentReviewer": "vox_connection_qa",
       "dependsOn": [
@@ -453,14 +639,40 @@
         "Purge, provider revocation, backup expiry and already delivered copies have truthful separate receipts."
       ],
       "externalBoundary": "Local synthetic work only. Any provider account access, paid call, external effect, host access or deployment requires a separately scoped authorized assignment; this backlog grants none.",
-      "evidence": []
+      "evidence": [
+        {
+          "kind": "implementation_reference",
+          "result": "SOURCE_AND_SYNTHETIC",
+          "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
+          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "references": [
+            "src/lib/connections/lineage.ts",
+            "src/lib/connections/service.ts"
+          ],
+          "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
+          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+        }
+      ],
+      "implementation": {
+        "source": "partial",
+        "summary": "Recursive source lineage, current grant/person/agent checks, immediate suppression and replay tombstones implemented; global history/vector/cache/backup purge acknowledgment remains pending.",
+        "artifacts": [
+          "src/lib/connections/lineage.ts",
+          "src/lib/connections/service.ts"
+        ],
+        "syntheticEvidence": "See IMPLEMENTATION_STATUS.md and independent review for exact candidate/commands.",
+        "provider": "UNAVAILABLE",
+        "device": "UNAVAILABLE",
+        "deployment": "UNAVAILABLE",
+        "productionEffects": "DISABLED"
+      }
     },
     {
       "id": "CONN-009",
       "title": "Implement complete synthetic Studio connection journey",
       "stage": "C1",
       "size": "L",
-      "status": "planned",
+      "status": "in_progress",
       "owner": "vox_connection_frontend",
       "independentReviewer": "vox_connection_qa",
       "dependsOn": [
@@ -506,14 +718,40 @@
         "EN/FA/RTL/accessibility and core chat/call regression fixtures pass without changing Telegram transport."
       ],
       "externalBoundary": "Local synthetic work only. Any provider account access, paid call, external effect, host access or deployment requires a separately scoped authorized assignment; this backlog grants none.",
-      "evidence": []
+      "evidence": [
+        {
+          "kind": "implementation_reference",
+          "result": "SOURCE_AND_SYNTHETIC",
+          "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
+          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "references": [
+            "e2e/connections/",
+            "docs/connections/evidence/IMPLEMENTATION_REVIEW.md"
+          ],
+          "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
+          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+        }
+      ],
+      "implementation": {
+        "source": "implemented",
+        "summary": "Synthetic real HTTP/application/model/broker/React journey and EN/FA local browser evidence exist; provider/device journey remains unavailable.",
+        "artifacts": [
+          "e2e/connections/",
+          "docs/connections/evidence/IMPLEMENTATION_REVIEW.md"
+        ],
+        "syntheticEvidence": "See IMPLEMENTATION_STATUS.md and independent review for exact candidate/commands.",
+        "provider": "UNAVAILABLE",
+        "device": "UNAVAILABLE",
+        "deployment": "UNAVAILABLE",
+        "productionEffects": "DISABLED"
+      }
     },
     {
       "id": "CONN-010",
       "title": "Independently qualify the synthetic application and broker slice",
       "stage": "C1",
       "size": "L",
-      "status": "planned",
+      "status": "in_progress",
       "owner": "vox_connection_qa",
       "independentReviewer": "vox_connection_security",
       "dependsOn": [
@@ -574,14 +812,42 @@
         "Missing isolation, durable audit or source-suppression evidence blocks all real provider calls."
       ],
       "externalBoundary": "Local synthetic work only. Any provider account access, paid call, external effect, host access or deployment requires a separately scoped authorized assignment; this backlog grants none.",
-      "evidence": []
+      "evidence": [
+        {
+          "kind": "implementation_reference",
+          "result": "SOURCE_AND_SYNTHETIC",
+          "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
+          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "references": [
+            "src/lib/connections/__tests__/integration-*.test.ts",
+            "src/lib/connections/__tests__/security-*.test.ts",
+            "docs/connections/evidence/IMPLEMENTATION_REVIEW.md"
+          ],
+          "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
+          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+        }
+      ],
+      "implementation": {
+        "source": "partial",
+        "summary": "Independent finite synthetic security, lifecycle, transport, UI and worker fixtures run; final frozen candidate acceptance and target admission remain open.",
+        "artifacts": [
+          "src/lib/connections/__tests__/integration-*.test.ts",
+          "src/lib/connections/__tests__/security-*.test.ts",
+          "docs/connections/evidence/IMPLEMENTATION_REVIEW.md"
+        ],
+        "syntheticEvidence": "See IMPLEMENTATION_STATUS.md and independent review for exact candidate/commands.",
+        "provider": "UNAVAILABLE",
+        "device": "UNAVAILABLE",
+        "deployment": "UNAVAILABLE",
+        "productionEffects": "DISABLED"
+      }
     },
     {
       "id": "CONN-011",
       "title": "Qualify GitHub selected-repository read pilot",
       "stage": "C2",
       "size": "M",
-      "status": "planned",
+      "status": "qualification_unavailable",
       "owner": "vox_connection_adapter",
       "independentReviewer": "vox_connection_qa",
       "dependsOn": [
@@ -628,14 +894,40 @@
         "No initial real call occurs until shared lineage/revocation/policy/vault/broker/synthetic acceptance and budget gates are complete."
       ],
       "externalBoundary": "Local synthetic work only. Any provider account access, paid call, external effect, host access or deployment requires a separately scoped authorized assignment; this backlog grants none.",
-      "evidence": []
+      "evidence": [
+        {
+          "kind": "implementation_reference",
+          "result": "SOURCE_AND_SYNTHETIC",
+          "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
+          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "references": [
+            "src/lib/connections/providers/github.ts",
+            "src/lib/connections/broker/provider-identity.ts"
+          ],
+          "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
+          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+        }
+      ],
+      "implementation": {
+        "source": "implemented",
+        "summary": "Typed GitHub repository/issue/PR reads and native identity qualification have fixtures; no real account/installation/repository permission evidence.",
+        "artifacts": [
+          "src/lib/connections/providers/github.ts",
+          "src/lib/connections/broker/provider-identity.ts"
+        ],
+        "syntheticEvidence": "See IMPLEMENTATION_STATUS.md and independent review for exact candidate/commands.",
+        "provider": "UNAVAILABLE",
+        "device": "UNAVAILABLE",
+        "deployment": "UNAVAILABLE",
+        "productionEffects": "DISABLED"
+      }
     },
     {
       "id": "CONN-012",
       "title": "Qualify Notion selected-resource remote MCP pilot",
       "stage": "C2",
       "size": "L",
-      "status": "planned",
+      "status": "qualification_unavailable",
       "owner": "vox_connection_adapter",
       "independentReviewer": "vox_connection_qa",
       "dependsOn": [
@@ -683,14 +975,40 @@
         "Fixture proof and explicitly authorized real-account read evidence remain separate; shared pre-real-call gates are satisfied."
       ],
       "externalBoundary": "Local synthetic work only. Any provider account access, paid call, external effect, host access or deployment requires a separately scoped authorized assignment; this backlog grants none.",
-      "evidence": []
+      "evidence": [
+        {
+          "kind": "implementation_reference",
+          "result": "SOURCE_AND_SYNTHETIC",
+          "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
+          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "references": [
+            "src/lib/connections/providers/notion.ts",
+            "src/lib/connections/broker/provider-identity.ts"
+          ],
+          "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
+          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+        }
+      ],
+      "implementation": {
+        "source": "partial",
+        "summary": "Notion typed REST api_bridge reads and bot.workspace_id identity implemented; planned remote MCP profile and real workspace qualification are unavailable.",
+        "artifacts": [
+          "src/lib/connections/providers/notion.ts",
+          "src/lib/connections/broker/provider-identity.ts"
+        ],
+        "syntheticEvidence": "See IMPLEMENTATION_STATUS.md and independent review for exact candidate/commands.",
+        "provider": "UNAVAILABLE",
+        "device": "UNAVAILABLE",
+        "deployment": "UNAVAILABLE",
+        "productionEffects": "DISABLED"
+      }
     },
     {
       "id": "CONN-013",
       "title": "Implement durable effects, approval receipts and uncertain recovery",
       "stage": "C3",
       "size": "L",
-      "status": "planned",
+      "status": "in_progress",
       "owner": "vox_connection_platform",
       "independentReviewer": "vox_connection_security",
       "dependsOn": [
@@ -729,14 +1047,40 @@
         "Transactional durable intent/audit/budget reservation is required before consequential dispatch; rollback retains unknown-operation resolution."
       ],
       "externalBoundary": "Local synthetic work only. Any provider account access, paid call, external effect, host access or deployment requires a separately scoped authorized assignment; this backlog grants none.",
-      "evidence": []
+      "evidence": [
+        {
+          "kind": "implementation_reference",
+          "result": "SOURCE_AND_SYNTHETIC",
+          "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
+          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "references": [
+            "src/lib/connections/operations.ts",
+            "src/lib/connections/service.ts"
+          ],
+          "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
+          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+        }
+      ],
+      "implementation": {
+        "source": "implemented",
+        "summary": "Durable operation/outbox/attempt ledger, exact digest-bound approvals, fenced claims, explicit unknown outcomes and ephemeral loss recovery implemented; effects stay production-disabled.",
+        "artifacts": [
+          "src/lib/connections/operations.ts",
+          "src/lib/connections/service.ts"
+        ],
+        "syntheticEvidence": "See IMPLEMENTATION_STATUS.md and independent review for exact candidate/commands.",
+        "provider": "UNAVAILABLE",
+        "device": "UNAVAILABLE",
+        "deployment": "UNAVAILABLE",
+        "productionEffects": "DISABLED"
+      }
     },
     {
       "id": "CONN-014",
       "title": "Implement exact action review and durable status UI",
       "stage": "C3",
       "size": "M",
-      "status": "planned",
+      "status": "in_progress",
       "owner": "vox_connection_frontend",
       "independentReviewer": "vox_connection_qa",
       "dependsOn": [
@@ -772,14 +1116,40 @@
         "Already authorized unchanged standing workflow does not prompt redundantly; widening requires explicit new review."
       ],
       "externalBoundary": "Local synthetic work only. Any provider account access, paid call, external effect, host access or deployment requires a separately scoped authorized assignment; this backlog grants none.",
-      "evidence": []
+      "evidence": [
+        {
+          "kind": "implementation_reference",
+          "result": "SOURCE_AND_SYNTHETIC",
+          "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
+          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "references": [
+            "src/lib/connections/http.ts",
+            "src/app/studio/_components/screens/Connections.tsx"
+          ],
+          "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
+          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+        }
+      ],
+      "implementation": {
+        "source": "partial",
+        "summary": "Exact preview/review and operation status APIs/fixtures exist; production effects remain hidden/disabled pending independent external audience/source proof.",
+        "artifacts": [
+          "src/lib/connections/http.ts",
+          "src/app/studio/_components/screens/Connections.tsx"
+        ],
+        "syntheticEvidence": "See IMPLEMENTATION_STATUS.md and independent review for exact candidate/commands.",
+        "provider": "UNAVAILABLE",
+        "device": "UNAVAILABLE",
+        "deployment": "UNAVAILABLE",
+        "productionEffects": "DISABLED"
+      }
     },
     {
       "id": "CONN-015",
       "title": "Qualify reviewed GitHub draft PR and selected Notion updates",
       "stage": "C3",
       "size": "L",
-      "status": "planned",
+      "status": "qualification_unavailable",
       "owner": "vox_connection_adapter",
       "independentReviewer": "vox_connection_qa",
       "dependsOn": [
@@ -823,14 +1193,40 @@
         "Record provider receipt/evidence, cleanup and unknown states; no merge, publish, production deployment or credential-returning capability admitted."
       ],
       "externalBoundary": "Local synthetic work only. Any provider account access, paid call, external effect, host access or deployment requires a separately scoped authorized assignment; this backlog grants none.",
-      "evidence": []
+      "evidence": [
+        {
+          "kind": "implementation_reference",
+          "result": "SOURCE_AND_SYNTHETIC",
+          "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
+          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "references": [
+            "src/lib/connections/providers/github.ts",
+            "src/lib/connections/providers/notion.ts"
+          ],
+          "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
+          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+        }
+      ],
+      "implementation": {
+        "source": "partial",
+        "summary": "GitHub draft PR and selected Notion write adapters are fixture-qualified only. Production dispatch rejects all effects beyond read.",
+        "artifacts": [
+          "src/lib/connections/providers/github.ts",
+          "src/lib/connections/providers/notion.ts"
+        ],
+        "syntheticEvidence": "See IMPLEMENTATION_STATUS.md and independent review for exact candidate/commands.",
+        "provider": "UNAVAILABLE",
+        "device": "UNAVAILABLE",
+        "deployment": "UNAVAILABLE",
+        "productionEffects": "DISABLED"
+      }
     },
     {
       "id": "CONN-016",
       "title": "Qualify selected Google Drive, Docs, Sheets and Slides output",
       "stage": "C3",
       "size": "L",
-      "status": "planned",
+      "status": "qualification_unavailable",
       "owner": "vox_connection_adapter",
       "independentReviewer": "vox_connection_qa",
       "dependsOn": [
@@ -879,14 +1275,38 @@
         "Teaching fixture keeps learners separated; report saving does not disclose a private source to an unauthorized destination."
       ],
       "externalBoundary": "Local synthetic work only. Any provider account access, paid call, external effect, host access or deployment requires a separately scoped authorized assignment; this backlog grants none.",
-      "evidence": []
+      "evidence": [
+        {
+          "kind": "implementation_reference",
+          "result": "SOURCE_AND_SYNTHETIC",
+          "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
+          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "references": [
+            "src/lib/connections/providers/google.ts"
+          ],
+          "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
+          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+        }
+      ],
+      "implementation": {
+        "source": "implemented",
+        "summary": "Typed selected Google Drive/Docs/Sheets/Slides read and bounded output adapters have fixtures; account/OAuth/scope/output qualification unavailable and writes disabled.",
+        "artifacts": [
+          "src/lib/connections/providers/google.ts"
+        ],
+        "syntheticEvidence": "See IMPLEMENTATION_STATUS.md and independent review for exact candidate/commands.",
+        "provider": "UNAVAILABLE",
+        "device": "UNAVAILABLE",
+        "deployment": "UNAVAILABLE",
+        "productionEffects": "DISABLED"
+      }
     },
     {
       "id": "CONN-017",
       "title": "Qualify Slack workspace/channel reads and reviewed posting",
       "stage": "C3",
       "size": "M",
-      "status": "planned",
+      "status": "qualification_unavailable",
       "owner": "vox_connection_adapter",
       "independentReviewer": "vox_connection_qa",
       "dependsOn": [
@@ -932,14 +1352,38 @@
         "Signature/event contract is documented for later webhook task; installing alone enables no proactive workflow."
       ],
       "externalBoundary": "Local synthetic work only. Any provider account access, paid call, external effect, host access or deployment requires a separately scoped authorized assignment; this backlog grants none.",
-      "evidence": []
+      "evidence": [
+        {
+          "kind": "implementation_reference",
+          "result": "SOURCE_AND_SYNTHETIC",
+          "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
+          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "references": [
+            "src/lib/connections/providers/slack.ts"
+          ],
+          "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
+          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+        }
+      ],
+      "implementation": {
+        "source": "implemented",
+        "summary": "Slack selected channel identity/history and reviewed post adapter fixtures exist; exact workspace/channel/scopes and external recipients unqualified, posting disabled.",
+        "artifacts": [
+          "src/lib/connections/providers/slack.ts"
+        ],
+        "syntheticEvidence": "See IMPLEMENTATION_STATUS.md and independent review for exact candidate/commands.",
+        "provider": "UNAVAILABLE",
+        "device": "UNAVAILABLE",
+        "deployment": "UNAVAILABLE",
+        "productionEffects": "DISABLED"
+      }
     },
     {
       "id": "CONN-018",
       "title": "Qualify bounded git.joyixir.com Forgejo adapter",
       "stage": "C3",
       "size": "L",
-      "status": "planned",
+      "status": "qualification_unavailable",
       "owner": "vox_connection_adapter",
       "independentReviewer": "vox_connection_security",
       "dependsOn": [
@@ -984,14 +1428,38 @@
         "Lost/unknown writes reconcile via declared provider contract; no nearby-object guess or blind resend."
       ],
       "externalBoundary": "Local synthetic work only. Any provider account access, paid call, external effect, host access or deployment requires a separately scoped authorized assignment; this backlog grants none.",
-      "evidence": []
+      "evidence": [
+        {
+          "kind": "implementation_reference",
+          "result": "SOURCE_AND_SYNTHETIC",
+          "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
+          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "references": [
+            "src/lib/connections/providers/forgejo.ts"
+          ],
+          "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
+          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+        }
+      ],
+      "implementation": {
+        "source": "implemented",
+        "summary": "Fixed-origin bounded Forgejo reads and write fixtures implemented; installed instance/token/version and real repository rights unqualified.",
+        "artifacts": [
+          "src/lib/connections/providers/forgejo.ts"
+        ],
+        "syntheticEvidence": "See IMPLEMENTATION_STATUS.md and independent review for exact candidate/commands.",
+        "provider": "UNAVAILABLE",
+        "device": "UNAVAILABLE",
+        "deployment": "UNAVAILABLE",
+        "productionEffects": "DISABLED"
+      }
     },
     {
       "id": "CONN-019",
       "title": "Qualify existing Gamend MCP delegated operations",
       "stage": "C4",
       "size": "L",
-      "status": "planned",
+      "status": "qualification_unavailable",
       "owner": "vox_connection_adapter",
       "independentReviewer": "vox_connection_security",
       "dependsOn": [
@@ -1039,14 +1507,40 @@
         "Metric source/cohort/build/timezone/freshness/QA compatibility and regional restrictions are preserved; unsupported values remain unavailable."
       ],
       "externalBoundary": "Local synthetic work only. Any provider account access, paid call, external effect, host access or deployment requires a separately scoped authorized assignment; this backlog grants none.",
-      "evidence": []
+      "evidence": [
+        {
+          "kind": "implementation_reference",
+          "result": "SOURCE_AND_SYNTHETIC",
+          "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
+          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "references": [
+            "src/lib/connections/providers/gamend.ts",
+            "src/lib/connections/broker/provider-identity.ts"
+          ],
+          "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
+          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+        }
+      ],
+      "implementation": {
+        "source": "implemented",
+        "summary": "Finite Gamend MCP envelopes and native delegated identity/resource adapters implemented; real membership/token/capability evidence unavailable.",
+        "artifacts": [
+          "src/lib/connections/providers/gamend.ts",
+          "src/lib/connections/broker/provider-identity.ts"
+        ],
+        "syntheticEvidence": "See IMPLEMENTATION_STATUS.md and independent review for exact candidate/commands.",
+        "provider": "UNAVAILABLE",
+        "device": "UNAVAILABLE",
+        "deployment": "UNAVAILABLE",
+        "productionEffects": "DISABLED"
+      }
     },
     {
       "id": "CONN-020",
       "title": "Qualify GA and PostHog scoped analytics reads",
       "stage": "C4",
       "size": "L",
-      "status": "planned",
+      "status": "qualification_unavailable",
       "owner": "vox_connection_adapter",
       "independentReviewer": "vox_connection_qa",
       "dependsOn": [
@@ -1091,14 +1585,38 @@
         "Provider reads are individually enableable; saving a report uses a separately qualified write adapter/review contract."
       ],
       "externalBoundary": "Local synthetic work only. Any provider account access, paid call, external effect, host access or deployment requires a separately scoped authorized assignment; this backlog grants none.",
-      "evidence": []
+      "evidence": [
+        {
+          "kind": "implementation_reference",
+          "result": "SOURCE_AND_SYNTHETIC",
+          "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
+          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "references": [
+            "src/lib/connections/providers/analytics.ts"
+          ],
+          "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
+          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+        }
+      ],
+      "implementation": {
+        "source": "implemented",
+        "summary": "Bounded GA/PostHog aggregate insight reads with exact resources and fixture-normalized outputs implemented; real tenant/cohort/metric evidence unavailable.",
+        "artifacts": [
+          "src/lib/connections/providers/analytics.ts"
+        ],
+        "syntheticEvidence": "See IMPLEMENTATION_STATUS.md and independent review for exact candidate/commands.",
+        "provider": "UNAVAILABLE",
+        "device": "UNAVAILABLE",
+        "deployment": "UNAVAILABLE",
+        "productionEffects": "DISABLED"
+      }
     },
     {
       "id": "CONN-021",
       "title": "Qualify private Gmail read/draft and separately reviewed send",
       "stage": "C4",
       "size": "L",
-      "status": "planned",
+      "status": "qualification_unavailable",
       "owner": "vox_connection_adapter",
       "independentReviewer": "vox_connection_security",
       "dependsOn": [
@@ -1151,14 +1669,38 @@
         "Read/draft and send have separate admission states and kill switches; provider acceptance is not recipient delivery."
       ],
       "externalBoundary": "Local synthetic work only. Any provider account access, paid call, external effect, host access or deployment requires a separately scoped authorized assignment; this backlog grants none.",
-      "evidence": []
+      "evidence": [
+        {
+          "kind": "implementation_reference",
+          "result": "SOURCE_AND_SYNTHETIC",
+          "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
+          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "references": [
+            "src/lib/connections/providers/gmail.ts"
+          ],
+          "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
+          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+        }
+      ],
+      "implementation": {
+        "source": "implemented",
+        "summary": "Personal-only exact Gmail read/draft/send adapters have fixtures; real mailbox/scope/recipient delivery unqualified and external effects disabled.",
+        "artifacts": [
+          "src/lib/connections/providers/gmail.ts"
+        ],
+        "syntheticEvidence": "See IMPLEMENTATION_STATUS.md and independent review for exact candidate/commands.",
+        "provider": "UNAVAILABLE",
+        "device": "UNAVAILABLE",
+        "deployment": "UNAVAILABLE",
+        "productionEffects": "DISABLED"
+      }
     },
     {
       "id": "CONN-022",
       "title": "Qualify Figma selected-file capabilities and reviewed changes",
       "stage": "C4",
       "size": "M",
-      "status": "planned",
+      "status": "qualification_unavailable",
       "owner": "vox_connection_adapter",
       "independentReviewer": "vox_connection_qa",
       "dependsOn": [
@@ -1204,14 +1746,38 @@
         "Unsupported effects stay disabled; supported writes bind target/revision/diff and run through durable review/reconcile controls."
       ],
       "externalBoundary": "Local synthetic work only. Any provider account access, paid call, external effect, host access or deployment requires a separately scoped authorized assignment; this backlog grants none.",
-      "evidence": []
+      "evidence": [
+        {
+          "kind": "implementation_reference",
+          "result": "SOURCE_AND_SYNTHETIC",
+          "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
+          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "references": [
+            "src/lib/connections/providers/figma.ts"
+          ],
+          "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
+          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+        }
+      ],
+      "implementation": {
+        "source": "partial",
+        "summary": "Figma selected-node/file inspection and identity implemented; canvas mutation capability and actual file/plan/scope qualification unavailable.",
+        "artifacts": [
+          "src/lib/connections/providers/figma.ts"
+        ],
+        "syntheticEvidence": "See IMPLEMENTATION_STATUS.md and independent review for exact candidate/commands.",
+        "provider": "UNAVAILABLE",
+        "device": "UNAVAILABLE",
+        "deployment": "UNAVAILABLE",
+        "productionEffects": "DISABLED"
+      }
     },
     {
       "id": "CONN-023",
       "title": "Qualify Hetzner project inventory and bounded cloud actions",
       "stage": "C5",
       "size": "L",
-      "status": "planned",
+      "status": "qualification_unavailable",
       "owner": "vox_connection_adapter",
       "independentReviewer": "vox_connection_security",
       "dependsOn": [
@@ -1257,14 +1823,40 @@
         "Cloud credentials cannot reach production signing/release controls; no automatic regional or provider failover writes."
       ],
       "externalBoundary": "Local synthetic work only. Any provider account access, paid call, external effect, host access or deployment requires a separately scoped authorized assignment; this backlog grants none.",
-      "evidence": []
+      "evidence": [
+        {
+          "kind": "implementation_reference",
+          "result": "SOURCE_AND_SYNTHETIC",
+          "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
+          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "references": [
+            "src/lib/connections/providers/hetzner.ts",
+            "src/lib/connections/broker/provider-identity.ts"
+          ],
+          "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
+          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+        }
+      ],
+      "implementation": {
+        "source": "partial",
+        "summary": "Hetzner selected-server reads and bounded lifecycle adapter fixtures implemented; account/project identity is explicitly credential-resource evidence, actual billing/write/recovery unqualified and effects disabled.",
+        "artifacts": [
+          "src/lib/connections/providers/hetzner.ts",
+          "src/lib/connections/broker/provider-identity.ts"
+        ],
+        "syntheticEvidence": "See IMPLEMENTATION_STATUS.md and independent review for exact candidate/commands.",
+        "provider": "UNAVAILABLE",
+        "device": "UNAVAILABLE",
+        "deployment": "UNAVAILABLE",
+        "productionEffects": "DISABLED"
+      }
     },
     {
       "id": "CONN-024",
       "title": "Qualify isolated SSH workers and named server runbooks",
       "stage": "C5",
       "size": "L",
-      "status": "planned",
+      "status": "qualification_unavailable",
       "owner": "vox_connection_runner",
       "independentReviewer": "vox_connection_security",
       "dependsOn": [
@@ -1318,14 +1910,42 @@
         "Authorized disposable-host E2E and actual sandbox/IAM evidence are independent prerequisites; existing Mac Studio production is never an incidental test target."
       ],
       "externalBoundary": "Local synthetic work only. Any provider account access, paid call, external effect, host access or deployment requires a separately scoped authorized assignment; this backlog grants none.",
-      "evidence": []
+      "evidence": [
+        {
+          "kind": "implementation_reference",
+          "result": "SOURCE_AND_SYNTHETIC",
+          "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
+          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "references": [
+            "src/lib/connections/runners/",
+            "services/connections-runner/",
+            "docs/connections/RUNNER_OPERATIONS.md"
+          ],
+          "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
+          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+        }
+      ],
+      "implementation": {
+        "source": "partial",
+        "summary": "Isolated SSH reader and forced-command runbook source plus fixtures implemented; no disposable SSH host, attested enrollment or target host-key/IAM journey performed. Guarded signed release-attestation enrollment and per-account/scope runner bootstrap are implemented; actual target attestation and SSH admission remain unavailable.",
+        "artifacts": [
+          "src/lib/connections/runners/",
+          "services/connections-runner/",
+          "docs/connections/RUNNER_OPERATIONS.md"
+        ],
+        "syntheticEvidence": "See IMPLEMENTATION_STATUS.md and independent review for exact candidate/commands.",
+        "provider": "UNAVAILABLE",
+        "device": "UNAVAILABLE",
+        "deployment": "UNAVAILABLE",
+        "productionEffects": "DISABLED"
+      }
     },
     {
       "id": "CONN-025",
       "title": "Qualify isolated Chrome browser workflows",
       "stage": "C5",
       "size": "L",
-      "status": "planned",
+      "status": "qualification_unavailable",
       "owner": "vox_connection_runner",
       "independentReviewer": "vox_connection_security",
       "dependsOn": [
@@ -1380,14 +2000,42 @@
         "Consequential click/submit needs deterministic reviewed meaning; unsupported idempotency/reconciliation keeps writes unavailable or explicitly unknown."
       ],
       "externalBoundary": "Local synthetic work only. Any provider account access, paid call, external effect, host access or deployment requires a separately scoped authorized assignment; this backlog grants none.",
-      "evidence": []
+      "evidence": [
+        {
+          "kind": "implementation_reference",
+          "result": "SOURCE_AND_SYNTHETIC",
+          "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
+          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "references": [
+            "src/lib/connections/runners/",
+            "services/connections-runner/",
+            "docs/connections/RUNNER_OPERATIONS.md"
+          ],
+          "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
+          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+        }
+      ],
+      "implementation": {
+        "source": "partial",
+        "summary": "Isolated offline Chromium public-page reader implemented and actually exercised in a local immutable Docker image; authenticated/interactive browser and deployed isolation unqualified. Guarded signed release-attestation enrollment and per-account/scope runner bootstrap are implemented; actual target attestation and SSH admission remain unavailable.",
+        "artifacts": [
+          "src/lib/connections/runners/",
+          "services/connections-runner/",
+          "docs/connections/RUNNER_OPERATIONS.md"
+        ],
+        "syntheticEvidence": "See IMPLEMENTATION_STATUS.md and independent review for exact candidate/commands.",
+        "provider": "UNAVAILABLE",
+        "device": "UNAVAILABLE",
+        "deployment": "UNAVAILABLE",
+        "productionEffects": "DISABLED"
+      }
     },
     {
       "id": "CONN-026",
       "title": "Implement signed provider event inbox and scoped triggers",
       "stage": "C6",
       "size": "L",
-      "status": "planned",
+      "status": "in_progress",
       "owner": "vox_connection_platform",
       "independentReviewer": "vox_connection_security",
       "dependsOn": [
@@ -1433,14 +2081,40 @@
         "Feedback/causation chain caps and native state readback prevent loops; no provider event endpoint configures Telegram webhooks."
       ],
       "externalBoundary": "Local synthetic work only. Any provider account access, paid call, external effect, host access or deployment requires a separately scoped authorized assignment; this backlog grants none.",
-      "evidence": []
+      "evidence": [
+        {
+          "kind": "implementation_reference",
+          "result": "SOURCE_AND_SYNTHETIC",
+          "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
+          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "references": [
+            "src/lib/connections/events/",
+            "src/lib/connections/broker/service.ts"
+          ],
+          "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
+          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+        }
+      ],
+      "implementation": {
+        "source": "implemented",
+        "summary": "Broker-only GitHub/Slack raw-byte signatures, exact subscription metadata, keyed body replay dedupe, minimized durable event inbox and native-readback gate implemented; real provider hook setup unavailable.",
+        "artifacts": [
+          "src/lib/connections/events/",
+          "src/lib/connections/broker/service.ts"
+        ],
+        "syntheticEvidence": "See IMPLEMENTATION_STATUS.md and independent review for exact candidate/commands.",
+        "provider": "UNAVAILABLE",
+        "device": "UNAVAILABLE",
+        "deployment": "UNAVAILABLE",
+        "productionEffects": "DISABLED"
+      }
     },
     {
       "id": "CONN-027",
       "title": "Implement reviewed schedules and bounded proactive workflows",
       "stage": "C6",
       "size": "L",
-      "status": "planned",
+      "status": "in_progress",
       "owner": "vox_connection_platform",
       "independentReviewer": "vox_connection_qa",
       "dependsOn": [
@@ -1491,14 +2165,42 @@
         "Unchanged/nonactionable monitoring stays quiet unless periodic status requested; external notification details follow existing current-recipient consent rules."
       ],
       "externalBoundary": "Local synthetic work only. Any provider account access, paid call, external effect, host access or deployment requires a separately scoped authorized assignment; this backlog grants none.",
-      "evidence": []
+      "evidence": [
+        {
+          "kind": "implementation_reference",
+          "result": "SOURCE_AND_SYNTHETIC",
+          "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
+          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "references": [
+            "src/lib/connections/workflows/",
+            "src/lib/connections/triggers/",
+            "docs/connections/WORKFLOW_OPERATIONS.md"
+          ],
+          "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
+          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+        }
+      ],
+      "implementation": {
+        "source": "implemented",
+        "summary": "Explicit immutable reviewed read workflows, interval/daily timezone schedules, quiet hours, DST dedupe, stable ledger IDs and signed worker drain implemented. No hidden scheduler or unsolicited external delivery enabled.",
+        "artifacts": [
+          "src/lib/connections/workflows/",
+          "src/lib/connections/triggers/",
+          "docs/connections/WORKFLOW_OPERATIONS.md"
+        ],
+        "syntheticEvidence": "See IMPLEMENTATION_STATUS.md and independent review for exact candidate/commands.",
+        "provider": "UNAVAILABLE",
+        "device": "UNAVAILABLE",
+        "deployment": "UNAVAILABLE",
+        "productionEffects": "DISABLED"
+      }
     },
     {
       "id": "CONN-028",
       "title": "Implement scoped budgets, health, metrics and executor kill switches",
       "stage": "C1",
       "size": "M",
-      "status": "planned",
+      "status": "in_progress",
       "owner": "vox_connection_platform",
       "independentReviewer": "vox_connection_qa",
       "dependsOn": [
@@ -1538,14 +2240,42 @@
         "Unsampled minimized audit, no secret/body/header leakage, metric denominators/QA exclusion/completeness and incident owner are documented/tested."
       ],
       "externalBoundary": "Local synthetic work only. Any provider account access, paid call, external effect, host access or deployment requires a separately scoped authorized assignment; this backlog grants none.",
-      "evidence": []
+      "evidence": [
+        {
+          "kind": "implementation_reference",
+          "result": "SOURCE_AND_SYNTHETIC",
+          "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
+          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "references": [
+            "src/lib/connections/budgets.ts",
+            "src/lib/connections/runtime.ts",
+            "src/lib/connections/studio-application.ts"
+          ],
+          "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
+          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+        }
+      ],
+      "implementation": {
+        "source": "partial",
+        "summary": "Durable explicit daily model/tool reservations, per-grant/workflow ceilings, current profile kill gates and safe operation status implemented; full health/circuit-breaker/metrics/cost/target outage qualification remains open.",
+        "artifacts": [
+          "src/lib/connections/budgets.ts",
+          "src/lib/connections/runtime.ts",
+          "src/lib/connections/studio-application.ts"
+        ],
+        "syntheticEvidence": "See IMPLEMENTATION_STATUS.md and independent review for exact candidate/commands.",
+        "provider": "UNAVAILABLE",
+        "device": "UNAVAILABLE",
+        "deployment": "UNAVAILABLE",
+        "productionEffects": "DISABLED"
+      }
     },
     {
       "id": "CONN-029",
       "title": "Implement versioned runtime skills with capability-bound evaluation",
       "stage": "C6",
       "size": "L",
-      "status": "planned",
+      "status": "in_progress",
       "owner": "vox_connection_platform",
       "independentReviewer": "vox_connection_qa",
       "dependsOn": [
@@ -1598,14 +2328,40 @@
         "Missing provider actions remain unavailable; one skill rolls back without widening permissions or disconnecting unrelated agents."
       ],
       "externalBoundary": "Local synthetic work only. Any provider account access, paid call, external effect, host access or deployment requires a separately scoped authorized assignment; this backlog grants none.",
-      "evidence": []
+      "evidence": [
+        {
+          "kind": "implementation_reference",
+          "result": "SOURCE_AND_SYNTHETIC",
+          "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
+          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "references": [
+            "src/lib/connections/skills.ts",
+            "src/lib/connections/task-runtime.ts"
+          ],
+          "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
+          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+        }
+      ],
+      "implementation": {
+        "source": "implemented",
+        "summary": "Seven code-owned versioned runtime skill packages with capability-bound selection and no source persistence implemented; external model/provider evaluation and multi-version rollout remain unqualified.",
+        "artifacts": [
+          "src/lib/connections/skills.ts",
+          "src/lib/connections/task-runtime.ts"
+        ],
+        "syntheticEvidence": "See IMPLEMENTATION_STATUS.md and independent review for exact candidate/commands.",
+        "provider": "UNAVAILABLE",
+        "device": "UNAVAILABLE",
+        "deployment": "UNAVAILABLE",
+        "productionEffects": "DISABLED"
+      }
     },
     {
       "id": "CONN-030",
       "title": "Independently evaluate integrated pilot and admission gates",
       "stage": "C7",
       "size": "L",
-      "status": "planned",
+      "status": "in_progress",
       "owner": "vox_connection_qa",
       "independentReviewer": "vox_connection_security",
       "dependsOn": [
@@ -1673,14 +2429,38 @@
         "Later adapters repeat this gate for their own capability without becoming mandatory prerequisites for pilot release; unknown provider/device/isolation gates remain unavailable."
       ],
       "externalBoundary": "Local synthetic work only. Any provider account access, paid call, external effect, host access or deployment requires a separately scoped authorized assignment; this backlog grants none.",
-      "evidence": []
+      "evidence": [
+        {
+          "kind": "implementation_reference",
+          "result": "SOURCE_AND_SYNTHETIC",
+          "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
+          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "references": [
+            "docs/connections/evidence/IMPLEMENTATION_REVIEW.md"
+          ],
+          "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
+          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+        }
+      ],
+      "implementation": {
+        "source": "partial",
+        "summary": "Independent integrated source/fixture review exists, including local offline browser smoke. Real per-capability account/latency/cost/revocation/provider admission is unavailable.",
+        "artifacts": [
+          "docs/connections/evidence/IMPLEMENTATION_REVIEW.md"
+        ],
+        "syntheticEvidence": "See IMPLEMENTATION_STATUS.md and independent review for exact candidate/commands.",
+        "provider": "UNAVAILABLE",
+        "device": "UNAVAILABLE",
+        "deployment": "UNAVAILABLE",
+        "productionEffects": "DISABLED"
+      }
     },
     {
       "id": "CONN-031",
       "title": "Run authorized real-account and actual Telegram device journeys",
       "stage": "C7",
       "size": "L",
-      "status": "planned",
+      "status": "not_run",
       "owner": "vox_connection_qa",
       "independentReviewer": "vox_connection_security",
       "dependsOn": [
@@ -1728,14 +2508,38 @@
         "Runner does not alter implementation/oracle/promote; unavailable device/provider cases block affected public capability and remain labeled unavailable."
       ],
       "externalBoundary": "Local synthetic work only. Any provider account access, paid call, external effect, host access or deployment requires a separately scoped authorized assignment; this backlog grants none.",
-      "evidence": []
+      "evidence": [
+        {
+          "kind": "implementation_reference",
+          "result": "SOURCE_ONLY",
+          "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
+          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "references": [
+            "docs/connections/IMPLEMENTATION_STATUS.md"
+          ],
+          "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
+          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+        }
+      ],
+      "implementation": {
+        "source": "not_run",
+        "summary": "No real provider account authorization or physical Telegram device journey was performed.",
+        "artifacts": [
+          "docs/connections/IMPLEMENTATION_STATUS.md"
+        ],
+        "syntheticEvidence": "See IMPLEMENTATION_STATUS.md and independent review for exact candidate/commands.",
+        "provider": "UNAVAILABLE",
+        "device": "UNAVAILABLE",
+        "deployment": "UNAVAILABLE",
+        "productionEffects": "DISABLED"
+      }
     },
     {
       "id": "CONN-032",
       "title": "Qualify per-capability canary, rollback and operator handoff",
       "stage": "C7",
       "size": "L",
-      "status": "planned",
+      "status": "not_run",
       "owner": "vox_connection_release",
       "independentReviewer": "vox_connection_qa",
       "dependsOn": [
@@ -1783,7 +2587,40 @@
         "Later Google/Slack/Forgejo/Gamend/analytics/Gmail/Figma/Hetzner/server/browser/automation additions need their own CONN-030/031/032 evidence instances, never automatic release from pilot evidence."
       ],
       "externalBoundary": "Local synthetic work only. Any provider account access, paid call, external effect, host access or deployment requires a separately scoped authorized assignment; this backlog grants none.",
-      "evidence": []
+      "evidence": [
+        {
+          "kind": "implementation_reference",
+          "result": "SOURCE_ONLY",
+          "candidateBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
+          "candidate": "uncommitted; final digest pending coordinator freeze",
+          "references": [
+            "docs/connections/BROKER_OPERATIONS.md",
+            "docs/connections/IMPLEMENTATION_STATUS.md"
+          ],
+          "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
+          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+        }
+      ],
+      "implementation": {
+        "source": "not_run",
+        "summary": "No production deployment, provider canary, actual target IAM/rotation/rollback drill or operator handoff was performed.",
+        "artifacts": [
+          "docs/connections/BROKER_OPERATIONS.md",
+          "docs/connections/IMPLEMENTATION_STATUS.md"
+        ],
+        "syntheticEvidence": "See IMPLEMENTATION_STATUS.md and independent review for exact candidate/commands.",
+        "provider": "UNAVAILABLE",
+        "device": "UNAVAILABLE",
+        "deployment": "UNAVAILABLE",
+        "productionEffects": "DISABLED"
+      }
     }
-  ]
+  ],
+  "implementationBaseline": "d8d6766f4e7148e83ec4f85208974e00e3570c34",
+  "evidenceBoundary": "Source implementation and synthetic fixtures do not close account, device, infrastructure or release qualification. Production provider effects are hard-disabled independently in Studio and broker; read-only capabilities require explicit qualified per-account/scope inventory.",
+  "statusLegend": {
+    "in_progress": "Source or bounded synthetic implementation exists; stated task acceptance and external qualification are not complete.",
+    "qualification_unavailable": "Relevant source exists, but required provider/identity/device/target qualification was not run.",
+    "not_run": "The stated account/device/release journey has not been performed."
+  }
 }
