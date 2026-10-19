@@ -434,10 +434,19 @@ export class SharedMemoryService {
    * retention fail closed; cleanup remains on the normal lifecycle path. */
   readContextAuthorityNow(telegramId: number, space: SharedSpace, agentId: string, audience: SharedContextAudience): { revision: string; validUntil: number } {
     const startedAt = this.now();
+    let observedIds: number[] = [];
+    const publishObserved = () => {
+      for (const id of observedIds) {
+        const observed = this.adaptive.readRuntimeControlsForEffect(id, space, () => ({ value: true, denied: true }));
+        if (observed.status !== 'ready') return fail(503, 'authority_unavailable');
+      }
+    };
+    try {
     idSchema.parse(agentId);
     if (!this.authority.groupNow || !this.authority.agentNow) return fail(503, 'authority_unavailable');
     const ids = z.array(tgSchema).min(1).max(12).parse(audience.audienceTelegramIds);
     if (new Set(ids).size !== ids.length || !ids.includes(telegramId)) return fail(403, 'audience_denied');
+    observedIds = ids;
     const people = ids.map(id => this.verifiedNow(id, space));
     if (ids.length > 1) {
       const group = audience.groupId ? this.authority.groupNow(audience.groupId) : null;
@@ -461,6 +470,17 @@ export class SharedMemoryService {
     if (this.identityKey(current) !== this.identityKey(people) || groupStamp !== sharedDigest(groupIds.map(id => [id, this.authority.groupNow!(id)])) ||
         sharedDigest(agentStamp) !== sharedDigest(this.authority.agentNow(agentId))) return fail(409, 'authority_changed');
     if (this.repository.readCommittedForEffect().revision !== state.revision) return fail(409, 'revision_conflict');
+    // Native reads and lifecycle publication precede the final Studio checks.
+    // No permission sampled before that I/O can stand in for current membership.
+    publishObserved();
+    const finalPeople = current.map(p => {
+      const member = this.authority.memberNow?.(p.telegramId);
+      if (!member?.active) return fail(403, 'recipient_unavailable');
+      return { ...p, agentIds: member.agentIds, authorityRevision: member.revision };
+    });
+    if (this.identityKey(finalPeople) !== this.identityKey(people) ||
+        sharedDigest(agentStamp) !== sharedDigest(this.authority.agentNow(agentId)) ||
+        groupStamp !== sharedDigest(groupIds.map(id => [id, this.authority.groupNow!(id)]))) return fail(409, 'authority_changed');
     const fresh = this.now();
     if (!Number.isSafeInteger(fresh) || fresh < startedAt || this.validUntil(current) <= fresh) return fail(403, 'authority_expired');
     for (const c of state.containers) for (const m of c.memories) if (
@@ -468,6 +488,12 @@ export class SharedMemoryService {
     const revision = sharedDigest([state.revision, space, agentId, this.identityKey(people), audience, personalized, groupStamp, agentStamp]);
     return { revision: this.adaptive.storeIdentity === 'canonical' ? revision : sharedDigest([this.adaptive.storeIdentity, revision]),
       validUntil: Math.min(this.validUntil(current), ...state.containers.flatMap(c => c.memories.flatMap(m => m.status === 'active' ? [m.expiresAt] : m.status === 'pending' ? [m.publication?.validUntil ?? 0] : []))) };
+    } catch (error) {
+      // Retention and external authority can expire after the last private read.
+      // Keep that observation durable before returning denial to the transport.
+      publishObserved();
+      throw error;
+    }
   }
   private async contextProjection(telegramId: number, space: SharedSpace, agentId: string,
     audience: SharedContextAudience, includeBodies: boolean): Promise<SharedContext> {

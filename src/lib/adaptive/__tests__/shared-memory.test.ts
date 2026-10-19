@@ -435,3 +435,29 @@ describe('shared committed transport authority', () => {
     expect((await f.service.list(101, 'work')).containers.find(c => c.id === container.id)?.memories).toEqual([]);
   });
 });
+
+
+it.each(['shared_read', 'private_commit'] as const)('rechecks Studio membership after final %s I/O', async seam => {
+  const f = await setup(true); await f.personalize(101); await f.create({ agents: ['aria'] });
+  let calls = 0;
+  const storage = f.storage as SqliteAdaptiveStorage;
+  const read = f.service.repository.readCommittedForEffect.bind(f.service.repository), exec = storage.database.exec.bind(storage.database);
+  const spy = seam === 'shared_read' ? vi.spyOn(f.service.repository, 'readCommittedForEffect').mockImplementation((() => {
+    return () => { const result = read(); if (++calls === 2) f.active.set(101, false); return result; };
+  })()) : vi.spyOn(storage.database, 'exec').mockImplementation((() => {
+    return sql => { const result = exec(sql); if (sql === 'COMMIT' && ++calls === 3) f.active.set(101, false); return result; };
+  })());
+  try { expect(() => f.service.readContextAuthorityNow(101, 'work', 'aria', { audienceTelegramIds: [101] })).toThrow(); }
+  finally { spy.mockRestore(); }
+});
+it('persists a shared expiry first observed after the last shared read', async () => {
+  const f = await setup(true); await f.personalize(101); await f.create({ agents: ['aria'] });
+  await f.service.repository.transaction(d => { d.containers[0].memories[0].expiresAt = START + 10; });
+  const read = f.service.repository.readCommittedForEffect.bind(f.service.repository); let calls = 0;
+  const spy = vi.spyOn(f.service.repository, 'readCommittedForEffect').mockImplementation(() => { const result = read(); if (++calls === 2) f.setNow(START + 11); return result; });
+  try { expect(() => f.service.readContextAuthorityNow(101, 'work', 'aria', { audienceTelegramIds: [101] })).toThrow('retention_changed'); }
+  finally { spy.mockRestore(); }
+  expect((f.storage as SqliteAdaptiveStorage).readMetadata().lifecycleWatermark).toBeGreaterThanOrEqual(START + 11);
+  f.setNow(START + 5);
+  expect(() => f.service.readContextAuthorityNow(101, 'work', 'aria', { audienceTelegramIds: [101] })).toThrow();
+});
