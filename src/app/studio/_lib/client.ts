@@ -116,6 +116,8 @@ export interface Me {
 export interface MemoryItem { id: string; content: string; type: string; scope: string; scopeLabel: string; from: string; mine: boolean; at: string; sensitivity: string }
 export interface GroupItem { chatId: number; title: string; hasGuests: boolean; memberCount: number; agents: Array<{ id: string; name: string; look: AgentLook }> }
 export type RelationshipMode = 'off' | 'shadow' | 'live';
+export type RelationshipSpace = 'work' | 'personal';
+export interface RelationshipInboxItem { id: string; text: string; createdAt: number; expiresAt: number; status: 'unread' | 'read' | 'dismissed' }
 export interface RelationshipView {
   available: boolean;
   mode: RelationshipMode;
@@ -127,6 +129,11 @@ export interface RelationshipView {
   openSituations: number;
   pending: number;
   unanswered: number;
+  space: RelationshipSpace;
+  externalEnabled: boolean;
+  externalAvailable: boolean;
+  inbox: RelationshipInboxItem[];
+  sources: Array<{ id: string; createdAt: number }>;
 }
 
 const enc = encodeURIComponent;
@@ -182,9 +189,9 @@ export const api = {
   liveCall: (id: string, space: 'work' | 'personal' = 'work') => request<LiveCall>('POST', `agents/${enc(id)}/live-call`, { space }),
   callEnd: (id: string, space: 'work' | 'personal' = 'work') => request<{ ok: true }>('POST', `agents/${enc(id)}/call-end`, { space }),
   memories: (id: string) => request<{ memories: MemoryItem[] }>('GET', `agents/${enc(id)}/memories`),
-  relationship: (id: string) => request<{ relationship: RelationshipView }>('GET', `agents/${enc(id)}/relationship`),
-  updateRelationship: (id: string, input: { action: 'configure' | 'pause' | 'resume' | 'stop' | 'forget'; until?: string; timeZone?: string; quietHours?: { start: number; end: number } }) =>
-    request<{ relationship: RelationshipView }>('PUT', `agents/${enc(id)}/relationship`, input),
+  relationship: (id: string, space: RelationshipSpace = 'work') => request<{ relationship: RelationshipView }>('GET', `agents/${enc(id)}/relationship?space=${space}`),
+  updateRelationship: (id: string, input: { space?: RelationshipSpace; action: 'pause' | 'resume' | 'stop' | 'forget' | 'external' | 'source-delete' | 'read' | 'dismiss'; until?: string; enabled?: boolean; sourceId?: string; itemId?: string }, space: RelationshipSpace = 'work') =>
+    request<{ relationship: RelationshipView }>('PUT', `agents/${enc(id)}/relationship`, { ...input, space }),
   shareMemory: (id: string, memoryId: string, recipients: number[]) =>
     request<{ ok: true }>('PUT', `agents/${enc(id)}/memories`, { memoryId, recipients }),
   revokeMemory: (id: string, memoryId: string) =>

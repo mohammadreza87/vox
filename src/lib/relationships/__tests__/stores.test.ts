@@ -37,6 +37,17 @@ for (const kind of ['memory', 'firestore'] as const) describe(`${kind} relations
     expect(await store.due(new Date('2026-10-19T12:00:00Z'), 5)).toEqual([]); expect(await store.due(new Date('2026-10-19T14:00:00Z'), 5)).toEqual([key]);
     await store.update(key, (s) => { s.intentions[0].status = 'closed'; }); expect(await store.due(new Date('2026-10-19T14:00:00Z'), 5)).toEqual([]);
   });
+  it('finds all scoped account records including orphaned personas, excluding legacy and other accounts', async () => {
+    const store = create();
+    const scoped = (accountId: string, space: 'work' | 'personal', personaId: string): RelationshipKey => ({ ...key, personaId,
+      scope: { schemaVersion: 1, accountId, personId: 'a', bindingId: 'binding', tenantId: 'tenant', space, spaceId: space, containerId: `container-${space}` } });
+    const personal = scoped('telegram-account:300', 'personal', 'removed-agent');
+    const work = scoped('telegram-account:300', 'work', 'other-agent');
+    for (const target of [key, personal, work, scoped('telegram-account:301', 'personal', 'removed-agent')]) await store.update(target, () => undefined);
+    expect(await store.keysForAccount('telegram-account:300')).toEqual(expect.arrayContaining([personal, work]));
+    expect(await store.keysForAccount('telegram-account:300')).toHaveLength(2);
+    expect(await store.keysForAccount('telegram-account:999')).toEqual([]);
+  });
 });
 it('shares Firestore epochs across independent adapter instances and preserves failed commits', async () => {
   const fake = fakeFirestore(); const a = new FirestoreRelationshipStore(fake.db); const b = new FirestoreRelationshipStore(fake.db);

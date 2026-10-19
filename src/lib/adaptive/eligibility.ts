@@ -3,7 +3,7 @@ import { validId, validRecord, validTime } from './identity';
 
 export const CAPABILITIES = ['core_text', 'single_party_audio', 'multi_party_audio',
   'biometric_recognition', 'product_analytics', 'personalization', 'auto_memory',
-  'reminder_delivery', 'proactive_suggestions', 'content_quality_review'] as const;
+  'reminder_delivery', 'proactive_suggestions', 'content_quality_review', 'relationship_outreach'] as const;
 export type Capability = typeof CAPABILITIES[number];
 
 export interface AdultEntry {

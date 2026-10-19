@@ -1,6 +1,8 @@
 # Vox privacy, consent and voice recognition implementation requirements
 
-Planning review: **19 October 2026**. Status: **proposed requirements and bilingual draft copy; no implementation, collection, legal sign-off or deployment**. Product operator name supplied by the user: **Joyixir**. Intended launch audience: **adults only (18+) in the EU/EEA and US**. Joyixir's exact registered entity, address and privacy contact remain unresolved; the operator name alone does not identify the legal controller.
+Planning review: **19 October 2026**. Status: **proposed requirements and bilingual draft copy; no implementation, collection, legal sign-off or deployment**. Product operator name supplied by the user: **Joyixir**. Intended launch audience: **adults only (18+) in the EU/EEA and US**. The user confirmed **info@joyixir.com** as Joyixir's privacy contact on 19 October 2026. Mailbox operation and legal approval have not been verified. Joyixir's exact registered entity and address remain unresolved; the operator name and contact email do not complete the legal controller block.
+
+**اطلاعات تماس تأییدشده توسط کاربر:** کاربر در ۱۹ اکتبر ۲۰۲۶ نشانی **info@joyixir.com** را برای تماس دربارهٔ حریم خصوصی Joyixir تأیید کرد. کارکرد صندوق ایمیل و تأیید حقوقی بررسی نشده است. نام دقیق شخصیت حقوقی ثبت‌شده و نشانی آن هنوز مشخص نیست و بخش معرفی مسئول پردازش داده کامل نشده است.
 
 This document complements [Agent memory strategy](../AGENT_MEMORY_STRATEGY.md) and [Self-development research](../SELF_DEVELOPMENT_RESEARCH.md). It governs behavioral observation, durable personalization, predictions, notifications and optional speaker recognition. Requirements marked `PRIV-*` are proposed Vox release criteria. They combine source-informed legal constraints with deliberately stricter product choices; they are not a legal guarantee or a complete jurisdiction survey.
 
@@ -285,15 +287,15 @@ Do not render this flow or enable marketing enrollment in the initial release. T
 
 ### UX-15 — Deletion status and contact (`PRIV-033`, `PRIV-034`)
 
-**EN:** “Your selected data is blocked from further use. Deleted from: {completed_systems}. Still pending: {pending_systems_and_dates}. We’ll show completion here. Contact {privacy_contact} about this request.” Only use a completion variant after all applicable acknowledgements; explain any lawfully retained exception specifically.
+**EN:** “Your selected data is blocked from further use. Deleted from: {completed_systems}. Still pending: {pending_systems_and_dates}. We’ll show completion here. Contact info@joyixir.com about this request.” Only use a completion variant after all applicable acknowledgements; explain any lawfully retained exception specifically.
 
-**FA:** «استفادهٔ بیشتر از داده‌های انتخاب‌شدهٔ شما مسدود شده است. حذف‌شده از: {completed_systems}. در انتظار حذف: {pending_systems_and_dates}. تکمیل حذف در همین‌جا نمایش داده می‌شود. برای پیگیری این درخواست با {privacy_contact} تماس بگیرید.»
+**FA:** «استفادهٔ بیشتر از داده‌های انتخاب‌شدهٔ شما مسدود شده است. حذف‌شده از: {completed_systems}. در انتظار حذف: {pending_systems_and_dates}. تکمیل حذف در همین‌جا نمایش داده می‌شود. برای پیگیری این درخواست با info@joyixir.com تماس بگیرید.»
 
 ## 9. Privacy notice publication checklist
 
 **PRIV-037 — Publish only after factual verification.** The full EN/FA notice and any required US state supplement must cover:
 
-- Exact Joyixir legal entity, address, effective date/version, privacy contact, applicable representative and DPO contact if required.
+- Exact Joyixir legal entity, address, effective date/version, privacy contact (user-confirmed: **info@joyixir.com**; mailbox operation and legal approval remain unverified), applicable representative and DPO contact if required. The entity/address and full controller block remain unresolved.
 - Actual controller/processor or joint-controller role for consumer, Work and guest/group flows; who determines purposes and who handles rights. Workspace owners' administrative access and its limits.
 - Collected and inferred categories, source (direct, connector, participant, model), purpose-by-purpose basis and any special-category condition; legitimate interests identified where used. Required fields, consequences of refusal, optional choices and consent withdrawal.
 - Microphone/audio transport, transcripts, saved history, temporary mode, memories, predictions, templates, matching, provider-generated intermediates and notification tokens described separately; no implication all voices are enrolled.
@@ -335,7 +337,7 @@ The cases establish engineering evidence, not a claim that unlawful processing i
 
 | Decision | Proposed accountable owner | Required artifact |
 |---|---|---|
-| Registered entity/address/privacy email; exact market/state availability | Joyixir operator + counsel | Verified entity/contact block and geographic feature registry |
+| Registered entity/address; verification of user-confirmed privacy email **info@joyixir.com**; exact market/state availability | Joyixir operator + counsel | Verified entity/contact block and geographic feature registry; user confirmation of the email alone does not close this gate |
 | Consumer vs Work controller roles, requested-service basis and security interests | Privacy counsel + product owner | Processing register, role agreements and basis/necessity analysis |
 | EU/EEA biometric/behavioral DPIA, EEA legal incorporation and national ePrivacy/recording details | Privacy lead + local counsel | Approved DPIA and country release decisions; supervisory consultation if legally required |
 | US state inventory, BIPA signed release/public destruction policy, Texas vendor disclosures, California applicability, interstate call design | US privacy/communications counsel | State feature matrix, approved forms, public policy and specific recording architecture decision |

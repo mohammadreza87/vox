@@ -2,7 +2,7 @@
 export type AdaptiveSpace = 'work' | 'personal';
 export const ADAPTIVE_OPTIONAL_PURPOSES = [
   'optional.product_analytics', 'optional.personalization', 'optional.auto_memory', 'optional.biometric_recognition',
-  'optional.reminder_delivery', 'optional.proactive_suggestions', 'optional.content_quality_review',
+  'optional.reminder_delivery', 'optional.proactive_suggestions', 'optional.content_quality_review', 'optional.relationship_outreach',
 ] as const;
 export type AdaptiveOptionalPurpose = typeof ADAPTIVE_OPTIONAL_PURPOSES[number];
 export interface AdaptiveNotice {

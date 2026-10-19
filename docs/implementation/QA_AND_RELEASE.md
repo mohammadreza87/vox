@@ -1,6 +1,6 @@
 # Vox QA, evaluation and release plan
 
-Planning baseline: 19 October 2026, source `ebb75a67c79bf317d1dec40381b216c75bb90ffa`. This document specifies future work and proposed gates. It does not report executed tests, measured SLOs, provider compatibility, deployed behavior or legal clearance. Operator: **Joyixir**. Initial intended audience: **adults in the EU/EEA and US**. Exact operator legal details, privacy contact and jurisdiction-specific voice requirements must be finalized by the privacy owner before public enablement.
+Planning baseline: 19 October 2026, source `ebb75a67c79bf317d1dec40381b216c75bb90ffa`. This document specifies future work and proposed gates. It does not report executed tests, measured SLOs, provider compatibility, deployed behavior or legal clearance. Operator: **Joyixir**. Initial intended audience: **adults in the EU/EEA and US**. The user confirmed **info@joyixir.com** as the privacy contact on 19 October 2026; mailbox operation and legal approval remain unverified. Exact registered entity/address, the complete controller block and jurisdiction-specific voice requirements must be finalized by the privacy owner before public enablement.
 
 Read with [memory strategy](../AGENT_MEMORY_STRATEGY.md) and [observation and improvement strategy](../SELF_DEVELOPMENT_RESEARCH.md). Those documents supply the product and architecture rationale. This plan covers observation, Decisions, predictions, memory, personalization, notifications, optional speaker assistance and the software improvement loop as one permissioned system. Feature-specific gates apply only when enabling that feature; disabled optional voice recognition need not block an otherwise qualified text release.
 
@@ -272,7 +272,13 @@ status: proposed | qualified | blocked | rolled_out | rolled_back
 operator: Joyixir
 markets: [EU_EEA, US]
 audience: adults_only
-operator_legal_details_and_privacy_contact: PENDING
+operator_legal_details_and_privacy_contact: PENDING # Complete controller block remains unresolved
+privacy_contact:
+  email: info@joyixir.com
+  source: user_confirmed_2026_10_19
+  mailbox_operation: UNVERIFIED
+  legal_approval: PENDING
+registered_entity_and_address: PENDING
 candidate:
   source_commit: REQUIRED
   artifact_digest: REQUIRED

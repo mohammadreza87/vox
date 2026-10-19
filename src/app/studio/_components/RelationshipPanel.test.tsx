@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api, type RelationshipView } from '../_lib/client';
 import { RelationshipPanel } from './RelationshipPanel';
@@ -9,44 +9,61 @@ vi.mock('../_lib/client', async importOriginal => {
 });
 vi.mock('./StudioApp', () => ({ errorMessage: (e: unknown) => e instanceof Error ? e.message : 'Something went wrong' }));
 
-const current: RelationshipView = {
-  available: true, mode: 'live', disabled: false, timeZone: 'Europe/Tallinn',
-  quietHours: { start: 22, end: 8 }, preferences: [{ key: 'brevity', value: 'Prefers concise replies' }],
-  openSituations: 1, pending: 0, unanswered: 0,
-};
-const response = (relationship: RelationshipView) => ({ relationship });
-
-beforeEach(() => { vi.mocked(api.relationship).mockResolvedValue(response(current)); vi.mocked(api.updateRelationship).mockResolvedValue(response(current)); });
+const make = (space: 'work' | 'personal', more: Partial<RelationshipView> = {}): RelationshipView => ({
+  available: true, mode: 'live', disabled: false, timeZone: 'Europe/Tallinn', quietHours: { start: 22, end: 8 },
+  preferences: [{ key: 'brevity', value: space === 'work' ? 'Work brevity' : 'Personal detail' }], openSituations: 1, pending: 0, unanswered: 0,
+  space, externalEnabled: false, externalAvailable: true, inbox: [{ id: `${space}-item`, text: `${space} private check-in`, createdAt: 1, expiresAt: 99, status: 'unread' }], sources: [], ...more,
+});
+beforeEach(() => {
+  vi.mocked(api.relationship).mockImplementation(async (_id, space = 'work') => ({ relationship: make(space) }));
+  vi.mocked(api.updateRelationship).mockImplementation(async (_id, input) => ({ relationship: make(input.space ?? 'work', { externalEnabled: input.action === 'external' ? !!input.enabled : false }) }));
+});
 afterEach(() => vi.clearAllMocks());
 
 describe('RelationshipPanel', () => {
-  it('saves the selected time zone and quiet hours only when asked', async () => {
-    await act(async () => { render(<RelationshipPanel agentId="nova" name="Nova" />); });
-    expect(screen.getByText('Prefers concise replies')).toBeVisible();
-    fireEvent.change(screen.getByLabelText('Your time zone'), { target: { value: 'America/Toronto' } });
-    fireEvent.change(screen.getByLabelText('Quiet hours start'), { target: { value: '21:00' } });
-    expect(api.updateRelationship).not.toHaveBeenCalled();
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save quiet hours' })); });
-    expect(api.updateRelationship).toHaveBeenCalledWith('nova', { action: 'configure', timeZone: 'America/Toronto', quietHours: { start: 21, end: 8 } });
+  it('requests and renders isolated relationship state for each space', async () => {
+    const { rerender } = render(<RelationshipPanel agentId="nova" name="Nova" space="work" identityConfirmed />);
+    expect(await screen.findByText('Work brevity')).toBeVisible();
+    expect(screen.getByText('work private check-in')).toBeVisible();
+    rerender(<RelationshipPanel agentId="nova" name="Nova" space="personal" identityConfirmed />);
+    expect(screen.queryByText('Work brevity')).not.toBeInTheDocument();
+    expect(await screen.findByText('Personal detail')).toBeVisible();
+    expect(api.relationship).toHaveBeenLastCalledWith('nova', 'personal');
   });
 
-  it('pauses for seven days and resumes using explicit relationship actions', async () => {
-    await act(async () => { render(<RelationshipPanel agentId="nova" name="Nova" />); });
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Pause for 7 days' })); });
-    expect(api.updateRelationship).toHaveBeenCalledWith('nova', expect.objectContaining({ action: 'pause', until: expect.any(String) }));
-    vi.mocked(api.relationship).mockResolvedValueOnce(response({ ...current, disabled: true }));
-    await act(async () => { render(<RelationshipPanel agentId="paused" name="Nova" />); });
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Resume follow-ups' })); });
-    expect(api.updateRelationship).toHaveBeenLastCalledWith('paused', { action: 'resume' });
+  it('ignores a late response from the previous scope', async () => {
+    let resolveWork!: (value: { relationship: RelationshipView }) => void;
+    vi.mocked(api.relationship).mockImplementation((_id, space = 'work') => space === 'work' ? new Promise(resolve => { resolveWork = resolve; }) : Promise.resolve({ relationship: make('personal') }));
+    const { rerender } = render(<RelationshipPanel agentId="nova" name="Nova" space="work" identityConfirmed />);
+    rerender(<RelationshipPanel agentId="nova" name="Nova" space="personal" identityConfirmed />);
+    expect(await screen.findByText('Personal detail')).toBeVisible();
+    await act(async () => resolveWork({ relationship: make('work') }));
+    expect(screen.getByText('Personal detail')).toBeVisible();
+    expect(screen.queryByText('Work brevity')).not.toBeInTheDocument();
   });
 
-  it('requires an in-page confirmation before clearing working context and shows API errors', async () => {
-    await act(async () => { render(<RelationshipPanel agentId="nova" name="Nova" />); });
-    fireEvent.click(screen.getByRole('button', { name: 'Reset working context' }));
-    expect(api.updateRelationship).not.toHaveBeenCalled();
-    expect(screen.getByRole('group', { name: 'Reset working context confirmation' })).toBeVisible();
-    vi.mocked(api.updateRelationship).mockRejectedValueOnce(new Error('Could not clear context'));
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Clear context' })); });
-    expect(screen.getByRole('alert')).toHaveTextContent('Could not clear context');
+  it('keeps stop available when the relationship loop is disabled', async () => {
+    vi.mocked(api.relationship).mockResolvedValueOnce({ relationship: make('work', { available: false, mode: 'off' }) });
+    render(<RelationshipPanel agentId="nova" name="Nova" space="work" identityConfirmed />);
+    expect(await screen.findByText(/Follow-ups are unavailable/)).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Stop follow-ups' }));
+    await waitFor(() => expect(api.updateRelationship).toHaveBeenCalledWith('nova', expect.objectContaining({ action: 'stop', space: 'work' }), 'work'));
+  });
+
+  it('starts external alerts off and sends explicit scope when enabled', async () => {
+    render(<RelationshipPanel agentId="nova" name="Nova" space="personal" identityConfirmed />);
+    const alerts = await screen.findByRole('checkbox', { name: 'Generic Telegram alerts' });
+    expect(alerts).not.toBeChecked();
+    fireEvent.click(alerts);
+    await waitFor(() => expect(api.updateRelationship).toHaveBeenCalledWith('nova', { action: 'external', enabled: true, space: 'personal' }, 'personal'));
+    expect(screen.getByText(/never include conversation content/i)).toBeVisible();
+  });
+
+  it('renders RTL Persian labels and keeps private inbox hidden before identity confirmation', async () => {
+    const { container } = render(<RelationshipPanel agentId="nova" name="نووا" space="personal" locale="fa" />);
+    expect(await screen.findByText('بررسی‌های خصوصی تا زمان تأیید هویت پنهان هستند.')).toBeVisible();
+    expect(screen.queryByText('personal private check-in')).not.toBeInTheDocument();
+    expect(container.querySelector('section')).toHaveAttribute('dir', 'rtl');
+    expect(screen.getByRole('button', { name: 'توقف پیگیری' })).toBeEnabled();
   });
 });

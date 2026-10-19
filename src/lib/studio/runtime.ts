@@ -43,6 +43,7 @@ import { RelationshipLoop, FileRelationshipStore, FirestoreRelationshipStore, Fi
 import { StudioRelationshipAssessor } from './relationship-assessor';
 import { relationshipConfig } from './relationship-config';
 import { AdaptiveService } from '../adaptive/persistence/service';
+import { AdaptiveRelationshipService } from '../adaptive/relationships/service';
 import { AdaptiveRepository } from '../adaptive/persistence/repository';
 import { FileAdaptiveStorage, FirestoreAdaptiveStorage, type AdaptiveStorage } from '../adaptive/persistence/storage';
 import { adaptiveOptionsFromManifest } from '../adaptive/persistence/config';
@@ -113,7 +114,8 @@ export function validateStudioConfig(env: NodeJS.ProcessEnv, cwd = process.cwd()
   }
 
   const relationships = relationshipConfig(env);
-  return { production, token, superadminIds, dataDir, webAppUrl, storage, mediaBucket, publicUrl, relationships };
+  const scopedRelationshipsEnabled = env.STUDIO_SCOPED_RELATIONSHIPS === '1';
+  return { production, token, superadminIds, dataDir, webAppUrl, storage, mediaBucket, publicUrl, relationships, scopedRelationshipsEnabled };
 }
 
 /** STUDIO_WEB_SEARCH=off keeps every agent offline (web searches are billed per search). */
@@ -134,15 +136,15 @@ async function toJpeg(data: Buffer): Promise<Buffer> {
 const g = globalThis as unknown as { __voxStudio?: Promise<Studio> };
 
 type RuntimeStorage = Pick<StudioDeps, 'store' | 'memory' | 'rateLimiter' | 'adaptive' | 'relationshipStore' | 'observations'> & { sharedStorage: AdaptiveStorage };
-function fileStorage(dir: string): RuntimeStorage {
+function fileStorage(dir: string, scopedRelationshipsEnabled: boolean): RuntimeStorage {
   return { store: new StudioStore(dir), memory: createFileStores(join(dir, 'memory.json')),
-    relationshipStore: new FileRelationshipStore(join(dir, 'relationships.json')), observations: new FileObservationStore(join(dir, 'relationship-observations.json')),
+    relationshipStore: new FileRelationshipStore(join(dir, 'scoped-relationships-v1.json')), observations: new FileObservationStore(join(dir, 'scoped-relationship-observations-v1.json')),
     adaptive: new AdaptiveService(new AdaptiveRepository(new FileAdaptiveStorage(join(dir, 'adaptive'))),
-      adaptiveOptionsFromManifest(process.env.STUDIO_ADAPTIVE_POLICY_JSON)),
+      { ...adaptiveOptionsFromManifest(process.env.STUDIO_ADAPTIVE_POLICY_JSON), scopedRelationshipsEnabled }),
     sharedStorage: new FileAdaptiveStorage(join(dir, 'shared-memory')) };
 }
 
-async function firestoreStorage(bucketName: string): Promise<RuntimeStorage> {
+async function firestoreStorage(bucketName: string, scopedRelationshipsEnabled: boolean): Promise<RuntimeStorage> {
   const { getAdminApp, getAdminDb } = await import('@/lib/firebase-admin');
   const { getStorage } = await import('firebase-admin/storage');
   const db = await getAdminDb();
@@ -150,11 +152,11 @@ async function firestoreStorage(bucketName: string): Promise<RuntimeStorage> {
   return {
     store: new FirestoreStudioStore(db, bucket),
     adaptive: new AdaptiveService(new AdaptiveRepository(new FirestoreAdaptiveStorage(db)),
-      adaptiveOptionsFromManifest(process.env.STUDIO_ADAPTIVE_POLICY_JSON)),
+      { ...adaptiveOptionsFromManifest(process.env.STUDIO_ADAPTIVE_POLICY_JSON), scopedRelationshipsEnabled }),
     sharedStorage: new FirestoreAdaptiveStorage(db, 'adaptiveSharedMemory'),
     rateLimiter: new FirestoreStudioRateLimiter(db),
-    relationshipStore: new FirestoreRelationshipStore(db),
-    observations: new FirestoreObservationStore(db),
+    relationshipStore: new FirestoreRelationshipStore(db, 'vox_scoped_relationships_v1'),
+    observations: new FirestoreObservationStore(db, 'vox_scoped_relationship_observations_v1'),
     memory: {
       memories: new FirestoreMemoryStore(db),
       offers: new FirestoreShareOfferStore(db),
@@ -167,7 +169,7 @@ async function firestoreStorage(bucketName: string): Promise<RuntimeStorage> {
 async function create(): Promise<Studio> {
   const env = process.env;
   const config = validateStudioConfig(env);
-  const storage = config.storage === 'firestore' ? await firestoreStorage(config.mediaBucket!) : fileStorage(config.dataDir);
+  const storage = config.storage === 'firestore' ? await firestoreStorage(config.mediaBucket!, config.scopedRelationshipsEnabled) : fileStorage(config.dataDir, config.scopedRelationshipsEnabled);
   // Load and persist once so corrupt state or unwritable storage fails startup.
   if (config.production) {
     if (config.storage === 'file') await storage.store.update(() => undefined);
@@ -190,6 +192,7 @@ async function create(): Promise<Studio> {
     managerUsername = (await managerBot.getMe().catch(() => null))?.username ?? '';
   }
   const openai = env.OPENAI_API_KEY ? new OpenAIMedia(env.OPENAI_API_KEY) : null;
+  const authority = new AdaptiveRelationshipService(storage.adaptive!);
   const studio = new Studio({
     store: storage.store,
     personaLLM: new AnthropicLLM(env.ANTHROPIC_API_KEY!, env.STUDIO_PERSONA_MODEL || 'claude-sonnet-5-5'),
@@ -209,20 +212,43 @@ async function create(): Promise<Studio> {
     webhookBase: config.publicUrl,
     memory: storage.memory,
     adaptive: storage.adaptive,
+    relationshipAuthority: authority,
     rateLimiter: storage.rateLimiter,
     imageToJpeg: toJpeg,
     relationshipStore: storage.relationshipStore,
     observations: storage.observations,
     relationshipConfig: config.relationships,
-    // Relationship keys do not yet encode space or explicit outreach consent.
-    relationships: storage.adaptive ? undefined : new RelationshipLoop({
+    relationships: new RelationshipLoop({
       store: storage.relationshipStore!,
-      mode: config.relationships.mode,
+      mode: config.scopedRelationshipsEnabled ? config.relationships.mode : 'off',
+      authorize: async ({ key, sourceIds, phase, expectedFingerprint }) => {
+        if (!config.scopedRelationshipsEnabled || !key.scope) return null;
+        const match = /^telegram-account:([1-9]\d{0,15})$/.exec(key.scope.accountId);
+        const telegramId = match ? Number(match[1]) : NaN;
+        if (!Number.isSafeInteger(telegramId) || !await studio.relationshipCohortEnabled(key.personaId, telegramId)) return null;
+        return authority.authorize(key, sourceIds, phase, expectedFingerprint);
+      },
+      applyScopedControl: async (key, action, until) => {
+        const match = /^telegram-account:([1-9]\d{0,15})$/.exec(key.scope?.accountId ?? '');
+        const telegramId = match ? Number(match[1]) : NaN;
+        if (!key.scope || !Number.isSafeInteger(telegramId)) throw new Error('Invalid scoped relationship control');
+        await authority.control(telegramId, key.personaId, key.scope.space, action, until?.getTime());
+        await studio.deps.relationships!.control(key, action, { until });
+      },
       assessor: new StudioRelationshipAssessor(new AnthropicLLM(env.ANTHROPIC_API_KEY!, env.STUDIO_VOICE_MODEL || 'claude-haiku-5-5')),
       decisions: env.OPENAI_API_KEY ? new OpenAIFollowUpReview(env.OPENAI_API_KEY) : undefined,
       feedback: env.OPENAI_API_KEY ? new OpenAIRelationshipFeedback(env.OPENAI_API_KEY) : undefined,
       observer: new SafeRelationshipObserver(storage.observations!, env.STUDIO_SECRET!),
     }),
+  });
+  // The callback runs after the adaptive account transaction. It never calls
+  // status/context/authority, which would recursively re-enter that account.
+  storage.adaptive!.setRelationshipInvalidator(async ({ telegramId, space, agentId, sourceIds, reason }) => {
+    const accountId = `telegram-account:${telegramId}`;
+    for (const key of await storage.relationshipStore!.keysForAccount(accountId)) {
+      if (key.scope?.accountId !== accountId || key.scope.space !== space || (agentId && key.personaId !== agentId)) continue;
+      await studio.deps.relationships!.invalidate(key, { sourceIds, reason });
+    }
   });
   studio.deps.shared = new SharedMemoryService(new SharedMemoryRepository(storage.sharedStorage), storage.adaptive!, {
     member: async telegramId => {
