@@ -962,9 +962,11 @@ Generate versioned GEPA-style prompt/query/routing candidates offline with fixed
 
 ### VOX-045 — Implement sandbox software patch workflow
 
-**Owner:** `vox_architect` · **Reviewer:** `vox_privacy_security` · **Model:** `gpt-6.1-sol` · **Size:** L · **Priority:** P1 · **Status:** planned
+**Owner:** `vox_architect` · **Reviewer:** `vox_privacy_security` · **Model:** `gpt-6.1-sol` · **Size:** L · **Priority:** P1 · **Status:** in_progress
 
 **Requirements:** REQ-14, REQ-15, REQ-21. **Depends on:** VOX-016, VOX-023, VOX-043.
+
+**Implementation progress:** Local signed synthetic defect-to-patch workflow freezes Git source, materializes a bounded canonical patch, runs actual baseline/candidate TypeScript in pinned Docker and scores outside the container. Independent 12-case rehearsal reproduced four baseline failures and zero candidate failures; the reviewed Persian question-mark fix is applied with regression tests. Immutable artifacts, current trust/expiry/revocation and signed review packets are covered. Production service IAM, generic model author, remote PR automation and protected promotion deployment remain open.
 
 Convert reviewed defects into isolated worktrees/branches with small diffs, reproductions, tests and reviewable PR descriptions.
 
@@ -976,6 +978,8 @@ Convert reviewed defects into isolated worktrees/branches with small diffs, repr
 **Verification:** Sandbox boundary test plus a synthetic bug-to-patch rehearsal.
 
 **Deliverables:** Developer workflow; PR/evidence template.
+
+**Evidence:** ["docs/implementation/SOFTWARE_PATCH_WORKFLOW.md", "docs/implementation/evidence/software-patch/RESULT.md"]
 
 ### VOX-046 — Implement independent evaluation and promotion receipts
 
