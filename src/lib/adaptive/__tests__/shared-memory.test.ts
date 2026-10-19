@@ -41,6 +41,11 @@ async function setup(indexed = false) {
     memberNow: id => ({ active: active.get(id) === true, agentIds: ['aria', 'other-agent'] }),
     groupNow: id => id === 'chat--100' ? { memberTelegramIds: members, hasGuests: guests, revision: digest([members, guests]) } : null,
     agentNow: id => ({ active: ['aria', 'other-agent'].includes(id) }),
+    readSnapshotNow: ({ telegramIds, agentId, groupIds }) => ({
+      members: telegramIds.map(id => ({ telegramId: id, active: active.get(id) === true, agentIds: ['aria', 'other-agent'] })),
+      agent: { active: ['aria', 'other-agent'].includes(agentId) },
+      groups: groupIds.map(id => ({ groupId: id, value: id === 'chat--100' ? { memberTelegramIds: [...members], hasGuests: guests, revision: digest([members, guests]) } : null })),
+    }),
   };
   const factory = () => new SharedMemoryService(new SharedMemoryRepository(new FileAdaptiveStorage(sharedDirectory), 'synthetic'), adaptive, authority, () => now);
   const service = factory();
@@ -460,4 +465,18 @@ it('persists a shared expiry first observed after the last shared read', async (
   expect((f.storage as SqliteAdaptiveStorage).readMetadata().lifecycleWatermark).toBeGreaterThanOrEqual(START + 11);
   f.setNow(START + 5);
   expect(() => f.service.readContextAuthorityNow(101, 'work', 'aria', { audienceTelegramIds: [101] })).toThrow();
+});
+
+it('uses one final Studio audience snapshot after all native/private reads', async () => {
+  const f = await setup(true); await f.personalize(101); await f.create({ agents: ['aria'] });
+  const audience = { audienceTelegramIds: [101] };
+  const initial = await f.service.readContextAuthority(101, 'work', 'aria', audience);
+  const final = f.authority.readSnapshotNow!.bind(f.authority);
+  const spy = vi.spyOn(f.authority, 'readSnapshotNow').mockImplementation(scope => { f.active.set(101, false); return final(scope); });
+  expect(() => f.service.readContextAuthorityNow(101, 'work', 'aria', audience)).toThrow('recipient_unavailable');
+  expect(spy).toHaveBeenCalledTimes(1); spy.mockRestore();
+  f.active.set(101, true);
+  expect(f.service.readContextAuthorityNow(101, 'work', 'aria', audience).revision).toBe(initial.revision);
+  delete f.authority.readSnapshotNow;
+  expect(() => f.service.readContextAuthorityNow(101, 'work', 'aria', audience)).toThrow('authority_unavailable');
 });

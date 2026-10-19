@@ -32,6 +32,12 @@ export interface SharedAuthority {
   memberNow?(telegramId: number): { active: boolean; agentIds: string[]; revision?: string };
   groupNow?(groupId: string): { memberTelegramIds: number[]; hasGuests: boolean; revision: string } | null;
   agentNow?(agentId: string): { active: boolean; revision?: string };
+  /** One committed Studio snapshot; all returned facts derive from that state. */
+  readSnapshotNow?(scope: { telegramIds: number[]; agentId: string; groupIds: string[] }): {
+    members: { telegramId: number; active: boolean; agentIds: string[]; revision?: string }[];
+    agent: { active: boolean; revision?: string };
+    groups: { groupId: string; value: { memberTelegramIds: number[]; hasGuests: boolean; revision: string } | null }[];
+  };
 }
 interface Verified { telegramId: number; profile: AdaptiveSnapshot; agentIds: string[]; validUntil?: number; authorityRevision?: string }
 interface StagedWrite { operationId: string; containerId: string; memoryId: string; revision: number; eventKey: string }
@@ -443,7 +449,7 @@ export class SharedMemoryService {
     };
     try {
     idSchema.parse(agentId);
-    if (!this.authority.groupNow || !this.authority.agentNow) return fail(503, 'authority_unavailable');
+    if (!this.authority.groupNow || !this.authority.agentNow || !this.authority.readSnapshotNow) return fail(503, 'authority_unavailable');
     const ids = z.array(tgSchema).min(1).max(12).parse(audience.audienceTelegramIds);
     if (new Set(ids).size !== ids.length || !ids.includes(telegramId)) return fail(403, 'audience_denied');
     observedIds = ids;
@@ -473,14 +479,21 @@ export class SharedMemoryService {
     // Native reads and lifecycle publication precede the final Studio checks.
     // No permission sampled before that I/O can stand in for current membership.
     publishObserved();
+    const studio = this.authority.readSnapshotNow({ telegramIds: ids, agentId, groupIds });
+    if (studio.members.length !== ids.length || new Set(studio.members.map(m => m.telegramId)).size !== ids.length ||
+        studio.groups.length !== groupIds.length || new Set(studio.groups.map(g => g.groupId)).size !== groupIds.length) return fail(503, 'authority_unavailable');
     const finalPeople = current.map(p => {
-      const member = this.authority.memberNow?.(p.telegramId);
+      const member = studio.members.find(m => m.telegramId === p.telegramId);
       if (!member?.active) return fail(403, 'recipient_unavailable');
       return { ...p, agentIds: member.agentIds, authorityRevision: member.revision };
     });
     if (this.identityKey(finalPeople) !== this.identityKey(people) ||
-        sharedDigest(agentStamp) !== sharedDigest(this.authority.agentNow(agentId)) ||
-        groupStamp !== sharedDigest(groupIds.map(id => [id, this.authority.groupNow!(id)]))) return fail(409, 'authority_changed');
+        sharedDigest(agentStamp) !== sharedDigest(studio.agent) ||
+        groupStamp !== sharedDigest(groupIds.map(id => {
+          const row = studio.groups.find(g => g.groupId === id);
+          if (!row) return fail(503, 'authority_unavailable');
+          return [id, row.value];
+        }))) return fail(409, 'authority_changed');
     const fresh = this.now();
     if (!Number.isSafeInteger(fresh) || fresh < startedAt || this.validUntil(current) <= fresh) return fail(403, 'authority_expired');
     for (const c of state.containers) for (const m of c.memories) if (

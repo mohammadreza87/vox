@@ -39,5 +39,11 @@ export function sharedAuthorityFromStudioStore(store: StudioStorage): SharedAuth
     return { memberTelegramIds, hasGuests, revision: digest([id, memberTelegramIds, hasGuests, epoch(row.audienceEpoch)]) };
   };
   return { member: async id => member(await store.read(), id), agent: async id => agent(await store.read(), id), group: async id => group(await store.read(), id),
-    memberNow: id => member(committed(), id), agentNow: id => agent(committed(), id), groupNow: id => group(committed(), id) };
+    memberNow: id => member(committed(), id), agentNow: id => agent(committed(), id), groupNow: id => group(committed(), id),
+    readSnapshotNow: ({ telegramIds, agentId, groupIds }) => {
+      const state = committed();
+      return { members: telegramIds.map(id => ({ telegramId: id, ...member(state, id) })), agent: agent(state, agentId),
+        groups: groupIds.map(id => ({ groupId: id, value: group(state, id) })) };
+    } };
+
 }
