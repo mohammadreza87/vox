@@ -293,7 +293,7 @@ Propagate revocation/deletion across history projections, summaries, cache/searc
 
 **Deliverables:** Deletion coordinator; Derived lineage and tombstone tests.
 
-**Evidence:** ["docs/implementation/DELIVERY_RESULT.md"]
+**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/OBSERVATION_LEARNING.md"]
 
 ### VOX-015 — Migrate legacy memory and preference data conservatively
 
@@ -331,11 +331,11 @@ Implement database/IAM rules, restricted evidence and future biometric storage b
 
 **Deliverables:** Storage/IAM policy; Key and access runbook.
 
-**Evidence:** ["docs/implementation/DELIVERY_RESULT.md"]
+**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/OBSERVATION_LEARNING.md"]
 
 ### VOX-056 — Implement user rights, scoped exports and guest requests
 
-**Owner:** `vox_architect` · **Reviewer:** `vox_privacy_security` · **Model:** `gpt-6.1-sol` · **Size:** L · **Priority:** P0 · **Status:** planned
+**Owner:** `vox_architect` · **Reviewer:** `vox_privacy_security` · **Model:** `gpt-6.1-sol` · **Size:** L · **Priority:** P0 · **Status:** in_progress
 
 **Requirements:** REQ-01, REQ-02, REQ-03, REQ-09, REQ-17, REQ-22. **Depends on:** VOX-002, VOX-009, VOX-010, VOX-011, VOX-014, VOX-016.
 
@@ -351,6 +351,8 @@ Implement accessible EN/FA access/export, correction, erasure, restriction, obje
 **Verification:** Integration tests for shared-subject redaction, secure export expiry, wrong-requester access, deadline clocks, guest verification and correction/deletion lineage; independent privacy acceptance against PRIV-034/PVT-11.
 
 **Deliverables:** Rights service and operator queue; Scoped export and correction handlers; EN/FA privacy-center and guest request flows; Rights/deadline/access tests.
+
+**Evidence:** ["docs/implementation/OBSERVATION_LEARNING.md"]
 
 ## P2 — Reliable observation
 
@@ -371,7 +373,7 @@ Wire approved schemas with server-derived scope/identity, occurrence/receipt tim
 
 **Deliverables:** Event types/validators; Ingress endpoints.
 
-**Evidence:** ["docs/implementation/DELIVERY_RESULT.md"]
+**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/OBSERVATION_LEARNING.md"]
 
 ### VOX-018 — Implement durable outbox, consumers and repair
 
@@ -390,7 +392,7 @@ Add state-plus-outbox writes, idempotent consumers, bounded backoff, dead-letter
 
 **Deliverables:** Outbox and worker; Replay/repair tools.
 
-**Evidence:** ["docs/implementation/DELIVERY_RESULT.md"]
+**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/OBSERVATION_LEARNING.md"]
 
 ### VOX-019 — Instrument Studio turn stages and provider usage
 
@@ -409,11 +411,11 @@ Add turn trace correlation across STT/retrieval/decision/generation/TTS and actu
 
 **Deliverables:** Studio trace instrumentation; Usage model fixtures.
 
-**Evidence:** ["docs/implementation/DELIVERY_RESULT.md"]
+**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/OBSERVATION_LEARNING.md"]
 
 ### VOX-020 — Capture client experience and explicit outcomes
 
-**Owner:** `vox_data_engineer` · **Reviewer:** `vox_qa_evaluator` · **Model:** `gpt-6-luna` · **Size:** M · **Priority:** P0 · **Status:** planned
+**Owner:** `vox_data_engineer` · **Reviewer:** `vox_qa_evaluator` · **Model:** `gpt-6-luna` · **Size:** M · **Priority:** P0 · **Status:** in_progress
 
 **Requirements:** REQ-05, REQ-09, REQ-16. **Depends on:** VOX-017, VOX-012.
 
@@ -427,6 +429,8 @@ Wire first audio, interruption, playback failure, cancellation, correction, feed
 **Verification:** Browser event readback from synthetic interactions, duplicate/reconnect cases.
 
 **Deliverables:** Client event hooks; Outcome event coverage.
+
+**Evidence:** ["docs/implementation/OBSERVATION_LEARNING.md"]
 
 ### VOX-021 — Remove private payloads from diagnostic and audit paths
 
@@ -464,11 +468,11 @@ Produce scoped views for task outcome, latency/cost, correction, queue lag, perm
 
 **Deliverables:** Baseline dashboards/queries; Data quality report.
 
-**Evidence:** ["docs/implementation/DELIVERY_RESULT.md"]
+**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/OBSERVATION_LEARNING.md"]
 
 ### VOX-023 — Introduce read-only observer and reproducible findings
 
-**Owner:** `vox_architect` · **Reviewer:** `vox_privacy_security` · **Model:** `gpt-6.1-sol` · **Size:** M · **Priority:** P0 · **Status:** planned
+**Owner:** `vox_architect` · **Reviewer:** `vox_privacy_security` · **Model:** `gpt-6.1-sol` · **Size:** M · **Priority:** P0 · **Status:** in_progress
 
 **Requirements:** REQ-05, REQ-14, REQ-15. **Depends on:** VOX-022, VOX-016, VOX-007.
 
@@ -482,6 +486,8 @@ Use rules first and sampled semantic analysis to cluster failures into findings 
 **Verification:** Synthetic failure scenarios plus negative controls and budget checks.
 
 **Deliverables:** Observer job; Finding schema and examples.
+
+**Evidence:** ["docs/implementation/OBSERVATION_LEARNING.md"]
 
 ## P3 — Decisions, prediction and personalized UX
 
@@ -698,7 +704,7 @@ Schedule using explicit IANA timezone, DST handling, rolling per-person cross-sp
 
 ### VOX-035 — Implement recipient-safe Telegram dispatch and receipts
 
-**Owner:** `vox_architect` · **Reviewer:** `vox_privacy_security` · **Model:** `gpt-6.1-sol` · **Size:** L · **Priority:** P1 · **Status:** planned
+**Owner:** `vox_architect` · **Reviewer:** `vox_privacy_security` · **Model:** `gpt-6.1-sol` · **Size:** L · **Priority:** P1 · **Status:** in_progress
 
 **Requirements:** REQ-10, REQ-11, REQ-17. **Depends on:** VOX-016, VOX-032, VOX-034.
 
@@ -713,6 +719,8 @@ Deliver only to an explicitly opted-in, authenticated existing Telegram DM. Send
 **Verification:** Adapter fixtures plus approved real receipt and revoked-source E2E later.
 
 **Deliverables:** Telegram dispatcher; Receipt reconciliation tests.
+
+**Evidence:** ["docs/implementation/OBSERVATION_LEARNING.md"]
 
 ### VOX-036 — Measure notification usefulness and unwanted contact
 
@@ -844,7 +852,7 @@ Run independent consented/synthetic voice corpus across languages, devices, nois
 
 ### VOX-043 — Build reviewed learning-case dataset pipeline
 
-**Owner:** `vox_architect` · **Reviewer:** `vox_privacy_security` · **Model:** `gpt-6.1-sol` · **Size:** L · **Priority:** P1 · **Status:** planned
+**Owner:** `vox_architect` · **Reviewer:** `vox_privacy_security` · **Model:** `gpt-6.1-sol` · **Size:** L · **Priority:** P1 · **Status:** in_progress
 
 **Requirements:** REQ-04, REQ-14, REQ-17. **Depends on:** VOX-007, VOX-014, VOX-016, VOX-023.
 
@@ -859,9 +867,11 @@ Turn permitted findings into minimized reproductions/evaluation cases with linea
 
 **Deliverables:** Case curation workflow; Dataset manifests.
 
+**Evidence:** ["docs/implementation/OBSERVATION_LEARNING.md"]
+
 ### VOX-044 — Implement offline prompt and routing optimization
 
-**Owner:** `vox_architect` · **Reviewer:** `vox_qa_evaluator` · **Model:** `gpt-6.1-sol` · **Size:** L · **Priority:** P1 · **Status:** planned
+**Owner:** `vox_architect` · **Reviewer:** `vox_qa_evaluator` · **Model:** `gpt-6.1-sol` · **Size:** L · **Priority:** P1 · **Status:** in_progress
 
 **Requirements:** REQ-06, REQ-14, REQ-16. **Depends on:** VOX-025, VOX-030, VOX-043.
 
@@ -875,6 +885,8 @@ Generate versioned GEPA-style prompt/query/routing candidates offline with fixed
 **Verification:** Fixed-budget train/validation run and protected candidate evaluation.
 
 **Deliverables:** Optimization worker; Candidate registry.
+
+**Evidence:** ["docs/implementation/OBSERVATION_LEARNING.md"]
 
 ### VOX-045 — Implement sandbox software patch workflow
 
@@ -910,11 +922,11 @@ Run Promptfoo and deterministic tests in a protected environment against exact c
 
 **Deliverables:** Protected evaluator pipeline; Promotion receipt schema.
 
-**Evidence:** ["docs/implementation/DELIVERY_RESULT.md"]
+**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/OBSERVATION_LEARNING.md"]
 
 ### VOX-047 — Implement controlled experiments and rollback of learned state
 
-**Owner:** `vox_release_engineer` · **Reviewer:** `vox_qa_evaluator` · **Model:** `gpt-6.1-sol` · **Size:** L · **Priority:** P1 · **Status:** planned
+**Owner:** `vox_release_engineer` · **Reviewer:** `vox_qa_evaluator` · **Model:** `gpt-6.1-sol` · **Size:** L · **Priority:** P1 · **Status:** in_progress
 
 **Requirements:** REQ-14, REQ-17, REQ-18, REQ-21. **Depends on:** VOX-029, VOX-046.
 
@@ -929,9 +941,11 @@ Promote from offline to side-effect-free shadow then bounded pilot; isolate expe
 
 **Deliverables:** Promotion controller; Rollback runbook/evidence.
 
+**Evidence:** ["docs/implementation/OBSERVATION_LEARNING.md"]
+
 ### VOX-048 — Publish evidence-backed product improvement reports
 
-**Owner:** `vox_docs_analyst` · **Reviewer:** `vox_product_lead` · **Model:** `gpt-6-luna` · **Size:** S · **Priority:** P1 · **Status:** planned
+**Owner:** `vox_docs_analyst` · **Reviewer:** `vox_product_lead` · **Model:** `gpt-6-luna` · **Size:** S · **Priority:** P1 · **Status:** in_progress
 
 **Requirements:** REQ-05, REQ-14, REQ-16. **Depends on:** VOX-022, VOX-036, VOX-046.
 
@@ -945,6 +959,8 @@ Produce compact reports linking verified outcome changes to versions/cohorts, un
 **Verification:** Independent metric/source reconciliation and privacy scan.
 
 **Deliverables:** Improvement report template; Sample sanitized report.
+
+**Evidence:** ["docs/implementation/OBSERVATION_LEARNING.md"]
 
 ## P7 — Qualification and release
 
@@ -967,7 +983,7 @@ Execute QA matrix across consent, memory scopes, event ordering, decisions, noti
 
 **Deliverables:** Regression evidence packet; Open-defect register.
 
-**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/INTEGRATION_RELEASE.md", "docs/implementation/RELEASE_2026_10_19.md"]
+**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/INTEGRATION_RELEASE.md", "docs/implementation/RELEASE_2026_10_19.md", "docs/implementation/OBSERVATION_LEARNING.md"]
 
 ### VOX-050 — Run Studio browser journeys and accessibility checks
 
@@ -986,7 +1002,7 @@ Execute QA-approved Studio journeys using synthetic fixtures in Chromium/WebKit/
 
 **Deliverables:** Browser evidence bundle; Accessibility findings.
 
-**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/INTEGRATION_RELEASE.md", "docs/implementation/RELEASE_2026_10_19.md"]
+**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/INTEGRATION_RELEASE.md", "docs/implementation/RELEASE_2026_10_19.md", "docs/implementation/OBSERVATION_LEARNING.md"]
 
 ### VOX-051 — Run real provider and physical-device E2E
 
@@ -1012,7 +1028,7 @@ Execute approved core test-account journeys on actual supported Telegram/mobile/
 
 ### VOX-052 — Qualify load, recovery, deletion and incident response
 
-**Owner:** `vox_release_engineer` · **Reviewer:** `vox_qa_evaluator` · **Model:** `gpt-6.1-sol` · **Size:** L · **Priority:** P1 · **Status:** planned
+**Owner:** `vox_release_engineer` · **Reviewer:** `vox_qa_evaluator` · **Model:** `gpt-6.1-sol` · **Size:** L · **Priority:** P1 · **Status:** in_progress
 
 **Requirements:** REQ-04, REQ-16, REQ-17, REQ-21. **Depends on:** VOX-018, VOX-014, VOX-030, VOX-035, VOX-047, VOX-049.
 
@@ -1027,6 +1043,8 @@ Load-test approved synthetic workloads, queue/provider outage, lost receipts, re
 **Verification:** Fault/load/recovery drills with exact infrastructure and workload records.
 
 **Deliverables:** Operations qualification; Incident and restore runbook.
+
+**Evidence:** ["docs/implementation/OBSERVATION_LEARNING.md"]
 
 ### VOX-053 — Finalize public notices, support and launch materials
 

@@ -3,13 +3,31 @@ import { createHash, randomUUID } from 'crypto';
 import { promises as fs } from 'fs';
 import { join } from 'path';
 import type { Firestore } from 'firebase-admin/firestore';
+import { FieldPath } from 'firebase-admin/firestore';
+
+export interface AdaptiveAccountPage { accountIds: string[]; next?: string }
+export interface AdaptiveAccountPageInput { after?: string; limit: number }
 
 export interface AdaptiveStorage {
   /** Callback must be synchronous and retry safe. A throw commits nothing. */
   transact<T>(accountId: string, mutate: (current: unknown | null) => { document: unknown; result: T }): Promise<T>;
+  /** Server maintenance only. Opaque stable key cursor; never returns document payloads.
+   * Concurrent inserts before a cursor are visited on the next full sweep. */
+  listAccounts?(input: AdaptiveAccountPageInput): Promise<AdaptiveAccountPage>;
 }
 export const MAX_ADAPTIVE_DOCUMENT_BYTES = 700_000;
 const key = (id: string) => createHash('sha256').update(id).digest('hex');
+function pageInput(input: AdaptiveAccountPageInput): void {
+  if (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > 100 ||
+      (input.after !== undefined && !/^[a-f0-9]{64}$/.test(input.after))) throw new Error('Invalid adaptive enumeration');
+}
+function accountFrom(raw: unknown, expectedKey: string): string | undefined {
+  if (!raw || typeof raw !== 'object' || !('accountId' in raw)) return undefined;
+  const id = raw.accountId;
+  if (typeof id !== 'string' || !/^telegram-account:[1-9]\d{0,15}$/.test(id) ||
+      !Number.isSafeInteger(Number(id.slice('telegram-account:'.length))) || key(id) !== expectedKey) throw new Error('Invalid adaptive account index');
+  return id;
+}
 function encode(document: unknown): string {
   const json = JSON.stringify(document);
   if (Buffer.byteLength(json) > MAX_ADAPTIVE_DOCUMENT_BYTES) throw new Error('Adaptive account storage capacity reached');
@@ -20,6 +38,27 @@ function encode(document: unknown): string {
  * an operator must inspect/remove it after verifying no writer still owns it. */
 export class FileAdaptiveStorage implements AdaptiveStorage {
   constructor(readonly directory: string) {}
+  async listAccounts(input: AdaptiveAccountPageInput): Promise<AdaptiveAccountPage> {
+    pageInput(input);
+    // Streaming directory scan bounds retained keys and payload reads to limit+1.
+    // Filesystem enumeration is not an indexed database query.
+    let directory;
+    try { directory = await fs.opendir(this.directory); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { accountIds: [] }; throw error; }
+    const keys: string[] = [];
+    for await (const entry of directory) {
+      if (!entry.isFile() || !/^[a-f0-9]{64}\.json$/.test(entry.name)) continue;
+      const id = entry.name.slice(0, -5);
+      if (input.after && id <= input.after) continue;
+      keys.push(id); keys.sort(); if (keys.length > input.limit + 1) keys.pop();
+    }
+    const chosen = keys.slice(0, input.limit), accountIds: string[] = [];
+    for (const id of chosen) {
+      const account = accountFrom(JSON.parse(await fs.readFile(join(this.directory, `${id}.json`), 'utf8')), id);
+      if (account) accountIds.push(account);
+    }
+    return { accountIds, ...(keys.length > input.limit ? { next: chosen.at(-1)! } : {}) };
+  }
   async transact<T>(accountId: string, mutate: (current: unknown | null) => { document: unknown; result: T }): Promise<T> {
     await fs.mkdir(this.directory, { recursive: true, mode: 0o700 });
     const file = join(this.directory, `${key(accountId)}.json`);
@@ -58,6 +97,19 @@ export class FileAdaptiveStorage implements AdaptiveStorage {
 
 export class FirestoreAdaptiveStorage implements AdaptiveStorage {
   constructor(private readonly db: Firestore, private readonly collection = 'adaptiveAccounts') {}
+  async listAccounts(input: AdaptiveAccountPageInput): Promise<AdaptiveAccountPage> {
+    pageInput(input);
+    let query = this.db.collection(this.collection).orderBy(FieldPath.documentId()).select('json').limit(input.limit + 1);
+    if (input.after) query = query.startAfter(input.after);
+    const page = await query.get(), selected = page.docs.slice(0, input.limit), accountIds: string[] = [];
+    for (const document of selected) {
+      const raw = document.get('json');
+      if (typeof raw !== 'string') throw new Error('Invalid adaptive document');
+      const account = accountFrom(JSON.parse(raw), document.id);
+      if (account) accountIds.push(account);
+    }
+    return { accountIds, ...(page.docs.length > input.limit ? { next: selected.at(-1)!.id } : {}) };
+  }
   async transact<T>(accountId: string, mutate: (current: unknown | null) => { document: unknown; result: T }): Promise<T> {
     const ref = this.db.collection(this.collection).doc(key(accountId));
     const result = await this.db.runTransaction(async tx => {
@@ -70,5 +122,31 @@ export class FirestoreAdaptiveStorage implements AdaptiveStorage {
       return result;
     });
     return result === undefined ? result : structuredClone(result);
+  }
+}
+
+/** Synthetic/local adapter with the same rollback and per-account serialization contract. */
+export class MemoryAdaptiveStorage implements AdaptiveStorage {
+  private readonly documents = new Map<string, unknown>();
+  private readonly queues = new Map<string, Promise<void>>();
+  async transact<T>(accountId: string, mutate: (current: unknown | null) => { document: unknown; result: T }): Promise<T> {
+    const prior = this.queues.get(accountId) ?? Promise.resolve();
+    let release!: () => void;
+    const pending = new Promise<void>(resolve => { release = resolve; });
+    this.queues.set(accountId, pending);
+    await prior;
+    try {
+      const { document, result } = mutate(structuredClone(this.documents.get(accountId) ?? null));
+      const json = encode(document);
+      this.documents.set(accountId, JSON.parse(json));
+      return result === undefined ? result : structuredClone(result);
+    } finally { release(); if (this.queues.get(accountId) === pending) this.queues.delete(accountId); }
+  }
+  async listAccounts(input: AdaptiveAccountPageInput): Promise<AdaptiveAccountPage> {
+    pageInput(input);
+    const rows = [...this.documents].map(([id, raw]) => ({ key: key(id), raw })).filter(row => !input.after || row.key > input.after)
+      .sort((a, b) => a.key.localeCompare(b.key)).slice(0, input.limit + 1);
+    return { accountIds: rows.slice(0, input.limit).flatMap(row => { const id = accountFrom(row.raw, row.key); return id ? [id] : []; }),
+      ...(rows.length > input.limit ? { next: rows[input.limit - 1].key } : {}) };
   }
 }

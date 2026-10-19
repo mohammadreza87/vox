@@ -95,6 +95,8 @@
 .vx-btn-danger { background: rgba(255, 107, 94, .14); color: var(--danger); }
 .vx-btn-sm { height: 40px; padding: 0 16px; font-size: 14px; }
 .vx-btn-block { width: 100%; }
+/* Learning action labels can wrap to several lines in Persian on mobile. */
+.vx-learning-actions > .vx-btn { height: auto; min-height: 52px; padding-block: 10px; }
 
 .vx-icon-btn {
   width: 44px; height: 44px; border-radius: 999px; border: none; background: transparent; color: var(--text);

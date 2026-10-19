@@ -8,6 +8,7 @@ import { ADAPTIVE_POLICY_VERSION, OPTIONAL_PURPOSES, AdaptiveRepository, account
   spaceIdFor, tenantIdFor, type AdaptiveDocument, type OptionalPurpose, type SpaceKind, type StoredMemory } from './repository';
 import type { AdaptiveNotice, AdaptiveSnapshot, AdaptivePresentation } from './contracts';
 import type { AgentGrantInput, ConsentInput, DeletionInput, IdentityInput, MemoryInput, PresentInput } from './validation';
+import { sweepObserverDocument } from '../observation/helpers';
 
 export class AdaptiveError extends Error {
   readonly name = 'AdaptiveError';
@@ -114,6 +115,8 @@ export class AdaptiveService {
       }
       // Text retention is enforced even on reads; metadata remains as a replay tombstone.
       for (const memory of d.memories) if (memory.status === 'active' && memory.expiresAt <= now) this.tombstone(d, memory, now, `expiry:${memory.id}`);
+      if (sweepObserverDocument(d, now, (doc, space, agentId, time) =>
+        this.isPurposeAllowed(doc, space, 'optional.product_analytics', time, agentId))) this.bump(d, now);
       const value = fn(d, now);
       // The separate template store is suppressed/purged only after canonical
       // authority commits. Its invalidator never re-enters this transaction.
@@ -149,7 +152,9 @@ export class AdaptiveService {
         }
         for (const group of removed.values()) enqueue(group.space, 'source_deleted', group.agentId, group.ids);
       }
-      if (priorRelationships !== digest(d.relationships) && d.revision === priorRevision) this.bump(d, now);
+      const observerChanged = sweepObserverDocument(d, now, (doc, space, agentId, time) =>
+        this.isPurposeAllowed(doc, space, 'optional.product_analytics', time, agentId));
+      if ((observerChanged || priorRelationships !== digest(d.relationships)) && d.revision === priorRevision) this.bump(d, now);
       return value;
     });
     // Authority is already durably revoked. Purge failures are visible to caller;

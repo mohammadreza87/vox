@@ -54,7 +54,7 @@ export class AdaptiveExperienceService {
     d.events.push({ eventId: input.eventId, fingerprint, kind, resultId: input.eventId, revision: d.revision + 1 });
     return true;
   }
-  private clean(d: AdaptiveDocument, now: number): void {
+  pruneDocument(d: AdaptiveDocument, now: number): void {
     const e = d.experience;
     e.observations = e.observations.filter(o => o.at > now - RETENTION && this.purpose(d, o.space, 'optional.product_analytics', now, o.agentId) && o.consentEpoch === this.epoch(d, o.space, 'optional.product_analytics'));
     e.turnKeys = e.turnKeys.filter(k => k.expiresAt > now);
@@ -72,7 +72,7 @@ export class AdaptiveExperienceService {
     e.inbox = e.inbox.filter(i => i.expiresAt > now || i.createdAt > now - DAY);
   }
   private snapshot(d: AdaptiveDocument, space: SpaceKind, now: number): ExperienceSnapshot {
-    this.clean(d, now);
+    this.pruneDocument(d, now);
     const confirmed = this.adaptive.isProfileConfirmed(d, now);
     const personalization = this.purpose(d, space, 'optional.personalization', now);
     const productAnalytics = this.purpose(d, space, 'optional.product_analytics', now);
@@ -98,7 +98,7 @@ export class AdaptiveExperienceService {
   savePreference(telegramId: number, value: PreferenceInput): Promise<ExperienceSnapshot> {
     const input = preferenceInputSchema.parse(value);
     return this.adaptive.withAccountDocument(telegramId, (d, now) => {
-      this.confirmed(d, now); this.clean(d, now);
+      this.confirmed(d, now); this.pruneDocument(d, now);
       if (!this.command(d, input, 'preference_changed', digest(['preference', input]))) return this.snapshot(d, input.space, now);
       const prior = d.experience.preferences.find(p => p.space === input.space && p.agentId === input.agentId && p.setting.key === input.setting.key);
       if (!prior && d.experience.preferences.length >= 120) error(409, 'storage_capacity');
@@ -112,7 +112,7 @@ export class AdaptiveExperienceService {
     const input = settingsInputSchema.parse(value);
     if (input.timezone !== undefined && input.timezone !== null && !isSelectedTimezone(input.timezone)) return Promise.reject(new AdaptiveError(400, 'invalid_timezone'));
     return this.adaptive.withAccountDocument(telegramId, (d, now) => {
-      this.confirmed(d, now); this.clean(d, now);
+      this.confirmed(d, now); this.pruneDocument(d, now);
       if (!this.command(d, input, 'notification_settings', digest(['settings', input]))) return this.snapshot(d, input.space, now);
       const settings = d.experience.settings;
       settings.revision++; settings.dailyCap = input.dailyCap; settings.quietStartHour = input.quietStartHour; settings.quietEndHour = input.quietEndHour;
@@ -124,7 +124,7 @@ export class AdaptiveExperienceService {
   feedback(telegramId: number, value: FeedbackInput): Promise<ExperienceSnapshot> {
     const input = feedbackInputSchema.parse(value);
     return this.adaptive.withAccountDocument(telegramId, (d, now) => {
-      this.confirmed(d, now); this.clean(d, now);
+      this.confirmed(d, now); this.pruneDocument(d, now);
       if (!this.command(d, input, 'notification_feedback', digest(['feedback', input]))) return this.snapshot(d, input.space, now);
       const item = d.experience.inbox.find(i => i.id === input.itemId && i.space === input.space && i.status !== 'cancelled');
       if (!item) error(404, 'not_found');
@@ -136,7 +136,7 @@ export class AdaptiveExperienceService {
   reminder(telegramId: number, value: ReminderInput): Promise<ExperienceSnapshot> {
     const input = reminderInputSchema.parse(value);
     return this.adaptive.withAccountDocument(telegramId, (d, now) => {
-      this.confirmed(d, now); this.clean(d, now);
+      this.confirmed(d, now); this.pruneDocument(d, now);
       if (!this.purpose(d, input.space, 'optional.reminder_delivery', now, input.agentId)) error(403, 'reminder_consent_required');
       const settings = d.experience.settings[input.space];
       if (!settings.inboxEnabled || !settings.reminderEnabled) error(403, 'reminders_disabled');
@@ -155,7 +155,7 @@ export class AdaptiveExperienceService {
   recordTurn(telegramId: number, value: TurnInput): Promise<{ recorded: boolean; inboxCreated: boolean }> {
     const input = turnInputSchema.parse(value);
     return this.adaptive.withAccountDocument(telegramId, (d, now) => {
-      this.clean(d, now);
+      this.pruneDocument(d, now);
       if (input.origin !== 'human') return { recorded: false, inboxCreated: false };
       const analytics = this.purpose(d, input.space, 'optional.product_analytics', now, input.agentId);
       const proactive = this.purpose(d, input.space, 'optional.proactive_suggestions', now, input.agentId);
@@ -208,7 +208,7 @@ export class AdaptiveExperienceService {
     const key = JSON.stringify([telegramId, input.sessionId]);
     const active = this.activePredictions.get(key);
     await this.adaptive.withAccountDocument(telegramId, (d, now) => {
-      this.clean(d, now);
+      this.pruneDocument(d, now);
       let turn = d.experience.predictionTurns.find(p => p.agentId === input.agentId && p.space === input.space && p.sessionId === input.sessionId && p.turnId === input.turnId);
       if (!turn) {
         if (!this.adaptive.isCoreAllowed(d, now) || !d.agentGrants.some(g => g.agentId === input.agentId && g.space === input.space && g.allowed)) return;
@@ -249,7 +249,8 @@ export class AdaptiveExperienceService {
     catch { return { status: 'unknown', reason: 'invalid_input', elapsedMs: 0 }; }
     const reservation = randomUUID(), key = JSON.stringify([telegramId, input.sessionId]);
     const prepared = await this.adaptive.withAccountDocument(telegramId, (d, now) => {
-      this.confirmed(d, now); this.clean(d, now);
+      this.confirmed(d, now); this.pruneDocument(d, now);
+      // Current-user text is used only for this conversation, not analytics or learning.
       const grant = d.agentGrants.find(g => g.agentId === input.agentId && g.space === input.space && g.allowed);
       if (!grant || !this.adaptive.isCoreAllowed(d, now)) error(403, 'agent_access_denied');
       const imageCapability = image ? this.adaptive.capabilityStatus(d, 'single_party_image', now) : null;

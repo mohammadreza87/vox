@@ -23,6 +23,35 @@ afterEach(() => {
 const flush = () => vi.advanceTimersByTimeAsync(0);
 
 describe('bot runner', () => {
+  it('runs a bounded maintenance batch without overlap and aborts its remaining work on stop', async () => {
+    vi.useFakeTimers();
+    let finish!: () => void;
+    const blocked = new Promise<void>(resolve => { finish = resolve; });
+    const runPage = vi.fn(async () => { await blocked; return { state: 'completed', scanned: 0 }; });
+    h.studio.deps.maintenance = { runPage } as unknown as NonNullable<typeof h.studio.deps.maintenance>;
+    stop = startBots(h.studio).stop;
+    await flush();
+    expect(runPage).toHaveBeenCalledTimes(1);
+    const call = runPage.mock.calls[0] as unknown as [{ limit: number; signal: AbortSignal }];
+    expect(call[0].limit).toBe(20); expect(call[0].signal.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(runPage).toHaveBeenCalledTimes(1);
+    stop(); expect(call[0].signal.aborted).toBe(true);
+    finish(); await flush(); await vi.advanceTimersByTimeAsync(60_000);
+    expect(runPage).toHaveBeenCalledTimes(1);
+  });
+
+  it('retains the maintenance cadence after failure and logs only a fixed failure catalog', async () => {
+    vi.useFakeTimers();
+    const runPage = vi.fn().mockRejectedValueOnce(telegramCanaryError()).mockResolvedValue({ state: 'completed', scanned: 0 });
+    h.studio.deps.maintenance = { runPage } as unknown as NonNullable<typeof h.studio.deps.maintenance>;
+    stop = startBots(h.studio).stop;
+    await flush();
+    expect(h.logger.warn).toHaveBeenCalledWith({ type: 'adaptive_maintenance', outcome: 'failed', reason: 'sweep_failed' });
+    await vi.advanceTimersByTimeAsync(60_000); expect(runPage).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(h.logger.warn.mock.calls)).not.toContain(telegramCanary.transcript);
+  });
+
   it('VoxxBot: sets the menu button, greets people and hires on managed_bot updates', async () => {
     vi.useFakeTimers();
     h.studio.deps.webAppUrl = 'https://vox.example/studio';
