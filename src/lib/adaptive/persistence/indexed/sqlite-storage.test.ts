@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -10,7 +10,7 @@ import { SqliteAdaptiveStorage } from './sqlite-storage';
 import { IndexedStorageError, type CandidateHandle, type IndexedScope, type RuntimeAuthorityReceipt } from './contracts';
 import { accountKey } from './projection';
 const directories: string[] = [], stores: SqliteAdaptiveStorage[] = [];
-afterEach(() => { for (const s of stores.splice(0)) s.close(); for (const d of directories.splice(0)) rmSync(d, { recursive: true, force: true }); });
+afterEach(() => { vi.restoreAllMocks(); for (const s of stores.splice(0)) s.close(); for (const d of directories.splice(0)) rmSync(d, { recursive: true, force: true }); });
 async function fixture(count = 3) {
   const directory = mkdtempSync(join(tmpdir(), 'vox-indexed-synthetic-')); directories.push(directory);
   const path = join(directory, 'private.sqlite'); let now = 1000;
@@ -351,6 +351,22 @@ describe('staged SQLite adaptive storage — synthetic fixtures only', () => {
     expect(() => { (f.storage.indexed.identity as { generation: number }).generation = 999; }).toThrow();
     expect(f.storage.indexed.identity).not.toHaveProperty('catalogVersion');
     expect(f.storage.indexed.identity).not.toHaveProperty('lifecycleWatermark');
+  });
+
+  it('cleans exclusive ownership after failed guarded metadata initialization and reads startup identity once', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'vox-indexed-startup-failure-')); directories.push(directory);
+    const path = join(directory, 'private.sqlite');
+    const failedRead = vi.spyOn(SqliteAdaptiveStorage.prototype, 'readMetadata').mockImplementationOnce(() => { throw Error('synthetic startup metadata failure'); });
+    expect(() => new SqliteAdaptiveStorage(path)).toThrow(/corrupt/);
+    failedRead.mockRestore();
+    const observedRead = vi.spyOn(SqliteAdaptiveStorage.prototype, 'readMetadata');
+    const retry = new SqliteAdaptiveStorage(path); stores.push(retry);
+    expect(observedRead).toHaveBeenCalledTimes(1);
+    expect(retry.indexed.identity.incarnation).toMatch(/^[a-f0-9-]{36}$/);
+    expect(retry.indexed.identity.generation).toBe(1);
+    retry.close();
+    const secondRetry = new SqliteAdaptiveStorage(path); stores.push(secondRetry);
+    expect(secondRetry.indexed.identity).toEqual(retry.indexed.identity);
   });
 
 });

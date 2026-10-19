@@ -80,16 +80,15 @@ export class SqliteAdaptiveStorage implements AdaptiveStorage {
         opened.pragma(`user_version = ${INDEXED_SCHEMA_VERSION}`);
       } else if (version !== INDEXED_SCHEMA_VERSION || JSON.stringify(objects.map(o => o.name)) !== JSON.stringify(expectedObjects)) throw new IndexedStorageError('corrupt');
       if (JSON.stringify(schemaDefinitions(opened)) !== JSON.stringify(expectedSchema())) throw new IndexedStorageError('corrupt');
-      this.readMetadata();
+      const identity = this.readMetadata();
+      this.identity = Object.freeze({ incarnation: identity.incarnation, generation: identity.generation });
       if (opened.pragma('quick_check', { simple: true }) !== 'ok' || (opened.pragma('foreign_key_check') as unknown[]).length !== 0) throw new IndexedStorageError('corrupt');
       opened.exec('COMMIT');
+      this.indexed = new IndexedQueryEngine(this);
     } catch (error) {
       if (opened?.inTransaction) opened.exec('ROLLBACK'); opened?.close(); openStores.delete(this.storePath);
       throw this.error(error);
     }
-    const identity = this.readMetadata();
-    this.identity = Object.freeze({ incarnation: identity.incarnation, generation: identity.generation });
-    this.indexed = new IndexedQueryEngine(this);
   }
   private error(error: unknown, committed: boolean | 'unknown' = false): IndexedStorageError {
     if (error instanceof IndexedStorageError) return error;
