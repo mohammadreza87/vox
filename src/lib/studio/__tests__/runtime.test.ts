@@ -64,6 +64,15 @@ describe('Studio production initialization', () => {
     expect(JSON.parse(readFileSync(join(dir, 'studio.json'), 'utf8'))).toMatchObject({ members: [], agents: [] });
   });
 
+  it('keeps relationship providers and workers disabled under adaptive scope even when legacy allowlists are configured', async () => {
+    configure({ STUDIO_RELATIONSHIPS: 'live', STUDIO_RELATIONSHIP_AGENTS: 'synthetic-agent',
+      STUDIO_RELATIONSHIP_PEOPLE: '300', OPENAI_API_KEY: 'synthetic-test-key' });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ ok: true, result: { id: 1, is_bot: true, username: 'VoxxBot', first_name: 'Voxx' } })));
+    const studio = await getStudio();
+    expect(studio.deps.adaptive).toBeDefined();
+    expect(studio.deps.relationships).toBeUndefined();
+  });
+
   it('rejects a manager username that belongs to a different bot', async () => {
     configure();
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ ok: true, result: { id: 1, is_bot: true, username: 'OtherBot', first_name: 'Other' } })));

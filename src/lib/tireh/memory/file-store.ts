@@ -6,6 +6,8 @@ import { InMemoryChatHistoryStore, InMemoryMemoryStore, InMemoryShareOfferStore,
 
 interface FileState {
   memories: MemoryRecord[];
+  revisions?: Record<string, number>;
+  tombstones?: Record<string, string[]>;
   offers: ShareOffer[];
   chats: Record<string, ChatMessage[]>;
   epochs?: Record<string, number>;
@@ -20,14 +22,17 @@ export function createFileStores(path: string) {
   const memories = new InMemoryMemoryStore(epochs);
   const offers = new InMemoryShareOfferStore();
   const history = new InMemoryChatHistoryStore(epochs);
+  history.bindMemoryStore(memories);
 
   const reload = () => {
     if (!existsSync(path)) {
-      memories.records.clear(); offers.offers.clear(); history.chats.clear(); epochs.clear();
+      memories.records.clear(); memories.revisions.clear(); memories.tombstones.clear(); offers.offers.clear(); history.chats.clear(); epochs.clear();
       return;
     }
     const state = JSON.parse(readFileSync(path, 'utf8'), reviveDates) as FileState;
-    memories.records.clear(); offers.offers.clear(); history.chats.clear(); epochs.clear();
+    memories.records.clear(); memories.revisions.clear(); memories.tombstones.clear(); offers.offers.clear(); history.chats.clear(); epochs.clear();
+    for (const [key, revision] of Object.entries(state.revisions ?? {})) memories.revisions.set(key, revision);
+    for (const [key, events] of Object.entries(state.tombstones ?? {})) memories.tombstones.set(key, new Set(events));
     for (const m of state.memories ?? []) memories.records.set(m.id, m);
     for (const o of state.offers ?? []) offers.offers.set(o.id, o);
     for (const [key, list] of Object.entries(state.chats ?? {})) history.chats.set(key, list);
@@ -36,6 +41,8 @@ export function createFileStores(path: string) {
   reload();
   const save = () => {
     const state: FileState = {
+      revisions: Object.fromEntries(memories.revisions),
+      tombstones: Object.fromEntries([...memories.tombstones].map(([key, events]) => [key, [...events]])),
       memories: [...memories.records.values()], offers: [...offers.offers.values()],
       chats: Object.fromEntries(history.chats), epochs: Object.fromEntries(epochs),
     };
@@ -68,8 +75,9 @@ export function createFileStores(path: string) {
     }
     return store;
   };
+  history.clear = (personaId) => history.clearPersona(personaId);
   return {
-    memories: wrap(memories, ['add', 'addIfEpoch', 'update', 'updateIfShareVersion', 'delete'], ['get', 'listActive']),
+    memories: wrap(memories, ['add', 'addIfEpoch', 'update', 'updateIfShareVersion', 'delete', 'invalidate'], ['get', 'listActive', 'safetyRevision']),
     offers: wrap(offers, ['create', 'setStatus'], ['get']),
     history: wrap(history, ['append', 'clearPersona'], ['recent', 'getEpoch']),
     deduper: new InMemoryUpdateDeduper(),

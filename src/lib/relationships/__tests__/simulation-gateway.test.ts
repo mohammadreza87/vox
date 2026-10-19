@@ -28,15 +28,32 @@ describe('synthetic PersonaGateway session', () => {
       const canary = await session.execute({ op: 'seed_memory', ownerId: 'asha', content: 'Private family code: ashas-secret-code-8142.', topic: 'family-secret', sensitivity: 'personal' }) as { result: { memoryId: string } };
       await session.execute({ op: 'share', memoryId: tea.result.memoryId, ownerId: 'asha', recipientIds: ['marco'] });
 
-      const groupTurn = await session.execute({ op: 'turn', personId: 'marco', audience: { kind: 'group', groupId: 'book-club' }, text: 'What tea should we get for the meetup?' }) as { replies: string[] };
-      expect(groupTurn.replies).toHaveLength(1);
       const llm = session.llm as { requests: Array<{ system: string }> };
       const answerPrompt = () => llm.requests.findLast((request) => !request.system.startsWith('You extract long-term memories'))!.system;
+      // Exact-recipient sharing authorizes Marco's private retrieval. It does
+      // not move a private-origin fact into a group's retained context.
+      const privateTurn = await session.execute({ op: 'turn', personId: 'marco', audience: { kind: 'private', personId: 'marco' }, text: 'What tea does Asha like?' }) as { replies: string[] };
+      expect(privateTurn.replies).toHaveLength(1);
       expect(answerPrompt()).toContain('Asha likes jasmine tea.');
+      expect(answerPrompt()).not.toContain('ashas-secret-code-8142');
+
+      const group = session.org.getGroup('book-club')!;
+      await session.stores.memories.add({
+        personaId: 'tireh', content: 'Book club meets on Saturday.', type: 'fact',
+        topic: 'book-club-meeting', scope: { kind: 'group', groupId: group.id },
+        authorizedPersonIds: [...group.memberIds], sensitivity: 'normal',
+        source: { personId: 'marco', chatKind: 'group', groupId: group.id, at: now },
+        aboutPersonIds: [], confidence: 1,
+      });
+      const groupTurn = await session.execute({ op: 'turn', personId: 'marco', audience: { kind: 'group', groupId: 'book-club' }, text: 'What tea should we get for the meetup?' }) as { replies: string[] };
+      expect(groupTurn.replies).toHaveLength(1);
+      expect(answerPrompt()).toContain('Book club meets on Saturday.');
+      expect(answerPrompt()).not.toContain('Asha likes jasmine tea.');
       expect(answerPrompt()).not.toContain('ashas-secret-code-8142');
 
       await session.execute({ op: 'guest_join', groupId: 'book-club' });
       await session.execute({ op: 'turn', personId: 'marco', audience: { kind: 'group', groupId: 'book-club' }, text: 'What tea should we get?' });
+      expect(answerPrompt()).not.toContain('Book club meets on Saturday.');
       expect(answerPrompt()).not.toContain('Asha likes jasmine tea.');
       expect(answerPrompt()).not.toContain('ashas-secret-code-8142');
 

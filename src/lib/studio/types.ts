@@ -172,6 +172,8 @@ export interface StudioGroup {
   memberIds: number[];
   /** True when the chat has more members than the HOOR people we know of */
   hasGuests: boolean;
+  /** Monotonic audience epoch; leave/rejoin must not restore old sharing rights. */
+  audienceEpoch?: number;
   agentIds: string[];
   addedBy?: number;
   addedAt: string;

@@ -117,7 +117,7 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
 
     if (root === 'me' && method === 'GET') {
       return json({ member: me, org: studio.deps.orgName, bot: studio.deps.managerUsername, features: {
-        avatars: !!studio.deps.openai, voices: !!studio.deps.eleven, calls: !!studio.deps.openai || !!studio.deps.eleven, liveCalls: studio.liveCalls,
+        avatars: !!studio.deps.openai, voices: !!studio.deps.eleven, calls: !!studio.deps.openai || !!studio.deps.eleven, liveCalls: studio.liveCalls, legacyMemorySharing: !studio.deps.adaptive,
       } });
     }
     if (me.role === 'pending') throw new StudioError(403, 'Waiting for an admin to approve you.');
@@ -212,8 +212,14 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
             const b = await body(req);
             return json({ agent: await studio.setVisibility(me, id, str(b.visibility, 10) as AgentVisibility) });
           }
-          case 'POST live-call': return json(await studio.startLiveCall(me, id));
-          case 'POST call-end': await studio.endLiveCall(me, id); return json({ ok: true });
+          case 'POST live-call':
+          case 'POST call-end': {
+            const b = req.headers.get('content-type')?.includes('application/json') ? await body(req) : {};
+            const space = b.space ?? 'work';
+            if (space !== 'work' && space !== 'personal') throw new StudioError(400, 'Choose Work or Personal.');
+            if (action === 'live-call') return json(await studio.startLiveCall(me, id, space));
+            await studio.endLiveCall(me, id, space); return json({ ok: true });
+          }
           case 'PUT live-web': return json({ agent: await studio.setLiveWeb(me, id, (await body(req)).on === true) });
           case 'PUT group-behavior': return json({ agent: await studio.setGroupBehavior(me, id, await body(req)) });
           case 'POST profile-sync': return json(await studio.syncProfile(me, id));
@@ -234,7 +240,9 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
             const form = await req.formData().catch(() => { throw new StudioError(400, 'Expected audio'); });
             const audio = form.get('audio');
             if (!(audio instanceof Blob)) throw new StudioError(400, 'Expected audio');
-            return json(await studio.callTurn(me, id, await audio.arrayBuffer(), audio.type || 'audio/webm'));
+            const space = form.get('space') ?? 'work';
+            if (space !== 'work' && space !== 'personal') throw new StudioError(400, 'Choose Work or Personal.');
+            return json(await studio.callTurn(me, id, await audio.arrayBuffer(), audio.type || 'audio/webm', space));
           }
           case 'GET relationship': return json({ relationship: await studio.relationshipFor(me, id) });
           case 'PUT relationship': {

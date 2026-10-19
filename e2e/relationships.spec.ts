@@ -38,7 +38,7 @@ async function installStudioFixtures(page: Page) {
     const body = request.postDataJSON?.() as Record<string, unknown> | undefined;
     if (method !== 'GET' && body) mutations.push({ path, method, body });
     let result: unknown;
-    if (path === 'me') result = { member: members[0], org: 'Fixture Studio', bot: 'fixture_bot', features: { avatars: false, voices: false, calls: false } };
+    if (path === 'me') result = { member: members[0], org: 'Fixture Studio', bot: 'fixture_bot', features: { avatars: false, voices: false, calls: false, legacyMemorySharing: true } };
     else if (path === 'agents') result = { agents: [agent] };
     else if (path === `agents/${agent.id}`) result = { agent };
     else if (path === `agents/${agent.id}/memories`) {

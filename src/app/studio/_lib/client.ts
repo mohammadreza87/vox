@@ -76,7 +76,7 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(method: string, path: string, body?: unknown, responseType: 'json' | 'blob' = 'json'): Promise<T> {
+export async function request<T>(method: string, path: string, body?: unknown, responseType: 'json' | 'blob' = 'json'): Promise<T> {
   const headers: Record<string, string> = {
     'X-Telegram-Init-Data': tg()?.initData ?? '',
     Accept: responseType === 'blob' ? 'audio/*' : 'application/json',
@@ -110,7 +110,7 @@ export interface Me {
   member: Member;
   org: string;
   bot: string;
-  features: { avatars: boolean; voices: boolean; calls: boolean; liveCalls?: boolean };
+  features: { avatars: boolean; voices: boolean; calls: boolean; liveCalls?: boolean; legacyMemorySharing?: boolean };
 }
 
 export interface MemoryItem { id: string; content: string; type: string; scope: string; scopeLabel: string; from: string; mine: boolean; at: string; sensitivity: string }
@@ -173,13 +173,14 @@ export const api = {
   fire: (id: string, input: { reason: string; memoryPolicy: string; confirmName: string }) =>
     request<{ agent: AgentView }>('POST', `agents/${enc(id)}/fire`, input),
   groupLink: (id: string) => request<{ link: string }>('GET', `agents/${enc(id)}/group-link`),
-  callTurn: (id: string, audio: Blob) => {
+  callTurn: (id: string, audio: Blob, space: 'work' | 'personal' = 'work') => {
     const form = new FormData();
     form.append('audio', audio, 'turn');
+    form.append('space', space);
     return request<{ transcript: string; reply: string; audio?: string }>('POST', `agents/${enc(id)}/call`, form);
   },
-  liveCall: (id: string) => request<LiveCall>('POST', `agents/${enc(id)}/live-call`),
-  callEnd: (id: string) => request<{ ok: true }>('POST', `agents/${enc(id)}/call-end`),
+  liveCall: (id: string, space: 'work' | 'personal' = 'work') => request<LiveCall>('POST', `agents/${enc(id)}/live-call`, { space }),
+  callEnd: (id: string, space: 'work' | 'personal' = 'work') => request<{ ok: true }>('POST', `agents/${enc(id)}/call-end`, { space }),
   memories: (id: string) => request<{ memories: MemoryItem[] }>('GET', `agents/${enc(id)}/memories`),
   relationship: (id: string) => request<{ relationship: RelationshipView }>('GET', `agents/${enc(id)}/relationship`),
   updateRelationship: (id: string, input: { action: 'configure' | 'pause' | 'resume' | 'stop' | 'forget'; until?: string; timeZone?: string; quietHours?: { start: number; end: number } }) =>

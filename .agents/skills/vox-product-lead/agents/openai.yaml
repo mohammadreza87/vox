@@ -1,0 +1,4 @@
+interface:
+  display_name: "Vox Product lead"
+  short_description: "Coordinate scoped Vox delivery and evidence"
+  default_prompt: "Use $vox-product-lead to complete the assigned Vox task within its stated ownership and acceptance criteria."

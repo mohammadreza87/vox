@@ -1,0 +1,4 @@
+interface:
+  display_name: "Vox UX designer"
+  short_description: "Design clear Vox memory and consent flows"
+  default_prompt: "Use $vox-ux-designer to complete the assigned Vox task within its stated ownership and acceptance criteria."

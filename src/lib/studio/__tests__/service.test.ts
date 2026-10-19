@@ -713,7 +713,7 @@ describe('groups', () => {
   });
 
   it('in a group with unknown readers only the current exchange reaches the model', async () => {
-    const { agent: a } = await hire(h, org.alice);
+    const { agent: a, bot, botId } = await hire(h, org.alice);
     await h.store.update((s) => {
       s.groups.push({ chatId: chat.id, title: 'Game Team', memberIds: [ID.alice, ID.bob], hasGuests: true, agentIds: [a.id], addedAt: T0.toISOString() });
     });
@@ -723,9 +723,14 @@ describe('groups', () => {
     const { gateway } = await h.studio.gateway();
     expect(await gateway.handleUpdate(a.id, groupText(chat.id, ID.bob, 'Nova, what do we know?'))).toBe('replied');
     expect(h.chatLLM.lastPrompt).not.toContain('GROUPFACT');
-    expect(h.chatLLM.replyRequests.at(-1)?.messages).toEqual([{ role: 'user', content: 'Nova, what do we know?' }]);
+    expect(h.chatLLM.replyRequests.at(-1)?.messages).toEqual([{ role: 'user', content: 'Bob: Nova, what do we know?' }]);
     expect(h.chatLLM.lastPrompt).not.toContain('ORGFACT');
 
+    const roster = [ID.alice, ID.bob, botId];
+    bot().getChatMemberCount.mockResolvedValue(roster.length);
+    Object.assign(bot(), { getChatMember: vi.fn(async (_chatId: number, id: number) => ({
+      status: roster.includes(id) ? 'member' : 'left', user: { id, is_bot: id === botId, first_name: 'Synthetic reader' },
+    })) });
     await h.store.update((s) => { s.groups[0].hasGuests = false; });
     const fresh = await h.studio.gateway();
     expect(await fresh.gateway.handleUpdate(a.id, groupText(chat.id, ID.bob, 'Nova, and now?'))).toBe('replied');

@@ -1,0 +1,23 @@
+'use client';
+
+import type { AdaptiveOptionalPurpose, AdaptivePresentation, AdaptiveSnapshot, AdaptiveSpace } from '@/lib/adaptive/persistence/contracts';
+import { request } from './client';
+import type { PrivacyLocale } from './adaptive-copy';
+
+export type { AdaptiveOptionalPurpose, AdaptivePresentation, AdaptiveSnapshot, AdaptiveSpace };
+const eventId = () => crypto.randomUUID();
+export const adaptiveApi = {
+  read: (space: AdaptiveSpace, locale: PrivacyLocale) => request<AdaptiveSnapshot>('GET', `adaptive?space=${space}&locale=${locale}`),
+  confirm: (space: AdaptiveSpace, adultConfirmed: boolean, declaredJurisdiction?: string) =>
+    request<AdaptiveSnapshot>('POST', `adaptive/identity?space=${space}`, { confirm: true, adultConfirmed, ...(declaredJurisdiction ? { declaredJurisdiction } : {}) }),
+  present: (space: AdaptiveSpace, purpose: AdaptiveOptionalPurpose, revision: number, locale: PrivacyLocale) =>
+    request<AdaptivePresentation>('POST', 'adaptive/consents/present', { space, purpose, expectedRevision: revision, locale, eventId: eventId(), deliberateReopen: true }),
+  consent: (space: AdaptiveSpace, purpose: AdaptiveOptionalPurpose, revision: number, state: 'granted' | 'declined' | 'withdrawn', receipt?: string) =>
+    request<AdaptiveSnapshot>('PUT', 'adaptive/consents', { space, purpose, expectedRevision: revision, state, eventId: eventId(), ...(receipt ? { receipt } : {}) }),
+  save: (space: AdaptiveSpace, text: string, revision: number) =>
+    request<AdaptiveSnapshot>('POST', 'adaptive/memories', { space, text, expectedRevision: revision, eventId: eventId() }),
+  remove: (space: AdaptiveSpace, id: string, revision: number) =>
+    request<AdaptiveSnapshot>('DELETE', `adaptive/memories/${encodeURIComponent(id)}`, { space, expectedRevision: revision, eventId: eventId() }),
+  agent: (space: AdaptiveSpace, id: string, allowed: boolean, revision: number) =>
+    request<AdaptiveSnapshot>('PUT', `adaptive/agents/${encodeURIComponent(id)}`, { space, allowed, expectedRevision: revision, eventId: eventId() }),
+};

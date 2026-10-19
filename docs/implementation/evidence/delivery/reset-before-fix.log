@@ -1,0 +1,31 @@
+
+ RUN  v4.1.12 /Volumes/Workspace/Ludaxis/vox
+
+ ❯ src/app/studio/_components/screens/Experience.test.tsx (4 tests | 1 failed) 259ms
+     × shows the default reply length after the server confirms an explicit reset 51ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/app/studio/_components/screens/Experience.test.tsx > Experience controls > shows the default reply length after the server confirms an explicit reset
+Error: expect(element).toHaveValue(balanced)
+
+Expected the element to have value:
+  balanced
+Received:
+  brief
+ ❯ src/app/studio/_components/screens/Experience.test.tsx:38:51
+     36|     fireEvent.click(screen.getByRole('button', { name: 'Reset', exact:…
+     37|     await screen.findByText('Saved.');
+     38|     expect(screen.getByLabelText('Reply length')).toHaveValue('balance…
+       |                                                   ^
+     39|   });
+     40|   it('clears private reminder text during a space change and renders P…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 3 passed (4)
+   Start at  21:04:15
+   Duration  1.72s (transform 71ms, setup 108ms, import 414ms, tests 259ms, environment 808ms)
+

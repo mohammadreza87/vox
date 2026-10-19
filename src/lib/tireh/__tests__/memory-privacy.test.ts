@@ -41,9 +41,9 @@ describe('bounded memory and history audiences', () => {
     expect(parseScopeKey(scopeKey(shared.scope))).toEqual(shared.scope);
   });
 
-  it('personal group candidates retain sensitivity for rejection without creating a private record', () => {
+  it('personal group candidates classify as private while gateway rejects persistence', () => {
     const decision = decideScope(org, group, 'reza', candidate);
-    expect(decision).toMatchObject({ scope: { kind: 'group', groupId: group.kind === 'group' ? group.group.id : '' }, sensitivity: 'personal', authorizedPersonIds: ['reza', 'parastoo'] });
+    expect(decision).toMatchObject({ scope: { kind: 'private', personId: 'reza' }, sensitivity: 'personal', authorizedPersonIds: ['reza'] });
   });
 
   it('does not replay old group turns to newly joined readers or unknown audiences', () => {

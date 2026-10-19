@@ -25,8 +25,14 @@ export function audienceOf(chat: ChatContext): string[] {
 }
 
 export function hasGuestAudience(org: OrgDirectory, chat: ChatContext): boolean {
-  return (chat.kind === 'group' && !!chat.group.hasGuests) ||
+  return audienceOf(chat).length === 0 || (chat.kind === 'group' && !!chat.group.hasGuests) ||
     audienceOf(chat).some((id) => !org.getPerson(id) || org.getPerson(id)?.guest);
+}
+
+export const hasRestrictedAudience = hasGuestAudience;
+export function isVisibleInChat(org: OrgDirectory, memory: MemoryRecord, chat: ChatContext): boolean {
+  return (chat.kind !== 'group' || (memory.scope.kind === 'group' && memory.scope.groupId === chat.group.id)) &&
+    isMemoryAllowedInChat(org, memory, chat);
 }
 
 /** Capture once on creation or explicit sharing, never recalculate while reading. */

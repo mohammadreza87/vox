@@ -56,7 +56,7 @@ export async function handleAgentUpdate(studio: Studio, agentId: string, update:
     return;
   }
   if (update.chat_member) {
-    await studio.noteGroupMembership(update.chat_member.chat.id, update.chat_member.new_chat_member.user, update.chat_member.new_chat_member.status);
+    if (await studio.deps.memory.deduper.firstSeen(`audience:${agentId}:${update.update_id}`)) await studio.onGroupChatMember(update.chat_member);
     return;
   }
   const msg = update.message;

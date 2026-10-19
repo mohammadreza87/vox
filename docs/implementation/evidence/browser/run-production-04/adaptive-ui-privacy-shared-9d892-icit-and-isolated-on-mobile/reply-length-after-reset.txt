@@ -1,0 +1,5 @@
+Synthetic fixture result after preference reset:
+Displayed Reply length: balanced
+Expected default: balanced
+Mock backend state: work preference cleared (reset request body action=reset)
+Result: the reset UI reflects the cleared preference.

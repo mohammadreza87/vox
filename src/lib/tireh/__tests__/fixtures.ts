@@ -212,7 +212,7 @@ export function memory(partial: Partial<MemoryRecord> & { content: string; scope
     sensitivity: 'normal',
     source: { personId: 'reza', chatKind: 'private', at },
     aboutPersonIds: [],
-    authorizedPersonIds: testOrg().listPeople().filter((p) => canPersonSee(testOrg(), p.id, partial.scope)).map((p) => p.id),
+    authorizedPersonIds: partial.scope.kind === 'private' ? [partial.scope.personId] : partial.scope.kind === 'people' ? [...partial.scope.personIds] : testOrg().listPeople().filter((p) => canPersonSee(testOrg(), p.id, partial.scope)).map((p) => p.id),
     confidence: 0.9,
     createdAt: at,
     updatedAt: at,

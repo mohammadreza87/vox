@@ -7,7 +7,7 @@
  */
 
 import { z } from 'zod';
-import { audienceOf, hasGuestAudience, isMemoryAllowedInChat } from './visibility';
+import { audienceOf, hasRestrictedAudience, isMemoryAllowedInChat } from './visibility';
 import type { LLM } from '../llm';
 import type { OrgDirectory } from '../org/directory';
 import type {
@@ -47,9 +47,9 @@ export function buildExtractionPrompt(
   known = known.filter((m) => isMemoryAllowedInChat(org, m, chat));
   const directory = chat.kind === 'group'
     ? `Group participants:\n${chat.group.memberIds.map((id) => `- ${id}: ${org.getPerson(id)?.name ?? 'Unknown participant'}`).join('\n')}`
-    : `Known people:\n${org.listPeople().map((p) => `- ${p.id}: ${p.name} (${p.role})`).join('\n')}
+    : `Known people:\n${org.listPeople().filter(p => !hasRestrictedAudience(org, chat) || audienceOf(chat).includes(p.id)).map((p) => `- ${p.id}: ${p.name}${hasRestrictedAudience(org, chat) ? '' : ` (${p.role})`}`).join('\n')}
 
-Known projects:\n${org.config.projects.map((p) => `- ${p.id}: ${p.name}`).join('\n') || '- none'}`;
+Known projects:\n${hasRestrictedAudience(org, chat) ? '- none' : org.config.projects.map((p) => `- ${p.id}: ${p.name}`).join('\n') || '- none'}`;
   const where =
     chat.kind === 'private'
       ? `a private chat between ${persona.name} and ${org.getPerson(speakerId)?.name}`
@@ -186,6 +186,7 @@ export function decideScope(
       : 'normal';
 
   if (chat.kind === 'group') {
+    if (sensitivity !== 'normal') return { scope: { kind: 'private', personId: speakerId }, authorizedPersonIds: [speakerId], sensitivity, type: candidate.type };
     // A group statement grants no wider audience or private-memory write.
     // The caller rejects ineligible sensitive candidates before persistence;
     // preserve their classification here rather than silently downgrading it.

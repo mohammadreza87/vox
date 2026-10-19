@@ -14,11 +14,17 @@ import { MemoriesScreen } from './screens/Memories';
 import { FireScreen } from './screens/Fire';
 import { OrgScreen } from './screens/Org';
 import { GroupsScreen } from './screens/Groups';
+import { PrivacyScreen } from './screens/Privacy';
+import { SharedMemoriesScreen } from './screens/SharedMemories';
+import { ExperienceScreen } from './screens/Experience';
 
 export type Route =
   | { name: 'home' }
   | { name: 'groups' }
   | { name: 'org' }
+  | { name: 'privacy' }
+  | { name: 'shared-memories' }
+  | { name: 'experience' }
   | { name: 'agent'; id: string }
   | { name: 'spawn'; draftId?: string; successorOf?: string }
   | { name: 'call'; id: string }
@@ -50,6 +56,7 @@ const TABS: Array<{ route: Route['name']; label: string; icon: string }> = [
   { route: 'home', label: 'Agents', icon: 'cloud' },
   { route: 'groups', label: 'Groups', icon: 'groups' },
   { route: 'org', label: 'Org', icon: 'shield' },
+  { route: 'privacy', label: 'Privacy', icon: 'lock' },
 ];
 
 export function StudioApp() {
@@ -144,6 +151,9 @@ export function StudioApp() {
               {route.name === 'home' && <HomeScreen />}
               {route.name === 'groups' && <GroupsScreen />}
               {route.name === 'org' && <OrgScreen />}
+              {route.name === 'privacy' && <PrivacyScreen onShared={() => nav.push({ name: 'shared-memories' })} onExperience={() => nav.push({ name: 'experience' })} />}
+              {route.name === 'shared-memories' && <SharedMemoriesScreen selfId={me.member.telegramId} onBack={nav.back} />}
+              {route.name === 'experience' && <ExperienceScreen onBack={nav.back} />}
               {route.name === 'agent' && <AgentScreen id={route.id} />}
               {route.name === 'spawn' && <SpawnScreen draftId={route.draftId} successorOf={route.successorOf} />}
               {route.name === 'call' && <CallScreen id={route.id} />}
@@ -154,7 +164,7 @@ export function StudioApp() {
         </div>
 
         {isTab && (
-          <nav className="vx-tabbar" aria-label="Main" style={{ gridTemplateColumns: 'repeat(3, minmax(0, 1fr))' }}>
+          <nav className="vx-tabbar" aria-label="Main" style={{ gridTemplateColumns: 'repeat(4, minmax(0, 1fr))' }}>
             {TABS.map((t) => {
               const active = route.name === t.route;
               return (

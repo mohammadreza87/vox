@@ -1,0 +1,4 @@
+interface:
+  display_name: "Vox Evidence and documentation analyst"
+  short_description: "Maintain traceable Vox evidence and docs"
+  default_prompt: "Use $vox-docs-analyst to complete the assigned Vox task within its stated ownership and acceptance criteria."
