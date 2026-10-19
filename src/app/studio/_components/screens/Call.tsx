@@ -3,6 +3,8 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import { useEffect, useRef, useState } from 'react';
 import { api, haptic, type AgentView } from '../../_lib/client';
+import { learningApi } from '../../_lib/learning-client';
+import type { ClientObservationInput } from '@/lib/adaptive/observation/contracts';
 import { Cloud, PALETTE, stageFor, type Expression } from '../Cloud';
 import { errorMessage, LoadingFill, useNav } from '../StudioApp';
 import { Icon, TopBar } from '../ui';
@@ -35,10 +37,26 @@ export function CallScreen({ id }: { id: string }) {
 
   const stream = useRef<MediaStream | null>(null);
   const recorder = useRef<MediaRecorder | null>(null);
-  const chunks = useRef<Blob[]>([]);
   const player = useRef<HTMLAudioElement | null>(null);
   const meter = useRef<{ ctx: AudioContext; raf: number } | null>(null);
   const cancelled = useRef(false);
+  const generation = useRef(0);
+  const playback = useRef<{ agentId: string; space: 'work' | 'personal'; turnId: string; generation: number; outcomes: Set<ClientObservationInput['outcome']> } | null>(null);
+  const clearPlayback = () => {
+    playback.current = null;
+    if (player.current) {
+      player.current.onplaying = null; player.current.onended = null; player.current.onerror = null;
+      player.current.pause();
+    }
+  };
+  const reportPlayback = (outcome: ClientObservationInput['outcome']) => {
+    const turn = playback.current;
+    if (!turn || !turn.turnId || turn.generation !== generation.current || cancelled.current || turn.outcomes.has(outcome)) return;
+    turn.outcomes.add(outcome);
+    // Optional evidence must never affect the call, including when reporting is unavailable.
+    try { void learningApi.event({ eventId: crypto.randomUUID(), agentId: turn.agentId, space: turn.space, turnId: turn.turnId, outcome }).catch(() => undefined); }
+    catch { /* best effort */ }
+  };
   // Live mode: ElevenLabs streams both ways and handles turn-taking.
   const [live, setLive] = useState(false);
   const [muted, setMuted] = useState(false);
@@ -49,14 +67,22 @@ export function CallScreen({ id }: { id: string }) {
   useEffect(() => {
     // Reset on (re)mount: React StrictMode runs this effect's cleanup once in dev.
     cancelled.current = false;
-    api.agent(id).then((r) => setAgent(r.agent)).catch((e) => { nav.toast(errorMessage(e), 'error'); nav.back(); });
+    const current = ++generation.current;
+    const active = () => !cancelled.current && generation.current === current;
+    if (agent?.id !== id) setAgent(null);
+    setPhase('ready'); setLines([]); setLive(false); liveUnavailable.current = false;
+    api.agent(id).then((r) => { if (active()) setAgent(r.agent); }).catch((e) => { if (active()) { nav.toast(errorMessage(e), 'error'); nav.back(); } });
     const t = setInterval(() => setSeconds((s) => s + 1), 1000);
     return () => {
       clearInterval(t);
+      // Navigation can unmount the screen without the explicit hang-up handler.
+      // Record only audio that actually started, while its captured turn is valid.
+      if (playback.current?.outcomes.has('playback_started')) reportPlayback('interrupted');
       cancelled.current = true;
+      generation.current = current + 1;
+      clearPlayback();
       if (recorder.current?.state === 'recording') recorder.current.stop();
       stream.current?.getTracks().forEach((tr) => tr.stop());
-      player.current?.pause();
       if (meter.current) { cancelAnimationFrame(meter.current.raf); void meter.current.ctx.close(); }
       recorder.current = null;
       stream.current = null;
@@ -64,11 +90,12 @@ export function CallScreen({ id }: { id: string }) {
       void endLive();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
+  }, [id, space]);
 
-  const ensureStream = async () => {
+  const ensureStream = async (current: number) => {
     if (stream.current) return stream.current;
     const s = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+    if (cancelled.current || generation.current !== current) { s.getTracks().forEach(tr => tr.stop()); return null; }
     stream.current = s;
     try {
       const ctx = new AudioContext();
@@ -77,6 +104,7 @@ export function CallScreen({ id }: { id: string }) {
       ctx.createMediaStreamSource(s).connect(analyser);
       const data = new Uint8Array(analyser.frequencyBinCount);
       const tick = () => {
+        if (cancelled.current || generation.current !== current) return;
         analyser.getByteFrequencyData(data);
         setLevel(data.reduce((a, b) => a + b, 0) / data.length / 128);
         if (meter.current) meter.current.raf = requestAnimationFrame(tick);
@@ -87,44 +115,56 @@ export function CallScreen({ id }: { id: string }) {
   };
 
   const start = async () => {
+    const current = generation.current;
+    const turnAgentId = id; const turnSpace = space;
     // A user gesture unlocks playback for the replies that follow.
     if (!player.current) { player.current = new Audio(); player.current.play().catch(() => undefined); }
     try {
-      const s = await ensureStream();
+      const s = await ensureStream(current);
+      if (!s || cancelled.current || generation.current !== current) return;
       const mime = pickMime();
       const rec = new MediaRecorder(s, mime ? { mimeType: mime } : undefined);
-      chunks.current = [];
-      rec.ondataavailable = (e) => { if (e.data.size) chunks.current.push(e.data); };
-      rec.onstop = () => void send(new Blob(chunks.current, { type: rec.mimeType || mime || 'audio/webm' }));
+      const recordedChunks: Blob[] = [];
+      rec.ondataavailable = (e) => { if (e.data.size) recordedChunks.push(e.data); };
+      rec.onstop = () => { if (!cancelled.current && generation.current === current) void send(new Blob(recordedChunks, { type: rec.mimeType || mime || 'audio/webm' }), turnAgentId, turnSpace, current); };
       rec.start();
       recorder.current = rec;
       haptic.tap();
       setPhase('listening');
     } catch {
+      if (cancelled.current || generation.current !== current) return;
       haptic.error();
       nav.toast('Microphone access is needed for calls.', 'error');
     }
   };
 
-  const send = async (blob: Blob) => {
-    if (cancelled.current) return;
+  const send = async (blob: Blob, turnAgentId: string, turnSpace: 'work' | 'personal', current: number) => {
+    const active = () => !cancelled.current && generation.current === current;
+    if (!active()) return;
     if (blob.size < 2000) { setPhase('ready'); return; }
     setPhase('thinking');
     try {
-      const r = await api.callTurn(id, blob, space);
-      if (cancelled.current) return;
+      const r = await api.callTurn(turnAgentId, blob, turnSpace);
+      if (!active()) return;
       if (!r.transcript) { nav.toast("Didn't catch that — try again."); setPhase('ready'); return; }
       setLines((l) => [...l, { who: 'you', text: r.transcript }, { who: 'agent', text: r.reply }]);
       if (r.audio && player.current) {
+        clearPlayback();
         const p = player.current;
+        const turn = { agentId: turnAgentId, space: turnSpace, turnId: r.turnId ?? '', generation: current, outcomes: new Set<ClientObservationInput['outcome']>() };
+        playback.current = turn;
+        const currentPlayback = () => active() && player.current === p && playback.current === turn;
+        p.onplaying = () => { if (currentPlayback()) reportPlayback('playback_started'); };
+        p.onended = () => { if (currentPlayback()) { reportPlayback('playback_completed'); clearPlayback(); setPhase('ready'); } };
+        p.onerror = () => { if (currentPlayback()) { reportPlayback('playback_failed'); clearPlayback(); setPhase('ready'); } };
         p.src = `data:audio/mpeg;base64,${r.audio}`;
-        p.onended = () => setPhase('ready');
         setPhase('speaking');
-        await p.play().catch(() => setPhase('ready'));
+        await p.play().catch(() => { if (currentPlayback()) { reportPlayback('playback_failed'); clearPlayback(); setPhase('ready'); } });
       } else {
         setPhase('ready');
       }
     } catch (e) {
+      if (!active()) return;
       haptic.error();
       nav.toast(errorMessage(e), 'error');
       setPhase('ready');
@@ -143,34 +183,41 @@ export function CallScreen({ id }: { id: string }) {
   /** Opens a live call; returns false when the server only supports tap-to-talk. */
   const startLive = async (): Promise<boolean> => {
     if (liveUnavailable.current) return false;
+    const current = generation.current;
+    const active = () => !cancelled.current && generation.current === current;
     setPhase('thinking');
     try {
       const call = await api.liveCall(id, space);
+      if (!active()) return true;
       if (!call.live) { liveUnavailable.current = true; setPhase('ready'); return false; }
       await navigator.mediaDevices.getUserMedia({ audio: true }).then((s) => s.getTracks().forEach((t) => t.stop()));
+      if (!active()) return true;
       const { Conversation } = await import('@elevenlabs/client');
+      if (!active()) return true;
       const conv = await Conversation.startSession({
         signedUrl: call.signedUrl,
         customLlmExtraBody: { call: call.callToken },
         overrides: { agent: { firstMessage: call.firstMessage, ...(call.language ? { language: call.language as never } : {}) }, tts: { voiceId: call.voiceId } },
-        onModeChange: ({ mode }) => setPhase(mode === 'speaking' ? 'speaking' : 'listening'),
-        onMessage: ({ message, role }) => { if (message.trim()) setLines((l) => [...l, { who: role === 'user' ? 'you' : 'agent', text: message }]); },
-        onError: (message) => nav.toast(message || 'The call dropped.', 'error'),
-        onDisconnect: () => { if (session.current) { session.current = null; setPhase('ready'); void api.callEnd(id, space).catch(() => undefined); } },
+        onModeChange: ({ mode }) => { if (active()) setPhase(mode === 'speaking' ? 'speaking' : 'listening'); },
+        onMessage: ({ message, role }) => { if (active() && message.trim()) setLines((l) => [...l, { who: role === 'user' ? 'you' : 'agent', text: message }]); },
+        onError: (message) => { if (active()) nav.toast(message || 'The call dropped.', 'error'); },
+        onDisconnect: () => { if (active() && session.current) { session.current = null; setPhase('ready'); void api.callEnd(id, space).catch(() => undefined); } },
       });
-      if (cancelled.current) { await conv.endSession(); return true; }
+      if (!active()) { await conv.endSession(); return true; }
       session.current = conv;
       setLive(true);
       setSeconds(0);
       setPhase('listening');
       haptic.success();
       const tick = () => {
+        if (!active()) return;
         setLevel(Math.min(1, (session.current?.getInputVolume() ?? 0) * 2));
         liveMeter.current = requestAnimationFrame(tick);
       };
       liveMeter.current = requestAnimationFrame(tick);
       return true;
     } catch (e) {
+      if (!active()) return true;
       haptic.error();
       nav.toast(e instanceof DOMException ? 'Microphone access is needed for calls.' : errorMessage(e), 'error');
       setPhase('ready');
@@ -191,12 +238,12 @@ export function CallScreen({ id }: { id: string }) {
       else void startLive();
       return;
     }
-    if (phase === 'ready') void startLive().then((handled) => { if (!handled) void start(); });
+    if (phase === 'ready') void startLive().then((handled) => { if (!handled && !cancelled.current) void start(); });
     else if (phase === 'listening') { haptic.soft(); recorder.current?.stop(); }
-    else if (phase === 'speaking') { player.current?.pause(); setPhase('ready'); void start(); }
+    else if (phase === 'speaking') { reportPlayback('interrupted'); clearPlayback(); setPhase('ready'); void start(); }
   };
 
-  const hangUp = () => { haptic.heavy(); void endLive(); nav.back(); };
+  const hangUp = () => { haptic.heavy(); reportPlayback('interrupted'); clearPlayback(); void endLive(); nav.back(); };
 
   if (!agent) return <><TopBar onBack={nav.back} /><LoadingFill /></>;
   const pal = PALETTE[agent.look.hue];

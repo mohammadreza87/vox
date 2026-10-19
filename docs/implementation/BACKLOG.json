@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "prepared_at": "2026-10-19",
-  "source_commit": "ebb75a67c79bf317d1dec40381b216c75bb90ffa",
+  "source_commit": "9fb73d311753a461bd62e37ce3129b8a60c83d00",
   "operator_name": "Joyixir",
   "markets": [
     "EU/EEA",
     "US"
   ],
   "audience": "adults only",
-  "status": "adaptive integration merged to develop and deployed on the Mac Studio service; diagnostic hardening independently accepted locally; full roadmap and optional activation gates remain open",
+  "status": "Observation and adaptive conversation source integrated; release receipt records exact deployed revision. Optional activation and full roadmap qualification remain open.",
   "size_legend": {
     "S": "bounded change/review",
     "M": "multi-file bounded slice",
@@ -519,9 +519,10 @@
         "Bounded retrieval implementation"
       ],
       "evidence": [
-        "docs/implementation/DELIVERY_RESULT.md"
+        "docs/implementation/DELIVERY_RESULT.md",
+        "docs/implementation/MEMORY_RETRIEVAL_RESULT.md"
       ],
-      "progress_note": "Explicit private/shared records and whole-record context packing capped at 12 items/8192 serialized UTF-8 bytes. Current account/container aggregates are bounded but still loaded; indexed retrieval, calibrated ranking, automatic extraction and consolidation remain open. Automatic memory stays unavailable."
+      "progress_note": "Added EN/FA lexical ranking, trusted explicit-preference priority, whole-record 12-item/8192-byte packing and content-free scoped LRU prewarming. Both streaming and completed turns use current authorized projections and full receipt rechecks. Account/container aggregates are still loaded; indexed retrieval, calibrated semantic ranking and generalized automatic extraction/consolidation remain open."
     },
     {
       "id": "VOX-014",
@@ -555,9 +556,10 @@
         "Derived lineage and tombstone tests"
       ],
       "evidence": [
-        "docs/implementation/DELIVERY_RESULT.md"
+        "docs/implementation/DELIVERY_RESULT.md",
+        "docs/implementation/OBSERVATION_LEARNING.md"
       ],
-      "progress_note": "Payload-erasing deletion, lineage/history invalidation, replay tombstones, staged shared cleanup and read-time expiry implemented. Scheduled sweeps, provider/backup residual tracking and restore drills remain open."
+      "progress_note": "Account/shared scheduled cleanup now has durable paginated leases, restart recovery and expiry tests; observer consent revocation purges journal and derived findings in the same transaction. Maintenance release switch remains off. Provider/backup residual retention and production restore qualification remain open."
     },
     {
       "id": "VOX-015",
@@ -627,9 +629,10 @@
         "Key and access runbook"
       ],
       "evidence": [
-        "docs/implementation/DELIVERY_RESULT.md"
+        "docs/implementation/DELIVERY_RESULT.md",
+        "docs/implementation/OBSERVATION_LEARNING.md"
       ],
-      "progress_note": "Private account and shared files/Firestore collections separated from Studio state; private file modes and transaction boundaries implemented. Production IAM, keys, worker credentials and isolation qualification remain open."
+      "progress_note": "Separate account/shared/maintenance namespaces and restricted file modes implemented. Local improvement roles use distinct Ed25519 authorities and a pinned Docker evaluator with no network or secrets. Production service IAM, protected datasets and separate worker credentials remain open."
     },
     {
       "id": "VOX-017",
@@ -661,9 +664,10 @@
         "Ingress endpoints"
       ],
       "evidence": [
-        "docs/implementation/DELIVERY_RESULT.md"
+        "docs/implementation/DELIVERY_RESULT.md",
+        "docs/implementation/OBSERVATION_LEARNING.md"
       ],
-      "progress_note": "Strict content-free schemas and trusted consent-gated recordTurn ingestion implemented; client-wide instrumentation/export remains open."
+      "progress_note": "Strict bounded server/client observation envelopes now serve authenticated Studio ingress with server-derived identity, exact agent/space receipt, revision and QA-origin exclusion. Real voice/private Telegram producers retain no conversation content. Wider channel/usage/version coverage remains open."
     },
     {
       "id": "VOX-018",
@@ -695,9 +699,10 @@
         "Replay/repair tools"
       ],
       "evidence": [
-        "docs/implementation/DELIVERY_RESULT.md"
+        "docs/implementation/DELIVERY_RESULT.md",
+        "docs/implementation/OBSERVATION_LEARNING.md"
       ],
-      "progress_note": "Atomic consent/memory outbox and event dedupe persisted. Consumers, scheduled repair and deployment-scale transport remain open."
+      "progress_note": "Bounded durable observer journal includes deduplication, replacement revisions, leases, three-attempt backoff, failure state and explicit retry service; maintenance checkpoints recover after restart. Consent outbox consumers beyond this slice and production-scale transport remain open."
     },
     {
       "id": "VOX-019",
@@ -728,15 +733,16 @@
         "Usage model fixtures"
       ],
       "evidence": [
-        "docs/implementation/DELIVERY_RESULT.md"
+        "docs/implementation/DELIVERY_RESULT.md",
+        "docs/implementation/OBSERVATION_LEARNING.md"
       ],
-      "progress_note": "Mini App voice response completion duration is recorded only with current permission and exact agent grant. Full turn-stage, failed-turn producer, provider usage and first-useful-audio instrumentation remain open."
+      "progress_note": "Actual voice response and private Telegram terminal outcomes now feed the new observer. Voice playback is correlated by server-issued turn ID. Provider usage, token cost and stage-level latency remain unavailable."
     },
     {
       "id": "VOX-020",
       "phase": "P2",
       "title": "Capture client experience and explicit outcomes",
-      "status": "planned",
+      "status": "in_progress",
       "priority": "P0",
       "size": "M",
       "owner": "vox_data_engineer",
@@ -761,7 +767,10 @@
         "Client event hooks",
         "Outcome event coverage"
       ],
-      "evidence": []
+      "evidence": [
+        "docs/implementation/OBSERVATION_LEARNING.md"
+      ],
+      "progress_note": "Tap-to-talk client hooks report playing, completed, failed and interrupted outcomes using accepted server correlation. Events remain unverified and never certify task success. Live ElevenLabs, correction and experiment-exposure coverage remain open."
     },
     {
       "id": "VOX-021",
@@ -828,15 +837,16 @@
         "Data quality report"
       ],
       "evidence": [
-        "docs/implementation/DELIVERY_RESULT.md"
+        "docs/implementation/DELIVERY_RESULT.md",
+        "docs/implementation/OBSERVATION_LEARNING.md"
       ],
-      "progress_note": "Private per-space usage projection reports response statuses, unavailable task success and incomplete coverage. Organization reporting, cohort suppression and dashboards remain open."
+      "progress_note": "Own-space Studio measurements show response/playback denominators, queue lag/failure, deterministic findings and explicit unavailable task success/usage. Owner/superadmin operations view shows local workflow metadata only. Organization/cohort dashboards remain open."
     },
     {
       "id": "VOX-023",
       "phase": "P2",
       "title": "Introduce read-only observer and reproducible findings",
-      "status": "planned",
+      "status": "in_progress",
       "priority": "P0",
       "size": "M",
       "owner": "vox_architect",
@@ -862,7 +872,10 @@
         "Observer job",
         "Finding schema and examples"
       ],
-      "evidence": []
+      "evidence": [
+        "docs/implementation/OBSERVATION_LEARNING.md"
+      ],
+      "progress_note": "Deterministic read-only observer reconstructs findings from a bounded content-free journal with unknown causes and alternative explanations. No message/code/provider capability exists in its consumer. Semantic clustering and production worker isolation remain open."
     },
     {
       "id": "VOX-024",
@@ -896,9 +909,10 @@
       ],
       "evidence": [
         "docs/implementation/DELIVERY_RESULT.md",
-        "docs/implementation/evidence/decisions-provider/RESULT.md"
+        "docs/implementation/evidence/decisions-provider/RESULT.md",
+        "src/lib/adaptive/prediction/RESULT.md"
       ],
-      "progress_note": "Typed Decisions adapter uses installed SDK6.9.1 public post without a dependency upgrade. One synthetic live gpt-6-luna fixed-choice request succeeded and its response was accepted by local replay through the production decoder. The smoke used a5s timeout; observed1087ms exceeds the production500ms budget. Retention/residency, SDK upgrade and deployed endpoint qualification remain open."
+      "progress_note": "Decisions text/image adapter and bounded real HTTP consumer are integrated, with unknown/timeout fallback and no permission authority. Existing supported SDK generic transport is used; synthetic wire tests pass. Real-account performance/retention qualification remains open."
     },
     {
       "id": "VOX-025",
@@ -966,9 +980,10 @@
         "Race/cancellation suite"
       ],
       "evidence": [
-        "docs/implementation/DELIVERY_RESULT.md"
+        "docs/implementation/DELIVERY_RESULT.md",
+        "src/lib/adaptive/prediction/RESULT.md"
       ],
-      "progress_note": "Durable revision/evaluation budgets, one prediction lease, cancellation and fresh policy receipt checks implemented for text endpoint. Early streaming voice/image consumer integration remains open."
+      "progress_note": "Real off-by-default Studio draft consumer debounces edits, caps two evaluations per turn, cancels and supersedes durable revisions, checks fresh receipts and performs read-only gateway context preparation. Scope/correction/cancel/provider-late-result tests pass. Actual early partial-voice producer and end-to-end speed qualification remain open."
     },
     {
       "id": "VOX-027",
@@ -1120,7 +1135,7 @@
       "id": "VOX-031",
       "phase": "P3",
       "title": "Integrate supported voice/image input prediction path",
-      "status": "planned",
+      "status": "in_progress",
       "priority": "P1",
       "size": "L",
       "owner": "vox_voice_engineer",
@@ -1153,7 +1168,10 @@
         "Input/prediction adapter",
         "Mode/device compatibility evidence"
       ],
-      "evidence": []
+      "evidence": [
+        "docs/implementation/ADAPTIVE_COMPLETION_RESULT.md"
+      ],
+      "progress_note": "Added actual Studio text/image conversation and opt-in draft/image prediction, with browser metadata-stripping JPEG re-encoding, server raster limits, separate image capability, and fresh consent at each provider request/continuation/fallback and delivery. Live-call SDK currently exposes final transcripts; true partial-voice prediction remains unimplemented and is not claimed."
     },
     {
       "id": "VOX-032",
@@ -1265,7 +1283,7 @@
       "id": "VOX-035",
       "phase": "P4",
       "title": "Implement recipient-safe Telegram dispatch and receipts",
-      "status": "planned",
+      "status": "in_progress",
       "priority": "P1",
       "size": "L",
       "owner": "vox_architect",
@@ -1292,7 +1310,10 @@
         "Telegram dispatcher",
         "Receipt reconciliation tests"
       ],
-      "evidence": []
+      "evidence": [
+        "docs/implementation/OBSERVATION_LEARNING.md"
+      ],
+      "progress_note": "Prior scoped relationship release includes generic opted-in Telegram alerts, fresh authority checks and private inbox content. Live cohort activation, provider/device delivery proof and pilot outcomes remain open."
     },
     {
       "id": "VOX-036",
@@ -1400,7 +1421,7 @@
       "id": "VOX-039",
       "phase": "P5",
       "title": "Implement optional enrollment and template lifecycle",
-      "status": "planned",
+      "status": "in_progress",
       "priority": "P1",
       "size": "L",
       "owner": "vox_voice_engineer",
@@ -1428,13 +1449,16 @@
         "Enrollment APIs/store",
         "Lifecycle tests"
       ],
-      "evidence": []
+      "evidence": [
+        "docs/implementation/VOICE_IDENTITY_RESULT.md"
+      ],
+      "progress_note": "Canonical biometric opt-in plus separate own-voice disclosure, one-use intent, isolated encrypted opaque templates, bounded provider deadlines, canonical withdrawal and replay-safe all-device space deletion implemented with synthetic protocol tests. Provider is deliberately not configured in production; actual cryptographic access, provider behavior, retention and legal qualification remain open."
     },
     {
       "id": "VOX-040",
       "phase": "P5",
       "title": "Implement speaker hints and authenticated person switching",
-      "status": "planned",
+      "status": "in_progress",
       "priority": "P1",
       "size": "L",
       "owner": "vox_voice_engineer",
@@ -1463,13 +1487,16 @@
         "Speaker hint adapter",
         "Profile-switch integration"
       ],
-      "evidence": []
+      "evidence": [
+        "docs/implementation/VOICE_IDENTITY_RESULT.md"
+      ],
+      "progress_note": "Implemented self-only possible_self/unknown test hint; it never changes identity or private access. Cross-account speaker matching and authenticated person-switch flow are not implemented; communication style is not an identity credential."
     },
     {
       "id": "VOX-041",
       "phase": "P5",
       "title": "Build enrollment, status, test and deletion UX",
-      "status": "planned",
+      "status": "in_progress",
       "priority": "P1",
       "size": "M",
       "owner": "vox_frontend_engineer",
@@ -1496,7 +1523,10 @@
         "Voice controls UI",
         "Consent/status UX evidence"
       ],
-      "evidence": []
+      "evidence": [
+        "docs/implementation/VOICE_IDENTITY_RESULT.md"
+      ],
+      "progress_note": "English/Persian disclosure, enrollment, status, test, cancellation, deletion and unavailable-provider UI implemented. Microphone starts only after server capture intent. Physical-device/browser qualification remains open."
     },
     {
       "id": "VOX-042",
@@ -1536,7 +1566,7 @@
       "id": "VOX-043",
       "phase": "P6",
       "title": "Build reviewed learning-case dataset pipeline",
-      "status": "planned",
+      "status": "in_progress",
       "priority": "P1",
       "size": "L",
       "owner": "vox_architect",
@@ -1563,13 +1593,16 @@
         "Case curation workflow",
         "Dataset manifests"
       ],
-      "evidence": []
+      "evidence": [
+        "docs/implementation/OBSERVATION_LEARNING.md"
+      ],
+      "progress_note": "Signed minimized synthetic/approved aggregate finding import, lineage expiry/revocation and private-content rejection implemented for local routing workflow. No automatic export of real user observations; production curation/rights integration remains open."
     },
     {
       "id": "VOX-044",
       "phase": "P6",
       "title": "Implement offline prompt and routing optimization",
-      "status": "planned",
+      "status": "in_progress",
       "priority": "P1",
       "size": "L",
       "owner": "vox_architect",
@@ -1595,7 +1628,10 @@
         "Optimization worker",
         "Candidate registry"
       ],
-      "evidence": []
+      "evidence": [
+        "docs/implementation/OBSERVATION_LEARNING.md"
+      ],
+      "progress_note": "Fixed-budget offline cancellation-routing search and immutable JSON candidate registry implemented. Small synthetic corpus only; prompt optimization, representative train/validation data and provider quality evaluation remain open."
     },
     {
       "id": "VOX-045",
@@ -1662,15 +1698,16 @@
         "Promotion receipt schema"
       ],
       "evidence": [
-        "docs/implementation/DELIVERY_RESULT.md"
+        "docs/implementation/DELIVERY_RESULT.md",
+        "docs/implementation/OBSERVATION_LEARNING.md"
       ],
-      "progress_note": "Read-only promotion gate rejects untrusted/self-evaluation receipts, protected paths and missing human approval. Enforced isolated evaluator/developer/release credentials and artifact verification remain open."
+      "progress_note": "Pinned Docker evaluator and separate signed evaluator/human receipts bind exact artifacts/data/policy; malformed payload, budget bypass and counterfeit evidence regressions covered. Synthetic role keys do not qualify production IAM; protected service deployment and representative corpus remain open. Final cancellation datasets and the fixed evaluator require both cancelled-stop and active-continue coverage, rejecting inconsistent labels (policy version 2)."
     },
     {
       "id": "VOX-047",
       "phase": "P6",
       "title": "Implement controlled experiments and rollback of learned state",
-      "status": "planned",
+      "status": "in_progress",
       "priority": "P1",
       "size": "L",
       "owner": "vox_release_engineer",
@@ -1696,13 +1733,16 @@
         "Promotion controller",
         "Rollback runbook/evidence"
       ],
-      "evidence": []
+      "evidence": [
+        "docs/implementation/OBSERVATION_LEARNING.md"
+      ],
+      "progress_note": "Local comparison-only rollback rehearsal binds candidate and baseline artifacts, and explicitly makes no deployment or candidate-disable claim. Controlled production experiments, derived-state rollback and kill-switch qualification remain open."
     },
     {
       "id": "VOX-048",
       "phase": "P6",
       "title": "Publish evidence-backed product improvement reports",
-      "status": "planned",
+      "status": "in_progress",
       "priority": "P1",
       "size": "S",
       "owner": "vox_docs_analyst",
@@ -1728,7 +1768,10 @@
         "Improvement report template",
         "Sample sanitized report"
       ],
-      "evidence": []
+      "evidence": [
+        "docs/implementation/OBSERVATION_LEARNING.md"
+      ],
+      "progress_note": "Sanitized local improvement report and read-only owner/superadmin status view distinguish local tests from unavailable CI/deployment/measured effect. Real product outcomes and costs remain unavailable."
     },
     {
       "id": "VOX-049",
@@ -1777,9 +1820,11 @@
       "evidence": [
         "docs/implementation/DELIVERY_RESULT.md",
         "docs/implementation/INTEGRATION_RELEASE.md",
-        "docs/implementation/RELEASE_2026_10_19.md"
+        "docs/implementation/RELEASE_2026_10_19.md",
+        "docs/implementation/OBSERVATION_LEARNING.md",
+        "docs/implementation/ADAPTIVE_COMPLETION_RESULT.md"
       ],
-      "progress_note": "Independent synthetic regressions cover consent/revocation/delete/identity expiry/group minimization and staged publication races. Full roadmap matrix, rights/backup/provider/worker isolation qualification remain open."
+      "progress_note": "Combined source suite, independent cross-review and consent/cancellation/transport regression checks are recorded in the completion receipt. Synthetic evidence does not close protected semantic/provider/device cases."
     },
     {
       "id": "VOX-050",
@@ -1818,9 +1863,11 @@
       "evidence": [
         "docs/implementation/DELIVERY_RESULT.md",
         "docs/implementation/INTEGRATION_RELEASE.md",
-        "docs/implementation/RELEASE_2026_10_19.md"
+        "docs/implementation/RELEASE_2026_10_19.md",
+        "docs/implementation/OBSERVATION_LEARNING.md",
+        "docs/implementation/ADAPTIVE_COMPLETION_RESULT.md"
       ],
-      "progress_note": "Production-build-backed mobile Chromium synthetic flows passed in EN/FA: consent decline/grant, exact sharing preview/create, Work/Personal isolation, preferences/reset, notification settings and overflow. Screenshots/evidence recorded. Full WebKit/physical-device/accessibility/provider and remaining-roadmap journeys remain open."
+      "progress_note": "New compiled Studio browser journey covers text/image chat, Work/Personal clearing, EN/FA and default-off unavailable recognition. Evidence and real-device distinction are recorded in the completion receipt."
     },
     {
       "id": "VOX-051",
@@ -1871,7 +1918,7 @@
       "id": "VOX-052",
       "phase": "P7",
       "title": "Qualify load, recovery, deletion and incident response",
-      "status": "planned",
+      "status": "in_progress",
       "priority": "P1",
       "size": "L",
       "owner": "vox_release_engineer",
@@ -1902,7 +1949,10 @@
         "Operations qualification",
         "Incident and restore runbook"
       ],
-      "evidence": []
+      "evidence": [
+        "docs/implementation/OBSERVATION_LEARNING.md"
+      ],
+      "progress_note": "Local account sweep pagination, competing leases, crash recovery, expiry, snapshot reconciliation and bounded observer retries tested. Background maintenance is supported only in the persistent file/polling runtime; unsupported activation fails startup. Production load/SLOs, full backup restoration and provider residual deletion remain open."
     },
     {
       "id": "VOX-053",
@@ -2027,7 +2077,7 @@
       "id": "VOX-056",
       "phase": "P1",
       "title": "Implement user rights, scoped exports and guest requests",
-      "status": "planned",
+      "status": "in_progress",
       "priority": "P0",
       "size": "L",
       "owner": "vox_architect",
@@ -2063,7 +2113,10 @@
         "EN/FA privacy-center and guest request flows",
         "Rights/deadline/access tests"
       ],
-      "evidence": []
+      "evidence": [
+        "docs/implementation/OBSERVATION_LEARNING.md"
+      ],
+      "progress_note": "Confirmed own-account Work/Personal JSON export now includes allowlisted account records and currently authorized published shared content; exports are not persisted. Provider/backups explicitly unavailable. Guest request verification and broader rights orchestration remain open."
     }
   ],
   "delivery_slices": [

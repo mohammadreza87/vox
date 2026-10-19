@@ -8,6 +8,7 @@ import { ADAPTIVE_POLICY_VERSION, OPTIONAL_PURPOSES, AdaptiveRepository, account
   spaceIdFor, tenantIdFor, type AdaptiveDocument, type OptionalPurpose, type SpaceKind, type StoredMemory } from './repository';
 import type { AdaptiveNotice, AdaptiveSnapshot, AdaptivePresentation } from './contracts';
 import type { AgentGrantInput, ConsentInput, DeletionInput, IdentityInput, MemoryInput, PresentInput } from './validation';
+import { sweepObserverDocument } from '../observation/helpers';
 
 export class AdaptiveError extends Error {
   readonly name = 'AdaptiveError';
@@ -24,6 +25,8 @@ export interface AdaptiveServiceOptions {
   inboxEnabled?: boolean;
   /** Releases only the fresh scoped relationship implementation, never legacy memory. */
   scopedRelationshipsEnabled?: boolean;
+  /** True only with an explicitly qualified, injected voice-identity provider. */
+  voiceRecognitionEnabled?: boolean;
   /** Trusted server registry/resolver. Client declarations alone cannot provide approvals. */
   capabilityPolicy?: (context: { accountId: string; personId: string; capability: Capability;
     declaration?: AdaptiveDocument['declaration'] }, now: number) => { request: CapabilityRequest; approvals: readonly JurisdictionApproval[] } | undefined;
@@ -38,7 +41,7 @@ const COPY: Record<OptionalPurpose, { en: [string, string]; fa: [string, string]
   'optional.product_analytics': { en: ['Product analytics', 'Allow optional product usage measurements in this space. This does not allow conversation content review, personalization, or model training. You can withdraw at any time.'], fa: ['آمار استفاده', 'اجازه می‌دهم آمار اختیاری استفاده در این فضا ثبت شود. این انتخاب اجازه بررسی متن گفتگو، شخصی‌سازی یا آموزش مدل نیست. هر زمان می‌توانم آن را لغو کنم.'] },
   'optional.personalization': { en: ['Personalization', 'Allow Vox to use your permitted preferences to adapt responses in this space. This does not enable automatic memory collection or analytics. You can withdraw at any time.'], fa: ['شخصی‌سازی', 'اجازه می‌دهم ووکس از ترجیحات مجازم برای تنظیم پاسخ‌ها در این فضا استفاده کند. این انتخاب جمع‌آوری خودکار حافظه یا آمار را فعال نمی‌کند. هر زمان می‌توانم آن را لغو کنم.'] },
   'optional.auto_memory': { en: ['Automatic memory', 'Allow Vox to save permitted relationship context in this space and use this confirmed account profile for check-ins for up to 30 days, including while you are away. Private details stay in Vox; Telegram alerts require a separate choice. You can inspect, delete, or disable this context and withdraw at any time.'], fa: ['حافظه خودکار', 'اجازه می‌دهم وکس زمینهٔ مجاز رابطه را در این فضا ذخیره کند و تا ۳۰ روز، از جمله زمانی که حضور ندارم، از این نمایهٔ تأییدشده برای پیگیری استفاده کند. جزئیات خصوصی در وکس می‌ماند و اعلان تلگرام به انتخاب جداگانه نیاز دارد. می‌توانم زمینه را ببینم، حذف یا غیرفعال کنم و هر زمان رضایت را پس بگیرم.'] },
-  'optional.biometric_recognition': { en: ['Voice recognition', 'Voice recognition requires a separate enrollment and approved release. This switch is unavailable here and cannot enroll a voice or unlock private data.'], fa: ['تشخیص صدا', 'تشخیص صدا به ثبت‌نام جداگانه و تأیید انتشار نیاز دارد. این گزینه اینجا در دسترس نیست و صدا ثبت نمی‌کند یا دسترسی به داده خصوصی نمی‌دهد.'] },
+  'optional.biometric_recognition': { en: ['Voice recognition', 'Allow optional voice matching in this space after separate enrollment and provider disclosure. This choice does not record or enroll your voice and never unlocks private data. Withdrawing disables matching and starts deletion of enrolled templates in this space.'], fa: ['تشخیص صدا', 'اجازهٔ تطبیق اختیاری صدا در این فضا پس از ثبت جداگانه و اطلاع از ارائه‌دهنده. این انتخاب صدای شما را ضبط یا ثبت نمی‌کند و هرگز دسترسی به دادهٔ خصوصی نمی‌دهد. پس‌گرفتن رضایت، تطبیق را غیرفعال و حذف الگوهای ثبت‌شدهٔ این فضا را آغاز می‌کند.'] },
   'optional.reminder_delivery': { en: ['Reminder delivery', 'Allow delivery of reminders you explicitly request. Channels and recipients need separate confirmation. This does not allow marketing or proactive suggestions.'], fa: ['ارسال یادآوری', 'اجازه می‌دهم یادآوری‌هایی که صریحاً درخواست کرده‌ام ارسال شوند. کانال و گیرنده به تأیید جداگانه نیاز دارند. این انتخاب اجازه بازاریابی یا پیشنهاد خودکار نیست.'] },
   'optional.proactive_suggestions': { en: ['Proactive suggestions', 'Allow suggestions based on permitted information in this space. This does not grant access to other spaces or enable external messages. You can withdraw at any time.'], fa: ['پیشنهادهای خودکار', 'اجازه می‌دهم براساس اطلاعات مجاز در این فضا پیشنهاد دریافت کنم. این انتخاب اجازه دسترسی به فضاهای دیگر یا ارسال پیام بیرونی نیست. هر زمان می‌توانم آن را لغو کنم.'] },
   'optional.relationship_outreach': { en: ['Telegram check-in alerts', 'Allow generic Telegram alerts when a private check-in is ready in your authenticated Vox inbox. Private check-in details stay inside Vox. This choice applies only to this space and requires a separately enabled Telegram channel. You can withdraw at any time.'], fa: ['اعلان پیگیری در تلگرام', 'اجازه می‌دهم وقتی پیگیری خصوصی در صندوق احراز هویت‌شدهٔ وکس آماده است، اعلان عمومی تلگرام دریافت کنم. جزئیات خصوصی در وکس می‌ماند. این انتخاب فقط برای همین فضا است و به فعال‌سازی جداگانهٔ کانال تلگرام نیاز دارد. هر زمان می‌توانم آن را لغو کنم.'] },
@@ -46,7 +49,7 @@ const COPY: Record<OptionalPurpose, { en: [string, string]; fa: [string, string]
 };
 export function adaptiveNotice(purpose: OptionalPurpose, locale: 'en' | 'fa'): AdaptiveNotice {
   const [title, body] = COPY[purpose][locale];
-  const version = purpose === 'optional.auto_memory' ? 'adaptive-relationship-memory-v1' : ADAPTIVE_POLICY_VERSION;
+  const version = purpose === 'optional.auto_memory' ? 'adaptive-relationship-memory-v1' : purpose === 'optional.biometric_recognition' ? 'adaptive-voice-identity-v1' : ADAPTIVE_POLICY_VERSION;
   return { id: `notice:${purpose}`, version, title, body, locale,
     copyHash: digest([version, purpose, locale, title, body]) };
 }
@@ -55,6 +58,8 @@ export function adaptiveNotice(purpose: OptionalPurpose, locale: 'en' | 'fa'): A
 export class AdaptiveService {
   private readonly now: () => number;
   private relationshipInvalidator?: (input: RelationshipInvalidation) => Promise<void>;
+  private voiceIdentityInvalidator?: (input: { telegramId: number; space?: SpaceKind; reason: string }) => Promise<void>;
+  setVoiceIdentityInvalidator(handler: (input: { telegramId: number; space?: SpaceKind; reason: string }) => Promise<void>): void { this.voiceIdentityInvalidator = handler; }
   setRelationshipInvalidator(handler: (input: RelationshipInvalidation) => Promise<void>): void { this.relationshipInvalidator = handler; }
   async notifyRelationshipInvalidation(input: RelationshipInvalidation): Promise<void> { await this.relationshipInvalidator?.(input); }
   constructor(readonly repository: AdaptiveRepository, private readonly options: AdaptiveServiceOptions = {}) { this.now = options.now ?? Date.now; }
@@ -65,8 +70,11 @@ export class AdaptiveService {
   private async transact<T>(telegramId: number, fn: (d: AdaptiveDocument, now: number) => T): Promise<T> {
     const now = this.now();
     const invalidations: RelationshipInvalidation[] = [];
+    const voiceInvalidations: Array<{ telegramId: number; space?: SpaceKind; reason: string }> = [];
     const result = await this.repository.transaction(this.account(telegramId), now, d => {
       invalidations.length = 0;
+      voiceInvalidations.length = 0;
+      const priorBinding = digest(d.binding ?? null);
       const priorRevision = d.revision;
       const priorRelationships = digest(d.relationships);
       const priorPermissions = new Map(d.permissions.map(p => [p.id, p.revision]));
@@ -107,7 +115,17 @@ export class AdaptiveService {
       }
       // Text retention is enforced even on reads; metadata remains as a replay tombstone.
       for (const memory of d.memories) if (memory.status === 'active' && memory.expiresAt <= now) this.tombstone(d, memory, now, `expiry:${memory.id}`);
+      if (sweepObserverDocument(d, now, (doc, space, agentId, time) =>
+        this.isPurposeAllowed(doc, space, 'optional.product_analytics', time, agentId))) this.bump(d, now);
       const value = fn(d, now);
+      // The separate template store is suppressed/purged only after canonical
+      // authority commits. Its invalidator never re-enters this transaction.
+      if (priorBinding !== digest(d.binding ?? null) || (d.binding && d.binding.expiresAt <= now)) {
+        voiceInvalidations.push({ telegramId, reason: 'profile_changed' });
+      } else for (const p of d.permissions) if (p.purpose === 'optional.biometric_recognition' &&
+          priorPermissions.get(p.id) !== p.revision) {
+        voiceInvalidations.push({ telegramId, space: p.spaceId === spaceIdFor(d.accountId, 'work') ? 'work' : 'personal', reason: 'voice_consent_changed' });
+      }
       const enqueue = (space: SpaceKind, reason: string, agentId?: string, sourceIds?: string[]) => {
         for (const source of d.relationships.sources) if (source.key.scope.space === space && (!agentId || source.key.personaId === agentId) && (!sourceIds || sourceIds.includes(source.id))) {
           if (source.status !== 'deleted') { source.status = 'deleted'; source.revision++; }
@@ -134,12 +152,19 @@ export class AdaptiveService {
         }
         for (const group of removed.values()) enqueue(group.space, 'source_deleted', group.agentId, group.ids);
       }
-      if (priorRelationships !== digest(d.relationships) && d.revision === priorRevision) this.bump(d, now);
+      const observerChanged = sweepObserverDocument(d, now, (doc, space, agentId, time) =>
+        this.isPurposeAllowed(doc, space, 'optional.product_analytics', time, agentId));
+      if ((observerChanged || priorRelationships !== digest(d.relationships)) && d.revision === priorRevision) this.bump(d, now);
       return value;
     });
     // Authority is already durably revoked. Purge failures are visible to caller;
     // no rollback can restore permission or permit an in-flight send.
-    for (const input of invalidations) await this.notifyRelationshipInvalidation(input);
+    const cleanup = await Promise.allSettled([
+      ...invalidations.map(input => this.notifyRelationshipInvalidation(input)),
+      ...voiceInvalidations.map(input => this.voiceIdentityInvalidator?.(input)),
+    ]);
+    const failed = cleanup.find((entry): entry is PromiseRejectedResult => entry.status === 'rejected');
+    if (failed) throw failed.reason;
     return result;
   }
   private identity(d: AdaptiveDocument): IdentityContext {
@@ -157,7 +182,7 @@ export class AdaptiveService {
   }
   private eligible(d: AdaptiveDocument, capability: Capability, now: number): { eligible: boolean; reason?: string; validUntil?: number; approvalVersions?: readonly string[] } {
     // Enrollment/provider/communications release gates have no implementation in this slice.
-    if (['biometric_recognition', 'content_quality_review'].includes(capability) ||
+    if (capability === 'content_quality_review' || (capability === 'biometric_recognition' && this.options.voiceRecognitionEnabled !== true) ||
         (['auto_memory', 'relationship_outreach'].includes(capability) && this.options.scopedRelationshipsEnabled !== true) ||
         (['reminder_delivery', 'proactive_suggestions'].includes(capability) && this.options.inboxEnabled !== true)) return { eligible: false, reason: 'feature_not_released' };
     const policy = this.options.capabilityPolicy?.({ accountId: d.accountId, personId: d.personId, capability, declaration: d.declaration }, now);

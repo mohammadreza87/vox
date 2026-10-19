@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ExperienceScreen } from './Experience';
 import { emptyExperience } from '@/lib/adaptive/runtime/contracts';
 const mocks = vi.hoisted(() => ({ read: vi.fn(), preference: vi.fn(), settings: vi.fn(), reminder: vi.fn(), feedback: vi.fn(), agents: vi.fn() }));
+vi.mock('../LearningPanel', () => ({ LearningPanel: ({ space, locale }: { space: string; locale: string }) => <div data-testid="learning-panel" data-space={space} data-locale={locale} /> }));
 vi.mock('../../_lib/experience-client', () => ({ experienceApi: mocks }));
 vi.mock('../../_lib/client', () => ({ api: mocks }));
 const snapshot = () => ({ schemaVersion: 1, revision: 2, space: 'work', confirmed: true, settings: emptyExperience().settings,
@@ -43,8 +44,10 @@ describe('Experience controls', () => {
     await screen.findByText('WORK_REMINDER_CANARY');
     fireEvent.click(screen.getByRole('button', { name: 'فارسی' }));
     expect(container.querySelector('section')).toHaveAttribute('dir', 'rtl');
+    expect(screen.getByTestId('learning-panel')).toHaveAttribute('data-locale', 'fa');
     mocks.read.mockImplementation(() => new Promise(() => undefined));
     fireEvent.click(screen.getByRole('button', { name: 'شخصی', exact: true }));
     await waitFor(() => expect(screen.queryByText('WORK_REMINDER_CANARY')).not.toBeInTheDocument());
+    expect(screen.getByTestId('learning-panel')).toHaveAttribute('data-space', 'personal');
   });
 });

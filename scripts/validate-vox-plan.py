@@ -40,8 +40,8 @@ def render(data):
             ])
             for capability, deps in task.get("capability_dependencies", {}).items():
                 lines.extend([f"**When enabling {capability}:** {', '.join(deps)}.", ""])
-            if task.get("implementation_note"):
-                lines.extend(["**Implementation progress:** " + task["implementation_note"], ""])
+            if task.get("progress_note") or task.get("implementation_note"):
+                lines.extend(["**Implementation progress:** " + (task.get("progress_note") or task["implementation_note"]), ""])
             lines.extend([task["scope"], "", "**Acceptance:**", ""])
             lines.extend("- [ ] " + item for item in task["acceptance_criteria"])
             lines.extend([

@@ -7,7 +7,7 @@ documented in [the runtime contract](../runtime/README.md) and [delivery record]
 
 `DecisionService.evaluate` requires a server feature switch, a current session
 revision, an authoritative authorization fingerprint and a loader for minimized
-text. Authorization precedes loading and is checked again before provider export
+text or one bounded explicitly shared image. Authorization precedes loading and is checked again before provider export
 and result use. The loader must return only already permitted evidence; this
 library cannot make an unrestricted source store safe. Questions are semantic
 predicates/choices/scores, never identity or access decisions. The provider rejects
@@ -34,7 +34,8 @@ test verifies the complete URL/body/signal without network or credentials.
 `prompt_cache_options: { mode: 'explicit' }` with no breakpoints requests no prompt
 caching. This is not a provider retention or regional processing guarantee.
 
-Only text is supported locally. Images/audio and live account compatibility,
+Bounded current-turn text/image evidence is supported locally; see the
+[prediction consumer contract](../prediction/README.md). Raw audio and live account compatibility,
 quality calibration, latency/cost benchmarks, residency and retention verification
 remain unavailable. Returned token usage is measured if provided; when a request
 times out before usage arrives its eventual billed usage is unknown. No price

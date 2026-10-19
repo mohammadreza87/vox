@@ -5,6 +5,7 @@ import { adaptiveApi, type AdaptiveOptionalPurpose, type AdaptivePresentation, t
 import { privacyCopy, purposeCopy, type PrivacyLocale } from '../../_lib/adaptive-copy';
 import { Icon, Spinner } from '../ui';
 import { api, type AgentView } from '../../_lib/client';
+import { VoiceRecognitionPanel } from '../VoiceRecognitionPanel';
 
 export function PrivacyScreen({ onShared, onExperience, onConnections }: { onShared?: () => void; onExperience?: () => void; onConnections?: () => void }) {
   const [locale, setLocale] = useState<PrivacyLocale>('en');
@@ -87,6 +88,7 @@ export function PrivacyScreen({ onShared, onExperience, onConnections }: { onSha
         <p className="vx-small vx-2">{c.accountNote}</p>
       </div>
       <h2 className="vx-title-m">{c.optional}</h2>
+      <VoiceRecognitionPanel key={space} space={space} locale={locale} />
       <div className="vx-group">
         {snapshot.purposes.map(p => {
           const copy = purposeCopy[p.purpose]?.[locale];

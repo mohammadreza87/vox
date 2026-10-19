@@ -5,6 +5,7 @@ import type { ConsentPermission, PersonAccountBinding } from '../types';
 import type { AdaptiveStorage } from './storage';
 import { emptyExperience, experienceDocumentSchema } from '../runtime/contracts';
 import { emptyRelationshipDocument, relationshipDocumentSchema } from '../relationships/contracts';
+import { emptyObserverDocument, observerDocumentSchema } from '../observation/contracts';
 
 export const OPTIONAL_PURPOSES = [
   'optional.product_analytics', 'optional.personalization', 'optional.auto_memory',
@@ -48,6 +49,7 @@ const documentSchema = z.object({ schemaVersion: z.literal(1), accountId: id, pe
   memories: z.array(memorySchema).max(300), events: z.array(eventSchema).max(2000),
   experience: experienceDocumentSchema.default(emptyExperience),
   relationships: relationshipDocumentSchema.default(emptyRelationshipDocument),
+  observer: observerDocumentSchema.default(emptyObserverDocument),
   consentEvents: z.array(z.unknown()).max(2000), outbox: z.array(outboxSchema).max(2000),
 }).strict();
 export type AdaptiveDocument = Omit<z.infer<typeof documentSchema>, 'permissions' | 'binding' | 'consentEvents'> & {
@@ -62,7 +64,7 @@ export const containerIdFor = (accountId: string, space: SpaceKind) => `${spaceI
 function create(accountId: string, now: number): AdaptiveDocument {
   const personId = `account-profile:${digest(accountId).slice(0, 32)}`;
   return { schemaVersion: 1, accountId, personId, revision: 1, createdAt: now, updatedAt: now,
-    experience: emptyExperience(), relationships: emptyRelationshipDocument(), permissions: (['work', 'personal'] as const).flatMap(s => OPTIONAL_PURPOSES.map(p => ({
+    experience: emptyExperience(), relationships: emptyRelationshipDocument(), observer: emptyObserverDocument(), permissions: (['work', 'personal'] as const).flatMap(s => OPTIONAL_PURPOSES.map(p => ({
       schemaVersion: 1 as const, id: `permission:${s}:${p}`, revision: 1, createdAt: now, updatedAt: now,
       tenantId: tenantIdFor(accountId), spaceId: spaceIdFor(accountId, s), personId, purpose: p,
       purposeVersion: 1, policyVersion: ADAPTIVE_POLICY_VERSION, state: 'not_asked' as const,
@@ -90,7 +92,8 @@ export class AdaptiveRepository {
       if (draft.accountId !== accountId || draft.personId !== create(accountId, now).personId || draft.updatedAt > now ||
           new Set(draft.permissions.map(p => p.id)).size !== 16 || draft.permissions.length !== 16 ||
           new Set(draft.events.map(e => e.eventId)).size !== draft.events.length ||
-          new Set(draft.memories.map(m => m.id)).size !== draft.memories.length) throw new Error('Invalid adaptive document');
+          new Set(draft.memories.map(m => m.id)).size !== draft.memories.length ||
+          new Set(draft.observer.events.map(e => e.id)).size !== draft.observer.events.length) throw new Error('Invalid adaptive document');
       // Validate immutable partition keys. Corrupt identity/scope cannot become authoritative.
       for (const s of ['work', 'personal'] as const) for (const p of OPTIONAL_PURPOSES) {
         const permission = draft.permissions.find(row => row.id === `permission:${s}:${p}`);
@@ -111,7 +114,12 @@ export class AdaptiveRepository {
       }
       const result = fn(draft);
       documentSchema.parse(draft);
-      return { document: draft, result };
+      // Keep the disabled rollout readable by the previous strict schema. A
+      // future enabled observer rollout needs an explicit rollback migration;
+      // never restore an old account backup over newer rights/tombstones.
+      const stored: Partial<AdaptiveDocument> = { ...draft };
+      if (!draft.observer.events.length && !draft.observer.projections.length) delete stored.observer;
+      return { document: stored, result };
     });
   }
 }

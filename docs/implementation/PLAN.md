@@ -1,8 +1,8 @@
 # Vox adaptive agents: implementation plan
 
-Prepared 19 October 2026 for Joyixir. Product scope: adults in the EU/EEA and US; English and Persian interfaces; Work and Personal spaces. Source baseline: `ebb75a67c79bf317d1dec40381b216c75bb90ffa`.
+Prepared 19 October 2026 for Joyixir. Product scope: adults in the EU/EEA and US; English and Persian interfaces; Work and Personal spaces. Current implementation baseline: `9fb73d311753a461bd62e37ce3129b8a60c83d00`.
 
-**Delivery status:** the adaptive integration is merged into `develop` and deployed to the existing Mac Studio service at revision `523e9f0`. All exact-head CI checks passed; local/public health, authentication boundaries and polling ownership were verified. See the [release receipt](RELEASE_2026_10_19.md). The next communication-diagnostics slice has passed independent source review and the 1,812-test full suite. Optional processing remains off without reviewed configuration. Streaming prediction, automatic extraction, external notification delivery, biometric enrollment, isolated improvement workers, legal approval and physical-device qualification remain open. The [earlier local delivery record](DELIVERY_RESULT.md) is historical.
+**Delivery status:** the observation/lifecycle/improvement work and the complementary scoped chat, image prediction, bounded retrieval and optional voice lifecycle are now integrated in the completion candidate. See [adaptive completion](ADAPTIVE_COMPLETION_RESULT.md) for implementation, independent review and precise release evidence. Existing source/release receipts remain historical. Optional capabilities stay off without reviewed configuration; provider/device/privacy qualification and the unfinished roadmap entries remain open.
 
 **Product outcome.** Vox should understand the current task early, remember the right information for the right people, adapt the experience with visible user control, send useful timely notifications, and turn measured failures into tested product improvements. Success means more completed tasks and less rework, with bounded latency and cost and correct privacy boundaries.
 
@@ -18,6 +18,7 @@ Prepared 19 October 2026 for Joyixir. Product scope: adults in the EU/EEA and US
 | [Implementation start and decisions](/Volumes/Workspace/Ludaxis/vox/docs/implementation/STARTER_SLICE.md) | Active work, concrete decisions, metric contract and remaining foundation gaps |
 | [Production release receipt](RELEASE_2026_10_19.md) | Exact develop/CI/build/deployment evidence and activation limits |
 | [Communication diagnostics](OBSERVATION_DIAGNOSTICS.md) | Next source slice, independent review and remaining observation scope |
+| [Observation and lifecycle delivery](OBSERVATION_LEARNING.md) | Durable observer, scoped export, maintenance and local routing workflow; activation limits |
 | [Integrated local delivery](DELIVERY_RESULT.md) | Historical local foundation, evidence and remaining gates |
 | [First foundation result](/Volumes/Workspace/Ludaxis/vox/docs/implementation/FOUNDATION_RESULT.md) | Implemented code, independent acceptance, 480-test evidence and remaining integration |
 | [Prior memory strategy](/Volumes/Workspace/Ludaxis/vox/docs/AGENT_MEMORY_STRATEGY.md) and [research](/Volumes/Workspace/Ludaxis/vox/docs/SELF_DEVELOPMENT_RESEARCH.md) | Research rationale and source findings |

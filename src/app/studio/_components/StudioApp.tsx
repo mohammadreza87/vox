@@ -10,6 +10,7 @@ import { HomeScreen } from './screens/Home';
 import { AgentScreen } from './screens/Agent';
 import { SpawnScreen } from './screens/Spawn';
 import { CallScreen } from './screens/Call';
+import { ConversationScreen } from './screens/Conversation';
 import { MemoriesScreen } from './screens/Memories';
 import { FireScreen } from './screens/Fire';
 import { OrgScreen } from './screens/Org';
@@ -30,6 +31,7 @@ export type Route =
   | { name: 'agent'; id: string }
   | { name: 'spawn'; draftId?: string; successorOf?: string }
   | { name: 'call'; id: string }
+  | { name: 'conversation'; id: string }
   | { name: 'memories'; id: string }
   | { name: 'fire'; id: string };
 
@@ -156,10 +158,11 @@ export function StudioApp() {
               {route.name === 'privacy' && <PrivacyScreen onShared={() => nav.push({ name: 'shared-memories' })} onExperience={() => nav.push({ name: 'experience' })} onConnections={() => nav.push({ name: 'connections' })} />}
               {route.name === 'connections' && <ConnectionsScreen onBack={nav.back} agentId={route.agentId} />}
               {route.name === 'shared-memories' && <SharedMemoriesScreen selfId={me.member.telegramId} onBack={nav.back} />}
-              {route.name === 'experience' && <ExperienceScreen onBack={nav.back} />}
+              {route.name === 'experience' && <ExperienceScreen onBack={nav.back} role={me.member.role} />}
               {route.name === 'agent' && <AgentScreen id={route.id} />}
               {route.name === 'spawn' && <SpawnScreen draftId={route.draftId} successorOf={route.successorOf} />}
               {route.name === 'call' && <CallScreen id={route.id} />}
+              {route.name === 'conversation' && <ConversationScreen id={route.id} />}
               {route.name === 'memories' && <MemoriesScreen id={route.id} />}
               {route.name === 'fire' && <FireScreen id={route.id} />}
             </motion.div>
