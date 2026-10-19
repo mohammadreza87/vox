@@ -319,9 +319,9 @@ describe('retrieval', () => {
       memory({ id: 'project', content: 'PROJECT_CANARY', scope: { kind: 'project', projectId: 'gameend' } }),
       memory({ id: 'company', content: 'COMPANY_CANARY', scope: { kind: 'company', companyId: 'ludaxis' } }),
       memory({ id: 'org', content: 'ORG_CANARY', scope: { kind: 'org' } }),
-      memory({ id: 'local', content: 'LOCAL_GROUP_FACT', scope: { kind: 'group', groupId: room.id } }),
+      memory({ id: 'local', content: 'LOCAL_GROUP_FACT', scope: { kind: 'group', groupId: room.id }, authorizedPersonIds: [...room.memberIds] }),
     ];
-    expect(selectMemories(directory, records, chat, { query: 'CANARY', now }).map((m) => m.id)).toEqual(['local']);
+    expect(selectMemories(directory, records, chat, { query: 'CANARY', now }).map((m) => m.id)).toEqual(hasGuests ? [] : ['local']);
   });
 
   it('does not infer cross-group sharing from identical members', () => {
@@ -331,7 +331,7 @@ describe('retrieval', () => {
     const directory = new OrgDirectory(config);
     const records = [
       memory({ id: 'other', content: 'OTHER_GROUP_CANARY', scope: { kind: 'group', groupId: 'leads' } }),
-      memory({ id: 'local', content: 'LOCAL_GROUP_FACT', scope: { kind: 'group', groupId: mirror.id } }),
+      memory({ id: 'local', content: 'LOCAL_GROUP_FACT', scope: { kind: 'group', groupId: mirror.id }, authorizedPersonIds: [...mirror.memberIds] }),
     ];
     const chat: ChatContext = { kind: 'group', chatKey: 'group-other-leads', group: mirror };
     expect(selectMemories(directory, records, chat, { query: 'CANARY', now }).map((m) => m.id)).toEqual(['local']);
