@@ -479,7 +479,7 @@ export class StudioVoiceService implements VoiceService {
 
   async synthesize(text: string, voiceId: string, authority?: ExportAuthority) {
     if (!this.eleven) throw new Error('ELEVENLABS_API_KEY is not set');
-    const audio = await this.eleven.speak(text, voiceId, authority);
+    const audio = await (authority === undefined ? this.eleven.speak(text, voiceId) : this.eleven.speak(text, voiceId, authority));
     return { audio: audio.buffer.slice(audio.byteOffset, audio.byteOffset + audio.byteLength) as ArrayBuffer, mimeType: 'audio/mpeg', filename: 'voice.mp3' };
   }
 }
