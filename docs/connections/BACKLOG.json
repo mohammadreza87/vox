@@ -5,7 +5,7 @@
   "sourceBaseline": "42a1a57113e655b6185ddc731b6f9617aaa4bb4e",
   "status": "implementation_in_progress_fixture_only",
   "canonical": true,
-  "executionAuthorization": "The user authorized end-to-end implementation in this chat, superseding the planning-only instruction. This candidate implements and tests synthetic source paths. No live provider account, private data access, real external effect, target administration, scheduled production worker or deployment was exercised or is claimed by these records.",
+  "executionAuthorization": "The user authorized end-to-end implementation and production work in this chat. Source paths and synthetic fixtures are implemented; a globally disabled source/UI rollout of e28fc8d was independently verified on Mac Studio. No live provider account, private provider data, real external effect, broker/worker activation or scheduled production execution was exercised. See RELEASE_PACKET.md for the exact rollout boundary.",
   "sizeLegend": {
     "S": "bounded fixture/copy/adapter increment",
     "M": "cross-layer feature with established contract",
@@ -149,7 +149,7 @@
             "docs/connections/IMPLEMENTATION_STATUS.md"
           ],
           "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
-          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+          "limitations": "No provider/device/activated Connections deployment qualification; effectful dispatch disabled. Disabled source/UI rollout is recorded separately in RELEASE_PACKET.md."
         }
       ],
       "implementation": {
@@ -212,7 +212,7 @@
             "src/app/studio/_components/screens/ConnectionWorkflows.tsx"
           ],
           "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
-          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+          "limitations": "No provider/device/activated Connections deployment qualification; effectful dispatch disabled. Disabled source/UI rollout is recorded separately in RELEASE_PACKET.md."
         }
       ],
       "implementation": {
@@ -295,7 +295,7 @@
             "docs/connections/evidence/IMPLEMENTATION_REVIEW.md"
           ],
           "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
-          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+          "limitations": "No provider/device/activated Connections deployment qualification; effectful dispatch disabled. Disabled source/UI rollout is recorded separately in RELEASE_PACKET.md."
         }
       ],
       "implementation": {
@@ -361,7 +361,7 @@
             "docs/connections/BROKER_OPERATIONS.md"
           ],
           "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
-          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+          "limitations": "No provider/device/activated Connections deployment qualification; effectful dispatch disabled. Disabled source/UI rollout is recorded separately in RELEASE_PACKET.md."
         }
       ],
       "implementation": {
@@ -433,7 +433,7 @@
             "src/lib/connections/service.ts"
           ],
           "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
-          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+          "limitations": "No provider/device/activated Connections deployment qualification; effectful dispatch disabled. Disabled source/UI rollout is recorded separately in RELEASE_PACKET.md."
         }
       ],
       "implementation": {
@@ -504,7 +504,7 @@
             "scripts/connections-broker.mjs"
           ],
           "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
-          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+          "limitations": "No provider/device/activated Connections deployment qualification; effectful dispatch disabled. Disabled source/UI rollout is recorded separately in RELEASE_PACKET.md."
         }
       ],
       "implementation": {
@@ -579,7 +579,7 @@
             "src/lib/connections/catalog.ts"
           ],
           "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
-          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+          "limitations": "No provider/device/activated Connections deployment qualification; effectful dispatch disabled. Disabled source/UI rollout is recorded separately in RELEASE_PACKET.md."
         }
       ],
       "implementation": {
@@ -650,7 +650,7 @@
             "src/lib/connections/service.ts"
           ],
           "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
-          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+          "limitations": "No provider/device/activated Connections deployment qualification; effectful dispatch disabled. Disabled source/UI rollout is recorded separately in RELEASE_PACKET.md."
         }
       ],
       "implementation": {
@@ -729,7 +729,7 @@
             "docs/connections/evidence/IMPLEMENTATION_REVIEW.md"
           ],
           "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
-          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+          "limitations": "No provider/device/activated Connections deployment qualification; effectful dispatch disabled. Disabled source/UI rollout is recorded separately in RELEASE_PACKET.md."
         }
       ],
       "implementation": {
@@ -824,7 +824,7 @@
             "docs/connections/evidence/IMPLEMENTATION_REVIEW.md"
           ],
           "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
-          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+          "limitations": "No provider/device/activated Connections deployment qualification; effectful dispatch disabled. Disabled source/UI rollout is recorded separately in RELEASE_PACKET.md."
         }
       ],
       "implementation": {
@@ -905,7 +905,7 @@
             "src/lib/connections/broker/provider-identity.ts"
           ],
           "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
-          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+          "limitations": "No provider/device/activated Connections deployment qualification; effectful dispatch disabled. Disabled source/UI rollout is recorded separately in RELEASE_PACKET.md."
         }
       ],
       "implementation": {
@@ -986,7 +986,7 @@
             "src/lib/connections/broker/provider-identity.ts"
           ],
           "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
-          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+          "limitations": "No provider/device/activated Connections deployment qualification; effectful dispatch disabled. Disabled source/UI rollout is recorded separately in RELEASE_PACKET.md."
         }
       ],
       "implementation": {
@@ -1058,7 +1058,7 @@
             "src/lib/connections/service.ts"
           ],
           "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
-          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+          "limitations": "No provider/device/activated Connections deployment qualification; effectful dispatch disabled. Disabled source/UI rollout is recorded separately in RELEASE_PACKET.md."
         }
       ],
       "implementation": {
@@ -1127,7 +1127,7 @@
             "src/app/studio/_components/screens/Connections.tsx"
           ],
           "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
-          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+          "limitations": "No provider/device/activated Connections deployment qualification; effectful dispatch disabled. Disabled source/UI rollout is recorded separately in RELEASE_PACKET.md."
         }
       ],
       "implementation": {
@@ -1204,7 +1204,7 @@
             "src/lib/connections/providers/notion.ts"
           ],
           "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
-          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+          "limitations": "No provider/device/activated Connections deployment qualification; effectful dispatch disabled. Disabled source/UI rollout is recorded separately in RELEASE_PACKET.md."
         }
       ],
       "implementation": {
@@ -1285,7 +1285,7 @@
             "src/lib/connections/providers/google.ts"
           ],
           "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
-          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+          "limitations": "No provider/device/activated Connections deployment qualification; effectful dispatch disabled. Disabled source/UI rollout is recorded separately in RELEASE_PACKET.md."
         }
       ],
       "implementation": {
@@ -1362,7 +1362,7 @@
             "src/lib/connections/providers/slack.ts"
           ],
           "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
-          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+          "limitations": "No provider/device/activated Connections deployment qualification; effectful dispatch disabled. Disabled source/UI rollout is recorded separately in RELEASE_PACKET.md."
         }
       ],
       "implementation": {
@@ -1438,7 +1438,7 @@
             "src/lib/connections/providers/forgejo.ts"
           ],
           "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
-          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+          "limitations": "No provider/device/activated Connections deployment qualification; effectful dispatch disabled. Disabled source/UI rollout is recorded separately in RELEASE_PACKET.md."
         }
       ],
       "implementation": {
@@ -1518,7 +1518,7 @@
             "src/lib/connections/broker/provider-identity.ts"
           ],
           "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
-          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+          "limitations": "No provider/device/activated Connections deployment qualification; effectful dispatch disabled. Disabled source/UI rollout is recorded separately in RELEASE_PACKET.md."
         }
       ],
       "implementation": {
@@ -1595,7 +1595,7 @@
             "src/lib/connections/providers/analytics.ts"
           ],
           "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
-          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+          "limitations": "No provider/device/activated Connections deployment qualification; effectful dispatch disabled. Disabled source/UI rollout is recorded separately in RELEASE_PACKET.md."
         }
       ],
       "implementation": {
@@ -1679,7 +1679,7 @@
             "src/lib/connections/providers/gmail.ts"
           ],
           "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
-          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+          "limitations": "No provider/device/activated Connections deployment qualification; effectful dispatch disabled. Disabled source/UI rollout is recorded separately in RELEASE_PACKET.md."
         }
       ],
       "implementation": {
@@ -1756,7 +1756,7 @@
             "src/lib/connections/providers/figma.ts"
           ],
           "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
-          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+          "limitations": "No provider/device/activated Connections deployment qualification; effectful dispatch disabled. Disabled source/UI rollout is recorded separately in RELEASE_PACKET.md."
         }
       ],
       "implementation": {
@@ -1834,7 +1834,7 @@
             "src/lib/connections/broker/provider-identity.ts"
           ],
           "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
-          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+          "limitations": "No provider/device/activated Connections deployment qualification; effectful dispatch disabled. Disabled source/UI rollout is recorded separately in RELEASE_PACKET.md."
         }
       ],
       "implementation": {
@@ -1922,7 +1922,7 @@
             "docs/connections/RUNNER_OPERATIONS.md"
           ],
           "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
-          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+          "limitations": "No provider/device/activated Connections deployment qualification; effectful dispatch disabled. Disabled source/UI rollout is recorded separately in RELEASE_PACKET.md."
         }
       ],
       "implementation": {
@@ -2012,7 +2012,7 @@
             "docs/connections/RUNNER_OPERATIONS.md"
           ],
           "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
-          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+          "limitations": "No provider/device/activated Connections deployment qualification; effectful dispatch disabled. Disabled source/UI rollout is recorded separately in RELEASE_PACKET.md."
         }
       ],
       "implementation": {
@@ -2092,7 +2092,7 @@
             "src/lib/connections/broker/service.ts"
           ],
           "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
-          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+          "limitations": "No provider/device/activated Connections deployment qualification; effectful dispatch disabled. Disabled source/UI rollout is recorded separately in RELEASE_PACKET.md."
         }
       ],
       "implementation": {
@@ -2177,7 +2177,7 @@
             "docs/connections/WORKFLOW_OPERATIONS.md"
           ],
           "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
-          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+          "limitations": "No provider/device/activated Connections deployment qualification; effectful dispatch disabled. Disabled source/UI rollout is recorded separately in RELEASE_PACKET.md."
         }
       ],
       "implementation": {
@@ -2252,7 +2252,7 @@
             "src/lib/connections/studio-application.ts"
           ],
           "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
-          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+          "limitations": "No provider/device/activated Connections deployment qualification; effectful dispatch disabled. Disabled source/UI rollout is recorded separately in RELEASE_PACKET.md."
         }
       ],
       "implementation": {
@@ -2339,7 +2339,7 @@
             "src/lib/connections/task-runtime.ts"
           ],
           "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
-          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+          "limitations": "No provider/device/activated Connections deployment qualification; effectful dispatch disabled. Disabled source/UI rollout is recorded separately in RELEASE_PACKET.md."
         }
       ],
       "implementation": {
@@ -2439,7 +2439,7 @@
             "docs/connections/evidence/IMPLEMENTATION_REVIEW.md"
           ],
           "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
-          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+          "limitations": "No provider/device/activated Connections deployment qualification; effectful dispatch disabled. Disabled source/UI rollout is recorded separately in RELEASE_PACKET.md."
         }
       ],
       "implementation": {
@@ -2518,7 +2518,7 @@
             "docs/connections/IMPLEMENTATION_STATUS.md"
           ],
           "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
-          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+          "limitations": "No provider/device/activated Connections deployment qualification; effectful dispatch disabled. Disabled source/UI rollout is recorded separately in RELEASE_PACKET.md."
         }
       ],
       "implementation": {
@@ -2598,12 +2598,12 @@
             "docs/connections/IMPLEMENTATION_STATUS.md"
           ],
           "independentReview": "docs/connections/evidence/IMPLEMENTATION_REVIEW.md",
-          "limitations": "No provider/device/deployment qualification; effectful dispatch disabled."
+          "limitations": "No provider/device/activated Connections deployment qualification; effectful dispatch disabled. Disabled source/UI rollout is recorded separately in RELEASE_PACKET.md."
         }
       ],
       "implementation": {
-        "source": "not_run",
-        "summary": "No production deployment, provider canary, actual target IAM/rotation/rollback drill or operator handoff was performed.",
+        "source": "partial",
+        "summary": "Globally disabled source/UI e28fc8d installed and independently checked on Mac Studio. No enabled-provider canary, target broker/worker IAM, key rotation or executed rollback drill.",
         "artifacts": [
           "docs/connections/BROKER_OPERATIONS.md",
           "docs/connections/IMPLEMENTATION_STATUS.md"

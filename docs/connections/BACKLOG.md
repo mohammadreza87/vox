@@ -1,10 +1,10 @@
 # Connections delivery backlog
 
-Generated from [BACKLOG.json](BACKLOG.json), the canonical source. JSON SHA256: `04acf92c3d21b6c905bed69283f352fec149efefcffa9b9c885567b19e669c9a`.
+Generated from [BACKLOG.json](BACKLOG.json), the canonical source. JSON SHA256: `dcf0e1d93a80fe1580c5642817ba8e94c6339d1a5b7823df2b8ad7d76645478c`.
 
 Historical planning baseline `42a1a57113e655b6185ddc731b6f9617aaa4bb4e`. Current implementation baseline `d8d6766f4e7148e83ec4f85208974e00e3570c34`; combined runtime source is frozen at `cae9d1e` with independent held-out tests and the exact manifest in [IMPLEMENTATION_REVIEW.md](evidence/IMPLEMENTATION_REVIEW.md). A separate compiled artifact is required for deployment.
 
-The user authorized end-to-end implementation in this chat, superseding the planning-only instruction. This candidate implements and tests synthetic source paths. No live provider account, private data access, real external effect, target administration, scheduled production worker or deployment was exercised or is claimed by these records.
+The user authorized end-to-end implementation and production work in this chat. Source paths and synthetic fixtures are implemented; a globally disabled source/UI rollout of e28fc8d was independently verified on Mac Studio. No live provider account, private provider data, real external effect, broker/worker activation or scheduled production execution was exercised. See RELEASE_PACKET.md for the exact rollout boundary.
 
 Source implementation and synthetic fixtures do not close account, device, infrastructure or release qualification. Production provider effects are hard-disabled independently in Studio and broker; read-only capabilities require explicit qualified per-account/scope inventory.
 
@@ -45,7 +45,7 @@ Source implementation, synthetic evidence and account/device/deployment admissio
 | CONN-029 | in_progress | [Implement versioned runtime skills with capability-bound evaluation](#conn-029) | implemented |
 | CONN-030 | in_progress | [Independently evaluate integrated pilot and admission gates](#conn-030) | partial |
 | CONN-031 | not_run | [Run authorized real-account and actual Telegram device journeys](#conn-031) | not_run |
-| CONN-032 | not_run | [Qualify per-capability canary, rollback and operator handoff](#conn-032) | not_run |
+| CONN-032 | not_run | [Qualify per-capability canary, rollback and operator handoff](#conn-032) | partial |
 
 ## CONN-001
 
@@ -798,7 +798,7 @@ Dependencies: CONN-028, CONN-030, CONN-031. Requirements: CR-02, CR-03, CR-04, C
 
 Prepare/protect exact artifact/configuration, IAM/vault/network/backup checks, live canary/rollback/unknown-operation drill and operator handoff. Pilot excludes unqualified later adapters; repeat this task gate for each independently admitted later capability.
 
-Current implementation: No production deployment, provider canary, actual target IAM/rotation/rollback drill or operator handoff was performed.
+Current implementation: Globally disabled source/UI e28fc8d installed and independently checked on Mac Studio. No enabled-provider canary, target broker/worker IAM, key rotation or executed rollback drill.
 
 Artifacts: `docs/connections/BROKER_OPERATIONS.md`, `docs/connections/IMPLEMENTATION_STATUS.md`.
 
