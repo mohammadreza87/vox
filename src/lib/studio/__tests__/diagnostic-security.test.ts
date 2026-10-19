@@ -29,7 +29,9 @@ function canaryError() {
 function hostileError() {
   const accessed = vi.fn(() => { throw canaryError(); });
   const error = new Error('synthetic hostile error');
-  for (const key of ['message', 'stack', 'name', 'cause', 'code', 'status', 'toJSON']) {
+  // V8 may materialize lazy Error.stack when redefining it. Replace stack
+  // before installing hostile name/message accessors so construction is safe.
+  for (const key of ['stack', 'message', 'name', 'cause', 'code', 'status', 'toJSON']) {
     Object.defineProperty(error, key, { configurable: true, get: accessed });
   }
   return { error, accessed };
@@ -55,6 +57,17 @@ function liveRequest(stream = true) {
 }
 
 describe('independent diagnostic invocation security', () => {
+
+  it('constructs without invoking getters and retains every hostile exception property', () => {
+    const { error, accessed } = hostileError();
+    expect(error).toBeInstanceOf(Error);
+    expect(accessed).not.toHaveBeenCalled();
+    for (const key of ['message', 'stack', 'name', 'cause', 'code', 'status', 'toJSON']) {
+      expect(Object.getOwnPropertyDescriptor(error, key)?.get).toBe(accessed);
+      expect(() => Reflect.get(error, key)).toThrow(TEXT_CANARY);
+    }
+    expect(accessed).toHaveBeenCalledTimes(7);
+  });
 
   it('serializes the fixed catalog through the actual production Pino configuration', () => {
     // A fresh local process avoids replacing the application logger with a spy.

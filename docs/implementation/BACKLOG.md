@@ -502,7 +502,7 @@ Upgrade isolated OpenAI dependency; implement typed question/result/usage/refusa
 
 **Deliverables:** DecisionProvider implementation; SDK compatibility tests.
 
-**Evidence:** ["docs/implementation/DELIVERY_RESULT.md"]
+**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/evidence/decisions-provider/RESULT.md"]
 
 ### VOX-025 — Define and calibrate question catalog and policies
 
@@ -616,7 +616,7 @@ Benchmark baseline versus candidate using the fixed workload, uncertainty interv
 
 **Deliverables:** Decision qualification report; Budget and circuit-break settings.
 
-**Evidence:** ["docs/implementation/DELIVERY_RESULT.md"]
+**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/evidence/decisions-provider/RESULT.md"]
 
 ### VOX-031 — Integrate supported voice/image input prediction path
 

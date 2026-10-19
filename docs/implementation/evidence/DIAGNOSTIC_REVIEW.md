@@ -72,3 +72,30 @@ The catalog deliberately gives up per-agent/account correlation. Do not restore 
 EN: The fixed-catalog operational logging slice passes independent local review: 16 adversarial checks and 912 composed tests pass. Both reproduced Mini App failures are fixed. Deployment, historical log deletion, production retention/IAM and legal approvals remain separate.
 
 FA: این بخش محدود از ثبت رخدادهای عملیاتی با فهرست ثابت، بررسی مستقل محلی را گذراند؛ ۱۶ آزمون خصمانه و ۹۱۲ آزمون ترکیبی موفق بودند و هر دو خطای بازتولیدشدهٔ مینی‌اپ اصلاح شدند. استقرار واقعی، حذف لاگ‌های گذشته، نگهداری داده و کنترل دسترسی در محیط واقعی و تأیید حقوقی همچنان جداگانه نیاز به بررسی دارند.
+
+## CI fixture portability correction: PR49 / Node20
+
+Lead-reported CI job `118242202425` on PR49 head `453078553e1b0e7a59d80edc2f2e0e2138a013bd` failed eight reviewer cases while constructing `hostileError`, before product code ran. That HEAD was verified locally in this isolated worktree. No CI logs were downloaded; the supplied failure was independently reproduced locally before editing.
+
+The official Darwin arm64 Node20.20.2 archive was downloaded into `/tmp` and its SHA-256 matched the official release manifest: `6375a1d4421bc04ab284ba89459df788a78c49c89e83c463d0eede47e2efc07b`. Sources: [Node20.20.2 checksums](https://nodejs.org/dist/v20.20.2/SHASUMS256.txt) and [runtime archive](https://nodejs.org/dist/v20.20.2/node-v20.20.2-darwin-arm64.tar.xz). No project dependencies or lockfiles changed.
+
+Cause: on Node20, redefining the lazy native `Error.stack` after installing the throwing `message` getter materializes stack information and invokes that getter. A standalone reproduction of the original order reported `constructed:false, calls:1`; the unmodified suite with V8 coverage failed eight cases and passed eight. This also reproduced without coverage in the standalone construction check, so coverage itself is not established as the cause.
+
+Correction: define the hostile `stack` property first, while native name/message remain ordinary, then define the same other six hostile properties. Every original case and assertion remains. One added test proves the fixture stays an Error, construction invokes no getters, all seven own getter descriptors remain installed, and reading each property still throws the transcript canary (seven getter invocations). No product source was edited and no security criterion was weakened.
+
+Independent before/after commands (Node20 binary installed only under `/tmp`):
+
+```sh
+/tmp/vox-diagnostic-node20/node-v20.20.2-darwin-arm64/bin/node node_modules/vitest/vitest.mjs run src/lib/studio/__tests__/diagnostic-security.test.ts --coverage --coverage.reportsDirectory=/tmp/vox-diagnostic-node20-before-coverage
+/tmp/vox-diagnostic-node20/node-v20.20.2-darwin-arm64/bin/node node_modules/vitest/vitest.mjs run src/lib/studio/__tests__/diagnostic-security.test.ts --coverage --coverage.reportsDirectory=/tmp/vox-diagnostic-node20-after-coverage
+/Users/reza/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node node_modules/vitest/vitest.mjs run src/lib/studio/__tests__/diagnostic-security.test.ts --coverage --coverage.reportsDirectory=/tmp/vox-diagnostic-node24-after-coverage
+node node_modules/vitest/vitest.mjs run src/lib/studio/__tests__/diagnostic-security.test.ts
+node node_modules/eslint/bin/eslint.js src/lib/studio/__tests__/diagnostic-security.test.ts
+git diff --check
+```
+
+Results: original Node20.20.2 coverage run **8 failed / 8 passed**; corrected Node20.20.2 coverage run **17/17 passed** at21:53:13 (2.29s); bundled Node24.19.0 coverage run **17/17 passed** at21:53:20 (2.26s); regular PATH Node22.23.3 run **17/17 passed** at21:53:20 (1.26s). ESLint and diff check passed. Logs and coverage reports remain under `/tmp/vox-diagnostic-node20-*` and `/tmp/vox-diagnostic-node24-*`; only failure/result snippets were surfaced. Coverage configuration and thresholds were unchanged.
+
+Corrected reviewer test SHA-256: `afffdbe497ddb9f36f35f23db4af6a6e6e4abcb9b41ea1ca32acc51a38035a9a`. The 11 reviewed production files still hash to `d6748fe1e44b114b82ba475e78fbfbafde04a12f7c32e0b07b7ce868f3208713`. Earlier composed-suite counts/hashes above are historical checkpoints, not a newly repeated full-suite result. The new evidence is a local macOS reproduction using the matching Node version and coverage mode; the Linux CI rerun remains the lead's next verification. No commit, push or deployment was performed.
+
+FA: شکست CI در ساخت دادهٔ آزمون و پیش از اجرای کد محصول بازتولید شد. با تعریف ویژگی پشته پیش از نصب دسترسی‌های خصمانه، هر هفت ویژگی و همهٔ معیارهای امنیتی حفظ شدند. هر ۱۷ آزمون روی Node20 و Node24 با پوشش کد و روی Node22 موفق بودند؛ اجرای دوبارهٔ CI همچنان جداگانه لازم است.

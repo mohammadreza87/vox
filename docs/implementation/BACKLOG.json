@@ -895,9 +895,10 @@
         "SDK compatibility tests"
       ],
       "evidence": [
-        "docs/implementation/DELIVERY_RESULT.md"
+        "docs/implementation/DELIVERY_RESULT.md",
+        "docs/implementation/evidence/decisions-provider/RESULT.md"
       ],
-      "progress_note": "Typed Decisions adapter uses existing SDK public post without a dependency upgrade; strict answer validation, refusal/fallback, no retry and 500ms deadline tested locally. Live account compatibility/retention and SDK upgrade qualification remain open."
+      "progress_note": "Typed Decisions adapter uses installed SDK6.9.1 public post without a dependency upgrade. One synthetic live gpt-6-luna fixed-choice request succeeded and its response was accepted by local replay through the production decoder. The smoke used a5s timeout; observed1087ms exceeds the production500ms budget. Retention/residency, SDK upgrade and deployed endpoint qualification remain open."
     },
     {
       "id": "VOX-025",
@@ -1110,9 +1111,10 @@
         "Budget and circuit-break settings"
       ],
       "evidence": [
-        "docs/implementation/DELIVERY_RESULT.md"
+        "docs/implementation/DELIVERY_RESULT.md",
+        "docs/implementation/evidence/decisions-provider/RESULT.md"
       ],
-      "progress_note": "Local timeout/refusal/revocation/budget fallback contract tests passed at checkpoints. Real quality, latency, cost and load qualification remain open."
+      "progress_note": "Local timeout/refusal/revocation/budget fallback tests passed. One live synthetic sample took1087ms and134 input tokens; it exceeded the production500ms deadline and cannot establish a latency distribution, cost baseline or speed improvement. Held-out quality, load, cold/warm caching and real conversation measurements remain open."
     },
     {
       "id": "VOX-031",
