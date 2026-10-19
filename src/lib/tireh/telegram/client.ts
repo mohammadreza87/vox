@@ -35,14 +35,31 @@ export interface TelegramCallbackQuery {
   data?: string;
 }
 
+export interface TelegramChatMemberUpdated {
+  chat: TelegramChat;
+  from: TelegramUser;
+  date: number;
+  old_chat_member: { status: string; user: TelegramUser };
+  new_chat_member: { status: string; user: TelegramUser };
+}
+
+export interface TelegramManagedBotUpdated {
+  user: TelegramUser;
+  bot: TelegramUser;
+}
+
 export interface TelegramUpdate {
   update_id: number;
   message?: TelegramMessage;
   callback_query?: TelegramCallbackQuery;
+  my_chat_member?: TelegramChatMemberUpdated;
+  managed_bot?: TelegramManagedBotUpdated;
 }
 
+export type InlineButton = { text: string; callback_data: string } | { text: string; web_app: { url: string } } | { text: string; url: string };
+
 export interface InlineKeyboard {
-  inline_keyboard: Array<Array<{ text: string; callback_data: string }>>;
+  inline_keyboard: Array<Array<InlineButton>>;
 }
 
 type FetchFn = typeof fetch;
@@ -136,12 +153,58 @@ export class TelegramBotClient {
   }
 
   /** Long polling; `timeoutSeconds` is how long Telegram holds the request open */
-  getUpdates(offset: number | undefined, timeoutSeconds = 30): Promise<TelegramUpdate[]> {
+  getUpdates(
+    offset: number | undefined,
+    timeoutSeconds = 30,
+    allowedUpdates: string[] = ['message', 'callback_query']
+  ): Promise<TelegramUpdate[]> {
     return this.call('getUpdates', {
       ...(offset !== undefined ? { offset } : {}),
       timeout: timeoutSeconds,
-      allowed_updates: ['message', 'callback_query'],
+      allowed_updates: allowedUpdates,
     });
+  }
+
+  // ---- managed bots (Bot API 9.6) and bot profile -------------------------
+
+  getManagedBotToken(botUserId: number): Promise<string> {
+    return this.call('getManagedBotToken', { user_id: botUserId });
+  }
+
+  setMyName(name: string): Promise<boolean> {
+    return this.call('setMyName', { name: name.slice(0, 64) });
+  }
+
+  setMyDescription(description: string): Promise<boolean> {
+    return this.call('setMyDescription', { description: description.slice(0, 512) });
+  }
+
+  setMyShortDescription(shortDescription: string): Promise<boolean> {
+    return this.call('setMyShortDescription', { short_description: shortDescription.slice(0, 120) });
+  }
+
+  setMyCommands(commands: Array<{ command: string; description: string }>): Promise<boolean> {
+    return this.call('setMyCommands', { commands });
+  }
+
+  /** Telegram profile photos must be JPG */
+  setMyProfilePhoto(jpeg: Buffer): Promise<boolean> {
+    const form = new FormData();
+    form.append('photo', JSON.stringify({ type: 'static', photo: 'attach://avatar' }));
+    form.append('avatar', new Blob([new Uint8Array(jpeg)], { type: 'image/jpeg' }), 'avatar.jpg');
+    return this.call('setMyProfilePhoto', form);
+  }
+
+  setChatMenuButton(text: string, webAppUrl: string): Promise<boolean> {
+    return this.call('setChatMenuButton', { menu_button: { type: 'web_app', text, web_app: { url: webAppUrl } } });
+  }
+
+  getChatMemberCount(chatId: number): Promise<number> {
+    return this.call('getChatMemberCount', { chat_id: chatId });
+  }
+
+  leaveChat(chatId: number): Promise<boolean> {
+    return this.call('leaveChat', { chat_id: chatId });
   }
 
   setWebhook(url: string, secretToken: string): Promise<boolean> {

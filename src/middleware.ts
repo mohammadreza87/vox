@@ -59,13 +59,17 @@ const CSP_DIRECTIVES = {
   'base-uri': ["'self'"],
   'object-src': ["'none'"],
   'worker-src': ["'self'", 'blob:'],
-  'media-src': ["'self'", 'blob:', 'data:'],
+  'media-src': ["'self'", 'blob:', 'data:', 'https://storage.googleapis.com'], // ElevenLabs voice-library previews
   'manifest-src': ["'self'"],
 };
 
+// Telegram clients that render Mini Apps in an iframe (Telegram Web)
+const TELEGRAM_FRAME_ANCESTORS = ["'self'", 'https://web.telegram.org', 'https://*.telegram.org'];
+
 // Build CSP header string
-function buildCSP(isDev: boolean): string {
+function buildCSP(isDev: boolean, isMiniApp = false): string {
   const directives = { ...CSP_DIRECTIVES };
+  if (isMiniApp) directives['frame-ancestors'] = TELEGRAM_FRAME_ANCESTORS;
 
   // In development, allow localhost and hot reload
   if (isDev) {
@@ -103,13 +107,16 @@ export function middleware(request: NextRequest) {
 
   // Security headers
   response.headers.set('X-Content-Type-Options', 'nosniff');
-  response.headers.set('X-Frame-Options', 'DENY');
+  // Vox Studio is a Telegram Mini App: Telegram Web frames it, so framing is
+  // limited to Telegram by CSP instead of being denied outright.
+  const isMiniApp = request.nextUrl.pathname.startsWith('/studio');
+  if (!isMiniApp) response.headers.set('X-Frame-Options', 'DENY');
   response.headers.set('X-XSS-Protection', '1; mode=block');
   response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
   response.headers.set('Permissions-Policy', PERMISSIONS_POLICY);
 
   // CSP - use report-only in development to avoid blocking
-  const csp = buildCSP(isDev);
+  const csp = buildCSP(isDev, isMiniApp);
   if (isDev) {
     response.headers.set('Content-Security-Policy-Report-Only', csp);
   } else {

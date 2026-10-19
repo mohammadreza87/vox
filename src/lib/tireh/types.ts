@@ -51,6 +51,8 @@ export interface Group {
   memberIds: string[];        // everyone who can read the group
   projectId?: string;         // decisions here become project memory
   companyId?: string;
+  /** People outside the organization can read this group: only its own memories are usable */
+  hasGuests?: boolean;
 }
 
 export interface PersonaVoice {

@@ -18,7 +18,8 @@
     "e2e:headed": "playwright test --headed",
     "storybook": "storybook dev -p 6006",
     "build-storybook": "storybook build",
-    "tireh:local": "dotenv -e .env.local -- tsx scripts/tireh-local.ts"
+    "tireh:local": "dotenv -e .env.local -- tsx scripts/tireh-local.ts",
+    "studio:start": "STUDIO_BOTS=1 next start"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.71.0",

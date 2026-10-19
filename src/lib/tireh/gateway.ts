@@ -156,11 +156,31 @@ export class PersonaGateway {
 
     // Memory formation must never break the conversation.
     try {
-      await this.formMemories(persona, chat, speaker.id, message);
+      await this.formMemories(persona, chat, speaker.id, message.message_id);
     } catch (error) {
       this.log.error(`[tireh] ${persona.id}: memory extraction failed`, error);
     }
     return 'replied';
+  }
+
+  /**
+   * One private exchange outside Telegram (e.g. a voice call in the Mini App):
+   * same memory, same privacy rules, same persona.
+   */
+  async converse(personaId: string, speakerId: string, text: string): Promise<string> {
+    const persona = this.deps.org.getPersona(personaId);
+    if (!persona) throw new Error(`Unknown persona ${personaId}`);
+    if (!this.deps.org.getPerson(speakerId)) throw new Error('Unknown speaker');
+    const chat: ChatContext = { kind: 'private', chatKey: `private-${speakerId}`, personId: speakerId };
+    await this.deps.history.append(persona.id, chat.chatKey, { role: 'user', personId: speakerId, text, at: this.now() });
+    const reply = await this.generateReply(persona, chat, speakerId, text);
+    await this.deps.history.append(persona.id, chat.chatKey, { role: 'assistant', text: reply, at: this.now() });
+    try {
+      await this.formMemories(persona, chat, speakerId);
+    } catch (error) {
+      this.log.error(`[tireh] ${persona.id}: memory extraction failed`, error);
+    }
+    return reply;
   }
 
   private resolveChat(
@@ -251,7 +271,7 @@ export class PersonaGateway {
   // MEMORY FORMATION
   // ============================================
 
-  private async formMemories(persona: Persona, chat: ChatContext, speakerId: string, message: TelegramMessage) {
+  private async formMemories(persona: Persona, chat: ChatContext, speakerId: string, messageId?: number) {
     const { org, llm, memories } = this.deps;
     const transcript = await this.deps.history.recent(persona.id, chat.chatKey, EXTRACTION_WINDOW);
     const existing = await memories.listActive(persona.id);
@@ -305,7 +325,7 @@ export class PersonaGateway {
           personId: sourceId,
           chatKind: chat.kind,
           groupId: chat.kind === 'group' ? chat.group.id : undefined,
-          telegramMessageId: message.message_id,
+          telegramMessageId: messageId,
           at,
         },
         aboutPersonIds: candidate.about,
