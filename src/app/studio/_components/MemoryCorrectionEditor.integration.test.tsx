@@ -46,3 +46,28 @@ it.each(['en','fa'] as const)('connects %s Create/Edit/Review/Save to real signe
   expect((await f.service.read(123,'personal')).memories).toEqual([]);
   const doc=await f.service.withAccountDocument(123,d=>d);expect(doc.permissions.every(p=>p.state!=='granted')).toBe(true);
 });
+it('keeps a real signed FILE-queued Save scoped and visible until its authoritative response',async()=>{
+  const {mkdir,readFile,rmdir}=await import('node:fs/promises'),{join}=await import('node:path'),{accountIdFor}=await import('@/lib/adaptive/persistence/repository'),{createHash}=await import('node:crypto');
+  const f=await correctionFixture();fixtures.push(f);vi.spyOn(Date,'now').mockReturnValue(CORRECTION_NOW);
+  const token='123:synthetic-correction';(window as unknown as {Telegram:unknown}).Telegram={WebApp:{initData:signInitData({id:123,first_name:'Synthetic'},token)}};
+  vi.spyOn(api,'agents').mockResolvedValue({agents:[]} as Awaited<ReturnType<typeof api.agents>>);
+  const puts:Array<{signal:AbortSignal|undefined;body:unknown}>=[];
+  vi.stubGlobal('fetch',async(url:string,init:RequestInit)=>{
+    const target=new URL(url,'https://vox.synthetic'),headers=new Headers(init.headers);headers.set('origin',target.origin);
+    if(init.method==='PUT')puts.push({signal:init.signal as AbortSignal,body:JSON.parse(String(init.body))});
+    return handleAdaptiveRequest(f.studio,f.service,new Request(target,{...init,headers}),target.pathname.replace('/api/studio/adaptive','').split('/').filter(Boolean),token);
+  });
+  const pending=vi.fn(()=>true);render(<PrivacyScreen onCorrectionPendingChange={pending}/>);fireEvent.click(await screen.findByRole('button',{name:'Edit note'}));
+  fireEvent.change(screen.getByRole('textbox',{name:'Corrected note'}),{target:{value:'Scoped FILE correction'}});fireEvent.click(screen.getByRole('button',{name:'Review correction'}));
+  const file=join(f.directory,'adaptive',`${createHash('sha256').update(accountIdFor(123)).digest('hex')}.json`),lock=`${file}.lock`;await mkdir(lock);let held=true;
+  try{
+    fireEvent.click(screen.getByRole('button',{name:'Save correction'}));await waitFor(()=>expect(puts).toHaveLength(1));
+    expect(screen.getByText('Saving in Work…')).toBeVisible();expect(screen.getByRole('button',{name:'Personal',exact:true})).toBeDisabled();expect(screen.getByRole('button',{name:'Cancel',exact:true})).toBeDisabled();
+    fireEvent.click(screen.getByRole('button',{name:'Cancel',exact:true}));fireEvent.click(screen.getByRole('button',{name:'Personal',exact:true}));
+    expect(puts[0].signal?.aborted).toBe(false);expect(JSON.parse(await readFile(file,'utf8')).memories[0].text).toBe(f.note.text);
+    await rmdir(lock);held=false;
+    await screen.findByText('Scoped FILE correction');await waitFor(()=>expect(pending).toHaveBeenLastCalledWith(expect.any(String),false));
+    const saved=JSON.parse(await readFile(file,'utf8')).memories[0];expect(saved).toMatchObject({id:f.note.id,text:'Scoped FILE correction',revision:2,expiresAt:f.note.expiresAt,createdAt:f.note.createdAt});expect(puts).toHaveLength(1);expect(puts[0].signal?.aborted).toBe(false);
+    expect(screen.getByRole('button',{name:'Personal',exact:true})).toBeEnabled();fireEvent.click(screen.getByRole('button',{name:'Personal',exact:true}));await waitFor(()=>expect(screen.queryByText('Scoped FILE correction')).not.toBeInTheDocument());expect((await f.service.read(123,'personal')).memories).toEqual([]);
+  }finally{if(held)await rmdir(lock);}
+});

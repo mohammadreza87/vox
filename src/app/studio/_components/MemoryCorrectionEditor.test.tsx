@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { MemoryCorrectionEditor } from './MemoryCorrectionEditor';
+import { MEMORY_CORRECTION_SAVE_TIMEOUT_MS, MemoryCorrectionEditor } from './MemoryCorrectionEditor';
 import type { AdaptiveSnapshot } from '../_lib/adaptive-client';
 const mocks = vi.hoisted(() => ({ correct: vi.fn() }));
 vi.mock('../_lib/adaptive-client', () => ({ adaptiveApi: mocks }));
@@ -26,7 +26,7 @@ it('cancel discards review, and failed Save asks for refresh without retrying or
   await screen.findByRole('alert'); expect(screen.queryByText('RAW_INTERNAL_ERROR')).not.toBeInTheDocument(); expect(p.onSaved).not.toHaveBeenCalled();
   expect(screen.getByRole('button',{name:'Save correction'})).toBeDisabled(); fireEvent.click(screen.getByRole('button',{name:'Refresh notes'})); expect(p.onRefresh).toHaveBeenCalledOnce(); expect(mocks.correct).toHaveBeenCalledOnce();
 });
-it.each(['space','locale','binding','confirmed','unsupported','revision','unmount','cancel','expiry'] as const)('aborts pending Save on %s and ignores an adapter that resolves late', async change=>{
+it.each(['space','locale','binding','confirmed','unsupported','revision','unmount','expiry'] as const)('aborts pending Save on %s and ignores an adapter that resolves late', async change=>{
   const p=props(); let release!:(v:AdaptiveSnapshot)=>void; mocks.correct.mockImplementation(()=>new Promise(r=>{release=r;}));
   const view=render(<MemoryCorrectionEditor {...p}/>); review(); fireEvent.click(screen.getByRole('button',{name:'Save correction'}));
   const signal=mocks.correct.mock.calls[0][2] as AbortSignal;
@@ -45,4 +45,50 @@ it('hides editing for derived, unsupported or unconfirmed rows',()=>{
   const p=props(),view=render(<MemoryCorrectionEditor {...p} note={{...note,sourceRefs:[{id:'source',revision:1}]}}/>); expect(screen.queryByRole('button')).toBeNull();
   view.rerender(<MemoryCorrectionEditor {...p} snapshot={{...snapshot,memoryCorrectionAvailable:false}}/>); expect(screen.queryByRole('button')).toBeNull();
   view.rerender(<MemoryCorrectionEditor {...p} snapshot={{...snapshot,identity:{...snapshot.identity,confirmed:false}}}/>); expect(screen.queryByRole('button')).toBeNull();
+});
+
+it.each(['en','fa'] as const)('keeps dispatched %s Save visible, disables Cancel, owns one event, and releases after confirmation', async locale=>{
+  const p={...props(),locale,onPendingChange:vi.fn(()=>true),onUnconfirmed:vi.fn()}; let release!:(v:AdaptiveSnapshot)=>void;
+  mocks.correct.mockImplementation(()=>new Promise(r=>{release=r;}));render(<MemoryCorrectionEditor {...p}/>);review(locale==='fa');
+  fireEvent.click(screen.getByRole('button',{name:locale==='fa'?'ذخیرهٔ اصلاح':'Save correction'}));
+  const first=mocks.correct.mock.calls[0],signal=first[2] as AbortSignal,token=first[1].eventId;
+  expect(screen.getByRole('status')).toHaveAttribute('aria-live','polite');
+  expect(screen.getByText(locale==='fa'?'در حال ذخیره در فضای کاری…':'Saving in Work…')).toBeVisible();
+  const cancel=screen.getByRole('button',{name:locale==='fa'?'انصراف':'Cancel'});expect(cancel).toBeDisabled();fireEvent.click(cancel);
+  expect(signal.aborted).toBe(false);expect(mocks.correct).toHaveBeenCalledOnce();expect(p.onPendingChange).toHaveBeenCalledExactlyOnceWith(token,true);
+  const result={...snapshot,revision:3};await act(async()=>release(result));expect(p.onSaved).toHaveBeenCalledExactlyOnceWith(result);
+  expect(p.onPendingChange).toHaveBeenLastCalledWith(token,false);expect(p.onUnconfirmed).not.toHaveBeenCalled();
+});
+it('bounds an abort-ignoring Save, reports scoped unknown, and ignores its late success without retry',async()=>{
+  vi.useFakeTimers();const p={...props(),onPendingChange:vi.fn(()=>true),onUnconfirmed:vi.fn()};let release!:(v:AdaptiveSnapshot)=>void;
+  mocks.correct.mockImplementation(()=>new Promise(r=>{release=r;}));render(<MemoryCorrectionEditor {...p}/>);review();fireEvent.click(screen.getByRole('button',{name:'Save correction'}));
+  const token=mocks.correct.mock.calls[0][1].eventId,signal=mocks.correct.mock.calls[0][2] as AbortSignal;
+  await act(async()=>{await vi.advanceTimersByTimeAsync(MEMORY_CORRECTION_SAVE_TIMEOUT_MS);});
+  expect(signal.aborted).toBe(true);expect(screen.getByRole('alert')).toHaveTextContent('may have been saved in Work');
+  expect(p.onPendingChange).toHaveBeenLastCalledWith(token,false);expect(p.onUnconfirmed).toHaveBeenCalledExactlyOnceWith('work');
+  expect(screen.getByRole('button',{name:'Save correction'})).toBeDisabled();expect(mocks.correct).toHaveBeenCalledOnce();
+  await act(async()=>release({...snapshot,revision:3}));expect(p.onSaved).not.toHaveBeenCalled();expect(p.onPendingChange).toHaveBeenCalledTimes(2);
+  fireEvent.click(screen.getByRole('button',{name:'Refresh notes'}));expect(p.onRefresh).toHaveBeenCalledOnce();
+});
+it('old forced-unmount completion cannot release a later command owner',async()=>{
+  const p={...props(),onPendingChange:vi.fn(()=>true),onUnconfirmed:vi.fn()};let release!:(v:AdaptiveSnapshot)=>void;
+  mocks.correct.mockImplementation(()=>new Promise(r=>{release=r;}));const view=render(<MemoryCorrectionEditor {...p}/>);review();fireEvent.click(screen.getByRole('button',{name:'Save correction'}));
+  view.unmount();expect(p.onUnconfirmed).toHaveBeenCalledExactlyOnceWith('work');expect(p.onPendingChange).toHaveBeenCalledTimes(2);
+  await act(async()=>release(snapshot));expect(p.onPendingChange).toHaveBeenCalledTimes(2);expect(p.onSaved).not.toHaveBeenCalled();
+});
+it.each(['Cancel','Back to edit'])('guards same-batch Save then %s before the pending render',async action=>{
+  let release!:(v:AdaptiveSnapshot)=>void;mocks.correct.mockImplementation(()=>new Promise(r=>{release=r;}));const p=props();render(<MemoryCorrectionEditor {...p}/>);review();
+  const save=screen.getByRole('button',{name:'Save correction'}),competing=screen.getByRole('button',{name:action});
+  act(()=>{fireEvent.click(save);fireEvent.click(competing);});
+  expect(mocks.correct).toHaveBeenCalledOnce();expect((mocks.correct.mock.calls[0][2] as AbortSignal).aborted).toBe(false);expect(screen.getByText('Saving in Work…')).toBeVisible();
+  await act(async()=>release(snapshot));expect(p.onSaved).toHaveBeenCalledOnce();
+});
+it.each(['note','binding','capability'] as const)('clears sensitive pending review and releases navigation on actual %s clock expiry',async expiry=>{
+  vi.useFakeTimers();const deadline=Date.now()+5000,p={...props(),onPendingChange:vi.fn(()=>true),onUnconfirmed:vi.fn()};
+  const expiredNote=expiry==='note'?{...note,expiresAt:deadline}:note;
+  const authority={...snapshot,identity:{...snapshot.identity,...(expiry==='binding'?{bindingExpiresAt:deadline}:{})},...(expiry==='capability'?{explicitMemoryValidUntil:deadline}:{})};
+  mocks.correct.mockImplementation(()=>new Promise(()=>undefined));render(<MemoryCorrectionEditor {...p} note={expiredNote} snapshot={authority}/>);review();fireEvent.click(screen.getByRole('button',{name:'Save correction'}));
+  const token=mocks.correct.mock.calls[0][1].eventId;await act(async()=>{await vi.advanceTimersByTimeAsync(5001);});
+  expect((mocks.correct.mock.calls[0][2] as AbortSignal).aborted).toBe(true);expect(screen.queryByText('Corrected explicit claim')).not.toBeInTheDocument();expect(screen.queryByRole('region',{name:'Correct private note'})).not.toBeInTheDocument();
+  expect(p.onPendingChange).toHaveBeenLastCalledWith(token,false);expect(p.onUnconfirmed).toHaveBeenCalledExactlyOnceWith('work');expect(p.onSaved).not.toHaveBeenCalled();
 });
