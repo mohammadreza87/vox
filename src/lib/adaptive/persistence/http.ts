@@ -6,7 +6,7 @@ import { boundedStudioRequest } from '../../studio/http';
 import { StudioError, type Studio } from '../../studio/service';
 import { StudioRateLimiter, StudioRateLimitError } from '../../studio/ratelimit';
 import { AdaptiveError, type AdaptiveService } from './service';
-import { agentGrantInput, consentInput, deletionInput, identityInput, memoryInput, presentInput, spaceInput } from './validation';
+import { agentGrantInput, consentInput, correctionInput, deletionInput, identityInput, memoryInput, presentInput, spaceInput } from './validation';
 import { ReviewedMemoryService } from '../reviewed-memory/service';
 import { reviewedPreviewInputSchema, reviewedAcceptInputSchema } from '../reviewed-memory/contracts';
 import { digest } from './repository';
@@ -94,6 +94,23 @@ export async function handleAdaptiveRequest(studio: Studio, service: AdaptiveSer
     if (route === 'POST identity') return response(await service.confirm(user.id, identityInput.parse(body), space));
     if (route === 'POST consents/present') return response(await service.present(user.id, presentInput.parse(body)));
     if (route === 'PUT consents') return response(await service.changeConsent(user.id, consentInput.parse(body)));
+    if (request.method === 'PUT' && path.length === 2 && path[0] === 'memories' && /^[a-zA-Z0-9-]{1,100}$/.test(path[1])) {
+      const input = correctionInput.parse(body);
+      const authorityNow = () => {
+        const current = studio.deps.store.readCommittedForEffect?.();
+        const members = current?.members.filter(row => row.telegramId === user.id) ?? [], actor = members[0];
+        if (members.length !== 1 || !actor || !['member', 'admin', 'superadmin', 'owner'].includes(actor.role) ||
+          actor.learningAuthorityRevision !== undefined && (!Number.isSafeInteger(actor.learningAuthorityRevision) || actor.learningAuthorityRevision < 0)) return null;
+        return digest([actor.telegramId, actor.role, actor.learningAuthorityRevision ?? 0]);
+      };
+      const authority = authorityNow();
+      if (!authority) return response({ error: 'memory_correction_unavailable' }, 503);
+      const authorizeNow = () => authorityNow() === authority;
+      await service.correctMemory(user.id, path[1], input, { authorizeNow, signal: request.signal });
+      const snapshot = await service.read(user.id, input.space, locale);
+      if (request.signal.aborted || !authorizeNow() || !service.memorySnapshotCurrentNow(user.id, snapshot, locale)) return response({ error: 'memory_correction_changed' }, 409);
+      return response(snapshot);
+    }
     if (route === 'POST memories') return response(await service.createMemory(user.id, memoryInput.parse(body)), 201);
     if (request.method === 'PUT' && path.length === 2 && path[0] === 'agents' && /^[a-zA-Z0-9_-]{1,100}$/.test(path[1])) {
       const input = agentGrantInput.parse(body);

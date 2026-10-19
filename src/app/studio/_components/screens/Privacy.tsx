@@ -6,6 +6,7 @@ import { privacyCopy, purposeCopy, type PrivacyLocale } from '../../_lib/adaptiv
 import { Icon, Spinner } from '../ui';
 import { api, type AgentView } from '../../_lib/client';
 import { VoiceRecognitionPanel } from '../VoiceRecognitionPanel';
+import { MemoryCorrectionEditor } from '../MemoryCorrectionEditor';
 import { ReviewedMemoryPanel } from '../ReviewedMemoryPanel';
 
 export function PrivacyScreen({ onShared, onExperience, onConnections }: { onShared?: () => void; onExperience?: () => void; onConnections?: () => void }) {
@@ -119,11 +120,13 @@ export function PrivacyScreen({ onShared, onExperience, onConnections }: { onSha
         <p className="vx-small vx-2">{c[space]} · {c.private}</p>
         {!snapshot.explicitMemoryAvailable && <p className="vx-small vx-2">{c.unavailable}</p>}
         <button className="vx-btn vx-btn-secondary vx-btn-block" disabled={busy || !note.trim() || !snapshot.explicitMemoryAvailable} onClick={() => void mutate(async () => { const result = await adaptiveApi.save(space, note, snapshot.revision); setNote(''); return result; }, c.saved)}>{c.saveMemory}</button>
+        {!snapshot.memoryCorrectionAvailable && snapshot.memories.some(m => !m.sourceRefs) && <p className="vx-small vx-2">{locale === 'fa' ? 'ویرایش اینجا در دسترس نیست؛ هنوز می‌توانید یادداشت را حذف یا یادداشت تازه‌ای ذخیره کنید.' : 'Editing is unavailable here; you can still delete a note or save a new one.'}</p>}
         {!snapshot.memories.length && <p className="vx-small vx-2">{c.empty}</p>}
         {snapshot.memories.map(m => <article key={m.id} className="vx-privacy-note">
           <p style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{m.text}</p>
           {m.origin && <p className="vx-small">{locale === 'fa' ? 'ادعای بررسی‌شدهٔ شما؛ به‌طور مستقل تأیید نشده است.' : 'User-reviewed claim; not independently verified.'}</p>}
           {m.sourceRefs && <p className="vx-small">{locale === 'fa' ? `خلاصهٔ بررسی‌شده از ${m.sourceRefs.length} یادداشت؛ حذف خلاصه، اصل یادداشت‌ها را نگه می‌دارد.` : `Reviewed summary of ${m.sourceRefs.length} notes; deleting this summary keeps the originals.`}</p>}
+          <MemoryCorrectionEditor key={`${space}:${locale}:${snapshot.identity.bindingId ?? 'unconfirmed'}:${m.id}:${m.revision}`} note={m} snapshot={snapshot} locale={locale} disabled={busy || removing === m.id} onSaved={result => { setSnapshot(current => current && current.revision > result.revision ? current : result); setStatus(c.saved); setRemoving(null); }} onRefresh={() => void load()} />
           <p className="vx-small vx-2">{c.expires}: {new Date(m.expiresAt).toLocaleDateString(locale === 'fa' ? 'fa-IR' : 'en-GB')}</p>
           {removing === m.id ? <div>
             <h3 className="vx-small">{c.deleteTitle}</h3><p className="vx-small vx-2">{c.deleteBody}</p>
