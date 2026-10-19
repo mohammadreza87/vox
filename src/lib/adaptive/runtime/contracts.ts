@@ -1,18 +1,31 @@
 import { z } from 'zod';
 import { reminderDeliveryDocumentSchema, reminderItemDeliverySchema, type ReminderTelegramStatus } from './reminder-contracts';
 import { sharedImageDataUrlSchema } from '../prediction/image';
+import { preferenceValueSchema, type PreferenceValue, type ResolvedPreference } from '../personalization';
 const id = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/);
 const time = z.number().int().nonnegative().safe();
 const revision = z.number().int().positive().safe();
 export const experienceSpaceSchema = z.enum(['work', 'personal']);
-export const preferenceSettingSchema = z.discriminatedUnion('key', [
-  z.object({ key: z.literal('response_length'), value: z.enum(['brief', 'balanced', 'detailed']) }).strict(),
-  z.object({ key: z.literal('language'), value: z.enum(['auto', 'en', 'fa']) }).strict(),
-  z.object({ key: z.literal('formatting'), value: z.enum(['plain', 'structured']) }).strict(),
-]);
+export const preferenceSettingSchema = preferenceValueSchema;
 export const storedPreferenceSchema = z.object({ id, revision, space: experienceSpaceSchema, agentId: id,
   setting: preferenceSettingSchema, status: z.enum(['active', 'reset']), updatedAt: time,
 }).strict();
+export const preferenceUndoSchema = z.object({ changeId: id, space: experienceSpaceSchema, agentId: id,
+  key: z.enum(['response_length', 'language', 'formatting']), before: storedPreferenceSchema.nullable(),
+  afterFingerprint: z.string().regex(/^[a-f0-9]{64}$/), bindingId: id, createdAt: time, expiresAt: time,
+}).strict().refine(row => row.expiresAt > row.createdAt && row.expiresAt - row.createdAt <= 10 * 60_000 &&
+  (!row.before || row.before.space === row.space && row.before.agentId === row.agentId && row.before.setting.key === row.key));
+export type PreferenceUndo = z.infer<typeof preferenceUndoSchema>;
+export type PreferenceExplanation = 'explicit_choice' | 'explicit_reset' | 'default' | 'personalization_off' | 'capability_unavailable' | 'agent_grant_missing';
+export interface PreferenceEntry {
+  setting: PreferenceValue; source: ResolvedPreference['source']; applied: boolean; explanation: PreferenceExplanation;
+  saved?: z.infer<typeof storedPreferenceSchema>;
+  undo?: { changeId: string; expiresAt: number; restore: { setting: PreferenceValue; status: 'active' | 'reset' } | null };
+}
+export interface PreferenceState {
+  schemaVersion: 1; revision: number; space: 'work' | 'personal'; agentId: string;
+  receipt: string; entries: PreferenceEntry[];
+}
 export const storedObservationSchema = z.object({ eventId: id, space: experienceSpaceSchema, agentId: id,
   turnId: id, channel: z.enum(['voice', 'text', 'telegram']), status: z.enum(['responded', 'failed', 'cancelled']),
   durationMs: z.number().finite().min(0).max(86_400_000), at: time, consentEpoch: z.number().int().nonnegative(),
@@ -35,6 +48,8 @@ export const experienceDocumentSchema = z.object({
   preferences: z.array(storedPreferenceSchema).max(120), observations: z.array(storedObservationSchema).max(500),
   inbox: z.array(inboxItemSchema).max(100),
   settings: experienceSettingsSchema, reminderDelivery: reminderDeliveryDocumentSchema.optional(),
+  /** Only the latest explicit change per key; never permissions or grants. */
+  preferenceUndo: z.array(preferenceUndoSchema).max(120).optional(),
   /** Content-free dedupe tombstones retained independently of the observation opt-in. */
   turnKeys: z.array(z.object({ key: id, fingerprint: id.optional(), expiresAt: time }).strict()).max(1000),
   predictionTurns: z.array(z.object({ agentId: id, space: experienceSpaceSchema, sessionId: id,
@@ -64,6 +79,7 @@ export interface ExperienceSnapshot {
 }
 const command = { space: experienceSpaceSchema, expectedRevision: revision, eventId: z.string().regex(/^[A-Za-z0-9_-]{8,100}$/) };
 export const preferenceInputSchema = z.object({ ...command, agentId: id, setting: preferenceSettingSchema, action: z.enum(['set', 'reset']) }).strict();
+export const preferenceUndoInputSchema = z.object({ ...command, agentId: id, changeId: id }).strict();
 export const settingsInputSchema = z.object({ ...command, timezone: z.string().max(128).nullable().optional(),
   dailyCap: z.number().int().min(0).max(20), quietStartHour: z.number().int().min(0).max(23), quietEndHour: z.number().int().min(0).max(23),
   inboxEnabled: z.boolean(), proactiveEnabled: z.boolean(), reminderEnabled: z.boolean(),
@@ -86,6 +102,7 @@ export const predictInputSchema = z.object({ space: experienceSpaceSchema, agent
   revision: z.number().int().nonnegative().safe(), contextKey: id.optional(), image: sharedImageSchema.optional(), text: z.string().trim().min(1).max(4096),
   question: z.enum(['intent_route', 'explicit_correction', 'next_step', 'image_route']) }).strict();
 export type PreferenceInput = z.infer<typeof preferenceInputSchema>;
+export type PreferenceUndoInput = z.infer<typeof preferenceUndoInputSchema>;
 export type SettingsInput = z.infer<typeof settingsInputSchema>;
 export type FeedbackInput = z.infer<typeof feedbackInputSchema>;
 export type ReminderInput = z.input<typeof reminderInputSchema>;
