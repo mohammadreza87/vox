@@ -53,7 +53,7 @@ export class ReviewedMemoryService {
     sources.forEach(visit);
     const rows = d.memories.filter(row => lineage.has(row.id)).sort((a, b) => a.id.localeCompare(b.id));
     return { sources, personId: d.personId, expiresAt: Math.min(d.binding!.expiresAt, this.adaptive.capabilityStatus(d, 'core_text', now).validUntil ?? now, ...rows.map(row => row.expiresAt)),
-      authority: digest([d.accountId, d.personId, d.binding, this.adaptive.coreFingerprint(d, now), studio, input.space, input.agentId,
+      authority: digest([...(this.adaptive.storeIdentity === 'canonical' ? [] : [this.adaptive.storeIdentity]), d.accountId, d.personId, d.binding, this.adaptive.coreFingerprint(d, now), studio, input.space, input.agentId,
         d.agentGrants.filter(g => g.space === input.space && g.agentId === input.agentId), rows]) };
   }
   private currentNow(telegramId: number, input: Pick<Receipt, 'space' | 'agentId' | 'sourceRefs'>) {

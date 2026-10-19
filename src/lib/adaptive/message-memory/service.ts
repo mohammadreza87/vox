@@ -40,7 +40,7 @@ export class MessageMemoryService {
     if (this.options.llm.committedExportFence !== true) return unavailable();
     if (!studio || !this.adaptive.isCoreAllowed(d, now) || d.agentGrants.filter(g => g.space === input.space && g.agentId === input.agentId && g.allowed).length !== 1) return changed();
     return { personId: d.personId, expiresAt: Math.min(d.binding!.expiresAt, this.adaptive.capabilityStatus(d, 'core_text', now).validUntil ?? now),
-      authority: digest([this.options.llm.identity ?? null, d.accountId, d.personId, d.binding, this.adaptive.coreFingerprint(d, now), studio, input.space, input.agentId,
+      authority: digest([...(this.adaptive.storeIdentity === 'canonical' ? [] : [this.adaptive.storeIdentity]), this.options.llm.identity ?? null, d.accountId, d.personId, d.binding, this.adaptive.coreFingerprint(d, now), studio, input.space, input.agentId,
         d.agentGrants.filter(g => g.space === input.space && g.agentId === input.agentId)]) };
   }
   private currentNow(telegramId: number, input: Pick<Receipt, 'space' | 'agentId'>) {
