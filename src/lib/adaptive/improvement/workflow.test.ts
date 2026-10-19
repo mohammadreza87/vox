@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { runInNewContext } from 'node:vm';
 import { generateKeyPairSync } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { attest, canonical, hash, type Authority, type RoutingArtifact, type TrustStore } from './contracts';
 import { ImprovementWorkflow, type ProtectedEvaluation } from './workflow';
-import { EVALUATOR_DIGEST, POLICY_DIGEST, evaluateIsolated, optimizeRouting } from './sandbox';
+import { EVALUATOR_DIGEST, EVALUATOR_PROGRAM, POLICY_DIGEST, evaluateIsolated, optimizeRouting } from './sandbox';
 import type { ImprovementCandidate } from './index';
 const roots: string[] = []; const now = 100000;
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => fs.rm(root, { recursive: true, force: true }))); });
@@ -150,6 +151,39 @@ describe('durable improvement routing vertical slice', () => {
     for (const invalidBudget of [NaN, Infinity, 0, -1, 1.5]) {
       expect(() => optimizeRouting(baseline, dataset, 2, invalidBudget)).toThrow('budget');
     }
+  });
+  it('fixed evaluator fails unsafe cancellation and active regression against mandatory policy coverage', async () => {
+    const s = await setup();
+    for (const [artifact, candidateFailures] of [[s.baseline, 1], [{ ...s.artifact, onActive: 'stop' }, 1], [s.artifact, 0]] as const) {
+      const output: string[] = [];
+      runInNewContext(EVALUATOR_PROGRAM, {
+        require: () => ({ readFileSync: (path: string) => canonical(path === '/protected/dataset.json' ? s.dataset : path === '/input/baseline.json' ? s.baseline : artifact) }),
+        process: { stdout: { write: (value: string) => output.push(value) } },
+      });
+      expect(JSON.parse(output.join(''))).toEqual({ checks: 2, candidateFailures, baselineFailures: 1 });
+    }
+  });
+  it.each([
+    [{ cancelled: false, expected: 'continue' }],
+    [{ cancelled: true, expected: 'stop' }],
+    [{ cancelled: false, expected: 'continue' }, { cancelled: false, expected: 'continue' }],
+    [{ cancelled: true, expected: 'stop' }, { cancelled: true, expected: 'stop' }],
+    [{ cancelled: true, expected: 'continue' }, { cancelled: false, expected: 'continue' }],
+    [{ cancelled: true, expected: 'stop' }, { cancelled: false, expected: 'stop' }],
+  ])('rejects missing policy coverage and incorrect labels before signing or optimization: %j', async (...cases) => {
+    const s = await setup();
+    const dataset = { version: 'invalid', cases } as Parameters<typeof optimizeRouting>[1];
+    const artifact = s.baseline; // Unsafe cancellation used to pass an active-only final set.
+    const candidate = { ...s.candidate, artifactDigest: hash(canonical(artifact)), candidateRevision: hash(canonical(artifact)), datasetVersion: hash(canonical(dataset)) };
+    await expect(evaluateIsolated({ candidate, artifact, baseline: s.baseline, dataset,
+      imageDigest: `sha256:${hash('image')}`, evaluatorKeyId: 'evaluator', evaluatorPrivateKey: s.keys.evaluator, now })).rejects.toThrow();
+    expect(() => optimizeRouting(s.baseline, dataset, 2, 8)).toThrow();
+    const output: string[] = [];
+    expect(() => runInNewContext(EVALUATOR_PROGRAM, {
+      require: () => ({ readFileSync: (path: string) => canonical(path === '/protected/dataset.json' ? dataset : artifact) }),
+      process: { stdout: { write: (value: string) => output.push(value) } },
+    })).toThrow('routing_policy_coverage_required');
+    expect(output).toEqual([]);
   });
   it.runIf(!!process.env.VOX_IMPROVEMENT_IMAGE)('executes frozen baseline/candidate in pinned Docker isolation and signs bounded result', async () => {
     const s = await setup(); const envelope = await evaluateIsolated({ candidate: s.candidate, artifact: s.artifact, baseline: s.baseline, dataset: s.dataset,

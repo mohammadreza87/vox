@@ -14,7 +14,7 @@ This record describes the next implementation slice; source, local qualification
 
 ## Boundaries and defaults
 
-`STUDIO_MAINTENANCE=1` explicitly enables background sweeps; any other value leaves the worker off. Existing relationship switches and the capability policy manifest retain their own gates. Adding this code grants no optional purpose or agent access.
+`STUDIO_MAINTENANCE=1` enables background sweeps only with file storage and `STUDIO_BOTS=1` in the persistent polling process. Startup rejects enabled maintenance with webhooks, Firestore, serverless markers or polling disabled: a serverless scheduled maintenance entrypoint is not implemented. Any value other than `1` leaves the worker off. Existing relationship switches and the capability policy manifest retain their own gates. The single-host `prepare` command imports the reviewed settings, retains existing private extensions and preserves intentional empty/off settings; it does not activate a capability itself. Adding this code grants no optional purpose or agent access.
 
 Empty observer state is omitted from serialized account documents so this disabled rollout remains readable by the previous strict schema. Once journal collection is enabled, rolling back to older code requires an explicit content-free observer-field migration; do not restore stale backups over newer consent or deletion records. Maintenance and improvement state use separate namespaces ignored by the previous release.
 
@@ -22,7 +22,7 @@ Empty observer state is omitted from serialized account documents so this disabl
 
 The observer journal has a 200-event capacity, seven-day maximum retention and three attempts per processing cycle. Identity/permission/grant expiry can purge events sooner. A full journal rejects optional measurements without breaking the conversation; the UI declares instrumented coverage incomplete. `retryFailed` is an explicit trusted service operation after the failure has been investigated. No automatic repeated paid analysis runs.
 
-Docker is a local container boundary. Its host, daemon and image are trusted. Synthetic distinct keys demonstrate signature enforcement but do not establish production IAM isolation. The cancellation dataset is deliberately small and does not measure language quality, human warmth, prediction accuracy or real product improvement. Software patch authoring, PR automation, protected dataset provisioning and serving-policy promotion remain separate tasks.
+Docker is a local container boundary. Its host, daemon and image are trusted. Synthetic distinct keys demonstrate signature enforcement but do not establish production IAM isolation. The fixed evaluator and dataset contract require both cancelled→stop and active→continue cases and reject incorrect labels before issuing a signed result (policy version 2). The cancellation dataset is deliberately small and does not measure language quality, human warmth, prediction accuracy or real product improvement. Software patch authoring, PR automation, protected dataset provisioning and serving-policy promotion remain separate tasks.
 
 ## Verification and operations
 
@@ -44,6 +44,6 @@ Production activation still needs approved capability policy, the person's scope
 
 گزارش‌های هر شخص خصوصی هستند و نقش مالک یا مدیر ارشد اجازهٔ دیدن آمار خصوصی دیگران را نمی‌دهد. خروجی حساب به فضای انتخابی و حافظهٔ مشترک منتشرشده‌ای محدود است که دسترسی آن هنوز معتبر باشد. وضعیت حذف در سرویس‌دهنده‌ها و نسخه‌های پشتیبان تأیید نشده است.
 
-پردازش پس‌زمینه تنها با تنظیم صریح `STUDIO_MAINTENANCE=1` فعال می‌شود. اضافه‌شدن کد هیچ رضایت یا دسترسی تازه‌ای ایجاد نمی‌کند. گردش بهبود محلی از داده و کلیدهای مصنوعی، ارزیابی محدود در Docker و امضای جداگانهٔ ارزیاب و تأییدکننده استفاده می‌کند. این آزمایش کوچک، کیفیت مکالمهٔ واقعی، جداسازی مجوزهای تولید، انتشار خودکار کد یا بازگردانی واقعی سرویس را اثبات نمی‌کند.
+پردازش پس‌زمینه تنها با تنظیم صریح `STUDIO_MAINTENANCE=1`، ذخیره‌سازی فایل و `STUDIO_BOTS=1` در فرایند دائمی polling فعال می‌شود. فعال‌سازی آن در Firestore، webhook، محیط serverless یا با polling خاموش، هنگام راه‌اندازی رد می‌شود؛ مسیر زمان‌بندی‌شدهٔ serverless هنوز پیاده‌سازی نشده است. فرمان آماده‌سازی، تنظیم‌های موجود و مقدارهای عمداً خالی یا خاموش را حفظ می‌کند. اضافه‌شدن کد هیچ رضایت یا دسترسی تازه‌ای ایجاد نمی‌کند. گردش بهبود محلی از داده و کلیدهای مصنوعی، ارزیابی محدود در Docker و امضای جداگانهٔ ارزیاب و تأییدکننده استفاده می‌کند. ارزیاب باید هم توقف نوبت لغوشده و هم ادامهٔ نوبت فعال را بررسی کند و برچسب ناسازگار را رد می‌کند. این آزمایش کوچک، کیفیت مکالمهٔ واقعی، جداسازی مجوزهای تولید، انتشار خودکار کد یا بازگردانی واقعی سرویس را اثبات نمی‌کند.
 
 آزمون‌های مرورگر شامل انگلیسی، فارسی، راست‌به‌چپ، جداسازی فضاها و دریافت فایل هستند. آزمون دستگاه واقعی، اندازه‌گیری کیفیت سرویس‌دهنده، سیاست مصوب انتشار و پایلوت عملیاتی همچنان لازم‌اند. اطلاعات حقوقی ثبت‌شده و نشانی بهره‌بردار هنوز تکمیل نشده؛ ایمیل تأییدشدهٔ حریم خصوصی `info@joyixir.com` است.

@@ -77,8 +77,14 @@ export const protectedEvaluationSchema = z.object({
   }).strict(),
   details: evaluationDetailsSchema,
 }).strict();
-export const caseSchema = z.object({ cancelled: z.boolean(), expected: z.enum(['stop', 'continue']) }).strict();
-export const datasetSchema = z.object({ version: identifier, cases: z.array(caseSchema).min(1).max(128) }).strict();
+// Expected labels are evaluator policy, never author-selected target behavior.
+export const caseSchema = z.discriminatedUnion('cancelled', [
+  z.object({ cancelled: z.literal(true), expected: z.literal('stop') }).strict(),
+  z.object({ cancelled: z.literal(false), expected: z.literal('continue') }).strict(),
+]);
+export const datasetSchema = z.object({ version: identifier, cases: z.array(caseSchema).min(2).max(128) }).strict()
+  .refine(dataset => dataset.cases.some(item => item.cancelled) && dataset.cases.some(item => !item.cancelled),
+    { message: 'routing_policy_coverage_required' });
 export type RoutingDataset = z.infer<typeof datasetSchema>;
 
 export function routeCancellation(config: RoutingArtifact, cancelled: boolean): 'stop' | 'continue' {

@@ -1,5 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentView } from '../../_lib/client';
 import { CallScreen } from './Call';
@@ -171,6 +171,49 @@ describe('Correlated browser playback evidence', () => {
     unmount(); act(() => { playing(); ended(); });
     expect(mocks.event).not.toHaveBeenCalled();
     expect(player.onplaying).toBeNull(); expect(player.onended).toBeNull();
+  });
+  it.each(['Minimize', 'Privacy', 'native back'])('reports active playback once when navigation unmounts through %s', async route => {
+    function Navigation() {
+      const [visible, setVisible] = useState(true);
+      mocks.back.mockImplementation(() => setVisible(false));
+      mocks.push.mockImplementation(() => setVisible(false));
+      return visible ? <CallScreen id="synthetic-agent" /> : <div>Destination</div>;
+    }
+    render(<Navigation />);
+    const player = await tapToTalk();
+    const playing = player.onplaying!; const ended = player.onended!; const failed = player.onerror!;
+    act(() => playing());
+    mocks.event.mockClear();
+    act(() => {
+      if (route === 'native back') mocks.back();
+      else fireEvent.click(screen.getByRole('button', { name: route, exact: true }));
+    });
+    expect(screen.getByText('Destination')).toBeInTheDocument();
+    act(() => { playing(); ended(); failed(); });
+    expect(mocks.event).toHaveBeenCalledTimes(1);
+    expect(mocks.event).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'synthetic-agent', space: 'personal', turnId: 'synthetic-turn', outcome: 'interrupted' }));
+    expect(player.pause).toHaveBeenCalled();
+    expect(player.onplaying).toBeNull(); expect(player.onended).toBeNull(); expect(player.onerror).toBeNull();
+  });
+  it('uses the old captured agent and space when replacing an actively playing screen', async () => {
+    const { rerender } = render(<CallScreen id="synthetic-agent" />);
+    const player = await tapToTalk();
+    act(() => player.onplaying?.());
+    mocks.event.mockClear();
+    rerender(<CallScreen id="new-agent" />);
+    expect(mocks.event).toHaveBeenCalledTimes(1);
+    expect(mocks.event).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'synthetic-agent', space: 'personal', turnId: 'synthetic-turn', outcome: 'interrupted' }));
+  });
+  it.each(['completed', 'interrupted', 'uncorrelated'])('does not report another interruption on unmount after %s playback', async state => {
+    if (state === 'uncorrelated') mocks.callTurn.mockResolvedValue({ transcript: 'Hello', reply: 'Hi', audio: 'synthetic' });
+    const { unmount } = render(<CallScreen id="synthetic-agent" />);
+    const player = await tapToTalk();
+    act(() => player.onplaying?.());
+    if (state === 'completed') act(() => player.onended?.());
+    if (state === 'interrupted') await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Talk' })); });
+    mocks.event.mockClear();
+    unmount();
+    expect(mocks.event).not.toHaveBeenCalled();
   });
   it('discards an old agent response after the screen changes agent', async () => {
     let finish!: (value: object) => void;
