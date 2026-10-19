@@ -56,6 +56,8 @@ import { AdaptiveObserverService } from '../adaptive/observation/service';
 import { AdaptiveLifecycleService } from '../adaptive/lifecycle/service';
 import { AdaptiveMaintenanceRunner } from '../adaptive/lifecycle/maintenance';
 import { DecisionService, OpenAIDecisionProvider } from '../adaptive/decisions';
+import { VoiceIdentityService } from '../adaptive/voice-identity/service';
+import { VoiceIdentityRepository } from '../adaptive/voice-identity/repository';
 import { canUseAgent } from './permissions';
 import { groupId } from './org-bridge';
 import { z } from 'zod';
@@ -163,13 +165,14 @@ async function toJpeg(data: Buffer): Promise<Buffer> {
 
 const g = globalThis as unknown as { __voxStudio?: Promise<Studio> };
 
-type RuntimeStorage = Pick<StudioDeps, 'store' | 'memory' | 'rateLimiter' | 'adaptive' | 'relationshipStore' | 'observations'> & { sharedStorage: AdaptiveStorage; maintenanceStorage: AdaptiveStorage };
+type RuntimeStorage = Pick<StudioDeps, 'store' | 'memory' | 'rateLimiter' | 'adaptive' | 'relationshipStore' | 'observations'> & { sharedStorage: AdaptiveStorage; voiceIdentityStorage: AdaptiveStorage; maintenanceStorage: AdaptiveStorage };
 function fileStorage(dir: string, scopedRelationshipsEnabled: boolean): RuntimeStorage {
   return { store: new StudioStore(dir), memory: createFileStores(join(dir, 'memory.json')),
     relationshipStore: new FileRelationshipStore(join(dir, 'scoped-relationships-v1.json')), observations: new FileObservationStore(join(dir, 'scoped-relationship-observations-v1.json')),
     adaptive: new AdaptiveService(new AdaptiveRepository(new FileAdaptiveStorage(join(dir, 'adaptive'))),
       { ...adaptiveOptionsFromManifest(process.env.STUDIO_ADAPTIVE_POLICY_JSON), scopedRelationshipsEnabled }),
     sharedStorage: new FileAdaptiveStorage(join(dir, 'shared-memory')),
+    voiceIdentityStorage: new FileAdaptiveStorage(join(dir, 'voice-identity')),
     maintenanceStorage: new FileAdaptiveStorage(join(dir, 'adaptive-maintenance')) };
 }
 
@@ -183,6 +186,7 @@ async function firestoreStorage(bucketName: string, scopedRelationshipsEnabled: 
     adaptive: new AdaptiveService(new AdaptiveRepository(new FirestoreAdaptiveStorage(db)),
       { ...adaptiveOptionsFromManifest(process.env.STUDIO_ADAPTIVE_POLICY_JSON), scopedRelationshipsEnabled }),
     sharedStorage: new FirestoreAdaptiveStorage(db, 'adaptiveSharedMemory'),
+    voiceIdentityStorage: new FirestoreAdaptiveStorage(db, 'adaptiveVoiceIdentity'),
     maintenanceStorage: new FirestoreAdaptiveStorage(db, 'adaptiveMaintenance'),
     rateLimiter: new FirestoreStudioRateLimiter(db),
     relationshipStore: new FirestoreRelationshipStore(db, 'vox_scoped_relationships_v1'),
@@ -302,17 +306,17 @@ async function create(): Promise<Studio> {
       decisions: new DecisionService(new OpenAIDecisionProvider(new OpenAI({ apiKey: env.OPENAI_API_KEY, maxRetries: 0 }))),
     } : {}),
   });
+  // No matching provider is qualified by this release. Status/delete remain
+  // reachable, while every capture/enrollment operation fails before audio.
+  studio.deps.voiceIdentity = new VoiceIdentityService(storage.adaptive!, new VoiceIdentityRepository(storage.voiceIdentityStorage), { enabled: false });
+  storage.adaptive!.setVoiceIdentityInvalidator(async ({ telegramId, space }) => {
+    await studio.deps.voiceIdentity!.invalidate(telegramId, space);
+  });
   studio.deps.observer = new AdaptiveObserverService(storage.adaptive!);
   studio.deps.lifecycle = new AdaptiveLifecycleService(storage.adaptive!, { shared: studio.deps.shared });
   if (config.maintenanceEnabled) studio.deps.maintenance = new AdaptiveMaintenanceRunner(studio.deps.lifecycle,
     storage.adaptive!.repository.storage, storage.maintenanceStorage, {
-      afterAccount: async telegramId => {
-        const state = await storage.store.read();
-        const member = state.members.find(m => m.telegramId === telegramId && m.role !== 'pending');
-        const allowedAgentIds = member ? state.agents.filter(a => a.status === 'active' && canUseAgent(member, a) && !(a.blocked ?? []).includes(telegramId)).map(a => a.id) : [];
-        const result = await studio.deps.observer!.process(telegramId, { limit: 20, allowedAgentIds });
-        if (result.failed) throw new Error('Observer maintenance failed');
-      },
+      afterAccount: telegramId => maintainAdaptiveAccount(studio, telegramId),
     });
   if (config.trustedImprovementKeys) {
     const workflow = new ImprovementWorkflow({ root: join(config.dataDir, 'improvement-review'), trust: config.trustedImprovementKeys });
@@ -321,6 +325,22 @@ async function create(): Promise<Studio> {
     studio.deps.improvement = { report: () => workflow.report() };
   }
   return studio;
+}
+
+export async function maintainAdaptiveAccount(studio: Studio, telegramId: number): Promise<void> {
+  const results = await Promise.allSettled([
+      (async () => {
+        const state = await studio.deps.store.read();
+        const member = state.members.find(m => m.telegramId === telegramId && m.role !== 'pending');
+        const allowedAgentIds = member ? state.agents.filter(a => a.status === 'active' && canUseAgent(member, a) && !(a.blocked ?? []).includes(telegramId)).map(a => a.id) : [];
+        return studio.deps.observer!.process(telegramId, { limit: 20, allowedAgentIds });
+      })(),
+      // No Studio read is a prerequisite for independent biometric cleanup.
+      studio.deps.voiceIdentity!.maintenanceAccount(telegramId),
+    ]);
+  if (results.some(result => result.status === 'rejected') ||
+      results[0].status === 'fulfilled' && results[0].value.failed ||
+      results[1].status === 'fulfilled' && results[1].value.pending) throw new Error('Adaptive maintenance incomplete');
 }
 
 export function getStudio(): Promise<Studio> {

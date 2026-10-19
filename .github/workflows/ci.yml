@@ -184,6 +184,11 @@ jobs:
         env:
           RELATIONSHIP_E2E_PRODUCTION: '1'
 
+      - name: Run scoped conversation production browser journeys
+        run: npx playwright test --config=playwright.conversation.config.ts
+        env:
+          CONVERSATION_E2E_PRODUCTION: '1'
+
       - name: Run E2E tests
         run: npx playwright test
         env:

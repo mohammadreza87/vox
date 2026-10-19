@@ -1,0 +1,149 @@
+{
+  "scope": "controlled compiled Next HTTP E2E; synthetic auth/data; ONLY external providers stubbed; no API responses mocked",
+  "compiledRevision": "82e6eaa2db0ea9b57ed929faa9889057c8ad7f14",
+  "sourceHeadAtRun": "232f4645e2928f611ae8bdb7417ecb2d7adf75bb",
+  "buildId": "6LkkM4qin-mWUp-tYQLGl",
+  "at": "2026-10-19T20:00:42.630Z",
+  "origin": "http://localhost:3105",
+  "checks": [
+    {
+      "name": "anonymous conversation denied",
+      "expected": 401,
+      "status": 401
+    },
+    {
+      "name": "wrong origin denied",
+      "expected": 403,
+      "status": 403
+    },
+    {
+      "name": "confirm synthetic adult account profile",
+      "expected": 200,
+      "status": 200
+    },
+    {
+      "name": "work authority read",
+      "expected": 200,
+      "status": 200
+    },
+    {
+      "name": "work exact agent grant",
+      "expected": 200,
+      "status": 200
+    },
+    {
+      "name": "work text completes",
+      "expected": 200,
+      "status": 200
+    },
+    {
+      "name": "work explicit minimized image completes",
+      "expected": 200,
+      "status": 200
+    },
+    {
+      "name": "Personal requires its own grant",
+      "expected": 403,
+      "status": 403
+    },
+    {
+      "name": "personal authority read",
+      "expected": 200,
+      "status": 200
+    },
+    {
+      "name": "personal exact agent grant",
+      "expected": 200,
+      "status": 200
+    },
+    {
+      "name": "Personal completes after explicit grant",
+      "expected": 200,
+      "status": 200
+    },
+    {
+      "name": "voice status truthfully unavailable",
+      "expected": 200,
+      "status": 200
+    },
+    {
+      "name": "voice capture intent denied while disabled",
+      "expected": 403,
+      "status": 403
+    },
+    {
+      "name": "voice audio rejected before provider path",
+      "expected": 403,
+      "status": 403
+    },
+    {
+      "name": "analytics authority before granted",
+      "expected": 200,
+      "status": 200
+    },
+    {
+      "name": "analytics separate disclosure",
+      "expected": 200,
+      "status": 200
+    },
+    {
+      "name": "analytics granted",
+      "expected": 200,
+      "status": 200
+    },
+    {
+      "name": "analytics eligible controlled turn",
+      "expected": 200,
+      "status": 200
+    },
+    {
+      "name": "persisted analytics is content free",
+      "passed": true,
+      "events": 1
+    },
+    {
+      "name": "experience real route reports Decisions disabled",
+      "expected": 200,
+      "status": 200
+    },
+    {
+      "name": "disabled Decisions keeps baseline",
+      "expected": 200,
+      "status": 200
+    },
+    {
+      "name": "analytics authority before withdrawn",
+      "expected": 200,
+      "status": 200
+    },
+    {
+      "name": "analytics withdrawn",
+      "expected": 200,
+      "status": 200
+    },
+    {
+      "name": "analytics withdrawal clears persisted events",
+      "passed": true,
+      "events": 0
+    }
+  ],
+  "providerCounts": {
+    "telegramGetMe": 1,
+    "anthropic": 4,
+    "currentImageRequests": 1,
+    "decisions": 0,
+    "blockedExternal": 0
+  },
+  "limitations": [
+    "No real provider accuracy/latency/cost proof",
+    "No real Telegram users or sends",
+    "No microphone/device qualification",
+    "Local controlled artifact; no deployment",
+    "Next request origin normalized to localhost:3105; 127.0.0.1 Origin rejected"
+  ],
+  "cacheControlProbe": {
+    "status": 401,
+    "cacheControl": "no-store, no-cache, must-revalidate, proxy-revalidate",
+    "noStore": true
+  }
+}

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { sharedImageDataUrlSchema } from '../prediction/image';
 const id = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/);
 const time = z.number().int().nonnegative().safe();
 const revision = z.number().int().positive().safe();
@@ -37,7 +38,7 @@ export const experienceDocumentSchema = z.object({
   turnKeys: z.array(z.object({ key: id, fingerprint: id.optional(), expiresAt: time }).strict()).max(1000),
   predictionTurns: z.array(z.object({ agentId: id, space: experienceSpaceSchema, sessionId: id,
     turnId: id, revision: z.number().int().nonnegative(), evaluations: z.number().int().min(0).max(2),
-    inFlightUntil: time, expiresAt: time }).strict()).max(100),
+    reservation: id.optional(), policyReceipt: id.optional(), authorizationFingerprint: id.optional(), requiresImage: z.boolean().optional(), receiptExpiresAt: time.optional(), cancelled: z.boolean().optional(), superseded: z.boolean().optional(), contextKey: id.optional(), inFlightUntil: time, expiresAt: time }).strict()).max(100),
 }).strict();
 export type ExperienceDocument = z.infer<typeof experienceDocumentSchema>;
 export type StoredPreference = z.infer<typeof storedPreferenceSchema>;
@@ -72,12 +73,22 @@ export const reminderInputSchema = z.object({ ...command, agentId: id, label: z.
 export const turnInputSchema = z.object({ space: experienceSpaceSchema, agentId: id, turnId: id,
   channel: z.enum(['voice', 'text', 'telegram']), durationMs: z.number().finite().min(0).max(86_400_000),
   status: z.enum(['responded', 'failed', 'cancelled']), origin: z.enum(['human', 'agent', 'system', 'qa']).default('human') }).strict();
+export const predictionScopeSchema = z.object({ space: experienceSpaceSchema, agentId: id, sessionId: id, turnId: id,
+  revision: z.number().int().nonnegative().safe(), contextKey: id.optional() }).strict();
+export const predictionCancelSchema = predictionScopeSchema;
+export const predictionValidateSchema = predictionScopeSchema.extend({ policyReceipt: id });
+export type PredictionValidateInput = z.infer<typeof predictionValidateSchema>;
+export type PredictionCancelInput = z.infer<typeof predictionCancelSchema>;
+export const sharedImageSchema = z.object({ sourceId: id, revision: z.number().int().nonnegative().safe(),
+  dataUrl: sharedImageDataUrlSchema }).strict();
 export const predictInputSchema = z.object({ space: experienceSpaceSchema, agentId: id, sessionId: id, turnId: id,
-  revision: z.number().int().nonnegative().safe(), text: z.string().trim().min(1).max(4096),
-  question: z.enum(['intent_route', 'explicit_correction', 'next_step']) }).strict();
+  revision: z.number().int().nonnegative().safe(), contextKey: id.optional(), image: sharedImageSchema.optional(), text: z.string().trim().min(1).max(4096),
+  question: z.enum(['intent_route', 'explicit_correction', 'next_step', 'image_route']) }).strict();
 export type PreferenceInput = z.infer<typeof preferenceInputSchema>;
 export type SettingsInput = z.infer<typeof settingsInputSchema>;
 export type FeedbackInput = z.infer<typeof feedbackInputSchema>;
 export type ReminderInput = z.infer<typeof reminderInputSchema>;
 export type TurnInput = z.input<typeof turnInputSchema>;
 export type PredictInput = z.infer<typeof predictInputSchema>;
+
+export type PredictionReply = import('../decisions').DecisionResult & { policyReceipt?: string; revision?: number; questionVersion?: string; sessionId?: string; turnId?: string; contextKey?: string; expiresAt?: number; preparedContext?: boolean; routeHint?: 'conversation' | 'recall' | 'task' | 'continue' | 'clarify' | 'prepare' | 'screenshot' | 'document' | 'scene' };

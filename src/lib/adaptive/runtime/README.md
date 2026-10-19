@@ -20,7 +20,7 @@ replays are idempotent, conflicting IDs fail. Responses are not cached.
 - POST `reminders`: an explicit reminder label and due time, with reminder consent
   and agent access. The label is private content, never analytics or an external payload.
 - POST `feedback`: read/dismiss/useful/not_useful for an accessible inbox item.
-- POST `predict`: current user text and a fixed registry question. Text is ephemeral;
+- POST `predict`: current user text, optional minimized explicitly shared image, and a fixed registry question. Content is ephemeral;
   the response carries an opaque policy receipt, revision and question version.
 
 Explicit preferences can be saved at the user's request before personalization
@@ -51,8 +51,10 @@ Prediction requires an injected provider, explicit server enablement, confirmed
 profile, core release eligibility and exact agent grant. Durable per-turn budgets
 allow two evaluations across revisions, with one active lease per session. The
 service checks current authorization around its 500 ms provider deadline. No text,
-answers or unrestricted provider diagnostics are persisted. No images/audio enter
-Decisions here. Three registry questions are supported; relevance ranking,
+answers or unrestricted provider diagnostics are persisted. One bounded image may enter
+Decisions under the separate image capability; raw audio is unsupported.
+The [live prediction consumer](../prediction/README.md) adds cancellation tombstones,
+fresh short-lived receipt validation and the text/image browser producer. Three registry questions are supported; relevance ranking,
 notification ranking and quality grading are not enabled by this endpoint.
 
 There is no external sender, recurring worker, browser permission request or
