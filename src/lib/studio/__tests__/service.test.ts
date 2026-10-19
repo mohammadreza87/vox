@@ -712,7 +712,7 @@ describe('groups', () => {
     expect(g.agents.map((x) => x.name)).toEqual(['Nova']);
   });
 
-  it('in a group with guests only that group\'s own memories reach the model', async () => {
+  it('only the current group\'s memories reach the model, with or without guests', async () => {
     const { agent: a } = await hire(h, org.alice);
     await h.store.update((s) => {
       s.groups.push({ chatId: chat.id, title: 'Game Team', memberIds: [ID.alice, ID.bob], hasGuests: true, agentIds: [a.id], addedAt: T0.toISOString() });
@@ -727,8 +727,9 @@ describe('groups', () => {
 
     await h.store.update((s) => { s.groups[0].hasGuests = false; });
     const fresh = await h.studio.gateway();
-    await fresh.gateway.handleUpdate(a.id, groupText(chat.id, ID.bob, 'Nova, and now?'));
-    expect(h.chatLLM.lastPrompt).toContain('ORGFACT');
+    expect(await fresh.gateway.handleUpdate(a.id, groupText(chat.id, ID.bob, 'Nova, and now?'))).toBe('replied');
+    expect(h.chatLLM.lastPrompt).toContain('GROUPFACT');
+    expect(h.chatLLM.lastPrompt).not.toContain('ORGFACT');
   });
 });
 

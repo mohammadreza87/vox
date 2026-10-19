@@ -149,7 +149,7 @@ describe('sharing private work memories', () => {
     expect(llm.lastPrompt).not.toContain('March 5');
   });
 
-  it('after Reza approves, Parastoo and the GameEnd group see it with provenance', async () => {
+  it('after Reza approves, project members can retrieve it privately without importing it into groups', async () => {
     const { gateway, llm, shareData, bot } = await rezaTellsLaunchDate();
     await gateway.handleUpdate('aria', callback(TG.reza, shareData));
     expect(bot.sent.some((s) => s.method === 'answerCallbackQuery' && s.text === 'Shared with GameEnd project.')).toBe(true);
@@ -158,7 +158,7 @@ describe('sharing private work memories', () => {
     expect(llm.lastPrompt).toContain('GameEnd launch moves to March 5 (Reza, privately, 2026-10-19; shared with: GameEnd project)');
 
     await gateway.handleUpdate('aria', groupText(GAMEEND_CHAT, TG.milad, '@hoor_aria_bot launch date?'));
-    expect(llm.lastPrompt).toContain('GameEnd launch moves to March 5');
+    expect(llm.lastPrompt).not.toContain('GameEnd launch moves to March 5');
   });
 
   it('only the person who said it can approve sharing', async () => {
@@ -189,7 +189,7 @@ describe('sharing private work memories', () => {
 });
 
 describe('shared group memory', () => {
-  it('decisions in the GameEnd group become GameEnd project memory for every member', async () => {
+  it('decisions in the GameEnd group remain group memory for its members', async () => {
     const { gateway, llm, memories } = makeGateway();
     llm.nextExtraction = extraction({
       content: 'The GameEnd team decided to cut the tutorial to 3 steps',
@@ -199,7 +199,7 @@ describe('shared group memory', () => {
     });
     await gateway.handleUpdate('aria', groupText(GAMEEND_CHAT, TG.parastoo, 'Aria, we agreed: tutorial is 3 steps max'));
     const [stored] = [...memories.records.values()];
-    expect(stored.scope).toEqual({ kind: 'project', projectId: 'gameend' });
+    expect(stored.scope).toEqual({ kind: 'group', groupId: 'gameend-team' });
     expect(stored.source).toMatchObject({ personId: 'parastoo', chatKind: 'group', groupId: 'gameend-team' });
 
     // Milad later asks privately: he's a GameEnd member, so Aria can tell him
@@ -357,7 +357,7 @@ describe('commands', () => {
 
     await gateway.handleUpdate('aria', privateText(TG.milad, '/memories'));
     const miladView = bot.sent.at(-1)!.text!;
-    expect(miladView).toContain('The GameEnd team ships every Friday [GameEnd project — from Parastoo]');
+    expect(miladView).toContain('The GameEnd team ships every Friday [GameEnd Team group — from Parastoo]');
     expect(miladView).not.toContain('weekly demos');
 
     await gateway.handleUpdate('aria', privateText(TG.reza, '/memories'));
@@ -441,13 +441,13 @@ describe('memory formation quality', () => {
     expect(memories.records.size).toBe(1);
   });
 
-  it('credits the person who actually said it in a group', async () => {
+  it('does not re-extract another speaker from earlier quiet group messages', async () => {
     const { gateway, llm, memories } = makeGateway();
     await gateway.handleUpdate('aria', groupText(GAMEEND_CHAT, TG.milad, 'Build 42 crashes on Android 12'));
     llm.nextExtraction = extraction({ content: 'Build 42 crashes on Android 12', type: 'fact', kind: 'work', saidBy: 'milad' });
     await gateway.handleUpdate('aria', groupText(GAMEEND_CHAT, TG.parastoo, 'Aria, note what Milad found'));
-    const [stored] = [...memories.records.values()];
-    expect(stored.source.personId).toBe('milad');
+    expect(memories.records.size).toBe(0);
+    expect(llm.extractionRequests.at(-1)?.messages[0].content).not.toContain('Build 42 crashes');
   });
 
   it('ignores a claimed speaker who did not speak in the new messages', async () => {

@@ -128,3 +128,32 @@ describe('guests (people outside the organization)', () => {
     expect(memberPrompt).not.toContain('- Sam');
   });
 });
+
+describe('group prompt boundaries', () => {
+  it.each([false, true])('uses participant names without directory or profile context (hasGuests=%s)', (hasGuests) => {
+    const config = testOrgConfig();
+    config.people.find((p) => p.id === 'milad')!.notes = 'PRIVATE_PROFILE_CANARY';
+    config.people.find((p) => p.id === 'sina')!.name = 'HIDDEN_DIRECTORY_CANARY';
+    config.projects[0].name = 'PROJECT_DIRECTORY_CANARY';
+    const room = { id: 'room', name: 'Room', telegramChatId: -7003, memberIds: ['milad'], projectId: 'gameend', hasGuests };
+    config.groups.push(room);
+    const directory = new OrgDirectory(config);
+    const prompt = buildSystemPrompt({
+      org: directory, persona: directory.getPersona('aria')!,
+      chat: { kind: 'group', chatKey: 'group-room', group: room }, speakerId: 'milad',
+      memories: [
+        memory({ content: 'DM_CANARY', scope: { kind: 'private', personId: 'milad' } }),
+        memory({ content: 'OTHER_GROUP_CANARY', scope: { kind: 'group', groupId: 'gameend-team' } }),
+        memory({ content: 'LOCAL_GROUP_FACT', scope: { kind: 'group', groupId: room.id } }),
+      ],
+    });
+    expect(prompt).toContain('- Milad');
+    expect(prompt).toContain('LOCAL_GROUP_FACT');
+    for (const hidden of [
+      '## Organization', 'How people relate', 'You report to', 'reports to', 'Team member',
+      'Reza', 'Parastoo', 'PRIVATE_PROFILE_CANARY', 'HIDDEN_DIRECTORY_CANARY', 'PROJECT_DIRECTORY_CANARY',
+      'DM_CANARY', 'OTHER_GROUP_CANARY',
+    ]) expect(prompt).not.toContain(hidden);
+    if (hasGuests) expect(prompt).toContain('## People outside HOOR');
+  });
+});

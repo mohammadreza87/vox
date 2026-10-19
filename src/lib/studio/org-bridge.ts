@@ -19,9 +19,10 @@ const ROLE_LABEL: Record<Member['role'], string> = {
 export interface OrgOptions {
   /** The chat model can search the web (agents may still turn it off) */
   webSearch?: boolean;
+  groupObservation?: boolean;
 }
 
-export function agentToPersona(agent: Agent, ownerId: string, { webSearch = true }: OrgOptions = {}): Persona {
+export function agentToPersona(agent: Agent, ownerId: string, { webSearch = true, groupObservation = true }: OrgOptions = {}): Persona {
   const runtime = personaToRuntime(agent.persona);
   const p = agent.persona;
   return {
@@ -35,6 +36,10 @@ export function agentToPersona(agent: Agent, ownerId: string, { webSearch = true
     voice: { elevenLabsVoiceId: agent.voice?.voiceId ?? defaultVoiceId(agent.persona.presentation), description: agent.persona.voiceBrief },
     ownerId,
     telegramUsername: agent.bot?.username,
+    telegramId: agent.bot?.id,
+    groupParticipation: agent.groupBehavior?.participation ?? 'balanced',
+    groupRemember: agent.groupBehavior?.remember ?? true,
+    groupObservation,
     identityVersion: agent.identityVersion,
     // Voice messages get voice replies; agents without a designed voice use a default one.
     replyWithVoice: 'mirror',
@@ -78,6 +83,7 @@ export function studioToOrgConfig(state: StudioState, orgName = 'HOOR', options:
     id: groupId(g.chatId),
     name: g.title,
     telegramChatId: g.chatId,
+    agentIds: g.agentIds,
     memberIds: g.memberIds.map(personId).filter((id) => known.has(id)),
     // Anyone reading who isn't an approved member makes it a guest group:
     // only the group's own memories are safe there.

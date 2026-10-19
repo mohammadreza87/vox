@@ -63,6 +63,7 @@ export async function handleAgentUpdate(studio: Studio, agentId: string, update:
   if (!msg.from || msg.from.is_bot || (live.blocked ?? []).includes(msg.from.id)) return;
 
   if (msg.chat.type === 'group' || msg.chat.type === 'supergroup') {
+    if (!state.groups.some((g) => g.chatId === msg.chat.id && g.agentIds.includes(agentId))) return;
     // Rebuild when the speaker is new to the group so they count in its audience right away.
     if (await studio.noteGroupSpeaker(msg.chat.id, msg.from)) ({ gateway } = await studio.gateway());
     await gateway.handleUpdate(agentId, update);

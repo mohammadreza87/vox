@@ -56,7 +56,11 @@ export interface Group {
   companyId?: string;
   /** People outside the organization can read this group: only its own memories are usable */
   hasGuests?: boolean;
+  /** Only these invited agents may observe this group (legacy config may omit). */
+  agentIds?: string[];
 }
+
+export type GroupParticipation = 'mentions' | 'balanced' | 'active';
 
 export interface PersonaVoice {
   elevenLabsVoiceId: string;
@@ -73,6 +77,10 @@ export interface Persona {
   voice: PersonaVoice;
   ownerId: string;            // accountable human (reporting parent)
   telegramUsername?: string;  // bot username without "@"
+  telegramId?: number;
+  groupParticipation?: GroupParticipation;
+  groupRemember?: boolean;
+  groupObservation?: boolean;
   identityVersion: number;    // bump only via an approved, versioned change
   replyWithVoice: 'never' | 'mirror' | 'always';
   /** How this persona treats people outside the organization (public personas) */
@@ -161,6 +169,8 @@ export interface ChatMessage {
   text: string;
   at: Date;
   telegramMessageId?: number;
+  /** Group context collected under the group-only memory policy. */
+  groupPolicyVersion?: 1;
 }
 
 /** Where a conversation happens and who can read it */

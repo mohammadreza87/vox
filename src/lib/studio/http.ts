@@ -209,6 +209,7 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
           case 'POST live-call': return json(await studio.startLiveCall(me, id));
           case 'POST call-end': await studio.endLiveCall(me, id); return json({ ok: true });
           case 'PUT live-web': return json({ agent: await studio.setLiveWeb(me, id, (await body(req)).on === true) });
+          case 'PUT group-behavior': return json({ agent: await studio.setGroupBehavior(me, id, await body(req)) });
           case 'POST profile-sync': return json(await studio.syncProfile(me, id));
           case 'DELETE blocked': {
             const telegramId = Number(new URL(req.url).searchParams.get('telegramId'));

@@ -36,14 +36,14 @@ export function selectMemories(
   const audience = audienceOf(chat);
   const queryTokens = tokens(query);
 
-  // With guests in the room, the audience is not fully known: only what was
-  // said in this very group may be used.
-  const guestSafe = (m: MemoryRecord) =>
-    chat.kind !== 'group' || !chat.group.hasGuests ||
+  // Group membership does not grant permission to move knowledge from a DM,
+  // another group or a project into this conversation.
+  const inConversation = (m: MemoryRecord) =>
+    chat.kind !== 'group' ||
     (m.scope.kind === 'group' && m.scope.groupId === chat.group.id);
 
   const scored = memories
-    .filter((m) => !m.supersededBy && guestSafe(m) && isVisibleToAudience(org, m, audience))
+    .filter((m) => !m.supersededBy && inConversation(m) && isVisibleToAudience(org, m, audience))
     .map((memory) => {
       const memoryTokens = tokens(`${memory.content} ${memory.topic ?? ''}`);
       let overlap = 0;
