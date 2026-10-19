@@ -22,6 +22,7 @@ function fakeFirestore() {
   function docRef(path: string) {
     return {
       id: path.split('/').pop()!,
+      path,
       async set(value: Record<string, unknown>) {
         assertNoUndefined(value);
         data.set(path, structuredClone(value));
@@ -48,11 +49,11 @@ function fakeFirestore() {
 
   function collectionRef(path: string, filters: Array<[string, unknown]> = [], order?: [string, 'asc' | 'desc'], max?: number) {
     return {
-      doc: (id?: string) => docRef(`${path}/${id ?? `auto${++auto}`}`),
       async listDocuments() {
-        const ids = new Set([...data.keys()].filter((key) => key.startsWith(`${path}/`)).map((key) => key.slice(path.length + 1).split('/')[0]));
-        return [...ids].map((id) => docRef(`${path}/${id}`));
+        const keys = new Set([...data.keys()].filter((key) => key.startsWith(`${path}/`)).map((key) => key.slice(0, path.length + 1) + key.slice(path.length + 1).split('/')[0]));
+        return [...keys].map(docRef);
       },
+      doc: (id?: string) => docRef(`${path}/${id ?? `auto${++auto}`}`),
       async add(value: Record<string, unknown>) {
         await docRef(`${path}/auto${++auto}`).set(value);
       },
@@ -63,7 +64,7 @@ function fakeFirestore() {
         let docs = [...data.entries()]
           .filter(([key]) => key.startsWith(`${path}/`) && !key.slice(path.length + 1).includes('/'))
           .filter(([, value]) => filters.every(([f, v]) => value[f] === v))
-          .map(([key, value]) => ({ id: key.split('/').pop()!, data: () => value }));
+          .map(([key, value]) => ({ id: key.split('/').pop()!, ref: docRef(key), data: () => value }));
         if (order) {
           const [field, dir] = order;
           docs.sort((a, b) => {
@@ -78,16 +79,35 @@ function fakeFirestore() {
     };
   }
 
-  let pending = Promise.resolve();
-  const runTransaction = <T>(operation: (tx: unknown) => Promise<T>) => {
-    const result = pending.then(() => operation({
-      get: (ref: ReturnType<typeof docRef>) => ref.get(),
-      set: (ref: ReturnType<typeof docRef>, value: Record<string, unknown>) => ref.set(value),
-    }));
-    pending = result.then(() => undefined, () => undefined);
-    return result;
+  type Ref = ReturnType<typeof docRef>;
+  type Query = ReturnType<typeof collectionRef>;
+  let transactionQueue = Promise.resolve();
+  const db = {
+    collection: (name: string) => collectionRef(name),
+    async runTransaction<T>(operation: (tx: unknown) => Promise<T>): Promise<T> {
+      // Serialize synthetic commits and apply writes only after successful reads.
+      let release!: () => void;
+      const previous = transactionQueue;
+      transactionQueue = new Promise<void>((resolve) => { release = resolve; });
+      await previous;
+      const writes: Array<() => Promise<unknown>> = [];
+      try {
+        const result = await operation({
+          get: (ref: Ref | Query) => ref.get(),
+          set: (ref: Ref, value: Record<string, unknown>) => writes.push(() => ref.set(value)),
+          update: (ref: Ref, value: Record<string, unknown>) => writes.push(() => ref.update(value)),
+          delete: (ref: Ref) => writes.push(() => ref.delete()),
+        });
+        for (const write of writes) await write();
+        return result;
+      } finally { release(); }
+    },
+    batch() {
+      const writes: Array<() => Promise<unknown>> = [];
+      return { delete: (ref: Ref) => writes.push(() => ref.delete()), commit: async () => { for (const write of writes) await write(); } };
+    },
   };
-  return { db: { collection: (name: string) => collectionRef(name), runTransaction } as unknown as Firestore, data };
+  return { db: db as unknown as Firestore, data };
 }
 
 const baseMemory = {
@@ -102,6 +122,36 @@ const baseMemory = {
 };
 
 describe('FirestoreMemoryStore', () => {
+  it('atomically replaces an active predecessor and rejects competing, stale, foreign or deleted corrections', async () => {
+    const { db, data } = fakeFirestore(); const first = new FirestoreMemoryStore(db), second = new FirestoreMemoryStore(db);
+    const old = await first.add({ ...baseMemory, source: { ...baseMemory.source, eventIds: ['original'] } });
+    const correction = { ...baseMemory, supersedes: old.id, content: 'Corrected date', source: { ...baseMemory.source, eventIds: ['correction'] } };
+    const revision = await first.safetyRevision('aria');
+    const outcomes = await Promise.allSettled([first.add(correction, { expectedRevision: revision }), second.add(correction, { expectedRevision: revision })]);
+    expect(outcomes.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+    const active = await first.listActive('aria'); expect(active).toHaveLength(1);
+    expect(await first.get(old.id)).toMatchObject({ supersededBy: active[0].id, shareVersion: 1 });
+    expect(data.get(`tireh_memories/${old.id}`)?.active).toBe(false);
+    expect(await first.safetyRevision('aria')).toBe(revision + 1);
+    expect(await second.updateIfShareVersion(old.id, 0, { scope: { kind: 'org' } })).toBe(false);
+    await expect(second.add(correction)).rejects.toThrow('Memory context was invalidated');
+    await expect(second.add({ ...correction, personaId: 'other' })).rejects.toThrow('Memory context was invalidated');
+    await second.delete(active[0].id);
+    expect(await first.get(old.id)).toBeNull(); expect(await first.listActive('aria')).toEqual([]);
+    await expect(first.add(correction)).rejects.toThrow('Memory context was invalidated');
+  });
+
+  it('applies the same atomic replacement contract to epoch-guarded additions', async () => {
+    const { db } = fakeFirestore(); const store = new FirestoreMemoryStore(db);
+    const old = await store.add(baseMemory); const correction = { ...baseMemory, supersedes: old.id, content: 'New date' };
+    expect(await store.addIfEpoch(correction, 1)).toBeNull();
+    expect((await store.listActive('aria')).map(row => row.id)).toEqual([old.id]);
+    const next = await store.addIfEpoch(correction, 0);
+    expect((await store.listActive('aria')).map(row => row.id)).toEqual([next!.id]);
+    expect(await store.get(old.id)).toMatchObject({ supersededBy: next!.id, shareVersion: 1 });
+    expect(await store.safetyRevision('aria')).toBe(1);
+  });
+
   it('stores memories without undefined fields and reads them back with dates', async () => {
     const { db, data } = fakeFirestore();
     const store = new FirestoreMemoryStore(db);
@@ -200,5 +250,51 @@ describe('FirestoreUpdateDeduper', () => {
     expect(await deduper.firstSeen('aria__1')).toBe(true);
     expect(await deduper.firstSeen('aria__1')).toBe(false);
     expect(await deduper.firstSeen('aria__2')).toBe(true);
+  });
+});
+
+describe('Firestore synthetic transaction safety contract', () => {
+  it('durably rejects old source replay, while unrelated source memories survive', async () => {
+    const { db, data } = fakeFirestore();
+    const first = new FirestoreMemoryStore(db);
+    const source = { ...baseMemory, content: 'FORGOTTEN_CANARY', source: { ...baseMemory.source, eventIds: ['source-one'] } };
+    const record = await first.add(source);
+    await first.add({ ...baseMemory, source: { ...baseMemory.source, eventIds: ['source-two'] } });
+    const oldRevision = await first.safetyRevision('aria');
+    await first.delete(record.id);
+    const restarted = new FirestoreMemoryStore(db);
+    await expect(restarted.add(source)).rejects.toThrow('Memory context was invalidated');
+    await expect(restarted.add({ ...baseMemory, source: { ...baseMemory.source, eventIds: ['source-three'] } }, { expectedRevision: oldRevision })).rejects.toThrow('Memory context was invalidated');
+    expect((await restarted.listActive('aria')).map((r) => r.source.eventIds)).toEqual([['source-two']]);
+    expect(JSON.stringify([...data.values()])).not.toContain('FORGOTTEN_CANARY');
+    expect(data.get('tireh_memory_state/aria')?.tombstones).toContain('source-one');
+  });
+
+  it('blocks a stale stamped append after invalidation, and physically purges legacy orphan chats', async () => {
+    const { db, data } = fakeFirestore();
+    const memory = new FirestoreMemoryStore(db);
+    const history = new FirestoreChatHistoryStore(db);
+    const privacy = { policyKey: 'synthetic', memoryRevision: 0, sourceEventIds: ['one'], memoryIds: [] };
+    await memory.invalidate('aria');
+    await history.append('aria', 'private-reza', { role: 'user', text: 'STALE_CANARY', at: new Date(), privacy });
+    expect(await history.recent('aria', 'private-reza', 20)).toEqual([]);
+    data.set('tireh_chats/aria__orphan/messages/old', { role: 'user', text: 'LEGACY_CANARY', at: new Date() });
+    await history.append('aria', 'current', { role: 'user', text: 'CURRENT_CANARY', at: new Date() });
+    await history.append('other', 'current', { role: 'user', text: 'OTHER_PERSONA_SURVIVES', at: new Date() });
+    await history.clear('aria');
+    expect(JSON.stringify([...data.values()])).not.toContain('LEGACY_CANARY');
+    expect(JSON.stringify([...data.values()])).not.toContain('CURRENT_CANARY');
+    expect((await history.recent('other', 'current', 20))[0].text).toBe('OTHER_PERSONA_SURVIVES');
+  });
+
+  it('rejects derived-source replay after ancestor deletion', async () => {
+    const { db } = fakeFirestore();
+    const store = new FirestoreMemoryStore(db);
+    const parent = await store.add({ ...baseMemory, source: { ...baseMemory.source, eventIds: ['parent'] } });
+    const child = { ...baseMemory, content: 'child', source: { ...baseMemory.source, eventIds: ['child'], derivedFromEventIds: ['parent'] } };
+    await store.add(child);
+    await store.delete(parent.id);
+    expect(await store.listActive('aria')).toEqual([]);
+    await expect(store.add(child)).rejects.toThrow('Memory context was invalidated');
   });
 });

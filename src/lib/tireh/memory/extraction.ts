@@ -7,7 +7,7 @@
  */
 
 import { z } from 'zod';
-import { audienceOf, hasGuestAudience, isMemoryAllowedInChat } from './visibility';
+import { audienceOf, hasRestrictedAudience, isMemoryAllowedInChat } from './visibility';
 import type { LLM } from '../llm';
 import type { OrgDirectory } from '../org/directory';
 import type {
@@ -44,15 +44,12 @@ export function buildExtractionPrompt(
   speakerId: string,
   known: MemoryRecord[] = []
 ): string {
-  const guestAudience = hasGuestAudience(org, chat);
-  const audience = audienceOf(chat);
-  const people = org.listPeople().filter((p) => !guestAudience || audience.includes(p.id))
-    .map((p) => `- ${p.id}: ${p.name}${guestAudience ? '' : ` (${p.role})`}`).join('\n');
-  const projects = guestAudience ? '- none' : org.config.projects.map((p) => `- ${p.id}: ${p.name}`).join('\n') || '- none';
+  known = known.filter((m) => isMemoryAllowedInChat(org, m, chat));
   const directory = chat.kind === 'group'
     ? `Group participants:\n${chat.group.memberIds.map((id) => `- ${id}: ${org.getPerson(id)?.name ?? 'Unknown participant'}`).join('\n')}`
-    : `Known people:\n${people}\n\nKnown projects:\n${projects}`;
-  known = known.filter((m) => isMemoryAllowedInChat(org, m, chat));
+    : `Known people:\n${org.listPeople().filter(p => !hasRestrictedAudience(org, chat) || audienceOf(chat).includes(p.id)).map((p) => `- ${p.id}: ${p.name}${hasRestrictedAudience(org, chat) ? '' : ` (${p.role})`}`).join('\n')}
+
+Known projects:\n${hasRestrictedAudience(org, chat) ? '- none' : org.config.projects.map((p) => `- ${p.id}: ${p.name}`).join('\n') || '- none'}`;
   const where =
     chat.kind === 'private'
       ? `a private chat between ${persona.name} and ${org.getPerson(speakerId)?.name}`
@@ -189,9 +186,10 @@ export function decideScope(
       : 'normal';
 
   if (chat.kind === 'group') {
+    if (sensitivity !== 'normal') return { scope: { kind: 'private', personId: speakerId }, authorizedPersonIds: [speakerId], sensitivity, type: candidate.type };
     // A group statement grants no wider audience or private-memory write.
-    // Sensitive group candidates retain their classification and are rejected
-    // by the caller rather than being silently downgraded or moved to a DM.
+    // The caller rejects ineligible sensitive candidates before persistence;
+    // preserve their classification here rather than silently downgrading it.
     return { scope: { kind: 'group', groupId: chat.group.id }, authorizedPersonIds: [...chat.group.memberIds], sensitivity, type: candidate.type };
   }
 

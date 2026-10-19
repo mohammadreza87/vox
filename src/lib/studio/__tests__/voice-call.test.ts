@@ -3,6 +3,7 @@ import { personId } from '../org-bridge';
 import { voiceAgentBody } from '../media';
 import { callToken, handleVoiceLlm, readCallToken, toTurns, voiceLlmKey } from '../voice-call';
 import { hire, ID, makeStudio, SECRET, seedOrg, T0, type Harness } from './helpers';
+import { expectContentFreeTelegramLogs, telegramCanary, telegramCanaryError } from '@/test/telegram-diagnostics';
 
 let h: Harness;
 let org: Awaited<ReturnType<typeof seedOrg>>;
@@ -131,6 +132,26 @@ const defaultVoice = (agent: { persona: { presentation?: string } }) =>
   ({ feminine: 'EXAVITQu4vr4xnSDxMaL', masculine: 'JBFqnCBsd6RMkjVDRZzb' } as Record<string, string>)[agent.persona.presentation ?? ''] ?? 'SAz9YHcvj6GT2YYXdXww';
 
 describe('live call upkeep', () => {
+  it.each(['start', 'stream'] as const)('keeps actual %s failures private while preserving HTTP and stream completion semantics', async (failure) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const { agent } = await hire(h, org.alice, { name: telegramCanary.persona });
+      h.studio.deps.fastLLM = { complete: vi.fn(), stream: vi.fn(async function* () {
+        if (failure === 'stream') yield 'Partial answer.';
+        throw telegramCanaryError();
+      }) };
+      const response = await handleVoiceLlm(h.studio, llmRequest({ stream: true,
+        messages: [{ role: 'user', content: telegramCanary.transcript }],
+        elevenlabs_extra_body: { call: callToken(SECRET, agent.id, ID.alice, new Date()) },
+      }));
+      expect(response.status).toBe(failure === 'start' ? 503 : 200);
+      if (failure === 'start') expect(await response.json()).toEqual({ error: { message: 'The agent is unavailable.' } });
+      else expect(await sse(response)).toEqual({ text: 'Partial answer. Sorry, I lost my train of thought.', done: true });
+      expect(warn).toHaveBeenCalledWith({ type: 'telegram_ingress', stage: failure === 'start' ? 'live_turn' : 'live_stream', reason: 'operation_failed', outcome: failure === 'start' ? 'http_503' : 'stream_fallback' });
+      expectContentFreeTelegramLogs([...warn.mock.calls, ...h.logger.info.mock.calls, ...h.logger.warn.mock.calls, ...h.logger.error.mock.calls], [agent.id]);
+    } finally { warn.mockRestore(); }
+  });
+
   it('answers non-streaming requests as one JSON completion', async () => {
     const { agent } = await hire(h, org.alice, {}, undefined, 'org');
     h.studio.deps.fastLLM = { complete: vi.fn(async () => 'All good.') };

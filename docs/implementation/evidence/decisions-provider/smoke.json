@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "completed_at_utc": "2026-10-19T18:51:01.729Z",
+  "source_revision": "523e9f0",
+  "diagnostic_revision": "4530785",
+  "provider_source_sha256": "17562e7e8f85a8480c21e2f6f6788873efae5a343a8114855ce56b908fbb367a",
+  "official_guide": "https://developers.openai.com/api/docs/guides/decisions",
+  "official_reference": "https://developers.openai.com/api/reference/resources/decisions/methods/create",
+  "documented_request_contract": "compatible_with_reviewed_text_choice_subset",
+  "endpoint_path": "/v1/decisions",
+  "model_requested": "gpt-6-luna",
+  "sdk_version": "6.9.1",
+  "input_category": "synthetic_geometry_fixed_enum",
+  "request_timeout_ms": 5000,
+  "production_adapter_timeout_ms": 500,
+  "retries": 0,
+  "network_attempts": 1,
+  "production_credential_read": true,
+  "result": "completed",
+  "response_shape": {
+    "model": "string",
+    "answers": "array",
+    "usage": "object",
+    "answer": {
+      "choice": "string",
+      "confidence": "number",
+      "name": "string",
+      "probabilities": "array",
+      "type": "string"
+    },
+    "probabilities": {
+      "probability": "number",
+      "value": "string"
+    }
+  },
+  "model_returned": "gpt-6-luna",
+  "elapsed_request_ms": 1087,
+  "usage": {
+    "input_tokens": 134,
+    "output_tokens": 0,
+    "total_tokens": 134,
+    "input_tokens_details": {
+      "cached_tokens": 0,
+      "cache_write_tokens": 0
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 0
+    }
+  },
+  "live_adapter_compatibility": "observed_response_accepted_by_production_decoder",
+  "quality_qualification": "UNAVAILABLE",
+  "retention_residency_qualification": "UNAVAILABLE",
+  "device_qualification": "UNAVAILABLE",
+  "latency_distribution_qualification": "UNAVAILABLE",
+  "no_retry_after_first_failure": true,
+  "setup_history": [
+    {
+      "at_utc": "2026-10-19T18:50:11.302Z",
+      "phase": "local_smoke_setup",
+      "cause": "ERR_PACKAGE_PATH_NOT_EXPORTED",
+      "operation": "SDK package metadata lookup",
+      "result": "stopped_before_request",
+      "credential_read": false,
+      "network_attempts": 0
+    }
+  ],
+  "harness_recovery_authorized": true,
+  "started_at_utc": "2026-10-19T18:51:00.523Z",
+  "decoder_validation_mode": "local_replay_of_single_provider_response_without_additional_network",
+  "synthetic_choice": "triangle",
+  "production_500ms_budget": "exceeded_for_this_sample",
+  "transport_outcome": "SDK_success_response; exact_HTTP_status_not_captured",
+  "provider_retries": 0
+}

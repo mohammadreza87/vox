@@ -15,9 +15,9 @@ env:
   NODE_VERSION: '20'
 
 jobs:
-  # ============================================
+  # =====================================
   # Lint & Type Check (fast feedback)
-  # ============================================
+  # =====================================
   lint:
     name: Lint & Type Check
     runs-on: ubuntu-latest
@@ -40,9 +40,9 @@ jobs:
       - name: Run TypeScript type check
         run: npx tsc --noEmit
 
-  # ============================================
+  # =====================================
   # Unit & Integration Tests
-  # ============================================
+  # =====================================
   test:
     name: Tests
     runs-on: ubuntu-latest
@@ -67,6 +67,12 @@ jobs:
           NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: test.firebaseapp.com
           NEXT_PUBLIC_FIREBASE_PROJECT_ID: test-project
 
+      - name: Verify Connections release configuration preservation
+        run: node --test scripts/connections-production-config.test.mjs
+
+      - name: Verify single-host configuration preservation
+        run: node --test scripts/studio-production.test.mjs
+
       - name: Upload coverage reports
         uses: codecov/codecov-action@v4
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -75,9 +81,9 @@ jobs:
           files: ./coverage/lcov.info
           fail_ci_if_error: false
 
-  # ============================================
+  # =====================================
   # Build Verification
-  # ============================================
+  # =====================================
   build:
     name: Build
     runs-on: ubuntu-latest
@@ -132,9 +138,9 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
 
-  # ============================================
+  # =====================================
   # E2E Tests (optional, runs on main only)
-  # ============================================
+  # =====================================
   e2e:
     name: E2E Tests
     runs-on: ubuntu-latest
@@ -173,6 +179,29 @@ jobs:
           NEXT_PUBLIC_FIREBASE_PROJECT_ID: ${{ secrets.NEXT_PUBLIC_FIREBASE_PROJECT_ID || 'test-project' }}
           NEXT_TELEMETRY_DISABLED: 1
 
+      - name: Run adaptive production browser journey
+        run: npx playwright test --config=e2e/adaptive.config.ts
+
+      - name: Run scoped relationship production browser journeys
+        run: npx playwright test --config=playwright.relationships.config.ts --project=chromium
+        env:
+          RELATIONSHIP_E2E_PRODUCTION: '1'
+
+      - name: Run scoped conversation production browser journeys
+        run: npx playwright test --config=playwright.conversation.config.ts
+        env:
+          CONVERSATION_E2E_PRODUCTION: '1'
+
+      # All production journeys must run before the general suite starts next dev,
+      # which replaces .next and removes the downloaded production BUILD_ID.
+      - name: Run Connections production browser fixtures
+        run: npm run e2e:connections
+        env:
+          CONNECTIONS_E2E_PRODUCTION: '1'
+
+      - name: Run reminder production browser journeys
+        run: npx playwright test --config=playwright.reminders.config.ts --project=chromium
+
       - name: Run E2E tests
         run: npx playwright test
         env:
@@ -188,9 +217,9 @@ jobs:
           path: playwright-report/
           retention-days: 7
 
-  # ============================================
+  # =====================================
   # Security Audit
-  # ============================================
+  # =====================================
   security:
     name: Security Audit
     runs-on: ubuntu-latest
@@ -211,13 +240,13 @@ jobs:
         run: npm audit --audit-level=high
         continue-on-error: true  # Don't fail CI, but report issues
 
-  # ============================================
+  # =====================================
   # PR Comment with Summary
-  # ============================================
+  # =====================================
   pr-summary:
     name: PR Summary
     runs-on: ubuntu-latest
-    needs: [lint, test, build]
+    needs: [lint, test, build, e2e]
     if: github.event_name == 'pull_request'
     permissions:
       pull-requests: write
@@ -244,6 +273,7 @@ jobs:
             | Lint & Type Check | ✅ Passed |
             | Tests | ✅ Passed |
             | Build | ✅ Passed |
+            | Browser journeys | ✅ Passed |
 
             *Last updated: ${new Date().toISOString()}*
             `;

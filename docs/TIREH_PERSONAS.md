@@ -2,6 +2,8 @@
 
 Telegram is the messenger. Vox runs the AI personas behind it.
 
+**Studio integration update (19 October 2026):** the local adaptive candidate uses explicit private and exact-audience shared records with separate Work/Personal consent and agent grants. It denies replay/extraction from the legacy unscoped stores described below until explicit migration is qualified. See [the current delivery and limitations](implementation/DELIVERY_RESULT.md). The standalone Tireh design below is not a claim that automatic memory or production privacy has been activated.
+
 ## The use case
 
 TIREH has AI colleagues such as **Aria, the Product Lead**. Aria is **one persona for the whole organization**: the same name, voice and personality for everyone.
@@ -10,7 +12,7 @@ TIREH has AI colleagues such as **Aria, the Product Lead**. Aria is **one person
 - When **Parastoo** talks to Aria, she builds her own memories with the same Aria.
 - Aria **knows who everyone is and how they relate** (Parastoo reports to Reza and manages Milad; Reza and Parastoo are co-founders).
 - Aria builds **shared memories** with groups and projects.
-- Aria **never leaks** what someone told her privately.
+- Aria must restrict private context to its authorized recipients; local tests and production qualification are separate evidence.
 
 ## How it works
 
@@ -40,22 +42,24 @@ Each persona is its **own Telegram bot**, with its own name, photo, @username an
 - **Private chat:** the audience is that one person.
 - **Registered group:** the audience is every member listed in config, whether or not they have spoken.
 
-This rule is enforced **in code, before anything reaches the model** (`memory/visibility.ts`). Memories that aren't allowed are never put in the prompt, so no prompt trick can make Aria reveal them.
+Stored-memory retrieval and both prompt builders apply this rule in code (`memory/visibility.ts`), including groups marked `hasGuests` and unknown audience IDs. Restricted audiences do not receive the internal directory in reply or extraction prompts. This is not a full-system privacy guarantee: raw-history lineage, deletion suppression and current membership checks before delivery remain open work in the [implementation start record](implementation/STARTER_SLICE.md).
 
 ### Memory scopes
 
 | Scope | Who can see it | Created by |
 |---|---|---|
 | `private` | one person | anything said in a private chat |
-| `group` | members of a registered group | things said in a group |
-| `project` | project members | decisions in a project's group, or a private work fact the owner approved for sharing |
+| `group` | members of a registered group | normal work facts and decisions said in that group |
+| `project` | project members | a private work fact the owner explicitly approved for sharing; never automatic promotion of group decisions |
 | `company` | company members | config / future |
 | `org` | everyone in the organization | config / future |
 
 Two further protections:
 
 - **Personal** memories (health, family, feelings) never leave a one-to-one chat with their owner, even if their scope is somehow widened.
-- **Confidential** remarks stay with the speaker, even when said in a group.
+- **Personal and confidential** remarks stay with the speaker even when said in a group; personal classifications are not downgraded to normal shared facts.
+
+This scope change applies to newly extracted memories. Previously widened project memories require the explicit migration/quarantine work in VOX-015; this change does not silently rewrite them.
 
 ### Sharing private work facts
 

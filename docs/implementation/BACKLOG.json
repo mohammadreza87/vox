@@ -1,0 +1,2157 @@
+{
+  "schema_version": 1,
+  "prepared_at": "2026-10-19",
+  "source_commit": "9fb73d311753a461bd62e37ce3129b8a60c83d00",
+  "operator_name": "Joyixir OÜ",
+  "markets": [
+    "EU/EEA",
+    "US"
+  ],
+  "audience": "adults only",
+  "status": "Observation and adaptive conversation source integrated; release receipt records exact deployed revision. Optional activation and full roadmap qualification remain open.",
+  "size_legend": {
+    "S": "bounded change/review",
+    "M": "multi-file bounded slice",
+    "L": "cross-boundary or high-risk slice; split before dispatch if necessary"
+  },
+  "phases": [
+    {
+      "id": "P0",
+      "name": "Define and design"
+    },
+    {
+      "id": "P1",
+      "name": "Identity, consent and memory"
+    },
+    {
+      "id": "P2",
+      "name": "Reliable observation"
+    },
+    {
+      "id": "P3",
+      "name": "Decisions, prediction and personalized UX"
+    },
+    {
+      "id": "P4",
+      "name": "Notifications"
+    },
+    {
+      "id": "P5",
+      "name": "Optional voice recognition"
+    },
+    {
+      "id": "P6",
+      "name": "Product improvement"
+    },
+    {
+      "id": "P7",
+      "name": "Qualification and release"
+    }
+  ],
+  "roles": [
+    "vox_product_lead",
+    "vox_ux_designer",
+    "vox_architect",
+    "vox_privacy_security",
+    "vox_data_engineer",
+    "vox_frontend_engineer",
+    "vox_voice_engineer",
+    "vox_qa_evaluator",
+    "vox_e2e_runner",
+    "vox_release_engineer",
+    "vox_docs_analyst"
+  ],
+  "tasks": [
+    {
+      "id": "VOX-001",
+      "phase": "P0",
+      "title": "Confirm release scope and measurable outcomes",
+      "status": "in_progress",
+      "priority": "P0",
+      "size": "M",
+      "owner": "vox_product_lead",
+      "reviewer": "vox_qa_evaluator",
+      "model": "gpt-6.1-sol",
+      "requirements": [
+        "REQ-05",
+        "REQ-16",
+        "REQ-22"
+      ],
+      "depends_on": [],
+      "scope": "Confirm Joyixir operator details, EU/EEA and US adults, supported channels/devices, pilot cohort and spending ceiling. Separate core launch from biometric activation.",
+      "acceptance_criteria": [
+        "Each unresolved launch decision has an accountable human and affected capability.",
+        "Task success and useful-response latency have definitions and named data sources; notification opens alone are not success."
+      ],
+      "verification": "Product/QA review with recorded decisions; unresolved items remain explicit.",
+      "deliverables": [
+        "Decision register",
+        "Pilot and metric contract"
+      ],
+      "evidence": [
+        "docs/implementation/FOUNDATION_RESULT.md"
+      ],
+      "implementation_note": "Local scope/metric/decision contract reviewed; launch facts remain explicitly assigned to product/legal owners. See STARTER_SLICE.md."
+    },
+    {
+      "id": "VOX-002",
+      "phase": "P0",
+      "title": "Create privacy, biometric and jurisdiction launch matrix",
+      "status": "in_progress",
+      "priority": "P0",
+      "size": "L",
+      "owner": "vox_privacy_security",
+      "reviewer": "vox_product_lead",
+      "model": "gpt-6.1-sol",
+      "requirements": [
+        "REQ-01",
+        "REQ-12",
+        "REQ-22"
+      ],
+      "depends_on": [
+        "VOX-001"
+      ],
+      "scope": "Complete purpose/basis mapping, controller/processor roles, US state biometric/recording review, DPIA assessment, retention and subprocessor/transfer checks.",
+      "acceptance_criteria": [
+        "Exact registered entity/address/privacy contact are filled before public notices.",
+        "Every enabled market/capability has a reviewed legal basis and notice; unknown biometric jurisdictions stay disabled."
+      ],
+      "verification": "Qualified privacy/legal review of PRIV requirements and actual data flows.",
+      "deliverables": [
+        "Approved jurisdiction matrix",
+        "Notice and processor checklist"
+      ],
+      "evidence": [
+        "docs/implementation/FOUNDATION_RESULT.md"
+      ],
+      "implementation_note": "Independent source privacy/security review completed. Formal counsel review, operator/contact details and real jurisdiction approvals remain open; no new optional processing enabled."
+    },
+    {
+      "id": "VOX-003",
+      "phase": "P0",
+      "title": "Design onboarding and privacy center",
+      "status": "in_progress",
+      "priority": "P0",
+      "size": "M",
+      "owner": "vox_ux_designer",
+      "reviewer": "vox_privacy_security",
+      "model": "gpt-6.1-sol",
+      "requirements": [
+        "REQ-01",
+        "REQ-09",
+        "REQ-20"
+      ],
+      "depends_on": [
+        "VOX-001"
+      ],
+      "scope": "Design AI disclosure, core processing explanation, separate optional choices, preference reset, withdrawal and deletion status with English/Persian RTL copy.",
+      "acceptance_criteria": [
+        "Declining optional purposes leaves core use available; toggles start off and no prechecked consent.",
+        "Keyboard/screen-reader flow, equal decline, copy versioning and recovery states are specified."
+      ],
+      "verification": "Annotated flow review plus synthetic usability sessions before implementation.",
+      "deliverables": [
+        "Design flow and states",
+        "EN/FA copy and accessibility annotations"
+      ],
+      "evidence": [
+        "docs/implementation/FOUNDATION_RESULT.md",
+        "docs/implementation/EXPERIENCE_SPEC.md"
+      ],
+      "implementation_note": "EN/FA onboarding/privacy-state specification reviewed for bounded design direction. Browser implementation, actual journey execution and final copy approval remain outstanding."
+    },
+    {
+      "id": "VOX-004",
+      "phase": "P0",
+      "title": "Design memory, identity and personalization controls",
+      "status": "in_progress",
+      "priority": "P0",
+      "size": "L",
+      "owner": "vox_ux_designer",
+      "reviewer": "vox_privacy_security",
+      "model": "gpt-6.1-sol",
+      "requirements": [
+        "REQ-02",
+        "REQ-03",
+        "REQ-08",
+        "REQ-09"
+      ],
+      "depends_on": [
+        "VOX-001"
+      ],
+      "scope": "Design Work/Personal switch, private/group/exact-recipient sharing, current person, why-this/undo, guest behavior and authenticated profile switching.",
+      "acceptance_criteria": [
+        "Every sharing action previews exact recipients and history consequences.",
+        "User can correct/reset an inference and distinguish explicit preference from hypothesis."
+      ],
+      "verification": "Journey review including shared account and group membership change.",
+      "deliverables": [
+        "Annotated memory/identity flows",
+        "Personalization component states"
+      ],
+      "evidence": [
+        "docs/implementation/FOUNDATION_RESULT.md",
+        "docs/implementation/EXPERIENCE_SPEC.md"
+      ],
+      "implementation_note": "Memory/identity/sharing specification reviewed; synthetic walkthrough scripts supplied. Verified server integration and interactive acceptance remain outstanding."
+    },
+    {
+      "id": "VOX-005",
+      "phase": "P0",
+      "title": "Design notification and voice enrollment journeys",
+      "status": "in_progress",
+      "priority": "P0",
+      "size": "M",
+      "owner": "vox_ux_designer",
+      "reviewer": "vox_privacy_security",
+      "model": "gpt-6.1-sol",
+      "requirements": [
+        "REQ-09",
+        "REQ-10",
+        "REQ-11",
+        "REQ-12",
+        "REQ-13"
+      ],
+      "depends_on": [
+        "VOX-002",
+        "VOX-003"
+      ],
+      "scope": "Design inbox/settings/channel choice/snooze and separate adult biometric enrollment, test, refusal, deletion and non-biometric paths.",
+      "acceptance_criteria": [
+        "OS notification permission and biometric consent are separate from general onboarding.",
+        "Voice failure never forces enrollment or unlocks another person; notification preview is generic by default."
+      ],
+      "verification": "EN/FA prototype review with consent and lock-screen scenarios.",
+      "deliverables": [
+        "Notification journey",
+        "Voice enrollment and fallback journey"
+      ],
+      "evidence": [
+        "docs/implementation/FOUNDATION_RESULT.md",
+        "docs/implementation/EXPERIENCE_SPEC.md"
+      ],
+      "implementation_note": "Notification/voice design direction reviewed, canonical caps/channels aligned. No capability activation or completed voice enrollment implementation."
+    },
+    {
+      "id": "VOX-006",
+      "phase": "P0",
+      "title": "Freeze versioned application contracts and threat model",
+      "status": "in_progress",
+      "priority": "P0",
+      "size": "L",
+      "owner": "vox_architect",
+      "reviewer": "vox_privacy_security",
+      "model": "gpt-6.1-sol",
+      "requirements": [
+        "REQ-02",
+        "REQ-03",
+        "REQ-04",
+        "REQ-06",
+        "REQ-15",
+        "REQ-17"
+      ],
+      "depends_on": [
+        "VOX-001",
+        "VOX-002"
+      ],
+      "scope": "Define scopes, grants, schemas, service credentials, event projections, decision envelope, retention/revocation epochs and trust boundaries.",
+      "acceptance_criteria": [
+        "Directory/history/extraction/cache/evaluation/notification paths all appear in the permission graph.",
+        "Model suggestions cannot authorize access, enrollment, deployment or external sends."
+      ],
+      "verification": "Architecture/threat-model review; data flow and credential matrix.",
+      "deliverables": [
+        "Architecture decision records",
+        "Versioned schema drafts"
+      ],
+      "evidence": [
+        "docs/implementation/FOUNDATION_RESULT.md",
+        "docs/implementation/FOUNDATION_CONTRACT.md"
+      ],
+      "implementation_note": "Pure versioned contract implemented and independently accepted locally. Server integration, IAM/storage enforcement and formal approval remain outstanding."
+    },
+    {
+      "id": "VOX-007",
+      "phase": "P0",
+      "title": "Specify protected eval corpus and baseline protocol",
+      "status": "planned",
+      "priority": "P0",
+      "size": "M",
+      "owner": "vox_qa_evaluator",
+      "reviewer": "vox_architect",
+      "model": "gpt-6.1-sol",
+      "requirements": [
+        "REQ-05",
+        "REQ-14",
+        "REQ-16",
+        "REQ-18"
+      ],
+      "depends_on": [
+        "VOX-001",
+        "VOX-006"
+      ],
+      "scope": "Define synthetic and permitted realistic datasets, person/group/conversation/time splits, calibrated judges, latency/cost denominators and statistical gates.",
+      "acceptance_criteria": [
+        "Optimizer cannot read or edit final promotion examples/scoring.",
+        "Persian/English, cancellation, revoked sharing, unknown identity and notification outcomes have cases."
+      ],
+      "verification": "QA approves evaluation protocol before model candidate selection.",
+      "deliverables": [
+        "Dataset manifest template",
+        "Baseline and promotion protocol"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "VOX-008",
+      "phase": "P0",
+      "title": "Inventory provider, SDK and device capability constraints",
+      "status": "in_progress",
+      "priority": "P0",
+      "size": "M",
+      "owner": "vox_architect",
+      "reviewer": "vox_release_engineer",
+      "model": "gpt-6.1-sol",
+      "requirements": [
+        "REQ-06",
+        "REQ-12",
+        "REQ-16",
+        "REQ-22"
+      ],
+      "depends_on": [
+        "VOX-001",
+        "VOX-002"
+      ],
+      "scope": "Check selected account access to Decisions, SDK migration, regional processing/retention, voice candidates, Telegram delivery and browser/device limits.",
+      "acceptance_criteria": [
+        "Provider availability, legal eligibility and latency are separate evidence fields.",
+        "Image input guide/reference differences are recorded; common supported contract is chosen and tested later."
+      ],
+      "verification": "Read-only documentation/account configuration checks; paid probes occur only within assigned test scope.",
+      "deliverables": [
+        "Provider compatibility matrix",
+        "SDK upgrade proposal"
+      ],
+      "evidence": [
+        "docs/implementation/DELIVERY_RESULT.md"
+      ],
+      "progress_note": "Documented installed SDK 6.9.1 public post compatibility with Decisions; account/model/device/residency qualification remains open."
+    },
+    {
+      "id": "VOX-009",
+      "phase": "P1",
+      "title": "Implement person, account, space and container identities",
+      "status": "in_progress",
+      "priority": "P0",
+      "size": "L",
+      "owner": "vox_architect",
+      "reviewer": "vox_privacy_security",
+      "model": "gpt-6.1-sol",
+      "requirements": [
+        "REQ-02",
+        "REQ-03",
+        "REQ-19"
+      ],
+      "depends_on": [
+        "VOX-004",
+        "VOX-006"
+      ],
+      "scope": "Add normalized person-account bindings, Work/Personal spaces, private/group/exact-recipient containers, memberships and explicit history policy.",
+      "acceptance_criteria": [
+        "Identical members in Work and Personal still address different containers.",
+        "Claimed speaker or account owner does not silently establish a different verified person."
+      ],
+      "verification": "Unit/integration tests across two spaces, multiple agents, group guests and shared accounts.",
+      "deliverables": [
+        "Domain types and repositories",
+        "Identity binding tests"
+      ],
+      "evidence": [
+        "docs/implementation/FOUNDATION_RESULT.md",
+        "docs/implementation/FOUNDATION_CONTRACT.md",
+        "docs/implementation/DELIVERY_RESULT.md"
+      ],
+      "implementation_note": "Person/account/space/container model and explicit identity selection implemented as pure functions; durable repositories, authentication ceremony and migration remain outstanding.",
+      "progress_note": "Durable account-confirmed private profiles, Work/Personal scopes, group and selected-recipient containers. Cross-account identity linking and authenticated multi-person switching remain open."
+    },
+    {
+      "id": "VOX-010",
+      "phase": "P1",
+      "title": "Implement deterministic memory authorization everywhere",
+      "status": "in_progress",
+      "priority": "P0",
+      "size": "L",
+      "owner": "vox_architect",
+      "reviewer": "vox_privacy_security",
+      "model": "gpt-6.1-sol",
+      "requirements": [
+        "REQ-02",
+        "REQ-15"
+      ],
+      "depends_on": [
+        "VOX-009"
+      ],
+      "scope": "Apply one server policy to retrieval, directory context, history, summaries, extraction, tool results and exports; fix guest prompt and scope-expansion gaps.",
+      "acceptance_criteria": [
+        "Read/edit/reshare and agent/purpose permissions are independently enforced.",
+        "Unknown audience excludes confidential context and no group-to-project expansion occurs without an explicit grant."
+      ],
+      "verification": "Permission matrix and private-canary adversarial tests, including admin SDK paths.",
+      "deliverables": [
+        "Policy service and adapters",
+        "Access regression suite"
+      ],
+      "evidence": [
+        "docs/implementation/FOUNDATION_RESULT.md",
+        "docs/implementation/FOUNDATION_CONTRACT.md",
+        "docs/implementation/DELIVERY_RESULT.md"
+      ],
+      "implementation_note": "Bounded reply/extractor guest filtering and no automatic group-to-project promotion implemented; pure authorization engine accepted. Raw-history suppression and final audience freshness remain open.",
+      "progress_note": "Runtime private/shared authorization, agent grants, whole-group projection, delivery rechecks and staged shared publication integrated. Distributed authority/transport atomicity and live Telegram audience completeness remain open."
+    },
+    {
+      "id": "VOX-011",
+      "phase": "P1",
+      "title": "Implement versioned consent ledger and enforcement",
+      "status": "in_progress",
+      "priority": "P0",
+      "size": "L",
+      "owner": "vox_architect",
+      "reviewer": "vox_privacy_security",
+      "model": "gpt-6.1-sol",
+      "requirements": [
+        "REQ-01",
+        "REQ-04",
+        "REQ-17",
+        "REQ-22"
+      ],
+      "depends_on": [
+        "VOX-002",
+        "VOX-006",
+        "VOX-009"
+      ],
+      "scope": "Create purpose-specific consent/notice receipts, current epochs, withdrawal and enforcement API; distinguish notice acceptance from optional processing permission. Enforce the versioned country/state/feature release registry, adult-entry state and participant/session processing grants at every capture/provider boundary.",
+      "acceptance_criteria": [
+        "The server rejects optional collection before persistence/export when disabled.",
+        "Withdrawn purpose cancels queued work and subsequent provider calls; denial is not overridden by stale UI state.",
+        "Unknown, conflicting, expired or blocked jurisdiction approvals deny affected processing server-side even if a client directly calls the endpoint.",
+        "Credible underage/accidental-participant signals suspend optional capture and trigger the approved incident/deletion route; voice never establishes age."
+      ],
+      "verification": "Concurrent grant/withdrawal tests and replay of old jobs.",
+      "deliverables": [
+        "Consent service and endpoints",
+        "Ledger/enforcement tests",
+        "Server capability eligibility registry and age/session policy tests"
+      ],
+      "evidence": [
+        "docs/implementation/FOUNDATION_RESULT.md",
+        "docs/implementation/FOUNDATION_CONTRACT.md",
+        "docs/implementation/DELIVERY_RESULT.md"
+      ],
+      "implementation_note": "Pure consent transitions and eligibility implemented and independently accepted. Durable ledger, notice-presentation binding, endpoints and runtime collection gates remain outstanding.",
+      "progress_note": "Versioned consent receipts, explicit presentation, durable transitions, expiry and server manifest eligibility wired to Studio API. Legal approval of actual notices remains open."
+    },
+    {
+      "id": "VOX-012",
+      "phase": "P1",
+      "title": "Build onboarding, privacy center and user controls",
+      "status": "in_progress",
+      "priority": "P0",
+      "size": "L",
+      "owner": "vox_frontend_engineer",
+      "reviewer": "vox_ux_designer",
+      "model": "gpt-6.1-sol",
+      "requirements": [
+        "REQ-01",
+        "REQ-08",
+        "REQ-09",
+        "REQ-20"
+      ],
+      "depends_on": [
+        "VOX-003",
+        "VOX-004",
+        "VOX-011"
+      ],
+      "scope": "Implement scoped settings, AI disclosure, optional consent choices, why-this/undo/reset and request-status UX in Studio. Include a proportionate 18+ entry gate, no-account guest notice/choice and accidental-participant reporting without collecting a full birth date by default.",
+      "acceptance_criteria": [
+        "English/Persian states are equivalent, accessible and correct in RTL.",
+        "Users can decline, revisit and withdraw without losing unrelated core features.",
+        "Adult entry, guest choice and withdrawal reach the authoritative ledger; a hidden UI or local checkbox cannot stand in for server permission."
+      ],
+      "verification": "Component tests plus browser journeys with denied permissions/offline recovery.",
+      "deliverables": [
+        "Studio settings/onboarding UI",
+        "Accessibility and locale evidence"
+      ],
+      "evidence": [
+        "docs/implementation/DELIVERY_RESULT.md"
+      ],
+      "progress_note": "EN/FA Privacy screen, profile declaration, optional choices/withdrawal, private notes and per-agent grants implemented. Guest entry and complete user-rights/status journeys remain open."
+    },
+    {
+      "id": "VOX-013",
+      "phase": "P1",
+      "title": "Implement memory lifecycle and bounded retrieval",
+      "status": "in_progress",
+      "priority": "P0",
+      "size": "L",
+      "owner": "vox_architect",
+      "reviewer": "vox_qa_evaluator",
+      "model": "gpt-6.1-sol",
+      "requirements": [
+        "REQ-02",
+        "REQ-08",
+        "REQ-16",
+        "REQ-17"
+      ],
+      "depends_on": [
+        "VOX-010",
+        "VOX-011"
+      ],
+      "scope": "Add provenance/claims/supersession, token-budgeted retrieval, indexed candidate queries and background extraction with scope checks at execution.",
+      "acceptance_criteria": [
+        "Normal turns do not download every active memory or await consolidation.",
+        "Explicit preferences override hypotheses; extracted third-party claims do not become confirmed personal facts."
+      ],
+      "verification": "Retrieval relevance/equality tests, queue retry and scoped extraction tests.",
+      "deliverables": [
+        "Memory lifecycle jobs",
+        "Bounded retrieval implementation"
+      ],
+      "evidence": [
+        "docs/implementation/DELIVERY_RESULT.md",
+        "docs/implementation/MEMORY_RETRIEVAL_RESULT.md",
+        "docs/implementation/REVIEWED_PRIVATE_MEMORY_RESULT.md"
+      ],
+      "progress_note": "Explicit private note review now supports selected-only ephemeral summary previews, deliberate save, signed source revisions, descendant invalidation and guarded FILE commits. Retrieval ranks individual notes and summaries by current query relevance and retains originals unless exact statement coverage is established. Author132/11 and independent112/8 plus exact prior-schema rollback passed. Aggregate loading, indexed retrieval and generalized automatic extraction remain open."
+    },
+    {
+      "id": "VOX-014",
+      "phase": "P1",
+      "title": "Implement deletion, revocation and scheduled retention expiry",
+      "status": "in_progress",
+      "priority": "P0",
+      "size": "L",
+      "owner": "vox_architect",
+      "reviewer": "vox_privacy_security",
+      "model": "gpt-6.1-sol",
+      "requirements": [
+        "REQ-02",
+        "REQ-17"
+      ],
+      "depends_on": [
+        "VOX-010",
+        "VOX-011",
+        "VOX-013"
+      ],
+      "scope": "Propagate revocation/deletion across history projections, summaries, cache/search, evidence, queues and permitted downstream datasets; maintain minimal tombstones. Implement versioned class-specific expiry and inactivity sweeps, provider residual tracking and backup expiration with the approved numeric schedule.",
+      "acceptance_criteria": [
+        "Old extraction/notification/replay work cannot recreate deleted content.",
+        "UI distinguishes immediate loss of access from physical cleanup/provider residual retention.",
+        "Fake-clock expiry and inactivity cases deny use on time and purge all derived copies; retries are idempotent and failures alert a named owner.",
+        "Provider/backup residuals retain explicit pending status until verified expiration or deletion; restoring a backup applies tombstones before any read."
+      ],
+      "verification": "Race tests, restore drill and deletion completion reconciliation. Advance fake time across every data-class TTL and inactivity threshold; verify purge receipts and unresolved provider residuals.",
+      "deliverables": [
+        "Deletion coordinator",
+        "Derived lineage and tombstone tests"
+      ],
+      "evidence": [
+        "docs/implementation/DELIVERY_RESULT.md",
+        "docs/implementation/OBSERVATION_LEARNING.md"
+      ],
+      "progress_note": "Account/shared scheduled cleanup now has durable paginated leases, restart recovery and expiry tests; observer consent revocation purges journal and derived findings in the same transaction. Maintenance release switch remains off. Provider/backup residual retention and production restore qualification remain open."
+    },
+    {
+      "id": "VOX-015",
+      "phase": "P1",
+      "title": "Migrate legacy memory and preference data conservatively",
+      "status": "in_progress",
+      "priority": "P0",
+      "size": "L",
+      "owner": "vox_architect",
+      "reviewer": "vox_privacy_security",
+      "model": "gpt-6.1-sol",
+      "requirements": [
+        "REQ-03",
+        "REQ-19"
+      ],
+      "depends_on": [
+        "VOX-009",
+        "VOX-010",
+        "VOX-011",
+        "VOX-014"
+      ],
+      "scope": "Create dry-run inventory/mapping for Studio and older app memory, identity and notifications flags; quarantine ambiguous ownership/purpose/history.",
+      "acceptance_criteria": [
+        "No past use becomes optional consent; legacy notifications=true is not a proactive opt-in.",
+        "Dry-run counts reconcile and rollback preserves authored data without widening permissions."
+      ],
+      "verification": "Synthetic migration rehearsal and before/after access comparison.",
+      "deliverables": [
+        "Versioned migration and rollback",
+        "Reconciliation report"
+      ],
+      "evidence": [
+        "docs/implementation/DELIVERY_RESULT.md"
+      ],
+      "progress_note": "Legacy unscoped history/auto-memory is denied in new runtime, preserving source data without silent consent migration. Explicit migration/reconciliation/rollback tooling remains open."
+    },
+    {
+      "id": "VOX-016",
+      "phase": "P1",
+      "title": "Enforce storage, key and service-account isolation",
+      "status": "in_progress",
+      "priority": "P0",
+      "size": "L",
+      "owner": "vox_architect",
+      "reviewer": "vox_privacy_security",
+      "model": "gpt-6.1-sol",
+      "requirements": [
+        "REQ-02",
+        "REQ-15",
+        "REQ-17",
+        "REQ-22"
+      ],
+      "depends_on": [
+        "VOX-006",
+        "VOX-009",
+        "VOX-010",
+        "VOX-011"
+      ],
+      "scope": "Implement database/IAM rules, restricted evidence and future biometric storage boundaries, secret handling, key rotation and audit access.",
+      "acceptance_criteria": [
+        "Observer/developer credentials cannot read raw private memory or write release/evaluator state.",
+        "Client and backend bypass attempts fail; logs contain no credentials or private payloads."
+      ],
+      "verification": "Emulator/integration rules tests plus staged policy verification later.",
+      "deliverables": [
+        "Storage/IAM policy",
+        "Key and access runbook"
+      ],
+      "evidence": [
+        "docs/implementation/DELIVERY_RESULT.md",
+        "docs/implementation/OBSERVATION_LEARNING.md"
+      ],
+      "progress_note": "Separate account/shared/maintenance namespaces and restricted file modes implemented. Local improvement roles use distinct Ed25519 authorities and a pinned Docker evaluator with no network or secrets. Production service IAM, protected datasets and separate worker credentials remain open."
+    },
+    {
+      "id": "VOX-017",
+      "phase": "P2",
+      "title": "Implement allowlisted event schemas and ingress",
+      "status": "in_progress",
+      "priority": "P0",
+      "size": "M",
+      "owner": "vox_data_engineer",
+      "reviewer": "vox_architect",
+      "model": "gpt-6-luna",
+      "requirements": [
+        "REQ-04",
+        "REQ-05"
+      ],
+      "depends_on": [
+        "VOX-006",
+        "VOX-010",
+        "VOX-011"
+      ],
+      "scope": "Wire approved schemas with server-derived scope/identity, occurrence/receipt times, origin, revisions, versions and bounded properties. Schema changes escalate to architect.",
+      "acceptance_criteria": [
+        "Unknown properties, oversized payloads and unauthorized purpose/scope are rejected.",
+        "Raw transcript/audio/image/voiceprint fields do not enter broad analytics."
+      ],
+      "verification": "Schema and authentication tests including spoofed actor and QA-origin exclusion.",
+      "deliverables": [
+        "Event types/validators",
+        "Ingress endpoints"
+      ],
+      "evidence": [
+        "docs/implementation/DELIVERY_RESULT.md",
+        "docs/implementation/OBSERVATION_LEARNING.md"
+      ],
+      "progress_note": "Strict bounded server/client observation envelopes now serve authenticated Studio ingress with server-derived identity, exact agent/space receipt, revision and QA-origin exclusion. Real voice/private Telegram producers retain no conversation content. Wider channel/usage/version coverage remains open."
+    },
+    {
+      "id": "VOX-018",
+      "phase": "P2",
+      "title": "Implement durable outbox, consumers and repair",
+      "status": "in_progress",
+      "priority": "P0",
+      "size": "L",
+      "owner": "vox_architect",
+      "reviewer": "vox_qa_evaluator",
+      "model": "gpt-6.1-sol",
+      "requirements": [
+        "REQ-04",
+        "REQ-16",
+        "REQ-17"
+      ],
+      "depends_on": [
+        "VOX-017",
+        "VOX-016"
+      ],
+      "scope": "Add state-plus-outbox writes, idempotent consumers, bounded backoff, dead-letter handling, lag/freshness metrics and repair workflow.",
+      "acceptance_criteria": [
+        "Duplicate/out-of-order/revised events converge to the same final state and metrics.",
+        "Worker crash recovers without memory duplication or lost consequential events; revoked jobs remain suppressed."
+      ],
+      "verification": "Fault-injection/replay tests and queue recovery rehearsal.",
+      "deliverables": [
+        "Outbox and worker",
+        "Replay/repair tools"
+      ],
+      "evidence": [
+        "docs/implementation/DELIVERY_RESULT.md",
+        "docs/implementation/OBSERVATION_LEARNING.md"
+      ],
+      "progress_note": "Bounded durable observer journal includes deduplication, replacement revisions, leases, three-attempt backoff, failure state and explicit retry service; maintenance checkpoints recover after restart. Consent outbox consumers beyond this slice and production-scale transport remain open."
+    },
+    {
+      "id": "VOX-019",
+      "phase": "P2",
+      "title": "Instrument Studio turn stages and provider usage",
+      "status": "in_progress",
+      "priority": "P0",
+      "size": "M",
+      "owner": "vox_data_engineer",
+      "reviewer": "vox_architect",
+      "model": "gpt-6-luna",
+      "requirements": [
+        "REQ-05",
+        "REQ-16"
+      ],
+      "depends_on": [
+        "VOX-017",
+        "VOX-008"
+      ],
+      "scope": "Add turn trace correlation across STT/retrieval/decision/generation/TTS and actual provider metadata via an architect-approved LLM interface change.",
+      "acceptance_criteria": [
+        "Measured usage and estimated values are visibly different; current model versions accompany cost.",
+        "Logs/trace attributes pass payload allowlist and flush behavior is explicit for short-lived handlers."
+      ],
+      "verification": "Scripted provider tests and synthetic full-turn trace readback.",
+      "deliverables": [
+        "Studio trace instrumentation",
+        "Usage model fixtures"
+      ],
+      "evidence": [
+        "docs/implementation/DELIVERY_RESULT.md",
+        "docs/implementation/OBSERVATION_LEARNING.md"
+      ],
+      "progress_note": "Actual voice response and private Telegram terminal outcomes now feed the new observer. Voice playback is correlated by server-issued turn ID. Provider usage, token cost and stage-level latency remain unavailable."
+    },
+    {
+      "id": "VOX-020",
+      "phase": "P2",
+      "title": "Capture client experience and explicit outcomes",
+      "status": "in_progress",
+      "priority": "P0",
+      "size": "M",
+      "owner": "vox_data_engineer",
+      "reviewer": "vox_qa_evaluator",
+      "model": "gpt-6-luna",
+      "requirements": [
+        "REQ-05",
+        "REQ-09",
+        "REQ-16"
+      ],
+      "depends_on": [
+        "VOX-017",
+        "VOX-012"
+      ],
+      "scope": "Wire first audio, interruption, playback failure, cancellation, correction, feedback and experiment exposure with approved event names.",
+      "acceptance_criteria": [
+        "Server completion does not substitute for first audible playback.",
+        "Client events are unverified, include versions, and do not imply satisfaction or completed tasks."
+      ],
+      "verification": "Browser event readback from synthetic interactions, duplicate/reconnect cases.",
+      "deliverables": [
+        "Client event hooks",
+        "Outcome event coverage"
+      ],
+      "evidence": [
+        "docs/implementation/OBSERVATION_LEARNING.md"
+      ],
+      "progress_note": "Tap-to-talk client hooks report playing, completed, failed and interrupted outcomes using accepted server correlation. Events remain unverified and never certify task success. Live ElevenLabs, correction and experiment-exposure coverage remain open."
+    },
+    {
+      "id": "VOX-021",
+      "phase": "P2",
+      "title": "Remove private payloads from diagnostic and audit paths",
+      "status": "in_progress",
+      "priority": "P0",
+      "size": "M",
+      "owner": "vox_architect",
+      "reviewer": "vox_privacy_security",
+      "model": "gpt-6.1-sol",
+      "requirements": [
+        "REQ-04",
+        "REQ-15",
+        "REQ-22"
+      ],
+      "depends_on": [
+        "VOX-017"
+      ],
+      "scope": "Replace raw STT/call/extraction logs and block audit text with reason codes/restricted evidence refs; keep sensitive replay disabled or explicitly masked.",
+      "acceptance_criteria": [
+        "Synthetic private canaries cannot appear in unauthorized logs/audit/analytics/replay exports.",
+        "Admin audit access does not provide access to private conversation evidence."
+      ],
+      "verification": "Export-capture tests on all known logging and replay paths.",
+      "deliverables": [
+        "Sanitized logging/audit changes",
+        "Leak-canary report"
+      ],
+      "evidence": [
+        "docs/implementation/OBSERVATION_DIAGNOSTICS.md",
+        "docs/implementation/evidence/DIAGNOSTIC_REVIEW.md"
+      ],
+      "progress_note": "Active Studio/Tireh polling, webhook, gateway, provider fallback, live call and Mini App HTTP diagnostics now emit fixed catalog fields without raw exceptions, arbitrary codes, content or identity IDs. Independent canary/getter/proxy and real Pino serialization checks passed. Historical/platform logs, sinks/IAM/retention and full export/replay coverage remain open."
+    },
+    {
+      "id": "VOX-022",
+      "phase": "P2",
+      "title": "Build operational and product outcome views",
+      "status": "in_progress",
+      "priority": "P0",
+      "size": "M",
+      "owner": "vox_data_engineer",
+      "reviewer": "vox_qa_evaluator",
+      "model": "gpt-6-luna",
+      "requirements": [
+        "REQ-05",
+        "REQ-16"
+      ],
+      "depends_on": [
+        "VOX-018",
+        "VOX-019",
+        "VOX-020",
+        "VOX-021"
+      ],
+      "scope": "Produce scoped views for task outcome, latency/cost, correction, queue lag, permission/consent failures and notification outcomes with compatible cohorts.",
+      "acceptance_criteria": [
+        "Cohort/language/channel/release/QA filters and completeness are visible.",
+        "Missing provider outcomes remain unavailable; sampling does not bias uncorrected totals."
+      ],
+      "verification": "Reconcile synthetic source events to displayed aggregates and denominators.",
+      "deliverables": [
+        "Baseline dashboards/queries",
+        "Data quality report"
+      ],
+      "evidence": [
+        "docs/implementation/DELIVERY_RESULT.md",
+        "docs/implementation/OBSERVATION_LEARNING.md"
+      ],
+      "progress_note": "Own-space Studio measurements show response/playback denominators, queue lag/failure, deterministic findings and explicit unavailable task success/usage. Owner/superadmin operations view shows local workflow metadata only. Organization/cohort dashboards remain open."
+    },
+    {
+      "id": "VOX-023",
+      "phase": "P2",
+      "title": "Introduce read-only observer and reproducible findings",
+      "status": "in_progress",
+      "priority": "P0",
+      "size": "M",
+      "owner": "vox_architect",
+      "reviewer": "vox_privacy_security",
+      "model": "gpt-6.1-sol",
+      "requirements": [
+        "REQ-05",
+        "REQ-14",
+        "REQ-15"
+      ],
+      "depends_on": [
+        "VOX-022",
+        "VOX-016",
+        "VOX-007"
+      ],
+      "scope": "Use rules first and sampled semantic analysis to cluster failures into findings with evidence, alternative explanations and confidence.",
+      "acceptance_criteria": [
+        "Observer cannot send user messages, modify app code or access unrestricted private content.",
+        "Each finding separates observed event from inferred cause and links a reproducible case."
+      ],
+      "verification": "Synthetic failure scenarios plus negative controls and budget checks.",
+      "deliverables": [
+        "Observer job",
+        "Finding schema and examples"
+      ],
+      "evidence": [
+        "docs/implementation/OBSERVATION_LEARNING.md"
+      ],
+      "progress_note": "Deterministic read-only observer reconstructs findings from a bounded content-free journal with unknown causes and alternative explanations. No message/code/provider capability exists in its consumer. Semantic clustering and production worker isolation remain open."
+    },
+    {
+      "id": "VOX-024",
+      "phase": "P3",
+      "title": "Upgrade SDK and implement Decisions provider adapter",
+      "status": "in_progress",
+      "priority": "P1",
+      "size": "L",
+      "owner": "vox_architect",
+      "reviewer": "vox_qa_evaluator",
+      "model": "gpt-6.1-sol",
+      "requirements": [
+        "REQ-06",
+        "REQ-16",
+        "REQ-22"
+      ],
+      "depends_on": [
+        "VOX-008",
+        "VOX-016",
+        "VOX-019"
+      ],
+      "scope": "Upgrade isolated OpenAI dependency; implement typed question/result/usage/refusal adapter and scripted fake, with an explicit versioned schema.",
+      "acceptance_criteria": [
+        "All question answer variants and partial refusal are handled without truthy/default-success coercion.",
+        "Existing OpenAI use cases remain compatible and raw audio never enters Decisions."
+      ],
+      "verification": "Contract tests with fixture payloads; limited approved live-account smoke later.",
+      "deliverables": [
+        "DecisionProvider implementation",
+        "SDK compatibility tests"
+      ],
+      "evidence": [
+        "docs/implementation/DELIVERY_RESULT.md",
+        "docs/implementation/evidence/decisions-provider/RESULT.md",
+        "src/lib/adaptive/prediction/RESULT.md"
+      ],
+      "progress_note": "Decisions text/image adapter and bounded real HTTP consumer are integrated, with unknown/timeout fallback and no permission authority. Existing supported SDK generic transport is used; synthetic wire tests pass. Real-account performance/retention qualification remains open."
+    },
+    {
+      "id": "VOX-025",
+      "phase": "P3",
+      "title": "Define and calibrate question catalog and policies",
+      "status": "in_progress",
+      "priority": "P1",
+      "size": "M",
+      "owner": "vox_qa_evaluator",
+      "reviewer": "vox_architect",
+      "model": "gpt-6.1-sol",
+      "requirements": [
+        "REQ-06",
+        "REQ-07",
+        "REQ-16"
+      ],
+      "depends_on": [
+        "VOX-007",
+        "VOX-024"
+      ],
+      "scope": "Implement DEC-01–07 catalog with supported choices, unknown path, task-specific thresholds and evidence scope; compare with deterministic rules.",
+      "acceptance_criteria": [
+        "Question/data versions and false positive/negative/abstention metrics are retained per language/channel.",
+        "No threshold controls identity, consent, ACL or irreversible actions."
+      ],
+      "verification": "Held-out calibration and blinded review with fixed budget.",
+      "deliverables": [
+        "Versioned question catalog",
+        "Calibration report"
+      ],
+      "evidence": [
+        "docs/implementation/DELIVERY_RESULT.md"
+      ],
+      "progress_note": "Three versioned fixed questions wired to prediction endpoint. Held-out calibration and supported language/cohort efficacy remain open."
+    },
+    {
+      "id": "VOX-026",
+      "phase": "P3",
+      "title": "Implement live prediction revision and cancellation",
+      "status": "in_progress",
+      "priority": "P1",
+      "size": "L",
+      "owner": "vox_architect",
+      "reviewer": "vox_qa_evaluator",
+      "model": "gpt-6.1-sol",
+      "requirements": [
+        "REQ-06",
+        "REQ-07",
+        "REQ-17"
+      ],
+      "depends_on": [
+        "VOX-013",
+        "VOX-014",
+        "VOX-024",
+        "VOX-025"
+      ],
+      "scope": "Bind predictions to turn/source/scope/policy revisions, cap speculative calls and cancel stale results; prefetch only authorized candidates.",
+      "acceptance_criteria": [
+        "Correction, person/space change, membership change, expiry and deletion invalidate prepared context.",
+        "Timeout or out-of-order decision returns baseline conversation; no speculative external side effect."
+      ],
+      "verification": "Deterministic clock/out-of-order/cancel tests and live-path latency comparison.",
+      "deliverables": [
+        "Session prediction controller",
+        "Race/cancellation suite"
+      ],
+      "evidence": [
+        "docs/implementation/DELIVERY_RESULT.md",
+        "src/lib/adaptive/prediction/RESULT.md"
+      ],
+      "progress_note": "Real off-by-default Studio draft consumer debounces edits, caps two evaluations per turn, cancels and supersedes durable revisions, checks fresh receipts and performs read-only gateway context preparation. Scope/correction/cancel/provider-late-result tests pass. Actual early partial-voice producer and end-to-end speed qualification remain open."
+    },
+    {
+      "id": "VOX-027",
+      "phase": "P3",
+      "title": "Implement explicit preferences and scoped hypotheses",
+      "status": "in_progress",
+      "priority": "P1",
+      "size": "M",
+      "owner": "vox_architect",
+      "reviewer": "vox_privacy_security",
+      "model": "gpt-6.1-sol",
+      "requirements": [
+        "REQ-03",
+        "REQ-08",
+        "REQ-17"
+      ],
+      "depends_on": [
+        "VOX-011",
+        "VOX-013",
+        "VOX-014",
+        "VOX-025"
+      ],
+      "scope": "Add preference precedence, hypothesis evidence/expiry, bounded effects and user correction/reset; no hidden sensitive-trait inference.",
+      "acceptance_criteria": [
+        "Explicit user choice always wins and can disable future learning.",
+        "Ambiguous identity or one interruption cannot produce durable personal attribution."
+      ],
+      "verification": "Preference conflict, quoted speech, wrong account and reset tests.",
+      "deliverables": [
+        "Preference/hypothesis service",
+        "Attribution fixtures"
+      ],
+      "evidence": [
+        "docs/implementation/DELIVERY_RESULT.md",
+        "docs/implementation/PERSONALIZATION_CONTROLS_RESULT.md",
+        "docs/implementation/REVIEWED_PREFERENCE_LEARNING_RESULT.md"
+      ],
+      "progress_note": "Reviewed preference learning now has separate versioned opt-in per confirmed account, agent and Work/Personal space. Final current text may create bounded enum proposals through guarded Decisions; Use is required, explicit choices win, and shared turn budgets, source suppression, expiry and authority revisions fence stale work. Independent 424/30 and composed 121/6 checks passed. Compiled browser, final CI, live provider quality and rollout remain pending; no sensitive-trait or identity inference."
+    },
+    {
+      "id": "VOX-028",
+      "phase": "P3",
+      "title": "Build personalized UX with explanation and undo",
+      "status": "in_progress",
+      "priority": "P1",
+      "size": "M",
+      "owner": "vox_frontend_engineer",
+      "reviewer": "vox_ux_designer",
+      "model": "gpt-6.1-sol",
+      "requirements": [
+        "REQ-08",
+        "REQ-09",
+        "REQ-20"
+      ],
+      "depends_on": [
+        "VOX-004",
+        "VOX-012",
+        "VOX-026",
+        "VOX-027"
+      ],
+      "scope": "Apply approved length/language/format/suggested-action and component-schema variants with why-this, undo and stable navigation.",
+      "acceptance_criteria": [
+        "No control moves mid-interaction; accessibility preferences remain under user control.",
+        "Undo restores behavior and prevents immediate relearning from the same evidence."
+      ],
+      "verification": "Usability/accessibility EN/FA tests and reversible variant journeys.",
+      "deliverables": [
+        "Personalized Studio components",
+        "UX evidence"
+      ],
+      "evidence": [
+        "docs/implementation/DELIVERY_RESULT.md",
+        "docs/implementation/PERSONALIZATION_CONTROLS_RESULT.md",
+        "docs/implementation/REVIEWED_PREFERENCE_LEARNING_RESULT.md"
+      ],
+      "progress_note": "EN/FA explicit choices retain scoped explanations and genuine Undo. The composed review-only learning panel offers separate opt-in, uncertain candidate reasons, Use/dismiss, scope cancellation and suppression against immediate relearning after Undo/reset. Independent source and real-handler/file React journeys passed. Compiled browser acceptance and broader suggested-action/component variants remain open."
+    },
+    {
+      "id": "VOX-029",
+      "phase": "P3",
+      "title": "Implement feature gates and shared-container experiments",
+      "status": "in_progress",
+      "priority": "P1",
+      "size": "L",
+      "owner": "vox_architect",
+      "reviewer": "vox_qa_evaluator",
+      "model": "gpt-6.1-sol",
+      "requirements": [
+        "REQ-16",
+        "REQ-18",
+        "REQ-21"
+      ],
+      "depends_on": [
+        "VOX-009",
+        "VOX-018",
+        "VOX-020",
+        "VOX-025"
+      ],
+      "scope": "Add server-enforced flags/kill switches, stable assignments/exposure and isolated variant memory for private/person or shared-container experiments.",
+      "acceptance_criteria": [
+        "The same selected-recipient container cannot mix experimental writes across different DMs.",
+        "Cache invalidation stops a disabled feature immediately within the defined operational bound."
+      ],
+      "verification": "Cross-session assignment, membership and rollback tests.",
+      "deliverables": [
+        "Experiment/flag service",
+        "Exposure and isolation tests"
+      ],
+      "evidence": [
+        "docs/implementation/DELIVERY_RESULT.md"
+      ],
+      "progress_note": "Server manifest and Decisions switch fail closed; no experiment assignment/exposure worker enabled."
+    },
+    {
+      "id": "VOX-030",
+      "phase": "P3",
+      "title": "Qualify decision latency, cost and fallback behavior",
+      "status": "in_progress",
+      "priority": "P1",
+      "size": "M",
+      "owner": "vox_qa_evaluator",
+      "reviewer": "vox_release_engineer",
+      "model": "gpt-6.1-sol",
+      "requirements": [
+        "REQ-06",
+        "REQ-07",
+        "REQ-16"
+      ],
+      "depends_on": [
+        "VOX-024",
+        "VOX-025",
+        "VOX-026",
+        "VOX-028",
+        "VOX-029"
+      ],
+      "scope": "Benchmark baseline versus candidate using the fixed workload, uncertainty intervals and matched quality; evaluate circuit break/budget/outage behavior.",
+      "acceptance_criteria": [
+        "At most two speculative evaluations/turn and one in-flight/session are enforced unless a reviewed configuration changes them.",
+        "500ms proposed deadline degrades to baseline; no unmeasured vendor speed claim is treated as Vox performance."
+      ],
+      "verification": "Load/fault tests and approved provider measurements with exact versions.",
+      "deliverables": [
+        "Decision qualification report",
+        "Budget and circuit-break settings"
+      ],
+      "evidence": [
+        "docs/implementation/DELIVERY_RESULT.md",
+        "docs/implementation/evidence/decisions-provider/RESULT.md"
+      ],
+      "progress_note": "Local timeout/refusal/revocation/budget fallback tests passed. One live synthetic sample took1087ms and134 input tokens; it exceeded the production500ms deadline and cannot establish a latency distribution, cost baseline or speed improvement. Held-out quality, load, cold/warm caching and real conversation measurements remain open."
+    },
+    {
+      "id": "VOX-031",
+      "phase": "P3",
+      "title": "Integrate supported voice/image input prediction path",
+      "status": "in_progress",
+      "priority": "P1",
+      "size": "L",
+      "owner": "vox_voice_engineer",
+      "reviewer": "vox_architect",
+      "model": "gpt-6.1-sol",
+      "requirements": [
+        "REQ-06",
+        "REQ-07",
+        "REQ-09",
+        "REQ-16",
+        "REQ-01",
+        "REQ-03",
+        "REQ-22"
+      ],
+      "depends_on": [
+        "VOX-024",
+        "VOX-026",
+        "VOX-030",
+        "VOX-011"
+      ],
+      "scope": "Add capability-gated partial-transcript and minimized shared-image prediction; compare current streaming path with GPT-Live integration where available. Own session audio eligibility before capture: notice/required participant choice, guest flow, current audience and jurisdiction rechecks, and pause-on-join handling.",
+      "acceptance_criteria": [
+        "Unsupported mode/account uses baseline input flow; raw audio is not sent to Decisions.",
+        "Transcript corrections and changed image/context invalidate predictions and never leak into broader analytics.",
+        "No participant audio reaches a provider until applicable notice/permission gates pass; a new/unknown participant pauses affected capture and restricted output.",
+        "Unknown or unresolvable mixed-audience consent keeps multi-party processing disabled with an accessible text/private-channel alternative; single-person core mode remains separately qualified."
+      ],
+      "verification": "Mocked stream contract plus approved actual-device/provider E2E.",
+      "deliverables": [
+        "Input/prediction adapter",
+        "Mode/device compatibility evidence"
+      ],
+      "evidence": [
+        "docs/implementation/ADAPTIVE_COMPLETION_RESULT.md"
+      ],
+      "progress_note": "Added actual Studio text/image conversation and opt-in draft/image prediction, with browser metadata-stripping JPEG re-encoding, server raster limits, separate image capability, and fresh consent at each provider request/continuation/fallback and delivery. Live-call SDK currently exposes final transcripts; true partial-voice prediction remains unimplemented and is not claimed."
+    },
+    {
+      "id": "VOX-032",
+      "phase": "P4",
+      "title": "Implement notification categories, preferences and inbox",
+      "status": "in_progress",
+      "priority": "P1",
+      "size": "M",
+      "owner": "vox_frontend_engineer",
+      "reviewer": "vox_privacy_security",
+      "model": "gpt-6.1-sol",
+      "requirements": [
+        "REQ-01",
+        "REQ-09",
+        "REQ-10",
+        "REQ-11"
+      ],
+      "depends_on": [
+        "VOX-005",
+        "VOX-011",
+        "VOX-012"
+      ],
+      "scope": "Create authenticated inbox and purpose/category/channel choices with snooze/mute/why-this; keep proactive off and marketing disabled.",
+      "acceptance_criteria": [
+        "Legacy enabled flags do not silently opt people into proactive contact.",
+        "Choosing Telegram/browser channel does not imply OS permission or consent to unrelated purposes."
+      ],
+      "verification": "Component/API tests for choose/decline/revoke/RTL states.",
+      "deliverables": [
+        "Notification settings/inbox",
+        "Preference tests"
+      ],
+      "evidence": [
+        "docs/implementation/DELIVERY_RESULT.md"
+      ],
+      "progress_note": "Authenticated EN/FA inbox, category/settings controls, requested reminders and feedback implemented. Snooze, Telegram channel controls and external receipts remain open."
+    },
+    {
+      "id": "VOX-033",
+      "phase": "P4",
+      "title": "Implement candidate ranking and deterministic eligibility",
+      "status": "in_progress",
+      "priority": "P1",
+      "size": "L",
+      "owner": "vox_architect",
+      "reviewer": "vox_privacy_security",
+      "model": "gpt-6.1-sol",
+      "requirements": [
+        "REQ-02",
+        "REQ-10",
+        "REQ-11"
+      ],
+      "depends_on": [
+        "VOX-025",
+        "VOX-027",
+        "VOX-032",
+        "VOX-014"
+      ],
+      "scope": "Generate evidence-linked candidates, optionally rank using DEC-05, then enforce exact recipient/source rights, purpose, freshness and eligibility.",
+      "acceptance_criteria": [
+        "A high score cannot override a disabled category/channel or missing source grant.",
+        "Every suppression has a bounded reason code; evidence content stays restricted."
+      ],
+      "verification": "Policy table tests for private/group/selected-recipient cases and expired evidence.",
+      "deliverables": [
+        "Candidate/eligibility service",
+        "Notification policy fixtures"
+      ],
+      "evidence": [
+        "docs/implementation/DELIVERY_RESULT.md"
+      ],
+      "progress_note": "Pure deterministic eligibility and generic candidate policy plus durable generic inbox candidates implemented. Learned ranking/calibration remains open."
+    },
+    {
+      "id": "VOX-034",
+      "phase": "P4",
+      "title": "Implement scheduler, quiet hours and notification budgets",
+      "status": "in_progress",
+      "priority": "P1",
+      "size": "L",
+      "owner": "vox_architect",
+      "reviewer": "vox_qa_evaluator",
+      "model": "gpt-6.1-sol",
+      "requirements": [
+        "REQ-10",
+        "REQ-16",
+        "REQ-17"
+      ],
+      "depends_on": [
+        "VOX-018",
+        "VOX-033"
+      ],
+      "scope": "Schedule using explicit IANA timezone, DST handling, rolling per-person cross-space caps, dedupe and atomic budget reservation.",
+      "acceptance_criteria": [
+        "Default optional nudges obey 2/rolling24h and21:00–08:00 quiet hours; unknown timezone uses inbox only.",
+        "Duplicate workers/retries cannot spend the same budget twice or resurrect revoked candidates."
+      ],
+      "verification": "Fake-clock DST/timezone change and concurrent reservation tests.",
+      "deliverables": [
+        "Scheduler and budget ledger",
+        "Time/concurrency tests"
+      ],
+      "evidence": [
+        "docs/implementation/DELIVERY_RESULT.md"
+      ],
+      "progress_note": "Durable atomic cross-space cap and chosen-timezone quiet-hour checks implemented; due reminders appear on authenticated inbox reads. External scheduler/worker remains open."
+    },
+    {
+      "id": "VOX-035",
+      "phase": "P4",
+      "title": "Implement recipient-safe Telegram dispatch and receipts",
+      "status": "in_progress",
+      "priority": "P1",
+      "size": "L",
+      "owner": "vox_architect",
+      "reviewer": "vox_privacy_security",
+      "model": "gpt-6.1-sol",
+      "requirements": [
+        "REQ-10",
+        "REQ-11",
+        "REQ-17"
+      ],
+      "depends_on": [
+        "VOX-016",
+        "VOX-032",
+        "VOX-034"
+      ],
+      "scope": "Deliver only to an explicitly opted-in, authenticated existing Telegram DM. Send generic text plus an opaque reference; render details inside the authenticated inbox only after current recipient/source authorization. Recheck policy immediately before send.",
+      "acceptance_criteria": [
+        "Revoke-after-queue prevents send and links reauthorize on open.",
+        "Unknown timeout outcome does not trigger blind duplicate sends; accepted/delivered/read states remain distinct.",
+        "External payloads, URLs, transport receipts and logs contain no private memory or transcript text; no content-bearing notification exception ships in this release."
+      ],
+      "verification": "Adapter fixtures plus approved real receipt and revoked-source E2E later.",
+      "deliverables": [
+        "Telegram dispatcher",
+        "Receipt reconciliation tests"
+      ],
+      "evidence": [
+        "docs/implementation/OBSERVATION_LEARNING.md"
+      ],
+      "progress_note": "Prior scoped relationship release includes generic opted-in Telegram alerts, fresh authority checks and private inbox content. Live cohort activation, provider/device delivery proof and pilot outcomes remain open."
+    },
+    {
+      "id": "VOX-036",
+      "phase": "P4",
+      "title": "Measure notification usefulness and unwanted contact",
+      "status": "in_progress",
+      "priority": "P1",
+      "size": "M",
+      "owner": "vox_data_engineer",
+      "reviewer": "vox_qa_evaluator",
+      "model": "gpt-6-luna",
+      "requirements": [
+        "REQ-05",
+        "REQ-10",
+        "REQ-18"
+      ],
+      "depends_on": [
+        "VOX-020",
+        "VOX-032",
+        "VOX-035"
+      ],
+      "scope": "Instrument explicit useful/not-useful, snooze/mute, suppression, opt-out and verified task outcomes with compatible exposure.",
+      "acceptance_criteria": [
+        "Click/open is reported separately from useful outcome.",
+        "Cross-space counters reveal no source content and analytics uses permitted projections only."
+      ],
+      "verification": "Source-to-view reconciliation and small-cohort privacy checks.",
+      "deliverables": [
+        "Notification outcome views",
+        "Exposure/feedback fixtures"
+      ],
+      "evidence": [
+        "docs/implementation/DELIVERY_RESULT.md"
+      ],
+      "progress_note": "Private useful/dismiss feedback endpoint and UI implemented. Cohort-level reporting and real usefulness measurements remain open."
+    },
+    {
+      "id": "VOX-037",
+      "phase": "P4",
+      "title": "Qualify browser push as a separate follow-up channel",
+      "status": "planned",
+      "priority": "P2",
+      "size": "M",
+      "owner": "vox_frontend_engineer",
+      "reviewer": "vox_qa_evaluator",
+      "model": "gpt-6.1-sol",
+      "requirements": [
+        "REQ-09",
+        "REQ-10",
+        "REQ-11",
+        "REQ-20"
+      ],
+      "depends_on": [
+        "VOX-032",
+        "VOX-034",
+        "VOX-035"
+      ],
+      "scope": "Implement or capability-gate browser push only after platform support, permission, service-worker/token lifecycle and delivery behavior are measured.",
+      "acceptance_criteria": [
+        "No automatic OS prompt on first visit or repeated prompt after denial.",
+        "Actual supported devices prove delivery/revocation; unsupported devices retain inbox without silent channel fallback."
+      ],
+      "verification": "Real browser/OS/device tests with explicit subscriptions and test accounts.",
+      "deliverables": [
+        "Push capability adapter or documented deferral",
+        "Device matrix"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "VOX-038",
+      "phase": "P5",
+      "title": "Select voice architecture and qualify jurisdictions",
+      "status": "planned",
+      "priority": "P1",
+      "size": "L",
+      "owner": "vox_voice_engineer",
+      "reviewer": "vox_privacy_security",
+      "model": "gpt-6.1-sol",
+      "requirements": [
+        "REQ-12",
+        "REQ-13",
+        "REQ-16",
+        "REQ-22"
+      ],
+      "depends_on": [
+        "VOX-002",
+        "VOX-005",
+        "VOX-008",
+        "VOX-016"
+      ],
+      "scope": "Compare local-first and cloud speaker recognition for permitted candidate sets, encryption, deletion, latency, spoof resistance and vendor contracts.",
+      "acceptance_criteria": [
+        "Legal/security approve supported markets, provider/data path and acceptable false acceptance/rejection bounds before enrollment.",
+        "Enrollment sample retention and residual provider behavior match the notice."
+      ],
+      "verification": "Synthetic/consented benchmark design and signed decision record.",
+      "deliverables": [
+        "Voice ADR and provider scorecard",
+        "Jurisdiction feature configuration"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "VOX-039",
+      "phase": "P5",
+      "title": "Implement optional enrollment and template lifecycle",
+      "status": "in_progress",
+      "priority": "P1",
+      "size": "L",
+      "owner": "vox_voice_engineer",
+      "reviewer": "vox_privacy_security",
+      "model": "gpt-6.1-sol",
+      "requirements": [
+        "REQ-01",
+        "REQ-12",
+        "REQ-17"
+      ],
+      "depends_on": [
+        "VOX-011",
+        "VOX-014",
+        "VOX-016",
+        "VOX-038"
+      ],
+      "scope": "Enroll only an authenticated adult with separate explicit biometric choice; use restricted templates, short-lived buffers, deletion and re-enrollment controls.",
+      "acceptance_criteria": [
+        "No passive or third-party enrollment; optional refusal leaves ordinary voice/chat functional.",
+        "Withdrawal deletes/disables templates per policy and prevents queued re-enrollment or matching.",
+        "Consent and approved jurisdiction are checked before sample/query feature extraction, including local extraction; denying storage after extraction is insufficient."
+      ],
+      "verification": "Consent/withdrawal races, key-access and template deletion tests.",
+      "deliverables": [
+        "Enrollment APIs/store",
+        "Lifecycle tests"
+      ],
+      "evidence": [
+        "docs/implementation/VOICE_IDENTITY_RESULT.md"
+      ],
+      "progress_note": "Canonical biometric opt-in plus separate own-voice disclosure, one-use intent, isolated encrypted opaque templates, bounded provider deadlines, canonical withdrawal and replay-safe all-device space deletion implemented with synthetic protocol tests. Provider is deliberately not configured in production; actual cryptographic access, provider behavior, retention and legal qualification remain open."
+    },
+    {
+      "id": "VOX-040",
+      "phase": "P5",
+      "title": "Implement speaker hints and authenticated person switching",
+      "status": "in_progress",
+      "priority": "P1",
+      "size": "L",
+      "owner": "vox_voice_engineer",
+      "reviewer": "vox_privacy_security",
+      "model": "gpt-6.1-sol",
+      "requirements": [
+        "REQ-03",
+        "REQ-12",
+        "REQ-13"
+      ],
+      "depends_on": [
+        "VOX-009",
+        "VOX-010",
+        "VOX-026",
+        "VOX-039"
+      ],
+      "scope": "Return recognized hint/unknown within permitted candidates; segment overlapping speakers; require authenticated person confirmation for private-context switch. Treat segment labels as transient and unverified; enable query-template extraction only in a session whose present participants have the required processing permission.",
+      "acceptance_criteria": [
+        "Voice or writing-style match never alone changes private memory grants.",
+        "Unknown/multiple/quoted/recorded speakers cannot write another person profile.",
+        "Unconsented, unknown or unresolved mixed audio is not processed into biometric query templates; join/withdrawal cancels matching before the next buffer.",
+        "Matching uses only the explicitly permitted candidate set; it never searches other accounts or silently links a writing-style similarity to a person."
+      ],
+      "verification": "Wrong-account, overlap, replay and person-switch integration tests.",
+      "deliverables": [
+        "Speaker hint adapter",
+        "Profile-switch integration"
+      ],
+      "evidence": [
+        "docs/implementation/VOICE_IDENTITY_RESULT.md"
+      ],
+      "progress_note": "Implemented self-only possible_self/unknown test hint; it never changes identity or private access. Cross-account speaker matching and authenticated person-switch flow are not implemented; communication style is not an identity credential."
+    },
+    {
+      "id": "VOX-041",
+      "phase": "P5",
+      "title": "Build enrollment, status, test and deletion UX",
+      "status": "in_progress",
+      "priority": "P1",
+      "size": "M",
+      "owner": "vox_frontend_engineer",
+      "reviewer": "vox_ux_designer",
+      "model": "gpt-6.1-sol",
+      "requirements": [
+        "REQ-09",
+        "REQ-12",
+        "REQ-13",
+        "REQ-20"
+      ],
+      "depends_on": [
+        "VOX-005",
+        "VOX-039",
+        "VOX-040"
+      ],
+      "scope": "Implement separate biometric disclosure, jurisdiction gating, enrollment/test feedback, visible recognition status and non-biometric fallback in EN/FA.",
+      "acceptance_criteria": [
+        "Unsupported region/provider and uncertain match have clear noncoercive flows.",
+        "User sees recognition controls distinct from cloned voice and can delete a template."
+      ],
+      "verification": "Accessibility/RTL journey and actual microphone-denial testing.",
+      "deliverables": [
+        "Voice controls UI",
+        "Consent/status UX evidence"
+      ],
+      "evidence": [
+        "docs/implementation/VOICE_IDENTITY_RESULT.md"
+      ],
+      "progress_note": "English/Persian disclosure, enrollment, status, test, cancellation, deletion and unavailable-provider UI implemented. Microphone starts only after server capture intent. Physical-device/browser qualification remains open."
+    },
+    {
+      "id": "VOX-042",
+      "phase": "P5",
+      "title": "Qualify voice accuracy, spoofing and device behavior",
+      "status": "planned",
+      "priority": "P1",
+      "size": "L",
+      "owner": "vox_qa_evaluator",
+      "reviewer": "vox_privacy_security",
+      "model": "gpt-6.1-sol",
+      "requirements": [
+        "REQ-03",
+        "REQ-12",
+        "REQ-13",
+        "REQ-16"
+      ],
+      "depends_on": [
+        "VOX-038",
+        "VOX-039",
+        "VOX-040",
+        "VOX-041"
+      ],
+      "scope": "Run independent consented/synthetic voice corpus across languages, devices, noise, synthetic/replayed audio and nonmatch populations.",
+      "acceptance_criteria": [
+        "FAR/FRR and confidence intervals satisfy preapproved thresholds; no universal accuracy claim.",
+        "Private-data access remains blocked even on a false match; deletion and fallback work on actual devices."
+      ],
+      "verification": "Protected voice benchmark and hardware E2E; publish exact dataset/provider/device versions.",
+      "deliverables": [
+        "Voice qualification packet",
+        "Market-specific go/no-go"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "VOX-043",
+      "phase": "P6",
+      "title": "Build reviewed learning-case dataset pipeline",
+      "status": "in_progress",
+      "priority": "P1",
+      "size": "L",
+      "owner": "vox_architect",
+      "reviewer": "vox_privacy_security",
+      "model": "gpt-6.1-sol",
+      "requirements": [
+        "REQ-04",
+        "REQ-14",
+        "REQ-17"
+      ],
+      "depends_on": [
+        "VOX-007",
+        "VOX-014",
+        "VOX-016",
+        "VOX-023"
+      ],
+      "scope": "Turn permitted findings into minimized reproductions/evaluation cases with lineage, data-purpose eligibility, retention and review.",
+      "acceptance_criteria": [
+        "Private canaries cannot enter shared prompts, PRs, reports or unapproved datasets.",
+        "Deletion propagates into exported learning cases and future optimization exclusions."
+      ],
+      "verification": "Canary export tests and dataset lineage/delete reconciliation.",
+      "deliverables": [
+        "Case curation workflow",
+        "Dataset manifests"
+      ],
+      "evidence": [
+        "docs/implementation/OBSERVATION_LEARNING.md"
+      ],
+      "progress_note": "Signed minimized synthetic/approved aggregate finding import, lineage expiry/revocation and private-content rejection implemented for local routing workflow. No automatic export of real user observations; production curation/rights integration remains open."
+    },
+    {
+      "id": "VOX-044",
+      "phase": "P6",
+      "title": "Implement offline prompt and routing optimization",
+      "status": "in_progress",
+      "priority": "P1",
+      "size": "L",
+      "owner": "vox_architect",
+      "reviewer": "vox_qa_evaluator",
+      "model": "gpt-6.1-sol",
+      "requirements": [
+        "REQ-06",
+        "REQ-14",
+        "REQ-16"
+      ],
+      "depends_on": [
+        "VOX-025",
+        "VOX-030",
+        "VOX-043"
+      ],
+      "scope": "Generate versioned GEPA-style prompt/query/routing candidates offline with fixed budgets and incumbent comparisons; preserve serving path.",
+      "acceptance_criteria": [
+        "Optimizer cannot edit metrics, held-out tests or production policies.",
+        "Generated prompt artifacts are checked for memorized private examples and support rollback."
+      ],
+      "verification": "Fixed-budget train/validation run and protected candidate evaluation.",
+      "deliverables": [
+        "Optimization worker",
+        "Candidate registry"
+      ],
+      "evidence": [
+        "docs/implementation/OBSERVATION_LEARNING.md"
+      ],
+      "progress_note": "Fixed-budget offline cancellation-routing search and immutable JSON candidate registry implemented. Small synthetic corpus only; prompt optimization, representative train/validation data and provider quality evaluation remain open."
+    },
+    {
+      "id": "VOX-045",
+      "phase": "P6",
+      "title": "Implement sandbox software patch workflow",
+      "status": "in_progress",
+      "priority": "P1",
+      "size": "L",
+      "owner": "vox_architect",
+      "reviewer": "vox_privacy_security",
+      "model": "gpt-6.1-sol",
+      "requirements": [
+        "REQ-14",
+        "REQ-15",
+        "REQ-21"
+      ],
+      "depends_on": [
+        "VOX-016",
+        "VOX-023",
+        "VOX-043"
+      ],
+      "scope": "Convert reviewed defects into isolated worktrees/branches with small diffs, reproductions, tests and reviewable PR descriptions.",
+      "acceptance_criteria": [
+        "Developer credentials cannot access production secrets, raw private content or deploy/merge authority.",
+        "Candidate scripts/logs cannot certify their own success; changed code maps to the assigned issue."
+      ],
+      "verification": "Sandbox boundary test plus a synthetic bug-to-patch rehearsal.",
+      "deliverables": [
+        "Developer workflow",
+        "PR/evidence template"
+      ],
+      "evidence": [
+        "docs/implementation/SOFTWARE_PATCH_WORKFLOW.md",
+        "docs/implementation/evidence/software-patch/RESULT.md",
+        "docs/implementation/MODEL_PATCH_AUTHOR.md",
+        "docs/implementation/evidence/model-author/RESULT.md"
+      ],
+      "progress_note": "Signed defect-to-patch workflow and shipped Persian punctuation fix remain qualified by v1 evidence. Additive v2 now authors a bounded patch through gpt-6.1-sol Responses, durably reserves one request per proposal, verifies signed provenance and preserves protected Docker evaluation. Independent 81-test review and mock end-to-end evaluation passed. One actual provider request produced the correct patch; its first Docker stage stayed incomplete because the test launcher lacked the Docker context, preserved as failed qualification. Independent re-evaluation of the captured artifact is recorded separately. Production IAM, generic coding, automatic PR publication and protected deployment remain open."
+    },
+    {
+      "id": "VOX-046",
+      "phase": "P6",
+      "title": "Implement independent evaluation and promotion receipts",
+      "status": "in_progress",
+      "priority": "P1",
+      "size": "L",
+      "owner": "vox_qa_evaluator",
+      "reviewer": "vox_privacy_security",
+      "model": "gpt-6.1-sol",
+      "requirements": [
+        "REQ-14",
+        "REQ-16",
+        "REQ-18"
+      ],
+      "depends_on": [
+        "VOX-007",
+        "VOX-029",
+        "VOX-043",
+        "VOX-044",
+        "VOX-045"
+      ],
+      "scope": "Run Promptfoo and deterministic tests in a protected environment against exact candidate/model/prompt/data versions; calibrate judge to human examples.",
+      "acceptance_criteria": [
+        "Malformed/skipped/refused evaluations reduce coverage and cannot become passes.",
+        "Quality gains cannot override privacy/identity failures; evidence collected outside candidate control."
+      ],
+      "verification": "Adversarial fake-log/judge-tamper tests and full evaluation rehearsal.",
+      "deliverables": [
+        "Protected evaluator pipeline",
+        "Promotion receipt schema"
+      ],
+      "evidence": [
+        "docs/implementation/DELIVERY_RESULT.md",
+        "docs/implementation/OBSERVATION_LEARNING.md"
+      ],
+      "progress_note": "Pinned Docker evaluator and separate signed evaluator/human receipts bind exact artifacts/data/policy; malformed payload, budget bypass and counterfeit evidence regressions covered. Synthetic role keys do not qualify production IAM; protected service deployment and representative corpus remain open. Final cancellation datasets and the fixed evaluator require both cancelled-stop and active-continue coverage, rejecting inconsistent labels (policy version 2)."
+    },
+    {
+      "id": "VOX-047",
+      "phase": "P6",
+      "title": "Implement controlled experiments and rollback of learned state",
+      "status": "in_progress",
+      "priority": "P1",
+      "size": "L",
+      "owner": "vox_release_engineer",
+      "reviewer": "vox_qa_evaluator",
+      "model": "gpt-6.1-sol",
+      "requirements": [
+        "REQ-14",
+        "REQ-17",
+        "REQ-18",
+        "REQ-21"
+      ],
+      "depends_on": [
+        "VOX-029",
+        "VOX-046"
+      ],
+      "scope": "Promote from offline to side-effect-free shadow then bounded pilot; isolate experimental memory writes and rollback code/config/derived state together.",
+      "acceptance_criteria": [
+        "Shared containers do not leak candidate effects into control recipients.",
+        "Kill switch stops candidate behavior; bad derived memories are quarantined/repaired with lineage."
+      ],
+      "verification": "Pilot/rollback exercise with predeclared stopping rules and fake-clock outcomes.",
+      "deliverables": [
+        "Promotion controller",
+        "Rollback runbook/evidence"
+      ],
+      "evidence": [
+        "docs/implementation/OBSERVATION_LEARNING.md"
+      ],
+      "progress_note": "Local comparison-only rollback rehearsal binds candidate and baseline artifacts, and explicitly makes no deployment or candidate-disable claim. Controlled production experiments, derived-state rollback and kill-switch qualification remain open."
+    },
+    {
+      "id": "VOX-048",
+      "phase": "P6",
+      "title": "Publish evidence-backed product improvement reports",
+      "status": "in_progress",
+      "priority": "P1",
+      "size": "S",
+      "owner": "vox_docs_analyst",
+      "reviewer": "vox_product_lead",
+      "model": "gpt-6-luna",
+      "requirements": [
+        "REQ-05",
+        "REQ-14",
+        "REQ-16"
+      ],
+      "depends_on": [
+        "VOX-022",
+        "VOX-036",
+        "VOX-046"
+      ],
+      "scope": "Produce compact reports linking verified outcome changes to versions/cohorts, uncertainty, costs and decisions; keep private narratives out.",
+      "acceptance_criteria": [
+        "Report distinguishes proposal, local test, CI, deployment and measured effect.",
+        "No missing metric becomes zero; unsupported causal claims are labelled hypotheses."
+      ],
+      "verification": "Independent metric/source reconciliation and privacy scan.",
+      "deliverables": [
+        "Improvement report template",
+        "Sample sanitized report"
+      ],
+      "evidence": [
+        "docs/implementation/OBSERVATION_LEARNING.md"
+      ],
+      "progress_note": "Sanitized local improvement report and read-only owner/superadmin status view distinguish local tests from unavailable CI/deployment/measured effect. Real product outcomes and costs remain unavailable."
+    },
+    {
+      "id": "VOX-049",
+      "phase": "P7",
+      "title": "Run complete synthetic integration and protected regression suite",
+      "status": "in_progress",
+      "priority": "P1",
+      "size": "L",
+      "owner": "vox_qa_evaluator",
+      "reviewer": "vox_architect",
+      "model": "gpt-6.1-sol",
+      "requirements": [
+        "REQ-02",
+        "REQ-03",
+        "REQ-04",
+        "REQ-06",
+        "REQ-10",
+        "REQ-14",
+        "REQ-17",
+        "REQ-01",
+        "REQ-22"
+      ],
+      "depends_on": [
+        "VOX-015",
+        "VOX-016",
+        "VOX-018",
+        "VOX-021",
+        "VOX-030",
+        "VOX-035",
+        "VOX-046",
+        "VOX-056",
+        "VOX-031"
+      ],
+      "scope": "Execute QA matrix across consent, memory scopes, event ordering, decisions, notifications, evaluation authority and provider failures.",
+      "acceptance_criteria": [
+        "All critical invariants pass against an exact candidate; failures retain original receipts.",
+        "Revocation/identity/queue races are reproduced deterministically and repaired before gate completion.",
+        "Direct API attempts with expired/unknown jurisdiction policy, missing adult entry, guest refusal or a participant joining mid-turn are denied before affected capture/provider processing.",
+        "User-rights exports filter other people's data and exercise correction, restriction, objection and guest requests with traceable deadlines."
+      ],
+      "verification": "Vitest/emulator/property/contract tests plus protected Promptfoo evaluation.",
+      "deliverables": [
+        "Regression evidence packet",
+        "Open-defect register"
+      ],
+      "evidence": [
+        "docs/implementation/DELIVERY_RESULT.md",
+        "docs/implementation/INTEGRATION_RELEASE.md",
+        "docs/implementation/RELEASE_2026_10_19.md",
+        "docs/implementation/OBSERVATION_LEARNING.md",
+        "docs/implementation/ADAPTIVE_COMPLETION_RESULT.md"
+      ],
+      "progress_note": "Combined source suite, independent cross-review and consent/cancellation/transport regression checks are recorded in the completion receipt. Synthetic evidence does not close protected semantic/provider/device cases."
+    },
+    {
+      "id": "VOX-050",
+      "phase": "P7",
+      "title": "Run Studio browser journeys and accessibility checks",
+      "status": "in_progress",
+      "priority": "P1",
+      "size": "M",
+      "owner": "vox_e2e_runner",
+      "reviewer": "vox_qa_evaluator",
+      "model": "gpt-6-luna",
+      "requirements": [
+        "REQ-01",
+        "REQ-08",
+        "REQ-09",
+        "REQ-10",
+        "REQ-20"
+      ],
+      "depends_on": [
+        "VOX-012",
+        "VOX-028",
+        "VOX-032",
+        "VOX-035",
+        "VOX-049"
+      ],
+      "scope": "Execute QA-approved Studio journeys using synthetic fixtures in Chromium/WebKit/mobile emulation, EN/FA and RTL; record exact evidence.",
+      "acceptance_criteria": [
+        "Tests cover reject optional consent, correction/reset, shared memory, revoked notification and degraded states.",
+        "Emulation is labelled as such; screenshots alone do not prove backend/provider outcomes."
+      ],
+      "verification": "Playwright commands and accessibility audit with versioned artifacts.",
+      "deliverables": [
+        "Browser evidence bundle",
+        "Accessibility findings"
+      ],
+      "evidence": [
+        "docs/implementation/DELIVERY_RESULT.md",
+        "docs/implementation/INTEGRATION_RELEASE.md",
+        "docs/implementation/RELEASE_2026_10_19.md",
+        "docs/implementation/OBSERVATION_LEARNING.md",
+        "docs/implementation/ADAPTIVE_COMPLETION_RESULT.md"
+      ],
+      "progress_note": "New compiled Studio browser journey covers text/image chat, Work/Personal clearing, EN/FA and default-off unavailable recognition. Evidence and real-device distinction are recorded in the completion receipt."
+    },
+    {
+      "id": "VOX-051",
+      "phase": "P7",
+      "title": "Run real provider and physical-device E2E",
+      "status": "planned",
+      "priority": "P1",
+      "size": "L",
+      "owner": "vox_e2e_runner",
+      "reviewer": "vox_qa_evaluator",
+      "model": "gpt-6-luna",
+      "requirements": [
+        "REQ-06",
+        "REQ-09",
+        "REQ-10",
+        "REQ-11",
+        "REQ-12",
+        "REQ-13",
+        "REQ-16"
+      ],
+      "depends_on": [
+        "VOX-031",
+        "VOX-035",
+        "VOX-050"
+      ],
+      "scope": "Execute approved core test-account journeys on actual supported Telegram/mobile/browser devices with provider calls and notification receipts. Voice recognition and browser push qualification require their additional capability dependencies; disabled features must be explicitly excluded.",
+      "acceptance_criteria": [
+        "End-of-speech to heard audio, interruption/cancellation, notification permissions/delivery and voice fallback have actual evidence.",
+        "Unavailable hardware/provider/jurisdiction gates remain UNAVAILABLE; no mock substitution.",
+        "For every enabled audio mode, actual capture/provider traces prove pre-processing permission, new-participant pause and denied-region behavior; unqualified multi-party modes remain disabled."
+      ],
+      "verification": "Human-assisted hardware capture and independent backend trace/receipt correlation.",
+      "deliverables": [
+        "Device/provider qualification matrix",
+        "Exact candidate evidence"
+      ],
+      "evidence": [],
+      "capability_dependencies": {
+        "voice_recognition": [
+          "VOX-042"
+        ],
+        "browser_push": [
+          "VOX-037"
+        ]
+      }
+    },
+    {
+      "id": "VOX-052",
+      "phase": "P7",
+      "title": "Qualify load, recovery, deletion and incident response",
+      "status": "in_progress",
+      "priority": "P1",
+      "size": "L",
+      "owner": "vox_release_engineer",
+      "reviewer": "vox_qa_evaluator",
+      "model": "gpt-6.1-sol",
+      "requirements": [
+        "REQ-04",
+        "REQ-16",
+        "REQ-17",
+        "REQ-21"
+      ],
+      "depends_on": [
+        "VOX-018",
+        "VOX-014",
+        "VOX-030",
+        "VOX-035",
+        "VOX-047",
+        "VOX-049"
+      ],
+      "scope": "Load-test approved synthetic workloads, queue/provider outage, lost receipts, restore/tombstones and incident kill switches; set alert owners.",
+      "acceptance_criteria": [
+        "Operational SLOs and budgets meet agreed baseline-derived targets.",
+        "Restore/retry cannot reintroduce deleted data; notification and prediction kill switches function.",
+        "Clock-driven retention/inactivity drills cover every enabled data class, provider residual status and backup expiry; failed sweeps alert, and expired content stays inaccessible."
+      ],
+      "verification": "Fault/load/recovery drills with exact infrastructure and workload records.",
+      "deliverables": [
+        "Operations qualification",
+        "Incident and restore runbook"
+      ],
+      "evidence": [
+        "docs/implementation/OBSERVATION_LEARNING.md"
+      ],
+      "progress_note": "Local account sweep pagination, competing leases, crash recovery, expiry, snapshot reconciliation and bounded observer retries tested. Background maintenance is supported only in the persistent file/polling runtime; unsupported activation fails startup. Production load/SLOs, full backup restoration and provider residual deletion remain open."
+    },
+    {
+      "id": "VOX-053",
+      "phase": "P7",
+      "title": "Finalize public notices, support and launch materials",
+      "status": "planned",
+      "priority": "P1",
+      "size": "M",
+      "owner": "vox_docs_analyst",
+      "reviewer": "vox_privacy_security",
+      "model": "gpt-6-luna",
+      "requirements": [
+        "REQ-01",
+        "REQ-09",
+        "REQ-12",
+        "REQ-22"
+      ],
+      "depends_on": [
+        "VOX-002",
+        "VOX-012",
+        "VOX-032",
+        "VOX-048",
+        "VOX-056"
+      ],
+      "scope": "Align public privacy/biometric notices and English/Persian UX/support content with implemented data routes, retention, providers and actual enabled markets.",
+      "acceptance_criteria": [
+        "No placeholders, unsupported zero-retention claims or missing operator/contact remain in published notices.",
+        "Human legal/privacy owner approves final notice and product behavior; policy version matches receipts."
+      ],
+      "verification": "Copy-to-implementation traceability and legal/localization review.",
+      "deliverables": [
+        "Launch notice/support package",
+        "Approval/version record"
+      ],
+      "evidence": [],
+      "capability_dependencies": {
+        "voice_recognition": [
+          "VOX-038",
+          "VOX-042"
+        ]
+      }
+    },
+    {
+      "id": "VOX-054",
+      "phase": "P7",
+      "title": "Run independent release gate and staged production pilot",
+      "status": "planned",
+      "priority": "P1",
+      "size": "L",
+      "owner": "vox_release_engineer",
+      "reviewer": "vox_qa_evaluator",
+      "model": "gpt-6.1-sol",
+      "requirements": [
+        "REQ-16",
+        "REQ-18",
+        "REQ-21",
+        "REQ-22"
+      ],
+      "depends_on": [
+        "VOX-049",
+        "VOX-050",
+        "VOX-052",
+        "VOX-053",
+        "VOX-047",
+        "VOX-051"
+      ],
+      "scope": "Assemble exact artifact/CI/config/migration/legal evidence and rollout separately for core versus voice/push enabled capabilities; run controlled pilot.",
+      "acceptance_criteria": [
+        "Every enabled capability satisfies required physical/provider gates; core can exclude unqualified voice or browser push explicitly.",
+        "Deployment revision and live target behavior are verified independently; human release owner authorizes production activation."
+      ],
+      "verification": "Go/no-go checklist and canary rollout receipts with rollback rehearsal.",
+      "deliverables": [
+        "Release decision packet",
+        "Pilot monitoring and rollback record"
+      ],
+      "evidence": [],
+      "capability_dependencies": {
+        "voice_recognition": [
+          "VOX-042"
+        ],
+        "browser_push": [
+          "VOX-037"
+        ]
+      }
+    },
+    {
+      "id": "VOX-055",
+      "phase": "P7",
+      "title": "Close pilot with measured outcomes and next-release decision",
+      "status": "planned",
+      "priority": "P1",
+      "size": "M",
+      "owner": "vox_product_lead",
+      "reviewer": "vox_qa_evaluator",
+      "model": "gpt-6.1-sol",
+      "requirements": [
+        "REQ-05",
+        "REQ-08",
+        "REQ-10",
+        "REQ-16",
+        "REQ-18",
+        "REQ-21"
+      ],
+      "depends_on": [
+        "VOX-054",
+        "VOX-048"
+      ],
+      "scope": "Reconcile pilot exposures/outcomes, guardrails, latency/cost, opt-outs and complaints; decide keep/rollback/iterate with accountable owners.",
+      "acceptance_criteria": [
+        "Insufficient or conflicting evidence keeps baseline or extends study under approved limits.",
+        "No automatic broad launch based solely on engagement, model self-grades or a successful deploy."
+      ],
+      "verification": "Independent analysis at assignment unit with confidence intervals and user feedback.",
+      "deliverables": [
+        "Pilot outcome report",
+        "Prioritized follow-up backlog"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "VOX-056",
+      "phase": "P1",
+      "title": "Implement user rights, scoped exports and guest requests",
+      "status": "in_progress",
+      "priority": "P0",
+      "size": "L",
+      "owner": "vox_architect",
+      "reviewer": "vox_privacy_security",
+      "model": "gpt-6.1-sol",
+      "requirements": [
+        "REQ-01",
+        "REQ-02",
+        "REQ-03",
+        "REQ-09",
+        "REQ-17",
+        "REQ-22"
+      ],
+      "depends_on": [
+        "VOX-002",
+        "VOX-009",
+        "VOX-010",
+        "VOX-011",
+        "VOX-014",
+        "VOX-016"
+      ],
+      "scope": "Implement accessible EN/FA access/export, correction, erasure, restriction, objection, portability and withdrawal requests with proportionate requester verification, a no-account guest route, operator queue, jurisdiction deadlines and status receipts. Wire the privacy center to these real handlers.",
+      "acceptance_criteria": [
+        "A verified requester receives only their authorized projection; a workspace owner or shared-account user cannot export another person's private memories.",
+        "Correction propagates to derived records; restriction/objection prevent the affected use under the approved basis policy; deletion invokes the existing coordinator rather than a separate partial cleanup.",
+        "Guest requests are trackable without compulsory biometric verification or full account creation; deadlines, extensions, reasons and completion receipts are visible to the privacy operator.",
+        "EN/FA flows expose truthful pending/completed/error states and reveal no private details through request IDs, download links, support logs or unverified email addresses."
+      ],
+      "verification": "Integration tests for shared-subject redaction, secure export expiry, wrong-requester access, deadline clocks, guest verification and correction/deletion lineage; independent privacy acceptance against PRIV-034/PVT-11.",
+      "deliverables": [
+        "Rights service and operator queue",
+        "Scoped export and correction handlers",
+        "EN/FA privacy-center and guest request flows",
+        "Rights/deadline/access tests"
+      ],
+      "evidence": [
+        "docs/implementation/OBSERVATION_LEARNING.md"
+      ],
+      "progress_note": "Confirmed own-account Work/Personal JSON export now includes allowlisted account records and currently authorized published shared content; exports are not persisted. Provider/backups explicitly unavailable. Guest request verification and broader rights orchestration remain open."
+    }
+  ],
+  "delivery_slices": [
+    {
+      "id": "adaptive-local-core",
+      "status": "complete_local",
+      "baseline": "ebb75a67c79bf317d1dec40381b216c75bb90ffa",
+      "evidence": "docs/implementation/DELIVERY_RESULT.md",
+      "note": "Source delivery slice only; parent task acceptance and production gates remain independent."
+    },
+    {
+      "id": "adaptive-develop-release",
+      "status": "deployed_core_optional_features_off",
+      "baseline": "c424dc6d9829540ad1e999a99efa824e9894dd66",
+      "deployed_revision": "523e9f040a08b574352e122322449d418076ca54",
+      "evidence": "docs/implementation/RELEASE_2026_10_19.md",
+      "note": "Exact local/public health and route checks; no physical-device, biometric, automatic-learning or proactive pilot qualification."
+    },
+    {
+      "id": "safe-communication-diagnostics",
+      "status": "complete_local",
+      "baseline": "c424dc6d9829540ad1e999a99efa824e9894dd66",
+      "evidence": "docs/implementation/OBSERVATION_DIAGNOSTICS.md",
+      "note": "Fixed catalog events in the active communication chain; independent source review passed. Wider VOX-021 export, platform and retention acceptance remains open."
+    }
+  ]
+}

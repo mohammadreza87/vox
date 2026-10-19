@@ -5,7 +5,7 @@
  *   build private memories with her, she knows how people relate, she builds
  *   shared memory with groups and projects, and nothing leaks between them.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   callback,
   fakeVoice,
@@ -426,7 +426,7 @@ describe('memory formation quality', () => {
     const transcript = llm.extractionRequests[1].messages[0].content;
     expect(transcript).toMatch(/\[context\] Reza \(id: reza\) \[message id: \d+\]: first message/);
     expect(transcript).toMatch(/\[new\] Reza \(id: reza\) \[message id: \d+\]: second message/);
-    expect(transcript).toContain('[context] Aria: Sure.');
+    expect(transcript).toMatch(/\[context\] Aria \[message id: \d+\]: Sure\./);
     expect(transcript).not.toContain('[new] Aria:');
   });
 
@@ -495,6 +495,22 @@ describe('memory formation quality', () => {
 
 
 describe('privacy mutation fences', () => {
+  it.each(['private', 'group'])('suppresses a %s reply if its speaker disappears before delivery', async (kind) => {
+    const { gateway, org, bot, history, memories } = makeGateway();
+    const speaker = org.getPersonByTelegramId(TG.reza)!;
+    const lookup = vi.spyOn(org, 'getPersonByTelegramId')
+      .mockReturnValueOnce(speaker).mockReturnValue(undefined);
+    try {
+      const update = kind === 'group' ? groupText(GAMEEND_CHAT, TG.reza, 'Aria, hello') : privateText(TG.reza, 'Hello');
+      await expect(gateway.handleUpdate('aria', update)).resolves.toBe('ignored');
+      expect(lookup).toHaveBeenCalledTimes(2);
+      expect(bot.sent).toEqual([]);
+      expect((await history.recent('aria', kind === 'group' ? 'group-gameend-team' : 'private-reza', 20))
+        .filter((message) => message.role === 'assistant')).toEqual([]);
+      expect(await memories.listActive('aria')).toEqual([]);
+    } finally { lookup.mockRestore(); }
+  });
+
   it.each(['private', 'group'])('does not send or retain a %s answer generated before an authorized history reset', async (kind) => {
     const { gateway, llm, history, bot } = makeGateway();
     let started!: () => void;

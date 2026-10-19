@@ -22,9 +22,14 @@
     "studio:start": "STUDIO_BOTS=1 next start",
     "studio:build": "node scripts/studio-build.mjs",
     "studio:production": "node scripts/studio-production.mjs",
-    "test:relationships": "vitest run src/lib/relationships src/lib/studio/__tests__/relationships.test.ts src/lib/tireh/__tests__/memory-privacy.test.ts src/app/api/studio/relationships/drain/route.test.ts src/app/studio/_components/RelationshipPanel.test.tsx",
+    "test:relationships": "vitest run src/lib/relationships src/lib/studio/__tests__/relationships.test.ts src/lib/studio/__tests__/scoped-relationship-integration.test.ts src/lib/studio/__tests__/scoped-relationship-drain.test.ts src/lib/adaptive/__tests__/relationships-service.test.ts src/lib/tireh/__tests__/memory-privacy.test.ts src/app/api/studio/relationships/drain/route.test.ts src/app/studio/_components/RelationshipPanel.test.tsx",
     "simulate:relationships": "tsx scripts/relationship-simulation.ts",
-    "e2e:relationships": "playwright test --config=playwright.relationships.config.ts"
+    "e2e:relationships": "playwright test --config=playwright.relationships.config.ts",
+    "test:connections": "vitest run src/lib/connections",
+    "e2e:connections": "playwright test --config=playwright.connections.config.ts",
+    "connections:broker": "node --import tsx scripts/connections-broker.mjs",
+    "connections:config": "node --import tsx scripts/connections-config.mjs",
+    "connections:preflight": "node --import tsx scripts/connections-preflight.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.71.0",

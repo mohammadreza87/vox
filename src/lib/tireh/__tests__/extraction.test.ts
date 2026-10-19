@@ -93,16 +93,23 @@ describe('decideScope', () => {
     expect(decideScope(org, leads, 'reza', candidate({})).scope).toEqual({ kind: 'group', groupId: 'leads' });
   });
 
-  it('never turns confidential group remarks into private records or normal shared facts', () => {
+  it('classifies confidential group remarks as private without downgrading sensitivity', () => {
     const d = decideScope(org, gameend, 'milad', candidate({ confidential: true }));
-    expect(d.scope).toEqual({ kind: 'group', groupId: 'gameend-team' });
+    expect(d.scope).toEqual({ kind: 'private', personId: 'milad' });
     expect(d.sensitivity).toBe('confidential');
     expect(d.offerScope).toBeUndefined();
   });
 
   it('preserves the personal classification for a group candidate', () => {
     const d = decideScope(org, gameend, 'milad', candidate({ kind: 'personal' }));
-    expect(d.scope).toEqual({ kind: 'group', groupId: 'gameend-team' });
+    expect(d.scope).toEqual({ kind: 'private', personId: 'milad' });
+    expect(d.sensitivity).toBe('personal');
+    expect(d.offerScope).toBeUndefined();
+  });
+
+  it('personal group statements retain personal sensitivity and private scope', () => {
+    const d = decideScope(org, gameend, 'milad', candidate({ kind: 'personal' }));
+    expect(d.scope).toEqual({ kind: 'private', personId: 'milad' });
     expect(d.sensitivity).toBe('personal');
     expect(d.offerScope).toBeUndefined();
   });

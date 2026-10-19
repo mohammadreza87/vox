@@ -1,0 +1,65 @@
+{
+  "scope": "actual Chromium browser → actual compiled Next API → actual isolated file storage → stubbed external Anthropic; no API mocks",
+  "compiledArtifact": {
+    "revision": "82e6eaa2db0ea9b57ed929faa9889057c8ad7f14",
+    "sourceTree": "c0818a1d7d18c744da2fe1f9a78fcd1490eef014",
+    "buildId": "6LkkM4qin-mWUp-tYQLGl",
+    "builtAt": "2026-10-19T19:58:19.498Z"
+  },
+  "origin": "http://localhost:3105",
+  "at": "2026-10-19T20:03:58.575Z",
+  "browser": "Chromium headless,390x844",
+  "checks": [
+    {
+      "name": "real authenticated agent → Chat here navigation",
+      "passed": true
+    },
+    {
+      "name": "browser text → HTTP → Anthropic stub → visible actual reply",
+      "passed": true
+    },
+    {
+      "name": "real selected file → browser minimization → HTTP image → actual visible reply",
+      "passed": true
+    },
+    {
+      "name": "browser Personal denied before independent grant",
+      "passed": true
+    },
+    {
+      "name": "browser Personal completes after real API grant",
+      "passed": true
+    },
+    {
+      "name": "Persian RTL controls → real HTTP → actual reply",
+      "passed": true
+    }
+  ],
+  "conversationStatuses": [
+    200,
+    200,
+    403,
+    200,
+    200
+  ],
+  "apiResponseCount": 9,
+  "apiMocks": 0,
+  "browserExternalStub": "Telegram SDK JS only, signed synthetic initData",
+  "blockedBrowserHosts": [],
+  "pageErrors": [],
+  "providerCounts": {
+    "anthropic": 4,
+    "image": 1,
+    "decisions": 0,
+    "blockedServerExternal": 0
+  },
+  "screenshots": [
+    "conversation-en.png",
+    "personal-denied.png",
+    "conversation-fa.png"
+  ],
+  "limitations": [
+    "Controlled synthetic full chain; no real provider/device/Telegram auth proof",
+    "No production deployment"
+  ]
+}

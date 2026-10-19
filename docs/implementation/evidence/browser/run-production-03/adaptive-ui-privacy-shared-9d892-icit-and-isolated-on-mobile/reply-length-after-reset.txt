@@ -1,0 +1,5 @@
+Synthetic fixture result after successful reset request:
+Displayed Reply length: detailed
+Expected default: balanced
+Mock backend state: work preference cleared (reset request body action=reset)
+Result: UI does not refresh the selected Reply length after reset.

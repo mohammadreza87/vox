@@ -48,6 +48,7 @@ export interface Project {
 
 /** A Telegram group registered with TIREH. Unregistered groups are refused. */
 export interface Group {
+  audienceEpoch?: number;
   id: string;                 // internal id, e.g. "gameend-team"
   name: string;
   telegramChatId: number;
@@ -125,6 +126,10 @@ export type MemoryType = 'fact' | 'decision' | 'preference' | 'event' | 'relatio
 export type MemorySensitivity = 'normal' | 'personal' | 'confidential';
 
 export interface MemorySource {
+  /** Opaque source event lineage; never source text. */
+  eventIds?: string[];
+  /** Context dependencies, distinct from this record's own source events. */
+  derivedFromEventIds?: string[];
   personId: string;           // who said it
   chatKind: 'private' | 'group';
   groupId?: string;
@@ -135,11 +140,12 @@ export interface MemorySource {
 export interface MemoryRecord {
   id: string;
   personaId: string;
+  /** Historical recipients fixed at explicit authorization; absence denotes legacy data. */
+  authorizedPersonIds?: string[];
   content: string;
   type: MemoryType;
   scope: MemoryScope;
   /** Audience at creation/explicit sharing. Membership changes never widen it. */
-  authorizedPersonIds?: string[];
   /** Changes on every explicit sharing mutation, invalidating old offers. */
   shareVersion?: number;
   sensitivity: MemorySensitivity;
@@ -172,6 +178,8 @@ export interface ShareOffer {
 // ============================================
 
 export interface ChatMessage {
+  /** Server-created boundary stamp. Unstamped legacy rows are never replayed. */
+  privacy?: { policyKey: string; memoryRevision: number; sourceEventIds: string[]; memoryIds: string[] };
   role: 'user' | 'assistant';
   personId?: string;          // set for user messages
   text: string;
@@ -179,13 +187,12 @@ export interface ChatMessage {
   telegramMessageId?: number;
   /** Group context collected under the group-only memory policy. */
   groupPolicyVersion?: 1;
-  /** Addressing result captured with Telegram entity/reply metadata intact. */
-  groupOtherTarget?: boolean;
-  /** Internal correlation for feedback on a delivered follow-up; never model authority. */
+  /** Delivered follow-up correlation; never model authority. */
   relationshipIntentionId?: string;
-  /** Audience allowed to reuse this turn; required for group history. */
   audiencePersonIds?: string[];
   privacyEpoch?: number;
+  /** Addressing result captured with Telegram entity/reply metadata intact. */
+  groupOtherTarget?: boolean;
 }
 
 /** Where a conversation happens and who can read it */

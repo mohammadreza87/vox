@@ -16,6 +16,8 @@ export interface GroupBehavior {
 }
 
 export interface Member {
+  /** Monotonic source authority; absent legacy value is zero. */
+  learningAuthorityRevision?: number;
   telegramId: number;
   name: string;
   username?: string;
@@ -113,6 +115,8 @@ export interface TelegramProfileSync {
 }
 
 export interface Agent {
+  /** Monotonic source authority; never decrement or restore. */
+  learningAuthorityRevision?: number;
   id: string;
   status: AgentStatus;
   persona: PersonaSpec;
@@ -172,6 +176,8 @@ export interface StudioGroup {
   memberIds: number[];
   /** True when the chat has more members than the HOOR people we know of */
   hasGuests: boolean;
+  /** Monotonic audience epoch; leave/rejoin must not restore old sharing rights. */
+  audienceEpoch?: number;
   agentIds: string[];
   addedBy?: number;
   addedAt: string;

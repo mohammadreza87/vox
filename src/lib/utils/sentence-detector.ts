@@ -53,7 +53,7 @@ export class SentenceDetector {
 
   // Sentence ending patterns - handles ., !, ? followed by space or end
   // Uses a more robust pattern that handles common abbreviations
-  private static SENTENCE_END = /([.!?]+)(?:\s+|$)/g;
+  private static SENTENCE_END = /([.!?؟]+)(?:\s+|$)/g;
   private static MIN_SENTENCE_LENGTH = 10;
 
   // Common abbreviations that should not trigger sentence end

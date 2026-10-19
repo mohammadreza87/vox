@@ -1,6 +1,8 @@
+import { TurnTrace } from '../../adaptive/observation/trace';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AnthropicLLM, GeminiLLM } from '../llm';
 import { withSources } from '../gateway';
+import { expectContentFreeTelegramLogs, telegramCanary, telegramCanaryError } from '@/test/telegram-diagnostics';
 
 const provider = vi.hoisted(() => ({
   create: vi.fn(),
@@ -37,6 +39,28 @@ beforeEach(() => {
 });
 
 describe('Anthropic request compatibility', () => {
+  it.each(['pause_turn', 'tool_unavailable'])('reauthorizes %s without hidden SDK retries', async kind => {
+    let allowed = true;
+    provider.create.mockImplementationOnce(async () => {
+      allowed = false;
+      if (kind === 'tool_unavailable') throw { status: 400, message: 'web_search unavailable' };
+      return { stop_reason: 'pause_turn', content: [{ type: 'text', text: 'Searching' }] };
+    });
+    await expect(new AnthropicLLM('fixture-key', 'claude-sonnet-5-5').completeWithWeb({ ...request,
+      maxSearches: 1, authorize: async () => allowed })).rejects.toThrow('llm_authority_changed');
+    expect(provider.create).toHaveBeenCalledTimes(1);
+    expect(provider.create.mock.calls[0][1]).toEqual({ maxRetries: 0 });
+    expect(provider.create.mock.calls[0][0]).not.toHaveProperty('authorize');
+  });
+  it('denies initial completion, stream and Gemini export on failed authority', async () => {
+    const denied = { ...request, authorize: async () => false };
+    const llm = new AnthropicLLM('fixture-key', 'claude-sonnet-5-5');
+    await expect(llm.complete(denied)).rejects.toThrow('llm_authority_changed');
+    await expect(llm.stream(denied).next()).rejects.toThrow('llm_authority_changed');
+    await expect(new GeminiLLM('fixture-key', 'fixture-model').complete(denied)).rejects.toThrow('llm_authority_changed');
+    expect(provider.create).not.toHaveBeenCalled(); expect(provider.stream).not.toHaveBeenCalled();
+    expect(provider.sendMessage).not.toHaveBeenCalled();
+  });
   it('rejects token-truncated output for a side-effecting caller', async () => {
     provider.create.mockResolvedValueOnce({ stop_reason: 'max_tokens', content: [{ type: 'text', text: 'How did your' }] });
     await expect(new AnthropicLLM('fixture-key', 'claude-haiku-5-5').complete({ ...request, requireComplete: true })).rejects.toThrow('completion truncated');
@@ -82,6 +106,18 @@ it('preserves Gemini sampling and output settings', async () => {
   });
   expect(provider.sendMessage).toHaveBeenCalledWith('A helpful teammate');
   expect(provider.create).not.toHaveBeenCalled();
+});
+
+it('serializes current-turn images in the provider wire format without exposing internal fields', async () => {
+  const images = [{ mimeType: 'image/png' as const, data: 'synthetic-image-bytes' }];
+  const multimodal = { ...request, messages: [{ role: 'user' as const, content: 'Describe this.', images }] };
+  await new AnthropicLLM('fixture-key', 'claude-sonnet-5-5').complete(multimodal);
+  expect(provider.create.mock.lastCall?.[0].messages).toEqual([{ role: 'user', content: [
+    { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'synthetic-image-bytes' } }, { type: 'text', text: 'Describe this.' },
+  ] }]);
+  await new GeminiLLM('fixture-key', 'gemini-test').complete(multimodal);
+  expect(provider.sendMessage).toHaveBeenLastCalledWith([{ text: 'Describe this.' }, { inlineData: { mimeType: 'image/png', data: 'synthetic-image-bytes' } }]);
+  expect(multimodal.messages[0].images).toEqual(images);
 });
 
 it('rejects Gemini token-truncated output for a side-effecting caller', async () => {
@@ -131,9 +167,33 @@ describe('live web search', () => {
     expect(provider.create.mock.lastCall?.[0]).not.toHaveProperty('tools');
   });
 
+  it('keeps fallback provider content and configured model identifiers out of diagnostic arguments', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const error = telegramCanaryError();
+      error.message += ' web_search is not supported';
+      provider.create.mockRejectedValueOnce(Object.assign(error, { status: 400 }));
+      const llm = new AnthropicLLM(telegramCanary.credential, telegramCanary.persona);
+      expect(await llm.completeWithWeb({ ...request, maxSearches: 3 })).toEqual({ text: 'fixture answer', sources: [] });
+      await llm.completeWithWeb({ ...request, maxSearches: 3 });
+      expect(provider.create).toHaveBeenCalledTimes(3);
+      expect(provider.create.mock.lastCall?.[0]).not.toHaveProperty('tools');
+      expect(warn).toHaveBeenCalledWith({ type: 'telegram_ingress', stage: 'web_search', reason: 'tool_unavailable', outcome: 'reply_without_search' });
+      expectContentFreeTelegramLogs(warn.mock.calls);
+    } finally { warn.mockRestore(); }
+  });
+
   it('does not swallow other failures', async () => {
     provider.create.mockRejectedValueOnce(Object.assign(new Error('overloaded'), { status: 529 }));
     await expect(new AnthropicLLM('fixture-key', 'claude-haiku-5-5').completeWithWeb({ ...request, maxSearches: 3 })).rejects.toThrow('overloaded');
+  });
+
+  it.each(['status', 'message'])('preserves the original provider exception when its %s accessor throws', async (property) => {
+    const error = Object.assign(telegramCanaryError(), { status: 400 });
+    Object.defineProperty(error, property, { get: () => { throw new Error('synthetic getter failure'); } });
+    provider.create.mockRejectedValueOnce(error);
+    await expect(new AnthropicLLM('fixture-key', 'claude-haiku-5-5').completeWithWeb({ ...request, maxSearches: 3 })).rejects.toBe(error);
+    expect(provider.create).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -150,5 +210,45 @@ describe('streaming', () => {
     for await (const p of new AnthropicLLM('fixture-key', 'claude-haiku-5-5').stream(request)) parts.push(p);
     expect(parts).toEqual(['Hi ', 'there']);
     expect(provider.stream.mock.lastCall?.[0]).toEqual({ model: 'claude-haiku-5-5', max_tokens: 1500, system: request.system, messages: request.messages });
+  });
+});
+
+
+describe('returned provider usage without response interference', () => {
+  it('records Anthropic actual zero/cache fields and never guesses missing fields', async () => {
+    provider.create.mockResolvedValueOnce({ content: [{ type: 'text', text: 'answer' }], usage: { input_tokens: 0, output_tokens: 7, cache_read_input_tokens: 4 } });
+    const trace = new TurnTrace(true);
+    expect(await trace.run(() => new AnthropicLLM('test', 'claude-haiku-5-5').complete(request))).toBe('answer');
+    expect(trace.snapshot()?.usage).toEqual([{ provider: 'anthropic', modelFamily: 'claude', inputTokens: 0, outputTokens: 7, cacheReadTokens: 4, cacheWriteTokens: null, status: 'complete' }]);
+    expect(trace.snapshot()?.stages[0]).toMatchObject({ stage: 'generation', outcome: 'succeeded' });
+  });
+  it('captures each web continuation and failure separately; failed requests have unavailable usage', async () => {
+    provider.create.mockResolvedValueOnce({ stop_reason: 'pause_turn', content: [], usage: { input_tokens: 2, output_tokens: 3 } })
+      .mockResolvedValueOnce({ stop_reason: 'end_turn', content: [{ type: 'text', text: 'answer' }], usage: { input_tokens: 5, output_tokens: 6 } });
+    const trace = new TurnTrace(true);
+    await trace.run(() => new AnthropicLLM('test', 'claude-haiku-5-5').completeWithWeb({ ...request, maxSearches: 1 }));
+    expect(trace.snapshot()?.usage.map(u => u.inputTokens)).toEqual([2, 5]);
+    provider.create.mockRejectedValueOnce(new Error('PRIVATE_PROVIDER_ERROR'));
+    await expect(trace.run(() => new AnthropicLLM('test', 'claude-haiku-5-5').complete(request))).rejects.toThrow('PRIVATE_PROVIDER_ERROR');
+    expect(trace.snapshot()?.usage.at(-1)?.status).toBe('unavailable'); expect(JSON.stringify(trace.snapshot())).not.toContain('PRIVATE_PROVIDER_ERROR');
+  });
+  it('emits one cumulative stream receipt and captures Gemini returned metadata', async () => {
+    provider.stream.mockReturnValue((async function* () { yield { type: 'message_start', message: { usage: { input_tokens: 8, output_tokens: 0 } } };
+      yield { type: 'message_delta', usage: { output_tokens: 3 } }; yield { type: 'message_delta', usage: { output_tokens: 5 } }; yield { type: 'message_stop' }; })());
+    const trace = new TurnTrace(true);
+    await trace.run(async () => { for await (const part of new AnthropicLLM('test', 'claude-haiku-5-5').stream(request)) { expect(typeof part).toBe('string'); } });
+    expect(trace.snapshot()?.usage).toMatchObject([{ inputTokens: 8, outputTokens: 5 }]);
+    provider.sendMessage.mockResolvedValueOnce({ response: { text: () => 'answer', usageMetadata: { promptTokenCount: 12, candidatesTokenCount: 6, cachedContentTokenCount: 2 } } });
+    await trace.run(() => new GeminiLLM('test', 'gemini-test').complete(request));
+    expect(trace.snapshot()?.usage.at(-1)).toMatchObject({ provider: 'gemini', inputTokens: 12, outputTokens: 6, cacheReadTokens: 2 });
+  });
+  it('ignores malformed usage accessors and keeps the original answer', async () => {
+    const response = { content: [{ type: 'text', text: 'same answer' }] };
+    Object.defineProperty(response, 'usage', { get: () => { throw new Error('PRIVATE_USAGE_GETTER'); } });
+    provider.create.mockResolvedValue(response);
+    expect(await new AnthropicLLM('test', 'claude-haiku-5-5').complete(request)).toBe('same answer');
+    const trace = new TurnTrace(true);
+    expect(await trace.run(() => new AnthropicLLM('test', 'claude-haiku-5-5').complete(request))).toBe('same answer');
+    expect(trace.snapshot()?.usage[0].status).toBe('unavailable');
   });
 });

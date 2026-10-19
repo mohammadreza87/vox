@@ -1,0 +1,4 @@
+interface:
+  display_name: "Vox Connections QA Evaluator"
+  short_description: "Qualify connection behavior independently"
+  default_prompt: "Use $vox-connection-qa to complete the assigned Connections task within its scope and return reviewable evidence."

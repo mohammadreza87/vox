@@ -4,10 +4,12 @@
  * (serverless production), so both modes behave the same.
  */
 
-import { createHmac, timingSafeEqual } from 'crypto';
+import { createHash, createHmac, timingSafeEqual } from 'crypto';
+import { beginObservation, observationCancelled } from './observation';
 import type { TelegramUpdate } from '../tireh/telegram/client';
 import { canUseAgent, visibilityOf } from './permissions';
 import type { Studio } from './service';
+import { logTelegramDiagnostic } from '../tireh/telegram/diagnostics';
 
 export const MANAGER_UPDATES = ['message', 'managed_bot'];
 export const AGENT_UPDATES = ['message', 'callback_query', 'my_chat_member', 'chat_member'];
@@ -22,6 +24,12 @@ export async function handleManagerUpdate(studio: Studio, update: TelegramUpdate
   const msg = update.message;
   if (!msg?.from || msg.from.is_bot || msg.chat.type !== 'private') return;
   const member = await studio.ensureMember(msg.from);
+  if (member.role !== 'pending' && msg.chat.id === msg.from.id && studio.deps.reminderEndpointId) {
+    // A verified private manager DM establishes this bot's reachable recipient.
+    // Mini App auth alone and messages from groups never establish a channel.
+    await studio.deps.experience?.noteReminderRecipient(member.telegramId, studio.deps.reminderEndpointId)
+      .catch(() => logTelegramDiagnostic(studio.deps.logger ?? console, 'update_failed'));
+  }
   const webAppUrl = studio.deps.webAppUrl;
   const open = webAppUrl ? { inline_keyboard: [[{ text: 'Open Vox Studio', web_app: { url: webAppUrl } }]] } : undefined;
   const text = member.role === 'pending'
@@ -45,8 +53,9 @@ export async function handleManagerUpdate(studio: Studio, update: TelegramUpdate
  *    admins; org: every member); for public agents also anyone else, after the
  *    agent decides in character whether to answer, decline, ignore or block.
  */
-export async function handleAgentUpdate(studio: Studio, agentId: string, update: TelegramUpdate): Promise<void> {
-  const initial = await studio.gateway();
+export async function handleAgentUpdate(studio: Studio, agentId: string, update: TelegramUpdate, endpointId?: string): Promise<void> {
+  const endpoint = endpointId ? { personaId: agentId, id: endpointId } : undefined;
+  const initial = await studio.gateway(endpoint);
   const state = initial.state;
   let gateway = initial.gateway;
   const live = state.agents.find((a) => a.id === agentId);
@@ -56,7 +65,7 @@ export async function handleAgentUpdate(studio: Studio, agentId: string, update:
     return;
   }
   if (update.chat_member) {
-    await studio.noteGroupMembership(update.chat_member.chat.id, update.chat_member.new_chat_member.user, update.chat_member.new_chat_member.status);
+    if (await studio.deps.memory.deduper.firstSeen(`audience:${agentId}:${update.update_id}`)) await studio.onGroupChatMember(update.chat_member);
     return;
   }
   const msg = update.message;
@@ -73,7 +82,7 @@ export async function handleAgentUpdate(studio: Studio, agentId: string, update:
     await studio.verifyGroupAudience(agentId, msg.chat.id);
     // Rebuild when the speaker is new to the group so they count in its audience right away.
     await studio.noteGroupSpeaker(msg.chat.id, msg.from);
-    ({ gateway } = await studio.gateway());
+    ({ gateway } = await studio.gateway(endpoint));
     await gateway.handleUpdate(agentId, update);
     return;
   }
@@ -81,7 +90,14 @@ export async function handleAgentUpdate(studio: Studio, agentId: string, update:
 
   const member = state.members.find((m) => m.telegramId === msg.from!.id);
   if (member && canUseAgent(member, live)) {
-    await gateway.handleUpdate(agentId, update);
+    const turnId = createHash('sha256').update(JSON.stringify([agentId, endpointId ?? '', update.update_id])).digest('hex');
+    const observe = await beginObservation(studio, member.telegramId, agentId, 'work', 'telegram', turnId);
+    try {
+      const result = await observe.run(() => gateway.handleUpdate(agentId, update));
+      // Duplicate and command updates are not new conversation measurements.
+      if (result === 'replied') await observe('responded');
+      else if (result === 'ignored') await observe('unknown');
+    } catch (error) { await observe(observationCancelled(error) ? 'cancelled' : 'failed'); throw error; }
     return;
   }
 
@@ -105,7 +121,7 @@ export async function handleAgentUpdate(studio: Studio, agentId: string, update:
     await bot.sendMessage(msg.chat.id, `I've enjoyed talking, but I need a break. Let's pick this up tomorrow.`);
     return;
   }
-  ({ gateway } = await studio.gateway());
+  ({ gateway } = await studio.gateway(endpoint));
   const text = msg.text ?? msg.caption ?? '';
   if (text.startsWith('/') || (!text && msg.voice)) {
     // Commands (/start, /memories…) and voice notes go straight through; the gateway handles them.

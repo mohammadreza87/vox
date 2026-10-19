@@ -30,12 +30,14 @@ export function MemoriesScreen({ id }: { id: string }) {
   const [shareError, setShareError] = useState('');
   const [shareBusy, setShareBusy] = useState(false);
   const [forgetId, setForgetId] = useState<string | null>(null);
+  const [legacySharing, setLegacySharing] = useState(false);
 
   useEffect(() => {
     Promise.all([api.agent(id), api.memories(id)])
       .then(([a, m]) => { setAgent(a.agent); setMemories(m.memories); })
       .catch((e) => { nav.toast(errorMessage(e), 'error'); nav.back(); });
     api.members().then(({ people: members }) => setPeople(members)).catch(() => setPeople([]));
+    api.me().then(({ features }) => setLegacySharing(features.legacyMemorySharing === true)).catch(() => setLegacySharing(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
@@ -70,7 +72,7 @@ export function MemoriesScreen({ id }: { id: string }) {
           {FILTERS.map((f) => <button key={f} className="vx-chip" aria-pressed={f === filter} onClick={() => setFilter(f)}>{f}</button>)}
         </div>
         {shown.length === 0 ? (
-          <Empty title="Nothing yet" body={`Talk to ${agent.persona.name} and memories form on their own. You can always delete what you said.`} />
+          <Empty title="Nothing yet" body="Use Privacy to save private notes, or Shared memories to choose exactly who can access a note. You can inspect and delete saved memories." />
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             <AnimatePresence initial={false}>
@@ -87,7 +89,7 @@ export function MemoriesScreen({ id }: { id: string }) {
                   </div>
                   {m.mine && <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end' }}>
                     <button className="vx-icon-btn" aria-label="Forget this" aria-expanded={forgetId === m.id} onClick={() => setForgetId(forgetId === m.id ? null : m.id)} style={{ width: 36, height: 36, color: '#7D828C' }}><Icon name="trash" size={18} /></button>
-                    {!['personal', 'confidential', 'sensitive'].includes(m.sensitivity.toLowerCase()) && <button className="vx-btn vx-btn-secondary vx-btn-sm" onClick={() => { setSharingId(sharingId === m.id ? null : m.id); setRecipients([]); setShareError(''); }} aria-expanded={sharingId === m.id}>Share</button>}
+                    {legacySharing && !['personal', 'confidential', 'sensitive'].includes(m.sensitivity.toLowerCase()) && <button className="vx-btn vx-btn-secondary vx-btn-sm" onClick={() => { setSharingId(sharingId === m.id ? null : m.id); setRecipients([]); setShareError(''); }} aria-expanded={sharingId === m.id}>Share</button>}
                   </div>}
                 </motion.div>
                 {forgetId === m.id && <div role="group" aria-label="Forget memory confirmation" className="vx-group" style={{ padding: 12, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}><span className="vx-small">{agent.persona.name} will forget this for good.</span><button className="vx-btn vx-btn-danger vx-btn-sm" onClick={() => void forget(m)}>Forget</button><button className="vx-btn vx-btn-secondary vx-btn-sm" onClick={() => setForgetId(null)}>Keep memory</button></div>}

@@ -69,6 +69,23 @@ const TELEGRAM_FRAME_ANCESTORS = ['https://web.telegram.org'];
 
 const isPathOrChild = (pathname: string, root: string) => pathname === root || pathname.startsWith(`${root}/`);
 
+// Middleware runs at the Edge and cannot read the manifest/key files. Admit only
+// the existing explicit server configuration; the Node route must still verify
+// HMAC and current profile authority before serving any broker action.
+function hasBrokerControlConfiguration(): boolean {
+  const manifest = process.env.STUDIO_CONNECTIONS_CONFIG_FILE;
+  const key = process.env.STUDIO_CONNECTIONS_BROKER_AUTH_KEY_FILE;
+  const brokerUrl = process.env.STUDIO_CONNECTIONS_BROKER_URL;
+  const privatePath = (value: string | undefined) => Boolean(value && value === value.trim() &&
+    value.startsWith('/') && !value.startsWith('//') && !/[\0\r\n]/.test(value));
+  if (!privatePath(manifest) || !privatePath(key) || !brokerUrl) return false;
+  try {
+    const url = new URL(brokerUrl);
+    return url.protocol === 'http:' && ['127.0.0.1', '[::1]'].includes(url.hostname) &&
+      !url.username && !url.password && url.pathname === '/' && !url.search && !url.hash;
+  } catch { return false; }
+}
+
 // Build CSP header string
 function buildCSP(isDev: boolean, isMiniApp = false): string {
   const directives = { ...CSP_DIRECTIVES };
@@ -121,7 +138,9 @@ export function middleware(request: NextRequest) {
       target.search = request.nextUrl.search;
       return NextResponse.redirect(target);
     }
-    if (!isPathOrChild(pathname, '/studio') && !isPathOrChild(pathname, '/api/studio') &&
+    const brokerControl = pathname === '/api/connections/broker' && request.method === 'POST' &&
+      request.nextUrl.search === '' && hasBrokerControlConfiguration();
+    if (!brokerControl && !isPathOrChild(pathname, '/studio') && !isPathOrChild(pathname, '/api/studio') &&
       !pathname.startsWith('/_next/static/') && pathname !== '/favicon.ico') {
       return new NextResponse(null, { status: 404, headers: { 'Cache-Control': 'no-store' } });
     }

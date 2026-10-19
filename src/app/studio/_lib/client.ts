@@ -76,7 +76,7 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(method: string, path: string, body?: unknown, responseType: 'json' | 'blob' = 'json'): Promise<T> {
+export async function request<T>(method: string, path: string, body?: unknown, responseType: 'json' | 'blob' = 'json', signal?: AbortSignal): Promise<T> {
   const headers: Record<string, string> = {
     'X-Telegram-Init-Data': tg()?.initData ?? '',
     Accept: responseType === 'blob' ? 'audio/*' : 'application/json',
@@ -87,7 +87,7 @@ async function request<T>(method: string, path: string, body?: unknown, response
     headers['Content-Type'] = 'application/json';
     payload = JSON.stringify(body);
   }
-  const res = await fetch(`/api/studio/${path}`, { method, headers, body: payload });
+  const res = await fetch(`/api/studio/${path}`, { method, headers, body: payload, ...(signal ? { signal } : {}) });
   if (!res.ok) {
     const err: unknown = await res.json().catch(() => null);
     const message = err && typeof err === 'object' && 'error' in err && typeof err.error === 'string'
@@ -110,12 +110,14 @@ export interface Me {
   member: Member;
   org: string;
   bot: string;
-  features: { avatars: boolean; voices: boolean; calls: boolean; liveCalls?: boolean };
+  features: { avatars: boolean; voices: boolean; calls: boolean; liveCalls?: boolean; legacyMemorySharing?: boolean };
 }
 
 export interface MemoryItem { id: string; content: string; type: string; scope: string; scopeLabel: string; from: string; mine: boolean; at: string; sensitivity: string }
 export interface GroupItem { chatId: number; title: string; hasGuests: boolean; memberCount: number; agents: Array<{ id: string; name: string; look: AgentLook }> }
 export type RelationshipMode = 'off' | 'shadow' | 'live';
+export type RelationshipSpace = 'work' | 'personal';
+export interface RelationshipInboxItem { id: string; text: string; createdAt: number; expiresAt: number; status: 'unread' | 'read' | 'dismissed' }
 export interface RelationshipView {
   available: boolean;
   mode: RelationshipMode;
@@ -127,6 +129,11 @@ export interface RelationshipView {
   openSituations: number;
   pending: number;
   unanswered: number;
+  space: RelationshipSpace;
+  externalEnabled: boolean;
+  externalAvailable: boolean;
+  inbox: RelationshipInboxItem[];
+  sources: Array<{ id: string; createdAt: number }>;
 }
 
 const enc = encodeURIComponent;
@@ -173,17 +180,18 @@ export const api = {
   fire: (id: string, input: { reason: string; memoryPolicy: string; confirmName: string }) =>
     request<{ agent: AgentView }>('POST', `agents/${enc(id)}/fire`, input),
   groupLink: (id: string) => request<{ link: string }>('GET', `agents/${enc(id)}/group-link`),
-  callTurn: (id: string, audio: Blob) => {
+  callTurn: (id: string, audio: Blob, space: 'work' | 'personal' = 'work') => {
     const form = new FormData();
     form.append('audio', audio, 'turn');
-    return request<{ transcript: string; reply: string; audio?: string }>('POST', `agents/${enc(id)}/call`, form);
+    form.append('space', space);
+    return request<{ transcript: string; reply: string; audio?: string; turnId?: string }>('POST', `agents/${enc(id)}/call`, form);
   },
-  liveCall: (id: string) => request<LiveCall>('POST', `agents/${enc(id)}/live-call`),
-  callEnd: (id: string) => request<{ ok: true }>('POST', `agents/${enc(id)}/call-end`),
+  liveCall: (id: string, space: 'work' | 'personal' = 'work') => request<LiveCall>('POST', `agents/${enc(id)}/live-call`, { space }),
+  callEnd: (id: string, space: 'work' | 'personal' = 'work') => request<{ ok: true }>('POST', `agents/${enc(id)}/call-end`, { space }),
   memories: (id: string) => request<{ memories: MemoryItem[] }>('GET', `agents/${enc(id)}/memories`),
-  relationship: (id: string) => request<{ relationship: RelationshipView }>('GET', `agents/${enc(id)}/relationship`),
-  updateRelationship: (id: string, input: { action: 'configure' | 'pause' | 'resume' | 'stop' | 'forget'; until?: string; timeZone?: string; quietHours?: { start: number; end: number } }) =>
-    request<{ relationship: RelationshipView }>('PUT', `agents/${enc(id)}/relationship`, input),
+  relationship: (id: string, space: RelationshipSpace = 'work') => request<{ relationship: RelationshipView }>('GET', `agents/${enc(id)}/relationship?space=${space}`),
+  updateRelationship: (id: string, input: { space?: RelationshipSpace; action: 'pause' | 'resume' | 'stop' | 'forget' | 'external' | 'source-delete' | 'read' | 'dismiss'; until?: string; enabled?: boolean; sourceId?: string; itemId?: string }, space: RelationshipSpace = 'work') =>
+    request<{ relationship: RelationshipView }>('PUT', `agents/${enc(id)}/relationship`, { ...input, space }),
   shareMemory: (id: string, memoryId: string, recipients: number[]) =>
     request<{ ok: true }>('PUT', `agents/${enc(id)}/memories`, { memoryId, recipients }),
   revokeMemory: (id: string, memoryId: string) =>
@@ -196,6 +204,7 @@ export const api = {
 
 export type LiveCall =
   | { live: false }
-  | { live: true; signedUrl: string; callToken: string; voiceId: string; language?: string; firstMessage: string };
+  | { live: true; signedUrl: string; callToken: string; voiceId: string; language?: string; firstMessage: string;
+      partialPrediction?: import('@/lib/adaptive/prediction/voice-client').VoicePartialCapability };
 
 export const mediaUrl = (file: string) => `/api/studio/media/${encodeURIComponent(file)}`;

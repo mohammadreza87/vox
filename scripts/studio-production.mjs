@@ -15,7 +15,11 @@ const envFile = join(base, 'production.env');
 const label = 'io.ludaxis.vox-studio';
 const domain = `gui/${process.getuid()}`;
 const plist = join(homedir(), 'Library', 'LaunchAgents', `${label}.plist`);
-const keys = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'ELEVENLABS_API_KEY', 'ELEVENLABS_TTS_MODEL', 'VOXX_BOT_TOKEN', 'VOXX_BOT_USERNAME', 'STUDIO_SECRET', 'STUDIO_SUPERADMIN_IDS', 'STUDIO_WEBAPP_URL', 'STUDIO_DATA_DIR', 'STUDIO_ORG_NAME', 'STUDIO_CHAT_MODEL', 'STUDIO_VOICE_MODEL', 'STUDIO_PERSONA_MODEL', 'STUDIO_DECISIONS', 'OPENAI_DECISION_MODEL', 'STUDIO_GROUP_OBSERVATION'];
+const keys = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'ELEVENLABS_API_KEY', 'ELEVENLABS_TTS_MODEL', 'VOXX_BOT_TOKEN', 'VOXX_BOT_USERNAME', 'STUDIO_SECRET', 'STUDIO_SUPERADMIN_IDS', 'STUDIO_WEBAPP_URL', 'STUDIO_DATA_DIR', 'STUDIO_ORG_NAME', 'STUDIO_CHAT_MODEL', 'STUDIO_VOICE_MODEL', 'STUDIO_PERSONA_MODEL', 'STUDIO_DECISIONS', 'OPENAI_DECISION_MODEL', 'STUDIO_GROUP_OBSERVATION',
+  'OPENAI_IMAGE_MODEL', 'OPENAI_STT_MODEL', 'STUDIO_WEB_SEARCH', 'STUDIO_DECISIONS_ENABLED',
+  'STUDIO_RELATIONSHIPS', 'STUDIO_RELATIONSHIP_ROLES', 'STUDIO_RELATIONSHIP_AGENTS', 'STUDIO_RELATIONSHIP_PEOPLE', 'STUDIO_RELATIONSHIP_WORKER_SECRET',
+  'STUDIO_SCOPED_RELATIONSHIPS', 'STUDIO_ADAPTIVE_POLICY_JSON', 'STUDIO_MAINTENANCE', 'STUDIO_REMINDER_DELIVERY', 'STUDIO_IMPROVEMENT_TRUST_JSON'];
+keys.push('STUDIO_CONNECTIONS_CONFIG_FILE', 'STUDIO_CONNECTIONS_BROKER_URL', 'STUDIO_CONNECTIONS_BROKER_AUTH_KEY_FILE');
 const readEnv = (file) => existsSync(file) ? parseEnv(readFileSync(file, 'utf8')) : {};
 const stamp = () => new Date().toISOString().replace(/[:.]/g, '-');
 function envLine(key, value) {
@@ -37,12 +41,15 @@ function prepare() {
   privateDir(base);
   const source = readEnv(resolve(process.argv[3] ?? join(root, '.env.local')));
   const env = readEnv(envFile);
-  for (const key of keys) if (!env[key] && source[key]) env[key] = source[key];
+  // Existing values, including an intentional empty/off setting, take priority.
+  // Only allowlisted source values are imported; existing private extensions
+  // are retained so preparing a release cannot silently erase configured policy.
+  for (const key of keys) if (!Object.hasOwn(env, key) && Object.hasOwn(source, key)) env[key] = source[key];
   env.STUDIO_SECRET ||= randomBytes(32).toString('hex');
   env.STUDIO_DATA_DIR ||= join(base, 'data');
   env.VOXX_BOT_USERNAME ||= 'VoxxBot';
   env.STUDIO_ORG_NAME ||= 'HOOR';
-  const contents = keys.map(k => envLine(k, env[k] ?? '')).join('\n') + '\n';
+  const contents = [...new Set([...keys, ...Object.keys(env)])].map(k => envLine(k, env[k] ?? '')).join('\n') + '\n';
   const temporary = `${envFile}.${process.pid}.tmp`;
   try {
     writeFileSync(temporary, contents, { mode: 0o600 });

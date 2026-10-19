@@ -1,3 +1,4 @@
+import { measureStage, unavailableUsage, captureUsage } from '../adaptive/observation/trace';
 /**
  * Media providers for Studio:
  *  - OpenAI: avatar images (gpt-image) and speech-to-text (gpt-4o transcribe)
@@ -9,6 +10,7 @@
 import type { AgentLook, PersonaSpec } from './types';
 import type { VoiceService } from '../tireh/voice';
 import type { DecisionAnswer, DecisionQuestion } from '../tireh/triage';
+import { logTelegramDiagnostic } from '../tireh/telegram/diagnostics';
 
 type FetchFn = typeof fetch;
 
@@ -56,14 +58,21 @@ export class OpenAIMedia {
    * fast, and billed for input only. Refused or malformed answers are left out.
    */
   async decide(input: string, questions: DecisionQuestion[], timeoutMs = 10_000): Promise<Record<string, DecisionAnswer>> {
+    return measureStage('decisions', async () => {
+      try { return await this.decideObserved(input, questions, timeoutMs); }
+      catch (error) { unavailableUsage('openai', 'gpt'); throw error; }
+    }, result => Object.keys(result).length ? 'succeeded' : 'unknown');
+  }
+  private async decideObserved(input: string, questions: DecisionQuestion[], timeoutMs: number): Promise<Record<string, DecisionAnswer>> {
     const response = await this.fetchFn('https://api.openai.com/v1/decisions', {
       method: 'POST',
       headers: { Authorization: `Bearer ${this.apiKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: this.decisionModel, input, questions }),
       signal: AbortSignal.timeout(timeoutMs),
     });
-    const json = (await response.json().catch(() => ({}))) as { answers?: Array<Record<string, unknown>> };
+    const json = (await response.json().catch(() => ({}))) as { answers?: Array<Record<string, unknown>>; usage?: { input_tokens?: unknown } };
     if (!response.ok) throw new Error(`OpenAI decision failed: HTTP ${response.status}`);
+    captureUsage('openai', 'gpt', () => ({ inputTokens: json.usage?.input_tokens }));
     const answers: Record<string, DecisionAnswer> = {};
     for (const a of json.answers ?? []) {
       const name = typeof a.name === 'string' ? a.name : '';
@@ -89,6 +98,10 @@ export class OpenAIMedia {
   }
 
   async transcribe(audio: ArrayBuffer, mimeType = 'audio/ogg', filename = 'voice.ogg'): Promise<string> {
+    return measureStage('stt', async () => { try { return await this.transcribeObserved(audio, mimeType, filename); }
+      catch (error) { unavailableUsage('openai', 'unknown'); throw error; } });
+  }
+  private async transcribeObserved(audio: ArrayBuffer, mimeType: string, filename: string): Promise<string> {
     const form = new FormData();
     form.append('file', new Blob([audio], { type: mimeType }), filename);
     form.append('model', this.sttModel);
@@ -97,8 +110,9 @@ export class OpenAIMedia {
       headers: { Authorization: `Bearer ${this.apiKey}` },
       body: form,
     });
-    const json = (await response.json().catch(() => ({}))) as { text?: string; error?: { message?: string } };
+    const json = (await response.json().catch(() => ({}))) as { text?: string; error?: { message?: string }; usage?: { type?: string; input_tokens?: unknown; output_tokens?: unknown } };
     if (!response.ok) throw new Error(`OpenAI transcription failed: ${json.error?.message ?? `HTTP ${response.status}`}`);
+    captureUsage('openai', 'unknown', () => json.usage?.type === 'tokens' ? { inputTokens: json.usage.input_tokens, outputTokens: json.usage.output_tokens } : {});
     return (json.text ?? '').trim();
   }
 }
@@ -301,6 +315,10 @@ export class ElevenLabsStudio {
   }
 
   async speak(text: string, voiceId: string): Promise<Buffer> {
+    return measureStage('tts', async () => { try { return await this.speakObserved(text, voiceId); }
+      finally { unavailableUsage('elevenlabs', 'eleven'); } });
+  }
+  private async speakObserved(text: string, voiceId: string): Promise<Buffer> {
     const response = await this.request(`${XI}/text-to-speech/${encodeURIComponent(voiceId)}?output_format=mp3_44100_128`, {
       method: 'POST', headers: { ...this.headers(), Accept: 'audio/mpeg' },
       body: JSON.stringify({ text: text.slice(0, 2500), model_id: this.ttsModel, voice_settings: { stability: 0.5, similarity_boost: 0.75 } }),
@@ -316,6 +334,10 @@ export class ElevenLabsStudio {
 
   /** Speech-to-text (Scribe), so voice messages work without OpenAI. */
   async transcribe(audio: ArrayBuffer, mimeType = 'audio/ogg'): Promise<string> {
+    return measureStage('stt', async () => { try { return await this.transcribeObserved(audio, mimeType); }
+      finally { unavailableUsage('elevenlabs', 'scribe'); } });
+  }
+  private async transcribeObserved(audio: ArrayBuffer, mimeType: string): Promise<string> {
     const form = new FormData();
     form.append('model_id', process.env.ELEVENLABS_STT_MODEL ?? 'scribe_v1');
     form.append('file', new Blob([audio], { type: mimeType }), mimeType.includes('mp4') ? 'voice.m4a' : mimeType.includes('webm') ? 'voice.webm' : 'voice.ogg');
@@ -348,9 +370,30 @@ export class ElevenLabsStudio {
     await this.convai(`/agents/${encodeURIComponent(agentId)}`, { method: 'PATCH', body: JSON.stringify(voiceAgentBody(config)) });
   }
 
+  /** Read-only qualification of the exact provider version used for optional
+   * provisional text. No agent configuration, prompt or secret leaves here.
+   * https://elevenlabs.io/docs/api-reference/agents/get */
+  async partialTranscriptVersion(agentId: string, expected: { llmUrl: string; secretId: string }): Promise<string | null> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const controller = new AbortController();
+    try {
+      const raw = await Promise.race([this.convai<unknown>(`/agents/${encodeURIComponent(agentId)}`, { method: 'GET', signal: controller.signal }),
+        new Promise<null>(resolve => { timer = setTimeout(() => { controller.abort(); resolve(null); }, 400); })]);
+      const config = record(raw), conversation = record(config.conversation_config), prompt = record(record(conversation.agent).prompt);
+      const llm = record(prompt.custom_llm), events = record(conversation.conversation).client_events;
+      const version = str(config.version_id);
+      if (config.agent_id !== agentId || !version || !/^[A-Za-z0-9_-]{1,96}$/.test(version) || prompt.llm !== 'custom-llm' ||
+          llm.url !== expected.llmUrl || record(llm.api_key).secret_id !== expected.secretId || !Array.isArray(events) ||
+          !['audio', 'agent_response', 'user_transcript', 'interruption', 'tentative_user_transcript'].every(event => events.includes(event))) return null;
+      return version;
+    } catch { return null; }
+    finally { if (timer) clearTimeout(timer); }
+  }
+
   /** A short-lived URL the browser uses to start one conversation. */
-  async signedUrl(agentId: string): Promise<string> {
-    const json = await this.convai<{ signed_url?: string }>(`/conversation/get-signed-url?agent_id=${encodeURIComponent(agentId)}`, {});
+  async signedUrl(agentId: string, versionId?: string): Promise<string> {
+    const version = versionId ? `&version_id=${encodeURIComponent(versionId)}` : '';
+    const json = await this.convai<{ signed_url?: string }>(`/conversation/get-signed-url?agent_id=${encodeURIComponent(agentId)}${version}`, {});
     if (!json.signed_url) throw new ElevenLabsSpeechError(502, 'provider_error');
     return json.signed_url;
   }
@@ -426,7 +469,7 @@ export class StudioVoiceService implements VoiceService {
       return await this.openai.transcribe(audio, mimeType);
     } catch (error) {
       if (!this.eleven) throw error;
-      console.warn('[studio] OpenAI transcription failed, trying ElevenLabs', error);
+      logTelegramDiagnostic(console, 'transcription_fallback');
       return this.eleven.transcribe(audio, mimeType);
     }
   }

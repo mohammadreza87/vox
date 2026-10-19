@@ -1,0 +1,4 @@
+interface:
+  display_name: "Vox Scripted E2E runner"
+  short_description: "Execute approved Vox E2E evidence checks"
+  default_prompt: "Use $vox-e2e-runner to complete the assigned Vox task within its stated ownership and acceptance criteria."

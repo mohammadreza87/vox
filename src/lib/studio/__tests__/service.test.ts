@@ -386,7 +386,7 @@ describe('managed bot → hire', () => {
     expect(first.failed).toEqual(['name']);
     expect(bot().setMyProfilePhoto).toHaveBeenCalledTimes(2);
     expect(bot().setMyDescription).toHaveBeenCalledTimes(2);
-    expect(h.logger.warn).toHaveBeenCalledWith(expect.stringContaining('Telegram name update failed'), expect.anything());
+    expect(h.logger.warn).toHaveBeenCalledWith({ type: 'telegram_ingress', stage: 'profile_name', reason: 'operation_failed', outcome: 'continue' });
 
     const second = await h.studio.syncProfile(org.alice, agent.id);
     expect(second.failed).toEqual([]);
@@ -723,18 +723,16 @@ describe('groups', () => {
     const { gateway } = await h.studio.gateway();
     expect(await gateway.handleUpdate(a.id, groupText(chat.id, ID.bob, 'Nova, what do we know?'))).toBe('replied');
     expect(h.chatLLM.lastPrompt).not.toContain('GROUPFACT');
-    expect(h.chatLLM.replyRequests.at(-1)?.messages).toEqual([{ role: 'user', content: 'Nova, what do we know?' }]);
+    expect(h.chatLLM.replyRequests.at(-1)?.messages).toEqual([{ role: 'user', content: 'Bob: Nova, what do we know?' }]);
     expect(h.chatLLM.lastPrompt).not.toContain('ORGFACT');
 
-    // The known-reader phase must also pass the fresh inventory before sending.
-    bot().getChatMemberCount.mockResolvedValue(3);
-    Object.assign(bot(), {
-      getChatMember: async (chatId: number, userId: number) => {
-        expect(chatId).toBe(chat.id);
-        expect([ID.alice, ID.bob, botId]).toContain(userId);
-        return { status: 'member', user: { id: userId, is_bot: userId === botId, first_name: 'Member' } };
-      },
-    });
+    const roster = [ID.alice, ID.bob, botId];
+    bot().getChatMemberCount.mockResolvedValue(roster.length);
+    Object.assign(bot(), { getChatMember: vi.fn(async (chatId: number, id: number) => {
+      expect(chatId).toBe(chat.id);
+      expect(roster).toContain(id);
+      return { status: roster.includes(id) ? 'member' : 'left', user: { id, is_bot: id === botId, first_name: 'Synthetic reader' } };
+    }) });
     await h.store.update((s) => { s.groups[0].hasGuests = false; });
     const fresh = await h.studio.gateway();
     expect(await fresh.gateway.handleUpdate(a.id, groupText(chat.id, ID.bob, 'Nova, and now?'))).toBe('replied');

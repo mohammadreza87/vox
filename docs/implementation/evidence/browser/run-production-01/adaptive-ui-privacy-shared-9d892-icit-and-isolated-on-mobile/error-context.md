@@ -1,0 +1,47 @@
+# Page snapshot
+
+```yaml
+- generic [active] [ref=e1]:
+  - generic [ref=e4]:
+    - generic [ref=e5]:
+      - button "Back" [ref=e6] [cursor=pointer]:
+        - img [ref=e7]
+      - generic [ref=e9]: Shared memories
+      - button "فارسی" [ref=e11] [cursor=pointer]
+    - generic [ref=e12]:
+      - paragraph [ref=e13]: Save a note for an exact set of people. Each person chooses separately whether an agent can use it for personalization.
+      - group "Memory space" [ref=e14]:
+        - button "Work" [pressed] [ref=e15] [cursor=pointer]
+        - button "Personal" [ref=e16] [cursor=pointer]
+      - generic [ref=e17]:
+        - heading "A new shared note" [level=2] [ref=e18]
+        - generic [ref=e19]:
+          - text: Share with
+          - combobox "Share with" [ref=e20]:
+            - option "Selected people" [selected]
+            - option "A group"
+        - group "Exact recipients, including you" [ref=e21]:
+          - generic [ref=e22]: Exact recipients, including you
+          - paragraph [ref=e23]: Synthetic Owner · You
+          - generic [ref=e24]:
+            - checkbox "Synthetic Guest" [ref=e25]
+            - text: Synthetic Guest
+        - group "Agents allowed to read this note" [ref=e26]:
+          - generic [ref=e27]: Agents allowed to read this note
+          - generic [ref=e28]:
+            - checkbox "Fixture Agent" [ref=e29]
+            - text: Fixture Agent
+        - generic [ref=e30]:
+          - text: Note
+          - textbox "Note" [ref=e31]
+        - button "Preview exact audience" [disabled] [ref=e32]
+      - article [ref=e33]:
+        - heading "Selected people" [level=2] [ref=e34]
+        - paragraph [ref=e35]: Synthetic Owner · Synthetic Guest
+        - generic [ref=e36]:
+          - paragraph [ref=e37]: Synthetic work note
+          - button "Delete note" [ref=e38] [cursor=pointer]
+        - button "Leave shared memory" [ref=e40] [cursor=pointer]
+        - 'button "Remove access: Synthetic Guest" [ref=e42] [cursor=pointer]'
+  - alert [ref=e43]
+```

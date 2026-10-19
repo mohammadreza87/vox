@@ -221,7 +221,7 @@ describe('Telegram profile reconciliation', () => {
     try {
       await vi.advanceTimersByTimeAsync(8000);
       expect(newcomer.bot().getUpdates).toHaveBeenCalledTimes(1);
-      expect(h.logger.info).toHaveBeenCalledWith(`[studio] ${hired.agent.id} offline`);
+      expect(h.logger.info).toHaveBeenCalledWith({ type: 'telegram_ingress', stage: 'lifecycle', reason: 'deactivated', outcome: 'offline' });
     } finally {
       release.resolve();
       // Join the outstanding per-agent queue so no background fixture job leaks.

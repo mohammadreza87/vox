@@ -10,18 +10,28 @@ import { HomeScreen } from './screens/Home';
 import { AgentScreen } from './screens/Agent';
 import { SpawnScreen } from './screens/Spawn';
 import { CallScreen } from './screens/Call';
+import { ConversationScreen } from './screens/Conversation';
 import { MemoriesScreen } from './screens/Memories';
 import { FireScreen } from './screens/Fire';
 import { OrgScreen } from './screens/Org';
 import { GroupsScreen } from './screens/Groups';
+import { PrivacyScreen } from './screens/Privacy';
+import { SharedMemoriesScreen } from './screens/SharedMemories';
+import { ExperienceScreen } from './screens/Experience';
+import { ConnectionsScreen } from './screens/Connections';
 
 export type Route =
   | { name: 'home' }
   | { name: 'groups' }
   | { name: 'org' }
+  | { name: 'privacy' }
+  | { name: 'shared-memories' }
+  | { name: 'experience'; notificationId?: string }
+  | { name: 'connections'; agentId?: string }
   | { name: 'agent'; id: string }
   | { name: 'spawn'; draftId?: string; successorOf?: string }
   | { name: 'call'; id: string }
+  | { name: 'conversation'; id: string }
   | { name: 'memories'; id: string }
   | { name: 'fire'; id: string };
 
@@ -50,6 +60,7 @@ const TABS: Array<{ route: Route['name']; label: string; icon: string }> = [
   { route: 'home', label: 'Agents', icon: 'cloud' },
   { route: 'groups', label: 'Groups', icon: 'groups' },
   { route: 'org', label: 'Org', icon: 'shield' },
+  { route: 'privacy', label: 'Privacy', icon: 'lock' },
 ];
 
 export function StudioApp() {
@@ -58,6 +69,25 @@ export function StudioApp() {
   const [stack, setStack] = useState<Route[]>([{ name: 'home' }]);
   const [toast, setToast] = useState<{ message: string; tone: 'info' | 'error' } | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const notificationOpened = useRef(false);
+  const correctionOwner = useRef<string | null>(null);
+  const [correctionPending, setCorrectionPending] = useState(false);
+  const correctionPendingChange = useCallback((token: string, pending: boolean): boolean => {
+    if (pending) {
+      if (correctionOwner.current && correctionOwner.current !== token) return false;
+      correctionOwner.current = token; setCorrectionPending(true);
+    } else {
+      if (correctionOwner.current !== token) return false;
+      correctionOwner.current = null; setCorrectionPending(false);
+    }
+    return true;
+  }, []);
+  useEffect(() => {
+    if (!correctionPending) return;
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ''; };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [correctionPending]);
 
   const loadMe = useCallback(async () => {
     try {
@@ -73,12 +103,28 @@ export function StudioApp() {
     void loadMe();
   }, [loadMe]);
 
+  useEffect(() => {
+    if (!me || me.member.role === 'pending' || notificationOpened.current) return;
+    notificationOpened.current = true;
+    const url = new URL(window.location.href);
+    const notificationId = url.searchParams.get('notification');
+    if (notificationId && /^[A-Za-z0-9_-]{1,128}$/.test(notificationId)) {
+      // An opaque link chooses a screen only. The inbox reloads current account,
+      // space, consent and agent authority before showing any notification.
+      setStack([{ name: 'home' }, { name: 'experience', notificationId }]);
+    }
+    if (notificationId !== null) {
+      url.searchParams.delete('notification');
+      window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
+    }
+  }, [me]);
+
   const nav: Nav | null = me && {
     me,
     refreshMe: loadMe,
-    push: (r) => { haptic.tap(); setStack((s) => [...s, r]); },
-    back: () => setStack((s) => (s.length > 1 ? s.slice(0, -1) : s)),
-    reset: (...routes) => setStack(routes.length ? routes : [{ name: 'home' }]),
+    push: (r) => { if (correctionOwner.current) return; haptic.tap(); setStack((s) => [...s, r]); },
+    back: () => { if (!correctionOwner.current) setStack((s) => (s.length > 1 ? s.slice(0, -1) : s)); },
+    reset: (...routes) => { if (!correctionOwner.current) setStack(routes.length ? routes : [{ name: 'home' }]); },
     toast: (message, tone = 'info') => {
       if (tone === 'error') haptic.error();
       setToast({ message, tone });
@@ -91,7 +137,7 @@ export function StudioApp() {
   useEffect(() => {
     const back = tg()?.BackButton;
     if (!back) return;
-    const onBack = () => setStack((s) => (s.length > 1 ? s.slice(0, -1) : s));
+    const onBack = () => { if (!correctionOwner.current) setStack((s) => (s.length > 1 ? s.slice(0, -1) : s)); };
     if (stack.length > 1) back.show(); else back.hide();
     back.onClick(onBack);
     return () => back.offClick(onBack);
@@ -144,9 +190,14 @@ export function StudioApp() {
               {route.name === 'home' && <HomeScreen />}
               {route.name === 'groups' && <GroupsScreen />}
               {route.name === 'org' && <OrgScreen />}
+              {route.name === 'privacy' && <PrivacyScreen onCorrectionPendingChange={correctionPendingChange} onShared={() => nav.push({ name: 'shared-memories' })} onExperience={() => nav.push({ name: 'experience' })} onConnections={() => nav.push({ name: 'connections' })} />}
+              {route.name === 'connections' && <ConnectionsScreen onBack={nav.back} agentId={route.agentId} />}
+              {route.name === 'shared-memories' && <SharedMemoriesScreen selfId={me.member.telegramId} onBack={nav.back} />}
+              {route.name === 'experience' && <ExperienceScreen onBack={nav.back} role={me.member.role} notificationId={route.notificationId} />}
               {route.name === 'agent' && <AgentScreen id={route.id} />}
               {route.name === 'spawn' && <SpawnScreen draftId={route.draftId} successorOf={route.successorOf} />}
               {route.name === 'call' && <CallScreen id={route.id} />}
+              {route.name === 'conversation' && <ConversationScreen id={route.id} />}
               {route.name === 'memories' && <MemoriesScreen id={route.id} />}
               {route.name === 'fire' && <FireScreen id={route.id} />}
             </motion.div>
@@ -154,11 +205,11 @@ export function StudioApp() {
         </div>
 
         {isTab && (
-          <nav className="vx-tabbar" aria-label="Main" style={{ gridTemplateColumns: 'repeat(3, minmax(0, 1fr))' }}>
+          <nav className="vx-tabbar" aria-label="Main" style={{ gridTemplateColumns: 'repeat(4, minmax(0, 1fr))' }}>
             {TABS.map((t) => {
               const active = route.name === t.route;
               return (
-                <button key={t.route} className="vx-tab" aria-current={active ? 'page' : undefined}
+                <button key={t.route} className="vx-tab" disabled={correctionPending} aria-current={active ? 'page' : undefined}
                   onClick={() => { haptic.select(); nav.reset({ name: t.route } as Route); }}>
                   <span className="vx-tab-pill">
                     {active && <motion.span layoutId="tabpill" transition={{ type: 'spring', stiffness: 500, damping: 32 }}

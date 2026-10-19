@@ -1,0 +1,131 @@
+{
+  "auditEvents": 6,
+  "auditHead": "3bc82e1c34a4617343e14052086270922ab9fbd62b0ee3b4baa1d9cdbfc8534a",
+  "beforeApproval": {
+    "ready": false,
+    "reason": "human_release_required"
+  },
+  "candidates": [
+    {
+      "artifactDigest": "0dfb1a104e80bbad02c6046612450966cf8f2a359d484f99f9c834a01715c850",
+      "candidateId": "cancel_routing_candidate",
+      "eligible": true,
+      "evaluationStatus": "passed",
+      "humanDecision": "approve",
+      "rollback": {
+        "artifactDigest": "0dfb1a104e80bbad02c6046612450966cf8f2a359d484f99f9c834a01715c850",
+        "candidateId": "cancel_routing_candidate",
+        "checks": {
+          "candidateOnCancelled": "stop",
+          "restoredOnCancelled": "continue"
+        },
+        "comparisonOnly": true,
+        "derivedState": "none_created",
+        "productionMutation": false,
+        "rehearsedAt": 1792440091029,
+        "restoredArtifactDigest": "6560980d6a6722ad6f34a365a72f04e863bdf5a0dd0533b3a00cb85c2d811809",
+        "restoredRevision": "7361cfdf1c5770a03bf22dd0f8a156b708ae7384fe702d84336494c6fd5e8133",
+        "scope": "local_rehearsal"
+      }
+    }
+  ],
+  "causalClaim": "hypothesis_only",
+  "ci": "UNAVAILABLE",
+  "cost": "UNAVAILABLE",
+  "deployment": "UNAVAILABLE",
+  "evidenceLevel": "E1_local_workflow",
+  "isolatedEvaluation": {
+    "keyId": "evaluator",
+    "payload": {
+      "details": {
+        "artifactDigest": "0dfb1a104e80bbad02c6046612450966cf8f2a359d484f99f9c834a01715c850",
+        "baselineArtifactDigest": "6560980d6a6722ad6f34a365a72f04e863bdf5a0dd0533b3a00cb85c2d811809",
+        "baselineFailures": 2,
+        "candidateFailures": 0,
+        "checks": 3,
+        "datasetDigest": "bf354705d99197c3889d3b8e30dbbe07b17aeb329e3b064268b9261d9b2f2693",
+        "evaluatorDigest": "419afae06cf09a6bc21e316bedb51dbed218a39ebcff0d98cd1bb912ad0df758",
+        "imageDigest": "sha256:48e4b67d85f87bd551df43704e24d252f56cc5f8e9718841aace50f19948f0f9",
+        "isolation": "docker_network_none_readonly",
+        "phase": "protected_final",
+        "policyDigest": "f9bc3bdb906a9d90fc6f5ed9bd6c44558271c01b30e21c3da54176571a04240b",
+        "sourceDigest": "7361cfdf1c5770a03bf22dd0f8a156b708ae7384fe702d84336494c6fd5e8133"
+      },
+      "receipt": {
+        "artifactDigest": "0dfb1a104e80bbad02c6046612450966cf8f2a359d484f99f9c834a01715c850",
+        "baselineRevision": "7361cfdf1c5770a03bf22dd0f8a156b708ae7384fe702d84336494c6fd5e8133",
+        "candidateId": "cancel_routing_candidate",
+        "candidateRevision": "0dfb1a104e80bbad02c6046612450966cf8f2a359d484f99f9c834a01715c850",
+        "datasetVersion": "bf354705d99197c3889d3b8e30dbbe07b17aeb329e3b064268b9261d9b2f2693",
+        "evaluatorServiceId": "evaluator",
+        "evaluatorVersion": "419afae06cf09a6bc21e316bedb51dbed218a39ebcff0d98cd1bb912ad0df758",
+        "failedChecks": 0,
+        "privacyFailures": 0,
+        "promotionPolicyVersion": "f9bc3bdb906a9d90fc6f5ed9bd6c44558271c01b30e21c3da54176571a04240b",
+        "skippedChecks": 0,
+        "status": "passed",
+        "testedAt": 1792440091029
+      }
+    },
+    "purpose": "protected_evaluation",
+    "schemaVersion": 1,
+    "signature": "BJTdb2lEp5TLML75ordMttB1yf23cFEgghoPM6dQuTMYv7o7ukUxVQIxzzLX8NSeljxgs9cv0mubS5S9LGMiCg=="
+  },
+  "limitations": [
+    "synthetic human approval",
+    "no live service IAM qualification",
+    "routing artifact is not deployed",
+    "no arbitrary software patch execution",
+    "no production memory writes"
+  ],
+  "measuredProductionEffect": "UNAVAILABLE",
+  "optimization": {
+    "artifact": {
+      "kind": "cancellation_routing",
+      "onActive": "continue",
+      "onCancelled": "stop",
+      "schemaVersion": 1
+    },
+    "baselineFailures": 1,
+    "candidateFailures": 0,
+    "candidatesConsidered": 2,
+    "casesPerCandidate": 2,
+    "evidence": "optimization_only"
+  },
+  "productionMutation": false,
+  "readiness": {
+    "artifactDigest": "0dfb1a104e80bbad02c6046612450966cf8f2a359d484f99f9c834a01715c850",
+    "candidateId": "cancel_routing_candidate",
+    "candidateRevision": "0dfb1a104e80bbad02c6046612450966cf8f2a359d484f99f9c834a01715c850",
+    "ready": true,
+    "rollbackRevision": "7361cfdf1c5770a03bf22dd0f8a156b708ae7384fe702d84336494c6fd5e8133"
+  },
+  "rollback": {
+    "artifactDigest": "0dfb1a104e80bbad02c6046612450966cf8f2a359d484f99f9c834a01715c850",
+    "candidateId": "cancel_routing_candidate",
+    "checks": {
+      "candidateOnCancelled": "stop",
+      "restoredOnCancelled": "continue"
+    },
+    "comparisonOnly": true,
+    "derivedState": "none_created",
+    "productionMutation": false,
+    "rehearsedAt": 1792440091029,
+    "restoredArtifactDigest": "6560980d6a6722ad6f34a365a72f04e863bdf5a0dd0533b3a00cb85c2d811809",
+    "restoredRevision": "7361cfdf1c5770a03bf22dd0f8a156b708ae7384fe702d84336494c6fd5e8133",
+    "scope": "local_rehearsal"
+  },
+  "schemaVersion": 1,
+  "sourceDigest": "7361cfdf1c5770a03bf22dd0f8a156b708ae7384fe702d84336494c6fd5e8133",
+  "sourceManifest": {
+    "baseRevision": "b1f5e6a380f6042636c45432b08258c10115913c",
+    "files": {
+      "scripts/improvement-demo.ts": "190f1df9c5a85694a41accdcfacf1b09039493933f87ebd44a71ed937739101b",
+      "src/lib/adaptive/improvement/contracts.ts": "04386b8d71bd3bf7f5dafa8fbffe27c11d65fa877ad33979c659ffba44d44b74",
+      "src/lib/adaptive/improvement/index.ts": "77f6411d321f91d1c85ec1685717b1c377bcca54c18a1bf21dcf0110fed9423c",
+      "src/lib/adaptive/improvement/sandbox.ts": "f23ef78580d566d4dff211aabbdbaed82f8989636afa4d6d0d354d5c95b4f690",
+      "src/lib/adaptive/improvement/workflow.ts": "8dda64f20a2f6cc11379236031924eb348c263011c39a426b706acc80cd686f8"
+    }
+  },
+  "sourceRevision": "b1f5e6a380f6042636c45432b08258c10115913c"
+}

@@ -36,9 +36,12 @@ export function selectMemories(
   const audience = audienceOf(chat);
   const queryTokens = tokens(query);
 
-  // Membership does not move DM, project or other-group knowledge here.
-  const inConversation = (m: MemoryRecord) => chat.kind !== 'group' ||
+  // Group membership does not grant permission to move knowledge from a DM,
+  // another group or a project into this conversation.
+  const inConversation = (m: MemoryRecord) =>
+    chat.kind !== 'group' ||
     (m.scope.kind === 'group' && m.scope.groupId === chat.group.id);
+
   const scored = memories
     .filter((m) => inConversation(m) && isMemoryAllowedInChat(org, m, chat))
     .map((memory) => {

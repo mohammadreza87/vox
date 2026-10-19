@@ -1,6 +1,6 @@
 # Vox relationship system — delivery plan
 
-Status: core v3 is implemented in a review candidate and remains default-off; it is not production. The current typed follow-up review contract passed a small frozen fictional gate, and an independent final default-model gateway session passed scoped user acceptance with fake Telegram transport. Human-rated pilot and live deployment gates remain open, and quality/population claims are not established. Baseline: `68a1cd3` (2026-10-19). Historical personality datasets are out of scope.
+Status: legacy core v3 and a separate scoped adaptive relationship delivery path are implemented in review candidates and remain default-off; neither is production. The scoped path is explicitly gated by `STUDIO_SCOPED_RELATIONSHIPS=1`. Synthetic provider/transport and authority tests exercise its consent, scope, stale-context and inbox/alert fences; they are not live-pilot evidence. The legacy typed follow-up review contract passed a small frozen fictional gate, and an independent final default-model gateway session passed scoped user acceptance with fake Telegram transport. Human-rated pilot and live deployment gates remain open, and quality/population claims are not established. Baseline: `68a1cd3` (2026-10-19). Historical personality datasets are out of scope.
 
 ## Product outcome
 
@@ -34,6 +34,18 @@ Scoped source events feed an assessor that updates preferences, situations and t
 Temporal grounding uses a literal quote from the current source, caller-attached `sourceId`, source time and timezone. Model-derived ISO date extraction is not independent proof of an event date. A known future start is preparatory; `after_event` requires a known end; ongoing events do not imply completion. Reschedules refresh the window while preserving the old kind unless the new purpose changes it. Unknown timing fails quiet. Shadow assesses the supplied incoming turn only: it creates no outbox work, foreground reply or memory and does not perform the complete fresh-draft review. It is not full-loop quality evidence. The observer remains an event-processing role; Decisions is not an event database, memory store, scheduler, or autonomous developer.
 
 Every action retains a policy version, source, event identity, time, and outcome. Model results cannot override server-side scope, explicit stop, recipient restrictions, or delivery guards. Local storage uses serialized atomic replacement in one process. Serverless production uses Firestore transactions and an externally scheduled authenticated drain endpoint. No reliability claim depends on a background timer surviving a request.
+
+## Scoped adaptive relationship delivery (current implementation)
+
+The scoped adaptive path is independent of the legacy relationship loop and requires `STUDIO_SCOPED_RELATIONSHIPS=1`; unset is the default. The relationship mode and configured cohort still gate work. A matching `owner`/`superadmin` role or cohort entry is only an operator rollout gate and does not grant identity, memory, agent, inbox, or outreach permission. The authenticated API and worker recheck the user's Work/Personal consent and agent grant, current role and agent access, source audience and expiry, relationship controls, and adaptive-context revision. Unknown or stale authority fails quiet.
+
+An affirmative `adaptive-relationship-memory-v1` auto-memory notice creates a 30-day background relationship binding. New source capture and viewing the authenticated private inbox still require the 12-hour profile confirmation. Older auto-memory consent without this scoped binding transitions to `reconsent_required` on the next adaptive transaction. Withdrawal invalidates current authority and pending work. Resume only clears the durable stop/pause state; it never grants consent or revives cancelled intentions.
+
+The worker composes a fresh candidate and preserves the core exact-draft review. It commits reviewed details to the authenticated private inbox. Optional Telegram delivery is a generic “check-in ready” alert, controlled by its own `optional.relationship_outreach` purpose and off-by-default setting; it also requires a current prior private Telegram source. Alert text excludes conversation detail. Inbox publication does not retry because an alert failed, and uncertain Telegram outcomes are terminal. The scoped path never writes detailed check-ins to legacy chat history. Scoped `shadow` currently does no gateway assessment and creates no relationship delivery work.
+
+Studio Experience selects Work/Personal and an agent for scoped relationship controls; shared timezone, quiet-hour and notification-cap settings stay in Experience. Pause, stop and forget are durable per account/agent/space and remain usable when feature eligibility is withdrawn. Storage uses fresh scoped file names and Firestore collections, isolated from legacy relationship documents. Retention is bounded to 500 sources/90 days, 500 ledger records/90 days and 100 inbox items. Acoustic emotion diagnosis and automatic model training are not implemented.
+
+Deployment boundary: `vox.joyixir.com` on the Mac polling runtime is the sole active target. Firebase guard PR #48 is a separate merged change and must remain with `STUDIO_SCOPED_RELATIONSHIPS` unset. No live pilot is qualified. Do not activate the scoped gate until the exact-candidate checks, storage/rules review, live transport gates and human-rated pilot criteria below are complete.
 
 ## Team and model allocation
 
@@ -75,6 +87,7 @@ Effort is relative (S/M/L), not a delivery-date promise. Each row is a reviewabl
 | E5.3 Integration, browser, storage and fault checks | QA + lead | L | E4 | API/auth, UI, file restarts, Firestore concurrency where emulator available, provider and transport failure cases |
 | E6.1 Independent review and remediation | Reviewer + owners | L | E5 | Findings resolved or explicitly release-blocking; no suppressed failing checks |
 | E6.2 Deploy, scheduled worker and live pilot | Lead | L | E6.1 | Exact deployed revision, scheduler reachability, production storage, provider response and authorized Telegram/call evidence |
+| E6.3 Scoped adaptive relationship delivery | Full-stack + context + QA | L | E2.3/E4.3 | New default-off path behind `STUDIO_SCOPED_RELATIONSHIPS`; affirmative 30-day relationship binding, 12-hour capture/inbox confirmation, selected agent and Work/Personal controls, exact-draft private inbox publication, separately authorized generic alert and stale-revision fences; synthetic checks do not qualify live pilot |
 
 ## Behavioral and privacy contract
 

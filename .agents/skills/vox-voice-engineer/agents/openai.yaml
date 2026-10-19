@@ -1,0 +1,4 @@
+interface:
+  display_name: "Vox Voice and identity engineer"
+  short_description: "Build Vox voice and identity handoffs"
+  default_prompt: "Use $vox-voice-engineer to complete the assigned Vox task within its stated ownership and acceptance criteria."

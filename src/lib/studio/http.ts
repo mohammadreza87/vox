@@ -8,6 +8,7 @@ import { StudioRateLimiter, StudioRateLimitError, type StudioRequestRateLimiter 
 import { Studio, StudioError } from './service';
 import { PersonaGenerationError } from './persona';
 import { ElevenLabsSpeechError } from './media';
+import { logTelegramDiagnostic, type TelegramDiagnostic } from '../tireh/telegram/diagnostics';
 import type { AgentVisibility, Member, MemoryPolicy, Role, SpawnBrief } from './types';
 
 type Json = Record<string, unknown>;
@@ -117,7 +118,7 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
 
     if (root === 'me' && method === 'GET') {
       return json({ member: me, org: studio.deps.orgName, bot: studio.deps.managerUsername, features: {
-        avatars: !!studio.deps.openai, voices: !!studio.deps.eleven, calls: !!studio.deps.openai || !!studio.deps.eleven, liveCalls: studio.liveCalls,
+        avatars: !!studio.deps.openai, voices: !!studio.deps.eleven, calls: !!studio.deps.openai || !!studio.deps.eleven, liveCalls: studio.liveCalls, legacyMemorySharing: !studio.deps.adaptive,
       } });
     }
     if (me.role === 'pending') throw new StudioError(403, 'Waiting for an admin to approve you.');
@@ -212,8 +213,14 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
             const b = await body(req);
             return json({ agent: await studio.setVisibility(me, id, str(b.visibility, 10) as AgentVisibility) });
           }
-          case 'POST live-call': return json(await studio.startLiveCall(me, id));
-          case 'POST call-end': await studio.endLiveCall(me, id); return json({ ok: true });
+          case 'POST live-call':
+          case 'POST call-end': {
+            const b = req.headers.get('content-type')?.includes('application/json') ? await body(req) : {};
+            const space = b.space ?? 'work';
+            if (space !== 'work' && space !== 'personal') throw new StudioError(400, 'Choose Work or Personal.');
+            if (action === 'live-call') return json(await studio.startLiveCall(me, id, space));
+            await studio.endLiveCall(me, id, space); return json({ ok: true });
+          }
           case 'PUT live-web': return json({ agent: await studio.setLiveWeb(me, id, (await body(req)).on === true) });
           case 'PUT group-behavior': return json({ agent: await studio.setGroupBehavior(me, id, await body(req)) });
           case 'POST profile-sync': return json(await studio.syncProfile(me, id));
@@ -234,12 +241,21 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
             const form = await req.formData().catch(() => { throw new StudioError(400, 'Expected audio'); });
             const audio = form.get('audio');
             if (!(audio instanceof Blob)) throw new StudioError(400, 'Expected audio');
-            return json(await studio.callTurn(me, id, await audio.arrayBuffer(), audio.type || 'audio/webm'));
+            const space = form.get('space') ?? 'work';
+            if (space !== 'work' && space !== 'personal') throw new StudioError(400, 'Choose Work or Personal.');
+            return json(await studio.callTurn(me, id, await audio.arrayBuffer(), audio.type || 'audio/webm', space, req.signal));
           }
-          case 'GET relationship': return json({ relationship: await studio.relationshipFor(me, id) });
+          case 'GET relationship': {
+            const space = new URL(req.url).searchParams.get('space') ?? 'work';
+            if (space !== 'work' && space !== 'personal') throw new StudioError(400, 'Choose Work or Personal.');
+            return json({ relationship: await studio.relationshipFor(me, id, space) });
+          }
           case 'PUT relationship': {
             const b = await body(req);
+            const space = b.space ?? 'work';
+            if (space !== 'work' && space !== 'personal') throw new StudioError(400, 'Choose Work or Personal.');
             return json({ relationship: await studio.updateRelationship(me, id, {
+              space, enabled: typeof b.enabled === 'boolean' ? b.enabled : undefined, sourceId: str(b.sourceId, 200), itemId: str(b.itemId, 200),
               action: str(b.action, 20) ?? '', until: str(b.until, 40), timeZone: str(b.timeZone, 80),
               quietHours: b.quietHours as { start: number; end: number } | undefined,
             }) });
@@ -265,25 +281,34 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
     }
     return json({ error: 'Not found' }, 404);
   } catch (error) {
-    if (ElevenLabsSpeechError.is(error)) {
-      (studio.deps.logger ?? console).warn('[studio] voice provider unavailable', { code: error.code, status: error.status });
-      const status = error.code === 'payment_required' ? 402
-        : error.code === 'quota_exceeded' || error.code === 'rate_limited' ? 429
-          : error.code === 'permission_denied' ? 403 : error.code === 'unavailable' ? 503 : 502;
-      return json({ error: new ElevenLabsSpeechError(error.status, error.code).message, code: error.code }, status);
+    let failure: { response: Response; diagnostic?: TelegramDiagnostic };
+    try { failure = studioFailureResponse(error); }
+    catch {
+      // Error objects are untrusted too. Inspection must not escape the HTTP
+      // boundary or turn a hostile accessor into a second exported exception.
+      failure = { response: json({ error: 'Something went wrong. Try again.' }, 500), diagnostic: 'studio_http_failed' };
     }
-    if (error instanceof StudioRateLimitError) return json({ error: error.message }, 429, { 'Retry-After': String(error.retryAfterSeconds) });
-    if (StudioError.is(error)) return json({ error: error.message }, error.status);
-    if (error instanceof PersonaGenerationError) {
-      (studio.deps.logger ?? console).warn('[studio] persona generation invalid', { invalidFields: error.invalidFields });
-      return json({ error: error.message }, 502);
-    }
-    if (error && typeof error === 'object' && 'issues' in error) return json({ error: "Claude's answer didn't fit the persona format. Try again." }, 502);
-    const provider = providerErrorMessage(error);
-    (studio.deps.logger ?? console).error('[studio] request failed', error);
-    if (provider) return json({ error: provider }, 502);
-    return json({ error: 'Something went wrong. Try again.' }, 500);
+    // Emit once, only after classification/response formatting has succeeded.
+    if (failure.diagnostic) logTelegramDiagnostic(studio.deps.logger ?? console, failure.diagnostic);
+    return failure.response;
   }
+}
+
+function studioFailureResponse(error: unknown): { response: Response; diagnostic?: TelegramDiagnostic } {
+  if (ElevenLabsSpeechError.is(error)) {
+    const status = error.code === 'payment_required' ? 402
+      : error.code === 'quota_exceeded' || error.code === 'rate_limited' ? 429
+        : error.code === 'permission_denied' ? 403 : error.code === 'unavailable' ? 503 : 502;
+    return { response: json({ error: new ElevenLabsSpeechError(error.status, error.code).message, code: error.code }, status), diagnostic: 'studio_http_voice_failed' };
+  }
+  if (StudioRateLimitError.is(error)) return { response: json({ error: 'Too many requests. Please try again shortly.' }, 429, { 'Retry-After': String(error.retryAfterSeconds) }) };
+  if (StudioError.is(error)) return { response: json({ error: error.message }, error.status) };
+  if (error instanceof PersonaGenerationError) return { response: json({ error: error.message }, 502), diagnostic: 'studio_http_persona_failed' };
+  if (error && typeof error === 'object' && 'issues' in error) return { response: json({ error: "Claude's answer didn't fit the persona format. Try again." }, 502) };
+  const provider = providerErrorMessage(error);
+  return provider
+    ? { response: json({ error: provider }, 502), diagnostic: 'studio_http_provider_failed' }
+    : { response: json({ error: 'Something went wrong. Try again.' }, 500), diagnostic: 'studio_http_failed' };
 }
 
 /**

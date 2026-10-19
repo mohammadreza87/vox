@@ -1,5 +1,25 @@
 /* Vox Studio — "Soft Weather" design system (scoped to .vx) */
 
+.vx-privacy { display: flex; flex-direction: column; gap: 16px; }
+.vx-privacy p { margin: 0; }
+.vx-privacy h2, .vx-privacy h3, .vx-privacy h4 { margin: 0; }
+.vx-privacy-heading { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.vx-privacy-heading > label { margin-inline-start: auto; min-width: 90px; }
+.vx-privacy-heading .vx-title { font-size: 21px; line-height: 28px; }
+.vx-privacy-symbol { width: 48px; height: 48px; border-radius: 16px; background: rgba(214,255,92,.12); color: var(--volt); display: grid; place-items: center; }
+.vx-privacy-spaces, .vx-privacy-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.vx-privacy-spaces > button, .vx-privacy-actions > button { flex: 1; }
+.vx-privacy-spaces [aria-pressed="true"] { border-color: var(--volt); color: var(--volt); background: rgba(214,255,92,.08); }
+.vx-privacy-card, .vx-privacy-purpose { display: flex; flex-direction: column; gap: 12px; padding: 18px; }
+.vx-privacy-purpose + .vx-privacy-purpose, .vx-privacy-note { border-top: 1px solid var(--hair); }
+.vx-privacy-purpose-heading { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.vx-privacy-checkbox, .vx-privacy-confirmed { display: flex; align-items: center; gap: 8px; min-height: 44px; }
+.vx-privacy-checkbox input { width: 20px; height: 20px; accent-color: var(--volt); }
+.vx-privacy-confirmed { color: var(--success); }
+.vx-privacy-notice { display: flex; flex-direction: column; gap: 12px; padding: 14px; border: 1px solid var(--ice); border-radius: 14px; }
+.vx-privacy-note { padding-top: 14px; display: flex; flex-direction: column; gap: 10px; }
+.vx-privacy [dir="rtl"], .vx-privacy[dir="rtl"] { text-align: right; }
+
 .vx {
   --ground: #0E1013;
   --s1: #16191E;
@@ -75,6 +95,8 @@
 .vx-btn-danger { background: rgba(255, 107, 94, .14); color: var(--danger); }
 .vx-btn-sm { height: 40px; padding: 0 16px; font-size: 14px; }
 .vx-btn-block { width: 100%; }
+/* Learning action labels can wrap to several lines in Persian on mobile. */
+.vx-learning-actions > .vx-btn { height: auto; min-height: 52px; padding-block: 10px; }
 
 .vx-icon-btn {
   width: 44px; height: 44px; border-radius: 999px; border: none; background: transparent; color: var(--text);

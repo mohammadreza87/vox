@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { audienceOf, canPersonSee, isVisibleToAudience, parseScopeKey, scopeKey } from '../memory/visibility';
+import { audienceOf, canPersonSee, isVisibleInChat, isVisibleToAudience, parseScopeKey, scopeKey } from '../memory/visibility';
 import { memory, testOrg, testOrgConfig } from './fixtures';
 import { OrgDirectory } from '../org/directory';
 import { buildSystemPrompt } from '../conversation/prompt';
@@ -76,6 +76,12 @@ describe('isVisibleToAudience', () => {
   it('an empty audience sees nothing', () => {
     expect(isVisibleToAudience(org, memory({ content: 'x', scope: { kind: 'org' } }), [])).toBe(false);
   });
+
+  it('a one-member group is still not a private conversation for personal memories', () => {
+    const personal = memory({ content: 'Private family detail', sensitivity: 'personal', scope: { kind: 'private', personId: 'reza' } });
+    expect(isVisibleInChat(org, personal, dm)).toBe(true);
+    expect(isVisibleInChat(org, personal, { ...group, group: { ...gameendGroup, memberIds: ['reza'] } })).toBe(false);
+  });
 });
 
 describe('scope keys', () => {
@@ -144,7 +150,7 @@ describe('group prompt boundaries', () => {
       memories: [
         memory({ content: 'DM_CANARY', scope: { kind: 'private', personId: 'milad' } }),
         memory({ content: 'OTHER_GROUP_CANARY', scope: { kind: 'group', groupId: 'gameend-team' } }),
-        memory({ content: 'LOCAL_GROUP_FACT', scope: { kind: 'group', groupId: room.id }, authorizedPersonIds: ['milad'] }),
+        memory({ content: 'LOCAL_GROUP_FACT', authorizedPersonIds: [...room.memberIds], scope: { kind: 'group', groupId: room.id } }),
       ],
     });
     expect(prompt).toContain('- Milad');
