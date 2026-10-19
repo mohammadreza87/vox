@@ -1,3 +1,4 @@
+import { logicalTurnSchema } from '../adaptive/personalization/learning/contracts';
 import { z } from 'zod';
 import { verifyInitData } from './auth';
 import { canUseAgent } from './permissions';
@@ -13,7 +14,7 @@ import { LLMAuthorizationError, type LLMImage } from '../tireh/llm';
 
 const id = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/);
 const inputSchema = z.object({ agentId: id, space: z.enum(['work', 'personal']),
-  text: z.string().trim().min(1).max(4096), image: z.string().max(MAX_IMAGE_URL_LENGTH).optional(),
+  text: z.string().trim().min(1).max(4096), turn: logicalTurnSchema.optional(), image: z.string().max(MAX_IMAGE_URL_LENGTH).optional(),
 }).strict();
 const json = (data: unknown, status = 200, headers: Record<string, string> = {}) => Response.json(data, {
   status, headers: { 'Cache-Control': 'no-store', ...headers },
@@ -96,6 +97,8 @@ export async function handleConversationRequest(studio: Studio, request: Request
     if (request.signal.aborted || await authority() !== before) {
       await observe('cancelled'); return json({ error: 'conversation_changed' }, 409);
     }
+    if (input.turn && !input.image) studio.deps.preferenceLearning?.enqueue({ telegramId: user.id, agentId: input.agentId,
+      space: input.space, turn: input.turn, text: input.text }, request.signal);
     return json({ reply, ...(correlation ? { turnId: correlation } : {}) });
   } catch (error) {
     await observe?.(request.signal.aborted || LLMAuthorizationError.is(error) ? 'cancelled' : 'failed');

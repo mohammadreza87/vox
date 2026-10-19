@@ -7,6 +7,7 @@ import { RelationshipPanel } from '../RelationshipPanel';
 import { ReminderPanel } from '../ReminderPanel';
 import { LearningPanel } from '../LearningPanel';
 import { PreferencePanel } from '../PreferencePanel';
+import { PreferenceLearningPanel } from '../PreferenceLearningPanel';
 
 export function ExperienceScreen({ onBack, role, notificationId }: { onBack: () => void; role?: Role; notificationId?: string }) {
   const [space, setSpace] = useState<'work' | 'personal'>('work');
@@ -90,6 +91,7 @@ export function ExperienceScreen({ onBack, role, notificationId }: { onBack: () 
         <div className="vx-card vx-privacy-card">
           <h2 className="vx-head">{t('Reply preferences', 'ترجیح‌های پاسخ')}</h2>
           <label>{t('Agent', 'عامل')}<select className="vx-input" disabled={busy} value={agentId} onChange={e => setAgentId(e.target.value)}><option value="">{t('Choose an agent', 'انتخاب عامل')}</option>{agents.map(a => <option key={a.id} value={a.id}>{a.persona.name}</option>)}</select></label>
+          <PreferenceLearningPanel key={`learning:${space}:${agentId}`} agentId={agentId} space={space} confirmed={data.confirmed} revisionHint={data.revision} locale={fa ? 'fa' : 'en'} onRevision={revision => setData(current => current?.space === space ? { ...current, revision } : current)} />
           <PreferencePanel key={`${space}:${agentId}`} agentId={agentId} space={space} confirmed={data.confirmed} revisionHint={data.revision} locale={fa ? 'fa' : 'en'} onSnapshot={apply} />
         </div>
         <div className="vx-card vx-privacy-card">
