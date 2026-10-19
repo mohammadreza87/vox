@@ -9,6 +9,7 @@ import { StudioRateLimiter, StudioRateLimitError } from './ratelimit';
 import { personId } from './org-bridge';
 import { beginObservation } from './observation';
 import { digest } from '../adaptive/persistence/repository';
+import type { RuntimeControlEvaluator } from '../adaptive/persistence/authority';
 import { AdaptiveError } from '../adaptive/persistence/service';
 import { minimizeImageDataUrl, MAX_IMAGE_URL_LENGTH } from '../adaptive/prediction/image';
 import { LLMAuthorizationError, type LLMImage } from '../tireh/llm';
@@ -47,16 +48,17 @@ export async function handleConversationRequest(studio: Studio, request: Request
     try { body = await bounded.json(); } catch { return json({ error: 'invalid_json' }, 400); }
     const input = inputSchema.parse(body);
     const adaptive = studio.deps.adaptive;
-    const authority = async (): Promise<string | null> => {
-      const indexed = !!adaptive.repository.storage.indexed;
-      const currentScope = () => indexed ? adaptive.withRuntimeControls(user.id, input.space, (d, now, namespace) => {
+    const indexed = !!adaptive.repository.storage.indexed;
+    const scopeEvaluation: RuntimeControlEvaluator<string | null> = (d, now, namespace) => {
         const core = adaptive.capabilityStatus(d, 'core_text', now);
         const imagePolicy = input.image ? adaptive.capabilityStatus(d, 'single_party_image', now) : null;
         const allowed = adaptive.isCoreAllowed(d, now) && d.agentGrants.some(g => g.agentId === input.agentId && g.space === input.space && g.allowed) &&
           (!imagePolicy || imagePolicy.eligible);
         return {value: allowed ? digest([namespace, adaptive.coreFingerprint(d, now), d.agentGrants.filter(g => g.agentId === input.agentId && g.space === input.space), imagePolicy]) : null,
           denied: !allowed, ...(allowed ? {deadline: Math.min(d.binding!.expiresAt, core.validUntil ?? now, imagePolicy?.validUntil ?? Number.MAX_SAFE_INTEGER)} : {})};
-      }) : adaptive.withAccountDocument(user.id, (d, now) => {
+      };
+    const authority = async (): Promise<string | null> => {
+      const currentScope = () => indexed ? adaptive.withRuntimeControls(user.id, input.space, scopeEvaluation) : adaptive.withAccountDocument(user.id, (d, now) => {
         const imagePolicy = input.image ? adaptive.capabilityStatus(d, 'single_party_image', now) : null;
         if (!adaptive.isCoreAllowed(d, now) || !d.agentGrants.some(g => g.agentId === input.agentId && g.space === input.space && g.allowed) ||
             (imagePolicy && !imagePolicy.eligible)) return null;
@@ -79,6 +81,18 @@ export async function handleConversationRequest(studio: Studio, request: Request
       // These fresh fences do not make the two storage systems atomic.
       return await studioAllowed() ? digest([scope, context?.revision]) : null;
     };
+    const authorityNow = (): string | null => {
+      if (!indexed) return null;
+      const scope = adaptive.readRuntimeControlsForEffect(user.id, input.space, scopeEvaluation);
+      if (scope.status !== 'ready' || !scope.value) return null;
+      const context = studio.adaptiveContextAuthorityNow(input.agentId, personId(user.id), input.space);
+      // Canonical controls are sampled again after the other committed stores.
+      const current = adaptive.readRuntimeControlsForEffect(user.id, input.space, (...args) => {
+        const evaluated = scopeEvaluation(...args);
+        return {...evaluated, deadline: Math.min(evaluated.deadline ?? Number.MAX_SAFE_INTEGER, context.validUntil)};
+      });
+      return current.status === 'ready' && current.value === scope.value ? digest([scope.value, context.revision]) : null;
+    };
     const before = await authority();
     if (!before) return json({ error: 'conversation_not_permitted' }, 403);
     if (request.signal.aborted) return json({ error: 'conversation_cancelled' }, 409);
@@ -98,7 +112,8 @@ export async function handleConversationRequest(studio: Studio, request: Request
       await observe('cancelled'); return json({ error: 'conversation_changed' }, 409);
     }
     const reply = await observe.run(() => gateway.converse(input.agentId, personId(user.id), input.text, { space: input.space, images,
-      authorize: async () => !request.signal.aborted && await authority() === before }));
+      authorize: async () => !request.signal.aborted && await authority() === before,
+      ...(indexed ? {authorizeNow: () => !request.signal.aborted && authorityNow() === before} : {}) }));
     // Gateway also checks memory/source policy around provider export and output.
     if (request.signal.aborted || await authority() !== before) {
       await observe('cancelled'); return json({ error: 'conversation_changed' }, 409);
@@ -109,6 +124,7 @@ export async function handleConversationRequest(studio: Studio, request: Request
     }
     if (input.turn && !input.image) studio.deps.preferenceLearning?.enqueue({ telegramId: user.id, agentId: input.agentId,
       space: input.space, turn: input.turn, text: input.text }, request.signal);
+    if (indexed && (request.signal.aborted || authorityNow() !== before)) return json({error: 'conversation_changed'}, 409);
     return json({ reply, ...(correlation ? { turnId: correlation } : {}) });
   } catch (error) {
     await observe?.(request.signal.aborted || LLMAuthorizationError.is(error) ? 'cancelled' : 'failed');

@@ -12,27 +12,35 @@ import {AdaptiveExperienceService} from '../../adaptive/runtime/service';
 import {DecisionService} from '../../adaptive/decisions';
 import {handleConversationRequest} from '../conversation';
 import {signInitData} from '../auth';
-import {personId} from '../org-bridge';
+import {personId, groupId, studioToOrg} from '../org-bridge';
+import {AnthropicLLM} from '../../tireh/llm';
+import {FileAdaptiveStorage} from '../../adaptive/persistence/storage';
+import {SharedMemoryRepository} from '../../adaptive/shared/repository';
+import {SharedMemoryService} from '../../adaptive/shared/service';
+import {sharedAuthorityFromStudioStore} from '../shared-authority';
 
 const NOW = T0.getTime(), TOKEN = '123:synthetic-manager';
 const paths: string[] = [], stores: SqliteAdaptiveStorage[] = [];
-afterEach(() => {vi.restoreAllMocks(); for (const store of stores.splice(0)) store.close(); for (const path of paths.splice(0)) rmSync(path, {recursive: true, force: true});});
-async function fixture() {
+afterEach(() => {vi.restoreAllMocks(); vi.unstubAllGlobals(); for (const store of stores.splice(0)) store.close(); for (const path of paths.splice(0)) rmSync(path, {recursive: true, force: true});});
+async function fixture(personalization = true, consent = true) {
   const h = makeStudio(), users = await seedOrg(h), {agent} = await hire(h, users.alice);
   let now = NOW;
   const directory = mkdtempSync(join(tmpdir(), 'vox-indexed-reply-')); paths.push(directory);
-  const capabilities = ['core_text', 'personalization'];
+  const capabilities = personalization ? ['core_text', 'personalization'] : ['core_text'];
   const options = adaptiveOptionsFromManifest(JSON.stringify({schemaVersion: 1, configurationVersion: 'synthetic', enabledCapabilities: capabilities,
     accounts: [{accountId: accountIdFor(ID.alice), jurisdictionKeys: ['SYNTHETIC'], allowDeclaredAdult: true}],
     approvals: capabilities.map((capability, i) => ({schemaVersion: 1, id: `approval-${i}`, revision: 1, createdAt: NOW, updatedAt: NOW,
       jurisdiction: 'SYNTHETIC', capability, state: 'approved', configurationVersion: 'synthetic', effectiveAt: NOW, reviewExpiresAt: NOW + 86_400_000, owner: 'synthetic', approvalReference: 'synthetic-only'}))}));
   const storage = new SqliteAdaptiveStorage(join(directory, 'synthetic.sqlite'), {now: () => now}); stores.push(storage);
   const adaptive = new AdaptiveService(new AdaptiveRepository(storage), {...options, now: () => now});
+  Object.defineProperty(h.chatLLM, 'committedExportFence', {value: true});
   h.studio.deps.adaptive = adaptive; h.studio.deps.experience = new AdaptiveExperienceService(adaptive);
   await adaptive.confirm(ID.alice, {confirm: true, adultConfirmed: true});
   const before = await adaptive.read(ID.alice, 'work'), purpose = 'optional.personalization';
+  if (personalization && consent) {
   const shown = await adaptive.present(ID.alice, {space: 'work', purpose, locale: 'en', expectedRevision: before.purposes.find(p => p.purpose === purpose)!.revision, eventId: randomUUID()});
   await adaptive.changeConsent(ID.alice, {space: 'work', purpose, state: 'granted', expectedRevision: shown.purposes.find(p => p.purpose === purpose)!.revision, eventId: randomUUID(), receipt: shown.receipt});
+  }
   const consented = await adaptive.read(ID.alice, 'work');
   await adaptive.setAgentAccess(ID.alice, agent.id, {space: 'work', allowed: true, expectedRevision: consented.revision, eventId: randomUUID()});
   now = NOW + 300; h.clock.now = new Date(now);
@@ -52,6 +60,14 @@ async function fixture() {
   return {h, agent, users, adaptive, storage, reset, request, unavailableLegacy, setNow: (value: number) => {now = value; h.clock.now = new Date(value);}};
 }
 
+function attachShared(f: Awaited<ReturnType<typeof fixture>>) {
+  const directory = mkdtempSync(join(tmpdir(), 'vox-indexed-shared-reply-')); paths.push(directory);
+  const shared = new SharedMemoryService(new SharedMemoryRepository(new FileAdaptiveStorage(directory)), f.adaptive,
+    sharedAuthorityFromStudioStore(f.h.store), () => f.h.clock.now.getTime());
+  f.h.studio.deps.shared = shared;
+  return shared;
+}
+
 describe('real indexed Studio reply acquisition and compact rechecks', () => {
   it.each([['What is launchcodename?', 'Launchcodename is Sapphire.'], ['كد پرتاب چيست؟', 'کد پرتاب یاقوت است.']])('selects the actual EN/FA query %s among 300 notes with one private acquisition', async (query, expected) => {
     const f = await fixture(); f.unavailableLegacy(); const acquire = vi.spyOn(f.adaptive, 'readPrivateContext');
@@ -61,6 +77,23 @@ describe('real indexed Studio reply acquisition and compact rechecks', () => {
     const payload = JSON.stringify(f.h.chatLLM.replyRequests[0].messages);
     expect(payload).toContain(expected); expect(payload).not.toContain('Unrelated calendar distractor 299');
     expect(f.storage.io.canonicalImageReads).toBe(0); expect(f.storage.io.bodyRowsRead).toBeGreaterThan(0); expect(f.storage.io.bodyRowsRead).toBeLessThanOrEqual(64);
+  });
+  it('keeps a core-only reply usable when configured shared context is denied by capability', async () => {
+    const f = await fixture(false); const shared = attachShared(f), read = vi.spyOn(shared, 'readContextAuthorityNow');
+    const response = await handleConversationRequest(f.h.studio, f.request('Synthetic core question'), TOKEN);
+    expect(response.status).toBe(200); expect(read).toHaveBeenCalled();
+    expect(JSON.stringify(f.h.chatLLM.replyRequests)).not.toContain('Launchcodename is Sapphire.');
+    expect(f.storage.io.bodyRowsRead).toBe(0);
+  });
+  it('changes the paired revision when formerly empty shared/personalization permission is granted', async () => {
+    const f = await fixture(true, false); attachShared(f);
+    const before = await f.h.studio.adaptiveContextAuthority(f.agent.id, personId(ID.alice), 'work');
+    const state = await f.adaptive.readAuthority(ID.alice, 'work');
+    const shown = await f.adaptive.present(ID.alice, {space: 'work', purpose: 'optional.personalization', locale: 'en', expectedRevision: state.purposes.find(p => p.purpose === 'optional.personalization')!.revision, eventId: randomUUID()});
+    await f.adaptive.changeConsent(ID.alice, {space: 'work', purpose: 'optional.personalization', state: 'granted', expectedRevision: shown.purposes.find(p => p.purpose === 'optional.personalization')!.revision, eventId: randomUUID(), receipt: shown.receipt});
+    const after = f.h.studio.adaptiveContextAuthorityNow(f.agent.id, personId(ID.alice), 'work');
+    expect(after.revision).not.toBe(before.revision);
+    expect(after.revision).toBe((await f.h.studio.adaptiveContextAuthority(f.agent.id, personId(ID.alice), 'work')).revision);
   });
   it('pairs body acquisition and query-independent authority revisions without reloading bodies', async () => {
     const f = await fixture(), context = await f.h.studio.adaptiveContext(f.agent.id, personId(ID.alice), 'work', 'launchcodename');
@@ -149,7 +182,124 @@ describe('real indexed Studio reply acquisition and compact rechecks', () => {
       optionalRecordingReads += f.storage.io.canonicalImageReads - before; return result;
     });
     const result = await f.h.studio.callTurn(f.users.alice, f.agent.id, new ArrayBuffer(3), 'audio/webm');
-    expect(result.transcript).toBe('launchcodename'); expect(acquire).toHaveBeenCalledExactlyOnceWith(ID.alice, 'work', f.agent.id, 'launchcodename');
+    expect(result.transcript).toBe('launchcodename'); expect(result.audio).toBeUndefined(); expect(f.h.eleven.speak).not.toHaveBeenCalled(); expect(acquire).toHaveBeenCalledExactlyOnceWith(ID.alice, 'work', f.agent.id, 'launchcodename');
     expect(optionalRecordingReads).toBe(1); expect(f.storage.io.canonicalImageReads).toBe(optionalRecordingReads); expect(f.storage.io.bodyRowsRead).toBeLessThanOrEqual(64);
   });
+  it.each(['positive', 'grant-revoke', 'correction', 'block-restore', 'expiry', 'clock-during-snapshot', 'shared-permission-revoke'] as const)('actual SDK final configured fetch fences %s during preparation', async mode => {
+    const f = await fixture();
+    if (mode === 'shared-permission-revoke') attachShared(f);
+    const transports: string[] = [];
+    const fetcher: typeof fetch = async (_url, init) => {
+      transports.push(String(init?.body));
+      return new Response(JSON.stringify({id: 'synthetic', type: 'message', role: 'assistant', model: 'synthetic', content: [{type: 'text', text: 'SDK_POSITIVE_REPLY'}], stop_reason: 'end_turn', stop_sequence: null, usage: {input_tokens: 1, output_tokens: 1}}), {headers: {'content-type': 'application/json'}});
+    };
+    vi.stubGlobal('window', undefined);
+    const llm = new AnthropicLLM('synthetic-not-real-key', 'synthetic-model', fetcher);
+    f.h.studio.deps.chatLLM = llm;
+    const client = (llm as unknown as {getClient(): {prepareOptions(options: unknown): Promise<void>}}).getClient();
+    const prepare = client.prepareOptions.bind(client);
+    let prepared = false, clockArmed = false;
+    const readStudio = f.h.store.readCommittedForEffect.bind(f.h.store);
+    vi.spyOn(f.h.store, 'readCommittedForEffect').mockImplementation(() => {
+      const result = readStudio();
+      if (clockArmed) {clockArmed = false; f.setNow(NOW + 80_001);}
+      return result;
+    });
+    client.prepareOptions = async options => {
+      prepared = true;
+      if (mode === 'shared-permission-revoke') {
+        const state = await f.adaptive.readAuthority(ID.alice, 'work');
+        await f.adaptive.changeConsent(ID.alice, {space: 'work', purpose: 'optional.personalization', state: 'withdrawn', expectedRevision: state.purposes.find(p => p.purpose === 'optional.personalization')!.revision, eventId: randomUUID()});
+      } else if (mode === 'grant-revoke') {
+        const snapshot = await f.adaptive.readAuthority(ID.alice, 'work');
+        await f.adaptive.setAgentAccess(ID.alice, f.agent.id, {space: 'work', allowed: false, expectedRevision: snapshot.revision, eventId: randomUUID()});
+      } else if (mode === 'correction') {
+        await f.adaptive.correctMemory(ID.alice, 'memory-0', {space: 'work', text: 'Corrected SDK fact.', expectedRevision: 1, eventId: randomUUID()}, {authorizeNow: () => true});
+      } else if (mode === 'block-restore') {
+        await f.h.studio.blockByAgent(f.agent.id, ID.alice);
+        await f.h.studio.unblock(f.users.alice, f.agent.id, ID.alice);
+      } else if (mode === 'expiry') f.setNow(NOW + 80_001);
+      if (mode === 'clock-during-snapshot') clockArmed = true;
+      f.reset(); await prepare(options);
+    };
+    const response = await handleConversationRequest(f.h.studio, f.request('launchcodename'), TOKEN);
+    expect(prepared).toBe(true);
+    if (mode === 'positive') {
+      expect(response.status).toBe(200); expect(transports).toHaveLength(1);
+      expect(transports[0]).toContain('Launchcodename is Sapphire.');
+      expect(await response.text()).toContain('SDK_POSITIVE_REPLY');
+    } else {
+      expect(response.status).not.toBe(200); expect(transports).toHaveLength(0);
+      expect(await response.text()).not.toContain('SDK_POSITIVE_REPLY');
+    }
+    expect(f.storage.io.bodyRowsRead).toBe(0); expect(f.storage.io.canonicalImageReads).toBe(0);
+  });
+
+  it.each(['positive', 'audience', 'block-restore', 'role-restore', 'group-policy'] as const)('actual SDK group fence sees committed authority changes: %s', async change => {
+    const f = await fixture();
+    const chatId = -100800;
+    await f.h.store.update(s => {s.groups.push({chatId, title: 'Synthetic group', memberIds: [ID.alice], hasGuests: false, agentIds: [f.agent.id], addedAt: T0.toISOString()}); s.agents.find(a => a.id === f.agent.id)!.groupBehavior = {participation: 'balanced', remember: true};});
+    vi.stubGlobal('window', undefined);
+    const transport = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({id: 'synthetic', type: 'message', role: 'assistant', model: 'synthetic', content: [{type: 'text', text: 'GROUP_REPLY'}], stop_reason: 'end_turn', usage: {input_tokens: 1, output_tokens: 1}}), {headers: {'content-type': 'application/json'}}));
+    const llm = new AnthropicLLM('synthetic-key', 'synthetic-model', transport); f.h.studio.deps.chatLLM = llm;
+    const client = (llm as unknown as {getClient(): {prepareOptions(options: unknown): Promise<void>}}).getClient();
+    const prepare = client.prepareOptions.bind(client);
+    let prepared = false;
+    client.prepareOptions = async options => {
+      prepared = true;
+      if (change === 'audience') await f.h.store.update(s => {const g = s.groups.find(g => g.chatId === chatId)!; g.hasGuests = true; g.audienceEpoch = (g.audienceEpoch ?? 0) + 1;});
+      if (change === 'block-restore') {await f.h.studio.blockByAgent(f.agent.id, ID.alice); await f.h.studio.unblock(f.users.alice, f.agent.id, ID.alice);}
+      if (change === 'role-restore') {await f.h.studio.setRole(f.users.superadmin, ID.alice, 'admin'); await f.h.studio.setRole(f.users.superadmin, ID.alice, 'member');}
+      if (change === 'group-policy') {
+        await f.h.studio.setGroupBehavior(f.users.alice, f.agent.id, {participation: 'mentions', remember: false});
+        await f.h.studio.setGroupBehavior(f.users.alice, f.agent.id, {participation: 'balanced', remember: true});
+      }
+      await prepare(options);
+    };
+    const {gateway, state} = await f.h.studio.gateway(), org = studioToOrg(state, 'HOOR');
+    const chat = {kind: 'group' as const, chatKey: `group-${groupId(chatId)}`, group: org.getGroup(groupId(chatId))!};
+    const result = gateway.generateReply(org.getPersona(f.agent.id)!, chat, personId(ID.alice), 'Synthetic group question');
+    if (change !== 'positive') {await expect(result).rejects.toThrow(); expect(transport).not.toHaveBeenCalled();}
+    else {expect(await result).toBe('GROUP_REPLY'); expect(transport).toHaveBeenCalledTimes(1);}
+    expect(prepared).toBe(true);
+  });
+
+  it.each([false, true])('actual SDK streaming fence blocks revoked context before any configured fetch: %s', async revoke => {
+    const f = await fixture(); vi.stubGlobal('window', undefined);
+    const events = [
+      {type: 'message_start', message: {id: 'synthetic', type: 'message', role: 'assistant', model: 'synthetic', content: [], usage: {input_tokens: 1, output_tokens: 0}}},
+      {type: 'content_block_start', index: 0, content_block: {type: 'text', text: ''}},
+      {type: 'content_block_delta', index: 0, delta: {type: 'text_delta', text: 'STREAM_POSITIVE'}},
+      {type: 'content_block_stop', index: 0},
+      {type: 'message_delta', delta: {stop_reason: 'end_turn', stop_sequence: null}, usage: {output_tokens: 1}},
+      {type: 'message_stop'},
+    ];
+    const transport = vi.fn<typeof fetch>(async () => new Response(events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(''), {headers: {'content-type': 'text/event-stream'}}));
+    const llm = new AnthropicLLM('synthetic-key', 'synthetic-model', transport); f.h.studio.deps.chatLLM = llm;
+    const client = (llm as unknown as {getClient(): {prepareOptions(options: unknown): Promise<void>}}).getClient();
+    const prepare = client.prepareOptions.bind(client); let prepared = false;
+    client.prepareOptions = async options => {
+      prepared = true;
+      if (revoke) await f.adaptive.correctMemory(ID.alice, 'memory-0', {space: 'work', text: 'Corrected streaming source.', expectedRevision: 1, eventId: randomUUID()}, {authorizeNow: () => true});
+      await prepare(options);
+    };
+    const {gateway} = await f.h.studio.gateway(), chunks: string[] = [];
+    const run = async () => {for await (const part of gateway.liveTurn(f.agent.id, personId(ID.alice), [{role: 'user', content: 'launchcodename'}])) chunks.push(part);};
+    if (revoke) {await expect(run()).rejects.toThrow(); expect(transport).not.toHaveBeenCalled(); expect(chunks).toEqual([]);}
+    else {await run(); expect(chunks).toEqual(['STREAM_POSITIVE']); expect(transport).toHaveBeenCalledTimes(1);}
+    expect(prepared).toBe(true);
+  });
+
+  it('actual SDK core-only reply needs Studio/core authority but no optional-memory grant', async () => {
+    const f = await fixture(false); attachShared(f);
+    await f.adaptive.withAccountDocument(ID.alice, d => {d.agentGrants = []; d.revision++;});
+    vi.stubGlobal('window', undefined);
+    const transport = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({id: 'synthetic', type: 'message', role: 'assistant', model: 'synthetic', content: [{type: 'text', text: 'CORE_NO_OPTIONAL_REPLY'}], stop_reason: 'end_turn', usage: {input_tokens: 1, output_tokens: 1}}), {headers: {'content-type': 'application/json'}}));
+    f.h.studio.deps.chatLLM = new AnthropicLLM('synthetic-key', 'synthetic-model', transport);
+    f.reset(); const {gateway} = await f.h.studio.gateway();
+    expect(await gateway.converse(f.agent.id, personId(ID.alice), 'Synthetic core only question')).toBe('CORE_NO_OPTIONAL_REPLY');
+    expect(transport).toHaveBeenCalledTimes(1); expect(String(transport.mock.calls[0][1]?.body)).not.toContain('Launchcodename is Sapphire.');
+    expect(f.storage.io.bodyRowsRead).toBe(0); expect(f.storage.io.canonicalImageReads).toBe(0);
+  });
+
 });

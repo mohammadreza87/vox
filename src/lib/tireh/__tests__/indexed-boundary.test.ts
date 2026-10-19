@@ -4,10 +4,11 @@ import {InMemoryUpdateDeduper} from '../memory/store';
 import {makeGateway, memory} from './fixtures';
 import type {LLM} from '../llm';
 
-function fixture(privacy: RuntimePrivacy, llm?: LLM) {
+function fixture(privacy: RuntimePrivacy, llm?: LLM, now = () => new Date('2026-10-19T10:00:00Z')) {
   const h = makeGateway();
+  Object.defineProperty(llm ?? h.llm, 'committedExportFence', {value: true, configurable: true});
   const gateway = new PersonaGateway({org: h.org, llm: llm ?? h.llm, memories: h.memories, offers: h.offers, history: h.history,
-    deduper: new InMemoryUpdateDeduper(), voice: null, botFor: () => h.bot, runtimePrivacy: privacy, now: () => new Date('2026-10-19T10:00:00Z')});
+    deduper: new InMemoryUpdateDeduper(), voice: null, botFor: () => h.bot, runtimePrivacy: privacy, now});
   return {...h, gateway};
 }
 function compact() {
@@ -15,7 +16,7 @@ function compact() {
   const authority = () => ({revision, memoryEnabled: false, historyEnabled: false});
   const read = vi.fn(async (_persona: string, _person: string, _space?: 'work' | 'personal', _chat?: unknown, query?: string) => ({...authority(), context: [`Current selected context for ${query}`]}));
   const readAuthority = vi.fn(async () => authority());
-  const privacy: RuntimePrivacy = {legacyStores: 'unavailable', read, readAuthority, validateAudience: async () => true};
+  const privacy: RuntimePrivacy = {legacyStores: 'unavailable', read, readAuthority, finalReadNow: () => ({...authority(), validUntil: Number.MAX_SAFE_INTEGER}), validateAudience: async () => true, validateAudienceNow: () => true};
   return {privacy, read, readAuthority, change: () => {revision = 'scope-v2';}};
 }
 describe('indexed complete authority gateway boundary', () => {
@@ -60,6 +61,48 @@ describe('indexed complete authority gateway boundary', () => {
     const h = fixture(c.privacy, llm), parts: string[] = [];
     for await (const part of h.gateway.liveTurn('aria', 'reza', [{role: 'user', content: 'current final utterance'}])) {parts.push(part); c.change();}
     expect(parts).toEqual(['first']); expect(c.read).toHaveBeenCalledTimes(1); expect(c.read.mock.calls[0][4]).toBe('current final utterance');
+  });
+  it('refuses an unqualified LLM even when all synchronous snapshots are current', async () => {
+    const c = compact(), h = fixture(c.privacy);
+    Object.defineProperty(h.llm, 'committedExportFence', {value: undefined});
+    expect(await h.gateway.converse('aria', 'reza', 'draft')).not.toBe('Sure.');
+    expect(h.llm.replyRequests).toHaveLength(0);
+  });
+  it('refuses a missing or busy synchronous adapter rather than using async authority', async () => {
+    for (const busy of [false, true]) {
+      const c = compact();
+      c.privacy.finalReadNow = busy ? () => {throw Error('busy');} : undefined;
+      const h = fixture(c.privacy);
+      expect(await h.gateway.converse('aria', 'reza', 'draft')).not.toBe('Sure.');
+      expect(h.llm.replyRequests).toHaveLength(0);
+    }
+  });
+  it('checks source deadlines after the external synchronous request fence finishes', async () => {
+    const c = compact(); let now = Date.parse('2026-10-19T10:00:00Z'); const deadline = now + 100;
+    const original = c.privacy.finalReadNow!;
+    c.privacy.finalReadNow = (...args) => ({...original(...args), validUntil: deadline});
+    const h = fixture(c.privacy, undefined, () => new Date(now));
+    const reply = await h.gateway.converse('aria', 'reza', 'draft', {authorizeNow: () => {now = deadline; return true;}});
+    expect(reply).not.toBe('Sure.'); expect(h.llm.replyRequests).toHaveLength(0);
+  });
+  it('rejects malformed shared revisions in marked group adapters', async () => {
+    const c = compact();
+    c.privacy.readShared = async () => ({revision: undefined as unknown as string, context: ['MALFORMED_SHARED_CANARY']});
+    c.privacy.readSharedAuthority = async () => ({revision: undefined as unknown as string});
+    c.privacy.readSharedAuthorityNow = () => ({revision: undefined as unknown as string, validUntil: Number.MAX_SAFE_INTEGER});
+    const h = fixture(c.privacy), group = h.org.getGroup('gameend-team')!;
+    expect(await h.gateway.generateReply(h.org.getPersona('aria')!, {kind: 'group', chatKey: 'group-gameend-team', group}, 'reza', 'question')).not.toBe('Sure.');
+    expect(h.llm.replyRequests).toHaveLength(0);
+  });
+  it('rejects one invalid participant deadline even when other participants have finite deadlines', async () => {
+    const c = compact(), read = c.privacy.finalReadNow!;
+    c.privacy.finalReadNow = (...args) => ({...read(...args), validUntil: args[1] === 'reza' ? Infinity : Number.MAX_SAFE_INTEGER});
+    c.privacy.readShared = async () => ({revision: 'shared', context: ['SHARED_CANARY']});
+    c.privacy.readSharedAuthority = async () => ({revision: 'shared'});
+    c.privacy.readSharedAuthorityNow = () => ({revision: 'shared', validUntil: Number.MAX_SAFE_INTEGER});
+    const h = fixture(c.privacy), group = h.org.getGroup('gameend-team')!;
+    expect(await h.gateway.generateReply(h.org.getPersona('aria')!, {kind: 'group', chatKey: 'group-gameend-team', group}, 'reza', 'question')).not.toBe('Sure.');
+    expect(h.llm.replyRequests).toHaveLength(0);
   });
   it('preparation selects one current body and never calls the reply model or retains history', async () => {
     const c = compact(), h = fixture(c.privacy), append = vi.spyOn(h.history, 'append');
