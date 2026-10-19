@@ -40,6 +40,15 @@ export function normalizeTurns(messages: LLMMessage[]): LLMMessage[] {
   return merged;
 }
 
+function supportsCustomSampling(model: string): boolean {
+  // Claude 5 families and Opus 4.7+ reject non-default sampling parameters.
+  // Match the family/version prefix so dated IDs and aliases follow the same
+  // contract, while older Claude models keep the caller's temperature.
+  const familyVersion = /^claude-(?:sonnet|haiku|opus|fable|mythos)-(\d+)(?:-|$)/.exec(model);
+  if (familyVersion && Number(familyVersion[1]) >= 5) return false;
+  return !/^claude-opus-4-(?:[7-9]|[1-9]\d)(?:-|$)/.test(model);
+}
+
 export class AnthropicLLM implements LLM {
   private client: Anthropic | null = null;
 
@@ -50,7 +59,7 @@ export class AnthropicLLM implements LLM {
     const response = await this.client.messages.create({
       model: this.model,
       max_tokens: maxTokens,
-      temperature,
+      ...(supportsCustomSampling(this.model) ? { temperature } : {}),
       system,
       messages: normalizeTurns(messages),
     });

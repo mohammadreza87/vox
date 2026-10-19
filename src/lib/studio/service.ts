@@ -445,8 +445,9 @@ export class Studio {
       a.suggestedUsername = a.suggestedUsername ?? suggestUsername(a.persona.name);
       return { ...a };
     });
-    const link = `https://t.me/newbot/${this.deps.managerUsername}/${agent.suggestedUsername}`;
-    return { link, agent: await this.present(agent, actor) };
+    const link = new URL(`https://t.me/newbot/${this.deps.managerUsername}/${agent.suggestedUsername}`);
+    link.searchParams.set('name', agent.persona.name);
+    return { link: link.href, agent: await this.present(agent, actor) };
   }
 
   /**

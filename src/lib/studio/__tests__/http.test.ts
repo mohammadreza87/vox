@@ -247,7 +247,7 @@ describe('agents', () => {
     expect(look.status).toBe(200);
 
     const pub = await call(req('POST', `agents/${id}/publish`, { body: {} }));
-    expect(pub.json.link).toBe('https://t.me/newbot/VoxxBot/hoor_leyla_bot');
+    expect(pub.json.link).toBe('https://t.me/newbot/VoxxBot/hoor_leyla_bot?name=Leyla');
     expect((await call(req('GET', 'agents'))).json.agents.map((a: { id: string }) => a.id)).toEqual([id]);
     expect((await call(req('GET', `agents/${id}`, { as: ID.bob }))).status).toBe(404);
   });

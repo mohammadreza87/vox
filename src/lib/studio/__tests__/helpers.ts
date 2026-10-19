@@ -232,7 +232,7 @@ export async function hire(h: Harness, creator: Member, persona: Partial<Persona
   h.personaLLM.push(draftJson(persona));
   const { agent } = await h.studio.draft(creator, {}, successorOf);
   const { link } = await h.studio.publish(creator, agent.id);
-  const username = link.split('/').pop()!;
+  const username = new URL(link).pathname.split('/').pop()!;
   const botId = nextBotId++;
   const hired = await h.studio.onManagedBot({
     user: { id: creator.telegramId, is_bot: false, first_name: creator.name },
