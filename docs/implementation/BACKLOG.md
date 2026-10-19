@@ -430,7 +430,7 @@ Wire first audio, interruption, playback failure, cancellation, correction, feed
 
 ### VOX-021 — Remove private payloads from diagnostic and audit paths
 
-**Owner:** `vox_architect` · **Reviewer:** `vox_privacy_security` · **Model:** `gpt-6.1-sol` · **Size:** M · **Priority:** P0 · **Status:** planned
+**Owner:** `vox_architect` · **Reviewer:** `vox_privacy_security` · **Model:** `gpt-6.1-sol` · **Size:** M · **Priority:** P0 · **Status:** in_progress
 
 **Requirements:** REQ-04, REQ-15, REQ-22. **Depends on:** VOX-017.
 
@@ -444,6 +444,8 @@ Replace raw STT/call/extraction logs and block audit text with reason codes/rest
 **Verification:** Export-capture tests on all known logging and replay paths.
 
 **Deliverables:** Sanitized logging/audit changes; Leak-canary report.
+
+**Evidence:** ["docs/implementation/OBSERVATION_DIAGNOSTICS.md", "docs/implementation/evidence/DIAGNOSTIC_REVIEW.md"]
 
 ### VOX-022 — Build operational and product outcome views
 
@@ -500,7 +502,7 @@ Upgrade isolated OpenAI dependency; implement typed question/result/usage/refusa
 
 **Deliverables:** DecisionProvider implementation; SDK compatibility tests.
 
-**Evidence:** ["docs/implementation/DELIVERY_RESULT.md"]
+**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/evidence/decisions-provider/RESULT.md"]
 
 ### VOX-025 — Define and calibrate question catalog and policies
 
@@ -614,7 +616,7 @@ Benchmark baseline versus candidate using the fixed workload, uncertainty interv
 
 **Deliverables:** Decision qualification report; Budget and circuit-break settings.
 
-**Evidence:** ["docs/implementation/DELIVERY_RESULT.md"]
+**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/evidence/decisions-provider/RESULT.md"]
 
 ### VOX-031 — Integrate supported voice/image input prediction path
 
@@ -965,7 +967,7 @@ Execute QA matrix across consent, memory scopes, event ordering, decisions, noti
 
 **Deliverables:** Regression evidence packet; Open-defect register.
 
-**Evidence:** ["docs/implementation/DELIVERY_RESULT.md"]
+**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/INTEGRATION_RELEASE.md", "docs/implementation/RELEASE_2026_10_19.md"]
 
 ### VOX-050 — Run Studio browser journeys and accessibility checks
 
@@ -984,7 +986,7 @@ Execute QA-approved Studio journeys using synthetic fixtures in Chromium/WebKit/
 
 **Deliverables:** Browser evidence bundle; Accessibility findings.
 
-**Evidence:** ["docs/implementation/DELIVERY_RESULT.md"]
+**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/INTEGRATION_RELEASE.md", "docs/implementation/RELEASE_2026_10_19.md"]
 
 ### VOX-051 — Run real provider and physical-device E2E
 

@@ -26,6 +26,7 @@ import { selectMemories } from './memory/retrieval';
 import { decideScope, extractCandidates, resolveCandidateSource, firstNewIndex } from './memory/extraction';
 import { canPersonSee, describeScope, isVisibleToAudience, audienceOf, historyMessageForChat, selectHistoryForChat, snapshotScopeAudience } from './memory/visibility';
 import { groupAddressing } from './group-addressing';
+import { logTelegramDiagnostic, voiceFailureDiagnostic } from './telegram/diagnostics';
 
 export type GroupAction = 'observe' | 'reply' | 'proactive' | 'remember';
 
@@ -184,7 +185,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     }
     catch (error) {
       if (parseExplicitControl(text) || (error && typeof error === 'object' && 'code' in error && error.code === 'relationship_control_unconfirmed')) throw error;
-      this.log.warn('[tireh] relationship observation unavailable');
+      logTelegramDiagnostic(this.log, 'relationship_observation_failed');
     }
   }
 
@@ -258,7 +259,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
           `Hi, I'm ${persona.name}. I only work with members of ${org.organizationName}, so I can't chat here.\n\nIf you're on the team, ask an admin to add your Telegram ID: ${message.from.id}`
         );
       }
-      this.log.warn(`[tireh] ${persona.id}: message from unregistered Telegram user ${message.from.id}`);
+      logTelegramDiagnostic(this.log, 'unknown_account');
       return 'stranger';
     }
 
@@ -270,14 +271,14 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
           `This group isn't registered with ${org.organizationName}, so I can't take part here.\n\nTo register it, an admin adds this chat ID to the config: ${message.chat.id}`
         );
       }
-      this.log.warn(`[tireh] ${persona.id}: unregistered group ${message.chat.id}`);
+      logTelegramDiagnostic(this.log, 'unknown_group');
       return 'unregistered-group';
     }
     if (chat === 'not-member') {
       // The group's member list in config is the audience used for memory
       // visibility. Someone outside it means the config is out of date, so
       // the persona stays out of the conversation until it is fixed.
-      this.log.warn(`[tireh] ${persona.id}: ${speaker.id} is not a registered member of group ${message.chat.id}`);
+      logTelegramDiagnostic(this.log, 'group_nonmember');
       return 'ignored';
     }
     if (!chat) return 'ignored';
@@ -358,7 +359,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
       try {
         generated = await this.composeReply(persona, chat, speaker.id, text, triage, message.message_id, addressed ? 'reply' : 'proactive', voiceWanted && canSpeak ? 'voice' : 'text', boundary);
       } catch {
-        this.log.error(`[tireh] ${persona.id}: reply generation failed`);
+        logTelegramDiagnostic(this.log, 'reply_generation_failed');
         return 'ignored';
       }
       const { text: reply, sources } = generated;
@@ -389,7 +390,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
           await this.formMemories(persona, chat, speaker.id, boundary, [userMessage, ...(assistantMessage ? [assistantMessage] : [])], message.message_id, !addressed);
         }
       } catch {
-        this.log.error(`[tireh] ${persona.id}: memory extraction failed`);
+        logTelegramDiagnostic(this.log, 'extraction_failed');
       }
     }
     return shouldReply ? 'replied' : 'ignored';
@@ -451,7 +452,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     try {
       await this.formMemories(persona, chat, speakerId, boundary, [user, assistant]);
     } catch {
-      this.log.error(`[tireh] ${persona.id}: memory extraction failed`);
+      logTelegramDiagnostic(this.log, 'extraction_failed');
     }
     return await this.unchanged(persona, chat, speakerId, boundary) ? reply : this.changedReply;
   }
@@ -584,7 +585,7 @@ You are on a live voice call. Answer in one to three short spoken sentences. No 
       const chat: ChatContext = { kind: 'private', chatKey: `private-${speakerId}`, personId: speakerId };
       await this.formMemories(persona, chat, speakerId, await this.boundary(persona, chat, speakerId), []);
     } catch {
-      this.log.error(`[tireh] ${persona.id}: memory extraction failed`);
+      logTelegramDiagnostic(this.log, 'extraction_failed');
     }
   }
 
@@ -615,7 +616,7 @@ You are on a live voice call. Answer in one to three short spoken sentences. No 
       if (!(await this.groupAllowed(persona, chat, speakerId, 'reply'))) return '';
       return await this.deps.voice.transcribe(audio, message.voice.mime_type ?? 'audio/ogg');
     } catch {
-      this.log.error('[tireh] transcription failed');
+      logTelegramDiagnostic(this.log, 'transcription_failed');
       return '';
     }
   }
@@ -656,7 +657,7 @@ You are on a live voice call. Answer in one to three short spoken sentences. No 
       const answers = await decider.decide(triageInput(persona, lines), triageQuestions(persona, askAddressed), TRIAGE_TIMEOUT_MS);
       return readTriage(answers, askAddressed, persona.groupParticipation ?? 'mentions');
     } catch {
-      this.log.warn(`[tireh] ${persona.id}: triage unavailable`);
+      logTelegramDiagnostic(this.log, 'triage_failed');
       return null;
     }
   }
@@ -743,16 +744,14 @@ You are on a live voice call. Answer in one to three short spoken sentences. No 
         await bot.sendVoice(message.chat.id, audio, { mimeType, filename, replyTo });
         audioSent = true;
       } catch (error) {
-        const code = error && typeof error === 'object' && 'code' in error && typeof error.code === 'string'
-          && /^[a-z_]{1,60}$/.test(error.code) ? error.code : 'delivery_failed';
-        this.log.error(`[tireh] ${persona.id}: voice reply failed, sending text (${code})`);
+        logTelegramDiagnostic(this.log, voiceFailureDiagnostic(error));
       }
     }
     if (!await canSend()) return null;
     if (audioSent) {
       // A failed transcript must not report that an already-delivered voice failed.
       try { await bot.sendMessage(message.chat.id, withSources(reply, sources), { replyTo }); }
-      catch { this.log.warn(`[tireh] ${persona.id}: voice delivered, transcript failed`); }
+      catch { logTelegramDiagnostic(this.log, 'voice_transcript_failed'); }
       return reply;
     }
     const fallback = /[\u0600-\u06ff]/.test(message.text ?? message.caption ?? reply)

@@ -19,6 +19,9 @@ env:
 jobs:
   deploy:
     name: Deploy to Firebase
+    # The live Mac polling service owns the shared Telegram bots. Firebase must
+    # not register their webhooks unless an explicit target migration is made.
+    if: ${{ vars.STUDIO_PRODUCTION_TARGET == 'firebase' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # Firebase's framework deploy invokes Next build again. Keep real settings

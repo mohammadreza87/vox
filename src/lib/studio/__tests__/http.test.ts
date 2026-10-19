@@ -5,6 +5,7 @@ import { InMemoryRelationshipStore, RelationshipLoop } from '../../relationships
 import { handleStudioRequest, MAX_STUDIO_JSON_BYTES, MAX_STUDIO_UPLOAD_BYTES, type RouterOptions } from '../http';
 import { StudioRateLimiter } from '../ratelimit';
 import { draftJson, hire, ID, makeStudio, seedOrg, type Harness } from './helpers';
+import { expectContentFreeTelegramLogs, telegramCanaryError } from '@/test/telegram-diagnostics';
 
 const BOT_TOKEN = '555:voxx-test-token';
 const opts: RouterOptions = { botToken: BOT_TOKEN, devUser: null };
@@ -261,7 +262,7 @@ describe('agents', () => {
     expect(bad.json.error).toMatch(/one correction.*brief is kept/i);
     expect(h.personaLLM.requests).toHaveLength(2);
     expect((await h.store.read()).agents).toHaveLength(0);
-    expect(h.logger.warn).toHaveBeenCalledWith('[studio] persona generation invalid', expect.objectContaining({ invalidFields: expect.any(Array) }));
+    expect(h.logger.warn).toHaveBeenCalledWith({ type: 'telegram_ingress', stage: 'persona_generation', reason: 'invalid_output', outcome: 'http_502' });
     const r = await call(req('POST', 'agents', { rawBody: '{oops', headers: { 'content-type': 'application/json' } }));
     expect(r.status).toBe(400);
     expect(r.json.error).toBe('Invalid JSON body');
@@ -376,6 +377,27 @@ describe('agents', () => {
     expect((await call(req('GET', 'nothing'))).status).toBe(404);
     expect((await call(req('POST', 'agents/x/teleport', { body: {} }))).status).toBe(404);
     expect((await call(req('DELETE', 'members'))).status).toBe(404);
+  });
+
+  it.each(['canary', 'name', 'message', 'status', 'code', 'proxy'] as const)('keeps real Mini App call errors private with a %s error and preserves a generic response', async (kind) => {
+    const { agent } = await hire(h, org.alice);
+    const error = kind === 'proxy'
+      ? new Proxy({}, { get: () => { throw new Error('synthetic getter failure'); } })
+      : telegramCanaryError();
+    if (kind !== 'canary' && kind !== 'proxy') Object.defineProperty(error, kind, { get: () => { throw new Error('synthetic getter failure'); } });
+    h.openai.transcribe.mockRejectedValueOnce(error);
+    h.eleven.transcribe.mockRejectedValueOnce(error);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const original = globalThis.Blob;
+    globalThis.Blob = NodeBlob as unknown as typeof Blob;
+    try {
+      const response = await call(req('POST', `agents/${agent.id}/call`, multipart('audio', 'turn.webm', 'audio/webm', 'SYNTHETIC_AUDIO')));
+      expect(response.status).toBe(500);
+      expect(response.json).toEqual({ error: 'Something went wrong. Try again.' });
+      expect(h.logger.error).toHaveBeenCalledTimes(1);
+      expect(h.logger.error).toHaveBeenCalledWith({ type: 'telegram_ingress', stage: 'studio_http', reason: 'operation_failed', outcome: 'http_500' });
+      expectContentFreeTelegramLogs([...warn.mock.calls, ...h.logger.info.mock.calls, ...h.logger.warn.mock.calls, ...h.logger.error.mock.calls], [agent.id]);
+    } finally { globalThis.Blob = original; warn.mockRestore(); }
   });
 });
 

@@ -15,6 +15,7 @@ import { boundedStudioRequest, MAX_STUDIO_JSON_BYTES } from '@/lib/studio/http';
 import { StudioError } from '@/lib/studio/service';
 import { handleAgentUpdate, handleManagerUpdate, isValidWebhookSecret, registerWebhooks } from '@/lib/studio/updates';
 import type { TelegramUpdate } from '@/lib/tireh/telegram/client';
+import { logTelegramDiagnostic } from '@/lib/tireh/telegram/diagnostics';
 import { timingSafeEqual } from 'crypto';
 
 export const runtime = 'nodejs';
@@ -61,7 +62,7 @@ export async function POST(request: Request, { params }: RouteParams) {
   try {
     studio = await getStudio();
   } catch {
-    console.error('[studio] webhook: not configured');
+    logTelegramDiagnostic(console, 'studio_webhook_disabled');
     return Response.json({ error: 'Vox Studio is not configured' }, { status: 503 });
   }
 
@@ -73,7 +74,7 @@ export async function POST(request: Request, { params }: RouteParams) {
       const complete = result.manager && result.failed.length === 0;
       return Response.json(result, { status: complete ? 200 : 502 });
     } catch {
-      console.error('[studio] webhook setup failed');
+      logTelegramDiagnostic(console, 'studio_webhook_setup_failed');
       return Response.json({ error: 'Bot setup failed. Please try again.' }, { status: 502 });
     }
   }
@@ -84,7 +85,7 @@ export async function POST(request: Request, { params }: RouteParams) {
   } catch {
     // Answer 200 anyway: a Telegram retry storm can't fix a bug, and the
     // gateway's deduper already guards against double handling.
-    console.error(`[studio] webhook ${key} failed`);
+    logTelegramDiagnostic(console, 'studio_webhook_failed');
   }
   return Response.json({ ok: true });
 }

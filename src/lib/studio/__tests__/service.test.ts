@@ -386,7 +386,7 @@ describe('managed bot → hire', () => {
     expect(first.failed).toEqual(['name']);
     expect(bot().setMyProfilePhoto).toHaveBeenCalledTimes(2);
     expect(bot().setMyDescription).toHaveBeenCalledTimes(2);
-    expect(h.logger.warn).toHaveBeenCalledWith(expect.stringContaining('Telegram name update failed'), expect.anything());
+    expect(h.logger.warn).toHaveBeenCalledWith({ type: 'telegram_ingress', stage: 'profile_name', reason: 'operation_failed', outcome: 'continue' });
 
     const second = await h.studio.syncProfile(org.alice, agent.id);
     expect(second.failed).toEqual([]);
