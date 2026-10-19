@@ -70,6 +70,24 @@ export function StudioApp() {
   const [toast, setToast] = useState<{ message: string; tone: 'info' | 'error' } | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const notificationOpened = useRef(false);
+  const correctionOwner = useRef<string | null>(null);
+  const [correctionPending, setCorrectionPending] = useState(false);
+  const correctionPendingChange = useCallback((token: string, pending: boolean): boolean => {
+    if (pending) {
+      if (correctionOwner.current && correctionOwner.current !== token) return false;
+      correctionOwner.current = token; setCorrectionPending(true);
+    } else {
+      if (correctionOwner.current !== token) return false;
+      correctionOwner.current = null; setCorrectionPending(false);
+    }
+    return true;
+  }, []);
+  useEffect(() => {
+    if (!correctionPending) return;
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ''; };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [correctionPending]);
 
   const loadMe = useCallback(async () => {
     try {
@@ -104,9 +122,9 @@ export function StudioApp() {
   const nav: Nav | null = me && {
     me,
     refreshMe: loadMe,
-    push: (r) => { haptic.tap(); setStack((s) => [...s, r]); },
-    back: () => setStack((s) => (s.length > 1 ? s.slice(0, -1) : s)),
-    reset: (...routes) => setStack(routes.length ? routes : [{ name: 'home' }]),
+    push: (r) => { if (correctionOwner.current) return; haptic.tap(); setStack((s) => [...s, r]); },
+    back: () => { if (!correctionOwner.current) setStack((s) => (s.length > 1 ? s.slice(0, -1) : s)); },
+    reset: (...routes) => { if (!correctionOwner.current) setStack(routes.length ? routes : [{ name: 'home' }]); },
     toast: (message, tone = 'info') => {
       if (tone === 'error') haptic.error();
       setToast({ message, tone });
@@ -119,7 +137,7 @@ export function StudioApp() {
   useEffect(() => {
     const back = tg()?.BackButton;
     if (!back) return;
-    const onBack = () => setStack((s) => (s.length > 1 ? s.slice(0, -1) : s));
+    const onBack = () => { if (!correctionOwner.current) setStack((s) => (s.length > 1 ? s.slice(0, -1) : s)); };
     if (stack.length > 1) back.show(); else back.hide();
     back.onClick(onBack);
     return () => back.offClick(onBack);
@@ -172,7 +190,7 @@ export function StudioApp() {
               {route.name === 'home' && <HomeScreen />}
               {route.name === 'groups' && <GroupsScreen />}
               {route.name === 'org' && <OrgScreen />}
-              {route.name === 'privacy' && <PrivacyScreen onShared={() => nav.push({ name: 'shared-memories' })} onExperience={() => nav.push({ name: 'experience' })} onConnections={() => nav.push({ name: 'connections' })} />}
+              {route.name === 'privacy' && <PrivacyScreen onCorrectionPendingChange={correctionPendingChange} onShared={() => nav.push({ name: 'shared-memories' })} onExperience={() => nav.push({ name: 'experience' })} onConnections={() => nav.push({ name: 'connections' })} />}
               {route.name === 'connections' && <ConnectionsScreen onBack={nav.back} agentId={route.agentId} />}
               {route.name === 'shared-memories' && <SharedMemoriesScreen selfId={me.member.telegramId} onBack={nav.back} />}
               {route.name === 'experience' && <ExperienceScreen onBack={nav.back} role={me.member.role} notificationId={route.notificationId} />}
@@ -191,7 +209,7 @@ export function StudioApp() {
             {TABS.map((t) => {
               const active = route.name === t.route;
               return (
-                <button key={t.route} className="vx-tab" aria-current={active ? 'page' : undefined}
+                <button key={t.route} className="vx-tab" disabled={correctionPending} aria-current={active ? 'page' : undefined}
                   onClick={() => { haptic.select(); nav.reset({ name: t.route } as Route); }}>
                   <span className="vx-tab-pill">
                     {active && <motion.span layoutId="tabpill" transition={{ type: 'spring', stiffness: 500, damping: 32 }}

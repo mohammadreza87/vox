@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PrivacyScreen } from './Privacy';
 import type { AdaptiveSnapshot } from '../../_lib/adaptive-client';
@@ -76,25 +76,42 @@ it('renders an inherited unverified claim caveat alongside summary provenance in
   expect(summary.revision).toBe(1); expect(mocks.save).not.toHaveBeenCalled(); expect(mocks.consent).not.toHaveBeenCalled();
 });
 
-it('retains the newer authoritative snapshot when two own-note correction responses arrive out of order', async () => {
+it('serializes own-note corrections and preserves the first authoritative result when the next note saves', async () => {
   const notes = ['First own note', 'Second own note'].map((text, index) => ({ id: `note-${index}`, text, revision: 1, createdAt: 1, expiresAt: 2_000_000_000_000 }));
   const initial = snapshot({ memories: notes, memoryCorrectionAvailable: true }); mocks.read.mockResolvedValue(initial);
   const release: Array<(value: AdaptiveSnapshot) => void> = [];
   mocks.correct.mockImplementation(() => new Promise(resolve => release.push(resolve)));
   const view = render(<PrivacyScreen />); await screen.findAllByRole('button', { name: 'Edit note' });
-  for (let index = 0; index < 2; index++) {
-    const article = view.container.querySelectorAll('.vx-privacy-note')[index] as HTMLElement;
-    fireEvent.click(within(article).getByRole('button', { name: 'Edit note' }));
-    fireEvent.change(within(article).getByRole('textbox'), { target: { value: `Corrected ${index}` } });
-    fireEvent.click(within(article).getByRole('button', { name: 'Review correction' }));
-    fireEvent.click(within(article).getByRole('button', { name: 'Save correction' }));
-  }
-  await waitFor(() => expect(mocks.correct).toHaveBeenCalledTimes(2));
-  const current = notes.map((m, index) => ({ ...m, revision: 2, text: `Corrected ${index}` }));
-  release[1]({ ...initial, revision: 4, memories: current });
-  await waitFor(() => expect(view.container.querySelectorAll('.vx-privacy-note')[1]).toHaveTextContent('Corrected 1'));
-  release[0]({ ...initial, revision: 3, memories: [current[0], notes[1]] });
-  await waitFor(() => expect(view.container.querySelectorAll('.vx-privacy-note')[0]).toHaveTextContent('Corrected 0'));
-  expect(view.container.querySelectorAll('.vx-privacy-note')[1]).toHaveTextContent('Corrected 1');
-  expect(mocks.correct).toHaveBeenCalledTimes(2);
+  const first=view.container.querySelectorAll('.vx-privacy-note')[0] as HTMLElement;
+  fireEvent.click(within(first).getByRole('button',{name:'Edit note'}));fireEvent.change(within(first).getByRole('textbox'),{target:{value:'Corrected 0'}});fireEvent.click(within(first).getByRole('button',{name:'Review correction'}));fireEvent.click(within(first).getByRole('button',{name:'Save correction'}));
+  const second=view.container.querySelectorAll('.vx-privacy-note')[1] as HTMLElement;
+  const edit=within(second).getByRole('button',{name:'Edit note'});expect(edit).toBeDisabled();fireEvent.click(edit);expect(within(second).queryByRole('textbox')).not.toBeInTheDocument();expect(mocks.correct).toHaveBeenCalledOnce();
+  const firstSaved={...notes[0],revision:2,text:'Corrected 0'};
+  await act(async()=>release[0]({...initial,revision:3,memories:[firstSaved,notes[1]]}));
+  expect(within(first).getByText('Corrected 0')).toBeVisible();expect(edit).toBeEnabled();
+  fireEvent.click(edit);fireEvent.change(within(second).getByRole('textbox'),{target:{value:'Corrected 1'}});fireEvent.click(within(second).getByRole('button',{name:'Review correction'}));fireEvent.click(within(second).getByRole('button',{name:'Save correction'}));
+  await act(async()=>release[1]({...initial,revision:4,memories:[firstSaved,{...notes[1],revision:2,text:'Corrected 1'}]}));
+  expect(view.container.querySelectorAll('.vx-privacy-note')[0]).toHaveTextContent('Corrected 0');expect(view.container.querySelectorAll('.vx-privacy-note')[1]).toHaveTextContent('Corrected 1');expect(mocks.correct).toHaveBeenCalledTimes(2);
+});
+
+it.each(['en','fa'] as const)('owns a pending %s correction without self-aborting or allowing competing scope/writes', async locale=>{
+  const note={id:'pending-note',text:'Scoped original note',revision:1,createdAt:1,expiresAt:Date.now()+86400_000};
+  const current=snapshot({memoryCorrectionAvailable:true,memories:[note]});mocks.read.mockImplementation((space:string)=>Promise.resolve({...current,space,memories:space==='work'?[note]:[]}));
+  let release!:(v:AdaptiveSnapshot)=>void;mocks.correct.mockImplementation(()=>new Promise(r=>{release=r;}));
+  const navigation={shared:vi.fn(),experience:vi.fn(),connections:vi.fn(),pending:vi.fn(()=>true)};
+  render(<PrivacyScreen onShared={navigation.shared} onExperience={navigation.experience} onConnections={navigation.connections} onCorrectionPendingChange={navigation.pending}/>);
+  await screen.findByRole('button',{name:'Edit note'});if(locale==='fa'){fireEvent.change(screen.getByRole('combobox',{name:'Language'}),{target:{value:'fa'}});await screen.findByRole('button',{name:'ویرایش یادداشت'});}
+  const fa=locale==='fa';fireEvent.click(screen.getByRole('button',{name:fa?'ویرایش یادداشت':'Edit note'}));
+  fireEvent.change(screen.getByRole('textbox',{name:fa?'یادداشت اصلاح‌شده':'Corrected note'}),{target:{value:'Scoped corrected note'}});
+  fireEvent.click(screen.getByRole('button',{name:fa?'بررسی اصلاح':'Review correction'}));fireEvent.click(screen.getByRole('button',{name:fa?'ذخیرهٔ اصلاح':'Save correction'}));
+  const signal=mocks.correct.mock.calls[0][2] as AbortSignal,token=mocks.correct.mock.calls[0][1].eventId;
+  expect(signal.aborted).toBe(false);expect(navigation.pending).toHaveBeenCalledExactlyOnceWith(token,true);
+  const personal=screen.getByRole('button',{name:fa?'شخصی':'Personal',exact:true}),language=screen.getByRole('combobox',{name:fa?'زبان':'Language'});
+  for(const control of [personal,language,screen.getByRole('button',{name:fa?'انصراف':'Cancel',exact:true}),screen.getByRole('button',{name:fa?'ذخیرهٔ حافظهٔ خصوصی':'Save private memory'}),screen.getByRole('button',{name:fa?'حذف':'Delete',exact:true})])expect(control).toBeDisabled();
+  fireEvent.click(personal);fireEvent.change(language,{target:{value:fa?'en':'fa'}});expect(personal).toHaveAttribute('aria-pressed','false');
+  for(const name of [fa?'ترجیح‌ها و صندوق اعلان':'Preferences & notification inbox',fa?'اتصال‌ها و دسترسی عامل‌ها':'Connections & agent access',fa?'حافظه‌های مشترک':'Shared memories']){const button=screen.getByRole('button',{name});expect(button).toBeDisabled();fireEvent.click(button);}
+  expect(navigation.shared).not.toHaveBeenCalled();expect(navigation.experience).not.toHaveBeenCalled();expect(navigation.connections).not.toHaveBeenCalled();expect(signal.aborted).toBe(false);expect(mocks.correct).toHaveBeenCalledOnce();
+  await act(async()=>release({...current,revision:3,memories:[{...note,text:'Scoped corrected note',revision:2}]}));
+  expect(navigation.pending).toHaveBeenLastCalledWith(token,false);expect(personal).toBeEnabled();expect(screen.getAllByText('Scoped corrected note').length).toBeGreaterThan(0);
+  fireEvent.click(personal);await waitFor(()=>expect(screen.queryByText('Scoped corrected note')).not.toBeInTheDocument());expect(mocks.read).toHaveBeenLastCalledWith('personal',locale);
 });
