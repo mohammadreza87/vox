@@ -66,3 +66,6 @@ storybook-static
 playwright-report/
 test-results/
 firebase-debug.log
+
+# TIREH org config with real Telegram ids
+tireh.org.json
