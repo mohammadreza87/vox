@@ -1,0 +1,48 @@
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, expect, it, vi } from 'vitest';
+import { PrivacyScreen } from './screens/Privacy';
+import { correctionFixture, CORRECTION_NOW } from '@/lib/adaptive/__tests__/memory-correction-fixtures';
+import { handleAdaptiveRequest } from '@/lib/adaptive/persistence/http';
+import { signInitData } from '@/lib/studio/auth';
+import { api } from '../_lib/client';
+// The unrelated biometric panel is unavailable in this fixture. Note UI, typed
+// client, authentication, HTTP handler and canonical FILE writes are all real.
+vi.mock('./VoiceRecognitionPanel', () => ({ VoiceRecognitionPanel: () => null }));
+const fixtures: Awaited<ReturnType<typeof correctionFixture>>[]=[];
+afterEach(async()=>{cleanup();vi.restoreAllMocks();vi.unstubAllGlobals();Reflect.deleteProperty(window,'Telegram');await Promise.all(fixtures.splice(0).map(f=>f.close()));});
+it.each(['en','fa'] as const)('connects %s Create/Edit/Review/Save to real signed HTTP and FILE rows, retaining claim labels',async locale=>{
+  const f=await correctionFixture(); fixtures.push(f); vi.spyOn(Date,'now').mockReturnValue(CORRECTION_NOW);
+  await f.service.withAccountDocument(123,d=>{d.memories[0].origin='user_reviewed_claim';});
+  const token='123:synthetic-correction'; (window as unknown as {Telegram:unknown}).Telegram={WebApp:{initData:signInitData({id:123,first_name:'Synthetic'},token)}};
+  vi.spyOn(api,'agents').mockResolvedValue({agents:[]} as Awaited<ReturnType<typeof api.agents>>);
+  const requests:Array<{method:string;path:string;body:unknown}>=[];
+  vi.stubGlobal('fetch',async(url:string,init:RequestInit)=>{
+    const target=new URL(url,'https://vox.synthetic'),headers=new Headers(init.headers);headers.set('origin',target.origin);
+    requests.push({method:init.method!,path:target.pathname,body:init.body?JSON.parse(String(init.body)):null});
+    return handleAdaptiveRequest(f.studio,f.service,new Request(target,{...init,headers}),target.pathname.replace('/api/studio/adaptive','').split('/').filter(Boolean),token);
+  });
+  render(<PrivacyScreen/>); await screen.findByRole('button',{name:'Edit note'});
+  if(locale==='fa') {fireEvent.change(screen.getByRole('combobox',{name:'Language'}),{target:{value:'fa'}});await screen.findByRole('button',{name:'ویرایش یادداشت'});}
+  const fa=locale==='fa',claim=fa?'ادعای بررسی‌شدهٔ شما؛ به‌طور مستقل تأیید نشده است.':'User-reviewed claim; not independently verified.';
+  expect(screen.getByText(claim)).toBeVisible();
+  fireEvent.click(screen.getByRole('button',{name:fa?'ویرایش یادداشت':'Edit note'}));
+  fireEvent.change(screen.getByRole('textbox',{name:fa?'یادداشت اصلاح‌شده':'Corrected note'}),{target:{value:'Corrected private claim'}});
+  fireEvent.click(screen.getByRole('button',{name:fa?'بررسی اصلاح':'Review correction'}));
+  expect(requests.filter(r=>r.method==='PUT')).toHaveLength(0);
+  fireEvent.click(screen.getByRole('button',{name:fa?'ذخیرهٔ اصلاح':'Save correction'}));
+  await waitFor(()=>expect(screen.queryByRole('button',{name:fa?'ذخیرهٔ اصلاح':'Save correction'})).not.toBeInTheDocument());
+  expect(screen.getByText(claim)).toBeVisible();
+  const row=(await f.service.read(123,'work')).memories[0]; expect(row).toMatchObject({id:f.note.id,text:'Corrected private claim',revision:2,origin:'user_reviewed_claim',expiresAt:f.note.expiresAt,createdAt:f.note.createdAt});
+  expect(requests.filter(r=>r.method==='PUT')).toEqual([{method:'PUT',path:`/api/studio/adaptive/memories/${f.note.id}`,body:{space:'work',text:'Corrected private claim',expectedRevision:1,eventId:expect.any(String)}}]);
+  const label=fa?'وکس چه چیزی را به خاطر بسپارد؟':'What should Vox remember?';
+  // Use the existing Create form independently of the correction review.
+  const createArea=screen.getByRole('textbox',{name:label});
+  expect(createArea).toBeDefined(); fireEvent.change(createArea,{target:{value:'A new ordinary note'}});
+  const saveButton=screen.getAllByRole('button').find(el=>el.textContent===(fa?'ذخیرهٔ حافظهٔ خصوصی':'Save private memory'));
+  expect(saveButton,label).toBeDefined(); fireEvent.click(saveButton!);
+  await waitFor(async()=>expect((await f.service.read(123,'work')).memories).toHaveLength(2));
+  fireEvent.click(screen.getByRole('button',{name:fa?'شخصی':'Personal',exact:true}));
+  await waitFor(()=>expect(screen.queryByText('Corrected private claim')).not.toBeInTheDocument());
+  expect((await f.service.read(123,'personal')).memories).toEqual([]);
+  const doc=await f.service.withAccountDocument(123,d=>d);expect(doc.permissions.every(p=>p.state!=='granted')).toBe(true);
+});

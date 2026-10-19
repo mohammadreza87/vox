@@ -1,5 +1,6 @@
 'use client';
 
+import type { CorrectionInput } from '@/lib/adaptive/persistence/validation';
 import type { AdaptiveOptionalPurpose, AdaptivePresentation, AdaptiveSnapshot, AdaptiveSpace } from '@/lib/adaptive/persistence/contracts';
 import { request } from './client';
 import type { MessageMemoryPreview, MessagePreviewInput, MessageAcceptInput } from '@/lib/adaptive/message-memory/contracts';
@@ -22,6 +23,8 @@ export const adaptiveApi = {
     request<AdaptiveSnapshot>('PUT', 'adaptive/consents', { space, purpose, expectedRevision: revision, state, eventId: eventId(), ...(receipt ? { receipt } : {}) }),
   save: (space: AdaptiveSpace, text: string, revision: number) =>
     request<AdaptiveSnapshot>('POST', 'adaptive/memories', { space, text, expectedRevision: revision, eventId: eventId() }),
+  correct: (id: string, input: CorrectionInput, signal?: AbortSignal, locale: PrivacyLocale = 'en') =>
+    request<AdaptiveSnapshot>('PUT', `adaptive/memories/${encodeURIComponent(id)}?locale=${locale}`, input, 'json', signal),
   remove: (space: AdaptiveSpace, id: string, revision: number) =>
     request<AdaptiveSnapshot>('DELETE', `adaptive/memories/${encodeURIComponent(id)}`, { space, expectedRevision: revision, eventId: eventId() }),
   agent: (space: AdaptiveSpace, id: string, allowed: boolean, revision: number) =>

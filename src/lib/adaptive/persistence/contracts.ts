@@ -19,6 +19,8 @@ export interface AdaptiveSnapshot {
   memories: { id: string; revision: number; text: string; createdAt: number; expiresAt: number; origin?: 'user_reviewed_claim'; sourceRefs?: { id: string; revision: number }[] }[];
   agents: { agentId: string; allowed: boolean; revision: number }[];
   explicitMemoryAvailable: boolean;
+  /** Strong current-authority write fence; absent legacy field means unavailable. */
+  memoryCorrectionAvailable?: boolean;
   explicitMemoryValidUntil?: number;
   explicitMemoryReason?: string;
   /** No optional notices constitute acknowledgement of a legal privacy policy. */

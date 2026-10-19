@@ -106,9 +106,9 @@ export class MessageMemoryService {
       const eventId = `message-review:${receipt.nonce}`, fingerprint = digest([eventId, input.space, input.agentId, input.claims]), prior = d.events.find(event => event.eventId === eventId);
       if (prior) {
         const memoryIds = prior.resultId.split(',');
-        if (prior.fingerprint !== fingerprint || memoryIds.length !== input.claims.length || memoryIds.some(id => {
+        if (prior.fingerprint !== fingerprint || memoryIds.length !== input.claims.length || memoryIds.some((id, index) => {
           const memory = d.memories.find(m => m.id === id);
-          return !memory || memory.origin !== 'user_reviewed_claim' || !this.adaptive.isExplicitMemoryAllowed(d, input.space, memory, 'read', now, input.agentId);
+          return !memory || memory.revision !== 1 || memory.text !== input.claims[index] || memory.origin !== 'user_reviewed_claim' || !this.adaptive.isExplicitMemoryAllowed(d, input.space, memory, 'read', now, input.agentId);
         })) return changed();
         return { memoryIds };
       }

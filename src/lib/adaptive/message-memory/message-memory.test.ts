@@ -246,3 +246,17 @@ it('projects inherited unverified labels into Privacy snapshots without changing
   const afterDelete = await f.adaptive.read(123, 'work'); expect(afterDelete.memories.some(m => [summaryId, 'nested-summary'].includes(m.id))).toBe(false);
   expect(afterDelete.memories.find(m => m.id === 'ordinary-note')?.origin).toBeUndefined();
 });
+
+it('correction preserves the unverified claim origin and old acceptance cannot revert it, even when later restored to the same text', async () => {
+  const f = await setup(), preview = await f.service.preview(123, f.input), accepted = await f.service.accept(123, f.accept(preview));
+  const id = accepted.memoryIds[0], original = (await f.adaptive.read(123, 'work')).memories.find(m => m.id === id)!;
+  const correction = { space: 'work' as const, text: 'The date is now reported as March 8; still unverified.', expectedRevision: 1, eventId: randomUUID() };
+  await f.adaptive.correctMemory(123, id, correction, { authorizeNow: () => true });
+  await expect(f.service.accept(123, f.accept(preview))).rejects.toMatchObject({ code: 'message_memory_changed' });
+  const current = (await f.adaptive.read(123, 'work')).memories.find(m => m.id === id)!;
+  expect(current).toMatchObject({ text: correction.text, revision: 2, origin: 'user_reviewed_claim', createdAt: original.createdAt, expiresAt: original.expiresAt });
+  await f.adaptive.correctMemory(123, id, { ...correction, text: original.text, expectedRevision: 2, eventId: randomUUID() }, { authorizeNow: () => true });
+  await expect(f.service.accept(123, f.accept(preview))).rejects.toMatchObject({ code: 'message_memory_changed' });
+  expect((await f.adaptive.read(123, 'work')).memories.find(m => m.id === id)).toMatchObject({ text: original.text, revision: 3, origin: 'user_reviewed_claim' });
+  expect(f.create).toHaveBeenCalledOnce();
+});
