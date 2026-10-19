@@ -1,0 +1,46 @@
+# Template only. Review paths/UID ownership and run offline preflight before installation.
+# Installing/enabling/starting this service requires the separately authorized release.
+[Unit]
+Description=Vox Connections independent credential broker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=vox-broker
+Group=vox-broker
+WorkingDirectory=/opt/vox
+ExecStart=/usr/bin/node --import tsx /opt/vox/scripts/connections-broker.mjs serve /etc/vox-connections-broker/config.json
+Environment=NODE_ENV=production
+Environment=PATH=/usr/bin:/bin
+UMask=0077
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=20
+KillMode=control-group
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/vox-connections-broker
+ReadOnlyPaths=/etc/vox-connections-broker /opt/vox
+InaccessiblePaths=-/etc/vox-studio -/var/lib/vox-studio
+LimitNOFILE=512
+TasksMax=64
+MemoryMax=768M
+CPUQuota=100%
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

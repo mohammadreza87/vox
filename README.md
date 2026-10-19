@@ -36,6 +36,10 @@ Vox is a **voice-first AI messenger** where your contacts are specialized AI ass
 
 ## ✨ Features
 
+### Vox Studio Connections
+
+The Connections release candidate adds private, per-agent access to selected app resources, isolated tasks and reviewed scheduled checks. Provider activation and external changes remain gated by account-specific qualification. See the [English and Persian guide](docs/connections/USER_GUIDE.md), [implementation status](docs/connections/IMPLEMENTATION_STATUS.md), and [operator setup](docs/connections/ACCOUNT_ONBOARDING.md).
+
 ### 🗣️ Voice Cloning - Use Your Own Voice!
 
 **Clone your voice** or anyone's voice to create personalized AI assistants:

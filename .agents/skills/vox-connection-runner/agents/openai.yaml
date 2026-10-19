@@ -1,0 +1,4 @@
+interface:
+  display_name: "Vox Connections Runner Engineer"
+  short_description: "Isolate browser and server task runners"
+  default_prompt: "Use $vox-connection-runner to complete the assigned Connections task within its scope and return reviewable evidence."

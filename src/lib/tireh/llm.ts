@@ -37,6 +37,8 @@ export interface LLMRequest {
   temperature?: number;
   /** Side-effecting callers must not deliver a provider-truncated completion. */
   requireComplete?: boolean;
+  /** Request-scoped cancellation for bounded connection tasks. */
+  signal?: AbortSignal;
   /** Server-only fence, rechecked before every provider request/retry. Never serialized. */
   authorize?: () => Promise<boolean>;
 }
@@ -56,6 +58,7 @@ export interface WebSource {
 }
 
 export interface LLM {
+  readonly identity?: { provider: string; model: string };
   complete(request: LLMRequest): Promise<string>;
   /**
    * Like `complete`, but the model may search the web for live information.
@@ -140,6 +143,7 @@ export class AnthropicLLM implements LLM {
   private webUnavailable = false;
 
   constructor(private readonly apiKey: string, private readonly model: string) {}
+  get identity() { return { provider: 'anthropic', model: this.model }; }
 
   private params({ system, maxTokens = 1024, temperature = 0.7 }: LLMRequest) {
     return {
@@ -155,7 +159,7 @@ export class AnthropicLLM implements LLM {
     await authorizeRequest(request);
     // Hidden SDK retries cannot recheck current authority. Scoped requests use
     // no automatic retry; explicit web continuations pass through this fence.
-    return request.authorize ? this.client.messages.create(body, { maxRetries: 0 }) : this.client.messages.create(body);
+    return request.authorize || request.signal ? this.client.messages.create(body, { maxRetries: 0, ...(request.signal ? { signal: request.signal } : {}) }) : this.client.messages.create(body);
   }
 
   async complete(request: LLMRequest): Promise<string> {
@@ -171,7 +175,7 @@ export class AnthropicLLM implements LLM {
     this.client ??= new Anthropic({ apiKey: this.apiKey });
     await authorizeRequest(request);
     const body = { ...this.params(request), messages: anthropicTurns(request.messages) };
-    const stream = request.authorize ? this.client.messages.stream(body, { maxRetries: 0 }) : this.client.messages.stream(body);
+    const stream = request.authorize || request.signal ? this.client.messages.stream(body, { maxRetries: 0, ...(request.signal ? { signal: request.signal } : {}) }) : this.client.messages.stream(body);
     for await (const event of stream) {
       if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') yield event.delta.text;
     }
@@ -205,8 +209,9 @@ export class GeminiLLM implements LLM {
   private client: GoogleGenerativeAI | null = null;
 
   constructor(private readonly apiKey: string, private readonly model: string) {}
+  get identity() { return { provider: 'gemini', model: this.model }; }
 
-  async complete({ system, messages, maxTokens = 1024, temperature = 0.7, requireComplete, authorize }: LLMRequest): Promise<string> {
+  async complete({ system, messages, maxTokens = 1024, temperature = 0.7, requireComplete, authorize, signal }: LLMRequest): Promise<string> {
     const turns = normalizeTurns(messages);
     const last = turns.pop();
     if (!last) return '';
@@ -217,7 +222,8 @@ export class GeminiLLM implements LLM {
       generationConfig: { maxOutputTokens: maxTokens, temperature },
     });
     await authorizeRequest({ authorize });
-    const result = await chat.sendMessage(last.images?.length ? geminiParts(last) : last.content);
+    const content = last.images?.length ? geminiParts(last) : last.content;
+    const result = await (signal ? chat.sendMessage(content, { signal }) : chat.sendMessage(content));
     if (requireComplete && result.response.candidates?.some((candidate) => candidate.finishReason === 'MAX_TOKENS')) throw new Error('LLM completion truncated');
     return result.response.text().trim();
   }

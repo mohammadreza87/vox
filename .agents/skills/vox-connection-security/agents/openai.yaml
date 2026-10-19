@@ -1,0 +1,4 @@
+interface:
+  display_name: "Vox Connections Security Reviewer"
+  short_description: "Review connection security independently"
+  default_prompt: "Use $vox-connection-security to complete the assigned Connections task within its scope and return reviewable evidence."
