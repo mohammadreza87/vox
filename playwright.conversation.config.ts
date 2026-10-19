@@ -20,7 +20,7 @@ export default defineConfig({
   },
   webServer: {
     command: production
-      ? 'STUDIO_BOTS=0 npm run start -- --hostname 127.0.0.1 --port 3104'
+      ? 'node e2e/start-conversation-server.mjs'
       : 'STUDIO_BOTS=0 npm run dev -- --hostname 127.0.0.1 --port 3104',
     url: baseURL,
     reuseExistingServer: false,
@@ -28,6 +28,12 @@ export default defineConfig({
     env: {
       STUDIO_BOTS: '0',
       STUDIO_DECISIONS_ENABLED: '0',
+      STUDIO_DECISIONS: 'off',
+      STUDIO_RELATIONSHIPS: 'off',
+      STUDIO_SCOPED_RELATIONSHIPS: '0',
+      STUDIO_MAINTENANCE: '0',
+      STUDIO_IMPROVEMENT_TRUST_JSON: '',
+      STUDIO_ADAPTIVE_POLICY_JSON: '',
       STUDIO_STORAGE: 'file',
       STUDIO_DATA_DIR: '/tmp/vox-conversation-browser-qa',
       VOXX_BOT_TOKEN: '',

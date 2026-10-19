@@ -2,8 +2,8 @@
 
 This delivery combines the observation/lifecycle/improvement candidate from PR #51
 with scoped conversation, memory retrieval, reversible prediction and optional
-voice-enrollment infrastructure. The production release receipt is recorded below
-after validation; source implementation alone does not enable optional processing.
+voice-enrollment infrastructure. Source implementation alone does not enable
+optional processing; PR #52 and the release handoff record exact deployment state.
 
 ## Delivered behavior
 
@@ -49,13 +49,15 @@ reviewed the composed behavior. Independent review reproduced and closed:
    waits now release the request, erase owned buffers and ignore/wipe late results.
 5. Disabled prediction cancellation created new-format durable records. It now
    returns without introducing those records.
+6. A separate Studio-state read failure skipped biometric cleanup. Both cleanup
+   paths now start independently; failed pages retain their checkpoint for retry.
 
 Author evidence: [memory](MEMORY_RETRIEVAL_RESULT.md),
 [prediction](../../src/lib/adaptive/prediction/RESULT.md),
 [voice](VOICE_IDENTITY_RESULT.md), and
 [observation](evidence/observation-learning/RESULT.md). Full candidate validation,
-compiled browser/server evidence, CI and deployed revision are recorded in the
-release section once executed. Synthetic timings are not a measured improvement
+compiled browser/server evidence, CI and deployed revision are distinguished in the
+release section. Synthetic timings are not a measured improvement
 in real-user response latency or proof of speaker-recognition accuracy.
 
 ## Rollout and rollback
@@ -102,7 +104,26 @@ paragraph does not establish compliance for an otherwise unqualified data flow.
 حذف پردازش می‌کند. آزمون‌های مصنوعی جای آزمایش ارائه‌دهنده، دستگاه واقعی، کیفیت،
 کارایی یا تأیید حقوقی را نمی‌گیرند. کارهای باقی‌مانده در فهرست اصلی صریح مانده‌اند.
 
-## Release evidence
+## Validation and release evidence
 
-Pending final composed-candidate checks and coordinated promotion. This line must
-not be interpreted as deployed or activated behavior.
+- Candidate `232f4645e2928f611ae8bdb7417ecb2d7adf75bb`: **2065 passed,
+  10 skipped**, 147 passing test files, with two workers and the unchanged 10-second
+  per-test deadline. A prior run concurrent with a build exposed a capacity-test
+  timeout; the quieter complete run passed. TypeScript passed; lint has no errors
+  and reports existing warnings plus the new intentional cleanup-ref warning.
+- Independent combined review approved `232f464`, including the actual runtime
+  maintenance retry after a Studio-store failure and exact provider-payload
+  comparisons after adding a server-only authorization callback.
+- Production artifact `82e6eaa2db0ea9b57ed929faa9889057c8ad7f14`, build
+  `6LkkM4qin-mWUp-tYQLGl`: two desktop/mobile browser journeys passed for EN/FA,
+  actual PNG decode/JPEG re-encoding, scope clearing and unavailable voice. The
+  standalone server launcher was then verified with the same two journeys.
+- The same artifact passed [24 controlled HTTP checks](evidence/adaptive-completion/controlled-http.json)
+  against real Next routes and file storage. Only external provider responses were
+  synthetic. This proves the connected server path, not real provider performance.
+
+These are candidate receipts, not a claim that their exact revisions are still
+deployed. Final promotion is coordinated through PR #52 after PR #51. The release
+handoff records exact source/build, CI, local/public health, authentication checks,
+polling ownership and unchanged activation flags. Physical devices, real provider
+quality and legal clearance are not implied by a successful deployment.
