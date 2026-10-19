@@ -1,0 +1,7 @@
+--- a/src/lib/utils/sentence-detector.ts
++++ b/src/lib/utils/sentence-detector.ts
+@@ -55,3 +55,3 @@
+   // Uses a more robust pattern that handles common abbreviations
+-  private static SENTENCE_END = /([.!?]+)(?:\s+|$)/g;
++  private static SENTENCE_END = /([.!?؟]+)(?:\s+|$)/g;
+   private static MIN_SENTENCE_LENGTH = 10;
