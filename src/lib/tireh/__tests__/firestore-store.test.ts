@@ -122,6 +122,36 @@ const baseMemory = {
 };
 
 describe('FirestoreMemoryStore', () => {
+  it('atomically replaces an active predecessor and rejects competing, stale, foreign or deleted corrections', async () => {
+    const { db, data } = fakeFirestore(); const first = new FirestoreMemoryStore(db), second = new FirestoreMemoryStore(db);
+    const old = await first.add({ ...baseMemory, source: { ...baseMemory.source, eventIds: ['original'] } });
+    const correction = { ...baseMemory, supersedes: old.id, content: 'Corrected date', source: { ...baseMemory.source, eventIds: ['correction'] } };
+    const revision = await first.safetyRevision('aria');
+    const outcomes = await Promise.allSettled([first.add(correction, { expectedRevision: revision }), second.add(correction, { expectedRevision: revision })]);
+    expect(outcomes.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+    const active = await first.listActive('aria'); expect(active).toHaveLength(1);
+    expect(await first.get(old.id)).toMatchObject({ supersededBy: active[0].id, shareVersion: 1 });
+    expect(data.get(`tireh_memories/${old.id}`)?.active).toBe(false);
+    expect(await first.safetyRevision('aria')).toBe(revision + 1);
+    expect(await second.updateIfShareVersion(old.id, 0, { scope: { kind: 'org' } })).toBe(false);
+    await expect(second.add(correction)).rejects.toThrow('Memory context was invalidated');
+    await expect(second.add({ ...correction, personaId: 'other' })).rejects.toThrow('Memory context was invalidated');
+    await second.delete(active[0].id);
+    expect(await first.get(old.id)).toBeNull(); expect(await first.listActive('aria')).toEqual([]);
+    await expect(first.add(correction)).rejects.toThrow('Memory context was invalidated');
+  });
+
+  it('applies the same atomic replacement contract to epoch-guarded additions', async () => {
+    const { db } = fakeFirestore(); const store = new FirestoreMemoryStore(db);
+    const old = await store.add(baseMemory); const correction = { ...baseMemory, supersedes: old.id, content: 'New date' };
+    expect(await store.addIfEpoch(correction, 1)).toBeNull();
+    expect((await store.listActive('aria')).map(row => row.id)).toEqual([old.id]);
+    const next = await store.addIfEpoch(correction, 0);
+    expect((await store.listActive('aria')).map(row => row.id)).toEqual([next!.id]);
+    expect(await store.get(old.id)).toMatchObject({ supersededBy: next!.id, shareVersion: 1 });
+    expect(await store.safetyRevision('aria')).toBe(1);
+  });
+
   it('stores memories without undefined fields and reads them back with dates', async () => {
     const { db, data } = fakeFirestore();
     const store = new FirestoreMemoryStore(db);
