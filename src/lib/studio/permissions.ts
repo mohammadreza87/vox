@@ -1,7 +1,9 @@
 /**
  * Authority rules for Vox Studio. Pure functions, enforced by every API route.
  *
- *  superadmin  everything; the only role that can create admins (human or AI)
+ *  owner       everything, including making other owners; founders come from
+ *              STUDIO_SUPERADMIN_IDS and can't be demoted from the app
+ *  superadmin  everything except touching owners; creates admins (human or AI)
  *  admin       approves people, fires agents, edits any forming agent
  *  member      uses agents, spawns agents, edits agents they created while forming
  *  pending     opened the Mini App but not yet approved; can do nothing
@@ -12,7 +14,7 @@
 
 import type { Agent, Member, Role, StudioState } from './types';
 
-const RANK: Record<Role, number> = { pending: 0, member: 1, admin: 2, superadmin: 3 };
+const RANK: Record<Role, number> = { pending: 0, member: 1, admin: 2, superadmin: 3, owner: 4 };
 
 export function atLeast(member: Member | undefined, role: Role): boolean {
   return !!member && RANK[member.role] >= RANK[role];
@@ -69,7 +71,8 @@ export type RoleChangeResult = { ok: true } | { ok: false; reason: string };
 
 /**
  * Who may move whom to which role.
- *  - Superadmins: anything, except removing the last superadmin.
+ *  - Owners: anything, except removing the last owner.
+ *  - Superadmins: grant up to superadmin; never make or touch owners.
  *  - Admins: approve pending → member, or remove members (→ pending). Never touch admins.
  *  - Nobody changes their own role.
  */
@@ -88,9 +91,15 @@ export function checkRoleChange(
     return allowed ? { ok: true } : { ok: false, reason: 'Only a superadmin can grant or remove admin rights.' };
   }
 
-  if (target.role === 'superadmin' && next !== 'superadmin') {
-    const supers = state.members.filter((m) => m.role === 'superadmin').length;
-    if (supers <= 1) return { ok: false, reason: 'HOOR needs at least one superadmin. Promote someone else first.' };
+  if (actor.role === 'superadmin' && (target.role === 'owner' || next === 'owner')) {
+    return { ok: false, reason: 'Only an owner can make or change owners.' };
+  }
+  if (target.role === 'owner' && next !== 'owner' && state.members.filter((m) => m.role === 'owner').length <= 1) {
+    return { ok: false, reason: 'HOOR needs at least one owner. Make someone else an owner first.' };
+  }
+  const leaders = state.members.filter((m) => atLeast(m, 'superadmin')).length;
+  if (atLeast(target, 'superadmin') && RANK[next] < RANK.superadmin && leaders <= 1) {
+    return { ok: false, reason: 'HOOR needs at least one superadmin. Promote someone else first.' };
   }
   return { ok: true };
 }

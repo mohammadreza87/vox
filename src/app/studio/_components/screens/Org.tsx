@@ -7,9 +7,10 @@ import { AgentFace } from '../Cloud';
 import { errorMessage, useNav } from '../StudioApp';
 import { Icon, Sheet, Spinner } from '../ui';
 
-const ROLE_LABEL: Record<Role, string> = { superadmin: 'Superadmin', admin: 'Admin', member: 'Member', pending: 'Waiting' };
+const ROLE_LABEL: Record<Role, string> = { owner: 'Owner', superadmin: 'Superadmin', admin: 'Admin', member: 'Member', pending: 'Waiting' };
 const SECTIONS: Array<{ role: Role; title: string }> = [
   { role: 'pending', title: 'Waiting for approval' },
+  { role: 'owner', title: 'Owners' },
   { role: 'superadmin', title: 'Superadmins' },
   { role: 'admin', title: 'Admins' },
   { role: 'member', title: 'Members' },
@@ -18,7 +19,8 @@ const SECTIONS: Array<{ role: Role; title: string }> = [
 /** Role changes the current user may offer for a person (the server re-checks). */
 function choicesFor(me: Member, target: Member): Role[] {
   if (me.telegramId === target.telegramId) return [];
-  if (me.role === 'superadmin') return (['superadmin', 'admin', 'member', 'pending'] as Role[]).filter((r) => r !== target.role);
+  if (me.role === 'owner') return (['owner', 'superadmin', 'admin', 'member', 'pending'] as Role[]).filter((r) => r !== target.role);
+  if (me.role === 'superadmin') return target.role === 'owner' ? [] : (['superadmin', 'admin', 'member', 'pending'] as Role[]).filter((r) => r !== target.role);
   if (me.role === 'admin') {
     if (target.role === 'pending') return ['member'];
     if (target.role === 'member') return ['pending'];
@@ -73,7 +75,8 @@ export function OrgScreen() {
           <span className="vx-over">{nav.me.org}</span>
           <h1 className="vx-display">People</h1>
           <p className="vx-2" style={{ margin: 0 }}>
-            {me.role === 'superadmin' ? 'You can approve people and grant admin rights — to humans or agents.'
+            {me.role === 'owner' ? 'You can make owners, superadmins and admins — humans or agents.'
+              : me.role === 'superadmin' ? 'You can approve people and grant admin rights — to humans or agents.'
               : me.role === 'admin' ? 'You can approve new people. Superadmins grant admin rights.'
               : 'Everyone here can talk to every shared agent.'}
           </p>
@@ -116,7 +119,7 @@ export function OrgScreen() {
           <span className="vx-over">Agent admins · {agentAdmins.length}</span>
           {agentAdmins.length === 0 ? (
             <p className="vx-small vx-2" style={{ margin: 0 }}>
-              No agent is an admin yet.{me.role === 'superadmin' ? ' Open an agent → ··· → Make admin. Agent admins can propose new agents.' : ''}
+              No agent is an admin yet.{me.role === 'superadmin' || me.role === 'owner' ? ' Open an agent → ··· → Make admin. Agent admins can propose new agents.' : ''}
             </p>
           ) : (
             <div className="vx-group">

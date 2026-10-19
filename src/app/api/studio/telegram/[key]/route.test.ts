@@ -37,6 +37,10 @@ describe('POST /api/studio/telegram/[key]', () => {
     const res = await call('manager', start, { 'x-telegram-bot-api-secret-token': webhookSecret(SECRET, 'manager') });
     expect(res.status).toBe(200);
     expect(h.manager.sendMessage).toHaveBeenCalledWith(7070, expect.stringContaining("You're on the list"), {});
+    const reply = h.manager.sendMessage.mock.calls[0][1];
+    expect(reply).toContain('First name: Neda');
+    expect(reply).toContain('Last name: —');
+    expect(reply).toContain('User ID: 7070');
   });
 
   it('answers 400 on bad JSON and 200 for unknown agents', async () => {
