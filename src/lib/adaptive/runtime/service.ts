@@ -363,7 +363,7 @@ export class AdaptiveExperienceService {
         const deadline = Math.min(d.binding.expiresAt,
           ...capabilities.flatMap(c => { const status = this.adaptive.capabilityStatus(d, c, now); return status.eligible && status.validUntil !== undefined ? [status.validUntil] : []; }),
           ...(permission.state === 'granted' && permission.expiresAt > now ? [permission.expiresAt] : []));
-        return { value: { revision: snapshot.contextReceipt, validUntil: deadline }, deadline };
+        return { value: { revision: snapshot.contextReceipt, validUntil: deadline }, deadline, observedDenial: !snapshot.allowed };
       });
       return result.status === 'ready' ? result.value : null;
     } catch { return null; }

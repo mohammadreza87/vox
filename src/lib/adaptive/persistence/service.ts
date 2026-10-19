@@ -650,7 +650,8 @@ export class AdaptiveService {
     const confirmed = this.confirmed(d, now);
     const parts = [d.accountId, d.binding, confirmed, consent, eligible, d.agentGrants.filter(g => g.space === space && g.agentId === personaId)];
     return { value: { revision: digest(namespace === 'canonical' ? parts : [namespace, ...parts]), memoryEnabled: false, historyEnabled: false },
-      denied: !confirmed, ...(confirmed ? { deadline: Math.min(d.binding!.expiresAt, eligible.validUntil ?? INFINITY) } : {}) };
+      denied: !confirmed, observedDenial: !eligible.eligible || consent.state === 'granted' && consent.expiresAt <= now,
+      ...(confirmed ? { deadline: Math.min(d.binding!.expiresAt, eligible.validUntil ?? INFINITY) } : {}) };
   }
   /** Runtime gets no private text from this helper. Legacy history cannot inherit consent. */
   runtimePrivacy = {

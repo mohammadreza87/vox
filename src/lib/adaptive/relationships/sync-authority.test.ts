@@ -124,3 +124,15 @@ it('legacy FILE retains original opaque hash inputs rather than adding canonical
   expect(permit.sourceFence).toBe(digest([key, binding, f.adaptive.capabilityStatus(d, 'core_text', NOW), purposes.map(purpose => [d.permissions.find(c => c.spaceId === key.spaceId && c.purpose === purpose), f.adaptive.capabilityStatus(d, purpose === 'optional.auto_memory' ? 'auto_memory' : purpose === 'optional.personalization' ? 'personalization' : 'proactive_suggestions', NOW)]), d.agentGrants]));
   expect(p.state).toBe('granted');
 });
+
+it('publishes optional preference denial after native commit while retaining the binding bound', async () => {
+  const f = await fixture('indexed'); f.setPolicy(NOW + 10);
+  const storage = f.storage as SqliteAdaptiveStorage, exec = storage.database.exec.bind(storage.database); let commits = 0;
+  vi.spyOn(storage.database, 'exec').mockImplementation(sql => {
+    const result = exec(sql); if (sql === 'COMMIT' && ++commits === 2) f.setNow(NOW + 11); return result;
+  });
+  expect(f.experience.readPreferencesAuthorityNow(123, 'work', 'agent', 'interactive-binding')).not.toBeNull();
+  expect(storage.readMetadata().lifecycleWatermark).toBeGreaterThanOrEqual(NOW + 11);
+  vi.restoreAllMocks(); f.setNow(NOW + 5);
+  expect(f.experience.readPreferencesAuthorityNow(123, 'work', 'agent', 'interactive-binding')).toBeNull();
+});
