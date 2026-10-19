@@ -62,9 +62,11 @@ it('requires stopped producers and exact CAS for explicit-account rollback', asy
     await expect(pruneFileObserverTelemetry({ directory, accountId, apply: true, producersStopped: true, expectedContentSha256: '0'.repeat(64) })).rejects.toThrow('rollback_document_changed');
     await pruneFileObserverTelemetry({ directory, accountId, apply: true, producersStopped: true, expectedContentSha256: preview.contentSha256 });
     const cleaned = JSON.parse(await readFile(filename, 'utf8')); expect(cleaned.memories).toEqual(original.memories); expect(cleaned.observer.events[0]).not.toHaveProperty('telemetry');
-    // Verify the actual prior strict schema, rather than copying its expectations.
-    const { execFileSync } = await import('node:child_process'); const ts = await import('typescript'); const { createRequire } = await import('node:module');
-    const oldSource = execFileSync('git', ['show', 'ee800d9:src/lib/adaptive/observation/contracts.ts'], { encoding: 'utf8' });
+    // Exact prior schema bytes from ee800d9272b8bd36addc82984c3aa23a16c007af.
+    // Keep this fixture in the checkout so shallow CI clones can verify rollback too.
+    const ts = await import('typescript'); const { createRequire } = await import('node:module');
+    const oldSource = await readFile(join(process.cwd(), 'src/lib/adaptive/observation/__fixtures__/observer-contracts-before-telemetry.ts.txt'), 'utf8');
+    expect(createHash('sha256').update(oldSource).digest('hex')).toBe('de1483c63c8809964f7eeb15eaa02517d7722a8e910d9b229502a56cb1034e8a');
     const code = ts.transpileModule(oldSource, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText;
     const previous = { exports: {} as Record<string, { parse(value: unknown): unknown }> };
     new Function('require', 'module', 'exports', code)(createRequire(import.meta.url), previous, previous.exports);
