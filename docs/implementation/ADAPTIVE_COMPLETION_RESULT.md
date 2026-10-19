@@ -121,6 +121,11 @@ paragraph does not establish compliance for an otherwise unqualified data flow.
 - The same artifact passed [24 controlled HTTP checks](evidence/adaptive-completion/controlled-http.json)
   against real Next routes and file storage. Only external provider responses were
   synthetic. This proves the connected server path, not real provider performance.
+- A [connected browser journey](evidence/adaptive-completion/controlled-browser.json)
+  also passed with **zero API mocks**: actual mobile-viewport Chromium → compiled
+  Next → file storage → synthetic external Anthropic response. Work text/image,
+  Personal denial followed by a real scoped grant, and Persian RTL/reply all passed.
+  This is a controlled complete application path, not physical-device evidence.
 
 These are candidate receipts, not a claim that their exact revisions are still
 deployed. Final promotion is coordinated through PR #52 after PR #51. The release

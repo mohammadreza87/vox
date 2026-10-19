@@ -983,7 +983,7 @@ Convert reviewed defects into isolated worktrees/branches with small diffs, repr
 
 **Requirements:** REQ-14, REQ-16, REQ-18. **Depends on:** VOX-007, VOX-029, VOX-043, VOX-044, VOX-045.
 
-**Implementation progress:** Pinned Docker evaluator and separate signed evaluator/human receipts bind exact artifacts/data/policy; malformed payload, budget bypass and counterfeit evidence regressions covered. Synthetic role keys do not qualify production IAM; protected service deployment and representative corpus remain open.
+**Implementation progress:** Pinned Docker evaluator and separate signed evaluator/human receipts bind exact artifacts/data/policy; malformed payload, budget bypass and counterfeit evidence regressions covered. Synthetic role keys do not qualify production IAM; protected service deployment and representative corpus remain open. Final cancellation datasets and the fixed evaluator require both cancelled-stop and active-continue coverage, rejecting inconsistent labels (policy version 2).
 
 Run Promptfoo and deterministic tests in a protected environment against exact candidate/model/prompt/data versions; calibrate judge to human examples.
 
@@ -1114,7 +1114,7 @@ Execute approved core test-account journeys on actual supported Telegram/mobile/
 
 **Requirements:** REQ-04, REQ-16, REQ-17, REQ-21. **Depends on:** VOX-018, VOX-014, VOX-030, VOX-035, VOX-047, VOX-049.
 
-**Implementation progress:** Local account sweep pagination, competing leases, crash recovery, expiry, snapshot reconciliation and bounded observer retries tested. Production load/SLOs, full backup restoration and provider residual deletion remain open.
+**Implementation progress:** Local account sweep pagination, competing leases, crash recovery, expiry, snapshot reconciliation and bounded observer retries tested. Background maintenance is supported only in the persistent file/polling runtime; unsupported activation fails startup. Production load/SLOs, full backup restoration and provider residual deletion remain open.
 
 Load-test approved synthetic workloads, queue/provider outage, lost receipts, restore/tombstones and incident kill switches; set alert owners.
 
