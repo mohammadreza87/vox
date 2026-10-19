@@ -9,7 +9,8 @@
  *          → extract new memories → scope them → offer to share private work facts
  */
 
-import type { LLM, WebSource } from './llm';
+import { streamText, type LLM, type WebSource } from './llm';
+import { readTriage, TRIAGE_TIMEOUT_MS, triageInput, triageQuestions, type Decider, type Triage } from './triage';
 import type { OrgDirectory } from './org/directory';
 import type { ChatContext, ChatMessage, MemoryRecord, MemoryScope, Persona } from './types';
 import type { ChatHistoryStore, MemoryStore, ShareOfferStore, UpdateDeduper } from './memory/store';
@@ -23,6 +24,10 @@ import { canPersonSee, describeScope, isVisibleToAudience } from './memory/visib
 export interface GatewayDeps {
   org: OrgDirectory;
   llm: LLM;
+  /** Fast model for live voice calls and quick replies (default: llm) */
+  fastLlm?: LLM;
+  /** Fast pre-reply triage (see triage.ts); without it every reply takes the full path */
+  decider?: Decider;
   memories: MemoryStore;
   offers: ShareOfferStore;
   history: ChatHistoryStore;
@@ -143,17 +148,23 @@ export class PersonaGateway {
     };
     await this.deps.history.append(persona.id, chat.chatKey, userMessage);
 
-    // In groups the persona keeps context but only speaks when addressed.
-    if (!addressed) return 'ignored';
+    // Groups: a text message meant for the persona that doesn't name it can
+    // still get an answer when triage is sure (voice notes stay name-only).
+    const askAddressed = !addressed && chat.kind === 'group' && !isVoice;
+    if (!addressed && !askAddressed) return 'ignored';
+    const triage = this.triage(persona, chat, askAddressed);
+    if (!addressed && !(await triage)?.addressed) return 'ignored';
 
     await bot.sendChatAction(message.chat.id, isVoice ? 'record_voice' : 'typing').catch(() => undefined);
 
-    const { text: reply, sources } = await this.composeReply(persona, chat, speaker.id, text);
+    const { text: reply, sources } = await this.composeReply(persona, chat, speaker.id, text, triage);
     await this.sendReply(persona, chat, message, reply, isVoice, sources);
 
     const assistantMessage: ChatMessage = { role: 'assistant', text: reply, at: this.now() };
     await this.deps.history.append(persona.id, chat.chatKey, assistantMessage);
 
+    // Nothing worth remembering: skip the extraction call.
+    if ((await triage)?.memorable === false) return 'replied';
     // Memory formation must never break the conversation.
     try {
       await this.formMemories(persona, chat, speaker.id, message.message_id);
@@ -181,6 +192,50 @@ export class PersonaGateway {
       this.log.error(`[tireh] ${persona.id}: memory extraction failed`, error);
     }
     return reply;
+  }
+
+  /**
+   * One turn of a live voice call, streamed as it is generated. `turns` is the
+   * call so far as the voice platform heard it (interrupted replies are cut
+   * short there); memories and the persona come from here, so the same
+   * privacy rules apply as in Telegram. The turn is kept in the person's
+   * private history; memories form when the call ends (see `reflect`).
+   */
+  async *liveTurn(personaId: string, speakerId: string, turns: Array<{ role: 'user' | 'assistant'; content: string }>): AsyncIterable<string> {
+    const { org } = this.deps;
+    const persona = org.getPersona(personaId);
+    if (!persona) throw new Error(`Unknown persona ${personaId}`);
+    if (!org.getPerson(speakerId)) throw new Error('Unknown speaker');
+    const chat: ChatContext = { kind: 'private', chatKey: `private-${speakerId}`, personId: speakerId };
+    const said = [...turns].reverse().find((t) => t.role === 'user')?.content.trim() ?? '';
+    const recent = await this.deps.history.recent(persona.id, chat.chatKey, 1);
+    // The platform can ask twice for the same turn (e.g. after a barge-in).
+    if (said && !(recent[0]?.role === 'user' && recent[0].text === said)) {
+      await this.deps.history.append(persona.id, chat.chatKey, { role: 'user', personId: speakerId, text: said, at: this.now() });
+    }
+    const all = await this.deps.memories.listActive(persona.id);
+    const memories = selectMemories(org, all, chat, { query: said, now: this.now() });
+    const system = `${buildSystemPrompt({ org, persona: { ...persona, webSearch: false }, chat, speakerId, memories, now: this.now() })}
+
+## Live voice call
+You are on a live voice call. Answer in one to three short spoken sentences, like a phone conversation. No lists, links, emoji or stage directions. If you were cut off, don't repeat yourself; follow what the person says next.`;
+    let reply = '';
+    for await (const part of streamText(this.deps.fastLlm ?? this.deps.llm, { system, messages: turns.slice(-20), maxTokens: 300 })) {
+      reply += part;
+      yield part;
+    }
+    if (reply.trim()) await this.deps.history.append(persona.id, chat.chatKey, { role: 'assistant', text: reply.trim(), at: this.now() });
+  }
+
+  /** Forms memories from a finished private conversation (e.g. a voice call). */
+  async reflect(personaId: string, speakerId: string): Promise<void> {
+    const persona = this.deps.org.getPersona(personaId);
+    if (!persona || !this.deps.org.getPerson(speakerId)) return;
+    try {
+      await this.formMemories(persona, { kind: 'private', chatKey: `private-${speakerId}`, personId: speakerId }, speakerId);
+    } catch (error) {
+      this.log.error(`[tireh] ${persona.id}: memory extraction failed`, error);
+    }
   }
 
   private resolveChat(
@@ -225,12 +280,34 @@ export class PersonaGateway {
     return (await this.composeReply(persona, chat, speakerId, text)).text;
   }
 
+  /**
+   * Triage of the latest message (already in history); null when there is no
+   * decider, or it fails or is slow. Never throws.
+   */
+  private async triage(persona: Persona, chat: ChatContext, askAddressed: boolean): Promise<Triage | null> {
+    const { decider, org } = this.deps;
+    if (!decider) return null;
+    try {
+      const recent = await this.deps.history.recent(persona.id, chat.chatKey, 6);
+      const lines = recent.map((m) => ({ who: m.role === 'assistant' ? persona.name : org.getPerson(m.personId ?? '')?.name ?? 'Someone', text: m.text }));
+      const answers = await decider.decide(triageInput(persona, lines), triageQuestions(persona, askAddressed), TRIAGE_TIMEOUT_MS);
+      return readTriage(answers, askAddressed);
+    } catch (error) {
+      this.log.warn(`[tireh] ${persona.id}: triage unavailable, taking the full path`, error);
+      return null;
+    }
+  }
+
   /** The reply plus the web pages it cites, when the persona searched. */
-  private async composeReply(persona: Persona, chat: ChatContext, speakerId: string, text: string): Promise<{ text: string; sources: WebSource[] }> {
+  private async composeReply(persona: Persona, chat: ChatContext, speakerId: string, text: string, triaged?: Promise<Triage | null>): Promise<{ text: string; sources: WebSource[] }> {
     const { org } = this.deps;
-    const all = await this.deps.memories.listActive(persona.id);
+    const [all, triage] = await Promise.all([this.deps.memories.listActive(persona.id), triaged ?? null]);
+    // Search only when triage says the answer needs live facts (or there is no triage).
+    const search = !!persona.webSearch && (triage ? triage.needsWeb : true);
+    // Small talk goes to the fast model; anything needing care, or a search, to the main one.
+    const quick = triage?.effort === 'quick' && !search && !!this.deps.fastLlm;
     const memories = selectMemories(org, all, chat, { query: text, now: this.now() });
-    const system = buildSystemPrompt({ org, persona, chat, speakerId, memories, now: this.now() });
+    const system = buildSystemPrompt({ org, persona: { ...persona, webSearch: search }, chat, speakerId, memories, now: this.now() });
 
     const recent = await this.deps.history.recent(persona.id, chat.chatKey, HISTORY_LIMIT);
     const messages = recent.map((m) => ({
@@ -241,11 +318,11 @@ export class PersonaGateway {
           : m.text,
     }));
 
-    const request = { system, messages, maxTokens: 700 };
-    const { llm } = this.deps;
+    const request = { system, messages, maxTokens: quick ? 400 : 700 };
+    const llm = quick ? this.deps.fastLlm! : this.deps.llm;
     // Strangers get fewer searches: each one costs money.
     const maxSearches = org.getPerson(speakerId)?.guest ? 1 : 3;
-    const { text: reply, sources } = persona.webSearch && llm.completeWithWeb
+    const { text: reply, sources } = search && llm.completeWithWeb
       ? await llm.completeWithWeb({ ...request, maxSearches })
       : { text: await llm.complete(request), sources: [] };
     return { text: reply || "Sorry, I lost my train of thought. Could you say that again?", sources: reply ? sources : [] };

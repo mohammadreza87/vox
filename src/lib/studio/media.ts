@@ -8,6 +8,7 @@
 
 import type { AgentLook, PersonaSpec } from './types';
 import type { VoiceService } from '../tireh/voice';
+import type { DecisionAnswer, DecisionQuestion } from '../tireh/triage';
 
 type FetchFn = typeof fetch;
 
@@ -46,8 +47,33 @@ export class OpenAIMedia {
     private readonly apiKey: string,
     private readonly fetchFn: FetchFn = fetch,
     private readonly imageModel = process.env.OPENAI_IMAGE_MODEL ?? 'gpt-image-1',
-    private readonly sttModel = process.env.OPENAI_STT_MODEL ?? 'gpt-4o-mini-transcribe'
+    private readonly sttModel = process.env.OPENAI_STT_MODEL ?? 'gpt-4o-mini-transcribe',
+    private readonly decisionModel = process.env.OPENAI_DECISION_MODEL ?? 'gpt-6-luna'
   ) {}
+
+  /**
+   * Answers independent questions about one input with the Decisions API:
+   * fast, and billed for input only. Refused or malformed answers are left out.
+   */
+  async decide(input: string, questions: DecisionQuestion[], timeoutMs = 10_000): Promise<Record<string, DecisionAnswer>> {
+    const response = await this.fetchFn('https://api.openai.com/v1/decisions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${this.apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: this.decisionModel, input, questions }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    const json = (await response.json().catch(() => ({}))) as { answers?: Array<Record<string, unknown>> };
+    if (!response.ok) throw new Error(`OpenAI decision failed: HTTP ${response.status}`);
+    const answers: Record<string, DecisionAnswer> = {};
+    for (const a of json.answers ?? []) {
+      const name = typeof a.name === 'string' ? a.name : '';
+      const confidence = typeof a.confidence === 'number' ? a.confidence : 0;
+      if (a.type === 'predicate' && typeof a.probability === 'number') answers[name] = { type: 'predicate', probability: a.probability };
+      else if (a.type === 'choice' && typeof a.choice === 'string') answers[name] = { type: 'choice', choice: a.choice, confidence };
+      else if (a.type === 'score' && typeof a.score === 'number') answers[name] = { type: 'score', score: a.score, confidence };
+    }
+    return answers;
+  }
 
   /** Returns a JPEG (Telegram profile photos must be JPG). */
   async generateAvatar(prompt: string): Promise<Buffer> {
@@ -144,15 +170,126 @@ export class ElevenLabsStudio {
     if (!response.ok) throw new Error(`ElevenLabs TTS failed: HTTP ${response.status}`);
     return Buffer.from(await response.arrayBuffer());
   }
+
+  /** Speech-to-text (Scribe), so voice messages work without OpenAI. */
+  async transcribe(audio: ArrayBuffer, mimeType = 'audio/ogg'): Promise<string> {
+    const form = new FormData();
+    form.append('model_id', process.env.ELEVENLABS_STT_MODEL ?? 'scribe_v1');
+    form.append('file', new Blob([audio], { type: mimeType }), mimeType.includes('mp4') ? 'voice.m4a' : mimeType.includes('webm') ? 'voice.webm' : 'voice.ogg');
+    const response = await this.fetchFn(`${XI}/speech-to-text`, { method: 'POST', headers: this.headers(false), body: form });
+    const json = (await response.json().catch(() => ({}))) as { text?: string };
+    if (!response.ok) throw new Error(`ElevenLabs speech-to-text failed: HTTP ${response.status}`);
+    return (json.text ?? '').trim();
+  }
+
+  // ---- Live voice (ElevenLabs Agents) ----
+
+  private async convai<T>(path: string, init: RequestInit, what: string): Promise<T> {
+    const response = await this.fetchFn(`${XI}/convai${path}`, { ...init, headers: this.headers(init.method !== undefined && init.method !== 'GET') });
+    const json = (await response.json().catch(() => ({}))) as T & { detail?: unknown };
+    if (!response.ok) {
+      const detail = typeof json.detail === 'string' ? json.detail : JSON.stringify(json.detail ?? '').slice(0, 300);
+      throw new Error(`ElevenLabs ${what} failed: HTTP ${response.status}${detail ? ` ${detail}` : ''}`);
+    }
+    return json;
+  }
+
+  /** Stores the key ElevenLabs sends to our custom LLM endpoint. */
+  async createSecret(name: string, value: string): Promise<string> {
+    const json = await this.convai<{ secret_id?: string }>('/secrets', { method: 'POST', body: JSON.stringify({ type: 'new', name, value }) }, 'secret creation');
+    if (!json.secret_id) throw new Error('ElevenLabs secret creation returned no id');
+    return json.secret_id;
+  }
+
+  async createAgent(config: VoiceAgentConfig): Promise<string> {
+    const json = await this.convai<{ agent_id?: string }>('/agents/create', { method: 'POST', body: JSON.stringify(voiceAgentBody(config)) }, 'agent creation');
+    if (!json.agent_id) throw new Error('ElevenLabs agent creation returned no id');
+    return json.agent_id;
+  }
+
+  async updateAgent(agentId: string, config: VoiceAgentConfig): Promise<void> {
+    await this.convai(`/agents/${encodeURIComponent(agentId)}`, { method: 'PATCH', body: JSON.stringify(voiceAgentBody(config)) }, 'agent update');
+  }
+
+  /** A short-lived URL the browser uses to start one conversation. */
+  async signedUrl(agentId: string): Promise<string> {
+    const json = await this.convai<{ signed_url?: string }>(`/conversation/get-signed-url?agent_id=${encodeURIComponent(agentId)}`, {}, 'call start');
+    if (!json.signed_url) throw new Error('ElevenLabs returned no signed URL');
+    return json.signed_url;
+  }
+}
+
+/**
+ * ElevenLabs default voices, so agents without a designed voice can still
+ * send voice messages and take calls.
+ */
+const DEFAULT_VOICES: Record<string, string> = {
+  feminine: 'EXAVITQu4vr4xnSDxMaL', // Sarah
+  masculine: 'JBFqnCBsd6RMkjVDRZzb', // George
+  neutral: 'SAz9YHcvj6GT2YYXdXww', // River
+};
+
+export function defaultVoiceId(presentation?: string): string {
+  return DEFAULT_VOICES[presentation ?? ''] ?? DEFAULT_VOICES.neutral;
+}
+
+export interface VoiceAgentConfig {
+  name: string;
+  /** Our OpenAI-compatible endpoint that answers in character */
+  llmUrl: string;
+  llmSecretId: string;
+  maxCallSeconds: number;
+}
+
+/**
+ * One ElevenLabs agent serves every Studio agent: ElevenLabs does the
+ * listening, turn-taking and speaking (low-latency Flash voices), and asks our
+ * endpoint what to say, so personas, memories and privacy stay ours. The voice,
+ * language and greeting are chosen per call.
+ */
+export function voiceAgentBody(c: VoiceAgentConfig) {
+  return {
+    name: c.name,
+    conversation_config: {
+      agent: {
+        first_message: '',
+        language: 'en',
+        prompt: {
+          prompt: 'The persona and everything it knows come from the custom LLM.',
+          llm: 'custom-llm',
+          max_tokens: 300,
+          custom_llm: { url: c.llmUrl, model_id: 'vox-persona', api_key: { secret_id: c.llmSecretId } },
+        },
+      },
+      tts: { model_id: 'eleven_flash_v2_5' },
+      conversation: { max_duration_seconds: c.maxCallSeconds },
+    },
+    platform_settings: {
+      overrides: {
+        conversation_config_override: { agent: { first_message: true, language: true }, tts: { voice_id: true } },
+        custom_llm_extra_body: true,
+      },
+    },
+  };
 }
 
 /** Voice for the persona runtime: OpenAI hears, ElevenLabs speaks. */
 export class StudioVoiceService implements VoiceService {
   constructor(private readonly openai: OpenAIMedia | null, private readonly eleven: ElevenLabsStudio | null) {}
 
+  /** OpenAI hears when configured; ElevenLabs Scribe covers for it. */
   async transcribe(audio: ArrayBuffer, mimeType?: string): Promise<string> {
-    if (!this.openai) throw new Error('OPENAI_API_KEY is not set');
-    return this.openai.transcribe(audio, mimeType);
+    if (!this.openai) {
+      if (!this.eleven) throw new Error('Voice messages need OPENAI_API_KEY or ELEVENLABS_API_KEY');
+      return this.eleven.transcribe(audio, mimeType);
+    }
+    try {
+      return await this.openai.transcribe(audio, mimeType);
+    } catch (error) {
+      if (!this.eleven) throw error;
+      console.warn('[studio] OpenAI transcription failed, trying ElevenLabs', error);
+      return this.eleven.transcribe(audio, mimeType);
+    }
   }
 
   async synthesize(text: string, voiceId: string) {

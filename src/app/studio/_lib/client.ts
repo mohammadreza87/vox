@@ -108,7 +108,7 @@ export interface Me {
   member: Member;
   org: string;
   bot: string;
-  features: { avatars: boolean; voices: boolean; calls: boolean };
+  features: { avatars: boolean; voices: boolean; calls: boolean; liveCalls?: boolean };
 }
 
 export interface LibraryVoice { voiceId: string; publicOwnerId: string; name: string; accent: string; gender: string; age: string; descriptive: string; language?: string; previewUrl?: string }
@@ -159,11 +159,17 @@ export const api = {
     form.append('audio', audio, 'turn');
     return request<{ transcript: string; reply: string; audio?: string }>('POST', `agents/${enc(id)}/call`, form);
   },
+  liveCall: (id: string) => request<LiveCall>('POST', `agents/${enc(id)}/live-call`),
+  callEnd: (id: string) => request<{ ok: true }>('POST', `agents/${enc(id)}/call-end`),
   memories: (id: string) => request<{ memories: MemoryItem[] }>('GET', `agents/${enc(id)}/memories`),
   forget: (id: string, memoryId: string) => request<{ ok: true }>('DELETE', `agents/${enc(id)}/memories?memoryId=${enc(memoryId)}`),
   members: () => request<{ people: Member[]; agentAdmins: AgentView[] }>('GET', 'members'),
   setRole: (telegramId: number, role: Role) => request<{ member: Member }>('PUT', `members/${telegramId}`, { role }),
   groups: () => request<{ groups: GroupItem[] }>('GET', 'groups'),
 };
+
+export type LiveCall =
+  | { live: false }
+  | { live: true; signedUrl: string; callToken: string; voiceId: string; language?: string; firstMessage: string };
 
 export const mediaUrl = (file: string) => `/api/studio/media/${encodeURIComponent(file)}`;

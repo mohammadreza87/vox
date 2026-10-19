@@ -4,6 +4,7 @@ import { withSources } from '../gateway';
 
 const provider = vi.hoisted(() => ({
   create: vi.fn(),
+  stream: vi.fn(),
   getGenerativeModel: vi.fn(),
   startChat: vi.fn(),
   sendMessage: vi.fn(),
@@ -11,7 +12,7 @@ const provider = vi.hoisted(() => ({
 
 vi.mock('@anthropic-ai/sdk', () => ({
   default: class {
-    messages = { create: provider.create };
+    messages = { create: provider.create, stream: provider.stream };
   },
 }));
 
@@ -124,5 +125,21 @@ describe('live web search', () => {
   it('does not swallow other failures', async () => {
     provider.create.mockRejectedValueOnce(Object.assign(new Error('overloaded'), { status: 529 }));
     await expect(new AnthropicLLM('fixture-key', 'claude-haiku-5-5').completeWithWeb({ ...request, maxSearches: 3 })).rejects.toThrow('overloaded');
+  });
+});
+
+describe('streaming', () => {
+  it('yields text deltas as they arrive', async () => {
+    const events = [
+      { type: 'message_start' },
+      { type: 'content_block_delta', delta: { type: 'text_delta', text: 'Hi ' } },
+      { type: 'content_block_delta', delta: { type: 'input_json_delta', partial_json: '{' } },
+      { type: 'content_block_delta', delta: { type: 'text_delta', text: 'there' } },
+    ];
+    provider.stream.mockReturnValue((async function* () { yield* events; })());
+    const parts: string[] = [];
+    for await (const p of new AnthropicLLM('fixture-key', 'claude-haiku-5-5').stream(request)) parts.push(p);
+    expect(parts).toEqual(['Hi ', 'there']);
+    expect(provider.stream.mock.lastCall?.[0]).toEqual({ model: 'claude-haiku-5-5', max_tokens: 1500, system: request.system, messages: request.messages });
   });
 });

@@ -176,6 +176,8 @@ export interface StudioState {
   guests?: Guest[];
   /** Daily message counts for guests: key `${agentId}:${telegramId}` */
   guestUsage?: Record<string, { day: string; count: number }>;
+  /** The shared ElevenLabs agent behind live calls (created on first call) */
+  voiceAgent?: { id: string; llmUrl: string; secretId: string; keyId?: string; version: number };
 }
 
 export const FORMING_DAYS = 7;

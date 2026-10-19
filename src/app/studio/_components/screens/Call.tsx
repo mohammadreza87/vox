@@ -8,10 +8,12 @@ import { errorMessage, LoadingFill, useNav } from '../StudioApp';
 import { Icon, TopBar } from '../ui';
 
 type Phase = 'ready' | 'listening' | 'thinking' | 'speaking';
+type LiveSession = { endSession(): Promise<void>; setMicMuted(muted: boolean): void; getInputVolume(): number };
 interface Line { who: 'you' | 'agent'; text: string }
 
 const EXPR: Record<Phase, Expression> = { ready: 'idle', listening: 'listening', thinking: 'thinking', speaking: 'speaking' };
 const HINT: Record<Phase, string> = { ready: 'Tap to talk', listening: 'Listening — tap to send', thinking: 'Thinking…', speaking: 'Tap to interrupt' };
+const LIVE_HINT: Record<Phase, string> = { ready: 'Tap to start the call', listening: 'Listening…', thinking: 'Connecting…', speaking: 'Speaking — just talk to interrupt' };
 
 function pickMime(): string {
   if (typeof MediaRecorder === 'undefined') return '';
@@ -36,6 +38,12 @@ export function CallScreen({ id }: { id: string }) {
   const player = useRef<HTMLAudioElement | null>(null);
   const meter = useRef<{ ctx: AudioContext; raf: number } | null>(null);
   const cancelled = useRef(false);
+  // Live mode: ElevenLabs streams both ways and handles turn-taking.
+  const [live, setLive] = useState(false);
+  const [muted, setMuted] = useState(false);
+  const session = useRef<LiveSession | null>(null);
+  const liveMeter = useRef<number | null>(null);
+  const liveUnavailable = useRef(false);
 
   useEffect(() => {
     // Reset on (re)mount: React StrictMode runs this effect's cleanup once in dev.
@@ -52,6 +60,7 @@ export function CallScreen({ id }: { id: string }) {
       recorder.current = null;
       stream.current = null;
       meter.current = null;
+      void endLive();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
@@ -121,13 +130,73 @@ export function CallScreen({ id }: { id: string }) {
     }
   };
 
+  const endLive = async () => {
+    const s = session.current;
+    if (!s) return;
+    session.current = null;
+    if (liveMeter.current) cancelAnimationFrame(liveMeter.current);
+    await s.endSession().catch(() => undefined);
+    // What was said becomes memories, as in Telegram.
+    void api.callEnd(id).catch(() => undefined);
+  };
+
+  /** Opens a live call; returns false when the server only supports tap-to-talk. */
+  const startLive = async (): Promise<boolean> => {
+    if (liveUnavailable.current) return false;
+    setPhase('thinking');
+    try {
+      const call = await api.liveCall(id);
+      if (!call.live) { liveUnavailable.current = true; setPhase('ready'); return false; }
+      await navigator.mediaDevices.getUserMedia({ audio: true }).then((s) => s.getTracks().forEach((t) => t.stop()));
+      const { Conversation } = await import('@elevenlabs/client');
+      const conv = await Conversation.startSession({
+        signedUrl: call.signedUrl,
+        customLlmExtraBody: { call: call.callToken },
+        overrides: { agent: { firstMessage: call.firstMessage, ...(call.language ? { language: call.language as never } : {}) }, tts: { voiceId: call.voiceId } },
+        onModeChange: ({ mode }) => setPhase(mode === 'speaking' ? 'speaking' : 'listening'),
+        onMessage: ({ message, role }) => { if (message.trim()) setLines((l) => [...l, { who: role === 'user' ? 'you' : 'agent', text: message }]); },
+        onError: (message) => nav.toast(message || 'The call dropped.', 'error'),
+        onDisconnect: () => { if (session.current) { session.current = null; setPhase('ready'); void api.callEnd(id).catch(() => undefined); } },
+      });
+      if (cancelled.current) { await conv.endSession(); return true; }
+      session.current = conv;
+      setLive(true);
+      setSeconds(0);
+      setPhase('listening');
+      haptic.success();
+      const tick = () => {
+        setLevel(Math.min(1, (session.current?.getInputVolume() ?? 0) * 2));
+        liveMeter.current = requestAnimationFrame(tick);
+      };
+      liveMeter.current = requestAnimationFrame(tick);
+      return true;
+    } catch (e) {
+      haptic.error();
+      nav.toast(e instanceof DOMException ? 'Microphone access is needed for calls.' : errorMessage(e), 'error');
+      setPhase('ready');
+      return true;
+    }
+  };
+
+  const toggleMute = () => {
+    if (!session.current) return;
+    haptic.select();
+    session.current.setMicMuted(!muted);
+    setMuted(!muted);
+  };
+
   const tap = () => {
-    if (phase === 'ready') void start();
+    if (live) {
+      if (session.current) toggleMute();
+      else void startLive();
+      return;
+    }
+    if (phase === 'ready') void startLive().then((handled) => { if (!handled) void start(); });
     else if (phase === 'listening') { haptic.soft(); recorder.current?.stop(); }
     else if (phase === 'speaking') { player.current?.pause(); setPhase('ready'); void start(); }
   };
 
-  const hangUp = () => { haptic.heavy(); nav.back(); };
+  const hangUp = () => { haptic.heavy(); void endLive(); nav.back(); };
 
   if (!agent) return <><TopBar onBack={nav.back} /><LoadingFill /></>;
   const pal = PALETTE[agent.look.hue];
@@ -157,7 +226,7 @@ export function CallScreen({ id }: { id: string }) {
         </motion.div>
         <AnimatePresence mode="wait">
           <motion.div key={phase} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }} className="vx-small vx-2" aria-live="polite">
-            {HINT[phase]}
+            {live ? (muted && session.current ? 'Muted — tap the mic to talk' : LIVE_HINT[phase]) : HINT[phase]}
           </motion.div>
         </AnimatePresence>
       </div>
@@ -177,12 +246,13 @@ export function CallScreen({ id }: { id: string }) {
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 40, padding: '24px 16px calc(28px + env(safe-area-inset-bottom))', position: 'relative' }}>
         <span style={{ width: 56 }} />
         <motion.button onClick={tap} disabled={phase === 'thinking'} whileTap={{ scale: 0.92 }}
-          aria-label={phase === 'listening' ? 'Send' : 'Talk'}
-          animate={{ background: phase === 'listening' ? '#D6FF5C' : '#1E2228', color: phase === 'listening' ? '#0E1013' : '#F2F1EC',
+          aria-label={live && session.current ? (muted ? 'Unmute' : 'Mute') : phase === 'listening' ? 'Send' : 'Talk'}
+          aria-pressed={live && session.current ? muted : undefined}
+          animate={{ background: phase === 'listening' && !muted ? '#D6FF5C' : '#1E2228', color: phase === 'listening' && !muted ? '#0E1013' : '#F2F1EC',
             boxShadow: phase === 'listening' ? `0 0 0 ${6 + level * 18}px rgba(214,255,92,.18)` : '0 0 0 0 rgba(214,255,92,0)' }}
           transition={{ duration: 0.12 }}
           style={{ width: 84, height: 84, borderRadius: '50%', border: '1px solid rgba(255,255,255,.08)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', opacity: phase === 'thinking' ? 0.5 : 1 }}>
-          <Icon name={phase === 'listening' ? 'send' : 'mic'} size={32} width={2} />
+          <Icon name={live && session.current ? (muted ? 'micOff' : 'mic') : phase === 'listening' ? 'send' : 'mic'} size={32} width={2} />
         </motion.button>
         <motion.button onClick={hangUp} whileTap={{ scale: 0.92 }} aria-label="End call"
           style={{ width: 56, height: 56, borderRadius: '50%', border: 'none', background: '#FF6B5E', color: '#0E1013', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
