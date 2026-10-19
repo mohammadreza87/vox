@@ -21,6 +21,7 @@ const MEMORIES = 'tireh_memories';
 const OFFERS = 'tireh_share_offers';
 const CHATS = 'tireh_chats';
 const UPDATES = 'tireh_updates';
+const EPOCHS = 'tireh_privacy_epochs';
 
 /** Firestore rejects undefined values; drop them recursively (Dates kept). */
 function clean<T>(value: T): T {
@@ -57,6 +58,19 @@ function memoryFromDoc(id: string, data: Record<string, unknown>): MemoryRecord 
 export class FirestoreMemoryStore implements MemoryStore {
   constructor(private readonly db: Firestore) {}
 
+  async addIfEpoch(memory: NewMemory, expectedEpoch: number): Promise<MemoryRecord | null> {
+    const ref = this.db.collection(MEMORIES).doc();
+    const epochRef = this.db.collection(EPOCHS).doc(memory.personaId);
+    return this.db.runTransaction(async (transaction) => {
+      const epoch = await transaction.get(epochRef);
+      if (Number(epoch.data()?.epoch ?? 0) !== expectedEpoch) return null;
+      const now = new Date();
+      const data = { ...memory, createdAt: now, updatedAt: now };
+      transaction.set(ref, clean({ ...data, active: !memory.supersededBy, scopeKey: scopeKey(memory.scope) }));
+      return { ...data, id: ref.id };
+    });
+  }
+
   async add(memory: NewMemory): Promise<MemoryRecord> {
     const now = new Date();
     const ref = this.db.collection(MEMORIES).doc();
@@ -84,6 +98,17 @@ export class FirestoreMemoryStore implements MemoryStore {
     if (patch.scope) extra.scopeKey = scopeKey(patch.scope);
     if ('supersededBy' in patch) extra.active = !patch.supersededBy;
     await this.db.collection(MEMORIES).doc(id).update(clean({ ...patch, ...extra }));
+  }
+
+  async updateIfShareVersion(id: string, expectedVersion: number, patch: Partial<Omit<MemoryRecord, 'id' | 'personaId'>>): Promise<boolean> {
+    const ref = this.db.collection(MEMORIES).doc(id);
+    return this.db.runTransaction(async (transaction) => {
+      const snapshot = await transaction.get(ref);
+      if (!snapshot.exists || Number(snapshot.data()?.shareVersion ?? 0) !== expectedVersion) return false;
+      const data = { ...snapshot.data(), ...patch, updatedAt: new Date() };
+      transaction.set(ref, clean({ ...data, active: !data.supersededBy, scopeKey: scopeKey(data.scope as MemoryRecord['scope']) }));
+      return true;
+    });
   }
 
   async delete(id: string): Promise<void> {
@@ -121,17 +146,50 @@ export class FirestoreShareOfferStore implements ShareOfferStore {
 export class FirestoreChatHistoryStore implements ChatHistoryStore {
   constructor(private readonly db: Firestore) {}
 
+  async getEpoch(personaId: string): Promise<number> {
+    const doc = await this.db.collection(EPOCHS).doc(personaId).get();
+    return Number(doc.data()?.epoch ?? 0);
+  }
+
+  async clearPersona(personaId: string): Promise<void> {
+    const epochRef = this.db.collection(EPOCHS).doc(personaId);
+    const nextEpoch = await this.db.runTransaction(async (transaction) => {
+      const existing = await transaction.get(epochRef);
+      const epoch = Number(existing.data()?.epoch ?? 0) + 1;
+      transaction.set(epochRef, { epoch });
+      return epoch;
+    });
+    // listDocuments includes historical parents that have only subcollections.
+    const chats = await this.db.collection(CHATS).listDocuments();
+    for (const chat of chats) {
+      if (!chat.id.startsWith(`${personaId}__`)) continue;
+      const messages = await chat.collection('messages').get();
+      for (const message of messages.docs) {
+        if (Number(message.data().privacyEpoch ?? 0) < nextEpoch) await chat.collection('messages').doc(message.id).delete();
+      }
+    }
+  }
+
   private messages(personaId: string, chatKey: string) {
     return this.db.collection(CHATS).doc(`${personaId}__${chatKey}`).collection('messages');
   }
 
-  async append(personaId: string, chatKey: string, message: ChatMessage): Promise<void> {
-    await this.messages(personaId, chatKey).add(clean(message));
+  async append(personaId: string, chatKey: string, message: ChatMessage, expectedEpoch?: number): Promise<void> {
+    const epochRef = this.db.collection(EPOCHS).doc(personaId);
+    const messageRef = this.messages(personaId, chatKey).doc();
+    await this.db.runTransaction(async (transaction) => {
+      const doc = await transaction.get(epochRef);
+      const epoch = Number(doc.data()?.epoch ?? 0);
+      if (expectedEpoch !== undefined && epoch !== expectedEpoch) return;
+      transaction.set(messageRef, clean({ ...message, privacyEpoch: epoch }));
+    });
   }
 
   async recent(personaId: string, chatKey: string, limit: number): Promise<ChatMessage[]> {
+    const epoch = await this.getEpoch(personaId);
     const snap = await this.messages(personaId, chatKey).orderBy('at', 'desc').limit(limit).get();
     return snap.docs
+      .filter((d) => Number(d.data().privacyEpoch ?? 0) === epoch)
       .map((d) => {
         const data = d.data() as Record<string, unknown>;
         return { ...(data as unknown as ChatMessage), at: toDate(data.at) };

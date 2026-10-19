@@ -52,7 +52,7 @@ describe('bot runner', () => {
     stop = startBots(h.studio).stop;
     await flush();
     expect(h.botFor).toHaveBeenCalledWith(token);
-    expect(h.bots.get(token)!.getUpdates).toHaveBeenCalledWith(undefined, 25, ['message', 'callback_query', 'my_chat_member']);
+    expect(h.bots.get(token)!.getUpdates).toHaveBeenCalledWith(undefined, 25, ['message', 'callback_query', 'my_chat_member', 'chat_member']);
 
     await h.studio.fire(org.admin, agent.id, { reason: '', memoryPolicy: 'archive', confirmName: 'Nova' });
     await vi.advanceTimersByTimeAsync(8000);

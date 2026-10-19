@@ -186,11 +186,13 @@ describe('group voice request followed by a separate mention', () => {
   const prior: ChatMessage = {
     role: 'user', personId: 'reza', text: 'Please send a voice message.',
     at: new Date('2026-10-19T09:59:45Z'), telegramMessageId: 1, groupPolicyVersion: 1, groupOtherTarget: false,
+    audiencePersonIds: ['reza', 'parastoo', 'milad'],
   };
   it.each([
     ['another speaker', { ...prior, personId: 'parastoo' }, 'group-gameend-team', '@hoor_aria_bot'],
     ['an old request', { ...prior, at: new Date('2026-10-19T09:57:00Z') }, 'group-gameend-team', '@hoor_aria_bot'],
     ['future history', { ...prior, telegramMessageId: 999999 }, 'group-gameend-team', '@hoor_aria_bot'],
+    ['missing audience snapshot', { ...prior, audiencePersonIds: undefined }, 'group-gameend-team', '@hoor_aria_bot'],
     ['legacy group history', { ...prior, groupPolicyVersion: undefined }, 'group-gameend-team', '@hoor_aria_bot'],
     ['another group', prior, 'group-leads', '@hoor_aria_bot'],
     ['a private chat', prior, 'private-reza', '@hoor_aria_bot'],
@@ -201,6 +203,27 @@ describe('group voice request followed by a separate mention', () => {
     const ctx = setup({ decision: 'no' });
     await ctx.history.append('aria', chatKey, message);
     await ctx.gateway.handleUpdate('aria', groupText(GAMEEND_CHAT, TG.reza, followup));
+    expect(ctx.bot.sendVoice).not.toHaveBeenCalled();
+    expect(ctx.bot.sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['expanded', 'unknown', 'reset'] as const)('does not inherit a request after audience or privacy changes: %s', async (change) => {
+    const ctx = setup({ decision: 'no' });
+    await ctx.history.append('aria', 'group-gameend-team', prior);
+    if (change === 'expanded') ctx.org.getGroupByChatId(GAMEEND_CHAT)!.memberIds.push('sina');
+    if (change === 'unknown') ctx.org.getGroupByChatId(GAMEEND_CHAT)!.hasGuests = true;
+    if (change === 'reset') await ctx.history.clearPersona('aria');
+    await ctx.gateway.handleUpdate('aria', groupText(GAMEEND_CHAT, TG.reza, '@hoor_aria_bot'));
+    expect(ctx.bot.sendVoice).not.toHaveBeenCalled();
+    expect(ctx.bot.sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not refresh a delayed request age when Telegram delivers it later', async () => {
+    const ctx = setup({ decision: 'no' });
+    await ctx.gateway.handleUpdate('aria', groupText(GAMEEND_CHAT, TG.reza, 'Please send a voice message.', {
+      date: Math.floor(new Date('2026-10-19T09:57:00Z').getTime() / 1000),
+    }));
+    await ctx.gateway.handleUpdate('aria', groupText(GAMEEND_CHAT, TG.reza, '@hoor_aria_bot'));
     expect(ctx.bot.sendVoice).not.toHaveBeenCalled();
     expect(ctx.bot.sendMessage).toHaveBeenCalledTimes(1);
   });
@@ -315,6 +338,50 @@ describe('truthful voice failures and delivery history', () => {
     expect(ctx.bot.sendMessage).not.toHaveBeenCalled();
     const history = await ctx.history.recent('aria', 'group-gameend-team', 20);
     expect(history.filter((message) => message.role === 'assistant')).toEqual([]);
+    expect(ctx.llm.extractionCalls).toBe(0);
+  });
+});
+
+describe('combined voice delivery and privacy epoch fences', () => {
+  it.each(['resolve', 'reject'] as const)('suppresses audio and fallback after an authorized reset during TTS: %s', async (finish) => {
+    const voice = fakeVoice();
+    let started!: () => void;
+    const atTTS = new Promise<void>((done) => { started = done; });
+    let resolve!: (audio: { audio: ArrayBuffer; mimeType: string; filename: string }) => void;
+    let reject!: (error: Error) => void;
+    voice.synthesize.mockImplementationOnce(async () => {
+      started();
+      return new Promise((done, fail) => {
+        resolve = done;
+        reject = fail;
+      });
+    });
+    const ctx = setup({ voice });
+    const handling = ctx.gateway.handleUpdate('aria', privateText(TG.reza, 'Please send a voice message.'));
+    await atTTS;
+    await ctx.history.clearPersona('aria');
+    if (finish === 'resolve') resolve({ audio: new ArrayBuffer(4), mimeType: 'audio/mpeg', filename: 'voice.mp3' });
+    else reject(new Error('synthetic TTS failure after reset'));
+    expect(await handling).toBe('ignored');
+    expect(ctx.bot.sendVoice).not.toHaveBeenCalled();
+    expect(ctx.bot.sendMessage).not.toHaveBeenCalled();
+    expect(await ctx.history.recent('aria', 'private-reza', 20)).toEqual([]);
+  });
+
+  it('suppresses the transcript and retained history if privacy changes after audio delivery', async () => {
+    const ctx = setup();
+    const sendVoice = ctx.bot.sendVoice.getMockImplementation()!;
+    ctx.bot.sendVoice.mockImplementationOnce(async (...args) => {
+      const result = await sendVoice(...args);
+      await ctx.history.clearPersona('aria');
+      return result;
+    });
+    expect(await ctx.gateway.handleUpdate('aria', privateText(TG.reza, 'Please send a voice message.'))).toBe('ignored');
+    // Audio already sent cannot be recalled; no transcript or history may follow.
+    expect(ctx.bot.sendVoice).toHaveBeenCalledTimes(1);
+    expect(ctx.bot.sendMessage).not.toHaveBeenCalled();
+    expect(ctx.bot.sent.map((item) => item.method)).toEqual(['sendVoice']);
+    expect(await ctx.history.recent('aria', 'private-reza', 20)).toEqual([]);
     expect(ctx.llm.extractionCalls).toBe(0);
   });
 });

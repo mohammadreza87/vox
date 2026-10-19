@@ -158,8 +158,8 @@ describe('firstNewIndex', () => {
 
 describe('parseCandidates saidBy', () => {
   it('drops unknown speakers', () => {
-    const [c] = parseCandidates(org, JSON.stringify({ memories: [{ content: 'Something happened', type: 'event', kind: 'work', saidBy: 'ghost' }] }));
-    expect(c.saidBy).toBeNull();
+    const candidates = parseCandidates(org, JSON.stringify({ memories: [{ content: 'Something happened', type: 'event', kind: 'work', saidBy: 'ghost' }] }));
+    expect(candidates).toEqual([]);
   });
 });
 

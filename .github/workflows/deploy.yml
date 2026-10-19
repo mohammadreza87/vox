@@ -19,6 +19,9 @@ env:
 jobs:
   deploy:
     name: Deploy to Firebase
+    # The live Mac polling service owns the shared Telegram bots. Firebase must
+    # not register their webhooks unless an explicit target migration is made.
+    if: ${{ vars.STUDIO_PRODUCTION_TARGET == 'firebase' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # Firebase's framework deploy invokes Next build again. Keep real settings
@@ -38,6 +41,11 @@ jobs:
       STUDIO_PUBLIC_URL: ${{ vars.STUDIO_PUBLIC_URL || 'https://vox-aicontact-fe0e3.web.app' }}
       STUDIO_MEDIA_BUCKET: ${{ vars.STUDIO_MEDIA_BUCKET || secrets.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET }}
       STUDIO_ORG_NAME: ${{ vars.STUDIO_ORG_NAME || 'HOOR' }}
+      STUDIO_RELATIONSHIPS: ${{ vars.STUDIO_RELATIONSHIPS || 'off' }}
+      STUDIO_RELATIONSHIP_AGENTS: ${{ vars.STUDIO_RELATIONSHIP_AGENTS }}
+      STUDIO_RELATIONSHIP_PEOPLE: ${{ vars.STUDIO_RELATIONSHIP_PEOPLE }}
+      STUDIO_RELATIONSHIP_ROLES: ${{ vars.STUDIO_RELATIONSHIP_ROLES }}
+      STUDIO_RELATIONSHIP_WORKER_SECRET: ${{ secrets.STUDIO_RELATIONSHIP_WORKER_SECRET }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
@@ -60,9 +68,6 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Validate production configuration
-        run: node scripts/firebase-production-env.mjs
-
       - name: Lint
         run: npm run lint
 
@@ -73,10 +78,23 @@ jobs:
         run: npm run test -- --run
 
       - name: Deployment script tests
-        run: node --test scripts/firebase-production-env.test.mjs scripts/firebase-production-verify.test.mjs
+        run: node --test scripts/firebase-production-env.test.mjs scripts/firebase-production-verify.test.mjs scripts/firebase-relationship-infra.test.mjs
+
+      - name: Verify Firebase config packaging
+        run: |
+          npx --yes firebase-tools@15.34.0 --version
+          node --test scripts/firebase-config-packaging.test.mjs
 
       - name: Production dependency audit
         run: npm audit --omit=dev --audit-level=high
+
+      - name: Prepare relationship infrastructure
+        run: node scripts/firebase-relationship-infra.mjs prepare
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+
+      - name: Validate production configuration
+        run: node scripts/firebase-production-env.mjs
 
       - name: Build application
         run: npm run build
@@ -89,11 +107,23 @@ jobs:
           firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           channelId: live
           projectId: ${{ env.FIREBASE_PROJECT_ID }}
+          firebaseToolsVersion: 15.34.0
         env:
           FIREBASE_CLI_EXPERIMENTS: webframeworks
 
       - name: Register bots and verify production
         run: node scripts/firebase-production-verify.mjs
+
+      - name: Verify and activate relationship worker
+        run: node scripts/firebase-relationship-infra.mjs activate
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+
+      - name: Pause relationship worker after release failure
+        if: failure()
+        run: node scripts/firebase-relationship-infra.mjs pause
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
 
       - name: Deployment summary
         run: |

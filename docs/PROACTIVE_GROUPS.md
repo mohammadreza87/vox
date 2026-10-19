@@ -18,6 +18,8 @@ All modes can follow messages Telegram delivers, including messages the agent do
 
 Useful group facts remain scoped to their originating group. This setting does not share private chats, automatically export facts to other groups, or create a shared memory vault for other agents. Any separate, explicitly approved sharing retains its own audience rules. Following messages and saving durable memories are different operations: switching remembering off does not stop processing recent conversation context.
 
+Current audience checks also apply: an unknown group audience receives only the current exchange, with no stored memory or prior history sent to the model. When the audience is known, prior group history must carry the group-policy stamp; both history and memories must authorize every current reader. Direct mentions still require these checks; they only bypass the spontaneous-reply budget.
+
 ### Let Telegram deliver ordinary messages
 
 For participation without a mention, the agent must receive ordinary group messages. Either:
@@ -62,6 +64,8 @@ These probes used no user transcripts. They establish bounded provider access an
 This release targets the Mac Studio polling runtime, which processes each bot’s updates serially. Concurrent webhook memory writes are not fully qualified: two simultaneous corrections to the same author/topic can leave conflicting active records because memory replacement is not an atomic ordered write. The receipt window prevents duplicate extraction claims; it does not promise atomic ordered memory updates. Do not use this release report as Firebase/webhook qualification.
 
 ## فارسی
+
+بررسی مخاطبان فعلی نیز اعمال می‌شود: اگر مخاطبان گروه نامعلوم باشند، فقط گفت‌وگوی جاری به مدل می‌رسد و حافظهٔ ذخیره‌شده یا تاریخچهٔ قبلی ارسال نمی‌شود. برای مخاطبان معلوم، تاریخچهٔ قبلی گروه باید نشان سیاست گروه را داشته باشد؛ همهٔ خوانندگان فعلی باید برای تاریخچه و حافظه‌ها مجاز باشند. خطاب مستقیم نیز این بررسی‌ها را دور نمی‌زند؛ فقط از بودجهٔ پاسخ خودجوش مستثناست.
 
 ### تنظیمات عامل
 
