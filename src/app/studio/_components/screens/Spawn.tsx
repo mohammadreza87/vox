@@ -26,6 +26,7 @@ export function SpawnScreen({ draftId, successorOf }: { draftId?: string; succes
   const [names, setNames] = useState<string[]>([]);
   const [step, setStep] = useState(draftId ? -1 : 0);
   const [busy, setBusy] = useState<Busy>(null);
+  const [operationError, setOperationError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!draftId) return;
@@ -36,10 +37,12 @@ export function SpawnScreen({ draftId, successorOf }: { draftId?: string; succes
   }, [draftId]);
 
   const run = async <T,>(label: string, fn: () => Promise<T>): Promise<T | undefined> => {
+    setOperationError(null);
     setBusy(label);
     try {
       return await fn();
     } catch (e) {
+      setOperationError(errorMessage(e));
       haptic.error();
       nav.toast(errorMessage(e), 'error');
       return undefined;
@@ -73,6 +76,7 @@ export function SpawnScreen({ draftId, successorOf }: { draftId?: string; succes
             if (ok) nav.reset({ name: 'home' });
           }}><Icon name="trash" size={20} /></button>
         ) : undefined} />
+      {operationError && <div role="alert" style={{ padding: '12px 24px', color: '#FF6B5E', flexShrink: 0 }}>{operationError}</div>}
       <AnimatePresence mode="wait" initial={false}>
         <motion.div key={step} initial={{ opacity: 0, x: 24 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -24 }}
           transition={{ duration: 0.24, ease: [0.2, 0, 0, 1] }} style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
@@ -710,21 +714,27 @@ function TestStep({ agent, onNext, live }: { agent: AgentView; onNext: () => voi
 function HireStep({ agent, busy, run, onUpdate }: Omit<StepProps, 'onNext'>) {
   const nav = useNav();
   const [link, setLink] = useState<string | null>(null);
+  const [statusError, setStatusError] = useState<string | null>(null);
   const awaiting = agent.status === 'awaiting_bot';
 
   // While waiting for the human to confirm the bot in Telegram, poll for it.
   useEffect(() => {
     if (!awaiting) return;
+    let cancelled = false;
     const t = setInterval(async () => {
       try {
         const r = await api.agent(agent.id);
+        if (cancelled) return;
+        setStatusError(null);
         if (r.agent.status === 'active') {
           haptic.success();
           onUpdate(r.agent);
         }
-      } catch { /* keep waiting */ }
+      } catch (e) {
+        if (!cancelled) setStatusError(errorMessage(e));
+      }
     }, 3000);
-    return () => clearInterval(t);
+    return () => { cancelled = true; clearInterval(t); };
   }, [awaiting, agent.id, onUpdate]);
 
   const publish = async () => {
@@ -763,7 +773,9 @@ function HireStep({ agent, busy, run, onUpdate }: Omit<StepProps, 'onNext'>) {
           <div className="vx-row"><Icon name="mic" size={20} /><span style={{ flex: 1 }}>Voice</span><span className="vx-small vx-2">{agent.voice?.label ?? 'Text only'}</span></div>
           <div className="vx-row"><Icon name="lock" size={20} /><span style={{ flex: 1 }}>Personality locks</span><span className="vx-small vx-2">7 days after hire</span></div>
         </div>
-        {awaiting && <div className="vx-small vx-2" style={{ display: 'flex', alignItems: 'center', gap: 8 }}><Spinner size={14} />Waiting for Telegram…</div>}
+        {awaiting && (statusError
+          ? <p role="alert" style={{ margin: 0, color: '#FF6B5E' }}>Can’t check the bot’s status: {statusError}</p>
+          : <div className="vx-small vx-2" style={{ display: 'flex', alignItems: 'center', gap: 8 }}><Spinner size={14} />Waiting for Telegram…</div>)}
       </div>
       <Dock>
         {awaiting ? (
