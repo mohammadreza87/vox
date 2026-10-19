@@ -59,13 +59,20 @@ const CSP_DIRECTIVES = {
   'base-uri': ["'self'"],
   'object-src': ["'none'"],
   'worker-src': ["'self'", 'blob:'],
-  'media-src': ["'self'", 'blob:', 'data:'],
+  'media-src': ["'self'", 'blob:', 'data:', 'https://storage.googleapis.com'], // ElevenLabs voice-library previews
   'manifest-src': ["'self'"],
 };
 
+// Telegram clients that render Mini Apps in an iframe (Telegram Web)
+// Both official WebA and WebK clients use this origin (telegram.org/apps).
+const TELEGRAM_FRAME_ANCESTORS = ['https://web.telegram.org'];
+
+const isPathOrChild = (pathname: string, root: string) => pathname === root || pathname.startsWith(`${root}/`);
+
 // Build CSP header string
-function buildCSP(isDev: boolean): string {
+function buildCSP(isDev: boolean, isMiniApp = false): string {
   const directives = { ...CSP_DIRECTIVES };
+  if (isMiniApp) directives['frame-ancestors'] = TELEGRAM_FRAME_ANCESTORS;
 
   // In development, allow localhost and hot reload
   if (isDev) {
@@ -94,6 +101,18 @@ const PERMISSIONS_POLICY = [
 ].join(', ');
 
 export function middleware(request: NextRequest) {
+  const pathname = request.nextUrl.pathname;
+  if (process.env.STUDIO_ONLY === '1') {
+    if (pathname === '/') {
+      const target = request.nextUrl.clone();
+      target.pathname = '/studio';
+      return NextResponse.redirect(target);
+    }
+    if (!isPathOrChild(pathname, '/studio') && !isPathOrChild(pathname, '/api/studio') &&
+      !pathname.startsWith('/_next/static/') && pathname !== '/favicon.ico') {
+      return new NextResponse(null, { status: 404, headers: { 'Cache-Control': 'no-store' } });
+    }
+  }
   const response = NextResponse.next();
   const isDev = process.env.NODE_ENV === 'development';
 
@@ -103,13 +122,18 @@ export function middleware(request: NextRequest) {
 
   // Security headers
   response.headers.set('X-Content-Type-Options', 'nosniff');
-  response.headers.set('X-Frame-Options', 'DENY');
+  // Vox Studio is a Telegram Mini App: Telegram Web frames it, so framing is
+  // limited to Telegram by CSP instead of being denied outright.
+  const isMiniApp = isPathOrChild(pathname, '/studio');
+  if (!isMiniApp) response.headers.set('X-Frame-Options', 'DENY');
   response.headers.set('X-XSS-Protection', '1; mode=block');
   response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+  // self refers to the Studio origin even when Telegram embeds it. Telegram's
+  // parent iframe must delegate microphone access; no wildcard is needed here.
   response.headers.set('Permissions-Policy', PERMISSIONS_POLICY);
 
   // CSP - use report-only in development to avoid blocking
-  const csp = buildCSP(isDev);
+  const csp = buildCSP(isDev, isMiniApp);
   if (isDev) {
     response.headers.set('Content-Security-Policy-Report-Only', csp);
   } else {
@@ -139,14 +163,7 @@ export function middleware(request: NextRequest) {
 
 // Configure which paths the middleware runs on
 export const config = {
-  matcher: [
-    /*
-     * Match all request paths except:
-     * - _next/static (static files)
-     * - _next/image (image optimization files)
-     * - favicon.ico (favicon file)
-     * - public folder files
-     */
-    '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
-  ],
+  // Every path must reach the Studio-only gate, including API paths ending in
+  // image extensions and the unused /_next/image optimization endpoint.
+  matcher: ['/:path*'],
 };
