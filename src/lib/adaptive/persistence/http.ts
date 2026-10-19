@@ -43,7 +43,9 @@ export async function handleAdaptiveRequest(studio: Studio, service: AdaptiveSer
     if (route === 'POST reviewed/preview' || route === 'POST reviewed/accept') {
       const authority = (state: Awaited<ReturnType<Studio['deps']['store']['read']>>, agentId: string) => {
         const actor = state.members.find(member => member.telegramId === user.id), agent = state.agents.find(agent => agent.id === agentId);
-        return actor && agent && !(agent.blocked ?? []).includes(user.id) && canUseAgent(actor, agent) ? digest([actor, agent]) : null;
+        const validEpoch = (row: { learningAuthorityRevision?: number }) => row.learningAuthorityRevision === undefined ||
+          (Number.isSafeInteger(row.learningAuthorityRevision) && row.learningAuthorityRevision >= 0);
+        return actor && agent && validEpoch(actor) && validEpoch(agent) && !(agent.blocked ?? []).includes(user.id) && canUseAgent(actor, agent) ? digest([actor, agent]) : null;
       };
       const reviewed = new ReviewedMemoryService(service, { llm: studio.deps.chatLLM, secret: studio.deps.secret,
         now: () => studio.deps.now?.().getTime() ?? Date.now(),

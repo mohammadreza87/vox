@@ -1,4 +1,6 @@
 import { expect, test, type Page, type Locator } from '@playwright/test';
+import type { PreferenceInput, PreferenceState, StoredPreference } from '../src/lib/adaptive/runtime/contracts';
+import type { PreferenceValue } from '../src/lib/adaptive/personalization';
 
 const PERSON = 710001;
 const OTHER = 710002;
@@ -14,7 +16,32 @@ function makeHarness() {
   const calls: Array<{ method: string; path: string; body?: any; space?: string }> = [];
   const processed: Record<string, boolean> = { work: false, personal: false };
   const granted: Record<string, boolean> = { work: false, personal: false };
-  const preferences: Record<string, string> = {};
+  // Mirror the current projection: records are distinct per agent, space and
+  // setting; reset is a retained explicit row, not an absent preference.
+  let revision = 1;
+  const preferences: Record<string, StoredPreference> = {};
+  const defaults: PreferenceValue[] = [{ key: 'response_length', value: 'balanced' }, { key: 'language', value: 'auto' }, { key: 'formatting', value: 'plain' }];
+  const preferenceKey = (space: string, agentId: string, key: string) => `${space}:${agentId}:${key}`;
+  const preferenceValue = (space: string, agentId: string, key: string) => {
+    const row = preferences[preferenceKey(space, agentId, key)]; return row?.status === 'active' ? row.setting.value : undefined;
+  };
+  const preferenceState = (space: 'work' | 'personal', agentId: string): PreferenceState => ({
+    schemaVersion: 1, revision, space, agentId, receipt: `synthetic-projection:${space}:${agentId}:${revision}`,
+    entries: defaults.map(setting => {
+      const saved = preferences[preferenceKey(space, agentId, setting.key)];
+      // This fixture has no adaptive agent grant: saving a choice must not
+      // silently make it applied or revive permissions.
+      return { setting, source: 'default', applied: false,
+        explanation: granted[space] ? 'agent_grant_missing' : 'personalization_off', ...(saved ? { saved } : {}) };
+    }),
+  });
+  const savePreference = (body: PreferenceInput): boolean => {
+    if (body?.expectedRevision !== revision) return false;
+    const key = preferenceKey(body.space, body.agentId, body.setting.key), prior = preferences[key];
+    preferences[key] = { id: prior?.id ?? body.eventId, revision: (prior?.revision ?? 0) + 1, space: body.space, agentId: body.agentId,
+      setting: body.setting, status: body.action === 'reset' ? 'reset' : 'active', updatedAt: NOW };
+    revision++; return true;
+  };
   const sharedNotes: Record<string, string[]> = { work: ['Synthetic work note'], personal: ['Synthetic personal note'] };
   const settings: any = {
     revision: 1, timezone: 'Europe/Tallinn', dailyCap: 2, quietStartHour: 21, quietEndHour: 8,
@@ -41,9 +68,8 @@ function makeHarness() {
     recipients: [{ telegramId: PERSON, personId: 'person-synthetic', active: true }, { telegramId: OTHER, personId: 'person-other', active: true }],
     agents: [], status: 'active', memories: [{ id: `${space}-memory-${i}`, revision: 1, text, authorPersonId: 'person-synthetic', createdAt: NOW, expiresAt: NOW + 86400000 }],
   })) });
-  const experience = (space: 'work' | 'personal') => ({ schemaVersion: 1, revision: 1, space, confirmed: true,
-    preferences: preferences[space] ? [{ id: `pref-${space}`, revision: 1, space, agentId: AGENT,
-      setting: { key: 'response_length', value: preferences[space] }, status: 'active', updatedAt: NOW, applied: false }] : [],
+  const experience = (space: 'work' | 'personal') => ({ schemaVersion: 1, revision, space, confirmed: true,
+    preferences: Object.values(preferences).filter(row => row.space === space).map(row => ({ ...row, applied: false })),
     settings: { ...settings, [space]: settings[space] }, inbox: [],
     observations: { available: false, responded: 0, failed: 0, cancelled: 0, total: 0, meanResponseMs: null, verifiedTaskSuccess: null, complete: false },
     capabilities: { personalization: true, productAnalytics: false, proactiveInbox: false, reminders: false, decisions: false },
@@ -57,7 +83,7 @@ function makeHarness() {
     completeness: { complete: false, acceptedEvents: 16, processedEvents: processed[space] ? 16 : 14, pendingEvents: processed[space] ? 0 : 2, failedEvents: 1,
       samplingRate: 1, retentionMs: 604800000, coverage: 'instrumented_response_and_client_playback_only', playbackEvidence: 'client_unverified', verifiedTaskSuccess: null, providerUsage: null, language: null, release: null },
   });
-  return { calls, sharedNotes, settings, adaptive, shared, experience, learning, processed, granted, preferences };
+  return { calls, sharedNotes, settings, adaptive, shared, experience, learning, processed, granted, preferences, preferenceValue, preferenceState, savePreference };
 }
 
 async function installFixtures(page: Page, h: ReturnType<typeof makeHarness>) {
@@ -106,9 +132,14 @@ async function installFixtures(page: Page, h: ReturnType<typeof makeHarness>) {
     else if (path === 'learning/export' && method === 'GET') result = { schemaVersion: 1, space, lifecycle: { observations: h.learning(space) } };
     else if (path === 'learning/operations' && method === 'GET') result = { maintenanceConfigured: false, improvementConfigured: false, report: null };
     else if (path === 'experience' && method === 'GET') result = h.experience(space);
-    else if (path === 'experience/preferences') {
-      if (body?.action === 'reset') delete h.preferences[space]; else h.preferences[space] = body?.setting?.value;
-      result = h.experience(space);
+    else if (path === 'experience/preferences' && method === 'GET') {
+      const agentId = url.searchParams.get('agentId');
+      if (agentId !== AGENT) { status = 403; result = { error: 'agent_access_denied' }; }
+      else result = h.preferenceState(space, agentId);
+    }
+    else if (path === 'experience/preferences' && method === 'PUT') {
+      if (!h.savePreference(body)) { status = 409; result = { error: 'revision_conflict' }; }
+      else result = h.experience(space);
     }
     else if (path === 'experience/settings') {
       h.settings[space] = { inboxEnabled: body.inboxEnabled, proactiveEnabled: body.proactiveEnabled, reminderEnabled: body.reminderEnabled };
@@ -223,13 +254,40 @@ test('privacy, shared memory and experience controls stay explicit and isolated 
   await page.screenshot({ path: testInfo.outputPath('experience-fa.png'), fullPage: true });
   await page.getByRole('button', { name: 'English' }).last().click();
   await experience.getByRole('combobox', { name: 'Agent' }).selectOption(AGENT);
-  await experience.getByLabel('Reply length').selectOption('detailed');
-  await experience.getByRole('button', { name: 'Save preference' }).click();
-  await expect.poll(() => h.preferences.work).toBe('detailed');
-  await experience.getByRole('button', { name: 'Reset' }).click();
-  await expect.poll(() => h.preferences.work).toBeUndefined();
-  await expect(experience.getByLabel('Reply length')).toHaveValue('balanced');
-  const resetReplyLength = await experience.getByLabel('Reply length').inputValue();
+  const replyLength = experience.getByRole('article', { name: 'Reply length preference', exact: true });
+  const replyLanguage = experience.getByRole('article', { name: 'Reply language preference', exact: true });
+  await expect(experience.locator('.vx-preference-row')).toHaveCount(3);
+  await replyLength.getByRole('combobox', { name: 'Reply length', exact: true }).selectOption('detailed');
+  await replyLength.getByRole('button', { name: 'Save preference', exact: true }).click();
+  await expect.poll(() => h.preferenceValue('work', AGENT, 'response_length')).toBe('detailed');
+  await expect(replyLength.getByText('Saved choice: Detailed')).toBeVisible();
+  await expect(replyLanguage.getByRole('combobox', { name: 'Reply language', exact: true })).toHaveValue('auto');
+  await replyLength.getByRole('button', { name: 'Reset', exact: true }).click();
+  await expect.poll(() => h.preferenceValue('work', AGENT, 'response_length')).toBeUndefined();
+  await expect(replyLength.getByRole('combobox', { name: 'Reply length', exact: true })).toHaveValue('balanced');
+  const resetReplyLength = await replyLength.getByRole('combobox', { name: 'Reply length', exact: true }).inputValue();
+  expect(h.preferences[`work:${AGENT}:response_length`].status).toBe('reset');
+  const preferenceWrites = h.calls.filter(c => c.path === 'experience/preferences' && c.method === 'PUT');
+  expect(preferenceWrites.map(c => c.body)).toMatchObject([
+    { agentId: AGENT, space: 'work', action: 'set', setting: { key: 'response_length', value: 'detailed' }, expectedRevision: 1 },
+    { agentId: AGENT, space: 'work', action: 'reset', setting: { key: 'response_length', value: 'detailed' }, expectedRevision: 2 },
+  ]);
+  expect(h.calls.some(c => c.path === 'experience/preferences' && c.method === 'GET' && c.space === 'work')).toBeTruthy();
+  await experience.getByRole('button', { name: 'Personal', exact: true }).click();
+  await expect(experience.getByRole('combobox', { name: 'Agent', exact: true })).toHaveValue('');
+  await expect(replyLength).toHaveCount(0);
+  await experience.getByRole('combobox', { name: 'Agent', exact: true }).selectOption(AGENT);
+  await expect(replyLength.getByRole('combobox', { name: 'Reply length', exact: true })).toHaveValue('balanced');
+  await replyLength.getByRole('combobox', { name: 'Reply length', exact: true }).selectOption('brief');
+  await replyLength.getByRole('button', { name: 'Save preference', exact: true }).click();
+  await expect.poll(() => h.preferenceValue('personal', AGENT, 'response_length')).toBe('brief');
+  await expect(replyLength.getByText('Saved choice: Brief')).toBeVisible();
+  await experience.getByRole('button', { name: 'Work', exact: true }).click();
+  await expect(experience.getByRole('combobox', { name: 'Agent', exact: true })).toHaveValue('');
+  await experience.getByRole('combobox', { name: 'Agent', exact: true }).selectOption(AGENT);
+  await expect(replyLength.getByRole('combobox', { name: 'Reply length', exact: true })).toHaveValue('balanced');
+  expect(h.preferenceValue('work', AGENT, 'response_length')).toBeUndefined();
+  expect(h.preferenceValue('personal', AGENT, 'response_length')).toBe('brief');
   await experience.getByLabel('Enable inbox').check();
   await experience.getByLabel('Selected timezone').fill('Europe/Tallinn');
   await experience.getByRole('button', { name: 'Save notification settings' }).click();

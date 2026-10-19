@@ -16,6 +16,8 @@ export interface GroupBehavior {
 }
 
 export interface Member {
+  /** Monotonic source authority; absent legacy value is zero. */
+  learningAuthorityRevision?: number;
   telegramId: number;
   name: string;
   username?: string;
@@ -113,6 +115,8 @@ export interface TelegramProfileSync {
 }
 
 export interface Agent {
+  /** Monotonic source authority; never decrement or restore. */
+  learningAuthorityRevision?: number;
   id: string;
   status: AgentStatus;
   persona: PersonaSpec;
