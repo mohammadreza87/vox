@@ -28,7 +28,8 @@ export interface TelegramMessage {
   left_chat_member?: TelegramUser;
   voice?: { file_id: string; duration: number; mime_type?: string; file_size?: number };
   reply_to_message?: TelegramMessage;
-  entities?: Array<{ type: string; offset: number; length: number }>;
+  entities?: Array<{ type: string; offset: number; length: number; user?: TelegramUser }>;
+  caption_entities?: Array<{ type: string; offset: number; length: number; user?: TelegramUser }>;
 }
 
 export interface TelegramCallbackQuery {

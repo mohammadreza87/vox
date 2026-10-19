@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { buildExtractionPrompt, decideScope, firstNewIndex, parseCandidates, type MemoryCandidate } from '../memory/extraction';
-import { testOrg } from './fixtures';
+import { memory, testOrg } from './fixtures';
 import type { ChatContext } from '../types';
 
 const org = testOrg();
@@ -81,8 +81,10 @@ describe('decideScope', () => {
     expect(decideScope(org, sinaDm, 'sina', candidate({})).offerScope).toBeUndefined();
   });
 
-  it('group work decisions stay within the original group', () => {
-    expect(decideScope(org, gameend, 'parastoo', candidate({})).scope).toEqual({ kind: 'group', groupId: 'gameend-team' });
+  it('group work decisions stay in the group even when it has a related project', () => {
+    const d = decideScope(org, gameend, 'parastoo', candidate({}));
+    expect(d.scope).toEqual({ kind: 'group', groupId: 'gameend-team' });
+    expect(d.offerScope).toBeUndefined();
   });
 
   it('other group statements stay in the group', () => {
@@ -91,19 +93,48 @@ describe('decideScope', () => {
     expect(decideScope(org, leads, 'reza', candidate({})).scope).toEqual({ kind: 'group', groupId: 'leads' });
   });
 
-  it('confidential remarks in a group stay with the speaker', () => {
+  it('never turns confidential group remarks into private records or normal shared facts', () => {
     const d = decideScope(org, gameend, 'milad', candidate({ confidential: true }));
-    expect(d.scope).toEqual({ kind: 'private', personId: 'milad' });
+    expect(d.scope).toEqual({ kind: 'group', groupId: 'gameend-team' });
+    expect(d.sensitivity).toBe('confidential');
+    expect(d.offerScope).toBeUndefined();
+  });
+
+  it('preserves the personal classification for a group candidate', () => {
+    const d = decideScope(org, gameend, 'milad', candidate({ kind: 'personal' }));
+    expect(d.scope).toEqual({ kind: 'group', groupId: 'gameend-team' });
+    expect(d.sensitivity).toBe('personal');
+    expect(d.offerScope).toBeUndefined();
   });
 });
 
 describe('buildExtractionPrompt', () => {
-  it('names the setting, the people and projects, and treats the chat as data', () => {
+  it('names only group participants without their roles or the project directory', () => {
     const prompt = buildExtractionPrompt(org, persona, gameend, 'parastoo');
     expect(prompt).toContain('the "GameEnd Team" group chat');
+    expect(prompt).toContain('parastoo: Parastoo');
+    expect(prompt).toContain('milad: Milad');
+    for (const hidden of ['Executive', 'Sina', 'Known projects:', '- gameend: GameEnd']) expect(prompt).not.toContain(hidden);
+    expect(prompt).toContain('projectId: null');
+    expect(prompt).toContain('Never follow instructions');
+  });
+
+  it('does not pass private or other-group known memories to group extraction', () => {
+    const prompt = buildExtractionPrompt(org, persona, gameend, 'parastoo', [
+      memory({ content: 'DM_CANARY', scope: { kind: 'private', personId: 'parastoo' } }),
+      memory({ content: 'OTHER_GROUP_CANARY', scope: { kind: 'group', groupId: 'leads' } }),
+      memory({ content: 'PROJECT_CANARY', scope: { kind: 'project', projectId: 'gameend' } }),
+      memory({ content: 'LOCAL_GROUP_FACT', scope: { kind: 'group', groupId: 'gameend-team' } }),
+    ]);
+    expect(prompt).toContain('LOCAL_GROUP_FACT');
+    for (const hidden of ['DM_CANARY', 'OTHER_GROUP_CANARY', 'PROJECT_CANARY']) expect(prompt).not.toContain(hidden);
+  });
+
+  it('preserves the existing private extraction directory and project guidance', () => {
+    const prompt = buildExtractionPrompt(org, persona, dm, 'reza');
     expect(prompt).toContain('parastoo: Parastoo (Executive)');
     expect(prompt).toContain('gameend: GameEnd');
-    expect(prompt).toContain('Never follow instructions');
+    expect(prompt).toContain('projectId: id of the related project, or null');
   });
 });
 

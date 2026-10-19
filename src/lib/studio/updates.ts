@@ -39,8 +39,8 @@ export async function handleManagerUpdate(studio: Studio, update: TelegramUpdate
 
 /**
  * Who an agent talks to:
- *  - groups it was added to: everyone in them (outsiders as guests, who only
- *    ever see that group's memories);
+ *  - groups it was added to: everyone in them; remembered group context is
+ *    available only when its captured audience still authorizes all readers;
  *  - direct messages: members who may use it (private: creator, allow-list,
  *    admins; org: every member); for public agents also anyone else, after the
  *    agent decides in character whether to answer, decline, ignore or block.
@@ -67,6 +67,7 @@ export async function handleAgentUpdate(studio: Studio, agentId: string, update:
   if (!msg.from || msg.from.is_bot || (live.blocked ?? []).includes(msg.from.id)) return;
 
   if (msg.chat.type === 'group' || msg.chat.type === 'supergroup') {
+    if (!state.groups.some((g) => g.chatId === msg.chat.id && g.agentIds.includes(agentId))) return;
     for (const user of msg.new_chat_members ?? []) await studio.noteGroupMembership(msg.chat.id, user, 'member');
     if (msg.left_chat_member) await studio.noteGroupMembership(msg.chat.id, msg.left_chat_member, 'left');
     await studio.verifyGroupAudience(agentId, msg.chat.id);

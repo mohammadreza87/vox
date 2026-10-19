@@ -28,15 +28,27 @@ describe('synthetic PersonaGateway session', () => {
       const canary = await session.execute({ op: 'seed_memory', ownerId: 'asha', content: 'Private family code: ashas-secret-code-8142.', topic: 'family-secret', sensitivity: 'personal' }) as { result: { memoryId: string } };
       await session.execute({ op: 'share', memoryId: tea.result.memoryId, ownerId: 'asha', recipientIds: ['marco'] });
 
-      const groupTurn = await session.execute({ op: 'turn', personId: 'marco', audience: { kind: 'group', groupId: 'book-club' }, text: 'What tea should we get for the meetup?' }) as { replies: string[] };
-      expect(groupTurn.replies).toHaveLength(1);
       const llm = session.llm as { requests: Array<{ system: string }> };
       const answerPrompt = () => llm.requests.findLast((request) => !request.system.startsWith('You extract long-term memories'))!.system;
+      // Explicit recipient sharing authorizes Marco's DM, not another conversation.
+      await session.execute({ op: 'turn', personId: 'marco', audience: { kind: 'private', personId: 'marco' }, text: 'What tea does Asha like?' });
       expect(answerPrompt()).toContain('Asha likes jasmine tea.');
+      expect(answerPrompt()).not.toContain('ashas-secret-code-8142');
+
+      const group = session.org.getGroup('book-club')!;
+      await session.stores.memories.add({ personaId: 'tireh', content: 'The book club meetup begins at six.',
+        type: 'fact', scope: { kind: 'group', groupId: group.id }, authorizedPersonIds: [...group.memberIds],
+        sensitivity: 'normal', source: { personId: 'asha', chatKind: 'group', groupId: group.id, at: now },
+        aboutPersonIds: [], topic: 'book-club-meetup', confidence: 1 });
+      const groupTurn = await session.execute({ op: 'turn', personId: 'marco', audience: { kind: 'group', groupId: 'book-club' }, text: 'What tea should we get for the meetup?' }) as { replies: string[] };
+      expect(groupTurn.replies).toHaveLength(1);
+      expect(answerPrompt()).toContain('The book club meetup begins at six.');
+      expect(answerPrompt()).not.toContain('Asha likes jasmine tea.');
       expect(answerPrompt()).not.toContain('ashas-secret-code-8142');
 
       await session.execute({ op: 'guest_join', groupId: 'book-club' });
       await session.execute({ op: 'turn', personId: 'marco', audience: { kind: 'group', groupId: 'book-club' }, text: 'What tea should we get?' });
+      expect(answerPrompt()).not.toContain('The book club meetup begins at six.');
       expect(answerPrompt()).not.toContain('Asha likes jasmine tea.');
       expect(answerPrompt()).not.toContain('ashas-secret-code-8142');
 
@@ -46,6 +58,10 @@ describe('synthetic PersonaGateway session', () => {
       expect(answerPrompt()).not.toContain('Asha likes jasmine tea.');
       expect(answerPrompt()).not.toContain('ashas-secret-code-8142');
       expect(await session.stores.memories.get(canary.result.memoryId)).not.toBeNull();
+      await session.execute({ op: 'turn', personId: 'marco', audience: { kind: 'group', groupId: 'book-club' }, text: 'When is the meetup?' });
+      expect(answerPrompt()).toContain('The book club meetup begins at six.');
+      expect(answerPrompt()).not.toContain('Asha likes jasmine tea.');
+      expect(answerPrompt()).not.toContain('ashas-secret-code-8142');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

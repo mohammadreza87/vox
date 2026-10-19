@@ -5,9 +5,9 @@
  */
 
 import type { AgentView } from '@/lib/studio/service';
-import type { AgentLook, AgentVisibility, Member, PersonaSpec, Role, SpawnBrief } from '@/lib/studio/types';
+import type { AgentLook, AgentVisibility, GroupBehavior, Member, PersonaSpec, Role, SpawnBrief } from '@/lib/studio/types';
 
-export type { AgentView, AgentLook, AgentVisibility, Member, PersonaSpec, Role, SpawnBrief };
+export type { AgentView, AgentLook, AgentVisibility, GroupBehavior, Member, PersonaSpec, Role, SpawnBrief };
 
 interface TelegramWebApp {
   initData: string;
@@ -162,6 +162,7 @@ export const api = {
   setAccess: (id: string, access: 'everyone' | number[]) => request<{ agent: AgentView }>('PUT', `agents/${enc(id)}/access`, { access }),
   setVisibility: (id: string, visibility: AgentVisibility) => request<{ agent: AgentView }>('PUT', `agents/${enc(id)}/visibility`, { visibility }),
   setLiveWeb: (id: string, on: boolean) => request<{ agent: AgentView }>('PUT', `agents/${enc(id)}/live-web`, { on }),
+  setGroupBehavior: (id: string, behavior: GroupBehavior) => request<{ agent: AgentView }>('PUT', `agents/${enc(id)}/group-behavior`, behavior),
   syncProfile: (id: string) => request<{ agent: AgentView; failed: string[] }>('POST', `agents/${enc(id)}/profile-sync`),
   unblock: (id: string, telegramId: number) => request<{ agent: AgentView }>('DELETE', `agents/${enc(id)}/blocked?telegramId=${telegramId}`),
   setAgentAdmin: (id: string, isAdmin: boolean) => request<{ agent: AgentView }>('PUT', `agents/${enc(id)}/admin`, { isAdmin }),

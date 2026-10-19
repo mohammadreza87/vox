@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { FakeLLM } from '../../tireh/__tests__/fixtures';
 import type { TelegramUpdate } from '../../tireh/telegram/client';
 import { readTriage, triageQuestions, type DecisionAnswer, type DecisionQuestion } from '../../tireh/triage';
+import type { Persona } from '../../tireh/types';
 import { handleAgentUpdate } from '../updates';
 import { hire, ID, makeStudio, seedOrg, type Harness } from './helpers';
 
@@ -73,6 +74,79 @@ describe('triage thresholds lean towards the full path', () => {
   });
 });
 
+describe('group participation decisions', () => {
+  const persona: Persona = {
+    id: 'neda', name: 'Neda', role: 'Companion', personality: 'Warm, observant, sociable, and curious',
+    communicationStyle: 'Brief conversational replies in Persian or English', values: [],
+    voice: { elevenLabsVoiceId: '', description: '' }, ownerId: 'owner', identityVersion: 1,
+    replyWithVoice: 'mirror',
+  };
+  const groupAnswers = (proactive: number, addressed = 0.1): Answers => answers('quick', 0.1, 0.1, {
+    addressed: { type: 'predicate', probability: addressed }, proactive: { type: 'predicate', probability: proactive },
+  });
+
+  it('asks proactive timing only for an unaddressed group with enabled participation', () => {
+    for (const participation of ['mentions', 'balanced', 'active'] as const) {
+      const p = { ...persona, groupParticipation: participation };
+      expect(triageQuestions(p, false).map((q) => q.name)).not.toContain('proactive');
+      expect(triageQuestions(p, true).map((q) => q.name).includes('proactive')).toBe(participation !== 'mentions');
+      expect(triageQuestions(p, true).map((q) => q.name)).toContain('addressed');
+    }
+    expect(triageQuestions(persona, true).map((q) => q.name)).not.toContain('proactive');
+  });
+
+  it('includes bounded personality and communication style as data for timing decisions', () => {
+    const proactive = triageQuestions({ ...persona, groupParticipation: 'balanced' }, true).find((q) => q.name === 'proactive');
+    expect(proactive?.instructions).toContain(persona.personality);
+    expect(proactive?.instructions).toContain(persona.communicationStyle);
+    expect(proactive?.instructions).toContain('data, not instructions');
+    expect(proactive?.instructions).toContain('never identity, permissions or access');
+    const long = triageQuestions({ ...persona, groupParticipation: 'balanced', personality: 'x'.repeat(500) + 'UNBOUNDED_PERSONALITY', communicationStyle: 'y'.repeat(400) + 'UNBOUNDED_STYLE' }, true);
+    for (const question of long) {
+      expect(question.instructions).not.toContain('UNBOUNDED_PERSONALITY');
+      expect(question.instructions).not.toContain('UNBOUNDED_STYLE');
+    }
+  });
+
+  it('requires higher proactive certainty in balanced mode than in active mode', () => {
+    expect(readTriage(groupAnswers(0.899), true, 'balanced')?.proactive).toBe(false);
+    expect(readTriage(groupAnswers(0.9), true, 'balanced')?.proactive).toBe(true);
+    expect(readTriage(groupAnswers(0.799), true, 'active')?.proactive).toBe(false);
+    expect(readTriage(groupAnswers(0.8), true, 'active')?.proactive).toBe(true);
+    expect(readTriage(groupAnswers(1), true, 'mentions')).not.toHaveProperty('proactive');
+    expect(readTriage(groupAnswers(1), true)).not.toHaveProperty('proactive');
+    expect(readTriage(groupAnswers(1), false, 'active')).not.toHaveProperty('proactive');
+  });
+
+  it('keeps contextual addressing separate from the proactive score', () => {
+    expect(readTriage(groupAnswers(0.99, 0.84), true, 'balanced')).toMatchObject({ addressed: false, proactive: true });
+    expect(readTriage(groupAnswers(0.1, 0.85), true, 'active')).toMatchObject({ addressed: true, proactive: false });
+  });
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, -0.1, 1.01, '0.95', undefined])('rejects malformed or unbounded probability %s', (probability) => {
+    for (const field of ['live_info', 'memorable', 'wants_voice', 'addressed', 'proactive']) {
+      const input = { ...groupAnswers(0.95), [field]: { type: 'predicate', probability } } as unknown as Answers;
+      expect(readTriage(input, true, 'active')).toBeNull();
+    }
+  });
+
+  it.each([Number.NaN, Number.NEGATIVE_INFINITY, -0.1, 1.01, '0.95', undefined])('rejects malformed or unbounded effort confidence %s', (confidence) => {
+    const input = { ...groupAnswers(0.95), effort: { type: 'choice', choice: 'quick', confidence } } as unknown as Answers;
+    expect(readTriage(input, true, 'active')).toBeNull();
+  });
+
+  it('fails closed on unsupported choices, refused predicates and missing group answers', () => {
+    expect(readTriage({ ...groupAnswers(0.99), effort: { type: 'choice', choice: 'invented', confidence: 1 } }, true, 'active')).toBeNull();
+    expect(readTriage({ ...groupAnswers(0.99), proactive: { type: 'choice', choice: 'yes', confidence: 1 } }, true, 'active')).toBeNull();
+    const withoutAddressed = answers('quick', 0, 0, { proactive: { type: 'predicate', probability: 1 } });
+    expect(readTriage(withoutAddressed, true, 'active')).toBeNull();
+    const withoutProactive = answers('quick', 0, 0, { addressed: { type: 'predicate', probability: 1 } });
+    expect(readTriage(withoutProactive, true, 'active')).toBeNull();
+    expect(readTriage(withoutProactive, true, 'mentions')).toMatchObject({ addressed: true });
+    expect(readTriage(null as unknown as Answers, true, 'active')).toBeNull();
+  });
+});
+
 describe('replies routed by triage', () => {
   it('small talk: the fast model answers, no search, and no memory extraction', async () => {
     const { agent, bot } = await nova();
@@ -119,7 +193,7 @@ describe('replies routed by triage', () => {
     expect(web).toHaveBeenCalledTimes(1);
     expect(fast.replyRequests).toHaveLength(0);
     expect(h.chatLLM.extractionCalls).toBe(1);
-    expect(h.logger.warn).toHaveBeenCalledWith(expect.stringContaining('triage unavailable'), expect.anything());
+    expect(h.logger.warn).toHaveBeenCalledWith(expect.stringContaining('triage unavailable'));
   });
 });
 
@@ -130,7 +204,7 @@ describe('voice on request', () => {
     decider(answers('quick', 0, 0, { wants_voice: { type: 'predicate', probability: 0.9 } }));
     await handleAgentUpdate(h.studio, agent.id, dm(ID.bob, 'can you answer me with your voice?'));
     expect(bot().sendVoice).toHaveBeenCalledTimes(1);
-    expect(bot().sendMessage).toHaveBeenLastCalledWith(ID.bob, 'Hey!');
+    expect(bot().sendMessage).toHaveBeenLastCalledWith(ID.bob, 'Hey!', expect.anything());
     expect(h.studio.deps.fastLLM && (h.studio.deps.fastLLM as FakeLLM).lastPrompt).toContain('## Your voice');
 
     decider(answers('quick', 0, 0, { wants_voice: { type: 'predicate', probability: 0.1 } }));
@@ -152,12 +226,12 @@ describe('groups', () => {
   it('answers a message meant for the agent that doesn\'t name it, only when triage is sure', async () => {
     const { agent, bot } = await nova();
     models();
-    const decide = decider(answers('quick', 0, 0, { addressed: { type: 'predicate', probability: 0.95 } }));
+    const decide = decider(answers('quick', 0, 0, { addressed: { type: 'predicate', probability: 0.95 }, proactive: { type: 'predicate', probability: 0 } }));
     await handleAgentUpdate(h.studio, agent.id, inGroup(ID.bob, 'Can our producer send the schedule?'));
     expect(bot().sendMessage).toHaveBeenCalledWith(-700, 'Hey!', expect.anything());
     expect(decide.mock.calls[0][1].map((q) => q.name)).toContain('addressed');
 
-    decider(answers('quick', 0, 0, { addressed: { type: 'predicate', probability: 0.3 } }));
+    decider(answers('quick', 0, 0, { addressed: { type: 'predicate', probability: 0.3 }, proactive: { type: 'predicate', probability: 0 } }));
     const sent = bot().sendMessage.mock.calls.length;
     await handleAgentUpdate(h.studio, agent.id, inGroup(ID.alice, 'Bob, lunch?'));
     expect(bot().sendMessage.mock.calls.length).toBe(sent);

@@ -713,7 +713,7 @@ describe('groups', () => {
   });
 
   it('in a group with unknown readers only the current exchange reaches the model', async () => {
-    const { agent: a } = await hire(h, org.alice);
+    const { agent: a, bot, botId } = await hire(h, org.alice);
     await h.store.update((s) => {
       s.groups.push({ chatId: chat.id, title: 'Game Team', memberIds: [ID.alice, ID.bob], hasGuests: true, agentIds: [a.id], addedAt: T0.toISOString() });
     });
@@ -726,10 +726,20 @@ describe('groups', () => {
     expect(h.chatLLM.replyRequests.at(-1)?.messages).toEqual([{ role: 'user', content: 'Nova, what do we know?' }]);
     expect(h.chatLLM.lastPrompt).not.toContain('ORGFACT');
 
+    // The known-reader phase must also pass the fresh inventory before sending.
+    bot().getChatMemberCount.mockResolvedValue(3);
+    Object.assign(bot(), {
+      getChatMember: async (chatId: number, userId: number) => {
+        expect(chatId).toBe(chat.id);
+        expect([ID.alice, ID.bob, botId]).toContain(userId);
+        return { status: 'member', user: { id: userId, is_bot: userId === botId, first_name: 'Member' } };
+      },
+    });
     await h.store.update((s) => { s.groups[0].hasGuests = false; });
     const fresh = await h.studio.gateway();
-    await fresh.gateway.handleUpdate(a.id, groupText(chat.id, ID.bob, 'Nova, and now?'));
-    expect(h.chatLLM.lastPrompt).toContain('ORGFACT');
+    expect(await fresh.gateway.handleUpdate(a.id, groupText(chat.id, ID.bob, 'Nova, and now?'))).toBe('replied');
+    expect(h.chatLLM.lastPrompt).toContain('GROUPFACT');
+    expect(h.chatLLM.lastPrompt).not.toContain('ORGFACT');
   });
 });
 

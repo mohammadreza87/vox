@@ -36,8 +36,11 @@ export function selectMemories(
   const audience = audienceOf(chat);
   const queryTokens = tokens(query);
 
+  // Membership does not move DM, project or other-group knowledge here.
+  const inConversation = (m: MemoryRecord) => chat.kind !== 'group' ||
+    (m.scope.kind === 'group' && m.scope.groupId === chat.group.id);
   const scored = memories
-    .filter((m) => isMemoryAllowedInChat(org, m, chat))
+    .filter((m) => inConversation(m) && isMemoryAllowedInChat(org, m, chat))
     .map((memory) => {
       const memoryTokens = tokens(`${memory.content} ${memory.topic ?? ''}`);
       let overlap = 0;

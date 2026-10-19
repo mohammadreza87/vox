@@ -22,6 +22,9 @@ import { buildSystemPrompt } from './conversation/prompt';
 import { selectMemories } from './memory/retrieval';
 import { decideScope, extractCandidates, resolveCandidateSource } from './memory/extraction';
 import { canPersonSee, describeScope, isVisibleToAudience, historyMessageForChat, selectHistoryForChat, snapshotScopeAudience } from './memory/visibility';
+import { groupAddressing } from './group-addressing';
+
+export type GroupAction = 'observe' | 'reply' | 'proactive' | 'remember';
 
 export interface GatewayDeps {
   org: OrgDirectory;
@@ -40,6 +43,10 @@ export interface GatewayDeps {
   voice: VoiceService | null;
   /** Telegram client for a persona's bot */
   botFor(personaId: string): TelegramBotClient;
+  /** Recheck live membership/settings before provider calls and side effects. */
+  groupAllowed?(personaId: string, chatId: number, telegramId: number, action: GroupAction): Promise<boolean>;
+  claimGroupReply?(personaId: string, chatId: number, messageId: number): Promise<boolean>;
+  claimGroupMemory?(personaId: string, chatId: number, messageId: number): Promise<boolean>;
   logger?: Pick<Console, 'info' | 'warn' | 'error'>;
   now?: () => Date;
 }
@@ -56,6 +63,7 @@ export type HandleResult =
 
 const HISTORY_LIMIT = 20;
 const EXTRACTION_WINDOW = 6;
+const NO_MEMORY = /(?:do not|don't|don’t)\s+(?:remember|save|store)|forget (?:this|that)|ذخیره نکن|به خاطر نسپار|یادت نماند|فراموش کن/iu;
 
 export class PersonaGateway {
   private readonly log: Pick<Console, 'info' | 'warn' | 'error'>;
@@ -188,6 +196,8 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
       return 'ignored';
     }
     if (!chat) return 'ignored';
+    if (chat.kind === 'group' && chat.group.agentIds && !chat.group.agentIds.includes(persona.id)) return 'ignored';
+    if (!(await this.groupAllowed(persona, chat, speaker.id, 'reply'))) return 'ignored';
 
     const rawText = message.text ?? message.caption ?? '';
     if (parseExplicitControl(rawText) === 'forget') {
@@ -199,15 +209,18 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
       if (handled) return 'command';
     }
 
-    const addressed = chat.kind === 'private' || this.isAddressed(persona, message);
+    const targeting = groupAddressing(persona, message);
+    const addressed = chat.kind === 'private' || targeting.direct;
+    if (!addressed && (persona.groupObservation === false || !(await this.groupAllowed(persona, chat, speaker.id, 'observe')))) return 'ignored';
 
     // Group voice notes are transcribed only when the persona is addressed,
     // to avoid paying for every voice message in the group.
     let text = rawText;
     const isVoice = Boolean(message.voice);
     if (isVoice && addressed) {
-      text = await this.transcribe(bot, message);
+      text = await this.transcribe(bot, message, persona, chat, speaker.id);
       if (!text) {
+        if (!(await this.groupAllowed(persona, chat, speaker.id, 'reply'))) return 'ignored';
         const sorry = this.deps.voice
           ? "Sorry, I couldn't make out that voice message."
           : "I can't listen to voice messages yet. Could you type it?";
@@ -228,43 +241,77 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
       ? new Date(message.date * 1000) : receivedAt;
     const privacyEpoch = await this.deps.history.getEpoch(persona.id);
     const userMessage: ChatMessage = {
-      role: 'user',
-      personId: speaker.id,
-      text,
-      at: sourceAt,
-      telegramMessageId: message.message_id,
+      role: 'user', personId: speaker.id, text, at: sourceAt, telegramMessageId: message.message_id,
+      ...(chat.kind === 'group' ? { groupPolicyVersion: 1 as const } : {}),
     };
+    if (!(await this.groupAllowed(persona, chat, speaker.id, addressed ? 'reply' : 'observe'))) return 'ignored';
     await this.append(persona.id, chat, userMessage, privacyEpoch);
     await this.observeRelationship(persona.id, chat, speaker.id, text, `telegram:${message.chat.id}:${message.message_id}`, 'telegram', sourceAt);
 
-    // Groups: a text message meant for the persona that doesn't name it can
-    // still get an answer when triage is sure (voice notes stay name-only).
-    const askAddressed = !addressed && chat.kind === 'group' && !isVoice;
-    if (!addressed && !askAddressed) return 'ignored';
-    const triage = this.triage(persona, chat, askAddressed);
-    if (!addressed && !(await triage)?.addressed) return 'ignored';
-
-    await bot.sendChatAction(message.chat.id, isVoice ? 'record_voice' : 'typing').catch(() => undefined);
-
-    const { text: reply, sources } = await this.composeReply(persona, chat, speaker.id, text, triage);
+    const askAddressed = !addressed && chat.kind === 'group' && !isVoice && !targeting.otherTarget
+      && persona.groupParticipation !== 'mentions';
+    const triage = this.triage(persona, chat, askAddressed, userMessage, addressed ? 'reply' : 'observe');
     const settled = await triage;
-    // Voice in → voice out; a typed "send me a voice" counts too.
-    const voiceWanted = isVoice || (settled ? settled.wantsVoice : VOICE_REQUEST.test(text));
-    if (await this.deps.history.getEpoch(persona.id) !== privacyEpoch) return 'ignored';
-    await this.sendReply(persona, chat, message, reply, voiceWanted, sources, privacyEpoch);
-
-    const assistantMessage: ChatMessage = { role: 'assistant', text: reply, at: this.now() };
-    await this.append(persona.id, chat, assistantMessage, privacyEpoch);
-
-    // Nothing worth remembering: skip the extraction call.
-    if (settled?.memorable === false) return 'replied';
-    // Memory formation must never break the conversation.
-    try {
-      await this.formMemories(persona, chat, speaker.id);
-    } catch (error) {
-      this.log.error(`[tireh] ${persona.id}: memory extraction failed`, error);
+    let shouldReply = addressed;
+    if (askAddressed && (settled?.addressed || settled?.proactive)
+      && await this.groupAllowed(persona, chat, speaker.id, 'proactive')) {
+      // Unsolicited replies require a shared throttle; standalone runtimes without
+      // one can still answer direct messages but cannot interrupt the group.
+      shouldReply = await this.deps.claimGroupReply?.(persona.id, message.chat.id, message.message_id) ?? false;
     }
-    return 'replied';
+    if (shouldReply && await this.groupAllowed(persona, chat, speaker.id, addressed ? 'reply' : 'proactive')) {
+      await bot.sendChatAction(message.chat.id, isVoice ? 'record_voice' : 'typing').catch(() => undefined);
+      let generated: { text: string; sources: WebSource[] };
+      try {
+        generated = await this.composeReply(persona, chat, speaker.id, text, triage, message.message_id, addressed ? 'reply' : 'proactive');
+      } catch {
+        this.log.error(`[tireh] ${persona.id}: reply generation failed`);
+        return 'ignored';
+      }
+      const { text: reply, sources } = generated;
+      if (!reply) return 'ignored';
+      if (!(await this.groupAllowed(persona, chat, speaker.id, addressed ? 'reply' : 'proactive'))) return 'ignored';
+      const voiceWanted = isVoice || (settled ? settled.wantsVoice : VOICE_REQUEST.test(text));
+      if (await this.deps.history.getEpoch(persona.id) !== privacyEpoch) return 'ignored';
+      if (!(await this.sendReply(persona, chat, message, reply, voiceWanted, sources, addressed ? 'reply' : 'proactive', privacyEpoch))) return 'ignored';
+      await this.append(persona.id, chat, {
+        role: 'assistant', text: reply, at: this.now(),
+        ...(chat.kind === 'group' ? { groupPolicyVersion: 1 as const, telegramMessageId: message.message_id } : {}),
+      }, privacyEpoch);
+    } else {
+      shouldReply = false;
+    }
+
+    // A useful group fact can be remembered without interrupting. A failed
+    // classifier never causes passive extraction, and opt-outs are not saved.
+    const remember = chat.kind === 'group'
+      ? persona.groupRemember !== false && !NO_MEMORY.test(text) && (settled?.memorable === true || (addressed && settled === null))
+      : settled?.memorable !== false;
+    if (remember) {
+      try {
+        if (chat.kind !== 'group' || (await this.groupAllowed(persona, chat, speaker.id, 'remember')
+          && (addressed || await this.groupAllowed(persona, chat, speaker.id, 'observe'))
+          && (this.deps.claimGroupMemory ? await this.deps.claimGroupMemory(persona.id, message.chat.id, message.message_id) : addressed))) {
+          await this.formMemories(persona, chat, speaker.id, message.message_id, chat.kind === 'group' ? userMessage : undefined, !addressed, privacyEpoch);
+        }
+      } catch {
+        this.log.error(`[tireh] ${persona.id}: memory extraction failed`);
+      }
+    }
+    return shouldReply ? 'replied' : 'ignored';
+  }
+
+  private async groupAllowed(persona: Persona, chat: ChatContext, speakerId: string, action: GroupAction): Promise<boolean> {
+    if (chat.kind !== 'group') return true;
+    if (chat.group.agentIds && !chat.group.agentIds.includes(persona.id)) return false;
+    const telegramId = this.deps.org.getPerson(speakerId)?.telegramUserId;
+    return this.deps.groupAllowed ? !!telegramId && this.deps.groupAllowed(persona.id, chat.group.telegramChatId, telegramId, action) : true;
+  }
+
+  private async recentHistory(persona: Persona, chat: ChatContext, limit: number, messageId?: number): Promise<ChatMessage[]> {
+    const recent = await this.recent(persona.id, chat, limit);
+    return chat.kind === 'private' ? recent : recent.filter((m) => m.groupPolicyVersion === 1
+      && (messageId === undefined || (m.telegramMessageId !== undefined && m.telegramMessageId <= messageId)));
   }
 
   /**
@@ -285,8 +332,8 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     await this.append(persona.id, chat, { role: 'assistant', text: reply, at: this.now() }, privacyEpoch);
     try {
       await this.formMemories(persona, chat, speakerId);
-    } catch (error) {
-      this.log.error(`[tireh] ${persona.id}: memory extraction failed`, error);
+    } catch {
+      this.log.error(`[tireh] ${persona.id}: memory extraction failed`);
     }
     return reply;
   }
@@ -338,8 +385,8 @@ You are on a live voice call. Answer in one to three short spoken sentences, lik
     if (!persona || !this.deps.org.getPerson(speakerId)) return;
     try {
       await this.formMemories(persona, { kind: 'private', chatKey: `private-${speakerId}`, personId: speakerId }, speakerId);
-    } catch (error) {
-      this.log.error(`[tireh] ${persona.id}: memory extraction failed`, error);
+    } catch {
+      this.log.error(`[tireh] ${persona.id}: memory extraction failed`);
     }
   }
 
@@ -360,23 +407,17 @@ You are on a live voice call. Answer in one to three short spoken sentences, lik
   }
 
   private isAddressed(persona: Persona, message: TelegramMessage): boolean {
-    if (message.reply_to_message?.from?.is_bot) {
-      const username = message.reply_to_message.from.username;
-      if (!persona.telegramUsername || username === persona.telegramUsername) return true;
-    }
-    const text = (message.text ?? message.caption ?? '').toLowerCase();
-    if (persona.telegramUsername && text.includes(`@${persona.telegramUsername.toLowerCase()}`)) return true;
-    const name = persona.name.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    return new RegExp(`(^|[^\\p{L}])${name}([^\\p{L}]|$)`, 'u').test(text);
+    return groupAddressing(persona, message).direct;
   }
 
-  private async transcribe(bot: TelegramBotClient, message: TelegramMessage): Promise<string> {
+  private async transcribe(bot: TelegramBotClient, message: TelegramMessage, persona: Persona, chat: ChatContext, speakerId: string): Promise<string> {
     if (!this.deps.voice || !message.voice) return '';
     try {
       const audio = await bot.downloadFile(message.voice.file_id);
+      if (!(await this.groupAllowed(persona, chat, speakerId, 'reply'))) return '';
       return await this.deps.voice.transcribe(audio, message.voice.mime_type ?? 'audio/ogg');
-    } catch (error) {
-      this.log.error('[tireh] transcription failed', error);
+    } catch {
+      this.log.error('[tireh] transcription failed');
       return '';
     }
   }
@@ -399,22 +440,24 @@ You are on a live voice call. Answer in one to three short spoken sentences, lik
    * Triage of the latest message (already in history); null when there is no
    * decider, or it fails or is slow. Never throws.
    */
-  private async triage(persona: Persona, chat: ChatContext, askAddressed: boolean): Promise<Triage | null> {
+  private async triage(persona: Persona, chat: ChatContext, askAddressed: boolean, source: ChatMessage, action: GroupAction): Promise<Triage | null> {
     const { decider, org } = this.deps;
     if (!decider) return null;
     try {
-      const recent = await this.recent(persona.id, chat, 6);
+      const prior = await this.recentHistory(persona, chat, 6, source.telegramMessageId);
+      const recent = chat.kind === 'group' ? [...prior.filter((m) => m.telegramMessageId! < source.telegramMessageId!), source].slice(-6) : prior;
       const lines = recent.map((m) => ({ who: m.role === 'assistant' ? persona.name : org.getPerson(m.personId ?? '')?.name ?? 'Someone', text: m.text }));
+      if (!(await this.groupAllowed(persona, chat, source.personId!, action))) return null;
       const answers = await decider.decide(triageInput(persona, lines), triageQuestions(persona, askAddressed), TRIAGE_TIMEOUT_MS);
-      return readTriage(answers, askAddressed);
-    } catch (error) {
-      this.log.warn(`[tireh] ${persona.id}: triage unavailable, taking the full path`, error);
+      return readTriage(answers, askAddressed, persona.groupParticipation ?? 'mentions');
+    } catch {
+      this.log.warn(`[tireh] ${persona.id}: triage unavailable`);
       return null;
     }
   }
 
   /** The reply plus the web pages it cites, when the persona searched. */
-  private async composeReply(persona: Persona, chat: ChatContext, speakerId: string, text: string, triaged?: Promise<Triage | null>): Promise<{ text: string; sources: WebSource[] }> {
+  private async composeReply(persona: Persona, chat: ChatContext, speakerId: string, text: string, triaged?: Promise<Triage | null>, messageId?: number, action: GroupAction = 'reply'): Promise<{ text: string; sources: WebSource[] }> {
     const { org } = this.deps;
     const [all, triage] = await Promise.all([this.deps.memories.listActive(persona.id), triaged ?? null]);
     // Search only when triage says the answer needs live facts (or there is no triage).
@@ -422,9 +465,13 @@ You are on a live voice call. Answer in one to three short spoken sentences, lik
     // Small talk goes to the fast model; anything needing care, or a search, to the main one.
     const quick = triage?.effort === 'quick' && !search && !!this.deps.fastLlm;
     const memories = selectMemories(org, all, chat, { query: text, now: this.now() });
-    const system = `${buildSystemPrompt({ org, persona: { ...persona, webSearch: search }, chat, speakerId, memories, canFollowUp: await this.canFollowUp(persona.id, chat), now: this.now(), canSpeak: !!this.deps.voice && persona.replyWithVoice !== 'never' })}\n${await this.relationshipContext(persona.id, chat)}`;
-
-    const recent = await this.recent(persona.id, chat, HISTORY_LIMIT);
+    const system = `${buildSystemPrompt({ org, persona: { ...persona, webSearch: search }, chat, speakerId, memories, canFollowUp: await this.canFollowUp(persona.id, chat), now: this.now(), canSpeak: !!this.deps.voice && persona.replyWithVoice !== 'never' })}\n${await this.relationshipContext(persona.id, chat)}`
+      + (action === 'proactive' ? '\n\nYou are joining a group conversation selectively. Make one brief, natural contribution in character. Do not repeat recent replies or demand attention; one to three sentences is enough.' : '');
+    const prior = await this.recentHistory(persona, chat, HISTORY_LIMIT, messageId);
+    // Anchor generation to this event, even when concurrent later updates exist.
+    const recent = chat.kind === 'group' && !chat.group.hasGuests && messageId !== undefined
+      ? [...prior.filter((m) => m.telegramMessageId! < messageId), { role: 'user' as const, personId: speakerId, text, at: this.now() }].slice(-HISTORY_LIMIT)
+      : prior;
     const messages = recent.map((m) => ({
       role: m.role,
       content:
@@ -439,6 +486,7 @@ You are on a live voice call. Answer in one to three short spoken sentences, lik
     const llm = quick ? this.deps.fastLlm! : this.deps.llm;
     // Strangers get fewer searches: each one costs money.
     const maxSearches = org.getPerson(speakerId)?.guest ? 1 : 3;
+    if (!(await this.groupAllowed(persona, chat, speakerId, action))) return { text: '', sources: [] };
     const { text: reply, sources } = search && llm.completeWithWeb
       ? await llm.completeWithWeb({ ...request, maxSearches })
       : { text: await llm.complete(request), sources: [] };
@@ -452,56 +500,69 @@ You are on a live voice call. Answer in one to three short spoken sentences, lik
     reply: string,
     voiceWanted: boolean,
     sources: WebSource[] = [],
+    action: GroupAction = 'reply',
     privacyEpoch?: number
-  ): Promise<void> {
+  ): Promise<boolean> {
     const bot = this.deps.botFor(persona.id);
     const canSend = async () => {
       await this.deps.beforeSend?.(persona.id, chat);
-      return privacyEpoch === undefined || await this.deps.history.getEpoch(persona.id) === privacyEpoch;
+      if (privacyEpoch !== undefined && await this.deps.history.getEpoch(persona.id) !== privacyEpoch) return false;
+      const speaker = this.deps.org.getPersonByTelegramId(message.from!.id);
+      return !!speaker && await this.groupAllowed(persona, chat, speaker.id, action);
     };
     const replyTo = chat.kind === 'group' ? message.message_id : undefined;
     const speak =
       this.deps.voice &&
       (persona.replyWithVoice === 'always' || (persona.replyWithVoice === 'mirror' && voiceWanted));
 
+    if (!await canSend()) return false;
     if (speak) {
       try {
         const { audio, mimeType, filename } = await this.deps.voice!.synthesize(reply, persona.voice.elevenLabsVoiceId);
-        if (!await canSend()) return;
+        if (!await canSend()) return false;
         await bot.sendVoice(message.chat.id, audio, { mimeType, filename, replyTo });
-        // The transcript goes as its own message: captions are capped at 1024 chars.
-        if (!await canSend()) return;
-        await bot.sendMessage(message.chat.id, withSources(reply, sources));
-        return;
-      } catch (error) {
-        this.log.error(`[tireh] ${persona.id}: voice reply failed, sending text`, error);
+        // Captions are capped at 1024 chars, so send the transcript separately.
+        if (!await canSend()) return false;
+        await bot.sendMessage(message.chat.id, withSources(reply, sources), { replyTo });
+        return true;
+      } catch {
+        this.log.error(`[tireh] ${persona.id}: voice reply failed, sending text`);
       }
     }
-    if (!await canSend()) return;
+    if (!await canSend()) return false;
     await bot.sendMessage(message.chat.id, withSources(reply, sources), { replyTo });
+    return true;
   }
 
   // ============================================
   // MEMORY FORMATION
   // ============================================
 
-  private async formMemories(persona: Persona, chat: ChatContext, speakerId: string) {
+  private async formMemories(persona: Persona, chat: ChatContext, speakerId: string, messageId?: number, sourceMessage?: ChatMessage, passive = false, expectedEpoch?: number) {
     const { org, llm, memories } = this.deps;
-    const privacyEpoch = await this.deps.history.getEpoch(persona.id);
-    const transcript = await this.recent(persona.id, chat, EXTRACTION_WINDOW);
+    if (chat.kind === 'group' && !sourceMessage) return;
+    const privacyEpoch = expectedEpoch ?? await this.deps.history.getEpoch(persona.id);
+    if (await this.deps.history.getEpoch(persona.id) !== privacyEpoch) return;
+    const transcript = sourceMessage ? [sourceMessage] : await this.recent(persona.id, chat, EXTRACTION_WINDOW);
     if (!transcript.some((m) => m.role === 'user')) return;
-    const existing = await memories.listActive(persona.id);
+    let existing = await memories.listActive(persona.id);
     // Only memories this audience may see are shown to the extractor.
     const known = selectMemories(org, existing, chat, {
       query: transcript.map((m) => m.text).join(' '),
       limit: 30,
       now: this.now(),
     });
+    if (!(await this.groupAllowed(persona, chat, speakerId, 'remember')) || (passive && !(await this.groupAllowed(persona, chat, speakerId, 'observe')))) return;
     const candidates = await extractCandidates(llm, org, persona, chat, speakerId, transcript, known);
     if (candidates.length === 0) return;
 
-    const at = this.now();
+    const at = sourceMessage?.at ?? this.now();
     for (const candidate of candidates) {
+      if (chat.kind === 'group') existing = await memories.listActive(persona.id);
+      if (chat.kind === 'group' && (candidate.kind === 'personal' || candidate.confidential
+        || candidate.about.some((id) => !chat.group.memberIds.includes(id))
+        || (candidate.saidBy && candidate.saidBy !== speakerId))) continue;
+      if (!(await this.groupAllowed(persona, chat, speakerId, 'remember')) || (passive && !(await this.groupAllowed(persona, chat, speakerId, 'observe')))) return;
       const source = resolveCandidateSource(candidate, transcript);
       if (!source?.personId) continue;
       const sourceId = source.personId;
@@ -515,9 +576,11 @@ You are on a live voice call. Answer in one to three short spoken sentences, lik
         ? existing.find(
             (m) =>
               m.topic === topic &&
-              m.source.personId === sourceId
+              m.source.personId === sourceId &&
+              (chat.kind !== 'group' || JSON.stringify(m.scope) === JSON.stringify(decision.scope))
           )
         : undefined;
+      if (chat.kind === 'group' && messageId !== undefined && (replaced?.source.telegramMessageId ?? 0) > messageId) continue;
       if (replaced && replaced.content.trim().toLowerCase() === candidate.content.trim().toLowerCase()) continue;
       const duplicate = existing.some(
         (m) =>
@@ -660,7 +723,9 @@ You are on a live voice call. Answer in one to three short spoken sentences, lik
   ): Promise<boolean> {
     const bot = this.deps.botFor(persona.id);
     const [rawCommand, ...args] = text.trim().split(/\s+/);
-    const command = rawCommand.split('@')[0].toLowerCase();
+    const [commandName, target] = rawCommand.split('@');
+    if (target && target.toLowerCase() !== persona.telegramUsername?.toLowerCase()) return false;
+    const command = commandName.toLowerCase();
     const { org } = this.deps;
 
     switch (command) {
@@ -672,7 +737,7 @@ You are on a live voice call. Answer in one to three short spoken sentences, lik
         return true;
 
       case '/whoami':
-        await bot.sendMessage(message.chat.id, org.describePerson(speakerId));
+        await bot.sendMessage(message.chat.id, chat.kind === 'group' ? `${org.getPerson(speakerId)?.name} — Telegram ID: ${message.from!.id}` : org.describePerson(speakerId));
         return true;
 
       case '/memories': {

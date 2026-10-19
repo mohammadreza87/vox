@@ -5,7 +5,8 @@ import { createLLMFromEnv, normalizeTurns, AnthropicLLM, GeminiLLM } from '../ll
 import { isValidWebhookSecret } from '../telegram/webhook-auth';
 import { botTokenEnvName, getBotToken } from '../runtime';
 import { findConflicts, selectMemories } from '../memory/retrieval';
-import { memory, testOrg } from './fixtures';
+import { memory, testOrg, testOrgConfig } from './fixtures';
+import { OrgDirectory } from '../org/directory';
 import type { ChatContext } from '../types';
 
 vi.mock('@/lib/firebase-admin', () => ({ getAdminDb: vi.fn() }));
@@ -304,6 +305,36 @@ describe('retrieval', () => {
       memory({ id: 'secret', content: 'Tutorial secret', scope: { kind: 'private', personId: 'reza' } }),
     ];
     expect(selectMemories(org, memories, dm, { query: 'tutorial', now })).toEqual([]);
+  });
+
+  it.each([false, true])('keeps DM and wider-scope memory out of a single-human group (hasGuests=%s)', (hasGuests) => {
+    const config = testOrgConfig();
+    const room = { id: 'solo', name: 'Solo', telegramChatId: -7001, memberIds: ['reza'], hasGuests };
+    config.groups.push(room);
+    const directory = new OrgDirectory(config);
+    const chat: ChatContext = { kind: 'group', chatKey: 'group-solo', group: room };
+    const records = [
+      memory({ id: 'private', content: 'PRIVATE_CANARY', scope: { kind: 'private', personId: 'reza' } }),
+      memory({ id: 'personal', content: 'PERSONAL_CANARY', scope: { kind: 'private', personId: 'reza' }, sensitivity: 'personal' }),
+      memory({ id: 'project', content: 'PROJECT_CANARY', scope: { kind: 'project', projectId: 'gameend' } }),
+      memory({ id: 'company', content: 'COMPANY_CANARY', scope: { kind: 'company', companyId: 'ludaxis' } }),
+      memory({ id: 'org', content: 'ORG_CANARY', scope: { kind: 'org' } }),
+      memory({ id: 'local', content: 'LOCAL_GROUP_FACT', scope: { kind: 'group', groupId: room.id }, authorizedPersonIds: [...room.memberIds] }),
+    ];
+    expect(selectMemories(directory, records, chat, { query: 'CANARY', now }).map((m) => m.id)).toEqual(hasGuests ? [] : ['local']);
+  });
+
+  it('does not infer cross-group sharing from identical members', () => {
+    const config = testOrgConfig();
+    const mirror = { id: 'other-leads', name: 'Other leads', telegramChatId: -7002, memberIds: ['reza', 'parastoo'], hasGuests: false };
+    config.groups.push(mirror);
+    const directory = new OrgDirectory(config);
+    const records = [
+      memory({ id: 'other', content: 'OTHER_GROUP_CANARY', scope: { kind: 'group', groupId: 'leads' } }),
+      memory({ id: 'local', content: 'LOCAL_GROUP_FACT', scope: { kind: 'group', groupId: mirror.id }, authorizedPersonIds: [...mirror.memberIds] }),
+    ];
+    const chat: ChatContext = { kind: 'group', chatKey: 'group-other-leads', group: mirror };
+    expect(selectMemories(directory, records, chat, { query: 'CANARY', now }).map((m) => m.id)).toEqual(['local']);
   });
 
   it('finds conflicts only when the same topic has different content', () => {

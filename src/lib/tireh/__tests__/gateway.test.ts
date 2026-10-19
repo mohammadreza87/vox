@@ -149,7 +149,7 @@ describe('sharing private work memories', () => {
     expect(llm.lastPrompt).not.toContain('March 5');
   });
 
-  it('after Reza approves, Parastoo and the GameEnd group see it with provenance', async () => {
+  it('after Reza approves, project members can retrieve it privately without importing it into groups', async () => {
     const { gateway, llm, shareData, bot } = await rezaTellsLaunchDate();
     await gateway.handleUpdate('aria', callback(TG.reza, shareData));
     expect(bot.sent.some((s) => s.method === 'answerCallbackQuery' && s.text === 'Shared with GameEnd project.')).toBe(true);
@@ -158,7 +158,7 @@ describe('sharing private work memories', () => {
     expect(llm.lastPrompt).toContain('GameEnd launch moves to March 5 (Reza, privately, 2026-10-19; shared with: GameEnd project)');
 
     await gateway.handleUpdate('aria', groupText(GAMEEND_CHAT, TG.milad, '@hoor_aria_bot launch date?'));
-    expect(llm.lastPrompt).toContain('GameEnd launch moves to March 5');
+    expect(llm.lastPrompt).not.toContain('GameEnd launch moves to March 5');
   });
 
   it('only the person who said it can approve sharing', async () => {
@@ -189,6 +189,15 @@ describe('sharing private work memories', () => {
 });
 
 describe('shared group memory', () => {
+  it('does not persist personal or confidential group remarks into either group or private memory', async () => {
+    const { gateway, llm, memories } = makeGateway();
+    for (const details of [{ kind: 'personal', confidential: false }, { kind: 'work', confidential: true }]) {
+      llm.nextExtraction = extraction({ content: 'Milad has a private appointment on Friday', type: 'event', ...details, saidBy: 'milad' });
+      await gateway.handleUpdate('aria', groupText(GAMEEND_CHAT, TG.milad, 'Aria, I have a private appointment on Friday'));
+    }
+    expect([...memories.records.values()]).toEqual([]);
+  });
+
   it('decisions stay with the original group and its captured members', async () => {
     const { gateway, llm, memories } = makeGateway();
     llm.nextExtraction = extraction({
@@ -443,13 +452,13 @@ describe('memory formation quality', () => {
     expect(memories.records.size).toBe(1);
   });
 
-  it('credits the person who actually said it in a group', async () => {
+  it('does not re-extract another speaker from earlier quiet group messages', async () => {
     const { gateway, llm, memories } = makeGateway();
     await gateway.handleUpdate('aria', groupText(GAMEEND_CHAT, TG.milad, 'Build 42 crashes on Android 12'));
     llm.nextExtraction = extraction({ content: 'Build 42 crashes on Android 12', type: 'fact', kind: 'work', saidBy: 'milad' });
     await gateway.handleUpdate('aria', groupText(GAMEEND_CHAT, TG.parastoo, 'Aria, note what Milad found'));
-    const [stored] = [...memories.records.values()];
-    expect(stored.source.personId).toBe('milad');
+    expect(memories.records.size).toBe(0);
+    expect(llm.extractionRequests.at(-1)?.messages[0].content).not.toContain('Build 42 crashes');
   });
 
   it('ignores a claimed speaker who did not speak in the new messages', async () => {
@@ -486,7 +495,7 @@ describe('memory formation quality', () => {
 
 
 describe('privacy mutation fences', () => {
-  it('does not send or retain an answer generated before an authorized history reset', async () => {
+  it.each(['private', 'group'])('does not send or retain a %s answer generated before an authorized history reset', async (kind) => {
     const { gateway, llm, history, bot } = makeGateway();
     let started!: () => void;
     const atModel = new Promise<void>((resolve) => { started = resolve; });
@@ -497,7 +506,7 @@ describe('privacy mutation fences', () => {
       if (request.system.startsWith('You extract')) return original(request);
       started(); return generated;
     };
-    const running = gateway.handleUpdate('aria', privateText(TG.reza, 'Can you remind me?'));
+    const running = gateway.handleUpdate('aria', kind === 'group' ? groupText(GAMEEND_CHAT, TG.reza, 'Aria, can you remind me?') : privateText(TG.reza, 'Can you remind me?'));
     await atModel;
     await history.clearPersona('aria');
     finish('REVOKED_OUTPUT_CANARY');
@@ -506,7 +515,7 @@ describe('privacy mutation fences', () => {
     expect(await history.recent('aria', 'private-reza', 10)).toEqual([]);
   });
 
-  it('does not retain extraction that finishes after authorized forgetting', async () => {
+  it.each(['private', 'group'])('does not retain %s extraction that finishes after authorized forgetting', async (kind) => {
     const { gateway, llm, history, memories } = makeGateway();
     let started!: () => void;
     const atExtractor = new Promise<void>((resolve) => { started = resolve; });
@@ -517,10 +526,10 @@ describe('privacy mutation fences', () => {
       if (!request.system.startsWith('You extract')) return original(request);
       started(); return extracted;
     };
-    const running = gateway.handleUpdate('aria', privateText(TG.reza, 'Remember my appointment on Friday'));
+    const running = gateway.handleUpdate('aria', kind === 'group' ? groupText(GAMEEND_CHAT, TG.reza, 'Aria, remember my appointment on Friday') : privateText(TG.reza, 'Remember my appointment on Friday'));
     await atExtractor;
     await history.clearPersona('aria');
-    finish(JSON.stringify(extraction({ content: 'Reza has an appointment Friday', type: 'event', kind: 'personal' })));
+    finish(JSON.stringify(extraction({ content: 'Reza has an appointment Friday', type: 'event', kind: 'work' })));
     await running;
     expect(await memories.listActive('aria')).toEqual([]);
   });

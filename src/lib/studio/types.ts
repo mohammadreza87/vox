@@ -10,6 +10,11 @@
 
 export type Role = 'owner' | 'superadmin' | 'admin' | 'member' | 'pending';
 
+export interface GroupBehavior {
+  participation: 'mentions' | 'balanced' | 'active';
+  remember: boolean;
+}
+
 export interface Member {
   telegramId: number;
   name: string;
@@ -131,6 +136,7 @@ export interface Agent {
   identityVersion: number;
   /** Searches the web for live information when it helps (missing = on) */
   liveWeb?: boolean;
+  groupBehavior?: GroupBehavior;
   successorOf?: string;
   firedAt?: string;
   firedBy?: number;
@@ -158,6 +164,12 @@ export interface StudioGroup {
   agentIds: string[];
   addedBy?: number;
   addedAt: string;
+  /** Content-free throttle shared by all agents in this group. */
+  proactive?: { lastAt: string; messageId: number; windowAt: string; count: number };
+  /** Retired ID floor per agent; legacy max-watermarks stay permanently denied. */
+  memoryWatermarks?: Record<string, number>;
+  /** Claimed IDs above the floor, bounded to the most recent 256-message-ID range. */
+  memoryClaims?: Record<string, number[]>;
 }
 
 export interface AuditEntry {
