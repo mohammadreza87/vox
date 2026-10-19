@@ -86,6 +86,26 @@ it('does not report or refresh a late mutation after unmount', async () => {
   fireEvent.click(within(row).getByRole('button', { name: 'Save preference' })); view.unmount();
   await act(async () => complete(snapshot)); expect(p.onSnapshot).not.toHaveBeenCalled(); expect(mocks.preferenceState).toHaveBeenCalledTimes(1);
 });
+it('lets a newly loaded scope save while an old command hangs, without the old completion unlocking the new command', async () => {
+  let finishWork!: (value: ExperienceSnapshot) => void, finishPersonal!: (value: ExperienceSnapshot) => void;
+  mocks.preference.mockReturnValueOnce(new Promise(resolve => { finishWork = resolve; }))
+    .mockReturnValueOnce(new Promise(resolve => { finishPersonal = resolve; }));
+  const p = props(), view = render(<PreferencePanel {...p} />);
+  fireEvent.click(within(await screen.findByRole('article', { name: 'Reply length preference' })).getByRole('button', { name: 'Save preference' }));
+  mocks.preferenceState.mockResolvedValue({ ...state(), space: 'personal', agentId: 'agent2', revision: 12 });
+  view.rerender(<PreferencePanel {...p} agentId="agent2" space="personal" revisionHint={12} />);
+  await act(async () => {});
+  const save = within(await screen.findByRole('article', { name: 'Reply length preference' })).getByRole('button', { name: 'Save preference' });
+  expect(save).toBeEnabled(); fireEvent.click(save);
+  expect(mocks.preference).toHaveBeenCalledTimes(2);
+  expect(mocks.preference.mock.calls[1][0]).toMatchObject({ space: 'personal', agentId: 'agent2', expectedRevision: 12 });
+  await act(async () => finishWork(snapshot));
+  expect(save).toBeDisabled(); expect(p.onSnapshot).not.toHaveBeenCalled();
+  fireEvent.click(save); expect(mocks.preference).toHaveBeenCalledTimes(2);
+  await act(async () => finishPersonal({ ...snapshot, revision: 13 }));
+  expect(p.onSnapshot).toHaveBeenCalledExactlyOnceWith({ ...snapshot, revision: 13 });
+  expect(screen.getByLabelText('Reply length')).toBeEnabled();
+});
 it('does not abandon a pending command when the parent catches up to its already-loaded revision', async () => {
   mocks.preferenceState.mockResolvedValueOnce({ ...state(), revision: 11 }).mockResolvedValue({ ...state(), revision: 12 });
   let complete!: (value: ExperienceSnapshot) => void;

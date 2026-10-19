@@ -55,9 +55,9 @@ export function PreferencePanel({ agentId, space, confirmed, revisionHint, local
   const fa = locale === 'fa';
   const [state, setState] = useState<PreferenceState | null>(null);
   const [limited, setLimited] = useState(false);
-  const stateRef = useRef<PreferenceState | null>(null), generation = useRef(0), busyRef = useRef(false);
+  const stateRef = useRef<PreferenceState | null>(null), generation = useRef(0), busyRef = useRef<number | null>(null);
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [status, setStatus] = useState('');
-  const invalidate = useCallback(() => { generation.current++; }, []);
+  const invalidate = useCallback(() => { generation.current++; busyRef.current = null; }, []);
   const fetchState = useCallback(async () => {
     try { return { state: await experienceApi.preferenceState(space, agentId), limited: false }; }
     catch (error) {
@@ -76,7 +76,7 @@ export function PreferencePanel({ agentId, space, confirmed, revisionHint, local
     }
   }, [space, agentId]);
   const load = useCallback(async () => {
-    const current = ++generation.current; setBusy(true); setError(''); setStatus('');
+    const current = ++generation.current; busyRef.current = null; setBusy(true); setError(''); setStatus('');
     try {
       const result = await fetchState();
       if (generation.current !== current) return;
@@ -106,9 +106,9 @@ export function PreferencePanel({ agentId, space, confirmed, revisionHint, local
   }, [state]);
   const act = async (action: 'set' | 'reset' | 'undo', setting: PreferenceValue, changeId?: string) => {
     const before = stateRef.current;
-    if (!before || busyRef.current) return;
-    busyRef.current = true; setBusy(true); setError(''); setStatus('');
+    if (!before || busyRef.current !== null) return;
     const current = generation.current;
+    busyRef.current = current; setBusy(true); setError(''); setStatus('');
     try {
       const common = { space, agentId, expectedRevision: before.revision, eventId: crypto.randomUUID() };
       const result = action === 'undo' ? await experienceApi.preferenceUndo({ ...common, changeId: changeId! })
@@ -118,7 +118,7 @@ export function PreferencePanel({ agentId, space, confirmed, revisionHint, local
       if (generation.current !== current) return;
       stateRef.current = fresh.state; setState(fresh.state); setLimited(fresh.limited); setStatus(action === 'undo' ? 'undone' : 'saved'); setBusy(false); onSnapshot(result);
     } catch { if (generation.current === current) { stateRef.current = null; setState(null); setError('change'); } }
-    finally { busyRef.current = false; if (generation.current === current) setBusy(false); }
+    finally { if (busyRef.current === current) busyRef.current = null; if (generation.current === current) setBusy(false); }
   };
   return <div dir={fa ? 'rtl' : 'ltr'} lang={locale} aria-busy={busy}>
     <p className="vx-small vx-2">{fa ? 'درخواست فعلی شما مقدم است. این کنترل‌ها فقط انتخاب‌های صریح شما را ذخیره می‌کنند. واگرد فقط ترجیح را تغییر می‌دهد و مجوزی را برنمی‌گرداند.'

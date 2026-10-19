@@ -67,6 +67,19 @@ describe('Studio production initialization', () => {
     return dir;
   };
 
+  it('retains the reviewed-export fence when web search is disabled', async () => {
+    configure({ STUDIO_WEB_SEARCH: 'off' });
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json({ ok: true, result: { id: 1, is_bot: true, username: 'VoxxBot', first_name: 'Voxx' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    const studio = await getStudio();
+    expect(studio.deps.chatLLM.completeWithWeb).toBeUndefined();
+    expect(studio.deps.chatLLM.committedExportFence).toBe(true);
+    fetchMock.mockClear();
+    await expect(studio.deps.chatLLM.complete({ system: 'Synthetic reviewed notes only.', messages: [{ role: 'user', content: 'Synthetic note.' }],
+      authorizeNow: () => false })).rejects.toThrow();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('rejects invalid manager credentials, then retries after the provider recovers', async () => {
     const dir = configure();
     const fetchMock = vi.fn()
