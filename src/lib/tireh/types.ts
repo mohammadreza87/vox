@@ -52,7 +52,7 @@ export interface Group {
   name: string;
   telegramChatId: number;
   memberIds: string[];        // everyone who can read the group
-  projectId?: string;         // decisions here become project memory
+  projectId?: string;         // related project; sharing still requires explicit approval
   companyId?: string;
   /** People outside the organization can read this group: only its own memories are usable */
   hasGuests?: boolean;
@@ -105,6 +105,7 @@ export interface OrgConfig {
  */
 export type MemoryScope =
   | { kind: 'private'; personId: string }
+  | { kind: 'people'; personIds: string[] }
   | { kind: 'group'; groupId: string }
   | { kind: 'project'; projectId: string }
   | { kind: 'company'; companyId: string }
@@ -129,6 +130,10 @@ export interface MemoryRecord {
   content: string;
   type: MemoryType;
   scope: MemoryScope;
+  /** Audience at creation/explicit sharing. Membership changes never widen it. */
+  authorizedPersonIds?: string[];
+  /** Changes on every explicit sharing mutation, invalidating old offers. */
+  shareVersion?: number;
   sensitivity: MemorySensitivity;
   source: MemorySource;
   aboutPersonIds: string[];   // whom the memory is about
@@ -147,6 +152,9 @@ export interface ShareOffer {
   memoryId: string;
   ownerPersonId: string;      // only this person may approve
   proposedScope: MemoryScope;
+  /** Exact audience previewed when the offer was created. */
+  proposedAudiencePersonIds?: string[];
+  memoryShareVersion?: number;
   status: 'pending' | 'approved' | 'declined';
   createdAt: Date;
 }
@@ -161,6 +169,9 @@ export interface ChatMessage {
   text: string;
   at: Date;
   telegramMessageId?: number;
+  /** Audience allowed to reuse this turn; required for group history. */
+  audiencePersonIds?: string[];
+  privacyEpoch?: number;
 }
 
 /** Where a conversation happens and who can read it */

@@ -162,10 +162,11 @@ export function makeStudio(options: { openai?: boolean; eleven?: boolean; manage
     if (!bots.has(token)) bots.set(token, fakeTelegram());
     return bots.get(token)! as unknown as TelegramBotClient;
   });
+  const epochs = new Map<string, number>();
   const memory = {
-    memories: new InMemoryMemoryStore(),
+    memories: new InMemoryMemoryStore(epochs),
     offers: new InMemoryShareOfferStore(),
-    history: new InMemoryChatHistoryStore(),
+    history: new InMemoryChatHistoryStore(epochs),
     deduper: new InMemoryUpdateDeduper(),
   };
   const imageToJpeg = vi.fn(async (data: Buffer) => Buffer.concat([Buffer.from('JPEG:'), data]));

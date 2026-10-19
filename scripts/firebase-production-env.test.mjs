@@ -64,3 +64,13 @@ test('private atomic dotenv output round trips quotes, hashes, backslashes and l
     assert.throws(() => dotenvLine('SECRET', 'contains\0null'), /NUL/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+
+test('relationship activation is explicit and survives production environment packaging', () => {
+  assert.equal(firebaseProductionEnv(fixture()).STUDIO_RELATIONSHIPS, 'off');
+  assert.throws(() => firebaseProductionEnv({ ...fixture(), STUDIO_RELATIONSHIPS: 'live' }), /STUDIO_RELATIONSHIP_AGENTS/);
+  const env = { ...fixture(), STUDIO_RELATIONSHIPS: 'shadow', STUDIO_RELATIONSHIP_AGENTS: 'synthetic-agent', STUDIO_RELATIONSHIP_PEOPLE: '7070', STUDIO_RELATIONSHIP_WORKER_SECRET: 'fixture-only-worker-secret-with-more-than-32-characters' };
+  const config = firebaseProductionEnv(env);
+  for (const key of ['STUDIO_RELATIONSHIPS', 'STUDIO_RELATIONSHIP_AGENTS', 'STUDIO_RELATIONSHIP_PEOPLE', 'STUDIO_RELATIONSHIP_WORKER_SECRET']) assert.equal(config[key], env[key]);
+  assert.throws(() => firebaseProductionEnv({ ...env, STUDIO_RELATIONSHIP_PEOPLE: '-1' }), /positive Telegram/);
+});

@@ -81,8 +81,8 @@ describe('decideScope', () => {
     expect(decideScope(org, sinaDm, 'sina', candidate({})).offerScope).toBeUndefined();
   });
 
-  it('group work decisions in a project group become project memory', () => {
-    expect(decideScope(org, gameend, 'parastoo', candidate({})).scope).toEqual({ kind: 'project', projectId: 'gameend' });
+  it('group work decisions stay within the original group', () => {
+    expect(decideScope(org, gameend, 'parastoo', candidate({})).scope).toEqual({ kind: 'group', groupId: 'gameend-team' });
   });
 
   it('other group statements stay in the group', () => {
@@ -127,8 +127,8 @@ describe('firstNewIndex', () => {
 
 describe('parseCandidates saidBy', () => {
   it('drops unknown speakers', () => {
-    const [c] = parseCandidates(org, JSON.stringify({ memories: [{ content: 'Something happened', type: 'event', kind: 'work', saidBy: 'ghost' }] }));
-    expect(c.saidBy).toBeNull();
+    const candidates = parseCandidates(org, JSON.stringify({ memories: [{ content: 'Something happened', type: 'event', kind: 'work', saidBy: 'ghost' }] }));
+    expect(candidates).toEqual([]);
   });
 });
 

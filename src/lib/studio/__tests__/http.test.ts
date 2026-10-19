@@ -339,6 +339,7 @@ describe('agents', () => {
     const { agent } = await hire(h, org.alice);
     const mem = await h.memory.memories.add({
       personaId: agent.id, content: 'x', type: 'fact', sensitivity: 'normal', scope: { kind: 'org' },
+      authorizedPersonIds: [`tg-${ID.alice}`, `tg-${ID.bob}`],
       source: { personId: `tg-${ID.alice}`, chatKind: 'private', at: new Date() }, aboutPersonIds: [], confidence: 1,
     });
     expect((await call(req('GET', `agents/${agent.id}/memories`, { as: ID.bob }))).json.memories).toHaveLength(1);

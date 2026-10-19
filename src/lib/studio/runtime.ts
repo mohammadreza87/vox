@@ -37,6 +37,9 @@ import { FirestoreStudioStore } from './firestore-store';
 import { FirestoreStudioRateLimiter } from './firestore-ratelimit';
 import { Studio, type StudioDeps } from './service';
 import { StudioStore } from './store';
+import { RelationshipLoop, FileRelationshipStore, FirestoreRelationshipStore, FileObservationStore, FirestoreObservationStore, SafeRelationshipObserver, OpenAIDecisions } from '../relationships';
+import { StudioRelationshipAssessor } from './relationship-assessor';
+import { relationshipConfig } from './relationship-config';
 
 export function parseIds(raw: string | undefined): number[] {
   return (raw ?? '')
@@ -97,7 +100,8 @@ export function validateStudioConfig(env: NodeJS.ProcessEnv, cwd = process.cwd()
     }
   }
 
-  return { production, token, superadminIds, dataDir, webAppUrl, storage, mediaBucket, publicUrl };
+  const relationships = relationshipConfig(env);
+  return { production, token, superadminIds, dataDir, webAppUrl, storage, mediaBucket, publicUrl, relationships };
 }
 
 /** STUDIO_WEB_SEARCH=off keeps every agent offline (web searches are billed per search). */
@@ -117,11 +121,11 @@ async function toJpeg(data: Buffer): Promise<Buffer> {
 
 const g = globalThis as unknown as { __voxStudio?: Promise<Studio> };
 
-function fileStorage(dir: string): Pick<StudioDeps, 'store' | 'memory' | 'rateLimiter'> {
-  return { store: new StudioStore(dir), memory: createFileStores(join(dir, 'memory.json')) };
+function fileStorage(dir: string): Pick<StudioDeps, 'store' | 'memory' | 'rateLimiter' | 'relationshipStore' | 'observations'> {
+  return { store: new StudioStore(dir), memory: createFileStores(join(dir, 'memory.json')), relationshipStore: new FileRelationshipStore(join(dir, 'relationships.json')), observations: new FileObservationStore(join(dir, 'relationship-observations.json')) };
 }
 
-async function firestoreStorage(bucketName: string): Promise<Pick<StudioDeps, 'store' | 'memory' | 'rateLimiter'>> {
+async function firestoreStorage(bucketName: string): Promise<Pick<StudioDeps, 'store' | 'memory' | 'rateLimiter' | 'relationshipStore' | 'observations'>> {
   const { getAdminApp, getAdminDb } = await import('@/lib/firebase-admin');
   const { getStorage } = await import('firebase-admin/storage');
   const db = await getAdminDb();
@@ -129,6 +133,8 @@ async function firestoreStorage(bucketName: string): Promise<Pick<StudioDeps, 's
   return {
     store: new FirestoreStudioStore(db, bucket),
     rateLimiter: new FirestoreStudioRateLimiter(db),
+    relationshipStore: new FirestoreRelationshipStore(db),
+    observations: new FirestoreObservationStore(db),
     memory: {
       memories: new FirestoreMemoryStore(db),
       offers: new FirestoreShareOfferStore(db),
@@ -184,6 +190,16 @@ async function create(): Promise<Studio> {
     memory: storage.memory,
     rateLimiter: storage.rateLimiter,
     imageToJpeg: toJpeg,
+    relationshipStore: storage.relationshipStore,
+    observations: storage.observations,
+    relationshipConfig: config.relationships,
+    relationships: new RelationshipLoop({
+      store: storage.relationshipStore!,
+      mode: config.relationships.mode,
+      assessor: new StudioRelationshipAssessor(new AnthropicLLM(env.ANTHROPIC_API_KEY!, env.STUDIO_VOICE_MODEL || 'claude-haiku-5-5')),
+      decisions: env.OPENAI_API_KEY ? new OpenAIDecisions(env.OPENAI_API_KEY) : undefined,
+      observer: new SafeRelationshipObserver(storage.observations!, env.STUDIO_SECRET!),
+    }),
   });
 }
 
