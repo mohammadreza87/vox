@@ -38,6 +38,9 @@ const expectedObjects = ['accounts', 'bodies', 'catalogs', 'controls', 'memory_e
 export interface SqliteAdaptiveStorageOptions {
   validateDocument?: (raw: unknown, accountId: string, now: number) => AdaptiveDocument;
   now?: () => number;
+  /** Explicit transition tools only. Rejected for any existing database. A new
+   * incarnation is always generated; identity can never be imported/reused. */
+  newStoreSeed?: { generation: number; lifecycleWatermark: number };
 }
 export class SqliteAdaptiveStorage implements AdaptiveStorage {
   readonly supportsCommittedWriteFence = true as const;
@@ -56,6 +59,8 @@ export class SqliteAdaptiveStorage implements AdaptiveStorage {
     if (path === ':memory:' || !path) throw new IndexedStorageError('invalid_scope');
     this.storePath = resolve(path); this.clock = options.now ?? Date.now;
     this.validator = options.validateDocument ?? validateAdaptiveDocument;
+    const seed = z.object({ generation: integer.min(1), lifecycleWatermark: integer }).strict().safeParse(options.newStoreSeed ?? { generation: 1, lifecycleWatermark: 0 });
+    if (!seed.success) throw new IndexedStorageError('invalid_scope');
     if (openStores.has(this.storePath)) throw new IndexedStorageError('busy');
     openStores.add(this.storePath);
     let opened: Database.Database | undefined;
@@ -74,11 +79,12 @@ export class SqliteAdaptiveStorage implements AdaptiveStorage {
       const version = opened.pragma('user_version', { simple: true });
       const objects = opened.prepare("SELECT name FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY name").all() as { name: string }[];
       if (version === 0 && objects.length === 0) {
+        this.sampleTime(seed.data.lifecycleWatermark);
         opened.exec(DDL);
         opened.prepare('INSERT INTO store_meta(singleton,json) VALUES(1,?)').run(JSON.stringify({ formatVersion: 1,
-          schemaVersion: 1, incarnation: randomUUID(), generation: 1, lifecycleWatermark: 0 }));
+          schemaVersion: 1, incarnation: randomUUID(), generation: seed.data.generation, lifecycleWatermark: seed.data.lifecycleWatermark }));
         opened.pragma(`user_version = ${INDEXED_SCHEMA_VERSION}`);
-      } else if (version !== INDEXED_SCHEMA_VERSION || JSON.stringify(objects.map(o => o.name)) !== JSON.stringify(expectedObjects)) throw new IndexedStorageError('corrupt');
+      } else if (options.newStoreSeed !== undefined || version !== INDEXED_SCHEMA_VERSION || JSON.stringify(objects.map(o => o.name)) !== JSON.stringify(expectedObjects)) throw new IndexedStorageError('corrupt');
       if (JSON.stringify(schemaDefinitions(opened)) !== JSON.stringify(expectedSchema())) throw new IndexedStorageError('corrupt');
       const identity = this.readMetadata();
       this.identity = Object.freeze({ incarnation: identity.incarnation, generation: identity.generation });

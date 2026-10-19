@@ -369,4 +369,27 @@ describe('staged SQLite adaptive storage — synthetic fixtures only', () => {
     expect(secondRetry.indexed.identity).toEqual(retry.indexed.identity);
   });
 
+  it('seeds only brand new stores with carried watermark and generation while always minting fresh incarnation', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'vox-indexed-new-seed-')); directories.push(directory);
+    const path = join(directory, 'private.sqlite');
+    const seeded = new SqliteAdaptiveStorage(path, { now: () => 3000, newStoreSeed: { generation: 7, lifecycleWatermark: 2000 } }); stores.push(seeded);
+    expect(seeded.indexed.identity.generation).toBe(7); expect(seeded.readMetadata().lifecycleWatermark).toBe(2000);
+    const identity = seeded.indexed.identity; seeded.close();
+    expect(() => new SqliteAdaptiveStorage(path, { now: () => 3000, newStoreSeed: { generation: 7, lifecycleWatermark: 2000 } })).toThrow();
+    const current = new SqliteAdaptiveStorage(path, { now: () => 3000 }); stores.push(current);
+    expect(current.indexed.identity).toEqual(identity); current.close();
+    const other = new SqliteAdaptiveStorage(join(directory, 'other.sqlite'), { now: () => 3000, newStoreSeed: { generation: 7, lifecycleWatermark: 2000 } }); stores.push(other);
+    expect(other.indexed.identity.incarnation).not.toBe(identity.incarnation);
+  });
+  it('rejects invalid seeds and regressed seed clocks without leaking startup ownership', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'vox-indexed-bad-seed-')); directories.push(directory);
+    const path = join(directory, 'private.sqlite');
+    for (const seed of [{ generation: 0, lifecycleWatermark: 0 }, { generation: 1, lifecycleWatermark: -1 },
+      { generation: Number.MAX_SAFE_INTEGER + 1, lifecycleWatermark: 0 }, { generation: 1, lifecycleWatermark: 0, incarnation: 'reused' }])
+      expect(() => new SqliteAdaptiveStorage(path, { newStoreSeed: seed })).toThrow();
+    expect(() => new SqliteAdaptiveStorage(path, { now: () => 1000, newStoreSeed: { generation: 2, lifecycleWatermark: 2000 } })).toThrow(/clock_regression/);
+    const retry = new SqliteAdaptiveStorage(path, { now: () => 3000, newStoreSeed: { generation: 2, lifecycleWatermark: 2000 } }); stores.push(retry);
+    expect(retry.indexed.identity.generation).toBe(2);
+  });
+
 });
