@@ -7,6 +7,7 @@ import { verifyInitData } from './auth';
 import { StudioRateLimiter, StudioRateLimitError, type StudioRequestRateLimiter } from './ratelimit';
 import { Studio, StudioError } from './service';
 import { PersonaGenerationError } from './persona';
+import { ElevenLabsSpeechError } from './media';
 import type { AgentVisibility, Member, MemoryPolicy, Role, SpawnBrief } from './types';
 
 type Json = Record<string, unknown>;
@@ -141,10 +142,13 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
     if (root === 'relationship-observations' && method === 'GET') return json(await studio.relationshipObservations(me));
     if (root === 'audit' && method === 'GET') return json({ audit: await studio.auditLog(me) });
     if (root === 'voices' && method === 'GET') {
+      if (id === 'options' && !action) return json(await studio.voiceOptions(me));
+      if (id) throw new StudioError(404, 'Not found');
       const q = new URL(req.url).searchParams;
       return json({ voices: await studio.searchVoices(me, {
         gender: q.get('gender') ?? undefined, age: q.get('age') ?? undefined, accent: q.get('accent') ?? undefined,
         language: q.get('language') ?? undefined, search: q.get('search') ?? undefined,
+        category: q.get('category') ?? undefined,
       }) });
     }
 
@@ -180,6 +184,7 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
             const b = await body(req);
             if (b.action === 'design') return json({ agent: await studio.designVoices(me, id, str(b.description, 1000)) });
             if (b.action === 'choose-design') return json({ agent: await studio.chooseDesignedVoice(me, id, str(b.generatedVoiceId, 200) ?? '') });
+            if (b.action === 'choose-default') return json({ agent: await studio.chooseDefaultVoice(me, id, str(b.voiceId, 200) ?? '') });
             if (b.action === 'choose-library') {
               return json({ agent: await studio.chooseLibraryVoice(me, id, {
                 publicOwnerId: str(b.publicOwnerId, 200) ?? '', voiceId: str(b.voiceId, 200) ?? '', name: str(b.name, 60) ?? 'Voice',
@@ -260,6 +265,13 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
     }
     return json({ error: 'Not found' }, 404);
   } catch (error) {
+    if (ElevenLabsSpeechError.is(error)) {
+      (studio.deps.logger ?? console).warn('[studio] voice provider unavailable', { code: error.code, status: error.status });
+      const status = error.code === 'payment_required' ? 402
+        : error.code === 'quota_exceeded' || error.code === 'rate_limited' ? 429
+          : error.code === 'permission_denied' ? 403 : error.code === 'unavailable' ? 503 : 502;
+      return json({ error: new ElevenLabsSpeechError(error.status, error.code).message, code: error.code }, status);
+    }
     if (error instanceof StudioRateLimitError) return json({ error: error.message }, 429, { 'Retry-After': String(error.retryAfterSeconds) });
     if (StudioError.is(error)) return json({ error: error.message }, error.status);
     if (error instanceof PersonaGenerationError) {
@@ -280,6 +292,7 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
  * Never includes keys: only status codes and the provider's own message.
  */
 export function providerErrorMessage(error: unknown): string | null {
+  if (ElevenLabsSpeechError.is(error)) return new ElevenLabsSpeechError(error.status, error.code).message;
   if (!(error instanceof Error)) return null;
   // OpenAI / ElevenLabs adapters throw "<Provider> <action> failed: …"
   if (/^(OpenAI|ElevenLabs) .*failed/.test(error.message)) {

@@ -95,7 +95,7 @@ export interface AgentVoice {
   provider: 'elevenlabs';
   voiceId: string;
   label: string;
-  source: 'design' | 'library';
+  source: 'design' | 'library' | 'default';
 }
 
 export type AgentStatus = 'draft' | 'awaiting_bot' | 'active' | 'fired';

@@ -104,71 +104,214 @@ export class OpenAIMedia {
 }
 
 export interface VoicePreview { generatedVoiceId: string; audio: Buffer; mediaType: string }
-export interface LibraryVoice { voiceId: string; publicOwnerId: string; name: string; accent: string; gender: string; age: string; descriptive: string; language?: string; previewUrl?: string }
+export interface VerifiedVoiceLanguage { language: string; modelId: string; accent?: string; locale?: string; previewUrl?: string }
+export interface LibraryVoice {
+  voiceId: string; publicOwnerId: string; name: string; accent: string; gender: string; age: string; descriptive: string;
+  language?: string; previewUrl?: string; category?: string; description?: string;
+  verifiedLanguages?: VerifiedVoiceLanguage[]; rate?: number; freeUsersAllowed?: boolean;
+}
+export interface VoiceModelOption {
+  id: string; name: string; languages: Array<{ code: string; name: string }>; persian: boolean;
+  kind: 'quality' | 'realtime' | 'legacy';
+}
+export interface DefaultVoice { voiceId: string; name: string; gender?: string; accent?: string; language?: string; previewUrl?: string }
+export interface VoiceOptions { models: VoiceModelOption[]; defaultVoices: DefaultVoice[]; tier: string; libraryAllowed: boolean; ttsModel: string }
+
+export type ElevenLabsErrorCode = 'payment_required' | 'quota_exceeded' | 'permission_denied' | 'rate_limited' | 'unavailable' | 'provider_error';
+const ELEVENLABS_MESSAGES: Record<ElevenLabsErrorCode, string> = {
+  payment_required: 'This voice needs a paid ElevenLabs subscription. Upgrade the connected account, then try again.',
+  quota_exceeded: 'The connected ElevenLabs account has used its voice credits. Add credits or wait for the next billing period.',
+  permission_denied: 'The connected ElevenLabs account does not have permission for this voice request.',
+  rate_limited: 'ElevenLabs is receiving too many requests. Please try again in a minute.',
+  unavailable: 'ElevenLabs is temporarily unavailable. Please try again.',
+  provider_error: 'ElevenLabs could not complete this voice request. Please try again.',
+};
+
+/** Only fixed public messages escape the adapter; provider bodies may contain credentials. */
+export class ElevenLabsSpeechError extends Error {
+  constructor(readonly status: number, readonly code: ElevenLabsErrorCode) {
+    super(ELEVENLABS_MESSAGES[code]);
+    this.name = 'ElevenLabsSpeechError';
+  }
+
+  /** Next instrumentation and route bundles can load separate class instances. */
+  static is(error: unknown): error is ElevenLabsSpeechError {
+    if (!error || typeof error !== 'object') return false;
+    const value = error as { name?: unknown; status?: unknown; code?: unknown };
+    return value.name === 'ElevenLabsSpeechError'
+      && typeof value.status === 'number' && Number.isInteger(value.status) && value.status >= 400 && value.status <= 599
+      && typeof value.code === 'string' && Object.hasOwn(ELEVENLABS_MESSAGES, value.code);
+  }
+}
+
+function record(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+function str(value: unknown): string | undefined { return typeof value === 'string' && value.trim() ? value : undefined; }
+function providerError(status: number, body: unknown): ElevenLabsSpeechError {
+  const json = record(body), detail = record(json.detail), error = record(json.error);
+  const codes = [detail.status, detail.code, detail.type, error.status, error.code, json.status, json.code];
+  const has = (...values: string[]) => codes.some((code) => typeof code === 'string' && values.includes(code));
+  const code: ElevenLabsErrorCode = has('quota_exceeded', 'insufficient_credits', 'character_limit_exceeded') ? 'quota_exceeded'
+    : status === 402 || has('payment_required', 'paid_plan_required', 'subscription_required', 'free_users_not_allowed') ? 'payment_required'
+      : status === 429 || has('rate_limited', 'rate_limit_exceeded', 'too_many_concurrent_requests') ? 'rate_limited'
+        : status === 401 || status === 403 || has('missing_permissions', 'permission_denied', 'invalid_api_key') ? 'permission_denied'
+          : status >= 500 ? 'unavailable' : 'provider_error';
+  return new ElevenLabsSpeechError(status, code);
+}
 
 const XI = 'https://api.elevenlabs.io/v1';
 
 export class ElevenLabsStudio {
+  private optionsCache?: { expiresAt: number; value: VoiceOptions };
+  private optionsRequest?: Promise<VoiceOptions>;
+
   constructor(
     private readonly apiKey: string,
     private readonly fetchFn: FetchFn = fetch,
-    private readonly ttsModel = process.env.ELEVENLABS_TTS_MODEL ?? 'eleven_multilingual_v2'
+    private readonly ttsModel = process.env.ELEVENLABS_TTS_MODEL ?? 'eleven_v4'
   ) {}
 
   private headers(json = true): Record<string, string> {
     return json ? { 'xi-api-key': this.apiKey, 'Content-Type': 'application/json' } : { 'xi-api-key': this.apiKey };
   }
 
+  private async request(url: string, init: RequestInit): Promise<Response> {
+    try { return await this.fetchFn(url, init); }
+    catch { throw new ElevenLabsSpeechError(503, 'unavailable'); }
+  }
+
+  private async json<T>(response: Response): Promise<T> {
+    const json: unknown = await response.json().catch(() => undefined);
+    if (!response.ok) throw providerError(response.status, json);
+    if (json === undefined || json === null) throw new ElevenLabsSpeechError(502, 'provider_error');
+    return json as T;
+  }
+
+  /** Provider-verified choices and account access; no voice is created or added. */
+  async getVoiceOptions(): Promise<VoiceOptions> {
+    if (this.optionsCache && this.optionsCache.expiresAt > Date.now()) return structuredClone(this.optionsCache.value);
+    if (!this.optionsRequest) {
+      this.optionsRequest = this.loadVoiceOptions().then((value) => {
+        this.optionsCache = { value, expiresAt: Date.now() + 60_000 };
+        return value;
+      }).finally(() => { this.optionsRequest = undefined; });
+    }
+    return structuredClone(await this.optionsRequest);
+  }
+
+  private async getJson<T>(url: string): Promise<T> {
+    return this.json<T>(await this.request(url, { method: 'GET', headers: this.headers(false), signal: AbortSignal.timeout(10_000) }));
+  }
+
+  private async loadVoiceOptions(): Promise<VoiceOptions> {
+    const [rawModels, subscription, defaultVoices] = await Promise.all([
+      this.getJson<unknown>(`${XI}/models`),
+      // An unknown subscription must never grant paid-library access.
+      this.getJson<unknown>(`${XI}/user/subscription`).catch(() => undefined),
+      this.listDefaultVoices(),
+    ]);
+    if (!Array.isArray(rawModels)) throw new ElevenLabsSpeechError(502, 'provider_error');
+    const models = rawModels.flatMap((value): VoiceModelOption[] => {
+      const model = record(value), id = str(model.model_id);
+      if (!id || model.can_do_text_to_speech !== true) return [];
+      const languages = (Array.isArray(model.languages) ? model.languages : []).flatMap((value) => {
+        const language = record(value), code = str(language.language_id), name = str(language.name);
+        return code && name ? [{ code, name }] : [];
+      });
+      const modern = /^eleven_v\d+(?:_|$)/.test(id);
+      return [{ id, name: str(model.name) ?? id, languages, persian: languages.some((l) => l.code === 'fa'),
+        kind: modern ? /_(turbo|conversational)$/.test(id) ? 'realtime' : 'quality' : 'legacy' }];
+    });
+    const tier = str(record(subscription).tier)?.trim().toLowerCase() ?? 'unknown';
+    const libraryAllowed = ['starter', 'creator', 'pro', 'scale', 'business', 'enterprise', 'growing_business', 'independent_publisher'].includes(tier);
+    return { models, defaultVoices, tier, libraryAllowed, ttsModel: this.ttsModel };
+  }
+
+  private async listDefaultVoices(): Promise<DefaultVoice[]> {
+    const voices = new Map<string, DefaultVoice>(), seen = new Set<string>();
+    let token: string | undefined;
+    for (let page = 0; page < 10; page++) {
+      const params = new URLSearchParams({ voice_type: 'default', page_size: '100' });
+      if (token) params.set('next_page_token', token);
+      const json = await this.getJson<Record<string, unknown>>(`https://api.elevenlabs.io/v2/voices?${params}`);
+      if (!Array.isArray(json.voices)) throw new ElevenLabsSpeechError(502, 'provider_error');
+      for (const value of json.voices) {
+        const voice = record(value), labels = record(voice.labels), voiceId = str(voice.voice_id), name = str(voice.name);
+        if (voiceId && name) voices.set(voiceId, { voiceId, name, gender: str(labels.gender), accent: str(labels.accent), language: str(labels.language), previewUrl: str(voice.preview_url) });
+      }
+      if (json.has_more !== true) return [...voices.values()];
+      token = str(json.next_page_token);
+      if (!token || seen.has(token)) throw new ElevenLabsSpeechError(502, 'provider_error');
+      seen.add(token);
+    }
+    throw new ElevenLabsSpeechError(502, 'provider_error');
+  }
+
   async designVoices(description: string, sampleText?: string): Promise<VoicePreview[]> {
-    const body: Record<string, unknown> = { voice_description: description, model_id: 'eleven_multilingual_ttv_v2' };
+    const body: Record<string, unknown> = { voice_description: description, model_id: 'eleven_ttv_v3' };
     if (sampleText && sampleText.length >= 100) body.text = sampleText.slice(0, 1000);
     else body.auto_generate_text = true;
-    const response = await this.fetchFn(`${XI}/text-to-voice/design?output_format=mp3_44100_128`, {
+    const response = await this.request(`${XI}/text-to-voice/design?output_format=mp3_44100_128`, {
       method: 'POST', headers: this.headers(), body: JSON.stringify(body),
     });
-    const json = (await response.json().catch(() => ({}))) as { previews?: Array<{ generated_voice_id: string; audio_base_64: string; media_type?: string }> };
-    if (!response.ok || !json.previews) throw new Error(`ElevenLabs voice design failed: HTTP ${response.status}`);
+    const json = await this.json<{ previews?: Array<{ generated_voice_id: string; audio_base_64: string; media_type?: string }> }>(response);
+    if (!Array.isArray(json.previews) || !json.previews.length || json.previews.some((p) => !str(p.generated_voice_id) || !str(p.audio_base_64))) throw new ElevenLabsSpeechError(502, 'provider_error');
     return json.previews.map((p) => ({ generatedVoiceId: p.generated_voice_id, audio: Buffer.from(p.audio_base_64, 'base64'), mediaType: p.media_type ?? 'audio/mpeg' }));
   }
 
   async saveDesignedVoice(generatedVoiceId: string, name: string, description: string): Promise<string> {
-    const response = await this.fetchFn(`${XI}/text-to-voice`, {
+    const response = await this.request(`${XI}/text-to-voice`, {
       method: 'POST', headers: this.headers(),
       body: JSON.stringify({ voice_name: name, voice_description: description, generated_voice_id: generatedVoiceId }),
     });
-    const json = (await response.json().catch(() => ({}))) as { voice_id?: string };
-    if (!response.ok || !json.voice_id) throw new Error(`ElevenLabs create voice failed: HTTP ${response.status}`);
-    return json.voice_id;
+    const json = await this.json<{ voice_id?: string }>(response);
+    if (!str(json.voice_id)) throw new ElevenLabsSpeechError(502, 'provider_error');
+    return json.voice_id!;
   }
 
-  async searchLibrary(filters: { gender?: string; age?: string; accent?: string; language?: string; search?: string }): Promise<LibraryVoice[]> {
+  async searchLibrary(filters: { gender?: string; age?: string; accent?: string; language?: string; search?: string; category?: string }): Promise<LibraryVoice[]> {
     const params = new URLSearchParams({ page_size: '12' });
     for (const [k, v] of Object.entries(filters)) if (v) params.set(k, v);
-    const response = await this.fetchFn(`${XI}/shared-voices?${params}`, { headers: this.headers(false) });
-    const json = (await response.json().catch(() => ({}))) as { voices?: Array<Record<string, string>> };
-    if (!response.ok) throw new Error(`ElevenLabs library search failed: HTTP ${response.status}`);
-    return (json.voices ?? []).map((v) => ({
-      voiceId: v.voice_id, publicOwnerId: v.public_owner_id, name: v.name, accent: v.accent, gender: v.gender,
-      age: v.age, descriptive: v.descriptive, language: v.language, previewUrl: v.preview_url,
-    }));
+    const response = await this.request(`${XI}/shared-voices?${params}`, { headers: this.headers(false) });
+    const json = await this.json<{ voices?: unknown[] }>(response);
+    if (!Array.isArray(json.voices)) throw new ElevenLabsSpeechError(502, 'provider_error');
+    return json.voices.flatMap((value): LibraryVoice[] => {
+      const v = record(value), voiceId = str(v.voice_id), publicOwnerId = str(v.public_owner_id), name = str(v.name);
+      if (!voiceId || !publicOwnerId || !name) return [];
+      const verifiedLanguages = Array.isArray(v.verified_languages) ? v.verified_languages.flatMap((value): VerifiedVoiceLanguage[] => {
+        const verified = record(value), language = str(verified.language), modelId = str(verified.model_id);
+        return language && modelId ? [{ language, modelId, accent: str(verified.accent), locale: str(verified.locale), previewUrl: str(verified.preview_url) }] : [];
+      }) : undefined;
+      return [{ voiceId, publicOwnerId, name, accent: str(v.accent) ?? '', gender: str(v.gender) ?? '',
+        age: str(v.age) ?? '', descriptive: str(v.descriptive) ?? '', language: str(v.language), previewUrl: str(v.preview_url),
+        category: str(v.category), description: str(v.description), verifiedLanguages,
+        rate: typeof v.rate === 'number' && Number.isFinite(v.rate) ? v.rate : undefined,
+        freeUsersAllowed: typeof v.free_users_allowed === 'boolean' ? v.free_users_allowed : undefined }];
+    });
   }
 
   async addLibraryVoice(publicOwnerId: string, voiceId: string, name: string): Promise<string> {
-    const response = await this.fetchFn(`${XI}/voices/add/${encodeURIComponent(publicOwnerId)}/${encodeURIComponent(voiceId)}`, {
+    const response = await this.request(`${XI}/voices/add/${encodeURIComponent(publicOwnerId)}/${encodeURIComponent(voiceId)}`, {
       method: 'POST', headers: this.headers(), body: JSON.stringify({ new_name: name }),
     });
-    const json = (await response.json().catch(() => ({}))) as { voice_id?: string };
-    if (!response.ok || !json.voice_id) throw new Error(`ElevenLabs add voice failed: HTTP ${response.status}`);
-    return json.voice_id;
+    const json = await this.json<{ voice_id?: string }>(response);
+    if (!str(json.voice_id)) throw new ElevenLabsSpeechError(502, 'provider_error');
+    return json.voice_id!;
   }
 
   async speak(text: string, voiceId: string): Promise<Buffer> {
-    const response = await this.fetchFn(`${XI}/text-to-speech/${encodeURIComponent(voiceId)}?output_format=mp3_44100_128`, {
+    const response = await this.request(`${XI}/text-to-speech/${encodeURIComponent(voiceId)}?output_format=mp3_44100_128`, {
       method: 'POST', headers: { ...this.headers(), Accept: 'audio/mpeg' },
       body: JSON.stringify({ text: text.slice(0, 2500), model_id: this.ttsModel, voice_settings: { stability: 0.5, similarity_boost: 0.75 } }),
     });
-    if (!response.ok) throw new Error(`ElevenLabs TTS failed: HTTP ${response.status}`);
-    return Buffer.from(await response.arrayBuffer());
+    if (!response.ok) throw providerError(response.status, await response.json().catch(() => undefined));
+    if (!/^audio\//i.test(response.headers.get('content-type') ?? '')) throw new ElevenLabsSpeechError(502, 'provider_error');
+    let audio: Buffer;
+    try { audio = Buffer.from(await response.arrayBuffer()); }
+    catch { throw new ElevenLabsSpeechError(503, 'unavailable'); }
+    if (!audio.length) throw new ElevenLabsSpeechError(502, 'provider_error');
+    return audio;
   }
 
   /** Speech-to-text (Scribe), so voice messages work without OpenAI. */
@@ -176,45 +319,39 @@ export class ElevenLabsStudio {
     const form = new FormData();
     form.append('model_id', process.env.ELEVENLABS_STT_MODEL ?? 'scribe_v1');
     form.append('file', new Blob([audio], { type: mimeType }), mimeType.includes('mp4') ? 'voice.m4a' : mimeType.includes('webm') ? 'voice.webm' : 'voice.ogg');
-    const response = await this.fetchFn(`${XI}/speech-to-text`, { method: 'POST', headers: this.headers(false), body: form });
-    const json = (await response.json().catch(() => ({}))) as { text?: string };
-    if (!response.ok) throw new Error(`ElevenLabs speech-to-text failed: HTTP ${response.status}`);
+    const response = await this.request(`${XI}/speech-to-text`, { method: 'POST', headers: this.headers(false), body: form });
+    const json = await this.json<{ text?: string }>(response);
+    if (typeof json.text !== 'string') throw new ElevenLabsSpeechError(502, 'provider_error');
     return (json.text ?? '').trim();
   }
 
   // ---- Live voice (ElevenLabs Agents) ----
 
-  private async convai<T>(path: string, init: RequestInit, what: string): Promise<T> {
-    const response = await this.fetchFn(`${XI}/convai${path}`, { ...init, headers: this.headers(init.method !== undefined && init.method !== 'GET') });
-    const json = (await response.json().catch(() => ({}))) as T & { detail?: unknown };
-    if (!response.ok) {
-      const detail = typeof json.detail === 'string' ? json.detail : JSON.stringify(json.detail ?? '').slice(0, 300);
-      throw new Error(`ElevenLabs ${what} failed: HTTP ${response.status}${detail ? ` ${detail}` : ''}`);
-    }
-    return json;
+  private async convai<T>(path: string, init: RequestInit): Promise<T> {
+    return this.json<T>(await this.request(`${XI}/convai${path}`, { ...init, headers: this.headers(init.method !== undefined && init.method !== 'GET') }));
   }
 
   /** Stores the key ElevenLabs sends to our custom LLM endpoint. */
   async createSecret(name: string, value: string): Promise<string> {
-    const json = await this.convai<{ secret_id?: string }>('/secrets', { method: 'POST', body: JSON.stringify({ type: 'new', name, value }) }, 'secret creation');
-    if (!json.secret_id) throw new Error('ElevenLabs secret creation returned no id');
+    const json = await this.convai<{ secret_id?: string }>('/secrets', { method: 'POST', body: JSON.stringify({ type: 'new', name, value }) });
+    if (!json.secret_id) throw new ElevenLabsSpeechError(502, 'provider_error');
     return json.secret_id;
   }
 
   async createAgent(config: VoiceAgentConfig): Promise<string> {
-    const json = await this.convai<{ agent_id?: string }>('/agents/create', { method: 'POST', body: JSON.stringify(voiceAgentBody(config)) }, 'agent creation');
-    if (!json.agent_id) throw new Error('ElevenLabs agent creation returned no id');
+    const json = await this.convai<{ agent_id?: string }>('/agents/create', { method: 'POST', body: JSON.stringify(voiceAgentBody(config)) });
+    if (!json.agent_id) throw new ElevenLabsSpeechError(502, 'provider_error');
     return json.agent_id;
   }
 
   async updateAgent(agentId: string, config: VoiceAgentConfig): Promise<void> {
-    await this.convai(`/agents/${encodeURIComponent(agentId)}`, { method: 'PATCH', body: JSON.stringify(voiceAgentBody(config)) }, 'agent update');
+    await this.convai(`/agents/${encodeURIComponent(agentId)}`, { method: 'PATCH', body: JSON.stringify(voiceAgentBody(config)) });
   }
 
   /** A short-lived URL the browser uses to start one conversation. */
   async signedUrl(agentId: string): Promise<string> {
-    const json = await this.convai<{ signed_url?: string }>(`/conversation/get-signed-url?agent_id=${encodeURIComponent(agentId)}`, {}, 'call start');
-    if (!json.signed_url) throw new Error('ElevenLabs returned no signed URL');
+    const json = await this.convai<{ signed_url?: string }>(`/conversation/get-signed-url?agent_id=${encodeURIComponent(agentId)}`, {});
+    if (!json.signed_url) throw new ElevenLabsSpeechError(502, 'provider_error');
     return json.signed_url;
   }
 }
@@ -276,6 +413,8 @@ export function voiceAgentBody(c: VoiceAgentConfig) {
 /** Voice for the persona runtime: OpenAI hears, ElevenLabs speaks. */
 export class StudioVoiceService implements VoiceService {
   constructor(private readonly openai: OpenAIMedia | null, private readonly eleven: ElevenLabsStudio | null) {}
+
+  get canSynthesize(): boolean { return !!this.eleven; }
 
   /** OpenAI hears when configured; ElevenLabs Scribe covers for it. */
   async transcribe(audio: ArrayBuffer, mimeType?: string): Promise<string> {
