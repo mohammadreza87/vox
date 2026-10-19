@@ -21,9 +21,17 @@ it('armed document rollback is accepted by exact796073f strict schema while pres
     predictionTurns: document.experience.predictionTurns.map(row => { const old = { ...row }; delete old.finalFingerprint; delete old.learningEvidenceId; delete old.learningReservation; return old; }) } });
   expect(stripped.experience.preferenceUndo).toEqual(document.experience.preferenceUndo); expect(stripped.permissions).toEqual(document.permissions); expect(stripped.deletions).toEqual(document.deletions);
   const directory = await mkdtemp(join(tmpdir(), 'vox-learning-old-schema-')); directories.push(directory);
-  // Materialize only the exact historical strict schema's local import graph.
-  for (const path of ['src/lib/adaptive/runtime/contracts.ts', 'src/lib/adaptive/runtime/reminder-contracts.ts', 'src/lib/adaptive/prediction/image.ts', 'src/lib/adaptive/personalization/index.ts']) {
-    const file = join(directory, path); await mkdir(dirname(file), { recursive: true }); await writeFile(file, execFileSync('git', ['show', `796073f:${path}`]));
+  // Pinned exact historical source: no Git/history/network dependency in
+  // shallow CI. Digests and provenance are reviewable alongside the fixtures.
+  const fixtureDirectory = resolve('src/lib/adaptive/personalization/learning/compatibility/base796073f');
+  const manifest = JSON.parse(await readFile(join(fixtureDirectory, 'manifest.json'), 'utf8')) as {
+    revision: string; files: Array<{ path: string; fixture: string; sha256: string }>;
+  };
+  expect(manifest.revision).toBe('796073f07c60d93ee52eaa5344628478ec7ada4f');
+  for (const entry of manifest.files) {
+    const source = await readFile(join(fixtureDirectory, entry.fixture));
+    expect(createHash('sha256').update(source).digest('hex')).toBe(entry.sha256);
+    const file = join(directory, entry.path); await mkdir(dirname(file), { recursive: true }); await writeFile(file, source);
   }
   await symlink(resolve('node_modules'), join(directory, 'node_modules'));
   const probe = join(directory, 'probe.ts'), data = join(directory, 'documents.json');
