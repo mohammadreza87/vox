@@ -1,0 +1,78 @@
+# Page snapshot
+
+```yaml
+- generic [active] [ref=e1]:
+  - generic [ref=e4]:
+    - generic [ref=e5]:
+      - button "Back" [ref=e6] [cursor=pointer]:
+        - img [ref=e7]
+      - generic [ref=e9]: Your experience
+      - button "فارسی" [ref=e11] [cursor=pointer]
+    - generic [ref=e12]:
+      - paragraph [ref=e13]: Tell Vox what works for you. Saved choices, learning permissions and notification settings remain separate.
+      - group "Experience space" [ref=e14]:
+        - button "Work" [pressed] [ref=e15] [cursor=pointer]
+        - button "Personal" [ref=e16] [cursor=pointer]
+      - status [ref=e17]: Saved.
+      - generic [ref=e18]:
+        - heading "Reply preferences" [level=2] [ref=e19]
+        - generic [ref=e20]:
+          - text: Agent
+          - combobox "Agent" [ref=e21]:
+            - option "Choose an agent"
+            - option "Fixture Agent" [selected]
+        - generic [ref=e22]:
+          - text: Reply length
+          - combobox "Reply length" [ref=e23]:
+            - option "Brief"
+            - option "Balanced"
+            - option "Detailed" [selected]
+        - paragraph [ref=e24]: Your current request always comes first. Saved preferences are applied only with personalization permission and an explicit agent grant.
+        - generic [ref=e25]:
+          - button "Save preference" [ref=e26] [cursor=pointer]
+          - button "Reset" [ref=e27] [cursor=pointer]
+      - generic [ref=e28]:
+        - heading "Notification settings" [level=2] [ref=e29]
+        - paragraph [ref=e30]: These settings control your private inbox. They do not enable email, SMS or Telegram delivery. The interruption limit applies across both spaces.
+        - generic [ref=e31]:
+          - checkbox "Enable inbox" [checked] [ref=e32]
+          - text: Enable inbox
+        - generic [ref=e33]:
+          - checkbox "Helpful suggestions" [disabled] [ref=e34]
+          - text: Helpful suggestions
+        - generic [ref=e35]:
+          - checkbox "Requested reminders" [disabled] [ref=e36]
+          - text: Requested reminders
+        - generic [ref=e37]:
+          - text: Selected timezone
+          - textbox "Selected timezone" [ref=e38]:
+            - /placeholder: Europe/Tallinn
+            - text: Europe/Tallinn
+        - generic [ref=e39]:
+          - text: Maximum suggestions per 24 hours
+          - spinbutton "Maximum suggestions per 24 hours" [ref=e40]: "2"
+        - generic [ref=e41]:
+          - generic [ref=e42]:
+            - text: Quiet hours start
+            - spinbutton "Quiet hours start" [ref=e43]: "21"
+          - generic [ref=e44]:
+            - text: Quiet hours end
+            - spinbutton "Quiet hours end" [ref=e45]: "8"
+        - button "Save notification settings" [ref=e46] [cursor=pointer]
+      - generic [ref=e47]:
+        - heading "Create a reminder" [level=2] [ref=e48]
+        - paragraph [ref=e49]: Choose an agent above. A reminder appears in your authenticated inbox when it is due; it does not send an external message.
+        - generic [ref=e50]:
+          - text: Reminder
+          - textbox "Reminder" [disabled] [ref=e51]
+        - generic [ref=e52]:
+          - text: Due time (your device local time)
+          - textbox "Due time (your device local time)" [disabled] [ref=e53]
+        - button "Create reminder" [disabled] [ref=e54]
+      - heading "Your inbox" [level=2] [ref=e55]
+      - paragraph [ref=e56]: Nothing to show right now.
+      - generic [ref=e57]:
+        - heading "Your usage measurements" [level=2] [ref=e58]
+        - paragraph [ref=e59]: Optional usage analytics is off or unavailable.
+  - alert [ref=e60]
+```

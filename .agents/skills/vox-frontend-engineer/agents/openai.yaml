@@ -1,0 +1,4 @@
+interface:
+  display_name: "Vox Frontend and notifications engineer"
+  short_description: "Implement Vox controls and notification UX"
+  default_prompt: "Use $vox-frontend-engineer to complete the assigned Vox task within its stated ownership and acceptance criteria."

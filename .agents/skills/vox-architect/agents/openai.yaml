@@ -1,0 +1,4 @@
+interface:
+  display_name: "Vox Architect and Decisions engineer"
+  short_description: "Build Vox memory and Decisions contracts"
+  default_prompt: "Use $vox-architect to complete the assigned Vox task within its stated ownership and acceptance criteria."

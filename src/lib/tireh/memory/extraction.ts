@@ -9,6 +9,7 @@
 import { z } from 'zod';
 import type { LLM } from '../llm';
 import type { OrgDirectory } from '../org/directory';
+import { audienceOf, hasRestrictedAudience, isVisibleInChat } from './visibility';
 import type {
   ChatContext,
   ChatMessage,
@@ -42,13 +43,20 @@ export function buildExtractionPrompt(
   speakerId: string,
   known: MemoryRecord[] = []
 ): string {
-  const people = org.listPeople().map((p) => `- ${p.id}: ${p.name} (${p.role})`).join('\n');
-  const projects = org.config.projects.map((p) => `- ${p.id}: ${p.name}`).join('\n') || '- none';
+  const restricted = hasRestrictedAudience(org, chat);
+  const audience = new Set(audienceOf(chat));
+  const people = org.listPeople()
+    .filter((p) => restricted ? audience.has(p.id) : !p.guest || audience.has(p.id))
+    .map((p) => `- ${p.id}: ${p.name}${restricted ? '' : ` (${p.role})`}`).join('\n');
+  const projects = restricted ? '- none' :
+    org.config.projects.filter((p) => [...audience].every((id) => org.isProjectMember(id, p.id)))
+      .map((p) => `- ${p.id}: ${p.name}`).join('\n') || '- none';
   const where =
     chat.kind === 'private'
       ? `a private chat between ${persona.name} and ${org.getPerson(speakerId)?.name}`
       : `the "${chat.group.name}" group chat`;
 
+  known = known.filter((memory) => isVisibleInChat(org, memory, chat));
   const knownList =
     known.length > 0
       ? known.map((m) => `- [topic: ${m.topic ?? 'none'}] ${m.content}`).join('\n')
@@ -179,13 +187,12 @@ export function decideScope(
   if (chat.kind === 'group') {
     const { group } = chat;
     // Said openly in a group: the group already knows it, so group scope.
-    // Confidential remarks stay with the speaker.
-    if (sensitivity === 'confidential') {
+    // Personal/confidential remarks never become ordinary shared facts.
+    if (sensitivity !== 'normal') {
       return { scope: { kind: 'private', personId: speakerId }, sensitivity, type: candidate.type };
     }
-    if (candidate.type === 'decision' && candidate.kind === 'work' && group.projectId) {
-      return { scope: { kind: 'project', projectId: group.projectId }, sensitivity: 'normal', type: candidate.type };
-    }
+    // Project membership may be wider than the people in this conversation.
+    // A model classifying a statement as a decision is not a sharing grant.
     return { scope: { kind: 'group', groupId: group.id }, sensitivity: 'normal', type: candidate.type };
   }
 

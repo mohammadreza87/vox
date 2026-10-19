@@ -1,0 +1,365 @@
+   ▲ Next.js 15.5.28
+   - Environments: .env.local
+
+   Creating an optimized production build ...
+ ✓ Compiled successfully in 14.1s
+   Linting and checking validity of types ...
+
+./src/app/api/chat/route.test.ts
+89:26  Warning: 'incrementMessageCount' is assigned a value but never used.  @typescript-eslint/no-unused-vars
+102:19  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+103:19  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+123:19  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+124:19  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+143:19  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+144:19  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+167:19  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+168:19  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+229:19  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+230:19  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+260:19  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+261:19  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+288:19  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+289:19  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+305:19  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+306:19  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+336:19  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+337:19  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+380:19  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+381:19  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+413:19  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+414:19  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+
+./src/app/api/chat/route.ts
+66:68  Warning: '_context' is defined but never used.  @typescript-eslint/no-unused-vars
+210:7  Warning: 'filteredHistory' is never reassigned. Use 'const' instead.  prefer-const
+248:7  Warning: 'filteredHistory' is never reassigned. Use 'const' instead.  prefer-const
+337:45  Warning: 'userMessage' is defined but never used.  @typescript-eslint/no-unused-vars
+
+./src/app/api/chat/stream/route.ts
+94:68  Warning: '_context' is defined but never used.  @typescript-eslint/no-unused-vars
+416:7  Warning: 'filteredHistory' is never reassigned. Use 'const' instead.  prefer-const
+468:7  Warning: 'filteredHistory' is never reassigned. Use 'const' instead.  prefer-const
+
+./src/app/api/convai/session/route.ts
+85:11  Warning: 'fullPrompt' is assigned a value but never used.  @typescript-eslint/no-unused-vars
+
+./src/app/api/memory/extract/route.ts
+84:68  Warning: '_context' is defined but never used.  @typescript-eslint/no-unused-vars
+
+./src/app/api/translate/route.test.ts
+36:17  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+37:17  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+
+./src/app/api/translate/route.ts
+1:10  Warning: 'NextRequest' is defined but never used.  @typescript-eslint/no-unused-vars
+
+./src/app/api/translator/messages/route.ts
+7:3  Warning: 'TranslatorMessage' is defined but never used.  @typescript-eslint/no-unused-vars
+
+./src/app/api/tts/route.test.ts
+58:19  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+59:19  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+73:19  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+74:19  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+93:19  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+94:19  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+113:19  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+114:19  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+138:19  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+139:19  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+165:19  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+166:19  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+190:19  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+191:19  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+218:19  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+219:19  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+234:19  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+235:19  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+256:19  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+257:19  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+
+./src/app/api/v2/sync/route.ts
+11:45  Warning: 'getAdminDb' is defined but never used.  @typescript-eslint/no-unused-vars
+15:3  Warning: 'updateChat' is defined but never used.  @typescript-eslint/no-unused-vars
+21:10  Warning: 'ChatDocument' is defined but never used.  @typescript-eslint/no-unused-vars
+21:24  Warning: 'MessageDocument' is defined but never used.  @typescript-eslint/no-unused-vars
+98:19  Warning: 'existingMessageIds' is assigned a value but never used.  @typescript-eslint/no-unused-vars
+
+./src/app/api/voices/route.ts
+9:19  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+59:19  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+60:16  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+73:19  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+74:16  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+
+./src/app/app/page.tsx
+3:58  Warning: 'useMemo' is defined but never used.  @typescript-eslint/no-unused-vars
+16:10  Warning: 'ChatErrorBoundary' is defined but never used.  @typescript-eslint/no-unused-vars
+20:3  Warning: 'Cell' is defined but never used.  @typescript-eslint/no-unused-vars
+21:3  Warning: 'Section' is defined but never used.  @typescript-eslint/no-unused-vars
+22:3  Warning: 'List' is defined but never used.  @typescript-eslint/no-unused-vars
+23:13  Warning: 'TgAvatar' is defined but never used.  @typescript-eslint/no-unused-vars
+24:3  Warning: 'Badge' is defined but never used.  @typescript-eslint/no-unused-vars
+25:3  Warning: 'IconButton' is defined but never used.  @typescript-eslint/no-unused-vars
+26:3  Warning: 'Placeholder' is defined but never used.  @typescript-eslint/no-unused-vars
+27:3  Warning: 'SegmentedControl' is defined but never used.  @typescript-eslint/no-unused-vars
+28:3  Warning: 'Input' is defined but never used.  @typescript-eslint/no-unused-vars
+43:3  Warning: 'RotateCcw' is defined but never used.  @typescript-eslint/no-unused-vars
+56:10  Warning: 'auth' is defined but never used.  @typescript-eslint/no-unused-vars
+58:8  Warning: 'gsap' is defined but never used.  @typescript-eslint/no-unused-vars
+139:6  Warning: React Hook useEffect has a missing dependency: 'handleSelectContact'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+170:16  Warning: 'ttsSentences' is assigned a value but never used.  @typescript-eslint/no-unused-vars
+171:20  Warning: 'ttsSpeakingIndex' is assigned a value but never used.  @typescript-eslint/no-unused-vars
+198:24  Warning: 'fullText' is defined but never used.  @typescript-eslint/no-unused-vars
+222:5  Warning: 'buildEnrichedPrompt' is assigned a value but never used.  @typescript-eslint/no-unused-vars
+250:6  Warning: React Hook useEffect has missing dependencies: 'messages' and 'saveMemory'. Either include them or remove the dependency array.  react-hooks/exhaustive-deps
+280:6  Warning: React Hook useEffect has a missing dependency: 'activeChat'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+300:6  Warning: React Hook useEffect has missing dependencies: 'handleSendMessage' and 'resetTranscript'. Either include them or remove the dependency array.  react-hooks/exhaustive-deps
+594:9  Warning: 'handleEditContact' is assigned a value but never used.  @typescript-eslint/no-unused-vars
+
+./src/app/create/page.tsx
+7:77  Warning: 'Camera' is defined but never used.  @typescript-eslint/no-unused-vars
+40:7  Warning: 'clonedVoiceToOption' is assigned a value but never used.  @typescript-eslint/no-unused-vars
+82:68  Warning: 'customContactsUsed' is assigned a value but never used.  @typescript-eslint/no-unused-vars
+82:88  Warning: 'customContactsLimit' is assigned a value but never used.  @typescript-eslint/no-unused-vars
+128:10  Warning: 'isLoadingVoices' is assigned a value but never used.  @typescript-eslint/no-unused-vars
+221:9  Warning: 'selectedVoice' is assigned a value but never used.  @typescript-eslint/no-unused-vars
+263:21  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+387:6  Warning: React Hook useCallback has a missing dependency: 'previewVoiceWithTTS'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+530:9  Warning: 'deleteSavedVoice' is assigned a value but never used.  @typescript-eslint/no-unused-vars
+1230:23  Warning: Using `<img>` could result in slower LCP and higher bandwidth. Consider using `<Image />` from `next/image` or a custom image loader to automatically optimize images. This may incur additional usage or cost from your provider. See: https://nextjs.org/docs/messages/no-img-element  @next/next/no-img-element
+1335:19  Warning: Using `<img>` could result in slower LCP and higher bandwidth. Consider using `<Image />` from `next/image` or a custom image loader to automatically optimize images. This may incur additional usage or cost from your provider. See: https://nextjs.org/docs/messages/no-img-element  @next/next/no-img-element
+
+./src/app/design-system/page.tsx
+4:37  Warning: 'AlertCircle' is defined but never used.  @typescript-eslint/no-unused-vars
+
+./src/app/login/page.tsx
+22:28  Warning: 'telegramUser' is assigned a value but never used.  @typescript-eslint/no-unused-vars
+
+./src/app/pricing/page.tsx
+77:54  Warning: 'telegramLoading' is assigned a value but never used.  @typescript-eslint/no-unused-vars
+
+./src/app/settings/page.tsx
+58:9  Warning: 'subscriptionLoading' is assigned a value but never used.  @typescript-eslint/no-unused-vars
+59:9  Warning: 'refreshSubscription' is assigned a value but never used.  @typescript-eslint/no-unused-vars
+
+./src/app/translator/page.tsx
+10:10  Warning: 'getAuthToken' is defined but never used.  @typescript-eslint/no-unused-vars
+176:10  Warning: 'showUploadOption' is assigned a value but never used.  @typescript-eslint/no-unused-vars
+218:9  Warning: 'isInTelegram' is assigned a value but never used.  @typescript-eslint/no-unused-vars
+220:16  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+251:19  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+422:79  Warning: `'` can be escaped with `&apos;`, `&lsquo;`, `&#39;`, `&rsquo;`.  react/no-unescaped-entities
+544:35  Warning: `'` can be escaped with `&apos;`, `&lsquo;`, `&#39;`, `&rsquo;`.  react/no-unescaped-entities
+703:21  Warning: React Hook "useExistingVoice" cannot be called inside a callback. React Hooks must be called in a React function component or a custom React Hook function.  react-hooks/rules-of-hooks
+1051:19  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+
+./src/components/DatadogProvider.tsx
+82:6  Warning: React Hook useEffect has a missing dependency: 'user'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+
+./src/components/TelegramProvider.tsx
+51:6  Warning: React Hook useEffect has a missing dependency: 'authenticateWithBackend'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+
+./src/features/voice/hooks/useProgressiveTTS.ts
+4:28  Warning: 'DetectedSentence' is defined but never used.  @typescript-eslint/no-unused-vars
+103:57  Warning: 'isPlaying' is assigned a value but never used.  @typescript-eslint/no-unused-vars
+
+./src/features/voice/hooks/useTextToSpeech.ts
+140:5  Warning: React Hook useCallback has an unnecessary dependency: 'voiceId'. Either exclude it or remove the dependency array.  react-hooks/exhaustive-deps
+177:11  Warning: React Hook "useBrowserTTS" cannot be called inside a callback. React Hooks must be called in a React function component or a custom React Hook function.  react-hooks/rules-of-hooks
+220:9  Warning: React Hook "useBrowserTTS" cannot be called inside a callback. React Hooks must be called in a React function component or a custom React Hook function.  react-hooks/rules-of-hooks
+224:5  Warning: React Hook useCallback has a missing dependency: 'useBrowserTTS'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+
+./src/hooks/useContactMemory.ts
+14:3  Warning: 'ExtractMemoryRequest' is defined but never used.  @typescript-eslint/no-unused-vars
+
+./src/lib/api/modules/chat.ts
+20:16  Warning: 'Message' is defined but never used.  @typescript-eslint/no-unused-vars
+
+./src/lib/api/modules/voice.ts
+9:3  Warning: 'TextToSpeechRequest' is defined but never used.  @typescript-eslint/no-unused-vars
+13:3  Warning: 'GenerateRequest' is defined but never used.  @typescript-eslint/no-unused-vars
+
+./src/lib/api/stream-chat.ts
+86:20  Warning: 'parseError' is defined but never used.  @typescript-eslint/no-unused-vars
+
+./src/lib/api/types.ts
+6:16  Warning: 'Message' is defined but never used.  @typescript-eslint/no-unused-vars
+
+./src/lib/datadog/dashboard.ts
+773:1  Warning: Assign object to a variable before exporting as module default  import/no-anonymous-default-export
+
+./src/lib/datadog/detection-rules.ts
+517:1  Warning: Assign object to a variable before exporting as module default  import/no-anonymous-default-export
+
+./src/lib/datadog/incidents.ts
+289:10  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+312:10  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+331:10  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+371:10  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+391:1  Warning: Assign object to a variable before exporting as module default  import/no-anonymous-default-export
+
+./src/lib/datadog/llm-tracer.ts
+16:7  Warning: 'uuidv4' is assigned a value but never used.  @typescript-eslint/no-unused-vars
+498:1  Warning: Assign object to a variable before exporting as module default  import/no-anonymous-default-export
+
+./src/lib/datadog/pino-transport.ts
+91:20  Warning: '_' is assigned a value but never used.  @typescript-eslint/no-unused-vars
+91:43  Warning: 'pid' is assigned a value but never used.  @typescript-eslint/no-unused-vars
+252:1  Warning: Assign object to a variable before exporting as module default  import/no-anonymous-default-export
+
+./src/lib/datadog/rum.tsx
+141:27  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+305:6  Warning: React Hook useEffect has a missing dependency: 'user'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+314:6  Warning: React Hook useEffect has a missing dependency: 'context'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+355:1  Warning: Assign object to a variable before exporting as module default  import/no-anonymous-default-export
+
+./src/lib/datadog/security.ts
+122:9  Warning: 'normalizedText' is assigned a value but never used.  @typescript-eslint/no-unused-vars
+217:3  Warning: 'context' is defined but never used.  @typescript-eslint/no-unused-vars
+391:9  Warning: 'config' is assigned a value but never used.  @typescript-eslint/no-unused-vars
+466:1  Warning: Assign object to a variable before exporting as module default  import/no-anonymous-default-export
+
+./src/lib/features/flags.ts
+15:39  Warning: 'FlagSource' is defined but never used.  @typescript-eslint/no-unused-vars
+
+./src/lib/firebase-admin.ts
+9:5  Warning: '_initialized' is assigned a value but never used.  @typescript-eslint/no-unused-vars
+
+./src/lib/firestore.ts
+6:3  Warning: 'UsageData' is defined but never used.  @typescript-eslint/no-unused-vars
+
+./src/lib/ratelimit.ts
+237:27  Warning: 'remaining' is assigned a value but never used.  @typescript-eslint/no-unused-vars
+
+./src/repositories/cache/CachedChatRepository.ts
+86:11  Warning: 'chat' is assigned a value but never used.  @typescript-eslint/no-unused-vars
+
+./src/repositories/firestore/FirestoreMemoryRepository.ts
+14:3  Warning: 'collection' is defined but never used.  @typescript-eslint/no-unused-vars
+15:3  Warning: 'getDocs' is defined but never used.  @typescript-eslint/no-unused-vars
+
+./src/repositories/interfaces/IMemoryRepository.ts
+11:3  Warning: 'LastInteraction' is defined but never used.  @typescript-eslint/no-unused-vars
+
+./src/services/__tests__/container.test.ts
+17:10  Warning: 'IChatService' is defined but never used.  @typescript-eslint/no-unused-vars
+194:26  Warning: Unexpected any. Specify a different type.  @typescript-eslint/no-explicit-any
+
+./src/services/implementations/EmbeddingService.ts
+11:3  Warning: 'getDoc' is defined but never used.  @typescript-eslint/no-unused-vars
+
+./src/services/implementations/MemoryService.ts
+13:3  Warning: 'MemoryExtractionResult' is defined but never used.  @typescript-eslint/no-unused-vars
+
+./src/shared/components/Avatar.tsx
+33:11  Warning: Using `<img>` could result in slower LCP and higher bandwidth. Consider using `<Image />` from `next/image` or a custom image loader to automatically optimize images. This may incur additional usage or cost from your provider. See: https://nextjs.org/docs/messages/no-img-element  @next/next/no-img-element
+
+./src/shared/components/Button.stories.tsx
+3:28  Warning: 'Loader2' is defined but never used.  @typescript-eslint/no-unused-vars
+
+./src/shared/components/Tabs.stories.tsx
+3:16  Warning: 'Settings' is defined but never used.  @typescript-eslint/no-unused-vars
+
+./src/shared/components/TelegramLoginButton.tsx
+86:22  Warning: The ref value 'containerRef.current' will likely have changed by the time this effect cleanup function runs. If this ref points to a node rendered by React, copy 'containerRef.current' to a variable inside the effect, and use that variable in the cleanup function.  react-hooks/exhaustive-deps
+
+./src/shared/types/tokens.ts
+7:10  Warning: 'Message' is defined but never used.  @typescript-eslint/no-unused-vars
+8:10  Warning: 'IntentAction' is defined but never used.  @typescript-eslint/no-unused-vars
+
+./src/stores/StoreProvider.tsx
+32:9  Warning: 'authLoading' is assigned a value but never used.  @typescript-eslint/no-unused-vars
+193:40  Warning: A `require()` style import is forbidden.  @typescript-eslint/no-require-imports
+223:29  Warning: A `require()` style import is forbidden.  @typescript-eslint/no-require-imports
+
+./src/stores/authStore.ts
+58:11  Warning: 'get' is defined but never used.  @typescript-eslint/no-unused-vars
+151:20  Warning: 'state' is defined but never used.  @typescript-eslint/no-unused-vars
+
+./src/stores/chatStoreV2.ts
+487:15  Warning: 'data' is assigned a value but never used.  @typescript-eslint/no-unused-vars
+
+./src/stores/subscriptionStore.test.ts
+2:32  Warning: 'useSubscriptionSelectors' is defined but never used.  @typescript-eslint/no-unused-vars
+
+./src/stores/translatorStore.ts
+245:28  Warning: A `require()` style import is forbidden.  @typescript-eslint/no-require-imports
+
+./src/stores/types.ts
+5:10  Warning: 'User' is defined but never used.  @typescript-eslint/no-unused-vars
+
+./src/stories/Page.tsx
+39:13  Warning: `"` can be escaped with `&quot;`, `&ldquo;`, `&#34;`, `&rdquo;`.  react/no-unescaped-entities
+39:18  Warning: `"` can be escaped with `&quot;`, `&ldquo;`, `&#34;`, `&rdquo;`.  react/no-unescaped-entities
+
+info  - Need to disable some ESLint rules? Learn more here: https://nextjs.org/docs/app/api-reference/config/eslint#disabling-rules
+   Collecting page data ...
+   Generating static pages (0/41) ...
+   Generating static pages (10/41) 
+   Generating static pages (20/41) 
+   Generating static pages (30/41) 
+ ✓ Generating static pages (41/41)
+   Finalizing page optimization ...
+   Collecting build traces ...
+
+Route (app)                                 Size  First Load JS
+┌ ○ /                                    4.56 kB         249 kB
+├ ○ /_not-found                             1 kB         104 kB
+├ ƒ /api/auth/telegram                     217 B         103 kB
+├ ƒ /api/chat                              217 B         103 kB
+├ ƒ /api/chat/stream                     1.63 kB         104 kB
+├ ƒ /api/clone-voice                       217 B         103 kB
+├ ƒ /api/convai/chat/completions           217 B         103 kB
+├ ƒ /api/convai/llm                        217 B         103 kB
+├ ƒ /api/convai/session                    217 B         103 kB
+├ ƒ /api/features                          810 B         103 kB
+├ ƒ /api/health                            217 B         103 kB
+├ ƒ /api/memory/extract                    217 B         103 kB
+├ ƒ /api/stripe/create-checkout            217 B         103 kB
+├ ƒ /api/stripe/create-portal              217 B         103 kB
+├ ƒ /api/stripe/webhook                    217 B         103 kB
+├ ƒ /api/stt                               217 B         103 kB
+├ ƒ /api/studio/[...path]                  217 B         103 kB
+├ ƒ /api/studio/adaptive/[[...path]]       217 B         103 kB
+├ ƒ /api/studio/experience/[[...path]]     217 B         103 kB
+├ ƒ /api/studio/shared/[[...path]]         217 B         103 kB
+├ ƒ /api/studio/telegram/[key]             217 B         103 kB
+├ ƒ /api/telegram/payments                 217 B         103 kB
+├ ƒ /api/telegram/webhook                  217 B         103 kB
+├ ƒ /api/tireh/telegram/[personaId]        217 B         103 kB
+├ ƒ /api/translate                         217 B         103 kB
+├ ƒ /api/translator/messages               217 B         103 kB
+├ ƒ /api/tts                               217 B         103 kB
+├ ƒ /api/tts/stream                        217 B         103 kB
+├ ƒ /api/user/data                         217 B         103 kB
+├ ƒ /api/user/subscription                 217 B         103 kB
+├ ƒ /api/user/voices                       217 B         103 kB
+├ ƒ /api/v2/chats                          217 B         103 kB
+├ ƒ /api/v2/chats/[chatId]                 217 B         103 kB
+├ ƒ /api/v2/chats/[chatId]/messages        217 B         103 kB
+├ ƒ /api/v2/migrate                        217 B         103 kB
+├ ƒ /api/v2/sync                           217 B         103 kB
+├ ƒ /api/voices                            217 B         103 kB
+├ ○ /app                                 17.9 kB         516 kB
+├ ƒ /chat/[contactId]                      400 B         103 kB
+├ ○ /contacts                              367 B         103 kB
+├ ○ /create                              12.4 kB         257 kB
+├ ○ /design-system                       2.34 kB         243 kB
+├ ○ /login                               3.97 kB         249 kB
+├ ○ /pricing                             5.45 kB         271 kB
+├ ○ /settings                             7.8 kB         273 kB
+├ ○ /studio                              39.7 kB         184 kB
+└ ○ /translator                          9.81 kB         500 kB
++ First Load JS shared by all             103 kB
+  ├ chunks/1255-60d8dc7c8c9309a1.js      46.3 kB
+  ├ chunks/4bd1b696-100b9d70ed4e49c1.js  54.2 kB
+  └ other shared chunks (total)          1.95 kB
+
+
+ƒ Middleware                             33.5 kB
+
+○  (Static)   prerendered as static content
+ƒ  (Dynamic)  server-rendered on demand
+

@@ -43,12 +43,29 @@ export function audienceOf(chat: ChatContext): string[] {
   return chat.kind === 'private' ? [chat.personId] : [...chat.group.memberIds];
 }
 
+/** Unknown readers are restrictive even when no named guest has spoken. */
+export function hasRestrictedAudience(org: OrgDirectory, chat: ChatContext): boolean {
+  const audience = audienceOf(chat);
+  return (chat.kind === 'group' && Boolean(chat.group.hasGuests)) || audience.length === 0 ||
+    audience.some((id) => !org.getPerson(id) || org.getPerson(id)?.guest);
+}
+
+/** Apply the same conversation boundary at retrieval and both model prompts. */
+export function isVisibleInChat(org: OrgDirectory, memory: MemoryRecord, chat: ChatContext): boolean {
+  if (memory.supersededBy) return false;
+  if (memory.sensitivity === 'personal' && chat.kind !== 'private') return false;
+  if (chat.kind === 'group' && hasRestrictedAudience(org, chat) &&
+      !(memory.scope.kind === 'group' && memory.scope.groupId === chat.group.id)) return false;
+  return isVisibleToAudience(org, memory, audienceOf(chat));
+}
+
 export function isVisibleToAudience(
   org: OrgDirectory,
   memory: MemoryRecord,
   audience: string[]
 ): boolean {
-  if (audience.length === 0) return false;
+  if (audience.length === 0 || audience.some((id) => !org.getPerson(id))) return false;
+  if (memory.authorizedPersonIds && audience.some((id) => !memory.authorizedPersonIds!.includes(id))) return false;
   // Personal memories never leave a one-to-one conversation with their owner.
   if (memory.sensitivity === 'personal') {
     return (

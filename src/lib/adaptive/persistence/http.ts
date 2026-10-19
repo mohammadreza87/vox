@@ -1,0 +1,65 @@
+import { z } from 'zod';
+import { canUseAgent } from '../../studio/permissions';
+import { verifyInitData } from '../../studio/auth';
+import { boundedStudioRequest } from '../../studio/http';
+import { StudioError, type Studio } from '../../studio/service';
+import { StudioRateLimiter, StudioRateLimitError } from '../../studio/ratelimit';
+import { AdaptiveError, type AdaptiveService } from './service';
+import { agentGrantInput, consentInput, deletionInput, identityInput, memoryInput, presentInput, spaceInput } from './validation';
+const response = (data: unknown, status = 200, headers: Record<string, string> = {}) => new Response(JSON.stringify(data), {
+  status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...headers },
+});
+const fallbackLimiters = new WeakMap<Studio, StudioRateLimiter>();
+/** Same cryptographic Telegram authentication as Studio; no development impersonation. */
+export async function handleAdaptiveRequest(studio: Studio, service: AdaptiveService, request: Request, path: string[], botToken: string): Promise<Response> {
+  try {
+    let limiter = studio.deps.rateLimiter ?? fallbackLimiters.get(studio);
+    if (!limiter) { const local = new StudioRateLimiter(); fallbackLimiters.set(studio, local); limiter = local; }
+    await limiter.consume('ingress', 'all');
+    const initData = request.headers.get('x-telegram-init-data') ?? '';
+    if (initData.length > 16_384) return response({ error: 'authentication_required' }, 401);
+    const user = verifyInitData(initData, botToken);
+    if (!user) return response({ error: 'authentication_required' }, 401);
+    await limiter.consume('api', user.id);
+    const member = await studio.ensureMember(user);
+    if (member.role === 'pending') return response({ error: 'approval_required' }, 403);
+    const url = new URL(request.url);
+    const space = spaceInput.parse(url.searchParams.get('space') ?? 'work');
+    const locale = z.enum(['en', 'fa']).parse(url.searchParams.get('locale') ?? 'en');
+    if (request.method === 'GET' && path.length === 0) return response(await service.read(user.id, space, locale));
+    if (!['POST', 'PUT', 'DELETE'].includes(request.method)) return response({ error: 'not_found' }, 404);
+    // Authenticated browser mutation must originate from this origin, not a hostile page.
+    if (request.headers.get('origin') !== url.origin || request.headers.get('sec-fetch-site') === 'cross-site') return response({ error: 'origin_denied' }, 403);
+    if (request.headers.get('content-type')?.split(';')[0].trim().toLowerCase() !== 'application/json') return response({ error: 'json_required' }, 415);
+    await limiter.consume('mutation', user.id);
+    const bounded = await boundedStudioRequest(request, 8192);
+    let body: unknown;
+    try { body = await bounded.json(); } catch { return response({ error: 'invalid_json' }, 400); }
+    const route = `${request.method} ${path.join('/')}`;
+    if (route === 'POST identity') return response(await service.confirm(user.id, identityInput.parse(body), space));
+    if (route === 'POST consents/present') return response(await service.present(user.id, presentInput.parse(body)));
+    if (route === 'PUT consents') return response(await service.changeConsent(user.id, consentInput.parse(body)));
+    if (route === 'POST memories') return response(await service.createMemory(user.id, memoryInput.parse(body)), 201);
+    if (request.method === 'PUT' && path.length === 2 && path[0] === 'agents' && /^[a-zA-Z0-9_-]{1,100}$/.test(path[1])) {
+      const input = agentGrantInput.parse(body);
+      if (input.allowed) {
+        const current = await studio.deps.store.read();
+        const actor = current.members.find(m => m.telegramId === user.id);
+        const agent = current.agents.find(a => a.id === path[1]);
+        if (!agent || !canUseAgent(actor, agent)) return response({ error: 'agent_access_denied' }, 403);
+      }
+      return response(await service.setAgentAccess(user.id, path[1], input));
+    }
+    if (request.method === 'DELETE' && path.length === 2 && path[0] === 'memories' && /^[a-zA-Z0-9-]{1,100}$/.test(path[1])) {
+      return response(await service.deleteMemory(user.id, path[1], deletionInput.parse(body)));
+    }
+    return response({ error: 'not_found' }, 404);
+  } catch (error) {
+    if (error instanceof z.ZodError) return response({ error: 'invalid_request' }, 400);
+    if (error instanceof AdaptiveError) return response({ error: error.code }, error.status);
+    if (StudioError.is(error)) return response({ error: 'invalid_request' }, error.status);
+    if (error instanceof StudioRateLimitError) return response({ error: 'rate_limited' }, 429, { 'Retry-After': String(error.retryAfterSeconds) });
+    // Never return datastore errors, payloads, private text or validation internals.
+    return response({ error: 'adaptive_unavailable' }, 503);
+  }
+}

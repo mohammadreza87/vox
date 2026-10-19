@@ -74,7 +74,7 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(method: string, path: string, body?: unknown, responseType: 'json' | 'blob' = 'json'): Promise<T> {
+export async function request<T>(method: string, path: string, body?: unknown, responseType: 'json' | 'blob' = 'json'): Promise<T> {
   const headers: Record<string, string> = {
     'X-Telegram-Init-Data': tg()?.initData ?? '',
     Accept: responseType === 'blob' ? 'audio/*' : 'application/json',
@@ -152,9 +152,10 @@ export const api = {
   fire: (id: string, input: { reason: string; memoryPolicy: string; confirmName: string }) =>
     request<{ agent: AgentView }>('POST', `agents/${enc(id)}/fire`, input),
   groupLink: (id: string) => request<{ link: string }>('GET', `agents/${enc(id)}/group-link`),
-  callTurn: (id: string, audio: Blob) => {
+  callTurn: (id: string, audio: Blob, space: 'work' | 'personal' = 'work') => {
     const form = new FormData();
     form.append('audio', audio, 'turn');
+    form.append('space', space);
     return request<{ transcript: string; reply: string; audio?: string }>('POST', `agents/${enc(id)}/call`, form);
   },
   memories: (id: string) => request<{ memories: MemoryItem[] }>('GET', `agents/${enc(id)}/memories`),

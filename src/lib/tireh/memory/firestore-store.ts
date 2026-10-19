@@ -13,11 +13,13 @@
 
 import type { Firestore } from 'firebase-admin/firestore';
 import type { ChatMessage, MemoryRecord, ShareOffer } from '../types';
-import type { ChatHistoryStore, MemoryStore, NewMemory, ShareOfferStore, UpdateDeduper } from './store';
+import type { ChatHistoryStore, MemoryStore, MemoryWriteGuard, NewMemory, ShareOfferStore, UpdateDeduper } from './store';
+import { forgetClosure, lineageEventIds, sourceEventIds, StaleMemoryWriteError } from './store';
 import { scopeKey } from './visibility';
 import { randomUUID } from 'crypto';
 
 const MEMORIES = 'tireh_memories';
+const MEMORY_STATE = 'tireh_memory_state';
 const OFFERS = 'tireh_share_offers';
 const CHATS = 'tireh_chats';
 const UPDATES = 'tireh_updates';
@@ -57,11 +59,32 @@ function memoryFromDoc(id: string, data: Record<string, unknown>): MemoryRecord 
 export class FirestoreMemoryStore implements MemoryStore {
   constructor(private readonly db: Firestore) {}
 
-  async add(memory: NewMemory): Promise<MemoryRecord> {
+  async safetyRevision(personaId: string): Promise<number> {
+    const state = await this.db.collection(MEMORY_STATE).doc(personaId).get();
+    return Number(state.data()?.revision ?? 0);
+  }
+
+  async invalidate(personaId: string): Promise<void> {
+    await this.db.runTransaction(async (tx) => {
+      const ref = this.db.collection(MEMORY_STATE).doc(personaId);
+      const state = await tx.get(ref);
+      tx.set(ref, { ...state.data(), revision: Number(state.data()?.revision ?? 0) + 1 });
+    });
+  }
+
+  async add(memory: NewMemory, guard?: MemoryWriteGuard): Promise<MemoryRecord> {
     const now = new Date();
     const ref = this.db.collection(MEMORIES).doc();
     const data = { ...memory, createdAt: now, updatedAt: now };
-    await ref.set(clean({ ...data, active: !memory.supersededBy, scopeKey: scopeKey(memory.scope) }));
+    await this.db.runTransaction(async (tx) => {
+      const state = await tx.get(this.db.collection(MEMORY_STATE).doc(memory.personaId));
+      const revision = Number(state.data()?.revision ?? 0);
+      const tombstones = (state.data()?.tombstones ?? []) as string[];
+      if ((guard && guard.expectedRevision !== revision) || lineageEventIds(memory).some((id) => tombstones.includes(id))) {
+        throw new StaleMemoryWriteError();
+      }
+      tx.set(ref, clean({ ...data, active: !memory.supersededBy, scopeKey: scopeKey(memory.scope) }));
+    });
     return { ...data, id: ref.id };
   }
 
@@ -79,16 +102,41 @@ export class FirestoreMemoryStore implements MemoryStore {
     return snap.docs.map((d) => memoryFromDoc(d.id, d.data() as Record<string, unknown>));
   }
 
-  async update(id: string, patch: Partial<Omit<MemoryRecord, 'id' | 'personaId'>>): Promise<void> {
-    const extra: Record<string, unknown> = { updatedAt: new Date() };
-    if (patch.scope) extra.scopeKey = scopeKey(patch.scope);
-    if ('supersededBy' in patch) extra.active = !patch.supersededBy;
-    await this.db.collection(MEMORIES).doc(id).update(clean({ ...patch, ...extra }));
+  async update(id: string, patch: Partial<Omit<MemoryRecord, 'id' | 'personaId'>>, guard?: MemoryWriteGuard): Promise<void> {
+    await this.db.runTransaction(async (tx) => {
+      const ref = this.db.collection(MEMORIES).doc(id);
+      const snap = await tx.get(ref);
+      if (!snap.exists) return;
+      const personaId = snap.data()!.personaId as string;
+      const stateRef = this.db.collection(MEMORY_STATE).doc(personaId);
+      const state = await tx.get(stateRef);
+      const revision = Number(state.data()?.revision ?? 0);
+      if (guard && guard.expectedRevision !== revision) throw new StaleMemoryWriteError();
+      const extra: Record<string, unknown> = { updatedAt: new Date() };
+      if (patch.scope) extra.scopeKey = scopeKey(patch.scope);
+      if ('supersededBy' in patch) extra.active = !patch.supersededBy;
+      tx.update(ref, clean({ ...patch, ...extra }));
+      tx.set(stateRef, { ...state.data(), revision: revision + 1 });
+    });
   }
 
   async delete(id: string): Promise<void> {
-    await this.db.collection(MEMORIES).doc(id).delete();
+    await this.db.runTransaction(async (tx) => {
+      const ref = this.db.collection(MEMORIES).doc(id);
+      const snap = await tx.get(ref);
+      if (!snap.exists) return;
+      const personaId = snap.data()!.personaId as string;
+      const stateRef = this.db.collection(MEMORY_STATE).doc(personaId);
+      const state = await tx.get(stateRef);
+      const rows = await tx.get(this.db.collection(MEMORIES).where('personaId', '==', personaId));
+      const forgotten = forgetClosure(rows.docs.map((d) => memoryFromDoc(d.id, d.data() as Record<string, unknown>)), id);
+      const tombstones = new Set((state.data()?.tombstones ?? []) as string[]);
+      forgotten.forEach((m) => sourceEventIds(m).forEach((e) => tombstones.add(e)));
+      forgotten.forEach((m) => tx.delete(this.db.collection(MEMORIES).doc(m.id)));
+      tx.set(stateRef, { revision: Number(state.data()?.revision ?? 0) + 1, tombstones: [...tombstones] });
+    });
   }
+
 }
 
 export class FirestoreShareOfferStore implements ShareOfferStore {
@@ -126,7 +174,36 @@ export class FirestoreChatHistoryStore implements ChatHistoryStore {
   }
 
   async append(personaId: string, chatKey: string, message: ChatMessage): Promise<void> {
-    await this.messages(personaId, chatKey).add(clean(message));
+    const messages = this.messages(personaId, chatKey);
+    // Stamped gateway writes cannot race a committed memory deletion/update.
+    if (message.privacy) {
+      await this.db.runTransaction(async (tx) => {
+        const state = await tx.get(this.db.collection(MEMORY_STATE).doc(personaId));
+        if (Number(state.data()?.revision ?? 0) !== message.privacy!.memoryRevision) return;
+        tx.set(this.db.collection(CHATS).doc(`${personaId}__${chatKey}`), { personaId });
+        tx.set(messages.doc(), clean({ ...message, personaId }));
+      });
+    } else {
+      await this.db.collection(CHATS).doc(`${personaId}__${chatKey}`).set({ personaId });
+      await messages.add(clean({ ...message, personaId }));
+    }
+  }
+
+  async clear(personaId: string): Promise<void> {
+    // listDocuments includes historical parent documents that have only
+    // subcollections (the pre-stamp layout did not create parent rows).
+    const chats = await this.db.collection(CHATS).listDocuments();
+    for (const chat of chats) {
+      if (!chat.id.startsWith(`${personaId}__`)) continue;
+      for (;;) {
+        const rows = await chat.collection('messages').limit(400).get();
+        if (!rows.docs.length) break;
+        const batch = this.db.batch();
+        rows.docs.forEach((row) => batch.delete(row.ref));
+        await batch.commit();
+      }
+      await chat.delete();
+    }
   }
 
   async recent(personaId: string, chatKey: string, limit: number): Promise<ChatMessage[]> {

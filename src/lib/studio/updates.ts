@@ -10,7 +10,7 @@ import { canUseAgent, visibilityOf } from './permissions';
 import type { Studio } from './service';
 
 export const MANAGER_UPDATES = ['message', 'managed_bot'];
-export const AGENT_UPDATES = ['message', 'callback_query', 'my_chat_member'];
+export const AGENT_UPDATES = ['message', 'callback_query', 'my_chat_member', 'chat_member'];
 
 export async function handleManagerUpdate(studio: Studio, update: TelegramUpdate): Promise<void> {
   const manager = studio.deps.managerBot;
@@ -53,6 +53,10 @@ export async function handleAgentUpdate(studio: Studio, agentId: string, update:
   if (!live || live.status !== 'active') return;
   if (update.my_chat_member) {
     await studio.onBotChatMember(live, update.my_chat_member);
+    return;
+  }
+  if (update.chat_member) {
+    if (await studio.deps.memory.deduper.firstSeen(`audience:${agentId}:${update.update_id}`)) await studio.onGroupChatMember(update.chat_member);
     return;
   }
   const msg = update.message;

@@ -81,8 +81,8 @@ describe('decideScope', () => {
     expect(decideScope(org, sinaDm, 'sina', candidate({})).offerScope).toBeUndefined();
   });
 
-  it('group work decisions in a project group become project memory', () => {
-    expect(decideScope(org, gameend, 'parastoo', candidate({})).scope).toEqual({ kind: 'project', projectId: 'gameend' });
+  it('group work decisions stay with that group until a separate sharing grant', () => {
+    expect(decideScope(org, gameend, 'parastoo', candidate({})).scope).toEqual({ kind: 'group', groupId: 'gameend-team' });
   });
 
   it('other group statements stay in the group', () => {
@@ -94,6 +94,13 @@ describe('decideScope', () => {
   it('confidential remarks in a group stay with the speaker', () => {
     const d = decideScope(org, gameend, 'milad', candidate({ confidential: true }));
     expect(d.scope).toEqual({ kind: 'private', personId: 'milad' });
+  });
+
+  it('personal group statements retain personal sensitivity and private scope', () => {
+    const d = decideScope(org, gameend, 'milad', candidate({ kind: 'personal' }));
+    expect(d.scope).toEqual({ kind: 'private', personId: 'milad' });
+    expect(d.sensitivity).toBe('personal');
+    expect(d.offerScope).toBeUndefined();
   });
 });
 

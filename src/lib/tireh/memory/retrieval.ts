@@ -4,7 +4,7 @@
 
 import type { ChatContext, MemoryRecord } from '../types';
 import type { OrgDirectory } from '../org/directory';
-import { audienceOf, isVisibleToAudience } from './visibility';
+import { audienceOf, isVisibleInChat } from './visibility';
 
 const STOPWORDS = new Set([
   'about', 'after', 'again', 'also', 'been', 'before', 'from', 'have', 'just', 'like', 'more',
@@ -36,14 +36,8 @@ export function selectMemories(
   const audience = audienceOf(chat);
   const queryTokens = tokens(query);
 
-  // With guests in the room, the audience is not fully known: only what was
-  // said in this very group may be used.
-  const guestSafe = (m: MemoryRecord) =>
-    chat.kind !== 'group' || !chat.group.hasGuests ||
-    (m.scope.kind === 'group' && m.scope.groupId === chat.group.id);
-
   const scored = memories
-    .filter((m) => !m.supersededBy && guestSafe(m) && isVisibleToAudience(org, m, audience))
+    .filter((m) => isVisibleInChat(org, m, chat))
     .map((memory) => {
       const memoryTokens = tokens(`${memory.content} ${memory.topic ?? ''}`);
       let overlap = 0;

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Vox Release and reliability engineer"
+  short_description: "Verify Vox releases and rollback readiness"
+  default_prompt: "Use $vox-release-engineer to complete the assigned Vox task within its stated ownership and acceptance criteria."

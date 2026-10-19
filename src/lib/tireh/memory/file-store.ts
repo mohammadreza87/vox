@@ -15,6 +15,8 @@ import {
 
 interface FileState {
   memories: MemoryRecord[];
+  revisions?: Record<string, number>;
+  tombstones?: Record<string, string[]>;
   offers: ShareOffer[];
   chats: Record<string, ChatMessage[]>;
 }
@@ -29,9 +31,12 @@ export function createFileStores(path: string) {
   const memories = new InMemoryMemoryStore();
   const offers = new InMemoryShareOfferStore();
   const history = new InMemoryChatHistoryStore();
+  history.bindMemoryStore(memories);
 
   if (existsSync(path)) {
     const state = JSON.parse(readFileSync(path, 'utf8'), reviveDates) as FileState;
+    for (const [key, revision] of Object.entries(state.revisions ?? {})) memories.revisions.set(key, revision);
+    for (const [key, events] of Object.entries(state.tombstones ?? {})) memories.tombstones.set(key, new Set(events));
     for (const m of state.memories ?? []) memories.records.set(m.id, m);
     for (const o of state.offers ?? []) offers.offers.set(o.id, o);
     for (const [key, list] of Object.entries(state.chats ?? {})) history.chats.set(key, list);
@@ -40,6 +45,8 @@ export function createFileStores(path: string) {
   const save = () => {
     const state: FileState = {
       memories: [...memories.records.values()],
+      revisions: Object.fromEntries(memories.revisions),
+      tombstones: Object.fromEntries([...memories.tombstones].map(([key, events]) => [key, [...events]])),
       offers: [...offers.offers.values()],
       chats: Object.fromEntries(history.chats),
     };
@@ -61,9 +68,9 @@ export function createFileStores(path: string) {
   };
 
   return {
-    memories: persisting(memories, ['add', 'update', 'delete']),
+    memories: persisting(memories, ['add', 'update', 'delete', 'invalidate']),
     offers: persisting(offers, ['create', 'setStatus']),
-    history: persisting(history, ['append']),
+    history: persisting(history, ['append', 'clear']),
     // Polling hands out each update once, so de-duplication can stay in memory.
     deduper: new InMemoryUpdateDeduper(),
   };

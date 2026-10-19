@@ -1,0 +1,4 @@
+interface:
+  display_name: "Vox Privacy and security reviewer"
+  short_description: "Review Vox privacy and access boundaries"
+  default_prompt: "Use $vox-privacy-security to complete the assigned Vox task within its stated ownership and acceptance criteria."

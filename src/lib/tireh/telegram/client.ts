@@ -40,8 +40,8 @@ export interface TelegramChatMemberUpdated {
   chat: TelegramChat;
   from: TelegramUser;
   date: number;
-  old_chat_member: { status: string; user: TelegramUser };
-  new_chat_member: { status: string; user: TelegramUser };
+  old_chat_member: { status: string; user: TelegramUser; is_member?: boolean };
+  new_chat_member: { status: string; user: TelegramUser; is_member?: boolean };
 }
 
 export interface TelegramManagedBotUpdated {
@@ -54,6 +54,7 @@ export interface TelegramUpdate {
   message?: TelegramMessage;
   callback_query?: TelegramCallbackQuery;
   my_chat_member?: TelegramChatMemberUpdated;
+  chat_member?: TelegramChatMemberUpdated;
   managed_bot?: TelegramManagedBotUpdated;
 }
 

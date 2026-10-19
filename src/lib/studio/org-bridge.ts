@@ -74,6 +74,7 @@ export function studioToOrgConfig(state: StudioState, orgName = 'HOOR'): OrgConf
     // Anyone reading who isn't an approved member makes it a guest group:
     // only the group's own memories are safe there.
     hasGuests: g.hasGuests || g.memberIds.some((id) => !members.has(personId(id))),
+    audienceEpoch: g.audienceEpoch ?? 0,
   }));
 
   return {

@@ -223,7 +223,9 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
             const form = await req.formData().catch(() => { throw new StudioError(400, 'Expected audio'); });
             const audio = form.get('audio');
             if (!(audio instanceof Blob)) throw new StudioError(400, 'Expected audio');
-            return json(await studio.callTurn(me, id, await audio.arrayBuffer(), audio.type || 'audio/webm'));
+            const space = form.get('space') ?? 'work';
+            if (space !== 'work' && space !== 'personal') throw new StudioError(400, 'Choose Work or Personal.');
+            return json(await studio.callTurn(me, id, await audio.arrayBuffer(), audio.type || 'audio/webm', space));
           }
           case 'GET memories': return json({ memories: await studio.memoriesFor(me, id) });
           case 'DELETE memories': {

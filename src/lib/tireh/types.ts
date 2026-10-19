@@ -48,11 +48,12 @@ export interface Project {
 
 /** A Telegram group registered with TIREH. Unregistered groups are refused. */
 export interface Group {
+  audienceEpoch?: number;
   id: string;                 // internal id, e.g. "gameend-team"
   name: string;
   telegramChatId: number;
   memberIds: string[];        // everyone who can read the group
-  projectId?: string;         // decisions here become project memory
+  projectId?: string;         // related project; does not widen memory sharing
   companyId?: string;
   /** People outside the organization can read this group: only its own memories are usable */
   hasGuests?: boolean;
@@ -114,6 +115,10 @@ export type MemoryType = 'fact' | 'decision' | 'preference' | 'event' | 'relatio
 export type MemorySensitivity = 'normal' | 'personal' | 'confidential';
 
 export interface MemorySource {
+  /** Opaque source event lineage; never source text. */
+  eventIds?: string[];
+  /** Context dependencies, distinct from this record's own source events. */
+  derivedFromEventIds?: string[];
   personId: string;           // who said it
   chatKind: 'private' | 'group';
   groupId?: string;
@@ -124,6 +129,8 @@ export interface MemorySource {
 export interface MemoryRecord {
   id: string;
   personaId: string;
+  /** Historical recipients fixed at explicit authorization; absence denotes legacy data. */
+  authorizedPersonIds?: string[];
   content: string;
   type: MemoryType;
   scope: MemoryScope;
@@ -154,6 +161,8 @@ export interface ShareOffer {
 // ============================================
 
 export interface ChatMessage {
+  /** Server-created boundary stamp. Unstamped legacy rows are never replayed. */
+  privacy?: { policyKey: string; memoryRevision: number; sourceEventIds: string[]; memoryIds: string[] };
   role: 'user' | 'assistant';
   personId?: string;          // set for user messages
   text: string;

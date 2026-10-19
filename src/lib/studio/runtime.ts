@@ -25,6 +25,8 @@
  */
 
 import { isAbsolute, join, parse, relative, resolve, sep } from 'path';
+import { createHash } from 'crypto';
+import OpenAI from 'openai';
 import { AnthropicLLM } from '../tireh/llm';
 import { createFileStores } from '../tireh/memory/file-store';
 import { FirestoreChatHistoryStore, FirestoreMemoryStore, FirestoreShareOfferStore, FirestoreUpdateDeduper } from '../tireh/memory/firestore-store';
@@ -34,6 +36,16 @@ import { FirestoreStudioStore } from './firestore-store';
 import { FirestoreStudioRateLimiter } from './firestore-ratelimit';
 import { Studio, type StudioDeps } from './service';
 import { StudioStore } from './store';
+import { AdaptiveService } from '../adaptive/persistence/service';
+import { AdaptiveRepository } from '../adaptive/persistence/repository';
+import { FileAdaptiveStorage, FirestoreAdaptiveStorage, type AdaptiveStorage } from '../adaptive/persistence/storage';
+import { adaptiveOptionsFromManifest } from '../adaptive/persistence/config';
+import { SharedMemoryRepository } from '../adaptive/shared/repository';
+import { SharedMemoryService } from '../adaptive/shared/service';
+import { AdaptiveExperienceService } from '../adaptive/runtime/service';
+import { DecisionService, OpenAIDecisionProvider } from '../adaptive/decisions';
+import { canUseAgent } from './permissions';
+import { groupId } from './org-bridge';
 
 export function parseIds(raw: string | undefined): number[] {
   return (raw ?? '')
@@ -108,17 +120,24 @@ async function toJpeg(data: Buffer): Promise<Buffer> {
 
 const g = globalThis as unknown as { __voxStudio?: Promise<Studio> };
 
-function fileStorage(dir: string): Pick<StudioDeps, 'store' | 'memory' | 'rateLimiter'> {
-  return { store: new StudioStore(dir), memory: createFileStores(join(dir, 'memory.json')) };
+type RuntimeStorage = Pick<StudioDeps, 'store' | 'memory' | 'rateLimiter' | 'adaptive'> & { sharedStorage: AdaptiveStorage };
+function fileStorage(dir: string): RuntimeStorage {
+  return { store: new StudioStore(dir), memory: createFileStores(join(dir, 'memory.json')),
+    adaptive: new AdaptiveService(new AdaptiveRepository(new FileAdaptiveStorage(join(dir, 'adaptive'))),
+      adaptiveOptionsFromManifest(process.env.STUDIO_ADAPTIVE_POLICY_JSON)),
+    sharedStorage: new FileAdaptiveStorage(join(dir, 'shared-memory')) };
 }
 
-async function firestoreStorage(bucketName: string): Promise<Pick<StudioDeps, 'store' | 'memory' | 'rateLimiter'>> {
+async function firestoreStorage(bucketName: string): Promise<RuntimeStorage> {
   const { getAdminApp, getAdminDb } = await import('@/lib/firebase-admin');
   const { getStorage } = await import('firebase-admin/storage');
   const db = await getAdminDb();
   const bucket = getStorage(await getAdminApp()).bucket(bucketName);
   return {
     store: new FirestoreStudioStore(db, bucket),
+    adaptive: new AdaptiveService(new AdaptiveRepository(new FirestoreAdaptiveStorage(db)),
+      adaptiveOptionsFromManifest(process.env.STUDIO_ADAPTIVE_POLICY_JSON)),
+    sharedStorage: new FirestoreAdaptiveStorage(db, 'adaptiveSharedMemory'),
     rateLimiter: new FirestoreStudioRateLimiter(db),
     memory: {
       memories: new FirestoreMemoryStore(db),
@@ -154,7 +173,7 @@ async function create(): Promise<Studio> {
   } else if (managerBot && !managerUsername) {
     managerUsername = (await managerBot.getMe().catch(() => null))?.username ?? '';
   }
-  return new Studio({
+  const studio = new Studio({
     store: storage.store,
     personaLLM: new AnthropicLLM(env.ANTHROPIC_API_KEY!, env.STUDIO_PERSONA_MODEL || 'claude-sonnet-5-5'),
     chatLLM: new AnthropicLLM(env.ANTHROPIC_API_KEY!, env.STUDIO_CHAT_MODEL || 'claude-haiku-5-5'),
@@ -169,9 +188,33 @@ async function create(): Promise<Studio> {
     webAppUrl: config.webAppUrl,
     webhookBase: config.publicUrl,
     memory: storage.memory,
+    adaptive: storage.adaptive,
     rateLimiter: storage.rateLimiter,
     imageToJpeg: toJpeg,
   });
+  studio.deps.shared = new SharedMemoryService(new SharedMemoryRepository(storage.sharedStorage), storage.adaptive!, {
+    member: async telegramId => {
+      const state = await storage.store.read();
+      const member = state.members.find(m => m.telegramId === telegramId);
+      return { active: !!member && member.role !== 'pending', agentIds: member ? state.agents.filter(a => a.status === 'active' && canUseAgent(member, a)).map(a => a.id) : [] };
+    },
+    agent: async id => ({ active: (await storage.store.read()).agents.some(a => a.id === id && a.status === 'active') }),
+    group: async id => {
+      const state = await storage.store.read();
+      const group = state.groups.find(g => groupId(g.chatId) === id);
+      if (!group) return null;
+      const memberTelegramIds = [...group.memberIds].sort((a, b) => a - b);
+      const hasGuests = group.hasGuests || memberTelegramIds.some(id => !state.members.some(m => m.telegramId === id && m.role !== 'pending'));
+      return { memberTelegramIds, hasGuests, revision: createHash('sha256').update(JSON.stringify([id, memberTelegramIds, hasGuests, group.audienceEpoch ?? 0])).digest('hex') };
+    },
+  });
+  studio.deps.experience = new AdaptiveExperienceService(storage.adaptive!, {
+    decisionsEnabled: env.STUDIO_DECISIONS_ENABLED === '1' && !!env.OPENAI_API_KEY,
+    ...(env.STUDIO_DECISIONS_ENABLED === '1' && env.OPENAI_API_KEY ? {
+      decisions: new DecisionService(new OpenAIDecisionProvider(new OpenAI({ apiKey: env.OPENAI_API_KEY, maxRetries: 0 }))),
+    } : {}),
+  });
+  return studio;
 }
 
 export function getStudio(): Promise<Studio> {

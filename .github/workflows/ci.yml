@@ -173,6 +173,9 @@ jobs:
           NEXT_PUBLIC_FIREBASE_PROJECT_ID: ${{ secrets.NEXT_PUBLIC_FIREBASE_PROJECT_ID || 'test-project' }}
           NEXT_TELEMETRY_DISABLED: 1
 
+      - name: Run adaptive production browser journey
+        run: npx playwright test --config=e2e/adaptive.config.ts
+
       - name: Run E2E tests
         run: npx playwright test
         env:
