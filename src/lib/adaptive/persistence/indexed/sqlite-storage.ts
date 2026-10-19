@@ -186,14 +186,20 @@ export class SqliteAdaptiveStorage implements AdaptiveStorage {
   }
   async transact<T>(accountId: string, mutate: (current: unknown | null) => { document: unknown; result: T }, beforeCommit?: () => void): Promise<T> {
     validateAccountId(accountId); this.assertAvailable(); this.writer = true; let committed = false, committing = false;
+    let observedTime: number | undefined;
     try {
       this.database.exec('BEGIN IMMEDIATE'); const meta = this.readMetadata(), now = this.sampleTime(meta.lifecycleWatermark);
+      observedTime = now;
       const key = accountKey(accountId), current = this.database.prepare('SELECT canonical,canonical_digest FROM accounts WHERE account_key=?').get(key) as { canonical: string; canonical_digest: string } | undefined;
       if (current) { this.io.canonicalImageReads++; if (digest(JSON.parse(current.canonical)) !== current.canonical_digest) throw new IndexedStorageError('corrupt'); this.validator(JSON.parse(current.canonical), accountId, now); }
       const output = mutate(current ? JSON.parse(current.canonical) : null);
       if (output && typeof output === 'object' && 'then' in output) throw new IndexedStorageError('corrupt');
-      const document = this.validator(output.document, accountId, now), canonical = JSON.stringify(output.document);
-      const serializedDocument = this.validator(JSON.parse(canonical), accountId, now);
+      // Mutation callbacks sample current business time after acquiring storage.
+      // Validate against fresh time, never the earlier input-read sample.
+      const outputAt = this.sampleTime(now); observedTime = outputAt;
+      const document = this.validator(output.document, accountId, outputAt), canonical = JSON.stringify(output.document);
+      const serializedAt = this.sampleTime(outputAt); observedTime = serializedAt;
+      const serializedDocument = this.validator(JSON.parse(canonical), accountId, serializedAt);
       if (digest(document) !== digest(serializedDocument)) throw new IndexedStorageError('corrupt');
       const p = projectDocument(serializedDocument, canonical);
       this.database.prepare('INSERT INTO accounts VALUES(?,?,?,?) ON CONFLICT(account_key) DO UPDATE SET canonical=excluded.canonical,canonical_digest=excluded.canonical_digest').run(key, accountId, canonical, digest(output.document));
@@ -211,12 +217,12 @@ export class SqliteAdaptiveStorage implements AdaptiveStorage {
       }
       this.database.prepare('DELETE FROM outbox WHERE account_key=?').run(key);
       for (const row of p.outbox) this.database.prepare('INSERT INTO outbox VALUES(?,?,?)').run(key, row.eventId, JSON.stringify(row));
-      this.advance(meta, now, this.io);
-      this.sampleTime(meta.lifecycleWatermark);
+      this.advance(meta, serializedAt, this.io);
+      observedTime = this.sampleTime(serializedAt);
       beforeCommit?.(); // Last user operation immediately before synchronous COMMIT.
       committing = true; this.database.exec('COMMIT'); committed = true;
       const result = output.result === undefined ? output.result : structuredClone(output.result);
-      this.sampleTime(meta.lifecycleWatermark);
+      observedTime = this.sampleTime(observedTime);
       try { beforeCommit?.(); } catch { throw new IndexedStorageError('denied', true); }
       return result;
     } catch (error) {
@@ -226,7 +232,11 @@ export class SqliteAdaptiveStorage implements AdaptiveStorage {
         // A callback/guard may itself observe expiry. A failed mutation rolls
         // back its data, but never rolls back an observed lifecycle deadline.
         const watermark = this.readMetadata().lifecycleWatermark;
-        this.publishObservation(this.sampleTime(watermark), this.io);
+        // A clock regression can follow a later validated observation. Retain
+        // that high-water mark even when publication's fresh-clock check denies.
+        let publicationAt = Math.max(watermark, observedTime ?? watermark);
+        try { publicationAt = Math.max(publicationAt, this.sampleTime(0)); } catch { /* Retain valid observations; publication rechecks the current clock. */ }
+        this.publishObservation(publicationAt, this.io);
       } catch (publicationError) {
         throw new IndexedStorageError(publicationError instanceof IndexedStorageError ? publicationError.reason : 'corrupt', committed);
       }

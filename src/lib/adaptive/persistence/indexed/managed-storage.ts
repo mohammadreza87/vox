@@ -205,27 +205,36 @@ export class ManagedFileV2Storage implements AdaptiveStorage {
   }
   async transact<T>(accountId: string, mutate: (current: unknown | null) => { document: unknown; result: T }, beforeCommit?: () => void): Promise<T> {
     validateAccountId(accountId); this.assert(); this.writer = true;
-    let published = false, recordFile: string | undefined;
+    let published = false, recordFile: string | undefined, observedTime: number | undefined;
     try {
-      const head = this.head(), now = this.sample(head.lifecycleWatermark), current = this.record(head, accountId, now);
-      const output = mutate(current); const document = validateAdaptiveDocument(output.document, accountId, now);
+      const head = this.head(), now = this.sample(head.lifecycleWatermark);
+      observedTime = now;
+      const current = this.record(head, accountId, now);
+      const output = mutate(current), outputAt = this.sample(now); observedTime = outputAt;
+      const document = validateAdaptiveDocument(output.document, accountId, outputAt);
       const canonical = JSON.stringify(output.document);
-      if (Buffer.byteLength(canonical) > INDEXED_LIMITS.canonicalBytes || digest(document) !== digest(validateAdaptiveDocument(JSON.parse(canonical), accountId, now))) throw new IndexedStorageError('capacity');
+      const serializedAt = this.sample(outputAt); observedTime = serializedAt;
+      if (Buffer.byteLength(canonical) > INDEXED_LIMITS.canonicalBytes || digest(document) !== digest(validateAdaptiveDocument(JSON.parse(canonical), accountId, serializedAt))) throw new IndexedStorageError('capacity');
       const prior = head.accounts.find(row => row.key === accountKey(accountId)), file = randomUUID();
       recordFile = join(this.directory, 'records', `${file}.json`); writeDurableJson(recordFile, output.document);
       head.accounts = [...head.accounts.filter(row => row.key !== accountKey(accountId)), { key: accountKey(accountId), accountId, file, digest: digest(output.document) }].sort((a, b) => a.key < b.key ? -1 : 1);
       if (head.accounts.length > MAX_MANAGED_ACCOUNTS || Buffer.byteLength(JSON.stringify(head)) > MAX_HEAD_BYTES) throw new IndexedStorageError('capacity');
-      head.lifecycleWatermark = now;
-      writeDurableJson(join(this.directory, 'head.json'), head, () => { this.sample(head.lifecycleWatermark); beforeCommit?.(); }, () => { published = true; });
+      head.lifecycleWatermark = serializedAt;
+      writeDurableJson(join(this.directory, 'head.json'), head, () => { observedTime = this.sample(serializedAt); beforeCommit?.(); }, () => { published = true; });
       this.io.watermarkWrites++;
       if (prior) { unlinkSync(join(this.directory, 'records', `${prior.file}.json`)); syncDirectory(join(this.directory, 'records')); }
       const result = output.result === undefined ? output.result : structuredClone(output.result);
-      this.sample(head.lifecycleWatermark);
+      observedTime = this.sample(observedTime);
       try { beforeCommit?.(); } catch { throw new IndexedStorageError('denied', true); }
       return result;
     } catch (error) {
       if (!published && recordFile && existsSync(recordFile)) unlinkSync(recordFile);
-      try { this.publishTime(this.sample(this.head().lifecycleWatermark)); }
+      try {
+        const watermark = this.head().lifecycleWatermark;
+        let publicationAt = Math.max(watermark, observedTime ?? watermark);
+        try { publicationAt = Math.max(publicationAt, this.sample(0)); } catch { /* Preserve valid observations before the fresh-clock denial. */ }
+        this.publishTime(publicationAt);
+      }
       catch (timeError) { throw new IndexedStorageError(timeError instanceof IndexedStorageError ? timeError.reason : 'corrupt', published); }
       if (error instanceof IndexedStorageError && error.committed === 'unknown') throw error;
       if (published && (!(error instanceof IndexedStorageError) || error.committed !== true)) throw new IndexedStorageError(error instanceof IndexedStorageError ? error.reason : 'corrupt', true);
