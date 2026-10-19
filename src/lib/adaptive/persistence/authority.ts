@@ -9,9 +9,10 @@ export type AdaptiveRuntimeControls = AdaptiveAuthorityDocument & Pick<AdaptiveD
   relationships: Pick<AdaptiveDocument['relationships'], 'controls' | 'bindings' | 'sources' | 'externalSettings'>;
 };
 
-/** A pure evaluator explicitly identifies denial and the earliest external
+/** observedDenial publishes mixed negative feature observations without waiving
+ * the positive deadline. A pure evaluator identifies denial and the earliest external
  * policy deadline; the storage adapter persists observed denial time. */
-export interface RuntimeControlEvaluation<T> { value: T; deadline?: number; denied?: boolean }
+export interface RuntimeControlEvaluation<T> { value: T; deadline?: number; denied?: boolean; observedDenial?: boolean }
 /** Catalog evidence is data only. The namespace alone never proves current
  * permission, retention, source lineage or authority to load private bodies. */
 export type RuntimeControlStamp = Readonly<IndexedControlStamp> | undefined;
@@ -60,13 +61,13 @@ export function validateRuntimeControlEvaluation<T>(raw: unknown): RuntimeContro
   if (!raw || typeof raw !== 'object' || Array.isArray(raw) || utilTypes.isPromise(raw) ||
       ![Object.prototype, null].includes(Object.getPrototypeOf(raw))) throw new Error('Invalid synchronous authority evaluation');
   const fields = Object.getOwnPropertyDescriptors(raw);
-  if (Reflect.ownKeys(raw).some(key => typeof key !== 'string' || !['value', 'deadline', 'denied'].includes(key)) ||
+  if (Reflect.ownKeys(raw).some(key => typeof key !== 'string' || !['value', 'deadline', 'denied', 'observedDenial'].includes(key)) ||
       !Object.hasOwn(fields, 'value') || Object.values(fields).some(d => !('value' in d))) invalid = true;
-  const deadline = fields.deadline?.value, denied = fields.denied?.value;
+  const deadline = fields.deadline?.value, denied = fields.denied?.value, observedDenial = fields.observedDenial?.value;
   if ((deadline !== undefined && (!Number.isSafeInteger(deadline) || deadline < 0)) ||
-      (denied !== undefined && typeof denied !== 'boolean')) invalid = true;
+      (denied !== undefined && typeof denied !== 'boolean') || (observedDenial !== undefined && typeof observedDenial !== 'boolean')) invalid = true;
   if (invalid) throw new Error('Invalid synchronous authority evaluation');
-  return { value: fields.value.value as T, ...(deadline === undefined ? {} : { deadline }), ...(denied === undefined ? {} : { denied }) };
+  return { value: fields.value.value as T, ...(deadline === undefined ? {} : { deadline }), ...(denied === undefined ? {} : { denied }), ...(observedDenial === undefined ? {} : { observedDenial }) };
 }
 
 export function runtimeControlsFromIndexed(c: IndexedControls): AdaptiveRuntimeControls {

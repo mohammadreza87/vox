@@ -286,7 +286,8 @@ export class AdaptiveService {
       evaluation = validateRuntimeControlEvaluation<T>(fn(runtimeControlsFromIndexed(controls), now,
         digest([stamp.incarnation, stamp.generation]), stamp));
       return { ...(evaluation.deadline === undefined ? {} : { deadline: evaluation.deadline }),
-        ...(evaluation.denied === undefined ? {} : { denied: evaluation.denied }) };
+        ...(evaluation.denied === undefined ? {} : { denied: evaluation.denied }),
+        ...(evaluation.observedDenial === undefined ? {} : { observedDenial: evaluation.observedDenial }) };
     });
     if (snapshot.status !== 'ready' || !evaluation) return { status: snapshot.status !== 'ready' && snapshot.reason === 'missing' ? 'missing' : 'busy' };
     return { status: 'ready', value: evaluation.value };
@@ -428,6 +429,7 @@ export class AdaptiveService {
     const confirmed = this.confirmed(d, now);
     const statuses = ['core_text' as const, ...Object.values(CAPABILITY)].map(c => this.eligible(d, c, now));
     return { value: this.authoritySnapshot(d, space, now, locale), denied: !confirmed,
+      observedDenial: statuses.some(status => !status.eligible) || d.permissions.some(p => p.spaceId === spaceIdFor(d.accountId, space) && p.state === 'granted' && p.expiresAt <= now),
       ...(confirmed ? { deadline: Math.min(d.binding!.expiresAt,
         ...d.permissions.filter(p => p.spaceId === spaceIdFor(d.accountId, space) && p.state === 'granted' && p.expiresAt > now).map(p => p.expiresAt),
         ...statuses.flatMap(s => s.eligible && s.validUntil !== undefined ? [s.validUntil] : [])) } : {}) };

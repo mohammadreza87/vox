@@ -174,3 +174,25 @@ it('synchronous authority rejects a native writer and preserves a crossed permis
   expect(f.adaptive.readAuthorityNow(123, 'work').purposes.find(p => p.purpose === 'optional.personalization')?.state).toBe('expired');
   expect(f.storage.readMetadata().lifecycleWatermark).toBeGreaterThanOrEqual(NOW + 80_001);
 });
+
+
+it('persists mixed feature denials after native publication without waiving positive deadlines', async () => {
+  const f = await fixture(); f.setPolicyUntil(NOW + 10);
+  const exec = f.storage.database.exec.bind(f.storage.database); let commits = 0;
+  vi.spyOn(f.storage.database, 'exec').mockImplementation(sql => {
+    const result = exec(sql); if (sql === 'COMMIT' && ++commits === 2) f.setNow(NOW + 11); return result;
+  });
+  const snapshot = f.adaptive.readAuthorityNow(123, 'work');
+  expect(snapshot.identity.confirmed).toBe(true); expect(snapshot.explicitMemoryAvailable).toBe(false);
+  expect(f.storage.readMetadata().lifecycleWatermark).toBeGreaterThanOrEqual(NOW + 11);
+  vi.restoreAllMocks(); f.setNow(NOW + 5);
+  expect(() => f.adaptive.readAuthorityNow(123, 'work')).toThrow();
+});
+it('does not let a mixed denial bypass a binding expiry crossed by its additional publication', async () => {
+  const f = await fixture(); const exec = f.storage.database.exec.bind(f.storage.database); let commits = 0;
+  vi.spyOn(f.storage.database, 'exec').mockImplementation(sql => {
+    const result = exec(sql); if (sql === 'COMMIT' && ++commits === 3) f.setNow(NOW + 90_001); return result;
+  });
+  expect(() => f.adaptive.readAuthorityNow(123, 'work')).toThrow();
+  expect(f.storage.readMetadata().lifecycleWatermark).toBeGreaterThanOrEqual(NOW + 90_001);
+});

@@ -143,7 +143,7 @@ export class SqliteAdaptiveStorage implements AdaptiveStorage {
    * snapshot behind a live writer. The watermark publication is deliberately a
    * measured durable write. Constant time does not issue an UPDATE. */
   readWindow<T>(io: IndexedIoCounters, read: (now: number, meta: IndexedStoreMetadata) => T,
-    checkFresh: (value: T, now: number) => void | { denied?: boolean; deadline?: number }, at?: number, options?: { publishFresh: true }): T {
+    checkFresh: (value: T, now: number) => void | { denied?: boolean; deadline?: number; observedDenial?: boolean }, at?: number, options?: { publishFresh: true }): T {
     this.assertAvailable(); this.writer = true; let committed = false, committing = false;
     try {
       this.database.exec('BEGIN IMMEDIATE'); const meta = this.readMetadata();
@@ -162,7 +162,12 @@ export class SqliteAdaptiveStorage implements AdaptiveStorage {
         const evaluation = checkFresh(value, fresh);
         const afterEvaluation = this.sampleTime(meta.lifecycleWatermark);
         if (!evaluation?.denied && evaluation?.deadline !== undefined && evaluation.deadline <= afterEvaluation) throw new IndexedStorageError('expired');
-        if (evaluation?.denied) this.publishObservation(afterEvaluation, io);
+        if (evaluation?.denied || evaluation?.observedDenial) {
+          this.publishObservation(afterEvaluation, io);
+          // A mixed authority snapshot still contains positive permissions.
+          // Publishing a negative observation cannot waive their deadline.
+          if (!evaluation.denied && evaluation.deadline !== undefined && evaluation.deadline <= this.sampleTime(afterEvaluation)) throw new IndexedStorageError('expired');
+        }
       } catch (error) {
         if (error instanceof IndexedStorageError && (error.reason === 'expired' || error.reason === 'denied')) {
           // Expiry can first be observed during native durability. Publish that

@@ -140,13 +140,13 @@ export class IndexedQueryEngine implements IndexedAdaptiveQueries {
       }
       if (rawEvaluation && typeof rawEvaluation === 'object' && 'then' in rawEvaluation)
         throw new IndexedStorageError('invalid_controls'); // Never execute a thenable.
-      const parsed = z.object({ deadline: z.number().int().nonnegative().safe().optional(), denied: z.boolean().optional() }).strict().safeParse(rawEvaluation);
+      const parsed = z.object({ deadline: z.number().int().nonnegative().safe().optional(), denied: z.boolean().optional(), observedDenial: z.boolean().optional() }).strict().safeParse(rawEvaluation);
       if (evaluateFresh && !parsed.success) throw new IndexedStorageError('invalid_controls');
       const evaluated = parsed.success ? parsed.data : undefined;
       const bound = Math.min(deadline, evaluated?.deadline ?? Number.MAX_SAFE_INTEGER);
       if (!evaluated?.denied && bound <= now) throw new IndexedStorageError('expired');
       value.observedAt = now;
-      return { denied: evaluated?.denied, deadline: bound };
+      return { denied: evaluated?.denied, observedDenial: evaluated?.observedDenial, deadline: bound };
     }, undefined, { publishFresh: true });
     } catch (error) { return fail(error instanceof IndexedStorageError ? error.reason : 'corrupt', io); }
   }
