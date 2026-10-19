@@ -27,11 +27,16 @@ function state(): StudioState {
 }
 
 describe('studio → runtime org', () => {
-  it('only approved members become people', () => {
-    const org = studioToOrg(state());
+  it('approved members are org people; pending people and guests are outsiders', () => {
+    const s = state();
+    s.guests = [{ telegramId: ID.stranger, name: 'Stranger', firstSeen: '' }];
+    const org = studioToOrg(s);
     expect(org.getPersonByTelegramId(ID.alice)?.id).toBe(personId(ID.alice));
+    expect(org.getPersonByTelegramId(ID.alice)?.guest).toBeFalsy();
     expect(org.getPersonByTelegramId(ID.superadmin)?.role).toBe('Super Admin');
-    expect(org.getPersonByTelegramId(ID.pending)).toBeUndefined();
+    for (const id of [ID.pending, ID.stranger]) {
+      expect(org.getPersonByTelegramId(id)).toMatchObject({ guest: true, companyIds: [] });
+    }
   });
 
   it('only active agents with a bot become personas; unknown creators fall back to a superadmin owner', () => {
@@ -61,7 +66,7 @@ describe('studio → runtime org', () => {
     const s = state();
     s.groups[0].memberIds.push(ID.pending);
     const g = studioToOrg(s).getGroupByChatId(-100777)!;
-    expect(g.memberIds).not.toContain(personId(ID.pending));
+    expect(g.memberIds).toContain(personId(ID.pending));
     expect(g.hasGuests).toBe(true);
   });
 });

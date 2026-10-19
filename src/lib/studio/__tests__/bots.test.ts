@@ -74,7 +74,7 @@ describe('bot runner', () => {
     expect(h.bots.get(token)!.getUpdates).toHaveBeenCalledTimes(1);
   });
 
-  it('agent bot: a group message from an outsider marks the group as having guests', async () => {
+  it('agent bot: an outsider in a group it was added to gets a guest-safe answer', async () => {
     vi.useFakeTimers();
     const { agent, token } = await hire(h, org.alice);
     await h.store.update((s) => {
@@ -86,8 +86,14 @@ describe('bot runner', () => {
     ]);
     stop = startBots(h.studio).stop;
     await flush();
-    expect((await h.store.read()).groups[0].hasGuests).toBe(true);
-    expect(h.chatLLM.replyPrompts).toHaveLength(0);
+    const s = await h.store.read();
+    expect(s.groups[0].hasGuests).toBe(true);
+    expect(s.guests?.map((g) => g.telegramId)).toEqual([ID.stranger]);
+    // Groups are open to everyone in them; the outsider is answered as a guest
+    // and the prompt keeps the org chart out.
+    expect(h.chatLLM.replyPrompts).toHaveLength(1);
+    expect(h.chatLLM.lastPrompt).toContain('not part of HOOR');
+    expect(h.chatLLM.lastPrompt).not.toContain('## Organization');
   });
 });
 

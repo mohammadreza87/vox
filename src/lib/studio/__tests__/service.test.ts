@@ -121,7 +121,7 @@ describe('spawn: draft, refine, look, avatars, voice, sandbox, publish', () => {
     h.personaLLM.push(draftJson({ name: 'Leyla' }));
     const { agent, names } = await h.studio.draft(org.alice, { role: 'Producer' });
     expect(names).toEqual(['Leyla', 'Alt', 'Other']);
-    expect(agent).toMatchObject({ status: 'draft', createdBy: ID.alice, isAdmin: false, access: 'everyone', locked: false, formingDay: null, canEdit: true });
+    expect(agent).toMatchObject({ status: 'draft', createdBy: ID.alice, isAdmin: false, visibility: 'private', access: [], locked: false, formingDay: null, canEdit: true });
     expect(agent.look.hue).toBe('sky');
     expect((await h.store.read()).audit.at(-1)?.action).toBe('agent.draft');
   });
@@ -491,15 +491,36 @@ describe('access and agent admins', () => {
     await expectStudioError(h.studio.setAgentAdmin(org.superadmin, d.agent.id, true), 403, /active/);
   });
 
-  it('the creator restricts access; others lose sight of the agent, admins keep it', async () => {
-    const { agent } = await hire(h, org.alice);
-    await expectStudioError(h.studio.setAccess(org.bob, agent.id, [ID.bob]), 403);
-    await expectStudioError(h.studio.setAccess(org.alice, agent.id, ['x'] as never), 400);
-    await h.studio.setAccess(org.alice, agent.id, [ID.alice]);
+  it('new agents are private: creator, allow-list and admins only', async () => {
+    const { agent } = await hire(h, org.alice, {}, undefined, 'private');
+    expect(agent.visibility).toBe('private');
     await expectStudioError(h.studio.getAgent(org.bob, agent.id), 404);
     await expectStudioError(h.studio.groupLink(org.bob, agent.id), 404);
     expect((await h.studio.getAgent(org.admin, agent.id)).id).toBe(agent.id);
     expect(await h.studio.groupLink(org.alice, agent.id)).toBe('https://t.me/hoor_nova_bot?startgroup=hoor');
+    // The creator adds Bob to the allow-list.
+    await expectStudioError(h.studio.setAccess(org.bob, agent.id, [ID.bob]), 403);
+    await expectStudioError(h.studio.setAccess(org.alice, agent.id, ['x'] as never), 400);
+    await h.studio.setAccess(org.alice, agent.id, [ID.bob]);
+    expect((await h.studio.getAgent(org.bob, agent.id)).id).toBe(agent.id);
+  });
+
+  it('the creator or an admin opens an agent to the org or the public', async () => {
+    const { agent } = await hire(h, org.alice, {}, undefined, 'private');
+    await expectStudioError(h.studio.setVisibility(org.bob, agent.id, 'org'), 403);
+    await expectStudioError(h.studio.setVisibility(org.alice, agent.id, 'everyone' as never), 400);
+    expect((await h.studio.setVisibility(org.alice, agent.id, 'org')).visibility).toBe('org');
+    expect((await h.studio.getAgent(org.bob, agent.id)).visibility).toBe('org');
+    expect((await h.studio.setVisibility(org.admin, agent.id, 'public')).visibility).toBe('public');
+    expect((await h.store.read()).audit.filter((e) => e.action === 'agent.visibility').map((e) => e.detail)).toEqual(['org', 'public']);
+  });
+
+  it('older agents without a visibility keep their access meaning', async () => {
+    const { agent } = await hire(h, org.alice);
+    await h.store.update((s) => { const a = s.agents.find((x) => x.id === agent.id)!; delete a.visibility; a.access = 'everyone'; });
+    expect((await h.studio.getAgent(org.bob, agent.id)).visibility).toBe('org');
+    await h.store.update((s) => { s.agents.find((x) => x.id === agent.id)!.access = [ID.alice]; });
+    await expectStudioError(h.studio.getAgent(org.bob, agent.id), 404);
   });
 });
 
@@ -618,11 +639,11 @@ describe('groups', () => {
     const { agent: a, bot } = await hire(h, org.alice);
     await h.studio.onBotChatMember(a, join(ID.stranger));
     await h.studio.onBotChatMember(a, join(ID.pending, 'administrator'));
-    await h.studio.setAccess(org.alice, a.id, [ID.alice]);
+    await h.studio.setVisibility(org.alice, a.id, 'private');
     const restricted = (await h.store.read()).agents[0];
     await h.studio.onBotChatMember(restricted, join(ID.bob));
     expect(bot().leaveChat).toHaveBeenCalledTimes(3);
-    expect(bot().sendMessage).toHaveBeenCalledWith(chat.id, expect.stringContaining('HOOR member adds me'));
+    expect(bot().sendMessage).toHaveBeenCalledWith(chat.id, expect.stringContaining('can add me to groups'));
     expect((await h.store.read()).groups).toEqual([]);
   });
 
@@ -639,12 +660,17 @@ describe('groups', () => {
     const { agent: a, bot } = await hire(h, org.alice);
     bot().getChatMemberCount.mockResolvedValueOnce(3);
     await h.studio.onBotChatMember(a, join(ID.alice));
-    expect(await h.studio.noteGroupSpeaker(chat.id, ID.bob)).toBe(true);
+    const user = (id: number, first_name = 'X') => ({ id, first_name });
+    expect(await h.studio.noteGroupSpeaker(chat.id, user(ID.bob))).toBe(true);
+    expect(await h.studio.noteGroupSpeaker(chat.id, user(ID.bob))).toBe(false); // nothing new
     expect((await h.store.read()).groups[0].memberIds).toEqual([ID.alice, ID.bob]);
     await h.store.update((s) => { s.groups[0].hasGuests = false; });
-    expect(await h.studio.noteGroupSpeaker(chat.id, ID.stranger)).toBe(false);
-    expect((await h.store.read()).groups[0].hasGuests).toBe(true);
-    expect(await h.studio.noteGroupSpeaker(-1, ID.alice)).toBe(false);
+    // Outsiders join the group's audience as guests.
+    expect(await h.studio.noteGroupSpeaker(chat.id, { id: ID.stranger, first_name: 'Sam', last_name: 'Lee', username: 'sam' })).toBe(true);
+    const s = await h.store.read();
+    expect(s.groups[0]).toMatchObject({ hasGuests: true, memberIds: [ID.alice, ID.bob, ID.stranger] });
+    expect(s.guests).toEqual([{ telegramId: ID.stranger, name: 'Sam Lee', username: 'sam', firstSeen: T0.toISOString() }]);
+    expect(await h.studio.noteGroupSpeaker(-1, user(ID.alice))).toBe(false);
   });
 
   it('members list only their groups; admins list all', async () => {

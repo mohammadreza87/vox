@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { audienceOf, canPersonSee, isVisibleToAudience, parseScopeKey, scopeKey } from '../memory/visibility';
-import { memory, testOrg } from './fixtures';
+import { memory, testOrg, testOrgConfig } from './fixtures';
+import { OrgDirectory } from '../org/directory';
+import { buildSystemPrompt } from '../conversation/prompt';
 import type { ChatContext, MemoryScope } from '../types';
 
 const org = testOrg();
@@ -88,5 +90,41 @@ describe('scope keys', () => {
     for (const scope of scopes) expect(parseScopeKey(scopeKey(scope))).toEqual(scope);
     expect(parseScopeKey('weird:x')).toBeNull();
     expect(parseScopeKey('private')).toBeNull();
+  });
+});
+
+describe('guests (people outside the organization)', () => {
+  const config = testOrgConfig();
+  config.people.push({ id: 'sam', name: 'Sam', role: 'Guest', telegramUserId: 999, companyIds: [], projectIds: [], guest: true });
+  config.groups.push({ id: 'open', name: 'Open chat', telegramChatId: -42, memberIds: ['reza', 'sam'], hasGuests: true });
+  const withGuest = new OrgDirectory(config);
+
+  it('see only their own private memories and their groups, never org, company or project knowledge', () => {
+    expect(canPersonSee(withGuest, 'sam', { kind: 'private', personId: 'sam' })).toBe(true);
+    expect(canPersonSee(withGuest, 'sam', { kind: 'private', personId: 'reza' })).toBe(false);
+    expect(canPersonSee(withGuest, 'sam', { kind: 'group', groupId: 'open' })).toBe(true);
+    expect(canPersonSee(withGuest, 'sam', { kind: 'group', groupId: 'leads' })).toBe(false);
+    expect(canPersonSee(withGuest, 'sam', { kind: 'org' })).toBe(false);
+    expect(canPersonSee(withGuest, 'sam', { kind: 'company', companyId: 'ludaxis' })).toBe(false);
+    expect(canPersonSee(withGuest, 'sam', { kind: 'project', projectId: 'gameend' })).toBe(false);
+    // Members are unaffected.
+    expect(canPersonSee(withGuest, 'reza', { kind: 'org' })).toBe(true);
+  });
+
+  it('an org memory is hidden from any conversation a guest can read', () => {
+    const orgFact = memory({ scope: { kind: 'org' } });
+    expect(isVisibleToAudience(withGuest, orgFact, ['reza'])).toBe(true);
+    expect(isVisibleToAudience(withGuest, orgFact, ['reza', 'sam'])).toBe(false);
+  });
+
+  it('keeps the org chart and reporting lines out of the prompt when a guest is present', () => {
+    const persona = { ...withGuest.getPersona('aria')!, strangerPolicy: 'Chats about design; keeps plans private.' };
+    const guestPrompt = buildSystemPrompt({ org: withGuest, persona, chat: { kind: 'private', personId: 'sam', chatKey: 'p:sam' } as ChatContext, speakerId: 'sam', memories: [] });
+    expect(guestPrompt).toContain('Sam (not part of HOOR)');
+    expect(guestPrompt).toContain('Chats about design; keeps plans private.');
+    for (const hidden of ['## Organization', 'How people relate', 'You report to', 'Parastoo', 'Executive']) expect(guestPrompt).not.toContain(hidden);
+    const memberPrompt = buildSystemPrompt({ org: withGuest, persona, chat: { kind: 'private', personId: 'reza', chatKey: 'p:reza' } as ChatContext, speakerId: 'reza', memories: [] });
+    expect(memberPrompt).toContain('## Organization');
+    expect(memberPrompt).not.toContain('- Sam');
   });
 });

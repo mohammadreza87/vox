@@ -5,9 +5,9 @@
  */
 
 import type { AgentView } from '@/lib/studio/service';
-import type { AgentLook, Member, PersonaSpec, Role, SpawnBrief } from '@/lib/studio/types';
+import type { AgentLook, AgentVisibility, Member, PersonaSpec, Role, SpawnBrief } from '@/lib/studio/types';
 
-export type { AgentView, AgentLook, Member, PersonaSpec, Role, SpawnBrief };
+export type { AgentView, AgentLook, AgentVisibility, Member, PersonaSpec, Role, SpawnBrief };
 
 interface TelegramWebApp {
   initData: string;
@@ -133,6 +133,8 @@ export const api = {
     request<{ reply: string }>('POST', `agents/${enc(id)}/test`, { messages }),
   publish: (id: string) => request<{ link: string; agent: AgentView }>('POST', `agents/${enc(id)}/publish`),
   setAccess: (id: string, access: 'everyone' | number[]) => request<{ agent: AgentView }>('PUT', `agents/${enc(id)}/access`, { access }),
+  setVisibility: (id: string, visibility: AgentVisibility) => request<{ agent: AgentView }>('PUT', `agents/${enc(id)}/visibility`, { visibility }),
+  unblock: (id: string, telegramId: number) => request<{ agent: AgentView }>('DELETE', `agents/${enc(id)}/blocked?telegramId=${telegramId}`),
   setAgentAdmin: (id: string, isAdmin: boolean) => request<{ agent: AgentView }>('PUT', `agents/${enc(id)}/admin`, { isAdmin }),
   fire: (id: string, input: { reason: string; memoryPolicy: string; confirmName: string }) =>
     request<{ agent: AgentView }>('POST', `agents/${enc(id)}/fire`, input),

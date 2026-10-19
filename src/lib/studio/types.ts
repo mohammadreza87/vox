@@ -45,6 +45,10 @@ export interface PersonaSpec {
   voiceBrief: string;
   /** Short accessory/feature hint for the avatar, respectful of culture */
   avatarHint: string;
+  /** How they treat people outside the org when public: what they share, when they stop */
+  withStrangers?: string;
+  /** 0 (guarded) … 100 (chatty with anyone): how readily they engage strangers */
+  openness?: number;
 }
 
 /** Optional inputs to the spawn brief; Claude fills the gaps. */
@@ -111,14 +115,35 @@ export interface Agent {
   tokenEnc?: string;
   suggestedUsername?: string;
   isAdmin: boolean;
-  /** 'everyone' in HOOR, or an allow-list of Telegram ids */
+  /**
+   * Who can talk to the agent in direct messages (groups it was added to are
+   * always open to their members):
+   *  private  creator, the allow-list in `access`, and admins (default)
+   *  org      every approved member
+   *  public   anyone on Telegram; the agent decides how to treat strangers
+   * Missing on older agents: derived from `access`.
+   */
+  visibility?: AgentVisibility;
+  /** Allow-list of Telegram ids for private agents ('everyone' on older agents) */
   access: 'everyone' | number[];
+  /** Telegram ids this agent stopped talking to */
+  blocked?: number[];
   identityVersion: number;
   successorOf?: string;
   firedAt?: string;
   firedBy?: number;
   firedReason?: string;
   memoryPolicy?: MemoryPolicy;
+}
+
+export type AgentVisibility = 'private' | 'org' | 'public';
+
+/** Someone outside the org who talked to a public agent or shares a group with one. */
+export interface Guest {
+  telegramId: number;
+  name: string;
+  username?: string;
+  firstSeen: string;
 }
 
 export interface StudioGroup {
@@ -146,6 +171,9 @@ export interface StudioState {
   agents: Agent[];
   groups: StudioGroup[];
   audit: AuditEntry[];
+  guests?: Guest[];
+  /** Daily message counts for guests: key `${agentId}:${telegramId}` */
+  guestUsage?: Record<string, { day: string; count: number }>;
 }
 
 export const FORMING_DAYS = 7;

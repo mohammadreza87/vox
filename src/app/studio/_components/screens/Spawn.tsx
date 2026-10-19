@@ -756,7 +756,7 @@ function HireStep({ agent, busy, run, onUpdate }: Omit<StepProps, 'onNext'>) {
         <p className="vx-2" style={{ margin: 0, maxWidth: 320 }}>
           {awaiting
             ? 'Telegram opened a “Create bot” screen. Tap Create — this page updates on its own when it’s done.'
-            : `${agent.persona.name} becomes a real Telegram bot that everyone in ${nav.me.org} can message, call and add to groups.`}
+            : `${agent.persona.name} becomes a real Telegram bot. It starts private (you, people you pick, and admins); you can open it to ${nav.me.org} or make it public later.`}
         </p>
         <div className="vx-group" style={{ width: '100%', textAlign: 'left' }}>
           <div className="vx-row"><Icon name="cloud" size={20} /><span style={{ flex: 1 }}>Look & avatar</span><span className="vx-small vx-2">{agent.look.avatar ? 'Picture' : 'Cloud'}</span></div>

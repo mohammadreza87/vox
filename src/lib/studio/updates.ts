@@ -6,6 +6,7 @@
 
 import { createHmac, timingSafeEqual } from 'crypto';
 import type { TelegramUpdate } from '../tireh/telegram/client';
+import { canUseAgent, visibilityOf } from './permissions';
 import type { Studio } from './service';
 
 export const MANAGER_UPDATES = ['message', 'managed_bot'];
@@ -36,8 +37,18 @@ export async function handleManagerUpdate(studio: Studio, update: TelegramUpdate
   await manager.sendMessage(msg.chat.id, `${text}\n\n${account}`, open ? { keyboard: open } : {});
 }
 
+/**
+ * Who an agent talks to:
+ *  - groups it was added to: everyone in them (outsiders as guests, who only
+ *    ever see that group's memories);
+ *  - direct messages: members who may use it (private: creator, allow-list,
+ *    admins; org: every member); for public agents also anyone else, after the
+ *    agent decides in character whether to answer, decline, ignore or block.
+ */
 export async function handleAgentUpdate(studio: Studio, agentId: string, update: TelegramUpdate): Promise<void> {
-  const { gateway, state } = await studio.gateway();
+  const initial = await studio.gateway();
+  const state = initial.state;
+  let gateway = initial.gateway;
   const live = state.agents.find((a) => a.id === agentId);
   if (!live || live.status !== 'active') return;
   if (update.my_chat_member) {
@@ -45,16 +56,62 @@ export async function handleAgentUpdate(studio: Studio, agentId: string, update:
     return;
   }
   const msg = update.message;
-  if (msg?.from && !msg.from.is_bot && (msg.chat.type === 'group' || msg.chat.type === 'supergroup')) {
-    const known = await studio.noteGroupSpeaker(msg.chat.id, msg.from.id);
-    if (known) {
-      // Rebuild so the speaker counts in the group's audience right away.
-      const fresh = await studio.gateway();
-      await fresh.gateway.handleUpdate(agentId, update);
-      return;
-    }
+  if (!msg) {
+    await gateway.handleUpdate(agentId, update);
+    return;
   }
-  await gateway.handleUpdate(agentId, update);
+  if (!msg.from || msg.from.is_bot || (live.blocked ?? []).includes(msg.from.id)) return;
+
+  if (msg.chat.type === 'group' || msg.chat.type === 'supergroup') {
+    // Rebuild when the speaker is new to the group so they count in its audience right away.
+    if (await studio.noteGroupSpeaker(msg.chat.id, msg.from)) ({ gateway } = await studio.gateway());
+    await gateway.handleUpdate(agentId, update);
+    return;
+  }
+  if (msg.chat.type !== 'private') return;
+
+  const member = state.members.find((m) => m.telegramId === msg.from!.id);
+  if (member && canUseAgent(member, live)) {
+    await gateway.handleUpdate(agentId, update);
+    return;
+  }
+
+  const token = studio.botToken(live);
+  if (!token) return;
+  const bot = studio.deps.botFor(token);
+  const org = studio.deps.orgName;
+  if (visibilityOf(live) !== 'public') {
+    const creator = state.members.find((m) => m.telegramId === live.createdBy)?.name;
+    const text = member && member.role !== 'pending'
+      ? `Hi, I'm ${live.persona.name}. I'm private for now${creator ? `: ask ${creator}` : ': ask an admin'} if you'd like to work with me.`
+      : `Hi, I'm ${live.persona.name}. I only talk with ${visibilityOf(live) === 'org' ? `the ${org} team` : `a few people at ${org}`} for now.`;
+    await bot.sendMessage(msg.chat.id, text);
+    return;
+  }
+
+  // Public agent, someone outside the team (or not yet approved).
+  const standing = await studio.admitGuest(agentId, msg.from);
+  if (standing === 'blocked' || standing === 'over-limit') return;
+  if (standing === 'limit-reached') {
+    await bot.sendMessage(msg.chat.id, `I've enjoyed talking, but I need a break. Let's pick this up tomorrow.`);
+    return;
+  }
+  ({ gateway } = await studio.gateway());
+  const text = msg.text ?? msg.caption ?? '';
+  if (text.startsWith('/') || (!text && msg.voice)) {
+    // Commands (/start, /memories…) and voice notes go straight through; the gateway handles them.
+    await gateway.handleUpdate(agentId, update);
+    return;
+  }
+  const decision = await studio.decideOnStranger(live, text);
+  if (decision.action === 'reply') {
+    await gateway.handleUpdate(agentId, update);
+  } else if (decision.action === 'decline') {
+    await bot.sendMessage(msg.chat.id, decision.message!);
+  } else if (decision.action === 'block') {
+    await studio.blockByAgent(agentId, msg.from.id, text);
+    await bot.sendMessage(msg.chat.id, decision.message!);
+  }
 }
 
 /** Per-bot webhook secret, derived so nothing extra needs storing. */

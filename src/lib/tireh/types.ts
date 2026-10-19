@@ -21,6 +21,9 @@ export interface Person {
   companyIds: string[];
   projectIds: string[];
   notes?: string;             // short public profile line
+  /** Someone outside the organization talking to a public persona. Sees only
+   *  their own private memories and the groups they are in. */
+  guest?: boolean;
 }
 
 /** Non-reporting relationships, e.g. "co-founders", "siblings" */
@@ -72,6 +75,8 @@ export interface Persona {
   telegramUsername?: string;  // bot username without "@"
   identityVersion: number;    // bump only via an approved, versioned change
   replyWithVoice: 'never' | 'mirror' | 'always';
+  /** How this persona treats people outside the organization (public personas) */
+  strangerPolicy?: string;
 }
 
 export interface OrgConfig {

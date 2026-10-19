@@ -26,6 +26,7 @@ const personSchema = z.object({
   companyIds: z.array(idSchema).default([]),
   projectIds: z.array(idSchema).default([]),
   notes: z.string().optional(),
+  guest: z.boolean().optional(),
 });
 
 const personaSchema = z.object({
@@ -43,6 +44,7 @@ const personaSchema = z.object({
   telegramUsername: z.string().optional(),
   identityVersion: z.number().int().positive().default(1),
   replyWithVoice: z.enum(['never', 'mirror', 'always']).default('mirror'),
+  strangerPolicy: z.string().optional(),
 });
 
 export const orgConfigSchema = z.object({
