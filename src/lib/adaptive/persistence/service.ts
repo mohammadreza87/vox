@@ -282,9 +282,27 @@ export class AdaptiveService {
   private record(d: AdaptiveDocument, eventId: string, fingerprint: string, kind: string, resultId: string): void {
     d.events.push({ eventId, fingerprint, kind, resultId, revision: d.revision });
   }
+  /** Current authorized, valid-lineage projection only. Never persist inherited
+   * labels or reuse this invocation-local set across source/authority changes. */
+  private reviewedClaimOrigins(memories: readonly StoredMemory[]): Set<string> {
+    const claims = new Set(memories.filter(memory => memory.origin === 'user_reviewed_claim').map(memory => memory.id));
+    // Valid lineage is at most eight nodes deep. Fixed-point propagation is
+    // bounded even for reverse-ordered shared DAGs; it never changes rows.
+    for (let depth = 0; depth < 8; depth++) {
+      let changed = false;
+      for (const memory of memories) if (!claims.has(memory.id) && memory.sourceRefs?.some(ref => claims.has(ref.id))) {
+        claims.add(memory.id); changed = true;
+      }
+      if (!changed) break;
+    }
+    return claims;
+  }
   private snapshot(d: AdaptiveDocument, space: SpaceKind, now: number, locale: 'en' | 'fa' = 'en', includeMemories = true): AdaptiveSnapshot {
     const confirmed = this.confirmed(d, now);
     const memory = this.eligible(d, 'core_text', now);
+    const memories = confirmed && includeMemories ? d.memories.filter(m => m.space === space && validMemoryLineage(d, m, now))
+      .filter(m => this.authorized(d, space, m, 'read', now)) : [];
+    const claimOrigins = this.reviewedClaimOrigins(memories);
     return { schemaVersion: 1, identity: { accountId: d.accountId, confirmed,
       verification: confirmed ? 'account_confirmation' : 'unconfirmed', adultDeclared: d.declaration?.adultConfirmed === true,
       ...(d.declaration?.declaredJurisdiction ? { declaredJurisdiction: d.declaration.declaredJurisdiction } : {}),
@@ -298,8 +316,8 @@ export class AdaptiveService {
           revision: permission.revision, available: confirmed && eligibility.eligible,
           ...(!confirmed ? { reason: 'profile_confirmation_required' } : !eligibility.eligible ? { reason: eligibility.reason } : {}), notice: adaptiveNotice(purpose, locale) };
       }),
-      memories: confirmed && includeMemories ? d.memories.filter(m => m.space === space && validMemoryLineage(d, m, now))
-        .filter(m => this.authorized(d, space, m, 'read', now)).map(m => ({ id: m.id, revision: m.revision, text: m.text!, createdAt: m.createdAt, expiresAt: m.expiresAt, ...(m.sourceRefs ? { sourceRefs: m.sourceRefs } : {}) })) : [],
+      memories: memories.map(m => ({ id: m.id, revision: m.revision, text: m.text!, createdAt: m.createdAt, expiresAt: m.expiresAt,
+        ...(claimOrigins.has(m.id) ? { origin: 'user_reviewed_claim' as const } : {}), ...(m.sourceRefs ? { sourceRefs: m.sourceRefs } : {}) })),
       agents: confirmed ? d.agentGrants.filter(g => g.space === space).map(g => ({ agentId: g.agentId, allowed: g.allowed, revision: g.revision })) : [],
       explicitMemoryAvailable: confirmed && memory.eligible,
       ...(memory.eligible && memory.validUntil !== undefined ? { explicitMemoryValidUntil: memory.validUntil } : {}),
@@ -502,19 +520,25 @@ export class AdaptiveService {
       const confirmed = this.confirmed(d, now);
       const allowed = confirmed && permission.state === 'granted' && permission.expiresAt > now && eligibility.eligible;
       const authorized = allowed ? d.memories.filter(m => this.authorized(d, space, m, 'read', now, agentId)) : [];
+      const byId = new Map(authorized.map(memory => [memory.id, memory]));
+      const claimOrigins = this.reviewedClaimOrigins(authorized);
       const ancestors = (memory: StoredMemory, ids = new Set<string>()): string[] => {
         for (const ref of memory.sourceRefs ?? []) {
           if (ids.has(ref.id)) continue;
           ids.add(ref.id);
-          const source = authorized.find(row => row.id === ref.id);
+          const source = byId.get(ref.id);
           if (source) ancestors(source, ids);
         }
         return [...ids];
       };
       return { revision: digest([d.accountId, d.personId, space, agentId, d.binding, confirmed, permission, allowed, eligibility,
         d.agentGrants.filter(g => g.space === space && g.agentId === agentId),
-        authorized.map(m => [m.id, m.revision, m.expiresAt, m.revocationEpoch, m.sourceRefs])]),
-        memories: authorized.map(m => ({ id: m.id, text: m.text!, ...(m.sourceRefs ? { sourceIds: ancestors(m) } : {}) })) };
+        authorized.map(m => [m.id, m.revision, m.expiresAt, m.revocationEpoch, m.sourceRefs, m.origin])]),
+        memories: authorized.map(m => {
+          const sourceIds = m.sourceRefs ? ancestors(m) : undefined;
+          const claim = claimOrigins.has(m.id);
+          return { id: m.id, text: claim ? `User-reviewed claim (not independently verified): ${m.text!}` : m.text!, ...(sourceIds ? { sourceIds } : {}) };
+        }) };
     });
   }
 }
