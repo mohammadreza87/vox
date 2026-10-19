@@ -2,12 +2,15 @@ import { ensureReminderDelivery, pruneReminderDelivery, reminderChannelStatus, r
 import { REMINDER_DISCLOSURE_VERSION, reminderChannelPresentSchema, reminderChannelInputSchema, reminderActionInputSchema, type ReminderChannelPresentInput, type ReminderChannelInput, type ReminderActionInput } from './reminder-contracts';
 import { randomUUID } from 'crypto';
 import { minimizeImageDataUrl } from '../prediction/image';
+import { resolvePreferences } from '../personalization';
+import { explicitPreferenceSnapshot, PREFERENCE_UNDO_MS, prunePreferenceUndo } from '../personalization/explicit';
 import { DecisionService, type DecisionInput, type DecisionResult } from '../decisions';
 import { isQuietHour, isSelectedTimezone } from '../notifications';
 import { digest, type AdaptiveDocument, type OptionalPurpose, type SpaceKind } from '../persistence/repository';
 import { AdaptiveError, AdaptiveService } from '../persistence/service';
 import { emptyExperience, feedbackInputSchema, predictInputSchema, preferenceInputSchema, reminderInputSchema,
   settingsInputSchema, turnInputSchema, predictionCancelSchema, predictionValidateSchema, type PredictionValidateInput, type PredictionCancelInput, type PredictionReply, type ExperienceSnapshot, type FeedbackInput,
+  preferenceUndoInputSchema, type PreferenceUndoInput, type PreferenceState,
   type PredictInput, type PreferenceInput, type ReminderInput, type SettingsInput, type TurnInput } from './contracts';
 
 const DAY = 86_400_000;
@@ -59,6 +62,7 @@ export class AdaptiveExperienceService {
     return true;
   }
   pruneDocument(d: AdaptiveDocument, now: number): void {
+    prunePreferenceUndo(d, now);
     const e = d.experience;
     e.observations = e.observations.filter(o => o.at > now - RETENTION && this.purpose(d, o.space, 'optional.product_analytics', now, o.agentId) && o.consentEpoch === this.epoch(d, o.space, 'optional.product_analytics'));
     e.turnKeys = e.turnKeys.filter(k => k.expiresAt > now);
@@ -110,9 +114,35 @@ export class AdaptiveExperienceService {
       if (!this.command(d, input, 'preference_changed', digest(['preference', input]))) return this.snapshot(d, input.space, now);
       const prior = d.experience.preferences.find(p => p.space === input.space && p.agentId === input.agentId && p.setting.key === input.setting.key);
       if (!prior && d.experience.preferences.length >= 120) error(409, 'storage_capacity');
+      const before = prior ? structuredClone(prior) : null;
       if (prior) { prior.setting = input.setting; prior.status = input.action === 'reset' ? 'reset' : 'active'; prior.updatedAt = now; prior.revision++; }
       else d.experience.preferences.push({ id: input.eventId, revision: 1, space: input.space, agentId: input.agentId,
         setting: input.setting, status: input.action === 'reset' ? 'reset' : 'active', updatedAt: now });
+      const after = d.experience.preferences.find(p => p.space === input.space && p.agentId === input.agentId && p.setting.key === input.setting.key)!;
+      const undo = (d.experience.preferenceUndo ?? []).filter(row => row.space !== input.space || row.agentId !== input.agentId || row.key !== input.setting.key);
+      if (undo.length >= 120) error(409, 'storage_capacity');
+      undo.push({ changeId: input.eventId, space: input.space, agentId: input.agentId, key: input.setting.key, before,
+        afterFingerprint: digest(after), bindingId: d.binding!.id, createdAt: now, expiresAt: Math.min(now + PREFERENCE_UNDO_MS, d.binding!.expiresAt) });
+      d.experience.preferenceUndo = undo;
+      this.bump(d, now); return this.snapshot(d, input.space, now);
+    });
+  }
+  undoPreference(telegramId: number, value: PreferenceUndoInput): Promise<ExperienceSnapshot> {
+    const input = preferenceUndoInputSchema.parse(value);
+    return this.adaptive.withAccountDocument(telegramId, (d, now) => {
+      this.confirmed(d, now); this.pruneDocument(d, now);
+      if (!this.command(d, input, 'preference_undone', digest(['preference-undo', input]))) return this.snapshot(d, input.space, now);
+      const change = d.experience.preferenceUndo?.find(row => row.changeId === input.changeId && row.space === input.space && row.agentId === input.agentId);
+      if (!change) error(409, 'preference_undo_unavailable');
+      const index = d.experience.preferences.findIndex(p => p.space === input.space && p.agentId === input.agentId && p.setting.key === change!.key);
+      const current = d.experience.preferences[index];
+      if (!current || digest(current) !== change!.afterFingerprint) error(409, 'preference_undo_unavailable');
+      if (change!.before) d.experience.preferences[index] = { ...change!.before, revision: current.revision + 1, updatedAt: now };
+      else d.experience.preferences.splice(index, 1);
+      d.experience.preferenceUndo = d.experience.preferenceUndo!.filter(row => row !== change);
+      if (!d.experience.preferenceUndo.length) delete d.experience.preferenceUndo;
+      // The undo itself never receives another undo token. Current consent,
+      // grants, deleted memories and every unrelated preference stay untouched.
       this.bump(d, now); return this.snapshot(d, input.space, now);
     });
   }
@@ -283,12 +313,45 @@ export class AdaptiveExperienceService {
   }
   /** Fresh explicit preferences only. Caller must compare receipt before provider
    * export and output, just as for private memory context. */
-  readPreferences(telegramId: number, space: SpaceKind, agentId: string): Promise<{ revision: string; settings: { key: string; value: string }[] }> {
+  private preferenceSnapshot(telegramId: number, space: SpaceKind, agentId: string) {
     return this.adaptive.withAccountDocument(telegramId, (d, now) => {
-      const allowed = this.purpose(d, space, 'optional.personalization', now, agentId);
-      return { revision: digest([this.adaptive.purposeFingerprint(d, space, 'optional.personalization', now, agentId),
-        d.experience.preferences.filter(p => p.space === space && p.agentId === agentId).map(p => [p.id, p.revision, p.status])]),
-        settings: allowed ? d.experience.preferences.filter(p => p.space === space && p.agentId === agentId && p.status === 'active').map(p => p.setting) : [] };
+      this.pruneDocument(d, now);
+      return explicitPreferenceSnapshot(this.adaptive, d, space, agentId, now);
+    });
+  }
+  private async resolveExplicitPreferences(telegramId: number, space: SpaceKind, agentId: string) {
+    const snapshot = await this.preferenceSnapshot(telegramId, space, agentId);
+    // Storage callbacks are synchronous. Resolve outside the account lock, then
+    // fence every source/permission again after the resolver's awaited checks.
+    const resolved = await resolvePreferences(snapshot.records, snapshot.scope, snapshot.now, async () => snapshot.allowed);
+    const current = await this.preferenceSnapshot(telegramId, space, agentId);
+    if (snapshot.receipt !== current.receipt) error(409, 'preference_authority_changed');
+    return { ...current, resolved };
+  }
+  async readPreferences(telegramId: number, space: SpaceKind, agentId: string): Promise<{ revision: string; settings: { key: string; value: string }[] }> {
+    const snapshot = await this.resolveExplicitPreferences(telegramId, space, agentId);
+    return { revision: snapshot.contextReceipt, settings: snapshot.allowed ? snapshot.resolved
+      .filter(row => row.source === 'explicit').map(row => row.setting) : [] };
+  }
+  async readPreferenceState(telegramId: number, space: SpaceKind, agentId: string): Promise<PreferenceState> {
+    const snapshot = await this.resolveExplicitPreferences(telegramId, space, agentId);
+    if (!snapshot.confirmed) error(403, 'profile_confirmation_required');
+    return { schemaVersion: 1, revision: snapshot.revision, receipt: snapshot.receipt, space, agentId,
+      entries: snapshot.resolved.map(row => {
+        const saved = snapshot.saved.find(p => p.setting.key === row.setting.key);
+        const undo = snapshot.undo.find(p => p.key === row.setting.key);
+        return { setting: row.setting, source: row.source, applied: snapshot.allowed && row.source === 'explicit',
+          explanation: snapshot.reason ?? (row.source === 'explicit' ? 'explicit_choice' : row.source === 'reset' ? 'explicit_reset' : 'default'),
+          ...(saved ? { saved } : {}), ...(undo ? { undo: { changeId: undo.changeId, expiresAt: undo.expiresAt,
+            restore: undo.before ? { setting: undo.before.setting, status: undo.before.status } : null } } : {}) };
+      }) };
+  }
+  preferenceStateCurrentNow(telegramId: number, state: PreferenceState) {
+    return this.adaptive.readCommittedForEffect(telegramId, (d, now) => {
+      // Prune the detached snapshot only; maintenance owns durable expiry purge.
+      prunePreferenceUndo(d, now);
+      const current = explicitPreferenceSnapshot(this.adaptive, d, state.space, state.agentId, now);
+      return current.confirmed && current.receipt === state.receipt;
     });
   }
   /** Cancellation writes content-free tombstones so a delayed request or another

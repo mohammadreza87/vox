@@ -211,6 +211,16 @@ export class AdaptiveService {
   withAccountDocument<T>(telegramId: number, fn: (document: AdaptiveDocument, now: number) => T): Promise<T> {
     return this.transact(telegramId, fn);
   }
+  /** Validated committed file snapshot only. No mutation or awaited work. */
+  readCommittedForEffect<T>(telegramId: number, fn: (document: AdaptiveDocument, now: number) => T):
+    { status: 'ready'; value: T } | { status: 'busy' | 'unsupported' | 'missing' } {
+    const now = this.now();
+    const snapshot = this.repository.readCommittedForEffect(this.account(telegramId), now);
+    if (snapshot.status !== 'ready') return snapshot;
+    if (!snapshot.document) return { status: 'missing' };
+    // Synchronous disk/schema work can itself cross an authority deadline.
+    return { status: 'ready', value: fn(snapshot.document, this.now()) };
+  }
   isProfileConfirmed(d: AdaptiveDocument, now: number): boolean { return this.confirmed(d, now); }
   isCoreAllowed(d: AdaptiveDocument, now: number): boolean { return this.confirmed(d, now) && this.eligible(d, 'core_text', now).eligible; }
   purposeFingerprint(d: AdaptiveDocument, space: SpaceKind, purpose: OptionalPurpose, now: number, agentId?: string): string {

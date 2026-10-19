@@ -6,6 +6,7 @@ import { TopBar } from '../ui';
 import { RelationshipPanel } from '../RelationshipPanel';
 import { ReminderPanel } from '../ReminderPanel';
 import { LearningPanel } from '../LearningPanel';
+import { PreferencePanel } from '../PreferencePanel';
 
 export function ExperienceScreen({ onBack, role, notificationId }: { onBack: () => void; role?: Role; notificationId?: string }) {
   const [space, setSpace] = useState<'work' | 'personal'>('work');
@@ -13,7 +14,6 @@ export function ExperienceScreen({ onBack, role, notificationId }: { onBack: () 
   const [data, setData] = useState<ExperienceSnapshot | null>(null);
   const [agents, setAgents] = useState<AgentView[]>([]);
   const [agentId, setAgentId] = useState('');
-  const [length, setLength] = useState<'brief' | 'balanced' | 'detailed'>('balanced');
   const [timezone, setTimezone] = useState('');
   const [cap, setCap] = useState(2);
   const [quietStart, setQuietStart] = useState(21);
@@ -58,7 +58,7 @@ export function ExperienceScreen({ onBack, role, notificationId }: { onBack: () 
     const element = document.getElementById(`reminder-${notificationId}`);
     element?.scrollIntoView?.({ block: 'center' }); element?.focus();
   }, [data, notificationId, notificationScope]);
-  const mutate = async (action: () => Promise<ExperienceSnapshot>, refreshPreference = false) => {
+  const mutate = async (action: () => Promise<ExperienceSnapshot>) => {
     if (busy) return;
     const current = generation.current;
     setBusy(true); setStatus(''); setError('');
@@ -66,10 +66,6 @@ export function ExperienceScreen({ onBack, role, notificationId }: { onBack: () 
       const next = await action();
       if (generation.current === current) {
         apply(next);
-        if (refreshPreference) {
-          const saved = next.preferences.find(p => p.agentId === agentId && p.setting.key === 'response_length' && p.status === 'active');
-          setLength(saved?.setting.key === 'response_length' ? saved.setting.value : 'balanced');
-        }
         setStatus(t('Saved.', 'ذخیره شد.'));
       }
     }
@@ -83,11 +79,6 @@ export function ExperienceScreen({ onBack, role, notificationId }: { onBack: () 
     finally { setBusy(false); }
   };
   const command = () => ({ space, expectedRevision: data!.revision, eventId: crypto.randomUUID() });
-  const selectAgent = (id: string) => {
-    setAgentId(id);
-    const preference = data?.preferences.find(p => p.agentId === id && p.setting.key === 'response_length' && p.status === 'active');
-    setLength(preference?.setting.key === 'response_length' ? preference.setting.value : 'balanced');
-  };
   return <><TopBar onBack={onBack} title={t('Your experience', 'تجربهٔ شما')} right={<button className="vx-chip" disabled={busy} onClick={() => setFa(!fa)}>{fa ? 'English' : 'فارسی'}</button>} />
     <section className="vx-scroll vx-privacy" dir={fa ? 'rtl' : 'ltr'} lang={fa ? 'fa' : 'en'} aria-busy={busy}>
       <p className="vx-2">{t('Tell Vox what works for you. Saved choices, learning permissions and notification settings remain separate.', 'به وکس بگویید چه چیزی برای شما مناسب است. انتخاب‌های ذخیره‌شده، مجوزهای یادگیری و تنظیمات اعلان جدا هستند.')}</p>
@@ -98,10 +89,8 @@ export function ExperienceScreen({ onBack, role, notificationId }: { onBack: () 
       {data && <>
         <div className="vx-card vx-privacy-card">
           <h2 className="vx-head">{t('Reply preferences', 'ترجیح‌های پاسخ')}</h2>
-          <label>{t('Agent', 'عامل')}<select className="vx-input" disabled={busy} value={agentId} onChange={e => selectAgent(e.target.value)}><option value="">{t('Choose an agent', 'انتخاب عامل')}</option>{agents.map(a => <option key={a.id} value={a.id}>{a.persona.name}</option>)}</select></label>
-          <label>{t('Reply length', 'اندازهٔ پاسخ')}<select className="vx-input" disabled={busy} value={length} onChange={e => setLength(e.target.value as typeof length)}><option value="brief">{t('Brief', 'کوتاه')}</option><option value="balanced">{t('Balanced', 'متعادل')}</option><option value="detailed">{t('Detailed', 'با جزئیات')}</option></select></label>
-          <p className="vx-small vx-2">{t('Your current request always comes first. Saved preferences are applied only with personalization permission and an explicit agent grant.', 'درخواست فعلی شما همیشه مقدم است. ترجیح‌های ذخیره‌شده فقط با مجوز شخصی‌سازی و دسترسی صریح عامل استفاده می‌شوند.')}</p>
-          <div className="vx-privacy-actions"><button className="vx-btn vx-btn-secondary" disabled={busy || !agentId || !data.confirmed} onClick={() => void mutate(() => experienceApi.preference({ ...command(), agentId, setting: { key: 'response_length', value: length }, action: 'set' }), true)}>{t('Save preference', 'ذخیرهٔ ترجیح')}</button><button className="vx-btn vx-btn-secondary" disabled={busy || !agentId || !data.confirmed} onClick={() => void mutate(() => experienceApi.preference({ ...command(), agentId, setting: { key: 'response_length', value: length }, action: 'reset' }), true)}>{t('Reset', 'بازنشانی')}</button></div>
+          <label>{t('Agent', 'عامل')}<select className="vx-input" disabled={busy} value={agentId} onChange={e => setAgentId(e.target.value)}><option value="">{t('Choose an agent', 'انتخاب عامل')}</option>{agents.map(a => <option key={a.id} value={a.id}>{a.persona.name}</option>)}</select></label>
+          <PreferencePanel key={`${space}:${agentId}`} agentId={agentId} space={space} confirmed={data.confirmed} revisionHint={data.revision} locale={fa ? 'fa' : 'en'} onSnapshot={apply} />
         </div>
         <div className="vx-card vx-privacy-card">
           <h2 className="vx-head">{t('Notification settings', 'تنظیمات اعلان')}</h2>
