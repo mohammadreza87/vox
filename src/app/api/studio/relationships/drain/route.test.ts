@@ -20,9 +20,13 @@ describe('authenticated relationship worker', () => {
   it('runs a bounded authenticated drain and exposes no runtime error details', async () => {
     vi.stubEnv('STUDIO_RELATIONSHIP_WORKER_SECRET', secret);
     const drain = vi.fn(async () => ({ sent: 1 }));
-    getStudio.mockResolvedValue({ drainRelationships: drain });
+    getStudio.mockResolvedValue({ drainRelationships: drain, deps: {
+      relationships: { mode: 'live' }, relationshipConfig: { roles: ['owner', 'superadmin'], agentIds: ['*'], personIds: [] },
+    } });
     const request = () => new Request('http://localhost/api/studio/relationships/drain', { method: 'POST', headers: { authorization: `Bearer ${secret}` }, body: '{"limit":1}' });
-    expect(await (await POST(request())).json()).toEqual({ result: { sent: 1 } });
+    expect(await (await POST(request())).json()).toEqual({ result: { sent: 1 }, configuration: {
+      mode: 'live', roles: ['owner', 'superadmin'], allAgents: true, explicitAgentCount: 0, explicitPersonCount: 0,
+    } });
     expect(drain).toHaveBeenCalledWith(1);
     getStudio.mockRejectedValue(new Error('secret-private-runtime-detail'));
     const failed = await POST(request());

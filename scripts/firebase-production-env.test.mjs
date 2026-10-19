@@ -74,3 +74,14 @@ test('relationship activation is explicit and survives production environment pa
   for (const key of ['STUDIO_RELATIONSHIPS', 'STUDIO_RELATIONSHIP_AGENTS', 'STUDIO_RELATIONSHIP_PEOPLE', 'STUDIO_RELATIONSHIP_WORKER_SECRET']) assert.equal(config[key], env[key]);
   assert.throws(() => firebaseProductionEnv({ ...env, STUDIO_RELATIONSHIP_PEOPLE: '-1' }), /positive Telegram/);
 });
+
+
+test('privileged relationship roles support wildcard agents and optional people intersection', () => {
+  const env = { ...fixture(), STUDIO_RELATIONSHIPS: 'live', STUDIO_RELATIONSHIP_AGENTS: '*', STUDIO_RELATIONSHIP_ROLES: 'owner,superadmin', STUDIO_RELATIONSHIP_WORKER_SECRET: 'fixture-only-worker-secret-with-more-than-32-characters' };
+  assert.equal(firebaseProductionEnv(env).STUDIO_RELATIONSHIP_ROLES, 'owner,superadmin');
+  assert.equal(firebaseProductionEnv(env).STUDIO_RELATIONSHIP_PEOPLE, '');
+  assert.equal(firebaseProductionEnv({ ...env, STUDIO_RELATIONSHIP_PEOPLE: '7070' }).STUDIO_RELATIONSHIP_PEOPLE, '7070');
+  for (const role of ['admin', 'member', 'pending', '*']) assert.throws(() => firebaseProductionEnv({ ...env, STUDIO_RELATIONSHIP_ROLES: role }), /only owner/);
+  assert.throws(() => firebaseProductionEnv({ ...env, STUDIO_RELATIONSHIP_ROLES: '', STUDIO_RELATIONSHIP_PEOPLE: '7070' }), /Wildcard/);
+  assert.throws(() => firebaseProductionEnv({ ...env, STUDIO_RELATIONSHIP_AGENTS: '*,a' }), /Wildcard/);
+});

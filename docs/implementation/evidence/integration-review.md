@@ -85,3 +85,59 @@ not establish those outcomes. Optional Decisions, automatic learning, biometric
 recognition, external notifications and autonomous improvement remain unavailable
 under the default-disabled configuration; their activation gates are outside this
 bounded integration review.
+
+## Incremental review: group voice and privileged-role integration
+
+Reviewed the settled working-tree composition of the group voice change
+`7b1e09b` and privileged-role/infrastructure change `2af7e8f`, against HEAD
+`9c9b72d2abbbf9dc915b6cc0f620f1e092bbf4cc`. This supplements the earlier local
+review; it does not identify the final merge commit or deployed artifact.
+
+**No new critical bypass found for the default-disabled Mac target.** Group
+delivery-format carryover requires retained-history permission, uses stamped
+`historyAt` records and checks the current boundary after loading them. It also
+requires the same speaker, a recent unanswered source turn and no other addressee.
+The actual adaptive runtime denies legacy history, so this path cannot reopen it.
+Asynchronous relationship eligibility is awaited in observation, prompt grounding
+and capability hints; denied/unavailable eligibility suppresses those additions
+while ordinary current-turn replies remain usable. Studio still denies the
+relationship path before role/wildcard eligibility when adaptive authority exists.
+The legacy pilot's role checks read current membership and recheck authorization
+before worker transport; role demotion and explicit people/agent restrictions are
+covered by the selected synthetic suite.
+
+Independent incremental checks at `2026-10-19T18:31:46.857147Z`:
+
+```sh
+npx vitest run src/lib/tireh/__tests__/combined-runtime.test.ts src/lib/studio/__tests__/relationships.test.ts src/app/api/studio/relationships/drain/route.test.ts
+node --test scripts/firebase-relationship-infra.test.mjs
+```
+
+Results: **29/29 tests in 3 files**, then **15/15 infrastructure-script tests**,
+both exit 0. Requests and infrastructure were mocked; no real cloud operations or
+messages were performed. The 12-file incremental scope fingerprint was
+`a6205bbdf9f2a810dec5c1052505b14806e545a7007966c6ef37f2ab04103feb`, unchanged
+before/after the Vitest run. It uses the same path/NUL/bytes/NUL method over:
+
+```text
+.github/workflows/deploy.yml
+scripts/firebase-production-env.mjs
+scripts/firebase-relationship-infra.mjs
+scripts/firebase-relationship-infra.test.mjs
+src/app/api/studio/relationships/drain/route.ts
+src/app/api/studio/relationships/drain/route.test.ts
+src/lib/studio/relationship-config.ts
+src/lib/studio/runtime.ts
+src/lib/studio/service.ts
+src/lib/studio/__tests__/relationships.test.ts
+src/lib/tireh/gateway.ts
+src/lib/tireh/__tests__/combined-runtime.test.ts
+```
+
+Firebase owner-pilot activation is explicitly **not qualified by this composed
+adaptive runtime**. Its relationship loop reports `off`; the new activation
+script rejects a requested `live` pilot that does not match the runtime and does
+not resume the scheduler. The Firebase workflow changes concern that separate
+target, not the Mac installer. Coordinate any shared Firebase rollout with its
+release owner and resolve configuration/activation scope before promotion; this
+report neither approves nor reports that separate activation.

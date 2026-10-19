@@ -30,6 +30,63 @@ async function setup(mode: 'off' | 'shadow' | 'live' = 'live') {
 }
 
 describe('relationship vertical slice', () => {
+  it('uses live privileged roles for UI, settings, gateway observations and delivery', async () => {
+    const x = await setup();
+    x.h.studio.deps.relationshipConfig = { mode: 'live', agentIds: ['*'], personIds: [], roles: ['owner', 'superadmin'] };
+    expect((await x.h.studio.relationshipFor(x.users.superadmin, x.hired.agent.id)).available).toBe(true);
+    expect((await x.h.studio.relationshipFor(x.users.admin, x.hired.agent.id)).available).toBe(false);
+    const changeRole = async (role: 'member' | 'superadmin') => x.h.store.update((s) => { s.members.find((m) => m.telegramId === ID.alice)!.role = role; });
+    expect((await x.h.studio.relationshipFor(x.users.alice, x.hired.agent.id)).available).toBe(false);
+    await expect(x.h.studio.updateRelationship(x.users.alice, x.hired.agent.id, { action: 'configure', timeZone: 'UTC' })).rejects.toThrow('not available');
+    await x.turn('My boss criticized my presentation.');
+    expect(x.assess).not.toHaveBeenCalled();
+    // This gateway predates promotion: its relationship gate must read current roles.
+    const { gateway } = await x.h.studio.gateway();
+    await changeRole('superadmin');
+    expect((await x.h.studio.relationshipFor(x.users.alice, x.hired.agent.id)).available).toBe(true);
+    await x.turn('My boss criticized my presentation.');
+    expect(x.assess).toHaveBeenCalledOnce();
+    await changeRole('member');
+    x.assess.mockClear();
+    for await (const chunk of gateway.liveTurn(x.hired.agent.id, `tg-${ID.alice}`, [{ role: 'user', content: 'Still thinking about it.' }])) void chunk;
+    expect(x.h.chatLLM.lastPrompt).not.toContain('brief and gentle');
+    expect(x.h.chatLLM.lastPrompt).not.toContain('Follow-up capability:');
+    expect(x.assess).not.toHaveBeenCalled();
+    x.h.advanceDays(1);
+    x.hired.bot().sendMessage.mockClear();
+    expect(await x.h.studio.drainRelationships()).toMatchObject({ sent: 0 });
+    expect(x.hired.bot().sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('rechecks a role demoted during composition before Telegram transport', async () => {
+    const x = await setup();
+    x.h.studio.deps.relationshipConfig = { mode: 'live', agentIds: ['*'], personIds: [], roles: ['owner', 'superadmin'] };
+    await x.h.store.update((s) => { s.members.find((m) => m.telegramId === ID.alice)!.role = 'superadmin'; });
+    await x.turn('My boss criticized my presentation.');
+    x.h.advanceDays(1);
+    x.hired.bot().sendMessage.mockClear();
+    const originalComplete = x.h.chatLLM.complete.bind(x.h.chatLLM);
+    vi.spyOn(x.h.chatLLM, 'complete').mockImplementation(async (input) => {
+      await x.h.store.update((s) => { s.members.find((m) => m.telegramId === ID.alice)!.role = 'member'; });
+      return originalComplete(input);
+    });
+    expect(await x.h.studio.drainRelationships()).toMatchObject({ sent: 0 });
+    expect(x.hired.bot().sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('intersects privileged roles with people and retains agent restrictions', async () => {
+    const x = await setup();
+    x.h.studio.deps.relationshipConfig = { mode: 'live', agentIds: ['*'], personIds: [`tg-${ID.alice}`], roles: ['owner', 'superadmin'] };
+    expect((await x.h.studio.relationshipFor(x.users.superadmin, x.hired.agent.id)).available).toBe(false);
+    await x.h.store.update((s) => { s.members.find((m) => m.telegramId === ID.alice)!.role = 'superadmin'; });
+    expect((await x.h.studio.relationshipFor(x.users.alice, x.hired.agent.id)).available).toBe(true);
+    x.h.studio.deps.relationshipConfig.agentIds = ['other-agent'];
+    expect((await x.h.studio.relationshipFor(x.users.alice, x.hired.agent.id)).available).toBe(false);
+    x.h.studio.deps.relationshipConfig.agentIds = ['*'];
+    await x.h.store.update((s) => { s.agents.find((a) => a.id === x.hired.agent.id)!.blocked = [ID.alice]; });
+    expect((await x.h.studio.relationshipFor(x.users.alice, x.hired.agent.id)).available).toBe(false);
+  });
+
   it('preserves a queued Telegram message source date across midnight in assessment and history', async () => {
     const x = await setup();
     x.h.clock.now = new Date('2026-10-20T00:10:00Z');
@@ -175,6 +232,11 @@ describe('relationship extraction and runtime configuration', () => {
     await expect(assessor.assess({ key: { personaId: 'a', chatKey: 'private-a', audience: { kind: 'private', personId: 'a' } }, text: 'synthetic', context: '', now: new Date() })).rejects.toThrow('timeout');
   });
   it('defaults off and rejects activation without explicit provider, pilot and scheduler configuration', () => {
+    const privileged = { STUDIO_RELATIONSHIPS: 'live', OPENAI_API_KEY: 'test', STUDIO_RELATIONSHIP_AGENTS: '*', STUDIO_RELATIONSHIP_ROLES: 'owner,superadmin' };
+    expect(relationshipConfig(privileged)).toMatchObject({ agentIds: ['*'], personIds: [], roles: ['owner', 'superadmin'] });
+    for (const role of ['admin', 'member', 'pending', '*']) expect(() => relationshipConfig({ ...privileged, STUDIO_RELATIONSHIP_ROLES: role })).toThrow('only owner');
+    expect(() => relationshipConfig({ ...privileged, STUDIO_RELATIONSHIP_ROLES: '', STUDIO_RELATIONSHIP_PEOPLE: '300' })).toThrow('Wildcard');
+    expect(() => relationshipConfig({ ...privileged, STUDIO_RELATIONSHIP_AGENTS: '*,a' })).toThrow('Wildcard');
     expect(relationshipConfig({})).toMatchObject({ mode: 'off' });
     expect(() => relationshipConfig({ STUDIO_RELATIONSHIPS: 'oops' })).toThrow();
     expect(() => relationshipConfig({ STUDIO_RELATIONSHIPS: 'live', OPENAI_API_KEY: 'test' })).toThrow('allowlists');

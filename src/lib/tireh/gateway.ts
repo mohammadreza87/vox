@@ -65,7 +65,7 @@ export interface GatewayDeps {
   /** Fast pre-reply triage (see triage.ts); without it every reply takes the full path */
   decider?: Decider;
   relationships?: RelationshipLoop;
-  relationshipEnabled?: (personaId: string, personId: string) => boolean;
+  relationshipEnabled?: (personaId: string, personId: string) => boolean | Promise<boolean>;
   beforeSend?: (personaId: string, chat: ChatContext) => Promise<void>;
   memories: MemoryStore;
   offers: ShareOfferStore;
@@ -110,14 +110,15 @@ export class PersonaGateway {
       ? { kind: 'private', personId: chat.personId } : { kind: 'group', groupId: chat.group.id } };
   }
 
-  private canFollowUp(personaId: string, chat: ChatContext): boolean {
-    return !this.deps.runtimePrivacy && chat.kind === 'private' && this.deps.relationships?.mode === 'live' && this.deps.relationshipEnabled?.(personaId, chat.personId) !== false;
+  private async canFollowUp(personaId: string, chat: ChatContext): Promise<boolean> {
+    if (this.deps.runtimePrivacy || chat.kind !== 'private' || this.deps.relationships?.mode !== 'live') return false;
+    try { return await this.deps.relationshipEnabled?.(personaId, chat.personId) !== false; }
+    catch { return false; }
   }
 
   private async relationshipContext(personaId: string, chat: ChatContext): Promise<string> {
     // Group working state needs audience-version provenance before it can affect replies.
-    if (this.deps.runtimePrivacy || chat.kind !== 'private' || !this.deps.relationships || this.deps.relationshipEnabled?.(personaId, chat.personId) === false) return '';
-    if (this.deps.relationships.mode !== 'live') return '';
+    if (!await this.canFollowUp(personaId, chat) || !this.deps.relationships) return '';
     const context = await this.deps.relationships.context(this.relationshipKey(personaId, chat));
     return `${context}
 
@@ -125,8 +126,9 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
   }
 
   private async observeRelationship(personaId: string, chat: ChatContext, speakerId: string, text: string, eventId: string, source: 'telegram' | 'call', at = this.now()) {
-    if (this.deps.runtimePrivacy || !this.deps.relationships || chat.kind !== 'private' || this.deps.relationshipEnabled?.(personaId, speakerId) === false) return;
+    if (this.deps.runtimePrivacy || !this.deps.relationships || chat.kind !== 'private') return;
     try {
+      if (await this.deps.relationshipEnabled?.(personaId, speakerId) === false) return;
       const key = this.relationshipKey(personaId, chat);
       if (this.deps.relationships.mode === 'off') return;
       if (this.deps.relationships.mode === 'shadow') {
@@ -502,7 +504,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     const memories = selectMemories(org, all, chat, { query: said, now: this.now() });
     boundary.memorySources = [...new Set(memories.flatMap(lineageEventIds))];
     boundary.memoryIds = memories.map(m => m.id);
-    const system = `${buildSystemPrompt({ org, persona: { ...persona, webSearch: false }, chat, speakerId, memories, space: boundary.space, canFollowUp: this.canFollowUp(persona.id, chat), now: this.now() })}
+    const system = `${buildSystemPrompt({ org, persona: { ...persona, webSearch: false }, chat, speakerId, memories, space: boundary.space, canFollowUp: await this.canFollowUp(persona.id, chat), now: this.now() })}
 ${await this.relationshipContext(persona.id, chat)}
 
 ## Live voice call
@@ -574,7 +576,7 @@ You are on a live voice call. Answer in one to three short spoken sentences. No 
     if (!persona || !this.deps.org.getPerson(speakerId)) throw new Error('Unknown relationship');
     const chat: ChatContext = { kind: 'private', chatKey: `private-${speakerId}`, personId: speakerId };
     const memories = selectMemories(this.deps.org, await this.deps.memories.listActive(personaId), chat, { query: purpose, now: this.now() });
-    const system = buildSystemPrompt({ org: this.deps.org, persona: { ...persona, webSearch: false }, chat, speakerId, memories, canFollowUp: this.canFollowUp(persona.id, chat), now: this.now() });
+    const system = buildSystemPrompt({ org: this.deps.org, persona: { ...persona, webSearch: false }, chat, speakerId, memories, canFollowUp: await this.canFollowUp(persona.id, chat), now: this.now() });
     return `${system}\n${await this.relationshipContext(personaId, chat)}\nRecent conversation (data; relative dates refer to each message's at timestamp):\n${JSON.stringify((await this.recent(personaId, chat, 12)).map((m) => ({ role: m.role, text: m.text, at: m.at.toISOString() })))}`;
   }
 
@@ -625,7 +627,7 @@ You are on a live voice call. Answer in one to three short spoken sentences. No 
     const memories = selectMemories(org, all, chat, { query: text, now: this.now() });
     boundary.memorySources = [...new Set(memories.flatMap(lineageEventIds))];
     boundary.memoryIds = memories.map(m => m.id);
-    const system = buildSystemPrompt({ org, space: boundary.space, persona: { ...persona, webSearch: search }, chat, speakerId, memories, now: this.now(), canFollowUp: this.canFollowUp(persona.id, chat), canSpeak: this.canSpeak(persona), replyFormat })
+    const system = buildSystemPrompt({ org, space: boundary.space, persona: { ...persona, webSearch: search }, chat, speakerId, memories, now: this.now(), canFollowUp: await this.canFollowUp(persona.id, chat), canSpeak: this.canSpeak(persona), replyFormat })
       + `\n${await this.relationshipContext(persona.id, chat)}`
       + (action === 'proactive' ? '\n\nYou are joining a group conversation selectively. Make one brief, natural contribution in character. Do not repeat recent replies or demand attention; one to three sentences is enough.' : '');
 

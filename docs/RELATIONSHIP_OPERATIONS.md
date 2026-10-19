@@ -7,9 +7,10 @@ Read [delivery plan](RELATIONSHIP_SYSTEM_PLAN.md) and [core contracts](../src/li
 | Variable | Meaning |
 |---|---|
 | `STUDIO_RELATIONSHIPS` | `off`, `shadow`, or `live`; defaults `off` |
-| `STUDIO_RELATIONSHIP_AGENTS` | Explicit comma-separated pilot agent IDs |
-| `STUDIO_RELATIONSHIP_PEOPLE` | Explicit comma-separated positive Telegram user IDs |
-| `STUDIO_RELATIONSHIP_WORKER_SECRET` | Server-generated secret of at least 32 characters; scheduler bearer credential |
+| `STUDIO_RELATIONSHIP_AGENTS` | Explicit pilot agent IDs, or `*` only with privileged role scope |
+| `STUDIO_RELATIONSHIP_ROLES` | Optional `owner,superadmin`; current roles are checked at input, context, controls and delivery |
+| `STUDIO_RELATIONSHIP_PEOPLE` | Positive Telegram IDs; optional with role scope, and intersects roles when both are present |
+| `STUDIO_RELATIONSHIP_WORKER_SECRET` | Server-generated secret of at least 32 characters; CI derives a purpose-separated HMAC from the existing server secret when omitted |
 | `OPENAI_API_KEY` | Decisions provider account; not exposed to browsers |
 
 Shadow assesses only the supplied accepted turn. It makes no outbox work, foreground reply, or memory change and does not run the complete fresh-draft review. Live enables personal working context for the allowlist and reconsideration jobs. The user's timezone must be known before an automatic send. Studio → agent → Memories → Staying in touch provides timezone/quiet hours and pause/stop/resume. Ordinary follow-ups never ask a new permission question.
@@ -17,6 +18,12 @@ Shadow assesses only the supplied accepted turn. It makes no outbox work, foregr
 Telegram `/pause` pauses seven days; `/stop` stops proactive check-ins; `/resume` enables future eligible check-ins without resurrecting cancelled jobs. The user can continue normal conversation while paused or stopped. An unanswered automatic check-in suppresses further social nudges until an inbound turn. No acoustic mood inference is implemented; voice uses the accepted transcript.
 
 ## Serverless worker
+
+The production workflow runs `firebase-relationship-infra.mjs prepare` before packaging. It verifies the deployed globally client-denied Firestore rules, required indexes and active working-data TTL, and prepares the named `vox-relationship-worker` scheduler paused. It never replaces rules. After exact-revision health, webhook and authenticated runtime/configuration checks, activation force-runs the paused job, verifies a fresh successful attempt, then enables the minute cadence. Off and shadow leave it paused; release failure also pauses it.
+
+The worker credential is generated only on CI: an existing explicit credential takes precedence; otherwise HMAC-SHA256 of `STUDIO_SECRET` with purpose `vox:relationship-worker:v1` produces a stable independent bearer value. It is masked and passed privately to runtime packaging and the scheduler. Changing the parent secret changes this fallback credential; coordinate rotation and redeployment. No new service-account credentials or user permissions are granted. Existing release credentials need Rules read, Firestore field/TTL administration and Cloud Scheduler administration. API/IAM failures stop promotion with sanitized diagnostics.
+
+For the authorized internal pilot, use `live`, roles `owner,superadmin`, agents `*`, and no explicit people filter. This follows current roles and existing agent access; it does not broadcast a greeting, invent a timezone, create prior DM history, or override stop/pause controls. Demotion suppresses the relationship immediately on the next gate. Stored personal controls survive, so a later promotion does not silently undo a stop.
 
 Schedule **POST** `/api/studio/relationships/drain` once per minute with an `Authorization: Bearer <worker secret>` header and JSON `{"limit":2}`. The route authenticates before runtime initialization and accepts at most five relationships per request. Use a secret manager for the credential; do not commit it or put it in logs. The hosting environment must have outbound provider/Telegram access and sufficient timeout. The ledger, not the HTTP invocation, is the source of pending work.
 

@@ -28,6 +28,13 @@ export async function POST(request: Request): Promise<Response> {
   } catch { return Response.json({ error: 'Invalid worker request' }, { status: 400, headers }); }
   try {
     const studio = await getStudio();
-    return Response.json({ result: await studio.drainRelationships(limit) }, { headers });
+    const config = studio.deps.relationshipConfig;
+    return Response.json({ result: await studio.drainRelationships(limit), configuration: {
+      mode: studio.deps.relationships?.mode ?? 'off',
+      roles: config?.roles ?? [],
+      allAgents: config?.agentIds.includes('*') ?? false,
+      explicitAgentCount: config?.agentIds.filter((id) => id !== '*').length ?? 0,
+      explicitPersonCount: config?.personIds.length ?? 0,
+    } }, { headers });
   } catch { return Response.json({ error: 'Relationship worker unavailable' }, { status: 503, headers }); }
 }

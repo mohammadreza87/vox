@@ -25,6 +25,27 @@ function setup() {
 }
 
 describe('composed live, relationship and adaptive runtime boundaries', () => {
+  it.each(['denied', 'unavailable'] as const)('keeps core replies usable when asynchronous relationship authority is %s', async (authority) => {
+    const ctx = makeGateway();
+    const context = vi.fn(async () => 'UNAUTHORIZED_RELATIONSHIP_CONTEXT');
+    const observeTurn = vi.fn();
+    const relationshipEnabled = vi.fn(async () => {
+      if (authority === 'unavailable') throw new Error('synthetic authority outage');
+      return false;
+    });
+    const gateway = new PersonaGateway({
+      ...ctx, voice: null, botFor: () => ctx.bot,
+      relationships: { mode: 'live', context, observeTurn } as unknown as RelationshipLoop,
+      relationshipEnabled,
+    });
+    expect(await gateway.converse('aria', 'reza', 'hello')).toBe('Sure.');
+    expect(relationshipEnabled).toHaveBeenCalled();
+    expect(context).not.toHaveBeenCalled();
+    expect(observeTurn).not.toHaveBeenCalled();
+    expect(JSON.stringify(ctx.llm.replyRequests)).not.toContain('UNAUTHORIZED_RELATIONSHIP_CONTEXT');
+    expect(ctx.llm.lastPrompt).not.toContain('Vox supports your initiating friendly check-ins');
+  });
+
   it('denies legacy relationship observation and context despite an injected live loop', async () => {
     const ctx = setup();
     await ctx.gateway.converse('aria', 'reza', 'hello');

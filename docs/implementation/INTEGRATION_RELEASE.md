@@ -1,6 +1,6 @@
 # Adaptive develop integration
 
-This release combines the adaptive foundation (`dd1b317`), the Mac Studio voice/profile/group release (`5b2537e`), and the relationship foundation (`423e058`). `develop` was created from `main` (`68a1cd3`); the integration is reviewed as one candidate before deployment. Existing branch test reports remain historical evidence, not qualification of the combined source.
+This release combines the adaptive foundation (`dd1b317`), the Mac Studio voice/profile/group release (`7b1e09b`), and the relationship foundation and role-pilot infrastructure (`2af7e8f`). `develop` was created from `main` (`68a1cd3`); the integration is reviewed as one candidate before deployment. Existing branch test reports remain historical evidence, not qualification of the combined source.
 
 ## Runtime behavior
 
@@ -16,7 +16,7 @@ This release combines the adaptive foundation (`dd1b317`), the Mac Studio voice/
 
 The release owner records the exact candidate commit, full regression result, production build ID, browser fixture boundaries, remote CI checks and deployed local/public revision separately. The production installer requires a clean committed source and matching build provenance, stops the service for a private data backup, and restores the previous release if readiness fails. See [production operations](../PRODUCTION.md).
 
-Combined local verification on 2026-10-19: 1,698 Vitest tests passed across 119 files; nine Firestore-emulator cases in two files were skipped because this run had no emulator. TypeScript passed. Repository lint passed with 182 warnings and zero errors. All 17 deployment/configuration script tests passed. Production dependency audit reported eight moderate findings and zero high/critical findings; the known inherited warnings are not described as a clean audit. The [independent review](evidence/integration-review.md) passed 50 selected cases, including four newly authored boundary regressions. Later deployment receipts identify the final artifact and remote checks.
+Combined local verification on 2026-10-19: 1,757 Vitest tests passed across 119 files; nine Firestore-emulator cases in two files were skipped because this run had no emulator. TypeScript passed. Repository lint passed with 182 warnings and zero errors. All 33 deployment/configuration script tests passed. Production dependency audit reported eight moderate findings and zero high/critical findings; the known inherited warnings are not described as a clean audit. The [independent review](evidence/integration-review.md) passed 50 selected cases, including four newly authored boundary regressions. Later deployment receipts identify the final artifact and remote checks.
 
 The adaptive browser journey runs with its dedicated production server before the standard browser suite in CI; its outputs now go to ignored `test-results`, preserving historical screenshots. The legacy relationship browser fixture explicitly advertises its legacy sharing capability; this fixture does not imply the production capability is active. CI's summary waits for browser tests.
 
