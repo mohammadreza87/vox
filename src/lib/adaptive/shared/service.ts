@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import { brandError, publicDomainError } from '../../error-contract';
 import { z } from 'zod';
 import { authorizeAccess } from '../policy';
 import type { PolicySnapshot, ResourceDescriptor } from '../types';
@@ -10,7 +11,8 @@ import type { SharedAgentInput, SharedContainerView, SharedContext, SharedContex
 
 export class SharedMemoryError extends Error {
   readonly name = 'SharedMemoryError';
-  constructor(readonly status: number, readonly code: string) { super(code); }
+  constructor(readonly status: number, readonly code: string) { super(code); brandError(this, 'SharedMemoryError'); }
+  static is(error: unknown): error is SharedMemoryError { return publicDomainError(error, 'SharedMemoryError'); }
 }
 const fail = (status: number, code: string): never => { throw new SharedMemoryError(status, code); };
 const spaceSchema = z.enum(['work', 'personal']);

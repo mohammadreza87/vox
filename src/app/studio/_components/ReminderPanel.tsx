@@ -41,7 +41,7 @@ export function ReminderPanel({ data, agentId, fa, busy, mutate, notificationId 
     <h2 className="vx-title-m">{t('Your reminders', 'یادآورهای شما')}</h2>
     {!reminders.length && <p>{t('No active reminders.', 'یادآور فعالی وجود ندارد.')}</p>}
     {reminders.map(item => <article id={`reminder-${item.id}`} tabIndex={-1} className="vx-card vx-privacy-card" key={item.id} aria-current={notificationId === item.id ? 'true' : undefined}>
-      <h3 className="vx-head">{item.label}</h3><p>{date(item.dueAt)}</p><p role={item.delivery?.state === 'unknown' ? 'status' : undefined}>{delivery(item)}</p>
+      <h3 className="vx-head" style={{ overflowWrap: 'anywhere' }}>{item.label}</h3><p>{date(item.dueAt)}</p><p role={item.delivery?.state === 'unknown' ? 'status' : undefined}>{delivery(item)}</p>
       <p className="vx-small vx-2">{t('Why this: you created this reminder for this agent and space.', 'دلیل نمایش: این یادآور را برای همین عامل و فضا ساخته‌اید.')}</p>
       <div className="vx-privacy-actions"><button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy} onClick={() => void mutate(() => experienceApi.reminderAction({ ...command(), itemId: item.id, action: 'snooze', dueAt: Date.now() + 15 * 60_000 }))}>{t('Snooze 15 minutes', 'تعویق ۱۵ دقیقه')}</button>
         <button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy} onClick={() => void mutate(() => experienceApi.reminderAction({ ...command(), itemId: item.id, action: 'cancel' }))}>{t('Cancel reminder', 'لغو یادآور')}</button>

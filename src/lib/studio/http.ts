@@ -301,7 +301,7 @@ function studioFailureResponse(error: unknown): { response: Response; diagnostic
         : error.code === 'permission_denied' ? 403 : error.code === 'unavailable' ? 503 : 502;
     return { response: json({ error: new ElevenLabsSpeechError(error.status, error.code).message, code: error.code }, status), diagnostic: 'studio_http_voice_failed' };
   }
-  if (error instanceof StudioRateLimitError) return { response: json({ error: error.message }, 429, { 'Retry-After': String(error.retryAfterSeconds) }) };
+  if (StudioRateLimitError.is(error)) return { response: json({ error: 'Too many requests. Please try again shortly.' }, 429, { 'Retry-After': String(error.retryAfterSeconds) }) };
   if (StudioError.is(error)) return { response: json({ error: error.message }, error.status) };
   if (error instanceof PersonaGenerationError) return { response: json({ error: error.message }, 502), diagnostic: 'studio_http_persona_failed' };
   if (error && typeof error === 'object' && 'issues' in error) return { response: json({ error: "Claude's answer didn't fit the persona format. Try again." }, 502) };

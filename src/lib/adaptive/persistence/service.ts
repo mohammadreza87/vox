@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import { brandError, publicDomainError } from '../../error-contract';
 import { transitionConsent } from '../consent';
 import { evaluateCapability, type Capability, type CapabilityRequest, type JurisdictionApproval } from '../eligibility';
 import { resolveVerifiedPerson } from '../identity';
@@ -12,7 +13,8 @@ import { sweepObserverDocument } from '../observation/helpers';
 
 export class AdaptiveError extends Error {
   readonly name = 'AdaptiveError';
-  constructor(readonly status: number, readonly code: string) { super(code); }
+  constructor(readonly status: number, readonly code: string) { super(code); brandError(this, 'AdaptiveError'); }
+  static is(error: unknown): error is AdaptiveError { return publicDomainError(error, 'AdaptiveError'); }
 }
 const fail = (status: number, code: string): never => { throw new AdaptiveError(status, code); };
 export interface RelationshipInvalidation { telegramId: number; space: SpaceKind; agentId?: string; sourceIds?: string[]; reason: string }

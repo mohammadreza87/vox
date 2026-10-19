@@ -6,6 +6,7 @@
  */
 
 import { measureStage, captureUsage, observedUsage, recordStage, unavailableUsage } from '../adaptive/observation/trace';
+import { brandError, namedError } from '../error-contract';
 import Anthropic from '@anthropic-ai/sdk';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { logTelegramDiagnostic } from './telegram/diagnostics';
@@ -43,7 +44,11 @@ export interface LLMRequest {
 }
 
 export class LLMAuthorizationError extends Error {
-  constructor() { super('llm_authority_changed'); this.name = 'LLMAuthorizationError'; }
+  constructor() { super('llm_authority_changed'); this.name = 'LLMAuthorizationError'; brandError(this, 'LLMAuthorizationError'); }
+  static is(error: unknown): error is LLMAuthorizationError {
+    try { return namedError(error, 'LLMAuthorizationError') && Object.getOwnPropertyDescriptor(error, 'message')?.value === 'llm_authority_changed'; }
+    catch { return false; }
+  }
 }
 async function authorizeRequest(request: Pick<LLMRequest, 'authorize'>): Promise<void> {
   if (!request.authorize) return;
