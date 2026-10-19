@@ -127,6 +127,23 @@ export class TelegramBotClient {
     return response.arrayBuffer();
   }
 
+  getMe(): Promise<TelegramUser> {
+    return this.call('getMe', {});
+  }
+
+  deleteWebhook(): Promise<boolean> {
+    return this.call('deleteWebhook', { drop_pending_updates: false });
+  }
+
+  /** Long polling; `timeoutSeconds` is how long Telegram holds the request open */
+  getUpdates(offset: number | undefined, timeoutSeconds = 30): Promise<TelegramUpdate[]> {
+    return this.call('getUpdates', {
+      ...(offset !== undefined ? { offset } : {}),
+      timeout: timeoutSeconds,
+      allowed_updates: ['message', 'callback_query'],
+    });
+  }
+
   setWebhook(url: string, secretToken: string): Promise<boolean> {
     return this.call('setWebhook', {
       url,

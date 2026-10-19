@@ -115,6 +115,23 @@ tireh_updates/{personaId__updateId}          webhook idempotency
 
 These collections are written only by the server (Admin SDK). Keep client access denied in Firestore rules.
 
+## Try it locally (no deploy)
+
+Runs on your laptop or the Mac Studio. It uses long polling, so no public URL or webhook is needed, and memory is kept in `.tireh-local.json`.
+
+1. In @BotFather, `/newbot` → e.g. `@hoor_aria_bot`. Copy the token.
+2. `cp tireh.org.example.json tireh.org.json`. If you don't know your Telegram ID yet, leave it out; the bot will tell you it when you message it.
+3. In `.env.local`:
+   ```
+   TIREH_BOT_TOKEN_ARIA=<token from BotFather>
+   ANTHROPIC_API_KEY=<key>          # or GEMINI_API_KEY + TIREH_LLM_PROVIDER=gemini
+   ELEVENLABS_API_KEY=<key>         # optional, for voice
+   ```
+4. `npm install`, then `npm run tireh:local`, and message the bot.
+5. Put the Telegram ID it replies with into `tireh.org.json` and restart. Do the same for Parastoo and the others to test shared memory.
+
+`TIREH_STORE=firestore` (with `SERVICE_ACCOUNT_KEY`) uses Firestore instead of the local file. Running locally removes the bot's webhook; re-register it with `scripts/tireh-set-webhooks.mjs` when you deploy.
+
 ## Setup
 
 1. **Create the bot.** In @BotFather, `/newbot` → e.g. `@hoor_aria_bot`. Set its name, photo and description to match the persona. For group listening, `/setprivacy` → **Disable**. After changing privacy mode, remove the bot from the group and add it again, or make it a group admin.

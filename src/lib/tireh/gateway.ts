@@ -83,7 +83,7 @@ export class PersonaGateway {
       if (message.chat.type === 'private') {
         await bot.sendMessage(
           message.chat.id,
-          `Hi, I'm ${persona.name}. I only work with members of ${org.organizationName}, so I can't chat here.`
+          `Hi, I'm ${persona.name}. I only work with members of ${org.organizationName}, so I can't chat here.\n\nIf you're on the team, ask an admin to add your Telegram ID: ${message.from.id}`
         );
       }
       this.log.warn(`[tireh] ${persona.id}: message from unregistered Telegram user ${message.from.id}`);
@@ -95,7 +95,7 @@ export class PersonaGateway {
       if (this.isAddressed(persona, message)) {
         await bot.sendMessage(
           message.chat.id,
-          `This group isn't registered with ${org.organizationName}, so I can't take part here.`
+          `This group isn't registered with ${org.organizationName}, so I can't take part here.\n\nTo register it, an admin adds this chat ID to the config: ${message.chat.id}`
         );
       }
       this.log.warn(`[tireh] ${persona.id}: unregistered group ${message.chat.id}`);

@@ -69,3 +69,6 @@ firebase-debug.log
 
 # TIREH org config with real Telegram ids
 tireh.org.json
+# TIREH local test data
+.tireh-local.json
+.tireh-local.json.tmp
