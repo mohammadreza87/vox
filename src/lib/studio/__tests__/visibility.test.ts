@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MemoryRecord, MemoryScope } from '../../tireh/types';
 import type { TelegramUpdate } from '../../tireh/telegram/client';
 import { personId } from '../org-bridge';
@@ -180,6 +180,47 @@ describe('groups are open to everyone in them', () => {
     await h.studio.onBotChatMember((await h.store.read()).agents[0], join(ID.stranger, -2));
     expect(bot().leaveChat).toHaveBeenCalledTimes(1);
     expect((await h.store.read()).groups.map((g) => g.chatId)).toEqual([-2]);
+  });
+});
+
+describe('live web search', () => {
+  function webLLM() {
+    const real = h.chatLLM.complete.bind(h.chatLLM);
+    const completeWithWeb = vi.fn(async (req: { system: string; maxSearches: number }) => {
+      await real({ system: req.system, messages: [] });
+      return { text: 'Sunny, 18°C.', sources: [{ url: 'https://weather.example/teh', title: 'Weather' }] };
+    });
+    h.studio.deps.chatLLM = {
+      complete: async (req) => (req.system.includes('Decide, in character') ? JSON.stringify({ action: 'reply' }) : real(req)),
+      completeWithWeb,
+    };
+    return completeWithWeb;
+  }
+
+  it('agents search by default and link their sources; strangers get fewer searches', async () => {
+    const { agent, bot } = await agentWith('public');
+    const search = webLLM();
+    await handleAgentUpdate(h.studio, agent.id, dm(ID.bob, 'Weather in Tehran?'));
+    expect(search.mock.lastCall?.[0].maxSearches).toBe(3);
+    expect(search.mock.lastCall?.[0].system).toContain('## Live information');
+    expect(bot().sendMessage).toHaveBeenLastCalledWith(ID.bob, 'Sunny, 18°C.\n\nSources:\nhttps://weather.example/teh', expect.anything());
+    // Memory keeps the reply, not the links.
+    const history = await h.memory.history.recent(agent.id, `private-${personId(ID.bob)}`, 5);
+    expect(history.at(-1)?.text).toBe('Sunny, 18°C.');
+
+    await handleAgentUpdate(h.studio, agent.id, dm(ID.stranger, 'Weather?'));
+    expect(search.mock.lastCall?.[0].maxSearches).toBe(1);
+  });
+
+  it('an agent with live web off answers from what it knows', async () => {
+    const { agent } = await agentWith('org');
+    const search = webLLM();
+    const view = await h.studio.setLiveWeb(org.alice, agent.id, false);
+    expect(view.liveWeb).toBe(false);
+    await handleAgentUpdate(h.studio, agent.id, dm(ID.bob, 'Weather?'));
+    expect(search).not.toHaveBeenCalled();
+    expect(replies().at(-1)).not.toContain('## Live information');
+    await expectRejects(h.studio.setLiveWeb(org.bob, agent.id, true));
   });
 });
 

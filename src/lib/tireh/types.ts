@@ -77,6 +77,8 @@ export interface Persona {
   replyWithVoice: 'never' | 'mirror' | 'always';
   /** How this persona treats people outside the organization (public personas) */
   strangerPolicy?: string;
+  /** May search the web for live information (news, prices, weather, scores) */
+  webSearch?: boolean;
 }
 
 export interface OrgConfig {

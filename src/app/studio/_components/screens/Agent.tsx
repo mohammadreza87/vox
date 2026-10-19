@@ -5,7 +5,7 @@ import { useEffect, useState } from 'react';
 import { api, haptic, openTelegram, type AgentView, type AgentVisibility, type Member } from '../../_lib/client';
 import { AgentFace, PALETTE, stageFor } from '../Cloud';
 import { errorMessage, LoadingFill, useNav } from '../StudioApp';
-import { Icon, Sheet, TopBar } from '../ui';
+import { Icon, Sheet, Spinner, TopBar } from '../ui';
 
 function FormingHalo({ day, color, size }: { day: number; color: string; size: number }) {
   const cx = size / 2, r = size / 2 - 6, seg = 360 / 7, gap = 4;
@@ -96,6 +96,26 @@ export function AgentScreen({ id }: { id: string }) {
       const r = await api.setVisibility(agent.id, v);
       setAgent(r.agent);
       haptic.success();
+    } catch (e) { nav.toast(errorMessage(e), 'error'); } finally { setBusy(false); }
+  };
+
+  const toggleLiveWeb = async () => {
+    setBusy(true);
+    try {
+      const r = await api.setLiveWeb(agent.id, !agent.liveWeb);
+      setAgent(r.agent);
+      haptic.success();
+    } catch (e) { nav.toast(errorMessage(e), 'error'); } finally { setBusy(false); }
+  };
+
+  const syncProfile = async () => {
+    setBusy(true);
+    try {
+      const r = await api.syncProfile(agent.id);
+      setAgent(r.agent);
+      if (r.failed.length) { haptic.error(); nav.toast(`Telegram refused: ${r.failed.join(', ')}. Try again in a minute.`, 'error'); }
+      else { haptic.success(); nav.toast(`@${agent.bot?.username} now has ${p.name}'s name and photo`); }
+      setSheet(null);
     } catch (e) { nav.toast(errorMessage(e), 'error'); } finally { setBusy(false); }
   };
 
@@ -196,6 +216,7 @@ export function AgentScreen({ id }: { id: string }) {
             <div className="vx-row"><span className="vx-2" style={{ flex: 1 }}>Voice</span><span>{agent.voice?.label ?? 'Text only'}</span></div>
             <div className="vx-row"><span className="vx-2" style={{ flex: 1 }}>Languages</span><span>{p.languages.join(', ')}</span></div>
             <div className="vx-row"><span className="vx-2" style={{ flex: 1 }}>Who can talk</span><span>{visibilityLabel(agent, nav.me.org)}</span></div>
+            <div className="vx-row"><span className="vx-2" style={{ flex: 1 }}>Live web</span><span>{agent.liveWeb ? 'Searches when needed' : 'Off'}</span></div>
             <div className="vx-row"><span className="vx-2" style={{ flex: 1 }}>Hired by</span><span>{agent.creatorName ?? '—'}</span></div>
           </div>
 
@@ -218,6 +239,23 @@ export function AgentScreen({ id }: { id: string }) {
             <button className="vx-row" onClick={openVisibility} style={{ width: '100%', background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left' }}>
               <span style={{ flex: 1 }}>Who can talk to {p.name}</span>
               <span className="vx-small vx-2">{visibilityLabel(agent, nav.me.org)}</span>
+            </button>
+          )}
+          {agent.canManageAccess && (
+            <button className="vx-row" role="switch" aria-checked={agent.liveWeb} disabled={busy} onClick={toggleLiveWeb} style={{ width: '100%', background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left', borderTop: '1px solid rgba(255,255,255,.08)', color: 'inherit' }}>
+              <span style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <span>Live web search</span>
+                <span className="vx-small vx-2">News, prices, weather and other live facts, with sources</span>
+              </span>
+              <span style={{ width: 44, height: 26, borderRadius: 13, padding: 3, flexShrink: 0, background: agent.liveWeb ? '#D6FF5C' : '#3A3F48', transition: 'background .2s', display: 'flex', justifyContent: agent.liveWeb ? 'flex-end' : 'flex-start' }}>
+                <motion.span layout style={{ width: 20, height: 20, borderRadius: '50%', background: agent.liveWeb ? '#0E1013' : '#A9ADB5' }} />
+              </span>
+            </button>
+          )}
+          {(agent.canManageAccess || agent.canEdit) && agent.bot && (
+            <button className="vx-row" disabled={busy} onClick={syncProfile} style={{ width: '100%', background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left', borderTop: '1px solid rgba(255,255,255,.08)', color: 'inherit' }}>
+              <span style={{ flex: 1 }}>Update Telegram name &amp; photo</span>
+              {busy ? <Spinner /> : <span className="vx-small vx-3">@{agent.bot.username}</span>}
             </button>
           )}
           {isSuper && (

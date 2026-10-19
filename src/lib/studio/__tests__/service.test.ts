@@ -360,9 +360,11 @@ describe('managed bot → hire', () => {
     const b = bot();
     expect(b.setMyName).toHaveBeenCalledWith('Leyla');
     expect(b.setMyShortDescription).toHaveBeenCalledWith('Producer at HOOR. Ships on time');
-    expect(b.setMyDescription.mock.calls[0][0]).toContain('Only HOOR members can chat');
+    expect(b.setMyDescription.mock.calls[0][0]).toContain('Leyla works with a few people at HOOR.');
     expect(b.setMyCommands.mock.calls[0][0].map((c: { command: string }) => c.command)).toEqual(['start', 'memories', 'forget', 'whoami']);
-    expect(b.setMyProfilePhoto).not.toHaveBeenCalled();
+    // No custom avatar: the cloud character is rendered as the photo.
+    const photo = String(b.setMyProfilePhoto.mock.calls[0][0]);
+    expect(photo.startsWith('JPEG:<svg')).toBe(true);
     expect(h.manager.sendMessage).toHaveBeenCalledWith(ID.alice, expect.stringContaining('Leyla is alive: @hoor_leyla_bot'));
   });
 
@@ -374,6 +376,21 @@ describe('managed bot → hire', () => {
     await h.studio.onManagedBot({ user: { id: ID.alice, is_bot: false, first_name: 'A' }, bot: { id: 1, is_bot: true, first_name: 'N', username: 'hoor_nova_bot' } });
     const photo = h.bots.get('token-1')!.setMyProfilePhoto.mock.calls[0][0] as unknown as Buffer;
     expect(photo.equals(readFileSync(join(h.store.mediaDir, withAvatar.look.avatar!)))).toBe(true);
+  });
+
+  it('one refused profile step never skips the others, and the creator can re-sync', async () => {
+    const { agent, bot } = await hire(h, org.alice, { name: 'Leyla' });
+    bot().setMyName.mockRejectedValueOnce(new Error('Too Many Requests: retry after 30'));
+    const first = await h.studio.syncProfile(org.alice, agent.id);
+    expect(first.failed).toEqual(['name']);
+    expect(bot().setMyProfilePhoto).toHaveBeenCalledTimes(2);
+    expect(bot().setMyDescription).toHaveBeenCalledTimes(2);
+    expect(h.logger.warn).toHaveBeenCalledWith(expect.stringContaining('Telegram name update failed'), expect.anything());
+
+    const second = await h.studio.syncProfile(org.alice, agent.id);
+    expect(second.failed).toEqual([]);
+    expect(bot().setMyName).toHaveBeenLastCalledWith('Leyla');
+    await expect(h.studio.syncProfile(org.bob, agent.id)).rejects.toThrow();
   });
 
   it('matches by suggested username first, else the creator\'s latest waiting agent', async () => {

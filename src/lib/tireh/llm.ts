@@ -20,8 +20,18 @@ export interface LLMRequest {
   temperature?: number;
 }
 
+export interface WebSource {
+  url: string;
+  title: string;
+}
+
 export interface LLM {
   complete(request: LLMRequest): Promise<string>;
+  /**
+   * Like `complete`, but the model may search the web for live information.
+   * Optional: providers without web search simply don't implement it.
+   */
+  completeWithWeb?(request: LLMRequest & { maxSearches: number }): Promise<{ text: string; sources: WebSource[] }>;
 }
 
 /** Models require alternating turns starting with the user; merge and trim. */
@@ -49,24 +59,73 @@ function supportsCustomSampling(model: string): boolean {
   return !/^claude-opus-4-(?:[7-9]|[1-9]\d)(?:-|$)/.test(model);
 }
 
+/** Server-side web search continues in a new request when a turn pauses. */
+const MAX_WEB_CONTINUATIONS = 3;
+
+/**
+ * The answer is the text after the last search result: text before it is the
+ * model narrating its search ("Let me look that up"), not the reply.
+ */
+export function webAnswer(content: Anthropic.ContentBlock[]): { text: string; sources: WebSource[] } {
+  let start = 0;
+  content.forEach((block, i) => { if (block.type === 'web_search_tool_result') start = i + 1; });
+  const sources: WebSource[] = [];
+  const text = content.slice(start).flatMap((block) => {
+    if (block.type !== 'text') return [];
+    for (const c of block.citations ?? []) {
+      if (c.type === 'web_search_result_location' && !sources.some((s) => s.url === c.url)) sources.push({ url: c.url, title: c.title ?? c.url });
+    }
+    return [block.text];
+  }).join('').trim();
+  return { text, sources };
+}
+
 export class AnthropicLLM implements LLM {
   private client: Anthropic | null = null;
+  /** Set once the API refuses the web search tool for this model. */
+  private webUnavailable = false;
 
   constructor(private readonly apiKey: string, private readonly model: string) {}
 
-  async complete({ system, messages, maxTokens = 1024, temperature = 0.7 }: LLMRequest): Promise<string> {
-    this.client ??= new Anthropic({ apiKey: this.apiKey });
-    const response = await this.client.messages.create({
+  private params({ system, maxTokens = 1024, temperature = 0.7 }: LLMRequest) {
+    return {
       model: this.model,
       max_tokens: maxTokens,
       ...(supportsCustomSampling(this.model) ? { temperature } : {}),
       system,
-      messages: normalizeTurns(messages),
-    });
+    };
+  }
+
+  async complete(request: LLMRequest): Promise<string> {
+    this.client ??= new Anthropic({ apiKey: this.apiKey });
+    const response = await this.client.messages.create({ ...this.params(request), messages: normalizeTurns(request.messages) });
     return response.content
       .flatMap((block) => (block.type === 'text' ? [block.text] : []))
       .join('')
       .trim();
+  }
+
+  async completeWithWeb(request: LLMRequest & { maxSearches: number }): Promise<{ text: string; sources: WebSource[] }> {
+    if (this.webUnavailable || request.maxSearches < 1) return { text: await this.complete(request), sources: [] };
+    this.client ??= new Anthropic({ apiKey: this.apiKey });
+    const messages: Anthropic.MessageParam[] = normalizeTurns(request.messages);
+    const tools: Anthropic.ToolUnion[] = [{ type: 'web_search_20250305', name: 'web_search', max_uses: request.maxSearches }];
+    try {
+      let response = await this.client.messages.create({ ...this.params(request), messages, tools });
+      for (let i = 0; response.stop_reason === 'pause_turn' && i < MAX_WEB_CONTINUATIONS; i++) {
+        messages.push({ role: 'assistant', content: response.content });
+        response = await this.client.messages.create({ ...this.params(request), messages, tools });
+      }
+      return webAnswer(response.content);
+    } catch (error) {
+      // A model or account without web search answers from what it knows.
+      if ((error as { status?: number }).status === 400 && /web_search|tool/i.test(String((error as Error).message))) {
+        this.webUnavailable = true;
+        console.warn(`[llm] web search unavailable for ${this.model}; replying without it: ${(error as Error).message}`);
+        return { text: await this.complete(request), sources: [] };
+      }
+      throw error;
+    }
   }
 }
 

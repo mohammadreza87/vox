@@ -205,6 +205,8 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
             const b = await body(req);
             return json({ agent: await studio.setVisibility(me, id, str(b.visibility, 10) as AgentVisibility) });
           }
+          case 'PUT live-web': return json({ agent: await studio.setLiveWeb(me, id, (await body(req)).on === true) });
+          case 'POST profile-sync': return json(await studio.syncProfile(me, id));
           case 'DELETE blocked': {
             const telegramId = Number(new URL(req.url).searchParams.get('telegramId'));
             if (!Number.isSafeInteger(telegramId) || telegramId <= 0) throw new StudioError(400, 'Invalid Telegram id');

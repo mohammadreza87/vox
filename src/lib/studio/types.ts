@@ -129,6 +129,8 @@ export interface Agent {
   /** Telegram ids this agent stopped talking to */
   blocked?: number[];
   identityVersion: number;
+  /** Searches the web for live information when it helps (missing = on) */
+  liveWeb?: boolean;
   successorOf?: string;
   firedAt?: string;
   firedBy?: number;

@@ -20,12 +20,13 @@
  *   STUDIO_PUBLIC_URL        https base URL; switches bots to webhooks
  *                            (/api/studio/telegram/[key]) instead of polling
  *   STUDIO_CHAT_MODEL        model for replies (default: fast Claude model)
+ *   STUDIO_WEB_SEARCH        off = agents never search the web (default: on, per-agent toggle)
  *   STUDIO_PERSONA_MODEL     model for persona design (default: stronger Claude model)
  *   STUDIO_ORG_NAME          default HOOR
  */
 
 import { isAbsolute, join, parse, relative, resolve, sep } from 'path';
-import { AnthropicLLM } from '../tireh/llm';
+import { AnthropicLLM, type LLM } from '../tireh/llm';
 import { createFileStores } from '../tireh/memory/file-store';
 import { FirestoreChatHistoryStore, FirestoreMemoryStore, FirestoreShareOfferStore, FirestoreUpdateDeduper } from '../tireh/memory/firestore-store';
 import { TelegramBotClient } from '../tireh/telegram/client';
@@ -97,6 +98,12 @@ export function validateStudioConfig(env: NodeJS.ProcessEnv, cwd = process.cwd()
   return { production, token, superadminIds, dataDir, webAppUrl, storage, mediaBucket, publicUrl };
 }
 
+/** STUDIO_WEB_SEARCH=off keeps every agent offline (web searches are billed per search). */
+function chatLLM(env: NodeJS.ProcessEnv): LLM {
+  const llm = new AnthropicLLM(env.ANTHROPIC_API_KEY!, env.STUDIO_CHAT_MODEL || 'claude-haiku-5-5');
+  return env.STUDIO_WEB_SEARCH === 'off' ? { complete: (request) => llm.complete(request) } : llm;
+}
+
 async function toJpeg(data: Buffer): Promise<Buffer> {
   const sharp = (await import('sharp')).default;
   return sharp(data, { limitInputPixels: 40_000_000 })
@@ -157,7 +164,7 @@ async function create(): Promise<Studio> {
   return new Studio({
     store: storage.store,
     personaLLM: new AnthropicLLM(env.ANTHROPIC_API_KEY!, env.STUDIO_PERSONA_MODEL || 'claude-sonnet-5-5'),
-    chatLLM: new AnthropicLLM(env.ANTHROPIC_API_KEY!, env.STUDIO_CHAT_MODEL || 'claude-haiku-5-5'),
+    chatLLM: chatLLM(env),
     openai: env.OPENAI_API_KEY ? new OpenAIMedia(env.OPENAI_API_KEY) : null,
     eleven: env.ELEVENLABS_API_KEY ? new ElevenLabsStudio(env.ELEVENLABS_API_KEY) : null,
     managerBot,
