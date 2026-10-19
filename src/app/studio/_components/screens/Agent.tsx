@@ -88,6 +88,7 @@ export function AgentScreen({ id }: { id: string }) {
       const next = agent.access === 'everyone' ? [nav.me.member.telegramId] : 'everyone';
       const r = await api.setAccess(agent.id, next);
       setAgent(r.agent);
+      setSheet(null);
       nav.toast(next === 'everyone' ? `Everyone in ${nav.me.org} can use ${p.name}` : `Only you (and admins) can use ${p.name}`);
     } catch (e) { nav.toast(errorMessage(e), 'error'); }
   };

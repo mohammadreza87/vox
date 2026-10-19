@@ -26,7 +26,7 @@ export function StatusLine({ agent }: { agent: AgentView }) {
   const pal = PALETTE[agent.look.hue];
   if (agent.status === 'fired') return <span className="vx-pill danger">RETIRED</span>;
   if (agent.status === 'draft') return <span className="vx-pill warn">DRAFT</span>;
-  if (agent.status === 'awaiting_bot') return <span className="vx-pill warn">CONFIRM IN TELEGRAM</span>;
+  if (agent.status === 'awaiting_bot') return <span className="vx-pill warn">AWAITING BOT</span>;
   if (agent.locked) return <span className="vx-pill lock"><Icon name="lock" size={11} width={2.5} />LOCKED</span>;
   return (
     <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
