@@ -134,6 +134,7 @@ export function startBots(studio: Studio): { stop: () => void } {
       maintenanceAbort.abort();
       for (const loop of loops.values()) loop.stop();
       loops.clear();
+      return studio.deps.preferenceLearning?.tasks.close();
     },
   };
 }

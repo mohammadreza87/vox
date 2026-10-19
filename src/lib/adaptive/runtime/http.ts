@@ -11,6 +11,7 @@ import { StudioRateLimiter, StudioRateLimitError } from '../../studio/ratelimit'
 import { AdaptiveError } from '../persistence/service';
 import { experienceSpaceSchema, feedbackInputSchema, predictionCancelSchema, predictionValidateSchema, predictInputSchema, preferenceInputSchema, preferenceUndoInputSchema, reminderInputSchema, settingsInputSchema, type ExperienceSnapshot } from './contracts';
 import type { AdaptiveExperienceService } from './service';
+import { learningCancelSchema, learningPresentSchema, learningToggleSchema, learningReviewSchema } from '../personalization/learning/contracts';
 const json = (data: unknown, status = 200, headers: Record<string, string> = {}) => new Response(JSON.stringify(data), {
   status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...headers },
 });
@@ -38,6 +39,19 @@ export async function handleExperienceRequest(studio: Studio, service: AdaptiveE
       const state = await studio.deps.store.read();
       return state.agents.some(agent => agent.id === agentId && !(agent.blocked ?? []).includes(user.id) && canUseAgent(state.members.find(m => m.telegramId === user.id), agent));
     };
+    const learningResponse = async (scope: { space: 'work' | 'personal'; agentId: string }) => {
+      const learning = studio.deps.preferenceLearning;
+      if (!learning) return json({ error: 'preference_learning_unavailable' }, 503);
+      const view = await learning.view(user.id, scope);
+      learning.revalidateViewNow(user.id, view);
+      const publicView: Partial<typeof view> = { ...view }; delete publicView.receipt;
+      return json(publicView);
+    };
+    if (request.method === 'GET' && path.join('/') === 'preference-learning') {
+      const agentId = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/).parse(url.searchParams.get('agentId'));
+      if (!await canAccess(agentId)) return json({ error: 'agent_access_denied' }, 403);
+      return await learningResponse({ space, agentId });
+    }
     if (request.method === 'GET' && path.join('/') === 'preferences') {
       const agentId = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/).parse(url.searchParams.get('agentId'));
       if (!await canAccess(agentId)) return json({ error: 'agent_access_denied' }, 403);
@@ -84,6 +98,22 @@ export async function handleExperienceRequest(studio: Studio, service: AdaptiveE
     const bounded = await boundedStudioRequest(request, path.join('/') === 'predict' ? 96_000 : 16_384);
     try { body = await bounded.json(); } catch { return json({ error: 'invalid_json' }, 400); }
     const route = `${request.method} ${path.join('/')}`;
+    if (route === 'POST preference-learning/cancel') {
+      const input = learningCancelSchema.parse(body);
+      studio.deps.preferenceLearning?.tasks.cancel(user.id, input.space, input.agentId);
+      return json({ cancelled: true });
+    }
+    if (['POST preference-learning/present', 'PUT preference-learning', 'POST preference-learning/review'].includes(route)) {
+      const learning = studio.deps.preferenceLearning;
+      if (!learning) return json({ error: 'preference_learning_unavailable' }, 503);
+      const input = route === 'POST preference-learning/present' ? learningPresentSchema.parse(body)
+        : route === 'PUT preference-learning' ? learningToggleSchema.parse(body) : learningReviewSchema.parse(body);
+      if (!await canAccess(input.agentId)) return json({ error: 'agent_access_denied' }, 403);
+      if (route === 'POST preference-learning/present') await learning.present(user.id, learningPresentSchema.parse(input), request.signal);
+      else if (route === 'PUT preference-learning') await learning.toggle(user.id, learningToggleSchema.parse(input), request.signal);
+      else await learning.review(user.id, learningReviewSchema.parse(input), request.signal);
+      return await learningResponse(input);
+    }
     if (route === 'PUT settings') return await snapshotResponse(await service.settings(user.id, settingsInputSchema.parse(body)));
     if (route === 'PUT preferences') {
       const input = preferenceInputSchema.parse(body);

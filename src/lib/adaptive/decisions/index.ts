@@ -1,5 +1,6 @@
 import { measureStage, observedUsage } from '../observation/trace';
-import type OpenAI from 'openai';
+import OpenAI from 'openai';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { z } from 'zod';
 import { MAX_IMAGE_URL_LENGTH, minimizeImageDataUrl } from '../prediction/image';
 
@@ -46,20 +47,32 @@ export type DecisionResult =
   | { status: 'unknown'; reason: DecisionUnknownReason; elapsedMs: number; inputTokens?: number }
   | { status: 'answered'; model: string; answers: DecisionAnswer[]; elapsedMs: number; inputTokens?: number };
 export interface DecisionProvider {
-  evaluate(input: DecisionInput, signal: AbortSignal): Promise<unknown>;
+  readonly committedExportFence?: true;
+  evaluate(input: DecisionInput, signal: AbortSignal, authorizeNow?: () => boolean): Promise<unknown>;
 }
+const decisionAuthority = new AsyncLocalStorage<{ signal: AbortSignal; authorizeNow?: () => boolean }>();
+const guardedProvider = Symbol('guarded-decision-transport');
 
 /** No credentials are read here. Inject a configured, permitted SDK client. No auto-retry. */
 export class OpenAIDecisionProvider implements DecisionProvider {
-  constructor(private readonly client: Pick<OpenAI, 'post'>) {}
-  evaluate(input: DecisionInput, signal: AbortSignal): Promise<unknown> {
+  readonly committedExportFence?: true;
+  constructor(private readonly client: Pick<OpenAI, 'post'>, guard?: typeof guardedProvider) { if (guard === guardedProvider) this.committedExportFence = true; }
+  /** SDK public constructor transport hook; no provider request is made here. */
+  static guarded(options: { apiKey: string; dangerouslyAllowBrowser?: boolean }, transportFetch: typeof fetch = globalThis.fetch): OpenAIDecisionProvider {
+    return new OpenAIDecisionProvider(new OpenAI({ ...options, maxRetries: 0, logLevel: 'off', fetch: (input, init) => {
+      const scope = decisionAuthority.getStore();
+      if (scope?.signal.aborted || scope?.authorizeNow && !scope.authorizeNow()) throw new Error('decision_authority_changed');
+      return transportFetch(input, init);
+    } }), guardedProvider);
+  }
+  evaluate(input: DecisionInput, signal: AbortSignal, authorizeNow?: () => boolean): Promise<unknown> {
     // Parse again at provider boundary: unknown fields cannot be serialized to OpenAI.
     const parsed = requestSchema.parse(input);
-    return this.client.post<unknown>('/decisions', {
+    return decisionAuthority.run({ signal, authorizeNow }, () => this.client.post<unknown>('/decisions', {
       body: { model: DECISIONS_MODEL, input: parsed.input, questions: parsed.questions,
         prompt_cache_options: { mode: 'explicit' } },
       signal, timeout: 500, maxRetries: 0,
-    });
+    }));
   }
 }
 
@@ -70,6 +83,7 @@ export interface DecisionContext {
   /** Current deterministic authorization fingerprint including scope, source,
    * audience, grants/consent and policy versions; null denies. Never model output. */
   readonly authorize: () => Promise<string | null>;
+  readonly authorizeNow?: () => boolean;
   /** Loads only minimized input AFTER authorization. Never persisted in diagnostics. */
   readonly loadInput: () => Promise<DecisionInput>;
   readonly signal?: AbortSignal;
@@ -112,6 +126,7 @@ export class DecisionService {
   private failures = 0;
   private blockedUntil = 0;
   constructor(private readonly provider: DecisionProvider, private readonly now: () => number = Date.now) {}
+  get committedExportFence(): boolean { return this.provider.committedExportFence === true; }
   async evaluate(context: DecisionContext): Promise<DecisionResult> {
     return measureStage('decisions', () => this.evaluateObserved(context), result => result.status === 'answered' ? 'succeeded' : ['cancelled', 'stale'].includes(result.reason) ? 'cancelled' : 'unknown');
   }
@@ -120,6 +135,7 @@ export class DecisionService {
     const unknown = (reason: DecisionUnknownReason, inputTokens?: number): DecisionResult =>
       ({ status: 'unknown', reason, elapsedMs: Math.max(0, this.now() - started), ...(inputTokens === undefined ? {} : { inputTokens }) });
     if (!context.enabled) return unknown('disabled');
+    if (context.authorizeNow && !this.committedExportFence) return unknown('unsupported');
     if (this.blockedUntil > started) return unknown('circuit_open');
     if (context.deadlineMs !== undefined && (!Number.isFinite(context.deadlineMs) || context.deadlineMs < 1)) return unknown('invalid_input');
     if (context.signal?.aborted) return unknown('cancelled');
@@ -146,7 +162,8 @@ export class DecisionService {
         // Source/policy may have changed while loading even minimized input.
         if (await context.authorize() !== before || context.currentRevision() !== context.revision) return unknown('stale');
         if (controller.signal.aborted) return unknown(stopReason);
-        const raw = await this.provider.evaluate(parsed.data, controller.signal);
+        if (context.authorizeNow && !context.authorizeNow()) return unknown('unauthorized');
+        const raw = await this.provider.evaluate(parsed.data, controller.signal, context.authorizeNow);
         if (controller.signal.aborted) return unknown(stopReason);
         const result = validateAnswers(raw, parsed.data);
         if (!result) return unknown('malformed');

@@ -11,6 +11,7 @@ import { ADAPTIVE_POLICY_VERSION, OPTIONAL_PURPOSES, AdaptiveRepository, account
 import type { AdaptiveNotice, AdaptiveSnapshot, AdaptivePresentation } from './contracts';
 import type { AgentGrantInput, ConsentInput, DeletionInput, IdentityInput, MemoryInput, PresentInput } from './validation';
 import { sweepObserverDocument } from '../observation/helpers';
+import { pruneLearningDocument } from '../personalization/learning/state';
 
 export class AdaptiveError extends Error {
   readonly name = 'AdaptiveError';
@@ -62,6 +63,10 @@ export class AdaptiveService {
   private readonly now: () => number;
   private relationshipInvalidator?: (input: RelationshipInvalidation) => Promise<void>;
   private voiceIdentityInvalidator?: (input: { telegramId: number; space?: SpaceKind; reason: string }) => Promise<void>;
+  private preferenceLearningAuthority?: (telegramId: number, agentId: string) => string | null;
+  setPreferenceLearningAuthority(handler: (telegramId: number, agentId: string) => string | null): void { this.preferenceLearningAuthority = handler; }
+  private preferenceLearningInvalidator?: (telegramId: number) => void;
+  setPreferenceLearningInvalidator(handler: (telegramId: number) => void): void { this.preferenceLearningInvalidator = handler; }
   setVoiceIdentityInvalidator(handler: (input: { telegramId: number; space?: SpaceKind; reason: string }) => Promise<void>): void { this.voiceIdentityInvalidator = handler; }
   setRelationshipInvalidator(handler: (input: RelationshipInvalidation) => Promise<void>): void { this.relationshipInvalidator = handler; }
   async notifyRelationshipInvalidation(input: RelationshipInvalidation): Promise<void> { await this.relationshipInvalidator?.(input); }
@@ -71,12 +76,15 @@ export class AdaptiveService {
     return accountIdFor(telegramId);
   }
   private async transact<T>(telegramId: number, fn: (d: AdaptiveDocument, now: number) => T, beforeCommit?: () => void): Promise<T> {
-    const now = this.now();
     const invalidations: RelationshipInvalidation[] = [];
     const voiceInvalidations: Array<{ telegramId: number; space?: SpaceKind; reason: string }> = [];
-    const result = await this.repository.transaction(this.account(telegramId), now, d => {
+    let learningChanged = false;
+    const result = await this.repository.transaction(this.account(telegramId), this.now, (d, now) => {
       invalidations.length = 0;
       voiceInvalidations.length = 0;
+      const learningControl = () => digest([d.binding, d.permissions.filter(p => p.purpose === 'optional.personalization'),
+        d.agentGrants, d.experience.preferences, d.experience.preferenceLearning?.intents]);
+      const priorLearning = learningControl();
       const revokeReminderIdentity = () => {
         for (const space of ['work', 'personal'] as const) {
           const channel = d.experience.reminderDelivery?.[space];
@@ -133,7 +141,10 @@ export class AdaptiveService {
       if (purgeInvalidDerivedMemory(d, now)) this.bump(d, now);
       if (sweepObserverDocument(d, now, (doc, space, agentId, time) =>
         this.isPurposeAllowed(doc, space, 'optional.product_analytics', time, agentId))) this.bump(d, now);
+      if (pruneLearningDocument(this, d, now, this.preferenceLearningAuthority ? agentId => this.preferenceLearningAuthority!(telegramId, agentId) : undefined)) this.bump(d, now);
       const value = fn(d, now);
+      if (pruneLearningDocument(this, d, now, this.preferenceLearningAuthority ? agentId => this.preferenceLearningAuthority!(telegramId, agentId) : undefined)) this.bump(d, now);
+      learningChanged = priorLearning !== learningControl();
       if (purgeInvalidDerivedMemory(d, now)) this.bump(d, now);
       if (!d.binding || d.binding.accountId !== d.accountId || d.binding.personId !== d.personId) revokeReminderIdentity();
       // The separate template store is suppressed/purged only after canonical
@@ -175,6 +186,7 @@ export class AdaptiveService {
       if ((observerChanged || priorRelationships !== digest(d.relationships)) && d.revision === priorRevision) this.bump(d, now);
       return value;
     }, beforeCommit);
+    if (learningChanged) this.preferenceLearningInvalidator?.(telegramId);
     // Authority is already durably revoked. Purge failures are visible to caller;
     // no rollback can restore permission or permit an in-flight send.
     const cleanup = await Promise.allSettled([
@@ -217,8 +229,7 @@ export class AdaptiveService {
   /** Validated committed file snapshot only. No mutation or awaited work. */
   readCommittedForEffect<T>(telegramId: number, fn: (document: AdaptiveDocument, now: number) => T):
     { status: 'ready'; value: T } | { status: 'busy' | 'unsupported' | 'missing' } {
-    const now = this.now();
-    const snapshot = this.repository.readCommittedForEffect(this.account(telegramId), now);
+    const snapshot = this.repository.readCommittedForEffect(this.account(telegramId), this.now);
     if (snapshot.status !== 'ready') return snapshot;
     if (!snapshot.document) return { status: 'missing' };
     // Synchronous disk/schema work can itself cross an authority deadline.

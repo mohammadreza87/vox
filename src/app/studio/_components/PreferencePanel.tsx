@@ -57,14 +57,15 @@ export function PreferencePanel({ agentId, space, confirmed, revisionHint, local
   const [limited, setLimited] = useState(false);
   const stateRef = useRef<PreferenceState | null>(null), generation = useRef(0), busyRef = useRef<number | null>(null);
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [status, setStatus] = useState('');
-  const invalidate = useCallback(() => { generation.current++; busyRef.current = null; }, []);
-  const fetchState = useCallback(async () => {
-    try { return { state: await experienceApi.preferenceState(space, agentId), limited: false }; }
+  const readRequest = useRef<AbortController | null>(null), commandRequest = useRef<AbortController | null>(null);
+  const invalidate = useCallback(() => { generation.current++; busyRef.current = null; readRequest.current?.abort(); commandRequest.current?.abort(); }, []);
+  const fetchState = useCallback(async (signal: AbortSignal) => {
+    try { return { state: await experienceApi.preferenceState(space, agentId, signal), limited: false }; }
     catch (error) {
       if (!(error instanceof ApiError) || error.status !== 503 || error.message !== 'preference_projection_unavailable') throw error;
       // Preserve the existing ordinary controls on backends without a synchronous
       // projection fence. No inferred reason or undo token is synthesized here.
-      const snapshot = await experienceApi.read(space);
+      const snapshot = await experienceApi.read(space, signal);
       if (!snapshot.confirmed) throw error;
       const defaults: PreferenceValue[] = [{ key: 'response_length', value: 'balanced' }, { key: 'language', value: 'auto' }, { key: 'formatting', value: 'plain' }];
       const state: PreferenceState = { schemaVersion: 1, revision: snapshot.revision, space, agentId, receipt: '', entries: defaults.map(setting => {
@@ -76,9 +77,11 @@ export function PreferencePanel({ agentId, space, confirmed, revisionHint, local
     }
   }, [space, agentId]);
   const load = useCallback(async () => {
+    readRequest.current?.abort(); commandRequest.current?.abort(); commandRequest.current = null;
+    const controller = new AbortController(); readRequest.current = controller;
     const current = ++generation.current; busyRef.current = null; setBusy(true); setError(''); setStatus('');
     try {
-      const result = await fetchState();
+      const result = await fetchState(controller.signal);
       if (generation.current !== current) return;
       stateRef.current = result.state; setState(result.state); setLimited(result.limited);
     } catch { if (generation.current === current) { stateRef.current = null; setState(null); setError('load'); } }
@@ -108,13 +111,14 @@ export function PreferencePanel({ agentId, space, confirmed, revisionHint, local
     const before = stateRef.current;
     if (!before || busyRef.current !== null) return;
     const current = generation.current;
+    readRequest.current?.abort(); const controller = new AbortController(); commandRequest.current = controller;
     busyRef.current = current; setBusy(true); setError(''); setStatus('');
     try {
       const common = { space, agentId, expectedRevision: before.revision, eventId: crypto.randomUUID() };
-      const result = action === 'undo' ? await experienceApi.preferenceUndo({ ...common, changeId: changeId! })
-        : await experienceApi.preference({ ...common, action, setting });
+      const result = action === 'undo' ? await experienceApi.preferenceUndo({ ...common, changeId: changeId! }, controller.signal)
+        : await experienceApi.preference({ ...common, action, setting }, controller.signal);
       if (generation.current !== current) return;
-      const fresh = await fetchState();
+      const fresh = await fetchState(controller.signal);
       if (generation.current !== current) return;
       stateRef.current = fresh.state; setState(fresh.state); setLimited(fresh.limited); setStatus(action === 'undo' ? 'undone' : 'saved'); setBusy(false); onSnapshot(result);
     } catch { if (generation.current === current) { stateRef.current = null; setState(null); setError('change'); } }

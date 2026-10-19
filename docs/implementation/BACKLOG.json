@@ -1019,9 +1019,10 @@
       ],
       "evidence": [
         "docs/implementation/DELIVERY_RESULT.md",
-        "docs/implementation/PERSONALIZATION_CONTROLS_RESULT.md"
+        "docs/implementation/PERSONALIZATION_CONTROLS_RESULT.md",
+        "docs/implementation/REVIEWED_PREFERENCE_LEARNING_RESULT.md"
       ],
-      "progress_note": "Explicit response length/language/format choices feed the scoped resolver only under current permission and agent grant. The reviewed learning producer remains a separate in-progress slice; this release adds no automatic inference or analytics reuse."
+      "progress_note": "Reviewed preference learning now has separate versioned opt-in per confirmed account, agent and Work/Personal space. Final current text may create bounded enum proposals through guarded Decisions; Use is required, explicit choices win, and shared turn budgets, source suppression, expiry and authority revisions fence stale work. Independent 424/30 and composed 121/6 checks passed. Compiled browser, final CI, live provider quality and rollout remain pending; no sensitive-trait or identity inference."
     },
     {
       "id": "VOX-028",
@@ -1056,9 +1057,10 @@
       ],
       "evidence": [
         "docs/implementation/DELIVERY_RESULT.md",
-        "docs/implementation/PERSONALIZATION_CONTROLS_RESULT.md"
+        "docs/implementation/PERSONALIZATION_CONTROLS_RESULT.md",
+        "docs/implementation/REVIEWED_PREFERENCE_LEARNING_RESULT.md"
       ],
-      "progress_note": "EN/FA choices show coded reasons for saved, applied, reset, missing grant and unavailable permission. One-step CAS/idempotent Undo restores the prior explicit enum row or true absence, expires within ten minutes/current binding and never restores rights. Author124/14 and independent44/4 passed. Learned-candidate explanations/suppression and broader UX variants remain open."
+      "progress_note": "EN/FA explicit choices retain scoped explanations and genuine Undo. The composed review-only learning panel offers separate opt-in, uncertain candidate reasons, Use/dismiss, scope cancellation and suppression against immediate relearning after Undo/reset. Independent source and real-handler/file React journeys passed. Compiled browser acceptance and broader suggested-action/component variants remain open."
     },
     {
       "id": "VOX-029",

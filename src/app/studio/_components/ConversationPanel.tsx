@@ -1,9 +1,10 @@
 'use client';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { LivePredictionConsumer, predictionHttpTransport } from '@/lib/adaptive/prediction/client';
 import { prepareSharedImage } from '@/lib/adaptive/prediction/image-browser';
 import { TaskOutcome } from './TaskOutcome';
 import { tg } from '../_lib/client';
+import { preferenceLearningApi } from '../_lib/preference-learning-client';
 
 /** Typed fallback and explicit image sharing use the same scoped agent context
  * as calls. Draft processing is a separate, off-by-default user choice. */
@@ -28,22 +29,24 @@ export function ConversationPanel({ agentId, space, locale = 'en', disabled = fa
   const sessionId = useRef('');
   const latest = useRef({ draft, prepare, disabled });
   latest.current = { draft, prepare, disabled };
-  const startPredictionTurn = () => consumer.current?.startTurn({ agentId, space,
-    sessionId: sessionId.current, turnId: crypto.randomUUID(), contextKey: crypto.randomUUID() });
+  const startPredictionTurn = useCallback(() => consumer.current?.startTurn({ agentId, space,
+    sessionId: sessionId.current, turnId: crypto.randomUUID(), contextKey: crypto.randomUUID() }), [agentId, space]);
   useEffect(() => {
     sessionId.current = crypto.randomUUID();
     const current = new LivePredictionConsumer({ ...predictionHttpTransport(() => tg()?.initData ?? ''),
       onPrepared: result => setPrepared(result?.preparedContext === true), debounceMs: 350 });
     consumer.current = current;
+    current.startTurn({ agentId, space, sessionId: sessionId.current, turnId: crypto.randomUUID(), contextKey: crypto.randomUUID() });
     setDraft(''); setImage(undefined); setLastTurnId(undefined); setLines([]); setPrepare(false); setPrepared(false); setBusy(false); setError('');
-    return () => { generation.current++; current.cancel(); request.current?.abort(); imageRequest.current?.abort(); consumer.current = null; };
+    return () => { void preferenceLearningApi.cancel(space, agentId); generation.current++; current.cancel(); request.current?.abort(); imageRequest.current?.abort(); consumer.current = null; };
   }, [agentId, space]);
   useEffect(() => {
     if (disabled) { consumer.current?.cancel(); request.current?.abort(); imageRequest.current?.abort(); setPrepare(false); setPrepared(false); }
-  }, [disabled]);
+    else if (!consumer.current?.snapshotTurn()) startPredictionTurn();
+  }, [disabled, startPredictionTurn]);
   const updatePrediction = (text: string, selected = image) => {
-    if (latest.current.prepare && !latest.current.disabled) consumer.current?.update({ text, image: selected,
-      stable: text.trim().length >= 12, question: selected ? 'image_route' : 'intent_route' });
+    consumer.current?.update({ text, image: selected,
+      stable: latest.current.prepare && !latest.current.disabled && text.trim().length >= 12, question: selected ? 'image_route' : 'intent_route' });
   };
   const chooseImage = async (file?: File) => {
     imageRequest.current?.abort();
@@ -62,12 +65,14 @@ export function ConversationPanel({ agentId, space, locale = 'en', disabled = fa
     if (busy || disabled || loadingImage || !draft.trim()) return;
     const current = generation.current;
     const controller = new AbortController(); request.current?.abort(); request.current = controller;
-    consumer.current?.cancel(); setPrepared(false); setBusy(true); setError('');
+    const logicalTurn = consumer.current?.snapshotTurn();
+    consumer.current?.suspend(); setPrepared(false); setBusy(true); setError('');
+    let completed = false;
     try {
       // A prediction is never promoted into authority, tool input or an answer.
       const response = await fetch('/api/studio/conversation', { method: 'POST', credentials: 'same-origin', signal: controller.signal,
         headers: { 'Content-Type': 'application/json', 'x-telegram-init-data': tg()?.initData ?? '' },
-        body: JSON.stringify({ agentId, space, text: draft, ...(image ? { image: image.dataUrl } : {}) }) });
+        body: JSON.stringify({ agentId, space, text: draft, ...(logicalTurn ? { turn: logicalTurn } : {}), ...(image ? { image: image.dataUrl } : {}) }) });
       if (!response.ok) throw new Error('conversation_unavailable');
       const data: unknown = await response.json();
       if (!data || typeof data !== 'object' || !('reply' in data) || typeof data.reply !== 'string') throw new Error('invalid_reply');
@@ -75,11 +80,11 @@ export function ConversationPanel({ agentId, space, locale = 'en', disabled = fa
       const reply = data.reply;
       setLastTurnId('turnId' in data && typeof data.turnId === 'string' ? data.turnId : undefined);
       setLines(previous => [...previous, { role: 'you', text: draft }, { role: 'agent', text: reply }].slice(-20) as typeof previous);
-      setDraft(''); setImage(undefined);
+      completed = true; setDraft(''); setImage(undefined);
     } catch {
       if (!controller.signal.aborted && generation.current === current) setError(t('Your message could not be completed. Check Privacy and agent access before trying again.', 'پیام شما کامل نشد. پیش از تلاش دوباره حریم خصوصی و دسترسی عامل را بررسی کنید.'));
     } finally {
-      if (generation.current === current) { setBusy(false); if (prepare && !disabled) startPredictionTurn(); }
+      if (generation.current === current) { setBusy(false); if (completed && !disabled) startPredictionTurn(); }
     }
   };
   return <section className="vx-card vx-privacy-card" dir={fa ? 'rtl' : 'ltr'} lang={locale}
@@ -100,8 +105,8 @@ export function ConversationPanel({ agentId, space, locale = 'en', disabled = fa
       <button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy || disabled} onClick={() => { setImage(undefined); if (prepare) consumer.current?.update({ text: draft, stable: draft.trim().length >= 12 }); }}>{t('Remove image', 'حذف تصویر')}</button>
     </div>}
     <label className="vx-privacy-checkbox"><input type="checkbox" checked={prepare} disabled={busy || disabled} onChange={e => {
-      setPrepare(e.target.checked); if (!e.target.checked) consumer.current?.cancel();
-      else { startPredictionTurn(); consumer.current?.update({ text: draft, image, stable: draft.trim().length >= 12 }); }
+      setPrepare(e.target.checked); if (!e.target.checked) consumer.current?.suspend();
+      else { consumer.current?.update({ text: draft, image, stable: draft.trim().length >= 12 }); }
     }} />{t('Prepare while I type', 'آماده‌سازی هنگام تایپ')}</label>
     <p className="vx-small vx-2">{t('When selected, your draft and selected image may be sent to OpenAI before you press Send. Preparation stays off when unavailable and never sends a message for you.', 'با انتخاب این گزینه، پیش‌نویس و تصویر انتخاب‌شده ممکن است پیش از زدن ارسال به OpenAI فرستاده شوند. اگر آماده‌سازی در دسترس نباشد خاموش می‌ماند و هرگز از طرف شما پیامی ارسال نمی‌کند.')}</p>
     {lastTurnId && <TaskOutcome key={`${agentId}:${space}:${lastTurnId}`} agentId={agentId} space={space} turnId={lastTurnId} locale={locale} />}

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { reminderDeliveryDocumentSchema, reminderItemDeliverySchema, type ReminderTelegramStatus } from './reminder-contracts';
 import { sharedImageDataUrlSchema } from '../prediction/image';
 import { preferenceValueSchema, type PreferenceValue, type ResolvedPreference } from '../personalization';
+import { learningDocumentSchema } from '../personalization/learning/contracts';
 const id = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/);
 const time = z.number().int().nonnegative().safe();
 const revision = z.number().int().positive().safe();
@@ -50,11 +51,13 @@ export const experienceDocumentSchema = z.object({
   settings: experienceSettingsSchema, reminderDelivery: reminderDeliveryDocumentSchema.optional(),
   /** Only the latest explicit change per key; never permissions or grants. */
   preferenceUndo: z.array(preferenceUndoSchema).max(120).optional(),
+  preferenceLearning: learningDocumentSchema.optional(),
   /** Content-free dedupe tombstones retained independently of the observation opt-in. */
   turnKeys: z.array(z.object({ key: id, fingerprint: id.optional(), expiresAt: time }).strict()).max(1000),
   predictionTurns: z.array(z.object({ agentId: id, space: experienceSpaceSchema, sessionId: id,
     turnId: id, revision: z.number().int().nonnegative(), evaluations: z.number().int().min(0).max(2),
-    reservation: id.optional(), policyReceipt: id.optional(), authorizationFingerprint: id.optional(), requiresImage: z.boolean().optional(), receiptExpiresAt: time.optional(), cancelled: z.boolean().optional(), superseded: z.boolean().optional(), contextKey: id.optional(), inFlightUntil: time, expiresAt: time }).strict()).max(100),
+    reservation: id.optional(), policyReceipt: id.optional(), authorizationFingerprint: id.optional(), requiresImage: z.boolean().optional(), receiptExpiresAt: time.optional(), cancelled: z.boolean().optional(), superseded: z.boolean().optional(), contextKey: id.optional(),
+    finalFingerprint: z.string().regex(/^[a-f0-9]{64}$/).optional(), learningEvidenceId: z.string().regex(/^[a-f0-9]{64}$/).optional(), learningReservation: id.optional(), inFlightUntil: time, expiresAt: time }).strict()).max(100),
 }).strict();
 export type ExperienceDocument = z.infer<typeof experienceDocumentSchema>;
 export type StoredPreference = z.infer<typeof storedPreferenceSchema>;

@@ -75,11 +75,13 @@ function create(accountId: string, now: number): AdaptiveDocument {
 
 export class AdaptiveRepository {
   constructor(readonly storage: AdaptiveStorage) {}
-  readCommittedForEffect(accountId: string, now: number): { status: 'ready'; document: AdaptiveDocument | null } | { status: 'busy' | 'unsupported' } {
+  readCommittedForEffect(accountId: string, at: number | (() => number)): { status: 'ready'; document: AdaptiveDocument | null } | { status: 'busy' | 'unsupported' } {
     if (!this.storage.readCommittedForEffect) return { status: 'unsupported' };
-    if (!/^telegram-account:[1-9]\d{0,15}$/.test(accountId) || !Number.isSafeInteger(now) || now < 0) throw new Error('Invalid adaptive account');
+    if (!/^telegram-account:[1-9]\d{0,15}$/.test(accountId)) throw new Error('Invalid adaptive account');
     const result = this.storage.readCommittedForEffect(accountId);
     if (result.status !== 'ready') return result;
+    const now = typeof at === 'function' ? at() : at;
+    if (!Number.isSafeInteger(now) || now < 0) throw new Error('Invalid adaptive account');
     if (result.document === null) return { status: 'ready', document: null };
     const document = documentSchema.parse(result.document) as AdaptiveDocument;
     if (document.accountId !== accountId || document.personId !== create(accountId, now).personId || document.updatedAt > now || document.permissions.length !== 16 || new Set(document.permissions.map(p => p.id)).size !== 16) throw new Error('Invalid adaptive document');
@@ -89,10 +91,14 @@ export class AdaptiveRepository {
     }
     return { status: 'ready', document };
   }
-  transaction<T>(accountId: string, now: number, fn: (document: AdaptiveDocument) => T, beforeCommit?: () => void): Promise<T> {
-    if (!/^telegram-account:[1-9]\d{0,15}$/.test(accountId) || !Number.isSafeInteger(now) || now < 0) throw new Error('Invalid adaptive account');
+  transaction<T>(accountId: string, at: number | (() => number), fn: (document: AdaptiveDocument, now: number) => T, beforeCommit?: () => void): Promise<T> {
+    if (!/^telegram-account:[1-9]\d{0,15}$/.test(accountId) || typeof at !== 'function' && (!Number.isSafeInteger(at) || at < 0)) throw new Error('Invalid adaptive account');
     if (beforeCommit && this.storage.supportsCommittedWriteFence !== true) throw new Error('Committed write fence unsupported');
     return this.storage.transact(accountId, current => {
+      // Sample after the backend acquires its serialization/lock and reads the
+      // committed document. The same time drives validation and business expiry.
+      const now = typeof at === 'function' ? at() : at;
+      if (!Number.isSafeInteger(now) || now < 0) throw new Error('Invalid adaptive account');
       // Only an exact, otherwise valid old 14-purpose document is upgraded. Existing
       // permissions and receipts are preserved; the new purpose starts unasked.
       let input = current;
@@ -128,7 +134,7 @@ export class AdaptiveRepository {
             scope.spaceId !== spaceIdFor(accountId, scope.space) || scope.containerId !== containerIdFor(accountId, scope.space) ||
             key.audience.personId !== draft.personId || key.chatKey !== `private-${draft.personId}`) throw new Error('Invalid relationship partition');
       }
-      const result = fn(draft);
+      const result = fn(draft, now);
       documentSchema.parse(draft);
       // Keep the disabled rollout readable by the previous strict schema. A
       // future enabled observer rollout needs an explicit rollback migration;
