@@ -9,6 +9,8 @@
  *          → extract new memories → scope them → offer to share private work facts
  */
 
+import { createHash, randomUUID } from 'crypto';
+import { parseExplicitControl, type RelationshipLoop, type RelationshipKey } from '../relationships';
 import { streamText, type LLM, type WebSource } from './llm';
 import { explicitReplyFormat, readTriage, TRIAGE_TIMEOUT_MS, triageInput, triageQuestions, type Decider, type Triage } from './triage';
 import type { OrgDirectory } from './org/directory';
@@ -18,8 +20,8 @@ import type { VoiceService } from './voice';
 import type { TelegramBotClient, TelegramCallbackQuery, TelegramMessage, TelegramUpdate } from './telegram/client';
 import { buildSystemPrompt } from './conversation/prompt';
 import { selectMemories } from './memory/retrieval';
-import { decideScope, extractCandidates, firstNewIndex } from './memory/extraction';
-import { canPersonSee, describeScope, isVisibleToAudience } from './memory/visibility';
+import { decideScope, extractCandidates, resolveCandidateSource } from './memory/extraction';
+import { canPersonSee, describeScope, isVisibleToAudience, historyMessageForChat, selectHistoryForChat, snapshotScopeAudience } from './memory/visibility';
 import { groupAddressing } from './group-addressing';
 
 export type GroupAction = 'observe' | 'reply' | 'proactive' | 'remember';
@@ -31,6 +33,9 @@ export interface GatewayDeps {
   fastLlm?: LLM;
   /** Fast pre-reply triage (see triage.ts); without it every reply takes the full path */
   decider?: Decider;
+  relationships?: RelationshipLoop;
+  relationshipEnabled?: (personaId: string, personId: string) => boolean;
+  beforeSend?: (personaId: string, chat: ChatContext) => Promise<void>;
   memories: MemoryStore;
   offers: ShareOfferStore;
   history: ChatHistoryStore;
@@ -65,6 +70,75 @@ export class PersonaGateway {
 
   constructor(private readonly deps: GatewayDeps) {
     this.log = deps.logger ?? console;
+  }
+
+  private relationshipKey(personaId: string, chat: ChatContext): RelationshipKey {
+    return { personaId, chatKey: chat.chatKey, audience: chat.kind === 'private'
+      ? { kind: 'private', personId: chat.personId } : { kind: 'group', groupId: chat.group.id } };
+  }
+
+  private canFollowUp(personaId: string, chat: ChatContext): boolean {
+    return chat.kind === 'private' && this.deps.relationships?.mode === 'live' && this.deps.relationshipEnabled?.(personaId, chat.personId) !== false;
+  }
+
+  private async relationshipContext(personaId: string, chat: ChatContext): Promise<string> {
+    // Group working state needs audience-version provenance before it can affect replies.
+    if (chat.kind !== 'private' || !this.deps.relationships || this.deps.relationshipEnabled?.(personaId, chat.personId) === false) return '';
+    if (this.deps.relationships.mode !== 'live') return '';
+    const context = await this.deps.relationships.context(this.relationshipKey(personaId, chat));
+    return `${context}
+
+Follow-up capability: This agent can initiate a considerate check-in in this private conversation when the relationship system judges it useful and the person's contact settings allow it. Do not falsely say you can never reach out first. A possible check-in is reconsidered later, so do not guarantee a message or an exact delivery time. Pauses, stops, quiet hours and changed circumstances take priority.`;
+  }
+
+  private async observeRelationship(personaId: string, chat: ChatContext, speakerId: string, text: string, eventId: string, source: 'telegram' | 'call', at = this.now()) {
+    if (!this.deps.relationships || chat.kind !== 'private' || this.deps.relationshipEnabled?.(personaId, speakerId) === false) return;
+    try {
+      const key = this.relationshipKey(personaId, chat);
+      if (this.deps.relationships.mode === 'off') return;
+      if (this.deps.relationships.mode === 'shadow') {
+        await this.deps.relationships.observeTurn({ ...key, eventId, speakerId, text, source, at });
+        return;
+      }
+      const contextEpoch = (await this.deps.relationships.status(key)).epoch;
+      const historyEpoch = await this.deps.history.getEpoch(personaId);
+      const previous = (await this.recent(personaId, chat, HISTORY_LIMIT)).filter((turn) => turn.role === 'assistant').at(-1);
+      const previousAssistant = previous && historyEpoch === await this.deps.history.getEpoch(personaId)
+        ? { text: previous.text, at: previous.at, intentionId: previous.relationshipIntentionId } : undefined;
+      await this.deps.relationships.observeTurn({ ...key, eventId, speakerId, text, source, at, contextEpoch, previousAssistant });
+    }
+    catch { this.log.warn('[tireh] relationship observation unavailable'); }
+  }
+
+  /** All channels share this deletion path; never let an LLM merely promise a forget. */
+  private async forgetOwnedContext(personaId: string, speakerId: string): Promise<string> {
+    // Fence old generation/extraction before inspecting source records.
+    await this.deps.history.clearPersona(personaId);
+    await this.deps.relationships?.invalidatePersona(personaId, { reason: 'owner_forget_all' });
+    for (const memory of await this.deps.memories.listActive(personaId)) {
+      if (memory.source.personId !== speakerId) continue;
+      let id: string | undefined = memory.id;
+      const visited = new Set<string>();
+      while (id && !visited.has(id)) {
+        visited.add(id);
+        const row: MemoryRecord | null = await this.deps.memories.get(id);
+        if (!row || row.personaId !== personaId || row.source.personId !== speakerId) break;
+        await this.deps.memories.delete(id);
+        id = row.supersedes;
+      }
+    }
+    // Also fence anything that read old records while deletion was in progress.
+    await this.deps.history.clearPersona(personaId);
+    await this.deps.relationships?.invalidatePersona(personaId, { reason: 'owner_forget_all' });
+    return 'I cleared what you told me from memory and future conversation context. Messages already delivered in Telegram remain there.';
+  }
+
+  private async recent(personaId: string, chat: ChatContext, limit: number): Promise<ChatMessage[]> {
+    return selectHistoryForChat(this.deps.org, await this.deps.history.recent(personaId, chat.chatKey, limit), chat);
+  }
+
+  private async append(personaId: string, chat: ChatContext, message: ChatMessage, epoch?: number): Promise<void> {
+    await this.deps.history.append(personaId, chat.chatKey, historyMessageForChat(chat, message), epoch);
   }
 
   private now(): Date {
@@ -126,6 +200,10 @@ export class PersonaGateway {
     if (!(await this.groupAllowed(persona, chat, speaker.id, 'reply'))) return 'ignored';
 
     const rawText = message.text ?? message.caption ?? '';
+    if (parseExplicitControl(rawText) === 'forget') {
+      await this.handleCommand(persona, chat, speaker.id, message, '/forgetall');
+      return 'command';
+    }
     if (rawText.startsWith('/')) {
       const handled = await this.handleCommand(persona, chat, speaker.id, message, rawText);
       if (handled) return 'command';
@@ -151,13 +229,24 @@ export class PersonaGateway {
       }
     }
     if (!text.trim()) return 'ignored';
+    if (parseExplicitControl(text) === 'forget') {
+      await this.handleCommand(persona, chat, speaker.id, message, '/forgetall');
+      return 'command';
+    }
 
+    // Telegram can deliver a queued message after midnight. Preserve its source date
+    // for relative language; reject invalid/far-future metadata without shifting valid old messages.
+    const receivedAt = this.now();
+    const sourceAt = Number.isSafeInteger(message.date) && message.date > 0 && message.date * 1000 <= receivedAt.getTime() + 300_000
+      ? new Date(message.date * 1000) : receivedAt;
+    const privacyEpoch = await this.deps.history.getEpoch(persona.id);
     const userMessage: ChatMessage = {
-      role: 'user', personId: speaker.id, text, at: this.now(), telegramMessageId: message.message_id,
+      role: 'user', personId: speaker.id, text, at: sourceAt, telegramMessageId: message.message_id,
       ...(chat.kind === 'group' ? { groupPolicyVersion: 1 as const } : {}),
     };
     if (!(await this.groupAllowed(persona, chat, speaker.id, addressed ? 'reply' : 'observe'))) return 'ignored';
-    await this.deps.history.append(persona.id, chat.chatKey, userMessage);
+    await this.append(persona.id, chat, userMessage, privacyEpoch);
+    await this.observeRelationship(persona.id, chat, speaker.id, text, `telegram:${message.chat.id}:${message.message_id}`, 'telegram', sourceAt);
 
     const askAddressed = !addressed && chat.kind === 'group' && !isVoice && !targeting.otherTarget
       && persona.groupParticipation !== 'mentions';
@@ -185,12 +274,12 @@ export class PersonaGateway {
       const { text: reply, sources } = generated;
       if (!reply) return 'ignored';
       if (!(await this.groupAllowed(persona, chat, speaker.id, addressed ? 'reply' : 'proactive'))) return 'ignored';
-      const delivered = await this.sendReply(persona, chat, message, reply, voiceWanted, sources, addressed ? 'reply' : 'proactive');
+      const delivered = await this.sendReply(persona, chat, message, reply, voiceWanted, sources, addressed ? 'reply' : 'proactive', privacyEpoch);
       if (delivered === null) return 'ignored';
-      await this.deps.history.append(persona.id, chat.chatKey, {
+      await this.append(persona.id, chat, {
         role: 'assistant', text: delivered, at: this.now(), telegramMessageId: message.message_id,
         ...(chat.kind === 'group' ? { groupPolicyVersion: 1 as const } : {}),
-      });
+      }, privacyEpoch);
     } else {
       shouldReply = false;
     }
@@ -222,7 +311,7 @@ export class PersonaGateway {
   }
 
   private async recentHistory(persona: Persona, chat: ChatContext, limit: number, messageId?: number): Promise<ChatMessage[]> {
-    const recent = await this.deps.history.recent(persona.id, chat.chatKey, limit);
+    const recent = await this.recent(persona.id, chat, limit);
     return chat.kind === 'private' ? recent : recent.filter((m) => m.groupPolicyVersion === 1
       && (messageId === undefined || (m.telegramMessageId !== undefined && m.telegramMessageId <= messageId)));
   }
@@ -235,10 +324,14 @@ export class PersonaGateway {
     const persona = this.deps.org.getPersona(personaId);
     if (!persona) throw new Error(`Unknown persona ${personaId}`);
     if (!this.deps.org.getPerson(speakerId)) throw new Error('Unknown speaker');
+    if (parseExplicitControl(text) === 'forget') return this.forgetOwnedContext(persona.id, speakerId);
     const chat: ChatContext = { kind: 'private', chatKey: `private-${speakerId}`, personId: speakerId };
-    await this.deps.history.append(persona.id, chat.chatKey, { role: 'user', personId: speakerId, text, at: this.now() });
+    const privacyEpoch = await this.deps.history.getEpoch(persona.id);
+    await this.append(persona.id, chat, { role: 'user', personId: speakerId, text, at: this.now() }, privacyEpoch);
+    await this.observeRelationship(persona.id, chat, speakerId, text, `call:${randomUUID()}`, 'call');
     const reply = await this.generateReply(persona, chat, speakerId, text);
-    await this.deps.history.append(persona.id, chat.chatKey, { role: 'assistant', text: reply, at: this.now() });
+    if (await this.deps.history.getEpoch(persona.id) !== privacyEpoch) throw new Error('Conversation context changed; please try again.');
+    await this.append(persona.id, chat, { role: 'assistant', text: reply, at: this.now() }, privacyEpoch);
     try {
       await this.formMemories(persona, chat, speakerId);
     } catch {
@@ -260,24 +353,32 @@ export class PersonaGateway {
     if (!persona) throw new Error(`Unknown persona ${personaId}`);
     if (!org.getPerson(speakerId)) throw new Error('Unknown speaker');
     const chat: ChatContext = { kind: 'private', chatKey: `private-${speakerId}`, personId: speakerId };
+    const privacyEpoch = await this.deps.history.getEpoch(persona.id);
     const said = [...turns].reverse().find((t) => t.role === 'user')?.content.trim() ?? '';
-    const recent = await this.deps.history.recent(persona.id, chat.chatKey, 1);
+    if (parseExplicitControl(said) === 'forget') {
+      yield await this.forgetOwnedContext(persona.id, speakerId);
+      return;
+    }
+    const recent = await this.recent(persona.id, chat, 1);
     // The platform can ask twice for the same turn (e.g. after a barge-in).
     if (said && !(recent[0]?.role === 'user' && recent[0].text === said)) {
-      await this.deps.history.append(persona.id, chat.chatKey, { role: 'user', personId: speakerId, text: said, at: this.now() });
+      await this.append(persona.id, chat, { role: 'user', personId: speakerId, text: said, at: this.now() }, privacyEpoch);
+      await this.observeRelationship(persona.id, chat, speakerId, said, `live:${createHash('sha256').update(JSON.stringify(turns)).digest('hex')}`, 'call');
     }
     const all = await this.deps.memories.listActive(persona.id);
     const memories = selectMemories(org, all, chat, { query: said, now: this.now() });
-    const system = `${buildSystemPrompt({ org, persona: { ...persona, webSearch: false }, chat, speakerId, memories, now: this.now() })}
+    const system = `${buildSystemPrompt({ org, persona: { ...persona, webSearch: false }, chat, speakerId, memories, canFollowUp: this.canFollowUp(persona.id, chat), now: this.now() })}
+${await this.relationshipContext(persona.id, chat)}
 
 ## Live voice call
 You are on a live voice call. Answer in one to three short spoken sentences, like a phone conversation. No lists, links, emoji or stage directions. If you were cut off, don't repeat yourself; follow what the person says next.`;
     let reply = '';
-    for await (const part of streamText(this.deps.fastLlm ?? this.deps.llm, { system, messages: turns.slice(-20), maxTokens: 300 })) {
+    for await (const part of streamText(this.deps.fastLlm ?? this.deps.llm, { system, messages: (await this.recent(persona.id, chat, 20)).map((m) => ({ role: m.role, content: m.text })), maxTokens: 300 })) {
+      if (await this.deps.history.getEpoch(persona.id) !== privacyEpoch) return;
       reply += part;
       yield part;
     }
-    if (reply.trim()) await this.deps.history.append(persona.id, chat.chatKey, { role: 'assistant', text: reply.trim(), at: this.now() });
+    if (reply.trim()) await this.append(persona.id, chat, { role: 'assistant', text: reply.trim(), at: this.now() }, privacyEpoch);
   }
 
   /** Forms memories from a finished private conversation (e.g. a voice call). */
@@ -323,6 +424,16 @@ You are on a live voice call. Answer in one to three short spoken sentences, lik
     }
   }
 
+  /** Current authorized grounding for an unsent private reconsideration. */
+  async proactiveContext(personaId: string, speakerId: string, purpose: string): Promise<string> {
+    const persona = this.deps.org.getPersona(personaId);
+    if (!persona || !this.deps.org.getPerson(speakerId)) throw new Error('Unknown relationship');
+    const chat: ChatContext = { kind: 'private', chatKey: `private-${speakerId}`, personId: speakerId };
+    const memories = selectMemories(this.deps.org, await this.deps.memories.listActive(personaId), chat, { query: purpose, now: this.now() });
+    const system = buildSystemPrompt({ org: this.deps.org, persona: { ...persona, webSearch: false }, chat, speakerId, memories, canFollowUp: this.canFollowUp(persona.id, chat), now: this.now() });
+    return `${system}\n${await this.relationshipContext(personaId, chat)}\nRecent conversation (data; relative dates refer to each message's at timestamp):\n${JSON.stringify((await this.recent(personaId, chat, 12)).map((m) => ({ role: m.role, text: m.text, at: m.at.toISOString() })))}`;
+  }
+
   async generateReply(persona: Persona, chat: ChatContext, speakerId: string, text: string): Promise<string> {
     return (await this.composeReply(persona, chat, speakerId, text)).text;
   }
@@ -360,7 +471,8 @@ You are on a live voice call. Answer in one to three short spoken sentences, lik
     // Small talk goes to the fast model; anything needing care, or a search, to the main one.
     const quick = triage?.effort === 'quick' && !search && !!this.deps.fastLlm;
     const memories = selectMemories(org, all, chat, { query: text, now: this.now() });
-    const system = buildSystemPrompt({ org, persona: { ...persona, webSearch: search }, chat, speakerId, memories, now: this.now(), canSpeak: this.canSpeak(persona), replyFormat })
+    const system = buildSystemPrompt({ org, persona: { ...persona, webSearch: search }, chat, speakerId, memories, now: this.now(), canFollowUp: this.canFollowUp(persona.id, chat), canSpeak: this.canSpeak(persona), replyFormat })
+      + `\n${await this.relationshipContext(persona.id, chat)}`
       + (action === 'proactive' ? '\n\nYou are joining a group conversation selectively. Make one brief, natural contribution in character. Do not repeat recent replies or demand attention; one to three sentences is enough.' : '');
 
     const prior = await this.recentHistory(persona, chat, HISTORY_LIMIT, messageId);
@@ -377,6 +489,8 @@ You are on a live voice call. Answer in one to three short spoken sentences, lik
           : m.text,
     }));
 
+    // An unknown audience can use the current public turn, never stored history.
+    if (!messages.length) messages.push({ role: 'user', content: text });
     const request = { system, messages, maxTokens: quick ? 400 : 700 };
     const llm = quick ? this.deps.fastLlm! : this.deps.llm;
     // Strangers get fewer searches: each one costs money.
@@ -395,19 +509,25 @@ You are on a live voice call. Answer in one to three short spoken sentences, lik
     reply: string,
     voiceWanted: boolean,
     sources: WebSource[] = [],
-    action: GroupAction = 'reply'
+    action: GroupAction = 'reply',
+    privacyEpoch?: number
   ): Promise<string | null> {
     const bot = this.deps.botFor(persona.id);
+    const canSend = async () => {
+      await this.deps.beforeSend?.(persona.id, chat);
+      return (privacyEpoch === undefined || await this.deps.history.getEpoch(persona.id) === privacyEpoch) &&
+        await this.groupAllowed(persona, chat, this.deps.org.getPersonByTelegramId(message.from!.id)!.id, action);
+    };
     const replyTo = chat.kind === 'group' ? message.message_id : undefined;
     const speak = this.canSpeak(persona) && voiceWanted;
     let audioSent = false;
 
-    if (!(await this.groupAllowed(persona, chat, this.deps.org.getPersonByTelegramId(message.from!.id)!.id, action))) return null;
+    if (!await canSend()) return null;
     if (speak) {
       try {
         const { audio, mimeType, filename } = await this.deps.voice!.synthesize(reply, persona.voice.elevenLabsVoiceId);
         if (!audio.byteLength) throw new Error('Empty speech audio');
-        if (!(await this.groupAllowed(persona, chat, this.deps.org.getPersonByTelegramId(message.from!.id)!.id, action))) return null;
+        if (!await canSend()) return null;
         await bot.sendVoice(message.chat.id, audio, { mimeType, filename, replyTo });
         audioSent = true;
       } catch (error) {
@@ -416,7 +536,7 @@ You are on a live voice call. Answer in one to three short spoken sentences, lik
         this.log.error(`[tireh] ${persona.id}: voice reply failed, sending text (${code})`);
       }
     }
-    if (!(await this.groupAllowed(persona, chat, this.deps.org.getPersonByTelegramId(message.from!.id)!.id, action))) return null;
+    if (!await canSend()) return null;
     if (audioSent) {
       // A failed transcript must not report that an already-delivered voice failed.
       try { await bot.sendMessage(message.chat.id, withSources(reply, sources), { replyTo }); }
@@ -438,7 +558,9 @@ You are on a live voice call. Answer in one to three short spoken sentences, lik
   private async formMemories(persona: Persona, chat: ChatContext, speakerId: string, messageId?: number, sourceMessage?: ChatMessage, passive = false) {
     const { org, llm, memories } = this.deps;
     if (chat.kind === 'group' && !sourceMessage) return;
-    const transcript = sourceMessage ? [sourceMessage] : await this.deps.history.recent(persona.id, chat.chatKey, EXTRACTION_WINDOW);
+    const privacyEpoch = await this.deps.history.getEpoch(persona.id);
+    const transcript = sourceMessage ? [sourceMessage] : await this.recent(persona.id, chat, EXTRACTION_WINDOW);
+    if (!transcript.some((m) => m.role === 'user')) return;
     let existing = await memories.listActive(persona.id);
     // Only memories this audience may see are shown to the extractor.
     const known = selectMemories(org, existing, chat, {
@@ -451,10 +573,6 @@ You are on a live voice call. Answer in one to three short spoken sentences, lik
     if (candidates.length === 0) return;
 
     const at = sourceMessage?.at ?? this.now();
-    const newStart = firstNewIndex(transcript);
-    const newSpeakers = new Set(
-      transcript.slice(newStart).flatMap((m) => (m.role === 'user' && m.personId ? [m.personId] : []))
-    );
 
     for (const candidate of candidates) {
       if (chat.kind === 'group') existing = await memories.listActive(persona.id);
@@ -463,7 +581,9 @@ You are on a live voice call. Answer in one to three short spoken sentences, lik
         || (candidate.saidBy && candidate.saidBy !== speakerId))) continue;
       if (!(await this.groupAllowed(persona, chat, speakerId, 'remember')) || (passive && !(await this.groupAllowed(persona, chat, speakerId, 'observe')))) return;
       // Credit whoever actually said it, if they spoke in the new messages.
-      const sourceId = candidate.saidBy && newSpeakers.has(candidate.saidBy) ? candidate.saidBy : speakerId;
+      const source = resolveCandidateSource(candidate, transcript);
+      if (!source?.personId) continue;
+      const sourceId = source.personId;
       const decision = decideScope(org, chat, sourceId, candidate);
       const topic = candidate.topic?.toLowerCase().trim() || undefined;
 
@@ -475,7 +595,7 @@ You are on a live voice call. Answer in one to three short spoken sentences, lik
             (m) =>
               m.topic === topic &&
               m.source.personId === sourceId &&
-              JSON.stringify(m.scope) === JSON.stringify(decision.scope)
+              (chat.kind === 'private' || JSON.stringify(m.scope) === JSON.stringify(decision.scope))
           )
         : undefined;
       if (chat.kind === 'group' && messageId !== undefined && (replaced?.source.telegramMessageId ?? 0) > messageId) continue;
@@ -487,25 +607,33 @@ You are on a live voice call. Answer in one to three short spoken sentences, lik
       );
       if (duplicate) continue;
 
-      const record = await memories.add({
+      const record = await memories.addIfEpoch({
         personaId: persona.id,
         content: candidate.content,
         type: decision.type,
         scope: decision.scope,
+        authorizedPersonIds: decision.authorizedPersonIds,
         sensitivity: decision.sensitivity,
         source: {
           personId: sourceId,
           chatKind: chat.kind,
           groupId: chat.kind === 'group' ? chat.group.id : undefined,
-          telegramMessageId: messageId,
-          at,
+          telegramMessageId: source.telegramMessageId,
+          at: source.at ?? at,
         },
         aboutPersonIds: candidate.about,
         topic,
         supersedes: replaced?.id,
         confidence: candidate.confidence,
-      });
-      if (replaced) await memories.update(replaced.id, { supersededBy: record.id });
+      }, privacyEpoch);
+      if (!record) return;
+      if (replaced) {
+        await memories.update(replaced.id, { supersededBy: record.id, shareVersion: (replaced.shareVersion ?? 0) + 1 });
+        if (replaced.scope.kind !== 'private') {
+          await this.deps.history.clearPersona(persona.id);
+          await this.deps.relationships?.invalidatePersona(persona.id, { reason: 'shared_fact_corrected' });
+        }
+      }
 
       if (decision.offerScope) await this.offerShare(persona, chat, sourceId, record, decision.offerScope);
       existing.push(record);
@@ -525,6 +653,8 @@ You are on a live voice call. Answer in one to three short spoken sentences, lik
       memoryId: memory.id,
       ownerPersonId: ownerId,
       proposedScope,
+      memoryShareVersion: memory.shareVersion ?? 0,
+      proposedAudiencePersonIds: snapshotScopeAudience(this.deps.org, proposedScope),
     });
     const owner = this.deps.org.getPerson(ownerId);
     if (!owner?.telegramUserId) return;
@@ -568,14 +698,21 @@ You are on a live voice call. Answer in one to three short spoken sentences, lik
     }
 
     const memory = await this.deps.memories.get(offer.memoryId);
-    if (!memory || memory.supersededBy) {
+    if (!memory || memory.supersededBy || (memory.shareVersion ?? 0) !== (offer.memoryShareVersion ?? 0)) {
       await this.deps.offers.setStatus(offer.id, 'declined');
       await bot.answerCallbackQuery(query.id, 'That memory has since been changed or deleted.');
       return 'callback';
     }
     const scopeName = describeScope(this.deps.org, offer.proposedScope);
-    if (action === 'share' && canPersonSee(this.deps.org, person.id, offer.proposedScope)) {
-      await this.deps.memories.update(memory.id, { scope: offer.proposedScope });
+    if (action === 'share' && memory.source.personId === person.id && memory.sensitivity === 'normal' &&
+      offer.proposedAudiencePersonIds?.length && canPersonSee(this.deps.org, person.id, offer.proposedScope)) {
+      const audience = snapshotScopeAudience(this.deps.org, offer.proposedScope).filter((id) => offer.proposedAudiencePersonIds!.includes(id));
+      const shared = await this.deps.memories.updateIfShareVersion(memory.id, offer.memoryShareVersion ?? 0, { scope: offer.proposedScope, authorizedPersonIds: audience, shareVersion: (memory.shareVersion ?? 0) + 1 });
+      if (!shared) {
+        await this.deps.offers.setStatus(offer.id, 'declined');
+        await bot.answerCallbackQuery(query.id, 'That sharing request has expired.');
+        return 'callback';
+      }
       await this.deps.offers.setStatus(offer.id, 'approved');
       await bot.answerCallbackQuery(query.id, `Shared with ${scopeName}.`);
       if (query.message) {
@@ -640,6 +777,30 @@ You are on a live voice call. Answer in one to three short spoken sentences, lik
         return true;
       }
 
+      case '/forgetall': {
+        if (chat.kind !== 'private') {
+          await bot.sendMessage(message.chat.id, 'Ask me in a private chat so I can clear what you told me.');
+          return true;
+        }
+        await bot.sendMessage(message.chat.id, await this.forgetOwnedContext(persona.id, speakerId));
+        return true;
+      }
+
+      case '/pause':
+      case '/resume':
+      case '/stop': {
+        if (chat.kind !== 'private') {
+          await bot.sendMessage(message.chat.id, 'Manage your check-ins in a private chat.');
+          return true;
+        }
+        const action = command.slice(1) as 'pause' | 'resume' | 'stop';
+        await this.deps.relationships?.control(this.relationshipKey(persona.id, chat), action,
+          action === 'pause' ? { until: new Date(this.now().getTime() + 7 * 86_400_000) } : undefined);
+        await bot.sendMessage(message.chat.id, action === 'resume' ? 'Check-ins can resume when something is worth revisiting.' :
+          action === 'pause' ? 'Check-ins are paused for a week. You can still talk with me whenever you like.' : 'I will stop initiating check-ins. Send /resume if you change your mind.');
+        return true;
+      }
+
       case '/forget': {
         if (chat.kind !== 'private') {
           await bot.sendMessage(message.chat.id, 'Ask me in a private chat.');
@@ -654,6 +815,8 @@ You are on a live voice call. Answer in one to three short spoken sentences, lik
           await bot.sendMessage(message.chat.id, `Only ${org.getPerson(target.source.personId)?.name} can delete that one.`);
         } else {
           await this.deps.memories.delete(target.id);
+          await this.deps.history.clearPersona(persona.id);
+          await this.deps.relationships?.invalidatePersona(persona.id, { reason: 'memory_deleted' });
           await bot.sendMessage(message.chat.id, `Forgotten: "${target.content}"`);
         }
         return true;
@@ -667,7 +830,7 @@ You are on a live voice call. Answer in one to three short spoken sentences, lik
   private async memoriesVisibleTo(persona: Persona, personId: string): Promise<MemoryRecord[]> {
     const all = await this.deps.memories.listActive(persona.id);
     return all
-      .filter((m) => isVisibleToAudience(this.deps.org, m, [personId]))
+      .filter((m) => m.source.personId === personId || isVisibleToAudience(this.deps.org, m, [personId]))
       .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
   }
 }

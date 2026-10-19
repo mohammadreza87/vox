@@ -202,7 +202,7 @@ describe('shared group memory', () => {
     expect(stored.scope).toEqual({ kind: 'group', groupId: 'gameend-team' });
     expect(stored.source).toMatchObject({ personId: 'parastoo', chatKind: 'group', groupId: 'gameend-team' });
 
-    // Milad later asks privately: he's a GameEnd member, so Aria can tell him
+    // Milad was in the original group, so Aria may repeat its memory privately.
     await gateway.handleUpdate('aria', privateText(TG.milad, 'How long should the tutorial be?'));
     expect(llm.lastPrompt).toContain('cut the tutorial to 3 steps (Parastoo, in GameEnd Team');
 
@@ -414,9 +414,10 @@ describe('memory formation quality', () => {
     await gateway.handleUpdate('aria', privateText(TG.reza, 'first message'));
     await gateway.handleUpdate('aria', privateText(TG.reza, 'second message'));
     const transcript = llm.extractionRequests[1].messages[0].content;
-    expect(transcript).toContain('[context] Reza (id: reza): first message');
-    expect(transcript).toContain('[new] Reza (id: reza): second message');
-    expect(transcript).toContain('[new] Aria: Sure.');
+    expect(transcript).toMatch(/\[context\] Reza \(id: reza\) \[message id: \d+\]: first message/);
+    expect(transcript).toMatch(/\[new\] Reza \(id: reza\) \[message id: \d+\]: second message/);
+    expect(transcript).toMatch(/\[context\] Aria \[message id: \d+\]: Sure\./);
+    expect(transcript).not.toContain('[new] Aria:');
   });
 
   it('shows the extractor what Aria already knows, but only what this audience may see', async () => {
@@ -454,7 +455,14 @@ describe('memory formation quality', () => {
     const { gateway, llm, memories } = makeGateway();
     llm.nextExtraction = extraction({ content: 'Sina approved the budget', type: 'decision', kind: 'work', saidBy: 'sina' });
     await gateway.handleUpdate('aria', privateText(TG.reza, 'Sina approved the budget'));
-    expect([...memories.records.values()][0].source.personId).toBe('reza');
+    expect([...memories.records.values()]).toEqual([]);
+  });
+
+  it('discards unknown source claims instead of crediting the current speaker', async () => {
+    const { gateway, llm, memories } = makeGateway();
+    llm.nextExtraction = extraction({ content: 'A stranger approved the budget', type: 'decision', kind: 'work', saidBy: 'unknown-person' });
+    await gateway.handleUpdate('aria', privateText(TG.reza, 'A stranger approved the budget'));
+    expect(await memories.listActive('aria')).toEqual([]);
   });
 
   it('handles approving a share for a memory that was deleted meanwhile', async () => {
@@ -475,3 +483,126 @@ describe('memory formation quality', () => {
   });
 });
 
+
+describe('privacy mutation fences', () => {
+  it('does not send or retain an answer generated before an authorized history reset', async () => {
+    const { gateway, llm, history, bot } = makeGateway();
+    let started!: () => void;
+    const atModel = new Promise<void>((resolve) => { started = resolve; });
+    let finish!: (text: string) => void;
+    const generated = new Promise<string>((resolve) => { finish = resolve; });
+    const original = llm.complete.bind(llm);
+    llm.complete = async (request) => {
+      if (request.system.startsWith('You extract')) return original(request);
+      started(); return generated;
+    };
+    const running = gateway.handleUpdate('aria', privateText(TG.reza, 'Can you remind me?'));
+    await atModel;
+    await history.clearPersona('aria');
+    finish('REVOKED_OUTPUT_CANARY');
+    await running;
+    expect(bot.sent.some((m) => m.text?.includes('REVOKED_OUTPUT_CANARY'))).toBe(false);
+    expect(await history.recent('aria', 'private-reza', 10)).toEqual([]);
+  });
+
+  it('does not retain extraction that finishes after authorized forgetting', async () => {
+    const { gateway, llm, history, memories } = makeGateway();
+    let started!: () => void;
+    const atExtractor = new Promise<void>((resolve) => { started = resolve; });
+    let finish!: (text: string) => void;
+    const extracted = new Promise<string>((resolve) => { finish = resolve; });
+    const original = llm.complete.bind(llm);
+    llm.complete = async (request) => {
+      if (!request.system.startsWith('You extract')) return original(request);
+      started(); return extracted;
+    };
+    const running = gateway.handleUpdate('aria', privateText(TG.reza, 'Remember my appointment on Friday'));
+    await atExtractor;
+    await history.clearPersona('aria');
+    finish(JSON.stringify(extraction({ content: 'Reza has an appointment Friday', type: 'event', kind: 'personal' })));
+    await running;
+    expect(await memories.listActive('aria')).toEqual([]);
+  });
+
+  it('rejects a pending offer after its source owner revoked sharing', async () => {
+    const { gateway, llm, memories, bot } = makeGateway();
+    llm.nextExtraction = extraction({ content: 'Launch is Friday', type: 'decision', kind: 'work', projectId: 'gameend' });
+    await gateway.handleUpdate('aria', privateText(TG.reza, 'Launch is Friday'));
+    const offer = bot.sent.find((m) => m.text?.includes('Should I share'))!;
+    const data = (offer.options as { keyboard: { inline_keyboard: Array<Array<{ callback_data: string }>> } }).keyboard.inline_keyboard[0][0].callback_data;
+    const memory = [...memories.records.values()][0];
+    await memories.updateIfShareVersion(memory.id, 0, { scope: { kind: 'private', personId: 'reza' }, authorizedPersonIds: ['reza'], shareVersion: 1 });
+    await gateway.handleUpdate('aria', callback(TG.reza, data));
+    expect((await memories.get(memory.id))?.scope).toEqual({ kind: 'private', personId: 'reza' });
+    expect(bot.sent.at(-1)?.text).toBe('That memory has since been changed or deleted.');
+  });
+
+  it('retires a shared fact when its owner corrects it privately without widening the correction', async () => {
+    const { gateway, llm, memories } = makeGateway();
+    llm.nextExtraction = extraction({ content: 'Launch is Friday', type: 'decision', kind: 'work', topic: 'launch' });
+    await gateway.handleUpdate('aria', privateText(TG.reza, 'Launch is Friday'));
+    const old = [...memories.records.values()][0];
+    await memories.updateIfShareVersion(old.id, 0, { scope: { kind: 'people', personIds: ['reza', 'parastoo'] }, authorizedPersonIds: ['reza', 'parastoo'], shareVersion: 1 });
+    await gateway.handleUpdate('aria', privateText(TG.parastoo, 'What is the launch date?'));
+    expect(llm.lastPrompt).toContain('Launch is Friday');
+    llm.nextExtraction = extraction({ content: 'Launch is Monday', type: 'decision', kind: 'work', topic: 'launch' });
+    await gateway.handleUpdate('aria', privateText(TG.reza, 'Correction privately: launch is Monday'));
+    const current = await memories.listActive('aria');
+    expect(current).toHaveLength(1);
+    expect(current[0]).toMatchObject({ content: 'Launch is Monday', scope: { kind: 'private', personId: 'reza' } });
+    expect((await memories.get(old.id))?.supersededBy).toBe(current[0].id);
+    await gateway.handleUpdate('aria', privateText(TG.parastoo, 'What is the launch date now?'));
+    const request = llm.replyRequests.at(-1)!;
+    expect(JSON.stringify(request)).not.toContain('Launch is Friday');
+    expect(JSON.stringify(request)).not.toContain('Launch is Monday');
+  });
+});
+
+describe('voice privacy fence', () => {
+  it('does not send synthesized content after authorized forgetting during synthesis', async () => {
+    const voice = fakeVoice('Could you remind me?');
+    let started!: () => void;
+    const atSynthesis = new Promise<void>((resolve) => { started = resolve; });
+    let finish!: () => void;
+    const synthesized = new Promise<void>((resolve) => { finish = resolve; });
+    voice.synthesize.mockImplementation(async () => {
+      started(); await synthesized;
+      return { audio: new ArrayBuffer(4), mimeType: 'audio/mpeg', filename: 'voice.mp3' };
+    });
+    const { gateway, llm, history, bot } = makeGateway({ voice });
+    llm.nextReply = 'REVOKED_VOICE_CANARY';
+    const running = gateway.handleUpdate('aria', privateVoice(TG.reza));
+    await atSynthesis;
+    await history.clearPersona('aria');
+    finish();
+    await running;
+    expect(bot.sendVoice).not.toHaveBeenCalled();
+    expect(bot.sent.some((message) => message.text?.includes('REVOKED_VOICE_CANARY'))).toBe(false);
+    expect(await history.recent('aria', 'private-reza', 10)).toEqual([]);
+  });
+});
+
+
+describe('forget across conversation channels', () => {
+  it.each(['call', 'live', 'voice-note'] as const)('%s deletes source records and derived history without asking a model to promise deletion', async (channel) => {
+    const x = makeGateway({ voice: fakeVoice('Forget everything about me.') });
+    const at = new Date('2026-10-19T10:00:00Z');
+    await x.memories.add({ personaId: 'aria', content: 'FORGET_VOICE_CANARY', type: 'fact', scope: { kind: 'private', personId: 'reza' }, sensitivity: 'normal', source: { personId: 'reza', chatKind: 'private', at }, aboutPersonIds: ['reza'], confidence: 1 });
+    await x.memories.add({ personaId: 'aria', content: 'Other person data', type: 'fact', scope: { kind: 'private', personId: 'parastoo' }, sensitivity: 'normal', source: { personId: 'parastoo', chatKind: 'private', at }, aboutPersonIds: ['parastoo'], confidence: 1 });
+    const before = await x.history.getEpoch('aria');
+    await x.history.append('aria', 'private-reza', { role: 'assistant', text: 'FORGET_VOICE_CANARY', at }, before);
+    let receipt = '';
+    if (channel === 'call') receipt = await x.gateway.converse('aria', 'reza', 'Forget everything about me.');
+    if (channel === 'live') for await (const chunk of x.gateway.liveTurn('aria', 'reza', [{ role: 'user', content: 'Forget everything about me.' }])) receipt += chunk;
+    if (channel === 'voice-note') {
+      expect(await x.gateway.handleUpdate('aria', privateVoice(TG.reza))).toBe('command');
+      receipt = x.bot.sent.at(-1)?.text ?? '';
+    }
+    expect(receipt).toContain('I cleared');
+    expect(x.llm.replyRequests).toHaveLength(0);
+    expect(x.llm.extractionCalls).toBe(0);
+    expect((await x.memories.listActive('aria')).map(m => m.content)).toEqual(['Other person data']);
+    expect(await x.history.recent('aria', 'private-reza', 20)).toEqual([]);
+    expect(await x.memories.addIfEpoch({ personaId: 'aria', content: 'FORGET_VOICE_CANARY', type: 'fact', scope: { kind: 'private', personId: 'reza' }, sensitivity: 'normal', source: { personId: 'reza', chatKind: 'private', at }, aboutPersonIds: [], confidence: 1 }, before)).toBeNull();
+  });
+});

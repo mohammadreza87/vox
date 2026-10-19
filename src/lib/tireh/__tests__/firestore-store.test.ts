@@ -49,6 +49,10 @@ function fakeFirestore() {
   function collectionRef(path: string, filters: Array<[string, unknown]> = [], order?: [string, 'asc' | 'desc'], max?: number) {
     return {
       doc: (id?: string) => docRef(`${path}/${id ?? `auto${++auto}`}`),
+      async listDocuments() {
+        const ids = new Set([...data.keys()].filter((key) => key.startsWith(`${path}/`)).map((key) => key.slice(path.length + 1).split('/')[0]));
+        return [...ids].map((id) => docRef(`${path}/${id}`));
+      },
       async add(value: Record<string, unknown>) {
         await docRef(`${path}/auto${++auto}`).set(value);
       },
@@ -74,7 +78,16 @@ function fakeFirestore() {
     };
   }
 
-  return { db: { collection: (name: string) => collectionRef(name) } as unknown as Firestore, data };
+  let pending = Promise.resolve();
+  const runTransaction = <T>(operation: (tx: unknown) => Promise<T>) => {
+    const result = pending.then(() => operation({
+      get: (ref: ReturnType<typeof docRef>) => ref.get(),
+      set: (ref: ReturnType<typeof docRef>, value: Record<string, unknown>) => ref.set(value),
+    }));
+    pending = result.then(() => undefined, () => undefined);
+    return result;
+  };
+  return { db: { collection: (name: string) => collectionRef(name), runTransaction } as unknown as Firestore, data };
 }
 
 const baseMemory = {
@@ -101,6 +114,21 @@ describe('FirestoreMemoryStore', () => {
     const loaded = await store.get(saved.id);
     expect(loaded?.source.at).toBeInstanceOf(Date);
     expect(loaded?.content).toBe(baseMemory.content);
+  });
+
+  it('fences stale extraction and stale share approval across store instances', async () => {
+    const { db } = fakeFirestore();
+    const first = new FirestoreMemoryStore(db);
+    const second = new FirestoreMemoryStore(db);
+    const history = new FirestoreChatHistoryStore(db);
+    const epoch = await history.getEpoch('aria');
+    await history.clearPersona('aria');
+    expect(await first.addIfEpoch(baseMemory, epoch)).toBeNull();
+    const saved = await first.addIfEpoch(baseMemory, await history.getEpoch('aria'));
+    expect(saved).not.toBeNull();
+    expect(await first.updateIfShareVersion(saved!.id, 0, { shareVersion: 1, scope: { kind: 'private', personId: 'parastoo' } })).toBe(true);
+    expect(await second.updateIfShareVersion(saved!.id, 0, { shareVersion: 1, scope: { kind: 'org' } })).toBe(false);
+    expect((await second.get(saved!.id))?.scope.kind).toBe('private');
   });
 
   it('lists only active memories for the persona and tracks scope changes', async () => {
@@ -140,6 +168,19 @@ describe('FirestoreShareOfferStore', () => {
 });
 
 describe('FirestoreChatHistoryStore', () => {
+  it('clears all retained source and generated messages for one persona including legacy parents', async () => {
+    const { db } = fakeFirestore();
+    const store = new FirestoreChatHistoryStore(db);
+    const turn = { role: 'assistant' as const, text: 'derived secret', at: new Date() };
+    await store.append('aria', 'a', turn);
+    await store.append('aria', 'b', turn);
+    await store.append('other', 'a', turn);
+    await store.clearPersona('aria');
+    await store.append('aria', 'a', turn, 0);
+    expect(await store.recent('aria', 'a', 10)).toEqual([]);
+    expect(await store.recent('aria', 'b', 10)).toEqual([]);
+    expect(await store.recent('other', 'a', 10)).toHaveLength(1);
+  });
   it('returns the most recent messages in chronological order', async () => {
     const { db } = fakeFirestore();
     const store = new FirestoreChatHistoryStore(db);

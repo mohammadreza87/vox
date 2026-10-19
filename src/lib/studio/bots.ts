@@ -98,10 +98,21 @@ export function startBots(studio: Studio): { stop: () => void } {
 
   void refresh();
   const timer = setInterval(refresh, REFRESH_MS);
+  let draining = false;
+  const drain = async () => {
+    if (stopped || draining || studio.deps.relationships?.mode !== 'live') return;
+    draining = true;
+    try { await studio.drainRelationships(2); }
+    catch { log.warn('[studio] relationship worker unavailable'); }
+    finally { draining = false; }
+  };
+  void drain(); // Recover durable due work after restart.
+  const relationshipTimer = setInterval(drain, 60_000);
   return {
     stop: () => {
       stopped = true;
       clearInterval(timer);
+      clearInterval(relationshipTimer);
       for (const loop of loops.values()) loop.stop();
       loops.clear();
     },

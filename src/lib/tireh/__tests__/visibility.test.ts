@@ -144,11 +144,12 @@ describe('group prompt boundaries', () => {
       memories: [
         memory({ content: 'DM_CANARY', scope: { kind: 'private', personId: 'milad' } }),
         memory({ content: 'OTHER_GROUP_CANARY', scope: { kind: 'group', groupId: 'gameend-team' } }),
-        memory({ content: 'LOCAL_GROUP_FACT', scope: { kind: 'group', groupId: room.id } }),
+        memory({ content: 'LOCAL_GROUP_FACT', authorizedPersonIds: [...room.memberIds], scope: { kind: 'group', groupId: room.id } }),
       ],
     });
     expect(prompt).toContain('- Milad');
-    expect(prompt).toContain('LOCAL_GROUP_FACT');
+    if (hasGuests) expect(prompt).not.toContain('LOCAL_GROUP_FACT');
+    else expect(prompt).toContain('LOCAL_GROUP_FACT');
     for (const hidden of [
       '## Organization', 'How people relate', 'You report to', 'reports to', 'Team member',
       'Reza', 'Parastoo', 'PRIVATE_PROFILE_CANARY', 'HIDDEN_DIRECTORY_CANARY', 'PROJECT_DIRECTORY_CANARY',

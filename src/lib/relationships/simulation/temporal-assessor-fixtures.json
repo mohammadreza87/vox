@@ -1,0 +1,139 @@
+{
+  "schemaVersion": 1,
+  "id": "temporal-assessor-v1",
+  "now": "2026-10-19T12:00:00Z",
+  "sourceAt": "2026-10-19T12:00:00Z",
+  "timeZone": "UTC",
+  "model": "claude-haiku-5-5",
+  "policy": "Frozen single-shot fictional extraction through actual StudioRelationshipAssessor; no retuning/retries. Dates remain model-derived extracts; literal evidence and deterministic boundaries checked separately.",
+  "cases": [
+    {
+      "id": "ongoing-ceramics",
+      "category": "ongoing",
+      "text": "I keep practicing the uneven mugs we talked about. The handles are slowly getting steadier, and I am still trying different shapes.",
+      "context": "Open topic ceramics: user has been learning pottery and discussing weekly practice.",
+      "expected": {
+        "kind": "ongoing",
+        "requireFollowUp": true
+      }
+    },
+    {
+      "id": "ongoing-bread",
+      "category": "ongoing",
+      "text": "That bread project we have been troubleshooting is still going. The dough is holding shape better after our last change; I am working on the crust now.",
+      "context": "Open topic bread: user and agent have discussed baking experiments repeatedly.",
+      "expected": {
+        "kind": "ongoing",
+        "requireFollowUp": true
+      }
+    },
+    {
+      "id": "ongoing-fa",
+      "category": "ongoing",
+      "text": "هنوز روی همان فیلم کوتاهی که درباره‌اش حرف زدیم کار می‌کنم. پایان آرام‌تر بهتر شده ولی تدوینش هنوز ادامه دارد.",
+      "context": "Open topic film: short film editing project, ongoing collaboration.",
+      "expected": {
+        "kind": "ongoing",
+        "requireFollowUp": true
+      }
+    },
+    {
+      "id": "ongoing-garden",
+      "category": "ongoing",
+      "text": "The herb garden we planned is slowly filling out. I am still trying to get the basil happy, just enjoying the experiment rather than looking for advice.",
+      "context": "Open topic garden: user discussed herbs and a shared planting plan.",
+      "expected": {
+        "kind": "ongoing",
+        "requireFollowUp": true
+      }
+    },
+    {
+      "id": "dated-known",
+      "category": "dated",
+      "text": "The pottery workshop we discussed is Tuesday October 20 from 14:00 to 16:00 UTC. I am taking the blue apron.",
+      "context": "Open topic pottery: user has discussed first workshop repeatedly.",
+      "expected": {
+        "kind": "after_event",
+        "startsAt": "2026-10-20T14:00:00.000Z",
+        "endsAt": "2026-10-20T16:00:00.000Z",
+        "gate": "defer"
+      }
+    },
+    {
+      "id": "dated-reschedule",
+      "category": "dated",
+      "text": "My rehearsal moved to Thursday October 22, 14:00 to 16:00 UTC. The old Sunday slot was cancelled; I am still using the poem we edited.",
+      "context": "Open topic rehearsal with pending after-event followup for Sunday October 18, 14:00 to 16:00 UTC. Stable existing topic key: rehearsal.",
+      "expected": {
+        "kind": "after_event",
+        "startsAt": "2026-10-22T14:00:00.000Z",
+        "endsAt": "2026-10-22T16:00:00.000Z",
+        "situationTopic": "rehearsal",
+        "gate": "defer"
+      }
+    },
+    {
+      "id": "dated-past",
+      "category": "dated",
+      "text": "My first library shift was yesterday October 18, from 10:00 to 14:00 UTC. I used the reading we practiced; I have not told you about it yet.",
+      "context": "Open topic library: user prepared first volunteer shift with the agent.",
+      "expected": {
+        "kind": "after_event",
+        "startsAt": "2026-10-18T10:00:00.000Z",
+        "endsAt": "2026-10-18T14:00:00.000Z",
+        "gate": null
+      }
+    },
+    {
+      "id": "dated-unknown",
+      "category": "dated",
+      "text": "The audition we discussed is tomorrow, but I do not know the exact start or end time yet.",
+      "context": "Open topic audition: user preparing a meaningful first audition.",
+      "expected": {
+        "kind": "after_event",
+        "unknownEnd": true,
+        "gate": "defer"
+      }
+    },
+    {
+      "id": "busy-en",
+      "category": "busy",
+      "text": "I am still working on that photo archive we discussed. I am in work calls right now until 16:00 UTC today and cannot chat until then.",
+      "context": "Open topic archive: ongoing photo organization project.",
+      "expected": {
+        "kind": "ongoing",
+        "busyUntil": "2026-10-19T16:00:00.000Z",
+        "gate": "defer"
+      }
+    },
+    {
+      "id": "busy-fa",
+      "category": "busy",
+      "text": "هنوز روی همان داستانی که درباره‌اش حرف زدیم کار می‌کنم. الان در جلسه هستم و امروز تا ساعت ۱۷ به وقت UTC نمی‌توانم گفتگو کنم.",
+      "context": "Open topic story: ongoing writing project. Stable existing topic key: story.",
+      "expected": {
+        "kind": "ongoing",
+        "busyUntil": "2026-10-19T17:00:00.000Z",
+        "gate": "defer"
+      }
+    },
+    {
+      "id": "quoted-fiction",
+      "category": "boundary",
+      "text": "I am proofreading a screenplay. A fictional character says, \"My audition is Tuesday October 20 from 14:00 to 16:00 UTC.\" That is dialogue, not my event. No need to discuss the screenplay later.",
+      "context": "",
+      "expected": {
+        "noTiming": true
+      }
+    },
+    {
+      "id": "other-person",
+      "category": "boundary",
+      "text": "Translate this sentence only: my neighbor has a recital Tuesday October 20 from 14:00 to 16:00 UTC. I will not attend and this is not an event in my life.",
+      "context": "",
+      "expected": {
+        "noTiming": true
+      }
+    }
+  ]
+}

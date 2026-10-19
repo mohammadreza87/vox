@@ -712,17 +712,18 @@ describe('groups', () => {
     expect(g.agents.map((x) => x.name)).toEqual(['Nova']);
   });
 
-  it('only the current group\'s memories reach the model, with or without guests', async () => {
+  it('in a group with unknown readers only the current exchange reaches the model', async () => {
     const { agent: a } = await hire(h, org.alice);
     await h.store.update((s) => {
       s.groups.push({ chatId: chat.id, title: 'Game Team', memberIds: [ID.alice, ID.bob], hasGuests: true, agentIds: [a.id], addedAt: T0.toISOString() });
     });
-    await h.memory.memories.add(mem(a.id, { content: 'GROUPFACT launch is Friday', scope: { kind: 'group', groupId: groupId(chat.id) } }));
-    await h.memory.memories.add(mem(a.id, { content: 'ORGFACT revenue numbers', scope: { kind: 'org' } }));
+    await h.memory.memories.add(mem(a.id, { content: 'GROUPFACT launch is Friday', scope: { kind: 'group', groupId: groupId(chat.id) }, authorizedPersonIds: [personId(ID.alice), personId(ID.bob)] }));
+    await h.memory.memories.add(mem(a.id, { content: 'ORGFACT revenue numbers', scope: { kind: 'org' }, authorizedPersonIds: [personId(ID.alice), personId(ID.bob)] }));
 
     const { gateway } = await h.studio.gateway();
     expect(await gateway.handleUpdate(a.id, groupText(chat.id, ID.bob, 'Nova, what do we know?'))).toBe('replied');
-    expect(h.chatLLM.lastPrompt).toContain('GROUPFACT');
+    expect(h.chatLLM.lastPrompt).not.toContain('GROUPFACT');
+    expect(h.chatLLM.replyRequests.at(-1)?.messages).toEqual([{ role: 'user', content: 'Nova, what do we know?' }]);
     expect(h.chatLLM.lastPrompt).not.toContain('ORGFACT');
 
     await h.store.update((s) => { s.groups[0].hasGuests = false; });
@@ -786,9 +787,9 @@ describe('memories API', () => {
   async function setup() {
     const { agent } = await hire(h, org.alice);
     const alicePrivate = await h.memory.memories.add(mem(agent.id, { content: 'alice secret', scope: { kind: 'private', personId: personId(ID.alice) } }));
-    const shared = await h.memory.memories.add(mem(agent.id, { content: 'org fact', scope: { kind: 'org' } }));
+    const shared = await h.memory.memories.add(mem(agent.id, { content: 'org fact', scope: { kind: 'org' }, authorizedPersonIds: [personId(ID.alice), personId(ID.bob)] }));
     const bobs = await h.memory.memories.add(mem(agent.id, {
-      content: 'bob said', scope: { kind: 'org' }, source: { personId: personId(ID.bob), chatKind: 'private', at: T0 },
+      content: 'bob said', scope: { kind: 'org' }, authorizedPersonIds: [personId(ID.alice), personId(ID.bob)], source: { personId: personId(ID.bob), chatKind: 'private', at: T0 },
     }));
     return { agent, alicePrivate, shared, bobs };
   }
@@ -812,5 +813,41 @@ describe('memories API', () => {
     await h.studio.forgetMemory(org.bob, agent.id, bobs.id);
     expect(await h.memory.memories.get(bobs.id)).toBeNull();
     expect(await h.memory.memories.get(shared.id)).not.toBeNull();
+  });
+});
+
+describe('selected memory sharing', () => {
+  it('source owner chooses exact recipients and may revoke the grant and retained derived history', async () => {
+    const { agent } = await hire(h, org.alice);
+    const record = await h.memory.memories.add(mem(agent.id, { content: 'EXPLICIT_RECIPIENT_CANARY', scope: { kind: 'private', personId: personId(ID.alice) } }));
+    await expectStudioError(h.studio.shareMemory(org.bob, agent.id, record.id, [ID.admin]), 403);
+    await h.studio.shareMemory(org.alice, agent.id, record.id, [ID.bob]);
+    expect((await h.studio.memoriesFor(org.bob, agent.id)).map((m) => m.content)).toContain('EXPLICIT_RECIPIENT_CANARY');
+    expect((await h.studio.memoriesFor(org.admin, agent.id)).map((m) => m.content)).not.toContain('EXPLICIT_RECIPIENT_CANARY');
+    await h.memory.history.append(agent.id, `private-${personId(ID.bob)}`, { role: 'assistant', text: 'EXPLICIT_RECIPIENT_CANARY', at: T0 });
+    await expectStudioError(h.studio.revokeMemory(org.bob, agent.id, record.id), 403);
+    await h.studio.revokeMemory(org.alice, agent.id, record.id);
+    expect((await h.studio.memoriesFor(org.bob, agent.id)).map((m) => m.content)).not.toContain('EXPLICIT_RECIPIENT_CANARY');
+    expect((await h.studio.memoriesFor(org.alice, agent.id)).map((m) => m.content)).toContain('EXPLICIT_RECIPIENT_CANARY');
+    expect(await h.memory.history.recent(agent.id, `private-${personId(ID.bob)}`, 10)).toEqual([]);
+    expect((await h.memory.memories.get(record.id))?.shareVersion).toBe(2);
+  });
+
+  it('legacy shared rows remain unavailable until the source owner explicitly grants access', async () => {
+    const { agent } = await hire(h, org.alice);
+    const legacy = await h.memory.memories.add(mem(agent.id, { content: 'LEGACY_CANARY', scope: { kind: 'org' } }));
+    expect((await h.studio.memoriesFor(org.alice, agent.id)).find((m) => m.id === legacy.id)).toMatchObject({ content: 'LEGACY_CANARY', scopeLabel: 'Sharing needs review' });
+    expect((await h.studio.memoriesFor(org.bob, agent.id)).map((m) => m.content)).not.toContain('LEGACY_CANARY');
+    await h.studio.shareMemory(org.alice, agent.id, legacy.id, [ID.bob]);
+    expect((await h.studio.memoriesFor(org.bob, agent.id)).map((m) => m.content)).toContain('LEGACY_CANARY');
+  });
+
+  it('refuses broad sharing of personal and confidential memories', async () => {
+    const { agent } = await hire(h, org.alice);
+    for (const sensitivity of ['personal', 'confidential'] as const) {
+      const record = await h.memory.memories.add(mem(agent.id, { content: 'sensitive', sensitivity, scope: { kind: 'private', personId: personId(ID.alice) } }));
+      await expectStudioError(h.studio.shareMemory(org.alice, agent.id, record.id, [ID.bob]), 400);
+      expect((await h.studio.memoriesFor(org.bob, agent.id)).map((m) => m.id)).not.toContain(record.id);
+    }
   });
 });
