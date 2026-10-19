@@ -408,6 +408,16 @@ export class SharedMemoryService {
     return this.list(telegramId, input.space);
   }
   async readContext(telegramId: number, space: SharedSpace, agentId: string, audience: SharedContextAudience): Promise<SharedContext> {
+    return this.contextProjection(telegramId, space, agentId, audience, true);
+  }
+  /** Same audience/container revision without returning memory text. Participant
+   * private authority is compact in indexed mode. The separate shared adapter
+   * still loads its canonical document; this is not shared body indexing. */
+  async readContextAuthority(telegramId: number, space: SharedSpace, agentId: string, audience: SharedContextAudience): Promise<{ revision: string }> {
+    return { revision: (await this.contextProjection(telegramId, space, agentId, audience, false)).revision };
+  }
+  private async contextProjection(telegramId: number, space: SharedSpace, agentId: string,
+    audience: SharedContextAudience, includeBodies: boolean): Promise<SharedContext> {
     idSchema.parse(agentId); const actor = await this.verified(telegramId, space);
     const ids = z.array(tgSchema).min(1).max(12).parse(audience.audienceTelegramIds);
     if (new Set(ids).size !== ids.length || !ids.includes(telegramId)) return fail(403, 'audience_denied');
@@ -424,7 +434,7 @@ export class SharedMemoryService {
     const groupStamp = await this.groupStamp(relevant, audience.groupId);
     const agentStamp = await this.authority.agent(agentId);
     const memories: SharedContext['memories'] = [];
-    if (personalized) for (const c of state.containers) {
+    if (personalized && includeBodies) for (const c of state.containers) {
       if (c.space !== space || c.status !== 'active' || !(await this.groupCurrent(c))) continue;
       for (const m of c.memories) if (this.allowed(c, m, actor, people, 'read', agentId)) memories.push({ id: m.id, text: m.text!, containerId: c.id });
     }
@@ -432,6 +442,7 @@ export class SharedMemoryService {
     if (groupStamp !== await this.groupStamp(relevant, audience.groupId) || sharedDigest(agentStamp) !== sharedDigest(await this.authority.agent(agentId))) return fail(409, 'authority_changed');
     const currentRevision = await this.repository.transaction(d => d.revision);
     if (currentRevision !== state.revision) return fail(409, 'revision_conflict');
-    return { revision: sharedDigest([state.revision, space, agentId, this.identityKey(people), audience, personalized, groupStamp, agentStamp]), memories };
+    const revision = sharedDigest([state.revision, space, agentId, this.identityKey(people), audience, personalized, groupStamp, agentStamp]);
+    return { revision: this.adaptive.storeIdentity === 'canonical' ? revision : sharedDigest([this.adaptive.storeIdentity, revision]), memories };
   }
 }

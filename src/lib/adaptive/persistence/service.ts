@@ -15,6 +15,7 @@ import { sweepObserverDocument } from '../observation/helpers';
 import { pruneLearningDocument } from '../personalization/learning/state';
 import { runtimeControlsFromDocument, runtimeControlsFromIndexed, validateRuntimeControlEvaluation,
   type RuntimeControlEvaluation, type RuntimeControlEvaluator } from './authority';
+import { readIndexedPrivateContext, type PrivateContextSnapshot } from './indexed-private-context';
 
 export class AdaptiveError extends Error {
   readonly name = 'AdaptiveError';
@@ -76,7 +77,7 @@ export class AdaptiveService {
   constructor(readonly repository: AdaptiveRepository, private readonly options: AdaptiveServiceOptions = {}) { this.now = options.now ?? Date.now; }
   /** Stable receipt namespace, safe inside a writer. This is not access authority. */
   get storeIdentity(): string {
-    const identity = this.repository.storage.indexed?.identity;
+    const identity = this.repository.storage.identity ?? this.repository.storage.indexed?.identity;
     return identity ? digest([identity.incarnation, identity.generation]) : 'canonical';
   }
   private account(telegramId: number): string {
@@ -247,7 +248,7 @@ export class AdaptiveService {
       let evaluated: RuntimeControlEvaluation<T> | undefined; let observedAt = 0;
       const result = await this.transact(telegramId, (d, now) => {
         observedAt = now;
-        evaluated = validateRuntimeControlEvaluation<T>(fn(runtimeControlsFromDocument(d), now, 'canonical', undefined));
+        evaluated = validateRuntimeControlEvaluation<T>(fn(runtimeControlsFromDocument(d), now, this.storeIdentity, undefined));
         this.checkRuntimeEvaluation(evaluated, now);
         return evaluated.value;
       });
@@ -265,7 +266,7 @@ export class AdaptiveService {
     const indexed = this.repository.storage.indexed;
     if (!indexed) {
       try { return this.readCommittedForEffect(telegramId, (d, now) => {
-        const evaluated = validateRuntimeControlEvaluation<T>(fn(runtimeControlsFromDocument(d), now, 'canonical', undefined));
+        const evaluated = validateRuntimeControlEvaluation<T>(fn(runtimeControlsFromDocument(d), now, this.storeIdentity, undefined));
         this.checkRuntimeEvaluation(evaluated, now);
         return evaluated.value;
       }); } catch { return { status: 'busy' }; }
@@ -355,12 +356,10 @@ export class AdaptiveService {
     }
     return claims;
   }
-  private snapshot(d: AdaptiveDocument, space: SpaceKind, now: number, locale: 'en' | 'fa' = 'en', includeMemories = true): AdaptiveSnapshot {
+  private authoritySnapshot(d: AdaptiveAuthorityDocument & Pick<AdaptiveDocument, 'revision'>,
+    space: SpaceKind, now: number, locale: 'en' | 'fa' = 'en'): AdaptiveSnapshot {
     const confirmed = this.confirmed(d, now);
     const memory = this.eligible(d, 'core_text', now);
-    const memories = confirmed && includeMemories ? d.memories.filter(m => m.space === space && validMemoryLineage(d, m, now))
-      .filter(m => this.authorized(d, space, m, 'read', now)) : [];
-    const claimOrigins = this.reviewedClaimOrigins(memories);
     return { schemaVersion: 1, identity: { accountId: d.accountId, confirmed,
       verification: confirmed ? 'account_confirmation' : 'unconfirmed', adultDeclared: d.declaration?.adultConfirmed === true,
       ...(d.declaration?.declaredJurisdiction ? { declaredJurisdiction: d.declaration.declaredJurisdiction } : {}),
@@ -374,8 +373,7 @@ export class AdaptiveService {
           revision: permission.revision, available: confirmed && eligibility.eligible,
           ...(!confirmed ? { reason: 'profile_confirmation_required' } : !eligibility.eligible ? { reason: eligibility.reason } : {}), notice: adaptiveNotice(purpose, locale) };
       }),
-      memories: memories.map(m => ({ id: m.id, revision: m.revision, text: m.text!, createdAt: m.createdAt, expiresAt: m.expiresAt,
-        ...(claimOrigins.has(m.id) ? { origin: 'user_reviewed_claim' as const } : {}), ...(m.sourceRefs ? { sourceRefs: m.sourceRefs } : {}) })),
+      memories: [],
       agents: confirmed ? d.agentGrants.filter(g => g.space === space).map(g => ({ agentId: g.agentId, allowed: g.allowed, revision: g.revision })) : [],
       explicitMemoryAvailable: confirmed && memory.eligible,
       memoryCorrectionAvailable: confirmed && memory.eligible && this.repository.storage.supportsCommittedWriteFence === true && !!this.repository.storage.readCommittedForEffect,
@@ -383,13 +381,27 @@ export class AdaptiveService {
       ...(!confirmed ? { explicitMemoryReason: 'profile_confirmation_required' } : !memory.eligible ? { explicitMemoryReason: memory.reason } : {}),
     };
   }
+  private snapshot(d: AdaptiveDocument, space: SpaceKind, now: number, locale: 'en' | 'fa' = 'en'): AdaptiveSnapshot {
+    const authority = this.authoritySnapshot(d, space, now, locale);
+    const memories = authority.identity.confirmed ? d.memories.filter(m => m.space === space && validMemoryLineage(d, m, now))
+      .filter(m => this.authorized(d, space, m, 'read', now)) : [];
+    const claimOrigins = this.reviewedClaimOrigins(memories);
+    return { ...authority, memories: memories.map(m => ({ id: m.id, revision: m.revision, text: m.text!, createdAt: m.createdAt, expiresAt: m.expiresAt,
+      ...(claimOrigins.has(m.id) ? { origin: 'user_reviewed_claim' as const } : {}), ...(m.sourceRefs ? { sourceRefs: m.sourceRefs } : {}) })) };
+  }
   read(telegramId: number, space: SpaceKind, locale: 'en' | 'fa' = 'en'): Promise<AdaptiveSnapshot> {
     return this.transact(telegramId, (d, now) => this.snapshot(d, space, now, locale));
   }
-  /** Metadata-only authorization projection. The account aggregate remains the
-   * storage boundary; no private text is mapped into shared-service authority. */
+  /** Indexed mode reads compact controls only. The FILE compatibility path keeps
+   * its existing canonical lifecycle sweep; neither projection returns bodies. */
   readAuthority(telegramId: number, space: SpaceKind, locale: 'en' | 'fa' = 'en'): Promise<AdaptiveSnapshot> {
-    return this.transact(telegramId, (d, now) => this.snapshot(d, space, now, locale, false));
+    if (!this.repository.storage.indexed) return this.transact(telegramId, (d, now) => this.authoritySnapshot(d, space, now, locale));
+    return this.withRuntimeControls(telegramId, space, (d, now) => {
+      const confirmed = this.confirmed(d, now);
+      const statuses = ['core_text' as const, ...Object.values(CAPABILITY)].map(c => this.eligible(d, c, now));
+      return { value: this.authoritySnapshot(d, space, now, locale), denied: !confirmed,
+        ...(confirmed ? { deadline: Math.min(d.binding!.expiresAt, ...statuses.flatMap(s => s.eligible && s.validUntil !== undefined ? [s.validUntil] : [])) } : {}) };
+    });
   }
   confirm(telegramId: number, input: IdentityInput, space: SpaceKind = 'work'): Promise<AdaptiveSnapshot> {
     const bindingId = randomUUID();
@@ -606,6 +618,13 @@ export class AdaptiveService {
     read: async (personaId: string, legacyPersonId: string, space: SpaceKind = 'work'): Promise<{ revision: string; memoryEnabled: boolean; historyEnabled: boolean }> => {
       const match = /^tg-([1-9]\d*)$/.exec(legacyPersonId);
       if (!match) return { revision: 'unconfirmed', memoryEnabled: false, historyEnabled: false };
+      if (this.repository.storage.indexed) return this.withRuntimeControls(Number(match[1]), space, (d, now, namespace) => {
+        const consent = this.permission(d, space, 'optional.auto_memory'), eligible = this.eligible(d, 'auto_memory', now);
+        const confirmed = this.confirmed(d, now);
+        return { value: { revision: digest([namespace, d.accountId, d.binding, confirmed, consent, eligible,
+          d.agentGrants.filter(g => g.space === space && g.agentId === personaId)]), memoryEnabled: false, historyEnabled: false },
+          denied: !confirmed, ...(confirmed ? { deadline: Math.min(d.binding!.expiresAt, eligible.validUntil ?? INFINITY) } : {}) };
+      });
       return this.transact(Number(match[1]), (d, now) => {
         const consent = this.permission(d, space, 'optional.auto_memory');
         return { revision: digest([d.accountId, d.binding, this.confirmed(d, now), consent, this.eligible(d, 'auto_memory', now), d.agentGrants.filter(g => g.space === space && g.agentId === personaId)]),
@@ -616,7 +635,11 @@ export class AdaptiveService {
   };
   /** Authorized, fresh explicit-private context for the separately gated runtime path.
    * The caller must recheck returned revision before provider use/output. */
-  readPrivateContext(telegramId: number, space: SpaceKind, agentId: string): Promise<{ revision: string; memories: { id: string; text: string; sourceIds?: string[] }[] }> {
+  readPrivateContext(telegramId: number, space: SpaceKind, agentId: string, query = ''): Promise<PrivateContextSnapshot> {
+    if (this.repository.storage.indexed) {
+      try { return Promise.resolve(readIndexedPrivateContext(this, telegramId, space, agentId, query)); }
+      catch { return Promise.reject(new AdaptiveError(503, 'adaptive_context_unavailable')); }
+    }
     return this.transact(telegramId, (d, now) => {
       const permission = this.permission(d, space, 'optional.personalization');
       const eligibility = this.eligible(d, 'personalization', now);
@@ -643,5 +666,12 @@ export class AdaptiveService {
           return { id: m.id, text: claim ? `User-reviewed claim (not independently verified): ${m.text!}` : m.text!, ...(sourceIds ? { sourceIds } : {}) };
         }) };
     });
+  }
+  /** Same full private catalog/authority revision, without candidate or body
+   * reads in indexed mode. Rechecks never rehydrate previously selected text. */
+  async readPrivateContextAuthority(telegramId: number, space: SpaceKind, agentId: string): Promise<{ revision: string }> {
+    if (!this.repository.storage.indexed) return { revision: (await this.readPrivateContext(telegramId, space, agentId)).revision };
+    try { return { revision: readIndexedPrivateContext(this, telegramId, space, agentId, '', true).revision }; }
+    catch { return fail(503, 'adaptive_context_unavailable'); }
   }
 }

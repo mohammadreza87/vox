@@ -9,15 +9,17 @@ import { adaptiveOptionsFromManifest } from '../persistence/config';
 import { SharedMemoryRepository, type SharedDocument } from '../shared/repository';
 import { SharedMemoryService, type SharedAuthority } from '../shared/service';
 import type { SharedContainerView } from '../shared/contracts';
+import { SqliteAdaptiveStorage } from '../persistence/indexed/sqlite-storage';
 const roots: string[] = [];
-afterEach(async () => { await Promise.all(roots.splice(0).map(p => rm(p, { recursive: true, force: true }))); });
+const sqliteStores: SqliteAdaptiveStorage[] = [];
+afterEach(async () => { for (const storage of sqliteStores.splice(0)) storage.close(); await Promise.all(roots.splice(0).map(p => rm(p, { recursive: true, force: true }))); });
 const START = 1_800_000_000_000;
 function deferred() {
   let resolve!: () => void;
   const promise = new Promise<void>(done => { resolve = done; });
   return { promise, resolve };
 }
-async function setup() {
+async function setup(indexed = false) {
   const root = await mkdtemp(join(tmpdir(), 'vox-shared-')); roots.push(root);
   let now = START;
   const manifest = JSON.stringify({ schemaVersion: 1, configurationVersion: 'shared-synthetic', enabledCapabilities: ['core_text', 'personalization'],
@@ -26,7 +28,9 @@ async function setup() {
       jurisdiction: 'SYNTHETIC', capability, state: 'approved', configurationVersion: 'shared-synthetic', effectiveAt: START, reviewExpiresAt: START + 400 * 86400_000,
       owner: 'synthetic-owner', approvalReference: 'synthetic-only' })) });
   const privateDirectory = join(root, 'private'), sharedDirectory = join(root, 'shared');
-  const adaptive = new AdaptiveService(new AdaptiveRepository(new FileAdaptiveStorage(privateDirectory)), { ...adaptiveOptionsFromManifest(manifest), now: () => now });
+  const storage = indexed ? new SqliteAdaptiveStorage(join(privateDirectory, 'synthetic.sqlite'), { now: () => now }) : new FileAdaptiveStorage(privateDirectory);
+  if (storage instanceof SqliteAdaptiveStorage) sqliteStores.push(storage);
+  const adaptive = new AdaptiveService(new AdaptiveRepository(storage), { ...adaptiveOptionsFromManifest(manifest), now: () => now });
   for (const id of [101, 102, 103]) await adaptive.confirm(id, { confirm: true, adultConfirmed: true, declaredJurisdiction: 'EE' });
   const active = new Map([[101, true], [102, true], [103, true]]);
   let members = [101, 102], guests = false;
@@ -53,10 +57,31 @@ async function setup() {
       receipt: presented.receipt, eventId: `grant-${space}-${id}` });
   }
   const command = (container: SharedContainerView, eventId: string) => ({ space: container.space, expectedRevision: container.revision, eventId });
-  return { service, adaptive, authority, factory, create, personalize, command, active, sharedDirectory, setNow: (value: number) => { now = value; }, setGroup: (ids: number[], hasGuests = false) => { members = ids; guests = hasGuests; } };
+  return { service, adaptive, storage, authority, factory, create, personalize, command, active, sharedDirectory, setNow: (value: number) => { now = value; }, setGroup: (ids: number[], hasGuests = false) => { members = ids; guests = hasGuests; } };
 }
 
 describe('durable explicit shared memory boundaries', () => {
+  it('rechecks indexed participants without private aggregates and returns matching body-free shared authority', async () => {
+    const ctx = await setup(true), storage = ctx.storage as SqliteAdaptiveStorage;
+    await ctx.personalize(101); await ctx.personalize(102);
+    const { container } = await ctx.create({ group: true, agents: ['aria'] });
+    for (const id of [101, 102]) await ctx.adaptive.withAccountDocument(id, (d, now) => {
+      d.memories = Array.from({ length: 300 }, (_, i) => ({ id: `private-${i}`, revision: 1, space: 'work', text: `PRIVATE_ACCOUNT_${id}_${i}`,
+        status: 'active', createdAt: now, updatedAt: now, expiresAt: now + 50_000, revocationEpoch: 0 })); d.revision++;
+    });
+    const audience = { audienceTelegramIds: [101, 102], groupId: 'chat--100' };
+    for (const k of Object.keys(storage.io) as (keyof typeof storage.io)[]) storage.io[k] = 0;
+    const before = await ctx.service.readContext(101, 'work', 'aria', audience);
+    expect(before.memories.map(m => m.text)).toEqual(['SHARED_CANARY']);
+    expect(await ctx.service.readContextAuthority(101, 'work', 'aria', audience)).toEqual({ revision: before.revision });
+    expect(storage.io.canonicalImageReads).toBe(0); expect(storage.io.bodyRowsRead).toBe(0);
+    await ctx.service.deleteMemory(101, container.id, container.memories[0].id, ctx.command(container, 'delete-shared'));
+    const deleted = await ctx.service.readContextAuthority(101, 'work', 'aria', audience);
+    expect(deleted.revision).not.toBe(before.revision);
+    expect((await ctx.service.readContext(101, 'work', 'aria', audience)).memories).toEqual([]);
+    ctx.setGroup([101, 102, 103]);
+    await expect(ctx.service.readContextAuthority(101, 'work', 'aria', audience)).rejects.toMatchObject({ code: 'audience_denied' });
+  });
   it('stores exact recipients separately and gives unrelated accounts no implicit access', async () => {
     const ctx = await setup(); const { container } = await ctx.create();
     expect(container.recipients.map(r => r.telegramId)).toEqual([101, 102]);
