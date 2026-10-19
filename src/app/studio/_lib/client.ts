@@ -184,7 +184,7 @@ export const api = {
     const form = new FormData();
     form.append('audio', audio, 'turn');
     form.append('space', space);
-    return request<{ transcript: string; reply: string; audio?: string }>('POST', `agents/${enc(id)}/call`, form);
+    return request<{ transcript: string; reply: string; audio?: string; turnId?: string }>('POST', `agents/${enc(id)}/call`, form);
   },
   liveCall: (id: string, space: 'work' | 'personal' = 'work') => request<LiveCall>('POST', `agents/${enc(id)}/live-call`, { space }),
   callEnd: (id: string, space: 'work' | 'personal' = 'work') => request<{ ok: true }>('POST', `agents/${enc(id)}/call-end`, { space }),

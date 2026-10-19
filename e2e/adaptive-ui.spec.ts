@@ -11,7 +11,8 @@ const purposes = [
 ] as const;
 
 function makeHarness() {
-  const calls: Array<{ method: string; path: string; body?: any }> = [];
+  const calls: Array<{ method: string; path: string; body?: any; space?: string }> = [];
+  const processed: Record<string, boolean> = { work: false, personal: false };
   const granted: Record<string, boolean> = { work: false, personal: false };
   const preferences: Record<string, string> = {};
   const sharedNotes: Record<string, string[]> = { work: ['Synthetic work note'], personal: ['Synthetic personal note'] };
@@ -47,7 +48,16 @@ function makeHarness() {
     observations: { available: false, responded: 0, failed: 0, cancelled: 0, total: 0, meanResponseMs: null, verifiedTaskSuccess: null, complete: false },
     capabilities: { personalization: true, productAnalytics: false, proactiveInbox: false, reminders: false, decisions: false },
   });
-  return { calls, sharedNotes, settings, adaptive, shared, experience, granted, preferences };
+  const learning = (space: 'work' | 'personal') => ({ schemaVersion: 1, version: 'vox-observer-v1', space, available: space === 'work',
+    projection: { space, sourceDigest: 'PRIVATE_DIGEST_CANARY', sourceEvents: 16, responded: processed[space] ? 13 : 12, failed: 1, cancelled: 0,
+      unknownResponses: 0, taskOutcomesUnknown: 13, timedResponses: 0, responseTurns: 13, meanResponseMs: null,
+      playbackStarted: 2, playbackCompleted: 1, playbackFailed: 1, interruptions: 0, playbackUnknown: 11, findings: [] },
+    findings: space === 'work' ? [{ id: 'PRIVATE_FINDING_CANARY', rule: 'playback_failure', count: 1, evidenceIds: ['PRIVATE_EVENT_CANARY'], inferredCause: null }] : [],
+    queue: { pending: processed[space] ? 0 : 2, leased: 0, failed: 1, oldestPendingAgeMs: 100, lastProcessedAt: processed[space] ? NOW : null },
+    completeness: { complete: false, acceptedEvents: 16, processedEvents: processed[space] ? 16 : 14, pendingEvents: processed[space] ? 0 : 2, failedEvents: 1,
+      samplingRate: 1, retentionMs: 604800000, coverage: 'instrumented_response_and_client_playback_only', playbackEvidence: 'client_unverified', verifiedTaskSuccess: null, providerUsage: null, language: null, release: null },
+  });
+  return { calls, sharedNotes, settings, adaptive, shared, experience, learning, processed, granted, preferences };
 }
 
 async function installFixtures(page: Page, h: ReturnType<typeof makeHarness>) {
@@ -69,7 +79,7 @@ async function installFixtures(page: Page, h: ReturnType<typeof makeHarness>) {
     const method = request.method();
     let body: any;
     try { body = request.postDataJSON(); } catch { body = undefined; }
-    h.calls.push({ method, path, body });
+    h.calls.push({ method, path, body, space: url.searchParams.get('space') ?? undefined });
     const space = (url.searchParams.get('space') === 'personal' || body?.space === 'personal' ? 'personal' : 'work') as 'work' | 'personal';
     let result: any;
     let status = 200;
@@ -91,6 +101,10 @@ async function installFixtures(page: Page, h: ReturnType<typeof makeHarness>) {
     else if (path === 'shared/containers') {
       h.sharedNotes[space].push(body?.text ?? 'Synthetic shared note'); result = h.shared(space); status = 201;
     }
+    else if (path === 'learning/observations' && method === 'GET') result = h.learning(space);
+    else if (path === 'learning/observations/process' && method === 'POST') { h.processed[space] = true; result = h.learning(space); }
+    else if (path === 'learning/export' && method === 'GET') result = { schemaVersion: 1, space, lifecycle: { observations: h.learning(space) } };
+    else if (path === 'learning/operations' && method === 'GET') result = { maintenanceConfigured: false, improvementConfigured: false, report: null };
     else if (path === 'experience' && method === 'GET') result = h.experience(space);
     else if (path === 'experience/preferences') {
       if (body?.action === 'reset') delete h.preferences[space]; else h.preferences[space] = body?.setting?.value;
@@ -223,4 +237,60 @@ test('privacy, shared memory and experience controls stay explicit and isolated 
   expect(h.calls.some(c => c.path === 'experience/settings' && c.body?.space === 'work' && c.body?.inboxEnabled === true)).toBeTruthy();
   await testInfo.attach('reply-length-after-reset.txt', { body: `Displayed value after successful reset: ${resetReplyLength}\n`, contentType: 'text/plain' });
   expect(resetReplyLength, 'Reset should return the displayed Reply length to Balanced').toBe('balanced');
+});
+
+
+test('learning evidence stays scoped, honest and downloadable in English and Persian', async ({ page }, testInfo) => {
+  const h = makeHarness();
+  await installFixtures(page, h);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/studio');
+  await page.getByRole('button', { name: 'Privacy', exact: true }).click();
+  await page.getByRole('button', { name: 'Preferences & notification inbox' }).click();
+  const experience = page.locator('.vx-privacy').last();
+  const learning = page.getByRole('region', { name: 'Learning evidence', exact: true });
+  await expect(learning.getByText('Your Work space')).toBeVisible();
+  await expect(learning.locator('dd').first()).toHaveText('12');
+  await expect(learning.getByText(/Waiting to process/)).toHaveText('Waiting to process: 2 · Processing failures: 1');
+  await expect(learning.getByText('Playback is client reported. Verified task success is unknown.')).toBeVisible();
+  await expect(learning.getByText('Average response time: Unavailable')).toBeVisible();
+  await expect(learning).not.toContainText('PRIVATE_');
+  await checkNoHorizontalOverflow(page);
+  await learning.screenshot({ path: testInfo.outputPath('learning-en.png') });
+  await learning.getByRole('button', { name: 'Refresh measurements', exact: true }).click();
+  await expect(learning.locator('dd').first()).toHaveText('13');
+  await expect(learning.getByText(/Waiting to process/)).toHaveText('Waiting to process: 0 · Processing failures: 1');
+  expect(h.calls.find(c => c.path === 'learning/observations/process')).toMatchObject({ method: 'POST', space: 'work', body: {} });
+
+  await experience.getByRole('button', { name: 'Personal', exact: true }).click();
+  await expect(learning.getByText('Your Personal space')).toBeVisible();
+  await expect(learning.getByText(/Optional usage analytics is off or unavailable/)).toBeVisible();
+  await expect(learning.locator('dd').first()).toHaveText('Unavailable');
+  await expect(learning.getByText(/Playback failures were reported by the client/)).toHaveCount(0);
+  const downloadPromise = page.waitForEvent('download');
+  await learning.getByRole('button', { name: 'Export my learning data' }).click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toBe('vox-learning-personal.json');
+  const stream = await download.createReadStream();
+  let exported = ''; if (stream) for await (const chunk of stream) exported += chunk.toString();
+  expect(JSON.parse(exported)).toMatchObject({ schemaVersion: 1, space: 'personal' });
+  expect(h.calls.filter(c => c.path === 'learning/export')).toEqual([expect.objectContaining({ method: 'GET', space: 'personal' })]);
+  await testInfo.attach('learning-personal-export.json', { body: exported, contentType: 'application/json' });
+
+  await page.getByRole('button', { name: 'فارسی', exact: true }).click();
+  const persian = page.getByRole('region', { name: 'شواهد یادگیری', exact: true });
+  await expect(persian).toHaveAttribute('dir', 'rtl');
+  await expect(persian).toHaveAttribute('lang', 'fa');
+  await expect(persian.getByText('فضای شخصی شما')).toBeVisible();
+  await expect(persian.locator('dd').first()).toHaveText('در دسترس نیست');
+  await checkNoHorizontalOverflow(page);
+  await persian.screenshot({ path: testInfo.outputPath('learning-fa-personal.png') });
+  await experience.getByRole('button', { name: 'کاری', exact: true }).click();
+  await expect(persian.locator('dd').first()).toHaveText('۱۳');
+  await expect(persian.getByText('پخش توسط مرورگر گزارش شده است. موفقیت تأییدشدهٔ کار نامشخص است.')).toBeVisible();
+  await persian.screenshot({ path: testInfo.outputPath('learning-fa-work.png') });
+  const operations = page.getByRole('region', { name: 'عملیات بهبود نرم‌افزار', exact: true });
+  await expect(operations.getByText('گزارش روند محلی: در دسترس نیست.')).toBeVisible();
+  await expect(operations.getByText(/CI، استقرار، اثر عملیاتی و هزینه: در دسترس نیست/)).toBeVisible();
+  await operations.screenshot({ path: testInfo.outputPath('operations-fa.png') });
 });

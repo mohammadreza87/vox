@@ -153,7 +153,7 @@ export function StudioApp() {
               {route.name === 'org' && <OrgScreen />}
               {route.name === 'privacy' && <PrivacyScreen onShared={() => nav.push({ name: 'shared-memories' })} onExperience={() => nav.push({ name: 'experience' })} />}
               {route.name === 'shared-memories' && <SharedMemoriesScreen selfId={me.member.telegramId} onBack={nav.back} />}
-              {route.name === 'experience' && <ExperienceScreen onBack={nav.back} />}
+              {route.name === 'experience' && <ExperienceScreen onBack={nav.back} role={me.member.role} />}
               {route.name === 'agent' && <AgentScreen id={route.id} />}
               {route.name === 'spawn' && <SpawnScreen draftId={route.draftId} successorOf={route.successorOf} />}
               {route.name === 'call' && <CallScreen id={route.id} />}

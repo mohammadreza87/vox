@@ -1,6 +1,7 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { createPublicKey } from 'crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getStudio, validateStudioConfig } from '../runtime';
 import { FirestoreStudioStore } from '../firestore-store';
@@ -27,6 +28,8 @@ const production = (): NodeJS.ProcessEnv => ({
   STUDIO_RELATIONSHIP_PEOPLE: '',
   STUDIO_RELATIONSHIP_ROLES: '',
   STUDIO_RELATIONSHIP_WORKER_SECRET: '',
+  STUDIO_MAINTENANCE: '',
+  STUDIO_IMPROVEMENT_TRUST_JSON: '',
   OPENAI_API_KEY: '',
   K_SERVICE: '',
   FUNCTION_TARGET: '',
@@ -38,6 +41,12 @@ const cloudProduction = (): NodeJS.ProcessEnv => ({
   ...production(), STUDIO_STORAGE: 'firestore', STUDIO_DATA_DIR: undefined,
   STUDIO_PUBLIC_URL: 'https://studio.example.com', STUDIO_MEDIA_BUCKET: 'vox-studio.firebasestorage.app',
 });
+
+// Public-only synthetic key material. No signers or private keys exist in this fixture.
+const publicTrust = () => Object.fromEntries(['analyst', 'author', 'evaluator', 'human'].map((role, n) => [role, { role,
+  publicKey: createPublicKey({ key: Buffer.concat([Buffer.from('302a300506032b6570032100', 'hex'), Buffer.alloc(32, n + 1)]), format: 'der', type: 'spki' })
+    .export({ type: 'spki', format: 'pem' }).toString(),
+}]));
 
 describe('Studio production initialization', () => {
   const dirs: string[] = [];
@@ -86,6 +95,37 @@ describe('Studio production initialization', () => {
     await expect(getStudio()).rejects.toThrow('VOXX_BOT_USERNAME does not match');
   });
 
+  it('provides scoped rights and observer services while maintenance stays off by default', async () => {
+    configure();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ ok: true, result: { id: 1, is_bot: true, username: 'VoxxBot', first_name: 'Voxx' } })));
+    const studio = await getStudio();
+    expect(studio.deps.lifecycle).toBeDefined(); expect(studio.deps.observer).toBeDefined();
+    expect(studio.deps.maintenance).toBeUndefined();
+    expect(studio.deps.improvement).toBeUndefined();
+  });
+
+  it('wires maintenance into a separate durable file namespace only under its explicit switch', async () => {
+    const dir = configure({ STUDIO_MAINTENANCE: '1' });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ ok: true, result: { id: 1, is_bot: true, username: 'VoxxBot', first_name: 'Voxx' } })));
+    const studio = await getStudio();
+    const runner = studio.deps.maintenance!;
+    expect(runner).toBeDefined();
+    expect(runner.accounts).not.toBe(runner.checkpoints);
+    expect((runner.checkpoints as { directory?: string }).directory).toBe(join(dir, 'adaptive-maintenance'));
+    expect((runner.accounts as { directory?: string }).directory).toBe(join(dir, 'adaptive'));
+    expect(await runner.runPage({ workerId: 'synthetic-check', limit: 1 })).toMatchObject({ state: 'completed', scanned: 0 });
+    expect(existsSync(join(dir, 'adaptive-maintenance'))).toBe(true);
+  });
+
+  it('exposes only an empty read-only local improvement report when public trust is configured', async () => {
+    const dir = configure({ STUDIO_IMPROVEMENT_TRUST_JSON: JSON.stringify(publicTrust()) });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ ok: true, result: { id: 1, is_bot: true, username: 'VoxxBot', first_name: 'Voxx' } })));
+    const studio = await getStudio();
+    expect(Object.keys(studio.deps.improvement!)).toEqual(['report']);
+    expect(await studio.deps.improvement!.report()).toMatchObject({ candidates: [], auditEvents: 0, productionMutation: false });
+    expect(existsSync(join(dir, 'improvement-review'))).toBe(false);
+  });
+
   it('wires persistent Firestore stores and webhooks without writing local state', async () => {
     const dir = configure(cloudProduction());
     vi.stubEnv('STUDIO_DATA_DIR', join(dir, 'unused-local'));
@@ -115,6 +155,25 @@ describe('Studio production initialization', () => {
 });
 
 describe('Studio production configuration', () => {
+  it.each(['broken-json', '{}', 'null', '[]', JSON.stringify({ analyst: { role: 'analyst', publicKey: 'PRIVATE KEY CANARY' } })])
+  ('fails closed for malformed or incomplete improvement trust', raw => {
+    expect(() => validateStudioConfig({ ...production(), STUDIO_IMPROVEMENT_TRUST_JSON: raw })).toThrow('STUDIO_IMPROVEMENT_TRUST_JSON is invalid');
+  });
+  it('rejects reused authority keys and private/extra fields in runtime trust', () => {
+    const trust = publicTrust();
+    expect(() => validateStudioConfig({ ...production(), STUDIO_IMPROVEMENT_TRUST_JSON: JSON.stringify({ ...trust, human: { ...trust.human, publicKey: trust.author.publicKey } }) })).toThrow('STUDIO_IMPROVEMENT_TRUST_JSON is invalid');
+    expect(() => validateStudioConfig({ ...production(), STUDIO_IMPROVEMENT_TRUST_JSON: JSON.stringify({ ...trust, human: { ...trust.human, privateKey: 'FORBIDDEN' } }) })).toThrow('STUDIO_IMPROVEMENT_TRUST_JSON is invalid');
+  });
+  it('requires file storage for the local improvement report and keeps missing trust disabled', () => {
+    expect(validateStudioConfig(production()).trustedImprovementKeys).toBeUndefined();
+    expect(() => validateStudioConfig({ ...cloudProduction(), STUDIO_IMPROVEMENT_TRUST_JSON: JSON.stringify(publicTrust()) })).toThrow('distributed workflow support is unavailable');
+  });
+  it.each([undefined, '', '0', 'true', 'on'])('leaves maintenance off for %s', value => {
+    expect(validateStudioConfig({ ...production(), STUDIO_MAINTENANCE: value }).maintenanceEnabled).toBe(false);
+  });
+  it('requires an exact independent maintenance opt-in', () => {
+    expect(validateStudioConfig({ ...production(), STUDIO_MAINTENANCE: '1' }).maintenanceEnabled).toBe(true);
+  });
   it('accepts a complete deployment and parses bootstrap members without IO', () => {
     expect(validateStudioConfig(production(), '/srv/vox')).toMatchObject({
       production: true, superadminIds: [123, 456], dataDir: '/srv/vox-data',

@@ -4,7 +4,8 @@
  * (serverless production), so both modes behave the same.
  */
 
-import { createHmac, timingSafeEqual } from 'crypto';
+import { createHash, createHmac, timingSafeEqual } from 'crypto';
+import { beginObservation } from './observation';
 import type { TelegramUpdate } from '../tireh/telegram/client';
 import { canUseAgent, visibilityOf } from './permissions';
 import type { Studio } from './service';
@@ -82,7 +83,14 @@ export async function handleAgentUpdate(studio: Studio, agentId: string, update:
 
   const member = state.members.find((m) => m.telegramId === msg.from!.id);
   if (member && canUseAgent(member, live)) {
-    await gateway.handleUpdate(agentId, update);
+    const turnId = createHash('sha256').update(JSON.stringify([agentId, endpointId ?? '', update.update_id])).digest('hex');
+    const observe = await beginObservation(studio, member.telegramId, agentId, 'work', 'telegram', turnId);
+    try {
+      const result = await gateway.handleUpdate(agentId, update);
+      // Duplicate and command updates are not new conversation measurements.
+      if (result === 'replied') await observe('responded');
+      else if (result === 'ignored') await observe('unknown');
+    } catch (error) { await observe('failed'); throw error; }
     return;
   }
 

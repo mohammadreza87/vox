@@ -15,6 +15,7 @@ import type { TelegramBotClient, TelegramUpdate } from '../tireh/telegram/client
 import { logTelegramDiagnostic } from '../tireh/telegram/diagnostics';
 import type { Studio } from './service';
 import { AGENT_UPDATES, handleAgentUpdate, handleManagerUpdate, MANAGER_UPDATES } from './updates';
+import { randomUUID } from 'crypto';
 
 const REFRESH_MS = 8000;
 
@@ -108,11 +109,29 @@ export function startBots(studio: Studio): { stop: () => void } {
   };
   void drain(); // Recover durable due work after restart.
   const relationshipTimer = setInterval(drain, 60_000);
+  // The dependency exists only under the independent STUDIO_MAINTENANCE=1 flag.
+  // Lease/checkpoint lives in storage; this guard only prevents process-local overlap.
+  let maintaining = false;
+  const maintenanceAbort = new AbortController();
+  const maintenanceWorker = `studio-${randomUUID()}`;
+  const maintain = async () => {
+    if (stopped || maintaining || !studio.deps.maintenance) return;
+    maintaining = true;
+    try {
+      const result = await studio.deps.maintenance.runPage({ workerId: maintenanceWorker, limit: 20, signal: maintenanceAbort.signal });
+      if (result.state === 'failed' && !stopped) log.warn({ type: 'adaptive_maintenance', outcome: 'failed', reason: 'sweep_failed' });
+    } catch { if (!stopped) log.warn({ type: 'adaptive_maintenance', outcome: 'failed', reason: 'sweep_failed' }); }
+    finally { maintaining = false; }
+  };
+  const maintenanceTimer = studio.deps.maintenance ? setInterval(maintain, 60_000) : undefined;
+  void maintain();
   return {
     stop: () => {
       stopped = true;
       clearInterval(timer);
       clearInterval(relationshipTimer);
+      if (maintenanceTimer) clearInterval(maintenanceTimer);
+      maintenanceAbort.abort();
       for (const loop of loops.values()) loop.stop();
       loops.clear();
     },

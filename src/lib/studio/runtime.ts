@@ -50,9 +50,27 @@ import { adaptiveOptionsFromManifest } from '../adaptive/persistence/config';
 import { SharedMemoryRepository } from '../adaptive/shared/repository';
 import { SharedMemoryService } from '../adaptive/shared/service';
 import { AdaptiveExperienceService } from '../adaptive/runtime/service';
+import { AdaptiveObserverService } from '../adaptive/observation/service';
+import { AdaptiveLifecycleService } from '../adaptive/lifecycle/service';
+import { AdaptiveMaintenanceRunner } from '../adaptive/lifecycle/maintenance';
 import { DecisionService, OpenAIDecisionProvider } from '../adaptive/decisions';
 import { canUseAgent } from './permissions';
 import { groupId } from './org-bridge';
+import { z } from 'zod';
+import { ImprovementWorkflow } from '../adaptive/improvement/workflow';
+import { validateTrust, type TrustStore } from '../adaptive/improvement/contracts';
+
+function improvementTrust(raw: string | undefined, storage: string): TrustStore | undefined {
+  if (!raw?.trim()) return undefined;
+  if (storage !== 'file') throw new Error('STUDIO_IMPROVEMENT_TRUST_JSON requires file storage; distributed workflow support is unavailable');
+  try {
+    const trust = z.record(z.string().regex(/^[A-Za-z0-9_-]{1,128}$/), z.object({
+      role: z.enum(['analyst', 'author', 'evaluator', 'human']),
+      publicKey: z.string().min(1).max(4096).refine(pem => /^-----BEGIN PUBLIC KEY-----\r?\n[A-Za-z0-9+/=\r\n]+-----END PUBLIC KEY-----\s*$/.test(pem)),
+    }).strict()).refine(keys => Object.keys(keys).length <= 32).parse(JSON.parse(raw));
+    validateTrust(trust); return trust;
+  } catch { throw new Error('STUDIO_IMPROVEMENT_TRUST_JSON is invalid'); }
+}
 
 export function parseIds(raw: string | undefined): number[] {
   return (raw ?? '')
@@ -115,7 +133,9 @@ export function validateStudioConfig(env: NodeJS.ProcessEnv, cwd = process.cwd()
 
   const relationships = relationshipConfig(env);
   const scopedRelationshipsEnabled = env.STUDIO_SCOPED_RELATIONSHIPS === '1';
-  return { production, token, superadminIds, dataDir, webAppUrl, storage, mediaBucket, publicUrl, relationships, scopedRelationshipsEnabled };
+  const maintenanceEnabled = env.STUDIO_MAINTENANCE === '1';
+  const trustedImprovementKeys = improvementTrust(env.STUDIO_IMPROVEMENT_TRUST_JSON, storage);
+  return { production, token, superadminIds, dataDir, webAppUrl, storage, mediaBucket, publicUrl, relationships, scopedRelationshipsEnabled, maintenanceEnabled, trustedImprovementKeys };
 }
 
 /** STUDIO_WEB_SEARCH=off keeps every agent offline (web searches are billed per search). */
@@ -135,13 +155,14 @@ async function toJpeg(data: Buffer): Promise<Buffer> {
 
 const g = globalThis as unknown as { __voxStudio?: Promise<Studio> };
 
-type RuntimeStorage = Pick<StudioDeps, 'store' | 'memory' | 'rateLimiter' | 'adaptive' | 'relationshipStore' | 'observations'> & { sharedStorage: AdaptiveStorage };
+type RuntimeStorage = Pick<StudioDeps, 'store' | 'memory' | 'rateLimiter' | 'adaptive' | 'relationshipStore' | 'observations'> & { sharedStorage: AdaptiveStorage; maintenanceStorage: AdaptiveStorage };
 function fileStorage(dir: string, scopedRelationshipsEnabled: boolean): RuntimeStorage {
   return { store: new StudioStore(dir), memory: createFileStores(join(dir, 'memory.json')),
     relationshipStore: new FileRelationshipStore(join(dir, 'scoped-relationships-v1.json')), observations: new FileObservationStore(join(dir, 'scoped-relationship-observations-v1.json')),
     adaptive: new AdaptiveService(new AdaptiveRepository(new FileAdaptiveStorage(join(dir, 'adaptive'))),
       { ...adaptiveOptionsFromManifest(process.env.STUDIO_ADAPTIVE_POLICY_JSON), scopedRelationshipsEnabled }),
-    sharedStorage: new FileAdaptiveStorage(join(dir, 'shared-memory')) };
+    sharedStorage: new FileAdaptiveStorage(join(dir, 'shared-memory')),
+    maintenanceStorage: new FileAdaptiveStorage(join(dir, 'adaptive-maintenance')) };
 }
 
 async function firestoreStorage(bucketName: string, scopedRelationshipsEnabled: boolean): Promise<RuntimeStorage> {
@@ -154,6 +175,7 @@ async function firestoreStorage(bucketName: string, scopedRelationshipsEnabled: 
     adaptive: new AdaptiveService(new AdaptiveRepository(new FirestoreAdaptiveStorage(db)),
       { ...adaptiveOptionsFromManifest(process.env.STUDIO_ADAPTIVE_POLICY_JSON), scopedRelationshipsEnabled }),
     sharedStorage: new FirestoreAdaptiveStorage(db, 'adaptiveSharedMemory'),
+    maintenanceStorage: new FirestoreAdaptiveStorage(db, 'adaptiveMaintenance'),
     rateLimiter: new FirestoreStudioRateLimiter(db),
     relationshipStore: new FirestoreRelationshipStore(db, 'vox_scoped_relationships_v1'),
     observations: new FirestoreObservationStore(db, 'vox_scoped_relationship_observations_v1'),
@@ -272,6 +294,24 @@ async function create(): Promise<Studio> {
       decisions: new DecisionService(new OpenAIDecisionProvider(new OpenAI({ apiKey: env.OPENAI_API_KEY, maxRetries: 0 }))),
     } : {}),
   });
+  studio.deps.observer = new AdaptiveObserverService(storage.adaptive!);
+  studio.deps.lifecycle = new AdaptiveLifecycleService(storage.adaptive!, { shared: studio.deps.shared });
+  if (config.maintenanceEnabled) studio.deps.maintenance = new AdaptiveMaintenanceRunner(studio.deps.lifecycle,
+    storage.adaptive!.repository.storage, storage.maintenanceStorage, {
+      afterAccount: async telegramId => {
+        const state = await storage.store.read();
+        const member = state.members.find(m => m.telegramId === telegramId && m.role !== 'pending');
+        const allowedAgentIds = member ? state.agents.filter(a => a.status === 'active' && canUseAgent(member, a) && !(a.blocked ?? []).includes(telegramId)).map(a => a.id) : [];
+        const result = await studio.deps.observer!.process(telegramId, { limit: 20, allowedAgentIds });
+        if (result.failed) throw new Error('Observer maintenance failed');
+      },
+    });
+  if (config.trustedImprovementKeys) {
+    const workflow = new ImprovementWorkflow({ root: join(config.dataDir, 'improvement-review'), trust: config.trustedImprovementKeys });
+    // Server/runtime receives only the report capability, with no signing material
+    // and no proposal, candidate, evaluation or release mutation methods.
+    studio.deps.improvement = { report: () => workflow.report() };
+  }
   return studio;
 }
 

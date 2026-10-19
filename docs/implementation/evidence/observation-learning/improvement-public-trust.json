@@ -1,0 +1,18 @@
+{
+  "analyst": {
+    "publicKey": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEASxzSCiipyTZttinKrtl1mYGQB9fbtrYU6SJYBd8zWiA=\n-----END PUBLIC KEY-----\n",
+    "role": "analyst"
+  },
+  "author": {
+    "publicKey": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAqwxe+KAm/KPYuLW1JsAdAYbOxGJCvGVZAwMKjHdqu3w=\n-----END PUBLIC KEY-----\n",
+    "role": "author"
+  },
+  "evaluator": {
+    "publicKey": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAX2pEYSEEjZej7ZsPqPnradJOTMj/ov6z5UXveZatQWk=\n-----END PUBLIC KEY-----\n",
+    "role": "evaluator"
+  },
+  "human": {
+    "publicKey": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAPgYQdSZ+CuYO7C3+khJIqvf7srY7R1jU5M/xnBs1G2M=\n-----END PUBLIC KEY-----\n",
+    "role": "human"
+  }
+}
