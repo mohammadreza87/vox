@@ -9,7 +9,7 @@ import { FileAdaptiveStorage } from '../storage';
 import { SqliteAdaptiveStorage } from './sqlite-storage';
 import { ManagedFileV2Storage, openManagedAdaptiveStorage, markerPath, readMarker,
   storePath, type ManagedAdaptiveStorage } from './managed-storage';
-import { migrateAdaptiveStorage, finalizeManagedTransition, inspectManagedTransition } from './migration';
+import { migrateAdaptiveStorage, finalizeManagedTransition, inspectManagedTransition, recoverManagedReadyStorage, abortPreparedManagedTransition } from './migration';
 import { rollbackAdaptiveStorage } from './rollback';
 import type { IndexedScope } from './contracts';
 import { accountKey } from './projection';
@@ -157,4 +157,53 @@ it('CLI inspection emits only format evidence and requires explicit quiescence f
   const inspected = spawnSync(process.execPath, ['--import', 'tsx', script, 'inspect', '--root', f.root], { encoding: 'utf8', timeout: 10_000 });
   expect(inspected.status, inspected.stderr).toBe(0); expect(JSON.parse(inspected.stdout)).toMatchObject({ state: 'ready', format: 'sqlite-v1' });
   expect(inspected.stdout).not.toContain('Synthetic original source');
+});
+
+it('recovers the exact CURRENT FILEv2 ready target after killed post-publication response without touching archived state', async () => {
+  const f = await fixture(); await migrateAdaptiveStorage(f.root, { quiesced: true, now: f.now });
+  const sqlite = f.open('sqlite-v1');
+  await new AdaptiveRepository(sqlite).transaction(f.accountId, f.now, d => { d.memories[0].text = 'CURRENT prior-to-crash correction'; d.memories[0].revision++; d.revision++; d.updatedAt = 2000; });
+  const expected = digest(document(sqlite, f.accountId)); sqlite.close();
+  const moduleUrl = pathToFileURL(join(process.cwd(), 'src/lib/adaptive/persistence/indexed/rollback.ts')).href;
+  const script = `import { rollbackAdaptiveStorage } from ${JSON.stringify(moduleUrl)};
+    await rollbackAdaptiveStorage(${JSON.stringify(f.root)}, { quiesced:true, now:()=>2000, afterPhase:phase=>{if(phase==='published')process.kill(process.pid,'SIGKILL')} });`;
+  const child = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], { encoding: 'utf8', timeout: 10_000 });
+  expect(child.signal, child.stderr).toBe('SIGKILL'); const marker = readMarker(f.root); if (marker.state !== 'ready') throw Error('missing published pointer');
+  expect(marker.format).toBe('file-v2'); expect(() => f.open('file-v2')).toThrow(/busy/);
+  await expect(recoverManagedReadyStorage(f.root, { quiesced: true, format: 'file-v2', identity: { ...marker.identity, generation: 999 }, now: f.now, reclaimDeadLease: true })).rejects.toThrow();
+  const recovered = await recoverManagedReadyStorage(f.root, { quiesced: true, format: 'file-v2', identity: marker.identity, now: f.now, reclaimDeadLease: true });
+  expect(recovered.identity).toEqual(marker.identity); expect(recovered.accounts).toBe(1);
+  const current = f.open('file-v2'); expect(digest(document(current, f.accountId))).toBe(expected);
+});
+
+it('refuses missing published SQLite and FILEv2 components without initializing replacements', async () => {
+  const f = await fixture(); await migrateAdaptiveStorage(f.root, { quiesced: true, now: f.now });
+  let marker = readMarker(f.root); if (marker.state !== 'ready') throw Error('not ready');
+  const sqlite = storePath(f.root, marker.store), hold = `${sqlite}.held`;
+  const { renameSync, existsSync, readdirSync } = await import('fs'); renameSync(sqlite, hold);
+  const before = readdirSync(join(f.root + '.managed', 'stores')).sort(); expect(() => f.open('sqlite-v1')).toThrow();
+  expect(existsSync(sqlite)).toBe(false); expect(readdirSync(join(f.root + '.managed', 'stores')).sort()).toEqual(before);
+  renameSync(hold, sqlite); await rollbackAdaptiveStorage(f.root, { quiesced: true, now: f.now });
+  marker = readMarker(f.root); if (marker.state !== 'ready') throw Error('not ready');
+  const file = storePath(f.root, marker.store), head = join(file, 'head.json'); renameSync(head, join(file, 'head.held'));
+  expect(() => f.open('file-v2')).toThrow(); expect(existsSync(head)).toBe(false);
+});
+it('aborts only an exact unchanged prepared import, quarantines target bytes and retries legacy migration safely', async () => {
+  const f = await fixture();
+  await expect(migrateAdaptiveStorage(f.root, { quiesced: true, now: f.now, afterPhase: phase => { if (phase === 'imported') throw Error('synthetic partial import'); } })).rejects.toThrow();
+  const marker = readMarker(f.root); if (marker.state !== 'transition') throw Error('not preparing');
+  await expect(abortPreparedManagedTransition(f.root, { quiesced: true, transitionId: marker.id, sourceDigest: 'wrong', now: f.now })).rejects.toThrow();
+  const aborted = await abortPreparedManagedTransition(f.root, { quiesced: true, transitionId: marker.id, sourceDigest: marker.sourceDigest, now: f.now });
+  expect(aborted).toMatchObject({ state: 'aborted', restored: 'legacy-file' }); expect(aborted.quarantine).toBeDefined();
+  expect(lstatSync(f.root).isDirectory()).toBe(true);
+  const retry = await migrateAdaptiveStorage(f.root, { quiesced: true, now: f.now }); expect(retry.accounts).toBe(1);
+});
+it('aborts prepared rollback to the exact current source ready pointer rather than a target or initial backup', async () => {
+  const f = await fixture(); await migrateAdaptiveStorage(f.root, { quiesced: true, now: f.now });
+  const old = readMarker(f.root); if (old.state !== 'ready') throw Error('not ready');
+  await expect(rollbackAdaptiveStorage(f.root, { quiesced: true, now: f.now, afterPhase: phase => { if (phase === 'imported') throw Error('synthetic interrupted rollback'); } })).rejects.toThrow();
+  const marker = readMarker(f.root); if (marker.state !== 'transition') throw Error('not preparing');
+  const aborted = await abortPreparedManagedTransition(f.root, { quiesced: true, transitionId: marker.id, sourceDigest: marker.sourceDigest, now: f.now });
+  expect(aborted.restored).toBe('sqlite-v1'); expect(readMarker(f.root)).toMatchObject({ state: 'ready', identity: old.identity, store: old.store });
+  expect(document(f.open('sqlite-v1'), f.accountId).memories[0].text).toContain('original');
 });

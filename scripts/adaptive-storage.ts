@@ -2,12 +2,12 @@
 /** Explicit local administration only. No default command/root/format, no
  * activation, provider requests, feature grants or migration-time restore. */
 import { resolve } from 'path';
-import { migrateAdaptiveStorage, inspectManagedTransition, finalizeManagedTransition } from '../src/lib/adaptive/persistence/indexed/migration';
+import { migrateAdaptiveStorage, inspectManagedTransition, finalizeManagedTransition, recoverManagedReadyStorage, abortPreparedManagedTransition } from '../src/lib/adaptive/persistence/indexed/migration';
 import { rollbackAdaptiveStorage } from '../src/lib/adaptive/persistence/indexed/rollback';
 import { IndexedStorageError } from '../src/lib/adaptive/persistence/indexed/contracts';
 async function main(): Promise<void> {
   const [command, ...args] = process.argv.slice(2);
-  const allowed = new Set(['--root', '--quiesced', '--transition-id', '--source-digest', '--reclaim-dead-lease']);
+  const allowed = new Set(['--root', '--quiesced', '--transition-id', '--source-digest', '--reclaim-dead-lease', '--format', '--incarnation', '--generation']);
   const flags = new Map<string, string | true>();
   for (let i = 0; i < args.length; i++) {
     const flag = args[i]; if (!allowed.has(flag) || flags.has(flag)) throw new IndexedStorageError('invalid_scope');
@@ -21,10 +21,17 @@ async function main(): Promise<void> {
     if (flags.size !== 2) throw new IndexedStorageError('invalid_scope');
     console.log(JSON.stringify(await (command === 'migrate' ? migrateAdaptiveStorage : rollbackAdaptiveStorage)(root, { quiesced: true }))); return;
   }
-  if (command === 'finalize') {
+  if (command === 'recover-ready') {
+    const format = flags.get('--format'), incarnation = flags.get('--incarnation'), generation = Number(flags.get('--generation'));
+    if (flags.size !== 6 || !['sqlite-v1', 'file-v2'].includes(String(format)) || typeof incarnation !== 'string' ||
+        !Number.isSafeInteger(generation) || generation < 1 || flags.get('--reclaim-dead-lease') !== true) throw new IndexedStorageError('invalid_scope');
+    console.log(JSON.stringify(await recoverManagedReadyStorage(root, { quiesced: true, format: format as 'sqlite-v1' | 'file-v2',
+      identity: { incarnation, generation }, reclaimDeadLease: true }))); return;
+  }
+  if (command === 'finalize' || command === 'abort-prepared') {
     const transitionId = flags.get('--transition-id'), sourceDigest = flags.get('--source-digest');
-    if (typeof transitionId !== 'string' || typeof sourceDigest !== 'string') throw new IndexedStorageError('invalid_scope');
-    console.log(JSON.stringify(await finalizeManagedTransition(root, { quiesced: true, transitionId, sourceDigest,
+    if (flags.size !== (flags.has('--reclaim-dead-lease') ? 5 : 4) || typeof transitionId !== 'string' || typeof sourceDigest !== 'string') throw new IndexedStorageError('invalid_scope');
+    console.log(JSON.stringify(await (command === 'finalize' ? finalizeManagedTransition : abortPreparedManagedTransition)(root, { quiesced: true, transitionId, sourceDigest,
       reclaimDeadLease: flags.get('--reclaim-dead-lease') === true }))); return;
   }
   throw new IndexedStorageError('invalid_scope');

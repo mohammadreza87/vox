@@ -10,13 +10,13 @@
  */
 import { randomUUID } from 'crypto';
 import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync,
-  renameSync, rmdirSync, unlinkSync, writeFileSync } from 'fs';
+  renameSync, rmdirSync, unlinkSync, writeFileSync, readSync } from 'fs';
 import { dirname, join, resolve } from 'path';
 import { z } from 'zod';
 import type { AdaptiveStorage, AdaptiveAccountPage, AdaptiveAccountPageInput } from '../storage';
 import { digest, validateAdaptiveDocument } from '../repository';
 import { accountKey, validateAccountId } from './projection';
-import { INDEXED_LIMITS, IndexedStorageError } from './contracts';
+import { INDEXED_LIMITS, INDEXED_SCHEMA_VERSION, IndexedStorageError } from './contracts';
 import { SqliteAdaptiveStorage } from './sqlite-storage';
 const integer = z.number().int().nonnegative().safe(), uuid = z.string().uuid();
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
@@ -108,7 +108,21 @@ export function metadataOf(storage: ManagedAdaptiveStorage): { incarnation: stri
 export function openRawManagedStore(root: string, ready: Pick<ManagedReady, 'format' | 'store'>,
   now: () => number, seed?: { generation: number; lifecycleWatermark: number }, reclaimDead = false): ManagedAdaptiveStorage {
   const path = storePath(root, ready.store);
-  if (existsSync(path)) noSymlink(path, ready.format === 'sqlite-v1' ? 'file' : 'directory');
+  if (seed) { if (existsSync(path)) throw new IndexedStorageError('corrupt'); }
+  else {
+    if (!existsSync(path)) throw new IndexedStorageError('missing');
+    noSymlink(path, ready.format === 'sqlite-v1' ? 'file' : 'directory');
+    if (ready.format === 'file-v2') {
+      if (!existsSync(join(path, 'head.json')) || !existsSync(join(path, 'records'))) throw new IndexedStorageError('missing');
+      noSymlink(join(path, 'head.json'), 'file'); noSymlink(join(path, 'records'), 'directory');
+    } else {
+      // Refuse empty/foreign published files before a writable constructor could
+      // initialize them. The qualified schema version is immutable after create.
+      const header = Buffer.alloc(100), fd = openSync(path, 'r'); let bytes: number;
+      try { bytes = readSync(fd, header, 0, header.length, 0); } finally { closeSync(fd); }
+      if (bytes !== 100 || header.subarray(0, 16).toString('binary') !== 'SQLite format 3\0' || header.readUInt32BE(60) !== INDEXED_SCHEMA_VERSION) throw new IndexedStorageError('corrupt');
+    }
+  }
   return ready.format === 'sqlite-v1' ? new SqliteAdaptiveStorage(path, { now, ...(seed ? { newStoreSeed: seed } : {}) })
     : new ManagedFileV2Storage(path, { now, ...(seed ? { newStoreSeed: seed } : {}), reclaimDeadLease: reclaimDead });
 }

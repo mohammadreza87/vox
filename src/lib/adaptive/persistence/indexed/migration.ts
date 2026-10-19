@@ -1,6 +1,6 @@
 /** Quiesced, explicit current-state transitions. All source text stays in private
  * local files/memory. No background migration or divergent-store merge exists. */
-import { existsSync, lstatSync, mkdirSync, readdirSync, renameSync, writeFileSync, openSync, closeSync, fsyncSync } from 'fs';
+import { existsSync, lstatSync, mkdirSync, readdirSync, renameSync, writeFileSync, openSync, closeSync, fsyncSync, unlinkSync } from 'fs';
 import { dirname, join, resolve } from 'path';
 import { randomUUID } from 'crypto';
 import { validateAdaptiveDocument, digest } from '../repository';
@@ -198,4 +198,61 @@ export async function finalizeManagedTransition(root: string, options: { quiesce
     return { format: ready.format, identity: ready.identity, accounts: actual.rows.length, stateDigest: actual.digest,
       lifecycleWatermark: ready.watermarkFloor, transitionId: transition.id };
   } finally { target?.close(); source?.close(); release(); }
+}
+
+/** Explicit recovery after ready publication/response loss. Select only the
+ * already-published identity, validate its CURRENT state and release dead leases.
+ * No retired store, source archive or migration-time image is consulted. */
+export async function recoverManagedReadyStorage(root: string, options: { quiesced: true; format: 'sqlite-v1' | 'file-v2';
+  identity: { incarnation: string; generation: number }; now?: () => number; reclaimDeadLease: true }): Promise<Omit<TransitionResult, 'transitionId'>> {
+  if (options.quiesced !== true || options.reclaimDeadLease !== true) throw new IndexedStorageError('invalid_scope');
+  root = resolve(root); const release = acquireLease(`${root}.managed.lock`, true); let storage: ManagedAdaptiveStorage | undefined;
+  try {
+    const marker = readMarker(root);
+    if (marker.state !== 'ready' || marker.format !== options.format || marker.identity.incarnation !== options.identity.incarnation ||
+        marker.identity.generation !== options.identity.generation) throw new IndexedStorageError('corrupt');
+    verifyPoison(root, marker.rootId); const at = time(options.now ?? Date.now);
+    storage = openRawManagedStore(root, marker, () => at, undefined, true);
+    const meta = metadataOf(storage);
+    if (meta.incarnation !== marker.identity.incarnation || meta.generation !== marker.identity.generation || meta.lifecycleWatermark < marker.watermarkFloor) throw new IndexedStorageError('corrupt');
+    const actual = await snapshotStore(storage, at);
+    return { format: marker.format, identity: marker.identity, accounts: actual.rows.length,
+      stateDigest: actual.digest, lifecycleWatermark: actual.watermark };
+  } finally { storage?.close(); release(); }
+}
+
+
+/** Abort only an unpublished prepared import, with the exact unchanged current
+ * source. Partial target artifacts are quarantined, never selected or deleted. */
+export async function abortPreparedManagedTransition(root: string, options: { quiesced: true; transitionId: string; sourceDigest: string;
+  now?: () => number; reclaimDeadLease?: boolean }): Promise<{ state: 'aborted'; restored: 'legacy-file' | 'sqlite-v1' | 'file-v2'; quarantine?: string }> {
+  if (options.quiesced !== true) throw new IndexedStorageError('invalid_scope'); root = resolve(root);
+  const release = acquireLease(`${root}.managed.lock`, options.reclaimDeadLease); let source: ManagedAdaptiveStorage | undefined;
+  try {
+    const transition = readMarker(root);
+    if (transition.state !== 'transition' || transition.phase !== 'prepared' || transition.id !== options.transitionId || transition.sourceDigest !== options.sourceDigest) throw new IndexedStorageError('corrupt');
+    const at = time(options.now ?? Date.now), current = await currentSource(root, transition, at, options.reclaimDeadLease === true); source = current.storage;
+    if (current.snapshot.digest !== transition.sourceDigest || current.snapshot.watermark < transition.sourceWatermark) throw new IndexedStorageError('corrupt');
+    if (transition.sourceFormat === 'legacy-file') {
+      noSymlink(root, 'directory'); if (existsSync(archivePath(root, transition))) throw new IndexedStorageError('corrupt');
+    }
+    const target = storePath(root, transition.targetStore), owner = `${target}.owner`;
+    if (existsSync(owner)) { const releaseTarget = acquireLease(owner, options.reclaimDeadLease); releaseTarget(); }
+    const stores = join(managedDirectory(root), 'stores');
+    const artifacts = readdirSync(stores).filter(name => name === transition.targetStore ||
+      ['-journal', '-wal', '-shm'].some(suffix => name === `${transition.targetStore}${suffix}`) ||
+      new RegExp(`^${transition.targetStore}\\.owner\\.abandoned-[a-f0-9-]{36}$`).test(name));
+    let quarantine: string | undefined;
+    if (artifacts.length) {
+      const parent = join(managedDirectory(root), 'abandoned-targets');
+      if (!existsSync(parent)) { mkdirSync(parent, { mode: 0o700 }); syncDirectory(managedDirectory(root)); }
+      noSymlink(parent, 'directory'); quarantine = randomUUID(); const directory = join(parent, quarantine); mkdirSync(directory, { mode: 0o700 }); syncDirectory(parent);
+      for (const name of artifacts) { noSymlink(join(stores, name)); renameSync(join(stores, name), join(directory, name)); }
+      syncDirectory(directory); syncDirectory(stores);
+    }
+    if (transition.previous) writeDurableJson(markerPath(root), { ...transition.previous,
+      watermarkFloor: Math.max(transition.previous.watermarkFloor, current.snapshot.watermark) });
+    else { unlinkSync(markerPath(root)); syncDirectory(managedDirectory(root)); }
+    return { state: 'aborted', restored: transition.sourceFormat, ...(quarantine ? { quarantine } : {}) };
+  } finally { source?.close(); release(); }
 }
