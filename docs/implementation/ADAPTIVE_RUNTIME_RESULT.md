@@ -1,6 +1,6 @@
 # Adaptive runtime integration
 
-Operator: **Joyixir OÜ**, privacy contact **info@joyixir.com**. The postal address and legal approval are outstanding. This document describes the candidate in `codex/vox-adaptive-runtime`; it is not a production activation receipt.
+Operator: **Joyixir OÜ**, privacy contact **info@joyixir.com**. The [registered address is verified from the official company register](OPERATOR_DETAILS.md); legal approval remains outstanding. This document describes the candidate in `codex/vox-adaptive-runtime`; it is not a production activation receipt.
 
 The slice connects the existing permissions and UI to background reminders, bounded turn diagnostics and the installed voice SDK's partial-transcript events. Optional processing is still disabled without its exact capability configuration and the person's choices.
 
@@ -41,4 +41,4 @@ Remaining product work includes learned preference hypotheses and explanation/un
 
 بررسی نهایی ارسال در همان پردازش و ذخیره‌سازی فایل، وضعیت ثبت‌شدهٔ هر دو منبع را درست پیش از درخواست ارسال می‌خواند. قفل نویسنده، تلاشِ هنوز ارسال‌نشده را به تعویق می‌اندازد؛ دادهٔ خراب یا منبع پشتیبانی‌نشده اجازهٔ ارسال نمی‌دهد. این تضمین تراکنش توزیع‌شده یا پس‌گرفتن درخواستِ شروع‌شده نیست. بررسی مستقل شامل ۱۴۸ آزمایش در پنج فایل و هفت بازتولید موقتِ موفق پس از اصلاح بود؛ این شواهد، ارسال واقعی تلگرام یا تأیید انتشار ترکیبی نیست.
 
-نام شرکت **Joyixir OÜ** و راه تماس **info@joyixir.com** ثبت شده است؛ نشانی پستی و تأیید حقوقی هنوز تکمیل نشده‌اند. آماده‌سازی گفتار زنده به انتخاب جداگانهٔ کاربر و بررسی فقط‌خواندنیِ نسخه و تنظیمات همان عامل وابسته است؛ نشانی امضاشده به نسخهٔ تأییدشده متصل می‌شود. نبود اطلاعات، خطا یا پایان مهلت، آماده‌سازی را غیرفعال نگه می‌دارد و تماس معمولی ادامه دارد. ۸۳ آزمون نویسنده و ۵۸ آزمون بررسی مستقل موفق شدند؛ پیکربندی حساب واقعی و تحویل رویداد روی دستگاه‌های فارسی و انگلیسی هنوز بررسی نشده‌اند. تشخیص هویت از صدا مجوز دسترسی به حافظه نمی‌دهد. آزمایش‌های مصنوعی جایگزین بررسی دستگاه واقعی، ارسال واقعی، دقت تشخیص صدا یا سنجش بهبود سرعت نیستند.
+نام شرکت **Joyixir OÜ** و راه تماس **info@joyixir.com** ثبت شده است؛ نشانی ثبت‌شده از سامانهٔ رسمی شرکت‌ها بررسی شد؛ تأیید حقوقی همچنان باقی است. آماده‌سازی گفتار زنده به انتخاب جداگانهٔ کاربر و بررسی فقط‌خواندنیِ نسخه و تنظیمات همان عامل وابسته است؛ نشانی امضاشده به نسخهٔ تأییدشده متصل می‌شود. نبود اطلاعات، خطا یا پایان مهلت، آماده‌سازی را غیرفعال نگه می‌دارد و تماس معمولی ادامه دارد. ۸۳ آزمون نویسنده و ۵۸ آزمون بررسی مستقل موفق شدند؛ پیکربندی حساب واقعی و تحویل رویداد روی دستگاه‌های فارسی و انگلیسی هنوز بررسی نشده‌اند. تشخیص هویت از صدا مجوز دسترسی به حافظه نمی‌دهد. آزمایش‌های مصنوعی جایگزین بررسی دستگاه واقعی، ارسال واقعی، دقت تشخیص صدا یا سنجش بهبود سرعت نیستند.
