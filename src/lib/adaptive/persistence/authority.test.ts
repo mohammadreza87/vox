@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { AdaptiveRepository, accountIdFor } from './repository';
 import { AdaptiveService } from './service';
 import { SqliteAdaptiveStorage } from './indexed/sqlite-storage';
+import { FileAdaptiveStorage } from './storage';
+import type { RuntimeControlEvaluation, RuntimeControlStamp } from './authority';
 
 const paths: string[] = [], stores: SqliteAdaptiveStorage[] = [];
 afterEach(() => { vi.restoreAllMocks(); for (const s of stores.splice(0)) s.close(); for (const p of paths.splice(0)) rmSync(p, { recursive: true, force: true }); });
@@ -63,4 +65,75 @@ it('never releases an evaluation whose external deadline crossed during callback
     f.setNow(2001); return { value: 'MUST_NOT_ESCAPE', deadline: 2000 };
   })).rejects.toMatchObject({ code: 'adaptive_controls_unavailable' });
   expect(f.storage.io.canonicalImageReads).toBe(0); expect(f.storage.io.bodyRowsRead).toBe(0);
+});
+
+it('freezes mapped wrappers and exposes catalog changes separately from the stable store namespace', async () => {
+  const f = await fixture(); let initialStamp: RuntimeControlStamp;
+  const namespace = await f.adaptive.withRuntimeControls(123, 'work', (controls, _now, identity, stamp) => {
+    initialStamp = stamp;
+    expect(Object.isFrozen(controls)).toBe(true); expect(Object.isFrozen(controls.experience)).toBe(true);
+    expect(Object.isFrozen(controls.relationships)).toBe(true); expect(Object.isFrozen(controls.binding)).toBe(true);
+    expect(Object.isFrozen(stamp)).toBe(true);
+    expect(Reflect.set(controls, 'binding', undefined)).toBe(false);
+    expect(Reflect.set(controls.experience, 'preferences', [])).toBe(false);
+    return { value: identity };
+  });
+  expect(namespace).toBe(f.adaptive.storeIdentity);
+  await f.adaptive.repository.transaction(accountIdFor(123), () => 1000, d => { d.memories[0].text = 'CORRECTED'; d.memories[0].revision++; });
+  await f.adaptive.withRuntimeControls(123, 'work', (_c, _now, identity, stamp) => {
+    expect(identity).toBe(namespace); expect(stamp!.catalogDigest).not.toBe(initialStamp!.catalogDigest);
+    expect(stamp!.catalogVersion).toBeGreaterThan(initialStamp!.catalogVersion);
+    return { value: true };
+  });
+});
+
+for (const kind of ['indexed', 'file'] as const) {
+  async function serviceFixture() {
+    if (kind === 'indexed') return fixture();
+    const path = mkdtempSync(join(tmpdir(), 'vox-file-authority-')); paths.push(path);
+    let now = 1000; const storage = new FileAdaptiveStorage(path);
+    const repository = new AdaptiveRepository(storage);
+    await repository.transaction(accountIdFor(123), () => now, () => {});
+    return { storage, adaptive: new AdaptiveService(repository, { now: () => now }), setNow: (value: number) => { now = value; } };
+  }
+  it(`${kind}: rejects async wrapper and async values without unhandled promise rejection`, async () => {
+    const f = await serviceFixture();
+    for (const make of [() => Promise.reject(new Error('synthetic-invalid-wrapper')),
+      () => ({ value: Promise.reject(new Error('synthetic-invalid-value')) }),
+      () => ({ value: { nested: Promise.reject(new Error('synthetic-invalid-nested-value')) } })]) {
+      const result = f.adaptive.readRuntimeControlsForEffect(123, 'work', () => make() as unknown as RuntimeControlEvaluation<boolean>);
+      expect(result.status).toBe('busy');
+      await new Promise(resolve => setImmediate(resolve));
+    }
+  });
+  it(`${kind}: rejects accessor/thenable outputs without invoking user methods`, async () => {
+    const f = await serviceFixture(); const getter = vi.fn(() => true), then = vi.fn();
+    for (const value of [Object.defineProperty({}, 'value', { get: getter }), { value: { then } },
+      { value: Object.defineProperty({}, 'bad', { get: getter }) }]) {
+      expect(f.adaptive.readRuntimeControlsForEffect(123, 'work', () => value as RuntimeControlEvaluation<boolean>).status).toBe('busy');
+    }
+    expect(getter).not.toHaveBeenCalled(); expect(then).not.toHaveBeenCalled();
+  });
+  it(`${kind}: suppresses callback deadline crossing for synchronous and asynchronous reads`, async () => {
+    const f = await serviceFixture();
+    expect(f.adaptive.readRuntimeControlsForEffect(123, 'work', () => {
+      f.setNow(2001); return { value: 'MUST_NOT_ESCAPE', deadline: 2000 };
+    }).status).toBe('busy');
+    await expect(f.adaptive.withRuntimeControls(123, 'work', () => {
+      f.setNow(4001); return { value: 'MUST_NOT_ESCAPE', deadline: 4000 };
+    })).rejects.toThrow();
+  });
+}
+
+it('FILE fallback suppresses a result if durability crosses the external deadline', async () => {
+  const path = mkdtempSync(join(tmpdir(), 'vox-file-durability-')); paths.push(path);
+  let now = 1000; const storage = new FileAdaptiveStorage(path); const repository = new AdaptiveRepository(storage);
+  await repository.transaction(accountIdFor(123), () => now, () => {});
+  const adaptive = new AdaptiveService(repository, { now: () => now });
+  const transact = storage.transact.bind(storage);
+  vi.spyOn(storage, 'transact').mockImplementation(async (...args) => { const result = await transact(...args); now = 2001; return result; });
+  await expect(adaptive.withRuntimeControls(123, 'work', controls => {
+    expect(Object.isFrozen(controls)).toBe(true); expect(controls).not.toHaveProperty('memories');
+    return { value: 'MUST_NOT_ESCAPE', deadline: 2000 };
+  })).rejects.toMatchObject({ code: 'adaptive_controls_unavailable' });
 });

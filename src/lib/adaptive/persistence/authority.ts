@@ -1,5 +1,6 @@
 import type { AdaptiveAuthorityDocument, AdaptiveDocument } from './repository';
-import type { IndexedControls } from './indexed/contracts';
+import { types as utilTypes } from 'node:util';
+import type { IndexedControls, IndexedControlStamp } from './indexed/contracts';
 
 /** Read-only canonical controls. Memory bodies, inbox content, observations and
  * mutation/event ledgers are deliberately absent from this distinct type. */
@@ -11,14 +12,81 @@ export type AdaptiveRuntimeControls = AdaptiveAuthorityDocument & Pick<AdaptiveD
 /** A pure evaluator explicitly identifies denial and the earliest external
  * policy deadline; the storage adapter persists observed denial time. */
 export interface RuntimeControlEvaluation<T> { value: T; deadline?: number; denied?: boolean }
+/** Catalog evidence is data only. The namespace alone never proves current
+ * permission, retention, source lineage or authority to load private bodies. */
+export type RuntimeControlStamp = Readonly<IndexedControlStamp> | undefined;
+export type RuntimeControlEvaluator<T> = (controls: Readonly<AdaptiveRuntimeControls>, now: number,
+  storeIdentity: string, stamp: RuntimeControlStamp) => RuntimeControlEvaluation<T>;
+
+/** These inputs are validated JSON trees; never freeze a caller's mutable draft. */
+function freezeControls<T>(value: T): T {
+  if (value && typeof value === 'object') {
+    if (!Object.isFrozen(value)) Object.freeze(value);
+    for (const descriptor of Object.values(Object.getOwnPropertyDescriptors(value)))
+      if ('value' in descriptor) freezeControls(descriptor.value);
+  }
+  return value;
+}
+
+/** Keep the bridge synchronous even when a mistaken async evaluator is hidden
+ * inside its result wrapper. Inspect data descriptors, never execute getters or
+ * arbitrary thenables. Observe genuine rejected promises before failing closed. */
+export function validateRuntimeControlEvaluation<T>(raw: unknown): RuntimeControlEvaluation<T> {
+  const invalid = () => { throw new Error('Invalid synchronous authority evaluation'); };
+  const inspectPromise = (value: unknown) => {
+    if (utilTypes.isPromise(value)) {
+      void Promise.prototype.then.call(value, undefined, () => undefined);
+      invalid();
+    }
+  };
+  inspectPromise(raw);
+  if (!raw || typeof raw !== 'object' || ![Object.prototype, null].includes(Object.getPrototypeOf(raw))) return invalid();
+  const fields = Object.getOwnPropertyDescriptors(raw);
+  if (Reflect.ownKeys(raw).some(key => typeof key !== 'string' || !['value', 'deadline', 'denied'].includes(key)) ||
+      !Object.hasOwn(fields, 'value') || Object.values(fields).some(d => !('value' in d))) return invalid();
+  const deadline = fields.deadline?.value, denied = fields.denied?.value;
+  if ((deadline !== undefined && (!Number.isSafeInteger(deadline) || deadline < 0)) ||
+      (denied !== undefined && typeof denied !== 'boolean')) return invalid();
+  const seen = new Set<object>(); let nodes = 0;
+  const checkValue = (value: unknown, depth = 0): void => {
+    inspectPromise(value);
+    if (++nodes > 100_000 || depth > 32) return invalid();
+    if (value === null || value === undefined || typeof value === 'string' || typeof value === 'boolean' ||
+        (typeof value === 'number' && Number.isFinite(value))) return;
+    if (typeof value !== 'object' || (!Array.isArray(value) && ![Object.prototype, null].includes(Object.getPrototypeOf(value)))) return invalid();
+    if (seen.has(value)) return invalid();
+    seen.add(value);
+    for (const key of Reflect.ownKeys(value)) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key)!;
+      if (typeof key !== 'string' || key === 'then' || !('value' in descriptor)) return invalid();
+      checkValue(descriptor.value, depth + 1);
+    }
+    seen.delete(value);
+  };
+  checkValue(fields.value.value);
+  return { value: fields.value.value as T, ...(deadline === undefined ? {} : { deadline }), ...(denied === undefined ? {} : { denied }) };
+}
 
 export function runtimeControlsFromIndexed(c: IndexedControls): AdaptiveRuntimeControls {
-  return {
+  return freezeControls({
     accountId: c.accountId, personId: c.personId, createdAt: c.createdAt, updatedAt: c.updatedAt, revision: c.revision,
     binding: c.binding, declaration: c.declaration, permissions: c.permissions, agentGrants: c.agentGrants,
     experience: { preferences: c.preferences, settings: c.settings, predictionTurns: c.predictionTurns,
       ...(c.preferenceLearning ? { preferenceLearning: c.preferenceLearning } : {}) },
     relationships: { controls: c.relationshipControls, bindings: c.relationshipBindings,
       sources: c.relationshipSources, externalSettings: c.relationshipExternalSettings },
-  };
+  });
+}
+
+/** Compatibility reads still load a canonical document, but evaluators receive
+ * the same immutable, body-free type without mutating the transaction draft. */
+export function runtimeControlsFromDocument(d: AdaptiveDocument): AdaptiveRuntimeControls {
+  return freezeControls(structuredClone({ accountId: d.accountId, personId: d.personId, createdAt: d.createdAt,
+    updatedAt: d.updatedAt, revision: d.revision, binding: d.binding, declaration: d.declaration,
+    permissions: d.permissions, agentGrants: d.agentGrants,
+    experience: { preferences: d.experience.preferences, settings: d.experience.settings,
+      predictionTurns: d.experience.predictionTurns,
+      ...(d.experience.preferenceLearning ? { preferenceLearning: d.experience.preferenceLearning } : {}) },
+    relationships: { controls: d.relationships.controls, bindings: d.relationships.bindings,
+      sources: d.relationships.sources, externalSettings: d.relationships.externalSettings } }));
 }

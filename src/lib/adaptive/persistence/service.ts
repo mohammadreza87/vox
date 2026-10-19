@@ -13,7 +13,8 @@ import { correctionInput, type CorrectionInput } from './validation';
 import type { AgentGrantInput, ConsentInput, DeletionInput, IdentityInput, MemoryInput, PresentInput } from './validation';
 import { sweepObserverDocument } from '../observation/helpers';
 import { pruneLearningDocument } from '../personalization/learning/state';
-import { runtimeControlsFromIndexed, type AdaptiveRuntimeControls, type RuntimeControlEvaluation } from './authority';
+import { runtimeControlsFromDocument, runtimeControlsFromIndexed, validateRuntimeControlEvaluation,
+  type RuntimeControlEvaluation, type RuntimeControlEvaluator } from './authority';
 
 export class AdaptiveError extends Error {
   readonly name = 'AdaptiveError';
@@ -73,6 +74,11 @@ export class AdaptiveService {
   setRelationshipInvalidator(handler: (input: RelationshipInvalidation) => Promise<void>): void { this.relationshipInvalidator = handler; }
   async notifyRelationshipInvalidation(input: RelationshipInvalidation): Promise<void> { await this.relationshipInvalidator?.(input); }
   constructor(readonly repository: AdaptiveRepository, private readonly options: AdaptiveServiceOptions = {}) { this.now = options.now ?? Date.now; }
+  /** Stable receipt namespace, safe inside a writer. This is not access authority. */
+  get storeIdentity(): string {
+    const identity = this.repository.storage.indexed?.identity;
+    return identity ? digest([identity.incarnation, identity.generation]) : 'canonical';
+  }
   private account(telegramId: number): string {
     if (!Number.isSafeInteger(telegramId) || telegramId <= 0) return fail(401, 'authentication_required');
     return accountIdFor(telegramId);
@@ -142,7 +148,7 @@ export class AdaptiveService {
       for (const memory of d.memories) if (memory.status === 'active' && memory.expiresAt <= now) this.tombstone(d, memory, now, `expiry:${memory.id}`);
       if (purgeInvalidDerivedMemory(d, now)) this.bump(d, now);
       if (sweepObserverDocument(d, now, (doc, space, agentId, time) =>
-        this.isPurposeAllowed(doc, space, 'optional.product_analytics', time, agentId))) this.bump(d, now);
+        this.isPurposeAllowed(doc, space, 'optional.product_analytics', time, agentId), this.storeIdentity)) this.bump(d, now);
       if (pruneLearningDocument(this, d, now, this.preferenceLearningAuthority ? agentId => this.preferenceLearningAuthority!(telegramId, agentId) : undefined)) this.bump(d, now);
       const value = fn(d, now);
       if (pruneLearningDocument(this, d, now, this.preferenceLearningAuthority ? agentId => this.preferenceLearningAuthority!(telegramId, agentId) : undefined)) this.bump(d, now);
@@ -187,7 +193,7 @@ export class AdaptiveService {
         for (const group of removed.values()) enqueue(group.space, 'source_deleted', group.agentId, group.ids);
       }
       const observerChanged = sweepObserverDocument(d, now, (doc, space, agentId, time) =>
-        this.isPurposeAllowed(doc, space, 'optional.product_analytics', time, agentId));
+        this.isPurposeAllowed(doc, space, 'optional.product_analytics', time, agentId), this.storeIdentity);
       if ((observerChanged || priorRelationships !== digest(d.relationships)) && d.revision === priorRevision) this.bump(d, now);
       return value;
     }, beforeCommit);
@@ -234,28 +240,51 @@ export class AdaptiveService {
   /** Pure authority consumers use compact controls on an explicitly selected
    * indexed store. Mutations and detailed UI snapshots retain the canonical API.
    * The callback must be synchronous. Store identity must bind retained work. */
-  withRuntimeControls<T>(telegramId: number, space: SpaceKind,
-    fn: (controls: AdaptiveRuntimeControls, now: number, storeIdentity: string) => RuntimeControlEvaluation<T>): Promise<T> {
-    if (!this.repository.storage.indexed) return this.transact(telegramId, (d, now) => fn(d, now, 'canonical').value);
+  async withRuntimeControls<T>(telegramId: number, space: SpaceKind, fn: RuntimeControlEvaluator<T>): Promise<T> {
+    if (!this.repository.storage.indexed) {
+      // The fallback may await canonical durability. Suppress an expired result
+      // again after that I/O; it does not provide the indexed durable watermark.
+      let evaluated: RuntimeControlEvaluation<T> | undefined; let observedAt = 0;
+      const result = await this.transact(telegramId, (d, now) => {
+        observedAt = now;
+        evaluated = validateRuntimeControlEvaluation<T>(fn(runtimeControlsFromDocument(d), now, 'canonical', undefined));
+        this.checkRuntimeEvaluation(evaluated, now);
+        return evaluated.value;
+      });
+      this.checkRuntimeEvaluation(evaluated!, observedAt);
+      return result;
+    }
     const result = this.readRuntimeControlsForEffect(telegramId, space, fn);
     return result.status === 'ready' ? Promise.resolve(result.value) : Promise.reject(new AdaptiveError(503, 'adaptive_controls_unavailable'));
   }
   /** Synchronous current-state controls for the configured provider export fence.
    * Evaluators are pure, body-free and synchronous. A denial remains a data result;
    * it never grants private-body access or authorizes an external side effect. */
-  readRuntimeControlsForEffect<T>(telegramId: number, space: SpaceKind,
-    fn: (controls: AdaptiveRuntimeControls, now: number, storeIdentity: string) => RuntimeControlEvaluation<T>):
+  readRuntimeControlsForEffect<T>(telegramId: number, space: SpaceKind, fn: RuntimeControlEvaluator<T>):
     { status: 'ready'; value: T } | { status: 'busy' | 'unsupported' | 'missing' } {
     const indexed = this.repository.storage.indexed;
-    if (!indexed) return this.readCommittedForEffect(telegramId, (d, now) => fn(d, now, 'canonical').value);
+    if (!indexed) {
+      try { return this.readCommittedForEffect(telegramId, (d, now) => {
+        const evaluated = validateRuntimeControlEvaluation<T>(fn(runtimeControlsFromDocument(d), now, 'canonical', undefined));
+        this.checkRuntimeEvaluation(evaluated, now);
+        return evaluated.value;
+      }); } catch { return { status: 'busy' }; }
+    }
     let evaluation: RuntimeControlEvaluation<T> | undefined;
     const snapshot = indexed.readControls(this.account(telegramId), space, (controls, now, stamp) => {
-      evaluation = fn(runtimeControlsFromIndexed(controls), now, digest([stamp.incarnation, stamp.generation]));
+      evaluation = validateRuntimeControlEvaluation<T>(fn(runtimeControlsFromIndexed(controls), now,
+        digest([stamp.incarnation, stamp.generation]), stamp));
       return { ...(evaluation.deadline === undefined ? {} : { deadline: evaluation.deadline }),
         ...(evaluation.denied === undefined ? {} : { denied: evaluation.denied }) };
     });
     if (snapshot.status !== 'ready' || !evaluation) return { status: snapshot.status !== 'ready' && snapshot.reason === 'missing' ? 'missing' : 'busy' };
     return { status: 'ready', value: evaluation.value };
+  }
+  private checkRuntimeEvaluation<T>(evaluation: RuntimeControlEvaluation<T>, observedAt: number): void {
+    const fresh = this.now();
+    if (!Number.isSafeInteger(fresh) || fresh < observedAt ||
+        (!evaluation.denied && evaluation.deadline !== undefined && evaluation.deadline <= fresh))
+      fail(503, 'adaptive_controls_unavailable');
   }
   /** Validated committed file snapshot only. No mutation or awaited work. */
   readCommittedForEffect<T>(telegramId: number, fn: (document: AdaptiveDocument, now: number) => T):
