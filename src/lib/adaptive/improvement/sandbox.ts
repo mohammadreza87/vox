@@ -14,12 +14,17 @@ export const EVALUATOR_PROGRAM = `const fs = require('node:fs');
 const candidate = JSON.parse(fs.readFileSync('/input/candidate.json','utf8'));
 const baseline = JSON.parse(fs.readFileSync('/input/baseline.json','utf8'));
 const dataset = JSON.parse(fs.readFileSync('/protected/dataset.json','utf8'));
+if (!Array.isArray(dataset.cases) || dataset.cases.length < 2 || dataset.cases.length > 128 ||
+    !dataset.cases.some(item => item.cancelled === true) || !dataset.cases.some(item => item.cancelled === false) ||
+    dataset.cases.some(item => typeof item.cancelled !== 'boolean' || item.expected !== (item.cancelled ? 'stop' : 'continue'))) {
+  throw new Error('routing_policy_coverage_required');
+}
 const action = (config, item) => item.cancelled ? (config.onCancelled === 'stop' ? 'stop' : 'continue') : config.onActive;
 let candidateFailures=0, baselineFailures=0;
 for(const item of dataset.cases){ candidateFailures += Number(action(candidate,item)!==item.expected); baselineFailures += Number(action(baseline,item)!==item.expected); }
 process.stdout.write(JSON.stringify({checks:dataset.cases.length,candidateFailures,baselineFailures}));`;
 export const EVALUATOR_DIGEST = hash(EVALUATOR_PROGRAM);
-export const POLICY_DIGEST = hash(canonical({ version: 1, zeroFailures: true, noSkipped: true, finalSetUsesPerRegistry: 1, humanRelease: true, productionMutation: false }));
+export const POLICY_DIGEST = hash(canonical({ version: 2, mandatoryRoutingCoverage: ['cancelled_stop', 'active_continue'], zeroFailures: true, noSkipped: true, finalSetUsesPerRegistry: 1, humanRelease: true, productionMutation: false }));
 export interface IsolatedEvaluationOptions { candidate: ImprovementCandidate; artifact: RoutingArtifact; baseline: RoutingArtifact;
   dataset: RoutingDataset; imageDigest: string; evaluatorKeyId: string; evaluatorPrivateKey: string; now?: number }
 /** No image pull, environment inheritance, network, writable root, Docker socket,

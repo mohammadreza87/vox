@@ -12,6 +12,8 @@
  *   ELEVENLABS_API_KEY       voice design, voice library, speech
  *   STUDIO_WEBAPP_URL        public https URL of /studio (menu button)
  *   STUDIO_DATA_DIR          default ./.vox-studio (file storage)
+ *   STUDIO_MAINTENANCE=1     optional background sweep; requires file storage,
+ *                            STUDIO_BOTS=1 and a persistent polling process
  *
  * Serverless production (Firebase):
  *   STUDIO_STORAGE=firestore  state in Firestore, media in Cloud Storage,
@@ -136,6 +138,12 @@ export function validateStudioConfig(env: NodeJS.ProcessEnv, cwd = process.cwd()
   const relationships = relationshipConfig(env);
   const scopedRelationshipsEnabled = env.STUDIO_SCOPED_RELATIONSHIPS === '1';
   const maintenanceEnabled = env.STUDIO_MAINTENANCE === '1';
+  // The only scheduler is startBots' in-process interval. Webhooks/serverless
+  // have no scheduled maintenance entrypoint and must not advertise activation.
+  if (maintenanceEnabled && (env.STUDIO_BOTS !== '1' || storage !== 'file' || publicUrl ||
+    env.K_SERVICE || env.FUNCTION_TARGET || env.FUNCTION_NAME || env.VERCEL === '1')) {
+    throw new Error('STUDIO_MAINTENANCE=1 requires STUDIO_BOTS=1 with file storage in a persistent polling process; webhook and serverless maintenance are unsupported');
+  }
   const trustedImprovementKeys = improvementTrust(env.STUDIO_IMPROVEMENT_TRUST_JSON, storage);
   return { production, token, superadminIds, dataDir, webAppUrl, storage, mediaBucket, publicUrl, relationships, scopedRelationshipsEnabled, maintenanceEnabled, trustedImprovementKeys };
 }

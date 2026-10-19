@@ -104,8 +104,19 @@ describe('Studio production initialization', () => {
     expect(studio.deps.improvement).toBeUndefined();
   });
 
+  it.each(['file', 'firestore'])('rejects enabled maintenance before storage/provider IO without a scheduler: %s', storage => {
+    const dir = configure({ ...(storage === 'firestore' ? cloudProduction() : {}), STUDIO_MAINTENANCE: '1' });
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    return expect(getStudio()).rejects.toThrow('STUDIO_MAINTENANCE=1 requires STUDIO_BOTS=1').then(() => {
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(firebase.getAdminDb).not.toHaveBeenCalled();
+      expect(existsSync(join(dir, 'studio.json'))).toBe(false);
+    });
+  });
+
   it('wires maintenance into a separate durable file namespace only under its explicit switch', async () => {
-    const dir = configure({ STUDIO_MAINTENANCE: '1' });
+    const dir = configure({ STUDIO_MAINTENANCE: '1', STUDIO_BOTS: '1' });
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ ok: true, result: { id: 1, is_bot: true, username: 'VoxxBot', first_name: 'Voxx' } })));
     const studio = await getStudio();
     const runner = studio.deps.maintenance!;
@@ -172,7 +183,20 @@ describe('Studio production configuration', () => {
     expect(validateStudioConfig({ ...production(), STUDIO_MAINTENANCE: value }).maintenanceEnabled).toBe(false);
   });
   it('requires an exact independent maintenance opt-in', () => {
-    expect(validateStudioConfig({ ...production(), STUDIO_MAINTENANCE: '1' }).maintenanceEnabled).toBe(true);
+    expect(validateStudioConfig({ ...production(), STUDIO_MAINTENANCE: '1', STUDIO_BOTS: '1' }).maintenanceEnabled).toBe(true);
+  });
+  it.each([undefined, '', '0', 'true'])('rejects maintenance without its polling scheduler: %s', bots => {
+    expect(() => validateStudioConfig({ ...production(), STUDIO_MAINTENANCE: '1', STUDIO_BOTS: bots })).toThrow('STUDIO_MAINTENANCE=1 requires STUDIO_BOTS=1');
+  });
+  it('rejects maintenance on an otherwise valid Firestore webhook deployment', () => {
+    expect(validateStudioConfig(cloudProduction()).storage).toBe('firestore');
+    expect(() => validateStudioConfig({ ...cloudProduction(), STUDIO_MAINTENANCE: '1' })).toThrow('webhook and serverless maintenance are unsupported');
+  });
+  it.each(['K_SERVICE', 'FUNCTION_TARGET', 'FUNCTION_NAME', 'VERCEL'])('rejects maintenance in a development serverless process: %s', key => {
+    expect(() => validateStudioConfig({ ...production(), NODE_ENV: 'development', STUDIO_BOTS: '1', STUDIO_MAINTENANCE: '1', [key]: key === 'VERCEL' ? '1' : 'service' })).toThrow('webhook and serverless maintenance are unsupported');
+  });
+  it('rejects maintenance on development Firestore even without webhooks', () => {
+    expect(() => validateStudioConfig({ ...cloudProduction(), NODE_ENV: 'development', STUDIO_PUBLIC_URL: '', STUDIO_BOTS: '1', STUDIO_MAINTENANCE: '1' })).toThrow('webhook and serverless maintenance are unsupported');
   });
   it('accepts a complete deployment and parses bootstrap members without IO', () => {
     expect(validateStudioConfig(production(), '/srv/vox')).toMatchObject({

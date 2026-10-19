@@ -75,6 +75,9 @@ export function CallScreen({ id }: { id: string }) {
     const t = setInterval(() => setSeconds((s) => s + 1), 1000);
     return () => {
       clearInterval(t);
+      // Navigation can unmount the screen without the explicit hang-up handler.
+      // Record only audio that actually started, while its captured turn is valid.
+      if (playback.current?.outcomes.has('playback_started')) reportPlayback('interrupted');
       cancelled.current = true;
       generation.current = current + 1;
       clearPlayback();

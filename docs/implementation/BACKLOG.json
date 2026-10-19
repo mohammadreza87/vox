@@ -1701,7 +1701,7 @@
         "docs/implementation/DELIVERY_RESULT.md",
         "docs/implementation/OBSERVATION_LEARNING.md"
       ],
-      "progress_note": "Pinned Docker evaluator and separate signed evaluator/human receipts bind exact artifacts/data/policy; malformed payload, budget bypass and counterfeit evidence regressions covered. Synthetic role keys do not qualify production IAM; protected service deployment and representative corpus remain open."
+      "progress_note": "Pinned Docker evaluator and separate signed evaluator/human receipts bind exact artifacts/data/policy; malformed payload, budget bypass and counterfeit evidence regressions covered. Synthetic role keys do not qualify production IAM; protected service deployment and representative corpus remain open. Final cancellation datasets and the fixed evaluator require both cancelled-stop and active-continue coverage, rejecting inconsistent labels (policy version 2)."
     },
     {
       "id": "VOX-047",
@@ -1952,7 +1952,7 @@
       "evidence": [
         "docs/implementation/OBSERVATION_LEARNING.md"
       ],
-      "progress_note": "Local account sweep pagination, competing leases, crash recovery, expiry, snapshot reconciliation and bounded observer retries tested. Production load/SLOs, full backup restoration and provider residual deletion remain open."
+      "progress_note": "Local account sweep pagination, competing leases, crash recovery, expiry, snapshot reconciliation and bounded observer retries tested. Background maintenance is supported only in the persistent file/polling runtime; unsupported activation fails startup. Production load/SLOs, full backup restoration and provider residual deletion remain open."
     },
     {
       "id": "VOX-053",
