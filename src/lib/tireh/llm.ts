@@ -39,6 +39,8 @@ export interface LLMRequest {
   temperature?: number;
   /** Side-effecting callers must not deliver a provider-truncated completion. */
   requireComplete?: boolean;
+  /** Request-scoped cancellation for bounded connection tasks. */
+  signal?: AbortSignal;
   /** Server-only fence, rechecked before every provider request/retry. Never serialized. */
   authorize?: () => Promise<boolean>;
 }
@@ -62,6 +64,7 @@ export interface WebSource {
 }
 
 export interface LLM {
+  readonly identity?: { provider: string; model: string };
   complete(request: LLMRequest): Promise<string>;
   /**
    * Like `complete`, but the model may search the web for live information.
@@ -146,6 +149,7 @@ export class AnthropicLLM implements LLM {
   private webUnavailable = false;
 
   constructor(private readonly apiKey: string, private readonly model: string) {}
+  get identity() { return { provider: 'anthropic', model: this.model }; }
 
   private params({ system, maxTokens = 1024, temperature = 0.7 }: LLMRequest) {
     return {
@@ -164,7 +168,7 @@ export class AnthropicLLM implements LLM {
     return measureStage('generation', async () => {
       let returned = false;
       try {
-      const response = await (request.authorize ? this.client!.messages.create(body, { maxRetries: 0 }) : this.client!.messages.create(body));
+      const response = await (request.authorize || request.signal ? this.client!.messages.create(body, { maxRetries: 0, ...(request.signal ? { signal: request.signal } : {}) }) : this.client!.messages.create(body));
       returned = true;
       captureUsage('anthropic', 'claude', () => ({ inputTokens: response.usage?.input_tokens, outputTokens: response.usage?.output_tokens,
         cacheReadTokens: response.usage?.cache_read_input_tokens, cacheWriteTokens: response.usage?.cache_creation_input_tokens }));
@@ -186,7 +190,7 @@ export class AnthropicLLM implements LLM {
     this.client ??= new Anthropic({ apiKey: this.apiKey });
     await authorizeRequest(request);
     const body = { ...this.params(request), messages: anthropicTurns(request.messages) };
-    const stream = request.authorize ? this.client.messages.stream(body, { maxRetries: 0 }) : this.client.messages.stream(body);
+    const stream = request.authorize || request.signal ? this.client.messages.stream(body, { maxRetries: 0, ...(request.signal ? { signal: request.signal } : {}) }) : this.client.messages.stream(body);
     const started = performance.now();
     let completed = false;
     let inputTokens: number | undefined, outputTokens: number | undefined, cacheReadTokens: number | null | undefined, cacheWriteTokens: number | null | undefined;
@@ -235,8 +239,9 @@ export class GeminiLLM implements LLM {
   private client: GoogleGenerativeAI | null = null;
 
   constructor(private readonly apiKey: string, private readonly model: string) {}
+  get identity() { return { provider: 'gemini', model: this.model }; }
 
-  async complete({ system, messages, maxTokens = 1024, temperature = 0.7, requireComplete, authorize }: LLMRequest): Promise<string> {
+  async complete({ system, messages, maxTokens = 1024, temperature = 0.7, requireComplete, authorize, signal }: LLMRequest): Promise<string> {
     const turns = normalizeTurns(messages);
     const last = turns.pop();
     if (!last) return '';
@@ -250,7 +255,8 @@ export class GeminiLLM implements LLM {
     const result = await measureStage('generation', async () => {
       let returned = false;
       try {
-      const result = await chat.sendMessage(last.images?.length ? geminiParts(last) : last.content);
+      const content = last.images?.length ? geminiParts(last) : last.content;
+      const result = await (signal ? chat.sendMessage(content, { signal }) : chat.sendMessage(content));
       returned = true;
       captureUsage('gemini', 'gemini', () => ({ inputTokens: result.response.usageMetadata?.promptTokenCount,
         outputTokens: result.response.usageMetadata?.candidatesTokenCount, cacheReadTokens: result.response.usageMetadata?.cachedContentTokenCount }));

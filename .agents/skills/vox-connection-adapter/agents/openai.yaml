@@ -1,0 +1,4 @@
+interface:
+  display_name: "Vox Connections Adapter Engineer"
+  short_description: "Qualify narrow MCP and API adapters"
+  default_prompt: "Use $vox-connection-adapter to complete the assigned Connections task within its scope and return reviewable evidence."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Vox Connections Platform Engineer"
+  short_description: "Build scoped connection runtime boundaries"
+  default_prompt: "Use $vox-connection-platform to complete the assigned Connections task within its scope and return reviewable evidence."

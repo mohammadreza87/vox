@@ -1,0 +1,23 @@
+import { z } from 'zod';
+import { defineTool, type ProviderToolDefinition } from './types';
+import { numericId, positiveId, safeText, parse, object } from './normalization';
+const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(value => { const time = Date.parse(value + 'T00:00:00Z'); return Number.isFinite(time) && new Date(time).toISOString().slice(0, 10) === value; });
+const report = z.object({ propertyId: numericId, startDate: date, endDate: date, metrics: z.array(z.enum(['activeUsers', 'newUsers', 'sessions', 'screenPageViews', 'eventCount', 'engagedSessions'])).min(1).max(6), dimensions: z.array(z.enum(['date', 'platform', 'country', 'deviceCategory', 'eventName'])).max(2), limit: z.number().int().min(1).max(100) }).strict().refine(a => { const span = Date.parse(a.endDate) - Date.parse(a.startDate); return span >= 0 && span <= 92 * 86400000; }, 'At most 93 calendar days');
+export const googleAnalyticsTools: readonly ProviderToolDefinition[] = [
+  defineTool({ id: 'google_analytics.report.run', providerId: 'google_analytics', title: 'Read analytics report', description: 'Read at most 100 rows and 93 days from one exact GA4 property. Threshold/freshness metadata remains visible.', effect: 'read', schema: report, requiredScopes: ['https://www.googleapis.com/auth/analytics.readonly'], resourceFormat: 'google_analytics:property:propertyId', mapResources: a => [`google_analytics:property:${a.propertyId}`],
+    request: a => ({ method: 'POST', path: `/v1beta/properties/${a.propertyId}:runReport`, body: { dateRanges: [{ startDate: a.startDate, endDate: a.endDate }], dimensions: a.dimensions.map(name => ({ name })), metrics: a.metrics.map(name => ({ name })), limit: String(a.limit), returnPropertyQuota: true } }), normalize: (r, a) => {
+      const data = parse(z.object({ dimensionHeaders: z.array(z.object({ name: z.enum(['date', 'platform', 'country', 'deviceCategory', 'eventName']) })).max(2).optional(), metricHeaders: z.array(z.object({ name: z.enum(['activeUsers', 'newUsers', 'sessions', 'screenPageViews', 'eventCount', 'engagedSessions']), type: z.string().max(60) })).max(6), rows: z.array(z.object({ dimensionValues: z.array(z.object({ value: safeText(300) })).max(2).optional(), metricValues: z.array(z.object({ value: z.string().max(100).regex(/^-?\d+(?:\.\d+)?$/) })).max(6) })).max(a.limit).optional(), rowCount: z.number().int().nonnegative().optional(), metadata: z.object({ currencyCode: z.string().max(10).optional(), timeZone: z.string().max(100).optional(), dataLossFromOtherRow: z.boolean().optional(), subjectToThresholding: z.boolean().optional(), samplingMetadatas: z.array(z.object({ samplesReadCount: z.string().regex(/^\d+$/), samplingSpaceSize: z.string().regex(/^\d+$/) })).max(10).optional() }).optional() }), r.body);
+      return { data: { ...data, propertyId: a.propertyId, startDate: a.startDate, endDate: a.endDate, source: 'google_analytics', freshness: 'UNAVAILABLE' }, truncated: (data.rowCount ?? 0) > (data.rows?.length ?? 0) };
+    } }),
+];
+export const posthogTools: readonly ProviderToolDefinition[] = [
+  defineTool({ id: 'posthog.insight.get', providerId: 'posthog', title: 'Read selected analytics insight', description: 'Read one saved PostHog insight from one selected project. Excludes raw query execution, SQL and persons.', effect: 'read', schema: z.object({ projectId: numericId, insightId: numericId }).strict(), requiredScopes: ['insight:read'], resourceFormat: 'posthog:project:projectId:insight:insightId', mapResources: a => [`posthog:project:${a.projectId}:insight:${a.insightId}`],
+    request: a => ({ method: 'GET', path: `/api/projects/${a.projectId}/insights/${a.insightId}/` }), normalize: (r, a) => {
+      const data = parse(z.object({ id: positiveId, name: safeText(500).nullable().optional(), description: safeText(2000).nullable().optional(), last_refresh: z.string().max(100).nullable().optional(), is_cached: z.boolean().optional() }), r.body);
+      if (String(data.id) !== a.insightId) throw new Error('invalid insight');
+      const result = object(r.body).result;
+      // Read only aggregated numerical timeseries. Retention/person/funnel paths need separate schemas.
+      const series = parse(z.array(z.object({ label: safeText(500), data: z.array(z.number().finite().nullable()).max(100), days: z.array(z.string().max(100)).max(100).optional(), count: z.number().finite().optional() })).max(20).nullable().optional(), result);
+      return { data: { ...data, projectId: a.projectId, series: series ?? [], source: 'posthog', timezone: 'UNAVAILABLE', cohort: 'saved_insight_definition' }, revision: data.last_refresh ?? undefined };
+    } }),
+];

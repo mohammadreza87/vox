@@ -1,0 +1,4 @@
+interface:
+  display_name: "Vox Connections Product Designer"
+  short_description: "Design clear per-agent connection flows"
+  default_prompt: "Use $vox-connection-designer to complete the assigned Connections task within its scope and return reviewable evidence."

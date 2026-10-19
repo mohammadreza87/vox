@@ -18,6 +18,7 @@ import { GroupsScreen } from './screens/Groups';
 import { PrivacyScreen } from './screens/Privacy';
 import { SharedMemoriesScreen } from './screens/SharedMemories';
 import { ExperienceScreen } from './screens/Experience';
+import { ConnectionsScreen } from './screens/Connections';
 
 export type Route =
   | { name: 'home' }
@@ -26,6 +27,7 @@ export type Route =
   | { name: 'privacy' }
   | { name: 'shared-memories' }
   | { name: 'experience'; notificationId?: string }
+  | { name: 'connections'; agentId?: string }
   | { name: 'agent'; id: string }
   | { name: 'spawn'; draftId?: string; successorOf?: string }
   | { name: 'call'; id: string }
@@ -170,7 +172,8 @@ export function StudioApp() {
               {route.name === 'home' && <HomeScreen />}
               {route.name === 'groups' && <GroupsScreen />}
               {route.name === 'org' && <OrgScreen />}
-              {route.name === 'privacy' && <PrivacyScreen onShared={() => nav.push({ name: 'shared-memories' })} onExperience={() => nav.push({ name: 'experience' })} />}
+              {route.name === 'privacy' && <PrivacyScreen onShared={() => nav.push({ name: 'shared-memories' })} onExperience={() => nav.push({ name: 'experience' })} onConnections={() => nav.push({ name: 'connections' })} />}
+              {route.name === 'connections' && <ConnectionsScreen onBack={nav.back} agentId={route.agentId} />}
               {route.name === 'shared-memories' && <SharedMemoriesScreen selfId={me.member.telegramId} onBack={nav.back} />}
               {route.name === 'experience' && <ExperienceScreen onBack={nav.back} role={me.member.role} notificationId={route.notificationId} />}
               {route.name === 'agent' && <AgentScreen id={route.id} />}

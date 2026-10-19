@@ -1,0 +1,4 @@
+interface:
+  display_name: "Vox Connections Release Engineer"
+  short_description: "Qualify and release connection capabilities"
+  default_prompt: "Use $vox-connection-release to complete the assigned Connections task within its scope and return reviewable evidence."
