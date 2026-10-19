@@ -192,17 +192,19 @@ jobs:
         env:
           CONVERSATION_E2E_PRODUCTION: '1'
 
+      # All production journeys must run before the general suite starts next dev,
+      # which replaces .next and removes the downloaded production BUILD_ID.
+      - name: Run Connections production browser fixtures
+        run: npm run e2e:connections
+        env:
+          CONNECTIONS_E2E_PRODUCTION: '1'
+
       - name: Run E2E tests
         run: npx playwright test
         env:
           NEXT_PUBLIC_FIREBASE_API_KEY: ${{ secrets.NEXT_PUBLIC_FIREBASE_API_KEY }}
           NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: ${{ secrets.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN }}
           NEXT_PUBLIC_FIREBASE_PROJECT_ID: ${{ secrets.NEXT_PUBLIC_FIREBASE_PROJECT_ID }}
-
-      - name: Run Connections production browser fixtures
-        run: npm run e2e:connections
-        env:
-          CONNECTIONS_E2E_PRODUCTION: '1'
 
       - name: Upload Playwright report
         uses: actions/upload-artifact@v4
