@@ -1,11 +1,20 @@
 import { createHash } from 'crypto';
 import type { RelationshipKey, RelationshipState } from './types';
 import { purgeTemporalEvidence } from './temporal';
+import { relationshipScopeSchema } from '../adaptive/relationships/contracts';
 
 export function relationshipId(key: RelationshipKey): string {
   const owner = key.audience.kind === 'private' ? key.audience.personId : key.audience.groupId;
   if (![key.personaId, key.chatKey, owner].every((x) => typeof x === 'string' && x.length > 0 && x.length <= 200)) throw new Error('Invalid relationship key');
-  return createHash('sha256').update(JSON.stringify([key.personaId, key.chatKey, key.audience.kind, owner])).digest('hex');
+  if (!['private', 'group'].includes(key.audience.kind)) throw new Error('Invalid relationship audience');
+  const identity: unknown[] = [key.personaId, key.chatKey, key.audience.kind, owner];
+  if (key.scope !== undefined) {
+    // Parsing canonicalizes field order, so equivalent objects have one identity.
+    const scope = relationshipScopeSchema.parse(key.scope);
+    if (key.audience.kind === 'private' && owner !== scope.personId) throw new Error('Relationship scope does not own this private context');
+    identity.push(scope);
+  }
+  return createHash('sha256').update(JSON.stringify(identity)).digest('hex');
 }
 export function emptyRelationship(key: RelationshipKey): RelationshipState {
   return { key: structuredClone(key), epoch: 0, revision: 0, disabled: false, timeZone: '', quietHours: { start: 22, end: 8 }, unansweredCount: 0, preferences: [], situations: [], intentions: [], eventIds: [], forgottenSourceIds: [] };
@@ -17,12 +26,15 @@ export interface RelationshipStore {
   update<T>(key: RelationshipKey, fn: (state: RelationshipState) => T): Promise<T>;
   due(now: Date, limit: number): Promise<RelationshipKey[]>;
   keysForPersona(personaId: string): Promise<RelationshipKey[]>;
+  keysForAccount(accountId: string): Promise<RelationshipKey[]>;
 }
 export function nextDue(state: RelationshipState): string | null {
   const times = state.intentions.flatMap((j) => j.status === 'pending' ? [j.dueAt] : j.status === 'evaluating' || j.status === 'sending' ? [j.leaseUntil ?? j.dueAt] : []);
   return times.sort()[0] ?? null;
 }
 export function bounded(state: RelationshipState): void {
+  const id = relationshipId(state.key);
+  if (state.intentions.some((j) => relationshipId(j.key) !== id)) throw new Error('Invalid intention relationship scope');
   state.eventIds = state.eventIds.slice(-256);
   state.forgottenSourceIds = state.forgottenSourceIds.slice(-256);
   state.preferences = state.preferences.slice(-24);
@@ -71,4 +83,5 @@ export class InMemoryRelationshipStore implements RelationshipStore {
     return [...this.states.values()].filter((s) => { const due = nextDue(s); return due && due <= now.toISOString(); }).sort((a,b) => nextDue(a)!.localeCompare(nextDue(b)!)).slice(0, limit).map((s) => structuredClone(s.key));
   }
   async keysForPersona(personaId: string): Promise<RelationshipKey[]> { await this.queue; return [...this.states.values()].filter((s) => s.key.personaId === personaId).map((s) => structuredClone(s.key)); }
+  async keysForAccount(accountId: string): Promise<RelationshipKey[]> { await this.queue; return [...this.states.values()].filter((s) => s.key.scope?.accountId === accountId).map((s) => structuredClone(s.key)); }
 }

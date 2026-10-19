@@ -1,8 +1,13 @@
 import type { GroundedTiming, TimingProposal } from './temporal';
+import type { RelationshipSource } from '../adaptive/relationships/contracts';
 /** Relationship data is scoped conversational state, never administrative configuration. */
 export type RelationshipMode = 'off' | 'shadow' | 'live';
 export type Audience = { kind: 'private'; personId: string } | { kind: 'group'; groupId: string };
-export interface RelationshipKey { personaId: string; chatKey: string; audience: Audience }
+export interface RelationshipScope {
+  schemaVersion: 1; accountId: string; personId: string; bindingId: string; tenantId: string;
+  space: 'work' | 'personal'; spaceId: string; containerId: string;
+}
+export interface RelationshipKey { personaId: string; chatKey: string; audience: Audience; scope?: RelationshipScope }
 /** Supplied only from the latest audience-authorized assistant turn, never persisted here. */
 export interface PreviousAssistant { text: string; at: Date; intentionId?: string }
 export interface TurnInput extends RelationshipKey {
@@ -10,6 +15,9 @@ export interface TurnInput extends RelationshipKey {
   previousAssistant?: PreviousAssistant;
   /** Relationship epoch captured before reading the authorized assistant history. */
   contextEpoch?: number;
+  authorizationFingerprint?: string;
+  /** Receipt only; current source authority always comes from the adaptive ledger. */
+  sourceReceipt?: RelationshipSource;
 }
 export interface Preference { key: string; value: string; sourceId: string; sourceIds?: string[]; updatedAt: string }
 export interface Situation { topic: string; summary: string; status: 'open' | 'closed'; sourceIds: string[]; updatedAt: string; timing?: GroundedTiming }
@@ -19,6 +27,8 @@ export interface Intention {
   sourceAt?: string; dueAt: string; expiresAt: string; status: IntentionStatus; revision: number;
   timing?: GroundedTiming;
   leaseOwner?: string; leaseUntil?: string; attempts: number; messageId?: string; reason?: string;
+  /** Transient permit captured by a worker; never grants authority by itself. */
+  authorizationFingerprint?: string;
 }
 export type FeedbackOutcome = 'helpful' | 'unwanted' | 'correction' | 'neutral';
 export type FeedbackScope = 'message' | 'topic' | 'global';

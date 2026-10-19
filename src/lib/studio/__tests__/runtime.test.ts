@@ -70,7 +70,7 @@ describe('Studio production initialization', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ ok: true, result: { id: 1, is_bot: true, username: 'VoxxBot', first_name: 'Voxx' } })));
     const studio = await getStudio();
     expect(studio.deps.adaptive).toBeDefined();
-    expect(studio.deps.relationships).toBeUndefined();
+    expect(studio.deps.relationships?.mode).toBe('off');
   });
 
   it('rejects a manager username that belongs to a different bot', async () => {

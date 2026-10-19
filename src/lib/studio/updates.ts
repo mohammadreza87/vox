@@ -45,8 +45,9 @@ export async function handleManagerUpdate(studio: Studio, update: TelegramUpdate
  *    admins; org: every member); for public agents also anyone else, after the
  *    agent decides in character whether to answer, decline, ignore or block.
  */
-export async function handleAgentUpdate(studio: Studio, agentId: string, update: TelegramUpdate): Promise<void> {
-  const initial = await studio.gateway();
+export async function handleAgentUpdate(studio: Studio, agentId: string, update: TelegramUpdate, endpointId?: string): Promise<void> {
+  const endpoint = endpointId ? { personaId: agentId, id: endpointId } : undefined;
+  const initial = await studio.gateway(endpoint);
   const state = initial.state;
   let gateway = initial.gateway;
   const live = state.agents.find((a) => a.id === agentId);
@@ -73,7 +74,7 @@ export async function handleAgentUpdate(studio: Studio, agentId: string, update:
     await studio.verifyGroupAudience(agentId, msg.chat.id);
     // Rebuild when the speaker is new to the group so they count in its audience right away.
     await studio.noteGroupSpeaker(msg.chat.id, msg.from);
-    ({ gateway } = await studio.gateway());
+    ({ gateway } = await studio.gateway(endpoint));
     await gateway.handleUpdate(agentId, update);
     return;
   }
@@ -105,7 +106,7 @@ export async function handleAgentUpdate(studio: Studio, agentId: string, update:
     await bot.sendMessage(msg.chat.id, `I've enjoyed talking, but I need a break. Let's pick this up tomorrow.`);
     return;
   }
-  ({ gateway } = await studio.gateway());
+  ({ gateway } = await studio.gateway(endpoint));
   const text = msg.text ?? msg.caption ?? '';
   if (text.startsWith('/') || (!text && msg.voice)) {
     // Commands (/start, /memories…) and voice notes go straight through; the gateway handles them.

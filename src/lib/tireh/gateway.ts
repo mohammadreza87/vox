@@ -11,6 +11,7 @@
 
 import { createHash, randomUUID } from 'crypto';
 import { parseExplicitControl, type RelationshipLoop, type RelationshipKey } from '../relationships';
+import type { AdaptiveRelationshipService } from '../adaptive/relationships/service';
 import { streamText, type LLM, type WebSource } from './llm';
 import { explicitReplyFormat, readTriage, TRIAGE_TIMEOUT_MS, triageInput, triageQuestions, type Decider, type Triage } from './triage';
 import type { OrgDirectory } from './org/directory';
@@ -65,7 +66,10 @@ export interface GatewayDeps {
   /** Fast pre-reply triage (see triage.ts); without it every reply takes the full path */
   decider?: Decider;
   relationships?: RelationshipLoop;
-  relationshipEnabled?: (personaId: string, personId: string) => boolean | Promise<boolean>;
+  relationshipAuthority?: AdaptiveRelationshipService;
+  /** Trusted transport provenance for this inbound update; never supplied by message text. */
+  relationshipEndpoint?: { personaId: string; id: string };
+  relationshipEnabled?: (personaId: string, personId: string, space?: 'work' | 'personal') => boolean | Promise<boolean>;
   beforeSend?: (personaId: string, chat: ChatContext) => Promise<void>;
   memories: MemoryStore;
   offers: ShareOfferStore;
@@ -110,13 +114,15 @@ export class PersonaGateway {
       ? { kind: 'private', personId: chat.personId } : { kind: 'group', groupId: chat.group.id } };
   }
 
-  private async canFollowUp(personaId: string, chat: ChatContext): Promise<boolean> {
-    if (this.deps.runtimePrivacy || chat.kind !== 'private' || this.deps.relationships?.mode !== 'live') return false;
-    try { return await this.deps.relationshipEnabled?.(personaId, chat.personId) !== false; }
+  private async canFollowUp(personaId: string, chat: ChatContext, space: 'work' | 'personal' = 'work'): Promise<boolean> {
+    if ((this.deps.runtimePrivacy && !this.deps.relationshipAuthority) || chat.kind !== 'private' || this.deps.relationships?.mode !== 'live') return false;
+    try { return await this.deps.relationshipEnabled?.(personaId, chat.personId, space) !== false; }
     catch { return false; }
   }
 
   private async relationshipContext(personaId: string, chat: ChatContext): Promise<string> {
+    // Scoped context is part of RuntimePrivacy's versioned context snapshot.
+    if (this.deps.runtimePrivacy) return '';
     // Group working state needs audience-version provenance before it can affect replies.
     if (!await this.canFollowUp(personaId, chat) || !this.deps.relationships) return '';
     const context = await this.deps.relationships.context(this.relationshipKey(personaId, chat));
@@ -125,9 +131,43 @@ export class PersonaGateway {
 Follow-up capability: This agent can initiate a considerate check-in in this private conversation when the relationship system judges it useful and the person's contact settings allow it. Do not falsely say you can never reach out first. A possible check-in is reconsidered later, so do not guarantee a message or an exact delivery time. Pauses, stops, quiet hours and changed circumstances take priority.`;
   }
 
-  private async observeRelationship(personaId: string, chat: ChatContext, speakerId: string, text: string, eventId: string, source: 'telegram' | 'call', at = this.now()) {
-    if (this.deps.runtimePrivacy || !this.deps.relationships || chat.kind !== 'private') return;
+  private async observeRelationship(personaId: string, chat: ChatContext, speakerId: string, text: string, eventId: string, source: 'telegram' | 'call', at = this.now(), space: 'work' | 'personal' = 'work') {
+    if (!this.deps.relationships || chat.kind !== 'private') return;
     try {
+      if (this.deps.runtimePrivacy) {
+        const authority = this.deps.relationshipAuthority;
+        const match = /^tg-([1-9]\d*)$/.exec(speakerId);
+        if (!authority || !match) return;
+        const telegramId = Number(match[1]);
+        const command = parseExplicitControl(text);
+        // A stop must still work after a purpose expires or the pilot is disabled.
+        if (command) {
+          const until = command === 'pause' ? new Date(this.now().getTime() + 7 * 86_400_000) : undefined;
+          await authority.control(telegramId, personaId, space, command, until?.getTime());
+          for (const key of await this.deps.relationships.deps.store.keysForPersona(personaId)) {
+            if (key.scope?.accountId === `telegram-account:${telegramId}` && key.scope.space === space) {
+              await this.deps.relationships.control(key, command, { until });
+            }
+          }
+          return;
+        }
+        if (NO_MEMORY.test(text) || this.deps.relationships.mode !== 'live') return;
+        if (await this.deps.relationshipEnabled?.(personaId, speakerId, space) === false) return;
+        const permit = await authority.resolve(telegramId, personaId, space);
+        if (!permit) return;
+        const endpointId = source === 'telegram' && this.deps.relationshipEndpoint?.personaId === personaId ? this.deps.relationshipEndpoint.id : undefined;
+        const receipt = await authority.acceptSource(permit, { id: eventId, at: at.getTime(), channel: source, ...(endpointId ? { endpointId } : {}) });
+        if (!receipt) return;
+        if (permit.notification.timezone) {
+          const state = await this.deps.relationships.deps.store.read(permit.key);
+          const quietHours = { start: permit.notification.quietStartHour, end: permit.notification.quietEndHour };
+          if (state.timeZone !== permit.notification.timezone || state.quietHours?.start !== quietHours.start || state.quietHours?.end !== quietHours.end)
+            await this.deps.relationships.configure(permit.key, { timeZone: permit.notification.timezone, quietHours });
+        }
+        await this.deps.relationships.observeTurn({ ...permit.key, eventId, speakerId: permit.key.audience.kind === 'private' ? permit.key.audience.personId : '',
+          text, source, at, authorizationFingerprint: permit.fingerprint, sourceReceipt: receipt });
+        return;
+      }
       if (await this.deps.relationshipEnabled?.(personaId, speakerId) === false) return;
       const key = this.relationshipKey(personaId, chat);
       if (this.deps.relationships.mode === 'off') return;
@@ -142,11 +182,19 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
         ? { text: previous.text, at: previous.at, intentionId: previous.relationshipIntentionId } : undefined;
       await this.deps.relationships.observeTurn({ ...key, eventId, speakerId, text, source, at, contextEpoch, previousAssistant });
     }
-    catch { this.log.warn('[tireh] relationship observation unavailable'); }
+    catch (error) {
+      if (parseExplicitControl(text) || (error && typeof error === 'object' && 'code' in error && error.code === 'relationship_control_unconfirmed')) throw error;
+      this.log.warn('[tireh] relationship observation unavailable');
+    }
   }
 
   /** All channels share this deletion path; never let an LLM merely promise a forget. */
-  private async forgetOwnedContext(personaId: string, speakerId: string): Promise<string> {
+  private async forgetOwnedContext(personaId: string, speakerId: string, space: 'work' | 'personal' = 'work'): Promise<string> {
+    if (this.deps.runtimePrivacy && this.deps.relationshipAuthority) {
+      const match = /^tg-([1-9]\d*)$/.exec(speakerId);
+      if (match) await this.deps.relationshipAuthority.invalidate(Number(match[1]), space, { agentId: personaId, reason: 'owner_forget_all' });
+      return 'I cleared the automatic relationship context in this space. Saved Private and Shared notes have separate deletion controls. Messages already delivered remain there.';
+    }
     // Fence old generation/extraction before inspecting source records.
     await this.deps.history.clearPersona(personaId);
     await this.deps.relationships?.invalidatePersona(personaId, { reason: 'owner_forget_all' });
@@ -277,7 +325,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     const sourceAt = Number.isSafeInteger(message.date) && message.date > 0 && message.date * 1000 <= receivedAt.getTime() + 300_000
       ? new Date(message.date * 1000) : receivedAt;
     const privacyEpoch = await this.deps.history.getEpoch(persona.id);
-    const boundary = await this.boundary(persona, chat, speaker.id);
+    let boundary = await this.boundary(persona, chat, speaker.id);
     if (!boundary.audienceValid) return 'ignored';
     const userMessage: ChatMessage = {
       role: 'user', personId: speaker.id, text, at: sourceAt, telegramMessageId: message.message_id,
@@ -286,7 +334,8 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     if (!(await this.groupAllowed(persona, chat, speaker.id, addressed ? 'reply' : 'observe'))) return 'ignored';
     userMessage.privacy = this.stamp(boundary, [randomUUID()]);
     await this.retain(persona, chat, speaker.id, userMessage, boundary);
-    await this.observeRelationship(persona.id, chat, speaker.id, text, `telegram:${message.chat.id}:${message.message_id}`, 'telegram', sourceAt);
+    await this.observeRelationship(persona.id, chat, speaker.id, text, `telegram:${this.deps.relationshipEndpoint?.personaId === persona.id ? `${this.deps.relationshipEndpoint.id}:` : ''}${message.chat.id}:${message.message_id}`, 'telegram', sourceAt);
+    if (this.deps.relationshipAuthority) boundary = await this.boundary(persona, chat, speaker.id);
 
     const askAddressed = !addressed && chat.kind === 'group' && !isVoice && !targeting.otherTarget
       && persona.groupParticipation !== 'mentions';
@@ -388,12 +437,13 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     const persona = this.deps.org.getPersona(personaId);
     if (!persona) throw new Error(`Unknown persona ${personaId}`);
     if (!this.deps.org.getPerson(speakerId)) throw new Error('Unknown speaker');
-    if (parseExplicitControl(text) === 'forget') return this.forgetOwnedContext(persona.id, speakerId);
+    if (parseExplicitControl(text) === 'forget') return this.forgetOwnedContext(persona.id, speakerId, options.space);
     const chat: ChatContext = { kind: 'private', chatKey: `private-${speakerId}`, personId: speakerId };
-    const boundary = await this.boundary(persona, chat, speakerId, options.space);
+    let boundary = await this.boundary(persona, chat, speakerId, options.space);
     const user: ChatMessage = { role: 'user', personId: speakerId, text, at: this.now(), privacy: this.stamp(boundary, [randomUUID()]) };
     await this.retain(persona, chat, speakerId, user, boundary);
-    await this.observeRelationship(persona.id, chat, speakerId, text, `call:${randomUUID()}`, 'call');
+    await this.observeRelationship(persona.id, chat, speakerId, text, `call:${randomUUID()}`, 'call', this.now(), boundary.space);
+    if (this.deps.relationshipAuthority) boundary = await this.boundary(persona, chat, speakerId, boundary.space);
     const reply = await this.generateReplyAt(persona, chat, speakerId, text, boundary);
     if (!(await this.unchanged(persona, chat, speakerId, boundary))) return this.changedReply;
     const assistant: ChatMessage = { role: 'assistant', text: reply, at: this.now(), privacy: this.stamp(boundary, user.privacy!.sourceEventIds) };
@@ -489,22 +539,23 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     const said = [...turns].reverse().find(t => t.role === 'user')?.content.trim() ?? '';
     if (!said) return;
     if (parseExplicitControl(said) === 'forget') {
-      yield await this.forgetOwnedContext(persona.id, speakerId);
+      yield await this.forgetOwnedContext(persona.id, speakerId, options.space);
       return;
     }
-    const boundary = await this.boundary(persona, chat, speakerId, options.space);
+    let boundary = await this.boundary(persona, chat, speakerId, options.space);
     if (!boundary.audienceValid) return;
     const user: ChatMessage = { role: 'user', personId: speakerId, text: said, at: this.now(), privacy: this.stamp(boundary, [randomUUID()]) };
     const recent = await this.historyAt(persona, chat, boundary, HISTORY_LIMIT);
     if (!(recent.at(-1)?.role === 'user' && recent.at(-1)?.text === said)) {
       await this.retain(persona, chat, speakerId, user, boundary);
-      await this.observeRelationship(persona.id, chat, speakerId, said, `live:${createHash('sha256').update(JSON.stringify(turns)).digest('hex')}`, 'call');
+      await this.observeRelationship(persona.id, chat, speakerId, said, `live:${createHash('sha256').update(JSON.stringify(turns)).digest('hex')}`, 'call', this.now(), boundary.space);
+      if (this.deps.relationshipAuthority) boundary = await this.boundary(persona, chat, speakerId, boundary.space);
     }
     const all = boundary.memoryEnabled ? await this.deps.memories.listActive(persona.id) : [];
     const memories = selectMemories(org, all, chat, { query: said, now: this.now() });
     boundary.memorySources = [...new Set(memories.flatMap(lineageEventIds))];
     boundary.memoryIds = memories.map(m => m.id);
-    const system = `${buildSystemPrompt({ org, persona: { ...persona, webSearch: false }, chat, speakerId, memories, space: boundary.space, canFollowUp: await this.canFollowUp(persona.id, chat), now: this.now() })}
+    const system = `${buildSystemPrompt({ org, persona: { ...persona, webSearch: false }, chat, speakerId, memories, space: boundary.space, canFollowUp: await this.canFollowUp(persona.id, chat, boundary.space), followUpChannel: this.deps.relationshipAuthority ? 'inbox' : 'chat', now: this.now() })}
 ${await this.relationshipContext(persona.id, chat)}
 
 ## Live voice call
@@ -627,7 +678,7 @@ You are on a live voice call. Answer in one to three short spoken sentences. No 
     const memories = selectMemories(org, all, chat, { query: text, now: this.now() });
     boundary.memorySources = [...new Set(memories.flatMap(lineageEventIds))];
     boundary.memoryIds = memories.map(m => m.id);
-    const system = buildSystemPrompt({ org, space: boundary.space, persona: { ...persona, webSearch: search }, chat, speakerId, memories, now: this.now(), canFollowUp: await this.canFollowUp(persona.id, chat), canSpeak: this.canSpeak(persona), replyFormat })
+    const system = buildSystemPrompt({ org, space: boundary.space, persona: { ...persona, webSearch: search }, chat, speakerId, memories, now: this.now(), canFollowUp: await this.canFollowUp(persona.id, chat, boundary.space), followUpChannel: this.deps.relationshipAuthority ? 'inbox' : 'chat', canSpeak: this.canSpeak(persona), replyFormat })
       + `\n${await this.relationshipContext(persona.id, chat)}`
       + (action === 'proactive' ? '\n\nYou are joining a group conversation selectively. Make one brief, natural contribution in character. Do not repeat recent replies or demand attention; one to three sentences is enough.' : '');
 
@@ -968,7 +1019,9 @@ You are on a live voice call. Answer in one to three short spoken sentences. No 
           return true;
         }
         const action = command.slice(1) as 'pause' | 'resume' | 'stop';
-        await this.deps.relationships?.control(this.relationshipKey(persona.id, chat), action,
+        if (this.deps.runtimePrivacy && this.deps.relationshipAuthority) {
+          await this.observeRelationship(persona.id, chat, speakerId, command, `control:${message.message_id}`, 'telegram');
+        } else await this.deps.relationships?.control(this.relationshipKey(persona.id, chat), action,
           action === 'pause' ? { until: new Date(this.now().getTime() + 7 * 86_400_000) } : undefined);
         await bot.sendMessage(message.chat.id, action === 'resume' ? 'Check-ins can resume when something is worth revisiting.' :
           action === 'pause' ? 'Check-ins are paused for a week. You can still talk with me whenever you like.' : 'I will stop initiating check-ins. Send /resume if you change your mind.');

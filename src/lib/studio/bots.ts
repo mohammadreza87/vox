@@ -79,7 +79,7 @@ export function startBots(studio: Studio): { stop: () => void } {
         if (current) { current.stop(); loops.delete(agent.id); }
         if (!token) continue;
         const bot = studio.deps.botFor(token);
-        loops.set(agent.id, { ...pollLoop(`@${agent.bot?.username}`, bot, AGENT_UPDATES, (update) => handleAgentUpdate(studio, agent.id, update), log), token });
+        loops.set(agent.id, { ...pollLoop(`@${agent.bot?.username}`, bot, AGENT_UPDATES, (update) => handleAgentUpdate(studio, agent.id, update, studio.relationshipEndpointId(token)), log), token });
         log.info(`[studio] ${agent.persona.name} online as @${agent.bot?.username}`);
       }
       // Repairs legacy photos without delaying new/fired bot polling changes.

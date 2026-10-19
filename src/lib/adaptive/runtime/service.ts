@@ -171,7 +171,8 @@ export class AdaptiveExperienceService {
       }
       const settings = d.experience.settings, selected = settings[input.space];
       const quiet = isSelectedTimezone(settings.timezone) && isQuietHour(now, settings.timezone, settings.quietStartHour, settings.quietEndHour);
-      const budget = d.experience.inbox.filter(i => i.category === 'proactive' && i.createdAt > now - DAY).length;
+      const budget = d.experience.inbox.filter(i => i.category === 'proactive' && i.createdAt > now - DAY).length +
+        d.relationships.ledger.filter(e => e.at > now - DAY).length;
       if (proactive && selected.inboxEnabled && selected.proactiveEnabled && input.status === 'failed' && !quiet && budget < settings.dailyCap && d.experience.inbox.length < 100) {
         const grant = d.agentGrants.find(g => g.space === input.space && g.agentId === input.agentId && g.allowed)!;
         d.experience.inbox.push({ id: randomUUID(), revision: 1, space: input.space, agentId: input.agentId, category: 'proactive', kind: 'reply_failed',
