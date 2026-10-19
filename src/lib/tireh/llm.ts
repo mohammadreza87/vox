@@ -32,6 +32,14 @@ export interface LLM {
    * Optional: providers without web search simply don't implement it.
    */
   completeWithWeb?(request: LLMRequest & { maxSearches: number }): Promise<{ text: string; sources: WebSource[] }>;
+  /** Text as it is generated, for live voice. Optional: callers fall back to `complete`. */
+  stream?(request: LLMRequest): AsyncIterable<string>;
+}
+
+/** Streams when the provider can, else yields the whole reply at once. */
+export async function* streamText(llm: LLM, request: LLMRequest): AsyncIterable<string> {
+  if (llm.stream) yield* llm.stream(request);
+  else yield await llm.complete(request);
 }
 
 /** Models require alternating turns starting with the user; merge and trim. */
@@ -103,6 +111,14 @@ export class AnthropicLLM implements LLM {
       .flatMap((block) => (block.type === 'text' ? [block.text] : []))
       .join('')
       .trim();
+  }
+
+  async *stream(request: LLMRequest): AsyncIterable<string> {
+    this.client ??= new Anthropic({ apiKey: this.apiKey });
+    const stream = this.client.messages.stream({ ...this.params(request), messages: normalizeTurns(request.messages) });
+    for await (const event of stream) {
+      if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') yield event.delta.text;
+    }
   }
 
   async completeWithWeb(request: LLMRequest & { maxSearches: number }): Promise<{ text: string; sources: WebSource[] }> {

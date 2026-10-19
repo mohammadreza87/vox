@@ -118,6 +118,11 @@ export function fakeEleven() {
     searchLibrary: vi.fn(async () => []),
     addLibraryVoice: vi.fn(async () => 'voice-library'),
     speak: vi.fn(async () => Buffer.from('spoken-mp3')),
+    transcribe: vi.fn(async () => 'heard by scribe'),
+    createSecret: vi.fn(async () => 'secret-1'),
+    createAgent: vi.fn(async () => 'agent-xi-1'),
+    updateAgent: vi.fn(async () => undefined),
+    signedUrl: vi.fn(async () => 'wss://api.elevenlabs.io/v1/convai/conversation?signed=1'),
   };
 }
 

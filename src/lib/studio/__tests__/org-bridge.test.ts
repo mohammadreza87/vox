@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { defaultVoiceId } from '../media';
 import { agentToPersona, groupId, personId, studioToOrg, studioToOrgConfig } from '../org-bridge';
 import type { Agent, StudioState } from '../types';
 import { fakeMember, ID, personaSpec, T0 } from './helpers';
@@ -48,7 +49,9 @@ describe('studio → runtime org', () => {
 
   it('maps persona identity, voice and voice-reply policy', () => {
     const silent = agentToPersona(agent({}), 'o');
-    expect(silent).toMatchObject({ name: 'Nova', identityVersion: 3, telegramUsername: 'hoor_nova_bot', replyWithVoice: 'never' });
+    // No designed voice: voice messages are still answered, with a default voice.
+    expect(silent).toMatchObject({ name: 'Nova', identityVersion: 3, telegramUsername: 'hoor_nova_bot', replyWithVoice: 'mirror' });
+    expect(silent.voice.elevenLabsVoiceId).toBe(defaultVoiceId(agent({}).persona.presentation));
     const voiced = agentToPersona(agent({ voice: { provider: 'elevenlabs', voiceId: 'v9', label: 'l', source: 'design' } }), 'o');
     expect(voiced.voice.elevenLabsVoiceId).toBe('v9');
     expect(voiced.replyWithVoice).toBe('mirror');

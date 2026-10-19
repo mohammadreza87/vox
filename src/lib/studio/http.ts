@@ -116,18 +116,18 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
 
     if (root === 'me' && method === 'GET') {
       return json({ member: me, org: studio.deps.orgName, bot: studio.deps.managerUsername, features: {
-        avatars: !!studio.deps.openai, voices: !!studio.deps.eleven, calls: !!studio.deps.openai,
+        avatars: !!studio.deps.openai, voices: !!studio.deps.eleven, calls: !!studio.deps.openai || !!studio.deps.eleven, liveCalls: studio.liveCalls,
       } });
     }
     if (me.role === 'pending') throw new StudioError(403, 'Waiting for an admin to approve you.');
 
     if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) await limiter.consume('mutation', me.telegramId);
-    const generation = root === 'agents' && method === 'POST' && (!id || ['refine', 'avatars', 'voice', 'speak', 'test', 'call'].includes(action));
+    const generation = root === 'agents' && method === 'POST' && (!id || ['refine', 'avatars', 'voice', 'speak', 'test', 'call', 'live-call'].includes(action));
     const voiceSearch = root === 'voices' && method === 'GET';
     if (generation || voiceSearch) await limiter.consume('expensive', me.telegramId);
     if (generation && action === 'avatars') await limiter.consume('avatar', me.telegramId);
     if (voiceSearch || (generation && ['voice', 'speak'].includes(action))) await limiter.consume('voice', me.telegramId);
-    if (generation && ['call', 'test'].includes(action)) await limiter.consume('call', me.telegramId);
+    if (generation && ['call', 'test', 'live-call'].includes(action)) await limiter.consume('call', me.telegramId);
     req = await boundedStudioRequest(req);
 
     if (root === 'members') {
@@ -206,6 +206,8 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
             const b = await body(req);
             return json({ agent: await studio.setVisibility(me, id, str(b.visibility, 10) as AgentVisibility) });
           }
+          case 'POST live-call': return json(await studio.startLiveCall(me, id));
+          case 'POST call-end': await studio.endLiveCall(me, id); return json({ ok: true });
           case 'PUT live-web': return json({ agent: await studio.setLiveWeb(me, id, (await body(req)).on === true) });
           case 'POST profile-sync': return json(await studio.syncProfile(me, id));
           case 'DELETE blocked': {

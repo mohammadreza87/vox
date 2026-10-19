@@ -5,6 +5,7 @@
 
 import { OrgDirectory } from '../tireh/org/directory';
 import type { Group, OrgConfig, Person, Persona } from '../tireh/types';
+import { defaultVoiceId } from './media';
 import { personaToRuntime } from './persona';
 import type { Agent, Member, StudioGroup, StudioState } from './types';
 
@@ -31,11 +32,12 @@ export function agentToPersona(agent: Agent, ownerId: string, { webSearch = true
     personality: runtime.personality,
     communicationStyle: runtime.communicationStyle,
     values: runtime.values,
-    voice: { elevenLabsVoiceId: agent.voice?.voiceId ?? '', description: agent.persona.voiceBrief },
+    voice: { elevenLabsVoiceId: agent.voice?.voiceId ?? defaultVoiceId(agent.persona.presentation), description: agent.persona.voiceBrief },
     ownerId,
     telegramUsername: agent.bot?.username,
     identityVersion: agent.identityVersion,
-    replyWithVoice: agent.voice ? 'mirror' : 'never',
+    // Voice messages get voice replies; agents without a designed voice use a default one.
+    replyWithVoice: 'mirror',
     webSearch: webSearch && agent.liveWeb !== false,
   };
 }

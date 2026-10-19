@@ -127,3 +127,57 @@ describe('StudioVoiceService', () => {
     await expect(voice.synthesize('x', 'v')).rejects.toThrow('ELEVENLABS_API_KEY');
   });
 });
+
+describe('OpenAI Decisions', () => {
+  it('asks all questions in one request and keeps only well-formed answers', async () => {
+    const fetchFn = fakeFetch({ json: { answers: [
+      { type: 'choice', name: 'effort', choice: 'quick', confidence: 0.8, probabilities: [] },
+      { type: 'predicate', name: 'live_info', probability: 0.1 },
+      { type: 'refusal', name: 'memorable' },
+    ] } });
+    const media = new OpenAIMedia('sk-test', fetchFn, 'gpt-image-1', 'stt', 'decider-model');
+    const out = await media.decide('Bob: thanks!', [{ type: 'predicate', name: 'live_info', instructions: 'x' }], 1500);
+    expect(out).toEqual({ effort: { type: 'choice', choice: 'quick', confidence: 0.8 }, live_info: { type: 'predicate', probability: 0.1 } });
+    const [url, init] = fetchFn.mock.calls[0];
+    expect(url).toBe('https://api.openai.com/v1/decisions');
+    expect(JSON.parse(String(init?.body))).toEqual({ model: 'decider-model', input: 'Bob: thanks!', questions: [{ type: 'predicate', name: 'live_info', instructions: 'x' }] });
+    expect(init?.signal).toBeInstanceOf(AbortSignal);
+    await expect(new OpenAIMedia('sk', fakeFetch({ status: 403 })).decide('x', [])).rejects.toThrow('HTTP 403');
+  });
+});
+
+describe('ElevenLabs speech-to-text and live-call agents', () => {
+  it('transcribes with Scribe', async () => {
+    const fetchFn = fakeFetch({ json: { text: ' salam ', language_code: 'fas' } });
+    expect(await new ElevenLabsStudio('xi', fetchFn).transcribe(new ArrayBuffer(8), 'audio/ogg')).toBe('salam');
+    const [url, init] = fetchFn.mock.calls[0];
+    expect(url).toBe('https://api.elevenlabs.io/v1/speech-to-text');
+    const form = init?.body as FormData;
+    expect(form.get('model_id')).toBe('scribe_v1');
+    expect((form.get('file') as File).name).toBe('voice.ogg');
+  });
+
+  it('voice messages fall back to ElevenLabs when OpenAI is missing or fails', async () => {
+    const eleven = { transcribe: vi.fn(async () => 'from scribe') } as unknown as ElevenLabsStudio;
+    expect(await new StudioVoiceService(null, eleven).transcribe(new ArrayBuffer(1))).toBe('from scribe');
+    const broken = { transcribe: vi.fn(async () => { throw new Error('quota'); }) } as unknown as OpenAIMedia;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    expect(await new StudioVoiceService(broken, eleven).transcribe(new ArrayBuffer(1))).toBe('from scribe');
+    warn.mockRestore();
+    await expect(new StudioVoiceService(null, null).transcribe(new ArrayBuffer(1))).rejects.toThrow('ELEVENLABS_API_KEY');
+  });
+
+  it('creates the call agent with our LLM, Flash voices and per-call overrides, and explains refusals', async () => {
+    const fetchFn = fakeFetch({ json: { secret_id: 's1' } }, { json: { agent_id: 'a1' } }, { json: { signed_url: 'wss://x' } }, { status: 401, json: { detail: { status: 'missing_permissions', message: 'convai_write' } } });
+    const xi = new ElevenLabsStudio('xi', fetchFn);
+    expect(await xi.createSecret('n', 'v')).toBe('s1');
+    expect(await xi.createAgent({ name: 'HOOR calls', llmUrl: 'https://vox.example/api/studio/voice-llm', llmSecretId: 's1', maxCallSeconds: 900 })).toBe('a1');
+    const body = JSON.parse(String(fetchFn.mock.calls[1][1]?.body));
+    expect(body.conversation_config.agent.prompt).toMatchObject({ llm: 'custom-llm', custom_llm: { url: 'https://vox.example/api/studio/voice-llm', api_key: { secret_id: 's1' } } });
+    expect(body.conversation_config.tts.model_id).toBe('eleven_flash_v2_5');
+    expect(body.platform_settings.overrides.conversation_config_override).toEqual({ agent: { first_message: true, language: true }, tts: { voice_id: true } });
+    expect(await xi.signedUrl('a1')).toBe('wss://x');
+    expect(fetchFn.mock.calls[2][0]).toBe('https://api.elevenlabs.io/v1/convai/conversation/get-signed-url?agent_id=a1');
+    await expect(xi.updateAgent('a1', { name: 'n', llmUrl: 'u', llmSecretId: 's', maxCallSeconds: 1 })).rejects.toThrow(/HTTP 401.*missing_permissions/);
+  });
+});

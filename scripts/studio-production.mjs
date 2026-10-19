@@ -15,7 +15,7 @@ const envFile = join(base, 'production.env');
 const label = 'io.ludaxis.vox-studio';
 const domain = `gui/${process.getuid()}`;
 const plist = join(homedir(), 'Library', 'LaunchAgents', `${label}.plist`);
-const keys = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'ELEVENLABS_API_KEY', 'VOXX_BOT_TOKEN', 'VOXX_BOT_USERNAME', 'STUDIO_SECRET', 'STUDIO_SUPERADMIN_IDS', 'STUDIO_WEBAPP_URL', 'STUDIO_DATA_DIR', 'STUDIO_ORG_NAME', 'STUDIO_CHAT_MODEL', 'STUDIO_PERSONA_MODEL'];
+const keys = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'ELEVENLABS_API_KEY', 'VOXX_BOT_TOKEN', 'VOXX_BOT_USERNAME', 'STUDIO_SECRET', 'STUDIO_SUPERADMIN_IDS', 'STUDIO_WEBAPP_URL', 'STUDIO_DATA_DIR', 'STUDIO_ORG_NAME', 'STUDIO_CHAT_MODEL', 'STUDIO_VOICE_MODEL', 'STUDIO_PERSONA_MODEL', 'STUDIO_DECISIONS', 'OPENAI_DECISION_MODEL'];
 const readEnv = (file) => existsSync(file) ? parseEnv(readFileSync(file, 'utf8')) : {};
 const stamp = () => new Date().toISOString().replace(/[:.]/g, '-');
 function envLine(key, value) {
@@ -70,7 +70,7 @@ async function check() {
   const modelsResponse = await fetch('https://api.anthropic.com/v1/models?limit=100', { headers: { 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' }, signal: AbortSignal.timeout(15_000) }).catch(() => null);
   const models = modelsResponse?.ok ? await modelsResponse.json() : null;
   if (!models?.data) throw new Error('Anthropic authentication/model lookup failed.');
-  for (const model of [env.STUDIO_CHAT_MODEL || 'claude-haiku-5-5', env.STUDIO_PERSONA_MODEL || 'claude-sonnet-5-5']) {
+  for (const model of new Set([env.STUDIO_CHAT_MODEL || 'claude-sonnet-5-5', env.STUDIO_VOICE_MODEL || 'claude-haiku-5-5', env.STUDIO_PERSONA_MODEL || 'claude-sonnet-5-5'])) {
     if (!models.data.some(x => x.id === model)) throw new Error(`Anthropic model unavailable: ${model}`);
   }
   console.log(`✓ Telegram: @${bot.result.username}`);
@@ -91,6 +91,10 @@ async function check() {
       if (!ids.has(model)) throw new Error(`OpenAI model unavailable to this key: ${model}`);
     }
     console.log('✓ OpenAI: key valid, image and transcription models available');
+    // Reply triage uses the Decisions API; replies still work without it, just slower.
+    const decisions = env.STUDIO_DECISIONS === 'off' ? null : env.OPENAI_DECISION_MODEL || 'gpt-6-luna';
+    if (decisions && ids.has(decisions)) console.log(`✓ OpenAI Decisions: ${decisions} available for fast reply triage`);
+    else if (decisions) console.log(`  ! OpenAI Decisions model ${decisions} not available to this key (needs the Decisions permission): replies skip triage.`);
   } else console.log('– OpenAI: OPENAI_API_KEY absent (no avatars, no calls)');
   if (env.ELEVENLABS_API_KEY) {
     const headers = { 'xi-api-key': env.ELEVENLABS_API_KEY };
@@ -106,6 +110,10 @@ async function check() {
       console.log(`✓ ElevenLabs: key valid, ${tts} available, ${left.toLocaleString('en-US')} characters left this period`);
       if (left < 1000) console.log('  ! ElevenLabs is nearly out of characters: voice replies will fail soon.');
     } else console.log(`✓ ElevenLabs: key valid, ${tts} available (subscription details not readable with this key)`);
+    // Live calls create and use an ElevenLabs agent: the key needs the Agents permission.
+    const agents = await fetch('https://api.elevenlabs.io/v1/convai/agents?page_size=1', { headers, signal: AbortSignal.timeout(15_000) }).catch(() => null);
+    if (agents?.ok) console.log('✓ ElevenLabs Agents: available for live calls');
+    else console.log(`  ! ElevenLabs Agents not accessible${agents ? ` (HTTP ${agents.status})` : ''}: give the key the "ElevenLabs Agents" permission for live calls.`);
   } else console.log('– ElevenLabs: ELEVENLABS_API_KEY absent (no voices)');
   console.log(`Preflight passed for @${bot.result.username} at ${url.origin}/studio.`);
   return env;

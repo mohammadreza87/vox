@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { MemoryRecord, MemoryScope } from '../../tireh/types';
 import { groupText } from '../../tireh/__tests__/fixtures';
 import { decryptSecret } from '../crypto';
+import { defaultVoiceId } from '../media';
 import { groupId, personId } from '../org-bridge';
 import { StudioError } from '../service';
 import { draftJson, fakeMember, hire, ID, makeStudio, personaSpec, SECRET, seedOrg, T0, type Harness } from './helpers';
@@ -754,20 +755,25 @@ describe('calls', () => {
     expect(memories[0].scope).toEqual({ kind: 'private', personId: personId(ID.alice) });
   });
 
-  it('no audio when the agent has no voice; empty transcript means no reply', async () => {
+  it('an agent without a designed voice speaks with a default one; empty transcript means no reply', async () => {
     const { agent } = await hire(h, org.alice);
     const r = await h.studio.callTurn(org.bob, agent.id, new ArrayBuffer(4), 'audio/webm');
-    expect(r.audio).toBeUndefined();
+    expect(r.audio).toBe(Buffer.from('spoken-mp3').toString('base64'));
+    expect(h.eleven.speak).toHaveBeenLastCalledWith('Sure.', defaultVoiceId(agent.persona.presentation));
     expect(r.reply).toBe('Sure.');
     h.openai.transcribe.mockResolvedValueOnce('');
     expect(await h.studio.callTurn(org.bob, agent.id, new ArrayBuffer(4), 'audio/webm')).toEqual({ transcript: '', reply: '' });
   });
 
-  it('refuses callers who cannot use the agent, oversize audio, and missing OpenAI', async () => {
+  it('refuses callers who cannot use the agent, oversize audio, and no speech-to-text provider', async () => {
     const { agent } = await hire(h, org.alice);
     await expectStudioError(h.studio.callTurn(org.pending, agent.id, new ArrayBuffer(4), 'audio/webm'), 404);
     await expectStudioError(h.studio.callTurn(org.bob, agent.id, new ArrayBuffer(10 * 1024 * 1024 + 1), 'audio/webm'), 400);
-    const bare = makeStudio({ openai: false });
+    const elevenOnly = makeStudio({ openai: false });
+    const e = await seedOrg(elevenOnly);
+    const withScribe = await hire(elevenOnly, e.alice);
+    expect((await elevenOnly.studio.callTurn(e.alice, withScribe.agent.id, new ArrayBuffer(4), 'audio/webm')).transcript).toBe('heard by scribe');
+    const bare = makeStudio({ openai: false, eleven: false });
     const o = await seedOrg(bare);
     const hired = await hire(bare, o.alice);
     await expectStudioError(bare.studio.callTurn(o.alice, hired.agent.id, new ArrayBuffer(4), 'audio/webm'), 503);
