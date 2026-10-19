@@ -3,17 +3,17 @@ import type { AdaptiveService } from '../../persistence/service';
 import { emptyLearning, LEARNING_TTL, type LearningIntent } from './contracts';
 type Scope = { space: SpaceKind; agentId: string };
 export function learningStudioFingerprint(adaptive: AdaptiveService, raw: string | null): string | null {
-  return raw && adaptive.repository.storage.indexed ? digest([raw, adaptive.storeIdentity]) : raw;
+  return raw && adaptive.storeIdentity !== 'canonical' ? digest([raw, adaptive.storeIdentity]) : raw;
 }
 export function learningAuthority(adaptive: AdaptiveService, d: AdaptiveAuthorityDocument, scope: Scope, now: number) {
   if (!adaptive.isCoreAllowed(d, now) || !adaptive.isPurposeAllowed(d, scope.space, 'optional.personalization', now, scope.agentId)) return undefined;
   const permission = d.permissions.find(p => p.id === `permission:${scope.space}:optional.personalization`)!,
     grant = d.agentGrants.find(g => g.space === scope.space && g.agentId === scope.agentId && g.allowed)!;
-  if (adaptive.repository.storage.indexed && permission.effectiveAt > now) return undefined;
+  if (adaptive.storeIdentity !== 'canonical' && permission.effectiveAt > now) return undefined;
   return { personId: d.personId, bindingId: d.binding!.id, permissionRevision: permission.revision, consentEpoch: permission.epoch,
     grantRevision: grant.revision, expiresAt: Math.min(d.binding!.expiresAt, permission.expiresAt,
       adaptive.capabilityStatus(d, 'personalization', now).validUntil ?? now, adaptive.capabilityStatus(d, 'core_text', now).validUntil ?? now),
-    fingerprint: digest(adaptive.repository.storage.indexed
+    fingerprint: digest(adaptive.storeIdentity !== 'canonical'
       ? [adaptive.purposeFingerprint(d, scope.space, 'optional.personalization', now, scope.agentId), adaptive.coreFingerprint(d, now), adaptive.storeIdentity]
       : [adaptive.purposeFingerprint(d, scope.space, 'optional.personalization', now, scope.agentId), adaptive.coreFingerprint(d, now)]) };
 }

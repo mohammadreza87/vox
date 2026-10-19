@@ -55,8 +55,8 @@ export class AdaptiveRelationshipService {
       tenantId: tenantIdFor(d.accountId), space, spaceId: spaceIdFor(d.accountId, space), containerId: containerIdFor(d.accountId, space) };
     const key: RelationshipKey = { personaId: agentId, chatKey: `private-${d.personId}`, audience: { kind: 'private', personId: d.personId }, scope };
     const sourceAuthority = [scope, binding, this.adaptive.capabilityStatus(d, 'core_text', now), PURPOSES.map(p => [d.permissions.find(c => c.spaceId === scope.spaceId && c.purpose === p), this.adaptive.capabilityStatus(d, p === 'optional.auto_memory' ? 'auto_memory' : p === 'optional.personalization' ? 'personalization' : 'proactive_suggestions', now)]), d.agentGrants.filter(g => g.space === space && g.agentId === agentId)];
-    // Preserve legacy FILE hashes; indexed receipts cannot survive a new store incarnation.
-    const sourceFence = digest(this.adaptive.repository.storage.indexed ? [...sourceAuthority, this.adaptive.storeIdentity] : sourceAuthority);
+    // Preserve original FILE hashes; managed receipts bind each store incarnation.
+    const sourceFence = digest(this.adaptive.storeIdentity !== 'canonical' ? [...sourceAuthority, this.adaptive.storeIdentity] : sourceAuthority);
     const settings = d.experience.settings;
     const external = d.relationships.externalSettings;
     const fingerprint = digest([sourceFence, settings, external, d.relationships.controls.filter(c => c.agentId === agentId && c.space === space), [d.permissions.find(p => p.spaceId === scope.spaceId && p.purpose === 'optional.relationship_outreach'), this.adaptive.capabilityStatus(d, 'relationship_outreach', now)]]);
@@ -89,6 +89,29 @@ export class AdaptiveRelationshipService {
       this.adaptive.capabilityStatus(d, 'relationship_outreach', now).validUntil ?? now,
     ] : [];
     return { ...permit, expiresAt: Math.min(permit.expiresAt, ...sourceDeadlines, ...externalDeadlines) };
+  }
+  /** Current committed authority at the final synchronous transport boundary.
+   * FILE fallback reads committed controls; it never prunes or writes a draft. */
+  resolveNow(telegramId: number, agentId: string, space: SpaceKind): RelationshipPermit | null {
+    try {
+      const result = this.adaptive.readRuntimeControlsForEffect(telegramId, space, (d, now) => {
+        const value = this.permit(d, agentId, space, now);
+        return { value, denied: !value, ...(value ? { deadline: value.expiresAt } : {}) };
+      });
+      return result.status === 'ready' ? result.value : null;
+    } catch { return null; }
+  }
+  authorizeNow(key: RelationshipKey, sourceIds: readonly string[], phase: RelationshipPhase, expectedFingerprint?: string): RelationshipPermit | null {
+    const telegramId = telegramFor(key);
+    if (telegramId === null) return null;
+    try {
+      const space = scopedRelationshipKeySchema.parse(key).scope.space;
+      const result = this.adaptive.readRuntimeControlsForEffect(telegramId, space, (d, now) => {
+        const value = this.authorized(d, key, sourceIds, phase, now, expectedFingerprint);
+        return { value, denied: !value, ...(value ? { deadline: value.expiresAt } : {}) };
+      });
+      return result.status === 'ready' ? result.value : null;
+    } catch { return null; }
   }
   resolve(telegramId: number, agentId: string, space: SpaceKind): Promise<RelationshipPermit | null> {
     if (this.adaptive.repository.storage.indexed) return this.adaptive.withRuntimeControls(telegramId, space, (d, now) => {

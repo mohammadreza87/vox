@@ -187,18 +187,22 @@ export class PreferenceLearningService {
       const studio = this.studio(input.telegramId, input);
       const current = this.adaptive.readCommittedForEffect(input.telegramId, (d, now) => {
         const authority = this.state(d, input, now, studio);
-        return d.experience.preferenceLearning?.intents.some(i => i.space === input.space && i.agentId === input.agentId && i.studioFingerprint === studio && sameLearningAuthority(i, authority, now));
+        const intent = d.experience.preferenceLearning?.intents.find(i => i.space === input.space && i.agentId === input.agentId && i.studioFingerprint === studio && sameLearningAuthority(i, authority, now));
+        return intent ? { storeIdentity: this.adaptive.storeIdentity, fingerprint: authority.fingerprint, intentId: intent.id, intentRevision: intent.revision } : undefined;
       });
-      return current.status === 'ready' && current.value === true && this.tasks.enqueue(input, signal);
+      if (current.status !== 'ready' || !current.value) return false;
+      if (this.adaptive.storeIdentity === 'canonical') return this.tasks.enqueue(input, signal);
+      const retained: LearningTaskInput & { learningFence: LearningFence } = { ...input, turn: { ...input.turn }, learningFence: current.value };
+      return this.tasks.enqueue(retained, signal);
     } catch { return false; }
   }
   private opaque(domain: string, value: unknown): string { return createHmac('sha256', this.options.secret).update(`${domain}:${JSON.stringify(value)}`).digest('hex'); }
   private async produce(task: RetainedLearningTask): Promise<void> {
     if (task.signal.aborted || !task.text?.trim() || task.text.length > 4096 ||
-        this.adaptive.repository.storage.indexed && task.learningFence?.storeIdentity !== this.adaptive.storeIdentity) return;
+        this.adaptive.storeIdentity !== 'canonical' && task.learningFence?.storeIdentity !== this.adaptive.storeIdentity) return;
     let initial: ReturnType<PreferenceLearningService['currentNow']>;
     try { initial = this.currentNow(task.telegramId, task); } catch { return; }
-    if (this.adaptive.repository.storage.indexed && initial.fingerprint !== task.learningFence?.fingerprint) return;
+    if (this.adaptive.storeIdentity !== 'canonical' && initial.fingerprint !== task.learningFence?.fingerprint) return;
     const studio = initial.studio, reservation = randomUUID();
     const evidenceId = this.opaque('preference-learning-source-v1', [task.telegramId, initial.personId, initial.bindingId, task.space, task.agentId, task.turn]);
     const fingerprint = this.opaque('preference-learning-final-v1', [evidenceId, task.text]);
@@ -207,7 +211,7 @@ export class PreferenceLearningService {
       draft = d;
       const state = this.state(d, task, now, this.studio(task.telegramId, task));
       const learning = d.experience.preferenceLearning, intent = learning?.intents.find(i => i.space === task.space && i.agentId === task.agentId && i.studioFingerprint === state.studio && sameLearningAuthority(i, state, now));
-      if (!intent || this.adaptive.repository.storage.indexed && (intent.id !== task.learningFence?.intentId || intent.revision !== task.learningFence.intentRevision) ||
+      if (!intent || this.adaptive.storeIdentity !== 'canonical' && (intent.id !== task.learningFence?.intentId || intent.revision !== task.learningFence.intentRevision) ||
           task.signal.aborted || state.fingerprint !== initial.fingerprint || learning!.suppressions.length >= 100 || learning!.candidates.length >= 24 ||
           learning!.suppressions.some(s => s.evidenceId === evidenceId)) return undefined;
       const keys = (Object.keys(optionsFor) as Array<keyof typeof optionsFor>).filter(key => !d.experience.preferences.some(p => p.space === task.space && p.agentId === task.agentId && p.setting.key === key));

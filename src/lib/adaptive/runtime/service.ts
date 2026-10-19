@@ -347,6 +347,27 @@ export class AdaptiveExperienceService {
     return { revision: snapshot.contextReceipt, settings: snapshot.allowed ? snapshot.resolved
       .filter(row => row.source === 'explicit').map(row => row.setting) : [] };
   }
+  /** Same opaque context revision as readPreferences, without resolving settings
+   * or awaiting I/O. A denied optional choice still has an empty-context revision;
+   * the exact current interactive binding remains mandatory for transport. */
+  readPreferencesAuthorityNow(telegramId: number, space: SpaceKind, agentId: string, bindingId: string): { revision: string; validUntil: number } | null {
+    try {
+      const result = this.adaptive.readRuntimeControlsForEffect(telegramId, space, (d, now, namespace) => {
+        if (!bindingId || d.binding?.id !== bindingId || !this.adaptive.isProfileConfirmed(d, now))
+          return { value: null, denied: true };
+        const snapshot = explicitPreferenceContextSnapshot(this.adaptive, d, space, agentId, now, namespace);
+        const permission = d.permissions.find(p => p.id === `permission:${space}:optional.personalization`)!;
+        const capabilities = ['core_text', 'personalization'] as const;
+        // The binding-only empty-context revision is also bounded. It grants no
+        // optional preference use when snapshot.allowed is false.
+        const deadline = Math.min(d.binding.expiresAt,
+          ...capabilities.flatMap(c => { const status = this.adaptive.capabilityStatus(d, c, now); return status.eligible && status.validUntil !== undefined ? [status.validUntil] : []; }),
+          ...(permission.state === 'granted' && permission.expiresAt > now ? [permission.expiresAt] : []));
+        return { value: { revision: snapshot.contextReceipt, validUntil: deadline }, deadline };
+      });
+      return result.status === 'ready' ? result.value : null;
+    } catch { return null; }
+  }
   async readPreferenceState(telegramId: number, space: SpaceKind, agentId: string): Promise<PreferenceState> {
     const snapshot = await this.resolveExplicitPreferences(telegramId, space, agentId);
     if (!snapshot.confirmed) error(403, 'profile_confirmation_required');
