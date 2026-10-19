@@ -7,12 +7,14 @@ import { resolveVerifiedPerson } from '../identity';
 import { authorizeAccess } from '../policy';
 import type { AccessRequest, ConsentPermission, IdentityContext, PolicySnapshot, ResourceDescriptor } from '../types';
 import { ADAPTIVE_POLICY_VERSION, OPTIONAL_PURPOSES, AdaptiveRepository, accountIdFor, containerIdFor, digest,
-  spaceIdFor, tenantIdFor, type AdaptiveDocument, type OptionalPurpose, type SpaceKind, type StoredMemory } from './repository';
+  spaceIdFor, tenantIdFor, type AdaptiveAuthorityDocument, type AdaptiveDocument, type OptionalPurpose, type SpaceKind, type StoredMemory } from './repository';
 import type { AdaptiveNotice, AdaptiveSnapshot, AdaptivePresentation } from './contracts';
 import { correctionInput, type CorrectionInput } from './validation';
 import type { AgentGrantInput, ConsentInput, DeletionInput, IdentityInput, MemoryInput, PresentInput } from './validation';
 import { sweepObserverDocument } from '../observation/helpers';
 import { pruneLearningDocument } from '../personalization/learning/state';
+import { runtimeControlsFromDocument, runtimeControlsFromIndexed, validateRuntimeControlEvaluation,
+  type RuntimeControlEvaluation, type RuntimeControlEvaluator } from './authority';
 
 export class AdaptiveError extends Error {
   readonly name = 'AdaptiveError';
@@ -72,6 +74,11 @@ export class AdaptiveService {
   setRelationshipInvalidator(handler: (input: RelationshipInvalidation) => Promise<void>): void { this.relationshipInvalidator = handler; }
   async notifyRelationshipInvalidation(input: RelationshipInvalidation): Promise<void> { await this.relationshipInvalidator?.(input); }
   constructor(readonly repository: AdaptiveRepository, private readonly options: AdaptiveServiceOptions = {}) { this.now = options.now ?? Date.now; }
+  /** Stable receipt namespace, safe inside a writer. This is not access authority. */
+  get storeIdentity(): string {
+    const identity = this.repository.storage.indexed?.identity;
+    return identity ? digest([identity.incarnation, identity.generation]) : 'canonical';
+  }
   private account(telegramId: number): string {
     if (!Number.isSafeInteger(telegramId) || telegramId <= 0) return fail(401, 'authentication_required');
     return accountIdFor(telegramId);
@@ -141,7 +148,7 @@ export class AdaptiveService {
       for (const memory of d.memories) if (memory.status === 'active' && memory.expiresAt <= now) this.tombstone(d, memory, now, `expiry:${memory.id}`);
       if (purgeInvalidDerivedMemory(d, now)) this.bump(d, now);
       if (sweepObserverDocument(d, now, (doc, space, agentId, time) =>
-        this.isPurposeAllowed(doc, space, 'optional.product_analytics', time, agentId))) this.bump(d, now);
+        this.isPurposeAllowed(doc, space, 'optional.product_analytics', time, agentId), this.storeIdentity)) this.bump(d, now);
       if (pruneLearningDocument(this, d, now, this.preferenceLearningAuthority ? agentId => this.preferenceLearningAuthority!(telegramId, agentId) : undefined)) this.bump(d, now);
       const value = fn(d, now);
       if (pruneLearningDocument(this, d, now, this.preferenceLearningAuthority ? agentId => this.preferenceLearningAuthority!(telegramId, agentId) : undefined)) this.bump(d, now);
@@ -186,7 +193,7 @@ export class AdaptiveService {
         for (const group of removed.values()) enqueue(group.space, 'source_deleted', group.agentId, group.ids);
       }
       const observerChanged = sweepObserverDocument(d, now, (doc, space, agentId, time) =>
-        this.isPurposeAllowed(doc, space, 'optional.product_analytics', time, agentId));
+        this.isPurposeAllowed(doc, space, 'optional.product_analytics', time, agentId), this.storeIdentity);
       if ((observerChanged || priorRelationships !== digest(d.relationships)) && d.revision === priorRevision) this.bump(d, now);
       return value;
     }, beforeCommit);
@@ -201,20 +208,20 @@ export class AdaptiveService {
     if (failed) throw failed.reason;
     return result;
   }
-  private identity(d: AdaptiveDocument): IdentityContext {
+  private identity(d: AdaptiveAuthorityDocument): IdentityContext {
     const binding = d.binding;
     return { authenticatedAccountId: d.accountId, ...(binding ? { selectedPerson: {
       personId: d.personId, bindingId: binding.id, bindingRevision: binding.revision,
     } } : {}) };
   }
-  private confirmed(d: AdaptiveDocument, now: number): boolean {
+  private confirmed(d: AdaptiveAuthorityDocument, now: number): boolean {
     return !!resolveVerifiedPerson(this.identity(d), { schemaVersion: 1, id: d.accountId, revision: 1,
       createdAt: d.createdAt, updatedAt: d.createdAt, status: 'active', ownerPersonId: d.personId }, d.binding, now);
   }
-  private requirePerson(d: AdaptiveDocument, now: number): void {
+  private requirePerson(d: AdaptiveAuthorityDocument, now: number): void {
     if (!this.confirmed(d, now)) fail(403, 'profile_confirmation_required');
   }
-  private eligible(d: AdaptiveDocument, capability: Capability, now: number): { eligible: boolean; reason?: string; validUntil?: number; approvalVersions?: readonly string[] } {
+  private eligible(d: AdaptiveAuthorityDocument, capability: Capability, now: number): { eligible: boolean; reason?: string; validUntil?: number; approvalVersions?: readonly string[] } {
     // Enrollment/provider/communications release gates have no implementation in this slice.
     if (capability === 'content_quality_review' || (capability === 'biometric_recognition' && this.options.voiceRecognitionEnabled !== true) ||
         (['auto_memory', 'relationship_outreach'].includes(capability) && this.options.scopedRelationshipsEnabled !== true) ||
@@ -223,12 +230,61 @@ export class AdaptiveService {
     if (!policy || policy.request.personId !== d.personId || policy.request.capability !== capability) return { eligible: false, reason: 'approval_missing' };
     return evaluateCapability(policy.request, policy.approvals, now);
   }
-  capabilityStatus(d: AdaptiveDocument, capability: Capability, now: number): { eligible: boolean; reason?: string; validUntil?: number; approvalVersions?: readonly string[] } {
+  capabilityStatus(d: AdaptiveAuthorityDocument, capability: Capability, now: number): { eligible: boolean; reason?: string; validUntil?: number; approvalVersions?: readonly string[] } {
     return this.eligible(d, capability, now);
   }
   /** Trusted backend seam: same aggregate/expiry transaction as consent and memory. */
   withAccountDocument<T>(telegramId: number, fn: (document: AdaptiveDocument, now: number) => T, beforeCommit?: () => void): Promise<T> {
     return this.transact(telegramId, fn, beforeCommit);
+  }
+  /** Pure authority consumers use compact controls on an explicitly selected
+   * indexed store. Mutations and detailed UI snapshots retain the canonical API.
+   * The callback must be synchronous. Store identity must bind retained work. */
+  async withRuntimeControls<T>(telegramId: number, space: SpaceKind, fn: RuntimeControlEvaluator<T>): Promise<T> {
+    if (!this.repository.storage.indexed) {
+      // The fallback may await canonical durability. Suppress an expired result
+      // again after that I/O; it does not provide the indexed durable watermark.
+      let evaluated: RuntimeControlEvaluation<T> | undefined; let observedAt = 0;
+      const result = await this.transact(telegramId, (d, now) => {
+        observedAt = now;
+        evaluated = validateRuntimeControlEvaluation<T>(fn(runtimeControlsFromDocument(d), now, 'canonical', undefined));
+        this.checkRuntimeEvaluation(evaluated, now);
+        return evaluated.value;
+      });
+      this.checkRuntimeEvaluation(evaluated!, observedAt);
+      return result;
+    }
+    const result = this.readRuntimeControlsForEffect(telegramId, space, fn);
+    return result.status === 'ready' ? Promise.resolve(result.value) : Promise.reject(new AdaptiveError(503, 'adaptive_controls_unavailable'));
+  }
+  /** Synchronous current-state controls for the configured provider export fence.
+   * Evaluators are pure, body-free and synchronous. A denial remains a data result;
+   * it never grants private-body access or authorizes an external side effect. */
+  readRuntimeControlsForEffect<T>(telegramId: number, space: SpaceKind, fn: RuntimeControlEvaluator<T>):
+    { status: 'ready'; value: T } | { status: 'busy' | 'unsupported' | 'missing' } {
+    const indexed = this.repository.storage.indexed;
+    if (!indexed) {
+      try { return this.readCommittedForEffect(telegramId, (d, now) => {
+        const evaluated = validateRuntimeControlEvaluation<T>(fn(runtimeControlsFromDocument(d), now, 'canonical', undefined));
+        this.checkRuntimeEvaluation(evaluated, now);
+        return evaluated.value;
+      }); } catch { return { status: 'busy' }; }
+    }
+    let evaluation: RuntimeControlEvaluation<T> | undefined;
+    const snapshot = indexed.readControls(this.account(telegramId), space, (controls, now, stamp) => {
+      evaluation = validateRuntimeControlEvaluation<T>(fn(runtimeControlsFromIndexed(controls), now,
+        digest([stamp.incarnation, stamp.generation]), stamp));
+      return { ...(evaluation.deadline === undefined ? {} : { deadline: evaluation.deadline }),
+        ...(evaluation.denied === undefined ? {} : { denied: evaluation.denied }) };
+    });
+    if (snapshot.status !== 'ready' || !evaluation) return { status: snapshot.status !== 'ready' && snapshot.reason === 'missing' ? 'missing' : 'busy' };
+    return { status: 'ready', value: evaluation.value };
+  }
+  private checkRuntimeEvaluation<T>(evaluation: RuntimeControlEvaluation<T>, observedAt: number): void {
+    const fresh = this.now();
+    if (!Number.isSafeInteger(fresh) || fresh < observedAt ||
+        (!evaluation.denied && evaluation.deadline !== undefined && evaluation.deadline <= fresh))
+      fail(503, 'adaptive_controls_unavailable');
   }
   /** Validated committed file snapshot only. No mutation or awaited work. */
   readCommittedForEffect<T>(telegramId: number, fn: (document: AdaptiveDocument, now: number) => T):
@@ -239,25 +295,25 @@ export class AdaptiveService {
     // Synchronous disk/schema work can itself cross an authority deadline.
     return { status: 'ready', value: fn(snapshot.document, this.now()) };
   }
-  isProfileConfirmed(d: AdaptiveDocument, now: number): boolean { return this.confirmed(d, now); }
-  isCoreAllowed(d: AdaptiveDocument, now: number): boolean { return this.confirmed(d, now) && this.eligible(d, 'core_text', now).eligible; }
-  purposeFingerprint(d: AdaptiveDocument, space: SpaceKind, purpose: OptionalPurpose, now: number, agentId?: string): string {
+  isProfileConfirmed(d: AdaptiveAuthorityDocument, now: number): boolean { return this.confirmed(d, now); }
+  isCoreAllowed(d: AdaptiveAuthorityDocument, now: number): boolean { return this.confirmed(d, now) && this.eligible(d, 'core_text', now).eligible; }
+  purposeFingerprint(d: AdaptiveAuthorityDocument, space: SpaceKind, purpose: OptionalPurpose, now: number, agentId?: string): string {
     return digest([d.accountId, d.binding, this.confirmed(d, now),
       space, purpose, agentId, this.permission(d, space, purpose), this.eligible(d, CAPABILITY[purpose], now),
       agentId ? d.agentGrants.filter(g => g.space === space && g.agentId === agentId) : null]);
   }
-  coreFingerprint(d: AdaptiveDocument, now: number): string {
+  coreFingerprint(d: AdaptiveAuthorityDocument, now: number): string {
     return digest([d.accountId, d.binding, this.confirmed(d, now), this.eligible(d, 'core_text', now)]);
   }
   /** Explicit preferences may be saved as a user directive. Applying them to an
    * agent still requires current optional purpose consent and an exact grant. */
-  isPurposeAllowed(d: AdaptiveDocument, space: SpaceKind, purpose: OptionalPurpose, now: number, agentId?: string): boolean {
+  isPurposeAllowed(d: AdaptiveAuthorityDocument, space: SpaceKind, purpose: OptionalPurpose, now: number, agentId?: string): boolean {
     const permission = this.permission(d, space, purpose);
     return this.confirmed(d, now) && this.eligible(d, CAPABILITY[purpose], now).eligible &&
       permission.state === 'granted' && permission.expiresAt > now &&
       (!agentId || d.agentGrants.some(g => g.space === space && g.agentId === agentId && g.allowed));
   }
-  private permission(d: AdaptiveDocument, space: SpaceKind, purpose: OptionalPurpose): ConsentPermission {
+  private permission(d: AdaptiveAuthorityDocument, space: SpaceKind, purpose: OptionalPurpose): ConsentPermission {
     return d.permissions.find(p => p.spaceId === spaceIdFor(d.accountId, space) && p.purpose === purpose)!;
   }
   private invalidateExperience(d: AdaptiveDocument, space: SpaceKind, purpose: OptionalPurpose): void {

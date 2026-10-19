@@ -1,0 +1,37 @@
+name: Indexed storage qualification
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: indexed-storage-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-standalone:
+    name: Linux Node 22 native standalone
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.3'
+      - name: Build exact synthetic standalone fixture
+        run: node scripts/qualification/indexed-storage-next/qualify.mjs build linux-amd64-node22-ci
+      - name: Verify copied native runtime and restart
+        run: node scripts/qualification/indexed-storage-next/qualify.mjs run linux-amd64-node22-ci 3142
+      - name: Retain qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: indexed-storage-linux-node22-evidence
+          path: scripts/qualification/indexed-storage-next/attempts/linux-amd64-node22-ci/evidence/
+          if-no-files-found: error
+          retention-days: 14

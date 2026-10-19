@@ -4,11 +4,14 @@ import { promises as fs, existsSync, readFileSync, renameSync } from 'fs';
 import { join } from 'path';
 import type { Firestore } from 'firebase-admin/firestore';
 import { FieldPath } from 'firebase-admin/firestore';
+import type { IndexedAdaptiveQueries } from './indexed/contracts';
 
 export interface AdaptiveAccountPage { accountIds: string[]; next?: string }
 export interface AdaptiveAccountPageInput { after?: string; limit: number }
 
 export interface AdaptiveStorage {
+  /** Optional server-only read model. Presence never selects or migrates a store. */
+  readonly indexed?: IndexedAdaptiveQueries;
   /** Callback must be synchronous and retry safe. A throw commits nothing. */
   transact<T>(accountId: string, mutate: (current: unknown | null) => { document: unknown; result: T }, beforeCommit?: () => void): Promise<T>;
   readonly supportsCommittedWriteFence?: true;

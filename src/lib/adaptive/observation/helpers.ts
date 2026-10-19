@@ -1,4 +1,4 @@
-import { digest, spaceIdFor, type AdaptiveDocument, type SpaceKind } from '../persistence/repository';
+import { digest, spaceIdFor, type AdaptiveAuthorityDocument, type AdaptiveDocument, type SpaceKind } from '../persistence/repository';
 import { TURN_STAGES, type TelemetryProjection } from './telemetry';
 import { OBSERVER_MAX_ATTEMPTS, OBSERVER_VERSION, type ObserverEvent, type ObserverFinding, type ObserverProjection } from './contracts';
 
@@ -8,12 +8,13 @@ function canonical(value: unknown): unknown {
   return value;
 }
 const PURPOSE = 'optional.product_analytics' as const;
-export type ObserverAllowed = (d: AdaptiveDocument, space: SpaceKind, agentId: string, now: number) => boolean;
+export type ObserverAllowed = (d: AdaptiveAuthorityDocument, space: SpaceKind, agentId: string, now: number) => boolean;
 /** The receipt changes on binding, permission or exact agent-grant changes. No text. */
-export function observerPolicyReceipt(d: AdaptiveDocument, space: SpaceKind, agentId: string): string {
-  return digest([OBSERVER_VERSION, d.accountId, d.personId, d.binding,
+export function observerPolicyReceipt(d: AdaptiveAuthorityDocument, space: SpaceKind, agentId: string, storeIdentity = 'canonical'): string {
+  const receipt = [OBSERVER_VERSION, d.accountId, d.personId, d.binding,
     d.permissions.find(p => p.id === `permission:${space}:${PURPOSE}`),
-    d.agentGrants.find(g => g.space === space && g.agentId === agentId)]);
+    d.agentGrants.find(g => g.space === space && g.agentId === agentId)];
+  return digest(storeIdentity === 'canonical' ? receipt : [storeIdentity, ...receipt]);
 }
 const uniqueTurns = (events: ObserverEvent[], outcome: ObserverEvent['outcome']) => new Set(events.filter(e => e.outcome === outcome).map(e => e.turnKey)).size;
 /** Pure independently replayable deterministic projection. Only processed, current-policy
@@ -71,10 +72,10 @@ export function projectObserverEvents(events: readonly ObserverEvent[], space: S
 }
 /** Run after account mutations and from the lifecycle sweep. It must execute within
  * the same account transaction. Revocation removes journal and all derived evidence. */
-export function sweepObserverDocument(d: AdaptiveDocument, now: number, isAllowed: ObserverAllowed): boolean {
+export function sweepObserverDocument(d: AdaptiveDocument, now: number, isAllowed: ObserverAllowed, storeIdentity = 'canonical'): boolean {
   const before = digest(canonical(d.observer));
   d.observer.events = d.observer.events.filter(e => e.receivedAt <= now && e.expiresAt > now && e.accountId === d.accountId && e.personId === d.personId &&
-    e.spaceId === spaceIdFor(d.accountId, e.space) && isAllowed(d, e.space, e.agentId, now) && e.policyReceipt === observerPolicyReceipt(d, e.space, e.agentId));
+    e.spaceId === spaceIdFor(d.accountId, e.space) && isAllowed(d, e.space, e.agentId, now) && e.policyReceipt === observerPolicyReceipt(d, e.space, e.agentId, storeIdentity));
   // Client outcomes cannot outlive their authoritative server correlation.
   const serverTurns = new Set(d.observer.events.filter(e => e.trust === 'server' && e.operation !== 'prediction' && e.outcome === 'responded').map(e => e.turnKey));
   d.observer.events = d.observer.events.filter(e => e.trust === 'server' || serverTurns.has(e.turnKey));
