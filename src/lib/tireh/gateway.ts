@@ -10,7 +10,7 @@
  */
 
 import { streamText, type LLM, type WebSource } from './llm';
-import { readTriage, TRIAGE_TIMEOUT_MS, triageInput, triageQuestions, type Decider, type Triage } from './triage';
+import { readTriage, TRIAGE_TIMEOUT_MS, triageInput, triageQuestions, VOICE_REQUEST, type Decider, type Triage } from './triage';
 import type { OrgDirectory } from './org/directory';
 import type { ChatContext, ChatMessage, MemoryRecord, MemoryScope, Persona } from './types';
 import type { ChatHistoryStore, MemoryStore, ShareOfferStore, UpdateDeduper } from './memory/store';
@@ -158,13 +158,16 @@ export class PersonaGateway {
     await bot.sendChatAction(message.chat.id, isVoice ? 'record_voice' : 'typing').catch(() => undefined);
 
     const { text: reply, sources } = await this.composeReply(persona, chat, speaker.id, text, triage);
-    await this.sendReply(persona, chat, message, reply, isVoice, sources);
+    const settled = await triage;
+    // Voice in → voice out; a typed "send me a voice" counts too.
+    const voiceWanted = isVoice || (settled ? settled.wantsVoice : VOICE_REQUEST.test(text));
+    await this.sendReply(persona, chat, message, reply, voiceWanted, sources);
 
     const assistantMessage: ChatMessage = { role: 'assistant', text: reply, at: this.now() };
     await this.deps.history.append(persona.id, chat.chatKey, assistantMessage);
 
     // Nothing worth remembering: skip the extraction call.
-    if ((await triage)?.memorable === false) return 'replied';
+    if (settled?.memorable === false) return 'replied';
     // Memory formation must never break the conversation.
     try {
       await this.formMemories(persona, chat, speaker.id, message.message_id);
@@ -307,7 +310,7 @@ You are on a live voice call. Answer in one to three short spoken sentences, lik
     // Small talk goes to the fast model; anything needing care, or a search, to the main one.
     const quick = triage?.effort === 'quick' && !search && !!this.deps.fastLlm;
     const memories = selectMemories(org, all, chat, { query: text, now: this.now() });
-    const system = buildSystemPrompt({ org, persona: { ...persona, webSearch: search }, chat, speakerId, memories, now: this.now() });
+    const system = buildSystemPrompt({ org, persona: { ...persona, webSearch: search }, chat, speakerId, memories, now: this.now(), canSpeak: !!this.deps.voice && persona.replyWithVoice !== 'never' });
 
     const recent = await this.deps.history.recent(persona.id, chat.chatKey, HISTORY_LIMIT);
     const messages = recent.map((m) => ({
@@ -333,14 +336,14 @@ You are on a live voice call. Answer in one to three short spoken sentences, lik
     chat: ChatContext,
     message: TelegramMessage,
     reply: string,
-    inputWasVoice: boolean,
+    voiceWanted: boolean,
     sources: WebSource[] = []
   ): Promise<void> {
     const bot = this.deps.botFor(persona.id);
     const replyTo = chat.kind === 'group' ? message.message_id : undefined;
     const speak =
       this.deps.voice &&
-      (persona.replyWithVoice === 'always' || (persona.replyWithVoice === 'mirror' && inputWasVoice));
+      (persona.replyWithVoice === 'always' || (persona.replyWithVoice === 'mirror' && voiceWanted));
 
     if (speak) {
       try {

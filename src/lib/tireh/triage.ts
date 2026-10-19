@@ -33,6 +33,8 @@ export interface Triage {
   effort: 'quick' | 'thoughtful';
   needsWeb: boolean;
   memorable: boolean;
+  /** The person asked to hear the reply (a voice message) */
+  wantsVoice: boolean;
   /** Groups only: the message is meant for the persona even without its name */
   addressed?: boolean;
 }
@@ -46,6 +48,10 @@ const QUICK_CONFIDENCE = 0.6;
 const WEB_PROBABILITY = 0.5;
 const MEMORABLE_PROBABILITY = 0.2;
 const ADDRESSED_PROBABILITY = 0.85;
+const VOICE_PROBABILITY = 0.5;
+
+/** Without triage: an explicit ask to hear the reply (English or Persian). */
+export const VOICE_REQUEST = /\b(voice( message| note| reply)?|audio|out loud|say it|speak to me|talk to me)\b|ویس|صدا|صوتی|بگو برام/i;
 
 export function triageQuestions(persona: Persona, askAddressed: boolean): DecisionQuestion[] {
   const questions: DecisionQuestion[] = [
@@ -68,6 +74,11 @@ export function triageQuestions(persona: Persona, askAddressed: boolean): Decisi
       name: 'memorable',
       instructions: 'Does the latest message share something worth remembering later: a fact about the sender or someone else, a preference, plan, decision, deadline, commitment, or a correction of earlier information?',
     },
+    {
+      type: 'predicate',
+      name: 'wants_voice',
+      instructions: 'Does the latest message ask for the reply as a voice message or audio, or ask to hear the speaker talk (for example "send me a voice", "say it out loud", "can I hear your voice")?',
+    },
   ];
   if (askAddressed) {
     questions.push({
@@ -80,12 +91,13 @@ export function triageQuestions(persona: Persona, askAddressed: boolean): Decisi
 }
 
 export function readTriage(answers: Record<string, DecisionAnswer>, askAddressed: boolean): Triage | null {
-  const effort = answers.effort, live = answers.live_info, memorable = answers.memorable, addressed = answers.addressed;
+  const effort = answers.effort, live = answers.live_info, memorable = answers.memorable, addressed = answers.addressed, voice = answers.wants_voice;
   if (effort?.type !== 'choice' || live?.type !== 'predicate' || memorable?.type !== 'predicate') return null;
   return {
     effort: effort.choice === 'quick' && effort.confidence >= QUICK_CONFIDENCE ? 'quick' : 'thoughtful',
     needsWeb: live.probability >= WEB_PROBABILITY,
     memorable: memorable.probability >= MEMORABLE_PROBABILITY,
+    wantsVoice: voice?.type === 'predicate' && voice.probability >= VOICE_PROBABILITY,
     ...(askAddressed ? { addressed: addressed?.type === 'predicate' && addressed.probability >= ADDRESSED_PROBABILITY } : {}),
   };
 }
