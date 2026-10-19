@@ -755,7 +755,7 @@ function HireStep({ agent, busy, run, onUpdate }: Omit<StepProps, 'onNext'>) {
         <h1 className="vx-title">{awaiting ? 'Confirm in Telegram' : `Hire ${agent.persona.name}`}</h1>
         <p className="vx-2" style={{ margin: 0, maxWidth: 320 }}>
           {awaiting
-            ? 'Telegram opened a “Create bot” screen. Tap Create — this page updates on its own when it’s done.'
+            ? `Telegram opened a “Create bot” screen. If the name is blank, enter ${agent.persona.name}. Confirm the username and tap Create — this page updates when it’s done.`
             : `${agent.persona.name} becomes a real Telegram bot. It starts private (you, people you pick, and admins); you can open it to ${nav.me.org} or make it public later.`}
         </p>
         <div className="vx-group" style={{ width: '100%', textAlign: 'left' }}>
