@@ -80,8 +80,8 @@ describe('authentication', () => {
 
 describe('media route', () => {
   it('serves stored media without auth, by safe name only', async () => {
-    h.store.saveMedia('av-abc.jpg', Buffer.from('IMG'));
-    h.store.saveMedia('vp-abc.mp3', Buffer.from('MP3'));
+    await h.store.saveMedia('av-abc.jpg', Buffer.from('IMG'));
+    await h.store.saveMedia('vp-abc.mp3', Buffer.from('MP3'));
     const img = await call(req('GET', 'media/av-abc.jpg', { as: null }));
     expect(img.status).toBe(200);
     expect(img.type).toBe('image/jpeg');

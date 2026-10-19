@@ -29,6 +29,31 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Vox Studio's server settings come from repository secrets and ship with
+      # the SSR function as a .env file (nothing is written unless STUDIO_SECRET exists).
+      - name: Vox Studio server config
+        env:
+          STUDIO_SECRET: ${{ secrets.STUDIO_SECRET }}
+          VOXX_BOT_TOKEN: ${{ secrets.VOXX_BOT_TOKEN }}
+          VOXX_BOT_USERNAME: ${{ vars.VOXX_BOT_USERNAME }}
+          STUDIO_SUPERADMIN_IDS: ${{ vars.STUDIO_SUPERADMIN_IDS }}
+          STUDIO_PUBLIC_URL: ${{ vars.STUDIO_PUBLIC_URL }}
+          STUDIO_MEDIA_BUCKET: ${{ vars.STUDIO_MEDIA_BUCKET || secrets.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET }}
+          STUDIO_ORG_NAME: ${{ vars.STUDIO_ORG_NAME }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+        run: |
+          if [ -z "$STUDIO_SECRET" ]; then echo "STUDIO_SECRET not set; Vox Studio stays off"; exit 0; fi
+          {
+            echo "STUDIO_STORAGE=firestore"
+            if [ -n "$STUDIO_PUBLIC_URL" ]; then echo "STUDIO_WEBAPP_URL=${STUDIO_PUBLIC_URL%/}/studio"; fi
+            for k in STUDIO_SECRET VOXX_BOT_TOKEN VOXX_BOT_USERNAME STUDIO_SUPERADMIN_IDS STUDIO_PUBLIC_URL STUDIO_MEDIA_BUCKET STUDIO_ORG_NAME ANTHROPIC_API_KEY OPENAI_API_KEY ELEVENLABS_API_KEY; do
+              if [ -n "${!k}" ]; then printf '%s=%s\n' "$k" "${!k}"; fi
+            done
+          } >> .env
+          echo "Vox Studio config written ($(wc -l < .env) lines)"
+
       - name: Build application
         run: npm run build
         env:
@@ -51,6 +76,16 @@ jobs:
           projectId: ${{ secrets.FIREBASE_PROJECT_ID }}
         env:
           FIREBASE_CLI_EXPERIMENTS: webframeworks
+
+      - name: Connect Vox Studio bots
+        if: success()
+        continue-on-error: true
+        env:
+          STUDIO_SECRET: ${{ secrets.STUDIO_SECRET }}
+          STUDIO_PUBLIC_URL: ${{ vars.STUDIO_PUBLIC_URL }}
+        run: |
+          if [ -z "$STUDIO_SECRET" ] || [ -z "$STUDIO_PUBLIC_URL" ]; then echo "Vox Studio not configured; skipping"; exit 0; fi
+          curl -sS --fail-with-body -X POST "${STUDIO_PUBLIC_URL%/}/api/studio/telegram/setup" -H "Authorization: Bearer $STUDIO_SECRET"
 
       - name: Deployment Summary
         run: |

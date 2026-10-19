@@ -41,7 +41,7 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
   try {
     // Media is addressed by unguessable file names so <img>/<audio> can load it.
     if (method === 'GET' && path[0] === 'media' && path[1]) {
-      const data = studio.deps.store.readMedia(path[1]);
+      const data = await studio.deps.store.readMedia(path[1]);
       if (!data) return json({ error: 'Not found' }, 404);
       const type = path[1].endsWith('.mp3') ? 'audio/mpeg' : 'image/jpeg';
       return new Response(new Uint8Array(data), { headers: { 'Content-Type': type, 'Cache-Control': 'private, max-age=31536000, immutable' } });

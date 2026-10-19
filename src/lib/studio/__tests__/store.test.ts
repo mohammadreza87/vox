@@ -79,19 +79,19 @@ describe('StudioStore', () => {
     expect(audit.at(-1)?.action).toBe('last');
   });
 
-  it('only saves and serves safe media names inside the media dir', () => {
+  it('only saves and serves safe media names inside the media dir', async () => {
     const dir = tempDir();
     const store = new StudioStore(dir);
-    store.saveMedia('av-1.jpg', Buffer.from('img'));
-    expect(store.readMedia('av-1.jpg')?.toString()).toBe('img');
-    expect(store.readMedia('missing.jpg')).toBeNull();
+    await store.saveMedia('av-1.jpg', Buffer.from('img'));
+    expect((await store.readMedia('av-1.jpg'))?.toString()).toBe('img');
+    expect(await store.readMedia('missing.jpg')).toBeNull();
     for (const bad of ['../studio.json', '..', '.hidden', 'a/b.jpg', '/etc/passwd', 'x\\..\\y', '', 'a'.repeat(200)]) {
-      expect(() => store.saveMedia(bad, Buffer.from('x'))).toThrow('Unsafe media file name');
-      expect(store.readMedia(bad)).toBeNull();
+      await expect(store.saveMedia(bad, Buffer.from('x'))).rejects.toThrow('Unsafe media file name');
+      expect(await store.readMedia(bad)).toBeNull();
     }
     // studio.json lives one level up and is never reachable as media
     writeFileSync(join(dir, 'studio.json'), '{}');
-    expect(store.readMedia('studio.json')).toBeNull();
+    expect(await store.readMedia('studio.json')).toBeNull();
     expect(existsSync(join(dir, 'media', 'av-1.jpg'))).toBe(true);
   });
 });

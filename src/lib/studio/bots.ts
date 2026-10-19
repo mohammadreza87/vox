@@ -4,12 +4,16 @@
  *    updates when someone confirms a new agent bot
  *  - each active agent's bot: DMs, groups, voice notes (via PersonaGateway)
  *
+ * For serverless hosting the same handlers run behind webhooks instead
+ * (updates.ts + /api/studio/telegram/[key]).
+ *
  * The set of agent bots is refreshed every few seconds, so a newly hired agent
  * comes online without a restart and a fired one goes quiet.
  */
 
 import type { TelegramBotClient, TelegramUpdate } from '../tireh/telegram/client';
 import type { Studio } from './service';
+import { AGENT_UPDATES, handleAgentUpdate, handleManagerUpdate, MANAGER_UPDATES } from './updates';
 
 const REFRESH_MS = 8000;
 
@@ -52,20 +56,7 @@ export function startBots(studio: Studio): { stop: () => void } {
   if (manager) {
     const webAppUrl = studio.deps.webAppUrl;
     if (webAppUrl) manager.setChatMenuButton('Open Studio', webAppUrl).catch((e) => log.warn('[studio] menu button', e));
-    loops.set('manager', pollLoop('VoxxBot', manager, ['message', 'managed_bot'], async (update) => {
-      if (update.managed_bot) {
-        await studio.onManagedBot(update.managed_bot);
-        return;
-      }
-      const msg = update.message;
-      if (!msg?.from || msg.from.is_bot || msg.chat.type !== 'private') return;
-      const member = await studio.ensureMember(msg.from);
-      const open = webAppUrl ? { inline_keyboard: [[{ text: 'Open Vox Studio', web_app: { url: webAppUrl } }]] } : undefined;
-      const text = member.role === 'pending'
-        ? `Hi ${member.name}. You're on the list for ${studio.deps.orgName}; an admin will approve you shortly.`
-        : `Hi ${member.name}. Spawn, call and manage your ${studio.deps.orgName} agents in Vox Studio.`;
-      await manager.sendMessage(msg.chat.id, text, open ? { keyboard: open } : {});
-    }, log));
+    loops.set('manager', pollLoop('VoxxBot', manager, MANAGER_UPDATES, (update) => handleManagerUpdate(studio, update), log));
   }
 
   const refresh = async () => {
@@ -85,26 +76,7 @@ export function startBots(studio: Studio): { stop: () => void } {
         if (current) { current.stop(); loops.delete(agent.id); }
         if (!token) continue;
         const bot = studio.deps.botFor(token);
-        loops.set(agent.id, { ...pollLoop(`@${agent.bot?.username}`, bot, ['message', 'callback_query', 'my_chat_member'], async (update) => {
-          const { gateway, state: current } = await studio.gateway();
-          const live = current.agents.find((a) => a.id === agent.id);
-          if (!live || live.status !== 'active') return;
-          if (update.my_chat_member) {
-            await studio.onBotChatMember(live, update.my_chat_member);
-            return;
-          }
-          const msg = update.message;
-          if (msg?.from && !msg.from.is_bot && (msg.chat.type === 'group' || msg.chat.type === 'supergroup')) {
-            const known = await studio.noteGroupSpeaker(msg.chat.id, msg.from.id);
-            if (known) {
-              // Rebuild so the speaker counts in the group's audience right away.
-              const fresh = await studio.gateway();
-              await fresh.gateway.handleUpdate(agent.id, update);
-              return;
-            }
-          }
-          await gateway.handleUpdate(agent.id, update);
-        }, log), token });
+        loops.set(agent.id, { ...pollLoop(`@${agent.bot?.username}`, bot, AGENT_UPDATES, (update) => handleAgentUpdate(studio, agent.id, update), log), token });
         log.info(`[studio] ${agent.persona.name} online as @${agent.bot?.username}`);
       }
     } catch (error) {
