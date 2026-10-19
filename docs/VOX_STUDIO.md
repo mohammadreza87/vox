@@ -4,13 +4,11 @@ Vox Studio is the Telegram Mini App inside **@VoxxBot** where everyone in HOOR s
 
 ```
 Telegram ── @VoxxBot (Mini App: /studio) ──┐
-        └─ @hoor_aria_bot, @hoor_…_bot ────┤  long polling
-                                           ▼
-            one Next.js process on the Mac Studio
-            ├─ /studio            Mini App UI
-            ├─ /api/studio/*      Mini App API (Telegram initData auth)
-            ├─ bot runner         VoxxBot + every hired agent bot
-            └─ .vox-studio/       studio.json, memory.json, media/
+        └─ @hoor_aria_bot, @hoor_…_bot ────┤
+                                         ▼
+            Next.js Studio UI + authenticated API
+            ├─ Firebase production: webhooks + Firestore + Cloud Storage
+            └─ Mac alternative: one poller process + private files
                  │
                  ├─ Claude        persona design (stronger model) + replies (fast model)
                  ├─ OpenAI        avatars (gpt-image-1) + speech-to-text
@@ -34,7 +32,27 @@ Telegram ── @VoxxBot (Mini App: /studio) ──┐
 
 Roles: `superadmin > admin > member > pending`. New people who press /start in @VoxxBot are `pending` until an admin approves them. The first superadmins come from `STUDIO_SUPERADMIN_IDS`.
 
-## Setup on the Mac Studio
+## Production (Firebase)
+
+Production runs serverless, so Studio switches modes there: bots receive updates by **webhook** (`/api/studio/telegram/[key]`, one derived secret per bot), state lives in **Firestore** (`studio/state`), media in **Cloud Storage** (`studio/media/`), and memories in the TIREH Firestore collections. Pushing to `main` deploys it and reconnects every bot.
+
+One-time setup, all in GitHub → repo **Settings → Secrets and variables → Actions** (never paste keys in chat):
+
+| Kind | Name | Value |
+|---|---|---|
+| Secret | `STUDIO_SECRET` | `openssl rand -hex 32` |
+| Secret | `VOXX_BOT_TOKEN` | @VoxxBot token from @BotFather |
+| Secret | `ANTHROPIC_API_KEY` | Claude |
+| Secret | `OPENAI_API_KEY` | avatars + speech-to-text |
+| Secret | `ELEVENLABS_API_KEY` | voices |
+| Variable | `VOXX_BOT_USERNAME` | `VoxxBot` |
+| Variable | `STUDIO_SUPERADMIN_IDS` | your Telegram user id |
+| Variable | `STUDIO_PUBLIC_URL` | the production URL, e.g. `https://vox-aicontact-fe0e3.web.app` |
+| Variable (optional) | `STUDIO_MEDIA_BUCKET` | defaults to the Firebase storage bucket |
+
+Also turn on **Bot Management** for @VoxxBot in @BotFather's Mini App. After the next deploy, open @VoxxBot → /start → **Open Vox Studio**. To reconnect bots by hand: `curl -X POST $STUDIO_PUBLIC_URL/api/studio/telegram/setup -H "Authorization: Bearer $STUDIO_SECRET"`.
+
+## Setup on the Mac Studio (alternative: one always-on server)
 
 For the supervised production release, private secrets, backups, HTTPS routing and
 rollback, follow [PRODUCTION.md](./PRODUCTION.md). The commands below are a manual

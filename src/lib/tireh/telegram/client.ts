@@ -207,11 +207,11 @@ export class TelegramBotClient {
     return this.call('leaveChat', { chat_id: chatId });
   }
 
-  setWebhook(url: string, secretToken: string): Promise<boolean> {
+  setWebhook(url: string, secretToken: string, allowedUpdates: string[] = ['message', 'callback_query']): Promise<boolean> {
     return this.call('setWebhook', {
       url,
       secret_token: secretToken,
-      allowed_updates: ['message', 'callback_query'],
+      allowed_updates: allowedUpdates,
       drop_pending_updates: false,
     });
   }

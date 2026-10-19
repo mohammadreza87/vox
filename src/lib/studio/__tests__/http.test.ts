@@ -48,6 +48,17 @@ function multipart(field: string, filename: string, type: string, content: strin
 }
 
 describe('request limits', () => {
+  it('awaits the runtime-injected shared limiter before touching persistence', async () => {
+    const ensure = vi.spyOn(h.studio, 'ensureMember');
+    h.studio.deps.rateLimiter = { consume: vi.fn(async (scope) => {
+      if (scope === 'api') throw new Error('Rate limit database unavailable');
+    }) };
+    expect((await call(req('GET', 'me'))).status).toBe(500);
+    expect(ensure).not.toHaveBeenCalled();
+    expect(h.studio.deps.rateLimiter.consume).toHaveBeenNthCalledWith(1, 'ingress', 'all');
+    expect(h.studio.deps.rateLimiter.consume).toHaveBeenNthCalledWith(2, 'api', ID.alice);
+  });
+
   it('limits the shared entrance before authentication, regardless of forwarded IP headers', async () => {
     let now = 0;
     const options: RouterOptions = { ...opts, rateLimiter: new StudioRateLimiter({
@@ -189,8 +200,8 @@ describe('authentication', () => {
 
 describe('media route', () => {
   it('serves stored media without auth, by safe name only', async () => {
-    h.store.saveMedia('av-abc.jpg', Buffer.from('IMG'));
-    h.store.saveMedia('vp-abc.mp3', Buffer.from('MP3'));
+    await h.store.saveMedia('av-abc.jpg', Buffer.from('IMG'));
+    await h.store.saveMedia('vp-abc.mp3', Buffer.from('MP3'));
     const img = await call(req('GET', 'media/av-abc.jpg', { as: null }));
     expect(img.status).toBe(200);
     expect(img.type).toBe('image/jpeg');

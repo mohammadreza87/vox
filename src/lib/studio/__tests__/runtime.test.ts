@@ -1,8 +1,13 @@
-import { mkdtempSync, readFileSync, rmSync } from 'fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getStudio, validateStudioConfig } from '../runtime';
+import { FirestoreStudioStore } from '../firestore-store';
+
+const firebase = vi.hoisted(() => ({ getAdminApp: vi.fn(), getAdminDb: vi.fn(), getStorage: vi.fn(), bucket: vi.fn() }));
+vi.mock('@/lib/firebase-admin', () => ({ getAdminApp: firebase.getAdminApp, getAdminDb: firebase.getAdminDb }));
+vi.mock('firebase-admin/storage', () => ({ getStorage: firebase.getStorage }));
 
 const production = (): NodeJS.ProcessEnv => ({
   NODE_ENV: 'production',
@@ -13,6 +18,18 @@ const production = (): NodeJS.ProcessEnv => ({
   STUDIO_SUPERADMIN_IDS: '123, 456',
   STUDIO_WEBAPP_URL: 'https://studio.example.com/studio',
   STUDIO_DATA_DIR: '/srv/vox-data',
+  STUDIO_STORAGE: 'file',
+  STUDIO_PUBLIC_URL: '',
+  STUDIO_BOTS: '0',
+  K_SERVICE: '',
+  FUNCTION_TARGET: '',
+  FUNCTION_NAME: '',
+  VERCEL: '',
+});
+
+const cloudProduction = (): NodeJS.ProcessEnv => ({
+  ...production(), STUDIO_STORAGE: 'firestore', STUDIO_DATA_DIR: undefined,
+  STUDIO_PUBLIC_URL: 'https://studio.example.com', STUDIO_MEDIA_BUCKET: 'vox-studio.firebasestorage.app',
 });
 
 describe('Studio production initialization', () => {
@@ -21,14 +38,15 @@ describe('Studio production initialization', () => {
   afterEach(() => {
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
+    vi.clearAllMocks();
     delete globalState.__voxStudio;
     for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
   });
 
-  const configure = () => {
+  const configure = (overrides: NodeJS.ProcessEnv = {}) => {
     const dir = mkdtempSync(join(tmpdir(), 'vox-studio-startup-'));
     dirs.push(dir);
-    for (const [key, value] of Object.entries({ ...production(), STUDIO_DATA_DIR: dir })) vi.stubEnv(key, value!);
+    for (const [key, value] of Object.entries({ ...production(), STUDIO_DATA_DIR: dir, ...overrides })) vi.stubEnv(key, value);
     return dir;
   };
 
@@ -50,6 +68,33 @@ describe('Studio production initialization', () => {
     configure();
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ ok: true, result: { id: 1, is_bot: true, username: 'OtherBot', first_name: 'Other' } })));
     await expect(getStudio()).rejects.toThrow('VOXX_BOT_USERNAME does not match');
+  });
+
+  it('wires persistent Firestore stores and webhooks without writing local state', async () => {
+    const dir = configure(cloudProduction());
+    vi.stubEnv('STUDIO_DATA_DIR', join(dir, 'unused-local'));
+    const get = vi.fn().mockResolvedValue({ get: () => undefined });
+    firebase.getAdminDb.mockResolvedValue({ doc: () => ({ get }) });
+    firebase.getAdminApp.mockResolvedValue({});
+    firebase.getStorage.mockReturnValue({ bucket: firebase.bucket });
+    firebase.bucket.mockReturnValue({});
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ ok: true, result: { id: 1, is_bot: true, username: 'VoxxBot', first_name: 'Voxx' } })));
+    const studio = await getStudio();
+    expect(studio.deps.store).toBeInstanceOf(FirestoreStudioStore);
+    expect(typeof studio.deps.rateLimiter?.consume).toBe('function');
+    expect(studio.deps.webhookBase).toBe('https://studio.example.com');
+    expect(firebase.bucket).toHaveBeenCalledWith('vox-studio.firebasestorage.app');
+    expect(get).toHaveBeenCalledOnce();
+    expect(existsSync(join(dir, 'unused-local'))).toBe(false);
+  });
+
+  it('fails startup when the configured Firestore state cannot be read', async () => {
+    configure(cloudProduction());
+    firebase.getAdminDb.mockResolvedValue({ doc: () => ({ get: async () => { throw new Error('Firestore unavailable'); } }) });
+    firebase.getAdminApp.mockResolvedValue({});
+    firebase.getStorage.mockReturnValue({ bucket: firebase.bucket });
+    firebase.bucket.mockReturnValue({});
+    await expect(getStudio()).rejects.toThrow('Firestore unavailable');
   });
 });
 
@@ -91,5 +136,45 @@ describe('Studio production configuration', () => {
   it('preserves local development without a manager, public URL, or explicit storage', () => {
     const config = validateStudioConfig({ NODE_ENV: 'development', STUDIO_SECRET: production().STUDIO_SECRET, ANTHROPIC_API_KEY: 'test' }, '/local/vox');
     expect(config).toMatchObject({ production: false, dataDir: '/local/vox/.vox-studio', superadminIds: [] });
+  });
+
+  it('accepts production Firestore without a local data directory and normalizes its webhook origin', () => {
+    expect(validateStudioConfig({ ...cloudProduction(), STUDIO_PUBLIC_URL: 'https://studio.example.com/' })).toMatchObject({
+      storage: 'firestore', publicUrl: 'https://studio.example.com', mediaBucket: 'vox-studio.firebasestorage.app',
+    });
+  });
+
+  it('uses the Firebase storage bucket when the explicit Studio bucket is omitted', () => {
+    expect(validateStudioConfig({ ...cloudProduction(), STUDIO_MEDIA_BUCKET: '', NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET: 'firebase-bucket.test' }).mediaBucket).toBe('firebase-bucket.test');
+  });
+
+  it.each(['', 'http://studio.example.com', 'https://studio.example.com/studio', 'https://user:password@studio.example.com',
+    'https://studio.example.com?secret=x', 'https://studio.example.com#fragment'])('rejects invalid production webhook bases: %s', (url) => {
+    expect(() => validateStudioConfig({ ...cloudProduction(), STUDIO_PUBLIC_URL: url })).toThrow('STUDIO_PUBLIC_URL');
+  });
+
+  it.each(['', 'gs://bucket.test', 'https://bucket.test', 'bucket/path', 'bucket with spaces'])('rejects invalid media buckets: %s', (bucket) => {
+    expect(() => validateStudioConfig({ ...cloudProduction(), STUDIO_MEDIA_BUCKET: bucket })).toThrow('STUDIO_MEDIA_BUCKET');
+  });
+
+  it('prevents webhook and long-polling transports from competing', () => {
+    expect(() => validateStudioConfig({ ...cloudProduction(), STUDIO_BOTS: '1' })).toThrow('STUDIO_BOTS=1');
+    expect(() => validateStudioConfig({ ...production(), STUDIO_PUBLIC_URL: 'https://studio.example.com', STUDIO_BOTS: '1' })).toThrow('STUDIO_BOTS=1');
+  });
+
+  it('requires webhook transport for production Firestore storage', () => {
+    expect(() => validateStudioConfig({ ...cloudProduction(), STUDIO_PUBLIC_URL: '', STUDIO_BOTS: '1' })).toThrow('STUDIO_BOTS=1');
+  });
+
+  it.each(['K_SERVICE', 'FUNCTION_TARGET', 'FUNCTION_NAME', 'VERCEL'])('rejects ephemeral file storage in a detected serverless runtime: %s', (key) => {
+    expect(() => validateStudioConfig({ ...production(), [key]: key === 'VERCEL' ? '1' : 'vox-service' })).toThrow('STUDIO_STORAGE=firestore');
+  });
+
+  it('requires persistent shared storage when a production webhook base is set', () => {
+    expect(() => validateStudioConfig({ ...production(), STUDIO_PUBLIC_URL: 'https://studio.example.com' })).toThrow('STUDIO_STORAGE=firestore');
+  });
+
+  it('rejects unknown storage modes instead of silently falling back to local disk', () => {
+    expect(() => validateStudioConfig({ ...production(), STUDIO_STORAGE: 'firestor' })).toThrow('STUDIO_STORAGE');
   });
 });

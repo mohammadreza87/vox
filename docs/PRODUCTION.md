@@ -1,9 +1,48 @@
 # Vox Studio production
 
-Studio needs one persistent Node.js process and a private writable data directory.
-Its Telegram long polling and file database do not support Firebase Functions,
-ephemeral storage, multiple replicas, or two processes polling the same bot token.
-The legacy Firebase website is a separate deployment.
+Studio supports two deployment profiles. Firebase uses Firestore, Cloud Storage
+and Telegram webhooks. The alternative Mac Studio profile uses one persistent
+Node.js process, a private data directory and Telegram long polling. Never use
+file storage on an ephemeral server or run pollers and webhooks for the same bot.
+
+## Firebase production
+
+The existing hostname is `https://vox-aicontact-fe0e3.web.app`; Studio opens at
+`/studio`. Configure the following in the repository's
+[Actions secrets](https://github.com/mohammadreza87/vox/settings/secrets/actions):
+
+- `STUDIO_SECRET`: a stable random encryption secret of at least 32 characters,
+  generated on the deployment host and entered directly into the secret store.
+- `VOXX_BOT_TOKEN`: @VoxxBot's manager token.
+- `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `ELEVENLABS_API_KEY`: providers required for
+  the complete chat, avatar and voice experience.
+- Existing Firebase service account, project ID and all six
+  `NEXT_PUBLIC_FIREBASE_*` configuration secrets used by the deployment workflow.
+
+Set repository variable `STUDIO_SUPERADMIN_IDS` to your positive Telegram user ID.
+Optional variables include `STUDIO_PUBLIC_URL`, `VOXX_BOT_USERNAME`,
+`STUDIO_MEDIA_BUCKET`, and `STUDIO_ORG_NAME`; their default values use the existing
+Firebase hostname/bucket, VoxxBot, and HOOR. Enable Bot Management for @VoxxBot in
+BotFather's Mini App before trying to hire an agent.
+
+The production workflow validates configuration, lint/types, tests and the high
+severity audit gate before deployment. It writes private server settings with
+`STUDIO_STORAGE=firestore`, `STUDIO_BOTS=0`, `STUDIO_ONLY=1` and the source revision.
+Missing configuration fails deployment instead of publishing a disabled Studio.
+It then registers every bot webhook and verifies the exact live revision, Studio
+page, unauthenticated rejection, and excluded legacy routes. A failed registration
+or readiness check fails the deployment job.
+
+CI and read-only credentials checks do not prove a working user flow. After a
+successful deployment, verify owner/pending access, draft/test/hire, a real reply,
+voice, and persistence from Telegram. Verify Firestore and Cloud Storage access
+policies and backups in the project; local backup commands below cover only the
+Mac profile. The Firestore state document has the platform's 1 MiB document limit.
+
+To recover Firebase, redeploy the last tested revision while preserving its
+encryption secret and compatible data. Reconnect webhooks to that revision's
+hostname and repeat the live checks. Do not run the Mac polling profile against
+those bot tokens during recovery.
 
 ## Mac Studio release
 
@@ -114,8 +153,9 @@ restore the previous code. Do not run a second poller to diagnose the same token
 It redirects the root page and hides legacy Firebase APIs, billing routes and the
 unused image optimizer. Studio validates Telegram signatures and freshness,
 restricts member access, encrypts stored bot tokens, limits per-user provider
-requests, and counts request bytes before parsing. Counters are process-local:
-multi-instance deployment requires shared persistence, locking, and rate limits.
+requests, and counts request bytes before parsing. File-mode counters are
+process-local. Firebase uses transaction-backed shared counters, Firestore state
+and webhook delivery instead of long polling.
 
 Telegram Web framing is allowed only from `https://web.telegram.org`. Calls still
 require microphone permission and delegation by the Telegram client. See

@@ -22,7 +22,7 @@ describe('Studio production readiness', () => {
   it('reports the deployed revision without authenticating or creating a member', async () => {
     const result = await health();
     expect(result.status).toBe(200);
-    expect(await result.json()).toEqual({ status: 'healthy', bots: true, revision: 'tested-revision' });
+    expect(await result.json()).toEqual({ status: 'healthy', bots: true, revision: 'tested-revision', transport: 'polling' });
     expect(result.headers.get('cache-control')).toBe('no-store');
     expect(router).not.toHaveBeenCalled();
   });
@@ -30,6 +30,14 @@ describe('Studio production readiness', () => {
   it('fails readiness when the bot runner has not started', async () => {
     state.__voxBots = false;
     expect((await health()).status).toBe(503);
+  });
+
+  it('supports webhook readiness without a polling process', async () => {
+    state.__voxBots = false;
+    getStudio.mockResolvedValueOnce({ deps: { store: { read }, managerBot: {}, webhookBase: 'https://studio.example.com' } });
+    const result = await health();
+    expect(result.status).toBe(200);
+    expect(await result.json()).toMatchObject({ transport: 'webhook', bots: true, revision: 'tested-revision' });
   });
 
   it('fails readiness if persistent storage cannot be read', async () => {

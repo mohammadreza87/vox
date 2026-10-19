@@ -83,6 +83,7 @@ export function fakeTelegram() {
     downloadFile: vi.fn(async () => new ArrayBuffer(8)),
     getMe: vi.fn(async () => ({ id: 1, is_bot: true, first_name: 'Voxx', username: 'VoxxBot' })),
     deleteWebhook: vi.fn(async () => true),
+    setWebhook: vi.fn(async () => true),
     // Long polling: hangs until a test scripts a batch with mockResolvedValueOnce.
     getUpdates: vi.fn((): Promise<TelegramUpdate[]> => new Promise(() => undefined)),
     getManagedBotToken: vi.fn(async (botId: number) => `token-${botId}`),

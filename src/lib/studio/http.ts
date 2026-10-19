@@ -4,7 +4,7 @@
  */
 
 import { verifyInitData } from './auth';
-import { StudioRateLimiter, StudioRateLimitError } from './ratelimit';
+import { StudioRateLimiter, StudioRateLimitError, type StudioRequestRateLimiter } from './ratelimit';
 import { Studio, StudioError } from './service';
 import type { Member, MemoryPolicy, Role, SpawnBrief } from './types';
 
@@ -17,10 +17,9 @@ export const MAX_STUDIO_JSON_BYTES = 256 * 1024;
 export const MAX_STUDIO_UPLOAD_BYTES = 12 * 1024 * 1024;
 
 /** Count actual bytes before JSON or multipart parsing, including chunked input. */
-async function boundedRequest(req: Request): Promise<Request> {
+export async function boundedStudioRequest(req: Request, maxBytes = req.headers.get('content-type')?.toLowerCase().startsWith('multipart/form-data')
+  ? MAX_STUDIO_UPLOAD_BYTES : MAX_STUDIO_JSON_BYTES): Promise<Request> {
   if (!req.body) return req;
-  const maxBytes = req.headers.get('content-type')?.toLowerCase().startsWith('multipart/form-data')
-    ? MAX_STUDIO_UPLOAD_BYTES : MAX_STUDIO_JSON_BYTES;
   const tooLarge = () => new StudioError(413, 'That upload is too large.');
   const length = req.headers.get('content-length');
   if (length && /^\d+$/.test(length) && Number(length) > maxBytes) {
@@ -72,13 +71,14 @@ export interface RouterOptions {
   /** Local development only: act as this Telegram user without initData */
   devUser?: { id: number; first_name: string } | null;
   /** Shared for the lifetime of this Studio; injectable for clock/policy tests. */
-  rateLimiter?: StudioRateLimiter;
+  rateLimiter?: StudioRequestRateLimiter;
 }
 
 const rateLimiters = new WeakMap<Studio, StudioRateLimiter>();
 
-function rateLimiterFor(studio: Studio, opts: RouterOptions): StudioRateLimiter {
+function rateLimiterFor(studio: Studio, opts: RouterOptions): StudioRequestRateLimiter {
   if (opts.rateLimiter) return opts.rateLimiter;
+  if (studio.deps.rateLimiter) return studio.deps.rateLimiter;
   let limiter = rateLimiters.get(studio);
   if (!limiter) {
     limiter = new StudioRateLimiter();
@@ -87,13 +87,13 @@ function rateLimiterFor(studio: Studio, opts: RouterOptions): StudioRateLimiter 
   return limiter;
 }
 
-async function authenticate(studio: Studio, req: Request, opts: RouterOptions, limiter: StudioRateLimiter): Promise<Member> {
+async function authenticate(studio: Studio, req: Request, opts: RouterOptions, limiter: StudioRequestRateLimiter): Promise<Member> {
   const initData = req.headers.get('x-telegram-init-data') ?? '';
   if (initData.length > 16_384) throw new StudioError(401, 'Open Vox Studio from Telegram.');
   const user = verifyInitData(initData, opts.botToken) ?? (initData ? null : opts.devUser ?? null);
   if (!user) throw new StudioError(401, 'Open Vox Studio from Telegram.');
   // Throttle verified identities before ensureMember can touch persistent state.
-  limiter.consume('api', user.id);
+  await limiter.consume('api', user.id);
   return studio.ensureMember(user);
 }
 
@@ -101,10 +101,10 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
   const method = req.method.toUpperCase();
   try {
     const limiter = rateLimiterFor(studio, opts);
-    limiter.consume('ingress', 'all');
+    await limiter.consume('ingress', 'all');
     // Media is addressed by unguessable file names so <img>/<audio> can load it.
     if (method === 'GET' && path[0] === 'media' && path[1]) {
-      const data = studio.deps.store.readMedia(path[1]);
+      const data = await studio.deps.store.readMedia(path[1]);
       if (!data) return json({ error: 'Not found' }, 404);
       const type = path[1].endsWith('.mp3') ? 'audio/mpeg' : 'image/jpeg';
       return new Response(new Uint8Array(data), { headers: { 'Content-Type': type, 'Cache-Control': 'private, max-age=31536000, immutable' } });
@@ -120,14 +120,14 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
     }
     if (me.role === 'pending') throw new StudioError(403, 'Waiting for an admin to approve you.');
 
-    if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) limiter.consume('mutation', me.telegramId);
+    if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) await limiter.consume('mutation', me.telegramId);
     const generation = root === 'agents' && method === 'POST' && (!id || ['refine', 'avatars', 'voice', 'speak', 'test', 'call'].includes(action));
     const voiceSearch = root === 'voices' && method === 'GET';
-    if (generation || voiceSearch) limiter.consume('expensive', me.telegramId);
-    if (generation && action === 'avatars') limiter.consume('avatar', me.telegramId);
-    if (voiceSearch || (generation && ['voice', 'speak'].includes(action))) limiter.consume('voice', me.telegramId);
-    if (generation && ['call', 'test'].includes(action)) limiter.consume('call', me.telegramId);
-    req = await boundedRequest(req);
+    if (generation || voiceSearch) await limiter.consume('expensive', me.telegramId);
+    if (generation && action === 'avatars') await limiter.consume('avatar', me.telegramId);
+    if (voiceSearch || (generation && ['voice', 'speak'].includes(action))) await limiter.consume('voice', me.telegramId);
+    if (generation && ['call', 'test'].includes(action)) await limiter.consume('call', me.telegramId);
+    req = await boundedStudioRequest(req);
 
     if (root === 'members') {
       if (!id && method === 'GET') return json(await studio.listMembers(me));

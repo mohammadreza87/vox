@@ -18,7 +18,9 @@ import {
   atLeast, canDeleteDraft, canEditPersona, canFire, canManageAccess, canSetAgentAdmin, canSpawn, canUseAgent,
   checkRoleChange, formingDay, isLocked, visibleAgents,
 } from './permissions';
-import type { StudioStore } from './store';
+import type { StudioStorage } from './store';
+import type { StudioRequestRateLimiter } from './ratelimit';
+import { AGENT_UPDATES, webhookSecret } from './updates';
 import {
   FORMING_DAYS, HUES, type Agent, type AgentLook, type Member, type MemoryPolicy, type PersonaSpec, type Role, type SpawnBrief,
 } from './types';
@@ -48,7 +50,9 @@ const ROLES: Role[] = ['superadmin', 'admin', 'member', 'pending'];
 const lockedMessage = (agent: Agent) => `${agent.persona.name}'s personality is locked. To change it, fire and hire a successor.`;
 
 export interface StudioDeps {
-  store: StudioStore;
+  store: StudioStorage;
+  /** Shared across serverless instances; omitted for the local file runtime. */
+  rateLimiter?: StudioRequestRateLimiter;
   personaLLM: LLM;
   chatLLM: LLM;
   openai: OpenAIMedia | null;
@@ -60,6 +64,8 @@ export interface StudioDeps {
   orgName: string;
   superadminIds: number[];
   webAppUrl?: string;
+  /** Serverless mode: public base URL that Telegram webhooks point at (unset = long polling). */
+  webhookBase?: string;
   memory: { memories: MemoryStore; offers: ShareOfferStore; history: ChatHistoryStore; deduper: UpdateDeduper };
   imageToJpeg?: (data: Buffer) => Promise<Buffer>;
   logger?: Pick<Console, 'info' | 'warn' | 'error'>;
@@ -334,7 +340,7 @@ export class Studio {
     if (this.deps.imageToJpeg) jpeg = await this.deps.imageToJpeg(data).catch(() => { throw bad("That image couldn't be read."); });
     else if (mime === 'image/jpeg') jpeg = data;
     else throw bad('Only JPEG uploads are supported on this server.');
-    const file = this.deps.store.saveMedia(`up-${id}-${randomUUID().slice(0, 8)}.jpg`, jpeg);
+    const file = await this.deps.store.saveMedia(`up-${id}-${randomUUID().slice(0, 8)}.jpg`, jpeg);
     await this.mutateAgent(actor, id, (a) => canEditPersona(actor, a, this.now()), (a) => {
       a.look.avatarVariants = [file, ...(a.look.avatarVariants ?? [])].slice(0, 12);
     });
@@ -347,10 +353,10 @@ export class Studio {
     if (agent.status !== 'draft') throw forbidden('The voice is chosen before publishing.');
     const brief = (description ?? agent.persona.voiceBrief).slice(0, 1000);
     const previews = await this.deps.eleven.designVoices(brief);
-    const saved = previews.slice(0, 3).map((p) => ({
+    const saved = await Promise.all(previews.slice(0, 3).map(async (p) => ({
       generatedVoiceId: p.generatedVoiceId,
-      file: this.deps.store.saveMedia(`vp-${id}-${randomUUID().slice(0, 8)}.mp3`, p.audio),
-    }));
+      file: await this.deps.store.saveMedia(`vp-${id}-${randomUUID().slice(0, 8)}.mp3`, p.audio),
+    })));
     const updated = await this.mutateAgent(actor, id, (a) => canEditPersona(actor, a, this.now()), (a) => {
       a.voicePreviews = saved;
       if (description) a.persona = { ...a.persona, voiceBrief: brief };
@@ -488,6 +494,10 @@ export class Studio {
     const token = this.botToken(agent);
     if (!token) return;
     const bot = this.deps.botFor(token);
+    // Wire delivery first so a failed cosmetic call can't leave the bot deaf.
+    if (this.deps.webhookBase) {
+      await bot.setWebhook(`${this.deps.webhookBase.replace(/\/+$/, '')}/api/studio/telegram/${agent.id}`, webhookSecret(this.deps.secret, agent.id), AGENT_UPDATES);
+    }
     const p = agent.persona;
     await bot.setMyName(p.name);
     await bot.setMyShortDescription(`${p.role} at ${this.deps.orgName}. ${p.tagline}`.trim());
@@ -498,7 +508,7 @@ export class Studio {
       { command: 'forget', description: 'Delete something you told me' },
       { command: 'whoami', description: 'How I know you' },
     ]);
-    const photo = agent.look.avatar ? this.deps.store.readMedia(agent.look.avatar) : null;
+    const photo = agent.look.avatar ? await this.deps.store.readMedia(agent.look.avatar) : null;
     if (photo) await bot.setMyProfilePhoto(photo);
   }
 
@@ -667,7 +677,7 @@ export class Studio {
   // RUNTIME: GATEWAY, CALLS, MEMORIES
   // ============================================
 
-  async gateway(): Promise<{ gateway: PersonaGateway; state: Awaited<ReturnType<StudioStore['read']>> }> {
+  async gateway(): Promise<{ gateway: PersonaGateway; state: Awaited<ReturnType<StudioStorage['read']>> }> {
     const state = await this.deps.store.read();
     const org = studioToOrg(state, this.deps.orgName);
     const tokens = new Map(state.agents.filter((a) => a.status === 'active').map((a) => [a.id, this.botToken(a)]));

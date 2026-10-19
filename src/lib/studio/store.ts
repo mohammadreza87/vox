@@ -1,18 +1,32 @@
 /**
- * Studio state on local disk — designed for a single always-on server
- * (the Mac Studio). One JSON document, written atomically, with every change
- * serialized through one queue so concurrent requests never lose writes.
- * Binary media (avatars, voice previews) live next to it as files.
+ * Where Studio keeps its state and media. Two implementations:
+ *  - StudioStore (this file): local disk, for one always-on server (Mac Studio)
+ *  - FirestoreStudioStore: Firestore + Cloud Storage, for serverless production
  */
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs';
 import { join, basename } from 'path';
 import type { AuditEntry, StudioState } from './types';
 
-const EMPTY: StudioState = { members: [], agents: [], groups: [], audit: [] };
-const SAFE_FILE = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,120}$/;
+export const EMPTY_STATE: StudioState = { members: [], agents: [], groups: [], audit: [] };
+export const SAFE_FILE = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,120}$/;
 
-export class StudioStore {
+export interface StudioStorage {
+  /** A deep copy of the current state. */
+  read(): Promise<StudioState>;
+  /** Apply `fn` to a draft and persist it; throwing inside `fn` changes nothing. `fn` may run more than once. */
+  update<T>(fn: (state: StudioState) => T): Promise<T>;
+  audit(entry: Omit<AuditEntry, 'at'>): Promise<void>;
+  saveMedia(name: string, data: Buffer): Promise<string>;
+  readMedia(name: string): Promise<Buffer | null>;
+}
+
+/**
+ * Local disk: one JSON document, written atomically, with every change
+ * serialized through one queue so concurrent requests never lose writes.
+ * Binary media (avatars, voice previews) live next to it as files.
+ */
+export class StudioStore implements StudioStorage {
   private state: StudioState | null = null;
   private queue: Promise<unknown> = Promise.resolve();
   readonly mediaDir: string;
@@ -28,8 +42,8 @@ export class StudioStore {
   private load(): StudioState {
     if (!this.state) {
       this.state = existsSync(this.file)
-        ? { ...EMPTY, ...(JSON.parse(readFileSync(this.file, 'utf8')) as StudioState) }
-        : structuredClone(EMPTY);
+        ? { ...EMPTY_STATE, ...(JSON.parse(readFileSync(this.file, 'utf8')) as StudioState) }
+        : structuredClone(EMPTY_STATE);
     }
     return this.state;
   }
@@ -72,13 +86,13 @@ export class StudioStore {
     });
   }
 
-  saveMedia(name: string, data: Buffer): string {
+  async saveMedia(name: string, data: Buffer): Promise<string> {
     if (!SAFE_FILE.test(name)) throw new Error('Unsafe media file name');
     writeFileSync(join(this.mediaDir, name), data);
     return name;
   }
 
-  readMedia(name: string): Buffer | null {
+  async readMedia(name: string): Promise<Buffer | null> {
     const clean = basename(name);
     if (clean !== name || !SAFE_FILE.test(name)) return null;
     const path = join(this.mediaDir, name);

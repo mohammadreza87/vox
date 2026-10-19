@@ -31,7 +31,7 @@ function envLine(key, value) {
 function privateDir(path) { mkdirSync(path, { recursive: true, mode: 0o700 }); chmodSync(path, 0o700); }
 function config() {
   if (!existsSync(envFile)) throw new Error('Run prepare first, then fill in production.env.');
-  return { ...readEnv(envFile), NODE_ENV: 'production', STUDIO_ONLY: '1', STUDIO_BOTS: '1' };
+  return { ...readEnv(envFile), NODE_ENV: 'production', STUDIO_STORAGE: 'file', STUDIO_PUBLIC_URL: '', STUDIO_ONLY: '1', STUDIO_BOTS: '1' };
 }
 function prepare() {
   privateDir(base);

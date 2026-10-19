@@ -12,6 +12,10 @@ export interface StudioRateLimiterOptions {
   policies?: Partial<Record<StudioRateScope, StudioRatePolicy>>;
 }
 
+export interface StudioRequestRateLimiter {
+  consume(scope: StudioRateScope, identity: string | number): void | Promise<void>;
+}
+
 const MINUTE = 60_000;
 const DEFAULT_POLICIES: Record<StudioRateScope, StudioRatePolicy> = {
   // A shared entrance limit also bounds invalid authentication and public media.
@@ -24,6 +28,18 @@ const DEFAULT_POLICIES: Record<StudioRateScope, StudioRatePolicy> = {
   voice: { requests: 20, windowMs: 10 * MINUTE },
   call: { requests: 20, windowMs: MINUTE },
 };
+
+/** Keep local and distributed windows identical, with validated immutable input. */
+export function studioRatePolicies(overrides: StudioRateLimiterOptions['policies'] = {}): Record<StudioRateScope, StudioRatePolicy> {
+  const policies = { ...DEFAULT_POLICIES, ...overrides };
+  for (const [scope, policy] of Object.entries(policies)) {
+    if (!policy || !Number.isSafeInteger(policy.requests) || policy.requests < 1 || !Number.isSafeInteger(policy.windowMs) || policy.windowMs < 1) {
+      throw new Error('Invalid rate limit policy');
+    }
+    policies[scope as StudioRateScope] = { ...policy };
+  }
+  return policies;
+}
 
 interface Counter {
   requests: number;
@@ -41,7 +57,7 @@ export class StudioRateLimitError extends Error {
  * Fixed windows with a hard key bound. Full capacity rejects new keys rather
  * than evicting live counters, so cycling user IDs cannot reset their limits.
  */
-export class StudioRateLimiter {
+export class StudioRateLimiter implements StudioRequestRateLimiter {
   private readonly counters = new Map<string, Counter>();
   private readonly now: () => number;
   private readonly maxKeys: number;
@@ -51,13 +67,8 @@ export class StudioRateLimiter {
   constructor(options: StudioRateLimiterOptions = {}) {
     this.now = options.now ?? Date.now;
     this.maxKeys = options.maxKeys ?? 10_000;
-    this.policies = { ...DEFAULT_POLICIES, ...options.policies };
+    this.policies = studioRatePolicies(options.policies);
     if (!Number.isSafeInteger(this.maxKeys) || this.maxKeys < 1) throw new Error('Invalid rate limiter capacity');
-    for (const policy of Object.values(this.policies)) {
-      if (!Number.isSafeInteger(policy.requests) || policy.requests < 1 || !Number.isSafeInteger(policy.windowMs) || policy.windowMs < 1) {
-        throw new Error('Invalid rate limit policy');
-      }
-    }
   }
 
   consume(scope: StudioRateScope, identity: string | number): void {
