@@ -1,12 +1,13 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConversationPanel } from './ConversationPanel';
-const controls = vi.hoisted(() => ({ start: vi.fn(), update: vi.fn(), cancel: vi.fn(), image: vi.fn(), fetch: vi.fn() }));
+const controls = vi.hoisted(() => ({ start: vi.fn(), update: vi.fn(), cancel: vi.fn(), suspend: vi.fn(), snapshot: vi.fn(), image: vi.fn(), fetch: vi.fn() }));
 vi.mock('@/lib/adaptive/prediction/client', () => ({
   predictionHttpTransport: () => ({}),
-  LivePredictionConsumer: class { startTurn = controls.start; update = controls.update; cancel = controls.cancel; },
+  LivePredictionConsumer: class { startTurn = controls.start; update = controls.update; cancel = controls.cancel; suspend = controls.suspend; snapshotTurn = controls.snapshot; },
 }));
 vi.mock('@/lib/adaptive/prediction/image-browser', () => ({ prepareSharedImage: controls.image }));
+vi.mock('../_lib/preference-learning-client', () => ({ preferenceLearningApi: { cancel: vi.fn() } }));
 vi.mock('../_lib/client', () => ({ tg: () => ({ initData: 'synthetic-signed-session' }) }));
 beforeEach(() => { vi.clearAllMocks(); vi.stubGlobal('fetch', controls.fetch); });
 afterEach(() => vi.unstubAllGlobals());
@@ -16,7 +17,7 @@ describe('scoped conversation UI', () => {
     render(<ConversationPanel agentId="agent1" space="personal" />);
     expect(screen.getByLabelText('Prepare while I type')).not.toBeChecked();
     fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'A private message' } });
-    expect(controls.fetch).not.toHaveBeenCalled(); expect(controls.update).not.toHaveBeenCalled();
+    expect(controls.fetch).not.toHaveBeenCalled(); expect(controls.update).toHaveBeenCalledWith(expect.objectContaining({ stable: false }));
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
     await screen.findByText('Scoped answer');
     expect(JSON.parse(controls.fetch.mock.calls[0][1].body)).toEqual({ agentId: 'agent1', space: 'personal', text: 'A private message' });
@@ -56,4 +57,13 @@ describe('scoped conversation UI', () => {
     expect(screen.getByRole('alert')).not.toHaveTextContent('PRIVATE_PROVIDER_CANARY');
     expect(screen.getByRole('log').closest('section')).toHaveAttribute('dir', 'rtl');
   });
+});
+it('reuses one logical turn regardless of preparation toggle and supplies it only as correlation on final Send', async () => {
+  const turn = { sessionId: 'logical-session', turnId: 'logical-turn', revision: 4, contextKey: 'logical-context' };
+  controls.snapshot.mockReturnValue(turn); controls.fetch.mockResolvedValue(Response.json({ reply: 'Correlated answer' }));
+  render(<ConversationPanel agentId="agent1" space="work" />);
+  expect(controls.start).toHaveBeenCalledOnce(); fireEvent.click(screen.getByLabelText('Prepare while I type')); fireEvent.click(screen.getByLabelText('Prepare while I type'));
+  expect(controls.start).toHaveBeenCalledOnce(); fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'Please keep replies brief.' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Send' })); await screen.findByText('Correlated answer');
+  expect(JSON.parse(controls.fetch.mock.calls[0][1].body).turn).toEqual(turn); expect(controls.suspend).toHaveBeenCalled(); expect(controls.start).toHaveBeenCalledTimes(2);
 });

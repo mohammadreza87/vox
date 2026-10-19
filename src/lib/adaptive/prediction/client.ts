@@ -45,6 +45,16 @@ export class LivePredictionConsumer {
     this.stop(); this.scope = undefined; this.revision++;
     if (scope) void this.options.invalidate(scope).catch(() => {});
   }
+  /** Stop speculative export without inventing another logical turn/budget. */
+  suspend(): void {
+    const exported = this.exported; this.exported = undefined;
+    this.stop(); this.revision++;
+    if (exported) void this.options.invalidate(exported).catch(() => {});
+  }
+  snapshotTurn(): { sessionId: string; turnId: string; revision: number; contextKey: string } | undefined {
+    if (!this.scope) return undefined;
+    return { sessionId: this.scope.sessionId, turnId: this.scope.turnId, revision: this.revision, contextKey: this.scope.contextKey };
+  }
   private matches(input: Pick<PredictInput, keyof PredictionScope | 'revision'>): boolean {
     return !!this.scope && input.revision === this.revision && Object.entries(this.scope).every(([key, value]) => input[key as keyof PredictionScope] === value);
   }

@@ -1,3 +1,4 @@
+import { createStudioPreferenceLearning } from './preference-learning';
 /**
  * Production wiring for Vox Studio, from environment variables.
  *
@@ -34,7 +35,6 @@
 import { isAbsolute, join, parse, relative, resolve, sep } from 'path';
 import { AnthropicLLM, type LLM } from '../tireh/llm';
 import { createHash } from 'crypto';
-import OpenAI from 'openai';
 import { createFileStores } from '../tireh/memory/file-store';
 import { FirestoreChatHistoryStore, FirestoreMemoryStore, FirestoreShareOfferStore, FirestoreUpdateDeduper } from '../tireh/memory/firestore-store';
 import { TelegramBotClient } from '../tireh/telegram/client';
@@ -171,7 +171,11 @@ async function toJpeg(data: Buffer): Promise<Buffer> {
     .toBuffer();
 }
 
-const g = globalThis as unknown as { __voxStudio?: Promise<Studio> };
+const g = globalThis as unknown as { __voxStudio?: Promise<Studio>; __voxPreferenceTasks?: Studio['deps']['preferenceLearning'];
+  __voxPreferenceStop?: Promise<{ pending: number }>; __voxPreferenceHooks?: boolean };
+export function stopStudioPreferenceLearning(): Promise<{ pending: number }> {
+  return g.__voxPreferenceStop = g.__voxPreferenceTasks?.tasks.close() ?? Promise.resolve({ pending: 0 });
+}
 
 type RuntimeStorage = Pick<StudioDeps, 'store' | 'memory' | 'rateLimiter' | 'adaptive' | 'relationshipStore' | 'observations'> & { sharedStorage: AdaptiveStorage; voiceIdentityStorage: AdaptiveStorage; maintenanceStorage: AdaptiveStorage };
 function fileStorage(dir: string, scopedRelationshipsEnabled: boolean): RuntimeStorage {
@@ -314,9 +318,10 @@ async function create(): Promise<Studio> {
     notificationEndpointId: reminderEndpointId,
     decisionsEnabled: env.STUDIO_DECISIONS_ENABLED === '1' && !!env.OPENAI_API_KEY,
     ...(env.STUDIO_DECISIONS_ENABLED === '1' && env.OPENAI_API_KEY ? {
-      decisions: new DecisionService(new OpenAIDecisionProvider(new OpenAI({ apiKey: env.OPENAI_API_KEY, maxRetries: 0 }))),
+      decisions: new DecisionService(OpenAIDecisionProvider.guarded({ apiKey: env.OPENAI_API_KEY })),
     } : {}),
   });
+  studio.deps.preferenceLearning = createStudioPreferenceLearning(studio);
   if (reminderEndpointId && config.token) {
     studio.deps.reminderEndpointId = reminderEndpointId;
     studio.deps.reminderDelivery = createStudioReminderDelivery(studio, {
@@ -363,7 +368,16 @@ export async function maintainAdaptiveAccount(studio: Studio, telegramId: number
 
 export function getStudio(): Promise<Studio> {
   if (!g.__voxStudio) {
-    g.__voxStudio = create().catch((e) => {
+    g.__voxStudio = create().then(async studio => {
+      await g.__voxPreferenceTasks?.tasks.close();
+      g.__voxPreferenceTasks = studio.deps.preferenceLearning;
+      if (!g.__voxPreferenceHooks) {
+        g.__voxPreferenceHooks = true;
+        const stop = () => { stopStudioPreferenceLearning(); };
+        process.once('SIGTERM', stop); process.once('SIGINT', stop);
+      }
+      return studio;
+    }).catch((e) => {
       g.__voxStudio = undefined;
       throw e;
     });

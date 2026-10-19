@@ -4,6 +4,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { useEffect, useRef, useState } from 'react';
 import { api, haptic, tg, type AgentView } from '../../_lib/client';
 import { learningApi } from '../../_lib/learning-client';
+import { preferenceLearningApi } from '../../_lib/preference-learning-client';
 import type { ClientObservationInput } from '@/lib/adaptive/observation/contracts';
 import { predictionHttpTransport } from '@/lib/adaptive/prediction/client';
 import { VoicePartialConsumer, type VoicePartialCapability } from '@/lib/adaptive/prediction/voice-client';
@@ -43,6 +44,7 @@ export function CallScreen({ id }: { id: string }) {
   const [prepareWhileSpeaking, setPrepareWhileSpeaking] = useState(false);
   const [feedbackTurnId, setFeedbackTurnId] = useState<string | null>(null);
   const partial = useRef<VoicePartialConsumer | null>(null);
+  useEffect(() => () => { void preferenceLearningApi.cancel(space, id); }, [id, space]);
   const changePreparation = (value: boolean) => {
     partial.current?.setOptIn(value);
     setPrepareWhileSpeaking(value && partialCapability?.available === true);

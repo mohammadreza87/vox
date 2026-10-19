@@ -51,6 +51,12 @@ export class AdaptiveLifecycleService {
           changeId: p.changeId, agentId: p.agentId, key: p.key, createdAt: p.createdAt, expiresAt: p.expiresAt,
           previous: p.before ? { setting: p.before.setting, status: p.before.status } : null,
         })),
+        preferenceLearning: d.experience.preferenceLearning ? {
+          version: d.experience.preferenceLearning.version,
+          intents: d.experience.preferenceLearning.intents.filter(i => i.space === space).map(({ agentId, createdAt, expiresAt }) => ({ agentId, createdAt, expiresAt })),
+          candidates: d.experience.preferenceLearning.candidates.filter(c => c.space === space).map(({ id, agentId, setting, reason, evidenceIds, createdAt, expiresAt }) => ({ id, agentId, setting, reason, evidenceIds, createdAt, expiresAt })),
+          suppressions: d.experience.preferenceLearning.suppressions.filter(s => s.space === space).map(({ agentId, evidenceId, createdAt, expiresAt }) => ({ agentId, evidenceId, createdAt, expiresAt })),
+        } : null,
         purposes: d.permissions.filter(p => p.id.startsWith(`permission:${space}:`)).map(p => ({ purpose: p.purpose,
           state: p.state, revision: p.revision, epoch: p.epoch, effectiveAt: p.effectiveAt, expiresAt: p.expiresAt })),
         agents: d.agentGrants.filter(g => g.space === space).map(g => ({ agentId: g.agentId, allowed: g.allowed, revision: g.revision })),

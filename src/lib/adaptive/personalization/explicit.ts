@@ -1,9 +1,27 @@
 import { containerIdFor, digest, spaceIdFor, tenantIdFor, type AdaptiveDocument, type SpaceKind } from '../persistence/repository';
-import type { AdaptiveService } from '../persistence/service';
-import type { PreferenceExplanation, StoredPreference } from '../runtime/contracts';
+import { AdaptiveError, type AdaptiveService } from '../persistence/service';
+import type { PreferenceExplanation, StoredPreference, PreferenceInput } from '../runtime/contracts';
+import { suppressLearningScope } from './learning/state';
 import type { PreferenceRecord, PreferenceScope } from './index';
 
 export const PREFERENCE_UNDO_MS = 10 * 60_000;
+/** Shared synchronous write: reviewed Use and ordinary controls have identical
+ * absence/reset preserving Undo semantics inside their own canonical transaction. */
+export function applyExplicitPreference(d: AdaptiveDocument, input: PreferenceInput, now: number): void {
+  const prior = d.experience.preferences.find(p => p.space === input.space && p.agentId === input.agentId && p.setting.key === input.setting.key);
+  if (!prior && d.experience.preferences.length >= 120) throw new AdaptiveError(409, 'storage_capacity');
+  const before = prior ? structuredClone(prior) : null;
+  suppressLearningScope(d, input, now);
+  if (prior) { prior.setting = input.setting; prior.status = input.action === 'reset' ? 'reset' : 'active'; prior.updatedAt = now; prior.revision++; }
+  else d.experience.preferences.push({ id: input.eventId, revision: 1, space: input.space, agentId: input.agentId,
+    setting: input.setting, status: input.action === 'reset' ? 'reset' : 'active', updatedAt: now });
+  const after = d.experience.preferences.find(p => p.space === input.space && p.agentId === input.agentId && p.setting.key === input.setting.key)!;
+  const undo = (d.experience.preferenceUndo ?? []).filter(row => row.space !== input.space || row.agentId !== input.agentId || row.key !== input.setting.key);
+  if (undo.length >= 120) throw new AdaptiveError(409, 'storage_capacity');
+  undo.push({ changeId: input.eventId, space: input.space, agentId: input.agentId, key: input.setting.key, before,
+    afterFingerprint: digest(after), bindingId: d.binding!.id, createdAt: now, expiresAt: Math.min(now + PREFERENCE_UNDO_MS, d.binding!.expiresAt) });
+  d.experience.preferenceUndo = undo;
+}
 /** An expired or replaced account confirmation can never restore an old choice. */
 export function prunePreferenceUndo(d: AdaptiveDocument, now: number): void {
   if (!d.experience.preferenceUndo) return;

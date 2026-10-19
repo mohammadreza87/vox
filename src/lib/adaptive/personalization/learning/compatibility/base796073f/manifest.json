@@ -1,0 +1,25 @@
+{
+  "revision": "796073f07c60d93ee52eaa5344628478ec7ada4f",
+  "files": [
+    {
+      "path": "src/lib/adaptive/runtime/contracts.ts",
+      "fixture": "runtime-contracts.ts.txt",
+      "sha256": "24402d13ed34572e5bcca1e397e5ed454be7c95d07c6bd3483e4c91213aab059"
+    },
+    {
+      "path": "src/lib/adaptive/runtime/reminder-contracts.ts",
+      "fixture": "runtime-reminder-contracts.ts.txt",
+      "sha256": "abf3e89e4aa398f951ab0acab14759174f5f65b69ed0b99ecd2763352b573d4f"
+    },
+    {
+      "path": "src/lib/adaptive/prediction/image.ts",
+      "fixture": "prediction-image.ts.txt",
+      "sha256": "8b8060efaa129e6bed4eb3126ac97b306b89e315acc8bc00b6756f7c5fae9b92"
+    },
+    {
+      "path": "src/lib/adaptive/personalization/index.ts",
+      "fixture": "personalization-index.ts.txt",
+      "sha256": "8173da400c4cda58fb845a5414de73ecb25994dcfe9f2744d9093db53dbcd3c6"
+    }
+  ]
+}

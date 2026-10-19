@@ -243,7 +243,7 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
             if (!(audio instanceof Blob)) throw new StudioError(400, 'Expected audio');
             const space = form.get('space') ?? 'work';
             if (space !== 'work' && space !== 'personal') throw new StudioError(400, 'Choose Work or Personal.');
-            return json(await studio.callTurn(me, id, await audio.arrayBuffer(), audio.type || 'audio/webm', space));
+            return json(await studio.callTurn(me, id, await audio.arrayBuffer(), audio.type || 'audio/webm', space, req.signal));
           }
           case 'GET relationship': {
             const space = new URL(req.url).searchParams.get('space') ?? 'work';

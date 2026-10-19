@@ -1,9 +1,11 @@
 import { ensureReminderDelivery, pruneReminderDelivery, reminderChannelStatus, reminderPermit, reminderDisclosureAuthority, REMINDER_PURPOSE } from './reminder-state';
 import { REMINDER_DISCLOSURE_VERSION, reminderChannelPresentSchema, reminderChannelInputSchema, reminderActionInputSchema, type ReminderChannelPresentInput, type ReminderChannelInput, type ReminderActionInput } from './reminder-contracts';
 import { randomUUID } from 'crypto';
+import { reserveDecision } from './decision-budget';
+import { suppressLearningScope } from '../personalization/learning/state';
 import { minimizeImageDataUrl } from '../prediction/image';
 import { resolvePreferences } from '../personalization';
-import { explicitPreferenceSnapshot, PREFERENCE_UNDO_MS, prunePreferenceUndo } from '../personalization/explicit';
+import { applyExplicitPreference, explicitPreferenceSnapshot, prunePreferenceUndo } from '../personalization/explicit';
 import { DecisionService, type DecisionInput, type DecisionResult } from '../decisions';
 import { isQuietHour, isSelectedTimezone } from '../notifications';
 import { digest, type AdaptiveDocument, type OptionalPurpose, type SpaceKind } from '../persistence/repository';
@@ -40,6 +42,7 @@ const questions: Record<PredictInput['question'], DecisionInput['questions'][num
 export class AdaptiveExperienceService {
   private readonly activePredictions = new Map<string, { controller: AbortController; reservation: string; turnId: string; revision: number }>();
   constructor(readonly adaptive: AdaptiveService, private readonly options: AdaptiveExperienceOptions = {}) {}
+  get learningDecisions(): DecisionService | undefined { return this.options.decisionsEnabled === true ? this.options.decisions : undefined; }
   private confirmed(d: AdaptiveDocument, now: number): void {
     if (!this.adaptive.isProfileConfirmed(d, now)) error(403, 'profile_confirmation_required');
   }
@@ -112,18 +115,7 @@ export class AdaptiveExperienceService {
     return this.adaptive.withAccountDocument(telegramId, (d, now) => {
       this.confirmed(d, now); this.pruneDocument(d, now);
       if (!this.command(d, input, 'preference_changed', digest(['preference', input]))) return this.snapshot(d, input.space, now);
-      const prior = d.experience.preferences.find(p => p.space === input.space && p.agentId === input.agentId && p.setting.key === input.setting.key);
-      if (!prior && d.experience.preferences.length >= 120) error(409, 'storage_capacity');
-      const before = prior ? structuredClone(prior) : null;
-      if (prior) { prior.setting = input.setting; prior.status = input.action === 'reset' ? 'reset' : 'active'; prior.updatedAt = now; prior.revision++; }
-      else d.experience.preferences.push({ id: input.eventId, revision: 1, space: input.space, agentId: input.agentId,
-        setting: input.setting, status: input.action === 'reset' ? 'reset' : 'active', updatedAt: now });
-      const after = d.experience.preferences.find(p => p.space === input.space && p.agentId === input.agentId && p.setting.key === input.setting.key)!;
-      const undo = (d.experience.preferenceUndo ?? []).filter(row => row.space !== input.space || row.agentId !== input.agentId || row.key !== input.setting.key);
-      if (undo.length >= 120) error(409, 'storage_capacity');
-      undo.push({ changeId: input.eventId, space: input.space, agentId: input.agentId, key: input.setting.key, before,
-        afterFingerprint: digest(after), bindingId: d.binding!.id, createdAt: now, expiresAt: Math.min(now + PREFERENCE_UNDO_MS, d.binding!.expiresAt) });
-      d.experience.preferenceUndo = undo;
+      applyExplicitPreference(d, input, now);
       this.bump(d, now); return this.snapshot(d, input.space, now);
     });
   }
@@ -137,6 +129,7 @@ export class AdaptiveExperienceService {
       const index = d.experience.preferences.findIndex(p => p.space === input.space && p.agentId === input.agentId && p.setting.key === change!.key);
       const current = d.experience.preferences[index];
       if (!current || digest(current) !== change!.afterFingerprint) error(409, 'preference_undo_unavailable');
+      suppressLearningScope(d, input, now);
       if (change!.before) d.experience.preferences[index] = { ...change!.before, revision: current.revision + 1, updatedAt: now };
       else d.experience.preferences.splice(index, 1);
       d.experience.preferenceUndo = d.experience.preferenceUndo!.filter(row => row !== change);
@@ -421,11 +414,11 @@ export class AdaptiveExperienceService {
         turn = { agentId: input.agentId, space: input.space, sessionId: input.sessionId, turnId: input.turnId, revision: input.revision, evaluations: 0, inFlightUntil: 0, expiresAt: now + 10 * 60_000 };
         d.experience.predictionTurns.push(turn);
       }
-      if (turn.superseded || input.revision < turn.revision || turn.cancelled && input.revision <= turn.revision) return { unknown: 'stale' as const };
+      if (turn.finalFingerprint || turn.superseded || input.revision < turn.revision || turn.cancelled && input.revision <= turn.revision) return { unknown: 'stale' as const };
       if (input.revision > turn.revision) { turn.revision = input.revision; turn.cancelled = false; this.bump(d, now); }
-      if (d.experience.predictionTurns.some(p => p.sessionId === input.sessionId && p.inFlightUntil > now)) return { unknown: 'busy' as const };
-      if (turn.evaluations >= 2) return { unknown: 'budget' as const };
-      turn.revision = input.revision; turn.evaluations++; turn.inFlightUntil = now + 1000; turn.reservation = reservation; turn.contextKey = input.contextKey;
+      turn.revision = input.revision; turn.contextKey = input.contextKey;
+      const reserved = reserveDecision(d, input, now, reservation, 'prepare');
+      if ('reason' in reserved) return { unknown: reserved.reason };
       this.bump(d, now);
       turn.policyReceipt = digest([d.accountId, input.space, input.agentId, input.sessionId, input.turnId, input.revision, input.contextKey, input.image && [input.image.sourceId, input.image.revision], reservation]);
       turn.requiresImage = !!image;

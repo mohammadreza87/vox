@@ -55,3 +55,10 @@ describe('live partial conversation consumer', () => {
     expect(fetcher).toHaveBeenCalledWith('/api/studio/experience/prediction-validate', expect.objectContaining({ signal: controller.signal, credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'x-telegram-init-data': 'signed-init' } }));
   });
 });
+it('suspending preparation preserves logical-turn identity and its consumed two-call budget', async () => {
+  vi.useFakeTimers(); const send = vi.fn(async () => ({ status: 'unknown' as const, reason: 'unsupported' as const, elapsedMs: 0 }));
+  const client = new LivePredictionConsumer({ send, invalidate: vi.fn(async () => ({})), validate: vi.fn(async () => ({ valid: false })), debounceMs: 1 });
+  const scope = { space: 'work' as const, agentId: 'agent1', sessionId: 'same-session', turnId: 'same-turn', contextKey: 'same-context' }; client.startTurn(scope);
+  for (let i = 0; i < 3; i++) { client.update({ text: 'A stable current sentence', stable: true }); await vi.advanceTimersByTimeAsync(2); client.suspend(); }
+  expect(send).toHaveBeenCalledTimes(2); expect(client.snapshotTurn()).toMatchObject({ sessionId: scope.sessionId, turnId: scope.turnId, contextKey: scope.contextKey }); client.cancel(); vi.useRealTimers();
+});
