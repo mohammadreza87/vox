@@ -1,6 +1,6 @@
 # Private saved note correction — VOX-056 / VOX-013
 
-Base: `943e4e6f5b20eaf6386c5d8d8ca7fd4f07185989`. Local implementation and focused qualification complete; independent review pending. No provider requests, real data, build, deployment, or external configuration changes.
+Base: `943e4e6f5b20eaf6386c5d8d8ca7fd4f07185989`. The initial implementation and its historical checks are recorded below. The later exact-source independent and compiled-browser qualification is recorded in the final section; deployment remains a separate release gate.
 
 ## English
 
@@ -53,3 +53,21 @@ Base: `e671666f5fedec6e05c7c392ce68a0cb3ddec61d` (runtime tree identical to `086
 - Pending: independent acceptance and a new exact composed compiled-browser journey. No build, production deployment or live provider calls were performed for this follow-up.
 
 این پیگیری پس از مشاهدهٔ شکست واقعی مرورگر انجام شد: تغییر فضا و قطع کلاینت، ذخیرهٔ مجازِ منتظر قفل FILE را الزاماً متوقف نکرد. شواهد شکست حفظ شده‌اند. ۵۷ آزمون در ۶ فایل، شامل مسیر واقعی کلاینت و درخواست امضاشده و FILE و آزمون‌های ناوبری، موفق شدند؛ بررسی مستقل و آزمون مرورگر روی ساخت تازه هنوز لازم است. هیچ مجوز، ساختار ذخیره‌سازی، محافظ وابستگی یا بازپخش سرور تضعیف نشده و ساخت یا استقرار انجام نشده است.
+
+## Independent and compiled qualification — 20 October 2026
+
+The Save lifecycle runtime candidate is `3bd66d40bca87d03c8cdbf0c0f2a319b185812ad`, tree `cdfa4b17efd7ab37949161ff88bc363ad14c96d2`; its observed PR66 merge `bc4bde9e20479e3457c4e8d899672ec31ae13651` has the same tree. Local combined tests passed **3,104**, with **13 skipped**. Independent external probes passed **23** cases and reproduced the original same-batch cancellation defect on the baseline. The clean compiled build was `5X-5bMG1gJN3jb6v5rTZs`.
+
+A fresh compiled browser run passed all five acceptance groups: unsent Cancel/no PUT; submitted Work Save with a visible destination and disabled competing controls until real HTTP200; preserved ID/retention/provenance/grants plus Work/Personal isolation and unauthorized/stale rejection; Persian claim correction with atomic dependent-summary text removal/tombstone/outbox; and rejection of both still-live old claim/summary receipts. It used actual compiled routes, signed synthetic identity and isolated FILE storage, with zero application API mocks, paid-provider calls or Telegram sends. Only the two exact synthetic claim/summary draft exports occurred. All 3,382 original artifact files remained unchanged; only three reviewed route-cache additions occurred. Receipt SHA256: `0b8c61a0ddfeca0cefaf29fa10efd4f5532c2460aa76156f756a379b9422c205`.
+
+The earlier browser attempt is retained: after the real Save returned200, its global status locator matched both Saved and an unrelated voice-recognition status. The new attempt required exactly one visible status with exact Saved text. Neither the product nor acceptance outcome was weakened. Target-element Persian screenshots establish review/caveat/control rendering; their crop does not independently prove every glyph is visible within the full viewport. Telegram Back was exercised at main-tab stack depth one; deeper-stack guards, unknown response and forced unmount are covered by separate component probes.
+
+CI172 retained one failed integration fixture (3,103 passed, one failed,13 skipped): its default one-second DOM poll expired while the real FILE-backed request was still pending. CI does not identify the slow I/O stage or the eventual response. A deterministic probe reproduced this with a successful real PUT whose response was delivered after1.2 seconds. The test-only follow-up tracks exact method/path/query response promises, awaits them under React act, checks HTTP status, then checks UI/canonical state. It removes mutating repository-read polling and changes no application deadline, storage behavior or permission guard. The same barrier covers initial/locale/space reads and Create. Final composed CI and deployment must be recorded separately; this evidence does not qualify provider quality, physical devices, production performance or optional-feature activation.
+
+### فارسی — نتیجهٔ بررسی مستقل و مرورگر
+
+روی نسخهٔ دقیق `3bd66d4`، آزمون‌های ترکیبی محلی با **۳۱۰۴ موفق و ۱۳ ردشده از اجرا** و بررسی مستقل با **۲۳ مورد موفق** ثبت شدند. نسخهٔ ادغام‌شدهٔ `bc4bde9` همان درخت منبع را دارد. اجرای تازهٔ مرورگر روی ساخت کامپایل‌شده، هر پنج گروه معیار را گذراند: انصراف پیش از ارسال بدون درخواست، نمایش فضای کاری و قفل کنترل‌های رقیب تا پاسخ واقعی۲۰۰، حفظ شناسه و مهلت و منشأ و دسترسی، جداسازی فضای شخصی، اصلاح فارسی و حذف متن خلاصهٔ وابسته، و رد رسیدهای قدیمی که هنوز معتبر زمانی بودند. مسیرها و ذخیره‌سازی FILE واقعی ولی حساب و ارائه‌دهنده مصنوعی بودند؛ هیچ پاسخ API برنامه جعل نشد و هیچ فراخوانی پولی یا پیام تلگرامی انجام نشد.
+
+شکست اجرای قبلی مرورگر حفظ شده است: انتخابگر سراسری وضعیت، هم پیام ذخیره و هم پیام نامرتبط تشخیص صدا را انتخاب می‌کرد. اجرای تازه فقط یک پیام دقیق ذخیره را می‌پذیرد؛ رفتار محصول و معیار پذیرش ضعیف نشده‌اند. تصاویر بریده‌شدهٔ عنصر فارسی، نمایش کنترل‌ها و هشدار منشأ را نشان می‌دهند ولی دیده‌شدن همهٔ نویسه‌ها در نمای کامل را مستقلاً ثابت نمی‌کنند. بازگشت تلگرام در صفحهٔ اصلی آزمایش شد؛ ناوبری عمیق‌تر و خروج اجباری و پاسخ مبهم، شواهد مؤلفه‌ای جدا دارند.
+
+در CI172 یک آزمون ادغام، هنگام انتظار برای نتیجهٔ درخواست واقعی مبتنی بر FILE از مهلت یک‌ثانیه‌ای مشاهدهٔ DOM گذشت؛ CI مرحلهٔ کند یا نتیجهٔ نهایی درخواست را مشخص نمی‌کند؛ یک آزمایش قطعی با تأخیر۱٫۲ثانیه‌ای پاسخ موفق، همین شکست را بازتولید کرد. اصلاح فقط آزمون، منتظر وعدهٔ پاسخ واقعی با روش و مسیر و پارامترهای دقیق می‌ماند، وضعیت HTTP را بررسی و سپس رابط و داده را ارزیابی می‌کند. مهلت برنامه، رفتار ذخیره‌سازی یا مجوزها تغییر نکرده‌اند. CI ترکیبی نهایی و استقرار باید جداگانه ثبت شوند؛ کیفیت ارائه‌دهندهٔ واقعی، دستگاه، کارایی تولید و فعال‌سازی قابلیت‌های اختیاری هنوز از این شواهد نتیجه نمی‌شوند.
