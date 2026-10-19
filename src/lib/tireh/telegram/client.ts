@@ -68,6 +68,15 @@ export interface InlineKeyboard {
 
 type FetchFn = typeof fetch;
 
+const CONNECT_RETRY_DELAYS_MS = [250, 1000];
+
+function isConnectTimeout(error: unknown): boolean {
+  if (!(error instanceof TypeError)) return false;
+  const cause = error.cause;
+  return typeof cause === 'object' && cause !== null
+    && 'code' in cause && cause.code === 'UND_ERR_CONNECT_TIMEOUT';
+}
+
 export class TelegramApiError extends Error {
   constructor(readonly method: string, readonly description: string) {
     super(`Telegram ${method} failed: ${description}`);
@@ -85,12 +94,27 @@ export class TelegramBotClient {
 
   private async call<T>(method: string, body: Record<string, unknown> | FormData, signal?: AbortSignal): Promise<T> {
     const isForm = body instanceof FormData;
-    const response = await this.fetchFn(`${this.base}/${method}`, {
+    const options: RequestInit = {
       method: 'POST',
       signal,
       headers: isForm ? undefined : { 'Content-Type': 'application/json' },
       body: isForm ? body : JSON.stringify(body),
-    });
+    };
+    let response: Response;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        response = await this.fetchFn(`${this.base}/${method}`, options);
+        break;
+      } catch (error) {
+        // A failed connection never sent the request. Retry only this known
+        // pre-send failure: socket/read timeouts can mean Telegram already
+        // accepted a message, so replaying those could send duplicate replies.
+        const delay = CONNECT_RETRY_DELAYS_MS[attempt];
+        if (delay === undefined || !isConnectTimeout(error)) throw error;
+        await new Promise<void>((resolve) => setTimeout(resolve, delay));
+      }
+    }
+    // Response/body errors must not replay a potentially accepted POST.
     const json = (await response.json().catch(() => ({}))) as { ok?: boolean; result?: T; description?: string };
     if (!json.ok) throw new TelegramApiError(method, json.description ?? `HTTP ${response.status}`);
     return json.result as T;

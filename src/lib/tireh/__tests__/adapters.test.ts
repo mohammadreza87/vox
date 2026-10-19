@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { TelegramApiError, TelegramBotClient } from '../telegram/client';
 import { ElevenLabsVoiceService } from '../voice';
 import { createLLMFromEnv, normalizeTurns, AnthropicLLM, GeminiLLM } from '../llm';
@@ -68,6 +68,148 @@ describe('TelegramBotClient', () => {
     await new TelegramBotClient('T', fetchFn as unknown as typeof fetch).setWebhook('https://x/y', 's3cret');
     const body = JSON.parse((fetchFn.mock.calls[0] as unknown as [string, RequestInit])[1].body as string);
     expect(body).toMatchObject({ url: 'https://x/y', secret_token: 's3cret', allowed_updates: ['message', 'callback_query'] });
+  });
+
+  describe('connection timeout retry', () => {
+    const fetchFailure = (code = 'UND_ERR_CONNECT_TIMEOUT') => new TypeError('fetch failed', {
+      cause: Object.assign(new Error('Synthetic transport failure'), { code }),
+    });
+
+    afterEach(() => vi.useRealTimers());
+
+    it('retries two pre-connection failures after 250 ms and 1 second without changing the message', async () => {
+      vi.useFakeTimers({ now: 0 });
+      const times: number[] = [];
+      const fetchFn = vi.fn(async () => {
+        times.push(Date.now());
+        if (times.length < 3) throw fetchFailure();
+        return new Response(JSON.stringify({ ok: true, result: { message_id: 17 } }));
+      });
+      const bot = new TelegramBotClient('TOKEN', fetchFn as unknown as typeof fetch);
+      const result = bot.sendMessage(-42, 'سلام Neda', { replyTo: 7, keyboard: { inline_keyboard: [[{ text: 'OK', callback_data: 'yes' }]] } });
+
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(249);
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(fetchFn).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(999);
+      expect(fetchFn).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(result).resolves.toMatchObject({ message_id: 17 });
+      expect(times).toEqual([0, 250, 1250]);
+      for (const [url, init] of fetchFn.mock.calls as unknown as Array<[string, RequestInit]>) {
+        expect(url).toBe('https://api.telegram.org/botTOKEN/sendMessage');
+        expect(init.method).toBe('POST');
+        expect(JSON.parse(init.body as string)).toEqual({
+          chat_id: -42, text: 'سلام Neda',
+          reply_parameters: { message_id: 7, allow_sending_without_reply: true },
+          reply_markup: { inline_keyboard: [[{ text: 'OK', callback_data: 'yes' }]] },
+        });
+      }
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('stops after three attempts and preserves the final original error', async () => {
+      vi.useFakeTimers();
+      const failures = [fetchFailure(), fetchFailure(), fetchFailure()];
+      const fetchFn = vi.fn()
+        .mockRejectedValueOnce(failures[0])
+        .mockRejectedValueOnce(failures[1])
+        .mockRejectedValueOnce(failures[2])
+        .mockResolvedValue(new Response(JSON.stringify({ ok: true, result: { message_id: 99 } })));
+      const result = new TelegramBotClient('T', fetchFn as unknown as typeof fetch).sendMessage(42, 'one reply');
+      const rejected = expect(result).rejects.toBe(failures[2]);
+      await vi.runAllTimersAsync();
+      await rejected;
+      expect(fetchFn).toHaveBeenCalledTimes(3);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it.each([
+      ['a generic fetch error', new TypeError('fetch failed')],
+      ['a code mentioned only in text', new TypeError('UND_ERR_CONNECT_TIMEOUT')],
+      ['a socket failure', fetchFailure('UND_ERR_SOCKET')],
+      ['a reset connection', fetchFailure('ECONNRESET')],
+      ['a response headers timeout', fetchFailure('UND_ERR_HEADERS_TIMEOUT')],
+      ['a response body timeout', fetchFailure('UND_ERR_BODY_TIMEOUT')],
+      ['an explicit abort', Object.assign(new DOMException('Aborted', 'AbortError'), { cause: fetchFailure().cause })],
+      ['an outer timeout', Object.assign(new DOMException('Timed out', 'TimeoutError'), { cause: fetchFailure().cause })],
+      ['a wrapped abort', new TypeError('fetch failed', { cause: new DOMException('Aborted', 'AbortError') })],
+      ['a mixed aggregate', new TypeError('fetch failed', { cause: new AggregateError([fetchFailure().cause, fetchFailure('UND_ERR_SOCKET').cause]) })],
+      ['an unknown nested wrapper', new TypeError('fetch failed', { cause: new Error('Unknown wrapper', { cause: fetchFailure().cause }) })],
+    ])('never retries %s because the send outcome is not a known connection timeout', async (_label, failure) => {
+      vi.useFakeTimers();
+      const fetchFn = vi.fn().mockRejectedValue(failure);
+      const result = new TelegramBotClient('T', fetchFn as unknown as typeof fetch).sendMessage(42, 'one reply');
+      await expect(result).rejects.toBe(failure);
+      await vi.runAllTimersAsync();
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('stops immediately if a retried request then has an ambiguous socket failure', async () => {
+      vi.useFakeTimers();
+      const ambiguous = fetchFailure('UND_ERR_SOCKET');
+      const fetchFn = vi.fn().mockRejectedValueOnce(fetchFailure()).mockRejectedValue(ambiguous);
+      const result = new TelegramBotClient('T', fetchFn as unknown as typeof fetch).sendMessage(42, 'one reply');
+      const rejected = expect(result).rejects.toBe(ambiguous);
+      await vi.runAllTimersAsync();
+      await rejected;
+      expect(fetchFn).toHaveBeenCalledTimes(2);
+    });
+
+    it.each([403, 429, 500])('does not retry a Telegram API response with HTTP %i', async (status) => {
+      vi.useFakeTimers();
+      const fetchFn = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: false, description: 'Synthetic API refusal' }), { status }));
+      const result = new TelegramBotClient('T', fetchFn as unknown as typeof fetch).sendMessage(42, 'one reply');
+      await expect(result).rejects.toBeInstanceOf(TelegramApiError);
+      await vi.runAllTimersAsync();
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not resend after receiving a response even if reading its body throws the retry-shaped error', async () => {
+      vi.useFakeTimers();
+      const response = new Response(null, { status: 200 });
+      vi.spyOn(response, 'json').mockRejectedValue(fetchFailure());
+      const fetchFn = vi.fn().mockResolvedValue(response);
+      const result = new TelegramBotClient('T', fetchFn as unknown as typeof fetch).sendMessage(42, 'already sent');
+      await expect(result).rejects.toBeInstanceOf(TelegramApiError);
+      await vi.runAllTimersAsync();
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+    });
+
+    it('retains multipart audio, caption and reply target when a connection retry succeeds', async () => {
+      vi.useFakeTimers();
+      const audio = new Uint8Array([3, 1, 4, 1, 5]);
+      const fetchFn = vi.fn().mockRejectedValueOnce(fetchFailure()).mockResolvedValue(new Response(JSON.stringify({ ok: true, result: { message_id: 23 } })));
+      const result = new TelegramBotClient('T', fetchFn as unknown as typeof fetch).sendVoice(-42, audio.buffer, {
+        caption: 'A voice reply', replyTo: 9, mimeType: 'audio/ogg', filename: 'reply.ogg',
+      });
+      await vi.runAllTimersAsync();
+      await expect(result).resolves.toMatchObject({ message_id: 23 });
+      expect(fetchFn).toHaveBeenCalledTimes(2);
+      // jsdom's File implements FileReader rather than Blob.arrayBuffer().
+      vi.useRealTimers();
+      for (const [url, init] of fetchFn.mock.calls as Array<[string, RequestInit]>) {
+        expect(url).toBe('https://api.telegram.org/botT/sendVoice');
+        expect(init.headers).toBeUndefined();
+        const body = init.body as FormData;
+        expect(body.get('chat_id')).toBe('-42');
+        expect(body.get('caption')).toBe('A voice reply');
+        expect(JSON.parse(body.get('reply_parameters') as string)).toEqual({ message_id: 9, allow_sending_without_reply: true });
+        const file = body.get('voice') as File;
+        expect(file.name).toBe('reply.ogg');
+        expect(file.type).toBe('audio/ogg');
+        const bytes = await new Promise<ArrayBuffer>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as ArrayBuffer);
+          reader.onerror = () => reject(reader.error);
+          reader.readAsArrayBuffer(file);
+        });
+        expect(new Uint8Array(bytes)).toEqual(audio);
+      }
+    });
   });
 });
 
