@@ -13,6 +13,7 @@ import { correctionInput, type CorrectionInput } from './validation';
 import type { AgentGrantInput, ConsentInput, DeletionInput, IdentityInput, MemoryInput, PresentInput } from './validation';
 import { sweepObserverDocument } from '../observation/helpers';
 import { pruneLearningDocument } from '../personalization/learning/state';
+import { runtimeControlsFromIndexed, type AdaptiveRuntimeControls, type RuntimeControlEvaluation } from './authority';
 
 export class AdaptiveError extends Error {
   readonly name = 'AdaptiveError';
@@ -229,6 +230,32 @@ export class AdaptiveService {
   /** Trusted backend seam: same aggregate/expiry transaction as consent and memory. */
   withAccountDocument<T>(telegramId: number, fn: (document: AdaptiveDocument, now: number) => T, beforeCommit?: () => void): Promise<T> {
     return this.transact(telegramId, fn, beforeCommit);
+  }
+  /** Pure authority consumers use compact controls on an explicitly selected
+   * indexed store. Mutations and detailed UI snapshots retain the canonical API.
+   * The callback must be synchronous. Store identity must bind retained work. */
+  withRuntimeControls<T>(telegramId: number, space: SpaceKind,
+    fn: (controls: AdaptiveRuntimeControls, now: number, storeIdentity: string) => RuntimeControlEvaluation<T>): Promise<T> {
+    if (!this.repository.storage.indexed) return this.transact(telegramId, (d, now) => fn(d, now, 'canonical').value);
+    const result = this.readRuntimeControlsForEffect(telegramId, space, fn);
+    return result.status === 'ready' ? Promise.resolve(result.value) : Promise.reject(new AdaptiveError(503, 'adaptive_controls_unavailable'));
+  }
+  /** Synchronous current-state controls for the configured provider export fence.
+   * Evaluators are pure, body-free and synchronous. A denial remains a data result;
+   * it never grants private-body access or authorizes an external side effect. */
+  readRuntimeControlsForEffect<T>(telegramId: number, space: SpaceKind,
+    fn: (controls: AdaptiveRuntimeControls, now: number, storeIdentity: string) => RuntimeControlEvaluation<T>):
+    { status: 'ready'; value: T } | { status: 'busy' | 'unsupported' | 'missing' } {
+    const indexed = this.repository.storage.indexed;
+    if (!indexed) return this.readCommittedForEffect(telegramId, (d, now) => fn(d, now, 'canonical').value);
+    let evaluation: RuntimeControlEvaluation<T> | undefined;
+    const snapshot = indexed.readControls(this.account(telegramId), space, (controls, now, stamp) => {
+      evaluation = fn(runtimeControlsFromIndexed(controls), now, digest([stamp.incarnation, stamp.generation]));
+      return { ...(evaluation.deadline === undefined ? {} : { deadline: evaluation.deadline }),
+        ...(evaluation.denied === undefined ? {} : { denied: evaluation.denied }) };
+    });
+    if (snapshot.status !== 'ready' || !evaluation) return { status: snapshot.status !== 'ready' && snapshot.reason === 'missing' ? 'missing' : 'busy' };
+    return { status: 'ready', value: evaluation.value };
   }
   /** Validated committed file snapshot only. No mutation or awaited work. */
   readCommittedForEffect<T>(telegramId: number, fn: (document: AdaptiveDocument, now: number) => T):
