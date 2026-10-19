@@ -104,8 +104,21 @@ export function middleware(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
   if (process.env.STUDIO_ONLY === '1') {
     if (pathname === '/') {
-      const target = request.nextUrl.clone();
+      // Next's middleware adapter requires an absolute redirect URL. A tunnel
+      // can expose localhost in request.nextUrl, so prefer the configured URL.
+      const configuredUrl = process.env.STUDIO_WEBAPP_URL?.trim();
+      let target: URL;
+      try {
+        target = configuredUrl ? new URL(configuredUrl) : new URL('/studio', request.url);
+      } catch {
+        return new NextResponse(null, { status: 503, headers: { 'Cache-Control': 'no-store' } });
+      }
+      if (configuredUrl && (target.protocol !== 'https:' || target.username || target.password ||
+        target.pathname.replace(/\/$/, '') !== '/studio' || target.search || target.hash)) {
+        return new NextResponse(null, { status: 503, headers: { 'Cache-Control': 'no-store' } });
+      }
       target.pathname = '/studio';
+      target.search = request.nextUrl.search;
       return NextResponse.redirect(target);
     }
     if (!isPathOrChild(pathname, '/studio') && !isPathOrChild(pathname, '/api/studio') &&
