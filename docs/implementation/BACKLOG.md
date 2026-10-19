@@ -966,7 +966,7 @@ Generate versioned GEPA-style prompt/query/routing candidates offline with fixed
 
 **Requirements:** REQ-14, REQ-15, REQ-21. **Depends on:** VOX-016, VOX-023, VOX-043.
 
-**Implementation progress:** Local signed synthetic defect-to-patch workflow freezes Git source, materializes a bounded canonical patch, runs actual baseline/candidate TypeScript in pinned Docker and scores outside the container. Independent 12-case rehearsal reproduced four baseline failures and zero candidate failures; the reviewed Persian question-mark fix is applied with regression tests. Immutable artifacts, current trust/expiry/revocation and signed review packets are covered. Production service IAM, generic model author, remote PR automation and protected promotion deployment remain open.
+**Implementation progress:** Signed defect-to-patch workflow and shipped Persian punctuation fix remain qualified by v1 evidence. Additive v2 now authors a bounded patch through gpt-6.1-sol Responses, durably reserves one request per proposal, verifies signed provenance and preserves protected Docker evaluation. Independent 81-test review and mock end-to-end evaluation passed. One actual provider request produced the correct patch; its first Docker stage stayed incomplete because the test launcher lacked the Docker context, preserved as failed qualification. Independent re-evaluation of the captured artifact is recorded separately. Production IAM, generic coding, automatic PR publication and protected deployment remain open.
 
 Convert reviewed defects into isolated worktrees/branches with small diffs, reproductions, tests and reviewable PR descriptions.
 
@@ -979,7 +979,7 @@ Convert reviewed defects into isolated worktrees/branches with small diffs, repr
 
 **Deliverables:** Developer workflow; PR/evidence template.
 
-**Evidence:** ["docs/implementation/SOFTWARE_PATCH_WORKFLOW.md", "docs/implementation/evidence/software-patch/RESULT.md"]
+**Evidence:** ["docs/implementation/SOFTWARE_PATCH_WORKFLOW.md","docs/implementation/evidence/software-patch/RESULT.md","docs/implementation/MODEL_PATCH_AUTHOR.md","docs/implementation/evidence/model-author/RESULT.md"]
 
 ### VOX-046 — Implement independent evaluation and promotion receipts
 

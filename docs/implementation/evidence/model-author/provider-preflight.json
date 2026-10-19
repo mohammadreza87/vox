@@ -1,0 +1,8 @@
+{
+  "model": "gpt-6.1-sol",
+  "access": "model_metadata_available",
+  "checkedAt": "2026-10-19T20:47:07.180Z",
+  "elapsedMs": 754,
+  "requests": 1,
+  "generationRequests": 0
+}

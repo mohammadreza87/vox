@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { promisify } from 'node:util';
 import { hash } from './contracts';
-import { SOFTWARE_TARGET_PATH, softwarePatchArtifactSchema, type FrozenSoftwareBase, type SoftwarePatchArtifact } from './software-contracts';
+import { SOFTWARE_TARGET_PATH, syntheticSoftwarePatchArtifactSchema, type FrozenSoftwareBase, type SyntheticSoftwarePatchArtifact } from './software-contracts';
 const execute = promisify(execFile);
 const oid = /^[a-f0-9]{40}$/;
 const fail = (reason: string): never => { throw new Error(reason); };
@@ -61,7 +61,7 @@ export function materializeSoftwarePatch(base: FrozenSoftwareBase, patch: string
   validateSource(result); if (result === base.source) fail('patch_must_change_source');
   return { source: result, patchDigest: hash(patch), resultSourceDigest: hash(result) };
 }
-export function createSyntheticPersianPatch(base: FrozenSoftwareBase, issueId: string, policyDigest: string): SoftwarePatchArtifact {
+export function createSyntheticPersianPatch(base: FrozenSoftwareBase, issueId: string, policyDigest: string): SyntheticSoftwarePatchArtifact {
   validateBase(base);
   const lines = base.source.slice(0, -1).split('\n');
   const before = '  private static SENTENCE_END = /([.!?]+)(?:\\s+|$)/g;';
@@ -71,7 +71,7 @@ export function createSyntheticPersianPatch(base: FrozenSoftwareBase, issueId: s
   const patch = [`--- a/${SOFTWARE_TARGET_PATH}`, `+++ b/${SOFTWARE_TARGET_PATH}`, `@@ -${index},3 +${index},3 @@`,
     ` ${lines[index - 1]}`, `-${before}`, `+${after}`, ` ${lines[index + 1]}`, ''].join('\n');
   const result = materializeSoftwarePatch(base, patch);
-  return softwarePatchArtifactSchema.parse({ authorMode: 'deterministic_synthetic', patch, identity: {
+  return syntheticSoftwarePatchArtifactSchema.parse({ authorMode: 'deterministic_synthetic', patch, identity: {
     schemaVersion: 1, issueId, repositoryCommit: base.repositoryCommit, repositoryTreeOid: base.repositoryTreeOid,
     targetPath: base.targetPath, baseBlobOid: base.baseBlobOid, baseSourceDigest: base.baseSourceDigest,
     patchDigest: result.patchDigest, resultSourceDigest: result.resultSourceDigest, policyDigest,
