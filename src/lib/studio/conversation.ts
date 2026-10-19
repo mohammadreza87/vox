@@ -48,14 +48,23 @@ export async function handleConversationRequest(studio: Studio, request: Request
     const input = inputSchema.parse(body);
     const adaptive = studio.deps.adaptive;
     const authority = async (): Promise<string | null> => {
-      const currentScope = () => adaptive.withAccountDocument(user.id, (d, now) => {
+      const indexed = !!adaptive.repository.storage.indexed;
+      const currentScope = () => indexed ? adaptive.withRuntimeControls(user.id, input.space, (d, now, namespace) => {
+        const core = adaptive.capabilityStatus(d, 'core_text', now);
+        const imagePolicy = input.image ? adaptive.capabilityStatus(d, 'single_party_image', now) : null;
+        const allowed = adaptive.isCoreAllowed(d, now) && d.agentGrants.some(g => g.agentId === input.agentId && g.space === input.space && g.allowed) &&
+          (!imagePolicy || imagePolicy.eligible);
+        return {value: allowed ? digest([namespace, adaptive.coreFingerprint(d, now), d.agentGrants.filter(g => g.agentId === input.agentId && g.space === input.space), imagePolicy]) : null,
+          denied: !allowed, ...(allowed ? {deadline: Math.min(d.binding!.expiresAt, core.validUntil ?? now, imagePolicy?.validUntil ?? Number.MAX_SAFE_INTEGER)} : {})};
+      }) : adaptive.withAccountDocument(user.id, (d, now) => {
         const imagePolicy = input.image ? adaptive.capabilityStatus(d, 'single_party_image', now) : null;
         if (!adaptive.isCoreAllowed(d, now) || !d.agentGrants.some(g => g.agentId === input.agentId && g.space === input.space && g.allowed) ||
             (imagePolicy && !imagePolicy.eligible)) return null;
         return digest([adaptive.coreFingerprint(d, now), d.agentGrants.filter(g => g.agentId === input.agentId && g.space === input.space), imagePolicy]);
       });
       const scope = await currentScope();
-      const context = scope ? await studio.adaptiveContext(input.agentId, personId(user.id), input.space) : null;
+      const context = scope ? await (indexed ? studio.adaptiveContextAuthority(input.agentId, personId(user.id), input.space)
+        : studio.adaptiveContext(input.agentId, personId(user.id), input.space)) : null;
       const studioAllowed = async () => {
         const state = await studio.deps.store.read();
         return state.agents.some(a => a.id === input.agentId && a.status === 'active' &&

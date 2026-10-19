@@ -43,10 +43,16 @@ export interface RuntimePrivacyState {
   reviewedContext?: { text: string; sourceTexts: string[] }[];
 }
 
+export type RuntimePrivacyAuthority = Pick<RuntimePrivacyState, 'revision' | 'memoryEnabled' | 'historyEnabled'>;
 export interface RuntimePrivacy {
-  read(personaId: string, personId: string, space?: 'work' | 'personal', chat?: ChatContext): Promise<RuntimePrivacyState>;
+  /** Server-owned structural contract: neither legacy memory nor history can be used. */
+  readonly legacyStores?: 'unavailable';
+  read(personaId: string, personId: string, space?: 'work' | 'personal', chat?: ChatContext, query?: string): Promise<RuntimePrivacyState>;
+  /** Complete query-independent revision, never selected context text. */
+  readAuthority?(personaId: string, personId: string, space?: 'work' | 'personal', chat?: ChatContext): Promise<RuntimePrivacyAuthority>;
   /** Already filtered to every recipient, separate from each participant's private context. */
   readShared?(personaId: string, chat: ChatContext, space: 'work' | 'personal'): Promise<{ revision: string; context: string[] }>;
+  readSharedAuthority?(personaId: string, chat: ChatContext, space: 'work' | 'personal'): Promise<{ revision: string }>;
   /** Fresh server membership/access check; snapshot directory alone is insufficient. */
   validateAudience?(personaId: string, chat: ChatContext): Promise<boolean>;
 }
@@ -54,6 +60,7 @@ export interface RuntimePrivacy {
 interface TurnBoundary {
   key: string;
   memoryRevision: number;
+  compact: boolean;
   memoryEnabled: boolean;
   historyEnabled: boolean;
   audienceValid: boolean;
@@ -332,8 +339,8 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     const receivedAt = this.now();
     const sourceAt = Number.isSafeInteger(message.date) && message.date > 0 && message.date * 1000 <= receivedAt.getTime() + 300_000
       ? new Date(message.date * 1000) : receivedAt;
-    const privacyEpoch = await this.deps.history.getEpoch(persona.id);
-    let boundary = await measureStage('retrieval', () => this.boundary(persona, chat, speaker.id));
+    let boundary = await measureStage('retrieval', () => this.boundary(persona, chat, speaker.id, 'work', text, this.compactPrivacy()));
+    const privacyEpoch = boundary.compact ? undefined : await this.deps.history.getEpoch(persona.id);
     if (!boundary.audienceValid) return 'ignored';
     const userMessage: ChatMessage = {
       role: 'user', personId: speaker.id, text, at: sourceAt, telegramMessageId: message.message_id,
@@ -343,7 +350,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     userMessage.privacy = this.stamp(boundary, [randomUUID()]);
     await this.retain(persona, chat, speaker.id, userMessage, boundary);
     await this.observeRelationship(persona.id, chat, speaker.id, text, `telegram:${this.deps.relationshipEndpoint?.personaId === persona.id ? `${this.deps.relationshipEndpoint.id}:` : ''}${message.chat.id}:${message.message_id}`, 'telegram', sourceAt);
-    if (this.deps.relationshipAuthority) boundary = await this.boundary(persona, chat, speaker.id);
+    if (this.deps.relationshipAuthority || boundary.compact) boundary = await this.boundary(persona, chat, speaker.id, boundary.space, text);
 
     const askAddressed = !addressed && chat.kind === 'group' && !isVoice && !targeting.otherTarget
       && persona.groupParticipation !== 'mentions';
@@ -448,13 +455,13 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     if (!await this.requestAuthorized(options.authorize)) return this.changedReply;
     if (parseExplicitControl(text) === 'forget') return this.forgetOwnedContext(persona.id, speakerId, options.space);
     const chat: ChatContext = { kind: 'private', chatKey: `private-${speakerId}`, personId: speakerId };
-    let boundary = await measureStage('retrieval', () => this.boundary(persona, chat, speakerId, options.space));
+    let boundary = await measureStage('retrieval', () => this.boundary(persona, chat, speakerId, options.space, text, this.compactPrivacy()));
     if (!await this.requestAuthorized(options.authorize)) return this.changedReply;
     const user: ChatMessage = { role: 'user', personId: speakerId, text, at: this.now(), privacy: this.stamp(boundary, [randomUUID()]) };
     await this.retain(persona, chat, speakerId, user, boundary);
     if (!await this.requestAuthorized(options.authorize)) return this.changedReply;
     await this.observeRelationship(persona.id, chat, speakerId, text, `call:${randomUUID()}`, 'call', this.now(), boundary.space);
-    if (this.deps.relationshipAuthority) boundary = await this.boundary(persona, chat, speakerId, boundary.space);
+    if (this.deps.relationshipAuthority || boundary.compact) boundary = await this.boundary(persona, chat, speakerId, boundary.space, text);
     const reply = await this.generateReplyAt(persona, chat, speakerId, text, boundary, options.images, options.authorize);
     if (!(await this.unchanged(persona, chat, speakerId, boundary)) || !await this.requestAuthorized(options.authorize)) return this.changedReply;
     const assistant: ChatMessage = { role: 'assistant', text: reply, at: this.now(), privacy: this.stamp(boundary, user.privacy!.sourceEventIds) };
@@ -488,12 +495,19 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     try { return !authorize || await authorize() === true; } catch { return false; }
   }
 
-  private async boundary(persona: Persona, chat: ChatContext, speakerId: string, space: 'work' | 'personal' = 'work'): Promise<TurnBoundary> {
+  private compactPrivacy(): boolean {
+    const privacy = this.deps.runtimePrivacy;
+    return privacy?.legacyStores === 'unavailable' && typeof privacy.readAuthority === 'function' &&
+      (!privacy.readShared || typeof privacy.readSharedAuthority === 'function');
+  }
+
+  private async boundary(persona: Persona, chat: ChatContext, speakerId: string, space: 'work' | 'personal' = 'work', query = '', authorityOnly = false): Promise<TurnBoundary> {
     const members = audienceOf(chat);
     let allowed = members.length > 0 && members.every((id) => Boolean(this.deps.org.getPerson(id))) &&
       (chat.kind !== 'group' || !chat.group.hasGuests);
     const states: RuntimePrivacyState[] = [];
-    let shared: { revision: string; context: string[] } | undefined;
+    const compact = this.compactPrivacy();
+    let shared: { revision: string; context?: string[] } | undefined;
     let audienceValid = true;
     if (this.deps.runtimePrivacy?.validateAudience) {
       try { audienceValid = await this.deps.runtimePrivacy.validateAudience(persona.id, chat); }
@@ -502,26 +516,35 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     }
     try {
       if (this.deps.runtimePrivacy) {
-        for (const id of members) states.push(await this.deps.runtimePrivacy.read(persona.id, id, space, chat));
+        for (const id of members) states.push(await (authorityOnly && compact
+          ? this.deps.runtimePrivacy.readAuthority!(persona.id, id, space, chat)
+          : compact ? this.deps.runtimePrivacy.read(persona.id, id, space, chat, query)
+            : this.deps.runtimePrivacy.read(persona.id, id, space, chat)));
         if (states.some((v) => !v || typeof v.revision !== 'string')) allowed = false;
-        if (allowed && chat.kind === 'group' && this.deps.runtimePrivacy.readShared) shared = await this.deps.runtimePrivacy.readShared(persona.id, chat, space);
+        if (allowed && chat.kind === 'group' && this.deps.runtimePrivacy.readShared) shared = await (authorityOnly && compact
+          ? this.deps.runtimePrivacy.readSharedAuthority!(persona.id, chat, space)
+          : this.deps.runtimePrivacy.readShared(persona.id, chat, space));
       }
     } catch { allowed = false; }
+    const scopedOnly = compact && states.length === members.length && states.length > 0 && states.every(v => v.memoryEnabled === false && v.historyEnabled === false);
+    if (compact && !scopedOnly) { allowed = false; audienceValid = false; }
     const memoryEnabled = space === 'work' && (!this.deps.runtimePrivacy || (allowed && states.every((v) => v.memoryEnabled === true)));
     const historyEnabled = allowed && space === 'work' && states.every((v) => v.historyEnabled === true);
     const key = createHash('sha256').update(JSON.stringify({
-      space, speakerId: chat.kind === 'private' ? speakerId : undefined, chat, allowed, audienceValid, shared, states: states.map((v) => [v?.revision, v?.memoryEnabled, v?.historyEnabled, v?.context, v?.priorityContext, v?.reviewedContext]),
+      space, speakerId: chat.kind === 'private' ? speakerId : undefined, chat, allowed, audienceValid, shared: scopedOnly ? shared?.revision : shared, states: states.map((v) => scopedOnly
+        ? [v.revision, v.memoryEnabled, v.historyEnabled]
+        : [v?.revision, v?.memoryEnabled, v?.historyEnabled, v?.context, v?.priorityContext, v?.reviewedContext]),
       // Also invalidate legacy history on directory/identity/membership changes.
       config: this.deps.org.config,
     })).digest('hex');
-    return { key, memoryRevision: await this.deps.memories.safetyRevision(persona.id), memoryEnabled, historyEnabled, audienceValid,
+    return { key, compact: scopedOnly, memoryRevision: scopedOnly ? 0 : await this.deps.memories.safetyRevision(persona.id), memoryEnabled, historyEnabled, audienceValid,
       context: allowed ? (chat.kind === 'private' ? states[0]?.context ?? [] : shared?.context ?? []).filter((v): v is string => typeof v === 'string') : [],
       priorityContext: allowed && chat.kind === 'private' ? (states[0]?.priorityContext ?? []).filter((v): v is string => typeof v === 'string') : [],
       reviewedContext: allowed && chat.kind === 'private' ? (states[0]?.reviewedContext ?? []) : [], space };
   }
 
   private async unchanged(persona: Persona, chat: ChatContext, speakerId: string, boundary: TurnBoundary): Promise<boolean> {
-    const current = await this.boundary(persona, chat, speakerId, boundary.space);
+    const current = await this.boundary(persona, chat, speakerId, boundary.space, '', boundary.compact);
     return current.audienceValid && boundary.audienceValid && current.key === boundary.key && current.memoryRevision === boundary.memoryRevision;
   }
 
@@ -563,7 +586,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
       if (await this.requestAuthorized(options.authorize)) yield reply;
       return;
     }
-    let boundary = await measureStage('retrieval', () => this.boundary(persona, chat, speakerId, options.space));
+    let boundary = await measureStage('retrieval', () => this.boundary(persona, chat, speakerId, options.space, said, this.compactPrivacy()));
     if (!boundary.audienceValid) return;
     const user: ChatMessage = { role: 'user', personId: speakerId, text: said, at: this.now(), privacy: this.stamp(boundary, [randomUUID()]) };
     const recent = await this.historyAt(persona, chat, boundary, HISTORY_LIMIT);
@@ -572,8 +595,9 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
       await this.retain(persona, chat, speakerId, user, boundary);
       if (!await this.requestAuthorized(options.authorize)) return;
       await this.observeRelationship(persona.id, chat, speakerId, said, `live:${createHash('sha256').update(JSON.stringify(turns)).digest('hex')}`, 'call', this.now(), boundary.space);
-      if (this.deps.relationshipAuthority) boundary = await this.boundary(persona, chat, speakerId, boundary.space);
+      if (this.deps.relationshipAuthority && !boundary.compact) boundary = await this.boundary(persona, chat, speakerId, boundary.space);
     }
+    if (boundary.compact) boundary = await this.boundary(persona, chat, speakerId, boundary.space, said);
     const all = boundary.memoryEnabled ? await this.deps.memories.listActive(persona.id) : [];
     const memories = selectMemories(org, all, chat, { query: said, now: this.now() });
     boundary.memorySources = [...new Set(memories.flatMap(lineageEventIds))];
@@ -657,7 +681,7 @@ You are on a live voice call. Answer in one to three short spoken sentences. No 
       const persona = this.deps.org.getPersona(personaId);
       if (!persona || !this.deps.org.getPerson(speakerId)) return false;
       const chat: ChatContext = { kind: 'private', chatKey: `private-${speakerId}`, personId: speakerId };
-      const boundary = await this.boundary(persona, chat, speakerId, options.space);
+      const boundary = await this.boundary(persona, chat, speakerId, options.space, text);
       if (!boundary.audienceValid || !await this.requestAuthorized(options.authorize) ||
           !await this.unchanged(persona, chat, speakerId, boundary)) return false;
       selectAdaptiveContext(boundary.context, text, { priorityContext: boundary.priorityContext, reviewedContext: boundary.reviewedContext,
@@ -715,7 +739,7 @@ You are on a live voice call. Answer in one to three short spoken sentences. No 
 
   private async composeReply(persona: Persona, chat: ChatContext, speakerId: string, text: string, triaged?: Promise<Triage | null>, messageId?: number, action: GroupAction = 'reply', replyFormat?: 'voice' | 'text', boundary?: TurnBoundary, images?: LLMMessage['images'], authorize?: () => Promise<boolean>): Promise<{ text: string; sources: WebSource[] }> {
     const { org } = this.deps;
-    boundary ??= await this.boundary(persona, chat, speakerId);
+    boundary ??= await this.boundary(persona, chat, speakerId, 'work', text);
     if (!boundary.audienceValid) return { text: this.changedReply, sources: [] };
     const [all, triage] = await Promise.all([boundary.memoryEnabled ? this.deps.memories.listActive(persona.id) : Promise.resolve([]), triaged ?? null]);
     // Search only when triage says the answer needs live facts (or there is no triage).
