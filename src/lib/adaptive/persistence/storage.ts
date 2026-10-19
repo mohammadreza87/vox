@@ -1,6 +1,6 @@
 /** Separate account documents; never shares the administrator-readable Studio state. */
 import { createHash, randomUUID } from 'crypto';
-import { promises as fs, existsSync, readFileSync } from 'fs';
+import { promises as fs, existsSync, readFileSync, renameSync } from 'fs';
 import { join } from 'path';
 import type { Firestore } from 'firebase-admin/firestore';
 import { FieldPath } from 'firebase-admin/firestore';
@@ -10,7 +10,8 @@ export interface AdaptiveAccountPageInput { after?: string; limit: number }
 
 export interface AdaptiveStorage {
   /** Callback must be synchronous and retry safe. A throw commits nothing. */
-  transact<T>(accountId: string, mutate: (current: unknown | null) => { document: unknown; result: T }): Promise<T>;
+  transact<T>(accountId: string, mutate: (current: unknown | null) => { document: unknown; result: T }, beforeCommit?: () => void): Promise<T>;
+  readonly supportsCommittedWriteFence?: true;
   /** File-only effect fence; synchronous committed snapshot, no writer in progress. */
   readCommittedForEffect?(accountId: string): { status: 'ready'; document: unknown | null } | { status: 'busy' };
   /** Server maintenance only. Opaque stable key cursor; never returns document payloads.
@@ -39,6 +40,7 @@ function encode(document: unknown): string {
 /** Cross-instance process locks, fsync and atomic rename. A crashed lock fails closed;
  * an operator must inspect/remove it after verifying no writer still owns it. */
 export class FileAdaptiveStorage implements AdaptiveStorage {
+  readonly supportsCommittedWriteFence = true as const;
   constructor(readonly directory: string) {}
   readCommittedForEffect(accountId: string): { status: 'ready'; document: unknown | null } | { status: 'busy' } {
     const file = join(this.directory, `${key(accountId)}.json`);
@@ -67,7 +69,7 @@ export class FileAdaptiveStorage implements AdaptiveStorage {
     }
     return { accountIds, ...(keys.length > input.limit ? { next: chosen.at(-1)! } : {}) };
   }
-  async transact<T>(accountId: string, mutate: (current: unknown | null) => { document: unknown; result: T }): Promise<T> {
+  async transact<T>(accountId: string, mutate: (current: unknown | null) => { document: unknown; result: T }, beforeCommit?: () => void): Promise<T> {
     await fs.mkdir(this.directory, { recursive: true, mode: 0o700 });
     const file = join(this.directory, `${key(accountId)}.json`);
     const lock = `${file}.lock`;
@@ -92,7 +94,11 @@ export class FileAdaptiveStorage implements AdaptiveStorage {
       const json = encode(document);
       const handle = await fs.open(temporary, 'wx', 0o600);
       try { await handle.writeFile(json); await handle.sync(); } finally { await handle.close(); }
-      await fs.rename(temporary, file);
+      if (beforeCommit) {
+        // Supported single-process topology: external Studio authority and
+        // deadlines cannot change between the last check and atomic commit.
+        beforeCommit(); renameSync(temporary, file);
+      } else await fs.rename(temporary, file);
       const directory = await fs.open(this.directory, 'r');
       try { await directory.sync(); } finally { await directory.close(); }
       return result === undefined ? result : structuredClone(result);

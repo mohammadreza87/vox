@@ -1,3 +1,4 @@
+import { isSchemaValidationError } from '../../error-contract';
 import { z } from 'zod';
 import { reminderChannelPresentSchema, reminderChannelInputSchema, reminderActionInputSchema } from './reminder-contracts';
 import { beginObservation } from '../../studio/observation';
@@ -8,12 +9,17 @@ import { boundedStudioRequest } from '../../studio/http';
 import { StudioError, type Studio } from '../../studio/service';
 import { StudioRateLimiter, StudioRateLimitError } from '../../studio/ratelimit';
 import { AdaptiveError } from '../persistence/service';
-import { experienceSpaceSchema, feedbackInputSchema, predictionCancelSchema, predictionValidateSchema, predictInputSchema, preferenceInputSchema, reminderInputSchema, settingsInputSchema, type ExperienceSnapshot } from './contracts';
+import { experienceSpaceSchema, feedbackInputSchema, predictionCancelSchema, predictionValidateSchema, predictInputSchema, preferenceInputSchema, preferenceUndoInputSchema, reminderInputSchema, settingsInputSchema, type ExperienceSnapshot } from './contracts';
 import type { AdaptiveExperienceService } from './service';
 const json = (data: unknown, status = 200, headers: Record<string, string> = {}) => new Response(JSON.stringify(data), {
   status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...headers },
 });
 const localLimiters = new WeakMap<Studio, StudioRateLimiter>();
+const telegramId = z.number().int().positive().safe();
+const projectionMember = z.object({ telegramId, role: z.enum(['pending', 'member', 'admin', 'superadmin', 'owner']) }).passthrough();
+const projectionAgent = z.object({ id: z.string(), status: z.enum(['draft', 'awaiting_bot', 'active', 'fired']), createdBy: telegramId,
+  visibility: z.enum(['private', 'org', 'public']).optional(), access: z.union([z.literal('everyone'), z.array(telegramId)]),
+  blocked: z.array(telegramId).optional() }).passthrough();
 export async function handleExperienceRequest(studio: Studio, service: AdaptiveExperienceService, request: Request, path: string[], botToken: string): Promise<Response> {
   try {
     if (!botToken.trim()) return json({ error: 'experience_unavailable' }, 503);
@@ -32,6 +38,25 @@ export async function handleExperienceRequest(studio: Studio, service: AdaptiveE
       const state = await studio.deps.store.read();
       return state.agents.some(agent => agent.id === agentId && !(agent.blocked ?? []).includes(user.id) && canUseAgent(state.members.find(m => m.telegramId === user.id), agent));
     };
+    if (request.method === 'GET' && path.join('/') === 'preferences') {
+      const agentId = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/).parse(url.searchParams.get('agentId'));
+      if (!await canAccess(agentId)) return json({ error: 'agent_access_denied' }, 403);
+      const state = await service.readPreferenceState(user.id, space, agentId);
+      if (!studio.deps.store.readCommittedForEffect) return json({ error: 'preference_projection_unavailable' }, 503);
+      // Both committed snapshots and serialization are synchronous. This closes
+      // same-process await races, not arbitrary cross-process/distributed writes.
+      const committed = studio.deps.store.readCommittedForEffect();
+      const members = committed.members.filter(m => m.telegramId === user.id), agents = committed.agents.filter(a => a.id === agentId);
+      const member = members[0], agent = agents[0];
+      if (members.length !== 1 || agents.length !== 1 || !projectionMember.safeParse(member).success || !projectionAgent.safeParse(agent).success ||
+          (agent.blocked ?? []).includes(user.id) || !canUseAgent(member, agent)) return json({ error: 'agent_access_denied' }, 403);
+      // Evaluate canonical deadlines last: even synchronous file I/O can cross
+      // an expiry while loading the Studio snapshot.
+      const current = service.preferenceStateCurrentNow(user.id, state);
+      if (current.status === 'unsupported') return json({ error: 'preference_projection_unavailable' }, 503);
+      if (current.status !== 'ready' || !current.value) return json({ error: 'preference_authority_changed' }, 409);
+      return json(state);
+    }
     const snapshotResponse = async (snapshot: ExperienceSnapshot, status = 200): Promise<Response> => {
       const current = await service.read(user.id, snapshot.space);
       const state = await studio.deps.store.read();
@@ -64,6 +89,11 @@ export async function handleExperienceRequest(studio: Studio, service: AdaptiveE
       const input = preferenceInputSchema.parse(body);
       if (!await canAccess(input.agentId)) return json({ error: 'agent_access_denied' }, 403);
       return await snapshotResponse(await service.savePreference(user.id, input));
+    }
+    if (route === 'POST preferences/undo') {
+      const input = preferenceUndoInputSchema.parse(body);
+      if (!await canAccess(input.agentId)) return json({ error: 'agent_access_denied' }, 403);
+      return await snapshotResponse(await service.undoPreference(user.id, input));
     }
     if (route === 'POST reminder-channel/present') return await snapshotResponse(await service.presentReminderChannel(user.id, reminderChannelPresentSchema.parse(body)));
     if (route === 'PUT reminder-channel') return await snapshotResponse(await service.reminderChannel(user.id, reminderChannelInputSchema.parse(body)));
@@ -137,7 +167,7 @@ export async function handleExperienceRequest(studio: Studio, service: AdaptiveE
     }
     return json({ error: 'not_found' }, 404);
   } catch (error) {
-    if (error instanceof z.ZodError) return json({ error: 'invalid_request' }, 400);
+    if (isSchemaValidationError(error)) return json({ error: 'invalid_request' }, 400);
     if (AdaptiveError.is(error)) return json({ error: error.code }, error.status);
     if (StudioError.is(error)) return json({ error: 'invalid_request' }, error.status);
     if (StudioRateLimitError.is(error)) return json({ error: 'rate_limited' }, 429, { 'Retry-After': String(error.retryAfterSeconds) });

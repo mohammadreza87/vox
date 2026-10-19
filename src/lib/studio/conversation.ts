@@ -1,3 +1,4 @@
+import { isSchemaValidationError } from '../error-contract';
 import { z } from 'zod';
 import { verifyInitData } from './auth';
 import { canUseAgent } from './permissions';
@@ -100,7 +101,7 @@ export async function handleConversationRequest(studio: Studio, request: Request
   } catch (error) {
     await observe?.(request.signal.aborted || LLMAuthorizationError.is(error) ? 'cancelled' : 'failed');
     if (LLMAuthorizationError.is(error)) return json({ error: 'conversation_changed' }, 409);
-    if (error instanceof z.ZodError) return json({ error: 'invalid_request' }, 400);
+    if (isSchemaValidationError(error)) return json({ error: 'invalid_request' }, 400);
     if (AdaptiveError.is(error)) return json({ error: error.code }, error.status);
     if (StudioRateLimitError.is(error)) return json({ error: 'rate_limited' }, 429, { 'Retry-After': String(error.retryAfterSeconds) });
     if (StudioError.is(error)) return json({ error: 'invalid_request' }, error.status);

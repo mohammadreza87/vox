@@ -1,5 +1,5 @@
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
-import { ZodError } from 'zod';
+import { isSchemaValidationError } from '../../error-contract';
 import { ConnectionsError } from '../errors';
 import { BrokerAuthenticator } from './auth';
 import type { ConnectionsBroker } from './service';
@@ -50,8 +50,10 @@ export function createConnectionsBrokerServer(broker: ConnectionsBroker, authent
         path === '/v1/enrollments/cancel' ? await broker.cancelSetup(input) : path === '/v1/execute' ? await broker.execute(input) : path === '/v1/invalidate' ? await broker.invalidate(input) : await broker.revoke(input);
       reply(response, 200, result);
     } catch (error) {
-      const status = error instanceof ConnectionsError ? error.status : error instanceof ZodError ? 400 : 500;
-      const code = error instanceof ConnectionsError ? error.code : error instanceof ZodError ? 'broker_input_invalid' : 'broker_internal_error';
+      const domainError = ConnectionsError.is(error) ? error : undefined;
+      const validationError = !domainError && isSchemaValidationError(error);
+      const status = domainError?.status ?? (validationError ? 400 : 500);
+      const code = domainError?.code ?? (validationError ? 'broker_input_invalid' : 'broker_internal_error');
       reply(response, status, { error: code });
     }
   });

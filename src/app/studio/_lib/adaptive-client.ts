@@ -3,10 +3,13 @@
 import type { AdaptiveOptionalPurpose, AdaptivePresentation, AdaptiveSnapshot, AdaptiveSpace } from '@/lib/adaptive/persistence/contracts';
 import { request } from './client';
 import type { PrivacyLocale } from './adaptive-copy';
+import type { ReviewedMemoryPreview, ReviewedPreviewInput, ReviewedAcceptInput } from '@/lib/adaptive/reviewed-memory/contracts';
 
 export type { AdaptiveOptionalPurpose, AdaptivePresentation, AdaptiveSnapshot, AdaptiveSpace };
 const eventId = () => crypto.randomUUID();
 export const adaptiveApi = {
+  reviewedPreview: (input: ReviewedPreviewInput, signal?: AbortSignal) => request<ReviewedMemoryPreview>('POST', 'adaptive/reviewed/preview', input, 'json', signal),
+  reviewedAccept: (input: ReviewedAcceptInput, signal?: AbortSignal) => request<{ memoryId: string; snapshot: AdaptiveSnapshot }>('POST', 'adaptive/reviewed/accept', input, 'json', signal),
   read: (space: AdaptiveSpace, locale: PrivacyLocale) => request<AdaptiveSnapshot>('GET', `adaptive?space=${space}&locale=${locale}`),
   confirm: (space: AdaptiveSpace, adultConfirmed: boolean, declaredJurisdiction?: string) =>
     request<AdaptiveSnapshot>('POST', `adaptive/identity?space=${space}`, { confirm: true, adultConfirmed, ...(declaredJurisdiction ? { declaredJurisdiction } : {}) }),

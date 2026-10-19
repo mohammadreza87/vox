@@ -1,3 +1,4 @@
+import { isSchemaValidationError } from '../error-contract';
 import { z } from 'zod';
 import { AdaptiveError } from '../adaptive/persistence/service';
 import { SharedMemoryError } from '../adaptive/shared/service';
@@ -82,7 +83,7 @@ export async function handleLearningRequest(studio: Studio, request: Request, pa
     }
     return json({ error: 'not_found' }, 404);
   } catch (error) {
-    if (error instanceof z.ZodError) return json({ error: 'invalid_request' }, 400);
+    if (isSchemaValidationError(error)) return json({ error: 'invalid_request' }, 400);
     if (AdaptiveError.is(error)) return json({ error: error.code }, error.status);
     if (SharedMemoryError.is(error)) return json({ error: error.code }, error.status);
     if (StudioError.is(error)) return json({ error: 'invalid_request' }, error.status);

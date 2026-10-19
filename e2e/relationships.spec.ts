@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import type { PreferenceState } from '../src/lib/adaptive/runtime/contracts';
 
 const ownerId = 77001;
 const agent = {
@@ -77,6 +78,15 @@ async function installStudioFixtures(page: Page, externalAvailable = false) {
       }
       result = { relationship: structuredClone(state) };
     }
+    else if (path === 'experience/preferences' && method === 'GET') {
+      const space = url.searchParams.get('space') === 'personal' ? 'personal' : 'work';
+      result = { schemaVersion: 1, revision: 1, space, agentId: agent.id, receipt: 'synthetic-preference-projection',
+        entries: [
+          { setting: { key: 'response_length', value: 'balanced' }, source: 'default', applied: false, explanation: 'default' },
+          { setting: { key: 'language', value: 'auto' }, source: 'default', applied: false, explanation: 'default' },
+          { setting: { key: 'formatting', value: 'plain' }, source: 'default', applied: false, explanation: 'default' },
+        ] } satisfies PreferenceState;
+    }
     else if (path === 'experience' && method === 'GET') result = experience((new URLSearchParams(query).get('space') ?? 'work') as 'work' | 'personal');
     else if (path === 'adaptive' && method === 'GET') result = adaptive((new URLSearchParams(query).get('space') ?? 'work') as 'work' | 'personal');
     else if (path === 'members') result = { people: members, agentAdmins: [] };
@@ -92,7 +102,7 @@ async function enterExperience(page: Page) {
   await page.getByRole('button', { name: 'Privacy', exact: true }).click();
   await page.getByRole('button', { name: 'Preferences & notification inbox' }).click();
   await expect(page.getByText('Your experience', { exact: true })).toBeVisible();
-  await page.getByLabel('Agent').selectOption(agent.id);
+  await page.getByRole('combobox', { name: 'Agent', exact: true }).selectOption(agent.id);
   await expect(page.getByRole('heading', { name: 'Staying in touch' })).toBeVisible();
 }
 
@@ -110,7 +120,7 @@ test('scoped check-ins clear on Work/Personal switch, localize, and support inbo
   await personalSettings;
   await expect(page.getByText('Loading…', { exact: true })).not.toBeVisible();
   await expect(page.getByText(workCheckin)).not.toBeVisible();
-  await page.getByLabel('Agent').selectOption(agent.id);
+  await page.getByRole('combobox', { name: 'Agent', exact: true }).selectOption(agent.id);
   await expect(page.getByText('Personal-only preference')).toBeVisible();
   await expect(page.getByText(personalCheckin)).toBeVisible();
   await expect.poll(() => reads.some(read => read.path.endsWith('/relationship') && read.query === '?space=personal')).toBe(true);
@@ -148,7 +158,7 @@ test('permitted generic alert can be enabled by keyboard in the selected scope',
   await page.getByLabel('Experience space').getByRole('button', { name: 'Personal', exact: true }).click();
   await personalSettings;
   await expect(page.getByText('Loading…', { exact: true })).not.toBeVisible();
-  await page.getByLabel('Agent').selectOption(agent.id);
+  await page.getByRole('combobox', { name: 'Agent', exact: true }).selectOption(agent.id);
   const alerts = page.getByRole('checkbox', { name: 'Generic Telegram alerts' });
   await expect(alerts).toBeEnabled();
   await alerts.focus();

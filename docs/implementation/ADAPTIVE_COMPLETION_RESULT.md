@@ -93,8 +93,8 @@ self-deploying product changes. Browser push remains a later channel.
 
 Provider/physical-device E2E, held-out semantic quality, actual latency/cost,
 biometric accuracy/spoofing, deployed storage/key access and recovery qualification
-remain separate gates. The user supplied Joyixir OÜ and info@joyixir.com; the postal
-address and qualified legal/privacy approval are still needed. A consent
+remain separate gates. The user supplied Joyixir OÜ and info@joyixir.com; the registered
+address is verified in [operator details](OPERATOR_DETAILS.md), while qualified legal/privacy approval remains pending. A consent
 paragraph does not establish compliance for an otherwise unqualified data flow.
 
 ## خلاصهٔ فارسی

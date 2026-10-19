@@ -1,3 +1,4 @@
+import { isSchemaValidationError } from '../../error-contract';
 import { z } from 'zod';
 import { verifyInitData } from '../../studio/auth';
 import { boundedStudioRequest } from '../../studio/http';
@@ -42,7 +43,7 @@ export async function handleSharedRequest(studio: Studio, service: SharedMemoryS
     }
     return response({ error: 'not_found' }, 404);
   } catch (error) {
-    if (error instanceof z.ZodError) return response({ error: 'invalid_request' }, 400);
+    if (isSchemaValidationError(error)) return response({ error: 'invalid_request' }, 400);
     if (SharedMemoryError.is(error) || AdaptiveError.is(error)) return response({ error: error.code }, error.status);
     if (StudioError.is(error)) return response({ error: 'invalid_request' }, error.status);
     if (StudioRateLimitError.is(error)) return response({ error: 'rate_limited' }, 429, { 'Retry-After': String(error.retryAfterSeconds) });

@@ -47,6 +47,10 @@ export class AdaptiveLifecycleService {
           .map(m => ({ id: m.id, revision: m.revision, text: m.text!, createdAt: m.createdAt, expiresAt: m.expiresAt })),
         preferences: d.experience.preferences.filter(p => p.space === space).map(p => ({ id: p.id, revision: p.revision,
           agentId: p.agentId, setting: p.setting, status: p.status, updatedAt: p.updatedAt })),
+        preferenceChanges: (d.experience.preferenceUndo ?? []).filter(p => p.space === space).map(p => ({
+          changeId: p.changeId, agentId: p.agentId, key: p.key, createdAt: p.createdAt, expiresAt: p.expiresAt,
+          previous: p.before ? { setting: p.before.setting, status: p.before.status } : null,
+        })),
         purposes: d.permissions.filter(p => p.id.startsWith(`permission:${space}:`)).map(p => ({ purpose: p.purpose,
           state: p.state, revision: p.revision, epoch: p.epoch, effectiveAt: p.effectiveAt, expiresAt: p.expiresAt })),
         agents: d.agentGrants.filter(g => g.space === space).map(g => ({ agentId: g.agentId, allowed: g.allowed, revision: g.revision })),

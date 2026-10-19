@@ -8,6 +8,7 @@
 import { measureStage, captureUsage, observedUsage, recordStage, unavailableUsage } from '../adaptive/observation/trace';
 import { brandError, namedError } from '../error-contract';
 import Anthropic from '@anthropic-ai/sdk';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { logTelegramDiagnostic } from './telegram/diagnostics';
 
@@ -39,10 +40,11 @@ export interface LLMRequest {
   temperature?: number;
   /** Side-effecting callers must not deliver a provider-truncated completion. */
   requireComplete?: boolean;
-  /** Request-scoped cancellation for bounded connection tasks. */
-  signal?: AbortSignal;
   /** Server-only fence, rechecked before every provider request/retry. Never serialized. */
   authorize?: () => Promise<boolean>;
+  /** Optional final synchronous committed-authority fence, never serialized. */
+  authorizeNow?: () => boolean;
+  signal?: AbortSignal;
 }
 
 export class LLMAuthorizationError extends Error {
@@ -57,6 +59,12 @@ async function authorizeRequest(request: Pick<LLMRequest, 'authorize'>): Promise
   try { if (await request.authorize() === true) return; } catch { /* Fail closed. */ }
   throw new LLMAuthorizationError();
 }
+function authorizeImmediate(request: Pick<LLMRequest, 'authorizeNow' | 'signal'>): void {
+  if (request.signal?.aborted) throw new LLMAuthorizationError();
+  if (!request.authorizeNow) return;
+  try { if (request.authorizeNow() === true) return; } catch { /* Fail closed. */ }
+  throw new LLMAuthorizationError();
+}
 
 export interface WebSource {
   url: string;
@@ -65,6 +73,8 @@ export interface WebSource {
 
 export interface LLM {
   readonly identity?: { provider: string; model: string };
+  /** Qualified final configured-transport fetch fence for private summary export. */
+  readonly committedExportFence?: true;
   complete(request: LLMRequest): Promise<string>;
   /**
    * Like `complete`, but the model may search the web for live information.
@@ -143,13 +153,26 @@ export function webAnswer(content: Anthropic.ContentBlock[]): { text: string; so
   return { text, sources };
 }
 
+const transportAuthority = new AsyncLocalStorage<Pick<LLMRequest, 'authorizeNow' | 'signal'>>();
+
 export class AnthropicLLM implements LLM {
+  readonly committedExportFence = true as const;
   private client: Anthropic | null = null;
   /** Set once the API refuses the web search tool for this model. */
   private webUnavailable = false;
 
-  constructor(private readonly apiKey: string, private readonly model: string) {}
+  constructor(private readonly apiKey: string, private readonly model: string, private readonly transportFetch?: typeof fetch) {}
   get identity() { return { provider: 'anthropic', model: this.model }; }
+
+  private getClient(): Anthropic {
+    return this.client ??= new Anthropic({ apiKey: this.apiKey, fetch: (input, init) => {
+      // The SDK may await header/body preparation. Check the committed snapshot
+      // inside its configured transport, in this request's async context, then
+      // invoke fetch in the same call stack. No callback is shared across calls.
+      authorizeImmediate(transportAuthority.getStore() ?? {});
+      return (this.transportFetch ?? globalThis.fetch)(input, init);
+    } });
+  }
 
   private params({ system, maxTokens = 1024, temperature = 0.7 }: LLMRequest) {
     return {
@@ -161,14 +184,16 @@ export class AnthropicLLM implements LLM {
   }
 
   private async create(request: LLMRequest, body: Anthropic.MessageCreateParamsNonStreaming): Promise<Anthropic.Message> {
-    this.client ??= new Anthropic({ apiKey: this.apiKey });
+    this.getClient();
     await authorizeRequest(request);
     // Hidden SDK retries cannot recheck current authority. Scoped requests use
     // no automatic retry; explicit web continuations pass through this fence.
     return measureStage('generation', async () => {
       let returned = false;
       try {
-      const response = await (request.authorize || request.signal ? this.client!.messages.create(body, { maxRetries: 0, ...(request.signal ? { signal: request.signal } : {}) }) : this.client!.messages.create(body));
+      authorizeImmediate(request);
+      const response = await transportAuthority.run({ authorizeNow: request.authorizeNow, signal: request.signal }, () => request.authorize || request.authorizeNow || request.signal
+        ? this.client!.messages.create(body, { maxRetries: 0, ...(request.signal ? { signal: request.signal } : {}) }) : this.client!.messages.create(body));
       returned = true;
       captureUsage('anthropic', 'claude', () => ({ inputTokens: response.usage?.input_tokens, outputTokens: response.usage?.output_tokens,
         cacheReadTokens: response.usage?.cache_read_input_tokens, cacheWriteTokens: response.usage?.cache_creation_input_tokens }));
@@ -187,10 +212,12 @@ export class AnthropicLLM implements LLM {
   }
 
   async *stream(request: LLMRequest): AsyncIterable<string> {
-    this.client ??= new Anthropic({ apiKey: this.apiKey });
+    this.getClient();
     await authorizeRequest(request);
     const body = { ...this.params(request), messages: anthropicTurns(request.messages) };
-    const stream = request.authorize || request.signal ? this.client.messages.stream(body, { maxRetries: 0, ...(request.signal ? { signal: request.signal } : {}) }) : this.client.messages.stream(body);
+    authorizeImmediate(request);
+    const stream = transportAuthority.run({ authorizeNow: request.authorizeNow, signal: request.signal }, () => request.authorize || request.authorizeNow || request.signal
+      ? this.client!.messages.stream(body, { maxRetries: 0, ...(request.signal ? { signal: request.signal } : {}) }) : this.client!.messages.stream(body));
     const started = performance.now();
     let completed = false;
     let inputTokens: number | undefined, outputTokens: number | undefined, cacheReadTokens: number | null | undefined, cacheWriteTokens: number | null | undefined;
@@ -213,7 +240,7 @@ export class AnthropicLLM implements LLM {
 
   async completeWithWeb(request: LLMRequest & { maxSearches: number }): Promise<{ text: string; sources: WebSource[] }> {
     if (this.webUnavailable || request.maxSearches < 1) return { text: await this.complete(request), sources: [] };
-    this.client ??= new Anthropic({ apiKey: this.apiKey });
+    this.getClient();
     const messages: Anthropic.MessageParam[] = anthropicTurns(request.messages);
     const tools: Anthropic.ToolUnion[] = [{ type: 'web_search_20250305', name: 'web_search', max_uses: request.maxSearches }];
     try {
@@ -241,7 +268,7 @@ export class GeminiLLM implements LLM {
   constructor(private readonly apiKey: string, private readonly model: string) {}
   get identity() { return { provider: 'gemini', model: this.model }; }
 
-  async complete({ system, messages, maxTokens = 1024, temperature = 0.7, requireComplete, authorize, signal }: LLMRequest): Promise<string> {
+  async complete({ system, messages, maxTokens = 1024, temperature = 0.7, requireComplete, authorize, authorizeNow, signal }: LLMRequest): Promise<string> {
     const turns = normalizeTurns(messages);
     const last = turns.pop();
     if (!last) return '';
@@ -255,8 +282,9 @@ export class GeminiLLM implements LLM {
     const result = await measureStage('generation', async () => {
       let returned = false;
       try {
-      const content = last.images?.length ? geminiParts(last) : last.content;
-      const result = await (signal ? chat.sendMessage(content, { signal }) : chat.sendMessage(content));
+      authorizeImmediate({ authorizeNow, signal });
+      const outgoing = last.images?.length ? geminiParts(last) : last.content;
+      const result = await (signal ? chat.sendMessage(outgoing, { signal }) : chat.sendMessage(outgoing));
       returned = true;
       captureUsage('gemini', 'gemini', () => ({ inputTokens: result.response.usageMetadata?.promptTokenCount,
         outputTokens: result.response.usageMetadata?.candidatesTokenCount, cacheReadTokens: result.response.usageMetadata?.cachedContentTokenCount }));

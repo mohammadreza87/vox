@@ -1,11 +1,13 @@
 import { expect, it, vi } from 'vitest';
 import { runInNewContext } from 'node:vm';
+import { z } from 'zod';
+import { isSchemaValidationError } from '../error-contract';
 import { AdaptiveError, type AdaptiveService } from '../adaptive/persistence/service';
 import { SharedMemoryError, type SharedMemoryService } from '../adaptive/shared/service';
 import { StudioRateLimitError } from '../studio/ratelimit';
 import { LLMAuthorizationError } from '../tireh/llm';
 import { signInitData } from '../studio/auth';
-import type { Studio } from '../studio/service';
+import { StudioError, type Studio } from '../studio/service';
 import { handleAdaptiveRequest } from '../adaptive/persistence/http';
 import { handleSharedRequest } from '../adaptive/shared/http';
 import { handleExperienceRequest } from '../adaptive/runtime/http';
@@ -15,6 +17,9 @@ import type { VoiceIdentityService } from '../adaptive/voice-identity/service';
 import { handleLearningRequest } from '../studio/learning-http';
 import { handleConversationRequest } from '../studio/conversation';
 import { handleStudioRequest } from '../studio/http';
+import { ConnectionsError } from '../connections/errors';
+import { handleConnectionsRequest } from '../connections/http';
+import type { ConnectionsApplication } from '../connections/application';
 
 /** Independent constructor models instrumentation's service copy, while Error
  * and the VM's shared Symbol registry remain the same as the route bundle. */
@@ -42,6 +47,11 @@ function studio(throwable?: unknown): Studio {
 it('recognizes branded errors from an independent constructor without exposing their message', async () => {
   const error = otherBundleError(); expect(error instanceof AdaptiveError).toBe(false); expect(AdaptiveError.is(error)).toBe(true);
   expect(SharedMemoryError.is(otherBundleError('SharedMemoryError'))).toBe(true);
+  expect(ConnectionsError.is(otherBundleError('ConnectionsError'))).toBe(true);
+  expect(ConnectionsError.is(new ConnectionsError(409, 'operation_changed'))).toBe(true);
+  expect(StudioError.is(otherBundleError('StudioError', { status: 403 }))).toBe(true);
+  expect(StudioError.is(new StudioError(403, 'Not permitted.'))).toBe(true);
+  expect(StudioError.is(new StudioError(402, 'This voice requires a paid plan.'))).toBe(true);
   expect(StudioRateLimitError.is(otherBundleError('StudioRateLimitError', { retryAfterSeconds: 4 }))).toBe(true);
   const denied = otherBundleError('LLMAuthorizationError', {}); Object.defineProperty(denied, 'message', { value: 'llm_authority_changed' });
   expect(LLMAuthorizationError.is(denied)).toBe(true);
@@ -107,4 +117,66 @@ it('the standard Studio rate-limit boundary uses fixed copy without reading a pr
   const response = await handleStudioRequest(s, request(), [], { botToken: TOKEN });
   expect(response.status).toBe(429); expect(await response.json()).toEqual({ error: 'Too many requests. Please try again shortly.' });
   expect(message).not.toHaveBeenCalled();
+});
+
+it('Connections preserves duplicate-bundle conflicts and rate limits without exposing lookalikes or getters', async () => {
+  const invoke = (error: unknown) => handleConnectionsRequest(studio(error), {} as ConnectionsApplication, request(), [], TOKEN);
+  const conflict = await invoke(otherBundleError('ConnectionsError', { status: 409, code: 'operation_changed' }));
+  expect(conflict.status).toBe(409); expect(await conflict.json()).toEqual({ error: 'operation_changed' });
+  const limited = await invoke(otherBundleError('StudioRateLimitError', { retryAfterSeconds: 4 }));
+  expect(limited.status).toBe(429); expect(limited.headers.get('Retry-After')).toBe('4');
+  expect(await limited.json()).toEqual({ error: 'rate_limited' });
+  const touched = vi.fn(() => { throw new Error('PRIVATE_GETTER_CANARY'); });
+  const getter = otherBundleError('ConnectionsError'); Object.defineProperty(getter, 'code', { get: touched });
+  for (const error of [getter, Object.assign(new Error('PRIVATE_PROMPT_CANARY'), { name: 'ConnectionsError', status: 409, code: 'private_canary' }),
+    otherBundleError('ConnectionsError', { status: 200, code: 'invalid_status' }), new Proxy(otherBundleError('ConnectionsError'), { getOwnPropertyDescriptor: touched })]) {
+    const response = await invoke(error); expect(response.status).toBe(503); expect(await response.json()).toEqual({ error: 'connections_unavailable' });
+  }
+  expect(touched).not.toHaveBeenCalled();
+});
+
+it('all adaptive HTTP boundaries reject hostile legacy Studio error metadata without invoking accessors', async () => {
+  const touched = vi.fn(() => { throw new Error('PRIVATE_GETTER_CANARY'); });
+  const errors = ['name', 'status', 'message'].map(field => {
+    const error = otherBundleError('StudioError', { status: 403 }); Object.defineProperty(error, field, { get: touched }); return error;
+  });
+  errors.push(new Proxy(otherBundleError('StudioError', { status: 403 }), { get: touched, getOwnPropertyDescriptor: touched }));
+  errors.push(otherBundleError('StudioError', { status: 200 }));
+  errors.push(Object.assign(new Error('PRIVATE_CANARY'), { name: 'StudioError', status: 403 }));
+  const zodGetter = Object.assign(new Error('PRIVATE_CANARY'), { name: 'ZodError' });
+  Object.defineProperty(zodGetter, '_zod', { get: touched }); errors.push(zodGetter);
+  for (const error of errors) {
+    expect(StudioError.is(error)).toBe(false);
+    for (const route of [...Object.values(routes), (s: Studio, r: Request) => handleConnectionsRequest(s, {} as ConnectionsApplication, r, [], TOKEN)]) {
+      const response = await route(studio(error), request()); expect(response.status).toBe(503);
+      expect(await response.text()).not.toContain('PRIVATE');
+    }
+  }
+  expect(touched).not.toHaveBeenCalled();
+});
+
+it('recognizes the installed real schema error and returns only invalid_request across HTTP boundaries', async () => {
+  const parsed = z.object({ allowed: z.boolean() }).strict().safeParse({ allowed: 'PRIVATE_INPUT_CANARY' });
+  if (parsed.success) throw new Error('Invalid synthetic schema fixture');
+  expect(isSchemaValidationError(parsed.error)).toBe(true);
+  for (const route of [...Object.values(routes), (s: Studio, r: Request) => handleConnectionsRequest(s, {} as ConnectionsApplication, r, [], TOKEN)]) {
+    const response = await route(studio(parsed.error), request()); expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: 'invalid_request' });
+  }
+});
+
+it('classifies native errors without traversing a hostile prototype', async () => {
+  const trap = vi.fn(() => { throw new Error('PRIVATE_PROTOTYPE_CANARY'); });
+  const prototype = new Proxy(Error.prototype, { getPrototypeOf: trap });
+  const domain = otherBundleError('ConnectionsError', { status: 409, code: 'operation_changed' });
+  Object.setPrototypeOf(domain, prototype);
+  expect(ConnectionsError.is(domain)).toBe(true);
+  const conflict = await handleConnectionsRequest(studio(domain), {} as ConnectionsApplication, request(), [], TOKEN);
+  expect(conflict.status).toBe(409); expect(await conflict.json()).toEqual({ error: 'operation_changed' });
+  const parsed = z.string().safeParse(1); if (parsed.success) throw new Error('Invalid synthetic schema fixture');
+  Object.setPrototypeOf(parsed.error, prototype);
+  expect(isSchemaValidationError(parsed.error)).toBe(true);
+  const invalid = await handleConnectionsRequest(studio(parsed.error), {} as ConnectionsApplication, request(), [], TOKEN);
+  expect(invalid.status).toBe(400); expect(await invalid.json()).toEqual({ error: 'invalid_request' });
+  expect(trap).not.toHaveBeenCalled();
 });
