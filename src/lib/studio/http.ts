@@ -229,7 +229,40 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
     if (error instanceof StudioRateLimitError) return json({ error: error.message }, 429, { 'Retry-After': String(error.retryAfterSeconds) });
     if (StudioError.is(error)) return json({ error: error.message }, error.status);
     if (error && typeof error === 'object' && 'issues' in error) return json({ error: "Claude's answer didn't fit the persona format. Try again." }, 502);
+    const provider = providerErrorMessage(error);
     (studio.deps.logger ?? console).error('[studio] request failed', error);
+    if (provider) return json({ error: provider }, 502);
     return json({ error: 'Something went wrong. Try again.' }, 500);
   }
+}
+
+/**
+ * Failures from Claude, OpenAI or ElevenLabs, said plainly so whoever runs the
+ * server knows what to fix (bad key, no credit, unknown model, overload).
+ * Never includes keys: only status codes and the provider's own message.
+ */
+export function providerErrorMessage(error: unknown): string | null {
+  if (!(error instanceof Error)) return null;
+  // OpenAI / ElevenLabs adapters throw "<Provider> <action> failed: …"
+  if (/^(OpenAI|ElevenLabs) .*failed/.test(error.message)) {
+    const status = Number(error.message.match(/HTTP (\d{3})/)?.[1] ?? NaN);
+    const key = error.message.startsWith('OpenAI') ? 'OPENAI_API_KEY' : 'ELEVENLABS_API_KEY';
+    if (status === 401 || status === 403) return `${error.message.split(':')[0]}: the server's ${key} was rejected. Check it is valid.`;
+    if (status === 429) return `${error.message.split(':')[0]}: rate limited or out of credit. Try again later.`;
+    return error.message.slice(0, 300);
+  }
+  // Anthropic SDK API errors carry a numeric status and the API's error body.
+  const api = error as Error & { status?: unknown; error?: { error?: { type?: string; message?: string } } };
+  if (error.name === 'APIConnectionError' || error.name === 'APIConnectionTimeoutError' || error.constructor?.name?.startsWith('APIConnection')) {
+    return "The server can't reach Claude right now (network or timeout). Try again shortly.";
+  }
+  if (typeof api.status !== 'number' || !('error' in api)) return null;
+  const detail = api.error?.error?.message ?? '';
+  if (api.status === 401) return "Claude rejected the server's ANTHROPIC_API_KEY. Check it is valid and not revoked.";
+  if (api.status === 403) return "This Anthropic API key isn't allowed to use that Claude model.";
+  if (api.status === 404) return `Claude model not found${detail ? ` (${detail})` : ''}. Check STUDIO_PERSONA_MODEL / STUDIO_CHAT_MODEL.`;
+  if (/credit balance/i.test(detail)) return 'The Anthropic account is out of credit. Add credit, then try again.';
+  if (api.status === 429) return 'Claude is rate-limiting this server. Try again in a minute.';
+  if (api.status === 529 || api.status >= 500) return 'Claude is overloaded right now. Try again shortly.';
+  return `Claude returned an error (${api.status})${detail ? `: ${detail.slice(0, 200)}` : ''}.`;
 }
