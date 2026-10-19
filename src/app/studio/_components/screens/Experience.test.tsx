@@ -28,7 +28,7 @@ describe('Experience controls', () => {
     fireEvent.change(await screen.findByLabelText('Agent'), { target: { value: 'agent' } });
     fireEvent.click(within(await screen.findByRole('article', { name: 'Reply length preference' })).getByRole('button', { name: 'Reset', exact: true }));
     await screen.findByRole('alert');
-    expect(mocks.preference).toHaveBeenCalledWith(expect.objectContaining({ action: 'reset', agentId: 'agent', space: 'work', expectedRevision: 2 }));
+    expect(mocks.preference).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ action: 'reset', agentId: 'agent', space: 'work', expectedRevision: 2 }), expect.any(AbortSignal));
     expect(screen.queryByText('Saved.')).not.toBeInTheDocument();
   });
   it('shows the default reply length after the server confirms an explicit reset', async () => {
