@@ -42,6 +42,7 @@ export interface SqliteAdaptiveStorageOptions {
 export class SqliteAdaptiveStorage implements AdaptiveStorage {
   readonly supportsCommittedWriteFence = true as const;
   readonly indexed: IndexedQueryEngine;
+  readonly identity: Readonly<Pick<IndexedStoreMetadata, 'incarnation' | 'generation'>>;
   /** Application materialization counters; these are not disk-page or latency measurements. */
   readonly io = emptyIndexedIo();
   readonly database: Database.Database;
@@ -86,6 +87,8 @@ export class SqliteAdaptiveStorage implements AdaptiveStorage {
       if (opened?.inTransaction) opened.exec('ROLLBACK'); opened?.close(); openStores.delete(this.storePath);
       throw this.error(error);
     }
+    const identity = this.readMetadata();
+    this.identity = Object.freeze({ incarnation: identity.incarnation, generation: identity.generation });
     this.indexed = new IndexedQueryEngine(this);
   }
   private error(error: unknown, committed: boolean | 'unknown' = false): IndexedStorageError {

@@ -340,4 +340,17 @@ describe('staged SQLite adaptive storage — synthetic fixtures only', () => {
     expect(child.stdout).toContain('synthetic-child-safe');
   });
 
+  it('exposes an immutable store namespace without SQL even inside a canonical writer callback', async () => {
+    const f = await fixture(); const expected = { incarnation: f.storage.readMetadata().incarnation, generation: 1 };
+    expect(f.storage.indexed.identity).toEqual(expected); expect(Object.isFrozen(f.storage.indexed.identity)).toBe(true);
+    const prepare = f.storage.database.prepare; let sql = 0;
+    f.storage.database.prepare = function (...args: Parameters<typeof prepare>) { sql++; return prepare.apply(this, args); } as typeof prepare;
+    try { expect(f.storage.indexed.identity).toEqual(expected); expect(sql).toBe(0); }
+    finally { f.storage.database.prepare = prepare; }
+    await f.mutate(() => { expect(f.storage.indexed.identity).toEqual(expected); });
+    expect(() => { (f.storage.indexed.identity as { generation: number }).generation = 999; }).toThrow();
+    expect(f.storage.indexed.identity).not.toHaveProperty('catalogVersion');
+    expect(f.storage.indexed.identity).not.toHaveProperty('lifecycleWatermark');
+  });
+
 });

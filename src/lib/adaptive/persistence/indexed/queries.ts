@@ -25,7 +25,8 @@ const fail = (reason: IndexedFailure['reason'], io: IndexedIoCounters): IndexedF
 /** SQL projections provide canonical facts, never current code-owned release
  * policy or Studio identity/agent authority. Callers must check both externally. */
 export class IndexedQueryEngine implements IndexedAdaptiveQueries {
-  constructor(private readonly host: SqliteAdaptiveStorage) {}
+  readonly identity: IndexedAdaptiveQueries['identity'];
+  constructor(private readonly host: SqliteAdaptiveStorage) { this.identity = host.identity; }
   private scope(scope: IndexedScope): void {
     if (!scopeSchema.safeParse(scope).success || scope.tenantId !== tenantIdFor(scope.accountId) ||
         scope.spaceId !== spaceIdFor(scope.accountId, scope.space) || scope.containerId !== containerIdFor(scope.accountId, scope.space)) throw new IndexedStorageError('invalid_scope');

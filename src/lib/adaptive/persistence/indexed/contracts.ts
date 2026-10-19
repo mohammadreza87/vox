@@ -73,6 +73,9 @@ export type BodyResult = { status: 'ready'; completion: 'complete' | 'partial';
   bodies: { handle: CandidateHandle; text: string; sourceIds?: string[] }[]; io: IndexedIoCounters } | IndexedFailure;
 export type ValidationResult = { status: 'ready'; io: IndexedIoCounters } | IndexedFailure;
 export interface IndexedAdaptiveQueries {
+  /** Stable startup-validated namespace only; no catalog, lifecycle or access
+   * authority. Safe to read inside canonical callbacks without nested SQL. */
+  readonly identity: Readonly<Pick<IndexedStoreMetadata, 'incarnation' | 'generation'>>;
   readControls(accountId: string, space: SpaceKind, evaluateFresh?: IndexedControlEvaluator): ControlsResult;
   readRuntimeAuthority(scope: IndexedScope, now?: number): AuthorityResult;
   queryCandidateIds(scope: IndexedScope, query: string, receipt: RuntimeAuthorityReceipt, cursor?: CandidateCursor): CandidateResult;
