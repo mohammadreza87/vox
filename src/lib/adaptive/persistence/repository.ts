@@ -31,6 +31,7 @@ const bindingSchema = z.object({ ...base, accountId: id, personId: id, status: z
 }).strict();
 const memorySchema = z.object({ id, revision, space, text: z.string().max(2000).optional(), status: z.enum(['active', 'deleted']),
   createdAt: integer, updatedAt: integer, expiresAt: integer, revocationEpoch: integer,
+  sourceRefs: z.array(z.object({ id, revision }).strict()).min(1).max(8).refine(refs => new Set(refs.map(ref => ref.id)).size === refs.length).optional(),
 }).strict();
 export type StoredMemory = z.infer<typeof memorySchema>;
 const receiptSchema = z.object({ id, purpose, space, permissionRevision: revision, locale: z.enum(['en', 'fa']),
@@ -88,8 +89,9 @@ export class AdaptiveRepository {
     }
     return { status: 'ready', document };
   }
-  transaction<T>(accountId: string, now: number, fn: (document: AdaptiveDocument) => T): Promise<T> {
+  transaction<T>(accountId: string, now: number, fn: (document: AdaptiveDocument) => T, beforeCommit?: () => void): Promise<T> {
     if (!/^telegram-account:[1-9]\d{0,15}$/.test(accountId) || !Number.isSafeInteger(now) || now < 0) throw new Error('Invalid adaptive account');
+    if (beforeCommit && this.storage.supportsCommittedWriteFence !== true) throw new Error('Committed write fence unsupported');
     return this.storage.transact(accountId, current => {
       // Only an exact, otherwise valid old 14-purpose document is upgraded. Existing
       // permissions and receipts are preserved; the new purpose starts unasked.
@@ -134,6 +136,6 @@ export class AdaptiveRepository {
       const stored: Partial<AdaptiveDocument> = { ...draft };
       if (!draft.observer.events.length && !draft.observer.projections.length) delete stored.observer;
       return { document: stored, result };
-    });
+    }, beforeCommit);
   }
 }

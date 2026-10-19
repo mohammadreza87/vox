@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
 import { brandError, publicDomainError } from '../../error-contract';
+import { purgeInvalidDerivedMemory, validMemoryLineage } from '../reviewed-memory/provenance';
 import { transitionConsent } from '../consent';
 import { evaluateCapability, type Capability, type CapabilityRequest, type JurisdictionApproval } from '../eligibility';
 import { resolveVerifiedPerson } from '../identity';
@@ -69,7 +70,7 @@ export class AdaptiveService {
     if (!Number.isSafeInteger(telegramId) || telegramId <= 0) return fail(401, 'authentication_required');
     return accountIdFor(telegramId);
   }
-  private async transact<T>(telegramId: number, fn: (d: AdaptiveDocument, now: number) => T): Promise<T> {
+  private async transact<T>(telegramId: number, fn: (d: AdaptiveDocument, now: number) => T, beforeCommit?: () => void): Promise<T> {
     const now = this.now();
     const invalidations: RelationshipInvalidation[] = [];
     const voiceInvalidations: Array<{ telegramId: number; space?: SpaceKind; reason: string }> = [];
@@ -129,9 +130,11 @@ export class AdaptiveService {
       }
       // Text retention is enforced even on reads; metadata remains as a replay tombstone.
       for (const memory of d.memories) if (memory.status === 'active' && memory.expiresAt <= now) this.tombstone(d, memory, now, `expiry:${memory.id}`);
+      if (purgeInvalidDerivedMemory(d, now)) this.bump(d, now);
       if (sweepObserverDocument(d, now, (doc, space, agentId, time) =>
         this.isPurposeAllowed(doc, space, 'optional.product_analytics', time, agentId))) this.bump(d, now);
       const value = fn(d, now);
+      if (purgeInvalidDerivedMemory(d, now)) this.bump(d, now);
       if (!d.binding || d.binding.accountId !== d.accountId || d.binding.personId !== d.personId) revokeReminderIdentity();
       // The separate template store is suppressed/purged only after canonical
       // authority commits. Its invalidator never re-enters this transaction.
@@ -171,7 +174,7 @@ export class AdaptiveService {
         this.isPurposeAllowed(doc, space, 'optional.product_analytics', time, agentId));
       if ((observerChanged || priorRelationships !== digest(d.relationships)) && d.revision === priorRevision) this.bump(d, now);
       return value;
-    });
+    }, beforeCommit);
     // Authority is already durably revoked. Purge failures are visible to caller;
     // no rollback can restore permission or permit an in-flight send.
     const cleanup = await Promise.allSettled([
@@ -208,8 +211,8 @@ export class AdaptiveService {
     return this.eligible(d, capability, now);
   }
   /** Trusted backend seam: same aggregate/expiry transaction as consent and memory. */
-  withAccountDocument<T>(telegramId: number, fn: (document: AdaptiveDocument, now: number) => T): Promise<T> {
-    return this.transact(telegramId, fn);
+  withAccountDocument<T>(telegramId: number, fn: (document: AdaptiveDocument, now: number) => T, beforeCommit?: () => void): Promise<T> {
+    return this.transact(telegramId, fn, beforeCommit);
   }
   /** Validated committed file snapshot only. No mutation or awaited work. */
   readCommittedForEffect<T>(telegramId: number, fn: (document: AdaptiveDocument, now: number) => T):
@@ -282,8 +285,8 @@ export class AdaptiveService {
           revision: permission.revision, available: confirmed && eligibility.eligible,
           ...(!confirmed ? { reason: 'profile_confirmation_required' } : !eligibility.eligible ? { reason: eligibility.reason } : {}), notice: adaptiveNotice(purpose, locale) };
       }),
-      memories: confirmed && includeMemories ? d.memories.filter(m => m.space === space && m.status === 'active' && m.expiresAt > now)
-        .filter(m => this.authorized(d, space, m, 'read', now)).map(m => ({ id: m.id, revision: m.revision, text: m.text!, createdAt: m.createdAt, expiresAt: m.expiresAt })) : [],
+      memories: confirmed && includeMemories ? d.memories.filter(m => m.space === space && validMemoryLineage(d, m, now))
+        .filter(m => this.authorized(d, space, m, 'read', now)).map(m => ({ id: m.id, revision: m.revision, text: m.text!, createdAt: m.createdAt, expiresAt: m.expiresAt, ...(m.sourceRefs ? { sourceRefs: m.sourceRefs } : {}) })) : [],
       agents: confirmed ? d.agentGrants.filter(g => g.space === space).map(g => ({ agentId: g.agentId, allowed: g.allowed, revision: g.revision })) : [],
       explicitMemoryAvailable: confirmed && memory.eligible,
       ...(memory.eligible && memory.validUntil !== undefined ? { explicitMemoryValidUntil: memory.validUntil } : {}),
@@ -378,6 +381,7 @@ export class AdaptiveService {
     });
   }
   private authorized(d: AdaptiveDocument, space: SpaceKind, memory: StoredMemory, operation: 'read' | 'contribute' | 'delete', now: number, agentId?: string): boolean {
+    if (operation === 'read' && !validMemoryLineage(d, memory, now)) return false;
     const base = { schemaVersion: 1 as const, revision: d.revision, createdAt: d.createdAt, updatedAt: d.updatedAt };
     const tenantId = tenantIdFor(d.accountId), spaceId = spaceIdFor(d.accountId, space), containerId = containerIdFor(d.accountId, space);
     const scope = { tenantId, spaceId };
@@ -404,6 +408,10 @@ export class AdaptiveService {
           purposeVersion: 1, status: 'active' as const, expiresAt: INFINITY, policyEpoch: 0,
         })) : [])], consents: d.permissions };
     return memory.space === space && authorizeAccess(request, snapshot, now).allowed;
+  }
+  /** Trusted explicit-request service seam; optional purposes are not inferred. */
+  isExplicitMemoryAllowed(d: AdaptiveDocument, space: SpaceKind, memory: StoredMemory, operation: 'read' | 'contribute', now: number, agentId?: string): boolean {
+    return this.authorized(d, space, memory, operation, now, agentId);
   }
   createMemory(telegramId: number, input: MemoryInput): Promise<AdaptiveSnapshot> {
     const memoryId = randomUUID();
@@ -474,17 +482,26 @@ export class AdaptiveService {
   };
   /** Authorized, fresh explicit-private context for the separately gated runtime path.
    * The caller must recheck returned revision before provider use/output. */
-  readPrivateContext(telegramId: number, space: SpaceKind, agentId: string): Promise<{ revision: string; memories: { id: string; text: string }[] }> {
+  readPrivateContext(telegramId: number, space: SpaceKind, agentId: string): Promise<{ revision: string; memories: { id: string; text: string; sourceIds?: string[] }[] }> {
     return this.transact(telegramId, (d, now) => {
       const permission = this.permission(d, space, 'optional.personalization');
       const eligibility = this.eligible(d, 'personalization', now);
       const confirmed = this.confirmed(d, now);
       const allowed = confirmed && permission.state === 'granted' && permission.expiresAt > now && eligibility.eligible;
-      const memories = allowed ? d.memories.filter(m => this.authorized(d, space, m, 'read', now, agentId)) : [];
+      const authorized = allowed ? d.memories.filter(m => this.authorized(d, space, m, 'read', now, agentId)) : [];
+      const ancestors = (memory: StoredMemory, ids = new Set<string>()): string[] => {
+        for (const ref of memory.sourceRefs ?? []) {
+          if (ids.has(ref.id)) continue;
+          ids.add(ref.id);
+          const source = authorized.find(row => row.id === ref.id);
+          if (source) ancestors(source, ids);
+        }
+        return [...ids];
+      };
       return { revision: digest([d.accountId, d.personId, space, agentId, d.binding, confirmed, permission, allowed, eligibility,
         d.agentGrants.filter(g => g.space === space && g.agentId === agentId),
-        memories.map(m => [m.id, m.revision, m.expiresAt, m.revocationEpoch])]),
-        memories: memories.map(m => ({ id: m.id, text: m.text! })) };
+        authorized.map(m => [m.id, m.revision, m.expiresAt, m.revocationEpoch, m.sourceRefs])]),
+        memories: authorized.map(m => ({ id: m.id, text: m.text!, ...(m.sourceRefs ? { sourceIds: ancestors(m) } : {}) })) };
     });
   }
 }

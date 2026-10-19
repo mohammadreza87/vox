@@ -7,8 +7,10 @@ export interface RetrievalCandidate {
   id: string;
   text: string;
   /** Only server-authored explicit preferences may receive this priority. */
-  layer: 'preference' | 'memory';
+  layer: 'preference' | 'summary' | 'memory';
   freshness: number;
+  /** Server-authored source IDs; suppress only after a covering summary fits. */
+  sourceIds?: readonly string[];
 }
 export interface RetrievalRequest {
   query: string;
@@ -36,6 +38,7 @@ const DEFAULT_BYTES = 8192;
 const DEFAULT_ITEMS = 12;
 const EN_STOP = new Set(['the', 'a', 'an', 'is', 'are', 'was', 'to', 'of', 'and', 'in', 'on', 'it', 'what', 'my', 'for', 'please']);
 const FA_STOP = new Set(['از', 'به', 'در', 'را', 'و', 'است', 'من', 'این', 'آن', 'که', 'برای', 'چیست']);
+const preferencePriority = (layer: RetrievalCandidate['layer']) => Number(layer === 'preference');
 
 /** Arabic/Persian keyboard equivalents, combining marks, joiners and digits.
  * No translation or semantic/provider calls; mixed EN/FA words stay searchable. */
@@ -47,7 +50,7 @@ export function normalizeRetrievalText(text: string): string {
 }
 function terms(text: string): string[] {
   return [...new Set(normalizeRetrievalText(text).match(/[\p{L}\p{N}]+/gu) ?? [])]
-    .filter(term => !EN_STOP.has(term) && !FA_STOP.has(term)).slice(0, 512);
+    .filter(term => !EN_STOP.has(term) && !FA_STOP.has(term));
 }
 interface CachedRanking { revision: string; createdAt: number; ids: string[] }
 
@@ -72,7 +75,7 @@ export class AuthorizedContextRetriever {
     let inputBytes = 0, oversized = 0;
     const ids = new Set<string>(), texts = new Set<string>(), candidates: RetrievalCandidate[] = [];
     // Preferences first so a duplicate saved note cannot displace its trusted row.
-    for (const candidate of [...request.candidates].sort((a, b) => Number(b.layer === 'preference') - Number(a.layer === 'preference'))) {
+    for (const candidate of [...request.candidates].sort((a, b) => preferencePriority(b.layer) - preferencePriority(a.layer))) {
       inputBytes += Buffer.byteLength(candidate.text, 'utf8');
       if (inputBytes > MAX_INPUT_BYTES) return empty();
       if (!candidate.id || ids.has(candidate.id)) return empty();
@@ -103,8 +106,8 @@ export class AuthorizedContextRetriever {
       const frequencies = new Map(queryTerms.map(term => [term, docs.filter(doc => doc.terms.has(term)).length]));
       const ranked = docs.map(doc => ({ ...doc, score: queryTerms.reduce((sum, term) => sum + (doc.terms.has(term)
         ? 1 + Math.log(1 + docs.length / (1 + frequencies.get(term)!)) : 0), 0) }));
-      order = ranked.sort((a, b) => Number(b.candidate.layer === 'preference') - Number(a.candidate.layer === 'preference') ||
-        b.score - a.score || b.candidate.freshness - a.candidate.freshness ||
+      order = ranked.sort((a, b) => preferencePriority(b.candidate.layer) - preferencePriority(a.candidate.layer) ||
+        b.score - a.score || Number(b.candidate.layer === 'summary') - Number(a.candidate.layer === 'summary') || b.candidate.freshness - a.candidate.freshness ||
         (a.candidate.id < b.candidate.id ? -1 : a.candidate.id > b.candidate.id ? 1 : 0)).map(row => row.candidate.id);
       if (key && this.cacheLimit > 0) {
         this.cache.set(key, { revision: receipt!, createdAt: now, ids: order });
@@ -113,12 +116,23 @@ export class AuthorizedContextRetriever {
     }
     const current = new Map(candidates.map(candidate => [candidate.id, candidate]));
     const selected: RetrievalCandidate[] = [];
+    const statements = (text: string) => normalizeRetrievalText(text).split(/[.!?؛؟\n]+/u).map(part => part.replace(/\s+/gu, ' ').trim()).filter(Boolean);
+    const phrases = new Map(candidates.map(candidate => [candidate.id, statements(candidate.text)]));
+    // Only a verbatim whole-statement sequence proves coverage. A bag of words
+    // cannot preserve negation/entity/date association. Packing comes first.
+    const covers = (summary: RetrievalCandidate, source: RetrievalCandidate) => {
+      if (summary.layer !== 'summary' || source.layer === 'preference' || !summary.sourceIds?.includes(source.id)) return false;
+      const original = phrases.get(source.id)!, proposed = phrases.get(summary.id)!;
+      return original.length > 0 && proposed.some((_, start) => original.every((statement, offset) => proposed[start + offset] === statement));
+    };
     for (const id of order) {
-      if (selected.length >= maxItems) break;
+
       const candidate = current.get(id);
-      if (!candidate) continue;
+      if (!candidate || selected.some(summary => covers(summary, candidate))) continue;
+      const retained = selected.filter(source => !covers(candidate, source));
+      if (retained.length >= maxItems) continue;
       // Preserve whole statements, including negations, dates and qualifications.
-      if (bytes([...selected.map(row => row.text), candidate.text]) <= maxBytes) selected.push({ ...candidate });
+      if (bytes([...retained.map(row => row.text), candidate.text]) <= maxBytes) selected.splice(0, selected.length, ...retained, { ...candidate });
       else oversized++;
     }
     return { selected, serializedBytes: bytes(selected.map(row => row.text)), cacheHit: !!cached, considered: candidates.length, oversized };

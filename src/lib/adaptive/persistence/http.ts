@@ -6,6 +6,9 @@ import { StudioError, type Studio } from '../../studio/service';
 import { StudioRateLimiter, StudioRateLimitError } from '../../studio/ratelimit';
 import { AdaptiveError, type AdaptiveService } from './service';
 import { agentGrantInput, consentInput, deletionInput, identityInput, memoryInput, presentInput, spaceInput } from './validation';
+import { ReviewedMemoryService } from '../reviewed-memory/service';
+import { reviewedPreviewInputSchema, reviewedAcceptInputSchema } from '../reviewed-memory/contracts';
+import { digest } from './repository';
 const response = (data: unknown, status = 200, headers: Record<string, string> = {}) => new Response(JSON.stringify(data), {
   status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...headers },
 });
@@ -32,10 +35,32 @@ export async function handleAdaptiveRequest(studio: Studio, service: AdaptiveSer
     if (request.headers.get('origin') !== url.origin || request.headers.get('sec-fetch-site') === 'cross-site') return response({ error: 'origin_denied' }, 403);
     if (request.headers.get('content-type')?.split(';')[0].trim().toLowerCase() !== 'application/json') return response({ error: 'json_required' }, 415);
     await limiter.consume('mutation', user.id);
-    const bounded = await boundedStudioRequest(request, 8192);
+    const bounded = await boundedStudioRequest(request, path[0] === 'reviewed' ? 16_384 : 8192);
     let body: unknown;
     try { body = await bounded.json(); } catch { return response({ error: 'invalid_json' }, 400); }
     const route = `${request.method} ${path.join('/')}`;
+    if (route === 'POST reviewed/preview' || route === 'POST reviewed/accept') {
+      const authority = (state: Awaited<ReturnType<Studio['deps']['store']['read']>>, agentId: string) => {
+        const actor = state.members.find(member => member.telegramId === user.id), agent = state.agents.find(agent => agent.id === agentId);
+        return actor && agent && !(agent.blocked ?? []).includes(user.id) && canUseAgent(actor, agent) ? digest([actor, agent]) : null;
+      };
+      const reviewed = new ReviewedMemoryService(service, { llm: studio.deps.chatLLM, secret: studio.deps.secret,
+        now: () => studio.deps.now?.().getTime() ?? Date.now(),
+        agentAuthority: async (_id, agentId) => authority(await studio.deps.store.read(), agentId),
+        agentAuthorityNow: (_id, agentId) => { const state = studio.deps.store.readCommittedForEffect?.(); return state ? authority(state, agentId) : null; },
+      });
+      await limiter.consume('expensive', user.id);
+      if (route === 'POST reviewed/preview') {
+        const input = reviewedPreviewInputSchema.parse(body), preview = await reviewed.preview(user.id, input, request.signal);
+        reviewed.revalidateNow(user.id, { space: input.space, agentId: input.agentId, text: preview.text, receipt: preview.receipt });
+        return response(preview);
+      }
+      const input = reviewedAcceptInputSchema.parse(body);
+      const saved = await reviewed.accept(user.id, input);
+      const snapshot = await service.read(user.id, input.space, locale);
+      reviewed.revalidateNow(user.id, input);
+      return response({ ...saved, snapshot }, 201);
+    }
     if (route === 'POST identity') return response(await service.confirm(user.id, identityInput.parse(body), space));
     if (route === 'POST consents/present') return response(await service.present(user.id, presentInput.parse(body)));
     if (route === 'PUT consents') return response(await service.changeConsent(user.id, consentInput.parse(body)));

@@ -82,3 +82,37 @@ describe('current-authority bounded retrieval', () => {
     expect(fa.serializedBytes).toBeLessThanOrEqual(8192); expect(fa.selected).toHaveLength(12);
   });
 });
+
+it('ranks a relevant authored detail ahead of many unrelated reviewed summaries within strict budgets', () => {
+  const candidates = [...Array.from({ length: 40 }, (_, i) => row(`s${i}`, `Unrelated holiday overview ${i} ${'x'.repeat(690)}`, i, 'summary')),
+    row('detail', 'Release freeze is 2026-11-02; do not infer approval.', 0), row('p', 'Use concise Persian.', 0, 'preference')];
+  const result = new AuthorizedContextRetriever().select({ candidates, query: 'Release freeze date' });
+  expect(result.selected.slice(0, 2).map(row => row.id)).toEqual(['p', 'detail']);
+  expect(result.selected.length).toBeLessThanOrEqual(12); expect(result.serializedBytes).toBeLessThanOrEqual(8192);
+});
+it('suppresses only adequately covered sources after a summary fits, preserving omitted dates and oversize fallback on cache hits', () => {
+  const r = new AuthorizedContextRetriever();
+  const source = row('source', 'Launch March 5 tentative', 0);
+  const summary = { ...row('summary', 'Launch tentative', 99, 'summary'), sourceIds: ['source'] };
+  expect(r.select({ candidates: [source, summary], query: 'Launch date March' }).selected[0].id).toBe('source');
+  expect(r.select({ candidates: [source, summary], query: 'Launch' }).selected.map(r => r.id)).toContain('source');
+  const covering = { ...summary, text: 'Launch March 5 tentative. Overview.' };
+  const request = { authority: authority(), candidates: [source, covering], query: 'Launch' };
+  expect(r.select(request).selected.map(r => r.id)).toEqual(['summary']);
+  expect(r.select(request)).toMatchObject({ cacheHit: true, selected: [expect.objectContaining({ id: 'summary' })] });
+  expect(r.select({ ...request, candidates: [source, { ...covering, text: covering.text + ' x'.repeat(300) }], maxBytes: 80 }).selected.map(r => r.id)).toEqual(['source']);
+});
+it('preserves Persian and Arabic-equivalent exact details omitted by an overview', () => {
+  const source = row('fa', 'جلسهٔ كيان ساعت ١٢ روز ۲۳ برگزار می‌شود؛ منتشر نکن.', 0);
+  const summary = { ...row('overview', 'جلسه کیان برگزار می‌شود.', 100, 'summary'), sourceIds: ['fa'] };
+  const result = new AuthorizedContextRetriever().select({ candidates: [summary, source], query: 'جلسه کیان ساعت ۱۲' });
+  expect(result.selected[0].id).toBe('fa'); expect(result.selected[0].text).toBe(source.text);
+});
+it.each([
+  ['Do not send invoices to Ali.', 'Send invoices to Sara.', 'Send invoices to Ali. Do not send invoices to Sara.', 'send invoices Ali Sara'],
+  ['جلسه علی روز ۱۲ است.', 'جلسه سارا روز ۲۳ است.', 'جلسه علی روز ۲۳ است. جلسه سارا روز ۱۲ است.', 'جلسه علی سارا'],
+  ['برای علی نفرست.', 'برای سارا بفرست.', 'برای علی بفرست. برای سارا نفرست.', 'علی سارا'],
+])('never treats swapped negations or date associations as source coverage (%s)', (a, b, summary, query) => {
+  const candidates = [row('a', a), row('b', b), { ...row('s', summary, 100, 'summary'), sourceIds: ['a', 'b'] }];
+  expect(new AuthorizedContextRetriever().select({ candidates, query }).selected.map(row => row.id)).toEqual(expect.arrayContaining(['a', 'b']));
+});
