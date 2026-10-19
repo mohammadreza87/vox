@@ -1,9 +1,11 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { assessFeedback, FEEDBACK_RETENTION_MS, FEEDBACK_TARGET_RETENTION_MS, forgetFeedback, OpenAIRelationshipFeedback, prepareFeedback, pruneFeedback, recordFeedback } from '../feedback';
 import { emptyRelationship, InMemoryRelationshipStore } from '../store';
 import { InMemoryObservationStore, SafeRelationshipObserver } from '../observer';
 import type { FeedbackOutcome, FeedbackProvider, FeedbackScope, RelationshipKey, RelationshipState, TurnInput } from '../types';
 import { StudioRelationshipAssessor } from '../../studio/relationship-assessor';
+
+afterEach(() => vi.unstubAllEnvs());
 
 const key: RelationshipKey = { personaId: 'aria', chatKey: 'private-a', audience: { kind: 'private', personId: 'a' } };
 const now = new Date('2026-10-19T12:00:00Z');
@@ -141,14 +143,16 @@ describe('bounded feedback Decisions adapter', () => {
 });
 
 it('exports linked content-free pseudonymous feedback, isolated across relationships', async () => {
+  const revision = 'a'.repeat(40);
+  vi.stubEnv('STUDIO_REVISION', revision);
   const h = harness(); const receipt = recordFeedback(h.state, await assessFeedback(classifier('helpful'), h.attempt(), now), now)!;
   const store = new InMemoryObservationStore(); const observer = new SafeRelationshipObserver(store, 's'.repeat(32), () => now);
   await observer.emitFeedback(key, 'live', receipt); await observer.emitFeedback(key, 'live', receipt);
   await observer.emitFeedback({ ...key, chatKey: 'private-b', audience: { kind: 'private', personId: 'b' } }, 'live', receipt);
   const events = await store.recent(); expect(events).toHaveLength(3);
   expect(events[0].intentionHash).not.toBe(events[1].intentionHash); expect(events[1].intentionHash).toBe(events[2].intentionHash);
-  expect(events[1]).toMatchObject({ type: 'feedback', outcome: 'helpful', feedbackScope: 'message' });
-  expect(Object.keys(events[1]).sort()).toEqual(['id', 'at', 'schemaVersion', 'feature', 'mode', 'type', 'scope', 'scopeHash', 'policyVersion', 'decisionModel', 'outcome', 'feedbackScope', 'intentionHash', 'sourceHash'].sort());
+  expect(events[1]).toMatchObject({ type: 'feedback', outcome: 'helpful', feedbackScope: 'message', revision });
+  expect(Object.keys(events[1]).sort()).toEqual(['id', 'at', 'schemaVersion', 'feature', 'mode', 'type', 'scope', 'scopeHash', 'policyVersion', 'decisionModel', 'outcome', 'feedbackScope', 'intentionHash', 'sourceHash', 'revision'].sort());
   const exported = JSON.stringify(events);
   for (const privateValue of [h.input.text, h.input.previousAssistant!.text, 'intention-sensitive-id', 'memory-sensitive-id', 'boss', 'private-a']) expect(exported).not.toContain(privateValue);
   await observer.emit(key, 'live', 'sent', undefined, receipt.intentionId);

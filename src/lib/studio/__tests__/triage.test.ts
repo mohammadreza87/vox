@@ -235,7 +235,7 @@ describe('replies routed by triage', () => {
     expect(web).toHaveBeenCalledTimes(1);
     expect(fast.replyRequests).toHaveLength(0);
     expect(h.chatLLM.extractionCalls).toBe(1);
-    expect(h.logger.warn).toHaveBeenCalledWith(expect.stringContaining('triage unavailable'));
+    expect(h.logger.warn).toHaveBeenCalledWith({ type: 'telegram_ingress', stage: 'triage', reason: 'operation_failed', outcome: 'full_reply_path' });
   });
 });
 

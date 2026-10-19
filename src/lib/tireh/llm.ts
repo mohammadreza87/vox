@@ -7,6 +7,16 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import { logTelegramDiagnostic } from './telegram/diagnostics';
+
+function isUnavailableWebTool(error: unknown): boolean {
+  // Provider content is used only for the existing fallback decision, never
+  // exported. Hostile accessors must preserve the original thrown exception.
+  try {
+    return !!error && typeof error === 'object' && 'status' in error && error.status === 400
+      && 'message' in error && /web_search|tool/i.test(String(error.message));
+  } catch { return false; }
+}
 
 export interface LLMMessage {
   role: 'user' | 'assistant';
@@ -138,9 +148,9 @@ export class AnthropicLLM implements LLM {
       return webAnswer(response.content);
     } catch (error) {
       // A model or account without web search answers from what it knows.
-      if ((error as { status?: number }).status === 400 && /web_search|tool/i.test(String((error as Error).message))) {
+      if (isUnavailableWebTool(error)) {
         this.webUnavailable = true;
-        console.warn(`[llm] web search unavailable for ${this.model}; replying without it: ${(error as Error).message}`);
+        logTelegramDiagnostic(console, 'web_search_unavailable');
         return { text: await this.complete(request), sources: [] };
       }
       throw error;

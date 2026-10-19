@@ -5,6 +5,24 @@ and Telegram webhooks. The alternative Mac Studio profile uses one persistent
 Node.js process, a private data directory and Telegram long polling. Never use
 file storage on an ephemeral server or run pollers and webhooks for the same bot.
 
+**Active target (19 October 2026):** `https://vox.joyixir.com/studio` uses the Mac
+Studio polling profile. The manager and active agent bots belong to that runtime.
+Firebase deployment is held: the `Deploy` job requires repository variable
+`STUDIO_PRODUCTION_TARGET=firebase`. An unset or different value skips that job,
+including manual dispatch. CI and preview deployment remain independent.
+
+Do not set that variable as a routine release step. A target migration must first
+stop the existing polling owner, preserve or migrate its state and encrypted bot
+tokens, and qualify the destination before registering webhooks. Firebase's
+production verifier registers webhooks and changes the manager's menu URL;
+`STUDIO_BOTS=0` only prevents polling and does not make Firebase inactive.
+Granted Firebase IAM roles do not change transport ownership or activate outreach.
+
+The composed Mac runtime currently suppresses the legacy relationship loop when
+adaptive privacy is present. Owner/Super Admin eligibility alone does not enable
+outreach. A release must also qualify Work/Personal scope, current consent and
+agent grants, external-channel permission, and final-send revocation checks.
+
 ## Adaptive defaults and history transition
 
 For the default-disabled release, leave `STUDIO_ADAPTIVE_POLICY_JSON` absent and
@@ -32,6 +50,7 @@ preserved for an explicit migration; confirming an account profile does not impo
 or authorize them. Replies therefore use the current input and any separately
 authorized explicit context, without the old retained conversation history. This
 change also applies when optional adaptive capabilities are disabled.
+
 
 ## Firebase production
 

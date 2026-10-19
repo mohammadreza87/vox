@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MAX_STUDIO_JSON_BYTES } from '@/lib/studio/http';
 import { webhookSecret } from '@/lib/studio/updates';
 import { hire, makeStudio, SECRET, seedOrg, type Harness } from '@/lib/studio/__tests__/helpers';
+import { expectContentFreeTelegramLogs, telegramCanary, telegramCanaryError } from '@/test/telegram-diagnostics';
 
 let h: Harness;
 const getStudio = vi.hoisted(() => vi.fn());
@@ -120,5 +121,39 @@ describe('POST /api/studio/telegram/[key]', () => {
       vi.spyOn(h.studio, 'ensureMember').mockRejectedValueOnce(new Error('handler unavailable'));
       expect((await call('manager', start, { 'x-telegram-bot-api-secret-token': webhookSecret(SECRET, 'manager') })).status).toBe(200);
     } finally { log.mockRestore(); }
+  });
+
+  it('keeps real agent failures content-free, acknowledges duplicates and continues with the next update', async () => {
+    const log = { info: vi.spyOn(console, 'info').mockImplementation(() => undefined), warn: vi.spyOn(console, 'warn').mockImplementation(() => undefined), error: vi.spyOn(console, 'error').mockImplementation(() => undefined) };
+    try {
+      const org = await seedOrg(h);
+      const { agent, bot } = await hire(h, org.alice, { name: telegramCanary.persona });
+      const incoming = { update_id: telegramCanary.update, message: { message_id: 1, from: { id: org.alice.telegramId, is_bot: false, first_name: 'Alice' }, chat: { id: org.alice.telegramId, type: 'private' }, date: 0, text: telegramCanary.transcript } };
+      const headers = { 'x-telegram-bot-api-secret-token': webhookSecret(SECRET, agent.id) };
+      vi.spyOn(h.memory.history, 'getEpoch').mockRejectedValueOnce(telegramCanaryError());
+      for (const update of [incoming, incoming, { ...incoming, update_id: incoming.update_id + 1 }]) {
+        const response = await call(agent.id, update, headers);
+        expect(response.status).toBe(200);
+        expect(await response.json()).toEqual({ ok: true });
+      }
+      expect(bot().sendMessage).toHaveBeenCalledTimes(1);
+      expect(log.error).toHaveBeenCalledTimes(1);
+      expectContentFreeTelegramLogs([...log.info.mock.calls, ...log.warn.mock.calls, ...log.error.mock.calls, ...h.logger.info.mock.calls, ...h.logger.warn.mock.calls, ...h.logger.error.mock.calls], [agent.id, agent.bot!.username]);
+    } finally { for (const spy of Object.values(log)) spy.mockRestore(); }
+  });
+
+  it('keeps initialization and setup exceptions out of every log argument', async () => {
+    const log = { info: vi.spyOn(console, 'info').mockImplementation(() => undefined), warn: vi.spyOn(console, 'warn').mockImplementation(() => undefined), error: vi.spyOn(console, 'error').mockImplementation(() => undefined) };
+    try {
+      getStudio.mockRejectedValueOnce(telegramCanaryError());
+      expect((await call('manager', start, { 'x-telegram-bot-api-secret-token': webhookSecret(SECRET, 'manager') })).status).toBe(503);
+      process.env.STUDIO_PUBLIC_URL = 'https://example.invalid';
+      h.manager.setWebhook.mockRejectedValueOnce(telegramCanaryError());
+      const response = await call('setup', {}, { authorization: `Bearer ${SECRET}` });
+      expect(response.status).toBe(502);
+      expect(await response.json()).toEqual({ error: 'Bot setup failed. Please try again.' });
+      expectContentFreeTelegramLogs([...log.info.mock.calls, ...log.warn.mock.calls, ...log.error.mock.calls]);
+      expect(log.error.mock.calls.map(([event]) => event.stage)).toEqual(['studio_webhook', 'studio_webhook_setup']);
+    } finally { for (const spy of Object.values(log)) spy.mockRestore(); }
   });
 });

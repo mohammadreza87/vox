@@ -9,6 +9,7 @@
 import type { AgentLook, PersonaSpec } from './types';
 import type { VoiceService } from '../tireh/voice';
 import type { DecisionAnswer, DecisionQuestion } from '../tireh/triage';
+import { logTelegramDiagnostic } from '../tireh/telegram/diagnostics';
 
 type FetchFn = typeof fetch;
 
@@ -426,7 +427,7 @@ export class StudioVoiceService implements VoiceService {
       return await this.openai.transcribe(audio, mimeType);
     } catch (error) {
       if (!this.eleven) throw error;
-      console.warn('[studio] OpenAI transcription failed, trying ElevenLabs', error);
+      logTelegramDiagnostic(console, 'transcription_fallback');
       return this.eleven.transcribe(audio, mimeType);
     }
   }

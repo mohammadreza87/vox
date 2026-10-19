@@ -14,6 +14,7 @@
 
 import { createHmac, timingSafeEqual } from 'crypto';
 import type { Studio } from './service';
+import { logTelegramDiagnostic } from '../tireh/telegram/diagnostics';
 
 export const CALL_TOKEN_TTL_MS = 2 * 60 * 60 * 1000;
 export const MAX_CALL_SECONDS = 15 * 60;
@@ -92,8 +93,8 @@ export async function handleVoiceLlm(studio: Studio, request: Request): Promise<
     // Start before answering so access errors become a proper HTTP error.
     parts = (await studio.liveTurn(call.agentId, call.telegramId, toTurns(body?.messages)))[Symbol.asyncIterator]();
     first = await parts.next();
-  } catch (e) {
-    console.warn('[studio] live call turn failed', e);
+  } catch {
+    logTelegramDiagnostic(console, 'live_turn_failed');
     return Response.json({ error: { message: 'The agent is unavailable.' } }, { status: 503 });
   }
 
@@ -114,8 +115,8 @@ export async function handleVoiceLlm(studio: Studio, request: Request): Promise<
         for (let r = first; !r.done; r = await parts.next()) {
           if (r.value) controller.enqueue(encoder.encode(chunk({ content: r.value })));
         }
-      } catch (e) {
-        console.warn('[studio] live call stream failed', e);
+      } catch {
+        logTelegramDiagnostic(console, 'live_stream_failed');
         controller.enqueue(encoder.encode(chunk({ content: ' Sorry, I lost my train of thought.' })));
       }
       controller.enqueue(encoder.encode(chunk({}, 'stop')));

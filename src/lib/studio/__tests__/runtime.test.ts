@@ -21,6 +21,13 @@ const production = (): NodeJS.ProcessEnv => ({
   STUDIO_STORAGE: 'file',
   STUDIO_PUBLIC_URL: '',
   STUDIO_BOTS: '0',
+  // Runtime wiring fixtures must not inherit a deployment's live pilot.
+  STUDIO_RELATIONSHIPS: 'off',
+  STUDIO_RELATIONSHIP_AGENTS: '',
+  STUDIO_RELATIONSHIP_PEOPLE: '',
+  STUDIO_RELATIONSHIP_ROLES: '',
+  STUDIO_RELATIONSHIP_WORKER_SECRET: '',
+  OPENAI_API_KEY: '',
   K_SERVICE: '',
   FUNCTION_TARGET: '',
   FUNCTION_NAME: '',
