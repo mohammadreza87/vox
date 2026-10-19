@@ -234,7 +234,7 @@ function Drafting() {
         </motion.div>
       </AnimatePresence>
       <div className="vx-title-m">Claude is imagining them…</div>
-      <p className="vx-2" style={{ margin: 0, maxWidth: 280 }}>Name, backstory, values, voice and a cloud of their own. About ten seconds.</p>
+      <p className="vx-2" style={{ margin: 0, maxWidth: 280 }}>Name, backstory, values, languages and a cloud of their own. Detailed profiles may take a little longer.</p>
     </div>
   );
 }
