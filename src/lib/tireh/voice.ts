@@ -5,6 +5,8 @@
  */
 
 export interface VoiceService {
+  /** Listening can be available even when no speech provider is configured. */
+  readonly canSynthesize?: boolean;
   transcribe(audio: ArrayBuffer, mimeType?: string): Promise<string>;
   synthesize(text: string, voiceId: string): Promise<{ audio: ArrayBuffer; mimeType: string; filename: string }>;
 }
@@ -17,7 +19,7 @@ export class ElevenLabsVoiceService implements VoiceService {
   constructor(
     private readonly apiKey: string,
     private readonly fetchFn: FetchFn = fetch,
-    private readonly ttsModel = 'eleven_multilingual_v2'
+    private readonly ttsModel = 'eleven_v4'
   ) {}
 
   async transcribe(audio: ArrayBuffer, mimeType = 'audio/ogg'): Promise<string> {

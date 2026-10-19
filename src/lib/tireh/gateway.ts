@@ -12,7 +12,7 @@
 import { createHash, randomUUID } from 'crypto';
 import { parseExplicitControl, type RelationshipLoop, type RelationshipKey } from '../relationships';
 import { streamText, type LLM, type WebSource } from './llm';
-import { readTriage, TRIAGE_TIMEOUT_MS, triageInput, triageQuestions, VOICE_REQUEST, type Decider, type Triage } from './triage';
+import { explicitReplyFormat, readTriage, TRIAGE_TIMEOUT_MS, triageInput, triageQuestions, type Decider, type Triage } from './triage';
 import type { OrgDirectory } from './org/directory';
 import type { ChatContext, ChatMessage, MemoryRecord, MemoryScope, Persona } from './types';
 import type { ChatHistoryStore, MemoryStore, ShareOfferStore, UpdateDeduper } from './memory/store';
@@ -63,6 +63,7 @@ export type HandleResult =
 
 const HISTORY_LIMIT = 20;
 const EXTRACTION_WINDOW = 6;
+const GROUP_FORMAT_FOLLOWUP_MS = 2 * 60_000;
 const NO_MEMORY = /(?:do not|don't|don’t)\s+(?:remember|save|store)|forget (?:this|that)|ذخیره نکن|به خاطر نسپار|یادت نماند|فراموش کن/iu;
 
 export class PersonaGateway {
@@ -242,7 +243,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     const privacyEpoch = await this.deps.history.getEpoch(persona.id);
     const userMessage: ChatMessage = {
       role: 'user', personId: speaker.id, text, at: sourceAt, telegramMessageId: message.message_id,
-      ...(chat.kind === 'group' ? { groupPolicyVersion: 1 as const } : {}),
+      ...(chat.kind === 'group' ? { groupPolicyVersion: 1 as const, groupOtherTarget: targeting.otherTarget } : {}),
     };
     if (!(await this.groupAllowed(persona, chat, speaker.id, addressed ? 'reply' : 'observe'))) return 'ignored';
     await this.append(persona.id, chat, userMessage, privacyEpoch);
@@ -260,10 +261,13 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
       shouldReply = await this.deps.claimGroupReply?.(persona.id, message.chat.id, message.message_id) ?? false;
     }
     if (shouldReply && await this.groupAllowed(persona, chat, speaker.id, addressed ? 'reply' : 'proactive')) {
-      await bot.sendChatAction(message.chat.id, isVoice ? 'record_voice' : 'typing').catch(() => undefined);
+      const format = await this.replyFormat(persona, chat, speaker.id, message, text);
+      const voiceWanted = format !== 'text' && (format === 'voice' || isVoice || persona.replyWithVoice === 'always' || settled?.wantsVoice === true);
+      const canSpeak = this.canSpeak(persona);
+      await bot.sendChatAction(message.chat.id, voiceWanted && canSpeak ? 'record_voice' : 'typing').catch(() => undefined);
       let generated: { text: string; sources: WebSource[] };
       try {
-        generated = await this.composeReply(persona, chat, speaker.id, text, triage, message.message_id, addressed ? 'reply' : 'proactive');
+        generated = await this.composeReply(persona, chat, speaker.id, text, triage, message.message_id, addressed ? 'reply' : 'proactive', voiceWanted && canSpeak ? 'voice' : 'text');
       } catch {
         this.log.error(`[tireh] ${persona.id}: reply generation failed`);
         return 'ignored';
@@ -271,11 +275,11 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
       const { text: reply, sources } = generated;
       if (!reply) return 'ignored';
       if (!(await this.groupAllowed(persona, chat, speaker.id, addressed ? 'reply' : 'proactive'))) return 'ignored';
-      const voiceWanted = isVoice || (settled ? settled.wantsVoice : VOICE_REQUEST.test(text));
       if (await this.deps.history.getEpoch(persona.id) !== privacyEpoch) return 'ignored';
-      if (!(await this.sendReply(persona, chat, message, reply, voiceWanted, sources, addressed ? 'reply' : 'proactive', privacyEpoch))) return 'ignored';
+      const delivered = await this.sendReply(persona, chat, message, reply, voiceWanted, sources, addressed ? 'reply' : 'proactive', privacyEpoch);
+      if (delivered === null) return 'ignored';
       await this.append(persona.id, chat, {
-        role: 'assistant', text: reply, at: this.now(),
+        role: 'assistant', text: delivered, at: this.now(),
         ...(chat.kind === 'group' ? { groupPolicyVersion: 1 as const, telegramMessageId: message.message_id } : {}),
       }, privacyEpoch);
     } else {
@@ -312,6 +316,25 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     const recent = await this.recent(persona.id, chat, limit);
     return chat.kind === 'private' ? recent : recent.filter((m) => m.groupPolicyVersion === 1
       && (messageId === undefined || (m.telegramMessageId !== undefined && m.telegramMessageId <= messageId)));
+  }
+
+  /** A separate @mention can address the speaker's immediately preceding request.
+   * Keep its delivery preference only while that request is recent and unanswered.
+   */
+  private async replyFormat(persona: Persona, chat: ChatContext, speakerId: string, message: TelegramMessage, text: string): Promise<'voice' | 'text' | undefined> {
+    const explicit = explicitReplyFormat(text);
+    if (explicit || chat.kind !== 'group') return explicit;
+    const label = text.trim().replace(/^[\s,.!?:;،؟…]+|[\s,.!?:;،؟…]+$/g, '').normalize('NFC').toLowerCase();
+    const name = persona.name.trim().normalize('NFC').toLowerCase();
+    const username = persona.telegramUsername?.replace(/^@/, '').toLowerCase();
+    if (label !== name && (!username || label !== `@${username}`)) return undefined;
+
+    const recent = await this.recentHistory(persona, chat, 6, message.message_id);
+    const prior = recent.filter((item) => item.telegramMessageId! < message.message_id).at(-1);
+    if (!prior || prior.role !== 'user' || prior.personId !== speakerId || prior.groupOtherTarget !== false) return undefined;
+    const age = this.now().getTime() - prior.at.getTime();
+    if (age < 0 || age > GROUP_FORMAT_FOLLOWUP_MS) return undefined;
+    return explicitReplyFormat(prior.text);
   }
 
   /**
@@ -457,7 +480,11 @@ You are on a live voice call. Answer in one to three short spoken sentences, lik
   }
 
   /** The reply plus the web pages it cites, when the persona searched. */
-  private async composeReply(persona: Persona, chat: ChatContext, speakerId: string, text: string, triaged?: Promise<Triage | null>, messageId?: number, action: GroupAction = 'reply'): Promise<{ text: string; sources: WebSource[] }> {
+  private canSpeak(persona: Persona): boolean {
+    return !!this.deps.voice && this.deps.voice.canSynthesize !== false && persona.replyWithVoice !== 'never';
+  }
+
+  private async composeReply(persona: Persona, chat: ChatContext, speakerId: string, text: string, triaged?: Promise<Triage | null>, messageId?: number, action: GroupAction = 'reply', replyFormat?: 'voice' | 'text'): Promise<{ text: string; sources: WebSource[] }> {
     const { org } = this.deps;
     const [all, triage] = await Promise.all([this.deps.memories.listActive(persona.id), triaged ?? null]);
     // Search only when triage says the answer needs live facts (or there is no triage).
@@ -465,7 +492,7 @@ You are on a live voice call. Answer in one to three short spoken sentences, lik
     // Small talk goes to the fast model; anything needing care, or a search, to the main one.
     const quick = triage?.effort === 'quick' && !search && !!this.deps.fastLlm;
     const memories = selectMemories(org, all, chat, { query: text, now: this.now() });
-    const system = `${buildSystemPrompt({ org, persona: { ...persona, webSearch: search }, chat, speakerId, memories, canFollowUp: await this.canFollowUp(persona.id, chat), now: this.now(), canSpeak: !!this.deps.voice && persona.replyWithVoice !== 'never' })}\n${await this.relationshipContext(persona.id, chat)}`
+    const system = `${buildSystemPrompt({ org, persona: { ...persona, webSearch: search }, chat, speakerId, memories, canFollowUp: await this.canFollowUp(persona.id, chat), now: this.now(), canSpeak: this.canSpeak(persona), replyFormat })}\n${await this.relationshipContext(persona.id, chat)}`
       + (action === 'proactive' ? '\n\nYou are joining a group conversation selectively. Make one brief, natural contribution in character. Do not repeat recent replies or demand attention; one to three sentences is enough.' : '');
     const prior = await this.recentHistory(persona, chat, HISTORY_LIMIT, messageId);
     // Anchor generation to this event, even when concurrent later updates exist.
@@ -502,7 +529,7 @@ You are on a live voice call. Answer in one to three short spoken sentences, lik
     sources: WebSource[] = [],
     action: GroupAction = 'reply',
     privacyEpoch?: number
-  ): Promise<boolean> {
+  ): Promise<string | null> {
     const bot = this.deps.botFor(persona.id);
     const canSend = async () => {
       await this.deps.beforeSend?.(persona.id, chat);
@@ -511,27 +538,36 @@ You are on a live voice call. Answer in one to three short spoken sentences, lik
       return !!speaker && await this.groupAllowed(persona, chat, speaker.id, action);
     };
     const replyTo = chat.kind === 'group' ? message.message_id : undefined;
-    const speak =
-      this.deps.voice &&
-      (persona.replyWithVoice === 'always' || (persona.replyWithVoice === 'mirror' && voiceWanted));
+    const speak = this.canSpeak(persona) && voiceWanted;
+    let audioSent = false;
 
-    if (!await canSend()) return false;
+    if (!await canSend()) return null;
     if (speak) {
       try {
         const { audio, mimeType, filename } = await this.deps.voice!.synthesize(reply, persona.voice.elevenLabsVoiceId);
-        if (!await canSend()) return false;
+        if (!audio.byteLength) throw new Error('Empty speech audio');
+        if (!await canSend()) return null;
         await bot.sendVoice(message.chat.id, audio, { mimeType, filename, replyTo });
-        // Captions are capped at 1024 chars, so send the transcript separately.
-        if (!await canSend()) return false;
-        await bot.sendMessage(message.chat.id, withSources(reply, sources), { replyTo });
-        return true;
-      } catch {
-        this.log.error(`[tireh] ${persona.id}: voice reply failed, sending text`);
+        audioSent = true;
+      } catch (error) {
+        const code = error && typeof error === 'object' && 'code' in error && typeof error.code === 'string'
+          && /^[a-z_]{1,60}$/.test(error.code) ? error.code : 'delivery_failed';
+        this.log.error(`[tireh] ${persona.id}: voice reply failed, sending text (${code})`);
       }
     }
-    if (!await canSend()) return false;
-    await bot.sendMessage(message.chat.id, withSources(reply, sources), { replyTo });
-    return true;
+    if (!await canSend()) return null;
+    if (audioSent) {
+      // A failed transcript must not report that an already-delivered voice failed.
+      try { await bot.sendMessage(message.chat.id, withSources(reply, sources), { replyTo }); }
+      catch { this.log.warn(`[tireh] ${persona.id}: voice delivered, transcript failed`); }
+      return reply;
+    }
+    const fallback = /[\u0600-\u06ff]/.test(message.text ?? message.caption ?? reply)
+      ? 'نتونستم پیام صوتی رو بفرستم. فعلاً متن پاسخ رو می‌فرستم:'
+      : "I couldn't send the voice message. Here's the text instead:";
+    const delivered = voiceWanted ? `${fallback}\n\n${reply}` : reply;
+    await bot.sendMessage(message.chat.id, withSources(delivered, sources), { replyTo });
+    return delivered;
   }
 
   // ============================================

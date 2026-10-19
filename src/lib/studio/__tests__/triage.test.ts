@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { FakeLLM } from '../../tireh/__tests__/fixtures';
 import type { TelegramUpdate } from '../../tireh/telegram/client';
-import { readTriage, triageQuestions, type DecisionAnswer, type DecisionQuestion } from '../../tireh/triage';
+import { explicitReplyFormat, readTriage, triageQuestions, type DecisionAnswer, type DecisionQuestion } from '../../tireh/triage';
 import type { Persona } from '../../tireh/types';
 import { handleAgentUpdate } from '../updates';
 import { hire, ID, makeStudio, seedOrg, type Harness } from './helpers';
@@ -71,6 +71,48 @@ describe('triage thresholds lean towards the full path', () => {
     const persona = { name: 'Nova', role: 'Producer' } as Parameters<typeof triageQuestions>[0];
     expect(triageQuestions(persona, false).map((q) => q.name)).toEqual(['effort', 'live_info', 'memorable', 'wants_voice']);
     expect(triageQuestions(persona, true).map((q) => q.name)).toContain('addressed');
+  });
+});
+
+describe('natural requests for voice delivery', () => {
+  it.each([
+    'can you send it by voice then i can hear the accent as well',
+    'Please send the answer as a voice message.',
+    'Please send that to me by voice.',
+    'Could you say that in a voice message?',
+    'Read your reply in audio please.',
+    'Send it by voice, not text.',
+    'Let me hear your accent.',
+    'Can I hear your accent?',
+    "I'd like to hear your accent.",
+    'لطفاً send it by voice',
+  ])('detects the requested output format: %s', (text) => {
+    expect(explicitReplyFormat(text)).toBe('voice');
+  });
+
+  it.each([
+    "Don't send it by voice.",
+    "I don't want you to send it by voice.",
+    'Please do not say that in a voice message.',
+    'Never read your answer in audio.',
+    "Don't let me hear your accent.",
+    "I don't want to hear your accent.",
+    'Send it by voice? Actually, text only please.',
+  ])('keeps a negated voice request as text: %s', (text) => {
+    expect(explicitReplyFormat(text)).toBe('text');
+  });
+
+  it.each([
+    'How can I send it by voice?',
+    'How can I please send it by voice?',
+    'Explain how to say that in a voice message.',
+    'I can send it by voice if needed.',
+    'What accent do you use?',
+    'Tell me about your accent.',
+    'The accent in that voice message is nice.',
+    'Let me hear about your accent.',
+  ])('leaves topics and the sender’s own recording instructions unspecified: %s', (text) => {
+    expect(explicitReplyFormat(text)).toBeUndefined();
   });
 });
 
@@ -198,6 +240,15 @@ describe('replies routed by triage', () => {
 });
 
 describe('voice on request', () => {
+  it.each(['Can you send it by voice?', 'Let me hear your accent.'])('honors natural audio requests despite a negative classifier: %s', async (text) => {
+    const { agent, bot } = await nova();
+    models();
+    decider(answers('quick', 0, 0, { wants_voice: { type: 'predicate', probability: 0 } }));
+    await handleAgentUpdate(h.studio, agent.id, dm(ID.bob, text));
+    expect(bot().sendVoice).toHaveBeenCalledTimes(1);
+    expect(bot().sendMessage).toHaveBeenCalledWith(ID.bob, 'Hey!', expect.anything());
+  });
+
   it('a typed request for a voice message is answered with voice, and the agent knows it can speak', async () => {
     const { agent, bot } = await nova();
     models();

@@ -1,7 +1,7 @@
 import { act, type ReactNode } from 'react';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, type AgentView } from '../../_lib/client';
+import { ApiError, type AgentView, type VoiceOptions } from '../../_lib/client';
 import { SpawnScreen } from './Spawn';
 import { AgentScreen } from './Agent';
 
@@ -10,6 +10,7 @@ const state = vi.hoisted(() => ({
   agent: vi.fn(),
   updatePersona: vi.fn(),
   syncProfile: vi.fn(),
+  voiceOptions: vi.fn(), chooseDefaultVoice: vi.fn(), searchVoices: vi.fn(), speak: vi.fn(),
   nav: {
     me: { org: 'Fixture team', member: { telegramId: 7777001, role: 'member' }, features: { avatars: false, voices: false, calls: false } },
     back: vi.fn(), reset: vi.fn(), push: vi.fn(), toast: vi.fn(), refreshMe: vi.fn(),
@@ -18,7 +19,8 @@ const state = vi.hoisted(() => ({
 
 vi.mock('../../_lib/client', async importOriginal => {
   const actual = await importOriginal<typeof import('../../_lib/client')>();
-  return { ...actual, api: { ...actual.api, draft: state.draft, agent: state.agent, updatePersona: state.updatePersona, syncProfile: state.syncProfile } };
+  return { ...actual, api: { ...actual.api, draft: state.draft, agent: state.agent, updatePersona: state.updatePersona, syncProfile: state.syncProfile,
+    voiceOptions: state.voiceOptions, chooseDefaultVoice: state.chooseDefaultVoice, searchVoices: state.searchVoices, speak: state.speak } };
 });
 
 vi.mock('../StudioApp', () => ({
@@ -57,7 +59,7 @@ function agent(overrides: Partial<AgentView> = {}): AgentView {
   };
 }
 
-beforeEach(() => { vi.useFakeTimers(); vi.resetAllMocks(); });
+beforeEach(() => { vi.useFakeTimers(); vi.resetAllMocks(); state.nav.me.features.voices = false; });
 afterEach(() => { cleanup(); vi.clearAllTimers(); vi.useRealTimers(); });
 
 describe('Spawn failure recovery', () => {
@@ -114,6 +116,136 @@ describe('Spawn failure recovery', () => {
     expect(screen.getByRole('heading', { name: 'Nova' })).toBeVisible();
     expect(screen.getByRole('button', { name: /looks good.*next/i })).toBeEnabled();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+});
+
+describe('Voice choices and language support', () => {
+  const options: VoiceOptions = {
+    models: [
+      { id: 'eleven_v4', name: 'Eleven v4', languages: [{ code: 'en', name: 'English' }, { code: 'fa', name: 'Persian' }, { code: 'vi', name: 'Vietnamese' }], persian: true, kind: 'quality' },
+      { id: 'eleven_v4_turbo', name: 'Eleven v4 Turbo', languages: [{ code: 'fa', name: 'Persian' }], persian: true, kind: 'realtime' },
+    ],
+    defaultVoices: [{ voiceId: 'fixture-sarah', name: 'Sarah', gender: 'female', language: 'en' }, { voiceId: 'fixture-george', name: 'George', gender: 'male', language: 'en' }],
+    tier: 'free', libraryAllowed: false, ttsModel: 'eleven_v4',
+  };
+
+  async function openVoiceStep(languages = ['Persian', 'English']) {
+    const current = agent();
+    current.persona.languages = languages;
+    current.persona.presentation = 'feminine';
+    current.voice = { label: 'Melania · voice library', source: 'library' };
+    state.nav.me.features.voices = true;
+    state.agent.mockResolvedValue({ agent: current });
+    state.voiceOptions.mockResolvedValue(options);
+    await act(async () => { render(<SpawnScreen draftId={current.id} />); });
+    fireEvent.click(screen.getByRole('button', { name: /looks good.*next/i }));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Next' })); });
+    return current;
+  }
+
+  it('shows usable built-ins, Persian-capable models, and the plan restriction without changing the selected voice', async () => {
+    await openVoiceStep();
+    expect(screen.getByRole('button', { name: 'Built-in voices' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'Use Sarah' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Use George' })).toBeEnabled();
+    expect(screen.getByText('Melania · voice library')).toBeVisible();
+    expect(screen.getByText(/free plan.*library voices need a paid plan/i)).toBeVisible();
+    expect(screen.getByText('Voice messages: Eleven v4 · Persian supported')).toBeVisible();
+    fireEvent.click(screen.getByText('Available speech models'));
+    expect(screen.getByText(/Eleven v4 Turbo · Real-time · Persian supported/)).toBeVisible();
+    expect(state.chooseDefaultVoice).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['English', 'en'], ['en', 'en'], ['Persian', 'fa'], ['Farsi', 'fa'], ['fa', 'fa'], ['Vietnamese', 'vi'], ['vi', 'vi'],
+  ])('starts with the first persona language %s instead of preferring another language', async (language, code) => {
+    state.searchVoices.mockResolvedValue({ voices: [] });
+    await openVoiceStep([language, 'Persian', 'English']);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Voice library' })); });
+    expect(screen.getByRole('combobox', { name: 'Voice language' })).toHaveValue(code);
+    expect(state.searchVoices).toHaveBeenCalledWith(expect.objectContaining({ language: code }));
+  });
+
+  it('offers English, Persian and Vietnamese shortcuts with male and any-gender library filters', async () => {
+    state.searchVoices.mockResolvedValue({ voices: [] });
+    await openVoiceStep(['English', 'Persian']);
+    expect(screen.getByRole('button', { name: 'English', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'Persian', exact: true })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Vietnamese', exact: true })).toBeVisible();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Voice library' })); });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Gender' }), { target: { value: 'male' } });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Vietnamese', exact: true })); });
+    expect(state.searchVoices).toHaveBeenLastCalledWith(expect.objectContaining({ language: 'vi', gender: 'male' }));
+    fireEvent.change(screen.getByRole('combobox', { name: 'Gender' }), { target: { value: '' } });
+    expect(screen.getByRole('option', { name: 'Any gender' })).toBeVisible();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'English', exact: true })); });
+    expect(state.searchVoices).toHaveBeenLastCalledWith(expect.objectContaining({ language: 'en', gender: '' }));
+    expect(screen.getByText('Melania · voice library')).toBeVisible();
+    expect(state.chooseDefaultVoice).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['English', "Hi, I'm Nova."], ['Persian', 'سلام، من Nova هستم.'], ['Vietnamese', 'Xin chào, tôi là Nova. Rất vui được trò chuyện với bạn.'],
+  ])('uses the selected %s language for a requested sample', async (language, expected) => {
+    const current = await openVoiceStep(['English']);
+    state.speak.mockResolvedValue(undefined);
+    fireEvent.click(screen.getByRole('button', { name: language, exact: true }));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Hear a sample' })); });
+    expect(state.speak).toHaveBeenCalledWith(current.id, expect.stringContaining(expected));
+  });
+
+  it('starts library searches in Persian and labels native candidates while disabling paid selection', async () => {
+    state.searchVoices.mockResolvedValue({ voices: [{ voiceId: 'fixture-fa', publicOwnerId: 'fixture-owner', name: 'Native Farsi',
+      language: 'fa', category: 'professional', gender: 'female', age: 'young', accent: 'standard', descriptive: 'warm', rate: 1 }] });
+    await openVoiceStep();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Voice library' })); });
+    expect(screen.getByRole('combobox', { name: 'Voice language' })).toHaveValue('fa');
+    expect(state.searchVoices).toHaveBeenCalledWith(expect.objectContaining({ language: 'fa', gender: 'female' }));
+    expect(state.searchVoices.mock.calls[0][0]).not.toHaveProperty('category');
+    expect(screen.getByText('Native language: Persian (فارسی)')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Use Native Farsi' })).toBeDisabled();
+  });
+
+  it('includes generated Persian voices without calling them native recordings', async () => {
+    state.searchVoices.mockResolvedValue({ voices: [{ voiceId: 'fixture-generated', publicOwnerId: 'fixture-owner', name: 'Generated Farsi',
+      language: 'fa', category: 'generated', gender: 'female', age: 'young', accent: 'tehrani', descriptive: 'warm' }] });
+    await openVoiceStep();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Voice library' })); });
+    expect(screen.getByText('Generated Farsi')).toBeVisible();
+    expect(screen.getByText('Language: Persian (فارسی)')).toBeVisible();
+    expect(screen.getByText(/female · young · tehrani · warm · Generated voice/)).toBeVisible();
+    expect(screen.queryByText('Native language: Persian (فارسی)')).not.toBeInTheDocument();
+  });
+
+  it('waits for a confirmed built-in selection and samples it in Persian', async () => {
+    const current = await openVoiceStep();
+    let finish!: (value: { agent: AgentView }) => void;
+    state.chooseDefaultVoice.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Use Sarah' })); });
+    expect(state.chooseDefaultVoice).toHaveBeenCalledWith(current.id, 'fixture-sarah');
+    expect(screen.getByText('Melania · voice library')).toBeVisible();
+    expect(screen.queryByText('Sarah · built-in')).not.toBeInTheDocument();
+    await act(async () => { finish({ agent: { ...current, voice: { label: 'Sarah · built-in', source: 'default' } } }); });
+    expect(screen.getByText('Sarah · built-in')).toBeVisible();
+    state.speak.mockResolvedValue(undefined);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Hear a sample' })); });
+    expect(state.speak).toHaveBeenCalledWith(current.id, expect.stringContaining('سلام'));
+  });
+
+  it('keeps catalogue failures visible and lets the visitor retry without generating audio', async () => {
+    // Set the rejection after openVoiceStep installs its default mock.
+    const current = agent();
+    state.nav.me.features.voices = true;
+    state.agent.mockResolvedValue({ agent: current });
+    state.voiceOptions.mockRejectedValueOnce(new Error('ElevenLabs is temporarily unavailable.')).mockResolvedValueOnce(options);
+    await act(async () => { render(<SpawnScreen draftId={current.id} />); });
+    fireEvent.click(screen.getByRole('button', { name: /looks good.*next/i }));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Next' })); });
+    expect(screen.getByRole('alert')).toHaveTextContent('Can’t load voice options');
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry voice options' })); });
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Use Sarah' })).toBeEnabled();
+    expect(state.speak).not.toHaveBeenCalled();
   });
 });
 

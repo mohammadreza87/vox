@@ -21,7 +21,7 @@ Telegram ── @VoxxBot (Mini App: /studio) ──┐
 |---|---|
 | **Spawn** | Write a loose brief: presentation, domain, languages, culture, accent, age and temperament. Claude drafts the name, backstory, values, voice brief and a random cloud look. You can edit any field or ask Claude to change things. |
 | **Look** | 8 colours × 3 cloud shapes, plus cheeks, lashes and brows. A dice button gives a random look. The chosen cloud becomes the Telegram profile photo unless you select a generated or uploaded picture (JPEG/PNG/WebP, cropped to 640px). |
-| **Voice** | ElevenLabs Voice Design creates three options from the voice brief, or you can search the voice library by gender, accent and language. |
+| **Voice** | Choose built-in voices, design a voice, or search the library by gender, accent and language. Voice messages use Eleven v4 with Persian support; the picker shows account restrictions and supported languages. See [Studio voices](./STUDIO_VOICES.md). |
 | **Test** | A sandbox chat. Nothing said there becomes a memory. |
 | **Hire** | Opens Telegram's "Create bot" screen (managed bots). One tap creates the bot. Studio stores its token encrypted, then sets the name, description, commands and photo. |
 | **Forming → locked** | For 7 days after hire, the personality and look can still be tuned. After that they are fixed for good. To change who an agent is, **fire** it and **hire a successor**. Its memories can pass to the successor, be archived or be deleted. |
