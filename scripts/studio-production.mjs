@@ -73,7 +73,40 @@ async function check() {
   for (const model of [env.STUDIO_CHAT_MODEL || 'claude-haiku-5-5', env.STUDIO_PERSONA_MODEL || 'claude-sonnet-5-5']) {
     if (!models.data.some(x => x.id === model)) throw new Error(`Anthropic model unavailable: ${model}`);
   }
-  for (const key of ['OPENAI_API_KEY', 'ELEVENLABS_API_KEY']) if (!env[key]) console.log(`Optional feature provider absent: ${key}`);
+  console.log(`✓ Telegram: @${bot.result.username}`);
+  console.log('✓ Anthropic: key valid, chat and persona models available');
+  // A webhook on the manager bot means another deployment (e.g. Firebase) owns
+  // its updates; long polling here would fight it.
+  const hook = await fetch(`https://api.telegram.org/bot${env.VOXX_BOT_TOKEN}/getWebhookInfo`, { signal: AbortSignal.timeout(15_000) })
+    .then(r => r.json()).catch(() => null);
+  if (hook?.result?.url) {
+    throw new Error(`@${bot.result.username} has a webhook (${new URL(hook.result.url).host}). Another deployment owns this bot; run only one.`);
+  }
+  // Read-only provider checks: no images, transcriptions or speech are generated.
+  if (env.OPENAI_API_KEY) {
+    const response = await fetch('https://api.openai.com/v1/models', { headers: { authorization: `Bearer ${env.OPENAI_API_KEY}` }, signal: AbortSignal.timeout(15_000) }).catch(() => null);
+    if (!response?.ok) throw new Error(`OpenAI authentication failed${response ? ` (HTTP ${response.status})` : ''}. Check OPENAI_API_KEY.`);
+    const ids = new Set(((await response.json().catch(() => null))?.data ?? []).map(m => m.id));
+    for (const model of [env.OPENAI_IMAGE_MODEL || 'gpt-image-1', env.OPENAI_STT_MODEL || 'gpt-4o-mini-transcribe']) {
+      if (!ids.has(model)) throw new Error(`OpenAI model unavailable to this key: ${model}`);
+    }
+    console.log('✓ OpenAI: key valid, image and transcription models available');
+  } else console.log('– OpenAI: OPENAI_API_KEY absent (no avatars, no calls)');
+  if (env.ELEVENLABS_API_KEY) {
+    const headers = { 'xi-api-key': env.ELEVENLABS_API_KEY };
+    const response = await fetch('https://api.elevenlabs.io/v1/models', { headers, signal: AbortSignal.timeout(15_000) }).catch(() => null);
+    if (!response?.ok) throw new Error(`ElevenLabs authentication failed${response ? ` (HTTP ${response.status})` : ''}. Check ELEVENLABS_API_KEY.`);
+    const ids = new Set(((await response.json().catch(() => null)) ?? []).map(m => m.model_id));
+    const tts = env.ELEVENLABS_TTS_MODEL || 'eleven_multilingual_v2';
+    if (!ids.has(tts)) throw new Error(`ElevenLabs model unavailable to this key: ${tts}`);
+    const user = await fetch('https://api.elevenlabs.io/v1/user/subscription', { headers, signal: AbortSignal.timeout(15_000) }).catch(() => null);
+    const sub = user?.ok ? await user.json().catch(() => null) : null;
+    if (sub && typeof sub.character_limit === 'number') {
+      const left = sub.character_limit - (sub.character_count ?? 0);
+      console.log(`✓ ElevenLabs: key valid, ${tts} available, ${left.toLocaleString('en-US')} characters left this period`);
+      if (left < 1000) console.log('  ! ElevenLabs is nearly out of characters: voice replies will fail soon.');
+    } else console.log(`✓ ElevenLabs: key valid, ${tts} available (subscription details not readable with this key)`);
+  } else console.log('– ElevenLabs: ELEVENLABS_API_KEY absent (no voices)');
   console.log(`Preflight passed for @${bot.result.username} at ${url.origin}/studio.`);
   return env;
 }
