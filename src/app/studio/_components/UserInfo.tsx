@@ -18,7 +18,7 @@ export function UserInfo({ member }: { member?: Member }) {
   const last = tgUser ? tgUser.last_name : undefined;
 
   if (!id) {
-    return <p className="vx-small vx-2" style={{ margin: 0 }}>Open Vox Studio from @VoxxBot in Telegram to see your account.</p>;
+    return <p className="vx-small vx-2" style={{ margin: 0 }}>Open Vox Studio from Telegram to see your User ID, then share it with an admin.</p>;
   }
 
   const copy = async () => {
@@ -51,6 +51,7 @@ export function UserInfo({ member }: { member?: Member }) {
           {copied ? <><Icon name="check" size={16} width={2.5} />Copied</> : 'Copy'}
         </button>
       </div>
+      <p className="vx-small vx-2" style={{ margin: 0, padding: '12px 16px' }}>Share your User ID with an admin.</p>
     </div>
   );
 }

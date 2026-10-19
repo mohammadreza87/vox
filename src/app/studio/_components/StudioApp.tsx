@@ -110,8 +110,9 @@ export function StudioApp() {
   }
   if (!me || !nav) {
     return (
-      <div className="vx" style={{ alignItems: 'center', justifyContent: 'center' }}>
+      <div className="vx" style={{ alignItems: 'center', justifyContent: 'center', padding: 24, gap: 14 }}>
         <Cloud look={{ hue: 'butter', family: 'drift', features: { cheeks: true, lashes: false, brows: false } }} expr="thinking" size={120} label="Vox" />
+        <div style={{ width: '100%', maxWidth: 360 }}><UserInfo /></div>
       </div>
     );
   }
@@ -121,10 +122,9 @@ export function StudioApp() {
         <Cloud look={{ hue: 'butter', family: 'drift', features: { cheeks: true, lashes: false, brows: false } }} expr="idle" size={150} label="Vox" />
         <h1 className="vx-title">Almost there</h1>
         <p className="vx-2" style={{ margin: 0, maxWidth: 300 }}>
-          You&apos;re on the list for {me.org}. An admin will approve you, then your agents appear here.
+          An admin needs to approve your access to {me.org}.
         </p>
         <div style={{ width: '100%', maxWidth: 360, marginTop: 4 }}><UserInfo member={me.member} /></div>
-        <p className="vx-small vx-3" style={{ margin: 0, maxWidth: 300 }}>Share your User ID with an admin if they can’t find you.</p>
         <button className="vx-btn vx-btn-secondary vx-btn-sm" onClick={() => void loadMe()}>Check again</button>
       </div>
     );
