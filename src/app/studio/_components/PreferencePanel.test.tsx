@@ -86,6 +86,19 @@ it('does not report or refresh a late mutation after unmount', async () => {
   fireEvent.click(within(row).getByRole('button', { name: 'Save preference' })); view.unmount();
   await act(async () => complete(snapshot)); expect(p.onSnapshot).not.toHaveBeenCalled(); expect(mocks.preferenceState).toHaveBeenCalledTimes(1);
 });
+it('does not abandon a pending command when the parent catches up to its already-loaded revision', async () => {
+  mocks.preferenceState.mockResolvedValueOnce({ ...state(), revision: 11 }).mockResolvedValue({ ...state(), revision: 12 });
+  let complete!: (value: ExperienceSnapshot) => void;
+  mocks.preference.mockReturnValue(new Promise(resolve => { complete = resolve; }));
+  const p = props(), view = render(<PreferencePanel {...p} />);
+  const row = await screen.findByRole('article', { name: 'Reply language preference' });
+  fireEvent.click(within(row).getByRole('button', { name: 'Reset' }));
+  view.rerender(<PreferencePanel {...p} revisionHint={11} />);
+  await act(async () => complete({ ...snapshot, revision: 12 }));
+  expect(await screen.findByText('Saved.')).toBeInTheDocument();
+  expect(p.onSnapshot).toHaveBeenCalledOnce();
+  expect(screen.getByLabelText('Reply language')).toBeEnabled();
+});
 it('hides undo when its displayed deadline ends', async () => {
   vi.useFakeTimers();
   const s = withUndo(); s.entries[0].undo!.expiresAt = Date.now() + 1000;

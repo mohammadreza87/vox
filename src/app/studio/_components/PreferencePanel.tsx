@@ -84,11 +84,14 @@ export function PreferencePanel({ agentId, space, confirmed, revisionHint, local
     } catch { if (generation.current === current) { stateRef.current = null; setState(null); setError('load'); } }
     finally { if (generation.current === current) setBusy(false); }
   }, [fetchState]);
+  // Catching up the parent's revision after our own mutation must not cancel a
+  // later command that already uses the same fresh state. Only scope/identity
+  // changes or unmount invalidate without starting a replacement load.
+  useEffect(() => invalidate, [agentId, space, confirmed, invalidate]);
   useEffect(() => {
     if (!agentId || !confirmed) { stateRef.current = null; setState(null); setBusy(false); setStatus(''); setError(''); return; }
     if (stateRef.current?.revision !== revisionHint || stateRef.current.agentId !== agentId || stateRef.current.space !== space) void load();
-    return invalidate;
-  }, [agentId, confirmed, invalidate, load, revisionHint, space]);
+  }, [agentId, confirmed, load, revisionHint, space]);
   useEffect(() => {
     const expiry = Math.min(...(state?.entries.flatMap(row => row.undo ? [row.undo.expiresAt] : []) ?? []));
     if (!Number.isFinite(expiry)) return;
