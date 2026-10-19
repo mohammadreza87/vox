@@ -23,7 +23,7 @@ These tasks may proceed with draft engineering contracts while real-data launch 
 | Decision | Current choice | Accountable owner / unresolved consequence |
 |---|---|---|
 | Product audience | Adults only; Work and Personal; EU/EEA and US | Reza / Joyixir product owner; country/state feature rollout requires legal review |
-| Operator | Joyixir supplied by the user | Reza supplies registered entity, address and privacy contact before public notices |
+| Operator | Joyixir supplied by the user; privacy contact **info@joyixir.com** confirmed by the user on 19 October 2026 | Reza supplies the exact registered entity and address before public notices; mailbox operation and legal approval remain unverified |
 | Local cohort and data | Synthetic fixtures and scripted providers only | Lead; no live-user cohort is enrolled |
 | External provider spend for this slice | Zero external provider calls | Lead; production/pilot ceiling remains for Reza to set |
 | Source surfaces | Active Studio/Tireh; preserve legacy `/app` and authored work | Architect; migrations remain explicit tasks |
