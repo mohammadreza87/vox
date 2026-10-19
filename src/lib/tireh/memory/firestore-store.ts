@@ -14,7 +14,7 @@
 import type { Firestore } from 'firebase-admin/firestore';
 import type { ChatMessage, MemoryRecord, ShareOffer } from '../types';
 import type { ChatHistoryStore, MemoryStore, MemoryWriteGuard, NewMemory, ShareOfferStore, UpdateDeduper } from './store';
-import { forgetClosure, lineageEventIds, sourceEventIds, StaleMemoryWriteError } from './store';
+import { assertReplacementTarget, forgetClosure, lineageEventIds, sourceEventIds, StaleMemoryWriteError } from './store';
 import { scopeKey } from './visibility';
 import { randomUUID } from 'crypto';
 
@@ -68,8 +68,16 @@ export class FirestoreMemoryStore implements MemoryStore {
       const state = await transaction.get(this.db.collection(MEMORY_STATE).doc(memory.personaId));
       if (lineageEventIds(memory).some((id) => ((state.data()?.tombstones ?? []) as string[]).includes(id))) return null;
       if (Number(epoch.data()?.epoch ?? 0) !== expectedEpoch) return null;
+      const predecessorRef = memory.supersedes ? this.db.collection(MEMORIES).doc(memory.supersedes) : undefined;
+      const predecessor = predecessorRef ? await transaction.get(predecessorRef) : undefined;
+      const target = predecessor?.exists ? memoryFromDoc(predecessor.id, predecessor.data()!) : undefined;
+      if (memory.supersedes) assertReplacementTarget(memory, target);
       const now = new Date();
       const data = { ...memory, createdAt: now, updatedAt: now };
+      if (target && predecessorRef) {
+        transaction.update(predecessorRef, { supersededBy: ref.id, shareVersion: (target.shareVersion ?? 0) + 1, updatedAt: now, active: false });
+        transaction.set(this.db.collection(MEMORY_STATE).doc(memory.personaId), { ...state.data(), revision: Number(state.data()?.revision ?? 0) + 1 });
+      }
       transaction.set(ref, clean({ ...data, active: !memory.supersededBy, scopeKey: scopeKey(memory.scope) }));
       return { ...data, id: ref.id };
     });
@@ -98,6 +106,14 @@ export class FirestoreMemoryStore implements MemoryStore {
       const tombstones = (state.data()?.tombstones ?? []) as string[];
       if ((guard && guard.expectedRevision !== revision) || lineageEventIds(memory).some((id) => tombstones.includes(id))) {
         throw new StaleMemoryWriteError();
+      }
+      const predecessorRef = memory.supersedes ? this.db.collection(MEMORIES).doc(memory.supersedes) : undefined;
+      const predecessor = predecessorRef ? await tx.get(predecessorRef) : undefined;
+      const target = predecessor?.exists ? memoryFromDoc(predecessor.id, predecessor.data()!) : undefined;
+      if (memory.supersedes) assertReplacementTarget(memory, target);
+      if (target && predecessorRef) {
+        tx.update(predecessorRef, { supersededBy: ref.id, shareVersion: (target.shareVersion ?? 0) + 1, updatedAt: now, active: false });
+        tx.set(this.db.collection(MEMORY_STATE).doc(memory.personaId), { ...state.data(), revision: revision + 1 });
       }
       tx.set(ref, clean({ ...data, active: !memory.supersededBy, scopeKey: scopeKey(memory.scope) }));
     });
