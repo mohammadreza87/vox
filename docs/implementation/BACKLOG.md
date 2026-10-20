@@ -134,9 +134,11 @@ Define scopes, grants, schemas, service credentials, event projections, decision
 
 ### VOX-007 — Specify protected eval corpus and baseline protocol
 
-**Owner:** `vox_qa_evaluator` · **Reviewer:** `vox_architect` · **Model:** `gpt-6.1-sol` · **Size:** M · **Priority:** P0 · **Status:** planned
+**Owner:** `vox_qa_evaluator` · **Reviewer:** `vox_architect` · **Model:** `gpt-6.1-sol` · **Size:** M · **Priority:** P0 · **Status:** in_progress
 
 **Requirements:** REQ-05, REQ-14, REQ-16, REQ-18. **Depends on:** VOX-001, VOX-006.
+
+**Implementation progress:** Strict synthetic manifest and disjoint task/person/group/conversation forward-time partitions, optimizer-only projection, predeclared paired denominators/budgets and signed minimized receipts are implemented. Independent local review passed 24 external checks after two reproduced outcome/scenario defects were fixed. External protected assets/IAM, calibrated judges, representative data and statistical qualification remain open.
 
 Define synthetic and permitted realistic datasets, person/group/conversation/time splits, calibrated judges, latency/cost denominators and statistical gates.
 
@@ -148,6 +150,8 @@ Define synthetic and permitted realistic datasets, person/group/conversation/tim
 **Verification:** QA approves evaluation protocol before model candidate selection.
 
 **Deliverables:** Dataset manifest template; Baseline and promotion protocol.
+
+**Evidence:** ["docs/implementation/EVALUATION_PROTOCOL.md"]
 
 ### VOX-008 — Inventory provider, SDK and device capability constraints
 
@@ -265,7 +269,7 @@ Implement scoped settings, AI disclosure, optional consent choices, why-this/und
 
 **Requirements:** REQ-02, REQ-08, REQ-16, REQ-17. **Depends on:** VOX-010, VOX-011.
 
-**Implementation progress:** Explicit note/claim/summary review and same-ID correction are implemented. The opt-in local SQLite adapter now provides bounded physical private candidate queries, compact synchronous authority, durable expiry watermark and namespace-bound receipts; managed FILEv2 supplies current-state rollback. Independent source evidence and operation limits are in INDEXED_STORAGE.md. Final composed conversation/transport and compiled runtime qualification remain release gates. Canonical account writes, shared aggregate reads, generalized extraction/consolidation and measured quality/latency remain open.
+**Implementation progress:** Explicit note/claim/summary review and same-ID correction are implemented. Optional prepared SQLite supplies bounded physical retrieval and compact authority; FILEv2 supplies current-state rollback. Guarded synthetic conversation qualification passed nine cases in both prepared schema-2 formats. PR77/deploy ee3467d also fixes concurrent reviewed-memory acceptance with 11 independent write/fence checks. Production still selects legacy FILE. Shared aggregate indexing, generalized extraction/consolidation and measured quality/latency remain open.
 
 Add provenance/claims/supersession, token-budgeted retrieval, indexed candidate queries and background extraction with scope checks at execution.
 
@@ -278,7 +282,7 @@ Add provenance/claims/supersession, token-budgeted retrieval, indexed candidate 
 
 **Deliverables:** Memory lifecycle jobs; Bounded retrieval implementation.
 
-**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/MEMORY_RETRIEVAL_RESULT.md", "docs/implementation/REVIEWED_PRIVATE_MEMORY_RESULT.md", "docs/implementation/INDEXED_STORAGE.md"]
+**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/MEMORY_RETRIEVAL_RESULT.md", "docs/implementation/REVIEWED_PRIVATE_MEMORY_RESULT.md", "docs/implementation/INDEXED_STORAGE.md", "docs/implementation/SQLITE_CONVERSATION_QUALIFICATION.md"]
 
 ### VOX-014 — Implement deletion, revocation and scheduled retention expiry
 
@@ -945,7 +949,7 @@ Turn permitted findings into minimized reproductions/evaluation cases with linea
 
 **Requirements:** REQ-06, REQ-14, REQ-16. **Depends on:** VOX-025, VOX-030, VOX-043.
 
-**Implementation progress:** Fixed-budget offline cancellation-routing search and immutable JSON candidate registry implemented. Small synthetic corpus only; prompt optimization, representative train/validation data and provider quality evaluation remain open.
+**Implementation progress:** Fixed-budget cancellation-routing optimizer now accepts only the strict optimization projection of a frozen protocol; validation/final cases and judge/scoring fields are excluded. Representative prompt optimization, real provider quality and external optimizer isolation remain open.
 
 Generate versioned GEPA-style prompt/query/routing candidates offline with fixed budgets and incumbent comparisons; preserve serving path.
 
@@ -958,7 +962,7 @@ Generate versioned GEPA-style prompt/query/routing candidates offline with fixed
 
 **Deliverables:** Optimization worker; Candidate registry.
 
-**Evidence:** ["docs/implementation/OBSERVATION_LEARNING.md"]
+**Evidence:** ["docs/implementation/OBSERVATION_LEARNING.md", "docs/implementation/EVALUATION_PROTOCOL.md"]
 
 ### VOX-045 — Implement sandbox software patch workflow
 
@@ -987,7 +991,7 @@ Convert reviewed defects into isolated worktrees/branches with small diffs, repr
 
 **Requirements:** REQ-14, REQ-16, REQ-18. **Depends on:** VOX-007, VOX-029, VOX-043, VOX-044, VOX-045.
 
-**Implementation progress:** Pinned Docker evaluator and separate signed evaluator/human receipts bind exact artifacts/data/policy; malformed payload, budget bypass and counterfeit evidence regressions covered. Synthetic role keys do not qualify production IAM; protected service deployment and representative corpus remain open. Final cancellation datasets and the fixed evaluator require both cancelled-stop and active-continue coverage, rejecting inconsistent labels (policy version 2).
+**Implementation progress:** Protocol-bound candidates now require a durable evaluator reservation before final execution, signed minimized companion, existing Docker final envelope and human approval of that exact envelope. Replay/crash/cross-candidate reuse and legacy bypass deny. Independent local 24-case review passed; four existing actual Docker checks remain skipped. External IAM/checkpoint and representative quality/calibration remain open.
 
 Run Promptfoo and deterministic tests in a protected environment against exact candidate/model/prompt/data versions; calibrate judge to human examples.
 
@@ -1000,7 +1004,7 @@ Run Promptfoo and deterministic tests in a protected environment against exact c
 
 **Deliverables:** Protected evaluator pipeline; Promotion receipt schema.
 
-**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/OBSERVATION_LEARNING.md"]
+**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/OBSERVATION_LEARNING.md", "docs/implementation/EVALUATION_PROTOCOL.md"]
 
 ### VOX-047 — Implement controlled experiments and rollback of learned state
 

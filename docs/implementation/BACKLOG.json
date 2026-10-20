@@ -274,7 +274,7 @@
       "id": "VOX-007",
       "phase": "P0",
       "title": "Specify protected eval corpus and baseline protocol",
-      "status": "planned",
+      "status": "in_progress",
       "priority": "P0",
       "size": "M",
       "owner": "vox_qa_evaluator",
@@ -300,7 +300,10 @@
         "Dataset manifest template",
         "Baseline and promotion protocol"
       ],
-      "evidence": []
+      "evidence": [
+        "docs/implementation/EVALUATION_PROTOCOL.md"
+      ],
+      "progress_note": "Strict synthetic manifest and disjoint task/person/group/conversation forward-time partitions, optimizer-only projection, predeclared paired denominators/budgets and signed minimized receipts are implemented. Independent local review passed 24 external checks after two reproduced outcome/scenario defects were fixed. External protected assets/IAM, calibrated judges, representative data and statistical qualification remain open."
     },
     {
       "id": "VOX-008",
@@ -522,9 +525,10 @@
         "docs/implementation/DELIVERY_RESULT.md",
         "docs/implementation/MEMORY_RETRIEVAL_RESULT.md",
         "docs/implementation/REVIEWED_PRIVATE_MEMORY_RESULT.md",
-        "docs/implementation/INDEXED_STORAGE.md"
+        "docs/implementation/INDEXED_STORAGE.md",
+        "docs/implementation/SQLITE_CONVERSATION_QUALIFICATION.md"
       ],
-      "progress_note": "Explicit note/claim/summary review and same-ID correction are implemented. The opt-in local SQLite adapter now provides bounded physical private candidate queries, compact synchronous authority, durable expiry watermark and namespace-bound receipts; managed FILEv2 supplies current-state rollback. Independent source evidence and operation limits are in INDEXED_STORAGE.md. Final composed conversation/transport and compiled runtime qualification remain release gates. Canonical account writes, shared aggregate reads, generalized extraction/consolidation and measured quality/latency remain open."
+      "progress_note": "Explicit note/claim/summary review and same-ID correction are implemented. Optional prepared SQLite supplies bounded physical retrieval and compact authority; FILEv2 supplies current-state rollback. Guarded synthetic conversation qualification passed nine cases in both prepared schema-2 formats. PR77/deploy ee3467d also fixes concurrent reviewed-memory acceptance with 11 independent write/fence checks. Production still selects legacy FILE. Shared aggregate indexing, generalized extraction/consolidation and measured quality/latency remain open."
     },
     {
       "id": "VOX-014",
@@ -1640,9 +1644,10 @@
         "Candidate registry"
       ],
       "evidence": [
-        "docs/implementation/OBSERVATION_LEARNING.md"
+        "docs/implementation/OBSERVATION_LEARNING.md",
+        "docs/implementation/EVALUATION_PROTOCOL.md"
       ],
-      "progress_note": "Fixed-budget offline cancellation-routing search and immutable JSON candidate registry implemented. Small synthetic corpus only; prompt optimization, representative train/validation data and provider quality evaluation remain open."
+      "progress_note": "Fixed-budget cancellation-routing optimizer now accepts only the strict optimization projection of a frozen protocol; validation/final cases and judge/scoring fields are excluded. Representative prompt optimization, real provider quality and external optimizer isolation remain open."
     },
     {
       "id": "VOX-045",
@@ -1716,9 +1721,10 @@
       ],
       "evidence": [
         "docs/implementation/DELIVERY_RESULT.md",
-        "docs/implementation/OBSERVATION_LEARNING.md"
+        "docs/implementation/OBSERVATION_LEARNING.md",
+        "docs/implementation/EVALUATION_PROTOCOL.md"
       ],
-      "progress_note": "Pinned Docker evaluator and separate signed evaluator/human receipts bind exact artifacts/data/policy; malformed payload, budget bypass and counterfeit evidence regressions covered. Synthetic role keys do not qualify production IAM; protected service deployment and representative corpus remain open. Final cancellation datasets and the fixed evaluator require both cancelled-stop and active-continue coverage, rejecting inconsistent labels (policy version 2)."
+      "progress_note": "Protocol-bound candidates now require a durable evaluator reservation before final execution, signed minimized companion, existing Docker final envelope and human approval of that exact envelope. Replay/crash/cross-candidate reuse and legacy bypass deny. Independent local 24-case review passed; four existing actual Docker checks remain skipped. External IAM/checkpoint and representative quality/calibration remain open."
     },
     {
       "id": "VOX-047",
@@ -2161,6 +2167,14 @@
       "baseline": "c424dc6d9829540ad1e999a99efa824e9894dd66",
       "evidence": "docs/implementation/OBSERVATION_DIAGNOSTICS.md",
       "note": "Fixed catalog events in the active communication chain; independent source review passed. Wider VOX-021 export, platform and retention acceptance remains open."
+    },
+    {
+      "id": "retention-observation-experiments-release",
+      "status": "deployed_core_optional_features_off",
+      "baseline": "7f0b0efe109e6b372245e82b038271db369bb8e4",
+      "deployed_revision": "ee3467d2649e36ea4a9c5ca02560c3f50a3f8451",
+      "evidence": "docs/implementation/RELEASE_2026_10_20.md",
+      "note": "Independent source/CI and exact live route/ownership verification passed. Optional activation and dependency audit findings remain explicit; no real provider generation/device proof."
     }
   ]
 }
