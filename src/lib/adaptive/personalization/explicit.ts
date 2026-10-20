@@ -51,14 +51,14 @@ export function explicitPreferenceContextSnapshot(adaptive: AdaptiveService, d: 
     createdAt: p.updatedAt, updatedAt: p.updatedAt, origin: 'explicit', status: p.status, setting: p.setting, evidenceEventIds: [] }));
   const context = [adaptive.purposeFingerprint(d, space, 'optional.personalization', now, agentId), allowed,
     saved.map(p => [p.id, p.revision, p.status])];
-  const contextReceipt = digest(storeIdentity === undefined ? context : [storeIdentity, ...context]);
+  const contextReceipt = digest(storeIdentity === undefined || storeIdentity === 'canonical' ? context : [storeIdentity, ...context]);
   return { revision: d.revision, confirmed, scope, allowed, reason, records, saved, contextReceipt, now };
 }
 /** Detailed controls and Undo still read the canonical document. FILE receipts
- * retain their original bytes; indexed receipts bind the same store namespace. */
+ * retain their original bytes; managed receipts bind the same store namespace. */
 export function explicitPreferenceSnapshot(adaptive: AdaptiveService, d: AdaptiveDocument, space: SpaceKind, agentId: string, now: number) {
   const context = explicitPreferenceContextSnapshot(adaptive, d, space, agentId, now,
-    adaptive.repository.storage.indexed ? adaptive.storeIdentity : undefined);
+    adaptive.storeIdentity !== 'canonical' ? adaptive.storeIdentity : undefined);
   const undo = context.confirmed ? (d.experience.preferenceUndo ?? []).filter(row => row.space === space && row.agentId === agentId) : [];
   const receipt = digest([context.contextReceipt, context.reason, context.saved, undo]);
   return { ...context, undo, receipt };

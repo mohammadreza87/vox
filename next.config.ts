@@ -6,6 +6,9 @@ const nextConfig: NextConfig = {
   output: 'standalone',
   // Native SQLite and Firebase Admin must retain their server-side package boundaries.
   serverExternalPackages: ['firebase-admin', 'better-sqlite3'],
+  outputFileTracingIncludes: {
+    '/*': ['./node_modules/better-sqlite3/prebuilds/darwin-arm64.node', './node_modules/better-sqlite3/prebuilds/linux-x64.node'],
+  },
 
   // Ensure images from external sources work
   images: {

@@ -128,7 +128,7 @@ export class AdaptiveRepository {
     return this.storage.transact(accountId, current => {
       // Sample after the backend acquires its serialization/lock and reads the
       // committed document. The same time drives validation and business expiry.
-      const now = typeof at === 'function' ? at() : at;
+      const now = typeof at === 'function' ? this.storage.sampleClock?.(at) ?? at() : at;
       if (!Number.isSafeInteger(now) || now < 0) throw new Error('Invalid adaptive account');
       // Only an exact, otherwise valid old 14-purpose document is upgraded. Existing
       // permissions and receipts are preserved; the new purpose starts unasked.

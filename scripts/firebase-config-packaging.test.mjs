@@ -102,7 +102,7 @@ test('Firebase production config loads without Sentry or its missing instrumenta
   const result = invoke(configBundle, 'phase-production-build', '');
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.config.output, 'standalone');
-  assert.deepEqual(result.config.serverExternalPackages, ['firebase-admin']);
+  assert.deepEqual(result.config.serverExternalPackages, ['firebase-admin', 'better-sqlite3']);
   assert.deepEqual(result.config.images.remotePatterns, [{ protocol: 'https', hostname: '**' }]);
   assert.equal(result.config.webpack, 'undefined');
 });

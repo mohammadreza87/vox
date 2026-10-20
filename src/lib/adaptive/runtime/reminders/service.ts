@@ -102,9 +102,14 @@ export class ReminderDeliveryService {
         // evaluate the clock synchronously before the adapter's single fetch.
         let final: ReminderRecipient | null;
         try { final = await this.options.recipient(telegramId, candidate.agentId, candidate.space); } catch { return false; }
-        const now = (this.options.now ?? Date.now)();
-        return !!final && !options.signal?.aborted && final.telegramId === latest.telegramId && final.endpointId === latest.endpointId &&
-          final.revision === latest.revision && now < clockPolicy.expiresAt && (clockPolicy.override || !isQuietHour(now, clockPolicy.timezone, clockPolicy.start, clockPolicy.end));
+        const policy = clockPolicy;
+        try { return this.experience.adaptive.evaluateAuthorityClock(this.options.now ?? Date.now, now => {
+          const allowed = !!final && !options.signal?.aborted && final.telegramId === latest.telegramId && final.endpointId === latest.endpointId &&
+            final.revision === latest.revision && now < policy.expiresAt && (policy.override || !isQuietHour(now, policy.timezone, policy.start, policy.end));
+          // Quiet-hour status cannot change before the next UTC minute in the
+          // supported current timezones. Re-evaluate rather than cross it.
+          return { value: allowed, denied: !allowed, deadline: Math.min(policy.expiresAt, (Math.floor(now / 60_000) + 1) * 60_000) };
+        }); } catch { return false; }
       };
       let result: ReminderSendResult = { state: 'cancelled' };
       if (await authorize('claimed')) {
@@ -124,14 +129,20 @@ export class ReminderDeliveryService {
               authorize: () => !controller.signal.aborted ? authorize('dispatching') : Promise.resolve(false), authorizeNow: () => {
                 try {
                   if (controller.signal.aborted || options.signal?.aborted || !this.options.recipientNow) return 'denied';
-                  const now = (this.options.now ?? Date.now)();
-                  const snapshot = this.experience.adaptive.repository.readCommittedForEffect(`telegram-account:${telegramId}`, now);
+                  const snapshot = this.experience.adaptive.readCommittedForEffect(telegramId, d => d);
                   if (snapshot.status === 'busy') return 'busy';
-                  if (snapshot.status !== 'ready' || !snapshot.document) return 'denied';
-                  const d = snapshot.document, item = d.experience.inbox.find(i => i.id === reservation.itemId);
-                  const row = d.experience.reminderDelivery?.ledger.find(row => row.id === reservation.id);
+                  if (snapshot.status !== 'ready') return 'denied';
                   const recipient = this.options.recipientNow(telegramId, candidate.agentId, candidate.space);
-                  return recipient && item && row?.state === 'dispatching' && row.leaseUntil > now && item.delivery?.attemptId === row.id && item.delivery.generation === reservation.generation && this.current(d, item, now, recipient) === reservation.fingerprint ? 'allowed' : 'denied';
+                  const allowed = this.experience.adaptive.evaluateAuthorityClock(this.options.now ?? Date.now, now => {
+                    const d = snapshot.value, item = d.experience.inbox.find(i => i.id === reservation.itemId);
+                    const row = d.experience.reminderDelivery?.ledger.find(row => row.id === reservation.id);
+                    const allowed = !!recipient && !!item && row?.state === 'dispatching' && row.leaseUntil > now && item.delivery?.attemptId === row.id &&
+                      item.delivery.generation === reservation.generation && this.current(d, item, now, recipient) === reservation.fingerprint;
+                    const permit = item ? reminderPermit(this.experience.adaptive, d, item.space, now, item.agentId) : null;
+                    return { value: allowed, denied: !allowed, ...(allowed ? { deadline: Math.min(row!.leaseUntil, item!.expiresAt, permit!.expiresAt,
+                      (Math.floor(now / 60_000) + 1) * 60_000) } : {}) };
+                  });
+                  return allowed ? 'allowed' : 'denied';
                 } catch { return 'denied'; }
               }, signal: controller.signal });
             result = await Promise.race([send.catch((): ReminderSendResult => ({ state: 'unknown' })), new Promise<ReminderSendResult>(resolve => {

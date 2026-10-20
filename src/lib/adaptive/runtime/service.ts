@@ -347,6 +347,27 @@ export class AdaptiveExperienceService {
     return { revision: snapshot.contextReceipt, settings: snapshot.allowed ? snapshot.resolved
       .filter(row => row.source === 'explicit').map(row => row.setting) : [] };
   }
+  /** Same opaque context revision as readPreferences, without resolving settings
+   * or awaiting I/O. A denied optional choice still has an empty-context revision;
+   * the exact current interactive binding remains mandatory for transport. */
+  readPreferencesAuthorityNow(telegramId: number, space: SpaceKind, agentId: string, bindingId: string): { revision: string; validUntil: number } | null {
+    try {
+      const result = this.adaptive.readRuntimeControlsForEffect(telegramId, space, (d, now, namespace) => {
+        if (!bindingId || d.binding?.id !== bindingId || !this.adaptive.isProfileConfirmed(d, now))
+          return { value: null, denied: true };
+        const snapshot = explicitPreferenceContextSnapshot(this.adaptive, d, space, agentId, now, namespace);
+        const permission = d.permissions.find(p => p.id === `permission:${space}:optional.personalization`)!;
+        const capabilities = ['core_text', 'personalization'] as const;
+        // The binding-only empty-context revision is also bounded. It grants no
+        // optional preference use when snapshot.allowed is false.
+        const deadline = Math.min(d.binding.expiresAt,
+          ...capabilities.flatMap(c => { const status = this.adaptive.capabilityStatus(d, c, now); return status.eligible && status.validUntil !== undefined ? [status.validUntil] : []; }),
+          ...(permission.state === 'granted' && permission.expiresAt > now ? [permission.expiresAt] : []));
+        return { value: { revision: snapshot.contextReceipt, validUntil: deadline }, deadline, observedDenial: !snapshot.allowed };
+      });
+      return result.status === 'ready' ? result.value : null;
+    } catch { return null; }
+  }
   async readPreferenceState(telegramId: number, space: SpaceKind, agentId: string): Promise<PreferenceState> {
     const snapshot = await this.resolveExplicitPreferences(telegramId, space, agentId);
     if (!snapshot.confirmed) error(403, 'profile_confirmation_required');
@@ -361,11 +382,17 @@ export class AdaptiveExperienceService {
       }) };
   }
   preferenceStateCurrentNow(telegramId: number, state: PreferenceState) {
-    return this.adaptive.readCommittedForEffect(telegramId, (d, now) => {
+    return this.adaptive.readCommittedAuthorityForEffect(telegramId, undefined, (d, now) => {
+      const expiries = (d.experience.preferenceUndo ?? []).filter(row => row.space === state.space && row.agentId === state.agentId).map(row => row.expiresAt);
       // Prune the detached snapshot only; maintenance owns durable expiry purge.
       prunePreferenceUndo(d, now);
       const current = explicitPreferenceSnapshot(this.adaptive, d, state.space, state.agentId, now);
-      return current.confirmed && current.receipt === state.receipt;
+      const value = current.confirmed && current.receipt === state.receipt;
+      const permission = d.permissions.find(p => p.id === `permission:${state.space}:optional.personalization`)!;
+      return { value, denied: !current.confirmed, observedDenial: !value || !current.allowed || expiries.some(at => at <= now),
+        ...(current.confirmed ? { deadline: Math.min(d.binding!.expiresAt, ...expiries.filter(at => at > now),
+          ...(permission.state === 'granted' && permission.expiresAt > now ? [permission.expiresAt] : []),
+          ...(['core_text', 'personalization'] as const).flatMap(c => { const status = this.adaptive.capabilityStatus(d, c, now); return status.eligible && status.validUntil !== undefined ? [status.validUntil] : []; })) } : {}) };
     });
   }
   /** Cancellation writes content-free tombstones so a delayed request or another

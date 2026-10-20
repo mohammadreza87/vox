@@ -15,6 +15,7 @@ import { sweepObserverDocument } from '../observation/helpers';
 import { pruneLearningDocument } from '../personalization/learning/state';
 import { runtimeControlsFromDocument, runtimeControlsFromIndexed, validateRuntimeControlEvaluation,
   type RuntimeControlEvaluation, type RuntimeControlEvaluator } from './authority';
+import { readIndexedPrivateContext, type PrivateContextSnapshot } from './indexed-private-context';
 
 export class AdaptiveError extends Error {
   readonly name = 'AdaptiveError';
@@ -74,9 +75,35 @@ export class AdaptiveService {
   setRelationshipInvalidator(handler: (input: RelationshipInvalidation) => Promise<void>): void { this.relationshipInvalidator = handler; }
   async notifyRelationshipInvalidation(input: RelationshipInvalidation): Promise<void> { await this.relationshipInvalidator?.(input); }
   constructor(readonly repository: AdaptiveRepository, private readonly options: AdaptiveServiceOptions = {}) { this.now = options.now ?? Date.now; }
+  /** Record a trusted clock observation, never a deadline or document timestamp.
+   * Managed writers latch this without I/O; original FILE behavior is unchanged. */
+  sampleClock(clock: () => number): number { return this.repository.storage.sampleClock?.(clock) ?? clock(); }
+  /** Opt-in pure authority evaluation after clock publication. Unlike a bare
+   * clock read, the declared deadline fences publication and evaluation time. */
+  evaluateAuthorityClock<T>(clock: () => number, evaluate: (now: number) => RuntimeControlEvaluation<T>): T {
+    let observed = this.sampleClock(clock);
+    const publish = () => { this.sampleClock(() => observed); };
+    const fresh = () => {
+      let value: number;
+      try { value = clock(); } catch (error) { publish(); throw error; }
+      if (!Number.isSafeInteger(value) || value < observed) { publish(); return fail(503, 'adaptive_controls_unavailable'); }
+      observed = value; return value;
+    };
+    let result: RuntimeControlEvaluation<T>;
+    try { result = validateRuntimeControlEvaluation<T>(evaluate(fresh())); }
+    catch (error) { publish(); throw error; }
+    const after = fresh();
+    if (!result.denied && result.deadline !== undefined && result.deadline <= after) { publish(); return fail(503, 'adaptive_controls_unavailable'); }
+    if (result.denied || result.observedDenial) {
+      publish();
+      const final = fresh();
+      if (!result.denied && result.deadline !== undefined && result.deadline <= final) { publish(); return fail(503, 'adaptive_controls_unavailable'); }
+    }
+    return result.value;
+  }
   /** Stable receipt namespace, safe inside a writer. This is not access authority. */
   get storeIdentity(): string {
-    const identity = this.repository.storage.indexed?.identity;
+    const identity = this.repository.storage.identity ?? this.repository.storage.indexed?.identity;
     return identity ? digest([identity.incarnation, identity.generation]) : 'canonical';
   }
   private account(telegramId: number): string {
@@ -243,15 +270,15 @@ export class AdaptiveService {
   async withRuntimeControls<T>(telegramId: number, space: SpaceKind, fn: RuntimeControlEvaluator<T>): Promise<T> {
     if (!this.repository.storage.indexed) {
       // The fallback may await canonical durability. Suppress an expired result
-      // again after that I/O; it does not provide the indexed durable watermark.
+      // again after that I/O; managed FILE publishes its lifecycle watermark.
       let evaluated: RuntimeControlEvaluation<T> | undefined; let observedAt = 0;
       const result = await this.transact(telegramId, (d, now) => {
         observedAt = now;
-        evaluated = validateRuntimeControlEvaluation<T>(fn(runtimeControlsFromDocument(d), now, 'canonical', undefined));
+        evaluated = validateRuntimeControlEvaluation<T>(fn(runtimeControlsFromDocument(d), now, this.storeIdentity, undefined));
         this.checkRuntimeEvaluation(evaluated, now);
         return evaluated.value;
       });
-      this.checkRuntimeEvaluation(evaluated!, observedAt);
+      this.checkRuntimeEvaluation(evaluated!, observedAt, true);
       return result;
     }
     const result = this.readRuntimeControlsForEffect(telegramId, space, fn);
@@ -264,27 +291,34 @@ export class AdaptiveService {
     { status: 'ready'; value: T } | { status: 'busy' | 'unsupported' | 'missing' } {
     const indexed = this.repository.storage.indexed;
     if (!indexed) {
-      try { return this.readCommittedForEffect(telegramId, (d, now) => {
-        const evaluated = validateRuntimeControlEvaluation<T>(fn(runtimeControlsFromDocument(d), now, 'canonical', undefined));
-        this.checkRuntimeEvaluation(evaluated, now);
-        return evaluated.value;
-      }); } catch { return { status: 'busy' }; }
+      try {
+        return this.readCommittedAuthorityForEffect(telegramId, this.now,
+          (d, now) => fn(runtimeControlsFromDocument(d), now, this.storeIdentity, undefined));
+      } catch { return { status: 'busy' }; }
     }
     let evaluation: RuntimeControlEvaluation<T> | undefined;
     const snapshot = indexed.readControls(this.account(telegramId), space, (controls, now, stamp) => {
       evaluation = validateRuntimeControlEvaluation<T>(fn(runtimeControlsFromIndexed(controls), now,
         digest([stamp.incarnation, stamp.generation]), stamp));
       return { ...(evaluation.deadline === undefined ? {} : { deadline: evaluation.deadline }),
-        ...(evaluation.denied === undefined ? {} : { denied: evaluation.denied }) };
+        ...(evaluation.denied === undefined ? {} : { denied: evaluation.denied }),
+        ...(evaluation.observedDenial === undefined ? {} : { observedDenial: evaluation.observedDenial }) };
     });
     if (snapshot.status !== 'ready' || !evaluation) return { status: snapshot.status !== 'ready' && snapshot.reason === 'missing' ? 'missing' : 'busy' };
     return { status: 'ready', value: evaluation.value };
   }
-  private checkRuntimeEvaluation<T>(evaluation: RuntimeControlEvaluation<T>, observedAt: number): void {
-    const fresh = this.now();
-    if (!Number.isSafeInteger(fresh) || fresh < observedAt ||
-        (!evaluation.denied && evaluation.deadline !== undefined && evaluation.deadline <= fresh))
+  private checkRuntimeEvaluation<T>(evaluation: RuntimeControlEvaluation<T>, observedAt: number, publish = false): void {
+    const observed = publish ? this.now() : this.sampleClock(this.now);
+    if (!Number.isSafeInteger(observed) || observed < observedAt) fail(503, 'adaptive_controls_unavailable');
+    if (publish) this.repository.storage.observeLifecycleTime?.(observed);
+    const fresh = publish ? this.now() : this.sampleClock(this.now);
+    if (!Number.isSafeInteger(fresh) || fresh < observed ||
+        (!evaluation.denied && evaluation.deadline !== undefined && evaluation.deadline <= fresh)) {
+      // Publication itself may cross a deadline. Retain that denial observation
+      // before returning unavailable, so a regressed clock cannot revive it.
+      if (publish && Number.isSafeInteger(fresh) && fresh >= observed) this.repository.storage.observeLifecycleTime?.(fresh);
       fail(503, 'adaptive_controls_unavailable');
+    }
   }
   /** Validated committed file snapshot only. No mutation or awaited work. */
   readCommittedForEffect<T>(telegramId: number, fn: (document: AdaptiveDocument, now: number) => T):
@@ -294,6 +328,13 @@ export class AdaptiveService {
     if (!snapshot.document) return { status: 'missing' };
     // Synchronous disk/schema work can itself cross an authority deadline.
     return { status: 'ready', value: fn(snapshot.document, this.now()) };
+  }
+  /** Explicit complete-document authority seam. Generic committed reads never
+   * infer denial or deadlines from an arbitrary return value. */
+  readCommittedAuthorityForEffect<T>(telegramId: number, clock: (() => number) | undefined,
+    evaluate: (document: AdaptiveDocument, now: number) => RuntimeControlEvaluation<T>):
+    { status: 'ready'; value: T } | { status: 'busy' | 'unsupported' | 'missing' } {
+    return this.readCommittedForEffect(telegramId, document => this.evaluateAuthorityClock(clock ?? this.now, now => evaluate(document, now)));
   }
   isProfileConfirmed(d: AdaptiveAuthorityDocument, now: number): boolean { return this.confirmed(d, now); }
   isCoreAllowed(d: AdaptiveAuthorityDocument, now: number): boolean { return this.confirmed(d, now) && this.eligible(d, 'core_text', now).eligible; }
@@ -355,12 +396,10 @@ export class AdaptiveService {
     }
     return claims;
   }
-  private snapshot(d: AdaptiveDocument, space: SpaceKind, now: number, locale: 'en' | 'fa' = 'en', includeMemories = true): AdaptiveSnapshot {
+  private authoritySnapshot(d: AdaptiveAuthorityDocument & Pick<AdaptiveDocument, 'revision'>,
+    space: SpaceKind, now: number, locale: 'en' | 'fa' = 'en'): AdaptiveSnapshot {
     const confirmed = this.confirmed(d, now);
     const memory = this.eligible(d, 'core_text', now);
-    const memories = confirmed && includeMemories ? d.memories.filter(m => m.space === space && validMemoryLineage(d, m, now))
-      .filter(m => this.authorized(d, space, m, 'read', now)) : [];
-    const claimOrigins = this.reviewedClaimOrigins(memories);
     return { schemaVersion: 1, identity: { accountId: d.accountId, confirmed,
       verification: confirmed ? 'account_confirmation' : 'unconfirmed', adultDeclared: d.declaration?.adultConfirmed === true,
       ...(d.declaration?.declaredJurisdiction ? { declaredJurisdiction: d.declaration.declaredJurisdiction } : {}),
@@ -374,8 +413,7 @@ export class AdaptiveService {
           revision: permission.revision, available: confirmed && eligibility.eligible,
           ...(!confirmed ? { reason: 'profile_confirmation_required' } : !eligibility.eligible ? { reason: eligibility.reason } : {}), notice: adaptiveNotice(purpose, locale) };
       }),
-      memories: memories.map(m => ({ id: m.id, revision: m.revision, text: m.text!, createdAt: m.createdAt, expiresAt: m.expiresAt,
-        ...(claimOrigins.has(m.id) ? { origin: 'user_reviewed_claim' as const } : {}), ...(m.sourceRefs ? { sourceRefs: m.sourceRefs } : {}) })),
+      memories: [],
       agents: confirmed ? d.agentGrants.filter(g => g.space === space).map(g => ({ agentId: g.agentId, allowed: g.allowed, revision: g.revision })) : [],
       explicitMemoryAvailable: confirmed && memory.eligible,
       memoryCorrectionAvailable: confirmed && memory.eligible && this.repository.storage.supportsCommittedWriteFence === true && !!this.repository.storage.readCommittedForEffect,
@@ -383,13 +421,40 @@ export class AdaptiveService {
       ...(!confirmed ? { explicitMemoryReason: 'profile_confirmation_required' } : !memory.eligible ? { explicitMemoryReason: memory.reason } : {}),
     };
   }
+  private snapshot(d: AdaptiveDocument, space: SpaceKind, now: number, locale: 'en' | 'fa' = 'en'): AdaptiveSnapshot {
+    const authority = this.authoritySnapshot(d, space, now, locale);
+    const memories = authority.identity.confirmed ? d.memories.filter(m => m.space === space && validMemoryLineage(d, m, now))
+      .filter(m => this.authorized(d, space, m, 'read', now)) : [];
+    const claimOrigins = this.reviewedClaimOrigins(memories);
+    return { ...authority, memories: memories.map(m => ({ id: m.id, revision: m.revision, text: m.text!, createdAt: m.createdAt, expiresAt: m.expiresAt,
+      ...(claimOrigins.has(m.id) ? { origin: 'user_reviewed_claim' as const } : {}), ...(m.sourceRefs ? { sourceRefs: m.sourceRefs } : {}) })) };
+  }
   read(telegramId: number, space: SpaceKind, locale: 'en' | 'fa' = 'en'): Promise<AdaptiveSnapshot> {
     return this.transact(telegramId, (d, now) => this.snapshot(d, space, now, locale));
   }
-  /** Metadata-only authorization projection. The account aggregate remains the
-   * storage boundary; no private text is mapped into shared-service authority. */
+  /** Indexed mode reads compact controls only. The FILE compatibility path keeps
+   * its existing canonical lifecycle sweep; neither projection returns bodies. */
   readAuthority(telegramId: number, space: SpaceKind, locale: 'en' | 'fa' = 'en'): Promise<AdaptiveSnapshot> {
-    return this.transact(telegramId, (d, now) => this.snapshot(d, space, now, locale, false));
+    if (!this.repository.storage.indexed) return this.transact(telegramId, (d, now) => this.authoritySnapshot(d, space, now, locale));
+    return this.withRuntimeControls(telegramId, space, (d, now) => this.authorityEvaluation(d, space, now, locale));
+  }
+  /** Exact authority projection at the configured transport boundary. */
+  readAuthorityNow(telegramId: number, space: SpaceKind, locale: 'en' | 'fa' = 'en'): AdaptiveSnapshot & { validUntil: number } {
+    const current = this.readRuntimeControlsForEffect(telegramId, space, (d, now) => {
+      const evaluation = this.authorityEvaluation(d, space, now, locale);
+      return { ...evaluation, value: { ...evaluation.value, validUntil: evaluation.deadline ?? INFINITY } };
+    });
+    return current.status === 'ready' ? current.value : fail(503, 'adaptive_controls_unavailable');
+  }
+  private authorityEvaluation(d: AdaptiveAuthorityDocument & Pick<AdaptiveDocument, 'revision'>,
+    space: SpaceKind, now: number, locale: 'en' | 'fa'): RuntimeControlEvaluation<AdaptiveSnapshot> {
+    const confirmed = this.confirmed(d, now);
+    const statuses = ['core_text' as const, ...Object.values(CAPABILITY)].map(c => this.eligible(d, c, now));
+    return { value: this.authoritySnapshot(d, space, now, locale), denied: !confirmed,
+      observedDenial: statuses.some(status => !status.eligible) || d.permissions.some(p => p.spaceId === spaceIdFor(d.accountId, space) && p.state === 'granted' && p.expiresAt <= now),
+      ...(confirmed ? { deadline: Math.min(d.binding!.expiresAt,
+        ...d.permissions.filter(p => p.spaceId === spaceIdFor(d.accountId, space) && p.state === 'granted' && p.expiresAt > now).map(p => p.expiresAt),
+        ...statuses.flatMap(s => s.eligible && s.validUntil !== undefined ? [s.validUntil] : [])) } : {}) };
   }
   confirm(telegramId: number, input: IdentityInput, space: SpaceKind = 'work'): Promise<AdaptiveSnapshot> {
     const bindingId = randomUUID();
@@ -552,7 +617,7 @@ export class AdaptiveService {
       return this.snapshot(d, input.space, now);
     }, () => {
       // Studio I/O precedes fresh canonical deadlines immediately before rename.
-      const authority = options.authorizeNow(), now = this.now();
+      const authority = options.authorizeNow(), now = this.sampleClock(this.now);
       if (!draft || !authority || options.signal?.aborted || !this.isCoreAllowed(draft, now) || this.coreFingerprint(draft, now) !== core) return fail(409, 'memory_correction_changed');
       if (!replay) {
         const memory = draft.memories.find(row => row.id === memoryId && row.space === input.space);
@@ -561,7 +626,13 @@ export class AdaptiveService {
     });
   }
   memorySnapshotCurrentNow(telegramId: number, snapshot: AdaptiveSnapshot, locale: 'en' | 'fa'): boolean {
-    const current = this.readCommittedForEffect(telegramId, (d, now) => digest(this.snapshot(d, snapshot.space, now, locale)) === digest(snapshot));
+    const current = this.readCommittedAuthorityForEffect(telegramId, this.now, (d, now) => {
+      const authority = this.authorityEvaluation(d, snapshot.space, now, locale);
+      const value = digest(this.snapshot(d, snapshot.space, now, locale)) === digest(snapshot);
+      const expiries = d.memories.filter(m => m.space === snapshot.space && m.status === 'active').map(m => m.expiresAt);
+      return { ...authority, value, observedDenial: authority.observedDenial || !value || expiries.some(at => at <= now),
+        ...(authority.deadline === undefined ? {} : { deadline: Math.min(authority.deadline, ...expiries.filter(at => at > now)) }) };
+    });
     return current.status === 'ready' && current.value;
   }
   private tombstone(d: AdaptiveDocument, memory: StoredMemory, now: number, eventId: string): void {
@@ -601,47 +672,92 @@ export class AdaptiveService {
       return this.snapshot(d, input.space, now);
     });
   }
+  private runtimePrivacyEvaluation(d: AdaptiveAuthorityDocument, now: number, namespace: string, personaId: string,
+    space: SpaceKind): RuntimeControlEvaluation<{ revision: string; memoryEnabled: boolean; historyEnabled: boolean }> {
+    const consent = this.permission(d, space, 'optional.auto_memory'), eligible = this.eligible(d, 'auto_memory', now);
+    const confirmed = this.confirmed(d, now);
+    const parts = [d.accountId, d.binding, confirmed, consent, eligible, d.agentGrants.filter(g => g.space === space && g.agentId === personaId)];
+    return { value: { revision: digest(namespace === 'canonical' ? parts : [namespace, ...parts]), memoryEnabled: false, historyEnabled: false },
+      denied: !confirmed, observedDenial: !eligible.eligible || consent.state === 'granted' && consent.expiresAt <= now,
+      ...(confirmed ? { deadline: Math.min(d.binding!.expiresAt, eligible.validUntil ?? INFINITY) } : {}) };
+  }
   /** Runtime gets no private text from this helper. Legacy history cannot inherit consent. */
   runtimePrivacy = {
     read: async (personaId: string, legacyPersonId: string, space: SpaceKind = 'work'): Promise<{ revision: string; memoryEnabled: boolean; historyEnabled: boolean }> => {
       const match = /^tg-([1-9]\d*)$/.exec(legacyPersonId);
       if (!match) return { revision: 'unconfirmed', memoryEnabled: false, historyEnabled: false };
-      return this.transact(Number(match[1]), (d, now) => {
-        const consent = this.permission(d, space, 'optional.auto_memory');
-        return { revision: digest([d.accountId, d.binding, this.confirmed(d, now), consent, this.eligible(d, 'auto_memory', now), d.agentGrants.filter(g => g.space === space && g.agentId === personaId)]),
-          // Legacy unscoped stores have no authoritative source lineage: never unlock them.
-          memoryEnabled: false, historyEnabled: false };
-      });
+      if (this.repository.storage.indexed) return this.withRuntimeControls(Number(match[1]), space,
+        (d, now, namespace) => this.runtimePrivacyEvaluation(d, now, namespace, personaId, space));
+      return this.transact(Number(match[1]), (d, now) => this.runtimePrivacyEvaluation(d, now, this.storeIdentity, personaId, space).value);
+    },
+    readNow: (personaId: string, legacyPersonId: string, space: SpaceKind = 'work'): { revision: string; memoryEnabled: boolean; historyEnabled: boolean; validUntil: number } => {
+      const match = /^tg-([1-9]\d*)$/.exec(legacyPersonId);
+      if (!match) return { revision: 'unconfirmed', memoryEnabled: false, historyEnabled: false, validUntil: INFINITY };
+      const result = this.readRuntimeControlsForEffect(Number(match[1]), space,
+        (d, now, namespace) => {
+          const evaluation = this.runtimePrivacyEvaluation(d, now, namespace, personaId, space);
+          return { ...evaluation, value: { ...evaluation.value, validUntil: evaluation.deadline ?? INFINITY } };
+        });
+      return result.status === 'ready' ? result.value : fail(503, 'adaptive_controls_unavailable');
     },
   };
   /** Authorized, fresh explicit-private context for the separately gated runtime path.
    * The caller must recheck returned revision before provider use/output. */
-  readPrivateContext(telegramId: number, space: SpaceKind, agentId: string): Promise<{ revision: string; memories: { id: string; text: string; sourceIds?: string[] }[] }> {
-    return this.transact(telegramId, (d, now) => {
-      const permission = this.permission(d, space, 'optional.personalization');
-      const eligibility = this.eligible(d, 'personalization', now);
-      const confirmed = this.confirmed(d, now);
-      const allowed = confirmed && permission.state === 'granted' && permission.expiresAt > now && eligibility.eligible;
-      const authorized = allowed ? d.memories.filter(m => this.authorized(d, space, m, 'read', now, agentId)) : [];
-      const byId = new Map(authorized.map(memory => [memory.id, memory]));
-      const claimOrigins = this.reviewedClaimOrigins(authorized);
-      const ancestors = (memory: StoredMemory, ids = new Set<string>()): string[] => {
-        for (const ref of memory.sourceRefs ?? []) {
-          if (ids.has(ref.id)) continue;
-          ids.add(ref.id);
-          const source = byId.get(ref.id);
-          if (source) ancestors(source, ids);
-        }
-        return [...ids];
-      };
-      return { revision: digest([d.accountId, d.personId, space, agentId, d.binding, confirmed, permission, allowed, eligibility,
-        d.agentGrants.filter(g => g.space === space && g.agentId === agentId),
-        authorized.map(m => [m.id, m.revision, m.expiresAt, m.revocationEpoch, m.sourceRefs, m.origin])]),
-        memories: authorized.map(m => {
-          const sourceIds = m.sourceRefs ? ancestors(m) : undefined;
-          const claim = claimOrigins.has(m.id);
-          return { id: m.id, text: claim ? `User-reviewed claim (not independently verified): ${m.text!}` : m.text!, ...(sourceIds ? { sourceIds } : {}) };
-        }) };
-    });
+  readPrivateContext(telegramId: number, space: SpaceKind, agentId: string, query = ''): Promise<PrivateContextSnapshot> {
+    if (this.repository.storage.indexed) {
+      try { return Promise.resolve(readIndexedPrivateContext(this, telegramId, space, agentId, query)); }
+      catch { return Promise.reject(new AdaptiveError(503, 'adaptive_context_unavailable')); }
+    }
+    return this.transact(telegramId, (d, now) => this.canonicalPrivateContext(d, now, space, agentId));
   }
+  private canonicalPrivateContext(d: AdaptiveDocument, now: number, space: SpaceKind, agentId: string): PrivateContextSnapshot {
+    const permission = this.permission(d, space, 'optional.personalization');
+    const eligibility = this.eligible(d, 'personalization', now);
+    const confirmed = this.confirmed(d, now);
+    const allowed = confirmed && permission.state === 'granted' && permission.expiresAt > now && eligibility.eligible;
+    const authorized = allowed ? d.memories.filter(m => this.authorized(d, space, m, 'read', now, agentId)) : [];
+    const byId = new Map(authorized.map(memory => [memory.id, memory]));
+    const claimOrigins = this.reviewedClaimOrigins(authorized);
+    const ancestors = (memory: StoredMemory, ids = new Set<string>()): string[] => {
+      for (const ref of memory.sourceRefs ?? []) {
+        if (ids.has(ref.id)) continue;
+        ids.add(ref.id);
+        const source = byId.get(ref.id);
+        if (source) ancestors(source, ids);
+      }
+      return [...ids];
+    };
+    const revision = digest([d.accountId, d.personId, space, agentId, d.binding, confirmed, permission, allowed, eligibility,
+      d.agentGrants.filter(g => g.space === space && g.agentId === agentId),
+      authorized.map(m => [m.id, m.revision, m.expiresAt, m.revocationEpoch, m.sourceRefs, m.origin])]);
+    return { revision: this.storeIdentity === 'canonical' ? revision : digest([this.storeIdentity, revision]),
+      memories: authorized.map(m => {
+        const sourceIds = m.sourceRefs ? ancestors(m) : undefined;
+        const claim = claimOrigins.has(m.id);
+        return { id: m.id, text: claim ? `User-reviewed claim (not independently verified): ${m.text!}` : m.text!, ...(sourceIds ? { sourceIds } : {}) };
+      }) };
+  }
+  /** Same full private catalog/authority revision, without candidate or body
+   * reads in indexed mode. Rechecks never rehydrate previously selected text. */
+  async readPrivateContextAuthority(telegramId: number, space: SpaceKind, agentId: string): Promise<{ revision: string }> {
+    if (!this.repository.storage.indexed) return { revision: (await this.readPrivateContext(telegramId, space, agentId)).revision };
+    return { revision: this.readPrivateContextAuthorityNow(telegramId, space, agentId).revision };
+  }
+  readPrivateContextAuthorityNow(telegramId: number, space: SpaceKind, agentId: string): { revision: string; validUntil: number } {
+    if (!this.repository.storage.indexed) {
+      const result = this.readCommittedAuthorityForEffect(telegramId, this.now, (d, now) => {
+        const authority = this.authorityEvaluation(d, space, now, 'en');
+        const deadline = Math.min(authority.deadline ?? INFINITY, ...d.memories.filter(m => m.space === space && m.status === 'active' && m.expiresAt > now).map(m => m.expiresAt));
+        return { ...authority, deadline, observedDenial: authority.observedDenial || d.memories.some(m => m.space === space && m.status === 'active' && m.expiresAt <= now),
+          value: { revision: this.canonicalPrivateContext(d, now, space, agentId).revision, validUntil: deadline } };
+      });
+      if (result.status !== 'ready') return fail(503, 'adaptive_context_unavailable');
+      return result.value;
+    }
+    try {
+      const context = readIndexedPrivateContext(this, telegramId, space, agentId, '', true);
+      return { revision: context.revision, validUntil: context.validUntil ?? INFINITY };
+    } catch { return fail(503, 'adaptive_context_unavailable'); }
+  }
+
 }

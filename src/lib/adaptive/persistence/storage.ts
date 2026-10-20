@@ -10,8 +10,16 @@ export interface AdaptiveAccountPage { accountIds: string[]; next?: string }
 export interface AdaptiveAccountPageInput { after?: string; limit: number }
 
 export interface AdaptiveStorage {
+  /** Managed-format namespace, never an access grant. Original FILE has none. */
+  readonly identity?: Readonly<{ incarnation: string; generation: number }>;
   /** Optional server-only read model. Presence never selects or migrates a store. */
   readonly indexed?: IndexedAdaptiveQueries;
+  /** Managed FILE lifecycle observation, outside writers; durable monotonic metadata only. */
+  observeLifecycleTime?(observedAt: number): void;
+  /** Trusted server clock only, never a draft/deadline timestamp. Canonical
+   * writers latch the sample; outside writers it is durable before return.
+   * This clock observation is not an access grant or an effect deadline check. */
+  sampleClock?(clock: () => number): number;
   /** Callback must be synchronous and retry safe. A throw commits nothing. */
   transact<T>(accountId: string, mutate: (current: unknown | null) => { document: unknown; result: T }, beforeCommit?: () => void): Promise<T>;
   readonly supportsCommittedWriteFence?: true;

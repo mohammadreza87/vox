@@ -56,7 +56,7 @@ export interface CandidateCursor {
   scope: IndexedScope; deadline: number; queryDigest: string; offset: number; seal: string;
 }
 export interface IndexedControlStamp { incarnation: string; generation: number; catalogVersion: number; catalogDigest: string }
-export interface IndexedControlEvaluation { deadline?: number; denied?: boolean }
+export interface IndexedControlEvaluation { deadline?: number; denied?: boolean; observedDenial?: boolean }
 /** Trusted synchronous, side-effect-free, body-free code only. No host reentry.
  * Denied data remains data; this evaluator never mints a memory access receipt. */
 export type IndexedControlEvaluator = (controls: Readonly<IndexedControls>, now: number, stamp: Readonly<IndexedControlStamp>) => IndexedControlEvaluation;

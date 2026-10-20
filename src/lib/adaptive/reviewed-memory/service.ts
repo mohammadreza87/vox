@@ -53,12 +53,14 @@ export class ReviewedMemoryService {
     sources.forEach(visit);
     const rows = d.memories.filter(row => lineage.has(row.id)).sort((a, b) => a.id.localeCompare(b.id));
     return { sources, personId: d.personId, expiresAt: Math.min(d.binding!.expiresAt, this.adaptive.capabilityStatus(d, 'core_text', now).validUntil ?? now, ...rows.map(row => row.expiresAt)),
-      authority: digest([d.accountId, d.personId, d.binding, this.adaptive.coreFingerprint(d, now), studio, input.space, input.agentId,
+      authority: digest([...(this.adaptive.storeIdentity === 'canonical' ? [] : [this.adaptive.storeIdentity]), d.accountId, d.personId, d.binding, this.adaptive.coreFingerprint(d, now), studio, input.space, input.agentId,
         d.agentGrants.filter(g => g.space === input.space && g.agentId === input.agentId), rows]) };
   }
   private currentNow(telegramId: number, input: Pick<Receipt, 'space' | 'agentId' | 'sourceRefs'>) {
     const studio = this.options.agentAuthorityNow(telegramId, input.agentId);
-    const snapshot = this.adaptive.readCommittedForEffect(telegramId, (document, now) => this.state(document, now, input, studio));
+    const snapshot = this.adaptive.readCommittedAuthorityForEffect(telegramId, this.now, (document, now) => {
+      const value = this.state(document, now, input, studio); return { value, deadline: value.expiresAt };
+    });
     if (snapshot.status !== 'ready') throw new AdaptiveError(503, 'reviewed_memory_unavailable');
     return snapshot.value;
   }
@@ -74,9 +76,12 @@ export class ReviewedMemoryService {
   /** Final no-await delivery fence after HTTP has loaded its response. */
   revalidateNow(telegramId: number, value: ReviewedAcceptInput): void {
     const input = reviewedAcceptInputSchema.parse(value), receipt = this.decode(input.receipt);
-    const state = this.currentNow(telegramId, receipt), now = this.now();
-    if (receipt.accountId !== accountIdFor(telegramId) || receipt.space !== input.space || receipt.agentId !== input.agentId || receipt.textHash !== digest(input.text) ||
-        receipt.issuedAt > now || receipt.expiresAt <= now || receipt.expiresAt > receipt.issuedAt + 120_000 || state.authority !== receipt.authority) return denied();
+    const state = this.currentNow(telegramId, receipt);
+    this.adaptive.evaluateAuthorityClock(this.now, now => {
+      if (receipt.accountId !== accountIdFor(telegramId) || receipt.space !== input.space || receipt.agentId !== input.agentId || receipt.textHash !== digest(input.text) ||
+          receipt.issuedAt > now || receipt.expiresAt <= now || receipt.expiresAt > receipt.issuedAt + 120_000 || state.authority !== receipt.authority) return denied();
+      return { value: undefined, deadline: Math.min(state.expiresAt, receipt.expiresAt) };
+    });
   }
   async preview(telegramId: number, value: ReviewedPreviewInput, signal?: AbortSignal): Promise<ReviewedMemoryPreview> {
     if (this.options.llm.committedExportFence !== true) throw new AdaptiveError(503, 'reviewed_memory_unavailable');
@@ -100,22 +105,24 @@ export class ReviewedMemoryService {
     finally { if (timer) clearTimeout(timer); signal?.removeEventListener('abort', cancel); }
     if (!text || text.length > 2000 || Buffer.byteLength(text, 'utf8') > 8192) throw new AdaptiveError(503, 'reviewed_memory_unavailable');
     if (!await authorize() || !authorizeNow()) return denied();
-    const now = this.now(), expiresAt = Math.min(now + 120_000, initial.expiresAt);
-    if (expiresAt <= now) return denied();
-    const receipt = this.encode({ v: 1, nonce: randomUUID(), accountId: accountIdFor(telegramId), personId: initial.personId,
-      space: input.space, agentId: input.agentId, sourceRefs: input.sourceRefs, authority: initial.authority, textHash: digest(text), issuedAt: now, expiresAt });
-    return { text, receipt, expiresAt, sourceRefs: input.sourceRefs };
+    return this.adaptive.evaluateAuthorityClock(this.now, now => {
+      const expiresAt = Math.min(now + 120_000, initial.expiresAt);
+      if (expiresAt <= now) return denied();
+      const receipt = this.encode({ v: 1, nonce: randomUUID(), accountId: accountIdFor(telegramId), personId: initial.personId,
+        space: input.space, agentId: input.agentId, sourceRefs: input.sourceRefs, authority: initial.authority, textHash: digest(text), issuedAt: now, expiresAt });
+      return { value: { text, receipt, expiresAt, sourceRefs: input.sourceRefs }, deadline: expiresAt };
+    });
   }
   async accept(telegramId: number, value: ReviewedAcceptInput): Promise<{ memoryId: string }> {
-    const input = reviewedAcceptInputSchema.parse(value), receipt = this.decode(input.receipt), now = this.now();
+    const input = reviewedAcceptInputSchema.parse(value), receipt = this.decode(input.receipt), now = this.adaptive.sampleClock(this.now);
     if (receipt.accountId !== accountIdFor(telegramId) || receipt.space !== input.space || receipt.agentId !== input.agentId || receipt.textHash !== digest(input.text) ||
         receipt.issuedAt > now || receipt.expiresAt <= now || receipt.expiresAt > receipt.issuedAt + 120_000) return denied();
     if ((await this.current(telegramId, receipt)).authority !== receipt.authority) return denied();
     let draft: AdaptiveDocument | undefined;
     return this.adaptive.withAccountDocument(telegramId, d => {
       draft = d;
-      const time = this.now();
-      const state = this.state(d, time, receipt, this.options.agentAuthorityNow(telegramId, input.agentId));
+      const studio = this.options.agentAuthorityNow(telegramId, input.agentId), time = this.adaptive.sampleClock(this.now);
+      const state = this.state(d, time, receipt, studio);
       if (state.personId !== receipt.personId || state.authority !== receipt.authority || receipt.expiresAt <= time) return denied();
       const eventId = `reviewed:${receipt.nonce}`, fingerprint = digest([receipt, input.text]), prior = d.events.find(event => event.eventId === eventId);
       if (prior) {
@@ -132,7 +139,7 @@ export class ReviewedMemoryService {
       d.events.push({ eventId, fingerprint, kind: 'reviewed_memory_saved', resultId: memory.id, revision: d.revision });
       return { memoryId: memory.id };
     }, () => {
-      const studio = this.options.agentAuthorityNow(telegramId, input.agentId), time = this.now();
+      const studio = this.options.agentAuthorityNow(telegramId, input.agentId), time = this.adaptive.sampleClock(this.now);
       if (!draft || receipt.expiresAt <= time || this.state(draft, time, receipt, studio).authority !== receipt.authority) return denied();
     });
   }
