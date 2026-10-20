@@ -166,6 +166,9 @@ export class AdaptiveExperienceService {
       if (!this.command(d, input, 'notification_feedback', digest(['feedback', input]))) return this.snapshot(d, input.space, now);
       const item = d.experience.inbox.find(i => i.id === input.itemId && i.space === input.space && i.status !== 'cancelled');
       if (!item) error(404, 'not_found');
+      // A delayed action cannot revive a dismissal or change its recorded outcome.
+      // Retain the accepted command receipt and its document revision only.
+      if (item!.status === 'dismissed') { this.bump(d, now); return this.snapshot(d, input.space, now); }
       if (input.action === 'useful' || input.action === 'not_useful') item!.feedback = input.action;
       else item!.status = input.action === 'read' ? 'read' : 'dismissed';
       item!.revision++; this.bump(d, now); return this.snapshot(d, input.space, now);

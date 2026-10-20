@@ -43,7 +43,52 @@ async function setup(file = false) {
   return { adaptive, experience, factory, directory, grant, agent, setNow: (t: number) => { now = t; } };
 }
 const turn = (turnId: string, space: SpaceKind = 'work') => ({ agentId: 'agent1', turnId, space, channel: 'voice' as const, durationMs: 150, status: 'failed' as const });
+async function feedbackFixture() {
+  const fixture = await setup(true);
+  await fixture.grant('optional.reminder_delivery'); await fixture.agent();
+  let current = await fixture.experience.read(123, 'work');
+  current = await fixture.experience.settings(123, { space: 'work', eventId: 'feedback-settings', expectedRevision: current.revision,
+    dailyCap: 2, quietStartHour: 21, quietEndHour: 8, inboxEnabled: true, proactiveEnabled: false, reminderEnabled: true });
+  const itemId = 'feedback-reminder';
+  await fixture.experience.reminder(123, { space: 'work', agentId: 'agent1', expectedRevision: current.revision,
+    eventId: itemId, label: 'Synthetic reminder', dueAt: NOW });
+  return { ...fixture, itemId };
+}
 describe('durable experience runtime', () => {
+  it.each(['read', 'useful', 'not_useful', 'dismiss'] as const)('keeps dismissal terminal after restart when delayed %s feedback arrives', async action => {
+    const { experience, adaptive, factory, itemId } = await feedbackFixture();
+    const initial = await experience.read(123, 'work');
+    const dismissal = { space: 'work' as const, itemId, action: 'dismiss' as const, eventId: 'dismiss-feedback', expectedRevision: initial.revision };
+    await experience.feedback(123, dismissal);
+    const dismissed = await adaptive.withAccountDocument(123, d => structuredClone(d.experience.inbox[0]));
+    const restarted = factory();
+    const current = await restarted.experience.read(123, 'work');
+    const delayed = { space: 'work' as const, itemId, action, eventId: 'delayed-feedback', expectedRevision: current.revision };
+    expect((await restarted.experience.feedback(123, delayed)).inbox).toEqual([]);
+    expect(await restarted.adaptive.withAccountDocument(123, d => d.experience.inbox[0])).toEqual(dismissed);
+    const after = await restarted.adaptive.withAccountDocument(123, d => structuredClone(d));
+    await restarted.experience.feedback(123, delayed);
+    await restarted.experience.feedback(123, dismissal);
+    expect(await restarted.adaptive.withAccountDocument(123, d => d)).toEqual(after);
+  });
+  it('preserves active read/usefulness transitions and rejects cancelled or wrong-space items', async () => {
+    const { experience, adaptive, agent, itemId } = await feedbackFixture();
+    for (const action of ['useful', 'read', 'not_useful'] as const) {
+      const current = await experience.read(123, 'work');
+      await experience.feedback(123, { space: 'work', itemId, action, eventId: `active-${action}`, expectedRevision: current.revision });
+      expect((await experience.read(123, 'work')).inbox[0]).toMatchObject(action === 'read' ? { status: 'read', feedback: 'useful' } : { feedback: action });
+    }
+    let current = await experience.read(123, 'personal');
+    await expect(experience.feedback(123, { space: 'personal', itemId, action: 'read', eventId: 'wrong-space-read', expectedRevision: current.revision })).rejects.toMatchObject({ code: 'not_found' });
+    await agent('work', false);
+    current = await experience.read(123, 'work');
+    const cancelled = await adaptive.withAccountDocument(123, d => structuredClone(d.experience.inbox[0]));
+    expect(cancelled.status).toBe('cancelled');
+    for (const action of ['read', 'useful', 'dismiss'] as const) {
+      await expect(experience.feedback(123, { space: 'work', itemId, action, eventId: `cancelled-${action}`, expectedRevision: current.revision })).rejects.toMatchObject({ code: 'not_found' });
+    }
+    expect(await adaptive.withAccountDocument(123, d => d.experience.inbox[0])).toEqual(cancelled);
+  });
   it('persists no optional observation until purpose consent AND exact agent grant exist', async () => {
     const { adaptive, experience, grant, agent } = await setup();
     expect(await experience.recordTurn(123, turn('turn1'))).toEqual({ recorded: false, inboxCreated: false });

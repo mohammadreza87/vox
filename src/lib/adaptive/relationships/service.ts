@@ -264,6 +264,8 @@ export class AdaptiveRelationshipService {
       if (!['read', 'dismissed'].includes(action)) throw new AdaptiveError(400, 'invalid_action');
       const item = d.relationships.inbox.find(i => i.id === id && i.key.personaId === agentId && i.key.scope.space === space && i.status !== 'cancelled');
       if (!item) throw new AdaptiveError(404, 'not_found');
+      // Dismissal is terminal, including a delayed read or repeated dismissal.
+      if (item.status === 'dismissed') return;
       item.status = action; if (action === 'dismissed') item.text = ''; d.revision++; d.updatedAt = now;
     });
   }
