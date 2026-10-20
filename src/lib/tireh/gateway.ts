@@ -27,6 +27,8 @@ import { selectMemories } from './memory/retrieval';
 import { decideScope, extractCandidates, resolveCandidateSource, firstNewIndex } from './memory/extraction';
 import { canPersonSee, describeScope, isVisibleToAudience, audienceOf, historyMessageForChat, selectHistoryForChat, snapshotScopeAudience } from './memory/visibility';
 import { groupAddressing } from './group-addressing';
+import type { PrivacySnapshot } from './privacy/snapshot';
+import type { RevisionSource } from './privacy/revisions';
 import { logTelegramDiagnostic, voiceFailureDiagnostic } from './telegram/diagnostics';
 
 export type GroupAction = 'observe' | 'reply' | 'proactive' | 'remember';
@@ -45,6 +47,12 @@ export interface RuntimePrivacyState {
 
 export interface RuntimePrivacy {
   read(personaId: string, personId: string, space?: 'work' | 'personal', chat?: ChatContext): Promise<RuntimePrivacyState>;
+  /** Runs `evaluate` (the boundary's own reads of this interface) over one
+   * read-only snapshot of every input it covers and returns the revisions of
+   * the documents it read. Without it every recheck recomputes in full. */
+  snapshot?<T>(request: { personaId: string; chat: ChatContext; space: 'work' | 'personal' }, evaluate: () => Promise<T>): Promise<PrivacySnapshot<T>>;
+  /** Reads current revisions for a snapshot's vector. Required with `snapshot`. */
+  revisions?: RevisionSource;
   /** Already filtered to every recipient, separate from each participant's private context. */
   readShared?(personaId: string, chat: ChatContext, space: 'work' | 'personal'): Promise<{ revision: string; context: string[] }>;
   /** Fresh server membership/access check; snapshot directory alone is insufficient. */
