@@ -70,6 +70,8 @@ import { adaptiveOptionsFromManifest } from '../adaptive/persistence/config';
 import { openLocalAdaptiveStorage, parseAdaptiveStorageFormat, type AdaptiveStorageFormat } from '../adaptive/persistence/runtime-storage';
 import { SharedMemoryRepository } from '../adaptive/shared/repository';
 import { SharedMemoryService } from '../adaptive/shared/service';
+import { tirehFlags } from '../tireh/flags';
+import { auditMemoryStore, auditShareOfferStore, createFileAuditStore, createFileSupersededNoticeStore, FirestoreAuditStore, FirestoreSupersededNoticeStore } from '../tireh/audit';
 import { AdaptiveExperienceService } from '../adaptive/runtime/service';
 import { AdaptiveObserverService } from '../adaptive/observation/service';
 import { AdaptiveLifecycleService } from '../adaptive/lifecycle/service';
@@ -360,6 +362,8 @@ async function create(): Promise<Studio> {
       }
     });
     studio.deps.shared = new SharedMemoryService(new SharedMemoryRepository(storage.sharedStorage), storage.adaptive!, sharedAuthorityFromStudioStore(storage.store));
+    // S08: content-free vox_audit rows and supersede notices, only when a flag is set at startup.
+    { const flags = tirehFlags(); if (flags.auditLog || flags.sharingV2) { const db = config.storage === 'firestore' ? await (await import('@/lib/firebase-admin')).getAdminDb() : null; const audit = db ? new FirestoreAuditStore(db) : createFileAuditStore(join(config.dataDir, 'vox-audit.jsonl')); const notices = db ? new FirestoreSupersededNoticeStore(db) : createFileSupersededNoticeStore(join(config.dataDir, 'supersede-notices.json')); studio.deps.audit = audit; studio.deps.memoryNotices = notices; studio.deps.memory = { ...studio.deps.memory, memories: auditMemoryStore(studio.deps.memory.memories, audit, notices), offers: auditShareOfferStore(studio.deps.memory.offers, audit) }; } }
     const reminderEndpointId = config.reminderDeliveryEnabled && config.token ? studio.relationshipEndpointId(config.token) : undefined;
     studio.deps.experience = new AdaptiveExperienceService(storage.adaptive!, {
       notificationsEnabled: config.reminderDeliveryEnabled,

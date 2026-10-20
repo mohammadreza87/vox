@@ -10,6 +10,7 @@ import { PersonaGenerationError } from './persona';
 import { ElevenLabsSpeechError } from './media';
 import { ROUTE_TEXT_CHARS } from './skills/route';
 import { logTelegramDiagnostic, type TelegramDiagnostic } from '../tireh/telegram/diagnostics';
+import { tirehFlags } from '../tireh/flags';
 import type { AgentVisibility, Member, MemoryPolicy, Role, SpawnBrief } from './types';
 
 type Json = Record<string, unknown>;
@@ -160,6 +161,7 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
       }
     }
     if (root === 'groups' && method === 'GET') return json({ groups: await studio.listGroups(me) });
+    if (root === 'groups' && id && action === 'resnapshot' && !path[3] && method === 'POST' && tirehFlags().sharingV2) { const b = await body(req); return json(await studio.resnapshotGroupMemory(me, Number(id), typeof b.telegramId === 'number' ? b.telegramId : NaN, b.apply === true)); }
     if (root === 'relationship-observations' && method === 'GET') return json(await studio.relationshipObservations(me));
     if (root === 'audit' && method === 'GET') return json({ audit: await studio.auditLog(me) });
     if (root === 'voices' && method === 'GET') {
@@ -303,7 +305,7 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
             await studio.revokeMemory(me, id, str(b.memoryId, 200) ?? '');
             return json({ ok: true });
           }
-          case 'GET memories': return json({ memories: await studio.memoriesFor(me, id) });
+          case 'GET memories': return json({ memories: await studio.memoriesFor(me, id), ...(tirehFlags().sharingV2 ? { notices: await studio.memoryNoticesFor(me, id) } : {}) });
           case 'DELETE memories': {
             const memoryId = new URL(req.url).searchParams.get('memoryId') ?? '';
             await studio.forgetMemory(me, id, memoryId);
