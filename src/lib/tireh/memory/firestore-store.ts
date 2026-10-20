@@ -16,6 +16,7 @@ import type { ChatMessage, MemoryRecord, ShareOffer } from '../types';
 import type { ChatHistoryStore, MemoryStore, MemoryWriteGuard, NewMemory, ShareOfferStore, UpdateDeduper } from './store';
 import { assertReplacementTarget, forgetClosure, lineageEventIds, sourceEventIds, StaleMemoryWriteError } from './store';
 import { scopeKey } from './visibility';
+import type { RevisionProbe } from '../privacy/revisions';
 import { randomUUID } from 'crypto';
 
 const MEMORIES = 'tireh_memories';
@@ -86,6 +87,12 @@ export class FirestoreMemoryStore implements MemoryStore {
   async safetyRevision(personaId: string): Promise<number> {
     const state = await this.db.collection(MEMORY_STATE).doc(personaId).get();
     return Number(state.data()?.revision ?? 0);
+  }
+
+  async revisionProbe(personaId: string): Promise<RevisionProbe> {
+    const ref = this.db.collection(MEMORY_STATE).doc(personaId);
+    const state = await ref.get();
+    return { key: `firestore:${ref.path}`, value: Number(state.data()?.revision ?? 0), remote: { path: ref.path, field: 'revision' } };
   }
 
   async invalidate(personaId: string): Promise<void> {
@@ -219,6 +226,12 @@ export class FirestoreChatHistoryStore implements ChatHistoryStore {
   async getEpoch(personaId: string): Promise<number> {
     const doc = await this.db.collection(EPOCHS).doc(personaId).get();
     return Number(doc.data()?.epoch ?? 0);
+  }
+
+  async epochProbe(personaId: string): Promise<RevisionProbe> {
+    const ref = this.db.collection(EPOCHS).doc(personaId);
+    const doc = await ref.get();
+    return { key: `firestore:${ref.path}`, value: Number(doc.data()?.epoch ?? 0), remote: { path: ref.path, field: 'epoch' } };
   }
 
   async clearPersona(personaId: string): Promise<void> {
