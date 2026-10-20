@@ -48,10 +48,25 @@ export async function handleLearningRequest(studio: Studio, request: Request, pa
       if (route === 'observations') return await snapshot();
       if (route === 'export') {
         if (!studio.deps.lifecycle) return json({ error: 'export_unavailable' }, 503);
-        const data = await studio.deps.lifecycle.exportAccount(user.id, space);
+        const prepared = await studio.deps.lifecycle.prepareAccountExport(user.id, space);
         const latest = await currentMember();
         if (!latest || latest.role === 'pending') return json({ error: 'access_changed' }, 409);
-        return json(data, 200, { 'Content-Disposition': `attachment; filename="vox-${space}-export.json"` });
+        const serialized = JSON.stringify(prepared.data);
+        const checkRequester = (): Response | undefined => {
+          if (verifyInitData(initData, botToken)?.id !== user.id) return json({ error: 'authentication_required' }, 401);
+          const state = studio.deps.store.readCommittedForEffect?.();
+          if (!state) return json({ error: 'export_unavailable' }, 503);
+          const members = state.members.filter(m => m.telegramId === user.id);
+          if (members.length !== 1 || !['member', 'admin', 'owner', 'superadmin'].includes(members[0].role)) return json({ error: 'access_changed' }, 409);
+          if (verifyInitData(initData, botToken)?.id !== user.id) return json({ error: 'authentication_required' }, 401);
+        };
+        // Serialize before the final synchronous source/auth checks. No awaited
+        // membership read can reopen a gap between this fence and publication.
+        const denied = checkRequester(); if (denied) return denied;
+        prepared.revalidate();
+        const changed = checkRequester(); if (changed) return changed;
+        return new Response(serialized, { headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store',
+          'Content-Disposition': `attachment; filename="vox-${space}-export.json"` } });
       }
       if (route === 'operations') {
         if (!['owner', 'superadmin'].includes(member.role)) return json({ error: 'access_denied' }, 403);
