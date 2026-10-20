@@ -364,6 +364,36 @@ export class SharedMemoryService {
     const latest = await this.listCurrent(telegramId, space, checkPrivateAccount);
     if (sharedDigest(latest) !== sharedDigest(expected)) fail(409, 'export_authority_changed');
   }
+  /** RI1 final attachment fence: synchronous metadata/control reads only. It
+   * compares the prepared export projection, never confers a new shared grant. */
+  captureExportFence(telegramId: number, space: SharedSpace, expected: SharedSnapshot): () => void {
+    const inspect = () => {
+      if (!this.authority.groupNow) return fail(503, 'authority_unavailable');
+      const actor = this.verifiedNow(telegramId, space), state = this.repository.readCommittedForEffect();
+      const relevant = state.containers.filter(c => c.space === space && c.members.some(m => m.telegramId === telegramId));
+      const containers: SharedContainerView[] = [];
+      const groups = relevant.filter(c => c.groupId).map(c => [c.groupId!, this.authority.groupNow!(c.groupId!)] as const);
+      for (const c of relevant) {
+        if (c.status !== 'active' || !c.members.some(m => m.personId === actor.profile.identity.personId && m.telegramId === telegramId && m.status === 'active')) continue;
+        const group = groups.find(([id]) => id === c.groupId)?.[1];
+        const current = c.kind !== 'group' || c.audienceInvalidatedAt === undefined && !!group && !group.hasGuests && group.revision === c.groupRevision &&
+          sharedDigest([...group.memberTelegramIds].sort((a,b) => a-b)) === sharedDigest(c.members.map(m => m.telegramId).sort((a,b) => a-b));
+        containers.push({ id: c.id, space, kind: c.kind, ...(c.groupId ? { groupId: c.groupId } : {}), revision: c.revision, ownerPersonId: c.ownerPersonId,
+          recipients: c.members.map(m => ({ telegramId: m.telegramId, personId: m.personId, active: m.status === 'active' })), agents: c.agents,
+          status: current ? 'active' : 'audience_changed', memories: current ? c.memories.filter(m => this.allowed(c, m, actor, [actor], 'read'))
+            .map(m => ({ id: m.id, revision: m.revision, text: m.text!, authorPersonId: m.authorPersonId, createdAt: m.createdAt, expiresAt: m.expiresAt })) : [] });
+      }
+      if (sharedDigest({ revision: state.revision, space, containers }) !== sharedDigest(expected)) return fail(409, 'export_authority_changed');
+      // Own-data management checks the requester, matching listCurrent. Other
+      // recipients' expired profiles do not authorize or prevent this export.
+      const stamp = sharedDigest([state.revision, groups, this.identityKey([actor])]);
+      if (this.repository.readCommittedForEffect().revision !== state.revision || this.identityKey([this.verifiedNow(telegramId, space)]) !== this.identityKey([actor]) ||
+        sharedDigest(groups) !== sharedDigest(relevant.filter(c => c.groupId).map(c => [c.groupId!, this.authority.groupNow!(c.groupId!)]))) return fail(409, 'export_authority_changed');
+      return stamp;
+    };
+    const stamp = inspect();
+    return () => { if (inspect() !== stamp) return fail(409, 'export_authority_changed'); };
+  }
   private async listCurrent(telegramId: number, space: SharedSpace, beforeDelivery?: () => Promise<void>): Promise<SharedSnapshot> {
     const actor = await this.verified(telegramId, space);
     const state = await this.currentDocument(space, telegramId);

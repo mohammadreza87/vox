@@ -22,6 +22,7 @@ import { SharedMemoryError, type SharedMemoryService } from '../adaptive/shared/
 import type { AdaptiveExperienceService } from '../adaptive/runtime/service';
 import type { VoiceIdentityService } from '../adaptive/voice-identity/service';
 import type { AdaptiveObserverService } from '../adaptive/observation/service';
+import type { RightsIntakeService } from '../adaptive/rights-intake/service';
 import type { AdaptiveLifecycleService } from '../adaptive/lifecycle/service';
 import type { AdaptiveMaintenanceRunner } from '../adaptive/lifecycle/maintenance';
 import type { ReminderDeliveryService } from '../adaptive/runtime/reminders/service';
@@ -121,6 +122,7 @@ export interface StudioDeps {
   voiceIdentity?: VoiceIdentityService;
   observer?: AdaptiveObserverService;
   lifecycle?: AdaptiveLifecycleService;
+  rights?: RightsIntakeService;
   maintenance?: AdaptiveMaintenanceRunner;
   reminderDelivery?: ReminderDeliveryService;
   /** Credential-bound opaque identifier; never a bot token or a client grant. */

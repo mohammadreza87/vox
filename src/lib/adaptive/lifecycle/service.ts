@@ -34,6 +34,36 @@ export class AdaptiveLifecycleService {
     if (before !== digest([d.experience, d.relationships, d.receipts])) { d.revision++; d.updatedAt = now; }
   }
   async exportAccount(telegramId: number, space: SpaceKind) {
+    return (await this.buildAccountExport(telegramId, space)).data;
+  }
+  /** A fresh export plus a synchronous final fence for an awaited receipt commit. */
+  async prepareAccountExport(telegramId: number, space: SpaceKind) {
+    const built = await this.buildAccountExport(telegramId, space);
+    const sharedFence = built.shared ? this.options.shared!.captureExportFence(telegramId, space, built.shared) : undefined;
+    const payloadDeadline = Math.min(built.data.confirmedUntil,
+      ...[...built.data.memories, ...built.data.preferenceChanges, ...built.data.reminders,
+        ...built.data.checkIns, ...built.data.observerEvents, ...built.data.sharedContributions,
+        ...(built.data.preferenceLearning?.intents ?? []), ...(built.data.preferenceLearning?.candidates ?? []),
+        ...(built.data.preferenceLearning?.suppressions ?? [])].map(row => row.expiresAt));
+    const inspect = () => {
+      const authority = this.adaptive.readAuthorityNow(telegramId, space);
+      if (!authority.identity.confirmed || !authority.explicitMemoryAvailable) return fail(409, 'export_authority_changed');
+      const read = this.adaptive.readCommittedForEffect(telegramId, (d, now) => {
+        if (!this.adaptive.isProfileConfirmed(d, now) || now >= payloadDeadline || d.revision !== built.data.revision || d.binding!.expiresAt !== built.data.confirmedUntil) return fail(409, 'export_authority_changed');
+        return digest([d, authority]);
+      });
+      if (read.status !== 'ready') return fail(503, 'export_unavailable');
+      return read.value;
+    };
+    const stamp = inspect();
+    const revalidate = () => {
+      if (inspect() !== stamp) return fail(409, 'export_authority_changed');
+      sharedFence?.();
+      if (inspect() !== stamp) return fail(409, 'export_authority_changed');
+    };
+    revalidate(); return { data: built.data, revalidate };
+  }
+  private async buildAccountExport(telegramId: number, space: SpaceKind) {
     selectedSpace(space);
     const own = await this.adaptive.withAccountDocument(telegramId, (d, now) => {
       if (!this.adaptive.isProfileConfirmed(d, now)) fail(403, 'profile_confirmation_required');
@@ -87,9 +117,9 @@ export class AdaptiveLifecycleService {
     });
     if (shared) await this.options.shared!.revalidateExport(telegramId, space, shared, checkPrivateAccount);
     else await checkPrivateAccount();
-    return { ...own, sharedContributions: contributions,
+    return { shared, data: { ...own, sharedContributions: contributions,
       coverage: { privateAccount: 'included' as const, shared: shared ? 'authorized_published_only' as const : 'not_configured' as const,
-        providers: 'unavailable' as const, backups: 'unavailable' as const } };
+        providers: 'unavailable' as const, backups: 'unavailable' as const } } };
   }
   /** Runs without profile confirmation or feature activation; uses existing expiry,
    * revocation and lineage invalidation in AdaptiveService's transaction. */

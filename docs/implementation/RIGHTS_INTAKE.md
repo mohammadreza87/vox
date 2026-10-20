@@ -1,0 +1,52 @@
+# Account privacy requests / درخواست حریم خصوصی حساب
+
+Implementation candidate, 20 October 2026. This RI1 increment of VOX-056 is awaiting independent acceptance and release. It does not complete VOX-056 or enable production intake. Operator: Joyixir OÜ; privacy contact: info@joyixir.com. See [operator details](OPERATOR_DETAILS.md), [privacy requirements](PRIVACY_AND_CONSENT.md), and [personalization pause](PRODUCT_PAUSE.md).
+
+## User behavior
+
+An existing signed-in account can submit a metadata-only request in Work or Personal, revisit its reference and current status, and deliberately prepare a fresh authorized local account export. The EN/FA Privacy panel works independently of optional personalization consent. Existing pending members can submit/read metadata; private export still requires current membership, confirmed account/space authority and the existing lifecycle permissions. Account authentication does not establish the natural person's identity.
+
+The configured policy chooses from access/export, correction, erasure, formal restriction, objection, portability and consent-withdrawal request kinds. Receipt records a request for review: it does not change consent, pause processing, correct or erase data. Existing immediate controls remain separate deliberate actions. Unknown guests and delegated requests are not implemented.
+
+Only an access/export request can prepare a current local attachment. It contains the current authorized account projection and currently authorized published shared contributions. The operator cannot download it. Provider and backup coverage remain unavailable; neither the service nor UI calls this full fulfillment or verified delivery. Repeating an old command returns current metadata, never an old attachment. A new deliberate download regenerates current data and rechecks authentication, membership, policy, source revisions, shared membership and expiry after awaited work and before publication.
+
+The statuses are received, operator review, awaiting requester, operator action pending, local export prepared, and closed without fulfillment. There is no generic completed/deleted/delivered state. Missing legal-deadline rules produce a visible unresolved deadline with no fabricated duration. A lost response requires a current-status refresh; the browser never silently retries a mutation, retains request data in local storage, or reuses an export buffer across account/space changes.
+
+## Authority and persistence
+
+`/api/studio/rights` uses signed Telegram initData, committed membership, same-origin JSON mutations, 4 KiB bodies, rate limits, strict schemas, no-store/no-referrer responses and minimized errors. Requester IDs are server-derived; opaque request references grant no authority. Operator queue/action access requires both current owner/superadmin membership and an explicit privacy-operator allowlist. Queue projections contain minimal request metadata and keyed pseudonymous account references, with short-lived authenticated encrypted handles/cursors. No transcript, note text, free-text request, identity document, export bytes or raw provider error is stored in the rights ledger.
+
+The additive ledger is separate from canonical memory, at `<STUDIO_DATA_DIR>/rights-intake/v1`. RI1 supports one persistent Studio process with the file runtime configuration; serverless/Firestore or multiple writer processes are unsupported. Both prepared SQLite and prepared FILE canonical adapters remain separately qualified. Per-account atomic ledgers have bounded descriptor reads with no symlink following, record locks, fsync and atomic rename. Bounds: 20 open/100 retained requests per account, 64 KiB per ledger, 32 audit transitions per request, 128 command receipts. Capacity fails explicitly instead of evicting unresolved evidence. Directory enumeration is bounded in returned items but is not an indexed global queue.
+
+`.clock-v1.json` persists observed server time, including read/status observations. An empty status visit may create this clock sidecar but does not allocate an account ledger or adaptive profile. A clock regression fails closed. An interrupted `.clock-v1.lock` is never automatically removed by age: stop all writers, inspect the recorded process and clock/ledger state, preserve evidence, and explicitly reconcile the lock under operator control before restarting. Do not delete a live lock or reset the clock to recover availability.
+
+## Explicit activation and rollback
+
+No key or policy is installed by this code release. Intake remains unavailable until all of these are reviewed and provisioned:
+
+- `STUDIO_RIGHTS_KEY_BASE64`: a dedicated server-generated 32-byte key, protected separately from bot credentials; never put it in source, chat or client configuration.
+- `STUDIO_RIGHTS_POLICY_JSON`: the strict versioned schema in `src/lib/adaptive/rights-intake/policy.ts`, including review owner/reference, effective/expiry times, permitted request kinds, current operator allowlist, single-process topology, explicit retention/handle durations and any reviewed account/space/kind deadline rules. No default legal deadline or retention term exists.
+- Exact `rights-intake-ri1-v1` copy version and SHA-256 hashes of the actual JSON-serialized EN/FA `rightsCopy` objects in `notice.ts`. Any wording change needs policy re-review; a well-shaped unrelated hash is insufficient.
+- A currently authorized operator, documented handling of unresolved requests, storage/key access controls, and independently qualified topology and retention procedures.
+
+Reached request review/retention dates stop new admissions pending operator review. RI1 does not implement automatic reassessment or purge of request/audit records; expired command receipts may be removed during a later authorized transaction. Policy change alone does not rewrite past deadlines or extend retention. Public enablement requires the missing operational retention workflow to be resolved; synthetic tests do not provide legal approval.
+
+Rollback stops new admissions, preserves the rights directory/key and current receipts for reviewed handling, and never restores older canonical data over newer deletions or choices. An older binary without RI1 cannot serve rights status; arrange explicit operator continuity before such a rollback. Do not convert production canonical storage or enable unrelated Decisions, observation, notifications or voice identity as part of this release.
+
+Remaining work includes no-account verification, delegated requests, jurisdiction/deadline extensions, formal restriction/objection enforcement, cross-store erasure, provider acknowledgments, backups, retention reassessment/purge and independently verified fulfillment. These remain open in VOX-056.
+
+## فارسی
+
+این نسخهٔ RI1 بخشی از VOX-056 است و هنوز منتظر پذیرش مستقل و انتشار است. انتشار کد به معنی فعال‌شدن دریافت درخواست در محیط اصلی یا تکمیل حقوق کاربر نیست. اپراتور Joyixir OÜ و راه تماس حریم خصوصی info@joyixir.com است.
+
+حساب واردشده می‌تواند برای فضای کاری یا شخصی یک درخواست فقط با فراداده ثبت کند و شمارهٔ پیگیری و وضعیت فعلی را ببیند. رضایت شخصی‌سازی اختیاری پیش‌شرط ثبت درخواست نیست. حساب موجود با عضویت در انتظار می‌تواند فراداده ثبت کند، اما دریافت خروجی خصوصی به اختیار فعلی حساب و فضای تأییدشده نیاز دارد. احراز حساب، هویت شخص حقیقی یا فردی در حساب دیگر را ثابت نمی‌کند. درخواست مهمان بدون حساب و درخواست نماینده هنوز پشتیبانی نمی‌شود.
+
+ثبت درخواست به‌تنهایی رضایت را تغییر نمی‌دهد، پردازش را متوقف نمی‌کند و داده‌ای را اصلاح یا حذف نمی‌کند. کنترل‌های فوری مکث شخصی‌سازی، پس‌گرفتن رضایت و ویرایش یا حذف یادداشت جداگانه‌اند. فقط درخواست دسترسی/خروجی می‌تواند یک خروجی محلی تازه از داده‌های مجاز فعلی بسازد؛ اپراتور به این فایل دسترسی ندارد. داده‌های ارائه‌دهندگان و پشتیبان‌ها و تحویل فایل تأیید نشده‌اند. تکرار فرمان قبلی فقط وضعیت فعلی را برمی‌گرداند و فایل قدیمی را بازیابی نمی‌کند. دریافت مجدد باید انتخاب تازهٔ کاربر باشد و اختیار، عضویت، سیاست، نسخهٔ منبع و انقضا در آخرین مرحله دوباره بررسی می‌شوند.
+
+وضعیت‌ها شامل دریافت، بررسی اپراتور، انتظار اقدام درخواست‌کننده، انتظار اقدام اپراتور، آماده‌شدن خروجی محلی و بسته‌شدن بدون انجام است؛ وضعیت عمومی «انجام شد»، «حذف شد» یا «تحویل شد» وجود ندارد. اگر قانون مهلت بررسی‌شده مشخص نباشد، مهلت نامشخص نمایش داده می‌شود و هیچ مدت قانونی فرضی تعیین نمی‌شود. پاسخ گم‌شده با تازه‌سازی وضعیت پیگیری می‌شود؛ مرورگر فرمان را خودکار تکرار نمی‌کند و اطلاعات درخواست را در ذخیره‌سازی محلی نگه نمی‌دارد.
+
+دفتر درخواست در مسیر جداگانهٔ `rights-intake/v1` قرار دارد. نسخهٔ نخست فقط یک فرایند پایدار را پشتیبانی می‌کند؛ چند نویسنده، Firestore و محیط بی‌سرور هنوز پشتیبانی نمی‌شوند. دسترسی صف اپراتور هم به نقش فعلی مالک/ابرمدیر و هم فهرست صریح اپراتور نیاز دارد. فقط فرادادهٔ حداقلی و شناسهٔ مستعار نمایش داده می‌شود، نه متن یادداشت، مکالمه یا فایل خروجی. خواندن وضعیت خالی می‌تواند فقط فایل ساعت `.clock-v1.json` را بسازد، نه دفتر حساب یا پروفایل. عقب‌رفتن ساعت یا قفل باقی‌مانده باعث توقف امن می‌شود؛ بازیابی قفل نیازمند توقف نویسنده‌ها، بررسی و اقدام صریح اپراتور است و حذف خودکار قفل بر اساس سن مجاز نیست.
+
+فعال‌سازی به کلید اختصاصی تولیدشده روی سرور، سیاست بررسی‌شدهٔ `STUDIO_RIGHTS_POLICY_JSON`، اپراتور فعلی، مدت‌های صریح نگهداری و تطابق نسخه و هش متن انگلیسی/فارسی نیاز دارد. هیچ کلید یا سیاستی با انتشار کد نصب نمی‌شود. رسیدن زمان بازبینی نگهداری، پذیرش درخواست تازه را تا بررسی متوقف می‌کند. بازبینی و پاک‌سازی خودکار دفتر درخواست هنوز پیاده نشده و پیش از فعال‌سازی عمومی باید فرآیند عملیاتی آن مشخص شود. تغییر سیاست، مهلت یا نگهداری قبلی را بی‌صدا تمدید نمی‌کند.
+
+بازگشت نسخه باید دفتر درخواست، کلید و رسیدهای فعلی را حفظ کند؛ نسخهٔ قدیمی بدون RI1 وضعیت درخواست را ارائه نمی‌کند و ادامهٔ پیگیری توسط اپراتور باید از قبل تعیین شود. بازیابی دادهٔ قدیمی روی حذف‌ها و انتخاب‌های جدید مجاز نیست. تأیید مهمان، نماینده، مهلت‌های حقوقی، محدودسازی و اعتراض رسمی، حذف سراسری، ارائه‌دهندگان، پشتیبان‌ها و تأیید انجام همچنان کار باز هستند.
