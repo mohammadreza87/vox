@@ -12,7 +12,7 @@ interface FileState {
   chats: Record<string, ChatMessage[]>;
   epochs?: Record<string, number>;
 }
-const DATE_KEYS = new Set(['at', 'createdAt', 'updatedAt']);
+const DATE_KEYS = new Set(['at', 'createdAt', 'updatedAt', 'validFrom', 'invalidatedAt', 'lastRetrievedAt', 'expiresAt', 'reviewAfter']);
 function reviveDates(_key: string, value: unknown) {
   return DATE_KEYS.has(_key) && typeof value === 'string' ? new Date(value) : value;
 }
@@ -77,7 +77,7 @@ export function createFileStores(path: string) {
   };
   history.clear = (personaId) => history.clearPersona(personaId);
   return {
-    memories: wrap(memories, ['add', 'addIfEpoch', 'update', 'updateIfShareVersion', 'delete', 'invalidate'], ['get', 'listActive', 'safetyRevision']),
+    memories: wrap(memories, ['add', 'addIfEpoch', 'update', 'updateIfShareVersion', 'delete', 'invalidate', 'addTombstones'], ['get', 'listActive', 'safetyRevision', 'tombstonesOf']),
     offers: wrap(offers, ['create', 'setStatus'], ['get']),
     history: wrap(history, ['append', 'clearPersona'], ['recent', 'getEpoch']),
     deduper: new InMemoryUpdateDeduper(),
