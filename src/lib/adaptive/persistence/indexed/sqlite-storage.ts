@@ -266,7 +266,8 @@ export class SqliteAdaptiveStorage implements AdaptiveStorage {
         if (!row) return { status: 'ready' as const, document: null };
         this.io.canonicalImageReads++; const document: unknown = JSON.parse(row.canonical);
         if (digest(document) !== row.canonical_digest) throw new IndexedStorageError('corrupt');
-        this.validator(document, accountId, now); return { status: 'ready' as const, document };
+        if (this.validator(document, accountId, now).schemaVersion !== this.canonicalSchemaVersion) throw new IndexedStorageError('invalid_controls');
+        return { status: 'ready' as const, document };
       }, () => undefined);
     } catch (error) { if (error instanceof IndexedStorageError && error.reason === 'busy') return { status: 'busy' }; throw error; }
   }
