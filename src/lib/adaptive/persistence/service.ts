@@ -746,7 +746,7 @@ export class AdaptiveService {
       const match = /^tg-([1-9]\d*)$/.exec(legacyPersonId);
       if (!match) return { revision: 'unconfirmed', memoryEnabled: false, historyEnabled: false, storedContextAllowed: false };
       const telegramId = Number(match[1]);
-      if (this.repository.storage.indexed || this.repository.storage.canonicalSchemaVersion === 2) return this.withDirectAuthority(telegramId, space,
+      if (this.repository.storage.indexed || this.repository.storage.canonicalSchemaVersion === 2 || this.repository.storage.canonicalSchemaVersion === 3) return this.withDirectAuthority(telegramId, space,
         (d, now, namespace) => this.runtimePrivacyEvaluation(d, now, namespace, personaId, space));
       const evaluate = (d: AdaptiveDocument, now: number) => this.runtimePrivacyEvaluation(d, now, this.storeIdentity, personaId, space).value;
       // A boundary read is pure. Serve it from the committed document instead of
