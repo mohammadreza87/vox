@@ -1,7 +1,7 @@
 import { expect, it, vi } from 'vitest';
 import { runInNewContext } from 'node:vm';
 import { z } from 'zod';
-import { isSchemaValidationError } from '../error-contract';
+import { isSchemaValidationError, publicDomainError } from '../error-contract';
 import { AdaptiveError, type AdaptiveService } from '../adaptive/persistence/service';
 import { SharedMemoryError, type SharedMemoryService } from '../adaptive/shared/service';
 import { StudioRateLimitError } from '../studio/ratelimit';
@@ -179,4 +179,9 @@ it('classifies native errors without traversing a hostile prototype', async () =
   const invalid = await handleConnectionsRequest(studio(parsed.error), {} as ConnectionsApplication, request(), [], TOKEN);
   expect(invalid.status).toBe(400); expect(await invalid.json()).toEqual({ error: 'invalid_request' });
   expect(trap).not.toHaveBeenCalled();
+});
+
+it('preserves only branded 410 record expiry errors across independent bundles', () => {
+  expect(publicDomainError(otherBundleError('RightsError', { status: 410, code: 'rights_record_expired' }), 'RightsError')).toBe(true);
+  expect(publicDomainError(Object.assign(new Error('private'), { name: 'RightsError', status: 410, code: 'rights_record_expired' }), 'RightsError')).toBe(false);
 });

@@ -68,6 +68,7 @@ function RequestPanel({ space, locale, session }: { space: RightsSpace; locale: 
     </select>
     <div className="vx-privacy-actions" style={{ flexWrap: 'wrap' }}><button className="vx-btn vx-btn-secondary" disabled={disabled} onClick={() => void run()}>{c.submit}</button><button className="vx-btn vx-btn-secondary" disabled={busy} onClick={() => void load()}>{c.refresh}</button></div>
     {data && !data.requests.length && <p className="vx-small">{c.empty}</p>}
+    {data?.expiredRequests?.map(row => <p key={row.requestId} className="vx-small" role="status">{c.reference}: <bdi>{row.requestId}</bdi> · {c.expiredRecord} {rightsDate(row.retainUntil, locale)}</p>)}
     {data?.requests.map(row => <article className="vx-card" key={row.requestId} style={{ minWidth: 0, overflowWrap: 'anywhere' }} aria-label={`${c.kinds[row.kind]} · ${row.requestId}`}>
       <h3 className="vx-head">{c.kinds[row.kind]} · {c[row.space]}</h3>
       <p className="vx-small">{c.reference}: <bdi>{row.requestId}</bdi></p>

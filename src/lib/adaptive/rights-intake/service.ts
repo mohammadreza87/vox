@@ -1,8 +1,8 @@
 import { createCipheriv, createDecipheriv, createHmac, randomBytes, randomUUID } from 'crypto';
 import { z } from 'zod';
 import { accountIdFor, digest } from '../persistence/repository';
-import { createInputSchema, integer, operatorActionSchema, reference, requesterActionSchema, spaceSchema,
-  type AccountLedger, type CreateInput, type OperatorAction, type RequestRecord, type RequesterAction,
+import { createInputSchema, retentionActionSchema, integer, operatorActionSchema, reference, requesterActionSchema, spaceSchema,
+  type RetentionAction, type RetentionResult, type AccountLedger, type CreateInput, type OperatorAction, type RequestRecord, type RequesterAction,
   type RightsMutation, type RightsOperations, type RightsOperationView, type RightsRequestView, type RightsSnapshot, type RightsSpace } from './contracts';
 import { rightsPolicySchema, type RightsPolicy } from './policy';
 import { fail, RightsError, RightsReplay, RightsRepository } from './repository';
@@ -44,7 +44,7 @@ export class RightsIntakeService {
     if (!result.success || this.options.key?.length !== 32 || result.data.effectiveAt > now || result.data.expiresAt <= now) return undefined;
     const p = result.data;
     if ([p.retention.requestReviewAfterMs, p.retention.auditRetentionMs, p.retention.receiptRetentionMs, p.handleLifetimeMs,
-      ...p.deadlineRules.map(rule => rule.dueAfterMs)].some(duration => !Number.isSafeInteger(now + duration))) return undefined;
+      ...(p.retentionOperations ? Object.values(p.retentionOperations) : []), ...p.deadlineRules.map(rule => rule.dueAfterMs)].some(duration => !Number.isSafeInteger(now + duration))) return undefined;
     // Intake needs a currently configured privacy operator, as well as an
     // explicit allowlist. A removed/non-owner member cannot keep it enabled.
     if (!p.privacyOperatorIds.some(id => { try { this.options.assertOperatorNow(id); return true; } catch { return false; } })) return undefined;
@@ -101,13 +101,13 @@ export class RightsIntakeService {
   }
   private row(d: AccountLedger | null, requestId: string, space: RightsSpace): RequestRecord {
     const r = d?.requests.find(r => r.requestId === requestId && r.space === space);
-    if (!r) return fail(404, 'not_found'); return r;
+    if (!r) { if (d?.tombstones.some(t => t.requestId === requestId && t.space === space && t.retainUntil > this.now(d))) return fail(410, 'rights_record_expired'); return fail(404, 'not_found'); } return r;
   }
   snapshot(id: number, space: RightsSpace): RightsSnapshot {
     spaceSchema.parse(space); const d = this.read(id), now = this.now(d), p = this.policy(now), available = this.available(d, now);
     const result: RightsSnapshot = { supportedKinds: available && p ? [...p.supportedKinds] : [], available, policyStatus: available ? 'available' : 'unavailable',
       ...(available && p ? { intakePolicy: { id: p.id, revision: p.revision, copyVersion: p.copyVersion } } : {}),
-      requests: (d?.requests ?? []).filter(r => r.space === space).map(r => this.view(r, now)), supportContact: 'info@joyixir.com' };
+      requests: (d?.requests ?? []).filter(r => r.space === space).map(r => this.view(r, now)), expiredRequests: (d?.tombstones ?? []).filter(t => t.space === space && t.retainUntil > now).map(t => ({ ...t })), supportContact: 'info@joyixir.com' };
     this.options.assertAccountNow(id); this.now(d); return result;
   }
   detail(id: number, space: RightsSpace, requestId: string): Pick<RightsMutation, 'request' | 'policyStatus'> {
@@ -118,6 +118,7 @@ export class RightsIntakeService {
     const receipt = d?.commandReceipts.find(r => r.eventId === eventId && r.retainUntil > now);
     if (!receipt) return undefined;
     if (receipt.fingerprint !== fingerprint) return fail(409, 'rights_conflict');
+    if (d!.tombstones.some(t => t.requestId === receipt.requestId)) return fail(410, 'rights_record_expired');
     return d!.requests.find(r => r.requestId === receipt.requestId) ?? fail(503, 'rights_storage_unavailable');
   }
   private async readForMutation(id: number): Promise<AccountLedger | null> {
@@ -138,10 +139,14 @@ export class RightsIntakeService {
   }
   private admit(d: AccountLedger, p: RightsPolicy, now: number): void {
     if (d.requests.some(r => r.retention.reviewOrExpiryAt <= now)) return fail(503, 'rights_retention_review_required');
-    // Only expired command receipts are removable. Unresolved requests/audits are never evicted.
-    d.commandReceipts = d.commandReceipts.filter(r => r.retainUntil > now);
+    // No unresolved request/audit is evicted. Continuity expires only at its recorded horizon.
+    this.cleanContinuity(d, now);
     if (d.commandReceipts.length >= 128) return fail(409, 'rights_capacity');
     this.requirePolicy(now, p);
+  }
+  private cleanContinuity(d: AccountLedger, now: number): void {
+    d.commandReceipts = d.commandReceipts.filter(r => r.retainUntil > now);
+    d.tombstones = d.tombstones.filter(t => t.retainUntil > now);
   }
   private receipt(d: AccountLedger, row: RequestRecord, input: { eventId: string; action?: string }, fp: string, now: number, p: RightsPolicy): void {
     d.commandReceipts.push({ eventId: input.eventId, fingerprint: fp, requestId: row.requestId, resultingRequestRevision: row.revision,
@@ -165,7 +170,7 @@ export class RightsIntakeService {
           localeAtSubmission: input.locale, intakePolicy: { id: p.id, revision: p.revision, copyVersion: p.copyVersion }, requester: { assurance: 'signed_telegram_account', personVerification: 'not_established' }, state: 'received', reasonCode: 'review_pending',
           deadline: rule ? { state: 'scheduled', dueAt: safeAdd(now, rule.dueAfterMs), policyId: p.id, policyRevision: p.revision, ruleId: rule.id, anchorAt: now } : { state: 'reviewed_policy_unavailable', dueAt: null, reason: 'no_matching_rule' },
           coverage: { localAccount: 'not_started', shared: 'not_started', providers: 'unsupported', backups: 'unsupported', guests: 'unsupported', deletion: 'not_implemented', formalRestriction: 'not_implemented' },
-          retention: { policyId: p.id, policyRevision: p.revision, reviewOrExpiryAt: safeAdd(now, p.retention.requestReviewAfterMs) },
+          retention: { policyId: p.id, policyRevision: p.revision, reviewOrExpiryAt: safeAdd(now, p.retention.requestReviewAfterMs), auditRetainUntil: safeAdd(now, p.retention.auditRetentionMs) },
           audit: [{ seq: 1, at: now, action: 'request_received', actor: 'requester', actorRef: this.ref('requester', accountId), from: null, to: 'received', policyRevision: p.revision }] };
         d.requests.push(row); this.receipt(d, row, input, fp, now, p);
       }, () => { this.options.assertAccountNow(id); this.requirePolicy(this.now(), p); });
@@ -185,6 +190,7 @@ export class RightsIntakeService {
     else return fail(400, 'unsupported_action');
     if (action === 'close_unfulfilled' && !['outside_supported_scope','duplicate_request','unable_to_verify','service_unavailable'].includes(reason ?? '')) return fail(400, 'unsupported_action');
     r.revision = bump(r.revision); r.updatedAt = now; r.state = to; r.reasonCode = reason;
+    if (to === 'closed_unfulfilled' && p.retentionOperations) r.retention.terminalRetainUntil = safeAdd(now, p.retentionOperations.terminalRetentionMs);
     r.audit.push({ seq: r.audit.length + 1, at: now, action: audit, actor, actorRef: this.ref(actor, actorId), from, to, ...(reason ? { reasonCode: reason } : {}), policyRevision: p.revision });
   }
   async requesterAction(id: number, space: RightsSpace, requestId: string, raw: RequesterAction): Promise<{ result: RightsMutation; prepared?: PreparedRightsExport }> {
@@ -209,7 +215,9 @@ export class RightsIntakeService {
   }
   private operationView(r: RequestRecord, operator: number, p: RightsPolicy, now: number): RightsOperationView {
     const { version, requestId, space, kind, revision, createdAt, updatedAt, state, reasonCode, deadline, coverage, retentionReviewRequired } = this.view(r, now);
+    const retentionAt = terminal(r) ? this.purgeAt(r, p) : r.retention.reviewOrExpiryAt;
     return { version, requestId, space, kind, revision, createdAt, updatedAt, state, ...(reasonCode ? { reasonCode } : {}), deadline, coverage, retentionReviewRequired,
+      ...(p.retentionOperations ? { retentionActions: terminal(r) ? (this.purgeAt(r, p) <= now ? ['reassess_retention', 'purge_terminal_record'] : ['reassess_retention']) : ['reassess_retention'], retentionPolicyRevision: p.revision, ...(retentionAt === Number.MAX_SAFE_INTEGER ? {} : { retentionAt }) } : {}),
       accountRef: this.ref('account', r.accountId), operationHandle: this.seal({ version: 1, type: 'operation', operatorRef: this.ref('operator', String(operator)), policy: digest(p), issuedAt: now, expiresAt: safeAdd(now, p.handleLifetimeMs), accountId: r.accountId, requestId, space }),
       audit: r.audit.map(a => ({ seq: a.seq, at: a.at, action: a.action, actor: a.actor, from: a.from, to: a.to, ...(a.reasonCode ? { reasonCode: a.reasonCode } : {}), policyRevision: a.policyRevision })) };
   }
@@ -223,6 +231,57 @@ export class RightsIntakeService {
     const nextCursor = page.next ? this.seal({ version: 1, type: 'cursor', operatorRef: this.ref('operator', String(operator)), policy: digest(p), issuedAt: now, expiresAt: safeAdd(now, p.handleLifetimeMs), after: page.next }) : undefined;
     this.operator(operator, p);
     return { requests, ...(nextCursor ? { nextCursor } : {}), policyStatus: rows.some(r => r.retention.reviewOrExpiryAt <= this.now()) ? 'unavailable' : 'available' };
+  }
+  private purgeAt(r: RequestRecord, p: RightsPolicy): number {
+    const closed = r.audit.find(a => a.action === 'request_closed');
+    if (!closed || !terminal(r) || !p.retentionOperations || r.retention.auditRetainUntil === undefined || r.retention.terminalRetainUntil === undefined) return Number.MAX_SAFE_INTEGER;
+    return Math.max(r.retention.reviewOrExpiryAt, r.retention.auditRetainUntil, r.retention.terminalRetainUntil, safeAdd(closed.at, p.retentionOperations.terminalRetentionMs), safeAdd(r.createdAt, p.retention.auditRetentionMs));
+  }
+  /** Explicit operator command; no age-based sweep ever closes or deletes an unresolved request. */
+  async retentionAction(operator: number, requestId: string, raw: RetentionAction): Promise<RetentionResult> {
+    reference.parse(requestId);
+    const input = retentionActionSchema.parse(raw), p = this.operator(operator);
+    if (!p.retentionOperations) return fail(503, 'rights_retention_policy_unavailable');
+    if (p.revision !== input.expectedPolicyRevision) return fail(409, 'rights_conflict');
+    const token = this.open(input.operationHandle, operator, p, 'operation');
+    if (token.requestId !== requestId) return fail(403, 'operation_handle_invalid');
+    const accountId = token.accountId!, space = token.space!;
+    // Handle refresh is permitted for an exact semantic retry; addressing and policy are still authenticated.
+    const fp = digest(['retention', operator, accountId, space, requestId, { ...input, operationHandle: undefined }]);
+    let replayed = false;
+    try {
+      await this.repository.transaction(accountId, () => this.now(), d => {
+        const now = this.now(d), previous = d.commandReceipts.find(r => r.eventId === input.eventId && r.retainUntil > now);
+        if (previous) { if (previous.fingerprint !== fp) return fail(409, 'rights_conflict'); throw new RightsReplay(); }
+        this.cleanContinuity(d, now);
+        if (d.commandReceipts.length >= 128) return fail(409, 'rights_capacity');
+        const r = this.row(d, requestId, space);
+        if (r.revision !== input.expectedRevision) return fail(409, 'rights_conflict');
+        if (input.action === 'purge_terminal_record') {
+          if (!terminal(r) || this.purgeAt(r, p) > now) return fail(409, 'rights_retention_not_eligible');
+          if (d.tombstones.length >= 128) return fail(409, 'rights_capacity');
+          this.receipt(d, r, input, fp, now, p);
+          const retainUntil = Math.max(safeAdd(now, p.retentionOperations!.continuityRetentionMs), ...d.commandReceipts.filter(c => c.requestId === requestId).map(c => c.retainUntil));
+          // Keep every retained event fingerprint for exactly the same continuity window.
+          // Otherwise an earlier create receipt could expire before its tombstone.
+          for (const receipt of d.commandReceipts) if (receipt.requestId === requestId) {
+            receipt.retainUntil = retainUntil; receipt.action = 'purged_record';
+            receipt.recordedAt = now; receipt.resultingRequestRevision = r.revision;
+          }
+          d.tombstones.push({ requestId, space, lastRevision: r.revision, purgedAt: now, retainUntil });
+          d.requests = d.requests.filter(row => row.requestId !== requestId);
+        } else {
+          if (r.audit.length >= 32) return fail(409, 'rights_capacity');
+          r.retention = { policyId: p.id, policyRevision: p.revision, auditRetainUntil: safeAdd(r.createdAt, p.retention.auditRetentionMs), ...(terminal(r) ? { terminalRetainUntil: safeAdd(r.audit.find(a => a.action === 'request_closed')!.at, p.retentionOperations!.terminalRetentionMs) } : {}), reviewOrExpiryAt: terminal(r) ? Math.max(safeAdd(r.audit.find(a => a.action === 'request_closed')!.at, p.retentionOperations!.terminalRetentionMs), safeAdd(r.createdAt, p.retention.auditRetentionMs)) : safeAdd(now, p.retention.requestReviewAfterMs) };
+          r.revision = bump(r.revision); r.updatedAt = now;
+          r.audit.push({ seq: r.audit.length + 1, at: now, action: 'retention_reassessed', actor: 'privacy_operator', actorRef: this.ref('privacy_operator', String(operator)), from: r.state, to: r.state, ...(r.reasonCode ? { reasonCode: r.reasonCode } : {}), policyRevision: p.revision });
+          this.receipt(d, r, input, fp, now, p);
+        }
+      }, () => { this.operator(operator, p); this.open(input.operationHandle, operator, p, 'operation'); });
+    } catch (error) { if (error instanceof RightsReplay) replayed = true; else throw error; }
+    this.operator(operator, p); this.open(input.operationHandle, operator, p, 'operation');
+    const current = this.repository.read(accountId); this.now(current); this.operator(operator, p);
+    return { replayed, requestId, outcome: current?.tombstones.some(t => t.requestId === requestId) ? 'purged' : 'reassessed' };
   }
   async operatorAction(operator: number, requestId: string, raw: OperatorAction): Promise<{ replayed: boolean; request: RightsOperationView; policyStatus: 'available' | 'unavailable' }> {
     reference.parse(requestId); const input = operatorActionSchema.parse(raw), p = this.operator(operator), token = this.open(input.operationHandle, operator, p, 'operation');

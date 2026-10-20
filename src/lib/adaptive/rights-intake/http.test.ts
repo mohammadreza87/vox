@@ -196,3 +196,22 @@ it('does not close an existing request if the signed requester session expires a
   const response = await x.request(`requests/${row.requestId}/actions?space=work`, 'POST', { version: 1, eventId: randomUUID(), expectedRevision: 1, action: 'withdraw_request' }, ID.alice, { 'x-telegram-init-data': auth });
   expect(response.status).toBe(401); expect(x.f.repository.read(accountIdFor(ID.alice))!.requests[0]).toMatchObject({ revision: 1, state: 'received' });
 });
+
+it('routes authenticated retention recovery while ordinary admission is blocked and never exposes purged request detail', async () => {
+  const x = await setup();
+  x.f.setPolicy({ ...syntheticRightsPolicy(), privacyOperatorIds: [ID.superadmin], retention: { requestReviewAfterMs: 100, auditRetentionMs: 100, receiptRetentionMs: 1000 }, retentionOperations: { terminalRetentionMs: 50, continuityRetentionMs: 200 } });
+  const row = await x.create('erasure'); expect((await x.act(row, 'withdraw_request')).status).toBe(200); x.setNow(NOW + 100);
+  const page = await (await x.request('operations/requests', 'GET', undefined, ID.superadmin)).json();
+  expect(page.policyStatus).toBe('unavailable'); const current = page.requests[0];
+  const command = { version: 1, eventId: randomUUID(), expectedRevision: current.revision, expectedPolicyRevision: 1, action: 'purge_terminal_record', operationHandle: current.operationHandle };
+  const path = `operations/requests/${row.requestId}/retention`;
+  expect((await x.request(path, 'POST', command, ID.alice)).status).toBe(403);
+  expect((await x.request(path, 'POST', command, ID.superadmin, { origin: 'https://hostile.invalid' })).status).toBe(403);
+  expect((await x.request(path, 'POST', { ...command, text: 'PRIVATE_CANARY' }, ID.superadmin)).status).toBe(400);
+  const response = await x.request(path, 'POST', command, ID.superadmin);
+  expect(response.status).toBe(200); expect(response.headers.get('cache-control')).toBe('no-store');
+  expect(await response.json()).toMatchObject({ requestId: row.requestId, outcome: 'purged', replayed: false });
+  expect((await x.request(`requests/${row.requestId}?space=work`)).status).toBe(410);
+  const snapshot = await (await x.request('')).json(); expect(snapshot.requests).toEqual([]); expect(snapshot.expiredRequests).toHaveLength(1);
+  expect((await x.request(`requests/${row.requestId}?space=personal`)).status).toBe(404);
+});

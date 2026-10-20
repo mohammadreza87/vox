@@ -1,7 +1,7 @@
 import { isSchemaValidationError } from '../error-contract';
 import { AdaptiveError } from '../adaptive/persistence/service';
 import { SharedMemoryError } from '../adaptive/shared/service';
-import { createInputSchema, operatorActionSchema, reference, requesterActionSchema, spaceSchema } from '../adaptive/rights-intake/contracts';
+import { createInputSchema, retentionActionSchema, operatorActionSchema, reference, requesterActionSchema, spaceSchema } from '../adaptive/rights-intake/contracts';
 import { fail, RightsError } from '../adaptive/rights-intake/repository';
 import type { Studio } from './service';
 import { StudioError } from './service';
@@ -84,6 +84,8 @@ export async function handleRightsRequest(studio: Studio, request: Request, path
       }
       return respond(result.result);
     }
+    if (path.length === 4 && path[0] === 'operations' && path[1] === 'requests' && path[3] === 'retention')
+      return respond(await rights.retentionAction(user.id, reference.parse(path[2]), retentionActionSchema.parse(body)));
     if (path.length === 4 && path[0] === 'operations' && path[1] === 'requests' && path[3] === 'actions')
       return respond(await rights.operatorAction(user.id, reference.parse(path[2]), operatorActionSchema.parse(body)));
     return json({ error: 'not_found' }, 404);
