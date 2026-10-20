@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { planLegacyFixtures } from '../planner';
 import { InventoryError, LIMITS, REASONS, type InventoryReportV1, type ManifestV1, type StopV1 } from '../contracts';
-import { AT, CANARY, appMessage, chunks, corpus, encodeFixtures, factFixture, memoryFixture, studioFixture } from './fixtures';
+import { AT, CANARY, appMessage, chunks, corpus, encodeFixtures, factFixture, memoryFixture, orgFixture, studioFixture } from './fixtures';
 
 async function run(adapter: ManifestV1['sources'][number]['adapter'], payloads: unknown[]) { const f = encodeFixtures([{ adapter, payloads }]); return planLegacyFixtures(f.manifest, chunks(f.bytes)); }
 function accounting(r: InventoryReportV1) {
@@ -220,5 +220,77 @@ describe('LIP1 synthetic inventory planner', () => {
     expect((await planLegacyFixtures(extra.manifest, chunks(extra.bytes))).status).toBe('rejected');
     const units = encodeFixtures([{ adapter: 'app-user/1', payloads: Array.from({ length: LIMITS.units }, (_, i) => ({ userId: `a${i}`, data: {} })) }]);
     const r = await planLegacyFixtures(units.manifest, chunks(units.bytes)); expect(r.status).toBe('complete'); expect(r.counts.consumedUnits).toBe(LIMITS.units); accounting(r);
+  });
+
+  it('accepts the native Firestore message personaId only in document-history data', async () => {
+    const message = { role: 'user', text: CANARY, at: AT, personaId: 'native-persona', privacyEpoch: 2 };
+    const r = await run('tireh-document/1', [{ collection: 'tireh_messages', id: 'message-a', parent: { personaId: 'native-persona', chatKey: 'chat-a' }, data: message }]);
+    expect(r.status).toBe('complete'); expect(r.counts.unresolvedFragments).toBe(0); expect(r.rows[1].hasUnsupportedFields).toBe(false); expect(r.rows[1].reasons).not.toContain('conflicting_source_metadata'); accounting(r);
+    const file = await run('tireh-file-state/1', [{ memories: [], offers: [], chats: { opaque: [message] } }]);
+    expect(file.status).toBe('incomplete'); expect(file.rows[1].hasUnsupportedFields).toBe(true); expect(file.counts.unresolvedFragments).toBe(1); accounting(file);
+  });
+
+  it('quarantines conflicting document persona metadata without duplicate-index evidence', async () => {
+    const base = { collection: 'tireh_messages', id: 'same-message', parent: { personaId: 'native-persona', chatKey: 'chat-a' } };
+    const r = await run('tireh-document/1', [
+      { ...base, data: { role: 'user', text: CANARY, at: AT, personaId: 'native-persona' } },
+      { ...base, data: { role: 'user', text: CANARY, at: AT, personaId: 'different-persona' } },
+      { ...base, data: { role: 'user', text: CANARY, at: AT, personaId: 'different-persona' } },
+    ]);
+    expect(r.status).toBe('complete'); expect(r.counts.byReason.conflicting_source_metadata).toBe(2); expect(r.counts.byReason.repeated_source_key).toBe(0);
+    expect(r.rows.filter(x => x.kind === 'history').slice(1).every(x => x.reasons.includes('conflicting_source_metadata'))).toBe(true); expect(r.rows.every(x => x.target === null && x.use === 'denied')).toBe(true); accounting(r);
+  });
+
+  it.each([undefined, 'native-persona'])('preserves normal document-history duplicates with optional persona stamp %j', async personaId => {
+    const payload = { collection: 'tireh_messages', id: 'same-message', parent: { personaId: 'native-persona', chatKey: 'chat-a' }, data: { role: 'user', text: CANARY, at: AT, personaId } };
+    const r = await run('tireh-document/1', [payload, payload]);
+    expect(r.status).toBe('complete'); expect(r.counts.byReason.repeated_source_key).toBe(2); expect(r.counts.byReason.conflicting_source_metadata).toBe(0); accounting(r);
+  });
+
+  it('does not manufacture native document-history keys from invalid explicit parent or persona data', async () => {
+    const payloads = [
+      { personaId: 1, parent: { personaId: 1, chatKey: 'a' } },
+      { personaId: 'a', parent: { personaId: 'a', chatKey: 12 } },
+      { personaId: 'a', parent: { personaId: '', chatKey: 'a' } },
+    ].flatMap(({ personaId, parent }) => Array.from({ length: 2 }, () => ({ collection: 'tireh_messages', id: 'same-message', parent, data: { role: 'user', text: CANARY, at: AT, personaId } })));
+    const r = await run('tireh-document/1', payloads);
+    expect(r.counts.byReason.repeated_source_key).toBe(0); expect(r.counts.byReason.malformed_record).toBeGreaterThan(0); accounting(r);
+  });
+
+  it('reports hidden app-chat data.messages as unresolved without skipping local Chat.messages', async () => {
+    const app = await run('app-chat/1', [{ chatId: 'a', data: { userId: 'u', contactId: 'c', messages: [appMessage()] }, messages: [] }]);
+    expect(app.status).toBe('incomplete'); expect(app.stop).toBe('invalid_payload'); expect(app.counts.unresolvedFragments).toBe(1); expect(app.counts.byKind.history).toBe(0); expect(app.rows[1].hasUnsupportedFields).toBe(true); expect(app.rows[1].reasons).toContain('unsupported_fields'); accounting(app);
+    const local = await run('app-local-chats/1', [[{ id: 'a', contactId: 'c', messages: [appMessage()] }]]);
+    expect(local.status).toBe('complete'); expect(local.counts.byKind.history).toBe(1); expect(local.counts.unresolvedFragments).toBe(0); accounting(local);
+  });
+
+  it('keeps identical config-local IDs in different explicit organizations separate', async () => {
+    const first = orgFixture(), second = { ...orgFixture(), organization: { id: 'different-org', name: CANARY } };
+    const r = await run('tireh-org-config/1', [first, second]);
+    expect(r.status).toBe('complete'); expect(r.counts.byReason.repeated_source_key).toBe(0); expect(r.counts.childRows).toBe(12); accounting(r);
+  });
+
+  it('annotates all same-organization config duplicates, including across fixture sources', async () => {
+    const f = encodeFixtures([{ adapter: 'tireh-org-config/1', payloads: [orgFixture()] }, { adapter: 'tireh-org-config/1', payloads: [orgFixture()] }]);
+    const r = await planLegacyFixtures(f.manifest, chunks(f.bytes));
+    expect(r.status).toBe('complete'); expect(r.counts.byReason.repeated_source_key).toBe(10); expect(r.sources.every(s => s.counts.byReason.repeated_source_key === 5)).toBe(true); accounting(r);
+  });
+
+  it.each([undefined, null, 0, {}, '', 'x'.repeat(LIMITS.keyBytes + 1)])('does not invent an organization namespace for invalid owner %j', async id => {
+    const config = { ...orgFixture(), organization: { id, name: CANARY } };
+    const r = await run('tireh-org-config/1', [config, config]);
+    expect(r.counts.byReason.repeated_source_key).toBe(0); expect(r.rows.every(x => x.target === null && x.currentAuthority === 'unverified')).toBe(true); expect(JSON.stringify(r)).not.toContain(CANARY); accounting(r);
+  });
+
+  it('bounds organization namespace bytes and leaves absent organization unlinked', async () => {
+    for (const [organization, repeated] of [
+      [{ id: 'x'.repeat(LIMITS.keyBytes), name: CANARY }, 10],
+      [{ id: 'ش'.repeat(129), name: CANARY }, 0],
+      [undefined, 0],
+    ] as const) {
+      const config = { ...orgFixture(), organization };
+      const r = await run('tireh-org-config/1', [config, config]);
+      expect(r.counts.byReason.repeated_source_key).toBe(repeated); expect(JSON.stringify(r)).not.toContain(CANARY); accounting(r);
+    }
   });
 });

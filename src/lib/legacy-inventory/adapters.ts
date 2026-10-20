@@ -16,6 +16,8 @@ const scope = shape({ kind: values('private', 'people', 'group', 'project', 'com
 const memory = shape({ id: 'string', personaId: 'string', authorizedPersonIds: strings, content: 'string', type: values('fact', 'decision', 'preference', 'event', 'relationship'), scope: object(scope), shareVersion: 'integer', sensitivity: values('normal', 'personal', 'confidential'), source: object(source), aboutPersonIds: strings, topic: 'string', supersedes: 'string', supersededBy: 'string', confidence: 'number', createdAt: 'timestamp', updatedAt: 'timestamp', active: 'boolean', scopeKey: 'string' }, ['id', 'personaId', 'content', 'type', 'scope', 'sensitivity', 'source', 'aboutPersonIds', 'confidence', 'createdAt', 'updatedAt']);
 const offer = shape({ id: 'string', personaId: 'string', memoryId: 'string', ownerPersonId: 'string', proposedScope: object(scope), proposedAudiencePersonIds: strings, memoryShareVersion: 'integer', status: values('pending', 'approved', 'declined'), createdAt: 'timestamp' }, ['id', 'personaId', 'memoryId', 'ownerPersonId', 'proposedScope', 'status', 'createdAt']);
 const history = shape({ role: values('user', 'assistant'), personId: 'string', text: 'string', at: 'timestamp', telegramMessageId: 'integer', groupPolicyVersion: { values: [1] }, relationshipIntentionId: 'string', audiencePersonIds: strings, privacyEpoch: 'integer', groupOtherTarget: 'boolean', privacy: object(shape({ policyKey: 'string', memoryRevision: 'integer', sourceEventIds: strings, memoryIds: strings }, ['policyKey', 'memoryRevision', 'sourceEventIds', 'memoryIds'])) }, ['role', 'text', 'at']);
+// Firestore append stamps personaId on message documents, not on local FileState turns.
+const documentHistory = shape({ ...history.fields, personaId: 'string' }, history.required);
 const fact = shape({ key: 'string', value: 'string', source: values('chat', 'call'), confidence: 'number', extractedAt: 'timestamp' }, ['key', 'value', 'source', 'confidence', 'extractedAt']);
 const summary = shape({ id: 'string', date: 'timestamp', type: values('chat', 'call'), duration: 'number', messageCount: 'integer', summary: 'string', keyTopics: strings, userMood: 'string' }, ['id', 'date', 'type', 'summary', 'keyTopics']);
 const continuity = shape({ date: 'timestamp', type: values('chat', 'call'), lastTopic: 'string', nextSteps: { nullable: 'string' } }, ['date', 'type', 'lastTopic']);
@@ -31,9 +33,12 @@ const studioGroup = shape({ chatId: 'integer', title: 'string', memberIds: integ
 const tirehGroup = shape({ audienceEpoch: 'integer', id: 'string', name: 'string', telegramChatId: 'integer', memberIds: strings, projectId: 'string', companyId: 'string', hasGuests: 'boolean', agentIds: strings }, ['id', 'name', 'telegramChatId', 'memberIds']);
 const persona = shape({ id: 'string', name: 'string', role: 'string', personality: 'string', communicationStyle: 'string', values: strings, voice: object(shape({ elevenLabsVoiceId: 'string', description: 'string' })), ownerId: 'string', telegramUsername: 'string', telegramId: 'integer', groupParticipation: values('mentions', 'balanced', 'active'), groupRemember: 'boolean', groupObservation: 'boolean', identityVersion: 'integer', replyWithVoice: values('never', 'mirror', 'always'), strangerPolicy: 'string', webSearch: 'boolean' }, ['id', 'name', 'role', 'personality', 'communicationStyle', 'values', 'voice', 'ownerId', 'identityVersion', 'replyWithVoice']);
 const user = shape({ id: 'string', email: 'string', displayName: { nullable: 'string' }, photoURL: { nullable: 'string' }, createdAt: 'timestamp', updatedAt: 'timestamp', settings: object(shape({ theme: values('light', 'dark'), language: 'string', notifications: 'boolean' })), tier: 'string', subscription: 'json', usage: 'json', defaultTranslatorVoiceId: { nullable: 'string' } });
-const chatMetadata = shape({ id: 'string', userId: 'string', contactId: 'string', contactName: 'string', contactEmoji: { nullable: 'string' }, contactImage: { nullable: 'string' }, contactPurpose: { nullable: 'string' }, lastMessage: { nullable: 'string' }, lastMessageAt: 'timestamp', createdAt: 'timestamp', updatedAt: 'timestamp', messages: 'json' }, ['contactId']);
+const appChatMetadata = shape({ id: 'string', userId: 'string', contactId: 'string', contactName: 'string', contactEmoji: { nullable: 'string' }, contactImage: { nullable: 'string' }, contactPurpose: { nullable: 'string' }, lastMessage: { nullable: 'string' }, lastMessageAt: 'timestamp', createdAt: 'timestamp', updatedAt: 'timestamp' }, ['contactId']);
+// Only the native local Chat shape embeds messages; app-chat enumerates its wrapper.
+const localChatMetadata = shape({ ...appChatMetadata.fields, messages: 'json' }, appChatMetadata.required);
 const own = (o: Obj, k: string) => Object.hasOwn(o, k);
 const obj = (v: unknown): v is Obj => !!v && typeof v === 'object' && !Array.isArray(v);
+const validStringKey = (v: unknown): v is string => typeof v === 'string' && v.length > 0 && Buffer.byteLength(v) <= LIMITS.keyBytes;
 function timestamp(v: unknown): boolean {
   if (obj(v)) return Object.keys(v).every(k => k === 'seconds' || k === 'nanoseconds') && Number.isSafeInteger(v.seconds) && Number.isInteger(v.nanoseconds) && Number(v.seconds) >= -62135596800 && Number(v.seconds) <= 253402300799 && Number(v.nanoseconds) >= 0 && Number(v.nanoseconds) < 1e9;
   if (typeof v !== 'string') return false;
@@ -128,18 +133,26 @@ export function adaptFixture(adapter: AdapterV1, payload: unknown, sourceId: num
       if (obj(data) && own(data, 'id') && data.id !== id) reason(c, 'conflicting_source_metadata');
     } else if (collection === 'tireh_messages') {
       const parent = get(payload, 'parent');
-      const c = row('history', data, history, ['tireh', get(parent, 'personaId'), get(parent, 'chatKey'), id]);
-      if (!obj(parent)) invalid(c);
+      const c = row('history', data, documentHistory);
+      const parentPersona = get(parent, 'personaId'), chatKey = get(parent, 'chatKey');
+      const conflict = obj(data) && own(data, 'personaId') && obj(parent) && own(parent, 'personaId') && data.personaId !== parentPersona;
+      if (conflict) reason(c, 'conflicting_source_metadata');
+      if (!validStringKey(parentPersona) || !validStringKey(chatKey) || !validStringKey(id)) invalid(c);
+      // Conflicting/invalid source claims cannot become even a native duplicate key.
+      if (!conflict && obj(data) && (!own(data, 'personaId') || validStringKey(data.personaId)) && validStringKey(parentPersona) && validStringKey(chatKey) && validStringKey(id)) key(c, 'tireh', parentPersona, chatKey, id);
     } else if (collection === 'tireh_memory_state' || collection === 'tireh_privacy_epochs') row('control', data, controlSpec);
     else opaque();
   } else if (adapter === 'tireh-org-config/1') {
     wrapper(payload, { organization: object(shape({ id: 'string', name: 'string' }, ['id', 'name'])), people: 'json', relationships: 'json', companies: 'json', projects: 'json', groups: 'json', personas: 'json' }, ['organization', 'people', 'relationships', 'companies', 'projects', 'groups', 'personas']);
-    array(get(payload, 'people'), v => row('identity', v, person, ['tireh-config', get(v, 'id')]));
+    const organizationId = get(get(payload, 'organization'), 'id');
+    if (!validStringKey(organizationId)) invalid(envelope);
+    const configKey = (family: string, v: unknown): [string, ...unknown[]] | undefined => validStringKey(organizationId) && typeof get(v, 'id') === 'string' ? [family, organizationId, get(v, 'id')] : undefined;
+    array(get(payload, 'people'), v => row('identity', v, person, configKey('tireh-config', v)));
     array(get(payload, 'relationships'), v => row('relationship_assertion', v, shape({ a: 'string', b: 'string', label: 'string' }, ['a', 'b', 'label'])));
-    array(get(payload, 'groups'), v => row('group_configuration', v, tirehGroup, ['tireh-config', get(v, 'id')]));
-    array(get(payload, 'personas'), v => row('agent_configuration', v, persona, ['tireh-config', get(v, 'id')]));
-    array(get(payload, 'projects'), v => row('scope_configuration', v, shape({ id: 'string', name: 'string', companyId: 'string', memberIds: strings, description: 'string' }, ['id', 'name', 'companyId', 'memberIds']), ['tireh-config-project', get(v, 'id')]));
-    array(get(payload, 'companies'), v => row('scope_configuration', v, shape({ id: 'string', name: 'string' }, ['id', 'name']), ['tireh-config-company', get(v, 'id')]));
+    array(get(payload, 'groups'), v => row('group_configuration', v, tirehGroup, configKey('tireh-config', v)));
+    array(get(payload, 'personas'), v => row('agent_configuration', v, persona, configKey('tireh-config', v)));
+    array(get(payload, 'projects'), v => row('scope_configuration', v, shape({ id: 'string', name: 'string', companyId: 'string', memberIds: strings, description: 'string' }, ['id', 'name', 'companyId', 'memberIds']), configKey('tireh-config-project', v)));
+    array(get(payload, 'companies'), v => row('scope_configuration', v, shape({ id: 'string', name: 'string' }, ['id', 'name']), configKey('tireh-config-company', v)));
   } else if (adapter === 'app-contact-memory/1') {
     wrapper(payload, { userId: 'string', contactId: 'string', data: 'json' }, ['userId', 'contactId', 'data']);
     const data = get(payload, 'data');
@@ -164,7 +177,7 @@ export function adaptFixture(adapter: AdapterV1, payload: unknown, sourceId: num
   } else if (adapter === 'app-chat/1') {
     wrapper(payload, { chatId: 'string', data: 'json', messages: 'json' }, ['chatId', 'data', 'messages']);
     const data = get(payload, 'data'), chatId = get(payload, 'chatId');
-    const c = row('history_metadata', data, chatMetadata, ['app-chat', get(data, 'userId'), chatId]);
+    const c = row('history_metadata', data, appChatMetadata, ['app-chat', get(data, 'userId'), chatId]);
     if (obj(data) && own(data, 'id') && data.id !== chatId) reason(c, 'conflicting_source_metadata');
     array(get(payload, 'messages'), v => {
       const message = get(v, 'data');
@@ -174,7 +187,7 @@ export function adaptFixture(adapter: AdapterV1, payload: unknown, sourceId: num
     });
   } else if (adapter === 'app-local-chats/1') {
     array(payload, v => {
-      row('history_metadata', v, chatMetadata, ['app-local', sourceId, get(v, 'id')]);
+      row('history_metadata', v, localChatMetadata, ['app-local', sourceId, get(v, 'id')]);
       array(get(v, 'messages'), m => row('history', m, appMessage, ['app-local', sourceId, get(v, 'id'), get(m, 'id')]));
     });
   } else if (adapter === 'studio-state/1') {
