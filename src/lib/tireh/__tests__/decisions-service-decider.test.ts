@@ -1,6 +1,6 @@
 /** S09: the ServiceDecider adapter and studioDecider selection. Fake providers only; no network. */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { DecisionService, requestSchema, type DecisionInput, type DecisionProvider, type DecisionProviderOptions } from '../../adaptive/decisions';
+import { DecisionService, requestSchema, type DecisionProvider } from '../../adaptive/decisions';
 import { minimizeImageDataUrl } from '../../adaptive/prediction/image';
 import { ServiceDecider, studioDecider } from '../decisions/service-decider';
 import { triageInput, triageQuestions, type Decider, type DecisionQuestion } from '../triage';
@@ -8,35 +8,10 @@ import { routeBrief } from '../../studio/skills/route';
 import { fixtureCatalog } from '../../studio/skills/__tests__/fixtures';
 import type { Persona } from '../types';
 import { testOrgConfig } from './fixtures';
+import { scriptedProvider } from './decisions-fixtures';
 
 const PNG_1X1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==';
-
-type Script = Record<string, { choice?: string; confidence?: number; probability?: number } | 'refusal'>;
-
-/** Answers every question validly; `script` picks choices/probabilities per name. */
-function scripted(script: Script = {}) {
-  const calls: Array<{ input: DecisionInput; options?: DecisionProviderOptions }> = [];
-  const provider: DecisionProvider = {
-    evaluate: vi.fn(async (input: DecisionInput, _signal: AbortSignal, _now?: () => boolean, options?: DecisionProviderOptions) => {
-      calls.push({ input, options });
-      return {
-        model: 'gpt-6-luna', usage: { input_tokens: 42 },
-        answers: input.questions.map((q) => {
-          const s = script[q.name];
-          if (s === 'refusal') return { name: q.name, type: 'refusal' };
-          if (q.type === 'predicate') return { name: q.name, type: 'predicate', probability: s?.probability ?? 0.5 };
-          if (q.type === 'score') return { name: q.name, type: 'score', score: 0, confidence: 1, probabilities: q.levels.map((l, i) => ({ value: i, label: l.label, probability: i === 0 ? 1 : 0 })) };
-          const values = q.choices.map((c) => c.value);
-          const chosen = s?.choice ?? (values.includes('none') ? 'none' : values[0]);
-          const confidence = s?.confidence ?? 0.8;
-          return { name: q.name, type: 'choice', choice: chosen, confidence,
-            probabilities: values.map((v) => ({ value: v, probability: v === chosen ? confidence : (1 - confidence) / (values.length - 1) })) };
-        }),
-      };
-    }),
-  };
-  return { provider, calls };
-}
+const scripted = scriptedProvider;
 
 const predicate = (name: string): DecisionQuestion => ({ type: 'predicate', name, instructions: `Is ${name} true?` });
 const persona = (): Persona => testOrgConfig().personas.find((p) => p.id === 'aria')!;
