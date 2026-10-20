@@ -290,7 +290,7 @@ Add provenance/claims/supersession, token-budgeted retrieval, indexed candidate 
 
 **Requirements:** REQ-02, REQ-17. **Depends on:** VOX-010, VOX-011, VOX-013.
 
-**Implementation progress:** Account/shared scheduled cleanup now has durable paginated leases, restart recovery and expiry tests; observer consent revocation purges journal and derived findings in the same transaction. Maintenance release switch remains off. Provider/backup residual retention and production restore qualification remain open.
+**Implementation progress:** Account/shared scheduled cleanup now has durable paginated leases, restart recovery and expiry tests; observer consent revocation purges journal and derived findings in the same transaction. Maintenance release switch remains off. Provider/backup residual retention and production restore qualification remain open. LC1 now invalidates whole frozen synthetic corpora on source/case expiry or withdrawal, preserves final-use/exclusion history across explicit migration/restart, and refuses unsafe capacity/downgrade paths. Independent local acceptance passed; physical audit retirement and external deletion remain open.
 
 Propagate revocation/deletion across history projections, summaries, cache/search, evidence, queues and permitted downstream datasets; maintain minimal tombstones. Implement versioned class-specific expiry and inactivity sweeps, provider residual tracking and backup expiration with the approved numeric schedule.
 
@@ -305,7 +305,7 @@ Propagate revocation/deletion across history projections, summaries, cache/searc
 
 **Deliverables:** Deletion coordinator; Derived lineage and tombstone tests.
 
-**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/OBSERVATION_LEARNING.md"]
+**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/OBSERVATION_LEARNING.md", "docs/implementation/LEARNING_CASES.md"]
 
 ### VOX-015 — Migrate legacy memory and preference data conservatively
 
@@ -928,7 +928,7 @@ Run independent consented/synthetic voice corpus across languages, devices, nois
 
 **Requirements:** REQ-04, REQ-14, REQ-17. **Depends on:** VOX-007, VOX-014, VOX-016, VOX-023.
 
-**Implementation progress:** Signed minimized synthetic/approved aggregate finding import, lineage expiry/revocation and private-content rejection implemented for local routing workflow. No automatic export of real user observations; production curation/rights integration remains open.
+**Implementation progress:** Signed minimized synthetic/approved aggregate finding import, lineage expiry/revocation and private-content rejection implemented for local routing workflow. No automatic export of real user observations; production curation/rights integration remains open. LC1 connects exact signed finding provenance and human-reviewed closed recipes to evaluator-frozen corpora, private current authority, optimization, reserved paired evaluation, real protected Docker companion, human approval and restart readiness. Independent e05e460 acceptance passed 41 external cases and 45 scanner checks; a cumulative audit-capacity P1 was reproduced and repaired before acceptance. This synthetic-only local slice does not complete real-data curation, rights integration, production IAM or measured model benefit.
 
 Turn permitted findings into minimized reproductions/evaluation cases with lineage, data-purpose eligibility, retention and review.
 
@@ -941,7 +941,7 @@ Turn permitted findings into minimized reproductions/evaluation cases with linea
 
 **Deliverables:** Case curation workflow; Dataset manifests.
 
-**Evidence:** ["docs/implementation/OBSERVATION_LEARNING.md"]
+**Evidence:** ["docs/implementation/OBSERVATION_LEARNING.md", "docs/implementation/LEARNING_CASES.md"]
 
 ### VOX-044 — Implement offline prompt and routing optimization
 

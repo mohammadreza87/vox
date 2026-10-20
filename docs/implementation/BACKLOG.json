@@ -564,9 +564,10 @@
       ],
       "evidence": [
         "docs/implementation/DELIVERY_RESULT.md",
-        "docs/implementation/OBSERVATION_LEARNING.md"
+        "docs/implementation/OBSERVATION_LEARNING.md",
+        "docs/implementation/LEARNING_CASES.md"
       ],
-      "progress_note": "Account/shared scheduled cleanup now has durable paginated leases, restart recovery and expiry tests; observer consent revocation purges journal and derived findings in the same transaction. Maintenance release switch remains off. Provider/backup residual retention and production restore qualification remain open."
+      "progress_note": "Account/shared scheduled cleanup now has durable paginated leases, restart recovery and expiry tests; observer consent revocation purges journal and derived findings in the same transaction. Maintenance release switch remains off. Provider/backup residual retention and production restore qualification remain open. LC1 now invalidates whole frozen synthetic corpora on source/case expiry or withdrawal, preserves final-use/exclusion history across explicit migration/restart, and refuses unsafe capacity/downgrade paths. Independent local acceptance passed; physical audit retirement and external deletion remain open."
     },
     {
       "id": "VOX-015",
@@ -1612,9 +1613,10 @@
         "Dataset manifests"
       ],
       "evidence": [
-        "docs/implementation/OBSERVATION_LEARNING.md"
+        "docs/implementation/OBSERVATION_LEARNING.md",
+        "docs/implementation/LEARNING_CASES.md"
       ],
-      "progress_note": "Signed minimized synthetic/approved aggregate finding import, lineage expiry/revocation and private-content rejection implemented for local routing workflow. No automatic export of real user observations; production curation/rights integration remains open."
+      "progress_note": "Signed minimized synthetic/approved aggregate finding import, lineage expiry/revocation and private-content rejection implemented for local routing workflow. No automatic export of real user observations; production curation/rights integration remains open. LC1 connects exact signed finding provenance and human-reviewed closed recipes to evaluator-frozen corpora, private current authority, optimization, reserved paired evaluation, real protected Docker companion, human approval and restart readiness. Independent e05e460 acceptance passed 41 external cases and 45 scanner checks; a cumulative audit-capacity P1 was reproduced and repaired before acceptance. This synthetic-only local slice does not complete real-data curation, rights integration, production IAM or measured model benefit."
     },
     {
       "id": "VOX-044",
@@ -2197,6 +2199,14 @@
       "deployed_revision": "b4193097a1003f38413f428a73ff55a0dfb1d79f",
       "evidence": "docs/implementation/RELEASE_MAINTENANCE_2026_10_20.md",
       "note": "Independent product and fixture-repair acceptance, CI218 and exact merged-build deployment passed. 40 live route checks, five active bots and unchanged configuration verified. Maintenance execution remains disabled; broader VOX-022/052 qualification stays open."
+    },
+    {
+      "id": "reviewed-synthetic-learning-cases",
+      "status": "complete_local",
+      "baseline": "b4193097a1003f38413f428a73ff55a0dfb1d79f",
+      "candidate": "e05e46074e1c4741b93b0a85d8bcc4e65a041773",
+      "evidence": "docs/implementation/LEARNING_CASES.md",
+      "note": "Independent local source, actual migration/old-reader and isolated Docker qualification passed after the recorded capacity fix. Final CI/deployment are separately bound; no optional activation or real conversation export."
     }
   ]
 }
