@@ -168,7 +168,9 @@ const ROUTES = ['quick', 'thoughtful', 'web', 'untriaged'] as const;
 const SOURCES = ['explicit_turn', 'explicit_stored', 'reset', 'sampled', 'persona_default'] as const;
 const SIGNAL_KINDS = ['reaction_positive', 'reaction_negative', 'follow_up', 'corrective_follow_up', 'share_offer_accepted',
   'voice_reciprocated', 'explicit_thanks', 'explicit_correction', 'correction_phrase'] as const;
-const ID_PATTERN = /^[A-Za-z0-9_.:-]{1,128}$/;
+/** Persona ids and decision ids. */
+export const REPLY_STYLE_ID_PATTERN = /^[A-Za-z0-9_.:-]{1,128}$/;
+const ID_PATTERN = REPLY_STYLE_ID_PATTERN;
 
 const hex32 = z.string().regex(/^[0-9a-f]{32}$/);
 const hex64 = z.string().regex(/^[0-9a-f]{64}$/);
