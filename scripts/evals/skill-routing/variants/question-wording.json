@@ -1,0 +1,4 @@
+{
+  "instructions": "Which of this colleague's playbooks fits the task the latest message asks for? A message that describes a problem or situation in this colleague's field is asking for help with it, even without a question. Judge the task, not the person's mood, feelings or health. Choose none for greetings, thanks, small talk, a one-line general fact, or when no playbook clearly fits.",
+  "noneDescription": "No playbook: greetings, thanks, small talk, a one-line general fact, or nothing above clearly fits."
+}

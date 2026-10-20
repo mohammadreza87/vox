@@ -73,3 +73,6 @@ tireh.org.json
 .tireh-local.json
 .tireh-local.json.tmp
 .vox-studio/
+
+# Raw provider responses from eval runs (regenerate with npm run eval:skills)
+scripts/evals/skill-routing/results/

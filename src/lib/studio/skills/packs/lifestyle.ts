@@ -459,7 +459,7 @@ const skills: AgentSkill[] = [
     id: 'fitness.readiness-screen',
     title: 'Readiness screen',
     summary: 'Checks safety, goal, history, kit and schedule before any plan is written.',
-    whenToUse: 'Use when someone first asks for a training plan, or returns after injury, illness, surgery, pregnancy or a long break.',
+    whenToUse: 'Use when someone is about to get their first training plan, or comes back to training after an injury, illness, surgery, pregnancy or a long break. Not for a new ache mid-programme.',
     method: [
       'Run a PAR-Q+-style screen: heart condition, chest pain, dizziness or fainting, bone or joint problems, medication, pregnancy; any yes means a doctor’s OK before vigorous work.',
       'Turn the goal into an outcome with a date and a reason ("5 push-ups by Nowruz, to keep up with my kids"); gently push back on "get fit".',
@@ -570,6 +570,7 @@ const skills: AgentSkill[] = [
   },
   {
     id: 'fitness.pain-aware-modification',
+    pinned: true,
     title: 'Pain-aware changes',
     summary: 'Works around minor aches safely and refers at once when red flags appear.',
     whenToUse: 'Use when someone mentions pain, an injury, a niggle, or coming back to training after one.',
@@ -837,6 +838,7 @@ const skills: AgentSkill[] = [
   },
   {
     id: 'sleep.red-flag-referral',
+    pinned: true,
     title: 'Sleep red flags',
     summary: 'Spots patterns a doctor should see and prepares you for that appointment.',
     whenToUse: 'Use when someone reports loud snoring with gasps or pauses, dozing while driving, extreme daytime sleepiness, insomnia 3+ nights a week for 3+ months, or acting out dreams.',
@@ -981,6 +983,7 @@ const skills: AgentSkill[] = [
   },
   {
     id: 'wellbeing.crisis-protocol',
+    pinned: true,
     title: 'Crisis protocol',
     summary: 'Meets self-harm, suicide risk, abuse or danger with care and local help, at once.',
     whenToUse: 'Use when any message suggests risk to the person or someone else (self-harm, suicide, violence, abuse, a medical emergency), whatever else was going on.',
@@ -1419,7 +1422,7 @@ const skills: AgentSkill[] = [
     id: 'learn.conversation-practice',
     title: 'Conversation practice',
     summary: 'Role-plays real situations at your level, with gentle, targeted correction.',
-    whenToUse: 'Use when a learner wants to practise speaking or chatting, by text or voice.',
+    whenToUse: 'Use when a learner wants to practise speaking or chatting, by text or voice, or answers in the target language inside a practice conversation or role-play.',
     method: [
       'Pick a realistic scenario tied to their goal: a job interview, a doctor’s visit, small talk with neighbours, a visa interview.',
       'Speak one notch above their level and keep your turns short so they talk more than you.',
@@ -1582,7 +1585,7 @@ const skills: AgentSkill[] = [
     id: 'travel.entry-requirements-check',
     title: 'Entry requirements',
     summary: 'Checks visas, entry systems, health and customs rules on official sources, with dates.',
-    whenToUse: 'Use when planning any international trip, once each traveller’s nationality, residence and route (including transits) are known.',
+    whenToUse: 'Use when someone asks whether they need a visa, eTA or transit visa, or how long their passport must be valid, or plans any international trip; check each traveller\'s nationality, residence and route.',
     method: [
       'Check each traveller’s nationality and residence against the official government or embassy site of the destination and every transit country, plus IATA Travel Centre.',
       'Cover visa or e-authorisation (Schengen visa, EES, UK ETA, US ESTA), passport validity and blank pages, minors with one parent, health rules.',
