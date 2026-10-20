@@ -39,11 +39,12 @@ export class MessageMemoryService {
   }
   private state(d: AdaptiveAuthorityDocument, now: number, input: Pick<Receipt, 'space' | 'agentId'>, studio: string | null) {
     if (this.options.llm.committedExportFence !== true) return unavailable();
+    if (!this.adaptive.isStoredPersonalizationUseAllowed(d,input.space)) throw new AdaptiveError(403,'product_personalization_paused');
     if (!studio || !this.adaptive.isCoreAllowed(d, now) || d.agentGrants.filter(g => g.space === input.space && g.agentId === input.agentId && g.allowed).length !== 1) return changed();
     return { personId: d.personId, expiresAt: Math.min(d.binding!.expiresAt, this.adaptive.capabilityStatus(d, 'core_text', now).validUntil ?? now),
       authority: digest([...(this.adaptive.storeIdentity === 'canonical' ? [] : [this.adaptive.storeIdentity]), this.options.llm.identity ?? null, d.accountId, d.personId, d.binding, this.adaptive.coreFingerprint(d, now), studio, input.space, input.agentId,
         d.agentGrants.filter(g => g.space === input.space && g.agentId === input.agentId),
-        ...(d.schemaVersion === 2 ? [productPauseUseStamp(d, input.space)] : [])]) };
+        ...(d.schemaVersion >= 2 ? [productPauseUseStamp(d, input.space)] : [])]) };
   }
   private currentNow(telegramId: number, input: Pick<Receipt, 'space' | 'agentId'>) {
     const studio = this.options.agentAuthorityNow(telegramId, input.agentId);

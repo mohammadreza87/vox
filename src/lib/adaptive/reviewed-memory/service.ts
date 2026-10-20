@@ -57,7 +57,7 @@ export class ReviewedMemoryService {
     return { sources, personId: d.personId, expiresAt: Math.min(d.binding!.expiresAt, this.adaptive.capabilityStatus(d, 'core_text', now).validUntil ?? now, ...rows.map(row => row.expiresAt)),
       authority: digest([...(this.adaptive.storeIdentity === 'canonical' ? [] : [this.adaptive.storeIdentity]), d.accountId, d.personId, d.binding, this.adaptive.coreFingerprint(d, now), studio, input.space, input.agentId,
         d.agentGrants.filter(g => g.space === input.space && g.agentId === input.agentId), rows,
-        ...(d.schemaVersion === 2 ? [productPauseUseStamp(d, input.space)] : [])]) };
+        ...(d.schemaVersion >= 2 ? [productPauseUseStamp(d, input.space)] : [])]) };
   }
   private currentNow(telegramId: number, input: Pick<Receipt, 'space' | 'agentId' | 'sourceRefs'>) {
     const studio = this.options.agentAuthorityNow(telegramId, input.agentId);
