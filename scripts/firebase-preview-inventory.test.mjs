@@ -13,16 +13,72 @@ const channel = (id, extra = {}) => ({ name: `sites/${project}/channels/${id}`, 
 const response = (channels) => JSON.stringify({ status: 'success', result: { channels } });
 const credential = { type: 'service_account', project_id: project, private_key: '-----BEGIN PRIVATE KEY-----\nSYNTHETIC_ONLY\n-----END PRIVATE KEY-----\n', client_email: 'synthetic@test-project.iam.gserviceaccount.com', token_uri: 'https://oauth2.googleapis.com/token' };
 const scopeCases = [
-  [`projects/${project}/sites/${project}/channels/pr1-canary`, 'UNEXPECTED_SCOPE_PROJECT_EXACT'],
   [`projects/123456789/sites/${project}/channels/pr1-canary`, 'UNEXPECTED_SCOPE_PROJECT_NUMERIC'],
   [`projects/other-project/sites/${project}/channels/pr1-canary`, 'UNEXPECTED_SCOPE_PROJECT_OTHER'],
   ['sites/other-project/channels/pr1-canary', 'UNEXPECTED_SCOPE_FOREIGN_SITE'],
   [`projects/${project}/sites/other-project/channels/pr1-canary`, 'UNEXPECTED_SCOPE_FOREIGN_SITE'],
   ['projects/123456789/sites/other-project/channels/pr1-canary', 'UNEXPECTED_SCOPE_FOREIGN_SITE'],
-  [`projects/${project}/sites/${project}/channels/pr1-canary/extra`, 'UNEXPECTED_SCOPE_MALFORMED'],
+  [`projects/${project}/sites/${project}/channels/pr1-canary/extra`, 'UNSAFE_CHANNEL'],
+  ['channels/pr1-canary', 'UNEXPECTED_SCOPE_MALFORMED'],
 ];
+const qualified = (item) => ({ ...item, name: `projects/${project}/${item.name}` });
 
-test('scope diagnostics classify fixed failure categories without accepting any new resource', () => {
+test('exact project-qualified alias matches canonical projection including mixed aliases and expiry', () => {
+  const items = [channel('pr1-null', { expireTime: null }), channel('pr2-absent', { expireTime: undefined }),
+    channel('pr3-date', { url: 'https://private-canary.invalid', release: { private: 'SECRET_CANARY' } }),
+    channel('private-label'), channel('live')];
+  const canonical = projectInventory(response(items), project);
+  assert.deepEqual(projectInventory(response(items.map(qualified)), project), canonical);
+  assert.deepEqual(projectInventory(response(items.map((item, i) => i % 2 ? qualified(item) : item)), project), canonical);
+  assert.doesNotMatch(JSON.stringify(canonical), /test-project|private-label|private-canary|SECRET_CANARY|projects\/|sites\//);
+  for (const id of ['pr1-test', 'live']) {
+    assert.throws(() => projectInventory(response([channel(id), qualified(channel(id))]), project), /UNSAFE_CHANNEL/);
+  }
+});
+
+test('both accepted aliases retain suffix, forbidden-value, expiry and project control rejection', async () => {
+  const controls = ['\n', '\r', '\r\n', '\u0000', '\u001b', '\t', '\u2028', '\u2029'];
+  for (const asAlias of [(item) => item, qualified]) {
+    for (const id of ['', '..', 'pr1-test/extra', 'pr1%2ftest', 'pr1-test?x', 'pr1-test#x', 'x'.repeat(64),
+      ...controls.flatMap((control) => [`pr1-test${control}`, `pr1${control}-test`])]) {
+      assert.throws(() => projectInventory(response([asAlias(channel(id))]), project), /UNSAFE_CHANNEL/);
+    }
+    assert.throws(() => projectInventory(response([asAlias(channel('pr1-canary'))]), project, ['canary']), /UNSAFE_CHANNEL/);
+    assert.throws(() => projectInventory(response([asAlias(channel('pr1-test', { expireTime: '2026-02-31T00:00:00Z' }))]), project), /INVALID_EXPIRY/);
+  }
+  await fixture(async (env) => {
+    let calls = 0;
+    for (const invalidProject of controls.flatMap((control) => [project + control, `test${control}-project`])) {
+      await assert.rejects(runInventory({ ...env, FIREBASE_PROJECT_ID: invalidProject },
+        { captureFn: async () => { calls++; return response([]); } }), /INVALID_PROJECT/);
+    }
+    assert.equal(calls, 0);
+  });
+});
+
+test('actual wrapper accepts only minimized exact-alias output and rejects cross-alias duplicates', async () => {
+  await fixture(async (env, root) => {
+    const bin = path.join(root, 'lib/bin');
+    const tmp = path.join(root, 'tmp');
+    fs.mkdirSync(bin, { recursive: true }); fs.mkdirSync(tmp);
+    for (const duplicate of [false, true]) {
+      const item = channel('pr1-test', { url: 'https://private-canary.invalid', release: { private: 'SECRET_CANARY' } });
+      const items = duplicate ? [item, qualified(item)] : [qualified(item)];
+      fs.writeFileSync(path.join(bin, 'firebase.js'),
+        `require('node:fs').writeFileSync('firebase-debug.log', 'PRIVATE_DEBUG_CANARY'); console.log(${JSON.stringify(response(items))});`);
+      const result = spawnSync(process.execPath, [fileURLToPath(new URL('./firebase-preview-inventory.mjs', import.meta.url))],
+        { env: { ...env, TMPDIR: tmp }, encoding: 'utf8', timeout: 5000 });
+      assert.equal(result.status, duplicate ? 1 : 0);
+      assert.equal(result.stderr, duplicate ? 'preview_inventory_failed:UNSAFE_CHANNEL\n' : '');
+      if (duplicate) assert.equal(result.stdout, '');
+      else assert.deepEqual(JSON.parse(result.stdout), projectInventory(response([item]), project));
+      assert.doesNotMatch(result.stdout + result.stderr, /test-project|private-canary|SECRET_CANARY|PRIVATE_DEBUG_CANARY/);
+      assert.deepEqual(fs.readdirSync(tmp), []);
+    }
+  });
+});
+
+test('scope diagnostics retain fixed failure categories for unsupported resources', () => {
   for (const [name, code] of scopeCases) {
     assert.throws(() => projectInventory(response([channel('pr1-test', { name })]), project),
       (error) => error.message === code && !error.message.includes('canary'));
@@ -32,8 +88,11 @@ test('scope diagnostics classify fixed failure categories without accepting any 
 test('scope diagnostics reject malformed segments, encodings, URLs and control characters', () => {
   const base = `projects/${project}/sites/${project}/channels/pr1-canary`;
   for (const name of [base + '\n', base + '\r', base + '\u0000', base + '?x=y', base + '#x',
-    base.replace('pr1-canary', '..'), base.replace('pr1-canary', 'pr1%2fcanary'),
-    base.replace('projects/', 'projects//'), base.replace(project, 'x'.repeat(64)),
+    base.replace('pr1-canary', '..'), base.replace('pr1-canary', 'pr1%2fcanary')]) {
+    assert.throws(() => projectInventory(response([channel('pr1-test', { name })]), project),
+      (error) => error.message === 'UNSAFE_CHANNEL');
+  }
+  for (const name of [base.replace('projects/', 'projects//'), base.replace(project, 'x'.repeat(64)),
     base.replace(project, '1'.repeat(31)), `https://example.invalid/${base}`, 'channels/pr1-canary']) {
     assert.throws(() => projectInventory(response([channel('pr1-test', { name })]), project),
       (error) => error.message === 'UNEXPECTED_SCOPE_MALFORMED');
