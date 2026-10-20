@@ -9,6 +9,8 @@
  * verbose playbook cannot crowd out the rest.
  */
 
+import type { PersonaSkillSet } from '../../tireh/types';
+import { MAX_ROUTABLE_SKILLS } from '../../tireh/skill-routing';
 import { MAX_AGENT_SKILLS, type AgentRole, type AgentSkill } from './types';
 
 /** ≈ 375 tokens at the chars/4 heuristic: the median authored playbook (~1,340 chars) renders in full. */
@@ -20,7 +22,8 @@ const sentence = (text: string) => {
 };
 const joinItems = (items: readonly string[]) => items.map((i) => i.trim().replace(/[.;]+$/, '')).filter(Boolean).join('; ');
 
-function renderRole(role: AgentRole): string {
+/** The role block that opens <craft> in both prompt modes. */
+export function renderRole(role: AgentRole): string {
   return [
     `Your role: ${role.title}. ${sentence(role.mission)}`,
     `What you know deeply: ${sentence(joinItems(role.knowledge))}`,
@@ -84,4 +87,36 @@ export function renderCraft(role: AgentRole | undefined, skills: readonly AgentS
     for (const skill of kept) parts.push(renderSkill(skill));
   }
   return parts.join('\n\n');
+}
+
+/**
+ * The policy for per-message skill selection (docs/SKILL_ROUTING.md), in one
+ * place so the offline eval applies exactly the same rule: the skills
+ * Decisions may choose between for an agent, best kept first.
+ *
+ * Only agents with a library WORK role are routed. Personal (lifestyle)
+ * playbooks trigger on mood and health ("feels anxious", "an injury"), so
+ * offering them would have Decisions classify someone's emotional or health
+ * state (docs/AGENT_INTELLIGENCE_SOLUTION.md §4.8), and selection could drop
+ * a safety screen. Custom agents without a role are not routed either.
+ * Pinned playbooks are never routable: they are always in the prompt.
+ */
+export function routableSkillsFor(role: AgentRole | undefined, skills: readonly AgentSkill[]): AgentSkill[] {
+  if (role?.space !== 'work') return [];
+  return skills.slice(0, MAX_AGENT_SKILLS).filter((s) => !s.pinned).slice(0, MAX_ROUTABLE_SKILLS);
+}
+
+/**
+ * The same role and skills split for per-message selection: pinned playbooks
+ * stay in the prompt, `routableSkillsFor` become selectable. Undefined when
+ * fewer than two skills are routable, so the agent always gets the full craft.
+ */
+export function renderSkillSet(role: AgentRole | undefined, skills: readonly AgentSkill[]): PersonaSkillSet | undefined {
+  const routable = routableSkillsFor(role, skills);
+  if (!role || routable.length < 2) return undefined;
+  return {
+    role: renderRole(role),
+    pinned: skills.slice(0, MAX_AGENT_SKILLS).filter((s) => s.pinned).map((s) => ({ id: s.id, playbook: renderSkill(s) })),
+    routable: routable.map((s) => ({ id: s.id, title: s.title, whenToUse: s.whenToUse.trim(), playbook: renderSkill(s) })),
+  };
 }

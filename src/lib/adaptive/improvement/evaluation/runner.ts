@@ -81,7 +81,11 @@ export async function runEvaluation(options: { manifest: unknown; corpus: unknow
           return { pending };
         });
         const remaining = Math.max(0, manifest.budget.maxWallTimeMs - (Date.now() - started));
-        const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new Error('evaluation_timeout')); }, remaining); });
+        const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => {
+          // Expiry ends this run even if a subsequent wall-clock read is earlier.
+          stopped = true;
+          controller.abort(); reject(new Error('evaluation_timeout'));
+        }, remaining); });
         const aborted = new Promise<never>((_, reject) => {
           if (controller.signal.aborted) reject(new Error('evaluation_cancelled'));
           else controller.signal.addEventListener('abort', () => reject(new Error('evaluation_cancelled')), { once: true });

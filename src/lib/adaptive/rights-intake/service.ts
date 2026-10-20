@@ -147,10 +147,13 @@ export class RightsIntakeService {
     if (d!.tombstones.some(t => t.requestId === receipt.requestId)) return fail(410, 'rights_record_expired');
     return d!.requests.find(r => r.requestId === receipt.requestId) ?? fail(503, 'rights_storage_unavailable');
   }
-  private async readForMutation(id: number): Promise<AccountLedger | null> {
+  private readForMutation(id: number): Promise<AccountLedger | null> {
+    return this.readAfterMutation(() => this.read(id));
+  }
+  private async readAfterMutation(read: () => AccountLedger | null): Promise<AccountLedger | null> {
     const deadline = Date.now() + 3000;
     while (true) {
-      try { return this.read(id); }
+      try { return read(); }
       catch (error) {
         if (!RightsError.is(error) || error.code !== 'rights_storage_busy' || Date.now() >= deadline) throw error;
         await new Promise(resolve => setTimeout(resolve, 10));
@@ -323,7 +326,11 @@ export class RightsIntakeService {
       }, () => { this.operator(operator, p); this.open(input.operationHandle, operator, p, 'operation'); });
     } catch (error) { if (error instanceof RightsReplay) replayed = true; else throw error; }
     this.operator(operator, p); this.open(input.operationHandle, operator, p, 'operation');
-    const current = this.repository.read(accountId); this.now(current); this.operator(operator, p);
+    const current = await this.readAfterMutation(() => {
+      this.operator(operator, p); this.open(input.operationHandle, operator, p, 'operation');
+      return this.repository.read(accountId);
+    });
+    this.now(current); this.operator(operator, p); this.open(input.operationHandle, operator, p, 'operation');
     return { replayed, requestId, outcome: current?.tombstones.some(t => t.requestId === requestId) ? 'purged' : 'reassessed' };
   }
   async operatorAction(operator: number, requestId: string, raw: OperatorAction): Promise<{ replayed: boolean; request: RightsOperationView; policyStatus: 'available' | 'unavailable' }> {

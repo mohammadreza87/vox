@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "description": "Held-out check for the proposed wording in variants/: written after run 1, never used to tune it. Positives for each rewritten skill, near-miss negatives in the same roles that a looser description could over-capture, and question-less problem statements for the question-wording variant.",
+  "userName": "Sara",
+  "personas": {
+    "lifestyle.travel-planner": "Arman",
+    "lifestyle.learning-tutor": "Darya",
+    "lifestyle.fitness-coach": "Nima",
+    "mobile.player-support": "Neda",
+    "ai.context-engineer": "Yasaman",
+    "tech.sre": "Babak",
+    "tech.data-analyst": "Arash"
+  },
+  "cases": [
+    { "id": "h-trv-01", "roleId": "lifestyle.travel-planner", "lang": "fa", "message": "با اقامت ترکیه و پاسپورت ایرانی برای ترانزیت تو فرودگاه فرانکفورت ویزا لازمه؟", "expected": ["travel.entry-requirements-check"], "note": "Transit visa question." },
+    { "id": "h-trv-02", "roleId": "lifestyle.travel-planner", "lang": "en", "message": "my passport expires in 4 months, can I still fly to Thailand in June?", "expected": ["travel.entry-requirements-check"], "note": "Passport validity." },
+    { "id": "h-trv-03", "roleId": "lifestyle.travel-planner", "lang": "en", "message": "what's the weather usually like in Lisbon in May?", "expected": ["none"], "tags": ["quickfact"], "note": "Quick fact; must not be pulled into entry requirements." },
+    { "id": "h-trv-04", "roleId": "lifestyle.travel-planner", "lang": "fa", "message": "بلیط استانبول رو الان بخرم یا صبر کنم ارزون‌تر شه؟", "expected": ["travel.booking-strategy"], "note": "Booking timing; near miss for the visa rewrite." },
+    { "id": "h-lrn-01", "roleId": "lifestyle.learning-tutor", "lang": "en", "history": [{ "who": "agent", "text": "Your turn: tell me about your weekend in English. I'll play your coworker." }], "message": "On Saturday I go to the mountain with my friends and we eat kebab", "expected": ["learn.conversation-practice", "learn.error-feedback"], "tags": ["history", "ambiguous"], "note": "Answer inside a role-play, with a tense error." },
+    { "id": "h-lrn-02", "roleId": "lifestyle.learning-tutor", "lang": "finglish", "history": [{ "who": "agent", "text": "Bia ye role-play konim: to too ye restoran too Paris hasti. Garçon: Bonsoir, vous avez choisi ?" }], "message": "Oui, je veux un steak frites s'il vous plaît", "expected": ["learn.conversation-practice", "learn.error-feedback"], "tags": ["history", "ambiguous"], "note": "Answer inside a role-play." },
+    { "id": "h-lrn-03", "roleId": "lifestyle.learning-tutor", "lang": "en", "message": "can you check this email for mistakes before I send it to my teacher? 'Dear Mr. Smith, I am writing for ask about the homework deadline...'", "expected": ["learn.error-feedback"], "note": "Writing check; near miss for the practice rewrite." },
+    { "id": "h-fit-01", "roleId": "lifestyle.fitness-coach", "lang": "en", "message": "had knee surgery in March and my physio cleared me last week. can we get me back in the gym?", "expected": ["fitness.readiness-screen", "fitness.program-design"], "tags": ["ambiguous"], "note": "Return after surgery." },
+    { "id": "h-fit-02", "roleId": "lifestyle.fitness-coach", "lang": "fa", "message": "دیروز بعد از ددلیفت کمرم یه کم گرفته، امروز تمرین کنم؟", "expected": ["none"], "tags": ["pinned-adjacent"], "note": "New ache: the pinned pain skill's job." },
+    { "id": "h-fit-03", "roleId": "lifestyle.fitness-coach", "lang": "en", "message": "45 and I've never exercised in my life. my doctor says walking and some weights would help. where do I start?", "expected": ["fitness.readiness-screen", "fitness.program-design"], "tags": ["ambiguous"], "note": "First plan." },
+    { "id": "h-ps-01", "roleId": "mobile.player-support", "lang": "en", "message": "player says he bought the season pass twice and wants one refunded. what do I tell him?", "expected": ["ps.purchase-issues"], "note": "Double charge, asks what to reply." },
+    { "id": "h-ps-02", "roleId": "mobile.player-support", "lang": "fa", "message": "این متن اطلاعیه‌ی تعمیرات سرور رو یه کم روون‌ترش کن: «سرورها از ساعت ۲ تا ۴ بامداد در دسترس نخواهند بود»", "expected": ["core.crisp-writing"], "note": "Pure writing job; near miss for the purchase rewrite." },
+    { "id": "h-ps-03", "roleId": "mobile.player-support", "lang": "en", "message": "a player lost all their gems after reinstalling on a new phone, how should I answer?", "expected": ["ps.purchase-issues", "ps.bug-handoff"], "tags": ["ambiguous"], "note": "Lost purchases after a reinstall, or lost progress." },
+    { "id": "h-ctx-01", "roleId": "ai.context-engineer", "lang": "fa", "message": "بات‌مون هر وقت ابزار تقویم خطا میده همینطوری پشت هم دوباره امتحان می‌کنه", "expected": ["ctx.tool-design"], "note": "Problem statement, no question." },
+    { "id": "h-sre-01", "roleId": "tech.sre", "lang": "fa", "message": "از صبح سه بار دیپلوی کردیم و هر سه بار رول‌بک شد", "expected": ["sre.deploy-safety"], "note": "Problem statement, no question." },
+    { "id": "h-da-01", "roleId": "tech.data-analyst", "lang": "fa", "message": "DAU دیروز یهو ۴۰ درصد افت کرد", "expected": ["data.sql-analysis", "data.cohort-retention"], "tags": ["ambiguous"], "note": "A number looks off / DAU moved unexpectedly; no question." },
+    { "id": "h-st-01", "roleId": "ai.context-engineer", "lang": "fa", "message": "امروز چقدر هوا گرمه", "expected": ["none"], "tags": ["smalltalk"], "note": "Small talk statement; must stay none." },
+    { "id": "h-st-02", "roleId": "tech.sre", "lang": "en", "message": "long day. heading home", "expected": ["none"], "tags": ["smalltalk"], "note": "Small talk statement; must stay none." }
+  ]
+}

@@ -816,7 +816,7 @@ const skills: AgentSkill[] = [
     id: 'cto.career-ladder',
     title: 'Engineering ladder',
     summary: 'Defines levels by scope and impact so promotions, hiring and pay stay consistent.',
-    whenToUse: 'Use when the team passes about 15–20 engineers, promotions feel arbitrary, offers are inconsistent, or senior people ask what “staff” means here.',
+    whenToUse: 'Use when the team passes about 15–20 engineers, promotion decisions look inconsistent, offers vary for similar roles, or senior people ask what “staff” means here.',
     method: [
       'Define 5–7 levels (e.g. L1 to L6, up to staff or principal) by scope of impact: task, feature, team, several teams, org. Scope is the backbone; years of experience are not a criterion.',
       'Describe 4–5 dimensions per level (technical craft, delivery, collaboration, leadership, operational ownership) with concrete behaviours and examples from your own work.',
@@ -1926,7 +1926,7 @@ const skills: AgentSkill[] = [
     id: 'cs.ticket-triage',
     title: 'Ticket triage',
     summary: 'Sorts, prioritises and routes tickets with one taxonomy and clear SLAs.',
-    whenToUse: 'Use when new tickets arrive, the queue needs sorting, priorities feel random, or an incident is generating a wave of similar tickets.',
+    whenToUse: 'Use when new tickets arrive, the queue needs sorting, priorities are unclear, or an incident is generating a wave of similar tickets.',
     method: [
       'Read each ticket for the actual problem, the customer tier, the business impact, and any sign of a wider incident or a security issue.',
       'Apply one category taxonomy and a P1–P4 priority with written criteria (P1: production down or data at risk for many users) and the matching SLA.',
