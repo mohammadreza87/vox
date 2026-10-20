@@ -138,7 +138,7 @@ Define scopes, grants, schemas, service credentials, event projections, decision
 
 **Requirements:** REQ-05, REQ-14, REQ-16, REQ-18. **Depends on:** VOX-001, VOX-006.
 
-**Implementation progress:** Strict synthetic manifest and disjoint task/person/group/conversation forward-time partitions, optimizer-only projection, predeclared paired denominators/budgets and signed minimized receipts are implemented. Independent local review passed 24 external checks after two reproduced outcome/scenario defects were fixed. External protected assets/IAM, calibrated judges, representative data and statistical qualification remain open.
+**Implementation progress:** Strict synthetic manifest and disjoint task/person/group/conversation forward-time partitions, optimizer-only projection, predeclared paired denominators/budgets and signed minimized receipts are implemented. Independent local review passed 24 external checks after two reproduced outcome/scenario defects were fixed. External protected assets/IAM, calibrated judges, representative data and statistical qualification remain open. Independent qualification additionally passed two actual pinned-Docker companion flows at integrated d5416f0; finite synthetic results do not establish population quality.
 
 Define synthetic and permitted realistic datasets, person/group/conversation/time splits, calibrated judges, latency/cost denominators and statistical gates.
 
@@ -991,7 +991,7 @@ Convert reviewed defects into isolated worktrees/branches with small diffs, repr
 
 **Requirements:** REQ-14, REQ-16, REQ-18. **Depends on:** VOX-007, VOX-029, VOX-043, VOX-044, VOX-045.
 
-**Implementation progress:** Protocol-bound candidates now require a durable evaluator reservation before final execution, signed minimized companion, existing Docker final envelope and human approval of that exact envelope. Replay/crash/cross-candidate reuse and legacy bypass deny. Independent local 24-case review passed; four existing actual Docker checks remain skipped. External IAM/checkpoint and representative quality/calibration remain open.
+**Implementation progress:** Protocol-bound candidates require a durable evaluator reservation before final execution, signed minimized companion, existing Docker final envelope and human approval of that exact envelope. Replay/crash/cross-candidate reuse and legacy bypass deny. Independent local 24-case review passed. At integrated d5416f0 the four normally skipped Docker cases passed within 33 workflow/software-sandbox tests; two independent actual pinned-Docker companion flows also passed, covering successful approval/restart and denied regression/self-promotion. Default CI skips remain explicit. External IAM/checkpoint and representative quality/calibration remain open.
 
 Run Promptfoo and deterministic tests in a protected environment against exact candidate/model/prompt/data versions; calibrate judge to human examples.
 
