@@ -24,7 +24,7 @@ const validateCase = (c: z.infer<typeof evaluationCaseSchemaBase>, ctx: z.Refine
 };
 export const evaluationCaseSchema = evaluationCaseSchemaBase.superRefine(validateCase);
 export type EvaluationCase = z.infer<typeof evaluationCaseSchema>;
-export const corpusSchema = z.object({ schemaVersion: z.literal(1), provenance: z.literal('synthetic_only'),
+export const corpusSchema = z.object({ schemaVersion: z.union([z.literal(1), z.literal(2)]), provenance: z.literal('synthetic_only'),
   optimization: z.array(evaluationCaseSchema).min(1).max(128), validation: z.array(evaluationCaseSchema).min(1).max(128), final: z.array(evaluationCaseSchema).min(1).max(128) }).strict();
 export type EvaluationCorpus = z.infer<typeof corpusSchema>;
 const validWindow = (w: { startsAt: number; endsAt: number }) => w.startsAt < w.endsAt;
@@ -34,7 +34,13 @@ export const scoringSchema = z.object({ version: z.literal('strict-synthetic-v1'
   maximumCostPerSuccessMicrousd: money, deterministicFailuresAllowed: z.literal(0), privacyFailuresAllowed: z.literal(0),
   inference: z.literal('descriptive_synthetic_only') }).strict();
 export const judgeSchema = z.object({ version: z.literal('deterministic-policy-v1'), calibration: z.literal('synthetic_only'), calibrationDigest: sha256 }).strict();
-const manifestSchemaBase = z.object({ schemaVersion: z.literal(1), id: identifier, purpose: z.literal('product_improvement'), provenance: z.literal('synthetic_only'),
+export const learningCaseCommitmentSchema = z.object({ version: z.literal(1), lineageDigest: sha256 }).strict();
+export type LearningCaseCommitment = z.infer<typeof learningCaseCommitmentSchema>;
+const versionedLearningCases = { schemaVersion: z.union([z.literal(1), z.literal(2)]), learningCases: learningCaseCommitmentSchema.optional() };
+function validLearningCaseVersion(value: { schemaVersion: number; learningCases?: LearningCaseCommitment }): boolean {
+  return value.schemaVersion === 2 ? value.learningCases !== undefined : value.schemaVersion === 1 && !Object.hasOwn(value, 'learningCases');
+}
+const manifestSchemaBase = z.object({ ...versionedLearningCases, id: identifier, purpose: z.literal('product_improvement'), provenance: z.literal('synthetic_only'),
   reviewedAt: timestamp, expiresAt: timestamp, retention: z.object({ approvalReference: identifier, retainUntil: timestamp }).strict(),
   split: z.object({ policy: z.literal('disjoint_task_person_group_conversation_forward_time_v1'), optimization: windowSchema, validation: windowSchema, final: windowSchema }).strict(),
   counts: z.object({ optimization: count.positive(), validation: count.positive(), final: count.positive() }).strict(),
@@ -45,7 +51,7 @@ const manifestSchemaBase = z.object({ schemaVersion: z.literal(1), id: identifie
   judge: judgeSchema, scoring: scoringSchema,
 }).strict();
 const validateManifest = (m: z.infer<typeof manifestSchemaBase>, ctx: z.RefinementCtx) => {
-  if (m.expiresAt <= m.reviewedAt || m.retention.retainUntil < m.expiresAt || m.split.optimization.endsAt > m.split.validation.startsAt || m.split.validation.endsAt > m.split.final.startsAt ||
+  if (!validLearningCaseVersion(m) || m.expiresAt <= m.reviewedAt || m.retention.retainUntil < m.expiresAt || m.split.optimization.endsAt > m.split.validation.startsAt || m.split.validation.endsAt > m.split.final.startsAt ||
       new Set(m.requiredScenarios).size !== scenarios.length || new Set(m.requiredLocales).size !== 3 || m.budget.maxCases < m.counts.final || m.budget.maxCalls < 2 * m.counts.final ||
       m.digests.judge !== hash(canonical(m.judge)) || m.digests.scoring !== hash(canonical(m.scoring))) ctx.addIssue({ code: 'custom', message: 'invalid_protocol_manifest' });
 };
@@ -70,7 +76,7 @@ const validateMetrics = (v: z.infer<typeof metricsSchemaBase>, ctx: z.Refinement
 export const metricsSchema = metricsSchemaBase.superRefine(validateMetrics);
 export type EvaluationMetrics = z.infer<typeof metricsSchema>;
 export const protocolMetadataSchema = z.object({ manifestDigest: sha256, splitDigest: sha256, coverageDigest: sha256, reviewedAt: timestamp, expiresAt: timestamp, retentionApprovalReference: identifier, counts: manifestSchema.shape.counts }).strict();
-const protocolReceiptSchemaBase = z.object({ schemaVersion: z.literal(1), evidence: z.literal('synthetic_local_preflight'), protocolDigest: sha256,
+const protocolReceiptSchemaBase = z.object({ ...versionedLearningCases, evidence: z.literal('synthetic_local_preflight'), protocolDigest: sha256,
   candidateId: identifier, candidateRevision: sha256, artifactDigest: sha256, baselineRevision: sha256, baselineArtifactDigest: sha256,
   legacyDatasetDigest: sha256, candidateEvaluatorDigest: sha256, promotionPolicyDigest: sha256,
   protocolMetadata: protocolMetadataSchema, bindings: manifestSchema.shape.digests, evaluatorServiceId: identifier, testedAt: timestamp, retainUntil: timestamp,
@@ -79,7 +85,7 @@ const protocolReceiptSchemaBase = z.object({ schemaVersion: z.literal(1), eviden
   budget: manifestSchema.shape.budget,
 }).strict();
 const validateProtocolReceipt = (r: z.infer<typeof protocolReceiptSchemaBase>, ctx: z.RefinementCtx) => {
-  if (r.protocolDigest !== hash(canonical({ protocolMetadata: r.protocolMetadata, bindings: r.bindings, budget: r.budget, retainUntil: r.retainUntil })) || r.testedAt < r.protocolMetadata.reviewedAt || r.testedAt >= r.protocolMetadata.expiresAt || r.baseline.assigned !== r.protocolMetadata.counts.final || r.retainUntil <= r.testedAt || r.baseline.assigned !== r.candidate.assigned || r.candidate.assigned > r.budget.maxCases || r.calls > r.budget.maxCalls || r.calls < r.baseline.assigned + r.candidate.assigned - r.baseline.skipped - r.candidate.skipped ||
+  if (!validLearningCaseVersion(r) || r.protocolDigest !== hash(canonical({ protocolMetadata: r.protocolMetadata, bindings: r.bindings, budget: r.budget, retainUntil: r.retainUntil, ...(r.learningCases ? { learningCases: r.learningCases } : {}) })) || r.testedAt < r.protocolMetadata.reviewedAt || r.testedAt >= r.protocolMetadata.expiresAt || r.baseline.assigned !== r.protocolMetadata.counts.final || r.retainUntil <= r.testedAt || r.baseline.assigned !== r.candidate.assigned || r.candidate.assigned > r.budget.maxCases || r.calls > r.budget.maxCalls || r.calls < r.baseline.assigned + r.candidate.assigned - r.baseline.skipped - r.candidate.skipped ||
       r.pairedSuccessGain !== r.candidate.successRate - r.baseline.successRate || r.status === 'passed' && (r.calls !== 2 * r.candidate.assigned || r.candidate.judgeAvailable !== r.candidate.assigned || r.baseline.judgeAvailable !== r.baseline.assigned || r.baseline.coverage !== 1 || r.candidate.coverage !== 1 || r.candidate.deterministicFailures !== 0 || r.candidate.privacyFailures !== 0 || r.candidate.costAvailable !== r.candidate.assigned || r.candidate.latencyAvailable !== r.candidate.assigned))
     ctx.addIssue({ code: 'custom', message: 'invalid_protocol_receipt' });
 };
@@ -87,12 +93,12 @@ export const protocolReceiptSchema = protocolReceiptSchemaBase.superRefine(valid
 export type ProtocolReceipt = z.infer<typeof protocolReceiptSchema>;
 
 /** Bind semantic refinements as well as JSON schema shape into the evaluator identity. */
-export const PROTOCOL_SCHEMA_DIGEST = hash(canonical({ version: 1, rules: [validateCase,validateManifest,validateMetrics,validateProtocolReceipt,validWindow].map(fn => fn.toString()),
+export const PROTOCOL_SCHEMA_DIGEST = hash(canonical({ version: 1, rules: [validateCase,validateManifest,validateMetrics,validateProtocolReceipt,validWindow,validLearningCaseVersion].map(fn => fn.toString()),
   schemas: [manifestSchema,evaluationCaseSchema,adapterOutputSchema,metricsSchema,protocolReceiptSchema].map(schema => schema.toJSONSchema()) }));
 
 const protocolReservationBase = protocolReceiptSchemaBase.omit({ evidence: true, baseline: true, candidate: true, pairedSuccessGain: true, calls: true, status: true, testedAt: true }).extend({ reservedAt: timestamp }).strict();
 const validateReservation = (r: z.infer<typeof protocolReservationBase>, ctx: z.RefinementCtx) => {
-  if (r.protocolDigest !== hash(canonical({ protocolMetadata: r.protocolMetadata, bindings: r.bindings, budget: r.budget, retainUntil: r.retainUntil })) ||
+  if (!validLearningCaseVersion(r) || r.protocolDigest !== hash(canonical({ protocolMetadata: r.protocolMetadata, bindings: r.bindings, budget: r.budget, retainUntil: r.retainUntil, ...(r.learningCases ? { learningCases: r.learningCases } : {}) })) ||
     r.reservedAt < r.protocolMetadata.reviewedAt || r.reservedAt >= r.protocolMetadata.expiresAt || r.retainUntil <= r.reservedAt)
     ctx.addIssue({ code: 'custom', message: 'invalid_protocol_reservation' });
 };

@@ -13,6 +13,7 @@ export const ADAPTIVE_RELEASE_CAPABILITIES = Object.freeze({
   supportedRightsLedgerVersions: Object.freeze([1, 2]),
   supportedExperimentLedgerSchemas: Object.freeze([1]),
   supportedGuestRightsLedgerSchemas: Object.freeze([1]),
+  supportedImprovementWorkflowSchemas: Object.freeze([1, 2]),
 });
 const fail = () => { throw new Error('Adaptive storage is incompatible with this release; current personalization controls must be preserved.'); };
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -58,6 +59,9 @@ function readBounded(path, max = 65536, budget) {
   } finally { closeSync(fd); }
 }
 function readPlainJson(path, max = 65536, budget) { try { return JSON.parse(readBounded(path, max, budget)); } catch { fail(); } }
+const canonical = value => value === null || typeof value !== 'object' ? JSON.stringify(value)
+  : Array.isArray(value) ? `[${value.map(canonical).join(',')}]`
+  : `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonical(value[key])}`).join(',')}}`;
 function entries(directory, limit = MAX_ACCOUNTS + 4) {
   const safe = safePath(directory, 'directory', true); if (!safe) return [];
   const dir = opendirSync(safe), result = [];
@@ -227,10 +231,58 @@ function scanSeparate(env, required, budget) {
   }
 
 }
+/** Detect committed workflow format even when its runtime configuration is off.
+ * Deep record/signature validation belongs to the workflow, not the installer. */
+function scanImprovement(env, required, budget) {
+  const root = join(env.STUDIO_DATA_DIR, 'improvement-review');
+  if (!safePath(root, 'directory', true)) return;
+  const rootNames = entries(root, 4).sort();
+  if (rootNames.some(name => !['audit', 'objects'].includes(name))) fail();
+  const audit = join(root, 'audit'), names = entries(audit, 5001).sort();
+  if (names.length > 5000) fail();
+  let previous = '0'.repeat(64), version = 1, generation = 0, observedAt = 0, registryId, trustDigest;
+  const baseFields = ['findings', 'proposals', 'candidates', 'revokedLineages', 'finalUses', 'protocolUses', 'rollbacks', 'operations'];
+  const eventFields = ['sequence', 'previous', 'action', 'operationId', 'at', 'state', 'digest'];
+  for (const [index, name] of names.entries()) {
+    if (name !== `${String(index + 1).padStart(10, '0')}.json`) fail();
+    const event = readPlainJson(join(audit, name), 2_000_000, budget);
+    const nextVersion = Object.hasOwn(event ?? {}, 'schemaVersion') ? event.schemaVersion : 1;
+    if (![1, 2].includes(nextVersion) || nextVersion < version ||
+        !keys(event, nextVersion === 2 ? [...eventFields, 'schemaVersion', 'kind'] : eventFields) ||
+        event.sequence !== index + 1 || event.previous !== previous || !digest(event.digest) ||
+        typeof event.action !== 'string' || !/^[a-z_]{1,128}$/.test(event.action) ||
+        typeof event.operationId !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(event.operationId) || !integer(event.at)) fail();
+    const { digest: stored, ...body } = event;
+    if (stored !== hash(canonical(nextVersion === 2 ? { domain: 'vox.improvement.audit.v2', body } : body))) fail();
+    const state = event.state;
+    if (!object(state) || ['findings', 'proposals', 'candidates', 'rollbacks', 'operations'].some(field => !object(state[field])) ||
+        ['revokedLineages', 'finalUses'].some(field => !Array.isArray(state[field]) || state[field].some(value => !digest(value))) ||
+        Object.hasOwn(state, 'protocolUses') && (!Array.isArray(state.protocolUses) || state.protocolUses.some(value => !digest(value)))) fail();
+    if (nextVersion === 1) {
+      if (!knownKeys(state, baseFields)) fail();
+    } else {
+      const fields = [...baseFields, 'schemaVersion', 'trustDigest', 'registryId', 'generation', 'observedAt', 'learningCases', 'learningCorpora', 'withdrawnCases'];
+      if (event.kind !== 'vox_improvement_audit' || !keys(state, fields) || state.schemaVersion !== 2 ||
+          !digest(state.trustDigest) || !uuid(state.registryId) || !positive(state.generation) || state.generation !== generation + 1 ||
+          !integer(state.observedAt) || state.observedAt !== event.at || state.observedAt < observedAt ||
+          !Array.isArray(state.protocolUses) || !Array.isArray(state.withdrawnCases) ||
+          state.withdrawnCases.some(value => !digest(value)) || new Set(state.withdrawnCases).size !== state.withdrawnCases.length ||
+          ['learningCases', 'learningCorpora'].some(field => !object(state[field]) || Object.entries(state[field]).some(([key, record]) => !digest(key) || !object(record))) ||
+          version === 2 && (registryId !== state.registryId || trustDigest !== state.trustDigest)) fail();
+      generation = state.generation; registryId = state.registryId; trustDigest = state.trustDigest;
+    }
+    observedAt = Math.max(observedAt, event.at); previous = stored; version = nextVersion;
+  }
+  // Do not accept a moving snapshot or a writer/recovery lock. The installer
+  // repeats admission after stopping the service before changing its release.
+  if (canonical(entries(root, 4).sort()) !== canonical(rootNames) ||
+      canonical(entries(audit, 5001).sort()) !== canonical(names)) fail();
+  if (names.length) required.improvementWorkflowSchema = version;
+}
 /** Bounded structural metadata admission; this does not replace runtime validation. */
 export function requiredAdaptiveCapabilities(env) {
   try { safePath(env.STUDIO_DATA_DIR, 'directory', true); const required = coreCapabilities(env), budget = { bytes: 0 };
-    scanAdaptive(env, required, budget); scanSeparate(env, required, budget); return required;
+    scanAdaptive(env, required, budget); scanSeparate(env, required, budget); scanImprovement(env, required, budget); return required;
   } catch { fail(); }
 }
 
@@ -253,8 +305,9 @@ export function assertReleaseAdaptiveCompatibility(env, manifest) {
     ['supportedRightsLedgerVersions', 'rightsLedgerVersion', [1, 2]],
     ['supportedExperimentLedgerSchemas', 'experimentLedgerSchema', [1]],
     ['supportedGuestRightsLedgerSchemas', 'guestRightsLedgerSchema', [1]],
+    ['supportedImprovementWorkflowSchemas', 'improvementWorkflowSchema', [1, 2]],
   ]) {
-    const versions = Object.hasOwn(supported, field) ? supported[field] : field === 'supportedRightsLedgerVersions' ? [1] : [];
+    const versions = Object.hasOwn(supported, field) ? supported[field] : ['supportedRightsLedgerVersions', 'supportedImprovementWorkflowSchemas'].includes(field) ? [1] : [];
     if (!Array.isArray(versions) || versions.length > allowed.length || new Set(versions).size !== versions.length || versions.some(v => !allowed.includes(v)) || required[requiredKey] !== undefined && !versions.includes(required[requiredKey])) fail();
   }
   return required;
