@@ -2226,6 +2226,13 @@
       "baseline": "4be2b395789ce283ce88769616a08c7546ff2484",
       "evidence": "docs/implementation/REQUESTED_ROUTINES.md",
       "note": "Provision basic rights intake and available per-account privacy controls; retain individual choices and explain unsupported features accurately. Live configuration and authenticated verification pending."
+    },
+    {
+      "id": "RI-PILOT-01",
+      "status": "in_progress",
+      "baseline": "2f0df5ffca7e180d9b246afc2acea9c848eee048",
+      "evidence": "docs/implementation/REQUESTED_ROUTINES.md",
+      "note": "Explicit internal-company operational availability for listed current owner/superadmin accounts, maximum 90 days, separate from jurisdiction approvals. Preserve adult/profile confirmation, purpose/agent/channel grants, pauses and holds. Exclude biometric recognition, content quality review and audio/image capabilities. Independent acceptance and deployment pending."
     }
   ]
 }

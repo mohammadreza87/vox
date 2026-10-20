@@ -39,6 +39,36 @@ describe('explicit daily command and bounded natural intent', () => {
     expect(hasExplicitDailyIntent('Please teach me a slang phrase every day')).toBe(true);
     for (const text of ['What does daily mean?', 'She said send me slang daily', 'Do not send me slang daily', '> send me slang daily', 'If I ask you to send me slang daily']) expect(hasExplicitDailyIntent(text)).toBe(false);
   });
+  it.each([
+    ['please pause daily lessons', 'pause'], ['please pause my daily lessons', 'pause'],
+    ['stop sending me daily slang', 'stop'], ['cancel my daily routine', 'stop'],
+    ['please resume my daily lessons', 'resume'], ['continue my daily lessons', 'resume'],
+    ['درس روزانه را متوقف کن', 'stop'], ['درس روزانه را لغو کن', 'stop'],
+    ['لطفاً درس‌های روزانه‌ام را موقتا متوقف کن', 'pause'], ['درس روزانه رو ادامه بده', 'resume'],
+    ['درس روزانه را از سر بگیر', 'resume'], ['دیگه هر روز اصطلاح نفرست', 'stop'],
+  ])('parses explicit natural control %s as %s', (text, type) => {
+    expect(parseDailyCommand(text)).toEqual({ type });
+  });
+  it.each(['stop', 'pause', 'continue', 'stop doing that', 'لطفا متوقف کن', 'ادامه بده', '> stop sending me daily slang', 'She said cancel my daily routine', 'درس روزانه را لغو نکن', 'درس روزانه را موقتا متوقف نکن', 'او گفت درس روزانه را لغو کن', '«درس روزانه را لغو کن»'])('does not infer a daily control from %s', text => {
+    expect(parseDailyCommand(text)).toBeNull();
+  });
+  it.each(['please pause daily lessons', 'please pause my daily lessons', 'لطفاً درس‌های روزانه‌ام را موقتا متوقف کن'])('preserves the persisted definition and suppresses delivery on natural pause: %s', async text => {
+    await send('/daily Europe/Tallinn teach slang');
+    const original = (await h.studio.deps.requestedRoutines!.manage(binding, { type: 'list' })).routines[0];
+    expect(await send(text, 2)).toBe(true); expect(lastReply()).toContain('paused');
+    const paused = (await h.studio.deps.requestedRoutines!.manage(binding, { type: 'list' })).routines[0];
+    expect(paused).toMatchObject({ id: original.id, status: 'paused', instruction: original.instruction, timeZone: original.timeZone, timing: original.timing, nextRunAt: null });
+    await h.studio.deps.requestedRoutines!.tick(); expect(fetcher).not.toHaveBeenCalled();
+    await send('درس روزانه را ادامه بده', 3);
+    expect((await h.studio.deps.requestedRoutines!.manage(binding, { type: 'list' })).routines[0]).toMatchObject({ status: 'active', instruction: original.instruction });
+  });
+  it.each(['stop sending me daily slang', 'cancel my daily routine', 'درس روزانه را لغو کن'])('stops delivery and clears retained lesson instruction on natural cancel: %s', async text => {
+    await send('/daily Europe/Tallinn teach slang');
+    expect(await send(text, 2)).toBe(true); expect(lastReply()).toContain('stopped');
+    const stopped = (await h.studio.deps.requestedRoutines!.manage(binding, { type: 'list' })).routines[0];
+    expect(stopped).toMatchObject({ status: 'stopped', instruction: '', recentLessons: [], nextRunAt: null });
+    await h.studio.deps.requestedRoutines!.tick(); expect(fetcher).not.toHaveBeenCalled();
+  });
   it('persists before confirmation and supports list, pause, resume, change, stop', async () => {
     await send('/daily Europe/Tallinn teach slang');
     expect(lastReply()).toContain('suitable daytime moment');
@@ -69,6 +99,16 @@ describe('explicit daily command and bounded natural intent', () => {
     await send('Teach slang every day', 4);
     expect(await handleRequestedRoutineMessage(h.studio, hired.agent.id, message('Europe/Tallinn', 5), 'rotated-endpoint')).toBe(false);
     expect((await h.studio.deps.requestedRoutines!.manage(binding, { type: 'list' })).routines).toHaveLength(0);
+  });
+  it('clears pending creation on natural cancellation and requires selection for multiple routines', async () => {
+    vi.spyOn(h.studio.deps.chatLLM, 'complete').mockResolvedValue(JSON.stringify({ intent: 'create', instruction: 'slang', localTime: null, timeZone: null }));
+    await send('Teach slang every day');
+    await send('stop sending me daily slang', 2);
+    expect(await send('Europe/Tallinn', 3)).toBe(false);
+    await send('/daily Europe/Tallinn teach slang', 4);
+    await send('/daily Europe/Tallinn teach idioms', 5);
+    await send('pause my daily lessons', 6); expect(lastReply()).toContain('Include the routine ID');
+    expect((await h.studio.deps.requestedRoutines!.manage(binding, { type: 'list' })).routines.every(r => r.status === 'active')).toBe(true);
   });
   it('does not classify ordinary messages or schedule forwarded or quoted input', async () => {
     const classifier = vi.spyOn(h.studio.deps.chatLLM, 'complete');

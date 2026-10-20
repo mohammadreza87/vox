@@ -25,6 +25,16 @@ Basic intake is available to recognized accounts, including a pending account th
 
 Available optional privacy controls require the per-account service manifest plus the person's own choices. Activating availability must not silently grant purposes, fabricate an adult declaration, or enroll a voice. Features without a working backend must be described accurately rather than given an enabled switch.
 
+### RI-PILOT-01: internal company availability
+
+The user explicitly requested the company's owner/superadmin pilot. A separate version-2 manifest uses `basis: internal_company_pilot` rather than claiming a resolved jurisdiction or legal approval. It has an explicit account list, current operational review owner/reference, and a maximum 90-day validity window. A synchronous read of current Studio membership must still show exactly one owner/superadmin account at every eligibility evaluation. Account removal, demotion, missing authority resolution or expiry denies use. The version-1 jurisdiction-based policy remains unchanged.
+
+This pilot may make only text notes, usage analytics, personalization, automatic memory, requested reminders, proactive suggestions and Telegram check-in alerts available. It cannot enable biometric recognition, content quality review, or audio/image capabilities. Each person's profile/adult confirmation, purpose choices, agent grants, channel choices, pauses and holds remain effective. No existing permission is changed by provisioning. A country answer is not a prerequisite for this operational pilot; regional/legal qualification remains unverified and is not implied by the manifest.
+
+The planned production configuration enables the scoped relationship loop and reminder maintenance/delivery workers for the existing owner/superadmin cohort. Those workers still require the relevant individual choices and fresh eligible input. The explicitly requested daily lesson uses its own direct-request authorization, so it does not wait for automatic-memory consent or a social check-in grant.
+
+Interactive privacy changes and private interactive access still require a current confirmed profile session. Background reminders and relationship work use their existing separately granted durable identity and channel bindings, so the interactive session expiring does not by itself cancel those grants. Clearing the profile identity blocks this work. The grants' own expiry, current membership, adult declaration, purpose/agent/channel/source permissions, withdrawal, pause and processing holds continue to govern delivery. A 90-day operational policy does not create a 90-day individual background grant.
+
 ## فارسی
 
 کاربر انتظار دارد مارکوس اصطلاح انگلیسی روزانه را در گفت‌وگوی خصوصی تلگرام خودش بفرستد و زمان مناسب را بر اساس منطقهٔ زمانی و فعالیت او انتخاب کند. پاسخ متنی فعلی وظیفهٔ تکرارشونده ایجاد نمی‌کند. یادآور فعلی فقط یک اعلان یک‌باره از ربات مدیر است و پیگیری رابطه مسیر جداگانه‌ای دارد.
@@ -46,3 +56,13 @@ Available optional privacy controls require the per-account service manifest plu
 ثبت درخواست برای حساب شناخته‌شده، از جمله حساب در انتظار عضویت، در دسترس است. خروجی حساب و دسترسی اپراتور بررسی جداگانه دارند. در زمان آماده‌سازی سه عضو شامل یک مالک و دو مدیر ارشد وجود دارد. عضویت جدید دسترسی اپراتور ایجاد نمی‌کند. ثبت درخواست به‌تنهایی داده را حذف نمی‌کند، پردازش را متوقف نمی‌کند و رضایت را تغییر نمی‌دهد.
 
 در دسترس شدن کنترل‌های اختیاری به تنظیم سرویس برای حساب و انتخاب خود شخص وابسته است. فعال‌سازی دسترسی نباید رضایت، تأیید بزرگ‌سالی یا ثبت صدای کاربر را جعل کند. قابلیت فاقد زیرساخت اجرایی باید صادقانه توضیح داده شود.
+
+### RI-PILOT-01: دسترسی آزمایشی داخلی شرکت
+
+کاربر استفادهٔ آزمایشی داخلی برای مالک‌ها و مدیران ارشد را صریحاً درخواست کرده است. تنظیم نسخهٔ دوم با مبنای `internal_company_pilot` از تأیید حقوقی یا منطقهٔ قضایی تفکیک می‌شود. حساب‌ها مشخص‌اند، مسئول و مرجع بررسی عملیاتی ثبت می‌شوند و اعتبار حداکثر ۹۰ روز است. در هر بررسی دسترسی، عضویت فعلی باید دقیقاً یک حساب مالک یا مدیر ارشد را نشان دهد. حذف حساب، کاهش نقش، نبود بررسی معتبر یا انقضا دسترسی را متوقف می‌کند. مسیر سیاست منطقه‌ای نسخهٔ اول تغییر نمی‌کند.
+
+این حالت فقط یادداشت متنی، تحلیل استفاده، شخصی‌سازی، حافظهٔ خودکار، یادآور درخواستی، پیشنهاد پیش‌دستانه و اعلان تلگرام را در دسترس قرار می‌دهد. تشخیص زیست‌سنجی، بررسی کیفیت محتوا و قابلیت‌های صوتی یا تصویری را فعال نمی‌کند. تأیید نمایه و بزرگ‌سالی، انتخاب هدف، مجوز عامل و کانال، توقف و محدودیت‌های کاربر همچنان لازم و معتبرند. هیچ رضایتی خودکار ثبت نمی‌شود. پاسخ کشور پیش‌نیاز این آزمایش عملیاتی نیست؛ صلاحیت منطقه‌ای یا حقوقی همچنان تأییدنشده است.
+
+تنظیم عملیاتی موردنظر کارگرهای رابطهٔ محدود و نگهداری و ارسال یادآورها را برای همان گروه داخلی فعال می‌کند. این مسیرها همچنان به انتخاب شخص و ورودی تازهٔ مجاز نیاز دارند. درس روزانهٔ صریحاً درخواست‌شده مجوز درخواست مستقیم خودش را دارد و به رضایت حافظهٔ خودکار یا پیگیری اجتماعی وابسته نیست.
+
+تغییر تعاملی تنظیمات حریم خصوصی و دسترسی خصوصی تعاملی همچنان به نشست فعلیِ نمایهٔ تأییدشده نیاز دارد. یادآورها و کارهای رابطه در پس‌زمینه از پیوند هویت و کانال پایدارِ جداگانه‌ای استفاده می‌کنند که شخص مجاز کرده است؛ پایان نشست تعاملی به‌تنهایی آن مجوزها را لغو نمی‌کند. پاک‌کردن هویت نمایه این کارها را متوقف می‌کند. انقضای خود مجوز، عضویت فعلی، تأیید بزرگ‌سالی، مجوز هدف و عامل و کانال و منبع، پس‌گرفتن رضایت، توقف و محدودیت پردازش همچنان ارسال را کنترل می‌کنند. اعتبار ۹۰روزهٔ سیاست عملیاتی به‌معنای ایجاد مجوز پس‌زمینهٔ ۹۰روزه برای شخص نیست.

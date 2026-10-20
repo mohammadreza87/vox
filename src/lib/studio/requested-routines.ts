@@ -27,8 +27,19 @@ export function hasExplicitDailyIntent(text: string): boolean {
 }
 
 export function parseDailyCommand(text: string): DailyRequest | null {
-  const naturalControl = /^(?:please\s+)?(stop|cancel|pause)\s+(?:(?:my|the)\s+)?daily\s+(?:lessons?|routines?|messages?|slang)(?:\s+please)?[.!]?$/i.exec(text.trim());
-  if (naturalControl) return { type: naturalControl[1].toLowerCase() === 'pause' ? 'pause' : 'stop' };
+  // Whole-message controls only: an ambiguous "stop" or quoted request is chat.
+  const naturalControl = /^(?:please\s+)?(stop|cancel|pause|resume|continue)\s+(?:(?:sending|teaching|giving)\s+(?:me\s+)?)?(?:(?:my|the)\s+)?daily\s+(?:lessons?|routines?|messages?|slang)(?:\s+please)?[.!]?$/i.exec(text.trim());
+  if (naturalControl) {
+    const action = naturalControl[1].toLowerCase();
+    return { type: action === 'pause' ? 'pause' : action === 'resume' || action === 'continue' ? 'resume' : 'stop' };
+  }
+  const fa = text.trim().replace(/[يى]/g, 'ی').replace(/ك/g, 'ک').replace(/[\u064b-\u065f]/g, '').replace(/\u200c/g, ' ').replace(/\s+/g, ' ').replace(/[.!؟]$/, '').trim();
+  const persianControl = /^(?:لطفا )?(?:درس(?: ها(?:ی)?)?|پیام(?: ها(?:ی)?)?|روتین|اصطلاح(?: ها(?:ی)?)?) روزانه(?: ام| من)? (?:را |رو )?(لغو کن|کنسل کن|متوقف کن|موقتا متوقف کن|مکث کن|توقف موقت کن|ادامه بده|از سر بگیر|دوباره شروع کن)$/.exec(fa);
+  if (persianControl) {
+    const action = persianControl[1];
+    return { type: ['موقتا متوقف کن', 'مکث کن', 'توقف موقت کن'].includes(action) ? 'pause' : ['ادامه بده', 'از سر بگیر', 'دوباره شروع کن'].includes(action) ? 'resume' : 'stop' };
+  }
+  if (/^(?:لطفا )?(?:دیگه )?(?:هر روز|روزانه) (?:برام |برای من )?(?:اصطلاح|درس|پیام) نفرست$/.test(fa)) return { type: 'stop' };
   const match = /^\/(daily|routines)(?:@[A-Za-z0-9_]+)?(?:\s+([\s\S]*))?$/i.exec(text.trim());
   if (!match) return null;
   const body = (match[2] ?? '').trim();
