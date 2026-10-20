@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /** Single-host Vox Studio releases. Secrets stay in an owner-only env file. */
-import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync, symlinkSync, renameSync, realpathSync, rmSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync, symlinkSync, renameSync, realpathSync, rmSync, unlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,15 +9,16 @@ import { randomBytes } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { createConnection } from 'node:net';
 import { assertReleaseAdaptiveCompatibility, readInstalledReleaseManifest } from './studio-adaptive-compatibility.mjs';
+import { assertCurrent, assertIdentifiedRuntime, assertReleaseDirectory, guardedBackup, parseExpected, readControlText, readCurrent, readRelease, releaseDirectoryIdentity, transitionRelease, withOperation } from './studio-operation-guard.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const base = process.env.VOX_PRODUCTION_DIR ?? join(homedir(), 'Library', 'Application Support', 'Vox Studio');
-const envFile = join(base, 'production.env');
+let base = process.env.VOX_PRODUCTION_DIR ?? join(homedir(), 'Library', 'Application Support', 'Vox Studio');
+let envFile = join(base, 'production.env');
 const label = 'io.ludaxis.vox-studio';
 const domain = `gui/${process.getuid()}`;
 const plist = join(homedir(), 'Library', 'LaunchAgents', `${label}.plist`);
 const keys = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'ELEVENLABS_API_KEY', 'ELEVENLABS_TTS_MODEL', 'VOXX_BOT_TOKEN', 'VOXX_BOT_USERNAME', 'STUDIO_SECRET', 'STUDIO_SUPERADMIN_IDS', 'STUDIO_WEBAPP_URL', 'STUDIO_DATA_DIR', 'STUDIO_ORG_NAME', 'STUDIO_CHAT_MODEL', 'STUDIO_VOICE_MODEL', 'STUDIO_PERSONA_MODEL', 'STUDIO_DECISIONS', 'OPENAI_DECISION_MODEL', 'STUDIO_GROUP_OBSERVATION',
-  'OPENAI_IMAGE_MODEL', 'OPENAI_STT_MODEL', 'STUDIO_WEB_SEARCH', 'STUDIO_DECISIONS_ENABLED',
+  'OPENAI_IMAGE_MODEL', 'OPENAI_STT_MODEL', 'STUDIO_WEB_SEARCH', 'STUDIO_DECISIONS_ENABLED', 'STUDIO_SKILL_ROUTING',
   'STUDIO_RELATIONSHIPS', 'STUDIO_RELATIONSHIP_ROLES', 'STUDIO_RELATIONSHIP_AGENTS', 'STUDIO_RELATIONSHIP_PEOPLE', 'STUDIO_RELATIONSHIP_WORKER_SECRET',
   'STUDIO_SCOPED_RELATIONSHIPS', 'STUDIO_ADAPTIVE_POLICY_JSON', 'STUDIO_MAINTENANCE', 'STUDIO_REMINDER_DELIVERY', 'STUDIO_IMPROVEMENT_TRUST_JSON'];
 keys.push('STUDIO_CONNECTIONS_CONFIG_FILE', 'STUDIO_CONNECTIONS_BROKER_URL', 'STUDIO_CONNECTIONS_BROKER_AUTH_KEY_FILE');
@@ -59,8 +60,7 @@ function prepare() {
   } finally { rmSync(temporary, { force: true }); }
   chmodSync(envFile, 0o600);
   privateDir(env.STUDIO_DATA_DIR);
-  console.log(`Production configuration prepared: ${envFile}`);
-  console.log('Existing secret values were preserved. No service has been started.');
+  return `Production configuration prepared: ${envFile}\nExisting secret values were preserved. No service has been started.`;
 }
 async function check() {
   const env = config();
@@ -196,7 +196,26 @@ function installPlist() {
     renameSync(temporary, plist);
   } finally { rmSync(temporary, { force: true }); }
 }
-async function install() {
+async function ready(revision, checkpoint) {
+  for (let attempt = 0; attempt < 15; attempt++) {
+    checkpoint();
+    const response = await fetch('http://127.0.0.1:3107/api/studio/health', { signal: AbortSignal.timeout(2000) }).catch(() => null);
+    const health = response?.ok ? await response.json().catch(() => null) : null;
+    checkpoint();
+    if (health?.status === 'healthy' && health.bots && health.revision === revision) return;
+    await new Promise(done => setTimeout(done, 2000));
+  }
+  throw new Error('New release failed its readiness check.');
+}
+function transitionOperations() {
+  return {
+    running, stop, start, snapshot, pointTo, ready,
+    clearCurrent: () => unlinkSync(join(base, 'current')),
+    compatible: release => assertReleaseAdaptiveCompatibility(config(), readInstalledReleaseManifest(release.path)),
+  };
+}
+async function install(guard, baseline) {
+  guard.check(); assertCurrent(base, baseline);
   const env = config();
   const artifact = join(root, '.next', 'standalone');
   if (!existsSync(join(artifact, 'server.js'))) throw new Error('Run npm run build first; standalone/server.js is missing.');
@@ -211,42 +230,37 @@ async function install() {
   }
   assertReleaseAdaptiveCompatibility(env, manifest);
   await check();
+  guard.check(); assertCurrent(base, baseline); // No release/config/previous mutation before this fence.
   const release = join(base, 'releases', `${stamp()}-${revision.slice(0, 12)}`);
-  privateDir(release);
+  privateDir(join(base, 'releases'));
+  mkdirSync(release, { mode: 0o700 }); // Exclusive creation: never adopt another operation's candidate.
+  const createdIdentity = releaseDirectoryIdentity(release);
   cpSync(artifact, release, { recursive: true, filter: source => !/^\.env(?:\.|$)/.test(basename(source)) });
   cpSync(join(root, '.next', 'static'), join(release, '.next', 'static'), { recursive: true });
   cpSync(join(root, 'public'), join(release, 'public'), { recursive: true });
   cpSync(fileURLToPath(import.meta.url), join(release, 'studio-runtime.mjs'));
   cpSync(new URL('./studio-adaptive-compatibility.mjs', import.meta.url), join(release, 'studio-adaptive-compatibility.mjs'));
+  cpSync(new URL('./studio-operation-guard.mjs', import.meta.url), join(release, 'studio-operation-guard.mjs'));
   cpSync(join(root, '.next', 'studio-release.json'), join(release, 'studio-release.json'));
   writeFileSync(join(release, 'revision'), revision + '\n');
-  const previous = existsSync(join(base, 'current')) ? realpathSync(join(base, 'current')) : null;
-  const wasRunning = running();
-  if (previous) writeFileSync(join(base, 'previous'), previous);
-  try {
-    await stop();
-    assertReleaseAdaptiveCompatibility(config(), manifest);
-    snapshot();
-    pointTo(release);
-    installPlist();
-    start();
-    let ready = false;
-    for (let attempt = 0; attempt < 15; attempt++) {
-      const response = await fetch('http://127.0.0.1:3107/api/studio/health', { signal: AbortSignal.timeout(2000) }).catch(() => null);
-      const health = response?.ok ? await response.json().catch(() => null) : null;
-      if (health?.status === 'healthy' && health.bots && health.revision === revision) { ready = true; break; }
-      await new Promise(done => setTimeout(done, 2000));
-    }
-    if (!ready) throw new Error('New release failed its readiness check.');
-  } catch (error) {
-    await stop();
-    if (previous) {
-      assertReleaseAdaptiveCompatibility(config(), readInstalledReleaseManifest(previous));
-      pointTo(previous); if (wasRunning) start();
-    }
-    throw error;
-  }
-  console.log(`Installed revision ${revision}. Run status, then verify the public HTTPS endpoint and Telegram.`);
+  assertReleaseDirectory(release, createdIdentity);
+  const target = readRelease(release);
+  if (target.revision !== revision || target.sourceTree !== sourceTree || target.buildId !== buildId) throw new Error('Copied release provenance changed.');
+  await transitionRelease(guard, baseline, target, {
+    ...transitionOperations(),
+    beforeSwitch: () => { if (!baseline.absent) writeFileSync(join(base, 'previous'), baseline.release.path); },
+    afterSwitch: installPlist,
+  });
+  return `Installed revision ${revision}. Run status, then verify the public HTTPS endpoint and Telegram.`;
+}
+async function rollback(guard, baseline) {
+  guard.check(); assertCurrent(base, baseline);
+  const previous = readControlText(join(base, 'previous'));
+  if (!existsSync(join(previous, 'server.js'))) throw new Error('Previous release is unavailable.');
+  const target = readRelease(previous);
+  assertReleaseAdaptiveCompatibility(config(), readInstalledReleaseManifest(previous));
+  await transitionRelease(guard, baseline, target, transitionOperations());
+  return 'Previous release restored; verify status.';
 }
 async function status() {
   console.log(`Launch agent: ${running() ? 'loaded' : 'not loaded'}`);
@@ -271,29 +285,36 @@ function run() {
   child.on('exit', code => process.exit(code ?? 1));
 }
 
-try {
-  switch (process.argv[2]) {
-    case 'prepare': prepare(); break;
+async function dispatch(command, guard, baseline) {
+  switch (command) {
+    case 'prepare': return prepare();
     case 'check': await check(); break;
-    case 'install': await install(); break;
+    case 'install': return install(guard, baseline);
     case 'status': await status(); break;
-    case 'stop': await stop(); break;
-    case 'run': run(); break;
-    case 'backup': { const wasRunning = running(); try { await stop(); snapshot(); } finally { if (wasRunning && !running()) start(); } break; }
-    case 'rollback': {
-      const previous = readFileSync(join(base, 'previous'), 'utf8');
-      if (!existsSync(join(previous, 'server.js'))) throw new Error('Previous release is unavailable.');
-      const previousManifest = readInstalledReleaseManifest(previous);
-      assertReleaseAdaptiveCompatibility(config(), previousManifest);
-      const current = realpathSync(join(base, 'current'));
-      const wasRunning = running();
-      try { await stop(); assertReleaseAdaptiveCompatibility(config(), previousManifest); snapshot(); pointTo(previous); start(); }
-      catch (error) {
-        await stop(); assertReleaseAdaptiveCompatibility(config(), readInstalledReleaseManifest(current));
-        pointTo(current); if (wasRunning) start(); throw error;
-      }
-      console.log('Previous release restored; verify status.'); break;
+    case 'stop': {
+      const current = readCurrent(base);
+      assertIdentifiedRuntime(current, running());
+      guard.check(); assertCurrent(base, current);
+      await stop();
+      guard.check(); assertCurrent(base, current); break;
     }
-    default: console.log('Usage: node scripts/studio-production.mjs prepare|check|install|status|stop|backup|rollback'); process.exitCode = 1;
+    case 'run': run(); break;
+    case 'backup': await guardedBackup(guard, { running, stop, snapshot, start, ready }); break;
+    case 'rollback': return rollback(guard, baseline);
+    default: console.log('Usage: node scripts/studio-production.mjs prepare|check|install|status|stop|backup|rollback\nInstall/rollback: --expect-current <resolved-path> --expect-revision <full-sha> --expect-build <build-id>\nInitial install only: --expect-absent'); process.exitCode = 1;
   }
-} catch (error) { console.error(error.message); process.exitCode = 1; }
+}
+try {
+  const command = process.argv[2];
+  if (['prepare', 'install', 'stop', 'backup', 'rollback'].includes(command)) {
+    const expected = ['install', 'rollback'].includes(command) ? parseExpected(process.argv.slice(3), command) : undefined;
+    const receipt = await withOperation(base, command, expected, async (guard, baseline) => {
+      base = guard.base; envFile = join(base, 'production.env');
+      return dispatch(command, guard, baseline);
+    }, { onCancel: signal => { process.exitCode = signal === 'SIGINT' ? 130 : 143; } });
+    if (receipt) console.log(receipt);
+  } else {
+    // launchd's run child must start while install owns the operation lock and awaits health.
+    await dispatch(command);
+  }
+} catch (error) { console.error(error.message); process.exitCode ||= 1; }

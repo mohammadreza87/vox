@@ -3,19 +3,23 @@ import { z } from 'zod';
 import { localUseStatusSchema, localUseViewSchema, localUsePlanInputSchema, localUsePlanSchema, localUseActionInputSchema, localUseOperationSchema, localUseReconcileInputSchema, type LocalUseScope, type LocalUsePlanInput, type LocalUseActionInput } from '@/lib/adaptive/rights-intake/local-use-contracts';
 import { rightsUseEffectSchema, rightsUseScopeSchema } from '@/lib/adaptive/rights-use-holds/contracts';
 import { RIGHTS_COPY_VERSION } from '@/lib/adaptive/rights-intake/notice';
-import { auditSchema, tombstoneSchema, retentionActionSchema, createInputSchema, integer, kindSchema, operatorActionSchema, policyBindingSchema, requestSchema, requesterActionSchema, type RetentionAction, type CreateInput, type OperatorAction, type RequesterAction, type RightsMutation, type RightsOperations, type RightsRequestView, type RightsSnapshot, type RightsSpace } from '@/lib/adaptive/rights-intake/contracts';
+import { auditSchema, tombstoneSchema, retentionActionSchema, createInputSchema, integer, kindSchema, operatorActionSchema, policyBindingSchema, requestSchema, requesterActionSchema, type RetentionAction, type CreateInput, type OperatorAction, type RequesterAction, type RightsMutation, type RightsOperations, type RightsOperationView, type RightsRequestView, type RightsSnapshot, type RightsSpace } from '@/lib/adaptive/rights-intake/contracts';
 import { preferenceValueSchema } from '@/lib/adaptive/personalization';
 import { productPauseScopeSchema } from '@/lib/adaptive/product-pause/contracts';
 import { experimentScopeExportSchema } from '@/lib/adaptive/experiments/contracts';
 import { ADAPTIVE_OPTIONAL_PURPOSES } from '@/lib/adaptive/persistence/contracts';
+import { localErasureOperatorSchema, localErasureReconcileInputSchema, localErasureViewSchema, localErasurePlanInputSchema, localErasurePlanSchema, localErasureExecuteInputSchema, localErasureMutationSchema, type LocalErasureView, type LocalErasurePlan, type LocalErasurePlanInput } from '@/lib/adaptive/rights-intake/local-erasure-contracts';
 import { tg } from './client';
+export type { LocalErasureView, LocalErasurePlan } from '@/lib/adaptive/rights-intake/local-erasure-contracts';
 export type { RightsRequestView, RightsSnapshot, RightsSpace, RightsOperations, RightsOperationView } from '@/lib/adaptive/rights-intake/contracts';
 const policyStatus = z.enum(['available', 'unavailable']);
 export const rightsRequestViewSchema = requestSchema.omit({ accountId: true, audit: true }).extend({ retentionReviewRequired: z.boolean() }).strict();
-const operationViewSchema = rightsRequestViewSchema.pick({ version: true, requestId: true, space: true, kind: true, revision: true, createdAt: true, updatedAt: true, state: true, reasonCode: true, deadline: true, coverage: true, retentionReviewRequired: true }).extend({ localUses: z.array(localUseOperationSchema).max(2).optional(), retentionActions: z.array(retentionActionSchema.shape.action).max(2).optional(), retentionAt: integer.optional(), retentionPolicyRevision: integer.positive().optional(), accountRef: z.string().regex(/^[a-f0-9]{64}$/), operationHandle: z.string().min(1).max(2048), audit: z.array(auditSchema.omit({ actorRef: true })).max(32) }).strict();
+const operationViewSchema = rightsRequestViewSchema.pick({ version: true, requestId: true, space: true, kind: true, revision: true, createdAt: true, updatedAt: true, state: true, reasonCode: true, deadline: true, coverage: true, retentionReviewRequired: true }).extend({ localUses: z.array(localUseOperationSchema).max(2).optional(), localErasures: z.array(localErasureOperatorSchema).max(32).optional(), retentionActions: z.array(retentionActionSchema.shape.action).max(2).optional(), retentionAt: integer.optional(), retentionPolicyRevision: integer.positive().optional(), accountRef: z.string().regex(/^[a-f0-9]{64}$/), operationHandle: z.string().min(1).max(2048), audit: z.array(auditSchema.omit({ actorRef: true })).max(32) }).strict().superRefine((r,c) => { const entries = r.localErasures; if (entries && (r.kind !== 'erasure' || new Set(entries.map(s => s.commandEventId)).size !== entries.length || new Set(entries.map(s => s.view.operationRef)).size !== entries.length)) c.addIssue({code:'custom',message:'Invalid erasure operations'}); });
 export const rightsSnapshotSchema = z.object({ available: z.boolean(), policyStatus, supportedKinds: z.array(kindSchema).max(7), intakePolicy: policyBindingSchema.optional(), requests: z.array(rightsRequestViewSchema).max(100), expiredRequests: z.array(tombstoneSchema).max(128).optional(), supportContact: z.literal('info@joyixir.com') }).strict().superRefine((value, ctx) => { if (value.available && (value.policyStatus !== 'available' || !value.intakePolicy || value.intakePolicy.copyVersion !== RIGHTS_COPY_VERSION || !value.supportedKinds.length)) ctx.addIssue({ code: 'custom', message: 'Policy unavailable' }); if (!value.available && value.supportedKinds.length) ctx.addIssue({ code: 'custom', message: 'Unavailable kinds' }); });
 const mutationSchema = z.object({ replayed: z.boolean(), request: rightsRequestViewSchema, policyStatus }).strict();
 const operationsSchema = z.object({ requests: z.array(operationViewSchema).max(100), nextCursor: z.string().min(1).max(4096).optional(), policyStatus }).strict().superRefine((v,c)=>{
+  const erasures = v.requests.flatMap(r => r.localErasures ?? []);
+  if (v.requests.some(r => r.localErasures && r.kind !== 'erasure') || new Set(erasures.map(s => s.commandEventId)).size !== erasures.length || new Set(erasures.map(s => s.view.operationRef)).size !== erasures.length) c.addIssue({code:'custom',message:'Invalid erasure operations'});
   if(v.requests.some(r=>r.localUses && (new Set(r.localUses.map(s=>s.view.status.scope.purpose)).size !== r.localUses.length || r.localUses.some(s=>s.view.status.scope.space !== r.space || s.view.availableActions.length>0)))) c.addIssue({code:'custom',message:'Invalid operations scope'});
 });
 const operationMutationSchema = z.object({ replayed: z.boolean(), request: operationViewSchema, policyStatus }).strict();
@@ -66,7 +70,41 @@ export type { LocalUseScope } from '@/lib/adaptive/rights-intake/local-use-contr
 function localScope<T extends {status: z.infer<typeof localUseStatusSchema>}>(value: T, scope: LocalUseScope): T {
   if (value.status.scope.space !== scope.space || value.status.scope.purpose !== scope.purpose) throw new RightsClientError(409); return value;
 }
+function erasureScope<T extends LocalErasureView>(value: T, row: Pick<RightsRequestView, 'requestId'|'revision'|'space'>): T {
+  if (value.requestId !== row.requestId || value.requestRevision !== row.revision || value.space !== row.space || new Set(value.operations.map(s => s.operationRef)).size !== value.operations.length) throw new RightsClientError(409);
+  return value;
+}
 export const rightsApi = {
+  async reconcilePrivateNoteErasure(row: RightsOperationView, operationRef: string, input: z.infer<typeof localErasureReconcileInputSchema>, session: string, signal?: AbortSignal) {
+    const body = localErasureReconcileInputSchema.parse(input);
+    const selected = row.localErasures?.find(s => s.view.operationRef === operationRef);
+    if (row.kind !== 'erasure' || !selected?.reconcileAllowed || selected.commandEventId !== body.commandEventId || body.operationHandle !== row.operationHandle || body.eventId === body.commandEventId) throw new RightsClientError(409);
+    const { value } = await call(`/operations/requests/${encodeURIComponent(row.requestId)}/private-note-erasure/reconcile`, session, 'POST', body, signal);
+    const result = erasureScope(localErasureViewSchema.parse(value), row);
+    if (!result.operations.some(s => s.operationRef === operationRef)) throw new RightsClientError(409);
+    return result;
+  },
+  async privateNoteErasure(row: RightsRequestView, session: string, signal?: AbortSignal) {
+    const { value } = await call(`/requests/${encodeURIComponent(row.requestId)}/private-note-erasure?space=${row.space}`, session, 'GET', undefined, signal);
+    return erasureScope(localErasureViewSchema.parse(value), row);
+  },
+  async privateNoteErasurePlan(row: RightsRequestView, input: LocalErasurePlanInput, session: string, signal?: AbortSignal) {
+    const body = localErasurePlanInputSchema.parse(input);
+    if (body.space !== row.space || body.expectedRequestRevision !== row.revision || row.kind !== 'erasure' || row.state === 'closed_unfulfilled') throw new RightsClientError(409);
+    const { value } = await call(`/requests/${encodeURIComponent(row.requestId)}/private-note-erasure/plan?space=${row.space}`, session, 'POST', body, signal);
+    const plan = localErasurePlanSchema.parse(value);
+    if (plan.requestId !== row.requestId || plan.space !== row.space || plan.eventId !== body.eventId || plan.memoryId !== body.memoryId || plan.memoryRevision !== body.expectedMemoryRevision || plan.expiresAt <= Date.now()) throw new RightsClientError(409);
+    return plan;
+  },
+  async privateNoteErasureExecute(row: RightsRequestView, plan: LocalErasurePlan, session: string, signal?: AbortSignal) {
+    const parsed = localErasurePlanSchema.parse(plan);
+    if (parsed.requestId !== row.requestId || parsed.space !== row.space || row.kind !== 'erasure' || row.state === 'closed_unfulfilled' || parsed.expiresAt <= Date.now()) throw new RightsClientError(409);
+    const input = localErasureExecuteInputSchema.parse({ version: 1, eventId: parsed.eventId, planHandle: parsed.planHandle });
+    const { value } = await call(`/requests/${encodeURIComponent(row.requestId)}/private-note-erasure/execute?space=${row.space}`, session, 'POST', input, signal);
+    const result = erasureScope(localErasureMutationSchema.parse(value), row);
+    if (!result.operations.some(s => s.operationRef === result.operationRef)) throw new RightsClientError(409);
+    return result;
+  },
   async localUse(requestId: string, scope: LocalUseScope, session: string, signal?: AbortSignal) {
     const {value} = await call(`/requests/${encodeURIComponent(requestId)}/local-use?space=${scope.space}&purpose=${scope.purpose}`,session,'GET',undefined,signal);
     return localScope(localUseViewSchema.parse(value),scope);

@@ -351,6 +351,15 @@ export class ManagedFileV2Storage implements AdaptiveStorage {
     try { const head = this.head(), now = this.sample(head.lifecycleWatermark), document = this.record(head, accountId, now); this.publishTime(now); return { status: 'ready', document }; }
     finally { this.writer = false; }
   }
+  readCommittedWithoutObservationForEffect(accountId:string):{status:'ready';document:unknown|null;observedAt:number}|{status:'busy'} {
+    validateAccountId(accountId);if(this.writer)return {status:'busy'};this.assert();this.writer=true;
+    try {
+      const head=this.head(),now=this.sample(head.lifecycleWatermark),document=this.record(head,accountId,now);
+      const latest=this.head(),fresh=this.sample(Math.max(now,latest.lifecycleWatermark));
+      if(digest(latest)!==digest(head))return {status:'busy'};
+      return {status:'ready',document,observedAt:fresh};
+    }finally{this.writer=false;}
+  }
   async listAccounts(input: AdaptiveAccountPageInput): Promise<AdaptiveAccountPage> {
     if (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > 100 || input.after !== undefined && !/^[a-f0-9]{64}$/.test(input.after)) throw new IndexedStorageError('invalid_scope');
     this.assert(); this.writer = true;
