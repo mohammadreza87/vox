@@ -1,3 +1,4 @@
+import { createStudioRequestedRoutines } from './requested-routines';
 import { RightsUseHoldService } from '../adaptive/rights-use-holds/service';
 import { lstatSync } from 'node:fs';
 import { RightsFileStorage } from '../adaptive/rights-intake/storage';
@@ -159,6 +160,11 @@ export function validateStudioConfig(env: NodeJS.ProcessEnv, cwd = process.cwd()
   const relationships = relationshipConfig(env);
   const scopedRelationshipsEnabled = env.STUDIO_SCOPED_RELATIONSHIPS === '1';
   const maintenanceEnabled = env.STUDIO_MAINTENANCE === '1';
+  const requestedRoutinesEnabled = env.STUDIO_REQUESTED_ROUTINES === '1';
+  if (requestedRoutinesEnabled && (env.STUDIO_BOTS !== '1' || storage !== 'file' || publicUrl ||
+    env.K_SERVICE || env.FUNCTION_TARGET || env.FUNCTION_NAME || env.VERCEL === '1')) {
+    throw new Error('STUDIO_REQUESTED_ROUTINES=1 requires STUDIO_BOTS=1 with file storage in a persistent polling process');
+  }
   const reminderDeliveryEnabled = env.STUDIO_REMINDER_DELIVERY === '1';
   if (env.STUDIO_EXPERIMENTS_ENABLED !== undefined && !['', '0', '1'].includes(env.STUDIO_EXPERIMENTS_ENABLED)) {
     throw new Error('STUDIO_EXPERIMENTS_ENABLED must be 0 or 1');
@@ -178,7 +184,7 @@ export function validateStudioConfig(env: NodeJS.ProcessEnv, cwd = process.cwd()
     throw new Error('STUDIO_REMINDER_DELIVERY=1 requires STUDIO_MAINTENANCE=1 and a configured manager bot');
   }
   const trustedImprovementKeys = improvementTrust(env.STUDIO_IMPROVEMENT_TRUST_JSON, storage);
-  return { production, token, superadminIds, dataDir, webAppUrl, storage, adaptiveFormat, mediaBucket, publicUrl, relationships, scopedRelationshipsEnabled, maintenanceEnabled, reminderDeliveryEnabled, experimentsEnabled, trustedImprovementKeys };
+  return { production, token, superadminIds, dataDir, webAppUrl, storage, adaptiveFormat, mediaBucket, publicUrl, relationships, scopedRelationshipsEnabled, maintenanceEnabled, reminderDeliveryEnabled, experimentsEnabled, requestedRoutinesEnabled, trustedImprovementKeys };
 }
 
 /** STUDIO_WEB_SEARCH=off keeps every agent offline (web searches are billed per search). */
@@ -340,6 +346,12 @@ async function create(): Promise<Studio> {
       } : {}),
     });
     studio.deps.preferenceLearning = createStudioPreferenceLearning(studio);
+    if (config.requestedRoutinesEnabled) {
+      studio.deps.requestedRoutinesEnabled = () => process.env.STUDIO_REQUESTED_ROUTINES === '1';
+      studio.deps.requestedRoutines = createStudioRequestedRoutines(studio, {
+        filePath: join(config.dataDir, 'requested-routines-v1.json'), enabled: studio.deps.requestedRoutinesEnabled,
+      });
+    }
     if (reminderEndpointId && config.token) {
       studio.deps.reminderEndpointId = reminderEndpointId;
       studio.deps.reminderDelivery = createStudioReminderDelivery(studio, {

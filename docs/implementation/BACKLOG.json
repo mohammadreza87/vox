@@ -2212,6 +2212,20 @@
       "evidence": "docs/implementation/RELEASE_LEARNING_CASES_2026_10_20.md",
       "note": "Independent source, actual migration/old-reader and isolated Docker qualification passed after the recorded capacity fix. CI221 passed 3945 tests with 13 existing skips, 36 release checks and 41 browser checks. Exact merged artifact deployed; 40 live routes and five active-bot ownership checks passed with configuration unchanged. No workflow activation, real conversation export or broader roadmap completion.",
       "deployed_revision": "a49f734e16e0a5b3430c1e1c088dab33feda5d53"
+    },
+    {
+      "id": "RR-01",
+      "status": "in_progress",
+      "baseline": "4be2b395789ce283ce88769616a08c7546ff2484",
+      "evidence": "docs/implementation/REQUESTED_ROUTINES.md",
+      "note": "Explicit requested daily agent lessons with adaptive local timing, own-private-Telegram delivery, durable occurrences and stop controls; independent acceptance and production verification pending."
+    },
+    {
+      "id": "RI-ACTIVATE",
+      "status": "in_progress",
+      "baseline": "4be2b395789ce283ce88769616a08c7546ff2484",
+      "evidence": "docs/implementation/REQUESTED_ROUTINES.md",
+      "note": "Provision basic rights intake and available per-account privacy controls; retain individual choices and explain unsupported features accurately. Live configuration and authenticated verification pending."
     }
   ]
 }

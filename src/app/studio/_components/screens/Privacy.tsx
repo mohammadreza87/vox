@@ -2,7 +2,7 @@
 
 import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { adaptiveApi, type AdaptiveOptionalPurpose, type AdaptivePresentation, type AdaptiveSnapshot, type AdaptiveSpace } from '../../_lib/adaptive-client';
-import { privacyCopy, purposeCopy, type PrivacyLocale } from '../../_lib/adaptive-copy';
+import { privacyCopy, purposeCopy, privacyUnavailableReason, type PrivacyLocale } from '../../_lib/adaptive-copy';
 import { Icon, Spinner } from '../ui';
 import { api, tg, type AgentView } from '../../_lib/client';
 import { VoiceRecognitionPanel } from '../VoiceRecognitionPanel';
@@ -135,10 +135,10 @@ export function PrivacyScreen({ onShared, onExperience, onConnections, onCorrect
           const on = p.state === 'granted';
           const opened = presentation?.purpose === p.purpose;
           return <div key={p.purpose} className="vx-privacy-purpose">
-            <div className="vx-privacy-purpose-heading"><h3 className="vx-head">{copy?.title ?? p.notice.title}</h3><span className={`vx-pill ${on && p.available ? 'live' : 'lock'}`}>{on ? c.on : ['expired', 'reconsent_required', 'suspended'].includes(p.state) || (on && !p.available) ? c.reviewNeeded : c.off}</span></div>
+            <div className="vx-privacy-purpose-heading"><h3 className="vx-head">{copy?.title ?? p.notice.title}</h3><span className={`vx-pill ${on && p.available ? 'live' : 'lock'}`}>{on && p.available ? c.on : ['expired', 'reconsent_required', 'suspended'].includes(p.state) || (on && !p.available) ? c.reviewNeeded : c.off}</span></div>
             <p className="vx-small vx-2">{copy?.body ?? p.notice.body}</p>
             {on && paused && ['optional.personalization', 'optional.auto_memory', 'optional.proactive_suggestions', 'optional.relationship_outreach'].includes(p.purpose) && <p className="vx-small">{pauseText(locale, space, 'consent')}</p>}
-            {!p.available && <p className="vx-small vx-2">{c.unavailable}</p>}
+            {!p.available && <p className="vx-small vx-2">{privacyUnavailableReason(p.reason, locale)}</p>}
             {opened ? <div className="vx-privacy-notice" aria-label={c.notice}>
               <h4>{presentation.data.notice.title}</h4><p className="vx-small">{presentation.data.notice.body}</p>
               <p className="vx-small vx-2">{c.noticeVersion}: {presentation.data.notice.version}</p>
@@ -155,7 +155,7 @@ export function PrivacyScreen({ onShared, onExperience, onConnections, onCorrect
         <p className="vx-small vx-2">{c.memoryBody}</p>
         <label className="vx-small">{c.memoryLabel}<textarea className="vx-textarea" value={note} rows={3} maxLength={2000} disabled={busy || !snapshot.explicitMemoryAvailable} onChange={e => setNote(e.target.value)} /></label>
         <p className="vx-small vx-2">{c[space]} · {c.private}</p>
-        {!snapshot.explicitMemoryAvailable && <p className="vx-small vx-2">{c.unavailable}</p>}
+        {!snapshot.explicitMemoryAvailable && <p className="vx-small vx-2">{privacyUnavailableReason(snapshot.explicitMemoryReason, locale)}</p>}
         <button className="vx-btn vx-btn-secondary vx-btn-block" disabled={busy || !note.trim() || !snapshot.explicitMemoryAvailable} onClick={() => void mutate(async () => { const result = await adaptiveApi.save(space, note, snapshot.revision); setNote(''); return result; }, c.saved)}>{c.saveMemory}</button>
         {!snapshot.memoryCorrectionAvailable && snapshot.memories.some(m => !m.sourceRefs) && <p className="vx-small vx-2">{locale === 'fa' ? 'ویرایش اینجا در دسترس نیست؛ هنوز می‌توانید یادداشت را حذف یا یادداشت تازه‌ای ذخیره کنید.' : 'Editing is unavailable here; you can still delete a note or save a new one.'}</p>}
         {!snapshot.memories.length && <p className="vx-small vx-2">{c.empty}</p>}

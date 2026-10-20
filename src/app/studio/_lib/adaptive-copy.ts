@@ -1,5 +1,21 @@
 export type PrivacyLocale = 'en' | 'fa';
 
+/** Explain the server's actual gate without implying every failure is a policy review. */
+export function privacyUnavailableReason(reason: string | undefined, locale: PrivacyLocale): string {
+  const messages: Record<string, readonly [string, string]> = {
+    profile_confirmation_required: ['Confirm your account profile above to use this control.', 'برای استفاده از این کنترل، نمایهٔ حساب خود را در بالا تأیید کنید.'],
+    adult_required: ['Confirm that you are 18 or older in your account profile.', 'در نمایهٔ حساب خود تأیید کنید که ۱۸ سال یا بیشتر دارید.'],
+    feature_not_released: ['This feature is not available yet.', 'این قابلیت هنوز در دسترس نیست.'],
+    jurisdiction_unknown: ['Your service region needs to be configured. Contact info@joyixir.com.', 'منطقهٔ سرویس شما باید تنظیم شود. با info@joyixir.com تماس بگیرید.'],
+    disabled: ['This feature is disabled for your account.', 'این قابلیت برای حساب شما غیرفعال است.'],
+    approval_missing: ['Service setup is incomplete for your account. Contact info@joyixir.com.', 'راه‌اندازی سرویس برای حساب شما کامل نشده است. با info@joyixir.com تماس بگیرید.'],
+    approval_invalid: ['Your service configuration needs to be updated. Contact info@joyixir.com.', 'تنظیمات سرویس شما باید به‌روز شود. با info@joyixir.com تماس بگیرید.'],
+    review_pending: ['Service availability for your account is under review.', 'دسترسی سرویس برای حساب شما در حال بررسی است.'],
+    blocked: ['This feature is unavailable for your account.', 'این قابلیت برای حساب شما در دسترس نیست.'],
+  };
+  return (messages[reason ?? ''] ?? ['This control is unavailable. Refresh your settings or contact info@joyixir.com.', 'این کنترل در دسترس نیست. تنظیمات را تازه کنید یا با info@joyixir.com تماس بگیرید.'])[locale === 'fa' ? 1 : 0];
+}
+
 export const privacyCopy = {
   en: {
     title: 'Privacy & memory', subtitle: 'Your context. Your choices.',
