@@ -22,18 +22,29 @@ export interface PrivacySnapshot<T> {
   replay?(): Promise<{ value: T } | null>;
 }
 
-export async function loadSnapshot<T>(prefetch: () => Promise<unknown>, evaluate: () => Promise<T>): Promise<PrivacySnapshot<T>> {
+/**
+ * `covered` must be false when the evaluation may consult a source that is not
+ * a scope-aware store (an injected stand-in, say): its changes would carry no
+ * probe, so the vector is marked incomplete and rechecks recompute in full.
+ */
+export async function loadSnapshot<T>(prefetch: () => Promise<unknown>, evaluate: () => Promise<T>, covered = true): Promise<PrivacySnapshot<T>> {
   let value!: T;
   // A read that had to commit (expiry normalisation, first creation) leaves
   // values that may mix pre- and post-commit state: evaluate once more over
   // the committed documents. Normalisation is idempotent, so one retry settles.
   for (let attempt = 0; attempt < 2; attempt++) {
     const scope = TurnReadScope.load();
-    try { value = await scope.run(async () => { await prefetch().catch(() => undefined); return evaluate(); }); }
+    try {
+      value = await scope.run(async () => {
+        // A failed prefetch is not an error: the evaluation reads (and fails) on its own.
+        try { await prefetch(); } catch { /* served on first use */ }
+        return evaluate();
+      });
+    }
     finally { scope.close(); }
     if (scope.wrote) continue;
     const probes = await scope.probes();
-    const complete = !scope.incomplete && !scope.volatile;
+    const complete = covered && !scope.incomplete && !scope.volatile;
     return { value, vector: { probes, complete }, ...(complete ? { replay: () => replay(scope, evaluate) } : {}) };
   }
   // Still writing after a committed attempt: serve this turn as before, with full rechecks.
