@@ -4,10 +4,12 @@ const space = z.enum(['work', 'personal']);
 export const erasureWitnessEntrySchema = z.object({ id, space, beforeRevision: n.positive(), beforeEpoch: n, beforeStatus: z.enum(['active', 'deleted']), afterRevision: n.positive(), afterEpoch: n, afterStatus: z.literal('deleted'), sourceRefsDigest: hash }).strict();
 export const erasureWitnessSchema = z.array(erasureWitnessEntrySchema).min(1).max(300);
 export type ErasureWitness = z.infer<typeof erasureWitnessSchema>;
+export const erasureRecordingAuthoritySchema=z.object({version:z.literal(1),commandEventId:uuid,requestRevision:n.positive(),policy:z.object({id:z.string().min(1).max(100),revision:n.positive(),digest:hash}).strict(),operatorRef:hash}).strict();
+export type ErasureRecordingAuthority=z.infer<typeof erasureRecordingAuthoritySchema>;
 export const localErasureOperationSchema = z.object({ version: z.literal(1), eventId: uuid, fingerprint: hash, requestId: uuid, requestRevision: n.positive(), space, memoryId: id,
   expectedCanonicalRevision: n.positive(), expectedBindingDigest: hash, witness: erasureWitnessSchema, witnessDigest: hash, createdAt: n, expiresAt: n, executionDeadline: n,
   policyDigest: hash, noticeDigest: hash, metadataRetainUntil: n, replayRetainUntil: n, receiptRetainUntil: n,
-  acknowledgement: z.object({ effectRevision: n.positive(), observedAt: n, recordedAt: n, retainUntil: n }).strict().optional(),
+  acknowledgement: z.object({ effectRevision: n.positive(), observedAt: n, recordedAt: n, retainUntil: n, recordingAuthority:erasureRecordingAuthoritySchema.optional() }).strict().optional(),
 }).strict();
 export type LocalErasureOperation = z.infer<typeof localErasureOperationSchema>;
 export const localErasureLedgerSchema = z.object({ version: z.literal(1), operations: z.array(localErasureOperationSchema).max(32) }).strict();

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { AccountLedger } from './contracts';
-import type { LocalErasureOperation } from './local-erasure-contracts';
+import type { LocalErasureOperation, ErasureRecordingAuthority } from './local-erasure-contracts';
 import type { LocalUseIntent } from './local-use-contracts';
 import { fail } from './repository';
 /** Sorted-key canonical JSON; transport handles and serialization order are not command identity. */
@@ -51,7 +51,7 @@ export function requireLocalUseCapacity(d: AccountLedger): void {
   for (const intent of d.localUse.intents) if (!d.localUse.acknowledgements.some(a => a.eventId === intent.eventId) && !d.localUse.intents.some(s => s.supersedesEventId === intent.eventId)) rows.acknowledgements.push(ackFor(intent));
   if (rows.intents.length > 128 || rows.acknowledgements.length > 128) return fail(409, 'rights_capacity');
   if(projected.version===4) {
-    for(const operation of projected.localErasure.operations) if(!operation.acknowledgement) {operation.acknowledgement={effectRevision:max,observedAt:max,recordedAt:max,retainUntil:max};projected.commandReceipts.push({eventId:operation.eventId,fingerprint:'f'.repeat(64),requestId:operation.requestId,resultingRequestRevision:max,action:'\u0000'.repeat(50),recordedAt:max,retainUntil:max});}
+    for(const operation of projected.localErasure.operations) if(!operation.acknowledgement) {operation.acknowledgement={effectRevision:max,observedAt:max,recordedAt:max,retainUntil:max,recordingAuthority:{version:1,commandEventId:operation.eventId,requestRevision:max,policy:{id:'\u0000'.repeat(100),revision:max,digest:'f'.repeat(64)},operatorRef:'f'.repeat(64)}};projected.commandReceipts.push({eventId:operation.eventId,fingerprint:'f'.repeat(64),requestId:operation.requestId,resultingRequestRevision:max,action:'\u0000'.repeat(50),recordedAt:max,retainUntil:max});}
     if(projected.localErasure.operations.length>32 || projected.commandReceipts.length>128)return fail(409,'rights_capacity');
   }
   const widen = (v: unknown): unknown => typeof v === 'number' ? max : Array.isArray(v) ? v.map(widen) : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, item]) => [k, widen(item)])) : v;
@@ -67,6 +67,9 @@ export function erasureFingerprint(accountId:string,operation:LocalErasureOperat
   const {fingerprint:_fingerprint,acknowledgement:_ack,...intent}=operation;void _fingerprint;void _ack;
   return localUseDigest(['vox.rights.private-note-erasure.intent.v1',accountId,intent]);
 }
+export function erasureReconcileFingerprint(accountId:string,operation:LocalErasureOperation,authority:ErasureRecordingAuthority):string {
+  return localUseDigest(['vox.rights.private-note-erasure.reconcile.v1',accountId,operation.requestId,operation.space,operation.fingerprint,operation.witnessDigest,authority]);
+}
 export function validateErasureLedger(d:AccountLedger):void {
   if(d.version!==4)return;
   const ids=[...d.commandReceipts.map(r=>r.eventId),...d.localUse.intents.map(r=>r.eventId),...d.localErasure.operations.map(r=>r.eventId)];
@@ -77,5 +80,7 @@ export function validateErasureLedger(d:AccountLedger):void {
       new Set(o.witness.map(w=>w.id)).size!==o.witness.length || o.witness.some((w,i)=>w.space!==o.space || i>0 && o.witness[i-1].id>=w.id || w.afterRevision!==w.beforeRevision+(w.beforeStatus==='active'?1:0) || w.afterEpoch!==w.beforeEpoch+(w.beforeStatus==='active'?1:0)) ||
       !d.requests.some(r=>r.requestId===o.requestId && r.space===o.space && r.kind==='erasure' && r.revision>=o.requestRevision) || o.createdAt>d.observedServerTime || o.expiresAt<=o.createdAt || o.executionDeadline<o.expiresAt || [o.metadataRetainUntil,o.replayRetainUntil,o.receiptRetainUntil].some(t=>t<o.executionDeadline) ||
       o.acknowledgement && (o.acknowledgement.effectRevision!==o.expectedCanonicalRevision+1 || o.acknowledgement.observedAt<o.createdAt || o.acknowledgement.recordedAt<o.acknowledgement.observedAt || o.acknowledgement.recordedAt>d.observedServerTime || o.acknowledgement.retainUntil<o.receiptRetainUntil || o.acknowledgement.retainUntil<=o.acknowledgement.recordedAt))return fail(503,'rights_storage_unavailable');
+    const authority=o.acknowledgement?.recordingAuthority;
+    if(authority && (authority.requestRevision<o.requestRevision || !d.requests.some(r=>r.requestId===o.requestId&&r.revision>=authority.requestRevision) || !d.commandReceipts.some(r=>r.eventId===authority.commandEventId&&r.requestId===o.requestId&&r.resultingRequestRevision===authority.requestRevision&&r.action==='private_note_erasure_reconcile'&&r.fingerprint===erasureReconcileFingerprint(d.accountId,o,authority)&&r.recordedAt===o.acknowledgement!.recordedAt&&r.retainUntil>=o.acknowledgement!.retainUntil)))return fail(503,'rights_storage_unavailable');
   }
 }
