@@ -251,6 +251,7 @@ describe('gateway decision log', () => {
 
   it('a private turn logs exactly one content-free row', async () => {
     vi.stubEnv('TIREH_DECISION_LOG', '1');
+    vi.stubEnv('TRIAGE_QUESTION_SET', undefined);
     const sink = collectingSink();
     const h = decisionsGateway({ decisionLog: sink });
     expect(await h.gateway.handleUpdate('aria', privateText(TG.reza, 'CANARY_LOG_5521 please plan the launch'))).toBe('replied');
