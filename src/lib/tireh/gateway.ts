@@ -724,7 +724,7 @@ You are on a live voice call. Answer in one to three short spoken sentences. No 
     if (boundary.compact && !this.exportAuthorizedNow(persona, chat, speakerId, boundary, options.authorizeNow)) return;
     const requested = performance.now();
     let first = true;
-    for await (const part of streamText(llm, { system, messages, maxTokens: 300,
+    for await (const part of streamText(llm, { system, messages, maxTokens: REPLY_MAX_TOKENS.live, effort: CHAT_EFFORT,
       authorize: async () => await this.unchanged(persona, chat, speakerId, boundary) && await this.requestAuthorized(options.authorize),
       ...(boundary.compact ? {authorizeNow: () => this.exportAuthorizedNow(persona, chat, speakerId, boundary, options.authorizeNow)} : {}) })) {
       if (first) { first = false; timer?.add('llm_ttft', performance.now() - requested); }
