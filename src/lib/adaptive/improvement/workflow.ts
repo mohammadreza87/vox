@@ -40,7 +40,7 @@ export class ImprovementWorkflow {
     const now = this.now(); if (!Number.isSafeInteger(now) || now < 0 || state && isLearning(state) && now < state.observedAt) fail('learning_case_clock_invalid'); return now;
   }
   private trustDigest(): string { return hash(canonical(this.trust)); }
-  private async load(): Promise<{ state: State; events: Event[] }> {
+  private async load(): Promise<{ state: State; events: Event[]; auditBytes: number }> {
     const audit=await fs.lstat(join(this.root,'audit')).catch((e:NodeJS.ErrnoException)=>e.code==='ENOENT'?undefined:Promise.reject(e));
     if(audit && (!audit.isDirectory() || audit.isSymbolicLink())) fail('audit_corrupt');
     const files = (await fs.readdir(join(this.root, 'audit')).catch((e: NodeJS.ErrnoException) => e.code === 'ENOENT' ? [] : Promise.reject(e))).sort();
@@ -49,7 +49,8 @@ export class ImprovementWorkflow {
     for (const name of files) {
       const file = await fs.open(join(this.root, 'audit', name), constants.O_RDONLY | constants.O_NOFOLLOW);
       let bytes: Buffer;
-      try { const stat = await file.stat(); if (!stat.isFile() || stat.size > 2000000 || (total += stat.size) > 64000000) fail('audit_capacity_reached'); bytes = await file.readFile(); }
+      try { const stat = await file.stat(); if (!stat.isFile() || stat.size > 2000000 || total + stat.size > 64000000) fail('audit_capacity_reached'); bytes = await file.readFile();
+        if (bytes.byteLength > 2000000 || (total += bytes.byteLength) > 64000000) fail('audit_capacity_reached'); }
       finally { await file.close(); }
       const entry = JSON.parse(bytes!.toString()) as Event;
       const { digest, ...body } = entry;
@@ -79,7 +80,24 @@ export class ImprovementWorkflow {
       }
       events.push(entry); previous = digest;
     }
-    return { state: events.length ? structuredClone(events[events.length - 1].state) : empty(), events };
+    return { state: events.length ? structuredClone(events[events.length - 1].state) : empty(), events, auditBytes: total };
+  }
+  /** Pure budget check shared by guarded appends and authority-bearing reads.
+   * It reserves no row and writes no clock from an informational read. */
+  private assertClockObservationCapacity(state:State,events:Event[],auditBytes:number):void {
+    if(!isLearning(state)) return;
+    const future=structuredClone(state);let suffix=0,clockOp:string;
+    // Bounded by the schema's operation count. All candidates are 42 ASCII bytes,
+    // exactly the actual clock_UUID key width; no randomness/read mutation.
+    do {clockOp=`clock_${String(suffix++).padStart(36,'0')}`;} while(future.operations[clockOp]);
+    future.operations[clockOp]=hash(canonical({action:'learning_cases_clock_observed',payload:{}}));
+    future.observedAt=Number.MAX_SAFE_INTEGER;future.generation++;
+    if(!learningStateSchema.safeParse(future).success || events.length+1>5000) fail('workflow_capacity_reached');
+    const body={schemaVersion:2 as const,kind:'vox_improvement_audit' as const,sequence:events.length+1,previous:head(events),
+      action:'learning_cases_clock_observed',operationId:clockOp,at:Number.MAX_SAFE_INTEGER,state:future};
+    const eventBytes=Buffer.byteLength(canonical({...body,digest:hash(canonical({domain:'vox.improvement.audit.v2',body}))}));
+    if(eventBytes>2000000) fail('workflow_capacity_reached');
+    if(auditBytes+eventBytes>64000000) fail('audit_capacity_reached');
   }
   private async locked<T>(consume: () => Promise<T>, create = true): Promise<T> {
     if (create) await fs.mkdir(join(this.root, 'audit'), { recursive: true, mode: 0o700 });
@@ -91,7 +109,7 @@ export class ImprovementWorkflow {
   private async transaction(operationId: string, action: string, input: unknown, mutate: (state: State, events: Event[]) => void, after?: (state: State, events: Event[]) => void): Promise<void> {
     identifier.parse(operationId); const payload = structuredClone(input);
     await this.locked(async () => {
-      const { state, events } = await this.load(); const request = hash(canonical({ action, payload }));
+      const loaded = await this.load(), { state, events } = loaded; let auditBytes=loaded.auditBytes; const request = hash(canonical({ action, payload }));
       if (isLearning(state) && state.trustDigest !== this.trustDigest()) fail('learning_case_trust_changed');
       this.sample(state);
       if (state.operations[operationId]) { if (state.operations[operationId] !== request) fail('idempotency_conflict'); return; }
@@ -107,18 +125,21 @@ export class ImprovementWorkflow {
         for(const key of Object.keys(state)) delete (state as unknown as Record<string,unknown>)[key]; Object.assign(state,before);
         operationId=`clock_${randomUUID()}`; action='learning_cases_clock_observed'; committedRequest=hash(canonical({action,payload:{}})); deferredFailure=error;
       }
-      const append=async(op:string,verb:string,fingerprint:string)=>{
+      const append=async(op:string,verb:string,fingerprint:string,reserveClock=false)=>{
         state.operations[op]=fingerprint; const at=this.sample(state);
         if(isLearning(state)){state.observedAt=at;state.generation++;learningStateSchema.parse(state);}
         const body={...(isLearning(state)?{schemaVersion:2 as const,kind:'vox_improvement_audit' as const}:{}),sequence:events.length+1,previous:head(events),action:verb,operationId:op,at,state:structuredClone(state)};
         const event={...body,digest:hash(canonical(isLearning(state)?{domain:'vox.improvement.audit.v2',body}:body))};
-        if(Buffer.byteLength(canonical(event))>2000000||events.length>=5000) fail('workflow_capacity_reached');
+        const serialized=canonical(event), eventBytes=Buffer.byteLength(serialized);
+        if(eventBytes>2000000||events.length>=5000) fail('workflow_capacity_reached');
+        if(auditBytes+eventBytes>64000000) fail('audit_capacity_reached');
+        if(reserveClock) this.assertClockObservationCapacity(state,[...events,event],auditBytes+eventBytes);
         const temporary=join(this.root,`.${randomUUID()}.tmp`),target=join(this.root,'audit',`${String(body.sequence).padStart(10,'0')}.json`);
-        const handle=await fs.open(temporary,'wx',0o600);try{await handle.writeFile(canonical(event));await handle.sync();}finally{await handle.close();}
-        await fs.link(temporary,target);await fs.unlink(temporary);
+        const handle=await fs.open(temporary,'wx',0o600);try{await handle.writeFile(serialized);await handle.sync();}finally{await handle.close();}
+        await fs.link(temporary,target);auditBytes+=eventBytes;await fs.unlink(temporary);
         const directory=await fs.open(join(this.root,'audit'),'r');try{await directory.sync();}finally{await directory.close();}events.push(event);
       };
-      await append(operationId,action,committedRequest); if(deferredFailure) throw deferredFailure;
+      await append(operationId,action,committedRequest,!!after && !deferredFailure); if(deferredFailure) throw deferredFailure;
       try { after?.(state,events); }
       catch(error) {
         // A valid clock can advance across fsync/publication. Latch a later
@@ -311,7 +332,8 @@ export class ImprovementWorkflow {
     } finally { await fs.unlink(temporary).catch(() => undefined); }
   }
   async readArtifact(candidateId: string): Promise<RoutingArtifact> {
-    const { state } = await this.load(); const record = state.candidates[candidateId]; if (!record) return fail('candidate_missing');
+    const { state,events,auditBytes } = await this.load(); const record = state.candidates[candidateId]; if (!record) return fail('candidate_missing');
+    if(record.candidate.learningCases) this.assertClockObservationCapacity(state,events,auditBytes);
     this.eligible(state, state.proposals[record.proposalId].findingId); this.checkRecordLearning(state,record);
     const bytes = await fs.readFile(join(this.root, 'objects', record.candidate.artifactDigest));
     if (hash(bytes) !== record.candidate.artifactDigest) fail('artifact_corrupt'); return routingArtifactSchema.parse(JSON.parse(bytes.toString()));
@@ -399,7 +421,8 @@ export class ImprovementWorkflow {
   }
   async readiness(candidateId: string) {
     return this.locked(async()=>{
-    const { state } = await this.load(); const record = state.candidates[candidateId]; if (!record) fail('candidate_missing');
+    const { state,events,auditBytes } = await this.load(); const record = state.candidates[candidateId]; if (!record) fail('candidate_missing');
+    if(record.candidate.learningCases) this.assertClockObservationCapacity(state,events,auditBytes);
     this.eligible(state, state.proposals[record.proposalId].findingId); this.checkRecordLearning(state,record); await this.readArtifact(candidateId);
     if (record.candidate.evaluationProtocolDigest && (!record.protocol || record.protocol.payload.status !== 'passed' || Math.min(record.protocol.payload.retainUntil, record.protocol.payload.protocolMetadata.expiresAt) <= this.now())) return { ready: false as const, reason: 'failed' as const };
     const candidate={...record.candidate}; delete candidate.learningCases;
@@ -434,10 +457,10 @@ export class ImprovementWorkflow {
     return (await this.load()).state.rollbacks[candidateId];
   }
   async listReviewQueue() {
-    const { state } = await this.load(); if(isLearning(state)) this.learning(state);
+    const { state,events,auditBytes } = await this.load(); if(isLearning(state)) this.learning(state);
     return { findings: Object.values(state.findings).filter(f => f.expiresAt > this.now() && !f.lineageIds.some(id => state.revokedLineages.includes(id))),
       proposals: Object.values(state.proposals).filter(p => { try { this.eligible(state, p.findingId); return true; } catch { return false; } }),
-      candidates: Object.values(state.candidates).map(r => ({ ...r, eligible: (() => { try { this.eligible(state, state.proposals[r.proposalId].findingId); this.checkRecordLearning(state,r); return true; } catch { return false; } })() })) };
+      candidates: Object.values(state.candidates).map(r => ({ ...r, eligible: (() => { try { if(r.candidate.learningCases) this.assertClockObservationCapacity(state,events,auditBytes); this.eligible(state, state.proposals[r.proposalId].findingId); this.checkRecordLearning(state,r); return true; } catch { return false; } })() })) };
   }
   async report() {
     const { state, events } = await this.load(); const queue = await this.listReviewQueue();

@@ -123,3 +123,78 @@ it('stripped LC1 declarations cannot fall into the enrolled source legacy propos
   expect(improvementCandidateSchema.safeParse({...candidate,schemaVersion:1}).success).toBe(false);
   expect(await assessPromotion(candidate,undefined,{now:500,verifyReceipt:async()=>true,humanApproved:async()=>true})).toEqual({ready:false,reason:'untrusted_receipt'});
 });
+async function capacityFixture() {
+  const s=await fixture(), binding={protocolDigest:evaluationProtocolDigest(s.manifest),lineageDigest:s.manifest.learningCases!.lineageDigest};
+  for(let i=0;i<14;i++) await s.workflow.withLearningCaseAuthority(s.handle,binding,'optimization',()=>i);
+  const audit=join(s.root,'audit');
+  const files=async()=> (await fs.readdir(audit)).sort();
+  const bytes=async()=> (await Promise.all((await files()).map(async n=>(await fs.stat(join(audit,n))).size))).reduce((a,b)=>a+b,0);
+  const snapshot=async()=>Object.fromEntries(await Promise.all((await files()).map(async n=>[n,hash(await fs.readFile(join(audit,n)))])));
+  const padTo=async(target:number)=>{
+    let remaining=target-await bytes();
+    for(const name of await files()) {
+      const path=join(audit,name), raw=await fs.readFile(path), padding=Math.min(remaining,1_999_999-raw.byteLength);
+      if(padding>0){await fs.writeFile(path,Buffer.concat([raw,Buffer.alloc(padding,32)]));remaining-=padding;}
+      if(!remaining)break;
+    }
+    expect(remaining).toBe(0);expect(await bytes()).toBe(target);
+  };
+  return {...s,binding,audit,files,bytes,snapshot,padTo};
+}
+it('refuses aggregate overflow before publication, preserving an actually readable near-limit signed history',async()=>{
+  const s=await capacityFixture();await s.padTo(63_999_999);const before=await s.snapshot(), count=(await s.files()).length;
+  expect((await s.workflow.report()).auditEvents).toBe(count);
+  await expect(s.workflow.revokeLineage('capacity_refusal',s.sign('human','revoke_lineage',{lineageId:hash('unrelated_capacity_marker')}))).rejects.toThrow('audit_capacity_reached');
+  expect(await s.snapshot()).toEqual(before);expect(await s.bytes()).toBe(63_999_999);
+  expect((await new ImprovementWorkflow({root:s.root,trust:s.trust,now:s.now}).report()).auditEvents).toBe(count);
+  expect((await fs.readdir(s.root)).some(n=>n.endsWith('.tmp')||n==='writer.lock')).toBe(false);
+  const state=JSON.parse(await fs.readFile(join(s.audit,(await s.files()).at(-1)!),'utf8')).state;
+  expect(state.operations.capacity_refusal).toBeUndefined();expect(state.revokedLineages).not.toContain(hash('unrelated_capacity_marker'));
+},60000);
+it('reserves a possible later clock append before publishing a near-limit use',async()=>{
+  const s=await capacityFixture(), names=await s.files(), previous=JSON.parse(await fs.readFile(join(s.audit,names.at(-1)!),'utf8'));
+  const operationId='use_00000000-0000-4000-8000-000000000000', state=structuredClone(previous.state);
+  state.operations[operationId]=hash(canonical({action:'learning_cases_used',payload:{binding:s.binding,phase:'optimization'}}));state.generation++;state.observedAt=500;
+  const body={schemaVersion:2,kind:'vox_improvement_audit',sequence:previous.sequence+1,previous:previous.digest,action:'learning_cases_used',operationId,at:500,state};
+  const firstBytes=Buffer.byteLength(canonical({...body,digest:hash(canonical({domain:'vox.improvement.audit.v2',body}))}));
+  await s.padTo(64_000_000-firstBytes-1);const before=await s.snapshot();let advance=true,calls=0;const original=fs.link.bind(fs);
+  const spy=vi.spyOn(fs,'link').mockImplementation(async(source,target)=>{await original(source,target);if(advance){advance=false;s.setNow(1000);}});
+  try {await expect(s.workflow.withLearningCaseAuthority(s.handle,s.binding,'optimization',()=>++calls)).rejects.toThrow('audit_capacity_reached');}
+  finally {spy.mockRestore();}
+  expect(calls).toBe(0);expect(advance).toBe(true);expect(await s.bytes()).toBe(64_000_000-firstBytes-1);expect((await s.files()).length).toBe(names.length);
+  const after=await s.snapshot();for(const [name,digest]of Object.entries(before))expect(after[name]).toBe(digest);
+  expect((await new ImprovementWorkflow({root:s.root,trust:s.trust,now:s.now}).report()).auditEvents).toBe(names.length);
+  expect((await fs.readdir(s.root)).some(n=>n.endsWith('.tmp')||n==='writer.lock')).toBe(false);
+},60000);
+it('with adequate headroom both actual appends fit and a later observed expiry cannot revive after restart',async()=>{
+  const s=await capacityFixture();await s.padTo(63_800_000);const before=await s.snapshot(), count=(await s.files()).length;
+  let advance=true,calls=0;const original=fs.link.bind(fs);
+  const spy=vi.spyOn(fs,'link').mockImplementation(async(source,target)=>{await original(source,target);if(advance){advance=false;s.setNow(1000);}});
+  try {await expect(s.workflow.withLearningCaseAuthority(s.handle,s.binding,'optimization',()=>++calls)).rejects.toThrow('expired');}
+  finally {spy.mockRestore();}
+  expect(calls).toBe(0);expect(advance).toBe(false);expect((await s.files()).length).toBe(count+2);
+  expect(await s.bytes()).toBeGreaterThan(63_800_000);expect(await s.bytes()).toBeLessThanOrEqual(64_000_000);
+  const after=await s.snapshot();for(const [name,digest]of Object.entries(before))expect(after[name]).toBe(digest);
+  const last=JSON.parse(await fs.readFile(join(s.audit,(await s.files()).at(-1)!),'utf8'));
+  expect(last.action).toBe('learning_cases_clock_observed');expect(last.state.observedAt).toBe(1000);
+  expect((await new ImprovementWorkflow({root:s.root,trust:s.trust,now:s.now}).report()).auditEvents).toBe(count+2);
+  s.setNow(600);await expect(new ImprovementWorkflow({root:s.root,trust:s.trust,now:s.now}).prepareLearningCases(s.preparation)).rejects.toThrow('clock_invalid');
+},60000);
+it('readonly LC1 eligibility stays unavailable at full budget after a denied expiry observation and clock rollback',async()=>{
+  const s=await capacityFixture(), artifact={schemaVersion:1 as const,kind:'cancellation_routing' as const,onCancelled:'stop' as const,onActive:'continue' as const};
+  const candidate={schemaVersion:2 as const,learningCases:s.manifest.learningCases,id:'capacity_candidate',authorServiceId:'author',baselineRevision:s.finding.sourceDigest,
+    candidateRevision:hash(canonical(artifact)),artifactDigest:hash(canonical(artifact)),problemCode:'audio_cancellation' as const,evidenceIds:[s.finding.id],evidenceKind:'synthetic' as const,
+    changedPaths:['src/features/call/cancellation-routing.ts'],evaluatorVersion:hash('evaluator'),datasetVersion:hash('final'),promotionPolicyVersion:hash('policy'),
+    evaluationProtocolDigest:evaluationProtocolDigest(s.manifest),rollbackRevision:s.finding.sourceDigest,createdAt:500};
+  await s.workflow.proposeRouting('capacity_proposal',{schemaVersion:2,learningCases:s.manifest.learningCases,id:'capacity_proposal',findingId:s.finding.id,
+    kind:'routing_change',hypothesis:'cancelled_turn_should_stop',expectedOutcome:'zero_post_cancel_work',baselineRevision:s.finding.sourceDigest,
+    baselineArtifactDigest:hash('baseline'),createdAt:500,evaluationProtocolDigest:candidate.evaluationProtocolDigest,budget:{maxCandidates:1,maxCases:6}});
+  await s.workflow.registerCandidate('capacity_candidate',s.sign('author','candidate_artifact',{proposalId:'capacity_proposal',candidate,artifact}));
+  expect((await s.workflow.listReviewQueue()).candidates[0].eligible).toBe(true);
+  await s.padTo(63_999_999);const before=await s.snapshot();expect((await s.workflow.report()).candidates[0].eligible).toBe(false);
+  s.setNow(1000);await expect(s.workflow.prepareLearningCases(s.preparation)).rejects.toThrow('audit_capacity_reached');
+  s.setNow(600);const restarted=new ImprovementWorkflow({root:s.root,trust:s.trust,now:s.now});
+  await expect(restarted.readiness(candidate.id)).rejects.toThrow('audit_capacity_reached');
+  await expect(restarted.readArtifact(candidate.id)).rejects.toThrow('audit_capacity_reached');
+  expect((await restarted.report()).candidates[0].eligible).toBe(false);expect(await s.snapshot()).toEqual(before);
+},60000);
