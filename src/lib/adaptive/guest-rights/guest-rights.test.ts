@@ -61,3 +61,23 @@ describe('guest metadata-only tracking', () => {
     it('notice copy hashes, durations and legal-deadline claims cannot be silently defaulted', () => { const p = syntheticGuestPolicy(); expect(guestPolicySchema.safeParse({ ...p, noticeHashes: { ...p.noticeHashes, fa: '0'.repeat(64) } }).success).toBe(false); expect(guestPolicySchema.safeParse({ ...p, retention: { ...p.retention, auditMs: 0 } }).success).toBe(false); expect(guestPolicySchema.safeParse({ ...p, deadlineRules: [] }).success).toBe(false); });
 });
 it('audit capacity preserves unresolved evidence instead of dropping history',async()=>{const f=fixture(),a=await created(f);for(let i=1;i<32;i++){const q=f.service.operations(123),r=q.requests[0];await f.service.operatorAction(123,{version:1,requestId:r.requestId,eventId:randomUUID(),expectedRevision:r.revision,expectedPolicyRevision:1,action:r.state==='awaiting_requester'?'mark_operator_pending':'request_requester_action',operationHandle:r.operationHandle});}const path=join(f.storage.directory,GuestRightsStorage.filename),before=readFileSync(path);await expect(f.service.close({...credential(a.draft),eventId:randomUUID(),expectedRevision:32})).rejects.toThrow('guest_audit_capacity');expect(readFileSync(path)).toEqual(before);expect(f.service.operations(123).requests[0].audit).toHaveLength(32);});
+
+it('purge binds its new receipt horizon from actual purge time even when continuity is shorter', async () => {
+    const f = fixture();
+    f.policy({...syntheticGuestPolicy(), retention:{reviewAfterMs:100,auditMs:1000,terminalMs:100,continuityMs:100,receiptMs:5000}});
+    const a=await created(f);
+    await f.service.close({...credential(a.draft),eventId:randomUUID(),expectedRevision:1});
+    f.time(GUEST_TEST_NOW+1000);
+    const purge=operation(f,'purge_terminal_record');
+    await f.service.operatorAction(123,purge);
+    const ledger=JSON.parse(readFileSync(join(f.storage.directory,GuestRightsStorage.filename),'utf8'));
+    expect(ledger.receipts).toHaveLength(3);
+    expect(ledger.receipts.every((r:{retainUntil:number})=>r.retainUntil>=GUEST_TEST_NOW+6000)).toBe(true);
+    expect(ledger.tombstones[0].retainUntil).toBeGreaterThanOrEqual(GUEST_TEST_NOW+6000);
+    f.time(GUEST_TEST_NOW+5001);
+    const restarted=new GuestRightsService(new GuestRightsStorage(f.storage.directory),f.options);
+    expect(restarted.status(credential(a.draft))).toMatchObject({expired:true,retainUntil:GUEST_TEST_NOW+6000});
+    await expect(restarted.operatorAction(123,purge)).resolves.toMatchObject({replayed:true});
+    f.time(GUEST_TEST_NOW+6001);
+    expect(()=>restarted.status(credential(a.draft))).toThrow('guest_not_found');
+});

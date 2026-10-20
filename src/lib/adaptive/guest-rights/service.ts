@@ -130,7 +130,7 @@ export class GuestRightsService {
             return fail(409, 'guest_retention_not_due');
         if (d.tombstones.length >= 128)
             return fail(409, 'guest_capacity');
-        const retainUntil = Math.max(add(now, p.retention.continuityMs), ...d.receipts.filter(c => c.requestId === r.requestId).map(c => c.retainUntil));
+        const retainUntil = Math.max(add(now, p.retention.continuityMs), add(now, p.retention.receiptMs), ...d.receipts.filter(c => c.requestId === r.requestId).map(c => c.retainUntil));
         for (const c of d.receipts.filter(c => c.requestId === r.requestId))
             c.retainUntil = retainUntil;
         this.receipt(d, input.eventId, input, r, p, now);
