@@ -27,7 +27,7 @@ Prepared 19 October 2026 for Joyixir OÜ. Product scope: adults in the EU/EEA an
 | [Rendered experience and correction observation](OBSERVATION_COMPLETION.md) | Visible committed text, scoped correction feedback and current-state rollback |
 | [Reviewed rights retention](RIGHTS_RETENTION.md) | Explicit reassessment, terminal purge, finite continuity and ledger compatibility |
 | [Scoped local-use restrictions](RIGHTS_LOCAL_USE.md) | RF1 is deployed on the existing Studio host with optional policy off; source/browser/CI evidence and open activation/rights gates are recorded. The security audit has 14 findings and is not clean |
-| [Private-note erasure / حذف یادداشت خصوصی](RIGHTS_PRIVATE_NOTE_ERASURE.md) | RF2 selected-note/dependency removal, current proof and recovery; independent acceptance pending / حذف محدود یادداشت و وابستگی‌ها، اثبات فعلی و بازیابی؛ پذیرش مستقل باز است |
+| [Private-note erasure / حذف یادداشت خصوصی](RIGHTS_PRIVATE_NOTE_ERASURE.md) | RF2 source review and 312 local synthetic checks passed; compiled/CI/release gates remain open / بازبینی منبع و ۳۱۲ آزمون محلی موفق؛ پذیرش برنامهٔ کامپایل‌شده، CI و انتشار باز است |
 | [RF1 production release receipt](RELEASE_RF1_2026_10_20.md) | Exact deployed revision/build, unchanged production policy/configuration, route/bot probes and outstanding release gates |
 | [Synthetic legacy inventory](LEGACY_INVENTORY.md) | Isolated LIP1 implementation and independent synthetic acceptance; no live inventory, import or restore |
 | [Selected offline inventory / فهرست آفلاین منتخب](LEGACY_OFFLINE_INVENTORY.md) | LIA1 native file → bounded deny-all report; independent synthetic acceptance / فایل بومی تا گزارش محدود با استفادهٔ ممنوع؛ پذیرش مستقل ساختگی |
