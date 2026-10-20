@@ -38,6 +38,7 @@ const diagnostics = {
   unknown_group: { level: 'warn', stage: 'audience', reason: 'unknown_group', outcome: 'refused' },
   group_nonmember: { level: 'warn', stage: 'audience', reason: 'group_nonmember', outcome: 'refused' },
   reply_generation_failed: { level: 'error', stage: 'reply_generation', reason: 'operation_failed', outcome: 'ignored' },
+  reply_empty: { level: 'warn', stage: 'reply_generation', reason: 'empty_output', outcome: 'fallback_reply' },
   extraction_failed: { level: 'error', stage: 'memory_extraction', reason: 'operation_failed', outcome: 'continue' },
   transcription_failed: { level: 'error', stage: 'transcription', reason: 'operation_failed', outcome: 'unavailable' },
   triage_failed: { level: 'warn', stage: 'triage', reason: 'operation_failed', outcome: 'full_reply_path' },
@@ -57,6 +58,9 @@ const diagnostics = {
   studio_http_persona_failed: { level: 'warn', stage: 'persona_generation', reason: 'invalid_output', outcome: 'http_502' },
   studio_http_provider_failed: { level: 'error', stage: 'studio_http', reason: 'provider_failed', outcome: 'http_502' },
   studio_http_failed: { level: 'error', stage: 'studio_http', reason: 'operation_failed', outcome: 'http_500' },
+  skill_route_failed: { level: 'warn', stage: 'skill_route', reason: 'operation_failed', outcome: 'local_fallback' },
+  skill_route_timeout: { level: 'warn', stage: 'skill_route', reason: 'timeout', outcome: 'local_fallback' },
+  skill_route_refused: { level: 'warn', stage: 'skill_route', reason: 'no_answer', outcome: 'local_fallback' },
 } as const;
 
 export type TelegramDiagnostic = keyof typeof diagnostics;

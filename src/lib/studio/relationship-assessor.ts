@@ -47,7 +47,7 @@ Only explicitly stated timezone and quiet hours can set those fields. Do not gue
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const text = await Promise.race([
-        this.llm.complete({ system, messages: [{ role: 'user', content: JSON.stringify({ now: input.now.toISOString(), sourceAt: (input.sourceAt ?? input.now).toISOString(), timeZone: input.timeZone || undefined, priorContext: input.context.slice(0, 12_000), previousAssistant: input.previousAssistant ? { text: input.previousAssistant.text.slice(0, 4000), at: input.previousAssistant.at.toISOString() } : undefined, currentMessage: input.text.slice(0, 8_000) }) }], maxTokens: 1600, temperature: 0.1, requireComplete: true }),
+        this.llm.complete({ system, messages: [{ role: 'user', content: JSON.stringify({ now: input.now.toISOString(), sourceAt: (input.sourceAt ?? input.now).toISOString(), timeZone: input.timeZone || undefined, priorContext: input.context.slice(0, 12_000), previousAssistant: input.previousAssistant ? { text: input.previousAssistant.text.slice(0, 4000), at: input.previousAssistant.at.toISOString() } : undefined, currentMessage: input.text.slice(0, 8_000) }) }], maxTokens: 4096, effort: 'medium', temperature: 0.1, requireComplete: true }),
         new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('relationship_assessment_timeout')), this.timeoutMs); }),
       ]);
       return parseRelationshipAssessment(text);

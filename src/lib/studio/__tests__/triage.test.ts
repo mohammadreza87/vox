@@ -196,7 +196,8 @@ describe('replies routed by triage', () => {
     const decide = decider(answers('quick', 0.05, 0.05));
     await handleAgentUpdate(h.studio, agent.id, dm(ID.bob, 'thanks!'));
     expect(bot().sendMessage).toHaveBeenLastCalledWith(ID.bob, 'Hey!', expect.anything());
-    expect(fast.replyRequests[0].maxTokens).toBe(400);
+    // Thinking shares the cap: small talk runs at low effort with headroom.
+    expect(fast.replyRequests[0]).toMatchObject({ maxTokens: 1200, effort: 'low' });
     expect(fast.lastPrompt).not.toContain('## Live information');
     expect(web).not.toHaveBeenCalled();
     expect(h.chatLLM.replyPrompts).toHaveLength(0);

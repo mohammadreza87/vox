@@ -166,6 +166,8 @@ it('gives the assessor bounded preceding context for a direct correction without
   expect(await assessor.assess({ key, text: 'That was too much advice. Please listen first.', context: '', now,
     previousAssistant: { text: 'a'.repeat(9000), at: new Date(sentAt), intentionId: 'private-intention' } })).toEqual({ preferences: [{ key: 'advice', value: 'Listen before offering advice' }] });
   const call = complete.mock.calls[0] as unknown as [{ system: string; messages: Array<{ content: string }> }];
+  // Thinking shares the cap: dated timing extraction keeps medium effort with headroom.
+  expect(call[0]).toMatchObject({ maxTokens: 4096, effort: 'medium', requireComplete: true });
   expect(call[0].system).toContain('only from the current person\'s explicit statement');
   expect(call[0].system).toContain('Topic-specific feedback must not become a global communication preference');
   const body = JSON.parse(call[0].messages[0].content);
