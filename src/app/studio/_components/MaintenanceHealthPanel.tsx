@@ -12,7 +12,7 @@ export function MaintenanceHealthPanel({ health, locale }: { health: unknown; lo
     not_configured: unavailable,
     not_started: t('No run recorded', 'اجرایی ثبت نشده است'),
     leased: t('Worker lease recorded', 'مجوز موقت کار ثبت شده است'),
-    continued: t('More pages remain', 'صفحه‌های بیشتری باقی مانده است'),
+    continued: t('Pass recorded incomplete', 'این نوبت ناتمام ثبت شده است'),
     completed: t('Pass recorded complete', 'تکمیل این نوبت ثبت شده است'),
     failed: t('Failure recorded', 'خطا ثبت شده است'),
     busy: t('Status temporarily busy', 'دریافت وضعیت موقتاً ممکن نیست'),

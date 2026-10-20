@@ -17,7 +17,7 @@ function health(state: MaintenanceHealth['state']): MaintenanceHealth {
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 
 it.each([
-  ['not_started', 'No run recorded'], ['leased', 'Worker lease recorded'], ['continued', 'More pages remain'],
+  ['not_started', 'No run recorded'], ['leased', 'Worker lease recorded'], ['continued', 'Pass recorded incomplete'],
   ['completed', 'Pass recorded complete'], ['failed', 'Failure recorded'], ['busy', 'Status temporarily busy'],
   ['stale', 'Recorded lease expired'], ['unavailable', 'Unavailable'], ['not_configured', 'Unavailable'],
 ] as const)('renders the %s snapshot without inferring a different worker state', (state, copy) => {
@@ -49,6 +49,16 @@ it('uses the server snapshot as of its recorded time even when the browser clock
   rerender(<MaintenanceHealthPanel health={health('leased')} locale="fa" />);
   expect(screen.getByRole('status')).toHaveTextContent('مجوز موقت کار ثبت شده است');
   expect(screen.queryByText('انقضای مجوز موقت ثبت شده است')).not.toBeInTheDocument();
+});
+
+it('labels an initially claimed checkpoint as incomplete without asserting that more pages were found', () => {
+  const initial = { ...health('leased'), checkpoint: { updatedAt: 8000, recordedStatus: 'continued', checkpointedPages: 0, checkpointedAccounts: 0, failure: null } };
+  const { rerender } = render(<MaintenanceHealthPanel health={initial} locale="en" />);
+  expect(screen.getByText('Last recorded result').nextElementSibling).toHaveTextContent('Pass recorded incomplete');
+  expect(screen.queryByText('More pages remain')).not.toBeInTheDocument();
+  rerender(<MaintenanceHealthPanel health={initial} locale="fa" />);
+  expect(screen.getByText('آخرین نتیجهٔ ثبت‌شده').nextElementSibling).toHaveTextContent('این نوبت ناتمام ثبت شده است');
+  expect(screen.queryByText('صفحه‌های بیشتری باقی مانده است')).not.toBeInTheDocument();
 });
 
 it('distinguishes confirmed missing activity from unobserved history and never supplies zero checkpoint counts', () => {
