@@ -332,6 +332,7 @@ test('learning evidence stays scoped, honest and downloadable in English and Per
   await expect(learning.getByText('Playback is client reported. Verified task success is unknown.')).toBeVisible();
   await expect(learning.getByText('Average response time: Unavailable')).toBeVisible();
   await expect(learning).not.toContainText('PRIVATE_');
+  await experience.locator('summary').filter({ hasText: /^Admin tools$/ }).click();
   await expect(page.getByRole('region', { name: 'Maintenance status', exact: true }).getByRole('status')).toHaveText('No run recorded');
   await checkNoHorizontalOverflow(page);
   await checkActionLabelsFit(learning);
