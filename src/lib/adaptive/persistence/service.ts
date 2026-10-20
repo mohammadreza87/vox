@@ -1,3 +1,4 @@
+import { mayUseStoredPersonalization, productPauseUseStamp } from '../product-pause/state';
 import { randomUUID } from 'crypto';
 import { brandError, publicDomainError } from '../../error-contract';
 import { purgeInvalidDerivedMemory, validMemoryLineage } from '../reviewed-memory/provenance';
@@ -118,7 +119,8 @@ export class AdaptiveService {
       invalidations.length = 0;
       voiceInvalidations.length = 0;
       const learningControl = () => digest([d.binding, d.permissions.filter(p => p.purpose === 'optional.personalization'),
-        d.agentGrants, d.experience.preferences, d.experience.preferenceLearning?.intents]);
+        d.agentGrants, d.experience.preferences, d.experience.preferenceLearning?.intents,
+        d.schemaVersion === 2 ? ['work', 'personal'].map(s => productPauseUseStamp(d, s as SpaceKind)) : null]);
       const priorLearning = learningControl();
       const revokeReminderIdentity = () => {
         for (const space of ['work', 'personal'] as const) {
@@ -264,6 +266,12 @@ export class AdaptiveService {
   withAccountDocument<T>(telegramId: number, fn: (document: AdaptiveDocument, now: number) => T, beforeCommit?: () => void): Promise<T> {
     return this.transact(telegramId, fn, beforeCommit);
   }
+  /** Bounded protective controls bypass generic event/outbox admission and never invoke consent invalidation. */
+  productPauseTransaction<T>(telegramId: number, fn: (document: AdaptiveDocument, now: number) => T, beforeCommit?: () => void): Promise<T> {
+    return this.repository.transaction(this.account(telegramId), this.now, fn, beforeCommit);
+  }
+  sampleServiceClock(): number { return this.sampleClock(this.now); }
+  notifyProductPauseCommitted(telegramId: number): void { this.preferenceLearningInvalidator?.(telegramId); }
   /** Pure authority consumers use compact controls on an explicitly selected
    * indexed store. Mutations and detailed UI snapshots retain the canonical API.
    * The callback must be synchronous. Store identity must bind retained work. */
@@ -338,10 +346,25 @@ export class AdaptiveService {
   }
   isProfileConfirmed(d: AdaptiveAuthorityDocument, now: number): boolean { return this.confirmed(d, now); }
   isCoreAllowed(d: AdaptiveAuthorityDocument, now: number): boolean { return this.confirmed(d, now) && this.eligible(d, 'core_text', now).eligible; }
-  purposeFingerprint(d: AdaptiveAuthorityDocument, space: SpaceKind, purpose: OptionalPurpose, now: number, agentId?: string): string {
+  purposeRetentionFingerprint(d: AdaptiveAuthorityDocument, space: SpaceKind, purpose: OptionalPurpose, now: number, agentId?: string): string {
     return digest([d.accountId, d.binding, this.confirmed(d, now),
       space, purpose, agentId, this.permission(d, space, purpose), this.eligible(d, CAPABILITY[purpose], now),
       agentId ? d.agentGrants.filter(g => g.space === space && g.agentId === agentId) : null]);
+  }
+  isStoredPersonalizationUseAllowed(d: AdaptiveAuthorityDocument, space: SpaceKind): boolean { return mayUseStoredPersonalization(d, space); }
+  purposeFingerprint(d: AdaptiveAuthorityDocument, space: SpaceKind, purpose: OptionalPurpose, now: number, agentId?: string): string {
+    const retention = this.purposeRetentionFingerprint(d, space, purpose, now, agentId);
+    return d.schemaVersion === 1 || !this.pauseCoveredPurpose(purpose) ? retention : digest([retention, productPauseUseStamp(d, space)]);
+  }
+  private pauseCoveredPurpose(purpose: OptionalPurpose): boolean {
+    return ['optional.personalization', 'optional.auto_memory', 'optional.proactive_suggestions', 'optional.relationship_outreach'].includes(purpose);
+  }
+  /** Primary source retention/management remains independent from voluntary use suspension. */
+  isPurposeRetentionAllowed(d: AdaptiveAuthorityDocument, space: SpaceKind, purpose: OptionalPurpose, now: number, agentId?: string): boolean {
+    const permission = this.permission(d, space, purpose);
+    return this.confirmed(d, now) && this.eligible(d, CAPABILITY[purpose], now).eligible &&
+      permission.state === 'granted' && permission.expiresAt > now &&
+      (!agentId || d.agentGrants.some(g => g.space === space && g.agentId === agentId && g.allowed));
   }
   coreFingerprint(d: AdaptiveAuthorityDocument, now: number): string {
     return digest([d.accountId, d.binding, this.confirmed(d, now), this.eligible(d, 'core_text', now)]);
@@ -349,11 +372,10 @@ export class AdaptiveService {
   /** Explicit preferences may be saved as a user directive. Applying them to an
    * agent still requires current optional purpose consent and an exact grant. */
   isPurposeAllowed(d: AdaptiveAuthorityDocument, space: SpaceKind, purpose: OptionalPurpose, now: number, agentId?: string): boolean {
-    const permission = this.permission(d, space, purpose);
-    return this.confirmed(d, now) && this.eligible(d, CAPABILITY[purpose], now).eligible &&
-      permission.state === 'granted' && permission.expiresAt > now &&
-      (!agentId || d.agentGrants.some(g => g.space === space && g.agentId === agentId && g.allowed));
+    return (!this.pauseCoveredPurpose(purpose) || this.isStoredPersonalizationUseAllowed(d, space)) &&
+      this.isPurposeRetentionAllowed(d, space, purpose, now, agentId);
   }
+
   private permission(d: AdaptiveAuthorityDocument, space: SpaceKind, purpose: OptionalPurpose): ConsentPermission {
     return d.permissions.find(p => p.spaceId === spaceIdFor(d.accountId, space) && p.purpose === purpose)!;
   }
@@ -406,6 +428,7 @@ export class AdaptiveService {
       ...(confirmed ? { personId: d.personId, bindingId: d.binding!.id, bindingRevision: d.binding!.revision,
         bindingExpiresAt: d.binding!.expiresAt, bindingCreatedAt: d.binding!.createdAt,
         bindingUpdatedAt: d.binding!.updatedAt, bindingVerifiedAt: d.binding!.verifiedAt } : {}) },
+      ...(d.schemaVersion === 2 ? { storedPersonalizationUseStamp: productPauseUseStamp(d, space), storedPersonalizationAllowed: this.isStoredPersonalizationUseAllowed(d, space) } : {}),
       space, revision: d.revision, scope: 'private_account_profile',
       purposes: OPTIONAL_PURPOSES.map(purpose => {
         const permission = this.permission(d, space, purpose), eligibility = this.eligible(d, CAPABILITY[purpose], now);
@@ -673,26 +696,27 @@ export class AdaptiveService {
     });
   }
   private runtimePrivacyEvaluation(d: AdaptiveAuthorityDocument, now: number, namespace: string, personaId: string,
-    space: SpaceKind): RuntimeControlEvaluation<{ revision: string; memoryEnabled: boolean; historyEnabled: boolean }> {
+    space: SpaceKind): RuntimeControlEvaluation<{ revision: string; memoryEnabled: boolean; historyEnabled: boolean; storedContextAllowed: boolean }> {
     const consent = this.permission(d, space, 'optional.auto_memory'), eligible = this.eligible(d, 'auto_memory', now);
     const confirmed = this.confirmed(d, now);
-    const parts = [d.accountId, d.binding, confirmed, consent, eligible, d.agentGrants.filter(g => g.space === space && g.agentId === personaId)];
-    return { value: { revision: digest(namespace === 'canonical' ? parts : [namespace, ...parts]), memoryEnabled: false, historyEnabled: false },
+    const parts: unknown[] = [d.accountId, d.binding, confirmed, consent, eligible, d.agentGrants.filter(g => g.space === space && g.agentId === personaId)];
+    if (d.schemaVersion === 2) parts.push(productPauseUseStamp(d, space));
+    return { value: { revision: digest(namespace === 'canonical' ? parts : [namespace, ...parts]), memoryEnabled: false, historyEnabled: false, storedContextAllowed: this.isStoredPersonalizationUseAllowed(d, space) },
       denied: !confirmed, observedDenial: !eligible.eligible || consent.state === 'granted' && consent.expiresAt <= now,
       ...(confirmed ? { deadline: Math.min(d.binding!.expiresAt, eligible.validUntil ?? INFINITY) } : {}) };
   }
   /** Runtime gets no private text from this helper. Legacy history cannot inherit consent. */
   runtimePrivacy = {
-    read: async (personaId: string, legacyPersonId: string, space: SpaceKind = 'work'): Promise<{ revision: string; memoryEnabled: boolean; historyEnabled: boolean }> => {
+    read: async (personaId: string, legacyPersonId: string, space: SpaceKind = 'work'): Promise<{ revision: string; memoryEnabled: boolean; historyEnabled: boolean; storedContextAllowed: boolean }> => {
       const match = /^tg-([1-9]\d*)$/.exec(legacyPersonId);
-      if (!match) return { revision: 'unconfirmed', memoryEnabled: false, historyEnabled: false };
+      if (!match) return { revision: 'unconfirmed', memoryEnabled: false, historyEnabled: false, storedContextAllowed: false };
       if (this.repository.storage.indexed) return this.withRuntimeControls(Number(match[1]), space,
         (d, now, namespace) => this.runtimePrivacyEvaluation(d, now, namespace, personaId, space));
       return this.transact(Number(match[1]), (d, now) => this.runtimePrivacyEvaluation(d, now, this.storeIdentity, personaId, space).value);
     },
-    readNow: (personaId: string, legacyPersonId: string, space: SpaceKind = 'work'): { revision: string; memoryEnabled: boolean; historyEnabled: boolean; validUntil: number } => {
+    readNow: (personaId: string, legacyPersonId: string, space: SpaceKind = 'work'): { revision: string; memoryEnabled: boolean; historyEnabled: boolean; storedContextAllowed: boolean; validUntil: number } => {
       const match = /^tg-([1-9]\d*)$/.exec(legacyPersonId);
-      if (!match) return { revision: 'unconfirmed', memoryEnabled: false, historyEnabled: false, validUntil: INFINITY };
+      if (!match) return { revision: 'unconfirmed', memoryEnabled: false, historyEnabled: false, storedContextAllowed: false, validUntil: INFINITY };
       const result = this.readRuntimeControlsForEffect(Number(match[1]), space,
         (d, now, namespace) => {
           const evaluation = this.runtimePrivacyEvaluation(d, now, namespace, personaId, space);
@@ -714,7 +738,7 @@ export class AdaptiveService {
     const permission = this.permission(d, space, 'optional.personalization');
     const eligibility = this.eligible(d, 'personalization', now);
     const confirmed = this.confirmed(d, now);
-    const allowed = confirmed && permission.state === 'granted' && permission.expiresAt > now && eligibility.eligible;
+    const allowed = confirmed && permission.state === 'granted' && permission.expiresAt > now && eligibility.eligible && this.isStoredPersonalizationUseAllowed(d, space);
     const authorized = allowed ? d.memories.filter(m => this.authorized(d, space, m, 'read', now, agentId)) : [];
     const byId = new Map(authorized.map(memory => [memory.id, memory]));
     const claimOrigins = this.reviewedClaimOrigins(authorized);
@@ -729,7 +753,8 @@ export class AdaptiveService {
     };
     const revision = digest([d.accountId, d.personId, space, agentId, d.binding, confirmed, permission, allowed, eligibility,
       d.agentGrants.filter(g => g.space === space && g.agentId === agentId),
-      authorized.map(m => [m.id, m.revision, m.expiresAt, m.revocationEpoch, m.sourceRefs, m.origin])]);
+      authorized.map(m => [m.id, m.revision, m.expiresAt, m.revocationEpoch, m.sourceRefs, m.origin]),
+      ...(d.schemaVersion === 2 ? [productPauseUseStamp(d, space)] : [])]);
     return { revision: this.storeIdentity === 'canonical' ? revision : digest([this.storeIdentity, revision]),
       memories: authorized.map(m => {
         const sourceIds = m.sourceRefs ? ancestors(m) : undefined;

@@ -5,7 +5,11 @@ import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {hire, ID, makeStudio, seedOrg, T0} from './helpers';
 import {AdaptiveRepository, accountIdFor} from '../../adaptive/persistence/repository';
+import {ProductPauseService} from '../../adaptive/product-pause/service';
+import {MessageMemoryService} from '../../adaptive/message-memory/service';
+import {ReviewedMemoryService} from '../../adaptive/reviewed-memory/service';
 import {AdaptiveService} from '../../adaptive/persistence/service';
+import {ManagedFileV2Storage} from '../../adaptive/persistence/indexed/managed-storage';
 import {SqliteAdaptiveStorage} from '../../adaptive/persistence/indexed/sqlite-storage';
 import {adaptiveOptionsFromManifest} from '../../adaptive/persistence/config';
 import {AdaptiveExperienceService} from '../../adaptive/runtime/service';
@@ -25,9 +29,9 @@ import {AdaptiveRelationshipService} from '../../adaptive/relationships/service'
 import {InMemoryRelationshipStore, RelationshipLoop} from '../../relationships';
 
 const NOW = T0.getTime(), TOKEN = '123:synthetic-manager';
-const paths: string[] = [], stores: SqliteAdaptiveStorage[] = [];
+const paths: string[] = [], stores: Array<SqliteAdaptiveStorage | ManagedFileV2Storage> = [];
 afterEach(() => {vi.restoreAllMocks(); vi.unstubAllGlobals(); for (const store of stores.splice(0)) store.close(); for (const path of paths.splice(0)) rmSync(path, {recursive: true, force: true});});
-async function fixture(personalization = true, consent = true, relationships = false) {
+async function fixture(personalization = true, consent = true, relationships = false, pausePrepared = false, format: 'sqlite' | 'file' = 'sqlite') {
   const h = makeStudio(), users = await seedOrg(h), {agent} = await hire(h, users.alice);
   let now = NOW;
   const directory = mkdtempSync(join(tmpdir(), 'vox-indexed-reply-')); paths.push(directory);
@@ -37,7 +41,8 @@ async function fixture(personalization = true, consent = true, relationships = f
     accounts: [ID.alice, ID.bob].map(id => ({accountId: accountIdFor(id), jurisdictionKeys: ['SYNTHETIC'], allowDeclaredAdult: true})),
     approvals: capabilities.map((capability, i) => ({schemaVersion: 1, id: `approval-${i}`, revision: 1, createdAt: NOW, updatedAt: NOW,
       jurisdiction: 'SYNTHETIC', capability, state: 'approved', configurationVersion: 'synthetic', effectiveAt: NOW, reviewExpiresAt: NOW + 86_400_000, owner: 'synthetic', approvalReference: 'synthetic-only'}))}));
-  const storage = new SqliteAdaptiveStorage(join(directory, 'synthetic.sqlite'), {now: () => now}); stores.push(storage);
+  const storeOptions = {now: () => now, newStoreSeed: {generation: 1, lifecycleWatermark: 0, schemaVersion: pausePrepared ? 2 as const : 1 as const}};
+  const storage = (format === 'file' ? new ManagedFileV2Storage(join(directory,'managed-file'),storeOptions) : new SqliteAdaptiveStorage(join(directory, 'synthetic.sqlite'),storeOptions)) as (SqliteAdaptiveStorage | ManagedFileV2Storage) & {io:{canonicalImageReads:number;bodyRowsRead?:number}}; stores.push(storage);
   const adaptive = new AdaptiveService(new AdaptiveRepository(storage), {...options, scopedRelationshipsEnabled: relationships, now: () => now});
   Object.defineProperty(h.chatLLM, 'committedExportFence', {value: true});
   h.studio.deps.adaptive = adaptive; h.studio.deps.experience = new AdaptiveExperienceService(adaptive);
@@ -81,7 +86,8 @@ async function attachRelationship(f: Awaited<ReturnType<typeof fixture>>) {
   });
   const authority = new AdaptiveRelationshipService(f.adaptive), store = new InMemoryRelationshipStore();
   const loop = new RelationshipLoop({store, mode: 'live', now: () => f.h.clock.now, assessor: {assess: async () => ({})},
-    authorize: input => authority.authorize(input.key, input.sourceIds, input.phase, input.expectedFingerprint)});
+    authorize: input => authority.authorize(input.key, input.sourceIds, input.phase, input.expectedFingerprint),
+    synchronize: (key, ids) => authority.synchronize(key, ids)});
   Object.assign(f.h.studio.deps, {relationshipAuthority: authority, relationships: loop, relationshipStore: store,
     relationshipConfig: {mode: 'live', agentIds: [f.agent.id], personIds: [personId(ID.alice)]}});
   const permit = (await authority.resolve(ID.alice, f.agent.id, 'work'))!; expect(permit).not.toBeNull();
@@ -393,4 +399,108 @@ describe('real indexed Studio reply acquisition and compact rechecks', () => {
     expect(JSON.stringify(f.h.chatLLM.replyRequests[0])).toContain('SYNTHETIC_LIVE_RELATIONSHIP_STYLE');
   });
 
+});
+
+async function pause(f: Awaited<ReturnType<typeof fixture>>, action: 'pause' | 'resume', telegramId = ID.alice) {
+  const service = new ProductPauseService(f.adaptive), status = await service.read(telegramId, 'work');
+  return service.command(telegramId, {version: 1, space: 'work', eventId: randomUUID(), expectedCommandSeq: status.commandSeq!, action});
+}
+const sdkReply = () => new Response(JSON.stringify({id: 'synthetic', type: 'message', role: 'assistant', model: 'synthetic', content: [{type: 'text', text: 'PAUSED_GENERIC_REPLY'}], stop_reason: 'end_turn', usage: {input_tokens: 1, output_tokens: 1}}), {headers: {'content-type': 'application/json'}});
+it.each(['sqlite','file'].flatMap(format => ['direct', 'tap', 'call', 'telegram'].map(route => ({format:format as 'sqlite'|'file',route}))))('paused actual Studio $format $route sends a fresh full current-only provider request', async ({route,format}) => {
+  const f = await fixture(true, true, true, true,format), relation = await attachRelationship(f);
+  const shared = attachShared(f); await f.adaptive.confirm(ID.bob,{confirm:true,adultConfirmed:true});
+  const sharedPreview = await shared.preview(ID.alice,{space:'work',kind:'selected',recipientTelegramIds:[ID.bob]});
+  await shared.create(ID.alice,{space:'work',expectedRevision:0,eventId:randomUUID(),previewToken:sharedPreview.previewToken,agentIds:[f.agent.id],text:'PRIVATE_SHARED_CANARY'});
+  await f.adaptive.withAccountDocument(ID.alice, d => {d.memories[0].text = 'PRIVATE_NOTE_CANARY'; d.memories[1].text = 'DERIVED_SUMMARY_CANARY'; d.memories[1].sourceRefs = [{id: d.memories[0].id, revision: 1}]; d.revision++;});
+  const prefs = await f.h.studio.deps.experience!.readPreferenceState(ID.alice, 'work', f.agent.id);
+  await f.h.studio.deps.experience!.savePreference(ID.alice, {space: 'work', agentId: f.agent.id, expectedRevision: prefs.revision, eventId: randomUUID(), action: 'set', setting: {key: 'response_length', value: 'brief'}});
+  await f.h.memory.history.append(f.agent.id, `private-${personId(ID.alice)}`, {role: 'user', text: 'UNKNOWN_HISTORY_CANARY', at: f.h.clock.now});
+  const before = await f.adaptive.withAccountDocument(ID.alice, d => ({memories: structuredClone(d.memories), preferences: structuredClone(d.experience.preferences), sources: structuredClone(d.relationships.sources), consent: structuredClone(d.permissions)}));
+  await pause(f, 'pause'); f.reset(); f.unavailableLegacy(); vi.stubGlobal('window', undefined);
+  const transport = vi.fn<typeof fetch>(async (_url, init) => {
+    if (JSON.parse(String(init?.body)).stream) {
+      const events = [{type:'message_start',message:{id:'synthetic',type:'message',role:'assistant',model:'synthetic',content:[],usage:{input_tokens:1,output_tokens:0}}}, {type:'content_block_start',index:0,content_block:{type:'text',text:''}}, {type:'content_block_delta',index:0,delta:{type:'text_delta',text:'PAUSED_GENERIC_REPLY'}}, {type:'content_block_stop',index:0}, {type:'message_delta',delta:{stop_reason:'end_turn'},usage:{output_tokens:1}}, {type:'message_stop'}];
+      return new Response(events.map(e => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join(''), {headers:{'content-type':'text/event-stream'}});
+    }
+    return sdkReply();
+  });
+  const llm = new AnthropicLLM('synthetic-key', 'synthetic-model', transport); f.h.studio.deps.chatLLM = llm; f.h.studio.deps.fastLLM = llm;
+  const speech = vi.fn<typeof fetch>(async () => new Response(new Uint8Array([1,2,3]), {headers:{'content-type':'audio/mpeg'}}));
+  f.h.studio.deps.eleven = new ElevenLabsStudio('synthetic-key', speech);
+  const sent: string[] = [];
+  f.h.studio.deps.botFor = () => new TelegramBotClient('synthetic-key', async (url) => {
+    sent.push(String(url)); return Response.json({ok:true,result:String(url).endsWith('sendChatAction') ? true : {message_id:900,chat:{id:ID.alice,type:'private'}}});
+  });
+  const current = 'CURRENT_GENERIC_INPUT';
+  if (route === 'direct') {const response = await handleConversationRequest(f.h.studio, f.request(current), TOKEN); expect(response.status).toBe(200); expect(await response.text()).toContain('PAUSED_GENERIC_REPLY');}
+  if (route === 'tap') {f.h.openai.transcribe.mockResolvedValue(current); const result = await f.h.studio.callTurn(f.users.alice, f.agent.id, new ArrayBuffer(3), 'audio/webm'); expect(result).toMatchObject({reply:'PAUSED_GENERIC_REPLY',audio:'AQID'});}
+  if (route === 'call') {let result = ''; for await (const chunk of await f.h.studio.liveTurn(f.agent.id, ID.alice, [{role:'assistant',content:'PLATFORM_HISTORY_CANARY'},{role:'user',content:current}])) result += chunk; expect(result).toBe('PAUSED_GENERIC_REPLY');}
+  if (route === 'telegram') {const {gateway} = await f.h.studio.gateway(); expect(await gateway.handleUpdate(f.agent.id, privateText(ID.alice, `Please reply as a voice message: ${current}`))).toBe('replied'); expect(sent.some(url => url.endsWith('sendVoice'))).toBe(true);}
+  expect(transport).toHaveBeenCalledTimes(1); const fullRequest = String(transport.mock.calls[0][1]?.body);
+  expect(fullRequest).toContain(current); expect(fullRequest).not.toMatch(/PRIVATE_NOTE_CANARY|DERIVED_SUMMARY_CANARY|UNKNOWN_HISTORY_CANARY|PLATFORM_HISTORY_CANARY|PRIVATE_SHARED_CANARY|SYNTHETIC_LIVE_RELATIONSHIP_STYLE|response_length/);
+  if (format === 'sqlite') expect(f.storage.io.bodyRowsRead).toBe(0);
+  const after = await f.adaptive.withAccountDocument(ID.alice, d => ({memories:d.memories,preferences:d.experience.preferences,sources:d.relationships.sources,consent:d.permissions})); expect(after).toEqual(before);
+  expect((await relation.store.read(relation.permit.key)).preferences[0].value).toBe('SYNTHETIC_LIVE_RELATIONSHIP_STYLE');
+});
+it.each(['sqlite','file'] as const)('pause then resume during actual SDK preparation never sanitizes old request on %s', async format => {
+  const f = await fixture(true,true,false,true,format); vi.stubGlobal('window', undefined);
+  const transport = vi.fn<typeof fetch>(async () => sdkReply()), llm = new AnthropicLLM('synthetic-key','synthetic-model',transport); f.h.studio.deps.chatLLM = llm;
+  const client = (llm as unknown as {getClient(): {prepareOptions(options: unknown): Promise<void>}}).getClient(), prepare = client.prepareOptions.bind(client);
+  client.prepareOptions = async options => {await pause(f,'pause'); await pause(f,'resume'); await prepare(options);};
+  const response = await handleConversationRequest(f.h.studio,f.request('launchcodename'),TOKEN);
+  expect([409,503]).toContain(response.status); expect(transport).not.toHaveBeenCalled();
+});
+it('paused current-message review stays context-free while stored-note summary and old receipts fail', async () => {
+  const f = await fixture(true,true,false,true), requests: unknown[] = [];
+  await f.adaptive.withAccountDocument(ID.alice,d => {d.memories = d.memories.slice(0,3);d.revision++;});
+  const llm = {committedExportFence:true as const, complete: vi.fn(async (request: unknown) => {requests.push(request);return JSON.stringify({claims:['Explicitly supplied current claim.']});})};
+  const settings = {llm,secret:'synthetic-secret-'.repeat(3), now:() => f.h.clock.now.getTime(),agentAuthority:async () => 'synthetic-studio',agentAuthorityNow:() => 'synthetic-studio'};
+  const current = new MessageMemoryService(f.adaptive,settings), stored = new ReviewedMemoryService(f.adaptive,settings), input = {space:'work' as const,agentId:f.agent.id,locale:'en' as const,text:'CURRENT_REVIEW_TEXT'};
+  const old = await current.preview(ID.alice,input);
+  const oldSummary = await stored.preview(ID.alice,{space:'work',agentId:f.agent.id,locale:'en',sourceRefs:[{id:'memory-0',revision:1},{id:'memory-1',revision:1}]});
+  requests.length = 0; await pause(f,'pause');
+  f.reset(); const fresh = await current.preview(ID.alice,input); expect(f.storage.io.canonicalImageReads).toBe(0); expect(f.storage.io.bodyRowsRead).toBe(0); expect(JSON.stringify(requests)).not.toMatch(/Launchcodename|Sapphire|Unrelated calendar/); expect(JSON.stringify(requests)).toContain('CURRENT_REVIEW_TEXT');
+  const accept = (p: typeof fresh) => ({space:input.space,agentId:input.agentId,claims:p.claims,sourceTextHash:p.sourceTextHash,receipt:p.receipt});
+  expect((await current.accept(ID.alice,accept(fresh))).memoryIds).toHaveLength(1);
+  await expect(stored.preview(ID.alice,{space:'work',agentId:f.agent.id,locale:'en',sourceRefs:[{id:'memory-0',revision:1},{id:'memory-1',revision:1}]})).rejects.toMatchObject({code:'product_personalization_paused'});
+  await pause(f,'resume'); await expect(current.accept(ID.alice,accept(old))).rejects.toMatchObject({code:'message_memory_changed'});
+  await expect(stored.accept(ID.alice,{space:'work',agentId:f.agent.id,text:oldSummary.text,receipt:oldSummary.receipt})).rejects.toMatchObject({code:'reviewed_memory_changed'});
+});
+
+it('shared required-participant pause suppresses use without changing primary shared management and stays stale after resume', async () => {
+  const f = await fixture(true,true,false,true), shared = attachShared(f);
+  await f.adaptive.confirm(ID.bob,{confirm:true,adultConfirmed:true});
+  const preview = await shared.preview(ID.alice,{space:'work',kind:'selected',recipientTelegramIds:[ID.bob]});
+  await shared.create(ID.alice,{space:'work',expectedRevision:0,eventId:randomUUID(),previewToken:preview.previewToken,agentIds:[f.agent.id],text:'REQUIRED_PARTICIPANT_SHARED_CANARY'});
+  const before = await shared.readContext(ID.alice,'work',f.agent.id,{audienceTelegramIds:[ID.alice]}); expect(before.memories[0].text).toBe('REQUIRED_PARTICIPANT_SHARED_CANARY');
+  const raw = await shared.repository.transaction(d => structuredClone(d.containers));
+  await pause(f,'pause',ID.bob);
+  const stopped = await shared.readContext(ID.alice,'work',f.agent.id,{audienceTelegramIds:[ID.alice]}); expect(stopped.memories).toEqual([]); expect(stopped.revision).not.toBe(before.revision);
+  expect(shared.readContextAuthorityNow(ID.alice,'work',f.agent.id,{audienceTelegramIds:[ID.alice]}).revision).toBe(stopped.revision);
+  expect((await shared.list(ID.alice,'work')).containers[0].memories[0].text).toBe('REQUIRED_PARTICIPANT_SHARED_CANARY');
+  expect(await shared.repository.transaction(d => d.containers)).toEqual(raw);
+  await pause(f,'resume',ID.bob);
+  const resumed = await shared.readContext(ID.alice,'work',f.agent.id,{audienceTelegramIds:[ID.alice]}); expect(resumed.memories[0].text).toBe('REQUIRED_PARTICIPANT_SHARED_CANARY'); expect(resumed.revision).not.toBe(before.revision);
+});
+it.each(['sqlite','file'] as const)('old %s TTS output remains stopped after pause plus resume during adapter preparation', async format => {
+  const f = await fixture(true,true,false,true,format); f.h.openai.transcribe.mockResolvedValue('launchcodename');
+  vi.spyOn(f.h.chatLLM,'complete').mockResolvedValue('OLD_TTS_CANARY');
+  const speech = vi.fn<typeof fetch>(async () => new Response(new Uint8Array([1,2,3]),{headers:{'content-type':'audio/mpeg'}}));
+  const eleven = new ElevenLabsStudio('synthetic-key',speech); f.h.studio.deps.eleven = eleven;
+  const adapter = eleven as unknown as {request(url:string,init:RequestInit,authority?:unknown):Promise<Response>}, request = adapter.request.bind(adapter);
+  adapter.request = async (...args) => {await pause(f,'pause');await pause(f,'resume');return request(...args);};
+  await expect(f.h.studio.callTurn(f.users.alice,f.agent.id,new ArrayBuffer(3),'audio/webm')).rejects.toMatchObject({status:409}); expect(speech).not.toHaveBeenCalled();
+});
+it.each(['sqlite','file'] as const)('old %s streamed turn never resumes after a pause/resume between chunks', async format => {
+  const f = await fixture(true,true,false,true,format);
+  f.h.studio.deps.fastLLM = {committedExportFence:true,complete:async () => '',stream:async function* () {yield 'ALREADY_DELIVERED';await pause(f,'pause');await pause(f,'resume');yield 'STALE_NEXT_CHUNK_CANARY';}};
+  const chunks: string[] = []; for await (const chunk of await f.h.studio.liveTurn(f.agent.id,ID.alice,[{role:'user',content:'Current input'}])) chunks.push(chunk);
+  expect(chunks).toEqual(['ALREADY_DELIVERED']);
+});
+it.each(['sqlite','file'] as const)('old %s Telegram send receipt cannot revive after resume at final send preparation', async format => {
+  const f = await fixture(true,true,false,true,format); vi.spyOn(f.h.chatLLM,'complete').mockResolvedValue('OLD_SEND_CANARY');
+  const exports: string[] = [], bot = new TelegramBotClient('synthetic-token',async (url) => {exports.push(String(url));return Response.json({ok:true,result:String(url).endsWith('sendChatAction') ? true : {message_id:900,chat:{id:ID.alice,type:'private'}}});});
+  const send = bot.sendMessage.bind(bot); vi.spyOn(bot,'sendMessage').mockImplementation(async (...args) => {await pause(f,'pause');await pause(f,'resume');return send(...args);}); f.h.studio.deps.botFor = () => bot;
+  const {gateway} = await f.h.studio.gateway(); await expect(gateway.handleUpdate(f.agent.id,privateText(ID.alice,'Current question'))).rejects.toMatchObject({name:'ExportAuthorityError'});
+  expect(exports.some(url => url.endsWith('sendMessage'))).toBe(false);
 });

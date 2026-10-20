@@ -16,7 +16,7 @@ import { z } from 'zod';
 import type { AdaptiveStorage, AdaptiveAccountPage, AdaptiveAccountPageInput } from '../storage';
 import { digest, validateAdaptiveDocument } from '../repository';
 import { accountKey, validateAccountId } from './projection';
-import { INDEXED_LIMITS, INDEXED_SCHEMA_VERSION, IndexedStorageError } from './contracts';
+import { INDEXED_LIMITS, IndexedStorageError } from './contracts';
 import { SqliteAdaptiveStorage } from './sqlite-storage';
 const integer = z.number().int().nonnegative().safe(), uuid = z.string().uuid();
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
@@ -24,16 +24,21 @@ export const MAX_TRANSITION_BYTES = 64 * 1024 * 1024;
 export const MAX_MANAGED_ACCOUNTS = 10_000;
 const MAX_HEAD_BYTES = 4 * 1024 * 1024;
 export const managedIdentitySchema = z.object({ incarnation: uuid, generation: integer.min(1) }).strict();
-export const managedReadySchema = z.object({ version: z.literal(1), state: z.literal('ready'), rootId: uuid,
+const legacyManagedReadySchema = z.object({ version: z.literal(1), state: z.literal('ready'), rootId: uuid,
   format: z.enum(['sqlite-v1', 'file-v2']), store: uuid, identity: managedIdentitySchema,
   watermarkFloor: integer }).strict();
+const pauseCapabilities = { canonicalSchemaVersion: z.literal(2), controlsSchemaVersion: z.literal(2), productPauseEnforcementVersion: z.literal(1) };
+export const managedReadySchema = z.union([legacyManagedReadySchema, legacyManagedReadySchema.extend({ version: z.literal(2), ...pauseCapabilities }).strict()]);
 export type ManagedReady = z.infer<typeof managedReadySchema>;
-export const transitionSchema = z.object({ version: z.literal(1), state: z.literal('transition'), rootId: uuid,
+export function requiredCanonicalSchema(marker: { version: 1 | 2 }): 1 | 2 { return marker.version === 2 ? 2 : 1; }
+const legacyTransitionSchema = z.object({ version: z.literal(1), state: z.literal('transition'), rootId: uuid,
   id: uuid, phase: z.enum(['prepared', 'verified', 'poisoned']), sourceFormat: z.enum(['legacy-file', 'sqlite-v1', 'file-v2']),
   previous: managedReadySchema.optional(), sourceDigest: hash, sourceWatermark: integer,
   legacyArchive: uuid.optional(), targetFormat: z.enum(['sqlite-v1', 'file-v2']), targetStore: uuid,
   targetIdentity: managedIdentitySchema.optional(), targetDigest: hash.optional(), generation: integer.min(1),
 }).strict();
+export const transitionSchema = z.union([legacyTransitionSchema, legacyTransitionSchema.extend({ version: z.literal(2),
+  ...pauseCapabilities, expectedTargetDigest: hash }).strict()]);
 export type ManagedTransition = z.infer<typeof transitionSchema>;
 export const markerSchema = z.union([managedReadySchema, transitionSchema]);
 export interface ManagedStorageOptions { format: 'sqlite-v1' | 'file-v2'; now?: () => number }
@@ -105,8 +110,8 @@ export function verifyPoison(root: string, rootId: string): void {
 export function metadataOf(storage: ManagedAdaptiveStorage): { incarnation: string; generation: number; lifecycleWatermark: number } {
   return storage instanceof SqliteAdaptiveStorage ? storage.readMetadata() : storage.readMetadata();
 }
-export function openRawManagedStore(root: string, ready: Pick<ManagedReady, 'format' | 'store'>,
-  now: () => number, seed?: { generation: number; lifecycleWatermark: number }, reclaimDead = false): ManagedAdaptiveStorage {
+export function openRawManagedStore(root: string, ready: Pick<ManagedReady, 'format' | 'store'> & { version?: 1 | 2 },
+  now: () => number, seed?: { generation: number; lifecycleWatermark: number; schemaVersion?: 1 | 2 }, reclaimDead = false): ManagedAdaptiveStorage {
   const path = storePath(root, ready.store);
   if (seed) { if (existsSync(path)) throw new IndexedStorageError('corrupt'); }
   else {
@@ -120,11 +125,13 @@ export function openRawManagedStore(root: string, ready: Pick<ManagedReady, 'for
       // initialize them. The qualified schema version is immutable after create.
       const header = Buffer.alloc(100), fd = openSync(path, 'r'); let bytes: number;
       try { bytes = readSync(fd, header, 0, header.length, 0); } finally { closeSync(fd); }
-      if (bytes !== 100 || header.subarray(0, 16).toString('binary') !== 'SQLite format 3\0' || header.readUInt32BE(60) !== INDEXED_SCHEMA_VERSION) throw new IndexedStorageError('corrupt');
+      if (bytes !== 100 || header.subarray(0, 16).toString('binary') !== 'SQLite format 3\0' || header.readUInt32BE(60) !== (ready.version ?? 1)) throw new IndexedStorageError('corrupt');
     }
   }
-  return ready.format === 'sqlite-v1' ? new SqliteAdaptiveStorage(path, { now, ...(seed ? { newStoreSeed: seed } : {}) })
+  const storage = ready.format === 'sqlite-v1' ? new SqliteAdaptiveStorage(path, { now, ...(seed ? { newStoreSeed: seed } : {}) })
     : new ManagedFileV2Storage(path, { now, ...(seed ? { newStoreSeed: seed } : {}), reclaimDeadLease: reclaimDead });
+  if (!seed && storage.canonicalSchemaVersion !== (ready.version ?? 1)) { storage.close(); throw new IndexedStorageError('corrupt'); }
+  return storage;
 }
 export function openManagedAdaptiveStorage(root: string, options: ManagedStorageOptions): ManagedAdaptiveStorage {
   root = resolve(root); validateManagedLayout(root);
@@ -135,23 +142,25 @@ export function openManagedAdaptiveStorage(root: string, options: ManagedStorage
     verifyPoison(root, marker.rootId);
     storage = openRawManagedStore(root, marker, options.now ?? Date.now);
     const metadata = metadataOf(storage);
-    if (metadata.incarnation !== marker.identity.incarnation || metadata.generation !== marker.identity.generation || metadata.lifecycleWatermark < marker.watermarkFloor) throw new IndexedStorageError('corrupt');
+    if (metadata.incarnation !== marker.identity.incarnation || metadata.generation !== marker.identity.generation || metadata.lifecycleWatermark < marker.watermarkFloor || storage.canonicalSchemaVersion !== requiredCanonicalSchema(marker)) throw new IndexedStorageError('corrupt');
     const close = storage.close.bind(storage); let closed = false;
     storage.close = () => { if (closed) return; close(); closed = true; release(); };
     return storage;
   } catch (error) { storage?.close(); release(); throw error; }
 }
 const referenceSchema = z.object({ key: hash, accountId: z.string().max(200), file: uuid, digest: hash }).strict();
-const headSchema = z.object({ formatVersion: z.literal(2), incarnation: uuid, generation: integer.min(1),
+const legacyHeadSchema = z.object({ formatVersion: z.literal(2), incarnation: uuid, generation: integer.min(1),
   lifecycleWatermark: integer, accounts: z.array(referenceSchema).max(MAX_MANAGED_ACCOUNTS) }).strict();
+const headSchema = z.union([legacyHeadSchema, legacyHeadSchema.extend({ schemaVersion: z.literal(2) }).strict()]);
 type FileHead = z.infer<typeof headSchema>;
-export interface ManagedFileOptions { now?: () => number; newStoreSeed?: { generation: number; lifecycleWatermark: number }; reclaimDeadLease?: boolean }
+export interface ManagedFileOptions { now?: () => number; newStoreSeed?: { generation: number; lifecycleWatermark: number; schemaVersion?: 1 | 2 }; reclaimDeadLease?: boolean }
 /** Rollback format, with compatibility aggregate callbacks. Atomic head publish
  * couples current canonical account image and durable lifecycle time. This is
  * intentionally not an indexed query adapter and makes no no-body-load claim. */
 export class ManagedFileV2Storage implements AdaptiveStorage {
   private transactionClock?: (clock: () => number) => number;
   readonly supportsCommittedWriteFence = true as const;
+  readonly canonicalSchemaVersion: 1 | 2;
   readonly identity: Readonly<{ incarnation: string; generation: number }>;
   readonly io = { canonicalImageReads: 0, watermarkWrites: 0 };
   private readonly now: () => number;
@@ -166,12 +175,13 @@ export class ManagedFileV2Storage implements AdaptiveStorage {
       const head = join(directory, 'head.json');
       if (!existsSync(head)) {
         if (readdirSync(directory).length) throw new IndexedStorageError('corrupt');
-        const seed = z.object({ generation: integer.min(1), lifecycleWatermark: integer }).strict().parse(options.newStoreSeed ?? { generation: 1, lifecycleWatermark: 0 });
+        const seed = z.object({ generation: integer.min(1), lifecycleWatermark: integer, schemaVersion: z.union([z.literal(1), z.literal(2)]).optional() }).strict().parse(options.newStoreSeed ?? { generation: 1, lifecycleWatermark: 0 });
         this.sample(seed.lifecycleWatermark); mkdirSync(join(directory, 'records'), { mode: 0o700 }); syncDirectory(directory);
-        writeDurableJson(head, { formatVersion: 2, incarnation: randomUUID(), generation: seed.generation,
+        writeDurableJson(head, { formatVersion: 2, ...(seed.schemaVersion === 2 ? { schemaVersion: 2 } : {}), incarnation: randomUUID(), generation: seed.generation,
           lifecycleWatermark: seed.lifecycleWatermark, accounts: [] });
       } else if (options.newStoreSeed) throw new IndexedStorageError('corrupt');
       noSymlink(join(directory, 'records'), 'directory'); const metadata = this.head();
+      this.canonicalSchemaVersion = 'schemaVersion' in metadata ? metadata.schemaVersion : 1;
       this.identity = Object.freeze({ incarnation: metadata.incarnation, generation: metadata.generation });
     } catch (error) { this.release(); throw error; }
   }
@@ -181,6 +191,7 @@ export class ManagedFileV2Storage implements AdaptiveStorage {
   }
   private head(): FileHead {
     const head = headSchema.parse(readJson(join(this.directory, 'head.json')));
+    if (this.canonicalSchemaVersion && ('schemaVersion' in head ? head.schemaVersion : 1) !== this.canonicalSchemaVersion) throw new IndexedStorageError('corrupt');
     if (this.identity && (head.incarnation !== this.identity.incarnation || head.generation !== this.identity.generation) ||
         new Set(head.accounts.map(a => a.key)).size !== head.accounts.length || new Set(head.accounts.map(a => a.file)).size !== head.accounts.length ||
         head.accounts.some((row, i) => i > 0 && head.accounts[i - 1].key >= row.key)) throw new IndexedStorageError('corrupt');
@@ -194,7 +205,7 @@ export class ManagedFileV2Storage implements AdaptiveStorage {
   private record(head: FileHead, accountId: string, now: number): unknown | null {
     const row = head.accounts.find(row => row.key === accountKey(accountId)); if (!row) return null;
     const raw = readJson(join(this.directory, 'records', `${row.file}.json`), INDEXED_LIMITS.canonicalBytes); this.io.canonicalImageReads++;
-    if (digest(raw) !== row.digest) throw new IndexedStorageError('corrupt'); validateAdaptiveDocument(raw, accountId, now); return raw;
+    if (digest(raw) !== row.digest) throw new IndexedStorageError('corrupt'); if (validateAdaptiveDocument(raw, accountId, now).schemaVersion !== this.canonicalSchemaVersion) throw new IndexedStorageError('invalid_controls'); return raw;
   }
   private publishTime(at: number): void {
     const head = this.head(); this.sample(head.lifecycleWatermark, at);
@@ -222,6 +233,7 @@ export class ManagedFileV2Storage implements AdaptiveStorage {
       const current = this.record(head, accountId, now);
       const output = mutate(current), outputAt = this.sample(observedTime); observedTime = outputAt;
       const document = validateAdaptiveDocument(output.document, accountId, outputAt);
+      if (document.schemaVersion !== this.canonicalSchemaVersion) throw new IndexedStorageError('invalid_controls');
       const canonical = JSON.stringify(output.document);
       const serializedAt = this.sample(observedTime); observedTime = serializedAt;
       if (Buffer.byteLength(canonical) > INDEXED_LIMITS.canonicalBytes || digest(document) !== digest(validateAdaptiveDocument(JSON.parse(canonical), accountId, serializedAt))) throw new IndexedStorageError('capacity');

@@ -70,8 +70,8 @@ jobs:
       - name: Verify Connections release configuration preservation
         run: node --test scripts/connections-production-config.test.mjs
 
-      - name: Verify single-host configuration preservation
-        run: node --test scripts/studio-production.test.mjs
+      - name: Verify single-host release safety and configuration preservation
+        run: node --test scripts/studio-production.test.mjs scripts/studio-adaptive-compatibility.test.mjs
 
       - name: Upload coverage reports
         uses: codecov/codecov-action@v4

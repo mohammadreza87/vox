@@ -1,7 +1,8 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConversationPanel } from './ConversationPanel';
-const controls = vi.hoisted(() => ({ start: vi.fn(), update: vi.fn(), cancel: vi.fn(), suspend: vi.fn(), snapshot: vi.fn(), image: vi.fn(), fetch: vi.fn() }));
+vi.mock('../_lib/product-pause-client', () => ({ useProductPause: () => controls.pause }));
+const controls = vi.hoisted(() => ({ pause: { coveredBlocked: false, status: null as { productPaused: boolean; accountId: string; useEpoch: number } | null }, start: vi.fn(), update: vi.fn(), cancel: vi.fn(), suspend: vi.fn(), snapshot: vi.fn(), image: vi.fn(), fetch: vi.fn() }));
 vi.mock('@/lib/adaptive/prediction/client', () => ({
   predictionHttpTransport: () => ({}),
   LivePredictionConsumer: class { startTurn = controls.start; update = controls.update; cancel = controls.cancel; suspend = controls.suspend; snapshotTurn = controls.snapshot; },
@@ -9,7 +10,7 @@ vi.mock('@/lib/adaptive/prediction/client', () => ({
 vi.mock('@/lib/adaptive/prediction/image-browser', () => ({ prepareSharedImage: controls.image }));
 vi.mock('../_lib/preference-learning-client', () => ({ preferenceLearningApi: { cancel: vi.fn() } }));
 vi.mock('../_lib/client', () => ({ tg: () => ({ initData: 'synthetic-signed-session' }) }));
-beforeEach(() => { vi.clearAllMocks(); vi.stubGlobal('fetch', controls.fetch); });
+beforeEach(() => { controls.pause.coveredBlocked = false; controls.pause.status = null; controls.snapshot.mockReturnValue(undefined); vi.clearAllMocks(); vi.stubGlobal('fetch', controls.fetch); });
 afterEach(() => vi.unstubAllGlobals());
 describe('scoped conversation UI', () => {
   it('keeps drafts local until Send with preparation off by default', async () => {
@@ -66,4 +67,20 @@ it('reuses one logical turn regardless of preparation toggle and supplies it onl
   expect(controls.start).toHaveBeenCalledOnce(); fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'Please keep replies brief.' } });
   fireEvent.click(screen.getByRole('button', { name: 'Send' })); await screen.findByText('Correlated answer');
   expect(JSON.parse(controls.fetch.mock.calls[0][1].body).turn).toEqual(turn); expect(controls.suspend).toHaveBeenCalled(); expect(controls.start).toHaveBeenCalledTimes(2);
+});
+
+it('keeps visible own history but disables its memory shortcut and drops pending output across pause', async () => {
+  controls.fetch.mockResolvedValueOnce(Response.json({ reply: 'Visible own reply' }));
+  const view = render(<ConversationPanel agentId="agent1" space="work" />);
+  fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'Own historical input' } }); fireEvent.click(screen.getByRole('button', { name: 'Send' })); await screen.findByText('Visible own reply');
+  fireEvent.click(screen.getByRole('button', { name: 'Review this text for memory' })); expect(screen.getByLabelText('Exact selected text')).toHaveTextContent('Own historical input');
+  let finish!: (value: Response) => void; controls.fetch.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+  fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'Pending before pause' } }); fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+  const signal = controls.fetch.mock.calls.at(-1)![1].signal as AbortSignal;
+  controls.pause.coveredBlocked = true; controls.pause.status = { productPaused: true, accountId: 'account', useEpoch: 1 };
+  view.rerender(<ConversationPanel agentId="agent1" space="work" />);
+  expect(screen.getByText('Visible own reply')).toBeVisible(); expect(screen.getByRole('button', { name: 'Review this text for memory' })).toBeDisabled(); expect(screen.queryByLabelText('Exact selected text')).toBeNull();
+  expect(screen.getByLabelText('Prepare while I type')).toBeDisabled(); expect(screen.getByLabelText('Message')).toBeEnabled(); expect(signal.aborted).toBe(true);
+  await act(async () => finish(Response.json({ reply: 'STALE_UNSENT_CANARY' }))); expect(screen.queryByText('STALE_UNSENT_CANARY')).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Review current text for memory' })).toBeNull();
 });

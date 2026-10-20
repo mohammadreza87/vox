@@ -5,6 +5,7 @@ import { AdaptiveError, type AdaptiveService } from '../persistence/service';
 import { accountIdFor, digest, type AdaptiveDocument, type StoredMemory } from '../persistence/repository';
 import { reviewedAcceptInputSchema, reviewedPreviewInputSchema, sourceRefsSchema, type ReviewedAcceptInput, type ReviewedMemoryPreview, type ReviewedPreviewInput } from './contracts';
 import { validMemoryLineage } from './provenance';
+import { productPauseUseStamp } from '../product-pause/state';
 
 const receiptSchema = z.object({ v: z.literal(1), nonce: z.string().uuid(), accountId: z.string().max(200), personId: z.string().max(200),
   space: z.enum(['work', 'personal']), agentId: z.string().max(200), sourceRefs: sourceRefsSchema, authority: z.string().regex(/^[a-f0-9]{64}$/),
@@ -40,6 +41,7 @@ export class ReviewedMemoryService {
     } catch { return denied(); }
   }
   private state(d: AdaptiveDocument, now: number, input: Pick<Receipt, 'space' | 'agentId' | 'sourceRefs'>, studio: string | null) {
+    if (!this.adaptive.isStoredPersonalizationUseAllowed(d, input.space)) throw new AdaptiveError(403, 'product_personalization_paused');
     if (!studio || !this.adaptive.isCoreAllowed(d, now) || d.agentGrants.filter(g => g.space === input.space && g.agentId === input.agentId && g.allowed).length !== 1) return denied();
     const sources = input.sourceRefs.map(ref => {
       const memory = d.memories.find(row => row.id === ref.id);
@@ -54,10 +56,14 @@ export class ReviewedMemoryService {
     const rows = d.memories.filter(row => lineage.has(row.id)).sort((a, b) => a.id.localeCompare(b.id));
     return { sources, personId: d.personId, expiresAt: Math.min(d.binding!.expiresAt, this.adaptive.capabilityStatus(d, 'core_text', now).validUntil ?? now, ...rows.map(row => row.expiresAt)),
       authority: digest([...(this.adaptive.storeIdentity === 'canonical' ? [] : [this.adaptive.storeIdentity]), d.accountId, d.personId, d.binding, this.adaptive.coreFingerprint(d, now), studio, input.space, input.agentId,
-        d.agentGrants.filter(g => g.space === input.space && g.agentId === input.agentId), rows]) };
+        d.agentGrants.filter(g => g.space === input.space && g.agentId === input.agentId), rows,
+        ...(d.schemaVersion === 2 ? [productPauseUseStamp(d, input.space)] : [])]) };
   }
   private currentNow(telegramId: number, input: Pick<Receipt, 'space' | 'agentId' | 'sourceRefs'>) {
     const studio = this.options.agentAuthorityNow(telegramId, input.agentId);
+    const use = this.adaptive.readRuntimeControlsForEffect(telegramId, input.space, d => ({value:this.adaptive.isStoredPersonalizationUseAllowed(d,input.space),denied:true}));
+    if (use.status !== 'ready') throw new AdaptiveError(503,'reviewed_memory_unavailable');
+    if (!use.value) throw new AdaptiveError(403,'product_personalization_paused');
     const snapshot = this.adaptive.readCommittedAuthorityForEffect(telegramId, this.now, (document, now) => {
       const value = this.state(document, now, input, studio); return { value, deadline: value.expiresAt };
     });
@@ -67,6 +73,8 @@ export class ReviewedMemoryService {
   private async current(telegramId: number, input: Pick<Receipt, 'space' | 'agentId' | 'sourceRefs'>, signal?: AbortSignal) {
     if (signal?.aborted) return denied();
     const studio = await this.options.agentAuthority(telegramId, input.agentId);
+    const allowed = await this.adaptive.withRuntimeControls(telegramId,input.space,d => ({value:this.adaptive.isStoredPersonalizationUseAllowed(d,input.space),denied:true}));
+    if (!allowed) throw new AdaptiveError(403,'product_personalization_paused');
     const result = await this.adaptive.withAccountDocument(telegramId, (d, now) => this.state(d, now, input, studio));
     if (signal?.aborted) return denied();
     const final = this.currentNow(telegramId, input);

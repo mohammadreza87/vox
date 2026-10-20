@@ -1,3 +1,4 @@
+import { productPauseUseStamp } from '../product-pause/state';
 import { randomUUID } from 'crypto';
 import type { RelationshipKey } from '../../relationships/types';
 import { isQuietHour, isSelectedTimezone } from '../notifications';
@@ -46,7 +47,8 @@ export class AdaptiveRelationshipService {
     return !!permission && permission.state === 'granted' && permission.effectiveAt <= now && permission.expiresAt > now &&
       grants.length === 1 && grants[0].allowed && this.adaptive.capabilityStatus(d, capability, now).eligible;
   }
-  private permit(d: RelationshipAuthority, agentId: string, space: SpaceKind, now: number): RelationshipPermit | null {
+  private permit(d: RelationshipAuthority, agentId: string, space: SpaceKind, now: number, retained = false): RelationshipPermit | null {
+    if (!retained && !this.adaptive.isStoredPersonalizationUseAllowed(d, space)) return null;
     const bindings = d.relationships.bindings.filter(b => b.space === space);
     const binding = bindings.length === 1 ? bindings[0] : null;
     if (!validId(agentId) || !['work', 'personal'].includes(space) || !this.adaptive.capabilityStatus(d, 'core_text', now).eligible || !binding || binding.status !== 'active' || binding.expiresAt <= now || binding.confirmedAt > now || binding.accountId !== d.accountId || binding.personId !== d.personId ||
@@ -59,7 +61,7 @@ export class AdaptiveRelationshipService {
     const sourceFence = digest(this.adaptive.storeIdentity !== 'canonical' ? [...sourceAuthority, this.adaptive.storeIdentity] : sourceAuthority);
     const settings = d.experience.settings;
     const external = d.relationships.externalSettings;
-    const fingerprint = digest([sourceFence, settings, external, d.relationships.controls.filter(c => c.agentId === agentId && c.space === space), [d.permissions.find(p => p.spaceId === scope.spaceId && p.purpose === 'optional.relationship_outreach'), this.adaptive.capabilityStatus(d, 'relationship_outreach', now)]]);
+    const fingerprint = digest([sourceFence, settings, external, d.relationships.controls.filter(c => c.agentId === agentId && c.space === space), [d.permissions.find(p => p.spaceId === scope.spaceId && p.purpose === 'optional.relationship_outreach'), this.adaptive.capabilityStatus(d, 'relationship_outreach', now)], ...(d.schemaVersion === 2 ? [productPauseUseStamp(d, space)] : [])]);
     const expiry = [binding.expiresAt, ...PURPOSES.map(p => d.permissions.find(c => c.spaceId === scope.spaceId && c.purpose === p)!.expiresAt),
       ...(['core_text', 'auto_memory', 'personalization', 'proactive_suggestions'] as const).map(c => this.adaptive.capabilityStatus(d, c, now).validUntil ?? now)];
     return { key, fingerprint, sourceFence, expiresAt: Math.min(...expiry), notification: { settingsRevision: settings.revision,
@@ -89,6 +91,18 @@ export class AdaptiveRelationshipService {
       this.adaptive.capabilityStatus(d, 'relationship_outreach', now).validUntil ?? now,
     ] : [];
     return { ...permit, expiresAt: Math.min(permit.expiresAt, ...sourceDeadlines, ...externalDeadlines) };
+  }
+  /** Source retention is independent of a temporary use stop or a stale task receipt. */
+  async synchronize(key: RelationshipKey, sourceIds: readonly string[]): Promise<'suspended_use' | 'invalid_source'> {
+    const telegramId = telegramFor(key); if (telegramId === null) return 'invalid_source';
+    const space = scopedRelationshipKeySchema.parse(key).scope.space;
+    const evaluate = (d: RelationshipAuthority, now: number) => {
+      const permit = this.permit(d, key.personaId, space, now, true);
+      return permit && sameKey(permit.key, key) && sourceIds.every(id => d.relationships.sources.some(s =>
+        s.id === id && sameKey(s.key, key) && s.status === 'active' && s.createdAt <= now && s.expiresAt > now && s.sourceFence === permit.sourceFence)) ? 'suspended_use' as const : 'invalid_source' as const;
+    };
+    if (this.adaptive.repository.storage.indexed) return this.adaptive.withRuntimeControls(telegramId, space, (d, now) => ({ value: evaluate(d, now), denied: true }));
+    return this.adaptive.withAccountDocument(telegramId, evaluate);
   }
   /** Current committed authority at the final synchronous transport boundary.
    * FILE fallback reads committed controls; it never prunes or writes a draft. */

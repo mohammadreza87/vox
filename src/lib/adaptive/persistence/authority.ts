@@ -1,3 +1,4 @@
+import { compactProductPause } from '../product-pause/state';
 import type { AdaptiveAuthorityDocument, AdaptiveDocument } from './repository';
 import { types as utilTypes } from 'node:util';
 import type { IndexedControls, IndexedControlStamp } from './indexed/contracts';
@@ -72,7 +73,7 @@ export function validateRuntimeControlEvaluation<T>(raw: unknown): RuntimeContro
 
 export function runtimeControlsFromIndexed(c: IndexedControls): AdaptiveRuntimeControls {
   return freezeControls({
-    accountId: c.accountId, personId: c.personId, createdAt: c.createdAt, updatedAt: c.updatedAt, revision: c.revision,
+    schemaVersion: c.schemaVersion, ...(c.productPause ? { productPause: c.productPause } : {}), accountId: c.accountId, personId: c.personId, createdAt: c.createdAt, updatedAt: c.updatedAt, revision: c.revision,
     binding: c.binding, declaration: c.declaration, permissions: c.permissions, agentGrants: c.agentGrants,
     experience: { preferences: c.preferences, settings: c.settings, predictionTurns: c.predictionTurns,
       ...(c.preferenceLearning ? { preferenceLearning: c.preferenceLearning } : {}) },
@@ -84,7 +85,7 @@ export function runtimeControlsFromIndexed(c: IndexedControls): AdaptiveRuntimeC
 /** Compatibility reads still load a canonical document, but evaluators receive
  * the same immutable, body-free type without mutating the transaction draft. */
 export function runtimeControlsFromDocument(d: AdaptiveDocument): AdaptiveRuntimeControls {
-  return freezeControls(structuredClone({ accountId: d.accountId, personId: d.personId, createdAt: d.createdAt,
+  return freezeControls(structuredClone({ schemaVersion: d.schemaVersion, ...(d.productPause ? { productPause: compactProductPause(d.productPause) } : {}), accountId: d.accountId, personId: d.personId, createdAt: d.createdAt,
     updatedAt: d.updatedAt, revision: d.revision, binding: d.binding, declaration: d.declaration,
     permissions: d.permissions, agentGrants: d.agentGrants,
     experience: { preferences: d.experience.preferences, settings: d.experience.settings,

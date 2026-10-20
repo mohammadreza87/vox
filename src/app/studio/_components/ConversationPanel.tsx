@@ -1,9 +1,11 @@
 'use client';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { LivePredictionConsumer, predictionHttpTransport } from '@/lib/adaptive/prediction/client';
 import { prepareSharedImage } from '@/lib/adaptive/prediction/image-browser';
 import { TaskOutcome } from './TaskOutcome';
 import { MessageMemoryReview } from './MessageMemoryReview';
+import { useProductPause } from '../_lib/product-pause-client';
+import { pauseText } from '../_lib/product-pause-copy';
 import { tg } from '../_lib/client';
 import { preferenceLearningApi } from '../_lib/preference-learning-client';
 
@@ -12,6 +14,10 @@ import { preferenceLearningApi } from '../_lib/preference-learning-client';
 export function ConversationPanel({ agentId, space, locale = 'en', disabled = false }: {
   agentId: string; space: 'work' | 'personal'; locale?: 'en' | 'fa'; disabled?: boolean;
 }) {
+  const session = tg()?.initData ?? '';
+  const pause = useProductPause(space, session);
+  const historicBlocked = pause.coveredBlocked;
+  const paused = pause.status?.productPaused === true;
   const fa = locale === 'fa';
   const t = (en: string, persian: string) => fa ? persian : en;
   const [draft, setDraft] = useState('');
@@ -29,26 +35,38 @@ export function ConversationPanel({ agentId, space, locale = 'en', disabled = fa
   const imageRequest = useRef<AbortController | null>(null);
   const generation = useRef(0);
   const sessionId = useRef('');
-  const latest = useRef({ draft, prepare, disabled });
-  latest.current = { draft, prepare, disabled };
+  const latest = useRef({ draft, prepare, disabled, historicBlocked });
+  latest.current = { draft, prepare, disabled, historicBlocked };
   const startPredictionTurn = useCallback(() => consumer.current?.startTurn({ agentId, space,
     sessionId: sessionId.current, turnId: crypto.randomUUID(), contextKey: crypto.randomUUID() }), [agentId, space]);
-  useEffect(() => {
+  useLayoutEffect(() => {
     sessionId.current = crypto.randomUUID();
     const current = new LivePredictionConsumer({ ...predictionHttpTransport(() => tg()?.initData ?? ''),
       onPrepared: result => setPrepared(result?.preparedContext === true), debounceMs: 350 });
     consumer.current = current;
     current.startTurn({ agentId, space, sessionId: sessionId.current, turnId: crypto.randomUUID(), contextKey: crypto.randomUUID() });
     setDraft(''); setImage(undefined); setReviewText(null); setMemoryStatus(''); setLastTurnId(undefined); setLines([]); setPrepare(false); setPrepared(false); setBusy(false); setError('');
+    // Invalidate the live request generation, including any later boundary change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     return () => { void preferenceLearningApi.cancel(space, agentId); generation.current++; current.cancel(); request.current?.abort(); imageRequest.current?.abort(); consumer.current = null; };
-  }, [agentId, space]);
+  }, [agentId, space, session]);
   useEffect(() => {
     if (disabled) { setReviewText(null); setMemoryStatus(''); consumer.current?.cancel(); request.current?.abort(); imageRequest.current?.abort(); setPrepare(false); setPrepared(false); }
     else if (!consumer.current?.snapshotTurn()) startPredictionTurn();
   }, [disabled, startPredictionTurn]);
+  const previousBoundary = useRef(`${pause.status?.accountId}:${pause.status?.useEpoch}:${historicBlocked}`);
+  useEffect(() => {
+    const boundary = `${pause.status?.accountId}:${pause.status?.useEpoch}:${historicBlocked}`;
+    if (previousBoundary.current === boundary) return;
+    previousBoundary.current = boundary;
+    // A changed use boundary invalidates old prepared work and pending output.
+    generation.current++; consumer.current?.cancel(); request.current?.abort(); imageRequest.current?.abort();
+    setReviewText(null); setMemoryStatus(''); setPrepared(false); setPrepare(false); setBusy(false); setLoadingImage(false);
+    if (!disabled) startPredictionTurn();
+  }, [pause.status?.accountId, pause.status?.useEpoch, historicBlocked, disabled, startPredictionTurn]);
   const updatePrediction = (text: string, selected = image) => {
     consumer.current?.update({ text, image: selected,
-      stable: latest.current.prepare && !latest.current.disabled && text.trim().length >= 12, question: selected ? 'image_route' : 'intent_route' });
+      stable: latest.current.prepare && !latest.current.disabled && !latest.current.historicBlocked && text.trim().length >= 12, question: selected ? 'image_route' : 'intent_route' });
   };
   const chooseImage = async (file?: File) => {
     imageRequest.current?.abort();
@@ -92,12 +110,14 @@ export function ConversationPanel({ agentId, space, locale = 'en', disabled = fa
   return <section className="vx-card vx-privacy-card" dir={fa ? 'rtl' : 'ltr'} lang={locale}
     aria-label={t('Type or share an image', 'تایپ یا اشتراک تصویر')} aria-busy={busy || loadingImage}>
     <h2 className="vx-head">{t('Type or share an image', 'تایپ یا اشتراک تصویر')}</h2>
-    <p className="vx-small vx-2">{t('Uses the memories allowed in this space. Images are sent only for this turn; Vox does not save the image.', 'از حافظه‌های مجاز این فضا استفاده می‌کند. تصویر فقط برای همین نوبت ارسال می‌شود؛ وکس تصویر را ذخیره نمی‌کند.')}</p>
+    {paused && <p className="vx-small" role="status">{pauseText(locale, space, 'conversation')}</p>}
+    <p className="vx-small vx-2">{paused ? pauseText(locale, space, 'history') : t('Uses the memories allowed in this space. Images are sent only for this turn; Vox does not save the image.', 'از حافظه‌های مجاز این فضا استفاده می‌کند. تصویر فقط برای همین نوبت ارسال می‌شود؛ وکس تصویر را ذخیره نمی‌کند.')}</p>
     <div role="log" aria-label={t('Conversation', 'گفتگو')} aria-live="polite" style={{ maxHeight: 220, overflowY: 'auto', overflowWrap: 'anywhere' }}>
       {lines.map((line, i) => <div key={i}><p className="vx-small"><strong>{line.role === 'you' ? t('You: ', 'شما: ') : t('Agent: ', 'عامل: ')}</strong>{line.text}</p>
-        {line.role === 'you' && <button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy || disabled} onClick={() => { setMemoryStatus(''); setReviewText({ text: line.text, agentId, space }); }}>{t('Review this text for memory', 'بررسی این متن برای حافظه')}</button>}</div>)}
+        {line.role === 'you' && <button className="vx-btn vx-btn-secondary vx-btn-sm" aria-describedby={historicBlocked ? 'vox-historic-review-reason' : undefined} disabled={busy || disabled || historicBlocked} onClick={() => { setMemoryStatus(''); setReviewText({ text: line.text, agentId, space }); }}>{t('Review this text for memory', 'بررسی این متن برای حافظه')}</button>}</div>)}
     </div>
-    {reviewText !== null && reviewText.agentId === agentId && reviewText.space === space && <MessageMemoryReview key={`${agentId}:${space}`} text={reviewText.text} agentId={agentId} space={space} locale={locale} disabled={disabled}
+    {historicBlocked && <p id="vox-historic-review-reason" className="vx-small">{paused ? pauseText(locale, space, 'historicDisabled') : pauseText(locale, space, 'unverified')}</p>}
+    {!historicBlocked && reviewText !== null && reviewText.agentId === agentId && reviewText.space === space && <MessageMemoryReview key={`${agentId}:${space}`} text={reviewText.text} agentId={agentId} space={space} locale={locale} disabled={disabled}
       onClose={() => setReviewText(null)} onSaved={count => { setReviewText(null); setMemoryStatus(t(`Saved ${count} private user-reviewed claims. Manage them in Privacy.`, `${count} ادعای خصوصیِ بررسی‌شده ذخیره شد. در حریم خصوصی مدیریت کنید.`)); }} />}
     {memoryStatus && <p role="status">{memoryStatus}</p>}
     <label className="vx-small">{t('Message', 'پیام')}<textarea className="vx-textarea" value={draft} rows={3} maxLength={4096} disabled={busy || disabled}
@@ -108,9 +128,9 @@ export function ConversationPanel({ agentId, space, locale = 'en', disabled = fa
       {/* Inline, minimized user selection; no third-party fetch. */}
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img src={image.dataUrl} alt={t('Image selected for this message', 'تصویر انتخاب‌شده برای این پیام')} style={{ maxWidth: '100%', maxHeight: 160, objectFit: 'contain' }} />
-      <button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy || disabled} onClick={() => { setImage(undefined); if (prepare) consumer.current?.update({ text: draft, stable: draft.trim().length >= 12 }); }}>{t('Remove image', 'حذف تصویر')}</button>
+      <button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy || disabled} onClick={() => { setImage(undefined); if (prepare && !historicBlocked) consumer.current?.update({ text: draft, stable: draft.trim().length >= 12 }); }}>{t('Remove image', 'حذف تصویر')}</button>
     </div>}
-    <label className="vx-privacy-checkbox"><input type="checkbox" checked={prepare} disabled={busy || disabled} onChange={e => {
+    <label className="vx-privacy-checkbox"><input type="checkbox" checked={prepare} disabled={busy || disabled || historicBlocked} onChange={e => {
       setPrepare(e.target.checked); if (!e.target.checked) consumer.current?.suspend();
       else { consumer.current?.update({ text: draft, image, stable: draft.trim().length >= 12 }); }
     }} />{t('Prepare while I type', 'آماده‌سازی هنگام تایپ')}</label>

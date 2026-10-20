@@ -1,6 +1,8 @@
 'use client';
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { api, type AgentView, type Role } from '../../_lib/client';
+import { pauseText } from '../../_lib/product-pause-copy';
+import { useProductPause } from '../../_lib/product-pause-client';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { api, tg, type AgentView, type Role } from '../../_lib/client';
 import { experienceApi, type ExperienceSnapshot } from '../../_lib/experience-client';
 import { TopBar } from '../ui';
 import { RelationshipPanel } from '../RelationshipPanel';
@@ -12,7 +14,10 @@ import { PreferenceLearningPanel } from '../PreferenceLearningPanel';
 export function ExperienceScreen({ onBack, role, notificationId }: { onBack: () => void; role?: Role; notificationId?: string }) {
   const [space, setSpace] = useState<'work' | 'personal'>('work');
   const [fa, setFa] = useState(false);
-  const [data, setData] = useState<ExperienceSnapshot | null>(null);
+  const session = tg()?.initData ?? '';
+  const [dataSession, setDataSession] = useState(session);
+  const [storedData, setData] = useState<ExperienceSnapshot | null>(null);
+  const data = dataSession === session && storedData?.space === space ? storedData : null;
   const [agents, setAgents] = useState<AgentView[]>([]);
   const [agentId, setAgentId] = useState('');
   const [timezone, setTimezone] = useState('');
@@ -29,11 +34,11 @@ export function ExperienceScreen({ onBack, role, notificationId }: { onBack: () 
   const [status, setStatus] = useState('');
   const generation = useRef(0);
   const t = (en: string, persian: string) => fa ? persian : en;
-  const apply = (value: ExperienceSnapshot) => {
-    setData(value); setTimezone(value.settings.timezone ?? ''); setCap(value.settings.dailyCap);
+  const apply = useCallback((value: ExperienceSnapshot) => {
+    setDataSession(session); setData(value); setTimezone(value.settings.timezone ?? ''); setCap(value.settings.dailyCap);
     setQuietStart(value.settings.quietStartHour); setQuietEnd(value.settings.quietEndHour);
     setInbox(value.settings[value.space].inboxEnabled); setProactive(value.settings[value.space].proactiveEnabled); setReminders(value.settings[value.space].reminderEnabled);
-  };
+  }, [session]);
   const load = useCallback(async () => {
     const current = ++generation.current;
     setData(null); setError(''); setStatus('');
@@ -42,9 +47,9 @@ export function ExperienceScreen({ onBack, role, notificationId }: { onBack: () 
       if (generation.current !== current) return;
       apply(snapshot); setAgents(listed.agents.filter(a => a.status === 'active')); setAgentId('');
     } catch { if (generation.current === current) setError('Settings could not be loaded. / تنظیمات دریافت نشد.'); }
-  }, [space]);
+  }, [space, apply]);
   const invalidate = useCallback(() => { generation.current++; }, []);
-  useEffect(() => { void load(); return invalidate; }, [load, invalidate]);
+  useLayoutEffect(() => { void load(); return invalidate; }, [load, invalidate]);
   useEffect(() => {
     let active = true;
     if (!notificationId || typeof experienceApi.resolveNotification !== 'function') return;
@@ -79,6 +84,14 @@ export function ExperienceScreen({ onBack, role, notificationId }: { onBack: () 
     } }
     finally { setBusy(false); }
   };
+  const pause = useProductPause(space, session);
+  const previousBoundary = useRef<{ epoch: number | null | undefined; accountId: string; blocked: boolean } | null>(null);
+  useLayoutEffect(() => {
+    const before = previousBoundary.current;
+    if (before && (before.blocked !== pause.coveredBlocked || before.epoch !== pause.status?.useEpoch || before.accountId !== pause.status?.accountId))
+      setData(current => current ? { ...current, inbox: current.inbox.filter(item => item.kind === 'requested_reminder') } : current);
+    if (pause.status) previousBoundary.current = { epoch: pause.status.useEpoch, accountId: pause.status.accountId, blocked: pause.coveredBlocked };
+  }, [pause.coveredBlocked, pause.status]);
   const command = () => ({ space, expectedRevision: data!.revision, eventId: crypto.randomUUID() });
   return <><TopBar onBack={onBack} title={t('Your experience', 'تجربهٔ شما')} right={<button className="vx-chip" disabled={busy} onClick={() => setFa(!fa)}>{fa ? 'English' : 'فارسی'}</button>} />
     <section className="vx-scroll vx-privacy" dir={fa ? 'rtl' : 'ltr'} lang={fa ? 'fa' : 'en'} aria-busy={busy}>
@@ -91,8 +104,8 @@ export function ExperienceScreen({ onBack, role, notificationId }: { onBack: () 
         <div className="vx-card vx-privacy-card">
           <h2 className="vx-head">{t('Reply preferences', 'ترجیح‌های پاسخ')}</h2>
           <label>{t('Agent', 'عامل')}<select className="vx-input" disabled={busy} value={agentId} onChange={e => setAgentId(e.target.value)}><option value="">{t('Choose an agent', 'انتخاب عامل')}</option>{agents.map(a => <option key={a.id} value={a.id}>{a.persona.name}</option>)}</select></label>
-          <PreferenceLearningPanel key={`learning:${space}:${agentId}`} agentId={agentId} space={space} confirmed={data.confirmed} revisionHint={data.revision} locale={fa ? 'fa' : 'en'} onRevision={revision => setData(current => current?.space === space ? { ...current, revision } : current)} />
-          <PreferencePanel key={`${space}:${agentId}`} agentId={agentId} space={space} confirmed={data.confirmed} revisionHint={data.revision} locale={fa ? 'fa' : 'en'} onSnapshot={apply} />
+          {pause.coveredBlocked ? <p className="vx-small">{pauseText(fa ? 'fa' : 'en', space, pause.status?.productPaused ? 'pausedUse' : 'unverified')}</p> : <PreferenceLearningPanel key={`learning:${space}:${agentId}`} agentId={agentId} space={space} confirmed={data.confirmed} revisionHint={data.revision} locale={fa ? 'fa' : 'en'} onRevision={revision => setData(current => current?.space === space ? { ...current, revision } : current)} />}
+          <PreferencePanel key={`${space}:${agentId}`} agentId={agentId} space={space} confirmed={data.confirmed} revisionHint={data.revision} locale={fa ? 'fa' : 'en'} onSnapshot={apply} productPaused={pause.status?.productPaused === true} />
         </div>
         <div className="vx-card vx-privacy-card">
           <h2 className="vx-head">{t('Notification settings', 'تنظیمات اعلان')}</h2>
@@ -110,7 +123,7 @@ export function ExperienceScreen({ onBack, role, notificationId }: { onBack: () 
         {agentId && typeof api.relationship === 'function' && <RelationshipPanel key={`${space}:${agentId}`} agentId={agentId} name={agents.find(a => a.id === agentId)?.persona.name ?? ''} space={space} locale={fa ? 'fa' : 'en'} identityConfirmed={data.confirmed} />}
         <h2 className="vx-title-m">{t('Your inbox', 'صندوق شما')}</h2>
         {!data.inbox.length && <p className="vx-small vx-2">{t('Nothing to show right now.', 'اکنون موردی برای نمایش نیست.')}</p>}
-        {data.inbox.filter(item => item.kind !== 'requested_reminder').map(item => <article className="vx-card vx-privacy-card" key={item.id}><h3 className="vx-head">{item.kind === 'requested_reminder' ? item.label : t('A reply did not finish. You can try again when convenient.', 'یک پاسخ کامل نشد. هر زمان مناسب بود می‌توانید دوباره تلاش کنید.')}</h3><div className="vx-privacy-actions"><button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy} onClick={() => void mutate(() => experienceApi.feedback({ ...command(), itemId: item.id, action: 'useful' }))}>{t('Useful', 'مفید بود')}</button><button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy} onClick={() => void mutate(() => experienceApi.feedback({ ...command(), itemId: item.id, action: 'dismiss' }))}>{t('Dismiss', 'بستن')}</button></div></article>)}
+        {data.inbox.filter(item => !pause.coveredBlocked && item.kind !== 'requested_reminder').map(item => <article className="vx-card vx-privacy-card" key={item.id}><h3 className="vx-head">{item.kind === 'requested_reminder' ? item.label : t('A reply did not finish. You can try again when convenient.', 'یک پاسخ کامل نشد. هر زمان مناسب بود می‌توانید دوباره تلاش کنید.')}</h3><div className="vx-privacy-actions"><button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy} onClick={() => void mutate(() => experienceApi.feedback({ ...command(), itemId: item.id, action: 'useful' }))}>{t('Useful', 'مفید بود')}</button><button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy} onClick={() => void mutate(() => experienceApi.feedback({ ...command(), itemId: item.id, action: 'dismiss' }))}>{t('Dismiss', 'بستن')}</button></div></article>)}
 
       </>}
       <LearningPanel space={space} locale={fa ? 'fa' : 'en'} showOperations={role === 'owner' || role === 'superadmin'} />

@@ -1,3 +1,4 @@
+import { productPauseUseStamp } from '../../product-pause/state';
 import { digest, type AdaptiveAuthorityDocument, type AdaptiveDocument, type SpaceKind } from '../../persistence/repository';
 import type { AdaptiveService } from '../../persistence/service';
 import { emptyLearning, LEARNING_TTL, type LearningIntent } from './contracts';
@@ -10,17 +11,17 @@ export function learningAuthority(adaptive: AdaptiveService, d: AdaptiveAuthorit
   const permission = d.permissions.find(p => p.id === `permission:${scope.space}:optional.personalization`)!,
     grant = d.agentGrants.find(g => g.space === scope.space && g.agentId === scope.agentId && g.allowed)!;
   if (adaptive.storeIdentity !== 'canonical' && permission.effectiveAt > now) return undefined;
-  return { personId: d.personId, bindingId: d.binding!.id, permissionRevision: permission.revision, consentEpoch: permission.epoch,
+  return { ...(d.schemaVersion === 2 ? { productPauseUseStamp: productPauseUseStamp(d, scope.space) } : {}), personId: d.personId, bindingId: d.binding!.id, permissionRevision: permission.revision, consentEpoch: permission.epoch,
     grantRevision: grant.revision, expiresAt: Math.min(d.binding!.expiresAt, permission.expiresAt,
       adaptive.capabilityStatus(d, 'personalization', now).validUntil ?? now, adaptive.capabilityStatus(d, 'core_text', now).validUntil ?? now),
     fingerprint: digest(adaptive.storeIdentity !== 'canonical'
       ? [adaptive.purposeFingerprint(d, scope.space, 'optional.personalization', now, scope.agentId), adaptive.coreFingerprint(d, now), adaptive.storeIdentity]
       : [adaptive.purposeFingerprint(d, scope.space, 'optional.personalization', now, scope.agentId), adaptive.coreFingerprint(d, now)]) };
 }
-export function sameLearningAuthority(row: Pick<LearningIntent, 'personId' | 'bindingId' | 'permissionRevision' | 'consentEpoch' | 'grantRevision' | 'expiresAt'>,
+export function sameLearningAuthority(row: Pick<LearningIntent, 'personId' | 'bindingId' | 'permissionRevision' | 'consentEpoch' | 'grantRevision' | 'expiresAt' | 'productPauseUseStamp'>,
   authority: ReturnType<typeof learningAuthority>, now: number) {
   return !!authority && row.expiresAt > now && authority.expiresAt > now && row.personId === authority.personId && row.bindingId === authority.bindingId &&
-    row.permissionRevision === authority.permissionRevision && row.consentEpoch === authority.consentEpoch && row.grantRevision === authority.grantRevision;
+    row.productPauseUseStamp === authority.productPauseUseStamp && row.permissionRevision === authority.permissionRevision && row.consentEpoch === authority.consentEpoch && row.grantRevision === authority.grantRevision;
 }
 export function suppressLearningScope(d: AdaptiveDocument, scope: Scope, now: number, evidenceIds: string[] = []) {
   const learning = d.experience.preferenceLearning;

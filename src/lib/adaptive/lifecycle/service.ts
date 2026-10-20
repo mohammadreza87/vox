@@ -43,6 +43,7 @@ export class AdaptiveLifecycleService {
         this.adaptive.isPurposeAllowed(d, space, 'optional.product_analytics', now, e.agentId));
       return { schemaVersion: 1 as const, accountId: d.accountId, space, generatedAt: now,
         revision: d.revision, confirmedUntil: d.binding!.expiresAt,
+        ...(d.schemaVersion === 2 ? { productPause: structuredClone(d.productPause!.scopes.find(row => row.space === space)) } : {}),
         memories: d.memories.filter(m => m.space === space && m.status === 'active' && m.expiresAt > now)
           .map(m => ({ id: m.id, revision: m.revision, text: m.text!, createdAt: m.createdAt, expiresAt: m.expiresAt })),
         preferences: d.experience.preferences.filter(p => p.space === space).map(p => ({ id: p.id, revision: p.revision,

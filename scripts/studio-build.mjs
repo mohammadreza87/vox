@@ -3,6 +3,7 @@ import { existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { ADAPTIVE_RELEASE_CAPABILITIES } from './studio-adaptive-compatibility.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const git = (...args) => {
@@ -23,6 +24,6 @@ try {
   const buildId = readFileSync(join(root, '.next', 'BUILD_ID'), 'utf8').trim();
   const artifactId = readFileSync(join(root, '.next', 'standalone', '.next', 'BUILD_ID'), 'utf8').trim();
   if (buildId !== artifactId || !existsSync(join(root, '.next', 'standalone', 'server.js'))) throw new Error('Standalone artifact is incomplete.');
-  writeFileSync(join(root, '.next', 'studio-release.json'), JSON.stringify({ revision, sourceTree, buildId, builtAt: new Date().toISOString() }, null, 2) + '\n');
+  writeFileSync(join(root, '.next', 'studio-release.json'), JSON.stringify({ revision, sourceTree, buildId, builtAt: new Date().toISOString(), ...ADAPTIVE_RELEASE_CAPABILITIES }, null, 2) + '\n');
   console.log(`Production artifact verified for ${revision}.`);
 } catch (error) { console.error(error.message); process.exitCode = 1; }

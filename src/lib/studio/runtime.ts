@@ -280,6 +280,7 @@ async function create(): Promise<Studio> {
           if (!Number.isSafeInteger(telegramId) || !await studio.relationshipCohortEnabled(key.personaId, telegramId)) return null;
           return authority.authorize(key, sourceIds, phase, expectedFingerprint);
         },
+        synchronize: (key, sourceIds) => authority.synchronize(key, sourceIds),
         applyScopedControl: async (key, action, until) => {
           const match = /^telegram-account:([1-9]\d{0,15})$/.exec(key.scope?.accountId ?? '');
           const telegramId = match ? Number(match[1]) : NaN;

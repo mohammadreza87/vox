@@ -10,6 +10,8 @@ export interface AdaptiveAccountPage { accountIds: string[]; next?: string }
 export interface AdaptiveAccountPageInput { after?: string; limit: number }
 
 export interface AdaptiveStorage {
+  /** Only explicit prepared stores create/accept the v2 canonical cohort. */
+  readonly canonicalSchemaVersion?: 1 | 2;
   /** Managed-format namespace, never an access grant. Original FILE has none. */
   readonly identity?: Readonly<{ incarnation: string; generation: number }>;
   /** Optional server-only read model. Presence never selects or migrates a store. */

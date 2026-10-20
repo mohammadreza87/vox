@@ -7,13 +7,13 @@ import { dirname, resolve } from 'path';
 import { z } from 'zod';
 import type { AdaptiveStorage, AdaptiveAccountPageInput, AdaptiveAccountPage } from '../storage';
 import { digest, validateAdaptiveDocument, type AdaptiveDocument } from '../repository';
-import { INDEXED_FORMAT_VERSION, INDEXED_SCHEMA_VERSION, IndexedStorageError, emptyIndexedIo,
+import { INDEXED_FORMAT_VERSION, IndexedStorageError, emptyIndexedIo,
   type IndexedIoCounters, type IndexedStoreMetadata } from './contracts';
 import { accountKey, projectDocument, validateAccountId } from './projection';
 import { IndexedQueryEngine } from './queries';
 const openStores = new Set<string>();
 const integer = z.number().int().nonnegative().safe();
-const metadataSchema = z.object({ formatVersion: z.literal(INDEXED_FORMAT_VERSION), schemaVersion: z.literal(INDEXED_SCHEMA_VERSION),
+const metadataSchema = z.object({ formatVersion: z.literal(INDEXED_FORMAT_VERSION), schemaVersion: z.union([z.literal(1), z.literal(2)]),
   incarnation: z.string().uuid(), generation: integer.min(1), lifecycleWatermark: integer }).strict();
 const DDL = `
 CREATE TABLE store_meta (singleton INTEGER PRIMARY KEY CHECK(singleton=1), json TEXT NOT NULL) STRICT;
@@ -40,12 +40,13 @@ export interface SqliteAdaptiveStorageOptions {
   now?: () => number;
   /** Explicit transition tools only. Rejected for any existing database. A new
    * incarnation is always generated; identity can never be imported/reused. */
-  newStoreSeed?: { generation: number; lifecycleWatermark: number };
+  newStoreSeed?: { generation: number; lifecycleWatermark: number; schemaVersion?: 1 | 2 };
 }
 export class SqliteAdaptiveStorage implements AdaptiveStorage {
   private transactionClock?: (clock: () => number) => number;
   readonly supportsCommittedWriteFence = true as const;
   readonly indexed: IndexedQueryEngine;
+  readonly canonicalSchemaVersion: 1 | 2;
   readonly identity: Readonly<Pick<IndexedStoreMetadata, 'incarnation' | 'generation'>>;
   /** Application materialization counters; these are not disk-page or latency measurements. */
   readonly io = emptyIndexedIo();
@@ -60,7 +61,7 @@ export class SqliteAdaptiveStorage implements AdaptiveStorage {
     if (path === ':memory:' || !path) throw new IndexedStorageError('invalid_scope');
     this.storePath = resolve(path); this.clock = options.now ?? Date.now;
     this.validator = options.validateDocument ?? validateAdaptiveDocument;
-    const seed = z.object({ generation: integer.min(1), lifecycleWatermark: integer }).strict().safeParse(options.newStoreSeed ?? { generation: 1, lifecycleWatermark: 0 });
+    const seed = z.object({ generation: integer.min(1), lifecycleWatermark: integer, schemaVersion: z.union([z.literal(1), z.literal(2)]).optional() }).strict().safeParse(options.newStoreSeed ?? { generation: 1, lifecycleWatermark: 0 });
     if (!seed.success) throw new IndexedStorageError('invalid_scope');
     if (openStores.has(this.storePath)) throw new IndexedStorageError('busy');
     openStores.add(this.storePath);
@@ -83,11 +84,13 @@ export class SqliteAdaptiveStorage implements AdaptiveStorage {
         this.sampleTime(seed.data.lifecycleWatermark);
         opened.exec(DDL);
         opened.prepare('INSERT INTO store_meta(singleton,json) VALUES(1,?)').run(JSON.stringify({ formatVersion: 1,
-          schemaVersion: 1, incarnation: randomUUID(), generation: seed.data.generation, lifecycleWatermark: seed.data.lifecycleWatermark }));
-        opened.pragma(`user_version = ${INDEXED_SCHEMA_VERSION}`);
-      } else if (options.newStoreSeed !== undefined || version !== INDEXED_SCHEMA_VERSION || JSON.stringify(objects.map(o => o.name)) !== JSON.stringify(expectedObjects)) throw new IndexedStorageError('corrupt');
+          schemaVersion: seed.data.schemaVersion ?? 1, incarnation: randomUUID(), generation: seed.data.generation, lifecycleWatermark: seed.data.lifecycleWatermark }));
+        opened.pragma(`user_version = ${seed.data.schemaVersion ?? 1}`);
+      } else if (options.newStoreSeed !== undefined || (version !== 1 && version !== 2) || JSON.stringify(objects.map(o => o.name)) !== JSON.stringify(expectedObjects)) throw new IndexedStorageError('corrupt');
       if (JSON.stringify(schemaDefinitions(opened)) !== JSON.stringify(expectedSchema())) throw new IndexedStorageError('corrupt');
       const identity = this.readMetadata();
+      if (identity.schemaVersion !== opened.pragma('user_version', { simple: true })) throw new IndexedStorageError('corrupt');
+      this.canonicalSchemaVersion = identity.schemaVersion;
       this.identity = Object.freeze({ incarnation: identity.incarnation, generation: identity.generation });
       if (opened.pragma('quick_check', { simple: true }) !== 'ok' || (opened.pragma('foreign_key_check') as unknown[]).length !== 0) throw new IndexedStorageError('corrupt');
       opened.exec('COMMIT');
@@ -120,7 +123,7 @@ export class SqliteAdaptiveStorage implements AdaptiveStorage {
     const row = this.database.prepare('SELECT json FROM store_meta WHERE singleton=1').get() as { json: string } | undefined;
     if (!row) throw new IndexedStorageError('corrupt');
     const parsed = metadataSchema.safeParse(JSON.parse(row.json));
-    if (!parsed.success) throw new IndexedStorageError('corrupt'); return parsed.data;
+    if (!parsed.success || this.canonicalSchemaVersion && parsed.data.schemaVersion !== this.canonicalSchemaVersion) throw new IndexedStorageError('corrupt'); return parsed.data;
   }
   sign(value: unknown): string { return createHmac('sha256', this.secret).update(JSON.stringify(value)).digest('hex'); }
   verify(value: { seal: string }): boolean {
@@ -199,13 +202,15 @@ export class SqliteAdaptiveStorage implements AdaptiveStorage {
       observedTime = now;
       this.transactionClock = clock => { observedTime = this.sampleTime(observedTime!, clock()); return observedTime; };
       const key = accountKey(accountId), current = this.database.prepare('SELECT canonical,canonical_digest FROM accounts WHERE account_key=?').get(key) as { canonical: string; canonical_digest: string } | undefined;
-      if (current) { this.io.canonicalImageReads++; if (digest(JSON.parse(current.canonical)) !== current.canonical_digest) throw new IndexedStorageError('corrupt'); this.validator(JSON.parse(current.canonical), accountId, now); }
+      if (current) { this.io.canonicalImageReads++; if (digest(JSON.parse(current.canonical)) !== current.canonical_digest) throw new IndexedStorageError('corrupt'); if (this.validator(JSON.parse(current.canonical), accountId, now).schemaVersion !== this.canonicalSchemaVersion) throw new IndexedStorageError('invalid_controls'); }
       const output = mutate(current ? JSON.parse(current.canonical) : null);
       if (output && typeof output === 'object' && 'then' in output) throw new IndexedStorageError('corrupt');
       // Mutation callbacks sample current business time after acquiring storage.
       // Validate against fresh time, never the earlier input-read sample.
       const outputAt = this.sampleTime(observedTime); observedTime = outputAt;
-      const document = this.validator(output.document, accountId, outputAt), canonical = JSON.stringify(output.document);
+      const document = this.validator(output.document, accountId, outputAt);
+      if (document.schemaVersion !== this.canonicalSchemaVersion) throw new IndexedStorageError('invalid_controls');
+      const canonical = JSON.stringify(output.document);
       const serializedAt = this.sampleTime(observedTime); observedTime = serializedAt;
       const serializedDocument = this.validator(JSON.parse(canonical), accountId, serializedAt);
       if (digest(document) !== digest(serializedDocument)) throw new IndexedStorageError('corrupt');

@@ -2,10 +2,11 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ExperienceScreen } from './Experience';
 import { emptyExperience } from '@/lib/adaptive/runtime/contracts';
+vi.mock('../../_lib/product-pause-client', () => ({ useProductPause: () => ({ coveredBlocked: false, status: null }) }));
 const mocks = vi.hoisted(() => ({ read: vi.fn(), preference: vi.fn(), preferenceState: vi.fn(), preferenceUndo: vi.fn(), settings: vi.fn(), reminderChannelPresent: vi.fn(), reminder: vi.fn(), feedback: vi.fn(), agents: vi.fn() }));
 vi.mock('../LearningPanel', () => ({ LearningPanel: ({ space, locale }: { space: string; locale: string }) => <div data-testid="learning-panel" data-space={space} data-locale={locale} /> }));
 vi.mock('../../_lib/experience-client', () => ({ experienceApi: mocks }));
-vi.mock('../../_lib/client', () => ({ api: mocks }));
+vi.mock('../../_lib/client', () => ({ tg: () => null, api: mocks }));
 const snapshot = () => ({ schemaVersion: 1, revision: 2, space: 'work', confirmed: true, settings: emptyExperience().settings,
   preferences: [], inbox: [], observations: { available: false, total: 0 },
   capabilities: { personalization: false, productAnalytics: false, proactiveInbox: false, reminders: false, decisions: false } });

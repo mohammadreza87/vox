@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api, type RelationshipView } from '../_lib/client';
 import { RelationshipPanel } from './RelationshipPanel';
 
+vi.mock('../_lib/product-pause-client', () => ({ useProductPause: () => pauseState }));
+const pauseState = vi.hoisted(() => ({ coveredBlocked: false, status: null as { productPaused: boolean; useEpoch: number; accountId: string } | null }));
 vi.mock('../_lib/client', async importOriginal => {
   const actual = await importOriginal<typeof import('../_lib/client')>();
   return { ...actual, api: { ...actual.api, relationship: vi.fn(), updateRelationship: vi.fn() } };
@@ -15,6 +17,7 @@ const make = (space: 'work' | 'personal', more: Partial<RelationshipView> = {}):
   space, externalEnabled: false, externalAvailable: true, inbox: [{ id: `${space}-item`, text: `${space} private check-in`, createdAt: 1, expiresAt: 99, status: 'unread' }], sources: [], ...more,
 });
 beforeEach(() => {
+  pauseState.coveredBlocked = false; pauseState.status = null;
   vi.mocked(api.relationship).mockImplementation(async (_id, space = 'work') => ({ relationship: make(space) }));
   vi.mocked(api.updateRelationship).mockImplementation(async (_id, input) => ({ relationship: make(input.space ?? 'work', { externalEnabled: input.action === 'external' ? !!input.enabled : false }) }));
 });
@@ -66,4 +69,20 @@ describe('RelationshipPanel', () => {
     expect(container.querySelector('section')).toHaveAttribute('dir', 'rtl');
     expect(screen.getByRole('button', { name: 'توقف پیگیری' })).toBeEnabled();
   });
+});
+
+it('removes cached derived check-ins across pause/resume boundaries while retaining own source management', async () => {
+  vi.mocked(api.relationship).mockResolvedValue({ relationship: make('work', { sources: [{ id: 'source-own', createdAt: 1 }] as RelationshipView['sources'] }) });
+  const view = render(<RelationshipPanel agentId="nova" name="Nova" space="work" identityConfirmed />);
+  await screen.findByText('work private check-in');
+  pauseState.coveredBlocked = true; pauseState.status = { productPaused: true, useEpoch: 1, accountId: 'account' };
+  view.rerender(<RelationshipPanel agentId="nova" name="Nova" space="work" identityConfirmed />);
+  expect(screen.queryByText('work private check-in')).toBeNull();
+  expect(screen.getByRole('button', { name: 'Remove source' })).toBeEnabled();
+  expect(screen.getByRole('button', { name: 'Stop follow-ups' })).toBeEnabled();
+  expect(screen.getByRole('button', { name: 'Forget relationship context' })).toBeEnabled();
+  expect(screen.getByRole('checkbox', { name: 'Generic Telegram alerts' })).toBeDisabled();
+  pauseState.coveredBlocked = false; pauseState.status = { productPaused: false, useEpoch: 2, accountId: 'account' };
+  view.rerender(<RelationshipPanel agentId="nova" name="Nova" space="work" identityConfirmed />);
+  expect(screen.queryByText('work private check-in')).toBeNull();
 });

@@ -1,3 +1,4 @@
+import { hasCommittedPersonalizationTransport } from '../adaptive/persistence/indexed-private-context';
 import { isSchemaValidationError } from '../error-contract';
 import { logicalTurnSchema } from '../adaptive/personalization/learning/contracts';
 import { z } from 'zod';
@@ -48,7 +49,7 @@ export async function handleConversationRequest(studio: Studio, request: Request
     try { body = await bounded.json(); } catch { return json({ error: 'invalid_json' }, 400); }
     const input = inputSchema.parse(body);
     const adaptive = studio.deps.adaptive;
-    const indexed = !!adaptive.repository.storage.indexed;
+    const indexed = hasCommittedPersonalizationTransport(adaptive.repository.storage);
     const scopeEvaluation: RuntimeControlEvaluator<string | null> = (d, now, namespace) => {
         const core = adaptive.capabilityStatus(d, 'core_text', now);
         const imagePolicy = input.image ? adaptive.capabilityStatus(d, 'single_party_image', now) : null;
