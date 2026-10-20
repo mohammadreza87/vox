@@ -101,6 +101,7 @@ Points to check when filling the table (from docs/AGENT_INTELLIGENCE_SOLUTION.md
 - OpenAI Decisions: abuse-monitoring logs are kept for 30 days unless ZDR is approved; EU data residency is offered at a 10% surcharge.
 - ElevenLabs Agents: conversation data is kept for two years by default; Zero Retention Mode is enterprise-only.
 - Anthropic web_search: the name of the third-party search provider and its own retention.
+- Not in the table: DeepSeek, reached only by the legacy `/api/chat` and `/api/chat/stream` (OpenAI SDK with a DeepSeek base URL) and unreachable under `STUDIO_ONLY=1`; add a row if the legacy `/app` surface is kept (see [the route inventory](ROUTE_INVENTORY.md)).
 
 TODO (PRIV-009a): record counsel's view on sanctions and provider-terms jurisdiction limits for members and operators (docs/AGENT_INTELLIGENCE_SOLUTION.md section 7) before investing further in vendor-dependent voice, Decisions and memory features.
 
