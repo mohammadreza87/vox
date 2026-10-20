@@ -123,3 +123,15 @@ it('durable reservation makes exact retry read-only and prevents another protect
  await expect(evaluateReservedProtocol(restarted,'reserve-final',f.reservation,{manifest:f.manifest,corpus:f.corpus,candidate:f.c,artifact,baseline,evaluatorServiceId:'evaluator',adapter,clock:()=>now})).rejects.toThrow('protocol_attempt_already_reserved');expect(calls).toBe(0);
  await expect(restarted.reserveEvaluationProtocol('reserve-final',f.sign('evaluator','evaluation_protocol_reservation',{...f.reservation.payload,reservedAt:now+1}))).rejects.toThrow('idempotency_conflict');
 });
+
+it.each(['verified_success','verified_failure'] as const)('unknown notification outcome cannot be relabeled %s by an adapter or favorable judge',async outcome=>{
+ const f=syntheticProtocolInputs();const adapter={...deterministicSyntheticAdapter,async run(input:Parameters<SyntheticEvaluationAdapter['run']>[0],signal:AbortSignal){const result=await deterministicSyntheticAdapter.run(input,signal) as object;return input.input.notification==='unknown'?{...result,outcome,judgeScore:1}:result;}};
+ const result=await run(f.manifest,f.corpus,adapter);expect(result.status).toBe('failed');expect(result.candidate.assigned).toBe(6);expect(result.candidate.complete).toBe(6);expect(result.candidate.successes).toBe(5);expect(result.candidate.successRate).toBe(5/6);expect(result.candidate.deterministicFailures).toBe(1);expect(result.candidate.qualityPerAssignedCase).toBe(5/6);
+});
+it.each(['optimization','validation','final'] as const)('%s rejects contradictory notification fixtures even with valid recomputed corpus digests',partition=>{
+ for(const scenario of ['notification_verified','notification_unknown'] as const)for(const contradiction of [{cancelled:true},{identity:'unknown' as const},{sharing:'revoked' as const}]){const f=syntheticProtocolInputs();const example=f.corpus[partition].find(c=>c.scenario===scenario)!;Object.assign(example.input,contradiction);rehash(f.manifest,f.corpus);expect(()=>validateEvaluationInputs(f.manifest,f.corpus,now)).toThrow('scenario_policy_mismatch');}
+});
+it('mixed cancellation, revoked-sharing and unknown-identity flags require an explicit separate scenario policy',()=>{
+ const contradictions=[['cancellation',{identity:'unknown'}],['cancellation',{sharing:'revoked'}],['cancellation',{notification:'verified'}],['revoked_sharing',{cancelled:true}],['revoked_sharing',{identity:'unknown'}],['revoked_sharing',{notification:'verified'}],['unknown_identity',{cancelled:true}],['unknown_identity',{sharing:'revoked'}],['unknown_identity',{notification:'verified'}]] as const;
+ for(const [scenario,contradiction]of contradictions){const f=syntheticProtocolInputs();Object.assign(f.corpus.final.find(c=>c.scenario===scenario)!.input,contradiction);rehash(f.manifest,f.corpus);expect(()=>validateEvaluationInputs(f.manifest,f.corpus,now)).toThrow('scenario_policy_mismatch');}
+});

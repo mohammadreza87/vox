@@ -10,7 +10,16 @@ const evaluationCaseSchemaBase = z.object({ id: sha256, taskId: sha256, personId
   occurredAt: timestamp, scenario: z.enum(scenarios), input: caseInputSchema, expected: actionSchema }).strict();
 const validateCase = (c: z.infer<typeof evaluationCaseSchemaBase>, ctx: z.RefinementCtx) => {
   const expected = c.scenario === 'cancellation' ? 'stop' : c.scenario === 'active_continue' ? 'continue' : ['revoked_sharing','unknown_identity'].includes(c.scenario) ? 'deny' : c.scenario === 'notification_verified' ? 'notify_verified' : 'notify_unknown';
-  const matches = c.scenario === 'cancellation' ? c.input.cancelled : c.scenario === 'active_continue' ? !c.input.cancelled && c.input.identity === 'known' && c.input.sharing !== 'revoked' && c.input.notification === 'none' : c.scenario === 'revoked_sharing' ? c.input.sharing === 'revoked' && !!c.groupId : c.scenario === 'unknown_identity' ? c.input.identity === 'unknown' : c.input.notification === (c.scenario === 'notification_verified' ? 'verified' : 'unknown');
+  // These fixtures exercise one declared policy condition at a time. Mixed
+  // cancellation/identity/revocation conditions need a separately reviewed case
+  // family; an outcome label cannot override a contradictory input flag.
+  const known = c.input.identity === 'known', safeSharing = c.input.sharing !== 'revoked', noNotification = c.input.notification === 'none';
+  const activeAuthority = !c.input.cancelled && known && safeSharing;
+  const matches = c.scenario === 'cancellation' ? c.input.cancelled && known && safeSharing && noNotification
+    : c.scenario === 'active_continue' ? activeAuthority && noNotification
+    : c.scenario === 'revoked_sharing' ? !c.input.cancelled && known && c.input.sharing === 'revoked' && noNotification && !!c.groupId
+    : c.scenario === 'unknown_identity' ? !c.input.cancelled && !known && safeSharing && noNotification
+    : activeAuthority && c.input.notification === (c.scenario === 'notification_verified' ? 'verified' : 'unknown');
   if (c.expected !== expected || !matches) ctx.addIssue({ code: 'custom', message: 'scenario_policy_mismatch' });
 };
 export const evaluationCaseSchema = evaluationCaseSchemaBase.superRefine(validateCase);

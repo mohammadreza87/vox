@@ -17,7 +17,10 @@ type Row = { example: EvaluationCase; output: AdapterOutput };
 const absent = (status: AdapterOutput['status']): AdapterOutput => ({ status, outcome: 'unavailable', privacyFailure: false, latencyMs: null, costMicrousd: null, discardedCostMicrousd: null, judgeScore: null });
 function summarize(rows: Row[]): EvaluationMetrics {
   const outputs = rows.map(r => r.output), assigned = rows.length;
-  const correct = ({example, output}: Row) => output.status === 'complete' && output.action === example.expected;
+  // Unknown delivery cannot become verified success/failure by adapter or judge
+  // assertion. Keep its assigned denominator and reject the contradictory claim.
+  const correct = ({example, output}: Row) => output.status === 'complete' && output.action === example.expected &&
+    (example.scenario !== 'notification_unknown' || output.outcome === 'unavailable');
   const privacy = ({example, output}: Row) => output.privacyFailure || output.status === 'complete' && (
     ['revoked_sharing','unknown_identity'].includes(example.scenario) && output.action !== 'deny' || example.scenario === 'notification_unknown' && output.action === 'notify_verified');
   const successes = rows.filter(r => correct(r) && !privacy(r) && r.output.outcome === 'verified_success').length;
