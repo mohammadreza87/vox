@@ -469,6 +469,27 @@ export class SharedMemoryService {
     });
     return this.list(telegramId, input.space);
   }
+  /** Policy eligibility is resource-specific. A stopped member can suppress only
+   * the shared contribution that requires them, never an unrelated container.
+   * Both acquisition and the committed fence use this exact selection. */
+  private contextSelection(containers: SharedContainer[], actor: Verified, people: Verified[], required: Verified[], agentId: string, personalized: boolean) {
+    if (!personalized) return [];
+    return containers.flatMap(container => {
+      if (container.status !== 'active' || container.audienceInvalidatedAt !== undefined) return [];
+      const eligible = container.memories.filter(memory => this.allowed(container, memory, actor, people, 'read', agentId));
+      if (!eligible.length) return [];
+      return eligible.filter(memory => {
+        const personIds = new Set([memory.authorPersonId, ...memory.recipientPersonIds, ...people.map(p => p.profile.identity.personId!)]);
+        return [...personIds].every(personId => {
+          const identities = required.filter(p => p.profile.identity.personId === personId &&
+            container.members.some(m => m.personId === personId && m.telegramId === p.telegramId));
+          // A stale/unmapped shared identity cannot grant use, including when
+          // another current profile happens to occupy the same Telegram slot.
+          return identities.length === 1 && identities[0].profile.storedPersonalizationAllowed !== false;
+        });
+      }).map(memory => ({ container, memory }));
+    });
+  }
   async readContext(telegramId: number, space: SharedSpace, agentId: string, audience: SharedContextAudience): Promise<SharedContext> {
     return this.contextProjection(telegramId, space, agentId, audience, true);
   }
@@ -522,7 +543,8 @@ export class SharedMemoryService {
     const requiredIds = [...new Set([...ids, ...relevant.filter(c => c.status === 'active').flatMap(c => c.members.map(m => m.telegramId))])].sort((a,b) => a-b);
     observedIds = requiredIds;
     const required = requiredIds.map(id => this.verifiedNow(id, space));
-    const personalized = required.every(p => p.profile.storedPersonalizationAllowed !== false) && people.every(p => p.profile.purposes.some(choice => choice.purpose === 'optional.personalization' && choice.state === 'granted' && choice.available));
+    const personalized = people.every(p => p.profile.storedPersonalizationAllowed !== false && p.profile.purposes.some(choice => choice.purpose === 'optional.personalization' && choice.state === 'granted' && choice.available));
+    const selection = this.contextSelection(relevant, people.find(p => p.telegramId === telegramId)!, people, required, agentId, personalized);
     // Re-read the small participant controls after all shared/native I/O. A
     // deadline crossed during parsing cannot release a stale positive result.
     const currentRequired = requiredIds.map(id => this.verifiedNow(id, space));
@@ -561,7 +583,7 @@ export class SharedMemoryService {
     const final = this.now();
     if (Number.isSafeInteger(final) && final >= 0) observedAt = Math.max(observedAt, final);
     if (!Number.isSafeInteger(final) || final < fresh || deadline <= final) return fail(403, 'authority_expired');
-    const revision = sharedDigest([state.revision, space, agentId, this.identityKey(people), audience, personalized, groupStamp, agentStamp, ...(required.some(p => p.profile.storedPersonalizationUseStamp !== undefined) ? [this.identityKey(required)] : [])]);
+    const revision = sharedDigest([state.revision, space, agentId, this.identityKey(people), audience, personalized, groupStamp, agentStamp, ...(required.some(p => p.profile.storedPersonalizationUseStamp !== undefined) ? [this.identityKey(required), selection.map(({ container, memory }) => [container.id, memory.id])] : [])]);
     return { revision: this.adaptive.storeIdentity === 'canonical' ? revision : sharedDigest([this.adaptive.storeIdentity, revision]),
       validUntil: deadline };
     } catch (error) {
@@ -587,20 +609,22 @@ export class SharedMemoryService {
     const relevant = state.containers.filter(c => c.space === space && c.members.some(m => m.telegramId === telegramId));
     const requiredIds = [...new Set([...ids, ...relevant.filter(c => c.status === 'active').flatMap(c => c.members.map(m => m.telegramId))])].sort((a,b) => a-b);
     const required = await Promise.all(requiredIds.map(id => this.verified(id, space)));
-    const personalized = required.every(p => p.profile.storedPersonalizationAllowed !== false) && people.every(p => p.profile.purposes.some(choice => choice.purpose === 'optional.personalization' && choice.state === 'granted' && choice.available));
+    const personalized = people.every(p => p.profile.storedPersonalizationAllowed !== false && p.profile.purposes.some(choice => choice.purpose === 'optional.personalization' && choice.state === 'granted' && choice.available));
+    const selection = this.contextSelection(relevant, people.find(p => p.telegramId === telegramId)!, people, required, agentId, personalized);
     const groupStamp = await this.groupStamp(relevant, audience.groupId);
     const agentStamp = await this.authority.agent(agentId);
     const memories: SharedContext['memories'] = [];
+    const selectedIds = new Set(selection.map(({ container, memory }) => JSON.stringify([container.id, memory.id])));
     if (personalized && includeBodies) for (const c of state.containers) {
       if (c.space !== space || c.status !== 'active' || !(await this.groupCurrent(c))) continue;
-      for (const m of c.memories) if (this.allowed(c, m, actor, people, 'read', agentId)) memories.push({ id: m.id, text: m.text!, containerId: c.id });
+      for (const m of c.memories) if (selectedIds.has(JSON.stringify([c.id, m.id]))) memories.push({ id: m.id, text: m.text!, containerId: c.id });
     }
     await this.recheck(people, space);
     await this.recheck(required, space);
     if (groupStamp !== await this.groupStamp(relevant, audience.groupId) || sharedDigest(agentStamp) !== sharedDigest(await this.authority.agent(agentId))) return fail(409, 'authority_changed');
     const currentRevision = await this.repository.transaction(d => d.revision);
     if (currentRevision !== state.revision) return fail(409, 'revision_conflict');
-    const revision = sharedDigest([state.revision, space, agentId, this.identityKey(people), audience, personalized, groupStamp, agentStamp, ...(required.some(p => p.profile.storedPersonalizationUseStamp !== undefined) ? [this.identityKey(required)] : [])]);
+    const revision = sharedDigest([state.revision, space, agentId, this.identityKey(people), audience, personalized, groupStamp, agentStamp, ...(required.some(p => p.profile.storedPersonalizationUseStamp !== undefined) ? [this.identityKey(required), selection.map(({ container, memory }) => [container.id, memory.id])] : [])]);
     return { revision: this.adaptive.storeIdentity === 'canonical' ? revision : sharedDigest([this.adaptive.storeIdentity, revision]), memories };
   }
 }
