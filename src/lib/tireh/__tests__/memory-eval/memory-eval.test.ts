@@ -87,6 +87,14 @@ function report() {
     ].map((x) => fmt(x).padEnd(12));
     lines.push(`${mode.padEnd(18)} ${cells.join(' ')} ${String(sum(mode, 'leaks')).padStart(4)} ${String(sum(mode, 'blockedHits')).padStart(7)}`);
   }
+  lines.push(`blockedHits by category: ${MODES.map((mode) => `${mode} ${CATEGORIES.map((c) => `${c}=${sum(mode, 'blockedHits', (q) => q.category === c)}`).join(',')}`).join(' | ')}`);
+  lines.push('recall@8 by language and category');
+  for (const mode of MODES) {
+    for (const lang of ['fa', 'en'] as const) {
+      const cells = CATEGORIES.slice(0, 4).map((c) => fmt(recallOf(mode, (q) => q.lang === lang && q.category === c)).padEnd(12));
+      lines.push(`${`${mode}/${lang}`.padEnd(18)} ${cells.join(' ')}`);
+    }
+  }
   console.info(lines.join('\n'));
 }
 
