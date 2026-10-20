@@ -24,6 +24,7 @@
     "studio:production": "node scripts/studio-production.mjs",
     "test:relationships": "vitest run src/lib/relationships src/lib/studio/__tests__/relationships.test.ts src/lib/studio/__tests__/scoped-relationship-integration.test.ts src/lib/studio/__tests__/scoped-relationship-drain.test.ts src/lib/adaptive/__tests__/relationships-service.test.ts src/lib/tireh/__tests__/memory-privacy.test.ts src/app/api/studio/relationships/drain/route.test.ts src/app/studio/_components/RelationshipPanel.test.tsx",
     "simulate:relationships": "tsx scripts/relationship-simulation.ts",
+    "eval:voice": "node --import tsx scripts/agent-voice-eval.ts",
     "timings:report": "node --import tsx scripts/stage-timings.ts",
     "e2e:relationships": "playwright test --config=playwright.relationships.config.ts",
     "test:connections": "vitest run src/lib/connections",

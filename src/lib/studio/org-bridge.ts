@@ -7,7 +7,10 @@ import { OrgDirectory } from '../tireh/org/directory';
 import type { Group, OrgConfig, Person, Persona } from '../tireh/types';
 import { defaultVoiceId } from './media';
 import { personaToRuntime } from './persona';
-import type { Agent, Member, StudioGroup, StudioState } from './types';
+import { CATALOG, type Catalog } from './skills/catalog';
+import { renderCraft } from './skills/render';
+import type { AgentSkill } from './skills/types';
+import type { Agent, Member, PersonaSpec, StudioGroup, StudioState } from './types';
 
 export const personId = (telegramId: number) => `tg-${telegramId}`;
 export const groupId = (chatId: number) => `chat-${Math.abs(chatId)}`;
@@ -20,11 +23,46 @@ export interface OrgOptions {
   /** The chat model can search the web (agents may still turn it off) */
   webSearch?: boolean;
   groupObservation?: boolean;
+  /** The skill library roles and skills resolve against (default: the shipped CATALOG). */
+  catalog?: Catalog;
 }
 
-export function agentToPersona(agent: Agent, ownerId: string, { webSearch = true, groupObservation = true }: OrgOptions = {}): Persona {
+/**
+ * Rendered craft per catalog, keyed by role and skill ids: rebuilt orgs reuse
+ * the same string. Bounded (least recently used out) because every skill
+ * toggle creates a new combination.
+ */
+const craftCache = new WeakMap<Catalog, Map<string, string>>();
+const CRAFT_CACHE_LIMIT = 256;
+
+/**
+ * The agent's role and skills as prompt text. No skill list means the role's
+ * defaults; unknown ids (a catalog change since hiring) are skipped.
+ */
+export function agentCraft(p: Pick<PersonaSpec, 'roleId' | 'skillIds'>, catalog: Catalog = CATALOG): string {
+  if (!p.roleId && !p.skillIds?.length) return '';
+  const key = `${p.roleId ?? ''}|${(p.skillIds ?? []).join(',')}|${p.skillIds ? 'explicit' : 'default'}`;
+  let cache = craftCache.get(catalog);
+  if (!cache) craftCache.set(catalog, cache = new Map());
+  const cached = cache.get(key);
+  if (cached !== undefined) {
+    cache.delete(key);
+    cache.set(key, cached);
+    return cached;
+  }
+  const role = p.roleId ? catalog.roles.find((r) => r.id === p.roleId) : undefined;
+  const ids = p.skillIds ?? role?.skills ?? [];
+  const skills = [...new Set(ids)].map((id) => catalog.skills.find((s) => s.id === id)).filter((s): s is AgentSkill => Boolean(s));
+  const craft = renderCraft(role, skills);
+  cache.set(key, craft);
+  if (cache.size > CRAFT_CACHE_LIMIT) cache.delete(cache.keys().next().value!);
+  return craft;
+}
+
+export function agentToPersona(agent: Agent, ownerId: string, { webSearch = true, groupObservation = true, catalog }: OrgOptions = {}): Persona {
   const runtime = personaToRuntime(agent.persona);
   const p = agent.persona;
+  const craft = agentCraft(p, catalog);
   return {
     strangerPolicy: [p.withStrangers, p.openness !== undefined ? `Openness to strangers: ${p.openness}/100.` : ''].filter(Boolean).join(' ') || undefined,
     id: agent.id,
@@ -33,6 +71,9 @@ export function agentToPersona(agent: Agent, ownerId: string, { webSearch = true
     personality: runtime.personality,
     communicationStyle: runtime.communicationStyle,
     values: runtime.values,
+    character: runtime.character,
+    ...(runtime.voiceExamples.length ? { voiceExamples: runtime.voiceExamples } : {}),
+    ...(craft ? { craft } : {}),
     voice: { elevenLabsVoiceId: agent.voice?.voiceId ?? defaultVoiceId(agent.persona.presentation), description: agent.persona.voiceBrief },
     ownerId,
     telegramUsername: agent.bot?.username,

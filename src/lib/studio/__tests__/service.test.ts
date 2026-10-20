@@ -295,7 +295,7 @@ describe('spawn: draft, refine, look, avatars, voice, sandbox, publish', () => {
     const reply = await h.studio.testChat(org.alice, agent.id, [{ role: 'user', content: 'Hi Nova' }]);
     expect(reply).toBe('Hi Alice!');
     expect(h.chatLLM.lastPrompt).toContain('You are Nova');
-    expect(h.chatLLM.lastPrompt).toContain('sandbox test');
+    expect(h.chatLLM.lastPrompt).toContain('private preview');
     expect(h.chatLLM.extractionCalls).toBe(0);
     expect(h.memory.memories.records.size).toBe(0);
     expect(h.memory.history.chats.size).toBe(0);

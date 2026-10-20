@@ -4,12 +4,18 @@
  * Telegram Mini App bridge + typed API client for Vox Studio.
  */
 
-import type { AgentView } from '@/lib/studio/service';
+import type { AgentView, SuccessorTemplate } from '@/lib/studio/service';
 import type { DefaultVoice, LibraryVoice, VoiceOptions } from '@/lib/studio/media';
 import type { AgentLook, AgentVisibility, GroupBehavior, Member, PersonaSpec, Role, SpawnBrief } from '@/lib/studio/types';
+// Client-safe: type-only imports from the skills contract (never catalog.ts / service.ts values).
+import type { CatalogView, RouteSuggestion } from '@/lib/studio/skills/types';
 
-export type { AgentView, AgentLook, AgentVisibility, GroupBehavior, Member, PersonaSpec, Role, SpawnBrief };
+export type { AgentView, AgentLook, AgentVisibility, GroupBehavior, Member, PersonaSpec, Role, SpawnBrief, SuccessorTemplate };
 export type { DefaultVoice, LibraryVoice, VoiceOptions };
+export type { CatalogView, RouteSuggestion };
+
+/** Body of POST catalog/route. `final: false` (typing) answers from the server's local router only. */
+export interface RouteRequest { text: string; final?: boolean; exclude?: string[]; answer?: string }
 
 interface TelegramWebApp {
   initData: string;
@@ -110,7 +116,7 @@ export interface Me {
   member: Member;
   org: string;
   bot: string;
-  features: { avatars: boolean; voices: boolean; calls: boolean; liveCalls?: boolean; legacyMemorySharing?: boolean };
+  features: { avatars: boolean; voices: boolean; calls: boolean; liveCalls?: boolean; legacyMemorySharing?: boolean; skillRouting?: 'decisions' | 'local' };
 }
 
 export interface MemoryItem { id: string; content: string; type: string; scope: string; scopeLabel: string; from: string; mine: boolean; at: string; sensitivity: string }
@@ -143,6 +149,10 @@ export const api = {
   me: () => request<Me>('GET', 'me'),
   agents: () => request<{ agents: AgentView[] }>('GET', 'agents'),
   agent: (id: string) => request<{ agent: AgentView }>('GET', `agents/${enc(id)}`),
+  /** A fired predecessor's name, role and skills, for any member drafting its successor. */
+  successorTemplate: (id: string) => request<SuccessorTemplate>('GET', `agents/${enc(id)}/successor`),
+  catalog: () => request<CatalogView>('GET', 'catalog'),
+  route: (body: RouteRequest, signal?: AbortSignal) => request<RouteSuggestion>('POST', 'catalog/route', body, 'json', signal),
   draft: (brief: SpawnBrief, successorOf?: string) => request<{ agent: AgentView; names: string[] }>('POST', 'agents', { brief, successorOf }),
   updatePersona: (id: string, persona: Partial<PersonaSpec>) => request<{ agent: AgentView }>('PATCH', `agents/${enc(id)}`, { persona }),
   deleteDraft: (id: string) => request<{ ok: true }>('DELETE', `agents/${enc(id)}`),

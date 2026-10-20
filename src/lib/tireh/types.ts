@@ -88,6 +88,16 @@ export interface Persona {
   strangerPolicy?: string;
   /** May search the web for live information (news, prices, weather, scores) */
   webSearch?: boolean;
+  /**
+   * Who they are and how they talk, already rendered (background, habits,
+   * opinions, trade-offs). When absent the prompt falls back to
+   * personality / communicationStyle / values.
+   */
+  character?: string;
+  /** Role knowledge and skill playbooks, already rendered; stable per agent version. */
+  craft?: string;
+  /** Short exchanges in the persona's own voice: style examples, never memories. */
+  voiceExamples?: Array<{ user: string; reply: string }>;
 }
 
 export interface OrgConfig {

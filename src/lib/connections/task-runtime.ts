@@ -18,6 +18,8 @@ const decision = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('answer'), text: z.string().trim().min(1).max(12_000) }).strict(),
   z.object({ kind: z.literal('tool'), toolId: idSchema, arguments: z.record(z.string(), z.unknown()), expectedTargetRevision: idSchema.nullable() }).strict(),
 ]);
+/** Per-step output cap, thinking included; the budget reservation uses the same bound. */
+const STEP_MAX_TOKENS = 4096;
 
 /** A fresh, single-connection task context. Nothing from ordinary bot histories,
  * personal memories, other accounts or other provider schemas enters this model.
@@ -78,7 +80,7 @@ Reviewed task guidance: ${skill?.instructions ?? 'Complete the explicit task usi
         destinationId: 'model:studio', purpose: 'explicit.connection_task' });
       const inputBytes = Buffer.byteLength(system) + Buffer.byteLength(JSON.stringify(messages));
       if (inputBytes > 100_000) return deny('task_context_limit', 413);
-      await this.app.reserveTaskBudget?.(connection.providerId, `${input.requestId}:model:${step}`, 'model_tokens', inputBytes + 1800);
+      await this.app.reserveTaskBudget?.(connection.providerId, `${input.requestId}:model:${step}`, 'model_tokens', inputBytes + STEP_MAX_TOKENS);
       await assertCurrent();
       await service.lineage.assertUse(actor, { space: input.space, sourceIds, agentId: input.agentId,
         destinationId: 'model:studio', purpose: 'explicit.connection_task' });
@@ -86,7 +88,7 @@ Reviewed task guidance: ${skill?.instructions ?? 'Complete the explicit task usi
       let timer: ReturnType<typeof setTimeout> | undefined;
       let raw: string;
       try {
-        raw = await Promise.race([this.llm.complete({ system, messages, maxTokens: 1800, requireComplete: true, signal: controller.signal,
+        raw = await Promise.race([this.llm.complete({ system, messages, maxTokens: STEP_MAX_TOKENS, effort: 'medium', requireComplete: true, signal: controller.signal,
           authorize: async () => { await assertCurrent(); await service.lineage.assertUse(actor, { space: input.space, sourceIds,
             agentId: input.agentId, destinationId: 'model:studio', purpose: 'explicit.connection_task' }); return true; } }),
           new Promise<never>((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new Error('task_deadline_expired')); }, Math.max(1, deadlineAt - this.now())); })]);

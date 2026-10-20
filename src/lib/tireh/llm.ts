@@ -33,11 +33,16 @@ export interface LLMMessage {
   images?: LLMImage[];
 }
 
+/** How hard the model thinks before answering; thinking tokens count toward maxTokens. */
+export type LLMEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
 export interface LLMRequest {
   system: string;
   messages: LLMMessage[];
   maxTokens?: number;
   temperature?: number;
+  /** Anthropic models with effort control only; other providers and older models ignore it. */
+  effort?: LLMEffort;
   /** Side-effecting callers must not deliver a provider-truncated completion. */
   requireComplete?: boolean;
   /** Server-only fence, rechecked before every provider request/retry. Never serialized. */
@@ -132,6 +137,45 @@ function supportsCustomSampling(model: string): boolean {
   return !/^claude-opus-4-(?:[7-9]|[1-9]\d)(?:-|$)/.test(model);
 }
 
+/**
+ * Effort (`output_config.effort`) is accepted by Claude 5 families, Opus 4.5+
+ * and Sonnet 4.6+; Haiku 4.5 and Sonnet 4.5 reject it. Unknown or dated IDs
+ * follow their family/version prefix.
+ */
+export function supportsEffort(model: string): boolean {
+  const match = /^claude-(sonnet|haiku|opus|fable|mythos)-(\d+)(?:-(\d{1,2}))?(?:-|$)/.exec(model);
+  if (!match) return false;
+  const [, family, major, minor = '0'] = match;
+  if (Number(major) >= 5) return true;
+  if (Number(major) !== 4) return false;
+  return family === 'opus' ? Number(minor) >= 5 : family === 'sonnet' ? Number(minor) >= 6 : false;
+}
+
+/**
+ * `output_config` is GA on the Messages API, but @anthropic-ai/sdk 0.71 only
+ * types it on the beta params. The SDK serializes the body as given, so the
+ * field is added through this narrow type instead of a cast to `any`.
+ */
+type EffortBody = { output_config?: { effort: LLMEffort } };
+
+/**
+ * The persona system prompt (conversation/prompt.ts) puts everything that is
+ * identical for every turn of an agent first and closes it with this tag.
+ * Anthropic requests send that prefix as its own cached block, so repeat
+ * turns read it at a tenth of the input price; prompts without the tag
+ * (persona design, extraction, triage) stay a plain string.
+ */
+export const SYSTEM_CACHE_BREAK = '</rules>';
+
+export function cachedSystem(system: string): string | Anthropic.TextBlockParam[] {
+  const end = system.indexOf(SYSTEM_CACHE_BREAK);
+  if (end < 0) return system;
+  const cut = end + SYSTEM_CACHE_BREAK.length;
+  const rest = system.slice(cut);
+  const prefix: Anthropic.TextBlockParam = { type: 'text', text: system.slice(0, cut), cache_control: { type: 'ephemeral' } };
+  return rest.trim() ? [prefix, { type: 'text', text: rest }] : [prefix];
+}
+
 /** Server-side web search continues in a new request when a turn pauses. */
 const MAX_WEB_CONTINUATIONS = 3;
 
@@ -174,12 +218,13 @@ export class AnthropicLLM implements LLM {
     } });
   }
 
-  private params({ system, maxTokens = 1024, temperature = 0.7 }: LLMRequest) {
+  private params({ system, maxTokens = 1024, temperature = 0.7, effort }: LLMRequest): Omit<Anthropic.MessageCreateParamsNonStreaming, 'messages'> & EffortBody {
     return {
       model: this.model,
       max_tokens: maxTokens,
       ...(supportsCustomSampling(this.model) ? { temperature } : {}),
-      system,
+      system: cachedSystem(system),
+      ...(effort && supportsEffort(this.model) ? { output_config: { effort } } : {}),
     };
   }
 

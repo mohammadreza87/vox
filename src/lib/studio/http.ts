@@ -5,9 +5,10 @@
 
 import { verifyInitData } from './auth';
 import { StudioRateLimiter, StudioRateLimitError, type StudioRequestRateLimiter } from './ratelimit';
-import { Studio, StudioError } from './service';
+import { Studio, StudioError, type RouteBriefInput } from './service';
 import { PersonaGenerationError } from './persona';
 import { ElevenLabsSpeechError } from './media';
+import { ROUTE_TEXT_CHARS } from './skills/route';
 import { logTelegramDiagnostic, type TelegramDiagnostic } from '../tireh/telegram/diagnostics';
 import type { AgentVisibility, Member, MemoryPolicy, Role, SpawnBrief } from './types';
 
@@ -69,6 +70,23 @@ async function body(req: Request): Promise<Json> {
 
 const str = (v: unknown, max = 2000) => (typeof v === 'string' ? v.slice(0, max) : undefined);
 
+const MAX_ROUTE_EXCLUDE = 20;
+const MAX_ROUTE_ID = 64;
+
+/** POST catalog/route body: { text ≤ 1200, final?: boolean, exclude?: string[] ≤ 20, answer?: string ≤ 64 }. */
+function routeInput(b: Json): RouteBriefInput {
+  const invalid = (message: string) => new StudioError(400, message);
+  if (typeof b.text !== 'string') throw invalid('Describe the agent in a sentence.');
+  if (b.text.length > ROUTE_TEXT_CHARS) throw invalid(`Keep the description under ${ROUTE_TEXT_CHARS} characters.`);
+  if (b.final != null && typeof b.final !== 'boolean') throw invalid('final must be true or false.');
+  const exclude = b.exclude ?? [];
+  if (!Array.isArray(exclude) || exclude.length > MAX_ROUTE_EXCLUDE || exclude.some((id) => typeof id !== 'string' || id.length > MAX_ROUTE_ID)) {
+    throw invalid('Invalid list of dismissed roles.');
+  }
+  if (b.answer != null && (typeof b.answer !== 'string' || b.answer.length > MAX_ROUTE_ID)) throw invalid('Invalid answer.');
+  return { text: b.text, final: b.final === true, exclude: exclude as string[], ...(typeof b.answer === 'string' && b.answer ? { answer: b.answer } : {}) };
+}
+
 export interface RouterOptions {
   botToken: string;
   /** Local development only: act as this Telegram user without initData */
@@ -119,11 +137,13 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
     if (root === 'me' && method === 'GET') {
       return json({ member: me, org: studio.deps.orgName, bot: studio.deps.managerUsername, features: {
         avatars: !!studio.deps.openai, voices: !!studio.deps.eleven, calls: !!studio.deps.openai || !!studio.deps.eleven, liveCalls: studio.liveCalls, legacyMemorySharing: !studio.deps.adaptive,
+        skillRouting: studio.deps.decider ? 'decisions' : 'local',
       } });
     }
     if (me.role === 'pending') throw new StudioError(403, 'Waiting for an admin to approve you.');
 
-    if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) await limiter.consume('mutation', me.telegramId);
+    const routing = root === 'catalog' && id === 'route' && !action && method === 'POST';
+    if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) await limiter.consume(routing ? 'route' : 'mutation', me.telegramId);
     const generation = root === 'agents' && method === 'POST' && (!id || ['refine', 'avatars', 'voice', 'speak', 'test', 'call', 'live-call'].includes(action));
     const voiceSearch = root === 'voices' && method === 'GET';
     if (generation || voiceSearch) await limiter.consume('expensive', me.telegramId);
@@ -151,6 +171,17 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
         language: q.get('language') ?? undefined, search: q.get('search') ?? undefined,
         category: q.get('category') ?? undefined,
       }) });
+    }
+
+    if (root === 'catalog') {
+      // Static per deploy (the view carries its version): a short private cache is safe.
+      if (!id && method === 'GET') return json(studio.catalogView(me), 200, { 'Cache-Control': 'private, max-age=300' });
+      if (routing) {
+        const b = await body(req);
+        // A submitted brief reaches the Decisions provider when one is configured: spend the generation budget before validating.
+        if (b.final === true && studio.deps.decider) await limiter.consume('expensive', me.telegramId);
+        return json(await studio.routeBrief(me, routeInput(b)));
+      }
     }
 
     if (root === 'agents') {
@@ -237,6 +268,8 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
             }) });
           }
           case 'GET group-link': return json({ link: await studio.groupLink(me, id) });
+          // Only name, roleId and skillIds of a fired predecessor: what a successor brief starts from.
+          case 'GET successor': return json(await studio.successorTemplate(me, id));
           case 'POST call': {
             const form = await req.formData().catch(() => { throw new StudioError(400, 'Expected audio'); });
             const audio = form.get('audio');

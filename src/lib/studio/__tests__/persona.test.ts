@@ -1,7 +1,27 @@
 import { describe, expect, it, vi } from 'vitest';
 import { briefToText, draftPersona, PersonaGenerationError, personaToRuntime, randomLook, refinePersona, suggestUsername, validatePersona } from '../persona';
 import { HUES } from '../types';
+import type { AgentRole, AgentSkill } from '../skills/types';
 import { draftJson, personaSpec, ScriptedLLM } from './helpers';
+
+const ROLE: AgentRole = {
+  id: 'mobile.live-ops-producer', pack: 'mobile', space: 'work', title: 'Live-ops Producer', summary: 'Runs the event calendar.',
+  mission: 'Keep the live game fresh every week without burning out the team.',
+  knowledge: ['Event calendars for casual puzzle games', 'Store featuring windows', 'D1/D7 cohorts'],
+  pointOfView: ['Cut scope before moving a date.', 'Friday releases are a bet the team pays for on Saturday.'],
+  voice: 'Numbers before adjectives.', boundaries: 'Defers legal and HR questions.',
+  skills: ['core.scope-trade'], optionalSkills: [], starters: ['Plan next week’s event', 'Is this dip real?', 'Should we ship on Friday?'],
+  hue: 'sky', traits: { warmDirect: 70, playfulSerious: 50, conciseExpansive: 20 }, keywords: ['live ops', 'events', 'calendar', 'producer', 'retention', 'لایو'],
+};
+const SKILL: AgentSkill = {
+  id: 'core.scope-trade', title: 'Scope trade-off', summary: 'Trade scope against a fixed date.', whenToUse: 'Use when a date and a scope collide.',
+  method: ['Find the real deadline.', 'Name the cost.', 'Offer one swap.'], qualityBar: ['Trade-off first.', 'One owner.', 'One date.'],
+  pitfalls: ['Silent yes.', 'Options without a pick.'], frameworks: [], sources: [{ name: 'Fixture', url: 'https://example.com/f' }],
+};
+const EXAMPLES = [
+  { user: 'can we squeeze the leaderboard in?', reply: 'Tiny to build, not to ship. Swap it for the shop polish and I will tell art today.' },
+  { user: 'امروز از اون روزا بود…', reply: 'از اونا که هر جلسه یه جلسه‌ی دیگه می‌زاد؟ فردا صبح کارا رو سبک‌تر می‌چینیم.' },
+];
 
 /** Deterministic rand from a list of values */
 const seq = (...values: number[]) => {
@@ -60,7 +80,7 @@ describe('draftPersona', () => {
     const draft = await draftPersona(llm, { languages: LANGUAGES }, 'HOOR');
     expect(draft.persona.languages).toEqual(LANGUAGES);
     expect(llm.requests).toHaveLength(1);
-    expect(llm.requests[0].maxTokens).toBe(4096);
+    expect(llm.requests[0].maxTokens).toBe(8192);
     expect(promptedSchema(llm.requests[0].system)).toMatchObject({
       properties: {
         persona: { properties: {
@@ -89,7 +109,7 @@ describe('draftPersona', () => {
     const llm = new ScriptedLLM().push(invalid, draftJson(corrected));
     const draft = await draftPersona(llm, brief, 'HOOR');
     expect(draft.persona).toMatchObject(corrected);
-    expect(llm.requests.map((request) => request.maxTokens)).toEqual([4096, 8192]);
+    expect(llm.requests.map((request) => request.maxTokens)).toEqual([8192, 12000]);
     const repair = llm.requests[1];
     expect(repair.messages.map((message) => message.role)).toEqual(['user', 'assistant', 'user']);
     expect(repair.messages[1].content).toBe(invalid);
@@ -154,7 +174,78 @@ describe('draftPersona', () => {
   });
 });
 
+describe('drafting character and craft', () => {
+  it('drafts from a library role in one call: mission, point of view, skills and starters reach the prompt, ids never do', async () => {
+    const llm = new ScriptedLLM().push(draftJson({ languages: ['Persian', 'English'], voiceExamples: EXAMPLES, opinions: ['Cut scope first, because dates are trust.', 'Ship small.'] }));
+    const { persona } = await draftPersona(llm, { role: 'Live-ops Producer', languages: ['Persian', 'English'] }, 'HOOR', { role: ROLE, skills: [SKILL] });
+    expect(llm.requests).toHaveLength(1);
+    const system = llm.requests[0].system;
+    for (const text of [ROLE.mission, 'Cut scope before moving a date.', 'Defers legal and HR questions.', 'Scope trade-off (Trade scope against a fixed date)',
+      '1. Plan next week’s event', '3. Should we ship on Friday?', 'leans direct; balanced playful/serious; leans concise']) expect(system).toContain(text);
+    expect(system).not.toContain('Temperament suggestion');
+    const schema = promptedSchema(system);
+    expect(schema.properties.persona.properties).not.toHaveProperty('roleId');
+    expect(schema.properties.persona.properties).not.toHaveProperty('skillIds');
+    expect(schema.properties.persona.properties).toMatchObject({ voiceExamples: { minItems: 2, maxItems: 3 }, opinions: { minItems: 2 }, signatureMoves: { minItems: 2 } });
+    expect(llm.requests[0].effort).toBe('medium');
+    expect(persona.voiceExamples).toEqual(EXAMPLES);
+    expect(persona).not.toHaveProperty('roleId');
+  });
+
+  it('suggests a temperament for variety only when the creator set no traits and picked no role', async () => {
+    const free = new ScriptedLLM().push(draftJson());
+    await draftPersona(free, {}, 'HOOR');
+    expect(free.requests[0].system).toContain('Temperament suggestion');
+    const tuned = new ScriptedLLM().push(draftJson());
+    await draftPersona(tuned, { traits: { warmDirect: 20 } }, 'HOOR');
+    expect(tuned.requests[0].system).not.toContain('Temperament suggestion');
+  });
+
+  it('drops voice examples written in assistant clichés or markdown instead of teaching them', async () => {
+    const llm = new ScriptedLLM().push(draftJson({ voiceExamples: [
+      EXAMPLES[0],
+      { user: 'hi', reply: "Great question! I'd be happy to help." },
+      { user: 'plan?', reply: '**Plan:**\n- step one' },
+    ], opinions: ['  ', 'A real view.'] }));
+    const { persona } = await draftPersona(llm, {}, 'HOOR');
+    expect(persona.voiceExamples).toEqual([EXAMPLES[0]]);
+    expect(persona.opinions).toEqual(['A real view.']);
+    expect(llm.requests).toHaveLength(1);
+  });
+
+  it('renders a second-person character for the runtime while keeping the legacy summary', () => {
+    const r = personaToRuntime(personaSpec({ opinions: ['Cut scope first.'], signatureMoves: ['Gives the number before the caveat'], petPeeves: ['Charts without axes'], voiceExamples: [...EXAMPLES, { user: ' ', reply: 'x' }] }));
+    for (const text of ['Personality: Curious and candid', 'How you talk: Short and clear', 'Views you hold: Cut scope first.', 'What you reliably do: Gives the number before the caveat.',
+      'Pet peeves: Charts without axes.', 'How people sum you up: Finds the fun', 'Languages: English.']) expect(r.character).toContain(text);
+    expect(r.character).not.toContain('Reply in the language');
+    expect(r.voiceExamples).toEqual(EXAMPLES);
+  });
+});
+
 describe('refinePersona', () => {
+  it('never shows Claude the library ids, keeps them, and keeps character lists Claude left out', async () => {
+    const current = personaSpec({ roleId: ROLE.id, skillIds: [SKILL.id], voiceExamples: EXAMPLES, opinions: ['Ship small.'] });
+    // Claude answers without the ids (never shown) and forgets two character lists.
+    const answer: Record<string, unknown> = { ...current, personality: 'More playful' };
+    for (const key of ['roleId', 'skillIds', 'voiceExamples', 'opinions']) delete answer[key];
+    const llm = new ScriptedLLM().push(JSON.stringify(answer));
+    const refined = await refinePersona(llm, current, 'make her more playful', { role: ROLE, skills: [SKILL] });
+    expect(llm.requests[0].messages[0].content).not.toContain(ROLE.id);
+    expect(llm.requests[0].messages[0].content).not.toContain('skillIds');
+    expect(llm.requests[0].system).toContain('rewrite voiceExamples to match');
+    expect(llm.requests[0].system).toContain(ROLE.mission);
+    expect(llm.requests[0].system).not.toContain('Starter messages');
+    expect(refined).toMatchObject({ personality: 'More playful', roleId: ROLE.id, skillIds: [SKILL.id], voiceExamples: EXAMPLES, opinions: ['Ship small.'] });
+  });
+
+  it('clears a character list Claude deliberately returned empty', async () => {
+    const current = personaSpec({ opinions: ['Ship small.'], petPeeves: ['Vague tickets.'], voiceExamples: EXAMPLES });
+    const llm = new ScriptedLLM().push(JSON.stringify({ ...current, petPeeves: [] }));
+    const refined = await refinePersona(llm, current, 'drop the pet peeves');
+    expect(refined.petPeeves).toEqual([]);
+    expect(refined).toMatchObject({ opinions: ['Ship small.'], voiceExamples: EXAMPLES });
+  });
+
   it('sends the current persona and the instruction, returns the refined persona', async () => {
     const llm = new ScriptedLLM().push(JSON.stringify(personaSpec({ personality: 'More playful' })));
     const refined = await refinePersona(llm, personaSpec(), 'make her more playful');
@@ -171,7 +262,7 @@ describe('refinePersona', () => {
     const instruction = 'Make her more playful and change her languages to only Persian and Turkish.';
     const refined = await refinePersona(llm, current, instruction);
     expect(refined).toMatchObject(requested);
-    expect(llm.requests.map((request) => request.maxTokens)).toEqual([4096, 8192]);
+    expect(llm.requests.map((request) => request.maxTokens)).toEqual([8192, 12000]);
     expect(promptedSchema(llm.requests[0].system)).toMatchObject({ properties: { communicationStyle: { maxLength: 400 }, languages: { maxItems: 32 } } });
     const repair = llm.requests[1].messages;
     expect(repair[1].content).toBe(invalid);
@@ -196,6 +287,19 @@ describe('validatePersona', () => {
     expect(validatePersona({ ...personaSpec(), presentation: 'robot' }).ok).toBe(false);
     expect(validatePersona({ ...personaSpec(), isAdmin: true }).ok).toBe(false);
     expect(validatePersona(personaSpec({ culture: 'x'.repeat(201) })).ok).toBe(false);
+  });
+
+  it('accepts the full stored shape (library ids, character fields) and bounds it', () => {
+    const stored = personaSpec({ roleId: ROLE.id, skillIds: ['core.a', 'core.b'], voiceExamples: EXAMPLES, opinions: ['Ship small.'], signatureMoves: ['Number first.'], petPeeves: ['Charts without axes.'] });
+    expect(validatePersona(stored)).toMatchObject({ ok: true, persona: { roleId: ROLE.id, skillIds: ['core.a', 'core.b'], voiceExamples: EXAMPLES } });
+    expect(validatePersona(personaSpec()).ok && (validatePersona(personaSpec()) as { persona: { voiceExamples: unknown[] } }).persona.voiceExamples).toEqual([]);
+    expect(validatePersona({ ...stored, skillIds: Array.from({ length: 9 }, (_, i) => `core.s${i}`) }).ok).toBe(false);
+    expect(validatePersona({ ...stored, roleId: 'x'.repeat(65) }).ok).toBe(false);
+    expect(validatePersona({ ...stored, voiceExamples: [...EXAMPLES, ...EXAMPLES] }).ok).toBe(false);
+    expect(validatePersona({ ...stored, voiceExamples: [{ user: 'u'.repeat(201), reply: 'r' }] }).ok).toBe(false);
+    expect(validatePersona({ ...stored, voiceExamples: [{ user: 'u', reply: 'r'.repeat(401) }] }).ok).toBe(false);
+    expect(validatePersona({ ...stored, voiceExamples: [{ user: 'u', reply: 'r', isAdmin: true }] }).ok).toBe(false);
+    expect(validatePersona({ ...stored, opinions: Array.from({ length: 5 }, () => 'view') }).ok).toBe(false);
   });
 
   it('allows up to 32 languages while keeping the manual edit count and item limits strict', () => {
