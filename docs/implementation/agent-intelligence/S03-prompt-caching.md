@@ -122,3 +122,13 @@ Step 1 (loadTurnSnapshot, revision vectors, single boundary, scalar unchanged, l
 - Existing tests whose fakes treat `request.system` as a string fail under the flag; enumerated and covered by counterparts. The gateway-suite wrappers use a scoped test-only `Array.prototype.startsWith` shim; production code has no shim.
 - Callers outside src/lib/tireh reading `request.system` as a string must use `systemText()` (S06, S08, S12 after merge).
 - 1-hour cache writes cost 2x; measure before enabling broadly.
+
+## Implementation notes (this run)
+
+- `TURN_CONTEXT_NOTE` in Block A quotes the heading as "For this turn" (without `## `), so the literal per-turn heading never appears before the last cache breakpoint, as the wire-level test requires.
+- Expected flag-on failures in existing suites (`TIREH_CACHED_PROMPT=1 npx vitest run src/lib/tireh`), all from local fakes that call string methods on `request.system`, read the saved-context row at `messages[0]`, or compare the newest message object exactly:
+  - `diagnostics.test.ts`: "keeps extraction exceptions private without changing the handled outcome";
+  - `history-privacy.test.ts`: "fences an extraction completing after source deletion", "stops extraction and new history after withdrawal while an extractor is in flight", "keeps Personal isolated from legacy Work and presents explicit context as data";
+  - `gateway.test.ts` (run directly, without the wrapper shim): "a failed memory extraction does not break the reply" and the four "privacy mutation fences" tests (history reset private/group, forgetting private/group);
+  - `voice-delivery.test.ts`: "answers a typed caption in a hasGuests group from the caption alone" (exact `toEqual` on the newest message, which now also carries `trailingText`).
+  Each has a flag-on counterpart in `cached-prompt-gateway.test.ts` or passes through the gateway-suite wrappers.

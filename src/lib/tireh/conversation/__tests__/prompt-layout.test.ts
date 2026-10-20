@@ -76,6 +76,7 @@ describe('Block A (persona)', () => {
     for (const input of variants) {
       const a = buildPromptLayout(input).system[0].text;
       expect(a).not.toContain('Today is');
+      expect(a).not.toContain('## For this turn');
       expect(a).not.toMatch(/\d{4}-\d{2}-\d{2}/);
       expect(a).not.toContain(MEMORY_CANARY);
       expect(a).not.toContain(SAVED_CANARY);
