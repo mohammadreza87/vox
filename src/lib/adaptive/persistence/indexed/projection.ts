@@ -1,3 +1,5 @@
+import { rightsUseControlsSchema } from '../../rights-use-holds/contracts';
+import { compactRightsUseHolds, parseRightsUseControls, rightsUseStamp } from '../../rights-use-holds/state';
 import type { AdaptiveDirectAuthorityControls } from '../authority';
 import { productPauseUseControlsSchema } from '../../product-pause/contracts';
 import { compactProductPause, productPauseUseStamp } from '../../product-pause/state';
@@ -29,15 +31,16 @@ const legacyIndexedControlsSchema = z.object({ schemaVersion: z.literal(1), acco
   relationshipBindings: relationshipDocumentSchema.shape.bindings,
   relationshipSources: relationshipDocumentSchema.shape.sources,
   relationshipExternalSettings: relationshipDocumentSchema.shape.externalSettings }).strict();
-export const indexedControlsSchema = z.union([legacyIndexedControlsSchema, legacyIndexedControlsSchema.extend({ schemaVersion: z.literal(2), productPause: productPauseUseControlsSchema }).strict()]);
+export const indexedControlsSchema = z.union([legacyIndexedControlsSchema, legacyIndexedControlsSchema.extend({ schemaVersion: z.literal(2), productPause: productPauseUseControlsSchema }).strict(), legacyIndexedControlsSchema.extend({schemaVersion:z.literal(3),productPause:productPauseUseControlsSchema,rightsUseControls:rightsUseControlsSchema,retentionStoreIdentity:z.union([z.string().regex(/^[a-f0-9]{64}$/),z.literal('canonical')])}).strict()]);
 const directAuthorityBase = legacyIndexedControlsSchema.pick({ schemaVersion: true, accountId: true, personId: true,
   createdAt: true, revision: true, updatedAt: true, binding: true, declaration: true, permissions: true, agentGrants: true });
 export const directAuthorityControlsSchema = z.union([directAuthorityBase,
-  directAuthorityBase.extend({ schemaVersion: z.literal(2), productPause: productPauseUseControlsSchema }).strict()]);
+  directAuthorityBase.extend({ schemaVersion: z.literal(2), productPause: productPauseUseControlsSchema }).strict(), directAuthorityBase.extend({schemaVersion:z.literal(3),productPause:productPauseUseControlsSchema,rightsUseControls:rightsUseControlsSchema,retentionStoreIdentity:z.union([z.string().regex(/^[a-f0-9]{64}$/),z.literal('canonical')])}).strict()]);
 export function parseDirectAuthorityControls(raw: unknown, accountId: string): AdaptiveDirectAuthorityControls {
   const parsed = directAuthorityControlsSchema.safeParse(raw);
   if (!parsed.success) throw new IndexedStorageError('invalid_controls');
   const c = parsed.data;
+  if (c.schemaVersion===3) { try {parseRightsUseControls(c.rightsUseControls);} catch {throw new IndexedStorageError('invalid_controls');} }
   validateAccountId(accountId);
   if (c.accountId !== accountId || c.personId !== `account-profile:${digest(accountId).slice(0, 32)}` ||
       new Set(c.permissions.map(p => p.id)).size !== 16 ||
@@ -59,6 +62,7 @@ export function parseControls(raw: unknown, accountId: string): IndexedControls 
   const parsed = indexedControlsSchema.safeParse(raw);
   if (!parsed.success) throw new IndexedStorageError('invalid_controls');
   const c = parsed.data as IndexedControls;
+  if (c.schemaVersion===3) { try {parseRightsUseControls(c.rightsUseControls);} catch {throw new IndexedStorageError('invalid_controls');} }
   validateAccountId(accountId);
   if (c.accountId !== accountId || c.personId !== `account-profile:${digest(accountId).slice(0, 32)}` ||
       new Set(c.permissions.map(p => p.id)).size !== 16 ||
@@ -101,7 +105,7 @@ export interface IndexedProjection {
 export function projectDocument(document: AdaptiveDocument, canonical: string): IndexedProjection {
   if (Buffer.byteLength(canonical) > INDEXED_LIMITS.canonicalBytes || document.memories.length > INDEXED_LIMITS.memories ||
       new Set(document.memories.map(m => m.id)).size !== document.memories.length) throw new IndexedStorageError('capacity');
-  const c: IndexedControls = { schemaVersion: document.schemaVersion, ...(document.schemaVersion === 2 ? { productPause: compactProductPause(document.productPause!) } : {}), accountId: document.accountId, personId: document.personId,
+  const c: IndexedControls = { schemaVersion: document.schemaVersion, ...(document.schemaVersion >= 2 ? { productPause: compactProductPause(document.productPause!) } : {}), ...(document.schemaVersion===3?{retentionStoreIdentity:document.retentionStoreIdentity,rightsUseControls:compactRightsUseHolds(document.rightsUseHolds!)}:{}), accountId: document.accountId, personId: document.personId,
     createdAt: document.createdAt, revision: document.revision, updatedAt: document.updatedAt, ...(document.binding ? { binding: document.binding } : {}),
     ...(document.declaration ? { declaration: document.declaration } : {}),
     permissions: document.permissions, agentGrants: document.agentGrants,
@@ -130,7 +134,8 @@ export function projectDocument(document: AdaptiveDocument, canonical: string): 
     controls.relationshipSources.filter(s => s.key.scope.space === space),
     [controls.relationshipExternalSettings.revision, controls.relationshipExternalSettings[space]],
     memories.filter(m => m.metadata.space === space).map(m => m.metadata), containerIdFor(document.accountId, space),
-    ...(document.schemaVersion === 2 ? [productPauseUseStamp(controls, space)] : []),
+    ...(document.schemaVersion >= 2 ? [productPauseUseStamp(controls, space)] : []),
+    ...(document.schemaVersion===3?[rightsUseStamp(controls,space,'optional.personalization'),rightsUseStamp(controls,space,'optional.product_analytics')]:[]),
   ]) }));
   return { canonical, controls, controlsJson, controlsDigest: digest(controls), memories, catalogs, outbox: document.outbox };
 }

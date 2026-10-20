@@ -1,3 +1,4 @@
+import { rightsUseAllowed } from '../../rights-use-holds/state';
 import { mayUseStoredPersonalization } from '../../product-pause/state';
 import { z } from 'zod';
 import { types as utilTypes } from 'util';
@@ -56,6 +57,7 @@ export class IndexedQueryEngine implements IndexedAdaptiveQueries {
     const deadlines = [binding!.expiresAt];
     if (['optional.personalization', 'optional.auto_memory', 'optional.proactive_suggestions', 'optional.relationship_outreach'].includes(scope.purpose) &&
         !mayUseStoredPersonalization(c, scope.space)) return fail('denied', io);
+    if (!rightsUseAllowed(c,scope.space,scope.purpose) || ['optional.auto_memory','optional.proactive_suggestions','optional.relationship_outreach'].includes(scope.purpose) && !rightsUseAllowed(c,scope.space,'optional.personalization')) return fail('denied',io);
     if (scope.purpose !== 'core_text') {
       const permission = c.permissions.find(p => p.spaceId === scope.spaceId && p.purpose === scope.purpose)!;
       if (permission.state !== 'granted' || permission.effectiveAt > now || permission.updatedAt > now || permission.expiresAt <= now)
@@ -86,12 +88,12 @@ export class IndexedQueryEngine implements IndexedAdaptiveQueries {
     return { controls: c, catalog, deadline: Math.min(...deadlines) };
   }
   private stamp(meta: IndexedStoreMetadata, scope: IndexedScope, a: Authority) {
-    return { version: 1 as const, incarnation: meta.incarnation, generation: meta.generation,
+    return { version: (meta.schemaVersion===3?2:1) as 1|2, incarnation: meta.incarnation, generation: meta.generation,
       catalogVersion: a.catalog.version, catalogDigest: a.catalog.digest, scope: structuredClone(scope), deadline: a.deadline };
   }
   private signed<T extends object>(payload: T): T & { seal: string } { return { ...payload, seal: this.host.sign(payload) }; }
   private receipt(receipt: RuntimeAuthorityReceipt, meta: IndexedStoreMetadata, now: number, io: IndexedIoCounters): Authority | IndexedFailure {
-    if (!receipt || !this.host.verify(receipt) || receipt.version !== 1 || receipt.incarnation !== meta.incarnation || receipt.generation !== meta.generation ||
+    if (!receipt || !this.host.verify(receipt) || receipt.version !== (meta.schemaVersion===3?2:1) || receipt.incarnation !== meta.incarnation || receipt.generation !== meta.generation ||
         !Number.isSafeInteger(receipt.issuedAt) || receipt.issuedAt > now) return fail('stale_receipt', io);
     if (receipt.deadline <= now) return fail('expired', io);
     const a = this.controls(receipt.scope, now, io);
@@ -223,7 +225,7 @@ export class IndexedQueryEngine implements IndexedAdaptiveQueries {
       if (typeof query !== 'string') return fail('invalid_scope', io);
       const requested = lexicalTerms(query.slice(0, INDEXED_LIMITS.queryChars)), terms = requested.slice(0, INDEXED_LIMITS.queryTerms);
       const queryDigest = digest(query), offset = cursor?.offset ?? 0;
-      if (cursor && (!this.host.verify(cursor) || cursor.version !== 1 || cursor.incarnation !== meta.incarnation || cursor.generation !== meta.generation ||
+      if (cursor && (!this.host.verify(cursor) || cursor.version !== (meta.schemaVersion===3?2:1) || cursor.incarnation !== meta.incarnation || cursor.generation !== meta.generation ||
           cursor.catalogVersion !== receipt.catalogVersion || cursor.catalogDigest !== receipt.catalogDigest || cursor.deadline !== receipt.deadline ||
           digest(cursor.scope) !== digest(scope) || cursor.queryDigest !== queryDigest || !Number.isSafeInteger(offset) || offset < 0 || offset > INDEXED_LIMITS.memories)) return fail('stale_cursor', io);
       const scores = new Map<string, number>(), key = accountKey(scope.accountId);
@@ -264,7 +266,7 @@ export class IndexedQueryEngine implements IndexedAdaptiveQueries {
       const cache = new Map<string, MemoryMetadata | undefined>();
       const proofs: { handle: CandidateHandle; proof: NonNullable<ReturnType<IndexedQueryEngine['lineage']>> }[] = [];
       for (const handle of handles) {
-        if (!this.host.verify(handle) || handle.version !== 1 || handle.incarnation !== meta.incarnation || handle.generation !== meta.generation ||
+        if (!this.host.verify(handle) || handle.version !== (meta.schemaVersion===3?2:1) || handle.incarnation !== meta.incarnation || handle.generation !== meta.generation ||
             handle.catalogVersion !== receipt.catalogVersion || handle.catalogDigest !== receipt.catalogDigest || handle.deadline !== receipt.deadline ||
             digest(handle.scope) !== digest(receipt.scope)) return fail('stale_handle', io);
         const proof = this.lineage(receipt.scope, handle.id, now, io, cache), m = proof?.metadata;

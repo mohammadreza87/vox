@@ -74,14 +74,14 @@ export class AdaptiveExperienceService {
   pruneDocument(d: AdaptiveDocument, now: number): void {
     prunePreferenceUndo(d, now);
     const e = d.experience;
-    e.observations = e.observations.filter(o => o.at > now - RETENTION && this.purpose(d, o.space, 'optional.product_analytics', now, o.agentId) && o.consentEpoch === this.epoch(d, o.space, 'optional.product_analytics'));
+    e.observations = e.observations.filter(o => o.at > now - RETENTION && this.adaptive.isPurposeRetentionAllowed(d, o.space, 'optional.product_analytics', now, o.agentId) && o.consentEpoch === this.epoch(d, o.space, 'optional.product_analytics'));
     e.turnKeys = e.turnKeys.filter(k => k.expiresAt > now);
     e.predictionTurns = e.predictionTurns.filter(p => p.expiresAt > now);
     for (const item of e.inbox) {
       const purpose = item.category === 'reminder' ? 'optional.reminder_delivery' : 'optional.proactive_suggestions';
       const grant = d.agentGrants.find(g => g.agentId === item.agentId && g.space === item.space);
       const durableReminder = item.category === 'reminder' && item.delivery && item.delivery.channelRevision === d.experience.reminderDelivery?.[item.space].revision && !!reminderPermit(this.adaptive, d, item.space, now, item.agentId);
-      if (item.expiresAt <= now || (!durableReminder && !this.purpose(d, item.space, purpose, now, item.agentId)) ||
+      if (item.expiresAt <= now || (!durableReminder && !this.adaptive.isPurposeRetentionAllowed(d, item.space, purpose, now, item.agentId)) ||
           item.consentEpoch !== this.epoch(d, item.space, purpose) || !grant || item.grantRevision !== grant.revision) {
         if (item.status !== 'cancelled') { item.status = 'cancelled'; item.revision++; }
         delete item.label;
@@ -441,7 +441,7 @@ export class AdaptiveExperienceService {
       const image = turn?.requiresImage ? this.adaptive.capabilityStatus(d, 'single_party_image', now) : null;
       const valid = !!turn && !!grant && this.options.decisionsEnabled === true && !!this.options.decisions && !turn.cancelled && !turn.superseded && turn.expiresAt > now &&
         turn.revision === input.revision && turn.contextKey === input.contextKey && turn.policyReceipt === input.policyReceipt && (turn.receiptExpiresAt ?? 0) > now &&
-        this.adaptive.isCoreAllowed(d, now) && (!image || image.eligible) && turn.authorizationFingerprint === predictionAuthorizationFingerprint(this.adaptive.coreFingerprint(d, now), grant.revision, image, storeIdentity, d.schemaVersion === 2 ? productPauseUseStamp(d, input.space) : undefined);
+        this.adaptive.isCoreAllowed(d, now) && (!image || image.eligible) && turn.authorizationFingerprint === predictionAuthorizationFingerprint(this.adaptive.coreFingerprint(d, now), grant.revision, image, storeIdentity, d.schemaVersion >= 2 ? productPauseUseStamp(d, input.space) : undefined);
       return { value: { valid }, denied: !valid,
         ...(valid ? { deadline: Math.min(d.binding!.expiresAt, turn!.expiresAt, turn!.receiptExpiresAt!, core.validUntil ?? now, image?.validUntil ?? Number.MAX_SAFE_INTEGER) } : {}) };
     };
@@ -491,7 +491,7 @@ export class AdaptiveExperienceService {
       const policy = [d.accountId, input.space, input.agentId, input.sessionId, input.turnId, input.revision, input.contextKey, input.image && [input.image.sourceId, input.image.revision], reservation];
       turn.policyReceipt = digest(this.adaptive.storeIdentity === 'canonical' ? policy : [this.adaptive.storeIdentity, ...policy]);
       turn.requiresImage = !!image;
-      turn.authorizationFingerprint = predictionAuthorizationFingerprint(this.adaptive.coreFingerprint(d, now), grant!.revision, imageCapability, this.adaptive.storeIdentity, d.schemaVersion === 2 ? productPauseUseStamp(d, input.space) : undefined); turn.receiptExpiresAt = Math.min(now + 1500, imageCapability?.validUntil ?? Infinity);
+      turn.authorizationFingerprint = predictionAuthorizationFingerprint(this.adaptive.coreFingerprint(d, now), grant!.revision, imageCapability, this.adaptive.storeIdentity, d.schemaVersion >= 2 ? productPauseUseStamp(d, input.space) : undefined); turn.receiptExpiresAt = Math.min(now + 1500, imageCapability?.validUntil ?? Infinity);
       return { receipt: turn.policyReceipt, expiresAt: turn.receiptExpiresAt, coreFingerprint: this.adaptive.coreFingerprint(d, now), grantRevision: grant!.revision };
     });
     if ('unknown' in prepared) {
@@ -506,7 +506,7 @@ export class AdaptiveExperienceService {
       const receipt = await this.adaptive.withAccountDocument(telegramId, (d, now) => {
         const turn = d.experience.predictionTurns.find(p => p.agentId === input.agentId && p.space === input.space && p.sessionId === input.sessionId && p.turnId === input.turnId);
         return this.adaptive.isCoreAllowed(d, now) && this.adaptive.coreFingerprint(d, now) === prepared.coreFingerprint &&
-          (!image || this.adaptive.capabilityStatus(d, 'single_party_image', now).eligible) && turn?.authorizationFingerprint === predictionAuthorizationFingerprint(this.adaptive.coreFingerprint(d, now), prepared.grantRevision, image ? this.adaptive.capabilityStatus(d, 'single_party_image', now) : null, this.adaptive.storeIdentity, d.schemaVersion === 2 ? productPauseUseStamp(d, input.space) : undefined) &&
+          (!image || this.adaptive.capabilityStatus(d, 'single_party_image', now).eligible) && turn?.authorizationFingerprint === predictionAuthorizationFingerprint(this.adaptive.coreFingerprint(d, now), prepared.grantRevision, image ? this.adaptive.capabilityStatus(d, 'single_party_image', now) : null, this.adaptive.storeIdentity, d.schemaVersion >= 2 ? productPauseUseStamp(d, input.space) : undefined) &&
           turn?.revision === input.revision && !turn.cancelled && !turn.superseded && turn.expiresAt > now && turn.reservation === reservation && turn.contextKey === input.contextKey &&
           d.agentGrants.some(g => g.agentId === input.agentId && g.space === input.space && g.allowed && g.revision === prepared.grantRevision) ? prepared.receipt! : null;
       });

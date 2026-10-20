@@ -9,7 +9,7 @@ import { applyProductPauseCommand, productPauseUseState, ProductPauseConflict } 
 export class ProductPauseService {
   constructor(private readonly adaptive: AdaptiveService) {}
   private prepared(d: AdaptiveDocument): boolean {
-    return this.adaptive.repository.storage.canonicalSchemaVersion === 2 && d.schemaVersion === 2;
+    return (d.schemaVersion === 2 || d.schemaVersion === 3) && this.adaptive.repository.storage.canonicalSchemaVersion === d.schemaVersion;
   }
   private status(d: AdaptiveDocument, space: SpaceKind, now: number): ProductPauseStatus {
     const available = this.prepared(d), state = productPauseUseState(d, space);
@@ -23,7 +23,7 @@ export class ProductPauseService {
       const status = this.status(d, space, now);
       return { value: status, ...(status.canResume ? { deadline: Math.min(d.binding!.expiresAt, this.adaptive.capabilityStatus(d, 'core_text', now).validUntil ?? Number.MAX_SAFE_INTEGER) } : { denied: true }) };
     });
-    if (result.status === 'missing' && this.adaptive.repository.storage.canonicalSchemaVersion === 2) return Promise.resolve({ version: 1, accountId: accountIdFor(telegramId), space, available: true, productPaused: false, useEpoch: 0, commandSeq: 0, canPause: true, canResume: false });
+    if (result.status === 'missing' && (this.adaptive.repository.storage.canonicalSchemaVersion === 2 || this.adaptive.repository.storage.canonicalSchemaVersion === 3)) return Promise.resolve({ version: 1, accountId: accountIdFor(telegramId), space, available: true, productPaused: false, useEpoch: 0, commandSeq: 0, canPause: true, canResume: false });
     return Promise.resolve(result.status === 'ready' ? result.value : { version: 1, accountId: accountIdFor(telegramId), space, available: false, productPaused: null, useEpoch: null, reason: result.status, canPause: false, canResume: false });
   }
   async command(telegramId: number, raw: unknown, beforeCommit?: () => void): Promise<ProductPauseCommandResult> {
