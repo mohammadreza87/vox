@@ -349,6 +349,8 @@ export class AdaptiveService {
       target=d.memories.find(m=>m.id===o.memoryId && m.space===o.space);
       if(!target || target.status!=='active' || target.expiresAt<=now || target.origin || target.sourceRefs || !this.authorized(d,o.space,target,'delete',now) || localUseDigest(this.erasureWitness(d,o.memoryId,o.space))!==o.witnessDigest)return fail(409,'erasure_changed');
       target=structuredClone(target);
+      const outboxIds=o.witness.filter(w=>w.beforeStatus==='active').map(w=>`rights-erasure:${digest([o.eventId,w.id])}`);
+      if(new Set(outboxIds).size!==outboxIds.length || d.outbox.some(row=>outboxIds.includes(row.eventId)))return fail(409,'erasure_event_conflict');
       // Validate the complete cloned unit before touching the writer draft.
       const projected=structuredClone(d),revision=d.revision+1;
       if(!Number.isSafeInteger(revision))return fail(409,'erasure_capacity');

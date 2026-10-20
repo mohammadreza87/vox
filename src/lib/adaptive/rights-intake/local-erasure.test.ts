@@ -3,10 +3,11 @@ import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { SqliteAdaptiveStorage } from '../persistence/indexed/sqlite-storage';
-import { accountIdFor, type AdaptiveDocument } from '../persistence/repository';
+import { accountIdFor, digest, type AdaptiveDocument } from '../persistence/repository';
 import { AdaptiveLifecycleService } from '../lifecycle/service';
 import { localUseFixture, syntheticLocalUsePolicy, RF1_NOW } from './local-use-fixtures';
 import { RightsIntakeService } from './service';
+import { RightsLocalErasureWorkflow } from './local-erasure-service';
 import { prepareRightsLocalErasureLedger } from './conversion';
 import { localErasureNotice, LOCAL_ERASURE_NOTICE_VERSION } from './local-erasure-notice';
 import { rightsPolicySchema } from './policy';
@@ -160,4 +161,48 @@ for(const format of ['file','sqlite'] as const)for(const mode of ['in-call','pub
    f.setNow(RF1_NOW+200);const view=f.service.privateNoteErasureStatus(101,f.row.requestId,'work');f.setNow(RF1_NOW+150);
    expect(()=>f.service.assertPrivateNoteErasurePublication(101,f.row.requestId,'work',view)).toThrow('rights_clock_unavailable');
  }
+});
+for(const format of ['file','sqlite'] as const)for(const drift of ['request','policy','both'] as const)it(`fresh RF2 reconcile authority ${format} ${drift} after original expiry`,async()=>{
+ const f=await fixture(format),p=f.plan(),transaction=f.repository.transaction.bind(f.repository);let calls=0;
+ vi.spyOn(f.repository,'transaction').mockImplementation(async(...args)=>{if(++calls===2)throw Error('TEST ONLY ACK LOSS');return transaction(...args);});await f.execute(p);vi.restoreAllMocks();f.setNow(RF1_NOW+30001);
+ if(drift!=='policy'){
+   const rows=await f.service.operations(999),r=rows.requests.find(r=>r.requestId===f.row.requestId)!;
+   await f.service.operatorAction(999,r.requestId,{version:1,eventId:randomUUID(),expectedRevision:r.revision,action:'begin_review',reasonCode:'review_pending',operationHandle:r.operationHandle});
+ }
+ if(drift!=='request'){const renewed=policy();renewed.revision=2;renewed.expiresAt+=100000;renewed.localErasure.approvalReference='TEST ONLY renewed recording policy';f.setPolicy(renewed);}
+ const rows=await f.service.operations(999),r=rows.requests.find(r=>r.requestId===f.row.requestId)!,before=f.read(),ledger=f.repository.read(accountIdFor(101))!;
+ expect(r.localErasures).toMatchObject([{commandEventId:p.eventId,reconcileAllowed:true}]);
+ await f.service.reconcilePrivateNoteErasure(999,r.requestId,r.operationHandle,p.eventId,randomUUID());
+ expect(f.service.privateNoteErasureStatus(101,r.requestId,'work').operations[0]).toMatchObject({technical:'note_content_removed',recording:'recorded'});expect(f.read()).toEqual(before);
+ const after=f.repository.read(accountIdFor(101))!;if(ledger.version!==4||after.version!==4)throw Error('missing');
+ const {acknowledgement,...original}=after.localErasure.operations[0];expect(original).toEqual(ledger.localErasure.operations[0]);expect(acknowledgement).toMatchObject({recordingAuthority:{requestRevision:r.revision,policy:{revision:drift==='request'?1:2}}});
+});
+for(const format of ['file','sqlite'] as const)for(const deny of ['stale-handle','closed','unapproved','staged-policy-change'] as const)it(`fresh RF2 reconcile denies ${format} ${deny}`,async()=>{
+ const f=await fixture(format),p=f.plan(),transaction=f.repository.transaction.bind(f.repository);let calls=0;
+ vi.spyOn(f.repository,'transaction').mockImplementation(async(...args)=>{if(++calls===2)throw Error('TEST ONLY ACK LOSS');return transaction(...args);});await f.execute(p);vi.restoreAllMocks();f.setNow(RF1_NOW+30001);
+ let rows=await f.service.operations(999),r=rows.requests.find(r=>r.requestId===f.row.requestId)!;
+ if(deny==='stale-handle')await f.service.operatorAction(999,r.requestId,{version:1,eventId:randomUUID(),expectedRevision:r.revision,action:'begin_review',reasonCode:'review_pending',operationHandle:r.operationHandle});
+ if(deny==='closed'){await f.service.requesterAction(101,'work',r.requestId,{version:1,eventId:randomUUID(),expectedRevision:r.revision,action:'withdraw_request'});rows=await f.service.operations(999);r=rows.requests.find(r=>r.requestId===f.row.requestId)!;}
+ if(deny==='unapproved'){const p=policy();p.localErasure.allowedActions=['plan','execute'];f.setPolicy(p);rows=await f.service.operations(999);r=rows.requests.find(r=>r.requestId===f.row.requestId)!;}
+ if(deny==='staged-policy-change'){const transact=f.rightsStorage.transact.bind(f.rightsStorage);vi.spyOn(f.rightsStorage,'transact').mockImplementationOnce((id,mutate,before)=>transact(id,mutate,()=>{const p=policy();p.revision=2;f.setPolicy(p);before?.();}));}
+ const before=f.read();await expect(f.service.reconcilePrivateNoteErasure(999,r.requestId,r.operationHandle,p.eventId,randomUUID())).rejects.toThrow();expect(f.read()).toEqual(before);
+ const d=f.repository.read(accountIdFor(101))!;if(d.version!==4)throw Error('missing');expect(d.localErasure.operations[0].acknowledgement).toBeUndefined();
+});
+for(const format of ['file','sqlite'] as const)it(`RF2 reserved outbox namespace synthetic parity ${format}`,async()=>{
+ const f=await fixture(format),eventId=randomUUID(),reserved=`rights-erasure:${digest([eventId,f.memory.id])}`;
+ await f.write(d=>d.outbox.push({eventId:reserved,kind:'memory_deleted',space:'work',personId:d.personId,revision:d.revision,memoryId:'TEST ONLY unrelated existing row',epoch:0,createdAt:RF1_NOW}));
+ const plan=f.service.privateNoteErasurePlan(101,f.row.requestId,'work',{version:1,eventId,expectedRequestRevision:f.row.revision,space:'work',memoryId:f.memory.id,expectedMemoryRevision:f.memory.revision,locale:'en'}),before=f.read();
+ await expect(f.execute(plan)).rejects.toThrow();expect(f.read()).toEqual(before);expect(f.read().outbox.filter(o=>o.eventId===reserved)).toHaveLength(1);
+});
+for(const format of ['file','sqlite'] as const)it(`RF2 sealed revision survives service to workflow gap ${format}`,async()=>{
+ const f=await fixture(format),p=f.plan(),transaction=f.repository.transaction.bind(f.repository);let calls=0;
+ vi.spyOn(f.repository,'transaction').mockImplementation(async(...args)=>{if(++calls===2)throw Error('TEST ONLY ACK LOSS');return transaction(...args);});await f.execute(p);vi.restoreAllMocks();
+ const rows=await f.service.operations(999),r=rows.requests.find(r=>r.requestId===f.row.requestId)!,before=f.read(),original=RightsLocalErasureWorkflow.prototype.reconcile;
+ vi.spyOn(RightsLocalErasureWorkflow.prototype,'reconcile').mockImplementationOnce(async function(this:RightsLocalErasureWorkflow,...args){
+   // Synthetic scheduling point after the service read and before capture.
+   await f.service.operatorAction(999,r.requestId,{version:1,eventId:randomUUID(),expectedRevision:r.revision,action:'begin_review',reasonCode:'review_pending',operationHandle:r.operationHandle});
+   return original.apply(this,args);
+ });
+ await expect(f.service.reconcilePrivateNoteErasure(999,r.requestId,r.operationHandle,p.eventId,randomUUID())).rejects.toThrow();expect(f.read()).toEqual(before);
+ const d=f.repository.read(accountIdFor(101))!;if(d.version!==4)throw Error('missing');expect(d.localErasure.operations[0].acknowledgement).toBeUndefined();
 });

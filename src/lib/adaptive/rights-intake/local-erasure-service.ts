@@ -6,8 +6,8 @@ import type { AccountLedger, RightsSpace } from './contracts';
 import type { RightsOptions } from './service';
 import { rightsPolicySchema, type RightsPolicy } from './policy';
 import { fail, RightsReplay, type RightsRepository } from './repository';
-import { erasureFingerprint, localUseDigest } from './local-use-state';
-import { localErasurePlanInputSchema, localErasureExecuteInputSchema, localErasureViewSchema, localErasureMutationSchema, localErasurePlanSchema, type LocalErasureOperation, type LocalErasureView, type LocalErasurePlanInput, type LocalErasureExecuteInput, type LocalErasureMutation } from './local-erasure-contracts';
+import { erasureFingerprint, erasureReconcileFingerprint, localUseDigest } from './local-use-state';
+import { localErasurePlanInputSchema, localErasureExecuteInputSchema, localErasureViewSchema, localErasureMutationSchema, localErasurePlanSchema, type LocalErasureOperation, type LocalErasureView, type LocalErasurePlanInput, type LocalErasureExecuteInput, type LocalErasureMutation, type ErasureRecordingAuthority } from './local-erasure-contracts';
 
 type Policy=Extract<RightsPolicy,{version:3}>;
 const n=z.number().int().nonnegative().safe(),hash=z.string().regex(/^[a-f0-9]{64}$/);
@@ -85,17 +85,34 @@ export class RightsLocalErasureWorkflow {
       this.auth(id);this.requirePolicy('plan',t.policyDigest);
     });
   }
-  private async acknowledge(id:number,o:LocalErasureOperation,action:'execute'|'reconcile',operatorGuard?:()=>void,reconcileEventId?:string){
-    const guard=()=>this.guard(id,o,action,operatorGuard);guard();
-    const proof=this.backend().privateNoteErasureProofNow(id,o,guard);if(proof.technical!=='note_content_removed')return fail(409,'rights_conflict');
+  private async acknowledge(id:number,o:LocalErasureOperation,action:'execute'|'reconcile',operatorGuard?:()=>void,recording?:ErasureRecordingAuthority){
+    if((action==='reconcile')!==!!recording)return fail(409,'rights_conflict');
+    const policyDigest=recording?.policy.digest??o.policyDigest,requestRevision=recording?.requestRevision??o.requestRevision;
+    const inspectDraft=(d:AccountLedger|null)=>{
+      const r=this.row(d,o.requestId,o.space),stored=d?.version===4?d.localErasure.operations.find(i=>i.eventId===o.eventId):undefined;
+      if(!stored||stored.fingerprint!==o.fingerprint||stored.fingerprint!==erasureFingerprint(accountIdFor(id),stored)||r.kind!=='erasure'||r.state==='closed_unfulfilled'||r.revision!==requestRevision||r.retention.reviewOrExpiryAt<=this.now(d)||action==='execute'&&(this.now(d)>=o.expiresAt||this.now(d)>=o.executionDeadline))return fail(409,'rights_conflict');
+      return stored;
+    };
+    const authority=()=>{this.auth(id);operatorGuard?.();this.requirePolicy(action,policyDigest);};
+    const guard=()=>{authority();inspectDraft(this.read(id));authority();};
+    guard();const proof=this.backend().privateNoteErasureProofNow(id,o,guard);
+    if(proof.technical!=='note_content_removed')return fail(409,'rights_conflict');
+    let draft:AccountLedger|undefined;
     try{await this.repository.transaction(accountIdFor(id),()=>this.now(),d=>{
-      this.auth(id);operatorGuard?.();this.requirePolicy(action,o.policyDigest);if(d.version!==4)return fail(503,'rights_erasure_unsupported');const stored=d.localErasure.operations.find(i=>i.eventId===o.eventId),r=this.row(d,o.requestId,o.space);if(!stored||stored.fingerprint!==o.fingerprint||r.revision!==o.requestRevision||r.state==='closed_unfulfilled'||action==='execute'&&this.now(d)>=o.expiresAt)return fail(409,'rights_conflict');if(stored.acknowledgement)throw new RightsReplay();
-      const p=this.requirePolicy(action,o.policyDigest),now=this.now(d);if(reconcileEventId){if(reconcileEventId===o.eventId||d.commandReceipts.some(r=>r.eventId===reconcileEventId)||d.localUse.intents.some(i=>i.eventId===reconcileEventId)||d.localErasure.operations.some(i=>i.eventId===reconcileEventId))return fail(409,'rights_conflict');d.commandReceipts.push({eventId:reconcileEventId,fingerprint:localUseDigest(['vox.rights.private-note-erasure.reconcile.v1',reconcileEventId,o.fingerprint]),requestId:o.requestId,resultingRequestRevision:o.requestRevision,action:'private_note_erasure_reconcile',recordedAt:now,retainUntil:Math.max(o.receiptRetainUntil,add(now,p.localErasure.receiptRetentionMs))});}stored.acknowledgement={effectRevision:proof.effectRevision!,observedAt:proof.observedAt!,recordedAt:now,retainUntil:Math.max(o.receiptRetainUntil,add(now,p.localErasure.receiptRetentionMs))};d.revision=bump(d.revision);
+      draft=d;authority();const stored=inspectDraft(d);if(stored.acknowledgement)throw new RightsReplay();
+      const p=this.requirePolicy(action,policyDigest),now=this.now(d),retainUntil=Math.max(o.receiptRetainUntil,add(now,p.localErasure.receiptRetentionMs));
+      if(recording){
+        if(d.version!==4||d.commandReceipts.some(r=>r.eventId===recording.commandEventId)||d.localUse.intents.some(i=>i.eventId===recording.commandEventId)||d.localErasure.operations.some(i=>i.eventId===recording.commandEventId))return fail(409,'rights_conflict');
+        d.commandReceipts.push({eventId:recording.commandEventId,fingerprint:erasureReconcileFingerprint(accountIdFor(id),o,recording),requestId:o.requestId,resultingRequestRevision:recording.requestRevision,action:'private_note_erasure_reconcile',recordedAt:now,retainUntil});
+      }
+      stored.acknowledgement={effectRevision:proof.effectRevision!,observedAt:proof.observedAt!,recordedAt:now,retainUntil,...(recording?{recordingAuthority:recording}:{})};d.revision=bump(d.revision);
     },()=>this.finalFence(()=>{
-      // The rights writer is held: inspect its prepared intent via closure, never
-      // recursively read its own lock. Other account/policy/canonical authority is fresh.
-      this.auth(id);operatorGuard?.();this.requirePolicy(action,o.policyDigest);if(action==='execute'&&this.now()>=o.expiresAt)return fail(409,'rights_conflict');
-      const current=this.backend().privateNoteErasureProofNow(id,o,()=>{this.auth(id);operatorGuard?.();});if(current.technical!=='note_content_removed'||current.effectRevision!==proof.effectRevision)return fail(409,'rights_conflict');
+      // The storage writer pins the committed input. Check the locked draft,
+      // never recursively read this rights lock; canonical proof stays current.
+      authority();if(!draft)return fail(409,'rights_conflict');inspectDraft(draft);
+      const current=this.backend().privateNoteErasureProofNow(id,o,()=>{this.auth(id);operatorGuard?.();});
+      if(current.technical!=='note_content_removed'||current.effectRevision!==proof.effectRevision)return fail(409,'rights_conflict');
+      authority();inspectDraft(draft);
     }));}catch(e){if(!(e instanceof RightsReplay))throw e;}
   }
   async execute(id:number,requestId:string,space:RightsSpace,raw:LocalErasureExecuteInput):Promise<LocalErasureMutation>{
@@ -129,8 +146,12 @@ export class RightsLocalErasureWorkflow {
     try{await this.acknowledge(id,o,'execute');}catch{this.auth(id);/* Effect remains durable; current proof truthfully exposes pending acknowledgement. */}
     return result(false);
   }
-  async reconcile(id:number,requestId:string,space:RightsSpace,commandEventId:string,operatorGuard:()=>void,reconcileEventId:string){
-    operatorGuard();const d=this.read(id),o=d?.version===4?d.localErasure.operations.find(o=>o.requestId===requestId&&o.space===space&&o.eventId===commandEventId):undefined;
-    if(!o)return fail(404,'not_found');await this.acknowledge(id,o,'reconcile',operatorGuard,reconcileEventId);operatorGuard();return this.status(id,requestId,space);
+  async reconcile(id:number,requestId:string,space:RightsSpace,commandEventId:string,operatorGuard:()=>void,reconcileEventId:string,operatorRef:string,expectedRequestRevision:number){
+    operatorGuard();const d=this.read(id),r=this.row(d,requestId,space),p=this.requirePolicy('reconcile');
+    const o=d?.version===4?d.localErasure.operations.find(o=>o.requestId===requestId&&o.space===space&&o.eventId===commandEventId):undefined;
+    if(!o||r.kind!=='erasure'||r.state==='closed_unfulfilled')return fail(404,'not_found');
+    if(r.revision!==expectedRequestRevision)return fail(409,'rights_conflict');
+    const recording:ErasureRecordingAuthority={version:1,commandEventId:reconcileEventId,requestRevision:r.revision,policy:{id:p.id,revision:p.revision,digest:localUseDigest(p)},operatorRef};
+    await this.acknowledge(id,o,'reconcile',operatorGuard,recording);operatorGuard();return this.status(id,requestId,space);
   }
 }
