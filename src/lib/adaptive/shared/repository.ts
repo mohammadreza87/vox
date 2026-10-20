@@ -54,6 +54,17 @@ const documentSchema = z.object({ schemaVersion: z.literal(1), namespace: id, re
 export class SharedMemoryRepository {
   constructor(readonly storage: AdaptiveStorage, readonly namespace = 'studio') {}
   private get key(): string { return `shared-memory:v1:${this.namespace}`; }
+  /** Canonical shared aggregate, synchronously validated. No text is returned by
+   * the service authority projection; this is not a shared-body index. */
+  readCommittedForEffect(): SharedDocument {
+    const snapshot = this.storage.readCommittedForEffect?.(`shared-memory:v1:${this.namespace}`);
+    if (!snapshot || snapshot.status !== 'ready') throw new Error('Shared authority unavailable');
+    const document: SharedDocument = snapshot.document === null
+      ? { schemaVersion: 1, namespace: this.namespace, revision: 0, containers: [], previews: [], events: [] }
+      : documentSchema.parse(snapshot.document);
+    if (document.namespace !== this.namespace || Buffer.byteLength(JSON.stringify(document)) > 650_000) throw new Error('Invalid shared memory document');
+    return document;
+  }
   transaction<T>(fn: (document: SharedDocument) => T): Promise<T> {
     const scope = activeReadScope();
     return scope ? this.served(scope, fn) : this.committed(fn);

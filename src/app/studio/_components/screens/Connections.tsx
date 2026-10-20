@@ -83,17 +83,17 @@ export function ConnectionsScreen({ onBack, agentId }: { onBack: () => void; age
   const closeDetail = () => { setSelected(null); setReview(null); setAdding(false); };
 
   return <section className="vx-scroll vx-privacy" dir={locale === 'fa' ? 'rtl' : 'ltr'} lang={locale} aria-busy={busy}>
-    <TopBar onBack={selected || review || adding ? closeDetail : onBack} backLabel={c.back} />
-    <header className="vx-privacy-heading"><span className="vx-privacy-symbol"><Icon name="shield" size={28} /></span>
-      <div><p className="vx-over">{c.subtitle}</p><h1 className="vx-title" tabIndex={-1} ref={heading}>{review ? c.review : selected ? c.reviewAccess : adding ? c.chooseService : c.title}</h1></div>
+    <div style={{ margin: '-12px -16px 0' }}><TopBar onBack={selected || review || adding ? closeDetail : onBack} backLabel={c.back} /></div>
+    <header className="vx-privacy-heading" style={{ alignItems: 'flex-end' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0, flex: '1 1 200px' }}><p className="vx-over">{c.subtitle}</p><h1 className="vx-title" tabIndex={-1} ref={heading}>{review ? c.review : selected ? c.reviewAccess : adding ? c.chooseService : c.title}</h1></div>
       <label className="vx-small">{c.language}<select className="vx-input" value={locale} disabled={busy || !!flow && flow.status === 'pending'} onChange={e => setLocale(e.target.value as ConnectionsLocale)}><option value="en">English</option><option value="fa">فارسی</option></select></label>
     </header>
     <p className="vx-2">{c.intro}</p>
     <div className="vx-privacy-spaces" role="group" aria-label={c.title}>{(['work', 'personal'] as const).map(value => <button key={value} className="vx-btn vx-btn-secondary" aria-pressed={space === value} disabled={busy || !!flow && flow.status === 'pending'} onClick={() => setSpace(value)}>{c[value]}</button>)}</div>
-    <p className="vx-small vx-2"><Icon name="lock" size={14} /> {c.audience}</p>
+    <p className="vx-small vx-2" style={{ display: 'flex', alignItems: 'center', gap: 6 }}><Icon name="lock" size={14} /> {c.audience}</p>
     {error && <div className="vx-banner danger" role="alert">{error}<button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy} onClick={() => void refresh()}>{c.refresh}</button></div>}
     {status && <p className="vx-banner info" role="status">{status}</p>}
-    {!data && !error && <p role="status"><Spinner /> {c.loading}</p>}
+    {!data && !error && <div role="status" className="vx-small vx-2" style={{ display: 'flex', alignItems: 'center', gap: 8 }}><Spinner /> {c.loading}</div>}
     {data && <>
       {!data.enabled && <p className="vx-banner info">{c.unavailable}</p>}
       {data.modelProcessor && <p className="vx-small vx-2">{c.processor} <bdi>{data.modelProcessor.provider} · {data.modelProcessor.model}</bdi>.</p>}

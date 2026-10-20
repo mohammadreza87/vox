@@ -57,7 +57,10 @@ async function setup() {
 
 it('uses the real production LLM adapter with selected notes only, ephemeral preview and explicit idempotent acceptance', async () => {
   const f = await setup(); const before = await f.adaptive.withAccountDocument(123, d => JSON.stringify(d));
+  const complete = vi.spyOn(f.llm, 'complete');
   const preview = await f.service.preview(123, f.input);
+  // Thinking shares the cap: low effort with headroom for a full 2000-character draft.
+  expect(complete.mock.calls[0][0]).toMatchObject({ maxTokens: 2048, effort: 'low', temperature: 0, requireComplete: true });
   expect(f.create).toHaveBeenCalledOnce(); const sent = JSON.stringify(f.create.mock.calls);
   expect(sent).toContain('Launch is March 5.'); expect(sent).not.toContain('UNSELECTED_PRIVATE_CANARY'); expect(sent).not.toContain('authorize');
   expect(await f.adaptive.withAccountDocument(123, d => JSON.stringify(d))).toBe(before);
@@ -140,8 +143,12 @@ it.each(['busy', 'malformed', 'source_deleted'] as const)('the synchronous real-
 it('withholds provider output after revocation and rejects a source deletion just before the acceptance transaction', async () => {
   const f = await setup(); f.create.mockImplementationOnce(async () => { await f.removeSource(); return { content: [{ type: 'text', text: 'MUST_NOT_DELIVER' }], stop_reason: 'end_turn', usage: { input_tokens: 12, output_tokens: 8 } }; });
   await expect(f.service.preview(123, f.input)).rejects.toMatchObject({ code: 'reviewed_memory_changed' });
-  const g = await setup(), preview = await g.service.preview(123, g.input), transaction = g.adaptive.withAccountDocument.bind(g.adaptive); let calls = 0;
-  vi.spyOn(g.adaptive, 'withAccountDocument').mockImplementation(async (id, fn) => { if (++calls === 2) await g.removeSource(); return transaction(id, fn); });
+  const g = await setup(), preview = await g.service.preview(123, g.input), transaction = g.adaptive.withAccountDocument.bind(g.adaptive);
+  vi.spyOn(g.adaptive, 'withAccountDocument').mockImplementation(async (id, fn, beforeCommit) => {
+    // Target the acceptance write, independent of incidental read preflights.
+    if (beforeCommit) await g.removeSource();
+    return transaction(id, fn, beforeCommit);
+  });
   await expect(g.service.accept(123, g.accept(preview))).rejects.toMatchObject({ code: 'reviewed_memory_changed' });
   expect(await transaction(123, d => d.memories.some(row => row.sourceRefs))).toBe(false);
 });

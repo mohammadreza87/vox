@@ -1,0 +1,37 @@
+# Read-only preview inventory / فهرست فقط‌خواندنی پیش‌نمایش
+
+Firebase preview creation can fail with HTTP 429 when the site has reached its channel quota. The preview workflow now attempts a bounded read-only inventory after a successful or failed deployment attempt, provided CLI preparation succeeded and the job was not cancelled. Deployment and inventory outcomes remain separate; inventory cannot turn a failed deployment into success.
+
+The script uses the existing runner service account and project. It checks the credential's project and fixes the requested default site to that project. It accepts the documented `sites/SITE_ID/channels/CHANNEL_ID` response and the observed `projects/PROJECT_ID/sites/SITE_ID/channels/CHANNEL_ID` spelling only when both project and site match the trusted requested project exactly. Both forms share all ID, duplicate, expiry and output checks; numeric or other project labels and foreign sites remain rejected. No IAM roles, secrets, workflow triggers, channel deletion or channel reuse are added.
+
+Output contains channel counts and up to 100 PR-shaped channel IDs with expiry timestamps or explicit `null`. Live and other channels are counted separately; other labels are omitted. Omitted PR counts and completeness are explicit. A missing expiry does not establish cleanup eligibility. The existing preview comment now promises only its configured seven-day expiry.
+
+Credential files use a private temporary directory and restrictive modes. The child runs the unmodified cached Firebase CLI 15.34.0 with an allowlisted environment. Raw provider output and debug logs are not published; failures use bounded codes. Temporary files are removed after success, failure, timeout or handled signals. Forced runner termination cannot execute cleanup.
+
+The inventory has a 30-second deadline, 1 MiB stdout limit, 32 KiB stderr limit and 1,000-channel response limit. CLI pagination completes before projection. These are deadline/output limits; the CLI's internal accumulated pages do not have a strict heap bound. Malformed, oversized or foreign-site results produce no partial totals.
+
+Initial local validation covers 14 synthetic script tests, six independent wrapper checks, two canonical-name/nullable-expiry probes and all 64 workflow-condition combinations. These checks use fictional credentials and local fake CLI processes. Successful live inventory totals and any subsequent cleanup decision require separate evidence. This feature does not establish production readiness of the conversation system.
+
+The first runner attempt at `f20afea` built successfully, encountered the existing channel-quota error, then rejected the inventory response with `UNEXPECTED_SCOPE`; it emitted no counts. The diagnostic revision added fixed failure categories for project-qualified resource forms, foreign sites and malformed names while preserving all prior rejections. Numeric project labels do not prove ownership, and no raw resource values enter diagnostics. Three additional synthetic tests cover classification, malformed input and actual wrapper error output/cleanup.
+
+The subsequent diagnostic run at `82db466` returned `UNEXPECTED_SCOPE_PROJECT_EXACT`, identifying the exact requested textual project and site without logging their values. The follow-up compatibility contract accepts only that equivalent spelling and preserves both failed-run receipts. Three further tests cover equivalent/mixed aliases, shared duplicate detection, control-character rejection and actual wrapper output/cleanup. Explicit trailing-control tests also pass on the existing baseline validation; no pre-existing control-character bypass is claimed. Successful live counts remain unverified.
+
+References: [Firebase Channel resource](https://firebase.google.com/docs/reference/hosting/rest/v1beta1/sites.channels), [paginated channel listing](https://firebase.google.com/docs/reference/hosting/rest/v1beta1/sites.channels/list).
+
+---
+
+ایجاد پیش‌نمایش Firebase ممکن است به‌دلیل پرشدن سهمیهٔ کانال‌های سایت با خطای HTTP 429 متوقف شود. گردش‌کار اکنون پس از تلاش موفق یا ناموفق استقرار، در صورت آماده‌بودن CLI و لغونشدن کار، فهرست‌گیری محدود و فقط‌خواندنی انجام می‌دهد. نتیجهٔ فهرست‌گیری و استقرار جدا است و موفقیت فهرست‌گیری شکست استقرار را پنهان نمی‌کند.
+
+این ابزار از حساب سرویس و پروژهٔ موجود runner استفاده می‌کند و پروژهٔ اعتبارنامه و سایت پیش‌فرض درخواست را تطبیق می‌دهد. قالب مستند `sites/SITE_ID/channels/CHANNEL_ID` و قالب مشاهده‌شدهٔ `projects/PROJECT_ID/sites/SITE_ID/channels/CHANNEL_ID` فقط با تطابق دقیق پروژه و سایت با پروژهٔ معتبر درخواست پذیرفته می‌شوند. هر دو قالب از بررسی یکسان شناسه، تکرار، انقضا و خروجی عبور می‌کنند؛ پروژهٔ عددی یا دیگر و سایت متفاوت همچنان رد می‌شوند. هیچ نقش IAM، secret، trigger، حذف کانال یا استفادهٔ مجدد از کانال اضافه نشده است.
+
+خروجی شامل شمارنده‌ها و حداکثر ۱۰۰ شناسهٔ کانال PR همراه با انقضا یا مقدار صریح `null` است. کانال live و سایر کانال‌ها جدا شمرده می‌شوند؛ نام سایر کانال‌ها نمایش داده نمی‌شود. تعداد موارد حذف‌شده از نمایش و کامل‌بودن فهرست PR روشن است. نبود زمان انقضا مجوز پاک‌سازی نیست. متن پیش‌نمایش فقط انقضای تنظیم‌شدهٔ هفت‌روزه را اعلام می‌کند.
+
+اعتبارنامه در پوشهٔ موقت خصوصی و فایل با دسترسی محدود نگهداری می‌شود. فرایند فرزند CLI اصلی نسخهٔ 15.34.0 را با محیط محدود اجرا می‌کند. خروجی خام ارائه‌دهنده و گزارش‌های debug منتشر نمی‌شوند و خطاها فقط با کدهای محدود گزارش می‌شوند. فایل‌های موقت پس از موفقیت، خطا، مهلت یا سیگنال قابل‌مدیریت حذف می‌شوند؛ توقف اجباری runner امکان اجرای پاک‌سازی را ندارد.
+
+محدودیت‌ها شامل مهلت ۳۰ ثانیه، خروجی استاندارد ۱ MiB، خروجی خطای ۳۲ KiB و حداکثر ۱۰۰۰ کانال است. صفحه‌بندی CLI پیش از خلاصه‌سازی کامل می‌شود؛ این محدودیت‌ها سقف قطعی حافظهٔ داخلی CLI نیستند. پاسخ نامعتبر، بیش‌ازحد بزرگ یا متعلق به سایت دیگر هیچ جمع ناقصی تولید نمی‌کند.
+
+شواهد محلی اولیه شامل ۱۴ آزمون مصنوعی، شش بررسی مستقل wrapper، دو بررسی قالب نام و انقضای خالی و ۶۴ ترکیب شرط گردش‌کار است. آزمون‌ها از اعتبارنامهٔ ساختگی و CLI محلی جعلی استفاده می‌کنند. دریافت موفق شمارنده‌های زنده و هر تصمیم پاک‌سازی به شواهد جدا نیاز دارد. این قابلیت تأیید آمادگی سامانهٔ گفتگو برای تولید نیست.
+
+اولین اجرای runner روی `f20afea` ساخت موفق داشت، با خطای سهمیهٔ موجود روبه‌رو شد و سپس پاسخ فهرست را با `UNEXPECTED_SCOPE` رد کرد؛ هیچ شمارنده‌ای منتشر نشد. نسخهٔ تشخیصی فقط دسته‌های ثابت خطا برای قالب نام دارای پروژه، سایت دیگر و نام نامعتبر اضافه کرد و تمام ردهای قبلی را حفظ کرد. برچسب عددی پروژه اثبات مالکیت نیست و هیچ مقدار خام منبع در خطا نمایش داده نمی‌شود. سه آزمون مصنوعی دیگر دسته‌بندی، ورودی نامعتبر و خروجی خطا و پاک‌سازی wrapper واقعی را پوشش می‌دهند.
+
+اجرای تشخیصی بعدی روی `82db466` مقدار `UNEXPECTED_SCOPE_PROJECT_EXACT` را برگرداند و تطابق دقیق پروژهٔ متنی و سایت درخواست را بدون نمایش مقادیر مشخص کرد. قرارداد سازگاری بعدی فقط همین قالب معادل را می‌پذیرد و شواهد هر دو اجرای ناموفق حفظ می‌شوند. سه آزمون دیگر برابری و ترکیب قالب‌ها، تشخیص تکرار مشترک، رد نویسه‌های کنترلی و خروجی و پاک‌سازی wrapper واقعی را پوشش می‌دهند. آزمون نویسه‌های کنترلی انتهایی روی اعتبارسنجی مبنا نیز موفق است؛ وجود نقص قبلی در این مورد ادعا نمی‌شود. دریافت موفق شمارنده‌های زنده هنوز تأیید نشده است.

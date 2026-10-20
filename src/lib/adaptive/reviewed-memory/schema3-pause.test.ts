@@ -1,0 +1,44 @@
+import {afterEach,expect,it} from 'vitest';
+import {mkdtempSync,realpathSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {randomUUID} from 'node:crypto';
+import {AdaptiveRepository,accountIdFor} from '../persistence/repository';
+import {AdaptiveService} from '../persistence/service';
+import {adaptiveOptionsFromManifest} from '../persistence/config';
+import {SqliteAdaptiveStorage} from '../persistence/indexed/sqlite-storage';
+import {ManagedFileV2Storage,type ManagedAdaptiveStorage} from '../persistence/indexed/managed-storage';
+import {RightsUseHoldService} from '../rights-use-holds/service';
+import {ProductPauseService} from '../product-pause/service';
+import {ReviewedMemoryService} from './service';
+import {MessageMemoryService} from '../message-memory/service';
+import type {LLM} from '../../tireh/llm';
+const NOW=1800000000000,dirs:string[]=[],stores:ManagedAdaptiveStorage[]=[];
+afterEach(()=>{for(const s of stores.splice(0))s.close();for(const d of dirs.splice(0))rmSync(d,{recursive:true,force:true});});
+for(const format of ['sqlite','file'] as const)for(const tool of ['reviewed','message'] as const)it(`${format} ${tool}: rights hold preserves deliberate tool, schema3 pause/resume permanently invalidates old preview`,async()=>{
+ const dir=mkdtempSync(join(realpathSync(tmpdir()),'vox-rf1-selected-note-'));dirs.push(dir);
+ const storage=format==='sqlite'?new SqliteAdaptiveStorage(join(dir,'state.sqlite'),{now:()=>NOW,newStoreSeed:{generation:1,lifecycleWatermark:0,schemaVersion:3}}):new ManagedFileV2Storage(join(dir,'state'),{now:()=>NOW,newStoreSeed:{generation:1,lifecycleWatermark:0,schemaVersion:3}});stores.push(storage);
+ const accountId=accountIdFor(123),options=adaptiveOptionsFromManifest(JSON.stringify({schemaVersion:1,configurationVersion:'synthetic',enabledCapabilities:['core_text'],accounts:[{accountId,jurisdictionKeys:['SYNTHETIC'],allowDeclaredAdult:true}],approvals:[{schemaVersion:1,id:'synthetic-core',revision:1,createdAt:NOW,updatedAt:NOW,jurisdiction:'SYNTHETIC',capability:'core_text',state:'approved',configurationVersion:'synthetic',effectiveAt:NOW,reviewExpiresAt:NOW+3600000,owner:'synthetic',approvalReference:'synthetic'}]}));
+ const adaptive=new AdaptiveService(new AdaptiveRepository(storage),{...options,now:()=>NOW});await adaptive.confirm(123,{confirm:true,adultConfirmed:true});
+ await adaptive.setAgentAccess(123,'agent',{space:'work',allowed:true,expectedRevision:(await adaptive.read(123,'work')).revision,eventId:randomUUID()});
+ for(const text of ['Synthetic selected source.','Second synthetic selected source.'])await adaptive.createMemory(123,{space:'work',text,expectedRevision:(await adaptive.read(123,'work')).revision,eventId:randomUUID()});
+ const llm:LLM={identity:{provider:'synthetic-local-only',model:'synthetic'},committedExportFence:true,complete:async request=>{if(request.authorize && !await request.authorize() || request.authorizeNow && !request.authorizeNow())throw Error('Synthetic authority denied');return tool==='reviewed'?'REVIEWED_DRAFT: Synthetic selected-note claim.':JSON.stringify({claims:['Synthetic selected-text claim.']});}};
+ const common={llm,secret:'synthetic-selected-note-qa-secret-32-plus',now:()=>NOW,agentAuthority:async()=> 'synthetic-studio-authority',agentAuthorityNow:()=> 'synthetic-studio-authority'};
+ const reviewed=new ReviewedMemoryService(adaptive,common),message=new MessageMemoryService(adaptive,common);
+ const sources=(await adaptive.read(123,'work')).memories.map(m=>({id:m.id,revision:m.revision}));
+ const preview=async()=>tool==='reviewed'?{tool:'reviewed' as const,value:await reviewed.preview(123,{space:'work',agentId:'agent',locale:'en',sourceRefs:sources})}:{tool:'message' as const,value:await message.preview(123,{space:'work',agentId:'agent',locale:'en',text:'Synthetic current selected text.'})};
+ const accept=async(p:Awaited<ReturnType<typeof preview>>)=>p.tool==='reviewed'?reviewed.accept(123,{space:'work',agentId:'agent',text:p.value.text,receipt:p.value.receipt}):message.accept(123,{space:'work',agentId:'agent',claims:p.value.claims,sourceTextHash:p.value.sourceTextHash,receipt:p.value.receipt});
+ const beforeHold=await preview(),holds=new RightsUseHoldService(adaptive),scope={space:'work',purpose:'optional.personalization'} as const,read=holds.inspectNow(123,scope,()=>{});if(read.status!=='ready')throw Error('Missing authority');
+ await holds.apply(123,{version:1,scope,effectId:randomUUID(),requestId:randomUUID(),expectedCanonicalRevision:read.value.accountRevision,expectedUseEpoch:0,applyIntentDigest:'a'.repeat(64),policy:{id:'synthetic',revision:1,digest:'b'.repeat(64),approvalReference:'synthetic',decisionReference:'synthetic'},notice:{version:'synthetic',digest:'c'.repeat(64)},reviewAt:NOW+60000,metadataRetainUntil:NOW+86400000,replayRetainUntil:NOW+172800000},()=>{});
+ await expect(accept(beforeHold)).resolves.toBeDefined();const old=await preview();
+ const pause=new ProductPauseService(adaptive);await pause.command(123,{version:1,space:'work',eventId:'synthetic-pause-event-00001',expectedCommandSeq:0,action:'pause'});
+ if(tool==='reviewed')await expect(preview()).rejects.toBeDefined();
+ else {
+  const paused=await preview();await expect(accept(paused)).resolves.toBeDefined();
+ }
+ const pausedReceipt=tool==='message'?await preview():undefined;
+ await pause.command(123,{version:1,space:'work',eventId:'synthetic-resume-event-0001',expectedCommandSeq:1,action:'resume'});
+ await expect(accept(old)).rejects.toMatchObject({code:tool==='reviewed'?'reviewed_memory_changed':'message_memory_changed'});
+ if(pausedReceipt)await expect(accept(pausedReceipt)).rejects.toMatchObject({code:'message_memory_changed'});
+ await expect(accept(await preview())).resolves.toBeDefined();expect(holds.inspectNow(123,scope,()=>{})).toMatchObject({status:'ready',value:{effectiveBlocked:true,useEpoch:1}});
+});

@@ -27,6 +27,10 @@ export const viewport = {
 // This MUST set the class before any CSS loads to prevent flash
 const themeScript = `
   (function() {
+    if (window.location.pathname === '/privacy' || window.location.pathname.startsWith('/privacy/')) {
+      if (window.matchMedia('(prefers-color-scheme: dark)').matches) document.documentElement.classList.add('dark');
+      return;
+    }
     function getTheme() {
       try {
         var stored = localStorage.getItem('theme');
@@ -70,7 +74,6 @@ export default function RootLayout({
     <html lang="en" suppressHydrationWarning>
       <head>
         {/* Telegram WebApp SDK - must load before app for Mini App detection */}
-        <script src="https://telegram.org/js/telegram-web-app.js" />
         {/* Theme color for browser UI - will be updated by themeScript */}
         <meta name="theme-color" content="#f5f5f7" />
         {/* PWA meta tags */}

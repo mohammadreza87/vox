@@ -1,3 +1,4 @@
+import {assertExportAuthority, ExportAuthorityError} from '../voice';
 /**
  * Minimal Telegram Bot API client for persona bots. One instance per bot.
  * `fetch` is injectable so the whole gateway can be tested offline.
@@ -71,6 +72,15 @@ type FetchFn = typeof fetch;
 
 const CONNECT_RETRY_DELAYS_MS = [250, 1000];
 
+function retryDelay(milliseconds: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const abort = () => {clearTimeout(timer); signal?.removeEventListener('abort', abort); reject(new ExportAuthorityError());};
+    const timer = setTimeout(() => {signal?.removeEventListener('abort', abort); resolve();}, milliseconds);
+    if (signal?.aborted) abort();
+    else signal?.addEventListener('abort', abort, {once: true});
+  });
+}
+
 function isConnectTimeout(error: unknown): boolean {
   if (!(error instanceof TypeError)) return false;
   const cause = error.cause;
@@ -85,6 +95,7 @@ export class TelegramApiError extends Error {
 }
 
 export class TelegramBotClient {
+  readonly committedSendFence = true as const;
   private readonly base: string;
   private readonly fileBase: string;
 
@@ -93,7 +104,7 @@ export class TelegramBotClient {
     this.fileBase = `https://api.telegram.org/file/bot${token}`;
   }
 
-  private async call<T>(method: string, body: Record<string, unknown> | FormData, signal?: AbortSignal): Promise<T> {
+  private async call<T>(method: string, body: Record<string, unknown> | FormData, signal?: AbortSignal, authorizeNow?: () => boolean): Promise<T> {
     const isForm = body instanceof FormData;
     const options: RequestInit = {
       method: 'POST',
@@ -104,6 +115,7 @@ export class TelegramBotClient {
     let response: Response;
     for (let attempt = 0; ; attempt++) {
       try {
+        assertExportAuthority({signal, authorizeNow});
         response = await this.fetchFn(`${this.base}/${method}`, options);
         break;
       } catch (error) {
@@ -112,7 +124,7 @@ export class TelegramBotClient {
         // accepted a message, so replaying those could send duplicate replies.
         const delay = CONNECT_RETRY_DELAYS_MS[attempt];
         if (delay === undefined || !isConnectTimeout(error)) throw error;
-        await new Promise<void>((resolve) => setTimeout(resolve, delay));
+        await retryDelay(delay, signal);
       }
     }
     // Response/body errors must not replay a potentially accepted POST.
@@ -124,20 +136,20 @@ export class TelegramBotClient {
   sendMessage(
     chatId: number,
     text: string,
-    options: { replyTo?: number; keyboard?: InlineKeyboard; signal?: AbortSignal } = {}
+    options: { replyTo?: number; keyboard?: InlineKeyboard; signal?: AbortSignal; authorizeNow?: () => boolean } = {}
   ): Promise<TelegramMessage> {
     return this.call('sendMessage', {
       chat_id: chatId,
       text: text.slice(0, 4096),
       ...(options.replyTo ? { reply_parameters: { message_id: options.replyTo, allow_sending_without_reply: true } } : {}),
       ...(options.keyboard ? { reply_markup: options.keyboard } : {}),
-    }, options.signal);
+    }, options.signal, options.authorizeNow);
   }
 
   sendVoice(
     chatId: number,
     audio: ArrayBuffer,
-    options: { caption?: string; replyTo?: number; mimeType?: string; filename?: string } = {}
+    options: { caption?: string; replyTo?: number; mimeType?: string; filename?: string; signal?: AbortSignal; authorizeNow?: () => boolean } = {}
   ): Promise<TelegramMessage> {
     const form = new FormData();
     form.append('chat_id', String(chatId));
@@ -150,7 +162,7 @@ export class TelegramBotClient {
     if (options.replyTo) {
       form.append('reply_parameters', JSON.stringify({ message_id: options.replyTo, allow_sending_without_reply: true }));
     }
-    return this.call('sendVoice', form);
+    return this.call('sendVoice', form, options.signal, options.authorizeNow);
   }
 
   sendChatAction(chatId: number, action: 'typing' | 'record_voice'): Promise<boolean> {

@@ -37,12 +37,21 @@ export type Route =
 
 interface Nav {
   push(r: Route): void;
+  /** Back as the person means it: an active back guard takes it first, otherwise one screen is popped. */
   back(): void;
   /** Replace the whole stack (first route is the tab underneath). */
   reset(...routes: Route[]): void;
   toast(message: string, tone?: 'info' | 'error'): void;
   me: Me;
   refreshMe(): Promise<void>;
+  /**
+   * While registered, Back (Telegram's button, `back()`, a screen's top bar) calls `onBack`
+   * instead of leaving the screen, e.g. to close an open sheet. Guards stack: the newest wins.
+   * Returns the unregister function; call it when the guard ends and on unmount.
+   */
+  guardBack(onBack: () => void): () => void;
+  /** Offers one Back press to the newest guard; true when a guard took it. For screens whose Back is not a plain pop. */
+  consumeBack(): boolean;
 }
 
 const NavContext = createContext<Nav | null>(null);
@@ -119,11 +128,38 @@ export function StudioApp() {
     }
   }, [me]);
 
+  // Back guards (an open sheet): while one is registered, Back closes it instead of leaving the screen.
+  const backGuards = useRef<Array<{ onBack: () => void }>>([]);
+  const stackDepth = useRef(1);
+  const syncBackButton = useCallback(() => {
+    const button = tg()?.BackButton;
+    if (!button) return;
+    if (stackDepth.current > 1 || backGuards.current.length) button.show(); else button.hide();
+  }, []);
+  const consumeBack = useCallback(() => {
+    const guard = backGuards.current[backGuards.current.length - 1];
+    guard?.onBack();
+    return !!guard;
+  }, []);
+  const goBack = useCallback(() => {
+    if (consumeBack() || correctionOwner.current) return;
+    setStack((s) => (s.length > 1 ? s.slice(0, -1) : s));
+  }, [consumeBack]);
+  const guardBack = useCallback((onBack: () => void) => {
+    const guard = { onBack };
+    backGuards.current = [...backGuards.current, guard];
+    syncBackButton();
+    return () => {
+      backGuards.current = backGuards.current.filter((g) => g !== guard);
+      syncBackButton();
+    };
+  }, [syncBackButton]);
+
   const nav: Nav | null = me && {
     me,
     refreshMe: loadMe,
     push: (r) => { if (correctionOwner.current) return; haptic.tap(); setStack((s) => [...s, r]); },
-    back: () => { if (!correctionOwner.current) setStack((s) => (s.length > 1 ? s.slice(0, -1) : s)); },
+    back: goBack,
     reset: (...routes) => { if (!correctionOwner.current) setStack(routes.length ? routes : [{ name: 'home' }]); },
     toast: (message, tone = 'info') => {
       if (tone === 'error') haptic.error();
@@ -131,17 +167,19 @@ export function StudioApp() {
       clearTimeout(toastTimer.current);
       toastTimer.current = setTimeout(() => setToast(null), 3200);
     },
+    guardBack,
+    consumeBack,
   };
 
-  // Telegram's native back button mirrors the in-app stack.
+  // Telegram's native back button mirrors the in-app stack (and any open guard).
   useEffect(() => {
+    stackDepth.current = stack.length;
     const back = tg()?.BackButton;
     if (!back) return;
-    const onBack = () => { if (!correctionOwner.current) setStack((s) => (s.length > 1 ? s.slice(0, -1) : s)); };
-    if (stack.length > 1) back.show(); else back.hide();
-    back.onClick(onBack);
-    return () => back.offClick(onBack);
-  }, [stack.length]);
+    syncBackButton();
+    back.onClick(goBack);
+    return () => back.offClick(goBack);
+  }, [stack.length, goBack, syncBackButton]);
 
   if (error) {
     return (
@@ -216,7 +254,7 @@ export function StudioApp() {
                       style={{ position: 'absolute', inset: 0, borderRadius: 999, background: '#282D35' }} />}
                     <span style={{ position: 'relative', display: 'flex' }}><Icon name={t.icon} /></span>
                   </span>
-                  {t.label}
+                  <span className="vx-tab-label">{t.label}</span>
                 </button>
               );
             })}

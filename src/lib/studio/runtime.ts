@@ -1,4 +1,15 @@
+import { createStudioRequestedRoutines } from './requested-routines';
+import { RightsUseHoldService } from '../adaptive/rights-use-holds/service';
+import { lstatSync } from 'node:fs';
+import { RightsFileStorage } from '../adaptive/rights-intake/storage';
+import { RightsIntakeService } from '../adaptive/rights-intake/service';
+import { RightsRepository } from '../adaptive/rights-intake/repository';
+import { parseRightsPolicy } from '../adaptive/rights-intake/policy';
+import { assertRightsAccountNow } from './rights-http';
 import { createStudioPreferenceLearning } from './preference-learning';
+import { FileExperimentStorage } from '../adaptive/experiments/storage';
+import { ControlledExperimentService } from '../adaptive/experiments/service';
+import { StudioExperimentRuntime } from '../adaptive/experiments/runtime';
 /**
  * Production wiring for Vox Studio, from environment variables.
  *
@@ -13,6 +24,8 @@ import { createStudioPreferenceLearning } from './preference-learning';
  *   ELEVENLABS_API_KEY       voice design, voice library, speech
  *   STUDIO_WEBAPP_URL        public https URL of /studio (menu button)
  *   STUDIO_DATA_DIR          default ./.vox-studio (file storage)
+ *   STUDIO_ADAPTIVE_FORMAT   file (default), sqlite-v1 or file-v2; managed formats
+ *                            require an explicit quiesced transition before startup
  *   STUDIO_MAINTENANCE=1     optional background sweep; requires file storage,
  *                            STUDIO_BOTS=1 and a persistent polling process
  *   STUDIO_REMINDER_DELIVERY=1  optional Telegram reminders; requires maintenance
@@ -27,6 +40,9 @@ import { createStudioPreferenceLearning } from './preference-learning';
  *   STUDIO_CHAT_MODEL        model for chat replies (default: claude-sonnet-5-5)
  *   STUDIO_VOICE_MODEL       model for live calls (default: claude-haiku-5-5, the fastest)
  *   STUDIO_DECISIONS         off = no OpenAI Decisions triage (default: on with OPENAI_API_KEY)
+ *   STUDIO_SKILL_ROUTING     per-message playbook selection inside triage (docs/SKILL_ROUTING.md):
+ *                            on (default) | shadow (ask and log, replies keep the full craft)
+ *                            | off (never ask). Any other value is treated as off.
  *   STUDIO_WEB_SEARCH        off = agents never search the web (default: on, per-agent toggle)
  *   STUDIO_PERSONA_MODEL     model for persona design (default: stronger Claude model)
  *   STUDIO_ORG_NAME          default HOOR
@@ -34,7 +50,7 @@ import { createStudioPreferenceLearning } from './preference-learning';
 
 import { isAbsolute, join, parse, relative, resolve, sep } from 'path';
 import { AnthropicLLM, type LLM } from '../tireh/llm';
-import { createHash } from 'crypto';
+import { parseSkillRouting } from '../tireh/skill-routing';
 import { createFileStores } from '../tireh/memory/file-store';
 import { FirestoreChatHistoryStore, FirestoreMemoryStore, FirestoreShareOfferStore, FirestoreUpdateDeduper } from '../tireh/memory/firestore-store';
 import { TelegramBotClient } from '../tireh/telegram/client';
@@ -42,7 +58,7 @@ import { ElevenLabsStudio, OpenAIMedia } from './media';
 import { FirestoreStudioStore } from './firestore-store';
 import { FirestoreStudioRateLimiter } from './firestore-ratelimit';
 import { Studio, type StudioDeps } from './service';
-import { StudioStore } from './store';
+import { StudioStore, type StudioStorage } from './store';
 import { RelationshipLoop, FileRelationshipStore, FirestoreRelationshipStore, FileObservationStore, FirestoreObservationStore, SafeRelationshipObserver, OpenAIFollowUpReview, OpenAIRelationshipFeedback } from '../relationships';
 import { StudioRelationshipAssessor } from './relationship-assessor';
 import { relationshipConfig } from './relationship-config';
@@ -51,6 +67,7 @@ import { AdaptiveRelationshipService } from '../adaptive/relationships/service';
 import { AdaptiveRepository } from '../adaptive/persistence/repository';
 import { FileAdaptiveStorage, FirestoreAdaptiveStorage, type AdaptiveStorage } from '../adaptive/persistence/storage';
 import { adaptiveOptionsFromManifest } from '../adaptive/persistence/config';
+import { openLocalAdaptiveStorage, parseAdaptiveStorageFormat, type AdaptiveStorageFormat } from '../adaptive/persistence/runtime-storage';
 import { SharedMemoryRepository } from '../adaptive/shared/repository';
 import { FirestoreRevisionSource } from '../tireh/privacy/revisions';
 import { SharedMemoryService } from '../adaptive/shared/service';
@@ -58,15 +75,35 @@ import { AdaptiveExperienceService } from '../adaptive/runtime/service';
 import { AdaptiveObserverService } from '../adaptive/observation/service';
 import { AdaptiveLifecycleService } from '../adaptive/lifecycle/service';
 import { AdaptiveMaintenanceRunner } from '../adaptive/lifecycle/maintenance';
+import { readMaintenanceHealth } from '../adaptive/lifecycle/maintenance-health';
 import { DecisionService, OpenAIDecisionProvider } from '../adaptive/decisions';
 import { VoiceIdentityService } from '../adaptive/voice-identity/service';
 import { VoiceIdentityRepository } from '../adaptive/voice-identity/repository';
 import { canUseAgent } from './permissions';
-import { groupId } from './org-bridge';
+import { sharedAuthorityFromStudioStore } from './shared-authority';
 import { z } from 'zod';
 import { ImprovementWorkflow } from '../adaptive/improvement/workflow';
 import { validateTrust, type TrustStore } from '../adaptive/improvement/contracts';
 import { createStudioReminderDelivery } from './reminder-delivery';
+import { digest } from '../adaptive/persistence/repository';
+
+/** Internal availability is bound to current committed company roles, never a
+ * bootstrap/environment list. Unsupported distributed synchronous reads deny. */
+export function internalPilotAuthority(store: StudioStorage) {
+  return { currentInternalMember: (accountId: string) => {
+    try {
+      const match = /^telegram-account:([1-9]\d{0,15})$/.exec(accountId);
+      if (!match || !Number.isSafeInteger(Number(match[1]))) return;
+      const state = store.readCommittedForEffect?.();
+      if (!state) return;
+      const rows = state.members.filter(member => member.telegramId === Number(match[1]));
+      if (rows.length !== 1 || !['owner', 'superadmin'].includes(rows[0].role)) return;
+      const revision = rows[0].learningAuthorityRevision ?? 0;
+      if (!Number.isSafeInteger(revision) || revision < 0) return;
+      return { allowed: true, authorityVersion: digest([rows[0].telegramId, rows[0].role, rows[0].joinedAt, revision]) };
+    } catch { return; }
+  } };
+}
 
 function improvementTrust(raw: string | undefined, storage: string): TrustStore | undefined {
   if (!raw?.trim()) return undefined;
@@ -91,6 +128,9 @@ export function parseIds(raw: string | undefined): number[] {
 export function validateStudioConfig(env: NodeJS.ProcessEnv, cwd = process.cwd()) {
   if (!env.STUDIO_SECRET || env.STUDIO_SECRET.trim().length < 32) throw new Error('STUDIO_SECRET (≥32 chars) is required');
   if (!env.ANTHROPIC_API_KEY?.trim()) throw new Error('ANTHROPIC_API_KEY is required');
+  // Parse only: no operational role, age, consent or jurisdiction is inferred.
+  // Invalid supplied policy fails before opening stores or contacting a provider.
+  adaptiveOptionsFromManifest(env.STUDIO_ADAPTIVE_POLICY_JSON);
 
   const production = env.NODE_ENV === 'production';
   const token = env.VOXX_BOT_TOKEN?.trim();
@@ -99,6 +139,7 @@ export function validateStudioConfig(env: NodeJS.ProcessEnv, cwd = process.cwd()
   const webAppUrl = env.STUDIO_WEBAPP_URL?.trim();
   const storage = env.STUDIO_STORAGE?.trim() || 'file';
   if (storage !== 'file' && storage !== 'firestore') throw new Error('STUDIO_STORAGE must be file or firestore');
+  const adaptiveFormat = parseAdaptiveStorageFormat(env.STUDIO_ADAPTIVE_FORMAT, storage, !(env.K_SERVICE || env.FUNCTION_TARGET || env.FUNCTION_NAME || env.VERCEL === '1' || env.STUDIO_PUBLIC_URL?.trim()));
   const mediaBucket = env.STUDIO_MEDIA_BUCKET?.trim() || env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET?.trim();
   let publicUrl = env.STUDIO_PUBLIC_URL?.trim() || undefined;
   if (publicUrl && env.STUDIO_BOTS === '1') throw new Error('STUDIO_PUBLIC_URL webhooks cannot run with STUDIO_BOTS=1 long polling');
@@ -142,7 +183,20 @@ export function validateStudioConfig(env: NodeJS.ProcessEnv, cwd = process.cwd()
   const relationships = relationshipConfig(env);
   const scopedRelationshipsEnabled = env.STUDIO_SCOPED_RELATIONSHIPS === '1';
   const maintenanceEnabled = env.STUDIO_MAINTENANCE === '1';
+  const requestedRoutinesEnabled = env.STUDIO_REQUESTED_ROUTINES === '1';
+  if (requestedRoutinesEnabled && (env.STUDIO_BOTS !== '1' || storage !== 'file' || publicUrl ||
+    env.K_SERVICE || env.FUNCTION_TARGET || env.FUNCTION_NAME || env.VERCEL === '1')) {
+    throw new Error('STUDIO_REQUESTED_ROUTINES=1 requires STUDIO_BOTS=1 with file storage in a persistent polling process');
+  }
   const reminderDeliveryEnabled = env.STUDIO_REMINDER_DELIVERY === '1';
+  if (env.STUDIO_EXPERIMENTS_ENABLED !== undefined && !['', '0', '1'].includes(env.STUDIO_EXPERIMENTS_ENABLED)) {
+    throw new Error('STUDIO_EXPERIMENTS_ENABLED must be 0 or 1');
+  }
+  const experimentsEnabled = env.STUDIO_EXPERIMENTS_ENABLED === '1';
+  if (experimentsEnabled && (storage !== 'file' || adaptiveFormat === 'file' || publicUrl ||
+    env.K_SERVICE || env.FUNCTION_TARGET || env.FUNCTION_NAME || env.VERCEL === '1')) {
+    throw new Error('STUDIO_EXPERIMENTS_ENABLED=1 requires prepared local adaptive storage in a persistent process');
+  }
   // The only scheduler is startBots' in-process interval. Webhooks/serverless
   // have no scheduled maintenance entrypoint and must not advertise activation.
   if (maintenanceEnabled && (env.STUDIO_BOTS !== '1' || storage !== 'file' || publicUrl ||
@@ -153,7 +207,7 @@ export function validateStudioConfig(env: NodeJS.ProcessEnv, cwd = process.cwd()
     throw new Error('STUDIO_REMINDER_DELIVERY=1 requires STUDIO_MAINTENANCE=1 and a configured manager bot');
   }
   const trustedImprovementKeys = improvementTrust(env.STUDIO_IMPROVEMENT_TRUST_JSON, storage);
-  return { production, token, superadminIds, dataDir, webAppUrl, storage, mediaBucket, publicUrl, relationships, scopedRelationshipsEnabled, maintenanceEnabled, reminderDeliveryEnabled, trustedImprovementKeys };
+  return { production, token, superadminIds, dataDir, webAppUrl, storage, adaptiveFormat, mediaBucket, publicUrl, relationships, scopedRelationshipsEnabled, maintenanceEnabled, reminderDeliveryEnabled, experimentsEnabled, requestedRoutinesEnabled, trustedImprovementKeys };
 }
 
 /** STUDIO_WEB_SEARCH=off keeps every agent offline (web searches are billed per search). */
@@ -173,20 +227,23 @@ async function toJpeg(data: Buffer): Promise<Buffer> {
 }
 
 const g = globalThis as unknown as { __voxStudio?: Promise<Studio>; __voxPreferenceTasks?: Studio['deps']['preferenceLearning'];
-  __voxPreferenceStop?: Promise<{ pending: number }>; __voxPreferenceHooks?: boolean };
+  __voxPreferenceStop?: Promise<{ pending: number }>; __voxPreferenceHooks?: boolean; __voxAdaptiveClose?: () => void; __voxAdaptiveExitHook?: boolean };
 export function stopStudioPreferenceLearning(): Promise<{ pending: number }> {
   return g.__voxPreferenceStop = g.__voxPreferenceTasks?.tasks.close() ?? Promise.resolve({ pending: 0 });
 }
 
-type RuntimeStorage = Pick<StudioDeps, 'store' | 'memory' | 'rateLimiter' | 'adaptive' | 'relationshipStore' | 'observations' | 'revisions'> & { sharedStorage: AdaptiveStorage; voiceIdentityStorage: AdaptiveStorage; maintenanceStorage: AdaptiveStorage };
-function fileStorage(dir: string, scopedRelationshipsEnabled: boolean): RuntimeStorage {
-  return { store: new StudioStore(dir), memory: createFileStores(join(dir, 'memory.json')),
+type RuntimeStorage = Pick<StudioDeps, 'store' | 'memory' | 'rateLimiter' | 'adaptive' | 'relationshipStore' | 'observations' | 'revisions'> & { sharedStorage: AdaptiveStorage; voiceIdentityStorage: AdaptiveStorage; maintenanceStorage: AdaptiveStorage; closeAdaptive?: () => void };
+function fileStorage(dir: string, scopedRelationshipsEnabled: boolean, format: AdaptiveStorageFormat): RuntimeStorage {
+  const managed = openLocalAdaptiveStorage(join(dir, 'adaptive'), format);
+  try { const store = new StudioStore(dir);
+    return { store, memory: createFileStores(join(dir, 'memory.json')),
     relationshipStore: new FileRelationshipStore(join(dir, 'scoped-relationships-v1.json')), observations: new FileObservationStore(join(dir, 'scoped-relationship-observations-v1.json')),
-    adaptive: new AdaptiveService(new AdaptiveRepository(new FileAdaptiveStorage(join(dir, 'adaptive'))),
-      { ...adaptiveOptionsFromManifest(process.env.STUDIO_ADAPTIVE_POLICY_JSON), scopedRelationshipsEnabled }),
+    adaptive: new AdaptiveService(new AdaptiveRepository(managed.storage),
+      { ...adaptiveOptionsFromManifest(process.env.STUDIO_ADAPTIVE_POLICY_JSON, internalPilotAuthority(store)), scopedRelationshipsEnabled }),
     sharedStorage: new FileAdaptiveStorage(join(dir, 'shared-memory')),
     voiceIdentityStorage: new FileAdaptiveStorage(join(dir, 'voice-identity')),
-    maintenanceStorage: new FileAdaptiveStorage(join(dir, 'adaptive-maintenance')) };
+    maintenanceStorage: new FileAdaptiveStorage(join(dir, 'adaptive-maintenance')), closeAdaptive: managed.close };
+  } catch (error) { managed.close(); throw error; }
 }
 
 async function firestoreStorage(bucketName: string, scopedRelationshipsEnabled: boolean): Promise<RuntimeStorage> {
@@ -194,10 +251,11 @@ async function firestoreStorage(bucketName: string, scopedRelationshipsEnabled: 
   const { getStorage } = await import('firebase-admin/storage');
   const db = await getAdminDb();
   const bucket = getStorage(await getAdminApp()).bucket(bucketName);
+  const store = new FirestoreStudioStore(db, bucket);
   return {
-    store: new FirestoreStudioStore(db, bucket),
+    store,
     adaptive: new AdaptiveService(new AdaptiveRepository(new FirestoreAdaptiveStorage(db)),
-      { ...adaptiveOptionsFromManifest(process.env.STUDIO_ADAPTIVE_POLICY_JSON), scopedRelationshipsEnabled }),
+      { ...adaptiveOptionsFromManifest(process.env.STUDIO_ADAPTIVE_POLICY_JSON, internalPilotAuthority(store)), scopedRelationshipsEnabled }),
     sharedStorage: new FirestoreAdaptiveStorage(db, 'adaptiveSharedMemory'),
     voiceIdentityStorage: new FirestoreAdaptiveStorage(db, 'adaptiveVoiceIdentity'),
     maintenanceStorage: new FirestoreAdaptiveStorage(db, 'adaptiveMaintenance'),
@@ -218,139 +276,178 @@ async function firestoreStorage(bucketName: string, scopedRelationshipsEnabled: 
 async function create(): Promise<Studio> {
   const env = process.env;
   const config = validateStudioConfig(env);
-  const storage = config.storage === 'firestore' ? await firestoreStorage(config.mediaBucket!, config.scopedRelationshipsEnabled) : fileStorage(config.dataDir, config.scopedRelationshipsEnabled);
-  // Load and persist once so corrupt state or unwritable storage fails startup.
-  if (config.production) {
-    if (config.storage === 'file') await storage.store.update(() => undefined);
-    else await storage.store.read();
-  }
-  const managerBot = config.token ? new TelegramBotClient(config.token) : null;
-  let managerUsername = env.VOXX_BOT_USERNAME ?? '';
-  if (managerBot && config.production) {
-    let manager;
-    // Bound the read-only credential probe; an unavailable Telegram connection
-    // must not leave server startup hanging indefinitely.
-    const probe = new TelegramBotClient(config.token!, (input, init) => fetch(input, { ...init, signal: AbortSignal.timeout(10_000) }));
-    try { manager = await probe.getMe(); } catch { throw new Error('VOXX_BOT_TOKEN authentication failed (Telegram getMe)'); }
-    if (!manager.is_bot || !manager.username) throw new Error('VOXX_BOT_TOKEN must identify a Telegram bot with a username');
-    if (managerUsername && managerUsername.replace(/^@/, '').toLowerCase() !== manager.username.toLowerCase()) {
-      throw new Error('VOXX_BOT_USERNAME does not match VOXX_BOT_TOKEN');
+  const storage = config.storage === 'firestore' ? await firestoreStorage(config.mediaBucket!, config.scopedRelationshipsEnabled) : fileStorage(config.dataDir, config.scopedRelationshipsEnabled, config.adaptiveFormat);
+  try {
+    // Load and persist once so corrupt state or unwritable storage fails startup.
+    if (config.production) {
+      if (config.storage === 'file') await storage.store.update(() => undefined);
+      else await storage.store.read();
     }
-    managerUsername = manager.username;
-  } else if (managerBot && !managerUsername) {
-    managerUsername = (await managerBot.getMe().catch(() => null))?.username ?? '';
-  }
-  const openai = env.OPENAI_API_KEY ? new OpenAIMedia(env.OPENAI_API_KEY) : null;
-  const authority = new AdaptiveRelationshipService(storage.adaptive!);
-  const studio = new Studio({
-    store: storage.store,
-    personaLLM: new AnthropicLLM(env.ANTHROPIC_API_KEY!, env.STUDIO_PERSONA_MODEL || 'claude-sonnet-5-5'),
-    chatLLM: chatLLM(env),
-    fastLLM: new AnthropicLLM(env.ANTHROPIC_API_KEY!, env.STUDIO_VOICE_MODEL || 'claude-haiku-5-5'),
-    openai,
-    // Reply triage and stranger decisions; STUDIO_DECISIONS=off skips them.
-    decider: openai && env.STUDIO_DECISIONS !== 'off' ? openai : undefined,
-    eleven: env.ELEVENLABS_API_KEY ? new ElevenLabsStudio(env.ELEVENLABS_API_KEY) : null,
-    managerBot,
-    managerUsername,
-    botFor: (token) => new TelegramBotClient(token),
-    secret: env.STUDIO_SECRET!,
-    orgName: env.STUDIO_ORG_NAME ?? 'HOOR',
-    superadminIds: config.superadminIds,
-    webAppUrl: config.webAppUrl,
-    webhookBase: config.publicUrl,
-    memory: storage.memory,
-    adaptive: storage.adaptive,
-    revisions: storage.revisions,
-    relationshipAuthority: authority,
-    rateLimiter: storage.rateLimiter,
-    imageToJpeg: toJpeg,
-    relationshipStore: storage.relationshipStore,
-    observations: storage.observations,
-    relationshipConfig: config.relationships,
-    relationships: new RelationshipLoop({
-      store: storage.relationshipStore!,
-      mode: config.scopedRelationshipsEnabled ? config.relationships.mode : 'off',
-      authorize: async ({ key, sourceIds, phase, expectedFingerprint }) => {
-        if (!config.scopedRelationshipsEnabled || !key.scope) return null;
-        const match = /^telegram-account:([1-9]\d{0,15})$/.exec(key.scope.accountId);
-        const telegramId = match ? Number(match[1]) : NaN;
-        if (!Number.isSafeInteger(telegramId) || !await studio.relationshipCohortEnabled(key.personaId, telegramId)) return null;
-        return authority.authorize(key, sourceIds, phase, expectedFingerprint);
-      },
-      applyScopedControl: async (key, action, until) => {
-        const match = /^telegram-account:([1-9]\d{0,15})$/.exec(key.scope?.accountId ?? '');
-        const telegramId = match ? Number(match[1]) : NaN;
-        if (!key.scope || !Number.isSafeInteger(telegramId)) throw new Error('Invalid scoped relationship control');
-        await authority.control(telegramId, key.personaId, key.scope.space, action, until?.getTime());
-        await studio.deps.relationships!.control(key, action, { until });
-      },
-      assessor: new StudioRelationshipAssessor(new AnthropicLLM(env.ANTHROPIC_API_KEY!, env.STUDIO_VOICE_MODEL || 'claude-haiku-5-5')),
-      decisions: env.OPENAI_API_KEY ? new OpenAIFollowUpReview(env.OPENAI_API_KEY) : undefined,
-      feedback: env.OPENAI_API_KEY ? new OpenAIRelationshipFeedback(env.OPENAI_API_KEY) : undefined,
-      observer: new SafeRelationshipObserver(storage.observations!, env.STUDIO_SECRET!),
-    }),
-  });
-  // The callback runs after the adaptive account transaction. It never calls
-  // status/context/authority, which would recursively re-enter that account.
-  storage.adaptive!.setRelationshipInvalidator(async ({ telegramId, space, agentId, sourceIds, reason }) => {
-    const accountId = `telegram-account:${telegramId}`;
-    for (const key of await storage.relationshipStore!.keysForAccount(accountId)) {
-      if (key.scope?.accountId !== accountId || key.scope.space !== space || (agentId && key.personaId !== agentId)) continue;
-      await studio.deps.relationships!.invalidate(key, { sourceIds, reason });
+    const managerBot = config.token ? new TelegramBotClient(config.token) : null;
+    let managerUsername = env.VOXX_BOT_USERNAME ?? '';
+    if (managerBot && config.production) {
+      let manager;
+      // Bound the read-only credential probe; an unavailable Telegram connection
+      // must not leave server startup hanging indefinitely.
+      const probe = new TelegramBotClient(config.token!, (input, init) => fetch(input, { ...init, signal: AbortSignal.timeout(10_000) }));
+      try { manager = await probe.getMe(); } catch { throw new Error('VOXX_BOT_TOKEN authentication failed (Telegram getMe)'); }
+      if (!manager.is_bot || !manager.username) throw new Error('VOXX_BOT_TOKEN must identify a Telegram bot with a username');
+      if (managerUsername && managerUsername.replace(/^@/, '').toLowerCase() !== manager.username.toLowerCase()) {
+        throw new Error('VOXX_BOT_USERNAME does not match VOXX_BOT_TOKEN');
+      }
+      managerUsername = manager.username;
+    } else if (managerBot && !managerUsername) {
+      managerUsername = (await managerBot.getMe().catch(() => null))?.username ?? '';
     }
-  });
-  studio.deps.shared = new SharedMemoryService(new SharedMemoryRepository(storage.sharedStorage), storage.adaptive!, {
-    member: async telegramId => {
-      const state = await storage.store.read();
-      const member = state.members.find(m => m.telegramId === telegramId);
-      return { active: !!member && member.role !== 'pending', agentIds: member ? state.agents.filter(a => a.status === 'active' && canUseAgent(member, a)).map(a => a.id) : [] };
-    },
-    agent: async id => ({ active: (await storage.store.read()).agents.some(a => a.id === id && a.status === 'active') }),
-    group: async id => {
-      const state = await storage.store.read();
-      const group = state.groups.find(g => groupId(g.chatId) === id);
-      if (!group) return null;
-      const memberTelegramIds = [...group.memberIds].sort((a, b) => a - b);
-      const hasGuests = group.hasGuests || memberTelegramIds.some(id => !state.members.some(m => m.telegramId === id && m.role !== 'pending'));
-      return { memberTelegramIds, hasGuests, revision: createHash('sha256').update(JSON.stringify([id, memberTelegramIds, hasGuests, group.audienceEpoch ?? 0])).digest('hex') };
-    },
-  });
-  const reminderEndpointId = config.reminderDeliveryEnabled && config.token ? studio.relationshipEndpointId(config.token) : undefined;
-  studio.deps.experience = new AdaptiveExperienceService(storage.adaptive!, {
-    notificationsEnabled: config.reminderDeliveryEnabled,
-    notificationEndpointId: reminderEndpointId,
-    decisionsEnabled: env.STUDIO_DECISIONS_ENABLED === '1' && !!env.OPENAI_API_KEY,
-    ...(env.STUDIO_DECISIONS_ENABLED === '1' && env.OPENAI_API_KEY ? {
-      decisions: new DecisionService(OpenAIDecisionProvider.guarded({ apiKey: env.OPENAI_API_KEY })),
-    } : {}),
-  });
-  studio.deps.preferenceLearning = createStudioPreferenceLearning(studio);
-  if (reminderEndpointId && config.token) {
-    studio.deps.reminderEndpointId = reminderEndpointId;
-    studio.deps.reminderDelivery = createStudioReminderDelivery(studio, {
-      enabled: true, endpointId: reminderEndpointId, botToken: config.token, webAppUrl: config.webAppUrl,
+    const openai = env.OPENAI_API_KEY ? new OpenAIMedia(env.OPENAI_API_KEY) : null;
+    const authority = new AdaptiveRelationshipService(storage.adaptive!);
+    const studio = new Studio({
+      store: storage.store,
+      personaLLM: new AnthropicLLM(env.ANTHROPIC_API_KEY!, env.STUDIO_PERSONA_MODEL || 'claude-sonnet-5-5'),
+      chatLLM: chatLLM(env),
+      fastLLM: new AnthropicLLM(env.ANTHROPIC_API_KEY!, env.STUDIO_VOICE_MODEL || 'claude-haiku-5-5'),
+      openai,
+      // Reply triage and stranger decisions; STUDIO_DECISIONS=off skips them.
+      decider: openai && env.STUDIO_DECISIONS !== 'off' ? openai : undefined,
+      skillRouting: parseSkillRouting(env.STUDIO_SKILL_ROUTING),
+      eleven: env.ELEVENLABS_API_KEY ? new ElevenLabsStudio(env.ELEVENLABS_API_KEY) : null,
+      managerBot,
+      managerUsername,
+      botFor: (token) => new TelegramBotClient(token),
+      secret: env.STUDIO_SECRET!,
+      orgName: env.STUDIO_ORG_NAME ?? 'HOOR',
+      superadminIds: config.superadminIds,
+      webAppUrl: config.webAppUrl,
+      webhookBase: config.publicUrl,
+      memory: storage.memory,
+      adaptive: storage.adaptive,
+      revisions: storage.revisions,
+      relationshipAuthority: authority,
+      // Content-free per-stage timings for a latency baseline (scripts/stage-timings.ts).
+      stageTimings: env.STUDIO_STAGE_TIMINGS === '1',
+      rateLimiter: storage.rateLimiter,
+      imageToJpeg: toJpeg,
+      relationshipStore: storage.relationshipStore,
+      observations: storage.observations,
+      relationshipConfig: config.relationships,
+      relationships: new RelationshipLoop({
+        store: storage.relationshipStore!,
+        mode: config.scopedRelationshipsEnabled ? config.relationships.mode : 'off',
+        authorize: async ({ key, sourceIds, phase, expectedFingerprint }) => {
+          if (!config.scopedRelationshipsEnabled || !key.scope) return null;
+          const match = /^telegram-account:([1-9]\d{0,15})$/.exec(key.scope.accountId);
+          const telegramId = match ? Number(match[1]) : NaN;
+          if (!Number.isSafeInteger(telegramId) || !await studio.relationshipCohortEnabled(key.personaId, telegramId)) return null;
+          return authority.authorize(key, sourceIds, phase, expectedFingerprint);
+        },
+        synchronize: (key, sourceIds) => authority.synchronize(key, sourceIds),
+        applyScopedControl: async (key, action, until) => {
+          const match = /^telegram-account:([1-9]\d{0,15})$/.exec(key.scope?.accountId ?? '');
+          const telegramId = match ? Number(match[1]) : NaN;
+          if (!key.scope || !Number.isSafeInteger(telegramId)) throw new Error('Invalid scoped relationship control');
+          await authority.control(telegramId, key.personaId, key.scope.space, action, until?.getTime());
+          await studio.deps.relationships!.control(key, action, { until });
+        },
+        assessor: new StudioRelationshipAssessor(new AnthropicLLM(env.ANTHROPIC_API_KEY!, env.STUDIO_VOICE_MODEL || 'claude-haiku-5-5')),
+        decisions: env.OPENAI_API_KEY ? new OpenAIFollowUpReview(env.OPENAI_API_KEY) : undefined,
+        feedback: env.OPENAI_API_KEY ? new OpenAIRelationshipFeedback(env.OPENAI_API_KEY) : undefined,
+        observer: new SafeRelationshipObserver(storage.observations!, env.STUDIO_SECRET!),
+      }),
     });
-  }
-  // No matching provider is qualified by this release. Status/delete remain
-  // reachable, while every capture/enrollment operation fails before audio.
-  studio.deps.voiceIdentity = new VoiceIdentityService(storage.adaptive!, new VoiceIdentityRepository(storage.voiceIdentityStorage), { enabled: false });
-  storage.adaptive!.setVoiceIdentityInvalidator(async ({ telegramId, space }) => {
-    await studio.deps.voiceIdentity!.invalidate(telegramId, space);
-  });
-  studio.deps.observer = new AdaptiveObserverService(storage.adaptive!);
-  studio.deps.lifecycle = new AdaptiveLifecycleService(storage.adaptive!, { shared: studio.deps.shared });
-  if (config.maintenanceEnabled) studio.deps.maintenance = new AdaptiveMaintenanceRunner(studio.deps.lifecycle,
-    storage.adaptive!.repository.storage, storage.maintenanceStorage, {
-      afterAccount: (telegramId, context) => maintainAdaptiveAccount(studio, telegramId, context.signal),
+    // The callback runs after the adaptive account transaction. It never calls
+    // status/context/authority, which would recursively re-enter that account.
+    storage.adaptive!.setRelationshipInvalidator(async ({ telegramId, space, agentId, sourceIds, reason }) => {
+      const accountId = `telegram-account:${telegramId}`;
+      for (const key of await storage.relationshipStore!.keysForAccount(accountId)) {
+        if (key.scope?.accountId !== accountId || key.scope.space !== space || (agentId && key.personaId !== agentId)) continue;
+        await studio.deps.relationships!.invalidate(key, { sourceIds, reason });
+      }
     });
-  if (config.trustedImprovementKeys) {
-    const workflow = new ImprovementWorkflow({ root: join(config.dataDir, 'improvement-review'), trust: config.trustedImprovementKeys });
-    // Server/runtime receives only the report capability, with no signing material
-    // and no proposal, candidate, evaluation or release mutation methods.
-    studio.deps.improvement = { report: () => workflow.report() };
-  }
-  return studio;
+    studio.deps.shared = new SharedMemoryService(new SharedMemoryRepository(storage.sharedStorage), storage.adaptive!, sharedAuthorityFromStudioStore(storage.store));
+    const reminderEndpointId = config.reminderDeliveryEnabled && config.token ? studio.relationshipEndpointId(config.token) : undefined;
+    studio.deps.experience = new AdaptiveExperienceService(storage.adaptive!, {
+      notificationsEnabled: config.reminderDeliveryEnabled,
+      notificationEndpointId: reminderEndpointId,
+      decisionsEnabled: env.STUDIO_DECISIONS_ENABLED === '1' && !!env.OPENAI_API_KEY,
+      ...(env.STUDIO_DECISIONS_ENABLED === '1' && env.OPENAI_API_KEY ? {
+        decisions: new DecisionService(OpenAIDecisionProvider.guarded({ apiKey: env.OPENAI_API_KEY })),
+      } : {}),
+    });
+    studio.deps.preferenceLearning = createStudioPreferenceLearning(studio);
+    if (config.requestedRoutinesEnabled) {
+      studio.deps.requestedRoutinesEnabled = () => process.env.STUDIO_REQUESTED_ROUTINES === '1';
+      studio.deps.requestedRoutines = createStudioRequestedRoutines(studio, {
+        filePath: join(config.dataDir, 'requested-routines-v1.json'), enabled: studio.deps.requestedRoutinesEnabled,
+      });
+    }
+    if (reminderEndpointId && config.token) {
+      studio.deps.reminderEndpointId = reminderEndpointId;
+      studio.deps.reminderDelivery = createStudioReminderDelivery(studio, {
+        enabled: true, endpointId: reminderEndpointId, botToken: config.token, webAppUrl: config.webAppUrl,
+      });
+    }
+    // No matching provider is qualified by this release. Status/delete remain
+    // reachable, while every capture/enrollment operation fails before audio.
+    studio.deps.voiceIdentity = new VoiceIdentityService(storage.adaptive!, new VoiceIdentityRepository(storage.voiceIdentityStorage), { enabled: false });
+    storage.adaptive!.setVoiceIdentityInvalidator(async ({ telegramId, space }) => {
+      await studio.deps.voiceIdentity!.invalidate(telegramId, space);
+    });
+    studio.deps.observer = new AdaptiveObserverService(storage.adaptive!);
+    const experimentDirectory = join(config.dataDir, 'controlled-experiments', 'v1');
+    const retainedExperiments = config.storage === 'file' && !!lstatSync(join(config.dataDir, 'controlled-experiments'), { throwIfNoEntry: false });
+    if (config.experimentsEnabled || retainedExperiments) {
+      if (config.publicUrl || env.K_SERVICE || env.FUNCTION_TARGET || env.FUNCTION_NAME || env.VERCEL === '1') {
+        throw new Error('Retained experiments require a persistent local lifecycle owner');
+      }
+      // Enabling the runtime installs no experiment. A separately reviewed,
+      // versioned operator configuration is required before any assignment.
+      studio.deps.experiments = new StudioExperimentRuntime(
+        new ControlledExperimentService(new FileExperimentStorage(experimentDirectory)),
+        storage.adaptive!, storage.store, Date.now, config.experimentsEnabled,
+      );
+      storage.adaptive!.setExperimentLifecycleReconciler(async telegramId => {
+        studio.deps.experiments!.reconcileAccount(telegramId);
+      });
+    }
+    studio.deps.lifecycle = new AdaptiveLifecycleService(storage.adaptive!, { shared: studio.deps.shared,
+      ...(studio.deps.experiments ? { prepareExperimentExport: (telegramId: number, space: 'work' | 'personal') =>
+        studio.deps.experiments!.prepareScopeExport(telegramId, space) } : {}),
+    });
+    // RI1 supports one persistent process only. The ledger stays separate from
+    // both canonical adapters; missing reviewed policy/key leaves intake disabled.
+    if (config.storage === 'file' && !config.publicUrl && !env.K_SERVICE && !env.FUNCTION_TARGET && !env.FUNCTION_NAME && env.VERCEL !== '1') {
+      const encodedKey = env.STUDIO_RIGHTS_KEY_BASE64;
+      const key = encodedKey && /^[A-Za-z0-9+/]{43}=$/.test(encodedKey) ? Buffer.from(encodedKey, 'base64') : undefined;
+      studio.deps.rights = new RightsIntakeService(new RightsRepository(new RightsFileStorage(join(config.dataDir, 'rights-intake', 'v1'))), {
+        policy: () => parseRightsPolicy(process.env.STUDIO_RIGHTS_POLICY_JSON), key, localUse: new RightsUseHoldService(storage.adaptive!), localErasure: studio.deps.lifecycle,
+        assertPrivateMemoryNow: id => assertRightsAccountNow(studio,id,'export'),
+        assertAccountNow: id => assertRightsAccountNow(studio, id),
+        assertOperatorNow: id => assertRightsAccountNow(studio, id, 'operator'),
+        prepareExport: async (id, space) => {
+          assertRightsAccountNow(studio, id, 'export');
+          const prepared = await studio.deps.lifecycle!.prepareAccountExport(id, space);
+          return { data: prepared.data, revalidate: () => { assertRightsAccountNow(studio, id, 'export'); prepared.revalidate(); } };
+        },
+      });
+    }
+    studio.deps.maintenanceHealth = () => readMaintenanceHealth(storage.maintenanceStorage);
+    if (config.maintenanceEnabled) studio.deps.maintenance = new AdaptiveMaintenanceRunner(studio.deps.lifecycle,
+      storage.adaptive!.repository.storage, storage.maintenanceStorage, {
+        afterAccount: (telegramId, context) => maintainAdaptiveAccount(studio, telegramId, context.signal),
+      });
+    if (config.trustedImprovementKeys) {
+      const workflow = new ImprovementWorkflow({ root: join(config.dataDir, 'improvement-review'), trust: config.trustedImprovementKeys });
+      // Server/runtime receives only the report capability, with no signing material
+      // and no proposal, candidate, evaluation or release mutation methods.
+      studio.deps.improvement = { report: () => workflow.report() };
+    }
+    g.__voxAdaptiveClose = storage.closeAdaptive;
+    if (storage.closeAdaptive && !g.__voxAdaptiveExitHook) {
+      g.__voxAdaptiveExitHook = true;
+      process.once('exit', () => { g.__voxAdaptiveClose?.(); });
+    }
+    return studio;
+  } catch (error) { storage.closeAdaptive?.(); throw error; }
 }
 
 export async function maintainAdaptiveAccount(studio: Studio, telegramId: number, signal?: AbortSignal): Promise<void> {
@@ -373,14 +470,16 @@ export async function maintainAdaptiveAccount(studio: Studio, telegramId: number
 export function getStudio(): Promise<Studio> {
   if (!g.__voxStudio) {
     g.__voxStudio = create().then(async studio => {
-      await g.__voxPreferenceTasks?.tasks.close();
-      g.__voxPreferenceTasks = studio.deps.preferenceLearning;
-      if (!g.__voxPreferenceHooks) {
-        g.__voxPreferenceHooks = true;
-        const stop = () => { stopStudioPreferenceLearning(); };
-        process.once('SIGTERM', stop); process.once('SIGINT', stop);
-      }
-      return studio;
+      try {
+        await g.__voxPreferenceTasks?.tasks.close();
+        g.__voxPreferenceTasks = studio.deps.preferenceLearning;
+        if (!g.__voxPreferenceHooks) {
+          g.__voxPreferenceHooks = true;
+          const stop = () => { stopStudioPreferenceLearning(); };
+          process.once('SIGTERM', stop); process.once('SIGINT', stop);
+        }
+        return studio;
+      } catch (error) { g.__voxAdaptiveClose?.(); g.__voxAdaptiveClose = undefined; throw error; }
     }).catch((e) => {
       g.__voxStudio = undefined;
       throw e;

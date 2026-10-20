@@ -1,9 +1,16 @@
+import { rightsUseAllowed, rightsUseStamp } from '../rights-use-holds/state';
+import { productPauseUseStamp } from '../product-pause/state';
 import { randomUUID } from 'crypto';
 import type { RelationshipKey } from '../../relationships/types';
 import { isQuietHour, isSelectedTimezone } from '../notifications';
 import { AdaptiveError, AdaptiveService } from '../persistence/service';
-import { containerIdFor, digest, spaceIdFor, tenantIdFor, type AdaptiveDocument, type OptionalPurpose, type SpaceKind } from '../persistence/repository';
+import { containerIdFor, digest, spaceIdFor, tenantIdFor, type AdaptiveAuthorityDocument, type AdaptiveDocument, type OptionalPurpose, type SpaceKind } from '../persistence/repository';
 import { scopedRelationshipKeySchema, type RelationshipInboxItem, type RelationshipPermit, type RelationshipPhase, type RelationshipSource } from './contracts';
+
+type RelationshipAuthority = AdaptiveAuthorityDocument & {
+  experience: Pick<AdaptiveDocument['experience'], 'settings'>;
+  relationships: Pick<AdaptiveDocument['relationships'], 'bindings' | 'controls' | 'sources' | 'externalSettings'>;
+};
 
 const DAY = 86_400_000;
 const PURPOSES: OptionalPurpose[] = ['optional.auto_memory', 'optional.personalization', 'optional.proactive_suggestions'];
@@ -34,14 +41,15 @@ export class AdaptiveRelationshipService {
     d.relationships.ledger = d.relationships.ledger.filter(e => e.at > now - 90 * DAY);
     d.relationships.inbox = d.relationships.inbox.filter(i => i.expiresAt > now || i.createdAt > now - DAY);
   }
-  private purposeAllowed(d: AdaptiveDocument, agentId: string, space: SpaceKind, purpose: OptionalPurpose, now: number): boolean {
+  private purposeAllowed(d: AdaptiveAuthorityDocument, agentId: string, space: SpaceKind, purpose: OptionalPurpose, now: number): boolean {
     const permission = d.permissions.find(p => p.spaceId === spaceIdFor(d.accountId, space) && p.purpose === purpose);
     const capability = purpose === 'optional.relationship_outreach' ? 'relationship_outreach' : purpose === 'optional.auto_memory' ? 'auto_memory' : purpose === 'optional.personalization' ? 'personalization' : 'proactive_suggestions';
     const grants = d.agentGrants.filter(g => g.agentId === agentId && g.space === space);
     return !!permission && permission.state === 'granted' && permission.effectiveAt <= now && permission.expiresAt > now &&
       grants.length === 1 && grants[0].allowed && this.adaptive.capabilityStatus(d, capability, now).eligible;
   }
-  private permit(d: AdaptiveDocument, agentId: string, space: SpaceKind, now: number): RelationshipPermit | null {
+  private permit(d: RelationshipAuthority, agentId: string, space: SpaceKind, now: number, retained = false, retentionStoreIdentity?:string): RelationshipPermit | null {
+    if (!retained && (!this.adaptive.isStoredPersonalizationUseAllowed(d, space) || !rightsUseAllowed(d,space,'optional.personalization'))) return null;
     const bindings = d.relationships.bindings.filter(b => b.space === space);
     const binding = bindings.length === 1 ? bindings[0] : null;
     if (!validId(agentId) || !['work', 'personal'].includes(space) || !this.adaptive.capabilityStatus(d, 'core_text', now).eligible || !binding || binding.status !== 'active' || binding.expiresAt <= now || binding.confirmedAt > now || binding.accountId !== d.accountId || binding.personId !== d.personId ||
@@ -49,10 +57,14 @@ export class AdaptiveRelationshipService {
     const scope = { schemaVersion: 1 as const, accountId: d.accountId, personId: d.personId, bindingId: binding.id,
       tenantId: tenantIdFor(d.accountId), space, spaceId: spaceIdFor(d.accountId, space), containerId: containerIdFor(d.accountId, space) };
     const key: RelationshipKey = { personaId: agentId, chatKey: `private-${d.personId}`, audience: { kind: 'private', personId: d.personId }, scope };
-    const sourceFence = digest([scope, binding, this.adaptive.capabilityStatus(d, 'core_text', now), PURPOSES.map(p => [d.permissions.find(c => c.spaceId === scope.spaceId && c.purpose === p), this.adaptive.capabilityStatus(d, p === 'optional.auto_memory' ? 'auto_memory' : p === 'optional.personalization' ? 'personalization' : 'proactive_suggestions', now)]), d.agentGrants.filter(g => g.space === space && g.agentId === agentId)]);
+    const sourceAuthority = [scope, binding, this.adaptive.capabilityStatus(d, 'core_text', now), PURPOSES.map(p => [d.permissions.find(c => c.spaceId === scope.spaceId && c.purpose === p), this.adaptive.capabilityStatus(d, p === 'optional.auto_memory' ? 'auto_memory' : p === 'optional.personalization' ? 'personalization' : 'proactive_suggestions', now)]), d.agentGrants.filter(g => g.space === space && g.agentId === agentId)];
+    // Preserve original FILE hashes; managed receipts bind each store incarnation.
+    const sourceNamespace=retained && d.schemaVersion===3 ? retentionStoreIdentity : this.adaptive.storeIdentity;
+    if(!sourceNamespace)return null;
+    const sourceFence = digest(sourceNamespace !== 'canonical' ? [...sourceAuthority, sourceNamespace] : sourceAuthority);
     const settings = d.experience.settings;
     const external = d.relationships.externalSettings;
-    const fingerprint = digest([sourceFence, settings, external, d.relationships.controls.filter(c => c.agentId === agentId && c.space === space), [d.permissions.find(p => p.spaceId === scope.spaceId && p.purpose === 'optional.relationship_outreach'), this.adaptive.capabilityStatus(d, 'relationship_outreach', now)]]);
+    const fingerprint = digest([sourceFence, settings, external, d.relationships.controls.filter(c => c.agentId === agentId && c.space === space), [d.permissions.find(p => p.spaceId === scope.spaceId && p.purpose === 'optional.relationship_outreach'), this.adaptive.capabilityStatus(d, 'relationship_outreach', now)], ...(d.schemaVersion >= 2 ? [productPauseUseStamp(d, space)] : []), ...(d.schemaVersion===3?[rightsUseStamp(d,space,'optional.personalization')]:[])]);
     const expiry = [binding.expiresAt, ...PURPOSES.map(p => d.permissions.find(c => c.spaceId === scope.spaceId && c.purpose === p)!.expiresAt),
       ...(['core_text', 'auto_memory', 'personalization', 'proactive_suggestions'] as const).map(c => this.adaptive.capabilityStatus(d, c, now).validUntil ?? now)];
     return { key, fingerprint, sourceFence, expiresAt: Math.min(...expiry), notification: { settingsRevision: settings.revision,
@@ -60,14 +72,14 @@ export class AdaptiveRelationshipService {
       inboxEnabled: settings[space].inboxEnabled, proactiveEnabled: settings[space].proactiveEnabled,
       externalEnabled: external[space] && this.purposeAllowed(d, agentId, space, 'optional.relationship_outreach', now) } };
   }
-  private authorized(d: AdaptiveDocument, key: RelationshipKey, sourceIds: readonly string[], phase: RelationshipPhase, now: number, expected?: string): RelationshipPermit | null {
+  private authorized(d: RelationshipAuthority, key: RelationshipKey, sourceIds: readonly string[], phase: RelationshipPhase, now: number, expected?: string): RelationshipPermit | null {
     const parsed = scopedRelationshipKeySchema.safeParse(key);
     if (!parsed.success || parsed.data.scope.accountId !== d.accountId || !sourceIds.every(validId) || sourceIds.length > 256 || new Set(sourceIds).size !== sourceIds.length) return null;
     const permit = this.permit(d, key.personaId, parsed.data.scope.space, now);
     if (!permit || !sameKey(permit.key, key) || (expected !== undefined && permit.fingerprint !== expected)) return null;
     for (const id of sourceIds) {
       const matches = d.relationships.sources.filter(s => s.id === id && sameKey(s.key, key));
-      if (matches.length !== 1 || matches[0].status !== 'active' || matches[0].expiresAt <= now || matches[0].createdAt > now || matches[0].sourceFence !== permit.sourceFence) return null;
+      if (matches.length !== 1 || matches[0].status !== 'active' || matches[0].expiresAt <= now || matches[0].createdAt > now || matches[0].sourceFence !== this.permit(d,key.personaId,parsed.data.scope.space,now,true,matches[0].retentionStoreIdentity)?.sourceFence) return null;
     }
     const control = d.relationships.controls.find(c => c.agentId === key.personaId && c.space === parsed.data.scope.space);
     if (phase !== 'context' && control && (control.disabled || (control.pausedUntil !== undefined && control.pausedUntil > now))) return null;
@@ -76,15 +88,75 @@ export class AdaptiveRelationshipService {
     }
     if (phase === 'external' && (!permit.notification.externalEnabled || !isSelectedTimezone(permit.notification.timezone) ||
         isQuietHour(now, permit.notification.timezone, permit.notification.quietStartHour, permit.notification.quietEndHour))) return null;
-    return permit;
+    const sourceDeadlines = sourceIds.map(id => d.relationships.sources.find(s => s.id === id && sameKey(s.key, key))!.expiresAt);
+    const externalDeadlines = phase === 'external' ? [
+      d.permissions.find(p => p.spaceId === parsed.data.scope.spaceId && p.purpose === 'optional.relationship_outreach')!.expiresAt,
+      this.adaptive.capabilityStatus(d, 'relationship_outreach', now).validUntil ?? now,
+    ] : [];
+    return { ...permit, expiresAt: Math.min(permit.expiresAt, ...sourceDeadlines, ...externalDeadlines) };
+  }
+  /** Source retention is independent of a temporary use stop or a stale task receipt. */
+  async synchronize(key: RelationshipKey, sourceIds: readonly string[]): Promise<'suspended_use' | 'invalid_source'> {
+    const telegramId = telegramFor(key); if (telegramId === null) return 'invalid_source';
+    const space = scopedRelationshipKeySchema.parse(key).scope.space;
+    const evaluate = (d: RelationshipAuthority, now: number) => {
+      const permit = this.permit(d, key.personaId, space, now, true,this.adaptive.storeIdentity);
+      return permit && sameKey(permit.key, key) && sourceIds.every(id => d.relationships.sources.some(s =>
+        s.id === id && sameKey(s.key, key) && s.status === 'active' && s.createdAt <= now && s.expiresAt > now && s.sourceFence === this.permit(d,key.personaId,space,now,true,s.retentionStoreIdentity)?.sourceFence)) ? 'suspended_use' as const : 'invalid_source' as const;
+    };
+    if (this.adaptive.repository.storage.indexed) return this.adaptive.withRuntimeControls(telegramId, space, (d, now) => ({ value: evaluate(d, now), denied: true }));
+    return this.adaptive.withAccountDocument(telegramId, evaluate);
+  }
+  /** Reject paused use before reading relationship controls/sources from canonical FILE. */
+  private pausedUse(telegramId: number, space: SpaceKind): boolean {
+    if (![2,3].includes(this.adaptive.repository.storage.canonicalSchemaVersion??1)) return false;
+    const state = this.adaptive.readDirectAuthorityForEffect(telegramId, space, (d, now) => ({
+      value: !this.adaptive.isStoredPersonalizationUseAllowed(d, space) || !rightsUseAllowed(d,space,'optional.personalization'), denied: true,
+      observedDenial: !this.adaptive.isProfileConfirmed(d, now),
+    }));
+    return state.status !== 'ready' || state.value;
+  }
+  /** Current committed authority at the final synchronous transport boundary.
+   * FILE fallback reads committed controls; it never prunes or writes a draft. */
+  resolveNow(telegramId: number, agentId: string, space: SpaceKind): RelationshipPermit | null {
+    try {
+      if (this.pausedUse(telegramId, space)) return null;
+      const result = this.adaptive.readRuntimeControlsForEffect(telegramId, space, (d, now) => {
+        const value = this.permit(d, agentId, space, now);
+        return { value, denied: !value, ...(value ? { deadline: value.expiresAt } : {}) };
+      });
+      return result.status === 'ready' ? result.value : null;
+    } catch { return null; }
+  }
+  authorizeNow(key: RelationshipKey, sourceIds: readonly string[], phase: RelationshipPhase, expectedFingerprint?: string): RelationshipPermit | null {
+    const telegramId = telegramFor(key);
+    if (telegramId === null) return null;
+    try {
+      const space = scopedRelationshipKeySchema.parse(key).scope.space;
+      const result = this.adaptive.readRuntimeControlsForEffect(telegramId, space, (d, now) => {
+        const value = this.authorized(d, key, sourceIds, phase, now, expectedFingerprint);
+        return { value, denied: !value, ...(value ? { deadline: value.expiresAt } : {}) };
+      });
+      return result.status === 'ready' ? result.value : null;
+    } catch { return null; }
   }
   /** Pure read: served from one committed load; pruning that must commit falls back to the transaction. */
   resolve(telegramId: number, agentId: string, space: SpaceKind): Promise<RelationshipPermit | null> {
+    if (this.pausedUse(telegramId, space)) return Promise.resolve(null);
+    if (this.adaptive.repository.storage.indexed) return this.adaptive.withRuntimeControls(telegramId, space, (d, now) => {
+      const value = this.permit(d, agentId, space, now);
+      return { value, denied: !value, ...(value ? { deadline: value.expiresAt } : {}) };
+    }).catch(() => null);
+    // Pure read: served from a committed load; pruning that must commit still commits.
     return this.adaptive.withAccountView(telegramId, (d, now) => { this.pruneDocument(d, now); return this.permit(d, agentId, space, now); });
   }
   async authorize(key: RelationshipKey, sourceIds: readonly string[], phase: RelationshipPhase, expectedFingerprint?: string): Promise<RelationshipPermit | null> {
     const telegramId = telegramFor(key);
     if (telegramId === null) return null;
+    if (this.adaptive.repository.storage.indexed) return this.adaptive.withRuntimeControls(telegramId, scopedRelationshipKeySchema.parse(key).scope.space, (d, now) => {
+      const value = this.authorized(d, key, sourceIds, phase, now, expectedFingerprint);
+      return { value, denied: !value, ...(value ? { deadline: value.expiresAt } : {}) };
+    }).catch(() => null);
     return this.adaptive.withAccountDocument(telegramId, (d, now) => { this.pruneDocument(d, now); return this.authorized(d, key, sourceIds, phase, now, expectedFingerprint); });
   }
   async acceptSource(permit: RelationshipPermit, input: { id: string; at: number; channel: 'telegram' | 'call'; endpointId?: string }): Promise<RelationshipSource | null> {
@@ -103,7 +175,7 @@ export class AdaptiveRelationshipService {
       if (prior) return prior.status === 'active' && prior.eventFingerprint === eventFingerprint && prior.sourceFence === current.sourceFence ? this.source(prior) : null;
       if (d.relationships.sources.length >= 500) return null;
       const source = { id: input.id, revision: 1, createdAt: input.at, expiresAt: input.at + 90 * DAY, status: 'active' as const,
-        sourceFence: current.sourceFence, channel: input.channel, ...(input.endpointId !== undefined ? { endpointId: input.endpointId } : {}), key: scopedRelationshipKeySchema.parse(current.key), eventFingerprint };
+        ...(d.schemaVersion===3?{retentionStoreIdentity:this.adaptive.storeIdentity}:{}), sourceFence: current.sourceFence, channel: input.channel, ...(input.endpointId !== undefined ? { endpointId: input.endpointId } : {}), key: scopedRelationshipKeySchema.parse(current.key), eventFingerprint };
       d.relationships.sources.push(source); d.revision++; d.updatedAt = now;
       return this.source(source);
     });
@@ -194,6 +266,8 @@ export class AdaptiveRelationshipService {
       if (!['read', 'dismissed'].includes(action)) throw new AdaptiveError(400, 'invalid_action');
       const item = d.relationships.inbox.find(i => i.id === id && i.key.personaId === agentId && i.key.scope.space === space && i.status !== 'cancelled');
       if (!item) throw new AdaptiveError(404, 'not_found');
+      // Dismissal is terminal, including a delayed read or repeated dismissal.
+      if (item.status === 'dismissed') return;
       item.status = action; if (action === 'dismissed') item.text = ''; d.revision++; d.updatedAt = now;
     });
   }

@@ -1,0 +1,16 @@
+{
+  "baseline": "approved isolated packaging-v3",
+  "baselineManifestSha256": "a69ca9bd4a834f3a4a840f6c838efef4effbab1e7a0db1311d3c3d7e823fb122",
+  "byteIdenticalFiles": [
+    "next.config.mjs",
+    "boundary.cjs",
+    "app/layout.jsx",
+    "app/page.jsx",
+    "app/api/storage/route.js",
+    "app/api/network-probe/route.js",
+    "public/qualification.txt"
+  ],
+  "runnerDelta": "manifest filename normalized; exact Node v22.23.3 required instead of major22; every other statement byte-identical",
+  "dependencyDelta": "root package name + exact Node engine only; all package versions/integrities unchanged",
+  "execution": "No repository fixture build, install, server or route run; independent review and actual Linux CI pending"
+}

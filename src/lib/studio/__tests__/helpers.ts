@@ -1,11 +1,19 @@
 /**
  * Fakes for Vox Studio tests: scripted Claude, fake OpenAI / ElevenLabs,
  * fake Telegram bots, a real StudioStore on a temp dir and in-memory memory.
+ * Like every production runtime (runtime.ts), the Studio is wired with an
+ * AdaptiveService on file storage in the same temp dir, and its relationship
+ * authority. Pass `adaptive: false` only to test the legacy path, which no
+ * production runtime builds.
  */
 import { mkdtempSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { vi } from 'vitest';
+import { AdaptiveRepository } from '../../adaptive/persistence/repository';
+import { AdaptiveService } from '../../adaptive/persistence/service';
+import { FileAdaptiveStorage } from '../../adaptive/persistence/storage';
+import { AdaptiveRelationshipService } from '../../adaptive/relationships/service';
 import type { LLM, LLMRequest } from '../../tireh/llm';
 import {
   InMemoryChatHistoryStore,
@@ -149,12 +157,14 @@ export interface Harness {
     deduper: InMemoryUpdateDeduper;
   };
   imageToJpeg: ReturnType<typeof vi.fn>;
+  /** The production-default adaptive service; undefined only with `adaptive: false`. */
+  adaptive?: AdaptiveService;
   logger: { info: ReturnType<typeof vi.fn>; warn: ReturnType<typeof vi.fn>; error: ReturnType<typeof vi.fn> };
   clock: { now: Date };
   advanceDays(days: number): void;
 }
 
-export function makeStudio(options: { openai?: boolean; eleven?: boolean; manager?: boolean; managerUsername?: string } = {}): Harness {
+export function makeStudio(options: { openai?: boolean; eleven?: boolean; manager?: boolean; managerUsername?: string; adaptive?: boolean } = {}): Harness {
   const dir = tempDir();
   const store = new StudioStore(dir);
   const personaLLM = new ScriptedLLM();
@@ -177,6 +187,8 @@ export function makeStudio(options: { openai?: boolean; eleven?: boolean; manage
   const imageToJpeg = vi.fn(async (data: Buffer) => Buffer.concat([Buffer.from('JPEG:'), data]));
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   const clock = { now: new Date(T0) };
+  const adaptive = options.adaptive === false ? undefined
+    : new AdaptiveService(new AdaptiveRepository(new FileAdaptiveStorage(join(dir, 'adaptive'))), { now: () => clock.now.getTime() });
   const studio = new Studio({
     store,
     personaLLM,
@@ -190,12 +202,13 @@ export function makeStudio(options: { openai?: boolean; eleven?: boolean; manage
     orgName: 'HOOR',
     superadminIds: [ID.superadmin],
     memory,
+    ...(adaptive ? { adaptive, relationshipAuthority: new AdaptiveRelationshipService(adaptive) } : {}),
     imageToJpeg,
     logger,
     now: () => clock.now,
   });
   return {
-    studio, store, dir, personaLLM, chatLLM, openai, eleven, manager, bots, botFor, memory, imageToJpeg, logger, clock,
+    studio, store, dir, personaLLM, chatLLM, openai, eleven, manager, bots, botFor, memory, imageToJpeg, logger, clock, adaptive,
     advanceDays(days: number) {
       clock.now = new Date(clock.now.getTime() + days * 86_400_000);
     },

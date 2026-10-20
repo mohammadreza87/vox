@@ -12,7 +12,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  NODE_VERSION: '20'
+  NODE_VERSION: '22.23.3'
 
 jobs:
   # =====================================
@@ -23,10 +23,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
@@ -48,10 +48,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
@@ -67,14 +67,23 @@ jobs:
           NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: test.firebaseapp.com
           NEXT_PUBLIC_FIREBASE_PROJECT_ID: test-project
 
+      - name: Verify offline inventory CLI and generated source parity
+        run: node --test scripts/legacy-offline-inventory.test.mjs
+
+      - name: Verify bounded Firebase preview inventory
+        run: node --test scripts/firebase-preview-inventory.test.mjs
+
       - name: Verify Connections release configuration preservation
         run: node --test scripts/connections-production-config.test.mjs
 
-      - name: Verify single-host configuration preservation
-        run: node --test scripts/studio-production.test.mjs
+      - name: Verify single-host release safety and configuration preservation
+        run: node --test scripts/studio-production.test.mjs scripts/studio-skill-routing-config.test.mjs scripts/studio-adaptive-compatibility.test.mjs scripts/studio-rights-erasure-compatibility.test.mjs scripts/rights-intake-storage.test.mjs
+
+      - name: Verify guest browser fixture build provenance
+        run: node --test e2e/guest-fixture-build.test.mjs
 
       - name: Upload coverage reports
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v7
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -90,10 +99,10 @@ jobs:
     needs: [lint, test]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
@@ -148,10 +157,10 @@ jobs:
     if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
@@ -192,6 +201,12 @@ jobs:
         env:
           CONVERSATION_E2E_PRODUCTION: '1'
 
+      - name: Run observation and correction production browser journeys
+        run: npx playwright test --config=playwright.observation.config.ts
+
+      - name: Run isolated guest privacy production browser journeys
+        run: npx playwright test --config=playwright.guest-rights.config.ts
+
       # All production journeys must run before the general suite starts next dev,
       # which replaces .next and removes the downloaded production BUILD_ID.
       - name: Run Connections production browser fixtures
@@ -225,10 +240,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'

@@ -1,0 +1,6 @@
+/** Synthetic local fixtures only. Not reviewed production policy or legal durations. */
+import { createHash } from 'crypto';
+import { guestRightsCopy, GUEST_COPY_VERSION } from './notice';
+import type { GuestPolicy } from './policy';
+export const GUEST_TEST_NOW = Date.UTC(2026, 9, 20, 8);
+export function syntheticGuestPolicy(now = GUEST_TEST_NOW): GuestPolicy { return { version: 1, id: 'synthetic-only', revision: 1, effectiveAt: now, expiresAt: now + 1000000, reviewOwner: 'synthetic-reviewer', reviewReference: 'local-fixture-not-legal-approval', topology: 'single_persistent_process', assurance: 'request_credential_only', admissionEnabled: true, supportedKinds: ['access_export', 'correction', 'erasure', 'restriction', 'objection', 'portability', 'withdrawal'], privacyOperatorIds: [123], copyVersion: GUEST_COPY_VERSION, noticeHashes: { en: createHash('sha256').update(JSON.stringify(guestRightsCopy.en)).digest('hex'), fa: createHash('sha256').update(JSON.stringify(guestRightsCopy.fa)).digest('hex') }, draftLifetimeMs: 10000, operationLifetimeMs: 10000, admission: { windowMs: 100000, maxPerWindow: 10, maxOpen: 20, maxRecords: 100 }, retention: { reviewAfterMs: 100, auditMs: 1000, terminalMs: 2000, continuityMs: 5000, receiptMs: 1000 } }; }

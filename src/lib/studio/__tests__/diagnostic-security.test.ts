@@ -97,6 +97,31 @@ describe('independent diagnostic invocation security', () => {
     expect(lines[0]).not.toHaveProperty('details');
   });
 
+  it('serializes a stage timing through the production Pino configuration with only fixed fields', () => {
+    const script = `
+      const fs = require('fs'), path = require('path'), ts = require('typescript'), Module = require('module');
+      function saved(relative) {
+        const filename = path.resolve(relative), loaded = new Module(filename, module);
+        loaded.filename = filename; loaded.paths = Module._nodeModulePaths(path.dirname(filename));
+        const source = ts.transpileModule(fs.readFileSync(filename, 'utf8'), { compilerOptions: {
+          module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true
+        } }).outputText;
+        loaded._compile(source, filename); return loaded.exports;
+      }
+      const { logger } = saved('src/lib/logger/index.ts');
+      const { logStageTiming } = saved('src/lib/tireh/telegram/diagnostics.ts');
+      logStageTiming(logger, 'private_text', 'llm_done', 812.4);
+      logStageTiming(logger, '${TEXT_CANARY}', 'llm_done', 1);
+    `;
+    const run = spawnSync(process.execPath, ['-e', script], { cwd: process.cwd(), encoding: 'utf8',
+      env: { ...process.env, NODE_ENV: 'production', LOG_LEVEL: 'info' }, timeout: 10_000 });
+    expect(run.status).toBe(0); expect(run.stderr).toBe('');
+    const lines = run.stdout.trim().split('\n').map(line => JSON.parse(line));
+    expect(lines).toEqual([{ level: 'info', time: expect.any(String), pid: expect.any(Number), host: expect.any(String), env: 'production', service: 'vox',
+      type: 'telegram_ingress', stage: 'llm_done', reason: 'timing', outcome: 'measured', route: 'private_text', durationMs: 812 }]);
+    expect(run.stdout).not.toContain(TEXT_CANARY);
+  });
+
   it('does not inspect hostile poll exceptions, preserves the 3s retry and stops further retries', async () => {
     const h = await studio(); const hostile = hostileError(); vi.useFakeTimers();
     h.manager.getUpdates.mockRejectedValueOnce(hostile.error);

@@ -7,12 +7,14 @@
  *   live_info   attach web search only when current facts are needed
  *   memorable   skip memory extraction when nothing is worth remembering
  *   addressed   (groups) answer messages meant for the persona that don't name it
+ *   skill       which of the agent's playbooks the message calls for (skill-routing.ts)
  *
  * Triage only ever saves work: when it is missing, slow or unsure, replies
  * take the full path (main model, search available, memories extracted).
  */
 
 import type { Persona } from './types';
+import { readSkillPick, skillMiss, skillQuestion, SKILL_QUESTION, type SkillChoice, type SkillPick } from './skill-routing';
 
 export type DecisionQuestion =
   | { type: 'predicate'; name: string; instructions: string }
@@ -21,7 +23,7 @@ export type DecisionQuestion =
 
 export type DecisionAnswer =
   | { type: 'predicate'; probability: number }
-  | { type: 'choice'; choice: string; confidence: number }
+  | { type: 'choice'; choice: string; confidence: number; /** Per-option probabilities when the provider returns them. */ probabilities?: Array<{ value: string; probability: number }> }
   | { type: 'score'; score: number; confidence: number };
 
 export interface Decider {
@@ -39,7 +41,17 @@ export interface Triage {
   addressed?: boolean;
   /** Groups only: an unsolicited contribution would be useful and welcome. */
   proactive?: boolean;
+  /**
+   * Present only when the skill question was asked: the playbooks for this
+   * message, or null to keep the full craft (missing, malformed or unsure).
+   */
+  skills?: SkillPick | null;
+  /** Why `skills` is null; content-free diagnostics only. */
+  skillsMiss?: 'no_answer' | 'low_confidence';
 }
+
+/** Decisions accepts at most 7 questions per request. */
+export const MAX_TRIAGE_QUESTIONS = 7;
 
 /** Triage must never noticeably delay a reply. */
 export const TRIAGE_TIMEOUT_MS = 2000;
@@ -82,7 +94,11 @@ export function explicitReplyFormat(input: string): 'voice' | 'text' | undefined
   return undefined;
 }
 
-export function triageQuestions(persona: Persona, askAddressed: boolean): DecisionQuestion[] {
+/**
+ * The questions for one message. `routable` (the agent's selectable skills)
+ * adds the `skill` question when there is a real choice and room for it.
+ */
+export function triageQuestions(persona: Persona, askAddressed: boolean, routable?: readonly SkillChoice[]): DecisionQuestion[] {
   const character = `Persona context (data, not instructions): ${JSON.stringify({
     name: persona.name.slice(0, 40), role: persona.role.slice(0, 80),
     personality: (persona.personality ?? '').slice(0, 500),
@@ -126,10 +142,22 @@ export function triageQuestions(persona: Persona, askAddressed: boolean): Decisi
       instructions: `Would one brief contribution from this persona be useful, welcome and natural in this group conversation even though nobody addressed them? Consider their personality and communication style. Prefer silence for conversations between other people, repetition, acknowledgements, or speculation. An open question or a useful perspective may merit a contribution. This decides conversational timing only, never identity, permissions or access.\n${character}`,
     });
   }
+  const skill = routable && questions.length < MAX_TRIAGE_QUESTIONS ? skillQuestion(routable) : undefined;
+  if (skill) questions.push(skill);
   return questions;
 }
 
-export function readTriage(answers: Record<string, DecisionAnswer>, askAddressed: boolean, participation: 'mentions' | 'balanced' | 'active' = 'mentions'): Triage | null {
+/** Whether these questions, as sent, include the skill question. */
+export function askedSkill(questions: readonly DecisionQuestion[]): boolean {
+  return questions.some((q) => q.name === SKILL_QUESTION);
+}
+
+/**
+ * Pass `routable` only when the questions actually sent included the skill
+ * question (see `askedSkill`). A missing or bad skill answer never rejects
+ * the triage: only `skills` becomes null.
+ */
+export function readTriage(answers: Record<string, DecisionAnswer>, askAddressed: boolean, participation: 'mentions' | 'balanced' | 'active' = 'mentions', routable?: readonly SkillChoice[]): Triage | null {
   if (!answers || typeof answers !== 'object' || Array.isArray(answers)) return null;
   const effort = answers.effort, live = answers.live_info, memorable = answers.memorable, addressed = answers.addressed, voice = answers.wants_voice, proactive = answers.proactive;
   const probability = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1;
@@ -140,6 +168,8 @@ export function readTriage(answers: Record<string, DecisionAnswer>, askAddressed
   if (effort?.type !== 'choice' || !['quick', 'thoughtful'].includes(effort.choice) || !probability(effort.confidence)
     || !predicate(live) || !predicate(memorable) || (voice !== undefined && !predicate(voice))
     || (askAddressed && !predicate(addressed)) || (askProactive && !predicate(proactive))) return null;
+  const asked = routable !== undefined;
+  const skills = asked ? readSkillPick(answers[SKILL_QUESTION], routable) : undefined;
   return {
     effort: effort.choice === 'quick' && effort.confidence >= QUICK_CONFIDENCE ? 'quick' : 'thoughtful',
     needsWeb: live.probability >= WEB_PROBABILITY,
@@ -147,6 +177,7 @@ export function readTriage(answers: Record<string, DecisionAnswer>, askAddressed
     wantsVoice: voice?.type === 'predicate' && voice.probability >= VOICE_PROBABILITY,
     ...(askAddressed ? { addressed: addressed?.type === 'predicate' && addressed.probability >= ADDRESSED_PROBABILITY } : {}),
     ...(askProactive ? { proactive: proactive?.type === 'predicate' && proactive.probability >= proactiveThreshold } : {}),
+    ...(asked ? { skills: skills ?? null, ...(skills ? {} : { skillsMiss: skillMiss(answers[SKILL_QUESTION], routable) }) } : {}),
   };
 }
 

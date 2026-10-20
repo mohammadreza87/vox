@@ -1,6 +1,8 @@
 # Vox adaptive agents: implementation plan
 
-Prepared 19 October 2026 for Joyixir OÜ. Product scope: adults in the EU/EEA and US; English and Persian interfaces; Work and Personal spaces. Current implementation baseline: `9fb73d311753a461bd62e37ce3129b8a60c83d00`.
+Prepared 19 October 2026 for Joyixir OÜ. Product scope: adults in the EU/EEA and US; English and Persian interfaces; Work and Personal spaces. The recorded RF1 release is `cf63acf64c6eadf5a2247d2436e0a22bc114386b` (20 October 2026); see the [historical receipt](RELEASE_RF1_2026_10_20.md). The prior learning-case release is documented in [its receipt](RELEASE_LEARNING_CASES_2026_10_20.md). RF1 was deployed with its optional policy off; VOX-056 remains open.
+
+**Later runtime observation:** at 2026-10-20T13:33Z the existing Studio host served healthy `504203f0a798e780dc23e6eee5c51d89dcf5cdb3`, build `6QvxjYDllUGBSqlhTaxRG`, installed by another session. This is a dated runtime observation, not qualification of every intervening source change or optional feature. RF2 [private-note erasure](RIGHTS_PRIVATE_NOTE_ERASURE.md) is being implemented and independently evaluated. **فارسی:** رسید RF1 تاریخی است؛ در ۲۰ اکتبر، ساعت ۱۳:۳۳ UTC، میزبان موجود نسخهٔ سالم `504203f` با ساخت `6QvxjYDllUGBSqlhTaxRG` را از نصب جلسه‌ای دیگر اجرا می‌کرد. این مشاهدهٔ زمان‌دار، پذیرش همهٔ تغییرات یا قابلیت‌های اختیاری نیست. پیاده‌سازی و ارزیابی مستقل حذف محدود یادداشت خصوصی RF2 ادامه دارد.
 
 **Delivery status:** the observation/lifecycle/improvement work and the complementary scoped chat, image prediction, bounded retrieval and optional voice lifecycle are now integrated in the completion candidate. See [adaptive completion](ADAPTIVE_COMPLETION_RESULT.md) for implementation, independent review and precise release evidence. Existing source/release receipts remain historical. Optional capabilities stay off without reviewed configuration; provider/device/privacy qualification and the unfinished roadmap entries remain open.
 
@@ -17,7 +19,21 @@ Prepared 19 October 2026 for Joyixir OÜ. Product scope: adults in the EU/EEA an
 | [Package validation](PACKAGE_VALIDATION.md) | Checks performed on the plan and skills, plus remaining runtime evidence boundaries |
 | [Implementation start and decisions](STARTER_SLICE.md) | Active work, concrete decisions, metric contract and remaining foundation gaps |
 | [Production release receipt](RELEASE_2026_10_19.md) | Exact develop/CI/build/deployment evidence and activation limits |
+| [20 October release receipt](RELEASE_2026_10_20.md) | Retention, observation and presentation experiments; exact live revision and remaining gates |
+| [Guest and evaluation release receipt](RELEASE_GUEST_EVALUATION_2026_10_20.md) | Public privacy fallback, signed evaluation protocol, trusted public origins and exact deployed evidence |
+| [Recorded maintenance status](MAINTENANCE_HEALTH.md) | Read-only operator checkpoint progress, failure and lease evidence without enabling execution |
+| [Maintenance status release receipt](RELEASE_MAINTENANCE_2026_10_20.md) | Independent and CI acceptance, exact deployed revision and preserved configuration |
 | [Communication diagnostics](OBSERVATION_DIAGNOSTICS.md) | Next source slice, independent review and remaining observation scope |
+| [Rendered experience and correction observation](OBSERVATION_COMPLETION.md) | Visible committed text, scoped correction feedback and current-state rollback |
+| [Reviewed rights retention](RIGHTS_RETENTION.md) | Explicit reassessment, terminal purge, finite continuity and ledger compatibility |
+| [Scoped local-use restrictions](RIGHTS_LOCAL_USE.md) | RF1 is deployed on the existing Studio host with optional policy off; source/browser/CI evidence and open activation/rights gates are recorded. The security audit has 14 findings and is not clean |
+| [Private-note erasure / حذف یادداشت خصوصی](RIGHTS_PRIVATE_NOTE_ERASURE.md) | RF2 source review and 312 local synthetic checks passed; compiled/CI/release gates remain open / بازبینی منبع و ۳۱۲ آزمون محلی موفق؛ پذیرش برنامهٔ کامپایل‌شده، CI و انتشار باز است |
+| [RF1 production release receipt](RELEASE_RF1_2026_10_20.md) | Exact deployed revision/build, unchanged production policy/configuration, route/bot probes and outstanding release gates |
+| [Synthetic legacy inventory](LEGACY_INVENTORY.md) | Isolated LIP1 implementation and independent synthetic acceptance; no live inventory, import or restore |
+| [Selected offline inventory / فهرست آفلاین منتخب](LEGACY_OFFLINE_INVENTORY.md) | LIA1 native file → bounded deny-all report; independent synthetic acceptance / فایل بومی تا گزارش محدود با استفادهٔ ممنوع؛ پذیرش مستقل ساختگی |
+| [Reviewed synthetic learning cases](LEARNING_CASES.md) | Exact finding/review provenance, current-use authority, migration/capacity safety and independent local acceptance |
+| [Protected evaluation protocol](EVALUATION_PROTOCOL.md) | Frozen synthetic splits, paired budgets, durable final-attempt reservation and signed promotion binding |
+| [Controlled presentation experiments](CONTROLLED_EXPERIMENTS.md) | Private Studio consumption, consent lifecycle, isolated variants and kill semantics |
 | [Adaptive runtime integration](ADAPTIVE_RUNTIME_RESULT.md) | Reminder delivery, stage and usage diagnostics, partial voice preparation and exact qualification limits |
 | [Observation and lifecycle delivery](OBSERVATION_LEARNING.md) | Durable observer, scoped export, maintenance and local routing workflow; activation limits |
 | [Integrated local delivery](DELIVERY_RESULT.md) | Historical local foundation, evidence and remaining gates |

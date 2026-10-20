@@ -14,6 +14,14 @@ beforeEach(async () => {
   h.studio.deps.webhookBase = 'https://vox.example/';
 });
 
+/** Legacy (non-adaptive) path: TIREH memory, history and the unscoped relationship loop.
+ * No production runtime builds it; adaptive runtimes disable all three (production-turn.test.ts). */
+async function legacyHarness() {
+  h = makeStudio({ adaptive: false });
+  org = await seedOrg(h);
+  h.studio.deps.webhookBase = 'https://vox.example/';
+}
+
 function llmRequest(body: unknown, key = voiceLlmKey(SECRET)) {
   return new Request('https://vox.example/api/studio/voice-llm/v1/chat/completions', {
     method: 'POST', headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' }, body: JSON.stringify(body),
@@ -82,6 +90,7 @@ describe('live calls', () => {
   });
 
   it('answers each turn in character, streamed, with the fast voice model and the caller\'s memories', async () => {
+    await legacyHarness();
     const { agent } = await hire(h, org.alice, { name: 'Nova' }, undefined, 'org');
     let attempt = 0;
     const voice = {

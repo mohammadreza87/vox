@@ -134,9 +134,11 @@ Define scopes, grants, schemas, service credentials, event projections, decision
 
 ### VOX-007 — Specify protected eval corpus and baseline protocol
 
-**Owner:** `vox_qa_evaluator` · **Reviewer:** `vox_architect` · **Model:** `gpt-6.1-sol` · **Size:** M · **Priority:** P0 · **Status:** planned
+**Owner:** `vox_qa_evaluator` · **Reviewer:** `vox_architect` · **Model:** `gpt-6.1-sol` · **Size:** M · **Priority:** P0 · **Status:** in_progress
 
 **Requirements:** REQ-05, REQ-14, REQ-16, REQ-18. **Depends on:** VOX-001, VOX-006.
+
+**Implementation progress:** Strict synthetic manifest and disjoint task/person/group/conversation forward-time partitions, optimizer-only projection, predeclared paired denominators/budgets and signed minimized receipts are implemented. Independent local review passed 24 external checks after two reproduced outcome/scenario defects were fixed. External protected assets/IAM, calibrated judges, representative data and statistical qualification remain open. Independent qualification additionally passed two actual pinned-Docker companion flows at integrated d5416f0; finite synthetic results do not establish population quality.
 
 Define synthetic and permitted realistic datasets, person/group/conversation/time splits, calibrated judges, latency/cost denominators and statistical gates.
 
@@ -148,6 +150,8 @@ Define synthetic and permitted realistic datasets, person/group/conversation/tim
 **Verification:** QA approves evaluation protocol before model candidate selection.
 
 **Deliverables:** Dataset manifest template; Baseline and promotion protocol.
+
+**Evidence:** ["docs/implementation/EVALUATION_PROTOCOL.md"]
 
 ### VOX-008 — Inventory provider, SDK and device capability constraints
 
@@ -243,7 +247,7 @@ Create purpose-specific consent/notice receipts, current epochs, withdrawal and 
 
 **Requirements:** REQ-01, REQ-08, REQ-09, REQ-20. **Depends on:** VOX-003, VOX-004, VOX-011.
 
-**Implementation progress:** EN/FA Privacy screen, profile declaration, optional choices/withdrawal, private notes and per-agent grants implemented. Guest entry and complete user-rights/status journeys remain open.
+**Implementation progress:** EN/FA Privacy screen, profile declaration, optional choices/withdrawal, private notes and per-agent grants implemented. Guest entry and complete user-rights/status journeys remain open. GI1 adds an isolated public EN/FA /privacy route, manual reference/recovery-code status, explicit close confirmation and disabled-mode contact fallback. Guest credentials remain in transient component state and request bodies; this is metadata request tracking, not verified identity, consent or rights fulfillment. Independent backend and trusted-origin acceptance passed; compiled/CI/release evidence is tracked per candidate, and legal activation remains separate.
 
 Implement scoped settings, AI disclosure, optional consent choices, why-this/undo/reset and request-status UX in Studio. Include a proportionate 18+ entry gate, no-account guest notice/choice and accidental-participant reporting without collecting a full birth date by default.
 
@@ -257,7 +261,7 @@ Implement scoped settings, AI disclosure, optional consent choices, why-this/und
 
 **Deliverables:** Studio settings/onboarding UI; Accessibility and locale evidence.
 
-**Evidence:** ["docs/implementation/DELIVERY_RESULT.md"]
+**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/GUEST_RIGHTS_INTAKE.md"]
 
 ### VOX-013 — Implement memory lifecycle and bounded retrieval
 
@@ -265,7 +269,7 @@ Implement scoped settings, AI disclosure, optional consent choices, why-this/und
 
 **Requirements:** REQ-02, REQ-08, REQ-16, REQ-17. **Depends on:** VOX-010, VOX-011.
 
-**Implementation progress:** Added EN/FA lexical ranking, trusted explicit-preference priority, whole-record 12-item/8192-byte packing and content-free scoped LRU prewarming. Both streaming and completed turns use current authorized projections and full receipt rechecks. Account/container aggregates are still loaded; indexed retrieval, calibrated semantic ranking and generalized automatic extraction/consolidation remain open.
+**Implementation progress:** Explicit note/claim/summary review and same-ID correction are implemented. Optional prepared SQLite supplies bounded physical retrieval and compact authority; FILEv2 supplies current-state rollback. Guarded synthetic conversation qualification passed nine cases in both prepared schema-2 formats. PR77/deploy ee3467d also fixes concurrent reviewed-memory acceptance with 11 independent write/fence checks. Production still selects legacy FILE. Shared aggregate indexing, generalized extraction/consolidation and measured quality/latency remain open.
 
 Add provenance/claims/supersession, token-budgeted retrieval, indexed candidate queries and background extraction with scope checks at execution.
 
@@ -278,7 +282,7 @@ Add provenance/claims/supersession, token-budgeted retrieval, indexed candidate 
 
 **Deliverables:** Memory lifecycle jobs; Bounded retrieval implementation.
 
-**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/MEMORY_RETRIEVAL_RESULT.md"]
+**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/MEMORY_RETRIEVAL_RESULT.md", "docs/implementation/REVIEWED_PRIVATE_MEMORY_RESULT.md", "docs/implementation/INDEXED_STORAGE.md", "docs/implementation/SQLITE_CONVERSATION_QUALIFICATION.md"]
 
 ### VOX-014 — Implement deletion, revocation and scheduled retention expiry
 
@@ -286,7 +290,7 @@ Add provenance/claims/supersession, token-budgeted retrieval, indexed candidate 
 
 **Requirements:** REQ-02, REQ-17. **Depends on:** VOX-010, VOX-011, VOX-013.
 
-**Implementation progress:** Account/shared scheduled cleanup now has durable paginated leases, restart recovery and expiry tests; observer consent revocation purges journal and derived findings in the same transaction. Maintenance release switch remains off. Provider/backup residual retention and production restore qualification remain open.
+**Implementation progress:** Account/shared scheduled cleanup now has durable paginated leases, restart recovery and expiry tests; observer consent revocation purges journal and derived findings in the same transaction. Maintenance release switch remains off. Provider/backup residual retention and production restore qualification remain open. LC1 now invalidates whole frozen synthetic corpora on source/case expiry or withdrawal, preserves final-use/exclusion history across explicit migration/restart, and refuses unsafe capacity/downgrade paths. Independent local acceptance passed; physical audit retirement and external deletion remain open.
 
 Propagate revocation/deletion across history projections, summaries, cache/search, evidence, queues and permitted downstream datasets; maintain minimal tombstones. Implement versioned class-specific expiry and inactivity sweeps, provider residual tracking and backup expiration with the approved numeric schedule.
 
@@ -301,7 +305,7 @@ Propagate revocation/deletion across history projections, summaries, cache/searc
 
 **Deliverables:** Deletion coordinator; Derived lineage and tombstone tests.
 
-**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/OBSERVATION_LEARNING.md"]
+**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/OBSERVATION_LEARNING.md", "docs/implementation/LEARNING_CASES.md"]
 
 ### VOX-015 — Migrate legacy memory and preference data conservatively
 
@@ -309,7 +313,7 @@ Propagate revocation/deletion across history projections, summaries, cache/searc
 
 **Requirements:** REQ-03, REQ-19. **Depends on:** VOX-009, VOX-010, VOX-011, VOX-014.
 
-**Implementation progress:** Legacy unscoped history/auto-memory is denied in new runtime, preserving source data without silent consent migration. Explicit migration/reconciliation/rollback tooling remains open.
+**Implementation progress:** Legacy unscoped history/auto-memory remains denied without silent consent migration. Current adaptive FILE/SQLite/FILEv2 format transition, recovery and current-state rollback tooling is implemented and independently source-tested (INDEXED_STORAGE.md). Broader legacy application inventory, ownership/purpose reconciliation, quarantine mapping and production residual/restore qualification remain open; storage-format conversion does not grant historical data new consent.
 
 Create dry-run inventory/mapping for Studio and older app memory, identity and notifications flags; quarantine ambiguous ownership/purpose/history.
 
@@ -322,7 +326,7 @@ Create dry-run inventory/mapping for Studio and older app memory, identity and n
 
 **Deliverables:** Versioned migration and rollback; Reconciliation report.
 
-**Evidence:** ["docs/implementation/DELIVERY_RESULT.md"]
+**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/INDEXED_STORAGE.md"]
 
 ### VOX-016 — Enforce storage, key and service-account isolation
 
@@ -351,7 +355,7 @@ Implement database/IAM rules, restricted evidence and future biometric storage b
 
 **Requirements:** REQ-01, REQ-02, REQ-03, REQ-09, REQ-17, REQ-22. **Depends on:** VOX-002, VOX-009, VOX-010, VOX-011, VOX-014, VOX-016.
 
-**Implementation progress:** Confirmed own-account Work/Personal JSON export now includes allowlisted account records and currently authorized published shared content; exports are not persisted. Provider/backups explicitly unavailable. Guest request verification and broader rights orchestration remain open.
+**Implementation progress:** Own-account Work/Personal export, EN/FA note correction, RI1 request intake and RI2 retention operations are implemented. RI2 binds original audit/closure floors, explicitly reassesses unresolved cases, purges only eligible terminal records and retains finite scoped continuity/410 receipts. Independent RI2 local acceptance passed 36 cases. Formal restriction/objection, guest verification, provider/backups and broader rights fulfillment remain open. Prior additional independent immediate-export race proof remains unavailable after automatic security review; no replacement execution is claimed. GI1 guest metadata intake, bounded separate ledger, current-operator queue, key continuity, final authority fences and finite retention/status receipts are implemented behind reviewed-policy/key configuration. Independent review caught and verified the fix for a short purge-receipt horizon. Actual compiled proxy testing also exposed internal/public-origin mismatch; all six affected handlers now use the trusted server URL. Composed independent acceptance passed 158 external cases and 117 repository regressions; compiled/CI/release evidence remains bound to its exact candidate. Guest recovery-code possession never proves identity or authorizes private-data disclosure.
 
 Implement accessible EN/FA access/export, correction, erasure, restriction, objection, portability and withdrawal requests with proportionate requester verification, a no-account guest route, operator queue, jurisdiction deadlines and status receipts. Wire the privacy center to these real handlers.
 
@@ -366,7 +370,7 @@ Implement accessible EN/FA access/export, correction, erasure, restriction, obje
 
 **Deliverables:** Rights service and operator queue; Scoped export and correction handlers; EN/FA privacy-center and guest request flows; Rights/deadline/access tests.
 
-**Evidence:** ["docs/implementation/OBSERVATION_LEARNING.md"]
+**Evidence:** ["docs/implementation/OBSERVATION_LEARNING.md", "docs/implementation/RIGHTS_INTAKE.md", "docs/implementation/RIGHTS_RETENTION.md", "docs/implementation/GUEST_RIGHTS_INTAKE.md"]
 
 ## P2 — Reliable observation
 
@@ -376,7 +380,7 @@ Implement accessible EN/FA access/export, correction, erasure, restriction, obje
 
 **Requirements:** REQ-04, REQ-05. **Depends on:** VOX-006, VOX-010, VOX-011.
 
-**Implementation progress:** Strict bounded server/client observation envelopes now serve authenticated Studio ingress with server-derived identity, exact agent/space receipt, revision and QA-origin exclusion. Real voice/private Telegram producers retain no conversation content. Wider channel/usage/version coverage remains open.
+**Implementation progress:** Allowlisted text_rendered and client-unverified correction observations now have strict ingress, current receipt/canonical command checks, bounded retention and own-space export. No raw note/conversation text is accepted in these observations. Composed release evidence remains separate.
 
 Wire approved schemas with server-derived scope/identity, occurrence/receipt times, origin, revisions, versions and bounded properties. Schema changes escalate to architect.
 
@@ -389,7 +393,7 @@ Wire approved schemas with server-derived scope/identity, occurrence/receipt tim
 
 **Deliverables:** Event types/validators; Ingress endpoints.
 
-**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/OBSERVATION_LEARNING.md"]
+**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/OBSERVATION_LEARNING.md", "docs/implementation/OBSERVATION_COMPLETION.md"]
 
 ### VOX-018 — Implement durable outbox, consumers and repair
 
@@ -439,7 +443,7 @@ Add turn trace correlation across STT/retrieval/decision/generation/TTS and actu
 
 **Requirements:** REQ-05, REQ-09, REQ-16. **Depends on:** VOX-017, VOX-012.
 
-**Implementation progress:** Tap-to-talk client hooks report playing, completed, failed and interrupted outcomes using accepted server correlation. Events remain unverified and never certify task success. Live ElevenLabs, correction and experiment-exposure coverage remain open.
+**Implementation progress:** Studio reports committed, connected and visible whole-reply text, separately from explicit task-success feedback. EN/FA note-correction metadata reports saved/unconfirmed outcomes without delaying Save; analytics eligibility loss cancels pending diagnostics. This is whole-response DOM timing, not first streamed token or human comprehension.
 
 Wire first audio, interruption, playback failure, cancellation, correction, feedback and experiment exposure with approved event names.
 
@@ -452,7 +456,7 @@ Wire first audio, interruption, playback failure, cancellation, correction, feed
 
 **Deliverables:** Client event hooks; Outcome event coverage.
 
-**Evidence:** ["docs/implementation/OBSERVATION_LEARNING.md"]
+**Evidence:** ["docs/implementation/OBSERVATION_LEARNING.md", "docs/implementation/OBSERVATION_COMPLETION.md"]
 
 ### VOX-021 — Remove private payloads from diagnostic and audit paths
 
@@ -460,7 +464,7 @@ Wire first audio, interruption, playback failure, cancellation, correction, feed
 
 **Requirements:** REQ-04, REQ-15, REQ-22. **Depends on:** VOX-017.
 
-**Implementation progress:** Active Studio/Tireh polling, webhook, gateway, provider fallback, live call and Mini App HTTP diagnostics now emit fixed catalog fields without raw exceptions, arbitrary codes, content or identity IDs. Independent canary/getter/proxy and real Pino serialization checks passed. Historical/platform logs, sinks/IAM/retention and full export/replay coverage remain open.
+**Implementation progress:** New correction/presentation diagnostics retain fixed outcome, scope and bounded timing only; exports omit internal receipts/source/authority hashes. Current-state rollback removes the new observer extension from legacy FILE, prepared SQLite or FILEv2 while preserving canonical data, pause controls and tombstones.
 
 Replace raw STT/call/extraction logs and block audit text with reason codes/restricted evidence refs; keep sensitive replay disabled or explicitly masked.
 
@@ -473,7 +477,7 @@ Replace raw STT/call/extraction logs and block audit text with reason codes/rest
 
 **Deliverables:** Sanitized logging/audit changes; Leak-canary report.
 
-**Evidence:** ["docs/implementation/OBSERVATION_DIAGNOSTICS.md", "docs/implementation/evidence/DIAGNOSTIC_REVIEW.md"]
+**Evidence:** ["docs/implementation/OBSERVATION_DIAGNOSTICS.md", "docs/implementation/evidence/DIAGNOSTIC_REVIEW.md", "docs/implementation/OBSERVATION_COMPLETION.md"]
 
 ### VOX-022 — Build operational and product outcome views
 
@@ -481,7 +485,7 @@ Replace raw STT/call/extraction logs and block audit text with reason codes/rest
 
 **Requirements:** REQ-05, REQ-16. **Depends on:** VOX-018, VOX-019, VOX-020, VOX-021.
 
-**Implementation progress:** Own-space Studio measurements show response/playback denominators, queue lag/failure, deterministic findings and explicit unavailable task success/usage. Owner/superadmin operations view shows local workflow metadata only. Organization/cohort dashboards remain open.
+**Implementation progress:** Own-space Studio measurements show response/playback denominators, queue lag/failure, deterministic findings and explicit unavailable task success/usage. Owner/superadmin operations view shows local workflow metadata only. Organization/cohort dashboards remain open. The next bounded source slice adds strict read-only system-wide maintenance status for current operators: retained progress, activity time, recorded failure, lease expiry and explicit unavailable states in EN/FA. Counts are not unique people or verified deletions. Independent/compiled/CI acceptance is tracked per candidate in MAINTENANCE_HEALTH.md. The bounded maintenance-status slice passed independent compiled/ENFA and CI acceptance and was deployed as b419309 on 20 October; 40 local/public routes and five active-bot ownership checks passed with unchanged configuration. This does not close alerting, actual scheduling/load, backup or provider-deletion gates.
 
 Produce scoped views for task outcome, latency/cost, correction, queue lag, permission/consent failures and notification outcomes with compatible cohorts.
 
@@ -494,7 +498,7 @@ Produce scoped views for task outcome, latency/cost, correction, queue lag, perm
 
 **Deliverables:** Baseline dashboards/queries; Data quality report.
 
-**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/OBSERVATION_LEARNING.md"]
+**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/OBSERVATION_LEARNING.md", "docs/implementation/MAINTENANCE_HEALTH.md", "docs/implementation/RELEASE_MAINTENANCE_2026_10_20.md"]
 
 ### VOX-023 — Introduce read-only observer and reproducible findings
 
@@ -588,7 +592,7 @@ Bind predictions to turn/source/scope/policy revisions, cap speculative calls an
 
 **Requirements:** REQ-03, REQ-08, REQ-17. **Depends on:** VOX-011, VOX-013, VOX-014, VOX-025.
 
-**Implementation progress:** Durable explicit response preferences/reset integrated with scoped consent and per-agent grants; pure expiring hypothesis resolver tested. Learning/inference producer and evidence lifecycle remain open.
+**Implementation progress:** Reviewed preference learning now has separate versioned opt-in per confirmed account, agent and Work/Personal space. Final current text may create bounded enum proposals through guarded Decisions; Use is required, explicit choices win, and shared turn budgets, source suppression, expiry and authority revisions fence stale work. Independent 424/30 and composed 121/6 checks passed. Compiled browser, final CI, live provider quality and rollout remain pending; no sensitive-trait or identity inference.
 
 Add preference precedence, hypothesis evidence/expiry, bounded effects and user correction/reset; no hidden sensitive-trait inference.
 
@@ -601,7 +605,7 @@ Add preference precedence, hypothesis evidence/expiry, bounded effects and user 
 
 **Deliverables:** Preference/hypothesis service; Attribution fixtures.
 
-**Evidence:** ["docs/implementation/DELIVERY_RESULT.md"]
+**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/PERSONALIZATION_CONTROLS_RESULT.md", "docs/implementation/REVIEWED_PREFERENCE_LEARNING_RESULT.md"]
 
 ### VOX-028 — Build personalized UX with explanation and undo
 
@@ -609,7 +613,7 @@ Add preference precedence, hypothesis evidence/expiry, bounded effects and user 
 
 **Requirements:** REQ-08, REQ-09, REQ-20. **Depends on:** VOX-004, VOX-012, VOX-026, VOX-027.
 
-**Implementation progress:** Work/Personal call selector, preferences controls and shared audience preview implemented. Broader UX variants and why-this/undo for inferred adaptation remain open.
+**Implementation progress:** EN/FA explicit choices retain scoped explanations and genuine Undo. The composed review-only learning panel offers separate opt-in, uncertain candidate reasons, Use/dismiss, scope cancellation and suppression against immediate relearning after Undo/reset. Independent source and real-handler/file React journeys passed. Compiled browser acceptance and broader suggested-action/component variants remain open.
 
 Apply approved length/language/format/suggested-action and component-schema variants with why-this, undo and stable navigation.
 
@@ -622,7 +626,7 @@ Apply approved length/language/format/suggested-action and component-schema vari
 
 **Deliverables:** Personalized Studio components; UX evidence.
 
-**Evidence:** ["docs/implementation/DELIVERY_RESULT.md"]
+**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/PERSONALIZATION_CONTROLS_RESULT.md", "docs/implementation/REVIEWED_PREFERENCE_LEARNING_RESULT.md"]
 
 ### VOX-029 — Implement feature gates and shared-container experiments
 
@@ -630,7 +634,7 @@ Apply approved length/language/format/suggested-action and component-schema vari
 
 **Requirements:** REQ-16, REQ-18, REQ-21. **Depends on:** VOX-009, VOX-018, VOX-020, VOX-025.
 
-**Implementation progress:** Server manifest and Decisions switch fail closed; no experiment assignment/exposure worker enabled.
+**Implementation progress:** Controlled presentation experiment service, strict configuration and lifecycle, private-person and exact shared-container assignment contracts, and client-unverified visible exposure are implemented. The actual Studio surface is private text density only, default off; shared-runtime enrollment and production cohort activation remain open.
 
 Add server-enforced flags/kill switches, stable assignments/exposure and isolated variant memory for private/person or shared-container experiments.
 
@@ -643,7 +647,7 @@ Add server-enforced flags/kill switches, stable assignments/exposure and isolate
 
 **Deliverables:** Experiment/flag service; Exposure and isolation tests.
 
-**Evidence:** ["docs/implementation/DELIVERY_RESULT.md"]
+**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/CONTROLLED_EXPERIMENTS.md"]
 
 ### VOX-030 — Qualify decision latency, cost and fallback behavior
 
@@ -924,7 +928,7 @@ Run independent consented/synthetic voice corpus across languages, devices, nois
 
 **Requirements:** REQ-04, REQ-14, REQ-17. **Depends on:** VOX-007, VOX-014, VOX-016, VOX-023.
 
-**Implementation progress:** Signed minimized synthetic/approved aggregate finding import, lineage expiry/revocation and private-content rejection implemented for local routing workflow. No automatic export of real user observations; production curation/rights integration remains open.
+**Implementation progress:** Signed minimized synthetic/approved aggregate finding import, lineage expiry/revocation and private-content rejection implemented for local routing workflow. No automatic export of real user observations; production curation/rights integration remains open. LC1 connects exact signed finding provenance and human-reviewed closed recipes to evaluator-frozen corpora, private current authority, optimization, reserved paired evaluation, real protected Docker companion, human approval and restart readiness. Independent e05e460 acceptance passed 41 external cases and 45 scanner checks; a cumulative audit-capacity P1 was reproduced and repaired before acceptance. This synthetic-only local slice does not complete real-data curation, rights integration, production IAM or measured model benefit.
 
 Turn permitted findings into minimized reproductions/evaluation cases with lineage, data-purpose eligibility, retention and review.
 
@@ -937,7 +941,7 @@ Turn permitted findings into minimized reproductions/evaluation cases with linea
 
 **Deliverables:** Case curation workflow; Dataset manifests.
 
-**Evidence:** ["docs/implementation/OBSERVATION_LEARNING.md"]
+**Evidence:** ["docs/implementation/OBSERVATION_LEARNING.md", "docs/implementation/LEARNING_CASES.md"]
 
 ### VOX-044 — Implement offline prompt and routing optimization
 
@@ -945,7 +949,7 @@ Turn permitted findings into minimized reproductions/evaluation cases with linea
 
 **Requirements:** REQ-06, REQ-14, REQ-16. **Depends on:** VOX-025, VOX-030, VOX-043.
 
-**Implementation progress:** Fixed-budget offline cancellation-routing search and immutable JSON candidate registry implemented. Small synthetic corpus only; prompt optimization, representative train/validation data and provider quality evaluation remain open.
+**Implementation progress:** Fixed-budget cancellation-routing optimizer now accepts only the strict optimization projection of a frozen protocol; validation/final cases and judge/scoring fields are excluded. Representative prompt optimization, real provider quality and external optimizer isolation remain open.
 
 Generate versioned GEPA-style prompt/query/routing candidates offline with fixed budgets and incumbent comparisons; preserve serving path.
 
@@ -958,7 +962,7 @@ Generate versioned GEPA-style prompt/query/routing candidates offline with fixed
 
 **Deliverables:** Optimization worker; Candidate registry.
 
-**Evidence:** ["docs/implementation/OBSERVATION_LEARNING.md"]
+**Evidence:** ["docs/implementation/OBSERVATION_LEARNING.md", "docs/implementation/EVALUATION_PROTOCOL.md"]
 
 ### VOX-045 — Implement sandbox software patch workflow
 
@@ -979,7 +983,7 @@ Convert reviewed defects into isolated worktrees/branches with small diffs, repr
 
 **Deliverables:** Developer workflow; PR/evidence template.
 
-**Evidence:** ["docs/implementation/SOFTWARE_PATCH_WORKFLOW.md","docs/implementation/evidence/software-patch/RESULT.md","docs/implementation/MODEL_PATCH_AUTHOR.md","docs/implementation/evidence/model-author/RESULT.md"]
+**Evidence:** ["docs/implementation/SOFTWARE_PATCH_WORKFLOW.md", "docs/implementation/evidence/software-patch/RESULT.md", "docs/implementation/MODEL_PATCH_AUTHOR.md", "docs/implementation/evidence/model-author/RESULT.md"]
 
 ### VOX-046 — Implement independent evaluation and promotion receipts
 
@@ -987,7 +991,7 @@ Convert reviewed defects into isolated worktrees/branches with small diffs, repr
 
 **Requirements:** REQ-14, REQ-16, REQ-18. **Depends on:** VOX-007, VOX-029, VOX-043, VOX-044, VOX-045.
 
-**Implementation progress:** Pinned Docker evaluator and separate signed evaluator/human receipts bind exact artifacts/data/policy; malformed payload, budget bypass and counterfeit evidence regressions covered. Synthetic role keys do not qualify production IAM; protected service deployment and representative corpus remain open. Final cancellation datasets and the fixed evaluator require both cancelled-stop and active-continue coverage, rejecting inconsistent labels (policy version 2).
+**Implementation progress:** Protocol-bound candidates require a durable evaluator reservation before final execution, signed minimized companion, existing Docker final envelope and human approval of that exact envelope. Replay/crash/cross-candidate reuse and legacy bypass deny. Independent local 24-case review passed. At integrated d5416f0 the four normally skipped Docker cases passed within 33 workflow/software-sandbox tests; two independent actual pinned-Docker companion flows also passed, covering successful approval/restart and denied regression/self-promotion. Default CI skips remain explicit. External IAM/checkpoint and representative quality/calibration remain open.
 
 Run Promptfoo and deterministic tests in a protected environment against exact candidate/model/prompt/data versions; calibrate judge to human examples.
 
@@ -1000,7 +1004,7 @@ Run Promptfoo and deterministic tests in a protected environment against exact c
 
 **Deliverables:** Protected evaluator pipeline; Promotion receipt schema.
 
-**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/OBSERVATION_LEARNING.md"]
+**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/OBSERVATION_LEARNING.md", "docs/implementation/EVALUATION_PROTOCOL.md"]
 
 ### VOX-047 — Implement controlled experiments and rollback of learned state
 
@@ -1008,7 +1012,7 @@ Run Promptfoo and deterministic tests in a protected environment against exact c
 
 **Requirements:** REQ-14, REQ-17, REQ-18, REQ-21. **Depends on:** VOX-029, VOX-046.
 
-**Implementation progress:** Local comparison-only rollback rehearsal binds candidate and baseline artifacts, and explicitly makes no deployment or candidate-disable claim. Controlled production experiments, derived-state rollback and kill-switch qualification remain open.
+**Implementation progress:** Versioned off/offline/shadow/pilot/killed controller, isolated derived state, kill/quarantine/purge, durable suppression/source tombstones, reviewed retention and scoped export are implemented. Local FILE/SQLite/FILEv2 consent integration is independently tested. Evidence references are operator attestations, not automatic proof of independent promotion; production pilot and representative outcome readout remain open.
 
 Promote from offline to side-effect-free shadow then bounded pilot; isolate experimental memory writes and rollback code/config/derived state together.
 
@@ -1021,7 +1025,7 @@ Promote from offline to side-effect-free shadow then bounded pilot; isolate expe
 
 **Deliverables:** Promotion controller; Rollback runbook/evidence.
 
-**Evidence:** ["docs/implementation/OBSERVATION_LEARNING.md"]
+**Evidence:** ["docs/implementation/OBSERVATION_LEARNING.md", "docs/implementation/CONTROLLED_EXPERIMENTS.md"]
 
 ### VOX-048 — Publish evidence-backed product improvement reports
 
@@ -1118,7 +1122,7 @@ Execute approved core test-account journeys on actual supported Telegram/mobile/
 
 **Requirements:** REQ-04, REQ-16, REQ-17, REQ-21. **Depends on:** VOX-018, VOX-014, VOX-030, VOX-035, VOX-047, VOX-049.
 
-**Implementation progress:** Local account sweep pagination, competing leases, crash recovery, expiry, snapshot reconciliation and bounded observer retries tested. Background maintenance is supported only in the persistent file/polling runtime; unsupported activation fails startup. Production load/SLOs, full backup restoration and provider residual deletion remain open.
+**Implementation progress:** Local account sweep pagination, competing leases, crash recovery, expiry, snapshot reconciliation and bounded observer retries tested. Background maintenance is supported only in the persistent file/polling runtime; unsupported activation fails startup. Production load/SLOs, full backup restoration and provider residual deletion remain open. A separate read-only FILE checkpoint health capability and EN/FA operator status view are implemented without activating maintenance or changing cleanup semantics. Disabled execution preserves readable retained evidence; current committed operator/auth fences protect publication. Alert delivery, actual scheduled-worker/load qualification and backup/provider guarantees remain open. The bounded maintenance-status slice passed independent compiled/ENFA and CI acceptance and was deployed as b419309 on 20 October; 40 local/public routes and five active-bot ownership checks passed with unchanged configuration. This does not close alerting, actual scheduling/load, backup or provider-deletion gates.
 
 Load-test approved synthetic workloads, queue/provider outage, lost receipts, restore/tombstones and incident kill switches; set alert owners.
 
@@ -1132,7 +1136,7 @@ Load-test approved synthetic workloads, queue/provider outage, lost receipts, re
 
 **Deliverables:** Operations qualification; Incident and restore runbook.
 
-**Evidence:** ["docs/implementation/OBSERVATION_LEARNING.md"]
+**Evidence:** ["docs/implementation/OBSERVATION_LEARNING.md", "docs/implementation/MAINTENANCE_HEALTH.md", "docs/implementation/RELEASE_MAINTENANCE_2026_10_20.md"]
 
 ### VOX-053 — Finalize public notices, support and launch materials
 

@@ -8,7 +8,7 @@ import { LEARNING_VERSION } from './contracts';
 import { randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 export async function learningFixture(options: { file?: boolean; guarded?: boolean; key?: string; value?: string } = {}) {
-  const h = makeStudio(), users = await seedOrg(h), { agent } = await hire(h, users.alice);
+  const h = makeStudio({ adaptive: false }), users = await seedOrg(h), { agent } = await hire(h, users.alice);
   const f = await preferenceFixture({ file: options.file !== false, telegramId: ID.alice, agentId: agent.id });
   let now = NOW;
   h.studio.deps.now = () => new Date(now);

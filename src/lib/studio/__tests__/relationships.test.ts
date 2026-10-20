@@ -7,7 +7,8 @@ import { parseRelationshipAssessment, StudioRelationshipAssessor } from '../rela
 import { hire, ID, makeStudio, seedOrg, SECRET } from './helpers';
 
 async function setup(mode: 'off' | 'shadow' | 'live' = 'live') {
-  const h = makeStudio();
+  // Legacy relationship loop: adaptive runtimes refuse unscoped relationship state (adaptive-integration.test.ts).
+  const h = makeStudio({ adaptive: false });
   const users = await seedOrg(h);
   const hired = await hire(h, users.alice);
   const store = new InMemoryRelationshipStore();
@@ -153,6 +154,9 @@ describe('relationship vertical slice', () => {
       return original(request);
     });
     expect(await x.h.studio.drainRelationships()).toMatchObject({ sent: 0, failed: 1, deferred: 1 });
+    // Thinking shares the cap, so the composer runs at low effort with headroom.
+    expect(vi.mocked(x.h.chatLLM.complete).mock.calls.map(([request]) => request).find((request) => request.system.startsWith('Write one brief natural')))
+      .toMatchObject({ maxTokens: 2048, effort: 'low', requireComplete: true });
     expect(x.hired.bot().sendMessage).not.toHaveBeenCalled();
     expect((await x.loop.status(x.key)).intentions[0].status).toBe('pending');
   });

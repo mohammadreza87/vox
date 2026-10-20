@@ -21,12 +21,14 @@ export const routingArtifactSchema = z.object({ schemaVersion: z.literal(1), kin
   onCancelled: z.enum(['stop', 'complete']), onActive: z.enum(['continue', 'stop']),
 }).strict();
 export type RoutingArtifact = z.infer<typeof routingArtifactSchema>;
-export const proposalSchema = z.object({ id: identifier, findingId: identifier,
+const learningCommitment = z.object({ version: z.literal(1), lineageDigest: sha256 }).strict();
+export const proposalSchema = z.object({ schemaVersion: z.literal(2).optional(), learningCases: learningCommitment.optional(), id: identifier, findingId: identifier,
   kind: z.literal('routing_change'), hypothesis: z.literal('cancelled_turn_should_stop'),
   expectedOutcome: z.literal('zero_post_cancel_work'),
   baselineRevision: sha256, baselineArtifactDigest: sha256, createdAt: timestamp,
+  evaluationProtocolDigest: sha256.optional(),
   budget: z.object({ maxCandidates: z.number().int().min(1).max(4), maxCases: z.number().int().min(1).max(128) }).strict(),
-}).strict();
+}).strict().refine(p => (p.schemaVersion === 2) === !!p.learningCases && (!p.learningCases || !!p.evaluationProtocolDigest));
 export type Proposal = z.infer<typeof proposalSchema>;
 export type Authority = 'analyst' | 'author' | 'evaluator' | 'human';
 export interface Attestation<T> { schemaVersion: 1; keyId: string; purpose: string; payload: T; signature: string }
@@ -62,6 +64,7 @@ export type HumanApproval = z.infer<typeof approvalSchema>;
 export const evaluationDetailsSchema = z.object({
   sourceDigest: sha256, artifactDigest: sha256, baselineArtifactDigest: sha256, datasetDigest: sha256, evaluatorDigest: sha256,
   imageDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/), policyDigest: sha256,
+  protocolReceiptDigest: sha256.optional(),
   phase: z.literal('protected_final'), isolation: z.literal('docker_network_none_readonly'),
   checks: z.number().int().positive().max(128), baselineFailures: z.number().int().nonnegative(), candidateFailures: z.number().int().nonnegative(),
 }).strict();
@@ -69,12 +72,13 @@ export const evaluationDetailsSchema = z.object({
  * never become durable audit/review content merely because a worker signed them. */
 export const protectedEvaluationSchema = z.object({
   receipt: z.object({
+    schemaVersion: z.literal(2).optional(), learningCases: learningCommitment.optional(),
     candidateId: identifier, candidateRevision: sha256, artifactDigest: sha256,
     evaluatorServiceId: identifier, evaluatorVersion: sha256, datasetVersion: sha256,
-    promotionPolicyVersion: sha256, baselineRevision: sha256,
+    promotionPolicyVersion: sha256, baselineRevision: sha256, evaluationProtocolDigest: sha256.optional(),
     status: z.enum(['passed', 'failed', 'incomplete']), privacyFailures: z.number().int().nonnegative(),
     failedChecks: z.number().int().nonnegative(), skippedChecks: z.number().int().nonnegative(), testedAt: timestamp,
-  }).strict(),
+  }).strict().refine(r => (r.schemaVersion === 2) === !!r.learningCases && (!r.learningCases || !!r.evaluationProtocolDigest)),
   details: evaluationDetailsSchema,
 }).strict();
 // Expected labels are evaluator policy, never author-selected target behavior.

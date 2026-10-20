@@ -5,11 +5,15 @@ import { AdaptiveRelationshipService } from '../relationships/service';
 import type { SharedMemoryService } from '../shared/service';
 import { z } from 'zod';
 import type { ObserverDocument } from '../observation/contracts';
+import type { LocalErasureOperation } from '../rights-intake/local-erasure-contracts';
+import type { ExperimentScopeExport } from '../experiments/contracts';
 
 export interface LifecycleOptions {
   shared?: SharedMemoryService;
   /** Called within the authoritative transaction, before export/recovery projection. */
   pruneObserver?: (document: AdaptiveDocument, now: number) => void;
+  /** Own-space data from the separate ledger, with a publication-time fence. */
+  prepareExperimentExport?: (telegramId: number, space: SpaceKind) => { data: ExperimentScopeExport; revalidate(): void };
 }
 const fail = (status: number, code: string): never => { throw new AdaptiveError(status, code); };
 function selectedSpace(space: SpaceKind): void {
@@ -25,6 +29,10 @@ export class AdaptiveLifecycleService {
     this.experience = new AdaptiveExperienceService(adaptive);
     this.relationships = new AdaptiveRelationshipService(adaptive);
   }
+  privateNoteErasureQualified():boolean {return this.adaptive.privateNoteErasureQualified();}
+  preparePrivateNoteErasureNow(id:number,space:SpaceKind,memoryId:string,revision:number,guard:(observedAt?:number)=>void){return this.adaptive.preparePrivateNoteErasureNow(id,space,memoryId,revision,guard);}
+  privateNoteErasureProofNow(id:number,operation:LocalErasureOperation,guard:(observedAt?:number)=>void){return this.adaptive.privateNoteErasureProofNow(id,operation,guard);}
+  eraseSelectedPrivateNote(id:number,operation:LocalErasureOperation,guard:()=>void){return this.adaptive.eraseSelectedPrivateNote(id,operation,guard);}
   private prune(d: AdaptiveDocument, now: number): void {
     const before = digest([d.experience, d.relationships, d.receipts]);
     this.experience.pruneDocument(d, now);
@@ -34,15 +42,48 @@ export class AdaptiveLifecycleService {
     if (before !== digest([d.experience, d.relationships, d.receipts])) { d.revision++; d.updatedAt = now; }
   }
   async exportAccount(telegramId: number, space: SpaceKind) {
+    return (await this.buildAccountExport(telegramId, space)).data;
+  }
+  /** A fresh export plus a synchronous final fence for an awaited receipt commit. */
+  async prepareAccountExport(telegramId: number, space: SpaceKind) {
+    const built = await this.buildAccountExport(telegramId, space);
+    const sharedFence = built.shared ? this.options.shared!.captureExportFence(telegramId, space, built.shared) : undefined;
+    const payloadDeadline = Math.min(built.data.confirmedUntil,
+      ...[...built.data.memories, ...built.data.preferenceChanges, ...built.data.reminders,
+        ...built.data.checkIns, ...built.data.observerEvents, ...(built.data.observerCorrections ?? []), ...built.data.sharedContributions,
+        ...(built.data.preferenceLearning?.intents ?? []), ...(built.data.preferenceLearning?.candidates ?? []),
+        ...(built.data.preferenceLearning?.suppressions ?? [])].map(row => row.expiresAt));
+    const inspect = () => {
+      const authority = this.adaptive.readAuthorityNow(telegramId, space);
+      if (!authority.identity.confirmed || !authority.explicitMemoryAvailable) return fail(409, 'export_authority_changed');
+      const read = this.adaptive.readCommittedForEffect(telegramId, (d, now) => {
+        if (!this.adaptive.isProfileConfirmed(d, now) || now >= payloadDeadline || d.revision !== built.data.revision || d.binding!.expiresAt !== built.data.confirmedUntil) return fail(409, 'export_authority_changed');
+        return digest([d, authority]);
+      });
+      if (read.status !== 'ready') return fail(503, 'export_unavailable');
+      return read.value;
+    };
+    const stamp = inspect();
+    const revalidate = () => {
+      if (inspect() !== stamp) return fail(409, 'export_authority_changed');
+      sharedFence?.();
+      built.experiments?.revalidate();
+      if (inspect() !== stamp) return fail(409, 'export_authority_changed');
+    };
+    revalidate(); return { data: built.data, revalidate };
+  }
+  private async buildAccountExport(telegramId: number, space: SpaceKind) {
     selectedSpace(space);
     const own = await this.adaptive.withAccountDocument(telegramId, (d, now) => {
       if (!this.adaptive.isProfileConfirmed(d, now)) fail(403, 'profile_confirmation_required');
       this.prune(d, now);
       const observer = (d as AdaptiveDocument & { observer?: ObserverDocument }).observer;
       const observerEvents = (observer?.events ?? []).filter(e => e.space === space && e.expiresAt > now &&
-        this.adaptive.isPurposeAllowed(d, space, 'optional.product_analytics', now, e.agentId));
+        this.adaptive.isPurposeRetentionAllowed(d, space, 'optional.product_analytics', now, e.agentId));
       return { schemaVersion: 1 as const, accountId: d.accountId, space, generatedAt: now,
         revision: d.revision, confirmedUntil: d.binding!.expiresAt,
+        ...(d.schemaVersion===3?{rightsUseHolds:{...structuredClone(d.rightsUseHolds!),scopes:d.rightsUseHolds!.scopes.filter(s=>s.space===space),effects:d.rightsUseHolds!.effects.filter(e=>e.space===space)}}:{}),
+        ...(d.schemaVersion >= 2 ? { productPause: structuredClone(d.productPause!.scopes.find(row => row.space === space)) } : {}),
         memories: d.memories.filter(m => m.space === space && m.status === 'active' && m.expiresAt > now)
           .map(m => ({ id: m.id, revision: m.revision, text: m.text!, createdAt: m.createdAt, expiresAt: m.expiresAt })),
         preferences: d.experience.preferences.filter(p => p.space === space).map(p => ({ id: p.id, revision: p.revision,
@@ -70,6 +111,9 @@ export class AdaptiveLifecycleService {
           channel: o.channel, status: o.status, durationMs: o.durationMs, at: o.at })),
         checkIns: d.relationships.inbox.filter(i => i.key.scope.space === space && i.status !== 'cancelled' && i.expiresAt > now)
           .map(i => ({ id: i.id, agentId: i.key.personaId, text: i.text, status: i.status, createdAt: i.createdAt, expiresAt: i.expiresAt })),
+        ...((observer?.corrections ?? []).some(e => e.space === space) ? { observerCorrections: (observer?.corrections ?? []).filter(e => e.space === space && e.expiresAt > now &&
+          this.adaptive.isPurposeRetentionAllowed(d, space, 'optional.product_analytics', now)).map(e => ({ version: e.version, trust: e.trust, outcome: e.outcome,
+          mutationEvidence: e.mutationEvidence, occurredAt: e.occurredAt, expiresAt: e.expiresAt })) } : {}),
         observerEvents: observerEvents.map(e => ({ agentId: e.agentId, trust: e.trust, channel: e.channel,
           outcome: e.outcome, durationMs: e.durationMs, occurredAt: e.occurredAt, expiresAt: e.expiresAt, state: e.state })),
       };
@@ -86,9 +130,10 @@ export class AdaptiveLifecycleService {
     });
     if (shared) await this.options.shared!.revalidateExport(telegramId, space, shared, checkPrivateAccount);
     else await checkPrivateAccount();
-    return { ...own, sharedContributions: contributions,
+    const experiments = this.options.prepareExperimentExport?.(telegramId, space);
+    return { shared, experiments, data: { ...own, ...(experiments ? { experiments: experiments.data } : {}), sharedContributions: contributions,
       coverage: { privateAccount: 'included' as const, shared: shared ? 'authorized_published_only' as const : 'not_configured' as const,
-        providers: 'unavailable' as const, backups: 'unavailable' as const } };
+        providers: 'unavailable' as const, backups: 'unavailable' as const } } };
   }
   /** Runs without profile confirmation or feature activation; uses existing expiry,
    * revocation and lineage invalidation in AdaptiveService's transaction. */

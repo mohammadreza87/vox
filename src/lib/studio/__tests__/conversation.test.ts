@@ -17,7 +17,7 @@ function request(body: unknown, extras: Record<string, string> = {}, signal?: Ab
       'x-telegram-init-data': signInitData({ id: ID.alice, first_name: 'Alice' }, TOKEN), ...extras }, body: JSON.stringify(body) });
 }
 async function setup() {
-  const h = makeStudio(), users = await seedOrg(h), { agent } = await hire(h, users.alice);
+  const h = makeStudio({ adaptive: false }), users = await seedOrg(h), { agent } = await hire(h, users.alice);
   const now = Date.now(), capabilities = ['core_text', 'single_party_image', 'product_analytics'];
   const options = adaptiveOptionsFromManifest(JSON.stringify({ schemaVersion: 1, configurationVersion: 'test', enabledCapabilities: capabilities,
     accounts: [{ accountId: accountIdFor(ID.alice), jurisdictionKeys: ['SYNTHETIC'], allowDeclaredAdult: true }],

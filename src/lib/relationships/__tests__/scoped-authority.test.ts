@@ -187,3 +187,13 @@ describe('scoped relationship authority', () => {
     expect(h.delivery.compose).not.toHaveBeenCalled(); expect(h.choose).not.toHaveBeenCalled(); expect(h.delivery.send).not.toHaveBeenCalled();
   });
 });
+
+it('suspended use cancels old tasks but retains primary context and normal source lineage for fresh resume', async () => {
+  const h = harness(); await h.turn('retained-source'); const before = await h.store.read(key);
+  h.deps.synchronize = async () => 'suspended_use'; h.revoke();
+  expect(await h.loop.context(key)).toBe(''); const paused = await h.store.read(key);
+  expect(paused.preferences).toEqual(before.preferences); expect(paused.situations).toEqual(before.situations); expect(paused.forgottenSourceIds).toEqual(before.forgottenSourceIds);
+  expect(paused.intentions[0]).toMatchObject({status:'cancelled',purpose:'',topic:'',sourceIds:[]});
+  h.changePolicy(); expect(await h.loop.context(key)).toContain('PERSONAL_CANARY');
+  h.advance(); await h.loop.drain(h.delivery); expect(h.delivery.send).not.toHaveBeenCalled();
+});

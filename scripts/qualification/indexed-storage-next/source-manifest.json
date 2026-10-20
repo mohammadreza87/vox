@@ -1,0 +1,71 @@
+{
+  "version": 1,
+  "scope": "Reviewed synthetic native Next qualification source only; no artifacts or runtime activation",
+  "files": [
+    {
+      "path": ".gitignore",
+      "bytes": 148,
+      "sha256": "8b671e07abc4c731c8bc03f97823a19af12f59bcea1e0ee47db0d61d6652e4ec"
+    },
+    {
+      "path": "PROVENANCE.json",
+      "bytes": 735,
+      "sha256": "22790bd270211392cc2fe831864aedbb61a3fe4fb80eae7224628acedff1533b"
+    },
+    {
+      "path": "README.md",
+      "bytes": 6435,
+      "sha256": "b60b89592f2a96fe6a349b6634bf00412d5f69a2ebd58c64984ab37b380ddb28"
+    },
+    {
+      "path": "app/api/network-probe/route.js",
+      "bytes": 1002,
+      "sha256": "35bd5a969ae98a5f400ccc85a38dbd4a97b8066f37021fb1849aba1d5f45fe65"
+    },
+    {
+      "path": "app/api/storage/route.js",
+      "bytes": 2594,
+      "sha256": "afaaeb0ee9ba0f6f2200c75355a51c90fc211280cba1720aac2a2629b7582b25"
+    },
+    {
+      "path": "app/layout.jsx",
+      "bytes": 104,
+      "sha256": "8e9d56d15e1ce9d15541688b91716aabf64bf2fac45514ae5f80b3c18d690230"
+    },
+    {
+      "path": "app/page.jsx",
+      "bytes": 105,
+      "sha256": "25458bcbaaf806ecce5519ada271c7abfcafbe68b218310312c7227903a9f0b2"
+    },
+    {
+      "path": "boundary.cjs",
+      "bytes": 2959,
+      "sha256": "53e17d6e5dd95afb6ea27849bde57847a37719ab28398c94d075c125222aa04a"
+    },
+    {
+      "path": "next.config.mjs",
+      "bytes": 456,
+      "sha256": "b6ec89af0d3386a1aaaf697f5b5fdc1ea04b3cc35f4d1e6d713c27e2aa36a196"
+    },
+    {
+      "path": "package-lock.json",
+      "bytes": 31436,
+      "sha256": "93a1f65e8d3820b17d01c2c79ca96fe970be964d445c844f7d2cb294b2eae90b"
+    },
+    {
+      "path": "package.json",
+      "bytes": 401,
+      "sha256": "4f013a5fb73791e6f940bc02b9b451c04245646b43c7ce17751576ec0b1ac264"
+    },
+    {
+      "path": "public/qualification.txt",
+      "bytes": 57,
+      "sha256": "6233dfeb2e831dbfb2b43bb7df0b02183f03ff7c8ed269156c00be9e0098c3e9"
+    },
+    {
+      "path": "qualify.mjs",
+      "bytes": 15053,
+      "sha256": "552f83cc0c7b2252ad0220344b7e0243547a8b5bcd9c023b281025a6b782b534"
+    }
+  ]
+}

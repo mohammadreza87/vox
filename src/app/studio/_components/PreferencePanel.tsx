@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ExperienceSnapshot, PreferenceEntry, PreferenceState } from '@/lib/adaptive/runtime/contracts';
 import type { PreferenceValue } from '@/lib/adaptive/personalization';
 import { experienceApi } from '../_lib/experience-client';
+import { pauseText } from '../_lib/product-pause-copy';
 import { ApiError } from '../_lib/client';
 
 const choices = {
@@ -12,6 +13,7 @@ const choices = {
 } as const;
 const names = { response_length: ['Reply length', 'اندازهٔ پاسخ'], language: ['Reply language', 'زبان پاسخ'], formatting: ['Reply format', 'قالب پاسخ'] } as const;
 const explanations = {
+  rights_use_restricted: ['Saved choices are not used because a local personalization restriction is active in this space. Managing your saved choices remains available.', 'انتخاب‌های ذخیره‌شده استفاده نمی‌شوند؛ محدودیت محلی شخصی‌سازی در این فضا فعال است. مدیریت انتخاب‌های ذخیره‌شده همچنان در دسترس است.'],
   explicit_choice: ['Used because you saved this choice for this agent and space.', 'به دلیل انتخاب ذخیره‌شدهٔ شما برای همین عامل و فضا استفاده می‌شود.'],
   explicit_reset: ['Default style is used because you explicitly reset this choice.', 'به دلیل بازنشانی صریح شما، شیوهٔ پیش‌فرض استفاده می‌شود.'],
   default: ['No saved choice; the default style is used.', 'انتخابی ذخیره نشده است؛ شیوهٔ پیش‌فرض استفاده می‌شود.'],
@@ -22,7 +24,7 @@ const explanations = {
 function choiceName(setting: PreferenceValue, fa: boolean) {
   return choices[setting.key].find(row => row[0] === setting.value)?.[fa ? 2 : 1] ?? setting.value;
 }
-function PreferenceRow({ entry, fa, busy, limited, act }: { entry: PreferenceEntry; fa: boolean; busy: boolean; limited: boolean;
+function PreferenceRow({ entry, fa, busy, limited, act, space }: { entry: PreferenceEntry; fa: boolean; busy: boolean; limited: boolean; space: 'work' | 'personal';
   act(action: 'set' | 'reset' | 'undo', setting: PreferenceValue, changeId?: string): void }) {
   const key = entry.setting.key;
   const [selected, setSelected] = useState(entry.saved?.status === 'active' ? entry.saved.setting.value : entry.setting.value);
@@ -34,7 +36,7 @@ function PreferenceRow({ entry, fa, busy, limited, act }: { entry: PreferenceEnt
       {choices[key].map(([option, en, persian]) => <option value={option} key={option}>{fa ? persian : en}</option>)}
     </select></label>
     <p className="vx-small vx-2">{limited ? (fa ? 'دلیل دقیق و واگرد اینجا در دسترس نیست. ذخیره و بازنشانی ترجیح همچنان ممکن است.'
-      : 'Detailed explanations and undo are unavailable here. You can still save or reset a preference.') : explanations[entry.explanation][fa ? 1 : 0]}</p>
+      : 'Detailed explanations and undo are unavailable here. You can still save or reset a preference.') : entry.explanation === 'product_personalization_paused' ? pauseText(fa ? 'fa' : 'en', space, 'preference') : explanations[entry.explanation][fa ? 1 : 0]}</p>
     {entry.saved?.status === 'active' && !entry.applied && <p className="vx-small">{fa ? 'انتخاب ذخیره‌شده: ' : 'Saved choice: '}{choiceName(entry.saved.setting, fa)}</p>}
     <div className="vx-privacy-actions">
       <button className="vx-btn vx-btn-secondary" disabled={busy} onClick={() => act('set', value)}>{fa ? 'ذخیرهٔ ترجیح' : 'Save preference'}</button>
@@ -48,9 +50,9 @@ function PreferenceRow({ entry, fa, busy, limited, act }: { entry: PreferenceEnt
   </article>;
 }
 
-export function PreferencePanel({ agentId, space, confirmed, revisionHint, locale = 'en', onSnapshot }: {
+export function PreferencePanel({ agentId, space, confirmed, revisionHint, locale = 'en', onSnapshot, productPaused = false }: {
   agentId: string; space: 'work' | 'personal'; confirmed: boolean; revisionHint: number;
-  locale?: 'en' | 'fa'; onSnapshot(snapshot: ExperienceSnapshot): void;
+  locale?: 'en' | 'fa'; productPaused?: boolean; onSnapshot(snapshot: ExperienceSnapshot): void;
 }) {
   const fa = locale === 'fa';
   const [state, setState] = useState<PreferenceState | null>(null);
@@ -127,6 +129,7 @@ export function PreferencePanel({ agentId, space, confirmed, revisionHint, local
   return <div dir={fa ? 'rtl' : 'ltr'} lang={locale} aria-busy={busy}>
     <p className="vx-small vx-2">{fa ? 'درخواست فعلی شما مقدم است. این کنترل‌ها فقط انتخاب‌های صریح شما را ذخیره می‌کنند. واگرد فقط ترجیح را تغییر می‌دهد و مجوزی را برنمی‌گرداند.'
       : 'Your current request comes first. These controls save only your explicit choices. Undo changes only the preference and never restores permission.'}</p>
+    {productPaused && <p className="vx-small">{pauseText(locale, space, 'preference')}</p>}
     {!agentId && <p className="vx-small">{fa ? 'برای دیدن ترجیح‌ها یک عامل انتخاب کنید.' : 'Choose an agent to see preferences.'}</p>}
     {agentId && !confirmed && <p className="vx-small">{fa ? 'ابتدا نمایهٔ حساب را در حریم خصوصی تأیید کنید.' : 'Confirm your account profile in Privacy first.'}</p>}
     {error && <div role="alert"><p>{error === 'load' ? (fa ? 'ترجیح‌ها دریافت نشد.' : 'Preferences could not be loaded.')
@@ -135,6 +138,6 @@ export function PreferencePanel({ agentId, space, confirmed, revisionHint, local
     {busy && !state && <p role="status">{fa ? 'در حال دریافت ترجیح‌ها…' : 'Loading preferences…'}</p>}
     {status && <p role="status">{status === 'undone' ? (fa ? 'آخرین تغییر واگرد شد.' : 'Last change undone.') : (fa ? 'ذخیره شد.' : 'Saved.')}</p>}
     {agentId && confirmed && state?.agentId === agentId && state.space === space && state.entries.map(entry => <PreferenceRow key={`${entry.setting.key}:${entry.saved?.revision ?? 0}:${entry.source}:${entry.explanation}`}
-      entry={entry} fa={fa} busy={busy} limited={limited} act={(action, setting, changeId) => void act(action, setting, changeId)} />)}
+      entry={entry} fa={fa} space={space} busy={busy} limited={limited} act={(action, setting, changeId) => void act(action, setting, changeId)} />)}
   </div>;
 }

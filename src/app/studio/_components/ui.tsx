@@ -7,6 +7,9 @@ const STROKE = { fill: 'none', stroke: 'currentColor', strokeWidth: 1.75, stroke
 
 const PATHS: Record<string, string> = {
   back: 'M15 5l-7 7 7 7',
+  refresh: 'M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5',
+  settings: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z',
+  attach: 'M21 11.5l-8.5 8.5a5 5 0 0 1-7-7L14 4.5a3.3 3.3 0 0 1 4.7 4.7l-8.5 8.5a1.7 1.7 0 0 1-2.4-2.4L15.5 7.5',
   close: 'M6 6l12 12M18 6L6 18',
   plus: 'M12 5v14M5 12h14',
   cloud: 'M7 17a4 4 0 0 1-.5-7.97A5.5 5.5 0 0 1 17.3 8.5 4.25 4.25 0 0 1 17 17Z',
@@ -32,6 +35,10 @@ const PATHS: Record<string, string> = {
   user: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8M4 21a8 8 0 0 1 16 0',
   captions: 'M3 5h18v14H3zM10 10.5a2 2 0 1 0 0 3M17 10.5a2 2 0 1 0 0 3',
   end: 'M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2',
+  chevron: 'M6 9l6 6 6-6',
+  /** Points to the inline end; add .vx-mirror so it flips under RTL. */
+  chevronEnd: 'M9 6l6 6-6 6',
+  search: 'M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14M20 20l-4-4',
 };
 
 export function Icon({ name, size = 22, width = 1.75, style }: { name: keyof typeof PATHS | string; size?: number; width?: number; style?: React.CSSProperties }) {
@@ -111,5 +118,28 @@ export function Empty({ title, body, action }: { title: string; body?: string; a
       {body && <p className="vx-2" style={{ margin: 0 }}>{body}</p>}
       {action}
     </div>
+  );
+}
+
+/** A labelled block, as on the tab screens: small overline, then content. */
+export function Section({ label, children, id }: { label: ReactNode; children: ReactNode; id?: string }) {
+  return (
+    <section className="vx-section" aria-labelledby={id}>
+      <span className="vx-over" id={id}>{label}</span>
+      {children}
+    </section>
+  );
+}
+
+/** A grouped-list entry that opens another screen. */
+export function NavRow({ label, detail, onClick, disabled }: { label: string; detail?: string; onClick: () => void; disabled?: boolean }) {
+  return (
+    <button className="vx-row vx-nav-row" onClick={onClick} disabled={disabled}>
+      <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
+        <span>{label}</span>
+        {detail && <span className="vx-small vx-2">{detail}</span>}
+      </span>
+      <span className="vx-chev"><Icon name="chevronEnd" size={18} /></span>
+    </button>
   );
 }

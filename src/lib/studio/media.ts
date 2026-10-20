@@ -8,7 +8,7 @@ import { measureStage, unavailableUsage, captureUsage } from '../adaptive/observ
  */
 
 import type { AgentLook, PersonaSpec } from './types';
-import type { VoiceService } from '../tireh/voice';
+import { assertExportAuthority, type ExportAuthority, type VoiceService } from '../tireh/voice';
 import type { DecisionAnswer, DecisionQuestion } from '../tireh/triage';
 import { logTelegramDiagnostic } from '../tireh/telegram/diagnostics';
 
@@ -42,6 +42,23 @@ export function avatarPrompt(persona: PersonaSpec, look: AgentLook, variant = 0)
   const expressions = ['gentle closed-mouth smile', 'curious, eyes slightly wide', 'happy, small open smile', 'calm and attentive'];
   return `A single cute minimal character: a soft cumulus cloud creature, ${SHAPES[look.family]} silhouette. Body colour ${colorName} ${base}, lit softly from the upper left so it lightens to ${light} and shades to ${shadow} at the lower right. Face: two glossy vertical oval eyes in near-black #1A1C22 with one small white highlight each, a small curved mouth, ${FACE[persona.presentation] ?? FACE.neutral}. Expression: ${expressions[variant % expressions.length]}. One small accessory hinting at their work as ${persona.role}: ${persona.avatarHint || 'none'}, simple and respectful, not a costume. Smooth matte vinyl-toy finish, subtle rim glow, centred, square, plain flat background #0E1013, generous padding.
 Avoid: text, letters, logos, watermarks, emoji style, robots, circuits, gradient backgrounds, sparkles, realistic human features, noses, teeth, limbs, hands, gendered clothing stereotypes, religious or national symbols, caricature, multiple characters, busy backgrounds, photorealism, harsh outlines.`;
+}
+
+/**
+ * Per-option probabilities of a choice answer, copied field by field; the
+ * whole list is dropped when any entry is malformed. Decisions allows at most
+ * 255 options.
+ */
+function choiceProbabilities(value: unknown): Array<{ value: string; probability: number }> | undefined {
+  if (!Array.isArray(value) || !value.length || value.length > 255) return undefined;
+  const out: Array<{ value: string; probability: number }> = [];
+  for (const entry of value) {
+    const option: unknown = entry && typeof entry === 'object' ? (entry as { value?: unknown }).value : undefined;
+    const probability: unknown = entry && typeof entry === 'object' ? (entry as { probability?: unknown }).probability : undefined;
+    if (typeof option !== 'string' || typeof probability !== 'number' || !Number.isFinite(probability) || probability < 0 || probability > 1) return undefined;
+    out.push({ value: option, probability });
+  }
+  return out;
 }
 
 export class OpenAIMedia {
@@ -78,7 +95,10 @@ export class OpenAIMedia {
       const name = typeof a.name === 'string' ? a.name : '';
       const confidence = typeof a.confidence === 'number' ? a.confidence : 0;
       if (a.type === 'predicate' && typeof a.probability === 'number') answers[name] = { type: 'predicate', probability: a.probability };
-      else if (a.type === 'choice' && typeof a.choice === 'string') answers[name] = { type: 'choice', choice: a.choice, confidence };
+      else if (a.type === 'choice' && typeof a.choice === 'string') {
+        const probabilities = choiceProbabilities(a.probabilities);
+        answers[name] = { type: 'choice', choice: a.choice, confidence, ...(probabilities ? { probabilities } : {}) };
+      }
       else if (a.type === 'score' && typeof a.score === 'number') answers[name] = { type: 'score', score: a.score, confidence };
     }
     return answers;
@@ -177,6 +197,7 @@ function providerError(status: number, body: unknown): ElevenLabsSpeechError {
 const XI = 'https://api.elevenlabs.io/v1';
 
 export class ElevenLabsStudio {
+  readonly committedTtsExportFence = true as const;
   private optionsCache?: { expiresAt: number; value: VoiceOptions };
   private optionsRequest?: Promise<VoiceOptions>;
 
@@ -190,8 +211,9 @@ export class ElevenLabsStudio {
     return json ? { 'xi-api-key': this.apiKey, 'Content-Type': 'application/json' } : { 'xi-api-key': this.apiKey };
   }
 
-  private async request(url: string, init: RequestInit): Promise<Response> {
-    try { return await this.fetchFn(url, init); }
+  private async request(url: string, init: RequestInit, authority?: ExportAuthority): Promise<Response> {
+    assertExportAuthority(authority);
+    try { return await this.fetchFn(url, authority ? {...init, signal: authority.signal} : init); }
     catch { throw new ElevenLabsSpeechError(503, 'unavailable'); }
   }
 
@@ -314,21 +336,22 @@ export class ElevenLabsStudio {
     return json.voice_id!;
   }
 
-  async speak(text: string, voiceId: string): Promise<Buffer> {
-    return measureStage('tts', async () => { try { return await this.speakObserved(text, voiceId); }
+  async speak(text: string, voiceId: string, authority?: ExportAuthority): Promise<Buffer> {
+    return measureStage('tts', async () => { try { return await this.speakObserved(text, voiceId, authority); }
       finally { unavailableUsage('elevenlabs', 'eleven'); } });
   }
-  private async speakObserved(text: string, voiceId: string): Promise<Buffer> {
+  private async speakObserved(text: string, voiceId: string, authority?: ExportAuthority): Promise<Buffer> {
     const response = await this.request(`${XI}/text-to-speech/${encodeURIComponent(voiceId)}?output_format=mp3_44100_128`, {
       method: 'POST', headers: { ...this.headers(), Accept: 'audio/mpeg' },
       body: JSON.stringify({ text: text.slice(0, 2500), model_id: this.ttsModel, voice_settings: { stability: 0.5, similarity_boost: 0.75 } }),
-    });
+    }, authority);
     if (!response.ok) throw providerError(response.status, await response.json().catch(() => undefined));
     if (!/^audio\//i.test(response.headers.get('content-type') ?? '')) throw new ElevenLabsSpeechError(502, 'provider_error');
     let audio: Buffer;
     try { audio = Buffer.from(await response.arrayBuffer()); }
     catch { throw new ElevenLabsSpeechError(503, 'unavailable'); }
     if (!audio.length) throw new ElevenLabsSpeechError(502, 'provider_error');
+    assertExportAuthority(authority);
     return audio;
   }
 
@@ -458,6 +481,7 @@ export class StudioVoiceService implements VoiceService {
   constructor(private readonly openai: OpenAIMedia | null, private readonly eleven: ElevenLabsStudio | null) {}
 
   get canSynthesize(): boolean { return !!this.eleven; }
+  get committedExportFence(): true | undefined { return this.eleven?.committedTtsExportFence; }
 
   /** OpenAI hears when configured; ElevenLabs Scribe covers for it. */
   async transcribe(audio: ArrayBuffer, mimeType?: string): Promise<string> {
@@ -474,9 +498,11 @@ export class StudioVoiceService implements VoiceService {
     }
   }
 
-  async synthesize(text: string, voiceId: string) {
+  async synthesize(text: string, voiceId: string, authority?: ExportAuthority) {
     if (!this.eleven) throw new Error('ELEVENLABS_API_KEY is not set');
-    const audio = await this.eleven.speak(text, voiceId);
+    assertExportAuthority(authority);
+    const audio = await (authority === undefined ? this.eleven.speak(text, voiceId) : this.eleven.speak(text, voiceId, authority));
+    assertExportAuthority(authority);
     return { audio: audio.buffer.slice(audio.byteOffset, audio.byteOffset + audio.byteLength) as ArrayBuffer, mimeType: 'audio/mpeg', filename: 'voice.mp3' };
   }
 }

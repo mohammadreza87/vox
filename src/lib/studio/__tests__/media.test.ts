@@ -146,6 +146,22 @@ describe('OpenAI Decisions', () => {
     expect(init?.signal).toBeInstanceOf(AbortSignal);
     await expect(new OpenAIMedia('sk', fakeFetch({ status: 403 })).decide('x', [])).rejects.toThrow('HTTP 403');
   });
+
+  it('keeps well-formed per-option probabilities of a choice and drops malformed lists', async () => {
+    const good = [{ value: 'ua.plan', probability: 0.6, extra: 'ignored' }, { value: 'none', probability: 0.4 }];
+    const fetchFn = fakeFetch({ json: { answers: [
+      { type: 'choice', name: 'skill', choice: 'ua.plan', confidence: 0.6, probabilities: good },
+      { type: 'choice', name: 'bad_value', choice: 'a', confidence: 0.9, probabilities: [{ value: 1, probability: 0.9 }] },
+      { type: 'choice', name: 'bad_probability', choice: 'a', confidence: 0.9, probabilities: [{ value: 'a', probability: 1.5 }, { value: 'b', probability: 0.1 }] },
+      { type: 'choice', name: 'not_a_list', choice: 'a', confidence: 0.9, probabilities: { a: 0.9 } },
+      { type: 'choice', name: 'null_entry', choice: 'a', confidence: 0.9, probabilities: [null] },
+    ] } });
+    const out = await new OpenAIMedia('sk-test', fetchFn).decide('x', []);
+    expect(out.skill).toEqual({ type: 'choice', choice: 'ua.plan', confidence: 0.6, probabilities: [{ value: 'ua.plan', probability: 0.6 }, { value: 'none', probability: 0.4 }] });
+    for (const name of ['bad_value', 'bad_probability', 'not_a_list', 'null_entry']) {
+      expect(out[name]).toEqual({ type: 'choice', choice: 'a', confidence: 0.9 });
+    }
+  });
 });
 
 describe('ElevenLabs speech-to-text and live-call agents', () => {
@@ -197,4 +213,12 @@ it('records returned STT/Decisions tokens and leaves audio-provider usage unavai
   expect(trace.snapshot()?.usage).toMatchObject([{ provider: 'openai', inputTokens: 9, outputTokens: 3 }, { provider: 'openai', inputTokens: 7, outputTokens: null },
     { provider: 'elevenlabs', inputTokens: null, outputTokens: null, status: 'unavailable' }]);
   for (const canary of ['PRIVATE_TRANSCRIPT_CANARY', 'PRIVATE_DRAFT_CANARY', 'PRIVATE_SPEECH_CANARY']) expect(JSON.stringify(trace.snapshot())).not.toContain(canary);
+});
+it('StudioVoiceService preserves the request fence through the actual speech adapter and rejects a newly stale audio buffer', async () => {
+  let current = true;
+  const fetcher = vi.fn<typeof fetch>(async () => ({ok:true,status:200,headers:new Headers({'content-type':'audio/mpeg'}),arrayBuffer:async () => {current = false;return new Uint8Array([1,2,3]).buffer;}} as Response));
+  const service = new StudioVoiceService(null,new ElevenLabsStudio('synthetic-key',fetcher));
+  await expect(service.synthesize('CURRENT_ALLOWED_TEXT','synthetic-voice',{authorizeNow:() => current})).rejects.toMatchObject({name:'ExportAuthorityError'});
+  expect(fetcher).toHaveBeenCalledOnce(); expect(String(fetcher.mock.calls[0][1]?.body)).toContain('CURRENT_ALLOWED_TEXT');
+  expect(String(fetcher.mock.calls[0][1]?.body)).not.toMatch(/authorizeNow|signal/);
 });

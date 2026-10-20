@@ -1,6 +1,6 @@
 /** Process-local limits for Studio's single persistent server process. */
 import { brandError, namedError } from '../error-contract';
-export type StudioRateScope = 'ingress' | 'api' | 'mutation' | 'expensive' | 'avatar' | 'voice' | 'call';
+export type StudioRateScope = 'ingress' | 'api' | 'mutation' | 'route' | 'expensive' | 'avatar' | 'voice' | 'call';
 
 export interface StudioRatePolicy {
   requests: number;
@@ -24,6 +24,8 @@ const DEFAULT_POLICIES: Record<StudioRateScope, StudioRatePolicy> = {
   ingress: { requests: 600, windowMs: MINUTE },
   api: { requests: 120, windowMs: MINUTE },
   mutation: { requests: 30, windowMs: MINUTE },
+  // Role suggestions while the creator types (local matching, no provider call).
+  route: { requests: 90, windowMs: MINUTE },
   expensive: { requests: 60, windowMs: 10 * MINUTE },
   avatar: { requests: 6, windowMs: 10 * MINUTE },
   voice: { requests: 20, windowMs: 10 * MINUTE },
