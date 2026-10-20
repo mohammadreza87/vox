@@ -61,7 +61,7 @@ export interface RuntimePrivacy {
 }
 
 /** Every input of the turn boundary key, in hash order. Each one has a
- * monotonic revision writer that rechecks compare (see revision-inputs.test). */
+ * monotonic revision writer that rechecks compare (see boundary-revisions.test). */
 export const BOUNDARY_HASH_INPUTS = ['space', 'speakerId', 'chat', 'allowed', 'audienceValid', 'shared', 'states', 'config'] as const;
 type BoundaryHashInput = typeof BOUNDARY_HASH_INPUTS[number];
 
@@ -784,7 +784,10 @@ You are on a live voice call. Answer in one to three short spoken sentences. No 
   }
 
   async generateReply(persona: Persona, chat: ChatContext, speakerId: string, text: string): Promise<string> {
-    return this.generateReplyAt(persona, chat, speakerId, text, await this.boundary(persona, chat, speakerId));
+    const boundary = await this.boundary(persona, chat, speakerId);
+    const reply = await this.generateReplyAt(persona, chat, speakerId, text, boundary);
+    // Callers deliver this text themselves: recheck after generation, as composeReply used to.
+    return await this.unchanged(persona, chat, speakerId, boundary) ? reply : this.changedReply;
   }
 
   private async generateReplyAt(persona: Persona, chat: ChatContext, speakerId: string, text: string, boundary: TurnBoundary, images?: LLMMessage['images'], authorize?: () => Promise<boolean>): Promise<string> {
