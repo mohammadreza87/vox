@@ -4,6 +4,7 @@
  */
 
 import { createHash, randomUUID } from 'crypto';
+import { revisionOwnerId, type RevisionProbe } from '../privacy/revisions';
 import type { ChatMessage, MemoryRecord, ShareOffer } from '../types';
 
 export type NewMemory = Omit<MemoryRecord, 'id' | 'createdAt' | 'updatedAt'>;
@@ -58,6 +59,8 @@ export function forgetClosure(records: MemoryRecord[], id: string): MemoryRecord
 export interface MemoryStore {
   /** Increments on restriction, correction, supersession or deletion. */
   safetyRevision(personaId: string): Promise<number>;
+  /** safetyRevision as a probe that turn rechecks can re-read cheaply. */
+  revisionProbe?(personaId: string): Promise<RevisionProbe>;
   addIfEpoch(memory: NewMemory, expectedEpoch: number): Promise<MemoryRecord | null>;
   updateIfShareVersion(id: string, expectedVersion: number, patch: Partial<Omit<MemoryRecord, 'id' | 'personaId'>>, guard?: MemoryWriteGuard): Promise<boolean>;
   invalidate(personaId: string): Promise<void>;
@@ -83,6 +86,8 @@ export interface ChatHistoryStore {
   bindMemoryStore?(memories: MemoryStore): void;
   append(personaId: string, chatKey: string, message: ChatMessage, expectedEpoch?: number): Promise<void>;
   getEpoch(personaId: string): Promise<number>;
+  /** getEpoch as a probe that turn rechecks can re-read cheaply. */
+  epochProbe?(personaId: string): Promise<RevisionProbe>;
   recent(personaId: string, chatKey: string, limit: number): Promise<ChatMessage[]>;
   /** Purge retained source/derived turns after authorized forgetting or revocation. */
   clearPersona(personaId: string): Promise<void>;
@@ -108,8 +113,13 @@ export class InMemoryMemoryStore implements MemoryStore {
   readonly records = new Map<string, MemoryRecord>();
   readonly revisions = new Map<string, number>();
   readonly tombstones = new Map<string, Set<string>>();
+  private readonly revisionOwner = revisionOwnerId('memory-revision');
 
   async safetyRevision(personaId: string): Promise<number> { return this.revisions.get(personaId) ?? 0; }
+  async revisionProbe(personaId: string): Promise<RevisionProbe> {
+    const read = () => this.revisions.get(personaId) ?? 0;
+    return { key: `${this.revisionOwner}:${personaId}`, value: read(), local: read };
+  }
 
   async invalidate(personaId: string): Promise<void> {
     this.revisions.set(personaId, (this.revisions.get(personaId) ?? 0) + 1);
@@ -202,6 +212,11 @@ export class InMemoryChatHistoryStore implements ChatHistoryStore {
   constructor(readonly epochs = new Map<string, number>()) {}
 
   async getEpoch(personaId: string): Promise<number> { return this.epochs.get(personaId) ?? 0; }
+  private readonly epochOwner = revisionOwnerId('privacy-epoch');
+  async epochProbe(personaId: string): Promise<RevisionProbe> {
+    const read = () => this.epochs.get(personaId) ?? 0;
+    return { key: `${this.epochOwner}:${personaId}`, value: read(), local: read };
+  }
 
   async clearPersona(personaId: string): Promise<void> {
     this.epochs.set(personaId, (this.epochs.get(personaId) ?? 0) + 1);

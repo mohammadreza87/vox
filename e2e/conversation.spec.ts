@@ -73,7 +73,7 @@ async function runConversationJourney(page: Page, testInfo: { outputPath: (name:
   const calls = await installFixtures(page);
   await page.goto('/studio');
   await page.getByRole('button', { name: 'Fixture Agent, Synthetic QA' }).click();
-  await page.getByRole('button', { name: 'Chat here' }).click();
+  await page.getByRole('button', { name: 'Chat', exact: true }).click();
   const panel = page.getByRole('region', { name: 'Type or share an image' });
   await expect(panel).toBeVisible();
   await expect(page.getByRole('group', { name: 'Conversation space' })).toBeVisible();
@@ -104,9 +104,9 @@ async function runConversationJourney(page: Page, testInfo: { outputPath: (name:
   await page.screenshot({ path: testInfo.outputPath('conversation-en.png'), fullPage: true });
 
   await page.getByRole('button', { name: 'فارسی' }).click();
-  await expect(page.locator('.vx-privacy').last()).toHaveAttribute('dir', 'rtl');
-  await expect(page.locator('.vx-privacy').last()).toHaveAttribute('lang', 'fa');
   const faPanel = page.getByRole('region', { name: 'تایپ یا اشتراک تصویر' });
+  await expect(faPanel).toHaveAttribute('dir', 'rtl');
+  await expect(faPanel).toHaveAttribute('lang', 'fa');
   await expect(faPanel.getByLabel('پیام')).toBeVisible();
   await expect(faPanel.getByRole('checkbox', { name: 'آماده‌سازی هنگام تایپ' })).not.toBeChecked();
   const persianMessage = 'پیام آزمایشی فارسی';

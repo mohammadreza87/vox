@@ -54,6 +54,20 @@ describe('Privacy and memory controls', () => {
     await waitFor(() => expect(screen.queryByRole('checkbox', { name: locale === 'fa' ? '۱۸ سال یا بیشتر دارم' : 'I am 18 or older' })).not.toBeInTheDocument());
     expect(mocks.consent).not.toHaveBeenCalled(); expect(mocks.present).not.toHaveBeenCalled();
   });
+  it('renders one canonical profile and one destination for each navigation action', async () => {
+    const initial = snapshot(); mocks.read.mockResolvedValue(snapshot({ identity: { ...initial.identity, adultDeclared: false }, explicitMemoryAvailable: false, explicitMemoryReason: 'adult_required' }));
+    const navigation = { shared: vi.fn(), experience: vi.fn(), connections: vi.fn() };
+    const view = render(<PrivacyScreen onShared={navigation.shared} onExperience={navigation.experience} onConnections={navigation.connections} />);
+    await screen.findByRole('checkbox', { name: 'I am 18 or older' });
+    expect(view.container.querySelectorAll('#vox-profile-heading')).toHaveLength(1);
+    expect(view.container.querySelectorAll('#jurisdiction-hint')).toHaveLength(1);
+    expect(screen.getAllByRole('button', { name: 'Use my account profile' })).toHaveLength(1);
+    for (const [name, action] of [['Shared memories', navigation.shared], ['Preferences & notification inbox', navigation.experience], ['Connections & agent access', navigation.connections]] as const) {
+      const controls = screen.getAllByRole('button', { name }); expect(controls).toHaveLength(1);
+      fireEvent.click(controls[0]); expect(action).toHaveBeenCalledOnce();
+    }
+    expect(mocks.confirm).not.toHaveBeenCalled(); expect(mocks.consent).not.toHaveBeenCalled();
+  });
   it('keeps a valid confirmed profile unchanged and does not offer or submit a new adult declaration', async () => {
     render(<PrivacyScreen />); await screen.findByText('Account profile confirmed');
     expect(screen.queryByRole('checkbox', { name: 'I am 18 or older' })).not.toBeInTheDocument();

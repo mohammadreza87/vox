@@ -20,6 +20,7 @@ import { pruneLearningDocument } from '../personalization/learning/state';
 import { runtimeControlsFromDocument, runtimeControlsFromIndexed, validateRuntimeControlEvaluation,
   directAuthorityControls, type DirectAuthorityEvaluator, type RuntimeControlEvaluation, type RuntimeControlEvaluator } from './authority';
 import { readIndexedPrivateContext, type PrivateContextSnapshot } from './indexed-private-context';
+import { activeReadScope, readOnce } from '../../tireh/privacy/read-scope';
 
 export class AdaptiveError extends Error {
   readonly name = 'AdaptiveError';
@@ -291,6 +292,13 @@ export class AdaptiveService {
   /** Trusted backend seam: same aggregate/expiry transaction as consent and memory. */
   withAccountDocument<T>(telegramId: number, fn: (document: AdaptiveDocument, now: number) => T, beforeCommit?: () => void): Promise<T> {
     return this.transact(telegramId, fn, beforeCommit);
+  }
+  /** Twin of `withAccountDocument` for pure reads: an unlocked committed load,
+   * the same normalisation and callback, and no rewrite when nothing changed.
+   * A read that does change the document (expiry, pruning, first creation)
+   * commits through the ordinary transaction, exactly as before. */
+  withAccountView<T>(telegramId: number, fn: (document: AdaptiveDocument, now: number) => T): Promise<T> {
+    return readOnce(() => this.transact(telegramId, fn));
   }
   /** Bounded protective controls bypass generic event/outbox admission and never invoke consent invalidation. */
   productPauseTransaction<T>(telegramId: number, fn: (document: AdaptiveDocument, now: number) => T, beforeCommit?: () => void): Promise<T> {
@@ -859,6 +867,9 @@ export class AdaptiveService {
       if (this.repository.storage.indexed || this.repository.storage.canonicalSchemaVersion === 2 || this.repository.storage.canonicalSchemaVersion === 3) return this.withDirectAuthority(telegramId, space,
         (d, now, namespace) => this.runtimePrivacyEvaluation(d, now, namespace, personaId, space));
       const evaluate = (d: AdaptiveDocument, now: number) => this.runtimePrivacyEvaluation(d, now, this.storeIdentity, personaId, space).value;
+      // Inside a turn snapshot the scoped transaction serves, and probes, the
+      // snapshot's committed copy of this account.
+      if (activeReadScope()) return this.transact(telegramId, evaluate);
       // A boundary read is pure. Serve it from the committed document instead of
       // a read-modify-write of the account file; the same evaluation over the
       // same bytes gives the same revision. A missing, locked or unsupported
@@ -904,7 +915,7 @@ export class AdaptiveService {
     // synchronous single-owner canonical transaction. Unknown controls never fall back.
     try {const denied=this.preparedFilePrivateContextDenial(telegramId,space,agentId);if(denied)return Promise.resolve(denied);}
     catch {return Promise.reject(new AdaptiveError(503,'adaptive_context_unavailable'));}
-    return this.transact(telegramId, (d, now) => this.canonicalPrivateContext(d, now, space, agentId));
+    return this.withAccountView(telegramId, (d, now) => this.canonicalPrivateContext(d, now, space, agentId));
   }
   private canonicalPrivateContext(d: AdaptiveDocument, now: number, space: SpaceKind, agentId: string): PrivateContextSnapshot {
     const permission = this.permission(d, space, 'optional.personalization');

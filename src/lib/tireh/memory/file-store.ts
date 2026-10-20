@@ -1,4 +1,7 @@
-/** Local JSON persistence. Mutations reload under a process-independent lock. */
+/** Local JSON persistence. Mutations reload under a process-independent lock.
+ * Revision and epoch probes reload under the lock when taken; their in-process
+ * re-reads see every change committed through this process (the single-process
+ * Mac profile, as StudioStore already assumes). */
 import { chmodSync, existsSync, readFileSync, renameSync, writeFileSync } from 'fs';
 import { mkdir, rmdir } from 'fs/promises';
 import type { ChatMessage, MemoryRecord, ShareOffer } from '../types';
@@ -77,9 +80,9 @@ export function createFileStores(path: string) {
   };
   history.clear = (personaId) => history.clearPersona(personaId);
   return {
-    memories: wrap(memories, ['add', 'addIfEpoch', 'update', 'updateIfShareVersion', 'delete', 'invalidate'], ['get', 'listActive', 'safetyRevision']),
+    memories: wrap(memories, ['add', 'addIfEpoch', 'update', 'updateIfShareVersion', 'delete', 'invalidate'], ['get', 'listActive', 'safetyRevision', 'revisionProbe']),
     offers: wrap(offers, ['create', 'setStatus'], ['get']),
-    history: wrap(history, ['append', 'clearPersona'], ['recent', 'getEpoch']),
+    history: wrap(history, ['append', 'clearPersona'], ['recent', 'getEpoch', 'epochProbe']),
     deduper: new InMemoryUpdateDeduper(),
   };
 }

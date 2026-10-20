@@ -366,6 +366,30 @@ Four concepts stay distinct, as `src/lib/adaptive/types.ts` already encodes: aut
 
 Baselines are estimates for the Firestore profile (text about 7 s p50, voice note about 12 s, live call 3.6 s to first token then 15 to 30 s per reply). The Mac file profile is faster per recomputation but has the same shape. Step 0 replaces these with measurements.
 
+**Measured: step 1 (boundary once), Mac file profile, 20 October 2026.** Vox-side work only. The model is a local stub (zero latency for text; twelve deltas 25 ms apart for live), so no network or model time is included. Harness: `src/lib/studio/__tests__/turn-latency.bench.test.ts` (opt-in, `VOX_TURN_BENCH=1`), content-free timers on the gateway's boundary and recheck calls, a consented account with three saved notes, an explicit preference and shared memory wired. Each figure is the median of three runs of 15 turns after 3 warm-up turns, before (`0ba1ddd`) and after on the same machine. Step 0's product timers had not landed, so the harness wraps the gateway methods instead. Absolute numbers move with machine load (an earlier "before" run measured 540 ms for the same text turn); the counts and ratios are stable. Firestore was not measured.
+
+| Stage (ms unless a count) | Private text before | Private text after | Live call before | Live call after |
+|---|---|---|---|---|
+| Boundary computations per turn (count) | 6 | 1 | 15 | 1 |
+| Rechecks per turn (count) | 5 | 4 | 14 | 2 |
+| First boundary / snapshot | 47 | 12 | 49 | 12 |
+| All rechecks | 239 | 4.5 | 693 | 2.4 |
+| All privacy work | 286 | 16.7 | 748 | 14.6 |
+| Request to provider call | 96 | 14 | 144 | 16 |
+| Request to SSE headers | | | 221 | 43 |
+| Request to first SSE content | | | 221 | 43 |
+| Turn total, Vox side | 287 | 17.5 | 1,064 | 334 (300 is the stub stream) |
+
+**Re-measured after merging main `c7498a5`, same harness and machine.** Main had meanwhile added its own compact mode for prepared and indexed adaptive stores and a read-only committed path for `runtimePrivacy.read`. The default file format still recomputed the full boundary at every recheck, so the comparison is current main against this branch merged with it.
+
+| Stage (ms unless a count) | Private text, main | Private text, merged | Live call, main | Live call, merged |
+|---|---|---|---|---|
+| Boundary computations per turn (count) | 7 | 1 | 16 | 1 |
+| All privacy work | 299 | 35 | 1,434 | 32 |
+| Request to provider call | 136 | 46 | 271 | 33 |
+| Request to first SSE content | | | 415 | 60 |
+| Turn total, Vox side | 303 | 52 | 1,754 | 343 (300 is the stub stream) |
+
 ### 4.12 What it costs
 
 Per private text turn after restructuring, blended at 70% Haiku and 30% Sonnet escalation: about $0.002, falling to about $0.001 if escalation is 10%; the Decisions pre-pass is about $0.0001 of that; the Haiku-only route is about $0.0003 with a warm cache. Today's main route is Sonnet at about $0.019 per uncached turn. Voice features dominate spend: STT and ElevenLabs TTS and Agents prices on Vox's actual plan are unverified and excluded. Firestore operations fall from roughly 60 to 100 reads and 50 transactional writes per turn to roughly 10 to 15 reads and 3 to 5 writes. Nightly consolidation on the Batch API costs under $0.01 per person-persona per night on Haiku. Order of magnitude: $1 to $3 per active user-month excluding voice. Cache reads do not count toward Anthropic rate limits, so the Start tier covers a pilot; the $500 monthly spend cap is the first wall.

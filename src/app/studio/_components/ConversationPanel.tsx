@@ -138,11 +138,12 @@ export function ConversationPanel({ agentId, space, locale = 'en', disabled = fa
   };
   return <section className="vx-chat" dir={fa ? 'rtl' : 'ltr'} lang={locale}
     aria-label={t('Type or share an image', 'تایپ یا اشتراک تصویر')} aria-busy={busy || loadingImage}>
-    <div role="log" aria-label={t('Conversation', 'گفتگو')} aria-live="polite" className="vx-chat-log">
+    <div className="vx-chat-log">
       <div className="vx-chat-intro">
         {paused && <p className="vx-small" role="status">{pauseText(locale, space, 'conversation')}</p>}
         <p className="vx-small vx-3">{paused ? pauseText(locale, space, 'history') : t('Uses the memories allowed in this space. Images are sent only for this turn; Vox does not save the image.', 'از حافظه‌های مجاز این فضا استفاده می‌کند. تصویر فقط برای همین نوبت ارسال می‌شود؛ وکس تصویر را ذخیره نمی‌کند.')}</p>
       </div>
+      <div role="log" aria-label={t('Conversation', 'گفتگو')} aria-live="polite" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       {lines.map((line, i) => <div key={i} className={`vx-bubble-row ${line.role === 'you' ? 'mine' : ''}`}>
         <p className={`vx-bubble ${line.role === 'you' ? 'mine' : ''}`}>
           <strong className="vx-sr">{line.role === 'you' ? t('You: ', 'شما: ') : t('Agent: ', 'عامل: ')}</strong>
@@ -151,6 +152,7 @@ export function ConversationPanel({ agentId, space, locale = 'en', disabled = fa
         {line.role === 'you' && <button className="vx-bubble-action" aria-describedby={historicBlocked ? 'vox-historic-review-reason' : undefined} disabled={busy || disabled || historicBlocked} onClick={() => { setMemoryStatus(''); setReviewText({ text: line.text, agentId, space }); }}>{t('Review this text for memory', 'بررسی این متن برای حافظه')}</button>}
       </div>)}
       {busy && <div className="vx-bubble-row"><p className="vx-bubble vx-typing" aria-hidden="true"><span /><span /><span /></p></div>}
+      </div>
     </div>
     <div className="vx-chat-dock">
       {historicBlocked && <p id="vox-historic-review-reason" className="vx-small vx-2">{paused ? pauseText(locale, space, 'historicDisabled') : pauseText(locale, space, 'unverified')}</p>}

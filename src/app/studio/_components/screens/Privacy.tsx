@@ -3,7 +3,7 @@
 import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { adaptiveApi, type AdaptiveOptionalPurpose, type AdaptivePresentation, type AdaptiveSnapshot, type AdaptiveSpace } from '../../_lib/adaptive-client';
 import { privacyCopy, purposeCopy, privacyUnavailableReason, type PrivacyLocale } from '../../_lib/adaptive-copy';
-import { Icon, Spinner } from '../ui';
+import { Icon, NavRow, Section, Spinner } from '../ui';
 import { api, tg, type AgentView } from '../../_lib/client';
 import { VoiceRecognitionPanel } from '../VoiceRecognitionPanel';
 import { MemoryCorrectionEditor } from '../MemoryCorrectionEditor';
@@ -108,14 +108,7 @@ export function PrivacyScreen({ onShared, onExperience, onConnections, onCorrect
       <label className="vx-small" style={{ flex: '0 0 auto' }}>{c.language}<select className="vx-input" value={locale} disabled={busy || !!pendingCorrection} onChange={e => { if (!pendingCorrectionRef.current) setLocale(e.target.value as PrivacyLocale); }}><option value="en">English</option><option value="fa">فارسی</option></select></label>
     </header>
     <p className="vx-2">{c.intro}</p>
-    <fieldset disabled={!!pendingCorrection} onClickCapture={event => { if (pendingCorrectionRef.current) { event.preventDefault(); event.stopPropagation(); } }} onChangeCapture={event => { if (pendingCorrectionRef.current) { event.preventDefault(); event.stopPropagation(); } }} style={{ display: 'flex', flexDirection: 'column', gap: 20, border: 0, padding: 0, margin: 0, minWidth: 0 }}>
-    <ProductPausePanel locale={locale} sessionKey={session} onReviewProfile={() => document.getElementById('vox-profile-heading')?.focus()} />
-    <RightsRequestPanel space={space} locale={locale} sessionKey={session} memorySnapshot={snapshot?.space === space ? snapshot : null} notesStale={notesStale} mutationDisabled={busy || !!pendingCorrection} onRefreshNotes={() => void load()} onErasurePendingChange={correctionPending} onErasureDispatched={erasureDispatched} />
-    <p className="vx-small"><a href="/privacy">{locale === 'fa' ? 'درخواست حریم خصوصی بدون حساب' : 'Privacy request without an account'}</a></p>
-    <GuestRightsOperationsPanel locale={locale} sessionKey={session} />
     <fieldset disabled={!!pendingCorrection} onClickCapture={event => { if (pendingCorrectionRef.current) { event.preventDefault(); event.stopPropagation(); } }} onChangeCapture={event => { if (pendingCorrectionRef.current) { event.preventDefault(); event.stopPropagation(); } }} style={{ display: 'flex', flexDirection: 'column', gap: 16, border: 0, padding: 0, margin: 0, minWidth: 0 }}>
-    {onExperience && <button className="vx-btn vx-btn-secondary" onClick={() => { if (!pendingCorrectionRef.current) onExperience(); }}>{locale === 'fa' ? 'ترجیح‌ها و صندوق اعلان' : 'Preferences & notification inbox'}</button>}
-    {onConnections && <button className="vx-btn vx-btn-secondary" onClick={() => { if (!pendingCorrectionRef.current) onConnections(); }}>{locale === 'fa' ? 'اتصال‌ها و دسترسی عامل‌ها' : 'Connections & agent access'}</button>}
     <div className="vx-privacy-spaces" role="group" aria-label={c.space}>
       {(['work', 'personal'] as const).map(value => <button key={value} className="vx-btn vx-btn-secondary" aria-pressed={space === value} disabled={busy} onClick={() => { if (!pendingCorrectionRef.current) setSpace(value); }}>{c[value]}</button>)}
     </div>
@@ -124,17 +117,6 @@ export function PrivacyScreen({ onShared, onExperience, onConnections, onCorrect
     {!snapshot && !error && <div role="status" className="vx-small vx-2" style={{ display: 'flex', alignItems: 'center', gap: 8 }}><Spinner /> {c.loading}</div>}
     {snapshot && <>
       <Section label={label('Your memory', 'حافظهٔ شما')}>
-      <div className="vx-card vx-privacy-card">
-        <h2 className="vx-head" id="vox-profile-heading" tabIndex={-1}>{c.identity}</h2><p className="vx-small vx-2">{c.identityBody}</p>
-        {snapshot.identity.confirmed && <p className="vx-privacy-confirmed"><Icon name="check" size={18} /> {c.confirmed}</p>}
-        {(!snapshot.identity.confirmed || adultDeclarationNeeded) && <>
-          <label className="vx-privacy-checkbox"><input type="checkbox" checked={adult} disabled={busy} onChange={e => setAdult(e.target.checked)} />{c.adult}</label>
-          <label className="vx-small">{c.jurisdiction}<input className="vx-input" value={jurisdiction} placeholder="EE / US-CA" maxLength={11} disabled={busy} onChange={e => setJurisdiction(e.target.value.toUpperCase())} aria-describedby="jurisdiction-hint" /></label>
-          <p id="jurisdiction-hint" className="vx-small vx-2">{c.jurisdictionHint}</p>
-          <button className="vx-btn vx-btn-secondary vx-btn-block" disabled={busy || !adult || (!!jurisdiction && !/^[A-Z]{2}(?:-[A-Z0-9]{1,8})?$/.test(jurisdiction))} onClick={() => void mutate(() => adaptiveApi.confirm(space, adult, jurisdiction || undefined), c.confirmed)}>{c.confirm}</button>
-        </>}
-        <p className="vx-small vx-2">{c.accountNote}</p>
-      </div>
       <h2 className="vx-title-m">{c.optional}</h2>
       <VoiceRecognitionPanel key={space} space={space} locale={locale} />
       <div className="vx-group">
@@ -193,15 +175,16 @@ export function PrivacyScreen({ onShared, onExperience, onConnections, onCorrect
       </Section>
       <Section label={label('Your account', 'حساب شما')}>
       <div className="vx-card vx-privacy-card">
-          <h2 className="vx-head" id="vox-profile-heading" tabIndex={-1}>{c.identity}</h2><p className="vx-small vx-2">{c.identityBody}</p>
-          {snapshot.identity.confirmed ? <p className="vx-privacy-confirmed"><Icon name="check" size={18} /> {c.confirmed}</p> : <>
-            <label className="vx-privacy-checkbox"><input type="checkbox" checked={adult} disabled={busy} onChange={e => setAdult(e.target.checked)} />{c.adult}</label>
-            <label className="vx-small">{c.jurisdiction}<input className="vx-input" value={jurisdiction} placeholder="EE / US-CA" maxLength={11} disabled={busy} onChange={e => setJurisdiction(e.target.value.toUpperCase())} aria-describedby="jurisdiction-hint" /></label>
-            <p id="jurisdiction-hint" className="vx-small vx-2">{c.jurisdictionHint}</p>
-            <button className="vx-btn vx-btn-secondary vx-btn-block" disabled={busy || !adult || (!!jurisdiction && !/^[A-Z]{2}(?:-[A-Z0-9]{1,8})?$/.test(jurisdiction))} onClick={() => void mutate(() => adaptiveApi.confirm(space, adult, jurisdiction || undefined), c.confirmed)}>{c.confirm}</button>
-          </>}
-          <p className="vx-small vx-2">{c.accountNote}</p>
-        </div>
+        <h2 className="vx-head" id="vox-profile-heading" tabIndex={-1}>{c.identity}</h2><p className="vx-small vx-2">{c.identityBody}</p>
+        {snapshot.identity.confirmed && <p className="vx-privacy-confirmed"><Icon name="check" size={18} /> {c.confirmed}</p>}
+        {(!snapshot.identity.confirmed || adultDeclarationNeeded) && <>
+          <label className="vx-privacy-checkbox"><input type="checkbox" checked={adult} disabled={busy} onChange={e => setAdult(e.target.checked)} />{c.adult}</label>
+          <label className="vx-small">{c.jurisdiction}<input className="vx-input" value={jurisdiction} placeholder="EE / US-CA" maxLength={11} disabled={busy} onChange={e => setJurisdiction(e.target.value.toUpperCase())} aria-describedby="jurisdiction-hint" /></label>
+          <p id="jurisdiction-hint" className="vx-small vx-2">{c.jurisdictionHint}</p>
+          <button className="vx-btn vx-btn-secondary vx-btn-block" disabled={busy || !adult || (!!jurisdiction && !/^[A-Z]{2}(?:-[A-Z0-9]{1,8})?$/.test(jurisdiction))} onClick={() => void mutate(() => adaptiveApi.confirm(space, adult, jurisdiction || undefined), c.confirmed)}>{c.confirm}</button>
+        </>}
+        <p className="vx-small vx-2">{c.accountNote}</p>
+      </div>
       </Section>
     </>}
     {(onShared || onExperience || onConnections) && <Section label={label('More', 'بیشتر')}>
@@ -214,7 +197,9 @@ export function PrivacyScreen({ onShared, onExperience, onConnections, onCorrect
     </fieldset>
     <Section label={label('Data controls', 'کنترل داده‌ها')}>
       <ProductPausePanel locale={locale} sessionKey={session} onReviewProfile={() => document.getElementById('vox-profile-heading')?.focus()} />
-      <RightsRequestPanel space={space} locale={locale} sessionKey={session} />
+      <RightsRequestPanel space={space} locale={locale} sessionKey={session} memorySnapshot={snapshot?.space === space ? snapshot : null} notesStale={notesStale} mutationDisabled={busy || !!pendingCorrection} onRefreshNotes={() => void load()} onErasurePendingChange={correctionPending} onErasureDispatched={erasureDispatched} />
+      <p className="vx-small"><a href="/privacy">{label('Privacy request without an account', 'درخواست حریم خصوصی بدون حساب')}</a></p>
+      <GuestRightsOperationsPanel locale={locale} sessionKey={session} />
     </Section>
     <Section label={label('About', 'دربارهٔ')}>
       <div className="vx-card vx-privacy-card">
