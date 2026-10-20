@@ -47,6 +47,7 @@ export function MaintenanceHealthPanel({ health, locale }: { health: unknown; lo
         <dt className="vx-small vx-2">{label}</dt><dd className="vx-small" style={{ margin: '4px 0 0' }}>{content}</dd>
       </div>)}
     </dl>
+    <p className="vx-small vx-2">{t('Checkpoint counts do not measure unique people or deletions.', 'این شمارنده‌های پیشرفت، تعداد افراد یکتا یا حذف داده‌ها را نشان نمی‌دهند.')}</p>
     {checkpoint?.failure === 'sweep_failed' && <p className="vx-small">{t('A maintenance failure was recorded.', 'یک خطای نگهداری ثبت شده است.')}</p>}
     <p className="vx-small vx-2">{t('Recorded progress is not proof of deletion or a running worker.', 'پیشرفت ثبت‌شده، انجام حذف یا در حال اجرا بودن فرایند را ثابت نمی‌کند.')}</p>
   </section>;

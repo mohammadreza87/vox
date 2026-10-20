@@ -24,6 +24,7 @@ it.each([
   const { container } = render(<MaintenanceHealthPanel health={health(state)} locale="en" />);
   expect(screen.getByRole('status')).toHaveTextContent(copy);
   expect(screen.getByText('Recorded progress is not proof of deletion or a running worker.')).toBeInTheDocument();
+  expect(screen.getByText('Checkpoint counts do not measure unique people or deletions.')).toBeInTheDocument();
   expect(container.textContent).not.toMatch(/unsupported_store|checkpoint_locked|lease_expired|sweep_failed|\bhealthy\b|\bETA\b|%/);
 });
 
@@ -76,5 +77,6 @@ it('renders Persian semantics, RTL and localized checkpoint numbers without expo
   expect(within(panel).getByText('صفحه‌ها در پیشرفت ثبت‌شده').nextElementSibling).toHaveTextContent('۳');
   expect(within(panel).getByText('حساب‌ها در پیشرفت ثبت‌شده').nextElementSibling).toHaveTextContent('۵');
   expect(within(panel).getByText('یک خطای نگهداری ثبت شده است.')).toBeInTheDocument();
+  expect(within(panel).getByText('این شمارنده‌های پیشرفت، تعداد افراد یکتا یا حذف داده‌ها را نشان نمی‌دهند.')).toBeInTheDocument();
   expect(container.textContent).not.toMatch(/sweep_failed|checkpointed|accountId|cursor|workerId/);
 });
