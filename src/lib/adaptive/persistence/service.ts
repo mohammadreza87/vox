@@ -2,14 +2,16 @@ import { rightsUseAllowed, rightsUseStamp } from '../rights-use-holds/state';
 import { mayUseStoredPersonalization, productPauseUseStamp } from '../product-pause/state';
 import { randomUUID } from 'crypto';
 import { brandError, publicDomainError } from '../../error-contract';
-import { purgeInvalidDerivedMemory, validMemoryLineage } from '../reviewed-memory/provenance';
+import { purgeInvalidDerivedMemory, validMemoryLineage, selectedMemoryClosure } from '../reviewed-memory/provenance';
+import { localErasureOperationSchema, type LocalErasureOperation, type ErasureWitness } from '../rights-intake/local-erasure-contracts';
+import { erasureFingerprint, localUseDigest } from '../rights-intake/local-use-state';
 import { transitionConsent } from '../consent';
 import { evaluateCapability, type Capability, type CapabilityRequest, type JurisdictionApproval } from '../eligibility';
 import { resolveVerifiedPerson } from '../identity';
 import { authorizeAccess } from '../policy';
 import type { AccessRequest, ConsentPermission, IdentityContext, PolicySnapshot, ResourceDescriptor } from '../types';
 import { ADAPTIVE_POLICY_VERSION, OPTIONAL_PURPOSES, AdaptiveRepository, accountIdFor, containerIdFor, digest,
-  spaceIdFor, tenantIdFor, type AdaptiveAuthorityDocument, type AdaptiveDocument, type OptionalPurpose, type SpaceKind, type StoredMemory } from './repository';
+  spaceIdFor, tenantIdFor, validateAdaptiveDocument, type AdaptiveAuthorityDocument, type AdaptiveDocument, type OptionalPurpose, type SpaceKind, type StoredMemory } from './repository';
 import type { AdaptiveNotice, AdaptiveSnapshot, AdaptivePresentation } from './contracts';
 import { correctionInput, type CorrectionInput } from './validation';
 import type { AgentGrantInput, ConsentInput, DeletionInput, IdentityInput, MemoryInput, PresentInput } from './validation';
@@ -278,6 +280,77 @@ export class AdaptiveService {
   }
   rightsUseHoldTransaction<T>(telegramId:number,fn:(document:AdaptiveDocument,now:number)=>T,beforeCommit:()=>void):Promise<T> {
     return this.repository.transaction(this.account(telegramId),this.now,fn,beforeCommit,true);
+  }
+  /** RF2 is deliberately separate from generic account maintenance. */
+  privateNoteErasureQualified():boolean {
+    const s=this.repository.storage;
+    return s.canonicalSchemaVersion===3 && s.supportsCommittedWriteFence===true && !!s.readCommittedForEffect &&
+      (!!s.indexed || s.fileAuthorityProjectionVersion===2 && typeof s.readDirectAuthorityForEffect==='function');
+  }
+  private erasureWitness(d:AdaptiveDocument,memoryId:string,space:SpaceKind):ErasureWitness {
+    try {return selectedMemoryClosure(d,memoryId,space).map(m=>{
+      const step=m.status==='active'?1:0;
+      if(!Number.isSafeInteger(m.revision+step)||!Number.isSafeInteger(m.revocationEpoch+step))return fail(409,'erasure_capacity');
+      return {id:m.id,space:m.space,beforeRevision:m.revision,beforeEpoch:m.revocationEpoch,beforeStatus:m.status,
+        afterRevision:m.revision+step,afterEpoch:m.revocationEpoch+step,afterStatus:'deleted' as const,sourceRefsDigest:digest(m.sourceRefs??null)};
+    });}catch(e){if(AdaptiveError.is(e))throw e;return fail(409,'erasure_lineage_unavailable');}
+  }
+  preparePrivateNoteErasureNow(id:number,space:SpaceKind,memoryId:string,revision:number,guard:()=>void) {
+    const check=()=>{validateRuntimeControlEvaluation({value:guard()});};check();
+    if(!this.privateNoteErasureQualified())return fail(503,'erasure_unsupported');
+    const read=this.readCommittedForEffect(id,(d,now)=>{
+      check();this.requirePerson(d,now);
+      const m=d.memories.find(m=>m.id===memoryId && m.space===space);
+      if(!m || m.status!=='active' || m.expiresAt<=now || m.origin || m.sourceRefs || m.revision!==revision || !this.authorized(d,space,m,'delete',now))return fail(409,'erasure_selection_changed');
+      return {expectedCanonicalRevision:d.revision,expectedBindingDigest:digest(d.binding),witness:this.erasureWitness(d,memoryId,space),bindingExpiresAt:d.binding!.expiresAt};
+    });
+    check();if(read.status!=='ready')return fail(503,'erasure_authority_unavailable');return read.value;
+  }
+  privateNoteErasureProofNow(id:number,operation:LocalErasureOperation,guard:()=>void):{technical:'unknown'|'not_applied'|'note_content_removed';observedAt:number|null;effectRevision:number|null} {
+    validateRuntimeControlEvaluation({value:guard()});
+    if(!this.privateNoteErasureQualified())return {technical:'unknown',observedAt:null,effectRevision:null};
+    const read=this.readCommittedForEffect(id,(d,now)=>{
+      validateRuntimeControlEvaluation({value:guard()});this.requirePerson(d,now);
+      const unknown={technical:'unknown' as const,observedAt:null,effectRevision:null};
+      if(operation.fingerprint!==erasureFingerprint(d.accountId,operation) || operation.witnessDigest!==localUseDigest(operation.witness))return unknown;
+      const e=d.events.find(e=>e.eventId===operation.eventId);
+      let closure:StoredMemory[];try{closure=selectedMemoryClosure(d,operation.memoryId,operation.space);}catch{return unknown;}
+      const matches=(after:boolean)=>operation.witness.every(w=>{
+        const m=d.memories.find(m=>m.id===w.id && m.space===w.space);
+        return !!m && m.status===(after?'deleted':w.beforeStatus) && m.revision===(after?w.afterRevision:w.beforeRevision) && m.revocationEpoch===(after?w.afterEpoch:w.beforeEpoch) && digest(m.sourceRefs??null)===w.sourceRefsDigest && (!after || m.text===undefined);
+      });
+      if(!e) return d.revision===operation.expectedCanonicalRevision && digest(d.binding)===operation.expectedBindingDigest && matches(false) && localUseDigest(this.erasureWitness(d,operation.memoryId,operation.space))===operation.witnessDigest ? {technical:'not_applied' as const,observedAt:now,effectRevision:null}:unknown;
+      return e.kind==='rights_private_note_erased' && e.resultId===operation.memoryId && e.fingerprint===operation.fingerprint && e.revision===operation.expectedCanonicalRevision+1 && matches(true) && !closure.some(m=>m.status==='active' && m.text!==undefined) ? {technical:'note_content_removed' as const,observedAt:now,effectRevision:e.revision}:unknown;
+    });
+    validateRuntimeControlEvaluation({value:guard()});return read.status==='ready'?read.value:{technical:'unknown',observedAt:null,effectRevision:null};
+  }
+  eraseSelectedPrivateNote(id:number,raw:LocalErasureOperation,guard:()=>void):Promise<void> {
+    const o=localErasureOperationSchema.parse(raw),check=()=>{validateRuntimeControlEvaluation({value:guard()});};check();
+    if(!this.privateNoteErasureQualified())return Promise.reject(new AdaptiveError(503,'erasure_unsupported'));
+    let draft:AdaptiveDocument|undefined,target:StoredMemory|undefined;
+    return this.repository.transaction(this.account(id),this.now,(d,now)=>{
+      draft=d;check();this.requirePerson(d,now);
+      if(o.fingerprint!==erasureFingerprint(d.accountId,o) || d.revision!==o.expectedCanonicalRevision || digest(d.binding)!==o.expectedBindingDigest || now>=o.expiresAt || now>=o.executionDeadline || d.events.some(e=>e.eventId===o.eventId))return fail(409,'erasure_changed');
+      target=d.memories.find(m=>m.id===o.memoryId && m.space===o.space);
+      if(!target || target.status!=='active' || target.expiresAt<=now || target.origin || target.sourceRefs || !this.authorized(d,o.space,target,'delete',now) || localUseDigest(this.erasureWitness(d,o.memoryId,o.space))!==o.witnessDigest)return fail(409,'erasure_changed');
+      target=structuredClone(target);
+      // Validate the complete cloned unit before touching the writer draft.
+      const projected=structuredClone(d),revision=d.revision+1;
+      if(!Number.isSafeInteger(revision))return fail(409,'erasure_capacity');
+      for(const w of o.witness) if(w.beforeStatus==='active') {
+        const m=projected.memories.find(m=>m.id===w.id)!;m.status='deleted';delete m.text;m.revision=w.afterRevision;m.revocationEpoch=w.afterEpoch;m.updatedAt=now;
+        projected.outbox.push({eventId:`rights-erasure:${digest([o.eventId,w.id])}`,kind:'memory_deleted',space:m.space,personId:d.personId,revision,memoryId:m.id,epoch:m.revocationEpoch,createdAt:now});
+      }
+      projected.revision=revision;projected.updatedAt=now;
+      projected.events.push({eventId:o.eventId,fingerprint:o.fingerprint,kind:'rights_private_note_erased',resultId:o.memoryId,revision});
+      // Existing schema validators also preserve pause/RF1 reserved capacity.
+      validateAdaptiveDocument(projected,d.accountId,now);
+      if(projected.events.length>2000 || projected.outbox.length>2000)return fail(409,'erasure_capacity');
+      d.memories=projected.memories;d.outbox=projected.outbox;d.events=projected.events;d.revision=revision;d.updatedAt=now;
+    },()=>{
+      check();const now=this.sampleClock(this.now);
+      if(!draft || !target || !this.isProfileConfirmed(draft,now) || digest(draft.binding)!==o.expectedBindingDigest || now>=o.expiresAt || now>=o.executionDeadline || target.expiresAt<=now || !this.authorized(draft,o.space,target,'delete',now))return fail(409,'erasure_changed');
+    },true);
   }
   sampleServiceClock(): number { return this.sampleClock(this.now); }
   notifyProductPauseCommitted(telegramId: number): void { this.preferenceLearningInvalidator?.(telegramId); }
