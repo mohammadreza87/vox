@@ -5,6 +5,7 @@ import { AdaptiveRelationshipService } from '../relationships/service';
 import type { SharedMemoryService } from '../shared/service';
 import { z } from 'zod';
 import type { ObserverDocument } from '../observation/contracts';
+import type { LocalErasureOperation } from '../rights-intake/local-erasure-contracts';
 import type { ExperimentScopeExport } from '../experiments/contracts';
 
 export interface LifecycleOptions {
@@ -28,6 +29,10 @@ export class AdaptiveLifecycleService {
     this.experience = new AdaptiveExperienceService(adaptive);
     this.relationships = new AdaptiveRelationshipService(adaptive);
   }
+  privateNoteErasureQualified():boolean {return this.adaptive.privateNoteErasureQualified();}
+  preparePrivateNoteErasureNow(id:number,space:SpaceKind,memoryId:string,revision:number,guard:()=>void){return this.adaptive.preparePrivateNoteErasureNow(id,space,memoryId,revision,guard);}
+  privateNoteErasureProofNow(id:number,operation:LocalErasureOperation,guard:()=>void){return this.adaptive.privateNoteErasureProofNow(id,operation,guard);}
+  eraseSelectedPrivateNote(id:number,operation:LocalErasureOperation,guard:()=>void){return this.adaptive.eraseSelectedPrivateNote(id,operation,guard);}
   private prune(d: AdaptiveDocument, now: number): void {
     const before = digest([d.experience, d.relationships, d.receipts]);
     this.experience.pruneDocument(d, now);

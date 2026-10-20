@@ -1,4 +1,4 @@
-import { requireLocalUseCapacity, validateLocalUseLedger } from './local-use-state';
+import { requireLocalUseCapacity, validateLocalUseLedger, validateErasureLedger } from './local-use-state';
 import { brandError, publicDomainError } from '../../error-contract';
 import type { AdaptiveStorage } from '../persistence/storage';
 import { ledgerSchema, legacyLedgerSchema, type AccountLedger, type RequestRecord } from './contracts';
@@ -21,7 +21,11 @@ function validAudit(row: RequestRecord, audit: RequestRecord['audit'][number], i
   }
 }
 export class RightsRepository {
-  constructor(readonly storage: AdaptiveStorage & { observeRightsTime?: (now: number) => void }) {}
+  constructor(readonly storage: AdaptiveStorage & { observeRightsTime?: (now: number) => void; readRightsTimeForEffect?:()=>{status:'ready';observedServerTime:number}|{status:'busy'} }) {}
+  assertTimeForEffect(now:number):void {
+    const current=this.storage.readRightsTimeForEffect?.();
+    if(!Number.isSafeInteger(now)||now<0||current?.status!=='ready'||now<current.observedServerTime)return fail(503,'rights_clock_unavailable');
+  }
   observeTime(now: number): void {
     try { if (!this.storage.observeRightsTime) return fail(503, 'rights_clock_unavailable'); this.storage.observeRightsTime(now); } catch (error) { if (RightsError.is(error)) throw error; return fail(503, 'rights_clock_unavailable'); }
   }
@@ -44,7 +48,7 @@ export class RightsRepository {
       new Set(d.tombstones.map(r => r.requestId)).size !== d.tombstones.length ||
       d.tombstones.some(t => t.purgedAt > d.observedServerTime || t.retainUntil <= t.purgedAt || d.requests.some(r => r.requestId === t.requestId)) ||
       d.commandReceipts.some(r => r.recordedAt > d.observedServerTime || r.retainUntil <= r.recordedAt || !d.requests.some(request => request.requestId === r.requestId && request.revision >= r.resultingRequestRevision) && !d.tombstones.some(t => t.requestId === r.requestId && t.lastRevision >= r.resultingRequestRevision && t.retainUntil >= r.retainUntil))) return fail(503, 'rights_storage_unavailable');
-    validateLocalUseLedger(d);
+    validateLocalUseLedger(d); validateErasureLedger(d);
     return d;
   }
   read(accountId: string): AccountLedger | null {
@@ -59,12 +63,24 @@ export class RightsRepository {
         if (raw === null) return fail(409, 'rights_conversion_not_eligible');
         const before = this.parse(accountId, raw), now = clock();
         if (before.observedServerTime > now) return fail(503, 'rights_clock_unavailable');
-        if (before.version === 3) throw new RightsReplay();
+        if (before.version === 3 || before.version === 4) throw new RightsReplay();
         const next: AccountLedger = { ...before, version: 3, revision: before.revision + 1, observedServerTime: now, localUse: { version: 1, intents: [], acknowledgements: [] } };
         this.parse(accountId, next); requireLocalUseCapacity(next);
         return { document: next, result: undefined };
       }, fence);
     } catch (e) { if (e instanceof RightsReplay) return; if (RightsError.is(e)) throw e; return fail(503, 'rights_storage_busy'); }
+  }
+  /** Quiesced reviewed local administration only; never a requester fallback. */
+  async migrateToV4(accountId:string,clock:()=>number,fence:()=>void):Promise<void> {
+    try {await this.storage.transact(accountId,raw=>{
+      if(raw===null)return fail(409,'rights_conversion_not_eligible');
+      const before=this.parse(accountId,raw),now=clock();
+      if(now<before.observedServerTime)return fail(503,'rights_clock_unavailable');
+      if(before.version===4)throw new RightsReplay();
+      if(before.version!==3)return fail(409,'rights_conversion_not_eligible');
+      const next:AccountLedger={...before,version:4,revision:before.revision+1,observedServerTime:now,localErasure:{version:1,operations:[]}};
+      this.parse(accountId,next);requireLocalUseCapacity(next);return {document:next,result:undefined};
+    },fence);}catch(e){if(e instanceof RightsReplay)return;if(RightsError.is(e))throw e;return fail(503,'rights_storage_busy');}
   }
   async transaction<T>(accountId: string, clock: () => number, mutate: (ledger: AccountLedger) => T, fence: () => void): Promise<T> {
     try {

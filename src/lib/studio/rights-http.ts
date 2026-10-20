@@ -1,3 +1,4 @@
+import { localErasurePlanInputSchema, localErasureExecuteInputSchema, localErasureReconcileInputSchema } from '../adaptive/rights-intake/local-erasure-contracts';
 import { localUseActionInputSchema, localUsePlanInputSchema, localUsePurposeSchema, localUseReconcileInputSchema } from '../adaptive/rights-intake/local-use-contracts';
 import { RightsUseHoldError } from '../adaptive/rights-use-holds/service';
 import { trustedStudioRequestOrigin } from './request-origin';
@@ -42,7 +43,7 @@ export async function handleRightsRequest(studio: Studio, request: Request, path
     };
     assertAuthenticatedNow();
     if (!studio.deps.rights) return json({ error: 'rights_unavailable' }, 503);
-    const rights = studio.deps.rights.forRequest(assertAuthenticatedNow);
+    const rights = studio.deps.rights.forRequest(()=>{assertAuthenticatedNow();if(path.includes('private-note-erasure')&&request.signal.aborted)return fail(409,'rights_request_cancelled');});
     const respond = (value: unknown, status = 200) => {
       const serialized = JSON.stringify(value);
       assertAuthenticatedNow();
@@ -56,6 +57,10 @@ export async function handleRightsRequest(studio: Studio, request: Request, path
     if ([...url.searchParams.keys()].some(k => !allowedQuery.includes(k)) || allowedQuery.some(k => url.searchParams.getAll(k).length > 1)) return json({ error: 'invalid_request' }, 400);
     const space = operator || route === 'requests' && request.method === 'POST' && !url.searchParams.has('space') ? undefined : spaceSchema.parse(url.searchParams.get('space'));
     if (request.method === 'GET') {
+      if(path.length===3&&path[0]==='requests'&&path[2]==='private-note-erasure') {
+        const id=reference.parse(path[1]),result=rights.privateNoteErasureStatus(user.id,id,space!);
+        return respondLocal(result,()=>rights.assertPrivateNoteErasurePublication(user.id,id,space!,result));
+      }
       if (path.length === 3 && path[0] === 'requests' && path[2] === 'local-use') {
         const requestId = reference.parse(path[1]), scope = { space: space!, purpose: localUsePurposeSchema.parse(url.searchParams.get('purpose')) };
         const result = rights.localUseStatus(user.id, requestId, scope);
@@ -63,7 +68,7 @@ export async function handleRightsRequest(studio: Studio, request: Request, path
       }
       if (route === '') return respond(rights.snapshot(user.id, space!));
       if (path.length === 2 && path[0] === 'requests') return respond(rights.detail(user.id, space!, reference.parse(path[1])));
-      if (route === 'operations/requests') return respond(await rights.operations(user.id, url.searchParams.get('cursor') ?? undefined));
+      if (route === 'operations/requests') {const result=await rights.operations(user.id,url.searchParams.get('cursor')??undefined);return respondLocal(result,()=>rights.assertErasureOperationsPublication(user.id,result));}
       return json({ error: 'not_found' }, 404);
     }
     if (request.method !== 'POST') return json({ error: 'not_found' }, 404);
@@ -76,6 +81,15 @@ export async function handleRightsRequest(studio: Studio, request: Request, path
     let body: unknown;
     try { body = await bounded.json(); } catch { return json({ error: 'invalid_request' }, 400); }
     assertAuthenticatedNow();
+    if(path.length===4&&path[0]==='requests'&&path[2]==='private-note-erasure') {
+      const id=reference.parse(path[1]);
+      if(path[3]==='plan'){const result=rights.privateNoteErasurePlan(user.id,id,space!,localErasurePlanInputSchema.parse(body));return respondLocal(result,()=>rights.assertPrivateNoteErasurePlanPublication(user.id,id,space!,result));}
+      if(path[3]==='execute'){const result=await rights.privateNoteErasureExecute(user.id,id,space!,localErasureExecuteInputSchema.parse(body));return respondLocal(result,()=>rights.assertPrivateNoteErasurePublication(user.id,id,space!,result));}
+    }
+    if(path.length===5&&path[0]==='operations'&&path[1]==='requests'&&path[3]==='private-note-erasure'&&path[4]==='reconcile') {
+      const input=localErasureReconcileInputSchema.parse(body),id=reference.parse(path[2]);const result=await rights.reconcilePrivateNoteErasure(user.id,id,input.operationHandle,input.commandEventId,input.eventId);
+      return respondLocal(result,()=>rights.assertPrivateNoteErasureOperatorPublication(user.id,id,input.operationHandle,result));
+    }
     if (path.length === 4 && path[0] === 'requests' && path[2] === 'local-use') {
       const requestId = reference.parse(path[1]);
       if (path[3] === 'plan') return respond(rights.localUsePlan(user.id, requestId, space!, localUsePlanInputSchema.parse(body)));
