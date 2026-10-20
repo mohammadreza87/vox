@@ -70,6 +70,9 @@ jobs:
       - name: Verify offline inventory CLI and generated source parity
         run: node --test scripts/legacy-offline-inventory.test.mjs
 
+      - name: Verify bounded Firebase preview inventory
+        run: node --test scripts/firebase-preview-inventory.test.mjs
+
       - name: Verify Connections release configuration preservation
         run: node --test scripts/connections-production-config.test.mjs
 
