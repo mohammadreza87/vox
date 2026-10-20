@@ -552,10 +552,12 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
         if (shared && typeof shared.revision !== 'string') { allowed = false; audienceValid = false; }
       }
     } catch { allowed = false; }
+    // An audience that is not fully known (hasGuests, unknown or unverified readers)
+    // gets neither memory nor history, with or without a runtime privacy adapter.
     const scopedOnly = compact && states.length === members.length && states.length > 0 && states.every(v => v.memoryEnabled === false && v.historyEnabled === false);
     if (compact && !scopedOnly) { allowed = false; audienceValid = false; }
     const storedContextAllowed = !this.deps.runtimePrivacy || states.length === members.length && states.every(v => v.storedContextAllowed !== false);
-    const memoryEnabled = storedContextAllowed && space === 'work' && (!this.deps.runtimePrivacy || (allowed && states.every((v) => v.memoryEnabled === true)));
+    const memoryEnabled = storedContextAllowed && allowed && space === 'work' && (!this.deps.runtimePrivacy || states.every((v) => v.memoryEnabled === true));
     const historyEnabled = storedContextAllowed && allowed && space === 'work' && states.every((v) => v.historyEnabled === true);
     if (compact && !this.syncPrivacyAvailable()) { allowed = false; audienceValid = false; }
     const key = this.boundaryKey(chat, speakerId, space, allowed, audienceValid, scopedOnly, states, shared);
@@ -935,7 +937,9 @@ You are on a live voice call. Answer in one to three short spoken sentences. No 
 
   private async formMemories(persona: Persona, chat: ChatContext, speakerId: string, boundary: TurnBoundary, currentTurn: ChatMessage[], messageId?: number, passive = false, authorize?: () => Promise<boolean>) {
     const { org, llm, memories } = this.deps;
-    if ((!boundary.memoryEnabled && this.deps.runtimePrivacy) || !(await this.unchanged(persona, chat, speakerId, boundary))) return;
+    // Without memory nothing may be extracted: not even a discarded extraction
+    // request leaves the process for a guest or unknown audience.
+    if (!boundary.memoryEnabled || !(await this.unchanged(persona, chat, speakerId, boundary))) return;
     const retained = await this.historyAt(persona, chat, boundary, EXTRACTION_WINDOW);
     const transcript = chat.kind === 'group' ? currentTurn.filter(m => m.role === 'user') : retained.length ? retained : currentTurn;
     if (!transcript.some((m) => m.role === 'user')) return;

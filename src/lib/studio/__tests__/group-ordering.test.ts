@@ -7,10 +7,15 @@ describe('group updates completing out of order', () => {
   it('extracts both distinct sources when the newer decision finishes first', async () => {
     const h = makeStudio();
     const org = await seedOrg(h);
-    const { agent, bot } = await hire(h, org.alice, { name: 'Nova', role: 'Producer' });
+    const { agent, bot, botId } = await hire(h, org.alice, { name: 'Nova', role: 'Producer' });
     await h.store.update((state) => {
       state.groups.push({ chatId: -700, title: 'QA', memberIds: [ID.alice, ID.bob], hasGuests: false, agentIds: [agent.id], addedBy: ID.alice, addedAt: '' });
     });
+    // A verifiable roster keeps the audience complete; an unverified group is
+    // treated as having guests, where no memory may be formed.
+    const roster = [ID.alice, ID.bob, botId];
+    bot().getChatMemberCount.mockResolvedValue(roster.length);
+    Object.assign(bot(), { getChatMember: vi.fn(async (_chatId: number, id: number) => ({ status: roster.includes(id) ? 'member' : 'left', user: { id, is_bot: id === botId, first_name: 'Synthetic' } })) });
     let release!: () => void;
     let entered!: () => void;
     const firstEntered = new Promise<void>((resolve) => { entered = resolve; });
@@ -41,5 +46,6 @@ describe('group updates completing out of order', () => {
     expect(memories.map((row) => row.source.telegramMessageId).sort()).toEqual([101, 102]);
     expect(memories.map((row) => row.content).sort()).toEqual(['First distinct fact', 'Second distinct fact']);
     expect(bot().sendMessage).not.toHaveBeenCalled();
+    expect((await h.store.read()).groups[0].hasGuests).toBe(false);
   });
 });
