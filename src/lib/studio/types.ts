@@ -202,6 +202,8 @@ export interface StudioGroup {
   /** Monotonic audience epoch; leave/rejoin must not restore old sharing rights. */
   audienceEpoch?: number;
   agentIds: string[];
+  /** Declared history policy; absent = since_membership. Never widens a record by itself. */
+  historyPolicy?: 'since_membership' | 'all_authorized_history';
   addedBy?: number;
   addedAt: string;
   /** Content-free throttle shared by all agents in this group. */

@@ -59,6 +59,8 @@ export interface Group {
   hasGuests?: boolean;
   /** Only these invited agents may observe this group (legacy config may omit). */
   agentIds?: string[];
+  /** Who sees group-scoped history from before they joined. Default since_membership; only an explicit, audited admin re-snapshot widens. */
+  historyPolicy?: 'since_membership' | 'all_authorized_history';
 }
 
 export type GroupParticipation = 'mentions' | 'balanced' | 'active';
