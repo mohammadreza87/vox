@@ -92,7 +92,7 @@ it('reports first text only after actual committed visible reply and acknowledge
   vi.stubGlobal('cancelAnimationFrame', vi.fn());
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ top: 1, left: 1, bottom: 20, right: 100, width: 99, height: 19 } as DOMRect);
   vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
-  controls.fetch.mockResolvedValue(Response.json({ reply: 'PRIVATE_REPLY_CANARY', turnId: 'accepted-turn', responsePresentation: { density: 'compact', receipt: 'opaque-exposure-receipt' } }));
+  controls.fetch.mockResolvedValue(Response.json({ reply: 'PRIVATE_REPLY_CANARY', turnId: 'accepted-turn', responsePresentation: { density: 'compact', receipt: 'a'.repeat(64) } }));
   const view = render(<ConversationPanel agentId="agent1" space="work" />);
   fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'PRIVATE_QUESTION_CANARY' } });
   fireEvent.click(screen.getByRole('button', { name: 'Send' }));
@@ -101,7 +101,7 @@ it('reports first text only after actual committed visible reply and acknowledge
   await act(async () => frames.shift()!(performance.now())); expect(controls.event).not.toHaveBeenCalled();
   await act(async () => frames.shift()!(performance.now()));
   expect(controls.event).toHaveBeenCalledExactlyOnceWith({ agentId: 'agent1', space: 'work', turnId: 'accepted-turn', eventId: 'text-accepted-turn', outcome: 'text_rendered', durationMs: expect.any(Number) }, expect.any(AbortSignal));
-  expect(controls.exposure).toHaveBeenCalledExactlyOnceWith('POST', 'experiments/exposure', { agentId: 'agent1', space: 'work', receipt: 'opaque-exposure-receipt' }, 'json', expect.any(AbortSignal));
+  expect(controls.exposure).toHaveBeenCalledExactlyOnceWith('POST', 'experiments/exposure', { agentId: 'agent1', space: 'work', receipt: 'a'.repeat(64) }, 'json', expect.any(AbortSignal));
   expect(JSON.stringify(controls.event.mock.calls)).not.toMatch(/PRIVATE_|task_succeeded/);
   const signal = controls.event.mock.calls[0][1] as AbortSignal;
   view.unmount(); expect(signal.aborted).toBe(true);
@@ -117,4 +117,23 @@ it('drops a committed but not yet visible text measurement when the account/spac
   view.rerender(<ConversationPanel agentId="agent1" space="personal" />);
   while (frames.length) await act(async () => frames.shift()!(performance.now()));
   expect(controls.event).not.toHaveBeenCalled(); expect(controls.exposure).not.toHaveBeenCalled();
+});
+
+it.each(['declined', 'unavailable'] as const)('restores inherited comfortable presentation when exposure is %s', async result => {
+  const frames: FrameRequestCallback[] = [];
+  vi.stubGlobal('requestAnimationFrame', (fn: FrameRequestCallback) => { frames.push(fn); return frames.length; }); vi.stubGlobal('cancelAnimationFrame', vi.fn());
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ top: 1, left: 1, bottom: 20, right: 100, width: 99, height: 19 } as DOMRect);
+  controls.fetch.mockResolvedValue(Response.json({ reply: 'Scoped reply', turnId: 'turn', responsePresentation: { density: 'compact', receipt: 'b'.repeat(64) } }));
+  if (result === 'declined') controls.exposure.mockResolvedValue({ recorded: false, duplicate: false }); else controls.exposure.mockRejectedValue(new Error('PRIVATE_ACK_ERROR'));
+  render(<ConversationPanel agentId="agent1" space="work" />); fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'Scoped request' } }); fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+  const reply = await screen.findByText('Scoped reply'); expect(reply).toHaveAttribute('data-response-density', 'compact');
+  await act(async () => { frames.shift()!(performance.now()); frames.shift()!(performance.now()); await Promise.resolve(); });
+  expect(reply).toHaveAttribute('data-response-density', 'comfortable'); expect(reply.style.lineHeight).toBe('');
+  expect(controls.exposure).toHaveBeenCalledOnce();
+});
+
+it('ignores presentation metadata without the exact bounded server receipt', async () => {
+  controls.fetch.mockResolvedValue(Response.json({ reply: 'Safe reply', turnId: 'accepted-turn', responsePresentation: { density: 'compact', receipt: 'unbounded-experiment-canary' } }));
+  render(<ConversationPanel agentId="agent1" space="work" />); fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'Scoped request' } }); fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+  const reply = await screen.findByText('Safe reply'); expect(reply).not.toHaveAttribute('data-response-density'); expect(reply.style.lineHeight).toBe(''); expect(controls.exposure).not.toHaveBeenCalled();
 });

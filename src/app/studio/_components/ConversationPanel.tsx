@@ -16,10 +16,11 @@ import { preferenceLearningApi } from '../_lib/preference-learning-client';
 type Presentation = { density: 'compact' | 'comfortable'; receipt: string };
 type ConversationLine = { role: 'you' | 'agent'; text: string; turnId?: string; started?: number; epoch?: number; session?: string; presentation?: Presentation };
 function presentation(raw: unknown): Presentation | undefined {
-  if (!raw || typeof raw !== 'object' || !('density' in raw) || !['compact', 'comfortable'].includes(String(raw.density)) || !('receipt' in raw) || typeof raw.receipt !== 'string' || !raw.receipt || raw.receipt.length > 4096) return undefined;
+  if (!raw || typeof raw !== 'object' || !('density' in raw) || !['compact', 'comfortable'].includes(String(raw.density)) || !('receipt' in raw) || typeof raw.receipt !== 'string' || !/^[a-f0-9]{64}$/.test(raw.receipt)) return undefined;
   return { density: raw.density as Presentation['density'], receipt: raw.receipt };
 }
 function CommittedReply({ line, agentId, space, current }: { line: ConversationLine; agentId: string; space: 'work' | 'personal'; current(): boolean }) {
+  const [presentationRejected, setPresentationRejected] = useState(false);
   const element = useRef<HTMLSpanElement | null>(null), reported = useRef(false), latestCurrent = useRef(current);
   latestCurrent.current = current;
   useEffect(() => {
@@ -29,11 +30,14 @@ function CommittedReply({ line, agentId, space, current }: { line: ConversationL
       if (reported.current || !latestCurrent.current()) return; reported.current = true;
       if (line.turnId) void learningApi.event({ agentId, space, turnId: line.turnId, eventId: `text-${line.turnId}`, outcome: 'text_rendered',
         ...(line.started !== undefined ? { durationMs: Math.min(86_400_000, Math.max(0, performance.now() - line.started)) } : {}) }, controller.signal).catch(() => undefined);
-      if (line.presentation) void studioRequest('POST', 'experiments/exposure', { agentId, space, receipt: line.presentation.receipt }, 'json', controller.signal).catch(() => undefined);
+      if (line.presentation) void studioRequest<{ recorded: boolean; duplicate: boolean }>('POST', 'experiments/exposure', { agentId, space, receipt: line.presentation.receipt }, 'json', controller.signal)
+        .then(result => { if (!controller.signal.aborted && latestCurrent.current() && !result.recorded && !result.duplicate) setPresentationRejected(true); })
+        .catch(() => { if (!controller.signal.aborted && latestCurrent.current()) setPresentationRejected(true); });
     }, () => latestCurrent.current());
     return () => { stop(); controller.abort(); };
   }, [line, agentId, space]);
-  return <span ref={element} data-response-density={line.presentation?.density} style={line.presentation ? { lineHeight: line.presentation.density === 'compact' ? 1.35 : 1.8 } : undefined}>{line.text}</span>;
+  const density = line.presentation ? presentationRejected ? 'comfortable' : line.presentation.density : undefined;
+  return <span ref={element} data-response-density={density} style={density === 'compact' ? { lineHeight: 1.35 } : undefined}>{line.text}</span>;
 }
 export function ConversationPanel({ agentId, space, locale = 'en', disabled = false }: {
   agentId: string; space: 'work' | 'personal'; locale?: 'en' | 'fa'; disabled?: boolean;

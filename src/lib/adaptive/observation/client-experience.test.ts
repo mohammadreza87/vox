@@ -69,3 +69,38 @@ it('CAS rollback preserves current memory/deletion/consent state and is accepted
     expect(() => stripClientExperienceForRollback(original, 'telegram-account:456')).toThrow('rollback_scope_mismatch');
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
+
+it.each(['sqlite', 'file-v2'] as const)('rolls back current %s canonical data through the adapter transaction without restoring controls', async kind => {
+  const { SqliteAdaptiveStorage } = await import('../persistence/indexed/sqlite-storage');
+  const { ManagedFileV2Storage } = await import('../persistence/indexed/managed-storage');
+  const { AdaptiveRepository, accountIdFor } = await import('../persistence/repository');
+  const { pruneClientExperience } = await import('./client-experience-rollback');
+  const directory = await mkdtemp(join(tmpdir(), `vox-observer-rollback-${kind}-`));
+  const now = Date.UTC(2026, 9, 20), seed = { generation: 1, lifecycleWatermark: now, schemaVersion: 2 as const };
+  const storage = kind === 'sqlite' ? new SqliteAdaptiveStorage(join(directory, 'store.sqlite'), { now: () => now, newStoreSeed: seed })
+    : new ManagedFileV2Storage(join(directory, 'store'), { now: () => now, newStoreSeed: seed });
+  const accountId = accountIdFor(123), repo = new AdaptiveRepository(storage);
+  try {
+    await repo.transaction(accountId, now, d => {
+      d.memories.push({ id: 'current-correction', revision: 3, space: 'work', text: 'PRESERVED_CURRENT_SOURCE', status: 'active', createdAt: now, updatedAt: now, expiresAt: now + 100000, revocationEpoch: 2 },
+        { id: 'deleted-source', revision: 4, space: 'work', status: 'deleted', createdAt: now, updatedAt: now, expiresAt: now + 100000, revocationEpoch: 3 });
+      const p = d.permissions.find(p => p.purpose === 'optional.personalization' && p.id.startsWith('permission:work:'))!; p.state = 'withdrawn'; p.epoch++;
+      const scope = d.productPause!.scopes[0]; scope.productPaused = true; scope.useEpoch = 2; scope.commandSeq = 3;
+      scope.latest = { eventId: 'preserved-current-command', fingerprint: 'e'.repeat(64), seq: 3, result: 'changed', resultingUseEpoch: 2, recordedAt: now };
+      d.observer.corrections = [{ version: 1, id: 'a'.repeat(64), fingerprint: 'b'.repeat(64), space: 'work', policyReceipt: 'c'.repeat(64), trust: 'client_unverified', outcome: 'correction_client_unconfirmed', mutationEvidence: 'unavailable', occurredAt: now, expiresAt: now + 100000 }];
+    });
+    const before = storage.readCommittedForEffect(accountId); expect(before.status).toBe('ready'); if (before.status !== 'ready') return;
+    const original = structuredClone(before.document) as Record<string, unknown>;
+    const preview = await pruneClientExperience(storage, { accountId });
+    expect(storage.readCommittedForEffect(accountId)).toEqual(before);
+    await expect(pruneClientExperience(storage, { accountId, apply: true, producersStopped: true, expectedContentSha256: '0'.repeat(64) })).rejects.toThrow('rollback_document_changed');
+    await pruneClientExperience(storage, { accountId, apply: true, producersStopped: true, expectedContentSha256: preview.contentSha256 });
+    const result = storage.readCommittedForEffect(accountId); expect(result.status).toBe('ready'); if (result.status !== 'ready') return;
+    const expected = { ...original }; delete expected.observer;
+    // Managed adapters canonically omit an empty optional observer extension.
+    expect(result.document).toEqual(expected);
+    expect(storage.canonicalSchemaVersion).toBe(2);
+    // Revalidate through the repository/adapter's schema and control fences too.
+    await expect(repo.transaction(accountId, now, d => d.productPause)).resolves.toEqual(original.productPause);
+  } finally { storage.close(); await rm(directory, { recursive: true, force: true }); }
+});

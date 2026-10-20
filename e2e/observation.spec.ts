@@ -16,7 +16,7 @@ async function fixtures(page: Page, correctionFailure = false) {
     else if (path === 'agents') data = { agents: [agent] };
     else if (path === `agents/${AGENT}`) data = { agent };
     else if (path === 'product-pause') data = { version: 1, accountId: 'synthetic-account', space: url.searchParams.get('space') ?? 'work', available: true, productPaused: false, useEpoch: 0, commandSeq: 0, canPause: true, canResume: false };
-    else if (path === 'conversation') data = { reply: 'PRIVATE_REPLY_CANARY', turnId: `accepted-turn-${++turn}`, responsePresentation: { density: 'compact', receipt: `exposure-${turn}` } };
+    else if (path === 'conversation') data = { reply: 'PRIVATE_REPLY_CANARY', turnId: `accepted-turn-${++turn}`, responsePresentation: { density: 'compact', receipt: turn.toString(16).padStart(64, '0') } };
     else if (path === 'learning/events') {
       events.push(body);
       if (body.outcome === 'text_rendered') visibleAtReport = await page.locator('[data-response-density="compact"]').last().evaluate(el => !!el.textContent?.trim() && getComputedStyle(el).visibility !== 'hidden' && el.getBoundingClientRect().width > 0);
@@ -58,7 +58,7 @@ test('hidden committed output is not reported until actually visible', async ({ 
 });
 for (const locale of ['en', 'fa'] as const) for (const failure of [false, true]) test(`correction ${failure ? 'unconfirmed' : 'saved'} ${locale} produces only fixed feedback metadata`, async ({ page }) => {
   const f = await fixtures(page, failure); await page.goto('/studio'); await page.getByRole('button', { name: 'Privacy', exact: true }).click();
-  if (locale === 'fa') await page.getByLabel('Language', { exact: true }).selectOption('fa');
+  if (locale === 'fa') await page.getByRole('combobox', { name: 'Language', exact: true }).selectOption('fa');
   const fa = locale === 'fa'; await page.getByRole('button', { name: fa ? 'ویرایش یادداشت' : 'Edit note', exact: true }).click();
   await page.getByLabel(fa ? 'یادداشت اصلاح‌شده' : 'Corrected note', { exact: true }).fill('PRIVATE_CORRECTION_CANARY');
   await page.getByRole('button', { name: fa ? 'بررسی اصلاح' : 'Review correction', exact: true }).click();
@@ -66,5 +66,5 @@ for (const locale of ['en', 'fa'] as const) for (const failure of [false, true])
   await expect.poll(() => f.corrections.length).toBe(1);
   expect(f.corrections[0]).toMatchObject({ version: 1, space: 'work', eventId: expect.any(String), policyReceipt: 'a'.repeat(64), outcome: failure ? 'correction_client_unconfirmed' : 'correction_client_saved' });
   expect(JSON.stringify(f.corrections)).not.toMatch(/PRIVATE_|note|text|memoryId/);
-  if (failure) await expect(page.getByRole('alert')).not.toContainText('PRIVATE_FAILURE_CANARY');
+  if (failure) await expect(page.getByRole('region', { name: fa ? 'اصلاح یادداشت خصوصی' : 'Correct private note' }).getByRole('alert')).not.toContainText('PRIVATE_FAILURE_CANARY');
 });
