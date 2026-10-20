@@ -4,10 +4,10 @@ import { useProductPause } from '../../_lib/product-pause-client';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { api, tg, type AgentView, type Role } from '../../_lib/client';
 import { experienceApi, type ExperienceSnapshot } from '../../_lib/experience-client';
-import { TopBar } from '../ui';
+import { Icon, Spinner, TopBar } from '../ui';
 import { RelationshipPanel } from '../RelationshipPanel';
 import { ReminderPanel } from '../ReminderPanel';
-import { LearningPanel } from '../LearningPanel';
+import { LearningPanel, OperationsPanel } from '../LearningPanel';
 import { RightsOperationsPanel } from '../RightsOperationsPanel';
 import { PreferencePanel } from '../PreferencePanel';
 import { PreferenceLearningPanel } from '../PreferenceLearningPanel';
@@ -132,11 +132,13 @@ export function ExperienceScreen({ onBack, role, notificationId }: { onBack: () 
   return <><TopBar onBack={onBack} title={t('Your experience', 'تجربهٔ شما')} right={<button className="vx-chip" disabled={busy} onClick={() => setFa(!fa)}>{fa ? 'English' : 'فارسی'}</button>} />
     <section className="vx-scroll vx-privacy" dir={fa ? 'rtl' : 'ltr'} lang={fa ? 'fa' : 'en'} aria-busy={busy}>
       <p className="vx-2">{t('Tell Vox what works for you. Saved choices, learning permissions and notification settings remain separate.', 'به وکس بگویید چه چیزی برای شما مناسب است. انتخاب‌های ذخیره‌شده، مجوزهای یادگیری و تنظیمات اعلان جدا هستند.')}</p>
-      <div className="vx-privacy-spaces" role="group" aria-label={t('Experience space', 'فضای تجربه')}>{(['work', 'personal'] as const).map(s => <button className="vx-btn vx-btn-secondary" key={s} disabled={busy} aria-pressed={space === s} onClick={() => setSpace(s)}>{s === 'work' ? t('Work', 'کاری') : t('Personal', 'شخصی')}</button>)}</div>
-      <button className="vx-btn vx-btn-secondary" disabled={busy} onClick={() => void load()}>{t('Refresh experience settings', 'تازه‌سازی تنظیمات تجربه')}</button>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div className="vx-privacy-spaces" role="group" aria-label={t('Experience space', 'فضای تجربه')} style={{ flex: 1 }}>{(['work', 'personal'] as const).map(s => <button className="vx-btn vx-btn-secondary" key={s} disabled={busy} aria-pressed={space === s} onClick={() => setSpace(s)}>{s === 'work' ? t('Work', 'کاری') : t('Personal', 'شخصی')}</button>)}</div>
+        <button className="vx-icon-btn solid" disabled={busy} onClick={() => void load()} aria-label={t('Refresh experience settings', 'تازه‌سازی تنظیمات تجربه')}>{busy ? <Spinner size={16} /> : <Icon name="refresh" size={20} />}</button>
+      </div>
       {error && <div className="vx-banner danger" role="alert">{error}<button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy} onClick={() => void load()}>{t('Refresh', 'تازه‌سازی')}</button></div>}
-      {status && <p role="status">{status}</p>}
-      {!data && !error && <p role="status">{t('Loading…', 'در حال دریافت…')}</p>}
+      {status && <p role="status" className="vx-banner info">{status}</p>}
+      {!data && !error && <div role="status" className="vx-small vx-2" style={{ display: 'flex', alignItems: 'center', gap: 8 }}><Spinner /> {t('Loading…', 'در حال دریافت…')}</div>}
       {data && <>
         <div className="vx-card vx-privacy-card">
           <h2 className="vx-head">{t('Reply preferences', 'ترجیح‌های پاسخ')}</h2>
@@ -158,13 +160,19 @@ export function ExperienceScreen({ onBack, role, notificationId }: { onBack: () 
         {notificationMissing && <p role="status">{t('This reminder is not available.', 'این یادآور در دسترس نیست.')}</p>}
         <ReminderPanel key={space} data={data} agentId={agentId} fa={fa} busy={busy} mutate={mutate} notificationId={notificationId} />
         {agentId && typeof api.relationship === 'function' && <RelationshipPanel key={`${space}:${agentId}`} agentId={agentId} name={agents.find(a => a.id === agentId)?.persona.name ?? ''} space={space} locale={fa ? 'fa' : 'en'} identityConfirmed={data.confirmed} />}
-        <h2 className="vx-title-m">{t('Your inbox', 'صندوق شما')}</h2>
+        <h2 className="vx-over" style={{ marginTop: 4 }}>{t('Your inbox', 'صندوق شما')}</h2>
         {!data.inbox.length && <p className="vx-small vx-2">{t('Nothing to show right now.', 'اکنون موردی برای نمایش نیست.')}</p>}
         {data.inbox.filter(item => !pause.coveredBlocked && item.kind !== 'requested_reminder').map(item => <article className="vx-card vx-privacy-card" key={item.id}><h3 className="vx-head">{item.kind === 'requested_reminder' ? item.label : t('A reply did not finish. You can try again when convenient.', 'یک پاسخ کامل نشد. هر زمان مناسب بود می‌توانید دوباره تلاش کنید.')}</h3><div className="vx-privacy-actions"><button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy} onClick={() => void mutate(() => experienceApi.feedback({ ...command(), itemId: item.id, action: 'useful' }))}>{t('Useful', 'مفید بود')}</button><button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy} onClick={() => void mutate(() => experienceApi.feedback({ ...command(), itemId: item.id, action: 'dismiss' }))}>{t('Dismiss', 'بستن')}</button></div></article>)}
 
       </>}
-      <LearningPanel space={space} locale={fa ? 'fa' : 'en'} showOperations={role === 'owner' || role === 'superadmin'} />
-      {(role === 'owner' || role === 'superadmin') && <RightsOperationsPanel locale={fa ? 'fa' : 'en'} sessionKey={session} />}
+      <LearningPanel space={space} locale={fa ? 'fa' : 'en'} />
+      {(role === 'owner' || role === 'superadmin') && <details>
+        <summary>{t('Admin tools', 'ابزارهای مدیر')}</summary>
+        <div style={{ paddingTop: 8, display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <OperationsPanel locale={fa ? 'fa' : 'en'} />
+          <RightsOperationsPanel locale={fa ? 'fa' : 'en'} sessionKey={session} />
+        </div>
+      </details>}
     </section>
   </>;
 }

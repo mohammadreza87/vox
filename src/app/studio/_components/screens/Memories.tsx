@@ -63,11 +63,10 @@ export function MemoriesScreen({ id }: { id: string }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
           <AgentFace look={agent.look} size={56} expr="thinking" label={agent.persona.name} />
           <div>
-            <h1 className="vx-title">What {agent.persona.name} remembers</h1>
+            <h1 className="vx-title-m">What {agent.persona.name} remembers</h1>
             <div className="vx-small vx-2">Only what you’re allowed to see: your private memories and what’s shared with your groups.</div>
           </div>
         </div>
-        <RelationshipPanel agentId={id} name={agent.persona.name} />
         <div style={{ display: 'flex', gap: 8 }}>
           {FILTERS.map((f) => <button key={f} className="vx-chip" aria-pressed={f === filter} onClick={() => setFilter(f)}>{f}</button>)}
         </div>
@@ -108,6 +107,7 @@ export function MemoriesScreen({ id }: { id: string }) {
             </AnimatePresence>
           </div>
         )}
+        <div style={{ marginTop: 8 }}><RelationshipPanel agentId={id} name={agent.persona.name} /></div>
       </div>
     </>
   );

@@ -25,17 +25,23 @@ export function ProductPausePanel({ locale = 'en', sessionKey, onReviewProfile }
   const actionStyle = { minHeight: 44, whiteSpace: 'normal' as const, overflowWrap: 'anywhere' as const };
   return <section className="vx-card vx-privacy-card" dir={locale === 'fa' ? 'rtl' : 'ltr'} lang={locale}
     aria-labelledby={`${id}-title`} aria-busy={working} style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
-    <div role="group" aria-label={locale === 'fa' ? 'فضای کنترل مکث' : 'Pause control space'} className="vx-privacy-actions" style={{ flexWrap: 'wrap' }}>
+    <div role="group" aria-label={locale === 'fa' ? 'فضای کنترل مکث' : 'Pause control space'} className="vx-segmented">
       {(['work', 'personal'] as const).map(value => <button className="vx-btn vx-btn-secondary" key={value} style={actionStyle} aria-pressed={space === value}
         onClick={() => { setConfirming(false); setSpace(value); }}>{locale === 'fa' ? value === 'work' ? 'کاری' : 'شخصی' : value === 'work' ? 'Work' : 'Personal'}</button>)}
     </div>
     <h2 id={`${id}-title`} className="vx-head">{copy('title')}</h2>
     <p className="vx-small">{copy('scope')}</p>
-    <p className="vx-small">{copy('explanation')}</p>
-    <p className="vx-small">{copy('continues')}</p>
-    <p className="vx-small vx-2">{copy('otherSettings')}</p>
-    <p className="vx-small vx-2">{copy('retention')}</p>
-    <details><summary>{locale === 'fa' ? 'محدودیت تحویل' : 'Delivery limit'}</summary><p className="vx-small">{copy('recall')}</p></details>
+    <details>
+      <summary>{locale === 'fa' ? 'مکث چطور کار می‌کند' : 'How the pause works'}</summary>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingTop: 4 }}>
+        <p className="vx-small">{copy('explanation')}</p>
+        <p className="vx-small">{copy('continues')}</p>
+        <p className="vx-small vx-2">{copy('otherSettings')}</p>
+        <p className="vx-small vx-2">{copy('retention')}</p>
+        <h3 className="vx-small" style={{ fontWeight: 600 }}>{locale === 'fa' ? 'محدودیت تحویل' : 'Delivery limit'}</h3>
+        <p className="vx-small">{copy('recall')}</p>
+      </div>
+    </details>
     {working && <p role="status" aria-live="polite">{control.phase === 'pending' ? copy(control.command?.action === 'resume' ? 'pendingResume' : 'pendingPause') : copy('loading')}</p>}
     <p ref={status} tabIndex={-1} role={control.phase === 'unknown' || control.phase === 'auth' ? 'alert' : 'status'} aria-live="polite">
       {control.phase === 'auth' ? copy('auth') : current && control.status?.productPaused !== null ? copy(paused ? 'paused' : 'unpaused') : <>

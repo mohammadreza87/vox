@@ -108,7 +108,7 @@ export function LearningPanel({ space, locale = 'en', showOperations = false }: 
 }
 
 
-function OperationsPanel({ locale }: { locale: 'en' | 'fa' }) {
+export function OperationsPanel({ locale }: { locale: 'en' | 'fa' }) {
   const t = (en: string, fa: string) => locale === 'fa' ? fa : en;
   const [data, setData] = useState<LearningOperations | null>(null);
   const [busy, setBusy] = useState(true);

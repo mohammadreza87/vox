@@ -116,7 +116,6 @@ export function OrgScreen() {
           );
         })}
 
-        {['owner', 'superadmin', 'admin'].includes(me.role) && <RelationshipObservations />}
 
         <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <span className="vx-over">Agent admins · {agentAdmins.length}</span>
@@ -140,6 +139,7 @@ export function OrgScreen() {
             </div>
           )}
         </section>
+        {['owner', 'superadmin', 'admin'].includes(me.role) && <RelationshipObservations />}
       </div>
 
       <Sheet open={!!selected} onClose={() => setSelected(null)} label="Change role">

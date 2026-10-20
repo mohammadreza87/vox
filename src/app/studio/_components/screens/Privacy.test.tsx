@@ -30,6 +30,36 @@ describe('Privacy and memory controls', () => {
     expect(screen.queryByRole('checkbox', { name: 'WORK_ONLY_SECRET' })).not.toBeInTheDocument();
     expect(mocks.consent).not.toHaveBeenCalled(); expect(mocks.confirm).not.toHaveBeenCalled();
   });
+  it.each([
+    ['en', 'missing'], ['fa', 'missing'], ['en', 'expired'], ['fa', 'expired'], ['en', 'purpose-only'],
+  ] as const)('lets a current profile renew a %s %s adult declaration only after an explicit choice', async (locale, mode) => {
+    const initial = snapshot();
+    const blocked = snapshot({ identity: { ...initial.identity, adultDeclared: mode !== 'missing' }, explicitMemoryAvailable: false,
+      ...(mode !== 'purpose-only' ? { explicitMemoryReason: 'adult_required' } : {}),
+      purposes: initial.purposes.map(p => ({ ...p, available: false, reason: 'adult_required' })),
+    });
+    mocks.read.mockResolvedValue(blocked); mocks.confirm.mockResolvedValue(snapshot({ revision: 3 }));
+    render(<PrivacyScreen />);
+    await screen.findByText('Account profile confirmed');
+    if (locale === 'fa') {
+      fireEvent.change(screen.getByRole('combobox', { name: 'Language' }), { target: { value: 'fa' } });
+      await screen.findByText('نمایهٔ حساب تأیید شد');
+    }
+    const checkbox = screen.getByRole('checkbox', { name: locale === 'fa' ? '۱۸ سال یا بیشتر دارم' : 'I am 18 or older' });
+    const confirm = screen.getByRole('button', { name: locale === 'fa' ? 'استفاده از نمایهٔ حساب خودم' : 'Use my account profile' });
+    expect(checkbox).not.toBeChecked(); expect(confirm).toBeDisabled();
+    fireEvent.click(confirm); expect(mocks.confirm).not.toHaveBeenCalled(); expect(mocks.consent).not.toHaveBeenCalled();
+    fireEvent.click(checkbox); expect(confirm).toBeEnabled(); fireEvent.click(confirm);
+    await waitFor(() => expect(mocks.confirm).toHaveBeenCalledExactlyOnceWith('work', true, undefined));
+    await waitFor(() => expect(screen.queryByRole('checkbox', { name: locale === 'fa' ? '۱۸ سال یا بیشتر دارم' : 'I am 18 or older' })).not.toBeInTheDocument());
+    expect(mocks.consent).not.toHaveBeenCalled(); expect(mocks.present).not.toHaveBeenCalled();
+  });
+  it('keeps a valid confirmed profile unchanged and does not offer or submit a new adult declaration', async () => {
+    render(<PrivacyScreen />); await screen.findByText('Account profile confirmed');
+    expect(screen.queryByRole('checkbox', { name: 'I am 18 or older' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Use my account profile' })).not.toBeInTheDocument();
+    expect(mocks.confirm).not.toHaveBeenCalled(); expect(mocks.consent).not.toHaveBeenCalled();
+  });
   it('presents server receipt copy before grant and offers an equal keep-off action', async () => {
     const presented = snapshot({ purposes: [{ ...snapshot().purposes[0], state: 'presented', revision: 2 }] });
     mocks.present.mockResolvedValue({ ...presented, receipt: 'receipt-from-server', notice: presented.purposes[0].notice });
