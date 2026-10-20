@@ -61,6 +61,8 @@ describe('independent isolated model→policy→ledger→typed adapter fixture l
     const result = await f.runtime.run(f.actor, f.input);
     expect(result.status).toBe('completed'); expect(result.sourceIds).toHaveLength(1);
     expect(f.outbound.map(r => r.path)).toEqual(['/repos/qa/fixture/issues/1']);
+    // Thinking shares the per-step cap: tool choice keeps medium effort with headroom.
+    expect(f.modelInputs[0]).toMatchObject({ maxTokens: 4096, effort: 'medium', requireComplete: true });
     expect(JSON.stringify(f.modelInputs[0])).not.toContain('PRIVATE_TASK_CANARY');
     expect(JSON.stringify(f.modelInputs[1])).toContain('Untrusted tool result');
     expect(JSON.stringify(f.modelInputs)).not.toContain('SYNTHETIC_NO_ACCOUNT_TOKEN');

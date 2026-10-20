@@ -6,6 +6,7 @@ import { SpawnScreen } from './Spawn';
 import { AgentScreen } from './Agent';
 
 const state = vi.hoisted(() => ({
+  catalog: vi.fn(), route: vi.fn(),
   draft: vi.fn(),
   agent: vi.fn(),
   updatePersona: vi.fn(),
@@ -14,12 +15,14 @@ const state = vi.hoisted(() => ({
   nav: {
     me: { org: 'Fixture team', member: { telegramId: 7777001, role: 'member' }, features: { avatars: false, voices: false, calls: false } },
     back: vi.fn(), reset: vi.fn(), push: vi.fn(), toast: vi.fn(), refreshMe: vi.fn(),
+    // No sheet is opened here: Back is never guarded.
+    guardBack: () => () => {}, consumeBack: () => false,
   },
 }));
 
 vi.mock('../../_lib/client', async importOriginal => {
   const actual = await importOriginal<typeof import('../../_lib/client')>();
-  return { ...actual, api: { ...actual.api, draft: state.draft, agent: state.agent, updatePersona: state.updatePersona, syncProfile: state.syncProfile,
+  return { ...actual, api: { ...actual.api, catalog: state.catalog, route: state.route, draft: state.draft, agent: state.agent, updatePersona: state.updatePersona, syncProfile: state.syncProfile,
     voiceOptions: state.voiceOptions, chooseDefaultVoice: state.chooseDefaultVoice, searchVoices: state.searchVoices, speak: state.speak } };
 });
 
@@ -32,14 +35,19 @@ vi.mock('../StudioApp', () => ({
 // These regressions exercise API failures, retry state and polling, not animation timing.
 vi.mock('framer-motion', async () => {
   const { createElement } = await import('react');
-  const element = (tag: string) => function MotionElement({ children, ...props }: { children?: ReactNode; [key: string]: unknown }) {
-    const domProps = Object.fromEntries(Object.entries(props).filter(([key]) =>
-      !['initial', 'animate', 'exit', 'transition', 'whileTap', 'layoutId', 'layout'].includes(key)));
-    return createElement(tag, domProps, children);
+  const MOTION_PROPS = ['initial', 'animate', 'exit', 'transition', 'whileTap', 'whileHover', 'layoutId', 'layout', 'variants',
+    'drag', 'dragConstraints', 'dragElastic', 'onDragEnd'];
+  const cache = new Map<string, (props: { children?: ReactNode; [key: string]: unknown }) => ReactNode>();
+  const element = (tag: string) => {
+    if (!cache.has(tag)) cache.set(tag, function MotionElement({ children, ...props }) {
+      return createElement(tag, Object.fromEntries(Object.entries(props).filter(([key]) => !MOTION_PROPS.includes(key))), children);
+    });
+    return cache.get(tag)!;
   };
   return {
     AnimatePresence: ({ children }: { children?: ReactNode }) => children,
-    motion: { div: element('div'), button: element('button'), span: element('span'), path: element('path') },
+    motion: new Proxy({}, { get: (_target, tag: string) => element(tag) }),
+    useReducedMotion: () => false,
   };
 });
 
@@ -59,23 +67,28 @@ function agent(overrides: Partial<AgentView> = {}): AgentView {
   };
 }
 
-beforeEach(() => { vi.useFakeTimers(); vi.resetAllMocks(); state.nav.me.features.voices = false; });
+beforeEach(() => {
+  vi.useFakeTimers(); vi.resetAllMocks(); state.nav.me.features.voices = false;
+  // An empty library (content is still being written): the Brief degrades to plain free text.
+  state.catalog.mockResolvedValue({ version: 'empty', packs: [], roles: [], skills: [] });
+  state.route.mockResolvedValue({ skillIds: [], confidence: 0, alternatives: [], source: 'local' });
+});
 afterEach(() => { cleanup(); vi.clearAllTimers(); vi.useRealTimers(); });
 
 describe('Spawn failure recovery', () => {
-  it('keeps a failed draft error and the visitor’s brief available after the transient toast expires', async () => {
+  it('keeps a failed draft error inline (no extra toast) with the visitor’s brief still available', async () => {
     const message = 'Vox Studio returned an unexpected page. Close and reopen the Mini App, then try again.';
     state.draft.mockRejectedValue(new ApiError(200, message));
     render(<SpawnScreen />);
-    fireEvent.change(screen.getByPlaceholderText(/a calm product lead/i), { target: { value: 'An analytical teammate' } });
+    fireEvent.change(screen.getByRole('textbox', { name: /describe who you need/i }), { target: { value: 'An analytical teammate' } });
 
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: /draft with claude/i })); });
-    expect(state.nav.toast).toHaveBeenCalledWith(message, 'error');
+    expect(state.nav.toast).not.toHaveBeenCalled();
     await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
 
     expect(screen.getByRole('alert')).toBeVisible();
     expect(screen.getByRole('alert')).toHaveTextContent(message);
-    expect(screen.getByPlaceholderText(/a calm product lead/i)).toHaveValue('An analytical teammate');
+    expect(screen.getByRole('textbox', { name: /describe who you need/i })).toHaveValue('An analytical teammate');
     expect(screen.getByRole('button', { name: /draft with claude/i })).toBeEnabled();
   });
 
@@ -106,7 +119,10 @@ describe('Spawn failure recovery', () => {
   it('moves from the actual Brief button to the editable Persona step after a successful draft', async () => {
     state.draft.mockResolvedValue({ agent: agent(), names: ['Nova', 'Alt'] });
     render(<SpawnScreen />);
-    fireEvent.change(screen.getByPlaceholderText(/a calm product lead/i), { target: { value: 'A curious designer' } });
+    fireEvent.change(screen.getByRole('textbox', { name: /describe who you need/i }), { target: { value: 'A curious designer' } });
+    // Languages, culture, accent, presentation and temperament live behind one Fine-tune row.
+    expect(screen.queryByRole('button', { name: 'Persian' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /fine-tune/i }));
     fireEvent.click(screen.getByRole('button', { name: 'Persian' }));
 
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: /draft with claude/i })); });
@@ -114,7 +130,7 @@ describe('Spawn failure recovery', () => {
     expect(state.draft).toHaveBeenCalledWith(expect.objectContaining({ description: 'A curious designer', languages: ['Persian'] }), undefined);
     expect(screen.queryByRole('button', { name: /draft with claude/i })).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Nova' })).toBeVisible();
-    expect(screen.getByRole('button', { name: /looks good.*next/i })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /use nova · pick a look/i })).toBeEnabled();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 });
@@ -138,7 +154,7 @@ describe('Voice choices and language support', () => {
     state.agent.mockResolvedValue({ agent: current });
     state.voiceOptions.mockResolvedValue(options);
     await act(async () => { render(<SpawnScreen draftId={current.id} />); });
-    fireEvent.click(screen.getByRole('button', { name: /looks good.*next/i }));
+    fireEvent.click(screen.getByRole('button', { name: /use .* pick a look/i }));
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Next' })); });
     return current;
   }
@@ -239,7 +255,7 @@ describe('Voice choices and language support', () => {
     state.agent.mockResolvedValue({ agent: current });
     state.voiceOptions.mockRejectedValueOnce(new Error('ElevenLabs is temporarily unavailable.')).mockResolvedValueOnce(options);
     await act(async () => { render(<SpawnScreen draftId={current.id} />); });
-    fireEvent.click(screen.getByRole('button', { name: /looks good.*next/i }));
+    fireEvent.click(screen.getByRole('button', { name: /use .* pick a look/i }));
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Next' })); });
     expect(screen.getByRole('alert')).toHaveTextContent('Can’t load voice options');
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry voice options' })); });

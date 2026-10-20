@@ -157,7 +157,9 @@ export async function extractCandidates(
   const output = await llm.complete({
     system: buildExtractionPrompt(org, persona, chat, speakerId, known),
     messages: [{ role: 'user', content: lines.join('\n') }],
-    maxTokens: 1024,
+    // Thinking shares maxTokens; low effort leaves room for the whole JSON list.
+    maxTokens: 3072,
+    effort: 'low',
     temperature: 0.2,
   });
   return parseCandidates(org, output);

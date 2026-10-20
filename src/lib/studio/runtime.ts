@@ -1,3 +1,4 @@
+import { RightsUseHoldService } from '../adaptive/rights-use-holds/service';
 import { lstatSync } from 'node:fs';
 import { RightsFileStorage } from '../adaptive/rights-intake/storage';
 import { RightsIntakeService } from '../adaptive/rights-intake/service';
@@ -373,7 +374,7 @@ async function create(): Promise<Studio> {
       const encodedKey = env.STUDIO_RIGHTS_KEY_BASE64;
       const key = encodedKey && /^[A-Za-z0-9+/]{43}=$/.test(encodedKey) ? Buffer.from(encodedKey, 'base64') : undefined;
       studio.deps.rights = new RightsIntakeService(new RightsRepository(new RightsFileStorage(join(config.dataDir, 'rights-intake', 'v1'))), {
-        policy: () => parseRightsPolicy(process.env.STUDIO_RIGHTS_POLICY_JSON), key,
+        policy: () => parseRightsPolicy(process.env.STUDIO_RIGHTS_POLICY_JSON), key, localUse: new RightsUseHoldService(storage.adaptive!),
         assertAccountNow: id => assertRightsAccountNow(studio, id),
         assertOperatorNow: id => assertRightsAccountNow(studio, id, 'operator'),
         prepareExport: async (id, space) => {

@@ -15,7 +15,7 @@ export function compactProductPause(pause: ProductPauseV1): ProductPauseUseContr
 export function productPauseUseState(controls: ProductPauseAuthority, space: Space): { productPaused: boolean; useEpoch: number } {
   if (space !== 'work' && space !== 'personal') return { productPaused: true, useEpoch: 0 };
   if (controls.schemaVersion === 1 && controls.productPause === undefined) return { productPaused: false, useEpoch: 0 };
-  if (controls.schemaVersion === 2) {
+  if ((controls.schemaVersion === 2 || controls.schemaVersion === 3)) {
     const p = productPauseSchema.safeParse(controls.productPause);
     const compact = p.success ? p : productPauseUseControlsSchema.safeParse(controls.productPause);
     if (compact.success) { const s = compact.data.scopes[space === 'work' ? 0 : 1]; return { productPaused: s.productPaused, useEpoch: s.useEpoch }; }

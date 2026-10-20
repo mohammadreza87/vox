@@ -2,6 +2,7 @@
 import { useCallback, useId, useLayoutEffect, useRef, useState } from 'react';
 import { rightsApi, type RightsRequestView, type RightsSnapshot, type RightsSpace } from '../_lib/rights-client';
 import { rightsCopy, rightsDate, rightsState, rightsTitle, type RightsLocale } from '../_lib/rights-copy';
+import { RightsLocalUsePanel } from './RightsLocalUsePanel';
 import { tg } from '../_lib/client';
 
 /** A remount boundary drops all prior account/space metadata before the next fetch. */
@@ -76,6 +77,7 @@ function RequestPanel({ space, locale, session }: { space: RightsSpace; locale: 
       <p className="vx-small vx-2">{c.receivedAt}: {rightsDate(row.createdAt, locale)} · {c.updatedAt}: {rightsDate(row.updatedAt, locale)}</p>
       <p className="vx-small">{row.deadline.state === 'scheduled' ? `${c.deadline}: ${rightsDate(row.deadline.dueAt, locale)}` : c.unresolved}</p>
       <p className="vx-small vx-2">{c.coverage}</p>
+      {['restriction','objection'].includes(row.kind) && <RightsLocalUsePanel row={row} locale={locale} session={session}/>}
       {row.retentionReviewRequired && <p role="status">{c.retention}</p>}
       {row.state !== 'closed_unfulfilled' && <div className="vx-privacy-actions" style={{ flexWrap: 'wrap' }}>
         {row.kind === 'access_export' && <button className="vx-btn vx-btn-secondary" disabled={disabled} onClick={() => void run(row, 'prepare_local_export')}>{c.prepare}</button>}

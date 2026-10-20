@@ -21,6 +21,7 @@ import type { ChatHistoryStore, MemoryStore, ShareOfferStore, UpdateDeduper } fr
 import type { VoiceService } from './voice';
 import type { TelegramBotClient, TelegramCallbackQuery, TelegramMessage, TelegramUpdate } from './telegram/client';
 import { buildSystemPrompt } from './conversation/prompt';
+import { emptyReplyFallback, toPlainChat } from './conversation/format';
 import { selectAdaptiveContext } from './memory/adaptive-context';
 import { lineageEventIds } from './memory/store';
 import { selectMemories } from './memory/retrieval';
@@ -123,6 +124,10 @@ export type HandleResult =
 const HISTORY_LIMIT = 20;
 const EXTRACTION_WINDOW = 6;
 const GROUP_FORMAT_FOLLOWUP_MS = 2 * 60_000;
+// Chat replies think briefly (effort low); thinking shares max_tokens, so the
+// caps leave headroom while the prompt keeps the visible reply short.
+const CHAT_EFFORT = 'low' as const;
+const REPLY_MAX_TOKENS = { quick: 1200, thoughtful: 2000, live: 800 } as const;
 const GUEST_VOICE_REPLY = 'I only read typed messages here, so I did not listen to that voice message. Could you type it instead?';
 const NO_MEMORY = /(?:do not|don't|don’t)\s+(?:remember|save|store)|forget (?:this|that)|ذخیره نکن|به خاطر نسپار|یادت نماند|فراموش کن/iu;
 
@@ -893,7 +898,7 @@ You are on a live voice call. Answer in one to three short spoken sentences. No 
     // History, message assembly and saved context together; boundary time is counted on its own.
     lap('retrieval');
     if (!await this.unchanged(persona, chat, speakerId, boundary)) return { text: this.changedReply, sources: [] };
-    const request = { system, messages, maxTokens: quick ? 400 : 700,
+    const request = { system, messages, maxTokens: quick ? REPLY_MAX_TOKENS.quick : REPLY_MAX_TOKENS.thoughtful, effort: CHAT_EFFORT,
       authorize: async () => await this.unchanged(persona, chat, speakerId, boundary!) && await this.requestAuthorized(authorize),
       ...(boundary.compact ? {authorizeNow: () => this.exportAuthorizedNow(persona, chat, speakerId, boundary!, authorizeNow)} : {}) };
     const llm = quick ? this.deps.fastLlm! : this.deps.llm;
@@ -909,7 +914,13 @@ You are on a live voice call. Answer in one to three short spoken sentences. No 
       : { text: await llm.complete(request), sources: [] });
     if (!await this.unchanged(persona, chat, speakerId, boundary) || !await this.requestAuthorized(authorize)) return { text: this.changedReply, sources: [] };
     if (boundary.compact && !this.exportAuthorizedNow(persona, chat, speakerId, boundary, authorizeNow)) return {text: this.changedReply, sources: []};
-    return { text: reply || "Sorry, I lost my train of thought. Could you say that again?", sources: reply ? sources : [] };
+    // Composed replies become plain words here (no markdown): Telegram text, the
+    // transcript of a voice reply and Mini App call turns. Live calls stream raw.
+    const reply = typeof raw === 'string' ? toPlainChat(raw) : '';
+    if (!reply) logTelegramDiagnostic(this.log, 'reply_empty');
+    // An unprompted group contribution that came out empty is simply not sent.
+    if (!reply && action === 'proactive') return { text: '', sources: [] };
+    return { text: reply || emptyReplyFallback(text), sources: reply ? sources : [] };
   }
 
   private async sendReply(

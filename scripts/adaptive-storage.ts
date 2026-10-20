@@ -2,7 +2,7 @@
 /** Explicit local administration only. No default command/root/format, no
  * activation, provider requests, feature grants or migration-time restore. */
 import { resolve } from 'path';
-import { prepareFileAuthorityAdaptiveStorage, prepareProductPauseAdaptiveStorage, migrateAdaptiveStorage, inspectManagedTransition, finalizeManagedTransition, recoverManagedReadyStorage, abortPreparedManagedTransition } from '../src/lib/adaptive/persistence/indexed/migration';
+import { prepareFileAuthorityAdaptiveStorage, prepareProductPauseAdaptiveStorage, prepareRightsUseHoldsAdaptiveStorage, migrateAdaptiveStorage, inspectManagedTransition, finalizeManagedTransition, recoverManagedReadyStorage, abortPreparedManagedTransition } from '../src/lib/adaptive/persistence/indexed/migration';
 import { rollbackAdaptiveStorage } from '../src/lib/adaptive/persistence/indexed/rollback';
 import { IndexedStorageError } from '../src/lib/adaptive/persistence/indexed/contracts';
 async function main(): Promise<void> {
@@ -21,10 +21,11 @@ async function main(): Promise<void> {
     if (flags.size !== 2) throw new IndexedStorageError('invalid_scope');
     console.log(JSON.stringify(await prepareFileAuthorityAdaptiveStorage(root, { quiesced: true }))); return;
   }
-  if (command === 'prepare-product-pause') {
+  if (command === 'prepare-product-pause' || command === 'prepare-rights-use-holds') {
     const format = flags.get('--format');
     if (flags.size !== 3 || !['sqlite-v1', 'file-v2'].includes(String(format))) throw new IndexedStorageError('invalid_scope');
-    console.log(JSON.stringify(await prepareProductPauseAdaptiveStorage(root, format as 'sqlite-v1' | 'file-v2', { quiesced: true }))); return;
+    const prepare = command === 'prepare-rights-use-holds' ? prepareRightsUseHoldsAdaptiveStorage : prepareProductPauseAdaptiveStorage;
+    console.log(JSON.stringify(await prepare(root, format as 'sqlite-v1' | 'file-v2', { quiesced: true }))); return;
   }
   if (command === 'migrate' || command === 'rollback') {
     if (flags.size !== 2) throw new IndexedStorageError('invalid_scope');

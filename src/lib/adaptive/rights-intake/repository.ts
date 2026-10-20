@@ -1,3 +1,4 @@
+import { requireLocalUseCapacity, validateLocalUseLedger } from './local-use-state';
 import { brandError, publicDomainError } from '../../error-contract';
 import type { AdaptiveStorage } from '../persistence/storage';
 import { ledgerSchema, legacyLedgerSchema, type AccountLedger, type RequestRecord } from './contracts';
@@ -43,12 +44,27 @@ export class RightsRepository {
       new Set(d.tombstones.map(r => r.requestId)).size !== d.tombstones.length ||
       d.tombstones.some(t => t.purgedAt > d.observedServerTime || t.retainUntil <= t.purgedAt || d.requests.some(r => r.requestId === t.requestId)) ||
       d.commandReceipts.some(r => r.recordedAt > d.observedServerTime || r.retainUntil <= r.recordedAt || !d.requests.some(request => request.requestId === r.requestId && request.revision >= r.resultingRequestRevision) && !d.tombstones.some(t => t.requestId === r.requestId && t.lastRevision >= r.resultingRequestRevision && t.retainUntil >= r.retainUntil))) return fail(503, 'rights_storage_unavailable');
+    validateLocalUseLedger(d);
     return d;
   }
   read(accountId: string): AccountLedger | null {
     const value = this.storage.readCommittedForEffect?.(accountId);
     if (!value || value.status !== 'ready') return fail(503, 'rights_storage_busy');
     return value.document === null ? null : this.parse(accountId, value.document);
+  }
+  /** Explicit administrative preparation only; never called by status/preview or policy activation. */
+  async migrateToV3(accountId: string, clock: () => number, fence: () => void): Promise<void> {
+    try {
+      await this.storage.transact(accountId, raw => {
+        if (raw === null) return fail(409, 'rights_conversion_not_eligible');
+        const before = this.parse(accountId, raw), now = clock();
+        if (before.observedServerTime > now) return fail(503, 'rights_clock_unavailable');
+        if (before.version === 3) throw new RightsReplay();
+        const next: AccountLedger = { ...before, version: 3, revision: before.revision + 1, observedServerTime: now, localUse: { version: 1, intents: [], acknowledgements: [] } };
+        this.parse(accountId, next); requireLocalUseCapacity(next);
+        return { document: next, result: undefined };
+      }, fence);
+    } catch (e) { if (e instanceof RightsReplay) return; if (RightsError.is(e)) throw e; return fail(503, 'rights_storage_busy'); }
   }
   async transaction<T>(accountId: string, clock: () => number, mutate: (ledger: AccountLedger) => T, fence: () => void): Promise<T> {
     try {
@@ -59,7 +75,7 @@ export class RightsRepository {
         const result = mutate(d); d.observedServerTime = clock();
         if (d.observedServerTime < now) return fail(503, 'rights_clock_unavailable');
         if (Buffer.byteLength(JSON.stringify(d)) > 65_536) return fail(409, 'rights_capacity');
-        this.parse(accountId, d);
+        this.parse(accountId, d); requireLocalUseCapacity(d);
         return { document: d, result };
       }, fence);
     } catch (error) { if (RightsError.is(error) || error instanceof RightsReplay) throw error; return fail(503, 'rights_storage_busy'); }

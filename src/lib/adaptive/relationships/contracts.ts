@@ -7,7 +7,7 @@ export const relationshipScopeSchema = z.object({ schemaVersion: z.literal(1), a
 export const scopedRelationshipKeySchema = z.object({ personaId: id, chatKey: id,
   audience: z.object({ kind: z.literal('private'), personId: id }).strict(), scope: relationshipScopeSchema }).strict();
 export const relationshipSourceSchema = z.object({ id, revision: z.number().int().positive().safe(), createdAt: time,
-  expiresAt: time, status: z.enum(['active', 'deleted']), sourceFence: id, channel: z.enum(['telegram', 'call']),
+  expiresAt: time, status: z.enum(['active', 'deleted']), retentionStoreIdentity:z.union([z.string().regex(/^[a-f0-9]{64}$/),z.literal('canonical')]).optional(), sourceFence: id, channel: z.enum(['telegram', 'call']),
   /** Opaque current bot endpoint identity from trusted server capture; never a token. */
   endpointId: id.optional() }).strict();
 export type RelationshipSource = z.infer<typeof relationshipSourceSchema>;

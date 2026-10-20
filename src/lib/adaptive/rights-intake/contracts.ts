@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { localUseLedgerSchema, type localUseOperationSchema } from './local-use-contracts';
 export const integer = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 export const reference = z.uuidv4();
 export const spaceSchema = z.enum(['work', 'personal']);
@@ -18,8 +19,10 @@ export const tombstoneSchema = z.object({ requestId: reference, space: spaceSche
 export const retentionActionSchema = z.object({ version: z.literal(1), eventId: reference, expectedRevision: integer.positive(), expectedPolicyRevision: integer.positive(), action: z.enum(['reassess_retention', 'purge_terminal_record']), operationHandle: z.string().min(1).max(2048) }).strict();
 export type RetentionAction = z.infer<typeof retentionActionSchema>;
 export interface RetentionResult { replayed: boolean; requestId: string; outcome: 'reassessed' | 'purged' }
-export const ledgerSchema = z.object({ version: z.literal(2), accountId: requestSchema.shape.accountId, revision: integer.positive(), observedServerTime: integer, requests: z.array(requestSchema).max(100), tombstones: z.array(tombstoneSchema).max(128), commandReceipts: z.array(z.object({ eventId: reference, fingerprint: z.string().regex(/^[a-f0-9]{64}$/), requestId: reference, resultingRequestRevision: integer.positive(), action: z.string().min(1).max(50), recordedAt: integer, retainUntil: integer }).strict()).max(128) }).strict();
-export const legacyLedgerSchema = ledgerSchema.omit({ tombstones: true }).extend({ version: z.literal(1) }).strict();
+export const ledgerV2Schema = z.object({ version: z.literal(2), accountId: requestSchema.shape.accountId, revision: integer.positive(), observedServerTime: integer, requests: z.array(requestSchema).max(100), tombstones: z.array(tombstoneSchema).max(128), commandReceipts: z.array(z.object({ eventId: reference, fingerprint: z.string().regex(/^[a-f0-9]{64}$/), requestId: reference, resultingRequestRevision: integer.positive(), action: z.string().min(1).max(50), recordedAt: integer, retainUntil: integer }).strict()).max(128) }).strict();
+export const legacyLedgerSchema = ledgerV2Schema.omit({ tombstones: true }).extend({ version: z.literal(1) }).strict();
+export const ledgerV3Schema = ledgerV2Schema.extend({ version: z.literal(3), localUse: localUseLedgerSchema }).strict();
+export const ledgerSchema = z.discriminatedUnion('version', [ledgerV2Schema, ledgerV3Schema]);
 export const createInputSchema = z.object({ version: z.literal(1), eventId: reference, space: spaceSchema, kind: kindSchema, locale: z.enum(['en', 'fa']), expectedIntakePolicyRevision: integer.positive() }).strict();
 export const requesterActionSchema = z.object({ version: z.literal(1), eventId: reference, expectedRevision: integer.positive(), action: z.enum(['prepare_local_export', 'withdraw_request']) }).strict();
 export const operatorActionSchema = z.object({ version: z.literal(1), eventId: reference, expectedRevision: integer.positive(), action: z.enum(['begin_review', 'request_requester_action', 'mark_operator_pending', 'close_unfulfilled']), reasonCode: reasonSchema, operationHandle: z.string().min(1).max(2048) }).strict();
@@ -30,7 +33,7 @@ export type CreateInput = z.infer<typeof createInputSchema>;
 export type RequesterAction = z.infer<typeof requesterActionSchema>;
 export type OperatorAction = z.infer<typeof operatorActionSchema>;
 export type RightsRequestView = Omit<RequestRecord, 'accountId' | 'audit'> & { retentionReviewRequired: boolean };
-export type RightsOperationView = Pick<RightsRequestView, 'version' | 'requestId' | 'space' | 'kind' | 'revision' | 'createdAt' | 'updatedAt' | 'state' | 'reasonCode' | 'deadline' | 'coverage' | 'retentionReviewRequired'> & { retentionActions?: Array<RetentionAction['action']>; retentionAt?: number; retentionPolicyRevision?: number; accountRef: string; operationHandle: string; audit: Array<Omit<RequestRecord['audit'][number], 'actorRef'>> };
+export type RightsOperationView = Pick<RightsRequestView, 'version' | 'requestId' | 'space' | 'kind' | 'revision' | 'createdAt' | 'updatedAt' | 'state' | 'reasonCode' | 'deadline' | 'coverage' | 'retentionReviewRequired'> & { localUses?: Array<z.infer<typeof localUseOperationSchema>>; retentionActions?: Array<RetentionAction['action']>; retentionAt?: number; retentionPolicyRevision?: number; accountRef: string; operationHandle: string; audit: Array<Omit<RequestRecord['audit'][number], 'actorRef'>> };
 export interface RightsSnapshot { supportedKinds: Array<CreateInput['kind']>; available: boolean; policyStatus: 'available' | 'unavailable'; intakePolicy?: z.infer<typeof policyBindingSchema>; requests: RightsRequestView[]; expiredRequests?: Array<z.infer<typeof tombstoneSchema>>; supportContact: 'info@joyixir.com' }
 export interface RightsMutation { replayed: boolean; request: RightsRequestView; policyStatus: 'available' | 'unavailable' }
 export interface RightsOperations { requests: RightsOperationView[]; nextCursor?: string; policyStatus: 'available' | 'unavailable' }

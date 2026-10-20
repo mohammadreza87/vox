@@ -1,3 +1,4 @@
+import { rightsUseStamp } from '../rights-use-holds/state';
 import { productPauseUseStamp } from '../product-pause/state';
 import { accountIdFor, tenantIdFor, type SpaceKind } from '../persistence/repository';
 import type { AdaptiveService } from '../persistence/service';
@@ -25,7 +26,7 @@ export class StudioExperimentRuntime {
         // Pause suspends use; withdrawal/expiry/unconfirmed identity ends retention.
         const allowed = this.adaptive.isPurposeRetentionAllowed(d, space, 'optional.product_analytics', now) &&
           this.adaptive.isPurposeRetentionAllowed(d, space, 'optional.personalization', now);
-        return { value: { allowed, revision: experimentDigest([identity, d.binding, permissions]) }, denied: !allowed };
+        return { value: { allowed, revision: experimentDigest([d.schemaVersion===3?d.retentionStoreIdentity:identity, d.binding, permissions]) }, denied: !allowed };
       });
       if (read.status !== 'ready') throw new Error('Experiment reconciliation authority unavailable');
       const scope = this.scope(telegramId, space);
@@ -63,10 +64,10 @@ export class StudioExperimentRuntime {
       const capabilities = (['product_analytics', 'personalization', 'core_text'] as const).map(c => this.adaptive.capabilityStatus(d, c, sampledAt));
       const expiresAt = Math.min(d.binding?.expiresAt ?? sampledAt, ...permissions.map(p => p.expiresAt), ...capabilities.map(c => c.validUntil ?? sampledAt));
       const value: ExperimentAuthority | undefined = allowed && capabilities.every(c => c.eligible) && expiresAt > sampledAt ? {
-        scopeRevision: experimentDigest([identity, d.binding, permissions]),
+        scopeRevision: experimentDigest([d.schemaVersion===3?d.retentionStoreIdentity:identity, d.binding, permissions]),
         scope: { kind: 'private_person', tenantId: tenantIdFor(d.accountId), space, personId: d.personId }, expiresAt,
         revision: experimentDigest([identity, studioStamp, agentId, d.binding, permissions, d.agentGrants.filter(g => g.agentId === agentId && g.space === space),
-          productPauseUseStamp(d, space), capabilities]),
+          productPauseUseStamp(d, space), capabilities, ...(d.schemaVersion===3?[rightsUseStamp(d,space,'optional.personalization'),rightsUseStamp(d,space,'optional.product_analytics')]:[])]),
       } : undefined;
       return { value, denied: !value, ...(value ? { deadline: expiresAt } : {}) };
     });

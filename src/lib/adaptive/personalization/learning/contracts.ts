@@ -10,7 +10,7 @@ const hash = z.string().regex(/^[a-f0-9]{64}$/);
 export const learningScope = { space: z.enum(['work', 'personal']), agentId: id };
 export const logicalTurnSchema = z.object({ sessionId: id, turnId: id, revision: z.number().int().nonnegative().safe(), contextKey: id }).strict();
 export type LogicalTurn = z.infer<typeof logicalTurnSchema>;
-const authority = { productPauseUseStamp: hash.optional(), studioFingerprint: hash, personId: scopeId, bindingId: scopeId, permissionRevision: revision, consentEpoch: time, grantRevision: revision };
+const authority = { retentionStoreIdentity:z.union([hash,z.literal('canonical')]).optional(), rightsUseStamp:hash.optional(), productPauseUseStamp: hash.optional(), studioFingerprint: hash, personId: scopeId, bindingId: scopeId, permissionRevision: revision, consentEpoch: time, grantRevision: revision };
 const presentation = z.object({ ...learningScope, ...authority, version: z.literal(LEARNING_VERSION), receipt: id,
   copyHash: hash, locale: z.enum(['en', 'fa']), createdAt: time, expiresAt: time }).strict();
 const intent = z.object({ ...learningScope, ...authority, version: z.literal(LEARNING_VERSION), id, revision, createdAt: time, expiresAt: time }).strict();

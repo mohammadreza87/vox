@@ -32,6 +32,10 @@ const PATHS: Record<string, string> = {
   user: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8M4 21a8 8 0 0 1 16 0',
   captions: 'M3 5h18v14H3zM10 10.5a2 2 0 1 0 0 3M17 10.5a2 2 0 1 0 0 3',
   end: 'M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2',
+  chevron: 'M6 9l6 6 6-6',
+  /** Points to the inline end; add .vx-mirror so it flips under RTL. */
+  chevronEnd: 'M9 6l6 6-6 6',
+  search: 'M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14M20 20l-4-4',
 };
 
 export function Icon({ name, size = 22, width = 1.75, style }: { name: keyof typeof PATHS | string; size?: number; width?: number; style?: React.CSSProperties }) {

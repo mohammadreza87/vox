@@ -29,7 +29,7 @@ export const observerEventSchema = z.object({ schemaVersion: z.literal(1), versi
   id: hash, fingerprint: hash, revision, turnKey: hash, origin: z.literal('human'),
   purpose: z.literal('optional.product_analytics'), policyVersion: z.literal('adaptive-privacy-v1'),
   consentEpoch: time, permissionRevision: revision, grantRevision: revision, bindingRevision: revision, accountId: z.string().max(200), personId: z.string().max(200),
-  space, spaceId: z.string().max(200), agentId: id, policyReceipt: hash,
+  space, spaceId: z.string().max(200), agentId: id, policyReceipt: hash, rightsUseStamp:hash.optional(), retentionStoreIdentity:z.union([hash,z.literal('canonical')]).optional(),
   clientExperienceVersion: z.literal(1).optional(),
   trust: z.enum(['server', 'client_unverified']), channel: z.enum(['voice', 'text', 'telegram']),
   outcome: z.enum(['responded', 'failed', 'cancelled', 'unknown', 'playback_started', 'playback_completed', 'playback_failed', 'interrupted', 'task_succeeded', 'task_failed', 'task_unknown', 'text_rendered']),
@@ -58,7 +58,7 @@ export const correctionObservationInputSchema = z.object({ version: z.literal(1)
 }).strict();
 export type CorrectionObservationInput = z.infer<typeof correctionObservationInputSchema>;
 export const correctionObservationSchema = z.object({ version: z.literal(1), id: hash, fingerprint: hash, space,
-  policyReceipt: hash, trust: z.literal('client_unverified'),
+  policyReceipt: hash, retentionStoreIdentity:z.union([hash,z.literal('canonical')]).optional(), trust: z.literal('client_unverified'),
   outcome: z.enum(['correction_client_saved', 'correction_client_unconfirmed']),
   mutationEvidence: z.enum(['accepted_command_receipt', 'unavailable']), occurredAt: time, expiresAt: time,
 }).strict();

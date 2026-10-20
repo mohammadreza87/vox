@@ -13,7 +13,8 @@ const uuid = 'b3c708bb-58bd-4504-93da-bc0c95f485e3';
 const releaseMetadata = { revision: 'a'.repeat(40), sourceTree: 'b'.repeat(40), buildId: 'synthetic-build', builtAt: '2026-10-20T00:00:00.000Z' };
 const ready = version => ({ version, state: 'ready', rootId: uuid, format: 'sqlite-v1', store: uuid,
   identity: { incarnation: uuid, generation: 1 }, watermarkFloor: 200,
-  ...(version === 2 ? { canonicalSchemaVersion: 2, controlsSchemaVersion: 2, productPauseEnforcementVersion: 1 } : {}) });
+  ...(version >= 2 ? { canonicalSchemaVersion: version, controlsSchemaVersion: version, productPauseEnforcementVersion: 1 } : {}),
+  ...(version === 3 ? { rightsUseHoldEnforcementVersion: 1 } : {}) });
 function fixture(run) {
   const dir = mkdtempSync(join(tmpdir(), 'vox-release-pause-'));
   const env = { STUDIO_DATA_DIR: join(dir, 'data'), STUDIO_ADAPTIVE_FORMAT: 'sqlite-v1' };
@@ -24,7 +25,7 @@ function fixture(run) {
     writeFileSync(marker, JSON.stringify(value));
     rmSync(join(managed, 'stores'), { recursive: true, force: true }); mkdirSync(join(managed, 'stores'), { mode: 0o700 });
     writeFileSync(join(env.STUDIO_DATA_DIR, 'adaptive'), `VOX_MANAGED_STORAGE_V1:${uuid}\n`);
-    if (![1, 2].includes(value.version) || !['sqlite-v1', 'file-v2'].includes(value.format)) return;
+    if (![1, 2, 3].includes(value.version) || !['sqlite-v1', 'file-v2'].includes(value.format)) return;
     const path = join(managed, 'stores', uuid);
     if (value.format === 'sqlite-v1') {
       const db = new Database(path);
@@ -34,7 +35,7 @@ function fixture(run) {
       db.prepare('INSERT INTO store_meta(singleton,json) VALUES(1,?)').run(JSON.stringify({ formatVersion: 1, schemaVersion: value.version, incarnation: uuid, generation: 1, lifecycleWatermark: 200 })); db.close();
     } else {
       mkdirSync(join(path, 'records'), { recursive: true, mode: 0o700 });
-      writeFileSync(join(path, 'head.json'), JSON.stringify({ formatVersion: 2, incarnation: uuid, generation: 1, lifecycleWatermark: 200, accounts: [], ...(value.version === 2 ? { schemaVersion: 2, authorityProjectionVersion: 1 } : {}) }));
+      writeFileSync(join(path, 'head.json'), JSON.stringify({ formatVersion: 2, incarnation: uuid, generation: 1, lifecycleWatermark: 200, accounts: [], ...(value.version >= 2 ? { schemaVersion: value.version, authorityProjectionVersion: value.version === 3 ? 2 : 1 } : {}) }));
     }
   };
   try { run({ dir, env, managed, marker, setMarker }); } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -71,7 +72,7 @@ test('prepared FILE requires explicit body-free authority capability without cha
   f.setMarker(fileMarker);
   assert.equal(assertReleaseAdaptiveCompatibility(env, ADAPTIVE_RELEASE_CAPABILITIES).fileAuthorityProjectionVersion, 1);
   const { supportedFileAuthorityProjectionVersions: omitted, ...priorCapabilities } = ADAPTIVE_RELEASE_CAPABILITIES;
-  assert.deepEqual(omitted, [1]);
+  assert.deepEqual(omitted, [1, 2]);
   for (const candidate of [priorCapabilities, { ...priorCapabilities, supportedFileAuthorityProjectionVersions: [] },
     { ...priorCapabilities, supportedFileAuthorityProjectionVersions: [2] },
     { ...priorCapabilities, supportedFileAuthorityProjectionVersions: null }]) {
@@ -85,6 +86,58 @@ test('prepared FILE requires explicit body-free authority capability without cha
   assert.equal(assertReleaseAdaptiveCompatibility(f.env, priorCapabilities).canonicalSchemaVersion, 2);
   f.setMarker({ ...ready(1), format: 'file-v2' });
   assert.equal(assertReleaseAdaptiveCompatibility(env, null).canonicalSchemaVersion, 1);
+}));
+
+test('empty v3 namespaces require explicit rights enforcement and matching FILE projection support', () => fixture(f => {
+  const { rightsUseHoldEnforcementVersion: omitted, ...withoutRights } = ADAPTIVE_RELEASE_CAPABILITIES;
+  assert.equal(omitted, 1);
+  for (const format of ['sqlite-v1', 'file-v2']) {
+    const env = { ...f.env, STUDIO_ADAPTIVE_FORMAT: format };
+    f.setMarker({ ...ready(3), format, ...(format === 'file-v2' ? { fileAuthorityProjectionVersion: 2 } : {}) });
+    const before = readFileSync(f.marker);
+    const required = assertReleaseAdaptiveCompatibility(env, ADAPTIVE_RELEASE_CAPABILITIES);
+    assert.equal(required.canonicalSchemaVersion, 3);
+    assert.equal(required.controlsSchemaVersion, 3);
+    assert.equal(required.rightsUseHoldEnforcementVersion, 1);
+    for (const manifest of [null, withoutRights,
+      { ...ADAPTIVE_RELEASE_CAPABILITIES, supportedAdaptiveDataSchemas: [1, 2] },
+      { ...ADAPTIVE_RELEASE_CAPABILITIES, supportedAdaptiveControlSchemas: [1, 2] },
+      { ...ADAPTIVE_RELEASE_CAPABILITIES, rightsUseHoldEnforcementVersion: 0 },
+      { ...ADAPTIVE_RELEASE_CAPABILITIES, rightsUseHoldEnforcementVersion: null }]) {
+      assert.throws(() => assertReleaseAdaptiveCompatibility(env, manifest), /incompatible/);
+    }
+    if (format === 'file-v2') {
+      assert.equal(required.fileAuthorityProjectionVersion, 2);
+      assert.throws(() => assertReleaseAdaptiveCompatibility(env, {
+        ...ADAPTIVE_RELEASE_CAPABILITIES, supportedFileAuthorityProjectionVersions: [1],
+      }), /incompatible/);
+    }
+    assert.deepEqual(readFileSync(f.marker), before);
+  }
+}));
+
+test('v3 marker and physical schema mismatches cannot downgrade to legacy admission', () => fixture(f => {
+  for (const patch of [
+    { rightsUseHoldEnforcementVersion: undefined }, { rightsUseHoldEnforcementVersion: 0 },
+    { controlsSchemaVersion: 2 }, { canonicalSchemaVersion: 2 }, { productPauseEnforcementVersion: 0 },
+    { version: 4 }, { unexpected: false },
+  ]) {
+    f.setMarker({ ...ready(3), ...patch });
+    assert.throws(() => requiredAdaptiveCapabilities(f.env), /incompatible/);
+  }
+  f.setMarker(ready(3));
+  const db = new Database(join(f.managed, 'stores', uuid)); db.pragma('user_version = 2'); db.close();
+  assert.throws(() => requiredAdaptiveCapabilities(f.env), /incompatible/);
+  const env = { ...f.env, STUDIO_ADAPTIVE_FORMAT: 'file-v2' };
+  for (const projection of [undefined, 0, 1, 3, null]) {
+    f.setMarker({ ...ready(3), format: 'file-v2', fileAuthorityProjectionVersion: projection });
+    assert.throws(() => requiredAdaptiveCapabilities(env), /incompatible/);
+  }
+  f.setMarker({ ...ready(3), format: 'file-v2', fileAuthorityProjectionVersion: 2 });
+  const path = join(f.managed, 'stores', uuid, 'head.json');
+  const head = JSON.parse(readFileSync(path, 'utf8'));
+  writeFileSync(path, JSON.stringify({ ...head, authorityProjectionVersion: 1 }));
+  assert.throws(() => requiredAdaptiveCapabilities(env), /incompatible/);
 }));
 
 test('transitions, missing controls, unknown markers and mixed configured formats deny admission', () => fixture(f => {
@@ -178,7 +231,7 @@ test('actual install and rollback reject projection-unaware releases before any 
   const manifestPath = join(f.project, '.next', 'studio-release.json');
   const provenance = JSON.parse(readFileSync(manifestPath, 'utf8'));
   const { supportedFileAuthorityProjectionVersions: omitted, ...priorCapabilities } = ADAPTIVE_RELEASE_CAPABILITIES;
-  assert.deepEqual(omitted, [1]);
+  assert.deepEqual(omitted, [1, 2]);
   writeFileSync(manifestPath, JSON.stringify({ ...provenance, ...priorCapabilities }));
   const install = f.invoke('install');
   assert.equal(install.status, 1); assert.match(install.stderr, /Adaptive storage is incompatible/);
@@ -314,6 +367,138 @@ const workflowCanonical = value => value === null || typeof value !== 'object' ?
   : Array.isArray(value) ? `[${value.map(workflowCanonical).join(',')}]`
   : `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${workflowCanonical(value[key])}`).join(',')}}`;
 const workflowHash = value => createHash('sha256').update(workflowCanonical(value)).digest('hex');
+function signLocalIntent(intent) {
+  intent.fingerprint = workflowHash(['vox.rights.local-use.command.v1', { accountId, requestId: intent.requestId,
+    scope: intent.scope, action: intent.action, eventId: intent.eventId, policyDigest: intent.policy.digest, notice: intent.notice,
+    ...(intent.action === 'release' ? { selectedEffectId: intent.effectId } : {}),
+    ...(intent.supersedesEventId ? { supersedesEventId: intent.supersedesEventId } : {}) }]);
+  const command = Object.fromEntries(Object.entries(intent).filter(([key]) => key !== 'version' && key !== 'intentDigest'));
+  intent.intentDigest = workflowHash(['vox.rights.local-use.intent.v1', { accountId, ...command }]);
+  return intent;
+}
+function structuralRightsFixture() {
+  const scopes = ['work', 'personal'].flatMap(space => ['optional.personalization', 'optional.product_analytics'].map(purpose => ({ space, purpose, useEpoch: 0 })));
+  const effect = { version: 1, effectId: uuid, requestId: '08e44461-e129-4be8-9833-664a5cc4dd79', space: 'work', purpose: 'optional.personalization',
+    revision: 1, state: 'active', appliedAt: 100, applyIntentDigest: 'a'.repeat(64),
+    policy: { id: 'synthetic', revision: 1, digest: 'b'.repeat(64), approvalReference: 'fixture', decisionReference: 'fixture' },
+    notice: { version: 'synthetic', digest: 'c'.repeat(64) }, reviewAt: 500, metadataRetainUntil: 600, replayRetainUntil: 700 };
+  scopes[0].useEpoch = 1;
+  const doc = { ...document(3), retentionStoreIdentity: 'canonical', rightsUseHolds: { version: 1, scopes, effects: [effect] } };
+  const descriptor = { effectId: effect.effectId, requestId: effect.requestId, space: effect.space, purpose: effect.purpose, state: effect.state,
+    revision: effect.revision, appliedAt: effect.appliedAt, applyIntentDigest: effect.applyIntentDigest, effectDigest: workflowHash(effect) };
+  const controls = { ...document(3), retentionStoreIdentity: 'canonical', rightsUseControls: { version: 1, effects: [descriptor], scopes: scopes.map((scope, index) => ({
+    ...scope, effectiveBlocked: index === 0, activeEffectsDigest: workflowHash(index === 0 ? [descriptor] : []),
+  })) } };
+  return { doc, controls, effect };
+}
+function putStructuralRights(f, doc, controls, format) {
+  const store = join(f.managed, 'stores', uuid);
+  if (format === 'sqlite-v1') {
+    putCanonical(f, doc); const db = new Database(store);
+    try { db.prepare('INSERT OR REPLACE INTO controls(account_key,json,digest) VALUES(?,?,?)').run(accountKey, JSON.stringify(controls), hash(controls)); }
+    finally { db.close(); } return;
+  }
+  const image = { version: 2, schemaVersion: 3, incarnation: uuid, generation: 1, key: accountKey, accountId,
+    canonicalFile: uuid, canonicalDigest: hash(doc), controls, catalogs: [{ space: 'work', digest: 'a'.repeat(64) }, { space: 'personal', digest: 'b'.repeat(64) }] };
+  mkdirSync(join(store, 'authority'), { recursive: true }); writeFileSync(join(store, 'authority', `${uuid}.json`), JSON.stringify(image));
+  writeFileSync(join(store, 'records', `${uuid}.json`), JSON.stringify(doc));
+  const path = join(store, 'head.json'), head = JSON.parse(readFileSync(path, 'utf8'));
+  head.accounts = [{ key: accountKey, accountId, file: uuid, digest: hash(doc), authorityFile: uuid, authorityDigest: hash(image) }];
+  writeFileSync(path, JSON.stringify(head));
+}
+for (const format of ['sqlite-v1', 'file-v2']) test(`${format} v3 structural proof rejects contradictory or missing hold controls`, () => fixture(f => {
+  f.env.STUDIO_ADAPTIVE_FORMAT = format;
+  f.setMarker({ ...ready(3), format, ...(format === 'file-v2' ? { fileAuthorityProjectionVersion: 2 } : {}) });
+  const { doc, controls } = structuralRightsFixture(); putStructuralRights(f, doc, controls, format);
+  assert.equal(requiredAdaptiveCapabilities(f.env).rightsUseHoldEnforcementVersion, 1);
+  for (const mutate of [c => { delete c.rightsUseControls; }, c => { c.rightsUseControls.scopes[0].effectiveBlocked = false; },
+    c => { c.rightsUseControls.scopes[0].useEpoch++; }, c => { c.rightsUseControls.effects[0].applyIntentDigest = 'd'.repeat(64); },
+    c => { c.rightsUseControls.effects[0].effectDigest = 'd'.repeat(64); }, c => { c.rightsUseControls.effects = []; }, c => { c.revision++; },
+    c => { c.retentionStoreIdentity = 'e'.repeat(64); }]) {
+    const changed = structuredClone(controls); mutate(changed); putStructuralRights(f, doc, changed, format);
+    assert.throws(() => requiredAdaptiveCapabilities(f.env), /incompatible/);
+  }
+  for (const mutate of [d => { delete d.rightsUseHolds; }, d => { d.rightsUseHolds.scopes[0].useEpoch = 0; },
+    d => { d.rightsUseHolds.effects.push(d.rightsUseHolds.effects[0]); }, d => { d.rightsUseHolds.effects[0].policy.prompt = 'PRIVATE_TEXT'; },
+    d => { d.rightsUseHolds.effects[0].state = 'released'; }, d => { delete d.retentionStoreIdentity; }]) {
+    const changed = structuredClone(doc); mutate(changed); putStructuralRights(f, changed, controls, format);
+    assert.throws(() => requiredAdaptiveCapabilities(f.env), error => /incompatible/.test(error.message) && !error.message.includes('PRIVATE_TEXT'));
+  }
+}));
+test('v3 observer retention metadata is bounded and cannot enter legacy namespaces', () => fixture(f => {
+  const event = { schemaVersion: 1, version: 'vox-observer-v1', id: 'a'.repeat(64), outcome: 'responded',
+    retentionStoreIdentity: 'canonical', rightsUseStamp: 'b'.repeat(64) };
+  const correction = { version: 1, id: 'c'.repeat(64), outcome: 'correction_client_saved', retentionStoreIdentity: 'd'.repeat(64) };
+  f.setMarker(ready(3)); const { doc, controls } = structuralRightsFixture();
+  doc.observer = { schemaVersion: 1, events: [event], projections: [], corrections: [correction] };
+  putStructuralRights(f, doc, controls, 'sqlite-v1');
+  assert.equal(requiredAdaptiveCapabilities(f.env).rightsUseHoldEnforcementVersion, 1);
+  for (const mutate of [d => { d.observer.events[0].retentionStoreIdentity = 'unknown'; },
+    d => { delete d.observer.events[0].retentionStoreIdentity; }, d => { d.observer.events[0].rightsUseStamp = null; },
+    d => { d.observer.corrections[0].retentionStoreIdentity = 'unknown'; }]) {
+    const changed = structuredClone(doc); mutate(changed); putStructuralRights(f, changed, controls, 'sqlite-v1');
+    assert.throws(() => requiredAdaptiveCapabilities(f.env), /incompatible/);
+  }
+  f.setMarker(ready(1)); putCanonical(f, document(1, doc.observer));
+  assert.throws(() => requiredAdaptiveCapabilities(f.env), /incompatible/);
+}));
+test('RI3 binds structural intents and acknowledgements with policies absent and no writes', () => fixture(f => {
+  f.setMarker(ready(1)); const { effect } = structuralRightsFixture(), eventId = '52a7116c-30f0-4c0d-a6ce-10adefbd4889';
+  const scope = { space: effect.space, purpose: effect.purpose };
+  const intent = { version: 1, eventId, fingerprint: workflowHash(['vox.rights.local-use.command.v1', { accountId, requestId: effect.requestId,
+    scope, action: 'apply', eventId, policyDigest: effect.policy.digest, notice: effect.notice }]), requestId: effect.requestId, requestRevision: 1,
+    scope, action: 'apply', effectId: effect.effectId, createdAt: 100, expectedCanonicalRevision: 1, expectedUseEpoch: 0,
+    policy: effect.policy, notice: effect.notice, reviewAt: 500, metadataRetainUntil: 600, replayRetainUntil: 700, receiptRetainUntil: 600 };
+  signLocalIntent(intent);
+  const ack = { version: 1, eventId, intentDigest: intent.intentDigest, effectId: intent.effectId, accountRevision: 2, useEpoch: 1,
+    effectRevision: 1, effectDigest: workflowHash(effect), effectState: 'active', observedAt: 150, recordedAt: 160, retainUntil: 600 };
+  const ledger = { version: 3, accountId, revision: 3, observedServerTime: 200, requests: [{ version: 1, requestId: effect.requestId, accountId,
+    space: 'work', kind: 'restriction', revision: 1, createdAt: 100, updatedAt: 100, state: 'received', retention: {}, audit: [{}] }],
+    commandReceipts: [], tombstones: [], localUse: { version: 1, intents: [intent], acknowledgements: [ack] } };
+  const file = putRights(f, 2); writeFileSync(file, JSON.stringify(ledger)); const before = readFileSync(file);
+  assert.equal(assertReleaseAdaptiveCompatibility(f.env, ADAPTIVE_RELEASE_CAPABILITIES).rightsLedgerVersion, 3);
+  for (const manifest of [{ ...ADAPTIVE_RELEASE_CAPABILITIES, supportedRightsLedgerVersions: [1, 2] },
+    { ...ADAPTIVE_RELEASE_CAPABILITIES, rightsUseHoldEnforcementVersion: 0 }]) assert.throws(() => assertReleaseAdaptiveCompatibility(f.env, manifest), /incompatible/);
+  assert.deepEqual(readFileSync(file), before);
+  for (const mutate of [d => { delete d.localUse; }, d => { d.localUse.intents[0].policy.prompt = 'PRIVATE_TEXT'; },
+    d => { d.localUse.intents[0].intentDigest = 'f'.repeat(64); }, d => { d.localUse.intents[0].scope.space = 'personal'; },
+    d => { d.localUse.acknowledgements[0].intentDigest = 'f'.repeat(64); }, d => { d.localUse.acknowledgements[0].recordedAt = 99; },
+    d => { d.localUse.acknowledgements[0].accountRevision = intent.expectedCanonicalRevision; },
+    d => { d.localUse.acknowledgements[0].useEpoch = intent.expectedUseEpoch; },
+    d => { d.localUse.acknowledgements.push(d.localUse.acknowledgements[0]); }, d => { d.requests = []; }]) {
+    const changed = structuredClone(ledger); mutate(changed); writeFileSync(file, JSON.stringify(changed)); const bytes = readFileSync(file);
+    assert.throws(() => requiredAdaptiveCapabilities(f.env), error => /incompatible/.test(error.message) && !error.message.includes('PRIVATE_TEXT'));
+    assert.deepEqual(readFileSync(file), bytes);
+  }
+  const release = signLocalIntent({ ...intent, eventId: 'ab26374c-c293-4aa6-8954-44e377f5bb45', action: 'release', createdAt: 210,
+    expectedCanonicalRevision: 2, expectedUseEpoch: 1, expectedEffectRevision: 1, expectedEffectDigest: workflowHash(effect) });
+  const successor = signLocalIntent({ ...release, eventId: '211d686f-4914-47f1-b772-e2c18ef56483', createdAt: 250,
+    expectedCanonicalRevision: 3, supersedesEventId: release.eventId });
+  const recovered = { ...structuredClone(ledger), observedServerTime: 400,
+    localUse: { version: 1, intents: [intent, release, successor], acknowledgements: [ack] } };
+  writeFileSync(file, JSON.stringify(recovered));
+  assert.equal(requiredAdaptiveCapabilities(f.env).rightsLedgerVersion, 3);
+  const releaseAck = { ...ack, eventId: successor.eventId, intentDigest: successor.intentDigest, accountRevision: 4,
+    useEpoch: 2, effectRevision: 2, effectState: 'released', observedAt: 300, recordedAt: 310 };
+  recovered.localUse.acknowledgements.push(releaseAck);
+  writeFileSync(file, JSON.stringify(recovered));
+  assert.equal(requiredAdaptiveCapabilities(f.env).rightsLedgerVersion, 3);
+  for (const mutate of [
+    d => { delete d.localUse.intents[2].supersedesEventId; signLocalIntent(d.localUse.intents[2]); },
+    d => { d.localUse.intents[2].supersedesEventId = intent.eventId; signLocalIntent(d.localUse.intents[2]); },
+    d => { d.localUse.intents[2].supersedesEventId = successor.eventId; signLocalIntent(d.localUse.intents[2]); },
+    d => { d.localUse.intents[2].createdAt = 209; signLocalIntent(d.localUse.intents[2]); },
+    d => { d.localUse.intents = [intent, successor, release]; },
+    d => { d.localUse.intents.push(signLocalIntent({ ...successor, eventId: '71a7116c-30f0-4c0d-a6ce-10adefbd4889' })); },
+    d => { d.localUse.acknowledgements.push({ ...releaseAck, eventId: release.eventId, intentDigest: release.intentDigest }); },
+    d => { d.localUse.acknowledgements[1].effectRevision = successor.expectedEffectRevision; },
+    d => { d.localUse.intents[0].supersedesEventId = release.eventId; signLocalIntent(d.localUse.intents[0]); },
+  ]) {
+    const changed = structuredClone(recovered); mutate(changed); writeFileSync(file, JSON.stringify(changed));
+    const bytes = readFileSync(file); assert.throws(() => requiredAdaptiveCapabilities(f.env), /incompatible/);
+    assert.deepEqual(readFileSync(file), bytes);
+  }
+}));
 const workflowState = (version, generation = 1, at = 200) => ({
   findings: {}, proposals: {}, candidates: {}, revokedLineages: ['c'.repeat(64)], finalUses: ['d'.repeat(64)],
   protocolUses: [], rollbacks: {}, operations: {},
