@@ -1,6 +1,6 @@
 # Vox adaptive agents: implementation plan
 
-Prepared 19 October 2026 for Joyixir OÜ. Product scope: adults in the EU/EEA and US; English and Persian interfaces; Work and Personal spaces. Current released baseline: `b4193097a1003f38413f428a73ff55a0dfb1d79f` (20 October 2026); the next reviewed learning-case candidate is tracked separately.
+Prepared 19 October 2026 for Joyixir OÜ. Product scope: adults in the EU/EEA and US; English and Persian interfaces; Work and Personal spaces. Current released baseline: `a49f734e16e0a5b3430c1e1c088dab33feda5d53` (20 October 2026); see the [reviewed synthetic learning-case release](RELEASE_LEARNING_CASES_2026_10_20.md). Further rights-control implementation is a separate candidate.
 
 **Delivery status:** the observation/lifecycle/improvement work and the complementary scoped chat, image prediction, bounded retrieval and optional voice lifecycle are now integrated in the completion candidate. See [adaptive completion](ADAPTIVE_COMPLETION_RESULT.md) for implementation, independent review and precise release evidence. Existing source/release receipts remain historical. Optional capabilities stay off without reviewed configuration; provider/device/privacy qualification and the unfinished roadmap entries remain open.
 
