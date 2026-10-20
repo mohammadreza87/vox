@@ -283,6 +283,8 @@ async function create(): Promise<Studio> {
       memory: storage.memory,
       adaptive: storage.adaptive,
       relationshipAuthority: authority,
+      // Content-free per-stage timings for a latency baseline (scripts/stage-timings.ts).
+      stageTimings: env.STUDIO_STAGE_TIMINGS === '1',
       rateLimiter: storage.rateLimiter,
       imageToJpeg: toJpeg,
       relationshipStore: storage.relationshipStore,
