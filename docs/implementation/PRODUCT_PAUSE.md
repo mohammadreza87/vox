@@ -1,6 +1,10 @@
 # Personalization pause / مکث شخصی‌سازی
 
-Implementation candidate, 20 October 2026. Independent composed acceptance, compiled browser qualification, CI and release are pending. This is a bounded product control within the VOX-056 work; the formal rights service, guest requests, deadlines and provider/backup erasure remain open.
+Source qualification, 20 October 2026. [PR74](https://github.com/mohammadreza87/vox/pull/74) passed CI198, Preview131 and Indexed14 and merged into develop. Independent scoped source/native reconciliation and the actual compiled supplement accepted head `c00e5e6`; this is not full 83/83 acceptance or physical-device qualification. Deployment and production storage preparation are separate gates. This is a bounded product control within VOX-056; guest requests, formal restriction, deadlines and provider/backup erasure remain open.
+
+The independent reconciliation report hash is `8fcc46588b2a9cc68f969f7812b04b0e59a73be9d52e4216ac4a50409026770e`; final compiled acceptance hash is `42cb0353881bc1cbf34a2ca1041821983f5fd3bd0b97855cf24625f5490a44a8`. The 83-instance matrix preserves 56 covered selected native/oracle cases, 26 literal qualifications and one invalid selection. Native keyboard language selection remains unavailable; locale setup is distinct from the tested native pause-control keyboard interaction. Prior failures remain in the evidence.
+
+**وضعیت منبع، ۲۰ اکتبر ۲۰۲۶:** تغییرات PR74 پس از موفقیت CI198، Preview131 و Indexed14 در develop ادغام شد. بررسی مستقل محدود منبع/native و مکمل اجرای واقعی نسخهٔ compiled روی `c00e5e6` پذیرفته شد؛ این نتیجه به معنی موفقیت کامل ۸۳ مورد یا آزمون دستگاه واقعی نیست. ماتریس شامل ۵۶ مورد پوشش‌داده‌شده، ۲۶ مورد با محدودیت رابط و یک انتخاب نامعتبر است. انتخاب زبان با صفحه‌کلید native همچنان تأیید نشده و با آزمون صفحه‌کلید کنترل مکث متفاوت است. انتشار و آماده‌سازی ذخیره‌سازی اصلی دروازه‌های جداگانه‌اند؛ موارد ناموفق قبلی حفظ شده‌اند.
 
 ## User behavior
 

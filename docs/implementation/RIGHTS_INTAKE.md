@@ -1,6 +1,6 @@
 # Account privacy requests / درخواست حریم خصوصی حساب
 
-Implementation candidate, 20 October 2026. This RI1 increment of VOX-056 is awaiting independent acceptance and release. It does not complete VOX-056 or enable production intake. Operator: Joyixir OÜ; privacy contact: info@joyixir.com. See [operator details](OPERATOR_DETAILS.md), [privacy requirements](PRIVACY_AND_CONSENT.md), and [personalization pause](PRODUCT_PAUSE.md).
+Source qualification, 20 October 2026. The RI1 increment in [PR75](https://github.com/mohammadreza87/vox/pull/75) passed independent local acceptance on `3b8df062`: 22 standalone browser cases, eight signed HTTP cases, 16 EN/FA layout matrices and 320 focus/visibility checks across prepared SQLite and FILE. Another 53 native cases carry from `a64fbd2a` through verified CSS-only source equality. Acceptance report SHA-256: `a0b49bc622a2e41a8860fc5a08fa19d103208f774532f723a544a5543342fccf`. Exact CI, deployment and activation have their own receipts; this does not complete VOX-056 or enable production intake. Operator: Joyixir OÜ; privacy contact: info@joyixir.com. See [operator details](OPERATOR_DETAILS.md), [privacy requirements](PRIVACY_AND_CONSENT.md), and [personalization pause](PRODUCT_PAUSE.md).
 
 ## User behavior
 
@@ -9,6 +9,8 @@ An existing signed-in account can submit a metadata-only request in Work or Pers
 The configured policy chooses from access/export, correction, erasure, formal restriction, objection, portability and consent-withdrawal request kinds. Receipt records a request for review: it does not change consent, pause processing, correct or erase data. Existing immediate controls remain separate deliberate actions. Unknown guests and delegated requests are not implemented.
 
 Only an access/export request can prepare a current local attachment. It contains the current authorized account projection and currently authorized published shared contributions. The operator cannot download it. Provider and backup coverage remain unavailable; neither the service nor UI calls this full fulfillment or verified delivery. Repeating an old command returns current metadata, never an old attachment. A new deliberate download regenerates current data and rechecks authentication, membership, policy, source revisions, shared membership and expiry after awaited work and before publication.
+
+The separate immediate download at `/api/studio/learning/export` uses the same prepared source fence in the follow-up repair `bf453827`. It serializes the attachment before final synchronous signed-session, committed-membership and source checks; no awaited work follows those checks. It needs no RI1 policy/key and retains the current production authorization path, including legacy FILE support. Custom lifecycle instances without a shared service inherit the prepared seam's core-policy requirement; they are outside the configured production path. The repair's author regression passed 55 cases. Its additional independent race-test execution was stopped by automatic security review and remains unavailable; source review and final CI are separate evidence, not a replacement claim that the blocked test passed.
 
 The statuses are received, operator review, awaiting requester, operator action pending, local export prepared, and closed without fulfillment. There is no generic completed/deleted/delivered state. Missing legal-deadline rules produce a visible unresolved deadline with no fabricated duration. A lost response requires a current-status refresh; the browser never silently retries a mutation, retains request data in local storage, or reuses an export buffer across account/space changes.
 
@@ -37,7 +39,9 @@ Remaining work includes no-account verification, delegated requests, jurisdictio
 
 ## فارسی
 
-این نسخهٔ RI1 بخشی از VOX-056 است و هنوز منتظر پذیرش مستقل و انتشار است. انتشار کد به معنی فعال‌شدن دریافت درخواست در محیط اصلی یا تکمیل حقوق کاربر نیست. اپراتور Joyixir OÜ و راه تماس حریم خصوصی info@joyixir.com است.
+این نسخهٔ RI1 بخشی از VOX-056 است. پذیرش مستقل محلی روی `3b8df062` با ۲۲ آزمون مرورگر، ۸ آزمون HTTP امضاشده، ۱۶ ماتریس چیدمان انگلیسی/فارسی و ۳۲۰ بررسی نمایانی کنترل‌ها موفق شد. ۵۳ آزمون native از `a64fbd2a` با اثبات یکسان‌بودن کد و تغییر صرفاً CSS منتقل شده‌اند. CI دقیق، انتشار و فعال‌سازی رسیدهای جداگانه دارند؛ انتشار کد به معنی فعال‌شدن دریافت درخواست در محیط اصلی یا تکمیل حقوق کاربر نیست. اپراتور Joyixir OÜ و راه تماس حریم خصوصی info@joyixir.com است.
+
+ترمیم مسیر دریافت فوری `/api/studio/learning/export` در `bf453827` پس از ساخت متن فایل، نشست امضاشده، عضویت ثبت‌شده و اختیار فعلی منبع را به‌صورت هم‌زمان و بدون انتظار بعدی بررسی می‌کند. کلید یا سیاست RI1 لازم ندارد و مسیر مجوز فعلی محیط اصلی، از جمله FILE قدیمی، حفظ می‌شود. نمونهٔ سفارشی چرخهٔ عمر بدون سرویس اشتراک، شرط سیاست اصلیِ روش آماده‌سازی را نیز دارد و مسیر فعلی تولید نیست. ۵۵ آزمون نویسنده موفق شد؛ اجرای اضافی آزمون رقابت مستقل توسط بررسی امنیتی خودکار متوقف شد و تأیید نشده است. بازبینی منبع و CI مدرک جداگانه‌اند و به معنی موفقیت آزمون متوقف‌شده نیستند.
 
 حساب واردشده می‌تواند برای فضای کاری یا شخصی یک درخواست فقط با فراداده ثبت کند و شمارهٔ پیگیری و وضعیت فعلی را ببیند. رضایت شخصی‌سازی اختیاری پیش‌شرط ثبت درخواست نیست. حساب موجود با عضویت در انتظار می‌تواند فراداده ثبت کند، اما دریافت خروجی خصوصی به اختیار فعلی حساب و فضای تأییدشده نیاز دارد. احراز حساب، هویت شخص حقیقی یا فردی در حساب دیگر را ثابت نمی‌کند. درخواست مهمان بدون حساب و درخواست نماینده هنوز پشتیبانی نمی‌شود.
 
