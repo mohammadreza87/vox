@@ -181,7 +181,8 @@ describe('deadline', () => {
 describe('OpenAIDecisionProvider (S15 handoff)', () => {
   it('still sends timeout 500 and maxRetries 0 whatever options.timeoutMs says', async () => {
     const post = vi.fn(async () => ({}));
-    const provider = new OpenAIDecisionProvider({ post } as never);
+    // Through the interface: the class body (S15) still declares three parameters.
+    const provider: DecisionProvider = new OpenAIDecisionProvider({ post } as never);
     await provider.evaluate({ input: 'text', questions: predicates(1) } as DecisionInput, new AbortController().signal, undefined, { timeoutMs: 2000 });
     expect(post).toHaveBeenCalledOnce();
     expect(post.mock.calls[0]).toEqual(['/decisions', expect.objectContaining({ timeout: 500, maxRetries: 0 })]);

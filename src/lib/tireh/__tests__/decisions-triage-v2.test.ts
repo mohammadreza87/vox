@@ -11,7 +11,7 @@ import type { Persona } from '../types';
 import { memory, privateText, TG, testOrgConfig } from './fixtures';
 import { questionSchema, MAX_DECISION_QUESTIONS } from '../../adaptive/decisions';
 import { PERSONA_HEADER_PREFIX, TRIAGE_V2_QUESTION_NAMES } from '../decisions/catalog';
-import { decisionsGateway, pred, v1Answers } from './decisions-fixtures';
+import { decisionsGateway, v1Answers } from './decisions-fixtures';
 
 const basePersona = (): Persona => testOrgConfig().personas.find((p) => p.id === 'aria')!;
 const ROUTABLE: SkillChoice[] = [
