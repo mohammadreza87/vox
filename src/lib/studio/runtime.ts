@@ -76,6 +76,7 @@ import { AdaptiveLifecycleService } from '../adaptive/lifecycle/service';
 import { AdaptiveMaintenanceRunner } from '../adaptive/lifecycle/maintenance';
 import { readMaintenanceHealth } from '../adaptive/lifecycle/maintenance-health';
 import { DecisionService, OpenAIDecisionProvider } from '../adaptive/decisions';
+import { studioDecider } from '../tireh/decisions/service-decider';
 import { VoiceIdentityService } from '../adaptive/voice-identity/service';
 import { VoiceIdentityRepository } from '../adaptive/voice-identity/repository';
 import { canUseAgent } from './permissions';
@@ -305,7 +306,7 @@ async function create(): Promise<Studio> {
       fastLLM: new AnthropicLLM(env.ANTHROPIC_API_KEY!, env.STUDIO_VOICE_MODEL || 'claude-haiku-5-5'),
       openai,
       // Reply triage and stranger decisions; STUDIO_DECISIONS=off skips them.
-      decider: openai && env.STUDIO_DECISIONS !== 'off' ? openai : undefined,
+      decider: openai && env.STUDIO_DECISIONS !== 'off' ? studioDecider(openai, env) : undefined,
       skillRouting: parseSkillRouting(env.STUDIO_SKILL_ROUTING),
       eleven: env.ELEVENLABS_API_KEY ? new ElevenLabsStudio(env.ELEVENLABS_API_KEY) : null,
       managerBot,
@@ -370,6 +371,7 @@ async function create(): Promise<Studio> {
       } : {}),
     });
     studio.deps.preferenceLearning = createStudioPreferenceLearning(studio);
+    if ((await import('../tireh/flags')).tirehFlags().decisionLog) { const { createDecisionLogSink, createFileDecisionLogStore, FirestoreDecisionLogStore } = await import('../tireh/decisions/log'); studio.deps.decisionLog = createDecisionLogSink(config.storage === 'firestore' ? new FirestoreDecisionLogStore(await (await import('@/lib/firebase-admin')).getAdminDb()) : createFileDecisionLogStore(join(config.dataDir, 'decision-log-v1.jsonl')), { warn: (code) => console.warn(`[decision-log] ${code}`) }); }
     if (config.requestedRoutinesEnabled) {
       studio.deps.requestedRoutinesEnabled = () => process.env.STUDIO_REQUESTED_ROUTINES === '1';
       studio.deps.requestedRoutines = createStudioRequestedRoutines(studio, {
