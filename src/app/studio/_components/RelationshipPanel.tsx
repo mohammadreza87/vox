@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useProductPause } from '../_lib/product-pause-client';
+import { Icon, Spinner } from './ui';
 import { pauseText } from '../_lib/product-pause-copy';
 import { api, tg, type RelationshipSpace, type RelationshipView } from '../_lib/client';
 
@@ -85,13 +86,17 @@ export function RelationshipPanel({ agentId, name, space = 'work', locale = 'en'
   const available = !!value?.available && value.mode !== 'off';
   const allowManage = !!value;
   return <section className="vx-card" dir={fa ? 'rtl' : 'ltr'} lang={fa ? 'fa' : 'en'} aria-labelledby="relationship-title" style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
-    <div><h2 id="relationship-title" className="vx-title-m" style={{ margin: 0 }}>{t('Staying in touch', 'در ارتباط ماندن')}</h2>
-      <p className="vx-small vx-2" style={{ margin: '5px 0 0' }}>{t(`Manage ${name}’s follow-ups and private check-ins in your ${space} space.`, `پیگیری‌ها و بررسی‌های خصوصی ${name} را در فضای ${space === 'work' ? 'کاری' : 'شخصی'} مدیریت کنید.`)}</p></div>
-    <button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy || loading} onClick={() => void load()}>{t('Refresh relationship settings', 'تازه‌سازی تنظیمات ارتباط')}</button>
+    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+      <div style={{ flex: 1, minWidth: 0 }}><h2 id="relationship-title" className="vx-head" style={{ margin: 0 }}>{t('Staying in touch', 'در ارتباط ماندن')}</h2>
+        <p className="vx-small vx-2" style={{ margin: '4px 0 0' }}>{t(`Manage ${name}’s follow-ups and private check-ins in your ${space} space.`, `پیگیری‌ها و بررسی‌های خصوصی ${name} را در فضای ${space === 'work' ? 'کاری' : 'شخصی'} مدیریت کنید.`)}</p></div>
+      <button className="vx-icon-btn solid" style={{ width: 36, height: 36 }} disabled={busy || loading} onClick={() => void load()} aria-label={t('Refresh relationship settings', 'تازه‌سازی تنظیمات ارتباط')}>
+        {busy || loading ? <Spinner size={16} /> : <Icon name="refresh" size={18} />}
+      </button>
+    </div>
     {!value && !error && <p className="vx-small vx-2" role="status">{t('Loading relationship settings…', 'در حال دریافت تنظیمات ارتباط…')}</p>}
     {error && <div className="vx-banner danger" role="alert">{error}</div>}
     {value && <>
-      <p className="vx-small" style={{ margin: 0 }} role="status">{!available ? t('Follow-ups are unavailable in this space. You can still pause, stop, or clear existing context.', 'پیگیری در این فضا در دسترس نیست. همچنان می‌توانید آن را متوقف یا مکث کنید یا زمینهٔ موجود را پاک کنید.') : paused ? t('Follow-ups are paused.', 'پیگیری‌ها مکث شده‌اند.') : stopped ? t('Follow-ups are stopped.', 'پیگیری‌ها متوقف شده‌اند.') : t('Follow-ups are available for useful open conversations.', 'پیگیری برای گفتگوهای باز و مفید در دسترس است.')}</p>
+      <p className="vx-small" style={{ margin: 0, color: available && !paused && !stopped ? 'var(--success)' : 'var(--text-2)' }} role="status">{!available ? t('Follow-ups are unavailable in this space. You can still pause, stop, or clear existing context.', 'پیگیری در این فضا در دسترس نیست. همچنان می‌توانید آن را متوقف یا مکث کنید یا زمینهٔ موجود را پاک کنید.') : paused ? t('Follow-ups are paused.', 'پیگیری‌ها مکث شده‌اند.') : stopped ? t('Follow-ups are stopped.', 'پیگیری‌ها متوقف شده‌اند.') : t('Follow-ups are available for useful open conversations.', 'پیگیری برای گفتگوهای باز و مفید در دسترس است.')}</p>
       {value.mode === 'off' && <p className="vx-small vx-2">{t('Relationship features are currently unavailable. Review Privacy and memory settings for prerequisites.', 'ویژگی‌های ارتباطی اکنون در دسترس نیستند. پیش‌نیازها را در تنظیمات حریم خصوصی و حافظه ببینید.')}</p>}
       <div className="vx-group" style={{ padding: 12 }}><div className="vx-small" style={{ fontWeight: 600, marginBottom: 6 }}>{t('Communication preferences', 'ترجیح‌های ارتباطی')}</div>
         {value.preferences.length ? <ul style={{ margin: 0, paddingInlineStart: 20 }}>{value.preferences.map((p, i) => <li key={`${p.key}-${i}`} className="vx-small">{p.value}</li>)}</ul> : <p className="vx-small vx-2" style={{ margin: 0 }}>{t('No preferences saved.', 'ترجیحی ذخیره نشده است.')}</p>}</div>

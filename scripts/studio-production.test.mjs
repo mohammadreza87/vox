@@ -41,6 +41,22 @@ test('prepare imports reviewed feature settings, round trips JSON and keeps the 
   assert.ok(!result.stdout.includes('synthetic-public-key'));
 }));
 
+test('prepare imports explicit routine and rights configuration without replacing existing choices or leaking the key', () => fixture(f => {
+  const key = Buffer.alloc(32, 7).toString('base64');
+  const policy = JSON.stringify({ version: 1, id: 'synthetic-fixture-only' });
+  writeFileSync(f.source, f.base + `STUDIO_REQUESTED_ROUTINES='1'\nSTUDIO_RIGHTS_POLICY_JSON='${policy}'\nSTUDIO_RIGHTS_KEY_BASE64='${key}'\n`);
+  const result = f.prepare();
+  assert.equal(result.status, 0, result.stderr);
+  const env = parseEnv(readFileSync(f.destination, 'utf8'));
+  assert.equal(env.STUDIO_REQUESTED_ROUTINES, '1');
+  assert.equal(env.STUDIO_RIGHTS_POLICY_JSON, policy);
+  assert.equal(env.STUDIO_RIGHTS_KEY_BASE64, key);
+  assert.ok(!result.stdout.includes(key) && !result.stderr.includes(key));
+  writeFileSync(f.source, f.base + "STUDIO_REQUESTED_ROUTINES='0'\nSTUDIO_RIGHTS_POLICY_JSON='changed'\nSTUDIO_RIGHTS_KEY_BASE64='changed'\n");
+  assert.equal(f.prepare().status, 0);
+  assert.deepEqual(parseEnv(readFileSync(f.destination, 'utf8')), env);
+}));
+
 test('repeated prepare preserves current disabled flags, blank trust, credentials and private extensions', () => fixture(f => {
   writeFileSync(f.destination, f.base + "STUDIO_MAINTENANCE='0'\nSTUDIO_REMINDER_DELIVERY=''\nSTUDIO_IMPROVEMENT_TRUST_JSON=''\nOPENAI_API_KEY=''\nSTUDIO_RELATIONSHIPS='off'\nSTUDIO_RELATIONSHIP_ROLES='owner,superadmin'\nPRIVATE_EXTENSION='preserve-this'\n");
   writeFileSync(f.source, f.base + "STUDIO_MAINTENANCE='1'\nSTUDIO_REMINDER_DELIVERY='1'\nSTUDIO_IMPROVEMENT_TRUST_JSON='new-trust'\nOPENAI_API_KEY='synthetic-key'\nSTUDIO_RELATIONSHIPS='live'\nSTUDIO_RELATIONSHIP_ROLES='owner'\nPRIVATE_EXTENSION='overwrite-attempt'\n");

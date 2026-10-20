@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, type AgentView, type GroupItem, type Member } from '../../_lib/client';
 import { sharedApi, type SharedPreview, type SharedSnapshot } from '../../_lib/shared-client';
 import { adaptiveApi } from '../../_lib/adaptive-client';
-import { TopBar } from '../ui';
+import { Spinner, TopBar } from '../ui';
 
 export function SharedMemoriesScreen({ selfId, onBack }: { selfId: number; onBack: () => void }) {
   const [space, setSpace] = useState<'work' | 'personal'>('work');
@@ -60,7 +60,7 @@ export function SharedMemoriesScreen({ selfId, onBack }: { selfId: number; onBac
       <div className="vx-privacy-spaces" role="group" aria-label={t('Memory space', 'فضای حافظه')}>{(['work', 'personal'] as const).map(s => <button className="vx-btn vx-btn-secondary" key={s} disabled={busy} aria-pressed={space === s} onClick={() => setSpace(s)}>{s === 'work' ? t('Work', 'کاری') : t('Personal', 'شخصی')}</button>)}</div>
       {error && <div className="vx-banner danger" role="alert">{error}<button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy} onClick={() => void load()}>{t('Refresh', 'تازه‌سازی')}</button></div>}
       {status && <p role="status">{status}</p>}
-      {!data && !error && <p role="status">{t('Loading…', 'در حال دریافت…')}</p>}
+      {!data && !error && <div role="status" className="vx-small vx-2" style={{ display: 'flex', alignItems: 'center', gap: 8 }}><Spinner /> {t('Loading…', 'در حال دریافت…')}</div>}
       {data && <>
         <div className="vx-card vx-privacy-card">
           <h2 className="vx-head">{t('A new shared note', 'یادداشت مشترک جدید')}</h2>

@@ -1,3 +1,4 @@
+import { createStudioRequestedRoutines } from './requested-routines';
 import { RightsUseHoldService } from '../adaptive/rights-use-holds/service';
 import { lstatSync } from 'node:fs';
 import { RightsFileStorage } from '../adaptive/rights-intake/storage';
@@ -57,7 +58,7 @@ import { ElevenLabsStudio, OpenAIMedia } from './media';
 import { FirestoreStudioStore } from './firestore-store';
 import { FirestoreStudioRateLimiter } from './firestore-ratelimit';
 import { Studio, type StudioDeps } from './service';
-import { StudioStore } from './store';
+import { StudioStore, type StudioStorage } from './store';
 import { RelationshipLoop, FileRelationshipStore, FirestoreRelationshipStore, FileObservationStore, FirestoreObservationStore, SafeRelationshipObserver, OpenAIFollowUpReview, OpenAIRelationshipFeedback } from '../relationships';
 import { StudioRelationshipAssessor } from './relationship-assessor';
 import { relationshipConfig } from './relationship-config';
@@ -83,6 +84,25 @@ import { z } from 'zod';
 import { ImprovementWorkflow } from '../adaptive/improvement/workflow';
 import { validateTrust, type TrustStore } from '../adaptive/improvement/contracts';
 import { createStudioReminderDelivery } from './reminder-delivery';
+import { digest } from '../adaptive/persistence/repository';
+
+/** Internal availability is bound to current committed company roles, never a
+ * bootstrap/environment list. Unsupported distributed synchronous reads deny. */
+export function internalPilotAuthority(store: StudioStorage) {
+  return { currentInternalMember: (accountId: string) => {
+    try {
+      const match = /^telegram-account:([1-9]\d{0,15})$/.exec(accountId);
+      if (!match || !Number.isSafeInteger(Number(match[1]))) return;
+      const state = store.readCommittedForEffect?.();
+      if (!state) return;
+      const rows = state.members.filter(member => member.telegramId === Number(match[1]));
+      if (rows.length !== 1 || !['owner', 'superadmin'].includes(rows[0].role)) return;
+      const revision = rows[0].learningAuthorityRevision ?? 0;
+      if (!Number.isSafeInteger(revision) || revision < 0) return;
+      return { allowed: true, authorityVersion: digest([rows[0].telegramId, rows[0].role, rows[0].joinedAt, revision]) };
+    } catch { return; }
+  } };
+}
 
 function improvementTrust(raw: string | undefined, storage: string): TrustStore | undefined {
   if (!raw?.trim()) return undefined;
@@ -107,6 +127,9 @@ export function parseIds(raw: string | undefined): number[] {
 export function validateStudioConfig(env: NodeJS.ProcessEnv, cwd = process.cwd()) {
   if (!env.STUDIO_SECRET || env.STUDIO_SECRET.trim().length < 32) throw new Error('STUDIO_SECRET (≥32 chars) is required');
   if (!env.ANTHROPIC_API_KEY?.trim()) throw new Error('ANTHROPIC_API_KEY is required');
+  // Parse only: no operational role, age, consent or jurisdiction is inferred.
+  // Invalid supplied policy fails before opening stores or contacting a provider.
+  adaptiveOptionsFromManifest(env.STUDIO_ADAPTIVE_POLICY_JSON);
 
   const production = env.NODE_ENV === 'production';
   const token = env.VOXX_BOT_TOKEN?.trim();
@@ -159,6 +182,11 @@ export function validateStudioConfig(env: NodeJS.ProcessEnv, cwd = process.cwd()
   const relationships = relationshipConfig(env);
   const scopedRelationshipsEnabled = env.STUDIO_SCOPED_RELATIONSHIPS === '1';
   const maintenanceEnabled = env.STUDIO_MAINTENANCE === '1';
+  const requestedRoutinesEnabled = env.STUDIO_REQUESTED_ROUTINES === '1';
+  if (requestedRoutinesEnabled && (env.STUDIO_BOTS !== '1' || storage !== 'file' || publicUrl ||
+    env.K_SERVICE || env.FUNCTION_TARGET || env.FUNCTION_NAME || env.VERCEL === '1')) {
+    throw new Error('STUDIO_REQUESTED_ROUTINES=1 requires STUDIO_BOTS=1 with file storage in a persistent polling process');
+  }
   const reminderDeliveryEnabled = env.STUDIO_REMINDER_DELIVERY === '1';
   if (env.STUDIO_EXPERIMENTS_ENABLED !== undefined && !['', '0', '1'].includes(env.STUDIO_EXPERIMENTS_ENABLED)) {
     throw new Error('STUDIO_EXPERIMENTS_ENABLED must be 0 or 1');
@@ -178,7 +206,7 @@ export function validateStudioConfig(env: NodeJS.ProcessEnv, cwd = process.cwd()
     throw new Error('STUDIO_REMINDER_DELIVERY=1 requires STUDIO_MAINTENANCE=1 and a configured manager bot');
   }
   const trustedImprovementKeys = improvementTrust(env.STUDIO_IMPROVEMENT_TRUST_JSON, storage);
-  return { production, token, superadminIds, dataDir, webAppUrl, storage, adaptiveFormat, mediaBucket, publicUrl, relationships, scopedRelationshipsEnabled, maintenanceEnabled, reminderDeliveryEnabled, experimentsEnabled, trustedImprovementKeys };
+  return { production, token, superadminIds, dataDir, webAppUrl, storage, adaptiveFormat, mediaBucket, publicUrl, relationships, scopedRelationshipsEnabled, maintenanceEnabled, reminderDeliveryEnabled, experimentsEnabled, requestedRoutinesEnabled, trustedImprovementKeys };
 }
 
 /** STUDIO_WEB_SEARCH=off keeps every agent offline (web searches are billed per search). */
@@ -206,10 +234,11 @@ export function stopStudioPreferenceLearning(): Promise<{ pending: number }> {
 type RuntimeStorage = Pick<StudioDeps, 'store' | 'memory' | 'rateLimiter' | 'adaptive' | 'relationshipStore' | 'observations'> & { sharedStorage: AdaptiveStorage; voiceIdentityStorage: AdaptiveStorage; maintenanceStorage: AdaptiveStorage; closeAdaptive?: () => void };
 function fileStorage(dir: string, scopedRelationshipsEnabled: boolean, format: AdaptiveStorageFormat): RuntimeStorage {
   const managed = openLocalAdaptiveStorage(join(dir, 'adaptive'), format);
-  try { return { store: new StudioStore(dir), memory: createFileStores(join(dir, 'memory.json')),
+  try { const store = new StudioStore(dir);
+    return { store, memory: createFileStores(join(dir, 'memory.json')),
     relationshipStore: new FileRelationshipStore(join(dir, 'scoped-relationships-v1.json')), observations: new FileObservationStore(join(dir, 'scoped-relationship-observations-v1.json')),
     adaptive: new AdaptiveService(new AdaptiveRepository(managed.storage),
-      { ...adaptiveOptionsFromManifest(process.env.STUDIO_ADAPTIVE_POLICY_JSON), scopedRelationshipsEnabled }),
+      { ...adaptiveOptionsFromManifest(process.env.STUDIO_ADAPTIVE_POLICY_JSON, internalPilotAuthority(store)), scopedRelationshipsEnabled }),
     sharedStorage: new FileAdaptiveStorage(join(dir, 'shared-memory')),
     voiceIdentityStorage: new FileAdaptiveStorage(join(dir, 'voice-identity')),
     maintenanceStorage: new FileAdaptiveStorage(join(dir, 'adaptive-maintenance')), closeAdaptive: managed.close };
@@ -221,10 +250,11 @@ async function firestoreStorage(bucketName: string, scopedRelationshipsEnabled: 
   const { getStorage } = await import('firebase-admin/storage');
   const db = await getAdminDb();
   const bucket = getStorage(await getAdminApp()).bucket(bucketName);
+  const store = new FirestoreStudioStore(db, bucket);
   return {
-    store: new FirestoreStudioStore(db, bucket),
+    store,
     adaptive: new AdaptiveService(new AdaptiveRepository(new FirestoreAdaptiveStorage(db)),
-      { ...adaptiveOptionsFromManifest(process.env.STUDIO_ADAPTIVE_POLICY_JSON), scopedRelationshipsEnabled }),
+      { ...adaptiveOptionsFromManifest(process.env.STUDIO_ADAPTIVE_POLICY_JSON, internalPilotAuthority(store)), scopedRelationshipsEnabled }),
     sharedStorage: new FirestoreAdaptiveStorage(db, 'adaptiveSharedMemory'),
     voiceIdentityStorage: new FirestoreAdaptiveStorage(db, 'adaptiveVoiceIdentity'),
     maintenanceStorage: new FirestoreAdaptiveStorage(db, 'adaptiveMaintenance'),
@@ -340,6 +370,12 @@ async function create(): Promise<Studio> {
       } : {}),
     });
     studio.deps.preferenceLearning = createStudioPreferenceLearning(studio);
+    if (config.requestedRoutinesEnabled) {
+      studio.deps.requestedRoutinesEnabled = () => process.env.STUDIO_REQUESTED_ROUTINES === '1';
+      studio.deps.requestedRoutines = createStudioRequestedRoutines(studio, {
+        filePath: join(config.dataDir, 'requested-routines-v1.json'), enabled: studio.deps.requestedRoutinesEnabled,
+      });
+    }
     if (reminderEndpointId && config.token) {
       studio.deps.reminderEndpointId = reminderEndpointId;
       studio.deps.reminderDelivery = createStudioReminderDelivery(studio, {

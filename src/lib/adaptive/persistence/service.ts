@@ -6,7 +6,7 @@ import { purgeInvalidDerivedMemory, validMemoryLineage, selectedMemoryClosure } 
 import { localErasureOperationSchema, type LocalErasureOperation, type ErasureWitness } from '../rights-intake/local-erasure-contracts';
 import { erasureFingerprint, localUseDigest } from '../rights-intake/local-use-state';
 import { transitionConsent } from '../consent';
-import { evaluateCapability, type Capability, type CapabilityRequest, type JurisdictionApproval } from '../eligibility';
+import { evaluateCapability, type Capability, type CapabilityDecision, type CapabilityRequest, type JurisdictionApproval } from '../eligibility';
 import { resolveVerifiedPerson } from '../identity';
 import { authorizeAccess } from '../policy';
 import type { AccessRequest, ConsentPermission, IdentityContext, PolicySnapshot, ResourceDescriptor } from '../types';
@@ -42,6 +42,11 @@ export interface AdaptiveServiceOptions {
   /** Trusted server registry/resolver. Client declarations alone cannot provide approvals. */
   capabilityPolicy?: (context: { accountId: string; personId: string; capability: Capability;
     declaration?: AdaptiveDocument['declaration'] }, now: number) => { request: CapabilityRequest; approvals: readonly JurisdictionApproval[] } | undefined;
+  /** Separate operational availability path. It never asserts jurisdiction or
+   * substitutes for individual confirmation, purpose choice or content grants. */
+  internalPilotPolicy?: (context: { accountId: string; personId: string; capability: Capability;
+    declaration?: AdaptiveDocument['declaration'] }, now: number) =>
+    { basis: 'internal_company_pilot'; accountId: string; personId: string; capability: Capability; decision: CapabilityDecision };
 }
 const CAPABILITY: Record<OptionalPurpose, Capability> = {
   'optional.product_analytics': 'product_analytics', 'optional.personalization': 'personalization',
@@ -263,7 +268,20 @@ export class AdaptiveService {
     if (capability === 'content_quality_review' || (capability === 'biometric_recognition' && this.options.voiceRecognitionEnabled !== true) ||
         (['auto_memory', 'relationship_outreach'].includes(capability) && this.options.scopedRelationshipsEnabled !== true) ||
         (['reminder_delivery', 'proactive_suggestions'].includes(capability) && this.options.inboxEnabled !== true)) return { eligible: false, reason: 'feature_not_released' };
-    const policy = this.options.capabilityPolicy?.({ accountId: d.accountId, personId: d.personId, capability, declaration: d.declaration }, now);
+    const context = { accountId: d.accountId, personId: d.personId, capability, declaration: d.declaration };
+    if (this.options.internalPilotPolicy) {
+      // A cleared/changed account profile cannot use pilot availability. This
+      // checks persisted identity only, matching reminderPermit: interactive
+      // callers enforce confirmed(), while background callers enforce their
+      // independently disclosed durable identity and purpose grants.
+      if (!d.binding || d.binding.status !== 'verified' || d.binding.accountId !== d.accountId || d.binding.personId !== d.personId) {
+        return { eligible: false, reason: 'profile_confirmation_required' };
+      }
+      const pilot = this.options.internalPilotPolicy(context, now);
+      if (pilot.basis !== 'internal_company_pilot' || pilot.accountId !== d.accountId || pilot.personId !== d.personId || pilot.capability !== capability) return { eligible: false, reason: 'approval_invalid' };
+      return pilot.decision;
+    }
+    const policy = this.options.capabilityPolicy?.(context, now);
     if (!policy || policy.request.personId !== d.personId || policy.request.capability !== capability) return { eligible: false, reason: 'approval_missing' };
     return evaluateCapability(policy.request, policy.approvals, now);
   }
