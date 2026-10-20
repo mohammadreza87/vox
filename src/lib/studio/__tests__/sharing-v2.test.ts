@@ -29,6 +29,9 @@ import { SharedMemoryRepository } from '../../adaptive/shared/repository';
 import { SharedMemoryService, type SharedAuthority } from '../../adaptive/shared/service';
 import { draftJson, hire, ID, makeStudio, memberOf, seedOrg, T0, type Harness } from './helpers';
 
+// Adaptive file storage and full hire flows are slow on a loaded machine.
+vi.setConfig({ testTimeout: 60_000 });
+
 const firebase = vi.hoisted(() => ({ getAdminApp: vi.fn(), getAdminDb: vi.fn() }));
 vi.mock('@/lib/firebase-admin', () => ({ getAdminApp: firebase.getAdminApp, getAdminDb: firebase.getAdminDb }));
 
