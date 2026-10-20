@@ -64,7 +64,7 @@ export function readMaintenanceHealth(storage: AdaptiveStorage, clock: () => num
   const parsed = checkpointSchema.safeParse(raw); if (!parsed.success) return unavailable('invalid_checkpoint');
   const d = parsed.data;
   if (d.updatedAt > observedAt!) return unavailable('clock_regressed');
-  if ((d.status === 'failed') !== (d.failure === 'sweep_failed') || d.status === 'completed' && d.cursor !== undefined || d.lease && d.lease.until <= d.updatedAt) return unavailable('invalid_checkpoint');
+  if ((d.status === 'failed') !== (d.failure === 'sweep_failed') || d.status === 'completed' && d.cursor !== undefined || d.status === 'continued' && !d.lease && d.cursor === undefined || d.lease && d.lease.until <= d.updatedAt) return unavailable('invalid_checkpoint');
   const state = d.lease ? (d.lease.until > observedAt! ? 'leased' : 'stale') : d.status;
   return maintenanceHealthSchema.parse({ version: 1, state, observedAt,
     checkpoint: { updatedAt: d.updatedAt, recordedStatus: d.status, checkpointedPages: d.pages, checkpointedAccounts: d.accounts, failure: d.failure ?? null },

@@ -51,3 +51,13 @@ it('strict client-safe contract refuses missing/extra/misleading state combinati
   const empty = unconfiguredMaintenanceHealth(); expect(maintenanceHealthSchema.safeParse(empty).success).toBe(true);
   for (const invalid of [{}, { ...empty, observedAt: NOW }, { ...empty, workerId: 'PRIVATE' }, { ...empty, state: 'not_started' }, { ...empty, state: 'unavailable', reason: 'invalid_clock', observedAt: NOW }, { ...empty, state: 'completed', checkpoint: { updatedAt: NOW, recordedStatus: 'completed', checkpointedPages: 0, checkpointedAccounts: 0, failure: null } }]) expect(maintenanceHealthSchema.safeParse(invalid).success).toBe(false);
 });
+
+it('continued without cursor or lease is incoherent and cannot claim pending pages', async () => {
+  const f = fixture(); await f.seed(checkpoint({cursor:undefined,pages:1,accounts:1})); const before=readFileSync(f.file);
+  expect(f.health()).toMatchObject({state:'unavailable',reason:'invalid_checkpoint',checkpoint:null,leaseExpiresAt:null}); expect(readFileSync(f.file)).toEqual(before);
+});
+it('initial continued with no cursor remains valid while its lease is held or expired', async () => {
+  const f=fixture();await f.seed(checkpoint({cursor:undefined,pages:0,accounts:0,lease:{token:'11111111-1111-4111-8111-111111111111',workerId:'synthetic',until:NOW+1000}}));
+  expect(f.health()).toMatchObject({state:'leased',checkpoint:{recordedStatus:'continued',checkpointedPages:0,checkpointedAccounts:0}});
+  expect(f.health(NOW+1000)).toMatchObject({state:'stale',reason:'lease_expired',checkpoint:{recordedStatus:'continued',checkpointedPages:0,checkpointedAccounts:0}});
+});
