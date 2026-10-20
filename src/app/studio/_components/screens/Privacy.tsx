@@ -2,8 +2,8 @@
 
 import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { adaptiveApi, type AdaptiveOptionalPurpose, type AdaptivePresentation, type AdaptiveSnapshot, type AdaptiveSpace } from '../../_lib/adaptive-client';
-import { privacyCopy, purposeCopy, type PrivacyLocale } from '../../_lib/adaptive-copy';
-import { Icon, NavRow, Section, Spinner } from '../ui';
+import { privacyCopy, purposeCopy, privacyUnavailableReason, type PrivacyLocale } from '../../_lib/adaptive-copy';
+import { Icon, Spinner } from '../ui';
 import { api, tg, type AgentView } from '../../_lib/client';
 import { VoiceRecognitionPanel } from '../VoiceRecognitionPanel';
 import { MemoryCorrectionEditor } from '../MemoryCorrectionEditor';
@@ -48,6 +48,9 @@ export function PrivacyScreen({ onShared, onExperience, onConnections, onCorrect
   const c = privacyCopy[locale];
   const pause = useProductPause(space);
   const paused = pause.status?.productPaused === true || snapshot?.storedPersonalizationAllowed === false;
+  // Identity confirmation and a current adult declaration are separate facts.
+  const adultDeclarationNeeded = !!snapshot && (!snapshot.identity.adultDeclared || snapshot.explicitMemoryReason === 'adult_required' || snapshot.purposes.some(p => p.reason === 'adult_required'));
+  useLayoutEffect(() => { setAdult(false); }, [adultDeclarationNeeded]);
 
   const load = useCallback(async () => {
     if (pendingCorrectionRef.current) return;
@@ -56,7 +59,7 @@ export function PrivacyScreen({ onShared, onExperience, onConnections, onCorrect
     try {
       const [result, availableAgents] = await Promise.all([adaptiveApi.read(space, locale), api.agents()]);
       if (generation.current !== current) return;
-      setSnapshotSession(session); setSnapshot(result); setNotesStale(false); setAdult(result.identity.adultDeclared); setJurisdiction(result.identity.declaredJurisdiction ?? '');
+      setSnapshotSession(session); setSnapshot(result); setNotesStale(false); setAdult(false); setJurisdiction(result.identity.declaredJurisdiction ?? '');
       setAgents(availableAgents.agents.filter(a => a.status === 'active'));
     } catch { if (generation.current === current) setError(locale === 'fa' ? 'تنظیمات دریافت نشد. دوباره تلاش کنید.' : 'Your settings could not be loaded. Please try again.'); }
   }, [space, locale, session]);
@@ -122,52 +125,60 @@ export function PrivacyScreen({ onShared, onExperience, onConnections, onCorrect
     {snapshot && <>
       <Section label={label('Your memory', 'حافظهٔ شما')}>
       <div className="vx-card vx-privacy-card">
-          <div className="vx-privacy-purpose-heading"><h2 className="vx-head">{c.memoryTitle}</h2><Icon name="lock" size={20} /></div>
-          <p className="vx-small vx-2">{c.memoryBody}</p>
-          <label className="vx-small">{c.memoryLabel}<textarea className="vx-textarea" value={note} rows={3} maxLength={2000} disabled={busy || !snapshot.explicitMemoryAvailable} onChange={e => setNote(e.target.value)} /></label>
-          <p className="vx-small vx-2">{c[space]} · {c.private}</p>
-          {!snapshot.explicitMemoryAvailable && <p className="vx-small vx-2">{c.unavailable}</p>}
-          <button className="vx-btn vx-btn-secondary vx-btn-block" disabled={busy || !note.trim() || !snapshot.explicitMemoryAvailable} onClick={() => void mutate(async () => { const result = await adaptiveApi.save(space, note, snapshot.revision); setNote(''); return result; }, c.saved)}>{c.saveMemory}</button>
-          {!snapshot.memoryCorrectionAvailable && snapshot.memories.some(m => !m.sourceRefs) && <p className="vx-small vx-2">{locale === 'fa' ? 'ویرایش اینجا در دسترس نیست؛ هنوز می‌توانید یادداشت را حذف یا یادداشت تازه‌ای ذخیره کنید.' : 'Editing is unavailable here; you can still delete a note or save a new one.'}</p>}
-          {!snapshot.memories.length && <p className="vx-small vx-2">{c.empty}</p>}
-          {snapshot.memories.map(m => <article key={m.id} className="vx-privacy-note">
-            <p style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{m.text}</p>
-            {m.origin && <p className="vx-small">{locale === 'fa' ? 'ادعای بررسی‌شدهٔ شما؛ به‌طور مستقل تأیید نشده است.' : 'User-reviewed claim; not independently verified.'}</p>}
-            {m.sourceRefs && <p className="vx-small">{locale === 'fa' ? `خلاصهٔ بررسی‌شده از ${m.sourceRefs.length} یادداشت؛ حذف خلاصه، اصل یادداشت‌ها را نگه می‌دارد.` : `Reviewed summary of ${m.sourceRefs.length} notes; deleting this summary keeps the originals.`}</p>}
-            <MemoryCorrectionEditor key={`${space}:${locale}:${snapshot.identity.bindingId ?? 'unconfirmed'}:${m.id}:${m.revision}`} note={m} snapshot={snapshot} locale={locale} disabled={busy || removing === m.id} onSaved={result => { setSnapshot(current => current && current.revision > result.revision ? current : result); setStatus(c.saved); setRemoving(null); }} onRefresh={() => void load()} onPendingChange={correctionPending} onUnconfirmed={savedSpace => setStatus(savedSpace === 'work' ? (locale === 'fa' ? 'ممکن است اصلاح در فضای کاری ذخیره شده باشد. یادداشت‌ها را تازه‌سازی و بررسی کنید.' : 'The correction may have been saved in Work. Refresh notes to check.') : (locale === 'fa' ? 'ممکن است اصلاح در فضای شخصی ذخیره شده باشد. یادداشت‌ها را تازه‌سازی و بررسی کنید.' : 'The correction may have been saved in Personal. Refresh notes to check.'))} />
-            <p className="vx-small vx-2">{c.expires}: {new Date(m.expiresAt).toLocaleDateString(locale === 'fa' ? 'fa-IR' : 'en-GB')}</p>
-            {removing === m.id ? <div>
-              <h3 className="vx-small">{c.deleteTitle}</h3><p className="vx-small vx-2">{c.deleteBody}</p>
-              <div className="vx-privacy-actions"><button className="vx-btn vx-btn-danger vx-btn-sm" disabled={busy} onClick={() => void mutate(() => adaptiveApi.remove(space, m.id, m.revision), c.deleted)}>{c.remove}</button><button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy} onClick={() => setRemoving(null)}>{c.cancel}</button></div>
-            </div> : <button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy} onClick={() => setRemoving(m.id)}>{c.remove}</button>}
-          </article>)}
-        </div>
-      </Section>
-      <Section label={c.optional}>
+        <h2 className="vx-head" id="vox-profile-heading" tabIndex={-1}>{c.identity}</h2><p className="vx-small vx-2">{c.identityBody}</p>
+        {snapshot.identity.confirmed && <p className="vx-privacy-confirmed"><Icon name="check" size={18} /> {c.confirmed}</p>}
+        {(!snapshot.identity.confirmed || adultDeclarationNeeded) && <>
+          <label className="vx-privacy-checkbox"><input type="checkbox" checked={adult} disabled={busy} onChange={e => setAdult(e.target.checked)} />{c.adult}</label>
+          <label className="vx-small">{c.jurisdiction}<input className="vx-input" value={jurisdiction} placeholder="EE / US-CA" maxLength={11} disabled={busy} onChange={e => setJurisdiction(e.target.value.toUpperCase())} aria-describedby="jurisdiction-hint" /></label>
+          <p id="jurisdiction-hint" className="vx-small vx-2">{c.jurisdictionHint}</p>
+          <button className="vx-btn vx-btn-secondary vx-btn-block" disabled={busy || !adult || (!!jurisdiction && !/^[A-Z]{2}(?:-[A-Z0-9]{1,8})?$/.test(jurisdiction))} onClick={() => void mutate(() => adaptiveApi.confirm(space, adult, jurisdiction || undefined), c.confirmed)}>{c.confirm}</button>
+        </>}
+        <p className="vx-small vx-2">{c.accountNote}</p>
+      </div>
+      <h2 className="vx-title-m">{c.optional}</h2>
       <VoiceRecognitionPanel key={space} space={space} locale={locale} />
-        <div className="vx-group">
-          {snapshot.purposes.map(p => {
-            const copy = purposeCopy[p.purpose]?.[locale];
-            const on = p.state === 'granted';
-            const opened = presentation?.purpose === p.purpose;
-            return <div key={p.purpose} className="vx-privacy-purpose">
-              <div className="vx-privacy-purpose-heading"><h3 className="vx-head">{copy?.title ?? p.notice.title}</h3><span className={`vx-pill ${on && p.available ? 'live' : 'lock'}`}>{on ? c.on : ['expired', 'reconsent_required', 'suspended'].includes(p.state) || (on && !p.available) ? c.reviewNeeded : c.off}</span></div>
-              <p className="vx-small vx-2">{copy?.body ?? p.notice.body}</p>
-              {on && paused && ['optional.personalization', 'optional.auto_memory', 'optional.proactive_suggestions', 'optional.relationship_outreach'].includes(p.purpose) && <p className="vx-small">{pauseText(locale, space, 'consent')}</p>}
-              {!p.available && <p className="vx-small vx-2">{c.unavailable}</p>}
-              {opened ? <div className="vx-privacy-notice" aria-label={c.notice}>
-                <h4>{presentation.data.notice.title}</h4><p className="vx-small">{presentation.data.notice.body}</p>
-                <p className="vx-small vx-2">{c.noticeVersion}: {presentation.data.notice.version}</p>
-                <div className="vx-privacy-actions">
-                  <button className="vx-btn vx-btn-secondary" disabled={busy} onClick={() => void mutate(() => adaptiveApi.consent(space, p.purpose, p.revision, 'granted', presentation.data.receipt), c.saved)}>{c.enable}</button>
-                  <button className="vx-btn vx-btn-secondary" disabled={busy} onClick={() => void mutate(() => adaptiveApi.consent(space, p.purpose, p.revision, 'declined', presentation.data.receipt), c.saved)}>{c.decline}</button>
-                </div>
-              </div> : <button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy || (!on && (!p.available || !snapshot.identity.confirmed))} onClick={() => on ? void mutate(() => adaptiveApi.consent(space, p.purpose, p.revision, 'withdrawn'), c.withdrawn) : void review(p.purpose, p.revision)}>{on ? c.withdraw : c.review}</button>}
-            </div>;
-          })}
-        </div>
-      </Section>
-      <Section label={label('Summaries', 'خلاصه‌ها')}>
+      <div className="vx-group">
+        {snapshot.purposes.map(p => {
+          const copy = purposeCopy[p.purpose]?.[locale];
+          const on = p.state === 'granted';
+          const opened = presentation?.purpose === p.purpose;
+          return <div key={p.purpose} className="vx-privacy-purpose">
+            <div className="vx-privacy-purpose-heading"><h3 className="vx-head">{copy?.title ?? p.notice.title}</h3><span className={`vx-pill ${on && p.available ? 'live' : 'lock'}`}>{on && p.available ? c.on : ['expired', 'reconsent_required', 'suspended'].includes(p.state) || (on && !p.available) ? c.reviewNeeded : c.off}</span></div>
+            <p className="vx-small vx-2">{copy?.body ?? p.notice.body}</p>
+            {on && paused && ['optional.personalization', 'optional.auto_memory', 'optional.proactive_suggestions', 'optional.relationship_outreach'].includes(p.purpose) && <p className="vx-small">{pauseText(locale, space, 'consent')}</p>}
+            {!p.available && <p className="vx-small vx-2">{privacyUnavailableReason(p.reason, locale)}</p>}
+            {opened ? <div className="vx-privacy-notice" aria-label={c.notice}>
+              <h4>{presentation.data.notice.title}</h4><p className="vx-small">{presentation.data.notice.body}</p>
+              <p className="vx-small vx-2">{c.noticeVersion}: {presentation.data.notice.version}</p>
+              <div className="vx-privacy-actions">
+                <button className="vx-btn vx-btn-secondary" disabled={busy} onClick={() => void mutate(() => adaptiveApi.consent(space, p.purpose, p.revision, 'granted', presentation.data.receipt), c.saved)}>{c.enable}</button>
+                <button className="vx-btn vx-btn-secondary" disabled={busy} onClick={() => void mutate(() => adaptiveApi.consent(space, p.purpose, p.revision, 'declined', presentation.data.receipt), c.saved)}>{c.decline}</button>
+              </div>
+            </div> : <button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy || (!on && (!p.available || !snapshot.identity.confirmed))} onClick={() => on ? void mutate(() => adaptiveApi.consent(space, p.purpose, p.revision, 'withdrawn'), c.withdrawn) : void review(p.purpose, p.revision)}>{on ? c.withdraw : c.review}</button>}
+          </div>;
+        })}
+      </div>
+      <div className="vx-card vx-privacy-card">
+        <div className="vx-privacy-purpose-heading"><h2 className="vx-head">{c.memoryTitle}</h2><Icon name="lock" size={20} /></div>
+        <p className="vx-small vx-2">{c.memoryBody}</p>
+        <label className="vx-small">{c.memoryLabel}<textarea className="vx-textarea" value={note} rows={3} maxLength={2000} disabled={busy || !snapshot.explicitMemoryAvailable} onChange={e => setNote(e.target.value)} /></label>
+        <p className="vx-small vx-2">{c[space]} · {c.private}</p>
+        {!snapshot.explicitMemoryAvailable && <p className="vx-small vx-2">{privacyUnavailableReason(snapshot.explicitMemoryReason, locale)}</p>}
+        <button className="vx-btn vx-btn-secondary vx-btn-block" disabled={busy || !note.trim() || !snapshot.explicitMemoryAvailable} onClick={() => void mutate(async () => { const result = await adaptiveApi.save(space, note, snapshot.revision); setNote(''); return result; }, c.saved)}>{c.saveMemory}</button>
+        {!snapshot.memoryCorrectionAvailable && snapshot.memories.some(m => !m.sourceRefs) && <p className="vx-small vx-2">{locale === 'fa' ? 'ویرایش اینجا در دسترس نیست؛ هنوز می‌توانید یادداشت را حذف یا یادداشت تازه‌ای ذخیره کنید.' : 'Editing is unavailable here; you can still delete a note or save a new one.'}</p>}
+        {!snapshot.memories.length && <p className="vx-small vx-2">{c.empty}</p>}
+        {snapshot.memories.map(m => <article key={m.id} className="vx-privacy-note">
+          <p style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{m.text}</p>
+          {m.origin && <p className="vx-small">{locale === 'fa' ? 'ادعای بررسی‌شدهٔ شما؛ به‌طور مستقل تأیید نشده است.' : 'User-reviewed claim; not independently verified.'}</p>}
+          {m.sourceRefs && <p className="vx-small">{locale === 'fa' ? `خلاصهٔ بررسی‌شده از ${m.sourceRefs.length} یادداشت؛ حذف خلاصه، اصل یادداشت‌ها را نگه می‌دارد.` : `Reviewed summary of ${m.sourceRefs.length} notes; deleting this summary keeps the originals.`}</p>}
+          <MemoryCorrectionEditor key={`${space}:${locale}:${snapshot.identity.bindingId ?? 'unconfirmed'}:${m.id}:${m.revision}`} note={m} snapshot={snapshot} locale={locale} disabled={busy || removing === m.id} onSaved={result => { setSnapshot(current => current && current.revision > result.revision ? current : result); setStatus(c.saved); setRemoving(null); }} onRefresh={() => void load()} onPendingChange={correctionPending} onUnconfirmed={savedSpace => setStatus(savedSpace === 'work' ? (locale === 'fa' ? 'ممکن است اصلاح در فضای کاری ذخیره شده باشد. یادداشت‌ها را تازه‌سازی و بررسی کنید.' : 'The correction may have been saved in Work. Refresh notes to check.') : (locale === 'fa' ? 'ممکن است اصلاح در فضای شخصی ذخیره شده باشد. یادداشت‌ها را تازه‌سازی و بررسی کنید.' : 'The correction may have been saved in Personal. Refresh notes to check.'))} />
+          <p className="vx-small vx-2">{c.expires}: {new Date(m.expiresAt).toLocaleDateString(locale === 'fa' ? 'fa-IR' : 'en-GB')}</p>
+          {removing === m.id ? <div>
+            <h3 className="vx-small">{c.deleteTitle}</h3><p className="vx-small vx-2">{c.deleteBody}</p>
+            <div className="vx-privacy-actions"><button className="vx-btn vx-btn-danger vx-btn-sm" disabled={busy} onClick={() => void mutate(() => adaptiveApi.remove(space, m.id, m.revision), c.deleted)}>{c.remove}</button><button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy} onClick={() => setRemoving(null)}>{c.cancel}</button></div>
+          </div> : <button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy} onClick={() => setRemoving(m.id)}>{c.remove}</button>}
+        </article>)}
+      </div>
       <ReviewedMemoryPanel key={`${space}:${locale}:${snapshot.identity.bindingId ?? 'unconfirmed'}`} snapshot={snapshot} agents={agents} locale={locale} disabled={busy || !snapshot.explicitMemoryAvailable} pauseBlocked={pause.coveredBlocked} personalizationPaused={paused} pauseEpoch={pause.status?.useEpoch ?? undefined} onSaved={result => { setSnapshot(result); setStatus(c.saved); }} />
       </Section>
       <Section label={c.agents}>

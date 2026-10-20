@@ -1,3 +1,4 @@
+import type { RequestedRoutineEngine } from './routines';
 import { rightsUseAllowed, rightsUseStamp } from '../adaptive/rights-use-holds/state';
 import { hasCommittedPersonalizationTransport } from '../adaptive/persistence/indexed-private-context';
 import type { PreferenceLearningService } from '../adaptive/personalization/learning/service';
@@ -171,6 +172,9 @@ export interface StudioDeps {
   maintenance?: AdaptiveMaintenanceRunner;
   /** Read-only checkpoint observation, independent of worker activation. */
   maintenanceHealth?: () => MaintenanceHealth;
+  requestedRoutines?: RequestedRoutineEngine;
+  /** Dynamic kill switch, checked before each routine effect. */
+  requestedRoutinesEnabled?: () => boolean;
   reminderDelivery?: ReminderDeliveryService;
   /** Credential-bound opaque identifier; never a bot token or a client grant. */
   reminderEndpointId?: string;

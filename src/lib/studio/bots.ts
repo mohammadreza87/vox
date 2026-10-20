@@ -125,6 +125,16 @@ export function startBots(studio: Studio): { stop: () => void } {
   };
   const maintenanceTimer = studio.deps.maintenance ? setInterval(maintain, 60_000) : undefined;
   void maintain();
+  let runningRoutines = false;
+  const runRoutines = async () => {
+    if (stopped || runningRoutines || !studio.deps.requestedRoutines || !studio.deps.requestedRoutinesEnabled?.()) return;
+    runningRoutines = true;
+    try { await studio.deps.requestedRoutines.tick(); }
+    catch { log.warn({ type: 'requested_routines', outcome: 'failed' }); }
+    finally { runningRoutines = false; }
+  };
+  const routineTimer = studio.deps.requestedRoutines ? setInterval(runRoutines, 60_000) : undefined;
+  void runRoutines();
   return {
     stop: () => {
       stopped = true;
@@ -132,6 +142,8 @@ export function startBots(studio: Studio): { stop: () => void } {
       clearInterval(relationshipTimer);
       if (maintenanceTimer) clearInterval(maintenanceTimer);
       maintenanceAbort.abort();
+      if (routineTimer) clearInterval(routineTimer);
+      studio.deps.requestedRoutines?.close();
       for (const loop of loops.values()) loop.stop();
       loops.clear();
       return studio.deps.preferenceLearning?.tasks.close();
