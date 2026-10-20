@@ -4,6 +4,7 @@ import { RightsError, fail } from '../adaptive/rights-intake/repository';
 import { verifyInitData } from './auth';
 import { StudioRateLimiter, StudioRateLimitError } from './ratelimit';
 import { isSchemaValidationError } from '../error-contract';
+import { trustedStudioRequestOrigin } from './request-origin';
 const limiter = new StudioRateLimiter();
 const json = (value: unknown, status = 200, extra: Record<string, string> = {}) => Response.json(value, { status, headers: { 'Cache-Control': 'no-store, max-age=0', 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff', ...extra } });
 /** Independent 4KiB JSON reader: importing Studio's router would load provider modules. */
@@ -21,7 +22,7 @@ async function readGuestBody(request: Request): Promise<unknown> {
     finally { reader.releaseLock(); }
 }
 /** Payloads are never logged; credential-bearing routes reject every query string. */
-export async function handleGuestRightsRequest(service: GuestRightsService | undefined, request: Request, path: string[], botToken: string): Promise<Response> {
+export async function handleGuestRightsRequest(service: GuestRightsService | undefined, request: Request, path: string[], botToken: string, trustedWebAppUrl?: string): Promise<Response> {
     try {
         await limiter.consume('ingress', 'guest-rights');
         const url = new URL(request.url), route = path.join('/');
@@ -55,7 +56,9 @@ export async function handleGuestRightsRequest(service: GuestRightsService | und
         }
         if (request.method !== 'POST')
             return json({ error: 'not_found' }, 404);
-        if (request.headers.get('origin') !== url.origin || request.headers.get('sec-fetch-site') === 'cross-site')
+        const trustedOrigin = trustedStudioRequestOrigin(url, trustedWebAppUrl);
+        if (!trustedOrigin) return json({ error: 'guest_origin_unavailable' }, 503);
+        if (request.headers.get('origin') !== trustedOrigin || request.headers.get('sec-fetch-site') === 'cross-site')
             return json({ error: 'origin_denied' }, 403);
         if (request.headers.get('content-type')?.split(';')[0].trim().toLowerCase() !== 'application/json')
             return json({ error: 'json_required' }, 415);
