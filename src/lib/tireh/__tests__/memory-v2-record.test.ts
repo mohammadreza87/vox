@@ -113,7 +113,7 @@ describe('contentHash', () => {
   });
   it('Arabic presentation forms hash the same as the base letters', () => {
     // U+FEE1 MEEM ISOLATED, U+FE8E ALEF FINAL, U+FEE7 NOON INITIAL -> base letters under NFKC
-    expect(contentHash('ﻡﺎﻧ')).toBe(contentHash('مان'));
-    expect(contentHash('ﻡﺎﻧ')).not.toBe(contentHash('ما'));
+    expect(contentHash('\uFEE1\uFE8E\uFEE7')).toBe(contentHash('\u0645\u0627\u0646'));
+    expect(contentHash('\uFEE1\uFE8E\uFEE7')).not.toBe(contentHash('\u0645\u0627'));
   });
 });
