@@ -47,6 +47,28 @@ test('prepared v2 rejects an old or incomplete candidate even when no person is 
   assert.deepEqual(readFileSync(f.marker), before);
 }));
 
+test('prepared FILE requires explicit body-free authority capability without changing SQLite or legacy admission', () => fixture(f => {
+  const env = { ...f.env, STUDIO_ADAPTIVE_FORMAT: 'file-v2' };
+  const fileMarker = { ...ready(2), format: 'file-v2', fileAuthorityProjectionVersion: 1 };
+  f.setMarker(fileMarker);
+  assert.equal(assertReleaseAdaptiveCompatibility(env, ADAPTIVE_RELEASE_CAPABILITIES).fileAuthorityProjectionVersion, 1);
+  const { supportedFileAuthorityProjectionVersions: omitted, ...priorCapabilities } = ADAPTIVE_RELEASE_CAPABILITIES;
+  assert.deepEqual(omitted, [1]);
+  for (const candidate of [priorCapabilities, { ...priorCapabilities, supportedFileAuthorityProjectionVersions: [] },
+    { ...priorCapabilities, supportedFileAuthorityProjectionVersions: [2] },
+    { ...priorCapabilities, supportedFileAuthorityProjectionVersions: null }]) {
+    assert.throws(() => assertReleaseAdaptiveCompatibility(env, candidate), /incompatible/);
+  }
+  for (const version of [undefined, 0, 2, null]) {
+    f.setMarker({ ...fileMarker, fileAuthorityProjectionVersion: version });
+    assert.throws(() => requiredAdaptiveCapabilities(env), /incompatible/);
+  }
+  f.setMarker(ready(2));
+  assert.equal(assertReleaseAdaptiveCompatibility(f.env, priorCapabilities).canonicalSchemaVersion, 2);
+  f.setMarker({ ...ready(1), format: 'file-v2' });
+  assert.equal(assertReleaseAdaptiveCompatibility(env, null).canonicalSchemaVersion, 1);
+}));
+
 test('transitions, missing controls, unknown markers and mixed configured formats deny admission', () => fixture(f => {
   for (const patch of [{ state: 'transition' }, { version: 3 }, { controlsSchemaVersion: undefined },
     { canonicalSchemaVersion: 1 }, { productPauseEnforcementVersion: 2 }, { unexpected: false },
@@ -129,4 +151,24 @@ test('actual rollback refuses old release before launchctl and leaves current po
   const result = f.invoke('rollback');
   assert.equal(result.status, 1); assert.match(result.stderr, /Adaptive storage is incompatible/);
   assert.equal(existsSync(f.signal), false); assert.equal(realpathSync(join(f.production, 'current')), realpathSync(current));
+}));
+
+test('actual install and rollback reject projection-unaware releases before any effects', () => cliFixture(f => {
+  writeFileSync(join(f.production, 'production.env'), `STUDIO_DATA_DIR='${f.env.STUDIO_DATA_DIR}'\nSTUDIO_ADAPTIVE_FORMAT='file-v2'\n`);
+  f.setMarker({ ...ready(2), format: 'file-v2', fileAuthorityProjectionVersion: 1 });
+  const manifestPath = join(f.project, '.next', 'studio-release.json');
+  const provenance = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  const { supportedFileAuthorityProjectionVersions: omitted, ...priorCapabilities } = ADAPTIVE_RELEASE_CAPABILITIES;
+  assert.deepEqual(omitted, [1]);
+  writeFileSync(manifestPath, JSON.stringify({ ...provenance, ...priorCapabilities }));
+  const install = f.invoke('install');
+  assert.equal(install.status, 1); assert.match(install.stderr, /Adaptive storage is incompatible/);
+  const current = join(f.production, 'current-release'), previous = join(f.production, 'previous-release');
+  for (const dir of [current, previous]) { mkdirSync(dir); writeFileSync(join(dir, 'server.js'), 'synthetic'); }
+  writeFileSync(join(previous, 'studio-release.json'), JSON.stringify({ ...releaseMetadata, ...priorCapabilities }));
+  symlinkSync(current, join(f.production, 'current')); writeFileSync(join(f.production, 'previous'), previous);
+  const rollback = f.invoke('rollback');
+  assert.equal(rollback.status, 1); assert.match(rollback.stderr, /Adaptive storage is incompatible/);
+  assert.equal(existsSync(f.signal), false); assert.equal(existsSync(join(f.production, 'releases')), false);
+  assert.equal(realpathSync(join(f.production, 'current')), realpathSync(current));
 }));

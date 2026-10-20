@@ -10,7 +10,7 @@ import { StudioRateLimiter, StudioRateLimitError } from './ratelimit';
 import { personId } from './org-bridge';
 import { beginObservation } from './observation';
 import { digest } from '../adaptive/persistence/repository';
-import type { RuntimeControlEvaluator } from '../adaptive/persistence/authority';
+import type { DirectAuthorityEvaluator } from '../adaptive/persistence/authority';
 import { AdaptiveError } from '../adaptive/persistence/service';
 import { minimizeImageDataUrl, MAX_IMAGE_URL_LENGTH } from '../adaptive/prediction/image';
 import { LLMAuthorizationError, type LLMImage } from '../tireh/llm';
@@ -50,7 +50,7 @@ export async function handleConversationRequest(studio: Studio, request: Request
     const input = inputSchema.parse(body);
     const adaptive = studio.deps.adaptive;
     const indexed = hasCommittedPersonalizationTransport(adaptive.repository.storage);
-    const scopeEvaluation: RuntimeControlEvaluator<string | null> = (d, now, namespace) => {
+    const scopeEvaluation: DirectAuthorityEvaluator<string | null> = (d, now, namespace) => {
         const core = adaptive.capabilityStatus(d, 'core_text', now);
         const imagePolicy = input.image ? adaptive.capabilityStatus(d, 'single_party_image', now) : null;
         const allowed = adaptive.isCoreAllowed(d, now) && d.agentGrants.some(g => g.agentId === input.agentId && g.space === input.space && g.allowed) &&
@@ -59,7 +59,7 @@ export async function handleConversationRequest(studio: Studio, request: Request
           denied: !allowed, ...(allowed ? {deadline: Math.min(d.binding!.expiresAt, core.validUntil ?? now, imagePolicy?.validUntil ?? Number.MAX_SAFE_INTEGER)} : {})};
       };
     const authority = async (): Promise<string | null> => {
-      const currentScope = () => indexed ? adaptive.withRuntimeControls(user.id, input.space, scopeEvaluation) : adaptive.withAccountDocument(user.id, (d, now) => {
+      const currentScope = () => indexed ? adaptive.withDirectAuthority(user.id, input.space, scopeEvaluation) : adaptive.withAccountDocument(user.id, (d, now) => {
         const imagePolicy = input.image ? adaptive.capabilityStatus(d, 'single_party_image', now) : null;
         if (!adaptive.isCoreAllowed(d, now) || !d.agentGrants.some(g => g.agentId === input.agentId && g.space === input.space && g.allowed) ||
             (imagePolicy && !imagePolicy.eligible)) return null;
@@ -89,10 +89,10 @@ export async function handleConversationRequest(studio: Studio, request: Request
     };
     const authorityNow = (): string | null => {
       if (!indexed) return null;
-      const scope = adaptive.readRuntimeControlsForEffect(user.id, input.space, scopeEvaluation);
+      const scope = adaptive.readDirectAuthorityForEffect(user.id, input.space, scopeEvaluation);
       if (scope.status !== 'ready' || !scope.value) return null;
       const studioAuthority = studio.replyAuthorityNow(input.agentId, user.id);
-      const current = adaptive.readRuntimeControlsForEffect(user.id, input.space, scopeEvaluation);
+      const current = adaptive.readDirectAuthorityForEffect(user.id, input.space, scopeEvaluation);
       return current.status === 'ready' && current.value === scope.value ? digest([scope.value, studioAuthority]) : null;
     };
     const before = await authority();

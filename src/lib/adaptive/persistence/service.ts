@@ -15,7 +15,7 @@ import type { AgentGrantInput, ConsentInput, DeletionInput, IdentityInput, Memor
 import { sweepObserverDocument } from '../observation/helpers';
 import { pruneLearningDocument } from '../personalization/learning/state';
 import { runtimeControlsFromDocument, runtimeControlsFromIndexed, validateRuntimeControlEvaluation,
-  type RuntimeControlEvaluation, type RuntimeControlEvaluator } from './authority';
+  directAuthorityControls, type DirectAuthorityEvaluator, type RuntimeControlEvaluation, type RuntimeControlEvaluator } from './authority';
 import { readIndexedPrivateContext, type PrivateContextSnapshot } from './indexed-private-context';
 
 export class AdaptiveError extends Error {
@@ -272,6 +272,30 @@ export class AdaptiveService {
   }
   sampleServiceClock(): number { return this.sampleClock(this.now); }
   notifyProductPauseCommitted(telegramId: number): void { this.preferenceLearningInvalidator?.(telegramId); }
+  /** Current-input authority never needs stored note/preference/relationship payloads in prepared stores. */
+  async withDirectAuthority<T>(telegramId: number, space: SpaceKind, fn: DirectAuthorityEvaluator<T>): Promise<T> {
+    if (this.repository.storage.indexed || this.repository.storage.canonicalSchemaVersion === 2) {
+      const result = this.readDirectAuthorityForEffect(telegramId, space, fn);
+      if (result.status !== 'ready') return fail(503, 'adaptive_controls_unavailable');
+      return result.value;
+    }
+    return this.withAccountDocument(telegramId, (d, now) => this.evaluateAuthorityClock(this.now,
+      fresh => fn(directAuthorityControls(d), Math.max(now, fresh), this.storeIdentity, undefined)));
+  }
+  readDirectAuthorityForEffect<T>(telegramId: number, space: SpaceKind, fn: DirectAuthorityEvaluator<T>):
+    { status: 'ready'; value: T } | { status: 'busy' | 'unsupported' | 'missing' } {
+    const storage = this.repository.storage;
+    if (storage.canonicalSchemaVersion === 2 && !storage.indexed &&
+        (storage.fileAuthorityProjectionVersion !== 1 || !storage.readDirectAuthorityForEffect)) return { status: 'unsupported' };
+    if (storage.canonicalSchemaVersion === 2 && storage.readDirectAuthorityForEffect) {
+      try { return storage.readDirectAuthorityForEffect(this.account(telegramId), space, fn); }
+      catch { return { status: 'busy' }; }
+    }
+    if (storage.indexed) return this.readRuntimeControlsForEffect(telegramId, space,
+      (d, now, identity, stamp) => fn(directAuthorityControls(d), now, identity, stamp));
+    return this.readCommittedAuthorityForEffect(telegramId, this.now,
+      (d, now) => fn(directAuthorityControls(d), now, this.storeIdentity, undefined));
+  }
   /** Pure authority consumers use compact controls on an explicitly selected
    * indexed store. Mutations and detailed UI snapshots retain the canonical API.
    * The callback must be synchronous. Store identity must bind retained work. */
@@ -458,12 +482,12 @@ export class AdaptiveService {
   /** Indexed mode reads compact controls only. The FILE compatibility path keeps
    * its existing canonical lifecycle sweep; neither projection returns bodies. */
   readAuthority(telegramId: number, space: SpaceKind, locale: 'en' | 'fa' = 'en'): Promise<AdaptiveSnapshot> {
-    if (!this.repository.storage.indexed) return this.transact(telegramId, (d, now) => this.authoritySnapshot(d, space, now, locale));
-    return this.withRuntimeControls(telegramId, space, (d, now) => this.authorityEvaluation(d, space, now, locale));
+    if (!this.repository.storage.indexed && this.repository.storage.canonicalSchemaVersion !== 2) return this.transact(telegramId, (d, now) => this.authoritySnapshot(d, space, now, locale));
+    return this.withDirectAuthority(telegramId, space, (d, now) => this.authorityEvaluation(d, space, now, locale));
   }
   /** Exact authority projection at the configured transport boundary. */
   readAuthorityNow(telegramId: number, space: SpaceKind, locale: 'en' | 'fa' = 'en'): AdaptiveSnapshot & { validUntil: number } {
-    const current = this.readRuntimeControlsForEffect(telegramId, space, (d, now) => {
+    const current = this.readDirectAuthorityForEffect(telegramId, space, (d, now) => {
       const evaluation = this.authorityEvaluation(d, space, now, locale);
       return { ...evaluation, value: { ...evaluation.value, validUntil: evaluation.deadline ?? INFINITY } };
     });
@@ -710,14 +734,14 @@ export class AdaptiveService {
     read: async (personaId: string, legacyPersonId: string, space: SpaceKind = 'work'): Promise<{ revision: string; memoryEnabled: boolean; historyEnabled: boolean; storedContextAllowed: boolean }> => {
       const match = /^tg-([1-9]\d*)$/.exec(legacyPersonId);
       if (!match) return { revision: 'unconfirmed', memoryEnabled: false, historyEnabled: false, storedContextAllowed: false };
-      if (this.repository.storage.indexed) return this.withRuntimeControls(Number(match[1]), space,
+      if (this.repository.storage.indexed || this.repository.storage.canonicalSchemaVersion === 2) return this.withDirectAuthority(Number(match[1]), space,
         (d, now, namespace) => this.runtimePrivacyEvaluation(d, now, namespace, personaId, space));
       return this.transact(Number(match[1]), (d, now) => this.runtimePrivacyEvaluation(d, now, this.storeIdentity, personaId, space).value);
     },
     readNow: (personaId: string, legacyPersonId: string, space: SpaceKind = 'work'): { revision: string; memoryEnabled: boolean; historyEnabled: boolean; storedContextAllowed: boolean; validUntil: number } => {
       const match = /^tg-([1-9]\d*)$/.exec(legacyPersonId);
       if (!match) return { revision: 'unconfirmed', memoryEnabled: false, historyEnabled: false, storedContextAllowed: false, validUntil: INFINITY };
-      const result = this.readRuntimeControlsForEffect(Number(match[1]), space,
+      const result = this.readDirectAuthorityForEffect(Number(match[1]), space,
         (d, now, namespace) => {
           const evaluation = this.runtimePrivacyEvaluation(d, now, namespace, personaId, space);
           return { ...evaluation, value: { ...evaluation.value, validUntil: evaluation.deadline ?? INFINITY } };

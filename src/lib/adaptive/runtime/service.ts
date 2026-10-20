@@ -277,7 +277,7 @@ export class AdaptiveExperienceService {
    * completed response means responded; it never establishes task success. */
   recordTurn(telegramId: number, value: TurnInput): Promise<{ recorded: boolean; inboxCreated: boolean }> {
     const input = turnInputSchema.parse(value);
-    return this.adaptive.withAccountDocument(telegramId, (d, now) => {
+    const record = () => this.adaptive.withAccountDocument(telegramId, (d, now) => {
       this.pruneDocument(d, now);
       if (input.origin !== 'human') return { recorded: false, inboxCreated: false };
       const analytics = this.purpose(d, input.space, 'optional.product_analytics', now, input.agentId);
@@ -310,6 +310,12 @@ export class AdaptiveExperienceService {
       }
       this.bump(d, now); return { recorded, inboxCreated };
     });
+    if (this.adaptive.repository.storage.canonicalSchemaVersion === 2) return this.adaptive.withDirectAuthority(telegramId, input.space, (d, now) => {
+      const permitted = input.origin === 'human' && (this.adaptive.isPurposeAllowed(d, input.space, 'optional.product_analytics', now, input.agentId) ||
+        this.adaptive.isPurposeAllowed(d, input.space, 'optional.proactive_suggestions', now, input.agentId));
+      return { value: permitted, denied: !permitted };
+    }).then(permitted => permitted ? record() : { recorded: false, inboxCreated: false });
+    return record();
   }
   /** Fresh explicit preferences only. Caller must compare receipt before provider
    * export and output, just as for private memory context. */

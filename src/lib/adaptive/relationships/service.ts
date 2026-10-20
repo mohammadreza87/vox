@@ -104,10 +104,20 @@ export class AdaptiveRelationshipService {
     if (this.adaptive.repository.storage.indexed) return this.adaptive.withRuntimeControls(telegramId, space, (d, now) => ({ value: evaluate(d, now), denied: true }));
     return this.adaptive.withAccountDocument(telegramId, evaluate);
   }
+  /** Reject paused use before reading relationship controls/sources from canonical FILE. */
+  private pausedUse(telegramId: number, space: SpaceKind): boolean {
+    if (this.adaptive.repository.storage.canonicalSchemaVersion !== 2) return false;
+    const state = this.adaptive.readDirectAuthorityForEffect(telegramId, space, (d, now) => ({
+      value: !this.adaptive.isStoredPersonalizationUseAllowed(d, space), denied: true,
+      observedDenial: !this.adaptive.isProfileConfirmed(d, now),
+    }));
+    return state.status !== 'ready' || state.value;
+  }
   /** Current committed authority at the final synchronous transport boundary.
    * FILE fallback reads committed controls; it never prunes or writes a draft. */
   resolveNow(telegramId: number, agentId: string, space: SpaceKind): RelationshipPermit | null {
     try {
+      if (this.pausedUse(telegramId, space)) return null;
       const result = this.adaptive.readRuntimeControlsForEffect(telegramId, space, (d, now) => {
         const value = this.permit(d, agentId, space, now);
         return { value, denied: !value, ...(value ? { deadline: value.expiresAt } : {}) };
@@ -128,6 +138,7 @@ export class AdaptiveRelationshipService {
     } catch { return null; }
   }
   resolve(telegramId: number, agentId: string, space: SpaceKind): Promise<RelationshipPermit | null> {
+    if (this.pausedUse(telegramId, space)) return Promise.resolve(null);
     if (this.adaptive.repository.storage.indexed) return this.adaptive.withRuntimeControls(telegramId, space, (d, now) => {
       const value = this.permit(d, agentId, space, now);
       return { value, denied: !value, ...(value ? { deadline: value.expiresAt } : {}) };

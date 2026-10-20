@@ -431,6 +431,7 @@ it.each(['sqlite','file'].flatMap(format => ['direct', 'tap', 'call', 'telegram'
   f.h.studio.deps.botFor = () => new TelegramBotClient('synthetic-key', async (url) => {
     sent.push(String(url)); return Response.json({ok:true,result:String(url).endsWith('sendChatAction') ? true : {message_id:900,chat:{id:ID.alice,type:'private'}}});
   });
+  const canonicalRead = format === 'file' ? vi.spyOn(f.storage as unknown as {record(...args: unknown[]): unknown}, 'record') : undefined;
   const current = 'CURRENT_GENERIC_INPUT';
   if (route === 'direct') {const response = await handleConversationRequest(f.h.studio, f.request(current), TOKEN); expect(response.status).toBe(200); expect(await response.text()).toContain('PAUSED_GENERIC_REPLY');}
   if (route === 'tap') {f.h.openai.transcribe.mockResolvedValue(current); const result = await f.h.studio.callTurn(f.users.alice, f.agent.id, new ArrayBuffer(3), 'audio/webm'); expect(result).toMatchObject({reply:'PAUSED_GENERIC_REPLY',audio:'AQID'});}
@@ -439,7 +440,9 @@ it.each(['sqlite','file'].flatMap(format => ['direct', 'tap', 'call', 'telegram'
   expect(transport).toHaveBeenCalledTimes(1); const fullRequest = String(transport.mock.calls[0][1]?.body);
   expect(fullRequest).toContain(current); expect(fullRequest).not.toMatch(/PRIVATE_NOTE_CANARY|DERIVED_SUMMARY_CANARY|UNKNOWN_HISTORY_CANARY|PLATFORM_HISTORY_CANARY|PRIVATE_SHARED_CANARY|SYNTHETIC_LIVE_RELATIONSHIP_STYLE|response_length/);
   if (format === 'sqlite') expect(f.storage.io.bodyRowsRead).toBe(0);
+  else { expect(f.storage.io.canonicalImageReads).toBe(0); expect(canonicalRead).not.toHaveBeenCalled(); }
   const after = await f.adaptive.withAccountDocument(ID.alice, d => ({memories:d.memories,preferences:d.experience.preferences,sources:d.relationships.sources,consent:d.permissions})); expect(after).toEqual(before);
+  if (format === 'file') expect(canonicalRead).toHaveBeenCalledOnce(); // Own-management positive control opens the canonical image.
   expect((await relation.store.read(relation.permit.key)).preferences[0].value).toBe('SYNTHETIC_LIVE_RELATIONSHIP_STYLE');
 });
 it.each(['sqlite','file'] as const)('pause then resume during actual SDK preparation never sanitizes old request on %s', async format => {

@@ -2,7 +2,7 @@
 /** Explicit local administration only. No default command/root/format, no
  * activation, provider requests, feature grants or migration-time restore. */
 import { resolve } from 'path';
-import { prepareProductPauseAdaptiveStorage, migrateAdaptiveStorage, inspectManagedTransition, finalizeManagedTransition, recoverManagedReadyStorage, abortPreparedManagedTransition } from '../src/lib/adaptive/persistence/indexed/migration';
+import { prepareFileAuthorityAdaptiveStorage, prepareProductPauseAdaptiveStorage, migrateAdaptiveStorage, inspectManagedTransition, finalizeManagedTransition, recoverManagedReadyStorage, abortPreparedManagedTransition } from '../src/lib/adaptive/persistence/indexed/migration';
 import { rollbackAdaptiveStorage } from '../src/lib/adaptive/persistence/indexed/rollback';
 import { IndexedStorageError } from '../src/lib/adaptive/persistence/indexed/contracts';
 async function main(): Promise<void> {
@@ -17,6 +17,10 @@ async function main(): Promise<void> {
   const requested = flags.get('--root'); if (typeof requested !== 'string') throw new IndexedStorageError('invalid_scope'); const root = resolve(requested);
   if (command === 'inspect') { if (flags.size !== 1) throw new IndexedStorageError('invalid_scope'); console.log(JSON.stringify(inspectManagedTransition(root))); return; }
   if (flags.get('--quiesced') !== true) throw new IndexedStorageError('invalid_scope');
+  if (command === 'prepare-file-authority') {
+    if (flags.size !== 2) throw new IndexedStorageError('invalid_scope');
+    console.log(JSON.stringify(await prepareFileAuthorityAdaptiveStorage(root, { quiesced: true }))); return;
+  }
   if (command === 'prepare-product-pause') {
     const format = flags.get('--format');
     if (flags.size !== 3 || !['sqlite-v1', 'file-v2'].includes(String(format))) throw new IndexedStorageError('invalid_scope');

@@ -134,3 +134,19 @@ it('performs exactly one fresh read at initial unknown admission and never stamp
   expect(screen.queryByText('UNVERIFIED_OLD_INBOX')).toBeNull(); expect(screen.getByText('QUALIFIED_FIRST_INBOX')).toBeVisible(); expect(api.relationship).toHaveBeenCalledTimes(2);
   view.rerender(relationshipElement()); expect(api.relationship).toHaveBeenCalledTimes(2);
 });
+
+it('reacquires check-ins after a loading status refresh without admitting the old inbox', async () => {
+  relationshipPause(0, false);
+  const view = render(relationshipElement());
+  await screen.findByText('work private check-in');
+  let finish!: (value: { relationship: RelationshipView }) => void;
+  vi.mocked(api.relationship).mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+  relationshipPause(0, false, 'account-a', 'loading'); view.rerender(relationshipElement());
+  expect(screen.queryByText('work private check-in')).toBeNull();
+  relationshipPause(0, false); view.rerender(relationshipElement());
+  await waitFor(() => expect(api.relationship).toHaveBeenCalledTimes(2));
+  expect(screen.queryByText('work private check-in')).toBeNull();
+  await act(async () => finish({ relationship: make('work', { inbox: [{ ...make('work').inbox[0], text: 'FRESH_VERIFIED_CHECKIN' }] }) }));
+  expect(screen.getByText('FRESH_VERIFIED_CHECKIN')).toBeVisible();
+  view.rerender(relationshipElement()); expect(api.relationship).toHaveBeenCalledTimes(2);
+});

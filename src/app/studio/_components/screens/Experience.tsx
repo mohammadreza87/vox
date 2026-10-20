@@ -64,25 +64,32 @@ export function ExperienceScreen({ onBack, role, notificationId }: { onBack: () 
     setInbox(value.settings[value.space].inboxEnabled); setProactive(value.settings[value.space].proactiveEnabled); setReminders(value.settings[value.space].reminderEnabled);
     return true;
   }, []);
-  const load = useCallback(async () => {
+  const load = useCallback(async (preserveSelection = false) => {
     const requestedUse = currentUse.current;
     if (requestedUse.scope !== scope) return;
     const current = ++generation.current;
-    setData(null); setError(''); setStatus('');
+    if (!preserveSelection) setData(null);
+    setError(''); setStatus('');
     try {
       const [snapshot, listed] = await Promise.all([experienceApi.read(space), api.agents()]);
       if (generation.current !== current) return;
-      if (!apply(snapshot, requestedUse)) return; setAgents(listed.agents.filter(a => a.status === 'active')); setAgentId('');
+      if (!apply(snapshot, requestedUse)) return;
+      const activeAgents = listed.agents.filter(a => a.status === 'active');
+      setAgents(activeAgents);
+      setAgentId(current => preserveSelection && activeAgents.some(agent => agent.id === current) ? current : '');
     } catch { if (generation.current === current) setError('Settings could not be loaded. / تنظیمات دریافت نشد.'); }
   }, [space, scope, apply]);
   const invalidate = useCallback(() => { generation.current++; }, []);
   useLayoutEffect(() => { setBusy(false); void load(); return invalidate; }, [load, invalidate]);
   useEffect(() => {
-    if (admission.current.waiting && !blocked) {
+    if (pause.phase === 'loading' && pause.status?.productPaused !== true) admission.current.waiting = true;
+    if (admission.current.waiting && !blocked && !busy) {
       admission.current.waiting = false;
-      void load(); // Fresh acquisition after initial unknown readiness, once per scope.
+      // Keep mounted controls and selection while acquiring new use authority.
+      // Unmounting a child would trigger another shared status refresh.
+      void load(true);
     }
-  }, [blocked, load]);
+  }, [blocked, busy, load, pause.phase, pause.status?.productPaused]);
   useEffect(() => {
     let active = true;
     if (!notificationId || typeof experienceApi.resolveNotification !== 'function') return;

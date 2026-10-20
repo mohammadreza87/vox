@@ -1,3 +1,4 @@
+import { productPauseUseControlsSchema } from '../product-pause/contracts';
 import { compactProductPause } from '../product-pause/state';
 import type { AdaptiveAuthorityDocument, AdaptiveDocument } from './repository';
 import { types as utilTypes } from 'node:util';
@@ -9,6 +10,18 @@ export type AdaptiveRuntimeControls = AdaptiveAuthorityDocument & Pick<AdaptiveD
   experience: Pick<AdaptiveDocument['experience'], 'preferences' | 'settings' | 'predictionTurns' | 'preferenceLearning'>;
   relationships: Pick<AdaptiveDocument['relationships'], 'controls' | 'bindings' | 'sources' | 'externalSettings'>;
 };
+
+/** Narrow current-input authority: no stored preferences, relationship data or note metadata. */
+export type AdaptiveDirectAuthorityControls = AdaptiveAuthorityDocument & Pick<AdaptiveDocument, 'revision' | 'updatedAt'>;
+export type DirectAuthorityEvaluator<T> = (controls: Readonly<AdaptiveDirectAuthorityControls>, now: number,
+  storeIdentity: string, stamp: Readonly<IndexedControlStamp> | undefined) => RuntimeControlEvaluation<T>;
+export function directAuthorityControls(d: AdaptiveDirectAuthorityControls): AdaptiveDirectAuthorityControls {
+  return freezeControls(structuredClone({ schemaVersion: d.schemaVersion,
+    ...(d.productPause ? { productPause: productPauseUseControlsSchema.parse({ version: 1, scopes: d.productPause.scopes.map(({ space, productPaused, useEpoch }) => ({ space, productPaused, useEpoch })) }) } : {}),
+    accountId: d.accountId, personId: d.personId, createdAt: d.createdAt, updatedAt: d.updatedAt,
+    revision: d.revision, ...(d.binding ? { binding: d.binding } : {}),
+    ...(d.declaration ? { declaration: d.declaration } : {}), permissions: d.permissions, agentGrants: d.agentGrants }));
+}
 
 /** observedDenial publishes mixed negative feature observations without waiving
  * the positive deadline. A pure evaluator identifies denial and the earliest external

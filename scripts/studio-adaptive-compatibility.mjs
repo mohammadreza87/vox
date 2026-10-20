@@ -6,6 +6,7 @@ export const ADAPTIVE_RELEASE_CAPABILITIES = Object.freeze({
   supportedAdaptiveDataSchemas: Object.freeze([1, 2]),
   supportedAdaptiveControlSchemas: Object.freeze([1, 2]),
   productPauseEnforcementVersion: 1,
+  supportedFileAuthorityProjectionVersions: Object.freeze([1]),
 });
 const fail = () => { throw new Error('Adaptive storage is incompatible with this release; current personalization controls must be preserved.'); };
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -50,13 +51,16 @@ export function requiredAdaptiveCapabilities(env) {
   const marker = readPlainJson(join(managed, 'format.json'));
   const common = ['version', 'state', 'rootId', 'format', 'store', 'identity', 'watermarkFloor'];
   const extra = ['canonicalSchemaVersion', 'controlsSchemaVersion', 'productPauseEnforcementVersion'];
+  const fileProjection = marker?.version === 2 && format === 'file-v2' ? ['fileAuthorityProjectionVersion'] : [];
   if (!object(marker) || ![1, 2].includes(marker.version) ||
-      !keys(marker, marker.version === 1 ? common : [...common, ...extra]) || marker.state !== 'ready' || marker.format !== format ||
+      !keys(marker, marker.version === 1 ? common : [...common, ...extra, ...fileProjection]) || marker.state !== 'ready' || marker.format !== format ||
       !uuid(marker.rootId) || !uuid(marker.store) || !keys(marker.identity, ['incarnation', 'generation']) ||
       !uuid(marker.identity.incarnation) || !integer(marker.identity.generation) || marker.identity.generation < 1 || !integer(marker.watermarkFloor)) fail();
   if (marker.version === 1) return { canonicalSchemaVersion: 1, controlsSchemaVersion: 1, productPauseEnforcementVersion: 0 };
   if (marker.canonicalSchemaVersion !== 2 || marker.controlsSchemaVersion !== 2 || marker.productPauseEnforcementVersion !== 1) fail();
-  return { canonicalSchemaVersion: 2, controlsSchemaVersion: 2, productPauseEnforcementVersion: 1 };
+  if (fileProjection.length && marker.fileAuthorityProjectionVersion !== 1) fail();
+  return { canonicalSchemaVersion: 2, controlsSchemaVersion: 2, productPauseEnforcementVersion: 1,
+    ...(fileProjection.length ? { fileAuthorityProjectionVersion: 1 } : {}) };
 }
 
 export function assertReleaseAdaptiveCompatibility(env, manifest) {
@@ -65,10 +69,13 @@ export function assertReleaseAdaptiveCompatibility(env, manifest) {
   const supplied = fields.some(key => object(manifest) && Object.hasOwn(manifest, key));
   const supported = supplied ? manifest : { supportedAdaptiveDataSchemas: [1], supportedAdaptiveControlSchemas: [1], productPauseEnforcementVersion: 0 };
   const schemas = value => Array.isArray(value) && value.length > 0 && value.length <= 2 && new Set(value).size === value.length && value.every(x => x === 1 || x === 2);
+  const fileVersions = Object.hasOwn(supported, 'supportedFileAuthorityProjectionVersions') ? supported.supportedFileAuthorityProjectionVersions : [];
   if (!schemas(supported.supportedAdaptiveDataSchemas) || !schemas(supported.supportedAdaptiveControlSchemas) ||
+      !Array.isArray(fileVersions) || fileVersions.length > 1 || fileVersions.some(version => version !== 1) ||
       ![0, 1].includes(supported.productPauseEnforcementVersion) ||
       !supported.supportedAdaptiveDataSchemas.includes(required.canonicalSchemaVersion) ||
       !supported.supportedAdaptiveControlSchemas.includes(required.controlsSchemaVersion) ||
-      supported.productPauseEnforcementVersion < required.productPauseEnforcementVersion) fail();
+      supported.productPauseEnforcementVersion < required.productPauseEnforcementVersion ||
+      required.fileAuthorityProjectionVersion === 1 && !fileVersions.includes(1)) fail();
   return required;
 }

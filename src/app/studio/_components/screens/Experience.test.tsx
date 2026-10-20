@@ -117,3 +117,24 @@ it('makes one genuinely fresh initial read after unknown admission, keeping norm
   experiencePause(0, false); view.rerender(experienceElement()); await screen.findByText(derivedTitle); expect(screen.getByLabelText('Maximum suggestions per 24 hours')).toHaveValue(12); expect(mocks.read).toHaveBeenCalledTimes(2);
   await act(async () => finish(richSnapshot(18))); expect(screen.getByLabelText('Maximum suggestions per 24 hours')).toHaveValue(12); expect(screen.getByText(derivedTitle)).toBeVisible(); view.rerender(experienceElement()); expect(mocks.read).toHaveBeenCalledTimes(2);
 });
+
+it('reacquires inbox after status verification while keeping the selected agent mounted', async () => {
+  experiencePause(0, false); mocks.read.mockResolvedValueOnce(richSnapshot(7));
+  const view = render(experienceElement());
+  await screen.findByText(derivedTitle);
+  fireEvent.change(screen.getByLabelText('Agent'), { target: { value: 'agent' } });
+  await screen.findByLabelText('Reply length');
+  let finish!: (value: ReturnType<typeof richSnapshot>) => void;
+  mocks.read.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+  experiencePause(0, false, 'account-a', 'loading'); view.rerender(experienceElement());
+  expect(screen.queryByText(derivedTitle)).toBeNull();
+  experiencePause(0, false); view.rerender(experienceElement());
+  await waitFor(() => expect(mocks.read).toHaveBeenCalledTimes(2));
+  expect(screen.getByLabelText('Agent')).toHaveValue('agent');
+  expect(screen.queryByText(derivedTitle)).toBeNull();
+  await act(async () => finish(richSnapshot(12)));
+  expect(screen.getByText(derivedTitle)).toBeVisible();
+  expect(screen.getByLabelText('Agent')).toHaveValue('agent');
+  expect(screen.getByLabelText('Maximum suggestions per 24 hours')).toHaveValue(12);
+  view.rerender(experienceElement()); expect(mocks.read).toHaveBeenCalledTimes(2);
+});

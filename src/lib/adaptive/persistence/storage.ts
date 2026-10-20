@@ -4,6 +4,8 @@ import { promises as fs, existsSync, readFileSync, renameSync } from 'fs';
 import { join } from 'path';
 import type { Firestore } from 'firebase-admin/firestore';
 import { FieldPath } from 'firebase-admin/firestore';
+import type { DirectAuthorityEvaluator } from './authority';
+import type { SpaceKind } from './repository';
 import type { IndexedAdaptiveQueries } from './indexed/contracts';
 
 export interface AdaptiveAccountPage { accountIds: string[]; next?: string }
@@ -12,6 +14,8 @@ export interface AdaptiveAccountPageInput { after?: string; limit: number }
 export interface AdaptiveStorage {
   /** Only explicit prepared stores create/accept the v2 canonical cohort. */
   readonly canonicalSchemaVersion?: 1 | 2;
+  /** Required only for the prepared FILE narrow authority layout. */
+  readonly fileAuthorityProjectionVersion?: 1;
   /** Managed-format namespace, never an access grant. Original FILE has none. */
   readonly identity?: Readonly<{ incarnation: string; generation: number }>;
   /** Optional server-only read model. Presence never selects or migrates a store. */
@@ -25,6 +29,9 @@ export interface AdaptiveStorage {
   /** Callback must be synchronous and retry safe. A throw commits nothing. */
   transact<T>(accountId: string, mutate: (current: unknown | null) => { document: unknown; result: T }, beforeCommit?: () => void): Promise<T>;
   readonly supportsCommittedWriteFence?: true;
+  /** Explicit narrow authority channel. Presence does not advertise indexed queries or body access. */
+  readDirectAuthorityForEffect?<T>(accountId: string, space: SpaceKind, evaluate: DirectAuthorityEvaluator<T>):
+    { status: 'ready'; value: T } | { status: 'busy' | 'unsupported' | 'missing' };
   /** File-only effect fence; synchronous committed snapshot, no writer in progress. */
   readCommittedForEffect?(accountId: string): { status: 'ready'; document: unknown | null } | { status: 'busy' };
   /** Server maintenance only. Opaque stable key cursor; never returns document payloads.

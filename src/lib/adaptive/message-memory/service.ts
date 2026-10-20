@@ -48,16 +48,14 @@ export class MessageMemoryService {
   private currentNow(telegramId: number, input: Pick<Receipt, 'space' | 'agentId'>) {
     const studio = this.options.agentAuthorityNow(telegramId, input.agentId);
     const evaluate = (d: AdaptiveAuthorityDocument, now: number) => { const value = this.state(d, now, input, studio); return {value, deadline:value.expiresAt}; };
-    const result = this.adaptive.repository.storage.indexed ? this.adaptive.readRuntimeControlsForEffect(telegramId, input.space, evaluate)
-      : this.adaptive.readCommittedAuthorityForEffect(telegramId, this.now, evaluate);
+    const result = this.adaptive.readDirectAuthorityForEffect(telegramId, input.space, evaluate);
     if (result.status !== 'ready') return unavailable();
     return result.value;
   }
   private async current(telegramId: number, input: Pick<Receipt, 'space' | 'agentId'>, signal?: AbortSignal) {
     if (signal?.aborted) return changed();
     const studio = await this.options.agentAuthority(telegramId, input.agentId);
-    const before = this.adaptive.repository.storage.indexed ? await this.adaptive.withRuntimeControls(telegramId, input.space, (d, now) => {const value = this.state(d, now, input, studio); return {value,deadline:value.expiresAt};})
-      : await this.adaptive.withAccountDocument(telegramId, (d, now) => this.state(d, now, input, studio));
+    const before = await this.adaptive.withDirectAuthority(telegramId, input.space, (d, now) => { const value = this.state(d, now, input, studio); return { value, deadline: value.expiresAt }; });
     if (signal?.aborted) return changed();
     const current = this.currentNow(telegramId, input);
     if (before.authority !== current.authority) return changed();

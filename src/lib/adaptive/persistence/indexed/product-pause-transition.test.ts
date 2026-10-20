@@ -8,7 +8,7 @@ import { AdaptiveService } from '../service';
 import { ProductPauseService } from '../../product-pause/service';
 import { markerPath, readMarker, storePath, openManagedAdaptiveStorage, type ManagedAdaptiveStorage } from './managed-storage';
 import { accountKey } from './projection';
-import { migrateAdaptiveStorage, prepareProductPauseAdaptiveStorage, finalizeManagedTransition, abortPreparedManagedTransition } from './migration';
+import { migrateAdaptiveStorage, prepareProductPauseAdaptiveStorage, prepareFileAuthorityAdaptiveStorage, finalizeManagedTransition, abortPreparedManagedTransition } from './migration';
 import { rollbackAdaptiveStorage } from './rollback';
 import { SqliteAdaptiveStorage } from './sqlite-storage';
 const paths: string[] = [], stores: ManagedAdaptiveStorage[] = [];
@@ -92,4 +92,53 @@ it('converted v2 reserved block cannot be dropped through a content callback', a
   await expect(repo.transaction(accountId, 2000, d => { delete d.productPause; })).rejects.toThrow(); expect(digest(current(s))).toBe(before);
   const raw = current(s); expect(() => upgradeLegacyAdaptiveDocumentV1ForProductPause(raw, accountId, 2000)).toThrow();
   expect(validateAdaptiveDocument(normalizeLegacyAdaptiveDocument(raw, accountId, 2000), accountId, 2000)).toEqual(raw);
+});
+
+async function oldPreparedFileFixture() {
+  const f = await fixture();
+  await prepareProductPauseAdaptiveStorage(f.root, 'file-v2', { quiesced: true, now: () => 2000 });
+  const s = f.open('file-v2');
+  await new ProductPauseService(new AdaptiveService(new AdaptiveRepository(s), { now: () => 2000 })).command(123,
+    { version: 1, eventId: 'old-pause'.repeat(3), expectedCommandSeq: 0, space: 'work', action: 'pause' });
+  const expected = current(s), identity = s.identity; s.close();
+  const marker = readMarker(f.root); if (marker.state !== 'ready') throw Error('missing');
+  const file = join(storePath(f.root, marker.store), 'head.json'), head = JSON.parse(readFileSync(file, 'utf8'));
+  delete head.authorityProjectionVersion;
+  for (const row of head.accounts) { delete row.authorityFile; delete row.authorityDigest; }
+  writeFileSync(file, JSON.stringify(head));
+  rmSync(join(storePath(f.root, marker.store), 'authority'), { recursive: true });
+  const oldMarker = { ...marker } as Record<string, unknown>; delete oldMarker.fileAuthorityProjectionVersion;
+  writeFileSync(markerPath(f.root), JSON.stringify(oldMarker));
+  return { ...f, expected, identity, markerBytes: readFileSync(markerPath(f.root)), headBytes: readFileSync(file), file };
+}
+it('old prepared FILE refuses normal open; explicit same-format authority conversion preserves all current state under a fresh namespace', async () => {
+  const f = await oldPreparedFileFixture();
+  expect(() => f.open('file-v2')).toThrow();
+  expect(readFileSync(markerPath(f.root))).toEqual(f.markerBytes); expect(readFileSync(f.file)).toEqual(f.headBytes);
+  const result = await prepareFileAuthorityAdaptiveStorage(f.root, { quiesced: true, now: () => 2000 });
+  expect(result.identity.incarnation).not.toBe(f.identity.incarnation); expect(result.identity.generation).toBe(f.identity.generation + 1);
+  expect(readMarker(f.root)).toMatchObject({ fileAuthorityProjectionVersion: 1 });
+  const s = f.open('file-v2'); expect(digest(current(s))).toBe(digest(f.expected));
+  const snapshot = s.readDirectAuthorityForEffect!(accountId, 'work', d => ({ value: d.productPause!.scopes[0].productPaused, denied: true }));
+  expect(snapshot).toMatchObject({ status: 'ready', value: true });
+});
+it('authority-layout conversion resumes only the verified exact new target after response loss', async () => {
+  const f = await oldPreparedFileFixture();
+  await expect(prepareFileAuthorityAdaptiveStorage(f.root, { quiesced: true, now: () => 2000, afterPhase: phase => { if (phase === 'verified') throw Error('interrupted'); } })).rejects.toThrow('interrupted');
+  const marker = readMarker(f.root); if (marker.state !== 'transition') throw Error('missing');
+  expect(marker).toMatchObject({ fileAuthorityProjectionVersion: 1 });
+  expect(() => f.open('file-v2')).toThrow();
+  await finalizeManagedTransition(f.root, { quiesced: true, transitionId: marker.id, sourceDigest: marker.sourceDigest, now: () => 2000 });
+  expect(digest(current(f.open('file-v2')))).toBe(digest(f.expected));
+});
+
+it('verified layout conversion cannot finalize a target whose authority projection disagrees with the published target reference', async () => {
+  const f = await oldPreparedFileFixture();
+  await expect(prepareFileAuthorityAdaptiveStorage(f.root, { quiesced: true, now: () => 2000, afterPhase: phase => { if (phase === 'verified') throw Error('interrupted'); } })).rejects.toThrow();
+  const marker = readMarker(f.root); if (marker.state !== 'transition') throw Error('missing');
+  const path = storePath(f.root, marker.targetStore), head = JSON.parse(readFileSync(join(path, 'head.json'), 'utf8'));
+  const file = join(path, 'authority', `${head.accounts[0].authorityFile}.json`), image = JSON.parse(readFileSync(file, 'utf8'));
+  image.controls.productPause.scopes[0].productPaused = false; writeFileSync(file, JSON.stringify(image));
+  await expect(finalizeManagedTransition(f.root, { quiesced: true, transitionId: marker.id, sourceDigest: marker.sourceDigest, now: () => 2000 })).rejects.toThrow();
+  expect(readMarker(f.root).state).toBe('transition'); expect(() => f.open('file-v2')).toThrow();
 });

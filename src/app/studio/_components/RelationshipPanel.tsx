@@ -56,11 +56,12 @@ export function RelationshipPanel({ agentId, name, space = 'work', locale = 'en'
     return () => { sequence.current++; };
   }, [load]);
   useEffect(() => {
-    if (admission.current.waiting && !blocked) {
+    if (pause.phase === 'loading' && pause.status?.productPaused !== true) admission.current.waiting = true;
+    if (admission.current.waiting && !blocked && !busy) {
       admission.current.waiting = false;
-      void load(); // One new read after initial unknown readiness, never relabel an old payload.
+      void load(); // Reacquire after status verification; never relabel an old payload.
     }
-  }, [blocked, load]);
+  }, [blocked, busy, load, pause.phase, pause.status?.productPaused]);
   useLayoutEffect(() => {
     setStored(current => current && current.use !== boundary ? { ...current, value: { ...current.value, inbox: [] } } : current);
   }, [boundary]);

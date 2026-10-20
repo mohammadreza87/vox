@@ -57,6 +57,9 @@ async function installStudioFixtures(page: Page, externalAvailable = false) {
     let result: unknown;
     if (path === 'me') result = { member: members[0], org: 'Fixture Studio', bot: 'fixture_bot', features: { avatars: false, voices: false, calls: false, legacyMemorySharing: true } };
     else if (path === 'agents') result = { agents: [agent] };
+    else if (path === 'product-pause' && method === 'GET') result = { version: 1, accountId: 'fixture-account',
+      space: url.searchParams.get('space') === 'personal' ? 'personal' : 'work', available: false,
+      reason: 'store_not_prepared', productPaused: null, useEpoch: null, canPause: false, canResume: false };
     else if (path === `agents/${agent.id}`) result = { agent };
     else if (path === `agents/${agent.id}/memories`) {
       if (method === 'GET') result = { memories: [{ ...memory, scope: memoryScope, scopeLabel: memoryScope === 'private' ? 'Private to you' : 'Shared with Fixture Teammate' }] };

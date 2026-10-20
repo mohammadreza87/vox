@@ -70,5 +70,6 @@ export function readIndexedPrivateContext(adaptive: AdaptiveService, telegramId:
 export function hasCommittedPersonalizationTransport(storage: AdaptiveStorage): boolean {
   return !!storage.indexed || storage.canonicalSchemaVersion === 2 && !!storage.identity &&
     storage.supportsCommittedWriteFence === true && typeof storage.readCommittedForEffect === 'function' &&
-    typeof storage.sampleClock === 'function';
+    typeof storage.sampleClock === 'function' && storage.fileAuthorityProjectionVersion === 1 &&
+    typeof storage.readDirectAuthorityForEffect === 'function';
 }
