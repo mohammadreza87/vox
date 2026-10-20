@@ -849,9 +849,10 @@
       ],
       "evidence": [
         "docs/implementation/DELIVERY_RESULT.md",
-        "docs/implementation/OBSERVATION_LEARNING.md"
+        "docs/implementation/OBSERVATION_LEARNING.md",
+        "docs/implementation/MAINTENANCE_HEALTH.md"
       ],
-      "progress_note": "Own-space Studio measurements show response/playback denominators, queue lag/failure, deterministic findings and explicit unavailable task success/usage. Owner/superadmin operations view shows local workflow metadata only. Organization/cohort dashboards remain open."
+      "progress_note": "Own-space Studio measurements show response/playback denominators, queue lag/failure, deterministic findings and explicit unavailable task success/usage. Owner/superadmin operations view shows local workflow metadata only. Organization/cohort dashboards remain open. The next bounded source slice adds strict read-only system-wide maintenance status for current operators: retained progress, activity time, recorded failure, lease expiry and explicit unavailable states in EN/FA. Counts are not unique people or verified deletions. Independent/compiled/CI acceptance is tracked per candidate in MAINTENANCE_HEALTH.md."
     },
     {
       "id": "VOX-023",
@@ -1975,9 +1976,10 @@
         "Incident and restore runbook"
       ],
       "evidence": [
-        "docs/implementation/OBSERVATION_LEARNING.md"
+        "docs/implementation/OBSERVATION_LEARNING.md",
+        "docs/implementation/MAINTENANCE_HEALTH.md"
       ],
-      "progress_note": "Local account sweep pagination, competing leases, crash recovery, expiry, snapshot reconciliation and bounded observer retries tested. Background maintenance is supported only in the persistent file/polling runtime; unsupported activation fails startup. Production load/SLOs, full backup restoration and provider residual deletion remain open."
+      "progress_note": "Local account sweep pagination, competing leases, crash recovery, expiry, snapshot reconciliation and bounded observer retries tested. Background maintenance is supported only in the persistent file/polling runtime; unsupported activation fails startup. Production load/SLOs, full backup restoration and provider residual deletion remain open. A separate read-only FILE checkpoint health capability and EN/FA operator status view are implemented without activating maintenance or changing cleanup semantics. Disabled execution preserves readable retained evidence; current committed operator/auth fences protect publication. Alert delivery, actual scheduled-worker/load qualification and backup/provider guarantees remain open."
     },
     {
       "id": "VOX-053",
@@ -2177,6 +2179,14 @@
       "deployed_revision": "ee3467d2649e36ea4a9c5ca02560c3f50a3f8451",
       "evidence": "docs/implementation/RELEASE_2026_10_20.md",
       "note": "Independent source/CI and exact live route/ownership verification passed. Optional activation and dependency audit findings remain explicit; no real provider generation/device proof."
+    },
+    {
+      "id": "guest-evaluation-release",
+      "status": "deployed_core_optional_features_off",
+      "baseline": "ee3467d2649e36ea4a9c5ca02560c3f50a3f8451",
+      "deployed_revision": "9371894a2dc4bc6f9abca25289f2eaa9fe6e17b9",
+      "evidence": "docs/implementation/RELEASE_GUEST_EVALUATION_2026_10_20.md",
+      "note": "Independent source/browser and CI passed; exact merged build installed, 38 live route checks and four current active-bot ownership reads passed. Guest intake and other optional capabilities remain disabled pending their separate activation gates."
     }
   ]
 }
