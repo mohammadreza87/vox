@@ -1,3 +1,4 @@
+import { validateRightsUseHoldTransition } from '../../rights-use-holds/state';
 /** Explicit local format management. This module never selects a format from a
  * feature flag and never migrates on open. Quiescence is an operator assertion,
  * not something a JavaScript boolean can prove about an old runtime.
@@ -28,10 +29,11 @@ export const managedIdentitySchema = z.object({ incarnation: uuid, generation: i
 const legacyManagedReadySchema = z.object({ version: z.literal(1), state: z.literal('ready'), rootId: uuid,
   format: z.enum(['sqlite-v1', 'file-v2']), store: uuid, identity: managedIdentitySchema,
   watermarkFloor: integer }).strict();
+const rightsCapabilities={canonicalSchemaVersion:z.literal(3),controlsSchemaVersion:z.literal(3),productPauseEnforcementVersion:z.literal(1),rightsUseHoldEnforcementVersion:z.literal(1)};
 const pauseCapabilities = { canonicalSchemaVersion: z.literal(2), controlsSchemaVersion: z.literal(2), productPauseEnforcementVersion: z.literal(1) };
-export const managedReadySchema = z.union([legacyManagedReadySchema, legacyManagedReadySchema.extend({ version: z.literal(2), ...pauseCapabilities, fileAuthorityProjectionVersion: z.literal(1).optional() }).strict()]).refine(marker => !('fileAuthorityProjectionVersion' in marker) || marker.format === 'file-v2');
+export const managedReadySchema = z.union([legacyManagedReadySchema, legacyManagedReadySchema.extend({ version: z.literal(2), ...pauseCapabilities, fileAuthorityProjectionVersion: z.literal(1).optional() }).strict(), legacyManagedReadySchema.extend({version:z.literal(3),...rightsCapabilities,fileAuthorityProjectionVersion:z.literal(2).optional()}).strict()]).refine(marker => !('fileAuthorityProjectionVersion' in marker) || marker.format === 'file-v2').refine(m=>m.version!==3 || (m.format==='file-v2' ? m.fileAuthorityProjectionVersion===2 : m.fileAuthorityProjectionVersion===undefined));
 export type ManagedReady = z.infer<typeof managedReadySchema>;
-export function requiredCanonicalSchema(marker: { version: 1 | 2 }): 1 | 2 { return marker.version === 2 ? 2 : 1; }
+export function requiredCanonicalSchema(marker: { version: 1 | 2 | 3 }): 1 | 2 | 3 { return marker.version; }
 const legacyTransitionSchema = z.object({ version: z.literal(1), state: z.literal('transition'), rootId: uuid,
   id: uuid, phase: z.enum(['prepared', 'verified', 'poisoned']), sourceFormat: z.enum(['legacy-file', 'sqlite-v1', 'file-v2']),
   previous: managedReadySchema.optional(), sourceDigest: hash, sourceWatermark: integer,
@@ -39,7 +41,7 @@ const legacyTransitionSchema = z.object({ version: z.literal(1), state: z.litera
   targetIdentity: managedIdentitySchema.optional(), targetDigest: hash.optional(), generation: integer.min(1),
 }).strict();
 export const transitionSchema = z.union([legacyTransitionSchema, legacyTransitionSchema.extend({ version: z.literal(2),
-  ...pauseCapabilities, fileAuthorityProjectionVersion: z.literal(1).optional(), expectedTargetDigest: hash }).strict()]).refine(marker => !('fileAuthorityProjectionVersion' in marker) || marker.targetFormat === 'file-v2');
+  ...pauseCapabilities, fileAuthorityProjectionVersion: z.literal(1).optional(), expectedTargetDigest: hash }).strict(),legacyTransitionSchema.extend({version:z.literal(3),...rightsCapabilities,fileAuthorityProjectionVersion:z.literal(2).optional(),expectedTargetDigest:hash}).strict()]).refine(marker => !('fileAuthorityProjectionVersion' in marker) || marker.targetFormat === 'file-v2').refine(m=>m.version!==3 || (m.targetFormat==='file-v2' ? m.fileAuthorityProjectionVersion===2 : m.fileAuthorityProjectionVersion===undefined));
 export type ManagedTransition = z.infer<typeof transitionSchema>;
 export const markerSchema = z.union([managedReadySchema, transitionSchema]);
 export interface ManagedStorageOptions { format: 'sqlite-v1' | 'file-v2'; now?: () => number }
@@ -111,8 +113,8 @@ export function verifyPoison(root: string, rootId: string): void {
 export function metadataOf(storage: ManagedAdaptiveStorage): { incarnation: string; generation: number; lifecycleWatermark: number } {
   return storage instanceof SqliteAdaptiveStorage ? storage.readMetadata() : storage.readMetadata();
 }
-export function openRawManagedStore(root: string, ready: Pick<ManagedReady, 'format' | 'store'> & { version?: 1 | 2; fileAuthorityProjectionVersion?: 1 },
-  now: () => number, seed?: { generation: number; lifecycleWatermark: number; schemaVersion?: 1 | 2 }, reclaimDead = false, legacyAuthoritySource = false): ManagedAdaptiveStorage {
+export function openRawManagedStore(root: string, ready: Pick<ManagedReady, 'format' | 'store'> & { version?: 1 | 2 | 3; fileAuthorityProjectionVersion?: 1 | 2 },
+  now: () => number, seed?: { generation: number; lifecycleWatermark: number; schemaVersion?: 1 | 2 | 3 }, reclaimDead = false, legacyAuthoritySource = false): ManagedAdaptiveStorage {
   const path = storePath(root, ready.store);
   if (seed) { if (existsSync(path)) throw new IndexedStorageError('corrupt'); }
   else {
@@ -131,8 +133,8 @@ export function openRawManagedStore(root: string, ready: Pick<ManagedReady, 'for
   }
   const storage = ready.format === 'sqlite-v1' ? new SqliteAdaptiveStorage(path, { now, ...(seed ? { newStoreSeed: seed } : {}) })
     : new ManagedFileV2Storage(path, { now, ...(seed ? { newStoreSeed: seed } : {}), reclaimDeadLease: reclaimDead, legacyAuthoritySource });
-  if (!seed && storage instanceof ManagedFileV2Storage && ready.format === 'file-v2' && ready.version === 2 &&
-      (ready.fileAuthorityProjectionVersion !== storage.fileAuthorityProjectionVersion || !legacyAuthoritySource && ready.fileAuthorityProjectionVersion !== 1)) { storage.close(); throw new IndexedStorageError('invalid_controls'); }
+  if (!seed && storage instanceof ManagedFileV2Storage && ready.format === 'file-v2' && (ready.version === 2 || ready.version === 3) &&
+      (ready.fileAuthorityProjectionVersion !== storage.fileAuthorityProjectionVersion || !legacyAuthoritySource && ready.fileAuthorityProjectionVersion !== (ready.version===3?2:1))) { storage.close(); throw new IndexedStorageError('invalid_controls'); }
   if (!seed && storage.canonicalSchemaVersion !== (ready.version ?? 1)) { storage.close(); throw new IndexedStorageError('corrupt'); }
   return storage;
 }
@@ -157,12 +159,14 @@ const legacyHeadSchema = z.object({ formatVersion: z.literal(2), incarnation: uu
 const pauseHeadSchema = legacyHeadSchema.extend({ schemaVersion: z.literal(2) }).strict();
 const projectedReferenceSchema = referenceSchema.extend({ authorityFile: uuid, authorityDigest: hash }).strict();
 const projectedHeadSchema = pauseHeadSchema.extend({ authorityProjectionVersion: z.literal(1), accounts: z.array(projectedReferenceSchema).max(MAX_MANAGED_ACCOUNTS) }).strict();
-const headSchema = z.union([legacyHeadSchema, pauseHeadSchema, projectedHeadSchema]);
-const authorityImageSchema = z.object({ version: z.literal(1), schemaVersion: z.literal(2), incarnation: uuid, generation: integer.min(1),
+const rightsHeadSchema=legacyHeadSchema.extend({schemaVersion:z.literal(3),authorityProjectionVersion:z.literal(2),accounts:z.array(projectedReferenceSchema).max(MAX_MANAGED_ACCOUNTS)}).strict();
+const headSchema = z.union([legacyHeadSchema, pauseHeadSchema, projectedHeadSchema, rightsHeadSchema]);
+const legacyAuthorityImageSchema = z.object({ version: z.literal(1), schemaVersion: z.literal(2), incarnation: uuid, generation: integer.min(1),
   key: hash, accountId: z.string().max(200), canonicalFile: uuid, canonicalDigest: hash, controls: directAuthorityControlsSchema,
   catalogs: z.tuple([z.object({ space: z.literal('work'), digest: hash }).strict(), z.object({ space: z.literal('personal'), digest: hash }).strict()]) }).strict();
+const authorityImageSchema=z.union([legacyAuthorityImageSchema,legacyAuthorityImageSchema.extend({version:z.literal(2),schemaVersion:z.literal(3)}).strict()]);
 type FileHead = z.infer<typeof headSchema>;
-export interface ManagedFileOptions { now?: () => number; newStoreSeed?: { generation: number; lifecycleWatermark: number; schemaVersion?: 1 | 2 }; reclaimDeadLease?: boolean;
+export interface ManagedFileOptions { now?: () => number; newStoreSeed?: { generation: number; lifecycleWatermark: number; schemaVersion?: 1 | 2 | 3 }; reclaimDeadLease?: boolean;
   /** Explicit transition source only; never enables provider-facing authority or writes. */
   legacyAuthoritySource?: boolean }
 /** Rollback format, with compatibility aggregate callbacks. Atomic head publish
@@ -171,8 +175,8 @@ export interface ManagedFileOptions { now?: () => number; newStoreSeed?: { gener
 export class ManagedFileV2Storage implements AdaptiveStorage {
   private transactionClock?: (clock: () => number) => number;
   readonly supportsCommittedWriteFence = true as const;
-  readonly canonicalSchemaVersion: 1 | 2;
-  readonly fileAuthorityProjectionVersion?: 1;
+  readonly canonicalSchemaVersion: 1 | 2 | 3;
+  readonly fileAuthorityProjectionVersion?: 1 | 2;
   private readonly legacyAuthoritySource: boolean;
   readonly identity: Readonly<{ incarnation: string; generation: number }>;
   readonly io = { canonicalImageReads: 0, authorityImageReads: 0, watermarkWrites: 0 };
@@ -189,18 +193,18 @@ export class ManagedFileV2Storage implements AdaptiveStorage {
       const head = join(directory, 'head.json');
       if (!existsSync(head)) {
         if (readdirSync(directory).length) throw new IndexedStorageError('corrupt');
-        const seed = z.object({ generation: integer.min(1), lifecycleWatermark: integer, schemaVersion: z.union([z.literal(1), z.literal(2)]).optional() }).strict().parse(options.newStoreSeed ?? { generation: 1, lifecycleWatermark: 0 });
+        const seed = z.object({ generation: integer.min(1), lifecycleWatermark: integer, schemaVersion: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional() }).strict().parse(options.newStoreSeed ?? { generation: 1, lifecycleWatermark: 0 });
         if (this.legacyAuthoritySource) throw new IndexedStorageError('invalid_scope');
         this.sample(seed.lifecycleWatermark); mkdirSync(join(directory, 'records'), { mode: 0o700 });
-        if (seed.schemaVersion === 2) mkdirSync(join(directory, 'authority'), { mode: 0o700 });
+        if ((seed.schemaVersion??1) >= 2) mkdirSync(join(directory, 'authority'), { mode: 0o700 });
         syncDirectory(directory);
-        writeDurableJson(head, { formatVersion: 2, ...(seed.schemaVersion === 2 ? { schemaVersion: 2, authorityProjectionVersion: 1 } : {}), incarnation: randomUUID(), generation: seed.generation,
+        writeDurableJson(head, { formatVersion: 2, ...((seed.schemaVersion??1) >= 2 ? { schemaVersion: seed.schemaVersion, authorityProjectionVersion: seed.schemaVersion===3?2:1 } : {}), incarnation: randomUUID(), generation: seed.generation,
           lifecycleWatermark: seed.lifecycleWatermark, accounts: [] });
       } else if (options.newStoreSeed) throw new IndexedStorageError('corrupt');
       noSymlink(join(directory, 'records'), 'directory'); const metadata = this.head();
       this.canonicalSchemaVersion = 'schemaVersion' in metadata ? metadata.schemaVersion : 1;
       this.fileAuthorityProjectionVersion = 'authorityProjectionVersion' in metadata ? metadata.authorityProjectionVersion : undefined;
-      if (this.canonicalSchemaVersion === 2 && !this.fileAuthorityProjectionVersion && !this.legacyAuthoritySource) throw new IndexedStorageError('invalid_controls');
+      if (this.canonicalSchemaVersion >= 2 && !this.fileAuthorityProjectionVersion && !this.legacyAuthoritySource) throw new IndexedStorageError('invalid_controls');
       if (this.legacyAuthoritySource && (this.canonicalSchemaVersion !== 2 || this.fileAuthorityProjectionVersion)) throw new IndexedStorageError('invalid_scope');
       if (this.fileAuthorityProjectionVersion) noSymlink(join(directory, 'authority'), 'directory');
       this.identity = Object.freeze({ incarnation: metadata.incarnation, generation: metadata.generation });
@@ -254,9 +258,11 @@ export class ManagedFileV2Storage implements AdaptiveStorage {
       observedTime = now;
       this.transactionClock = clock => { observedTime = this.sample(observedTime!, clock()); return observedTime; };
       const current = this.record(head, accountId, now);
+      const priorDocument=current===null?null:validateAdaptiveDocument(structuredClone(current),accountId,now);
       const output = mutate(current), outputAt = this.sample(observedTime); observedTime = outputAt;
       const document = validateAdaptiveDocument(output.document, accountId, outputAt);
       if (document.schemaVersion !== this.canonicalSchemaVersion) throw new IndexedStorageError('invalid_controls');
+      validateRightsUseHoldTransition(priorDocument,document);
       const canonical = JSON.stringify(output.document);
       const serializedAt = this.sample(observedTime); observedTime = serializedAt;
       if (Buffer.byteLength(canonical) > INDEXED_LIMITS.canonicalBytes || digest(document) !== digest(validateAdaptiveDocument(JSON.parse(canonical), accountId, serializedAt))) throw new IndexedStorageError('capacity');
@@ -265,7 +271,7 @@ export class ManagedFileV2Storage implements AdaptiveStorage {
       const reference = { key: accountKey(accountId), accountId, file, digest: digest(output.document) };
       if ('authorityProjectionVersion' in head) {
         const projection = projectDocument(document, canonical), authorityId = randomUUID();
-        const image = authorityImageSchema.parse({ version: 1, schemaVersion: 2, incarnation: head.incarnation, generation: head.generation,
+        const image = authorityImageSchema.parse({ version: head.schemaVersion===3?2:1, schemaVersion: head.schemaVersion, incarnation: head.incarnation, generation: head.generation,
           key: reference.key, accountId, canonicalFile: file, canonicalDigest: reference.digest,
           controls: directAuthorityControls(document), catalogs: projection.catalogs });
         authorityFile = join(this.directory, 'authority', `${authorityId}.json`); writeDurableJson(authorityFile, image);
@@ -317,7 +323,7 @@ export class ManagedFileV2Storage implements AdaptiveStorage {
       if (digest(image) !== row.authorityDigest || image.incarnation !== head.incarnation || image.generation !== head.generation ||
           image.key !== row.key || image.accountId !== accountId || image.canonicalFile !== row.file || image.canonicalDigest !== row.digest) throw new IndexedStorageError('invalid_controls');
       const controls = directAuthorityControls(parseDirectAuthorityControls(image.controls, accountId));
-      if (controls.schemaVersion !== 2) throw new IndexedStorageError('invalid_controls');
+      if (controls.schemaVersion !== this.canonicalSchemaVersion || image.schemaVersion!==this.canonicalSchemaVersion || image.version!==this.fileAuthorityProjectionVersion) throw new IndexedStorageError('invalid_controls');
       observed = this.sample(observed);
       if (controls.createdAt > observed || controls.updatedAt > observed) throw new IndexedStorageError('clock_regression');
       const catalog = image.catalogs.find(c => c.space === space)!;
@@ -344,6 +350,15 @@ export class ManagedFileV2Storage implements AdaptiveStorage {
     validateAccountId(accountId); if (this.writer) return { status: 'busy' }; this.assert(); this.writer = true;
     try { const head = this.head(), now = this.sample(head.lifecycleWatermark), document = this.record(head, accountId, now); this.publishTime(now); return { status: 'ready', document }; }
     finally { this.writer = false; }
+  }
+  readCommittedWithoutObservationForEffect(accountId:string):{status:'ready';document:unknown|null;observedAt:number}|{status:'busy'} {
+    validateAccountId(accountId);if(this.writer)return {status:'busy'};this.assert();this.writer=true;
+    try {
+      const head=this.head(),now=this.sample(head.lifecycleWatermark),document=this.record(head,accountId,now);
+      const latest=this.head(),fresh=this.sample(Math.max(now,latest.lifecycleWatermark));
+      if(digest(latest)!==digest(head))return {status:'busy'};
+      return {status:'ready',document,observedAt:fresh};
+    }finally{this.writer=false;}
   }
   async listAccounts(input: AdaptiveAccountPageInput): Promise<AdaptiveAccountPage> {
     if (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > 100 || input.after !== undefined && !/^[a-f0-9]{64}$/.test(input.after)) throw new IndexedStorageError('invalid_scope');

@@ -23,10 +23,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
@@ -38,6 +38,22 @@ jobs:
         run: |
           npx --yes firebase-tools@15.34.0 --version
           node --test scripts/firebase-config-packaging.test.mjs
+
+      - name: Prepare cached Firebase preview inventory CLI
+        id: preview_inventory_cli
+        continue-on-error: true
+        run: |
+          node --test scripts/firebase-preview-inventory.test.mjs
+          npx --offline --yes --package=firebase-tools@15.34.0 -c 'command -v firebase' > "$RUNNER_TEMP/vox-preview-inventory-cli-path"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          const bin = fs.realpathSync(fs.readFileSync(path.join(process.env.RUNNER_TEMP, 'vox-preview-inventory-cli-path'), 'utf8').trim());
+          const root = path.resolve(path.dirname(bin), '../..');
+          const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+          if (pkg.name !== 'firebase-tools' || pkg.version !== '15.34.0' || /[\r\n]/.test(root)) process.exit(1);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `cli_root=${root}\n`);
+          NODE
 
       - name: Build application
         run: npm run build
@@ -98,7 +114,7 @@ jobs:
             | **Expires** | 7 days |
 
             ---
-            *This preview will be automatically deleted when the PR is closed or after 7 days.*
+            *This preview expires after 7 days.*
             `;
 
             if (botComment) {
@@ -116,3 +132,21 @@ jobs:
                 body
               });
             }
+
+      - name: Inventory preview channels (read only)
+        id: preview_inventory
+        if: ${{ always() && !cancelled() && github.event.pull_request.head.repo.full_name == github.repository && steps.preview_inventory_cli.outcome == 'success' && (steps.preview.outcome == 'success' || steps.preview.outcome == 'failure') }}
+        continue-on-error: true
+        timeout-minutes: 1
+        run: node scripts/firebase-preview-inventory.mjs
+        env:
+          FIREBASE_INVENTORY_CLI_ROOT: ${{ steps.preview_inventory_cli.outputs.cli_root }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+
+      - name: Report preview inventory status
+        if: ${{ always() && !cancelled() }}
+        run: |
+          echo 'Preview deploy outcome: ${{ steps.preview.outcome }}' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Preview inventory tool preparation: ${{ steps.preview_inventory_cli.outcome }}' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Read-only preview inventory outcome: ${{ steps.preview_inventory.outcome }}' >> "$GITHUB_STEP_SUMMARY"

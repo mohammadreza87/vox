@@ -1,3 +1,4 @@
+import { validateRightsUseHoldTransition } from '../../rights-use-holds/state';
 /** Off-default, single-process local storage. No format discovery, migration or
  * fallback is performed. Opening this adapter is an explicit server operation. */
 import Database from 'better-sqlite3';
@@ -13,7 +14,7 @@ import { accountKey, projectDocument, validateAccountId } from './projection';
 import { IndexedQueryEngine } from './queries';
 const openStores = new Set<string>();
 const integer = z.number().int().nonnegative().safe();
-const metadataSchema = z.object({ formatVersion: z.literal(INDEXED_FORMAT_VERSION), schemaVersion: z.union([z.literal(1), z.literal(2)]),
+const metadataSchema = z.object({ formatVersion: z.literal(INDEXED_FORMAT_VERSION), schemaVersion: z.union([z.literal(1), z.literal(2), z.literal(3)]),
   incarnation: z.string().uuid(), generation: integer.min(1), lifecycleWatermark: integer }).strict();
 const DDL = `
 CREATE TABLE store_meta (singleton INTEGER PRIMARY KEY CHECK(singleton=1), json TEXT NOT NULL) STRICT;
@@ -40,13 +41,13 @@ export interface SqliteAdaptiveStorageOptions {
   now?: () => number;
   /** Explicit transition tools only. Rejected for any existing database. A new
    * incarnation is always generated; identity can never be imported/reused. */
-  newStoreSeed?: { generation: number; lifecycleWatermark: number; schemaVersion?: 1 | 2 };
+  newStoreSeed?: { generation: number; lifecycleWatermark: number; schemaVersion?: 1 | 2 | 3 };
 }
 export class SqliteAdaptiveStorage implements AdaptiveStorage {
   private transactionClock?: (clock: () => number) => number;
   readonly supportsCommittedWriteFence = true as const;
   readonly indexed: IndexedQueryEngine;
-  readonly canonicalSchemaVersion: 1 | 2;
+  readonly canonicalSchemaVersion: 1 | 2 | 3;
   readonly identity: Readonly<Pick<IndexedStoreMetadata, 'incarnation' | 'generation'>>;
   /** Application materialization counters; these are not disk-page or latency measurements. */
   readonly io = emptyIndexedIo();
@@ -61,7 +62,7 @@ export class SqliteAdaptiveStorage implements AdaptiveStorage {
     if (path === ':memory:' || !path) throw new IndexedStorageError('invalid_scope');
     this.storePath = resolve(path); this.clock = options.now ?? Date.now;
     this.validator = options.validateDocument ?? validateAdaptiveDocument;
-    const seed = z.object({ generation: integer.min(1), lifecycleWatermark: integer, schemaVersion: z.union([z.literal(1), z.literal(2)]).optional() }).strict().safeParse(options.newStoreSeed ?? { generation: 1, lifecycleWatermark: 0 });
+    const seed = z.object({ generation: integer.min(1), lifecycleWatermark: integer, schemaVersion: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional() }).strict().safeParse(options.newStoreSeed ?? { generation: 1, lifecycleWatermark: 0 });
     if (!seed.success) throw new IndexedStorageError('invalid_scope');
     if (openStores.has(this.storePath)) throw new IndexedStorageError('busy');
     openStores.add(this.storePath);
@@ -86,7 +87,7 @@ export class SqliteAdaptiveStorage implements AdaptiveStorage {
         opened.prepare('INSERT INTO store_meta(singleton,json) VALUES(1,?)').run(JSON.stringify({ formatVersion: 1,
           schemaVersion: seed.data.schemaVersion ?? 1, incarnation: randomUUID(), generation: seed.data.generation, lifecycleWatermark: seed.data.lifecycleWatermark }));
         opened.pragma(`user_version = ${seed.data.schemaVersion ?? 1}`);
-      } else if (options.newStoreSeed !== undefined || (version !== 1 && version !== 2) || JSON.stringify(objects.map(o => o.name)) !== JSON.stringify(expectedObjects)) throw new IndexedStorageError('corrupt');
+      } else if (options.newStoreSeed !== undefined || (version !== 1 && version !== 2 && version !== 3) || JSON.stringify(objects.map(o => o.name)) !== JSON.stringify(expectedObjects)) throw new IndexedStorageError('corrupt');
       if (JSON.stringify(schemaDefinitions(opened)) !== JSON.stringify(expectedSchema())) throw new IndexedStorageError('corrupt');
       const identity = this.readMetadata();
       if (identity.schemaVersion !== opened.pragma('user_version', { simple: true })) throw new IndexedStorageError('corrupt');
@@ -210,6 +211,7 @@ export class SqliteAdaptiveStorage implements AdaptiveStorage {
       const outputAt = this.sampleTime(observedTime); observedTime = outputAt;
       const document = this.validator(output.document, accountId, outputAt);
       if (document.schemaVersion !== this.canonicalSchemaVersion) throw new IndexedStorageError('invalid_controls');
+      validateRightsUseHoldTransition(current ? this.validator(JSON.parse(current.canonical),accountId,outputAt) : null,document);
       const canonical = JSON.stringify(output.document);
       const serializedAt = this.sampleTime(observedTime); observedTime = serializedAt;
       const serializedDocument = this.validator(JSON.parse(canonical), accountId, serializedAt);
@@ -270,6 +272,21 @@ export class SqliteAdaptiveStorage implements AdaptiveStorage {
         return { status: 'ready' as const, document };
       }, () => undefined);
     } catch (error) { if (error instanceof IndexedStorageError && error.reason === 'busy') return { status: 'busy' }; throw error; }
+  }
+  readCommittedWithoutObservationForEffect(accountId:string):{status:'ready';document:unknown|null;observedAt:number}|{status:'busy'} {
+    validateAccountId(accountId);if(this.writer||this.database.inTransaction)return {status:'busy'};this.assertAvailable();this.writer=true;
+    try {
+      // A short synchronous shared read transaction, never BEGIN IMMEDIATE.
+      this.database.exec('BEGIN');const meta=this.readMetadata(),now=this.sampleTime(meta.lifecycleWatermark);let floor=now;
+      const row=this.database.prepare('SELECT canonical,canonical_digest FROM accounts WHERE account_key=?').get(accountKey(accountId)) as {canonical:string;canonical_digest:string}|undefined;
+      let document:unknown|null=null;
+      if(row){this.io.canonicalImageReads++;document=JSON.parse(row.canonical);if(digest(document)!==row.canonical_digest || this.validator(document,accountId,now).schemaVersion!==this.canonicalSchemaVersion)throw new IndexedStorageError('corrupt');}
+      floor=this.sampleTime(floor);this.database.exec('COMMIT');
+      const latest=this.readMetadata(),fresh=this.sampleTime(Math.max(floor,latest.lifecycleWatermark));
+      if(JSON.stringify(meta)!==JSON.stringify(latest))return {status:'busy'};
+      return {status:'ready',document,observedAt:fresh};
+    }catch(error){if(this.database.inTransaction)this.database.exec('ROLLBACK');const failure=this.error(error);if(failure.reason==='busy')return {status:'busy'};throw failure;}
+    finally{this.writer=false;}
   }
   async listAccounts(input: AdaptiveAccountPageInput): Promise<AdaptiveAccountPage> {
     if (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > 100 || input.after !== undefined && !/^[a-f0-9]{64}$/.test(input.after)) throw new Error('Invalid adaptive enumeration');

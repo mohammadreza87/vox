@@ -28,7 +28,7 @@ it('connects tentative SDK events to authenticated real HTTP authority, file sto
   let voice: VoicePartialConsumer | undefined;
   const requests: Promise<Response>[] = [];
   try {
-    const h = makeStudio(), users = await seedOrg(h), { agent } = await hire(h, users.alice), now = Date.now();
+    const h = makeStudio({ adaptive: false }), users = await seedOrg(h), { agent } = await hire(h, users.alice), now = Date.now();
     const adaptive = new AdaptiveService(new AdaptiveRepository(new FileAdaptiveStorage(directory)), adaptiveOptionsFromManifest(JSON.stringify({
       schemaVersion: 1, configurationVersion: 'synthetic', enabledCapabilities: ['core_text'],
       accounts: [{ accountId: accountIdFor(ID.alice), jurisdictionKeys: ['SYNTHETIC'], allowDeclaredAdult: true }],

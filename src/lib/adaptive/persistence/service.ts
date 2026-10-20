@@ -1,14 +1,17 @@
+import { rightsUseAllowed, rightsUseStamp } from '../rights-use-holds/state';
 import { mayUseStoredPersonalization, productPauseUseStamp } from '../product-pause/state';
 import { randomUUID } from 'crypto';
 import { brandError, publicDomainError } from '../../error-contract';
-import { purgeInvalidDerivedMemory, validMemoryLineage } from '../reviewed-memory/provenance';
+import { purgeInvalidDerivedMemory, validMemoryLineage, selectedMemoryClosure } from '../reviewed-memory/provenance';
+import { localErasureOperationSchema, type LocalErasureOperation, type ErasureWitness } from '../rights-intake/local-erasure-contracts';
+import { erasureFingerprint, localUseDigest } from '../rights-intake/local-use-state';
 import { transitionConsent } from '../consent';
 import { evaluateCapability, type Capability, type CapabilityRequest, type JurisdictionApproval } from '../eligibility';
 import { resolveVerifiedPerson } from '../identity';
 import { authorizeAccess } from '../policy';
 import type { AccessRequest, ConsentPermission, IdentityContext, PolicySnapshot, ResourceDescriptor } from '../types';
 import { ADAPTIVE_POLICY_VERSION, OPTIONAL_PURPOSES, AdaptiveRepository, accountIdFor, containerIdFor, digest,
-  spaceIdFor, tenantIdFor, type AdaptiveAuthorityDocument, type AdaptiveDocument, type OptionalPurpose, type SpaceKind, type StoredMemory } from './repository';
+  spaceIdFor, tenantIdFor, validateAdaptiveDocument, type AdaptiveAuthorityDocument, type AdaptiveDocument, type OptionalPurpose, type SpaceKind, type StoredMemory } from './repository';
 import type { AdaptiveNotice, AdaptiveSnapshot, AdaptivePresentation } from './contracts';
 import { correctionInput, type CorrectionInput } from './validation';
 import type { AgentGrantInput, ConsentInput, DeletionInput, IdentityInput, MemoryInput, PresentInput } from './validation';
@@ -124,7 +127,7 @@ export class AdaptiveService {
       voiceInvalidations.length = 0;
       const learningControl = () => digest([d.binding, d.permissions.filter(p => p.purpose === 'optional.personalization'),
         d.agentGrants, d.experience.preferences, d.experience.preferenceLearning?.intents,
-        d.schemaVersion === 2 ? ['work', 'personal'].map(s => productPauseUseStamp(d, s as SpaceKind)) : null]);
+        d.schemaVersion >= 2 ? ['work', 'personal'].map(s => productPauseUseStamp(d, s as SpaceKind)) : null]);
       const priorLearning = learningControl();
       const revokeReminderIdentity = () => {
         for (const space of ['work', 'personal'] as const) {
@@ -181,7 +184,7 @@ export class AdaptiveService {
       for (const memory of d.memories) if (memory.status === 'active' && memory.expiresAt <= now) this.tombstone(d, memory, now, `expiry:${memory.id}`);
       if (purgeInvalidDerivedMemory(d, now)) this.bump(d, now);
       if (sweepObserverDocument(d, now, (doc, space, agentId, time) =>
-        this.isPurposeAllowed(doc, space, 'optional.product_analytics', time, agentId), this.storeIdentity)) this.bump(d, now);
+        this.isPurposeRetentionAllowed(doc, space, 'optional.product_analytics', time, agentId), this.storeIdentity)) this.bump(d, now);
       if (pruneLearningDocument(this, d, now, this.preferenceLearningAuthority ? agentId => this.preferenceLearningAuthority!(telegramId, agentId) : undefined)) this.bump(d, now);
       const value = fn(d, now);
       if (pruneLearningDocument(this, d, now, this.preferenceLearningAuthority ? agentId => this.preferenceLearningAuthority!(telegramId, agentId) : undefined)) this.bump(d, now);
@@ -226,7 +229,7 @@ export class AdaptiveService {
         for (const group of removed.values()) enqueue(group.space, 'source_deleted', group.agentId, group.ids);
       }
       const observerChanged = sweepObserverDocument(d, now, (doc, space, agentId, time) =>
-        this.isPurposeAllowed(doc, space, 'optional.product_analytics', time, agentId), this.storeIdentity);
+        this.isPurposeRetentionAllowed(doc, space, 'optional.product_analytics', time, agentId), this.storeIdentity);
       if ((observerChanged || priorRelationships !== digest(d.relationships)) && d.revision === priorRevision) this.bump(d, now);
       return value;
     }, beforeCommit);
@@ -275,11 +278,104 @@ export class AdaptiveService {
   productPauseTransaction<T>(telegramId: number, fn: (document: AdaptiveDocument, now: number) => T, beforeCommit?: () => void): Promise<T> {
     return this.repository.transaction(this.account(telegramId), this.now, fn, beforeCommit);
   }
+  rightsUseHoldTransaction<T>(telegramId:number,fn:(document:AdaptiveDocument,now:number)=>T,beforeCommit:()=>void):Promise<T> {
+    return this.repository.transaction(this.account(telegramId),this.now,fn,beforeCommit,true);
+  }
+  /** RF2 is deliberately separate from generic account maintenance. */
+  privateNoteErasureQualified():boolean {
+    const s=this.repository.storage;
+    return s.canonicalSchemaVersion===3 && s.supportsCommittedWriteFence===true && !!s.readCommittedForEffect && !!s.readCommittedWithoutObservationForEffect &&
+      (!!s.indexed || s.fileAuthorityProjectionVersion===2 && typeof s.readDirectAuthorityForEffect==='function');
+  }
+  private erasureWitness(d:AdaptiveDocument,memoryId:string,space:SpaceKind):ErasureWitness {
+    try {return selectedMemoryClosure(d,memoryId,space).map(m=>{
+      const step=m.status==='active'?1:0;
+      if(!Number.isSafeInteger(m.revision+step)||!Number.isSafeInteger(m.revocationEpoch+step))return fail(409,'erasure_capacity');
+      return {id:m.id,space:m.space,beforeRevision:m.revision,beforeEpoch:m.revocationEpoch,beforeStatus:m.status,
+        afterRevision:m.revision+step,afterEpoch:m.revocationEpoch+step,afterStatus:'deleted' as const,sourceRefsDigest:digest(m.sourceRefs??null)};
+    });}catch(e){if(AdaptiveError.is(e))throw e;return fail(409,'erasure_lineage_unavailable');}
+  }
+  preparePrivateNoteErasureNow(id:number,space:SpaceKind,memoryId:string,revision:number,guard:(observedAt?:number)=>void) {
+    const check=(observedAt?:number)=>{validateRuntimeControlEvaluation({value:guard(observedAt)});};check();
+    if(!this.privateNoteErasureQualified())return fail(503,'erasure_unsupported');
+    const snapshot=this.repository.storage.readCommittedWithoutObservationForEffect!(this.account(id));
+    if(snapshot.status!=='ready'||!snapshot.document)return fail(503,'erasure_authority_unavailable');
+    let floor=snapshot.observedAt;check(floor);const now=this.now();
+    if(!Number.isSafeInteger(now)||now<floor)return fail(503,'erasure_clock_unavailable');floor=now;check(now);
+    const d=validateAdaptiveDocument(snapshot.document,this.account(id),now);this.requirePerson(d,now);
+    const m=d.memories.find(m=>m.id===memoryId && m.space===space);
+    if(!m || m.status!=='active' || m.expiresAt<=now || m.origin || m.sourceRefs || m.revision!==revision || !this.authorized(d,space,m,'delete',now))return fail(409,'erasure_selection_changed');
+    const value={expectedCanonicalRevision:d.revision,expectedBindingDigest:digest(d.binding),witness:this.erasureWitness(d,memoryId,space),bindingExpiresAt:d.binding!.expiresAt};
+    check();const fresh=this.now();if(!Number.isSafeInteger(fresh)||fresh<floor)return fail(503,'erasure_clock_unavailable');check(fresh);this.requirePerson(d,fresh);
+    if(m.expiresAt<=fresh || !this.authorized(d,space,m,'delete',fresh))return fail(409,'erasure_selection_changed');return value;
+  }
+  privateNoteErasureProofNow(id:number,operation:LocalErasureOperation,guard:(observedAt?:number)=>void):{technical:'unknown'|'not_applied'|'note_content_removed';observedAt:number|null;effectRevision:number|null} {
+    validateRuntimeControlEvaluation({value:guard()});
+    if(!this.privateNoteErasureQualified())return {technical:'unknown',observedAt:null,effectRevision:null};
+    const snapshot=this.repository.storage.readCommittedWithoutObservationForEffect!(this.account(id));
+    if(snapshot.status==='ready')validateRuntimeControlEvaluation({value:guard(snapshot.observedAt)});
+    let checkedDocument:AdaptiveDocument|undefined;
+    let clockFloor=snapshot.status==='ready'?snapshot.observedAt:0;
+    const read=snapshot.status!=='ready'?snapshot:snapshot.document===null?{status:'missing' as const}:(()=>{
+      const now=this.now();if(!Number.isSafeInteger(now)||now<clockFloor)return fail(503,'erasure_clock_unavailable');clockFloor=now;validateRuntimeControlEvaluation({value:guard(now)});
+      const d=validateAdaptiveDocument(snapshot.document,this.account(id),now);checkedDocument=d;
+      const value=(()=>{
+      validateRuntimeControlEvaluation({value:guard()});this.requirePerson(d,now);
+      const unknown={technical:'unknown' as const,observedAt:null,effectRevision:null};
+      if(operation.fingerprint!==erasureFingerprint(d.accountId,operation) || operation.witnessDigest!==localUseDigest(operation.witness))return unknown;
+      const e=d.events.find(e=>e.eventId===operation.eventId);
+      let closure:StoredMemory[];try{closure=selectedMemoryClosure(d,operation.memoryId,operation.space);}catch{return unknown;}
+      const matches=(after:boolean)=>operation.witness.every(w=>{
+        const m=d.memories.find(m=>m.id===w.id && m.space===w.space);
+        return !!m && m.status===(after?'deleted':w.beforeStatus) && m.revision===(after?w.afterRevision:w.beforeRevision) && m.revocationEpoch===(after?w.afterEpoch:w.beforeEpoch) && digest(m.sourceRefs??null)===w.sourceRefsDigest && (!after || m.text===undefined);
+      });
+      if(!e) return d.revision===operation.expectedCanonicalRevision && digest(d.binding)===operation.expectedBindingDigest && matches(false) && localUseDigest(this.erasureWitness(d,operation.memoryId,operation.space))===operation.witnessDigest ? {technical:'not_applied' as const,observedAt:now,effectRevision:null}:unknown;
+      return e.kind==='rights_private_note_erased' && e.resultId===operation.memoryId && e.fingerprint===operation.fingerprint && e.revision===operation.expectedCanonicalRevision+1 && matches(true) && !closure.some(m=>m.status==='active' && m.text!==undefined) ? {technical:'note_content_removed' as const,observedAt:now,effectRevision:e.revision}:unknown;
+      })();return {status:'ready' as const,value};
+    })();
+    validateRuntimeControlEvaluation({value:guard()});
+    if(checkedDocument && snapshot.status==='ready'){
+      const fresh=this.now();if(!Number.isSafeInteger(fresh)||fresh<clockFloor)return fail(503,'erasure_clock_unavailable');
+      validateRuntimeControlEvaluation({value:guard(fresh)});
+      this.requirePerson(checkedDocument,fresh);
+    }
+    return read.status==='ready'?read.value:{technical:'unknown',observedAt:null,effectRevision:null};
+  }
+  eraseSelectedPrivateNote(id:number,raw:LocalErasureOperation,guard:()=>void):Promise<void> {
+    const o=localErasureOperationSchema.parse(raw),check=()=>{validateRuntimeControlEvaluation({value:guard()});};check();
+    if(!this.privateNoteErasureQualified())return Promise.reject(new AdaptiveError(503,'erasure_unsupported'));
+    let draft:AdaptiveDocument|undefined,target:StoredMemory|undefined;
+    return this.repository.transaction(this.account(id),this.now,(d,now)=>{
+      draft=d;check();this.requirePerson(d,now);
+      if(o.fingerprint!==erasureFingerprint(d.accountId,o) || d.revision!==o.expectedCanonicalRevision || digest(d.binding)!==o.expectedBindingDigest || now>=o.expiresAt || now>=o.executionDeadline || d.events.some(e=>e.eventId===o.eventId))return fail(409,'erasure_changed');
+      target=d.memories.find(m=>m.id===o.memoryId && m.space===o.space);
+      if(!target || target.status!=='active' || target.expiresAt<=now || target.origin || target.sourceRefs || !this.authorized(d,o.space,target,'delete',now) || localUseDigest(this.erasureWitness(d,o.memoryId,o.space))!==o.witnessDigest)return fail(409,'erasure_changed');
+      target=structuredClone(target);
+      const outboxIds=o.witness.filter(w=>w.beforeStatus==='active').map(w=>`rights-erasure:${digest([o.eventId,w.id])}`);
+      if(new Set(outboxIds).size!==outboxIds.length || d.outbox.some(row=>outboxIds.includes(row.eventId)))return fail(409,'erasure_event_conflict');
+      // Validate the complete cloned unit before touching the writer draft.
+      const projected=structuredClone(d),revision=d.revision+1;
+      if(!Number.isSafeInteger(revision))return fail(409,'erasure_capacity');
+      for(const w of o.witness) if(w.beforeStatus==='active') {
+        const m=projected.memories.find(m=>m.id===w.id)!;m.status='deleted';delete m.text;m.revision=w.afterRevision;m.revocationEpoch=w.afterEpoch;m.updatedAt=now;
+        projected.outbox.push({eventId:`rights-erasure:${digest([o.eventId,w.id])}`,kind:'memory_deleted',space:m.space,personId:d.personId,revision,memoryId:m.id,epoch:m.revocationEpoch,createdAt:now});
+      }
+      projected.revision=revision;projected.updatedAt=now;
+      projected.events.push({eventId:o.eventId,fingerprint:o.fingerprint,kind:'rights_private_note_erased',resultId:o.memoryId,revision});
+      // Existing schema validators also preserve pause/RF1 reserved capacity.
+      validateAdaptiveDocument(projected,d.accountId,now);
+      if(projected.events.length>2000 || projected.outbox.length>2000)return fail(409,'erasure_capacity');
+      d.memories=projected.memories;d.outbox=projected.outbox;d.events=projected.events;d.revision=revision;d.updatedAt=now;
+    },()=>{
+      check();const now=this.sampleClock(this.now);
+      if(!draft || !target || !this.isProfileConfirmed(draft,now) || digest(draft.binding)!==o.expectedBindingDigest || now>=o.expiresAt || now>=o.executionDeadline || target.expiresAt<=now || !this.authorized(draft,o.space,target,'delete',now))return fail(409,'erasure_changed');
+    },true);
+  }
   sampleServiceClock(): number { return this.sampleClock(this.now); }
   notifyProductPauseCommitted(telegramId: number): void { this.preferenceLearningInvalidator?.(telegramId); }
   /** Current-input authority never needs stored note/preference/relationship payloads in prepared stores. */
   async withDirectAuthority<T>(telegramId: number, space: SpaceKind, fn: DirectAuthorityEvaluator<T>): Promise<T> {
-    if (this.repository.storage.indexed || this.repository.storage.canonicalSchemaVersion === 2) {
+    if (this.repository.storage.indexed || (this.repository.storage.canonicalSchemaVersion === 2 || this.repository.storage.canonicalSchemaVersion === 3)) {
       const result = this.readDirectAuthorityForEffect(telegramId, space, fn);
       if (result.status !== 'ready') return fail(503, 'adaptive_controls_unavailable');
       return result.value;
@@ -290,9 +386,9 @@ export class AdaptiveService {
   readDirectAuthorityForEffect<T>(telegramId: number, space: SpaceKind, fn: DirectAuthorityEvaluator<T>):
     { status: 'ready'; value: T } | { status: 'busy' | 'unsupported' | 'missing' } {
     const storage = this.repository.storage;
-    if (storage.canonicalSchemaVersion === 2 && !storage.indexed &&
-        (storage.fileAuthorityProjectionVersion !== 1 || !storage.readDirectAuthorityForEffect)) return { status: 'unsupported' };
-    if (storage.canonicalSchemaVersion === 2 && storage.readDirectAuthorityForEffect) {
+    if ((storage.canonicalSchemaVersion === 2 || storage.canonicalSchemaVersion === 3) && !storage.indexed &&
+        (storage.fileAuthorityProjectionVersion !== (storage.canonicalSchemaVersion === 3 ? 2 : 1) || !storage.readDirectAuthorityForEffect)) return { status: 'unsupported' };
+    if ((storage.canonicalSchemaVersion === 2 || storage.canonicalSchemaVersion === 3) && storage.readDirectAuthorityForEffect) {
       try { return storage.readDirectAuthorityForEffect(this.account(telegramId), space, fn); }
       catch { return { status: 'busy' }; }
     }
@@ -383,7 +479,8 @@ export class AdaptiveService {
   isStoredPersonalizationUseAllowed(d: AdaptiveAuthorityDocument, space: SpaceKind): boolean { return mayUseStoredPersonalization(d, space); }
   purposeFingerprint(d: AdaptiveAuthorityDocument, space: SpaceKind, purpose: OptionalPurpose, now: number, agentId?: string): string {
     const retention = this.purposeRetentionFingerprint(d, space, purpose, now, agentId);
-    return d.schemaVersion === 1 || !this.pauseCoveredPurpose(purpose) ? retention : digest([retention, productPauseUseStamp(d, space)]);
+    const paused = d.schemaVersion === 1 || !this.pauseCoveredPurpose(purpose) ? retention : digest([retention, productPauseUseStamp(d, space)]);
+    return d.schemaVersion === 3 && (this.pauseCoveredPurpose(purpose) || purpose==='optional.product_analytics') ? digest([paused, rightsUseStamp(d,space,purpose === 'optional.product_analytics' ? purpose : 'optional.personalization')]) : paused;
   }
   private pauseCoveredPurpose(purpose: OptionalPurpose): boolean {
     return ['optional.personalization', 'optional.auto_memory', 'optional.proactive_suggestions', 'optional.relationship_outreach'].includes(purpose);
@@ -401,7 +498,7 @@ export class AdaptiveService {
   /** Explicit preferences may be saved as a user directive. Applying them to an
    * agent still requires current optional purpose consent and an exact grant. */
   isPurposeAllowed(d: AdaptiveAuthorityDocument, space: SpaceKind, purpose: OptionalPurpose, now: number, agentId?: string): boolean {
-    return (!this.pauseCoveredPurpose(purpose) || this.isStoredPersonalizationUseAllowed(d, space)) &&
+    return rightsUseAllowed(d,space,purpose) && (!['optional.auto_memory','optional.proactive_suggestions','optional.relationship_outreach'].includes(purpose) || rightsUseAllowed(d,space,'optional.personalization')) && (!this.pauseCoveredPurpose(purpose) || this.isStoredPersonalizationUseAllowed(d, space)) &&
       this.isPurposeRetentionAllowed(d, space, purpose, now, agentId);
   }
 
@@ -457,7 +554,7 @@ export class AdaptiveService {
       ...(confirmed ? { personId: d.personId, bindingId: d.binding!.id, bindingRevision: d.binding!.revision,
         bindingExpiresAt: d.binding!.expiresAt, bindingCreatedAt: d.binding!.createdAt,
         bindingUpdatedAt: d.binding!.updatedAt, bindingVerifiedAt: d.binding!.verifiedAt } : {}) },
-      ...(d.schemaVersion === 2 ? { storedPersonalizationUseStamp: productPauseUseStamp(d, space), storedPersonalizationAllowed: this.isStoredPersonalizationUseAllowed(d, space) } : {}),
+      ...(d.schemaVersion >= 2 ? { storedPersonalizationUseStamp: productPauseUseStamp(d, space), storedPersonalizationAllowed: this.isStoredPersonalizationUseAllowed(d, space) } : {}),
       space, revision: d.revision, scope: 'private_account_profile',
       purposes: OPTIONAL_PURPOSES.map(purpose => {
         const permission = this.permission(d, space, purpose), eligibility = this.eligible(d, CAPABILITY[purpose], now);
@@ -729,8 +826,9 @@ export class AdaptiveService {
     const consent = this.permission(d, space, 'optional.auto_memory'), eligible = this.eligible(d, 'auto_memory', now);
     const confirmed = this.confirmed(d, now);
     const parts: unknown[] = [d.accountId, d.binding, confirmed, consent, eligible, d.agentGrants.filter(g => g.space === space && g.agentId === personaId)];
-    if (d.schemaVersion === 2) parts.push(productPauseUseStamp(d, space));
-    return { value: { revision: digest(namespace === 'canonical' ? parts : [namespace, ...parts]), memoryEnabled: false, historyEnabled: false, storedContextAllowed: this.isStoredPersonalizationUseAllowed(d, space) },
+    if (d.schemaVersion >= 2) parts.push(productPauseUseStamp(d, space));
+    if(d.schemaVersion===3)parts.push(rightsUseStamp(d,space,'optional.personalization'));
+    return { value: { revision: digest(namespace === 'canonical' ? parts : [namespace, ...parts]), memoryEnabled: false, historyEnabled: false, storedContextAllowed: this.isStoredPersonalizationUseAllowed(d, space) && rightsUseAllowed(d,space,'optional.personalization') },
       denied: !confirmed, observedDenial: !eligible.eligible || consent.state === 'granted' && consent.expiresAt <= now,
       ...(confirmed ? { deadline: Math.min(d.binding!.expiresAt, eligible.validUntil ?? INFINITY) } : {}) };
   }
@@ -739,9 +837,20 @@ export class AdaptiveService {
     read: async (personaId: string, legacyPersonId: string, space: SpaceKind = 'work'): Promise<{ revision: string; memoryEnabled: boolean; historyEnabled: boolean; storedContextAllowed: boolean }> => {
       const match = /^tg-([1-9]\d*)$/.exec(legacyPersonId);
       if (!match) return { revision: 'unconfirmed', memoryEnabled: false, historyEnabled: false, storedContextAllowed: false };
-      if (this.repository.storage.indexed || this.repository.storage.canonicalSchemaVersion === 2) return this.withDirectAuthority(Number(match[1]), space,
+      const telegramId = Number(match[1]);
+      if (this.repository.storage.indexed || this.repository.storage.canonicalSchemaVersion === 2 || this.repository.storage.canonicalSchemaVersion === 3) return this.withDirectAuthority(telegramId, space,
         (d, now, namespace) => this.runtimePrivacyEvaluation(d, now, namespace, personaId, space));
-      return this.transact(Number(match[1]), (d, now) => this.runtimePrivacyEvaluation(d, now, this.storeIdentity, personaId, space).value);
+      const evaluate = (d: AdaptiveDocument, now: number) => this.runtimePrivacyEvaluation(d, now, this.storeIdentity, personaId, space).value;
+      // A boundary read is pure. Serve it from the committed document instead of
+      // a read-modify-write of the account file; the same evaluation over the
+      // same bytes gives the same revision. A missing, locked or unsupported
+      // document, or one the strict schema rejects before the transaction's
+      // legacy normalization, still goes through the transaction as before.
+      try {
+        const committed = this.readCommittedForEffect(telegramId, evaluate);
+        if (committed.status === 'ready') return committed.value;
+      } catch { /* the transaction validates (and normalizes) the document itself */ }
+      return this.transact(telegramId, evaluate);
     },
     readNow: (personaId: string, legacyPersonId: string, space: SpaceKind = 'work'): { revision: string; memoryEnabled: boolean; historyEnabled: boolean; storedContextAllowed: boolean; validUntil: number } => {
       const match = /^tg-([1-9]\d*)$/.exec(legacyPersonId);
@@ -756,18 +865,34 @@ export class AdaptiveService {
   };
   /** Authorized, fresh explicit-private context for the separately gated runtime path.
    * The caller must recheck returned revision before provider use/output. */
+  private preparedFilePrivateContextDenial(telegramId:number,space:SpaceKind,agentId:string):PrivateContextSnapshot|undefined {
+    if(this.repository.storage.indexed || this.repository.storage.canonicalSchemaVersion!==3)return;
+    const current=this.readDirectAuthorityForEffect<PrivateContextSnapshot|undefined>(telegramId,space,(d,now,namespace,stamp)=>{
+      const allowed=this.isCoreAllowed(d,now)&&this.isPurposeAllowed(d,space,'optional.personalization',now,agentId);
+      if(allowed)return {value:undefined,deadline:Math.min(d.binding!.expiresAt,this.permission(d,space,'optional.personalization').expiresAt,
+        this.eligible(d,'core_text',now).validUntil??INFINITY,this.eligible(d,'personalization',now).validUntil??INFINITY)};
+      return {value:{revision:digest(['prepared-file-private-context-denied-v1',namespace,stamp,space,agentId,
+        this.coreFingerprint(d,now),this.purposeFingerprint(d,space,'optional.personalization',now,agentId)]),memories:[],completion:'complete' as const,validUntil:INFINITY},denied:true};
+    });
+    if(current.status!=='ready')return fail(503,'adaptive_context_unavailable');
+    return current.value;
+  }
   readPrivateContext(telegramId: number, space: SpaceKind, agentId: string, query = ''): Promise<PrivateContextSnapshot> {
     if (this.repository.storage.indexed) {
       try { return Promise.resolve(readIndexedPrivateContext(this, telegramId, space, agentId, query)); }
       catch { return Promise.reject(new AdaptiveError(503, 'adaptive_context_unavailable')); }
     }
+    // Managed FILE's body-free head is checked synchronously before entering its
+    // synchronous single-owner canonical transaction. Unknown controls never fall back.
+    try {const denied=this.preparedFilePrivateContextDenial(telegramId,space,agentId);if(denied)return Promise.resolve(denied);}
+    catch {return Promise.reject(new AdaptiveError(503,'adaptive_context_unavailable'));}
     return this.transact(telegramId, (d, now) => this.canonicalPrivateContext(d, now, space, agentId));
   }
   private canonicalPrivateContext(d: AdaptiveDocument, now: number, space: SpaceKind, agentId: string): PrivateContextSnapshot {
     const permission = this.permission(d, space, 'optional.personalization');
     const eligibility = this.eligible(d, 'personalization', now);
     const confirmed = this.confirmed(d, now);
-    const allowed = confirmed && permission.state === 'granted' && permission.expiresAt > now && eligibility.eligible && this.isStoredPersonalizationUseAllowed(d, space);
+    const allowed = confirmed && permission.state === 'granted' && permission.expiresAt > now && eligibility.eligible && this.isStoredPersonalizationUseAllowed(d, space) && rightsUseAllowed(d,space,'optional.personalization');
     const authorized = allowed ? d.memories.filter(m => this.authorized(d, space, m, 'read', now, agentId)) : [];
     const byId = new Map(authorized.map(memory => [memory.id, memory]));
     const claimOrigins = this.reviewedClaimOrigins(authorized);
@@ -783,7 +908,7 @@ export class AdaptiveService {
     const revision = digest([d.accountId, d.personId, space, agentId, d.binding, confirmed, permission, allowed, eligibility,
       d.agentGrants.filter(g => g.space === space && g.agentId === agentId),
       authorized.map(m => [m.id, m.revision, m.expiresAt, m.revocationEpoch, m.sourceRefs, m.origin]),
-      ...(d.schemaVersion === 2 ? [productPauseUseStamp(d, space)] : [])]);
+      ...(d.schemaVersion >= 2 ? [productPauseUseStamp(d, space)] : []), ...(d.schemaVersion===3?[rightsUseStamp(d,space,'optional.personalization')]:[])]);
     return { revision: this.storeIdentity === 'canonical' ? revision : digest([this.storeIdentity, revision]),
       memories: authorized.map(m => {
         const sourceIds = m.sourceRefs ? ancestors(m) : undefined;
@@ -799,6 +924,8 @@ export class AdaptiveService {
   }
   readPrivateContextAuthorityNow(telegramId: number, space: SpaceKind, agentId: string): { revision: string; validUntil: number } {
     if (!this.repository.storage.indexed) {
+      const denied=this.preparedFilePrivateContextDenial(telegramId,space,agentId);
+      if(denied)return {revision:denied.revision,validUntil:denied.validUntil??INFINITY};
       const result = this.readCommittedAuthorityForEffect(telegramId, this.now, (d, now) => {
         const authority = this.authorityEvaluation(d, space, now, 'en');
         const deadline = Math.min(authority.deadline ?? INFINITY, ...d.memories.filter(m => m.space === space && m.status === 'active' && m.expiresAt > now).map(m => m.expiresAt));

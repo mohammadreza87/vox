@@ -1,9 +1,10 @@
+import { RIGHTS_COPY_VERSION } from '@/lib/adaptive/rights-intake/notice';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { rightsApi, rightsExportSchema, rightsSnapshotSchema, RightsClientError } from './rights-client';
 const auth = vi.hoisted(() => ({ session: 'signed-current-account' }));
 vi.mock('./client', () => ({ tg: () => ({ initData: auth.session }) }));
 const requestId = '00000000-0000-4000-8000-000000000001', eventId = '00000000-0000-4000-8000-000000000002';
-const row = () => ({ version: 1 as const, requestId, space: 'work' as const, kind: 'access_export' as const, revision: 1, createdAt: 1, updatedAt: 1, localeAtSubmission: 'en' as const, intakePolicy: { id: 'synthetic', revision: 1, copyVersion: 'rights-intake-ri2-v1' }, requester: { assurance: 'signed_telegram_account' as const, personVerification: 'not_established' as const }, state: 'received' as const, deadline: { state: 'reviewed_policy_unavailable' as const, dueAt: null, reason: 'jurisdiction_unresolved' as const }, coverage: { localAccount: 'not_started' as const, shared: 'not_started' as const, providers: 'unsupported' as const, backups: 'unsupported' as const, guests: 'unsupported' as const, deletion: 'not_implemented' as const, formalRestriction: 'not_implemented' as const }, retention: { policyId: 'synthetic', policyRevision: 1, reviewOrExpiryAt: 50000 }, retentionReviewRequired: false });
+const row = () => ({ version: 1 as const, requestId, space: 'work' as const, kind: 'access_export' as const, revision: 1, createdAt: 1, updatedAt: 1, localeAtSubmission: 'en' as const, intakePolicy: { id: 'synthetic', revision: 1, copyVersion: RIGHTS_COPY_VERSION }, requester: { assurance: 'signed_telegram_account' as const, personVerification: 'not_established' as const }, state: 'received' as const, deadline: { state: 'reviewed_policy_unavailable' as const, dueAt: null, reason: 'jurisdiction_unresolved' as const }, coverage: { localAccount: 'not_started' as const, shared: 'not_started' as const, providers: 'unsupported' as const, backups: 'unsupported' as const, guests: 'unsupported' as const, deletion: 'not_implemented' as const, formalRestriction: 'not_implemented' as const }, retention: { policyId: 'synthetic', policyRevision: 1, reviewOrExpiryAt: 50000 }, retentionReviewRequired: false });
 const snapshot = () => ({ available: true, policyStatus: 'available', supportedKinds: ['access_export'], intakePolicy: row().intakePolicy, requests: [row()], supportContact: 'info@joyixir.com' });
 const exportData = () => ({ schemaVersion: 1, accountId: 'telegram-account:1', space: 'work', generatedAt: 1, revision: 1, confirmedUntil: 50, memories: [], preferences: [], preferenceChanges: [], preferenceLearning: null, purposes: [], agents: [], settings: { inboxEnabled: false, proactiveEnabled: false, reminderEnabled: false, dailyCap: 1, quietStartHour: 22, quietEndHour: 8 }, reminders: [], observations: [], checkIns: [], observerEvents: [], sharedContributions: [], coverage: { privateAccount: 'included', shared: 'not_configured', providers: 'unavailable', backups: 'unavailable' } });
 const input = { version: 1 as const, eventId, space: 'work' as const, kind: 'access_export' as const, locale: 'en' as const, expectedIntakePolicyRevision: 1 };
@@ -16,6 +17,17 @@ it('uses only authenticated no-store requests and rejects wrong scope and additi
   await expect(rightsApi.read('work', auth.session)).rejects.toThrow(); await expect(rightsApi.read('work', auth.session)).rejects.toThrow();
   expect(rightsSnapshotSchema.safeParse({ ...snapshot(), available: true, policyStatus: 'unavailable' }).success).toBe(false);
   expect(rightsSnapshotSchema.safeParse({ ...snapshot(), intakePolicy: { ...row().intakePolicy, copyVersion: 'unknown-copy' } }).success).toBe(false);
+});
+it('requires the current intake copy for admission while preserving historical request bindings', async () => {
+  const historical = { ...row(), intakePolicy: { ...row().intakePolicy, copyVersion: 'rights-intake-ri2-v1' } };
+  const current = { ...snapshot(), requests: [historical] };
+  const fetcher = vi.fn().mockResolvedValue(Response.json(current)); vi.stubGlobal('fetch', fetcher);
+  const result = await rightsApi.read('work', auth.session);
+  expect(result.intakePolicy?.copyVersion).toBe(RIGHTS_COPY_VERSION);
+  expect(result.requests[0].intakePolicy.copyVersion).toBe('rights-intake-ri2-v1');
+  expect(rightsSnapshotSchema.safeParse({ ...current, intakePolicy: historical.intakePolicy }).success).toBe(false);
+  expect(rightsSnapshotSchema.parse({ ...current, available: false, policyStatus: 'unavailable', supportedKinds: [], intakePolicy: undefined }).requests[0].intakePolicy).toEqual(historical.intakePolicy);
+  expect(fetcher).toHaveBeenCalledOnce();
 });
 it('returns current metadata on a deliberate same-event replay, never a historical export', async () => {
   const current = { ...row(), revision: 3, state: 'closed_unfulfilled', updatedAt: 3 }; const fetcher = vi.fn<(url: string, init: RequestInit) => Promise<Response>>(async () => Response.json({ replayed: true, request: current, policyStatus: 'unavailable' })); vi.stubGlobal('fetch', fetcher);
@@ -54,4 +66,11 @@ it('accepts only bounded own-space correction export fields without source text'
   const entry = { version: 1, trust: 'client_unverified', outcome: 'correction_client_saved', mutationEvidence: 'accepted_command_receipt', occurredAt: 1, expiresAt: 2 };
   expect(rightsExportSchema.safeParse({ ...exportData(), observerCorrections: [entry] }).success).toBe(true);
   expect(rightsExportSchema.safeParse({ ...exportData(), observerCorrections: [{ ...entry, text: 'PRIVATE_CANARY' }] }).success).toBe(false);
+});
+
+it('strictly validates current local proof/scope and never converts malformed unknown into inactive',async()=>{
+ const current={version:1,status:{version:1,scope:{space:'work',purpose:'optional.product_analytics'},technical:{current:'unknown',reconciliation:'none'},effectiveBlocked:null,observedAt:null,useEpoch:null,reason:'authority_unavailable'},availableActions:[]};
+ const fetcher=vi.fn().mockResolvedValueOnce(Response.json(current)).mockResolvedValueOnce(Response.json({...current,status:{...current.status,effectiveBlocked:false}})).mockResolvedValueOnce(Response.json({...current,status:{...current.status,scope:{space:'personal',purpose:'optional.product_analytics'}}}));vi.stubGlobal('fetch',fetcher);
+ const scope={space:'work',purpose:'optional.product_analytics'} as const;expect((await rightsApi.localUse(requestId,scope,auth.session)).status.technical.current).toBe('unknown');
+ await expect(rightsApi.localUse(requestId,scope,auth.session)).rejects.toThrow();await expect(rightsApi.localUse(requestId,scope,auth.session)).rejects.toThrow();expect(fetcher).toHaveBeenCalledTimes(3);
 });

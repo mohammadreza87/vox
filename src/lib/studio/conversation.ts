@@ -1,3 +1,4 @@
+import { trustedStudioRequestOrigin } from './request-origin';
 import { hasCommittedPersonalizationTransport } from '../adaptive/persistence/indexed-private-context';
 import { isSchemaValidationError } from '../error-contract';
 import { logicalTurnSchema } from '../adaptive/personalization/learning/contracts';
@@ -41,7 +42,9 @@ export async function handleConversationRequest(studio: Studio, request: Request
     if (member.role === 'pending') return json({ error: 'approval_required' }, 403);
     const url = new URL(request.url);
     if (request.method !== 'POST') return json({ error: 'not_found' }, 404);
-    if (request.headers.get('origin') !== url.origin || request.headers.get('sec-fetch-site') === 'cross-site') return json({ error: 'origin_denied' }, 403);
+    const expectedOrigin = trustedStudioRequestOrigin(url, studio.deps.webAppUrl);
+    if (!expectedOrigin) return json({ error: 'origin_unavailable' }, 503);
+    if (request.headers.get('origin') !== expectedOrigin || request.headers.get('sec-fetch-site') === 'cross-site') return json({ error: 'origin_denied' }, 403);
     if (request.headers.get('content-type')?.split(';')[0].trim().toLowerCase() !== 'application/json') return json({ error: 'json_required' }, 415);
     await limiter.consume('mutation', user.id);
     const bounded = await boundedStudioRequest(request, MAX_IMAGE_URL_LENGTH + 20_000);

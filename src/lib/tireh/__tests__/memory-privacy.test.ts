@@ -41,6 +41,22 @@ describe('bounded memory and history audiences', () => {
     expect(parseScopeKey(scopeKey(shared.scope))).toEqual(shared.scope);
   });
 
+  it('every ownerSharePatch caller inherits the exact-recipient rule: known non-guest members who may use the agent', () => {
+    const withGuest = structuredClone(config);
+    withGuest.people.push({ id: 'visitor', name: 'Visitor', role: 'Guest', telegramUserId: 9_999, companyIds: [], projectIds: [], guest: true });
+    const directory = new OrgDirectory(withGuest);
+    const m = memory({ scope: { kind: 'private', personId: 'reza' } });
+    const refused = 'Choose people who can use this agent.';
+    for (const recipients of [[], ['visitor'], ['unknown-person'], ['parastoo', 'visitor'], Array.from({ length: 31 }, () => 'parastoo'), [7] as unknown as string[]]) {
+      expect(() => ownerSharePatch(directory, m, 'reza', recipients), JSON.stringify(recipients)).toThrow(refused);
+    }
+    const mayUseAgent = (id: string) => id !== 'milad';
+    expect(() => ownerSharePatch(directory, m, 'reza', ['parastoo', 'milad'], { mayUseAgent })).toThrow(refused);
+    expect(ownerSharePatch(directory, m, 'reza', ['parastoo', 'parastoo'], { mayUseAgent })).toEqual({
+      scope: { kind: 'people', personIds: ['parastoo', 'reza'] }, authorizedPersonIds: ['parastoo', 'reza'], shareVersion: 1,
+    });
+  });
+
   it('personal group candidates classify as private while gateway rejects persistence', () => {
     const decision = decideScope(org, group, 'reza', candidate);
     expect(decision).toMatchObject({ scope: { kind: 'private', personId: 'reza' }, sensitivity: 'personal', authorizedPersonIds: ['reza'] });

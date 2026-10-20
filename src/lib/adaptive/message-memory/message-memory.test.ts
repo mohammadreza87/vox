@@ -50,7 +50,10 @@ async function setup() {
 }
 it('exports exact selected text only, keeps source/preview ephemeral, then atomically saves unverified claims with no optional grants', async () => {
   const f = await setup(); await f.adaptive.createMemory(123, { space: 'work', text: 'UNSELECTED_NOTE_CANARY', expectedRevision: (await f.adaptive.read(123, 'work')).revision, eventId: randomUUID() });
+  const complete = vi.spyOn(f.llm, 'complete');
   const before = await readFile(await f.file(), 'utf8'), p = await f.service.preview(123, f.input);
+  // Thinking shares the cap: low effort with headroom for three full claims.
+  expect(complete.mock.calls[0][0]).toMatchObject({ maxTokens: 3072, effort: 'low', temperature: 0, requireComplete: true });
   expect(p.sourceTextHash).toBe(digest(f.input.text)); expect(p.sourceTextHash).not.toBe(digest(f.input.text.trim())); expect(await readFile(await f.file(), 'utf8')).toBe(before);
   expect(f.create).toHaveBeenCalledOnce(); const sent = f.create.mock.calls[0] as unknown as [Record<string, unknown>];
   expect((f.create.mock.calls[0] as unknown as [unknown, unknown])[1]).toEqual({ maxRetries: 0, signal: expect.any(AbortSignal) });

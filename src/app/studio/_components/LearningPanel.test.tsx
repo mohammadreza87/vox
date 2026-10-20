@@ -1,6 +1,6 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ObserverSnapshot } from '../_lib/learning-client';
+import type { MaintenanceHealth, ObserverSnapshot } from '../_lib/learning-client';
 import { LearningPanel } from './LearningPanel';
 const mocks = vi.hoisted(() => ({ read: vi.fn(), process: vi.fn(), export: vi.fn(), operations: vi.fn() }));
 vi.mock('../_lib/learning-client', () => ({ learningApi: mocks }));
@@ -13,8 +13,13 @@ function snapshot(space: 'work' | 'personal' = 'work'): ObserverSnapshot {
     completeness: { complete: false, acceptedEvents: 4, processedEvents: 3, pendingEvents: 1, failedEvents: 0, samplingRate: 1, retentionMs: 604800000,
       coverage: 'instrumented_response_and_client_playback_only', playbackEvidence: 'client_unverified', verifiedTaskSuccess: null, providerUsage: null, language: null, release: null } };
 }
-beforeEach(() => { vi.resetAllMocks(); mocks.read.mockResolvedValue(snapshot()); mocks.process.mockResolvedValue(snapshot()); mocks.operations.mockResolvedValue({ maintenanceConfigured: false, improvementConfigured: false, report: null }); mocks.export.mockResolvedValue({ schemaVersion: 1, space: 'work', records: [] }); });
-afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+function maintenance(checkpointedPages = 42): MaintenanceHealth {
+  return { version: 1, state: 'completed', observedAt: 1000, leaseExpiresAt: null, reason: null,
+    checkpoint: { updatedAt: 900, recordedStatus: 'completed', checkpointedPages, checkpointedAccounts: 7, failure: null } };
+}
+const operations = (health: unknown = maintenance()) => ({ maintenanceConfigured: false, maintenance: health, improvementConfigured: false, report: null });
+beforeEach(() => { vi.resetAllMocks(); mocks.read.mockResolvedValue(snapshot()); mocks.process.mockResolvedValue(snapshot()); mocks.operations.mockResolvedValue(operations({ version: 1, state: 'not_configured', observedAt: null, checkpoint: null, leaseExpiresAt: null, reason: 'health_not_configured' })); mocks.export.mockResolvedValue({ schemaVersion: 1, space: 'work', records: [] }); });
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.useRealTimers(); });
 describe('Learning evidence', () => {
   it('shows partial evidence and queue health without exposing raw identifiers or inferring task success', async () => {
     const value = snapshot();
@@ -85,7 +90,7 @@ describe('Learning evidence', () => {
     expect(screen.getByText(/Maintenance: Not configured/)).toBeInTheDocument();
   });
   it('shows aggregate operator evidence without exposing candidate IDs or audit digests', async () => {
-    mocks.operations.mockResolvedValue({ maintenanceConfigured: true, improvementConfigured: true, report: {
+    mocks.operations.mockResolvedValue({ maintenanceConfigured: true, maintenance: maintenance(), improvementConfigured: true, report: {
       auditEvents: 4, auditHead: 'PRIVATE_AUDIT', candidates: [{ candidateId: 'PRIVATE_CANDIDATE', evaluationStatus: 'passed', humanDecision: 'approve' }],
     } });
     const { container } = render(<LearningPanel space="work" showOperations />);
@@ -106,5 +111,95 @@ describe('Learning evidence', () => {
     await act(async () => finish({ space: 'work' }));
     expect(create).not.toHaveBeenCalled();
     expect(screen.queryByText('Your JSON download is ready.')).not.toBeInTheDocument();
+  });
+
+  it('keeps configuration separate from retained maintenance failure and lease evidence', async () => {
+    mocks.operations.mockResolvedValue(operations({ ...maintenance(), state: 'leased', leaseExpiresAt: 2000,
+      checkpoint: { ...maintenance().checkpoint!, recordedStatus: 'failed', failure: 'sweep_failed' } }));
+    const { container } = render(<LearningPanel space="work" showOperations />);
+    await screen.findByText('Worker lease recorded');
+    expect(screen.getByText(/Maintenance: Not configured/)).toBeInTheDocument();
+    expect(screen.getByText('A maintenance failure was recorded.')).toBeInTheDocument();
+    expect(screen.getByText('System-wide status, independent of your selected space. This view does not run maintenance.')).toBeInTheDocument();
+    expect(mocks.operations).toHaveBeenCalledWith(expect.any(AbortSignal));
+    expect(mocks.process).not.toHaveBeenCalled(); expect(mocks.export).not.toHaveBeenCalled();
+    expect(container.textContent).not.toMatch(/sweep_failed|workerId|cursor|accountId/);
+  });
+
+  it('clears old progress while refreshing, rejects duplicate refresh and sanitizes failed reads', async () => {
+    mocks.operations.mockResolvedValue(operations());
+    render(<LearningPanel space="work" showOperations />);
+    const panel = screen.getByRole('region', { name: 'Software improvement operations' });
+    await within(panel).findByText('Pages in recorded progress');
+    let fail!: (error: Error) => void;
+    mocks.operations.mockReturnValueOnce(new Promise((_resolve, reject) => { fail = reject; }));
+    const refresh = within(panel).getByRole('button', { name: 'Refresh operations' });
+    fireEvent.click(refresh); fireEvent.click(refresh);
+    expect(mocks.operations).toHaveBeenCalledTimes(2);
+    expect(within(panel).queryByText('Pages in recorded progress')).not.toBeInTheDocument();
+    expect(panel).toHaveAttribute('aria-busy', 'true');
+    await act(async () => fail(new Error('PRIVATE_ACCOUNT_CURSOR_FAILURE')));
+    expect(await within(panel).findByRole('alert')).toHaveTextContent('Operations evidence is unavailable. Refresh to try again.');
+    expect(panel.textContent).not.toContain('PRIVATE_');
+    expect(within(panel).queryByText('Pages in recorded progress')).not.toBeInTheDocument();
+    mocks.operations.mockResolvedValueOnce(operations(maintenance(9)));
+    fireEvent.click(within(panel).getByRole('button', { name: 'Refresh operations' }));
+    await within(panel).findByText('Pages in recorded progress');
+    expect(within(panel).getByText('Pages in recorded progress').nextElementSibling).toHaveTextContent('9');
+  });
+
+  it('aborts a previous-space refresh and discards its late result without changing personal evidence behavior', async () => {
+    mocks.operations.mockResolvedValueOnce(operations());
+    const { rerender } = render(<LearningPanel space="work" showOperations />);
+    await screen.findByText('Pages in recorded progress');
+    let finish!: (value: ReturnType<typeof operations>) => void;
+    mocks.operations.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh operations' }));
+    const pendingSignal = mocks.operations.mock.calls.at(-1)![0] as AbortSignal;
+    mocks.operations.mockResolvedValueOnce(operations(maintenance(99)));
+    mocks.read.mockResolvedValueOnce(snapshot('personal'));
+    rerender(<LearningPanel space="personal" showOperations />);
+    expect(pendingSignal.aborted).toBe(true);
+    await screen.findByText('Pages in recorded progress');
+    await act(async () => finish(operations(maintenance(999))));
+    expect(screen.getByText('Pages in recorded progress').nextElementSibling).toHaveTextContent('99');
+    expect(screen.getByText('Your Personal space')).toBeInTheDocument();
+    expect(mocks.process).not.toHaveBeenCalled();
+  });
+
+  it('aborts on operator-view removal and ignores the old refresh after access is restored', async () => {
+    mocks.operations.mockResolvedValueOnce(operations());
+    const { rerender } = render(<LearningPanel space="work" showOperations />);
+    await screen.findByText('Pages in recorded progress');
+    let finish!: (value: ReturnType<typeof operations>) => void;
+    mocks.operations.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh operations' }));
+    const pendingSignal = mocks.operations.mock.calls.at(-1)![0] as AbortSignal;
+    rerender(<LearningPanel space="work" />);
+    expect(pendingSignal.aborted).toBe(true);
+    expect(screen.queryByRole('region', { name: 'Software improvement operations' })).not.toBeInTheDocument();
+    mocks.operations.mockResolvedValueOnce(operations(maintenance(10)));
+    rerender(<LearningPanel space="work" showOperations />);
+    await screen.findByText('Pages in recorded progress');
+    await act(async () => finish(operations(maintenance(999))));
+    expect(screen.getByText('Pages in recorded progress').nextElementSibling).toHaveTextContent('10');
+  });
+
+  it('aborts the pending initial operator read on unmount', async () => {
+    let finish!: (value: ReturnType<typeof operations>) => void;
+    mocks.operations.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+    const { unmount } = render(<LearningPanel space="work" showOperations />);
+    const pendingSignal = mocks.operations.mock.calls[0][0] as AbortSignal;
+    unmount(); expect(pendingSignal.aborted).toBe(true);
+    await act(async () => finish(operations()));
+  });
+
+  it('reads operations once without polling or processing actions as time advances', async () => {
+    vi.useFakeTimers(); mocks.operations.mockResolvedValue(operations());
+    render(<LearningPanel space="work" showOperations />);
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => vi.advanceTimersByTime(60000));
+    expect(mocks.operations).toHaveBeenCalledTimes(1);
+    expect(mocks.process).not.toHaveBeenCalled(); expect(mocks.export).not.toHaveBeenCalled();
   });
 });

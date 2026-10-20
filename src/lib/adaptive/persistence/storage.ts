@@ -13,9 +13,9 @@ export interface AdaptiveAccountPageInput { after?: string; limit: number }
 
 export interface AdaptiveStorage {
   /** Only explicit prepared stores create/accept the v2 canonical cohort. */
-  readonly canonicalSchemaVersion?: 1 | 2;
+  readonly canonicalSchemaVersion?: 1 | 2 | 3;
   /** Required only for the prepared FILE narrow authority layout. */
-  readonly fileAuthorityProjectionVersion?: 1;
+  readonly fileAuthorityProjectionVersion?: 1 | 2;
   /** Managed-format namespace, never an access grant. Original FILE has none. */
   readonly identity?: Readonly<{ incarnation: string; generation: number }>;
   /** Optional server-only read model. Presence never selects or migrates a store. */
@@ -34,6 +34,9 @@ export interface AdaptiveStorage {
     { status: 'ready'; value: T } | { status: 'busy' | 'unsupported' | 'missing' };
   /** File-only effect fence; synchronous committed snapshot, no writer in progress. */
   readCommittedForEffect?(accountId: string): { status: 'ready'; document: unknown | null } | { status: 'busy' };
+  /** RF2 proof-only committed snapshot. No durable clock observation or writer
+   * reservation; observedAt is checked against the committed clock floor. */
+  readCommittedWithoutObservationForEffect?(accountId:string):{status:'ready';document:unknown|null;observedAt:number}|{status:'busy'};
   /** Server maintenance only. Opaque stable key cursor; never returns document payloads.
    * Concurrent inserts before a cursor are visited on the next full sweep. */
   listAccounts?(input: AdaptiveAccountPageInput): Promise<AdaptiveAccountPage>;

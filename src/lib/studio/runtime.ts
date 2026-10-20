@@ -1,3 +1,4 @@
+import { RightsUseHoldService } from '../adaptive/rights-use-holds/service';
 import { lstatSync } from 'node:fs';
 import { RightsFileStorage } from '../adaptive/rights-intake/storage';
 import { RightsIntakeService } from '../adaptive/rights-intake/service';
@@ -38,6 +39,9 @@ import { StudioExperimentRuntime } from '../adaptive/experiments/runtime';
  *   STUDIO_CHAT_MODEL        model for chat replies (default: claude-sonnet-5-5)
  *   STUDIO_VOICE_MODEL       model for live calls (default: claude-haiku-5-5, the fastest)
  *   STUDIO_DECISIONS         off = no OpenAI Decisions triage (default: on with OPENAI_API_KEY)
+ *   STUDIO_SKILL_ROUTING     per-message playbook selection inside triage (docs/SKILL_ROUTING.md):
+ *                            on (default) | shadow (ask and log, replies keep the full craft)
+ *                            | off (never ask). Any other value is treated as off.
  *   STUDIO_WEB_SEARCH        off = agents never search the web (default: on, per-agent toggle)
  *   STUDIO_PERSONA_MODEL     model for persona design (default: stronger Claude model)
  *   STUDIO_ORG_NAME          default HOOR
@@ -45,6 +49,7 @@ import { StudioExperimentRuntime } from '../adaptive/experiments/runtime';
 
 import { isAbsolute, join, parse, relative, resolve, sep } from 'path';
 import { AnthropicLLM, type LLM } from '../tireh/llm';
+import { parseSkillRouting } from '../tireh/skill-routing';
 import { createFileStores } from '../tireh/memory/file-store';
 import { FirestoreChatHistoryStore, FirestoreMemoryStore, FirestoreShareOfferStore, FirestoreUpdateDeduper } from '../tireh/memory/firestore-store';
 import { TelegramBotClient } from '../tireh/telegram/client';
@@ -68,6 +73,7 @@ import { AdaptiveExperienceService } from '../adaptive/runtime/service';
 import { AdaptiveObserverService } from '../adaptive/observation/service';
 import { AdaptiveLifecycleService } from '../adaptive/lifecycle/service';
 import { AdaptiveMaintenanceRunner } from '../adaptive/lifecycle/maintenance';
+import { readMaintenanceHealth } from '../adaptive/lifecycle/maintenance-health';
 import { DecisionService, OpenAIDecisionProvider } from '../adaptive/decisions';
 import { VoiceIdentityService } from '../adaptive/voice-identity/service';
 import { VoiceIdentityRepository } from '../adaptive/voice-identity/repository';
@@ -270,6 +276,7 @@ async function create(): Promise<Studio> {
       openai,
       // Reply triage and stranger decisions; STUDIO_DECISIONS=off skips them.
       decider: openai && env.STUDIO_DECISIONS !== 'off' ? openai : undefined,
+      skillRouting: parseSkillRouting(env.STUDIO_SKILL_ROUTING),
       eleven: env.ELEVENLABS_API_KEY ? new ElevenLabsStudio(env.ELEVENLABS_API_KEY) : null,
       managerBot,
       managerUsername,
@@ -282,6 +289,8 @@ async function create(): Promise<Studio> {
       memory: storage.memory,
       adaptive: storage.adaptive,
       relationshipAuthority: authority,
+      // Content-free per-stage timings for a latency baseline (scripts/stage-timings.ts).
+      stageTimings: env.STUDIO_STAGE_TIMINGS === '1',
       rateLimiter: storage.rateLimiter,
       imageToJpeg: toJpeg,
       relationshipStore: storage.relationshipStore,
@@ -370,7 +379,8 @@ async function create(): Promise<Studio> {
       const encodedKey = env.STUDIO_RIGHTS_KEY_BASE64;
       const key = encodedKey && /^[A-Za-z0-9+/]{43}=$/.test(encodedKey) ? Buffer.from(encodedKey, 'base64') : undefined;
       studio.deps.rights = new RightsIntakeService(new RightsRepository(new RightsFileStorage(join(config.dataDir, 'rights-intake', 'v1'))), {
-        policy: () => parseRightsPolicy(process.env.STUDIO_RIGHTS_POLICY_JSON), key,
+        policy: () => parseRightsPolicy(process.env.STUDIO_RIGHTS_POLICY_JSON), key, localUse: new RightsUseHoldService(storage.adaptive!), localErasure: studio.deps.lifecycle,
+        assertPrivateMemoryNow: id => assertRightsAccountNow(studio,id,'export'),
         assertAccountNow: id => assertRightsAccountNow(studio, id),
         assertOperatorNow: id => assertRightsAccountNow(studio, id, 'operator'),
         prepareExport: async (id, space) => {
@@ -380,6 +390,7 @@ async function create(): Promise<Studio> {
         },
       });
     }
+    studio.deps.maintenanceHealth = () => readMaintenanceHealth(storage.maintenanceStorage);
     if (config.maintenanceEnabled) studio.deps.maintenance = new AdaptiveMaintenanceRunner(studio.deps.lifecycle,
       storage.adaptive!.repository.storage, storage.maintenanceStorage, {
         afterAccount: (telegramId, context) => maintainAdaptiveAccount(studio, telegramId, context.signal),

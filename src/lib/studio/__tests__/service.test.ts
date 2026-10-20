@@ -40,6 +40,13 @@ beforeEach(async () => {
   org = await seedOrg(h);
 });
 
+/** Legacy (non-adaptive) path: TIREH memory, history and the unscoped relationship loop.
+ * No production runtime builds it; adaptive runtimes disable all three (production-turn.test.ts). */
+async function legacyHarness() {
+  h = makeStudio({ adaptive: false });
+  org = await seedOrg(h);
+}
+
 // ============================================================================
 describe('members and roles', () => {
   it('bootstraps founding owners from superadminIds; everyone else starts pending', async () => {
@@ -288,7 +295,7 @@ describe('spawn: draft, refine, look, avatars, voice, sandbox, publish', () => {
     const reply = await h.studio.testChat(org.alice, agent.id, [{ role: 'user', content: 'Hi Nova' }]);
     expect(reply).toBe('Hi Alice!');
     expect(h.chatLLM.lastPrompt).toContain('You are Nova');
-    expect(h.chatLLM.lastPrompt).toContain('sandbox test');
+    expect(h.chatLLM.lastPrompt).toContain('private preview');
     expect(h.chatLLM.extractionCalls).toBe(0);
     expect(h.memory.memories.records.size).toBe(0);
     expect(h.memory.history.chats.size).toBe(0);
@@ -713,6 +720,7 @@ describe('groups', () => {
   });
 
   it('in a group with unknown readers only the current exchange reaches the model', async () => {
+    await legacyHarness();
     const { agent: a, bot, botId } = await hire(h, org.alice);
     await h.store.update((s) => {
       s.groups.push({ chatId: chat.id, title: 'Game Team', memberIds: [ID.alice, ID.bob], hasGuests: true, agentIds: [a.id], addedAt: T0.toISOString() });
@@ -744,6 +752,7 @@ describe('groups', () => {
 // ============================================================================
 describe('calls', () => {
   it('transcribes, replies through the gateway (memory formed) and speaks with the agent\'s voice', async () => {
+    await legacyHarness();
     h.personaLLM.push(draftJson());
     const { agent: d } = await h.studio.draft(org.alice, {});
     await h.studio.chooseLibraryVoice(org.alice, d.id, { publicOwnerId: 'o', voiceId: 'v', name: 'Sam' });
@@ -824,6 +833,8 @@ describe('memories API', () => {
 });
 
 describe('selected memory sharing', () => {
+  // Adaptive runtimes refuse legacy sharing with 409 (adaptive-integration.test.ts).
+  beforeEach(legacyHarness);
   it('source owner chooses exact recipients and may revoke the grant and retained derived history', async () => {
     const { agent } = await hire(h, org.alice);
     const record = await h.memory.memories.add(mem(agent.id, { content: 'EXPLICIT_RECIPIENT_CANARY', scope: { kind: 'private', personId: personId(ID.alice) } }));
@@ -847,6 +858,20 @@ describe('selected memory sharing', () => {
     expect((await h.studio.memoriesFor(org.bob, agent.id)).map((m) => m.content)).not.toContain('LEGACY_CANARY');
     await h.studio.shareMemory(org.alice, agent.id, legacy.id, [ID.bob]);
     expect((await h.studio.memoriesFor(org.bob, agent.id)).map((m) => m.content)).toContain('LEGACY_CANARY');
+  });
+
+  it('refuses recipients who are pending, outside the team or cannot use the agent, before reading the memory', async () => {
+    const { agent } = await hire(h, org.alice, {}, undefined, 'private');
+    const record = await h.memory.memories.add(mem(agent.id, { content: 'RECIPIENT_RULE_CANARY', scope: { kind: 'private', personId: personId(ID.alice) } }));
+    const get = vi.spyOn(h.memory.memories, 'get');
+    for (const recipients of [[ID.pending], [ID.stranger], [ID.bob], [], [ID.alice, Number.NaN]]) {
+      await expectStudioError(h.studio.shareMemory(org.alice, agent.id, record.id, recipients), 400, /Choose people who can use this agent/);
+    }
+    expect(get).not.toHaveBeenCalled();
+    get.mockRestore();
+    await h.studio.setAccess(org.alice, agent.id, [ID.bob]);
+    await h.studio.shareMemory(org.alice, agent.id, record.id, [ID.bob]);
+    expect((await h.memory.memories.get(record.id))?.authorizedPersonIds).toEqual([personId(ID.alice), personId(ID.bob)].sort());
   });
 
   it('refuses broad sharing of personal and confidential memories', async () => {

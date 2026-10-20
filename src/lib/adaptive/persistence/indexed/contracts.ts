@@ -1,3 +1,4 @@
+import type { RightsUseControls } from '../../rights-use-holds/contracts';
 /** Internal server-only persistence evidence. These records never grant Studio or
  * capability-policy authority and must never be accepted from an HTTP client. */
 import type { ProductPauseUseControlsV1 } from '../../product-pause/contracts';
@@ -8,7 +9,7 @@ export const INDEXED_SCHEMA_VERSION = 1 as const;
 export const INDEXED_LIMITS = Object.freeze({ memories: 300, canonicalBytes: 700_000,
   queryChars: 8192, queryTerms: 128, candidates: 64, bodyBytes: 128 * 1024, lineageDepth: 8 });
 export interface IndexedStoreMetadata {
-  formatVersion: 1; schemaVersion: 1 | 2; incarnation: string; generation: number; lifecycleWatermark: number;
+  formatVersion: 1; schemaVersion: 1 | 2 | 3; incarnation: string; generation: number; lifecycleWatermark: number;
 }
 export interface IndexedScope {
   accountId: string; personId: string; tenantId: string; space: SpaceKind; spaceId: string;
@@ -16,7 +17,7 @@ export interface IndexedScope {
 }
 /** A separate strict body-free schema, never a partial AdaptiveDocument. */
 export interface IndexedControls {
-  schemaVersion: 1 | 2; productPause?: ProductPauseUseControlsV1; accountId: string; personId: string; createdAt: number; revision: number; updatedAt: number;
+  schemaVersion: 1 | 2 | 3; productPause?: ProductPauseUseControlsV1; rightsUseControls?:RightsUseControls; retentionStoreIdentity?:string; accountId: string; personId: string; createdAt: number; revision: number; updatedAt: number;
   binding?: AdaptiveDocument['binding']; declaration?: AdaptiveDocument['declaration'];
   permissions: AdaptiveDocument['permissions']; agentGrants: AdaptiveDocument['agentGrants'];
   preferences: AdaptiveDocument['experience']['preferences']; settings: AdaptiveDocument['experience']['settings'];
@@ -43,17 +44,17 @@ export class IndexedStorageError extends Error {
   }
 }
 export interface RuntimeAuthorityReceipt {
-  version: 1; incarnation: string; generation: number; catalogVersion: number; catalogDigest: string;
+  version: 1 | 2; incarnation: string; generation: number; catalogVersion: number; catalogDigest: string;
   scope: IndexedScope; issuedAt: number; deadline: number; seal: string;
 }
 export interface CandidateHandle {
-  version: 1; incarnation: string; generation: number; catalogVersion: number; catalogDigest: string;
+  version: 1 | 2; incarnation: string; generation: number; catalogVersion: number; catalogDigest: string;
   deadline: number; scope: IndexedScope; id: string; revision: number; epoch: number;
   layer: 'summary' | 'memory'; sourceRefs: { id: string; revision: number }[];
   bodyBytes: number; bodyDigest: string; freshness: number; claim: boolean; seal: string;
 }
 export interface CandidateCursor {
-  version: 1; incarnation: string; generation: number; catalogVersion: number; catalogDigest: string;
+  version: 1 | 2; incarnation: string; generation: number; catalogVersion: number; catalogDigest: string;
   scope: IndexedScope; deadline: number; queryDigest: string; offset: number; seal: string;
 }
 export interface IndexedControlStamp { incarnation: string; generation: number; catalogVersion: number; catalogDigest: string }

@@ -24,6 +24,9 @@
     "studio:production": "node scripts/studio-production.mjs",
     "test:relationships": "vitest run src/lib/relationships src/lib/studio/__tests__/relationships.test.ts src/lib/studio/__tests__/scoped-relationship-integration.test.ts src/lib/studio/__tests__/scoped-relationship-drain.test.ts src/lib/adaptive/__tests__/relationships-service.test.ts src/lib/tireh/__tests__/memory-privacy.test.ts src/app/api/studio/relationships/drain/route.test.ts src/app/studio/_components/RelationshipPanel.test.tsx",
     "simulate:relationships": "tsx scripts/relationship-simulation.ts",
+    "eval:voice": "node --import tsx scripts/agent-voice-eval.ts",
+    "eval:skills": "node --import tsx scripts/skill-routing-eval.ts",
+    "timings:report": "node --import tsx scripts/stage-timings.ts",
     "e2e:relationships": "playwright test --config=playwright.relationships.config.ts",
     "test:connections": "vitest run src/lib/connections",
     "e2e:connections": "playwright test --config=playwright.connections.config.ts",
@@ -82,7 +85,7 @@
     "@types/testing-library__jest-dom": "^5.14.9",
     "@vitejs/plugin-react": "^5.1.2",
     "@vitest/browser-playwright": "^4.0.15",
-    "@vitest/coverage-v8": "^4.0.15",
+    "@vitest/coverage-v8": "4.1.12",
     "dotenv-cli": "^11.0.0",
     "eslint": "^9",
     "eslint-config-next": "^15.5.28",
@@ -95,7 +98,7 @@
     "tsx": "^4.19.2",
     "typescript": "^5",
     "vite": "^7.2.7",
-    "vitest": "^4.0.15"
+    "vitest": "4.1.12"
   },
   "overrides": {
     "next": {

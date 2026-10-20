@@ -10,6 +10,7 @@ import { MemoryCorrectionEditor } from '../MemoryCorrectionEditor';
 import { ReviewedMemoryPanel } from '../ReviewedMemoryPanel';
 import { ProductPausePanel } from '../ProductPausePanel';
 import { RightsRequestPanel } from '../RightsRequestPanel';
+import { GuestRightsOperationsPanel } from '../GuestRightsOperationsPanel';
 import { useProductPause } from '../../_lib/product-pause-client';
 import { pauseText } from '../../_lib/product-pause-copy';
 
@@ -31,6 +32,7 @@ export function PrivacyScreen({ onShared, onExperience, onConnections, onCorrect
   const [agents, setAgents] = useState<AgentView[]>([]);
   const generation = useRef(0), pendingCorrectionRef = useRef<string | null>(null), busyRef = useRef(false);
   const [pendingCorrection, setPendingCorrection] = useState<string | null>(null);
+  const [notesStale, setNotesStale] = useState(false);
   busyRef.current = busy;
   const correctionPending = useCallback((token: string, pending: boolean): boolean => {
     if (pending) {
@@ -54,12 +56,18 @@ export function PrivacyScreen({ onShared, onExperience, onConnections, onCorrect
     try {
       const [result, availableAgents] = await Promise.all([adaptiveApi.read(space, locale), api.agents()]);
       if (generation.current !== current) return;
-      setSnapshotSession(session); setSnapshot(result); setAdult(result.identity.adultDeclared); setJurisdiction(result.identity.declaredJurisdiction ?? '');
+      setSnapshotSession(session); setSnapshot(result); setNotesStale(false); setAdult(result.identity.adultDeclared); setJurisdiction(result.identity.declaredJurisdiction ?? '');
       setAgents(availableAgents.agents.filter(a => a.status === 'active'));
     } catch { if (generation.current === current) setError(locale === 'fa' ? 'تنظیمات دریافت نشد. دوباره تلاش کنید.' : 'Your settings could not be loaded. Please try again.'); }
   }, [space, locale, session]);
+  const erasureDispatched = useCallback(() => { generation.current++; setNotesStale(true); setSnapshot(current => current && ({ ...current, memories: [] })); setNote(''); setRemoving(null); setPresentation(null); }, []);
   const invalidate = useCallback(() => { generation.current++; }, []);
-  useLayoutEffect(() => { void load(); return invalidate; }, [load, invalidate]);
+  const loadedContext = useRef({ session, space, locale });
+  useLayoutEffect(() => {
+    const previous = loadedContext.current; loadedContext.current = { session, space, locale };
+    if ((previous.session !== session || previous.space !== space || previous.locale !== locale) && pendingCorrectionRef.current) correctionPending(pendingCorrectionRef.current, false);
+    void load(); return invalidate;
+  }, [load, invalidate, session, space, locale, correctionPending]);
 
   const mutate = async (action: () => Promise<AdaptiveSnapshot>, message: string) => {
     if (busyRef.current || pendingCorrectionRef.current) return;
@@ -98,6 +106,13 @@ export function PrivacyScreen({ onShared, onExperience, onConnections, onCorrect
     </header>
     <p className="vx-2">{c.intro}</p>
     <fieldset disabled={!!pendingCorrection} onClickCapture={event => { if (pendingCorrectionRef.current) { event.preventDefault(); event.stopPropagation(); } }} onChangeCapture={event => { if (pendingCorrectionRef.current) { event.preventDefault(); event.stopPropagation(); } }} style={{ display: 'flex', flexDirection: 'column', gap: 20, border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+    <ProductPausePanel locale={locale} sessionKey={session} onReviewProfile={() => document.getElementById('vox-profile-heading')?.focus()} />
+    <RightsRequestPanel space={space} locale={locale} sessionKey={session} memorySnapshot={snapshot?.space === space ? snapshot : null} notesStale={notesStale} mutationDisabled={busy || !!pendingCorrection} onRefreshNotes={() => void load()} onErasurePendingChange={correctionPending} onErasureDispatched={erasureDispatched} />
+    <p className="vx-small"><a href="/privacy">{locale === 'fa' ? 'درخواست حریم خصوصی بدون حساب' : 'Privacy request without an account'}</a></p>
+    <GuestRightsOperationsPanel locale={locale} sessionKey={session} />
+    <fieldset disabled={!!pendingCorrection} onClickCapture={event => { if (pendingCorrectionRef.current) { event.preventDefault(); event.stopPropagation(); } }} onChangeCapture={event => { if (pendingCorrectionRef.current) { event.preventDefault(); event.stopPropagation(); } }} style={{ display: 'flex', flexDirection: 'column', gap: 16, border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+    {onExperience && <button className="vx-btn vx-btn-secondary" onClick={() => { if (!pendingCorrectionRef.current) onExperience(); }}>{locale === 'fa' ? 'ترجیح‌ها و صندوق اعلان' : 'Preferences & notification inbox'}</button>}
+    {onConnections && <button className="vx-btn vx-btn-secondary" onClick={() => { if (!pendingCorrectionRef.current) onConnections(); }}>{locale === 'fa' ? 'اتصال‌ها و دسترسی عامل‌ها' : 'Connections & agent access'}</button>}
     <div className="vx-privacy-spaces" role="group" aria-label={c.space}>
       {(['work', 'personal'] as const).map(value => <button key={value} className="vx-btn vx-btn-secondary" aria-pressed={space === value} disabled={busy} onClick={() => { if (!pendingCorrectionRef.current) setSpace(value); }}>{c[value]}</button>)}
     </div>

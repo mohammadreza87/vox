@@ -141,7 +141,7 @@ export class PreferenceLearningService {
       learning.presentations = learning.presentations.filter(p => p.space !== input.space || p.agentId !== input.agentId);
       if (learning.presentations.length >= 24) return fail('storage_capacity');
       learning.presentations.push({ space: input.space, agentId: input.agentId, studioFingerprint: authority.studio, personId: authority.personId, bindingId: authority.bindingId,
-        ...(authority.productPauseUseStamp ? { productPauseUseStamp: authority.productPauseUseStamp } : {}), permissionRevision: authority.permissionRevision, consentEpoch: authority.consentEpoch, grantRevision: authority.grantRevision,
+        ...(authority.rightsUseStamp?{retentionStoreIdentity:this.adaptive.storeIdentity}:{}), ...(authority.rightsUseStamp?{rightsUseStamp:authority.rightsUseStamp}:{}), ...(authority.productPauseUseStamp ? { productPauseUseStamp: authority.productPauseUseStamp } : {}), permissionRevision: authority.permissionRevision, consentEpoch: authority.consentEpoch, grantRevision: authority.grantRevision,
         version: LEARNING_VERSION, locale: input.locale, receipt: randomUUID(), copyHash: digest([LEARNING_VERSION, input.locale, learningNotice[input.locale]]), createdAt: now, expiresAt: Math.min(now + 10 * 60_000, authority.expiresAt) });
       d.revision++; d.updatedAt = now;
     }, true, signal);
@@ -162,7 +162,7 @@ export class PreferenceLearningService {
         learning.intents = learning.intents.filter(i => i.space !== input.space || i.agentId !== input.agentId);
         if (learning.intents.length >= 24) return fail('storage_capacity');
         learning.intents.push({ space: input.space, agentId: input.agentId, studioFingerprint: authority.studio, personId: authority.personId, bindingId: authority.bindingId,
-          ...(authority.productPauseUseStamp ? { productPauseUseStamp: authority.productPauseUseStamp } : {}), permissionRevision: authority.permissionRevision, consentEpoch: authority.consentEpoch, grantRevision: authority.grantRevision,
+          ...(authority.rightsUseStamp?{retentionStoreIdentity:this.adaptive.storeIdentity}:{}), ...(authority.rightsUseStamp?{rightsUseStamp:authority.rightsUseStamp}:{}), ...(authority.productPauseUseStamp ? { productPauseUseStamp: authority.productPauseUseStamp } : {}), permissionRevision: authority.permissionRevision, consentEpoch: authority.consentEpoch, grantRevision: authority.grantRevision,
           version: LEARNING_VERSION, id: randomUUID(), revision: 1, createdAt: now, expiresAt: Math.min(now + LEARNING_TTL, authority.expiresAt) });
       } else {
         suppressLearningScope(d, input, now);
@@ -302,7 +302,7 @@ export class PreferenceLearningService {
         if (learning.candidates.length >= 24 || learning.candidates.some(c => c.space === task.space && c.agentId === task.agentId && c.setting.key === setting.key)) return;
         const authority = learningAuthority(this.adaptive, d, task, now)!;
         const candidate: LearningCandidate = { id: randomUUID(), revision: 1, version: LEARNING_VERSION, space: task.space, agentId: task.agentId,
-          studioFingerprint: studio, personId: authority.personId, bindingId: authority.bindingId, ...(authority.productPauseUseStamp ? { productPauseUseStamp: authority.productPauseUseStamp } : {}), permissionRevision: authority.permissionRevision, consentEpoch: authority.consentEpoch, grantRevision: authority.grantRevision,
+          studioFingerprint: studio, personId: authority.personId, bindingId: authority.bindingId, ...(authority.rightsUseStamp?{retentionStoreIdentity:this.adaptive.storeIdentity}:{}), ...(authority.rightsUseStamp?{rightsUseStamp:authority.rightsUseStamp}:{}), ...(authority.productPauseUseStamp ? { productPauseUseStamp: authority.productPauseUseStamp } : {}), permissionRevision: authority.permissionRevision, consentEpoch: authority.consentEpoch, grantRevision: authority.grantRevision,
           intentId: prepared.intent.id, intentRevision: prepared.intent.revision, setting, reason: reasonFor[setting.key], evidenceIds: [evidenceId], createdAt: now,
           expiresAt: Math.min(now + LEARNING_TTL, prepared.intent.expiresAt, authority.expiresAt) };
         if (candidate.expiresAt <= now) return;

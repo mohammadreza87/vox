@@ -1,6 +1,6 @@
 import { TurnTrace } from '../../adaptive/observation/trace';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { AnthropicLLM, GeminiLLM } from '../llm';
+import { AnthropicLLM, GeminiLLM, supportsEffort } from '../llm';
 import { withSources } from '../gateway';
 import { expectContentFreeTelegramLogs, telegramCanary, telegramCanaryError } from '@/test/telegram-diagnostics';
 
@@ -95,6 +95,33 @@ describe('Anthropic request compatibility', () => {
   it('retains the existing default temperature for older Claude models', async () => {
     await new AnthropicLLM('fixture-key', 'claude-sonnet-4-5').complete(request);
     expect(provider.create.mock.lastCall?.[0].temperature).toBe(0.7);
+  });
+});
+
+describe('reply effort', () => {
+  it.each([
+    'claude-sonnet-5-5', 'claude-sonnet-5-5-20260928', 'claude-haiku-5-5', 'claude-sonnet-5', 'claude-opus-5-5',
+    'claude-fable-5-1', 'claude-opus-4-5-20251101', 'claude-opus-4-8', 'claude-sonnet-4-6',
+  ])('sends output_config.effort to %s', async model => {
+    await new AnthropicLLM('fixture-key', model).complete({ ...request, effort: 'low' });
+    expect(provider.create.mock.lastCall?.[0].output_config).toEqual({ effort: 'low' });
+    provider.stream.mockReturnValueOnce((async function* () { /* no events */ })());
+    for await (const part of new AnthropicLLM('fixture-key', model).stream({ ...request, effort: 'low' })) void part;
+    expect(provider.stream.mock.lastCall?.[0].output_config).toEqual({ effort: 'low' });
+  });
+
+  it.each(['claude-haiku-4-5', 'claude-sonnet-4-5', 'claude-sonnet-4-20250514', 'claude-3-7-sonnet-20250219', 'gpt-4o'])(
+    'leaves effort out for %s, which rejects it', async model => {
+      expect(supportsEffort(model)).toBe(false);
+      await new AnthropicLLM('fixture-key', model).complete({ ...request, effort: 'low' });
+      expect(provider.create.mock.lastCall?.[0]).not.toHaveProperty('output_config');
+    });
+
+  it('sends nothing extra without an effort, and Gemini ignores it', async () => {
+    await new AnthropicLLM('fixture-key', 'claude-sonnet-5-5').complete(request);
+    expect(provider.create.mock.lastCall?.[0]).not.toHaveProperty('output_config');
+    expect(await new GeminiLLM('fixture-key', 'fixture-model').complete({ ...request, effort: 'low' })).toBe('fixture answer');
+    expect(JSON.stringify(provider.getGenerativeModel.mock.lastCall)).not.toContain('effort');
   });
 });
 

@@ -58,7 +58,8 @@ async function grantPersonalization(service: AdaptiveService, space: 'work' | 'p
 }
 
 async function setup() {
-  const h = makeStudio(); directories.push(h.dir);
+  // Installs its own adaptive service below; the default one would leave a mismatched relationship authority.
+  const h = makeStudio({ adaptive: false }); directories.push(h.dir);
   const org = await seedOrg(h);
   const { agent, bot, botId } = await hire(h, org.alice);
   const adaptive = adaptiveFor(h);
@@ -79,7 +80,7 @@ async function permitAgent(service: AdaptiveService, agentId: string, space: 'wo
 
 describe('independent composed delivery security', () => {
   it('optional defaults remain off without a release manifest even after account confirmation', async () => {
-    const h = makeStudio(); directories.push(h.dir);
+    const h = makeStudio({ adaptive: false }); directories.push(h.dir);
     const { service } = adaptiveFor(h, false);
     const current = await service.confirm(ID.alice, { confirm: true, adultConfirmed: true, declaredJurisdiction: 'EE' });
     expect(current.purposes.every(p => p.state === 'not_asked' && !p.available)).toBe(true);
@@ -134,7 +135,7 @@ describe('independent composed delivery security', () => {
   });
 
   it('an unconfirmed account profile can use core current-turn text without private context', async () => {
-    const h = makeStudio(); directories.push(h.dir);
+    const h = makeStudio({ adaptive: false }); directories.push(h.dir);
     const org = await seedOrg(h);
     const { agent } = await hire(h, org.alice);
     h.studio.deps.adaptive = adaptiveFor(h).service;

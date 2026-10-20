@@ -147,3 +147,10 @@ it('a same-scope replacement aborts the old command and lets a new command retai
   await act(async () => finishOld(snapshot)); expect(save).toBeDisabled(); expect(p.onSnapshot).not.toHaveBeenCalled();
   await act(async () => finishNext({ ...snapshot, revision: 13 })); expect(save).toBeEnabled(); expect(p.onSnapshot).toHaveBeenCalledExactlyOnceWith({ ...snapshot, revision: 13 });
 });
+
+it.each([false,true])('explains retained preferences held from automatic use in EN/FA (fa=%s)',async fa=>{
+ const s=withUndo();s.entries[0].applied=false;s.entries[0].source='default';s.entries[0].explanation='rights_use_restricted';mocks.preferenceState.mockResolvedValue(s);
+ render(<PreferencePanel {...props()} locale={fa?'fa':'en'}/>);
+ expect(await screen.findByText(fa?'انتخاب‌های ذخیره‌شده استفاده نمی‌شوند؛ محدودیت محلی شخصی‌سازی در این فضا فعال است. مدیریت انتخاب‌های ذخیره‌شده همچنان در دسترس است.':'Saved choices are not used because a local personalization restriction is active in this space. Managing your saved choices remains available.')).toBeInTheDocument();
+ expect(screen.getAllByRole('button',{name:fa?'ذخیرهٔ ترجیح':'Save preference'})[0]).toBeEnabled();expect(mocks.preference).not.toHaveBeenCalled();
+});
