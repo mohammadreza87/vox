@@ -48,6 +48,9 @@ export function PrivacyScreen({ onShared, onExperience, onConnections, onCorrect
   const c = privacyCopy[locale];
   const pause = useProductPause(space);
   const paused = pause.status?.productPaused === true || snapshot?.storedPersonalizationAllowed === false;
+  // Identity confirmation and a current adult declaration are separate facts.
+  const adultDeclarationNeeded = !!snapshot && (!snapshot.identity.adultDeclared || snapshot.explicitMemoryReason === 'adult_required' || snapshot.purposes.some(p => p.reason === 'adult_required'));
+  useLayoutEffect(() => { setAdult(false); }, [adultDeclarationNeeded]);
 
   const load = useCallback(async () => {
     if (pendingCorrectionRef.current) return;
@@ -56,7 +59,7 @@ export function PrivacyScreen({ onShared, onExperience, onConnections, onCorrect
     try {
       const [result, availableAgents] = await Promise.all([adaptiveApi.read(space, locale), api.agents()]);
       if (generation.current !== current) return;
-      setSnapshotSession(session); setSnapshot(result); setNotesStale(false); setAdult(result.identity.adultDeclared); setJurisdiction(result.identity.declaredJurisdiction ?? '');
+      setSnapshotSession(session); setSnapshot(result); setNotesStale(false); setAdult(false); setJurisdiction(result.identity.declaredJurisdiction ?? '');
       setAgents(availableAgents.agents.filter(a => a.status === 'active'));
     } catch { if (generation.current === current) setError(locale === 'fa' ? 'تنظیمات دریافت نشد. دوباره تلاش کنید.' : 'Your settings could not be loaded. Please try again.'); }
   }, [space, locale, session]);
@@ -119,7 +122,8 @@ export function PrivacyScreen({ onShared, onExperience, onConnections, onCorrect
     {snapshot && <>
       <div className="vx-card vx-privacy-card">
         <h2 className="vx-head" id="vox-profile-heading" tabIndex={-1}>{c.identity}</h2><p className="vx-small vx-2">{c.identityBody}</p>
-        {snapshot.identity.confirmed ? <p className="vx-privacy-confirmed"><Icon name="check" size={18} /> {c.confirmed}</p> : <>
+        {snapshot.identity.confirmed && <p className="vx-privacy-confirmed"><Icon name="check" size={18} /> {c.confirmed}</p>}
+        {(!snapshot.identity.confirmed || adultDeclarationNeeded) && <>
           <label className="vx-privacy-checkbox"><input type="checkbox" checked={adult} disabled={busy} onChange={e => setAdult(e.target.checked)} />{c.adult}</label>
           <label className="vx-small">{c.jurisdiction}<input className="vx-input" value={jurisdiction} placeholder="EE / US-CA" maxLength={11} disabled={busy} onChange={e => setJurisdiction(e.target.value.toUpperCase())} aria-describedby="jurisdiction-hint" /></label>
           <p id="jurisdiction-hint" className="vx-small vx-2">{c.jurisdictionHint}</p>
