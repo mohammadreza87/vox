@@ -4,6 +4,7 @@ import { RIGHTS_COPY_VERSION } from '@/lib/adaptive/rights-intake/notice';
 import { auditSchema, tombstoneSchema, retentionActionSchema, createInputSchema, integer, kindSchema, operatorActionSchema, policyBindingSchema, requestSchema, requesterActionSchema, type RetentionAction, type CreateInput, type OperatorAction, type RequesterAction, type RightsMutation, type RightsOperations, type RightsRequestView, type RightsSnapshot, type RightsSpace } from '@/lib/adaptive/rights-intake/contracts';
 import { preferenceValueSchema } from '@/lib/adaptive/personalization';
 import { productPauseScopeSchema } from '@/lib/adaptive/product-pause/contracts';
+import { experimentScopeExportSchema } from '@/lib/adaptive/experiments/contracts';
 import { ADAPTIVE_OPTIONAL_PURPOSES } from '@/lib/adaptive/persistence/contracts';
 import { tg } from './client';
 export type { RightsRequestView, RightsSnapshot, RightsSpace, RightsOperations, RightsOperationView } from '@/lib/adaptive/rights-intake/contracts';
@@ -22,6 +23,7 @@ const itemStatus = z.enum(['unread', 'read', 'dismissed', 'cancelled']);
 const duration = z.number().finite().min(0).max(86_400_000);
 // The attachment is the current server allowlist, never an unchecked JSON/blob or stored preview.
 export const rightsExportSchema = z.object({ schemaVersion: z.literal(1), accountId: z.string().regex(/^telegram-account:[1-9]\d{0,15}$/), space: z.enum(['work', 'personal']), generatedAt: time, revision: integer, confirmedUntil: time,
+  experiments: experimentScopeExportSchema.optional(),
   productPause: productPauseScopeSchema.optional(), memories: z.array(note), preferences: z.array(z.object({ id, revision, ...agent, setting, status: preferenceStatus, updatedAt: time }).strict()),
   preferenceChanges: z.array(z.object({ changeId: id, ...agent, key: z.enum(['response_length', 'language', 'formatting']), ...timed, previous: z.object({ setting, status: preferenceStatus }).strict().nullable() }).strict()),
   preferenceLearning: z.object({ version: z.literal('preference-learning-v1'), intents: z.array(z.object({ ...agent, ...timed }).strict()), candidates: z.array(z.object({ id, ...agent, setting, reason: z.enum(['length_cue', 'language_cue', 'formatting_cue']), evidenceIds: z.array(z.string().regex(/^[a-f0-9]{64}$/)).max(16), ...timed }).strict()), suppressions: z.array(z.object({ ...agent, evidenceId: z.string().regex(/^[a-f0-9]{64}$/), ...timed }).strict()) }).strict().nullable(),

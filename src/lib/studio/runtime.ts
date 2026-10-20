@@ -4,6 +4,9 @@ import { RightsRepository } from '../adaptive/rights-intake/repository';
 import { parseRightsPolicy } from '../adaptive/rights-intake/policy';
 import { assertRightsAccountNow } from './rights-http';
 import { createStudioPreferenceLearning } from './preference-learning';
+import { FileExperimentStorage } from '../adaptive/experiments/storage';
+import { ControlledExperimentService } from '../adaptive/experiments/service';
+import { StudioExperimentRuntime } from '../adaptive/experiments/runtime';
 /**
  * Production wiring for Vox Studio, from environment variables.
  *
@@ -150,6 +153,14 @@ export function validateStudioConfig(env: NodeJS.ProcessEnv, cwd = process.cwd()
   const scopedRelationshipsEnabled = env.STUDIO_SCOPED_RELATIONSHIPS === '1';
   const maintenanceEnabled = env.STUDIO_MAINTENANCE === '1';
   const reminderDeliveryEnabled = env.STUDIO_REMINDER_DELIVERY === '1';
+  if (env.STUDIO_EXPERIMENTS_ENABLED !== undefined && !['', '0', '1'].includes(env.STUDIO_EXPERIMENTS_ENABLED)) {
+    throw new Error('STUDIO_EXPERIMENTS_ENABLED must be 0 or 1');
+  }
+  const experimentsEnabled = env.STUDIO_EXPERIMENTS_ENABLED === '1';
+  if (experimentsEnabled && (storage !== 'file' || adaptiveFormat === 'file' || publicUrl ||
+    env.K_SERVICE || env.FUNCTION_TARGET || env.FUNCTION_NAME || env.VERCEL === '1')) {
+    throw new Error('STUDIO_EXPERIMENTS_ENABLED=1 requires prepared local adaptive storage in a persistent process');
+  }
   // The only scheduler is startBots' in-process interval. Webhooks/serverless
   // have no scheduled maintenance entrypoint and must not advertise activation.
   if (maintenanceEnabled && (env.STUDIO_BOTS !== '1' || storage !== 'file' || publicUrl ||
@@ -160,7 +171,7 @@ export function validateStudioConfig(env: NodeJS.ProcessEnv, cwd = process.cwd()
     throw new Error('STUDIO_REMINDER_DELIVERY=1 requires STUDIO_MAINTENANCE=1 and a configured manager bot');
   }
   const trustedImprovementKeys = improvementTrust(env.STUDIO_IMPROVEMENT_TRUST_JSON, storage);
-  return { production, token, superadminIds, dataDir, webAppUrl, storage, adaptiveFormat, mediaBucket, publicUrl, relationships, scopedRelationshipsEnabled, maintenanceEnabled, reminderDeliveryEnabled, trustedImprovementKeys };
+  return { production, token, superadminIds, dataDir, webAppUrl, storage, adaptiveFormat, mediaBucket, publicUrl, relationships, scopedRelationshipsEnabled, maintenanceEnabled, reminderDeliveryEnabled, experimentsEnabled, trustedImprovementKeys };
 }
 
 /** STUDIO_WEB_SEARCH=off keeps every agent offline (web searches are billed per search). */
@@ -332,7 +343,21 @@ async function create(): Promise<Studio> {
       await studio.deps.voiceIdentity!.invalidate(telegramId, space);
     });
     studio.deps.observer = new AdaptiveObserverService(storage.adaptive!);
-    studio.deps.lifecycle = new AdaptiveLifecycleService(storage.adaptive!, { shared: studio.deps.shared });
+    if (config.experimentsEnabled) {
+      // Enabling the runtime installs no experiment. A separately reviewed,
+      // versioned operator configuration is required before any assignment.
+      studio.deps.experiments = new StudioExperimentRuntime(
+        new ControlledExperimentService(new FileExperimentStorage(join(config.dataDir, 'controlled-experiments', 'v1'))),
+        storage.adaptive!, storage.store,
+      );
+      storage.adaptive!.setExperimentLifecycleReconciler(async telegramId => {
+        studio.deps.experiments!.reconcileAccount(telegramId);
+      });
+    }
+    studio.deps.lifecycle = new AdaptiveLifecycleService(storage.adaptive!, { shared: studio.deps.shared,
+      ...(studio.deps.experiments ? { prepareExperimentExport: (telegramId: number, space: 'work' | 'personal') =>
+        studio.deps.experiments!.prepareScopeExport(telegramId, space) } : {}),
+    });
     // RI1 supports one persistent process only. The ledger stays separate from
     // both canonical adapters; missing reviewed policy/key leaves intake disabled.
     if (config.storage === 'file' && !config.publicUrl && !env.K_SERVICE && !env.FUNCTION_TARGET && !env.FUNCTION_NAME && env.VERCEL !== '1') {

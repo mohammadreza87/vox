@@ -16,6 +16,8 @@ import { signInitData } from '../../studio/auth';
 import { handleExperimentExposure } from '../../studio/experiments-http';
 import type { Studio } from '../../studio/service';
 import { config, NOW } from './test-fixtures';
+import { AdaptiveLifecycleService } from '../lifecycle/service';
+import { rightsExportSchema } from '../../../app/studio/_lib/rights-client';
 const directories: string[] = [];
 afterEach(() => directories.splice(0).forEach(d => rmSync(d, { recursive: true, force: true })));
 export async function runtimeFixture() {
@@ -127,5 +129,47 @@ describe('authenticated experiment exposure handler with real local runtime', ()
     f.controller.kill(config().id, 4, 'purge', NOW);
     expect(await (await handleExperimentExposure(studio, request({ space: 'work', agentId: 'agent1', receipt: p.receipt }), token)).json()).toEqual({ recorded: false, duplicate: false });
     expect((await handleExperimentExposure(studio, request(config()), token)).status).toBe(400);
+  });
+});
+
+
+describe('composed experiment lifecycle integration', () => {
+  it('purges after canonical withdrawal and retries an interrupted separate-store cleanup', async () => {
+    const f = await runtimeFixture(); await f.enable();
+    const presentation = (await f.runtime.prepare(123, 'agent1', 'work', 'composed-turn'))!;
+    await f.runtime.acknowledge(123, { space: 'work', agentId: 'agent1', receipt: presentation.receipt });
+    const before = await f.adaptive.read(123, 'work');
+    let unavailable = true, attempts = 0;
+    f.adaptive.setExperimentLifecycleReconciler(async id => {
+      attempts++;
+      if (unavailable) throw new Error('synthetic cleanup unavailable');
+      f.runtime.reconcileAccount(id);
+    });
+    await expect(f.adaptive.changeConsent(123, { space: 'work', purpose: 'optional.product_analytics', state: 'withdrawn',
+      expectedRevision: before.purposes.find(p => p.purpose === 'optional.product_analytics')!.revision,
+      eventId: 'composed-withdrawal' })).rejects.toThrow('cleanup unavailable');
+    // A failed purge does not roll back the committed choice or permit use.
+    expect(f.runtime.current(123, 'agent1', 'work', presentation)).toBe(false);
+    expect(f.storage.read().derived).toHaveLength(1);
+    unavailable = false;
+    const after = await f.adaptive.read(123, 'work');
+    expect(after.purposes.find(p => p.purpose === 'optional.product_analytics')!.state).toBe('withdrawn');
+    expect(attempts).toBe(2);
+    expect(f.storage.read()).toMatchObject({ assignments: [], derived: [], exposures: [], tombstones: [{ kind: 'scope_suppressed' }] });
+  });
+  it('includes minimized experiment data only in the authenticated selected-space export', async () => {
+    const f = await runtimeFixture(); await f.enable();
+    await f.runtime.prepare(123, 'agent1', 'work', 'exported-turn');
+    const lifecycle = new AdaptiveLifecycleService(f.adaptive, {
+      prepareExperimentExport: (id, space) => f.runtime.prepareScopeExport(id, space),
+    });
+    const exported = await lifecycle.exportAccount(123, 'work');
+    expect(exported.experiments?.derived).toHaveLength(1);
+    expect(rightsExportSchema.safeParse(exported).success).toBe(true);
+    for (const internal of ['authorityRevision', 'scopeRevision', 'assignmentId', 'receipt', 'unit', 'source']) {
+      expect(Object.keys(exported.experiments!.derived[0])).not.toContain(internal);
+    }
+    expect((await lifecycle.exportAccount(123, 'personal')).experiments?.derived).toEqual([]);
+    await expect(lifecycle.exportAccount(124, 'work')).rejects.toMatchObject({ code: 'profile_confirmation_required' });
   });
 });

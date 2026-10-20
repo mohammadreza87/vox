@@ -5,11 +5,14 @@ import { AdaptiveRelationshipService } from '../relationships/service';
 import type { SharedMemoryService } from '../shared/service';
 import { z } from 'zod';
 import type { ObserverDocument } from '../observation/contracts';
+import type { ExperimentScopeExport } from '../experiments/contracts';
 
 export interface LifecycleOptions {
   shared?: SharedMemoryService;
   /** Called within the authoritative transaction, before export/recovery projection. */
   pruneObserver?: (document: AdaptiveDocument, now: number) => void;
+  /** Own-space data from the separate ledger, with a publication-time fence. */
+  prepareExperimentExport?: (telegramId: number, space: SpaceKind) => { data: ExperimentScopeExport; revalidate(): void };
 }
 const fail = (status: number, code: string): never => { throw new AdaptiveError(status, code); };
 function selectedSpace(space: SpaceKind): void {
@@ -59,6 +62,7 @@ export class AdaptiveLifecycleService {
     const revalidate = () => {
       if (inspect() !== stamp) return fail(409, 'export_authority_changed');
       sharedFence?.();
+      built.experiments?.revalidate();
       if (inspect() !== stamp) return fail(409, 'export_authority_changed');
     };
     revalidate(); return { data: built.data, revalidate };
@@ -120,7 +124,8 @@ export class AdaptiveLifecycleService {
     });
     if (shared) await this.options.shared!.revalidateExport(telegramId, space, shared, checkPrivateAccount);
     else await checkPrivateAccount();
-    return { shared, data: { ...own, sharedContributions: contributions,
+    const experiments = this.options.prepareExperimentExport?.(telegramId, space);
+    return { shared, experiments, data: { ...own, ...(experiments ? { experiments: experiments.data } : {}), sharedContributions: contributions,
       coverage: { privateAccount: 'included' as const, shared: shared ? 'authorized_published_only' as const : 'not_configured' as const,
         providers: 'unavailable' as const, backups: 'unavailable' as const } } };
   }

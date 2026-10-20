@@ -68,6 +68,10 @@ export class AdaptiveService {
   private readonly now: () => number;
   private relationshipInvalidator?: (input: RelationshipInvalidation) => Promise<void>;
   private voiceIdentityInvalidator?: (input: { telegramId: number; space?: SpaceKind; reason: string }) => Promise<void>;
+  private experimentLifecycleReconciler?: (telegramId: number) => Promise<void>;
+  /** Runs after canonical commit and must not re-enter an account transaction.
+   * Repeated reads/maintenance retry cleanup after an interrupted withdrawal. */
+  setExperimentLifecycleReconciler(handler: (telegramId: number) => Promise<void>): void { this.experimentLifecycleReconciler = handler; }
   private preferenceLearningAuthority?: (telegramId: number, agentId: string) => string | null;
   setPreferenceLearningAuthority(handler: (telegramId: number, agentId: string) => string | null): void { this.preferenceLearningAuthority = handler; }
   private preferenceLearningInvalidator?: (telegramId: number) => void;
@@ -232,6 +236,7 @@ export class AdaptiveService {
     const cleanup = await Promise.allSettled([
       ...invalidations.map(input => this.notifyRelationshipInvalidation(input)),
       ...voiceInvalidations.map(input => this.voiceIdentityInvalidator?.(input)),
+      this.experimentLifecycleReconciler?.(telegramId),
     ]);
     const failed = cleanup.find((entry): entry is PromiseRejectedResult => entry.status === 'rejected');
     if (failed) throw failed.reason;

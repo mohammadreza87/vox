@@ -128,8 +128,20 @@ export async function handleConversationRequest(studio: Studio, request: Request
     }
     if (input.turn && !input.image) studio.deps.preferenceLearning?.enqueue({ telegramId: user.id, agentId: input.agentId,
       space: input.space, turn: input.turn, text: input.text }, request.signal);
+    // An experiment may only decorate an already authorized response. Failure
+    // to prepare optional presentation keeps the normal conversation working.
+    const presentation = correlation && studio.deps.experiments
+      ? await studio.deps.experiments.prepare(user.id, input.agentId, input.space, correlation).catch(() => undefined)
+      : undefined;
+    if (correlation && studio.deps.experiments && (request.signal.aborted || await authority() !== before)) {
+      await observe('cancelled'); return json({ error: 'conversation_changed' }, 409);
+    }
+    let currentPresentation;
+    try {
+      if (presentation && studio.deps.experiments?.current(user.id, input.agentId, input.space, presentation)) currentPresentation = presentation;
+    } catch { /* Optional presentation failure retains the normal reply. */ }
     if (indexed && (request.signal.aborted || !contextFence || !contextFence())) return json({error: 'conversation_changed'}, 409);
-    return json({ reply, ...(correlation ? { turnId: correlation } : {}) });
+    return json({ reply, ...(correlation ? { turnId: correlation } : {}), ...(currentPresentation ? { responsePresentation: currentPresentation } : {}) });
   } catch (error) {
     await observe?.(request.signal.aborted || LLMAuthorizationError.is(error) ? 'cancelled' : 'failed');
     if (LLMAuthorizationError.is(error)) return json({ error: 'conversation_changed' }, 409);
