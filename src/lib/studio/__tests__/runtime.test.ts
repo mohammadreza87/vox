@@ -5,6 +5,8 @@ import { createPublicKey } from 'crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getStudio, validateStudioConfig } from '../runtime';
 import { FirestoreStudioStore } from '../firestore-store';
+import { FileAdaptiveStorage } from '../../adaptive/persistence/storage';
+import { CHECKPOINT } from '../../adaptive/lifecycle/maintenance';
 import { FileExperimentStorage } from '../../adaptive/experiments/storage';
 
 const firebase = vi.hoisted(() => ({ getAdminApp: vi.fn(), getAdminDb: vi.fn(), getStorage: vi.fn(), bucket: vi.fn() }));
@@ -112,13 +114,25 @@ describe('Studio production initialization', () => {
   });
 
   it('provides scoped rights and observer services while maintenance stays off by default', async () => {
-    configure();
+    const dir = configure();
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ ok: true, result: { id: 1, is_bot: true, username: 'VoxxBot', first_name: 'Voxx' } })));
     const studio = await getStudio();
     expect(studio.deps.lifecycle).toBeDefined(); expect(studio.deps.observer).toBeDefined();
     expect(studio.deps.maintenance).toBeUndefined();
+    expect(studio.deps.maintenanceHealth!()).toMatchObject({ state: 'not_started' });
+    expect(existsSync(join(dir, 'adaptive-maintenance'))).toBe(false);
     expect(studio.deps.improvement).toBeUndefined();
     expect(studio.deps.experiments).toBeUndefined();
+  });
+
+  it('observes retained checkpoint failure while execution is disabled without constructing a runner', async () => {
+    const dir = configure();
+    const storage = new FileAdaptiveStorage(join(dir, 'adaptive-maintenance'));
+    await storage.transact(CHECKPOINT, () => ({ document: { schemaVersion: 1, status: 'failed', failure: 'sweep_failed', pages: 2, accounts: 4, updatedAt: Date.now() - 100 }, result: undefined }));
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ ok: true, result: { id: 1, is_bot: true, username: 'VoxxBot', first_name: 'Voxx' } })));
+    const studio = await getStudio();
+    expect(studio.deps.maintenance).toBeUndefined();
+    expect(studio.deps.maintenanceHealth!()).toMatchObject({ state: 'failed', checkpoint: { checkpointedPages: 2, checkpointedAccounts: 4, failure: 'sweep_failed' } });
   });
 
   it('retains experiment lifecycle services after the presentation switch is disabled', async () => {

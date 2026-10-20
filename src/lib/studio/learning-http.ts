@@ -1,4 +1,5 @@
 import { trustedStudioRequestOrigin } from './request-origin';
+import { maintenanceHealthSchema, unconfiguredMaintenanceHealth } from '../adaptive/lifecycle/maintenance-health-contracts';
 import { isSchemaValidationError } from '../error-contract';
 import { z } from 'zod';
 import { AdaptiveError } from '../adaptive/persistence/service';
@@ -29,11 +30,34 @@ export async function handleLearningRequest(studio: Studio, request: Request, pa
     const user = verifyInitData(initData, botToken);
     if (!user) return json({ error: 'authentication_required' }, 401);
     await limiter.consume('api', user.id);
+    const url = new URL(request.url), route = path.join('/');
+    if (request.method === 'GET' && route === 'operations') {
+      try {
+        // Status reads must not call ensureMember, initialize checkpoints or claim work.
+        const checkOperator = (changed = false): Response | undefined => {
+          if (request.signal.aborted) return json({ error: 'access_changed' }, 409);
+          if (verifyInitData(initData, botToken)?.id !== user.id) return json({ error: 'authentication_required' }, 401);
+          const state = studio.deps.store.readCommittedForEffect?.();
+          if (!state) return json({ error: 'learning_unavailable' }, 503);
+          const members = state.members.filter(m => m.telegramId === user.id);
+          if (members.length !== 1 || !['owner', 'superadmin'].includes(members[0].role)) return json({ error: changed ? 'access_changed' : 'access_denied' }, changed ? 409 : 403);
+          if (verifyInitData(initData, botToken)?.id !== user.id) return json({ error: 'authentication_required' }, 401);
+        };
+        const denied = checkOperator(); if (denied) return denied;
+        if (url.search) return json({ error: 'invalid_request' }, 400);
+        const report = studio.deps.improvement ? await studio.deps.improvement.report() : null;
+        const health = maintenanceHealthSchema.safeParse(studio.deps.maintenanceHealth ? studio.deps.maintenanceHealth() : unconfiguredMaintenanceHealth());
+        if (!health.success) return json({ error: 'learning_unavailable' }, 503);
+        const serialized = JSON.stringify({ maintenanceConfigured: !!studio.deps.maintenance, maintenance: health.data,
+          improvementConfigured: !!studio.deps.improvement, report });
+        const changed = checkOperator(true); if (changed) return changed;
+        return new Response(serialized, { headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
+      } catch { return json({ error: 'learning_unavailable' }, 503); }
+    }
     await studio.ensureMember(user);
     const currentMember = async () => (await studio.deps.store.read()).members.find(m => m.telegramId === user.id);
     const member = await currentMember();
     if (!member || member.role === 'pending') return json({ error: 'approval_required' }, 403);
-    const url = new URL(request.url), route = path.join('/');
     const space = spaceSchema.parse(url.searchParams.get('space') ?? 'work');
     const snapshot = async () => {
       const observer = studio.deps.observer;
@@ -68,13 +92,6 @@ export async function handleLearningRequest(studio: Studio, request: Request, pa
         const changed = checkRequester(); if (changed) return changed;
         return new Response(serialized, { headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store',
           'Content-Disposition': `attachment; filename="vox-${space}-export.json"` } });
-      }
-      if (route === 'operations') {
-        if (!['owner', 'superadmin'].includes(member.role)) return json({ error: 'access_denied' }, 403);
-        const report = studio.deps.improvement ? await studio.deps.improvement.report() : null;
-        const latest = await currentMember();
-        if (!latest || !['owner', 'superadmin'].includes(latest.role)) return json({ error: 'access_changed' }, 409);
-        return json({ maintenanceConfigured: !!studio.deps.maintenance, improvementConfigured: !!studio.deps.improvement, report });
       }
       return json({ error: 'not_found' }, 404);
     }

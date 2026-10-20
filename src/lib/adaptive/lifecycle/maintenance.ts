@@ -3,8 +3,8 @@ import { z } from 'zod';
 import type { AdaptiveStorage } from '../persistence/storage';
 import type { AdaptiveLifecycleService } from './service';
 
-const CHECKPOINT = 'adaptive-maintenance:v1';
-const checkpointSchema = z.object({ schemaVersion: z.literal(1),
+export const CHECKPOINT = 'adaptive-maintenance:v1';
+export const checkpointSchema = z.object({ schemaVersion: z.literal(1),
   cursor: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   lease: z.object({ token: z.string().uuid(), workerId: z.string().regex(/^[A-Za-z0-9_-]{1,100}$/), until: z.number().int().nonnegative().safe() }).strict().optional(),
   status: z.enum(['continued', 'completed', 'failed']), pages: z.number().int().nonnegative().safe(),
