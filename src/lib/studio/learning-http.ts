@@ -2,7 +2,7 @@ import { isSchemaValidationError } from '../error-contract';
 import { z } from 'zod';
 import { AdaptiveError } from '../adaptive/persistence/service';
 import { SharedMemoryError } from '../adaptive/shared/service';
-import { clientObservationInputSchema } from '../adaptive/observation/contracts';
+import { clientObservationInputSchema, correctionObservationInputSchema } from '../adaptive/observation/contracts';
 import { digest } from '../adaptive/persistence/repository';
 import { verifyInitData } from './auth';
 import { boundedStudioRequest } from './http';
@@ -86,6 +86,11 @@ export async function handleLearningRequest(studio: Studio, request: Request, pa
     try { body = await bounded.json(); } catch { return json({ error: 'invalid_json' }, 400); }
     const observer = studio.deps.observer;
     if (!observer) return json({ error: 'observer_unavailable' }, 503);
+    if (route === 'correction-authority') {
+      const input = z.object({ space: spaceSchema }).strict().parse(body);
+      return json({ policyReceipt: await observer.authorizeCorrection(user.id, input.space) });
+    }
+    if (route === 'corrections') return json(await observer.recordCorrection(user.id, correctionObservationInputSchema.parse(body)));
     if (route === 'events') {
       const input = clientObservationInputSchema.parse(body);
       if (!(await observationAgents(studio, user.id)).includes(input.agentId)) return json({ error: 'agent_access_denied' }, 403);

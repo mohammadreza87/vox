@@ -42,7 +42,7 @@ export class AdaptiveLifecycleService {
     const sharedFence = built.shared ? this.options.shared!.captureExportFence(telegramId, space, built.shared) : undefined;
     const payloadDeadline = Math.min(built.data.confirmedUntil,
       ...[...built.data.memories, ...built.data.preferenceChanges, ...built.data.reminders,
-        ...built.data.checkIns, ...built.data.observerEvents, ...built.data.sharedContributions,
+        ...built.data.checkIns, ...built.data.observerEvents, ...(built.data.observerCorrections ?? []), ...built.data.sharedContributions,
         ...(built.data.preferenceLearning?.intents ?? []), ...(built.data.preferenceLearning?.candidates ?? []),
         ...(built.data.preferenceLearning?.suppressions ?? [])].map(row => row.expiresAt));
     const inspect = () => {
@@ -101,6 +101,9 @@ export class AdaptiveLifecycleService {
           channel: o.channel, status: o.status, durationMs: o.durationMs, at: o.at })),
         checkIns: d.relationships.inbox.filter(i => i.key.scope.space === space && i.status !== 'cancelled' && i.expiresAt > now)
           .map(i => ({ id: i.id, agentId: i.key.personaId, text: i.text, status: i.status, createdAt: i.createdAt, expiresAt: i.expiresAt })),
+        ...((observer?.corrections ?? []).some(e => e.space === space) ? { observerCorrections: (observer?.corrections ?? []).filter(e => e.space === space && e.expiresAt > now &&
+          this.adaptive.isPurposeAllowed(d, space, 'optional.product_analytics', now)).map(e => ({ version: e.version, trust: e.trust, outcome: e.outcome,
+          mutationEvidence: e.mutationEvidence, occurredAt: e.occurredAt, expiresAt: e.expiresAt })) } : {}),
         observerEvents: observerEvents.map(e => ({ agentId: e.agentId, trust: e.trust, channel: e.channel,
           outcome: e.outcome, durationMs: e.durationMs, occurredAt: e.occurredAt, expiresAt: e.expiresAt, state: e.state })),
       };

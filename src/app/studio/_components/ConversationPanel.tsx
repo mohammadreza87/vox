@@ -2,15 +2,39 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { LivePredictionConsumer, predictionHttpTransport } from '@/lib/adaptive/prediction/client';
 import { prepareSharedImage } from '@/lib/adaptive/prediction/image-browser';
+import { observeCommittedText } from '@/lib/adaptive/observation/committed-text';
+import { learningApi } from '../_lib/learning-client';
 import { TaskOutcome } from './TaskOutcome';
 import { MessageMemoryReview } from './MessageMemoryReview';
 import { useProductPause } from '../_lib/product-pause-client';
 import { pauseText } from '../_lib/product-pause-copy';
-import { tg } from '../_lib/client';
+import { tg, request as studioRequest } from '../_lib/client';
 import { preferenceLearningApi } from '../_lib/preference-learning-client';
 
 /** Typed fallback and explicit image sharing use the same scoped agent context
  * as calls. Draft processing is a separate, off-by-default user choice. */
+type Presentation = { density: 'compact' | 'comfortable'; receipt: string };
+type ConversationLine = { role: 'you' | 'agent'; text: string; turnId?: string; started?: number; epoch?: number; session?: string; presentation?: Presentation };
+function presentation(raw: unknown): Presentation | undefined {
+  if (!raw || typeof raw !== 'object' || !('density' in raw) || !['compact', 'comfortable'].includes(String(raw.density)) || !('receipt' in raw) || typeof raw.receipt !== 'string' || !raw.receipt || raw.receipt.length > 4096) return undefined;
+  return { density: raw.density as Presentation['density'], receipt: raw.receipt };
+}
+function CommittedReply({ line, agentId, space, current }: { line: ConversationLine; agentId: string; space: 'work' | 'personal'; current(): boolean }) {
+  const element = useRef<HTMLSpanElement | null>(null), reported = useRef(false), latestCurrent = useRef(current);
+  latestCurrent.current = current;
+  useEffect(() => {
+    if (!element.current || reported.current) return;
+    const controller = new AbortController();
+    const stop = observeCommittedText(element.current, () => {
+      if (reported.current || !latestCurrent.current()) return; reported.current = true;
+      if (line.turnId) void learningApi.event({ agentId, space, turnId: line.turnId, eventId: `text-${line.turnId}`, outcome: 'text_rendered',
+        ...(line.started !== undefined ? { durationMs: Math.min(86_400_000, Math.max(0, performance.now() - line.started)) } : {}) }, controller.signal).catch(() => undefined);
+      if (line.presentation) void studioRequest('POST', 'experiments/exposure', { agentId, space, receipt: line.presentation.receipt }, 'json', controller.signal).catch(() => undefined);
+    }, () => latestCurrent.current());
+    return () => { stop(); controller.abort(); };
+  }, [line, agentId, space]);
+  return <span ref={element} data-response-density={line.presentation?.density} style={line.presentation ? { lineHeight: line.presentation.density === 'compact' ? 1.35 : 1.8 } : undefined}>{line.text}</span>;
+}
 export function ConversationPanel({ agentId, space, locale = 'en', disabled = false }: {
   agentId: string; space: 'work' | 'personal'; locale?: 'en' | 'fa'; disabled?: boolean;
 }) {
@@ -29,7 +53,7 @@ export function ConversationPanel({ agentId, space, locale = 'en', disabled = fa
   const [error, setError] = useState('');
   const [lastTurnId, setLastTurnId] = useState<string>();
   const [reviewText, setReviewText] = useState<{ text: string; agentId: string; space: 'work' | 'personal' } | null>(null), [memoryStatus, setMemoryStatus] = useState('');
-  const [lines, setLines] = useState<Array<{ role: 'you' | 'agent'; text: string }>>([]);
+  const [lines, setLines] = useState<ConversationLine[]>([]);
   const consumer = useRef<LivePredictionConsumer | null>(null);
   const request = useRef<AbortController | null>(null);
   const imageRequest = useRef<AbortController | null>(null);
@@ -83,7 +107,7 @@ export function ConversationPanel({ agentId, space, locale = 'en', disabled = fa
   };
   const send = async () => {
     if (busy || disabled || loadingImage || !draft.trim()) return;
-    const current = generation.current;
+    const current = generation.current, started = performance.now(), currentSession = tg()?.initData ?? '';
     const controller = new AbortController(); request.current?.abort(); request.current = controller;
     const logicalTurn = consumer.current?.snapshotTurn();
     consumer.current?.suspend(); setPrepared(false); setBusy(true); setError('');
@@ -99,7 +123,7 @@ export function ConversationPanel({ agentId, space, locale = 'en', disabled = fa
       if (controller.signal.aborted || generation.current !== current) return;
       const reply = data.reply;
       setLastTurnId('turnId' in data && typeof data.turnId === 'string' ? data.turnId : undefined);
-      setLines(previous => [...previous, { role: 'you', text: draft }, { role: 'agent', text: reply }].slice(-20) as typeof previous);
+      setLines(previous => [...previous, { role: 'you', text: draft }, { role: 'agent', text: reply, epoch: current, session: currentSession, started, turnId: 'turnId' in data && typeof data.turnId === 'string' ? data.turnId : undefined, presentation: presentation('responsePresentation' in data ? data.responsePresentation : undefined) }].slice(-20) as typeof previous);
       completed = true; setDraft(''); setImage(undefined);
     } catch {
       if (!controller.signal.aborted && generation.current === current) setError(t('Your message could not be completed. Check Privacy and agent access before trying again.', 'پیام شما کامل نشد. پیش از تلاش دوباره حریم خصوصی و دسترسی عامل را بررسی کنید.'));
@@ -113,7 +137,7 @@ export function ConversationPanel({ agentId, space, locale = 'en', disabled = fa
     {paused && <p className="vx-small" role="status">{pauseText(locale, space, 'conversation')}</p>}
     <p className="vx-small vx-2">{paused ? pauseText(locale, space, 'history') : t('Uses the memories allowed in this space. Images are sent only for this turn; Vox does not save the image.', 'از حافظه‌های مجاز این فضا استفاده می‌کند. تصویر فقط برای همین نوبت ارسال می‌شود؛ وکس تصویر را ذخیره نمی‌کند.')}</p>
     <div role="log" aria-label={t('Conversation', 'گفتگو')} aria-live="polite" style={{ maxHeight: 220, overflowY: 'auto', overflowWrap: 'anywhere' }}>
-      {lines.map((line, i) => <div key={i}><p className="vx-small"><strong>{line.role === 'you' ? t('You: ', 'شما: ') : t('Agent: ', 'عامل: ')}</strong>{line.text}</p>
+      {lines.map((line, i) => <div key={i}><p className="vx-small"><strong>{line.role === 'you' ? t('You: ', 'شما: ') : t('Agent: ', 'عامل: ')}</strong>{line.role === 'agent' ? <CommittedReply line={line} agentId={agentId} space={space} current={() => !disabled && line.epoch === generation.current && line.session === (tg()?.initData ?? '')} /> : line.text}</p>
         {line.role === 'you' && <button className="vx-btn vx-btn-secondary vx-btn-sm" aria-describedby={historicBlocked ? 'vox-historic-review-reason' : undefined} disabled={busy || disabled || historicBlocked} onClick={() => { setMemoryStatus(''); setReviewText({ text: line.text, agentId, space }); }}>{t('Review this text for memory', 'بررسی این متن برای حافظه')}</button>}</div>)}
     </div>
     {historicBlocked && <p id="vox-historic-review-reason" className="vx-small">{paused ? pauseText(locale, space, 'historicDisabled') : pauseText(locale, space, 'unverified')}</p>}

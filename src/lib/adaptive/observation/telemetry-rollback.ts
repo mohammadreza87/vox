@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import { FileAdaptiveStorage } from '../persistence/storage';
+import { stripClientExperienceForRollback } from './client-experience-rollback';
 import { observerDocumentSchema } from './contracts';
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 /** Before restoring ee800d9: stop new producers, preview exact single account,
@@ -9,7 +10,8 @@ const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(valu
 export function stripObserverTelemetryForRollback(value: unknown, accountId: string): unknown {
   if (!value || typeof value !== 'object' || !('accountId' in value) || value.accountId !== accountId) throw new Error('rollback_scope_mismatch');
   if (!('observer' in value)) return structuredClone(value);
-  const observer = observerDocumentSchema.parse(value.observer);
+  const cleaned = stripClientExperienceForRollback(value, accountId) as typeof value;
+  const observer = observerDocumentSchema.parse(cleaned.observer);
   const events = observer.events.filter(event => !event.outcome.startsWith('task_') && event.operation !== 'prediction').map(event => {
     const original = { ...event }; delete original.telemetry; delete original.operation; return original;
   });

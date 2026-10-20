@@ -1,6 +1,6 @@
 import { digest, spaceIdFor, type AdaptiveAuthorityDocument, type AdaptiveDocument, type SpaceKind } from '../persistence/repository';
 import { TURN_STAGES, type TelemetryProjection } from './telemetry';
-import { OBSERVER_MAX_ATTEMPTS, OBSERVER_VERSION, type ObserverEvent, type ObserverFinding, type ObserverProjection } from './contracts';
+import { OBSERVER_MAX_ATTEMPTS, OBSERVER_VERSION, type ObserverEvent, type ObserverFinding, type ObserverProjection, type CorrectionObservation } from './contracts';
 
 function canonical(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonical);
@@ -8,9 +8,9 @@ function canonical(value: unknown): unknown {
   return value;
 }
 const PURPOSE = 'optional.product_analytics' as const;
-export type ObserverAllowed = (d: AdaptiveAuthorityDocument, space: SpaceKind, agentId: string, now: number) => boolean;
+export type ObserverAllowed = (d: AdaptiveAuthorityDocument, space: SpaceKind, agentId: string | undefined, now: number) => boolean;
 /** The receipt changes on binding, permission or exact agent-grant changes. No text. */
-export function observerPolicyReceipt(d: AdaptiveAuthorityDocument, space: SpaceKind, agentId: string, storeIdentity = 'canonical'): string {
+export function observerPolicyReceipt(d: AdaptiveAuthorityDocument, space: SpaceKind, agentId: string | undefined, storeIdentity = 'canonical'): string {
   const receipt = [OBSERVER_VERSION, d.accountId, d.personId, d.binding,
     d.permissions.find(p => p.id === `permission:${space}:${PURPOSE}`),
     d.agentGrants.find(g => g.space === space && g.agentId === agentId)];
@@ -19,7 +19,7 @@ export function observerPolicyReceipt(d: AdaptiveAuthorityDocument, space: Space
 const uniqueTurns = (events: ObserverEvent[], outcome: ObserverEvent['outcome']) => new Set(events.filter(e => e.outcome === outcome).map(e => e.turnKey)).size;
 /** Pure independently replayable deterministic projection. Only processed, current-policy
  * events belong here; the service/sweep performs authorization before calling it. */
-export function projectObserverEvents(events: readonly ObserverEvent[], space: SpaceKind): ObserverProjection {
+export function projectObserverEvents(events: readonly ObserverEvent[], space: SpaceKind, corrections: readonly CorrectionObservation[] = []): ObserverProjection {
   const source = events.filter(e => e.space === space && e.state === 'processed').sort((a, b) => a.id.localeCompare(b.id));
   const responses = new Map<string, ObserverEvent>();
   const rank = { unknown: 0, responded: 1, cancelled: 2, failed: 3 };
@@ -48,6 +48,15 @@ export function projectObserverEvents(events: readonly ObserverEvent[], space: S
     clientMeanTimeToPlaybackMs: playbackTiming.length ? playbackTiming.reduce((n, e) => n + e.durationMs!, 0) / playbackTiming.length : null,
     reportedTaskSucceeded: task.filter(e => e.outcome === 'task_succeeded').length, reportedTaskFailed: task.filter(e => e.outcome === 'task_failed').length,
     reportedTaskUnknown: task.filter(e => e.outcome === 'task_unknown').length };
+  const text = client.filter(e => e.outcome === 'text_rendered');
+  const textByTurn = [...new Map(text.map(e => [e.turnKey, e])).values()];
+  const textTiming = textByTurn.filter(e => e.durationMs !== undefined);
+  const correction = corrections.filter(e => e.space === space);
+  const clientExperience = { version: 1 as const, trust: 'client_unverified' as const, textRendered: textByTurn.length,
+    textTimingSamples: textTiming.length, meanTimeToTextMs: textTiming.length ? textTiming.reduce((n, e) => n + e.durationMs!, 0) / textTiming.length : null,
+    correctionSaved: correction.filter(e => e.outcome === 'correction_client_saved').length,
+    correctionUnconfirmed: correction.filter(e => e.outcome === 'correction_client_unconfirmed').length,
+    correctionAcceptedReceipts: correction.filter(e => e.mutationEvidence === 'accepted_command_receipt').length };
   const findings: ObserverFinding[] = [];
   const rules = [
     { rule: 'response_failure', outcome: 'failed', observed: 'server_reported_failure', alternatives: ['provider_or_application_failure', 'unknown'] },
@@ -62,13 +71,13 @@ export function projectObserverEvents(events: readonly ObserverEvent[], space: S
       evidenceIds, count: new Set(evidence.map(e => e.turnKey)).size, observed: rule.observed,
       inferredCause: null, alternatives: [...rule.alternatives], confidence: 'observation_only', reproducibleFrom: 'journal_events' });
   }
-  return { space, sourceDigest: digest(source.map(e => [e.id, e.fingerprint, e.revision])), sourceEvents: source.length,
+  return { space, sourceDigest: digest([source.map(e => [e.id, e.fingerprint, e.revision]), correction.map(e => [e.id, e.fingerprint]).sort((a, b) => a[0].localeCompare(b[0]))]), sourceEvents: source.length,
     responseTurns: server.length, taskOutcomesUnknown: server.filter(e => !taskReports.has(e.turnKey) || taskReports.get(e.turnKey)!.outcome === 'task_unknown').length, timedResponses: timed.length, responded: uniqueTurns(server, 'responded'), failed: uniqueTurns(server, 'failed'),
     cancelled: uniqueTurns(server, 'cancelled'), unknownResponses: uniqueTurns(server, 'unknown'),
     meanResponseMs: timed.length ? timed.reduce((total, e) => total + e.durationMs!, 0) / timed.length : null,
     playbackStarted: uniqueTurns(client, 'playback_started'), playbackCompleted: uniqueTurns(client, 'playback_completed'),
     playbackFailed: uniqueTurns(client, 'playback_failed'), interruptions: uniqueTurns(client, 'interrupted'),
-    telemetry, playbackUnknown: server.filter(e => e.channel === 'voice' && e.outcome === 'responded' && !finishedPlayback.has(e.turnKey)).length, findings };
+    ...(text.length || correction.length ? { clientExperience } : {}), telemetry, playbackUnknown: server.filter(e => e.channel === 'voice' && e.outcome === 'responded' && !finishedPlayback.has(e.turnKey)).length, findings };
 }
 /** Run after account mutations and from the lifecycle sweep. It must execute within
  * the same account transaction. Revocation removes journal and all derived evidence. */
@@ -76,6 +85,11 @@ export function sweepObserverDocument(d: AdaptiveDocument, now: number, isAllowe
   const before = digest(canonical(d.observer));
   d.observer.events = d.observer.events.filter(e => e.receivedAt <= now && e.expiresAt > now && e.accountId === d.accountId && e.personId === d.personId &&
     e.spaceId === spaceIdFor(d.accountId, e.space) && isAllowed(d, e.space, e.agentId, now) && e.policyReceipt === observerPolicyReceipt(d, e.space, e.agentId, storeIdentity));
+  if (d.observer.corrections) {
+    d.observer.corrections = d.observer.corrections.filter(e => e.occurredAt <= now && e.expiresAt > now && isAllowed(d, e.space, undefined, now) &&
+      e.policyReceipt === observerPolicyReceipt(d, e.space, undefined, storeIdentity));
+    if (!d.observer.corrections.length) delete d.observer.corrections;
+  }
   // Client outcomes cannot outlive their authoritative server correlation.
   const serverTurns = new Set(d.observer.events.filter(e => e.trust === 'server' && e.operation !== 'prediction' && e.outcome === 'responded').map(e => e.turnKey));
   d.observer.events = d.observer.events.filter(e => e.trust === 'server' || serverTurns.has(e.turnKey));
@@ -84,6 +98,6 @@ export function sweepObserverDocument(d: AdaptiveDocument, now: number, isAllowe
     if (e.state === 'failed') e.failureCode = 'retry_exhausted';
     delete e.leaseId; delete e.leaseUntil;
   }
-  d.observer.projections = (['work', 'personal'] as const).filter(space => d.observer.events.some(e => e.space === space && e.state === 'processed')).map(space => projectObserverEvents(d.observer.events, space));
+  d.observer.projections = (['work', 'personal'] as const).filter(space => d.observer.events.some(e => e.space === space && e.state === 'processed') || d.observer.corrections?.some(e => e.space === space)).map(space => projectObserverEvents(d.observer.events, space, d.observer.corrections));
   return before !== digest(canonical(d.observer));
 }
