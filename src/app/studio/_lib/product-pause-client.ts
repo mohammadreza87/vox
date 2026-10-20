@@ -139,7 +139,11 @@ export function useProductPause(space: PauseSpace, sessionKey?: string) {
   }, [store, sessionKey]);
   const knownPaused = state.status?.productPaused === true;
   const uncertain = ['initial', 'loading', 'unknown', 'auth'].includes(state.phase);
-  // Legacy unprepared responses preserve existing controls; unknown reads never imply unpaused.
-  const coveredBlocked = knownPaused || uncertain || state.phase === 'pending';
+  // Only an explicit legacy-store result preserves controls without pause state.
+  // A successful HTTP response can still report unverifiable authority.
+  const legacyUnprepared = state.status?.available === false && state.status.reason === 'store_not_prepared' &&
+    state.status.productPaused === null && state.status.useEpoch === null;
+  const unavailable = state.status?.available !== true && !legacyUnprepared;
+  const coveredBlocked = knownPaused || uncertain || unavailable || state.phase === 'pending';
   return { ...state, coveredBlocked, refresh: () => read(store), act: (action: 'pause' | 'resume') => command(store, action) };
 }

@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createHash, webcrypto } from 'node:crypto';
 import { ProductPausePanel } from './ProductPausePanel';
-import { parsePauseStatus } from '../_lib/product-pause-client';
+import { parsePauseStatus, useProductPause } from '../_lib/product-pause-client';
 import type { ProductPauseControlView } from '@/lib/studio/product-pause-http';
 import type { ProductPauseCommandV1 } from '@/lib/adaptive/product-pause/contracts';
 const control = (space: 'work' | 'personal' = 'work', extra: Partial<ProductPauseControlView> = {}): ProductPauseControlView => ({ version: 1, accountId: 'account-a', space, available: true, productPaused: false, useEpoch: 0, commandSeq: 0, canPause: true, canResume: true, ...extra });
@@ -87,4 +87,20 @@ it('never infers unpaused on failed/malformed reads and keeps unsupported legacy
   const fetcher = vi.fn().mockRejectedValueOnce(new TypeError('network')).mockResolvedValueOnce(Response.json(control('work', { available: false, productPaused: null, useEpoch: null, commandSeq: undefined, canPause: false, canResume: false, reason: 'store_not_prepared' })));
   vi.stubGlobal('fetch', fetcher); mount(); await screen.findByText('The current pause status in Work is unknown.'); expect(screen.queryByRole('button', { name: 'Pause in Work' })).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'Check current status' })); await screen.findByText('Personalization pause is not available for this account’s current storage and connection. No pause has been confirmed here.'); expect(screen.queryByText('Not paused in Work')).toBeNull();
+});
+it.each(['busy', 'denied', 'unavailable', 'missing', 'unknown_future', 'unsupported_transport', undefined])('blocks covered use for an unverified HTTP 200 status (%s)', async reason => {
+  vi.stubGlobal('fetch', vi.fn(async () => Response.json(control('work', { available: false, productPaused: null, useEpoch: null,
+    commandSeq: undefined, canPause: false, canResume: false, reason }))));
+  const sessionKey = `status-probe-${++session}`;
+  function Probe() { const pause = useProductPause('work', sessionKey); return <output>{pause.phase}:{String(pause.coveredBlocked)}</output>; }
+  render(<Probe />);
+  await screen.findByText('ready:true');
+});
+it('preserves legacy controls only for an explicitly unprepared store', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => Response.json(control('work', { available: false, productPaused: null, useEpoch: null,
+    commandSeq: undefined, canPause: false, canResume: false, reason: 'store_not_prepared' }))));
+  const sessionKey = `legacy-status-probe-${++session}`;
+  function Probe() { const pause = useProductPause('work', sessionKey); return <output>{pause.phase}:{String(pause.coveredBlocked)}</output>; }
+  render(<Probe />);
+  await screen.findByText('ready:false');
 });
