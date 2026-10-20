@@ -4,12 +4,63 @@ import * as fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { capture, LIMITS, projectInventory, runInventory } from './firebase-preview-inventory.mjs';
 
 const project = 'test-project';
 const channel = (id, extra = {}) => ({ name: `sites/${project}/channels/${id}`, expireTime: '2026-10-27T12:00:00Z', ...extra });
 const response = (channels) => JSON.stringify({ status: 'success', result: { channels } });
 const credential = { type: 'service_account', project_id: project, private_key: '-----BEGIN PRIVATE KEY-----\nSYNTHETIC_ONLY\n-----END PRIVATE KEY-----\n', client_email: 'synthetic@test-project.iam.gserviceaccount.com', token_uri: 'https://oauth2.googleapis.com/token' };
+const scopeCases = [
+  [`projects/${project}/sites/${project}/channels/pr1-canary`, 'UNEXPECTED_SCOPE_PROJECT_EXACT'],
+  [`projects/123456789/sites/${project}/channels/pr1-canary`, 'UNEXPECTED_SCOPE_PROJECT_NUMERIC'],
+  [`projects/other-project/sites/${project}/channels/pr1-canary`, 'UNEXPECTED_SCOPE_PROJECT_OTHER'],
+  ['sites/other-project/channels/pr1-canary', 'UNEXPECTED_SCOPE_FOREIGN_SITE'],
+  [`projects/${project}/sites/other-project/channels/pr1-canary`, 'UNEXPECTED_SCOPE_FOREIGN_SITE'],
+  ['projects/123456789/sites/other-project/channels/pr1-canary', 'UNEXPECTED_SCOPE_FOREIGN_SITE'],
+  [`projects/${project}/sites/${project}/channels/pr1-canary/extra`, 'UNEXPECTED_SCOPE_MALFORMED'],
+];
+
+test('scope diagnostics classify fixed failure categories without accepting any new resource', () => {
+  for (const [name, code] of scopeCases) {
+    assert.throws(() => projectInventory(response([channel('pr1-test', { name })]), project),
+      (error) => error.message === code && !error.message.includes('canary'));
+  }
+});
+
+test('scope diagnostics reject malformed segments, encodings, URLs and control characters', () => {
+  const base = `projects/${project}/sites/${project}/channels/pr1-canary`;
+  for (const name of [base + '\n', base + '\r', base + '\u0000', base + '?x=y', base + '#x',
+    base.replace('pr1-canary', '..'), base.replace('pr1-canary', 'pr1%2fcanary'),
+    base.replace('projects/', 'projects//'), base.replace(project, 'x'.repeat(64)),
+    base.replace(project, '1'.repeat(31)), `https://example.invalid/${base}`, 'channels/pr1-canary']) {
+    assert.throws(() => projectInventory(response([channel('pr1-test', { name })]), project),
+      (error) => error.message === 'UNEXPECTED_SCOPE_MALFORMED');
+  }
+  for (const name of ['x'.repeat(201), null, 123]) {
+    assert.throws(() => projectInventory(response([channel('pr1-test', { name })]), project), /INVALID_CHANNEL/);
+  }
+});
+
+test('actual wrapper scope failures expose only constant codes, exit nonzero and clean private files', async () => {
+  await fixture(async (env, root) => {
+    const bin = path.join(root, 'lib/bin');
+    const tmp = path.join(root, 'tmp');
+    fs.mkdirSync(bin, { recursive: true });
+    fs.mkdirSync(tmp);
+    for (const [name, code] of scopeCases) {
+      fs.writeFileSync(path.join(bin, 'firebase.js'),
+        `require('node:fs').writeFileSync('firebase-debug.log', 'PRIVATE_DEBUG_CANARY'); console.log(${JSON.stringify(response([channel('pr1-test', { name, url: 'https://private-canary.invalid' })]))});`);
+      const result = spawnSync(process.execPath, [fileURLToPath(new URL('./firebase-preview-inventory.mjs', import.meta.url))],
+        { env: { ...env, TMPDIR: tmp }, encoding: 'utf8', timeout: 5000 });
+      assert.equal(result.status, 1);
+      assert.equal(result.stdout, '');
+      assert.equal(result.stderr, `preview_inventory_failed:${code}\n`);
+      assert.deepEqual(fs.readdirSync(tmp), []);
+    }
+  });
+});
 
 test('projects only IDs/expiry/counts; excludes live and metadata, reports display truncation', () => {
   const items = Array.from({ length: 105 }, (_, i) => channel(`pr${i}-test`, { url: 'https://secret.example/user', release: { releaseUser: { email: 'private@example.com' } } }));

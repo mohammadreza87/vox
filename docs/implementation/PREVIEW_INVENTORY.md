@@ -10,7 +10,9 @@ Credential files use a private temporary directory and restrictive modes. The ch
 
 The inventory has a 30-second deadline, 1 MiB stdout limit, 32 KiB stderr limit and 1,000-channel response limit. CLI pagination completes before projection. These are deadline/output limits; the CLI's internal accumulated pages do not have a strict heap bound. Malformed, oversized or foreign-site results produce no partial totals.
 
-Local validation covers 14 synthetic script tests, six independent wrapper checks, two canonical-name/nullable-expiry probes and all 64 workflow-condition combinations. These checks use fictional credentials and local fake CLI processes. Runner execution, actual inventory totals, account/site availability and any subsequent cleanup decision require separate evidence. This feature does not establish production readiness of the conversation system.
+Initial local validation covers 14 synthetic script tests, six independent wrapper checks, two canonical-name/nullable-expiry probes and all 64 workflow-condition combinations. These checks use fictional credentials and local fake CLI processes. Successful live inventory totals and any subsequent cleanup decision require separate evidence. This feature does not establish production readiness of the conversation system.
+
+The first runner attempt at `f20afea` built successfully, encountered the existing channel-quota error, then rejected the inventory response with `UNEXPECTED_SCOPE`; it emitted no counts. Diagnostic refinement adds fixed failure categories for project-qualified resource forms, foreign sites and malformed names. Every previously rejected scope remains rejected; numeric project labels do not prove ownership. No raw resource values enter diagnostics. Three additional synthetic tests cover classification, malformed input and actual wrapper error output/cleanup.
 
 References: [Firebase Channel resource](https://firebase.google.com/docs/reference/hosting/rest/v1beta1/sites.channels), [paginated channel listing](https://firebase.google.com/docs/reference/hosting/rest/v1beta1/sites.channels/list).
 
@@ -26,4 +28,6 @@ References: [Firebase Channel resource](https://firebase.google.com/docs/referen
 
 محدودیت‌ها شامل مهلت ۳۰ ثانیه، خروجی استاندارد ۱ MiB، خروجی خطای ۳۲ KiB و حداکثر ۱۰۰۰ کانال است. صفحه‌بندی CLI پیش از خلاصه‌سازی کامل می‌شود؛ این محدودیت‌ها سقف قطعی حافظهٔ داخلی CLI نیستند. پاسخ نامعتبر، بیش‌ازحد بزرگ یا متعلق به سایت دیگر هیچ جمع ناقصی تولید نمی‌کند.
 
-شواهد محلی شامل ۱۴ آزمون مصنوعی، شش بررسی مستقل wrapper، دو بررسی قالب نام و انقضای خالی و ۶۴ ترکیب شرط گردش‌کار است. آزمون‌ها از اعتبارنامهٔ ساختگی و CLI محلی جعلی استفاده می‌کنند. اجرای واقعی runner، شمارنده‌های زنده، دسترسی حساب و سایت و هر تصمیم پاک‌سازی به شواهد جدا نیاز دارد. این قابلیت تأیید آمادگی سامانهٔ گفتگو برای تولید نیست.
+شواهد محلی اولیه شامل ۱۴ آزمون مصنوعی، شش بررسی مستقل wrapper، دو بررسی قالب نام و انقضای خالی و ۶۴ ترکیب شرط گردش‌کار است. آزمون‌ها از اعتبارنامهٔ ساختگی و CLI محلی جعلی استفاده می‌کنند. دریافت موفق شمارنده‌های زنده و هر تصمیم پاک‌سازی به شواهد جدا نیاز دارد. این قابلیت تأیید آمادگی سامانهٔ گفتگو برای تولید نیست.
+
+اولین اجرای runner روی `f20afea` ساخت موفق داشت، با خطای سهمیهٔ موجود روبه‌رو شد و سپس پاسخ فهرست را با `UNEXPECTED_SCOPE` رد کرد؛ هیچ شمارنده‌ای منتشر نشد. اصلاح تشخیصی فقط دسته‌های ثابت خطا برای قالب نام دارای پروژه، سایت دیگر و نام نامعتبر اضافه می‌کند. همهٔ محدوده‌های قبلاً ردشده همچنان رد می‌شوند؛ برچسب عددی پروژه اثبات مالکیت نیست. هیچ مقدار خام منبع در خطا نمایش داده نمی‌شود. سه آزمون مصنوعی دیگر دسته‌بندی، ورودی نامعتبر و خروجی خطا و پاک‌سازی wrapper واقعی را پوشش می‌دهند.

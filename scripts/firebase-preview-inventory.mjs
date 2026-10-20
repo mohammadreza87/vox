@@ -13,6 +13,19 @@ const object = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const keys = (v, allowed) => Object.keys(v).every((k) => allowed.includes(k));
 const projectId = (v) => typeof v === 'string' && /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/.test(v);
 
+function scopeFailure(name, project) {
+  // Classify only rejected resources. No identifier or additional scope is accepted or emitted.
+  if (/[\x00-\x20\x7f]/.test(name)) return 'UNEXPECTED_SCOPE_MALFORMED';
+  const simple = /^sites\/([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)\/channels\/([a-z0-9][a-z0-9-]{0,62})$/.exec(name);
+  if (simple) return 'UNEXPECTED_SCOPE_FOREIGN_SITE';
+  const qualified = /^projects\/([a-z][a-z0-9-]{4,28}[a-z0-9]|[0-9]{1,30})\/sites\/([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)\/channels\/([a-z0-9][a-z0-9-]{0,62})$/.exec(name);
+  if (!qualified) return 'UNEXPECTED_SCOPE_MALFORMED';
+  if (qualified[2] !== project) return 'UNEXPECTED_SCOPE_FOREIGN_SITE';
+  if (qualified[1] === project) return 'UNEXPECTED_SCOPE_PROJECT_EXACT';
+  if (/^[0-9]+$/.test(qualified[1])) return 'UNEXPECTED_SCOPE_PROJECT_NUMERIC';
+  return 'UNEXPECTED_SCOPE_PROJECT_OTHER';
+}
+
 export function projectInventory(raw, project, forbidden = []) {
   if (Buffer.byteLength(raw) > LIMITS.stdout) fail('OUTPUT_LIMIT');
   let data;
@@ -29,7 +42,7 @@ export function projectInventory(raw, project, forbidden = []) {
     // Provider metadata is deliberately never copied to output, including URL/release/user fields.
     if (!object(item) || typeof item.name !== 'string' || item.name.length > 200) fail('INVALID_CHANNEL');
     const prefix = `sites/${project}/channels/`;
-    if (!item.name.startsWith(prefix)) fail('UNEXPECTED_SCOPE');
+    if (!item.name.startsWith(prefix)) fail(scopeFailure(item.name, project));
     const id = item.name.slice(prefix.length);
     if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(id) || seen.has(id) || forbidden.some((s) => s && id.includes(s))) fail('UNSAFE_CHANNEL');
     seen.add(id);
@@ -134,7 +147,7 @@ function readonlyChild(root, project) {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === SELF) {
-  const allowed = new Set(['OUTPUT_LIMIT', 'INVALID_RESULT', 'CHANNEL_LIMIT', 'INVALID_CHANNEL', 'UNEXPECTED_SCOPE', 'UNSAFE_CHANNEL', 'INVALID_EXPIRY', 'CHILD_START', 'TIMEOUT', 'CLI_FAILED', 'INVALID_PROJECT', 'INVALID_CREDENTIALS', 'UNSUPPORTED_CLI']);
+  const allowed = new Set(['OUTPUT_LIMIT', 'INVALID_RESULT', 'CHANNEL_LIMIT', 'INVALID_CHANNEL', 'UNEXPECTED_SCOPE', 'UNEXPECTED_SCOPE_PROJECT_EXACT', 'UNEXPECTED_SCOPE_PROJECT_NUMERIC', 'UNEXPECTED_SCOPE_PROJECT_OTHER', 'UNEXPECTED_SCOPE_FOREIGN_SITE', 'UNEXPECTED_SCOPE_MALFORMED', 'UNSAFE_CHANNEL', 'INVALID_EXPIRY', 'CHILD_START', 'TIMEOUT', 'CLI_FAILED', 'INVALID_PROJECT', 'INVALID_CREDENTIALS', 'UNSUPPORTED_CLI']);
   try {
     if (process.argv[2] === '--readonly-child' && process.argv.length === 5) readonlyChild(process.argv[3], process.argv[4]);
     else if (process.argv.length === 2) console.log(JSON.stringify(await runInventory(process.env)));
