@@ -5,7 +5,8 @@ import type { TelegramUpdate } from '../../tireh/telegram/client';
 
 describe('group updates completing out of order', () => {
   it('extracts both distinct sources when the newer decision finishes first', async () => {
-    const h = makeStudio();
+    // Legacy memory path: adaptive runtimes disable TIREH memory, so nothing is extracted there.
+    const h = makeStudio({ adaptive: false });
     const org = await seedOrg(h);
     const { agent, bot, botId } = await hire(h, org.alice, { name: 'Nova', role: 'Producer' });
     await h.store.update((state) => {

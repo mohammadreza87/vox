@@ -40,6 +40,13 @@ beforeEach(async () => {
   org = await seedOrg(h);
 });
 
+/** Legacy (non-adaptive) path: TIREH memory, history and the unscoped relationship loop.
+ * No production runtime builds it; adaptive runtimes disable all three (production-turn.test.ts). */
+async function legacyHarness() {
+  h = makeStudio({ adaptive: false });
+  org = await seedOrg(h);
+}
+
 // ============================================================================
 describe('members and roles', () => {
   it('bootstraps founding owners from superadminIds; everyone else starts pending', async () => {
@@ -713,6 +720,7 @@ describe('groups', () => {
   });
 
   it('in a group with unknown readers only the current exchange reaches the model', async () => {
+    await legacyHarness();
     const { agent: a, bot, botId } = await hire(h, org.alice);
     await h.store.update((s) => {
       s.groups.push({ chatId: chat.id, title: 'Game Team', memberIds: [ID.alice, ID.bob], hasGuests: true, agentIds: [a.id], addedAt: T0.toISOString() });
@@ -744,6 +752,7 @@ describe('groups', () => {
 // ============================================================================
 describe('calls', () => {
   it('transcribes, replies through the gateway (memory formed) and speaks with the agent\'s voice', async () => {
+    await legacyHarness();
     h.personaLLM.push(draftJson());
     const { agent: d } = await h.studio.draft(org.alice, {});
     await h.studio.chooseLibraryVoice(org.alice, d.id, { publicOwnerId: 'o', voiceId: 'v', name: 'Sam' });
@@ -824,6 +833,8 @@ describe('memories API', () => {
 });
 
 describe('selected memory sharing', () => {
+  // Adaptive runtimes refuse legacy sharing with 409 (adaptive-integration.test.ts).
+  beforeEach(legacyHarness);
   it('source owner chooses exact recipients and may revoke the grant and retained derived history', async () => {
     const { agent } = await hire(h, org.alice);
     const record = await h.memory.memories.add(mem(agent.id, { content: 'EXPLICIT_RECIPIENT_CANARY', scope: { kind: 'private', personId: personId(ID.alice) } }));

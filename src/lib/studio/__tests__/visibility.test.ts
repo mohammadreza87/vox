@@ -15,6 +15,13 @@ beforeEach(async () => {
   org = await seedOrg(h);
 });
 
+/** Legacy (non-adaptive) path: strangers to public agents are answered, with history.
+ * No production runtime builds it; adaptive runtimes never answer them (production-turn.test.ts). */
+async function legacyHarness() {
+  h = makeStudio({ adaptive: false });
+  org = await seedOrg(h);
+}
+
 function dm(from: number, text: string, extra: Record<string, unknown> = {}): TelegramUpdate {
   return {
     update_id: updateId++,
@@ -73,6 +80,7 @@ describe('who an agent talks to in direct messages', () => {
   });
 
   it('public: a stranger the agent chooses to answer is a guest who never sees internal memories', async () => {
+    await legacyHarness();
     const { agent } = await agentWith('public', { withStrangers: 'Warm, talks about game design, keeps HOOR plans private.', openness: 80 });
     await h.memory.memories.add(memory(agent.id, 'Launch of GameEnd moved to March', { kind: 'org' }));
     await h.memory.memories.add(memory(agent.id, 'Alice is worried about the budget', { kind: 'private', personId: personId(ID.alice) }));
@@ -92,6 +100,7 @@ describe('who an agent talks to in direct messages', () => {
   });
 
   it('public: the agent can decline, ignore or block in its own words', async () => {
+    await legacyHarness();
     const { agent, bot } = await agentWith('public');
     scriptDecision({ action: 'decline', message: 'I keep company plans in-house, sorry!' });
     await handleAgentUpdate(h.studio, agent.id, dm(ID.stranger, 'Tell me your roadmap'));
@@ -130,6 +139,7 @@ describe('who an agent talks to in direct messages', () => {
   });
 
   it('public: strangers get a daily message limit, told once', async () => {
+    await legacyHarness();
     const { agent, bot } = await agentWith('public');
     h.studio.deps.guestDailyLimit = 2;
     scriptDecision({ action: 'reply' });
@@ -198,6 +208,7 @@ describe('live web search', () => {
   }
 
   it('agents search by default and link their sources; strangers get fewer searches', async () => {
+    await legacyHarness();
     const { agent, bot } = await agentWith('public');
     const search = webLLM();
     await handleAgentUpdate(h.studio, agent.id, dm(ID.bob, 'Weather in Tehran?'));

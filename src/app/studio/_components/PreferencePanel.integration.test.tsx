@@ -16,7 +16,7 @@ afterEach(async () => {
 it.each([{ locale: 'en', file: true }, { locale: 'fa', file: true }, { locale: 'en', file: false }, { locale: 'fa', file: false }] as const)(
   'connects $locale controls through the typed client and signed HTTP handler (file=$file)', async ({ locale, file }) => {
   vi.spyOn(Date, 'now').mockReturnValue(NOW);
-  const h = makeStudio(), users = await seedOrg(h), { agent } = await hire(h, users.alice);
+  const h = makeStudio({ adaptive: false }), users = await seedOrg(h), { agent } = await hire(h, users.alice);
   const f = await preferenceFixture({ file, telegramId: ID.alice, agentId: agent.id }); fixtures.push(f);
   h.studio.deps.adaptive = f.adaptive; h.studio.deps.experience = f.experience;
   await f.grant(); await f.agent();

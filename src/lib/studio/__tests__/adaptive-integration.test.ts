@@ -9,7 +9,8 @@ import { groupText } from '../../tireh/__tests__/fixtures';
 import { hire, ID, makeStudio, seedOrg } from './helpers';
 
 async function setup() {
-  const h = makeStudio();
+  // These fences cover an in-memory adaptive service without the relationship authority.
+  const h = makeStudio({ adaptive: false });
   const users = await seedOrg(h);
   const { agent, bot } = await hire(h, users.alice);
   h.studio.deps.adaptive = new AdaptiveService(new AdaptiveRepository(new MemoryAdaptiveStorage()));
