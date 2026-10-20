@@ -160,8 +160,7 @@ const fact = (content: string, extra: Record<string, unknown> = {}) => ({ memori
 const pick = ({ system, messages, maxTokens, effort }: LLMRequest) => ({ system, messages, maxTokens, effort });
 
 function seed(record: MemoryRecord): NewMemory {
-  const { id: _id, createdAt: _c, updatedAt: _u, ...rest } = record;
-  return rest;
+  return Object.fromEntries(Object.entries(record).filter(([key]) => !['id', 'createdAt', 'updatedAt'].includes(key))) as NewMemory;
 }
 
 function setupPrivacy(initial: Partial<RuntimePrivacyState> = {}) {
