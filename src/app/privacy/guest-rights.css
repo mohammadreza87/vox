@@ -1,0 +1,13 @@
+.guest-privacy { max-width: 48rem; margin: auto; padding: 1.25rem; color: var(--color-foreground, #191919); background: var(--color-background, #fff); min-height: 100dvh; }
+.guest-rights { display: grid; gap: 1rem; overflow-wrap: anywhere; }
+.guest-rights h1 { font-size: 1.65rem; font-weight: 700; }
+.guest-rights h2 { font-weight: 600; }
+.guest-rights label { display: grid; gap: .4rem; }
+.guest-rights input, .guest-rights select, .guest-rights button { color: inherit; font: inherit; background: transparent; border: 1px solid currentColor; border-radius: .4rem; padding: .7rem; min-width: 0; max-width: 100%; min-height: 2.75rem; }
+.guest-rights button { white-space: normal; overflow-wrap: normal; cursor: pointer; }
+.guest-rights button:disabled { opacity: .55; cursor: default; }
+.guest-rights :focus-visible { outline: 3px solid #487bbd; outline-offset: 3px; }
+.guest-rights .guest-check { display: flex; align-items: start; gap: .65rem; }
+.guest-rights .guest-check input { flex: 0 0 1.3rem; min-height: 1.3rem; margin-top: .25rem; }
+.guest-rights article { display: grid; gap: .8rem; border-block-start: 1px solid currentColor; padding-block: 1rem; }
+.guest-rights a { text-decoration: underline; }

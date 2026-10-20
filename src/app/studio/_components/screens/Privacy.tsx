@@ -10,6 +10,7 @@ import { MemoryCorrectionEditor } from '../MemoryCorrectionEditor';
 import { ReviewedMemoryPanel } from '../ReviewedMemoryPanel';
 import { ProductPausePanel } from '../ProductPausePanel';
 import { RightsRequestPanel } from '../RightsRequestPanel';
+import { GuestRightsOperationsPanel } from '../GuestRightsOperationsPanel';
 import { useProductPause } from '../../_lib/product-pause-client';
 import { pauseText } from '../../_lib/product-pause-copy';
 
@@ -94,6 +95,8 @@ export function PrivacyScreen({ onShared, onExperience, onConnections, onCorrect
     <p className="vx-2">{c.intro}</p>
     <ProductPausePanel locale={locale} sessionKey={session} onReviewProfile={() => document.getElementById('vox-profile-heading')?.focus()} />
     <RightsRequestPanel space={space} locale={locale} sessionKey={session} />
+    <p className="vx-small"><a href="/privacy">{locale === 'fa' ? 'درخواست حریم خصوصی بدون حساب' : 'Privacy request without an account'}</a></p>
+    <GuestRightsOperationsPanel locale={locale} sessionKey={session} />
     <fieldset disabled={!!pendingCorrection} onClickCapture={event => { if (pendingCorrectionRef.current) { event.preventDefault(); event.stopPropagation(); } }} onChangeCapture={event => { if (pendingCorrectionRef.current) { event.preventDefault(); event.stopPropagation(); } }} style={{ display: 'flex', flexDirection: 'column', gap: 16, border: 0, padding: 0, margin: 0, minWidth: 0 }}>
     {onExperience && <button className="vx-btn vx-btn-secondary" onClick={() => { if (!pendingCorrectionRef.current) onExperience(); }}>{locale === 'fa' ? 'ترجیح‌ها و صندوق اعلان' : 'Preferences & notification inbox'}</button>}
     {onConnections && <button className="vx-btn vx-btn-secondary" onClick={() => { if (!pendingCorrectionRef.current) onConnections(); }}>{locale === 'fa' ? 'اتصال‌ها و دسترسی عامل‌ها' : 'Connections & agent access'}</button>}

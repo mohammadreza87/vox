@@ -1,3 +1,4 @@
+import { guestPrivacyEvent, guestPrivacyPath } from './src/lib/guest-privacy-telemetry';
 import * as Sentry from '@sentry/nextjs';
 
 /**
@@ -7,11 +8,11 @@ import * as Sentry from '@sentry/nextjs';
 
 const SENTRY_DSN = process.env.NEXT_PUBLIC_SENTRY_DSN;
 
-Sentry.init({
+if (!(typeof window !== 'undefined' && guestPrivacyPath(window.location.pathname))) Sentry.init({
   dsn: SENTRY_DSN,
 
   // Only enable Sentry if DSN is configured
-  enabled: Boolean(SENTRY_DSN),
+  enabled: Boolean(SENTRY_DSN) && !(typeof window !== 'undefined' && guestPrivacyPath(window.location.pathname)),
 
   // Environment tag
   environment: process.env.NODE_ENV || 'development',
@@ -29,7 +30,7 @@ Sentry.init({
   // Integrations
   integrations: [
     // Browser tracing for performance monitoring
-    Sentry.browserTracingIntegration(),
+    Sentry.browserTracingIntegration({ shouldCreateSpanForRequest: url => !guestPrivacyPath(url) }),
     // Session replay (only in production to save bandwidth)
     ...(process.env.NODE_ENV === 'production'
       ? [
@@ -42,6 +43,8 @@ Sentry.init({
         ]
       : []),
   ],
+
+  beforeSendTransaction(event) { return guestPrivacyEvent(event) ? null : event; },
 
   // Filter out noise
   ignoreErrors: [
@@ -68,6 +71,7 @@ Sentry.init({
 
   // Sanitize sensitive data before sending
   beforeSend(event) {
+    if (guestPrivacyEvent(event)) return null;
     // Remove sensitive query params
     if (event.request?.query_string) {
       const sensitiveKeys = ['token', 'auth', 'key', 'secret', 'password'];
