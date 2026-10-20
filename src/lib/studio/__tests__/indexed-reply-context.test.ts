@@ -5,6 +5,7 @@ import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {hire, ID, makeStudio, seedOrg, T0} from './helpers';
 import {AdaptiveRepository, accountIdFor} from '../../adaptive/persistence/repository';
+import {RightsUseHoldService} from '../../adaptive/rights-use-holds/service';
 import {ProductPauseService} from '../../adaptive/product-pause/service';
 import {MessageMemoryService} from '../../adaptive/message-memory/service';
 import {ReviewedMemoryService} from '../../adaptive/reviewed-memory/service';
@@ -31,7 +32,7 @@ import {InMemoryRelationshipStore, RelationshipLoop} from '../../relationships';
 const NOW = T0.getTime(), TOKEN = '123:synthetic-manager';
 const paths: string[] = [], stores: Array<SqliteAdaptiveStorage | ManagedFileV2Storage> = [];
 afterEach(() => {vi.restoreAllMocks(); vi.unstubAllGlobals(); for (const store of stores.splice(0)) store.close(); for (const path of paths.splice(0)) rmSync(path, {recursive: true, force: true});});
-async function fixture(personalization = true, consent = true, relationships = false, pausePrepared = false, format: 'sqlite' | 'file' = 'sqlite') {
+async function fixture(personalization = true, consent = true, relationships = false, pausePrepared = false, format: 'sqlite' | 'file' = 'sqlite', rightsPrepared = false) {
   const h = makeStudio(), users = await seedOrg(h), {agent} = await hire(h, users.alice);
   let now = NOW;
   const directory = mkdtempSync(join(tmpdir(), 'vox-indexed-reply-')); paths.push(directory);
@@ -41,7 +42,7 @@ async function fixture(personalization = true, consent = true, relationships = f
     accounts: [ID.alice, ID.bob].map(id => ({accountId: accountIdFor(id), jurisdictionKeys: ['SYNTHETIC'], allowDeclaredAdult: true})),
     approvals: capabilities.map((capability, i) => ({schemaVersion: 1, id: `approval-${i}`, revision: 1, createdAt: NOW, updatedAt: NOW,
       jurisdiction: 'SYNTHETIC', capability, state: 'approved', configurationVersion: 'synthetic', effectiveAt: NOW, reviewExpiresAt: NOW + 86_400_000, owner: 'synthetic', approvalReference: 'synthetic-only'}))}));
-  const storeOptions = {now: () => now, newStoreSeed: {generation: 1, lifecycleWatermark: 0, schemaVersion: pausePrepared ? 2 as const : 1 as const}};
+  const storeOptions = {now: () => now, newStoreSeed: {generation: 1, lifecycleWatermark: 0, schemaVersion: rightsPrepared ? 3 as const : pausePrepared ? 2 as const : 1 as const}};
   const storage = (format === 'file' ? new ManagedFileV2Storage(join(directory,'managed-file'),storeOptions) : new SqliteAdaptiveStorage(join(directory, 'synthetic.sqlite'),storeOptions)) as (SqliteAdaptiveStorage | ManagedFileV2Storage) & {io:{canonicalImageReads:number;bodyRowsRead?:number}}; stores.push(storage);
   const adaptive = new AdaptiveService(new AdaptiveRepository(storage), {...options, scopedRelationshipsEnabled: relationships, now: () => now});
   Object.defineProperty(h.chatLLM, 'committedExportFence', {value: true});
@@ -506,4 +507,27 @@ it.each(['sqlite','file'] as const)('old %s Telegram send receipt cannot revive 
   const send = bot.sendMessage.bind(bot); vi.spyOn(bot,'sendMessage').mockImplementation(async (...args) => {await pause(f,'pause');await pause(f,'resume');return send(...args);}); f.h.studio.deps.botFor = () => bot;
   const {gateway} = await f.h.studio.gateway(); await expect(gateway.handleUpdate(f.agent.id,privateText(ID.alice,'Current question'))).rejects.toMatchObject({name:'ExportAuthorityError'});
   expect(exports.some(url => url.endsWith('sendMessage'))).toBe(false);
+});
+
+async function restrictAutomaticContext(f: Awaited<ReturnType<typeof fixture>>) {
+  const service = new RightsUseHoldService(f.adaptive), scope = {space:'work',purpose:'optional.personalization'} as const;
+  const current=service.inspectNow(ID.alice,scope,()=>{});if(current.status!=='ready')throw Error('missing prepared controls');
+  const now=f.h.clock.now.getTime();
+  const command={version:1 as const,scope,effectId:randomUUID(),requestId:randomUUID(),expectedCanonicalRevision:current.value.accountRevision,expectedUseEpoch:current.value.useEpoch,applyIntentDigest:'a'.repeat(64),policy:{id:'TEST ONLY',revision:1,digest:'b'.repeat(64),approvalReference:'TEST ONLY',decisionReference:'TEST ONLY'},notice:{version:'TEST ONLY',digest:'c'.repeat(64)},reviewAt:now+60000,metadataRetainUntil:now+86400000,replayRetainUntil:now+172800000};
+  const receipt=await service.apply(ID.alice,command,()=>{});return{service,command,receipt};
+}
+it.each(['sqlite','file'] as const)('RF1 %s suppresses automatic adapters before body admission while actual signed core reply remains available',async format=>{
+  const f=await fixture(true,true,false,true,format,true);await restrictAutomaticContext(f);f.reset();f.unavailableLegacy();vi.stubGlobal('window',undefined);
+  const transport=vi.fn<typeof fetch>(async()=>sdkReply());f.h.studio.deps.chatLLM=new AnthropicLLM('synthetic','synthetic',transport);
+  const shared=f.h.studio.deps.shared;expect(shared).toBeUndefined();const preferences=vi.spyOn(f.h.studio.deps.experience!,'readPreferences');
+  const response=await handleConversationRequest(f.h.studio,f.request('CURRENT_RF1_GENERIC_INPUT'),TOKEN);expect(response.status).toBe(200);expect(await response.text()).toContain('PAUSED_GENERIC_REPLY');
+  expect(transport).toHaveBeenCalledTimes(1);const body=String(transport.mock.calls[0][1]?.body);expect(body).toContain('CURRENT_RF1_GENERIC_INPUT');expect(body).not.toMatch(/Sapphire|یاقوت|Unrelated calendar|response_length/);expect(preferences).not.toHaveBeenCalled();
+  if(format==='sqlite')expect(f.storage.io.bodyRowsRead).toBe(0);else expect(f.storage.io.canonicalImageReads).toBe(0);
+});
+it.each(['sqlite','file'] as const)('RF1 %s epoch rejects an old prepared request after hold plus release without reviving it',async format=>{
+  const f=await fixture(true,true,false,true,format,true),transport=vi.fn<typeof fetch>(async()=>sdkReply());vi.stubGlobal('window',undefined);
+  const llm=new AnthropicLLM('synthetic','synthetic',transport),client=(llm as unknown as {getClient():{prepareOptions:(options:unknown)=>Promise<unknown>}}).getClient(),prepare=client.prepareOptions.bind(client);
+  client.prepareOptions=async options=>{const {service,command,receipt}=await restrictAutomaticContext(f);const r=service.inspectNow(ID.alice,command.scope,()=>{});if(r.status!=='ready')throw Error('missing');const {applyIntentDigest:_,...base}=command;void _;
+    await service.release(ID.alice,{...base,expectedCanonicalRevision:r.value.accountRevision,expectedUseEpoch:r.value.useEpoch,expectedEffectRevision:receipt.effect.revision,expectedEffectDigest:receipt.effect.effectDigest,releaseIntentDigest:'d'.repeat(64)},()=>{});return prepare(options);};
+  f.h.studio.deps.chatLLM=llm;const response=await handleConversationRequest(f.h.studio,f.request('What is launchcodename?'),TOKEN);expect([409,503]).toContain(response.status);expect(await response.text()).not.toContain('PAUSED_GENERIC_REPLY');expect(transport).not.toHaveBeenCalled();
 });

@@ -55,3 +55,10 @@ it('accepts only bounded own-space correction export fields without source text'
   expect(rightsExportSchema.safeParse({ ...exportData(), observerCorrections: [entry] }).success).toBe(true);
   expect(rightsExportSchema.safeParse({ ...exportData(), observerCorrections: [{ ...entry, text: 'PRIVATE_CANARY' }] }).success).toBe(false);
 });
+
+it('strictly validates current local proof/scope and never converts malformed unknown into inactive',async()=>{
+ const current={version:1,status:{version:1,scope:{space:'work',purpose:'optional.product_analytics'},technical:{current:'unknown',reconciliation:'none'},effectiveBlocked:null,observedAt:null,useEpoch:null,reason:'authority_unavailable'},availableActions:[]};
+ const fetcher=vi.fn().mockResolvedValueOnce(Response.json(current)).mockResolvedValueOnce(Response.json({...current,status:{...current.status,effectiveBlocked:false}})).mockResolvedValueOnce(Response.json({...current,status:{...current.status,scope:{space:'personal',purpose:'optional.product_analytics'}}}));vi.stubGlobal('fetch',fetcher);
+ const scope={space:'work',purpose:'optional.product_analytics'} as const;expect((await rightsApi.localUse(requestId,scope,auth.session)).status.technical.current).toBe('unknown');
+ await expect(rightsApi.localUse(requestId,scope,auth.session)).rejects.toThrow();await expect(rightsApi.localUse(requestId,scope,auth.session)).rejects.toThrow();expect(fetcher).toHaveBeenCalledTimes(3);
+});
