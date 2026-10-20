@@ -1,5 +1,5 @@
 'use client';
-import type { ClientObservationInput, ObserverSnapshot } from '@/lib/adaptive/observation/contracts';
+import type { ClientObservationInput, CorrectionObservationInput, ObserverSnapshot } from '@/lib/adaptive/observation/contracts';
 import { request } from './client';
 import type { ImprovementWorkflow } from '@/lib/adaptive/improvement/workflow';
 
@@ -13,5 +13,7 @@ export const learningApi = {
   process: (space: LearningSpace) => request<ObserverSnapshot>('POST', `learning/observations/process?space=${space}`, {}),
   export: (space: LearningSpace) => request<LearningExport>('GET', `learning/export?space=${space}`),
   operations: () => request<LearningOperations>('GET', 'learning/operations'),
-  event: (input: ClientObservationInput) => request<{ recorded: boolean; duplicate: boolean; eventId?: string }>('POST', 'learning/events', input),
+  correctionAuthority: (space: LearningSpace, signal?: AbortSignal) => request<{ policyReceipt: string | null }>('POST', 'learning/correction-authority', { space }, 'json', signal),
+  correction: (input: CorrectionObservationInput, signal?: AbortSignal) => request<{ recorded: boolean; duplicate: boolean }>('POST', 'learning/corrections', input, 'json', signal),
+  event: (input: ClientObservationInput, signal?: AbortSignal) => request<{ recorded: boolean; duplicate: boolean; eventId?: string }>('POST', 'learning/events', input, 'json', signal),
 };

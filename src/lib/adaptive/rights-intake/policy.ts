@@ -11,6 +11,8 @@ export const rightsPolicySchema = z.object({
   privacyOperatorIds: z.array(integer.positive()).min(1).max(20),
   copyVersion: z.string().min(1).max(100), noticeHashes: z.object({ en: z.string().regex(/^[a-f0-9]{64}$/), fa: z.string().regex(/^[a-f0-9]{64}$/) }).strict(),
   retention: z.object({ requestReviewAfterMs: integer.positive(), auditRetentionMs: integer.positive(), receiptRetentionMs: integer.positive() }).strict(),
+  /** Explicit RI2 approval; absence disables operator retention mutations. */
+  retentionOperations: z.object({ terminalRetentionMs: integer.positive(), continuityRetentionMs: integer.positive() }).strict().optional(),
   handleLifetimeMs: integer.positive(),
   /** Exact server-owned account rules; locale/IP/client claims never resolve jurisdiction. */
   deadlineRules: z.array(z.object({ id: z.string().min(1).max(100), accountId: z.string().regex(/^telegram-account:[1-9]\d{0,15}$/), space: spaceSchema, kind: kindSchema, dueAfterMs: integer.positive() }).strict()).max(100),

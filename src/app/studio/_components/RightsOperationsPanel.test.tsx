@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { RightsOperationsPanel } from './RightsOperationsPanel';
 import { RightsClientError, type RightsOperationView } from '../_lib/rights-client';
-const mocks = vi.hoisted(() => ({ session: 'operator-a', operations: vi.fn(), operate: vi.fn() }));
+const mocks = vi.hoisted(() => ({ session: 'operator-a', operations: vi.fn(), operate: vi.fn(), retain: vi.fn() }));
 vi.mock('../_lib/client', () => ({ tg: () => ({ initData: mocks.session }) }));
 vi.mock('../_lib/rights-client', async importOriginal => ({ ...await importOriginal<typeof import('../_lib/rights-client')>(), rightsApi: mocks }));
 const row = (): RightsOperationView => ({ version: 1, requestId: '00000000-0000-4000-8000-000000000001', accountRef: 'a'.repeat(64), operationHandle: 'encrypted-handle', space: 'work', kind: 'erasure', revision: 1, createdAt: 1, updatedAt: 1, state: 'received', deadline: { state: 'reviewed_policy_unavailable', dueAt: null, reason: 'jurisdiction_unresolved' }, coverage: { localAccount: 'not_started', shared: 'not_started', providers: 'unsupported', backups: 'unsupported', guests: 'unsupported', deletion: 'not_implemented', formalRestriction: 'not_implemented' }, retentionReviewRequired: false, audit: [] });
@@ -27,4 +27,21 @@ it('retains Persian metadata but disables mutations while reviewed policy is una
 });
 it('offers a bounded retry after a transient queue read error without exposing request metadata', async () => {
   mocks.operations.mockRejectedValueOnce(new Error('PRIVATE_ERROR_CANARY')).mockResolvedValue({ policyStatus: 'available', requests: [row()] }); render(<RightsOperationsPanel />); await screen.findByRole('alert'); expect(screen.queryByText(row().requestId)).not.toBeInTheDocument(); expect(screen.queryByText('PRIVATE_ERROR_CANARY')).not.toBeInTheDocument(); fireEvent.click(screen.getByRole('button', { name: 'Refresh privacy queue' })); expect(await screen.findByText(row().requestId)).toBeInTheDocument();
+});
+it('allows explicit retention review when admission is blocked, preserves policy CAS, and requires refresh after an unknown result', async () => {
+  const current = { ...row(), retentionReviewRequired: true, retentionActions: ['reassess_retention'], retentionPolicyRevision: 7, retentionAt: 50 };
+  mocks.operations.mockResolvedValue({ policyStatus: 'unavailable', requests: [current] }); mocks.retain.mockRejectedValue(new Error('lost'));
+  render(<RightsOperationsPanel />); const review = await screen.findByRole('button', { name: 'Reassess using reviewed retention policy' });
+  expect(review).toBeEnabled(); expect(screen.getByRole('button', { name: 'Begin review' })).toBeDisabled(); fireEvent.click(review); await screen.findByRole('alert');
+  expect(mocks.retain).toHaveBeenCalledWith(current.requestId, expect.objectContaining({ expectedRevision: 1, expectedPolicyRevision: 7, operationHandle: 'encrypted-handle', action: 'reassess_retention' }), 'operator-a', expect.any(AbortSignal));
+  expect(review).toBeDisabled(); expect(mocks.retain).toHaveBeenCalledTimes(1); expect(mocks.operate).not.toHaveBeenCalled();
+});
+it('requires a separate destructive purge confirmation with Persian scope and drops old detail after refresh', async () => {
+  const { rightsCopy } = await import('../_lib/rights-copy'); const c = rightsCopy.fa;
+  mocks.operations.mockResolvedValueOnce({ policyStatus: 'unavailable', requests: [{ ...row(), state: 'closed_unfulfilled', retentionReviewRequired: true, retentionActions: ['reassess_retention','purge_terminal_record'], retentionPolicyRevision: 1 }] }).mockResolvedValue({ policyStatus: 'available', requests: [] });
+  mocks.retain.mockResolvedValue({ outcome: 'purged' }); const view = render(<RightsOperationsPanel locale="fa" />);
+  fireEvent.click(await screen.findByRole('button', { name: c.purge })); expect(mocks.retain).not.toHaveBeenCalled(); expect(screen.getByText(c.confirmPurge)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: c.purge })); await act(async () => {});
+  expect(mocks.retain).toHaveBeenCalledTimes(1); expect(mocks.retain.mock.calls[0][1].action).toBe('purge_terminal_record');
+  expect(screen.queryByText(row().requestId)).not.toBeInTheDocument(); expect(view.container.querySelector('section')).toHaveAttribute('dir', 'rtl');
 });

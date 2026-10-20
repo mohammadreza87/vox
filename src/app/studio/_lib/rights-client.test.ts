@@ -3,7 +3,7 @@ import { rightsApi, rightsExportSchema, rightsSnapshotSchema, RightsClientError 
 const auth = vi.hoisted(() => ({ session: 'signed-current-account' }));
 vi.mock('./client', () => ({ tg: () => ({ initData: auth.session }) }));
 const requestId = '00000000-0000-4000-8000-000000000001', eventId = '00000000-0000-4000-8000-000000000002';
-const row = () => ({ version: 1 as const, requestId, space: 'work' as const, kind: 'access_export' as const, revision: 1, createdAt: 1, updatedAt: 1, localeAtSubmission: 'en' as const, intakePolicy: { id: 'synthetic', revision: 1, copyVersion: 'rights-intake-ri1-v1' }, requester: { assurance: 'signed_telegram_account' as const, personVerification: 'not_established' as const }, state: 'received' as const, deadline: { state: 'reviewed_policy_unavailable' as const, dueAt: null, reason: 'jurisdiction_unresolved' as const }, coverage: { localAccount: 'not_started' as const, shared: 'not_started' as const, providers: 'unsupported' as const, backups: 'unsupported' as const, guests: 'unsupported' as const, deletion: 'not_implemented' as const, formalRestriction: 'not_implemented' as const }, retention: { policyId: 'synthetic', policyRevision: 1, reviewOrExpiryAt: 50000 }, retentionReviewRequired: false });
+const row = () => ({ version: 1 as const, requestId, space: 'work' as const, kind: 'access_export' as const, revision: 1, createdAt: 1, updatedAt: 1, localeAtSubmission: 'en' as const, intakePolicy: { id: 'synthetic', revision: 1, copyVersion: 'rights-intake-ri2-v1' }, requester: { assurance: 'signed_telegram_account' as const, personVerification: 'not_established' as const }, state: 'received' as const, deadline: { state: 'reviewed_policy_unavailable' as const, dueAt: null, reason: 'jurisdiction_unresolved' as const }, coverage: { localAccount: 'not_started' as const, shared: 'not_started' as const, providers: 'unsupported' as const, backups: 'unsupported' as const, guests: 'unsupported' as const, deletion: 'not_implemented' as const, formalRestriction: 'not_implemented' as const }, retention: { policyId: 'synthetic', policyRevision: 1, reviewOrExpiryAt: 50000 }, retentionReviewRequired: false });
 const snapshot = () => ({ available: true, policyStatus: 'available', supportedKinds: ['access_export'], intakePolicy: row().intakePolicy, requests: [row()], supportContact: 'info@joyixir.com' });
 const exportData = () => ({ schemaVersion: 1, accountId: 'telegram-account:1', space: 'work', generatedAt: 1, revision: 1, confirmedUntil: 50, memories: [], preferences: [], preferenceChanges: [], preferenceLearning: null, purposes: [], agents: [], settings: { inboxEnabled: false, proactiveEnabled: false, reminderEnabled: false, dailyCap: 1, quietStartHour: 22, quietEndHour: 8 }, reminders: [], observations: [], checkIns: [], observerEvents: [], sharedContributions: [], coverage: { privateAccount: 'included', shared: 'not_configured', providers: 'unavailable', backups: 'unavailable' } });
 const input = { version: 1 as const, eventId, space: 'work' as const, kind: 'access_export' as const, locale: 'en' as const, expectedIntakePolicyRevision: 1 };
@@ -42,4 +42,16 @@ it('bounds waiting to 15 seconds without retrying or inventing a receipt', async
 it('rejects internal operator metadata and cannot turn a bare reference into account authority', async () => {
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ policyStatus: 'available', requests: [{ ...row(), accountId: 'telegram-account:2', accountRef: 'a'.repeat(64), operationHandle: 'opaque', audit: [] }] })));
   await expect(rightsApi.operations(auth.session)).rejects.toThrow();
+});
+
+it('rejects cross-space continuity and treats 410 as unconfirmed without replaying', async () => {
+  const fetcher = vi.fn().mockResolvedValueOnce(Response.json({ ...snapshot(), requests: [], expiredRequests: [{ requestId, space: 'personal', lastRevision: 2, purgedAt: 1000, retainUntil: 2000 }] })).mockResolvedValueOnce(Response.json({ error: 'rights_record_expired' }, { status: 410 })); vi.stubGlobal('fetch', fetcher);
+  await expect(rightsApi.read('work', auth.session)).rejects.toThrow();
+  await expect(rightsApi.create(input, auth.session)).rejects.toMatchObject({ status: 410 });
+  expect(fetcher).toHaveBeenCalledTimes(2);
+});
+it('accepts only bounded own-space correction export fields without source text', () => {
+  const entry = { version: 1, trust: 'client_unverified', outcome: 'correction_client_saved', mutationEvidence: 'accepted_command_receipt', occurredAt: 1, expiresAt: 2 };
+  expect(rightsExportSchema.safeParse({ ...exportData(), observerCorrections: [entry] }).success).toBe(true);
+  expect(rightsExportSchema.safeParse({ ...exportData(), observerCorrections: [{ ...entry, text: 'PRIVATE_CANARY' }] }).success).toBe(false);
 });

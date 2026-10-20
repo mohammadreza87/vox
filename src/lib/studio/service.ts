@@ -1,5 +1,6 @@
 import { hasCommittedPersonalizationTransport } from '../adaptive/persistence/indexed-private-context';
 import type { PreferenceLearningService } from '../adaptive/personalization/learning/service';
+import type { StudioExperimentRuntime } from '../adaptive/experiments/runtime';
 /**
  * Vox Studio service — every operation the Mini App and VoxxBot perform,
  * each one checked against permissions.ts. API routes stay thin.
@@ -119,6 +120,8 @@ export interface StudioDeps {
   shared?: SharedMemoryService;
   experience?: AdaptiveExperienceService;
   preferenceLearning?: PreferenceLearningService;
+  /** Optional presentation experiments; never a source of identity or access. */
+  experiments?: StudioExperimentRuntime;
   voiceIdentity?: VoiceIdentityService;
   observer?: AdaptiveObserverService;
   lifecycle?: AdaptiveLifecycleService;

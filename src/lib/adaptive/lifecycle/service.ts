@@ -5,11 +5,14 @@ import { AdaptiveRelationshipService } from '../relationships/service';
 import type { SharedMemoryService } from '../shared/service';
 import { z } from 'zod';
 import type { ObserverDocument } from '../observation/contracts';
+import type { ExperimentScopeExport } from '../experiments/contracts';
 
 export interface LifecycleOptions {
   shared?: SharedMemoryService;
   /** Called within the authoritative transaction, before export/recovery projection. */
   pruneObserver?: (document: AdaptiveDocument, now: number) => void;
+  /** Own-space data from the separate ledger, with a publication-time fence. */
+  prepareExperimentExport?: (telegramId: number, space: SpaceKind) => { data: ExperimentScopeExport; revalidate(): void };
 }
 const fail = (status: number, code: string): never => { throw new AdaptiveError(status, code); };
 function selectedSpace(space: SpaceKind): void {
@@ -42,7 +45,7 @@ export class AdaptiveLifecycleService {
     const sharedFence = built.shared ? this.options.shared!.captureExportFence(telegramId, space, built.shared) : undefined;
     const payloadDeadline = Math.min(built.data.confirmedUntil,
       ...[...built.data.memories, ...built.data.preferenceChanges, ...built.data.reminders,
-        ...built.data.checkIns, ...built.data.observerEvents, ...built.data.sharedContributions,
+        ...built.data.checkIns, ...built.data.observerEvents, ...(built.data.observerCorrections ?? []), ...built.data.sharedContributions,
         ...(built.data.preferenceLearning?.intents ?? []), ...(built.data.preferenceLearning?.candidates ?? []),
         ...(built.data.preferenceLearning?.suppressions ?? [])].map(row => row.expiresAt));
     const inspect = () => {
@@ -59,6 +62,7 @@ export class AdaptiveLifecycleService {
     const revalidate = () => {
       if (inspect() !== stamp) return fail(409, 'export_authority_changed');
       sharedFence?.();
+      built.experiments?.revalidate();
       if (inspect() !== stamp) return fail(409, 'export_authority_changed');
     };
     revalidate(); return { data: built.data, revalidate };
@@ -101,6 +105,9 @@ export class AdaptiveLifecycleService {
           channel: o.channel, status: o.status, durationMs: o.durationMs, at: o.at })),
         checkIns: d.relationships.inbox.filter(i => i.key.scope.space === space && i.status !== 'cancelled' && i.expiresAt > now)
           .map(i => ({ id: i.id, agentId: i.key.personaId, text: i.text, status: i.status, createdAt: i.createdAt, expiresAt: i.expiresAt })),
+        ...((observer?.corrections ?? []).some(e => e.space === space) ? { observerCorrections: (observer?.corrections ?? []).filter(e => e.space === space && e.expiresAt > now &&
+          this.adaptive.isPurposeAllowed(d, space, 'optional.product_analytics', now)).map(e => ({ version: e.version, trust: e.trust, outcome: e.outcome,
+          mutationEvidence: e.mutationEvidence, occurredAt: e.occurredAt, expiresAt: e.expiresAt })) } : {}),
         observerEvents: observerEvents.map(e => ({ agentId: e.agentId, trust: e.trust, channel: e.channel,
           outcome: e.outcome, durationMs: e.durationMs, occurredAt: e.occurredAt, expiresAt: e.expiresAt, state: e.state })),
       };
@@ -117,7 +124,8 @@ export class AdaptiveLifecycleService {
     });
     if (shared) await this.options.shared!.revalidateExport(telegramId, space, shared, checkPrivateAccount);
     else await checkPrivateAccount();
-    return { shared, data: { ...own, sharedContributions: contributions,
+    const experiments = this.options.prepareExperimentExport?.(telegramId, space);
+    return { shared, experiments, data: { ...own, ...(experiments ? { experiments: experiments.data } : {}), sharedContributions: contributions,
       coverage: { privateAccount: 'included' as const, shared: shared ? 'authorized_published_only' as const : 'not_configured' as const,
         providers: 'unavailable' as const, backups: 'unavailable' as const } } };
   }

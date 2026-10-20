@@ -6,7 +6,7 @@ const mocks = vi.hoisted(() => ({ session: 'account-a', read: vi.fn(), create: v
 vi.mock('../_lib/client', () => ({ tg: () => ({ initData: mocks.session }) }));
 vi.mock('../_lib/rights-client', () => ({ rightsApi: mocks }));
 const ref = '00000000-0000-4000-8000-000000000001';
-const row = (space: 'work' | 'personal' = 'work'): RightsRequestView => ({ version: 1, requestId: ref, space, kind: 'access_export', revision: 1, createdAt: 1, updatedAt: 1, localeAtSubmission: 'en', intakePolicy: { id: 'synthetic', revision: 1, copyVersion: 'rights-intake-ri1-v1' }, requester: { assurance: 'signed_telegram_account', personVerification: 'not_established' }, state: 'received', deadline: { state: 'reviewed_policy_unavailable', dueAt: null, reason: 'jurisdiction_unresolved' }, coverage: { localAccount: 'not_started', shared: 'not_started', providers: 'unsupported', backups: 'unsupported', guests: 'unsupported', deletion: 'not_implemented', formalRestriction: 'not_implemented' }, retention: { policyId: 'synthetic', policyRevision: 1, reviewOrExpiryAt: 10000 }, retentionReviewRequired: false });
+const row = (space: 'work' | 'personal' = 'work'): RightsRequestView => ({ version: 1, requestId: ref, space, kind: 'access_export', revision: 1, createdAt: 1, updatedAt: 1, localeAtSubmission: 'en', intakePolicy: { id: 'synthetic', revision: 1, copyVersion: 'rights-intake-ri2-v1' }, requester: { assurance: 'signed_telegram_account', personVerification: 'not_established' }, state: 'received', deadline: { state: 'reviewed_policy_unavailable', dueAt: null, reason: 'jurisdiction_unresolved' }, coverage: { localAccount: 'not_started', shared: 'not_started', providers: 'unsupported', backups: 'unsupported', guests: 'unsupported', deletion: 'not_implemented', formalRestriction: 'not_implemented' }, retention: { policyId: 'synthetic', policyRevision: 1, reviewOrExpiryAt: 10000 }, retentionReviewRequired: false });
 const status = (requests: RightsRequestView[] = []): RightsSnapshot => ({ available: true, policyStatus: 'available', supportedKinds: ['access_export'], intakePolicy: row().intakePolicy, requests, supportContact: 'info@joyixir.com' });
 beforeEach(() => { vi.resetAllMocks(); mocks.session = 'account-a'; mocks.read.mockResolvedValue(status()); mocks.create.mockResolvedValue({ replayed: false, request: row(), policyStatus: 'available' }); });
 afterEach(cleanup);
@@ -56,4 +56,13 @@ it('offers only the current reviewed policy kinds and selects a valid type after
   render(<RightsRequestPanel space="work" />); await screen.findByRole('option', { name: 'Erasure' }); expect(screen.getAllByRole('option')).toHaveLength(1); expect(screen.getByRole('combobox', { name: 'Request type' })).toHaveValue('erasure');
   fireEvent.click(screen.getByRole('button', { name: 'Submit request' })); await act(async () => {}); expect(mocks.create.mock.calls[0][0].kind).toBe('erasure');
   fireEvent.click(screen.getByRole('button', { name: 'Refresh request status' })); await screen.findByRole('option', { name: 'Formal restriction' }); expect(screen.getAllByRole('option')).toHaveLength(1); expect(screen.getByRole('combobox', { name: 'Request type' })).toHaveValue('restriction'); expect(screen.queryByRole('option', { name: 'Erasure' })).not.toBeInTheDocument();
+});
+
+it.each(['en','fa'] as const)('shows minimal expiry continuity in %s without old detail or fulfillment claims', async locale => {
+  const { rightsCopy } = await import('../_lib/rights-copy');
+  mocks.read.mockResolvedValue({ ...status(), expiredRequests: [{ requestId: ref, space: 'work', lastRevision: 2, purgedAt: 1000, retainUntil: 2000 }] });
+  render(<RightsRequestPanel space="work" locale={locale} />); await screen.findByText(ref);
+  expect(screen.getByText(new RegExp(rightsCopy[locale].expiredRecord))).toBeInTheDocument();
+  expect(screen.queryByRole('article')).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: rightsCopy[locale].prepare })).not.toBeInTheDocument();
 });

@@ -125,7 +125,10 @@ export class ReviewedMemoryService {
     const input = reviewedAcceptInputSchema.parse(value), receipt = this.decode(input.receipt), now = this.adaptive.sampleClock(this.now);
     if (receipt.accountId !== accountIdFor(telegramId) || receipt.space !== input.space || receipt.agentId !== input.agentId || receipt.textHash !== digest(input.text) ||
         receipt.issuedAt > now || receipt.expiresAt <= now || receipt.expiresAt > receipt.issuedAt + 120_000) return denied();
-    if ((await this.current(telegramId, receipt)).authority !== receipt.authority) return denied();
+    // Acceptance is a write: validate against the serialized current document
+    // below. An awaited read preflight followed by a synchronous effect read
+    // races another acceptance's FILE lock and can reject a valid duplicate.
+    // The write and final commit fences still check all current authority.
     let draft: AdaptiveDocument | undefined;
     return this.adaptive.withAccountDocument(telegramId, d => {
       draft = d;

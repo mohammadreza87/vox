@@ -81,6 +81,8 @@ export function LearningPanel({ space, locale = 'en', showOperations = false }: 
         <p>{t('Playback not reported', 'پخش گزارش‌نشده')}: {number(p?.playbackUnknown)} · {t('Interrupted playback', 'پخش قطع‌شده')}: {number(p?.interruptions)}</p>
         <p>{t('Average response time', 'میانگین زمان پاسخ')}: {available && p?.meanResponseMs != null ? `${Math.round(p.meanResponseMs).toLocaleString(fa ? 'fa-IR' : 'en-US')} ${t('ms', 'میلی‌ثانیه')}` : t('Unavailable', 'در دسترس نیست')}</p>
         <p>{t('Client-reported time to playback', 'زمان پخش گزارش‌شدهٔ مرورگر')}: {number(p?.telemetry?.clientMeanTimeToPlaybackMs)} {t('ms', 'میلی‌ثانیه')}</p>
+        <p>{t('Client-reported text displayed', 'نمایش متن گزارش‌شدهٔ مرورگر')}: {number(p?.clientExperience?.textRendered)} · {t('Time to text', 'زمان تا نمایش متن')}: {number(p?.clientExperience?.meanTimeToTextMs)} {t('ms', 'میلی‌ثانیه')}</p>
+        <p>{t('Reported corrections saved / unconfirmed', 'اصلاح‌های ذخیره‌شده / تأییدنشدهٔ گزارش‌شده')}: {number(p?.clientExperience?.correctionSaved)} / {number(p?.clientExperience?.correctionUnconfirmed)}</p>
         <p>{t('Reported task success / failure', 'موفقیت / شکست گزارش‌شدهٔ کار')}: {number(p?.telemetry?.reportedTaskSucceeded)} / {number(p?.telemetry?.reportedTaskFailed)}</p>
         <p>{t('Provider input / output tokens observed', 'توکن‌های ورودی / خروجی مشاهده‌شدهٔ ارائه‌دهنده')}: {number(p?.telemetry?.inputTokens)} / {number(p?.telemetry?.outputTokens)}</p>
         <p>{t('Usage complete', 'کامل بودن مصرف')}: {p?.telemetry?.usageComplete ? t('Yes', 'بله') : t('No; missing usage is unknown', 'خیر؛ مصرف ثبت‌نشده نامشخص است')} · {t('Billed cost unavailable', 'هزینهٔ صورتحساب در دسترس نیست')}</p>

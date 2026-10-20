@@ -351,9 +351,7 @@ Implement database/IAM rules, restricted evidence and future biometric storage b
 
 **Requirements:** REQ-01, REQ-02, REQ-03, REQ-09, REQ-17, REQ-22. **Depends on:** VOX-002, VOX-009, VOX-010, VOX-011, VOX-014, VOX-016.
 
-**Implementation progress:** Confirmed own-account Work/Personal JSON export includes allowlisted account records and currently authorized published shared content; exports are not persisted. PR74 personalization pause and PR75 RI1 intake passed their documented independent local scopes; see [pause](PRODUCT_PAUSE.md) and [RI1 scope and activation gates](RIGHTS_INTAKE.md). The immediate-export follow-up adds final synchronous publication checks, with 55 author regression cases passing; additional independent race execution remains unavailable after automatic security review. Exact CI/deployment are separate receipts. Provider/backups, guest verification, formal restriction/objection, retention reassessment and broader rights fulfillment remain open; VOX-056 is not complete.
-
-**پیشرفت:** دامنهٔ محلی مستند مکث شخصی‌سازی PR74 و دریافت درخواست RI1 در PR75 پذیرش مستقل گرفت. ترمیم دریافت فوری، بررسی نهایی هم‌زمان پیش از انتشار فایل را اضافه می‌کند و ۵۵ آزمون نویسنده موفق شد؛ اجرای اضافی آزمون رقابت مستقل پس از بررسی امنیتی خودکار تأیید نشده است. CI و استقرار رسید جداگانه دارند. فعال‌سازی سیاست، مهمان، محدودسازی و اعتراض رسمی، بازبینی نگهداری، حذف سراسری و تکمیل VOX-056 همچنان باز هستند.
+**Implementation progress:** Own-account Work/Personal export, EN/FA note correction, RI1 request intake and RI2 retention operations are implemented. RI2 binds original audit/closure floors, explicitly reassesses unresolved cases, purges only eligible terminal records and retains finite scoped continuity/410 receipts. Independent RI2 local acceptance passed 36 cases. Formal restriction/objection, guest verification, provider/backups and broader rights fulfillment remain open. Prior additional independent immediate-export race proof remains unavailable after automatic security review; no replacement execution is claimed.
 
 Implement accessible EN/FA access/export, correction, erasure, restriction, objection, portability and withdrawal requests with proportionate requester verification, a no-account guest route, operator queue, jurisdiction deadlines and status receipts. Wire the privacy center to these real handlers.
 
@@ -368,7 +366,7 @@ Implement accessible EN/FA access/export, correction, erasure, restriction, obje
 
 **Deliverables:** Rights service and operator queue; Scoped export and correction handlers; EN/FA privacy-center and guest request flows; Rights/deadline/access tests.
 
-**Evidence:** ["docs/implementation/OBSERVATION_LEARNING.md"]
+**Evidence:** ["docs/implementation/OBSERVATION_LEARNING.md", "docs/implementation/RIGHTS_INTAKE.md", "docs/implementation/RIGHTS_RETENTION.md"]
 
 ## P2 — Reliable observation
 
@@ -378,7 +376,7 @@ Implement accessible EN/FA access/export, correction, erasure, restriction, obje
 
 **Requirements:** REQ-04, REQ-05. **Depends on:** VOX-006, VOX-010, VOX-011.
 
-**Implementation progress:** Strict bounded server/client observation envelopes now serve authenticated Studio ingress with server-derived identity, exact agent/space receipt, revision and QA-origin exclusion. Real voice/private Telegram producers retain no conversation content. Wider channel/usage/version coverage remains open.
+**Implementation progress:** Allowlisted text_rendered and client-unverified correction observations now have strict ingress, current receipt/canonical command checks, bounded retention and own-space export. No raw note/conversation text is accepted in these observations. Composed release evidence remains separate.
 
 Wire approved schemas with server-derived scope/identity, occurrence/receipt times, origin, revisions, versions and bounded properties. Schema changes escalate to architect.
 
@@ -391,7 +389,7 @@ Wire approved schemas with server-derived scope/identity, occurrence/receipt tim
 
 **Deliverables:** Event types/validators; Ingress endpoints.
 
-**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/OBSERVATION_LEARNING.md"]
+**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/OBSERVATION_LEARNING.md", "docs/implementation/OBSERVATION_COMPLETION.md"]
 
 ### VOX-018 — Implement durable outbox, consumers and repair
 
@@ -441,7 +439,7 @@ Add turn trace correlation across STT/retrieval/decision/generation/TTS and actu
 
 **Requirements:** REQ-05, REQ-09, REQ-16. **Depends on:** VOX-017, VOX-012.
 
-**Implementation progress:** Tap-to-talk client hooks report playing, completed, failed and interrupted outcomes using accepted server correlation. Events remain unverified and never certify task success. Live ElevenLabs, correction and experiment-exposure coverage remain open.
+**Implementation progress:** Studio reports committed, connected and visible whole-reply text, separately from explicit task-success feedback. EN/FA note-correction metadata reports saved/unconfirmed outcomes without delaying Save; analytics eligibility loss cancels pending diagnostics. This is whole-response DOM timing, not first streamed token or human comprehension.
 
 Wire first audio, interruption, playback failure, cancellation, correction, feedback and experiment exposure with approved event names.
 
@@ -454,7 +452,7 @@ Wire first audio, interruption, playback failure, cancellation, correction, feed
 
 **Deliverables:** Client event hooks; Outcome event coverage.
 
-**Evidence:** ["docs/implementation/OBSERVATION_LEARNING.md"]
+**Evidence:** ["docs/implementation/OBSERVATION_LEARNING.md", "docs/implementation/OBSERVATION_COMPLETION.md"]
 
 ### VOX-021 — Remove private payloads from diagnostic and audit paths
 
@@ -462,7 +460,7 @@ Wire first audio, interruption, playback failure, cancellation, correction, feed
 
 **Requirements:** REQ-04, REQ-15, REQ-22. **Depends on:** VOX-017.
 
-**Implementation progress:** Active Studio/Tireh polling, webhook, gateway, provider fallback, live call and Mini App HTTP diagnostics now emit fixed catalog fields without raw exceptions, arbitrary codes, content or identity IDs. Independent canary/getter/proxy and real Pino serialization checks passed. Historical/platform logs, sinks/IAM/retention and full export/replay coverage remain open.
+**Implementation progress:** New correction/presentation diagnostics retain fixed outcome, scope and bounded timing only; exports omit internal receipts/source/authority hashes. Current-state rollback removes the new observer extension from legacy FILE, prepared SQLite or FILEv2 while preserving canonical data, pause controls and tombstones.
 
 Replace raw STT/call/extraction logs and block audit text with reason codes/restricted evidence refs; keep sensitive replay disabled or explicitly masked.
 
@@ -475,7 +473,7 @@ Replace raw STT/call/extraction logs and block audit text with reason codes/rest
 
 **Deliverables:** Sanitized logging/audit changes; Leak-canary report.
 
-**Evidence:** ["docs/implementation/OBSERVATION_DIAGNOSTICS.md", "docs/implementation/evidence/DIAGNOSTIC_REVIEW.md"]
+**Evidence:** ["docs/implementation/OBSERVATION_DIAGNOSTICS.md", "docs/implementation/evidence/DIAGNOSTIC_REVIEW.md", "docs/implementation/OBSERVATION_COMPLETION.md"]
 
 ### VOX-022 — Build operational and product outcome views
 
@@ -632,7 +630,7 @@ Apply approved length/language/format/suggested-action and component-schema vari
 
 **Requirements:** REQ-16, REQ-18, REQ-21. **Depends on:** VOX-009, VOX-018, VOX-020, VOX-025.
 
-**Implementation progress:** Server manifest and Decisions switch fail closed; no experiment assignment/exposure worker enabled.
+**Implementation progress:** Controlled presentation experiment service, strict configuration and lifecycle, private-person and exact shared-container assignment contracts, and client-unverified visible exposure are implemented. The actual Studio surface is private text density only, default off; shared-runtime enrollment and production cohort activation remain open.
 
 Add server-enforced flags/kill switches, stable assignments/exposure and isolated variant memory for private/person or shared-container experiments.
 
@@ -645,7 +643,7 @@ Add server-enforced flags/kill switches, stable assignments/exposure and isolate
 
 **Deliverables:** Experiment/flag service; Exposure and isolation tests.
 
-**Evidence:** ["docs/implementation/DELIVERY_RESULT.md"]
+**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/CONTROLLED_EXPERIMENTS.md"]
 
 ### VOX-030 — Qualify decision latency, cost and fallback behavior
 
@@ -1010,7 +1008,7 @@ Run Promptfoo and deterministic tests in a protected environment against exact c
 
 **Requirements:** REQ-14, REQ-17, REQ-18, REQ-21. **Depends on:** VOX-029, VOX-046.
 
-**Implementation progress:** Local comparison-only rollback rehearsal binds candidate and baseline artifacts, and explicitly makes no deployment or candidate-disable claim. Controlled production experiments, derived-state rollback and kill-switch qualification remain open.
+**Implementation progress:** Versioned off/offline/shadow/pilot/killed controller, isolated derived state, kill/quarantine/purge, durable suppression/source tombstones, reviewed retention and scoped export are implemented. Local FILE/SQLite/FILEv2 consent integration is independently tested. Evidence references are operator attestations, not automatic proof of independent promotion; production pilot and representative outcome readout remain open.
 
 Promote from offline to side-effect-free shadow then bounded pilot; isolate experimental memory writes and rollback code/config/derived state together.
 
@@ -1023,7 +1021,7 @@ Promote from offline to side-effect-free shadow then bounded pilot; isolate expe
 
 **Deliverables:** Promotion controller; Rollback runbook/evidence.
 
-**Evidence:** ["docs/implementation/OBSERVATION_LEARNING.md"]
+**Evidence:** ["docs/implementation/OBSERVATION_LEARNING.md", "docs/implementation/CONTROLLED_EXPERIMENTS.md"]
 
 ### VOX-048 — Publish evidence-backed product improvement reports
 

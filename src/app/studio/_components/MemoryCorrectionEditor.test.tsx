@@ -2,7 +2,8 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { MEMORY_CORRECTION_SAVE_TIMEOUT_MS, MemoryCorrectionEditor } from './MemoryCorrectionEditor';
 import type { AdaptiveSnapshot } from '../_lib/adaptive-client';
-const mocks = vi.hoisted(() => ({ correct: vi.fn() }));
+const mocks = vi.hoisted(() => ({ correct: vi.fn(), authority: vi.fn(), report: vi.fn() }));
+vi.mock('../_lib/learning-client', () => ({ learningApi: { correctionAuthority: mocks.authority, correction: mocks.report } }));
 vi.mock('../_lib/adaptive-client', () => ({ adaptiveApi: mocks }));
 const future = Date.now() + 86400_000;
 const note = { id: 'note', text: 'Original claim', revision: 1, createdAt: 1, expiresAt: future, origin: 'user_reviewed_claim' as const };
@@ -91,4 +92,37 @@ it.each(['note','binding','capability'] as const)('clears sensitive pending revi
   const token=mocks.correct.mock.calls[0][1].eventId;await act(async()=>{await vi.advanceTimersByTimeAsync(5001);});
   expect((mocks.correct.mock.calls[0][2] as AbortSignal).aborted).toBe(true);expect(screen.queryByText('Corrected explicit claim')).not.toBeInTheDocument();expect(screen.queryByRole('region',{name:'Correct private note'})).not.toBeInTheDocument();
   expect(p.onPendingChange).toHaveBeenLastCalledWith(token,false);expect(p.onUnconfirmed).toHaveBeenCalledExactlyOnceWith('work');expect(p.onSaved).not.toHaveBeenCalled();
+});
+
+it.each(['saved', 'unconfirmed'] as const)('reports only fixed unverified correction %s metadata without delaying Save', async outcome => {
+  const p = props(); p.snapshot = { ...snapshot, purposes: [{ purpose: 'optional.product_analytics', state: 'granted', available: true, revision: 1, notice: {} }] } as AdaptiveSnapshot;
+  mocks.authority.mockResolvedValue({ policyReceipt: 'a'.repeat(64) }); mocks.report.mockResolvedValue({ recorded: true });
+  if (outcome === 'saved') mocks.correct.mockResolvedValue({ ...snapshot, revision: 3 }); else mocks.correct.mockRejectedValue(new Error('PRIVATE_FAILURE_CANARY'));
+  render(<MemoryCorrectionEditor {...p} />); review(); fireEvent.click(screen.getByRole('button', { name: 'Save correction' }));
+  await act(async () => { await Promise.resolve(); });
+  const command = mocks.correct.mock.calls[0][1];
+  expect(mocks.report).toHaveBeenCalledExactlyOnceWith({ version: 1, eventId: command.eventId, space: 'work', policyReceipt: 'a'.repeat(64), outcome: outcome === 'saved' ? 'correction_client_saved' : 'correction_client_unconfirmed' });
+  expect(JSON.stringify(mocks.report.mock.calls)).not.toMatch(/Original claim|Corrected explicit|PRIVATE_FAILURE|note/);
+});
+it('never waits for diagnostics and drops a delayed receipt after unmount', async () => {
+  const p = props(); p.snapshot = { ...snapshot, purposes: [{ purpose: 'optional.product_analytics', state: 'granted', available: true, revision: 1, notice: {} }] } as AdaptiveSnapshot;
+  let release!: (value: { policyReceipt: string }) => void; mocks.authority.mockReturnValue(new Promise(resolve => { release = resolve; }));
+  mocks.correct.mockResolvedValue({ ...snapshot, revision: 3 });
+  const view = render(<MemoryCorrectionEditor {...p} />); review(); fireEvent.click(screen.getByRole('button', { name: 'Save correction' }));
+  await act(async () => { await Promise.resolve(); }); expect(p.onSaved).toHaveBeenCalledOnce();
+  view.unmount(); await act(async () => release({ policyReceipt: 'a'.repeat(64) })); expect(mocks.report).not.toHaveBeenCalled();
+});
+
+it('drops delayed diagnostics after analytics availability changes without cancelling the explicit save', async () => {
+  const p = props(); p.snapshot = { ...snapshot, purposes: [{ purpose: 'optional.product_analytics', state: 'granted', available: true, revision: 1, notice: {} }] } as AdaptiveSnapshot;
+  let receipt!: (value: { policyReceipt: string }) => void, saved!: (value: AdaptiveSnapshot) => void;
+  mocks.authority.mockReturnValue(new Promise(resolve => { receipt = resolve; }));
+  mocks.correct.mockReturnValue(new Promise(resolve => { saved = resolve; }));
+  const view = render(<MemoryCorrectionEditor {...p} />); review(); fireEvent.click(screen.getByRole('button', { name: 'Save correction' }));
+  const signal = mocks.authority.mock.calls[0][1] as AbortSignal;
+  view.rerender(<MemoryCorrectionEditor {...p} snapshot={{ ...p.snapshot, purposes: p.snapshot.purposes.map(a => ({ ...a, available: false })) }} />);
+  expect(signal.aborted).toBe(true);
+  expect((mocks.correct.mock.calls[0][2] as AbortSignal).aborted).toBe(false);
+  await act(async () => { receipt({ policyReceipt: 'a'.repeat(64) }); saved({ ...snapshot, revision: 3 }); });
+  expect(p.onSaved).toHaveBeenCalledOnce(); expect(mocks.report).not.toHaveBeenCalled();
 });

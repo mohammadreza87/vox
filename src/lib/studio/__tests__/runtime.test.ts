@@ -5,6 +5,7 @@ import { createPublicKey } from 'crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getStudio, validateStudioConfig } from '../runtime';
 import { FirestoreStudioStore } from '../firestore-store';
+import { FileExperimentStorage } from '../../adaptive/experiments/storage';
 
 const firebase = vi.hoisted(() => ({ getAdminApp: vi.fn(), getAdminDb: vi.fn(), getStorage: vi.fn(), bucket: vi.fn() }));
 vi.mock('@/lib/firebase-admin', () => ({ getAdminApp: firebase.getAdminApp, getAdminDb: firebase.getAdminDb }));
@@ -30,6 +31,7 @@ const production = (): NodeJS.ProcessEnv => ({
   STUDIO_RELATIONSHIP_WORKER_SECRET: '',
   STUDIO_MAINTENANCE: '',
   STUDIO_REMINDER_DELIVERY: '',
+  STUDIO_EXPERIMENTS_ENABLED: '',
   STUDIO_IMPROVEMENT_TRUST_JSON: '',
   OPENAI_API_KEY: '',
   K_SERVICE: '',
@@ -116,6 +118,17 @@ describe('Studio production initialization', () => {
     expect(studio.deps.lifecycle).toBeDefined(); expect(studio.deps.observer).toBeDefined();
     expect(studio.deps.maintenance).toBeUndefined();
     expect(studio.deps.improvement).toBeUndefined();
+    expect(studio.deps.experiments).toBeUndefined();
+  });
+
+  it('retains experiment lifecycle services after the presentation switch is disabled', async () => {
+    const dir = configure();
+    new FileExperimentStorage(join(dir, 'controlled-experiments', 'v1')).transaction(() => undefined);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ ok: true, result: { id: 1, is_bot: true, username: 'VoxxBot', first_name: 'Voxx' } })));
+    const studio = await getStudio();
+    expect(studio.deps.experiments).toBeDefined();
+    expect(await studio.deps.experiments!.prepare(123, 'synthetic', 'work', 'synthetic-turn')).toBeUndefined();
+    expect(studio.deps.experiments!.exportScope(123, 'work').derived).toEqual([]);
   });
 
   it.each(['file', 'firestore'])('rejects enabled maintenance before storage/provider IO without a scheduler: %s', storage => {
@@ -188,6 +201,15 @@ describe('Studio production initialization', () => {
 });
 
 describe('Studio production configuration', () => {
+  it('requires an explicit experiment switch and prepared local storage', () => {
+    expect(validateStudioConfig(production()).experimentsEnabled).toBe(false);
+    expect(() => validateStudioConfig({ ...production(), STUDIO_EXPERIMENTS_ENABLED: 'true' })).toThrow('must be 0 or 1');
+    expect(() => validateStudioConfig({ ...production(), STUDIO_EXPERIMENTS_ENABLED: '1' })).toThrow('requires prepared local adaptive storage');
+    expect(() => validateStudioConfig({ ...cloudProduction(), STUDIO_EXPERIMENTS_ENABLED: '1' })).toThrow('requires prepared local adaptive storage');
+    for (const format of ['sqlite-v1', 'file-v2']) {
+      expect(validateStudioConfig({ ...production(), STUDIO_ADAPTIVE_FORMAT: format, STUDIO_EXPERIMENTS_ENABLED: '1' }).experimentsEnabled).toBe(true);
+    }
+  });
   it.each(['broken-json', '{}', 'null', '[]', JSON.stringify({ analyst: { role: 'analyst', publicKey: 'PRIVATE KEY CANARY' } })])
   ('fails closed for malformed or incomplete improvement trust', raw => {
     expect(() => validateStudioConfig({ ...production(), STUDIO_IMPROVEMENT_TRUST_JSON: raw })).toThrow('STUDIO_IMPROVEMENT_TRUST_JSON is invalid');
