@@ -217,7 +217,7 @@ test('actual install/rollback refuse old, missing and corrupt v4 capability befo
     writeFileSync(join(path, '.next', 'BUILD_ID'), metadata.buildId);
     writeFileSync(join(path, 'studio-release.json'), JSON.stringify({ ...metadata, ...capabilities }));
   }
-  symlinkSync(current, join(production, 'current')); writeFileSync(join(production, 'previous'), previous);
+  symlinkSync(current, join(production, 'current')); writeFileSync(join(production, 'previous'), realpathSync(previous));
   writeFileSync(join(production, 'production.env'), `STUDIO_DATA_DIR='${f.env.STUDIO_DATA_DIR}'\nSTUDIO_ADAPTIVE_FORMAT='file'\n`);
   const signal = join(f.dir, 'unexpected-effect'), guard = join(f.dir, 'guard.mjs');
   writeFileSync(join(bin, 'launchctl'), `#!/bin/sh\nprintf called >> '${signal}'\nexit 1\n`, { mode: 0o700 });
