@@ -770,7 +770,7 @@ function loadInspector() {
     }
     return exports;
   })();
-  // src/lib/legacy-inventory/offline/acquire.ts SHA256 271c861b449dc94429957235802276fb226524e13bce26479a8a024a1894d665
+  // src/lib/legacy-inventory/offline/acquire.ts SHA256 55c76c505ed3fa849a3a455c9e9797be3c41a20afdc0125ff196d47fe87dd3fe
   const __liaAcquire = (() => {
     "use strict";
     const exports = {};
@@ -839,7 +839,7 @@ function loadInspector() {
                     throw new contracts_2.OfflineError('capacity_exceeded');
                 progress[counter]++;
                 const count = await readAt(fd, scratch, Math.min(scratch.length, Math.max(1, size - position)), position);
-                (0, contracts_2.checkCancelled)(signal);
+                // Cancellation discards the plan, not a successful read already observed.
                 if (kind === 'selection')
                     progress.selectionBytesRead += count;
                 else
@@ -849,10 +849,12 @@ function loadInspector() {
                         progress.selectionEof = true;
                     else
                         progress.snapshotEof = true;
+                    (0, contracts_2.checkCancelled)(signal);
                     if (position !== size)
                         throw new contracts_2.OfflineError('input_truncated');
                     return bytes;
                 }
+                (0, contracts_2.checkCancelled)(signal);
                 if (position + count > size)
                     throw new contracts_2.OfflineError('source_changed');
                 bytes.set(scratch.subarray(0, count), position);

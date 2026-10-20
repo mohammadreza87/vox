@@ -165,6 +165,29 @@ describe('LIA1 descriptor acquisition', () => {
     await expect(acquireOfflineSnapshot(p.source, p.selectionFd, initialProgress(), controller.signal)).rejects.toMatchObject({ code: 'cancelled' });
     expect(fs.close).toHaveBeenCalledTimes(2);
   });
+  it.each([
+    ['selection', 'positive'], ['selection', 'eof'], ['snapshot', 'positive'], ['snapshot', 'eof'],
+  ] as const)('accounts observed successful %s %s before cancellation drops the plan', async (kind, phase) => {
+    const p = pair(), controller = new AbortController(), target = kind === 'selection' ? p.selectionFd : p.source;
+    const expectedBytes = kind === 'selection' ? readFileSync(p.selectionPath).length : native.length;
+    let interrupted = false;
+    vi.mocked(fs.read).mockImplementation(((fd, buf, offset, length, pos, callback) => {
+      actualRead(fd, buf, offset, length, pos, (error, count, result) => {
+        if (!error && fd === target && (phase === 'positive' ? count > 0 : count === 0)) {
+          interrupted = true; controller.abort();
+        }
+        callback(error, count, result);
+      });
+    }) as typeof fs.read);
+    const { inspectOfflineTirehSnapshot } = await import('../inspect');
+    const result = await inspectOfflineTirehSnapshot(p.source, p.selectionFd, { signal: controller.signal });
+    expect(interrupted).toBe(true); expect(result.stop).toBe('cancelled'); expect(result.rows).toEqual([]);
+    expect(result.counts.consumedUnits).toBe(0); expect(result.counts.inventoriedUnits).toBe(0);
+    expect(result.acquisition[kind === 'selection' ? 'selectionBytesRead' : 'snapshotBytesRead']).toBe(expectedBytes);
+    expect(result.acquisition[kind === 'selection' ? 'selectionEof' : 'snapshotEof']).toBe(phase === 'eof');
+    expect(fs.close).toHaveBeenCalledTimes(2);
+    expect(readFileSync(p.sourcePath)).toEqual(native);
+  });
   it.each(['uid', 'time'])('rejects invalid %s metadata before content read', async field => {
     const p = pair();
     vi.mocked(fs.fstat).mockImplementation(((fd, options, callback) => actualStat(fd, options, (error, stat) => {

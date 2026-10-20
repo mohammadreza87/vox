@@ -54,13 +54,15 @@ async function readExact(fd: number, size: number, kind: 'selection' | 'snapshot
       if (progress[counter] === OFFLINE_LIMITS.readCalls) throw new OfflineError('capacity_exceeded');
       progress[counter]++;
       const count = await readAt(fd, scratch, Math.min(scratch.length, Math.max(1, size - position)), position);
-      checkCancelled(signal);
+      // Cancellation discards the plan, not a successful read already observed.
       if (kind === 'selection') progress.selectionBytesRead += count; else progress.snapshotBytesRead += count;
       if (count === 0) {
         if (kind === 'selection') progress.selectionEof = true; else progress.snapshotEof = true;
+        checkCancelled(signal);
         if (position !== size) throw new OfflineError('input_truncated');
         return bytes;
       }
+      checkCancelled(signal);
       if (position + count > size) throw new OfflineError('source_changed');
       bytes.set(scratch.subarray(0, count), position); position += count;
     }
