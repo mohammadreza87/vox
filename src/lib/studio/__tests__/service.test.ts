@@ -849,6 +849,20 @@ describe('selected memory sharing', () => {
     expect((await h.studio.memoriesFor(org.bob, agent.id)).map((m) => m.content)).toContain('LEGACY_CANARY');
   });
 
+  it('refuses recipients who are pending, outside the team or cannot use the agent, before reading the memory', async () => {
+    const { agent } = await hire(h, org.alice, {}, undefined, 'private');
+    const record = await h.memory.memories.add(mem(agent.id, { content: 'RECIPIENT_RULE_CANARY', scope: { kind: 'private', personId: personId(ID.alice) } }));
+    const get = vi.spyOn(h.memory.memories, 'get');
+    for (const recipients of [[ID.pending], [ID.stranger], [ID.bob], [], [ID.alice, Number.NaN]]) {
+      await expectStudioError(h.studio.shareMemory(org.alice, agent.id, record.id, recipients), 400, /Choose people who can use this agent/);
+    }
+    expect(get).not.toHaveBeenCalled();
+    get.mockRestore();
+    await h.studio.setAccess(org.alice, agent.id, [ID.bob]);
+    await h.studio.shareMemory(org.alice, agent.id, record.id, [ID.bob]);
+    expect((await h.memory.memories.get(record.id))?.authorizedPersonIds).toEqual([personId(ID.alice), personId(ID.bob)].sort());
+  });
+
   it('refuses broad sharing of personal and confidential memories', async () => {
     const { agent } = await hire(h, org.alice);
     for (const sensitivity of ['personal', 'confidential'] as const) {
