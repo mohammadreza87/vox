@@ -309,16 +309,21 @@ export function CallScreen({ id }: { id: string }) {
           style={{ color: captions ? '#D6FF5C' : undefined }}><Icon name="captions" /></button>
       </div>
 
-      <div role="group" aria-label="Conversation space" style={{ display: 'flex', gap: 8, justifyContent: 'center', padding: '12px 16px', position: 'relative' }}>
-        {(['work', 'personal'] as const).map(value => <button key={value} className="vx-chip" disabled={phase !== 'ready' || !!session.current} aria-pressed={space === value} onClick={() => { setSpace(value); setLines([]); setLive(false); liveUnavailable.current = false; }}>{value === 'work' ? 'Work' : 'Personal'}</button>)}
-        <button className="vx-chip" onClick={() => nav.push({ name: 'privacy' })}>Privacy</button>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '10px 16px 0', position: 'relative' }}>
+        <div role="group" aria-label="Conversation space" className="vx-segmented compact">
+          {(['work', 'personal'] as const).map(value => <button key={value} disabled={phase !== 'ready' || !!session.current} aria-pressed={space === value} onClick={() => { setSpace(value); setLines([]); setLive(false); liveUnavailable.current = false; }}>{value === 'work' ? 'Work' : 'Personal'}</button>)}
+        </div>
+        <button className="vx-icon-btn" style={{ width: 36, height: 36 }} aria-label="Privacy" onClick={() => nav.push({ name: 'privacy' })}><Icon name="lock" size={18} /></button>
       </div>
-      <div style={{ padding: '0 24px', position: 'relative' }}>
-        <label className="vx-small">Language / زبان <select value={locale} onChange={event => setLocale(event.target.value as 'en' | 'fa')}>
-          <option value="en">English</option><option value="fa">فارسی</option>
-        </select></label>
-      </div>
-      <VoicePreparationPanel capability={partialCapability} enabled={prepareWhileSpeaking} onChange={changePreparation} locale={locale} />
+      <details className="vx-call-options">
+        <summary>{locale === 'fa' ? 'تنظیمات تماس' : 'Call options'}</summary>
+        <div className="vx-card" style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 12, marginTop: 6 }}>
+          <label className="vx-small">Language / زبان <select className="vx-input" value={locale} onChange={event => setLocale(event.target.value as 'en' | 'fa')}>
+            <option value="en">English</option><option value="fa">فارسی</option>
+          </select></label>
+          <VoicePreparationPanel capability={partialCapability} enabled={prepareWhileSpeaking} onChange={changePreparation} locale={locale} />
+        </div>
+      </details>
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', position: 'relative', gap: 18 }}>
         <motion.div animate={{ scale: phase === 'listening' ? 1 + level * 0.08 : 1 }} transition={{ type: 'spring', stiffness: 400, damping: 20 }}>
           <Cloud look={agent.look} size={220} expr={EXPR[phase]} stage={stageFor(agent.formingDay, agent.status)} label={agent.persona.name} />

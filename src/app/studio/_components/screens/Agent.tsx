@@ -171,8 +171,8 @@ export function AgentScreen({ id }: { id: string }) {
   };
 
   const actions = [
-    { label: 'Chat here', icon: 'chat', run: () => nav.push({ name: 'conversation', id: agent.id }) },
-    { label: 'Chat', icon: 'chat', run: () => agent.bot && openTelegram(`https://t.me/${agent.bot.username}`) },
+    { label: 'Chat', icon: 'chat', run: () => nav.push({ name: 'conversation', id: agent.id }) },
+    { label: 'Telegram', icon: 'send', run: () => agent.bot && openTelegram(`https://t.me/${agent.bot.username}`) },
     { label: 'Call', icon: 'phone', run: () => nav.push({ name: 'call', id: agent.id }) },
     { label: 'Group', icon: 'groups', run: addToGroup },
     { label: 'Memories', icon: 'memory', run: () => nav.push({ name: 'memories', id: agent.id }) },
@@ -200,14 +200,19 @@ export function AgentScreen({ id }: { id: string }) {
 
         <div style={{ position: 'relative', marginTop: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
           {active && agent.profileSync?.status !== 'synced' && (
-            <div className="vx-card" style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {agent.profileSync?.status === 'error'
-                ? <p role="alert" style={{ margin: 0, color: '#FF6B5E' }}>Telegram profile still needs {agent.profileSync.failed.join(', ') || 'an update'}.</p>
-                : <p role="status" style={{ margin: 0 }}>Finishing Telegram profile…</p>}
-              {profileError && <p role="alert" style={{ margin: 0, color: '#FF6B5E' }}>{profileError}</p>}
+            <div className={`vx-banner ${agent.profileSync?.status === 'error' || profileError ? 'danger' : 'info'}`} style={{ alignItems: 'center' }}>
+              <span style={{ flexShrink: 0, display: 'flex', color: agent.profileSync?.status === 'error' ? '#FF6B5E' : '#8FB8FF' }}>
+                {agent.profileSync?.status === 'error' ? <Icon name="warn" size={18} /> : <Spinner size={16} />}
+              </span>
+              <span style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                {agent.profileSync?.status === 'error'
+                  ? <span role="alert">Telegram profile still needs {agent.profileSync.failed.join(', ') || 'an update'}.</span>
+                  : <span role="status">Finishing Telegram profile…</span>}
+                {profileError && <span role="alert" style={{ color: '#FF6B5E' }}>{profileError}</span>}
+              </span>
               {(agent.canManageAccess || agent.canEdit) && (
-                <button className="vx-btn vx-btn-secondary vx-btn-sm" onClick={syncProfile} disabled={busy}>
-                  {busy ? <Spinner /> : 'Retry Telegram profile'}
+                <button className="vx-btn vx-btn-secondary vx-btn-sm" style={{ height: 32, padding: '0 12px', fontSize: 13 }} onClick={syncProfile} disabled={busy} aria-label="Retry Telegram profile">
+                  {busy ? <Spinner size={14} /> : 'Retry'}
                 </button>
               )}
             </div>
@@ -235,10 +240,10 @@ export function AgentScreen({ id }: { id: string }) {
           )}
 
           {active && (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 8 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: `repeat(${actions.length}, minmax(0, 1fr))`, gap: 4 }}>
               {actions.map((a) => (
-                <button key={a.label} onClick={a.run} style={{ background: 'none', border: 'none', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, cursor: 'pointer', color: '#F2F1EC' }}>
-                  <motion.span whileTap={{ scale: 0.92 }} style={{ width: 56, height: 56, borderRadius: '50%', background: '#1E2228', border: '1px solid rgba(255,255,255,.08)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <button key={a.label} onClick={a.run} style={{ background: 'none', border: 'none', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, cursor: 'pointer', color: '#F2F1EC', minWidth: 0 }}>
+                  <motion.span whileTap={{ scale: 0.92 }} style={{ width: 52, height: 52, borderRadius: '50%', background: '#1E2228', border: '1px solid rgba(255,255,255,.08)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                     <Icon name={a.icon} />
                   </motion.span>
                   <span className="vx-small" style={{ fontWeight: 500 }}>{a.label}</span>
