@@ -25,6 +25,7 @@ export const skillSchema = z.object({
   deliverable: line(180).optional(),
   sources: z.array(z.object({ name: line(120), url: z.string().url(), license: line(40).optional() }).strict()).min(1).max(6),
   fa,
+  pinned: z.literal(true).optional(),
 }).strict();
 
 export const roleSchema = z.object({

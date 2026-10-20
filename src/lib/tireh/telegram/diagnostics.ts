@@ -64,6 +64,16 @@ const diagnostics = {
   skill_route_failed: { level: 'warn', stage: 'skill_route', reason: 'operation_failed', outcome: 'local_fallback' },
   skill_route_timeout: { level: 'warn', stage: 'skill_route', reason: 'timeout', outcome: 'local_fallback' },
   skill_route_refused: { level: 'warn', stage: 'skill_route', reason: 'no_answer', outcome: 'local_fallback' },
+  // Per-message skill selection for one composed reply (docs/SKILL_ROUTING.md):
+  // the outcome class only, never the message or the chosen skill.
+  skill_routed_selected: { level: 'info', stage: 'skill_select', reason: 'selected', outcome: 'routed' },
+  skill_routed_none: { level: 'info', stage: 'skill_select', reason: 'none', outcome: 'routed' },
+  skill_unrouted_no_answer: { level: 'info', stage: 'skill_select', reason: 'no_answer', outcome: 'full_craft' },
+  skill_unrouted_low_confidence: { level: 'info', stage: 'skill_select', reason: 'low_confidence', outcome: 'full_craft' },
+  skill_shadow_selected: { level: 'info', stage: 'skill_select', reason: 'selected', outcome: 'shadow_full_craft' },
+  skill_shadow_none: { level: 'info', stage: 'skill_select', reason: 'none', outcome: 'shadow_full_craft' },
+  skill_shadow_no_answer: { level: 'info', stage: 'skill_select', reason: 'no_answer', outcome: 'shadow_full_craft' },
+  skill_shadow_low_confidence: { level: 'info', stage: 'skill_select', reason: 'low_confidence', outcome: 'shadow_full_craft' },
   timing_ingress: { level: 'info', stage: 'ingress', reason: 'timing', outcome: 'measured' },
   timing_stt: { level: 'info', stage: 'stt', reason: 'timing', outcome: 'measured' },
   timing_boundary: { level: 'info', stage: 'boundary', reason: 'timing', outcome: 'measured' },

@@ -39,6 +39,9 @@ import { StudioExperimentRuntime } from '../adaptive/experiments/runtime';
  *   STUDIO_CHAT_MODEL        model for chat replies (default: claude-sonnet-5-5)
  *   STUDIO_VOICE_MODEL       model for live calls (default: claude-haiku-5-5, the fastest)
  *   STUDIO_DECISIONS         off = no OpenAI Decisions triage (default: on with OPENAI_API_KEY)
+ *   STUDIO_SKILL_ROUTING     per-message playbook selection inside triage (docs/SKILL_ROUTING.md):
+ *                            on (default) | shadow (ask and log, replies keep the full craft)
+ *                            | off (never ask). Any other value is treated as off.
  *   STUDIO_WEB_SEARCH        off = agents never search the web (default: on, per-agent toggle)
  *   STUDIO_PERSONA_MODEL     model for persona design (default: stronger Claude model)
  *   STUDIO_ORG_NAME          default HOOR
@@ -46,6 +49,7 @@ import { StudioExperimentRuntime } from '../adaptive/experiments/runtime';
 
 import { isAbsolute, join, parse, relative, resolve, sep } from 'path';
 import { AnthropicLLM, type LLM } from '../tireh/llm';
+import { parseSkillRouting } from '../tireh/skill-routing';
 import { createFileStores } from '../tireh/memory/file-store';
 import { FirestoreChatHistoryStore, FirestoreMemoryStore, FirestoreShareOfferStore, FirestoreUpdateDeduper } from '../tireh/memory/firestore-store';
 import { TelegramBotClient } from '../tireh/telegram/client';
@@ -272,6 +276,7 @@ async function create(): Promise<Studio> {
       openai,
       // Reply triage and stranger decisions; STUDIO_DECISIONS=off skips them.
       decider: openai && env.STUDIO_DECISIONS !== 'off' ? openai : undefined,
+      skillRouting: parseSkillRouting(env.STUDIO_SKILL_ROUTING),
       eleven: env.ELEVENLABS_API_KEY ? new ElevenLabsStudio(env.ELEVENLABS_API_KEY) : null,
       managerBot,
       managerUsername,
