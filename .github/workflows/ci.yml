@@ -73,6 +73,9 @@ jobs:
       - name: Verify single-host release safety and configuration preservation
         run: node --test scripts/studio-production.test.mjs scripts/studio-adaptive-compatibility.test.mjs
 
+      - name: Verify guest browser fixture build provenance
+        run: node --test e2e/guest-fixture-build.test.mjs
+
       - name: Upload coverage reports
         uses: codecov/codecov-action@v4
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
