@@ -13,6 +13,8 @@ import { logTelegramDiagnostic } from '../tireh/telegram/diagnostics';
 
 export const MANAGER_UPDATES = ['message', 'managed_bot'];
 export const AGENT_UPDATES = ['message', 'callback_query', 'my_chat_member', 'chat_member'];
+/** What the stranger decision sees for an untranscribed voice note; never audio or a transcript. */
+export const STRANGER_VOICE_PLACEHOLDER = '(a voice message; it was not listened to)';
 
 export async function handleManagerUpdate(studio: Studio, update: TelegramUpdate): Promise<void> {
   const manager = studio.deps.managerBot;
@@ -123,12 +125,16 @@ export async function handleAgentUpdate(studio: Studio, agentId: string, update:
   }
   ({ gateway } = await studio.gateway(endpoint));
   const text = msg.text ?? msg.caption ?? '';
-  if (text.startsWith('/') || (!text && msg.voice)) {
-    // Commands (/start, /memories…) and voice notes go straight through; the gateway handles them.
+  if (text.startsWith('/')) {
+    // Commands (/start, /memories…) go straight through; the gateway handles them.
     await gateway.handleUpdate(agentId, update);
     return;
   }
-  const decision = await studio.decideOnStranger(live, text);
+  // A voice note is decided like text, on a fixed content-free placeholder. A
+  // stranger's audio is never downloaded or transcribed: not before this
+  // decision, and not after it either, because the gateway never transcribes
+  // for an audience that includes a guest (PRIV-023).
+  const decision = await studio.decideOnStranger(live, text || (msg.voice ? STRANGER_VOICE_PLACEHOLDER : ''));
   if (decision.action === 'reply') {
     await gateway.handleUpdate(agentId, update);
   } else if (decision.action === 'decline') {

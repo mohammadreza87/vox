@@ -1,107 +1,51 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { verifyIdToken, extractBearerToken } from '@/lib/firebase-admin';
+import { NextResponse } from 'next/server';
+import { withAuth, type AuthenticatedRequest } from '@/lib/middleware';
+import { checkRateLimitSecure, getApiRateLimiter, getRateLimitIdentifier } from '@/lib/ratelimit';
 import { logger } from '@/lib/logger';
 
-interface SessionRequest {
-  contactId: string;
-  contactName: string;
-  voiceId: string;
-  systemPrompt: string;
-  personality?: string;
-}
+/** Generous for redials, small enough that one account cannot farm sessions. */
+const SESSIONS_PER_MINUTE = 6;
 
 /**
- * Generate signed URL for ElevenLabs Conversational AI session
- * Returns agent overrides for the contact's voice and personality
+ * Legacy /app voice calls: a short-lived signed URL for the shared ElevenLabs
+ * agent. Only a signed-in Firebase user may ask, within a per-account budget.
+ * The URL itself is a bearer credential that ElevenLabs cannot bind to the
+ * caller, so it is never logged; neither is anything the caller sent.
+ * Studio live calls use /api/studio/voice-llm with a signed call token instead.
  */
-export async function POST(request: NextRequest) {
+async function handler(request: AuthenticatedRequest) {
   try {
-    // Verify authentication
-    const token = extractBearerToken(request.headers.get('Authorization'));
-    if (!token) {
-      return NextResponse.json(
-        { error: 'Unauthorized' },
-        { status: 401 }
-      );
-    }
+    const limited = await checkRateLimitSecure(getApiRateLimiter(),
+      `convai-session:${getRateLimitIdentifier(request, request.userId)}`, SESSIONS_PER_MINUTE, 60_000);
+    if (!limited.success && limited.response) return limited.response;
 
-    const decodedToken = await verifyIdToken(token);
-    if (!decodedToken) {
-      return NextResponse.json(
-        { error: 'Invalid token' },
-        { status: 401 }
-      );
-    }
-
-    const body: SessionRequest = await request.json();
-    const { contactName, voiceId, systemPrompt, personality } = body;
-
-    // Validate required fields
-    if (!contactName || !voiceId) {
-      return NextResponse.json(
-        { error: 'contactName and voiceId are required' },
-        { status: 400 }
-      );
+    const body = (await request.json().catch(() => null)) as { contactName?: unknown; voiceId?: unknown } | null;
+    if (typeof body?.contactName !== 'string' || !body.contactName.trim() || typeof body.voiceId !== 'string' || !body.voiceId.trim()) {
+      return NextResponse.json({ error: 'contactName and voiceId are required' }, { status: 400 });
     }
 
     const agentId = process.env.ELEVENLABS_AGENT_ID;
-    if (!agentId) {
-      return NextResponse.json(
-        { error: 'ElevenLabs agent not configured' },
-        { status: 500 }
-      );
-    }
-
+    if (!agentId) return NextResponse.json({ error: 'ElevenLabs agent not configured' }, { status: 500 });
     const elevenLabsKey = process.env.ELEVENLABS_API_KEY;
-    if (!elevenLabsKey) {
-      return NextResponse.json(
-        { error: 'ElevenLabs API key not configured' },
-        { status: 500 }
-      );
-    }
+    if (!elevenLabsKey) return NextResponse.json({ error: 'ElevenLabs API key not configured' }, { status: 500 });
 
-    // Get signed URL from ElevenLabs
     const signedUrlResponse = await fetch(
-      `https://api.elevenlabs.io/v1/convai/conversation/get-signed-url?agent_id=${agentId}`,
-      {
-        headers: {
-          'xi-api-key': elevenLabsKey,
-        },
-      }
+      `https://api.elevenlabs.io/v1/convai/conversation/get-signed-url?agent_id=${encodeURIComponent(agentId)}`,
+      { headers: { 'xi-api-key': elevenLabsKey } },
     );
-
     if (!signedUrlResponse.ok) {
-      const error = await signedUrlResponse.json().catch(() => ({}));
-      logger.error({ error, status: signedUrlResponse.status }, '[ConvAI Session] Failed to get signed URL');
-      return NextResponse.json(
-        { error: 'Failed to create session' },
-        { status: 500 }
-      );
+      logger.error({ status: signedUrlResponse.status }, '[ConvAI Session] Failed to get signed URL');
+      return NextResponse.json({ error: 'Failed to create session' }, { status: 500 });
     }
+    const { signed_url: signedUrl } = (await signedUrlResponse.json()) as { signed_url?: unknown };
+    if (typeof signedUrl !== 'string' || !signedUrl) return NextResponse.json({ error: 'Failed to create session' }, { status: 500 });
 
-    const { signed_url: signedUrl } = await signedUrlResponse.json();
-
-    // Build the full system prompt
-    const fullPrompt = personality
-      ? `${systemPrompt}\n\nPersonality: ${personality}`
-      : systemPrompt;
-
-    // Return signed URL with agent overrides
-    // Testing with empty overrides
-    const overrides = {};
-
-    logger.info({ contactName, voiceId, userId: decodedToken.uid }, '[ConvAI Session] Session created');
-
-    return NextResponse.json({
-      signedUrl,
-      overrides,
-      agentId,
-    });
-  } catch (error) {
-    logger.error({ error }, '[ConvAI Session] Error');
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
+    logger.info({ userId: request.userId }, '[ConvAI Session] Session created');
+    return NextResponse.json({ signedUrl, overrides: {}, agentId });
+  } catch {
+    logger.error('[ConvAI Session] Error');
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
+
+export const POST = withAuth(handler);

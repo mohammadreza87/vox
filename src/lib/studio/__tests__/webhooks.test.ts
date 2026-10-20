@@ -1,7 +1,8 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { FirestoreStudioStore } from '../firestore-store';
-import { AGENT_UPDATES, handleManagerUpdate, isValidWebhookSecret, MANAGER_UPDATES, registerWebhooks, webhookSecret } from '../updates';
-import { hire, makeStudio, SECRET, seedOrg, type Harness } from './helpers';
+import { AGENT_UPDATES, handleAgentUpdate, handleManagerUpdate, isValidWebhookSecret, MANAGER_UPDATES, registerWebhooks, STRANGER_VOICE_PLACEHOLDER, webhookSecret } from '../updates';
+import type { TelegramUpdate } from '../../tireh/telegram/client';
+import { hire, ID, makeStudio, SECRET, seedOrg, T0, type FakeTelegram, type Harness } from './helpers';
 import type { AdaptiveExperienceService } from '../../adaptive/runtime/service';
 
 describe('webhook secrets', () => {
@@ -186,5 +187,65 @@ describe('FirestoreStudioStore', () => {
     expect(await store.readMedia('missing.jpg')).toBeNull();
     await expect(store.saveMedia('../x.jpg', Buffer.from('x'))).rejects.toThrow('Unsafe media file name');
     expect(await store.readMedia('../studio.json')).toBeNull();
+  });
+});
+
+describe('voice notes from outside the team never reach speech-to-text (PRIV-023)', () => {
+  let nextUpdate = 910_000;
+  const voice = { file_id: 'synthetic-voice-file', duration: 3, mime_type: 'audio/ogg' };
+  function strangerVoiceNote(): TelegramUpdate {
+    const id = nextUpdate++;
+    return { update_id: id, message: { message_id: id, date: 0, voice,
+      from: { id: ID.stranger, is_bot: false, first_name: 'Sam' }, chat: { id: ID.stranger, type: 'private' } } };
+  }
+  function expectNoSpeechToText(h: Harness, bot: FakeTelegram) {
+    expect(bot.downloadFile).not.toHaveBeenCalled();
+    expect(h.openai.transcribe).not.toHaveBeenCalled();
+    expect(h.eleven.transcribe).not.toHaveBeenCalled();
+  }
+
+  it.each(['reply', 'decline', 'ignore', 'block'] as const)('a stranger voice note to a public agent is decided (%s) without download or transcription', async (action) => {
+    const h = makeStudio();
+    const org = await seedOrg(h);
+    const { agent, bot } = await hire(h, org.alice, {}, undefined, 'public');
+    const decided: unknown[] = [];
+    const chat = h.chatLLM;
+    h.studio.deps.chatLLM = { complete: async (request) => {
+      if (!request.system.includes('Decide, in character')) return chat.complete(request);
+      decided.push(request.messages);
+      return JSON.stringify({ action, message: 'Synthetic in-character answer.' });
+    } };
+
+    await handleAgentUpdate(h.studio, agent.id, strangerVoiceNote());
+
+    expect(decided).toEqual([[{ role: 'user', content: STRANGER_VOICE_PLACEHOLDER }]]);
+    expectNoSpeechToText(h, bot());
+    // Nothing from the voice note is ever composed into a reply prompt.
+    expect(chat.replyPrompts).toEqual([]);
+    const sent = bot().sendMessage.mock.calls.map((call) => call[1]);
+    if (action === 'reply') expect(sent).toEqual([expect.stringContaining('Could you type it instead?')]);
+    else if (action === 'ignore') expect(sent).toEqual([]);
+    else expect(sent).toEqual(['Synthetic in-character answer.']);
+    expect((await h.store.read()).agents.find((a) => a.id === agent.id)?.blocked ?? []).toEqual(action === 'block' ? [ID.stranger] : []);
+  });
+
+  it('a voice note addressed to the agent in a group flagged hasGuests is never downloaded or transcribed', async () => {
+    const h = makeStudio();
+    const org = await seedOrg(h);
+    const { agent, bot, botId } = await hire(h, org.alice);
+    const chatId = -4242;
+    await h.store.update((s) => {
+      s.groups.push({ chatId, title: 'Mixed room', memberIds: [ID.alice, ID.bob], hasGuests: true, agentIds: [agent.id], addedAt: T0.toISOString() });
+    });
+    const id = nextUpdate++;
+    await handleAgentUpdate(h.studio, agent.id, { update_id: id, message: { message_id: id, date: 0, voice,
+      from: { id: ID.bob, is_bot: false, first_name: 'Bob' }, chat: { id: chatId, type: 'supergroup', title: 'Mixed room' },
+      // Replying to the agent's own message addresses it without any text.
+      reply_to_message: { message_id: 1, date: 0, chat: { id: chatId, type: 'supergroup' }, from: { id: botId, is_bot: true, first_name: 'Nova' } } } });
+
+    expectNoSpeechToText(h, bot());
+    expect(h.chatLLM.replyPrompts).toEqual([]);
+    expect(bot().sendMessage).toHaveBeenCalledTimes(1);
+    expect(bot().sendMessage).toHaveBeenCalledWith(chatId, expect.stringContaining('Could you type it instead?'), { replyTo: id });
   });
 });

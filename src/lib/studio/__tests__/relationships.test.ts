@@ -7,7 +7,8 @@ import { parseRelationshipAssessment, StudioRelationshipAssessor } from '../rela
 import { hire, ID, makeStudio, seedOrg, SECRET } from './helpers';
 
 async function setup(mode: 'off' | 'shadow' | 'live' = 'live') {
-  const h = makeStudio();
+  // Legacy relationship loop: adaptive runtimes refuse unscoped relationship state (adaptive-integration.test.ts).
+  const h = makeStudio({ adaptive: false });
   const users = await seedOrg(h);
   const hired = await hire(h, users.alice);
   const store = new InMemoryRelationshipStore();

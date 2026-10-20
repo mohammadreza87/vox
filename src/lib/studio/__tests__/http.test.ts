@@ -404,6 +404,8 @@ describe('agents', () => {
 
 
 describe('authenticated relationship settings', () => {
+  // Legacy relationship loop: adaptive runtimes refuse unscoped relationship state.
+  beforeEach(async () => { h = makeStudio({ adaptive: false }); org = await seedOrg(h); });
   it('binds settings to the signed actor and persists controls through the real router/service', async () => {
     const hired = await hire(h, org.alice);
     const loop = new RelationshipLoop({ store: new InMemoryRelationshipStore(), mode: 'live', now: () => h.clock.now, assessor: { assess: async () => ({}) } });

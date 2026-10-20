@@ -1,6 +1,6 @@
 # Vox adaptive agents: implementation plan
 
-Prepared 19 October 2026 for Joyixir OÜ. Product scope: adults in the EU/EEA and US; English and Persian interfaces; Work and Personal spaces. Current released baseline: `a49f734e16e0a5b3430c1e1c088dab33feda5d53` (20 October 2026); see the [reviewed synthetic learning-case release](RELEASE_LEARNING_CASES_2026_10_20.md). Further rights-control implementation is a separate candidate.
+Prepared 19 October 2026 for Joyixir OÜ. Product scope: adults in the EU/EEA and US; English and Persian interfaces; Work and Personal spaces. Current released baseline: `cf63acf64c6eadf5a2247d2436e0a22bc114386b` (20 October 2026); see the [RF1 release receipt](RELEASE_RF1_2026_10_20.md). The previously released learning-case baseline is documented in [its receipt](RELEASE_LEARNING_CASES_2026_10_20.md). RF1 is deployed with its optional policy off; VOX-056 remains open.
 
 **Delivery status:** the observation/lifecycle/improvement work and the complementary scoped chat, image prediction, bounded retrieval and optional voice lifecycle are now integrated in the completion candidate. See [adaptive completion](ADAPTIVE_COMPLETION_RESULT.md) for implementation, independent review and precise release evidence. Existing source/release receipts remain historical. Optional capabilities stay off without reviewed configuration; provider/device/privacy qualification and the unfinished roadmap entries remain open.
 
@@ -24,7 +24,9 @@ Prepared 19 October 2026 for Joyixir OÜ. Product scope: adults in the EU/EEA an
 | [Communication diagnostics](OBSERVATION_DIAGNOSTICS.md) | Next source slice, independent review and remaining observation scope |
 | [Rendered experience and correction observation](OBSERVATION_COMPLETION.md) | Visible committed text, scoped correction feedback and current-state rollback |
 | [Reviewed rights retention](RIGHTS_RETENTION.md) | Explicit reassessment, terminal purge, finite continuity and ledger compatibility |
-| [Scoped local-use restrictions](RIGHTS_LOCAL_USE.md) | RF1 source acceptance passed (39/39), CI230 tests/E2E and production build passed, and compiled-app SQLite and FILE attempt09 each passed 13/13; independent compiled-app acceptance passed 26/26; documentation-head CI, merge and release remain pending; security audit has 14 findings and is not clean |
+| [Scoped local-use restrictions](RIGHTS_LOCAL_USE.md) | RF1 is deployed on the existing Studio host with optional policy off; source/browser/CI evidence and open activation/rights gates are recorded. The security audit has 14 findings and is not clean |
+| [RF1 production release receipt](RELEASE_RF1_2026_10_20.md) | Exact deployed revision/build, unchanged production policy/configuration, route/bot probes and outstanding release gates |
+| [Synthetic legacy inventory](LEGACY_INVENTORY.md) | Isolated LIP1 implementation and independent synthetic acceptance; no live inventory, import or restore |
 | [Reviewed synthetic learning cases](LEARNING_CASES.md) | Exact finding/review provenance, current-use authority, migration/capacity safety and independent local acceptance |
 | [Protected evaluation protocol](EVALUATION_PROTOCOL.md) | Frozen synthetic splits, paired budgets, durable final-attempt reservation and signed promotion binding |
 | [Controlled presentation experiments](CONTROLLED_EXPERIMENTS.md) | Private Studio consumption, consent lifecycle, isolated variants and kill semantics |

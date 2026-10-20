@@ -13,7 +13,7 @@ const TOKEN = '123:synthetic-preferences';
 const fixtures: Awaited<ReturnType<typeof preferenceFixture>>[] = [];
 afterEach(async () => { vi.restoreAllMocks(); await Promise.all(fixtures.splice(0).map(f => f.close())); });
 async function setup(file = true) {
-  const h = makeStudio(), users = await seedOrg(h), { agent } = await hire(h, users.alice);
+  const h = makeStudio({ adaptive: false }), users = await seedOrg(h), { agent } = await hire(h, users.alice);
   const f = await preferenceFixture({ file, telegramId: ID.alice, agentId: agent.id }); fixtures.push(f);
   h.studio.deps.adaptive = f.adaptive; h.studio.deps.experience = f.experience;
   const auth = signInitData({ id: ID.alice, first_name: 'Synthetic' }, TOKEN);
