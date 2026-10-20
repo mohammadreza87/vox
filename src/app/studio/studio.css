@@ -145,7 +145,7 @@
 }
 
 .vx-tabbar {
-  position: absolute; left: 0; right: 0; bottom: 0; z-index: 6;
+  position: relative; flex-shrink: 0; z-index: 6;
   padding: 8px 8px calc(10px + env(safe-area-inset-bottom));
   background: rgba(22, 25, 30, .92); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
   border-top: 1px solid var(--hair); display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
