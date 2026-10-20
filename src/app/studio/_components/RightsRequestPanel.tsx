@@ -56,12 +56,15 @@ function RequestPanel({ space, locale, session }: { space: RightsSpace; locale: 
   const disabled = busy || !!issue || !data?.available || !data.supportedKinds.includes(kind);
   return <section className="vx-card vx-privacy-card" dir={locale === 'fa' ? 'rtl' : 'ltr'} lang={locale} aria-labelledby={`${id}-title`} aria-busy={busy} style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
     <h2 className="vx-head" id={`${id}-title`}>{rightsTitle(space, locale)}</h2>
-    <p className="vx-small">{c.scope}</p><p className="vx-small">{c.intro}</p><p className="vx-small vx-2">{c.immediate}</p>
+    <p className="vx-small">{c.scope}</p>
+    <details><summary>{locale === 'fa' ? 'این درخواست چه می‌کند' : 'What a request does'}</summary>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingTop: 4 }}><p className="vx-small">{c.intro}</p><p className="vx-small vx-2">{c.immediate}</p></div>
+    </details>
     {busy && <p role="status">{data ? c.pending : c.loading}</p>}
     {issue && <p role="alert">{c[issue]}</p>}
     {data && (!data.available || data.policyStatus !== 'available') && <p role="status">{c.unavailable}</p>}
     {notice === 'prepared' && <p role="status">{c.prepared}</p>}
-    <p className="vx-small">{c.support}: <a href="mailto:info@joyixir.com" dir="ltr">info@joyixir.com</a></p>
+    <p className="vx-small vx-2">{c.support}: <a href="mailto:info@joyixir.com" dir="ltr" style={{ color: 'var(--text-2)' }}>info@joyixir.com</a></p>
     <label className="vx-small" htmlFor={`${id}-kind`}>{c.kind}</label>
     <select id={`${id}-kind`} className="vx-input" value={kind} disabled={disabled} onChange={event => setKind(event.target.value as RightsRequestView['kind'])}>
       {(data?.supportedKinds ?? []).map(value => <option key={value} value={value}>{c.kinds[value]}</option>)}
