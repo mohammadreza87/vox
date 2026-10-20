@@ -98,11 +98,17 @@ export function renderCraft(role: AgentRole | undefined, skills: readonly AgentS
  * playbooks trigger on mood and health ("feels anxious", "an injury"), so
  * offering them would have Decisions classify someone's emotional or health
  * state (docs/AGENT_INTELLIGENCE_SOLUTION.md §4.8), and selection could drop
- * a safety screen. Custom agents without a role are not routed either.
- * Pinned playbooks are never routable: they are always in the prompt.
+ * a safety screen. A work role may carry any catalog skills, so every
+ * nonpinned attachment must also belong to that role's reviewed defaults or
+ * optional list. An unreviewed combination keeps the WHOLE craft, rather than
+ * filtering out skills whose safety instructions could otherwise disappear.
+ * Custom agents without a role are not routed either. Pinned playbooks are
+ * never routable: they are always in the prompt, including outside the list.
  */
 export function routableSkillsFor(role: AgentRole | undefined, skills: readonly AgentSkill[]): AgentSkill[] {
   if (role?.space !== 'work') return [];
+  const eligible = new Set([...role.skills, ...role.optionalSkills]);
+  if (skills.some((s) => !s.pinned && !eligible.has(s.id))) return [];
   return skills.slice(0, MAX_AGENT_SKILLS).filter((s) => !s.pinned).slice(0, MAX_ROUTABLE_SKILLS);
 }
 

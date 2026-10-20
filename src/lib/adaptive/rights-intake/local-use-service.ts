@@ -9,7 +9,7 @@ import type { AccountLedger, RightsSpace } from './contracts';
 import { localUseActionInputSchema, localUsePlanInputSchema, localUseScopeSchema, localUseStatusSchema, type LocalUseActionInput, type LocalUseIntent, type LocalUsePlanInput, type LocalUseScope, type LocalUseStatus } from './local-use-contracts';
 import { localUseDigest, localUseIntentDigest, localUseExecutionDeadline } from './local-use-state';
 
-type Policy = Extract<RightsPolicy, { version: 2 }>;
+type Policy = Extract<RightsPolicy, { version: 2 | 3 }>;
 type Backend = RightsUseHoldService;
 type Descriptor = Extract<ReturnType<Backend['inspectNow']>, { status: 'ready' }>['value']['effects'][number];
 const number = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), hash = z.string().regex(/^[a-f0-9]{64}$/);
@@ -40,7 +40,7 @@ export class RightsLocalUseWorkflow {
   }
   private policy(now: number): Policy | undefined {
     const parsed = rightsPolicySchema.safeParse(this.options.policy());
-    if (!parsed.success || parsed.data.version !== 2 || this.options.key?.length !== 32 || parsed.data.effectiveAt > now || parsed.data.expiresAt <= now) return;
+    if (!parsed.success || (parsed.data.version !== 2 && parsed.data.version !== 3) || this.options.key?.length !== 32 || parsed.data.effectiveAt > now || parsed.data.expiresAt <= now) return;
     if (Object.entries(parsed.data.localFulfillment).some(([k, value]) => k.endsWith('Ms') && typeof value === 'number' && !Number.isSafeInteger(now + value))) return;
     return parsed.data;
   }
@@ -67,7 +67,7 @@ export class RightsLocalUseWorkflow {
   status(id: number, requestId: string, scope: LocalUseScope): LocalUseView {
     z.uuidv4().parse(requestId); localUseScopeSchema.parse(scope);
     const d = this.read(id), row = this.row(d, requestId, scope.space);
-    if (d?.version !== 3 || !this.options.localUse) return this.unknown(scope, 'storage_unsupported');
+    if ((d?.version !== 3 && d?.version !== 4) || !this.options.localUse) return this.unknown(scope, 'storage_unsupported');
     const read = this.backend().inspectNow(id, scope, () => this.auth(id));
     if (read.status !== 'ready') return this.unknown(scope, read.status === 'unsupported' ? 'storage_unsupported' : 'authority_unavailable');
     const value = read.value, intents = d.localUse.intents.filter(i => i.requestId === requestId && sameScope(i.scope, scope));
@@ -92,7 +92,7 @@ export class RightsLocalUseWorkflow {
   }
   plan(id: number, requestId: string, space: RightsSpace, raw: LocalUsePlanInput) {
     const input = localUsePlanInputSchema.parse(raw), scope = { space, purpose: input.purpose }, d = this.read(id), row = this.row(d, requestId, space);
-    if (d?.version !== 3) return fail(503, 'rights_local_use_unsupported');
+    if ((d?.version !== 3 && d?.version !== 4)) return fail(503, 'rights_local_use_unsupported');
     const p = this.requirePolicy(scope, input.action), view = this.status(id, requestId, scope);
     if (!view.availableActions.includes(input.action)) return fail(409, 'rights_conflict');
     const current = this.backend().inspectNow(id, scope, () => this.auth(id)); if (current.status !== 'ready') return fail(503, 'rights_local_use_unavailable');
@@ -107,7 +107,7 @@ export class RightsLocalUseWorkflow {
   private matches(intent: LocalUseIntent, effect: Descriptor): boolean { return effect.effectId === intent.effectId && effect.requestId === intent.requestId && effect.space === intent.scope.space && effect.purpose === intent.scope.purpose && (intent.action === 'apply' ? effect.applyIntentDigest : effect.releaseIntentDigest) === intent.intentDigest; }
   private intentGuard(id: number, intent: LocalUseIntent, p: Policy): void {
     this.auth(id); this.requirePolicy(intent.scope, intent.action, p);
-    const d = this.read(id); if (d?.version !== 3) return fail(503, 'rights_local_use_unsupported');
+    const d = this.read(id); if ((d?.version !== 3 && d?.version !== 4)) return fail(503, 'rights_local_use_unsupported');
     const stored = d.localUse.intents.find(i => i.eventId === intent.eventId), row = this.row(d, intent.requestId, intent.scope.space);
     if (!stored || d.localUse.intents.some(s => s.supersedesEventId === intent.eventId) || localUseDigest(stored) !== localUseDigest(intent) || stored.intentDigest !== localUseIntentDigest(accountIdFor(id), stored) || row.revision !== intent.requestRevision || intent.action === 'apply' && row.state === 'closed_unfulfilled' || this.now(d) >= localUseExecutionDeadline(intent)) return fail(409, 'rights_conflict');
   }
@@ -117,7 +117,7 @@ export class RightsLocalUseWorkflow {
     if (proof.status !== 'ready' || !proof.value.effect || !this.matches(intent, proof.value.effect)) return fail(409, 'rights_conflict');
     const current = proof.value, effect = current.effect!;
     try { await this.repository.transaction(accountIdFor(id), () => this.now(), d => {
-      if (d.version !== 3) return fail(503, 'rights_local_use_unsupported');
+      if ((d.version !== 3 && d.version !== 4)) return fail(503, 'rights_local_use_unsupported');
       const stored = d.localUse.intents.find(i => i.eventId === intent.eventId); if (!stored || d.localUse.intents.some(s => s.supersedesEventId === intent.eventId) || localUseDigest(stored) !== localUseDigest(intent)) return fail(409, 'rights_conflict');
       if (d.localUse.acknowledgements.some(a => a.eventId === intent.eventId)) throw new RightsReplay();
       const now = this.now(d), retainUntil = Math.max(intent.receiptRetainUntil, add(now, p.localFulfillment.receiptRetentionMs));
@@ -131,7 +131,7 @@ export class RightsLocalUseWorkflow {
     const input = localUseActionInputSchema.parse(raw), token = this.open(input.planHandle, id, requestId), accountId = accountIdFor(id);
     if (token.scope.space !== space || token.action !== input.action) return fail(409, 'rights_conflict');
     const fp = localUseDigest(['vox.rights.local-use.command.v1', { accountId, requestId, scope: token.scope, action: input.action, eventId: input.eventId, policyDigest: token.policyDigest, notice: token.notice, ...(token.supersedesEventId ? {supersedesEventId:token.supersedesEventId} : {}), ...(token.effectId ? { selectedEffectId: token.effectId } : {}) }]);
-    const initial = this.read(id); if (initial?.version !== 3) return fail(503, 'rights_local_use_unsupported');
+    const initial = this.read(id); if ((initial?.version !== 3 && initial?.version !== 4)) return fail(503, 'rights_local_use_unsupported');
     const known = initial.localUse.intents.find(i => i.eventId === input.eventId);
     if (known) {
       if (known.fingerprint !== fp) return fail(409,'rights_conflict');
@@ -154,7 +154,7 @@ export class RightsLocalUseWorkflow {
     intent.intentDigest = localUseIntentDigest(accountId, intent);
     let recoveryIntents:LocalUseIntent[]=[];
     try { await this.repository.transaction(accountId, () => this.now(), d => {
-      if (d.version !== 3) return fail(503, 'rights_local_use_unsupported');
+      if ((d.version !== 3 && d.version !== 4)) return fail(503, 'rights_local_use_unsupported');
       const existing = d.localUse.intents.find(i => i.eventId === input.eventId);
       if (existing) { if (existing.fingerprint !== fp) return fail(409, 'rights_conflict'); throw new RightsReplay(); }
       const r = this.row(d, requestId, space); if (r.revision !== intent.requestRevision || input.action === 'apply' && r.state === 'closed_unfulfilled' || d.commandReceipts.some(r => r.eventId === input.eventId)) return fail(409, 'rights_conflict');
@@ -189,7 +189,7 @@ export class RightsLocalUseWorkflow {
   /** Existing committed operator authority is checked by the caller and again
    * at every proof/ack publication. No canonical mutation is performed here. */
   async reconcile(id: number, requestId: string, commandEventId: string, assertOperator: () => void): Promise<LocalUseView> {
-    assertOperator(); const d = this.read(id); if (d?.version !== 3) return fail(503,'rights_local_use_unsupported');
+    assertOperator(); const d = this.read(id); if ((d?.version !== 3 && d?.version !== 4)) return fail(503,'rights_local_use_unsupported');
     const intent = d.localUse.intents.find(i => i.eventId === commandEventId && i.requestId === requestId) ?? fail(404,'not_found');
     const p = this.requirePolicy(intent.scope,'reconcile'); await this.acknowledge(id,intent,p,assertOperator); assertOperator(); return this.status(id,requestId,intent.scope);
   }

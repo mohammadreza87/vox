@@ -11,7 +11,7 @@ export const ADAPTIVE_RELEASE_CAPABILITIES = Object.freeze({
   rightsUseHoldEnforcementVersion: 1,
   supportedFileAuthorityProjectionVersions: Object.freeze([1, 2]),
   supportedObserverClientExperienceVersions: Object.freeze([1]),
-  supportedRightsLedgerVersions: Object.freeze([1, 2, 3]),
+  supportedRightsLedgerVersions: Object.freeze([1, 2, 3, 4]),
   supportedExperimentLedgerSchemas: Object.freeze([1]),
   supportedGuestRightsLedgerSchemas: Object.freeze([1]),
   supportedImprovementWorkflowSchemas: Object.freeze([1, 2]),
@@ -173,6 +173,66 @@ function scanLocalUseLedger(doc) {
         intent.action === 'release' && ack.effectRevision <= intent.expectedEffectRevision ||
         ack.recordedAt < ack.observedAt || ack.recordedAt > doc.observedServerTime || ack.retainUntil < intent.receiptRetainUntil ||
         ack.retainUntil <= ack.recordedAt || intent.action === 'release' && ack.effectState !== 'released') fail();
+  }
+}
+/** RF2 metadata admission matches the immutable v4 contract. This checks neither
+ * current policy/authority nor canonical deletion proof; runtime owns both. */
+function scanLocalErasureLedger(doc) {
+  const value = doc.localErasure, v4 = id => uuid(id) && id[14] === '4';
+  if (!keys(value, ['version', 'operations']) || value.version !== 1 || !Array.isArray(value.operations) || value.operations.length > 32) fail();
+  for (const receipt of doc.commandReceipts) {
+    if (!keys(receipt, ['eventId', 'fingerprint', 'requestId', 'resultingRequestRevision', 'action', 'recordedAt', 'retainUntil']) ||
+        !v4(receipt.eventId) || !v4(receipt.requestId) || !boundedText(receipt.action, 50) ||
+        receipt.recordedAt > doc.observedServerTime || receipt.retainUntil <= receipt.recordedAt) fail();
+  }
+  const eventIds = [...doc.commandReceipts, ...doc.localUse.intents, ...value.operations].map(row => row?.eventId);
+  if (new Set(eventIds).size !== eventIds.length) fail();
+  for (const operation of value.operations) {
+    if (!object(operation) || !keys(operation, ['version', 'eventId', 'fingerprint', 'requestId', 'requestRevision', 'space', 'memoryId',
+      'expectedCanonicalRevision', 'expectedBindingDigest', 'witness', 'witnessDigest', 'createdAt', 'expiresAt', 'executionDeadline',
+      'policyDigest', 'noticeDigest', 'metadataRetainUntil', 'replayRetainUntil', 'receiptRetainUntil',
+      ...(Object.hasOwn(operation, 'acknowledgement') ? ['acknowledgement'] : [])]) ||
+      operation.version !== 1 || !v4(operation.eventId) || !v4(operation.requestId) || !positive(operation.requestRevision) ||
+      !['work', 'personal'].includes(operation.space) || !boundedText(operation.memoryId, 200) || !positive(operation.expectedCanonicalRevision) ||
+      ['fingerprint', 'expectedBindingDigest', 'witnessDigest', 'policyDigest', 'noticeDigest'].some(field => !digest(operation[field])) ||
+      ['createdAt', 'expiresAt', 'executionDeadline', 'metadataRetainUntil', 'replayRetainUntil', 'receiptRetainUntil'].some(field => !integer(operation[field])) ||
+      operation.createdAt > doc.observedServerTime || operation.expiresAt <= operation.createdAt || operation.executionDeadline < operation.expiresAt ||
+      [operation.metadataRetainUntil, operation.replayRetainUntil, operation.receiptRetainUntil].some(time => time < operation.executionDeadline) ||
+      !Array.isArray(operation.witness) || operation.witness.length < 1 || operation.witness.length > 300) fail();
+    for (const [index, witness] of operation.witness.entries()) {
+      if (!keys(witness, ['id', 'space', 'beforeRevision', 'beforeEpoch', 'beforeStatus', 'afterRevision', 'afterEpoch', 'afterStatus', 'sourceRefsDigest']) ||
+          !boundedText(witness.id, 200) || witness.space !== operation.space || !positive(witness.beforeRevision) || !integer(witness.beforeEpoch) ||
+          !['active', 'deleted'].includes(witness.beforeStatus) || !positive(witness.afterRevision) || !integer(witness.afterEpoch) ||
+          witness.afterStatus !== 'deleted' || !digest(witness.sourceRefsDigest) || index > 0 && operation.witness[index - 1].id >= witness.id ||
+          witness.afterRevision !== witness.beforeRevision + (witness.beforeStatus === 'active' ? 1 : 0) ||
+          witness.afterEpoch !== witness.beforeEpoch + (witness.beforeStatus === 'active' ? 1 : 0)) fail();
+    }
+    const selected = operation.witness.find(witness => witness.id === operation.memoryId);
+    const intent = Object.fromEntries(Object.entries(operation).filter(([field]) => !['fingerprint', 'acknowledgement'].includes(field)));
+    if (!selected || selected.beforeStatus !== 'active' || operation.witnessDigest !== canonicalHash(operation.witness) ||
+        operation.fingerprint !== canonicalHash(['vox.rights.private-note-erasure.intent.v1', doc.accountId, intent]) ||
+        !doc.requests.some(request => request.requestId === operation.requestId && request.space === operation.space &&
+          request.kind === 'erasure' && request.revision >= operation.requestRevision)) fail();
+    if (!Object.hasOwn(operation, 'acknowledgement')) continue;
+    const ack = operation.acknowledgement;
+    if (!object(ack) || !keys(ack, ['effectRevision', 'observedAt', 'recordedAt', 'retainUntil',
+      ...(Object.hasOwn(ack, 'recordingAuthority') ? ['recordingAuthority'] : [])]) || !positive(ack.effectRevision) ||
+      ['observedAt', 'recordedAt', 'retainUntil'].some(field => !integer(ack[field])) ||
+      ack.effectRevision !== operation.expectedCanonicalRevision + 1 || ack.observedAt < operation.createdAt ||
+      ack.recordedAt < ack.observedAt || ack.recordedAt > doc.observedServerTime || ack.retainUntil < operation.receiptRetainUntil ||
+      ack.retainUntil <= ack.recordedAt) fail();
+    if (!Object.hasOwn(ack, 'recordingAuthority')) continue;
+    const authority = ack.recordingAuthority;
+    if (!keys(authority, ['version', 'commandEventId', 'requestRevision', 'policy', 'operatorRef']) || authority.version !== 1 ||
+        !v4(authority.commandEventId) || !positive(authority.requestRevision) || authority.requestRevision < operation.requestRevision ||
+        !keys(authority.policy, ['id', 'revision', 'digest']) || !boundedText(authority.policy.id, 100) ||
+        !positive(authority.policy.revision) || !digest(authority.policy.digest) || !digest(authority.operatorRef) ||
+        !doc.requests.some(request => request.requestId === operation.requestId && request.revision >= authority.requestRevision) ||
+        !doc.commandReceipts.some(receipt => receipt.eventId === authority.commandEventId && receipt.requestId === operation.requestId &&
+          receipt.resultingRequestRevision === authority.requestRevision && receipt.action === 'private_note_erasure_reconcile' &&
+          receipt.recordedAt === ack.recordedAt && receipt.retainUntil >= ack.retainUntil &&
+          receipt.fingerprint === canonicalHash(['vox.rights.private-note-erasure.reconcile.v1', doc.accountId, operation.requestId,
+            operation.space, operation.fingerprint, operation.witnessDigest, authority]))) fail();
   }
 }
 function entries(directory, limit = MAX_ACCOUNTS + 4) {
@@ -337,12 +397,13 @@ function scanSeparate(env, required, budget) {
   for (const name of entries(rights)) {
     if (name === '.clock-v1.json') { const clock = readPlainJson(join(rights, name), 256, budget); if (!keys(clock, ['version', 'observedServerTime']) || clock.version !== 1 || !integer(clock.observedServerTime)) fail(); continue; }
     if (!/^[a-f0-9]{64}\.json$/.test(name)) fail(); const d = readPlainJson(join(rights, name), 65536, budget);
-    if (!object(d) || ![1, 2, 3].includes(d.version) || !keys(d, ['version', 'accountId', 'revision', 'observedServerTime', 'requests', 'commandReceipts', ...(d.version >= 2 ? ['tombstones'] : []), ...(d.version === 3 ? ['localUse'] : [])]) || !account(d.accountId) || hash(d.accountId) !== name.slice(0, -5) || !positive(d.revision) || !integer(d.observedServerTime) || !Array.isArray(d.requests) || d.requests.length > 100 || !Array.isArray(d.commandReceipts) || d.commandReceipts.length > 128 || d.version >= 2 && (!Array.isArray(d.tombstones) || d.tombstones.length > 128)) fail();
+    if (!object(d) || ![1, 2, 3, 4].includes(d.version) || !keys(d, ['version', 'accountId', 'revision', 'observedServerTime', 'requests', 'commandReceipts', ...(d.version >= 2 ? ['tombstones'] : []), ...(d.version >= 3 ? ['localUse'] : []), ...(d.version === 4 ? ['localErasure'] : [])]) || !account(d.accountId) || hash(d.accountId) !== name.slice(0, -5) || !positive(d.revision) || !integer(d.observedServerTime) || !Array.isArray(d.requests) || d.requests.length > 100 || !Array.isArray(d.commandReceipts) || d.commandReceipts.length > 128 || d.version >= 2 && (!Array.isArray(d.tombstones) || d.tombstones.length > 128)) fail();
     for (const r of d.requests) if (!knownKeys(r, ['version', 'requestId', 'accountId', 'space', 'kind', 'revision', 'createdAt', 'updatedAt', 'localeAtSubmission', 'intakePolicy', 'requester', 'state', 'reasonCode', 'deadline', 'coverage', 'localExport', 'retention', 'audit']) || !['received', 'operator_review', 'awaiting_requester', 'operator_action_pending', 'local_export_prepared', 'closed_unfulfilled'].includes(r.state) || !['access_export', 'correction', 'erasure', 'restriction', 'objection', 'portability', 'withdrawal'].includes(r.kind) || !['work', 'personal'].includes(r.space) || r.version !== 1 || r.accountId !== d.accountId || !uuid(r.requestId) || !positive(r.revision) || !integer(r.createdAt) || !integer(r.updatedAt) || !object(r.retention) || !Array.isArray(r.audit) || r.audit.length < 1 || r.audit.length > 32) fail();
     for (const r of d.commandReceipts) if (!object(r) || !uuid(r.eventId) || !digest(r.fingerprint) || !uuid(r.requestId) || !positive(r.resultingRequestRevision) || !integer(r.recordedAt) || !integer(r.retainUntil)) fail();
     if (d.version >= 2) { for (const t of d.tombstones) if (!keys(t, ['requestId', 'space', 'lastRevision', 'purgedAt', 'retainUntil']) || !uuid(t.requestId) || !['work', 'personal'].includes(t.space) || !positive(t.lastRevision) || !integer(t.purgedAt) || !integer(t.retainUntil) || t.retainUntil <= t.purgedAt) fail(); required.rightsLedgerVersion = Math.max(required.rightsLedgerVersion ?? 1, d.version); }
     else if (d.requests.some(r => Object.hasOwn(r.retention, 'auditRetainUntil') || Object.hasOwn(r.retention, 'terminalRetainUntil') || r.audit.some(a => a.action === 'retention_reassessed'))) fail();
-    if (d.version === 3) { scanLocalUseLedger(d); required.rightsUseHoldEnforcementVersion = 1; }
+    if (d.version >= 3) { scanLocalUseLedger(d); required.rightsUseHoldEnforcementVersion = 1; }
+    if (d.version === 4) scanLocalErasureLedger(d);
   }
   const experiments = join(env.STUDIO_DATA_DIR, 'controlled-experiments', 'v1');
   const names = entries(experiments); if (names.some(name => name !== 'ledger.json')) fail();
@@ -446,7 +507,7 @@ export function assertReleaseAdaptiveCompatibility(env, manifest) {
       required.fileAuthorityProjectionVersion !== undefined && !fileVersions.includes(required.fileAuthorityProjectionVersion)) fail();
   for (const [field, requiredKey, allowed] of [
     ['supportedObserverClientExperienceVersions', 'observerClientExperienceVersion', [1]],
-    ['supportedRightsLedgerVersions', 'rightsLedgerVersion', [1, 2, 3]],
+    ['supportedRightsLedgerVersions', 'rightsLedgerVersion', [1, 2, 3, 4]],
     ['supportedExperimentLedgerSchemas', 'experimentLedgerSchema', [1]],
     ['supportedGuestRightsLedgerSchemas', 'guestRightsLedgerSchema', [1]],
     ['supportedImprovementWorkflowSchemas', 'improvementWorkflowSchema', [1, 2]],

@@ -77,7 +77,7 @@ jobs:
         run: node --test scripts/connections-production-config.test.mjs
 
       - name: Verify single-host release safety and configuration preservation
-        run: node --test scripts/studio-production.test.mjs scripts/studio-adaptive-compatibility.test.mjs scripts/rights-intake-storage.test.mjs
+        run: node --test scripts/studio-production.test.mjs scripts/studio-skill-routing-config.test.mjs scripts/studio-adaptive-compatibility.test.mjs scripts/studio-rights-erasure-compatibility.test.mjs scripts/rights-intake-storage.test.mjs
 
       - name: Verify guest browser fixture build provenance
         run: node --test e2e/guest-fixture-build.test.mjs

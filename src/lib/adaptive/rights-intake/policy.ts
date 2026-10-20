@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { createHash } from 'crypto';
 import { LOCAL_USE_NOTICE_VERSION, localUseNotice } from './local-use-notice';
 import { localUsePurposeSchema } from './local-use-contracts';
+import { LOCAL_ERASURE_NOTICE_VERSION, localErasureNotice } from './local-erasure-notice';
 import { rightsCopy, RIGHTS_COPY_VERSION } from './notice';
 import { integer, kindSchema, spaceSchema } from './contracts';
 /** Every duration is supplied by a reviewed server policy. No legal/retention defaults. */
@@ -34,7 +35,10 @@ export const localFulfillmentPolicySchema = z.object({
       (['en','fa'] as const).some(locale => p.noticeHashes[locale] !== createHash('sha256').update(JSON.stringify(localUseNotice[locale])).digest('hex')) || p.metadataRetentionMs < p.reviewAfterMs)
     c.addIssue({ code: 'custom', message: 'Invalid local use policy' });
 });
-export const rightsPolicySchema = z.discriminatedUnion('version', [rightsPolicyBase, rightsPolicyBase.extend({ version: z.literal(2), localFulfillment: localFulfillmentPolicySchema }).strict()]).superRefine((p, ctx) => {
+export const localErasurePolicySchema = z.object({ version:z.literal(1), approvalReference:z.string().min(1).max(200), decisionReference:z.string().min(1).max(200), assurance:z.literal('signed_account_own_private_note'), topology:z.literal('single_persistent_process'), scope:z.literal('selected_manual_private_note_and_canonical_descendants'), allowedActions:z.array(z.enum(['plan','execute','reconcile'])).min(1).max(3), noticeVersion:z.literal(LOCAL_ERASURE_NOTICE_VERSION), noticeHashes:z.object({en:z.string().regex(/^[a-f0-9]{64}$/),fa:z.string().regex(/^[a-f0-9]{64}$/)}).strict(), planLifetimeMs:integer.positive(), executionWindowMs:integer.positive(), metadataRetentionMs:integer.positive(), replayRetentionMs:integer.positive(), receiptRetentionMs:integer.positive() }).strict().superRefine((p,c)=>{
+  if(new Set(p.allowedActions).size!==p.allowedActions.length || ['metadataRetentionMs','replayRetentionMs','receiptRetentionMs'].some(k=>p[k as 'metadataRetentionMs']<p.executionWindowMs) || (['en','fa'] as const).some(l=>p.noticeHashes[l]!==createHash('sha256').update(JSON.stringify(localErasureNotice[l])).digest('hex')))c.addIssue({code:'custom',message:'Invalid local erasure policy'});
+});
+export const rightsPolicySchema = z.discriminatedUnion('version', [rightsPolicyBase, rightsPolicyBase.extend({ version: z.literal(2), localFulfillment: localFulfillmentPolicySchema }).strict(), rightsPolicyBase.extend({version:z.literal(3),localFulfillment:localFulfillmentPolicySchema,localErasure:localErasurePolicySchema}).strict()]).superRefine((p, ctx) => {
   if (p.copyVersion !== RIGHTS_COPY_VERSION || (['en','fa'] as const).some(locale => p.noticeHashes[locale] !== createHash('sha256').update(JSON.stringify(rightsCopy[locale])).digest('hex')) ||
     p.effectiveAt >= p.expiresAt || new Set(p.supportedKinds).size !== p.supportedKinds.length || new Set(p.privacyOperatorIds).size !== p.privacyOperatorIds.length ||
     p.retention.auditRetentionMs < p.retention.requestReviewAfterMs || new Set(p.deadlineRules.map(r => [r.accountId,r.space,r.kind].join(':'))).size !== p.deadlineRules.length)

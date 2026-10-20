@@ -186,7 +186,7 @@ function cliFixture(run) {
   fixture(f => {
     const source = fileURLToPath(new URL('.', import.meta.url));
     const project = join(f.dir, 'source'); mkdirSync(join(project, 'scripts'), { recursive: true });
-    for (const name of ['studio-production.mjs', 'studio-adaptive-compatibility.mjs']) cpSync(join(source, name), join(project, 'scripts', name));
+    for (const name of ['studio-production.mjs', 'studio-adaptive-compatibility.mjs', 'studio-operation-guard.mjs']) cpSync(join(source, name), join(project, 'scripts', name));
     writeFileSync(join(project, '.gitignore'), '.next/\nnode_modules/\n');
     symlinkSync(fileURLToPath(new URL('../node_modules', import.meta.url)), join(project, 'node_modules'));
     const git = (...args) => { const result = spawnSync('git', args, { cwd: project, encoding: 'utf8' }); assert.equal(result.status, 0, result.stderr); return result.stdout.trim(); };
@@ -202,10 +202,18 @@ function cliFixture(run) {
     writeFileSync(guard, `import{appendFileSync}from'node:fs';globalThis.fetch=async()=>{appendFileSync(${JSON.stringify(signal)},'fetch');throw new Error('network denied')};`);
     writeFileSync(join(production, 'production.env'), `STUDIO_DATA_DIR='${f.env.STUDIO_DATA_DIR}'\nSTUDIO_ADAPTIVE_FORMAT='sqlite-v1'\n`);
     f.setMarker(ready(2));
-    const invoke = command => spawnSync(process.execPath, ['--import', guard, join(project, 'scripts', 'studio-production.mjs'), command], {
+    const setRelease = (dir, capabilities = {}) => {
+      mkdirSync(join(dir, '.next'), { recursive: true });
+      writeFileSync(join(dir, 'revision'), releaseMetadata.revision + '\n');
+      writeFileSync(join(dir, '.next', 'BUILD_ID'), releaseMetadata.buildId);
+      writeFileSync(join(dir, 'studio-release.json'), JSON.stringify({ ...releaseMetadata, ...capabilities }));
+    };
+    const invoke = command => spawnSync(process.execPath, ['--import', guard, join(project, 'scripts', 'studio-production.mjs'), command,
+      ...(existsSync(join(production, 'current')) ? ['--expect-current', realpathSync(join(production, 'current')),
+        '--expect-revision', releaseMetadata.revision, '--expect-build', releaseMetadata.buildId] : ['--expect-absent'])], {
       cwd: project, env: { PATH: `${bin}:${process.env.PATH}`, VOX_PRODUCTION_DIR: production }, encoding: 'utf8', timeout: 10000,
     });
-    run({ ...f, project, production, signal, invoke });
+    run({ ...f, project, production, signal, invoke, setRelease });
   });
 }
 
@@ -218,8 +226,9 @@ test('actual install refuses pause-unaware artifact before provider checks or st
 test('actual rollback refuses old release before launchctl and leaves current pointer untouched', () => cliFixture(f => {
   const current = join(f.production, 'current-release'), previous = join(f.production, 'previous-release');
   for (const dir of [current, previous]) { mkdirSync(dir); writeFileSync(join(dir, 'server.js'), 'synthetic'); }
-  writeFileSync(join(current, 'studio-release.json'), JSON.stringify({ ...releaseMetadata, ...ADAPTIVE_RELEASE_CAPABILITIES }));
-  symlinkSync(current, join(f.production, 'current')); writeFileSync(join(f.production, 'previous'), previous);
+  f.setRelease(current, ADAPTIVE_RELEASE_CAPABILITIES);
+  f.setRelease(previous);
+  symlinkSync(current, join(f.production, 'current')); writeFileSync(join(f.production, 'previous'), realpathSync(previous));
   const result = f.invoke('rollback');
   assert.equal(result.status, 1); assert.match(result.stderr, /Adaptive storage is incompatible/);
   assert.equal(existsSync(f.signal), false); assert.equal(realpathSync(join(f.production, 'current')), realpathSync(current));
@@ -237,8 +246,9 @@ test('actual install and rollback reject projection-unaware releases before any 
   assert.equal(install.status, 1); assert.match(install.stderr, /Adaptive storage is incompatible/);
   const current = join(f.production, 'current-release'), previous = join(f.production, 'previous-release');
   for (const dir of [current, previous]) { mkdirSync(dir); writeFileSync(join(dir, 'server.js'), 'synthetic'); }
-  writeFileSync(join(previous, 'studio-release.json'), JSON.stringify({ ...releaseMetadata, ...priorCapabilities }));
-  symlinkSync(current, join(f.production, 'current')); writeFileSync(join(f.production, 'previous'), previous);
+  f.setRelease(current, ADAPTIVE_RELEASE_CAPABILITIES);
+  f.setRelease(previous, priorCapabilities);
+  symlinkSync(current, join(f.production, 'current')); writeFileSync(join(f.production, 'previous'), realpathSync(previous));
   const rollback = f.invoke('rollback');
   assert.equal(rollback.status, 1); assert.match(rollback.stderr, /Adaptive storage is incompatible/);
   assert.equal(existsSync(f.signal), false); assert.equal(existsSync(join(f.production, 'releases')), false);
@@ -320,7 +330,8 @@ for (const extension of ['observer', 'rights', 'experiments']) test(`actual inst
   const install = f.invoke('install'); assert.equal(install.status, 1); assert.match(install.stderr, /Adaptive storage is incompatible/);
   const current = join(f.production, 'current-release'), previous = join(f.production, 'previous-release');
   for (const dir of [current, previous]) { mkdirSync(dir); writeFileSync(join(dir, 'server.js'), 'synthetic'); }
-  writeFileSync(join(previous, 'studio-release.json'), JSON.stringify({ ...releaseMetadata, ...baselineCapabilities })); symlinkSync(current, join(f.production, 'current')); writeFileSync(join(f.production, 'previous'), previous);
+  f.setRelease(current, ADAPTIVE_RELEASE_CAPABILITIES); f.setRelease(previous, baselineCapabilities);
+  symlinkSync(current, join(f.production, 'current')); writeFileSync(join(f.production, 'previous'), realpathSync(previous));
   const rollback = f.invoke('rollback'); assert.equal(rollback.status, 1); assert.match(rollback.stderr, /Adaptive storage is incompatible/);
   assert.equal(existsSync(f.signal), false); assert.equal(existsSync(join(f.production, 'releases')), false); assert.equal(realpathSync(join(f.production, 'current')), realpathSync(current));
 }));

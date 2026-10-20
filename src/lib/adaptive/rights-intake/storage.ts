@@ -138,6 +138,20 @@ export class RightsFileStorage implements AdaptiveStorage {
    * can leave .clock-v1.lock; subsequent reads fail closed. There is no automatic
    * timeout/reset: an operator must verify the writer is stopped, inspect the
    * durable clock and interrupted temporary file, then remove the stale lock. */
+  /** Final-effect fences never acquire the separate clock writer lock. */
+  readRightsTimeForEffect():{status:'ready';observedServerTime:number}|{status:'busy'} {
+    if(!this.root(false))return unavailable();
+    if(stat(join(this.directory,'.clock-v1.lock')))return {status:'busy'};
+    const file=join(this.directory,'.clock-v1.json'),info=stat(file);let fd:number|undefined;
+    try {
+      if(!info || !info.isFile() || info.isSymbolicLink() || info.nlink!==1 || (info.mode&0o077)!==0 || info.size>256)return unavailable();
+      fd=openSync(file,constants.O_RDONLY|constants.O_NOFOLLOW);const opened=fstatSync(fd);
+      if(!opened.isFile() || opened.nlink!==1 || opened.size>256 || opened.ino!==info.ino || opened.dev!==info.dev)return unavailable();
+      const raw:unknown=JSON.parse(readFileSync(fd,'utf8'));this.root(false);const latest=stat(file);
+      if(!latest || latest.isSymbolicLink() || latest.ino!==opened.ino || latest.dev!==opened.dev || stat(join(this.directory,'.clock-v1.lock')) || !raw || typeof raw!=='object' || Object.keys(raw).sort().join(',')!=='observedServerTime,version' || !('version' in raw) || raw.version!==1 || !('observedServerTime' in raw) || !Number.isSafeInteger(raw.observedServerTime) || Number(raw.observedServerTime)<0)return unavailable();
+      return {status:'ready',observedServerTime:Number(raw.observedServerTime)};
+    }catch{return unavailable();}finally{if(fd!==undefined)closeSync(fd);}
+  }
   observeRightsTime(now: number): void {
     if (!Number.isSafeInteger(now) || now < 0) return fail(503, 'rights_clock_unavailable');
     this.root(true);

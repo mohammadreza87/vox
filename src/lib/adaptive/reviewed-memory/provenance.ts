@@ -53,3 +53,30 @@ export function purgeInvalidDerivedMemory(d: AdaptiveDocument, now: number, onTo
   }
   return invalid.length > 0;
 }
+
+/** RF2 dependency enumeration only: no payload reads, sweeps or inferred links.
+ * A stale revision still declares a dependency. Cross-space/ambiguous graphs deny. */
+export function selectedMemoryClosure(d:AdaptiveDocument,selectedId:string,space:'work'|'personal'):StoredMemory[] {
+  const rows=new Map(d.memories.map(m=>[m.id,m]));
+  if(d.memories.length>300 || rows.size!==d.memories.length || !rows.has(selectedId) || rows.get(selectedId)!.space!==space)throw new Error('Invalid selected lineage');
+  const included=new Set([selectedId]);
+  for(let pass=0;pass<300;pass++) {
+    let changed=false;
+    for(const m of d.memories) if(m.sourceRefs?.some(r=>included.has(r.id))) {
+      if(m.space!==space)throw new Error('Invalid selected lineage');
+      if(!included.has(m.id)){included.add(m.id);changed=true;}
+    }
+    if(!changed)break;
+  }
+  const heights=new Map<string,number>();
+  const visit=(id:string,path:Set<string>):number=>{
+    const m=rows.get(id);if(!m || m.space!==space || path.has(id) || path.size>=8)throw new Error('Invalid selected lineage');
+    const known=heights.get(id);if(known!==undefined){if(known+path.size>8)throw new Error('Invalid selected lineage');return known;}
+    const refs=m.sourceRefs;if(refs && (!refs.length || refs.length>8 || new Set(refs.map(r=>r.id)).size!==refs.length))throw new Error('Invalid selected lineage');
+    const next=new Set(path).add(id);let depth=1;
+    for(const ref of refs??[])depth=Math.max(depth,1+visit(ref.id,next));
+    if(depth>8)throw new Error('Invalid selected lineage');heights.set(id,depth);return depth;
+  };
+  for(const id of included)visit(id,new Set());
+  return [...included].sort().map(id=>rows.get(id)!);
+}
