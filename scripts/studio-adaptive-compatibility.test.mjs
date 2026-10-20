@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import Database from 'better-sqlite3';
 import { createHash } from 'node:crypto';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -306,4 +306,93 @@ test('guest namespace requires its reader even with admissions disabled; unknown
   assert.throws(()=>assertReleaseAdaptiveCompatibility(f.env,old),/incompatible/);
   assert.equal(assertReleaseAdaptiveCompatibility(f.env,ADAPTIVE_RELEASE_CAPABILITIES).guestRightsLedgerSchema,1); assert.deepEqual(readFileSync(file),before);
   writeFileSync(file,JSON.stringify({...ledger,schemaVersion:2})); assert.throws(()=>requiredAdaptiveCapabilities(f.env),/incompatible/);
+}));
+
+// Small metadata-only fixtures for installer format admission. The workflow's
+// independent tests validate real migrated records and signatures separately.
+const workflowCanonical = value => value === null || typeof value !== 'object' ? JSON.stringify(value)
+  : Array.isArray(value) ? `[${value.map(workflowCanonical).join(',')}]`
+  : `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${workflowCanonical(value[key])}`).join(',')}}`;
+const workflowHash = value => createHash('sha256').update(workflowCanonical(value)).digest('hex');
+const workflowState = (version, generation = 1, at = 200) => ({
+  findings: {}, proposals: {}, candidates: {}, revokedLineages: ['c'.repeat(64)], finalUses: ['d'.repeat(64)],
+  protocolUses: [], rollbacks: {}, operations: {},
+  ...(version === 2 ? { schemaVersion: 2, trustDigest: 'a'.repeat(64), registryId: uuid, generation, observedAt: at,
+    learningCases: {}, learningCorpora: {}, withdrawnCases: ['e'.repeat(64)] } : {}),
+});
+function workflowEvent(version, sequence, previous, state = workflowState(version), patch = {}) {
+  const body = { ...(version === 2 ? { schemaVersion: 2, kind: 'vox_improvement_audit' } : {}),
+    sequence, previous, action: 'synthetic_fixture', operationId: `fixture_${sequence}`, at: state.observedAt ?? 100, state, ...patch };
+  return { ...body, digest: workflowHash(version === 2 ? { domain: 'vox.improvement.audit.v2', body } : body) };
+}
+function putWorkflow(f, events) {
+  const root = join(f.env.STUDIO_DATA_DIR, 'improvement-review'), audit = join(root, 'audit');
+  rmSync(root, { force: true, recursive: true }); mkdirSync(audit, { recursive: true, mode: 0o700 });
+  for (const event of events) writeFileSync(join(audit, `${String(event.sequence).padStart(10, '0')}.json`), JSON.stringify(event), { mode: 0o600 });
+  return { root, audit, file: join(audit, '0000000001.json') };
+}
+test('workflow migration requires the v2 reader even with improvement runtime disabled, without data writes', () => fixture(f => {
+  legacy(f);
+  const v1 = workflowEvent(1, 1, '0'.repeat(64)), v2 = workflowEvent(2, 2, v1.digest);
+  const paths = putWorkflow(f, [v1]);
+  const { supportedImprovementWorkflowSchemas: omitted, ...old } = ADAPTIVE_RELEASE_CAPABILITIES;
+  assert.deepEqual(omitted, [1, 2]);
+  assert.equal(assertReleaseAdaptiveCompatibility(f.env, old).improvementWorkflowSchema, 1);
+  assert.equal(assertReleaseAdaptiveCompatibility(f.env, null).improvementWorkflowSchema, 1);
+  writeFileSync(join(paths.audit, '0000000002.json'), JSON.stringify(v2));
+  const before = [1, 2].map(n => { const path = join(paths.audit, `000000000${n}.json`); return [readFileSync(path), lstatSync(path).mtimeMs]; });
+  assert.throws(() => assertReleaseAdaptiveCompatibility(f.env, old), /incompatible/);
+  assert.throws(() => assertReleaseAdaptiveCompatibility(f.env, null), /incompatible/);
+  assert.equal(assertReleaseAdaptiveCompatibility(f.env, ADAPTIVE_RELEASE_CAPABILITIES).improvementWorkflowSchema, 2);
+  assert.deepEqual([1, 2].map(n => { const path = join(paths.audit, `000000000${n}.json`); return [readFileSync(path), lstatSync(path).mtimeMs]; }), before);
+}));
+test('workflow admission refuses downgrade tails, changed identity/trust, regressed clocks and missing generations', () => fixture(f => {
+  legacy(f);
+  const first = workflowEvent(2, 1, '0'.repeat(64));
+  const valid = workflowEvent(2, 2, first.digest, workflowState(2, 2, 201));
+  putWorkflow(f, [first, valid]); assert.equal(requiredAdaptiveCapabilities(f.env).improvementWorkflowSchema, 2);
+  for (const next of [
+    workflowEvent(1, 2, first.digest),
+    workflowEvent(2, 2, first.digest, workflowState(2, 1, 201)),
+    workflowEvent(2, 2, first.digest, workflowState(2, 2, 199)),
+    workflowEvent(2, 2, first.digest, { ...workflowState(2, 2, 201), trustDigest: 'b'.repeat(64) }),
+    workflowEvent(2, 2, first.digest, { ...workflowState(2, 2, 201), registryId: '4cde5210-3599-4a0b-b34a-d74ebc815f18' }),
+  ]) {
+    putWorkflow(f, [first, next]); assert.throws(() => requiredAdaptiveCapabilities(f.env), /incompatible/);
+  }
+}));
+test('workflow corrupt or future envelopes cannot become a legacy or empty ledger', () => fixture(f => {
+  legacy(f);
+  const first = workflowEvent(2, 1, '0'.repeat(64));
+  for (const event of [
+    { ...first, schemaVersion: 3 }, { ...first, digest: '0'.repeat(64) },
+    workflowEvent(2, 1, '0'.repeat(64), { ...workflowState(2), schemaVersion: 3 }),
+    workflowEvent(2, 1, '0'.repeat(64), { ...workflowState(2), learningCases: undefined }),
+    workflowEvent(2, 1, '0'.repeat(64), { ...workflowState(2), raw: 'PRIVATE_CANARY' }),
+    workflowEvent(2, 1, '0'.repeat(64), workflowState(2), { kind: 'unknown' }),
+    workflowEvent(2, 1, '0'.repeat(64), workflowState(2), { unexpected: true }),
+  ]) {
+    putWorkflow(f, [event]);
+    assert.throws(() => requiredAdaptiveCapabilities(f.env), error => /incompatible/.test(error.message) && !error.message.includes('CANARY'));
+  }
+  const p = putWorkflow(f, [first]); writeFileSync(p.file, '{PRIVATE_CANARY');
+  assert.throws(() => requiredAdaptiveCapabilities(f.env), /incompatible/);
+}));
+test('workflow scan refuses writer locks, gaps, unsafe files and oversized committed metadata', () => fixture(f => {
+  legacy(f); const first = workflowEvent(2, 1, '0'.repeat(64));
+  let p = putWorkflow(f, [first]); mkdirSync(join(p.root, 'writer.lock'));
+  assert.throws(() => requiredAdaptiveCapabilities(f.env), /incompatible/);
+  p = putWorkflow(f, [first]); writeFileSync(join(p.audit, '0000000003.json'), JSON.stringify(first));
+  assert.throws(() => requiredAdaptiveCapabilities(f.env), /incompatible/);
+  p = putWorkflow(f, [first]); const outside = join(f.dir, 'outside.json'); writeFileSync(outside, JSON.stringify(first));
+  rmSync(p.file); symlinkSync(outside, p.file); assert.throws(() => requiredAdaptiveCapabilities(f.env), /incompatible/);
+  rmSync(p.file); linkSync(outside, p.file); assert.throws(() => requiredAdaptiveCapabilities(f.env), /incompatible/);
+  p = putWorkflow(f, [first]); writeFileSync(p.file, ' '.repeat(2_000_001));
+  assert.throws(() => requiredAdaptiveCapabilities(f.env), /incompatible/);
+}));
+test('workflow capability declaration must be a supported unique version array', () => fixture(f => {
+  legacy(f); putWorkflow(f, [workflowEvent(2, 1, '0'.repeat(64))]);
+  for (const value of [null, [9], [1, 1], [1], [], '2']) {
+    assert.throws(() => assertReleaseAdaptiveCompatibility(f.env, { ...ADAPTIVE_RELEASE_CAPABILITIES, supportedImprovementWorkflowSchemas: value }), /incompatible/);
+  }
 }));
