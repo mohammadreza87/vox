@@ -40,3 +40,11 @@ npx tsc --noEmit --incremental false
 ```
 
 Next owner: independent QA/privacy evaluator on the integrated candidate. Source/local evidence does not close platform logs/sinks/IAM retention, external deployment, live audio or verified external-task outcomes.
+
+### Author evidence receipt — 20 October 2026
+
+Runtime candidate: `6c0375cf80c73a8042c4b1b520d667ec40b0fabc` (first implementation `4287e3ebbfef5cc6b0c512a91c5b620887a9d413`). Focused author suite: **114 passed across 11 files**. `tsc --noEmit --incremental false` and `git diff --check` passed. The committed production build passed with existing repository lint warnings; `scripts/studio-build.mjs` verified source tree `b729ce757bd4c1dc98343c9a9da7a2e05641387c`, build ID `kH0w6gX7QzEECpXwfSJuX`, built at `2026-10-20T07:09:03.596Z`.
+
+`playwright test --config=playwright.observation.config.ts`: **6 passed in 7.3 seconds**, using that compiled standalone artifact on loopback. Coverage: visible committed-text report once, applied presentation/exposure acknowledgment, separate explicit task feedback, hidden-text suppression until visible, and EN/FA saved/unconfirmed correction reports. All browser HTTP responses were synthetic; the separate signed-handler/FILE tests establish actual ingestion/correlation/export integration. An initial author browser run exposed three fixture locator failures (ambiguous alert selection and a label locator); fixing those author selectors produced the passing rerun. No production data, provider generation, messages or deployment were involved.
+
+These are author results. Independent acceptance and any integrated release-manifest admission/rollback qualification belong to the lead/evaluator on the combined candidate; this source slice does not certify an older executable as compatible with populated new observer extensions.
