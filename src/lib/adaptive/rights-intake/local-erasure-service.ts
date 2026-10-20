@@ -23,9 +23,10 @@ export class RightsLocalErasureWorkflow {
   private observedTime=0;
   constructor(readonly repository:RightsRepository,readonly options:RightsOptions){}
   private sync(guard:()=>void){validateRuntimeControlEvaluation({value:guard()});}
-  private auth(id:number){if(this.options.assertRequestNow)this.sync(this.options.assertRequestNow);this.sync(()=>this.options.assertAccountNow(id));if(!this.options.assertPrivateMemoryNow)return fail(503,'rights_erasure_unsupported');this.sync(()=>this.options.assertPrivateMemoryNow!(id));if(this.options.assertRequestNow)this.sync(this.options.assertRequestNow);this.finalFence(()=>this.now());}
+  private observeTransient(observedAt?:number):void {if(observedAt===undefined)return;if(!Number.isSafeInteger(observedAt)||observedAt<0||observedAt<this.observedTime)return fail(503,'rights_clock_unavailable');if(this.options.assertErasureClockNow)this.sync(()=>this.options.assertErasureClockNow!(observedAt));this.observedTime=observedAt;}
+  private auth(id:number,observedAt?:number){this.observeTransient(observedAt);if(this.options.assertRequestNow)this.sync(this.options.assertRequestNow);this.sync(()=>this.options.assertAccountNow(id));if(!this.options.assertPrivateMemoryNow)return fail(503,'rights_erasure_unsupported');this.sync(()=>this.options.assertPrivateMemoryNow!(id));if(this.options.assertRequestNow)this.sync(this.options.assertRequestNow);this.finalFence(()=>this.now());}
   private finalFence<T>(fn:()=>T):T {const prior=this.inFinalFence;this.inFinalFence=true;try{return fn();}finally{this.inFinalFence=prior;}}
-  private now(d?:AccountLedger|null){this.options.assertRequestNow?.();const now=(this.options.clock??Date.now)();if(!Number.isSafeInteger(now)||now<0||now<this.observedTime||now<(d?.observedServerTime??0))return fail(503,'rights_clock_unavailable');if(this.inFinalFence)this.repository.assertTimeForEffect(now);else this.repository.observeTime(now);if(this.options.assertErasureClockNow)this.sync(()=>this.options.assertErasureClockNow!(now));this.observedTime=now;return now;}
+  private now(d?:AccountLedger|null){this.options.assertRequestNow?.();const now=(this.options.clock??Date.now)();if(!Number.isSafeInteger(now)||now<0||now<this.observedTime||now<(d?.observedServerTime??0))return fail(503,'rights_clock_unavailable');this.observeTransient(now);if(this.inFinalFence)this.repository.assertTimeForEffect(now);else this.repository.observeTime(now);return now;}
   private read(id:number){this.auth(id);const d=this.repository.read(accountIdFor(id));this.now(d);return d;}
   private row(d:AccountLedger|null,requestId:string,space:RightsSpace){return d?.requests.find(r=>r.requestId===requestId&&r.space===space)??fail(404,'not_found');}
   private backend(){return this.options.localErasure??fail(503,'rights_erasure_unsupported');}
@@ -56,7 +57,7 @@ export class RightsLocalErasureWorkflow {
   private readOnlyStatus(id:number,requestId:string,space:RightsSpace):LocalErasureView {
     z.uuidv4().parse(requestId);const d=this.read(id),r=this.row(d,requestId,space),p=this.policy('plan');
     const operations=(d?.version===4?d.localErasure.operations:[]).filter(o=>o.requestId===requestId&&o.space===space).map(o=>{
-      const proof=this.backend().privateNoteErasureProofNow(id,o,()=>this.auth(id));
+      const proof=this.backend().privateNoteErasureProofNow(id,o,(observedAt?:number)=>this.auth(id,observedAt));
       const recording=o.acknowledgement?'recorded' as const:proof.technical==='note_content_removed'?'acknowledgement_pending' as const:'intent_recorded' as const;
       return {operationRef:this.ref(o.eventId),...proof,recording,coverage:{...fixedCoverage,canonicalSelectedNote:proof.technical==='note_content_removed'?'removed' as const:proof.technical==='not_applied'?'not_started' as const:'unknown' as const,canonicalDependentNotes:proof.technical==='note_content_removed'?'no_active_payloads' as const:proof.technical==='not_applied'?'not_started' as const:'unknown' as const}};
     });
@@ -69,7 +70,7 @@ export class RightsLocalErasureWorkflow {
   private readOnlyPlan(id:number,requestId:string,space:RightsSpace,raw:LocalErasurePlanInput){
     const input=localErasurePlanInputSchema.parse(raw),d=this.read(id),r=this.row(d,requestId,space),p=this.requirePolicy('plan'),now=this.now(d);
     if(d?.version!==4||input.space!==space||r.kind!=='erasure'||r.state==='closed_unfulfilled'||r.revision!==input.expectedRequestRevision||r.retention.reviewOrExpiryAt<=now||d.localErasure.operations.some(o=>o.memoryId===input.memoryId)||!this.repository.storage.supportsCommittedWriteFence||!this.repository.storage.readRightsTimeForEffect)return fail(409,'rights_conflict');
-    const prepared=this.backend().preparePrivateNoteErasureNow(id,space,input.memoryId,input.expectedMemoryRevision,()=>this.auth(id));
+    const prepared=this.backend().preparePrivateNoteErasureNow(id,space,input.memoryId,input.expectedMemoryRevision,(observedAt?:number)=>this.auth(id,observedAt));
     const executionDeadline=Math.min(add(now,p.localErasure.executionWindowMs),p.expiresAt,prepared.bindingExpiresAt,r.retention.reviewOrExpiryAt),expiresAt=Math.min(add(now,p.localErasure.planLifetimeMs),executionDeadline);
     const token:Token={version:1,accountRef:this.ref(accountIdFor(id)),requestId,requestRevision:r.revision,space,eventId:input.eventId,memoryId:input.memoryId,memoryRevision:input.expectedMemoryRevision,expectedCanonicalRevision:prepared.expectedCanonicalRevision,expectedBindingDigest:prepared.expectedBindingDigest,witnessDigest:localUseDigest(prepared.witness),policyDigest:localUseDigest(p),noticeDigest:p.localErasure.noticeHashes[input.locale],createdAt:now,expiresAt,executionDeadline,metadataRetainUntil:add(now,p.localErasure.metadataRetentionMs),replayRetainUntil:add(now,p.localErasure.replayRetentionMs),receiptRetainUntil:add(now,p.localErasure.receiptRetentionMs)};
     this.auth(id);this.requirePolicy('plan',token.policyDigest);if(this.row(this.read(id),requestId,space).revision!==r.revision)return fail(409,'rights_conflict');
@@ -80,7 +81,7 @@ export class RightsLocalErasureWorkflow {
       const p=localErasurePlanSchema.parse(raw),t=this.open(p.planHandle,id,requestId,space);this.auth(id);this.requirePolicy('plan',t.policyDigest);
       const d=this.read(id),r=this.row(d,requestId,space);
       if(d?.version!==4||r.revision!==t.requestRevision||r.state==='closed_unfulfilled'||r.kind!=='erasure'||p.eventId!==t.eventId||p.memoryId!==t.memoryId||p.memoryRevision!==t.memoryRevision)return fail(409,'rights_conflict');
-      const current=this.backend().preparePrivateNoteErasureNow(id,space,t.memoryId,t.memoryRevision,()=>this.auth(id));
+      const current=this.backend().preparePrivateNoteErasureNow(id,space,t.memoryId,t.memoryRevision,(observedAt?:number)=>this.auth(id,observedAt));
       if(current.expectedCanonicalRevision!==t.expectedCanonicalRevision||current.expectedBindingDigest!==t.expectedBindingDigest||localUseDigest(current.witness)!==t.witnessDigest||this.now(d)>=t.expiresAt)return fail(409,'rights_conflict');
       this.auth(id);this.requirePolicy('plan',t.policyDigest);
     });
@@ -94,7 +95,7 @@ export class RightsLocalErasureWorkflow {
       return stored;
     };
     const authority=()=>{this.auth(id);operatorGuard?.();this.requirePolicy(action,policyDigest);};
-    const guard=()=>{authority();inspectDraft(this.read(id));authority();};
+    const guard=(observedAt?:number)=>{this.observeTransient(observedAt);authority();inspectDraft(this.read(id));authority();};
     guard();const proof=this.backend().privateNoteErasureProofNow(id,o,guard);
     if(proof.technical!=='note_content_removed')return fail(409,'rights_conflict');
     let draft:AccountLedger|undefined;
@@ -110,7 +111,7 @@ export class RightsLocalErasureWorkflow {
       // The storage writer pins the committed input. Check the locked draft,
       // never recursively read this rights lock; canonical proof stays current.
       authority();if(!draft)return fail(409,'rights_conflict');inspectDraft(draft);
-      const current=this.backend().privateNoteErasureProofNow(id,o,()=>{this.auth(id);operatorGuard?.();});
+      const current=this.backend().privateNoteErasureProofNow(id,o,(observedAt?:number)=>{this.auth(id,observedAt);operatorGuard?.();});
       if(current.technical!=='note_content_removed'||current.effectRevision!==proof.effectRevision)return fail(409,'rights_conflict');
       authority();inspectDraft(draft);
     }));}catch(e){if(!(e instanceof RightsReplay))throw e;}
@@ -126,13 +127,13 @@ export class RightsLocalErasureWorkflow {
       if(known.requestId!==requestId||known.memoryId!==token.memoryId||known.witnessDigest!==token.witnessDigest||known.policyDigest!==token.policyDigest||known.createdAt!==token.createdAt||known.expectedCanonicalRevision!==token.expectedCanonicalRevision||known.expectedBindingDigest!==token.expectedBindingDigest||known.noticeDigest!==token.noticeDigest||known.expiresAt!==token.expiresAt||known.executionDeadline!==token.executionDeadline)return fail(409,'rights_conflict');
       // Expired exact replay is a pure current read, including an unapplied intent.
       if(this.finalFence(()=>this.now(initial)>=known.expiresAt||this.now(initial)>=known.executionDeadline))return result(true);
-      const proof=this.backend().privateNoteErasureProofNow(id,known,()=>this.auth(id));
+      const proof=this.backend().privateNoteErasureProofNow(id,known,(observedAt?:number)=>this.auth(id,observedAt));
       if(proof.technical==='note_content_removed'){if(!known.acknowledgement)await this.acknowledge(id,known,'execute');return result(true);}
       this.guard(id,known);await this.backend().eraseSelectedPrivateNote(id,known,()=>this.finalFence(()=>this.guard(id,known)));await this.acknowledge(id,known,'execute');return result(true);
     }
     this.requirePolicy('execute',token.policyDigest);const now=this.now(initial);
     if(now<token.createdAt||now>=token.expiresAt||now>=token.executionDeadline||r.kind!=='erasure'||r.state==='closed_unfulfilled'||r.revision!==token.requestRevision)return fail(409,'rights_conflict');
-    const prepared=this.backend().preparePrivateNoteErasureNow(id,space,token.memoryId,token.memoryRevision,()=>this.auth(id));
+    const prepared=this.backend().preparePrivateNoteErasureNow(id,space,token.memoryId,token.memoryRevision,(observedAt?:number)=>this.auth(id,observedAt));
     if(prepared.expectedCanonicalRevision!==token.expectedCanonicalRevision||prepared.expectedBindingDigest!==token.expectedBindingDigest||localUseDigest(prepared.witness)!==token.witnessDigest)return fail(409,'rights_conflict');
     const {accountRef:_accountRef,memoryRevision:_memoryRevision,...fields}=token;void _accountRef;void _memoryRevision;
     const o:LocalErasureOperation={...fields,witness:prepared.witness,fingerprint:'0'.repeat(64)};o.fingerprint=erasureFingerprint(accountIdFor(id),o);

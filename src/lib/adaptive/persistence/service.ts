@@ -295,28 +295,29 @@ export class AdaptiveService {
         afterRevision:m.revision+step,afterEpoch:m.revocationEpoch+step,afterStatus:'deleted' as const,sourceRefsDigest:digest(m.sourceRefs??null)};
     });}catch(e){if(AdaptiveError.is(e))throw e;return fail(409,'erasure_lineage_unavailable');}
   }
-  preparePrivateNoteErasureNow(id:number,space:SpaceKind,memoryId:string,revision:number,guard:()=>void) {
-    const check=()=>{validateRuntimeControlEvaluation({value:guard()});};check();
+  preparePrivateNoteErasureNow(id:number,space:SpaceKind,memoryId:string,revision:number,guard:(observedAt?:number)=>void) {
+    const check=(observedAt?:number)=>{validateRuntimeControlEvaluation({value:guard(observedAt)});};check();
     if(!this.privateNoteErasureQualified())return fail(503,'erasure_unsupported');
     const snapshot=this.repository.storage.readCommittedWithoutObservationForEffect!(this.account(id));
     if(snapshot.status!=='ready'||!snapshot.document)return fail(503,'erasure_authority_unavailable');
-    let floor=snapshot.observedAt;check();const now=this.now();
-    if(!Number.isSafeInteger(now)||now<floor)return fail(503,'erasure_clock_unavailable');floor=now;
+    let floor=snapshot.observedAt;check(floor);const now=this.now();
+    if(!Number.isSafeInteger(now)||now<floor)return fail(503,'erasure_clock_unavailable');floor=now;check(now);
     const d=validateAdaptiveDocument(snapshot.document,this.account(id),now);this.requirePerson(d,now);
     const m=d.memories.find(m=>m.id===memoryId && m.space===space);
     if(!m || m.status!=='active' || m.expiresAt<=now || m.origin || m.sourceRefs || m.revision!==revision || !this.authorized(d,space,m,'delete',now))return fail(409,'erasure_selection_changed');
     const value={expectedCanonicalRevision:d.revision,expectedBindingDigest:digest(d.binding),witness:this.erasureWitness(d,memoryId,space),bindingExpiresAt:d.binding!.expiresAt};
-    check();const fresh=this.now();if(!Number.isSafeInteger(fresh)||fresh<floor)return fail(503,'erasure_clock_unavailable');this.requirePerson(d,fresh);
+    check();const fresh=this.now();if(!Number.isSafeInteger(fresh)||fresh<floor)return fail(503,'erasure_clock_unavailable');check(fresh);this.requirePerson(d,fresh);
     if(m.expiresAt<=fresh || !this.authorized(d,space,m,'delete',fresh))return fail(409,'erasure_selection_changed');return value;
   }
-  privateNoteErasureProofNow(id:number,operation:LocalErasureOperation,guard:()=>void):{technical:'unknown'|'not_applied'|'note_content_removed';observedAt:number|null;effectRevision:number|null} {
+  privateNoteErasureProofNow(id:number,operation:LocalErasureOperation,guard:(observedAt?:number)=>void):{technical:'unknown'|'not_applied'|'note_content_removed';observedAt:number|null;effectRevision:number|null} {
     validateRuntimeControlEvaluation({value:guard()});
     if(!this.privateNoteErasureQualified())return {technical:'unknown',observedAt:null,effectRevision:null};
     const snapshot=this.repository.storage.readCommittedWithoutObservationForEffect!(this.account(id));
+    if(snapshot.status==='ready')validateRuntimeControlEvaluation({value:guard(snapshot.observedAt)});
     let checkedDocument:AdaptiveDocument|undefined;
     let clockFloor=snapshot.status==='ready'?snapshot.observedAt:0;
     const read=snapshot.status!=='ready'?snapshot:snapshot.document===null?{status:'missing' as const}:(()=>{
-      const now=this.now();if(!Number.isSafeInteger(now)||now<clockFloor)return fail(503,'erasure_clock_unavailable');clockFloor=now;
+      const now=this.now();if(!Number.isSafeInteger(now)||now<clockFloor)return fail(503,'erasure_clock_unavailable');clockFloor=now;validateRuntimeControlEvaluation({value:guard(now)});
       const d=validateAdaptiveDocument(snapshot.document,this.account(id),now);checkedDocument=d;
       const value=(()=>{
       validateRuntimeControlEvaluation({value:guard()});this.requirePerson(d,now);
@@ -335,6 +336,7 @@ export class AdaptiveService {
     validateRuntimeControlEvaluation({value:guard()});
     if(checkedDocument && snapshot.status==='ready'){
       const fresh=this.now();if(!Number.isSafeInteger(fresh)||fresh<clockFloor)return fail(503,'erasure_clock_unavailable');
+      validateRuntimeControlEvaluation({value:guard(fresh)});
       this.requirePerson(checkedDocument,fresh);
     }
     return read.status==='ready'?read.value:{technical:'unknown',observedAt:null,effectRevision:null};

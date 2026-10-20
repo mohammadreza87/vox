@@ -213,7 +213,8 @@ export class RightsIntakeService {
     this.requirePolicy(now, p);
   }
   private cleanContinuity(d: AccountLedger, now: number): void {
-    d.commandReceipts = d.commandReceipts.filter(r => r.retainUntil > now);
+    const linked=new Set(d.version===4?d.localErasure.operations.flatMap(o=>o.acknowledgement?.recordingAuthority?[o.acknowledgement.recordingAuthority.commandEventId]:[]):[]);
+    d.commandReceipts = d.commandReceipts.filter(r => r.retainUntil > now || linked.has(r.eventId));
     d.tombstones = d.tombstones.filter(t => t.retainUntil > now);
   }
   private receipt(d: AccountLedger, row: RequestRecord, input: { eventId: string; action?: string }, fp: string, now: number, p: RightsPolicy): void {

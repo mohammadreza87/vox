@@ -206,3 +206,25 @@ for(const format of ['file','sqlite'] as const)it(`RF2 sealed revision survives 
  await expect(f.service.reconcilePrivateNoteErasure(999,r.requestId,r.operationHandle,p.eventId,randomUUID())).rejects.toThrow();expect(f.read()).toEqual(before);
  const d=f.repository.read(accountIdFor(101))!;if(d.version!==4)throw Error('missing');expect(d.localErasure.operations[0].acknowledgement).toBeUndefined();
 });
+for(const format of ['file','sqlite'] as const)for(const phase of ['plan','proof','publication'] as const)it(`RF2 cross-layer final clock maximum ${format} ${phase}`,async()=>{
+ const f=await fixture(format);if(phase!=='plan')await f.execute(f.plan());
+ const p=policy();p.expiresAt=RF1_NOW+175;f.setPolicy(p);f.setNow(RF1_NOW+100);
+ const view=phase==='publication'?f.service.privateNoteErasureStatus(101,f.row.requestId,'work'):undefined;
+ const clock=join(f.rightsStorage.directory,'.clock-v1.json'),before=readFileSync(clock,'utf8'),meta=f.storage.readMetadata();let samples=0;
+ vi.spyOn(f.adaptive as unknown as {now:()=>number},'now').mockImplementation(()=>{if(++samples===2){f.setNow(RF1_NOW+150);return RF1_NOW+200;}return RF1_NOW+100;});
+ const observed=vi.spyOn(f.repository,'observeTime');
+ expect(()=>phase==='plan'?f.plan():phase==='proof'?f.service.privateNoteErasureStatus(101,f.row.requestId,'work'):f.service.assertPrivateNoteErasurePublication(101,f.row.requestId,'work',view!)).toThrow();
+ expect(readFileSync(clock,'utf8')).toBe(before);expect(f.storage.readMetadata()).toEqual(meta);expect(observed).not.toHaveBeenCalled();
+});
+for(const format of ['file','sqlite'] as const)for(const action of ['intake','retention'] as const)it(`RF2 retained recording receipt survives cleanup ${format} ${action}`,async()=>{
+ const f=await fixture(format),p=policy();p.localErasure.planLifetimeMs=5;p.localErasure.executionWindowMs=10;p.localErasure.metadataRetentionMs=1000;p.localErasure.replayRetentionMs=1000;p.localErasure.receiptRetentionMs=1000;p.retentionOperations={terminalRetentionMs:1000,continuityRetentionMs:1000};f.setPolicy(p);
+ const plan=f.plan(),transaction=f.repository.transaction.bind(f.repository);let calls=0;
+ vi.spyOn(f.repository,'transaction').mockImplementation(async(...args)=>{if(++calls===2)throw Error('TEST ONLY ACK LOSS');return transaction(...args);});await f.execute(plan);vi.restoreAllMocks();
+ let rows=await f.service.operations(999),r=rows.requests.find(r=>r.requestId===f.row.requestId)!;const recordingEvent=randomUUID();await f.service.reconcilePrivateNoteErasure(999,r.requestId,r.operationHandle,plan.eventId,recordingEvent);
+ const unrelated=randomUUID();await f.repository.transaction(accountIdFor(101),()=>RF1_NOW,d=>{d.commandReceipts.push({eventId:unrelated,fingerprint:'f'.repeat(64),requestId:f.row.requestId,resultingRequestRevision:1,action:'TEST ONLY unrelated expired',recordedAt:RF1_NOW,retainUntil:RF1_NOW+1});d.revision++;},()=>{});
+ const before=f.repository.read(accountIdFor(101))!;if(before.version!==4)throw Error('missing');const receipt=before.commandReceipts.find(c=>c.eventId===recordingEvent),ack=before.localErasure.operations[0].acknowledgement;
+ f.setNow(RF1_NOW+1001);p.revision=2;f.setPolicy(p);
+ if(action==='intake')await f.service.create(101,{version:1,eventId:randomUUID(),space:'work',kind:'correction',locale:'en',expectedIntakePolicyRevision:2});
+ else {rows=await f.service.operations(999);r=rows.requests.find(r=>r.requestId===f.row.requestId)!;await f.service.retentionAction(999,r.requestId,{version:1,eventId:randomUUID(),expectedRevision:r.revision,expectedPolicyRevision:2,action:'reassess_retention',operationHandle:r.operationHandle});}
+ const after=f.repository.read(accountIdFor(101))!;if(after.version!==4)throw Error('missing');expect(after.commandReceipts.find(c=>c.eventId===recordingEvent)).toEqual(receipt);expect(after.localErasure.operations[0].acknowledgement).toEqual(ack);expect(after.commandReceipts.some(c=>c.eventId===unrelated)).toBe(false);
+});

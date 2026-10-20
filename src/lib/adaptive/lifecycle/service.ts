@@ -30,8 +30,8 @@ export class AdaptiveLifecycleService {
     this.relationships = new AdaptiveRelationshipService(adaptive);
   }
   privateNoteErasureQualified():boolean {return this.adaptive.privateNoteErasureQualified();}
-  preparePrivateNoteErasureNow(id:number,space:SpaceKind,memoryId:string,revision:number,guard:()=>void){return this.adaptive.preparePrivateNoteErasureNow(id,space,memoryId,revision,guard);}
-  privateNoteErasureProofNow(id:number,operation:LocalErasureOperation,guard:()=>void){return this.adaptive.privateNoteErasureProofNow(id,operation,guard);}
+  preparePrivateNoteErasureNow(id:number,space:SpaceKind,memoryId:string,revision:number,guard:(observedAt?:number)=>void){return this.adaptive.preparePrivateNoteErasureNow(id,space,memoryId,revision,guard);}
+  privateNoteErasureProofNow(id:number,operation:LocalErasureOperation,guard:(observedAt?:number)=>void){return this.adaptive.privateNoteErasureProofNow(id,operation,guard);}
   eraseSelectedPrivateNote(id:number,operation:LocalErasureOperation,guard:()=>void){return this.adaptive.eraseSelectedPrivateNote(id,operation,guard);}
   private prune(d: AdaptiveDocument, now: number): void {
     const before = digest([d.experience, d.relationships, d.receipts]);
