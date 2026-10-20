@@ -1,6 +1,8 @@
 import { measureStage, observedUsage } from '../../adaptive/observation/trace';
 import { randomUUID } from 'crypto';
 import { rm } from 'fs/promises';
+import { join } from 'path';
+import { FileAdaptiveStorage } from '../../adaptive/persistence/storage';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AdaptiveRepository, accountIdFor } from '../../adaptive/persistence/repository';
 import { AdaptiveService } from '../../adaptive/persistence/service';
@@ -17,7 +19,7 @@ import { ID, hire, makeStudio, seedOrg } from './helpers';
 const TOKEN = '12345:synthetic-learning-test';
 const dirs: string[] = [];
 afterEach(async () => { vi.restoreAllMocks(); await Promise.all(dirs.splice(0).map(dir => rm(dir, { recursive: true, force: true }))); });
-async function setup() {
+async function setup(file = false) {
   const h = makeStudio(); dirs.push(h.dir);
   const org = await seedOrg(h), { agent } = await hire(h, org.alice);
   const now = Date.now();
@@ -26,7 +28,7 @@ async function setup() {
     approvals: ['core_text', 'product_analytics'].map((capability, i) => ({ schemaVersion: 1, id: `test-${i}`, revision: 1, createdAt: now, updatedAt: now,
       jurisdiction: 'SYNTHETIC', capability, state: 'approved', configurationVersion: 'synthetic', effectiveAt: now, reviewExpiresAt: now + 86_400_000,
       owner: 'synthetic', approvalReference: 'synthetic-only' })) });
-  const adaptive = new AdaptiveService(new AdaptiveRepository(new MemoryAdaptiveStorage()), adaptiveOptionsFromManifest(manifest));
+  const adaptive = new AdaptiveService(new AdaptiveRepository(file ? new FileAdaptiveStorage(join(h.dir, 'adaptive')) : new MemoryAdaptiveStorage()), adaptiveOptionsFromManifest(manifest));
   const observer = new AdaptiveObserverService(adaptive), lifecycle = new AdaptiveLifecycleService(adaptive);
   h.studio.deps.observer = observer; h.studio.deps.lifecycle = lifecycle;
   await adaptive.confirm(ID.alice, { confirm: true, adultConfirmed: true });
@@ -118,7 +120,7 @@ describe('Studio observation producers and authenticated learning API', () => {
     expect((await (await request('events', 'POST', body)).json()).recorded).toBe(false);
   });
   it('exports only the confirmed own space and protects operations with fresh role checks', async () => {
-    const { h, adaptive, request } = await setup();
+    const { h, adaptive, request } = await setup(true);
     for (const space of ['work', 'personal'] as const) await adaptive.withAccountDocument(ID.alice, d => { d.memories.push({ id: `memory-${space}`, space,
       revision: 1, text: `PRIVATE_${space}`, status: 'active', createdAt: Date.now(), updatedAt: Date.now(), expiresAt: Date.now() + 60_000, revocationEpoch: 0 }); });
     const exported = await request('export?space=work');
