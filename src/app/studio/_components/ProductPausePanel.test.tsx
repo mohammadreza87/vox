@@ -86,7 +86,7 @@ it('isolates delayed Work commands from Personal and a new authenticated account
 it('never infers unpaused on failed/malformed reads and keeps unsupported legacy availability distinct', async () => {
   const fetcher = vi.fn().mockRejectedValueOnce(new TypeError('network')).mockResolvedValueOnce(Response.json(control('work', { available: false, productPaused: null, useEpoch: null, commandSeq: undefined, canPause: false, canResume: false, reason: 'store_not_prepared' })));
   vi.stubGlobal('fetch', fetcher); mount(); await screen.findByText('The current pause status in Work is unknown.'); expect(screen.queryByRole('button', { name: 'Pause in Work' })).toBeNull();
-  fireEvent.click(screen.getByRole('button', { name: 'Check current status' })); await screen.findByText('Personalization pause is not available for this account’s current storage and connection. No pause has been confirmed here.'); expect(screen.queryByText('Not paused in Work')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Check current status' })); await screen.findByText('Personalization pause is not available for this account yet. No pause has been confirmed here.'); expect(screen.queryByText('Not paused in Work')).toBeNull();
 });
 it.each(['busy', 'denied', 'unavailable', 'missing', 'unknown_future', 'unsupported_transport', undefined])('blocks covered use for an unverified HTTP 200 status (%s)', async reason => {
   vi.stubGlobal('fetch', vi.fn(async () => Response.json(control('work', { available: false, productPaused: null, useEpoch: null,
@@ -103,4 +103,17 @@ it('preserves legacy controls only for an explicitly unprepared store', async ()
   function Probe() { const pause = useProductPause('work', sessionKey); return <output>{pause.phase}:{String(pause.coveredBlocked)}</output>; }
   render(<Probe />);
   await screen.findByText('ready:false');
+});
+
+it.each(['en', 'fa'] as const)('preserves a verified saved pause when %s controls are unavailable without claiming it was never confirmed', async locale => {
+  vi.stubGlobal('fetch', vi.fn(async () => Response.json(control('work', { available: false, productPaused: true, useEpoch: 1, commandSeq: undefined, canPause: false, canResume: false, reason: 'unsupported_transport' }))));
+  mount(locale); const fa = locale === 'fa';
+  expect(await screen.findByText(fa ? 'مکث ذخیره‌شدهٔ شما برقرار است؛ این کنترل‌ها در دسترس نیستند. وضعیت فعلی را بررسی کنید.' : 'Your saved pause remains in place; these controls are unavailable. Check current status.')).toBeVisible();
+  expect(screen.getByText(fa ? 'در فضای کاری مکث شده است' : 'Paused in Work')).toBeVisible(); expect(screen.queryByText(/No pause has been confirmed here|اینجا هیچ مکثی تأیید نشده است/)).toBeNull();
+  expect(screen.queryByRole('button', { name: fa ? 'بررسی ازسرگیری در فضای کاری' : 'Review resume in Work' })).toBeNull(); expect(screen.getByRole('button', { name: fa ? 'بررسی وضعیت فعلی' : 'Check current status' })).toBeEnabled();
+});
+
+it.each(['missing', 'product_pause_unavailable', 'unsupported_transport', 'unsupported_store'])('treats unavailable reason %s as unverified authority rather than proof of legacy storage', async reason => {
+  vi.stubGlobal('fetch', vi.fn(async () => Response.json(control('work', { available: false, productPaused: null, useEpoch: null, commandSeq: undefined, canPause: false, canResume: false, reason }))));
+  mount(); expect(await screen.findByText('Pause status could not be verified. Check current status.')).toBeVisible(); expect(screen.queryByText(/No pause has been confirmed here/)).toBeNull(); expect(screen.queryByText('Not paused in Work')).toBeNull();
 });

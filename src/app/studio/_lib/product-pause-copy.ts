@@ -109,8 +109,12 @@ export const productPauseCopy = {
     "fa": "نیازی به تغییر نبود. وضعیت فعلی فضای {space} نمایش داده می‌شود."
   },
   "unsupported": {
-    "en": "Personalization pause is not available for this account’s current storage and connection. No pause has been confirmed here.",
-    "fa": "مکث شخصی‌سازی برای ذخیره‌سازی و اتصال فعلی این حساب در دسترس نیست. اینجا هیچ مکثی تأیید نشده است."
+    "en": "Personalization pause is not available for this account yet. No pause has been confirmed here.",
+    "fa": "مکث شخصی‌سازی هنوز برای این حساب در دسترس نیست. اینجا هیچ مکثی تأیید نشده است."
+  },
+  "unavailablePaused": {
+    "en": "Your saved pause remains in place; these controls are unavailable. Check current status.",
+    "fa": "مکث ذخیره‌شدهٔ شما برقرار است؛ این کنترل‌ها در دسترس نیستند. وضعیت فعلی را بررسی کنید."
   },
   "unverified": {
     "en": "Pause status could not be verified. Check current status.",

@@ -20,7 +20,7 @@ export function ProductPausePanel({ locale = 'en', sessionKey, onReviewProfile }
   useEffect(() => { if (control.notice === 'stale') { setConfirming(false); status.current?.focus(); } }, [control.notice]);
   const unavailable = control.status && !control.status.available;
   const reason = control.status?.reason;
-  const unprepared = ['store_not_prepared', 'unsupported_store', 'unsupported_transport', 'missing', 'product_pause_unavailable'].includes(reason ?? '');
+  const unprepared = reason === 'store_not_prepared';
   const noticeKey = { unknown: 'unknownOutcome', stale: 'stale', current: 'current', pause: 'pauseSuccess', resume: 'resumeSuccess', unchanged: 'unchanged' } as const;
   const actionStyle = { minHeight: 44, whiteSpace: 'normal' as const, overflowWrap: 'anywhere' as const };
   return <section className="vx-card vx-privacy-card" dir={locale === 'fa' ? 'rtl' : 'ltr'} lang={locale}
@@ -44,7 +44,7 @@ export function ProductPausePanel({ locale = 'en', sessionKey, onReviewProfile }
       </>}
     </p>
     {control.notice && <p role={['unknown', 'stale'].includes(control.notice) ? 'alert' : 'status'}>{copy(noticeKey[control.notice])}</p>}
-    {unavailable && <p role="status">{copy(unprepared ? 'unsupported' : 'unverified')}</p>}
+    {unavailable && <p role="status">{copy(current && paused ? 'unavailablePaused' : current && unprepared ? 'unsupported' : 'unverified')}</p>}
     <div className="vx-privacy-actions" style={{ flexWrap: 'wrap' }}>
       {current && control.status?.available && !paused && <button className="vx-btn vx-btn-secondary" style={actionStyle} disabled={!control.status.canPause}
         onClick={() => { void control.act('pause'); }}>{copy('pause')}</button>}
