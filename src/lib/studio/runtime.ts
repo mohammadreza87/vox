@@ -46,6 +46,16 @@ import { StudioExperimentRuntime } from '../adaptive/experiments/runtime';
  *   STUDIO_WEB_SEARCH        off = agents never search the web (default: on, per-agent toggle)
  *   STUDIO_PERSONA_MODEL     model for persona design (default: stronger Claude model)
  *   STUDIO_ORG_NAME          default HOOR
+ *
+ * Voiceprints (S11L, shadow mode; docs/implementation/VOICE_PROVIDER_INTEGRATION.md):
+ *   STUDIO_VOICE_RECOGNITION=1  voiceprint enrollment and shadow verification; capability
+ *                            approval and biometric consent are still required (default off)
+ *   VOICEPRINT_KEY           base64 of 32 bytes: the dedicated template key. Must never equal
+ *                            or derive from STUDIO_SECRET. Required with the flag; alone it
+ *                            keeps existing templates deletable (status/delete only)
+ *   PYANNOTE_API_KEY         pyannoteAI voiceprint provider (absent = provider unavailable)
+ *   PYANNOTE_BASE_URL        optional https origin (EU residency); default https://api.pyannote.ai
+ *   VOICE_MATCH_THRESHOLDS_JSON  {"default":{match,uncertain,echo},"orgs":{"<org>":{...}}}
  */
 
 import { isAbsolute, join, parse, relative, resolve, sep } from 'path';
@@ -238,7 +248,7 @@ function fileStorage(dir: string, scopedRelationshipsEnabled: boolean, format: A
     return { store, memory: createFileStores(join(dir, 'memory.json')),
     relationshipStore: new FileRelationshipStore(join(dir, 'scoped-relationships-v1.json')), observations: new FileObservationStore(join(dir, 'scoped-relationship-observations-v1.json')),
     adaptive: new AdaptiveService(new AdaptiveRepository(managed.storage),
-      { ...adaptiveOptionsFromManifest(process.env.STUDIO_ADAPTIVE_POLICY_JSON, internalPilotAuthority(store)), scopedRelationshipsEnabled }),
+      { ...adaptiveOptionsFromManifest(process.env.STUDIO_ADAPTIVE_POLICY_JSON, internalPilotAuthority(store)), scopedRelationshipsEnabled, voiceRecognitionEnabled: process.env.STUDIO_VOICE_RECOGNITION === '1' }),
     sharedStorage: new FileAdaptiveStorage(join(dir, 'shared-memory')),
     voiceIdentityStorage: new FileAdaptiveStorage(join(dir, 'voice-identity')),
     maintenanceStorage: new FileAdaptiveStorage(join(dir, 'adaptive-maintenance')), closeAdaptive: managed.close };
@@ -254,7 +264,7 @@ async function firestoreStorage(bucketName: string, scopedRelationshipsEnabled: 
   return {
     store,
     adaptive: new AdaptiveService(new AdaptiveRepository(new FirestoreAdaptiveStorage(db)),
-      { ...adaptiveOptionsFromManifest(process.env.STUDIO_ADAPTIVE_POLICY_JSON, internalPilotAuthority(store)), scopedRelationshipsEnabled }),
+      { ...adaptiveOptionsFromManifest(process.env.STUDIO_ADAPTIVE_POLICY_JSON, internalPilotAuthority(store)), scopedRelationshipsEnabled, voiceRecognitionEnabled: process.env.STUDIO_VOICE_RECOGNITION === '1' }),
     sharedStorage: new FirestoreAdaptiveStorage(db, 'adaptiveSharedMemory'),
     voiceIdentityStorage: new FirestoreAdaptiveStorage(db, 'adaptiveVoiceIdentity'),
     maintenanceStorage: new FirestoreAdaptiveStorage(db, 'adaptiveMaintenance'),
@@ -388,6 +398,18 @@ async function create(): Promise<Studio> {
     storage.adaptive!.setVoiceIdentityInvalidator(async ({ telegramId, space }) => {
       await studio.deps.voiceIdentity!.invalidate(telegramId, space);
     });
+    // S11L: with STUDIO_VOICE_RECOGNITION and VOICEPRINT_KEY unset nothing is wired (base behaviour).
+    const voiceprintIdentity = await import('./identity');
+    const vp = voiceprintIdentity.voiceprintConfigFromEnv(env, { storage: config.storage === 'firestore' ? 'firestore' : 'file', production: config.production });
+    if (vp) {
+      const store = config.storage === 'firestore'
+        ? new voiceprintIdentity.FirestoreVoiceprintStore(await (await import('@/lib/firebase-admin')).getAdminDb())
+        : new voiceprintIdentity.FileVoiceprintStore(join(config.dataDir, 'voiceprints-v1.json'));
+      studio.deps.voiceprints = new voiceprintIdentity.VoiceprintService({ store, cipher: vp.cipher, provider: vp.provider, thresholds: vp.thresholds,
+        orgKey: studio.deps.orgName, adaptive: storage.adaptive!, echoVoices: voiceprintIdentity.echoVoicesFromStudio(studio.deps.store, studio.deps.eleven) });
+      // Keeps the existing VoiceIdentityService invalidation and adds voiceprint deletion.
+      storage.adaptive!.setVoiceIdentityInvalidator(voiceprintIdentity.chainVoiceInvalidators(studio.deps.voiceIdentity!, studio.deps.voiceprints));
+    }
     studio.deps.observer = new AdaptiveObserverService(storage.adaptive!);
     const experimentDirectory = join(config.dataDir, 'controlled-experiments', 'v1');
     const retainedExperiments = config.storage === 'file' && !!lstatSync(join(config.dataDir, 'controlled-experiments'), { throwIfNoEntry: false });

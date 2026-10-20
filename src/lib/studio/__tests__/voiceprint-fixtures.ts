@@ -86,15 +86,17 @@ afterEach(async () => {
 export interface SetupOptions {
   flag?: boolean; approve?: boolean; consent?: boolean; confirm?: boolean; echo?: boolean;
   store?: 'memory' | 'file'; estimator?: ReturnType<typeof fakeEstimator>; thresholds?: VoiceThresholdConfig | null; deadlineMs?: number;
+  telegramId?: number;
 }
 
 export async function setupVoiceprints(o: SetupOptions = {}) {
   const flag = o.flag ?? true, approve = o.approve ?? true;
+  const telegramId = o.telegramId ?? TELEGRAM_ID, personId = `tg-${telegramId}`;
   let now = VP_NOW, event = 0;
   const directory = await mkdtemp(join(tmpdir(), 'vox-voiceprint-')); directories.push(directory);
   const capabilities = ['core_text', ...(approve ? ['biometric_recognition'] : [])];
   const manifest = JSON.stringify({ schemaVersion: 1, configurationVersion: 'synthetic-voiceprint-config', enabledCapabilities: capabilities,
-    accounts: [{ accountId: accountIdFor(TELEGRAM_ID), jurisdictionKeys: ['SYNTHETIC'], allowDeclaredAdult: true }],
+    accounts: [{ accountId: accountIdFor(telegramId), jurisdictionKeys: ['SYNTHETIC'], allowDeclaredAdult: true }],
     approvals: capabilities.map((capability, i) => ({ schemaVersion: 1, id: `synthetic-${i}`, revision: 1, createdAt: VP_NOW, updatedAt: VP_NOW,
       jurisdiction: 'SYNTHETIC', capability, state: 'approved', configurationVersion: 'synthetic-voiceprint-config', effectiveAt: VP_NOW,
       reviewExpiresAt: VP_NOW + 800 * 86400_000, owner: 'synthetic-owner', approvalReference: 'synthetic-only' })) });
@@ -113,28 +115,28 @@ export async function setupVoiceprints(o: SetupOptions = {}) {
   });
   const otherInvalidator = { invalidate: vi.fn(async () => undefined) };
   adaptive.setVoiceIdentityInvalidator(chainVoiceInvalidators(otherInvalidator, service));
-  const confirm = () => adaptive.confirm(TELEGRAM_ID, { confirm: true, adultConfirmed: true, declaredJurisdiction: 'EE' });
+  const confirm = () => adaptive.confirm(telegramId, { confirm: true, adultConfirmed: true, declaredJurisdiction: 'EE' });
   const changeConsent = async (space: 'work' | 'personal' = 'work', state: 'granted' | 'withdrawn' = 'granted') => {
     const purpose = 'optional.biometric_recognition';
-    let current = await adaptive.read(TELEGRAM_ID, space);
+    let current = await adaptive.read(telegramId, space);
     let receipt: string | undefined;
     if (state === 'granted') {
-      const presented = await adaptive.present(TELEGRAM_ID, { space, purpose, locale: 'en', expectedRevision: current.purposes.find(p => p.purpose === purpose)!.revision,
+      const presented = await adaptive.present(telegramId, { space, purpose, locale: 'en', expectedRevision: current.purposes.find(p => p.purpose === purpose)!.revision,
         eventId: `present-voiceprint-${++event}`, deliberateReopen: true });
       receipt = presented.receipt; current = presented;
     }
-    return adaptive.changeConsent(TELEGRAM_ID, { space, purpose, state, expectedRevision: current.purposes.find(p => p.purpose === purpose)!.revision,
+    return adaptive.changeConsent(telegramId, { space, purpose, state, expectedRevision: current.purposes.find(p => p.purpose === purpose)!.revision,
       eventId: `consent-voiceprint-${++event}`, ...(receipt ? { receipt } : {}) });
   };
   const grantAgent = async (agentId: string, space: 'work' | 'personal' = 'work', allowed = true) => {
-    const current = await adaptive.read(TELEGRAM_ID, space);
-    return adaptive.setAgentAccess(TELEGRAM_ID, agentId, { space, allowed, expectedRevision: current.revision, eventId: `agent-voiceprint-${++event}` });
+    const current = await adaptive.read(telegramId, space);
+    return adaptive.setAgentAccess(telegramId, agentId, { space, allowed, expectedRevision: current.revision, eventId: `agent-voiceprint-${++event}` });
   };
   if (o.confirm ?? true) await confirm();
   if (o.consent ?? (flag && approve)) await changeConsent();
   const enroll = (space: 'work' | 'personal' = 'work', audio = speakerAudio('reza', 'enrollment sample')) =>
-    service.enroll({ telegramId: TELEGRAM_ID, personId: PERSON_ID, space, audio, mimeType: 'audio/webm;codecs=opus', channel: 'mini_app' });
-  return { adaptive, store, cipher, provider, estimator, echoVoices, service, directory, otherInvalidator, confirm, changeConsent, grantAgent, enroll,
+    service.enroll({ telegramId: telegramId, personId: personId, space, audio, mimeType: 'audio/webm;codecs=opus', channel: 'mini_app' });
+  return { adaptive, store, cipher, provider, estimator, echoVoices, service, directory, otherInvalidator, confirm, changeConsent, grantAgent, enroll, telegramId, personId,
     setNow: (value: number) => { now = value; }, now: () => now };
 }
 
