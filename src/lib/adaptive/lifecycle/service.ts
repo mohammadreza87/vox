@@ -74,10 +74,11 @@ export class AdaptiveLifecycleService {
       this.prune(d, now);
       const observer = (d as AdaptiveDocument & { observer?: ObserverDocument }).observer;
       const observerEvents = (observer?.events ?? []).filter(e => e.space === space && e.expiresAt > now &&
-        this.adaptive.isPurposeAllowed(d, space, 'optional.product_analytics', now, e.agentId));
+        this.adaptive.isPurposeRetentionAllowed(d, space, 'optional.product_analytics', now, e.agentId));
       return { schemaVersion: 1 as const, accountId: d.accountId, space, generatedAt: now,
         revision: d.revision, confirmedUntil: d.binding!.expiresAt,
-        ...(d.schemaVersion === 2 ? { productPause: structuredClone(d.productPause!.scopes.find(row => row.space === space)) } : {}),
+        ...(d.schemaVersion===3?{rightsUseHolds:{...structuredClone(d.rightsUseHolds!),scopes:d.rightsUseHolds!.scopes.filter(s=>s.space===space),effects:d.rightsUseHolds!.effects.filter(e=>e.space===space)}}:{}),
+        ...(d.schemaVersion >= 2 ? { productPause: structuredClone(d.productPause!.scopes.find(row => row.space === space)) } : {}),
         memories: d.memories.filter(m => m.space === space && m.status === 'active' && m.expiresAt > now)
           .map(m => ({ id: m.id, revision: m.revision, text: m.text!, createdAt: m.createdAt, expiresAt: m.expiresAt })),
         preferences: d.experience.preferences.filter(p => p.space === space).map(p => ({ id: p.id, revision: p.revision,
@@ -106,7 +107,7 @@ export class AdaptiveLifecycleService {
         checkIns: d.relationships.inbox.filter(i => i.key.scope.space === space && i.status !== 'cancelled' && i.expiresAt > now)
           .map(i => ({ id: i.id, agentId: i.key.personaId, text: i.text, status: i.status, createdAt: i.createdAt, expiresAt: i.expiresAt })),
         ...((observer?.corrections ?? []).some(e => e.space === space) ? { observerCorrections: (observer?.corrections ?? []).filter(e => e.space === space && e.expiresAt > now &&
-          this.adaptive.isPurposeAllowed(d, space, 'optional.product_analytics', now)).map(e => ({ version: e.version, trust: e.trust, outcome: e.outcome,
+          this.adaptive.isPurposeRetentionAllowed(d, space, 'optional.product_analytics', now)).map(e => ({ version: e.version, trust: e.trust, outcome: e.outcome,
           mutationEvidence: e.mutationEvidence, occurredAt: e.occurredAt, expiresAt: e.expiresAt })) } : {}),
         observerEvents: observerEvents.map(e => ({ agentId: e.agentId, trust: e.trust, channel: e.channel,
           outcome: e.outcome, durationMs: e.durationMs, occurredAt: e.occurredAt, expiresAt: e.expiresAt, state: e.state })),

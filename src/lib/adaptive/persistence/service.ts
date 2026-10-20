@@ -1,3 +1,4 @@
+import { rightsUseAllowed, rightsUseStamp } from '../rights-use-holds/state';
 import { mayUseStoredPersonalization, productPauseUseStamp } from '../product-pause/state';
 import { randomUUID } from 'crypto';
 import { brandError, publicDomainError } from '../../error-contract';
@@ -124,7 +125,7 @@ export class AdaptiveService {
       voiceInvalidations.length = 0;
       const learningControl = () => digest([d.binding, d.permissions.filter(p => p.purpose === 'optional.personalization'),
         d.agentGrants, d.experience.preferences, d.experience.preferenceLearning?.intents,
-        d.schemaVersion === 2 ? ['work', 'personal'].map(s => productPauseUseStamp(d, s as SpaceKind)) : null]);
+        d.schemaVersion >= 2 ? ['work', 'personal'].map(s => productPauseUseStamp(d, s as SpaceKind)) : null]);
       const priorLearning = learningControl();
       const revokeReminderIdentity = () => {
         for (const space of ['work', 'personal'] as const) {
@@ -181,7 +182,7 @@ export class AdaptiveService {
       for (const memory of d.memories) if (memory.status === 'active' && memory.expiresAt <= now) this.tombstone(d, memory, now, `expiry:${memory.id}`);
       if (purgeInvalidDerivedMemory(d, now)) this.bump(d, now);
       if (sweepObserverDocument(d, now, (doc, space, agentId, time) =>
-        this.isPurposeAllowed(doc, space, 'optional.product_analytics', time, agentId), this.storeIdentity)) this.bump(d, now);
+        this.isPurposeRetentionAllowed(doc, space, 'optional.product_analytics', time, agentId), this.storeIdentity)) this.bump(d, now);
       if (pruneLearningDocument(this, d, now, this.preferenceLearningAuthority ? agentId => this.preferenceLearningAuthority!(telegramId, agentId) : undefined)) this.bump(d, now);
       const value = fn(d, now);
       if (pruneLearningDocument(this, d, now, this.preferenceLearningAuthority ? agentId => this.preferenceLearningAuthority!(telegramId, agentId) : undefined)) this.bump(d, now);
@@ -226,7 +227,7 @@ export class AdaptiveService {
         for (const group of removed.values()) enqueue(group.space, 'source_deleted', group.agentId, group.ids);
       }
       const observerChanged = sweepObserverDocument(d, now, (doc, space, agentId, time) =>
-        this.isPurposeAllowed(doc, space, 'optional.product_analytics', time, agentId), this.storeIdentity);
+        this.isPurposeRetentionAllowed(doc, space, 'optional.product_analytics', time, agentId), this.storeIdentity);
       if ((observerChanged || priorRelationships !== digest(d.relationships)) && d.revision === priorRevision) this.bump(d, now);
       return value;
     }, beforeCommit);
@@ -275,11 +276,14 @@ export class AdaptiveService {
   productPauseTransaction<T>(telegramId: number, fn: (document: AdaptiveDocument, now: number) => T, beforeCommit?: () => void): Promise<T> {
     return this.repository.transaction(this.account(telegramId), this.now, fn, beforeCommit);
   }
+  rightsUseHoldTransaction<T>(telegramId:number,fn:(document:AdaptiveDocument,now:number)=>T,beforeCommit:()=>void):Promise<T> {
+    return this.repository.transaction(this.account(telegramId),this.now,fn,beforeCommit,true);
+  }
   sampleServiceClock(): number { return this.sampleClock(this.now); }
   notifyProductPauseCommitted(telegramId: number): void { this.preferenceLearningInvalidator?.(telegramId); }
   /** Current-input authority never needs stored note/preference/relationship payloads in prepared stores. */
   async withDirectAuthority<T>(telegramId: number, space: SpaceKind, fn: DirectAuthorityEvaluator<T>): Promise<T> {
-    if (this.repository.storage.indexed || this.repository.storage.canonicalSchemaVersion === 2) {
+    if (this.repository.storage.indexed || (this.repository.storage.canonicalSchemaVersion === 2 || this.repository.storage.canonicalSchemaVersion === 3)) {
       const result = this.readDirectAuthorityForEffect(telegramId, space, fn);
       if (result.status !== 'ready') return fail(503, 'adaptive_controls_unavailable');
       return result.value;
@@ -290,9 +294,9 @@ export class AdaptiveService {
   readDirectAuthorityForEffect<T>(telegramId: number, space: SpaceKind, fn: DirectAuthorityEvaluator<T>):
     { status: 'ready'; value: T } | { status: 'busy' | 'unsupported' | 'missing' } {
     const storage = this.repository.storage;
-    if (storage.canonicalSchemaVersion === 2 && !storage.indexed &&
-        (storage.fileAuthorityProjectionVersion !== 1 || !storage.readDirectAuthorityForEffect)) return { status: 'unsupported' };
-    if (storage.canonicalSchemaVersion === 2 && storage.readDirectAuthorityForEffect) {
+    if ((storage.canonicalSchemaVersion === 2 || storage.canonicalSchemaVersion === 3) && !storage.indexed &&
+        (storage.fileAuthorityProjectionVersion !== (storage.canonicalSchemaVersion === 3 ? 2 : 1) || !storage.readDirectAuthorityForEffect)) return { status: 'unsupported' };
+    if ((storage.canonicalSchemaVersion === 2 || storage.canonicalSchemaVersion === 3) && storage.readDirectAuthorityForEffect) {
       try { return storage.readDirectAuthorityForEffect(this.account(telegramId), space, fn); }
       catch { return { status: 'busy' }; }
     }
@@ -383,7 +387,8 @@ export class AdaptiveService {
   isStoredPersonalizationUseAllowed(d: AdaptiveAuthorityDocument, space: SpaceKind): boolean { return mayUseStoredPersonalization(d, space); }
   purposeFingerprint(d: AdaptiveAuthorityDocument, space: SpaceKind, purpose: OptionalPurpose, now: number, agentId?: string): string {
     const retention = this.purposeRetentionFingerprint(d, space, purpose, now, agentId);
-    return d.schemaVersion === 1 || !this.pauseCoveredPurpose(purpose) ? retention : digest([retention, productPauseUseStamp(d, space)]);
+    const paused = d.schemaVersion === 1 || !this.pauseCoveredPurpose(purpose) ? retention : digest([retention, productPauseUseStamp(d, space)]);
+    return d.schemaVersion === 3 && (this.pauseCoveredPurpose(purpose) || purpose==='optional.product_analytics') ? digest([paused, rightsUseStamp(d,space,purpose === 'optional.product_analytics' ? purpose : 'optional.personalization')]) : paused;
   }
   private pauseCoveredPurpose(purpose: OptionalPurpose): boolean {
     return ['optional.personalization', 'optional.auto_memory', 'optional.proactive_suggestions', 'optional.relationship_outreach'].includes(purpose);
@@ -401,7 +406,7 @@ export class AdaptiveService {
   /** Explicit preferences may be saved as a user directive. Applying them to an
    * agent still requires current optional purpose consent and an exact grant. */
   isPurposeAllowed(d: AdaptiveAuthorityDocument, space: SpaceKind, purpose: OptionalPurpose, now: number, agentId?: string): boolean {
-    return (!this.pauseCoveredPurpose(purpose) || this.isStoredPersonalizationUseAllowed(d, space)) &&
+    return rightsUseAllowed(d,space,purpose) && (!['optional.auto_memory','optional.proactive_suggestions','optional.relationship_outreach'].includes(purpose) || rightsUseAllowed(d,space,'optional.personalization')) && (!this.pauseCoveredPurpose(purpose) || this.isStoredPersonalizationUseAllowed(d, space)) &&
       this.isPurposeRetentionAllowed(d, space, purpose, now, agentId);
   }
 
@@ -457,7 +462,7 @@ export class AdaptiveService {
       ...(confirmed ? { personId: d.personId, bindingId: d.binding!.id, bindingRevision: d.binding!.revision,
         bindingExpiresAt: d.binding!.expiresAt, bindingCreatedAt: d.binding!.createdAt,
         bindingUpdatedAt: d.binding!.updatedAt, bindingVerifiedAt: d.binding!.verifiedAt } : {}) },
-      ...(d.schemaVersion === 2 ? { storedPersonalizationUseStamp: productPauseUseStamp(d, space), storedPersonalizationAllowed: this.isStoredPersonalizationUseAllowed(d, space) } : {}),
+      ...(d.schemaVersion >= 2 ? { storedPersonalizationUseStamp: productPauseUseStamp(d, space), storedPersonalizationAllowed: this.isStoredPersonalizationUseAllowed(d, space) } : {}),
       space, revision: d.revision, scope: 'private_account_profile',
       purposes: OPTIONAL_PURPOSES.map(purpose => {
         const permission = this.permission(d, space, purpose), eligibility = this.eligible(d, CAPABILITY[purpose], now);
@@ -729,8 +734,9 @@ export class AdaptiveService {
     const consent = this.permission(d, space, 'optional.auto_memory'), eligible = this.eligible(d, 'auto_memory', now);
     const confirmed = this.confirmed(d, now);
     const parts: unknown[] = [d.accountId, d.binding, confirmed, consent, eligible, d.agentGrants.filter(g => g.space === space && g.agentId === personaId)];
-    if (d.schemaVersion === 2) parts.push(productPauseUseStamp(d, space));
-    return { value: { revision: digest(namespace === 'canonical' ? parts : [namespace, ...parts]), memoryEnabled: false, historyEnabled: false, storedContextAllowed: this.isStoredPersonalizationUseAllowed(d, space) },
+    if (d.schemaVersion >= 2) parts.push(productPauseUseStamp(d, space));
+    if(d.schemaVersion===3)parts.push(rightsUseStamp(d,space,'optional.personalization'));
+    return { value: { revision: digest(namespace === 'canonical' ? parts : [namespace, ...parts]), memoryEnabled: false, historyEnabled: false, storedContextAllowed: this.isStoredPersonalizationUseAllowed(d, space) && rightsUseAllowed(d,space,'optional.personalization') },
       denied: !confirmed, observedDenial: !eligible.eligible || consent.state === 'granted' && consent.expiresAt <= now,
       ...(confirmed ? { deadline: Math.min(d.binding!.expiresAt, eligible.validUntil ?? INFINITY) } : {}) };
   }
@@ -739,7 +745,7 @@ export class AdaptiveService {
     read: async (personaId: string, legacyPersonId: string, space: SpaceKind = 'work'): Promise<{ revision: string; memoryEnabled: boolean; historyEnabled: boolean; storedContextAllowed: boolean }> => {
       const match = /^tg-([1-9]\d*)$/.exec(legacyPersonId);
       if (!match) return { revision: 'unconfirmed', memoryEnabled: false, historyEnabled: false, storedContextAllowed: false };
-      if (this.repository.storage.indexed || this.repository.storage.canonicalSchemaVersion === 2) return this.withDirectAuthority(Number(match[1]), space,
+      if (this.repository.storage.indexed || (this.repository.storage.canonicalSchemaVersion === 2 || this.repository.storage.canonicalSchemaVersion === 3)) return this.withDirectAuthority(Number(match[1]), space,
         (d, now, namespace) => this.runtimePrivacyEvaluation(d, now, namespace, personaId, space));
       return this.transact(Number(match[1]), (d, now) => this.runtimePrivacyEvaluation(d, now, this.storeIdentity, personaId, space).value);
     },
@@ -767,7 +773,7 @@ export class AdaptiveService {
     const permission = this.permission(d, space, 'optional.personalization');
     const eligibility = this.eligible(d, 'personalization', now);
     const confirmed = this.confirmed(d, now);
-    const allowed = confirmed && permission.state === 'granted' && permission.expiresAt > now && eligibility.eligible && this.isStoredPersonalizationUseAllowed(d, space);
+    const allowed = confirmed && permission.state === 'granted' && permission.expiresAt > now && eligibility.eligible && this.isStoredPersonalizationUseAllowed(d, space) && rightsUseAllowed(d,space,'optional.personalization');
     const authorized = allowed ? d.memories.filter(m => this.authorized(d, space, m, 'read', now, agentId)) : [];
     const byId = new Map(authorized.map(memory => [memory.id, memory]));
     const claimOrigins = this.reviewedClaimOrigins(authorized);
@@ -783,7 +789,7 @@ export class AdaptiveService {
     const revision = digest([d.accountId, d.personId, space, agentId, d.binding, confirmed, permission, allowed, eligibility,
       d.agentGrants.filter(g => g.space === space && g.agentId === agentId),
       authorized.map(m => [m.id, m.revision, m.expiresAt, m.revocationEpoch, m.sourceRefs, m.origin]),
-      ...(d.schemaVersion === 2 ? [productPauseUseStamp(d, space)] : [])]);
+      ...(d.schemaVersion >= 2 ? [productPauseUseStamp(d, space)] : []), ...(d.schemaVersion===3?[rightsUseStamp(d,space,'optional.personalization')]:[])]);
     return { revision: this.storeIdentity === 'canonical' ? revision : digest([this.storeIdentity, revision]),
       memories: authorized.map(m => {
         const sourceIds = m.sourceRefs ? ancestors(m) : undefined;

@@ -34,7 +34,7 @@ export type ProductPauseUseControlsV1 = z.infer<typeof productPauseUseControlsSc
 export type ProductPauseCommandV1 = z.infer<typeof productPauseCommandSchema>;
 export type ProductPauseReceiptV1 = z.infer<typeof productPauseReceiptSchema>;
 /** Server-projected facts, never command or receipt authority. Missing/unknown v2 fails closed. */
-export type ProductPauseAuthority = { schemaVersion: 1 | 2; productPause?: ProductPauseV1 | ProductPauseUseControlsV1 };
+export type ProductPauseAuthority = { schemaVersion: 1 | 2 | 3; productPause?: ProductPauseV1 | ProductPauseUseControlsV1 };
 export interface ProductPauseStatus { version: 1; accountId: string; space: 'work' | 'personal'; available: boolean;
   productPaused: boolean | null; useEpoch: number | null; commandSeq?: number; latest?: ProductPauseReceiptV1; reason?: string; canPause: boolean; canResume: boolean }
 export interface ProductPauseCommandResult { status: ProductPauseStatus; receipt: ProductPauseReceiptV1; replayed: boolean }

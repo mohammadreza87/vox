@@ -1,3 +1,4 @@
+import { rightsUseAllowed, rightsUseStamp } from '../rights-use-holds/state';
 import { productPauseUseStamp } from '../product-pause/state';
 import { randomUUID } from 'crypto';
 import type { RelationshipKey } from '../../relationships/types';
@@ -47,8 +48,8 @@ export class AdaptiveRelationshipService {
     return !!permission && permission.state === 'granted' && permission.effectiveAt <= now && permission.expiresAt > now &&
       grants.length === 1 && grants[0].allowed && this.adaptive.capabilityStatus(d, capability, now).eligible;
   }
-  private permit(d: RelationshipAuthority, agentId: string, space: SpaceKind, now: number, retained = false): RelationshipPermit | null {
-    if (!retained && !this.adaptive.isStoredPersonalizationUseAllowed(d, space)) return null;
+  private permit(d: RelationshipAuthority, agentId: string, space: SpaceKind, now: number, retained = false, retentionStoreIdentity?:string): RelationshipPermit | null {
+    if (!retained && (!this.adaptive.isStoredPersonalizationUseAllowed(d, space) || !rightsUseAllowed(d,space,'optional.personalization'))) return null;
     const bindings = d.relationships.bindings.filter(b => b.space === space);
     const binding = bindings.length === 1 ? bindings[0] : null;
     if (!validId(agentId) || !['work', 'personal'].includes(space) || !this.adaptive.capabilityStatus(d, 'core_text', now).eligible || !binding || binding.status !== 'active' || binding.expiresAt <= now || binding.confirmedAt > now || binding.accountId !== d.accountId || binding.personId !== d.personId ||
@@ -58,10 +59,12 @@ export class AdaptiveRelationshipService {
     const key: RelationshipKey = { personaId: agentId, chatKey: `private-${d.personId}`, audience: { kind: 'private', personId: d.personId }, scope };
     const sourceAuthority = [scope, binding, this.adaptive.capabilityStatus(d, 'core_text', now), PURPOSES.map(p => [d.permissions.find(c => c.spaceId === scope.spaceId && c.purpose === p), this.adaptive.capabilityStatus(d, p === 'optional.auto_memory' ? 'auto_memory' : p === 'optional.personalization' ? 'personalization' : 'proactive_suggestions', now)]), d.agentGrants.filter(g => g.space === space && g.agentId === agentId)];
     // Preserve original FILE hashes; managed receipts bind each store incarnation.
-    const sourceFence = digest(this.adaptive.storeIdentity !== 'canonical' ? [...sourceAuthority, this.adaptive.storeIdentity] : sourceAuthority);
+    const sourceNamespace=retained && d.schemaVersion===3 ? retentionStoreIdentity : this.adaptive.storeIdentity;
+    if(!sourceNamespace)return null;
+    const sourceFence = digest(sourceNamespace !== 'canonical' ? [...sourceAuthority, sourceNamespace] : sourceAuthority);
     const settings = d.experience.settings;
     const external = d.relationships.externalSettings;
-    const fingerprint = digest([sourceFence, settings, external, d.relationships.controls.filter(c => c.agentId === agentId && c.space === space), [d.permissions.find(p => p.spaceId === scope.spaceId && p.purpose === 'optional.relationship_outreach'), this.adaptive.capabilityStatus(d, 'relationship_outreach', now)], ...(d.schemaVersion === 2 ? [productPauseUseStamp(d, space)] : [])]);
+    const fingerprint = digest([sourceFence, settings, external, d.relationships.controls.filter(c => c.agentId === agentId && c.space === space), [d.permissions.find(p => p.spaceId === scope.spaceId && p.purpose === 'optional.relationship_outreach'), this.adaptive.capabilityStatus(d, 'relationship_outreach', now)], ...(d.schemaVersion >= 2 ? [productPauseUseStamp(d, space)] : []), ...(d.schemaVersion===3?[rightsUseStamp(d,space,'optional.personalization')]:[])]);
     const expiry = [binding.expiresAt, ...PURPOSES.map(p => d.permissions.find(c => c.spaceId === scope.spaceId && c.purpose === p)!.expiresAt),
       ...(['core_text', 'auto_memory', 'personalization', 'proactive_suggestions'] as const).map(c => this.adaptive.capabilityStatus(d, c, now).validUntil ?? now)];
     return { key, fingerprint, sourceFence, expiresAt: Math.min(...expiry), notification: { settingsRevision: settings.revision,
@@ -76,7 +79,7 @@ export class AdaptiveRelationshipService {
     if (!permit || !sameKey(permit.key, key) || (expected !== undefined && permit.fingerprint !== expected)) return null;
     for (const id of sourceIds) {
       const matches = d.relationships.sources.filter(s => s.id === id && sameKey(s.key, key));
-      if (matches.length !== 1 || matches[0].status !== 'active' || matches[0].expiresAt <= now || matches[0].createdAt > now || matches[0].sourceFence !== permit.sourceFence) return null;
+      if (matches.length !== 1 || matches[0].status !== 'active' || matches[0].expiresAt <= now || matches[0].createdAt > now || matches[0].sourceFence !== this.permit(d,key.personaId,parsed.data.scope.space,now,true,matches[0].retentionStoreIdentity)?.sourceFence) return null;
     }
     const control = d.relationships.controls.find(c => c.agentId === key.personaId && c.space === parsed.data.scope.space);
     if (phase !== 'context' && control && (control.disabled || (control.pausedUntil !== undefined && control.pausedUntil > now))) return null;
@@ -97,18 +100,18 @@ export class AdaptiveRelationshipService {
     const telegramId = telegramFor(key); if (telegramId === null) return 'invalid_source';
     const space = scopedRelationshipKeySchema.parse(key).scope.space;
     const evaluate = (d: RelationshipAuthority, now: number) => {
-      const permit = this.permit(d, key.personaId, space, now, true);
+      const permit = this.permit(d, key.personaId, space, now, true,this.adaptive.storeIdentity);
       return permit && sameKey(permit.key, key) && sourceIds.every(id => d.relationships.sources.some(s =>
-        s.id === id && sameKey(s.key, key) && s.status === 'active' && s.createdAt <= now && s.expiresAt > now && s.sourceFence === permit.sourceFence)) ? 'suspended_use' as const : 'invalid_source' as const;
+        s.id === id && sameKey(s.key, key) && s.status === 'active' && s.createdAt <= now && s.expiresAt > now && s.sourceFence === this.permit(d,key.personaId,space,now,true,s.retentionStoreIdentity)?.sourceFence)) ? 'suspended_use' as const : 'invalid_source' as const;
     };
     if (this.adaptive.repository.storage.indexed) return this.adaptive.withRuntimeControls(telegramId, space, (d, now) => ({ value: evaluate(d, now), denied: true }));
     return this.adaptive.withAccountDocument(telegramId, evaluate);
   }
   /** Reject paused use before reading relationship controls/sources from canonical FILE. */
   private pausedUse(telegramId: number, space: SpaceKind): boolean {
-    if (this.adaptive.repository.storage.canonicalSchemaVersion !== 2) return false;
+    if (![2,3].includes(this.adaptive.repository.storage.canonicalSchemaVersion??1)) return false;
     const state = this.adaptive.readDirectAuthorityForEffect(telegramId, space, (d, now) => ({
-      value: !this.adaptive.isStoredPersonalizationUseAllowed(d, space), denied: true,
+      value: !this.adaptive.isStoredPersonalizationUseAllowed(d, space) || !rightsUseAllowed(d,space,'optional.personalization'), denied: true,
       observedDenial: !this.adaptive.isProfileConfirmed(d, now),
     }));
     return state.status !== 'ready' || state.value;
@@ -170,7 +173,7 @@ export class AdaptiveRelationshipService {
       if (prior) return prior.status === 'active' && prior.eventFingerprint === eventFingerprint && prior.sourceFence === current.sourceFence ? this.source(prior) : null;
       if (d.relationships.sources.length >= 500) return null;
       const source = { id: input.id, revision: 1, createdAt: input.at, expiresAt: input.at + 90 * DAY, status: 'active' as const,
-        sourceFence: current.sourceFence, channel: input.channel, ...(input.endpointId !== undefined ? { endpointId: input.endpointId } : {}), key: scopedRelationshipKeySchema.parse(current.key), eventFingerprint };
+        ...(d.schemaVersion===3?{retentionStoreIdentity:this.adaptive.storeIdentity}:{}), sourceFence: current.sourceFence, channel: input.channel, ...(input.endpointId !== undefined ? { endpointId: input.endpointId } : {}), key: scopedRelationshipKeySchema.parse(current.key), eventFingerprint };
       d.relationships.sources.push(source); d.revision++; d.updatedAt = now;
       return this.source(source);
     });
