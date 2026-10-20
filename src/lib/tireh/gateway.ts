@@ -25,7 +25,7 @@ import { selectAdaptiveContext } from './memory/adaptive-context';
 import { lineageEventIds } from './memory/store';
 import { selectMemories } from './memory/retrieval';
 import { decideScope, extractCandidates, resolveCandidateSource, firstNewIndex } from './memory/extraction';
-import { canPersonSee, describeScope, isVisibleToAudience, audienceOf, historyMessageForChat, selectHistoryForChat, snapshotScopeAudience } from './memory/visibility';
+import { canPersonSee, describeScope, hasGuestAudience, isVisibleToAudience, audienceOf, historyMessageForChat, selectHistoryForChat, snapshotScopeAudience } from './memory/visibility';
 import { groupAddressing } from './group-addressing';
 import { logTelegramDiagnostic, voiceFailureDiagnostic } from './telegram/diagnostics';
 
@@ -120,6 +120,7 @@ export type HandleResult =
 const HISTORY_LIMIT = 20;
 const EXTRACTION_WINDOW = 6;
 const GROUP_FORMAT_FOLLOWUP_MS = 2 * 60_000;
+const GUEST_VOICE_REPLY = 'I only read typed messages here, so I did not listen to that voice message. Could you type it instead?';
 const NO_MEMORY = /(?:do not|don't|don’t)\s+(?:remember|save|store)|forget (?:this|that)|ذخیره نکن|به خاطر نسپار|یادت نماند|فراموش کن/iu;
 
 export class PersonaGateway {
@@ -323,7 +324,15 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     // to avoid paying for every voice message in the group.
     let text = rawText;
     const isVoice = Boolean(message.voice);
-    if (isVoice && addressed) {
+    if (isVoice && addressed && hasGuestAudience(org, chat)) {
+      // PRIV-023: audio from a guest, or heard in a group with guests or unknown
+      // readers, never enters the provider path. Only a typed caption is used.
+      if (!rawText.trim()) {
+        if (!(await this.groupAllowed(persona, chat, speaker.id, 'reply'))) return 'ignored';
+        await bot.sendMessage(message.chat.id, GUEST_VOICE_REPLY, { replyTo: message.message_id });
+        return 'replied';
+      }
+    } else if (isVoice && addressed) {
       text = await this.transcribe(bot, message, persona, chat, speaker.id);
       if (!text) {
         if (!(await this.groupAllowed(persona, chat, speaker.id, 'reply'))) return 'ignored';
@@ -725,7 +734,8 @@ You are on a live voice call. Answer in one to three short spoken sentences. No 
   }
 
   private async transcribe(bot: TelegramBotClient, message: TelegramMessage, persona: Persona, chat: ChatContext, speakerId: string): Promise<string> {
-    if (!this.deps.voice || !message.voice) return '';
+    // Backstop for PRIV-023: no download and no speech-to-text when a guest can hear.
+    if (!this.deps.voice || !message.voice || hasGuestAudience(this.deps.org, chat)) return '';
     try {
       const audio = await bot.downloadFile(message.voice.file_id);
       if (!(await this.groupAllowed(persona, chat, speakerId, 'reply'))) return '';

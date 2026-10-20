@@ -430,3 +430,48 @@ describe('combined voice delivery and privacy epoch fences', () => {
     expect(ctx.llm.extractionCalls).toBe(0);
   });
 });
+
+describe('guest audiences never reach speech-to-text (PRIV-023)', () => {
+  const voice = { file_id: 'synthetic-voice-file', duration: 3, mime_type: 'audio/ogg' };
+  const addressedGroupVoice = (extra: Record<string, unknown> = {}) => groupText(GAMEEND_CHAT, TG.milad, '', {
+    text: undefined, voice,
+    reply_to_message: { message_id: 1, date: 0, chat: { id: GAMEEND_CHAT, type: 'supergroup' }, from: { id: 42, is_bot: true, first_name: 'Aria', username: 'hoor_aria_bot' } },
+    ...extra,
+  });
+
+  it('transcribes an addressed group voice note when every reader is a known member (control)', async () => {
+    const ctx = setup();
+    expect(await ctx.gateway.handleUpdate('aria', addressedGroupVoice())).toBe('replied');
+    expect(ctx.bot.downloadFile).toHaveBeenCalledTimes(1);
+    expect(ctx.voice.transcribe).toHaveBeenCalledTimes(1);
+  });
+
+  it('never downloads or transcribes an addressed voice note in a group flagged hasGuests', async () => {
+    const ctx = setup();
+    ctx.org.getGroupByChatId(GAMEEND_CHAT)!.hasGuests = true;
+    const update = addressedGroupVoice();
+    expect(await ctx.gateway.handleUpdate('aria', update)).toBe('replied');
+    expect(ctx.bot.downloadFile).not.toHaveBeenCalled();
+    expect(ctx.voice.transcribe).not.toHaveBeenCalled();
+    expect(ctx.llm.replyPrompts).toEqual([]);
+    expect(ctx.bot.sendMessage).toHaveBeenCalledExactlyOnceWith(GAMEEND_CHAT, expect.stringContaining('Could you type it instead?'), { replyTo: update.message!.message_id });
+  });
+
+  it('answers a typed caption in a hasGuests group from the caption alone', async () => {
+    const ctx = setup();
+    ctx.org.getGroupByChatId(GAMEEND_CHAT)!.hasGuests = true;
+    expect(await ctx.gateway.handleUpdate('aria', addressedGroupVoice({ caption: 'Aria, when is the meeting?' }))).toBe('replied');
+    expect(ctx.bot.downloadFile).not.toHaveBeenCalled();
+    expect(ctx.voice.transcribe).not.toHaveBeenCalled();
+    expect(ctx.llm.replyRequests.at(-1)?.messages.at(-1)).toEqual({ role: 'user', content: 'Milad: Aria, when is the meeting?' });
+  });
+
+  it('never downloads or transcribes a private voice note from a guest speaker', async () => {
+    const ctx = setup();
+    ctx.org.getPerson('sina')!.guest = true;
+    expect(await ctx.gateway.handleUpdate('aria', privateVoice(TG.sina))).toBe('replied');
+    expect(ctx.bot.downloadFile).not.toHaveBeenCalled();
+    expect(ctx.voice.transcribe).not.toHaveBeenCalled();
+    expect(ctx.bot.sendMessage).toHaveBeenCalledExactlyOnceWith(TG.sina, expect.stringContaining('Could you type it instead?'), expect.anything());
+  });
+});
