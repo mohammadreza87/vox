@@ -204,20 +204,27 @@ test('v4 retains the 65,536-byte UTF-8 bound without truncating or rewriting inp
 test('actual install/rollback refuse old, missing and corrupt v4 capability before any effects, even for empty v4', () => fixture(ledger(false), f => {
   const project = join(f.dir, 'source'), scripts = join(project, 'scripts'), production = join(f.dir, 'production'), bin = join(f.dir, 'bin');
   for (const path of [scripts, production, bin]) mkdirSync(path, { recursive: true });
-  for (const name of ['studio-production.mjs', 'studio-adaptive-compatibility.mjs']) cpSync(new URL(name, import.meta.url), join(scripts, name));
+  for (const name of ['studio-production.mjs', 'studio-adaptive-compatibility.mjs', 'studio-operation-guard.mjs']) cpSync(new URL(name, import.meta.url), join(scripts, name));
   writeFileSync(join(project, '.gitignore'), '.next/\n');
   const git = (...args) => { const r = spawnSync('git', args, { cwd: project, encoding: 'utf8' }); assert.equal(r.status, 0, r.stderr); return r.stdout.trim(); };
   git('init', '-q'); git('add', '.'); git('-c', 'user.name=Vox fixture', '-c', 'user.email=fixture@invalid.test', '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', 'commit', '-qm', 'synthetic RF2 release');
   mkdirSync(join(project, '.next', 'standalone', '.next'), { recursive: true }); writeFileSync(join(project, '.next', 'standalone', 'server.js'), 'throw new Error("must not start");');
   for (const path of [join(project, '.next'), join(project, '.next', 'standalone', '.next')]) writeFileSync(join(path, 'BUILD_ID'), metadata.buildId);
   const current = join(production, 'current-release'), previous = join(production, 'previous-release');
-  for (const path of [current, previous]) { mkdirSync(path); writeFileSync(join(path, 'server.js'), 'synthetic'); }
+  for (const path of [current, previous]) {
+    mkdirSync(join(path, '.next'), { recursive: true }); writeFileSync(join(path, 'server.js'), 'synthetic');
+    writeFileSync(join(path, 'revision'), metadata.revision);
+    writeFileSync(join(path, '.next', 'BUILD_ID'), metadata.buildId);
+    writeFileSync(join(path, 'studio-release.json'), JSON.stringify({ ...metadata, ...capabilities }));
+  }
   symlinkSync(current, join(production, 'current')); writeFileSync(join(production, 'previous'), previous);
   writeFileSync(join(production, 'production.env'), `STUDIO_DATA_DIR='${f.env.STUDIO_DATA_DIR}'\nSTUDIO_ADAPTIVE_FORMAT='file'\n`);
   const signal = join(f.dir, 'unexpected-effect'), guard = join(f.dir, 'guard.mjs');
   writeFileSync(join(bin, 'launchctl'), `#!/bin/sh\nprintf called >> '${signal}'\nexit 1\n`, { mode: 0o700 });
   writeFileSync(guard, `import{appendFileSync}from'node:fs';import net from'node:net';import http from'node:http';import https from'node:https';import{syncBuiltinESMExports}from'node:module';const deny=()=>{appendFileSync(${JSON.stringify(signal)},'effect');throw Error('synthetic effect denied')};globalThis.fetch=async()=>deny();net.createConnection=deny;net.connect=deny;http.request=deny;https.request=deny;syncBuiltinESMExports();`);
-  const invoke = command => spawnSync(process.execPath, ['--import', guard, join(scripts, 'studio-production.mjs'), command], { cwd: project, env: { PATH: `${bin}:${process.env.PATH}`, VOX_PRODUCTION_DIR: production }, encoding: 'utf8', timeout: 10000 });
+  const invoke = command => spawnSync(process.execPath, ['--import', guard, join(scripts, 'studio-production.mjs'), command,
+    '--expect-current', realpathSync(current), '--expect-revision', metadata.revision, '--expect-build', metadata.buildId],
+  { cwd: project, env: { PATH: `${bin}:${process.env.PATH}`, VOX_PRODUCTION_DIR: production }, encoding: 'utf8', timeout: 10000 });
   const { supportedRightsLedgerVersions: omitted, ...without } = capabilities; assert.ok(omitted.includes(4));
   for (const fields of [without, { ...capabilities, supportedRightsLedgerVersions: [1, 2, 3] }, { ...capabilities, supportedRightsLedgerVersions: null }, { ...capabilities, supportedRightsLedgerVersions: [4, 4] }]) {
     writeFileSync(join(project, '.next', 'studio-release.json'), JSON.stringify({ ...metadata, revision: git('rev-parse', 'HEAD'), sourceTree: git('rev-parse', 'HEAD^{tree}'), ...fields }));
@@ -227,7 +234,9 @@ test('actual install/rollback refuse old, missing and corrupt v4 capability befo
     assert.equal(realpathSync(join(production, 'current')), realpathSync(current));
   }
   rmSync(join(previous, 'studio-release.json')); assert.equal(readInstalledReleaseManifest(previous), null);
-  assert.match(invoke('rollback').stderr, /Adaptive storage is incompatible/);
+  const missing = invoke('rollback'); assert.equal(missing.status, 1);
+  assert.match(missing.stderr, /ENOENT/); assert.match(missing.stderr, /studio-release\.json/);
   writeFileSync(join(previous, 'studio-release.json'), '{'); assert.throws(() => readInstalledReleaseManifest(previous), /incompatible/);
-  assert.match(invoke('rollback').stderr, /Adaptive storage is incompatible/); assert.equal(existsSync(signal), false);
+  const corrupt = invoke('rollback'); assert.equal(corrupt.status, 1);
+  assert.match(corrupt.stderr, /Invalid installed release manifest/); assert.equal(existsSync(signal), false);
 }));
