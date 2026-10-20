@@ -5,9 +5,9 @@
 ### Scope: VOX-032/036-FB0
 
 A delayed read could change a dismissed suggestion or relationship check-in back
-to `read`. Dismissal had already cleared the message, so the item could return as
-an empty card. Runtime usefulness feedback could also change a dismissed item's
-recorded outcome.
+to `read`. For relationship check-ins, dismissal had already cleared the message,
+so the item could return as an empty card. Runtime usefulness feedback could also
+change a dismissed item's recorded outcome.
 
 Dismissed items now remain dismissed. Later read, usefulness and repeated dismiss
 commands succeed without changing the item's status, revision or feedback.
@@ -56,8 +56,8 @@ silence, a generic notification or an unrelated user reply.
 ### محدوده: VOX-032/036-FB0
 
 یک درخواست دیررس برای خواندن می‌توانست وضعیت پیشنهاد یا پیگیری ردشده را دوباره
-به `read` تغییر دهد. چون ردکردن، متن پیام را پاک کرده بود، کارت ممکن بود بدون
-متن دوباره ظاهر شود. بازخورد مفیدبودن در سرویس runtime نیز می‌توانست نتیجهٔ
+به `read` تغییر دهد. در پیگیری‌های رابطه، چون ردکردن متن پیام را پاک کرده بود،
+کارت ممکن بود بدون متن دوباره ظاهر شود. بازخورد مفیدبودن در سرویس runtime نیز می‌توانست نتیجهٔ
 ثبت‌شدهٔ یک مورد ردشده را تغییر دهد.
 
 اکنون مورد ردشده در همان وضعیت باقی می‌ماند. درخواست‌های بعدی برای خواندن،
