@@ -42,8 +42,10 @@ export function projectInventory(raw, project, forbidden = []) {
     // Provider metadata is deliberately never copied to output, including URL/release/user fields.
     if (!object(item) || typeof item.name !== 'string' || item.name.length > 200) fail('INVALID_CHANNEL');
     const prefix = `sites/${project}/channels/`;
-    if (!item.name.startsWith(prefix)) fail(scopeFailure(item.name, project));
-    const id = item.name.slice(prefix.length);
+    const qualifiedPrefix = `projects/${project}/sites/${project}/channels/`;
+    const matchedPrefix = [prefix, qualifiedPrefix].find((candidate) => item.name.startsWith(candidate));
+    if (!matchedPrefix) fail(scopeFailure(item.name, project));
+    const id = item.name.slice(matchedPrefix.length);
     if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(id) || seen.has(id) || forbidden.some((s) => s && id.includes(s))) fail('UNSAFE_CHANNEL');
     seen.add(id);
     if (id === 'live') { liveCount++; continue; }
