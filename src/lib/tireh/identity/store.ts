@@ -159,16 +159,16 @@ export function createFileStyleProfileStore(path: string): StyleProfileStore {
     return dropped;
   };
 
+  let directoryReady = false;
   const save = () => {
     const state: StyleProfileFile = { version: 1, profiles: [...memory.rows.values()] };
-    mkdirSync(dirname(path), { recursive: true });
     writeFileSync(`${path}.tmp`, JSON.stringify(state), { mode: 0o600 });
     chmodSync(`${path}.tmp`, 0o600);
     renameSync(`${path}.tmp`, path);
   };
 
   const withLock = async <T>(operation: () => Promise<T>, mutates: boolean): Promise<T> => {
-    mkdirSync(dirname(path), { recursive: true });
+    if (!directoryReady) { mkdirSync(dirname(path), { recursive: true }); directoryReady = true; }
     let acquired = false;
     for (let attempts = 0; attempts < 500; attempts++) {
       try { await mkdir(`${path}.lock`); acquired = true; break; }
