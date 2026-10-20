@@ -192,6 +192,9 @@ jobs:
         env:
           CONVERSATION_E2E_PRODUCTION: '1'
 
+      - name: Run observation and correction production browser journeys
+        run: npx playwright test --config=playwright.observation.config.ts
+
       # All production journeys must run before the general suite starts next dev,
       # which replaces .next and removes the downloaded production BUILD_ID.
       - name: Run Connections production browser fixtures
