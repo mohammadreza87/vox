@@ -10,6 +10,7 @@ import { useProductPause } from '../_lib/product-pause-client';
 import { pauseText } from '../_lib/product-pause-copy';
 import { tg, request as studioRequest } from '../_lib/client';
 import { preferenceLearningApi } from '../_lib/preference-learning-client';
+import { Icon, Spinner } from './ui';
 
 /** Typed fallback and explicit image sharing use the same scoped agent context
  * as calls. Draft processing is a separate, off-by-default user choice. */
@@ -135,37 +136,59 @@ export function ConversationPanel({ agentId, space, locale = 'en', disabled = fa
       if (generation.current === current) { setBusy(false); if (completed && !disabled) startPredictionTurn(); }
     }
   };
-  return <section className="vx-card vx-privacy-card" dir={fa ? 'rtl' : 'ltr'} lang={locale}
+  return <section className="vx-chat" dir={fa ? 'rtl' : 'ltr'} lang={locale}
     aria-label={t('Type or share an image', 'تایپ یا اشتراک تصویر')} aria-busy={busy || loadingImage}>
-    <h2 className="vx-head">{t('Type or share an image', 'تایپ یا اشتراک تصویر')}</h2>
-    {paused && <p className="vx-small" role="status">{pauseText(locale, space, 'conversation')}</p>}
-    <p className="vx-small vx-2">{paused ? pauseText(locale, space, 'history') : t('Uses the memories allowed in this space. Images are sent only for this turn; Vox does not save the image.', 'از حافظه‌های مجاز این فضا استفاده می‌کند. تصویر فقط برای همین نوبت ارسال می‌شود؛ وکس تصویر را ذخیره نمی‌کند.')}</p>
-    <div role="log" aria-label={t('Conversation', 'گفتگو')} aria-live="polite" style={{ maxHeight: 220, overflowY: 'auto', overflowWrap: 'anywhere' }}>
-      {lines.map((line, i) => <div key={i}><p className="vx-small"><strong>{line.role === 'you' ? t('You: ', 'شما: ') : t('Agent: ', 'عامل: ')}</strong>{line.role === 'agent' ? <CommittedReply line={line} agentId={agentId} space={space} current={() => !disabled && line.epoch === generation.current && line.session === (tg()?.initData ?? '')} /> : line.text}</p>
-        {line.role === 'you' && <button className="vx-btn vx-btn-secondary vx-btn-sm" aria-describedby={historicBlocked ? 'vox-historic-review-reason' : undefined} disabled={busy || disabled || historicBlocked} onClick={() => { setMemoryStatus(''); setReviewText({ text: line.text, agentId, space }); }}>{t('Review this text for memory', 'بررسی این متن برای حافظه')}</button>}</div>)}
+    <div role="log" aria-label={t('Conversation', 'گفتگو')} aria-live="polite" className="vx-chat-log">
+      <div className="vx-chat-intro">
+        {paused && <p className="vx-small" role="status">{pauseText(locale, space, 'conversation')}</p>}
+        <p className="vx-small vx-3">{paused ? pauseText(locale, space, 'history') : t('Uses the memories allowed in this space. Images are sent only for this turn; Vox does not save the image.', 'از حافظه‌های مجاز این فضا استفاده می‌کند. تصویر فقط برای همین نوبت ارسال می‌شود؛ وکس تصویر را ذخیره نمی‌کند.')}</p>
+      </div>
+      {lines.map((line, i) => <div key={i} className={`vx-bubble-row ${line.role === 'you' ? 'mine' : ''}`}>
+        <p className={`vx-bubble ${line.role === 'you' ? 'mine' : ''}`}>
+          <strong className="vx-sr">{line.role === 'you' ? t('You: ', 'شما: ') : t('Agent: ', 'عامل: ')}</strong>
+          {line.role === 'agent' ? <CommittedReply line={line} agentId={agentId} space={space} current={() => !disabled && line.epoch === generation.current && line.session === (tg()?.initData ?? '')} /> : line.text}
+        </p>
+        {line.role === 'you' && <button className="vx-bubble-action" aria-describedby={historicBlocked ? 'vox-historic-review-reason' : undefined} disabled={busy || disabled || historicBlocked} onClick={() => { setMemoryStatus(''); setReviewText({ text: line.text, agentId, space }); }}>{t('Review this text for memory', 'بررسی این متن برای حافظه')}</button>}
+      </div>)}
+      {busy && <div className="vx-bubble-row"><p className="vx-bubble vx-typing" aria-hidden="true"><span /><span /><span /></p></div>}
     </div>
-    {historicBlocked && <p id="vox-historic-review-reason" className="vx-small">{paused ? pauseText(locale, space, 'historicDisabled') : pauseText(locale, space, 'unverified')}</p>}
-    {!historicBlocked && reviewText !== null && reviewText.agentId === agentId && reviewText.space === space && <MessageMemoryReview key={`${agentId}:${space}`} text={reviewText.text} agentId={agentId} space={space} locale={locale} disabled={disabled}
-      onClose={() => setReviewText(null)} onSaved={count => { setReviewText(null); setMemoryStatus(t(`Saved ${count} private user-reviewed claims. Manage them in Privacy.`, `${count} ادعای خصوصیِ بررسی‌شده ذخیره شد. در حریم خصوصی مدیریت کنید.`)); }} />}
-    {memoryStatus && <p role="status">{memoryStatus}</p>}
-    <label className="vx-small">{t('Message', 'پیام')}<textarea className="vx-textarea" value={draft} rows={3} maxLength={4096} disabled={busy || disabled}
-      onChange={e => { setDraft(e.target.value); updatePrediction(e.target.value); }} /></label>
-    <label className="vx-small">{t('Image (optional)', 'تصویر (اختیاری)')}<input type="file" accept="image/png,image/jpeg,image/webp" disabled={busy || disabled || loadingImage}
-      onChange={e => { void chooseImage(e.target.files?.[0]); e.target.value = ''; }} /></label>
-    {image && <div>
-      {/* Inline, minimized user selection; no third-party fetch. */}
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src={image.dataUrl} alt={t('Image selected for this message', 'تصویر انتخاب‌شده برای این پیام')} style={{ maxWidth: '100%', maxHeight: 160, objectFit: 'contain' }} />
-      <button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy || disabled} onClick={() => { setImage(undefined); if (prepare && !historicBlocked) consumer.current?.update({ text: draft, stable: draft.trim().length >= 12 }); }}>{t('Remove image', 'حذف تصویر')}</button>
-    </div>}
-    <label className="vx-privacy-checkbox"><input type="checkbox" checked={prepare} disabled={busy || disabled || historicBlocked} onChange={e => {
-      setPrepare(e.target.checked); if (!e.target.checked) consumer.current?.suspend();
-      else { consumer.current?.update({ text: draft, image, stable: draft.trim().length >= 12 }); }
-    }} />{t('Prepare while I type', 'آماده‌سازی هنگام تایپ')}</label>
-    <p className="vx-small vx-2">{t('When selected, your draft and selected image may be sent to OpenAI before you press Send. Preparation stays off when unavailable and never sends a message for you.', 'با انتخاب این گزینه، پیش‌نویس و تصویر انتخاب‌شده ممکن است پیش از زدن ارسال به OpenAI فرستاده شوند. اگر آماده‌سازی در دسترس نباشد خاموش می‌ماند و هرگز از طرف شما پیامی ارسال نمی‌کند.')}</p>
-    {lastTurnId && <TaskOutcome key={`${agentId}:${space}:${lastTurnId}`} agentId={agentId} space={space} turnId={lastTurnId} locale={locale} />}
-    {prepared && <p className="vx-small" role="status">{t('Context prepared for this draft. You can keep editing.', 'زمینهٔ این پیش‌نویس آماده شد. می‌توانید ویرایش را ادامه دهید.')}</p>}
-    {error && <p className="vx-banner danger" role="alert">{error}</p>}
-    <button className="vx-btn vx-btn-primary" disabled={busy || disabled || loadingImage || !draft.trim()} onClick={() => void send()}>{busy ? t('Replying…', 'در حال پاسخ…') : t('Send', 'ارسال')}</button>
+    <div className="vx-chat-dock">
+      {historicBlocked && <p id="vox-historic-review-reason" className="vx-small vx-2">{paused ? pauseText(locale, space, 'historicDisabled') : pauseText(locale, space, 'unverified')}</p>}
+      {!historicBlocked && reviewText !== null && reviewText.agentId === agentId && reviewText.space === space && <MessageMemoryReview key={`${agentId}:${space}`} text={reviewText.text} agentId={agentId} space={space} locale={locale} disabled={disabled}
+        onClose={() => setReviewText(null)} onSaved={count => { setReviewText(null); setMemoryStatus(t(`Saved ${count} private user-reviewed claims. Manage them in Privacy.`, `${count} ادعای خصوصیِ بررسی‌شده ذخیره شد. در حریم خصوصی مدیریت کنید.`)); }} />}
+      {memoryStatus && <p role="status" className="vx-banner info">{memoryStatus}</p>}
+      {lastTurnId && <TaskOutcome key={`${agentId}:${space}:${lastTurnId}`} agentId={agentId} space={space} turnId={lastTurnId} locale={locale} />}
+      {prepared && <p className="vx-small vx-2" role="status">{t('Context prepared for this draft. You can keep editing.', 'زمینهٔ این پیش‌نویس آماده شد. می‌توانید ویرایش را ادامه دهید.')}</p>}
+      {error && <p className="vx-banner danger" role="alert">{error}</p>}
+      {image && <div className="vx-chat-attachment">
+        {/* Inline, minimized user selection; no third-party fetch. */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={image.dataUrl} alt={t('Image selected for this message', 'تصویر انتخاب‌شده برای این پیام')} />
+        <button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy || disabled} onClick={() => { setImage(undefined); if (prepare && !historicBlocked) consumer.current?.update({ text: draft, stable: draft.trim().length >= 12 }); }}>{t('Remove image', 'حذف تصویر')}</button>
+      </div>}
+      <div className="vx-chat-prepare">
+        <label className="vx-privacy-checkbox" style={{ minHeight: 32 }}><input type="checkbox" checked={prepare} disabled={busy || disabled || historicBlocked} onChange={e => {
+          setPrepare(e.target.checked); if (!e.target.checked) consumer.current?.suspend();
+          else { consumer.current?.update({ text: draft, image, stable: draft.trim().length >= 12 }); }
+        }} /><span className="vx-small">{t('Prepare while I type', 'آماده‌سازی هنگام تایپ')}</span></label>
+        <p className="vx-small vx-3">{t('When selected, your draft and selected image may be sent to OpenAI before you press Send. Preparation stays off when unavailable and never sends a message for you.', 'با انتخاب این گزینه، پیش‌نویس و تصویر انتخاب‌شده ممکن است پیش از زدن ارسال به OpenAI فرستاده شوند. اگر آماده‌سازی در دسترس نباشد خاموش می‌ماند و هرگز از طرف شما پیامی ارسال نمی‌کند.')}</p>
+      </div>
+      <div className="vx-composer">
+        <label className="vx-composer-attach" title={t('Image (optional)', 'تصویر (اختیاری)')}>
+          <span className="vx-sr">{t('Image (optional)', 'تصویر (اختیاری)')}</span>
+          <input type="file" accept="image/png,image/jpeg,image/webp" disabled={busy || disabled || loadingImage}
+            onChange={e => { void chooseImage(e.target.files?.[0]); e.target.value = ''; }} />
+          <Icon name="attach" size={20} />
+        </label>
+        <label className="vx-composer-field"><span className="vx-sr">{t('Message', 'پیام')}</span><textarea className="vx-textarea" value={draft} rows={1} maxLength={4096} disabled={busy || disabled}
+          placeholder={t('Message', 'پیام')}
+          onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }}
+          onChange={e => { setDraft(e.target.value); updatePrediction(e.target.value); }} /></label>
+        <button className="vx-composer-send" disabled={busy || disabled || loadingImage || !draft.trim()} onClick={() => void send()}>
+          {busy ? <Spinner size={18} /> : <Icon name="send" size={20} width={2.2} />}
+          <span className="vx-sr">{busy ? t('Replying…', 'در حال پاسخ…') : t('Send', 'ارسال')}</span>
+        </button>
+      </div>
+    </div>
   </section>;
 }

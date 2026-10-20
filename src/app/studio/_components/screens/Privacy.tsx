@@ -96,13 +96,19 @@ export function PrivacyScreen({ onShared, onExperience, onConnections, onCorrect
     finally { busyRef.current = false; setBusy(false); }
   };
 
-  return <section className="vx-scroll vx-privacy" dir={locale === 'fa' ? 'rtl' : 'ltr'} lang={locale} aria-busy={busy || !!pendingCorrection}>
-    <header className="vx-privacy-heading">
-      <span className="vx-privacy-symbol"><Icon name="shield" size={28} /></span>
-      <div><p className="vx-over">{c.subtitle}</p><h1 className="vx-title">{c.title}</h1></div>
-      <label className="vx-small">{c.language}<select className="vx-input" value={locale} disabled={busy || !!pendingCorrection} onChange={e => { if (!pendingCorrectionRef.current) setLocale(e.target.value as PrivacyLocale); }}><option value="en">English</option><option value="fa">فارسی</option></select></label>
+  const fa = locale === 'fa';
+  const label = (en: string, persian: string) => fa ? persian : en;
+  const go = (open?: () => void) => () => { if (!pendingCorrectionRef.current) open?.(); };
+  return <section className="vx-scroll vx-privacy" dir={fa ? 'rtl' : 'ltr'} lang={locale} aria-busy={busy || !!pendingCorrection}>
+    <header className="vx-privacy-heading" style={{ marginTop: 8, alignItems: 'flex-end' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0, flex: '1 1 200px' }}>
+        <span className="vx-over">{c.subtitle}</span>
+        <h1 className="vx-display">{c.title}</h1>
+      </div>
+      <label className="vx-small" style={{ flex: '0 0 auto' }}>{c.language}<select className="vx-input" value={locale} disabled={busy || !!pendingCorrection} onChange={e => { if (!pendingCorrectionRef.current) setLocale(e.target.value as PrivacyLocale); }}><option value="en">English</option><option value="fa">فارسی</option></select></label>
     </header>
     <p className="vx-2">{c.intro}</p>
+    <fieldset disabled={!!pendingCorrection} onClickCapture={event => { if (pendingCorrectionRef.current) { event.preventDefault(); event.stopPropagation(); } }} onChangeCapture={event => { if (pendingCorrectionRef.current) { event.preventDefault(); event.stopPropagation(); } }} style={{ display: 'flex', flexDirection: 'column', gap: 20, border: 0, padding: 0, margin: 0, minWidth: 0 }}>
     <ProductPausePanel locale={locale} sessionKey={session} onReviewProfile={() => document.getElementById('vox-profile-heading')?.focus()} />
     <RightsRequestPanel space={space} locale={locale} sessionKey={session} memorySnapshot={snapshot?.space === space ? snapshot : null} notesStale={notesStale} mutationDisabled={busy || !!pendingCorrection} onRefreshNotes={() => void load()} onErasurePendingChange={correctionPending} onErasureDispatched={erasureDispatched} />
     <p className="vx-small"><a href="/privacy">{locale === 'fa' ? 'درخواست حریم خصوصی بدون حساب' : 'Privacy request without an account'}</a></p>
@@ -113,13 +119,11 @@ export function PrivacyScreen({ onShared, onExperience, onConnections, onCorrect
     <div className="vx-privacy-spaces" role="group" aria-label={c.space}>
       {(['work', 'personal'] as const).map(value => <button key={value} className="vx-btn vx-btn-secondary" aria-pressed={space === value} disabled={busy} onClick={() => { if (!pendingCorrectionRef.current) setSpace(value); }}>{c[value]}</button>)}
     </div>
-    {error && <div className="vx-banner danger" role="alert">{error}<button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy} onClick={() => void load()}>{c.refresh}</button></div>}
+    {error && <div className="vx-banner danger" role="alert" style={{ alignItems: 'center' }}><span style={{ flex: 1 }}>{error}</span><button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy} onClick={() => void load()}>{c.refresh}</button></div>}
     {status && <p className="vx-banner info" role="status">{status}</p>}
-    {!snapshot && !error && <p role="status"><Spinner /> {c.loading}</p>}
-    <div className="vx-card vx-privacy-card"><h2 className="vx-head">{c.ai}</h2><p className="vx-small vx-2">{c.aiBody}</p></div>
-    <p className="vx-small vx-2">{c.operator} · {c.privacyContact}: <a href="mailto:info@joyixir.com" dir="ltr">info@joyixir.com</a></p>
-    <p className="vx-small vx-2">{c.registeredAddress}: <span dir="ltr">Harju maakond, Tallinn, Kesklinna linnaosa, Narva mnt 7-652, 10117, Estonia</span></p>
+    {!snapshot && !error && <div role="status" className="vx-small vx-2" style={{ display: 'flex', alignItems: 'center', gap: 8 }}><Spinner /> {c.loading}</div>}
     {snapshot && <>
+      <Section label={label('Your memory', 'حافظهٔ شما')}>
       <div className="vx-card vx-privacy-card">
         <h2 className="vx-head" id="vox-profile-heading" tabIndex={-1}>{c.identity}</h2><p className="vx-small vx-2">{c.identityBody}</p>
         {snapshot.identity.confirmed && <p className="vx-privacy-confirmed"><Icon name="check" size={18} /> {c.confirmed}</p>}
@@ -176,17 +180,50 @@ export function PrivacyScreen({ onShared, onExperience, onConnections, onCorrect
         </article>)}
       </div>
       <ReviewedMemoryPanel key={`${space}:${locale}:${snapshot.identity.bindingId ?? 'unconfirmed'}`} snapshot={snapshot} agents={agents} locale={locale} disabled={busy || !snapshot.explicitMemoryAvailable} pauseBlocked={pause.coveredBlocked} personalizationPaused={paused} pauseEpoch={pause.status?.useEpoch ?? undefined} onSaved={result => { setSnapshot(result); setStatus(c.saved); }} />
+      </Section>
+      <Section label={c.agents}>
       <div className="vx-card vx-privacy-card">
-        <h2 className="vx-head">{c.agents}</h2><p className="vx-small vx-2">{c.agentsBody}</p>
-        {!agents.length && <p className="vx-small vx-2">{c.noAgents}</p>}
-        {agents.map(agent => {
-          const allowed = snapshot.agents.some(g => g.agentId === agent.id && g.allowed);
-          return <div className="vx-privacy-purpose-heading" key={agent.id}><span>{agent.persona.name}</span><button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy || !snapshot.identity.confirmed} aria-label={`${allowed ? c.revokeAgent : c.allowAgent}: ${agent.persona.name}`} onClick={() => void mutate(() => adaptiveApi.agent(space, agent.id, !allowed, snapshot.revision), c.saved)}>{allowed ? c.revokeAgent : c.allowAgent}</button></div>;
-        })}
-      </div>
-      <div className="vx-card vx-privacy-card"><h2 className="vx-head">{c.sharing}</h2><p className="vx-small vx-2">{c.sharingBody}</p>{onShared && <button className="vx-btn vx-btn-secondary" onClick={() => { if (!pendingCorrectionRef.current) onShared(); }}>{locale === 'fa' ? 'حافظه‌های مشترک' : 'Shared memories'}</button>}</div>
-      <div className="vx-card vx-privacy-card"><h2 className="vx-head">{c.voice}</h2><p className="vx-small vx-2">{c.voiceBody}</p></div>
+          <h2 className="vx-head">{c.agents}</h2><p className="vx-small vx-2">{c.agentsBody}</p>
+          {!agents.length && <p className="vx-small vx-2">{c.noAgents}</p>}
+          {agents.map(agent => {
+            const allowed = snapshot.agents.some(g => g.agentId === agent.id && g.allowed);
+            return <div className="vx-privacy-purpose-heading" key={agent.id}><span>{agent.persona.name}</span><button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy || !snapshot.identity.confirmed} aria-label={`${allowed ? c.revokeAgent : c.allowAgent}: ${agent.persona.name}`} onClick={() => void mutate(() => adaptiveApi.agent(space, agent.id, !allowed, snapshot.revision), c.saved)}>{allowed ? c.revokeAgent : c.allowAgent}</button></div>;
+          })}
+        </div>
+      </Section>
+      <Section label={label('Your account', 'حساب شما')}>
+      <div className="vx-card vx-privacy-card">
+          <h2 className="vx-head" id="vox-profile-heading" tabIndex={-1}>{c.identity}</h2><p className="vx-small vx-2">{c.identityBody}</p>
+          {snapshot.identity.confirmed ? <p className="vx-privacy-confirmed"><Icon name="check" size={18} /> {c.confirmed}</p> : <>
+            <label className="vx-privacy-checkbox"><input type="checkbox" checked={adult} disabled={busy} onChange={e => setAdult(e.target.checked)} />{c.adult}</label>
+            <label className="vx-small">{c.jurisdiction}<input className="vx-input" value={jurisdiction} placeholder="EE / US-CA" maxLength={11} disabled={busy} onChange={e => setJurisdiction(e.target.value.toUpperCase())} aria-describedby="jurisdiction-hint" /></label>
+            <p id="jurisdiction-hint" className="vx-small vx-2">{c.jurisdictionHint}</p>
+            <button className="vx-btn vx-btn-secondary vx-btn-block" disabled={busy || !adult || (!!jurisdiction && !/^[A-Z]{2}(?:-[A-Z0-9]{1,8})?$/.test(jurisdiction))} onClick={() => void mutate(() => adaptiveApi.confirm(space, adult, jurisdiction || undefined), c.confirmed)}>{c.confirm}</button>
+          </>}
+          <p className="vx-small vx-2">{c.accountNote}</p>
+        </div>
+      </Section>
     </>}
+    {(onShared || onExperience || onConnections) && <Section label={label('More', 'بیشتر')}>
+      <div className="vx-group">
+        {onShared && <NavRow label={label('Shared memories', 'حافظه‌های مشترک')} onClick={go(onShared)} />}
+        {onExperience && <NavRow label={label('Preferences & notification inbox', 'ترجیح‌ها و صندوق اعلان')} onClick={go(onExperience)} />}
+        {onConnections && <NavRow label={label('Connections & agent access', 'اتصال‌ها و دسترسی عامل‌ها')} onClick={go(onConnections)} />}
+      </div>
+    </Section>}
     </fieldset>
+    <Section label={label('Data controls', 'کنترل داده‌ها')}>
+      <ProductPausePanel locale={locale} sessionKey={session} onReviewProfile={() => document.getElementById('vox-profile-heading')?.focus()} />
+      <RightsRequestPanel space={space} locale={locale} sessionKey={session} />
+    </Section>
+    <Section label={label('About', 'دربارهٔ')}>
+      <div className="vx-card vx-privacy-card">
+        <h2 className="vx-head">{c.ai}</h2><p className="vx-small vx-2">{c.aiBody}</p>
+        <h2 className="vx-head">{c.sharing}</h2><p className="vx-small vx-2">{c.sharingBody}</p>
+        <h2 className="vx-head">{c.voice}</h2><p className="vx-small vx-2">{c.voiceBody}</p>
+        <p className="vx-small vx-3">{c.operator} · {c.privacyContact}: <a href="mailto:info@joyixir.com" dir="ltr" style={{ color: 'var(--text-2)' }}>info@joyixir.com</a></p>
+        <p className="vx-small vx-3">{c.registeredAddress}: <span dir="ltr">Harju maakond, Tallinn, Kesklinna linnaosa, Narva mnt 7-652, 10117, Estonia</span></p>
+      </div>
+    </Section>
   </section>;
 }
