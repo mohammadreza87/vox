@@ -1,5 +1,8 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { createHash, randomUUID } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { SqliteAdaptiveStorage } from '../persistence/indexed/sqlite-storage';
 import { accountIdFor, type AdaptiveDocument } from '../persistence/repository';
 import { AdaptiveLifecycleService } from '../lifecycle/service';
 import { localUseFixture, syntheticLocalUsePolicy, RF1_NOW } from './local-use-fixtures';
@@ -110,4 +113,34 @@ it('operator recovery metadata binds the exact intent and final current proof wi
 it('complete canonical outbox capacity refuses a multi-row unit without partial tombstones',async()=>{
  const f=await fixture(),child=randomUUID();await f.write(d=>{d.memories.push({...structuredClone(f.memory),id:child,sourceRefs:[{id:f.memory.id,revision:1}]});while(d.outbox.length<1999)d.outbox.push({eventId:randomUUID(),kind:'memory_deleted',space:'work',personId:d.personId,revision:d.revision,memoryId:'TEST ONLY unrelated',epoch:0,createdAt:RF1_NOW});});
  const before=f.read();await expect(f.execute(f.plan())).rejects.toThrow();expect(f.read()).toEqual(before);
+});
+for(const format of ['file','sqlite'] as const)for(const scenario of ['status','expired-applied','expired-unapplied'] as const)it(`RF2 read-only clock contract ${format} ${scenario}`,async()=>{
+ const f=await fixture(format),p=f.plan();
+ if(scenario==='expired-unapplied'){vi.spyOn(f.backend,'eraseSelectedPrivateNote').mockRejectedValueOnce(Error('TEST ONLY intent stop'));await expect(f.execute(p)).rejects.toThrow();vi.restoreAllMocks();}
+ else await f.execute(p);
+ f.setNow(RF1_NOW+30001);
+ const clock=join(f.rightsStorage.directory,'.clock-v1.json'),lock=join(f.rightsStorage.directory,'.clock-v1.lock');
+ const snapshot=()=>{
+   const canonical=f.storage instanceof SqliteAdaptiveStorage ? {metadata:f.storage.database.prepare('SELECT json FROM store_meta').all(),accounts:f.storage.database.prepare('SELECT canonical,canonical_digest FROM accounts ORDER BY account_key').all()} : {head:readFileSync(join(f.storage.directory,'head.json'),'utf8'),records:JSON.parse(readFileSync(join(f.storage.directory,'head.json'),'utf8')).accounts.map((r:{file:string})=>readFileSync(join(f.storage.directory,'records',`${r.file}.json`),'utf8'))};
+   return {clock:readFileSync(clock,'utf8'),lock:existsSync(lock),rights:f.repository.read(accountIdFor(101)),canonical};
+ };
+ const before=snapshot(),observe=vi.spyOn(f.repository,'observeTime'),clockWriter=vi.spyOn(f.rightsStorage,'observeRightsTime'),transact=vi.spyOn(f.storage,'transact');
+ const watermark=f.storage.io.watermarkWrites;
+ const sql=f.storage instanceof SqliteAdaptiveStorage?vi.spyOn(f.storage.database,'exec'):undefined;
+ const publish=f.storage instanceof SqliteAdaptiveStorage?undefined:vi.spyOn(f.storage as unknown as {publishTime:(at:number)=>void},'publishTime');
+ if(scenario==='status')expect(f.service.privateNoteErasureStatus(101,f.row.requestId,'work').operations[0].technical).toBe('note_content_removed');
+ else expect(await f.execute(p)).toMatchObject({replayed:true,operations:[{technical:scenario==='expired-applied'?'note_content_removed':'not_applied'}]});
+ expect(snapshot()).toEqual(before);
+ expect(observe).not.toHaveBeenCalled();expect(clockWriter).not.toHaveBeenCalled();expect(transact).not.toHaveBeenCalled();expect(f.storage.io.watermarkWrites).toBe(watermark);
+ expect(publish?.mock.calls??[]).toEqual([]);expect((sql?.mock.calls??[]).some(([statement])=>/BEGIN\s+IMMEDIATE|UPDATE|INSERT|DELETE/i.test(statement))).toBe(false);
+});
+for(const format of ['file','sqlite'] as const)it(`${format}: pure RF2 reads retain committed clock rollback denial, normal execution/reconcile retain observations`,async()=>{
+ const f=await fixture(format),p=f.plan(),observe=vi.spyOn(f.repository,'observeTime'),transaction=f.repository.transaction.bind(f.repository);let calls=0;
+ vi.spyOn(f.repository,'transaction').mockImplementation(async(...args)=>{if(++calls===2)throw Error('TEST ONLY ACK LOSS');return transaction(...args);});
+ f.setNow(RF1_NOW+1);await f.execute(p);expect(observe).toHaveBeenCalled();vi.restoreAllMocks();
+ const operations=await f.service.operations(999),row=operations.requests.find(r=>r.requestId===f.row.requestId)!;
+ const duringReconcile=vi.spyOn(f.repository,'observeTime');await f.service.reconcilePrivateNoteErasure(999,f.row.requestId,row.operationHandle,p.eventId,randomUUID());expect(duringReconcile).toHaveBeenCalled();vi.restoreAllMocks();
+ const clock=join(f.rightsStorage.directory,'.clock-v1.json'),before=readFileSync(clock,'utf8');f.setNow(RF1_NOW);
+ const deniedWriter=vi.spyOn(f.repository,'observeTime');expect(()=>f.service.privateNoteErasureStatus(101,f.row.requestId,'work')).toThrow('rights_clock_unavailable');expect(deniedWriter).not.toHaveBeenCalled();expect(readFileSync(clock,'utf8')).toBe(before);
+ const d=f.repository.read(accountIdFor(101))!;if(d.version!==4)throw Error('missing');expect(()=>f.backend.privateNoteErasureProofNow(101,d.localErasure.operations[0],()=>{})).toThrow();
 });

@@ -273,6 +273,21 @@ export class SqliteAdaptiveStorage implements AdaptiveStorage {
       }, () => undefined);
     } catch (error) { if (error instanceof IndexedStorageError && error.reason === 'busy') return { status: 'busy' }; throw error; }
   }
+  readCommittedWithoutObservationForEffect(accountId:string):{status:'ready';document:unknown|null;observedAt:number}|{status:'busy'} {
+    validateAccountId(accountId);if(this.writer||this.database.inTransaction)return {status:'busy'};this.assertAvailable();this.writer=true;
+    try {
+      // A short synchronous shared read transaction, never BEGIN IMMEDIATE.
+      this.database.exec('BEGIN');const meta=this.readMetadata(),now=this.sampleTime(meta.lifecycleWatermark);
+      const row=this.database.prepare('SELECT canonical,canonical_digest FROM accounts WHERE account_key=?').get(accountKey(accountId)) as {canonical:string;canonical_digest:string}|undefined;
+      let document:unknown|null=null;
+      if(row){this.io.canonicalImageReads++;document=JSON.parse(row.canonical);if(digest(document)!==row.canonical_digest || this.validator(document,accountId,now).schemaVersion!==this.canonicalSchemaVersion)throw new IndexedStorageError('corrupt');}
+      this.sampleTime(now);this.database.exec('COMMIT');
+      const latest=this.readMetadata(),fresh=this.sampleTime(Math.max(now,latest.lifecycleWatermark));
+      if(JSON.stringify(meta)!==JSON.stringify(latest))return {status:'busy'};
+      return {status:'ready',document,observedAt:fresh};
+    }catch(error){if(this.database.inTransaction)this.database.exec('ROLLBACK');const failure=this.error(error);if(failure.reason==='busy')return {status:'busy'};throw failure;}
+    finally{this.writer=false;}
+  }
   async listAccounts(input: AdaptiveAccountPageInput): Promise<AdaptiveAccountPage> {
     if (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > 100 || input.after !== undefined && !/^[a-f0-9]{64}$/.test(input.after)) throw new Error('Invalid adaptive enumeration');
     return this.readWindow(emptyIndexedIo(), () => {

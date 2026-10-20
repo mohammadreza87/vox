@@ -50,6 +50,9 @@ export class RightsLocalErasureWorkflow {
     this.auth(id);operatorGuard?.();
   }
   status(id:number,requestId:string,space:RightsSpace):LocalErasureView {
+    return this.finalFence(()=>this.readOnlyStatus(id,requestId,space));
+  }
+  private readOnlyStatus(id:number,requestId:string,space:RightsSpace):LocalErasureView {
     z.uuidv4().parse(requestId);const d=this.read(id),r=this.row(d,requestId,space),p=this.policy('plan');
     const operations=(d?.version===4?d.localErasure.operations:[]).filter(o=>o.requestId===requestId&&o.space===space).map(o=>{
       const proof=this.backend().privateNoteErasureProofNow(id,o,()=>this.auth(id));
@@ -93,13 +96,15 @@ export class RightsLocalErasureWorkflow {
   }
   async execute(id:number,requestId:string,space:RightsSpace,raw:LocalErasureExecuteInput):Promise<LocalErasureMutation>{
     const input=localErasureExecuteInputSchema.parse(raw);this.auth(id);const token=this.open(input.planHandle,id,requestId,space);if(token.eventId!==input.eventId)return fail(403,'operation_handle_invalid');
-    const initial=this.read(id),r=this.row(initial,requestId,space);if(initial?.version!==4)return fail(503,'rights_erasure_unsupported');
+    // Do not publish a clock observation before knowing whether this is a pure
+    // expired replay. Authentication, ledger lookup and expiry checks are reads.
+    const initial=this.finalFence(()=>this.read(id)),r=this.row(initial,requestId,space);if(initial?.version!==4)return fail(503,'rights_erasure_unsupported');
     const known=initial.localErasure.operations.find(o=>o.eventId===input.eventId);
     const result=(replayed:boolean)=>localErasureMutationSchema.parse({...this.status(id,requestId,space),replayed,operationRef:this.ref(input.eventId)});
     if(known){
       if(known.requestId!==requestId||known.memoryId!==token.memoryId||known.witnessDigest!==token.witnessDigest||known.policyDigest!==token.policyDigest||known.createdAt!==token.createdAt||known.expectedCanonicalRevision!==token.expectedCanonicalRevision||known.expectedBindingDigest!==token.expectedBindingDigest||known.noticeDigest!==token.noticeDigest||known.expiresAt!==token.expiresAt||known.executionDeadline!==token.executionDeadline)return fail(409,'rights_conflict');
       // Expired exact replay is a pure current read, including an unapplied intent.
-      if(this.now(initial)>=known.expiresAt||this.now(initial)>=known.executionDeadline)return result(true);
+      if(this.finalFence(()=>this.now(initial)>=known.expiresAt||this.now(initial)>=known.executionDeadline))return result(true);
       const proof=this.backend().privateNoteErasureProofNow(id,known,()=>this.auth(id));
       if(proof.technical==='note_content_removed'){if(!known.acknowledgement)await this.acknowledge(id,known,'execute');return result(true);}
       this.guard(id,known);await this.backend().eraseSelectedPrivateNote(id,known,()=>this.finalFence(()=>this.guard(id,known)));await this.acknowledge(id,known,'execute');return result(true);

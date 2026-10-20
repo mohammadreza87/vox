@@ -284,7 +284,7 @@ export class AdaptiveService {
   /** RF2 is deliberately separate from generic account maintenance. */
   privateNoteErasureQualified():boolean {
     const s=this.repository.storage;
-    return s.canonicalSchemaVersion===3 && s.supportsCommittedWriteFence===true && !!s.readCommittedForEffect &&
+    return s.canonicalSchemaVersion===3 && s.supportsCommittedWriteFence===true && !!s.readCommittedForEffect && !!s.readCommittedWithoutObservationForEffect &&
       (!!s.indexed || s.fileAuthorityProjectionVersion===2 && typeof s.readDirectAuthorityForEffect==='function');
   }
   private erasureWitness(d:AdaptiveDocument,memoryId:string,space:SpaceKind):ErasureWitness {
@@ -309,7 +309,13 @@ export class AdaptiveService {
   privateNoteErasureProofNow(id:number,operation:LocalErasureOperation,guard:()=>void):{technical:'unknown'|'not_applied'|'note_content_removed';observedAt:number|null;effectRevision:number|null} {
     validateRuntimeControlEvaluation({value:guard()});
     if(!this.privateNoteErasureQualified())return {technical:'unknown',observedAt:null,effectRevision:null};
-    const read=this.readCommittedForEffect(id,(d,now)=>{
+    const snapshot=this.repository.storage.readCommittedWithoutObservationForEffect!(this.account(id));
+    let checkedDocument:AdaptiveDocument|undefined;
+    let clockFloor=snapshot.status==='ready'?snapshot.observedAt:0;
+    const read=snapshot.status!=='ready'?snapshot:snapshot.document===null?{status:'missing' as const}:(()=>{
+      const now=this.now();if(!Number.isSafeInteger(now)||now<clockFloor)return fail(503,'erasure_clock_unavailable');clockFloor=now;
+      const d=validateAdaptiveDocument(snapshot.document,this.account(id),now);checkedDocument=d;
+      const value=(()=>{
       validateRuntimeControlEvaluation({value:guard()});this.requirePerson(d,now);
       const unknown={technical:'unknown' as const,observedAt:null,effectRevision:null};
       if(operation.fingerprint!==erasureFingerprint(d.accountId,operation) || operation.witnessDigest!==localUseDigest(operation.witness))return unknown;
@@ -321,8 +327,14 @@ export class AdaptiveService {
       });
       if(!e) return d.revision===operation.expectedCanonicalRevision && digest(d.binding)===operation.expectedBindingDigest && matches(false) && localUseDigest(this.erasureWitness(d,operation.memoryId,operation.space))===operation.witnessDigest ? {technical:'not_applied' as const,observedAt:now,effectRevision:null}:unknown;
       return e.kind==='rights_private_note_erased' && e.resultId===operation.memoryId && e.fingerprint===operation.fingerprint && e.revision===operation.expectedCanonicalRevision+1 && matches(true) && !closure.some(m=>m.status==='active' && m.text!==undefined) ? {technical:'note_content_removed' as const,observedAt:now,effectRevision:e.revision}:unknown;
-    });
-    validateRuntimeControlEvaluation({value:guard()});return read.status==='ready'?read.value:{technical:'unknown',observedAt:null,effectRevision:null};
+      })();return {status:'ready' as const,value};
+    })();
+    validateRuntimeControlEvaluation({value:guard()});
+    if(checkedDocument && snapshot.status==='ready'){
+      const fresh=this.now();if(!Number.isSafeInteger(fresh)||fresh<clockFloor)return fail(503,'erasure_clock_unavailable');
+      this.requirePerson(checkedDocument,fresh);
+    }
+    return read.status==='ready'?read.value:{technical:'unknown',observedAt:null,effectRevision:null};
   }
   eraseSelectedPrivateNote(id:number,raw:LocalErasureOperation,guard:()=>void):Promise<void> {
     const o=localErasureOperationSchema.parse(raw),check=()=>{validateRuntimeControlEvaluation({value:guard()});};check();

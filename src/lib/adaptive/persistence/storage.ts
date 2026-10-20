@@ -34,6 +34,9 @@ export interface AdaptiveStorage {
     { status: 'ready'; value: T } | { status: 'busy' | 'unsupported' | 'missing' };
   /** File-only effect fence; synchronous committed snapshot, no writer in progress. */
   readCommittedForEffect?(accountId: string): { status: 'ready'; document: unknown | null } | { status: 'busy' };
+  /** RF2 proof-only committed snapshot. No durable clock observation or writer
+   * reservation; observedAt is checked against the committed clock floor. */
+  readCommittedWithoutObservationForEffect?(accountId:string):{status:'ready';document:unknown|null;observedAt:number}|{status:'busy'};
   /** Server maintenance only. Opaque stable key cursor; never returns document payloads.
    * Concurrent inserts before a cursor are visited on the next full sweep. */
   listAccounts?(input: AdaptiveAccountPageInput): Promise<AdaptiveAccountPage>;
