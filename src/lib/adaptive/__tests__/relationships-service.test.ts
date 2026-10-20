@@ -51,6 +51,33 @@ async function setup(scopedEnabled = true, approvalMs = 100 * 86_400_000) {
 }
 
 describe('scoped relationship authority and private delivery', () => {
+  it('keeps dismissed check-ins terminal and repeated dismissal idempotent after file restart', async () => {
+    const { service, enable, factory, raw } = await setup(); const { permit, source } = await enable();
+    await service.publish(permit.key, 'feedback-check-in', 'Synthetic check-in.', [source.id], permit.fingerprint);
+    await service.feedback(123, 'agent', 'work', 'feedback-check-in', 'read');
+    expect((await service.inbox(123, 'agent', 'work'))[0]).toMatchObject({ status: 'read', text: 'Synthetic check-in.' });
+    await service.feedback(123, 'agent', 'work', 'feedback-check-in', 'dismissed');
+    const dismissed = await raw();
+    expect(dismissed.relationships.inbox[0]).toMatchObject({ status: 'dismissed', text: '' });
+    const restarted = new AdaptiveRelationshipService(factory());
+    await restarted.feedback(123, 'agent', 'work', 'feedback-check-in', 'read');
+    expect(await restarted.inbox(123, 'agent', 'work')).toEqual([]);
+    await restarted.feedback(123, 'agent', 'work', 'feedback-check-in', 'dismissed');
+    await restarted.feedback(123, 'agent', 'work', 'feedback-check-in', 'dismissed');
+    expect(await raw()).toEqual(dismissed);
+  });
+  it('preserves feedback scope and source-cancellation fences', async () => {
+    const { service, enable, raw } = await setup(); const { permit, source } = await enable();
+    await service.publish(permit.key, 'cancelled-check-in', 'Synthetic check-in.', [source.id], permit.fingerprint);
+    await expect(service.feedback(123, 'agent', 'personal', 'cancelled-check-in', 'read')).rejects.toMatchObject({ code: 'not_found' });
+    await expect(service.feedback(123, 'other-agent', 'work', 'cancelled-check-in', 'read')).rejects.toMatchObject({ code: 'not_found' });
+    await service.invalidate(123, 'work', { sourceIds: [source.id], reason: 'source_deleted' });
+    const cancelled = await raw();
+    expect(cancelled.relationships.inbox[0]).toMatchObject({ status: 'cancelled', text: '' });
+    await expect(service.feedback(123, 'agent', 'work', 'cancelled-check-in', 'read')).rejects.toMatchObject({ code: 'not_found' });
+    await expect(service.feedback(123, 'agent', 'work', 'cancelled-check-in', 'dismissed')).rejects.toMatchObject({ code: 'not_found' });
+    expect(await raw()).toEqual(cancelled);
+  });
   it('keeps auto memory disabled without an explicit scoped implementation switch', async () => {
     const { adaptive, service } = await setup(false);
     expect((await adaptive.read(123, 'work')).purposes.find(p => p.purpose === 'optional.auto_memory')!.available).toBe(false);
