@@ -10,7 +10,7 @@ import {
 } from '../test';
 import type { StyleProfile } from '../profile';
 import type { StyleFeatures } from '../style-features';
-import { FIXTURE_KEY, FIXTURE_T0, personA, personB, trainProfile, type TimedFeatures } from './style-fixtures';
+import { FIXTURE_KEY, personA, personB, trainProfile, type TimedFeatures } from './style-fixtures';
 
 const PROFILE_A = trainProfile(personA(1, 200));
 
