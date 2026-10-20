@@ -20,11 +20,12 @@ const fixedCoverage={queuedDerivedUse:'unknown',noncanonicalDerivativeCopies:'un
 /** Metadata-only request workflow. Only the qualified canonical coordinator deletes. */
 export class RightsLocalErasureWorkflow {
   private inFinalFence=false;
+  private observedTime=0;
   constructor(readonly repository:RightsRepository,readonly options:RightsOptions){}
   private sync(guard:()=>void){validateRuntimeControlEvaluation({value:guard()});}
-  private auth(id:number){if(this.options.assertRequestNow)this.sync(this.options.assertRequestNow);this.sync(()=>this.options.assertAccountNow(id));if(!this.options.assertPrivateMemoryNow)return fail(503,'rights_erasure_unsupported');this.sync(()=>this.options.assertPrivateMemoryNow!(id));if(this.options.assertRequestNow)this.sync(this.options.assertRequestNow);}
+  private auth(id:number){if(this.options.assertRequestNow)this.sync(this.options.assertRequestNow);this.sync(()=>this.options.assertAccountNow(id));if(!this.options.assertPrivateMemoryNow)return fail(503,'rights_erasure_unsupported');this.sync(()=>this.options.assertPrivateMemoryNow!(id));if(this.options.assertRequestNow)this.sync(this.options.assertRequestNow);this.finalFence(()=>this.now());}
   private finalFence<T>(fn:()=>T):T {const prior=this.inFinalFence;this.inFinalFence=true;try{return fn();}finally{this.inFinalFence=prior;}}
-  private now(d?:AccountLedger|null){this.options.assertRequestNow?.();const now=(this.options.clock??Date.now)();if(!Number.isSafeInteger(now)||now<0||now<(d?.observedServerTime??0))return fail(503,'rights_clock_unavailable');if(this.inFinalFence)this.repository.assertTimeForEffect(now);else this.repository.observeTime(now);this.options.assertRequestNow?.();return now;}
+  private now(d?:AccountLedger|null){this.options.assertRequestNow?.();const now=(this.options.clock??Date.now)();if(!Number.isSafeInteger(now)||now<0||now<this.observedTime||now<(d?.observedServerTime??0))return fail(503,'rights_clock_unavailable');if(this.inFinalFence)this.repository.assertTimeForEffect(now);else this.repository.observeTime(now);if(this.options.assertErasureClockNow)this.sync(()=>this.options.assertErasureClockNow!(now));this.observedTime=now;return now;}
   private read(id:number){this.auth(id);const d=this.repository.read(accountIdFor(id));this.now(d);return d;}
   private row(d:AccountLedger|null,requestId:string,space:RightsSpace){return d?.requests.find(r=>r.requestId===requestId&&r.space===space)??fail(404,'not_found');}
   private backend(){return this.options.localErasure??fail(503,'rights_erasure_unsupported');}
@@ -63,6 +64,9 @@ export class RightsLocalErasureWorkflow {
     this.auth(id);return localErasureViewSchema.parse({version:1,requestId,requestRevision:r.revision,space,available,operations});
   }
   plan(id:number,requestId:string,space:RightsSpace,raw:LocalErasurePlanInput){
+    return this.finalFence(()=>this.readOnlyPlan(id,requestId,space,raw));
+  }
+  private readOnlyPlan(id:number,requestId:string,space:RightsSpace,raw:LocalErasurePlanInput){
     const input=localErasurePlanInputSchema.parse(raw),d=this.read(id),r=this.row(d,requestId,space),p=this.requirePolicy('plan'),now=this.now(d);
     if(d?.version!==4||input.space!==space||r.kind!=='erasure'||r.state==='closed_unfulfilled'||r.revision!==input.expectedRequestRevision||r.retention.reviewOrExpiryAt<=now||d.localErasure.operations.some(o=>o.memoryId===input.memoryId)||!this.repository.storage.supportsCommittedWriteFence||!this.repository.storage.readRightsTimeForEffect)return fail(409,'rights_conflict');
     const prepared=this.backend().preparePrivateNoteErasureNow(id,space,input.memoryId,input.expectedMemoryRevision,()=>this.auth(id));

@@ -144,3 +144,20 @@ for(const format of ['file','sqlite'] as const)it(`${format}: pure RF2 reads ret
  const deniedWriter=vi.spyOn(f.repository,'observeTime');expect(()=>f.service.privateNoteErasureStatus(101,f.row.requestId,'work')).toThrow('rights_clock_unavailable');expect(deniedWriter).not.toHaveBeenCalled();expect(readFileSync(clock,'utf8')).toBe(before);
  const d=f.repository.read(accountIdFor(101))!;if(d.version!==4)throw Error('missing');expect(()=>f.backend.privateNoteErasureProofNow(101,d.localErasure.operations[0],()=>{})).toThrow();
 });
+for(const format of ['file','sqlite'] as const)for(const rejected of [false,true])it(`RF2 plan clock purity ${format} rejected=${rejected}`,async()=>{
+ const f=await fixture(format);f.setNow(RF1_NOW+1);const clock=join(f.rightsStorage.directory,'.clock-v1.json'),before=readFileSync(clock,'utf8'),metadata=f.storage.readMetadata(),ledger=f.repository.read(accountIdFor(101)),observe=vi.spyOn(f.repository,'observeTime');
+ if(rejected)await f.write(d=>{d.memories.find(m=>m.id===f.memory.id)!.origin='user_reviewed_claim';});
+ const canonical=f.storage.readMetadata();if(rejected)expect(()=>f.plan()).toThrow();else expect(f.plan().memoryId).toBe(f.memory.id);
+ expect(readFileSync(clock,'utf8')).toBe(before);expect(f.storage.readMetadata()).toEqual(canonical);expect(f.repository.read(accountIdFor(101))).toEqual(ledger);expect(observe).not.toHaveBeenCalled();if(!rejected)expect(canonical).toEqual(metadata);
+});
+for(const format of ['file','sqlite'] as const)for(const mode of ['in-call','publication'] as const)it(`RF2 transient read clock maximum ${format} ${mode}`,async()=>{
+ const f=await fixture(format);await f.execute(f.plan());
+ if(mode==='in-call'){
+   const p=policy();p.expiresAt=RF1_NOW+175;f.setPolicy(p);
+   vi.spyOn(f.options,'clock').mockReturnValueOnce(RF1_NOW+200).mockReturnValue(RF1_NOW+150);
+   expect(()=>f.service.privateNoteErasureStatus(101,f.row.requestId,'work')).toThrow('rights_clock_unavailable');
+ }else{
+   f.setNow(RF1_NOW+200);const view=f.service.privateNoteErasureStatus(101,f.row.requestId,'work');f.setNow(RF1_NOW+150);
+   expect(()=>f.service.assertPrivateNoteErasurePublication(101,f.row.requestId,'work',view)).toThrow('rights_clock_unavailable');
+ }
+});

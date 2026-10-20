@@ -1,0 +1,24 @@
+import { afterEach, expect, it, vi } from 'vitest';
+import { randomUUID } from 'node:crypto';
+import { SqliteAdaptiveStorage } from '../persistence/indexed/sqlite-storage';
+import { accountIdFor, type AdaptiveDocument } from '../persistence/repository';
+import { localUseFixture, RF1_NOW } from './local-use-fixtures';
+import { AdaptiveLifecycleService } from '../lifecycle/service';
+import { erasureFingerprint, localUseDigest } from './local-use-state';
+import type { LocalErasureOperation } from './local-erasure-contracts';
+const closes:Array<()=>Promise<void>>=[];
+afterEach(async()=>{vi.restoreAllMocks();for(const close of closes.splice(0))await close();});
+for(const mode of ['adapter','binding-proof'] as const)it(`SQLite RF2 readonly every observed clock floor ${mode}`,async()=>{
+  const f=await localUseFixture('sqlite');closes.push(f.close);const storage=f.storage;if(!(storage instanceof SqliteAdaptiveStorage))throw Error('unexpected fixture');
+  const state=await f.adaptive.read(101,'work');await f.adaptive.createMemory(101,{eventId:randomUUID(),space:'work',expectedRevision:state.revision,text:'TEST ONLY CLOCK SOURCE'});
+  await f.storage.transact(accountIdFor(101),raw=>{const d=raw as AdaptiveDocument;d.binding!.expiresAt=RF1_NOW+175;return {document:d,result:undefined};});
+  const d=f.storage.readCommittedForEffect(accountIdFor(101));if(d.status!=='ready'||!d.document)throw Error('missing');
+  const memory=(d.document as AdaptiveDocument).memories[0],backend=new AdaptiveLifecycleService(f.adaptive),prepared=backend.preparePrivateNoteErasureNow(101,'work',memory.id,memory.revision,()=>{});
+  const operation:LocalErasureOperation={version:1,eventId:randomUUID(),requestId:randomUUID(),requestRevision:1,space:'work',memoryId:memory.id,expectedCanonicalRevision:prepared.expectedCanonicalRevision,expectedBindingDigest:prepared.expectedBindingDigest,witness:prepared.witness,witnessDigest:localUseDigest(prepared.witness),fingerprint:'0'.repeat(64),createdAt:RF1_NOW,expiresAt:RF1_NOW+50,executionDeadline:RF1_NOW+50,policyDigest:'0'.repeat(64),noticeDigest:'0'.repeat(64),metadataRetainUntil:RF1_NOW+1000,replayRetainUntil:RF1_NOW+1000,receiptRetainUntil:RF1_NOW+1000};operation.fingerprint=erasureFingerprint(accountIdFor(101),operation);
+  const snapshot=()=>({meta:storage.database.prepare('SELECT json FROM store_meta').all(),accounts:storage.database.prepare('SELECT canonical,canonical_digest FROM accounts ORDER BY account_key').all()});
+  const before=snapshot(),writes=storage.io.watermarkWrites,sample=storage.sampleTime.bind(storage),sequence=[RF1_NOW,RF1_NOW+200,RF1_NOW+150];
+  vi.spyOn(storage,'sampleTime').mockImplementation((floor)=>{const next=sequence.shift()??RF1_NOW+150;f.setNow(next);return sample(floor,next);});
+  const sql=vi.spyOn(storage.database,'exec');
+  expect(()=>mode==='adapter'?storage.readCommittedWithoutObservationForEffect(accountIdFor(101)):backend.privateNoteErasureProofNow(101,operation,()=>{})).toThrow();
+  expect(sequence).toEqual([]);expect(snapshot()).toEqual(before);expect(storage.io.watermarkWrites).toBe(writes);expect(sql.mock.calls.some(([q])=>/BEGIN\s+IMMEDIATE|UPDATE|INSERT|DELETE/i.test(q))).toBe(false);
+});

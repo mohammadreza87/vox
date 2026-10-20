@@ -298,13 +298,16 @@ export class AdaptiveService {
   preparePrivateNoteErasureNow(id:number,space:SpaceKind,memoryId:string,revision:number,guard:()=>void) {
     const check=()=>{validateRuntimeControlEvaluation({value:guard()});};check();
     if(!this.privateNoteErasureQualified())return fail(503,'erasure_unsupported');
-    const read=this.readCommittedForEffect(id,(d,now)=>{
-      check();this.requirePerson(d,now);
-      const m=d.memories.find(m=>m.id===memoryId && m.space===space);
-      if(!m || m.status!=='active' || m.expiresAt<=now || m.origin || m.sourceRefs || m.revision!==revision || !this.authorized(d,space,m,'delete',now))return fail(409,'erasure_selection_changed');
-      return {expectedCanonicalRevision:d.revision,expectedBindingDigest:digest(d.binding),witness:this.erasureWitness(d,memoryId,space),bindingExpiresAt:d.binding!.expiresAt};
-    });
-    check();if(read.status!=='ready')return fail(503,'erasure_authority_unavailable');return read.value;
+    const snapshot=this.repository.storage.readCommittedWithoutObservationForEffect!(this.account(id));
+    if(snapshot.status!=='ready'||!snapshot.document)return fail(503,'erasure_authority_unavailable');
+    let floor=snapshot.observedAt;check();const now=this.now();
+    if(!Number.isSafeInteger(now)||now<floor)return fail(503,'erasure_clock_unavailable');floor=now;
+    const d=validateAdaptiveDocument(snapshot.document,this.account(id),now);this.requirePerson(d,now);
+    const m=d.memories.find(m=>m.id===memoryId && m.space===space);
+    if(!m || m.status!=='active' || m.expiresAt<=now || m.origin || m.sourceRefs || m.revision!==revision || !this.authorized(d,space,m,'delete',now))return fail(409,'erasure_selection_changed');
+    const value={expectedCanonicalRevision:d.revision,expectedBindingDigest:digest(d.binding),witness:this.erasureWitness(d,memoryId,space),bindingExpiresAt:d.binding!.expiresAt};
+    check();const fresh=this.now();if(!Number.isSafeInteger(fresh)||fresh<floor)return fail(503,'erasure_clock_unavailable');this.requirePerson(d,fresh);
+    if(m.expiresAt<=fresh || !this.authorized(d,space,m,'delete',fresh))return fail(409,'erasure_selection_changed');return value;
   }
   privateNoteErasureProofNow(id:number,operation:LocalErasureOperation,guard:()=>void):{technical:'unknown'|'not_applied'|'note_content_removed';observedAt:number|null;effectRevision:number|null} {
     validateRuntimeControlEvaluation({value:guard()});

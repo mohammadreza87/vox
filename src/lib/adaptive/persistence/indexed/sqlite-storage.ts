@@ -277,12 +277,12 @@ export class SqliteAdaptiveStorage implements AdaptiveStorage {
     validateAccountId(accountId);if(this.writer||this.database.inTransaction)return {status:'busy'};this.assertAvailable();this.writer=true;
     try {
       // A short synchronous shared read transaction, never BEGIN IMMEDIATE.
-      this.database.exec('BEGIN');const meta=this.readMetadata(),now=this.sampleTime(meta.lifecycleWatermark);
+      this.database.exec('BEGIN');const meta=this.readMetadata(),now=this.sampleTime(meta.lifecycleWatermark);let floor=now;
       const row=this.database.prepare('SELECT canonical,canonical_digest FROM accounts WHERE account_key=?').get(accountKey(accountId)) as {canonical:string;canonical_digest:string}|undefined;
       let document:unknown|null=null;
       if(row){this.io.canonicalImageReads++;document=JSON.parse(row.canonical);if(digest(document)!==row.canonical_digest || this.validator(document,accountId,now).schemaVersion!==this.canonicalSchemaVersion)throw new IndexedStorageError('corrupt');}
-      this.sampleTime(now);this.database.exec('COMMIT');
-      const latest=this.readMetadata(),fresh=this.sampleTime(Math.max(now,latest.lifecycleWatermark));
+      floor=this.sampleTime(floor);this.database.exec('COMMIT');
+      const latest=this.readMetadata(),fresh=this.sampleTime(Math.max(floor,latest.lifecycleWatermark));
       if(JSON.stringify(meta)!==JSON.stringify(latest))return {status:'busy'};
       return {status:'ready',document,observedAt:fresh};
     }catch(error){if(this.database.inTransaction)this.database.exec('ROLLBACK');const failure=this.error(error);if(failure.reason==='busy')return {status:'busy'};throw failure;}

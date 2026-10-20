@@ -22,6 +22,8 @@ export interface RightsOptions {
   /** Dedicated provisioned 256-bit key. Never derive from a bot token or expose to clients. */
   key?: Buffer;
   clock?: () => number;
+  /** Request-local, nonpersistent RF2 observation shared across publication reads. */
+  assertErasureClockNow?: (observedAt:number)=>void;
   /** Per-request signed authentication; never stored in the ledger. */
   assertRequestNow?: () => void;
   assertAccountNow: (telegramId: number) => void;
@@ -38,6 +40,13 @@ const bump = (n: number) => { if (!Number.isSafeInteger(n + 1)) return fail(503,
 /** Metadata-only intake. Account authentication never establishes natural-person identity. */
 export class RightsIntakeService {
   private observedTime = 0;
+  private erasureObservedTime=0;
+  private erasureWorkflow():RightsLocalErasureWorkflow {
+    return new RightsLocalErasureWorkflow(this.repository,{...this.options,assertErasureClockNow:observedAt=>{
+      if(observedAt<this.erasureObservedTime)return fail(503,'rights_clock_unavailable');
+      this.erasureObservedTime=observedAt;this.options.assertErasureClockNow?.(observedAt);
+    }});
+  }
   assertOperatorPublicationNow(operator: number): void { this.operator(operator); }
   assertLocalUseOperatorPublication(operator: number, requestId: string, operationHandle: string, expected: LocalUseView): void {
     const p = this.operator(operator), token = this.open(operationHandle,operator,p,'operation');
@@ -59,10 +68,10 @@ export class RightsIntakeService {
     const id = Number(token.accountId!.slice('telegram-account:'.length));
     return new RightsLocalUseWorkflow(this.repository, this.options).reconcile(id, requestId, commandEventId, () => { this.operator(operator,p); this.open(operationHandle,operator,p,'operation'); });
   }
-  privateNoteErasureStatus(id:number,requestId:string,space:RightsSpace){return new RightsLocalErasureWorkflow(this.repository,this.options).status(id,requestId,space);}
-  privateNoteErasurePlan(id:number,requestId:string,space:RightsSpace,input:LocalErasurePlanInput){return new RightsLocalErasureWorkflow(this.repository,this.options).plan(id,requestId,space,input);}
-  assertPrivateNoteErasurePlanPublication(id:number,requestId:string,space:RightsSpace,plan:unknown){new RightsLocalErasureWorkflow(this.repository,this.options).assertPlanPublication(id,requestId,space,plan);}
-  privateNoteErasureExecute(id:number,requestId:string,space:RightsSpace,input:LocalErasureExecuteInput){return new RightsLocalErasureWorkflow(this.repository,this.options).execute(id,requestId,space,input);}
+  privateNoteErasureStatus(id:number,requestId:string,space:RightsSpace){return this.erasureWorkflow().status(id,requestId,space);}
+  privateNoteErasurePlan(id:number,requestId:string,space:RightsSpace,input:LocalErasurePlanInput){return this.erasureWorkflow().plan(id,requestId,space,input);}
+  assertPrivateNoteErasurePlanPublication(id:number,requestId:string,space:RightsSpace,plan:unknown){this.erasureWorkflow().assertPlanPublication(id,requestId,space,plan);}
+  privateNoteErasureExecute(id:number,requestId:string,space:RightsSpace,input:LocalErasureExecuteInput){return this.erasureWorkflow().execute(id,requestId,space,input);}
   assertPrivateNoteErasurePublication(id:number,requestId:string,space:RightsSpace,expected:LocalErasureView):void {
     const current=this.privateNoteErasureStatus(id,requestId,space);
     const projection=(v:LocalErasureView)=>[v.requestId,v.requestRevision,v.space,v.available,v.operations.map(({observedAt:_at,...o})=>{void _at;return o;})];
@@ -71,7 +80,7 @@ export class RightsIntakeService {
   async reconcilePrivateNoteErasure(operator:number,requestId:string,operationHandle:string,commandEventId:string,eventId:string){
     const p=this.operator(operator),token=this.open(operationHandle,operator,p,'operation');if(token.requestId!==requestId)return fail(403,'operation_handle_invalid');
     const id=Number(token.accountId!.slice('telegram-account:'.length));
-    return new RightsLocalErasureWorkflow(this.repository,this.options).reconcile(id,requestId,token.space!,commandEventId,()=>{this.operator(operator,p);this.open(operationHandle,operator,p,'operation');},eventId);
+    return this.erasureWorkflow().reconcile(id,requestId,token.space!,commandEventId,()=>{this.operator(operator,p);this.open(operationHandle,operator,p,'operation');},eventId);
   }
   assertPrivateNoteErasureOperatorPublication(operator:number,requestId:string,handle:string,expected:LocalErasureView){const p=this.operator(operator),t=this.open(handle,operator,p,'operation');if(t.requestId!==requestId)return fail(403,'operation_handle_invalid');this.assertPrivateNoteErasurePublication(Number(t.accountId!.slice('telegram-account:'.length)),requestId,t.space!,expected);this.operator(operator,p);}
   constructor(readonly repository: RightsRepository, readonly options: RightsOptions) {}
@@ -283,7 +292,7 @@ export class RightsIntakeService {
       return { view: { ...view, availableActions: [] }, ...(command ? { commandEventId: command.eventId } : {}), reconcileAllowed: !!pending && (p.version === 2 || p.version === 3) && p.localFulfillment.allowedActions.includes('reconcile_recorded_effect') && p.localFulfillment.purposes.includes(purpose) && view.status.technical.current !== 'unknown' && view.status.reason === 'receipt_pending' };
     }) : undefined;
     const localErasures=p.version===3 && r.kind==='erasure' && ledger?.version===4 && this.options.localErasure && this.options.assertPrivateMemoryNow ? (()=>{
-      const workflow=new RightsLocalErasureWorkflow(this.repository,this.options),view=workflow.status(Number(r.accountId.slice('telegram-account:'.length)),r.requestId,r.space);
+      const workflow=this.erasureWorkflow(),view=workflow.status(Number(r.accountId.slice('telegram-account:'.length)),r.requestId,r.space);
       const selected=ledger.localErasure.operations.filter(o=>o.requestId===r.requestId && o.space===r.space);
       return selected.map((o,index)=>({view:view.operations[index],commandEventId:o.eventId,reconcileAllowed:r.revision===o.requestRevision && !o.acknowledgement && view.operations[index].technical==='note_content_removed' && p.localErasure.allowedActions.includes('reconcile') && r.state!=='closed_unfulfilled' && r.retention.reviewOrExpiryAt>now}));
     })():undefined;
