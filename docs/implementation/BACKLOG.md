@@ -247,7 +247,7 @@ Create purpose-specific consent/notice receipts, current epochs, withdrawal and 
 
 **Requirements:** REQ-01, REQ-08, REQ-09, REQ-20. **Depends on:** VOX-003, VOX-004, VOX-011.
 
-**Implementation progress:** EN/FA Privacy screen, profile declaration, optional choices/withdrawal, private notes and per-agent grants implemented. Guest entry and complete user-rights/status journeys remain open.
+**Implementation progress:** EN/FA Privacy screen, profile declaration, optional choices/withdrawal, private notes and per-agent grants implemented. Guest entry and complete user-rights/status journeys remain open. GI1 adds an isolated public EN/FA /privacy route, manual reference/recovery-code status, explicit close confirmation and disabled-mode contact fallback. Guest credentials remain in transient component state and request bodies; this is metadata request tracking, not verified identity, consent or rights fulfillment. Independent final acceptance is pending.
 
 Implement scoped settings, AI disclosure, optional consent choices, why-this/undo/reset and request-status UX in Studio. Include a proportionate 18+ entry gate, no-account guest notice/choice and accidental-participant reporting without collecting a full birth date by default.
 
@@ -261,7 +261,7 @@ Implement scoped settings, AI disclosure, optional consent choices, why-this/und
 
 **Deliverables:** Studio settings/onboarding UI; Accessibility and locale evidence.
 
-**Evidence:** ["docs/implementation/DELIVERY_RESULT.md"]
+**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/GUEST_RIGHTS_INTAKE.md"]
 
 ### VOX-013 — Implement memory lifecycle and bounded retrieval
 
@@ -355,7 +355,7 @@ Implement database/IAM rules, restricted evidence and future biometric storage b
 
 **Requirements:** REQ-01, REQ-02, REQ-03, REQ-09, REQ-17, REQ-22. **Depends on:** VOX-002, VOX-009, VOX-010, VOX-011, VOX-014, VOX-016.
 
-**Implementation progress:** Own-account Work/Personal export, EN/FA note correction, RI1 request intake and RI2 retention operations are implemented. RI2 binds original audit/closure floors, explicitly reassesses unresolved cases, purges only eligible terminal records and retains finite scoped continuity/410 receipts. Independent RI2 local acceptance passed 36 cases. Formal restriction/objection, guest verification, provider/backups and broader rights fulfillment remain open. Prior additional independent immediate-export race proof remains unavailable after automatic security review; no replacement execution is claimed.
+**Implementation progress:** Own-account Work/Personal export, EN/FA note correction, RI1 request intake and RI2 retention operations are implemented. RI2 binds original audit/closure floors, explicitly reassesses unresolved cases, purges only eligible terminal records and retains finite scoped continuity/410 receipts. Independent RI2 local acceptance passed 36 cases. Formal restriction/objection, guest verification, provider/backups and broader rights fulfillment remain open. Prior additional independent immediate-export race proof remains unavailable after automatic security review; no replacement execution is claimed. GI1 guest metadata intake, bounded separate ledger, current-operator queue, key continuity, final authority fences and finite retention/status receipts are implemented behind reviewed-policy/key configuration. Independent review caught a short purge-receipt horizon; the corrected pin and compiled browser acceptance are pending. Guest recovery-code possession never proves identity or authorizes private-data disclosure.
 
 Implement accessible EN/FA access/export, correction, erasure, restriction, objection, portability and withdrawal requests with proportionate requester verification, a no-account guest route, operator queue, jurisdiction deadlines and status receipts. Wire the privacy center to these real handlers.
 
@@ -370,7 +370,7 @@ Implement accessible EN/FA access/export, correction, erasure, restriction, obje
 
 **Deliverables:** Rights service and operator queue; Scoped export and correction handlers; EN/FA privacy-center and guest request flows; Rights/deadline/access tests.
 
-**Evidence:** ["docs/implementation/OBSERVATION_LEARNING.md", "docs/implementation/RIGHTS_INTAKE.md", "docs/implementation/RIGHTS_RETENTION.md"]
+**Evidence:** ["docs/implementation/OBSERVATION_LEARNING.md", "docs/implementation/RIGHTS_INTAKE.md", "docs/implementation/RIGHTS_RETENTION.md", "docs/implementation/GUEST_RIGHTS_INTAKE.md"]
 
 ## P2 — Reliable observation
 
