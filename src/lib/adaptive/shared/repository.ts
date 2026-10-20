@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { AdaptiveStorage } from '../persistence/storage';
 import { digest } from '../persistence/repository';
+import { activeReadScope, memoized, type TurnReadScope } from '../../tireh/privacy/read-scope';
 import type { SharedRecipient, SharedSpace } from './contracts';
 export interface SharedMember extends SharedRecipient { bindingRevision: number; status: 'active' | 'revoked' }
 export interface SharedMemory {
@@ -52,19 +53,50 @@ const documentSchema = z.object({ schemaVersion: z.literal(1), namespace: id, re
  * from Studio admin state and private account documents; bounded capacity fails closed. */
 export class SharedMemoryRepository {
   constructor(readonly storage: AdaptiveStorage, readonly namespace = 'studio') {}
+  private get key(): string { return `shared-memory:v1:${this.namespace}`; }
   transaction<T>(fn: (document: SharedDocument) => T): Promise<T> {
-    return this.storage.transact(`shared-memory:v1:${this.namespace}`, (raw) => {
-      const parsed = raw === null ? undefined : documentSchema.safeParse(raw);
-      if (parsed && !parsed.success) throw new Error('Invalid shared memory document');
-      const document: SharedDocument = parsed?.success ? parsed.data : { schemaVersion: 1, namespace: this.namespace, revision: 0, containers: [], previews: [], events: [] };
-      if (!document || document.schemaVersion !== 1 || document.namespace !== this.namespace ||
-          !Number.isSafeInteger(document.revision) || document.revision < 0 || !Array.isArray(document.containers) ||
-          !Array.isArray(document.previews) || !Array.isArray(document.events)) throw new Error('Invalid shared memory document');
+    const scope = activeReadScope();
+    return scope ? this.served(scope, fn) : this.committed(fn);
+  }
+  private committed<T>(fn: (document: SharedDocument) => T): Promise<T> {
+    return this.storage.transact(this.key, (raw) => {
+      const document = this.parse(raw);
       const result = fn(document);
       if (!documentSchema.safeParse(document).success) throw new Error('Invalid shared memory mutation');
       if (Buffer.byteLength(JSON.stringify(document)) > 650_000) throw new Error('Shared memory storage capacity reached');
       return { document, result };
     });
+  }
+  /** Starts the read-only load of the shared document in the active read scope; no-op outside one. */
+  async preload(): Promise<void> {
+    const scope = activeReadScope(), load = this.storage.load?.bind(this.storage);
+    if (!scope || !load) return;
+    await scope.document(this.storage, this.key, () => load(this.key));
+  }
+  private parse(raw: unknown): SharedDocument {
+    const parsed = raw === null ? undefined : documentSchema.safeParse(raw);
+    if (parsed && !parsed.success) throw new Error('Invalid shared memory document');
+    const document: SharedDocument = parsed?.success ? parsed.data : { schemaVersion: 1, namespace: this.namespace, revision: 0, containers: [], previews: [], events: [] };
+    if (!document || document.schemaVersion !== 1 || document.namespace !== this.namespace ||
+        !Number.isSafeInteger(document.revision) || document.revision < 0 || !Array.isArray(document.containers) ||
+        !Array.isArray(document.previews) || !Array.isArray(document.events)) throw new Error('Invalid shared memory document');
+    return document;
+  }
+  /** Inside a read scope: a committed copy (parsed once per snapshot), not
+   * rewritten. A callback that changes the document (pruning, audience
+   * invalidation) commits through the ordinary transaction instead. */
+  private async served<T>(scope: TurnReadScope, fn: (document: SharedDocument) => T): Promise<T> {
+    const load = this.storage.load?.bind(this.storage);
+    if (!load) { scope.passThrough(); scope.noteWrite(); return this.committed(fn); }
+    const loaded = await scope.document(this.storage, this.key, () => load(this.key));
+    const parsed = memoized(loaded, 'shared:parsed', () => this.parse(loaded.value));
+    const canonical = memoized(loaded, 'shared:canonical', () => JSON.stringify(parsed));
+    const draft = structuredClone(parsed);
+    const result = fn(draft);
+    if (JSON.stringify(draft) !== canonical) {
+      try { return await this.committed(fn); } finally { scope.committed(this.storage, this.key); }
+    }
+    return result === undefined ? result : structuredClone(result);
   }
 }
 export const sharedDigest = digest;

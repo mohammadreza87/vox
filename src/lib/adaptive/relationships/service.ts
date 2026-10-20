@@ -78,8 +78,9 @@ export class AdaptiveRelationshipService {
         isQuietHour(now, permit.notification.timezone, permit.notification.quietStartHour, permit.notification.quietEndHour))) return null;
     return permit;
   }
+  /** Pure read: served from one committed load; pruning that must commit falls back to the transaction. */
   resolve(telegramId: number, agentId: string, space: SpaceKind): Promise<RelationshipPermit | null> {
-    return this.adaptive.withAccountDocument(telegramId, (d, now) => { this.pruneDocument(d, now); return this.permit(d, agentId, space, now); });
+    return this.adaptive.withAccountView(telegramId, (d, now) => { this.pruneDocument(d, now); return this.permit(d, agentId, space, now); });
   }
   async authorize(key: RelationshipKey, sourceIds: readonly string[], phase: RelationshipPhase, expectedFingerprint?: string): Promise<RelationshipPermit | null> {
     const telegramId = telegramFor(key);

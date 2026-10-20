@@ -13,6 +13,7 @@ import { correctionInput, type CorrectionInput } from './validation';
 import type { AgentGrantInput, ConsentInput, DeletionInput, IdentityInput, MemoryInput, PresentInput } from './validation';
 import { sweepObserverDocument } from '../observation/helpers';
 import { pruneLearningDocument } from '../personalization/learning/state';
+import { readOnce } from '../../tireh/privacy/read-scope';
 
 export class AdaptiveError extends Error {
   readonly name = 'AdaptiveError';
@@ -229,6 +230,13 @@ export class AdaptiveService {
   /** Trusted backend seam: same aggregate/expiry transaction as consent and memory. */
   withAccountDocument<T>(telegramId: number, fn: (document: AdaptiveDocument, now: number) => T, beforeCommit?: () => void): Promise<T> {
     return this.transact(telegramId, fn, beforeCommit);
+  }
+  /** Twin of `withAccountDocument` for pure reads: an unlocked committed load,
+   * the same normalisation and callback, and no rewrite when nothing changed.
+   * A read that does change the document (expiry, pruning, first creation)
+   * commits through the ordinary transaction, exactly as before. */
+  withAccountView<T>(telegramId: number, fn: (document: AdaptiveDocument, now: number) => T): Promise<T> {
+    return readOnce(() => this.transact(telegramId, fn));
   }
   /** Validated committed file snapshot only. No mutation or awaited work. */
   readCommittedForEffect<T>(telegramId: number, fn: (document: AdaptiveDocument, now: number) => T):
@@ -550,7 +558,7 @@ export class AdaptiveService {
     read: async (personaId: string, legacyPersonId: string, space: SpaceKind = 'work'): Promise<{ revision: string; memoryEnabled: boolean; historyEnabled: boolean }> => {
       const match = /^tg-([1-9]\d*)$/.exec(legacyPersonId);
       if (!match) return { revision: 'unconfirmed', memoryEnabled: false, historyEnabled: false };
-      return this.transact(Number(match[1]), (d, now) => {
+      return this.withAccountView(Number(match[1]), (d, now) => {
         const consent = this.permission(d, space, 'optional.auto_memory');
         return { revision: digest([d.accountId, d.binding, this.confirmed(d, now), consent, this.eligible(d, 'auto_memory', now), d.agentGrants.filter(g => g.space === space && g.agentId === personaId)]),
           // Legacy unscoped stores have no authoritative source lineage: never unlock them.
@@ -561,7 +569,7 @@ export class AdaptiveService {
   /** Authorized, fresh explicit-private context for the separately gated runtime path.
    * The caller must recheck returned revision before provider use/output. */
   readPrivateContext(telegramId: number, space: SpaceKind, agentId: string): Promise<{ revision: string; memories: { id: string; text: string; sourceIds?: string[] }[] }> {
-    return this.transact(telegramId, (d, now) => {
+    return this.withAccountView(telegramId, (d, now) => {
       const permission = this.permission(d, space, 'optional.personalization');
       const eligibility = this.eligible(d, 'personalization', now);
       const confirmed = this.confirmed(d, now);

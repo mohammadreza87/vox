@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { ConsentEvent } from '../consent';
 import type { ConsentPermission, PersonAccountBinding } from '../types';
 import type { AdaptiveStorage } from './storage';
+import { activeReadScope, memoized, type TurnReadScope } from '../../tireh/privacy/read-scope';
 import { emptyExperience, experienceDocumentSchema } from '../runtime/contracts';
 import { emptyRelationshipDocument, relationshipDocumentSchema } from '../relationships/contracts';
 import { emptyObserverDocument, observerDocumentSchema } from '../observation/contracts';
@@ -74,6 +75,20 @@ function create(accountId: string, now: number): AdaptiveDocument {
     }))), receipts: [], agentGrants: [], memories: [], events: [], consentEvents: [], outbox: [] };
 }
 
+function sampled(at: number | (() => number)): number {
+  const now = typeof at === 'function' ? at() : at;
+  if (!Number.isSafeInteger(now) || now < 0) throw new Error('Invalid adaptive account');
+  return now;
+}
+/** Keep the disabled rollout readable by the previous strict schema. A future
+ * enabled observer rollout needs an explicit rollback migration; never restore
+ * an old account backup over newer rights/tombstones. */
+function storedForm(draft: AdaptiveDocument): Partial<AdaptiveDocument> {
+  const stored: Partial<AdaptiveDocument> = { ...draft };
+  if (!draft.observer.events.length && !draft.observer.projections.length) delete stored.observer;
+  return stored;
+}
+
 export class AdaptiveRepository {
   constructor(readonly storage: AdaptiveStorage) {}
   readCommittedForEffect(accountId: string, at: number | (() => number)): { status: 'ready'; document: AdaptiveDocument | null } | { status: 'busy' | 'unsupported' } {
@@ -95,54 +110,91 @@ export class AdaptiveRepository {
   transaction<T>(accountId: string, at: number | (() => number), fn: (document: AdaptiveDocument, now: number) => T, beforeCommit?: () => void): Promise<T> {
     if (!/^telegram-account:[1-9]\d{0,15}$/.test(accountId) || typeof at !== 'function' && (!Number.isSafeInteger(at) || at < 0)) throw new Error('Invalid adaptive account');
     if (beforeCommit && this.storage.supportsCommittedWriteFence !== true) throw new Error('Committed write fence unsupported');
+    const scope = activeReadScope();
+    if (scope && !beforeCommit) return this.served(scope, accountId, at, fn);
+    // A fenced write inside a read scope is a real commit the scope cannot vouch for.
+    if (scope) scope.noteWrite();
+    return this.committed(accountId, at, fn, beforeCommit);
+  }
+  /** Starts the read-only load of an account in the active read scope; no-op outside one. */
+  async preload(accountId: string): Promise<void> {
+    const scope = activeReadScope(), load = this.storage.load?.bind(this.storage);
+    if (!scope || !load || !/^telegram-account:[1-9]\d{0,15}$/.test(accountId)) return;
+    await scope.document(this.storage, accountId, () => load(accountId));
+  }
+  private committed<T>(accountId: string, at: number | (() => number), fn: (document: AdaptiveDocument, now: number) => T, beforeCommit?: () => void): Promise<T> {
     return this.storage.transact(accountId, current => {
       // Sample after the backend acquires its serialization/lock and reads the
       // committed document. The same time drives validation and business expiry.
-      const now = typeof at === 'function' ? at() : at;
-      if (!Number.isSafeInteger(now) || now < 0) throw new Error('Invalid adaptive account');
-      // Only an exact, otherwise valid old 14-purpose document is upgraded. Existing
-      // permissions and receipts are preserved; the new purpose starts unasked.
-      let input = current;
-      if (input && typeof input === 'object' && 'permissions' in input && Array.isArray(input.permissions) && input.permissions.length === 14) {
-        const old = input.permissions;
-        const expected = create(accountId, now).permissions.filter(p => p.purpose !== 'optional.relationship_outreach');
-        if (old.every(p => p && typeof p === 'object' && 'id' in p) && new Set(old.map(p => p.id)).size === 14 &&
-            expected.every(p => old.some(row => row.id === p.id && row.purpose === p.purpose))) {
-          input = { ...input, permissions: [...old, ...create(accountId, now).permissions.filter(p => p.purpose === 'optional.relationship_outreach')] };
-        }
-      }
+      const now = sampled(at);
+      const input = this.upgrade(accountId, current, now);
       const draft = input === null ? create(accountId, now) : documentSchema.parse(input) as AdaptiveDocument;
-      if (draft.accountId !== accountId || draft.personId !== create(accountId, now).personId || draft.updatedAt > now ||
-          new Set(draft.permissions.map(p => p.id)).size !== 16 || draft.permissions.length !== 16 ||
-          new Set(draft.events.map(e => e.eventId)).size !== draft.events.length ||
-          new Set(draft.memories.map(m => m.id)).size !== draft.memories.length ||
-          new Set(draft.observer.events.map(e => e.id)).size !== draft.observer.events.length) throw new Error('Invalid adaptive document');
-      // Validate immutable partition keys. Corrupt identity/scope cannot become authoritative.
-      for (const s of ['work', 'personal'] as const) for (const p of OPTIONAL_PURPOSES) {
-        const permission = draft.permissions.find(row => row.id === `permission:${s}:${p}`);
-        if (!permission || permission.personId !== draft.personId || permission.purpose !== p ||
-            permission.tenantId !== tenantIdFor(accountId) || permission.spaceId !== spaceIdFor(accountId, s)) throw new Error('Invalid adaptive permission');
-      }
-      if (new Set(draft.relationships.controls.map(c => digest([c.agentId, c.space]))).size !== draft.relationships.controls.length ||
-          new Set(draft.relationships.bindings.map(b => b.space)).size !== draft.relationships.bindings.length ||
-          draft.relationships.bindings.some(b => b.accountId !== accountId || b.personId !== draft.personId || b.confirmedAt > b.expiresAt || b.confirmedAt > now) ||
-          new Set(draft.relationships.sources.map(s => digest([s.key.personaId, s.key.scope.space, s.id]))).size !== draft.relationships.sources.length ||
-          new Set(draft.relationships.inbox.map(i => i.id)).size !== draft.relationships.inbox.length ||
-          new Set(draft.relationships.ledger.map(i => i.id)).size !== draft.relationships.ledger.length) throw new Error('Invalid relationship authority');
-      for (const key of [...draft.relationships.sources.map(s => s.key), ...draft.relationships.inbox.map(i => i.key), ...draft.relationships.ledger.map(i => i.key)]) {
-        const scope = key.scope;
-        if (scope.accountId !== accountId || scope.personId !== draft.personId || scope.tenantId !== tenantIdFor(accountId) ||
-            scope.spaceId !== spaceIdFor(accountId, scope.space) || scope.containerId !== containerIdFor(accountId, scope.space) ||
-            key.audience.personId !== draft.personId || key.chatKey !== `private-${draft.personId}`) throw new Error('Invalid relationship partition');
-      }
+      this.check(accountId, draft, now);
       const result = fn(draft, now);
       documentSchema.parse(draft);
-      // Keep the disabled rollout readable by the previous strict schema. A
-      // future enabled observer rollout needs an explicit rollback migration;
-      // never restore an old account backup over newer rights/tombstones.
-      const stored: Partial<AdaptiveDocument> = { ...draft };
-      if (!draft.observer.events.length && !draft.observer.projections.length) delete stored.observer;
-      return { document: stored, result };
+      return { document: storedForm(draft), result };
     }, beforeCommit);
+  }
+  /** Inside a read scope: the same validation and callback over a committed
+   * copy (parsed once per snapshot), without rewriting it. A callback that
+   * changes the document, or a document that must first be created or
+   * upgraded, commits through the ordinary transaction instead. */
+  private async served<T>(scope: TurnReadScope, accountId: string, at: number | (() => number), fn: (document: AdaptiveDocument, now: number) => T): Promise<T> {
+    const load = this.storage.load?.bind(this.storage);
+    if (!load) { scope.passThrough(); return this.committed(accountId, at, fn); }
+    const loaded = await scope.document(this.storage, accountId, () => load(accountId));
+    const now = sampled(at);
+    if (loaded.value === null || this.upgrade(accountId, loaded.value, now) !== loaded.value) return this.commitInScope(scope, accountId, at, fn);
+    const parsed = memoized(loaded, 'adaptive:parsed', () => documentSchema.parse(loaded.value) as AdaptiveDocument);
+    const canonical = memoized(loaded, 'adaptive:canonical', () => JSON.stringify(storedForm(parsed)));
+    const draft = structuredClone(parsed);
+    this.check(accountId, draft, now);
+    const result = fn(draft, now);
+    if (JSON.stringify(storedForm(draft)) !== canonical) return this.commitInScope(scope, accountId, at, fn);
+    return result === undefined ? result : structuredClone(result);
+  }
+  /** Storage callbacks are retry safe, so rerunning `fn` for the commit is a retry. */
+  private async commitInScope<T>(scope: TurnReadScope, accountId: string, at: number | (() => number), fn: (document: AdaptiveDocument, now: number) => T): Promise<T> {
+    try { return await this.committed(accountId, at, fn); } finally { scope.committed(this.storage, accountId); }
+  }
+  /** Only an exact, otherwise valid old 14-purpose document is upgraded. Existing
+   * permissions and receipts are preserved; the new purpose starts unasked.
+   * Returns the input itself when no upgrade applies. */
+  private upgrade(accountId: string, current: unknown | null, now: number): unknown | null {
+    const input = current;
+    if (input && typeof input === 'object' && 'permissions' in input && Array.isArray(input.permissions) && input.permissions.length === 14) {
+      const old = input.permissions;
+      const expected = create(accountId, now).permissions.filter(p => p.purpose !== 'optional.relationship_outreach');
+      if (old.every(p => p && typeof p === 'object' && 'id' in p) && new Set(old.map(p => p.id)).size === 14 &&
+          expected.every(p => old.some(row => row.id === p.id && row.purpose === p.purpose))) {
+        return { ...input, permissions: [...old, ...create(accountId, now).permissions.filter(p => p.purpose === 'optional.relationship_outreach')] };
+      }
+    }
+    return input;
+  }
+  private check(accountId: string, draft: AdaptiveDocument, now: number): void {
+    if (draft.accountId !== accountId || draft.personId !== create(accountId, now).personId || draft.updatedAt > now ||
+        new Set(draft.permissions.map(p => p.id)).size !== 16 || draft.permissions.length !== 16 ||
+        new Set(draft.events.map(e => e.eventId)).size !== draft.events.length ||
+        new Set(draft.memories.map(m => m.id)).size !== draft.memories.length ||
+        new Set(draft.observer.events.map(e => e.id)).size !== draft.observer.events.length) throw new Error('Invalid adaptive document');
+    // Validate immutable partition keys. Corrupt identity/scope cannot become authoritative.
+    for (const s of ['work', 'personal'] as const) for (const p of OPTIONAL_PURPOSES) {
+      const permission = draft.permissions.find(row => row.id === `permission:${s}:${p}`);
+      if (!permission || permission.personId !== draft.personId || permission.purpose !== p ||
+          permission.tenantId !== tenantIdFor(accountId) || permission.spaceId !== spaceIdFor(accountId, s)) throw new Error('Invalid adaptive permission');
+    }
+    if (new Set(draft.relationships.controls.map(c => digest([c.agentId, c.space]))).size !== draft.relationships.controls.length ||
+        new Set(draft.relationships.bindings.map(b => b.space)).size !== draft.relationships.bindings.length ||
+        draft.relationships.bindings.some(b => b.accountId !== accountId || b.personId !== draft.personId || b.confirmedAt > b.expiresAt || b.confirmedAt > now) ||
+        new Set(draft.relationships.sources.map(s => digest([s.key.personaId, s.key.scope.space, s.id]))).size !== draft.relationships.sources.length ||
+        new Set(draft.relationships.inbox.map(i => i.id)).size !== draft.relationships.inbox.length ||
+        new Set(draft.relationships.ledger.map(i => i.id)).size !== draft.relationships.ledger.length) throw new Error('Invalid relationship authority');
+    for (const key of [...draft.relationships.sources.map(s => s.key), ...draft.relationships.inbox.map(i => i.key), ...draft.relationships.ledger.map(i => i.key)]) {
+      const scope = key.scope;
+      if (scope.accountId !== accountId || scope.personId !== draft.personId || scope.tenantId !== tenantIdFor(accountId) ||
+          scope.spaceId !== spaceIdFor(accountId, scope.space) || scope.containerId !== containerIdFor(accountId, scope.space) ||
+          key.audience.personId !== draft.personId || key.chatKey !== `private-${draft.personId}`) throw new Error('Invalid relationship partition');
+    }
   }
 }

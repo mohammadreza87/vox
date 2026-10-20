@@ -1,4 +1,5 @@
 import { ensureReminderDelivery, pruneReminderDelivery, reminderChannelStatus, reminderPermit, reminderDisclosureAuthority, REMINDER_PURPOSE } from './reminder-state';
+import { readOnce } from '../../tireh/privacy/read-scope';
 import { REMINDER_DISCLOSURE_VERSION, reminderChannelPresentSchema, reminderChannelInputSchema, reminderActionInputSchema, type ReminderChannelPresentInput, type ReminderChannelInput, type ReminderActionInput } from './reminder-contracts';
 import { randomUUID } from 'crypto';
 import { reserveDecision } from './decision-budget';
@@ -321,10 +322,14 @@ export class AdaptiveExperienceService {
     if (snapshot.receipt !== current.receipt) error(409, 'preference_authority_changed');
     return { ...current, resolved };
   }
-  async readPreferences(telegramId: number, space: SpaceKind, agentId: string): Promise<{ revision: string; settings: { key: string; value: string }[] }> {
-    const snapshot = await this.resolveExplicitPreferences(telegramId, space, agentId);
-    return { revision: snapshot.contextReceipt, settings: snapshot.allowed ? snapshot.resolved
-      .filter(row => row.source === 'explicit').map(row => row.setting) : [] };
+  /** Pure read: both preference snapshots are served from one committed load
+   * of the account; pruning that must commit falls back to the transaction. */
+  readPreferences(telegramId: number, space: SpaceKind, agentId: string): Promise<{ revision: string; settings: { key: string; value: string }[] }> {
+    return readOnce(async () => {
+      const snapshot = await this.resolveExplicitPreferences(telegramId, space, agentId);
+      return { revision: snapshot.contextReceipt, settings: snapshot.allowed ? snapshot.resolved
+        .filter(row => row.source === 'explicit').map(row => row.setting) : [] };
+    });
   }
   async readPreferenceState(telegramId: number, space: SpaceKind, agentId: string): Promise<PreferenceState> {
     const snapshot = await this.resolveExplicitPreferences(telegramId, space, agentId);
