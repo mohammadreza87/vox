@@ -1,5 +1,9 @@
 import { createCipheriv, createDecipheriv, createHmac, randomBytes, randomUUID } from 'crypto';
 import { z } from 'zod';
+import type { RightsUseHoldService } from '../rights-use-holds/service';
+import { RightsLocalUseWorkflow, type LocalUseView } from './local-use-service';
+import type { LocalUseScope, LocalUsePlanInput, LocalUseActionInput } from './local-use-contracts';
+import { hasLocalUseDependency } from './local-use-state';
 import { accountIdFor, digest } from '../persistence/repository';
 import { createInputSchema, retentionActionSchema, integer, operatorActionSchema, reference, requesterActionSchema, spaceSchema,
   type RetentionAction, type RetentionResult, type AccountLedger, type CreateInput, type OperatorAction, type RequestRecord, type RequesterAction,
@@ -9,6 +13,7 @@ import { fail, RightsError, RightsReplay, RightsRepository } from './repository'
 export interface PreparedRightsExport { data: { revision: number; [key: string]: unknown }; revalidate: () => void }
 export interface RightsOptions {
   policy: () => unknown;
+  localUse?: RightsUseHoldService;
   /** Dedicated provisioned 256-bit key. Never derive from a bot token or expose to clients. */
   key?: Buffer;
   clock?: () => number;
@@ -28,6 +33,27 @@ const bump = (n: number) => { if (!Number.isSafeInteger(n + 1)) return fail(503,
 /** Metadata-only intake. Account authentication never establishes natural-person identity. */
 export class RightsIntakeService {
   private observedTime = 0;
+  assertOperatorPublicationNow(operator: number): void { this.operator(operator); }
+  assertLocalUseOperatorPublication(operator: number, requestId: string, operationHandle: string, expected: LocalUseView): void {
+    const p = this.operator(operator), token = this.open(operationHandle,operator,p,'operation');
+    if(token.requestId !== requestId) return fail(403,'operation_handle_invalid');
+    this.assertLocalUsePublication(Number(token.accountId!.slice('telegram-account:'.length)),requestId,expected.status.scope,expected);
+    this.operator(operator,p);
+  }
+  localUseStatus(id: number, requestId: string, scope: LocalUseScope) { return new RightsLocalUseWorkflow(this.repository, this.options).status(id, requestId, scope); }
+  assertLocalUsePublication(id: number, requestId: string, scope: LocalUseScope, expected: LocalUseView): void {
+    const current = this.localUseStatus(id,requestId,scope);
+    const proof = (v: LocalUseView) => [v.status.scope, v.status.technical.current, v.status.selectedEffectId, v.status.useEpoch, v.status.effectiveBlocked, v.availableActions];
+    if (digest(proof(current)) !== digest(proof(expected))) return fail(409,'rights_conflict');
+  }
+  localUsePlan(id: number, requestId: string, space: RightsSpace, input: LocalUsePlanInput) { return new RightsLocalUseWorkflow(this.repository, this.options).plan(id, requestId, space, input); }
+  localUseAction(id: number, requestId: string, space: RightsSpace, input: LocalUseActionInput) { return new RightsLocalUseWorkflow(this.repository, this.options).act(id, requestId, space, input); }
+  async reconcileLocalUse(operator: number, requestId: string, operationHandle: string, commandEventId: string) {
+    const p = this.operator(operator), token = this.open(operationHandle, operator, p, 'operation');
+    if (token.requestId !== requestId) return fail(403,'operation_handle_invalid');
+    const id = Number(token.accountId!.slice('telegram-account:'.length));
+    return new RightsLocalUseWorkflow(this.repository, this.options).reconcile(id, requestId, commandEventId, () => { this.operator(operator,p); this.open(operationHandle,operator,p,'operation'); });
+  }
   constructor(readonly repository: RightsRepository, readonly options: RightsOptions) {}
   /** Request-local guard avoids mutating a shared service while awaits overlap. */
   forRequest(assertRequestNow: () => void): RightsIntakeService {
@@ -131,11 +157,20 @@ export class RightsIntakeService {
       }
     }
   }
+  /** A concurrent exact retry can briefly hold the writer after our commit.
+   * Reuse bounded committed acquisition; do not reread a locked ledger after
+   * obtaining the publication snapshot. Current request/account fences remain. */
+  private async mutationDetail(id:number,space:RightsSpace,requestId:string,expectedPolicy?:RightsPolicy):Promise<Pick<RightsMutation,'request'|'policyStatus'>> {
+    const d=await this.readForMutation(id),now=this.now(d),r=this.row(d,requestId,space);
+    const result={request:this.view(r,now),policyStatus:this.available(d,now)?'available' as const:'unavailable' as const};
+    if(expectedPolicy)this.requirePolicy(this.now(d),expectedPolicy);else this.policy(this.now(d));
+    this.options.assertAccountNow(id);this.options.assertRequestNow?.();return result;
+  }
   private async replayResult(id: number, space: RightsSpace, eventId: string, fp: string): Promise<RightsMutation | undefined> {
     const d = await this.readForMutation(id), now = this.now(d), row = this.replay(d, eventId, fp, now);
     if (!row) return undefined;
     if (row.space !== space) return fail(409, 'rights_conflict');
-    return { ...this.detail(id, space, row.requestId), replayed: true };
+    return { ...await this.mutationDetail(id, space, row.requestId), replayed: true };
   }
   private admit(d: AccountLedger, p: RightsPolicy, now: number): void {
     if (d.requests.some(r => r.retention.reviewOrExpiryAt <= now)) return fail(503, 'rights_retention_review_required');
@@ -175,7 +210,7 @@ export class RightsIntakeService {
         d.requests.push(row); this.receipt(d, row, input, fp, now, p);
       }, () => { this.options.assertAccountNow(id); this.requirePolicy(this.now(), p); });
     } catch (e) { if (e instanceof RightsReplay) return (await this.replayResult(id, input.space, input.eventId, fp))!; throw e; }
-    this.requirePolicy(this.now(), p); return { ...this.detail(id, input.space, requestId), replayed: false };
+    this.requirePolicy(this.now(), p); return { ...await this.mutationDetail(id, input.space, requestId,p), replayed: false };
   }
   private transition(r: RequestRecord, action: string, reason: RequestRecord['reasonCode'], actor: 'requester' | 'privacy_operator' | 'service', actorId: string, now: number, p: RightsPolicy): void {
     if (terminal(r)) return fail(409, 'rights_conflict');
@@ -216,8 +251,16 @@ export class RightsIntakeService {
   private operationView(r: RequestRecord, operator: number, p: RightsPolicy, now: number): RightsOperationView {
     const { version, requestId, space, kind, revision, createdAt, updatedAt, state, reasonCode, deadline, coverage, retentionReviewRequired } = this.view(r, now);
     const retentionAt = terminal(r) ? this.purgeAt(r, p) : r.retention.reviewOrExpiryAt;
-    return { version, requestId, space, kind, revision, createdAt, updatedAt, state, ...(reasonCode ? { reasonCode } : {}), deadline, coverage, retentionReviewRequired,
-      ...(p.retentionOperations ? { retentionActions: terminal(r) ? (this.purgeAt(r, p) <= now ? ['reassess_retention', 'purge_terminal_record'] : ['reassess_retention']) : ['reassess_retention'], retentionPolicyRevision: p.revision, ...(retentionAt === Number.MAX_SAFE_INTEGER ? {} : { retentionAt }) } : {}),
+    const ledger = this.repository.read(r.accountId);
+    const localUses = p.version === 2 && ['restriction','objection'].includes(r.kind) && ledger?.version === 3 ? (['optional.personalization','optional.product_analytics'] as const).map(purpose => {
+      const scope = { space: r.space, purpose }, account = Number(r.accountId.slice('telegram-account:'.length));
+      const workflow = new RightsLocalUseWorkflow(this.repository,this.options), view = workflow.status(account,r.requestId,scope);
+      const command = ledger.localUse.intents.find(i => i.requestId === r.requestId && i.scope.purpose === purpose && !ledger.localUse.acknowledgements.some(a => a.eventId === i.eventId) && !ledger.localUse.intents.some(s=>s.supersedesEventId===i.eventId));
+      const pending = !!command;
+      return { view: { ...view, availableActions: [] }, ...(command ? { commandEventId: command.eventId } : {}), reconcileAllowed: !!pending && p.version === 2 && p.localFulfillment.allowedActions.includes('reconcile_recorded_effect') && p.localFulfillment.purposes.includes(purpose) && view.status.technical.current !== 'unknown' && view.status.reason === 'receipt_pending' };
+    }) : undefined;
+    return { version, requestId, space, kind, revision, createdAt, updatedAt, state, ...(localUses ? {localUses} : {}), ...(reasonCode ? { reasonCode } : {}), deadline, coverage, retentionReviewRequired,
+      ...(p.retentionOperations ? { retentionActions: terminal(r) ? (this.purgeAt(r, p) <= now && ledger && !hasLocalUseDependency(ledger,r.requestId) ? ['reassess_retention', 'purge_terminal_record'] : ['reassess_retention']) : ['reassess_retention'], retentionPolicyRevision: p.revision, ...(retentionAt === Number.MAX_SAFE_INTEGER ? {} : { retentionAt }) } : {}),
       accountRef: this.ref('account', r.accountId), operationHandle: this.seal({ version: 1, type: 'operation', operatorRef: this.ref('operator', String(operator)), policy: digest(p), issuedAt: now, expiresAt: safeAdd(now, p.handleLifetimeMs), accountId: r.accountId, requestId, space }),
       audit: r.audit.map(a => ({ seq: a.seq, at: a.at, action: a.action, actor: a.actor, from: a.from, to: a.to, ...(a.reasonCode ? { reasonCode: a.reasonCode } : {}), policyRevision: a.policyRevision })) };
   }
@@ -258,7 +301,7 @@ export class RightsIntakeService {
         const r = this.row(d, requestId, space);
         if (r.revision !== input.expectedRevision) return fail(409, 'rights_conflict');
         if (input.action === 'purge_terminal_record') {
-          if (!terminal(r) || this.purgeAt(r, p) > now) return fail(409, 'rights_retention_not_eligible');
+          if (hasLocalUseDependency(d, requestId) || !terminal(r) || this.purgeAt(r, p) > now) return fail(409, 'rights_retention_not_eligible');
           if (d.tombstones.length >= 128) return fail(409, 'rights_capacity');
           this.receipt(d, r, input, fp, now, p);
           const retainUntil = Math.max(safeAdd(now, p.retentionOperations!.continuityRetentionMs), ...d.commandReceipts.filter(c => c.requestId === requestId).map(c => c.retainUntil));
@@ -272,7 +315,7 @@ export class RightsIntakeService {
           d.requests = d.requests.filter(row => row.requestId !== requestId);
         } else {
           if (r.audit.length >= 32) return fail(409, 'rights_capacity');
-          r.retention = { policyId: p.id, policyRevision: p.revision, auditRetainUntil: safeAdd(r.createdAt, p.retention.auditRetentionMs), ...(terminal(r) ? { terminalRetainUntil: safeAdd(r.audit.find(a => a.action === 'request_closed')!.at, p.retentionOperations!.terminalRetentionMs) } : {}), reviewOrExpiryAt: terminal(r) ? Math.max(safeAdd(r.audit.find(a => a.action === 'request_closed')!.at, p.retentionOperations!.terminalRetentionMs), safeAdd(r.createdAt, p.retention.auditRetentionMs)) : safeAdd(now, p.retention.requestReviewAfterMs) };
+          r.retention = { policyId: p.id, policyRevision: p.revision, auditRetainUntil: d.version === 3 ? Math.max(r.retention.auditRetainUntil ?? 0, safeAdd(r.createdAt, p.retention.auditRetentionMs)) : safeAdd(r.createdAt, p.retention.auditRetentionMs), ...(terminal(r) ? { terminalRetainUntil: d.version === 3 ? Math.max(r.retention.terminalRetainUntil ?? 0, safeAdd(r.audit.find(a => a.action === 'request_closed')!.at, p.retentionOperations!.terminalRetentionMs)) : safeAdd(r.audit.find(a => a.action === 'request_closed')!.at, p.retentionOperations!.terminalRetentionMs) } : {}), reviewOrExpiryAt: terminal(r) ? Math.max(safeAdd(r.audit.find(a => a.action === 'request_closed')!.at, p.retentionOperations!.terminalRetentionMs), safeAdd(r.createdAt, p.retention.auditRetentionMs)) : safeAdd(now, p.retention.requestReviewAfterMs) };
           r.revision = bump(r.revision); r.updatedAt = now;
           r.audit.push({ seq: r.audit.length + 1, at: now, action: 'retention_reassessed', actor: 'privacy_operator', actorRef: this.ref('privacy_operator', String(operator)), from: r.state, to: r.state, ...(r.reasonCode ? { reasonCode: r.reasonCode } : {}), policyRevision: p.revision });
           this.receipt(d, r, input, fp, now, p);

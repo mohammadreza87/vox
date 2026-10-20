@@ -84,10 +84,10 @@ export function projectObserverEvents(events: readonly ObserverEvent[], space: S
 export function sweepObserverDocument(d: AdaptiveDocument, now: number, isAllowed: ObserverAllowed, storeIdentity = 'canonical'): boolean {
   const before = digest(canonical(d.observer));
   d.observer.events = d.observer.events.filter(e => e.receivedAt <= now && e.expiresAt > now && e.accountId === d.accountId && e.personId === d.personId &&
-    e.spaceId === spaceIdFor(d.accountId, e.space) && isAllowed(d, e.space, e.agentId, now) && e.policyReceipt === observerPolicyReceipt(d, e.space, e.agentId, storeIdentity));
+    e.spaceId === spaceIdFor(d.accountId, e.space) && isAllowed(d, e.space, e.agentId, now) && e.policyReceipt === observerPolicyReceipt(d, e.space, e.agentId, d.schemaVersion===3?e.retentionStoreIdentity:storeIdentity));
   if (d.observer.corrections) {
     d.observer.corrections = d.observer.corrections.filter(e => e.occurredAt <= now && e.expiresAt > now && isAllowed(d, e.space, undefined, now) &&
-      e.policyReceipt === observerPolicyReceipt(d, e.space, undefined, storeIdentity));
+      e.policyReceipt === observerPolicyReceipt(d, e.space, undefined, d.schemaVersion===3?e.retentionStoreIdentity:storeIdentity));
     if (!d.observer.corrections.length) delete d.observer.corrections;
   }
   // Client outcomes cannot outlive their authoritative server correlation.

@@ -1,3 +1,5 @@
+import { rightsUseHoldsSchema, type RightsUseHolds, type RightsUseControls } from '../rights-use-holds/contracts';
+import { emptyRightsUseHolds, requireRightsUseHoldCapacity } from '../rights-use-holds/state';
 import { productPauseSchema, PRODUCT_PAUSE_RESERVED_BYTES, type ProductPauseV1, type ProductPauseUseControlsV1 } from '../product-pause/contracts';
 import { emptyProductPause } from '../product-pause/state';
 import { createHash } from 'crypto';
@@ -57,24 +59,25 @@ const legacyDocumentSchema = z.object({ schemaVersion: z.literal(1), accountId: 
   consentEvents: z.array(z.unknown()).max(2000), outbox: z.array(outboxSchema).max(2000),
 }).strict();
 const productPauseDocumentSchema = legacyDocumentSchema.extend({ schemaVersion: z.literal(2), productPause: productPauseSchema }).strict();
-const documentSchema = z.union([legacyDocumentSchema, productPauseDocumentSchema]);
+const rightsUseDocumentSchema = productPauseDocumentSchema.extend({schemaVersion:z.literal(3),rightsUseHolds:rightsUseHoldsSchema,retentionStoreIdentity:z.union([z.string().regex(/^[a-f0-9]{64}$/),z.literal('canonical')])}).strict();
+const documentSchema = z.union([legacyDocumentSchema, productPauseDocumentSchema, rightsUseDocumentSchema]);
 export type AdaptiveDocument = Omit<z.infer<typeof legacyDocumentSchema>, 'schemaVersion' | 'permissions' | 'binding' | 'consentEvents'> & {
-  schemaVersion: 1 | 2; productPause?: ProductPauseV1;
+  schemaVersion: 1 | 2 | 3; productPause?: ProductPauseV1; rightsUseHolds?: RightsUseHolds; retentionStoreIdentity?:string;
   permissions: ConsentPermission[]; binding?: PersonAccountBinding; consentEvents: ConsentEvent[];
 };
 /** Canonical facts needed to evaluate identity and current capability policy.
  * A body-free projection is this type, never a fabricated AdaptiveDocument. */
 export type AdaptiveAuthorityDocument = Pick<AdaptiveDocument,
-  'schemaVersion' | 'accountId' | 'personId' | 'createdAt' | 'binding' | 'declaration' | 'permissions' | 'agentGrants'> & { productPause?: ProductPauseV1 | ProductPauseUseControlsV1 };
+  'schemaVersion' | 'accountId' | 'personId' | 'createdAt' | 'binding' | 'declaration' | 'permissions' | 'agentGrants'> & { productPause?: ProductPauseV1 | ProductPauseUseControlsV1; retentionStoreIdentity?:string; rightsUseHolds?:RightsUseHolds; rightsUseControls?:RightsUseControls };
 export function digest(value: unknown): string { return createHash('sha256').update(JSON.stringify(value)).digest('hex'); }
 export const accountIdFor = (telegramId: number) => `telegram-account:${telegramId}`;
 export const tenantIdFor = (accountId: string) => `private-tenant:${digest(accountId).slice(0, 24)}`;
 export const spaceIdFor = (accountId: string, space: SpaceKind) => `${tenantIdFor(accountId)}:${space}`;
 export const containerIdFor = (accountId: string, space: SpaceKind) => `${spaceIdFor(accountId, space)}:private`;
 
-function create(accountId: string, now: number, schemaVersion: 1 | 2 = 1): AdaptiveDocument {
+function create(accountId: string, now: number, schemaVersion: 1 | 2 | 3 = 1,retentionStoreIdentity?:string): AdaptiveDocument {
   const personId = `account-profile:${digest(accountId).slice(0, 32)}`;
-  return { schemaVersion, ...(schemaVersion === 2 ? { productPause: emptyProductPause() } : {}), accountId, personId, revision: 1, createdAt: now, updatedAt: now,
+  return { schemaVersion, ...(schemaVersion >= 2 ? { productPause: emptyProductPause() } : {}), ...(schemaVersion === 3 ? {rightsUseHolds:emptyRightsUseHolds(),retentionStoreIdentity:retentionStoreIdentity!}: {}), accountId, personId, revision: 1, createdAt: now, updatedAt: now,
     experience: emptyExperience(), relationships: emptyRelationshipDocument(), observer: emptyObserverDocument(), permissions: (['work', 'personal'] as const).flatMap(s => OPTIONAL_PURPOSES.map(p => ({
       schemaVersion: 1 as const, id: `permission:${s}:${p}`, revision: 1, createdAt: now, updatedAt: now,
       tenantId: tenantIdFor(accountId), spaceId: spaceIdFor(accountId, s), personId, purpose: p,
@@ -111,9 +114,12 @@ export function validateAdaptiveDocument(value: unknown, accountId: string, now:
         scope.spaceId !== spaceIdFor(accountId, scope.space) || scope.containerId !== containerIdFor(accountId, scope.space) ||
         key.audience.personId !== draft.personId || key.chatKey !== `private-${draft.personId}`) throw new Error('Invalid relationship partition');
   }
-  if (draft.schemaVersion === 2) {
+  if (draft.schemaVersion >= 2) {
     if (draft.productPause!.scopes.some(s => s.latest && s.latest.recordedAt > now)) throw new Error('Invalid pause receipt time');
     requireProductPauseCapacity(draft);
+    requireRightsUseHoldCapacity(draft);
+    if(draft.schemaVersion===3 && ([...draft.relationships.sources,...draft.observer.events,...(draft.observer.corrections??[]),...(draft.experience.preferenceLearning?.presentations??[]),...(draft.experience.preferenceLearning?.intents??[]),...(draft.experience.preferenceLearning?.candidates??[])].some(r=>!r.retentionStoreIdentity)))throw new Error('Missing retained source namespace');
+    if (draft.rightsUseHolds?.effects.some(e=>e.appliedAt>now || e.release && e.release.releasedAt>now)) throw new Error('Invalid rights use time');
   }
   return draft;
 }
@@ -136,8 +142,18 @@ export function upgradeLegacyAdaptiveDocumentV1ForProductPause(raw: unknown, acc
   if (legacy.schemaVersion !== 1) throw new Error('Product pause conversion requires legacy v1');
   return validateAdaptiveDocument({ ...legacy, schemaVersion: 2, productPause: emptyProductPause() }, accountId, now);
 }
+export function upgradeAdaptiveDocumentForRightsUseHolds(raw:unknown,accountId:string,now:number,sourceIdentity:string):AdaptiveDocument {
+  const current=validateAdaptiveDocument(normalizeLegacyAdaptiveDocument(raw,accountId,now),accountId,now);
+  if(current.schemaVersion===3)return current;
+  if(sourceIdentity!=='canonical' && !/^[a-f0-9]{64}$/.test(sourceIdentity))throw new Error('Invalid retained source namespace');
+  const converted={...current,schemaVersion:3 as const,productPause:current.productPause??emptyProductPause(),rightsUseHolds:emptyRightsUseHolds(),retentionStoreIdentity:sourceIdentity};
+  for(const e of [...converted.relationships.sources,...converted.observer.events,...(converted.observer.corrections??[])])e.retentionStoreIdentity=sourceIdentity;
+  const learning=converted.experience.preferenceLearning;
+  if(learning)for(const r of [...learning.presentations,...learning.intents,...learning.candidates])r.retentionStoreIdentity=sourceIdentity;
+  return validateAdaptiveDocument(converted,accountId,now);
+}
 export function requireProductPauseCapacity(document: AdaptiveDocument): void {
-  if (document.schemaVersion !== 2) return;
+  if (document.schemaVersion < 2) return;
   const { productPause, ...payload } = document;
   // Count the complete property wrapper as part of the reserved block.
   if (Buffer.byteLength(JSON.stringify({ productPause })) > PRODUCT_PAUSE_RESERVED_BYTES ||
@@ -156,9 +172,10 @@ export class AdaptiveRepository {
     if (!Number.isSafeInteger(now) || now < 0) throw new Error('Invalid adaptive account');
     if (result.document === null) return { status: 'ready', document: null };
     const document = validateAdaptiveDocument(result.document, accountId, now);
+    if(document.schemaVersion===3 && this.storage.canonicalSchemaVersion!==3)throw new Error('Prepared rights storage required');
     return { status: 'ready', document };
   }
-  transaction<T>(accountId: string, at: number | (() => number), fn: (document: AdaptiveDocument, now: number) => T, beforeCommit?: () => void): Promise<T> {
+  transaction<T>(accountId: string, at: number | (() => number), fn: (document: AdaptiveDocument, now: number) => T, beforeCommit?: () => void, existingOnly = false): Promise<T> {
     if (!/^telegram-account:[1-9]\d{0,15}$/.test(accountId) || typeof at !== 'function' && (!Number.isSafeInteger(at) || at < 0)) throw new Error('Invalid adaptive account');
     if (beforeCommit && this.storage.supportsCommittedWriteFence !== true) throw new Error('Committed write fence unsupported');
     return this.storage.transact(accountId, current => {
@@ -166,8 +183,10 @@ export class AdaptiveRepository {
       // committed document. The same time drives validation and business expiry.
       const now = typeof at === 'function' ? this.storage.sampleClock?.(at) ?? at() : at;
       if (!Number.isSafeInteger(now) || now < 0) throw new Error('Invalid adaptive account');
+      if (existingOnly && current === null) throw new Error('Adaptive existing account required');
       const input = normalizeLegacyAdaptiveDocument(current, accountId, now);
-      const draft = input === null ? create(accountId, now, this.storage.canonicalSchemaVersion ?? 1) : validateAdaptiveDocument(input, accountId, now);
+      const draft = input === null ? create(accountId, now, this.storage.canonicalSchemaVersion ?? 1,this.storage.identity?digest([this.storage.identity.incarnation,this.storage.identity.generation]):undefined) : validateAdaptiveDocument(input, accountId, now);
+      if(draft.schemaVersion===3 && this.storage.canonicalSchemaVersion!==3)throw new Error('Prepared rights storage required');
       const result = fn(draft, now);
       validateAdaptiveDocument(draft, accountId, this.storage.sampleClock?.(() => typeof at === 'function' ? at() : at) ?? now);
       // Keep the disabled rollout readable by the previous strict schema. A

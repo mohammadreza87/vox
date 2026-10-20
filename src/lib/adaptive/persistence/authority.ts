@@ -1,3 +1,4 @@
+import { compactRightsUseHolds, parseRightsUseControls } from '../rights-use-holds/state';
 import { productPauseUseControlsSchema } from '../product-pause/contracts';
 import { compactProductPause } from '../product-pause/state';
 import type { AdaptiveAuthorityDocument, AdaptiveDocument } from './repository';
@@ -18,6 +19,7 @@ export type DirectAuthorityEvaluator<T> = (controls: Readonly<AdaptiveDirectAuth
 export function directAuthorityControls(d: AdaptiveDirectAuthorityControls): AdaptiveDirectAuthorityControls {
   return freezeControls(structuredClone({ schemaVersion: d.schemaVersion,
     ...(d.productPause ? { productPause: productPauseUseControlsSchema.parse({ version: 1, scopes: d.productPause.scopes.map(({ space, productPaused, useEpoch }) => ({ space, productPaused, useEpoch })) }) } : {}),
+    ...(d.schemaVersion===3?{retentionStoreIdentity:d.retentionStoreIdentity,rightsUseControls:d.rightsUseControls?parseRightsUseControls(d.rightsUseControls):compactRightsUseHolds(d.rightsUseHolds!)}:{}),
     accountId: d.accountId, personId: d.personId, createdAt: d.createdAt, updatedAt: d.updatedAt,
     revision: d.revision, ...(d.binding ? { binding: d.binding } : {}),
     ...(d.declaration ? { declaration: d.declaration } : {}), permissions: d.permissions, agentGrants: d.agentGrants }));
@@ -86,7 +88,7 @@ export function validateRuntimeControlEvaluation<T>(raw: unknown): RuntimeContro
 
 export function runtimeControlsFromIndexed(c: IndexedControls): AdaptiveRuntimeControls {
   return freezeControls({
-    schemaVersion: c.schemaVersion, ...(c.productPause ? { productPause: c.productPause } : {}), accountId: c.accountId, personId: c.personId, createdAt: c.createdAt, updatedAt: c.updatedAt, revision: c.revision,
+    schemaVersion: c.schemaVersion, ...(c.rightsUseControls?{retentionStoreIdentity:c.retentionStoreIdentity,rightsUseControls:parseRightsUseControls(c.rightsUseControls)}:{}), ...(c.productPause ? { productPause: c.productPause } : {}), accountId: c.accountId, personId: c.personId, createdAt: c.createdAt, updatedAt: c.updatedAt, revision: c.revision,
     binding: c.binding, declaration: c.declaration, permissions: c.permissions, agentGrants: c.agentGrants,
     experience: { preferences: c.preferences, settings: c.settings, predictionTurns: c.predictionTurns,
       ...(c.preferenceLearning ? { preferenceLearning: c.preferenceLearning } : {}) },
@@ -98,7 +100,7 @@ export function runtimeControlsFromIndexed(c: IndexedControls): AdaptiveRuntimeC
 /** Compatibility reads still load a canonical document, but evaluators receive
  * the same immutable, body-free type without mutating the transaction draft. */
 export function runtimeControlsFromDocument(d: AdaptiveDocument): AdaptiveRuntimeControls {
-  return freezeControls(structuredClone({ schemaVersion: d.schemaVersion, ...(d.productPause ? { productPause: compactProductPause(d.productPause) } : {}), accountId: d.accountId, personId: d.personId, createdAt: d.createdAt,
+  return freezeControls(structuredClone({ schemaVersion: d.schemaVersion, ...(d.schemaVersion===3?{retentionStoreIdentity:d.retentionStoreIdentity,rightsUseControls:compactRightsUseHolds(d.rightsUseHolds!)}:{}), ...(d.productPause ? { productPause: compactProductPause(d.productPause) } : {}), accountId: d.accountId, personId: d.personId, createdAt: d.createdAt,
     updatedAt: d.updatedAt, revision: d.revision, binding: d.binding, declaration: d.declaration,
     permissions: d.permissions, agentGrants: d.agentGrants,
     experience: { preferences: d.experience.preferences, settings: d.experience.settings,

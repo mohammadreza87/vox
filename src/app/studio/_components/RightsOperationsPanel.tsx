@@ -2,6 +2,8 @@
 import { useCallback, useId, useLayoutEffect, useRef, useState } from 'react';
 import { rightsApi, RightsClientError, type RightsOperationView, type RightsOperations } from '../_lib/rights-client';
 import { rightsCopy, rightsDate, rightsState, type RightsLocale } from '../_lib/rights-copy';
+import { LocalUseState } from './RightsLocalUsePanel';
+import { localUseNotice } from '@/lib/adaptive/rights-intake/local-use-notice';
 import { tg } from '../_lib/client';
 import type { OperatorAction, RetentionAction } from '@/lib/adaptive/rights-intake/contracts';
 
@@ -40,6 +42,16 @@ function OperationsPanel({ locale, session }: { locale: RightsLocale; session: s
     } catch (error) { if (valid(g)) { if (error instanceof RightsClientError && [401, 403].includes(error.status)) setData(null); else setUnknown(true); } }
     finally { if (valid(g)) { setBusy(false); lock.current = false; controller.current = null; } }
   };
+  const reconcile = async (row: RightsOperationView, commandEventId: string) => {
+    if (lock.current || unknown || !data || tg()?.initData !== session) return;
+    const g = ++generation.current, abort = new AbortController(); controller.current = abort; lock.current = true; setBusy(true);
+    try {
+      await rightsApi.reconcileLocalUse(row.requestId,{version:1,eventId:crypto.randomUUID(),commandEventId,operationHandle:row.operationHandle},session,abort.signal);
+      if (!valid(g)) return;
+      setData(null); const value = await rightsApi.operations(session,cursor.current,abort.signal); if (valid(g)) setData(value);
+    } catch(error) { if (valid(g)) { if (error instanceof RightsClientError && [401,403].includes(error.status)) setData(null); else setUnknown(true); } }
+    finally { if(valid(g)) {setBusy(false);lock.current=false;controller.current=null;} }
+  };
   if (!data) return failed ? <div lang={locale} dir={locale === 'fa' ? 'rtl' : 'ltr'}><p role="alert">{c.error}</p><button className="vx-btn vx-btn-secondary" disabled={busy} onClick={() => void load(cursor.current)}>{c.operatorRefresh}</button></div> : null;
   const disabled = busy || unknown || data.policyStatus !== 'available';
   return <section className="vx-card vx-privacy-card" aria-labelledby={`${id}-title`} aria-busy={busy} lang={locale} dir={locale === 'fa' ? 'rtl' : 'ltr'} style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
@@ -50,6 +62,11 @@ function OperationsPanel({ locale, session }: { locale: RightsLocale; session: s
       <h3 className="vx-head">{c.kinds[row.kind]} · {c[row.space]}</h3><p className="vx-small">{c.reference}: <bdi>{row.requestId}</bdi></p><p className="vx-small"><bdi>{row.accountRef}</bdi></p>
       <p className="vx-small" role="status">{rightsState(row, locale)}</p><p className="vx-small">{c.receivedAt}: {rightsDate(row.createdAt, locale)} · {c.updatedAt}: {rightsDate(row.updatedAt, locale)}</p>
       <p className="vx-small">{row.deadline.state === 'scheduled' ? `${c.deadline}: ${rightsDate(row.deadline.dueAt, locale)}` : c.unresolved}</p><p className="vx-small vx-2">{c.coverage}</p>{row.retentionReviewRequired && <p>{c.retention}</p>}
+      {row.localUses?.map(local => <section className="vx-card" key={local.view.status.scope.purpose}>
+        <h4 className="vx-head">{localUseNotice[locale].title} · {local.view.status.scope.purpose === 'optional.personalization' ? localUseNotice[locale].personalization : localUseNotice[locale].analytics}</h4>
+        <LocalUseState view={local.view} locale={locale} historical={busy || unknown}/>
+        {local.reconcileAllowed && local.commandEventId && <button className="vx-btn vx-btn-secondary" disabled={busy || unknown} onClick={()=>void reconcile(row,local.commandEventId!)}>{localUseNotice[locale].reconcile}</button>}
+      </section>)}
       {row.retentionAt !== undefined && <p className="vx-small">{c.retentionAt}: {rightsDate(row.retentionAt, locale)}</p>}
       {!!row.retentionActions?.length && <div><p className="vx-small">{c.retentionScope}</p><button className="vx-btn vx-btn-secondary" disabled={busy || unknown} onClick={() => void run(row, 'reassess_retention')}>{c.reassess}</button>{row.retentionActions.includes('purge_terminal_record') && (purging === row.requestId ? <div><p>{c.confirmPurge}</p><button className="vx-btn vx-btn-danger" disabled={busy || unknown} onClick={() => void run(row, 'purge_terminal_record')}>{c.purge}</button><button className="vx-btn vx-btn-secondary" disabled={busy} onClick={() => setPurging(null)}>{c.cancel}</button></div> : <button className="vx-btn vx-btn-secondary" disabled={busy || unknown} onClick={() => setPurging(row.requestId)}>{c.purge}</button>)}</div>}
       <div className="vx-privacy-actions" style={{ flexWrap: 'wrap' }}>
