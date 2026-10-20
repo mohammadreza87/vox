@@ -32,7 +32,13 @@ for(const format of ['sqlite','file'] as const)for(const tool of ['reviewed','me
  await holds.apply(123,{version:1,scope,effectId:randomUUID(),requestId:randomUUID(),expectedCanonicalRevision:read.value.accountRevision,expectedUseEpoch:0,applyIntentDigest:'a'.repeat(64),policy:{id:'synthetic',revision:1,digest:'b'.repeat(64),approvalReference:'synthetic',decisionReference:'synthetic'},notice:{version:'synthetic',digest:'c'.repeat(64)},reviewAt:NOW+60000,metadataRetainUntil:NOW+86400000,replayRetainUntil:NOW+172800000},()=>{});
  await expect(accept(beforeHold)).resolves.toBeDefined();const old=await preview();
  const pause=new ProductPauseService(adaptive);await pause.command(123,{version:1,space:'work',eventId:'synthetic-pause-event-00001',expectedCommandSeq:0,action:'pause'});
- await expect(preview()).rejects.toBeDefined();await pause.command(123,{version:1,space:'work',eventId:'synthetic-resume-event-0001',expectedCommandSeq:1,action:'resume'});
+ if(tool==='reviewed')await expect(preview()).rejects.toBeDefined();
+ else {
+  const paused=await preview();await expect(accept(paused)).resolves.toBeDefined();
+ }
+ const pausedReceipt=tool==='message'?await preview():undefined;
+ await pause.command(123,{version:1,space:'work',eventId:'synthetic-resume-event-0001',expectedCommandSeq:1,action:'resume'});
  await expect(accept(old)).rejects.toMatchObject({code:tool==='reviewed'?'reviewed_memory_changed':'message_memory_changed'});
+ if(pausedReceipt)await expect(accept(pausedReceipt)).rejects.toMatchObject({code:'message_memory_changed'});
  await expect(accept(await preview())).resolves.toBeDefined();expect(holds.inspectNow(123,scope,()=>{})).toMatchObject({status:'ready',value:{effectiveBlocked:true,useEpoch:1}});
 });
