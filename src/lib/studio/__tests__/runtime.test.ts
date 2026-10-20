@@ -5,6 +5,7 @@ import { createPublicKey } from 'crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getStudio, validateStudioConfig } from '../runtime';
 import { FirestoreStudioStore } from '../firestore-store';
+import { FileExperimentStorage } from '../../adaptive/experiments/storage';
 
 const firebase = vi.hoisted(() => ({ getAdminApp: vi.fn(), getAdminDb: vi.fn(), getStorage: vi.fn(), bucket: vi.fn() }));
 vi.mock('@/lib/firebase-admin', () => ({ getAdminApp: firebase.getAdminApp, getAdminDb: firebase.getAdminDb }));
@@ -118,6 +119,16 @@ describe('Studio production initialization', () => {
     expect(studio.deps.maintenance).toBeUndefined();
     expect(studio.deps.improvement).toBeUndefined();
     expect(studio.deps.experiments).toBeUndefined();
+  });
+
+  it('retains experiment lifecycle services after the presentation switch is disabled', async () => {
+    const dir = configure();
+    new FileExperimentStorage(join(dir, 'controlled-experiments', 'v1')).transaction(() => undefined);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ ok: true, result: { id: 1, is_bot: true, username: 'VoxxBot', first_name: 'Voxx' } })));
+    const studio = await getStudio();
+    expect(studio.deps.experiments).toBeDefined();
+    expect(await studio.deps.experiments!.prepare(123, 'synthetic', 'work', 'synthetic-turn')).toBeUndefined();
+    expect(studio.deps.experiments!.exportScope(123, 'work').derived).toEqual([]);
   });
 
   it.each(['file', 'firestore'])('rejects enabled maintenance before storage/provider IO without a scheduler: %s', storage => {

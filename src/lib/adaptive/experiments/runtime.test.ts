@@ -173,3 +173,18 @@ describe('composed experiment lifecycle integration', () => {
     await expect(lifecycle.exportAccount(124, 'work')).rejects.toMatchObject({ code: 'profile_confirmation_required' });
   });
 });
+
+it('keeps retained experiment management when the runtime effect switch is off', async () => {
+  const f = await runtimeFixture(); await f.enable();
+  const presentation = (await f.runtime.prepare(123, 'agent1', 'work', 'before-disable'))!;
+  const disabled = new StudioExperimentRuntime(f.controller, f.adaptive, f.store, () => NOW, false);
+  expect(await disabled.prepare(123, 'agent1', 'work', 'after-disable')).toBeUndefined();
+  expect(disabled.current(123, 'agent1', 'work', presentation)).toBe(false);
+  expect(await disabled.acknowledge(123, { space: 'work', agentId: 'agent1', receipt: presentation.receipt })).toEqual({ recorded: false, duplicate: false });
+  expect(disabled.exportScope(123, 'work').derived).toHaveLength(1);
+  f.adaptive.setExperimentLifecycleReconciler(async id => disabled.reconcileAccount(id));
+  const before = await f.adaptive.read(123, 'work');
+  await f.adaptive.changeConsent(123, { space: 'work', purpose: 'optional.product_analytics', state: 'withdrawn',
+    expectedRevision: before.purposes.find(p => p.purpose === 'optional.product_analytics')!.revision, eventId: 'disabled-withdrawal' });
+  expect(disabled.exportScope(123, 'work')).toMatchObject({ assignments: [], derived: [], exposures: [], suppressed: true });
+});

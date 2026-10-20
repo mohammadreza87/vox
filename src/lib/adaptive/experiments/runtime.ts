@@ -9,7 +9,7 @@ import { ControlledExperimentService, experimentDigest, type ExperimentAuthority
  * allocation is supported by the controller, never inferred from private DMs. */
 export class StudioExperimentRuntime {
   constructor(readonly controller: ControlledExperimentService, readonly adaptive: AdaptiveService,
-    readonly store: StudioStorage, private readonly clock: () => number = Date.now) {}
+    readonly store: StudioStorage, private readonly clock: () => number = Date.now, private readonly effectsEnabled = true) {}
   private scope(telegramId: number, space: SpaceKind) {
     if (!Number.isSafeInteger(telegramId) || telegramId < 1 || !['work', 'personal'].includes(space)) throw new Error('Invalid experiment scope');
     const accountId = accountIdFor(telegramId);
@@ -46,6 +46,7 @@ export class StudioExperimentRuntime {
     } };
   }
   private authority(telegramId: number, agentId: string, space: SpaceKind): ExperimentAuthority | undefined {
+    if (!this.effectsEnabled) return;
     if (!Number.isSafeInteger(telegramId) || telegramId < 1 || !/^[A-Za-z0-9_-]{1,128}$/.test(agentId) || !['work', 'personal'].includes(space)) return;
     const state = this.store.readCommittedForEffect?.();
     if (!state) return;

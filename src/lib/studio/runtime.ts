@@ -1,3 +1,4 @@
+import { lstatSync } from 'node:fs';
 import { RightsFileStorage } from '../adaptive/rights-intake/storage';
 import { RightsIntakeService } from '../adaptive/rights-intake/service';
 import { RightsRepository } from '../adaptive/rights-intake/repository';
@@ -343,12 +344,17 @@ async function create(): Promise<Studio> {
       await studio.deps.voiceIdentity!.invalidate(telegramId, space);
     });
     studio.deps.observer = new AdaptiveObserverService(storage.adaptive!);
-    if (config.experimentsEnabled) {
+    const experimentDirectory = join(config.dataDir, 'controlled-experiments', 'v1');
+    const retainedExperiments = config.storage === 'file' && !!lstatSync(join(config.dataDir, 'controlled-experiments'), { throwIfNoEntry: false });
+    if (config.experimentsEnabled || retainedExperiments) {
+      if (config.publicUrl || env.K_SERVICE || env.FUNCTION_TARGET || env.FUNCTION_NAME || env.VERCEL === '1') {
+        throw new Error('Retained experiments require a persistent local lifecycle owner');
+      }
       // Enabling the runtime installs no experiment. A separately reviewed,
       // versioned operator configuration is required before any assignment.
       studio.deps.experiments = new StudioExperimentRuntime(
-        new ControlledExperimentService(new FileExperimentStorage(join(config.dataDir, 'controlled-experiments', 'v1'))),
-        storage.adaptive!, storage.store,
+        new ControlledExperimentService(new FileExperimentStorage(experimentDirectory)),
+        storage.adaptive!, storage.store, Date.now, config.experimentsEnabled,
       );
       storage.adaptive!.setExperimentLifecycleReconciler(async telegramId => {
         studio.deps.experiments!.reconcileAccount(telegramId);
