@@ -739,9 +739,20 @@ export class AdaptiveService {
     read: async (personaId: string, legacyPersonId: string, space: SpaceKind = 'work'): Promise<{ revision: string; memoryEnabled: boolean; historyEnabled: boolean; storedContextAllowed: boolean }> => {
       const match = /^tg-([1-9]\d*)$/.exec(legacyPersonId);
       if (!match) return { revision: 'unconfirmed', memoryEnabled: false, historyEnabled: false, storedContextAllowed: false };
-      if (this.repository.storage.indexed || this.repository.storage.canonicalSchemaVersion === 2) return this.withDirectAuthority(Number(match[1]), space,
+      const telegramId = Number(match[1]);
+      if (this.repository.storage.indexed || this.repository.storage.canonicalSchemaVersion === 2) return this.withDirectAuthority(telegramId, space,
         (d, now, namespace) => this.runtimePrivacyEvaluation(d, now, namespace, personaId, space));
-      return this.transact(Number(match[1]), (d, now) => this.runtimePrivacyEvaluation(d, now, this.storeIdentity, personaId, space).value);
+      const evaluate = (d: AdaptiveDocument, now: number) => this.runtimePrivacyEvaluation(d, now, this.storeIdentity, personaId, space).value;
+      // A boundary read is pure. Serve it from the committed document instead of
+      // a read-modify-write of the account file; the same evaluation over the
+      // same bytes gives the same revision. A missing, locked or unsupported
+      // document, or one the strict schema rejects before the transaction's
+      // legacy normalization, still goes through the transaction as before.
+      try {
+        const committed = this.readCommittedForEffect(telegramId, evaluate);
+        if (committed.status === 'ready') return committed.value;
+      } catch { /* the transaction validates (and normalizes) the document itself */ }
+      return this.transact(telegramId, evaluate);
     },
     readNow: (personaId: string, legacyPersonId: string, space: SpaceKind = 'work'): { revision: string; memoryEnabled: boolean; historyEnabled: boolean; storedContextAllowed: boolean; validUntil: number } => {
       const match = /^tg-([1-9]\d*)$/.exec(legacyPersonId);

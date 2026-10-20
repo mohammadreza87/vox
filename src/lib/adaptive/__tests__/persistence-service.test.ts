@@ -153,6 +153,18 @@ describe('durable adaptive account boundaries', () => {
     const { service } = await setup(); await confirm(service); await grant(service);
     expect(await service.runtimePrivacy.read('agent', 'tg-123')).toMatchObject({ memoryEnabled: false, historyEnabled: false });
     expect(await service.runtimePrivacy.read('agent', 'guessed-person')).toMatchObject({ memoryEnabled: false, historyEnabled: false });
+  });
+  it('serves the legacy runtime privacy read from the committed document without rewriting it', async () => {
+    const { service, directory } = await setup(); await confirm(service); await grant(service);
+    const first = await service.runtimePrivacy.read('agent', 'tg-123');
+    const [file] = (await readdir(directory)).filter(name => name.endsWith('.json'));
+    const before = await readFile(join(directory, file));
+    const second = await service.runtimePrivacy.read('agent', 'tg-123', 'work');
+    expect(second).toEqual(first);
+    expect(await readFile(join(directory, file))).toEqual(before);
+    // A missing account still goes through the transaction, which creates it.
+    expect(await service.runtimePrivacy.read('agent', 'tg-124')).toMatchObject({ memoryEnabled: false, historyEnabled: false });
+    expect((await readdir(directory)).filter(name => name.endsWith('.json'))).toHaveLength(2);
     expect((await service.readPrivateContext(123, 'personal', 'agent')).memories).toEqual([]);
   });
 });
