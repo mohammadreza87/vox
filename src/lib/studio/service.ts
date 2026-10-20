@@ -26,6 +26,7 @@ import type { AdaptiveObserverService } from '../adaptive/observation/service';
 import type { RightsIntakeService } from '../adaptive/rights-intake/service';
 import type { AdaptiveLifecycleService } from '../adaptive/lifecycle/service';
 import type { AdaptiveMaintenanceRunner } from '../adaptive/lifecycle/maintenance';
+import type { MaintenanceHealth } from '../adaptive/lifecycle/maintenance-health-contracts';
 import type { ReminderDeliveryService } from '../adaptive/runtime/reminders/service';
 import type { ImprovementWorkflow } from '../adaptive/improvement/workflow';
 import type { LLM } from '../tireh/llm';
@@ -127,6 +128,8 @@ export interface StudioDeps {
   lifecycle?: AdaptiveLifecycleService;
   rights?: RightsIntakeService;
   maintenance?: AdaptiveMaintenanceRunner;
+  /** Read-only checkpoint observation, independent of worker activation. */
+  maintenanceHealth?: () => MaintenanceHealth;
   reminderDelivery?: ReminderDeliveryService;
   /** Credential-bound opaque identifier; never a bot token or a client grant. */
   reminderEndpointId?: string;

@@ -1,6 +1,7 @@
 'use client';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { learningApi, type LearningSpace, type ObserverSnapshot, type LearningOperations } from '../_lib/learning-client';
+import { MaintenanceHealthPanel } from './MaintenanceHealthPanel';
 
 /** Personal evidence only. Operations and cross-account improvement reports have separate access. */
 export function LearningPanel({ space, locale = 'en', showOperations = false }: { space: LearningSpace; locale?: 'en' | 'fa'; showOperations?: boolean }) {
@@ -103,7 +104,7 @@ export function LearningPanel({ space, locale = 'en', showOperations = false }: 
       <button className="vx-btn vx-btn-secondary" disabled={!!busy} onClick={() => void run('export')}>{busy === 'export' ? t('Preparing…', 'در حال آماده‌سازی…') : t('Export my learning data', 'دریافت داده‌های یادگیری من')}</button>
     </div>
     <p className="vx-small vx-2">{t('Refresh updates a small batch of measurements. Export downloads your saved preferences, memories and measurements for this space.', 'تازه‌سازی، دستهٔ کوچکی از اندازه‌گیری‌ها را به‌روز می‌کند. خروجی، ترجیح‌ها، حافظه‌ها و اندازه‌گیری‌های ذخیره‌شدهٔ شما در این فضا را دریافت می‌کند.')}</p>
-  </section>{showOperations && <OperationsPanel locale={locale} />}</>;
+  </section>{showOperations && <OperationsPanel key={space} locale={locale} />}</>;
 }
 
 
@@ -113,33 +114,40 @@ function OperationsPanel({ locale }: { locale: 'en' | 'fa' }) {
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState(false);
   const generation = useRef(0);
-  const load = async () => {
+  const controller = useRef<AbortController | null>(null);
+  const lock = useRef(false);
+  const load = useCallback(async () => {
+    if (lock.current) return;
     const current = ++generation.current;
+    const pending = new AbortController();
+    controller.current?.abort(); controller.current = pending;
+    lock.current = true;
     setBusy(true); setError(false); setData(null);
-    try { const value = await learningApi.operations(); if (generation.current === current) setData(value); }
-    catch { if (generation.current === current) setError(true); }
-    finally { if (generation.current === current) setBusy(false); }
-  };
+    try { const value = await learningApi.operations(pending.signal); if (generation.current === current && !pending.signal.aborted) setData(value); }
+    catch { if (generation.current === current && !pending.signal.aborted) setError(true); }
+    finally { if (generation.current === current) { lock.current = false; setBusy(false); } }
+  }, []);
+  const cancel = useCallback(() => { generation.current++; controller.current?.abort(); lock.current = false; }, []);
   useEffect(() => {
     void load();
-    const current = generation.current;
-    return () => { generation.current = current + 1; };
-  }, []);
+    return cancel;
+  }, [load, cancel]);
   const report = data?.report;
-  const configured = (value: boolean) => value ? t('Configured', 'پیکربندی شده') : t('Not configured', 'پیکربندی نشده');
+  const configured = (value: boolean) => value === true ? t('Configured', 'پیکربندی شده') : value === false ? t('Not configured', 'پیکربندی نشده') : t('Unavailable', 'در دسترس نیست');
   return <section className="vx-card vx-privacy-card" aria-label={t('Software improvement operations', 'عملیات بهبود نرم‌افزار')} aria-busy={busy} dir={locale === 'fa' ? 'rtl' : 'ltr'} lang={locale}>
     <h2 className="vx-head">{t('Software improvement', 'بهبود نرم‌افزار')}</h2>
     <p className="vx-small vx-2">{t('Operator view · Local workflow evidence. Configuration does not prove a scheduled run or a production change.', 'نمای اپراتور · شواهد روند محلی. پیکربندی به معنی اجرای زمان‌بندی‌شده یا تغییر محیط عملیاتی نیست.')}</p>
     {busy && <p role="status">{t('Loading operations…', 'در حال دریافت عملیات…')}</p>}
-    {error && <p role="alert">{t('Operations evidence is unavailable.', 'شواهد عملیات در دسترس نیست.')}</p>}
+    {error && <p role="alert">{t('Operations evidence is unavailable. Refresh to try again.', 'شواهد عملیات در دسترس نیست. برای تلاش دوباره، عملیات را تازه‌سازی کنید.')}</p>}
     {data && <>
       <p className="vx-small">{t('Maintenance', 'نگهداری')}: {configured(data.maintenanceConfigured)} · {t('Improvement workflow', 'روند بهبود')}: {configured(data.improvementConfigured)}</p>
+      <MaintenanceHealthPanel health={data.maintenance} locale={locale} />
       {report ? <>
         <p className="vx-small">{t('Audit events', 'رویدادهای ممیزی')}: {report.auditEvents.toLocaleString(locale === 'fa' ? 'fa-IR' : 'en-US')} · {t('Candidates', 'نامزدها')}: {report.candidates.length.toLocaleString(locale === 'fa' ? 'fa-IR' : 'en-US')}</p>
         <p className="vx-small">{t('Evaluations passed', 'ارزیابی‌های پذیرفته‌شده')}: {report.candidates.filter(c => c.evaluationStatus === 'passed').length.toLocaleString(locale === 'fa' ? 'fa-IR' : 'en-US')} · {t('Signed approvals', 'تأییدهای امضاشده')}: {report.candidates.filter(c => c.humanDecision === 'approve').length.toLocaleString(locale === 'fa' ? 'fa-IR' : 'en-US')}</p>
       </> : <p className="vx-small">{t('Local workflow report: unavailable.', 'گزارش روند محلی: در دسترس نیست.')}</p>}
     </>}
     <p className="vx-small vx-2">{t('CI, deployment, production impact and cost: unavailable. Proposed causes remain hypotheses.', 'CI، استقرار، اثر عملیاتی و هزینه: در دسترس نیست. علت‌های پیشنهادی همچنان فرضیه هستند.')}</p>
-    <button className="vx-btn vx-btn-secondary" disabled={busy} onClick={() => void load()}>{t('Refresh operations', 'تازه‌سازی عملیات')}</button>
+    <button className="vx-btn vx-btn-secondary" disabled={busy} onClick={() => void load()}>{busy ? t('Loading operations…', 'در حال دریافت عملیات…') : t('Refresh operations', 'تازه‌سازی عملیات')}</button>
   </section>;
 }

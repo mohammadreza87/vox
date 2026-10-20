@@ -485,7 +485,7 @@ Replace raw STT/call/extraction logs and block audit text with reason codes/rest
 
 **Requirements:** REQ-05, REQ-16. **Depends on:** VOX-018, VOX-019, VOX-020, VOX-021.
 
-**Implementation progress:** Own-space Studio measurements show response/playback denominators, queue lag/failure, deterministic findings and explicit unavailable task success/usage. Owner/superadmin operations view shows local workflow metadata only. Organization/cohort dashboards remain open.
+**Implementation progress:** Own-space Studio measurements show response/playback denominators, queue lag/failure, deterministic findings and explicit unavailable task success/usage. Owner/superadmin operations view shows local workflow metadata only. Organization/cohort dashboards remain open. The next bounded source slice adds strict read-only system-wide maintenance status for current operators: retained progress, activity time, recorded failure, lease expiry and explicit unavailable states in EN/FA. Counts are not unique people or verified deletions. Independent/compiled/CI acceptance is tracked per candidate in MAINTENANCE_HEALTH.md.
 
 Produce scoped views for task outcome, latency/cost, correction, queue lag, permission/consent failures and notification outcomes with compatible cohorts.
 
@@ -498,7 +498,7 @@ Produce scoped views for task outcome, latency/cost, correction, queue lag, perm
 
 **Deliverables:** Baseline dashboards/queries; Data quality report.
 
-**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/OBSERVATION_LEARNING.md"]
+**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/OBSERVATION_LEARNING.md", "docs/implementation/MAINTENANCE_HEALTH.md"]
 
 ### VOX-023 — Introduce read-only observer and reproducible findings
 
@@ -1122,7 +1122,7 @@ Execute approved core test-account journeys on actual supported Telegram/mobile/
 
 **Requirements:** REQ-04, REQ-16, REQ-17, REQ-21. **Depends on:** VOX-018, VOX-014, VOX-030, VOX-035, VOX-047, VOX-049.
 
-**Implementation progress:** Local account sweep pagination, competing leases, crash recovery, expiry, snapshot reconciliation and bounded observer retries tested. Background maintenance is supported only in the persistent file/polling runtime; unsupported activation fails startup. Production load/SLOs, full backup restoration and provider residual deletion remain open.
+**Implementation progress:** Local account sweep pagination, competing leases, crash recovery, expiry, snapshot reconciliation and bounded observer retries tested. Background maintenance is supported only in the persistent file/polling runtime; unsupported activation fails startup. Production load/SLOs, full backup restoration and provider residual deletion remain open. A separate read-only FILE checkpoint health capability and EN/FA operator status view are implemented without activating maintenance or changing cleanup semantics. Disabled execution preserves readable retained evidence; current committed operator/auth fences protect publication. Alert delivery, actual scheduled-worker/load qualification and backup/provider guarantees remain open.
 
 Load-test approved synthetic workloads, queue/provider outage, lost receipts, restore/tombstones and incident kill switches; set alert owners.
 
@@ -1136,7 +1136,7 @@ Load-test approved synthetic workloads, queue/provider outage, lost receipts, re
 
 **Deliverables:** Operations qualification; Incident and restore runbook.
 
-**Evidence:** ["docs/implementation/OBSERVATION_LEARNING.md"]
+**Evidence:** ["docs/implementation/OBSERVATION_LEARNING.md", "docs/implementation/MAINTENANCE_HEALTH.md"]
 
 ### VOX-053 — Finalize public notices, support and launch materials
 
