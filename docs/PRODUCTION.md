@@ -155,16 +155,24 @@ not start before the user signs in after reboot.
    npx vitest run
    npm audit --omit=dev --audit-level=high
    npm run studio:build
-   node scripts/studio-production.mjs install
+   # Initial install only; for upgrades use the approved present baseline below.
+   node scripts/studio-production.mjs install --expect-absent
    node scripts/studio-production.mjs status
    ```
 
-   The build records its commit, source tree and build ID; installation rejects
-   artifacts from a different revision. Installation copies the standalone server, static assets and public files into
-   an independent release directory, excluding `.env*` files. It snapshots stopped
-   state before switching, supervises the app with `io.ludaxis.vox-studio`, and
-   checks the exact revision at `/api/studio/health`. Failed startup restores the
-   previous release when one exists. No secrets are placed in the plist or argv.
+   `--expect-absent` is only for a verified initial install. For an upgrade, pass
+   `--expect-current '<absolute-resolved-release-path>' --expect-revision
+   '<full-40-character-revision>' --expect-build '<approved-build-id>'` using the
+   trusted, approved current baseline. See [Studio operation coordination](STUDIO_OPERATIONS.md)
+   for lock ownership, recovery and operator requirements.
+   The build records its commit, source tree and build ID; installation
+   copies the standalone server, static assets and public files into an independent
+   release directory, excluding `.env*` files. The guarded install procedure
+   snapshots stopped state before switching, supervises the app with
+   `io.ludaxis.vox-studio`, and checks the intended revision at
+   `/api/studio/health`. Automatic startup recovery is guarded: it may restore the
+   prior release only while the active pointer still identifies this operation's
+   candidate. No secrets are placed in the plist or argv.
 
 5. Create a **named** Cloudflare Tunnel and route the selected hostname to
    `http://127.0.0.1:3107`, with a final catch-all `http_status:404`. Run its connector
@@ -189,9 +197,17 @@ not start before the user signs in after reboot.
 ```sh
 node scripts/studio-production.mjs status
 node scripts/studio-production.mjs backup
-node scripts/studio-production.mjs rollback
+node scripts/studio-production.mjs rollback \
+  --expect-current '<absolute-resolved-release-path>' \
+  --expect-revision '<full-40-character-revision>' \
+  --expect-build '<approved-build-id>'
 node scripts/studio-production.mjs stop
 ```
+
+Rollback requires an expected present baseline; it does not accept
+`--expect-absent`. See [Studio operation coordination](STUDIO_OPERATIONS.md) for
+the lock, stale-lock recovery and bypass limits. Verify implementation and release
+evidence before using this procedure.
 
 Backups stop this service, copy both state and its matching encryption configuration
 to a private timestamped directory, then restart it if it was running. The installer
