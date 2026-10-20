@@ -51,3 +51,67 @@ export function revisionOwnerId(name: string): string { return `${name}#${++inst
 export function revisionField(value: unknown): number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : 0;
 }
+
+/** The revisions a turn snapshot observed: every document it read, plus the memory safety revision and the privacy epoch. */
+export interface RevisionVector {
+  readonly probes: readonly RevisionProbe[];
+  /** False when some input was read without a probe (no read-only path, a failed load, a source outside the probes): rechecks must recompute in full. */
+  readonly complete: boolean;
+}
+
+/** Reads current revisions for a vector's probes. */
+export interface RevisionSource {
+  /** Current values in probe order: synchronous for in-process probes, one batched read for remote ones. Throws when a probe cannot be read. */
+  read(probes: readonly RevisionProbe[]): Promise<number[]>;
+  /** Change hint without I/O: true when an in-process probe moved, false when none did, undefined when only a remote read could tell. */
+  changed(probes: readonly RevisionProbe[]): boolean | undefined;
+}
+
+export function sameRevisions(probes: readonly RevisionProbe[], values: readonly number[]): boolean {
+  return probes.length === values.length && probes.every((probe, index) => probe.value === values[index]);
+}
+
+function localHint(probes: readonly RevisionProbe[]): boolean | undefined {
+  let unknown = false;
+  for (const probe of probes) {
+    if (!probe.local) { unknown = true; continue; }
+    if (probe.local() !== probe.value) return true;
+  }
+  return unknown ? undefined : false;
+}
+
+/** File / Mac profile: every probe is an in-process counter; a read is synchronous. */
+export class InProcessRevisionSource implements RevisionSource {
+  async read(probes: readonly RevisionProbe[]): Promise<number[]> {
+    return probes.map(probe => {
+      if (!probe.local) throw new Error('Revision probe is not readable in process');
+      return probe.local();
+    });
+  }
+  changed(probes: readonly RevisionProbe[]): boolean | undefined { return localHint(probes); }
+}
+
+/** Structural subset of firebase-admin's Firestore used for revision reads. */
+export interface RevisionDocuments {
+  doc(path: string): unknown;
+  getAll(...refsOrOptions: unknown[]): Promise<Array<{ get(field: string): unknown }>>;
+}
+
+/** Firestore profile: one `getAll` of the few revision documents, masked to their counter fields. */
+export class FirestoreRevisionSource implements RevisionSource {
+  constructor(private readonly db: RevisionDocuments) {}
+  async read(probes: readonly RevisionProbe[]): Promise<number[]> {
+    const remote = [...new Map(probes.flatMap(probe => probe.remote ? [[probe.remote.path, probe.remote] as const] : [])).values()];
+    const snapshots = remote.length
+      ? await this.db.getAll(...remote.map(target => this.db.doc(target.path)), { fieldMask: [...new Set(remote.map(target => target.field))] })
+      : [];
+    if (snapshots.length !== remote.length) throw new Error('Incomplete revision read');
+    const byPath = new Map(remote.map((target, index) => [target.path, snapshots[index]]));
+    return probes.map(probe => {
+      if (probe.local) return probe.local();
+      if (!probe.remote) throw new Error('Revision probe is not readable');
+      return revisionField(byPath.get(probe.remote.path)!.get(probe.remote.field));
+    });
+  }
+  changed(probes: readonly RevisionProbe[]): boolean | undefined { return localHint(probes); }
+}
