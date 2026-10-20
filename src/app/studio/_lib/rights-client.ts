@@ -8,7 +8,9 @@ import { preferenceValueSchema } from '@/lib/adaptive/personalization';
 import { productPauseScopeSchema } from '@/lib/adaptive/product-pause/contracts';
 import { experimentScopeExportSchema } from '@/lib/adaptive/experiments/contracts';
 import { ADAPTIVE_OPTIONAL_PURPOSES } from '@/lib/adaptive/persistence/contracts';
+import { localErasureViewSchema, localErasurePlanInputSchema, localErasurePlanSchema, localErasureExecuteInputSchema, localErasureMutationSchema, type LocalErasureView, type LocalErasurePlan, type LocalErasurePlanInput } from '@/lib/adaptive/rights-intake/local-erasure-contracts';
 import { tg } from './client';
+export type { LocalErasureView, LocalErasurePlan } from '@/lib/adaptive/rights-intake/local-erasure-contracts';
 export type { RightsRequestView, RightsSnapshot, RightsSpace, RightsOperations, RightsOperationView } from '@/lib/adaptive/rights-intake/contracts';
 const policyStatus = z.enum(['available', 'unavailable']);
 export const rightsRequestViewSchema = requestSchema.omit({ accountId: true, audit: true }).extend({ retentionReviewRequired: z.boolean() }).strict();
@@ -66,7 +68,32 @@ export type { LocalUseScope } from '@/lib/adaptive/rights-intake/local-use-contr
 function localScope<T extends {status: z.infer<typeof localUseStatusSchema>}>(value: T, scope: LocalUseScope): T {
   if (value.status.scope.space !== scope.space || value.status.scope.purpose !== scope.purpose) throw new RightsClientError(409); return value;
 }
+function erasureScope<T extends LocalErasureView>(value: T, row: RightsRequestView): T {
+  if (value.requestId !== row.requestId || value.requestRevision !== row.revision || value.space !== row.space || new Set(value.operations.map(s => s.operationRef)).size !== value.operations.length) throw new RightsClientError(409);
+  return value;
+}
 export const rightsApi = {
+  async privateNoteErasure(row: RightsRequestView, session: string, signal?: AbortSignal) {
+    const { value } = await call(`/requests/${encodeURIComponent(row.requestId)}/private-note-erasure?space=${row.space}`, session, 'GET', undefined, signal);
+    return erasureScope(localErasureViewSchema.parse(value), row);
+  },
+  async privateNoteErasurePlan(row: RightsRequestView, input: LocalErasurePlanInput, session: string, signal?: AbortSignal) {
+    const body = localErasurePlanInputSchema.parse(input);
+    if (body.space !== row.space || body.expectedRequestRevision !== row.revision || row.kind !== 'erasure' || row.state === 'closed_unfulfilled') throw new RightsClientError(409);
+    const { value } = await call(`/requests/${encodeURIComponent(row.requestId)}/private-note-erasure/plan?space=${row.space}`, session, 'POST', body, signal);
+    const plan = localErasurePlanSchema.parse(value);
+    if (plan.requestId !== row.requestId || plan.space !== row.space || plan.eventId !== body.eventId || plan.memoryId !== body.memoryId || plan.memoryRevision !== body.expectedMemoryRevision || plan.expiresAt <= Date.now()) throw new RightsClientError(409);
+    return plan;
+  },
+  async privateNoteErasureExecute(row: RightsRequestView, plan: LocalErasurePlan, session: string, signal?: AbortSignal) {
+    const parsed = localErasurePlanSchema.parse(plan);
+    if (parsed.requestId !== row.requestId || parsed.space !== row.space || row.kind !== 'erasure' || row.state === 'closed_unfulfilled' || parsed.expiresAt <= Date.now()) throw new RightsClientError(409);
+    const input = localErasureExecuteInputSchema.parse({ version: 1, eventId: parsed.eventId, planHandle: parsed.planHandle });
+    const { value } = await call(`/requests/${encodeURIComponent(row.requestId)}/private-note-erasure/execute?space=${row.space}`, session, 'POST', input, signal);
+    const result = erasureScope(localErasureMutationSchema.parse(value), row);
+    if (!result.operations.some(s => s.operationRef === result.operationRef)) throw new RightsClientError(409);
+    return result;
+  },
   async localUse(requestId: string, scope: LocalUseScope, session: string, signal?: AbortSignal) {
     const {value} = await call(`/requests/${encodeURIComponent(requestId)}/local-use?space=${scope.space}&purpose=${scope.purpose}`,session,'GET',undefined,signal);
     return localScope(localUseViewSchema.parse(value),scope);
