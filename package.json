@@ -83,7 +83,7 @@
     "@types/testing-library__jest-dom": "^5.14.9",
     "@vitejs/plugin-react": "^5.1.2",
     "@vitest/browser-playwright": "^4.0.15",
-    "@vitest/coverage-v8": "^4.0.15",
+    "@vitest/coverage-v8": "4.1.12",
     "dotenv-cli": "^11.0.0",
     "eslint": "^9",
     "eslint-config-next": "^15.5.28",
@@ -96,7 +96,7 @@
     "tsx": "^4.19.2",
     "typescript": "^5",
     "vite": "^7.2.7",
-    "vitest": "^4.0.15"
+    "vitest": "4.1.12"
   },
   "overrides": {
     "next": {
