@@ -2,6 +2,9 @@
  * Content-free operational diagnostics for Telegram ingress. Callers select a
  * fixed event; exceptions, request data and bot/account identifiers never enter
  * this API. This is not a conversation/analytics event producer.
+ *
+ * Timing events (`timing_*`) add exactly two fields: a route from a fixed list
+ * and a whole number of milliseconds. Nothing else a caller passes is logged.
  */
 const diagnostics = {
   poll_failed: { level: 'warn', stage: 'poll', reason: 'operation_failed', outcome: 'retry_scheduled' },
@@ -57,9 +60,28 @@ const diagnostics = {
   studio_http_persona_failed: { level: 'warn', stage: 'persona_generation', reason: 'invalid_output', outcome: 'http_502' },
   studio_http_provider_failed: { level: 'error', stage: 'studio_http', reason: 'provider_failed', outcome: 'http_502' },
   studio_http_failed: { level: 'error', stage: 'studio_http', reason: 'operation_failed', outcome: 'http_500' },
+  timing_ingress: { level: 'info', stage: 'ingress', reason: 'timing', outcome: 'measured' },
+  timing_stt: { level: 'info', stage: 'stt', reason: 'timing', outcome: 'measured' },
+  timing_boundary: { level: 'info', stage: 'boundary', reason: 'timing', outcome: 'measured' },
+  timing_triage: { level: 'info', stage: 'triage', reason: 'timing', outcome: 'measured' },
+  timing_retrieval: { level: 'info', stage: 'retrieval', reason: 'timing', outcome: 'measured' },
+  timing_prompt: { level: 'info', stage: 'prompt', reason: 'timing', outcome: 'measured' },
+  timing_llm_ttft: { level: 'info', stage: 'llm_ttft', reason: 'timing', outcome: 'measured' },
+  timing_llm_done: { level: 'info', stage: 'llm_done', reason: 'timing', outcome: 'measured' },
+  timing_tts: { level: 'info', stage: 'tts', reason: 'timing', outcome: 'measured' },
+  timing_send: { level: 'info', stage: 'send', reason: 'timing', outcome: 'measured' },
+  timing_extraction: { level: 'info', stage: 'extraction', reason: 'timing', outcome: 'measured' },
+  timing_total: { level: 'info', stage: 'total', reason: 'timing', outcome: 'measured' },
 } as const;
 
 export type TelegramDiagnostic = keyof typeof diagnostics;
+
+/** Turn stages that can be timed; see tireh/timing.ts for what each one spans. */
+export const TIMING_STAGES = ['ingress', 'stt', 'boundary', 'triage', 'retrieval', 'prompt', 'llm_ttft', 'llm_done', 'tts', 'send', 'extraction', 'total'] as const;
+export type TimingStage = typeof TIMING_STAGES[number];
+export const TIMING_ROUTES = ['private_text', 'group_text', 'voice_note', 'call_turn', 'live_call'] as const;
+export type TimingRoute = typeof TIMING_ROUTES[number];
+const MAX_TIMING_MS = 86_400_000;
 
 const profileSteps = {
   webhook: 'profile_webhook_failed', name: 'profile_name_failed', photo: 'profile_photo_failed',
@@ -89,15 +111,28 @@ export function voiceFailureDiagnostic(error: unknown): TelegramDiagnostic {
 export function logTelegramDiagnostic(
   log: Pick<Console, 'info' | 'warn' | 'error'>,
   event: TelegramDiagnostic,
+  timing?: { route: TimingRoute; durationMs: number },
 ): void {
   // Guard even callers that bypass the type boundary. No unknown value is
   // forwarded to the destination, including inherited object property names.
   if (!Object.hasOwn(diagnostics, event)) return;
   const diagnostic = diagnostics[event];
-  log[diagnostic.level]({
-    type: 'telegram_ingress',
-    stage: diagnostic.stage,
-    reason: diagnostic.reason,
-    outcome: diagnostic.outcome,
-  });
+  const fields = { type: 'telegram_ingress', stage: diagnostic.stage, reason: diagnostic.reason, outcome: diagnostic.outcome };
+  if (diagnostic.reason !== 'timing') {
+    log[diagnostic.level](fields);
+    return;
+  }
+  // A timing event without a valid measurement is dropped, never logged
+  // partially. Hostile getters cannot escape: only copied primitives are used.
+  let route: unknown, durationMs: unknown;
+  try { route = timing?.route; durationMs = timing?.durationMs; } catch { return; }
+  if (typeof route !== 'string' || !(TIMING_ROUTES as readonly string[]).includes(route)) return;
+  if (typeof durationMs !== 'number' || !Number.isFinite(durationMs)) return;
+  log[diagnostic.level]({ ...fields, route: route as TimingRoute, durationMs: Math.min(MAX_TIMING_MS, Math.max(0, Math.round(durationMs))) });
+}
+
+/** One content-free timing line for a stage of a turn on a fixed route. */
+export function logStageTiming(log: Pick<Console, 'info' | 'warn' | 'error'>, route: TimingRoute, stage: TimingStage, durationMs: number): void {
+  if (!(TIMING_STAGES as readonly string[]).includes(stage)) return;
+  logTelegramDiagnostic(log, `timing_${stage}`, { route, durationMs });
 }

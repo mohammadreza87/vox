@@ -15,6 +15,13 @@ beforeEach(async () => {
   org = await seedOrg(h);
 });
 
+/** Legacy (non-adaptive) path: TIREH memory, history and the unscoped relationship loop.
+ * No production runtime builds it; adaptive runtimes disable all three (production-turn.test.ts). */
+async function legacyHarness() {
+  h = makeStudio({ adaptive: false });
+  org = await seedOrg(h);
+}
+
 const dm = (from: number, text: string): TelegramUpdate => ({
   update_id: updateId++,
   message: { message_id: updateId, from: { id: from, is_bot: false, first_name: 'X' }, chat: { id: from, type: 'private' }, date: 0, text },
@@ -206,6 +213,7 @@ describe('replies routed by triage', () => {
   });
 
   it('live facts: the main model with web search; something memorable is extracted', async () => {
+    await legacyHarness();
     const { agent, bot } = await nova();
     const { fast, web } = models();
     decider(answers('quick', 0.9, 0.6));
@@ -228,6 +236,7 @@ describe('replies routed by triage', () => {
   });
 
   it('without triage (error or timeout) every reply takes the full path', async () => {
+    await legacyHarness();
     const { agent } = await nova();
     const { fast, web } = models();
     decider(new Error('timeout'));

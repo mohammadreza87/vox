@@ -178,7 +178,7 @@ not start before the user signs in after reboot.
    - `/` redirects to `/studio`; `/studio` loads over valid HTTPS.
    - `/api/studio/health` returns 200, `bots: true`, and the installed revision.
    - `/api/studio/me` without signed Telegram initData returns 401.
-   - `/api/chat`, `/api/telegram/payments`, `/api/convai/llm`, and `/_next/image`
+   - `/api/chat`, `/api/telegram/payments`, `/api/convai/session`, and `/_next/image`
      return 404 in Studio-only production mode.
    - Open @VoxxBot in Telegram. Check owner access, pending-user approval,
      draft/test/hire, replies, voice and reload persistence. Startup readiness

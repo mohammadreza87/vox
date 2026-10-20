@@ -37,3 +37,21 @@ export function expectContentFreeTelegramLogs(calls: unknown[][], forbidden: rea
     }
   }
 }
+
+type CapturingLogger = { info: { mock: { calls: unknown[][] } }; warn: { mock: { calls: unknown[][] } }; error: { mock: { calls: unknown[][] } } };
+
+/** Every log call has one argument; timing events carry exactly the fixed fields
+ * and a whole number of milliseconds; no forbidden value appears anywhere. */
+export function expectContentFreeStageTimings(logger: CapturingLogger, forbidden: readonly string[]): Record<string, unknown>[] {
+  const calls = [...logger.info.mock.calls, ...logger.warn.mock.calls, ...logger.error.mock.calls];
+  for (const args of calls) expect(args).toHaveLength(1);
+  const events = logger.info.mock.calls.map(([event]) => event as Record<string, unknown>).filter((event) => event?.reason === 'timing');
+  for (const event of events) {
+    expect(Object.keys(event).sort()).toEqual(['durationMs', 'outcome', 'reason', 'route', 'stage', 'type']);
+    expect(event).toMatchObject({ type: 'telegram_ingress', reason: 'timing', outcome: 'measured' });
+    expect(Number.isSafeInteger(event.durationMs) && (event.durationMs as number) >= 0).toBe(true);
+  }
+  const serialized = JSON.stringify(calls);
+  for (const value of forbidden) expect(serialized).not.toContain(value);
+  return events;
+}
