@@ -87,7 +87,7 @@ function ErasurePanel({ row, locale, session, snapshot, notesStale, disabled, on
       {phase === 'current' && !!view?.operations.length && <><h5 ref={result} tabIndex={-1}>{c.result}</h5>{view.operations.map((status, index) => <RightsErasureState key={status.operationRef} status={status} locale={locale} unknownRef={index === view.operations.findIndex(item => item.technical === 'unknown') ? alert : undefined} />)}</>}
     </div>
     {['unknown','stale'].includes(phase) && <p ref={alert} tabIndex={-1} role="alert">{phase === 'unknown' ? c.unknown : c.stale}</p>}
-    {!working && !available && <p className="vx-small">{c.unavailable}</p>}
+    {!working && !available && <p className="vx-small"><span>{c.newActionLabel} </span>{c.unavailable}</p>}
     {available && !selecting && !dispatched.current && phase !== 'unknown' && <button ref={action} style={buttonStyle} className="vx-btn vx-btn-secondary" onClick={() => { clearDraft(); setPhase('selecting'); }}>{c.action}</button>}
     {selecting && <>
       {phase !== 'review' && <fieldset disabled={phase === 'planning' || !available} style={{ minWidth: 0 }}><legend>{c.choose}</legend>
