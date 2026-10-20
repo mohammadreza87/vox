@@ -1,4 +1,4 @@
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import { mkdtempSync, realpathSync, rmSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -25,7 +25,7 @@ import { ControlledExperimentService } from '../experiments/service';
 import { MemoryExperimentStorage } from '../experiments/storage';
 import { config as syntheticExperimentConfig } from '../experiments/test-fixtures';
 const paths:string[]=[],stores:ManagedAdaptiveStorage[]=[];
-afterEach(()=>{for(const s of stores.splice(0))s.close();for(const p of paths.splice(0))rmSync(p,{recursive:true,force:true});});
+afterEach(()=>{vi.restoreAllMocks();for(const s of stores.splice(0))s.close();for(const p of paths.splice(0))rmSync(p,{recursive:true,force:true});});
 const NOW=1800000000000,accountId=accountIdFor(123),guard=()=>{};
 const scope={space:'work',purpose:'optional.personalization'} as const;
 const binding={id:'synthetic',revision:1,digest:'a'.repeat(64),approvalReference:'synthetic-reviewed',decisionReference:'synthetic-decision'};
@@ -85,6 +85,18 @@ for(const format of ['sqlite','file'] as const){
   const before=digest(f.read());await expect(f.repository.transaction(accountId,NOW,d=>{d.retentionStoreIdentity='f'.repeat(64);})).rejects.toThrow('Retention namespace replacement');expect(digest(f.read())).toBe(before);
  });
 }
+it('prepared FILE3 automatic-context entry refuses before body under a hold or unknown direct controls, own export stays available',async()=>{
+ const f=await fixture('file');expect((await f.adaptive.readPrivateContext(123,'work','agent','note')).memories).toHaveLength(1);
+ await f.holds.apply(123,f.command(),guard);
+ const transact=vi.spyOn(f.storage,'transact'),read=vi.spyOn(f.storage,'readCommittedForEffect');
+ const context=await f.adaptive.readPrivateContext(123,'work','agent','note'),authority=await f.adaptive.readPrivateContextAuthority(123,'work','agent'),sync=f.adaptive.readPrivateContextAuthorityNow(123,'work','agent');
+ expect(context.memories).toEqual([]);expect(authority.revision).toBe(context.revision);expect(sync.revision).toBe(context.revision);expect(transact).not.toHaveBeenCalled();expect(read).not.toHaveBeenCalled();
+ const direct=vi.spyOn(f.storage as ManagedFileV2Storage,'readDirectAuthorityForEffect').mockReturnValue({status:'busy'});
+ await expect(f.adaptive.readPrivateContext(123,'work','agent')).rejects.toMatchObject({code:'adaptive_context_unavailable'});
+ await expect(f.adaptive.readPrivateContextAuthority(123,'work','agent')).rejects.toMatchObject({code:'adaptive_context_unavailable'});
+ expect(()=>f.adaptive.readPrivateContextAuthorityNow(123,'work','agent')).toThrow();expect(transact).not.toHaveBeenCalled();expect(read).not.toHaveBeenCalled();direct.mockRestore();
+ expect((await new AdaptiveLifecycleService(f.adaptive).exportAccount(123,'work')).memories).toHaveLength(1);
+});
 for(const format of ['sqlite-v1','file-v2'] as const)it(`${format}: real explicit conversion and current-state opposite-format migration preserve schema3 controls`,async()=>{
  const dir=mkdtempSync(join(realpathSync(tmpdir()),'vox-rf1-conversion-'));paths.push(dir);const root=join(dir,'legacy');mkdirSync(root);
  const repo=new AdaptiveRepository(new FileAdaptiveStorage(root));await repo.transaction(accountId,NOW,d=>{d.memories.push({id:'retained',revision:1,space:'work',text:'synthetic',status:'deleted',createdAt:NOW,updatedAt:NOW,expiresAt:NOW+10000,revocationEpoch:3});});

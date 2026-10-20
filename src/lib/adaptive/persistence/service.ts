@@ -762,11 +762,27 @@ export class AdaptiveService {
   };
   /** Authorized, fresh explicit-private context for the separately gated runtime path.
    * The caller must recheck returned revision before provider use/output. */
+  private preparedFilePrivateContextDenial(telegramId:number,space:SpaceKind,agentId:string):PrivateContextSnapshot|undefined {
+    if(this.repository.storage.indexed || this.repository.storage.canonicalSchemaVersion!==3)return;
+    const current=this.readDirectAuthorityForEffect<PrivateContextSnapshot|undefined>(telegramId,space,(d,now,namespace,stamp)=>{
+      const allowed=this.isCoreAllowed(d,now)&&this.isPurposeAllowed(d,space,'optional.personalization',now,agentId);
+      if(allowed)return {value:undefined,deadline:Math.min(d.binding!.expiresAt,this.permission(d,space,'optional.personalization').expiresAt,
+        this.eligible(d,'core_text',now).validUntil??INFINITY,this.eligible(d,'personalization',now).validUntil??INFINITY)};
+      return {value:{revision:digest(['prepared-file-private-context-denied-v1',namespace,stamp,space,agentId,
+        this.coreFingerprint(d,now),this.purposeFingerprint(d,space,'optional.personalization',now,agentId)]),memories:[],completion:'complete' as const,validUntil:INFINITY},denied:true};
+    });
+    if(current.status!=='ready')return fail(503,'adaptive_context_unavailable');
+    return current.value;
+  }
   readPrivateContext(telegramId: number, space: SpaceKind, agentId: string, query = ''): Promise<PrivateContextSnapshot> {
     if (this.repository.storage.indexed) {
       try { return Promise.resolve(readIndexedPrivateContext(this, telegramId, space, agentId, query)); }
       catch { return Promise.reject(new AdaptiveError(503, 'adaptive_context_unavailable')); }
     }
+    // Managed FILE's body-free head is checked synchronously before entering its
+    // synchronous single-owner canonical transaction. Unknown controls never fall back.
+    try {const denied=this.preparedFilePrivateContextDenial(telegramId,space,agentId);if(denied)return Promise.resolve(denied);}
+    catch {return Promise.reject(new AdaptiveError(503,'adaptive_context_unavailable'));}
     return this.transact(telegramId, (d, now) => this.canonicalPrivateContext(d, now, space, agentId));
   }
   private canonicalPrivateContext(d: AdaptiveDocument, now: number, space: SpaceKind, agentId: string): PrivateContextSnapshot {
@@ -805,6 +821,8 @@ export class AdaptiveService {
   }
   readPrivateContextAuthorityNow(telegramId: number, space: SpaceKind, agentId: string): { revision: string; validUntil: number } {
     if (!this.repository.storage.indexed) {
+      const denied=this.preparedFilePrivateContextDenial(telegramId,space,agentId);
+      if(denied)return {revision:denied.revision,validUntil:denied.validUntil??INFINITY};
       const result = this.readCommittedAuthorityForEffect(telegramId, this.now, (d, now) => {
         const authority = this.authorityEvaluation(d, space, now, 'en');
         const deadline = Math.min(authority.deadline ?? INFINITY, ...d.memories.filter(m => m.space === space && m.status === 'active' && m.expiresAt > now).map(m => m.expiresAt));
