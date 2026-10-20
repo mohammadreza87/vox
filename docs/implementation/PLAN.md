@@ -1,6 +1,6 @@
 # Vox adaptive agents: implementation plan
 
-Prepared 19 October 2026 for Joyixir OÜ. Product scope: adults in the EU/EEA and US; English and Persian interfaces; Work and Personal spaces. Current released baseline: `ee3467d2649e36ea4a9c5ca02560c3f50a3f8451` (20 October 2026); the next guest/evaluation candidate is tracked separately.
+Prepared 19 October 2026 for Joyixir OÜ. Product scope: adults in the EU/EEA and US; English and Persian interfaces; Work and Personal spaces. Current released baseline: `9371894a2dc4bc6f9abca25289f2eaa9fe6e17b9` (20 October 2026); the next maintenance-status candidate is tracked separately.
 
 **Delivery status:** the observation/lifecycle/improvement work and the complementary scoped chat, image prediction, bounded retrieval and optional voice lifecycle are now integrated in the completion candidate. See [adaptive completion](ADAPTIVE_COMPLETION_RESULT.md) for implementation, independent review and precise release evidence. Existing source/release receipts remain historical. Optional capabilities stay off without reviewed configuration; provider/device/privacy qualification and the unfinished roadmap entries remain open.
 
@@ -18,6 +18,7 @@ Prepared 19 October 2026 for Joyixir OÜ. Product scope: adults in the EU/EEA an
 | [Implementation start and decisions](STARTER_SLICE.md) | Active work, concrete decisions, metric contract and remaining foundation gaps |
 | [Production release receipt](RELEASE_2026_10_19.md) | Exact develop/CI/build/deployment evidence and activation limits |
 | [20 October release receipt](RELEASE_2026_10_20.md) | Retention, observation and presentation experiments; exact live revision and remaining gates |
+| [Guest and evaluation release receipt](RELEASE_GUEST_EVALUATION_2026_10_20.md) | Public privacy fallback, signed evaluation protocol, trusted public origins and exact deployed evidence |
 | [Communication diagnostics](OBSERVATION_DIAGNOSTICS.md) | Next source slice, independent review and remaining observation scope |
 | [Rendered experience and correction observation](OBSERVATION_COMPLETION.md) | Visible committed text, scoped correction feedback and current-state rollback |
 | [Reviewed rights retention](RIGHTS_RETENTION.md) | Explicit reassessment, terminal purge, finite continuity and ledger compatibility |
