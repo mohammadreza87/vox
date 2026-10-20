@@ -85,4 +85,19 @@ describe('routing policy', () => {
       expect(flagged(`${skill?.title}: ${skill?.whenToUse}`), id).toEqual(expect.arrayContaining([...words]));
     }
   });
+
+  it('checks every optional work skill even when it falls beyond the default eight-skill window', () => {
+    const problems: string[] = [];
+    for (const role of CATALOG.roles.filter((r) => r.space === 'work')) {
+      for (const skill of skillsOf(role)) {
+        // A creator can select any subset, so an optional tail entry can become
+        // a choice even if it is absent from the default first-eight rendering.
+        for (const candidate of routableSkillsFor(role, [skill])) {
+          const words = flagged(`${candidate.title}: ${candidate.whenToUse}`, ALLOWED[candidate.id]);
+          if (words.length) problems.push(`${role.id} → ${candidate.id} [${words.join(', ')}]`);
+        }
+      }
+    }
+    expect(problems).toEqual([]);
+  });
 });
