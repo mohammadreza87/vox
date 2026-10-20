@@ -1,7 +1,7 @@
 import { afterEach, expect, it } from 'vitest';
 import { createHash, randomUUID } from 'node:crypto';
-import { readFile, readdir, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { lstat, mkdir, mkdtemp, readFile, readdir, readlink, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { dirname, join, resolve } from 'node:path';
 import { accountIdFor } from '../persistence/repository';
 import { RightsIntakeService } from './service';
 import { RightsFileStorage } from './storage';
@@ -66,4 +66,58 @@ it('keeps an interrupted clock writer lock fail-closed for operator reconciliati
   await expect(f.service.create(101, f.input())).rejects.toMatchObject({ code: 'rights_clock_unavailable' });
   expect((await readdir(f.directory)).includes('.clock-v1.lock')).toBe(true);
   expect(await readFile(fileFor(f.directory), 'utf8')).toBe(before);
+});
+
+async function directoryBytes(directory: string): Promise<Record<string, string>> {
+  const result: Record<string, string> = {};
+  const visit = async (path: string, prefix: string) => {
+    for (const entry of await readdir(path, { withFileTypes: true })) {
+      const relative = prefix + entry.name, file = join(path, entry.name);
+      if (entry.isDirectory()) { result[relative + '/'] = ''; await visit(file, relative + '/'); }
+      else result[relative] = (await readFile(file)).toString('base64');
+    }
+  };
+  await visit(directory, ''); return result;
+}
+it.each([false, true])('rejects a pre-existing application-parent link with existing leaf=%s before touching outside bytes', async existingLeaf => {
+  const f = await setup(), data = join(f.directory, 'protected-data'), outside = join(f.directory, 'outside');
+  await mkdir(data, { mode: 0o700 }); await mkdir(outside, { mode: 0o700 });
+  await writeFile(join(outside, 'outside-canary'), 'MUST_REMAIN_UNCHANGED');
+  if (existingLeaf) { await mkdir(join(outside, 'v1'), { mode: 0o700 }); await writeFile(join(outside, 'v1', 'existing-canary'), 'PRIVATE_OUTSIDE_BYTES'); }
+  const before = await directoryBytes(outside);
+  await symlink(outside, join(data, 'rights-intake'));
+  expect(() => new RightsFileStorage(join(data, 'rights-intake', 'v1'))).toThrow('rights_storage_unavailable');
+  expect(await directoryBytes(outside)).toEqual(before);
+});
+it.each([false, true])('rejects an application ancestor above the rights directory with existing leaf=%s', async existingLeaf => {
+  const f = await setup(), outside = join(f.directory, 'outside'), data = join(f.directory, 'protected-data');
+  await mkdir(outside, { mode: 0o700 }); await writeFile(join(outside, 'outside-canary'), 'MUST_REMAIN_UNCHANGED');
+  if (existingLeaf) await mkdir(join(outside, 'rights-intake', 'v1'), { recursive: true, mode: 0o700 });
+  const before = await directoryBytes(outside); await symlink(outside, data);
+  expect(() => new RightsFileStorage(join(data, 'rights-intake', 'v1'))).toThrow('rights_storage_unavailable');
+  expect(await directoryBytes(outside)).toEqual(before);
+});
+it.each([false, true])('rejects a replaced application parent with existing leaf=%s at all storage boundaries', async existingLeaf => {
+  const f = await setup(), parent = join(f.directory, 'rights-intake'), outside = join(f.directory, 'outside');
+  await mkdir(parent, { mode: 0o700 }); await mkdir(outside, { mode: 0o700 });
+  await writeFile(join(outside, 'outside-canary'), 'MUST_REMAIN_UNCHANGED');
+  if (existingLeaf) { await mkdir(join(parent, 'v1'), { mode: 0o700 }); await mkdir(join(outside, 'v1'), { mode: 0o700 }); await writeFile(join(outside, 'v1', 'existing-canary'), 'PRIVATE_OUTSIDE_BYTES'); }
+  const storage = new RightsFileStorage(join(parent, 'v1')), before = await directoryBytes(outside);
+  await rename(parent, parent + '-original'); await symlink(outside, parent);
+  expect(() => storage.observeRightsTime(NOW)).toThrow('rights_storage_unavailable');
+  expect(() => storage.readCommittedForEffect(accountIdFor(101))).toThrow('rights_storage_unavailable');
+  await expect(storage.listAccounts({ limit: 1 })).rejects.toThrow('rights_storage_unavailable');
+  await expect(storage.transact(accountIdFor(101), () => ({ document: {}, result: undefined }))).rejects.toThrow('rights_storage_unavailable');
+  expect(await directoryBytes(outside)).toEqual(before);
+});
+it.each(['/tmp', '/var/tmp'])('supports a normal temporary directory under %s without generic ancestor resolution', async parent => {
+  const directory = await mkdtemp(join(parent, 'vox-rights-alias-')); extraRoots.push(directory);
+  const storage = new RightsFileStorage(join(directory, 'rights-intake', 'v1'));
+  storage.observeRightsTime(NOW);
+  expect(JSON.parse(await readFile(join(directory, 'rights-intake', 'v1', '.clock-v1.json'), 'utf8'))).toEqual({ version: 1, observedServerTime: NOW });
+  const alias = parent === '/tmp' ? '/tmp' : '/var', target = alias === '/tmp' ? '/private/tmp' : '/private/var';
+  if ((await lstat(alias)).isSymbolicLink()) {
+    expect(resolve(dirname(alias), await readlink(alias))).toBe(target);
+    expect(storage.directory.startsWith(target + '/')).toBe(true);
+  }
 });

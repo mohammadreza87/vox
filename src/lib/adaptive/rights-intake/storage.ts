@@ -1,9 +1,9 @@
 /** Rights-only file hardening and monotonic read-boundary clock. No canonical
  * adaptive format, account authority, queue index or production policy change. */
 import { createHash, randomUUID } from 'crypto';
-import { constants, closeSync, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'fs';
+import { constants, closeSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, renameSync, unlinkSync, writeFileSync } from 'fs';
 import { promises as fs } from 'fs';
-import { dirname, join, parse, relative, resolve, sep } from 'path';
+import { join, parse, relative, resolve, sep } from 'path';
 import { FileAdaptiveStorage, type AdaptiveAccountPageInput, type AdaptiveAccountPage } from '../persistence/storage';
 import { fail } from './repository';
 const unavailable = (): never => fail(503, 'rights_storage_unavailable');
@@ -11,14 +11,28 @@ const keyFor = (id: string) => createHash('sha256').update(id).digest('hex');
 function stat(path: string) {
   try { return lstatSync(path); } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined; throw error; }
 }
-/** Resolve existing system aliases once, then reject later symlink replacement
- * at every component of the selected canonical directory. */
+/** Only the two exact macOS root aliases may be normalized. Application
+ * components remain lexical, so both existing and later ancestor links deny
+ * access instead of silently selecting another protected-data directory. */
 function canonicalDirectory(path: string): string {
-  const absolute = resolve(path), leaf = stat(absolute);
-  if (leaf?.isSymbolicLink()) return unavailable();
-  let parent = absolute;
-  while (!existsSync(parent)) { const next = dirname(parent); if (next === parent) return unavailable(); parent = next; }
-  return join(realpathSync(parent), relative(parent, absolute));
+  let absolute = resolve(path);
+  for (const [alias, target] of [['/tmp', '/private/tmp'], ['/var', '/private/var']] as const) {
+    if (absolute !== alias && !absolute.startsWith(`${alias}/`)) continue;
+    if (stat(alias)?.isSymbolicLink()) {
+      const link = readlinkSync(alias);
+      if (link !== target && link !== target.slice(1)) return unavailable();
+      absolute = join(target, relative(alias, absolute));
+    }
+    break;
+  }
+  let current = parse(absolute).root;
+  for (const part of relative(current, absolute).split(sep).filter(Boolean)) {
+    current = join(current, part);
+    const value = stat(current);
+    if (!value) break;
+    if (!value.isDirectory() || value.isSymbolicLink()) return unavailable();
+  }
+  return absolute;
 }
 export class RightsFileStorage extends FileAdaptiveStorage {
   constructor(directory: string) { super(canonicalDirectory(directory)); }
