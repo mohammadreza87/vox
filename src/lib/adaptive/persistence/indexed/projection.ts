@@ -1,3 +1,6 @@
+import type { AdaptiveDirectAuthorityControls } from '../authority';
+import { productPauseUseControlsSchema } from '../../product-pause/contracts';
+import { compactProductPause, productPauseUseStamp } from '../../product-pause/state';
 import { z } from 'zod';
 import { createHash } from 'crypto';
 import { ADAPTIVE_POLICY_VERSION, OPTIONAL_PURPOSES, containerIdFor, digest, spaceIdFor, tenantIdFor,
@@ -14,7 +17,7 @@ const permission = z.object({ ...base, tenantId: id, spaceId: id, personId: id, 
   purposeVersion: z.literal(1), policyVersion: z.literal(ADAPTIVE_POLICY_VERSION),
   state: z.enum(['not_asked', 'presented', 'granted', 'declined', 'withdrawn', 'expired', 'reconsent_required', 'suspended']),
   epoch: time, effectiveAt: time, expiresAt: time, lastEventId: id.optional(), lastCommandFingerprint: z.string().max(3000).optional() }).strict();
-export const indexedControlsSchema = z.object({ schemaVersion: z.literal(1), accountId: id, personId: id, createdAt: time, revision, updatedAt: time,
+const legacyIndexedControlsSchema = z.object({ schemaVersion: z.literal(1), accountId: id, personId: id, createdAt: time, revision, updatedAt: time,
   binding: binding.optional(), declaration: z.object({ adultConfirmed: z.boolean(), declaredAt: time,
     declaredJurisdiction: z.string().max(20).optional() }).strict().optional(),
   permissions: z.array(permission).length(16), agentGrants: z.array(z.object({ agentId: id,
@@ -26,6 +29,27 @@ export const indexedControlsSchema = z.object({ schemaVersion: z.literal(1), acc
   relationshipBindings: relationshipDocumentSchema.shape.bindings,
   relationshipSources: relationshipDocumentSchema.shape.sources,
   relationshipExternalSettings: relationshipDocumentSchema.shape.externalSettings }).strict();
+export const indexedControlsSchema = z.union([legacyIndexedControlsSchema, legacyIndexedControlsSchema.extend({ schemaVersion: z.literal(2), productPause: productPauseUseControlsSchema }).strict()]);
+const directAuthorityBase = legacyIndexedControlsSchema.pick({ schemaVersion: true, accountId: true, personId: true,
+  createdAt: true, revision: true, updatedAt: true, binding: true, declaration: true, permissions: true, agentGrants: true });
+export const directAuthorityControlsSchema = z.union([directAuthorityBase,
+  directAuthorityBase.extend({ schemaVersion: z.literal(2), productPause: productPauseUseControlsSchema }).strict()]);
+export function parseDirectAuthorityControls(raw: unknown, accountId: string): AdaptiveDirectAuthorityControls {
+  const parsed = directAuthorityControlsSchema.safeParse(raw);
+  if (!parsed.success) throw new IndexedStorageError('invalid_controls');
+  const c = parsed.data;
+  validateAccountId(accountId);
+  if (c.accountId !== accountId || c.personId !== `account-profile:${digest(accountId).slice(0, 32)}` ||
+      new Set(c.permissions.map(p => p.id)).size !== 16 ||
+      new Set(c.agentGrants.map(g => digest([g.space, g.agentId]))).size !== c.agentGrants.length ||
+      c.binding && (c.binding.accountId !== accountId || c.binding.personId !== c.personId)) throw new IndexedStorageError('invalid_controls');
+  for (const space of ['work', 'personal'] as const) for (const purpose of OPTIONAL_PURPOSES) {
+    const p = c.permissions.find(row => row.id === `permission:${space}:${purpose}`);
+    if (!p || p.spaceId !== spaceIdFor(accountId, space) || p.tenantId !== tenantIdFor(accountId) ||
+        p.personId !== c.personId || p.purpose !== purpose) throw new IndexedStorageError('invalid_controls');
+  }
+  return c as AdaptiveDirectAuthorityControls;
+}
 export function validateAccountId(accountId: string): void {
   if (!/^telegram-account:[1-9]\d{0,15}$/.test(accountId) || !Number.isSafeInteger(Number(accountId.slice(17))))
     throw new IndexedStorageError('invalid_scope');
@@ -77,7 +101,7 @@ export interface IndexedProjection {
 export function projectDocument(document: AdaptiveDocument, canonical: string): IndexedProjection {
   if (Buffer.byteLength(canonical) > INDEXED_LIMITS.canonicalBytes || document.memories.length > INDEXED_LIMITS.memories ||
       new Set(document.memories.map(m => m.id)).size !== document.memories.length) throw new IndexedStorageError('capacity');
-  const c: IndexedControls = { schemaVersion: 1, accountId: document.accountId, personId: document.personId,
+  const c: IndexedControls = { schemaVersion: document.schemaVersion, ...(document.schemaVersion === 2 ? { productPause: compactProductPause(document.productPause!) } : {}), accountId: document.accountId, personId: document.personId,
     createdAt: document.createdAt, revision: document.revision, updatedAt: document.updatedAt, ...(document.binding ? { binding: document.binding } : {}),
     ...(document.declaration ? { declaration: document.declaration } : {}),
     permissions: document.permissions, agentGrants: document.agentGrants,
@@ -106,6 +130,7 @@ export function projectDocument(document: AdaptiveDocument, canonical: string): 
     controls.relationshipSources.filter(s => s.key.scope.space === space),
     [controls.relationshipExternalSettings.revision, controls.relationshipExternalSettings[space]],
     memories.filter(m => m.metadata.space === space).map(m => m.metadata), containerIdFor(document.accountId, space),
+    ...(document.schemaVersion === 2 ? [productPauseUseStamp(controls, space)] : []),
   ]) }));
   return { canonical, controls, controlsJson, controlsDigest: digest(controls), memories, catalogs, outbox: document.outbox };
 }

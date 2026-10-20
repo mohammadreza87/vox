@@ -198,3 +198,11 @@ it('records returned STT/Decisions tokens and leaves audio-provider usage unavai
     { provider: 'elevenlabs', inputTokens: null, outputTokens: null, status: 'unavailable' }]);
   for (const canary of ['PRIVATE_TRANSCRIPT_CANARY', 'PRIVATE_DRAFT_CANARY', 'PRIVATE_SPEECH_CANARY']) expect(JSON.stringify(trace.snapshot())).not.toContain(canary);
 });
+it('StudioVoiceService preserves the request fence through the actual speech adapter and rejects a newly stale audio buffer', async () => {
+  let current = true;
+  const fetcher = vi.fn<typeof fetch>(async () => ({ok:true,status:200,headers:new Headers({'content-type':'audio/mpeg'}),arrayBuffer:async () => {current = false;return new Uint8Array([1,2,3]).buffer;}} as Response));
+  const service = new StudioVoiceService(null,new ElevenLabsStudio('synthetic-key',fetcher));
+  await expect(service.synthesize('CURRENT_ALLOWED_TEXT','synthetic-voice',{authorizeNow:() => current})).rejects.toMatchObject({name:'ExportAuthorityError'});
+  expect(fetcher).toHaveBeenCalledOnce(); expect(String(fetcher.mock.calls[0][1]?.body)).toContain('CURRENT_ALLOWED_TEXT');
+  expect(String(fetcher.mock.calls[0][1]?.body)).not.toMatch(/authorizeNow|signal/);
+});

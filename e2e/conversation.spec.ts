@@ -47,6 +47,9 @@ async function installFixtures(page: Page) {
     let result: unknown = {};
     if (path === 'me') result = { member: { telegramId: PERSON, name: 'Synthetic Owner', role: 'owner', joinedAt: '2026-01-01T00:00:00.000Z' }, org: 'Synthetic Org', bot: 'fixturebot', features: { avatars: false, voices: false, calls: false } };
     else if (path === 'agents') result = { agents: [agent] };
+    else if (path === 'product-pause' && request.method() === 'GET') result = { version: 1, accountId: 'synthetic-account',
+      space: url.searchParams.get('space') === 'personal' ? 'personal' : 'work', available: false,
+      reason: 'store_not_prepared', productPaused: null, useEpoch: null, canPause: false, canResume: false };
     else if (path === `agents/${AGENT_ID}`) result = { agent };
     else if (path === 'conversation') result = { reply: `Synthetic ${typeof body?.space === 'string' ? body.space : 'work'} reply` };
     else if (path === 'adaptive') {

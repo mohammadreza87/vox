@@ -1,5 +1,6 @@
 /** Internal server-only persistence evidence. These records never grant Studio or
  * capability-policy authority and must never be accepted from an HTTP client. */
+import type { ProductPauseUseControlsV1 } from '../../product-pause/contracts';
 import type { AdaptiveDocument, OptionalPurpose, SpaceKind } from '../repository';
 
 export const INDEXED_FORMAT_VERSION = 1 as const;
@@ -7,7 +8,7 @@ export const INDEXED_SCHEMA_VERSION = 1 as const;
 export const INDEXED_LIMITS = Object.freeze({ memories: 300, canonicalBytes: 700_000,
   queryChars: 8192, queryTerms: 128, candidates: 64, bodyBytes: 128 * 1024, lineageDepth: 8 });
 export interface IndexedStoreMetadata {
-  formatVersion: 1; schemaVersion: 1; incarnation: string; generation: number; lifecycleWatermark: number;
+  formatVersion: 1; schemaVersion: 1 | 2; incarnation: string; generation: number; lifecycleWatermark: number;
 }
 export interface IndexedScope {
   accountId: string; personId: string; tenantId: string; space: SpaceKind; spaceId: string;
@@ -15,7 +16,7 @@ export interface IndexedScope {
 }
 /** A separate strict body-free schema, never a partial AdaptiveDocument. */
 export interface IndexedControls {
-  schemaVersion: 1; accountId: string; personId: string; createdAt: number; revision: number; updatedAt: number;
+  schemaVersion: 1 | 2; productPause?: ProductPauseUseControlsV1; accountId: string; personId: string; createdAt: number; revision: number; updatedAt: number;
   binding?: AdaptiveDocument['binding']; declaration?: AdaptiveDocument['declaration'];
   permissions: AdaptiveDocument['permissions']; agentGrants: AdaptiveDocument['agentGrants'];
   preferences: AdaptiveDocument['experience']['preferences']; settings: AdaptiveDocument['experience']['settings'];

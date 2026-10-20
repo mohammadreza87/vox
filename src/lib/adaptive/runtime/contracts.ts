@@ -17,7 +17,7 @@ export const preferenceUndoSchema = z.object({ changeId: id, space: experienceSp
 }).strict().refine(row => row.expiresAt > row.createdAt && row.expiresAt - row.createdAt <= 10 * 60_000 &&
   (!row.before || row.before.space === row.space && row.before.agentId === row.agentId && row.before.setting.key === row.key));
 export type PreferenceUndo = z.infer<typeof preferenceUndoSchema>;
-export type PreferenceExplanation = 'explicit_choice' | 'explicit_reset' | 'default' | 'personalization_off' | 'capability_unavailable' | 'agent_grant_missing';
+export type PreferenceExplanation = 'product_personalization_paused' | 'explicit_choice' | 'explicit_reset' | 'default' | 'personalization_off' | 'capability_unavailable' | 'agent_grant_missing';
 export interface PreferenceEntry {
   setting: PreferenceValue; source: ResolvedPreference['source']; applied: boolean; explanation: PreferenceExplanation;
   saved?: z.infer<typeof storedPreferenceSchema>;

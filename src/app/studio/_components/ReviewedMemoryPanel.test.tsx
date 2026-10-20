@@ -38,3 +38,20 @@ it('expires the preview locally without treating it as a saved memory', async ()
   render(<ReviewedMemoryPanel snapshot={snapshot()} agents={agents} locale="en" disabled={false} onSaved={vi.fn()} />); select();
   await screen.findByText('This preview expired. Request a new preview.'); expect(screen.getByRole('button', { name: 'Save reviewed summary' })).toBeDisabled(); expect(api.reviewedAccept).not.toHaveBeenCalled();
 });
+
+it('invalidates an existing preview on product pause while keeping original notes visible, and never revives it on resume', async () => {
+  const saved = vi.fn(); const props = { snapshot: snapshot(), agents, locale: 'en' as const, disabled: false, onSaved: saved };
+  const view = render(<ReviewedMemoryPanel {...props} />); select(); await screen.findByText(preview().text);
+  view.rerender(<ReviewedMemoryPanel {...props} pauseBlocked personalizationPaused pauseEpoch={1} />);
+  expect(screen.queryByText(preview().text)).toBeNull(); expect(screen.getByRole('button', { name: 'Create summary preview' })).toBeDisabled();
+  expect(screen.getByText('Summaries of saved notes are unavailable while personalization is paused in Work. You can still manage the original notes where allowed.')).toBeVisible();
+  expect(screen.getByText('Launch March 5')).toBeVisible(); expect(api.reviewedAccept).not.toHaveBeenCalled();
+  view.rerender(<ReviewedMemoryPanel {...props} pauseEpoch={2} />); expect(screen.queryByRole('button', { name: 'Save reviewed summary' })).toBeNull();
+});
+it('discards a late preview that arrives after a product-pause boundary', async () => {
+  let finish!: (value: ReturnType<typeof preview>) => void; api.reviewedPreview.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+  const props = { snapshot: snapshot(), agents, locale: 'en' as const, disabled: false, onSaved: vi.fn() };
+  const view = render(<ReviewedMemoryPanel {...props} />); select(); const signal = api.reviewedPreview.mock.calls[0][1] as AbortSignal;
+  view.rerender(<ReviewedMemoryPanel {...props} pauseBlocked personalizationPaused pauseEpoch={1} />); expect(signal.aborted).toBe(true);
+  await act(async () => finish(preview())); expect(screen.queryByText(preview().text)).toBeNull();
+});

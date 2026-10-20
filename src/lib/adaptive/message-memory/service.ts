@@ -2,7 +2,8 @@ import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import type { LLM } from '../../tireh/llm';
 import { AdaptiveError, type AdaptiveService } from '../persistence/service';
-import { accountIdFor, digest, type AdaptiveDocument, type StoredMemory } from '../persistence/repository';
+import { accountIdFor, digest, type AdaptiveAuthorityDocument, type AdaptiveDocument, type StoredMemory } from '../persistence/repository';
+import { productPauseUseStamp } from '../product-pause/state';
 import { previewClaimsSchema, messageAcceptInputSchema, messagePreviewInputSchema, type MessageAcceptInput, type MessageMemoryPreview, type MessagePreviewInput } from './contracts';
 const hash = z.string().regex(/^[a-f0-9]{64}$/), time = z.number().int().nonnegative().safe();
 const receiptSchema = z.object({ v: z.literal(1), nonce: z.string().uuid(), accountId: z.string().max(200), personId: z.string().max(200),
@@ -36,25 +37,25 @@ export class MessageMemoryService {
       return receiptSchema.parse(JSON.parse(Buffer.from(body, 'base64url').toString('utf8')));
     } catch { return changed(); }
   }
-  private state(d: AdaptiveDocument, now: number, input: Pick<Receipt, 'space' | 'agentId'>, studio: string | null) {
+  private state(d: AdaptiveAuthorityDocument, now: number, input: Pick<Receipt, 'space' | 'agentId'>, studio: string | null) {
     if (this.options.llm.committedExportFence !== true) return unavailable();
     if (!studio || !this.adaptive.isCoreAllowed(d, now) || d.agentGrants.filter(g => g.space === input.space && g.agentId === input.agentId && g.allowed).length !== 1) return changed();
     return { personId: d.personId, expiresAt: Math.min(d.binding!.expiresAt, this.adaptive.capabilityStatus(d, 'core_text', now).validUntil ?? now),
       authority: digest([...(this.adaptive.storeIdentity === 'canonical' ? [] : [this.adaptive.storeIdentity]), this.options.llm.identity ?? null, d.accountId, d.personId, d.binding, this.adaptive.coreFingerprint(d, now), studio, input.space, input.agentId,
-        d.agentGrants.filter(g => g.space === input.space && g.agentId === input.agentId)]) };
+        d.agentGrants.filter(g => g.space === input.space && g.agentId === input.agentId),
+        ...(d.schemaVersion === 2 ? [productPauseUseStamp(d, input.space)] : [])]) };
   }
   private currentNow(telegramId: number, input: Pick<Receipt, 'space' | 'agentId'>) {
     const studio = this.options.agentAuthorityNow(telegramId, input.agentId);
-    const result = this.adaptive.readCommittedAuthorityForEffect(telegramId, this.now, (d, now) => {
-      const value = this.state(d, now, input, studio); return { value, deadline: value.expiresAt };
-    });
+    const evaluate = (d: AdaptiveAuthorityDocument, now: number) => { const value = this.state(d, now, input, studio); return {value, deadline:value.expiresAt}; };
+    const result = this.adaptive.readDirectAuthorityForEffect(telegramId, input.space, evaluate);
     if (result.status !== 'ready') return unavailable();
     return result.value;
   }
   private async current(telegramId: number, input: Pick<Receipt, 'space' | 'agentId'>, signal?: AbortSignal) {
     if (signal?.aborted) return changed();
     const studio = await this.options.agentAuthority(telegramId, input.agentId);
-    const before = await this.adaptive.withAccountDocument(telegramId, (d, now) => this.state(d, now, input, studio));
+    const before = await this.adaptive.withDirectAuthority(telegramId, input.space, (d, now) => { const value = this.state(d, now, input, studio); return { value, deadline: value.expiresAt }; });
     if (signal?.aborted) return changed();
     const current = this.currentNow(telegramId, input);
     if (before.authority !== current.authority) return changed();

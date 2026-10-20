@@ -36,6 +36,22 @@ async function fixture(count = 3) {
     mutate: (fn: (d: AdaptiveDocument) => void, guard?: () => void) => repo.transaction(accountId, () => now, d => { fn(d); d.revision++; d.updatedAt = now; }, guard) };
 }
 describe('staged SQLite adaptive storage — synthetic fixtures only', () => {
+  it('refuses a rehashed legacy canonical record inside a prepared v2 store, including after restart', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'vox-indexed-version-boundary-')); directories.push(directory);
+    const path = join(directory, 'private.sqlite'), accountId = accountIdFor(123);
+    const storage = new SqliteAdaptiveStorage(path, { now: () => 1000, newStoreSeed: { generation: 1, lifecycleWatermark: 0, schemaVersion: 2 } }); stores.push(storage);
+    const repo = new AdaptiveRepository(storage);
+    await repo.transaction(accountId, 1000, d => { expect(d.schemaVersion).toBe(2); });
+    const row = storage.database.prepare('SELECT canonical FROM accounts WHERE account_key=?').get(accountKey(accountId)) as { canonical: string };
+    const downgraded = JSON.parse(row.canonical); downgraded.schemaVersion = 1; delete downgraded.productPause;
+    storage.database.prepare('UPDATE accounts SET canonical=?,canonical_digest=? WHERE account_key=?').run(JSON.stringify(downgraded), digest(downgraded), accountKey(accountId));
+    expect(() => storage.readCommittedForEffect(accountId)).toThrow('invalid_controls');
+    expect(() => repo.readCommittedForEffect(accountId, 1000)).toThrow('invalid_controls');
+    storage.close();
+    const reopened = new SqliteAdaptiveStorage(path, { now: () => 1000 }); stores.push(reopened);
+    expect(() => reopened.readCommittedForEffect(accountId)).toThrow('invalid_controls');
+    await expect(new AdaptiveRepository(reopened).transaction(accountId, 1000, () => undefined)).rejects.toThrow('invalid_controls');
+  });
   it('cold 300-row authority and exact scoped candidate reads do not load the canonical image or bodies', async () => {
     const f = await fixture(300); f.storage.close();
     const cold = new SqliteAdaptiveStorage(f.path, { now: () => 2000 }); stores.push(cold);

@@ -1,6 +1,6 @@
 /* Vox Studio — "Soft Weather" design system (scoped to .vx) */
 
-.vx-privacy { display: flex; flex-direction: column; gap: 16px; }
+.vx-privacy { display: flex; flex-direction: column; gap: 16px; scroll-padding-block-end: calc(120px + env(safe-area-inset-bottom)); }
 .vx-privacy p { margin: 0; }
 .vx-privacy h2, .vx-privacy h3, .vx-privacy h4 { margin: 0; }
 .vx-privacy-heading { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
@@ -97,6 +97,13 @@
 .vx-btn-block { width: 100%; }
 /* Learning action labels can wrap to several lines in Persian on mobile. */
 .vx-learning-actions > .vx-btn { height: auto; min-height: 52px; padding-block: 10px; }
+/* Privacy actions must contain wrapped labels at narrow widths and zoom. */
+.vx-privacy .vx-btn {
+  height: auto; min-height: 44px; min-width: 0; max-width: 100%;
+  padding: 12px; white-space: normal; overflow-wrap: anywhere;
+}
+.vx-privacy .vx-privacy-actions > .vx-btn,
+.vx-privacy .vx-privacy-spaces > .vx-btn { flex: 1 1 140px; }
 
 .vx-icon-btn {
   width: 44px; height: 44px; border-radius: 999px; border: none; background: transparent; color: var(--text);

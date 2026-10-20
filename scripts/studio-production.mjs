@@ -8,6 +8,7 @@ import { parseEnv } from 'node:util';
 import { randomBytes } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { createConnection } from 'node:net';
+import { assertReleaseAdaptiveCompatibility, readInstalledReleaseManifest } from './studio-adaptive-compatibility.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const base = process.env.VOX_PRODUCTION_DIR ?? join(homedir(), 'Library', 'Application Support', 'Vox Studio');
@@ -20,6 +21,7 @@ const keys = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'ELEVENLABS_API_KEY', 'ELEV
   'STUDIO_RELATIONSHIPS', 'STUDIO_RELATIONSHIP_ROLES', 'STUDIO_RELATIONSHIP_AGENTS', 'STUDIO_RELATIONSHIP_PEOPLE', 'STUDIO_RELATIONSHIP_WORKER_SECRET',
   'STUDIO_SCOPED_RELATIONSHIPS', 'STUDIO_ADAPTIVE_POLICY_JSON', 'STUDIO_MAINTENANCE', 'STUDIO_REMINDER_DELIVERY', 'STUDIO_IMPROVEMENT_TRUST_JSON'];
 keys.push('STUDIO_CONNECTIONS_CONFIG_FILE', 'STUDIO_CONNECTIONS_BROKER_URL', 'STUDIO_CONNECTIONS_BROKER_AUTH_KEY_FILE');
+keys.push('STUDIO_ADAPTIVE_FORMAT');
 const readEnv = (file) => existsSync(file) ? parseEnv(readFileSync(file, 'utf8')) : {};
 const stamp = () => new Date().toISOString().replace(/[:.]/g, '-');
 function envLine(key, value) {
@@ -195,7 +197,7 @@ function installPlist() {
   } finally { rmSync(temporary, { force: true }); }
 }
 async function install() {
-  await check();
+  const env = config();
   const artifact = join(root, '.next', 'standalone');
   if (!existsSync(join(artifact, 'server.js'))) throw new Error('Run npm run build first; standalone/server.js is missing.');
   const revision = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).stdout.trim();
@@ -207,18 +209,23 @@ async function install() {
   if (!manifest || manifest.revision !== revision || manifest.sourceTree !== sourceTree || manifest.buildId !== buildId || buildId !== readFileSync(join(root, '.next', 'BUILD_ID'), 'utf8').trim()) {
     throw new Error('Build provenance does not match this committed source. Run npm run studio:build.');
   }
+  assertReleaseAdaptiveCompatibility(env, manifest);
+  await check();
   const release = join(base, 'releases', `${stamp()}-${revision.slice(0, 12)}`);
   privateDir(release);
   cpSync(artifact, release, { recursive: true, filter: source => !/^\.env(?:\.|$)/.test(basename(source)) });
   cpSync(join(root, '.next', 'static'), join(release, '.next', 'static'), { recursive: true });
   cpSync(join(root, 'public'), join(release, 'public'), { recursive: true });
   cpSync(fileURLToPath(import.meta.url), join(release, 'studio-runtime.mjs'));
+  cpSync(new URL('./studio-adaptive-compatibility.mjs', import.meta.url), join(release, 'studio-adaptive-compatibility.mjs'));
+  cpSync(join(root, '.next', 'studio-release.json'), join(release, 'studio-release.json'));
   writeFileSync(join(release, 'revision'), revision + '\n');
   const previous = existsSync(join(base, 'current')) ? realpathSync(join(base, 'current')) : null;
   const wasRunning = running();
   if (previous) writeFileSync(join(base, 'previous'), previous);
   try {
     await stop();
+    assertReleaseAdaptiveCompatibility(config(), manifest);
     snapshot();
     pointTo(release);
     installPlist();
@@ -233,7 +240,10 @@ async function install() {
     if (!ready) throw new Error('New release failed its readiness check.');
   } catch (error) {
     await stop();
-    if (previous) { pointTo(previous); if (wasRunning) start(); }
+    if (previous) {
+      assertReleaseAdaptiveCompatibility(config(), readInstalledReleaseManifest(previous));
+      pointTo(previous); if (wasRunning) start();
+    }
     throw error;
   }
   console.log(`Installed revision ${revision}. Run status, then verify the public HTTPS endpoint and Telegram.`);
@@ -273,10 +283,15 @@ try {
     case 'rollback': {
       const previous = readFileSync(join(base, 'previous'), 'utf8');
       if (!existsSync(join(previous, 'server.js'))) throw new Error('Previous release is unavailable.');
+      const previousManifest = readInstalledReleaseManifest(previous);
+      assertReleaseAdaptiveCompatibility(config(), previousManifest);
       const current = realpathSync(join(base, 'current'));
       const wasRunning = running();
-      try { await stop(); snapshot(); pointTo(previous); start(); }
-      catch (error) { await stop(); pointTo(current); if (wasRunning) start(); throw error; }
+      try { await stop(); assertReleaseAdaptiveCompatibility(config(), previousManifest); snapshot(); pointTo(previous); start(); }
+      catch (error) {
+        await stop(); assertReleaseAdaptiveCompatibility(config(), readInstalledReleaseManifest(current));
+        pointTo(current); if (wasRunning) start(); throw error;
+      }
       console.log('Previous release restored; verify status.'); break;
     }
     default: console.log('Usage: node scripts/studio-production.mjs prepare|check|install|status|stop|backup|rollback'); process.exitCode = 1;

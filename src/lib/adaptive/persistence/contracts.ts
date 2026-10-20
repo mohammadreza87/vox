@@ -19,6 +19,9 @@ export interface AdaptiveSnapshot {
   memories: { id: string; revision: number; text: string; createdAt: number; expiresAt: number; origin?: 'user_reviewed_claim'; sourceRefs?: { id: string; revision: number }[] }[];
   agents: { agentId: string; allowed: boolean; revision: number }[];
   explicitMemoryAvailable: boolean;
+  /** Scoped use authority, separate from independent own-note management. */
+  storedPersonalizationUseStamp?: string;
+  storedPersonalizationAllowed?: boolean;
   /** Strong current-authority write fence; absent legacy field means unavailable. */
   memoryCorrectionAvailable?: boolean;
   explicitMemoryValidUntil?: number;

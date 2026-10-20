@@ -5,7 +5,9 @@ import type { AdaptiveSnapshot } from '../../_lib/adaptive-client';
 
 const mocks = vi.hoisted(() => ({ read: vi.fn(), confirm: vi.fn(), present: vi.fn(), consent: vi.fn(), save: vi.fn(), correct: vi.fn(), remove: vi.fn(), agent: vi.fn(), agents: vi.fn() }));
 vi.mock('../../_lib/adaptive-client', () => ({ adaptiveApi: mocks }));
-vi.mock('../../_lib/client', () => ({ api: { agents: mocks.agents } }));
+vi.mock('../ProductPausePanel', () => ({ ProductPausePanel: () => null }));
+vi.mock('../../_lib/product-pause-client', () => ({ useProductPause: () => ({ coveredBlocked: false, status: null }) }));
+vi.mock('../../_lib/client', () => ({ tg: () => null, api: { agents: mocks.agents } }));
 const snapshot = (extra: Partial<AdaptiveSnapshot> = {}): AdaptiveSnapshot => ({
   schemaVersion: 1, revision: 2, space: 'work', scope: 'private_account_profile',
   identity: { accountId: 'synthetic-account', personId: 'synthetic-person', confirmed: true, verification: 'account_confirmation', adultDeclared: true },

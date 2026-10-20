@@ -1,3 +1,4 @@
+import { mayUseStoredPersonalization } from '../../product-pause/state';
 import { z } from 'zod';
 import { types as utilTypes } from 'util';
 import { digest, OPTIONAL_PURPOSES, tenantIdFor, spaceIdFor, containerIdFor } from '../repository';
@@ -37,6 +38,7 @@ export class IndexedQueryEngine implements IndexedAdaptiveQueries {
     if (!row) return;
     this.host.count(io, 'controlRowsRead');
     const c = parseControls(JSON.parse(row.json), accountId);
+    if (c.schemaVersion !== this.host.canonicalSchemaVersion) throw new IndexedStorageError('invalid_controls');
     if (digest(c) !== row.digest) throw new IndexedStorageError('invalid_controls');
     return c;
   }
@@ -52,6 +54,8 @@ export class IndexedQueryEngine implements IndexedAdaptiveQueries {
       ownerPersonId: c.personId, status: 'active' }, binding, now);
     if (!confirmed) return fail(binding && binding.expiresAt <= now ? 'expired' : 'denied', io);
     const deadlines = [binding!.expiresAt];
+    if (['optional.personalization', 'optional.auto_memory', 'optional.proactive_suggestions', 'optional.relationship_outreach'].includes(scope.purpose) &&
+        !mayUseStoredPersonalization(c, scope.space)) return fail('denied', io);
     if (scope.purpose !== 'core_text') {
       const permission = c.permissions.find(p => p.spaceId === scope.spaceId && p.purpose === scope.purpose)!;
       if (permission.state !== 'granted' || permission.effectiveAt > now || permission.updatedAt > now || permission.expiresAt <= now)

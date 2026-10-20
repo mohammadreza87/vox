@@ -331,6 +331,7 @@ export class ElevenLabsStudio {
     try { audio = Buffer.from(await response.arrayBuffer()); }
     catch { throw new ElevenLabsSpeechError(503, 'unavailable'); }
     if (!audio.length) throw new ElevenLabsSpeechError(502, 'provider_error');
+    assertExportAuthority(authority);
     return audio;
   }
 
@@ -479,7 +480,9 @@ export class StudioVoiceService implements VoiceService {
 
   async synthesize(text: string, voiceId: string, authority?: ExportAuthority) {
     if (!this.eleven) throw new Error('ELEVENLABS_API_KEY is not set');
+    assertExportAuthority(authority);
     const audio = await (authority === undefined ? this.eleven.speak(text, voiceId) : this.eleven.speak(text, voiceId, authority));
+    assertExportAuthority(authority);
     return { audio: audio.buffer.slice(audio.byteOffset, audio.byteOffset + audio.byteLength) as ArrayBuffer, mimeType: 'audio/mpeg', filename: 'voice.mp3' };
   }
 }

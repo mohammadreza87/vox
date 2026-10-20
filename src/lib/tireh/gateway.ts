@@ -35,6 +35,8 @@ export interface RuntimePrivacyState {
   revision: string;
   memoryEnabled: boolean;
   historyEnabled: boolean;
+  /** False forbids all persisted or unknown-provenance context for this turn. */
+  storedContextAllowed?: boolean;
   /** Server-authorized explicit memory data; used in private chats only. */
   context?: string[];
   /** Server-rendered explicit response preferences; never user-supplied labels. */
@@ -43,7 +45,7 @@ export interface RuntimePrivacyState {
   reviewedContext?: { text: string; sourceTexts: string[] }[];
 }
 
-export type RuntimePrivacyAuthority = Pick<RuntimePrivacyState, 'revision' | 'memoryEnabled' | 'historyEnabled'>;
+export type RuntimePrivacyAuthority = Pick<RuntimePrivacyState, 'revision' | 'memoryEnabled' | 'historyEnabled' | 'storedContextAllowed'>;
 export type RuntimePrivacyCommittedAuthority = RuntimePrivacyAuthority & {validUntil: number};
 export interface RuntimePrivacy {
   /** Server-owned structural contract: neither legacy memory nor history can be used. */
@@ -543,14 +545,15 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     } catch { allowed = false; }
     const scopedOnly = compact && states.length === members.length && states.length > 0 && states.every(v => v.memoryEnabled === false && v.historyEnabled === false);
     if (compact && !scopedOnly) { allowed = false; audienceValid = false; }
-    const memoryEnabled = space === 'work' && (!this.deps.runtimePrivacy || (allowed && states.every((v) => v.memoryEnabled === true)));
-    const historyEnabled = allowed && space === 'work' && states.every((v) => v.historyEnabled === true);
+    const storedContextAllowed = !this.deps.runtimePrivacy || states.length === members.length && states.every(v => v.storedContextAllowed !== false);
+    const memoryEnabled = storedContextAllowed && space === 'work' && (!this.deps.runtimePrivacy || (allowed && states.every((v) => v.memoryEnabled === true)));
+    const historyEnabled = storedContextAllowed && allowed && space === 'work' && states.every((v) => v.historyEnabled === true);
     if (compact && !this.syncPrivacyAvailable()) { allowed = false; audienceValid = false; }
     const key = this.boundaryKey(chat, speakerId, space, allowed, audienceValid, scopedOnly, states, shared);
     return { key, compact: scopedOnly, memoryRevision: scopedOnly ? 0 : await this.deps.memories.safetyRevision(persona.id), memoryEnabled, historyEnabled, audienceValid,
-      context: allowed ? (chat.kind === 'private' ? states[0]?.context ?? [] : shared?.context ?? []).filter((v): v is string => typeof v === 'string') : [],
-      priorityContext: allowed && chat.kind === 'private' ? (states[0]?.priorityContext ?? []).filter((v): v is string => typeof v === 'string') : [],
-      reviewedContext: allowed && chat.kind === 'private' ? (states[0]?.reviewedContext ?? []) : [], space };
+      context: allowed && storedContextAllowed ? (chat.kind === 'private' ? states[0]?.context ?? [] : shared?.context ?? []).filter((v): v is string => typeof v === 'string') : [],
+      priorityContext: allowed && storedContextAllowed && chat.kind === 'private' ? (states[0]?.priorityContext ?? []).filter((v): v is string => typeof v === 'string') : [],
+      reviewedContext: allowed && storedContextAllowed && chat.kind === 'private' ? (states[0]?.reviewedContext ?? []) : [], space };
   }
 
   private syncPrivacyAvailable(): boolean {
@@ -563,8 +566,8 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     scopedOnly: boolean, states: RuntimePrivacyState[], shared?: {revision: string; context?: string[]}): string {
     return createHash('sha256').update(JSON.stringify({
       space, speakerId: chat.kind === 'private' ? speakerId : undefined, chat, allowed, audienceValid, shared: scopedOnly ? shared?.revision : shared, states: states.map((v) => scopedOnly
-        ? [v.revision, v.memoryEnabled, v.historyEnabled]
-        : [v?.revision, v?.memoryEnabled, v?.historyEnabled, v?.context, v?.priorityContext, v?.reviewedContext]),
+        ? [v.revision, v.memoryEnabled, v.historyEnabled, ...(v.storedContextAllowed === undefined ? [] : [v.storedContextAllowed])]
+        : [v?.revision, v?.memoryEnabled, v?.historyEnabled, ...(v?.storedContextAllowed === undefined ? [] : [v.storedContextAllowed]), v?.context, v?.priorityContext, v?.reviewedContext]),
       // Also invalidate legacy history on directory/identity/membership changes.
       config: this.deps.org.config,
     })).digest('hex');

@@ -2129,7 +2129,7 @@
       "evidence": [
         "docs/implementation/OBSERVATION_LEARNING.md"
       ],
-      "progress_note": "Confirmed own-account Work/Personal JSON export now includes allowlisted account records and currently authorized published shared content; exports are not persisted. Provider/backups explicitly unavailable. Guest request verification and broader rights orchestration remain open."
+      "progress_note": "Confirmed own-account Work/Personal JSON export includes allowlisted account records and currently authorized published shared content; exports are not persisted. Separate Work/Personal product-personalization pause is an implementation candidate described in PRODUCT_PAUSE.md; composed independent acceptance, compiled browser qualification and release remain pending. It is not formal restriction/objection orchestration. Provider/backups, guest verification and broader rights orchestration remain open."
     }
   ],
   "delivery_slices": [

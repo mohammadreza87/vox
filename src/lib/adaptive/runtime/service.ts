@@ -1,3 +1,4 @@
+import { productPauseUseStamp } from '../product-pause/state';
 import { ensureReminderDelivery, pruneReminderDelivery, reminderChannelStatus, reminderPermit, reminderDisclosureAuthority, REMINDER_PURPOSE } from './reminder-state';
 import { REMINDER_DISCLOSURE_VERSION, reminderChannelPresentSchema, reminderChannelInputSchema, reminderActionInputSchema, type ReminderChannelPresentInput, type ReminderChannelInput, type ReminderActionInput } from './reminder-contracts';
 import { randomUUID } from 'crypto';
@@ -18,8 +19,8 @@ import { emptyExperience, feedbackInputSchema, predictInputSchema, preferenceInp
 const DAY = 86_400_000;
 const RETENTION = 30 * DAY;
 /** The namespace identifies a store incarnation, never permission or identity. */
-function predictionAuthorizationFingerprint(core: string, grantRevision: number, image: ReturnType<AdaptiveService['capabilityStatus']> | null, storeIdentity: string): string {
-  const parts = [core, grantRevision, image];
+function predictionAuthorizationFingerprint(core: string, grantRevision: number, image: ReturnType<AdaptiveService['capabilityStatus']> | null, storeIdentity: string, useStamp?: string): string {
+  const parts = [core, grantRevision, image, ...(useStamp === undefined ? [] : [useStamp])];
   return digest(storeIdentity === 'canonical' ? parts : [storeIdentity, ...parts]);
 }
 type PredictionControls = AdaptiveAuthorityDocument & { experience: Pick<AdaptiveDocument['experience'], 'predictionTurns'> };
@@ -276,7 +277,7 @@ export class AdaptiveExperienceService {
    * completed response means responded; it never establishes task success. */
   recordTurn(telegramId: number, value: TurnInput): Promise<{ recorded: boolean; inboxCreated: boolean }> {
     const input = turnInputSchema.parse(value);
-    return this.adaptive.withAccountDocument(telegramId, (d, now) => {
+    const record = () => this.adaptive.withAccountDocument(telegramId, (d, now) => {
       this.pruneDocument(d, now);
       if (input.origin !== 'human') return { recorded: false, inboxCreated: false };
       const analytics = this.purpose(d, input.space, 'optional.product_analytics', now, input.agentId);
@@ -309,6 +310,12 @@ export class AdaptiveExperienceService {
       }
       this.bump(d, now); return { recorded, inboxCreated };
     });
+    if (this.adaptive.repository.storage.canonicalSchemaVersion === 2) return this.adaptive.withDirectAuthority(telegramId, input.space, (d, now) => {
+      const permitted = input.origin === 'human' && (this.adaptive.isPurposeAllowed(d, input.space, 'optional.product_analytics', now, input.agentId) ||
+        this.adaptive.isPurposeAllowed(d, input.space, 'optional.proactive_suggestions', now, input.agentId));
+      return { value: permitted, denied: !permitted };
+    }).then(permitted => permitted ? record() : { recorded: false, inboxCreated: false });
+    return record();
   }
   /** Fresh explicit preferences only. Caller must compare receipt before provider
    * export and output, just as for private memory context. */
@@ -434,7 +441,7 @@ export class AdaptiveExperienceService {
       const image = turn?.requiresImage ? this.adaptive.capabilityStatus(d, 'single_party_image', now) : null;
       const valid = !!turn && !!grant && this.options.decisionsEnabled === true && !!this.options.decisions && !turn.cancelled && !turn.superseded && turn.expiresAt > now &&
         turn.revision === input.revision && turn.contextKey === input.contextKey && turn.policyReceipt === input.policyReceipt && (turn.receiptExpiresAt ?? 0) > now &&
-        this.adaptive.isCoreAllowed(d, now) && (!image || image.eligible) && turn.authorizationFingerprint === predictionAuthorizationFingerprint(this.adaptive.coreFingerprint(d, now), grant.revision, image, storeIdentity);
+        this.adaptive.isCoreAllowed(d, now) && (!image || image.eligible) && turn.authorizationFingerprint === predictionAuthorizationFingerprint(this.adaptive.coreFingerprint(d, now), grant.revision, image, storeIdentity, d.schemaVersion === 2 ? productPauseUseStamp(d, input.space) : undefined);
       return { value: { valid }, denied: !valid,
         ...(valid ? { deadline: Math.min(d.binding!.expiresAt, turn!.expiresAt, turn!.receiptExpiresAt!, core.validUntil ?? now, image?.validUntil ?? Number.MAX_SAFE_INTEGER) } : {}) };
     };
@@ -484,7 +491,7 @@ export class AdaptiveExperienceService {
       const policy = [d.accountId, input.space, input.agentId, input.sessionId, input.turnId, input.revision, input.contextKey, input.image && [input.image.sourceId, input.image.revision], reservation];
       turn.policyReceipt = digest(this.adaptive.storeIdentity === 'canonical' ? policy : [this.adaptive.storeIdentity, ...policy]);
       turn.requiresImage = !!image;
-      turn.authorizationFingerprint = predictionAuthorizationFingerprint(this.adaptive.coreFingerprint(d, now), grant!.revision, imageCapability, this.adaptive.storeIdentity); turn.receiptExpiresAt = Math.min(now + 1500, imageCapability?.validUntil ?? Infinity);
+      turn.authorizationFingerprint = predictionAuthorizationFingerprint(this.adaptive.coreFingerprint(d, now), grant!.revision, imageCapability, this.adaptive.storeIdentity, d.schemaVersion === 2 ? productPauseUseStamp(d, input.space) : undefined); turn.receiptExpiresAt = Math.min(now + 1500, imageCapability?.validUntil ?? Infinity);
       return { receipt: turn.policyReceipt, expiresAt: turn.receiptExpiresAt, coreFingerprint: this.adaptive.coreFingerprint(d, now), grantRevision: grant!.revision };
     });
     if ('unknown' in prepared) {
@@ -499,7 +506,7 @@ export class AdaptiveExperienceService {
       const receipt = await this.adaptive.withAccountDocument(telegramId, (d, now) => {
         const turn = d.experience.predictionTurns.find(p => p.agentId === input.agentId && p.space === input.space && p.sessionId === input.sessionId && p.turnId === input.turnId);
         return this.adaptive.isCoreAllowed(d, now) && this.adaptive.coreFingerprint(d, now) === prepared.coreFingerprint &&
-          (!image || this.adaptive.capabilityStatus(d, 'single_party_image', now).eligible) && turn?.authorizationFingerprint === predictionAuthorizationFingerprint(this.adaptive.coreFingerprint(d, now), prepared.grantRevision, image ? this.adaptive.capabilityStatus(d, 'single_party_image', now) : null, this.adaptive.storeIdentity) &&
+          (!image || this.adaptive.capabilityStatus(d, 'single_party_image', now).eligible) && turn?.authorizationFingerprint === predictionAuthorizationFingerprint(this.adaptive.coreFingerprint(d, now), prepared.grantRevision, image ? this.adaptive.capabilityStatus(d, 'single_party_image', now) : null, this.adaptive.storeIdentity, d.schemaVersion === 2 ? productPauseUseStamp(d, input.space) : undefined) &&
           turn?.revision === input.revision && !turn.cancelled && !turn.superseded && turn.expiresAt > now && turn.reservation === reservation && turn.contextKey === input.contextKey &&
           d.agentGrants.some(g => g.agentId === input.agentId && g.space === input.space && g.allowed && g.revision === prepared.grantRevision) ? prepared.receipt! : null;
       });

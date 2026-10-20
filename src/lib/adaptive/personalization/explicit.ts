@@ -44,7 +44,7 @@ export function explicitPreferenceContextSnapshot(adaptive: AdaptiveService, d: 
   const saved: StoredPreference[] = confirmed ? d.experience.preferences.filter(p => p.space === space && p.agentId === agentId) : [];
   const allowed = adaptive.isPurposeAllowed(d, space, 'optional.personalization', now, agentId);
   const permission = d.permissions.find(p => p.id === `permission:${space}:optional.personalization`)!;
-  const reason: PreferenceExplanation | undefined = permission.state !== 'granted' || permission.expiresAt <= now ? 'personalization_off'
+  const reason: PreferenceExplanation | undefined = !adaptive.isStoredPersonalizationUseAllowed(d,space) ? 'product_personalization_paused' : permission.state !== 'granted' || permission.expiresAt <= now ? 'personalization_off'
     : !adaptive.capabilityStatus(d, 'personalization', now).eligible ? 'capability_unavailable'
       : !d.agentGrants.some(g => g.space === space && g.agentId === agentId && g.allowed) ? 'agent_grant_missing' : undefined;
   const records: PreferenceRecord[] = saved.map(p => ({ ...scope, schemaVersion: 1, id: p.id, revision: p.revision,

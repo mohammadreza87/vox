@@ -16,6 +16,9 @@ test('opaque notification opens its own personal reminder, with explicit EN/FA s
     const space = String(body?.space ?? url.searchParams.get('space') ?? 'work');
     let value: unknown = {};
     if (path === 'me') value = { member: { telegramId: 123, name: 'Synthetic', role: 'member', joinedAt: '' }, org: 'Synthetic', bot: 'fixture', features: { calls: false, avatars: false, voices: false } };
+    else if (path === 'product-pause' && request.method() === 'GET') value = { version: 1, accountId: 'telegram-account:123',
+      space: url.searchParams.get('space') === 'personal' ? 'personal' : 'work', available: false,
+      reason: 'store_not_prepared', productPaused: null, useEpoch: null, canPause: false, canResume: false };
     else if (path === 'agents') value = { agents: [{ id: 'fixture-agent', status: 'active', persona: { name: 'Fixture Agent', role: 'Synthetic', tagline: '', languages: ['en', 'fa'] }, look: { hue: 'ash', family: 'drift', features: {} }, visibility: 'private', access: [123], createdBy: 123 }] };
     else if (path === 'experience/reminders/reminder-personal') value = { space: 'personal' };
     else if (path === 'experience/reminder-channel/present') { presented = true; value = snapshot(space); }

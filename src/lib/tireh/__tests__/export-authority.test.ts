@@ -24,7 +24,9 @@ describe.each(['studio', 'gateway', 'delegated'] as const)('%s qualified speech 
     const fetcher = vi.fn<typeof fetch>(async (_url, init) => {events.push('fetch'); expect(init?.signal).toBe(controller.signal); expect(JSON.parse(String(init?.body))).toMatchObject({text: canary}); expect(String(init?.body)).not.toMatch(/authorizeNow|signal/); return audio();});
     const adapter = speech(kind, fetcher); expect(adapter.qualified).toBe(true);
     await adapter.run(canary, {signal: controller.signal, authorizeNow: () => {events.push('guard'); return true;}});
-    expect(events).toEqual(['guard', 'fetch']); expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(events).toEqual(kind === 'studio' ? ['guard', 'fetch', 'guard'] : kind === 'delegated'
+      ? ['guard', 'guard', 'fetch', 'guard', 'guard'] : ['guard', 'fetch']);
+    expect(fetcher).toHaveBeenCalledTimes(1);
   });
   it('denies revocation during payload preparation before the configured fetch', async () => {
     let allowed = true;
@@ -39,6 +41,20 @@ describe.each(['studio', 'gateway', 'delegated'] as const)('%s qualified speech 
     await expect(adapter.run(canary, {authorizeNow: () => {throw Error('synthetic');}})).rejects.toBeInstanceOf(ExportAuthorityError);
     await expect(adapter.run(canary, {authorizeNow: (() => Promise.reject(Error('synthetic async denial'))) as unknown as () => boolean})).rejects.toBeInstanceOf(ExportAuthorityError);
     expect(fetcher).not.toHaveBeenCalled();
+  });
+});
+
+describe.each(['studio', 'delegated'] as const)('%s final speech result', kind => {
+  it('refuses audio after authority changes while the provider response is being read', async () => {
+    let allowed = true;
+    const fetcher = vi.fn<typeof fetch>(async () => {
+      const response = audio();
+      const read = response.arrayBuffer.bind(response);
+      response.arrayBuffer = async () => { const bytes = await read(); allowed = false; return bytes; };
+      return response;
+    });
+    await expect(speech(kind, fetcher).run(canary, {authorizeNow: () => allowed})).rejects.toBeInstanceOf(ExportAuthorityError);
+    expect(fetcher).toHaveBeenCalledTimes(1);
   });
 });
 

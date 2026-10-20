@@ -117,6 +117,8 @@ async function installFixtures(page: Page, h: ReturnType<typeof makeHarness>) {
     ], agentAdmins: [] };
     else if (path === 'groups') result = { groups: [] };
     else if (path === 'adaptive' && method === 'GET') result = h.adaptive(space, (url.searchParams.get('locale') === 'fa' ? 'fa' : 'en'));
+    else if (path === 'product-pause' && method === 'GET') result = { version: 1, accountId: h.adaptive(space).identity.accountId,
+      space, available: false, reason: 'store_not_prepared', productPaused: null, useEpoch: null, canPause: false, canResume: false };
     else if (path === 'adaptive/consents/present') result = { ...h.adaptive(space, body?.locale ?? 'en'), receipt: 'synthetic-receipt', notice: h.adaptive(space, body?.locale ?? 'en').purposes.find((p: any) => p.purpose === body?.purpose)?.notice };
     else if (path === 'adaptive/consents') {
       h.granted[space] = body?.state === 'granted'; result = h.adaptive(space);

@@ -1,3 +1,4 @@
+import type { AdaptiveStorage } from './storage';
 import type { AdaptiveService } from './service';
 import { containerIdFor, digest, spaceIdFor, tenantIdFor, type SpaceKind } from './repository';
 import type { IndexedControlStamp, IndexedScope, RuntimeAuthorityReceipt } from './indexed/contracts';
@@ -62,4 +63,13 @@ export function readIndexedPrivateContext(adaptive: AdaptiveService, telegramId:
   return { revision: before.revision, validUntil: before.validUntil,
     memories: loaded.bodies.map(({ handle, text, sourceIds }) => ({ id: handle.id, text, ...(sourceIds ? { sourceIds } : {}) })),
     completion: candidates.completion === 'partial' || loaded.completion === 'partial' ? 'partial' : 'complete' };
+}
+
+/** Existing indexed qualification plus the explicitly prepared local FILE cohort.
+ * This checks structural guard support; callers still qualify provider/Studio adapters. */
+export function hasCommittedPersonalizationTransport(storage: AdaptiveStorage): boolean {
+  return !!storage.indexed || storage.canonicalSchemaVersion === 2 && !!storage.identity &&
+    storage.supportsCommittedWriteFence === true && typeof storage.readCommittedForEffect === 'function' &&
+    typeof storage.sampleClock === 'function' && storage.fileAuthorityProjectionVersion === 1 &&
+    typeof storage.readDirectAuthorityForEffect === 'function';
 }
