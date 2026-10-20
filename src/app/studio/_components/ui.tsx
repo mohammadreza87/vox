@@ -7,7 +7,6 @@ const STROKE = { fill: 'none', stroke: 'currentColor', strokeWidth: 1.75, stroke
 
 const PATHS: Record<string, string> = {
   back: 'M15 5l-7 7 7 7',
-  chevron: 'M9 5l7 7-7 7',
   refresh: 'M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5',
   settings: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z',
   attach: 'M21 11.5l-8.5 8.5a5 5 0 0 1-7-7L14 4.5a3.3 3.3 0 0 1 4.7 4.7l-8.5 8.5a1.7 1.7 0 0 1-2.4-2.4L15.5 7.5',
@@ -140,7 +139,7 @@ export function NavRow({ label, detail, onClick, disabled }: { label: string; de
         <span>{label}</span>
         {detail && <span className="vx-small vx-2">{detail}</span>}
       </span>
-      <span className="vx-chev"><Icon name="chevron" size={18} /></span>
+      <span className="vx-chev"><Icon name="chevronEnd" size={18} /></span>
     </button>
   );
 }
