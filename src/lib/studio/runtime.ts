@@ -1,3 +1,8 @@
+import { RightsFileStorage } from '../adaptive/rights-intake/storage';
+import { RightsIntakeService } from '../adaptive/rights-intake/service';
+import { RightsRepository } from '../adaptive/rights-intake/repository';
+import { parseRightsPolicy } from '../adaptive/rights-intake/policy';
+import { assertRightsAccountNow } from './rights-http';
 import { createStudioPreferenceLearning } from './preference-learning';
 /**
  * Production wiring for Vox Studio, from environment variables.
@@ -328,6 +333,22 @@ async function create(): Promise<Studio> {
     });
     studio.deps.observer = new AdaptiveObserverService(storage.adaptive!);
     studio.deps.lifecycle = new AdaptiveLifecycleService(storage.adaptive!, { shared: studio.deps.shared });
+    // RI1 supports one persistent process only. The ledger stays separate from
+    // both canonical adapters; missing reviewed policy/key leaves intake disabled.
+    if (config.storage === 'file' && !config.publicUrl && !env.K_SERVICE && !env.FUNCTION_TARGET && !env.FUNCTION_NAME && env.VERCEL !== '1') {
+      const encodedKey = env.STUDIO_RIGHTS_KEY_BASE64;
+      const key = encodedKey && /^[A-Za-z0-9+/]{43}=$/.test(encodedKey) ? Buffer.from(encodedKey, 'base64') : undefined;
+      studio.deps.rights = new RightsIntakeService(new RightsRepository(new RightsFileStorage(join(config.dataDir, 'rights-intake', 'v1'))), {
+        policy: () => parseRightsPolicy(process.env.STUDIO_RIGHTS_POLICY_JSON), key,
+        assertAccountNow: id => assertRightsAccountNow(studio, id),
+        assertOperatorNow: id => assertRightsAccountNow(studio, id, 'operator'),
+        prepareExport: async (id, space) => {
+          assertRightsAccountNow(studio, id, 'export');
+          const prepared = await studio.deps.lifecycle!.prepareAccountExport(id, space);
+          return { data: prepared.data, revalidate: () => { assertRightsAccountNow(studio, id, 'export'); prepared.revalidate(); } };
+        },
+      });
+    }
     if (config.maintenanceEnabled) studio.deps.maintenance = new AdaptiveMaintenanceRunner(studio.deps.lifecycle,
       storage.adaptive!.repository.storage, storage.maintenanceStorage, {
         afterAccount: (telegramId, context) => maintainAdaptiveAccount(studio, telegramId, context.signal),

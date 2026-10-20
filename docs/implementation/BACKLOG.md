@@ -351,7 +351,9 @@ Implement database/IAM rules, restricted evidence and future biometric storage b
 
 **Requirements:** REQ-01, REQ-02, REQ-03, REQ-09, REQ-17, REQ-22. **Depends on:** VOX-002, VOX-009, VOX-010, VOX-011, VOX-014, VOX-016.
 
-**Implementation progress:** Confirmed own-account Work/Personal JSON export now includes allowlisted account records and currently authorized published shared content; exports are not persisted. Provider/backups explicitly unavailable. Guest request verification and broader rights orchestration remain open.
+**Implementation progress:** Confirmed own-account Work/Personal JSON export now includes allowlisted account records and currently authorized published shared content; exports are not persisted. Provider/backups explicitly unavailable. Guest request verification and broader rights orchestration remain open. RI1 account request intake and restricted operator review are implementation candidates; see [RI1 scope and activation gates](RIGHTS_INTAKE.md). Independent acceptance and release are pending; VOX-056 remains in progress.
+
+**پیشرفت:** دریافت درخواست حساب و بررسی محدود اپراتور در RI1 پیاده‌سازی شده و منتظر پذیرش مستقل و انتشار است. فعال‌سازی سیاست، مهمان، حذف سراسری و تکمیل VOX-056 همچنان باز هستند.
 
 Implement accessible EN/FA access/export, correction, erasure, restriction, objection, portability and withdrawal requests with proportionate requester verification, a no-account guest route, operator queue, jurisdiction deadlines and status receipts. Wire the privacy center to these real handlers.
 

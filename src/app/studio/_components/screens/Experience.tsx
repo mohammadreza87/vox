@@ -8,6 +8,7 @@ import { TopBar } from '../ui';
 import { RelationshipPanel } from '../RelationshipPanel';
 import { ReminderPanel } from '../ReminderPanel';
 import { LearningPanel } from '../LearningPanel';
+import { RightsOperationsPanel } from '../RightsOperationsPanel';
 import { PreferencePanel } from '../PreferencePanel';
 import { PreferenceLearningPanel } from '../PreferenceLearningPanel';
 
@@ -163,6 +164,7 @@ export function ExperienceScreen({ onBack, role, notificationId }: { onBack: () 
 
       </>}
       <LearningPanel space={space} locale={fa ? 'fa' : 'en'} showOperations={role === 'owner' || role === 'superadmin'} />
+      {(role === 'owner' || role === 'superadmin') && <RightsOperationsPanel locale={fa ? 'fa' : 'en'} sessionKey={session} />}
     </section>
   </>;
 }
