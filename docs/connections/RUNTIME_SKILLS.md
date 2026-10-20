@@ -1,5 +1,7 @@
 # Runtime agent skills — proposed product contract
 
+**Status, 20 October 2026:** the runtime skills are implemented in `src/lib/connections/skills.ts`; the manifest shape below is the original proposal and differs from the shipped schema.
+
 This document defines future workflows for Vox personas. It does not install them or authorize any account access. Development-team skills in `.agents/skills/vox-connection-*` are separate instructions for building this product.
 
 ## Skill and permission separation

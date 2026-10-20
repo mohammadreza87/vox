@@ -39,6 +39,31 @@ Prepared 19 October 2026 for Joyixir OÜ. Product scope: adults in the EU/EEA an
 | [Observation and lifecycle delivery](OBSERVATION_LEARNING.md) | Durable observer, scoped export, maintenance and local routing workflow; activation limits |
 | [Integrated local delivery](DELIVERY_RESULT.md) | Historical local foundation, evidence and remaining gates |
 | [First foundation result](FOUNDATION_RESULT.md) | Implemented code, independent acceptance, 480-test evidence and remaining integration |
+| [Adaptive extension release compatibility](ADAPTIVE_EXTENSION_COMPATIBILITY.md) | Release admission reads persisted extension metadata next to the canonical markers |
+| [Experience contract](EXPERIENCE_SPEC.md) | Design reference for the Privacy, Reminder and Voice recognition screens; walkthrough scripts |
+| [Foundation contract v1](FOUNDATION_CONTRACT.md) | Historical pure-TypeScript contract for the adaptive module before persistence and endpoints |
+| [Guest privacy request tracking / پیگیری درخواست مهمان](GUEST_RIGHTS_INTAKE.md) | VOX-056 GI1 integration candidate and its independent acceptance |
+| [Indexed private memory](INDEXED_STORAGE.md) | FILE, SQLite and FILEv2 formats, migration, recovery and rollback tooling for VOX-013 |
+| [Adaptive develop integration](INTEGRATION_RELEASE.md) | How develop was assembled from the foundation, Mac Studio and relationship lines |
+| [Live voice access correction](LIVE_VOICE_ACCESS_FIX.md) | Access rechecks before signed live-call URLs and during streaming |
+| [Atomic memory correction hotfix](MEMORY_REPLACEMENT_HOTFIX_RESULT.md) | Local source and synthetic evidence for the memory replacement fix |
+| [Bounded memory retrieval](MEMORY_RETRIEVAL_RESULT.md) | Retrieval optimisation supporting the memory strategy; not legacy migration |
+| [Explicit message memory / حافظه از پیام](MESSAGE_MEMORY_RESULT.md) | Reviewed message-memory slice of VOX-013 without automatic memory |
+| [Model patch author / نویسندهٔ اصلاح کد](MODEL_PATCH_AUTHOR.md) | v2 model-authored software patches with their receipts |
+| [Explicit personalization controls](PERSONALIZATION_CONTROLS_RESULT.md) | Work/Personal controls and the command-lock integration fix |
+| [Read-only preview inventory / فهرست پیش‌نمایش](PREVIEW_INVENTORY.md) | Bounded Firebase preview channel inventory after quota failures |
+| [Private saved note correction](PRIVATE_NOTE_CORRECTION_RESULT.md) | VOX-056 and VOX-013 note correction with compiled-browser qualification |
+| [Personalization pause / مکث شخصی‌سازی](PRODUCT_PAUSE.md) | PR 74 pause control, source qualification and its remaining deployment gate |
+| [Reviewed preference learning](REVIEWED_PREFERENCE_LEARNING_RESULT.md) | VOX-027 integration acceptance and resolved review findings |
+| [Reviewed private memory / حافظهٔ خصوصی](REVIEWED_PRIVATE_MEMORY_RESULT.md) | Access restoration and authority revision evidence |
+| [Retention acknowledgement / تأیید نگهداری](RIGHTS_ACKNOWLEDGEMENT.md) | Acknowledgement flow for retention outcomes |
+| [Account privacy requests / درخواست حریم خصوصی](RIGHTS_INTAKE.md) | RI1 request intake, independent acceptance and later status clarifications |
+| [Terminal inbox feedback / بازخورد صندوق](SCOPED_FEEDBACK_RESULT.md) | FB0 scoped useful/dismiss feedback for VOX-032 and VOX-036 |
+| [Software patch workflow](SOFTWARE_PATCH_WORKFLOW.md) | v1 deterministic-author patch evaluation; v2 is the model author |
+| [Prepared conversation qualification](SQLITE_CONVERSATION_QUALIFICATION.md) | Synthetic guarded-transport fixture for schema-2 SQLite and FILEv2 |
+| [Turn telemetry](TURN_TELEMETRY_RESULT.md) | VOX-019 and VOX-020 stage, usage and outcome instrumentation evidence |
+| [Scoped voice identity lifecycle](VOICE_IDENTITY_RESULT.md) | VOX-039 to VOX-041 author evidence for the optional voice identity service |
+| [Voice provider decision](VOICE_PROVIDER_INTEGRATION.md) | Provider research and provisional transcript decision of 19 October 2026 |
 | [Prior memory strategy](../AGENT_MEMORY_STRATEGY.md) and [research](../SELF_DEVELOPMENT_RESEARCH.md) | Research rationale and source findings |
 
 **Agreed product decisions.** Work and Personal are separate spaces. Each contains private memory per person, group memory, and memory shared with an exact set of selected people independently of a chat group. Agent ownership never grants access to everyone's private memory. Prediction can prepare reversible work; permission checks remain deterministic. Voice recognition is optional and must not unlock private data. The user confirmed **Joyixir OÜ** as the registered operator name. The user confirmed **info@joyixir.com** as the privacy contact on 19 October 2026; mailbox operation and legal approval remain unverified. The [registered address is verified from the official Estonian register](OPERATOR_DETAILS.md); the complete notice still needs legal approval.

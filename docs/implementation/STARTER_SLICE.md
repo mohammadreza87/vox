@@ -1,5 +1,7 @@
 # Vox implementation start and decision register
 
+**Status, 20 October 2026:** historical. The branch named below is merged; current baselines and receipts are indexed in [PLAN.md](PLAN.md) and task status lives in [BACKLOG.json](BACKLOG.json).
+
 Started 19 October 2026 after the user instructed the team to proceed. Branch: `codex/adaptive-foundation`; base: `ebb75a67c79bf317d1dec40381b216c75bb90ffa`. The existing untracked research, reports and planning files are preserved.
 
 The first bounded delivery is locally accepted: [implemented changes, independent review and 480-test evidence](FOUNDATION_RESULT.md). The larger foundation tasks remain in progress until storage/runtime integration and their other acceptance requirements are met.

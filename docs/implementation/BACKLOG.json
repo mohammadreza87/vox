@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "prepared_at": "2026-10-19",
-  "source_commit": "9fb73d311753a461bd62e37ce3129b8a60c83d00",
+  "source_commit": "be098c2a6b104352377491091c2b4f696568d7a2",
   "operator_name": "Joyixir OÜ",
   "markets": [
     "EU/EEA",
     "US"
   ],
   "audience": "adults only",
-  "status": "Retention operations, rendered-text/correction observation and controlled private presentation experiments are integrated for independent acceptance. Production activation and complete roadmap qualification remain separate.",
+  "status": "Core adaptive runtime, retention, observation, reviewed learning, rights intake, scoped local-use restrictions (RF1) and agent intelligence step 0 are merged and installed with optional features off; the last installed revision is recorded in the latest delivery slice and in PLAN.md. Later develop commits (per-message skill playbooks, RF2 private-note erasure, offline inventory) are merged with CI evidence but not yet installed. Production activation of optional capabilities and complete roadmap qualification remain separate.",
   "size_legend": {
     "S": "bounded change/review",
     "M": "multi-file bounded slice",
@@ -605,7 +605,7 @@
         "docs/implementation/LEGACY_INVENTORY.md",
         "docs/implementation/LEGACY_OFFLINE_INVENTORY.md"
       ],
-      "progress_note": "Legacy unscoped history/auto-memory remains denied without silent consent migration. Current adaptive FILE/SQLite/FILEv2 format transition, recovery and current-state rollback tooling is implemented and independently source-tested (INDEXED_STORAGE.md). Broader legacy application inventory, ownership/purpose reconciliation, quarantine mapping and production residual/restore qualification remain open; storage-format conversion does not grant historical data new consent. LIP1 isolated synthetic inventory/planner is implemented on candidate `bbff2304792f998a357eabe0c6888955c3909c57` (tree `de57f234ecd9ecb9091e4b4cdb0717895931c528`; base `cf63acf64c6eadf5a2247d2436e0a22bc114386b`). Author reported 122 tests, lint and full TypeScript pass. Independent fixed 86-case and supplemental 18-case runs both passed on this candidate; privacy source review closed the three prior findings. Independent E1 acceptance passed 104/104 (86 original + 18 supplement), zero failures/skips/retries; final report SHA256 b7e2bddb008cf33ce8a6e8e8ed492aaa820d1fc3574f9266db3569019580ac33, execution receipt SHA256 559f1ba598e36f297d3d15abd17936bcdcbe2795a363b9814808d76f841aad92. Candidate a15ebc8 is rejected: its original 86/86 pass was later shown incomplete by three privacy findings; supplemental replay produced 14 failures/4 passes. Evidence remains preserved. LIP1 only plans an in-memory quarantine result over caller-supplied synthetic fixtures; no live inventory/import/restore/runtime link or permission is added. Real legacy source acquisition, ownership/purpose reconciliation, backup/restore and VOX-009/010/011/014 dependencies remain open; VOX-015 stays in progress. فارسی: بخش آزمایشی LIP1 برای فهرست‌برداری ساختگی و طرح قرنطینه روی نامزد `bbff2304792f998a357eabe0c6888955c3909c57` پیاده‌سازی شد؛ آزمون مستقل ۸۶ موردی و ۱۸ مورد تکمیلی هر دو موفق شدند و بازبینی حریم خصوصی سه ایراد قبلی را بست. پذیرش مستقل E1 با ۱۰۴ از ۱۰۴ موفق شد؛ هش گزارش `b7e2bddb008cf33ce8a6e8e8ed492aaa820d1fc3574f9266db3569019580ac33` و رسید `559f1ba598e36f297d3d15abd17936bcdcbe2795a363b9814808d76f841aad92` است. نامزد `a15ebc8` رد است: با وجود قبولی اولیهٔ ۸۶ مورد، سه ایراد حریم خصوصی بعداً یافت شد و اجرای تکمیلی ۱۴ شکست/۴ موفقیت داشت؛ شواهد حفظ شده‌اند. LIP1 فقط دادهٔ ساختگیِ صریح را به طرح قرنطینهٔ درون‌حافظه‌ای تبدیل می‌کند؛ فهرست‌برداری زنده، واردسازی، بازیابی، اتصال زمان اجرا یا مجوز ایجاد نمی‌کند. دریافت و تطبیق دادهٔ واقعی، پشتیبان/بازیابی و وابستگی‌های VOX-009/010/011/014 باز هستند؛ VOX-015 در حال انجام می‌ماند. LIA1 source bc2f1d7 now has independent synthetic acceptance 123/123 and privacy closure: selected native Tireh file through inherited descriptors to a minimized deny-all report, fixed static CLI with source parity, truthful cancelled-read accounting. No live snapshot, mapping, import, restore or consent grant. CI/merge/deployment for the LIA1 integration remain pending. فارسی: LIA1 در منبع bc2f1d7 با ۱۲۳ از ۱۲۳ آزمون مستقل ساختگی و تأیید حریم خصوصی پذیرفته شد؛ فایل بومی منتخب از طریق توصیفگر موروثی به گزارش محدود با استفادهٔ ممنوع تبدیل می‌شود، CLI ثابت با تطابق منبع و شمارش صحیح خواندنِ لغوشده دارد. snapshot زنده، نگاشت، واردسازی، بازیابی یا رضایت جدید ایجاد نمی‌کند. CI، ادغام و استقرار نسخهٔ LIA1 هنوز باز است."
+      "progress_note": "Legacy unscoped history/auto-memory remains denied without silent consent migration. Current adaptive FILE/SQLite/FILEv2 format transition, recovery and current-state rollback tooling is implemented and independently source-tested (INDEXED_STORAGE.md). Broader legacy application inventory, ownership/purpose reconciliation, quarantine mapping and production residual/restore qualification remain open; storage-format conversion does not grant historical data new consent. LIP1 isolated synthetic inventory/planner is implemented on candidate `bbff2304792f998a357eabe0c6888955c3909c57` (tree `de57f234ecd9ecb9091e4b4cdb0717895931c528`; base `cf63acf64c6eadf5a2247d2436e0a22bc114386b`). Author reported 122 tests, lint and full TypeScript pass. Independent fixed 86-case and supplemental 18-case runs both passed on this candidate; privacy source review closed the three prior findings. Independent E1 acceptance passed 104/104 (86 original + 18 supplement), zero failures/skips/retries; final report SHA256 b7e2bddb008cf33ce8a6e8e8ed492aaa820d1fc3574f9266db3569019580ac33, execution receipt SHA256 559f1ba598e36f297d3d15abd17936bcdcbe2795a363b9814808d76f841aad92. Candidate a15ebc8 is rejected: its original 86/86 pass was later shown incomplete by three privacy findings; supplemental replay produced 14 failures/4 passes. Evidence remains preserved. LIP1 only plans an in-memory quarantine result over caller-supplied synthetic fixtures; no live inventory/import/restore/runtime link or permission is added. Real legacy source acquisition, ownership/purpose reconciliation, backup/restore and VOX-009/010/011/014 dependencies remain open; VOX-015 stays in progress. فارسی: بخش آزمایشی LIP1 برای فهرست‌برداری ساختگی و طرح قرنطینه روی نامزد `bbff2304792f998a357eabe0c6888955c3909c57` پیاده‌سازی شد؛ آزمون مستقل ۸۶ موردی و ۱۸ مورد تکمیلی هر دو موفق شدند و بازبینی حریم خصوصی سه ایراد قبلی را بست. پذیرش مستقل E1 با ۱۰۴ از ۱۰۴ موفق شد؛ هش گزارش `b7e2bddb008cf33ce8a6e8e8ed492aaa820d1fc3574f9266db3569019580ac33` و رسید `559f1ba598e36f297d3d15abd17936bcdcbe2795a363b9814808d76f841aad92` است. نامزد `a15ebc8` رد است: با وجود قبولی اولیهٔ ۸۶ مورد، سه ایراد حریم خصوصی بعداً یافت شد و اجرای تکمیلی ۱۴ شکست/۴ موفقیت داشت؛ شواهد حفظ شده‌اند. LIP1 فقط دادهٔ ساختگیِ صریح را به طرح قرنطینهٔ درون‌حافظه‌ای تبدیل می‌کند؛ فهرست‌برداری زنده، واردسازی، بازیابی، اتصال زمان اجرا یا مجوز ایجاد نمی‌کند. دریافت و تطبیق دادهٔ واقعی، پشتیبان/بازیابی و وابستگی‌های VOX-009/010/011/014 باز هستند؛ VOX-015 در حال انجام می‌ماند. LIA1 source bc2f1d7 now has independent synthetic acceptance 123/123 and privacy closure: selected native Tireh file through inherited descriptors to a minimized deny-all report, fixed static CLI with source parity, truthful cancelled-read accounting. No live snapshot, mapping, import, restore or consent grant. LIA1 merged into develop through PR #91 with its CI qualification; it is not yet part of an installed release. فارسی: LIA1 در منبع bc2f1d7 با ۱۲۳ از ۱۲۳ آزمون مستقل ساختگی و تأیید حریم خصوصی پذیرفته شد؛ فایل بومی منتخب از طریق توصیفگر موروثی به گزارش محدود با استفادهٔ ممنوع تبدیل می‌شود، CLI ثابت با تطابق منبع و شمارش صحیح خواندنِ لغوشده دارد. snapshot زنده، نگاشت، واردسازی، بازیابی یا رضایت جدید ایجاد نمی‌کند. LIA1 از طریق درخواست ادغام ۹۱ در develop ادغام شد؛ هنوز در نسخهٔ نصب‌شده نیست."
     },
     {
       "id": "VOX-016",
@@ -746,9 +746,10 @@
       ],
       "evidence": [
         "docs/implementation/DELIVERY_RESULT.md",
-        "docs/implementation/OBSERVATION_LEARNING.md"
+        "docs/implementation/OBSERVATION_LEARNING.md",
+        "docs/implementation/RELEASE_INTELLIGENCE_STEP0_2026_10_20.md"
       ],
-      "progress_note": "Actual voice response and private Telegram terminal outcomes now feed the new observer. Voice playback is correlated by server-issued turn ID. Provider usage, token cost and stage-level latency remain unavailable."
+      "progress_note": "Actual voice response and private Telegram terminal outcomes now feed the new observer. Voice playback is correlated by server-issued turn ID. Content-free per-stage turn timings shipped in revision 504203f behind STUDIO_STAGE_TIMINGS=1 with `npm run timings:report`, and returned provider usage including cache tokens is captured by the LLM client. The flag is unset in production, so no p50/p95 baseline has been measured; token cost reporting remains open."
     },
     {
       "id": "VOX-020",
@@ -1226,9 +1227,10 @@
         "Preference tests"
       ],
       "evidence": [
-        "docs/implementation/DELIVERY_RESULT.md"
+        "docs/implementation/DELIVERY_RESULT.md",
+        "docs/implementation/SCOPED_FEEDBACK_RESULT.md"
       ],
-      "progress_note": "Authenticated EN/FA inbox, category/settings controls, requested reminders and feedback implemented. Snooze, Telegram channel controls and external receipts remain open."
+      "progress_note": "Authenticated EN/FA inbox, category/settings controls, requested reminders and feedback implemented. Snooze, Telegram channel controls and external receipts remain open. Scoped terminal inbox feedback (FB0) is merged; see SCOPED_FEEDBACK_RESULT.md."
     },
     {
       "id": "VOX-033",
@@ -1367,9 +1369,10 @@
         "Exposure/feedback fixtures"
       ],
       "evidence": [
-        "docs/implementation/DELIVERY_RESULT.md"
+        "docs/implementation/DELIVERY_RESULT.md",
+        "docs/implementation/SCOPED_FEEDBACK_RESULT.md"
       ],
-      "progress_note": "Private useful/dismiss feedback endpoint and UI implemented. Cohort-level reporting and real usefulness measurements remain open."
+      "progress_note": "Private useful/dismiss feedback endpoint and UI implemented. Cohort-level reporting and real usefulness measurements remain open. Scoped terminal inbox feedback (FB0) is merged; see SCOPED_FEEDBACK_RESULT.md."
     },
     {
       "id": "VOX-037",
@@ -1991,7 +1994,7 @@
       "id": "VOX-053",
       "phase": "P7",
       "title": "Finalize public notices, support and launch materials",
-      "status": "planned",
+      "status": "in_progress",
       "priority": "P1",
       "size": "M",
       "owner": "vox_docs_analyst",
@@ -2020,13 +2023,16 @@
         "Launch notice/support package",
         "Approval/version record"
       ],
-      "evidence": [],
+      "evidence": [
+        "docs/implementation/RELEASE_GUEST_EVALUATION_2026_10_20.md"
+      ],
       "capability_dependencies": {
         "voice_recognition": [
           "VOX-038",
           "VOX-042"
         ]
-      }
+      },
+      "progress_note": "The public privacy notice page with its contact fallback (/privacy and the guest rights panel) is deployed since revision 9371894; see RELEASE_GUEST_EVALUATION_2026_10_20.md. Legal sign-off of the notice text, support channel operation and launch materials remain open."
     },
     {
       "id": "VOX-054",
@@ -2212,6 +2218,23 @@
       "evidence": "docs/implementation/RELEASE_LEARNING_CASES_2026_10_20.md",
       "note": "Independent source, actual migration/old-reader and isolated Docker qualification passed after the recorded capacity fix. CI221 passed 3945 tests with 13 existing skips, 36 release checks and 41 browser checks. Exact merged artifact deployed; 40 live routes and five active-bot ownership checks passed with configuration unchanged. No workflow activation, real conversation export or broader roadmap completion.",
       "deployed_revision": "a49f734e16e0a5b3430c1e1c088dab33feda5d53"
+    },
+    {
+      "id": "scoped-local-use-rf1",
+      "status": "deployed_core_optional_features_off",
+      "baseline": "a49f734e16e0a5b3430c1e1c088dab33feda5d53",
+      "candidate": "cf63acf64c6eadf5a2247d2436e0a22bc114386b",
+      "evidence": "docs/implementation/RELEASE_RF1_2026_10_20.md",
+      "note": "RF1 scoped requester rights-use holds with durable recovery and UI, deployed with its optional policy off. See the receipt for CI, route and bot probes and the unchanged configuration."
+    },
+    {
+      "id": "agent-intelligence-step0",
+      "status": "deployed_core_optional_features_off",
+      "baseline": "cf63acf64c6eadf5a2247d2436e0a22bc114386b",
+      "candidate": "504203f0a798e780dc23e6eee5c51d89dcf5cdb3",
+      "evidence": "docs/implementation/RELEASE_INTELLIGENCE_STEP0_2026_10_20.md",
+      "note": "Step 0 of docs/AGENT_INTELLIGENCE_SOLUTION.md (stranger voice-note gate, ConvAI proxy removal, unknown-audience memory block, exact-recipient share rules, adaptive service wired by default, stage timings behind STUDIO_STAGE_TIMINGS) plus the committed-document runtime privacy read. Lint, types, tests and the indexed-storage qualification passed in CI; the CI build and browser jobs were cancelled by a later push, so build evidence is the local verified artifact. Installed and healthy at the exact revision; STUDIO_STAGE_TIMINGS stays unset, so the step 0 measurement gate is not met."
     }
-  ]
+  ],
+  "updated_at": "2026-10-20"
 }

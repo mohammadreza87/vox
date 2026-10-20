@@ -99,7 +99,7 @@ They break down where clarification turns into an interview. Microsoft's own gui
 ### 3.1 Model and data contract (what the UI needs)
 
 ```ts
-// src/lib/studio/role-library.ts (shared by server routing and the client: no network to browse, instant offline fallback)
+// proposed as src/lib/studio/role-library.ts; shipped as src/lib/studio/skills/catalog.ts and skills/route.ts (shared by server routing and the client: no network to browse, instant offline fallback)
 export type PackId = 'lifestyle' | 'tech' | 'ai' | 'mobile' | 'publisher';
 export type L10n = { en: string; fa: string };
 export interface SkillDef { id: string; title: L10n; summary: L10n }               // title ≤ 18 chars, summary ≤ 70
@@ -711,7 +711,7 @@ Icon additions in `ui.tsx` `PATHS`:
 | `useChangedFields.ts` | `useChangedFields(prev?: PersonaSpec, next?: PersonaSpec): Set<string>` (clears after 1.5 s) |
 | `motion.ts` | `EASE`, `DUR` (section 3.6) |
 | `_lib/spawn-copy.ts` | `spawnCopy: { en, fa }` (section 3.4 plus persona strings in section 4) |
-| `src/lib/studio/role-library.ts` | `PACKS`, `ROLES`, `SKILLS`, `localRoute(text, locale): Routing`, `packToDomain(pack)` |
+| `src/lib/studio/skills/catalog.ts`, `src/lib/studio/skills/route.ts` | shipped as `CATALOG`, `getRole`, `resolveSkills`, `catalogView()`, `routeLocally(text, opts)` and `routeBrief(text, opts)`; the proposal named them `PACKS`, `ROLES`, `SKILLS`, `localRoute`, `packToDomain` |
 
 **Draft tap, in order.**
 1. `haptic.tap()`.

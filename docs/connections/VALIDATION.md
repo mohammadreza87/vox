@@ -1,5 +1,7 @@
 # Planning package validation
 
+**Status, 20 October 2026:** historical plan-level validation. Implementation followed and is merged into `develop`; see [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) and [BACKLOG.json](BACKLOG.json), where no task is `planned` any more.
+
 19 October 2026 · Baseline `42a1a57113e655b6185ddc731b6f9617aaa4bb4e` · Branch `codex/studio-connections-plan`.
 
 **Disposition: researched implementation handoff, with plan-level review.** These results validate documents, role definitions and simulated handoffs. They do not certify any implemented connector, provider credential, production security boundary, device flow or deployment. All 32 implementation tasks remain `planned` with empty implementation evidence.

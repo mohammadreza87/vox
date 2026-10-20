@@ -1,5 +1,7 @@
 # Adaptive foundation contract v1
 
+**Status, 20 October 2026:** the contract below is historical. The adaptive module now has persistence (FILE, SQLite and FILEv2 formats), signed HTTP endpoints under `/api/studio/adaptive` and runtime wiring in `src/lib/studio/runtime.ts`; see [INDEXED_STORAGE.md](INDEXED_STORAGE.md) and [ADAPTIVE_RUNTIME_RESULT.md](ADAPTIVE_RUNTIME_RESULT.md).
+
 19 October 2026. Candidate engineering contract for VOX-006 and foundational portions of VOX-009/010/011, based on `ebb75a67c79bf317d1dec40381b216c75bb90ffa`. Source: [`src/lib/adaptive`](../../src/lib/adaptive/index.ts). This is local, pure TypeScript: no database, migration, provider, network, biometric matching, endpoint or runtime collection is enabled by this module. Legal review and launch approval remain separate gates. Synthetic test approvals do not constitute counsel approval.
 
 ## Public API and authoritative inputs

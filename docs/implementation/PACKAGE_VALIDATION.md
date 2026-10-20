@@ -1,5 +1,7 @@
 # Vox planning package validation
 
+**Status, 20 October 2026:** the package has grown to 21 skills under `.agents/skills/vox-*` and 20 agents under `.codex/agents`, and `scripts/validate-vox-plan.py` passes on the current tree. The counts below are the original 19 October validation.
+
 Reviewed 19 October 2026. Source baseline: `ebb75a67c79bf317d1dec40381b216c75bb90ffa`. This record describes checks of the local planning package and development roles. It does not certify application behavior, legal compliance, provider integration or production deployment.
 
 This is the planning-time snapshot. Local implementation subsequently started on 19 October; current work and evidence belong in [STARTER_SLICE.md](STARTER_SLICE.md) and the canonical backlog. Statements below that all tasks were planned describe this earlier validation point.
