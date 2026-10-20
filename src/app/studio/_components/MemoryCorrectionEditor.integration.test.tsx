@@ -8,6 +8,8 @@ import { api } from '../_lib/client';
 // The unrelated biometric panel is unavailable in this fixture. Note UI, typed
 // client, authentication, HTTP handler and canonical FILE writes are all real.
 vi.mock('./VoiceRecognitionPanel', () => ({ VoiceRecognitionPanel: () => null }));
+vi.mock('./ProductPausePanel', () => ({ ProductPausePanel: () => null }));
+vi.mock('../_lib/product-pause-client', () => ({ useProductPause: () => ({ coveredBlocked: false, status: null }) }));
 const fixtures: Awaited<ReturnType<typeof correctionFixture>>[]=[];
 type ResponseLedger = Array<{ key: string; response: Promise<Response> }>;
 async function completed(responses: ResponseLedger, key: string, status: number) {

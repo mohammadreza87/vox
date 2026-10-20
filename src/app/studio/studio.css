@@ -1,6 +1,6 @@
 /* Vox Studio — "Soft Weather" design system (scoped to .vx) */
 
-.vx-privacy { display: flex; flex-direction: column; gap: 16px; }
+.vx-privacy { display: flex; flex-direction: column; gap: 16px; scroll-padding-block-end: calc(120px + env(safe-area-inset-bottom)); }
 .vx-privacy p { margin: 0; }
 .vx-privacy h2, .vx-privacy h3, .vx-privacy h4 { margin: 0; }
 .vx-privacy-heading { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
@@ -97,6 +97,13 @@
 .vx-btn-block { width: 100%; }
 /* Learning action labels can wrap to several lines in Persian on mobile. */
 .vx-learning-actions > .vx-btn { height: auto; min-height: 52px; padding-block: 10px; }
+/* Privacy actions must contain wrapped labels at narrow widths and zoom. */
+.vx-privacy .vx-btn {
+  height: auto; min-height: 44px; min-width: 0; max-width: 100%;
+  padding: 12px; white-space: normal; overflow-wrap: anywhere;
+}
+.vx-privacy .vx-privacy-actions > .vx-btn,
+.vx-privacy .vx-privacy-spaces > .vx-btn { flex: 1 1 140px; }
 
 .vx-icon-btn {
   width: 44px; height: 44px; border-radius: 999px; border: none; background: transparent; color: var(--text);
@@ -138,12 +145,14 @@
 }
 
 .vx-tabbar {
-  position: absolute; left: 0; right: 0; bottom: 0; z-index: 6;
+  position: relative; flex-shrink: 0; z-index: 6;
   padding: 8px 8px calc(10px + env(safe-area-inset-bottom));
   background: rgba(22, 25, 30, .92); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
   border-top: 1px solid var(--hair); display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 .vx-tab { display: flex; flex-direction: column; align-items: center; gap: 3px; background: none; border: none; cursor: pointer; color: var(--text-3); font-size: 11px; font-weight: 600; padding: 0; }
+.vx-tab { min-width: 0; padding-inline: 4px; }
+.vx-tab-label { max-width: 100%; overflow-wrap: anywhere; }
 .vx-tab[aria-current="page"] { color: var(--text); }
 .vx-tab-pill { width: 48px; height: 32px; border-radius: 999px; display: flex; align-items: center; justify-content: center; position: relative; }
 

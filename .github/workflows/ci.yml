@@ -12,7 +12,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  NODE_VERSION: '20'
+  NODE_VERSION: '22.23.3'
 
 jobs:
   # =====================================
@@ -70,8 +70,11 @@ jobs:
       - name: Verify Connections release configuration preservation
         run: node --test scripts/connections-production-config.test.mjs
 
-      - name: Verify single-host configuration preservation
-        run: node --test scripts/studio-production.test.mjs
+      - name: Verify single-host release safety and configuration preservation
+        run: node --test scripts/studio-production.test.mjs scripts/studio-adaptive-compatibility.test.mjs
+
+      - name: Verify guest browser fixture build provenance
+        run: node --test e2e/guest-fixture-build.test.mjs
 
       - name: Upload coverage reports
         uses: codecov/codecov-action@v7
@@ -191,6 +194,12 @@ jobs:
         run: npx playwright test --config=playwright.conversation.config.ts
         env:
           CONVERSATION_E2E_PRODUCTION: '1'
+
+      - name: Run observation and correction production browser journeys
+        run: npx playwright test --config=playwright.observation.config.ts
+
+      - name: Run isolated guest privacy production browser journeys
+        run: npx playwright test --config=playwright.guest-rights.config.ts
 
       # All production journeys must run before the general suite starts next dev,
       # which replaces .next and removes the downloaded production BUILD_ID.

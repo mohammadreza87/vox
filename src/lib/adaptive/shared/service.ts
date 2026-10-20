@@ -6,6 +6,7 @@ import type { PolicySnapshot, ResourceDescriptor } from '../types';
 import type { AdaptiveSnapshot } from '../persistence/contracts';
 import { ADAPTIVE_POLICY_VERSION, accountIdFor } from '../persistence/repository';
 import type { AdaptiveService } from '../persistence/service';
+import type { RuntimeControlEvaluation } from '../persistence/authority';
 import { SharedMemoryRepository, sharedDigest, type SharedContainer, type SharedDocument, type SharedMember, type SharedMemory } from './repository';
 import type { SharedAgentInput, SharedContainerView, SharedContext, SharedContextAudience, SharedCreateInput, SharedMemoryInput, SharedMutation, SharedParticipantInput, SharedPreview, SharedPreviewInput, SharedSnapshot, SharedSpace } from './contracts';
 
@@ -26,30 +27,62 @@ const retention = 90 * 86400_000;
 const INFINITY = Number.MAX_SAFE_INTEGER;
 export interface SharedAuthority {
   /** Current approved Studio membership and agents this account may actually use. */
-  member(telegramId: number): Promise<{ active: boolean; agentIds: string[] }>;
+  member(telegramId: number): Promise<{ active: boolean; agentIds: string[]; revision?: string }>;
   group(groupId: string): Promise<{ memberTelegramIds: number[]; hasGuests: boolean; revision: string } | null>;
-  agent(agentId: string): Promise<{ active: boolean }>;
+  agent(agentId: string): Promise<{ active: boolean; revision?: string }>;
+  memberNow?(telegramId: number): { active: boolean; agentIds: string[]; revision?: string };
+  groupNow?(groupId: string): { memberTelegramIds: number[]; hasGuests: boolean; revision: string } | null;
+  agentNow?(agentId: string): { active: boolean; revision?: string };
+  /** One committed Studio snapshot; all returned facts derive from that state. */
+  readSnapshotNow?(scope: { telegramIds: number[]; agentId: string; groupIds: string[] }): {
+    members: { telegramId: number; active: boolean; agentIds: string[]; revision?: string }[];
+    agent: { active: boolean; revision?: string };
+    groups: { groupId: string; value: { memberTelegramIds: number[]; hasGuests: boolean; revision: string } | null }[];
+  };
 }
-interface Verified { telegramId: number; profile: AdaptiveSnapshot; agentIds: string[] }
+interface Verified { telegramId: number; profile: AdaptiveSnapshot; agentIds: string[]; validUntil?: number; authorityRevision?: string }
 interface StagedWrite { operationId: string; containerId: string; memoryId: string; revision: number; eventKey: string }
 /** Explicit authored sharing only. No extraction, implicit grants, or automatic recipient expansion. */
 export class SharedMemoryService {
   constructor(readonly repository: SharedMemoryRepository, readonly adaptive: AdaptiveService,
     readonly authority: SharedAuthority, private readonly now: () => number = Date.now) {}
 
+  private evaluateClock<T>(evaluate: (now: number) => RuntimeControlEvaluation<T>): T {
+    // The shared store has no separate clock schema. Only managed adaptive
+    // authority publishes observations; unmanaged FILE retains its behavior.
+    return this.adaptive.repository.storage.sampleClock
+      ? this.adaptive.evaluateAuthorityClock(this.now, evaluate) : evaluate(this.now()).value;
+  }
   private async verified(telegramId: number, space: SharedSpace): Promise<Verified> {
     tgSchema.parse(telegramId); spaceSchema.parse(space);
     const member = await this.authority.member(telegramId);
     if (!member.active) return fail(403, 'recipient_unavailable');
     const profile = await this.adaptive.readAuthority(telegramId, space);
-    if (!profile.identity.confirmed || !profile.identity.personId || !profile.identity.bindingId || !profile.identity.bindingRevision) return fail(403, 'profile_confirmation_required');
-    if (!profile.explicitMemoryAvailable) return fail(403, 'capability_unavailable');
-    if (!Number.isSafeInteger(profile.identity.bindingExpiresAt) || profile.identity.bindingExpiresAt! <= this.now()) return fail(403, 'profile_confirmation_required');
-    return { telegramId, profile, agentIds: member.agentIds };
+    return this.evaluateClock(now => {
+      if (!profile.identity.confirmed || !profile.identity.personId || !profile.identity.bindingId || !profile.identity.bindingRevision ||
+          !Number.isSafeInteger(profile.identity.bindingExpiresAt) || profile.identity.bindingExpiresAt! <= now) return fail(403, 'profile_confirmation_required');
+      if (!profile.explicitMemoryAvailable) return fail(403, 'capability_unavailable');
+      return { value: { telegramId, profile, agentIds: member.agentIds, ...(member.revision === undefined ? {} : { authorityRevision: member.revision }) },
+        deadline: Math.min(profile.identity.bindingExpiresAt!, profile.explicitMemoryValidUntil ?? INFINITY) };
+    });
+  }
+  private verifiedNow(telegramId: number, space: SharedSpace): Verified {
+    tgSchema.parse(telegramId); spaceSchema.parse(space);
+    if (!this.authority.memberNow) return fail(503, 'authority_unavailable');
+    const member = this.authority.memberNow(telegramId);
+    if (!member.active) return fail(403, 'recipient_unavailable');
+    const profile = this.adaptive.readAuthorityNow(telegramId, space);
+    return this.evaluateClock(now => {
+      if (!profile.identity.confirmed || !profile.identity.personId || !profile.identity.bindingId || !profile.identity.bindingRevision ||
+          !Number.isSafeInteger(profile.identity.bindingExpiresAt) || profile.identity.bindingExpiresAt! <= now) return fail(403, 'profile_confirmation_required');
+      if (!profile.explicitMemoryAvailable) return fail(403, 'capability_unavailable');
+      return { value: { telegramId, profile, agentIds: member.agentIds, validUntil: profile.validUntil, ...(member.revision === undefined ? {} : { authorityRevision: member.revision }) },
+        deadline: Math.min(profile.identity.bindingExpiresAt!, profile.explicitMemoryValidUntil ?? INFINITY, profile.validUntil) };
+    });
   }
   private identityKey(people: Verified[]): string {
     return sharedDigest(people.map(v => [v.telegramId, v.profile.identity.accountId, v.profile.identity.personId,
-      v.profile.identity.bindingId, v.profile.identity.bindingRevision, v.profile.identity.bindingExpiresAt, v.profile.explicitMemoryAvailable, v.profile.explicitMemoryValidUntil, v.profile.purposes.filter(p => p.purpose === 'optional.personalization').map(p => [p.purpose, p.state, p.available, p.revision]), [...v.agentIds].sort()]));
+      v.profile.identity.bindingId, v.profile.identity.bindingRevision, v.profile.identity.bindingExpiresAt, v.profile.explicitMemoryAvailable, v.profile.explicitMemoryValidUntil, v.profile.purposes.filter(p => p.purpose === 'optional.personalization').map(p => [p.purpose, p.state, p.available, p.revision]), [...v.agentIds].sort(), ...(v.authorityRevision === undefined ? [] : [v.authorityRevision]), ...(v.profile.storedPersonalizationUseStamp === undefined ? [] : [v.profile.storedPersonalizationUseStamp, v.profile.storedPersonalizationAllowed])]));
   }
   private async recheck(people: Verified[], space: SharedSpace): Promise<void> {
     const current = await Promise.all(people.map(v => this.verified(v.telegramId, space)));
@@ -114,47 +147,65 @@ export class SharedMemoryService {
   }
   private allowed(c: SharedContainer, memory: SharedMemory, actor: Verified, audience: Verified[], operation: 'read' | 'contribute' | 'delete' | 'manage', agentId?: string): boolean {
     if (c.status !== 'active' || memory.status !== 'active') return false;
-    const now = this.now();
-    const tenantId = `shared:${sharedDigest(this.repository.namespace).slice(0, 20)}`, spaceId = `${tenantId}:${c.space}`;
-    const scope = { tenantId, spaceId };
-    const base = { schemaVersion: 1 as const, revision: c.revision, createdAt: c.createdAt, updatedAt: c.updatedAt };
-    const actorId = actor.profile.identity.personId!;
-    const resource: ResourceDescriptor = { ...base, ...scope, id: memory.id, revision: memory.revision, containerId: c.id,
-      createdAt: memory.createdAt, updatedAt: memory.updatedAt, subjectPersonIds: [memory.authorPersonId], status: memory.status,
-      expiresAt: memory.expiresAt, revocationEpoch: c.revision };
-    const snapshot: PolicySnapshot = { schemaVersion: 1, policyVersion: ADAPTIVE_POLICY_VERSION,
-      account: { ...base, id: actor.profile.identity.accountId, ownerPersonId: actorId, status: 'active' },
-      people: c.members.map(m => ({ ...base, id: m.personId, status: m.status === 'active' ? 'active' as const : 'suspended' as const })),
-      binding: { schemaVersion: 1, id: actor.profile.identity.bindingId!, revision: actor.profile.identity.bindingRevision!,
-        createdAt: actor.profile.identity.bindingCreatedAt!, updatedAt: actor.profile.identity.bindingUpdatedAt!, accountId: actor.profile.identity.accountId,
-        personId: actorId, status: 'verified', method: 'account_confirmation', verifiedAt: actor.profile.identity.bindingVerifiedAt!, expiresAt: actor.profile.identity.bindingExpiresAt! },
-      space: { ...base, ...scope, id: spaceId, kind: c.space, ownerAccountId: accountIdFor(c.members.find(m => m.personId === c.ownerPersonId)!.telegramId), status: 'active', policyEpoch: 0 },
-      container: { ...base, ...scope, id: c.id, audience: c.kind === 'group' ? { kind: 'group', groupId: c.groupId! } : { kind: 'exact_recipients', personIds: c.members.map(m => m.personId) },
-        status: c.status, policyEpoch: 0, spacePolicyEpoch: 0, historyPolicy: 'all_authorized_history' }, resource,
-      memberships: c.members.map(m => ({ ...base, ...scope, id: `${c.id}:member:${m.personId}`, containerId: c.id, personId: m.personId,
-        ...(c.kind === 'group' ? { groupId: c.groupId } : {}), status: m.status, joinedAt: c.createdAt, expiresAt: INFINITY, policyEpoch: 0 })),
-      grants: [ ...c.members.map(m => ({ ...base, ...scope, id: `${c.id}:person:${m.personId}`, containerId: c.id,
-        principal: { kind: 'person' as const, id: m.personId }, operations: ['read' as const, 'contribute' as const,
-          ...(m.personId === c.ownerPersonId ? ['manage' as const, 'delete' as const] : m.personId === memory.authorPersonId ? ['delete' as const] : [])],
-        purpose: 'explicit.memory_request' as const, purposeVersion: 1, status: m.status, expiresAt: INFINITY, policyEpoch: 0 })),
-        ...c.agents.map(g => ({ ...base, ...scope, id: `${c.id}:agent:${g.agentId}`, revision: g.revision, containerId: c.id,
-          principal: { kind: 'agent' as const, id: g.agentId }, operations: ['read' as const], purpose: 'explicit.memory_request' as const,
-          purposeVersion: 1, status: g.allowed ? 'active' as const : 'revoked' as const, expiresAt: INFINITY, policyEpoch: 0 })) ], consents: [],
-    };
-    if (audience.some(a => !memory.recipientPersonIds.includes(a.profile.identity.personId!))) return false;
-    return authorizeAccess({ identity: { authenticatedAccountId: actor.profile.identity.accountId, selectedPerson: { personId: actorId,
-      bindingId: actor.profile.identity.bindingId!, bindingRevision: actor.profile.identity.bindingRevision! } }, ...scope, containerId: c.id,
-      resourceId: memory.id, operation, purpose: 'explicit.memory_request', purposeVersion: 1, consentPolicyVersion: ADAPTIVE_POLICY_VERSION,
-      audience: { kind: 'known', personIds: audience.map(a => a.profile.identity.personId!) }, ...(agentId ? { agentId } : {}) }, snapshot, now).allowed;
+    return this.evaluateClock(now => {
+      const tenantId = `shared:${sharedDigest(this.repository.namespace).slice(0, 20)}`, spaceId = `${tenantId}:${c.space}`;
+      const scope = { tenantId, spaceId };
+      const base = { schemaVersion: 1 as const, revision: c.revision, createdAt: c.createdAt, updatedAt: c.updatedAt };
+      const actorId = actor.profile.identity.personId!;
+      const resource: ResourceDescriptor = { ...base, ...scope, id: memory.id, revision: memory.revision, containerId: c.id,
+        createdAt: memory.createdAt, updatedAt: memory.updatedAt, subjectPersonIds: [memory.authorPersonId], status: 'active',
+        expiresAt: memory.expiresAt, revocationEpoch: c.revision };
+      const snapshot: PolicySnapshot = { schemaVersion: 1, policyVersion: ADAPTIVE_POLICY_VERSION,
+        account: { ...base, id: actor.profile.identity.accountId, ownerPersonId: actorId, status: 'active' },
+        people: c.members.map(m => ({ ...base, id: m.personId, status: m.status === 'active' ? 'active' as const : 'suspended' as const })),
+        binding: { schemaVersion: 1, id: actor.profile.identity.bindingId!, revision: actor.profile.identity.bindingRevision!,
+          createdAt: actor.profile.identity.bindingCreatedAt!, updatedAt: actor.profile.identity.bindingUpdatedAt!, accountId: actor.profile.identity.accountId,
+          personId: actorId, status: 'verified', method: 'account_confirmation', verifiedAt: actor.profile.identity.bindingVerifiedAt!, expiresAt: actor.profile.identity.bindingExpiresAt! },
+        space: { ...base, ...scope, id: spaceId, kind: c.space, ownerAccountId: accountIdFor(c.members.find(m => m.personId === c.ownerPersonId)!.telegramId), status: 'active', policyEpoch: 0 },
+        container: { ...base, ...scope, id: c.id, audience: c.kind === 'group' ? { kind: 'group', groupId: c.groupId! } : { kind: 'exact_recipients', personIds: c.members.map(m => m.personId) },
+          status: 'active', policyEpoch: 0, spacePolicyEpoch: 0, historyPolicy: 'all_authorized_history' }, resource,
+        memberships: c.members.map(m => ({ ...base, ...scope, id: `${c.id}:member:${m.personId}`, containerId: c.id, personId: m.personId,
+          ...(c.kind === 'group' ? { groupId: c.groupId } : {}), status: m.status, joinedAt: c.createdAt, expiresAt: INFINITY, policyEpoch: 0 })),
+        grants: [ ...c.members.map(m => ({ ...base, ...scope, id: `${c.id}:person:${m.personId}`, containerId: c.id,
+          principal: { kind: 'person' as const, id: m.personId }, operations: ['read' as const, 'contribute' as const,
+            ...(m.personId === c.ownerPersonId ? ['manage' as const, 'delete' as const] : m.personId === memory.authorPersonId ? ['delete' as const] : [])],
+          purpose: 'explicit.memory_request' as const, purposeVersion: 1, status: m.status, expiresAt: INFINITY, policyEpoch: 0 })),
+          ...c.agents.map(g => ({ ...base, ...scope, id: `${c.id}:agent:${g.agentId}`, revision: g.revision, containerId: c.id,
+            principal: { kind: 'agent' as const, id: g.agentId }, operations: ['read' as const], purpose: 'explicit.memory_request' as const,
+            purposeVersion: 1, status: g.allowed ? 'active' as const : 'revoked' as const, expiresAt: INFINITY, policyEpoch: 0 })) ], consents: [],
+      };
+      if (audience.some(a => !memory.recipientPersonIds.includes(a.profile.identity.personId!))) return { value: false, denied: true };
+      const allowed = authorizeAccess({ identity: { authenticatedAccountId: actor.profile.identity.accountId, selectedPerson: { personId: actorId,
+        bindingId: actor.profile.identity.bindingId!, bindingRevision: actor.profile.identity.bindingRevision! } }, ...scope, containerId: c.id,
+        resourceId: memory.id, operation, purpose: 'explicit.memory_request', purposeVersion: 1, consentPolicyVersion: ADAPTIVE_POLICY_VERSION,
+        audience: { kind: 'known', personIds: audience.map(a => a.profile.identity.personId!) }, ...(agentId ? { agentId } : {}) }, snapshot, now).allowed;
+      return { value: allowed, denied: !allowed, deadline: Math.min(memory.expiresAt, this.validUntil([actor, ...audience])) };
+    });
   }
   private validUntil(people: Verified[]): number {
-    return Math.min(...people.flatMap(p => [p.profile.identity.bindingExpiresAt ?? 0, p.profile.explicitMemoryValidUntil ?? 0]));
+    return Math.min(...people.flatMap(p => [p.profile.identity.bindingExpiresAt ?? 0, p.profile.explicitMemoryValidUntil ?? 0, p.validUntil ?? INFINITY]));
   }
   private assertFresh(people: Verified[]): void {
-    if (this.validUntil(people) <= this.now()) fail(403, 'authority_expired');
+    this.evaluateClock(now => {
+      const deadline = this.validUntil(people);
+      if (deadline <= now) return fail(403, 'authority_expired');
+      return { value: undefined, deadline };
+    });
   }
   pruneDocument(d: SharedDocument): void {
-    for (const c of d.containers) for (const m of c.memories) if (
+    // A shared transaction can still fail after pruning. Publish managed expiry
+    // observations independently so rollback cannot revive that seen deadline.
+    const expired = this.adaptive.repository.storage.sampleClock ? this.evaluateClock(now => {
+      const ids: string[] = [], liveDeadlines: number[] = [];
+      for (const c of d.containers) for (const m of c.memories) {
+        const deadline = m.status === 'pending' ? m.publication?.validUntil ?? 0 : m.status === 'active' ? m.expiresAt : undefined;
+        if (deadline === undefined) continue;
+        if (deadline <= now) ids.push(JSON.stringify([c.id, m.id])); else liveDeadlines.push(deadline);
+      }
+      return { value: ids, observedDenial: ids.length > 0, deadline: Math.min(INFINITY, ...liveDeadlines) };
+    }) : undefined;
+    const expiredIds = expired && new Set(expired);
+    for (const c of d.containers) for (const m of c.memories) if (expiredIds ? expiredIds.has(JSON.stringify([c.id, m.id])) :
       (m.status === 'pending' && (!m.publication || m.publication.validUntil <= this.now())) ||
       (m.status === 'active' && m.expiresAt <= this.now())) {
       const wasPending = m.status === 'pending';
@@ -214,10 +265,14 @@ export class SharedMemoryService {
         const m = c?.memories.find(m => m.id === write.memoryId && m.status === 'pending');
         const event = d.events.find(e => e.id === write.eventKey && e.operationId === write.operationId);
         if (!c || !m || !m.publication || !event) return fail(409, 'publication_stale');
-        if (c.revision !== write.revision || event.state !== 'pending' ||
-            m.publication.operationId !== write.operationId || m.publication.authorityKey !== this.identityKey(people) ||
-            m.publication.validUntil <= this.now() || m.publication.intentFingerprint !== event.fingerprint ||
-            m.publication.contentDigest !== this.contentDigest(m) || m.publication.audienceKey !== this.audienceKey(c) || c.audienceInvalidatedAt !== undefined) fail(409, 'publication_stale');
+        const publication = m.publication;
+        this.evaluateClock(now => {
+          if (c.revision !== write.revision || event.state !== 'pending' ||
+              publication.operationId !== write.operationId || publication.authorityKey !== this.identityKey(people) ||
+              publication.validUntil <= now || publication.intentFingerprint !== event.fingerprint ||
+              publication.contentDigest !== this.contentDigest(m) || publication.audienceKey !== this.audienceKey(c) || c.audienceInvalidatedAt !== undefined) fail(409, 'publication_stale');
+          return { value: undefined, deadline: Math.min(this.validUntil(people), publication.validUntil) };
+        });
         if (!this.allowed({ ...c, status: 'active' }, { ...m, status: 'active' }, actor, people, 'contribute')) fail(403, 'access_denied');
         m.status = 'active'; m.revision++; m.updatedAt = this.now(); m.publication.finalizedAt = this.now();
         if (c.status === 'pending') c.status = 'active';
@@ -260,7 +315,11 @@ export class SharedMemoryService {
     const retryFingerprint = sharedDigest(['create', input]);
     if (await this.repository.transaction(d => this.event(d, actor, input.eventId, retryFingerprint))) return this.list(telegramId, input.space);
     const preview = await this.repository.transaction(d => d.previews.find(p => p.token === input.previewToken && p.ownerPersonId === actor.profile.identity.personId && p.space === input.space));
-    if (!preview || preview.expiresAt <= this.now()) return fail(409, 'preview_required');
+    this.evaluateClock(now => {
+      if (!preview || preview.expiresAt <= now) return fail(409, 'preview_required');
+      return { value: undefined, deadline: preview.expiresAt };
+    });
+    if (!preview) return fail(409, 'preview_required');
     const people = await Promise.all(preview.members.map(m => m.telegramId === telegramId ? actor : this.verified(m.telegramId, input.space)));
     await this.agentsAvailable(input.agentIds, people);
     const group = preview.groupId ? await this.authority.group(preview.groupId) : null;
@@ -274,7 +333,10 @@ export class SharedMemoryService {
       this.assertFresh(people);
       this.capacity(d); if (input.expectedRevision !== 0) fail(409, 'revision_conflict');
       const receipt = d.previews.find(p => p.token === preview.token);
-      if (!receipt || receipt.expiresAt <= this.now() || receipt.consumedBy) fail(409, 'preview_required');
+      this.evaluateClock(now => {
+        if (!receipt || receipt.expiresAt <= now || receipt.consumedBy) return fail(409, 'preview_required');
+        return { value: undefined, deadline: receipt.expiresAt };
+      });
       const c: SharedContainer = { id: containerId, space: input.space, kind: preview.kind,
         ...(preview.groupId ? { groupId: preview.groupId, groupRevision: preview.groupRevision } : {}),
         ownerPersonId: actor.profile.identity.personId!, revision: 1, createdAt: this.now(), updatedAt: this.now(), status: 'pending',
@@ -301,6 +363,36 @@ export class SharedMemoryService {
     checkPrivateAccount: () => Promise<void>): Promise<void> {
     const latest = await this.listCurrent(telegramId, space, checkPrivateAccount);
     if (sharedDigest(latest) !== sharedDigest(expected)) fail(409, 'export_authority_changed');
+  }
+  /** RI1 final attachment fence: synchronous metadata/control reads only. It
+   * compares the prepared export projection, never confers a new shared grant. */
+  captureExportFence(telegramId: number, space: SharedSpace, expected: SharedSnapshot): () => void {
+    const inspect = () => {
+      if (!this.authority.groupNow) return fail(503, 'authority_unavailable');
+      const actor = this.verifiedNow(telegramId, space), state = this.repository.readCommittedForEffect();
+      const relevant = state.containers.filter(c => c.space === space && c.members.some(m => m.telegramId === telegramId));
+      const containers: SharedContainerView[] = [];
+      const groups = relevant.filter(c => c.groupId).map(c => [c.groupId!, this.authority.groupNow!(c.groupId!)] as const);
+      for (const c of relevant) {
+        if (c.status !== 'active' || !c.members.some(m => m.personId === actor.profile.identity.personId && m.telegramId === telegramId && m.status === 'active')) continue;
+        const group = groups.find(([id]) => id === c.groupId)?.[1];
+        const current = c.kind !== 'group' || c.audienceInvalidatedAt === undefined && !!group && !group.hasGuests && group.revision === c.groupRevision &&
+          sharedDigest([...group.memberTelegramIds].sort((a,b) => a-b)) === sharedDigest(c.members.map(m => m.telegramId).sort((a,b) => a-b));
+        containers.push({ id: c.id, space, kind: c.kind, ...(c.groupId ? { groupId: c.groupId } : {}), revision: c.revision, ownerPersonId: c.ownerPersonId,
+          recipients: c.members.map(m => ({ telegramId: m.telegramId, personId: m.personId, active: m.status === 'active' })), agents: c.agents,
+          status: current ? 'active' : 'audience_changed', memories: current ? c.memories.filter(m => this.allowed(c, m, actor, [actor], 'read'))
+            .map(m => ({ id: m.id, revision: m.revision, text: m.text!, authorPersonId: m.authorPersonId, createdAt: m.createdAt, expiresAt: m.expiresAt })) : [] });
+      }
+      if (sharedDigest({ revision: state.revision, space, containers }) !== sharedDigest(expected)) return fail(409, 'export_authority_changed');
+      // Own-data management checks the requester, matching listCurrent. Other
+      // recipients' expired profiles do not authorize or prevent this export.
+      const stamp = sharedDigest([state.revision, groups, this.identityKey([actor])]);
+      if (this.repository.readCommittedForEffect().revision !== state.revision || this.identityKey([this.verifiedNow(telegramId, space)]) !== this.identityKey([actor]) ||
+        sharedDigest(groups) !== sharedDigest(relevant.filter(c => c.groupId).map(c => [c.groupId!, this.authority.groupNow!(c.groupId!)]))) return fail(409, 'export_authority_changed');
+      return stamp;
+    };
+    const stamp = inspect();
+    return () => { if (inspect() !== stamp) return fail(409, 'export_authority_changed'); };
   }
   private async listCurrent(telegramId: number, space: SharedSpace, beforeDelivery?: () => Promise<void>): Promise<SharedSnapshot> {
     const actor = await this.verified(telegramId, space);
@@ -407,7 +499,132 @@ export class SharedMemoryService {
     });
     return this.list(telegramId, input.space);
   }
+  /** Policy eligibility is resource-specific. A stopped member can suppress only
+   * the shared contribution that requires them, never an unrelated container.
+   * Both acquisition and the committed fence use this exact selection. */
+  private contextSelection(containers: SharedContainer[], actor: Verified, people: Verified[], required: Verified[], agentId: string, personalized: boolean) {
+    if (!personalized) return [];
+    return containers.flatMap(container => {
+      if (container.status !== 'active' || container.audienceInvalidatedAt !== undefined) return [];
+      const eligible = container.memories.filter(memory => this.allowed(container, memory, actor, people, 'read', agentId));
+      if (!eligible.length) return [];
+      return eligible.filter(memory => {
+        const personIds = new Set([memory.authorPersonId, ...memory.recipientPersonIds, ...people.map(p => p.profile.identity.personId!)]);
+        return [...personIds].every(personId => {
+          const identities = required.filter(p => p.profile.identity.personId === personId &&
+            container.members.some(m => m.personId === personId && m.telegramId === p.telegramId));
+          // A stale/unmapped shared identity cannot grant use, including when
+          // another current profile happens to occupy the same Telegram slot.
+          return identities.length === 1 && identities[0].profile.storedPersonalizationAllowed !== false;
+        });
+      }).map(memory => ({ container, memory }));
+    });
+  }
   async readContext(telegramId: number, space: SharedSpace, agentId: string, audience: SharedContextAudience): Promise<SharedContext> {
+    return this.contextProjection(telegramId, space, agentId, audience, true);
+  }
+  /** Same audience/container revision without returning memory text. Participant
+   * private authority is compact in indexed mode. The separate shared adapter
+   * still loads its canonical document; this is not shared body indexing. */
+  async readContextAuthority(telegramId: number, space: SharedSpace, agentId: string, audience: SharedContextAudience): Promise<{ revision: string }> {
+    return { revision: (await this.contextProjection(telegramId, space, agentId, audience, false)).revision };
+  }
+  /** Final configured-fetch fence. Unsupported/writing stores and elapsed
+   * retention fail closed; cleanup remains on the normal lifecycle path. */
+  readContextAuthorityNow(telegramId: number, space: SharedSpace, agentId: string, audience: SharedContextAudience): { revision: string; validUntil: number } {
+    const startedAt = this.now();
+    let observedAt = startedAt;
+    let observedIds: number[] = [];
+    const publishObserved = (capturedAt?: number) => {
+      if (this.adaptive.repository.storage.sampleClock) {
+        if (observedIds.length) {
+          const at = this.adaptive.sampleClock(capturedAt === undefined ? this.now : () => capturedAt);
+          if (Number.isSafeInteger(at)) observedAt = Math.max(observedAt, at);
+        }
+        return;
+      }
+      for (const id of observedIds) {
+        const observed = this.adaptive.readRuntimeControlsForEffect(id, space, () => ({ value: true, denied: true }));
+        if (observed.status !== 'ready') return fail(503, 'authority_unavailable');
+      }
+    };
+    try {
+    idSchema.parse(agentId);
+    if (!this.authority.groupNow || !this.authority.agentNow || !this.authority.readSnapshotNow) return fail(503, 'authority_unavailable');
+    const ids = z.array(tgSchema).min(1).max(12).parse(audience.audienceTelegramIds);
+    if (new Set(ids).size !== ids.length || !ids.includes(telegramId)) return fail(403, 'audience_denied');
+    observedIds = ids;
+    const people = ids.map(id => this.verifiedNow(id, space));
+    if (ids.length > 1) {
+      const group = audience.groupId ? this.authority.groupNow(audience.groupId) : null;
+      if (!group || group.hasGuests || sharedDigest([...group.memberTelegramIds].sort((a,b) => a-b)) !== sharedDigest([...ids].sort((a,b) => a-b))) return fail(403, 'audience_denied');
+    }
+    const agentStamp = this.authority.agentNow(agentId);
+    if (!agentStamp.active || people.some(p => !p.agentIds.includes(agentId))) return fail(403, 'agent_access_denied');
+    const state = this.repository.readCommittedForEffect();
+    const relevant = state.containers.filter(c => c.space === space && c.members.some(m => m.telegramId === telegramId));
+    const groupIds = [...new Set([...relevant.flatMap(c => c.groupId ? [c.groupId] : []), ...(audience.groupId ? [audience.groupId] : [])])].sort();
+    const groupValues = groupIds.map(id => [id, this.authority.groupNow!(id)] as const);
+    const groupStamp = sharedDigest(groupValues);
+    for (const c of relevant) if (c.status === 'active' && c.kind === 'group' && c.audienceInvalidatedAt === undefined && c.members.some(m => m.telegramId === telegramId && m.status === 'active')) {
+      const group = groupValues.find(([id]) => id === c.groupId)?.[1];
+      if (!group || group.hasGuests || group.revision !== c.groupRevision || sharedDigest([...group.memberTelegramIds].sort((a,b) => a-b)) !== sharedDigest(c.members.map(m => m.telegramId).sort((a,b) => a-b))) return fail(409, 'authority_changed');
+    }
+    const requiredIds = [...new Set([...ids, ...relevant.filter(c => c.status === 'active').flatMap(c => c.members.map(m => m.telegramId))])].sort((a,b) => a-b);
+    observedIds = requiredIds;
+    const required = requiredIds.map(id => this.verifiedNow(id, space));
+    const personalized = people.every(p => p.profile.storedPersonalizationAllowed !== false && p.profile.purposes.some(choice => choice.purpose === 'optional.personalization' && choice.state === 'granted' && choice.available));
+    const selection = this.contextSelection(relevant, people.find(p => p.telegramId === telegramId)!, people, required, agentId, personalized);
+    // Re-read the small participant controls after all shared/native I/O. A
+    // deadline crossed during parsing cannot release a stale positive result.
+    const currentRequired = requiredIds.map(id => this.verifiedNow(id, space));
+    if (this.identityKey(currentRequired) !== this.identityKey(required)) return fail(409, 'authority_changed');
+    const current = ids.map(id => this.verifiedNow(id, space));
+    if (this.identityKey(current) !== this.identityKey(people) || groupStamp !== sharedDigest(groupIds.map(id => [id, this.authority.groupNow!(id)])) ||
+        sharedDigest(agentStamp) !== sharedDigest(this.authority.agentNow(agentId))) return fail(409, 'authority_changed');
+    if (this.repository.readCommittedForEffect().revision !== state.revision) return fail(409, 'revision_conflict');
+    // Native reads and lifecycle publication precede the final Studio checks.
+    // No permission sampled before that I/O can stand in for current membership.
+    publishObserved();
+    const studio = this.authority.readSnapshotNow({ telegramIds: requiredIds, agentId, groupIds });
+    if (studio.members.length !== requiredIds.length || new Set(studio.members.map(m => m.telegramId)).size !== requiredIds.length ||
+        studio.groups.length !== groupIds.length || new Set(studio.groups.map(g => g.groupId)).size !== groupIds.length) return fail(503, 'authority_unavailable');
+    const finalPeople = currentRequired.map(p => {
+      const member = studio.members.find(m => m.telegramId === p.telegramId);
+      if (!member?.active) return fail(403, 'recipient_unavailable');
+      return { ...p, agentIds: member.agentIds, authorityRevision: member.revision };
+    });
+    if (this.identityKey(finalPeople) !== this.identityKey(required) ||
+        sharedDigest(agentStamp) !== sharedDigest(studio.agent) ||
+        groupStamp !== sharedDigest(groupIds.map(id => {
+          const row = studio.groups.find(g => g.groupId === id);
+          if (!row) return fail(503, 'authority_unavailable');
+          return [id, row.value];
+        }))) return fail(409, 'authority_changed');
+    const finalRequired = requiredIds.map(id => this.verifiedNow(id, space));
+    if (this.identityKey(finalRequired) !== this.identityKey(required)) return fail(409, 'authority_changed');
+    const fresh = this.now();
+    const previousObservation = observedAt;
+    if (Number.isSafeInteger(fresh) && fresh >= 0) observedAt = Math.max(observedAt, fresh);
+    if (!Number.isSafeInteger(fresh) || fresh < previousObservation || this.validUntil(current) <= fresh) return fail(403, 'authority_expired');
+    for (const c of state.containers) for (const m of c.memories) if (
+      (m.status === 'pending' && (!m.publication || m.publication.validUntil <= fresh)) || (m.status === 'active' && m.expiresAt <= fresh)) return fail(409, 'retention_changed');
+    const deadline = Math.min(this.validUntil(current), this.validUntil(currentRequired), ...state.containers.flatMap(c => c.memories.flatMap(m => m.status === 'active' ? [m.expiresAt] : m.status === 'pending' ? [m.publication?.validUntil ?? 0] : [])));
+    const final = this.now();
+    if (Number.isSafeInteger(final) && final >= 0) observedAt = Math.max(observedAt, final);
+    if (!Number.isSafeInteger(final) || final < fresh || deadline <= final) return fail(403, 'authority_expired');
+    const revision = sharedDigest([state.revision, space, agentId, this.identityKey(people), audience, personalized, groupStamp, agentStamp, ...(required.some(p => p.profile.storedPersonalizationUseStamp !== undefined) ? [this.identityKey(required), selection.map(({ container, memory }) => [container.id, memory.id])] : [])]);
+    return { revision: this.adaptive.storeIdentity === 'canonical' ? revision : sharedDigest([this.adaptive.storeIdentity, revision]),
+      validUntil: deadline };
+    } catch (error) {
+      // Retention and external authority can expire after the last private read.
+      // Keep that observation durable before returning denial to the transport.
+      publishObserved(this.adaptive.repository.storage.sampleClock ? observedAt : undefined);
+      throw error;
+    }
+  }
+  private async contextProjection(telegramId: number, space: SharedSpace, agentId: string,
+    audience: SharedContextAudience, includeBodies: boolean): Promise<SharedContext> {
     idSchema.parse(agentId); const actor = await this.verified(telegramId, space);
     const ids = z.array(tgSchema).min(1).max(12).parse(audience.audienceTelegramIds);
     if (new Set(ids).size !== ids.length || !ids.includes(telegramId)) return fail(403, 'audience_denied');
@@ -418,20 +635,26 @@ export class SharedMemoryService {
     }
     await this.agentsAvailable([agentId], people);
     // Sharing does not grant any participant's optional personalization consent.
-    const personalized = people.every(p => p.profile.purposes.some(choice => choice.purpose === 'optional.personalization' && choice.state === 'granted' && choice.available));
     const state = await this.currentDocument(space, telegramId);
     const relevant = state.containers.filter(c => c.space === space && c.members.some(m => m.telegramId === telegramId));
+    const requiredIds = [...new Set([...ids, ...relevant.filter(c => c.status === 'active').flatMap(c => c.members.map(m => m.telegramId))])].sort((a,b) => a-b);
+    const required = await Promise.all(requiredIds.map(id => this.verified(id, space)));
+    const personalized = people.every(p => p.profile.storedPersonalizationAllowed !== false && p.profile.purposes.some(choice => choice.purpose === 'optional.personalization' && choice.state === 'granted' && choice.available));
+    const selection = this.contextSelection(relevant, people.find(p => p.telegramId === telegramId)!, people, required, agentId, personalized);
     const groupStamp = await this.groupStamp(relevant, audience.groupId);
     const agentStamp = await this.authority.agent(agentId);
     const memories: SharedContext['memories'] = [];
-    if (personalized) for (const c of state.containers) {
+    const selectedIds = new Set(selection.map(({ container, memory }) => JSON.stringify([container.id, memory.id])));
+    if (personalized && includeBodies) for (const c of state.containers) {
       if (c.space !== space || c.status !== 'active' || !(await this.groupCurrent(c))) continue;
-      for (const m of c.memories) if (this.allowed(c, m, actor, people, 'read', agentId)) memories.push({ id: m.id, text: m.text!, containerId: c.id });
+      for (const m of c.memories) if (selectedIds.has(JSON.stringify([c.id, m.id]))) memories.push({ id: m.id, text: m.text!, containerId: c.id });
     }
     await this.recheck(people, space);
+    await this.recheck(required, space);
     if (groupStamp !== await this.groupStamp(relevant, audience.groupId) || sharedDigest(agentStamp) !== sharedDigest(await this.authority.agent(agentId))) return fail(409, 'authority_changed');
     const currentRevision = await this.repository.transaction(d => d.revision);
     if (currentRevision !== state.revision) return fail(409, 'revision_conflict');
-    return { revision: sharedDigest([state.revision, space, agentId, this.identityKey(people), audience, personalized, groupStamp, agentStamp]), memories };
+    const revision = sharedDigest([state.revision, space, agentId, this.identityKey(people), audience, personalized, groupStamp, agentStamp, ...(required.some(p => p.profile.storedPersonalizationUseStamp !== undefined) ? [this.identityKey(required), selection.map(({ container, memory }) => [container.id, memory.id])] : [])]);
+    return { revision: this.adaptive.storeIdentity === 'canonical' ? revision : sharedDigest([this.adaptive.storeIdentity, revision]), memories };
   }
 }

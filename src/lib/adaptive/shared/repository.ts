@@ -52,6 +52,17 @@ const documentSchema = z.object({ schemaVersion: z.literal(1), namespace: id, re
  * from Studio admin state and private account documents; bounded capacity fails closed. */
 export class SharedMemoryRepository {
   constructor(readonly storage: AdaptiveStorage, readonly namespace = 'studio') {}
+  /** Canonical shared aggregate, synchronously validated. No text is returned by
+   * the service authority projection; this is not a shared-body index. */
+  readCommittedForEffect(): SharedDocument {
+    const snapshot = this.storage.readCommittedForEffect?.(`shared-memory:v1:${this.namespace}`);
+    if (!snapshot || snapshot.status !== 'ready') throw new Error('Shared authority unavailable');
+    const document: SharedDocument = snapshot.document === null
+      ? { schemaVersion: 1, namespace: this.namespace, revision: 0, containers: [], previews: [], events: [] }
+      : documentSchema.parse(snapshot.document);
+    if (document.namespace !== this.namespace || Buffer.byteLength(JSON.stringify(document)) > 650_000) throw new Error('Invalid shared memory document');
+    return document;
+  }
   transaction<T>(fn: (document: SharedDocument) => T): Promise<T> {
     return this.storage.transact(`shared-memory:v1:${this.namespace}`, (raw) => {
       const parsed = raw === null ? undefined : documentSchema.safeParse(raw);

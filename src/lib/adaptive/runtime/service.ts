@@ -1,3 +1,4 @@
+import { productPauseUseStamp } from '../product-pause/state';
 import { ensureReminderDelivery, pruneReminderDelivery, reminderChannelStatus, reminderPermit, reminderDisclosureAuthority, REMINDER_PURPOSE } from './reminder-state';
 import { REMINDER_DISCLOSURE_VERSION, reminderChannelPresentSchema, reminderChannelInputSchema, reminderActionInputSchema, type ReminderChannelPresentInput, type ReminderChannelInput, type ReminderActionInput } from './reminder-contracts';
 import { randomUUID } from 'crypto';
@@ -5,10 +6,10 @@ import { reserveDecision } from './decision-budget';
 import { suppressLearningScope } from '../personalization/learning/state';
 import { minimizeImageDataUrl } from '../prediction/image';
 import { resolvePreferences } from '../personalization';
-import { applyExplicitPreference, explicitPreferenceSnapshot, prunePreferenceUndo } from '../personalization/explicit';
+import { applyExplicitPreference, explicitPreferenceContextSnapshot, explicitPreferenceSnapshot, prunePreferenceUndo } from '../personalization/explicit';
 import { DecisionService, type DecisionInput, type DecisionResult } from '../decisions';
 import { isQuietHour, isSelectedTimezone } from '../notifications';
-import { digest, type AdaptiveDocument, type OptionalPurpose, type SpaceKind } from '../persistence/repository';
+import { digest, type AdaptiveAuthorityDocument, type AdaptiveDocument, type OptionalPurpose, type SpaceKind } from '../persistence/repository';
 import { AdaptiveError, AdaptiveService } from '../persistence/service';
 import { emptyExperience, feedbackInputSchema, predictInputSchema, preferenceInputSchema, reminderInputSchema,
   settingsInputSchema, turnInputSchema, predictionCancelSchema, predictionValidateSchema, type PredictionValidateInput, type PredictionCancelInput, type PredictionReply, type ExperienceSnapshot, type FeedbackInput,
@@ -17,6 +18,12 @@ import { emptyExperience, feedbackInputSchema, predictInputSchema, preferenceInp
 
 const DAY = 86_400_000;
 const RETENTION = 30 * DAY;
+/** The namespace identifies a store incarnation, never permission or identity. */
+function predictionAuthorizationFingerprint(core: string, grantRevision: number, image: ReturnType<AdaptiveService['capabilityStatus']> | null, storeIdentity: string, useStamp?: string): string {
+  const parts = [core, grantRevision, image, ...(useStamp === undefined ? [] : [useStamp])];
+  return digest(storeIdentity === 'canonical' ? parts : [storeIdentity, ...parts]);
+}
+type PredictionControls = AdaptiveAuthorityDocument & { experience: Pick<AdaptiveDocument['experience'], 'predictionTurns'> };
 const error = (status: number, code: string): never => { throw new AdaptiveError(status, code); };
 export interface AdaptiveExperienceOptions {
   /** Injection does not enable the provider; the explicit switch is also required. */
@@ -270,7 +277,7 @@ export class AdaptiveExperienceService {
    * completed response means responded; it never establishes task success. */
   recordTurn(telegramId: number, value: TurnInput): Promise<{ recorded: boolean; inboxCreated: boolean }> {
     const input = turnInputSchema.parse(value);
-    return this.adaptive.withAccountDocument(telegramId, (d, now) => {
+    const record = () => this.adaptive.withAccountDocument(telegramId, (d, now) => {
       this.pruneDocument(d, now);
       if (input.origin !== 'human') return { recorded: false, inboxCreated: false };
       const analytics = this.purpose(d, input.space, 'optional.product_analytics', now, input.agentId);
@@ -303,6 +310,12 @@ export class AdaptiveExperienceService {
       }
       this.bump(d, now); return { recorded, inboxCreated };
     });
+    if (this.adaptive.repository.storage.canonicalSchemaVersion === 2) return this.adaptive.withDirectAuthority(telegramId, input.space, (d, now) => {
+      const permitted = input.origin === 'human' && (this.adaptive.isPurposeAllowed(d, input.space, 'optional.product_analytics', now, input.agentId) ||
+        this.adaptive.isPurposeAllowed(d, input.space, 'optional.proactive_suggestions', now, input.agentId));
+      return { value: permitted, denied: !permitted };
+    }).then(permitted => permitted ? record() : { recorded: false, inboxCreated: false });
+    return record();
   }
   /** Fresh explicit preferences only. Caller must compare receipt before provider
    * export and output, just as for private memory context. */
@@ -322,9 +335,45 @@ export class AdaptiveExperienceService {
     return { ...current, resolved };
   }
   async readPreferences(telegramId: number, space: SpaceKind, agentId: string): Promise<{ revision: string; settings: { key: string; value: string }[] }> {
+    if (this.adaptive.repository.storage.indexed) {
+      const read = () => this.adaptive.withRuntimeControls(telegramId, space, (d, now, storeIdentity) => {
+        const value = explicitPreferenceContextSnapshot(this.adaptive, d, space, agentId, now, storeIdentity);
+        const permission = d.permissions.find(p => p.id === `permission:${space}:optional.personalization`)!;
+        const capability = this.adaptive.capabilityStatus(d, 'personalization', now);
+        return { value, denied: !value.allowed,
+          ...(value.allowed ? { deadline: Math.min(d.binding!.expiresAt, permission.expiresAt, capability.validUntil ?? now) } : {}) };
+      });
+      const snapshot = await read();
+      const resolved = await resolvePreferences(snapshot.records, snapshot.scope, snapshot.now, async () => snapshot.allowed);
+      const current = await read();
+      if (snapshot.contextReceipt !== current.contextReceipt) error(409, 'preference_authority_changed');
+      return { revision: current.contextReceipt, settings: current.allowed ? resolved
+        .filter(row => row.source === 'explicit').map(row => row.setting) : [] };
+    }
     const snapshot = await this.resolveExplicitPreferences(telegramId, space, agentId);
     return { revision: snapshot.contextReceipt, settings: snapshot.allowed ? snapshot.resolved
       .filter(row => row.source === 'explicit').map(row => row.setting) : [] };
+  }
+  /** Same opaque context revision as readPreferences, without resolving settings
+   * or awaiting I/O. A denied optional choice still has an empty-context revision;
+   * the exact current interactive binding remains mandatory for transport. */
+  readPreferencesAuthorityNow(telegramId: number, space: SpaceKind, agentId: string, bindingId: string): { revision: string; validUntil: number } | null {
+    try {
+      const result = this.adaptive.readRuntimeControlsForEffect(telegramId, space, (d, now, namespace) => {
+        if (!bindingId || d.binding?.id !== bindingId || !this.adaptive.isProfileConfirmed(d, now))
+          return { value: null, denied: true };
+        const snapshot = explicitPreferenceContextSnapshot(this.adaptive, d, space, agentId, now, namespace);
+        const permission = d.permissions.find(p => p.id === `permission:${space}:optional.personalization`)!;
+        const capabilities = ['core_text', 'personalization'] as const;
+        // The binding-only empty-context revision is also bounded. It grants no
+        // optional preference use when snapshot.allowed is false.
+        const deadline = Math.min(d.binding.expiresAt,
+          ...capabilities.flatMap(c => { const status = this.adaptive.capabilityStatus(d, c, now); return status.eligible && status.validUntil !== undefined ? [status.validUntil] : []; }),
+          ...(permission.state === 'granted' && permission.expiresAt > now ? [permission.expiresAt] : []));
+        return { value: { revision: snapshot.contextReceipt, validUntil: deadline }, deadline, observedDenial: !snapshot.allowed };
+      });
+      return result.status === 'ready' ? result.value : null;
+    } catch { return null; }
   }
   async readPreferenceState(telegramId: number, space: SpaceKind, agentId: string): Promise<PreferenceState> {
     const snapshot = await this.resolveExplicitPreferences(telegramId, space, agentId);
@@ -340,11 +389,17 @@ export class AdaptiveExperienceService {
       }) };
   }
   preferenceStateCurrentNow(telegramId: number, state: PreferenceState) {
-    return this.adaptive.readCommittedForEffect(telegramId, (d, now) => {
+    return this.adaptive.readCommittedAuthorityForEffect(telegramId, undefined, (d, now) => {
+      const expiries = (d.experience.preferenceUndo ?? []).filter(row => row.space === state.space && row.agentId === state.agentId).map(row => row.expiresAt);
       // Prune the detached snapshot only; maintenance owns durable expiry purge.
       prunePreferenceUndo(d, now);
       const current = explicitPreferenceSnapshot(this.adaptive, d, state.space, state.agentId, now);
-      return current.confirmed && current.receipt === state.receipt;
+      const value = current.confirmed && current.receipt === state.receipt;
+      const permission = d.permissions.find(p => p.id === `permission:${state.space}:optional.personalization`)!;
+      return { value, denied: !current.confirmed, observedDenial: !value || !current.allowed || expiries.some(at => at <= now),
+        ...(current.confirmed ? { deadline: Math.min(d.binding!.expiresAt, ...expiries.filter(at => at > now),
+          ...(permission.state === 'granted' && permission.expiresAt > now ? [permission.expiresAt] : []),
+          ...(['core_text', 'personalization'] as const).flatMap(c => { const status = this.adaptive.capabilityStatus(d, c, now); return status.eligible && status.validUntil !== undefined ? [status.validUntil] : []; })) } : {}) };
     });
   }
   /** Cancellation writes content-free tombstones so a delayed request or another
@@ -379,14 +434,27 @@ export class AdaptiveExperienceService {
   async validatePrediction(telegramId: number, value: PredictionValidateInput, authorizeDelivery?: () => Promise<boolean>): Promise<{ valid: boolean }> {
     const input = predictionValidateSchema.parse(value);
     try { if (authorizeDelivery && !await authorizeDelivery()) return { valid: false }; } catch { return { valid: false }; }
-    const result = await this.adaptive.withAccountDocument(telegramId, (d, now) => {
+    const evaluate = (d: PredictionControls, now: number, storeIdentity: string) => {
       const turn = d.experience.predictionTurns.find(p => p.agentId === input.agentId && p.space === input.space && p.sessionId === input.sessionId && p.turnId === input.turnId);
       const grant = d.agentGrants.find(g => g.agentId === input.agentId && g.space === input.space && g.allowed);
-      return { valid: !!turn && !!grant && this.options.decisionsEnabled === true && !!this.options.decisions && !turn.cancelled && !turn.superseded &&
+      const core = this.adaptive.capabilityStatus(d, 'core_text', now);
+      const image = turn?.requiresImage ? this.adaptive.capabilityStatus(d, 'single_party_image', now) : null;
+      const valid = !!turn && !!grant && this.options.decisionsEnabled === true && !!this.options.decisions && !turn.cancelled && !turn.superseded && turn.expiresAt > now &&
         turn.revision === input.revision && turn.contextKey === input.contextKey && turn.policyReceipt === input.policyReceipt && (turn.receiptExpiresAt ?? 0) > now &&
-        this.adaptive.isCoreAllowed(d, now) && (!turn.requiresImage || this.adaptive.capabilityStatus(d, 'single_party_image', now).eligible) && turn.authorizationFingerprint === digest([this.adaptive.coreFingerprint(d, now), grant.revision, turn.requiresImage ? this.adaptive.capabilityStatus(d, 'single_party_image', now) : null]) };
-    });
+        this.adaptive.isCoreAllowed(d, now) && (!image || image.eligible) && turn.authorizationFingerprint === predictionAuthorizationFingerprint(this.adaptive.coreFingerprint(d, now), grant.revision, image, storeIdentity, d.schemaVersion === 2 ? productPauseUseStamp(d, input.space) : undefined);
+      return { value: { valid }, denied: !valid,
+        ...(valid ? { deadline: Math.min(d.binding!.expiresAt, turn!.expiresAt, turn!.receiptExpiresAt!, core.validUntil ?? now, image?.validUntil ?? Number.MAX_SAFE_INTEGER) } : {}) };
+    };
+    const indexed = !!this.adaptive.repository.storage.indexed;
+    const result = indexed ? await this.adaptive.withRuntimeControls(telegramId, input.space, evaluate)
+      : await this.adaptive.withAccountDocument(telegramId, (d, now) => evaluate(d, now, this.adaptive.storeIdentity).value);
     try { if (authorizeDelivery && !await authorizeDelivery()) return { valid: false }; } catch { return { valid: false }; }
+    if (indexed) {
+      // External Studio authorization may itself await a canonical withdrawal.
+      // Re-evaluate compact authority after that await without an aggregate read.
+      const current = this.adaptive.readRuntimeControlsForEffect(telegramId, input.space, evaluate);
+      return current.status === 'ready' ? current.value : { valid: false };
+    }
     return result;
   }
   async predict(telegramId: number, value: PredictInput, signal?: AbortSignal, authorizeDelivery?: () => Promise<boolean>): Promise<PredictionReply> {
@@ -420,9 +488,10 @@ export class AdaptiveExperienceService {
       const reserved = reserveDecision(d, input, now, reservation, 'prepare');
       if ('reason' in reserved) return { unknown: reserved.reason };
       this.bump(d, now);
-      turn.policyReceipt = digest([d.accountId, input.space, input.agentId, input.sessionId, input.turnId, input.revision, input.contextKey, input.image && [input.image.sourceId, input.image.revision], reservation]);
+      const policy = [d.accountId, input.space, input.agentId, input.sessionId, input.turnId, input.revision, input.contextKey, input.image && [input.image.sourceId, input.image.revision], reservation];
+      turn.policyReceipt = digest(this.adaptive.storeIdentity === 'canonical' ? policy : [this.adaptive.storeIdentity, ...policy]);
       turn.requiresImage = !!image;
-      turn.authorizationFingerprint = digest([this.adaptive.coreFingerprint(d, now), grant!.revision, imageCapability]); turn.receiptExpiresAt = Math.min(now + 1500, imageCapability?.validUntil ?? Infinity);
+      turn.authorizationFingerprint = predictionAuthorizationFingerprint(this.adaptive.coreFingerprint(d, now), grant!.revision, imageCapability, this.adaptive.storeIdentity, d.schemaVersion === 2 ? productPauseUseStamp(d, input.space) : undefined); turn.receiptExpiresAt = Math.min(now + 1500, imageCapability?.validUntil ?? Infinity);
       return { receipt: turn.policyReceipt, expiresAt: turn.receiptExpiresAt, coreFingerprint: this.adaptive.coreFingerprint(d, now), grantRevision: grant!.revision };
     });
     if ('unknown' in prepared) {
@@ -437,7 +506,7 @@ export class AdaptiveExperienceService {
       const receipt = await this.adaptive.withAccountDocument(telegramId, (d, now) => {
         const turn = d.experience.predictionTurns.find(p => p.agentId === input.agentId && p.space === input.space && p.sessionId === input.sessionId && p.turnId === input.turnId);
         return this.adaptive.isCoreAllowed(d, now) && this.adaptive.coreFingerprint(d, now) === prepared.coreFingerprint &&
-          (!image || this.adaptive.capabilityStatus(d, 'single_party_image', now).eligible) && turn?.authorizationFingerprint === digest([this.adaptive.coreFingerprint(d, now), prepared.grantRevision, image ? this.adaptive.capabilityStatus(d, 'single_party_image', now) : null]) &&
+          (!image || this.adaptive.capabilityStatus(d, 'single_party_image', now).eligible) && turn?.authorizationFingerprint === predictionAuthorizationFingerprint(this.adaptive.coreFingerprint(d, now), prepared.grantRevision, image ? this.adaptive.capabilityStatus(d, 'single_party_image', now) : null, this.adaptive.storeIdentity, d.schemaVersion === 2 ? productPauseUseStamp(d, input.space) : undefined) &&
           turn?.revision === input.revision && !turn.cancelled && !turn.superseded && turn.expiresAt > now && turn.reservation === reservation && turn.contextKey === input.contextKey &&
           d.agentGrants.some(g => g.agentId === input.agentId && g.space === input.space && g.allowed && g.revision === prepared.grantRevision) ? prepared.receipt! : null;
       });

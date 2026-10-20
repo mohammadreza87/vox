@@ -1,6 +1,7 @@
 import { expect, test, type Page, type Locator } from '@playwright/test';
 import type { PreferenceInput, PreferenceState, StoredPreference } from '../src/lib/adaptive/runtime/contracts';
 import type { PreferenceValue } from '../src/lib/adaptive/personalization';
+import type { MaintenanceHealth } from '../src/lib/adaptive/lifecycle/maintenance-health-contracts';
 
 const PERSON = 710001;
 const OTHER = 710002;
@@ -117,6 +118,8 @@ async function installFixtures(page: Page, h: ReturnType<typeof makeHarness>) {
     ], agentAdmins: [] };
     else if (path === 'groups') result = { groups: [] };
     else if (path === 'adaptive' && method === 'GET') result = h.adaptive(space, (url.searchParams.get('locale') === 'fa' ? 'fa' : 'en'));
+    else if (path === 'product-pause' && method === 'GET') result = { version: 1, accountId: h.adaptive(space).identity.accountId,
+      space, available: false, reason: 'store_not_prepared', productPaused: null, useEpoch: null, canPause: false, canResume: false };
     else if (path === 'adaptive/consents/present') result = { ...h.adaptive(space, body?.locale ?? 'en'), receipt: 'synthetic-receipt', notice: h.adaptive(space, body?.locale ?? 'en').purposes.find((p: any) => p.purpose === body?.purpose)?.notice };
     else if (path === 'adaptive/consents') {
       h.granted[space] = body?.state === 'granted'; result = h.adaptive(space);
@@ -130,7 +133,10 @@ async function installFixtures(page: Page, h: ReturnType<typeof makeHarness>) {
     else if (path === 'learning/observations' && method === 'GET') result = h.learning(space);
     else if (path === 'learning/observations/process' && method === 'POST') { h.processed[space] = true; result = h.learning(space); }
     else if (path === 'learning/export' && method === 'GET') result = { schemaVersion: 1, space, lifecycle: { observations: h.learning(space) } };
-    else if (path === 'learning/operations' && method === 'GET') result = { maintenanceConfigured: false, improvementConfigured: false, report: null };
+    else if (path === 'learning/operations' && method === 'GET') result = {
+      maintenanceConfigured: false, improvementConfigured: false, report: null,
+      maintenance: { version: 1, state: 'not_started', observedAt: NOW, checkpoint: null, leaseExpiresAt: null, reason: null } satisfies MaintenanceHealth,
+    };
     else if (path === 'experience' && method === 'GET') result = h.experience(space);
     else if (path === 'experience/preferences' && method === 'GET') {
       const agentId = url.searchParams.get('agentId');
@@ -326,6 +332,7 @@ test('learning evidence stays scoped, honest and downloadable in English and Per
   await expect(learning.getByText('Playback is client reported. Verified task success is unknown.')).toBeVisible();
   await expect(learning.getByText('Average response time: Unavailable')).toBeVisible();
   await expect(learning).not.toContainText('PRIVATE_');
+  await expect(page.getByRole('region', { name: 'Maintenance status', exact: true }).getByRole('status')).toHaveText('No run recorded');
   await checkNoHorizontalOverflow(page);
   await checkActionLabelsFit(learning);
   await learning.screenshot({ path: testInfo.outputPath('learning-en.png') });
@@ -365,5 +372,6 @@ test('learning evidence stays scoped, honest and downloadable in English and Per
   const operations = page.getByRole('region', { name: 'عملیات بهبود نرم‌افزار', exact: true });
   await expect(operations.getByText('گزارش روند محلی: در دسترس نیست.')).toBeVisible();
   await expect(operations.getByText(/CI، استقرار، اثر عملیاتی و هزینه: در دسترس نیست/)).toBeVisible();
+  await expect(operations.getByRole('region', { name: 'وضعیت نگهداری', exact: true }).getByRole('status')).toHaveText('اجرایی ثبت نشده است');
   await operations.screenshot({ path: testInfo.outputPath('operations-fa.png') });
 });

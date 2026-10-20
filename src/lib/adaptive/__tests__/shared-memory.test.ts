@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readdir, readFile, rm } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -9,15 +9,17 @@ import { adaptiveOptionsFromManifest } from '../persistence/config';
 import { SharedMemoryRepository, type SharedDocument } from '../shared/repository';
 import { SharedMemoryService, type SharedAuthority } from '../shared/service';
 import type { SharedContainerView } from '../shared/contracts';
+import { SqliteAdaptiveStorage } from '../persistence/indexed/sqlite-storage';
 const roots: string[] = [];
-afterEach(async () => { await Promise.all(roots.splice(0).map(p => rm(p, { recursive: true, force: true }))); });
+const sqliteStores: SqliteAdaptiveStorage[] = [];
+afterEach(async () => { for (const storage of sqliteStores.splice(0)) storage.close(); await Promise.all(roots.splice(0).map(p => rm(p, { recursive: true, force: true }))); });
 const START = 1_800_000_000_000;
 function deferred() {
   let resolve!: () => void;
   const promise = new Promise<void>(done => { resolve = done; });
   return { promise, resolve };
 }
-async function setup() {
+async function setup(indexed = false) {
   const root = await mkdtemp(join(tmpdir(), 'vox-shared-')); roots.push(root);
   let now = START;
   const manifest = JSON.stringify({ schemaVersion: 1, configurationVersion: 'shared-synthetic', enabledCapabilities: ['core_text', 'personalization'],
@@ -26,7 +28,9 @@ async function setup() {
       jurisdiction: 'SYNTHETIC', capability, state: 'approved', configurationVersion: 'shared-synthetic', effectiveAt: START, reviewExpiresAt: START + 400 * 86400_000,
       owner: 'synthetic-owner', approvalReference: 'synthetic-only' })) });
   const privateDirectory = join(root, 'private'), sharedDirectory = join(root, 'shared');
-  const adaptive = new AdaptiveService(new AdaptiveRepository(new FileAdaptiveStorage(privateDirectory)), { ...adaptiveOptionsFromManifest(manifest), now: () => now });
+  const storage = indexed ? new SqliteAdaptiveStorage(join(privateDirectory, 'synthetic.sqlite'), { now: () => now }) : new FileAdaptiveStorage(privateDirectory);
+  if (storage instanceof SqliteAdaptiveStorage) sqliteStores.push(storage);
+  const adaptive = new AdaptiveService(new AdaptiveRepository(storage), { ...adaptiveOptionsFromManifest(manifest), now: () => now });
   for (const id of [101, 102, 103]) await adaptive.confirm(id, { confirm: true, adultConfirmed: true, declaredJurisdiction: 'EE' });
   const active = new Map([[101, true], [102, true], [103, true]]);
   let members = [101, 102], guests = false;
@@ -34,6 +38,14 @@ async function setup() {
     member: async id => ({ active: active.get(id) === true, agentIds: ['aria', 'other-agent'] }),
     group: async id => id === 'chat--100' ? { memberTelegramIds: members, hasGuests: guests, revision: digest([members, guests]) } : null,
     agent: async id => ({ active: ['aria', 'other-agent'].includes(id) }),
+    memberNow: id => ({ active: active.get(id) === true, agentIds: ['aria', 'other-agent'] }),
+    groupNow: id => id === 'chat--100' ? { memberTelegramIds: members, hasGuests: guests, revision: digest([members, guests]) } : null,
+    agentNow: id => ({ active: ['aria', 'other-agent'].includes(id) }),
+    readSnapshotNow: ({ telegramIds, agentId, groupIds }) => ({
+      members: telegramIds.map(id => ({ telegramId: id, active: active.get(id) === true, agentIds: ['aria', 'other-agent'] })),
+      agent: { active: ['aria', 'other-agent'].includes(agentId) },
+      groups: groupIds.map(id => ({ groupId: id, value: id === 'chat--100' ? { memberTelegramIds: [...members], hasGuests: guests, revision: digest([members, guests]) } : null })),
+    }),
   };
   const factory = () => new SharedMemoryService(new SharedMemoryRepository(new FileAdaptiveStorage(sharedDirectory), 'synthetic'), adaptive, authority, () => now);
   const service = factory();
@@ -53,10 +65,31 @@ async function setup() {
       receipt: presented.receipt, eventId: `grant-${space}-${id}` });
   }
   const command = (container: SharedContainerView, eventId: string) => ({ space: container.space, expectedRevision: container.revision, eventId });
-  return { service, adaptive, authority, factory, create, personalize, command, active, sharedDirectory, setNow: (value: number) => { now = value; }, setGroup: (ids: number[], hasGuests = false) => { members = ids; guests = hasGuests; } };
+  return { service, adaptive, storage, authority, factory, create, personalize, command, active, sharedDirectory, setNow: (value: number) => { now = value; }, setGroup: (ids: number[], hasGuests = false) => { members = ids; guests = hasGuests; } };
 }
 
 describe('durable explicit shared memory boundaries', () => {
+  it('rechecks indexed participants without private aggregates and returns matching body-free shared authority', async () => {
+    const ctx = await setup(true), storage = ctx.storage as SqliteAdaptiveStorage;
+    await ctx.personalize(101); await ctx.personalize(102);
+    const { container } = await ctx.create({ group: true, agents: ['aria'] });
+    for (const id of [101, 102]) await ctx.adaptive.withAccountDocument(id, (d, now) => {
+      d.memories = Array.from({ length: 300 }, (_, i) => ({ id: `private-${i}`, revision: 1, space: 'work', text: `PRIVATE_ACCOUNT_${id}_${i}`,
+        status: 'active', createdAt: now, updatedAt: now, expiresAt: now + 50_000, revocationEpoch: 0 })); d.revision++;
+    });
+    const audience = { audienceTelegramIds: [101, 102], groupId: 'chat--100' };
+    for (const k of Object.keys(storage.io) as (keyof typeof storage.io)[]) storage.io[k] = 0;
+    const before = await ctx.service.readContext(101, 'work', 'aria', audience);
+    expect(before.memories.map(m => m.text)).toEqual(['SHARED_CANARY']);
+    expect(await ctx.service.readContextAuthority(101, 'work', 'aria', audience)).toEqual({ revision: before.revision });
+    expect(storage.io.canonicalImageReads).toBe(0); expect(storage.io.bodyRowsRead).toBe(0);
+    await ctx.service.deleteMemory(101, container.id, container.memories[0].id, ctx.command(container, 'delete-shared'));
+    const deleted = await ctx.service.readContextAuthority(101, 'work', 'aria', audience);
+    expect(deleted.revision).not.toBe(before.revision);
+    expect((await ctx.service.readContext(101, 'work', 'aria', audience)).memories).toEqual([]);
+    ctx.setGroup([101, 102, 103]);
+    await expect(ctx.service.readContextAuthority(101, 'work', 'aria', audience)).rejects.toMatchObject({ code: 'audience_denied' });
+  });
   it('stores exact recipients separately and gives unrelated accounts no implicit access', async () => {
     const ctx = await setup(); const { container } = await ctx.create();
     expect(container.recipients.map(r => r.telegramId)).toEqual([101, 102]);
@@ -370,4 +403,80 @@ describe('durable explicit shared memory boundaries', () => {
     expect(raw).not.toContain('ORIGINAL_INTENT_CANARY'); expect(raw).not.toContain('TAMPERED_INTENT_CANARY');
   });
 
+});
+
+
+describe('shared committed transport authority', () => {
+  it('matches the async revision without private body reads and detects recipient/group changes', async () => {
+    const f = await setup(true); await f.personalize(101); await f.personalize(102); await f.create({ group: true, agents: ['aria'] });
+    const audience = { audienceTelegramIds: [101, 102], groupId: 'chat--100' };
+    const before = await f.service.readContext(101, 'work', 'aria', audience);
+    const storage = f.storage as SqliteAdaptiveStorage;
+    storage.io.canonicalImageReads = 0; storage.io.bodyRowsRead = 0;
+    expect(f.service.readContextAuthorityNow(101, 'work', 'aria', audience)).toMatchObject({ revision: before.revision });
+    expect(storage.io.canonicalImageReads).toBe(0); expect(storage.io.bodyRowsRead).toBe(0);
+    f.active.set(102, false); expect(() => f.service.readContextAuthorityNow(101, 'work', 'aria', audience)).toThrow('recipient_unavailable');
+    f.active.set(102, true); f.setGroup([101, 102, 103]);
+    expect(() => f.service.readContextAuthorityNow(101, 'work', 'aria', audience)).toThrow('audience_denied');
+  });
+  it('fails closed during a shared writer or unsupported Studio adapter', async () => {
+    const f = await setup(true), audience = { audienceTelegramIds: [101] };
+    await f.service.repository.transaction(() => {
+      expect(() => f.service.readContextAuthorityNow(101, 'work', 'aria', audience)).toThrow('Shared authority unavailable');
+    });
+    delete f.authority.memberNow;
+    expect(() => f.service.readContextAuthorityNow(101, 'work', 'aria', audience)).toThrow('authority_unavailable');
+  });
+  it('rejects expiry reached during shared parsing and exposes the earliest deadline', async () => {
+    const f = await setup(true); await f.personalize(101); const { container } = await f.create({ agents: ['aria'] });
+    await f.service.repository.transaction(d => { d.containers[0].memories[0].expiresAt = START + 10; });
+    const audience = { audienceTelegramIds: [101] };
+    await f.service.readContext(101, 'work', 'aria', audience);
+    expect(f.service.readContextAuthorityNow(101, 'work', 'aria', audience).validUntil).toBe(START + 10);
+    const read = f.service.repository.readCommittedForEffect.bind(f.service.repository);
+    const spy = vi.spyOn(f.service.repository, 'readCommittedForEffect').mockImplementation(() => { const d = read(); f.setNow(START + 11); return d; });
+    expect(() => f.service.readContextAuthorityNow(101, 'work', 'aria', audience)).toThrow('retention_changed');
+    spy.mockRestore();
+    expect((await f.service.list(101, 'work')).containers.find(c => c.id === container.id)?.memories).toEqual([]);
+  });
+});
+
+
+it.each(['shared_read', 'private_commit'] as const)('rechecks Studio membership after final %s I/O', async seam => {
+  const f = await setup(true); await f.personalize(101); await f.create({ agents: ['aria'] });
+  let calls = 0;
+  const storage = f.storage as SqliteAdaptiveStorage;
+  const read = f.service.repository.readCommittedForEffect.bind(f.service.repository), exec = storage.database.exec.bind(storage.database);
+  const spy = seam === 'shared_read' ? vi.spyOn(f.service.repository, 'readCommittedForEffect').mockImplementation((() => {
+    return () => { const result = read(); if (++calls === 2) f.active.set(101, false); return result; };
+  })()) : vi.spyOn(storage.database, 'exec').mockImplementation((() => {
+    return sql => { const result = exec(sql); if (sql === 'COMMIT' && ++calls === 3) f.active.set(101, false); return result; };
+  })());
+  try { expect(() => f.service.readContextAuthorityNow(101, 'work', 'aria', { audienceTelegramIds: [101] })).toThrow(); }
+  finally { spy.mockRestore(); }
+});
+it('persists a shared expiry first observed after the last shared read', async () => {
+  const f = await setup(true); await f.personalize(101); await f.create({ agents: ['aria'] });
+  await f.service.repository.transaction(d => { d.containers[0].memories[0].expiresAt = START + 10; });
+  const read = f.service.repository.readCommittedForEffect.bind(f.service.repository); let calls = 0;
+  const spy = vi.spyOn(f.service.repository, 'readCommittedForEffect').mockImplementation(() => { const result = read(); if (++calls === 2) f.setNow(START + 11); return result; });
+  try { expect(() => f.service.readContextAuthorityNow(101, 'work', 'aria', { audienceTelegramIds: [101] })).toThrow('retention_changed'); }
+  finally { spy.mockRestore(); }
+  expect((f.storage as SqliteAdaptiveStorage).readMetadata().lifecycleWatermark).toBeGreaterThanOrEqual(START + 11);
+  f.setNow(START + 5);
+  expect(() => f.service.readContextAuthorityNow(101, 'work', 'aria', { audienceTelegramIds: [101] })).toThrow();
+});
+
+it('uses one final Studio audience snapshot after all native/private reads', async () => {
+  const f = await setup(true); await f.personalize(101); await f.create({ agents: ['aria'] });
+  const audience = { audienceTelegramIds: [101] };
+  const initial = await f.service.readContextAuthority(101, 'work', 'aria', audience);
+  const final = f.authority.readSnapshotNow!.bind(f.authority);
+  const spy = vi.spyOn(f.authority, 'readSnapshotNow').mockImplementation(scope => { f.active.set(101, false); return final(scope); });
+  expect(() => f.service.readContextAuthorityNow(101, 'work', 'aria', audience)).toThrow('recipient_unavailable');
+  expect(spy).toHaveBeenCalledTimes(1); spy.mockRestore();
+  f.active.set(101, true);
+  expect(f.service.readContextAuthorityNow(101, 'work', 'aria', audience).revision).toBe(initial.revision);
+  delete f.authority.readSnapshotNow;
+  expect(() => f.service.readContextAuthorityNow(101, 'work', 'aria', audience)).toThrow('authority_unavailable');
 });

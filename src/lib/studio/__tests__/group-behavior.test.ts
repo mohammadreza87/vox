@@ -51,7 +51,8 @@ describe('group behavior service', () => {
     expect(view.groupBehavior).toEqual(behavior);
     const reloaded = new StudioStore(h.dir);
     const state = await reloaded.read();
-    expect(state.agents[0]).toEqual({ ...before.agents[0], groupBehavior: behavior });
+    expect(state.agents[0]).toEqual({ ...before.agents[0], groupBehavior: behavior,
+      learningAuthorityRevision: (before.agents[0].learningAuthorityRevision ?? 0) + 1 });
     expect(state.members).toEqual(before.members);
     expect(state.groups).toEqual(before.groups);
     expect(state.audit.slice(0, -1)).toEqual(before.audit);
@@ -63,6 +64,25 @@ describe('group behavior service', () => {
     expect(auditTime).toBeLessThanOrEqual(finished);
     const restarted = new Studio({ ...h.studio.deps, store: reloaded });
     expect((await restarted.getAgent(org.alice, agentId)).groupBehavior).toEqual(behavior);
+  });
+
+  it('keeps permission revisions increasing when group behavior is changed and restored', async () => {
+    const initial: GroupBehavior = { participation: 'balanced', remember: true };
+    await h.studio.setGroupBehavior(org.alice, agentId, initial);
+    const before = (await h.store.read()).agents[0];
+    for (const [index, behavior] of [
+      { participation: 'mentions', remember: false },
+      { participation: 'active', remember: false },
+      initial,
+    ].entries()) {
+      await h.studio.setGroupBehavior(org.alice, agentId, behavior);
+      const persisted = (await new StudioStore(h.dir).read()).agents[0];
+      expect(persisted.groupBehavior).toEqual(behavior);
+      expect(persisted.learningAuthorityRevision).toBe(before.learningAuthorityRevision! + index + 1);
+    }
+    const restored = (await new StudioStore(h.dir).read()).agents[0];
+    expect(restored.groupBehavior).toEqual(before.groupBehavior);
+    expect(restored.learningAuthorityRevision).toBeGreaterThan(before.learningAuthorityRevision!);
   });
 
   it.each(['alice', 'admin', 'superadmin'] as const)('allows %s to manage this agent’s group settings', async role => {

@@ -4,7 +4,8 @@ import type { RelationshipKey, RelationshipState } from '../../relationships';
 import { hire, ID, makeStudio, seedOrg } from './helpers';
 
 it('suppresses delivery when stop completes between the durable fence and transport', async () => {
-  const h = makeStudio(); const people = await seedOrg(h); const hired = await hire(h, people.alice);
+  // Legacy relationship loop: adaptive runtimes refuse unscoped relationship state.
+  const h = makeStudio({ adaptive: false }); const people = await seedOrg(h); const hired = await hire(h, people.alice);
   const key: RelationshipKey = { personaId: hired.agent.id, chatKey: `private-tg-${ID.alice}`, audience: { kind: 'private', personId: `tg-${ID.alice}` } };
   let stopCompleted = false;
   class InterleavingStore extends InMemoryRelationshipStore {

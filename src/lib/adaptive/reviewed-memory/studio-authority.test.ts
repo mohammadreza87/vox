@@ -3,7 +3,7 @@ import {preferenceFixture,NOW} from '@/lib/adaptive/personalization/__tests__/fi
 import {makeStudio,seedOrg,hire,ID} from '@/lib/studio/__tests__/helpers';
 import {AnthropicLLM} from '@/lib/tireh/llm';import {handleAdaptiveRequest} from '@/lib/adaptive/persistence/http';import {signInitData} from '@/lib/studio/auth';
 it('a real block/unblock round trip invalidates the previously signed summary preview',async()=>{
- const h=makeStudio();const users=await seedOrg(h);const {agent}=await hire(h,users.alice,{},undefined,'private');
+ const h=makeStudio({adaptive:false});const users=await seedOrg(h);const {agent}=await hire(h,users.alice,{},undefined,'private');
  const f=await preferenceFixture({file:true,telegramId:ID.alice,agentId:agent.id});
  try{
  h.studio.deps.adaptive=f.adaptive;h.studio.deps.now=()=>new Date(NOW);await f.agent();await h.store.update(s=>{s.agents.find(a=>a.id===agent.id)!.blocked=[]});

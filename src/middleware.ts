@@ -119,6 +119,12 @@ const PERMISSIONS_POLICY = [
 
 export function middleware(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
+  const guestPage = pathname === '/privacy';
+  const guestGet = ['/api/guest-rights', '/api/guest-rights/operations/requests'].includes(pathname) && request.method === 'GET';
+  const guestPost = ['/api/guest-rights/draft', '/api/guest-rights/requests', '/api/guest-rights/status', '/api/guest-rights/close', '/api/guest-rights/operations/actions'].includes(pathname) && request.method === 'POST';
+  const guestApi = (guestGet || guestPost) && request.nextUrl.search === '';
+  const guest = guestPage || guestApi;
+
   if (process.env.STUDIO_ONLY === '1') {
     if (pathname === '/') {
       // Next's middleware adapter requires an absolute redirect URL. A tunnel
@@ -140,7 +146,7 @@ export function middleware(request: NextRequest) {
     }
     const brokerControl = pathname === '/api/connections/broker' && request.method === 'POST' &&
       request.nextUrl.search === '' && hasBrokerControlConfiguration();
-    if (!brokerControl && !isPathOrChild(pathname, '/studio') && !isPathOrChild(pathname, '/api/studio') &&
+    if (!brokerControl && !guest && !isPathOrChild(pathname, '/studio') && !isPathOrChild(pathname, '/api/studio') &&
       !pathname.startsWith('/_next/static/') && pathname !== '/favicon.ico') {
       return new NextResponse(null, { status: 404, headers: { 'Cache-Control': 'no-store' } });
     }
@@ -159,13 +165,13 @@ export function middleware(request: NextRequest) {
   const isMiniApp = isPathOrChild(pathname, '/studio');
   if (!isMiniApp) response.headers.set('X-Frame-Options', 'DENY');
   response.headers.set('X-XSS-Protection', '1; mode=block');
-  response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+  response.headers.set('Referrer-Policy', guest ? 'no-referrer' : 'strict-origin-when-cross-origin');
   // self refers to the Studio origin even when Telegram embeds it. Telegram's
   // parent iframe must delegate microphone access; no wildcard is needed here.
-  response.headers.set('Permissions-Policy', PERMISSIONS_POLICY);
+  response.headers.set('Permissions-Policy', guest ? PERMISSIONS_POLICY.replace('camera=(self)', 'camera=()').replace('microphone=(self)', 'microphone=()').replace('payment=(self)', 'payment=()') : PERMISSIONS_POLICY);
 
   // CSP - use report-only in development to avoid blocking
-  const csp = buildCSP(isDev, isMiniApp);
+  const csp = guest ? ["default-src 'none'", "script-src 'self' 'unsafe-inline'", "style-src 'self' 'unsafe-inline'", "connect-src 'self'", "img-src 'self' data:", "font-src 'self'", "base-uri 'none'", "form-action 'self'", "frame-ancestors 'none'", "object-src 'none'", "media-src 'none'"].join('; ') : buildCSP(isDev, isMiniApp);
   if (isDev) {
     response.headers.set('Content-Security-Policy-Report-Only', csp);
   } else {

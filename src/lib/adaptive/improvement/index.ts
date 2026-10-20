@@ -7,7 +7,7 @@ export const improvementCandidateSchema = z.object({
   candidateRevision: revision, artifactDigest: digest, problemCode: z.enum(['audio_cancellation', 'latency_regression', 'routing_quality', 'response_style']),
   evidenceIds: z.array(id).min(1).max(32), evidenceKind: z.enum(['synthetic', 'approved_aggregate']),
   changedPaths: z.array(z.string().min(1).max(256)).min(1).max(64),
-  evaluatorVersion: id, datasetVersion: id, promotionPolicyVersion: id,
+  evaluatorVersion: id, datasetVersion: id, promotionPolicyVersion: id, evaluationProtocolDigest: digest.optional(),
   rollbackRevision: revision, createdAt: z.number().int().nonnegative(),
 }).strict().refine(c => c.baselineRevision !== c.candidateRevision && c.rollbackRevision === c.baselineRevision);
 export type ImprovementCandidate = z.infer<typeof improvementCandidateSchema>;
@@ -37,12 +37,14 @@ export interface EvaluationReceipt {
   readonly failedChecks: number;
   readonly skippedChecks: number;
   readonly testedAt: number;
+  readonly evaluationProtocolDigest?: string;
 }
 const evaluationReceiptSchema = z.object({
   candidateId: id, candidateRevision: revision, artifactDigest: digest, evaluatorServiceId: id,
   evaluatorVersion: id, datasetVersion: id, promotionPolicyVersion: id, baselineRevision: revision,
   status: z.enum(['passed', 'failed', 'incomplete']), privacyFailures: z.number().int().nonnegative(),
   failedChecks: z.number().int().nonnegative(), skippedChecks: z.number().int().nonnegative(),
+  evaluationProtocolDigest: digest.optional(),
   testedAt: z.number().int().nonnegative().safe(),
 }).strict();
 export type PromotionReadiness = { ready: false; reason: 'invalid_candidate' | 'protected_path' | 'missing_evaluation' | 'untrusted_receipt' | 'self_evaluation' | 'version_mismatch' | 'failed' | 'human_release_required' } |
@@ -54,6 +56,7 @@ export type PromotionReadiness = { ready: false; reason: 'invalid_candidate' | '
 export async function assessPromotion(input: unknown, receipt: EvaluationReceipt | undefined, gate: {
   now: number;
   verifyReceipt: (receipt: EvaluationReceipt) => Promise<boolean>;
+  verifyProtocol?: (candidate: ImprovementCandidate, receipt: EvaluationReceipt) => Promise<boolean>;
   humanApproved: (candidate: ImprovementCandidate) => Promise<boolean>;
 }): Promise<PromotionReadiness> {
   const parsed = improvementCandidateSchema.safeParse(input);
@@ -68,7 +71,11 @@ export async function assessPromotion(input: unknown, receipt: EvaluationReceipt
   if (receipt.candidateId !== candidate.id || receipt.candidateRevision !== candidate.candidateRevision ||
       receipt.artifactDigest !== candidate.artifactDigest || receipt.baselineRevision !== candidate.baselineRevision ||
       receipt.evaluatorVersion !== candidate.evaluatorVersion || receipt.datasetVersion !== candidate.datasetVersion ||
-      receipt.promotionPolicyVersion !== candidate.promotionPolicyVersion || receipt.testedAt < candidate.createdAt || receipt.testedAt > gate.now) return { ready: false, reason: 'version_mismatch' };
+      receipt.promotionPolicyVersion !== candidate.promotionPolicyVersion || receipt.evaluationProtocolDigest !== candidate.evaluationProtocolDigest || receipt.testedAt < candidate.createdAt || receipt.testedAt > gate.now) return { ready: false, reason: 'version_mismatch' };
+  if (candidate.evaluationProtocolDigest) {
+    try { if (!gate.verifyProtocol || !await gate.verifyProtocol(candidate, receipt)) return { ready: false, reason: 'untrusted_receipt' }; }
+    catch { return { ready: false, reason: 'untrusted_receipt' }; }
+  }
   if (receipt.status !== 'passed' || receipt.privacyFailures !== 0 || receipt.failedChecks !== 0 || receipt.skippedChecks !== 0) return { ready: false, reason: 'failed' };
   try { if (!await gate.humanApproved(candidate)) return { ready: false, reason: 'human_release_required' }; }
   catch { return { ready: false, reason: 'human_release_required' }; }

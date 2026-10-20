@@ -1,3 +1,5 @@
+import { productPauseSchema, PRODUCT_PAUSE_RESERVED_BYTES, type ProductPauseV1, type ProductPauseUseControlsV1 } from '../product-pause/contracts';
+import { emptyProductPause } from '../product-pause/state';
 import { createHash } from 'crypto';
 import { z } from 'zod';
 import type { ConsentEvent } from '../consent';
@@ -43,7 +45,7 @@ const eventSchema = z.object({ eventId: id, fingerprint: id, kind: id, resultId:
 const outboxSchema = z.object({ eventId: id, kind: z.enum(['consent_changed', 'memory_deleted', 'agent_grant_changed']), space,
   personId: id, revision, memoryId: id.optional(), agentId: id.optional(), epoch: integer, createdAt: integer,
 }).strict();
-const documentSchema = z.object({ schemaVersion: z.literal(1), accountId: id, personId: id, revision,
+const legacyDocumentSchema = z.object({ schemaVersion: z.literal(1), accountId: id, personId: id, revision,
   createdAt: integer, updatedAt: integer, binding: bindingSchema.optional(),
   declaration: z.object({ adultConfirmed: z.boolean(), declaredAt: integer, declaredJurisdiction: z.string().max(20).optional() }).strict().optional(),
   permissions: z.array(permissionSchema).max(16), receipts: z.array(receiptSchema).max(100),
@@ -54,24 +56,93 @@ const documentSchema = z.object({ schemaVersion: z.literal(1), accountId: id, pe
   observer: observerDocumentSchema.default(emptyObserverDocument),
   consentEvents: z.array(z.unknown()).max(2000), outbox: z.array(outboxSchema).max(2000),
 }).strict();
-export type AdaptiveDocument = Omit<z.infer<typeof documentSchema>, 'permissions' | 'binding' | 'consentEvents'> & {
+const productPauseDocumentSchema = legacyDocumentSchema.extend({ schemaVersion: z.literal(2), productPause: productPauseSchema }).strict();
+const documentSchema = z.union([legacyDocumentSchema, productPauseDocumentSchema]);
+export type AdaptiveDocument = Omit<z.infer<typeof legacyDocumentSchema>, 'schemaVersion' | 'permissions' | 'binding' | 'consentEvents'> & {
+  schemaVersion: 1 | 2; productPause?: ProductPauseV1;
   permissions: ConsentPermission[]; binding?: PersonAccountBinding; consentEvents: ConsentEvent[];
 };
+/** Canonical facts needed to evaluate identity and current capability policy.
+ * A body-free projection is this type, never a fabricated AdaptiveDocument. */
+export type AdaptiveAuthorityDocument = Pick<AdaptiveDocument,
+  'schemaVersion' | 'accountId' | 'personId' | 'createdAt' | 'binding' | 'declaration' | 'permissions' | 'agentGrants'> & { productPause?: ProductPauseV1 | ProductPauseUseControlsV1 };
 export function digest(value: unknown): string { return createHash('sha256').update(JSON.stringify(value)).digest('hex'); }
 export const accountIdFor = (telegramId: number) => `telegram-account:${telegramId}`;
 export const tenantIdFor = (accountId: string) => `private-tenant:${digest(accountId).slice(0, 24)}`;
 export const spaceIdFor = (accountId: string, space: SpaceKind) => `${tenantIdFor(accountId)}:${space}`;
 export const containerIdFor = (accountId: string, space: SpaceKind) => `${spaceIdFor(accountId, space)}:private`;
 
-function create(accountId: string, now: number): AdaptiveDocument {
+function create(accountId: string, now: number, schemaVersion: 1 | 2 = 1): AdaptiveDocument {
   const personId = `account-profile:${digest(accountId).slice(0, 32)}`;
-  return { schemaVersion: 1, accountId, personId, revision: 1, createdAt: now, updatedAt: now,
+  return { schemaVersion, ...(schemaVersion === 2 ? { productPause: emptyProductPause() } : {}), accountId, personId, revision: 1, createdAt: now, updatedAt: now,
     experience: emptyExperience(), relationships: emptyRelationshipDocument(), observer: emptyObserverDocument(), permissions: (['work', 'personal'] as const).flatMap(s => OPTIONAL_PURPOSES.map(p => ({
       schemaVersion: 1 as const, id: `permission:${s}:${p}`, revision: 1, createdAt: now, updatedAt: now,
       tenantId: tenantIdFor(accountId), spaceId: spaceIdFor(accountId, s), personId, purpose: p,
       purposeVersion: 1, policyVersion: ADAPTIVE_POLICY_VERSION, state: 'not_asked' as const,
       epoch: 0, effectiveAt: now, expiresAt: now,
     }))), receipts: [], agentGrants: [], memories: [], events: [], consentEvents: [], outbox: [] };
+}
+
+/** Strict complete canonical document validation shared with transactional indexed storage.
+ * Partial authority projections must use their own schema, never this function. */
+export function validateAdaptiveDocument(value: unknown, accountId: string, now: number): AdaptiveDocument {
+  if (!/^telegram-account:[1-9]\d{0,15}$/.test(accountId) || !Number.isSafeInteger(now) || now < 0) throw new Error('Invalid adaptive account');
+  const draft = documentSchema.parse(value) as AdaptiveDocument;
+  if (draft.accountId !== accountId || draft.personId !== create(accountId, now).personId || draft.updatedAt > now ||
+      new Set(draft.permissions.map(p => p.id)).size !== 16 || draft.permissions.length !== 16 ||
+      new Set(draft.events.map(e => e.eventId)).size !== draft.events.length ||
+      new Set(draft.memories.map(m => m.id)).size !== draft.memories.length ||
+      new Set(draft.observer.events.map(e => e.id)).size !== draft.observer.events.length) throw new Error('Invalid adaptive document');
+  // Validate immutable partition keys. Corrupt identity/scope cannot become authoritative.
+  for (const s of ['work', 'personal'] as const) for (const p of OPTIONAL_PURPOSES) {
+    const permission = draft.permissions.find(row => row.id === `permission:${s}:${p}`);
+    if (!permission || permission.personId !== draft.personId || permission.purpose !== p ||
+        permission.tenantId !== tenantIdFor(accountId) || permission.spaceId !== spaceIdFor(accountId, s)) throw new Error('Invalid adaptive permission');
+  }
+  if (new Set(draft.relationships.controls.map(c => digest([c.agentId, c.space]))).size !== draft.relationships.controls.length ||
+      new Set(draft.relationships.bindings.map(b => b.space)).size !== draft.relationships.bindings.length ||
+      draft.relationships.bindings.some(b => b.accountId !== accountId || b.personId !== draft.personId || b.confirmedAt > b.expiresAt || b.confirmedAt > now) ||
+      new Set(draft.relationships.sources.map(s => digest([s.key.personaId, s.key.scope.space, s.id]))).size !== draft.relationships.sources.length ||
+      new Set(draft.relationships.inbox.map(i => i.id)).size !== draft.relationships.inbox.length ||
+      new Set(draft.relationships.ledger.map(i => i.id)).size !== draft.relationships.ledger.length) throw new Error('Invalid relationship authority');
+  for (const key of [...draft.relationships.sources.map(s => s.key), ...draft.relationships.inbox.map(i => i.key), ...draft.relationships.ledger.map(i => i.key)]) {
+    const scope = key.scope;
+    if (scope.accountId !== accountId || scope.personId !== draft.personId || scope.tenantId !== tenantIdFor(accountId) ||
+        scope.spaceId !== spaceIdFor(accountId, scope.space) || scope.containerId !== containerIdFor(accountId, scope.space) ||
+        key.audience.personId !== draft.personId || key.chatKey !== `private-${draft.personId}`) throw new Error('Invalid relationship partition');
+  }
+  if (draft.schemaVersion === 2) {
+    if (draft.productPause!.scopes.some(s => s.latest && s.latest.recordedAt > now)) throw new Error('Invalid pause receipt time');
+    requireProductPauseCapacity(draft);
+  }
+  return draft;
+}
+
+/** The old fourteen-purpose normalization is limited to exact supported v1;
+ * full validation follows before it can become canonical or be converted. */
+export function normalizeLegacyAdaptiveDocument(raw: unknown, accountId: string, now: number): unknown {
+  if (raw && typeof raw === 'object' && 'schemaVersion' in raw && raw.schemaVersion === 1 &&
+      'permissions' in raw && Array.isArray(raw.permissions) && raw.permissions.length === 14) {
+    const old = raw.permissions, expected = create(accountId, now).permissions.filter(p => p.purpose !== 'optional.relationship_outreach');
+    if (old.every(p => p && typeof p === 'object' && 'id' in p) && new Set(old.map(p => p.id)).size === 14 &&
+        expected.every(p => old.some(row => row.id === p.id && row.purpose === p.purpose)))
+      return { ...raw, permissions: [...old, ...create(accountId, now).permissions.filter(p => p.purpose === 'optional.relationship_outreach')] };
+  }
+  return raw;
+}
+/** Explicit transition-only initialization. V2 corruption never enters this path. */
+export function upgradeLegacyAdaptiveDocumentV1ForProductPause(raw: unknown, accountId: string, now: number): AdaptiveDocument {
+  const legacy = validateAdaptiveDocument(normalizeLegacyAdaptiveDocument(raw, accountId, now), accountId, now);
+  if (legacy.schemaVersion !== 1) throw new Error('Product pause conversion requires legacy v1');
+  return validateAdaptiveDocument({ ...legacy, schemaVersion: 2, productPause: emptyProductPause() }, accountId, now);
+}
+export function requireProductPauseCapacity(document: AdaptiveDocument): void {
+  if (document.schemaVersion !== 2) return;
+  const { productPause, ...payload } = document;
+  // Count the complete property wrapper as part of the reserved block.
+  if (Buffer.byteLength(JSON.stringify({ productPause })) > PRODUCT_PAUSE_RESERVED_BYTES ||
+      Buffer.byteLength(JSON.stringify(payload)) > 700_000 - PRODUCT_PAUSE_RESERVED_BYTES ||
+      Buffer.byteLength(JSON.stringify(document)) > 700_000) throw new Error('Product pause reserved capacity exceeded');
 }
 
 export class AdaptiveRepository {
@@ -84,12 +155,7 @@ export class AdaptiveRepository {
     const now = typeof at === 'function' ? at() : at;
     if (!Number.isSafeInteger(now) || now < 0) throw new Error('Invalid adaptive account');
     if (result.document === null) return { status: 'ready', document: null };
-    const document = documentSchema.parse(result.document) as AdaptiveDocument;
-    if (document.accountId !== accountId || document.personId !== create(accountId, now).personId || document.updatedAt > now || document.permissions.length !== 16 || new Set(document.permissions.map(p => p.id)).size !== 16) throw new Error('Invalid adaptive document');
-    for (const space of ['work', 'personal'] as const) for (const purpose of OPTIONAL_PURPOSES) {
-      const p = document.permissions.find(p => p.id === `permission:${space}:${purpose}`);
-      if (!p || p.personId !== document.personId || p.purpose !== purpose || p.tenantId !== tenantIdFor(accountId) || p.spaceId !== spaceIdFor(accountId, space)) throw new Error('Invalid adaptive permission');
-    }
+    const document = validateAdaptiveDocument(result.document, accountId, now);
     return { status: 'ready', document };
   }
   transaction<T>(accountId: string, at: number | (() => number), fn: (document: AdaptiveDocument, now: number) => T, beforeCommit?: () => void): Promise<T> {
@@ -98,45 +164,12 @@ export class AdaptiveRepository {
     return this.storage.transact(accountId, current => {
       // Sample after the backend acquires its serialization/lock and reads the
       // committed document. The same time drives validation and business expiry.
-      const now = typeof at === 'function' ? at() : at;
+      const now = typeof at === 'function' ? this.storage.sampleClock?.(at) ?? at() : at;
       if (!Number.isSafeInteger(now) || now < 0) throw new Error('Invalid adaptive account');
-      // Only an exact, otherwise valid old 14-purpose document is upgraded. Existing
-      // permissions and receipts are preserved; the new purpose starts unasked.
-      let input = current;
-      if (input && typeof input === 'object' && 'permissions' in input && Array.isArray(input.permissions) && input.permissions.length === 14) {
-        const old = input.permissions;
-        const expected = create(accountId, now).permissions.filter(p => p.purpose !== 'optional.relationship_outreach');
-        if (old.every(p => p && typeof p === 'object' && 'id' in p) && new Set(old.map(p => p.id)).size === 14 &&
-            expected.every(p => old.some(row => row.id === p.id && row.purpose === p.purpose))) {
-          input = { ...input, permissions: [...old, ...create(accountId, now).permissions.filter(p => p.purpose === 'optional.relationship_outreach')] };
-        }
-      }
-      const draft = input === null ? create(accountId, now) : documentSchema.parse(input) as AdaptiveDocument;
-      if (draft.accountId !== accountId || draft.personId !== create(accountId, now).personId || draft.updatedAt > now ||
-          new Set(draft.permissions.map(p => p.id)).size !== 16 || draft.permissions.length !== 16 ||
-          new Set(draft.events.map(e => e.eventId)).size !== draft.events.length ||
-          new Set(draft.memories.map(m => m.id)).size !== draft.memories.length ||
-          new Set(draft.observer.events.map(e => e.id)).size !== draft.observer.events.length) throw new Error('Invalid adaptive document');
-      // Validate immutable partition keys. Corrupt identity/scope cannot become authoritative.
-      for (const s of ['work', 'personal'] as const) for (const p of OPTIONAL_PURPOSES) {
-        const permission = draft.permissions.find(row => row.id === `permission:${s}:${p}`);
-        if (!permission || permission.personId !== draft.personId || permission.purpose !== p ||
-            permission.tenantId !== tenantIdFor(accountId) || permission.spaceId !== spaceIdFor(accountId, s)) throw new Error('Invalid adaptive permission');
-      }
-      if (new Set(draft.relationships.controls.map(c => digest([c.agentId, c.space]))).size !== draft.relationships.controls.length ||
-          new Set(draft.relationships.bindings.map(b => b.space)).size !== draft.relationships.bindings.length ||
-          draft.relationships.bindings.some(b => b.accountId !== accountId || b.personId !== draft.personId || b.confirmedAt > b.expiresAt || b.confirmedAt > now) ||
-          new Set(draft.relationships.sources.map(s => digest([s.key.personaId, s.key.scope.space, s.id]))).size !== draft.relationships.sources.length ||
-          new Set(draft.relationships.inbox.map(i => i.id)).size !== draft.relationships.inbox.length ||
-          new Set(draft.relationships.ledger.map(i => i.id)).size !== draft.relationships.ledger.length) throw new Error('Invalid relationship authority');
-      for (const key of [...draft.relationships.sources.map(s => s.key), ...draft.relationships.inbox.map(i => i.key), ...draft.relationships.ledger.map(i => i.key)]) {
-        const scope = key.scope;
-        if (scope.accountId !== accountId || scope.personId !== draft.personId || scope.tenantId !== tenantIdFor(accountId) ||
-            scope.spaceId !== spaceIdFor(accountId, scope.space) || scope.containerId !== containerIdFor(accountId, scope.space) ||
-            key.audience.personId !== draft.personId || key.chatKey !== `private-${draft.personId}`) throw new Error('Invalid relationship partition');
-      }
+      const input = normalizeLegacyAdaptiveDocument(current, accountId, now);
+      const draft = input === null ? create(accountId, now, this.storage.canonicalSchemaVersion ?? 1) : validateAdaptiveDocument(input, accountId, now);
       const result = fn(draft, now);
-      documentSchema.parse(draft);
+      validateAdaptiveDocument(draft, accountId, this.storage.sampleClock?.(() => typeof at === 'function' ? at() : at) ?? now);
       // Keep the disabled rollout readable by the previous strict schema. A
       // future enabled observer rollout needs an explicit rollback migration;
       // never restore an old account backup over newer rights/tombstones.

@@ -1,3 +1,5 @@
+import { trustedStudioRequestOrigin } from './request-origin';
+import { hasCommittedPersonalizationTransport } from '../adaptive/persistence/indexed-private-context';
 import { isSchemaValidationError } from '../error-contract';
 import { logicalTurnSchema } from '../adaptive/personalization/learning/contracts';
 import { z } from 'zod';
@@ -9,6 +11,7 @@ import { StudioRateLimiter, StudioRateLimitError } from './ratelimit';
 import { personId } from './org-bridge';
 import { beginObservation } from './observation';
 import { digest } from '../adaptive/persistence/repository';
+import type { DirectAuthorityEvaluator } from '../adaptive/persistence/authority';
 import { AdaptiveError } from '../adaptive/persistence/service';
 import { minimizeImageDataUrl, MAX_IMAGE_URL_LENGTH } from '../adaptive/prediction/image';
 import { LLMAuthorizationError, type LLMImage } from '../tireh/llm';
@@ -39,7 +42,9 @@ export async function handleConversationRequest(studio: Studio, request: Request
     if (member.role === 'pending') return json({ error: 'approval_required' }, 403);
     const url = new URL(request.url);
     if (request.method !== 'POST') return json({ error: 'not_found' }, 404);
-    if (request.headers.get('origin') !== url.origin || request.headers.get('sec-fetch-site') === 'cross-site') return json({ error: 'origin_denied' }, 403);
+    const expectedOrigin = trustedStudioRequestOrigin(url, studio.deps.webAppUrl);
+    if (!expectedOrigin) return json({ error: 'origin_unavailable' }, 503);
+    if (request.headers.get('origin') !== expectedOrigin || request.headers.get('sec-fetch-site') === 'cross-site') return json({ error: 'origin_denied' }, 403);
     if (request.headers.get('content-type')?.split(';')[0].trim().toLowerCase() !== 'application/json') return json({ error: 'json_required' }, 415);
     await limiter.consume('mutation', user.id);
     const bounded = await boundedStudioRequest(request, MAX_IMAGE_URL_LENGTH + 20_000);
@@ -47,14 +52,29 @@ export async function handleConversationRequest(studio: Studio, request: Request
     try { body = await bounded.json(); } catch { return json({ error: 'invalid_json' }, 400); }
     const input = inputSchema.parse(body);
     const adaptive = studio.deps.adaptive;
+    const indexed = hasCommittedPersonalizationTransport(adaptive.repository.storage);
+    const scopeEvaluation: DirectAuthorityEvaluator<string | null> = (d, now, namespace) => {
+        const core = adaptive.capabilityStatus(d, 'core_text', now);
+        const imagePolicy = input.image ? adaptive.capabilityStatus(d, 'single_party_image', now) : null;
+        const allowed = adaptive.isCoreAllowed(d, now) && d.agentGrants.some(g => g.agentId === input.agentId && g.space === input.space && g.allowed) &&
+          (!imagePolicy || imagePolicy.eligible);
+        return {value: allowed ? digest([namespace, adaptive.coreFingerprint(d, now), d.agentGrants.filter(g => g.agentId === input.agentId && g.space === input.space), imagePolicy]) : null,
+          denied: !allowed, ...(allowed ? {deadline: Math.min(d.binding!.expiresAt, core.validUntil ?? now, imagePolicy?.validUntil ?? Number.MAX_SAFE_INTEGER)} : {})};
+      };
     const authority = async (): Promise<string | null> => {
-      const currentScope = () => adaptive.withAccountDocument(user.id, (d, now) => {
+      const currentScope = () => indexed ? adaptive.withDirectAuthority(user.id, input.space, scopeEvaluation) : adaptive.withAccountDocument(user.id, (d, now) => {
         const imagePolicy = input.image ? adaptive.capabilityStatus(d, 'single_party_image', now) : null;
         if (!adaptive.isCoreAllowed(d, now) || !d.agentGrants.some(g => g.agentId === input.agentId && g.space === input.space && g.allowed) ||
             (imagePolicy && !imagePolicy.eligible)) return null;
         return digest([adaptive.coreFingerprint(d, now), d.agentGrants.filter(g => g.agentId === input.agentId && g.space === input.space), imagePolicy]);
       });
       const scope = await currentScope();
+      if (indexed) {
+        if (!scope) return null;
+        const studioAuthority = await studio.replyAuthority(input.agentId, user.id);
+        if (await currentScope() !== scope || await studio.replyAuthority(input.agentId, user.id) !== studioAuthority) return null;
+        return digest([scope, studioAuthority]);
+      }
       const context = scope ? await studio.adaptiveContext(input.agentId, personId(user.id), input.space) : null;
       const studioAllowed = async () => {
         const state = await studio.deps.store.read();
@@ -69,6 +89,14 @@ export async function handleConversationRequest(studio: Studio, request: Request
       // await must be seen at the provider callback, before any content export.
       // These fresh fences do not make the two storage systems atomic.
       return await studioAllowed() ? digest([scope, context?.revision]) : null;
+    };
+    const authorityNow = (): string | null => {
+      if (!indexed) return null;
+      const scope = adaptive.readDirectAuthorityForEffect(user.id, input.space, scopeEvaluation);
+      if (scope.status !== 'ready' || !scope.value) return null;
+      const studioAuthority = studio.replyAuthorityNow(input.agentId, user.id);
+      const current = adaptive.readDirectAuthorityForEffect(user.id, input.space, scopeEvaluation);
+      return current.status === 'ready' && current.value === scope.value ? digest([scope.value, studioAuthority]) : null;
     };
     const before = await authority();
     if (!before) return json({ error: 'conversation_not_permitted' }, 403);
@@ -88,8 +116,11 @@ export async function handleConversationRequest(studio: Studio, request: Request
     if (request.signal.aborted || await authority() !== before) {
       await observe('cancelled'); return json({ error: 'conversation_changed' }, 409);
     }
+    let contextFence: (() => boolean) | undefined;
     const reply = await observe.run(() => gateway.converse(input.agentId, personId(user.id), input.text, { space: input.space, images,
-      authorize: async () => !request.signal.aborted && await authority() === before }));
+      authorize: async () => !request.signal.aborted && await authority() === before,
+      ...(indexed ? {authorizeNow: () => !request.signal.aborted && authorityNow() === before,
+        onBoundaryFence: (fence: () => boolean) => {contextFence = fence;}} : {}) }));
     // Gateway also checks memory/source policy around provider export and output.
     if (request.signal.aborted || await authority() !== before) {
       await observe('cancelled'); return json({ error: 'conversation_changed' }, 409);
@@ -100,7 +131,20 @@ export async function handleConversationRequest(studio: Studio, request: Request
     }
     if (input.turn && !input.image) studio.deps.preferenceLearning?.enqueue({ telegramId: user.id, agentId: input.agentId,
       space: input.space, turn: input.turn, text: input.text }, request.signal);
-    return json({ reply, ...(correlation ? { turnId: correlation } : {}) });
+    // An experiment may only decorate an already authorized response. Failure
+    // to prepare optional presentation keeps the normal conversation working.
+    const presentation = correlation && studio.deps.experiments
+      ? await studio.deps.experiments.prepare(user.id, input.agentId, input.space, correlation).catch(() => undefined)
+      : undefined;
+    if (correlation && studio.deps.experiments && (request.signal.aborted || await authority() !== before)) {
+      await observe('cancelled'); return json({ error: 'conversation_changed' }, 409);
+    }
+    let currentPresentation;
+    try {
+      if (presentation && studio.deps.experiments?.current(user.id, input.agentId, input.space, presentation)) currentPresentation = presentation;
+    } catch { /* Optional presentation failure retains the normal reply. */ }
+    if (indexed && (request.signal.aborted || !contextFence || !contextFence())) return json({error: 'conversation_changed'}, 409);
+    return json({ reply, ...(correlation ? { turnId: correlation } : {}), ...(currentPresentation ? { responsePresentation: currentPresentation } : {}) });
   } catch (error) {
     await observe?.(request.signal.aborted || LLMAuthorizationError.is(error) ? 'cancelled' : 'failed');
     if (LLMAuthorizationError.is(error)) return json({ error: 'conversation_changed' }, 409);

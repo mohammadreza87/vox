@@ -4,6 +4,7 @@ import { promises as fs } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
+import { protocolReceiptSchema, protocolReservationSchema, type ProtocolReservation, type ProtocolReceipt } from './evaluation/contracts';
 import { assessPromotion, improvementCandidateSchema, type ImprovementCandidate, type EvaluationReceipt } from './index';
 import { approvalSchema, canonical, evaluationDetailsSchema, findingSchema, hash, identifier, proposalSchema, protectedEvaluationSchema, routingArtifactSchema,
   validateTrust, verifyAttestation, routeCancellation, type Attestation, type HumanApproval, type MinimizedFinding, type Proposal, type RoutingArtifact, type TrustStore } from './contracts';
@@ -11,9 +12,9 @@ export interface ProtectedEvaluation {
   receipt: EvaluationReceipt;
   details: z.infer<typeof evaluationDetailsSchema>;
 }
-interface CandidateRecord { candidate: ImprovementCandidate; proposalId: string; authorKeyId: string; evaluation?: Attestation<ProtectedEvaluation>; approval?: Attestation<HumanApproval> }
+interface CandidateRecord { candidate: ImprovementCandidate; proposalId: string; authorKeyId: string; protocol?: Attestation<ProtocolReceipt>; protocolReservation?: Attestation<ProtocolReservation>; evaluation?: Attestation<ProtectedEvaluation>; approval?: Attestation<HumanApproval> }
 interface State { findings: Record<string, MinimizedFinding>; proposals: Record<string, Proposal>; candidates: Record<string, CandidateRecord>;
-  revokedLineages: string[]; finalUses: string[]; rollbacks: Record<string, RollbackReceipt>; operations: Record<string, string> }
+  revokedLineages: string[]; finalUses: string[]; protocolUses?: string[]; rollbacks: Record<string, RollbackReceipt>; operations: Record<string, string> }
 interface Event { sequence: number; previous: string; action: string; operationId: string; at: number; state: State; digest: string }
 export interface RollbackReceipt { candidateId: string; artifactDigest: string; restoredRevision: string; restoredArtifactDigest: string;
   scope: 'local_rehearsal'; comparisonOnly: true; productionMutation: false; derivedState: 'none_created'; rehearsedAt: number; checks: { candidateOnCancelled: 'stop' | 'continue'; restoredOnCancelled: 'stop' | 'continue' } }
@@ -90,7 +91,7 @@ export class ImprovementWorkflow {
     await this.transaction(operationId, 'candidate_registered', envelope, state => {
       const proposal = state.proposals[payload.proposalId]; if (!proposal) fail('proposal_missing');
       const finding = this.eligible(state, proposal.findingId);
-      if (candidate.evidenceKind !== finding.kind || candidate.evidenceIds.length !== 1 || candidate.evidenceIds[0] !== finding.id || candidate.baselineRevision !== proposal.baselineRevision || candidate.createdAt < proposal.createdAt) fail('candidate_binding_mismatch');
+      if (candidate.evidenceKind !== finding.kind || candidate.evidenceIds.length !== 1 || candidate.evidenceIds[0] !== finding.id || candidate.baselineRevision !== proposal.baselineRevision || candidate.createdAt < proposal.createdAt || candidate.evaluationProtocolDigest !== proposal.evaluationProtocolDigest) fail('candidate_binding_mismatch');
       if (Object.values(state.candidates).filter(c => c.proposalId === proposal.id).length >= proposal.budget.maxCandidates) fail('candidate_budget_exhausted');
       if (state.candidates[candidate.id]) fail('candidate_exists');
       state.candidates[candidate.id] = { candidate, proposalId: proposal.id, authorKeyId: envelope.keyId };
@@ -118,6 +119,44 @@ export class ImprovementWorkflow {
     const bytes = await fs.readFile(join(this.root, 'objects', record.candidate.artifactDigest));
     if (hash(bytes) !== record.candidate.artifactDigest) fail('artifact_corrupt'); return routingArtifactSchema.parse(JSON.parse(bytes.toString()));
   }
+  /** Returns true only for the first committed attempt, false for exact replay.
+   * Reserve before giving the protected runner final-case access. A crash burns
+   * this final-set attempt; neither a retry nor another candidate may rerun it. */
+  async reserveEvaluationProtocol(operationId: string, envelope: Attestation<ProtocolReservation>): Promise<boolean> {
+    if (!verifyAttestation(envelope, 'evaluator', 'evaluation_protocol_reservation', this.trust)) fail('untrusted_evaluation_protocol');
+    const reservation = protocolReservationSchema.parse(envelope.payload); await this.readArtifact(reservation.candidateId);
+    let claimed = false;
+    await this.transaction(operationId, 'evaluation_protocol_reserved', envelope, state => {
+      const record = state.candidates[reservation.candidateId]; if (!record) return fail('candidate_missing');
+      const candidate = record.candidate, proposal = state.proposals[record.proposalId]; this.eligible(state, proposal.findingId);
+      if (record.protocolReservation || !candidate.evaluationProtocolDigest || reservation.protocolDigest !== candidate.evaluationProtocolDigest || envelope.keyId === record.authorKeyId ||
+        reservation.evaluatorServiceId !== envelope.keyId || reservation.reservedAt < candidate.createdAt || reservation.reservedAt > this.now() || Math.min(reservation.retainUntil, reservation.protocolMetadata.expiresAt) <= this.now() ||
+        reservation.candidateRevision !== candidate.candidateRevision || reservation.artifactDigest !== candidate.artifactDigest || reservation.baselineRevision !== candidate.baselineRevision ||
+        reservation.baselineArtifactDigest !== proposal.baselineArtifactDigest || reservation.legacyDatasetDigest !== candidate.datasetVersion || reservation.candidateEvaluatorDigest !== candidate.evaluatorVersion ||
+        reservation.promotionPolicyDigest !== candidate.promotionPolicyVersion || reservation.budget.maxCases > proposal.budget.maxCases) fail('evaluation_protocol_binding_mismatch');
+      state.protocolUses ??= [];
+      if (state.protocolUses.includes(reservation.bindings.final)) fail('protocol_final_dataset_consumed');
+      state.protocolUses.push(reservation.bindings.final); record.protocolReservation = envelope; claimed = true;
+    });
+    return claimed;
+  }
+  async attachEvaluationProtocol(operationId: string, envelope: Attestation<ProtocolReceipt>): Promise<void> {
+    if (!verifyAttestation(envelope, 'evaluator', 'evaluation_protocol', this.trust)) fail('untrusted_evaluation_protocol');
+    const protocol = protocolReceiptSchema.parse(envelope.payload);
+    await this.readArtifact(protocol.candidateId);
+    await this.transaction(operationId, 'evaluation_protocol_attached', envelope, state => {
+      const record = state.candidates[protocol.candidateId]; if (!record) return fail('candidate_missing');
+      const candidate = record.candidate, proposal = state.proposals[record.proposalId]; this.eligible(state, proposal.findingId);
+      if (!record.protocolReservation || record.protocolReservation.keyId !== envelope.keyId || record.protocolReservation.payload.protocolDigest !== protocol.protocolDigest || record.protocolReservation.payload.reservedAt > protocol.testedAt) fail('evaluation_protocol_reservation_required');
+      if (record.protocol || !candidate.evaluationProtocolDigest || protocol.protocolDigest !== candidate.evaluationProtocolDigest || proposal.evaluationProtocolDigest !== candidate.evaluationProtocolDigest ||
+          envelope.keyId === record.authorKeyId || protocol.evaluatorServiceId !== envelope.keyId || protocol.testedAt < candidate.createdAt || protocol.testedAt > this.now() || Math.min(protocol.retainUntil, protocol.protocolMetadata.expiresAt) <= this.now() ||
+          protocol.candidateRevision !== candidate.candidateRevision || protocol.artifactDigest !== candidate.artifactDigest || protocol.baselineRevision !== candidate.baselineRevision ||
+          protocol.baselineArtifactDigest !== proposal.baselineArtifactDigest || protocol.legacyDatasetDigest !== candidate.datasetVersion || protocol.candidateEvaluatorDigest !== candidate.evaluatorVersion ||
+          protocol.promotionPolicyDigest !== candidate.promotionPolicyVersion || protocol.budget.maxCases > proposal.budget.maxCases) fail('evaluation_protocol_binding_mismatch');
+      if (!state.protocolUses?.includes(protocol.bindings.final)) fail('evaluation_protocol_reservation_required');
+      record.protocol = envelope;
+    });
+  }
   async attachEvaluation(operationId: string, envelope: Attestation<ProtectedEvaluation>): Promise<void> {
     if (!verifyAttestation(envelope, 'evaluator', 'protected_evaluation', this.trust)) fail('untrusted_evaluation');
     const { details, receipt } = protectedEvaluationSchema.parse(envelope.payload);
@@ -125,6 +164,9 @@ export class ImprovementWorkflow {
     await this.transaction(operationId, 'evaluation_attached', envelope, state => {
       const record = state.candidates[receipt.candidateId]; if (!record) fail('candidate_missing');
       const candidate = record.candidate; this.eligible(state, state.proposals[record.proposalId].findingId);
+      if (candidate.evaluationProtocolDigest ? (!record.protocol || record.protocol.keyId !== envelope.keyId || record.protocol.payload.status !== 'passed' || Math.min(record.protocol.payload.retainUntil, record.protocol.payload.protocolMetadata.expiresAt) <= this.now() ||
+        receipt.evaluationProtocolDigest !== candidate.evaluationProtocolDigest || details.protocolReceiptDigest !== hash(canonical(record.protocol)) || receipt.testedAt < record.protocol.payload.testedAt) :
+        (receipt.evaluationProtocolDigest !== undefined || details.protocolReceiptDigest !== undefined)) fail('evaluation_protocol_required');
       if (details.checks > state.proposals[record.proposalId].budget.maxCases) fail('evaluation_case_budget_exceeded');
       if (record.evaluation || envelope.keyId === record.authorKeyId || receipt.evaluatorServiceId !== envelope.keyId ||
         details.baselineArtifactDigest !== state.proposals[record.proposalId].baselineArtifactDigest || details.artifactDigest !== candidate.artifactDigest || details.sourceDigest !== candidate.baselineRevision || details.datasetDigest !== candidate.datasetVersion ||
@@ -143,6 +185,7 @@ export class ImprovementWorkflow {
     await this.transaction(operationId, 'human_reviewed', envelope, state => {
       const record = state.candidates[approval.candidateId]; if (!record?.evaluation) fail('evaluation_missing');
       this.eligible(state, state.proposals[record.proposalId].findingId);
+      if (record.candidate.evaluationProtocolDigest && (!record.protocol || record.protocol.payload.status !== 'passed' || Math.min(record.protocol.payload.retainUntil, record.protocol.payload.protocolMetadata.expiresAt) <= this.now())) fail('evaluation_protocol_required');
       if (record.approval || approval.artifactDigest !== record.candidate.artifactDigest || approval.evaluationDigest !== hash(canonical(record.evaluation)) ||
         approval.approvedAt < record.evaluation!.payload.receipt.testedAt || approval.approvedAt > this.now() || approval.expiresAt <= this.now()) fail('approval_binding_mismatch');
       record.approval = envelope;
@@ -151,8 +194,11 @@ export class ImprovementWorkflow {
   async readiness(candidateId: string) {
     const { state } = await this.load(); const record = state.candidates[candidateId]; if (!record) fail('candidate_missing');
     this.eligible(state, state.proposals[record.proposalId].findingId); await this.readArtifact(candidateId);
+    if (record.candidate.evaluationProtocolDigest && (!record.protocol || record.protocol.payload.status !== 'passed' || Math.min(record.protocol.payload.retainUntil, record.protocol.payload.protocolMetadata.expiresAt) <= this.now())) return { ready: false as const, reason: 'failed' as const };
     return assessPromotion(record.candidate, record.evaluation?.payload.receipt, { now: this.now(),
       verifyReceipt: async () => !!record.evaluation && verifyAttestation(record.evaluation, 'evaluator', 'protected_evaluation', this.trust),
+      verifyProtocol: async () => !!record.protocol && verifyAttestation(record.protocol, 'evaluator', 'evaluation_protocol', this.trust) &&
+        record.protocol.payload.protocolDigest === record.candidate.evaluationProtocolDigest && record.evaluation?.payload.details.protocolReceiptDigest === hash(canonical(record.protocol)),
       humanApproved: async () => !!record.approval && verifyAttestation(record.approval, 'human', 'release_review', this.trust) &&
         record.approval.payload.decision === 'approve' && record.approval.payload.expiresAt > this.now() && record.approval.payload.evaluationDigest === hash(canonical(record.evaluation)),
     });

@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { MessageMemoryReview } from './MessageMemoryReview';
 import { ConversationPanel } from './ConversationPanel';
+vi.mock('../_lib/product-pause-client', () => ({ useProductPause: () => ({ coveredBlocked: false, status: null }) }));
 const api = vi.hoisted(() => ({ messagePreview: vi.fn(), messageAccept: vi.fn() }));
 vi.mock('../_lib/adaptive-client', () => ({ adaptiveApi: api }));
 const preview = () => ({ claims: ['Ali reportedly said the date may be March 5.'], sourceTextHash: 'a'.repeat(64), receipt: 'signed-receipt', expiresAt: Date.now() + 120000 });

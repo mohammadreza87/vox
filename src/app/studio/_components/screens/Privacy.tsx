@@ -1,18 +1,26 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { adaptiveApi, type AdaptiveOptionalPurpose, type AdaptivePresentation, type AdaptiveSnapshot, type AdaptiveSpace } from '../../_lib/adaptive-client';
 import { privacyCopy, purposeCopy, type PrivacyLocale } from '../../_lib/adaptive-copy';
 import { Icon, Spinner } from '../ui';
-import { api, type AgentView } from '../../_lib/client';
+import { api, tg, type AgentView } from '../../_lib/client';
 import { VoiceRecognitionPanel } from '../VoiceRecognitionPanel';
 import { MemoryCorrectionEditor } from '../MemoryCorrectionEditor';
 import { ReviewedMemoryPanel } from '../ReviewedMemoryPanel';
+import { ProductPausePanel } from '../ProductPausePanel';
+import { RightsRequestPanel } from '../RightsRequestPanel';
+import { GuestRightsOperationsPanel } from '../GuestRightsOperationsPanel';
+import { useProductPause } from '../../_lib/product-pause-client';
+import { pauseText } from '../../_lib/product-pause-copy';
 
 export function PrivacyScreen({ onShared, onExperience, onConnections, onCorrectionPendingChange }: { onShared?: () => void; onExperience?: () => void; onConnections?: () => void; onCorrectionPendingChange?: (token: string, pending: boolean) => boolean }) {
   const [locale, setLocale] = useState<PrivacyLocale>('en');
   const [space, setSpace] = useState<AdaptiveSpace>('work');
-  const [snapshot, setSnapshot] = useState<AdaptiveSnapshot | null>(null);
+  const session = tg()?.initData ?? '';
+  const [snapshotSession, setSnapshotSession] = useState(session);
+  const [storedSnapshot, setSnapshot] = useState<AdaptiveSnapshot | null>(null);
+  const snapshot = snapshotSession === session ? storedSnapshot : null;
   const [presentation, setPresentation] = useState<{ purpose: AdaptiveOptionalPurpose; data: AdaptivePresentation } | null>(null);
   const [removing, setRemoving] = useState<string | null>(null);
   const [error, setError] = useState('');
@@ -37,6 +45,8 @@ export function PrivacyScreen({ onShared, onExperience, onConnections, onCorrect
     return true;
   }, [onCorrectionPendingChange]);
   const c = privacyCopy[locale];
+  const pause = useProductPause(space);
+  const paused = pause.status?.productPaused === true || snapshot?.storedPersonalizationAllowed === false;
 
   const load = useCallback(async () => {
     if (pendingCorrectionRef.current) return;
@@ -45,12 +55,12 @@ export function PrivacyScreen({ onShared, onExperience, onConnections, onCorrect
     try {
       const [result, availableAgents] = await Promise.all([adaptiveApi.read(space, locale), api.agents()]);
       if (generation.current !== current) return;
-      setSnapshot(result); setAdult(result.identity.adultDeclared); setJurisdiction(result.identity.declaredJurisdiction ?? '');
+      setSnapshotSession(session); setSnapshot(result); setAdult(result.identity.adultDeclared); setJurisdiction(result.identity.declaredJurisdiction ?? '');
       setAgents(availableAgents.agents.filter(a => a.status === 'active'));
     } catch { if (generation.current === current) setError(locale === 'fa' ? 'تنظیمات دریافت نشد. دوباره تلاش کنید.' : 'Your settings could not be loaded. Please try again.'); }
-  }, [space, locale]);
+  }, [space, locale, session]);
   const invalidate = useCallback(() => { generation.current++; }, []);
-  useEffect(() => { void load(); return invalidate; }, [load, invalidate]);
+  useLayoutEffect(() => { void load(); return invalidate; }, [load, invalidate]);
 
   const mutate = async (action: () => Promise<AdaptiveSnapshot>, message: string) => {
     if (busyRef.current || pendingCorrectionRef.current) return;
@@ -77,13 +87,17 @@ export function PrivacyScreen({ onShared, onExperience, onConnections, onCorrect
   };
 
   return <section className="vx-scroll vx-privacy" dir={locale === 'fa' ? 'rtl' : 'ltr'} lang={locale} aria-busy={busy || !!pendingCorrection}>
-    <fieldset disabled={!!pendingCorrection} onClickCapture={event => { if (pendingCorrectionRef.current) { event.preventDefault(); event.stopPropagation(); } }} onChangeCapture={event => { if (pendingCorrectionRef.current) { event.preventDefault(); event.stopPropagation(); } }} style={{ display: 'flex', flexDirection: 'column', gap: 16, border: 0, padding: 0, margin: 0, minWidth: 0 }}>
     <header className="vx-privacy-heading">
       <span className="vx-privacy-symbol"><Icon name="shield" size={28} /></span>
       <div><p className="vx-over">{c.subtitle}</p><h1 className="vx-title">{c.title}</h1></div>
-      <label className="vx-small">{c.language}<select className="vx-input" value={locale} disabled={busy} onChange={e => { if (!pendingCorrectionRef.current) setLocale(e.target.value as PrivacyLocale); }}><option value="en">English</option><option value="fa">فارسی</option></select></label>
+      <label className="vx-small">{c.language}<select className="vx-input" value={locale} disabled={busy || !!pendingCorrection} onChange={e => { if (!pendingCorrectionRef.current) setLocale(e.target.value as PrivacyLocale); }}><option value="en">English</option><option value="fa">فارسی</option></select></label>
     </header>
     <p className="vx-2">{c.intro}</p>
+    <ProductPausePanel locale={locale} sessionKey={session} onReviewProfile={() => document.getElementById('vox-profile-heading')?.focus()} />
+    <RightsRequestPanel space={space} locale={locale} sessionKey={session} />
+    <p className="vx-small"><a href="/privacy">{locale === 'fa' ? 'درخواست حریم خصوصی بدون حساب' : 'Privacy request without an account'}</a></p>
+    <GuestRightsOperationsPanel locale={locale} sessionKey={session} />
+    <fieldset disabled={!!pendingCorrection} onClickCapture={event => { if (pendingCorrectionRef.current) { event.preventDefault(); event.stopPropagation(); } }} onChangeCapture={event => { if (pendingCorrectionRef.current) { event.preventDefault(); event.stopPropagation(); } }} style={{ display: 'flex', flexDirection: 'column', gap: 16, border: 0, padding: 0, margin: 0, minWidth: 0 }}>
     {onExperience && <button className="vx-btn vx-btn-secondary" onClick={() => { if (!pendingCorrectionRef.current) onExperience(); }}>{locale === 'fa' ? 'ترجیح‌ها و صندوق اعلان' : 'Preferences & notification inbox'}</button>}
     {onConnections && <button className="vx-btn vx-btn-secondary" onClick={() => { if (!pendingCorrectionRef.current) onConnections(); }}>{locale === 'fa' ? 'اتصال‌ها و دسترسی عامل‌ها' : 'Connections & agent access'}</button>}
     <div className="vx-privacy-spaces" role="group" aria-label={c.space}>
@@ -97,7 +111,7 @@ export function PrivacyScreen({ onShared, onExperience, onConnections, onCorrect
     <p className="vx-small vx-2">{c.registeredAddress}: <span dir="ltr">Harju maakond, Tallinn, Kesklinna linnaosa, Narva mnt 7-652, 10117, Estonia</span></p>
     {snapshot && <>
       <div className="vx-card vx-privacy-card">
-        <h2 className="vx-head">{c.identity}</h2><p className="vx-small vx-2">{c.identityBody}</p>
+        <h2 className="vx-head" id="vox-profile-heading" tabIndex={-1}>{c.identity}</h2><p className="vx-small vx-2">{c.identityBody}</p>
         {snapshot.identity.confirmed ? <p className="vx-privacy-confirmed"><Icon name="check" size={18} /> {c.confirmed}</p> : <>
           <label className="vx-privacy-checkbox"><input type="checkbox" checked={adult} disabled={busy} onChange={e => setAdult(e.target.checked)} />{c.adult}</label>
           <label className="vx-small">{c.jurisdiction}<input className="vx-input" value={jurisdiction} placeholder="EE / US-CA" maxLength={11} disabled={busy} onChange={e => setJurisdiction(e.target.value.toUpperCase())} aria-describedby="jurisdiction-hint" /></label>
@@ -114,8 +128,9 @@ export function PrivacyScreen({ onShared, onExperience, onConnections, onCorrect
           const on = p.state === 'granted';
           const opened = presentation?.purpose === p.purpose;
           return <div key={p.purpose} className="vx-privacy-purpose">
-            <div className="vx-privacy-purpose-heading"><h3 className="vx-head">{copy?.title ?? p.notice.title}</h3><span className={`vx-pill ${on && p.available ? 'live' : 'lock'}`}>{on && p.available ? c.on : ['expired', 'reconsent_required', 'suspended'].includes(p.state) || (on && !p.available) ? c.reviewNeeded : c.off}</span></div>
+            <div className="vx-privacy-purpose-heading"><h3 className="vx-head">{copy?.title ?? p.notice.title}</h3><span className={`vx-pill ${on && p.available ? 'live' : 'lock'}`}>{on ? c.on : ['expired', 'reconsent_required', 'suspended'].includes(p.state) || (on && !p.available) ? c.reviewNeeded : c.off}</span></div>
             <p className="vx-small vx-2">{copy?.body ?? p.notice.body}</p>
+            {on && paused && ['optional.personalization', 'optional.auto_memory', 'optional.proactive_suggestions', 'optional.relationship_outreach'].includes(p.purpose) && <p className="vx-small">{pauseText(locale, space, 'consent')}</p>}
             {!p.available && <p className="vx-small vx-2">{c.unavailable}</p>}
             {opened ? <div className="vx-privacy-notice" aria-label={c.notice}>
               <h4>{presentation.data.notice.title}</h4><p className="vx-small">{presentation.data.notice.body}</p>
@@ -149,7 +164,7 @@ export function PrivacyScreen({ onShared, onExperience, onConnections, onCorrect
           </div> : <button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy} onClick={() => setRemoving(m.id)}>{c.remove}</button>}
         </article>)}
       </div>
-      <ReviewedMemoryPanel key={`${space}:${locale}:${snapshot.identity.bindingId ?? 'unconfirmed'}`} snapshot={snapshot} agents={agents} locale={locale} disabled={busy || !snapshot.explicitMemoryAvailable} onSaved={result => { setSnapshot(result); setStatus(c.saved); }} />
+      <ReviewedMemoryPanel key={`${space}:${locale}:${snapshot.identity.bindingId ?? 'unconfirmed'}`} snapshot={snapshot} agents={agents} locale={locale} disabled={busy || !snapshot.explicitMemoryAvailable} pauseBlocked={pause.coveredBlocked} personalizationPaused={paused} pauseEpoch={pause.status?.useEpoch ?? undefined} onSaved={result => { setSnapshot(result); setStatus(c.saved); }} />
       <div className="vx-card vx-privacy-card">
         <h2 className="vx-head">{c.agents}</h2><p className="vx-small vx-2">{c.agentsBody}</p>
         {!agents.length && <p className="vx-small vx-2">{c.noAgents}</p>}

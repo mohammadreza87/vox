@@ -111,7 +111,8 @@ describe('independent audience boundary regressions', () => {
       for (const record of records()) await memories.add(record);
       await gateway.handleUpdate('aria', groupText(GAMEEND_CHAT, TG.reza, 'Aria, hello'));
       expect(llm.replyRequests).toHaveLength(1);
-      expect(llm.extractionRequests).toHaveLength(1);
+      // Only an audience of known people reaches the extractor; a named guest is a known person.
+      expect(llm.extractionRequests).toHaveLength(mode === 'named guest' ? 1 : 0);
       for (const request of [...llm.replyRequests, ...llm.extractionRequests]) {
         const everyField = JSON.stringify(request);
         for (const hidden of [SECRET_PERSON, SECRET_ROLE, SECRET_PROJECT, SECRET_NOTE, PRIVATE, ORGANIZATION]) {
@@ -121,6 +122,24 @@ describe('independent audience boundary regressions', () => {
       }
     },
   );
+
+  it.each<'silent guest' | 'unknown person'>(['silent guest', 'unknown person'])(
+    'never extracts or stores a memory from a %s group turn without a runtime privacy adapter', async (mode) => {
+      const { gateway, llm, memories } = harness(mode);
+      llm.nextExtraction = { memories: [candidate] };
+      expect(await gateway.handleUpdate('aria', groupText(GAMEEND_CHAT, TG.reza, 'Aria, a decision for this group'))).toBe('replied');
+      expect(llm.extractionCalls).toBe(0);
+      expect(await memories.listActive('aria')).toEqual([]);
+    },
+  );
+
+  it('forms the group memory once every reader is a known member (control)', async () => {
+    const { gateway, llm, memories } = harness();
+    llm.nextExtraction = { memories: [candidate] };
+    await gateway.handleUpdate('aria', groupText(GAMEEND_CHAT, TG.reza, 'Aria, a decision for this group'));
+    expect(llm.extractionCalls).toBe(1);
+    expect((await memories.listActive('aria')).map((m) => m.content)).toEqual([SUBSET]);
+  });
 
   it('restricts a guest DM extractor and reply while retaining the guest’s own private memory', async () => {
     const { org, chat, memories, gateway, llm } = harness('named guest');

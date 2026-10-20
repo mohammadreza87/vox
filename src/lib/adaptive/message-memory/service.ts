@@ -2,7 +2,8 @@ import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import type { LLM } from '../../tireh/llm';
 import { AdaptiveError, type AdaptiveService } from '../persistence/service';
-import { accountIdFor, digest, type AdaptiveDocument, type StoredMemory } from '../persistence/repository';
+import { accountIdFor, digest, type AdaptiveAuthorityDocument, type AdaptiveDocument, type StoredMemory } from '../persistence/repository';
+import { productPauseUseStamp } from '../product-pause/state';
 import { previewClaimsSchema, messageAcceptInputSchema, messagePreviewInputSchema, type MessageAcceptInput, type MessageMemoryPreview, type MessagePreviewInput } from './contracts';
 const hash = z.string().regex(/^[a-f0-9]{64}$/), time = z.number().int().nonnegative().safe();
 const receiptSchema = z.object({ v: z.literal(1), nonce: z.string().uuid(), accountId: z.string().max(200), personId: z.string().max(200),
@@ -36,23 +37,25 @@ export class MessageMemoryService {
       return receiptSchema.parse(JSON.parse(Buffer.from(body, 'base64url').toString('utf8')));
     } catch { return changed(); }
   }
-  private state(d: AdaptiveDocument, now: number, input: Pick<Receipt, 'space' | 'agentId'>, studio: string | null) {
+  private state(d: AdaptiveAuthorityDocument, now: number, input: Pick<Receipt, 'space' | 'agentId'>, studio: string | null) {
     if (this.options.llm.committedExportFence !== true) return unavailable();
     if (!studio || !this.adaptive.isCoreAllowed(d, now) || d.agentGrants.filter(g => g.space === input.space && g.agentId === input.agentId && g.allowed).length !== 1) return changed();
     return { personId: d.personId, expiresAt: Math.min(d.binding!.expiresAt, this.adaptive.capabilityStatus(d, 'core_text', now).validUntil ?? now),
-      authority: digest([this.options.llm.identity ?? null, d.accountId, d.personId, d.binding, this.adaptive.coreFingerprint(d, now), studio, input.space, input.agentId,
-        d.agentGrants.filter(g => g.space === input.space && g.agentId === input.agentId)]) };
+      authority: digest([...(this.adaptive.storeIdentity === 'canonical' ? [] : [this.adaptive.storeIdentity]), this.options.llm.identity ?? null, d.accountId, d.personId, d.binding, this.adaptive.coreFingerprint(d, now), studio, input.space, input.agentId,
+        d.agentGrants.filter(g => g.space === input.space && g.agentId === input.agentId),
+        ...(d.schemaVersion === 2 ? [productPauseUseStamp(d, input.space)] : [])]) };
   }
   private currentNow(telegramId: number, input: Pick<Receipt, 'space' | 'agentId'>) {
     const studio = this.options.agentAuthorityNow(telegramId, input.agentId);
-    const result = this.adaptive.readCommittedForEffect(telegramId, (d, now) => this.state(d, now, input, studio));
+    const evaluate = (d: AdaptiveAuthorityDocument, now: number) => { const value = this.state(d, now, input, studio); return {value, deadline:value.expiresAt}; };
+    const result = this.adaptive.readDirectAuthorityForEffect(telegramId, input.space, evaluate);
     if (result.status !== 'ready') return unavailable();
     return result.value;
   }
   private async current(telegramId: number, input: Pick<Receipt, 'space' | 'agentId'>, signal?: AbortSignal) {
     if (signal?.aborted) return changed();
     const studio = await this.options.agentAuthority(telegramId, input.agentId);
-    const before = await this.adaptive.withAccountDocument(telegramId, (d, now) => this.state(d, now, input, studio));
+    const before = await this.adaptive.withDirectAuthority(telegramId, input.space, (d, now) => { const value = this.state(d, now, input, studio); return { value, deadline: value.expiresAt }; });
     if (signal?.aborted) return changed();
     const current = this.currentNow(telegramId, input);
     if (before.authority !== current.authority) return changed();
@@ -64,8 +67,11 @@ export class MessageMemoryService {
   }
   revalidateNow(telegramId: number, value: MessageAcceptInput, emptyPreview = false): void {
     const input = (emptyPreview ? messageAcceptInputSchema.extend({ claims: previewClaimsSchema }) : messageAcceptInputSchema).parse(value), receipt = this.decode(input.receipt), state = this.currentNow(telegramId, receipt);
-    this.match(telegramId, input, receipt, this.now());
-    if (state.personId !== receipt.personId || state.authority !== receipt.authority) changed();
+    this.adaptive.evaluateAuthorityClock(this.now, now => {
+      this.match(telegramId, input, receipt, now);
+      if (state.personId !== receipt.personId || state.authority !== receipt.authority) changed();
+      return { value: undefined, deadline: Math.min(state.expiresAt, receipt.expiresAt) };
+    });
   }
   async preview(telegramId: number, value: MessagePreviewInput, signal?: AbortSignal): Promise<MessageMemoryPreview> {
     const input = messagePreviewInputSchema.parse(value);
@@ -85,22 +91,24 @@ export class MessageMemoryService {
     } catch { if (signal?.aborted || !authorizeNow()) return changed(); return unavailable(); }
     finally { if (timer) clearTimeout(timer); signal?.removeEventListener('abort', cancel); }
     if (!await authorize() || !authorizeNow()) return changed();
-    const issuedAt = this.now(), expiresAt = Math.min(issuedAt + 120_000, initial.expiresAt);
-    if (expiresAt <= issuedAt) return changed();
-    const sourceTextHash = digest(input.text);
-    const receipt = this.encode({ v: 1, nonce: randomUUID(), accountId: accountIdFor(telegramId), personId: initial.personId,
-      space: input.space, agentId: input.agentId, authority: initial.authority, sourceTextHash, candidateHashes: claims.map(text => digest(text)), issuedAt, expiresAt });
-    return { claims, sourceTextHash, receipt, expiresAt };
+    return this.adaptive.evaluateAuthorityClock(this.now, issuedAt => {
+      const expiresAt = Math.min(issuedAt + 120_000, initial.expiresAt);
+      if (expiresAt <= issuedAt) return changed();
+      const sourceTextHash = digest(input.text);
+      const receipt = this.encode({ v: 1, nonce: randomUUID(), accountId: accountIdFor(telegramId), personId: initial.personId,
+        space: input.space, agentId: input.agentId, authority: initial.authority, sourceTextHash, candidateHashes: claims.map(text => digest(text)), issuedAt, expiresAt });
+      return { value: { claims, sourceTextHash, receipt, expiresAt }, deadline: expiresAt };
+    });
   }
   async accept(telegramId: number, value: MessageAcceptInput, signal?: AbortSignal): Promise<{ memoryIds: string[] }> {
     const input = messageAcceptInputSchema.parse(value), receipt = this.decode(input.receipt);
-    this.match(telegramId, input, receipt, this.now());
+    this.match(telegramId, input, receipt, this.adaptive.sampleClock(this.now));
     if ((await this.current(telegramId, receipt, signal)).authority !== receipt.authority) return changed();
     let draft: AdaptiveDocument | undefined;
     return this.adaptive.withAccountDocument(telegramId, d => {
       if (signal?.aborted) return changed();
       draft = d;
-      const studio = this.options.agentAuthorityNow(telegramId, input.agentId), now = this.now(), state = this.state(d, now, receipt, studio);
+      const studio = this.options.agentAuthorityNow(telegramId, input.agentId), now = this.adaptive.sampleClock(this.now), state = this.state(d, now, receipt, studio);
       this.match(telegramId, input, receipt, now);
       if (state.personId !== receipt.personId || state.authority !== receipt.authority) return changed();
       const eventId = `message-review:${receipt.nonce}`, fingerprint = digest([eventId, input.space, input.agentId, input.claims]), prior = d.events.find(event => event.eventId === eventId);
@@ -121,7 +129,7 @@ export class MessageMemoryService {
       d.events.push({ eventId, fingerprint, kind: 'message_memory_saved', resultId: memoryIds.join(','), revision: d.revision });
       return { memoryIds };
     }, () => {
-      const studio = this.options.agentAuthorityNow(telegramId, input.agentId), now = this.now();
+      const studio = this.options.agentAuthorityNow(telegramId, input.agentId), now = this.adaptive.sampleClock(this.now);
       if (signal?.aborted) return changed();
       this.match(telegramId, input, receipt, now);
       if (!draft || this.state(draft, now, receipt, studio).authority !== receipt.authority) changed();

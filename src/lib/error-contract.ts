@@ -22,7 +22,7 @@ export function publicDomainError(error: unknown, name: string): boolean {
     if (!namedError(error, name)) return false;
     const status: unknown = Object.getOwnPropertyDescriptor(error, 'status')?.value;
     const code: unknown = Object.getOwnPropertyDescriptor(error, 'code')?.value;
-    return typeof status === 'number' && [400, 401, 403, 404, 409, 413, 415, 422, 429, 500, 502, 503, 504].includes(status) &&
+    return typeof status === 'number' && [400, 401, 403, 404, 409, 410, 413, 415, 422, 429, 500, 502, 503, 504].includes(status) &&
       typeof code === 'string' && /^[a-z][a-z0-9_]{0,95}$/.test(code);
   } catch { return false; }
 }

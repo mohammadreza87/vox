@@ -4,8 +4,11 @@ import { PHASE_PRODUCTION_SERVER } from 'next/constants';
 const nextConfig: NextConfig = {
   // Keep each production release independent of the working checkout.
   output: 'standalone',
-  // Mark firebase-admin as external to prevent bundling issues
-  serverExternalPackages: ['firebase-admin'],
+  // Native SQLite and Firebase Admin must retain their server-side package boundaries.
+  serverExternalPackages: ['firebase-admin', 'better-sqlite3'],
+  outputFileTracingIncludes: {
+    '/*': ['./node_modules/better-sqlite3/prebuilds/darwin-arm64.node', './node_modules/better-sqlite3/prebuilds/linux-x64.node'],
+  },
 
   // Ensure images from external sources work
   images: {

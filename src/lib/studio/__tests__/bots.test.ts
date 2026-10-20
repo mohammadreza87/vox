@@ -21,6 +21,15 @@ afterEach(() => {
 });
 
 const flush = () => vi.advanceTimersByTimeAsync(0);
+// A whole agent turn runs the default adaptive service's real file I/O, which
+// fake timers cannot advance: wait in real time (bounded) until it is done.
+const realSetTimeout = globalThis.setTimeout;
+async function flushUntil(done: () => boolean, budgetMs = 5_000) {
+  for (let waited = 0; waited < budgetMs && !done(); waited += 5) {
+    await flush();
+    await new Promise((resolve) => realSetTimeout(resolve, 5));
+  }
+}
 
 describe('bot runner', () => {
   it('runs a bounded maintenance batch without overlap and aborts its remaining work on stop', async () => {
@@ -106,6 +115,10 @@ describe('bot runner', () => {
   });
 
   it('agent bot: an outsider in a group it was added to gets a guest-safe answer', async () => {
+    // Legacy (non-adaptive) path: no production runtime builds it; adaptive
+    // runtimes ignore a group turn from an unknown reader (adaptive-integration.test.ts).
+    h = makeStudio({ adaptive: false });
+    org = await seedOrg(h);
     vi.useFakeTimers();
     const { agent, token } = await hire(h, org.alice);
     await h.store.update((s) => {
@@ -117,6 +130,7 @@ describe('bot runner', () => {
     ]);
     stop = startBots(h.studio).stop;
     await flush();
+    await flushUntil(() => h.chatLLM.replyPrompts.length > 0);
     const s = await h.store.read();
     expect(s.groups[0].hasGuests).toBe(true);
     expect(s.guests?.map((g) => g.telegramId)).toEqual([ID.stranger]);
@@ -183,7 +197,7 @@ describe('bot runner', () => {
     bot().getUpdates.mockResolvedValueOnce([failed, failed, { update_id: telegramCanary.update + 1, message }]);
     h.logger.info.mockClear(); h.logger.warn.mockClear(); h.logger.error.mockClear();
     stop = startBots(h.studio).stop;
-    await flush();
+    await flushUntil(() => bot().getUpdates.mock.lastCall?.[0] === telegramCanary.update + 2);
     expect(bot().getUpdates).toHaveBeenLastCalledWith(telegramCanary.update + 2, 25, ['message', 'callback_query', 'my_chat_member', 'chat_member']);
     expect(bot().sendMessage).toHaveBeenCalledTimes(1);
     expect(h.logger.error).toHaveBeenCalledTimes(1);

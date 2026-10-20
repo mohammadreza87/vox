@@ -8,7 +8,8 @@ import { personId } from '../org-bridge';
 import { makeGateway } from '../../tireh/__tests__/fixtures';
 
 async function setup(adaptiveEnabled = false) {
-  const h = makeStudio(), users = await seedOrg(h), { agent } = await hire(h, users.alice);
+  // Without adaptiveEnabled these cases cover the legacy path ("even without adaptive privacy").
+  const h = makeStudio({ adaptive: false }), users = await seedOrg(h), { agent } = await hire(h, users.alice);
   h.studio.deps.webhookBase = 'https://vox.synthetic';
   if (adaptiveEnabled) {
     const now = Date.now();

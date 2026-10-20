@@ -1,6 +1,8 @@
 import { measureStage, observedUsage } from '../../adaptive/observation/trace';
 import { randomUUID } from 'crypto';
 import { rm } from 'fs/promises';
+import { join } from 'path';
+import { FileAdaptiveStorage } from '../../adaptive/persistence/storage';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AdaptiveRepository, accountIdFor } from '../../adaptive/persistence/repository';
 import { AdaptiveService } from '../../adaptive/persistence/service';
@@ -17,7 +19,7 @@ import { ID, hire, makeStudio, seedOrg } from './helpers';
 const TOKEN = '12345:synthetic-learning-test';
 const dirs: string[] = [];
 afterEach(async () => { vi.restoreAllMocks(); await Promise.all(dirs.splice(0).map(dir => rm(dir, { recursive: true, force: true }))); });
-async function setup() {
+async function setup(file = false) {
   const h = makeStudio(); dirs.push(h.dir);
   const org = await seedOrg(h), { agent } = await hire(h, org.alice);
   const now = Date.now();
@@ -26,7 +28,7 @@ async function setup() {
     approvals: ['core_text', 'product_analytics'].map((capability, i) => ({ schemaVersion: 1, id: `test-${i}`, revision: 1, createdAt: now, updatedAt: now,
       jurisdiction: 'SYNTHETIC', capability, state: 'approved', configurationVersion: 'synthetic', effectiveAt: now, reviewExpiresAt: now + 86_400_000,
       owner: 'synthetic', approvalReference: 'synthetic-only' })) });
-  const adaptive = new AdaptiveService(new AdaptiveRepository(new MemoryAdaptiveStorage()), adaptiveOptionsFromManifest(manifest));
+  const adaptive = new AdaptiveService(new AdaptiveRepository(file ? new FileAdaptiveStorage(join(h.dir, 'adaptive')) : new MemoryAdaptiveStorage()), adaptiveOptionsFromManifest(manifest));
   const observer = new AdaptiveObserverService(adaptive), lifecycle = new AdaptiveLifecycleService(adaptive);
   h.studio.deps.observer = observer; h.studio.deps.lifecycle = lifecycle;
   await adaptive.confirm(ID.alice, { confirm: true, adultConfirmed: true });
@@ -118,7 +120,7 @@ describe('Studio observation producers and authenticated learning API', () => {
     expect((await (await request('events', 'POST', body)).json()).recorded).toBe(false);
   });
   it('exports only the confirmed own space and protects operations with fresh role checks', async () => {
-    const { h, adaptive, request } = await setup();
+    const { h, adaptive, request } = await setup(true);
     for (const space of ['work', 'personal'] as const) await adaptive.withAccountDocument(ID.alice, d => { d.memories.push({ id: `memory-${space}`, space,
       revision: 1, text: `PRIVATE_${space}`, status: 'active', createdAt: Date.now(), updatedAt: Date.now(), expiresAt: Date.now() + 60_000, revocationEpoch: 0 }); });
     const exported = await request('export?space=work');
@@ -151,4 +153,40 @@ it('takes a real consented producer through numeric journal, own-space API proje
   expect(body.completeness.verifiedTaskSuccess).toBeNull();
   expect(JSON.stringify(body)).not.toContain('PRIVATE_CONTENT_CANARY');
   const personal = await request('observations?space=personal'); expect((await personal.json()).projection.telemetry.inputTokens).toBeNull();
+});
+
+it('connects signed text-render and correction reports to canonical FILE receipts and minimized exports', async () => {
+  const { h, agent, adaptive, request, observer } = await setup(true); h.studio.deps.adaptive = adaptive;
+  const { handleConversationRequest } = await import('../conversation');
+  const { handleAdaptiveRequest } = await import('../../adaptive/persistence/http');
+  const headers = { origin: 'https://vox.test', 'content-type': 'application/json', 'x-telegram-init-data': signInitData({ id: ID.alice, first_name: 'Synthetic' }, TOKEN) };
+  const conversation = await handleConversationRequest(h.studio, new Request('https://vox.test/api/studio/conversation', { method: 'POST', headers, body: JSON.stringify({ agentId: agent.id, space: 'work', text: 'PRIVATE_TEXT_CANARY' }) }), TOKEN);
+  expect(conversation.status).toBe(200); const response = await conversation.json(); expect(response.turnId).toBeTypeOf('string');
+  const text = { eventId: `text-${response.turnId}`, agentId: agent.id, turnId: response.turnId, space: 'work', outcome: 'text_rendered', durationMs: 17 };
+  expect((await (await request('events', 'POST', text)).json()).recorded).toBe(true);
+  expect((await request('events', 'POST', { ...text, transcript: 'PRIVATE_TRANSCRIPT_CANARY' })).status).toBe(400);
+  expect((await request('events', 'POST', text, { origin: 'https://hostile.invalid' })).status).toBe(403);
+  const before = await adaptive.read(ID.alice, 'work');
+  const saved = await adaptive.createMemory(ID.alice, { space: 'work', text: 'PRIVATE_ORIGINAL_CANARY', expectedRevision: before.revision, eventId: randomUUID() });
+  const note = saved.memories[0], command = { space: 'work', text: 'PRIVATE_CORRECTION_CANARY', expectedRevision: note.revision, eventId: randomUUID() };
+  const authority = await (await request('correction-authority', 'POST', { space: 'work' })).json();
+  const report = { version: 1, eventId: command.eventId, space: 'work', policyReceipt: authority.policyReceipt, outcome: 'correction_client_saved' };
+  expect((await (await request('corrections', 'POST', report)).json()).recorded).toBe(false);
+  const mutation = await handleAdaptiveRequest(h.studio, adaptive, new Request(`https://vox.test/api/studio/adaptive/memories/${note.id}`, { method: 'PUT', headers, body: JSON.stringify(command) }), ['memories', note.id], TOKEN);
+  expect(mutation.status).toBe(200);
+  expect((await (await request('corrections', 'POST', report)).json()).recorded).toBe(true);
+  expect((await (await request('corrections', 'POST', report)).json()).duplicate).toBe(true);
+  expect((await (await request('corrections', 'POST', report, { id: ID.bob })).json()).recorded).toBe(false);
+  await observer.process(ID.alice);
+  const snapshot = await (await request('observations?space=work')).json();
+  expect(snapshot.projection.clientExperience).toMatchObject({ textRendered: 1, meanTimeToTextMs: 17, correctionSaved: 1, correctionAcceptedReceipts: 1 });
+  expect(snapshot.completeness.verifiedTaskSuccess).toBeNull(); expect(JSON.stringify(snapshot)).not.toContain('PRIVATE_');
+  const exported = await (await request('export?space=work')).json();
+  expect(exported.observerCorrections).toMatchObject([{ outcome: 'correction_client_saved', mutationEvidence: 'accepted_command_receipt' }]);
+  expect(JSON.stringify(exported.observerCorrections)).not.toMatch(/PRIVATE_|eventId|personId|accountId|policyReceipt/);
+  expect((await (await request('export?space=personal')).json()).observerCorrections).toBeUndefined();
+  const current = await adaptive.read(ID.alice, 'work');
+  await adaptive.changeConsent(ID.alice, { space: 'work', purpose: 'optional.product_analytics', state: 'withdrawn', expectedRevision: current.purposes.find(p => p.purpose === 'optional.product_analytics')!.revision, eventId: randomUUID() });
+  expect((await (await request('corrections', 'POST', report)).json()).recorded).toBe(false);
+  expect((await (await request('export?space=work')).json()).observerCorrections).toBeUndefined();
 });

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseEnv } from 'node:util';
@@ -53,4 +53,15 @@ test('repeated prepare preserves current disabled flags, blank trust, credential
     assert.equal(env.PRIVATE_EXTENSION, 'preserve-this');
     assert.equal(env.STUDIO_SECRET, 'synthetic-only-secret-more-than-32-characters');
   }
+}));
+
+test('prepare carries explicit storage selection and preserves an existing legacy selection without conversion', () => fixture(f => {
+  writeFileSync(f.source, f.base + "STUDIO_ADAPTIVE_FORMAT='file-v2'\n");
+  assert.equal(f.prepare().status, 0);
+  assert.equal(parseEnv(readFileSync(f.destination, 'utf8')).STUDIO_ADAPTIVE_FORMAT, 'file-v2');
+  assert.equal(existsSync(join(f.dir, 'data', 'adaptive.managed')), false);
+  writeFileSync(f.destination, f.base + "STUDIO_ADAPTIVE_FORMAT=''\n");
+  assert.equal(f.prepare().status, 0);
+  assert.equal(parseEnv(readFileSync(f.destination, 'utf8')).STUDIO_ADAPTIVE_FORMAT, '');
+  assert.equal(existsSync(join(f.dir, 'data', 'adaptive.managed')), false);
 }));

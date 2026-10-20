@@ -216,7 +216,7 @@ export function StudioApp() {
                       style={{ position: 'absolute', inset: 0, borderRadius: 999, background: '#282D35' }} />}
                     <span style={{ position: 'relative', display: 'flex' }}><Icon name={t.icon} /></span>
                   </span>
-                  {t.label}
+                  <span className="vx-tab-label">{t.label}</span>
                 </button>
               );
             })}

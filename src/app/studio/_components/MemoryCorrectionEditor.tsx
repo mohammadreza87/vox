@@ -1,6 +1,8 @@
 'use client';
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { adaptiveApi, type AdaptiveSnapshot, type AdaptiveSpace } from '../_lib/adaptive-client';
+import { learningApi } from '../_lib/learning-client';
+import { tg } from '../_lib/client';
 import type { PrivacyLocale } from '../_lib/adaptive-copy';
 type Note = AdaptiveSnapshot['memories'][number];
 export const MEMORY_CORRECTION_SAVE_TIMEOUT_MS = 15_000;
@@ -17,9 +19,10 @@ export function MemoryCorrectionEditor({ note, snapshot, locale, disabled, onSav
   const [stage, setStage] = useState<'closed' | 'edit' | 'review'>('closed');
   const [text, setText] = useState(''), [prepared, setPrepared] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement | null>(null), reviewRef = useRef<HTMLHeadingElement | null>(null);
+  const diagnostics = useRef<AbortController | null>(null);
   const generation = useRef(0), request = useRef<PendingSave | null>(null);
   const invalidate = useCallback(() => {
-    generation.current++;
+    generation.current++; diagnostics.current?.abort(); diagnostics.current = null;
     const pending = request.current; request.current = null;
     if (pending) { clearTimeout(pending.timer); pending.controller.abort(); pending.release(); }
   }, []);
@@ -28,6 +31,8 @@ export function MemoryCorrectionEditor({ note, snapshot, locale, disabled, onSav
     invalidate(); setStage('closed'); setText(''); setPrepared(''); setBusy(false); setError(false);
     return invalidate;
   }, [invalidate, snapshot.space, snapshot.identity.accountId, snapshot.identity.personId, snapshot.identity.confirmed, snapshot.identity.bindingId, snapshot.identity.bindingRevision, snapshot.memoryCorrectionAvailable, snapshot.explicitMemoryValidUntil, note.id, note.revision, note.text, locale, disabled]);
+  const analytics = snapshot.purposes.find(p => p.purpose === 'optional.product_analytics');
+  useLayoutEffect(() => { return () => { diagnostics.current?.abort(); }; }, [analytics?.revision, analytics?.state, analytics?.available]);
   useEffect(() => { if (stage === 'edit') inputRef.current?.focus(); else if (stage === 'review') reviewRef.current?.focus(); }, [stage]);
   useEffect(() => {
     if (!snapshot.memoryCorrectionAvailable || !snapshot.identity.confirmed || note.sourceRefs) return;
@@ -41,6 +46,16 @@ export function MemoryCorrectionEditor({ note, snapshot, locale, disabled, onSav
     if (!allowed || busy || request.current || stage !== 'review' || !prepared || error) return;
     const epoch = generation.current, controller = new AbortController(), eventId = crypto.randomUUID();
     if (onPendingChange?.(eventId, true) === false) return;
+    const session = tg()?.initData ?? '', diagnosticController = new AbortController(); diagnostics.current?.abort(); diagnostics.current = diagnosticController;
+    // Optional receipt acquisition runs alongside Save and never delays it.
+    const authority = analytics?.state === 'granted' && analytics.available
+      ? (async () => learningApi.correctionAuthority(snapshot.space, diagnosticController.signal))().catch(() => null) : Promise.resolve(null);
+    const report = (outcome: 'correction_client_saved' | 'correction_client_unconfirmed') => {
+      void authority.then(receipt => {
+        if (!receipt?.policyReceipt || diagnosticController.signal.aborted || epoch !== generation.current || (tg()?.initData ?? '') !== session) return;
+        return learningApi.correction({ version: 1, eventId, space: snapshot.space, policyReceipt: receipt.policyReceipt, outcome });
+      }).catch(() => undefined);
+    };
     let confirmed = false, released = false;
     const pending: PendingSave = { controller, release: () => {
       if (released) return; released = true;
@@ -56,8 +71,9 @@ export function MemoryCorrectionEditor({ note, snapshot, locale, disabled, onSav
       const result = await Promise.race([adaptiveApi.correct(note.id, { space: snapshot.space, text: prepared, expectedRevision: note.revision, eventId }, controller.signal, locale), timeout]);
       if (controller.signal.aborted || epoch !== generation.current) return;
       if (result.space !== snapshot.space) throw new Error('correction_scope_changed');
+      report('correction_client_saved');
       confirmed = true; setStage('closed'); setText(''); setPrepared(''); onSaved(result);
-    } catch { if (epoch === generation.current) setError(true); }
+    } catch { if (epoch === generation.current) { report('correction_client_unconfirmed'); setError(true); } }
     finally { clearTimeout(pending.timer); if (request.current === pending) request.current = null; pending.release(); if (epoch === generation.current) setBusy(false); }
   };
   if (stage === 'closed') return <button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={!allowed} onClick={() => { if (request.current) return; setText(note.text); setPrepared(''); setError(false); setStage('edit'); }}>{t('Edit note', 'ویرایش یادداشت')}</button>;

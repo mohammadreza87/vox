@@ -25,6 +25,8 @@ export interface RelationshipLoopDeps {
   store: RelationshipStore; assessor: Assessor; decisions?: DecisionProvider; feedback?: FeedbackProvider; observer?: RelationshipObserver;
   mode: RelationshipMode; now?: () => Date; policy?: Partial<RelationshipPolicy>;
   authorize?(input: { key: RelationshipKey; sourceIds: readonly string[]; phase: 'observe' | 'context' | 'inbox'; expectedFingerprint?: string }): Promise<{ fingerprint: string } | null>;
+  /** Separate source validity from use authority; a pause must never purge retained sources. */
+  synchronize?(key: RelationshipKey, sourceIds: readonly string[]): Promise<'suspended_use' | 'invalid_source'>;
   /** Persist restrictive controls in account/agent/space authority, outside core transactions. */
   applyScopedControl?(key: RelationshipKey, action: 'stop' | 'pause', until?: Date): Promise<void>;
 }
@@ -67,13 +69,33 @@ export class RelationshipLoop {
       return s;
     });
   }
+  /** Cancel pending use without changing primary context, lineage, source expiry or controls. */
+  async suspendUse(key: RelationshipKey): Promise<void> {
+    await this.deps.store.update(key, s => {
+      let changed = false;
+      for (const job of s.intentions) if (active(job)) {
+        if (job.status === 'sending') { job.status = 'delivery_unknown'; s.unansweredCount = Math.max(1, s.unansweredCount); }
+        else job.status = 'cancelled';
+        job.purpose = ''; job.topic = ''; job.sourceIds = []; purgeTemporalEvidence(job);
+        delete job.authorizationFingerprint; delete job.leaseOwner; delete job.leaseUntil; changed = true;
+      }
+      if (changed) s.revision++;
+    });
+  }
   private async authorize(key: RelationshipKey, sourceIds: readonly string[], phase: 'observe' | 'context' | 'inbox', expectedFingerprint?: string): Promise<string | null> {
     if (!key.scope && !this.deps.authorize) return 'legacy';
     try {
       const permit = await this.deps.authorize?.({ key, sourceIds: [...new Set(sourceIds)], phase, ...(expectedFingerprint ? { expectedFingerprint } : {}) });
       if (permit?.fingerprint && (!expectedFingerprint || permit.fingerprint === expectedFingerprint)) return permit.fingerprint;
     } catch { /* Authority errors deny use, never fall back to copied receipts. */ }
-    await this.purge(key);
+    // Unavailable authority never authorizes use. Only a positively invalid
+    // retained-source result permits destructive synchronization.
+    try {
+      if (this.deps.synchronize) {
+        if (await this.deps.synchronize(key, sourceIds) === 'invalid_source') await this.purge(key);
+        else await this.suspendUse(key);
+      } else await this.purge(key);
+    } catch { await this.suspendUse(key); }
     return null;
   }
   private async unchanged(key: RelationshipKey, snapshot: { epoch: number; revision: number }): Promise<boolean> {
@@ -94,7 +116,10 @@ export class RelationshipLoop {
   }
   async status(key: RelationshipKey): Promise<RelationshipState> {
     const state = await this.deps.store.update(key, (s) => { const cutoff = this.now().getTime() - 90 * 86400_000; s.preferences = s.preferences.filter((p) => Date.parse(p.updatedAt) >= cutoff); s.situations = s.situations.filter((v) => Date.parse(v.updatedAt) >= cutoff); pruneFeedback(s, this.now()); return s; });
-    if (!await this.authorize(key, relationshipSourceIds(state), 'context')) return this.purge(key);
+    if (!await this.authorize(key, relationshipSourceIds(state), 'context')) {
+      const current = await this.deps.store.read(key);
+      return { ...emptyRelationship(key), epoch: current.epoch, revision: current.revision, disabled: current.disabled, pausedUntil: current.pausedUntil, timeZone: current.timeZone, quietHours: current.quietHours, eventIds: current.eventIds, forgottenSourceIds: current.forgottenSourceIds, lastInboundAt: current.lastInboundAt, lastOutreachAt: current.lastOutreachAt, unansweredCount: current.unansweredCount, lastTelegramMessageId: current.lastTelegramMessageId };
+    }
     // A local forget/control can race with the ledger lookup as well.
     const current = await this.deps.store.read(key);
     if (current.epoch !== state.epoch || current.revision !== state.revision) return {

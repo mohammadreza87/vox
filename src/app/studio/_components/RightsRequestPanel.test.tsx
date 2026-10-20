@@ -1,0 +1,68 @@
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { RightsRequestPanel } from './RightsRequestPanel';
+import type { RightsRequestView, RightsSnapshot } from '../_lib/rights-client';
+const mocks = vi.hoisted(() => ({ session: 'account-a', read: vi.fn(), create: vi.fn(), act: vi.fn() }));
+vi.mock('../_lib/client', () => ({ tg: () => ({ initData: mocks.session }) }));
+vi.mock('../_lib/rights-client', () => ({ rightsApi: mocks }));
+const ref = '00000000-0000-4000-8000-000000000001';
+const row = (space: 'work' | 'personal' = 'work'): RightsRequestView => ({ version: 1, requestId: ref, space, kind: 'access_export', revision: 1, createdAt: 1, updatedAt: 1, localeAtSubmission: 'en', intakePolicy: { id: 'synthetic', revision: 1, copyVersion: 'rights-intake-ri2-v1' }, requester: { assurance: 'signed_telegram_account', personVerification: 'not_established' }, state: 'received', deadline: { state: 'reviewed_policy_unavailable', dueAt: null, reason: 'jurisdiction_unresolved' }, coverage: { localAccount: 'not_started', shared: 'not_started', providers: 'unsupported', backups: 'unsupported', guests: 'unsupported', deletion: 'not_implemented', formalRestriction: 'not_implemented' }, retention: { policyId: 'synthetic', policyRevision: 1, reviewOrExpiryAt: 10000 }, retentionReviewRequired: false });
+const status = (requests: RightsRequestView[] = []): RightsSnapshot => ({ available: true, policyStatus: 'available', supportedKinds: ['access_export'], intakePolicy: row().intakePolicy, requests, supportContact: 'info@joyixir.com' });
+beforeEach(() => { vi.resetAllMocks(); mocks.session = 'account-a'; mocks.read.mockResolvedValue(status()); mocks.create.mockResolvedValue({ replayed: false, request: row(), policyStatus: 'available' }); });
+afterEach(cleanup);
+it('records a metadata-only request once while busy and shows the durable reference without a guessed deadline', async () => {
+  let finish!: (v: unknown) => void; mocks.create.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+  render(<RightsRequestPanel space="work" />); const submit = await screen.findByRole('button', { name: 'Submit request' }); fireEvent.click(submit); fireEvent.click(submit);
+  expect(mocks.create).toHaveBeenCalledTimes(1); expect(submit).toBeDisabled(); expect(mocks.create.mock.calls[0][0]).toEqual({ version: 1, eventId: expect.any(String), space: 'work', kind: 'access_export', locale: 'en', expectedIntakePolicyRevision: 1 });
+  await act(async () => finish({ replayed: false, request: row(), policyStatus: 'available' })); expect(await screen.findByText(ref)).toBeInTheDocument(); expect(screen.getByText('Your request was recorded. Its applicable deadline has not been confirmed.')).toBeInTheDocument();
+  expect(screen.queryByText(/30 days|45 days|completed successfully/i)).not.toBeInTheDocument();
+});
+it('keeps unavailable intake honest in Persian, with support and no mutation', async () => {
+  mocks.read.mockResolvedValue({ ...status([row()]), available: false, policyStatus: 'unavailable', supportedKinds: [], intakePolicy: undefined }); const { container } = render(<RightsRequestPanel space="work" locale="fa" />);
+  expect(await screen.findByText('دریافت درخواست تا بررسی سیاست مربوط در دسترس نیست. همچنان می‌توانید از کنترل‌های موجود حریم خصوصی استفاده کنید.')).toBeInTheDocument(); expect(screen.getByRole('button', { name: 'ارسال درخواست' })).toBeDisabled(); expect(container.querySelector('section')).toHaveAttribute('dir', 'rtl'); expect(screen.getByRole('link', { name: 'info@joyixir.com' })).toHaveAttribute('href', 'mailto:info@joyixir.com'); expect(mocks.create).not.toHaveBeenCalled();
+});
+it('hides old rows immediately on scope/account changes and ignores late responses', async () => {
+  let finish!: (v: RightsSnapshot) => void; mocks.read.mockReturnValueOnce(new Promise(resolve => { finish = resolve; })).mockResolvedValue(status());
+  const view = render(<RightsRequestPanel space="work" sessionKey="account-a" />); view.rerender(<RightsRequestPanel space="personal" sessionKey="account-a" />);
+  await screen.findByText('No recorded requests in this space.'); await act(async () => finish(status([row()]))); expect(screen.queryByText(ref)).not.toBeInTheDocument();
+  mocks.read.mockResolvedValue(status([row('personal')])); fireEvent.click(screen.getByRole('button', { name: 'Refresh request status' })); await screen.findByText(ref);
+  mocks.session = 'account-b'; mocks.read.mockResolvedValue(status()); view.rerender(<RightsRequestPanel space="personal" sessionKey="account-b" />); expect(screen.queryByText(ref)).not.toBeInTheDocument(); await screen.findByText('No recorded requests in this space.');
+});
+it('reconciles a lost create acknowledgement through GET before allowing another deliberate action', async () => {
+  mocks.create.mockRejectedValue(new Error('private server error')); render(<RightsRequestPanel space="work" />); fireEvent.click(await screen.findByRole('button', { name: 'Submit request' })); await screen.findByRole('alert'); expect(screen.getByRole('button', { name: 'Submit request' })).toBeDisabled(); expect(screen.queryByText('private server error')).not.toBeInTheDocument();
+  mocks.read.mockResolvedValue(status([row()])); fireEvent.click(screen.getByRole('button', { name: 'Refresh request status' })); await screen.findByText(ref); expect(mocks.create).toHaveBeenCalledTimes(1); expect(screen.getByRole('button', { name: 'Submit request' })).toBeEnabled();
+});
+it('a prepared replay shows current metadata without downloading a historical export; closure needs confirmation', async () => {
+  mocks.read.mockResolvedValue(status([row()])); mocks.act.mockResolvedValue({ type: 'metadata', value: { replayed: true, policyStatus: 'available', request: { ...row(), state: 'local_export_prepared', revision: 2 } } });
+  const makeURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:synthetic'); render(<RightsRequestPanel space="work" />); fireEvent.click(await screen.findByRole('button', { name: 'Prepare current local export' })); await screen.findByText('Local account export prepared. Provider/backup data and delivery are unverified.'); expect(makeURL).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'Close request without fulfillment' })); expect(mocks.act).toHaveBeenCalledTimes(1); fireEvent.click(screen.getByRole('button', { name: 'Keep request open' })); expect(screen.queryByRole('button', { name: 'Confirm close without fulfillment' })).not.toBeInTheDocument(); makeURL.mockRestore();
+});
+it('erasure and restriction requests expose no automated completion or export action', async () => {
+  mocks.read.mockResolvedValue(status([{ ...row(), kind: 'erasure' }, { ...row(), requestId: '00000000-0000-4000-8000-000000000002', kind: 'restriction' }])); render(<RightsRequestPanel space="work" />); const articles = await screen.findAllByRole('article'); expect(articles).toHaveLength(2); articles.forEach(article => { expect(within(article).queryByRole('button', { name: 'Prepare current local export' })).toBeNull(); expect(within(article).getByText('Provider and backup actions are unsupported here. Deletion and formal restriction are not implemented by this request.')).toBeInTheDocument(); }); expect(mocks.act).not.toHaveBeenCalled();
+});
+it('downloads only after a deliberate fresh export, releases object URLs and reads current metadata before another preparation', async () => {
+  const prepared = { ...row(), revision: 2, state: 'local_export_prepared' as const };
+  mocks.read.mockResolvedValueOnce(status([row()])).mockResolvedValue(status([prepared]));
+  mocks.act.mockResolvedValue({ type: 'export', value: { space: 'work', currentProjection: true } });
+  const makeURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:current-export'), revokeURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {}), download = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+  render(<RightsRequestPanel space="work" />); fireEvent.click(await screen.findByRole('button', { name: 'Prepare current local export' })); await act(async () => {});
+  expect(download).toHaveBeenCalledTimes(1); expect(revokeURL).toHaveBeenCalledWith('blob:current-export'); expect(screen.queryByRole('link', { name: /export/i })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Prepare current local export' })); await act(async () => {}); expect(mocks.act).toHaveBeenCalledTimes(2); expect(mocks.act.mock.calls[1][1]).toMatchObject({ action: 'prepare_local_export', expectedRevision: 2 }); expect(makeURL).toHaveBeenCalledTimes(2); expect(revokeURL).toHaveBeenCalledTimes(2);
+  makeURL.mockRestore(); revokeURL.mockRestore(); download.mockRestore();
+});
+it('offers only the current reviewed policy kinds and selects a valid type after refresh', async () => {
+  mocks.read.mockResolvedValueOnce({ ...status(), supportedKinds: ['erasure'] }).mockResolvedValue({ ...status(), supportedKinds: ['restriction'] });
+  mocks.create.mockResolvedValue({ replayed: false, request: { ...row(), kind: 'erasure' }, policyStatus: 'available' });
+  render(<RightsRequestPanel space="work" />); await screen.findByRole('option', { name: 'Erasure' }); expect(screen.getAllByRole('option')).toHaveLength(1); expect(screen.getByRole('combobox', { name: 'Request type' })).toHaveValue('erasure');
+  fireEvent.click(screen.getByRole('button', { name: 'Submit request' })); await act(async () => {}); expect(mocks.create.mock.calls[0][0].kind).toBe('erasure');
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh request status' })); await screen.findByRole('option', { name: 'Formal restriction' }); expect(screen.getAllByRole('option')).toHaveLength(1); expect(screen.getByRole('combobox', { name: 'Request type' })).toHaveValue('restriction'); expect(screen.queryByRole('option', { name: 'Erasure' })).not.toBeInTheDocument();
+});
+
+it.each(['en','fa'] as const)('shows minimal expiry continuity in %s without old detail or fulfillment claims', async locale => {
+  const { rightsCopy } = await import('../_lib/rights-copy');
+  mocks.read.mockResolvedValue({ ...status(), expiredRequests: [{ requestId: ref, space: 'work', lastRevision: 2, purgedAt: 1000, retainUntil: 2000 }] });
+  render(<RightsRequestPanel space="work" locale={locale} />); await screen.findByText(ref);
+  expect(screen.getByText(new RegExp(rightsCopy[locale].expiredRecord))).toBeInTheDocument();
+  expect(screen.queryByRole('article')).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: rightsCopy[locale].prepare })).not.toBeInTheDocument();
+});

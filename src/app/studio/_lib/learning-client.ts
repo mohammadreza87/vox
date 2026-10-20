@@ -1,17 +1,26 @@
 'use client';
-import type { ClientObservationInput, ObserverSnapshot } from '@/lib/adaptive/observation/contracts';
-import { request } from './client';
+import type { ClientObservationInput, CorrectionObservationInput, ObserverSnapshot } from '@/lib/adaptive/observation/contracts';
+import { ApiError, request } from './client';
+import { maintenanceHealthSchema, type MaintenanceHealth } from '@/lib/adaptive/lifecycle/maintenance-health-contracts';
+export type { MaintenanceHealth } from '@/lib/adaptive/lifecycle/maintenance-health-contracts';
 import type { ImprovementWorkflow } from '@/lib/adaptive/improvement/workflow';
 
 export type { ObserverSnapshot };
 export type LearningSpace = 'work' | 'personal';
 // Export is a server-allowlisted document; do not assemble it from client state.
 export type LearningExport = Record<string, unknown>;
-export interface LearningOperations { maintenanceConfigured: boolean; improvementConfigured: boolean; report: Awaited<ReturnType<ImprovementWorkflow['report']>> | null }
+export interface LearningOperations { maintenanceConfigured: boolean; maintenance: MaintenanceHealth; improvementConfigured: boolean; report: Awaited<ReturnType<ImprovementWorkflow['report']>> | null }
 export const learningApi = {
   read: (space: LearningSpace) => request<ObserverSnapshot>('GET', `learning/observations?space=${space}`),
   process: (space: LearningSpace) => request<ObserverSnapshot>('POST', `learning/observations/process?space=${space}`, {}),
   export: (space: LearningSpace) => request<LearningExport>('GET', `learning/export?space=${space}`),
-  operations: () => request<LearningOperations>('GET', 'learning/operations'),
-  event: (input: ClientObservationInput) => request<{ recorded: boolean; duplicate: boolean; eventId?: string }>('POST', 'learning/events', input),
+  operations: async (signal?: AbortSignal): Promise<LearningOperations> => {
+    const value = await request<LearningOperations>('GET', 'learning/operations', undefined, 'json', signal);
+    const parsed = maintenanceHealthSchema.safeParse(value?.maintenance);
+    if (!parsed.success) throw new ApiError(503, 'Maintenance status is unavailable.');
+    return { ...value, maintenance: parsed.data };
+  },
+  correctionAuthority: (space: LearningSpace, signal?: AbortSignal) => request<{ policyReceipt: string | null }>('POST', 'learning/correction-authority', { space }, 'json', signal),
+  correction: (input: CorrectionObservationInput, signal?: AbortSignal) => request<{ recorded: boolean; duplicate: boolean }>('POST', 'learning/corrections', input, 'json', signal),
+  event: (input: ClientObservationInput, signal?: AbortSignal) => request<{ recorded: boolean; duplicate: boolean; eventId?: string }>('POST', 'learning/events', input, 'json', signal),
 };

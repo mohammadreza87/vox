@@ -23,6 +23,8 @@ export function emptyRelationship(key: RelationshipKey): RelationshipState {
 export interface RelationshipStore {
   bumpEpoch(personaId: string): Promise<void>;
   read(key: RelationshipKey): Promise<RelationshipState>;
+  /** Single-process committed snapshot; throws while any write is queued. */
+  readCommittedForEffect?(key: RelationshipKey): RelationshipState;
   update<T>(key: RelationshipKey, fn: (state: RelationshipState) => T): Promise<T>;
   due(now: Date, limit: number): Promise<RelationshipKey[]>;
   keysForPersona(personaId: string): Promise<RelationshipKey[]>;
@@ -62,11 +64,17 @@ export class InMemoryRelationshipStore implements RelationshipStore {
   protected epochs = new Map<string, number>();
   protected states = new Map<string, RelationshipState>();
   protected queue: Promise<unknown> = Promise.resolve();
+  private pendingWrites = 0;
+  readCommittedForEffect(key: RelationshipKey): RelationshipState {
+    if (this.pendingWrites !== 0) throw new Error('Relationship store busy');
+    return structuredClone(currentEpoch(this.states.get(relationshipId(key)) ?? emptyRelationship(key), this.epochs.get(key.personaId) ?? 0));
+  }
   protected async commit(states: Map<string, RelationshipState>): Promise<void> { this.states = states; }
   bumpEpoch(personaId: string): Promise<void> {
     const run = async () => { const previous = this.epochs; this.epochs = new Map(previous); this.epochs.set(personaId, (this.epochs.get(personaId) ?? 0) + 1);
       try { await this.commit(this.states); } catch (error) { this.epochs = previous; throw error; } };
-    const task = this.queue.then(run, run); this.queue = task.catch(() => undefined); return task;
+    this.pendingWrites++;
+    const task = this.queue.then(run, run).finally(() => { this.pendingWrites--; }); this.queue = task.catch(() => undefined); return task;
   }
   async read(key: RelationshipKey): Promise<RelationshipState> { await this.queue; return structuredClone(currentEpoch(this.states.get(relationshipId(key)) ?? emptyRelationship(key), this.epochs.get(key.personaId) ?? 0)); }
   update<T>(key: RelationshipKey, fn: (state: RelationshipState) => T): Promise<T> {
@@ -76,7 +84,8 @@ export class InMemoryRelationshipStore implements RelationshipStore {
       const next = new Map(this.states); next.set(id, state); await this.commit(next);
       return structuredClone(result);
     };
-    const task = this.queue.then(run, run); this.queue = task.catch(() => undefined); return task;
+    this.pendingWrites++;
+    const task = this.queue.then(run, run).finally(() => { this.pendingWrites--; }); this.queue = task.catch(() => undefined); return task;
   }
   async due(now: Date, limit: number): Promise<RelationshipKey[]> {
     await this.queue;

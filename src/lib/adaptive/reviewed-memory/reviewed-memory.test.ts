@@ -140,8 +140,12 @@ it.each(['busy', 'malformed', 'source_deleted'] as const)('the synchronous real-
 it('withholds provider output after revocation and rejects a source deletion just before the acceptance transaction', async () => {
   const f = await setup(); f.create.mockImplementationOnce(async () => { await f.removeSource(); return { content: [{ type: 'text', text: 'MUST_NOT_DELIVER' }], stop_reason: 'end_turn', usage: { input_tokens: 12, output_tokens: 8 } }; });
   await expect(f.service.preview(123, f.input)).rejects.toMatchObject({ code: 'reviewed_memory_changed' });
-  const g = await setup(), preview = await g.service.preview(123, g.input), transaction = g.adaptive.withAccountDocument.bind(g.adaptive); let calls = 0;
-  vi.spyOn(g.adaptive, 'withAccountDocument').mockImplementation(async (id, fn) => { if (++calls === 2) await g.removeSource(); return transaction(id, fn); });
+  const g = await setup(), preview = await g.service.preview(123, g.input), transaction = g.adaptive.withAccountDocument.bind(g.adaptive);
+  vi.spyOn(g.adaptive, 'withAccountDocument').mockImplementation(async (id, fn, beforeCommit) => {
+    // Target the acceptance write, independent of incidental read preflights.
+    if (beforeCommit) await g.removeSource();
+    return transaction(id, fn, beforeCommit);
+  });
   await expect(g.service.accept(123, g.accept(preview))).rejects.toMatchObject({ code: 'reviewed_memory_changed' });
   expect(await transaction(123, d => d.memories.some(row => row.sourceRefs))).toBe(false);
 });

@@ -8,7 +8,7 @@
     "US"
   ],
   "audience": "adults only",
-  "status": "Observation and adaptive conversation source integrated; release receipt records exact deployed revision. Optional activation and full roadmap qualification remain open.",
+  "status": "Retention operations, rendered-text/correction observation and controlled private presentation experiments are integrated for independent acceptance. Production activation and complete roadmap qualification remain separate.",
   "size_legend": {
     "S": "bounded change/review",
     "M": "multi-file bounded slice",
@@ -274,7 +274,7 @@
       "id": "VOX-007",
       "phase": "P0",
       "title": "Specify protected eval corpus and baseline protocol",
-      "status": "planned",
+      "status": "in_progress",
       "priority": "P0",
       "size": "M",
       "owner": "vox_qa_evaluator",
@@ -300,7 +300,10 @@
         "Dataset manifest template",
         "Baseline and promotion protocol"
       ],
-      "evidence": []
+      "evidence": [
+        "docs/implementation/EVALUATION_PROTOCOL.md"
+      ],
+      "progress_note": "Strict synthetic manifest and disjoint task/person/group/conversation forward-time partitions, optimizer-only projection, predeclared paired denominators/budgets and signed minimized receipts are implemented. Independent local review passed 24 external checks after two reproduced outcome/scenario defects were fixed. External protected assets/IAM, calibrated judges, representative data and statistical qualification remain open. Independent qualification additionally passed two actual pinned-Docker companion flows at integrated d5416f0; finite synthetic results do not establish population quality."
     },
     {
       "id": "VOX-008",
@@ -484,9 +487,10 @@
         "Accessibility and locale evidence"
       ],
       "evidence": [
-        "docs/implementation/DELIVERY_RESULT.md"
+        "docs/implementation/DELIVERY_RESULT.md",
+        "docs/implementation/GUEST_RIGHTS_INTAKE.md"
       ],
-      "progress_note": "EN/FA Privacy screen, profile declaration, optional choices/withdrawal, private notes and per-agent grants implemented. Guest entry and complete user-rights/status journeys remain open."
+      "progress_note": "EN/FA Privacy screen, profile declaration, optional choices/withdrawal, private notes and per-agent grants implemented. Guest entry and complete user-rights/status journeys remain open. GI1 adds an isolated public EN/FA /privacy route, manual reference/recovery-code status, explicit close confirmation and disabled-mode contact fallback. Guest credentials remain in transient component state and request bodies; this is metadata request tracking, not verified identity, consent or rights fulfillment. Independent backend and trusted-origin acceptance passed; compiled/CI/release evidence is tracked per candidate, and legal activation remains separate."
     },
     {
       "id": "VOX-013",
@@ -521,9 +525,11 @@
       "evidence": [
         "docs/implementation/DELIVERY_RESULT.md",
         "docs/implementation/MEMORY_RETRIEVAL_RESULT.md",
-        "docs/implementation/REVIEWED_PRIVATE_MEMORY_RESULT.md"
+        "docs/implementation/REVIEWED_PRIVATE_MEMORY_RESULT.md",
+        "docs/implementation/INDEXED_STORAGE.md",
+        "docs/implementation/SQLITE_CONVERSATION_QUALIFICATION.md"
       ],
-      "progress_note": "Explicit private note review now supports selected-only ephemeral summary previews, deliberate save, signed source revisions, descendant invalidation and guarded FILE commits. Retrieval ranks individual notes and summaries by current query relevance and retains originals unless exact statement coverage is established. Author132/11 and independent112/8 plus exact prior-schema rollback passed. Aggregate loading, indexed retrieval and generalized automatic extraction remain open."
+      "progress_note": "Explicit note/claim/summary review and same-ID correction are implemented. Optional prepared SQLite supplies bounded physical retrieval and compact authority; FILEv2 supplies current-state rollback. Guarded synthetic conversation qualification passed nine cases in both prepared schema-2 formats. PR77/deploy ee3467d also fixes concurrent reviewed-memory acceptance with 11 independent write/fence checks. Production still selects legacy FILE. Shared aggregate indexing, generalized extraction/consolidation and measured quality/latency remain open."
     },
     {
       "id": "VOX-014",
@@ -593,9 +599,10 @@
         "Reconciliation report"
       ],
       "evidence": [
-        "docs/implementation/DELIVERY_RESULT.md"
+        "docs/implementation/DELIVERY_RESULT.md",
+        "docs/implementation/INDEXED_STORAGE.md"
       ],
-      "progress_note": "Legacy unscoped history/auto-memory is denied in new runtime, preserving source data without silent consent migration. Explicit migration/reconciliation/rollback tooling remains open."
+      "progress_note": "Legacy unscoped history/auto-memory remains denied without silent consent migration. Current adaptive FILE/SQLite/FILEv2 format transition, recovery and current-state rollback tooling is implemented and independently source-tested (INDEXED_STORAGE.md). Broader legacy application inventory, ownership/purpose reconciliation, quarantine mapping and production residual/restore qualification remain open; storage-format conversion does not grant historical data new consent."
     },
     {
       "id": "VOX-016",
@@ -666,9 +673,10 @@
       ],
       "evidence": [
         "docs/implementation/DELIVERY_RESULT.md",
-        "docs/implementation/OBSERVATION_LEARNING.md"
+        "docs/implementation/OBSERVATION_LEARNING.md",
+        "docs/implementation/OBSERVATION_COMPLETION.md"
       ],
-      "progress_note": "Strict bounded server/client observation envelopes now serve authenticated Studio ingress with server-derived identity, exact agent/space receipt, revision and QA-origin exclusion. Real voice/private Telegram producers retain no conversation content. Wider channel/usage/version coverage remains open."
+      "progress_note": "Allowlisted text_rendered and client-unverified correction observations now have strict ingress, current receipt/canonical command checks, bounded retention and own-space export. No raw note/conversation text is accepted in these observations. Composed release evidence remains separate."
     },
     {
       "id": "VOX-018",
@@ -769,9 +777,10 @@
         "Outcome event coverage"
       ],
       "evidence": [
-        "docs/implementation/OBSERVATION_LEARNING.md"
+        "docs/implementation/OBSERVATION_LEARNING.md",
+        "docs/implementation/OBSERVATION_COMPLETION.md"
       ],
-      "progress_note": "Tap-to-talk client hooks report playing, completed, failed and interrupted outcomes using accepted server correlation. Events remain unverified and never certify task success. Live ElevenLabs, correction and experiment-exposure coverage remain open."
+      "progress_note": "Studio reports committed, connected and visible whole-reply text, separately from explicit task-success feedback. EN/FA note-correction metadata reports saved/unconfirmed outcomes without delaying Save; analytics eligibility loss cancels pending diagnostics. This is whole-response DOM timing, not first streamed token or human comprehension."
     },
     {
       "id": "VOX-021",
@@ -803,9 +812,10 @@
       ],
       "evidence": [
         "docs/implementation/OBSERVATION_DIAGNOSTICS.md",
-        "docs/implementation/evidence/DIAGNOSTIC_REVIEW.md"
+        "docs/implementation/evidence/DIAGNOSTIC_REVIEW.md",
+        "docs/implementation/OBSERVATION_COMPLETION.md"
       ],
-      "progress_note": "Active Studio/Tireh polling, webhook, gateway, provider fallback, live call and Mini App HTTP diagnostics now emit fixed catalog fields without raw exceptions, arbitrary codes, content or identity IDs. Independent canary/getter/proxy and real Pino serialization checks passed. Historical/platform logs, sinks/IAM/retention and full export/replay coverage remain open."
+      "progress_note": "New correction/presentation diagnostics retain fixed outcome, scope and bounded timing only; exports omit internal receipts/source/authority hashes. Current-state rollback removes the new observer extension from legacy FILE, prepared SQLite or FILEv2 while preserving canonical data, pause controls and tombstones."
     },
     {
       "id": "VOX-022",
@@ -839,9 +849,10 @@
       ],
       "evidence": [
         "docs/implementation/DELIVERY_RESULT.md",
-        "docs/implementation/OBSERVATION_LEARNING.md"
+        "docs/implementation/OBSERVATION_LEARNING.md",
+        "docs/implementation/MAINTENANCE_HEALTH.md"
       ],
-      "progress_note": "Own-space Studio measurements show response/playback denominators, queue lag/failure, deterministic findings and explicit unavailable task success/usage. Owner/superadmin operations view shows local workflow metadata only. Organization/cohort dashboards remain open."
+      "progress_note": "Own-space Studio measurements show response/playback denominators, queue lag/failure, deterministic findings and explicit unavailable task success/usage. Owner/superadmin operations view shows local workflow metadata only. Organization/cohort dashboards remain open. The next bounded source slice adds strict read-only system-wide maintenance status for current operators: retained progress, activity time, recorded failure, lease expiry and explicit unavailable states in EN/FA. Counts are not unique people or verified deletions. Independent/compiled/CI acceptance is tracked per candidate in MAINTENANCE_HEALTH.md."
     },
     {
       "id": "VOX-023",
@@ -1094,9 +1105,10 @@
         "Exposure and isolation tests"
       ],
       "evidence": [
-        "docs/implementation/DELIVERY_RESULT.md"
+        "docs/implementation/DELIVERY_RESULT.md",
+        "docs/implementation/CONTROLLED_EXPERIMENTS.md"
       ],
-      "progress_note": "Server manifest and Decisions switch fail closed; no experiment assignment/exposure worker enabled."
+      "progress_note": "Controlled presentation experiment service, strict configuration and lifecycle, private-person and exact shared-container assignment contracts, and client-unverified visible exposure are implemented. The actual Studio surface is private text density only, default off; shared-runtime enrollment and production cohort activation remain open."
     },
     {
       "id": "VOX-030",
@@ -1634,9 +1646,10 @@
         "Candidate registry"
       ],
       "evidence": [
-        "docs/implementation/OBSERVATION_LEARNING.md"
+        "docs/implementation/OBSERVATION_LEARNING.md",
+        "docs/implementation/EVALUATION_PROTOCOL.md"
       ],
-      "progress_note": "Fixed-budget offline cancellation-routing search and immutable JSON candidate registry implemented. Small synthetic corpus only; prompt optimization, representative train/validation data and provider quality evaluation remain open."
+      "progress_note": "Fixed-budget cancellation-routing optimizer now accepts only the strict optimization projection of a frozen protocol; validation/final cases and judge/scoring fields are excluded. Representative prompt optimization, real provider quality and external optimizer isolation remain open."
     },
     {
       "id": "VOX-045",
@@ -1710,9 +1723,10 @@
       ],
       "evidence": [
         "docs/implementation/DELIVERY_RESULT.md",
-        "docs/implementation/OBSERVATION_LEARNING.md"
+        "docs/implementation/OBSERVATION_LEARNING.md",
+        "docs/implementation/EVALUATION_PROTOCOL.md"
       ],
-      "progress_note": "Pinned Docker evaluator and separate signed evaluator/human receipts bind exact artifacts/data/policy; malformed payload, budget bypass and counterfeit evidence regressions covered. Synthetic role keys do not qualify production IAM; protected service deployment and representative corpus remain open. Final cancellation datasets and the fixed evaluator require both cancelled-stop and active-continue coverage, rejecting inconsistent labels (policy version 2)."
+      "progress_note": "Protocol-bound candidates require a durable evaluator reservation before final execution, signed minimized companion, existing Docker final envelope and human approval of that exact envelope. Replay/crash/cross-candidate reuse and legacy bypass deny. Independent local 24-case review passed. At integrated d5416f0 the four normally skipped Docker cases passed within 33 workflow/software-sandbox tests; two independent actual pinned-Docker companion flows also passed, covering successful approval/restart and denied regression/self-promotion. Default CI skips remain explicit. External IAM/checkpoint and representative quality/calibration remain open."
     },
     {
       "id": "VOX-047",
@@ -1745,9 +1759,10 @@
         "Rollback runbook/evidence"
       ],
       "evidence": [
-        "docs/implementation/OBSERVATION_LEARNING.md"
+        "docs/implementation/OBSERVATION_LEARNING.md",
+        "docs/implementation/CONTROLLED_EXPERIMENTS.md"
       ],
-      "progress_note": "Local comparison-only rollback rehearsal binds candidate and baseline artifacts, and explicitly makes no deployment or candidate-disable claim. Controlled production experiments, derived-state rollback and kill-switch qualification remain open."
+      "progress_note": "Versioned off/offline/shadow/pilot/killed controller, isolated derived state, kill/quarantine/purge, durable suppression/source tombstones, reviewed retention and scoped export are implemented. Local FILE/SQLite/FILEv2 consent integration is independently tested. Evidence references are operator attestations, not automatic proof of independent promotion; production pilot and representative outcome readout remain open."
     },
     {
       "id": "VOX-048",
@@ -1961,9 +1976,10 @@
         "Incident and restore runbook"
       ],
       "evidence": [
-        "docs/implementation/OBSERVATION_LEARNING.md"
+        "docs/implementation/OBSERVATION_LEARNING.md",
+        "docs/implementation/MAINTENANCE_HEALTH.md"
       ],
-      "progress_note": "Local account sweep pagination, competing leases, crash recovery, expiry, snapshot reconciliation and bounded observer retries tested. Background maintenance is supported only in the persistent file/polling runtime; unsupported activation fails startup. Production load/SLOs, full backup restoration and provider residual deletion remain open."
+      "progress_note": "Local account sweep pagination, competing leases, crash recovery, expiry, snapshot reconciliation and bounded observer retries tested. Background maintenance is supported only in the persistent file/polling runtime; unsupported activation fails startup. Production load/SLOs, full backup restoration and provider residual deletion remain open. A separate read-only FILE checkpoint health capability and EN/FA operator status view are implemented without activating maintenance or changing cleanup semantics. Disabled execution preserves readable retained evidence; current committed operator/auth fences protect publication. Alert delivery, actual scheduled-worker/load qualification and backup/provider guarantees remain open."
     },
     {
       "id": "VOX-053",
@@ -2125,9 +2141,12 @@
         "Rights/deadline/access tests"
       ],
       "evidence": [
-        "docs/implementation/OBSERVATION_LEARNING.md"
+        "docs/implementation/OBSERVATION_LEARNING.md",
+        "docs/implementation/RIGHTS_INTAKE.md",
+        "docs/implementation/RIGHTS_RETENTION.md",
+        "docs/implementation/GUEST_RIGHTS_INTAKE.md"
       ],
-      "progress_note": "Confirmed own-account Work/Personal JSON export now includes allowlisted account records and currently authorized published shared content; exports are not persisted. Provider/backups explicitly unavailable. Guest request verification and broader rights orchestration remain open."
+      "progress_note": "Own-account Work/Personal export, EN/FA note correction, RI1 request intake and RI2 retention operations are implemented. RI2 binds original audit/closure floors, explicitly reassesses unresolved cases, purges only eligible terminal records and retains finite scoped continuity/410 receipts. Independent RI2 local acceptance passed 36 cases. Formal restriction/objection, guest verification, provider/backups and broader rights fulfillment remain open. Prior additional independent immediate-export race proof remains unavailable after automatic security review; no replacement execution is claimed. GI1 guest metadata intake, bounded separate ledger, current-operator queue, key continuity, final authority fences and finite retention/status receipts are implemented behind reviewed-policy/key configuration. Independent review caught and verified the fix for a short purge-receipt horizon. Actual compiled proxy testing also exposed internal/public-origin mismatch; all six affected handlers now use the trusted server URL. Composed independent acceptance passed 158 external cases and 117 repository regressions; compiled/CI/release evidence remains bound to its exact candidate. Guest recovery-code possession never proves identity or authorizes private-data disclosure."
     }
   ],
   "delivery_slices": [
@@ -2152,6 +2171,22 @@
       "baseline": "c424dc6d9829540ad1e999a99efa824e9894dd66",
       "evidence": "docs/implementation/OBSERVATION_DIAGNOSTICS.md",
       "note": "Fixed catalog events in the active communication chain; independent source review passed. Wider VOX-021 export, platform and retention acceptance remains open."
+    },
+    {
+      "id": "retention-observation-experiments-release",
+      "status": "deployed_core_optional_features_off",
+      "baseline": "7f0b0efe109e6b372245e82b038271db369bb8e4",
+      "deployed_revision": "ee3467d2649e36ea4a9c5ca02560c3f50a3f8451",
+      "evidence": "docs/implementation/RELEASE_2026_10_20.md",
+      "note": "Independent source/CI and exact live route/ownership verification passed. Optional activation and dependency audit findings remain explicit; no real provider generation/device proof."
+    },
+    {
+      "id": "guest-evaluation-release",
+      "status": "deployed_core_optional_features_off",
+      "baseline": "ee3467d2649e36ea4a9c5ca02560c3f50a3f8451",
+      "deployed_revision": "9371894a2dc4bc6f9abca25289f2eaa9fe6e17b9",
+      "evidence": "docs/implementation/RELEASE_GUEST_EVALUATION_2026_10_20.md",
+      "note": "Independent source/browser and CI passed; exact merged build installed, 38 live route checks and four current active-bot ownership reads passed. Guest intake and other optional capabilities remain disabled pending their separate activation gates."
     }
   ]
 }

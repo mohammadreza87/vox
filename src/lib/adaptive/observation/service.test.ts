@@ -284,3 +284,64 @@ describe('stage/usage and explicit task outcome journal', () => {
     expect(result.projection.telemetry?.inputTokens).toBeNull();
   });
 });
+
+describe('committed text and correction metadata', () => {
+  it('accepts text only on the exact accepted text conversation, deduplicates and never verifies task success', async () => {
+    const f = await fixture(); await f.grant();
+    const report = { eventId: 'text-turn', space: 'work' as const, agentId: 'agent', turnId: 'turn', outcome: 'text_rendered' as const, durationMs: 321 };
+    expect(await f.observer.recordClient(123, report)).toMatchObject({ recorded: false });
+    await f.observer.recordServer(123, await f.input());
+    expect(await f.observer.recordClient(123, report)).toMatchObject({ recorded: false });
+    await f.observer.recordServer(123, await f.input('text', { channel: 'text', turnId: 'text-turn' }));
+    const text = { ...report, turnId: 'text-turn' };
+    expect(await f.observer.recordClient(124, text)).toMatchObject({ recorded: false });
+    expect(await f.observer.recordClient(123, { ...text, space: 'personal' })).toMatchObject({ recorded: false });
+    expect(await f.observer.recordClient(123, text)).toMatchObject({ recorded: true });
+    expect(await f.observer.recordClient(123, text)).toMatchObject({ duplicate: true });
+    await f.observer.process(123);
+    const snapshot = await f.observer.snapshot(123, 'work');
+    expect(snapshot.projection.clientExperience).toMatchObject({ version: 1, trust: 'client_unverified', textRendered: 1, meanTimeToTextMs: 321 });
+    expect(snapshot.projection.taskOutcomesUnknown).toBe(2); expect(snapshot.completeness.verifiedTaskSuccess).toBeNull();
+    const raw = await f.raw(); expect(raw.events.find(e => e.outcome === 'text_rendered')).toMatchObject({ clientExperienceVersion: 1 });
+    await f.withdraw(); expect((await f.raw()).events).toHaveLength(0);
+    expect(await f.observer.recordClient(123, text)).toMatchObject({ recorded: false });
+  });
+  it('correlates saved feedback with the canonical command receipt, isolates scope, and removes reports on withdrawal', async () => {
+    const f = await fixture(); await f.grant();
+    const receipt = await f.observer.authorizeCorrection(123, 'work'); expect(receipt).toBeTypeOf('string');
+    const input = { version: 1 as const, eventId: 'save-command', space: 'work' as const, policyReceipt: receipt!, outcome: 'correction_client_saved' as const };
+    expect(await f.observer.recordCorrection(123, input)).toMatchObject({ recorded: false });
+    const before = await f.adaptive.read(123, 'work');
+    const created = await f.adaptive.createMemory(123, { space: 'work', text: 'PRIVATE_NOTE_CANARY', expectedRevision: before.revision, eventId: randomUUID() });
+    const note = created.memories[0];
+    await f.adaptive.correctMemory(123, note.id, { space: 'work', text: 'PRIVATE_CORRECTION_CANARY', expectedRevision: note.revision, eventId: input.eventId }, { authorizeNow: () => true });
+    expect(await f.observer.recordCorrection(124, input)).toMatchObject({ recorded: false });
+    expect(await f.observer.recordCorrection(123, { ...input, space: 'personal' })).toMatchObject({ recorded: false });
+    expect(await f.observer.recordCorrection(123, input)).toMatchObject({ recorded: true });
+    expect(await f.observer.recordCorrection(123, input)).toMatchObject({ duplicate: true });
+    const unconfirmed = { ...input, eventId: 'unknown-command', outcome: 'correction_client_unconfirmed' as const };
+    expect(await f.observer.recordCorrection(123, unconfirmed)).toMatchObject({ recorded: true });
+    const snapshot = await f.observer.snapshot(123, 'work');
+    expect(snapshot.projection.clientExperience).toMatchObject({ correctionSaved: 1, correctionUnconfirmed: 1, correctionAcceptedReceipts: 1 });
+    expect(snapshot.completeness.clientCorrectionReports).toBe(2); expect(JSON.stringify(snapshot)).not.toContain('PRIVATE_');
+    const raw = await f.raw(); expect(JSON.stringify(raw)).not.toContain(note.id); expect(JSON.stringify(raw)).not.toContain(input.eventId);
+    const { AdaptiveLifecycleService } = await import('../lifecycle/service');
+    const exported = await new AdaptiveLifecycleService(f.adaptive).exportAccount(123, 'work');
+    expect(exported.observerCorrections).toHaveLength(2);
+    expect(JSON.stringify(exported.observerCorrections)).not.toMatch(/PRIVATE_|save-command|account|policyReceipt/);
+    await f.withdraw(); expect((await f.raw()).corrections).toBeUndefined();
+    expect(await f.observer.recordCorrection(123, input)).toMatchObject({ recorded: false });
+    await f.grant(); expect(await f.observer.recordCorrection(123, input)).toMatchObject({ recorded: false });
+  });
+  it('rejects arbitrary correction payloads and bounds all new records with the shared journal limit', async () => {
+    const f = await fixture(); await f.grant();
+    const policyReceipt = (await f.observer.authorizeCorrection(123, 'work'))!;
+    const input = { version: 1 as const, eventId: 'unconfirmed', space: 'work' as const, policyReceipt, outcome: 'correction_client_unconfirmed' as const };
+    expect(() => f.observer.recordCorrection(123, { ...input, text: 'PRIVATE_CANARY' } as never)).toThrow();
+    for (let i = 0; i < OBSERVER_MAX_EVENTS; i++) await f.observer.recordCorrection(123, { ...input, eventId: `unknown-${i}` });
+    await expect(f.observer.recordCorrection(123, input)).rejects.toMatchObject({ code: 'observer_capacity' });
+    f.setNow(NOW + OBSERVER_RETENTION_MS + 1);
+    expect((await f.observer.snapshot(123, 'work')).projection.clientExperience).toBeUndefined();
+    expect((await f.raw()).corrections).toBeUndefined();
+  });
+});
