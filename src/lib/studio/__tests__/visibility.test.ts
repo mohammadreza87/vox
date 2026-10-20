@@ -162,6 +162,9 @@ describe('who an agent talks to in direct messages', () => {
 
 describe('groups are open to everyone in them', () => {
   it('a private agent answers every group member once someone allowed added it', async () => {
+    // Legacy path: a guest in a group gets a guest-safe answer. Adaptive runtimes
+    // ignore a group turn from an unknown reader (adaptive-integration.test.ts).
+    await legacyHarness();
     const { agent } = await agentWith('private');
     await h.store.update((s) => {
       s.groups.push({ chatId: -500, title: 'Studio floor', memberIds: [ID.alice], hasGuests: false, agentIds: [agent.id], addedBy: ID.alice, addedAt: '' });

@@ -115,6 +115,10 @@ describe('bot runner', () => {
   });
 
   it('agent bot: an outsider in a group it was added to gets a guest-safe answer', async () => {
+    // Legacy (non-adaptive) path: no production runtime builds it; adaptive
+    // runtimes ignore a group turn from an unknown reader (adaptive-integration.test.ts).
+    h = makeStudio({ adaptive: false });
+    org = await seedOrg(h);
     vi.useFakeTimers();
     const { agent, token } = await hire(h, org.alice);
     await h.store.update((s) => {
