@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { defaultVoiceId } from '../media';
-import { agentCraft, agentToPersona, groupId, personId, studioToOrg, studioToOrgConfig } from '../org-bridge';
+import { agentCraft, agentSkillSet, agentToPersona, groupId, personId, studioToOrg, studioToOrgConfig } from '../org-bridge';
 import type { Catalog } from '../skills/catalog';
 import type { AgentRole, AgentSkill } from '../skills/types';
 import type { Agent, StudioState } from '../types';
@@ -99,6 +99,26 @@ describe('character, voice examples and craft reach the runtime persona', () => 
     expect(chosen.craft).not.toContain('Scope trade-off');
     expect(chosen.craft!.match(/<skill /g)).toHaveLength(1);
     expect(agentCraft({ roleId: role.id, skillIds: [] }, catalog)).not.toContain('<skill');
+  });
+
+  it('fills the routed skill set alongside the full craft, with pinned playbooks kept out of selection', () => {
+    const pinned: AgentSkill = { ...skill('core.safety', 'Safety referral'), pinned: true };
+    const withPinned: Catalog = { ...catalog, skills: [...catalog.skills, pinned] };
+    const p = personaSpec({ roleId: role.id, skillIds: ['core.scope', 'core.safety', 'core.risk'] });
+    const persona = agentToPersona(agent({ persona: p }), 'o', { catalog: withPinned });
+    expect(persona.craft).toContain('<skill name="Safety referral">');
+    expect(persona.skillSet?.role).toContain('Your role: Live-ops Producer.');
+    expect(persona.skillSet?.routable.map((s) => s.id)).toEqual(['core.scope', 'core.risk']);
+    expect(persona.skillSet?.pinned.map((s) => s.id)).toEqual(['core.safety']);
+    expect(persona.skillSet?.pinned[0].playbook).toContain('<skill name="Safety referral">');
+    // Cached per catalog with the craft: rebuilt orgs reuse the same objects.
+    expect(agentSkillSet(p, withPinned)).toBe(persona.skillSet);
+    expect(agentToPersona(agent({ persona: p }), 'o', { catalog: withPinned }).skillSet).toBe(persona.skillSet);
+    // Fewer than two routable skills: the agent always gets the full craft.
+    const single = agentToPersona(agent({ persona: personaSpec({ roleId: role.id, skillIds: ['core.scope', 'core.safety'] }) }), 'o', { catalog: withPinned });
+    expect(single.craft).toContain('<skill name="Scope trade-off">');
+    expect(single).not.toHaveProperty('skillSet');
+    expect(agentToPersona(agent({ persona: personaSpec() }), 'o', { catalog })).not.toHaveProperty('skillSet');
   });
 
   it('custom agents get no craft; character and voice examples always pass through', () => {

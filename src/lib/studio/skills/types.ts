@@ -56,6 +56,12 @@ export interface AgentSkill {
   deliverable?: string;
   sources: SkillSource[];
   fa?: FaCopy;
+  /**
+   * Safety, scope and referral playbooks that must apply even when a message is
+   * not "about" them (crisis protocol, red flags). Pinned skills are always in
+   * the prompt in full and never offered to per-message selection.
+   */
+  pinned?: true;
 }
 
 export interface RoleTraits {

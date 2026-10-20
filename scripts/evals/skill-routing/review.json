@@ -1,0 +1,179 @@
+{
+  "description": "Human review of the skill routing eval, merged into docs/agent-skills/SKILL_ROUTING_EVAL.md by scripts/skill-routing-eval.ts. Judgements are keyed by case id.",
+  "labelFixes": [],
+  "cases": {
+    "ctx-03": {
+      "verdict": "router",
+      "note": "Same miss as in the all-roles run: a confident none (0.80) for a Persian problem statement that asks nothing. With 'چیکار کنیم؟' added it routes at 1.00, and in English it routes at 0.84, so the description is sound and no rewrite is proposed. The question-wording change (see Wording experiments) fixes it."
+    },
+    "h-ps-03": {
+      "verdict": "description",
+      "note": "Three-way split: purchase-issues 0.37, crisp-writing 0.30, bug-handoff 0.25. Unrouted, so harmless. The broad crisp-writing trigger ('a reply') pulls 'how should I answer'; see the open crisp-writing proposal."
+    },
+    "h-ctx-01": {
+      "verdict": "router",
+      "note": "Another Persian problem statement with no question: tool-design 0.53 vs none 0.45, confidence 0.44, just under the threshold. Unrouted, so harmless. The question-wording change routes it at 0.99."
+    }
+  },
+  "rewrites": [
+    {
+      "skillId": "core.crisp-writing",
+      "proposed": "Use when the writing itself is the job: drafting, tightening or restructuring an email, post, summary or report someone will read and act on, in English or Persian.",
+      "why": "Still open, and now the only description lead on work roles. The broad 'a reply' trigger competes with every work skill that drafts replies: before the purchase-issues rewrite it split ps-01, it is the ps-04 runner-up in the all-roles run, and it pulls the held-out h-ps-03 (crisp-writing 0.30, purchase-issues 0.37, bug-handoff 0.25, so unrouted). In the all-roles experiment, narrowing it lifted purchase-issues to 0.46 on h-ps-03 and changed nothing else. It is a default for player support and the tech writer and optional in many work roles, so add cases for those roles before adopting.",
+      "cases": [
+        "ps-01",
+        "ps-04",
+        "h-ps-02",
+        "h-ps-03"
+      ]
+    }
+  ],
+  "heldout": "cases-heldout-2026-10-20T13-49-01-525Z.json",
+  "experiments": [
+    {
+      "label": "Shipped wording",
+      "main": "run-2026-10-20T13-48-52-628Z.json",
+      "heldout": "cases-heldout-2026-10-20T13-49-01-525Z.json"
+    },
+    {
+      "label": "Question wording, runtime text (candidate)",
+      "variant": "variants/question-wording.json",
+      "main": "variant-question-wording-2026-10-20T13-49-25-682Z.json",
+      "heldout": "cases-heldout-variant-question-wording-2026-10-20T13-49-32-444Z.json"
+    }
+  ],
+  "notes": [
+    "**What changed since the all-roles run.** Routing now applies to work roles only (`routableSkillsFor`). The four recommended rewrites were applied (entry requirements, conversation practice, readiness screen, purchase issues). Feeling words were removed from `core.weekly-review`, `cto.career-ladder` and `cs.ticket-triage`. On the 87 work-role cases, the shipped run differs from the all-roles run in 2 cases, both from the purchase-issues rewrite: ps-01 went from unrouted to purchase-issues, and ps-04 dropped its crisp-writing runner-up.",
+    "**The two safety findings from the all-roles run no longer apply.** A first fitness plan routed without the PAR-Q+ screen, and wellbeing triggers phrased as feelings, were both lifestyle issues. Lifestyle agents always get the full prompt now.",
+    "**Wrong routes are rare and mild.** Only ctx-03 loads the wrong thing: no playbook, when context budgeting was wanted. Every other miss on either set is unrouted, which means today's full prompt.",
+    "**Question-wording candidate (runtime, not packs).** Telling Decisions that a message describing a problem in this colleague's field asks for help, and narrowing `none`'s 'a quick factual answer' to 'a one-line general fact', fixes both Persian problem statements. On work roles it trades one wrong route for one harmless unrouted turn (ev-01: online-monitoring at 0.35), and takes the held-out work cases from 6/8 to 7/8. In the all-roles run its only harm was pushing fitness pain messages into a skill, and those agents are now unrouted by policy. The evidence is small (3 cases changed), so it is worth adopting in shadow first; the wording is in `scripts/evals/skill-routing/variants/question-wording.json`.",
+    "**Stability.** The two shipped-policy runs agree on all 87 scored cases, with identical confidences, so repeat runs measure provider noise only. Robustness to wording is a separate question; see ctx-03.",
+    "**Coverage gap.** The set covers 16 of the 43 work roles. The roles whose triggers were just edited (`cto.career-ladder`, `cs.ticket-triage`) are among the uncovered ones, as are the security, QA, tech writer, recruiter, finance, AI safety, governance, LLM infra, iOS, Android, release, community, game design, monetisation, BD, market research, brand, platform and book roles. Add about 3 cases per uncovered role before trusting the work-only numbers across the catalog.",
+    "**Limits.** One author wrote and labelled every case, with the skill list in view. The held-out work subset is only 8 cases. Real traffic will be harder: longer, multi-topic messages, voice-note transcripts and typos. Run `STUDIO_SKILL_ROUTING=shadow` first and compare the content-free outcome rates with these.",
+    "**Artefacts.** Raw provider responses for every run are saved under `scripts/evals/skill-routing/results/` (git-ignored): choices, confidences, per-option probabilities and usage. To rebuild this report from a saved run: `npm run eval:skills -- --from <run file>`. To try wording without editing packs: `--variant <file>`. To run the held-out set: `--cases scripts/evals/skill-routing/heldout.json`."
+  ],
+  "historical": {
+    "title": "all-roles run, before the work-only policy",
+    "intro": "Kept for comparison. This run offered every role's skills to Decisions, lifestyle roles included, with the catalog wording of the time: before the four rewrites and the feeling-word edits. It scored all 152 cases. Its misses, wording experiments and safety findings led to the shipped policy and the applied rewrites.",
+    "run": "run-2026-10-20T13-25-31-437Z.json",
+    "previousRun": "run-2026-10-20T13-23-57-165Z.json",
+    "cases": {
+      "fit-08": {
+        "verdict": "description",
+        "note": "none 0.47 vs readiness-screen 0.44: the readiness trigger's 'returns after injury' pulls a new-ache message. Harmless here (unrouted keeps the full prompt, and the pinned pain skill is always loaded). With the readiness rewrite it goes to none."
+      },
+      "lrn-08": {
+        "verdict": "description",
+        "note": "none 0.50 vs conversation-practice 0.41: the trigger covers asking to practise, not answering inside a practice the tutor started, so a German reply reads as small talk. Fixed by the conversation-practice rewrite."
+      },
+      "trv-04": {
+        "verdict": "description",
+        "note": "none 0.63 vs entry-requirements 0.29. The trigger reads as a precondition ('once nationality, residence and route are known'), not as the question people ask, and the none option's 'a quick factual answer' takes visa questions. A quick wrong visa answer is the costliest miss in the set. The rewrite fixes it, with 0.98 on two held-out visa questions."
+      },
+      "ctx-03": {
+        "verdict": "router",
+        "note": "Confident none (0.80) for a Persian problem statement that asks nothing. The same text ending in 'چیکار کنیم؟' routes to context-budgeting at 1.00, and the English statement at 0.84, so the label and the description are sound. The question-wording variant fixes this case but sends pain messages to readiness-screen, so it is not recommended as written."
+      },
+      "ps-01": {
+        "verdict": "description",
+        "note": "purchase-issues 0.51 vs crisp-writing 0.39: 'what do I reply' pulls the generic writing skill (its trigger lists 'a reply'). The case stays unrouted, which is harmless. The purchase-issues rewrite (which adds replying) fixes it."
+      }
+    },
+    "experiments": [
+      {
+        "label": "Current wording",
+        "main": "run-2026-10-20T13-25-31-437Z.json",
+        "heldout": "cases-heldout-2026-10-20T13-28-36-065Z.json"
+      },
+      {
+        "label": "Four use-when rewrites (recommended)",
+        "variant": "variants/when-to-use-rewrites.json",
+        "main": "variant-when-to-use-rewrites-2026-10-20T13-27-12-098Z.json",
+        "heldout": "cases-heldout-variant-when-to-use-rewrites-2026-10-20T13-28-52-609Z.json"
+      },
+      {
+        "label": "Four rewrites plus narrower crisp-writing",
+        "variant": "variants/when-to-use-rewrites-plus-writing.json",
+        "main": "variant-when-to-use-rewrites-plus-writing-2026-10-20T13-29-15-766Z.json",
+        "heldout": "cases-heldout-variant-when-to-use-rewrites-plus-writing-2026-10-20T13-29-27-876Z.json"
+      },
+      {
+        "label": "Question wording only (runtime text; not recommended)",
+        "variant": "variants/question-wording.json",
+        "main": "variant-question-wording-2026-10-20T13-26-43-616Z.json",
+        "heldout": "cases-heldout-variant-question-wording-2026-10-20T13-28-54-849Z.json"
+      },
+      {
+        "label": "Rewrites plus question wording",
+        "variant": "variants/combined.json",
+        "main": "variant-combined-2026-10-20T13-27-24-468Z.json",
+        "heldout": "cases-heldout-variant-combined-2026-10-20T13-28-56-876Z.json"
+      }
+    ],
+    "rewrites": [
+      {
+        "skillId": "travel.entry-requirements-check",
+        "proposed": "Use when someone asks whether they need a visa, eTA or transit visa, or how long their passport must be valid, or plans any international trip; check each traveller's nationality, residence and route.",
+        "why": "Today's trigger is a precondition, so direct visa and passport questions fall to none as quick facts. Main set: trv-04 goes from none to the skill. Held-out: two visa questions go from none and unrouted to 0.98. The weather (none) and booking near-misses are unchanged.",
+        "cases": [
+          "trv-04",
+          "h-trv-01",
+          "h-trv-02",
+          "h-trv-03",
+          "h-trv-04"
+        ],
+        "status": "applied",
+        "before": "Use when planning any international trip, once each traveller’s nationality, residence and route (including transits) are known."
+      },
+      {
+        "skillId": "fitness.readiness-screen",
+        "proposed": "Use when someone is about to get their first training plan, or comes back to training after an injury, illness, surgery, pregnancy or a long break. Not for a new ache mid-programme.",
+        "why": "'Returns after injury' draws new-ache messages, which belong to the pinned pain skill. The held-out back-ache message moves from readiness-screen (0.56) to none (0.79), and fit-08 from unrouted to none. Post-surgery and first-plan positives still route correctly.",
+        "cases": [
+          "fit-08",
+          "h-fit-01",
+          "h-fit-02",
+          "h-fit-03"
+        ],
+        "status": "applied",
+        "before": "Use when someone first asks for a training plan, or returns after injury, illness, surgery, pregnancy or a long break."
+      },
+      {
+        "skillId": "learn.conversation-practice",
+        "proposed": "Use when a learner wants to practise speaking or chatting, by text or voice, or answers in the target language inside a practice conversation or role-play.",
+        "why": "Turns that answer inside a role-play looked like small talk. lrn-08 and two held-out role-play answers now route; the held-out 'check this email' near-miss still goes to error-feedback.",
+        "cases": [
+          "lrn-08",
+          "h-lrn-01",
+          "h-lrn-02",
+          "h-lrn-03"
+        ],
+        "status": "applied",
+        "before": "Use when a learner wants to practise speaking or chatting, by text or voice."
+      },
+      {
+        "skillId": "ps.purchase-issues",
+        "proposed": "Use when a player reports being charged without receiving items, losing purchases after a reinstall, a double charge, or asks for a refund, including what to reply to them.",
+        "why": "'What do I reply' requests split toward crisp-writing and went unrouted. ps-01 now routes. The held-out pure writing job (h-ps-02) still goes to crisp-writing.",
+        "cases": [
+          "ps-01",
+          "h-ps-01",
+          "h-ps-02"
+        ],
+        "status": "applied",
+        "before": "Use when a player reports being charged without receiving items, losing purchases after a reinstall, a double charge, or asks for a refund."
+      }
+    ],
+    "notes": [
+      "**Pinned set (4).** `wellbeing.crisis-protocol`, `core.scope-and-referral` (crisis, red flags, eating-disorder signs, legal and regulated-money limits), `sleep.red-flag-referral` (apnea, drowsy driving) and `fitness.pain-aware-modification` (the fitness role's red-flag screen: chest pain, fainting, numbness). Each catches risk whatever the message is about, and the fitness role does not carry scope-and-referral by default. At most 2 pinned skills sit in any default set (wellbeing companion).",
+      "**Left routable on purpose.** `fitness.readiness-screen` (a first-plan intake), `nutrition.baseline-audit` and `target-estimation` (each runs its own SCOFF screen or needs it clear; the nutrition coach carries the pinned scope skill), `chef.food-safety` (only matters when food handling or allergies come up), `money.investing-education`, `travel.contingency-plan` and all legal playbooks (the legal role carries the pinned scope skill).",
+      "**Safety gap this eval surfaced (resolved by the work-only policy): the first plan without the PAR-Q+ screen.** `fitness.program-design` never refers to the readiness screen. When routing picks program-design alone for a first plan (fit-07 does under the recommended rewrites), the screen is not in the prompt that turn. Today's full craft always has it. Options: add a first step to program-design ('If no readiness screen is on record, run it first'), or pin readiness-screen (the fitness default set would then hold 2 pinned skills, still within the limit).",
+      "**Policy tension (resolved by the work-only policy): wellbeing triggers are written as feelings.** The routable wellbeing skills trigger on feelings: grounding ('feels anxious, overwhelmed, panicky'), values activation ('low motivation… feeling flat') and the check-in ('telling you how they are'). Routing them asks Decisions to read emotional state, which `AGENT_INTELLIGENCE_SOLUTION.md` §4.8 rules out, whatever the question's instructions say. Either keep the wellbeing companion unrouted, or rewrite those triggers as requests ('asks for a quick way to calm down', 'asks for help getting going again'). The 3 wellbeing cases here are task-phrased and all routed correctly; this eval does not test feeling-phrased messages on purpose.",
+      "**Pinned skills cover only roles that carry them.** The crisis protocol is a default only for the wellbeing companion (optional for relationships). Career, money, fitness and sleep agents do not carry it by default. Routing does not change this, but it is the bigger safety lever.",
+      "**Stability is not robustness.** Both full runs returned identical choices and confidences (to the provider's 2 decimals), so repeat runs only measure provider noise. Wording sensitivity is real: adding 'چیکار کنیم؟' moves ctx-03 from none 0.80 to the right skill at 1.00. Persian problem statements that ask nothing lean toward none (ctx-03, h-ctx-01).",
+      "**Split votes go unrouted, safely.** When two acceptable skills share the vote, confidence falls under 0.45 and the turn keeps the full prompt (h-ps-03 with the crisp-writing rewrite: purchase-issues 0.46, bug-handoff 0.28, confidence 0.35). That costs focus, not correctness. A runtime option, not tested here: route the top two when their combined probability is high and none is low.",
+      "**No label changed after the runs.** All 5 misses were reviewed. None was a bad label: 4 come from a misleading \"use when\" line, and 1 (ctx-03) is a router error on a Persian problem statement that asks nothing.",
+      "**Limits.** One author wrote and labelled every case before run 1, with the skill list in view, so real traffic will be harder: longer, multi-topic messages, voice-note transcripts and typos. The held-out set is small (18) and written after the main run. Treat the numbers as a check that the design works, not as a production estimate. Run `STUDIO_SKILL_ROUTING=shadow` first and compare the content-free outcome rates with these."
+    ]
+  }
+}

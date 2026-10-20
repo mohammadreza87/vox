@@ -44,6 +44,23 @@ export function avatarPrompt(persona: PersonaSpec, look: AgentLook, variant = 0)
 Avoid: text, letters, logos, watermarks, emoji style, robots, circuits, gradient backgrounds, sparkles, realistic human features, noses, teeth, limbs, hands, gendered clothing stereotypes, religious or national symbols, caricature, multiple characters, busy backgrounds, photorealism, harsh outlines.`;
 }
 
+/**
+ * Per-option probabilities of a choice answer, copied field by field; the
+ * whole list is dropped when any entry is malformed. Decisions allows at most
+ * 255 options.
+ */
+function choiceProbabilities(value: unknown): Array<{ value: string; probability: number }> | undefined {
+  if (!Array.isArray(value) || !value.length || value.length > 255) return undefined;
+  const out: Array<{ value: string; probability: number }> = [];
+  for (const entry of value) {
+    const option: unknown = entry && typeof entry === 'object' ? (entry as { value?: unknown }).value : undefined;
+    const probability: unknown = entry && typeof entry === 'object' ? (entry as { probability?: unknown }).probability : undefined;
+    if (typeof option !== 'string' || typeof probability !== 'number' || !Number.isFinite(probability) || probability < 0 || probability > 1) return undefined;
+    out.push({ value: option, probability });
+  }
+  return out;
+}
+
 export class OpenAIMedia {
   constructor(
     private readonly apiKey: string,
@@ -78,7 +95,10 @@ export class OpenAIMedia {
       const name = typeof a.name === 'string' ? a.name : '';
       const confidence = typeof a.confidence === 'number' ? a.confidence : 0;
       if (a.type === 'predicate' && typeof a.probability === 'number') answers[name] = { type: 'predicate', probability: a.probability };
-      else if (a.type === 'choice' && typeof a.choice === 'string') answers[name] = { type: 'choice', choice: a.choice, confidence };
+      else if (a.type === 'choice' && typeof a.choice === 'string') {
+        const probabilities = choiceProbabilities(a.probabilities);
+        answers[name] = { type: 'choice', choice: a.choice, confidence, ...(probabilities ? { probabilities } : {}) };
+      }
       else if (a.type === 'score' && typeof a.score === 'number') answers[name] = { type: 'score', score: a.score, confidence };
     }
     return answers;

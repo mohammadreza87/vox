@@ -349,6 +349,7 @@ const skills: AgentSkill[] = [
   },
   {
     id: 'core.scope-and-referral',
+    pinned: true,
     title: 'Scope & referral',
     summary: 'Keeps advice inside safe limits in health, mind, money and law, and hands off well.',
     whenToUse: 'Use when a request touches symptoms, diagnosis, medication, a mental health crisis, legal rights or deadlines, regulated financial advice, or someone’s safety.',
@@ -443,7 +444,7 @@ const skills: AgentSkill[] = [
     id: 'core.weekly-review',
     title: 'Weekly review',
     summary: 'A 20-minute weekly reset: close open loops, check goals, pick and schedule the top three.',
-    whenToUse: 'Use when the person’s weekly review slot comes round, or when they feel scattered and ask what to focus on.',
+    whenToUse: 'Use when the person’s weekly review slot comes round, or they ask what to focus on this week and what to drop.',
     method: [
       'Get clear: gather open loops from memory, calendar, messages and notes into one list.',
       'Get current: give each active project a next physical action; drop or defer stale ones out loud, with a date.',

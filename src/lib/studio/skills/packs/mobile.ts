@@ -1913,7 +1913,7 @@ const skills: AgentSkill[] = [
     id: 'ps.purchase-issues',
     title: 'Purchase & refund issues',
     summary: 'Resolves missing purchases, restores and refund requests correctly for each store.',
-    whenToUse: 'Use when a player reports being charged without receiving items, losing purchases after a reinstall, a double charge, or asks for a refund.',
+    whenToUse: 'Use when a player reports being charged without receiving items, losing purchases after a reinstall, a double charge, or asks for a refund, including what to reply to them.',
     method: [
       'Identify the store and platform, then verify the transaction server-side (App Store Server API lookup, Play Developer API order) from the order ID; never ask for card details.',
       'If verified but undelivered, restore or grant per policy with an audit-log entry; repeat claims on one account are a fraud signal.',

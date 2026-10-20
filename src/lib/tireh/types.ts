@@ -96,8 +96,23 @@ export interface Persona {
   character?: string;
   /** Role knowledge and skill playbooks, already rendered; stable per agent version. */
   craft?: string;
+  /**
+   * The same craft split for per-message skill selection (docs/SKILL_ROUTING.md),
+   * already rendered. Present only when there are at least two routable skills;
+   * turns without a selection keep using `craft` in full.
+   */
+  skillSet?: PersonaSkillSet;
   /** Short exchanges in the persona's own voice: style examples, never memories. */
   voiceExamples?: Array<{ user: string; reply: string }>;
+}
+
+export interface PersonaSkillSet {
+  /** The rendered role block (may be empty for an agent with skills but no role). */
+  role: string;
+  /** Safety, scope and referral playbooks: always in the prompt, never offered to selection. */
+  pinned: Array<{ id: string; playbook: string }>;
+  /** Playbooks selection may choose between, best kept first; at most MAX_ROUTABLE_SKILLS. */
+  routable: Array<{ id: string; title: string; whenToUse: string; playbook: string }>;
 }
 
 export interface OrgConfig {

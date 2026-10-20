@@ -14,7 +14,8 @@ import { createHash, randomUUID } from 'crypto';
 import { parseExplicitControl, type RelationshipLoop, type RelationshipKey } from '../relationships';
 import type { AdaptiveRelationshipService } from '../adaptive/relationships/service';
 import { LLMAuthorizationError, streamText, type LLM, type LLMMessage, type WebSource } from './llm';
-import { explicitReplyFormat, readTriage, TRIAGE_TIMEOUT_MS, triageInput, triageQuestions, type Decider, type Triage } from './triage';
+import { askedSkill, explicitReplyFormat, readTriage, TRIAGE_TIMEOUT_MS, triageInput, triageQuestions, type Decider, type Triage } from './triage';
+import { skillQuestion, type SkillChoice, type SkillRouting } from './skill-routing';
 import type { OrgDirectory } from './org/directory';
 import type { ChatContext, ChatMessage, MemoryRecord, MemoryScope, Persona } from './types';
 import type { ChatHistoryStore, MemoryStore, ShareOfferStore, UpdateDeduper } from './memory/store';
@@ -88,6 +89,8 @@ export interface GatewayDeps {
   fastLlm?: LLM;
   /** Fast pre-reply triage (see triage.ts); without it every reply takes the full path */
   decider?: Decider;
+  /** Per-message skill selection inside triage (skill-routing.ts); default `on`. */
+  skillRouting?: SkillRouting;
   relationships?: RelationshipLoop;
   relationshipAuthority?: AdaptiveRelationshipService;
   /** Trusted transport provenance for this inbound update; never supplied by message text. */
@@ -128,6 +131,15 @@ const GROUP_FORMAT_FOLLOWUP_MS = 2 * 60_000;
 // caps leave headroom while the prompt keeps the visible reply short.
 const CHAT_EFFORT = 'low' as const;
 const REPLY_MAX_TOKENS = { quick: 1200, thoughtful: 2000, live: 800 } as const;
+/** Content-free outcome of per-message skill selection for one composed reply. */
+const SKILL_DIAGNOSTIC = {
+  on: { selected: 'skill_routed_selected', none: 'skill_routed_none', no_answer: 'skill_unrouted_no_answer', low_confidence: 'skill_unrouted_low_confidence' },
+  shadow: { selected: 'skill_shadow_selected', none: 'skill_shadow_none', no_answer: 'skill_shadow_no_answer', low_confidence: 'skill_shadow_low_confidence' },
+} as const;
+/** One message's triage, and whether the skill question was among the questions sent. */
+interface Triaged { triage: Triage | null; skillAsked: boolean }
+const UNTRIAGED: Triaged = { triage: null, skillAsked: false };
+
 const GUEST_VOICE_REPLY = 'I only read typed messages here, so I did not listen to that voice message. Could you type it instead?';
 const NO_MEMORY = /(?:do not|don't|don’t)\s+(?:remember|save|store)|forget (?:this|that)|ذخیره نکن|به خاطر نسپار|یادت نماند|فراموش کن/iu;
 
@@ -386,10 +398,10 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
 
     const askAddressed = !addressed && chat.kind === 'group' && !isVoice && !targeting.otherTarget
       && persona.groupParticipation !== 'mentions';
-    const triage = this.deps.decider
+    const triaged = this.deps.decider
       ? timed('triage', () => this.triage(persona, chat, askAddressed, userMessage, addressed ? 'reply' : 'observe', boundary))
       : this.triage(persona, chat, askAddressed, userMessage, addressed ? 'reply' : 'observe', boundary);
-    const settled = await triage;
+    const settled = (await triaged).triage;
     let assistantMessage: ChatMessage | undefined;
     let shouldReply = addressed;
     if (askAddressed && (settled?.addressed || settled?.proactive)
@@ -405,7 +417,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
       await bot.sendChatAction(message.chat.id, voiceWanted && canSpeak ? 'record_voice' : 'typing').catch(() => undefined);
       let generated: { text: string; sources: WebSource[] };
       try {
-        generated = await this.composeReply(persona, chat, speaker.id, text, triage, message.message_id, addressed ? 'reply' : 'proactive', voiceWanted && canSpeak ? 'voice' : 'text', boundary);
+        generated = await this.composeReply(persona, chat, speaker.id, text, triaged, message.message_id, addressed ? 'reply' : 'proactive', voiceWanted && canSpeak ? 'voice' : 'text', boundary);
       } catch {
         logTelegramDiagnostic(this.log, 'reply_generation_failed');
         return 'ignored';
@@ -825,26 +837,56 @@ You are on a live voice call. Answer in one to three short spoken sentences. No 
   }
 
   /**
-   * Triage of the latest message (already in history); null when there is no
-   * decider, or it fails or is slow. Never throws.
+   * Triage of the latest message (already in history); `triage` is null when
+   * there is no decider, or it fails or is slow. `skillAsked` reflects the
+   * questions actually sent. Never throws.
    */
-  private async triage(persona: Persona, chat: ChatContext, askAddressed: boolean, source: ChatMessage, action: GroupAction, boundary: TurnBoundary): Promise<Triage | null> {
+  private async triage(persona: Persona, chat: ChatContext, askAddressed: boolean, source: ChatMessage, action: GroupAction, boundary: TurnBoundary): Promise<Triaged> {
     const { decider, org } = this.deps;
     // This optional adapter has no final configured-transport authority seam.
     // Indexed turns go directly to the qualified ordinary reply model.
-    if (!decider || boundary.compact) return null;
+    if (!decider || boundary.compact) return UNTRIAGED;
+    let skillAsked = false;
     try {
       const prior = await this.historyAt(persona, chat, boundary, 6);
       const recent = [...prior.filter((m) => m !== source && (chat.kind !== 'group' || (m.telegramMessageId ?? Infinity) < source.telegramMessageId!)), source].slice(-6);
       const lines = recent.map((m) => ({ who: m.role === 'assistant' ? persona.name : org.getPerson(m.personId ?? '')?.name ?? 'Someone', text: m.text }));
-      if (!(await this.groupAllowed(persona, chat, source.personId!, action))) return null;
-      if (!await this.unchanged(persona, chat, source.personId!, boundary)) return null;
-      const answers = await decider.decide(triageInput(persona, lines), triageQuestions(persona, askAddressed), TRIAGE_TIMEOUT_MS);
-      return readTriage(answers, askAddressed, persona.groupParticipation ?? 'mentions');
+      if (!(await this.groupAllowed(persona, chat, source.personId!, action))) return UNTRIAGED;
+      if (!await this.unchanged(persona, chat, source.personId!, boundary)) return UNTRIAGED;
+      // Pick a playbook only when this message may get a reply.
+      const routable = action === 'reply' || askAddressed ? this.routableSkills(persona, boundary) : undefined;
+      const questions = triageQuestions(persona, askAddressed, routable);
+      skillAsked = askedSkill(questions);
+      const answers = await decider.decide(triageInput(persona, lines), questions, TRIAGE_TIMEOUT_MS);
+      return { triage: readTriage(answers, askAddressed, persona.groupParticipation ?? 'mentions', skillAsked ? routable : undefined), skillAsked };
     } catch {
       logTelegramDiagnostic(this.log, 'triage_failed');
-      return null;
+      return { triage: null, skillAsked };
     }
+  }
+
+  /**
+   * The skills triage may choose between for this persona and turn; undefined
+   * when the question is not asked (routing off, no decider, an indexed turn,
+   * or no real choice).
+   */
+  private routableSkills(persona: Persona, boundary: TurnBoundary): SkillChoice[] | undefined {
+    if ((this.deps.skillRouting ?? 'on') === 'off' || !this.deps.decider || boundary.compact || !persona.skillSet) return undefined;
+    const routable = persona.skillSet.routable.map(({ id, title, whenToUse }) => ({ id, title, whenToUse }));
+    return skillQuestion(routable) ? routable : undefined;
+  }
+
+  /**
+   * The playbooks for a triaged reply: ids for a routed prompt, or undefined
+   * for the full craft (shadow, no answer, low confidence). Logs only the
+   * outcome class, never the message or a skill id.
+   */
+  private activeSkills({ triage, skillAsked }: Triaged): readonly string[] | undefined {
+    if (!skillAsked) return undefined;
+    const mode = this.deps.skillRouting === 'shadow' ? 'shadow' : 'on';
+    const pick = triage?.skills ?? null;
+    logTelegramDiagnostic(this.log, SKILL_DIAGNOSTIC[mode][pick ? (pick.ids.length ? 'selected' : 'none') : triage?.skillsMiss ?? 'no_answer']);
+    return mode === 'on' && pick ? pick.ids : undefined;
   }
 
   /** The reply plus the web pages it cites, when the persona searched. */
@@ -854,21 +896,25 @@ You are on a live voice call. Answer in one to three short spoken sentences. No 
     return !!this.deps.voice && this.deps.voice.canSynthesize !== false && persona.replyWithVoice !== 'never';
   }
 
-  private async composeReply(persona: Persona, chat: ChatContext, speakerId: string, text: string, triaged?: Promise<Triage | null>, messageId?: number, action: GroupAction = 'reply', replyFormat?: 'voice' | 'text', boundary?: TurnBoundary, images?: LLMMessage['images'], authorize?: () => Promise<boolean>, authorizeNow?: () => boolean): Promise<{ text: string; sources: WebSource[] }> {
+  private async composeReply(persona: Persona, chat: ChatContext, speakerId: string, text: string, triaged?: Promise<Triaged>, messageId?: number, action: GroupAction = 'reply', replyFormat?: 'voice' | 'text', boundary?: TurnBoundary, images?: LLMMessage['images'], authorize?: () => Promise<boolean>, authorizeNow?: () => boolean): Promise<{ text: string; sources: WebSource[] }> {
     const { org } = this.deps;
     boundary ??= await this.boundary(persona, chat, speakerId, 'work', text);
     if (!boundary.audienceValid) return { text: this.changedReply, sources: [] };
     const lap = stageLaps();
-    const [all, triage] = await Promise.all([boundary.memoryEnabled ? this.deps.memories.listActive(persona.id) : Promise.resolve([]), triaged ?? null]);
+    const [all, outcome] = await Promise.all([boundary.memoryEnabled ? this.deps.memories.listActive(persona.id) : Promise.resolve([]), triaged ?? UNTRIAGED]);
+    const triage = outcome.triage;
     // Search only when triage says the answer needs live facts (or there is no triage).
     const search = boundary.space === 'work' && !!persona.webSearch && (triage ? triage.needsWeb : true);
     // Small talk goes to the fast model; anything needing care, or a search, to the main one.
     const quick = triage?.effort === 'quick' && !search && !!this.deps.fastLlm;
+    // Only Telegram replies whose triage asked the skill question are routed;
+    // call turns, live calls, follow-ups and indexed turns keep the full craft.
+    const activeSkills = this.activeSkills(outcome);
     const memories = selectMemories(org, all, chat, { query: text, now: this.now() });
     boundary.memorySources = [...new Set(memories.flatMap(lineageEventIds))];
     boundary.memoryIds = memories.map(m => m.id);
     lap('retrieval');
-    const system = buildSystemPrompt({ org, space: boundary.space, persona: { ...persona, webSearch: search }, chat, speakerId, memories, now: this.now(), canFollowUp: await this.canFollowUp(persona.id, chat, boundary.space), followUpChannel: this.deps.relationshipAuthority ? 'inbox' : 'chat', canSpeak: this.canSpeak(persona, boundary), replyFormat })
+    const system = buildSystemPrompt({ org, space: boundary.space, persona: { ...persona, webSearch: search }, chat, speakerId, memories, now: this.now(), canFollowUp: await this.canFollowUp(persona.id, chat, boundary.space), followUpChannel: this.deps.relationshipAuthority ? 'inbox' : 'chat', canSpeak: this.canSpeak(persona, boundary), replyFormat, activeSkills })
       + `\n${await this.relationshipContext(persona.id, chat)}`
       + (action === 'proactive' ? '\n\nYou are joining a group conversation selectively. Make one brief, natural contribution in character. Do not repeat recent replies or demand attention; one to three sentences is enough.' : '');
     lap('prompt');
