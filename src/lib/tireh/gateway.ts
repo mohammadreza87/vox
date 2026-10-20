@@ -724,7 +724,7 @@ You are on a live voice call. Answer in one to three short spoken sentences. No 
     if (boundary.compact && !this.exportAuthorizedNow(persona, chat, speakerId, boundary, options.authorizeNow)) return;
     const requested = performance.now();
     let first = true;
-    for await (const part of streamText(llm, { system, messages, maxTokens: 300,
+    for await (const part of streamText(llm, { system, messages, maxTokens: REPLY_MAX_TOKENS.live, effort: CHAT_EFFORT,
       authorize: async () => await this.unchanged(persona, chat, speakerId, boundary) && await this.requestAuthorized(options.authorize),
       ...(boundary.compact ? {authorizeNow: () => this.exportAuthorizedNow(persona, chat, speakerId, boundary, options.authorizeNow)} : {}) })) {
       if (first) { first = false; timer?.add('llm_ttft', performance.now() - requested); }
@@ -909,7 +909,7 @@ You are on a live voice call. Answer in one to three short spoken sentences. No 
     // Run after all asynchronous boundary/history loads, immediately at export.
     if (!await this.requestAuthorized(authorize)) return { text: this.changedReply, sources: [] };
     if (request.authorizeNow && !request.authorizeNow()) return {text: this.changedReply, sources: []};
-    const { text: reply, sources } = await timed('llm_done', async () => search && llm.completeWithWeb
+    const { text: raw, sources } = await timed('llm_done', async () => search && llm.completeWithWeb
       ? await llm.completeWithWeb({ ...request, maxSearches })
       : { text: await llm.complete(request), sources: [] });
     if (!await this.unchanged(persona, chat, speakerId, boundary) || !await this.requestAuthorized(authorize)) return { text: this.changedReply, sources: [] };
