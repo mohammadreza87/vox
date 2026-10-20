@@ -15,9 +15,10 @@ import {
   type RetrievalOptions,
 } from '../memory/retrieval';
 import { FakeEmbeddingProvider } from '../memory/embeddings';
-import { InMemoryMemoryStore } from '../memory/store';
+import { InMemoryMemoryStore, type MemoryStore } from '../memory/store';
 import { memory, testOrg, testOrgConfig } from './fixtures';
 
+type FindNearest = NonNullable<MemoryStore['findNearest']>;
 const ZWNJ = String.fromCharCode(0x200c);
 const AR_YEH = String.fromCharCode(0x064a);
 const AR_KAF = String.fromCharCode(0x0643);
@@ -117,6 +118,7 @@ describe('v1 parity with the base oracle', () => {
       const expected = baseSelectMemories(org, memories, chat, options).map((m) => m.id);
       if (expected.length) nonEmpty++;
       expect(selectMemories(org, memories, chat, { ...options, mode: 'v1', queryEmbedding: [1, 2, 3] }).map((m) => m.id)).toEqual(expected);
+      vi.stubEnv('TIREH_RETRIEVAL_V2', undefined);
       expect(selectMemories(org, memories, chat, options).map((m) => m.id)).toEqual(expected);
       vi.stubEnv('TIREH_RETRIEVAL_V2', '0');
       expect(selectMemories(org, memories, chat, options).map((m) => m.id)).toEqual(expected);
@@ -142,6 +144,8 @@ const many = (n: number, extra: Partial<MemoryRecord> = {}) => Array.from({ leng
 describe('mode resolution', () => {
   it('TIREH_RETRIEVAL_V2=1 returns at most 8 by default, honours limit 30, and mode v1 overrides', () => {
     const rows = many(40);
+    vi.stubEnv('TIREH_RETRIEVAL_V2', undefined);
+    expect(selectMemories(org, rows, reza, { query: 'budget', now: NOW })).toHaveLength(20);
     vi.stubEnv('TIREH_RETRIEVAL_V2', '1');
     expect(selectMemories(org, rows, reza, { query: 'budget', now: NOW })).toHaveLength(MAX_PROMPT_MEMORIES);
     expect(selectMemories(org, rows, reza, { query: 'budget', now: NOW, limit: 30 })).toHaveLength(30);
@@ -394,7 +398,8 @@ describe('vectorCandidates', () => {
   beforeEach(() => { vi.stubEnv('TIREH_RETRIEVAL_V2', '1'); vi.stubEnv('TIREH_VECTOR_RETRIEVAL', '1'); });
 
   it('flag off gives [] with zero store calls', async () => {
-    vi.unstubAllEnvs();
+    vi.stubEnv('TIREH_RETRIEVAL_V2', undefined);
+    vi.stubEnv('TIREH_VECTOR_RETRIEVAL', undefined);
     const findNearest = vi.fn(async () => [rec({ content: 'x' })]);
     expect(await vectorCandidates({ findNearest }, org, reza, 'aria', [1, 0])).toEqual([]);
     vi.stubEnv('TIREH_VECTOR_RETRIEVAL', '1');
@@ -404,7 +409,7 @@ describe('vectorCandidates', () => {
 
   it('chunks 45 keys into 2 calls of at most 30 and merges duplicates', async () => {
     const dup = rec({ id: 'dup', content: 'x' });
-    const findNearest = vi.fn(async (_p: string, keys: string[]) => [dup, rec({ id: `only-${keys.length}`, content: 'y' })]);
+    const findNearest = vi.fn<FindNearest>(async (_p, keys) => [dup, rec({ id: `only-${keys.length}`, content: 'y' })]);
     const out = await vectorCandidates({ findNearest }, org, reza, 'aria', [1, 0], { memories: lots });
     expect(findNearest).toHaveBeenCalledTimes(2);
     expect(findNearest.mock.calls.map((c) => c[1].length)).toEqual([30, 15]);
@@ -426,7 +431,7 @@ describe('vectorCandidates', () => {
 
   it('candidates still go through the final gate', async () => {
     const leak = rec({ id: 'leak', content: 'budget', scope: { kind: 'private', personId: 'parastoo' } });
-    const findNearest = vi.fn(async () => [leak]);
+    const findNearest = vi.fn<FindNearest>(async () => [leak]);
     const candidates = await vectorCandidates({ findNearest }, org, sina, 'aria', [1, 0], { limit: 5 });
     expect(candidates).toHaveLength(1);
     expect(findNearest.mock.calls[0][3]).toBe(5);

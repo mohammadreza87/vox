@@ -23,6 +23,11 @@ afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 
 type Call = { url: string; body: Record<string, unknown> };
 
+async function rejection(promise: Promise<unknown>): Promise<Error> {
+  try { await promise; } catch (error) { return error as Error; }
+  throw new Error('expected a rejection');
+}
+
 function stubFetch(options: { dims?: number; status?: number; shuffle?: boolean; echo?: boolean; hang?: boolean } = {}) {
   const calls: Call[] = [];
   const fn = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
@@ -146,7 +151,7 @@ describe('OpenAIEmbeddingProvider (injected fetch, no network)', () => {
   it('a 500 rejects after exactly one fetch call, with no input or key in the error', async () => {
     const { fn } = stubFetch({ status: 500, echo: true });
     const p = new OpenAIEmbeddingProvider({ apiKey: API_KEY, fetch: fn as unknown as typeof fetch });
-    const error = await p.embed([CANARY]).catch((e: unknown) => e as Error);
+    const error = await rejection(p.embed([CANARY]));
     expect(error).toBeInstanceOf(Error);
     expect(fn).toHaveBeenCalledTimes(1);
     const text = `${error.message} ${error.stack ?? ''} ${JSON.stringify(error)}`;
@@ -161,7 +166,7 @@ describe('OpenAIEmbeddingProvider (injected fetch, no network)', () => {
     const controller = new AbortController();
     const pending = p.embed([CANARY], controller.signal);
     controller.abort();
-    const error = await pending.catch((e: unknown) => e as Error);
+    const error = await rejection(pending);
     expect(error).toBeInstanceOf(Error);
     expect(error.message).not.toContain(CANARY);
     const already = new AbortController();
@@ -172,7 +177,7 @@ describe('OpenAIEmbeddingProvider (injected fetch, no network)', () => {
   it('throws embedding_dimension_mismatch', async () => {
     const { fn } = stubFetch({ dims: 10 });
     const p = new OpenAIEmbeddingProvider({ apiKey: API_KEY, fetch: fn as unknown as typeof fetch });
-    const error = await p.embed([CANARY]).catch((e: unknown) => e as Error);
+    const error = await rejection(p.embed([CANARY]));
     expect(error.message).toBe('embedding_dimension_mismatch');
     expect(`${error.message}${error.stack}`).not.toContain(CANARY);
   });

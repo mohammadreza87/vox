@@ -80,7 +80,8 @@ function fakeFirestore() {
     return filters.every(([f, op, v]) => op === 'in' ? (v as unknown[]).includes(value[f]) : value[f] === v);
   }
 
-  function rows(path: string, filters: Array<[string, string, unknown]>) {
+  type Row = { id: string; ref: unknown; data: () => Doc };
+  function rows(path: string, filters: Array<[string, string, unknown]>): Row[] {
     return [...data.entries()]
       .filter(([key]) => key.startsWith(`${path}/`) && !key.slice(path.length + 1).includes('/'))
       .filter(([, value]) => matches(value, filters))
@@ -309,6 +310,8 @@ describe('findNearest', () => {
   }
 
   it('flag off returns [] without touching Firestore', async () => {
+    vi.stubEnv('TIREH_RETRIEVAL_V2', '');
+    vi.stubEnv('TIREH_VECTOR_RETRIEVAL', '');
     const { store, collectionCalls, nearestCalls } = await seeded();
     const calls = collectionCalls();
     expect(await store.findNearest('aria', ['project:gameend'], [1, 0, 0], 5)).toEqual([]);
@@ -317,6 +320,7 @@ describe('findNearest', () => {
   });
 
   it('TIREH_VECTOR_RETRIEVAL=1 without TIREH_RETRIEVAL_V2 counts as off', async () => {
+    vi.stubEnv('TIREH_RETRIEVAL_V2', '');
     vi.stubEnv('TIREH_VECTOR_RETRIEVAL', '1');
     const { store, nearestCalls } = await seeded();
     expect(await store.findNearest('aria', ['project:gameend'], [1, 0, 0], 5)).toEqual([]);

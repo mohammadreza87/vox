@@ -82,8 +82,11 @@ export interface MemoryStore {
 function withoutSensitiveEmbedding<T extends Partial<MemoryRecord>>(m: T, sensitivity = m.sensitivity): T {
   if (m.embedding === undefined && m.embeddingModel === undefined && m.embeddingVersion === undefined) return m;
   if (sensitivity === 'normal') return m;
-  const { embedding: _embedding, embeddingModel: _model, embeddingVersion: _version, ...rest } = m;
-  return rest as T;
+  const copy = { ...m };
+  delete copy.embedding;
+  delete copy.embeddingModel;
+  delete copy.embeddingVersion;
+  return copy;
 }
 
 export interface ShareOfferStore {

@@ -97,8 +97,8 @@ function payloads({ llm, bot }: ReturnType<typeof makeGateway>): string {
 }
 
 const FLAG_STATES = [
-  { name: 'flags unset', env: {} },
-  { name: 'TIREH_RETRIEVAL_V2=1', env: { TIREH_RETRIEVAL_V2: '1' } },
+  { name: 'flags unset', env: { TIREH_RETRIEVAL_V2: undefined, TIREH_VECTOR_RETRIEVAL: undefined } },
+  { name: 'TIREH_RETRIEVAL_V2=1', env: { TIREH_RETRIEVAL_V2: '1', TIREH_VECTOR_RETRIEVAL: undefined } },
   { name: 'TIREH_RETRIEVAL_V2=1 + TIREH_VECTOR_RETRIEVAL=1', env: { TIREH_RETRIEVAL_V2: '1', TIREH_VECTOR_RETRIEVAL: '1' } },
 ] as const;
 
