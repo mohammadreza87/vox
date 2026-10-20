@@ -28,8 +28,11 @@ const TRIAGE_LABELS = ['image_kind', 'image_task', 'contains_people', 'contains_
 
 /** The same message as plain text: same ids, same words, no photo. */
 function textTwin(update: TelegramUpdate): TelegramUpdate {
-  const { photo: _photo, document: _document, caption, ...message } = update.message!;
-  return { update_id: update.update_id, message: { ...message, text: caption ?? '' } };
+  const message = { ...update.message!, text: update.message!.caption ?? '' };
+  delete message.photo;
+  delete message.document;
+  delete message.caption;
+  return { update_id: update.update_id, message };
 }
 
 describe.each([undefined, '0'])('STUDIO_IMAGES=%s leaves behaviour exactly as the base', (flag) => {
@@ -258,7 +261,7 @@ describe.each([false, true])('no image bytes in any log (stage timings %s)', (st
       memories: await ctx.memories.listActive('aria'),
       extractionRequests: ctx.llm.extractionRequests,
       replyPrompts: ctx.llm.replyPrompts,
-      replyRequestsWithoutImages: ctx.llm.replyRequests.map((r) => ({ ...r, messages: r.messages.map(({ images: _images, ...m }) => m) })),
+      replyRequestsWithoutImages: ctx.llm.replyRequests.map((r) => ({ ...r, messages: r.messages.map((m) => ({ role: m.role, content: m.content })) })),
       textTriage: decider.decide.mock.calls,
       triageTextParts: decider.decideParts.mock.calls.map((call) => [call[0][0], call[1]]),
       sent: ctx.bot.sendMessage.mock.calls.map((call) => call[1]),

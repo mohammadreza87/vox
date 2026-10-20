@@ -16,7 +16,7 @@ function fileResponse(options: { status?: number; contentLength?: string; body?:
 }
 
 function client(...responses: Response[]) {
-  const fetchFn = vi.fn(async (..._args: Parameters<typeof fetch>) => {
+  const fetchFn = vi.fn<(...args: Parameters<typeof fetch>) => Promise<Response>>(async () => {
     const next = responses.shift();
     if (!next) throw new Error('unexpected fetch');
     return next;

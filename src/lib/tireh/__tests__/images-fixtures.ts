@@ -140,8 +140,8 @@ export function textAnswers(input: { effort?: 'quick' | 'thoughtful'; live?: num
 
 export function scriptedImageDecider(answers: ImageAnswers | (() => Promise<ImageAnswers>), text: ImageAnswers = {}) {
   return {
-    decide: vi.fn(async (_input: string, _questions: DecisionQuestion[], _timeoutMs?: number): Promise<ImageAnswers> => text),
-    decideParts: vi.fn(async (_input: readonly ImageDeciderPart[], _questions: DecisionQuestion[], _timeoutMs?: number): Promise<ImageAnswers> =>
+    decide: vi.fn<(input: string, questions: DecisionQuestion[], timeoutMs?: number) => Promise<ImageAnswers>>(async () => text),
+    decideParts: vi.fn<(input: readonly ImageDeciderPart[], questions: DecisionQuestion[], timeoutMs?: number) => Promise<ImageAnswers>>(async () =>
       typeof answers === 'function' ? answers() : answers),
   };
 }
@@ -159,7 +159,7 @@ export function imageBot(files: Map<string, Uint8Array> = defaultImageFiles()) {
   const bot = fakeBot();
   return Object.assign(bot, {
     files,
-    downloadImage: vi.fn(async (fileId: string, _options: { maxBytes: number; signal?: AbortSignal }): Promise<Uint8Array> => {
+    downloadImage: vi.fn<(fileId: string, options: { maxBytes: number; signal?: AbortSignal }) => Promise<Uint8Array>>(async (fileId) => {
       const bytes = files.get(fileId);
       if (!bytes) throw new Error('no such file');
       return bytes;
@@ -168,7 +168,11 @@ export function imageBot(files: Map<string, Uint8Array> = defaultImageFiles()) {
 }
 export type ImageBot = ReturnType<typeof imageBot>;
 
-export function makeImageGateway(options: { llm?: LLM & FakeLLM; fastLlm?: LLM & FakeLLM; decider?: ScriptedImageDecider | { decide: ScriptedImageDecider['decide'] }; logger?: { info: ReturnType<typeof vi.fn>; warn: ReturnType<typeof vi.fn>; error: ReturnType<typeof vi.fn> }; stageTimings?: boolean; files?: Map<string, Uint8Array> } = {}) {
+type LogSpy = ReturnType<typeof vi.fn<(...args: unknown[]) => void>>;
+export interface SpyLogger { info: LogSpy; warn: LogSpy; error: LogSpy }
+export const spyLogger = (): SpyLogger => ({ info: vi.fn<(...args: unknown[]) => void>(), warn: vi.fn<(...args: unknown[]) => void>(), error: vi.fn<(...args: unknown[]) => void>() });
+
+export function makeImageGateway(options: { llm?: LLM & FakeLLM; fastLlm?: LLM & FakeLLM; decider?: ScriptedImageDecider | { decide: ScriptedImageDecider['decide'] }; logger?: SpyLogger; stageTimings?: boolean; files?: Map<string, Uint8Array> } = {}) {
   const org = testOrg();
   const llm = options.llm ?? new VisionFakeLLM();
   const fastLlm = options.fastLlm;
@@ -177,7 +181,7 @@ export function makeImageGateway(options: { llm?: LLM & FakeLLM; fastLlm?: LLM &
   const offers = new InMemoryShareOfferStore();
   const history = new InMemoryChatHistoryStore(epochs);
   const bot = imageBot(options.files);
-  const logger = options.logger ?? { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  const logger = options.logger ?? spyLogger();
   const gateway = new PersonaGateway({
     org,
     llm,
