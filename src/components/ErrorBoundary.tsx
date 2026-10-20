@@ -2,7 +2,7 @@
 
 import { Component, ReactNode } from 'react';
 import * as Sentry from '@sentry/nextjs';
-import { Button } from '@/shared/components';
+import { Button } from '@/shared/components/Button';
 import { AlertTriangle, RefreshCw } from 'lucide-react';
 
 interface Props {

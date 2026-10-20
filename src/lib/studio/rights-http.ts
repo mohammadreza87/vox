@@ -1,3 +1,4 @@
+import { trustedStudioRequestOrigin } from './request-origin';
 import { isSchemaValidationError } from '../error-contract';
 import { AdaptiveError } from '../adaptive/persistence/service';
 import { SharedMemoryError } from '../adaptive/shared/service';
@@ -56,7 +57,9 @@ export async function handleRightsRequest(studio: Studio, request: Request, path
       return json({ error: 'not_found' }, 404);
     }
     if (request.method !== 'POST') return json({ error: 'not_found' }, 404);
-    if (request.headers.get('origin') !== url.origin || request.headers.get('sec-fetch-site') === 'cross-site') return json({ error: 'origin_denied' }, 403);
+    const expectedOrigin = trustedStudioRequestOrigin(url, studio.deps.webAppUrl);
+    if (!expectedOrigin) return json({ error: 'origin_unavailable' }, 503);
+    if (request.headers.get('origin') !== expectedOrigin || request.headers.get('sec-fetch-site') === 'cross-site') return json({ error: 'origin_denied' }, 403);
     if (request.headers.get('content-type')?.split(';')[0].trim().toLowerCase() !== 'application/json') return json({ error: 'json_required' }, 415);
     await limiter.consume('mutation', user.id);
     const bounded = await boundedStudioRequest(request, 4096);

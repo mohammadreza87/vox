@@ -12,6 +12,7 @@ export const ADAPTIVE_RELEASE_CAPABILITIES = Object.freeze({
   supportedObserverClientExperienceVersions: Object.freeze([1]),
   supportedRightsLedgerVersions: Object.freeze([1, 2]),
   supportedExperimentLedgerSchemas: Object.freeze([1]),
+  supportedGuestRightsLedgerSchemas: Object.freeze([1]),
 });
 const fail = () => { throw new Error('Adaptive storage is incompatible with this release; current personalization controls must be preserved.'); };
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -211,6 +212,20 @@ function scanSeparate(env, required, budget) {
     for (const r of d.exposures) if (!keys(r, ['id', 'derivedId', 'experimentId', 'assignmentVersion', 'assignmentId', 'unit', 'variant', 'occurredAt', 'trust', 'surface', 'configRevision']) || !positive(r.assignmentVersion) || !positive(r.configRevision) || !digest(r.derivedId) || !['control', 'candidate'].includes(r.variant) || r.trust !== 'client_unverified' || r.surface !== 'text_rendered' || !integer(r.occurredAt)) fail();
     required.experimentLedgerSchema = 1;
   }
+  const guest = join(env.STUDIO_DATA_DIR, 'guest-rights', 'v1');
+  const guestFile = `${hash('guest-rights-ledger:v1')}.json`;
+  for (const name of entries(guest)) {
+    if (name === '.clock-v1.json') { const clock = readPlainJson(join(guest, name), 256, budget); if (!keys(clock, ['version', 'observedServerTime']) || clock.version !== 1 || !integer(clock.observedServerTime)) fail(); continue; }
+    if (name !== guestFile) fail();
+    const d = readPlainJson(join(guest, name), 65536, budget);
+    if (!keys(d, ['schemaVersion', 'keyId', 'revision', 'observedAt', 'admission', 'requests', 'tombstones', 'receipts']) || d.schemaVersion !== 1 || !digest(d.keyId) || !positive(d.revision) || !integer(d.observedAt) || !keys(d.admission, ['windowStart','count']) || !integer(d.admission.windowStart) || !integer(d.admission.count)) fail();
+    for (const [field, limit] of [['requests',100],['tombstones',128],['receipts',128]]) if (!Array.isArray(d[field]) || d[field].length > limit) fail();
+    for (const r of d.requests) if (!keys(r, ['requestId','credentialHash','context','kind','locale','revision','createdAt','updatedAt','state','policy','deadline','retention','audit']) || !uuid(r.requestId) || !digest(r.credentialHash) || !['work','personal','unknown'].includes(r.context) || !['access_export','correction','erasure','restriction','objection','portability','withdrawal'].includes(r.kind) || !['en','fa'].includes(r.locale) || !positive(r.revision) || !integer(r.createdAt) || !integer(r.updatedAt) || !['received','operator_review','awaiting_requester','operator_action_pending','closed_unfulfilled'].includes(r.state) || !keys(r.policy,['id','revision','copyVersion']) || !positive(r.policy.revision) || !keys(r.deadline,['state']) || r.deadline.state !== 'unresolved' || !knownKeys(r.retention,['reviewAt','auditUntil','terminalUntil']) || !integer(r.retention.reviewAt) || !integer(r.retention.auditUntil) || Object.hasOwn(r.retention,'terminalUntil') && !integer(r.retention.terminalUntil) || !Array.isArray(r.audit) || r.audit.length < 1 || r.audit.length > 32) fail();
+    for (const t of d.tombstones) if (!keys(t,['requestId','credentialHash','lastRevision','purgedAt','retainUntil']) || !uuid(t.requestId) || !digest(t.credentialHash) || !positive(t.lastRevision) || !integer(t.purgedAt) || !integer(t.retainUntil) || t.retainUntil <= t.purgedAt) fail();
+    for (const r of d.receipts) if (!keys(r,['eventHash','fingerprint','requestId','revision','at','retainUntil']) || !digest(r.eventHash) || !digest(r.fingerprint) || !uuid(r.requestId) || !positive(r.revision) || !integer(r.at) || !integer(r.retainUntil) || r.retainUntil <= r.at) fail();
+    required.guestRightsLedgerSchema = 1;
+  }
+
 }
 /** Bounded structural metadata admission; this does not replace runtime validation. */
 export function requiredAdaptiveCapabilities(env) {
@@ -237,6 +252,7 @@ export function assertReleaseAdaptiveCompatibility(env, manifest) {
     ['supportedObserverClientExperienceVersions', 'observerClientExperienceVersion', [1]],
     ['supportedRightsLedgerVersions', 'rightsLedgerVersion', [1, 2]],
     ['supportedExperimentLedgerSchemas', 'experimentLedgerSchema', [1]],
+    ['supportedGuestRightsLedgerSchemas', 'guestRightsLedgerSchema', [1]],
   ]) {
     const versions = Object.hasOwn(supported, field) ? supported[field] : field === 'supportedRightsLedgerVersions' ? [1] : [];
     if (!Array.isArray(versions) || versions.length > allowed.length || new Set(versions).size !== versions.length || versions.some(v => !allowed.includes(v)) || required[requiredKey] !== undefined && !versions.includes(required[requiredKey])) fail();

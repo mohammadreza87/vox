@@ -297,3 +297,13 @@ test('malformed extension capability declarations never become implicit supporte
   for (const key of ['supportedObserverClientExperienceVersions', 'supportedRightsLedgerVersions', 'supportedExperimentLedgerSchemas']) for (const value of [null, [9], [1, 1], '1'])
     assert.throws(() => assertReleaseAdaptiveCompatibility(f.env, { ...ADAPTIVE_RELEASE_CAPABILITIES, [key]: value }), /incompatible/);
 }));
+test('guest namespace requires its reader even with admissions disabled; unknown versions refuse without mutation', () => fixture(f => {
+  legacy(f); const directory = join(f.env.STUDIO_DATA_DIR, 'guest-rights', 'v1'); mkdirSync(directory, { recursive: true });
+  const file = join(directory, createHash('sha256').update('guest-rights-ledger:v1').digest('hex')+'.json');
+  const ledger = { schemaVersion: 1, keyId:'a'.repeat(64),revision:1,observedAt:200,admission:{windowStart:200,count:0},requests:[],tombstones:[],receipts:[] };
+  writeFileSync(file, JSON.stringify(ledger)); const before=readFileSync(file);
+  const {supportedGuestRightsLedgerSchemas: omitted,...old}=ADAPTIVE_RELEASE_CAPABILITIES; assert.deepEqual(omitted,[1]);
+  assert.throws(()=>assertReleaseAdaptiveCompatibility(f.env,old),/incompatible/);
+  assert.equal(assertReleaseAdaptiveCompatibility(f.env,ADAPTIVE_RELEASE_CAPABILITIES).guestRightsLedgerSchema,1); assert.deepEqual(readFileSync(file),before);
+  writeFileSync(file,JSON.stringify({...ledger,schemaVersion:2})); assert.throws(()=>requiredAdaptiveCapabilities(f.env),/incompatible/);
+}));

@@ -1,3 +1,4 @@
+import { guestPrivacyEvent } from './src/lib/guest-privacy-telemetry';
 import * as Sentry from '@sentry/nextjs';
 
 /**
@@ -37,7 +38,10 @@ Sentry.init({
   ],
 
   // Sanitize sensitive data before sending
+  beforeSendTransaction(event) { return guestPrivacyEvent(event) ? null : event; },
+
   beforeSend(event) {
+    if (guestPrivacyEvent(event)) return null;
     // Remove sensitive environment variables from extra data
     if (event.extra) {
       const sensitiveKeys = ['key', 'secret', 'token', 'password', 'auth'];

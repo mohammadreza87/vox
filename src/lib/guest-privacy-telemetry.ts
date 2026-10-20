@@ -1,0 +1,3 @@
+/** All guest request payloads and credential-bearing page state are excluded from diagnostics. */
+export function guestPrivacyPath(value:unknown):boolean{if(typeof value!=='string')return false;try{const path=new URL(value.replace(/^(?:GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD)\s+/, ''),'https://local.invalid').pathname;return path==='/privacy'||path.startsWith('/privacy/')||path==='/api/guest-rights'||path.startsWith('/api/guest-rights/');}catch{return false;}}
+export function guestPrivacyEvent(event:{request?:{url?:string};transaction?:string}):boolean{return guestPrivacyPath(event.request?.url)||guestPrivacyPath(event.transaction)||typeof window!=='undefined'&&guestPrivacyPath(window.location.pathname);}

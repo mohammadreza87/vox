@@ -4,7 +4,7 @@ import { createHash, randomUUID } from 'crypto';
 import { constants, closeSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, renameSync, unlinkSync, writeFileSync } from 'fs';
 import { promises as fs } from 'fs';
 import { join, parse, relative, resolve, sep } from 'path';
-import { FileAdaptiveStorage, type AdaptiveAccountPageInput, type AdaptiveAccountPage } from '../persistence/storage';
+import type { AdaptiveStorage, AdaptiveAccountPageInput, AdaptiveAccountPage } from '../persistence/storage';
 import { fail } from './repository';
 const unavailable = (): never => fail(503, 'rights_storage_unavailable');
 const keyFor = (id: string) => createHash('sha256').update(id).digest('hex');
@@ -34,8 +34,10 @@ function canonicalDirectory(path: string): string {
   }
   return absolute;
 }
-export class RightsFileStorage extends FileAdaptiveStorage {
-  constructor(directory: string) { super(canonicalDirectory(directory)); }
+export class RightsFileStorage implements AdaptiveStorage {
+  readonly supportsCommittedWriteFence = true as const;
+  readonly directory: string;
+  constructor(directory: string) { this.directory = canonicalDirectory(directory); }
   private root(create: boolean): boolean {
     let current = parse(this.directory).root;
     for (const part of relative(current, this.directory).split(sep).filter(Boolean)) {
@@ -68,7 +70,7 @@ export class RightsFileStorage extends FileAdaptiveStorage {
     const value = stat(join(this.directory, `${keyFor(accountId)}.json`));
     if (value && (!value.isFile() || value.isSymbolicLink() || value.nlink !== 1 || (value.mode & 0o077) !== 0 || value.size > 65_536)) return unavailable();
   }
-  override readCommittedForEffect(accountId: string): { status: 'ready'; document: unknown | null } | { status: 'busy' } {
+  readCommittedForEffect(accountId: string): { status: 'ready'; document: unknown | null } | { status: 'busy' } {
     const lock = stat(join(this.directory, `${keyFor(accountId)}.json.lock`));
     if (lock) {
       this.root(false); if (!lock.isDirectory() || lock.isSymbolicLink()) return unavailable();
@@ -76,7 +78,7 @@ export class RightsFileStorage extends FileAdaptiveStorage {
     }
     return { status: 'ready', document: this.record(keyFor(accountId)) };
   }
-  override async transact<T>(accountId: string, mutate: (current: unknown | null) => { document: unknown; result: T }, beforeCommit?: () => void): Promise<T> {
+  async transact<T>(accountId: string, mutate: (current: unknown | null) => { document: unknown; result: T }, beforeCommit?: () => void): Promise<T> {
     this.guardRecord(accountId);
     const key = keyFor(accountId), file = join(this.directory, `${key}.json`), lock = `${file}.lock`;
     const temporary = `${file}.${randomUUID()}.tmp`, waitUntil = Date.now() + 3000;
@@ -111,7 +113,7 @@ export class RightsFileStorage extends FileAdaptiveStorage {
       await fs.rmdir(lock);
     }
   }
-  override async listAccounts(input: AdaptiveAccountPageInput): Promise<AdaptiveAccountPage> {
+  async listAccounts(input: AdaptiveAccountPageInput): Promise<AdaptiveAccountPage> {
     if (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > 20 || input.after !== undefined && !/^[a-f0-9]{64}$/.test(input.after)) return unavailable();
     if (!this.root(false)) return { accountIds: [] };
     const keys: string[] = [];
