@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { activeReadScope, memoized, type TurnReadScope } from '../../tireh/privacy/read-scope';
 import type { ConsentEvent } from '../consent';
 import type { ConsentPermission, PersonAccountBinding } from '../types';
-import type { AdaptiveStorage } from './storage';
+import { committedLoader, CommittedReadBusy, type AdaptiveStorage } from './storage';
 import { emptyExperience, experienceDocumentSchema } from '../runtime/contracts';
 import { emptyRelationshipDocument, relationshipDocumentSchema } from '../relationships/contracts';
 import { emptyObserverDocument, observerDocumentSchema } from '../observation/contracts';
@@ -201,9 +201,9 @@ export class AdaptiveRepository {
   }
   /** Starts the read-only load of an account in the active read scope; no-op outside one. */
   async preload(accountId: string): Promise<void> {
-    const scope = activeReadScope(), load = this.storage.load?.bind(this.storage);
+    const scope = activeReadScope(), load = committedLoader(this.storage);
     if (!scope || !load || !/^telegram-account:[1-9]\d{0,15}$/.test(accountId)) return;
-    await scope.document(this.storage, accountId, () => load(accountId));
+    await scope.document(this.storage, accountId, () => load(accountId)).catch(() => undefined);
   }
   private committed<T>(accountId: string, at: number | (() => number), fn: (document: AdaptiveDocument, now: number) => T, beforeCommit?: () => void, existingOnly = false): Promise<T> {
     return this.storage.transact(accountId, current => {
@@ -225,9 +225,14 @@ export class AdaptiveRepository {
    * A callback that changes the document, or a document that must first be
    * created or upgraded, commits through the ordinary transaction instead. */
   private async served<T>(scope: TurnReadScope, accountId: string, at: number | (() => number), fn: (document: AdaptiveDocument, now: number) => T, existingOnly: boolean): Promise<T> {
-    const load = this.storage.load?.bind(this.storage);
+    const load = committedLoader(this.storage);
     if (!load) { scope.passThrough(); return this.committed(accountId, at, fn, undefined, existingOnly); }
-    const loaded = await scope.document(this.storage, accountId, () => load(accountId));
+    let loaded;
+    try { loaded = await scope.document(this.storage, accountId, () => load(accountId)); }
+    catch (error) {
+      if (!(error instanceof CommittedReadBusy)) throw error;
+      scope.passThrough(); return this.committed(accountId, at, fn, undefined, existingOnly);
+    }
     const now = typeof at === 'function' ? this.storage.sampleClock?.(at) ?? at() : at;
     if (!Number.isSafeInteger(now) || now < 0) throw new Error('Invalid adaptive account');
     if (existingOnly && loaded.value === null) throw new Error('Adaptive existing account required');
