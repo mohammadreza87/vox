@@ -32,7 +32,7 @@ export function MemoryCorrectionEditor({ note, snapshot, locale, disabled, onSav
     return invalidate;
   }, [invalidate, snapshot.space, snapshot.identity.accountId, snapshot.identity.personId, snapshot.identity.confirmed, snapshot.identity.bindingId, snapshot.identity.bindingRevision, snapshot.memoryCorrectionAvailable, snapshot.explicitMemoryValidUntil, note.id, note.revision, note.text, locale, disabled]);
   const analytics = snapshot.purposes.find(p => p.purpose === 'optional.product_analytics');
-  useLayoutEffect(() => { return () => { diagnostics.current?.abort(); }; }, [analytics?.revision, analytics?.state]);
+  useLayoutEffect(() => { return () => { diagnostics.current?.abort(); }; }, [analytics?.revision, analytics?.state, analytics?.available]);
   useEffect(() => { if (stage === 'edit') inputRef.current?.focus(); else if (stage === 'review') reviewRef.current?.focus(); }, [stage]);
   useEffect(() => {
     if (!snapshot.memoryCorrectionAvailable || !snapshot.identity.confirmed || note.sourceRefs) return;

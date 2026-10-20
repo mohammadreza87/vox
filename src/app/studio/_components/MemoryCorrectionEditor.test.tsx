@@ -112,3 +112,17 @@ it('never waits for diagnostics and drops a delayed receipt after unmount', asyn
   await act(async () => { await Promise.resolve(); }); expect(p.onSaved).toHaveBeenCalledOnce();
   view.unmount(); await act(async () => release({ policyReceipt: 'a'.repeat(64) })); expect(mocks.report).not.toHaveBeenCalled();
 });
+
+it('drops delayed diagnostics after analytics availability changes without cancelling the explicit save', async () => {
+  const p = props(); p.snapshot = { ...snapshot, purposes: [{ purpose: 'optional.product_analytics', state: 'granted', available: true, revision: 1, notice: {} }] } as AdaptiveSnapshot;
+  let receipt!: (value: { policyReceipt: string }) => void, saved!: (value: AdaptiveSnapshot) => void;
+  mocks.authority.mockReturnValue(new Promise(resolve => { receipt = resolve; }));
+  mocks.correct.mockReturnValue(new Promise(resolve => { saved = resolve; }));
+  const view = render(<MemoryCorrectionEditor {...p} />); review(); fireEvent.click(screen.getByRole('button', { name: 'Save correction' }));
+  const signal = mocks.authority.mock.calls[0][1] as AbortSignal;
+  view.rerender(<MemoryCorrectionEditor {...p} snapshot={{ ...p.snapshot, purposes: p.snapshot.purposes.map(a => ({ ...a, available: false })) }} />);
+  expect(signal.aborted).toBe(true);
+  expect((mocks.correct.mock.calls[0][2] as AbortSignal).aborted).toBe(false);
+  await act(async () => { receipt({ policyReceipt: 'a'.repeat(64) }); saved({ ...snapshot, revision: 3 }); });
+  expect(p.onSaved).toHaveBeenCalledOnce(); expect(mocks.report).not.toHaveBeenCalled();
+});
