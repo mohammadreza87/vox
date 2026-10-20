@@ -18,6 +18,8 @@ import { logTelegramDiagnostic } from '../tireh/telegram/diagnostics';
 
 export const CALL_TOKEN_TTL_MS = 2 * 60 * 60 * 1000;
 export const MAX_CALL_SECONDS = 15 * 60;
+/** How long a streamed live turn waits for its first delta before sending SSE headers. */
+export const FIRST_DELTA_GRACE_MS = 250;
 
 /** The bearer key ElevenLabs sends to our LLM endpoint (stored as an ElevenLabs secret). */
 export function voiceLlmKey(secret: string): string {
@@ -88,23 +90,40 @@ export async function handleVoiceLlm(studio: Studio, request: Request): Promise<
   if (!call) return Response.json({ error: { message: 'This call has expired. Start a new one.' } }, { status: 403 });
 
   let parts: AsyncIterator<string>;
-  let first: IteratorResult<string>;
   try {
     // Start before answering so access errors become a proper HTTP error.
     parts = (await studio.liveTurn(call.agentId, call.telegramId, toTurns(body?.messages)))[Symbol.asyncIterator]();
-    first = await parts.next();
   } catch {
     logTelegramDiagnostic(console, 'live_turn_failed');
     return Response.json({ error: { message: 'The agent is unavailable.' } }, { status: 503 });
   }
-
   const id = `chatcmpl-${Date.now().toString(36)}`;
   const created = Math.floor(Date.now() / 1000);
+  const unavailable = () => {
+    logTelegramDiagnostic(console, 'live_turn_failed');
+    return Response.json({ error: { message: 'The agent is unavailable.' } }, { status: 503 });
+  };
+
+  const firstPart = parts.next();
   if (body?.stream === false) {
+    let first: IteratorResult<string>;
+    try { first = await firstPart; } catch { return unavailable(); }
     let text = '';
     for (let r = first; !r.done; r = await parts.next()) text += r.value;
     return Response.json({ id, object: 'chat.completion', created, model: 'vox-persona', choices: [{ index: 0, message: { role: 'assistant', content: text }, finish_reason: 'stop' }] });
   }
+  // Stream: the SSE headers go out once the first delta arrives or after a
+  // short grace, whichever is first, instead of waiting for the first token.
+  // A failure inside the grace stays a retryable HTTP error for ElevenLabs;
+  // after it the headers are committed and a failure ends the stream with the
+  // spoken fallback, as a mid-stream failure always did.
+  firstPart.catch(() => undefined);
+  let first: IteratorResult<string> | undefined;
+  let grace: ReturnType<typeof setTimeout> | undefined;
+  try { first = await Promise.race([firstPart, new Promise<undefined>(resolve => { grace = setTimeout(() => resolve(undefined), FIRST_DELTA_GRACE_MS); })]); }
+  catch { return unavailable(); }
+  finally { clearTimeout(grace); }
+
   const chunk = (delta: Record<string, string>, finish: string | null = null) =>
     `data: ${JSON.stringify({ id, object: 'chat.completion.chunk', created, model: 'vox-persona', choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;
   const encoder = new TextEncoder();
@@ -112,7 +131,7 @@ export async function handleVoiceLlm(studio: Studio, request: Request): Promise<
     async start(controller) {
       try {
         controller.enqueue(encoder.encode(chunk({ role: 'assistant' })));
-        for (let r = first; !r.done; r = await parts.next()) {
+        for (let r = first ?? await firstPart; !r.done; r = await parts.next()) {
           if (r.value) controller.enqueue(encoder.encode(chunk({ content: r.value })));
         }
       } catch {

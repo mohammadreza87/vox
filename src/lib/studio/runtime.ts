@@ -69,6 +69,7 @@ import { FileAdaptiveStorage, FirestoreAdaptiveStorage, type AdaptiveStorage } f
 import { adaptiveOptionsFromManifest } from '../adaptive/persistence/config';
 import { openLocalAdaptiveStorage, parseAdaptiveStorageFormat, type AdaptiveStorageFormat } from '../adaptive/persistence/runtime-storage';
 import { SharedMemoryRepository } from '../adaptive/shared/repository';
+import { FirestoreRevisionSource } from '../tireh/privacy/revisions';
 import { SharedMemoryService } from '../adaptive/shared/service';
 import { AdaptiveExperienceService } from '../adaptive/runtime/service';
 import { AdaptiveObserverService } from '../adaptive/observation/service';
@@ -231,7 +232,7 @@ export function stopStudioPreferenceLearning(): Promise<{ pending: number }> {
   return g.__voxPreferenceStop = g.__voxPreferenceTasks?.tasks.close() ?? Promise.resolve({ pending: 0 });
 }
 
-type RuntimeStorage = Pick<StudioDeps, 'store' | 'memory' | 'rateLimiter' | 'adaptive' | 'relationshipStore' | 'observations'> & { sharedStorage: AdaptiveStorage; voiceIdentityStorage: AdaptiveStorage; maintenanceStorage: AdaptiveStorage; closeAdaptive?: () => void };
+type RuntimeStorage = Pick<StudioDeps, 'store' | 'memory' | 'rateLimiter' | 'adaptive' | 'relationshipStore' | 'observations' | 'revisions'> & { sharedStorage: AdaptiveStorage; voiceIdentityStorage: AdaptiveStorage; maintenanceStorage: AdaptiveStorage; closeAdaptive?: () => void };
 function fileStorage(dir: string, scopedRelationshipsEnabled: boolean, format: AdaptiveStorageFormat): RuntimeStorage {
   const managed = openLocalAdaptiveStorage(join(dir, 'adaptive'), format);
   try { const store = new StudioStore(dir);
@@ -259,6 +260,8 @@ async function firestoreStorage(bucketName: string, scopedRelationshipsEnabled: 
     voiceIdentityStorage: new FirestoreAdaptiveStorage(db, 'adaptiveVoiceIdentity'),
     maintenanceStorage: new FirestoreAdaptiveStorage(db, 'adaptiveMaintenance'),
     rateLimiter: new FirestoreStudioRateLimiter(db),
+    // Turn rechecks: one masked getAll of the revision documents.
+    revisions: new FirestoreRevisionSource(db),
     relationshipStore: new FirestoreRelationshipStore(db, 'vox_scoped_relationships_v1'),
     observations: new FirestoreObservationStore(db, 'vox_scoped_relationship_observations_v1'),
     memory: {
@@ -318,6 +321,7 @@ async function create(): Promise<Studio> {
       webhookBase: config.publicUrl,
       memory: storage.memory,
       adaptive: storage.adaptive,
+      revisions: storage.revisions,
       relationshipAuthority: authority,
       // Content-free per-stage timings for a latency baseline (scripts/stage-timings.ts).
       stageTimings: env.STUDIO_STAGE_TIMINGS === '1',

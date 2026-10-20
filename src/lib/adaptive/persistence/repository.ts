@@ -4,6 +4,7 @@ import { productPauseSchema, PRODUCT_PAUSE_RESERVED_BYTES, type ProductPauseV1, 
 import { emptyProductPause } from '../product-pause/state';
 import { createHash } from 'crypto';
 import { z } from 'zod';
+import { activeReadScope, memoized, type TurnReadScope } from '../../tireh/privacy/read-scope';
 import type { ConsentEvent } from '../consent';
 import type { ConsentPermission, PersonAccountBinding } from '../types';
 import type { AdaptiveStorage } from './storage';
@@ -90,7 +91,12 @@ function create(accountId: string, now: number, schemaVersion: 1 | 2 | 3 = 1,ret
  * Partial authority projections must use their own schema, never this function. */
 export function validateAdaptiveDocument(value: unknown, accountId: string, now: number): AdaptiveDocument {
   if (!/^telegram-account:[1-9]\d{0,15}$/.test(accountId) || !Number.isSafeInteger(now) || now < 0) throw new Error('Invalid adaptive account');
-  const draft = documentSchema.parse(value) as AdaptiveDocument;
+  return checkAdaptiveDocument(documentSchema.parse(value) as AdaptiveDocument, accountId, now);
+}
+/** The invariant half of validateAdaptiveDocument, for a document already
+ * parsed by its schema (a read scope parses a loaded document once). */
+function checkAdaptiveDocument(draft: AdaptiveDocument, accountId: string, now: number): AdaptiveDocument {
+  if (!/^telegram-account:[1-9]\d{0,15}$/.test(accountId) || !Number.isSafeInteger(now) || now < 0) throw new Error('Invalid adaptive account');
   if (draft.accountId !== accountId || draft.personId !== create(accountId, now).personId || draft.updatedAt > now ||
       new Set(draft.permissions.map(p => p.id)).size !== 16 || draft.permissions.length !== 16 ||
       new Set(draft.events.map(e => e.eventId)).size !== draft.events.length ||
@@ -161,6 +167,15 @@ export function requireProductPauseCapacity(document: AdaptiveDocument): void {
       Buffer.byteLength(JSON.stringify(document)) > 700_000) throw new Error('Product pause reserved capacity exceeded');
 }
 
+/** Keep the disabled rollout readable by the previous strict schema. A future
+ * enabled observer rollout needs an explicit rollback migration; never restore
+ * an old account backup over newer rights/tombstones. */
+function storedForm(draft: AdaptiveDocument): Partial<AdaptiveDocument> {
+  const stored: Partial<AdaptiveDocument> = { ...draft };
+  if (!draft.observer.events.length && !draft.observer.projections.length) delete stored.observer;
+  return stored;
+}
+
 export class AdaptiveRepository {
   constructor(readonly storage: AdaptiveStorage) {}
   readCommittedForEffect(accountId: string, at: number | (() => number)): { status: 'ready'; document: AdaptiveDocument | null } | { status: 'busy' | 'unsupported' } {
@@ -178,6 +193,19 @@ export class AdaptiveRepository {
   transaction<T>(accountId: string, at: number | (() => number), fn: (document: AdaptiveDocument, now: number) => T, beforeCommit?: () => void, existingOnly = false): Promise<T> {
     if (!/^telegram-account:[1-9]\d{0,15}$/.test(accountId) || typeof at !== 'function' && (!Number.isSafeInteger(at) || at < 0)) throw new Error('Invalid adaptive account');
     if (beforeCommit && this.storage.supportsCommittedWriteFence !== true) throw new Error('Committed write fence unsupported');
+    const scope = activeReadScope();
+    if (scope && !beforeCommit) return this.served(scope, accountId, at, fn, existingOnly);
+    // A fenced write inside a read scope is a real commit the scope cannot vouch for.
+    if (scope) scope.noteWrite();
+    return this.committed(accountId, at, fn, beforeCommit, existingOnly);
+  }
+  /** Starts the read-only load of an account in the active read scope; no-op outside one. */
+  async preload(accountId: string): Promise<void> {
+    const scope = activeReadScope(), load = this.storage.load?.bind(this.storage);
+    if (!scope || !load || !/^telegram-account:[1-9]\d{0,15}$/.test(accountId)) return;
+    await scope.document(this.storage, accountId, () => load(accountId));
+  }
+  private committed<T>(accountId: string, at: number | (() => number), fn: (document: AdaptiveDocument, now: number) => T, beforeCommit?: () => void, existingOnly = false): Promise<T> {
     return this.storage.transact(accountId, current => {
       // Sample after the backend acquires its serialization/lock and reads the
       // committed document. The same time drives validation and business expiry.
@@ -189,12 +217,31 @@ export class AdaptiveRepository {
       if(draft.schemaVersion===3 && this.storage.canonicalSchemaVersion!==3)throw new Error('Prepared rights storage required');
       const result = fn(draft, now);
       validateAdaptiveDocument(draft, accountId, this.storage.sampleClock?.(() => typeof at === 'function' ? at() : at) ?? now);
-      // Keep the disabled rollout readable by the previous strict schema. A
-      // future enabled observer rollout needs an explicit rollback migration;
-      // never restore an old account backup over newer rights/tombstones.
-      const stored: Partial<AdaptiveDocument> = { ...draft };
-      if (!draft.observer.events.length && !draft.observer.projections.length) delete stored.observer;
-      return { document: stored, result };
+      return { document: storedForm(draft), result };
     }, beforeCommit);
+  }
+  /** Inside a read scope: the same normalisation, validation and callback over
+   * a committed copy (schema-parsed once per snapshot), without rewriting it.
+   * A callback that changes the document, or a document that must first be
+   * created or upgraded, commits through the ordinary transaction instead. */
+  private async served<T>(scope: TurnReadScope, accountId: string, at: number | (() => number), fn: (document: AdaptiveDocument, now: number) => T, existingOnly: boolean): Promise<T> {
+    const load = this.storage.load?.bind(this.storage);
+    if (!load) { scope.passThrough(); return this.committed(accountId, at, fn, undefined, existingOnly); }
+    const loaded = await scope.document(this.storage, accountId, () => load(accountId));
+    const now = typeof at === 'function' ? this.storage.sampleClock?.(at) ?? at() : at;
+    if (!Number.isSafeInteger(now) || now < 0) throw new Error('Invalid adaptive account');
+    if (existingOnly && loaded.value === null) throw new Error('Adaptive existing account required');
+    if (loaded.value === null || normalizeLegacyAdaptiveDocument(loaded.value, accountId, now) !== loaded.value) return this.commitInScope(scope, accountId, at, fn, existingOnly);
+    const parsed = memoized(loaded, 'adaptive:parsed', () => documentSchema.parse(loaded.value) as AdaptiveDocument);
+    const canonical = memoized(loaded, 'adaptive:canonical', () => JSON.stringify(storedForm(parsed)));
+    const draft = checkAdaptiveDocument(structuredClone(parsed), accountId, now);
+    if (draft.schemaVersion === 3 && this.storage.canonicalSchemaVersion !== 3) throw new Error('Prepared rights storage required');
+    const result = fn(draft, now);
+    if (JSON.stringify(storedForm(draft)) !== canonical) return this.commitInScope(scope, accountId, at, fn, existingOnly);
+    return result === undefined ? result : structuredClone(result);
+  }
+  /** Storage callbacks are retry safe, so rerunning `fn` for the commit is a retry. */
+  private async commitInScope<T>(scope: TurnReadScope, accountId: string, at: number | (() => number), fn: (document: AdaptiveDocument, now: number) => T, existingOnly: boolean): Promise<T> {
+    try { return await this.committed(accountId, at, fn, undefined, existingOnly); } finally { scope.committed(this.storage, accountId); }
   }
 }

@@ -140,13 +140,15 @@ export class AdaptiveRelationshipService {
       return result.status === 'ready' ? result.value : null;
     } catch { return null; }
   }
+  /** Pure read: served from one committed load; pruning that must commit falls back to the transaction. */
   resolve(telegramId: number, agentId: string, space: SpaceKind): Promise<RelationshipPermit | null> {
     if (this.pausedUse(telegramId, space)) return Promise.resolve(null);
     if (this.adaptive.repository.storage.indexed) return this.adaptive.withRuntimeControls(telegramId, space, (d, now) => {
       const value = this.permit(d, agentId, space, now);
       return { value, denied: !value, ...(value ? { deadline: value.expiresAt } : {}) };
     }).catch(() => null);
-    return this.adaptive.withAccountDocument(telegramId, (d, now) => { this.pruneDocument(d, now); return this.permit(d, agentId, space, now); });
+    // Pure read: served from a committed load; pruning that must commit still commits.
+    return this.adaptive.withAccountView(telegramId, (d, now) => { this.pruneDocument(d, now); return this.permit(d, agentId, space, now); });
   }
   async authorize(key: RelationshipKey, sourceIds: readonly string[], phase: RelationshipPhase, expectedFingerprint?: string): Promise<RelationshipPermit | null> {
     const telegramId = telegramFor(key);

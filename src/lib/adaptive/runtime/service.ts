@@ -1,5 +1,6 @@
 import { productPauseUseStamp } from '../product-pause/state';
 import { ensureReminderDelivery, pruneReminderDelivery, reminderChannelStatus, reminderPermit, reminderDisclosureAuthority, REMINDER_PURPOSE } from './reminder-state';
+import { readOnce } from '../../tireh/privacy/read-scope';
 import { REMINDER_DISCLOSURE_VERSION, reminderChannelPresentSchema, reminderChannelInputSchema, reminderActionInputSchema, type ReminderChannelPresentInput, type ReminderChannelInput, type ReminderActionInput } from './reminder-contracts';
 import { randomUUID } from 'crypto';
 import { reserveDecision } from './decision-budget';
@@ -353,9 +354,13 @@ export class AdaptiveExperienceService {
       return { revision: current.contextReceipt, settings: current.allowed ? resolved
         .filter(row => row.source === 'explicit').map(row => row.setting) : [] };
     }
-    const snapshot = await this.resolveExplicitPreferences(telegramId, space, agentId);
-    return { revision: snapshot.contextReceipt, settings: snapshot.allowed ? snapshot.resolved
-      .filter(row => row.source === 'explicit').map(row => row.setting) : [] };
+    // Pure read: both preference snapshots load committed state without a
+    // rewrite; pruning that must commit still commits.
+    return readOnce(async () => {
+      const snapshot = await this.resolveExplicitPreferences(telegramId, space, agentId);
+      return { revision: snapshot.contextReceipt, settings: snapshot.allowed ? snapshot.resolved
+        .filter(row => row.source === 'explicit').map(row => row.setting) : [] };
+    });
   }
   /** Same opaque context revision as readPreferences, without resolving settings
    * or awaiting I/O. A denied optional choice still has an empty-context revision;
