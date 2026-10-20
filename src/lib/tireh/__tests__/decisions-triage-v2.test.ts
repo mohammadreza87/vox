@@ -5,10 +5,13 @@
  * Never regenerate those snapshots: a diff there is a v1 drift.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { readTriage, triageQuestions, type DecisionAnswer } from '../triage';
+import { readTriage, readTriageV2, triageInput, triageQuestions, type DecisionAnswer } from '../triage';
 import type { SkillChoice } from '../skill-routing';
 import type { Persona } from '../types';
-import { testOrgConfig } from './fixtures';
+import { memory, privateText, TG, testOrgConfig } from './fixtures';
+import { questionSchema, MAX_DECISION_QUESTIONS } from '../../adaptive/decisions';
+import { PERSONA_HEADER_PREFIX, TRIAGE_V2_QUESTION_NAMES } from '../decisions/catalog';
+import { decisionsGateway, pred, v1Answers } from './decisions-fixtures';
 
 const basePersona = (): Persona => testOrgConfig().personas.find((p) => p.id === 'aria')!;
 const ROUTABLE: SkillChoice[] = [
@@ -153,5 +156,157 @@ describe('V1 GOLDEN (captured at base 6d00b80; never regenerate)', () => {
     vi.stubEnv('TRIAGE_QUESTION_SET', 'v2');
     expect(goldenCases().map((_, i) => questionsJson(i, 'v1'))).toEqual(unsetQuestions);
     expect(readCases().map((_, i) => readOut(i, 'v1'))).toEqual(unsetReads);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// v2 (everything below is written after the golden capture)
+
+const v2Answers = (extra: Record<string, DecisionAnswer> = {}): Record<string, DecisionAnswer> => ({
+  route: { type: 'choice', choice: 'task', confidence: 0.8 },
+  context_need: { type: 'choice', choice: 'open_threads', confidence: 0.7 },
+  thread_status: { type: 'choice', choice: 'continues', confidence: 0.6 },
+  explicit_style_request: { type: 'choice', choice: 'brief', confidence: 0.9 },
+  personal_life: pred(0.1), confidential: pred(0.2), explicit_correction: pred(0.3),
+  ...extra,
+});
+
+describe('v2 question set', () => {
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it('appends the seven v2 questions after the v1 list, keeping the skill question before them', () => {
+    goldenCases().forEach(([, persona, askAddressed, routable]) => {
+      const v1 = triageQuestions(persona, askAddressed, routable, 'v1').map((q) => q.name);
+      for (const set of ['v2', 'v2-live'] as const) {
+        const names = triageQuestions(persona, askAddressed, routable, set).map((q) => q.name);
+        expect(names).toEqual([...v1, ...TRIAGE_V2_QUESTION_NAMES]);
+        expect(names.length).toBeLessThanOrEqual(MAX_DECISION_QUESTIONS);
+      }
+    });
+    const [, persona, askAddressed, routable] = goldenCases()[4];
+    expect(triageQuestions(persona, askAddressed, routable, 'v2').map((q) => q.name).indexOf('skill')).toBe(4);
+  });
+
+  it('reads the set from TRIAGE_QUESTION_SET at call time', () => {
+    vi.stubEnv('TRIAGE_QUESTION_SET', ' V2 ');
+    expect(triageQuestions(basePersona(), false).map((q) => q.name)).toContain('route');
+    vi.stubEnv('TRIAGE_QUESTION_SET', 'v2-live');
+    expect(triageQuestions(basePersona(), false).map((q) => q.name)).toContain('explicit_correction');
+  });
+
+  it('every v2 question parses under the Decisions questionSchema and carries no persona data', () => {
+    const p = { ...basePersona(), personality: 'PERSONALITY_CANARY_7', communicationStyle: 'STYLE_CANARY_7' };
+    const v2 = triageQuestions(p, true, ROUTABLE, 'v2').slice(-TRIAGE_V2_QUESTION_NAMES.length);
+    for (const q of v2) expect(questionSchema.safeParse(q).success).toBe(true);
+    const text = JSON.stringify(v2);
+    for (const forbidden of [p.name, p.role, 'PERSONALITY_CANARY_7', 'STYLE_CANARY_7', PERSONA_HEADER_PREFIX]) expect(text).not.toContain(forbidden);
+  });
+});
+
+describe('readTriage under v2 (shadow)', () => {
+  it('populates Triage.v2 without changing effort or memorable', () => {
+    for (const route of [{ choice: 'smalltalk', confidence: 0.99 }, { choice: 'correction', confidence: 0.99 }]) {
+      const answers = { ...v1Answers(), ...v2Answers({ route: { type: 'choice', ...route }, explicit_correction: pred(0.99) }) };
+      const v1 = readTriage(answers, false, 'mentions', undefined, 'v1');
+      const v2 = readTriage(answers, false, 'mentions', undefined, 'v2');
+      expect(v2).toEqual({ ...v1, v2: { route: route.choice, contextNeed: 'open_threads', threadStatus: 'continues', explicitStyleRequest: 'brief', personalLife: 0.1, confidential: 0.2, explicitCorrection: 0.99 } });
+      expect(v2?.effort).toBe('thoughtful');
+      expect(v2?.memorable).toBe(false);
+    }
+  });
+
+  it.each([
+    ['route', { route: pred(0.9) }, 'route'],
+    ['route', { route: { type: 'choice', choice: 'banter', confidence: 0.9 } }, 'route'],
+    ['context_need', { context_need: { type: 'choice', choice: 'none', confidence: NaN } }, 'contextNeed'],
+    ['thread_status', { thread_status: { type: 'choice', choice: 'new', confidence: 1.5 } }, 'threadStatus'],
+    ['personal_life', { personal_life: pred(1.5) }, 'personalLife'],
+    ['confidential', { confidential: pred(NaN) }, 'confidential'],
+    ['explicit_correction', { explicit_correction: { type: 'choice', choice: 'yes', confidence: 0.9 } }, 'explicitCorrection'],
+  ] as Array<[string, Record<string, DecisionAnswer>, string]>)('a malformed %s answer omits only that field', (name, bad, field) => {
+    const answers = { ...v1Answers(), ...v2Answers(bad) };
+    const out = readTriage(answers, false, 'mentions', undefined, 'v2');
+    expect(out).not.toBeNull();
+    expect(out!.effort).toBe('thoughtful');
+    expect(out!.v2).not.toHaveProperty(field);
+    expect(Object.keys(out!.v2!)).toHaveLength(6);
+    const missing = { ...v1Answers(), ...v2Answers() };
+    delete missing[name];
+    expect(Object.keys(readTriage(missing, false, 'mentions', undefined, 'v2')!.v2!)).toHaveLength(6);
+  });
+
+  it('has no v2 key without v2 answers, and v2 answers never rescue an invalid v1 result', () => {
+    expect(readTriage(v1Answers(), false, 'mentions', undefined, 'v2')).not.toHaveProperty('v2');
+    expect(readTriage({ ...v2Answers(), live_info: pred(0) }, false, 'mentions', undefined, 'v2')).toBeNull();
+    expect(readTriageV2({} as Record<string, DecisionAnswer>)).toEqual({});
+  });
+});
+
+describe('readTriage under v2-live', () => {
+  const live = (extra: Record<string, DecisionAnswer>) => readTriage({ ...v1Answers(), ...v2Answers(extra) }, false, 'mentions', undefined, 'v2-live');
+
+  it('route smalltalk at 0.7 makes effort quick; at 0.5 it stays thoughtful', () => {
+    expect(live({ route: { type: 'choice', choice: 'smalltalk', confidence: 0.7 } })!.effort).toBe('quick');
+    expect(live({ route: { type: 'choice', choice: 'smalltalk', confidence: 0.5 } })!.effort).toBe('thoughtful');
+  });
+
+  it('route correction at 0.6 or explicit_correction at 0.6 makes the message memorable; 0.4 does not', () => {
+    expect(live({ route: { type: 'choice', choice: 'correction', confidence: 0.6 } })!.memorable).toBe(true);
+    expect(live({ explicit_correction: pred(0.6) })!.memorable).toBe(true);
+    expect(live({ explicit_correction: pred(0.4) })!.memorable).toBe(false);
+  });
+
+  it('never changes needsWeb, wantsVoice, addressed, proactive or skills', () => {
+    const extras: Record<string, DecisionAnswer> = { route: { type: 'choice', choice: 'smalltalk', confidence: 0.99 }, explicit_correction: pred(0.99),
+      live_info: pred(0.9), wants_voice: pred(0.9), addressed: pred(0.9), proactive: pred(0.95),
+      skill: { type: 'choice', choice: 'x.alpha', confidence: 0.9 } };
+    const answers = { ...v1Answers(), ...v2Answers(), ...extras };
+    const v1 = readTriage(answers, true, 'active', ROUTABLE, 'v1')!;
+    const out = readTriage(answers, true, 'active', ROUTABLE, 'v2-live')!;
+    const { effort, memorable, v2, ...rest } = out;
+    const { effort: v1Effort, memorable: v1Memorable, ...restV1 } = v1;
+    expect(rest).toEqual(restV1);
+    expect([v1Effort, v1Memorable]).toEqual(['thoughtful', false]);
+    expect([effort, memorable, v2?.route]).toEqual(['quick', true, 'smalltalk']);
+  });
+});
+
+describe('gateway shadow', () => {
+  afterEach(() => { vi.unstubAllEnvs(); });
+  const answers = v1Answers({ route: { type: 'choice', choice: 'smalltalk', confidence: 0.95 } });
+
+  it('under v2 the main model answers despite a smalltalk route', async () => {
+    vi.stubEnv('TRIAGE_QUESTION_SET', 'v2');
+    const h = decisionsGateway({ answers });
+    expect(await h.gateway.handleUpdate('aria', privateText(TG.reza, 'hey there'))).toBe('replied');
+    expect(h.decide.mock.calls[0][1].map((q) => q.name)).toContain('route');
+    expect(h.bot.sent.find((s) => s.method === 'sendMessage')?.text).toBe('MAIN_MODEL_REPLY');
+    expect(h.fastLlm.replyPrompts).toHaveLength(0);
+  });
+
+  it('under v2-live the fast model answers', async () => {
+    vi.stubEnv('TRIAGE_QUESTION_SET', 'v2-live');
+    const h = decisionsGateway({ answers });
+    expect(await h.gateway.handleUpdate('aria', privateText(TG.reza, 'hey there'))).toBe('replied');
+    expect(h.bot.sent.find((s) => s.method === 'sendMessage')?.text).toBe('FAST_MODEL_REPLY');
+    expect(h.llm.replyPrompts).toHaveLength(0);
+  });
+
+  it('the pre-pass input is the persona header plus the recent lines, never a memory', async () => {
+    vi.stubEnv('TRIAGE_QUESTION_SET', 'v2');
+    const h = decisionsGateway({ answers });
+    await h.memories.add(memory({ content: 'CANARY_MEM_91 drinks green tea', scope: { kind: 'private', personId: 'reza' } }));
+    expect(await h.gateway.handleUpdate('aria', privateText(TG.reza, 'What tea do I drink?'))).toBe('replied');
+    expect(h.decide).toHaveBeenCalledOnce();
+    const [input, questions] = h.decide.mock.calls[0];
+    expect(input).not.toContain('CANARY_MEM_91');
+    expect(JSON.stringify(questions)).not.toContain('CANARY_MEM_91');
+    // Base behaviour (unchanged by S09): in a private chat the stored copy of the
+    // latest message is not filtered by identity, so it appears twice.
+    const line = { who: 'Reza', text: 'What tea do I drink?' };
+    expect(input).toBe(triageInput(h.org.getPersona('aria')!, [line, line]));
+    expect(input.split('\n\n')[1].split('\n').length).toBeLessThanOrEqual(6);
+    // The memory was visible to this audience: it reached the reply prompt.
+    expect(h.llm.lastPrompt).toContain('CANARY_MEM_91');
   });
 });
