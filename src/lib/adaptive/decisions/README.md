@@ -110,3 +110,26 @@ conservative defense in depth, not an OS/IAM sandbox. Protected receipt and huma
 approval callbacks must use evaluator/release credentials unavailable to the
 candidate author. Production credentials, artifact verification and worker
 isolation must be independently established before an improvement service runs.
+
+## Reply-style procedural memory (library, not wired)
+
+`personalization/procedural.ts` is a Beta-Bernoulli Thompson-sampling policy over six
+fixed, low-risk reply-style dimensions (length, register, structure, modality, language,
+closing question), keyed by a hashed person key, persona, space and route. Precedence is
+explicit request this turn > explicit stored preference (`resolvePreferences` output;
+resets pin the persona default; hypotheses never pin) > sampled arm > persona default.
+Pinned dimensions are never sampled or learned. The reward is composite: a positive
+reaction, a non-corrective follow-up within 10 minutes, an accepted share offer, a
+reciprocated voice note or explicit thanks give 1; any explicit correction, EN/FA
+correction phrase, negative reaction or corrective follow-up gives 0. Reply-rate alone
+never changes a posterior. Posteriors decay toward Beta(1,1) with a 90-day half-life,
+are visible through `describe()`, deleted by `reset()`, and deleted together with
+evaluation rows by `withdraw()`, which integrators must call on `optional.personalization`
+withdrawal, product pause and epoch bump. `choose()` and `settle()` take a call-time
+`personalizationAllowed` check and do nothing when it is false, in groups or for guest
+audiences. Offline-evaluation rows (`vox_reply_style_eval`, 90-day TTL on `expiresAt`)
+hold only enums, a pseudonymous person key, the chosen arms, the propensity, the unchosen
+arms and a 0/1 reward; they hold no message text. Firestore TTL on
+`vox_reply_style_eval.expiresAt` must be enabled at deploy time. Wiring is deferred until
+the DPIA covers behavioural adaptation and `message_reaction` delivery to persona bots is
+confirmed (docs/AGENT_INTELLIGENCE_SOLUTION.md sections 4.10 and 5, step 14).
