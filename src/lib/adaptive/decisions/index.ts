@@ -65,14 +65,27 @@ export class OpenAIDecisionProvider implements DecisionProvider {
       return transportFetch(input, init);
     } }), guardedProvider);
   }
-  evaluate(input: DecisionInput, signal: AbortSignal, authorizeNow?: () => boolean): Promise<unknown> {
+  /** client.decisions.create when present (openai >= 7.30.0), else client.post('/decisions');
+   * maxRetries 0; timeout = options.timeoutMs clamped to [1, 5000] ms, default 500. */
+  evaluate(input: DecisionInput, signal: AbortSignal, authorizeNow?: () => boolean, options?: { readonly timeoutMs?: number }): Promise<unknown> {
     // Parse again at provider boundary: unknown fields cannot be serialized to OpenAI.
     const parsed = requestSchema.parse(input);
-    return decisionAuthority.run({ signal, authorizeNow }, () => this.client.post<unknown>('/decisions', {
-      body: { model: DECISIONS_MODEL, input: parsed.input, questions: parsed.questions,
-        prompt_cache_options: { mode: 'explicit' } },
-      signal, timeout: 500, maxRetries: 0,
-    }));
+    const body = { model: DECISIONS_MODEL, input: parsed.input, questions: parsed.questions, prompt_cache_options: { mode: 'explicit' as const } };
+    const request = { signal, timeout: OpenAIDecisionProvider.requestTimeoutMs(options?.timeoutMs), maxRetries: 0 as const };
+    const create = OpenAIDecisionProvider.typedCreate(this.client);
+    // Both paths stay inside the store: the guarded fetch reads it at transport time.
+    return decisionAuthority.run({ signal, authorizeNow }, () => create ? create(body, request) : this.client.post<unknown>('/decisions', { body, ...request }));
+  }
+  private static requestTimeoutMs(value: number | undefined): number {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return 500;
+    return Math.min(5_000, Math.max(1, Math.floor(value)));
+  }
+  /** Structural detection, so this compiles on SDK 6.9.1 and fakes shaped { post } keep working. */
+  private static typedCreate(client: object): ((body: object, options: { signal: AbortSignal; timeout: number; maxRetries: 0 }) => Promise<unknown>) | null {
+    const resource: unknown = Reflect.get(client, 'decisions');
+    const create: unknown = resource && typeof resource === 'object' ? Reflect.get(resource, 'create') : undefined;
+    if (typeof create !== 'function') return null;
+    return (b, o) => Promise.resolve((create as (this: unknown, body: object, options: object) => PromiseLike<unknown>).call(resource, b, o));
   }
 }
 
