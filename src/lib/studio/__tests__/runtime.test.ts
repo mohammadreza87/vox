@@ -5,6 +5,7 @@ import { createPublicKey } from 'crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getStudio, validateStudioConfig } from '../runtime';
 import { FirestoreStudioStore } from '../firestore-store';
+import { FilePetStore, petStoreFor } from '../pet-store';
 import { FileAdaptiveStorage } from '../../adaptive/persistence/storage';
 import { CHECKPOINT } from '../../adaptive/lifecycle/maintenance';
 import { FileExperimentStorage } from '../../adaptive/experiments/storage';
@@ -105,6 +106,18 @@ describe('Studio production initialization', () => {
     const studio = await getStudio();
     expect(studio.deps.adaptive).toBeDefined();
     expect(studio.deps.relationships?.mode).toBe('off');
+  });
+
+  it('wires the pet store beside studio.json instead of deriving it from the store class', async () => {
+    const dir = configure();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ ok: true, result: { id: 1, is_bot: true, username: 'VoxxBot', first_name: 'Voxx' } })));
+    const studio = await getStudio();
+    expect(studio.deps.pets).toBeInstanceOf(FilePetStore);
+    expect((studio.deps.pets as FilePetStore).dir).toBe(join(dir, 'pets'));
+    // A route bundle sees the instrumentation-built Studio through globalThis with its own copy of
+    // StudioStore, so an instanceof derivation fails there; the wired store must win.
+    Object.setPrototypeOf(studio.deps.store, Object.prototype);
+    await expect(petStoreFor(studio)).resolves.toBe(studio.deps.pets);
   });
 
   it('rejects a manager username that belongs to a different bot', async () => {
