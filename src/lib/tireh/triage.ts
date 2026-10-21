@@ -52,12 +52,17 @@ export interface DecideDetail {
   unknownReason?: string;
 }
 
+export interface DeciderAuthority {
+  authorize: () => Promise<string | null>;
+  authorizeNow?: () => boolean;
+}
+
 export interface Decider {
-  decide(input: string, questions: DecisionQuestion[], timeoutMs?: number): Promise<Record<string, DecisionAnswer>>;
+  decide(input: string, questions: DecisionQuestion[], timeoutMs?: number, authority?: DeciderAuthority): Promise<Record<string, DecisionAnswer>>;
   /** Optional structured input (text parts plus at most one image). */
-  decideParts?(input: readonly DeciderPart[], questions: DecisionQuestion[], timeoutMs?: number): Promise<Record<string, DecisionAnswer>>;
+  decideParts?(input: readonly DeciderPart[], questions: DecisionQuestion[], timeoutMs?: number, authority?: DeciderAuthority): Promise<Record<string, DecisionAnswer>>;
   /** Optional: the same decision with elapsed time, tokens and the unknown reason. */
-  decideDetailed?(input: string, questions: DecisionQuestion[], timeoutMs?: number): Promise<DecideDetail>;
+  decideDetailed?(input: string, questions: DecisionQuestion[], timeoutMs?: number, authority?: DeciderAuthority): Promise<DecideDetail>;
 }
 
 /** Parsed v2 answers (question set v2 / v2-live). Shadow unless v2-live. */

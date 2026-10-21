@@ -126,13 +126,14 @@ describe('hint isolation in the source tree', () => {
     }
   });
 
-  it('is not imported by any production module (the library is unwired)', () => {
+  it('keeps the style identity library unwired except for the shared voice-band contract', () => {
     const importers: string[] = [];
     for (const file of walk(SRC)) {
       if (isTest(file) || within(file, IDENTITY_DIR)) continue;
       for (const ref of importsOf(readFileSync(file, 'utf8'))) {
         if (resolvesInto(resolveSpecifier(ref.specifier, file), IDENTITY_DIR) || ref.specifier.includes('tireh/identity')) {
-          importers.push(`${relative(SRC, file)} -> ${ref.specifier}`);
+          // S11L consumes the shared band/result contract; it does not wire style identity.
+          if (resolveSpecifier(ref.specifier, file)?.replace(/\.(ts|tsx)$/, '') !== join(IDENTITY_DIR, 'voice-band')) importers.push(`${relative(SRC, file)} -> ${ref.specifier}`);
         }
       }
     }

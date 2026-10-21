@@ -18,6 +18,7 @@
 import { z } from 'zod';
 import type { AdaptiveService } from '../../adaptive/persistence/service';
 import { spaceIdFor } from '../../adaptive/persistence/repository';
+import type { DirectAuthorityEvaluator } from '../../adaptive/persistence/authority';
 import { tirehFlags, type TirehFlags } from '../../tireh/flags';
 import { MIN_NET_SPEECH_MS, type VoiceBand, type VoiceNoteInput, type VoiceNoteVerifier, type VoiceVerification } from '../../tireh/identity/voice-band';
 import { defaultVoiceId, type ElevenLabsStudio } from '../media';
@@ -92,7 +93,7 @@ export interface VoiceprintServiceDeps {
   store: VoiceprintStore;
   cipher: VoiceprintCipher;
   provider?: VoiceprintProvider;
-  adaptive?: Pick<AdaptiveService, 'withDirectAuthority' | 'isPurposeAllowed' | 'isProfileConfirmed' | 'capabilityStatus'>;
+  adaptive?: Pick<AdaptiveService, 'withDirectAuthority' | 'readDirectAuthorityForEffect' | 'isPurposeAllowed' | 'isProfileConfirmed' | 'capabilityStatus'>;
   thresholds: VoiceThresholdConfig | null;
   /** Org name used to select per-org thresholds. */
   orgKey: string;
@@ -158,31 +159,38 @@ export class VoiceprintService implements VoiceNoteVerifier {
     return config.orgs && Object.hasOwn(config.orgs, this.deps.orgKey) ? config.orgs[this.deps.orgKey] : config.default;
   }
 
-  /** Current biometric authority from the adaptive store. Any failure is "not allowed". */
+  private authorityEvaluator(space: 'work' | 'personal', agentId?: string): DirectAuthorityEvaluator<Authority> {
+    const adaptive = this.deps.adaptive!;
+    return (d, now) => {
+      const p = d.permissions.find(x => x.spaceId === spaceIdFor(d.accountId, space) && x.purpose === PURPOSE);
+      const confirmed = adaptive.isProfileConfirmed(d, now);
+      const eligibility = adaptive.capabilityStatus(d, 'biometric_recognition', now);
+      const personAllowed = !!p && adaptive.isPurposeAllowed(d, space, PURPOSE, now) && p.state === 'granted' && p.expiresAt > now && !!p.lastEventId;
+      const agentAllowed = personAllowed && (!agentId || adaptive.isPurposeAllowed(d, space, PURPOSE, now, agentId));
+      const reason: VoiceprintUnavailableReason | undefined = personAllowed ? undefined
+        : !confirmed ? 'profile_confirmation_required'
+          : eligibility.reason === 'feature_not_released' ? 'disabled'
+            : !eligibility.eligible ? 'capability_unavailable' : 'biometric_consent_required';
+      const value: Authority = { personAllowed, agentAllowed, ...(reason ? { reason } : {}), ...(personAllowed ? { consentEventId: p!.lastEventId! } : {}) };
+      return !personAllowed ? { value, denied: true } : { value, deadline: Math.min(p!.expiresAt, eligibility.validUntil ?? p!.expiresAt, d.binding!.expiresAt) };
+    };
+  }
+
+  /** Current biometric authority from the adaptive store. Any failure is not allowed. */
   private async authority(telegramId: number, space: 'work' | 'personal', agentId?: string): Promise<Authority> {
-    const adaptive = this.deps.adaptive;
-    if (!adaptive) return { personAllowed: false, agentAllowed: false, reason: 'disabled' };
+    if (!this.deps.adaptive || !this.enabled()) return { personAllowed: false, agentAllowed: false, reason: 'disabled' };
+    try { return await this.deps.adaptive.withDirectAuthority(telegramId, space, this.authorityEvaluator(space, agentId)); }
+    catch { return { personAllowed: false, agentAllowed: false, reason: 'adaptive_unavailable' }; }
+  }
+
+  /** Synchronous committed fence after awaited preparation and immediately before
+   * each provider export. Unsupported or busy authority cannot authorize audio. */
+  private authorityNow(telegramId: number, space: 'work' | 'personal', consentEventId: string | undefined, agentId?: string): boolean {
+    if (!this.deps.adaptive || !this.enabled() || !consentEventId) return false;
     try {
-      return await adaptive.withDirectAuthority(telegramId, space, (d, now) => {
-        const p = d.permissions.find(x => x.spaceId === spaceIdFor(d.accountId, space) && x.purpose === PURPOSE);
-        const confirmed = adaptive.isProfileConfirmed(d, now);
-        const eligibility = adaptive.capabilityStatus(d, 'biometric_recognition', now);
-        // isPurposeAllowed covers profile confirmation, capability approval (eligible()) and the
-        // flag-driven voiceRecognitionEnabled option. A granted state with lastEventId can only come
-        // from transitionConsent() with affirmative consent evidence.
-        const personAllowed = !!p && adaptive.isPurposeAllowed(d, space, PURPOSE, now) && p.state === 'granted' && p.expiresAt > now && !!p.lastEventId;
-        const agentAllowed = personAllowed && (!agentId || adaptive.isPurposeAllowed(d, space, PURPOSE, now, agentId));
-        const reason: VoiceprintUnavailableReason | undefined = personAllowed ? undefined
-          : !confirmed ? 'profile_confirmation_required'
-            : eligibility.reason === 'feature_not_released' ? 'disabled'
-              : !eligibility.eligible ? 'capability_unavailable' : 'biometric_consent_required';
-        const value: Authority = { personAllowed, agentAllowed, ...(reason ? { reason } : {}), ...(personAllowed ? { consentEventId: p!.lastEventId! } : {}) };
-        if (!personAllowed) return { value, denied: true };
-        return { value, deadline: Math.min(p!.expiresAt, eligibility.validUntil ?? p!.expiresAt, d.binding!.expiresAt) };
-      });
-    } catch {
-      return { personAllowed: false, agentAllowed: false, reason: 'adaptive_unavailable' };
-    }
+      const current = this.deps.adaptive.readDirectAuthorityForEffect(telegramId, space, this.authorityEvaluator(space, agentId));
+      return current.status === 'ready' && current.value.personAllowed && current.value.agentAllowed && current.value.consentEventId === consentEventId;
+    } catch { return false; }
   }
 
   async verifyVoiceNote(input: VoiceNoteInput, signal?: AbortSignal): Promise<VoiceVerification> {
@@ -220,16 +228,21 @@ export class VoiceprintService implements VoiceNoteVerifier {
       if (!speech) return { band: 'NO_OPINION', reason: 'too_short' };
       const netSpeechMs = speech.netMs;
       if (netSpeechMs < MIN_NET_SPEECH_MS) return { band: 'NO_OPINION', reason: 'too_short', netSpeechMs };
+      if (!this.authorityNow(telegramId, input.space, authority.consentEventId, input.personaId)) return { band: 'NO_OPINION', reason: 'consent_missing' };
       const self = this.deps.cipher.open(row.template, [row.personId, row.space, row.provider, row.modelVersion, row.consentEventId]);
       opened.push(self);
       const candidates = [{ id: 'self', template: self }, ...this.openEcho(echo, opened)];
       let result: { candidateId?: string; score: number };
       try {
-        result = await withDeadline(this.deps.deadlineMs ?? VOICE_VERIFY_TIMEOUT_MS, signal, s => provider.identify(bytes, candidates, s));
+        result = await withDeadline(this.deps.deadlineMs ?? VOICE_VERIFY_TIMEOUT_MS, signal, s => {
+          if (!this.authorityNow(telegramId, input.space, authority.consentEventId, input.personaId)) throw new VoiceprintError('consent_changed', 409);
+          return provider.identify(bytes, candidates, s);
+        });
       } catch (error) {
         if (error instanceof DeadlineExceeded || signal?.aborted) return { band: 'NO_OPINION', reason: 'timeout' };
         return { band: 'NO_OPINION', reason: 'provider_error' };
       }
+      if (!this.authorityNow(telegramId, input.space, authority.consentEventId, input.personaId)) return { band: 'NO_OPINION', reason: 'consent_missing' };
       const score = Number.isFinite(result.score) ? result.score : 0;
       if (result.candidateId?.startsWith('echo:')) {
         if (score >= thresholds.echo) return { band: 'NO_OPINION', reason: 'self_echo', netSpeechMs };
@@ -281,9 +294,10 @@ export class VoiceprintService implements VoiceNoteVerifier {
       if (!echo.length) throw new VoiceprintError('echo_guard_unavailable', 503);
       const timeout = this.deps.enrollTimeoutMs ?? ENROLL_TIMEOUT_MS;
       const candidates = this.openEcho(echo, opened);
-      const echoCheck = await this.providerCall(() => withDeadline(timeout, signal, s => provider.identify(bytes, candidates, s)));
+      const check = () => { if (!this.authorityNow(input.telegramId, input.space, before.consentEventId)) throw new VoiceprintError('consent_changed', 409); };
+      const echoCheck = await this.providerCall(() => withDeadline(timeout, signal, s => { check(); return provider.identify(bytes, candidates, s); }));
       if (Number.isFinite(echoCheck.score) && echoCheck.score >= thresholds.echo) throw new VoiceprintError('self_echo', 422);
-      template = await this.providerCall(() => withDeadline(timeout, signal, s => provider.voiceprint(bytes, input.mimeType, s)));
+      template = await this.providerCall(() => withDeadline(timeout, signal, s => { check(); return provider.voiceprint(bytes, input.mimeType, s); }));
       const during = await this.authority(input.telegramId, input.space);
       if (!during.personAllowed || during.consentEventId !== before.consentEventId) throw new VoiceprintError('consent_changed', 409);
       const consentEventId = before.consentEventId!;

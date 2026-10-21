@@ -5,8 +5,8 @@ import { z } from 'zod';
 import { MAX_IMAGE_URL_LENGTH, minimizeImageDataUrl } from '../prediction/image';
 
 /** Verified against OpenAI's Decisions guide/API reference on 2026-10-19.
- * SDK 6.9.1 has no decisions resource. Its public post() supports the documented
- * POST /v1/decisions; upgrade/replace this seam independently of consumers.
+ * Installed SDK 7.39.0 supplies decisions.create; a structural public post()
+ * fallback preserves older injected clients. Both use the same guarded transport.
  * https://developers.openai.com/api/docs/guides/decisions
  * https://developers.openai.com/api/reference/resources/decisions/methods/create
  */
@@ -65,12 +65,12 @@ export type DecisionResult =
   | { status: 'unknown'; reason: DecisionUnknownReason; elapsedMs: number; inputTokens?: number }
   | { status: 'answered'; model: string; answers: DecisionAnswer[]; elapsedMs: number; inputTokens?: number };
 /** Per-request provider options; `timeoutMs` is the service's effective deadline. */
-export interface DecisionProviderOptions { readonly timeoutMs?: number }
+export interface DecisionProviderOptions { readonly timeoutMs?: number; readonly authorize?: () => Promise<boolean> }
 export interface DecisionProvider {
   readonly committedExportFence?: true;
   evaluate(input: DecisionInput, signal: AbortSignal, authorizeNow?: () => boolean, options?: DecisionProviderOptions): Promise<unknown>;
 }
-const decisionAuthority = new AsyncLocalStorage<{ signal: AbortSignal; authorizeNow?: () => boolean }>();
+const decisionAuthority = new AsyncLocalStorage<{ signal: AbortSignal; authorizeNow?: () => boolean; authorize?: () => Promise<boolean> }>();
 const guardedProvider = Symbol('guarded-decision-transport');
 
 /** No credentials are read here. Inject a configured, permitted SDK client. No auto-retry. */
@@ -79,22 +79,23 @@ export class OpenAIDecisionProvider implements DecisionProvider {
   constructor(private readonly client: Pick<OpenAI, 'post'>, guard?: typeof guardedProvider) { if (guard === guardedProvider) this.committedExportFence = true; }
   /** SDK public constructor transport hook; no provider request is made here. */
   static guarded(options: { apiKey: string; dangerouslyAllowBrowser?: boolean }, transportFetch: typeof fetch = globalThis.fetch): OpenAIDecisionProvider {
-    return new OpenAIDecisionProvider(new OpenAI({ ...options, maxRetries: 0, logLevel: 'off', fetch: (input, init) => {
+    return new OpenAIDecisionProvider(new OpenAI({ ...options, maxRetries: 0, logLevel: 'off', fetch: async (input, init) => {
       const scope = decisionAuthority.getStore();
+      if (scope?.authorize && !await scope.authorize()) throw new Error('decision_authority_changed');
       if (scope?.signal.aborted || scope?.authorizeNow && !scope.authorizeNow()) throw new Error('decision_authority_changed');
       return transportFetch(input, init);
     } }), guardedProvider);
   }
   /** client.decisions.create when present (openai >= 7.30.0), else client.post('/decisions');
    * maxRetries 0; timeout = options.timeoutMs clamped to [1, 5000] ms, default 500. */
-  evaluate(input: DecisionInput, signal: AbortSignal, authorizeNow?: () => boolean, options?: { readonly timeoutMs?: number }): Promise<unknown> {
+  evaluate(input: DecisionInput, signal: AbortSignal, authorizeNow?: () => boolean, options?: DecisionProviderOptions): Promise<unknown> {
     // Parse again at provider boundary: unknown fields cannot be serialized to OpenAI.
     const parsed = requestSchema.parse(input);
     const body = { model: DECISIONS_MODEL, input: parsed.input, questions: parsed.questions, prompt_cache_options: { mode: 'explicit' as const } };
     const request = { signal, timeout: OpenAIDecisionProvider.requestTimeoutMs(options?.timeoutMs), maxRetries: 0 as const };
     const create = OpenAIDecisionProvider.typedCreate(this.client);
     // Both paths stay inside the store: the guarded fetch reads it at transport time.
-    return decisionAuthority.run({ signal, authorizeNow }, () => create ? create(body, request) : this.client.post<unknown>('/decisions', { body, ...request }));
+    return decisionAuthority.run({ signal, authorizeNow, authorize: options?.authorize }, () => create ? create(body, request) : this.client.post<unknown>('/decisions', { body, ...request }));
   }
   private static requestTimeoutMs(value: number | undefined): number {
     if (typeof value !== 'number' || !Number.isFinite(value)) return 500;
@@ -117,6 +118,8 @@ export interface DecisionContext {
    * audience, grants/consent and policy versions; null denies. Never model output. */
   readonly authorize: () => Promise<string | null>;
   readonly authorizeNow?: () => boolean;
+  /** Optional async committed authority check at the last guarded transport hop. */
+  readonly authorizeAtTransport?: () => Promise<string | null>;
   /** Loads only minimized input AFTER authorization. Never persisted in diagnostics. */
   readonly loadInput: () => Promise<DecisionInput>;
   readonly signal?: AbortSignal;
@@ -170,7 +173,7 @@ export class DecisionService {
     const unknown = (reason: DecisionUnknownReason, inputTokens?: number): DecisionResult =>
       ({ status: 'unknown', reason, elapsedMs: Math.max(0, this.now() - started), ...(inputTokens === undefined ? {} : { inputTokens }) });
     if (!context.enabled) return unknown('disabled');
-    if (context.authorizeNow && !this.committedExportFence) return unknown('unsupported');
+    if ((context.authorizeNow || context.authorizeAtTransport) && !this.committedExportFence) return unknown('unsupported');
     if (this.blockedUntil > started) return unknown('circuit_open');
     if (context.deadlineMs !== undefined && (!Number.isFinite(context.deadlineMs) || context.deadlineMs < 1)) return unknown('invalid_input');
     if (context.signal?.aborted) return unknown('cancelled');
@@ -198,7 +201,8 @@ export class DecisionService {
         if (await context.authorize() !== before || context.currentRevision() !== context.revision) return unknown('stale');
         if (controller.signal.aborted) return unknown(stopReason);
         if (context.authorizeNow && !context.authorizeNow()) return unknown('unauthorized');
-        const raw = await this.provider.evaluate(parsed.data, controller.signal, context.authorizeNow, { timeoutMs: deadline });
+        const raw = await this.provider.evaluate(parsed.data, controller.signal, context.authorizeNow, { timeoutMs: deadline,
+          ...(context.authorizeAtTransport ? { authorize: async () => !controller.signal.aborted && context.currentRevision() === context.revision && await context.authorizeAtTransport!() === before && context.currentRevision() === context.revision } : {}) });
         if (controller.signal.aborted) return unknown(stopReason);
         const result = validateAnswers(raw, parsed.data);
         if (!result) return unknown('malformed');

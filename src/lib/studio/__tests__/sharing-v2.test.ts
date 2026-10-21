@@ -223,6 +223,8 @@ describe('(e) inheritMemories with TIREH_SHARING_V2=1', () => {
 
   it('copies nothing when the store cannot carry tombstones', async () => {
     const store = new InMemoryMemoryStore();
+    // S06 adds tombstone support to the built-in store; explicitly model an older adapter.
+    Object.defineProperties(store, { tombstonesOf: { value: undefined }, addTombstones: { value: undefined } });
     const { h, next } = await successorScenario(store);
     expect(await store.listActive(next.id)).toEqual([]);
     expect((await h.store.read()).audit.filter((e) => e.action === 'memory.inherit').map((e) => e.detail)).toEqual(['skipped: tombstones unsupported']);
