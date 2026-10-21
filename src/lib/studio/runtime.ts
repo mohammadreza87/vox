@@ -46,6 +46,16 @@ import { StudioExperimentRuntime } from '../adaptive/experiments/runtime';
  *   STUDIO_WEB_SEARCH        off = agents never search the web (default: on, per-agent toggle)
  *   STUDIO_PERSONA_MODEL     model for persona design (default: stronger Claude model)
  *   STUDIO_ORG_NAME          default HOOR
+ *
+ * Voiceprints (S11L, shadow mode; docs/implementation/VOICE_PROVIDER_INTEGRATION.md):
+ *   STUDIO_VOICE_RECOGNITION=1  voiceprint enrollment and shadow verification; capability
+ *                            approval and biometric consent are still required (default off)
+ *   VOICEPRINT_KEY           base64 of 32 bytes: the dedicated template key. Must never equal
+ *                            or derive from STUDIO_SECRET. Required with the flag; alone it
+ *                            keeps existing templates deletable (status/delete only)
+ *   PYANNOTE_API_KEY         pyannoteAI voiceprint provider (absent = provider unavailable)
+ *   PYANNOTE_BASE_URL        optional https origin (EU residency); default https://api.pyannote.ai
+ *   VOICE_MATCH_THRESHOLDS_JSON  {"default":{match,uncertain,echo},"orgs":{"<org>":{...}}}
  */
 
 import { isAbsolute, join, parse, relative, resolve, sep } from 'path';
@@ -71,12 +81,15 @@ import { openLocalAdaptiveStorage, parseAdaptiveStorageFormat, type AdaptiveStor
 import { SharedMemoryRepository } from '../adaptive/shared/repository';
 import { FirestoreRevisionSource } from '../tireh/privacy/revisions';
 import { SharedMemoryService } from '../adaptive/shared/service';
+import { tirehFlags } from '../tireh/flags';
+import { auditMemoryStore, auditShareOfferStore, createFileAuditStore, createFileSupersededNoticeStore, FirestoreAuditStore, FirestoreSupersededNoticeStore } from '../tireh/audit';
 import { AdaptiveExperienceService } from '../adaptive/runtime/service';
 import { AdaptiveObserverService } from '../adaptive/observation/service';
 import { AdaptiveLifecycleService } from '../adaptive/lifecycle/service';
 import { AdaptiveMaintenanceRunner } from '../adaptive/lifecycle/maintenance';
 import { readMaintenanceHealth } from '../adaptive/lifecycle/maintenance-health';
 import { DecisionService, OpenAIDecisionProvider } from '../adaptive/decisions';
+import { studioDecider } from '../tireh/decisions/service-decider';
 import { VoiceIdentityService } from '../adaptive/voice-identity/service';
 import { VoiceIdentityRepository } from '../adaptive/voice-identity/repository';
 import { canUseAgent } from './permissions';
@@ -239,7 +252,7 @@ function fileStorage(dir: string, scopedRelationshipsEnabled: boolean, format: A
     return { store, memory: createFileStores(join(dir, 'memory.json')),
     relationshipStore: new FileRelationshipStore(join(dir, 'scoped-relationships-v1.json')), observations: new FileObservationStore(join(dir, 'scoped-relationship-observations-v1.json')),
     adaptive: new AdaptiveService(new AdaptiveRepository(managed.storage),
-      { ...adaptiveOptionsFromManifest(process.env.STUDIO_ADAPTIVE_POLICY_JSON, internalPilotAuthority(store)), scopedRelationshipsEnabled }),
+      { ...adaptiveOptionsFromManifest(process.env.STUDIO_ADAPTIVE_POLICY_JSON, internalPilotAuthority(store)), scopedRelationshipsEnabled, voiceRecognitionEnabled: process.env.STUDIO_VOICE_RECOGNITION === '1' }),
     sharedStorage: new FileAdaptiveStorage(join(dir, 'shared-memory')),
     voiceIdentityStorage: new FileAdaptiveStorage(join(dir, 'voice-identity')),
     maintenanceStorage: new FileAdaptiveStorage(join(dir, 'adaptive-maintenance')), closeAdaptive: managed.close };
@@ -255,7 +268,7 @@ async function firestoreStorage(bucketName: string, scopedRelationshipsEnabled: 
   return {
     store,
     adaptive: new AdaptiveService(new AdaptiveRepository(new FirestoreAdaptiveStorage(db)),
-      { ...adaptiveOptionsFromManifest(process.env.STUDIO_ADAPTIVE_POLICY_JSON, internalPilotAuthority(store)), scopedRelationshipsEnabled }),
+      { ...adaptiveOptionsFromManifest(process.env.STUDIO_ADAPTIVE_POLICY_JSON, internalPilotAuthority(store)), scopedRelationshipsEnabled, voiceRecognitionEnabled: process.env.STUDIO_VOICE_RECOGNITION === '1' }),
     sharedStorage: new FirestoreAdaptiveStorage(db, 'adaptiveSharedMemory'),
     voiceIdentityStorage: new FirestoreAdaptiveStorage(db, 'adaptiveVoiceIdentity'),
     maintenanceStorage: new FirestoreAdaptiveStorage(db, 'adaptiveMaintenance'),
@@ -308,7 +321,7 @@ async function create(): Promise<Studio> {
       fastLLM: new AnthropicLLM(env.ANTHROPIC_API_KEY!, env.STUDIO_VOICE_MODEL || 'claude-haiku-5-5'),
       openai,
       // Reply triage and stranger decisions; STUDIO_DECISIONS=off skips them.
-      decider: openai && env.STUDIO_DECISIONS !== 'off' ? openai : undefined,
+      decider: openai && env.STUDIO_DECISIONS !== 'off' ? studioDecider(openai, env) : undefined,
       skillRouting: parseSkillRouting(env.STUDIO_SKILL_ROUTING),
       eleven: env.ELEVENLABS_API_KEY ? new ElevenLabsStudio(env.ELEVENLABS_API_KEY) : null,
       managerBot,
@@ -364,6 +377,8 @@ async function create(): Promise<Studio> {
       }
     });
     studio.deps.shared = new SharedMemoryService(new SharedMemoryRepository(storage.sharedStorage), storage.adaptive!, sharedAuthorityFromStudioStore(storage.store));
+    // S08: content-free vox_audit rows and supersede notices, only when a flag is set at startup.
+    { const flags = tirehFlags(); if (flags.auditLog || flags.sharingV2) { const db = config.storage === 'firestore' ? await (await import('@/lib/firebase-admin')).getAdminDb() : null; const audit = db ? new FirestoreAuditStore(db) : createFileAuditStore(join(config.dataDir, 'vox-audit.jsonl')); const notices = db ? new FirestoreSupersededNoticeStore(db) : createFileSupersededNoticeStore(join(config.dataDir, 'supersede-notices.json')); studio.deps.audit = audit; studio.deps.memoryNotices = notices; studio.deps.memory = { ...studio.deps.memory, memories: auditMemoryStore(studio.deps.memory.memories, audit, notices), offers: auditShareOfferStore(studio.deps.memory.offers, audit) }; } }
     const reminderEndpointId = config.reminderDeliveryEnabled && config.token ? studio.relationshipEndpointId(config.token) : undefined;
     studio.deps.experience = new AdaptiveExperienceService(storage.adaptive!, {
       notificationsEnabled: config.reminderDeliveryEnabled,
@@ -374,6 +389,7 @@ async function create(): Promise<Studio> {
       } : {}),
     });
     studio.deps.preferenceLearning = createStudioPreferenceLearning(studio);
+    if ((await import('../tireh/flags')).tirehFlags().decisionLog) { const { createDecisionLogSink, createFileDecisionLogStore, FirestoreDecisionLogStore } = await import('../tireh/decisions/log'); studio.deps.decisionLog = createDecisionLogSink(config.storage === 'firestore' ? new FirestoreDecisionLogStore(await (await import('@/lib/firebase-admin')).getAdminDb()) : createFileDecisionLogStore(join(config.dataDir, 'decision-log-v1.jsonl')), { warn: (code) => console.warn(`[decision-log] ${code}`) }); }
     if (config.requestedRoutinesEnabled) {
       studio.deps.requestedRoutinesEnabled = () => process.env.STUDIO_REQUESTED_ROUTINES === '1';
       studio.deps.requestedRoutines = createStudioRequestedRoutines(studio, {
@@ -392,6 +408,18 @@ async function create(): Promise<Studio> {
     storage.adaptive!.setVoiceIdentityInvalidator(async ({ telegramId, space }) => {
       await studio.deps.voiceIdentity!.invalidate(telegramId, space);
     });
+    // S11L: with STUDIO_VOICE_RECOGNITION and VOICEPRINT_KEY unset nothing is wired (base behaviour).
+    const voiceprintIdentity = await import('./identity');
+    const vp = voiceprintIdentity.voiceprintConfigFromEnv(env, { storage: config.storage === 'firestore' ? 'firestore' : 'file', production: config.production });
+    if (vp) {
+      const store = config.storage === 'firestore'
+        ? new voiceprintIdentity.FirestoreVoiceprintStore(await (await import('@/lib/firebase-admin')).getAdminDb())
+        : new voiceprintIdentity.FileVoiceprintStore(join(config.dataDir, 'voiceprints-v1.json'));
+      studio.deps.voiceprints = new voiceprintIdentity.VoiceprintService({ store, cipher: vp.cipher, provider: vp.provider, thresholds: vp.thresholds,
+        orgKey: studio.deps.orgName, adaptive: storage.adaptive!, echoVoices: voiceprintIdentity.echoVoicesFromStudio(studio.deps.store, studio.deps.eleven) });
+      // Keeps the existing VoiceIdentityService invalidation and adds voiceprint deletion.
+      storage.adaptive!.setVoiceIdentityInvalidator(voiceprintIdentity.chainVoiceInvalidators(studio.deps.voiceIdentity!, studio.deps.voiceprints));
+    }
     studio.deps.observer = new AdaptiveObserverService(storage.adaptive!);
     const experimentDirectory = join(config.dataDir, 'controlled-experiments', 'v1');
     const retainedExperiments = config.storage === 'file' && !!lstatSync(join(config.dataDir, 'controlled-experiments'), { throwIfNoEntry: false });

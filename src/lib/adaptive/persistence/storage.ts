@@ -41,12 +41,31 @@ export interface AdaptiveStorage {
   /** Server maintenance only. Opaque stable key cursor; never returns document payloads.
    * Concurrent inserts before a cursor are visited on the next full sweep. */
   listAccounts?(input: AdaptiveAccountPageInput): Promise<AdaptiveAccountPage>;
-  /** Read-only: the committed document (or null) and a revision probe taken no
-   * later than the read. Never locks, writes or rewrites. Every commit through
-   * `transact` advances the probed revision. */
+  /** In-process commit revision of one document, advanced by every commit
+   * through `transact`. With readCommittedForEffect it lets a turn snapshot
+   * read committed state through that existing seam and recheck it cheaply. */
+  revisionProbe?(accountId: string): RevisionProbe;
+  /** For stores without a synchronous committed read (Firestore, memory): the
+   * committed document (or null) and a revision probe taken no later than the
+   * read. Never locks, writes or rewrites. */
   load?(accountId: string): Promise<AdaptiveLoad>;
 }
 export interface AdaptiveLoad { value: unknown | null; probe: RevisionProbe }
+/** A committed read refused because a writer holds the lock: run the ordinary transaction. */
+export class CommittedReadBusy extends Error { readonly name = 'CommittedReadBusy'; }
+/** Read-only committed load of one document for a turn read scope: the store's
+ * own readCommittedForEffect with its commit-revision probe (file format), else
+ * its async `load` (Firestore, memory). Undefined when it has neither. */
+export function committedLoader(storage: AdaptiveStorage): ((accountId: string) => Promise<AdaptiveLoad>) | undefined {
+  const read = storage.readCommittedForEffect?.bind(storage), revision = storage.revisionProbe?.bind(storage);
+  if (read && revision) return async accountId => {
+    // Probe before reading: a commit racing the read can only make it look stale.
+    const probe = revision(accountId), snapshot = read(accountId);
+    if (snapshot.status !== 'ready') throw new CommittedReadBusy();
+    return { value: snapshot.document, probe };
+  };
+  return storage.load?.bind(storage);
+}
 export const MAX_ADAPTIVE_DOCUMENT_BYTES = 700_000;
 const key = (id: string) => createHash('sha256').update(id).digest('hex');
 function pageInput(input: AdaptiveAccountPageInput): void {
@@ -73,12 +92,7 @@ export class FileAdaptiveStorage implements AdaptiveStorage {
   /** In-process revision bus: bumped after each atomic rename in this process. */
   readonly revisions = new RevisionCounter('file-adaptive');
   constructor(readonly directory: string) {}
-  async load(accountId: string): Promise<AdaptiveLoad> {
-    const probe = this.revisions.probe(accountId);
-    // Atomic rename means an unlocked read sees one complete committed version.
-    try { return { value: JSON.parse(await fs.readFile(join(this.directory, `${key(accountId)}.json`), 'utf8')), probe }; }
-    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { value: null, probe }; throw error; }
-  }
+  revisionProbe(accountId: string): RevisionProbe { return this.revisions.probe(accountId); }
   readCommittedForEffect(accountId: string): { status: 'ready'; document: unknown | null } | { status: 'busy' } {
     const file = join(this.directory, `${key(accountId)}.json`);
     if (existsSync(`${file}.lock`)) return { status: 'busy' };

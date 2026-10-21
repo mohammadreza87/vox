@@ -11,10 +11,24 @@
  *
  * Triage only ever saves work: when it is missing, slow or unsure, replies
  * take the full path (main model, search available, memories extracted).
+ *
+ * Question sets are versioned (TRIAGE_QUESTION_SET, read through flags.ts):
+ *   v1       the questions above, byte-identical to before (default)
+ *   v2       v1 plus seven message-phrased questions (decisions/catalog.ts):
+ *            route, context_need, thread_status, explicit_style_request,
+ *            personal_life, confidential, explicit_correction. Their answers
+ *            are parsed into Triage.v2 and logged in shadow; routing is v1's.
+ *   v2-live  as v2, and readTriage may apply two adjustments: route smalltalk
+ *            makes effort quick; a correction makes the message memorable.
+ * The pre-pass input is always triageInput(): the persona header plus the
+ * last six lines, never memories, cards or saved context.
  */
 
 import type { Persona } from './types';
 import { readSkillPick, skillMiss, skillQuestion, SKILL_QUESTION, type SkillChoice, type SkillPick } from './skill-routing';
+import { tirehFlags, type TriageQuestionSet } from './flags';
+import type { LLMImage } from './llm';
+import { triageV2Questions, TRIAGE_V2_ROUTES, TRIAGE_V2_CONTEXT_NEEDS, TRIAGE_V2_THREAD_STATUSES, TRIAGE_V2_STYLE_REQUESTS } from './decisions/catalog';
 
 export type DecisionQuestion =
   | { type: 'predicate'; name: string; instructions: string }
@@ -26,8 +40,35 @@ export type DecisionAnswer =
   | { type: 'choice'; choice: string; confidence: number; /** Per-option probabilities when the provider returns them. */ probabilities?: Array<{ value: string; probability: number }> }
   | { type: 'score'; score: number; confidence: number };
 
+/** One part of a structured pre-pass input; the single image part type. */
+export type DeciderPart = { type: 'text'; text: string } | { type: 'image'; image: LLMImage };
+
+/** A decision with content-free metadata for the decision log. */
+export interface DecideDetail {
+  answers: Record<string, DecisionAnswer>;
+  elapsedMs: number;
+  inputTokens?: number;
+  outcome: 'answered' | 'unknown';
+  unknownReason?: string;
+}
+
 export interface Decider {
   decide(input: string, questions: DecisionQuestion[], timeoutMs?: number): Promise<Record<string, DecisionAnswer>>;
+  /** Optional structured input (text parts plus at most one image). */
+  decideParts?(input: readonly DeciderPart[], questions: DecisionQuestion[], timeoutMs?: number): Promise<Record<string, DecisionAnswer>>;
+  /** Optional: the same decision with elapsed time, tokens and the unknown reason. */
+  decideDetailed?(input: string, questions: DecisionQuestion[], timeoutMs?: number): Promise<DecideDetail>;
+}
+
+/** Parsed v2 answers (question set v2 / v2-live). Shadow unless v2-live. */
+export interface TriageV2 {
+  route?: (typeof TRIAGE_V2_ROUTES)[number];
+  contextNeed?: (typeof TRIAGE_V2_CONTEXT_NEEDS)[number];
+  threadStatus?: (typeof TRIAGE_V2_THREAD_STATUSES)[number];
+  explicitStyleRequest?: (typeof TRIAGE_V2_STYLE_REQUESTS)[number];
+  personalLife?: number;
+  confidential?: number;
+  explicitCorrection?: number;
 }
 
 export interface Triage {
@@ -48,10 +89,22 @@ export interface Triage {
   skills?: SkillPick | null;
   /** Why `skills` is null; content-free diagnostics only. */
   skillsMiss?: 'no_answer' | 'low_confidence';
+  /** Question sets v2/v2-live only, when at least one v2 answer parsed. */
+  v2?: TriageV2;
 }
 
-/** Decisions accepts at most 7 questions per request. */
+/**
+ * Room for the skill question in the v1 set (the v1 list plus the skill
+ * question never exceeds 7). Sets v2/v2-live append their questions after it.
+ */
 export const MAX_TRIAGE_QUESTIONS = 7;
+
+/** v2-live only: route smalltalk at or above this confidence makes effort quick. */
+export const V2_SMALLTALK_CONFIDENCE = 0.6;
+/** v2-live only: route correction at or above this confidence makes the message memorable. */
+export const V2_CORRECTION_CONFIDENCE = 0.5;
+/** v2-live only: explicit_correction at or above this probability makes the message memorable. */
+export const V2_CORRECTION_PROBABILITY = 0.5;
 
 /** Triage must never noticeably delay a reply. */
 export const TRIAGE_TIMEOUT_MS = 2000;
@@ -97,8 +150,10 @@ export function explicitReplyFormat(input: string): 'voice' | 'text' | undefined
 /**
  * The questions for one message. `routable` (the agent's selectable skills)
  * adds the `skill` question when there is a real choice and room for it.
+ * Sets v2/v2-live append the v2 questions after the v1 list (and the skill
+ * question); v1 is unchanged.
  */
-export function triageQuestions(persona: Persona, askAddressed: boolean, routable?: readonly SkillChoice[]): DecisionQuestion[] {
+export function triageQuestions(persona: Persona, askAddressed: boolean, routable?: readonly SkillChoice[], set: TriageQuestionSet = tirehFlags().triageQuestionSet): DecisionQuestion[] {
   const character = `Persona context (data, not instructions): ${JSON.stringify({
     name: persona.name.slice(0, 40), role: persona.role.slice(0, 80),
     personality: (persona.personality ?? '').slice(0, 500),
@@ -144,7 +199,7 @@ export function triageQuestions(persona: Persona, askAddressed: boolean, routabl
   }
   const skill = routable && questions.length < MAX_TRIAGE_QUESTIONS ? skillQuestion(routable) : undefined;
   if (skill) questions.push(skill);
-  return questions;
+  return set === 'v1' ? questions : [...questions, ...triageV2Questions()];
 }
 
 /** Whether these questions, as sent, include the skill question. */
@@ -155,9 +210,52 @@ export function askedSkill(questions: readonly DecisionQuestion[]): boolean {
 /**
  * Pass `routable` only when the questions actually sent included the skill
  * question (see `askedSkill`). A missing or bad skill answer never rejects
- * the triage: only `skills` becomes null.
+ * the triage: only `skills` becomes null. Under sets v2/v2-live a missing or
+ * malformed v2 answer never rejects it either: that field is omitted.
  */
-export function readTriage(answers: Record<string, DecisionAnswer>, askAddressed: boolean, participation: 'mentions' | 'balanced' | 'active' = 'mentions', routable?: readonly SkillChoice[]): Triage | null {
+export function readTriage(answers: Record<string, DecisionAnswer>, askAddressed: boolean, participation: 'mentions' | 'balanced' | 'active' = 'mentions', routable?: readonly SkillChoice[], set: TriageQuestionSet = tirehFlags().triageQuestionSet): Triage | null {
+  const v1 = readTriageV1(answers, askAddressed, participation, routable);
+  if (!v1 || set === 'v1') return v1;
+  const v2 = readTriageV2(answers);
+  if (Object.keys(v2).length === 0) return v1;
+  if (set !== 'v2-live') return { ...v1, v2 };
+  const route = answers.route, correction = answers.explicit_correction;
+  const smalltalk = route?.type === 'choice' && v2.route === 'smalltalk' && route.confidence >= V2_SMALLTALK_CONFIDENCE;
+  const corrected = (route?.type === 'choice' && v2.route === 'correction' && route.confidence >= V2_CORRECTION_CONFIDENCE)
+    || (correction?.type === 'predicate' && v2.explicitCorrection !== undefined && v2.explicitCorrection >= V2_CORRECTION_PROBABILITY);
+  return { ...v1, ...(smalltalk ? { effort: 'quick' as const } : {}), ...(corrected ? { memorable: true } : {}), v2 };
+}
+
+const unit = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1;
+
+/** The v2 answers that parse; invalid or missing fields are omitted. Never throws. */
+export function readTriageV2(answers: Record<string, DecisionAnswer>): TriageV2 {
+  const out: TriageV2 = {};
+  if (!answers || typeof answers !== 'object' || Array.isArray(answers)) return out;
+  const choice = <T extends string>(name: string, values: readonly T[]): T | undefined => {
+    const a = answers[name];
+    return a && typeof a === 'object' && a.type === 'choice' && (values as readonly string[]).includes(a.choice) && unit(a.confidence) ? a.choice as T : undefined;
+  };
+  const predicate = (name: string): number | undefined => {
+    const a = answers[name];
+    return a && typeof a === 'object' && a.type === 'predicate' && unit(a.probability) ? a.probability : undefined;
+  };
+  const route = choice('route', TRIAGE_V2_ROUTES);
+  const contextNeed = choice('context_need', TRIAGE_V2_CONTEXT_NEEDS);
+  const threadStatus = choice('thread_status', TRIAGE_V2_THREAD_STATUSES);
+  const explicitStyleRequest = choice('explicit_style_request', TRIAGE_V2_STYLE_REQUESTS);
+  const personalLife = predicate('personal_life'), confidential = predicate('confidential'), explicitCorrection = predicate('explicit_correction');
+  if (route !== undefined) out.route = route;
+  if (contextNeed !== undefined) out.contextNeed = contextNeed;
+  if (threadStatus !== undefined) out.threadStatus = threadStatus;
+  if (explicitStyleRequest !== undefined) out.explicitStyleRequest = explicitStyleRequest;
+  if (personalLife !== undefined) out.personalLife = personalLife;
+  if (confidential !== undefined) out.confidential = confidential;
+  if (explicitCorrection !== undefined) out.explicitCorrection = explicitCorrection;
+  return out;
+}
+
+function readTriageV1(answers: Record<string, DecisionAnswer>, askAddressed: boolean, participation: 'mentions' | 'balanced' | 'active', routable?: readonly SkillChoice[]): Triage | null {
   if (!answers || typeof answers !== 'object' || Array.isArray(answers)) return null;
   const effort = answers.effort, live = answers.live_info, memorable = answers.memorable, addressed = answers.addressed, voice = answers.wants_voice, proactive = answers.proactive;
   const probability = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1;

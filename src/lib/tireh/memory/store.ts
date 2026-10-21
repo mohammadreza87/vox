@@ -72,6 +72,24 @@ export interface MemoryStore {
   listActive(personaId: string): Promise<MemoryRecord[]>;
   update(id: string, patch: Partial<Omit<MemoryRecord, 'id' | 'personaId'>>, guard?: MemoryWriteGuard): Promise<void>;
   delete(id: string): Promise<void>;
+  /** Firestore only; <=30 scope keys; candidates, never a visibility decision. */
+  findNearest?(personaId: string, scopeKeys: string[], vector: number[], limit: number): Promise<MemoryRecord[]>;
+  /** Opaque source-event ids. */
+  tombstonesOf?(personaId: string): Promise<string[]>;
+  /** Never removes; does not bump safetyRevision. */
+  addTombstones?(personaId: string, eventIds: readonly string[]): Promise<void>;
+}
+
+/** Embeddings are derived data kept for normal-sensitivity records only.
+ * Returns the same object when there is nothing to strip. */
+function withoutSensitiveEmbedding<T extends Partial<MemoryRecord>>(m: T, sensitivity = m.sensitivity): T {
+  if (m.embedding === undefined && m.embeddingModel === undefined && m.embeddingVersion === undefined) return m;
+  if (sensitivity === 'normal') return m;
+  const copy = { ...m };
+  delete copy.embedding;
+  delete copy.embeddingModel;
+  delete copy.embeddingVersion;
+  return copy;
 }
 
 export interface ShareOfferStore {
@@ -135,7 +153,7 @@ export class InMemoryMemoryStore implements MemoryStore {
     const predecessor = memory.supersedes ? this.records.get(memory.supersedes) : undefined;
     if (memory.supersedes) assertReplacementTarget(memory, predecessor);
     const now = new Date();
-    const record: MemoryRecord = { ...memory, id: randomUUID(), createdAt: now, updatedAt: now };
+    const record: MemoryRecord = withoutSensitiveEmbedding({ ...memory, id: randomUUID(), createdAt: now, updatedAt: now });
     if (predecessor) {
       this.records.set(predecessor.id, { ...predecessor, supersededBy: record.id, shareVersion: (predecessor.shareVersion ?? 0) + 1, updatedAt: now });
       this.revisions.set(memory.personaId, (this.revisions.get(memory.personaId) ?? 0) + 1);
@@ -157,7 +175,7 @@ export class InMemoryMemoryStore implements MemoryStore {
     if (!existing) return;
     this.check(existing.personaId, guard);
     this.revisions.set(existing.personaId, (this.revisions.get(existing.personaId) ?? 0) + 1);
-    this.records.set(id, { ...existing, ...patch, updatedAt: new Date() });
+    this.records.set(id, withoutSensitiveEmbedding({ ...existing, ...patch, updatedAt: new Date() }, patch.sensitivity ?? existing.sensitivity));
   }
 
   async updateIfShareVersion(id: string, expectedVersion: number, patch: Partial<Omit<MemoryRecord, 'id' | 'personaId'>>, guard?: MemoryWriteGuard): Promise<boolean> {
@@ -165,7 +183,7 @@ export class InMemoryMemoryStore implements MemoryStore {
     if (!memory || (memory.shareVersion ?? 0) !== expectedVersion) return false;
     this.check(memory.personaId, guard);
     this.revisions.set(memory.personaId, (this.revisions.get(memory.personaId) ?? 0) + 1);
-    this.records.set(id, { ...memory, ...patch, updatedAt: new Date() });
+    this.records.set(id, withoutSensitiveEmbedding({ ...memory, ...patch, updatedAt: new Date() }, patch.sensitivity ?? memory.sensitivity));
     return true;
   }
 
@@ -180,6 +198,18 @@ export class InMemoryMemoryStore implements MemoryStore {
     }
     this.tombstones.set(target.personaId, tombstones);
     this.revisions.set(target.personaId, (this.revisions.get(target.personaId) ?? 0) + 1);
+  }
+
+  async tombstonesOf(personaId: string): Promise<string[]> {
+    return [...(this.tombstones.get(personaId) ?? [])].sort();
+  }
+
+  async addTombstones(personaId: string, eventIds: readonly string[]): Promise<void> {
+    const ids = eventIds.filter((id) => typeof id === 'string' && id !== '');
+    if (ids.length === 0) return;
+    const tombstones = this.tombstones.get(personaId) ?? new Set<string>();
+    ids.forEach((id) => tombstones.add(id));
+    this.tombstones.set(personaId, tombstones);
   }
 }
 

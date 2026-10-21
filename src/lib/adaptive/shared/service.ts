@@ -9,6 +9,7 @@ import type { AdaptiveService } from '../persistence/service';
 import type { RuntimeControlEvaluation } from '../persistence/authority';
 import { SharedMemoryRepository, sharedDigest, type SharedContainer, type SharedDocument, type SharedMember, type SharedMemory } from './repository';
 import type { SharedAgentInput, SharedContainerView, SharedContext, SharedContextAudience, SharedCreateInput, SharedMemoryInput, SharedMutation, SharedParticipantInput, SharedPreview, SharedPreviewInput, SharedSnapshot, SharedSpace } from './contracts';
+import { tirehFlags } from '../../tireh/flags';
 
 export class SharedMemoryError extends Error {
   readonly name = 'SharedMemoryError';
@@ -499,6 +500,10 @@ export class SharedMemoryService {
     });
     return this.list(telegramId, input.space);
   }
+  /** S08 TIREH_SHARING_V2: reading what others deliberately shared needs membership and a
+   * read grant (contextSelection/allowed), not every participant's optional.personalization;
+   * the product pause still applies. Flag off: the base predicate, unchanged. */
+  private personalized(people: readonly Verified[]): boolean { return tirehFlags().sharingV2 ? people.every(p => p.profile.storedPersonalizationAllowed !== false) : people.every(p => p.profile.storedPersonalizationAllowed !== false && p.profile.purposes.some(choice => choice.purpose === 'optional.personalization' && choice.state === 'granted' && choice.available)); }
   /** Policy eligibility is resource-specific. A stopped member can suppress only
    * the shared contribution that requires them, never an unrelated container.
    * Both acquisition and the committed fence use this exact selection. */
@@ -573,7 +578,7 @@ export class SharedMemoryService {
     const requiredIds = [...new Set([...ids, ...relevant.filter(c => c.status === 'active').flatMap(c => c.members.map(m => m.telegramId))])].sort((a,b) => a-b);
     observedIds = requiredIds;
     const required = requiredIds.map(id => this.verifiedNow(id, space));
-    const personalized = people.every(p => p.profile.storedPersonalizationAllowed !== false && p.profile.purposes.some(choice => choice.purpose === 'optional.personalization' && choice.state === 'granted' && choice.available));
+    const personalized = this.personalized(people);
     const selection = this.contextSelection(relevant, people.find(p => p.telegramId === telegramId)!, people, required, agentId, personalized);
     // Re-read the small participant controls after all shared/native I/O. A
     // deadline crossed during parsing cannot release a stale positive result.
@@ -639,7 +644,7 @@ export class SharedMemoryService {
     const relevant = state.containers.filter(c => c.space === space && c.members.some(m => m.telegramId === telegramId));
     const requiredIds = [...new Set([...ids, ...relevant.filter(c => c.status === 'active').flatMap(c => c.members.map(m => m.telegramId))])].sort((a,b) => a-b);
     const required = await Promise.all(requiredIds.map(id => this.verified(id, space)));
-    const personalized = people.every(p => p.profile.storedPersonalizationAllowed !== false && p.profile.purposes.some(choice => choice.purpose === 'optional.personalization' && choice.state === 'granted' && choice.available));
+    const personalized = this.personalized(people);
     const selection = this.contextSelection(relevant, people.find(p => p.telegramId === telegramId)!, people, required, agentId, personalized);
     const groupStamp = await this.groupStamp(relevant, audience.groupId);
     const agentStamp = await this.authority.agent(agentId);

@@ -18,6 +18,8 @@ export interface TelegramChat {
   title?: string;
 }
 
+export interface TelegramPhotoSize { file_id: string; file_unique_id?: string; width: number; height: number; file_size?: number }
+
 export interface TelegramMessage {
   message_id: number;
   from?: TelegramUser;
@@ -28,6 +30,8 @@ export interface TelegramMessage {
   new_chat_members?: TelegramUser[];
   left_chat_member?: TelegramUser;
   voice?: { file_id: string; duration: number; mime_type?: string; file_size?: number };
+  photo?: TelegramPhotoSize[];
+  document?: { file_id: string; file_name?: string; mime_type?: string; file_size?: number };
   reply_to_message?: TelegramMessage;
   entities?: Array<{ type: string; offset: number; length: number; user?: TelegramUser }>;
   caption_entities?: Array<{ type: string; offset: number; length: number; user?: TelegramUser }>;
@@ -184,6 +188,23 @@ export class TelegramBotClient {
     const response = await this.fetchFn(`${this.fileBase}/${file.file_path}`);
     if (!response.ok) throw new TelegramApiError('downloadFile', `HTTP ${response.status}`);
     return response.arrayBuffer();
+  }
+
+  /**
+   * Bounded image download for one turn (S12). Errors are fixed strings: they
+   * never carry the URL, the bot token, the file path or any bytes.
+   */
+  async downloadImage(fileId: string, options: { maxBytes: number; signal?: AbortSignal }): Promise<Uint8Array> {
+    const file = await this.call<{ file_path?: string; file_size?: number }>('getFile', { file_id: fileId }, options.signal);
+    if (!file.file_path) throw new TelegramApiError('getFile', 'no file_path');
+    if (typeof file.file_size === 'number' && file.file_size > options.maxBytes) throw new TelegramApiError('getFile', 'file too large');
+    const response = await this.fetchFn(`${this.fileBase}/${file.file_path}`, { signal: options.signal });
+    if (!response.ok) throw new TelegramApiError('downloadFile', `HTTP ${response.status}`);
+    const declared = Number(response.headers?.get('content-length'));
+    if (Number.isFinite(declared) && declared > options.maxBytes) throw new TelegramApiError('downloadFile', 'file too large');
+    const buffer = await response.arrayBuffer();
+    if (buffer.byteLength > options.maxBytes) throw new TelegramApiError('downloadFile', 'file too large');
+    return new Uint8Array(buffer);
   }
 
   getMe(): Promise<TelegramUser> {

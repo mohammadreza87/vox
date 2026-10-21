@@ -59,6 +59,8 @@ export interface Group {
   hasGuests?: boolean;
   /** Only these invited agents may observe this group (legacy config may omit). */
   agentIds?: string[];
+  /** Who sees group-scoped history from before they joined. Default since_membership; only an explicit, audited admin re-snapshot widens. */
+  historyPolicy?: 'since_membership' | 'all_authorized_history';
 }
 
 export type GroupParticipation = 'mentions' | 'balanced' | 'active';
@@ -149,6 +151,8 @@ export type MemoryType = 'fact' | 'decision' | 'preference' | 'event' | 'relatio
 
 /** personal = about someone's private life; never leaves private scope */
 export type MemorySensitivity = 'normal' | 'personal' | 'confidential';
+export type MemorySpace = 'work' | 'personal';
+export type MemoryStatus = 'asserted' | 'inferred' | 'confirmed' | 'disputed';
 
 export interface MemorySource {
   /** Opaque source event lineage; never source text. */
@@ -180,6 +184,22 @@ export interface MemoryRecord {
   supersedes?: string;        // id of an older memory this replaces
   supersededBy?: string;
   confidence: number;         // 0-1
+  /** v2 (all optional on read; legacy rows load with memoryV2() defaults). */
+  space?: MemorySpace;            // default 'work'
+  status?: MemoryStatus;          // default 'asserted'
+  validFrom?: Date;               // default source.at
+  invalidatedAt?: Date;           // set with invalidatedBy by an UPDATE; never a hard delete
+  invalidatedBy?: string;         // id of the replacing record
+  importance?: number;            // integer 1-10; default decision 7, preference 6, otherwise 5
+  lastRetrievedAt?: Date;         // default undefined (treated as updatedAt)
+  retrievalCount?: number;        // default 0
+  expiresAt?: Date;               // v2 retrieval skips expiresAt <= now
+  reviewAfter?: Date;
+  subjectConfirmed?: boolean;     // default false
+  contentHash?: string;           // sha256 hex of content.normalize('NFKC').trim()
+  embedding?: number[];           // only when sensitivity === 'normal'; Firestore stores FieldValue.vector()
+  embeddingModel?: string;        // 'text-embedding-3-small'
+  embeddingVersion?: number;      // EMBEDDING_VERSION = 1
   createdAt: Date;
   updatedAt: Date;
 }
