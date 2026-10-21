@@ -1,4 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { renderToString } from 'react-dom/server';
+import { hydrateRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../../_lib/client';
 import type { ConnectionsDashboard } from '@/lib/connections/application';
@@ -20,6 +22,30 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 describe('public agent Connections page', () => {
+  it('hydrates server English markup with a Persian Telegram session without a React recovery', async () => {
+    const html = renderToString(<AgentConnectionsApp agentId="alpha" />);
+    const container = document.createElement('div'); container.innerHTML = html; document.body.append(container);
+    m.bridge.initDataUnsafe.user.language_code = 'fa';
+    const recoveries: unknown[] = []; let root!: ReturnType<typeof hydrateRoot>;
+    try {
+      await act(async () => { root = hydrateRoot(container, <AgentConnectionsApp agentId="alpha" />, { onRecoverableError: error => recoveries.push(error) }); });
+      await within(container).findByRole('heading', { name: 'اتصال‌ها' });
+      expect(recoveries).toEqual([]); expect(within(container).getByRole('main')).toHaveAttribute('dir', 'rtl');
+    } finally { await act(async () => root?.unmount()); container.remove(); }
+  });
+  it('removes access controls after confirmed disconnect without retaining stale selections', async () => {
+    const connected = dashboard('Own account'); let current = connected;
+    m.api.read.mockImplementation(async () => current); m.api.resources.mockResolvedValue({ resources: [] });
+    m.api.revoke.mockImplementation(async () => { current = { ...connected, connections: connected.connections.map(c => ({ ...c, lifecycle: 'revoked' })) }; });
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    try {
+      render(<AgentConnectionsApp agentId="alpha" />); fireEvent.click(await screen.findByRole('button', { name: 'Choose access' }));
+      fireEvent.click(await screen.findByRole('button', { name: 'Disconnect this account' }));
+      await screen.findByText('Access stopped.');
+      expect(screen.queryByRole('button', { name: 'Allow selected access' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Disconnect this account' })).not.toBeInTheDocument();
+    } finally { confirm.mockRestore(); }
+  });
   it('makes profile confirmation explicit and does not enable optional features or tool grants', async () => {
     m.api.read.mockRejectedValueOnce(new ApiError(403, 'profile_confirmation_required')).mockResolvedValue(dashboard()); m.api.confirm.mockResolvedValue({ confirmed: true });
     render(<AgentConnectionsApp agentId="alpha" />);

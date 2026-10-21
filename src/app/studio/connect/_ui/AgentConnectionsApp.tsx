@@ -50,7 +50,12 @@ export function AgentConnectionsApp({ agentId }: { agentId: string }) {
 
 function ConnectionsSession({ agentId, signed }: { agentId: string; signed: string }) {
   const [space, setSpace] = useState<SpaceKind>('personal');
-  const [locale, setLocale] = useState<ConnectionsLocale>(() => { const app = tg() as ReturnType<typeof tg> & { initDataUnsafe?: { user?: { language_code?: string } } }; return app?.initDataUnsafe?.user?.language_code?.startsWith('fa') ? 'fa' : 'en'; });
+  // Telegram exists only on the client. Keep the initial markup identical to SSR.
+  const [locale, setLocale] = useState<ConnectionsLocale>('en');
+  useEffect(() => {
+    const app = tg() as ReturnType<typeof tg> & { initDataUnsafe?: { user?: { language_code?: string } } };
+    setLocale(app?.initDataUnsafe?.user?.language_code?.startsWith('fa') ? 'fa' : 'en');
+  }, [signed]);
   return <SpaceConnectionsSession key={space} agentId={agentId} signed={signed} space={space} setSpace={setSpace} locale={locale} setLocale={setLocale} />;
 }
 function SpaceConnectionsSession({ agentId, signed, space, setSpace, locale, setLocale }: { agentId: string; signed: string; space: SpaceKind; setSpace: (space: SpaceKind) => void; locale: ConnectionsLocale; setLocale: (locale: ConnectionsLocale) => void }) {
@@ -130,7 +135,7 @@ function SpaceConnectionsSession({ agentId, signed, space, setSpace, locale, set
         {!data.connections.length && <p className="vxc-muted">{t("No accounts connected to this agent yet.")}</p>}
         {data.connections.filter(c => c.agentId === agentId && c.lifecycle !== 'deleted').map(c => <section key={c.id} className="vxc-card"><div className="vxc-row"><h2>{c.displayLabel}</h2><span className="vxc-status">{t(c.lifecycle.replace(/_/g, ' '))}</span></div>
           {c.lifecycle === 'pending' ? <button disabled={busy} onClick={() => void act(async () => landed(await api.setup(space, c.id)))}>{t("Finish setup")}</button> : c.lifecycle === 'connected' ? <button disabled={busy} onClick={() => setSelected(selected === c.id ? null : c.id)}>{selected === c.id ? t('Close access') : t('Choose access')}</button> : <p className="vxc-muted">{t("Access stopped.")}</p>}
-          {selected === c.id && <ConnectionAccess key={`${c.id}:${space}`} api={api} data={data} connection={c} space={space} agentId={agentId} busy={busy} act={act} refresh={refresh} current={current} onFailure={onFailure} t={t} locale={locale} />}
+          {selected === c.id && c.lifecycle === 'connected' && <ConnectionAccess key={`${c.id}:${space}`} api={api} data={data} connection={c} space={space} agentId={agentId} busy={busy} act={act} refresh={refresh} current={current} onFailure={onFailure} t={t} locale={locale} />}
         </section>)}
       </section>
       <section className="vxc-card"><h2>{t("Connect a service")}</h2>{data.providers.filter(provider => provider.id !== 'remote_mcp' && provider.availability === 'ready').map(provider => {
