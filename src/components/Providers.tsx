@@ -21,8 +21,8 @@ export function Providers({ children }: {
     }).Telegram?.WebApp; if (existing) {
         setReady(true);
         return;
-    } const script = document.createElement('script'); script.src = 'https://telegram.org/js/telegram-web-app.js'; script.async = false; script.dataset.voxTelegramSdk = 'true'; const done = () => { if (!stopped)
-        setReady(true); }; script.addEventListener('load', done); script.addEventListener('error', done); const timer = setTimeout(done, 8000); document.head.append(script); return () => { stopped = true; clearTimeout(timer); script.removeEventListener('load', done); script.removeEventListener('error', done); script.remove(); }; }, [path, publicPrivacy, crossed]);
+    } const sdkUrl = 'https://telegram.org/js/telegram-web-app.js'; const adopted = Array.from(document.querySelectorAll<HTMLScriptElement>('script[data-vox-telegram-sdk]')).find(candidate => candidate.src === sdkUrl); const script = adopted ?? document.createElement('script'); if (!adopted) { script.src = sdkUrl; script.async = false; script.dataset.voxTelegramSdk = 'true'; } const done = () => { if (!stopped)
+        setReady(true); }; script.addEventListener('load', done); script.addEventListener('error', done); const timer = setTimeout(done, 8000); if (!adopted) document.head.append(script); return () => { stopped = true; clearTimeout(timer); script.removeEventListener('load', done); script.removeEventListener('error', done); if (!adopted) script.remove(); }; }, [path, publicPrivacy, crossed]);
     if (crossed || path === null)
         return <p role="status">Loading…</p>;
     if (publicPrivacy)

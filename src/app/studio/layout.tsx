@@ -14,7 +14,7 @@ export default function StudioRootLayout({ children }: { children: React.ReactNo
   return (
     <html lang="en" suppressHydrationWarning>
       <body className="font-sans antialiased">
-        <Script src="https://telegram.org/js/telegram-web-app.js" strategy="beforeInteractive" />
+        <Script data-vox-telegram-sdk="true" src="https://telegram.org/js/telegram-web-app.js" strategy="beforeInteractive" />
         <div className="vx-fonts">{children}</div>
       </body>
     </html>
