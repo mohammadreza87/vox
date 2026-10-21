@@ -70,6 +70,7 @@ import { FirestoreStudioStore } from './firestore-store';
 import { FirestoreStudioRateLimiter } from './firestore-ratelimit';
 import { Studio, type StudioDeps } from './service';
 import { StudioStore, type StudioStorage } from './store';
+import { FilePetStore } from './pet-store';
 import { RelationshipLoop, FileRelationshipStore, FirestoreRelationshipStore, FileObservationStore, FirestoreObservationStore, SafeRelationshipObserver, OpenAIFollowUpReview, OpenAIRelationshipFeedback } from '../relationships';
 import { StudioRelationshipAssessor } from './relationship-assessor';
 import { relationshipConfig } from './relationship-config';
@@ -317,6 +318,9 @@ async function create(): Promise<Studio> {
     const authority = new AdaptiveRelationshipService(storage.adaptive!);
     const studio = new Studio({
       store: storage.store,
+      // Instrumentation and API routes have separate module graphs. Bind once here;
+      // route-local instanceof checks cannot identify an instrumentation-owned store.
+      pets: config.storage === 'file' ? new FilePetStore(join(config.dataDir, 'pets')) : undefined,
       personaLLM: new AnthropicLLM(env.ANTHROPIC_API_KEY!, env.STUDIO_PERSONA_MODEL || 'claude-sonnet-5-5'),
       chatLLM: chatLLM(env),
       fastLLM: new AnthropicLLM(env.ANTHROPIC_API_KEY!, env.STUDIO_VOICE_MODEL || 'claude-haiku-5-5'),
