@@ -9,6 +9,7 @@
     "start": "next start",
     "start:dd": "dotenv -e .env.local -- node --import dd-trace/initialize.mjs ./node_modules/.bin/next start",
     "lint": "eslint",
+    "check:studio-style": "node scripts/check-studio-style.mjs",
     "test": "vitest",
     "test:ui": "vitest --ui",
     "test:coverage": "vitest run --coverage",

@@ -1,114 +1,189 @@
 'use client';
 
-import { AnimatePresence, motion } from 'framer-motion';
-import { useEffect, useState } from 'react';
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
+import { useCallback, useEffect, useState } from 'react';
 import { api, haptic, type AgentView, type Member, type MemoryItem } from '../../_lib/client';
+import { DUR, EASE, SPRING, T, listItem } from '../../_lib/motion';
 import { AgentFace } from '../Cloud';
 import { RelationshipPanel } from '../RelationshipPanel';
-import { errorMessage, LoadingFill, useNav } from '../StudioApp';
-import { Empty, Icon, TopBar } from '../ui';
+import { errorMessage, useNav } from '../StudioApp';
+import { Check, Empty, ErrorState, FilterChips, Icon, Row, SheetHead, SkeletonRows, TopBar } from '../ui';
+import { LiveSheet, useFirstLoad } from './settings/kit';
 
-const FILTERS = ['All', 'Private', 'Shared'] as const;
+type Filter = 'all' | 'private' | 'shared';
+const NOT_SHAREABLE = ['personal', 'confidential', 'sensitive'];
 
-function when(iso: string) {
-  const d = new Date(iso);
-  const days = Math.floor((Date.now() - d.getTime()) / 86_400_000);
-  if (days < 1) return 'Today';
-  if (days < 2) return 'Yesterday';
-  if (days < 7) return `${days} days ago`;
-  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-}
-
+/** The agent's memories you may see (UI §5.4): rows, a ··· sheet per memory (share, forget), and Staying in touch as one row. */
 export function MemoriesScreen({ id }: { id: string }) {
   const nav = useNav();
-  const [agent, setAgent] = useState<AgentView | null>(null);
+  const fa = nav.locale === 'fa';
+  const t = (en: string, persian: string) => fa ? persian : en;
+  const reduced = useReducedMotion() || nav.tier === 'reduced';
+  const [agent, setAgent] = useState<AgentView | null>(() => nav.cache.get(id) ?? null);
   const [memories, setMemories] = useState<MemoryItem[] | null>(null);
-  const [filter, setFilter] = useState<(typeof FILTERS)[number]>('All');
+  const [loadError, setLoadError] = useState('');
+  const [filter, setFilter] = useState<Filter>('all');
   const [people, setPeople] = useState<Member[]>([]);
-  const [sharingId, setSharingId] = useState<string | null>(null);
-  const [recipients, setRecipients] = useState<number[]>([]);
-  const [shareError, setShareError] = useState('');
-  const [shareBusy, setShareBusy] = useState(false);
-  const [forgetId, setForgetId] = useState<string | null>(null);
   const [legacySharing, setLegacySharing] = useState(false);
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [mode, setMode] = useState<'view' | 'share' | 'forget'>('view');
+  const [recipients, setRecipients] = useState<number[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [sheetError, setSheetError] = useState('');
+  const first = useFirstLoad(!!memories);
 
-  useEffect(() => {
+  const load = useCallback(() => {
+    setLoadError('');
     Promise.all([api.agent(id), api.memories(id)])
-      .then(([a, m]) => { setAgent(a.agent); setMemories(m.memories); })
-      .catch((e) => { nav.toast(errorMessage(e), 'error'); nav.back(); });
+      .then(([a, m]) => { setAgent(a.agent); nav.cache.set(id, a.agent); setMemories(m.memories); })
+      .catch((e) => setLoadError(errorMessage(e)));
     api.members().then(({ people: members }) => setPeople(members)).catch(() => setPeople([]));
     api.me().then(({ features }) => setLegacySharing(features.legacyMemorySharing === true)).catch(() => setLegacySharing(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
+  useEffect(load, [load]);
 
-  if (!agent || !memories) return <><TopBar onBack={nav.back} /><LoadingFill /></>;
-
-  const shown = memories.filter((m) => filter === 'All' || (filter === 'Private' ? m.scope === 'private' : m.scope !== 'private'));
+  const when = (iso: string) => {
+    const d = new Date(iso);
+    const days = Math.floor((Date.now() - d.getTime()) / 86_400_000);
+    if (days < 1) return t('Today', 'امروز');
+    if (days < 2) return t('Yesterday', 'دیروز');
+    if (days < 7) return fa ? `${days.toLocaleString('fa-IR')} روز پیش` : `${days} days ago`;
+    return d.toLocaleDateString(fa ? 'fa-IR' : undefined, { month: 'short', day: 'numeric' });
+  };
+  const name = agent?.persona.name ?? '';
+  const open = memories?.find(m => m.id === openId) ?? null;
+  const shareable = (m: MemoryItem) => legacySharing && m.mine && !NOT_SHAREABLE.includes(m.sensitivity.toLowerCase());
+  const close = () => { if (!busy) { setOpenId(null); setMode('view'); setSheetError(''); } };
+  const openSheet = (m: MemoryItem) => { haptic.light(); setOpenId(m.id); setMode('view'); setRecipients([]); setSheetError(''); };
+  const audience = people.filter(person => person.role !== 'pending');
 
   const forget = async (m: MemoryItem) => {
+    setBusy(true); setSheetError('');
     try {
       await api.forget(id, m.id);
       haptic.success();
-      setMemories((all) => all?.filter((x) => x.id !== m.id) ?? null);
-      setForgetId(null);
-    } catch (e) {
-      nav.toast(errorMessage(e), 'error');
-    }
+      setOpenId(null); setMode('view');
+      setMemories(all => all?.filter(x => x.id !== m.id) ?? null);
+      nav.snack({ message: t('Forgotten', 'فراموش شد'), tone: 'success' });
+    } catch (e) { haptic.error(); setSheetError(errorMessage(e)); }
+    finally { setBusy(false); }
   };
+  const share = async (m: MemoryItem) => {
+    setBusy(true); setSheetError('');
+    try {
+      await api.shareMemory(id, m.id, recipients);
+      setMemories(all => all?.map(x => x.id === m.id ? { ...x, scope: 'shared', scopeLabel: 'Shared with selected people' } : x) ?? null);
+      haptic.success(); setMode('view'); setRecipients([]);
+    } catch (e) { haptic.error(); setSheetError(errorMessage(e)); }
+    finally { setBusy(false); }
+  };
+  const unshare = async (m: MemoryItem) => {
+    setBusy(true); setSheetError('');
+    try {
+      await api.revokeMemory(id, m.id);
+      setMemories(all => all?.map(x => x.id === m.id ? { ...x, scope: 'private', scopeLabel: 'Private to you' } : x) ?? null);
+      haptic.success(); setMode('view');
+    } catch (e) { haptic.error(); setSheetError(errorMessage(e)); }
+    finally { setBusy(false); }
+  };
+
+  if (loadError && !memories) {
+    return <><TopBar lead="back" onLead={nav.back} title={t('Memories', 'حافظه‌ها')} />
+      <div className="vx-scroll"><ErrorState title={t('Can’t load memories', 'حافظه‌ها دریافت نشد')} reason={loadError} retryLabel={t('Try again', 'تلاش دوباره')} onRetry={load} /></div></>;
+  }
+
+  const counts = memories ? { all: memories.length, private: memories.filter(m => m.scope === 'private').length, shared: memories.filter(m => m.scope !== 'private').length } : null;
+  const shown = memories?.filter(m => filter === 'all' || (filter === 'private' ? m.scope === 'private' : m.scope !== 'private')) ?? [];
+  const evaporate = reduced ? { opacity: 0, transition: { duration: DUR.fast } } : { opacity: 0, y: -24, scale: 0.96, transition: { duration: 0.6, ease: EASE.exit } };
 
   return (
     <>
-      <TopBar onBack={nav.back} backLabel={agent.persona.name} />
-      <div className="vx-scroll" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-          <AgentFace look={agent.look} size={56} expr="thinking" label={agent.persona.name} />
-          <div>
-            <h1 className="vx-title">What {agent.persona.name} remembers</h1>
-            <div className="vx-small vx-2">Only what you’re allowed to see: your private memories and what’s shared with your groups.</div>
-          </div>
-        </div>
-        <RelationshipPanel agentId={id} name={agent.persona.name} />
-        <div style={{ display: 'flex', gap: 8 }}>
-          {FILTERS.map((f) => <button key={f} className="vx-chip" aria-pressed={f === filter} onClick={() => setFilter(f)}>{f}</button>)}
-        </div>
-        {shown.length === 0 ? (
-          <Empty title="Nothing yet" body="Use Privacy to save private notes, or Shared memories to choose exactly who can access a note. You can inspect and delete saved memories." />
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <AnimatePresence initial={false}>
-              {shown.map((m, i) => (
-                <div key={m.id} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                <motion.div key={m.id} layout initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0, transition: { delay: Math.min(i, 10) * 0.03 } }}
-                  exit={{ opacity: 0, x: -40, transition: { duration: 0.2 } }} className="vx-card" style={{ padding: 14, display: 'flex', gap: 12, alignItems: 'flex-start' }}>
-                  <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    <p style={{ margin: 0, fontSize: 15, lineHeight: '21px' }}>{m.content}</p>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
-                      <span className={`vx-pill ${m.scope === 'private' ? 'lock' : 'volt'}`} style={{ display: 'block', maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: '22px' }}>{m.scopeLabel}</span>
-                      <span className="vx-small vx-3">{m.mine ? 'You' : m.from} · {when(m.at)}</span>
-                    </div>
-                  </div>
-                  {m.mine && <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end' }}>
-                    <button className="vx-icon-btn" aria-label="Forget this" aria-expanded={forgetId === m.id} onClick={() => setForgetId(forgetId === m.id ? null : m.id)} style={{ width: 36, height: 36, color: '#7D828C' }}><Icon name="trash" size={18} /></button>
-                    {legacySharing && !['personal', 'confidential', 'sensitive'].includes(m.sensitivity.toLowerCase()) && <button className="vx-btn vx-btn-secondary vx-btn-sm" onClick={() => { setSharingId(sharingId === m.id ? null : m.id); setRecipients([]); setShareError(''); }} aria-expanded={sharingId === m.id}>Share</button>}
-                  </div>}
-                </motion.div>
-                {forgetId === m.id && <div role="group" aria-label="Forget memory confirmation" className="vx-group" style={{ padding: 12, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}><span className="vx-small">{agent.persona.name} will forget this for good.</span><button className="vx-btn vx-btn-danger vx-btn-sm" onClick={() => void forget(m)}>Forget</button><button className="vx-btn vx-btn-secondary vx-btn-sm" onClick={() => setForgetId(null)}>Keep memory</button></div>}
-                {sharingId === m.id && <div key={`${m.id}-share`} className="vx-group" style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  <div className="vx-small">Choose who can see this memory. You can take access away later.</div>
-                  {people.filter(person => person.role !== 'pending').length === 0 ? <p className="vx-small vx-2" style={{ margin: 0 }}>No people are available to share with yet.</p> : people.filter(person => person.role !== 'pending').map(person => <label key={person.telegramId} className="vx-small" style={{ display: 'flex', gap: 9, alignItems: 'center' }}><input type="checkbox" checked={recipients.includes(person.telegramId)} onChange={e => setRecipients(r => e.target.checked ? [...r, person.telegramId] : r.filter(x => x !== person.telegramId))} />{person.name}</label>)}
-                  {shareError && <div role="alert" className="vx-small" style={{ color: '#FF6B5E' }}>{shareError}</div>}
-                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                    <button className="vx-btn vx-btn-primary vx-btn-sm" disabled={shareBusy || recipients.length === 0} onClick={async () => { setShareBusy(true); setShareError(''); try { await api.shareMemory(id, m.id, recipients); setMemories(all => all?.map(x => x.id === m.id ? { ...x, scope: 'shared', scopeLabel: 'Shared with selected people' } : x) ?? null); setSharingId(null); haptic.success(); } catch (e) { setShareError(errorMessage(e)); } finally { setShareBusy(false); } }}>Share with selected</button>
-                    {m.scope !== 'private' && <button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={shareBusy} onClick={async () => { setShareBusy(true); setShareError(''); try { await api.revokeMemory(id, m.id); setMemories(all => all?.map(x => x.id === m.id ? { ...x, scope: 'private', scopeLabel: 'Private to you' } : x) ?? null); setSharingId(null); haptic.success(); } catch (e) { setShareError(errorMessage(e)); } finally { setShareBusy(false); } }}>Stop sharing</button>}
-                    <button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={shareBusy} onClick={() => setSharingId(null)}>Cancel</button>
-                  </div>
-                </div>}
-                </div>
-              ))}
-            </AnimatePresence>
-          </div>
-        )}
+      <TopBar lead="back" onLead={nav.back} title={t('Memories', 'حافظه‌ها')} subtitle={name || undefined} />
+      <div className="vx-scroll vx-mem" dir={nav.dir} lang={nav.locale}>
+        <header className="vx-mem-head">
+          {agent ? <AgentFace look={agent.look} stage={agent.stage} size={56} expr="thinking" label={name} /> : <span className="vx-mem-face" />}
+          <h1 className="vx-title">{agent ? t(`What ${name} remembers`, `آنچه ${name} به خاطر دارد`) : t('Memories', 'حافظه‌ها')}</h1>
+        </header>
+
+        {agent && <RelationshipPanel presentation="row" agentId={id} name={name} space={nav.space} locale={nav.locale} />}
+
+        {!memories ? <SkeletonRows rows={4} lead={false} label={t('Loading memories', 'در حال دریافت حافظه‌ها')} /> : <>
+          {memories.length > 0 && <FilterChips label={t('Filter memories', 'پالایش حافظه‌ها')} value={filter} onChange={setFilter}
+            options={(['all', 'private', 'shared'] as const).filter(f => f === 'all' || counts![f] > 0).map(f => ({
+              value: f, count: counts![f],
+              label: f === 'all' ? t('All', 'همه') : f === 'private' ? t('Private', 'خصوصی') : t('Shared', 'مشترک'),
+            }))} />}
+          {shown.length === 0 ? (
+            <Empty look={agent?.look} expr="sleeping" title={t('Nothing yet', 'هنوز چیزی نیست')}
+              body={t(`Teach ${name} something in a chat, or save a private note in You. You can inspect and delete saved memories.`, `در گفتگو چیزی به ${name} یاد بدهید یا در بخش «شما» یادداشت خصوصی ذخیره کنید. حافظه‌های ذخیره‌شده را می‌توانید ببینید و حذف کنید.`)}
+              action={<button className="vx-btn vx-btn-secondary vx-btn-sm" onClick={() => nav.push({ name: 'conversation', id })}><Icon name="chat" size={18} />{t('Open a chat', 'باز کردن گفتگو')}</button>} />
+          ) : (
+            <section className="vx-section">
+              <div className="vx-group">
+                <AnimatePresence initial={false}>
+                  {shown.map((m, i) => (
+                    <motion.div key={m.id} className="vx-mem-item" layout={!reduced} exit={evaporate}
+                      initial={reduced ? false : first ? listItem.initial : false} animate={listItem.animate} transition={{ ...T.listItem(i), layout: SPRING.snappy }}>
+                      <div className="vx-row top">
+                        <button type="button" className="vx-mem-text" aria-expanded={expanded === m.id} onClick={() => setExpanded(expanded === m.id ? null : m.id)}>
+                          <span className={expanded === m.id ? undefined : 'vx-clamp-3'} dir="auto">{m.content}</span>
+                          <span className="vx-mem-meta">
+                            <span className={`vx-pill ${m.scope === 'private' ? 'lock' : 'volt'}`}>{m.scope === 'private' && <Icon name="lock" size={11} width={2.5} />}{m.scopeLabel}</span>
+                            <span>{m.mine ? t('You', 'شما') : m.from} · {when(m.at)}</span>
+                          </span>
+                        </button>
+                        {m.mine && <button type="button" className="vx-icon-btn vx-mem-more" aria-label={t('Memory options', 'گزینه‌های حافظه')} aria-haspopup="dialog"
+                          onClick={() => openSheet(m)}><Icon name="more" size={20} /></button>}
+                      </div>
+                    </motion.div>
+                  ))}
+                </AnimatePresence>
+              </div>
+              <p className="vx-section-foot">{t('Only what you’re allowed to see: your private memories and what’s shared with your groups.', 'فقط آنچه اجازهٔ دیدنش را دارید: حافظه‌های خصوصی شما و آنچه با گروه‌هایتان به اشتراک گذاشته شده است.')}</p>
+            </section>
+          )}
+        </>}
       </div>
+
+      <LiveSheet open={!!open} scope={id} onClose={close} label={t('Memory', 'حافظه')}>
+        {open && <div className="vx-sheet-stack">
+          <SheetHead title={t('Memory', 'حافظه')} sub={`${open.scopeLabel} · ${when(open.at)}`} />
+          <p className="vx-mem-quote" dir="auto">{open.content}</p>
+          {sheetError && <div className="vx-banner danger"><Icon name="warn" size={18} /><div className="vx-banner-body"><span role="alert">{sheetError}</span></div></div>}
+          {mode === 'share' ? <>
+            <p className="vx-small vx-2">{t('Choose who can see this memory. You can take access away later.', 'انتخاب کنید چه کسی این حافظه را ببیند. بعداً می‌توانید دسترسی را بردارید.')}</p>
+            <div className="vx-group" role="group" aria-label={t('People', 'افراد')}>
+              {audience.length === 0 ? <Row plain title={<span className="vx-2">{t('No people are available to share with yet.', 'هنوز فردی برای اشتراک‌گذاری نیست.')}</span>} />
+                : audience.map(person => {
+                  const on = recipients.includes(person.telegramId);
+                  return <Row key={person.telegramId} role="checkbox" aria-checked={on} aria-label={person.name} title={person.name} end={<Check />}
+                    lead={<span className="vx-initials" aria-hidden="true">{person.name.slice(0, 1).toUpperCase()}</span>}
+                    onClick={() => { haptic.select(); setRecipients(r => on ? r.filter(x => x !== person.telegramId) : [...r, person.telegramId]); }} />;
+                })}
+            </div>
+            <div className="vx-dock-row">
+              <button className="vx-btn vx-btn-secondary" disabled={busy} onClick={() => setMode('view')}>{t('Cancel', 'انصراف')}</button>
+              <button className="vx-btn vx-btn-primary" disabled={busy || recipients.length === 0} onClick={() => void share(open)}>{t('Share with selected', 'اشتراک با افراد انتخاب‌شده')}</button>
+            </div>
+          </> : mode === 'forget' ? (
+            <div className="vx-you-confirm" role="group" aria-label={t('Forget memory confirmation', 'تأیید فراموشی')}>
+              <p className="vx-head">{t(`${name} will forget this for good.`, `${name} این را برای همیشه فراموش می‌کند.`)}</p>
+              <div className="vx-dock-row">
+                <button className="vx-btn vx-btn-secondary" disabled={busy} onClick={() => setMode('view')}>{t('Keep memory', 'نگه‌داشتن')}</button>
+                <button className="vx-btn vx-btn-danger" disabled={busy} onClick={() => void forget(open)}>{t('Forget', 'فراموش کن')}</button>
+              </div>
+            </div>
+          ) : (
+            <div className="vx-group">
+              {shareable(open) && <Row plain lead={<Icon name="groups" size={20} />} title={t('Share', 'اشتراک‌گذاری')} chevron onClick={() => { haptic.light(); setRecipients([]); setMode('share'); }} />}
+              {shareable(open) && open.scope !== 'private' && <Row plain lead={<Icon name="lock" size={20} />} title={t('Stop sharing', 'توقف اشتراک')} disabled={busy} onClick={() => void unshare(open)} />}
+              <Row tone="danger" lead={<Icon name="trash" size={20} />} title={t('Forget', 'فراموش کن')} disabled={busy} onClick={() => { haptic.warn(); setMode('forget'); }} />
+            </div>
+          )}
+        </div>}
+      </LiveSheet>
     </>
   );
 }

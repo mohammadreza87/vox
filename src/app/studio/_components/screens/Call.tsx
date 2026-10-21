@@ -1,8 +1,16 @@
 'use client';
 
-import { AnimatePresence, motion } from 'framer-motion';
-import { useEffect, useRef, useState } from 'react';
+import { AnimatePresence, motion, useMotionValue, useSpring, useTransform, type MotionValue } from 'framer-motion';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { api, haptic, tg, type AgentView } from '../../_lib/client';
+import { callCopy } from '../../_lib/call-copy';
+import { formatClock, type Locale } from '../../_lib/i18n';
+import { DUR, EASE } from '../../_lib/motion';
+import { pageActive } from '../motion/activity';
+import { Ticker } from '../motion/Ticker';
+import { useTier } from '../motion/tier';
+import { useLanded } from '../motion/useLanded';
+import { syllables } from '../character/rig';
 import { learningApi } from '../../_lib/learning-client';
 import { preferenceLearningApi } from '../../_lib/preference-learning-client';
 import type { ClientObservationInput } from '@/lib/adaptive/observation/contracts';
@@ -10,17 +18,90 @@ import { predictionHttpTransport } from '@/lib/adaptive/prediction/client';
 import { VoicePartialConsumer, type VoicePartialCapability } from '@/lib/adaptive/prediction/voice-client';
 import { VoicePreparationPanel } from '../VoicePreparationPanel';
 import { TaskOutcome } from '../TaskOutcome';
-import { Cloud, PALETTE, stageFor, type Expression } from '../Cloud';
+import { Cloud, PALETTE, stageFor, type CloudMoment, type Expression } from '../Cloud';
 import { errorMessage, LoadingFill, useNav } from '../StudioApp';
-import { Icon, TopBar } from '../ui';
+import { Banner, hueVars, Icon, Section, Seg, Sheet, SheetHead, TopBar } from '../ui';
 
 type Phase = 'ready' | 'listening' | 'thinking' | 'speaking';
-type LiveSession = { endSession(): Promise<void>; setMicMuted(muted: boolean): void; getInputVolume(): number };
+type Space = 'work' | 'personal';
+type LiveSession = { endSession(): Promise<void>; setMicMuted(muted: boolean): void; getInputVolume(): number; getOutputVolume?(): number };
 interface Line { who: 'you' | 'agent'; text: string }
 
 const EXPR: Record<Phase, Expression> = { ready: 'idle', listening: 'listening', thinking: 'thinking', speaking: 'speaking' };
-const HINT: Record<Phase, string> = { ready: 'Tap to talk', listening: 'Listening — tap to send', thinking: 'Thinking…', speaking: 'Tap to interrupt' };
-const LIVE_HINT: Record<Phase, string> = { ready: 'Tap to start the call', listening: 'Listening…', thinking: 'Connecting…', speaking: 'Speaking — just talk to interrupt' };
+const LAND: CloudMoment = { kind: 'perk', key: 'land' };
+/** Hang-up's "bye" nod (motion §3.3); the screen pops once it ends, or after this at the latest. */
+const BYE: CloudMoment = { kind: 'nod', key: 'bye' };
+const BYE_MS = 350;
+/** Board waveform: 32 bars, 10–36 px, a fixed silhouette the level scales. */
+const BARS = Array.from({ length: 32 }, (_, i) => (10 + 26 * Math.abs(Math.sin(i * 1.7) * Math.cos(i * 0.6))) / 36);
+/** Speech envelope resolution for tap-to-talk replies (frames per second). */
+const ENV_HZ = 60;
+
+/** The only part of the call that ticks every second, so the screen itself doesn't re-render. */
+function CallClock({ since, locale }: { since: number; locale: Locale }) {
+  const [now, setNow] = useState(since);
+  useEffect(() => {
+    setNow(Date.now());
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [since]);
+  return <Ticker value={formatClock(Math.max(0, Math.floor((now - since) / 1000)), locale)} quick />;
+}
+
+/**
+ * 32-bar waveform (board 1-1-call): follows whoever is talking, freezes while thinking, lies flat
+ * when idle. It writes bar transforms straight from the level MotionValue, never through React.
+ */
+function Wave({ level, phase }: { level: MotionValue<number>; phase: Phase }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const reduced = useTier() === 'reduced';
+  useEffect(() => {
+    const bars = ref.current ? [...ref.current.children] as HTMLElement[] : [];
+    const moving = (phase === 'listening' || phase === 'speaking') && !reduced;
+    const draw = (v: number) => {
+      const t = performance.now() / 1000, amp = Math.min(1, v * 2.4);
+      bars.forEach((b, i) => {
+        const h = moving ? 0.12 + 0.88 * amp * BARS[i] * (0.62 + 0.38 * Math.sin(t * 9 + i * 1.7)) : phase === 'ready' ? 0.12 : BARS[i] * 0.5;
+        b.style.transform = `scaleY(${h.toFixed(3)})`;
+      });
+    };
+    if (phase !== 'thinking') draw(level.get());
+    if (!moving) return;
+    return level.on('change', draw);
+  }, [level, phase, reduced]);
+  return (
+    <div ref={ref} className="vx-wave vx-call-wave" data-phase={phase} aria-hidden="true">
+      {BARS.map((_, i) => <span key={i} />)}
+    </div>
+  );
+}
+
+/** RMS envelope of a reply (base64 MP3) decoded offline: drives lip-sync from playback time, never re-routes the audio. */
+async function speechEnvelope(b64: string): Promise<Float32Array | null> {
+  try {
+    const w = window as unknown as { OfflineAudioContext?: typeof OfflineAudioContext; webkitOfflineAudioContext?: typeof OfflineAudioContext };
+    const Ctx = w.OfflineAudioContext ?? w.webkitOfflineAudioContext;
+    if (!Ctx) return null;
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const ctx = new Ctx(1, 1, 22050);
+    // older WebKit only has the callback form
+    const audio = await new Promise<AudioBuffer>((resolve, reject) => {
+      const p = ctx.decodeAudioData(bytes.buffer, resolve, reject) as Promise<AudioBuffer> | undefined;
+      p?.then?.(resolve, reject);
+    });
+    const data = audio.getChannelData(0), win = Math.max(1, Math.round(audio.sampleRate / ENV_HZ));
+    const env = new Float32Array(Math.ceil(data.length / win));
+    for (let i = 0; i < env.length; i++) {
+      let sum = 0;
+      const a = i * win, b = Math.min(data.length, a + win);
+      for (let j = a; j < b; j++) sum += data[j] * data[j];
+      env[i] = Math.sqrt(sum / Math.max(1, b - a));
+    }
+    return env;
+  } catch { return null; }
+}
 
 function pickMime(): string {
   if (typeof MediaRecorder === 'undefined') return '';
@@ -30,16 +111,51 @@ function pickMime(): string {
   return '';
 }
 
+const useCallSize = () => useState(() => (typeof window !== 'undefined' && window.innerHeight < 720 ? 200 : 260))[0];
+
 export function CallScreen({ id }: { id: string }) {
   const nav = useNav();
-  const [agent, setAgent] = useState<AgentView | null>(null);
+  const locale: Locale = nav.locale ?? 'en';
+  const c = callCopy[locale];
+  const [agent, setAgent] = useState<AgentView | null>(() => nav.cache?.get(id) ?? null);
   const [phase, setPhase] = useState<Phase>('ready');
+  const phaseRef = useRef<Phase>('ready');
+  phaseRef.current = phase;
   const [lines, setLines] = useState<Line[]>([]);
   const [captions, setCaptions] = useState(true);
-  const [level, setLevel] = useState(0);
-  const [seconds, setSeconds] = useState(0);
-  const [space, setSpace] = useState<'work' | 'personal'>('work');
-  const [locale, setLocale] = useState<'en' | 'fa'>('en');
+  const [startedAt, setStartedAt] = useState<number | null>(null);
+  const [options, setOptions] = useState(false);
+  const [summary, setSummary] = useState(false);
+  const [micDenied, setMicDenied] = useState(false);
+  const cloudSize = useCallSize();
+  // The face perks once it has landed from the profile (not mid-flight), and nods "bye" before the pop (motion §3.3).
+  const callRef = useRef<HTMLDivElement>(null);
+  const landed = useLanded(callRef);
+  const [bye, setBye] = useState(false);
+  const leaving = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (leaving.current) clearTimeout(leaving.current); }, []);
+  /** Pops once, whichever comes first: the nod's end or its timeout. */
+  const leave = () => {
+    if (!leaving.current) return;
+    clearTimeout(leaving.current);
+    leaving.current = null;
+    nav.back();
+  };
+  // Audio level 0..1 per frame: the mic while listening, the voice while speaking. MotionValues only (P1).
+  const level = useMotionValue(0);
+  const listening = useMotionValue(0);
+  // Reduced motion: no live motion (motion §8). The mic ring and glow stay put; ringOpacity still says "listening".
+  const tier = useTier();
+  const live01 = useMotionValue(tier === 'reduced' ? 0 : 1);
+  useEffect(() => { live01.set(tier === 'reduced' ? 0 : 1); }, [tier, live01]);
+  const heard = useSpring(useTransform(() => level.get() * listening.get() * live01.get()), { stiffness: 400, damping: 20 });
+  const glowScale = useTransform(heard, (v) => 1 + v * 0.25);
+  const ringScale = useTransform(heard, (v) => 1 + ((6 + v * 18) * 2) / 84);
+  const ringOpacity = useSpring(listening, { stiffness: 300, damping: 30 });
+  useEffect(() => { listening.set(phase === 'listening' ? 1 : 0); }, [phase, listening]);
+  // Space is app-level (D17); the call keeps a local copy so a switch resets the session at once.
+  const [space, setSpaceLocal] = useState<Space>(nav.space ?? 'work');
+  useEffect(() => { if (nav.space) setSpaceLocal(nav.space); }, [nav.space]);
   const [partialCapability, setPartialCapability] = useState<VoicePartialCapability>();
   const [prepareWhileSpeaking, setPrepareWhileSpeaking] = useState(false);
   const [feedbackTurnId, setFeedbackTurnId] = useState<string | null>(null);
@@ -53,10 +169,10 @@ export function CallScreen({ id }: { id: string }) {
   const stream = useRef<MediaStream | null>(null);
   const recorder = useRef<MediaRecorder | null>(null);
   const player = useRef<HTMLAudioElement | null>(null);
-  const meter = useRef<{ ctx: AudioContext; raf: number } | null>(null);
+  const audioCtx = useRef<AudioContext | null>(null);
   const cancelled = useRef(false);
   const generation = useRef(0);
-  const playback = useRef<{ agentId: string; space: 'work' | 'personal'; turnId: string; generation: number; requestedAt: number; outcomes: Set<ClientObservationInput['outcome']> } | null>(null);
+  const playback = useRef<{ agentId: string; space: Space; turnId: string; generation: number; requestedAt: number; outcomes: Set<ClientObservationInput['outcome']> } | null>(null);
   const clearPlayback = () => {
     playback.current = null;
     if (player.current) {
@@ -78,37 +194,67 @@ export function CallScreen({ id }: { id: string }) {
   const [muted, setMuted] = useState(false);
   const micMuted = useRef(false);
   const session = useRef<LiveSession | null>(null);
-  const liveMeter = useRef<number | null>(null);
   const liveUnavailable = useRef(false);
   const liveGeneration = useRef(0);
+
+  /* ---- one meter loop: the mic while listening, the voice while speaking (live volume, the reply's envelope, or syllables) ---- */
+  const mic = useRef<(() => number) | null>(null);
+  const voice = useRef<(() => number | null) | null>(null);
+  const envelope = useRef<Float32Array | null>(null);
+  const meterRaf = useRef(0);
+  const startMeter = (current: number) => {
+    if (meterRaf.current) return;
+    let last = performance.now(), t = 0;
+    const tick = (now: number) => {
+      if (cancelled.current || generation.current !== current) { meterRaf.current = 0; return; }
+      const p = phaseRef.current;
+      // nothing to meter and the level has decayed: rest until a phase change restarts the loop
+      if (p !== 'listening' && p !== 'speaking' && level.get() <= 0.002) { level.set(0); meterRaf.current = 0; return; }
+      meterRaf.current = requestAnimationFrame(tick);
+      const dt = Math.min(64, Math.max(0, now - last));
+      last = now;
+      if (!pageActive()) return;
+      if (p === 'listening') level.set(mic.current?.() ?? 0);
+      else if (p === 'speaking') { t += dt / 1000; level.set(voice.current?.() ?? syllables(t) * 0.32); }
+      else if (level.get() > 0.002) level.set(level.get() * 0.85);
+    };
+    meterRaf.current = requestAnimationFrame(tick);
+  };
+  const stopMeter = () => { if (meterRaf.current) cancelAnimationFrame(meterRaf.current); meterRaf.current = 0; };
+  // the loop rests while nothing is metered; listening or speaking wakes it (once a source exists; startMeter is idempotent)
+  useEffect(() => {
+    if ((phase === 'listening' || phase === 'speaking') && (mic.current || voice.current) && !cancelled.current) startMeter(generation.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase]);
+
+  /** Stops everything the call holds (recorder, mic, meters, playback) and invalidates in-flight work. Idempotent. */
+  const teardown = (current: number) => {
+    if (playback.current?.outcomes.has('playback_started')) reportPlayback('interrupted');
+    cancelled.current = true;
+    generation.current = current + 1;
+    clearPlayback();
+    if (recorder.current?.state === 'recording') recorder.current.stop();
+    stream.current?.getTracks().forEach((tr) => tr.stop());
+    stopMeter();
+    void audioCtx.current?.close().catch(() => undefined);
+    recorder.current = null; stream.current = null; audioCtx.current = null; mic.current = null; voice.current = null;
+    void endLive();
+  };
 
   useEffect(() => {
     // Reset on (re)mount: React StrictMode runs this effect's cleanup once in dev.
     cancelled.current = false;
     const current = ++generation.current;
     const active = () => !cancelled.current && generation.current === current;
-    if (agent?.id !== id) setAgent(null);
-    setPhase('ready'); setLines([]); setLive(false); liveUnavailable.current = false;
-    setFeedbackTurnId(null); setPrepareWhileSpeaking(false); setPartialCapability(undefined);
+    if (agent?.id !== id) setAgent(nav.cache?.get(id) ?? null);
+    setPhase('ready'); setLines([]); setLive(false); liveUnavailable.current = false; setStartedAt(null); setMicDenied(false);
+    setFeedbackTurnId(null); setPrepareWhileSpeaking(false); setPartialCapability(undefined); setSummary(false);
     micMuted.current = false; setMuted(false);
-    api.agent(id).then((r) => { if (active()) setAgent(r.agent); }).catch((e) => { if (active()) { nav.toast(errorMessage(e), 'error'); nav.back(); } });
-    const t = setInterval(() => setSeconds((s) => s + 1), 1000);
-    return () => {
-      clearInterval(t);
-      // Navigation can unmount the screen without the explicit hang-up handler.
-      // Record only audio that actually started, while its captured turn is valid.
-      if (playback.current?.outcomes.has('playback_started')) reportPlayback('interrupted');
-      cancelled.current = true;
-      generation.current = current + 1;
-      clearPlayback();
-      if (recorder.current?.state === 'recording') recorder.current.stop();
-      stream.current?.getTracks().forEach((tr) => tr.stop());
-      if (meter.current) { cancelAnimationFrame(meter.current.raf); void meter.current.ctx.close(); }
-      recorder.current = null;
-      stream.current = null;
-      meter.current = null;
-      void endLive();
-    };
+    api.agent(id).then((r) => { if (active()) { nav.cache?.set(id, r.agent); setAgent(r.agent); } })
+      .catch((e) => { if (active()) { nav.toast(errorMessage(e), 'error'); nav.back(); } });
+    // Navigation can unmount the screen without the explicit hang-up handler.
+    // Record only audio that actually started, while its captured turn is valid.
+    return () => teardown(current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, space]);
 
@@ -123,14 +269,14 @@ export function CallScreen({ id }: { id: string }) {
       analyser.fftSize = 256;
       ctx.createMediaStreamSource(s).connect(analyser);
       const data = new Uint8Array(analyser.frequencyBinCount);
-      const tick = () => {
-        if (cancelled.current || generation.current !== current) return;
-        analyser.getByteFrequencyData(data);
-        setLevel(data.reduce((a, b) => a + b, 0) / data.length / 128);
-        if (meter.current) meter.current.raf = requestAnimationFrame(tick);
-      };
-      meter.current = { ctx, raf: requestAnimationFrame(tick) };
-    } catch { /* level meter is decorative */ }
+      audioCtx.current = ctx;
+      mic.current = () => { analyser.getByteFrequencyData(data); return Math.min(1, data.reduce((a, b) => a + b, 0) / data.length / 128); };
+    } catch { /* the level is decorative */ }
+    voice.current = () => {
+      const env = envelope.current, p = player.current;
+      return env && p ? Math.min(1, (env[Math.floor(p.currentTime * ENV_HZ)] ?? 0) * 1.6) : null;
+    };
+    startMeter(current);
     return s;
   };
 
@@ -150,16 +296,18 @@ export function CallScreen({ id }: { id: string }) {
       rec.onstop = () => { if (!cancelled.current && generation.current === current) void send(new Blob(recordedChunks, { type: rec.mimeType || mime || 'audio/webm' }), turnAgentId, turnSpace, current); };
       rec.start();
       recorder.current = rec;
-      haptic.tap();
+      haptic.light();
+      setMicDenied(false);
+      setStartedAt((t) => t ?? Date.now());
       setPhase('listening');
     } catch {
       if (cancelled.current || generation.current !== current) return;
       haptic.error();
-      nav.toast('Microphone access is needed for calls.', 'error');
+      setMicDenied(true);
     }
   };
 
-  const send = async (blob: Blob, turnAgentId: string, turnSpace: 'work' | 'personal', current: number) => {
+  const send = async (blob: Blob, turnAgentId: string, turnSpace: Space, current: number) => {
     const active = () => !cancelled.current && generation.current === current;
     if (!active()) return;
     if (blob.size < 2000) { setPhase('ready'); return; }
@@ -168,7 +316,7 @@ export function CallScreen({ id }: { id: string }) {
       const requestedAt = performance.now();
       const r = await api.callTurn(turnAgentId, blob, turnSpace);
       if (!active()) return;
-      if (!r.transcript) { nav.toast("Didn't catch that — try again."); setPhase('ready'); return; }
+      if (!r.transcript) { nav.toast(c.didntCatch); setPhase('ready'); return; }
       setLines((l) => [...l, { who: 'you', text: r.transcript }, { who: 'agent', text: r.reply }]);
       setFeedbackTurnId(r.turnId ?? null);
       if (r.audio && player.current) {
@@ -177,6 +325,8 @@ export function CallScreen({ id }: { id: string }) {
         const turn = { agentId: turnAgentId, space: turnSpace, turnId: r.turnId ?? '', generation: current, requestedAt, outcomes: new Set<ClientObservationInput['outcome']>() };
         playback.current = turn;
         const currentPlayback = () => active() && player.current === p && playback.current === turn;
+        envelope.current = null;
+        void speechEnvelope(r.audio).then((env) => { if (currentPlayback()) envelope.current = env; });
         p.onplaying = () => { if (currentPlayback()) reportPlayback('playback_started'); };
         p.onended = () => { if (currentPlayback()) { reportPlayback('playback_completed'); clearPlayback(); setPhase('ready'); } };
         p.onerror = () => { if (currentPlayback()) { reportPlayback('playback_failed'); clearPlayback(); setPhase('ready'); } };
@@ -194,16 +344,15 @@ export function CallScreen({ id }: { id: string }) {
     }
   };
 
-  const endLive = async () => {
+  async function endLive() {
     liveGeneration.current++;
     partial.current?.dispose(); partial.current = null;
     const s = session.current;
     if (!s) return;
     session.current = null;
-    if (liveMeter.current) cancelAnimationFrame(liveMeter.current);
     await s.endSession().catch(() => undefined);
     void api.callEnd(id, space).catch(() => undefined);
-  };
+  }
 
   /** Opens a live call; returns false when the server only supports tap-to-talk. */
   const startLive = async (): Promise<boolean> => {
@@ -237,29 +386,27 @@ export function CallScreen({ id }: { id: string }) {
           if (role === 'user') voicePartial.finishTurn();
           if (message.trim()) setLines((l) => [...l, { who: role === 'user' ? 'you' : 'agent', text: message }]);
         } },
-        onError: (message) => { if (active()) { voicePartial.dispose(); setPartialCapability(undefined); setPrepareWhileSpeaking(false); nav.toast(message || 'The call dropped.', 'error'); } },
+        onError: (message) => { if (active()) { voicePartial.dispose(); setPartialCapability(undefined); setPrepareWhileSpeaking(false); nav.toast(message || c.dropped, 'error'); } },
         onDisconnect: () => { if (active()) { voicePartial.dispose(); setPartialCapability(undefined); setPrepareWhileSpeaking(false);
-          if (session.current) { session.current = null; setPhase('ready'); void api.callEnd(id, space).catch(() => undefined); }
+          if (session.current) { session.current = null; setLive(false); setPhase('ready'); void api.callEnd(id, space).catch(() => undefined); }
         } },
-      });
+      }) as unknown as LiveSession;
       if (!active()) { await conv.endSession(); return true; }
       session.current = conv;
+      mic.current = () => Math.min(1, (session.current?.getInputVolume() ?? 0) * 2);
+      voice.current = () => (session.current?.getOutputVolume ? Math.min(1, session.current.getOutputVolume() * 1.6) : null);
       setLive(true);
-      setSeconds(0);
+      setMicDenied(false);
+      setStartedAt(Date.now());
       setPhase('listening');
       haptic.success();
-      const tick = () => {
-        if (!active()) return;
-        setLevel(Math.min(1, (session.current?.getInputVolume() ?? 0) * 2));
-        liveMeter.current = requestAnimationFrame(tick);
-      };
-      liveMeter.current = requestAnimationFrame(tick);
+      startMeter(current);
       return true;
     } catch (e) {
       if (!active()) return true;
       partial.current?.dispose(); setPartialCapability(undefined); setPrepareWhileSpeaking(false);
       haptic.error();
-      nav.toast(e instanceof DOMException ? 'Microphone access is needed for calls.' : errorMessage(e), 'error');
+      if (e instanceof DOMException) setMicDenied(true); else nav.toast(errorMessage(e), 'error');
       setPhase('ready');
       return true;
     }
@@ -285,82 +432,131 @@ export function CallScreen({ id }: { id: string }) {
     else if (phase === 'speaking') { reportPlayback('interrupted'); clearPlayback(); setPhase('ready'); void start(); }
   };
 
-  const hangUp = () => { haptic.heavy(); reportPlayback('interrupted'); clearPlayback(); void endLive(); nav.back(); };
+  /** End (D17: there is no minimise until the call lives at app level). A tap-to-talk turn asks how it went first. */
+  const hangUp = () => {
+    haptic.heavy();
+    reportPlayback('interrupted');
+    clearPlayback();
+    const ask = !!feedbackTurnId && !live;
+    teardown(generation.current);
+    setPhase('ready');
+    if (ask) { setSummary(true); return; }
+    if (tier === 'reduced') { nav.back(); return; }
+    if (leaving.current) return;
+    setBye(true);
+    leaving.current = setTimeout(leave, BYE_MS);
+  };
 
-  if (!agent) return <><TopBar onBack={nav.back} /><LoadingFill /></>;
-  const pal = PALETTE[agent.look.hue];
-  const last = lines.slice(-2);
-  const mm = String(Math.floor(seconds / 60)).padStart(2, '0');
-  const ss = String(seconds % 60).padStart(2, '0');
+  const changeSpace = (s: Space) => {
+    if (s === space) return;
+    setSpaceLocal(s);
+    nav.setSpace?.(s);
+  };
+
+  if (!agent) return <><TopBar lead="close" onLead={nav.back} /><LoadingFill /></>;
+  const pal = PALETTE[agent.look.hue] ?? PALETTE.lilac;
+  const name = agent.persona.name;
+  const connected = live && !!session.current;
+  const last = lines[lines.length - 1];
+  const status = phase === 'listening' ? (connected && muted ? c.muted : c.listening)
+    : phase === 'thinking' ? (connected || !liveUnavailable.current ? c.connecting : c.thinking)
+      : phase === 'speaking' ? c.speaking(name) : connected ? c.connected : c.ready;
+  const dot = phase === 'listening' && !(connected && muted) ? 'var(--success)' : phase === 'thinking' ? 'var(--warn)' : phase === 'speaking' ? 'var(--hue)' : 'var(--text-3)';
+  const hint = connected ? (muted ? c.mutedHint : c.liveHint[phase]) : live ? c.liveHint[phase] : c.hint[phase];
+  const inSession = !!session.current || phase !== 'ready';
+  const pulse = phase === 'speaking' && tier === 'full';
 
   return (
-    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', position: 'relative', overflowY: 'auto' }}>
-      <motion.div aria-hidden="true" animate={{ scale: phase === 'speaking' ? [1, 1.12, 1] : phase === 'listening' ? 1 + level * 0.25 : 1, opacity: phase === 'ready' ? 0.18 : 0.32 }}
-        transition={phase === 'speaking' ? { duration: 1.4, repeat: Infinity } : { duration: 0.12 }}
-        style={{ position: 'absolute', top: '22%', left: '50%', width: 360, height: 360, marginLeft: -180, borderRadius: '50%', background: `radial-gradient(circle, ${pal.glow}, transparent 65%)`, filter: 'blur(20px)' }} />
+    <div ref={callRef} className="vx-call" style={hueVars(pal)}>
+      {/* Board glow: a static radial; the voice swells it, speech breathes it. Transform + opacity only, no filter (P6) */}
+      {/* The speech pulse is full tier only (motion §7 P14: lite drops the glow pulse; reduced has no live motion) */}
+      <motion.div aria-hidden="true" className="vx-call-glow" animate={{ scale: pulse ? [1, 1.08, 1] : 1, opacity: phase === 'ready' ? 0.7 : 1 }}
+        transition={pulse ? { duration: 1.4, repeat: Infinity, ease: EASE.sine } : { duration: DUR.medium, ease: EASE.standard }}>
+        <motion.div style={{ width: '100%', height: '100%', borderRadius: '50%', scale: glowScale, background: `radial-gradient(closest-side, ${pal.glow}42, ${pal.glow}00)` }} />
+      </motion.div>
 
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px 0', position: 'relative' }}>
-        <button className="vx-icon-btn" aria-label="Minimize" onClick={nav.back}><Icon name="back" /></button>
-        <div style={{ textAlign: 'center' }}>
-          <div className="vx-head">{agent.persona.name}</div>
-          <div className="vx-small vx-2 vx-num">{agent.persona.role} · {mm}:{ss}</div>
+      <TopBar lead="close" onLead={hangUp} leadLabel={c.closeCall} title={name}
+        subtitle={<span className="vx-num">{agent.persona.role} · {c.spaces[space]}{startedAt !== null && <> · <CallClock since={startedAt} locale={locale} /></>}</span>}
+        end={(
+          <span className="vx-call-end">
+            {connected && <span className="vx-call-signal" title={c.connected}><Icon name="signal" size={20} /></span>}
+            <button type="button" className="vx-icon-btn" aria-label={c.options} onClick={() => setOptions(true)}><Icon name="more" /></button>
+          </span>
+        )} />
+
+      <div className="vx-call-stage">
+        <div className="vx-call-face">
+          <Cloud look={agent.look} size={cloudSize} expr={EXPR[phase]} stage={agent.stage ?? stageFor(agent.formingDay, agent.status)}
+            label={name} heroId={agent.id} level={level} moment={bye ? BYE : landed ? LAND : null} glow={0.3}
+            onMomentEnd={(k) => { if (k === 'nod') leave(); }} />
         </div>
-        <button className="vx-icon-btn" aria-label={captions ? 'Hide captions' : 'Show captions'} aria-pressed={captions} onClick={() => setCaptions((c) => !c)}
-          style={{ color: captions ? '#D6FF5C' : undefined }}><Icon name="captions" /></button>
-      </div>
-
-      <div role="group" aria-label="Conversation space" style={{ display: 'flex', gap: 8, justifyContent: 'center', padding: '12px 16px', position: 'relative' }}>
-        {(['work', 'personal'] as const).map(value => <button key={value} className="vx-chip" disabled={phase !== 'ready' || !!session.current} aria-pressed={space === value} onClick={() => { setSpace(value); setLines([]); setLive(false); liveUnavailable.current = false; }}>{value === 'work' ? 'Work' : 'Personal'}</button>)}
-        <button className="vx-chip" onClick={() => nav.push({ name: 'privacy' })}>Privacy</button>
-      </div>
-      <div style={{ padding: '0 24px', position: 'relative' }}>
-        <label className="vx-small">Language / زبان <select value={locale} onChange={event => setLocale(event.target.value as 'en' | 'fa')}>
-          <option value="en">English</option><option value="fa">فارسی</option>
-        </select></label>
-      </div>
-      <VoicePreparationPanel capability={partialCapability} enabled={prepareWhileSpeaking} onChange={changePreparation} locale={locale} />
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', position: 'relative', gap: 18 }}>
-        <motion.div animate={{ scale: phase === 'listening' ? 1 + level * 0.08 : 1 }} transition={{ type: 'spring', stiffness: 400, damping: 20 }}>
-          <Cloud look={agent.look} size={220} expr={EXPR[phase]} stage={stageFor(agent.formingDay, agent.status)} label={agent.persona.name} />
-        </motion.div>
-        <AnimatePresence mode="wait">
-          <motion.div key={phase} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }} className="vx-small vx-2" aria-live="polite">
-            {live ? (muted && session.current ? 'Muted — tap the mic to talk' : LIVE_HINT[phase]) : HINT[phase]}
-          </motion.div>
-        </AnimatePresence>
-      </div>
-      {feedbackTurnId && !live && <div style={{ padding: '0 24px', position: 'relative' }}>
-        <TaskOutcome key={`${id}:${space}:${feedbackTurnId}`} agentId={id} space={space} turnId={feedbackTurnId} locale={locale} />
-      </div>}
-
-      <div style={{ minHeight: 120, padding: '0 24px', display: 'flex', flexDirection: 'column', gap: 8, justifyContent: 'flex-end', position: 'relative' }}>
-        <AnimatePresence initial={false}>
-          {captions && last.map((l, i) => (
-            <motion.p key={`${lines.length}-${i}`} initial={{ opacity: 0, y: 10 }} animate={{ opacity: l.who === 'agent' ? 1 : 0.6, y: 0 }} exit={{ opacity: 0 }}
-              style={{ margin: 0, textAlign: 'center', fontSize: l.who === 'agent' ? 17 : 14, lineHeight: l.who === 'agent' ? '24px' : '19px',
-                display: '-webkit-box', WebkitLineClamp: l.who === 'agent' ? 4 : 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
-              {l.text}
-            </motion.p>
-          ))}
+        <div className="vx-status" aria-live="polite" style={{ '--status': dot } as CSSProperties}>
+          <span className="vx-status-dot" />
+          <AnimatePresence initial={false} mode="popLayout">
+            <motion.span key={status} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }} transition={{ duration: DUR.fast, ease: EASE.standard }}>{status}</motion.span>
+          </AnimatePresence>
+        </div>
+        <p className="vx-call-hint" aria-live="polite">{hint}</p>
+        <Wave level={level} phase={phase} />
+        {micDenied && (
+          <div className="vx-call-banner">
+            <Banner tone="warn" icon="mic" action={<button type="button" className="vx-btn vx-btn-sm vx-btn-secondary" onClick={() => { setMicDenied(false); tap(); }}>{c.tryAgain}</button>}>
+              {c.micDenied}
+            </Banner>
+          </div>
+        )}
+        <AnimatePresence initial={false} mode="popLayout">
+          {captions && last && (
+            <motion.div key={lines.length} className="vx-caption vx-call-caption" style={{ '--who': last.who === 'agent' ? 'var(--hue-light)' : 'var(--text-2)' } as CSSProperties}
+              initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: DUR.base, ease: EASE.enter }}>
+              <span className="vx-caption-who">{last.who === 'agent' ? name : c.you}</span>
+              <p dir="auto">{last.text}</p>
+            </motion.div>
+          )}
         </AnimatePresence>
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 40, padding: '24px 16px calc(28px + env(safe-area-inset-bottom))', position: 'relative' }}>
-        <span style={{ width: 56 }} />
-        <motion.button onClick={tap} disabled={phase === 'thinking'} whileTap={{ scale: 0.92 }}
-          aria-label={live && session.current ? (muted ? 'Unmute' : 'Mute') : phase === 'listening' ? 'Send' : 'Talk'}
-          aria-pressed={live && session.current ? muted : undefined}
-          animate={{ background: phase === 'listening' && !muted ? '#D6FF5C' : '#1E2228', color: phase === 'listening' && !muted ? '#0E1013' : '#F2F1EC',
-            boxShadow: phase === 'listening' ? `0 0 0 ${6 + level * 18}px rgba(214,255,92,.18)` : '0 0 0 0 rgba(214,255,92,0)' }}
-          transition={{ duration: 0.12 }}
-          style={{ width: 84, height: 84, borderRadius: '50%', border: '1px solid rgba(255,255,255,.08)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', opacity: phase === 'thinking' ? 0.5 : 1 }}>
-          <Icon name={live && session.current ? (muted ? 'micOff' : 'mic') : phase === 'listening' ? 'send' : 'mic'} size={32} width={2} />
-        </motion.button>
-        <motion.button onClick={hangUp} whileTap={{ scale: 0.92 }} aria-label="End call"
-          style={{ width: 56, height: 56, borderRadius: '50%', border: 'none', background: '#FF6B5E', color: '#0E1013', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
-          <Icon name="end" size={24} width={2} style={{ transform: 'rotate(135deg)' }} />
-        </motion.button>
+      <div className="vx-ctrls" data-snack-anchor>
+        {connected ? (
+          <button type="button" className="vx-ctrl" aria-label={muted ? c.unmute : c.mute} aria-pressed={muted} onClick={tap}>
+            <Icon name={muted ? 'micOff' : 'mic'} size={24} />
+          </button>
+        ) : null}
+        <button type="button" className="vx-ctrl" aria-label={c.captions} aria-pressed={captions} onClick={() => { haptic.select(); setCaptions((c) => !c); }}>
+          <Icon name="captions" size={24} />
+        </button>
+        {!connected && (
+          <span className="vx-call-talk">
+            {/* Mic ring: one transformed element instead of an animated box-shadow (P4) */}
+            <motion.span aria-hidden="true" className="vx-call-ring" style={{ scale: ringScale, opacity: ringOpacity }} />
+            <motion.button type="button" onClick={tap} disabled={phase === 'thinking'} className="vx-call-mic" data-on={phase === 'listening' || undefined}
+              aria-label={phase === 'listening' ? c.send : c.talk} whileTap={{ scale: 0.92 }}>
+              <Icon name={phase === 'listening' ? 'send' : 'mic'} size={32} width={2} />
+            </motion.button>
+          </span>
+        )}
+        <button type="button" className="vx-ctrl vx-ctrl-end" aria-label={c.end} onClick={hangUp}>
+          <Icon name="end" size={28} width={2} style={{ transform: 'rotate(135deg)' }} />
+        </button>
       </div>
+
+      <Sheet open={options} onClose={() => setOptions(false)} label={c.options}>
+        <SheetHead title={c.options} sub={`${name} · ${agent.persona.role}`} />
+        <Section plain title={c.space} foot={inSession ? c.endToSwitch : c.spaceFoot}>
+          <div>
+            <Seg label={c.conversationSpace} value={space} disabled={inSession}
+              options={[{ value: 'work', label: c.spaces.work }, { value: 'personal', label: c.spaces.personal }]}
+              onChange={(s) => changeSpace(s as Space)} />
+          </div>
+        </Section>
+        <VoicePreparationPanel capability={partialCapability} enabled={prepareWhileSpeaking} onChange={changePreparation} locale={locale} />
+      </Sheet>
+
+      <Sheet open={summary} onClose={() => nav.back()} label={c.ended}
+        dock={<button type="button" className="vx-btn vx-btn-primary vx-btn-block" onClick={() => nav.back()}>{c.done}</button>}>
+        <SheetHead title={c.ended} sub={`${name} · ${agent.persona.role}`} />
+        {feedbackTurnId && <TaskOutcome key={`${id}:${space}:${feedbackTurnId}`} agentId={id} space={space} turnId={feedbackTurnId} locale={locale} />}
+      </Sheet>
     </div>
   );
 }

@@ -1,0 +1,138 @@
+/* Vox Studio app shell: screen stack, overlay tab bar, snackbar. Motion lives in _lib/motion.ts. */
+
+.vx {
+  /* Board: 84 px bar = 8 + 56 content + 20 home-indicator room (more on notched phones) */
+  --tabbar-pad: max(20px, env(safe-area-inset-bottom));
+  --tabbar-h: calc(64px + var(--tabbar-pad));
+}
+
+/* ---- screen stack ---- */
+.vx-stage { position: relative; flex: 1; min-height: 0; overflow: hidden; }
+/* While a screen is arriving, taps wait (double-tap guard; StudioApp also drops the second push) */
+.vx-stage[data-busy] { pointer-events: none; }
+
+/* Opaque, so a pushed screen fully covers the one underneath. No will-change and no z-index at rest:
+   sheets inside a screen must stack above the overlay tab bar. */
+.vx-screen { position: absolute; inset: 0; display: flex; flex-direction: column; background: var(--ground); }
+.vx-screen:focus, .vx-screen:focus-visible { outline: none; }
+
+/* Leading-edge shadow of a pushed page: static, rides along with the transform (never an animated box-shadow).
+   It sits just outside the page, so at rest the stage clips it away. */
+.vx-screen[data-layer="page"]::before {
+  content: ''; position: absolute; top: 0; bottom: 0; inset-inline-end: 100%; width: 40px; pointer-events: none;
+  background: linear-gradient(to left, rgba(0, 0, 0, .38), rgba(0, 0, 0, 0));
+}
+[dir="rtl"] .vx-screen[data-layer="page"]::before { background: linear-gradient(to right, rgba(0, 0, 0, .38), rgba(0, 0, 0, 0)); }
+/* Covers (spawn, fire) cast upward while they rise */
+.vx-screen[data-layer="cover"]::before {
+  content: ''; position: absolute; left: 0; right: 0; bottom: 100%; height: 40px; pointer-events: none;
+  background: linear-gradient(to top, rgba(0, 0, 0, .32), rgba(0, 0, 0, 0));
+}
+
+/* ---- overlay tab bar ---- */
+.vx-tabbar {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 6;
+  height: var(--tabbar-h); padding: 8px 8px var(--tabbar-pad);
+  background: rgba(22, 25, 30, .92); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+  border-top: 1px solid var(--hair); display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); align-items: start;
+}
+/* No live backdrop blur while the bar slides: never on low-end Android, and on every tier during a
+   push/pop/cover (the stage is data-busy until the incoming screen settles), so the blur isn't re-run each frame. */
+.vx[data-motion="lite"] .vx-tabbar,
+.vx-stage[data-busy] .vx-tabbar { backdrop-filter: none; -webkit-backdrop-filter: none; background: rgba(22, 25, 30, .97); }
+.vx-tab {
+  display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 0; padding: 0 4px;
+  background: none; border: none; cursor: pointer; color: var(--text-3); font-size: 11px; line-height: 14px; font-weight: 600;
+  -webkit-tap-highlight-color: transparent; transition: color var(--dur-fast) var(--ease-standard);
+}
+.vx-tab[aria-current="page"] { color: var(--text); }
+.vx-tab:disabled { cursor: not-allowed; }
+.vx-tab:disabled:not([aria-current="page"]) { opacity: .5; }
+.vx-tab-label { max-width: 100%; overflow-wrap: anywhere; }
+.vx-tab-pill { width: 48px; height: 32px; border-radius: 999px; display: flex; align-items: center; justify-content: center; position: relative; }
+.vx-tab-pill-bg { position: absolute; inset: 0; border-radius: 999px; background: var(--s3); }
+.vx-tab-icon { position: relative; display: flex; }
+
+/* ---- snackbar (bottom, D13) ---- */
+/* StudioApp translates .vx-snack-lift up to 12 px above the tab bar / dock */
+.vx-snack-lift { position: absolute; left: 0; right: 0; bottom: 0; z-index: 40; padding: 0 12px 12px; pointer-events: none; }
+.vx-snack-lift:not([data-anchored]) { padding-bottom: calc(12px + env(safe-area-inset-bottom)); }
+.vx-snack-stage { position: relative; display: flex; justify-content: center; }
+.vx-snack {
+  pointer-events: auto; touch-action: none; user-select: none; -webkit-user-select: none;
+  width: 100%; max-width: 480px; min-height: 48px; display: flex; align-items: center; gap: 10px; padding: 8px 14px;
+  background: var(--s3); border: 1px solid var(--hair); border-radius: 16px; box-shadow: 0 12px 32px rgba(0, 0, 0, .4);
+  color: var(--text); font-size: 14px; line-height: 19px;
+}
+.vx-snack[data-tone="error"] { background: linear-gradient(rgba(255, 107, 94, .12), rgba(255, 107, 94, .12)), var(--s3); border-color: rgba(255, 107, 94, .32); }
+.vx-snack-icon { display: flex; flex-shrink: 0; color: var(--text-2); }
+.vx-snack[data-tone="success"] .vx-snack-icon { color: var(--success); }
+.vx-snack[data-tone="error"] .vx-snack-icon { color: var(--danger); }
+.vx-snack-msg { flex: 1; min-width: 0; padding: 4px 0; overflow-wrap: anywhere; }
+.vx-snack-action, .vx-snack-close {
+  flex-shrink: 0; height: 40px; margin-inline-end: -8px; border: none; border-radius: 999px; background: transparent; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; -webkit-tap-highlight-color: transparent;
+  transition: background-color var(--dur-fast) var(--ease-standard);
+}
+.vx-snack-action { padding: 0 12px; color: var(--volt); font-size: 14px; font-weight: 600; }
+.vx-snack-action:active { background: rgba(214, 255, 92, .1); }
+.vx-snack-close { width: 40px; color: var(--text-2); }
+.vx-snack-close:active { background: rgba(255, 255, 255, .06); }
+
+/* ---- progress pill (interaction §2.6): narrative copy, elapsed time, fill bar ---- */
+.vx-progress {
+  position: relative; overflow: hidden; display: inline-flex; align-items: center; gap: 8px; max-width: 100%;
+  height: 40px; padding: 0 16px; border-radius: 999px; background: var(--s1); border: 1px solid var(--hair);
+  font-size: 14px; font-weight: 500; color: var(--text);
+}
+.vx-progress-icon { display: flex; flex-shrink: 0; color: var(--text-2); }
+.vx-progress[data-done] .vx-progress-icon { color: var(--success); }
+.vx-progress-label { position: relative; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.vx-progress-label > span { display: inline-block; }
+.vx-progress-time { flex-shrink: 0; font-size: 13px; color: var(--text-3); }
+.vx-progress-bar { position: absolute; inset-inline: 0; bottom: 0; height: 2px; background: rgba(255, 255, 255, .06); }
+.vx-progress-bar > span { position: absolute; inset: 0; background: var(--volt); transform-origin: left center; transform: scaleX(0); }
+[dir="rtl"] .vx-progress-bar > span { transform-origin: right center; }
+.vx-progress[data-done] .vx-progress-bar > span { background: var(--success); }
+
+/* ---- ticker: rolling digits (tabular) ---- */
+/* Each character is its own flex item, which bidi never reorders: pin the run LTR or a fa clock reads backwards */
+.vx-tick { position: relative; display: inline-flex; align-items: baseline; font-variant-numeric: tabular-nums; direction: ltr; unicode-bidi: isolate; }
+.vx-tick-col { display: inline-block; height: 1em; line-height: 1; overflow: hidden; vertical-align: -0.1em; }
+.vx-tick-reel { display: flex; flex-direction: column; }
+.vx-tick-reel > span { height: 1em; line-height: 1; text-align: center; }
+.vx-tick-sym { line-height: 1; }
+.vx-sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+
+/* ---- success mark ---- */
+.vx-done { position: relative; display: inline-grid; place-items: center; flex-shrink: 0; }
+.vx-done-ring { position: absolute; inset: 0; border-radius: 50%; border: 2px solid var(--volt); pointer-events: none; }
+
+/* ---- 1:1 call (board 1-1-call): glow, 260 cloud, status pill, waveform, caption card, control row ---- */
+.vx-call { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; overflow-x: hidden; overflow-y: auto; }
+.vx-call > .vx-topbar { position: relative; z-index: 1; }
+.vx-call-glow { position: absolute; top: 120px; left: 50%; width: 560px; height: 560px; margin-left: -280px; pointer-events: none; }
+.vx-call-end { display: inline-flex; align-items: center; justify-content: flex-end; gap: 2px; }
+.vx-call-signal { display: flex; color: var(--success); }
+.vx-call-stage { position: relative; flex: 1; display: flex; flex-direction: column; align-items: center; padding-top: clamp(16px, 6vh, 56px); }
+.vx-call-face { position: relative; display: grid; place-items: center; }
+.vx-call-stage > .vx-status { margin-top: 12px; }
+.vx-call-hint { margin: 8px 0 0; min-height: 18px; font-size: 13px; line-height: 18px; color: var(--text-2); text-align: center; }
+.vx-call-wave { margin-top: 20px; width: 189px; }
+.vx-call-wave > span { height: 36px; transform: scaleY(.12); transform-origin: center; }
+.vx-call-wave[data-phase="listening"] { --wave: var(--text); }
+.vx-call-wave[data-phase="thinking"], .vx-call-wave[data-phase="ready"] { --wave: var(--text-3); }
+.vx-call-wave[data-phase="speaking"] { --wave: var(--hue); }
+.vx-call-caption { align-self: stretch; margin-top: 20px; }
+.vx-call-banner { align-self: stretch; margin: 16px var(--gutter, 16px) 0; }
+.vx-call .vx-ctrls { position: relative; padding-top: 24px; }
+.vx-call-talk { position: relative; display: grid; place-items: center; }
+.vx-call-ring { position: absolute; inset: 0; border-radius: 50%; background: rgba(214, 255, 92, .18); pointer-events: none; }
+.vx-call-mic {
+  position: relative; width: 84px; height: 84px; border-radius: 50%; border: 1px solid var(--hair); cursor: pointer;
+  display: grid; place-items: center; background: var(--s2); color: var(--text);
+  transition: background-color var(--dur-fast) var(--ease-standard), color var(--dur-fast) var(--ease-standard), opacity var(--dur-fast) var(--ease-standard);
+}
+.vx-call-mic[data-on] { background: var(--volt); color: var(--on-volt); border-color: transparent; }
+.vx-call-mic:disabled { opacity: .5; cursor: default; }
+@media (prefers-reduced-motion: reduce) { .vx-call-mic { transition: none; } }

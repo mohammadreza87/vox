@@ -5,8 +5,9 @@
 
 import { z } from 'zod';
 import type { LLM, LLMMessage } from '../tireh/llm';
-import type { AgentLook, CloudFamily, Hue, PersonaSpec, Presentation, SpawnBrief } from './types';
+import type { Accessory, AgentLook, CloudFamily, CloudSpecies, HairStyle, HairTone, Hue, PersonaSpec, Presentation, SpawnBrief } from './types';
 import { HUES } from './types';
+import { ACCENT_COLORS, ACCESSORIES, DEFAULT_ACCENT, FAMILY_IDS, HAIR_STYLES, HAIR_TONES, SPECIES, isCompatible, suggestAccessories } from './character/look';
 
 const personaSchema = z.object({
   name: z.string().min(1).max(40),
@@ -29,11 +30,19 @@ const personaSchema = z.object({
   openness: z.number().int().min(0).max(100).default(50),
 });
 
+/** Claude's look: v2 fields are optional so a v1-shaped answer still parses (it renders as a plain cloud). */
 const lookSchema = z.object({
-  hue: z.enum(['apricot', 'rose', 'butter', 'matcha', 'lagoon', 'sky', 'lilac', 'ash']),
-  family: z.enum(['puff', 'tower', 'drift']),
+  hue: z.enum(HUES),
+  family: z.enum(FAMILY_IDS),
   features: z.object({ cheeks: z.boolean(), lashes: z.boolean(), brows: z.boolean() }),
+  species: z.enum(SPECIES).optional(),
+  hair: z.enum(HAIR_STYLES).optional(),
+  hairTone: z.enum(HAIR_TONES).optional(),
+  accessory: z.enum(ACCESSORIES).optional(),
+  accent: z.enum(ACCENT_COLORS).optional(),
 });
+/** What Claude is asked for: the character parts are required (hair tone and accent stay optional). */
+const promptLookSchema = lookSchema.extend({ species: z.enum(SPECIES), hair: z.enum(HAIR_STYLES), accessory: z.enum(ACCESSORIES) });
 
 const draftSchema = z.object({
   names: z.array(z.string().min(1).max(40)).min(1).max(3),
@@ -60,9 +69,29 @@ const PERSONA_RULES = `Rules:
 - "voiceBrief" is a description for a voice designer: gender presentation, age range, timbre, pace, energy, and accent with the language it applies to. Max 2 sentences.
 - "withStrangers" is how they treat people outside the company if they are made public, in their own character: what they happily talk about, what they keep private, and when they politely end a conversation (spam, abuse, endless requests). Max 2 sentences.
 - "openness" (0-100) is how readily they engage strangers: guarded personalities are low, sociable ones high.
-- "avatarHint" is one small respectful accessory or detail for a cute cloud mascot (e.g. "tiny headphones", "a small notebook"). Never national flags, religious symbols or costumes.
 - "culture" and "accent" are short labels. Put cultural background in backstory and voice detail in voiceBrief. Aim comfortably below each field's character limit.
 - Keep every field concise. Respond with JSON only.`;
+
+const LOOK_RULES = `Also design their mascot "look": a cute vinyl-toy cloud creature. Pick:
+- hue: a colour that suits their energy.
+- family: "puff" (wide and round), "tower" (a little taller, two shoulder puffs) or "drift" (asymmetric, the larger puff on the right).
+- species: "cloud" (pure cloud) or a light animal hint that suits their personality: cat, dog, bunny, bear, owl or chick. Never derive it from culture or gender.
+- hair: none, tuft, fringe, bun, curls, spiky or pony; optional hairTone: deep (a darker shade of the body), cream, cocoa, ink or a hue name.
+- accessory: one small item hinting at their work. Role guide: support → headset; research, analyst, finance → specs or glasses; design, creative, marketing → beret, flower or star; engineering, ops → headphones, cap or beanie; sales, exec, host → bowtie or scarf; coach, wellbeing → flower or scarf; anything else → none or bow.
+- features: cheeks, lashes and brows (on/off). Presentation may inform but never dictates any part.
+Combinations that never work: a beret, cap or beanie with tuft, bun or spiky hair; a chick with any hair (its crest is its hair); an owl with hair other than none or fringe; a bunny with a cap, a beanie or spiky hair; a drift dog with headphones or a headset.
+Surprise us: vary looks between agents.`;
+
+/** Drops the part that breaks a compatibility rule (an incompatible part is never worth failing a draft). */
+function repairLook(look: AgentLook): AgentLook {
+  let out = look;
+  for (let i = 0; i < 3; i++) {
+    const c = isCompatible(out);
+    if (c.ok) return out;
+    out = c.field === 'hair' ? { ...out, hair: 'none' } : { ...out, accessory: 'none', accent: DEFAULT_ACCENT.none };
+  }
+  return out;
+}
 
 function parseJsonObject(text: string): unknown {
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
@@ -153,11 +182,11 @@ export async function draftPersona(llm: LLM, brief: SpawnBrief, orgName: string)
   const parsed = await generateValidated(llm, {
     schema,
     // A malformed look still gets a random fallback at validation time.
-    promptSchema: draftSchema.extend({ look: lookSchema }),
+    promptSchema: draftSchema.extend({ look: promptLookSchema }),
     system: `You design AI personas for ${orgName}: a colleague, general assistant or companion as requested by the brief. Given a brief, propose a complete persona.
 ${PERSONA_RULES}
 Include every requested language in persona.languages using the names given in the brief.
-Also design their cloud mascot "look": pick a colour (hue) that suits their energy, a shape family ("puff": wide and round, "tower": tall with broad shoulders, "drift": asymmetric lens) and face features. Surprise us: vary looks between agents; presentation may inform but never dictate the shape.
+${LOOK_RULES}
 Offer up to three names in names, with your pick first and matching persona.name.
 Seed for variety (use it to vary colour and shape): ${Math.floor(Math.random() * 1e6)}`,
     user: briefToText(brief),
@@ -165,7 +194,7 @@ Seed for variety (use it to vary colour and shape): ${Math.floor(Math.random() *
   });
   const persona = parsed.persona as PersonaSpec;
   const look = lookSchema.safeParse(parsed.look);
-  return { names: parsed.names, persona, look: look.success ? (look.data as AgentLook) : randomLook(persona.presentation) };
+  return { names: parsed.names, persona, look: look.success ? repairLook(look.data as AgentLook) : randomLook(persona.presentation, Math.random, persona.role) };
 }
 
 /** Validate a hand-edited persona (PATCH): same rules as Claude's output. */
@@ -188,24 +217,29 @@ Return the full persona JSON object with the same fields.`,
 }
 
 /**
- * A random cloud look. Shape family leans on presentation (puff / tower /
+ * A random character look. Shape family leans on presentation (puff / tower /
  * drift), but one time in four it is shuffled so looks never become a rule;
- * colour and face features are random. `rand` is injectable for tests.
+ * colour, face, species and hair are random, and the accessory leans on the
+ * role (character §6). Always compatible. `rand` is injectable for tests.
  */
-export function randomLook(presentation: Presentation, rand: () => number = Math.random): AgentLook {
+export function randomLook(presentation: Presentation, rand: () => number = Math.random, role?: string): AgentLook {
+  const pick = <T,>(list: readonly T[]): T => list[Math.floor(rand() * list.length) % list.length];
   const families: CloudFamily[] = ['puff', 'tower', 'drift'];
   const leaning: CloudFamily = presentation === 'feminine' ? 'puff' : presentation === 'masculine' ? 'tower' : 'drift';
   const family = rand() < 0.75 ? leaning : families[Math.floor(rand() * 3) % 3];
   const hue: Hue = HUES[Math.floor(rand() * HUES.length) % HUES.length];
-  return {
-    hue,
-    family,
-    features: {
-      cheeks: family !== 'tower' ? rand() < 0.85 : rand() < 0.3,
-      lashes: family === 'puff' ? rand() < 0.7 : rand() < 0.1,
-      brows: family === 'tower' ? rand() < 0.8 : rand() < 0.15,
-    },
+  const features = {
+    cheeks: family !== 'tower' ? rand() < 0.85 : rand() < 0.3,
+    lashes: family === 'puff' ? rand() < 0.7 : rand() < 0.1,
+    brows: family === 'tower' ? rand() < 0.8 : rand() < 0.15,
   };
+  const species: CloudSpecies = pick(SPECIES);
+  const hair: HairStyle = rand() < 0.3 ? 'none' : pick(HAIR_STYLES.slice(1));
+  // mostly the same-hue deep tone; never the body's own hue (it would vanish)
+  const hairTone: HairTone = rand() < 0.55 ? 'deep' : pick((['cocoa', 'ink', 'cream', ...HUES] as HairTone[]).filter((t) => t !== hue));
+  const suggested = role?.trim() ? suggestAccessories(role) : [];
+  const accessory: Accessory = suggested.length && rand() < 0.7 ? pick(suggested) : pick(ACCESSORIES);
+  return repairLook({ hue, family, features, species, hair, hairTone, accessory, accent: DEFAULT_ACCENT[accessory] });
 }
 
 export function suggestUsername(name: string, org = 'hoor'): string {

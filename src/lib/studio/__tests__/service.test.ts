@@ -3,10 +3,12 @@ import { join } from 'path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { MemoryRecord, MemoryScope } from '../../tireh/types';
 import { groupText } from '../../tireh/__tests__/fixtures';
+import { GROUND_COLOR, isCompatible } from '../character';
+import { PORTRAIT_MOODS } from '../character/portrait';
 import { decryptSecret } from '../crypto';
 import { defaultVoiceId } from '../media';
 import { groupId, personId } from '../org-bridge';
-import { StudioError } from '../service';
+import { keepSelected, Studio, StudioError } from '../service';
 import { draftJson, fakeMember, hire, ID, makeStudio, personaSpec, SECRET, seedOrg, T0, type Harness } from './helpers';
 
 type Org = Awaited<ReturnType<typeof seedOrg>>;
@@ -186,8 +188,9 @@ describe('spawn: draft, refine, look, avatars, voice, sandbox, publish', () => {
     h.personaLLM.push(draftJson());
     const { agent } = await h.studio.draft(org.alice, {});
     const withAvatars = await h.studio.generateAvatars(org.alice, agent.id, 3);
-    expect(h.openai.generateAvatar).toHaveBeenCalledTimes(3);
-    const prompts = h.openai.generateAvatar.mock.calls.map((c) => c[0]);
+    expect(h.openai.editAvatar).toHaveBeenCalledTimes(3);
+    expect(h.openai.generateAvatar).not.toHaveBeenCalled();
+    const prompts = h.openai.editAvatar.mock.calls.map((c) => c[0]);
     expect(new Set(prompts).size).toBe(3);
     const variants = withAvatars.look.avatarVariants!;
     expect(variants).toHaveLength(3);
@@ -200,17 +203,162 @@ describe('spawn: draft, refine, look, avatars, voice, sandbox, publish', () => {
     await expectStudioError(h.studio.chooseAvatar(org.alice, agent.id, 'av-other.jpg'), 400, /Unknown avatar/);
     const cleared = await h.studio.chooseAvatar(org.alice, agent.id, null);
     expect(cleared.look.avatar).toBeUndefined();
+
+    // Generating again always makes the newest picture the photo, keeping the earlier batch.
+    const again = await h.studio.generateAvatars(org.alice, agent.id, 1);
+    expect(again.look.avatar).toBe(again.look.avatarVariants![0]);
+    expect(again.look.avatarVariants).toEqual([again.look.avatar, ...variants]);
+    const regenerated = await h.studio.generateAvatars(org.alice, agent.id, 1);
+    expect(regenerated.look.avatar).not.toBe(again.look.avatar);
+    expect(regenerated.look.avatarVariants!.slice(0, 2)).toEqual([regenerated.look.avatar, again.look.avatar]);
+  });
+
+  it('normalises generated pictures through imageToJpeg and records the look each was drawn from', async () => {
+    h.personaLLM.push(draftJson());
+    const { agent } = await h.studio.draft(org.alice, {});
+    const view = await h.studio.generateAvatars(org.alice, agent.id, 2);
+    expect(h.imageToJpeg).toHaveBeenCalledTimes(2);
+    for (const file of view.look.avatarVariants!) expect(readFileSync(join(h.store.mediaDir, file)).toString()).toMatch(/^JPEG:edit:\d+$/);
+    expect(Object.keys(view.look.avatarLooks!).sort()).toEqual([...view.look.avatarVariants!].sort());
+    expect(new Set(Object.values(view.look.avatarLooks!)).size).toBe(1);
+
+    h.imageToJpeg.mockRejectedValueOnce(new Error('not an image'));
+    await expectStudioError(h.studio.generateAvatars(org.alice, agent.id, 1), 502, /couldn't be read/);
+    expect((await h.studio.getAgent(org.alice, agent.id)).look.avatarVariants).toEqual(view.look.avatarVariants);
+  });
+
+  it('keeps the selected picture when the 12-variant cap would evict it', async () => {
+    h.personaLLM.push(draftJson());
+    const { agent } = await h.studio.draft(org.alice, {});
+    const first = await h.studio.generateAvatars(org.alice, agent.id, 2);
+    const oldest = first.look.avatarVariants![1];
+    await h.studio.chooseAvatar(org.alice, agent.id, oldest);
+    for (let i = 0; i < 6; i++) await h.studio.generateAvatars(org.alice, agent.id, 2, { select: false });
+    const view = await h.studio.getAgent(org.alice, agent.id);
+    expect(view.look.avatar).toBe(oldest);
+    expect(view.look.avatarVariants).toHaveLength(12);
+    expect(view.look.avatarVariants!.at(-1)).toBe(oldest);
+    expect(Object.keys(view.look.avatarLooks!).sort()).toEqual([...view.look.avatarVariants!].sort());
+    expect(Object.keys(view.look.avatarVia!).sort()).toEqual([...view.look.avatarVariants!].sort());
+    expect((await h.studio.chooseAvatar(org.alice, agent.id, oldest)).look.avatar).toBe(oldest);
+
+    const uploaded = await h.studio.uploadAvatar(org.alice, agent.id, Buffer.from('PNG'), 'image/png');
+    expect(uploaded.look.avatarVariants).toHaveLength(12);
+    expect(uploaded.look.avatarVariants![0]).toBe(uploaded.look.avatar);
+    expect(uploaded.look.avatarVariants).toContain(oldest);
+  });
+
+  it('keepSelected caps the list, de-duplicates and keeps the selection in the last slot', () => {
+    const list = Array.from({ length: 14 }, (_, i) => `f${i}`);
+    expect(keepSelected(list)).toEqual(list.slice(0, 12));
+    expect(keepSelected(list, 'f3')).toEqual(list.slice(0, 12));
+    expect(keepSelected(list, 'f13')).toEqual([...list.slice(0, 11), 'f13']);
+    expect(keepSelected(['a', 'b', 'a'], 'b', 2)).toEqual(['a', 'b']);
+  });
+
+  it('setLook takes character fields only: avatar fields are ignored, bad features and clashing combos are refused', async () => {
+    h.personaLLM.push(draftJson());
+    const { agent } = await h.studio.draft(org.alice, {});
+    const before = await h.studio.generateAvatars(org.alice, agent.id, 1);
+    const patched = await h.studio.setLook(org.alice, agent.id, {
+      hue: 'rose', avatar: 'av-someone-else.jpg', avatarSource: 'custom', avatarVariants: ['av-someone-else.jpg'], avatarLooks: { x: 'y' },
+    });
+    expect(patched.look).toMatchObject({ hue: 'rose', avatar: before.look.avatar, avatarSource: 'generated', avatarVariants: before.look.avatarVariants });
+    expect(patched.look.avatarLooks).toEqual(before.look.avatarLooks);
+
+    await expectStudioError(h.studio.setLook(org.alice, agent.id, { features: { cheeks: 'yes' } }), 400, /on or off/);
+    await expectStudioError(h.studio.setLook(org.alice, agent.id, { species: 'dragon' }), 400, /species/);
+    await expectStudioError(h.studio.setLook(org.alice, agent.id, { species: 'bunny', hair: 'spiky' }), 400, /bunny/i);
+    await expectStudioError(h.studio.setLook(org.alice, agent.id, 'nonsense'), 400);
+    const v2 = await h.studio.setLook(org.alice, agent.id, { species: 'cat', hair: 'fringe', accessory: 'beret' });
+    expect(v2.look).toMatchObject({ species: 'cat', hair: 'fringe', accessory: 'beret', accent: 'berry', hue: 'rose' });
+    const random = await h.studio.setLook(org.alice, agent.id, 'random');
+    expect(random.look.avatar).toBe(before.look.avatar);
+    expect(isCompatible(random.look)).toEqual({ ok: true });
+  });
+
+  it('parallel single-portrait requests on separate instances reserve different moods from the store', async () => {
+    h.personaLLM.push(draftJson());
+    const { agent } = await h.studio.draft(org.alice, {});
+    const other = new Studio({ ...h.studio.deps });
+    await Promise.all([h.studio, other].map((s) => s.generateAvatars(org.alice, agent.id, 1, { select: false })));
+    const moods = (prompts: string[]) => prompts.map((p) => PORTRAIT_MOODS.findIndex((m) => p.includes(`Expression: ${m.text}.`))).sort();
+    expect(moods(h.openai.editAvatar.mock.calls.map((c) => c[0]))).toEqual([0, 1]);
+    h.openai.editAvatar.mockClear();
+    await Promise.all([other, h.studio].map((s) => s.generateAvatars(org.alice, agent.id, 1, { select: false })));
+    expect(moods(h.openai.editAvatar.mock.calls.map((c) => c[0]))).toEqual([2, 3]);
   });
 
   it('clamps the avatar count to 1..4 and treats a non-number as the default 2', async () => {
     h.personaLLM.push(draftJson());
     const { agent } = await h.studio.draft(org.alice, {});
     await h.studio.generateAvatars(org.alice, agent.id, 99);
-    expect(h.openai.generateAvatar).toHaveBeenCalledTimes(4);
-    h.openai.generateAvatar.mockClear();
+    expect(h.openai.editAvatar).toHaveBeenCalledTimes(4);
+    h.openai.editAvatar.mockClear();
     const v = await h.studio.generateAvatars(org.alice, agent.id, Number('abc'));
-    expect(h.openai.generateAvatar).toHaveBeenCalledTimes(2);
+    expect(h.openai.editAvatar).toHaveBeenCalledTimes(2);
     expect(v.look.avatarVariants).toHaveLength(6);
+  });
+
+  it('draws portraits from the stage-4 vector of the current look, falling back to a text-only prompt', async () => {
+    h.personaLLM.push(draftJson());
+    const { agent } = await h.studio.draft(org.alice, {});
+    await h.studio.setLook(org.alice, agent.id, { species: 'cat', hair: 'bun', accessory: 'glasses' });
+    await h.studio.generateAvatars(org.alice, agent.id, 1);
+    const [svg, size] = h.svgToPng.mock.lastCall!;
+    expect(size).toBe(1024);
+    expect(svg).toMatch(/^<svg[^>]+width="1024"/);
+    expect(svg).toContain(GROUND_COLOR);
+    const [prompt, reference] = h.openai.editAvatar.mock.lastCall!;
+    expect(reference).toEqual(await h.svgToPng.mock.results.at(-1)!.value);
+    expect(prompt).toMatch(/reference/i);
+    expect(h.logger.info).toHaveBeenLastCalledWith({ type: 'studio_portrait', via: 'edit' });
+
+    // A refused edit falls back to text, without the reference wording.
+    h.openai.editAvatar.mockRejectedValueOnce(new Error('OpenAI image edit failed: HTTP 400'));
+    const fallback = await h.studio.generateAvatars(org.alice, agent.id, 1);
+    expect(h.openai.generateAvatar).toHaveBeenCalledTimes(1);
+    expect(h.openai.generateAvatar.mock.lastCall![0]).not.toMatch(/reference/i);
+    expect(readFileSync(join(h.store.mediaDir, fallback.look.avatar!)).toString()).toMatch(/^JPEG:jpeg:\d+$/);
+    expect(h.logger.info).toHaveBeenLastCalledWith({ type: 'studio_portrait', via: 'text' });
+    expect(fallback.look.avatarVia).toMatchObject({ [fallback.look.avatar!]: 'text', [fallback.look.avatarVariants![1]]: 'edit' });
+    expect(h.logger.warn).toHaveBeenLastCalledWith({ type: 'studio_portrait', outcome: 'edit_failed', fallback: 'text' });
+    expect(JSON.stringify(h.logger.warn.mock.calls)).not.toContain('HTTP 400');
+
+    // Both failing adds nothing and keeps the current photo.
+    h.openai.editAvatar.mockRejectedValueOnce(new Error('OpenAI image edit failed: HTTP 400'));
+    h.openai.generateAvatar.mockRejectedValueOnce(new Error('OpenAI image generation failed: HTTP 500'));
+    await expect(h.studio.generateAvatars(org.alice, agent.id, 1)).rejects.toThrow(/generation failed/);
+    const after = await h.studio.getAgent(org.alice, agent.id);
+    expect(after.look.avatar).toBe(fallback.look.avatar);
+    expect(after.look.avatarVariants).toHaveLength(2);
+
+    // The A/B switch: text-first skips the reference entirely.
+    h.studio.deps.portraitVia = 'text';
+    h.openai.editAvatar.mockClear(); h.svgToPng.mockClear();
+    await h.studio.generateAvatars(org.alice, agent.id, 1);
+    expect(h.svgToPng).not.toHaveBeenCalled();
+    expect(h.openai.editAvatar).not.toHaveBeenCalled();
+  });
+
+  it('draws text-only portraits when the server has no SVG rasteriser', async () => {
+    const bare = makeStudio({ svgToPng: false });
+    const o = await seedOrg(bare);
+    bare.personaLLM.push(draftJson());
+    const { agent } = await bare.studio.draft(o.alice, {});
+    const view = await bare.studio.generateAvatars(o.alice, agent.id, 1);
+    expect(bare.openai.editAvatar).not.toHaveBeenCalled();
+    expect(bare.openai.generateAvatar).toHaveBeenCalledTimes(1);
+    expect(view.look.avatarVariants).toHaveLength(1);
+  });
+
+  it('gives the two parallel single-portrait requests of one tap different moods', async () => {
+    h.personaLLM.push(draftJson());
+    const { agent } = await h.studio.draft(org.alice, {});
+    await Promise.all([1, 2].map(() => h.studio.generateAvatars(org.alice, agent.id, 1, { select: false })));
+    const [a, b] = h.openai.editAvatar.mock.calls.map((c) => c[0]);
+    expect(a).not.toBe(b);
+    expect((await h.studio.getAgent(org.alice, agent.id)).look.avatarVariants).toHaveLength(2);
   });
 
   it('avatar generation needs an OpenAI key (503)', async () => {
@@ -253,7 +401,7 @@ describe('spawn: draft, refine, look, avatars, voice, sandbox, publish', () => {
     await expectStudioError(h.studio.chooseDesignedVoice(org.alice, agent.id, 'gen-4'), 400, /Unknown voice preview/);
     const chosen = await h.studio.chooseDesignedVoice(org.alice, agent.id, 'gen-2');
     expect(h.eleven.saveDesignedVoice).toHaveBeenCalledWith('gen-2', `HOOR Nova ${agent.id}`, 'Calm alto, 30s');
-    expect(chosen.voice).toEqual({ label: 'Designed voice · Tehrani', source: 'design' });
+    expect(chosen.voice).toEqual({ label: 'Designed voice · Tehrani', source: 'design', choiceId: 'gen-2' });
     // The internal voice id never leaks into the view.
     expect(JSON.stringify(chosen)).not.toContain('voice-designed');
   });
@@ -263,7 +411,8 @@ describe('spawn: draft, refine, look, avatars, voice, sandbox, publish', () => {
     const { agent } = await h.studio.draft(org.alice, {});
     const chosen = await h.studio.chooseLibraryVoice(org.alice, agent.id, { publicOwnerId: 'o1', voiceId: 'v1', name: 'Sam' });
     expect(h.eleven.addLibraryVoice).toHaveBeenCalledWith('o1', 'v1', 'HOOR Sam');
-    expect(chosen.voice).toEqual({ label: 'Sam · voice library', source: 'library' });
+    expect(chosen.voice).toEqual({ label: 'Sam · voice library', source: 'library', choiceId: 'v1' });
+    expect(JSON.stringify(chosen)).not.toContain('voice-library');
     expect((await h.store.read()).agents[0].voice?.voiceId).toBe('voice-library');
   });
 
@@ -492,27 +641,46 @@ describe('forming period and personality lock', () => {
     expect((await h.studio.updatePersona(org.admin, agent.id, { tagline: 'by admin' })).persona.tagline).toBe('by admin');
   });
 
-  it('after 7 days every persona/look/avatar edit is refused with "fire and hire a successor"', async () => {
+  it('after 7 days every personality edit is refused with "fire and hire a successor"', async () => {
     const { agent } = await hire(h, org.alice);
-    await h.studio.generateAvatars(org.alice, agent.id, 1);
-    const variant = (await h.store.read()).agents[0].look.avatarVariants![0];
     h.advanceDays(7);
     const view = await h.studio.getAgent(org.alice, agent.id);
-    expect(view).toMatchObject({ locked: true, formingDay: null, canEdit: false });
+    expect(view).toMatchObject({ locked: true, formingDay: null, canEdit: false, canEditLook: true });
 
     const locked = /locked\. To change it, fire and hire a successor/;
     for (const actor of [org.alice, org.admin, org.superadmin]) {
       await expectStudioError(h.studio.updatePersona(actor, agent.id, { tagline: 'x' }), 403, locked);
       await expectStudioError(h.studio.refine(actor, agent.id, 'nicer'), 403, locked);
-      await expectStudioError(h.studio.setLook(actor, agent.id, { hue: 'rose' }), 403, locked);
-      await expectStudioError(h.studio.setLook(actor, agent.id, 'random'), 403, locked);
-      await expectStudioError(h.studio.chooseAvatar(actor, agent.id, variant), 403, locked);
-      await expectStudioError(h.studio.generateAvatars(actor, agent.id), 403, locked);
-      await expectStudioError(h.studio.uploadAvatar(actor, agent.id, Buffer.from('x'), 'image/png'), 403, locked);
       await expectStudioError(h.studio.chooseLibraryVoice(actor, agent.id, { publicOwnerId: 'o', voiceId: 'v', name: 'n' }), 403, locked);
     }
     expect(h.personaLLM.requests).toHaveLength(1); // only the original draft
     expect((await h.store.read()).agents[0].identityVersion).toBe(1);
+  });
+
+  it('look and photo stay editable after the lock for the creator and admins, not for other members', async () => {
+    const { agent, bot } = await hire(h, org.alice);
+    h.advanceDays(10);
+    expect((await h.studio.getAgent(org.bob, agent.id)).canEditLook).toBe(false);
+    for (const actor of [org.alice, org.admin, org.superadmin]) {
+      expect((await h.studio.setLook(actor, agent.id, { hue: 'rose' })).look.hue).toBe('rose');
+      expect((await h.studio.setLook(actor, agent.id, 'random')).look.hue).toMatch(/apricot|rose|butter|matcha|lagoon|sky|lilac|ash/);
+      const generated = await h.studio.generateAvatars(actor, agent.id, 1);
+      expect((await h.studio.chooseAvatar(actor, agent.id, null)).look.avatar).toBeUndefined();
+      expect((await h.studio.chooseAvatar(actor, agent.id, generated.look.avatar!)).look.avatar).toBe(generated.look.avatar);
+      expect((await h.studio.uploadAvatar(actor, agent.id, Buffer.from('PNG'), 'image/png')).look.avatarSource).toBe('custom');
+    }
+    const variant = (await h.store.read()).agents[0].look.avatarVariants![0];
+    await expectStudioError(h.studio.setLook(org.bob, agent.id, { hue: 'sky' }), 403, /creator or an admin/);
+    await expectStudioError(h.studio.chooseAvatar(org.bob, agent.id, variant), 403);
+    await expectStudioError(h.studio.generateAvatars(org.bob, agent.id), 403);
+    await expectStudioError(h.studio.uploadAvatar(org.bob, agent.id, Buffer.from('x'), 'image/png'), 403);
+    expect(bot().setMyProfilePhoto).toHaveBeenLastCalledWith(Buffer.from('JPEG:PNG'));
+    expect((await h.store.read()).agents[0].identityVersion).toBe(1);
+    // Only appearance unlocks: the personality stays locked for everyone.
+    for (const actor of [org.alice, org.admin]) await expectStudioError(h.studio.updatePersona(actor, agent.id, { tagline: 'New' }), 403, /locked/);
+
+    await h.studio.fire(org.admin, agent.id, { reason: '', memoryPolicy: 'archive', confirmName: 'Nova' });
+    await expectStudioError(h.studio.setLook(org.admin, agent.id, { hue: 'sky' }), 403, /retired/);
   });
 });
 
@@ -717,6 +885,8 @@ describe('groups', () => {
     expect(await h.studio.listGroups(org.bob)).toEqual([]);
     const [g] = await h.studio.listGroups(org.admin);
     expect(g.agents.map((x) => x.name)).toEqual(['Nova']);
+    // Group faces grow with the agent: the server's stage, never a default full face (PLAN D7)
+    expect(g.agents[0].stage).toBe(1);
   });
 
   it('in a group with unknown readers only the current exchange reaches the model', async () => {

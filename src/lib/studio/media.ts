@@ -8,41 +8,24 @@ import { measureStage, unavailableUsage, captureUsage } from '../adaptive/observ
  */
 
 import type { AgentLook, PersonaSpec } from './types';
+import { avatarPromptV2 } from './character/portrait';
 import { assertExportAuthority, type ExportAuthority, type VoiceService } from '../tireh/voice';
 import type { DecisionAnswer, DecisionQuestion } from '../tireh/triage';
 import { logTelegramDiagnostic } from '../tireh/telegram/diagnostics';
 
 type FetchFn = typeof fetch;
 
-const PALETTE: Record<string, [string, string, string, string]> = {
-  apricot: ['Apricot', '#FFB38A', '#FFD9C2', '#E5835A'],
-  rose: ['Rosé', '#FF9DB5', '#FFD1DD', '#E06A8A'],
-  butter: ['Butter', '#FFE07A', '#FFF1BF', '#E0B23E'],
-  matcha: ['Matcha', '#A8E07A', '#D7F5BF', '#6FB247'],
-  lagoon: ['Lagoon', '#6FE0D0', '#BFF5EE', '#34AFA0'],
-  sky: ['Sky', '#8CC8FF', '#CFE6FF', '#5294DC'],
-  lilac: ['Lilac', '#C3A6FF', '#E6DBFF', '#8D6BDB'],
-  ash: ['Ash', '#B9BEC8', '#E3E6EB', '#868C99'],
-};
-
-const SHAPES: Record<string, string> = {
-  puff: 'Puff: wide, low, round soft lobes',
-  tower: 'Tower: taller cumulus, flatter base, broad shoulders',
-  drift: 'Drift: asymmetric lens-shaped',
-};
-
-const FACE: Record<string, string> = {
-  feminine: 'soft cheek blush and two tiny lash ticks',
-  masculine: 'short soft brow strokes',
-  neutral: 'small cheek dots',
-};
-
+/**
+ * Text-only portrait prompt in the character v2 vocabulary (one palette, the
+ * renderer's enums). Portraits go through character/portrait.ts renderPortrait,
+ * which prefers re-rendering the vector reference.
+ */
 export function avatarPrompt(persona: PersonaSpec, look: AgentLook, variant = 0): string {
-  const [colorName, base, light, shadow] = PALETTE[look.hue] ?? PALETTE.lilac;
-  const expressions = ['gentle closed-mouth smile', 'curious, eyes slightly wide', 'happy, small open smile', 'calm and attentive'];
-  return `A single cute minimal character: a soft cumulus cloud creature, ${SHAPES[look.family]} silhouette. Body colour ${colorName} ${base}, lit softly from the upper left so it lightens to ${light} and shades to ${shadow} at the lower right. Face: two glossy vertical oval eyes in near-black #1A1C22 with one small white highlight each, a small curved mouth, ${FACE[persona.presentation] ?? FACE.neutral}. Expression: ${expressions[variant % expressions.length]}. One small accessory hinting at their work as ${persona.role}: ${persona.avatarHint || 'none'}, simple and respectful, not a costume. Smooth matte vinyl-toy finish, subtle rim glow, centred, square, plain flat background #0E1013, generous padding.
-Avoid: text, letters, logos, watermarks, emoji style, robots, circuits, gradient backgrounds, sparkles, realistic human features, noses, teeth, limbs, hands, gendered clothing stereotypes, religious or national symbols, caricature, multiple characters, busy backgrounds, photorealism, harsh outlines.`;
+  return avatarPromptV2(persona, look, variant, false);
 }
+
+/** Image edits are slower than generations; leave the text fallback room inside the route's 120 s budget. */
+const EDIT_TIMEOUT_MS = 75_000;
 
 export class OpenAIMedia {
   constructor(
@@ -94,6 +77,33 @@ export class OpenAIMedia {
     const json = (await response.json().catch(() => ({}))) as { data?: Array<{ b64_json?: string }>; error?: { message?: string } };
     const b64 = json.data?.[0]?.b64_json;
     if (!response.ok || !b64) throw new Error(`OpenAI image generation failed: ${json.error?.message ?? `HTTP ${response.status}`}`);
+    return Buffer.from(b64, 'base64');
+  }
+
+  /**
+   * Re-renders a reference image (the stage-4 vector PNG) with gpt-image edits.
+   * `input_fidelity: high` keeps the silhouette, parts and face placement.
+   * Returns a JPEG; throws on any refusal so the caller can fall back to text.
+   */
+  async editAvatar(prompt: string, referencePng: Buffer, timeoutMs = EDIT_TIMEOUT_MS): Promise<Buffer> {
+    const form = new FormData();
+    form.append('model', this.imageModel);
+    form.append('image', new Blob([new Uint8Array(referencePng)], { type: 'image/png' }), 'reference.png');
+    form.append('prompt', prompt);
+    form.append('size', '1024x1024');
+    form.append('quality', 'medium');
+    form.append('output_format', 'jpeg');
+    form.append('input_fidelity', 'high');
+    form.append('n', '1');
+    const response = await this.fetchFn('https://api.openai.com/v1/images/edits', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${this.apiKey}` },
+      body: form,
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    const json = (await response.json().catch(() => ({}))) as { data?: Array<{ b64_json?: string }>; error?: { message?: string } };
+    const b64 = json.data?.[0]?.b64_json;
+    if (!response.ok || !b64) throw new Error(`OpenAI image edit failed: ${json.error?.message ?? `HTTP ${response.status}`}`);
     return Buffer.from(b64, 'base64');
   }
 

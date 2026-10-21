@@ -1,6 +1,7 @@
 import { TurnTrace } from '../../adaptive/observation/trace';
 import { describe, expect, it, vi } from 'vitest';
 import { avatarPrompt, ElevenLabsSpeechError, ElevenLabsStudio, OpenAIMedia, StudioVoiceService } from '../media';
+import { TONES } from '../character';
 import { personaSpec } from './helpers';
 
 function fakeFetch(...responses: Array<{ status?: number; json?: unknown; body?: ArrayBuffer }>) {
@@ -21,14 +22,18 @@ function fakeFetch(...responses: Array<{ status?: number; json?: unknown; body?:
 const look = { hue: 'lagoon' as const, family: 'tower' as const, features: { cheeks: false, lashes: false, brows: true } };
 
 describe('avatarPrompt', () => {
-  it('describes the cloud in the agent\'s colour and shape, with a varied expression and safe guidance', () => {
+  it('is the v2 text prompt: one palette, the look\'s own parts, a varied mood and safe guidance', () => {
     const p0 = avatarPrompt(personaSpec({ presentation: 'masculine' }), look, 0);
     const p1 = avatarPrompt(personaSpec({ presentation: 'masculine' }), look, 1);
-    expect(p0).toContain('Lagoon #6FE0D0');
-    expect(p0).toContain('Tower');
+    expect(p0).toContain(`Lagoon ${TONES.lagoon.base}`);
+    expect(p0).toContain('slightly taller dome');
     expect(p0).toContain('brow strokes');
-    expect(p0).toContain('a small notebook');
+    expect(p0).toContain('pure cloud creature');
     expect(p0).toContain('religious or national symbols');
+    // the accessory comes from the look, never from free text that would disagree with the vector
+    expect(p0).not.toContain('a small notebook');
+    expect(p0).toContain('Accessory: none');
+    expect(p0).not.toContain('Re-render the character in the reference image');
     expect(p0).not.toBe(p1);
   });
 });
@@ -43,6 +48,30 @@ describe('OpenAIMedia', () => {
     expect(url).toBe('https://api.openai.com/v1/images/generations');
     expect((init!.headers as Record<string, string>).Authorization).toBe('Bearer sk-test');
     expect(JSON.parse(init!.body as string)).toMatchObject({ model: 'gpt-image-1', prompt: 'a cloud', size: '1024x1024', n: 1, output_format: 'jpeg' });
+  });
+
+  it('edits a reference PNG as multipart, with high input fidelity, and decodes the JPEG', async () => {
+    const fetchFn = fakeFetch({ json: { data: [{ b64_json: Buffer.from('EDITED').toString('base64') }] } });
+    const media = new OpenAIMedia('sk-test', fetchFn, 'gpt-image-1', 'stt');
+    const out = await media.editAvatar('re-render it', Buffer.from('PNGREF'));
+    expect(out.toString()).toBe('EDITED');
+    const [url, init] = fetchFn.mock.calls[0];
+    expect(url).toBe('https://api.openai.com/v1/images/edits');
+    expect((init!.headers as Record<string, string>).Authorization).toBe('Bearer sk-test');
+    expect(init!.signal).toBeInstanceOf(AbortSignal);
+    const form = init!.body as FormData;
+    expect(Object.fromEntries(['model', 'prompt', 'size', 'quality', 'output_format', 'input_fidelity', 'n'].map((k) => [k, form.get(k)]))).toEqual({
+      model: 'gpt-image-1', prompt: 're-render it', size: '1024x1024', quality: 'medium', output_format: 'jpeg', input_fidelity: 'high', n: '1',
+    });
+    const image = form.get('image') as File;
+    expect(image).toMatchObject({ type: 'image/png', name: 'reference.png', size: 'PNGREF'.length });
+  });
+
+  it('throws on a refused or empty edit so the caller can fall back to text', async () => {
+    const refused = new OpenAIMedia('k', fakeFetch({ status: 400, json: { error: { message: 'safety system' } } }));
+    await expect(refused.editAvatar('x', Buffer.from('p'))).rejects.toThrow('OpenAI image edit failed: safety system');
+    const empty = new OpenAIMedia('k', fakeFetch({ status: 200, json: { data: [] } }));
+    await expect(empty.editAvatar('x', Buffer.from('p'))).rejects.toThrow('HTTP 200');
   });
 
   it('surfaces API errors', async () => {

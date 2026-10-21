@@ -5,6 +5,7 @@ import type { PreferenceValue } from '@/lib/adaptive/personalization';
 import { experienceApi } from '../_lib/experience-client';
 import { pauseText } from '../_lib/product-pause-copy';
 import { ApiError } from '../_lib/client';
+import { Banner, Icon, Seg, SkeletonRows } from './ui';
 
 const choices = {
   response_length: [['brief', 'Brief', 'کوتاه'], ['balanced', 'Balanced', 'متعادل'], ['detailed', 'Detailed', 'با جزئیات']],
@@ -27,25 +28,29 @@ function PreferenceRow({ entry, fa, busy, limited, act, space }: { entry: Prefer
   act(action: 'set' | 'reset' | 'undo', setting: PreferenceValue, changeId?: string): void }) {
   const key = entry.setting.key;
   const [selected, setSelected] = useState(entry.saved?.status === 'active' ? entry.saved.setting.value : entry.setting.value);
-  const value = { key, value: selected } as PreferenceValue;
   const title = names[key][fa ? 1 : 0];
   const restore = entry.undo?.restore;
-  return <article aria-label={fa ? `ترجیح: ${title}` : `${title} preference`} className="vx-preference-row">
-    <label>{title}<select className="vx-input" disabled={busy} value={selected} onChange={event => setSelected(event.target.value as typeof selected)}>
-      {choices[key].map(([option, en, persian]) => <option value={option} key={option}>{fa ? persian : en}</option>)}
-    </select></label>
-    <p className="vx-small vx-2">{limited ? (fa ? 'دلیل دقیق و واگرد اینجا در دسترس نیست. ذخیره و بازنشانی ترجیح همچنان ممکن است.'
-      : 'Detailed explanations and undo are unavailable here. You can still save or reset a preference.') : entry.explanation === 'product_personalization_paused' ? pauseText(fa ? 'fa' : 'en', space, 'preference') : explanations[entry.explanation][fa ? 1 : 0]}</p>
-    {entry.saved?.status === 'active' && !entry.applied && <p className="vx-small">{fa ? 'انتخاب ذخیره‌شده: ' : 'Saved choice: '}{choiceName(entry.saved.setting, fa)}</p>}
-    <div className="vx-privacy-actions">
-      <button className="vx-btn vx-btn-secondary" disabled={busy} onClick={() => act('set', value)}>{fa ? 'ذخیرهٔ ترجیح' : 'Save preference'}</button>
-      <button className="vx-btn vx-btn-secondary" disabled={busy} onClick={() => act('reset', value)}>{fa ? 'بازنشانی' : 'Reset'}</button>
-      {entry.undo && <button className="vx-btn vx-btn-secondary" disabled={busy} onClick={() => act('undo', value, entry.undo!.changeId)}>{fa ? 'واگرد آخرین تغییر' : 'Undo last change'}</button>}
+  // Choosing is saving (auto-save); every confirmed revision remounts the row with the server's answer.
+  const choose = (value: string) => { setSelected(value as typeof selected); act('set', { key, value } as PreferenceValue); };
+  return <article aria-label={fa ? `ترجیح: ${title}` : `${title} preference`} className="vx-row top vx-pref">
+    <div className="vx-pref-head">
+      <span className="vx-row-title plain">{title}</span>
+      {entry.saved?.status === 'active' && entry.applied && <span className="vx-pill live">{fa ? 'انتخاب شما' : 'Your choice'}</span>}
     </div>
-    {entry.undo && <p className="vx-small vx-2">{!restore ? (fa ? 'واگرد، انتخاب ذخیره‌شده را برمی‌دارد.' : 'Undo removes the saved choice.')
+    <Seg label={title} value={selected} disabled={busy} onChange={choose}
+      options={choices[key].map(([option, en, persian]) => ({ value: option, label: fa ? persian : en }))} />
+    <p className="vx-row-sub">{limited ? (fa ? 'دلیل دقیق و واگرد اینجا در دسترس نیست. ذخیره و بازنشانی ترجیح همچنان ممکن است.'
+      : 'Detailed explanations and undo are unavailable here. You can still save or reset a preference.') : entry.explanation === 'product_personalization_paused' ? pauseText(fa ? 'fa' : 'en', space, 'preference') : explanations[entry.explanation][fa ? 1 : 0]}</p>
+    {entry.saved?.status === 'active' && !entry.applied && <p className="vx-row-sub warn">{fa ? 'انتخاب ذخیره‌شده: ' : 'Saved choice: '}{choiceName(entry.saved.setting, fa)}</p>}
+    {entry.undo && <p className="vx-row-sub">{!restore ? (fa ? 'واگرد، انتخاب ذخیره‌شده را برمی‌دارد.' : 'Undo removes the saved choice.')
       : restore.status === 'reset' ? (fa ? 'واگرد، بازنشانی قبلی را برمی‌گرداند.' : 'Undo restores the previous reset.')
         : `${fa ? 'واگرد برمی‌گرداند: ' : 'Undo restores: '}${choiceName(restore.setting, fa)}`}{' '}
       {fa ? 'مهلت واگرد: ' : 'Undo until: '}{new Date(entry.undo.expiresAt).toLocaleTimeString(fa ? 'fa' : 'en', { hour: '2-digit', minute: '2-digit' })}</p>}
+    <div className="vx-pref-actions">
+      {entry.undo && <button type="button" className="vx-btn vx-btn-xs" disabled={busy} onClick={() => act('undo', { key, value: selected } as PreferenceValue, entry.undo!.changeId)}>
+        <Icon name="refresh" size={14} />{fa ? 'واگرد آخرین تغییر' : 'Undo last change'}</button>}
+      <button type="button" className="vx-btn vx-btn-ghost vx-btn-xs" disabled={busy} onClick={() => act('reset', { key, value: selected } as PreferenceValue)}>{fa ? 'بازنشانی' : 'Reset'}</button>
+    </div>
   </article>;
 }
 
@@ -125,18 +130,19 @@ export function PreferencePanel({ agentId, space, confirmed, revisionHint, local
     } catch { if (generation.current === current) { stateRef.current = null; setState(null); setError('change'); } }
     finally { if (busyRef.current === current) busyRef.current = null; if (generation.current === current) setBusy(false); }
   };
-  return <div dir={fa ? 'rtl' : 'ltr'} lang={locale} aria-busy={busy}>
-    <p className="vx-small vx-2">{fa ? 'درخواست فعلی شما مقدم است. این کنترل‌ها فقط انتخاب‌های صریح شما را ذخیره می‌کنند. واگرد فقط ترجیح را تغییر می‌دهد و مجوزی را برنمی‌گرداند.'
-      : 'Your current request comes first. These controls save only your explicit choices. Undo changes only the preference and never restores permission.'}</p>
-    {productPaused && <p className="vx-small">{pauseText(locale, space, 'preference')}</p>}
-    {!agentId && <p className="vx-small">{fa ? 'برای دیدن ترجیح‌ها یک عامل انتخاب کنید.' : 'Choose an agent to see preferences.'}</p>}
-    {agentId && !confirmed && <p className="vx-small">{fa ? 'ابتدا نمایهٔ حساب را در حریم خصوصی تأیید کنید.' : 'Confirm your account profile in Privacy first.'}</p>}
-    {error && <div role="alert"><p>{error === 'load' ? (fa ? 'ترجیح‌ها دریافت نشد.' : 'Preferences could not be loaded.')
-      : (fa ? 'تغییر تأیید نشد. پیش از تلاش دوباره تازه‌سازی و بررسی کنید.' : 'The change was not confirmed. Refresh and review before trying again.')}</p>
-      <button className="vx-btn vx-btn-secondary" onClick={() => { setStatus(''); void load(); }} disabled={busy}>{fa ? 'تازه‌سازی' : 'Refresh preferences'}</button></div>}
-    {busy && !state && <p role="status">{fa ? 'در حال دریافت ترجیح‌ها…' : 'Loading preferences…'}</p>}
-    {status && <p role="status">{status === 'undone' ? (fa ? 'آخرین تغییر واگرد شد.' : 'Last change undone.') : (fa ? 'ذخیره شد.' : 'Saved.')}</p>}
-    {agentId && confirmed && state?.agentId === agentId && state.space === space && state.entries.map(entry => <PreferenceRow key={`${entry.setting.key}:${entry.saved?.revision ?? 0}:${entry.source}:${entry.explanation}`}
-      entry={entry} fa={fa} space={space} busy={busy} limited={limited} act={(action, setting, changeId) => void act(action, setting, changeId)} />)}
+  const rows = agentId && confirmed && state?.agentId === agentId && state.space === space ? state.entries : null;
+  return <div className="vx-prefs" dir={fa ? 'rtl' : 'ltr'} lang={locale} aria-busy={busy}>
+    {productPaused && <Banner tone="warn">{pauseText(locale, space, 'preference')}</Banner>}
+    {!agentId && <p className="vx-footnote">{fa ? 'برای دیدن ترجیح‌ها یک عامل انتخاب کنید.' : 'Choose an agent to see preferences.'}</p>}
+    {agentId && !confirmed && <p className="vx-footnote">{fa ? 'ابتدا نمایهٔ حساب را در بخش «شما» تأیید کنید.' : 'Confirm your account profile in You first.'}</p>}
+    {error && <Banner tone="danger" action={<button type="button" className="vx-btn vx-btn-secondary vx-btn-xs" onClick={() => { setStatus(''); void load(); }} disabled={busy}>{fa ? 'تازه‌سازی' : 'Refresh preferences'}</button>}>
+      {error === 'load' ? (fa ? 'ترجیح‌ها دریافت نشد.' : 'Preferences could not be loaded.')
+        : (fa ? 'تغییر تأیید نشد. پیش از تلاش دوباره تازه‌سازی و بررسی کنید.' : 'The change was not confirmed. Refresh and review before trying again.')}</Banner>}
+    {busy && !state && <SkeletonRows rows={3} lead={false} label={fa ? 'در حال دریافت ترجیح‌ها…' : 'Loading preferences…'} />}
+    {rows && <div className="vx-group">{rows.map(entry => <PreferenceRow key={`${state!.revision}:${entry.setting.key}:${entry.saved?.revision ?? 0}:${entry.source}:${entry.explanation}`}
+      entry={entry} fa={fa} space={space} busy={busy} limited={limited} act={(action, setting, changeId) => void act(action, setting, changeId)} />)}</div>}
+    {status && <p className="vx-pref-status" role="status"><Icon name="check" size={14} width={2.5} />{status === 'undone' ? (fa ? 'آخرین تغییر واگرد شد.' : 'Last change undone.') : (fa ? 'ذخیره شد.' : 'Saved.')}</p>}
+    {rows && <p className="vx-footnote">{fa ? 'درخواست فعلی شما مقدم است. این کنترل‌ها فقط انتخاب‌های صریح شما را ذخیره می‌کنند. واگرد فقط ترجیح را تغییر می‌دهد و مجوزی را برنمی‌گرداند.'
+      : 'Your current request comes first. These controls save only your explicit choices. Undo changes only the preference and never restores permission.'}</p>}
   </div>;
 }

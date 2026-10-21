@@ -25,7 +25,7 @@ it('hides old rows immediately on scope/account changes and ignores late respons
   let finish!: (v: RightsSnapshot) => void; mocks.read.mockReturnValueOnce(new Promise(resolve => { finish = resolve; })).mockResolvedValue(status());
   const view = render(<RightsRequestPanel space="work" sessionKey="account-a" />); view.rerender(<RightsRequestPanel space="personal" sessionKey="account-a" />);
   await screen.findByText('No recorded requests in this space.'); await act(async () => finish(status([row()]))); expect(screen.queryByText(ref)).not.toBeInTheDocument();
-  mocks.read.mockResolvedValue(status([row('personal')])); fireEvent.click(screen.getByRole('button', { name: 'Refresh request status' })); await screen.findByText(ref);
+  mocks.read.mockResolvedValue(status([row('personal')])); view.rerender(<RightsRequestPanel space="work" sessionKey="account-a" />); view.rerender(<RightsRequestPanel space="personal" sessionKey="account-a" />); await screen.findByText(ref);
   mocks.session = 'account-b'; mocks.read.mockResolvedValue(status()); view.rerender(<RightsRequestPanel space="personal" sessionKey="account-b" />); expect(screen.queryByText(ref)).not.toBeInTheDocument(); await screen.findByText('No recorded requests in this space.');
 });
 it('reconciles a lost create acknowledgement through GET before allowing another deliberate action', async () => {
@@ -50,12 +50,32 @@ it('downloads only after a deliberate fresh export, releases object URLs and rea
   fireEvent.click(screen.getByRole('button', { name: 'Prepare current local export' })); await act(async () => {}); expect(mocks.act).toHaveBeenCalledTimes(2); expect(mocks.act.mock.calls[1][1]).toMatchObject({ action: 'prepare_local_export', expectedRevision: 2 }); expect(makeURL).toHaveBeenCalledTimes(2); expect(revokeURL).toHaveBeenCalledTimes(2);
   makeURL.mockRestore(); revokeURL.mockRestore(); download.mockRestore();
 });
-it('offers only the current reviewed policy kinds and selects a valid type after refresh', async () => {
+it('offers only the current reviewed policy kinds, with no native select and no standing Refresh', async () => {
   mocks.read.mockResolvedValueOnce({ ...status(), supportedKinds: ['erasure'] }).mockResolvedValue({ ...status(), supportedKinds: ['restriction'] });
   mocks.create.mockResolvedValue({ replayed: false, request: { ...row(), kind: 'erasure' }, policyStatus: 'available' });
-  render(<RightsRequestPanel space="work" />); await screen.findByRole('option', { name: 'Erasure' }); expect(screen.getAllByRole('option')).toHaveLength(1); expect(screen.getByRole('combobox', { name: 'Request type' })).toHaveValue('erasure');
+  const view = render(<RightsRequestPanel space="work" />); await screen.findByText('Erasure');
+  expect(view.container.querySelector('select')).toBeNull(); expect(screen.queryByRole('button', { name: 'Refresh request status' })).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'Submit request' })); await act(async () => {}); expect(mocks.create.mock.calls[0][0].kind).toBe('erasure');
-  fireEvent.click(screen.getByRole('button', { name: 'Refresh request status' })); await screen.findByRole('option', { name: 'Formal restriction' }); expect(screen.getAllByRole('option')).toHaveLength(1); expect(screen.getByRole('combobox', { name: 'Request type' })).toHaveValue('restriction'); expect(screen.queryByRole('option', { name: 'Erasure' })).not.toBeInTheDocument();
+  view.rerender(<RightsRequestPanel space="personal" />); await screen.findByText('Formal restriction'); expect(screen.queryByText('Erasure')).not.toBeInTheDocument();
+});
+it('two or three kinds are a segmented control; more open a picker', async () => {
+  mocks.read.mockResolvedValue({ ...status(), supportedKinds: ['access_export', 'erasure'] });
+  const view = render(<RightsRequestPanel space="work" />);
+  const seg = await screen.findByRole('tablist', { name: 'Request type' });
+  fireEvent.click(within(seg).getByRole('tab', { name: 'Erasure' })); expect(within(seg).getByRole('tab', { name: 'Erasure' })).toHaveAttribute('aria-selected', 'true');
+  fireEvent.click(screen.getByRole('button', { name: 'Submit request' })); await act(async () => {}); expect(mocks.create.mock.calls[0][0].kind).toBe('erasure');
+  view.unmount();
+  mocks.read.mockResolvedValue({ ...status(), supportedKinds: ['access_export', 'erasure', 'restriction', 'correction'] });
+  render(<RightsRequestPanel space="personal" />);
+  fireEvent.click(await screen.findByRole('button', { name: /Request type/ }));
+  fireEvent.click(await screen.findByRole('radio', { name: 'Correction' }));
+  expect(await screen.findByRole('button', { name: /Request type.*Correction/ })).toBeInTheDocument();
+});
+it('renders the volt Submit into the host sheet dock when given one', async () => {
+  const dock = document.createElement('div'); document.body.appendChild(dock);
+  render(<RightsRequestPanel space="work" dock={dock} />);
+  expect(await within(dock).findByRole('button', { name: 'Submit request' })).toHaveClass('vx-btn-primary');
+  dock.remove();
 });
 
 it.each(['en','fa'] as const)('shows minimal expiry continuity in %s without old detail or fulfillment claims', async locale => {

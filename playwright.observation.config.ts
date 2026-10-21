@@ -3,6 +3,8 @@ export default defineConfig({
   testDir: './e2e', testMatch: 'observation.spec.ts', workers: 1, retries: 0, reporter: [['list']],
   outputDir: './test-results/observation',
   use: { ...devices['Desktop Chrome'], baseURL: 'http://127.0.0.1:3105', screenshot: 'only-on-failure', trace: 'retain-on-failure' },
+  // The API is synthetic (page.route), so the flow can run twice: as is, and with the OS asking for less motion.
+  projects: [{ name: 'chromium' }, { name: 'chromium-reduced-motion', use: { contextOptions: { reducedMotion: 'reduce' } } }],
   webServer: {
     command: 'node e2e/start-conversation-server.mjs', url: 'http://127.0.0.1:3105', reuseExistingServer: false, timeout: 120000,
     env: { STUDIO_E2E_PORT: '3105', STUDIO_BOTS: '0', STUDIO_DECISIONS_ENABLED: '0', STUDIO_DECISIONS: 'off', STUDIO_RELATIONSHIPS: 'off',

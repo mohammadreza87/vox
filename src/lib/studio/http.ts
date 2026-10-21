@@ -171,9 +171,12 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
           case 'POST refine': return json({ agent: await studio.refine(me, id, str((await body(req)).instruction, 500) ?? '') });
           case 'POST look': {
             const b = await body(req);
-            return json({ agent: await studio.setLook(me, id, b.random ? 'random' : (b.look ?? {}) as Json) });
+            return json({ agent: await studio.setLook(me, id, b.random ? 'random' : b.look ?? {}, { sync: b.sync !== false }) });
           }
-          case 'POST avatars': return json({ agent: await studio.generateAvatars(me, id, Number((await body(req)).count ?? 2)) });
+          case 'POST avatars': {
+            const b = await body(req);
+            return json({ agent: await studio.generateAvatars(me, id, Number(b.count ?? 2), { select: b.select !== false }) });
+          }
           case 'PUT avatar': return json({ agent: await studio.chooseAvatar(me, id, str((await body(req)).file, 140) ?? null) });
           case 'POST avatar-upload': {
             const form = await req.formData().catch(() => { throw new StudioError(400, 'Expected an image upload'); });
@@ -223,7 +226,11 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
           }
           case 'PUT live-web': return json({ agent: await studio.setLiveWeb(me, id, (await body(req)).on === true) });
           case 'PUT group-behavior': return json({ agent: await studio.setGroupBehavior(me, id, await body(req)) });
-          case 'POST profile-sync': return json(await studio.syncProfile(me, id));
+          case 'POST profile-sync': {
+            // Retry sends no body and forces every step; the look editor sends { force: false }.
+            const b = req.headers.get('content-type')?.includes('application/json') ? await body(req) : {};
+            return json(await studio.syncProfile(me, id, { force: b.force !== false }));
+          }
           case 'DELETE blocked': {
             const telegramId = Number(new URL(req.url).searchParams.get('telegramId'));
             if (!Number.isSafeInteger(telegramId) || telegramId <= 0) throw new StudioError(400, 'Invalid Telegram id');
@@ -282,7 +289,7 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
     return json({ error: 'Not found' }, 404);
   } catch (error) {
     let failure: { response: Response; diagnostic?: TelegramDiagnostic };
-    try { failure = studioFailureResponse(error); }
+    try { failure = studioFailureResponse(error, path[0] === 'agents' && PHOTO_ACTIONS.has(path[2])); }
     catch {
       // Error objects are untrusted too. Inspection must not escape the HTTP
       // boundary or turn a hostile accessor into a second exported exception.
@@ -294,14 +301,20 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
   }
 }
 
-function studioFailureResponse(error: unknown): { response: Response; diagnostic?: TelegramDiagnostic } {
+/** Look and photo routes: their 429 body also carries `retryAfter` (seconds) for the picker's countdown. */
+const PHOTO_ACTIONS = new Set(['look', 'avatars', 'avatar', 'avatar-upload', 'profile-sync']);
+
+function studioFailureResponse(error: unknown, photo = false): { response: Response; diagnostic?: TelegramDiagnostic } {
   if (ElevenLabsSpeechError.is(error)) {
     const status = error.code === 'payment_required' ? 402
       : error.code === 'quota_exceeded' || error.code === 'rate_limited' ? 429
         : error.code === 'permission_denied' ? 403 : error.code === 'unavailable' ? 503 : 502;
     return { response: json({ error: new ElevenLabsSpeechError(error.status, error.code).message, code: error.code }, status), diagnostic: 'studio_http_voice_failed' };
   }
-  if (StudioRateLimitError.is(error)) return { response: json({ error: 'Too many requests. Please try again shortly.' }, 429, { 'Retry-After': String(error.retryAfterSeconds) }) };
+  if (StudioRateLimitError.is(error)) {
+    const seconds = error.retryAfterSeconds;
+    return { response: json({ error: 'Too many requests. Please try again shortly.', ...(photo ? { retryAfter: seconds } : {}) }, 429, { 'Retry-After': String(seconds) }) };
+  }
   if (StudioError.is(error)) return { response: json({ error: error.message }, error.status) };
   if (error instanceof PersonaGenerationError) return { response: json({ error: error.message }, 502), diagnostic: 'studio_http_persona_failed' };
   if (error && typeof error === 'object' && 'issues' in error) return { response: json({ error: "Claude's answer didn't fit the persona format. Try again." }, 502) };

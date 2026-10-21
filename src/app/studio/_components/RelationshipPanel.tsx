@@ -1,13 +1,20 @@
 'use client';
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useProductPause } from '../_lib/product-pause-client';
 import { pauseText } from '../_lib/product-pause-copy';
 import { api, tg, type RelationshipSpace, type RelationshipView } from '../_lib/client';
+import { haptic } from '../_lib/haptics';
+import { Banner, Icon, Row, Section, Seg, Spinner, Switch } from './ui';
+import { LiveSheet } from './screens/settings/kit';
 
 type UseBoundary = Readonly<{ scope: string; accountId?: string; useEpoch: number | null | undefined; blocked: boolean; phase: string | undefined }>;
-type Props = { agentId: string; name: string; space?: RelationshipSpace; locale?: 'en' | 'fa'; identityConfirmed?: boolean };
-export function RelationshipPanel({ agentId, name, space = 'work', locale = 'en', identityConfirmed = false }: Props) {
+type Props = { agentId: string; name: string; space?: RelationshipSpace; locale?: 'en' | 'fa'; identityConfirmed?: boolean;
+  /** inline: the controls in place (settings pages). row: one "Staying in touch" row that opens them in a sheet (Memories). */
+  presentation?: 'inline' | 'row' };
+export function RelationshipPanel({ agentId, name, space = 'work', locale = 'en', identityConfirmed = false, presentation = 'inline' }: Props) {
+  const headingId = useId();
+  const [open, setOpen] = useState(false);
   const session = tg()?.initData ?? '';
   const pause = useProductPause(space, session);
   const blocked = pause.coveredBlocked;
@@ -84,31 +91,78 @@ export function RelationshipPanel({ agentId, name, space = 'work', locale = 'en'
   const paused = !!value?.pausedUntil && Date.parse(value.pausedUntil) > Date.now();
   const available = !!value?.available && value.mode !== 'off';
   const allowManage = !!value;
-  return <section className="vx-card" dir={fa ? 'rtl' : 'ltr'} lang={fa ? 'fa' : 'en'} aria-labelledby="relationship-title" style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
-    <div><h2 id="relationship-title" className="vx-title-m" style={{ margin: 0 }}>{t('Staying in touch', 'در ارتباط ماندن')}</h2>
-      <p className="vx-small vx-2" style={{ margin: '5px 0 0' }}>{t(`Manage ${name}’s follow-ups and private check-ins in your ${space} space.`, `پیگیری‌ها و بررسی‌های خصوصی ${name} را در فضای ${space === 'work' ? 'کاری' : 'شخصی'} مدیریت کنید.`)}</p></div>
-    <button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy || loading} onClick={() => void load()}>{t('Refresh relationship settings', 'تازه‌سازی تنظیمات ارتباط')}</button>
-    {!value && !error && <p className="vx-small vx-2" role="status">{t('Loading relationship settings…', 'در حال دریافت تنظیمات ارتباط…')}</p>}
-    {error && <div className="vx-banner danger" role="alert">{error}</div>}
-    {value && <>
-      <p className="vx-small" style={{ margin: 0 }} role="status">{!available ? t('Follow-ups are unavailable in this space. You can still pause, stop, or clear existing context.', 'پیگیری در این فضا در دسترس نیست. همچنان می‌توانید آن را متوقف یا مکث کنید یا زمینهٔ موجود را پاک کنید.') : paused ? t('Follow-ups are paused.', 'پیگیری‌ها مکث شده‌اند.') : stopped ? t('Follow-ups are stopped.', 'پیگیری‌ها متوقف شده‌اند.') : t('Follow-ups are available for useful open conversations.', 'پیگیری برای گفتگوهای باز و مفید در دسترس است.')}</p>
-      {value.mode === 'off' && <p className="vx-small vx-2">{t('Relationship features are currently unavailable. Review Privacy and memory settings for prerequisites.', 'ویژگی‌های ارتباطی اکنون در دسترس نیستند. پیش‌نیازها را در تنظیمات حریم خصوصی و حافظه ببینید.')}</p>}
-      <div className="vx-group" style={{ padding: 12 }}><div className="vx-small" style={{ fontWeight: 600, marginBottom: 6 }}>{t('Communication preferences', 'ترجیح‌های ارتباطی')}</div>
-        {value.preferences.length ? <ul style={{ margin: 0, paddingInlineStart: 20 }}>{value.preferences.map((p, i) => <li key={`${p.key}-${i}`} className="vx-small">{p.value}</li>)}</ul> : <p className="vx-small vx-2" style={{ margin: 0 }}>{t('No preferences saved.', 'ترجیحی ذخیره نشده است.')}</p>}</div>
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        {paused || stopped ? <button className="vx-btn vx-btn-primary vx-btn-sm" disabled={busy || !available || blocked} onClick={() => void update({ action: 'resume' })}>{t('Resume follow-ups', 'ازسرگیری پیگیری')}</button> : null}
-        <button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy} onClick={() => void update({ action: 'pause', until: new Date(Date.now() + 7 * 86_400_000).toISOString() })}>{t('Pause for 7 days', 'مکث برای ۷ روز')}</button>
-        <button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy || !allowManage} onClick={() => void update({ action: 'stop' })}>{t('Stop follow-ups', 'توقف پیگیری')}</button>
+  const mode: 'active' | 'paused' | 'off' = stopped ? 'off' : paused ? 'paused' : 'active';
+  const modeLabel = { active: t('Active', 'فعال'), paused: t('Paused', 'مکث'), off: t('Off', 'خاموش') };
+  const summary = !value ? (error ? t('Couldn’t load', 'دریافت نشد') : t('Loading…', 'در حال دریافت…')) : !available ? t('Unavailable', 'در دسترس نیست') : modeLabel[mode];
+  const choose = (next: typeof mode) => {
+    if (next === mode) return;
+    if (next === 'active') { if (!available || blocked) { haptic.error(); return; } void update({ action: 'resume' }); }
+    else if (next === 'paused') void update({ action: 'pause', until: new Date(Date.now() + 7 * 86_400_000).toISOString() });
+    else void update({ action: 'stop' });
+  };
+  const pauseReason = pauseText(locale, space, pause.status?.productPaused ? 'pausedUse' : 'unverified');
+  const body = <section className="vx-rel" dir={fa ? 'rtl' : 'ltr'} lang={fa ? 'fa' : 'en'} aria-labelledby={headingId} aria-busy={busy || loading}>
+    <div className="vx-rel-head">
+      <div className="vx-rel-title">
+        <h2 id={headingId} className="vx-title-m">{t('Staying in touch', 'در ارتباط ماندن')}</h2>
+        <p className="vx-small vx-2">{t(`Manage ${name}’s follow-ups and private check-ins in your ${space} space.`, `پیگیری‌ها و بررسی‌های خصوصی ${name} را در فضای ${space === 'work' ? 'کاری' : 'شخصی'} مدیریت کنید.`)}</p>
       </div>
-      <p className="vx-small vx-2" style={{ margin: '-8px 0 0' }}>{t('Resuming does not grant memory or notification permissions.', 'ازسرگیری، مجوز حافظه یا اعلان را فعال نمی‌کند.')}</p>
-      <label className="vx-privacy-checkbox"><input type="checkbox" checked={value.externalEnabled} disabled={busy || (blocked || !value.externalAvailable) && !value.externalEnabled} onChange={e => void update({ action: 'external', enabled: e.target.checked })} />{t('Generic Telegram alerts', 'اعلان عمومی تلگرام')}</label>
-      <p className="vx-small vx-2" style={{ margin: '-8px 0 0' }}>{t('Alerts say that a check-in is ready. They never include conversation content.', 'اعلان فقط می‌گوید بررسی آماده است و هرگز محتوای گفتگو را شامل نمی‌شود.')}</p>
-      {blocked && <p className="vx-small" role="status">{pauseText(locale, space, pause.status?.productPaused ? 'pausedUse' : 'unverified')}</p>}
-      {!identityConfirmed && <p className="vx-small vx-2">{t('Confirm your identity in Privacy and memory settings to view private check-ins.', 'برای دیدن بررسی‌های خصوصی، هویت خود را در تنظیمات حریم خصوصی و حافظه تأیید کنید.')}</p>}
-      <div><h3 className="vx-small" style={{ fontWeight: 600 }}>{t('Private check-ins', 'بررسی‌های خصوصی')}</h3>
-        {blocked ? <p className="vx-small vx-2">{pauseText(locale, space, pause.status?.productPaused ? 'pausedUse' : 'unverified')}</p> : !identityConfirmed ? <p className="vx-small vx-2">{t('Private check-ins are hidden until identity is confirmed.', 'بررسی‌های خصوصی تا زمان تأیید هویت پنهان هستند.')}</p> : !value.inbox.length ? <p className="vx-small vx-2">{t('No check-ins right now.', 'اکنون بررسی‌ای وجود ندارد.')}</p> : value.inbox.map(item => <article className="vx-group" key={item.id} style={{ padding: 12, marginBottom: 8 }}><p className="vx-small" style={{ marginTop: 0 }}>{item.text}</p><div style={{ display: 'flex', gap: 8 }}>{item.status === 'unread' && <button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy} onClick={() => void update({ action: 'read', itemId: item.id })}>{t('Mark read', 'علامت‌گذاری به‌عنوان خوانده‌شده')}</button>}<button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy} onClick={() => void update({ action: 'dismiss', itemId: item.id })}>{t('Dismiss', 'بستن')}</button></div></article>)}</div>
-      {!!value.sources.length && <div><h3 className="vx-small" style={{ fontWeight: 600 }}>{t('Sources used for this relationship', 'منابع این ارتباط')}</h3>{value.sources.map(source => <div key={source.id} className="vx-group" style={{ padding: 8, marginBottom: 6 }}><span className="vx-small">{new Date(source.createdAt).toLocaleDateString(fa ? 'fa-IR' : 'en')}</span><button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy} onClick={() => void update({ action: 'source-delete', sourceId: source.id })}>{t('Remove source', 'حذف منبع')}</button></div>)}</div>}
-      {!confirmForget ? <button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy || !allowManage} onClick={() => setConfirmForget(true)}>{t('Forget relationship context', 'فراموش کردن زمینهٔ ارتباط')}</button> : <div role="group" aria-label={t('Forget relationship confirmation', 'تأیید فراموشی زمینه')} style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}><span className="vx-small">{t('Clear open situations and pending check-ins?', 'موقعیت‌های باز و بررسی‌های در انتظار پاک شوند؟')}</span><button className="vx-btn vx-btn-danger vx-btn-sm" disabled={busy} onClick={() => void update({ action: 'forget' })}>{t('Clear context', 'پاک کردن زمینه')}</button><button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy} onClick={() => setConfirmForget(false)}>{t('Keep it', 'نگه‌داشتن')}</button></div>}
+      <button type="button" className="vx-icon-btn" aria-label={t('Refresh relationship settings', 'تازه‌سازی تنظیمات ارتباط')} disabled={busy || loading} onClick={() => void load()}>
+        {loading ? <Spinner size={18} /> : <Icon name="refresh" size={20} />}</button>
+    </div>
+    {!value && !error && <p className="vx-footnote" role="status">{t('Loading relationship settings…', 'در حال دریافت تنظیمات ارتباط…')}</p>}
+    {error && <Banner tone="danger">{error}</Banner>}
+    {value && <>
+      <div className="vx-section">
+        <Seg label={t('Follow-ups', 'پیگیری‌ها')} value={mode} disabled={busy} onChange={choose}
+          options={[{ value: 'active', label: modeLabel.active }, { value: 'paused', label: paused ? modeLabel.paused : t('Pause 7 days', 'مکث ۷ روزه') }, { value: 'off', label: modeLabel.off }]} />
+        <p className="vx-section-foot"><span role="status">{!available ? t('Follow-ups are unavailable in this space. You can still pause, stop, or clear existing context.', 'پیگیری در این فضا در دسترس نیست. همچنان می‌توانید آن را متوقف یا مکث کنید یا زمینهٔ موجود را پاک کنید.') : paused ? t('Follow-ups are paused.', 'پیگیری‌ها مکث شده‌اند.') : stopped ? t('Follow-ups are stopped.', 'پیگیری‌ها متوقف شده‌اند.') : t('Follow-ups are available for useful open conversations.', 'پیگیری برای گفتگوهای باز و مفید در دسترس است.')}</span>
+          {' '}<span>{t('Resuming does not grant memory or notification permissions.', 'ازسرگیری، مجوز حافظه یا اعلان را فعال نمی‌کند.')}</span></p>
+        {value.mode === 'off' && <p className="vx-section-foot">{t('Relationship features are currently unavailable. Review the settings in You for prerequisites.', 'ویژگی‌های ارتباطی اکنون در دسترس نیستند. پیش‌نیازها را در تنظیمات بخش «شما» ببینید.')}</p>}
+      </div>
+      <Section foot={blocked ? pauseReason : undefined}>
+        <Switch checked={value.externalEnabled} disabled={busy || (blocked || !value.externalAvailable) && !value.externalEnabled}
+          label={t('Generic Telegram alerts', 'اعلان عمومی تلگرام')} sub={t('Alerts say that a check-in is ready. They never include conversation content.', 'اعلان فقط می‌گوید بررسی آماده است و هرگز محتوای گفتگو را شامل نمی‌شود.')}
+          onChange={enabled => void update({ action: 'external', enabled })} />
+      </Section>
+      <Section title={t('Communication preferences', 'ترجیح‌های ارتباطی')}>
+        {value.preferences.length ? value.preferences.map((p, i) => <Row key={`${p.key}-${i}`} plain title={<span dir="auto">{p.value}</span>} />)
+          : <Row plain title={<span className="vx-2">{t('No preferences saved.', 'ترجیحی ذخیره نشده است.')}</span>} />}
+      </Section>
+      <Section title={t('Private check-ins', 'بررسی‌های خصوصی')}>
+        {blocked ? <Row plain title={<span className="vx-2">{pauseReason}</span>} />
+          : !identityConfirmed ? <Row plain title={<span className="vx-2">{t('Private check-ins are hidden until identity is confirmed.', 'بررسی‌های خصوصی تا زمان تأیید هویت پنهان هستند.')}</span>} />
+          : !value.inbox.length ? <Row plain title={<span className="vx-2">{t('No check-ins right now.', 'اکنون بررسی‌ای وجود ندارد.')}</span>} />
+          : value.inbox.map(item => <div key={item.id} className="vx-row top vx-rel-item">
+            {item.status === 'unread' ? <span className="vx-rel-dot" aria-label={t('Unread', 'خوانده‌نشده')} /> : <span className="vx-rel-dot read" aria-hidden="true" />}
+            <span className="vx-row-main"><span className="vx-row-title plain" dir="auto">{item.text}</span>
+              <span className="vx-rel-actions">
+                {item.status === 'unread' && <button type="button" className="vx-btn vx-btn-secondary vx-btn-xs" disabled={busy} onClick={() => void update({ action: 'read', itemId: item.id })}>{t('Mark read', 'علامت‌گذاری به‌عنوان خوانده‌شده')}</button>}
+                <button type="button" className="vx-btn vx-btn-ghost vx-btn-xs" disabled={busy} onClick={() => void update({ action: 'dismiss', itemId: item.id })}>{t('Dismiss', 'بستن')}</button>
+              </span></span>
+          </div>)}
+      </Section>
+      {!!value.sources.length && <Section title={t('Sources used for this relationship', 'منابع این ارتباط')}>
+        {value.sources.map(source => <Row key={source.id} plain title={new Date(source.createdAt).toLocaleDateString(fa ? 'fa-IR' : 'en', { day: 'numeric', month: 'short', year: 'numeric' })}
+          end={<button type="button" className="vx-btn vx-btn-secondary vx-btn-xs" disabled={busy} onClick={() => void update({ action: 'source-delete', sourceId: source.id })}>{t('Remove source', 'حذف منبع')}</button>} />)}
+      </Section>}
+      {!confirmForget
+        ? <div className="vx-group"><Row tone="danger" lead={<Icon name="trash" size={20} />} title={t('Forget relationship context', 'فراموش کردن زمینهٔ ارتباط')} disabled={busy || !allowManage} onClick={() => { haptic.warn(); setConfirmForget(true); }} /></div>
+        : <div className="vx-you-confirm" role="group" aria-label={t('Forget relationship confirmation', 'تأیید فراموشی زمینه')}>
+          <p className="vx-head">{t('Clear open situations and pending check-ins?', 'موقعیت‌های باز و بررسی‌های در انتظار پاک شوند؟')}</p>
+          <div className="vx-dock-row">
+            <button type="button" className="vx-btn vx-btn-secondary" disabled={busy} onClick={() => setConfirmForget(false)}>{t('Keep it', 'نگه‌داشتن')}</button>
+            <button type="button" className="vx-btn vx-btn-danger" disabled={busy} onClick={() => void update({ action: 'forget' })}>{t('Clear context', 'پاک کردن زمینه')}</button>
+          </div>
+        </div>}
     </>}
   </section>;
+  if (presentation === 'inline') return body;
+  return <>
+    <div className="vx-group">
+      <Row lead={<span className="vx-tile icon" aria-hidden="true"><Icon name="bell" size={20} /></span>} title={t('Staying in touch', 'در ارتباط ماندن')} plain
+        value={summary} chevron onClick={() => { haptic.light(); setOpen(true); }} />
+    </div>
+    <LiveSheet open={open} scope={scope} onClose={() => { if (!busy) setOpen(false); }} label={t('Staying in touch', 'در ارتباط ماندن')}>{body}</LiveSheet>
+  </>;
 }

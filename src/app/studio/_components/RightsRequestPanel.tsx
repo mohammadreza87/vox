@@ -1,17 +1,24 @@
 'use client';
 import { useCallback, useId, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { rightsApi, type RightsRequestView, type RightsSnapshot, type RightsSpace } from '../_lib/rights-client';
 import { rightsCopy, rightsDate, rightsState, rightsTitle, type RightsLocale } from '../_lib/rights-copy';
 import { tg } from '../_lib/client';
+import { Icon, Picker, Row, Seg, Spinner } from './ui';
 
-/** A remount boundary drops all prior account/space metadata before the next fetch. */
-export function RightsRequestPanel({ space, locale = 'en', sessionKey = tg()?.initData ?? '' }: { space: RightsSpace; locale?: RightsLocale; sessionKey?: string }) {
-  return <RequestPanel key={JSON.stringify([sessionKey, space])} space={space} locale={locale} session={sessionKey} />;
+type Kind = RightsRequestView['kind'];
+
+/**
+ * A remount boundary drops all prior account/space metadata before the next fetch.
+ * `dock`: the host Sheet's dock element; the volt Submit renders there (UI §4.15), else at the end of the panel.
+ */
+export function RightsRequestPanel({ space, locale = 'en', sessionKey = tg()?.initData ?? '', dock }: { space: RightsSpace; locale?: RightsLocale; sessionKey?: string; dock?: HTMLElement | null }) {
+  return <RequestPanel key={JSON.stringify([sessionKey, space])} space={space} locale={locale} session={sessionKey} dock={dock ?? null} />;
 }
-function RequestPanel({ space, locale, session }: { space: RightsSpace; locale: RightsLocale; session: string }) {
+function RequestPanel({ space, locale, session, dock }: { space: RightsSpace; locale: RightsLocale; session: string; dock: HTMLElement | null }) {
   const c = rightsCopy[locale], id = useId();
   const [data, setData] = useState<RightsSnapshot | null>(null), [busy, setBusy] = useState(true), [issue, setIssue] = useState<'' | 'unknown' | 'error'>(''), [notice, setNotice] = useState('');
-  const [kind, setKind] = useState<RightsRequestView['kind']>('access_export'), [closing, setClosing] = useState<string | null>(null);
+  const [kind, setKind] = useState<Kind>('access_export'), [closing, setClosing] = useState<string | null>(null), [picking, setPicking] = useState(false);
   const controller = useRef<AbortController | null>(null), generation = useRef(0), lock = useRef(true), alive = useRef(true);
   const valid = useCallback((g: number) => alive.current && generation.current === g && tg()?.initData === session, [session]);
   const load = useCallback(async () => {
@@ -54,34 +61,52 @@ function RequestPanel({ space, locale, session }: { space: RightsSpace; locale: 
     finally { if (valid(g)) { lock.current = false; setBusy(false); controller.current = null; } }
   };
   const disabled = busy || !!issue || !data?.available || !data.supportedKinds.includes(kind);
-  return <section className="vx-card vx-privacy-card" dir={locale === 'fa' ? 'rtl' : 'ltr'} lang={locale} aria-labelledby={`${id}-title`} aria-busy={busy} style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
-    <h2 className="vx-head" id={`${id}-title`}>{rightsTitle(space, locale)}</h2>
-    <p className="vx-small">{c.scope}</p><p className="vx-small">{c.intro}</p><p className="vx-small vx-2">{c.immediate}</p>
-    {busy && <p role="status">{data ? c.pending : c.loading}</p>}
-    {issue && <p role="alert">{c[issue]}</p>}
-    {data && (!data.available || data.policyStatus !== 'available') && <p role="status">{c.unavailable}</p>}
-    {notice === 'prepared' && <p role="status">{c.prepared}</p>}
-    <p className="vx-small">{c.support}: <a href="mailto:info@joyixir.com" dir="ltr">info@joyixir.com</a></p>
-    <label className="vx-small" htmlFor={`${id}-kind`}>{c.kind}</label>
-    <select id={`${id}-kind`} className="vx-input" value={kind} disabled={disabled} onChange={event => setKind(event.target.value as RightsRequestView['kind'])}>
-      {(data?.supportedKinds ?? []).map(value => <option key={value} value={value}>{c.kinds[value]}</option>)}
-    </select>
-    <div className="vx-privacy-actions" style={{ flexWrap: 'wrap' }}><button className="vx-btn vx-btn-secondary" disabled={disabled} onClick={() => void run()}>{c.submit}</button><button className="vx-btn vx-btn-secondary" disabled={busy} onClick={() => void load()}>{c.refresh}</button></div>
-    {data && !data.requests.length && <p className="vx-small">{c.empty}</p>}
-    {data?.expiredRequests?.map(row => <p key={row.requestId} className="vx-small" role="status">{c.reference}: <bdi>{row.requestId}</bdi> · {c.expiredRecord} {rightsDate(row.retainUntil, locale)}</p>)}
-    {data?.requests.map(row => <article className="vx-card" key={row.requestId} style={{ minWidth: 0, overflowWrap: 'anywhere' }} aria-label={`${c.kinds[row.kind]} · ${row.requestId}`}>
-      <h3 className="vx-head">{c.kinds[row.kind]} · {c[row.space]}</h3>
-      <p className="vx-small">{c.reference}: <bdi>{row.requestId}</bdi></p>
-      <p role="status" className="vx-small">{rightsState(row, locale)}</p>
-      <p className="vx-small vx-2">{c.receivedAt}: {rightsDate(row.createdAt, locale)} · {c.updatedAt}: {rightsDate(row.updatedAt, locale)}</p>
-      <p className="vx-small">{row.deadline.state === 'scheduled' ? `${c.deadline}: ${rightsDate(row.deadline.dueAt, locale)}` : c.unresolved}</p>
-      <p className="vx-small vx-2">{c.coverage}</p>
-      {row.retentionReviewRequired && <p role="status">{c.retention}</p>}
-      {row.state !== 'closed_unfulfilled' && <div className="vx-privacy-actions" style={{ flexWrap: 'wrap' }}>
-        {row.kind === 'access_export' && <button className="vx-btn vx-btn-secondary" disabled={disabled} onClick={() => void run(row, 'prepare_local_export')}>{c.prepare}</button>}
-        {closing !== row.requestId && <button className="vx-btn vx-btn-secondary" disabled={disabled} onClick={() => setClosing(row.requestId)}>{c.withdraw}</button>}
-        {closing === row.requestId && <div><p>{c.confirmClose}</p><button className="vx-btn vx-btn-danger" disabled={disabled} onClick={() => void run(row, 'withdraw_request')}>{c.close}</button><button className="vx-btn vx-btn-secondary" disabled={busy} onClick={() => setClosing(null)}>{c.cancel}</button></div>}
-      </div>}
-    </article>)}
+  const kinds = data?.supportedKinds ?? [];
+  // Request type (UI §5.5): one kind reads as a value, two or three are a segmented control, more open a picker.
+  const kindControl = !kinds.length ? null
+    : kinds.length === 1 ? <div className="vx-group"><Row title={c.kind} plain value={c.kinds[kinds[0]]} /></div>
+    : kinds.length <= 3 ? <div className="vx-field"><span className="vx-label" aria-hidden="true">{c.kind}</span>
+        <Seg label={c.kind} value={kind} disabled={disabled} onChange={setKind} options={kinds.map(value => ({ value, label: c.kinds[value] }))} /></div>
+    : <>
+        <div className="vx-group"><Row title={c.kind} plain value={c.kinds[kind]} chevron disabled={disabled} aria-haspopup="dialog" onClick={() => setPicking(true)} /></div>
+        <Picker open={picking} onClose={() => setPicking(false)} title={c.kind} value={kind} onChange={setKind} options={kinds.map(value => ({ value, label: c.kinds[value] }))} />
+      </>;
+  const submit = <button type="button" className="vx-btn vx-btn-primary" disabled={disabled} onClick={() => void run()}>{c.submit}</button>;
+  return <section className="vx-sheet-stack vx-rights" dir={locale === 'fa' ? 'rtl' : 'ltr'} lang={locale} aria-labelledby={`${id}-title`} aria-busy={busy}>
+    <div className="vx-sheet-head">
+      <h2 className="vx-title-m" id={`${id}-title`}>{rightsTitle(space, locale)}</h2>
+      <p className="vx-small vx-2">{c.scope}</p>
+    </div>
+    <div className="vx-rights-prose"><p>{c.intro}</p><p className="vx-2">{c.immediate}</p></div>
+    {busy && <p className="vx-rights-note" role="status"><Spinner size={14} /> {data ? c.pending : c.loading}</p>}
+    {issue && <div className="vx-banner warn"><Icon name="warn" size={18} /><div className="vx-banner-body"><span role="alert">{c[issue]}</span>
+      <button type="button" className="vx-btn vx-btn-secondary vx-btn-xs" disabled={busy} onClick={() => void load()}>{c.refresh}</button></div></div>}
+    {data && (!data.available || data.policyStatus !== 'available') && <p className="vx-rights-note" role="status">{c.unavailable}</p>}
+    {notice === 'prepared' && <div className="vx-banner info"><Icon name="check" size={18} /><div className="vx-banner-body"><span role="status">{c.prepared}</span></div></div>}
+    {kindControl}
+    {dock ? createPortal(submit, dock) : <div className="vx-dock-row">{submit}</div>}
+    <p className="vx-footnote">{c.support}: <a href="mailto:info@joyixir.com" dir="ltr">info@joyixir.com</a></p>
+    {data && !data.requests.length && <p className="vx-footnote">{c.empty}</p>}
+    {data?.expiredRequests?.map(row => <p key={row.requestId} className="vx-footnote" role="status">{c.reference}: <bdi>{row.requestId}</bdi> · {c.expiredRecord} {rightsDate(row.retainUntil, locale)}</p>)}
+    {!!data?.requests.length && <div className="vx-group">{data.requests.map(row => <article className="vx-row top vx-rights-row" key={row.requestId} aria-label={`${c.kinds[row.kind]} · ${row.requestId}`}>
+      <span className="vx-row-main">
+        <span className="vx-row-title">{c.kinds[row.kind]} · {c[row.space]}</span>
+        <span className="vx-row-sub" role="status">{rightsState(row, locale)}</span>
+        <span className="vx-row-sub">{c.reference}: <bdi className="vx-rights-ref">{row.requestId}</bdi></span>
+        <span className="vx-row-sub">{c.receivedAt}: {rightsDate(row.createdAt, locale)} · {c.updatedAt}: {rightsDate(row.updatedAt, locale)}</span>
+        <span className="vx-row-sub">{row.deadline.state === 'scheduled' ? `${c.deadline}: ${rightsDate(row.deadline.dueAt, locale)}` : c.unresolved}</span>
+        <span className="vx-footnote">{c.coverage}</span>
+        {row.retentionReviewRequired && <span className="vx-row-sub" role="status">{c.retention}</span>}
+        {row.state !== 'closed_unfulfilled' && <span className="vx-rights-actions">
+          {row.kind === 'access_export' && <button className="vx-btn vx-btn-secondary vx-btn-xs" disabled={disabled} onClick={() => void run(row, 'prepare_local_export')}><Icon name="download" size={14} />{c.prepare}</button>}
+          {closing !== row.requestId && <button className="vx-btn vx-btn-ghost vx-btn-xs" disabled={disabled} onClick={() => setClosing(row.requestId)}>{c.withdraw}</button>}
+        </span>}
+        {row.state !== 'closed_unfulfilled' && closing === row.requestId && <span className="vx-you-confirm">
+          <span>{c.confirmClose}</span>
+          <span className="vx-dock-row"><button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy} onClick={() => setClosing(null)}>{c.cancel}</button>
+            <button className="vx-btn vx-btn-danger vx-btn-sm" disabled={disabled} onClick={() => void run(row, 'withdraw_request')}>{c.close}</button></span>
+        </span>}
+      </span>
+    </article>)}</div>}
   </section>;
 }

@@ -1,31 +1,45 @@
 'use client';
-import { useEffect, useState } from 'react';
-import { api, type AgentView } from '../../_lib/client';
+import { useCallback, useEffect, useState } from 'react';
+import { api, haptic, openTelegram, type AgentView } from '../../_lib/client';
+import { AgentFace } from '../Cloud';
 import { ConversationPanel } from '../ConversationPanel';
-import { LoadingFill, useNav } from '../StudioApp';
-import { TopBar } from '../ui';
+import { useNav } from '../StudioApp';
+import { ErrorState, Icon, TopBar } from '../ui';
 
+/** "Chat here": the in-app conversation. Locale and space are the app's; options sit behind ··· in the top bar. */
 export function ConversationScreen({ id }: { id: string }) {
   const nav = useNav();
-  const [agent, setAgent] = useState<AgentView | null>(null);
-  const [space, setSpace] = useState<'work' | 'personal'>('work');
-  const [fa, setFa] = useState(false);
+  const fa = nav.locale === 'fa';
+  const t = (en: string, persian: string) => fa ? persian : en;
+  const [agent, setAgent] = useState<AgentView | null>(() => nav.cache.get(id) ?? null);
   const [failed, setFailed] = useState(false);
-  useEffect(() => {
+  const [options, setOptions] = useState(false);
+  const load = useCallback(() => {
     let active = true;
-    api.agent(id).then(result => { if (active) setAgent(result.agent); }).catch(() => { if (active) setFailed(true); });
+    setFailed(false);
+    api.agent(id).then(result => { if (active) { setAgent(result.agent); nav.cache.set(id, result.agent); } }).catch(() => { if (active) setFailed(true); });
     return () => { active = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
-  return <><TopBar onBack={nav.back} title={agent?.persona.name ?? (fa ? 'گفتگو' : 'Conversation')}
-    right={<button className="vx-chip" onClick={() => setFa(value => !value)}>{fa ? 'English' : 'فارسی'}</button>} />
-    {failed ? <p role="alert">{fa ? 'عامل در دسترس نیست.' : 'This agent is unavailable.'}</p> : !agent ? <LoadingFill /> :
-      <div className="vx-scroll vx-privacy" dir={fa ? 'rtl' : 'ltr'} lang={fa ? 'fa' : 'en'}>
-        <div className="vx-privacy-spaces" role="group" aria-label={fa ? 'فضای گفتگو' : 'Conversation space'}>
-          {(['work', 'personal'] as const).map(value => <button key={value} className="vx-btn vx-btn-secondary" aria-pressed={space === value}
-            onClick={() => setSpace(value)}>{value === 'work' ? (fa ? 'کاری' : 'Work') : (fa ? 'شخصی' : 'Personal')}</button>)}
-          <button className="vx-chip" onClick={() => nav.push({ name: 'privacy' })}>{fa ? 'حریم خصوصی' : 'Privacy'}</button>
-        </div>
-        <ConversationPanel key={`${id}:${space}`} agentId={id} space={space} locale={fa ? 'fa' : 'en'} />
-      </div>}
-  </>;
+  useEffect(load, [load]);
+  const spaceName = nav.space === 'work' ? t('Work', 'کاری') : t('Personal', 'شخصی');
+  const bot = agent?.bot?.username;
+  return <div className="vx-chat-screen" dir={nav.dir} lang={nav.locale}>
+    <TopBar lead="back" onLead={nav.back}
+      title={agent ? <span className="vx-chat-title"><AgentFace look={agent.look} stage={agent.stage} size={24} variant="disc" still label={agent.persona.name} />{agent.persona.name}</span> : t('Conversation', 'گفتگو')}
+      subtitle={agent ? `${spaceName} · ${agent.persona.role}` : undefined}
+      end={agent && <span className="vx-chat-actions">
+        {bot && <button type="button" className="vx-icon-btn" aria-label={t('Open in Telegram', 'باز کردن در تلگرام')} onClick={() => { haptic.tap(); openTelegram(`https://t.me/${bot}`); }}>
+          <Icon name="external" size={20} /></button>}
+        <button type="button" className="vx-icon-btn" aria-label={t('Chat options', 'گزینه‌های گفتگو')} aria-haspopup="dialog" aria-expanded={options}
+          onClick={() => { haptic.light(); setOptions(true); }}><Icon name="more" size={22} /></button>
+      </span>} />
+    {failed && !agent ? <ErrorState title={t('This agent is unavailable.', 'عامل در دسترس نیست.')} retryLabel={t('Try again', 'تلاش دوباره')} onRetry={load} />
+      : !agent ? <div className="vx-chat-skel" role="status" aria-label={t('Loading', 'در حال دریافت')}>
+        <span className="vx-skeleton" data-delay /><span className="vx-skeleton me" data-delay /><span className="vx-skeleton" data-delay />
+      </div>
+      : <ConversationPanel key={`${id}:${nav.space}`} agentId={id} space={nav.space} locale={nav.locale}
+        agent={{ name: agent.persona.name, look: agent.look, stage: agent.stage }}
+        optionsOpen={options} onOptionsClose={() => setOptions(false)} onSpaceChange={s => { setOptions(false); nav.setSpace(s); }} />}
+  </div>;
 }

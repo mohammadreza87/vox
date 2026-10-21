@@ -49,6 +49,7 @@ import { createFileStores } from '../tireh/memory/file-store';
 import { FirestoreChatHistoryStore, FirestoreMemoryStore, FirestoreShareOfferStore, FirestoreUpdateDeduper } from '../tireh/memory/firestore-store';
 import { TelegramBotClient } from '../tireh/telegram/client';
 import { ElevenLabsStudio, OpenAIMedia } from './media';
+import { svgToPng } from './character/portrait';
 import { FirestoreStudioStore } from './firestore-store';
 import { FirestoreStudioRateLimiter } from './firestore-ratelimit';
 import { Studio, type StudioDeps } from './service';
@@ -287,6 +288,9 @@ async function create(): Promise<Studio> {
       stageTimings: env.STUDIO_STAGE_TIMINGS === '1',
       rateLimiter: storage.rateLimiter,
       imageToJpeg: toJpeg,
+      // The portrait edit reference; STUDIO_PORTRAITS=text skips it (PLAN §7 A/B gate).
+      svgToPng,
+      portraitVia: env.STUDIO_PORTRAITS === 'text' ? 'text' : 'edit',
       relationshipStore: storage.relationshipStore,
       observations: storage.observations,
       relationshipConfig: config.relationships,

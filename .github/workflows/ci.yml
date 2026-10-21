@@ -37,6 +37,9 @@ jobs:
       - name: Run ESLint
         run: npm run lint
 
+      - name: Check Studio style rules
+        run: npm run check:studio-style && node --test scripts/check-studio-style.test.mjs
+
       - name: Run TypeScript type check
         run: npx tsc --noEmit
 

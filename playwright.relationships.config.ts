@@ -2,7 +2,9 @@ import { defineConfig, devices } from '@playwright/test';
 export default defineConfig({
   testDir: './e2e', testMatch: 'relationships.spec.ts', fullyParallel: false, workers: 1,
   use: { baseURL: 'http://127.0.0.1:3100', trace: 'on-first-retry' },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }, { name: 'mobile-webkit', use: { ...devices['iPhone 13'] } }],
+  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }, { name: 'mobile-webkit', use: { ...devices['iPhone 13'] } },
+    // Cross-fade fallbacks must still render and navigate when the OS asks for less motion.
+    { name: 'mobile-reduced-motion', use: { ...devices['Pixel 7'], contextOptions: { reducedMotion: 'reduce' } } }],
   webServer: {
     command: process.env.RELATIONSHIP_E2E_PRODUCTION === '1'
       ? 'npm run start -- --hostname 127.0.0.1 --port 3100'

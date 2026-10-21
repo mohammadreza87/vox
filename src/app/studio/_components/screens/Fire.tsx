@@ -1,124 +1,165 @@
 'use client';
 
-import { animate, motion, useMotionValue, useTransform } from 'framer-motion';
+import { animate, motion, useIsPresent, useMotionValueEvent, useMotionValue } from 'framer-motion';
 import { useEffect, useRef, useState } from 'react';
+import { FIRE_REASONS, fireCopy, type FirePolicy } from '../../_lib/agents-copy';
 import { api, haptic, type AgentView } from '../../_lib/client';
+import { DUR, EASE, SPRING } from '../../_lib/motion';
 import { Cloud } from '../Cloud';
 import { errorMessage, LoadingFill, useNav } from '../StudioApp';
-import { Icon, TopBar } from '../ui';
+import { Icon, Radio, Row, TopBar } from '../ui';
 
-const REASONS = ['Wrong personality', 'Role changed', 'Not needed anymore', 'Start fresh'];
-const POLICIES = [
-  { value: 'transfer', title: 'Pass memories on', body: 'A successor you hire next inherits what they know.' },
-  { value: 'archive', title: 'Archive', body: 'Kept, but no agent uses them.' },
-  { value: 'delete', title: 'Delete forever', body: 'Every memory is erased. This can’t be undone.' },
-] as const;
+/** The server stores the English reason; the chip shows it in the reader's language. */
+const REASONS = FIRE_REASONS;
+const POLICIES: readonly FirePolicy[] = ['transfer', 'archive', 'delete'];
 const HOLD_MS = 1600;
+const RETIRE = { kind: 'retire', key: 'fired' } as const;
 
 export function FireScreen({ id }: { id: string }) {
   const nav = useNav();
-  const [agent, setAgent] = useState<AgentView | null>(null);
+  const c = fireCopy[nav.locale ?? 'en'];
+  const [agent, setAgent] = useState<AgentView | null>(() => nav.cache?.get(id) ?? null);
   const [reason, setReason] = useState('');
-  const [policy, setPolicy] = useState<(typeof POLICIES)[number]['value']>('transfer');
+  const [policy, setPolicy] = useState<FirePolicy>('transfer');
   const [confirmName, setConfirmName] = useState('');
   const [firing, setFiring] = useState(false);
   const [done, setDone] = useState<AgentView | null>(null);
+  // Hold progress 0..1 drives a scaleX fill (P5): transform only, growing from the reading start edge.
   const progress = useMotionValue(0);
-  const width = useTransform(progress, (v) => `${v * 100}%`);
   const hold = useRef<ReturnType<typeof animate> | null>(null);
+  const label = useRef<HTMLSpanElement>(null);
+  const passed = useRef(0);
+  const nameInput = useRef<HTMLInputElement>(null);
+  const [nameWrong, setNameWrong] = useState(false);
+  useMotionValueEvent(progress, 'change', (v) => {
+    // select at 33 % and 66 % while filling (motion §5.10); the text trembles past 70 %, no re-render
+    const step = v >= 2 / 3 ? 2 : v >= 1 / 3 ? 1 : 0;
+    if (step > passed.current && hold.current) haptic.select();
+    passed.current = step;
+    label.current?.classList.toggle('vx-tremble', v > 0.7 && v < 1);
+  });
 
   useEffect(() => {
-    api.agent(id).then((r) => setAgent(r.agent)).catch((e) => { nav.toast(errorMessage(e), 'error'); nav.back(); });
+    api.agent(id).then((r) => { nav.cache?.set(id, r.agent); setAgent(r.agent); }).catch((e) => { nav.toast(errorMessage(e), 'error'); nav.back(); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  if (!agent) return <><TopBar onBack={nav.back} /><LoadingFill /></>;
+  // A hold must never outlive the screen: the motion value's animation keeps running after unmount, and a
+  // person who backs out mid-hold (Telegram back, a second finger on ✕) must not fire the agent.
+  const present = useIsPresent();
+  const here = useRef(true);
+  here.current = present;
+  const dropHold = () => { hold.current?.stop(); hold.current = null; };
+  useEffect(() => { if (!present) dropHold(); }, [present]);
+  useEffect(() => () => { here.current = false; dropHold(); }, []);
+
+  useEffect(() => {
+    if (!nameWrong) return;
+    const t = setTimeout(() => setNameWrong(false), 1200);
+    return () => clearTimeout(t);
+  }, [nameWrong]);
+
+  if (!agent) return <><TopBar lead="close" onLead={nav.back} /><LoadingFill /></>;
   const name = agent.persona.name;
-  const ready = reason.trim().length > 0 && confirmName.trim().toLowerCase() === name.trim().toLowerCase();
+  const nameMatches = confirmName.trim().toLowerCase() === name.trim().toLowerCase();
+  const ready = reason.trim().length > 0 && nameMatches;
+  /** A typed name that doesn't match shakes once on blur (the border stays red for 1.2 s). */
+  const checkName = () => {
+    const el = nameInput.current;
+    if (!el || !confirmName.trim() || nameMatches) return;
+    haptic.error();
+    setNameWrong(true);
+    el.classList.remove('vx-shake');
+    void el.offsetWidth;
+    el.classList.add('vx-shake');
+  };
 
   const fire = async () => {
     setFiring(true);
     try {
       const r = await api.fire(id, { reason, memoryPolicy: policy, confirmName });
-      haptic.success();
+      if (!here.current) return;
+      // sombre: the hold's heavy beat was the only haptic (motion §4.15)
+      nav.cache?.set(id, r.agent);
       setDone(r.agent);
     } catch (e) {
+      if (!here.current) return;
       haptic.error();
       nav.toast(errorMessage(e), 'error');
       progress.set(0);
     } finally {
-      setFiring(false);
+      if (here.current) setFiring(false);
     }
   };
 
   const press = () => {
-    if (!ready || firing) return;
+    if (!ready || firing || !here.current) return;
     haptic.tap();
-    hold.current = animate(progress, 1, { duration: HOLD_MS / 1000 * (1 - progress.get()), ease: 'linear', onComplete: () => { haptic.heavy(); void fire(); } });
+    hold.current = animate(progress, 1, { duration: HOLD_MS / 1000 * (1 - progress.get()), ease: 'linear', onComplete: () => {
+      hold.current = null;
+      if (!here.current) return;
+      haptic.heavy();
+      void fire();
+    } });
   };
   const release = () => {
     if (progress.get() >= 1) return;
     hold.current?.stop();
-    animate(progress, 0, { duration: 0.25 });
+    hold.current = null;
+    animate(progress, 0, SPRING.snappy);
   };
 
   if (done) {
+    const enter = (delay: number) => ({ initial: { opacity: 0, y: 8 }, animate: { opacity: 1, y: 0 }, transition: { duration: DUR.slow, ease: EASE.enter, delay } });
     return (
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 18, padding: 24, textAlign: 'center' }}>
-        <motion.div initial={{ y: 0, opacity: 1 }} animate={{ y: [-4, -30], opacity: [1, 0.55] }} transition={{ duration: 2.4, ease: 'easeOut' }}>
-          <Cloud look={{ ...agent.look, hue: 'ash' }} size={150} expr="sleeping" label={name} />
-        </motion.div>
-        <h1 className="vx-title">Goodbye, {name}</h1>
-        <p className="vx-2" style={{ margin: 0, maxWidth: 300 }}>
-          {name} has left every group and stopped answering.{' '}
-          {policy === 'transfer' ? 'Their memories wait for a successor.' : policy === 'archive' ? 'Their memories are archived.' : 'Their memories are gone.'}
-        </p>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, width: '100%', maxWidth: 340 }}>
-          <button className="vx-btn vx-btn-primary" onClick={() => nav.reset({ name: 'home' }, { name: 'spawn', successorOf: id })}><Icon name="plus" width={2} />Hire a successor</button>
-          <button className="vx-btn vx-btn-secondary" onClick={() => nav.reset({ name: 'home' })}>Back to agents</button>
+        <div style={{ height: 176, display: 'flex', alignItems: 'flex-end' }}>
+          <Cloud look={agent.look} size={150} stage={agent.stage} expr="sleeping" label={name} moment={RETIRE} glow={0.3} />
         </div>
+        <motion.h1 className="vx-title" {...enter(0.5)}>{c.goodbye(name)}</motion.h1>
+        <motion.p className="vx-2" style={{ margin: 0, maxWidth: 300 }} {...enter(0.7)}>
+          {c.left(name)}{' '}{c.after[policy]}
+        </motion.p>
+        <motion.div style={{ display: 'flex', flexDirection: 'column', gap: 10, width: '100%', maxWidth: 340 }} {...enter(1)}>
+          <button className="vx-btn vx-btn-primary" onClick={() => nav.reset({ name: 'home' }, { name: 'spawn', successorOf: id })}><Icon name="plus" width={2} />{c.hireSuccessor}</button>
+          <button className="vx-btn vx-btn-secondary" onClick={() => nav.reset({ name: 'home' })}>{c.backToAgents}</button>
+        </motion.div>
       </div>
     );
   }
 
   return (
     <>
-      <TopBar onBack={nav.back} backLabel={name} />
+      <TopBar lead="close" onLead={nav.back} title={c.title(name)} />
       <div className="vx-scroll" style={{ display: 'flex', flexDirection: 'column', gap: 22 }}>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, textAlign: 'center' }}>
-          <Cloud look={agent.look} size={110} expr="sleeping" label={name} />
-          <h1 className="vx-title">Fire {name}?</h1>
-          <p className="vx-2" style={{ margin: 0 }}>A personality is permanent once formed. To change who they are, retire them and hire a new spawn.</p>
+          <Cloud look={agent.look} size={110} stage={agent.stage} expr="sleeping" label={name} />
+          <h1 className="vx-title">{c.question(name)}</h1>
+          <p className="vx-2" style={{ margin: 0 }}>{c.permanent}</p>
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <span className="vx-over">Why</span>
+          <span className="vx-over">{c.why}</span>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-            {REASONS.map((r) => <button key={r} className="vx-chip" aria-pressed={reason === r} onClick={() => { haptic.select(); setReason(r); }}>{r}</button>)}
+            {REASONS.map((r) => <button key={r} className="vx-chip" aria-pressed={reason === r} onClick={() => { haptic.select(); setReason(r); }}>{c.reasons[r]}</button>)}
           </div>
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <span className="vx-over">Their memories</span>
-          <div className="vx-group" role="radiogroup">
+          <span className="vx-over">{c.memories}</span>
+          <div className="vx-group" role="radiogroup" aria-label={c.memories}>
             {POLICIES.map((p) => (
-              <button key={p.value} role="radio" aria-checked={policy === p.value} className="vx-row" onClick={() => { haptic.select(); setPolicy(p.value); }}
-                style={{ width: '100%', background: 'none', border: 'none', borderTop: '1px solid rgba(255,255,255,.08)', textAlign: 'left', cursor: 'pointer', color: 'inherit' }}>
-                <span style={{ width: 20, height: 20, borderRadius: '50%', flexShrink: 0, border: `2px solid ${policy === p.value ? (p.value === 'delete' ? '#FF6B5E' : '#D6FF5C') : '#7D828C'}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  {policy === p.value && <motion.span layoutId="fire-radio" style={{ width: 10, height: 10, borderRadius: '50%', background: p.value === 'delete' ? '#FF6B5E' : '#D6FF5C' }} />}
-                </span>
-                <span style={{ display: 'flex', flexDirection: 'column' }}>
-                  <span style={{ color: p.value === 'delete' ? '#FF6B5E' : undefined }}>{p.title}</span>
-                  <span className="vx-small vx-2">{p.body}</span>
-                </span>
-              </button>
+              <Row key={p} role="radio" aria-checked={policy === p} lead={<Radio />} title={c.policies[p].title} sub={c.policies[p].body} plain
+                tone={p === 'delete' ? 'danger' : undefined} onClick={() => { haptic.select(); setPolicy(p); }} />
             ))}
           </div>
         </div>
 
         <label style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <span className="vx-over">Type “{name}” to confirm</span>
-          <input className="vx-input" value={confirmName} onChange={(e) => setConfirmName(e.target.value)} autoComplete="off" spellCheck={false} />
+          <span className="vx-over">{c.typeName(name)}</span>
+          <input ref={nameInput} className="vx-input" value={confirmName} onChange={(e) => { setConfirmName(e.target.value); setNameWrong(false); }} onBlur={checkName}
+            onAnimationEnd={(e) => e.currentTarget.classList.remove('vx-shake')} aria-invalid={nameWrong || undefined}
+            autoComplete="off" spellCheck={false} style={nameWrong ? { borderColor: 'var(--danger)' } : undefined} />
         </label>
       </div>
       <div className="vx-dock">
@@ -127,9 +168,9 @@ export function FireScreen({ id }: { id: string }) {
           onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); if (!e.repeat) press(); } }}
           onKeyUp={release} onContextMenu={(e) => e.preventDefault()}
           style={{ position: 'relative', overflow: 'hidden', touchAction: 'none', userSelect: 'none' }}>
-          <motion.span aria-hidden="true" style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width, background: 'rgba(255,107,94,.3)' }} />
-          <span style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-            <Icon name="warn" size={18} width={2} />{firing ? 'Firing…' : `Hold to fire ${name}`}
+          <motion.span aria-hidden="true" style={{ position: 'absolute', inset: 0, scaleX: progress, transformOrigin: nav.dir === 'rtl' ? 'right' : 'left', background: 'rgba(255,107,94,.3)' }} />
+          <span ref={label} style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+            <Icon name="warn" size={18} width={2} />{firing ? c.firing : c.hold(name)}
           </span>
         </button>
       </div>

@@ -109,7 +109,7 @@ async function installStudioFixtures(page: Page, externalAvailable = false) {
 
 async function enterExperience(page: Page) {
   await page.goto('/studio');
-  await page.getByRole('button', { name: 'Privacy', exact: true }).click();
+  await page.getByRole('button', { name: 'You', exact: true }).click();
   await page.getByRole('button', { name: 'Preferences & notification inbox' }).click();
   await expect(page.getByText('Your experience', { exact: true })).toBeVisible();
   await page.getByRole('combobox', { name: 'Agent', exact: true }).selectOption(agent.id);

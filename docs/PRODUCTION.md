@@ -68,8 +68,9 @@ The existing hostname is `https://vox-aicontact-fe0e3.web.app`; Studio opens at
 
 Set repository variable `STUDIO_SUPERADMIN_IDS` to your positive Telegram user ID.
 Optional variables include `STUDIO_PUBLIC_URL`, `VOXX_BOT_USERNAME`,
-`STUDIO_MEDIA_BUCKET`, and `STUDIO_ORG_NAME`; their default values use the existing
-Firebase hostname/bucket, VoxxBot, and HOOR. Enable Bot Management for @VoxxBot in
+`STUDIO_MEDIA_BUCKET`, `STUDIO_ORG_NAME` and `STUDIO_PORTRAITS`; their default values use the existing
+Firebase hostname/bucket, VoxxBot, and HOOR. Portraits are drawn by editing a render of the agent's
+vector character; set `STUDIO_PORTRAITS=text` to use the text-only prompt instead. Enable Bot Management for @VoxxBot in
 BotFather's Mini App before trying to hire an agent.
 
 The production workflow validates configuration, lint/types, tests and the high

@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../_lib/client';
 import { errorMessage } from './StudioApp';
+import { Banner, Icon, SkeletonRows, Spinner, Stat, Stats } from './ui';
 
 const labels: Record<string, string> = {
   turn: 'Interactions observed', planned: 'Situations to revisit', decision: 'Decisions made', sent: 'Check-ins delivered',
@@ -23,28 +24,26 @@ export function RelationshipObservations() {
     finally { setBusy(false); }
   }, []);
   useEffect(() => { void load(); const timer = setInterval(() => { if (document.visibilityState === 'visible') void load(); }, 30_000); return () => clearInterval(timer); }, [load]);
-  return <section className="vx-card" aria-labelledby="relationship-observation-title" style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
-    <div style={{ display: 'flex', alignItems: 'center', gap: 12, justifyContent: 'space-between' }}>
-      <h2 id="relationship-observation-title" className="vx-title-m" style={{ margin: 0 }}>Conversation activity</h2>
-      <button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy} onClick={() => void load()} aria-label="Refresh conversation activity">Refresh</button>
+  const mode = value?.mode === 'live' ? ['Pilot active', 'live'] : value?.mode === 'shadow' ? ['Evaluation only', 'volt'] : ['Check-ins off', ''];
+  const feedback = Object.entries(value?.feedbackOutcomes ?? {});
+  return <section className="vx-section vx-obs" aria-labelledby="relationship-observation-title" aria-busy={busy}>
+    <div className="vx-section-head">
+      <h2 id="relationship-observation-title" className="vx-over">Conversation activity</h2>
+      {value && <span className={`vx-pill${mode[1] ? ` ${mode[1]}` : ''}`}><span className="vx-pill-dot" aria-hidden="true" />{mode[0]}</span>}
+      <button type="button" className="vx-icon-btn" disabled={busy} onClick={() => void load()} aria-label="Refresh conversation activity">{busy ? <Spinner /> : <Icon name="refresh" size={18} />}</button>
     </div>
-    <p className="vx-small vx-2" style={{ margin: 0 }}>Operational counts only. Personal messages and memories stay private.</p>
-    {error && <p role="alert" className="vx-small">{error}</p>}
-    {!value && !error && <p role="status" className="vx-small">Loading activity…</p>}
-    {value && <>
-      <span className="vx-pill">{value.mode === 'live' ? 'Pilot active' : value.mode === 'shadow' ? 'Evaluation only' : 'Check-ins off'}</span>
-      {!value.sampledEvents ? <p className="vx-small vx-2">No activity recorded yet.</p> : <>
-        <dl style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: '8px 16px', margin: 0 }}>
-          {Object.entries(value.counts).map(([key, count]) => <div key={key} style={{ display: 'contents' }}><dt className="vx-small vx-2">{labels[key] ?? 'Other activity'}</dt><dd style={{ margin: 0, fontVariantNumeric: 'tabular-nums' }}>{count}</dd></div>)}
-        </dl>
-        {!!Object.keys(value.feedbackOutcomes ?? {}).length && <>
-          <p className="vx-small vx-2" style={{ margin: 0 }}>Detected feedback on delivered check-ins. These classifications can be mistaken; a reply alone does not count as helpful.</p>
-          <dl style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: '8px 16px', margin: 0 }}>
-            {Object.entries(value.feedbackOutcomes ?? {}).map(([key, count]) => <div key={key} style={{ display: 'contents' }}><dt className="vx-small vx-2">{feedbackLabels[key] ?? 'Other feedback'}</dt><dd style={{ margin: 0, fontVariantNumeric: 'tabular-nums' }}>{count}</dd></div>)}
-          </dl>
+    {error && <Banner tone="danger">{error}</Banner>}
+    {!value && !error && <SkeletonRows rows={2} lead={false} label="Loading activity…" />}
+    {value && (!value.sampledEvents
+      ? <div className="vx-group"><div className="vx-row"><span className="vx-row-sub">No activity recorded yet.</span></div></div>
+      : <>
+        <Stats>{Object.entries(value.counts).map(([key, count]) => <Stat key={key} label={labels[key] ?? 'Other activity'} value={count.toLocaleString('en-US')} />)}</Stats>
+        {!!feedback.length && <>
+          <p className="vx-section-foot">Detected feedback on delivered check-ins. These classifications can be mistaken; a reply alone does not count as helpful.</p>
+          <Stats>{feedback.map(([key, count]) => <Stat key={key} label={feedbackLabels[key] ?? 'Other feedback'} value={count.toLocaleString('en-US')} />)}</Stats>
         </>}
-        <p className="vx-small vx-3" style={{ margin: 0 }}>{value.sampledEvents} recent events{value.windowEnd ? ` · Latest ${new Date(value.windowEnd).toLocaleString()}` : ''}. Up to 500 events are shown; these are not all-time totals.</p>
-      </>}
-    </>}
+        <p className="vx-section-foot">{value.sampledEvents} recent events{value.windowEnd ? ` · Latest ${new Date(value.windowEnd).toLocaleString()}` : ''}. Up to 500 events are shown; these are not all-time totals.</p>
+      </>)}
+    <p className="vx-section-foot">Operational counts only. Personal messages and memories stay private.</p>
   </section>;
 }

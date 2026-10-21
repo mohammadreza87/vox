@@ -57,7 +57,7 @@ test('hidden committed output is not reported until actually visible', async ({ 
   await expect.poll(() => f.events.length).toBe(1); expect(f.visible()).toBe(true);
 });
 for (const locale of ['en', 'fa'] as const) for (const failure of [false, true]) test(`correction ${failure ? 'unconfirmed' : 'saved'} ${locale} produces only fixed feedback metadata`, async ({ page }) => {
-  const f = await fixtures(page, failure); await page.goto('/studio'); await page.getByRole('button', { name: 'Privacy', exact: true }).click();
+  const f = await fixtures(page, failure); await page.goto('/studio'); await page.getByRole('button', { name: 'You', exact: true }).click();
   if (locale === 'fa') await page.getByRole('combobox', { name: 'Language', exact: true }).selectOption('fa');
   const fa = locale === 'fa'; await page.getByRole('button', { name: fa ? 'ویرایش یادداشت' : 'Edit note', exact: true }).click();
   await page.getByLabel(fa ? 'یادداشت اصلاح‌شده' : 'Corrected note', { exact: true }).fill('PRIVATE_CORRECTION_CANARY');

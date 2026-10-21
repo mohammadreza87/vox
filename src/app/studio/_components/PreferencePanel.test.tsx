@@ -17,12 +17,14 @@ function withUndo(): PreferenceState {
     undo: { changeId: 'change-1', expiresAt: Date.now() + 60_000, restore: { setting: { key: 'response_length', value: 'brief' }, status: 'active' } } };
   return s;
 }
+/** A choice in a preference row; choosing saves (auto-save). */
+const option = (row: string, name: string) => within(screen.getByRole('article', { name: `${row} preference` })).getByRole('tab', { name });
 beforeEach(() => { vi.resetAllMocks(); mocks.preferenceState.mockResolvedValue(state()); mocks.preference.mockResolvedValue(snapshot); mocks.preferenceUndo.mockResolvedValue(snapshot); });
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); });
 it('shows coded reasons for all three settings and saves only an explicit choice with CAS', async () => {
   const p = props(); render(<PreferencePanel {...p} />);
-  fireEvent.change(await screen.findByLabelText('Reply language'), { target: { value: 'fa' } });
-  await act(async () => { fireEvent.click(within(screen.getByRole('article', { name: 'Reply language preference' })).getByRole('button', { name: 'Save preference' })); });
+  await screen.findByLabelText('Reply language');
+  await act(async () => { fireEvent.click(option('Reply language', 'Persian')); });
   expect(mocks.preference).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'agent1', space: 'work', expectedRevision: 10, action: 'set', setting: { key: 'language', value: 'fa' } }), expect.any(AbortSignal));
   expect(p.onSnapshot).toHaveBeenCalledWith(snapshot); expect(screen.getAllByText('No saved choice; the default style is used.')).toHaveLength(3);
 });
@@ -45,12 +47,12 @@ it('explains what undo restores, sends one scoped command and waits for server c
 });
 it('requires refresh after a conflict and uses the refreshed revision for the next explicit save', async () => {
   mocks.preference.mockRejectedValueOnce(new Error('PRIVATE_SERVER_CANARY'));
-  render(<PreferencePanel {...props()} />); const row = await screen.findByRole('article', { name: 'Reply length preference' });
-  fireEvent.click(within(row).getByRole('button', { name: 'Save preference' }));
+  render(<PreferencePanel {...props()} />); await screen.findByRole('article', { name: 'Reply length preference' });
+  fireEvent.click(option('Reply length', 'Brief'));
   const alert = await screen.findByRole('alert'); expect(alert).not.toHaveTextContent('PRIVATE_SERVER_CANARY'); expect(screen.queryByText('Saved.')).not.toBeInTheDocument();
   mocks.preferenceState.mockResolvedValue({ ...state(), revision: 22 }); fireEvent.click(screen.getByRole('button', { name: 'Refresh preferences' }));
-  const next = await screen.findByRole('article', { name: 'Reply length preference' });
-  await act(async () => { fireEvent.click(within(next).getByRole('button', { name: 'Save preference' })); });
+  await screen.findByRole('article', { name: 'Reply length preference' });
+  await act(async () => { fireEvent.click(option('Reply length', 'Detailed')); });
   expect(mocks.preference.mock.calls.at(-1)?.[0].expectedRevision).toBe(22);
 });
 it('suppresses stale source responses after switching agent and space', async () => {
@@ -74,17 +76,17 @@ it('reloads a newly selected scope even when its aggregate revision is identical
 it('clears old status and loading controls when profile confirmation disappears', async () => {
   mocks.preferenceState.mockImplementation(() => new Promise(() => {}));
   const p = props(), view = render(<PreferencePanel {...p} />);
-  expect(screen.getByText('Loading preferences…')).toBeInTheDocument();
+  expect(screen.getByRole('status', { name: 'Loading preferences…' })).toBeInTheDocument();
   view.rerender(<PreferencePanel {...p} confirmed={false} />);
-  expect(screen.getByText('Confirm your account profile in Privacy first.')).toBeInTheDocument();
-  expect(screen.queryByText('Loading preferences…')).not.toBeInTheDocument();
+  expect(screen.getByText('Confirm your account profile in You first.')).toBeInTheDocument();
+  expect(screen.queryByRole('status', { name: 'Loading preferences…' })).not.toBeInTheDocument();
   expect(screen.queryByRole('button')).not.toBeInTheDocument();
 });
 it('does not report or refresh a late mutation after unmount', async () => {
   let complete!: (value: ExperienceSnapshot) => void;
   mocks.preference.mockReturnValue(new Promise(resolve => { complete = resolve; }));
-  const p = props(), view = render(<PreferencePanel {...p} />); const row = await screen.findByRole('article', { name: 'Reply length preference' });
-  fireEvent.click(within(row).getByRole('button', { name: 'Save preference' })); const signal = mocks.preference.mock.calls[0][1] as AbortSignal; view.unmount(); expect(signal.aborted).toBe(true);
+  const p = props(), view = render(<PreferencePanel {...p} />); await screen.findByRole('article', { name: 'Reply length preference' });
+  fireEvent.click(option('Reply length', 'Brief')); const signal = mocks.preference.mock.calls[0][1] as AbortSignal; view.unmount(); expect(signal.aborted).toBe(true);
   await act(async () => complete(snapshot)); expect(p.onSnapshot).not.toHaveBeenCalled(); expect(mocks.preferenceState).toHaveBeenCalledTimes(1);
 });
 it('lets a newly loaded scope save while an old command hangs, without the old completion unlocking the new command', async () => {
@@ -92,20 +94,20 @@ it('lets a newly loaded scope save while an old command hangs, without the old c
   mocks.preference.mockReturnValueOnce(new Promise(resolve => { finishWork = resolve; }))
     .mockReturnValueOnce(new Promise(resolve => { finishPersonal = resolve; }));
   const p = props(), view = render(<PreferencePanel {...p} />);
-  fireEvent.click(within(await screen.findByRole('article', { name: 'Reply length preference' })).getByRole('button', { name: 'Save preference' }));
+  await screen.findByRole('article', { name: 'Reply length preference' }); fireEvent.click(option('Reply length', 'Brief'));
   mocks.preferenceState.mockResolvedValue({ ...state(), space: 'personal', agentId: 'agent2', revision: 12 });
   view.rerender(<PreferencePanel {...p} agentId="agent2" space="personal" revisionHint={12} />);
   await act(async () => {});
-  const save = within(await screen.findByRole('article', { name: 'Reply length preference' })).getByRole('button', { name: 'Save preference' });
+  await screen.findByRole('article', { name: 'Reply length preference' }); const save = option('Reply length', 'Brief');
   expect(save).toBeEnabled(); fireEvent.click(save);
   expect(mocks.preference).toHaveBeenCalledTimes(2);
   expect(mocks.preference.mock.calls[1][0]).toMatchObject({ space: 'personal', agentId: 'agent2', expectedRevision: 12 });
   await act(async () => finishWork(snapshot));
   expect(save).toBeDisabled(); expect(p.onSnapshot).not.toHaveBeenCalled();
-  fireEvent.click(save); expect(mocks.preference).toHaveBeenCalledTimes(2);
+  fireEvent.click(option('Reply length', 'Detailed')); expect(mocks.preference).toHaveBeenCalledTimes(2);
   await act(async () => finishPersonal({ ...snapshot, revision: 13 }));
   expect(p.onSnapshot).toHaveBeenCalledExactlyOnceWith({ ...snapshot, revision: 13 });
-  expect(screen.getByLabelText('Reply length')).toBeEnabled();
+  expect(option('Reply length', 'Detailed')).toBeEnabled();
 });
 it('does not abandon a pending command when the parent catches up to its already-loaded revision', async () => {
   mocks.preferenceState.mockResolvedValueOnce({ ...state(), revision: 11 }).mockResolvedValue({ ...state(), revision: 12 });
@@ -118,7 +120,7 @@ it('does not abandon a pending command when the parent catches up to its already
   await act(async () => complete({ ...snapshot, revision: 12 }));
   expect(await screen.findByText('Saved.')).toBeInTheDocument();
   expect(p.onSnapshot).toHaveBeenCalledOnce();
-  expect(screen.getByLabelText('Reply language')).toBeEnabled();
+  expect(option('Reply language', 'English')).toBeEnabled();
 });
 it('hides undo when its displayed deadline ends', async () => {
   vi.useFakeTimers();
@@ -139,11 +141,11 @@ it('a same-scope replacement aborts the old command and lets a new command retai
   let finishOld!: (value: ExperienceSnapshot) => void, finishNext!: (value: ExperienceSnapshot) => void;
   mocks.preference.mockReturnValueOnce(new Promise(resolve => { finishOld = resolve; })).mockReturnValueOnce(new Promise(resolve => { finishNext = resolve; }));
   const p = props(), view = render(<PreferencePanel {...p} />);
-  fireEvent.click(within(await screen.findByRole('article', { name: 'Reply length preference' })).getByRole('button', { name: 'Save preference' }));
+  await screen.findByRole('article', { name: 'Reply length preference' }); fireEvent.click(option('Reply length', 'Brief'));
   const oldSignal = mocks.preference.mock.calls[0][1] as AbortSignal;
   mocks.preferenceState.mockResolvedValue({ ...state(), revision: 12 }); view.rerender(<PreferencePanel {...p} revisionHint={12} />); await act(async () => {});
-  expect(oldSignal.aborted).toBe(true); const save = within(screen.getByRole('article', { name: 'Reply length preference' })).getByRole('button', { name: 'Save preference' });
+  expect(oldSignal.aborted).toBe(true); const save = option('Reply length', 'Brief');
   expect(save).toBeEnabled(); fireEvent.click(save); expect(mocks.preference).toHaveBeenCalledTimes(2);
-  await act(async () => finishOld(snapshot)); expect(save).toBeDisabled(); expect(p.onSnapshot).not.toHaveBeenCalled();
-  await act(async () => finishNext({ ...snapshot, revision: 13 })); expect(save).toBeEnabled(); expect(p.onSnapshot).toHaveBeenCalledExactlyOnceWith({ ...snapshot, revision: 13 });
+  await act(async () => finishOld(snapshot)); expect(option('Reply length', 'Detailed')).toBeDisabled(); expect(p.onSnapshot).not.toHaveBeenCalled();
+  await act(async () => finishNext({ ...snapshot, revision: 13 })); expect(option('Reply length', 'Detailed')).toBeEnabled(); expect(p.onSnapshot).toHaveBeenCalledExactlyOnceWith({ ...snapshot, revision: 13 });
 });

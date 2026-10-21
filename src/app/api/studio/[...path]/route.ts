@@ -7,6 +7,8 @@ import { handleStudioRequest } from '@/lib/studio/http';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+/** Two parallel portraits plus the Telegram push; matches firebase.json timeoutSeconds. */
+export const maxDuration = 120;
 
 interface RouteParams {
   params: Promise<{ path: string[] }>;

@@ -78,7 +78,7 @@ it('isolates delayed Work commands from Personal and a new authenticated account
     command = JSON.parse(String(init.body)); return new Promise<Response>(resolve => { finish = resolve; });
   }));
   const view = render(<ProductPausePanel sessionKey="session-a" />); fireEvent.click(await screen.findByRole('button', { name: 'Pause in Work' }));
-  fireEvent.click(within(screen.getByRole('group', { name: 'Pause control space' })).getByRole('button', { name: 'Personal' }));
+  fireEvent.click(within(screen.getByRole('tablist', { name: 'Pause control space' })).getByRole('tab', { name: 'Personal' }));
   await screen.findByText('Not paused in Personal'); expect(screen.queryByText(/Requesting pause in Work/)).toBeNull();
   view.rerender(<ProductPausePanel sessionKey="session-b" />); await screen.findByText('Not paused in Personal');
   await act(async () => { finish(Response.json(result(command))); }); expect(screen.queryByText('Pause confirmed in Work.')).toBeNull(); expect(screen.getByText('Not paused in Personal')).toBeVisible();
