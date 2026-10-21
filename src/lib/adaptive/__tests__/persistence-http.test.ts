@@ -58,3 +58,39 @@ describe('authenticated adaptive API boundary', () => {
     expect((await handleAdaptiveRequest(studio, service, req, [], TOKEN)).status).toBe(403);
   });
 });
+
+
+it('confirms the exact adult/country payload behind a trusted public proxy while preserving origin denial', async () => {
+  const { studio, service } = await setup();
+
+  const publicOrigin = 'https://vox.test';
+  const internalOrigin = 'https://127.0.0.1:3107';
+  studio.deps.webAppUrl = `${publicOrigin}/studio`;
+
+  const payload = { confirm: true, adultConfirmed: true, declaredJurisdiction: 'EE' };
+  const proxy = (extra: Record<string, string> = {}) => handleAdaptiveRequest(studio, service, new Request(`${internalOrigin}/api/studio/adaptive/identity?space=personal`, {
+    method: 'POST', headers: { 'x-telegram-init-data': signInitData({ id: 123, first_name: 'Synthetic' }, TOKEN), 'content-type': 'application/json', origin: publicOrigin, 'sec-fetch-site': 'same-origin', ...extra },
+    body: JSON.stringify(payload),
+  }), ['identity'], TOKEN);
+
+  // Forwarding/Host headers cannot expand the server-owned origin allowlist.
+  const rejectedHeaders: Record<string, string>[] = [
+    { origin: 'https://hostile.test', host: 'hostile.test', 'x-forwarded-host': 'hostile.test', 'x-forwarded-proto': 'https' },
+    { origin: internalOrigin },
+    { origin: publicOrigin, 'sec-fetch-site': 'cross-site' },
+    { origin: '' },
+  ];
+  for (const headers of rejectedHeaders) {
+    const result = await proxy(headers);
+    expect(result.status).toBe(403); expect(await result.json()).toEqual({ error: 'origin_denied' });
+  }
+  studio.deps.webAppUrl = '';
+  const invalid = await proxy({ origin: internalOrigin });
+  expect(invalid.status).toBe(503); expect(await invalid.json()).toEqual({ error: 'origin_unavailable' });
+  studio.deps.webAppUrl = `${publicOrigin}/studio`;
+
+  expect((await service.read(123, 'personal')).identity.confirmed).toBe(false);
+  const confirmed = await proxy();
+  expect(confirmed.status).toBe(200); expect(confirmed.headers.get('cache-control')).toBe('no-store');
+  expect((await confirmed.json()).identity).toMatchObject({ confirmed: true, adultDeclared: true, declaredJurisdiction: 'EE' });
+});

@@ -1,3 +1,4 @@
+import { trustedStudioRequestOrigin } from '../../studio/request-origin';
 import { isSchemaValidationError } from '../../error-contract';
 import { z } from 'zod';
 import { reminderChannelPresentSchema, reminderChannelInputSchema, reminderActionInputSchema } from './reminder-contracts';
@@ -91,7 +92,9 @@ export async function handleExperienceRequest(studio: Studio, service: AdaptiveE
     }
     if (request.method === 'GET' && path.length === 0) return await snapshotResponse(await service.read(user.id, space));
     if (!['POST', 'PUT'].includes(request.method)) return json({ error: 'not_found' }, 404);
-    if (request.headers.get('origin') !== url.origin || request.headers.get('sec-fetch-site') === 'cross-site') return json({ error: 'origin_denied' }, 403);
+    const expectedOrigin = trustedStudioRequestOrigin(url, studio.deps.webAppUrl);
+    if (!expectedOrigin) return json({ error: 'origin_unavailable' }, 503);
+    if (request.headers.get('origin') !== expectedOrigin || request.headers.get('sec-fetch-site') === 'cross-site') return json({ error: 'origin_denied' }, 403);
     if (request.headers.get('content-type')?.split(';')[0].trim().toLowerCase() !== 'application/json') return json({ error: 'json_required' }, 415);
     await limiter.consume('mutation', user.id);
     let body: unknown;

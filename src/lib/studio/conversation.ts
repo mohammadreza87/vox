@@ -69,6 +69,7 @@ export async function handleConversationRequest(studio: Studio, request: Request
     const input = inputSchema.parse(body);
     return outcomeResponse(await converseAuthorized(studio, user, input, request.signal));
   } catch (error) {
+    if (LLMAuthorizationError.is(error)) return json({ error: 'conversation_changed' }, 409);
     if (isSchemaValidationError(error)) return json({ error: 'invalid_request' }, 400);
     if (AdaptiveError.is(error)) return json({ error: error.code }, error.status);
     if (StudioRateLimitError.is(error)) return json({ error: 'rate_limited' }, 429, { 'Retry-After': String(error.retryAfterSeconds) });

@@ -173,6 +173,7 @@ function PetSession({ agentId, injected, signed, onForget }: { agentId: string; 
   const careRef = useRef<PetCare | null>(null);
   const talkRef = useRef<TalkState>('idle');
   const helloAt = useRef<number | null>(null);
+  const conversationStarted = useRef(false);
   const queued = useRef<(() => void)[]>([]);
   const localGuard = useRef<Partial<Record<string, string>>>({});
   const closing = useRef<(() => void) | null>(null);
@@ -365,7 +366,7 @@ function PetSession({ agentId, injected, signed, onForget }: { agentId: string; 
     return readyAfterPaint(tg(), () => {
       helloAt.current = performance.now();
       const care = careRef.current;
-      if (!care?.asleep) engine.fire({ type: 'hello', firstName: firstName() });
+      if (!care?.asleep && !conversationStarted.current) engine.fire({ type: 'hello', firstName: firstName() });
       if (care) {
         setDays(daysTogether(care.firstMetAt, sync.now()));
       }
@@ -485,7 +486,11 @@ function PetSession({ agentId, injected, signed, onForget }: { agentId: string; 
     if (!valid()) return;
     switch (c.type) {
       case 'expr': setExpr(c.expr); break;
-      case 'say': setBubble({ id: performance.now(), text: sayText(c.line, firstName()) }); break;
+      case 'say':
+        // Ambient reactions cannot replace the person's current conversation or a late greeting.
+        if (talkRef.current === 'idle' && !(conversationStarted.current && c.line === 'hi'))
+          setBubble({ id: performance.now(), text: sayText(c.line, firstName()) });
+        break;
       case 'thought': { const need = c.need; setThought(need); later(2400, () => setThought((n) => (n === need ? null : n))); break; }
       case 'care': sync.act(c.action, c.n); break;
       case 'score': setScore({ bops: c.bops, misses: c.misses }); break;
@@ -521,6 +526,7 @@ function PetSession({ agentId, injected, signed, onForget }: { agentId: string; 
   const onListen = useCallback((source: 'text' | 'mic') => {
     const e = engineRef.current;
     if (!valid() || !e || talkRef.current === 'thinking' || talkRef.current === 'speaking') return;
+    conversationStarted.current = true;
     talkRef.current = 'listening';
     // the engine plays the perk on entering listening (once; the mic gets its own variant)
     e.talk('listening', source);
@@ -618,6 +624,7 @@ function PetSession({ agentId, injected, signed, onForget }: { agentId: string; 
   /** Resolves false when the turn failed, so the pill puts the words back. */
   const onSend = async (text: string): Promise<boolean> => {
     if (!valid()) return false;
+    conversationStarted.current = true;
     startThinking();
     try {
       const r = await withTimeout((signal) => api.talk(agentId, { text }, { signal }));
@@ -629,6 +636,7 @@ function PetSession({ agentId, injected, signed, onForget }: { agentId: string; 
 
   const onVoice = async (blob: Blob) => {
     if (!valid()) return false;
+    conversationStarted.current = true;
     startThinking();
     try {
       const r = await withTimeout((signal) => api.talkVoice(agentId, blob, { signal }));

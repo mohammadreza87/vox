@@ -1,3 +1,4 @@
+import { trustedStudioRequestOrigin } from '../../studio/request-origin';
 import { isSchemaValidationError } from '../../error-contract';
 import { z } from 'zod';
 import { verifyInitData } from '../../studio/auth';
@@ -27,7 +28,9 @@ export async function handleSharedRequest(studio: Studio, service: SharedMemoryS
     const space = z.enum(['work', 'personal']).parse(url.searchParams.get('space') ?? 'work');
     if (request.method === 'GET' && path.length === 0) return response(await service.list(actor.id, space));
     if (!['POST', 'PUT', 'DELETE'].includes(request.method)) return response({ error: 'not_found' }, 404);
-    if (request.headers.get('origin') !== url.origin || request.headers.get('sec-fetch-site') === 'cross-site') return response({ error: 'origin_denied' }, 403);
+    const expectedOrigin = trustedStudioRequestOrigin(url, studio.deps.webAppUrl);
+    if (!expectedOrigin) return response({ error: 'origin_unavailable' }, 503);
+    if (request.headers.get('origin') !== expectedOrigin || request.headers.get('sec-fetch-site') === 'cross-site') return response({ error: 'origin_denied' }, 403);
     if (request.headers.get('content-type')?.split(';')[0].trim().toLowerCase() !== 'application/json') return response({ error: 'json_required' }, 415);
     await limiter.consume('mutation', actor.id);
     const bounded = await boundedStudioRequest(request, 8192);

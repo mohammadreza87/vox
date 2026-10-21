@@ -126,3 +126,38 @@ it('bounds context prewarm time and leaves semantic/baseline flow available', as
   const result = await request(['predict'], 'POST', input);
   expect(await result.json()).toMatchObject({ status: 'answered', preparedContext: false });
 });
+
+
+it('saves an explicit proxied preference without relaxing account, origin or opt-in authority', async () => {
+  const { studio, experience, adaptive } = setup(); const before = await adaptive.confirm(123, { confirm: true });
+
+  const publicOrigin = 'https://vox.test';
+  const internalOrigin = 'https://127.0.0.1:3107';
+  studio.deps.webAppUrl = `${publicOrigin}/studio`;
+
+  const payload = { space: 'work', expectedRevision: before.revision, eventId: 'proxy-preference-event', agentId: 'allowed-agent', setting: { key: 'language', value: 'fa' }, action: 'set' };
+  const proxy = (extra: Record<string, string> = {}) => handleExperienceRequest(studio, experience, new Request(`${internalOrigin}/api/studio/experience/preferences`, {
+    method: 'PUT', headers: { 'x-telegram-init-data': signInitData({ id: 123, first_name: 'Synthetic' }, TOKEN), 'content-type': 'application/json', origin: publicOrigin, 'sec-fetch-site': 'same-origin', ...extra },
+    body: JSON.stringify(payload),
+  }), ['preferences'], TOKEN);
+
+  // Forwarding/Host headers cannot expand the server-owned origin allowlist.
+  const rejectedHeaders: Record<string, string>[] = [
+    { origin: 'https://hostile.test', host: 'hostile.test', 'x-forwarded-host': 'hostile.test', 'x-forwarded-proto': 'https' },
+    { origin: internalOrigin },
+    { origin: publicOrigin, 'sec-fetch-site': 'cross-site' },
+    { origin: '' },
+  ];
+  for (const headers of rejectedHeaders) {
+    const result = await proxy(headers);
+    expect(result.status).toBe(403); expect(await result.json()).toEqual({ error: 'origin_denied' });
+  }
+  studio.deps.webAppUrl = '';
+  const invalid = await proxy({ origin: internalOrigin });
+  expect(invalid.status).toBe(503); expect(await invalid.json()).toEqual({ error: 'origin_unavailable' });
+  studio.deps.webAppUrl = `${publicOrigin}/studio`;
+
+  expect((await adaptive.read(123, 'work')).revision).toBe(before.revision);
+  const saved = await proxy(); expect(saved.status).toBe(200);
+  expect((await saved.json()).preferences[0]).toMatchObject({ applied: false, setting: { key: 'language', value: 'fa' } });
+});

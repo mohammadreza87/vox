@@ -62,3 +62,39 @@ describe('shared memory HTTP authentication and privacy boundary', () => {
     expect(conflict.status).toBe(409); expect(await conflict.json()).toEqual({ error: 'revision_conflict' });
   });
 });
+
+
+it('routes shared preview through the configured public proxy without trusting forwarding headers', async () => {
+  const { studio, service } = setup();
+
+  const publicOrigin = 'https://vox.test';
+  const internalOrigin = 'https://127.0.0.1:3107';
+  studio.deps.webAppUrl = `${publicOrigin}/studio`;
+
+  const payload = { space: 'work', recipientTelegramIds: [102], agentIds: [] };
+  const proxy = (extra: Record<string, string> = {}) => handleSharedRequest(studio, service as unknown as SharedMemoryService, new Request(`${internalOrigin}/api/studio/shared/preview`, {
+    method: 'POST', headers: { 'x-telegram-init-data': signInitData({ id: 101, first_name: 'Synthetic' }, TOKEN), 'content-type': 'application/json', origin: publicOrigin, 'sec-fetch-site': 'same-origin', ...extra },
+    body: JSON.stringify(payload),
+  }), ['preview'], TOKEN);
+
+  // Forwarding/Host headers cannot expand the server-owned origin allowlist.
+  const rejectedHeaders: Record<string, string>[] = [
+    { origin: 'https://hostile.test', host: 'hostile.test', 'x-forwarded-host': 'hostile.test', 'x-forwarded-proto': 'https' },
+    { origin: internalOrigin },
+    { origin: publicOrigin, 'sec-fetch-site': 'cross-site' },
+    { origin: '' },
+  ];
+  for (const headers of rejectedHeaders) {
+    const result = await proxy(headers);
+    expect(result.status).toBe(403); expect(await result.json()).toEqual({ error: 'origin_denied' });
+  }
+  studio.deps.webAppUrl = '';
+  const invalid = await proxy({ origin: internalOrigin });
+  expect(invalid.status).toBe(503); expect(await invalid.json()).toEqual({ error: 'origin_unavailable' });
+  studio.deps.webAppUrl = `${publicOrigin}/studio`;
+
+  expect(service.preview).not.toHaveBeenCalled();
+  const preview = await proxy();
+  expect(preview.status).toBe(200); expect(preview.headers.get('cache-control')).toBe('no-store');
+  expect(service.preview).toHaveBeenCalledExactlyOnceWith(101, payload);
+});

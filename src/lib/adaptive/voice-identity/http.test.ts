@@ -56,3 +56,40 @@ describe('voice identity authenticated HTTP synthetic integration', () => {
     expect(provider.inspect).not.toHaveBeenCalled(); expect(provider.extract).not.toHaveBeenCalled();
   });
 });
+
+
+it('allows the trusted proxied disclosure but keeps voice consent/provider and hostile-origin boundaries', async () => {
+  const { studio, service, consent, provider } = await setup(); await consent();
+
+  const publicOrigin = 'https://vox.test';
+  const internalOrigin = 'https://127.0.0.1:3107';
+  studio.deps.webAppUrl = `${publicOrigin}/studio`;
+
+  const before = await service.read(123, scope);
+  const payload = { ...scope, expectedRevision: before.revision, locale: 'fa' };
+  const proxy = (extra: Record<string, string> = {}) => handleVoiceIdentityRequest(studio, service, new Request(`${internalOrigin}/api/studio/voice-identity/present`, {
+    method: 'POST', headers: { 'x-telegram-init-data': signInitData({ id: 123, first_name: 'Synthetic' }, TOKEN), 'content-type': 'application/json', origin: publicOrigin, 'sec-fetch-site': 'same-origin', ...extra },
+    body: JSON.stringify(payload),
+  }), ['present'], TOKEN);
+
+  // Forwarding/Host headers cannot expand the server-owned origin allowlist.
+  const rejectedHeaders: Record<string, string>[] = [
+    { origin: 'https://hostile.test', host: 'hostile.test', 'x-forwarded-host': 'hostile.test', 'x-forwarded-proto': 'https' },
+    { origin: internalOrigin },
+    { origin: publicOrigin, 'sec-fetch-site': 'cross-site' },
+    { origin: '' },
+  ];
+  for (const headers of rejectedHeaders) {
+    const result = await proxy(headers);
+    expect(result.status).toBe(403); expect(await result.json()).toEqual({ error: 'origin_denied' });
+  }
+  studio.deps.webAppUrl = '';
+  const invalid = await proxy({ origin: internalOrigin });
+  expect(invalid.status).toBe(503); expect(await invalid.json()).toEqual({ error: 'origin_unavailable' });
+  studio.deps.webAppUrl = `${publicOrigin}/studio`;
+
+  expect((await service.read(123, scope)).revision).toBe(before.revision);
+  const presented = await proxy(); expect(presented.status).toBe(200);
+  expect((await presented.json()).notice.locale).toBe('fa');
+  expect(provider.inspect).not.toHaveBeenCalled(); expect(provider.extract).not.toHaveBeenCalled();
+});

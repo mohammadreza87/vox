@@ -211,6 +211,20 @@ describe('PetApp: talk outcomes, sleep, the cache and the page', () => {
     await waitFor(() => expect(engine().fire).toHaveBeenCalledWith({ type: 'celebrate', why: 'bond' }));
   });
 
+  it('keeps a fast conversation reply when delayed hello or ambient speech cues arrive', async () => {
+    telegram();
+    const base = fast();
+    const api = fast({ talk: async (id, req, o) => ({ ...(await base.talk(id, req, o)), reply: 'PRIORITY_CONVERSATION_REPLY' }) });
+    const { container } = render(<PetApp agentId="x" api={api} />);
+    await ready(container);
+    const input = screen.getByRole('textbox', { name: 'Talk to Mochi' });
+    fireEvent.change(input, { target: { value: 'hello' } });
+    fireEvent.submit(input.closest('form')!);
+    await waitFor(() => expect(bubble(container)).toContain('PRIORITY_CONVERSATION_REPLY'));
+    act(() => { engines.at(-1)!.opts.onCue?.({ type: 'say', line: 'hi' }); engines.at(-1)!.opts.onCue?.({ type: 'say', line: 'yum' }); });
+    expect(bubble(container)).toContain('PRIORITY_CONVERSATION_REPLY');
+  });
+
   it('a voice turn that heard nothing says so gently, never an empty bubble', async () => {
     telegram();
     class Recorder {
