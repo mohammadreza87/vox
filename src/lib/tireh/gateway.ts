@@ -21,6 +21,7 @@ import type { OrgDirectory } from './org/directory';
 import type { ChatContext, ChatMessage, MemoryRecord, MemoryScope, Persona } from './types';
 import type { ChatHistoryStore, MemoryStore, ShareOfferStore, UpdateDeduper } from './memory/store';
 import type { VoiceService } from './voice';
+import type { VoiceNoteVerifier } from './identity/voice-band';
 import type { TelegramBotClient, TelegramCallbackQuery, TelegramMessage, TelegramUpdate } from './telegram/client';
 import { attachTurnBlock, buildPromptLayout, buildSystemPrompt, LIVE_CALL_FRAME, PROACTIVE_GROUP_FRAME, type PromptInput } from './conversation/prompt';
 import { tirehFlags } from './flags';
@@ -142,6 +143,8 @@ export interface GatewayDeps {
   history: ChatHistoryStore;
   deduper: UpdateDeduper;
   voice: VoiceService | null;
+  /** S11L shadow voice verification on 1:1 voice notes; never grants access. */
+  voiceVerifier?: VoiceNoteVerifier;
   /** Telegram client for a persona's bot */
   botFor(personaId: string): TelegramBotClient;
   /** Recheck live membership/settings before provider calls and side effects. */
@@ -937,7 +940,16 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     try {
       const audio = await bot.downloadFile(message.voice.file_id);
       if (!(await this.groupAllowed(persona, chat, speakerId, 'reply'))) return '';
-      return await timed('stt', () => this.deps.voice!.transcribe(audio, message.voice!.mime_type ?? 'audio/ogg'));
+      const mimeType = message.voice.mime_type ?? 'audio/ogg';
+      const stt = timed('stt', () => this.deps.voice!.transcribe(audio, mimeType));
+      const verifier = chat.kind === 'private' ? this.deps.voiceVerifier : undefined;
+      if (!verifier) return await stt;
+      // S11L shadow mode: the band is computed beside STT and discarded. It never grants
+      // access. TODO(S10): pass it to IdentityService.assess, which may only lower identity.
+      // Telegram turns are space 'work' (the boundary default).
+      const [text] = await Promise.all([stt, verifier.verifyVoiceNote({ personaId: persona.id, personId: speakerId, space: 'work', chatKind: 'private',
+        guestAudience: hasGuestAudience(this.deps.org, chat), audio, mimeType, durationSec: message.voice.duration, channel: 'telegram_voice_note' }).catch(() => null)]);
+      return text;
     } catch {
       logTelegramDiagnostic(this.log, 'transcription_failed');
       return '';

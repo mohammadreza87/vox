@@ -151,6 +151,7 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
     if (generation && action === 'avatars') await limiter.consume('avatar', me.telegramId);
     if (voiceSearch || (generation && ['voice', 'speak'].includes(action))) await limiter.consume('voice', me.telegramId);
     if (generation && ['call', 'test', 'live-call'].includes(action)) await limiter.consume('call', me.telegramId);
+    if (root === 'voice-enroll' && method === 'POST' && studio.deps.voiceprints) { await limiter.consume('expensive', me.telegramId); await limiter.consume('call', me.telegramId); }
     req = await boundedStudioRequest(req);
 
     if (root === 'members') {
@@ -173,6 +174,25 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
         language: q.get('language') ?? undefined, search: q.get('search') ?? undefined,
         category: q.get('category') ?? undefined,
       }) });
+    }
+
+    // S11L voiceprint enrollment (STUDIO_VOICE_RECOGNITION). Without voiceprints wired this
+    // falls through to the base 404. The template and consent event id never leave the server.
+    if (root === 'voice-enroll' && !id && studio.deps.voiceprints) {
+      const spaceOf = (value: unknown): 'work' | 'personal' => {
+        if (value !== 'work' && value !== 'personal') throw new StudioError(400, 'Choose Work or Personal.');
+        return value;
+      };
+      if (method === 'GET') return json(await studio.voiceprintStatus(me, spaceOf(new URL(req.url).searchParams.get('space') ?? 'work')));
+      if (method === 'DELETE') return json(await studio.deleteVoiceprint(me, spaceOf(new URL(req.url).searchParams.get('space') ?? 'work')));
+      if (method === 'POST') {
+        const form = await req.formData().catch(() => { throw new StudioError(400, 'Expected audio'); });
+        const audio = form.get('audio');
+        if (!(audio instanceof Blob)) throw new StudioError(400, 'Expected audio');
+        if (form.get('statement') !== 'enroll_my_voice') throw new StudioError(400, 'Confirm the explicit consent statement first.');
+        const space = spaceOf(form.get('space') ?? 'work');
+        return json(await studio.enrollVoice(me, await audio.arrayBuffer(), audio.type || 'audio/webm', space));
+      }
     }
 
     if (root === 'catalog') {
