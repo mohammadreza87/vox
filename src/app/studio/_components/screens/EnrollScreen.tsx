@@ -180,8 +180,8 @@ export function EnrollScreen({ space, locale = 'en', onUsePersonSelection }: { s
           <button type="button" onClick={remove}>Delete voiceprint</button>
         </div>
       )}
-      <label className="flex gap-2 items-start">
-        <input type="checkbox" checked={agreed} onChange={event => setAgreed(event.target.checked)} disabled={phase !== 'idle'} />
+      <label className="vx-privacy-checkbox">
+        <input className="vx-privacy-check" type="checkbox" checked={agreed} onChange={event => setAgreed(event.target.checked)} disabled={phase !== 'idle'} />
         <span>{copy.statement}</span>
       </label>
       {phase === 'recording' ? (
