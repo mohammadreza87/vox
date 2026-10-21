@@ -196,6 +196,9 @@ export async function createStudioConnectionsApplication(studio: Studio, boundAc
       assertOwner(context, connection);
       if (connection.schemaVersion === 2 && connection.mcp) await assertMcpAvailable();
       else { if (!tool || tool.effect !== 'read') return deny('external_effects_not_qualified'); await currentProfile(tool.providerId, connectionAgentId(connection)); }
+      // A premature click must not consume the single-use spend reservation.
+      // The broker still rechecks current approval, authority and dispatch state.
+      if (!['queued', 'authorized'].includes(receipt.state)) return deny('operation_not_dispatchable', 409);
       await app.reserveTaskBudget?.(connection.providerId, `operation:${operationId}`, 'tool_calls', 1, connectionAgentId(connection));
       return options.broker!.execute({ actor, space, operationId });
     },
