@@ -38,7 +38,7 @@ export type Route =
   | { name: 'experience'; notificationId?: string }
   | { name: 'connections'; agentId?: string }
   | { name: 'agent'; id: string }
-  | { name: 'spawn'; draftId?: string; successorOf?: string }
+  | { name: 'spawn'; draftId?: string; successorOf?: string; refine?: boolean }
   | { name: 'call'; id: string }
   | { name: 'conversation'; id: string }
   | { name: 'memories'; id: string }
@@ -61,6 +61,7 @@ export interface Snack {
 
 export interface Nav {
   push(r: Route): void;
+  /** Back as the person means it: an active back guard takes it first, otherwise one screen is popped. */
   back(): void;
   /** Replace the whole stack (first route is the tab underneath). */
   reset(...routes: Route[]): void;
@@ -80,6 +81,14 @@ export interface Nav {
   /** Agents seen this session; hero targets render from it before their fetch lands */
   cache: Map<string, AgentView>;
   tier: MotionTier;
+  /**
+   * While registered, Back (Telegram's button, `back()`, a screen's top bar) calls `onBack`
+   * instead of leaving the screen, e.g. to close an open sheet. Guards stack: the newest wins.
+   * Returns the unregister function; call it when the guard ends and on unmount.
+   */
+  guardBack(onBack: () => void): () => void;
+  /** Offers one Back press to the newest guard; true when a guard took it. For screens whose Back is not a plain pop. */
+  consumeBack(): boolean;
 }
 
 const NavContext = createContext<Nav | null>(null);
@@ -263,15 +272,36 @@ export function StudioApp() {
     commit([...s, r], k, [...kinds.current.slice(0, s.length), k.kind]);
   }, [commit, heroReady]);
 
+  // The newest sheet guard consumes Back without disturbing the animated screen stack.
+  const backGuards = useRef<Array<{ onBack: () => void }>>([]);
+  const syncBackButton = useCallback(() => {
+    const button = tg()?.BackButton;
+    if (!button) return;
+    if (stackRef.current.length > 1 || backGuards.current.length) button.show(); else button.hide();
+  }, []);
+  const consumeBack = useCallback(() => {
+    const guard = backGuards.current[backGuards.current.length - 1];
+    guard?.onBack();
+    return !!guard;
+  }, []);
+  const guardBack = useCallback((onBack: () => void) => {
+    const guard = { onBack };
+    backGuards.current = [...backGuards.current, guard];
+    syncBackButton();
+    return () => {
+      backGuards.current = backGuards.current.filter(item => item !== guard);
+      syncBackButton();
+    };
+  }, [syncBackButton]);
   const back = useCallback(() => {
-    if (correctionOwner.current) return;
+    if (consumeBack() || correctionOwner.current) return;
     if (busy.current) { pendingBack.current = true; return; }   // e.g. a load error during the push: pop once it lands
     const s = stackRef.current;
     if (s.length < 2) return;
     const k = kindFor('back', top(s), s[s.length - 2], { hero: kinds.current[s.length - 1] === 'hero' });
     scrollMemory.delete(routeKey(top(s), s.length));
     commit(s.slice(0, -1), k, kinds.current.slice(0, s.length - 1));
-  }, [commit, scrollMemory]);
+  }, [commit, scrollMemory, consumeBack]);
   backRef.current = back;
 
   const reset = useCallback((...routes: Route[]) => {
@@ -298,8 +328,8 @@ export function StudioApp() {
 
   const nav = useMemo<Nav | null>(() => me && {
     me, refreshMe: loadMe, push, back, reset, toast, snack: showSnack,
-    locale, dir, setLocale, space, setSpace, cache, tier,
-  }, [me, loadMe, push, back, reset, toast, showSnack, locale, dir, setLocale, space, setSpace, cache, tier]);
+    locale, dir, setLocale, space, setSpace, cache, tier, guardBack, consumeBack,
+  }, [me, loadMe, push, back, reset, toast, showSnack, locale, dir, setLocale, space, setSpace, cache, tier, guardBack, consumeBack]);
 
   useEffect(() => {
     if (!me || me.member.role === 'pending' || notificationOpened.current) return;
@@ -322,10 +352,10 @@ export function StudioApp() {
     const button = tg()?.BackButton;
     if (!button) return;
     const onBack = () => backRef.current();
-    if (stack.length > 1) button.show(); else button.hide();
+    syncBackButton();
     button.onClick(onBack);
     return () => button.offClick(onBack);
-  }, [stack.length]);
+  }, [stack.length, syncBackButton]);
 
   // Telegram's ⋯ menu "Settings" opens You (D14).
   const ready = !!me && me.member.role !== 'pending';
@@ -410,7 +440,7 @@ export function StudioApp() {
                     {route.name === 'shared-memories' && <SharedMemoriesScreen selfId={me.member.telegramId} onBack={nav.back} />}
                     {route.name === 'experience' && <ExperienceScreen onBack={nav.back} role={me.member.role} notificationId={route.notificationId} />}
                     {route.name === 'agent' && <AgentScreen id={route.id} from={stack[stack.length - 2]?.name} />}
-                    {route.name === 'spawn' && <SpawnScreen draftId={route.draftId} successorOf={route.successorOf} />}
+                    {route.name === 'spawn' && <SpawnScreen draftId={route.draftId} successorOf={route.successorOf} refine={route.refine} />}
                     {route.name === 'call' && <CallScreen id={route.id} />}
                     {route.name === 'conversation' && <ConversationScreen id={route.id} />}
                     {route.name === 'memories' && <MemoriesScreen id={route.id} />}

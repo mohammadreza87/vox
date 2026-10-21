@@ -4,6 +4,7 @@ import { promises as fs, existsSync, readFileSync, renameSync } from 'fs';
 import { join } from 'path';
 import type { Firestore } from 'firebase-admin/firestore';
 import { FieldPath } from 'firebase-admin/firestore';
+import { RevisionCounter, revisionField, type RevisionProbe } from '../../tireh/privacy/revisions';
 import type { DirectAuthorityEvaluator } from './authority';
 import type { SpaceKind } from './repository';
 import type { IndexedAdaptiveQueries } from './indexed/contracts';
@@ -13,9 +14,9 @@ export interface AdaptiveAccountPageInput { after?: string; limit: number }
 
 export interface AdaptiveStorage {
   /** Only explicit prepared stores create/accept the v2 canonical cohort. */
-  readonly canonicalSchemaVersion?: 1 | 2;
+  readonly canonicalSchemaVersion?: 1 | 2 | 3;
   /** Required only for the prepared FILE narrow authority layout. */
-  readonly fileAuthorityProjectionVersion?: 1;
+  readonly fileAuthorityProjectionVersion?: 1 | 2;
   /** Managed-format namespace, never an access grant. Original FILE has none. */
   readonly identity?: Readonly<{ incarnation: string; generation: number }>;
   /** Optional server-only read model. Presence never selects or migrates a store. */
@@ -34,10 +35,18 @@ export interface AdaptiveStorage {
     { status: 'ready'; value: T } | { status: 'busy' | 'unsupported' | 'missing' };
   /** File-only effect fence; synchronous committed snapshot, no writer in progress. */
   readCommittedForEffect?(accountId: string): { status: 'ready'; document: unknown | null } | { status: 'busy' };
+  /** RF2 proof-only committed snapshot. No durable clock observation or writer
+   * reservation; observedAt is checked against the committed clock floor. */
+  readCommittedWithoutObservationForEffect?(accountId:string):{status:'ready';document:unknown|null;observedAt:number}|{status:'busy'};
   /** Server maintenance only. Opaque stable key cursor; never returns document payloads.
    * Concurrent inserts before a cursor are visited on the next full sweep. */
   listAccounts?(input: AdaptiveAccountPageInput): Promise<AdaptiveAccountPage>;
+  /** Read-only: the committed document (or null) and a revision probe taken no
+   * later than the read. Never locks, writes or rewrites. Every commit through
+   * `transact` advances the probed revision. */
+  load?(accountId: string): Promise<AdaptiveLoad>;
 }
+export interface AdaptiveLoad { value: unknown | null; probe: RevisionProbe }
 export const MAX_ADAPTIVE_DOCUMENT_BYTES = 700_000;
 const key = (id: string) => createHash('sha256').update(id).digest('hex');
 function pageInput(input: AdaptiveAccountPageInput): void {
@@ -61,7 +70,15 @@ function encode(document: unknown): string {
  * an operator must inspect/remove it after verifying no writer still owns it. */
 export class FileAdaptiveStorage implements AdaptiveStorage {
   readonly supportsCommittedWriteFence = true as const;
+  /** In-process revision bus: bumped after each atomic rename in this process. */
+  readonly revisions = new RevisionCounter('file-adaptive');
   constructor(readonly directory: string) {}
+  async load(accountId: string): Promise<AdaptiveLoad> {
+    const probe = this.revisions.probe(accountId);
+    // Atomic rename means an unlocked read sees one complete committed version.
+    try { return { value: JSON.parse(await fs.readFile(join(this.directory, `${key(accountId)}.json`), 'utf8')), probe }; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { value: null, probe }; throw error; }
+  }
   readCommittedForEffect(accountId: string): { status: 'ready'; document: unknown | null } | { status: 'busy' } {
     const file = join(this.directory, `${key(accountId)}.json`);
     if (existsSync(`${file}.lock`)) return { status: 'busy' };
@@ -119,6 +136,7 @@ export class FileAdaptiveStorage implements AdaptiveStorage {
         // deadlines cannot change between the last check and atomic commit.
         beforeCommit(); renameSync(temporary, file);
       } else await fs.rename(temporary, file);
+      this.revisions.bump(accountId);
       const directory = await fs.open(this.directory, 'r');
       try { await directory.sync(); } finally { await directory.close(); }
       return result === undefined ? result : structuredClone(result);
@@ -144,6 +162,14 @@ export class FirestoreAdaptiveStorage implements AdaptiveStorage {
     }
     return { accountIds, ...(page.docs.length > input.limit ? { next: selected.at(-1)!.id } : {}) };
   }
+  async load(accountId: string): Promise<AdaptiveLoad> {
+    const ref = this.db.collection(this.collection).doc(key(accountId));
+    const snap = await ref.get();
+    const raw = snap.exists ? snap.get('json') : null;
+    if (snap.exists && typeof raw !== 'string') throw new Error('Invalid adaptive document');
+    return { value: raw === null ? null : JSON.parse(raw),
+      probe: { key: `firestore:${ref.path}`, value: revisionField(snap.exists ? snap.get('rev') : 0), remote: { path: ref.path, field: 'rev' } } };
+  }
   async transact<T>(accountId: string, mutate: (current: unknown | null) => { document: unknown; result: T }): Promise<T> {
     const ref = this.db.collection(this.collection).doc(key(accountId));
     const result = await this.db.runTransaction(async tx => {
@@ -152,7 +178,9 @@ export class FirestoreAdaptiveStorage implements AdaptiveStorage {
       // Existing malformed documents never become an empty account.
       if (snap.exists && typeof raw !== 'string') throw new Error('Invalid adaptive document');
       const { document, result } = mutate(raw === null ? null : JSON.parse(raw));
-      tx.set(ref, { json: encode(document), updatedAt: new Date() });
+      // `rev` is a storage-level commit counter for revision rechecks; the
+      // document's own revision is not bumped by every writer.
+      tx.set(ref, { json: encode(document), rev: revisionField(snap.exists ? snap.get('rev') : 0) + 1, updatedAt: new Date() });
       return result;
     });
     return result === undefined ? result : structuredClone(result);
@@ -163,6 +191,12 @@ export class FirestoreAdaptiveStorage implements AdaptiveStorage {
 export class MemoryAdaptiveStorage implements AdaptiveStorage {
   private readonly documents = new Map<string, unknown>();
   private readonly queues = new Map<string, Promise<void>>();
+  readonly revisions = new RevisionCounter('memory-adaptive');
+  async load(accountId: string): Promise<AdaptiveLoad> {
+    const probe = this.revisions.probe(accountId);
+    const document = this.documents.get(accountId);
+    return { value: document === undefined ? null : structuredClone(document), probe };
+  }
   async transact<T>(accountId: string, mutate: (current: unknown | null) => { document: unknown; result: T }): Promise<T> {
     const prior = this.queues.get(accountId) ?? Promise.resolve();
     let release!: () => void;
@@ -173,6 +207,7 @@ export class MemoryAdaptiveStorage implements AdaptiveStorage {
       const { document, result } = mutate(structuredClone(this.documents.get(accountId) ?? null));
       const json = encode(document);
       this.documents.set(accountId, JSON.parse(json));
+      this.revisions.bump(accountId);
       return result === undefined ? result : structuredClone(result);
     } finally { release(); if (this.queues.get(accountId) === pending) this.queues.delete(accountId); }
   }

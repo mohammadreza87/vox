@@ -1,6 +1,6 @@
 # Recorded maintenance status / وضعیت ثبت‌شدهٔ نگهداری
 
-Bounded VOX-022 / VOX-052 implementation, based on released `9371894`. Backend and frontend authors are separate from the independent evaluator. Sol handles this slice because it changes operator authorization and storage inspection; the broader fixed-schema reporting role remains assigned to Luna in the backlog. Author source checks passed; independent acceptance, composed CI, compiled browser and deployment evidence must be attached to the exact candidate before release.
+Bounded VOX-022 / VOX-052 implementation, based on released `9371894`. Backend and frontend authors are separate from the independent evaluator. Sol handles this slice because it changes operator authorization and storage inspection; the broader fixed-schema reporting role remains assigned to Luna in the backlog. Independent source/compiled acceptance and final CI218 passed; merged revision b419309 was deployed with unchanged configuration. See the [release receipt](RELEASE_MAINTENANCE_2026_10_20.md) for exact candidate/build evidence and remaining limits.
 
 ## What the operator sees
 
@@ -34,4 +34,4 @@ Operator status is not an alerting service. Cohort dashboards, operational SLO/l
 
 فقط دریافت اولیه و دکمهٔ دستی تازه‌سازی وجود دارد؛ هیچ اجرا، زمان‌بندی، اعلان یا تلاش خودکار تازه‌ای اضافه نمی‌شود. هنگام تازه‌سازی، شواهد قدیمی پاک می‌شود و پاسخ دیررس پس از تغییر نما یا خروج نمایش داده نمی‌شود. دادهٔ ناقص، ناسازگار یا قدیمیِ فاقد فیلد وضعیت، «در دسترس نیست» خواهد بود. خواندن وضعیت هیچ فایل، قفل یا مجوزی را تغییر نمی‌دهد و کنترل نقش و احراز هویت درست پیش از انتشار پاسخ دوباره انجام می‌شود.
 
-بررسی مستقل، CI، مسیر مرورگر کامپایل‌شده و رسید استقرار باید به نامزد دقیق متصل باشند. این تغییر، هشدار عملیاتی، تأیید حذف نزد ارائه‌دهنده، بازیابی کامل پشتیبان، سنجش بار یا تکمیل همهٔ وظایف والد نیست؛ فعال‌سازی نگهداری تولید جداگانه باقی می‌ماند.
+بررسی مستقل، CI و مسیر مرورگر کامپایل‌شده موفق بوده و نسخهٔ b419309 با تنظیمات قبلی مستقر شده است؛ شناسه‌های دقیق و محدودیت‌ها در رسید انتشار ثبت شده‌اند. این تغییر، هشدار عملیاتی، تأیید حذف نزد ارائه‌دهنده، بازیابی کامل پشتیبان، سنجش بار یا تکمیل همهٔ وظایف والد نیست؛ فعال‌سازی نگهداری تولید جداگانه باقی می‌ماند.

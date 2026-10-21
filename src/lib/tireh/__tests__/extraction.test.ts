@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { buildExtractionPrompt, decideScope, firstNewIndex, parseCandidates, type MemoryCandidate } from '../memory/extraction';
-import { memory, testOrg } from './fixtures';
+import { buildExtractionPrompt, decideScope, extractCandidates, firstNewIndex, parseCandidates, type MemoryCandidate } from '../memory/extraction';
+import { FakeLLM, memory, testOrg } from './fixtures';
 import type { ChatContext } from '../types';
 
 const org = testOrg();
@@ -142,6 +142,15 @@ describe('buildExtractionPrompt', () => {
     expect(prompt).toContain('parastoo: Parastoo (Executive)');
     expect(prompt).toContain('gameend: GameEnd');
     expect(prompt).toContain('projectId: id of the related project, or null');
+  });
+});
+
+describe('extractCandidates', () => {
+  it('runs at low effort with headroom for thinking, since thinking shares the cap', async () => {
+    const llm = new FakeLLM();
+    await extractCandidates(llm, org, persona, dm, 'reza', [{ role: 'user', personId: 'reza', text: 'Launch moved to Friday', at: new Date() }]);
+    expect(llm.extractionRequests).toHaveLength(1);
+    expect(llm.extractionRequests[0]).toMatchObject({ maxTokens: 3072, effort: 'low', temperature: 0.2 });
   });
 });
 

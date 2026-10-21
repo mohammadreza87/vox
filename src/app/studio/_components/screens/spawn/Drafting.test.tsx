@@ -1,7 +1,7 @@
 import { act, cleanup, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CharacterLook } from '@/lib/studio/types';
-import { Drafting } from './Drafting';
+import { Drafting } from './Drafting.design';
 
 type FaceProps = { look: CharacterLook; moment?: { kind: string } | null };
 const faces = vi.hoisted(() => ({ renders: [] as FaceProps[] }));

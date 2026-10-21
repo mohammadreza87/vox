@@ -34,7 +34,7 @@ async function fixtures(page: Page, correctionFailure = false) {
   return { events, corrections, exposures, visible: () => visibleAtReport };
 }
 async function openChat(page: Page) {
-  await page.goto('/studio'); await page.getByRole('button', { name: 'Observation Fixture, Synthetic QA' }).click(); await page.getByRole('button', { name: 'Chat here' }).click();
+  await page.goto('/studio'); await page.getByRole('button', { name: 'Observation Fixture, Synthetic QA' }).click(); await page.getByRole('button', { name: 'Chat', exact: true }).click();
 }
 test('actual visible committed text reports once with applied presentation and distinct explicit task feedback', async ({ page }) => {
   const f = await fixtures(page); await openChat(page);

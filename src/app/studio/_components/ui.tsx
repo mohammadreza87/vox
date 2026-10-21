@@ -22,6 +22,7 @@ const STROKE = { fill: 'none', stroke: 'currentColor', strokeWidth: 1.75, stroke
 
 const PATHS: Record<string, string> = {
   back: 'M15 5l-7 7 7 7',
+  settings: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z',
   close: 'M6 6l12 12M18 6L6 18',
   plus: 'M12 5v14M5 12h14',
   cloud: 'M7 17a4 4 0 0 1-.5-7.97A5.5 5.5 0 0 1 17.3 8.5 4.25 4.25 0 0 1 17 17Z',
@@ -66,6 +67,9 @@ const PATHS: Record<string, string> = {
   refresh: 'M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6',
   minus: 'M5 12h14',
   telegram: 'M21 4L3 11.5l6 2M21 4l-3.5 16L9 13.5M21 4L9 13.5V19l3.2-3.4',
+  /** Points to the inline end; .vx-mirror flips it under RTL. */
+  chevron: 'M6 9l6 6 6-6',
+  chevronEnd: 'M9 6l6 6-6 6',
 };
 
 /** Icons that point somewhere and therefore mirror in RTL. */
@@ -565,12 +569,14 @@ export function SpaceSwitch({ value, onChange }: { value?: 'work' | 'personal'; 
 
 /* ---------- lists ---------- */
 
-export function Section({ title, end, foot, children, plain }: {
-  title?: ReactNode; end?: ReactNode; foot?: ReactNode; children: ReactNode;
+export function Section({ title, label, id, end, foot, children, plain }: {
+  label?: ReactNode; id?: string; title?: ReactNode; end?: ReactNode; foot?: ReactNode; children: ReactNode;
   /** Children are not rows: skip the grouped-list frame */
   plain?: boolean;
 }) {
-  const head = useId();
+  const generated = useId();
+  const head = id ?? generated;
+  title ??= label;
   return (
     <section className="vx-section" aria-labelledby={title ? head : undefined}>
       {(title || end) && <div className="vx-section-head">{title && <h2 id={head} className="vx-over">{title}</h2>}{end}</div>}
@@ -891,4 +897,17 @@ export function hueVars(pal: Pick<HuePalette, 'base' | 'light' | 'shadow' | 'glo
     '--hue': pal.base, '--hue-light': pal.light, '--hue-shadow': pal.shadow, '--hue-glow': pal.glow,
     '--hue-10': rgba(pal.base, 0.1), '--hue-12': rgba(pal.base, 0.12), '--hue-22': rgba(pal.glow, 0.22),
   } as CSSProperties;
+}
+
+/** A grouped-list entry that opens another screen. */
+export function NavRow({ label, detail, onClick, disabled }: { label: string; detail?: string; onClick: () => void; disabled?: boolean }) {
+  return (
+    <button className="vx-row vx-nav-row" onClick={onClick} disabled={disabled}>
+      <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
+        <span>{label}</span>
+        {detail && <span className="vx-small vx-2">{detail}</span>}
+      </span>
+      <span className="vx-chev"><Icon name="chevronEnd" size={18} /></span>
+    </button>
+  );
 }

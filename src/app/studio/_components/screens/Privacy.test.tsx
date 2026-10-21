@@ -209,3 +209,26 @@ it.each(['en', 'fa'] as const)('owns a pending %s correction without self-aborti
   expect(navigation.pending).toHaveBeenLastCalledWith(token, false); expect(personal).toBeEnabled(); expect(screen.getAllByText('Scoped corrected note').length).toBeGreaterThan(0);
   fireEvent.click(personal); await waitFor(() => expect(screen.queryByText('Scoped corrected note')).not.toBeInTheDocument()); expect(mocks.read).toHaveBeenLastCalledWith('personal', locale);
 });
+
+
+it.each(['en', 'fa'] as const)('allows a confirmed account to complete its missing adult declaration in %s', async locale => {
+  const incomplete = snapshot({
+    identity: { ...snapshot().identity, confirmed: true, adultDeclared: false },
+    explicitMemoryAvailable: false, explicitMemoryReason: 'adult_required',
+    purposes: snapshot().purposes.map(p => ({ ...p, available: false, reason: 'adult_required' })),
+  });
+  mocks.read.mockResolvedValue(incomplete);
+  mocks.confirm.mockResolvedValue(snapshot());
+  render(<Harness />);
+  if (locale === 'fa') await chooseLanguage('فارسی');
+  fireEvent.click(await screen.findByRole('button', { name: locale === 'fa' ? /هویت خود را تأیید کنید/ : /Confirm your identity/ }));
+  const adult = await screen.findByRole('checkbox', { name: locale === 'fa' ? '۱۸ سال یا بیشتر دارم' : 'I am 18 or older' });
+  expect(adult).toHaveAttribute('aria-checked', 'false');
+  const confirm = screen.getByRole('button', { name: locale === 'fa' ? 'استفاده از نمایهٔ حساب خودم' : 'Use my account profile' });
+  expect(confirm).toBeDisabled();
+  fireEvent.click(adult);
+  expect(confirm).toBeEnabled();
+  fireEvent.click(confirm);
+  await waitFor(() => expect(mocks.confirm).toHaveBeenCalledWith('work', true, undefined));
+  expect(mocks.consent).not.toHaveBeenCalled();
+});

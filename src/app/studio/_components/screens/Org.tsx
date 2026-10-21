@@ -115,7 +115,6 @@ export function OrgScreen() {
           );
         })}
 
-        {['owner', 'superadmin', 'admin'].includes(me.role) && <RelationshipObservations />}
 
         <section className="vx-section">
           <h2 className="vx-over vx-section-head">{c.count(c.agentAdmins, agentAdmins.length)}</h2>
@@ -132,6 +131,7 @@ export function OrgScreen() {
             </div>
           )}
         </section>
+        {['owner', 'superadmin', 'admin'].includes(me.role) && <RelationshipObservations />}
       </div>
 
       <Sheet open={!!selected} onClose={() => setSelected(null)} label={c.changeRole}>

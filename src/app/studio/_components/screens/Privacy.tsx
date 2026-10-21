@@ -3,7 +3,7 @@
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { adaptiveApi, type AdaptiveOptionalPurpose, type AdaptivePresentation, type AdaptiveSnapshot } from '../../_lib/adaptive-client';
-import { privacyCopy, purposeCopy } from '../../_lib/adaptive-copy';
+import { privacyCopy, purposeCopy, privacyUnavailableReason } from '../../_lib/adaptive-copy';
 import { api, haptic, tg, type AgentView } from '../../_lib/client';
 import { DUR, EASE, SPRING } from '../../_lib/motion';
 import { useProductPause } from '../../_lib/product-pause-client';
@@ -56,6 +56,7 @@ export function PrivacyScreen({ onShared, onExperience, onConnections, onCorrect
   const generation = useRef(0), pendingCorrectionRef = useRef<string | null>(null), busyRef = useRef(false), alive = useRef(true);
   const snapshotRef = useRef(snapshot); snapshotRef.current = snapshot;
   const [pendingCorrection, setPendingCorrection] = useState<string | null>(null);
+  const [notesStale, setNotesStale] = useState(false);
   busyRef.current = busy;
   const locked = !!pendingCorrection;
   const reduced = useReducedMotion() || nav.tier === 'reduced';
@@ -75,6 +76,9 @@ export function PrivacyScreen({ onShared, onExperience, onConnections, onCorrect
   const pause = useProductPause(space);
   const unread = useInboxBadge(space, pause.coveredBlocked || pause.status?.productPaused === true);
   const paused = pause.status?.productPaused === true || snapshot?.storedPersonalizationAllowed === false;
+  // Identity confirmation and a current adult declaration are separate facts.
+  const adultDeclarationNeeded = !!snapshot && (!snapshot.identity.adultDeclared || snapshot.explicitMemoryReason === 'adult_required' || snapshot.purposes.some(p => p.reason === 'adult_required'));
+  useLayoutEffect(() => { setAdult(false); }, [adultDeclarationNeeded]);
 
   const load = useCallback(async () => {
     if (pendingCorrectionRef.current) return;
@@ -84,12 +88,18 @@ export function PrivacyScreen({ onShared, onExperience, onConnections, onCorrect
     try {
       const [result, availableAgents] = await Promise.all([adaptiveApi.read(space, locale), api.agents()]);
       if (generation.current !== current) return;
-      setSnapshotSession(session); setSnapshot(result); setAdult(result.identity.adultDeclared); setJurisdiction(result.identity.declaredJurisdiction ?? '');
+      setSnapshotSession(session); setSnapshot(result); setNotesStale(false); setAdult(false); setJurisdiction(result.identity.declaredJurisdiction ?? '');
       setAgents(availableAgents.agents.filter(a => a.status === 'active'));
     } catch { if (generation.current === current) setError(locale === 'fa' ? 'تنظیمات دریافت نشد. دوباره تلاش کنید.' : 'Your settings could not be loaded. Please try again.'); }
   }, [space, locale, session]);
+  const erasureDispatched = useCallback(() => { generation.current++; setNotesStale(true); setSnapshot(current => current && ({ ...current, memories: [] })); setNote(''); setNoteId(null); setRemoving(null); setPresentation(null); }, []);
   const invalidate = useCallback(() => { generation.current++; }, []);
-  useLayoutEffect(() => { void load(); return invalidate; }, [load, invalidate]);
+  const loadedContext = useRef({ session, space, locale });
+  useLayoutEffect(() => {
+    const previous = loadedContext.current; loadedContext.current = { session, space, locale };
+    if ((previous.session !== session || previous.space !== space || previous.locale !== locale) && pendingCorrectionRef.current) correctionPending(pendingCorrectionRef.current, false);
+    void load(); return invalidate;
+  }, [load, invalidate, session, space, locale, correctionPending]);
 
   const mutate = async (action: () => Promise<AdaptiveSnapshot>, message: string, after?: (result: AdaptiveSnapshot) => void) => {
     if (busyRef.current || pendingCorrectionRef.current) return false;
@@ -157,9 +167,9 @@ export function PrivacyScreen({ onShared, onExperience, onConnections, onCorrect
     {snapshot && <>
       <Enter i={0} first={first}>
         <Section title={y.identitySection}>
-          <Row plain lead={<IconTile name={snapshot.identity.confirmed ? 'check' : 'user'} ok={snapshot.identity.confirmed} />} chevron disabled={locked} onClick={() => go(() => setPanel('identity'))}
-            title={snapshot.identity.confirmed ? y.identityConfirmed : y.identityConfirm}
-            sub={snapshot.identity.confirmed ? [y.adult, snapshot.identity.declaredJurisdiction].filter(Boolean).join(' · ') : y.identityNeeded} />
+          <Row plain lead={<IconTile name={snapshot.identity.confirmed && !adultDeclarationNeeded ? 'check' : 'user'} ok={snapshot.identity.confirmed && !adultDeclarationNeeded} />} chevron disabled={locked} onClick={() => go(() => setPanel('identity'))}
+            title={snapshot.identity.confirmed && !adultDeclarationNeeded ? y.identityConfirmed : y.identityConfirm}
+            sub={snapshot.identity.confirmed && !adultDeclarationNeeded ? [y.adult, snapshot.identity.declaredJurisdiction].filter(Boolean).join(' · ') : y.identityNeeded} />
           <Row plain lead={<IconTile name="telegram" />} chevron disabled={locked} onClick={() => go(() => setPanel('account'))}
             title={y.telegramAccount} sub={y.telegramAccountSub} />
         </Section>
@@ -171,7 +181,7 @@ export function PrivacyScreen({ onShared, onExperience, onConnections, onCorrect
             const copy = purposeCopy[p.purpose]?.[locale];
             const title = copy?.title ?? p.notice.title;
             const on = p.state === 'granted';
-            const sub = !p.available && !on ? c.unavailable
+            const sub = !p.available && !on ? privacyUnavailableReason(p.reason, locale)
               : REVIEW_STATES.includes(p.state) || (on && !p.available) ? c.reviewNeeded
               : !on && !snapshot.identity.confirmed ? y.needsIdentity
               : on && paused && COVERED.includes(p.purpose) ? pauseText(locale, space, 'consent')
@@ -183,21 +193,21 @@ export function PrivacyScreen({ onShared, onExperience, onConnections, onCorrect
       </Enter>
 
       <Enter i={2} first={first}>
-        <Section title={y.notesSection} foot={<>{c.memoryBody} {c[space]} · {c.private}.{!snapshot.explicitMemoryAvailable && <> {c.unavailable}</>}
+        <Section title={y.notesSection} foot={<>{c.memoryBody} {c[space]} · {c.private}.{!snapshot.explicitMemoryAvailable && <> {privacyUnavailableReason(snapshot.explicitMemoryReason, locale)}</>}
           {!snapshot.memoryCorrectionAvailable && snapshot.memories.some(m => !m.sourceRefs) && <> {locale === 'fa' ? 'ویرایش اینجا در دسترس نیست؛ هنوز می‌توانید یادداشت را حذف یا یادداشت تازه‌ای ذخیره کنید.' : 'Editing is unavailable here; you can still delete a note or save a new one.'}</>}</>}>
           <div className="vx-you-compose">
             <Composer multiline value={note} onChange={setNote} label={c.memoryLabel} sendLabel={c.saveMemory} placeholder={y.addNote} maxLength={2000}
-              disabled={busy || locked || !snapshot.explicitMemoryAvailable}
+              disabled={busy || locked || notesStale || !snapshot.explicitMemoryAvailable}
               onSend={() => void mutate(async () => { const result = await adaptiveApi.save(space, note, snapshot.revision); setNote(''); return result; }, c.saved)} />
           </div>
           {!snapshot.memories.length && <div className="vx-row"><span className="vx-row-sub">{c.empty}</span></div>}
-          <AnimatePresence initial={false}>
+          {!notesStale && <AnimatePresence initial={false}>
             {shownNotes.map(m => <motion.div key={m.id} className="vx-you-note" layout={!reduced} exit={evaporate} transition={SPRING.snappy}>
               <Row chevron disabled={locked} onClick={() => go(() => { setRemoving(null); setNoteId(m.id); })}
                 title={<span className="vx-clamp-2" dir="auto">{m.text}</span>}
                 sub={[m.origin && y.noteProvenanceClaim, m.sourceRefs && y.noteProvenanceSummary(m.sourceRefs.length), `${c.expires} ${date(m.expiresAt)}`].filter(Boolean).join(' · ')} />
             </motion.div>)}
-          </AnimatePresence>
+          </AnimatePresence>}
           {snapshot.memories.length > NOTES_SHOWN && <Row title={<span className="vx-row-link">{allNotes ? y.showFewer : y.seeAll(snapshot.memories.length)}</span>} onClick={() => setAllNotes(v => !v)} />}
           {snapshot.memories.length >= 2 && <Row plain lead={<IconTile name="spark" />} title={y.summarise} sub={y.summariseSub} chevron disabled={locked} onClick={() => go(() => setPanel('summary'))} />}
         </Section>
@@ -253,11 +263,11 @@ export function PrivacyScreen({ onShared, onExperience, onConnections, onCorrect
 
     {/* ---------- sheets ---------- */}
     <Sheet open={panel === 'identity' && !!snapshot} onClose={() => setPanel(null)} label={c.identity}
-      dock={snapshot && !snapshot.identity.confirmed && <button className="vx-btn vx-btn-primary vx-btn-block" disabled={busy || !adult || (!!jurisdiction && !/^[A-Z]{2}(?:-[A-Z0-9]{1,8})?$/.test(jurisdiction))}
+      dock={snapshot && (!snapshot.identity.confirmed || adultDeclarationNeeded) && <button className="vx-btn vx-btn-primary vx-btn-block" disabled={busy || !adult || (!!jurisdiction && !/^[A-Z]{2}(?:-[A-Z0-9]{1,8})?$/.test(jurisdiction))}
         onClick={() => void mutate(() => adaptiveApi.confirm(space, adult, jurisdiction || undefined), c.confirmed, () => { haptic.success(); setPanel(null); })}>{c.confirm}</button>}>
       {snapshot && <div className="vx-sheet-stack">
         <SheetHead title={c.identity} sub={c.identityBody} />
-        {snapshot.identity.confirmed
+        {snapshot.identity.confirmed && !adultDeclarationNeeded
           ? <div className="vx-group"><Row lead={<span className="vx-you-ok" aria-hidden="true"><Icon name="check" size={18} width={2} /></span>} title={c.confirmed}
             sub={[y.adult, snapshot.identity.declaredJurisdiction].filter(Boolean).join(' · ')} /></div>
           : <>
@@ -335,7 +345,7 @@ export function PrivacyScreen({ onShared, onExperience, onConnections, onCorrect
     <LiveSheet open={panel === 'summary' && !!snapshot} scope={scope} onClose={() => { if (!busyRef.current) setPanel(null); }} label={y.summarise}>
       {snapshot && <div className="vx-sheet-stack">
         <ReviewedMemoryPanel key={`${space}:${locale}:${snapshot.identity.bindingId ?? 'unconfirmed'}`} snapshot={snapshot} agents={agents} locale={locale}
-          disabled={busy || !snapshot.explicitMemoryAvailable} pauseBlocked={pause.coveredBlocked} personalizationPaused={paused} pauseEpoch={pause.status?.useEpoch ?? undefined}
+          disabled={busy || notesStale || !snapshot.explicitMemoryAvailable} pauseBlocked={pause.coveredBlocked} personalizationPaused={paused} pauseEpoch={pause.status?.useEpoch ?? undefined}
           onSaved={result => { setSnapshot(result); nav.snack({ message: c.saved, tone: 'success' }); }} />
       </div>}
     </LiveSheet>
@@ -345,7 +355,7 @@ export function PrivacyScreen({ onShared, onExperience, onConnections, onCorrect
     </Sheet>
 
     <Sheet open={panel === 'rights'} onClose={() => setPanel(null)} label={y.requests} dock={<div ref={setRightsDock} className="vx-dock-row" />}>
-      <div className="vx-sheet-stack"><RightsRequestPanel space={space} locale={locale} sessionKey={session} dock={rightsDock} /></div>
+      <div className="vx-sheet-stack"><RightsRequestPanel space={space} locale={locale} sessionKey={session} dock={rightsDock} memorySnapshot={snapshot} notesStale={notesStale} mutationDisabled={busy || locked} onRefreshNotes={() => void load()} onErasurePendingChange={correctionPending} onErasureDispatched={erasureDispatched} /></div>
     </Sheet>
 
     <Sheet open={pauseOpen} onClose={() => setPauseOpen(false)} label={y.pause}>

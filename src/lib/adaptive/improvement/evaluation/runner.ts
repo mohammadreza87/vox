@@ -1,6 +1,7 @@
 import { canonical, hash, routingArtifactSchema, type RoutingArtifact } from '../contracts';
 import { improvementCandidateSchema, type ImprovementCandidate } from '../index';
 import { PROTOCOL_SCHEMA_DIGEST, RESERVATION_SCHEMA_DIGEST, adapterOutputSchema, metricsSchema, protocolReceiptSchema, type AdapterOutput, type EvaluationCase, type EvaluationMetrics, type ProtocolReceipt } from './contracts';
+import { withEvaluationLearningCaseAuthority, type EvaluationLearningCaseAuthority, type LearningCasePhase } from './authority';
 import { validateEvaluationInputs, evaluationProtocolDigest, protocolCommitment } from './manifest';
 export interface SyntheticEvaluationAdapter {
   readonly evidence: 'synthetic_local'; readonly digest: string;
@@ -36,51 +37,89 @@ function summarize(rows: Row[]): EvaluationMetrics {
     totalCostMicrousd: totalCost, costAvailable: costs.length, costPerSuccessMicrousd: totalCost === null || successes === 0 ? null : totalCost / successes,
     judgeAvailable: outputs.filter(o => o.judgeScore !== null).length, qualityPerAssignedCase: rows.reduce((sum,r) => sum + (correct(r) && !privacy(r) ? r.output.judgeScore ?? 0 : 0), 0) / assigned });
 }
+const producedLearningCaseReceipts = new WeakMap<object, string>();
+/** Identity plus immutable-content commitment: only this runner can mint the
+ * ephemeral receipt accepted by its guarded signing helper. */
+export function isProducedLearningCaseReceipt(value: object): boolean {
+  const digest = producedLearningCaseReceipts.get(value);
+  return digest !== undefined && digest === hash(canonical(value));
+}
 /** Trusted evaluator adapter contract only. Supplying an object with this shape
  * does not establish separate credentials, process isolation or provider authority. */
 export async function runEvaluation(options: { manifest: unknown; corpus: unknown; candidate: ImprovementCandidate; artifact: RoutingArtifact; baseline: RoutingArtifact;
-  evaluatorServiceId: string; adapter: SyntheticEvaluationAdapter; clock: () => number; signal?: AbortSignal }): Promise<ProtocolReceipt> {
-  const now = options.clock();
+  evaluatorServiceId: string; adapter: SyntheticEvaluationAdapter; clock: () => number; signal?: AbortSignal; learningCaseAuthority?: EvaluationLearningCaseAuthority }): Promise<ProtocolReceipt> {
+  const clock = options.clock, authority = options.learningCaseAuthority, adapter = options.adapter, signal = options.signal, evaluatorServiceId = options.evaluatorServiceId;
+  const now = clock();
   const { manifest, corpus } = validateEvaluationInputs(options.manifest, options.corpus, now);
   const candidate = improvementCandidateSchema.parse(options.candidate), artifact = routingArtifactSchema.parse(options.artifact), baseline = routingArtifactSchema.parse(options.baseline);
   if (candidate.evaluationProtocolDigest !== evaluationProtocolDigest(manifest) || candidate.artifactDigest !== hash(canonical(artifact)) || candidate.candidateRevision !== candidate.artifactDigest ||
-    options.evaluatorServiceId === candidate.authorServiceId || options.adapter.evidence !== 'synthetic_local' || manifest.digests.adapter !== options.adapter.digest || manifest.digests.runner !== RUNNER_DIGEST) throw new Error('evaluation_protocol_binding_mismatch');
+    evaluatorServiceId === candidate.authorServiceId || options.adapter.evidence !== 'synthetic_local' || manifest.digests.adapter !== options.adapter.digest || manifest.digests.runner !== RUNNER_DIGEST) throw new Error('evaluation_protocol_binding_mismatch');
+  if (canonical(candidate.learningCases) !== canonical(manifest.learningCases)) throw new Error('learning_case_authority_binding_mismatch');
+  const binding = { protocolDigest: evaluationProtocolDigest(manifest), candidateId: candidate.id, artifactDigest: candidate.artifactDigest };
+  const current = <T>(phase: LearningCasePhase, consume: () => T): Promise<T> => manifest.learningCases
+    ? withEvaluationLearningCaseAuthority(authority, manifest.learningCases, binding, phase, manifest.digests.corpus, consume)
+    : Promise.resolve(consume());
+  await current('reservation', () => undefined);
+  const adapterRun = adapter.run.bind(adapter);
   const rows: { baseline: Row[]; candidate: Row[] } = { baseline: [], candidate: [] };
   let calls = 0, cost = 0, reportedLatency = 0, stopped = false;
   const started = Date.now();
   for (const example of corpus.final) for (const arm of ['baseline','candidate'] as const) {
     let output = absent('skipped');
-    if (!stopped && !options.signal?.aborted && calls < manifest.budget.maxCalls) {
-      calls++; const controller = new AbortController();
-      const abort = () => controller.abort(); options.signal?.addEventListener('abort', abort, { once: true });
+    if (!stopped && !signal?.aborted && calls < manifest.budget.maxCalls) {
+      let dispatched = false, received = false; let raw: unknown; const controller = new AbortController();
+      const abort = () => controller.abort(); signal?.addEventListener('abort', abort, { once: true });
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
+        const dispatch = await current('adapter', () => {
+          if (signal?.aborted || Date.now() - started >= manifest.budget.maxWallTimeMs) throw new Error('evaluation_cancelled_or_expired');
+          calls++; dispatched = true;
+          const pending = Promise.resolve(adapterRun({ artifact: structuredClone(arm === 'baseline' ? baseline : artifact), input: structuredClone(example.input) }, controller.signal));
+          // The writer may still be releasing while an adapter rejects. Attach
+          // a handler now; the original promise remains the race input below.
+          void pending.catch(() => undefined);
+          return { pending };
+        });
         const remaining = Math.max(0, manifest.budget.maxWallTimeMs - (Date.now() - started));
-        const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new Error('evaluation_timeout')); }, remaining); });
-        const aborted = new Promise<never>((_, reject) => controller.signal.addEventListener('abort', () => reject(new Error('evaluation_cancelled')), { once: true }));
-        const raw = await Promise.race([options.adapter.run({ artifact: structuredClone(arm === 'baseline' ? baseline : artifact), input: structuredClone(example.input) }, controller.signal), timeout, aborted]);
+        const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => {
+          // Expiry ends this run even if a subsequent wall-clock read is earlier.
+          stopped = true;
+          controller.abort(); reject(new Error('evaluation_timeout'));
+        }, remaining); });
+        const aborted = new Promise<never>((_, reject) => {
+          if (controller.signal.aborted) reject(new Error('evaluation_cancelled'));
+          else controller.signal.addEventListener('abort', () => reject(new Error('evaluation_cancelled')), { once: true });
+        });
+        raw = await Promise.race([dispatch.pending, timeout, aborted]); received = true;
+      } catch { output = absent(dispatched ? 'unavailable' : 'skipped'); }
+      finally { if (timer) clearTimeout(timer); signal?.removeEventListener('abort', abort); }
+      await current('result', () => {
+        if (!received) return;
         const parsed = adapterOutputSchema.safeParse(raw); output = parsed.success ? parsed.data : absent('invalid');
         if (output.status === 'complete' && !output.action) output = absent('invalid');
         if (output.costMicrousd !== null && output.discardedCostMicrousd !== null) cost += output.costMicrousd + output.discardedCostMicrousd;
         if (output.latencyMs !== null) reportedLatency += output.latencyMs;
-      } catch { output = absent('unavailable'); }
-      finally { if (timer) clearTimeout(timer); options.signal?.removeEventListener('abort', abort); }
+      });
       if (cost > manifest.budget.maxCostMicrousd || reportedLatency > manifest.budget.maxReportedLatencyMs || Date.now() - started >= manifest.budget.maxWallTimeMs) stopped = true;
     }
     rows[arm].push({ example, output });
   }
   const base = summarize(rows.baseline), proposed = summarize(rows.candidate), gain = proposed.successRate - base.successRate;
   const complete = base.coverage === 1 && proposed.coverage === 1 && base.costAvailable === base.assigned && proposed.costAvailable === proposed.assigned &&
-    base.latencyAvailable === base.assigned && proposed.latencyAvailable === proposed.assigned && base.judgeAvailable === base.assigned && proposed.judgeAvailable === proposed.assigned && !stopped && !options.signal?.aborted;
+    base.latencyAvailable === base.assigned && proposed.latencyAvailable === proposed.assigned && base.judgeAvailable === base.assigned && proposed.judgeAvailable === proposed.assigned && !stopped && !signal?.aborted;
   const passed = complete && proposed.deterministicFailures === 0 && proposed.privacyFailures === 0 && proposed.successRate >= manifest.scoring.minimumSuccessRate &&
     gain >= manifest.scoring.minimumPairedSuccessGain && proposed.qualityPerAssignedCase >= manifest.scoring.minimumQualityPerAssignedCase && proposed.p95LatencyMs! <= manifest.scoring.maximumP95LatencyMs && proposed.costPerSuccessMicrousd !== null && proposed.costPerSuccessMicrousd <= manifest.scoring.maximumCostPerSuccessMicrousd;
-  const testedAt = options.clock();
+  const testedAt = clock();
   if (!Number.isSafeInteger(testedAt) || testedAt < now || testedAt >= manifest.expiresAt || testedAt >= manifest.retention.retainUntil) throw new Error('evaluation_protocol_expired');
-  return protocolReceiptSchema.parse({ schemaVersion: 1, evidence: 'synthetic_local_preflight', protocolDigest: evaluationProtocolDigest(manifest), protocolMetadata: protocolCommitment(manifest).protocolMetadata,
+  return current('receipt', () => {
+    const receipt = protocolReceiptSchema.parse({ schemaVersion: manifest.schemaVersion, ...(manifest.learningCases ? { learningCases: manifest.learningCases } : {}), evidence: 'synthetic_local_preflight', protocolDigest: evaluationProtocolDigest(manifest), protocolMetadata: protocolCommitment(manifest).protocolMetadata,
     candidateId: candidate.id, candidateRevision: candidate.candidateRevision, artifactDigest: candidate.artifactDigest, baselineRevision: candidate.baselineRevision,
     baselineArtifactDigest: hash(canonical(baseline)), legacyDatasetDigest: candidate.datasetVersion, candidateEvaluatorDigest: candidate.evaluatorVersion, promotionPolicyDigest: candidate.promotionPolicyVersion,
-    bindings: manifest.digests, evaluatorServiceId: options.evaluatorServiceId, testedAt, retainUntil: manifest.retention.retainUntil,
+    bindings: manifest.digests, evaluatorServiceId: evaluatorServiceId, testedAt, retainUntil: manifest.retention.retainUntil,
     status: !complete ? 'incomplete' : passed ? 'passed' : 'failed', baseline: base, candidate: proposed, pairedSuccessGain: gain, calls, budget: manifest.budget });
+    if (manifest.learningCases) producedLearningCaseReceipts.set(receipt, hash(canonical(receipt)));
+    return receipt;
+  });
 }
-export const RUNNER_DIGEST = hash(canonical({ version: 1, schemasDigest: PROTOCOL_SCHEMA_DIGEST, reservationSchemaDigest: RESERVATION_SCHEMA_DIGEST, RESERVATION_SCHEMA_DIGEST, inputValidation: validateEvaluationInputs.toString(), commitment: protocolCommitment.toString(), protocolDigest: evaluationProtocolDigest.toString(), run: runEvaluation.toString(), summarize: summarize.toString(), absent: absent.toString(),
+export const RUNNER_DIGEST = hash(canonical({ version: 1, schemasDigest: PROTOCOL_SCHEMA_DIGEST, reservationSchemaDigest: RESERVATION_SCHEMA_DIGEST, RESERVATION_SCHEMA_DIGEST, inputValidation: validateEvaluationInputs.toString(), authority: withEvaluationLearningCaseAuthority.toString(), receiptIdentity: isProducedLearningCaseReceipt.toString(), commitment: protocolCommitment.toString(), protocolDigest: evaluationProtocolDigest.toString(), run: runEvaluation.toString(), summarize: summarize.toString(), absent: absent.toString(),
   outputSchema: adapterOutputSchema.toJSONSchema(), metricSchema: metricsSchema.toJSONSchema(), receiptSchema: protocolReceiptSchema.toJSONSchema() }));

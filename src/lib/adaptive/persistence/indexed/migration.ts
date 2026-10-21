@@ -3,7 +3,7 @@
 import { existsSync, lstatSync, mkdirSync, readdirSync, renameSync, writeFileSync, openSync, closeSync, fsyncSync, unlinkSync } from 'fs';
 import { dirname, join, resolve } from 'path';
 import { randomUUID } from 'crypto';
-import { validateAdaptiveDocument, normalizeLegacyAdaptiveDocument, upgradeLegacyAdaptiveDocumentV1ForProductPause, digest } from '../repository';
+import { validateAdaptiveDocument, upgradeAdaptiveDocumentForRightsUseHolds, normalizeLegacyAdaptiveDocument, upgradeLegacyAdaptiveDocumentV1ForProductPause, digest } from '../repository';
 import { directAuthorityControls } from '../authority';
 import { accountKey, projectDocument } from './projection';
 import { INDEXED_LIMITS, IndexedStorageError } from './contracts';
@@ -15,6 +15,7 @@ export interface TransitionOptions {
   quiesced: true; now?: () => number;
   /** Explicit current-state conversion; never selected on runtime open. */
   prepareProductPause?: true;
+  prepareRightsUseHolds?:true;
   /** Explicit same-format FILE authority-layout conversion; no normal-open repair. */
   prepareFileAuthority?: true;
   /** Synthetic fault/crash seam; never a provider or feature callback. */
@@ -39,7 +40,7 @@ async function snapshotStore(storage: ManagedAdaptiveStorage, now: number): Prom
       const record = storage.readCommittedForEffect(accountId);
       if (record.status !== 'ready' || record.document === null) throw new IndexedStorageError('busy');
       const validated = validateAdaptiveDocument(record.document, accountId, now);
-      if ('fileAuthorityProjectionVersion' in storage && storage.fileAuthorityProjectionVersion === 1) {
+      if ('fileAuthorityProjectionVersion' in storage && (storage.fileAuthorityProjectionVersion === 1 || storage.fileAuthorityProjectionVersion === 2)) {
         const expected = projectDocument(validated, JSON.stringify(record.document));
         for (const space of ['work', 'personal'] as const) {
           const projection = storage.readDirectAuthorityForEffect(accountId, space, (controls, _now, _identity, stamp) => ({
@@ -127,19 +128,20 @@ function poisonLegacy(root: string, transition: ManagedTransition, now: number, 
   verifyPoison(root, transition.rootId);
   if (snapshotLegacy(archive, now, reclaimDead).digest !== transition.sourceDigest) throw new IndexedStorageError('corrupt');
 }
-function expectedTargetDigest(transition: ManagedTransition): string { return transition.version === 2 ? transition.expectedTargetDigest : transition.sourceDigest; }
-function targetSnapshot(source: Snapshot, schema: 1 | 2, now: number): Snapshot {
+function expectedTargetDigest(transition: ManagedTransition): string { return transition.version !== 1 ? transition.expectedTargetDigest : transition.sourceDigest; }
+function targetSnapshot(source: Snapshot, schema: 1 | 2 | 3, now: number, sourceIdentity:string): Snapshot {
   const rows = source.rows.map(row => {
     const normalized = validateAdaptiveDocument(normalizeLegacyAdaptiveDocument(row.document, row.accountId, now), row.accountId, now);
     if (schema === 1) { if (normalized.schemaVersion !== 1) throw new IndexedStorageError('invalid_controls'); return row; }
-    const document = normalized.schemaVersion === 1 ? upgradeLegacyAdaptiveDocumentV1ForProductPause(row.document, row.accountId, now) : row.document;
+    if(schema===2 && normalized.schemaVersion===3)throw new IndexedStorageError('invalid_controls');
+    const document = schema===3 ? upgradeAdaptiveDocumentForRightsUseHolds(row.document,row.accountId,now,sourceIdentity) : normalized.schemaVersion === 1 ? upgradeLegacyAdaptiveDocumentV1ForProductPause(row.document, row.accountId, now) : row.document;
     return { accountId: row.accountId, document, digest: digest(document) };
   });
   return snapshotRows(rows, source.watermark, source.generation);
 }
 function readyFor(transition: ManagedTransition, watermark: number): ManagedReady {
   if (!transition.targetIdentity || transition.targetDigest !== expectedTargetDigest(transition)) throw new IndexedStorageError('corrupt');
-  return { ...(transition.version === 2 ? { version: 2 as const, canonicalSchemaVersion: 2 as const, controlsSchemaVersion: 2 as const, productPauseEnforcementVersion: 1 as const, ...(transition.targetFormat === 'file-v2' ? { fileAuthorityProjectionVersion: 1 as const } : {}) } : { version: 1 as const }), state: 'ready', rootId: transition.rootId, format: transition.targetFormat,
+  return { ...(transition.version===3 ? {version:3 as const,canonicalSchemaVersion:3 as const,controlsSchemaVersion:3 as const,productPauseEnforcementVersion:1 as const,rightsUseHoldEnforcementVersion:1 as const,...(transition.targetFormat==='file-v2'?{fileAuthorityProjectionVersion:2 as const}:{})} : transition.version === 2 ? { version: 2 as const, canonicalSchemaVersion: 2 as const, controlsSchemaVersion: 2 as const, productPauseEnforcementVersion: 1 as const, ...(transition.targetFormat === 'file-v2' ? { fileAuthorityProjectionVersion: 1 as const } : {}) } : { version: 1 as const }), state: 'ready', rootId: transition.rootId, format: transition.targetFormat,
     store: transition.targetStore, identity: transition.targetIdentity, watermarkFloor: watermark };
 }
 async function currentSource(root: string, transition: ManagedTransition, now: number, reclaimDead: boolean): Promise<{ snapshot: Snapshot; storage?: ManagedAdaptiveStorage }> {
@@ -160,7 +162,7 @@ export async function transitionAdaptiveStorage(root: string, targetFormat: 'sql
   try {
     const at = time(options.now ?? Date.now); let previous: ManagedReady | undefined, sourceSnapshot: Snapshot, sourceFormat: ManagedTransition['sourceFormat'];
     if (existsSync(markerPath(root))) {
-      const marker = readMarker(root); if (marker.state !== 'ready' || marker.format === targetFormat && !(options.prepareProductPause === true && marker.version === 1) && !(options.prepareFileAuthority === true && marker.version === 2 && marker.format === 'file-v2' && marker.fileAuthorityProjectionVersion === undefined)) throw new IndexedStorageError('corrupt');
+      const marker = readMarker(root); if (marker.state !== 'ready' || marker.format === targetFormat && !(options.prepareRightsUseHolds===true && marker.version<3) && !(options.prepareProductPause === true && marker.version === 1) && !(options.prepareFileAuthority === true && marker.version === 2 && marker.format === 'file-v2' && marker.fileAuthorityProjectionVersion === undefined)) throw new IndexedStorageError('corrupt');
       if (options.prepareFileAuthority && (marker.version !== 2 || marker.format !== 'file-v2' || marker.fileAuthorityProjectionVersion !== undefined || targetFormat !== 'file-v2')) throw new IndexedStorageError('invalid_scope');
       previous = marker; sourceFormat = marker.format; verifyPoison(root, marker.rootId);
       source = openRawManagedStore(root, marker, () => at, undefined, false, marker.version === 2 && marker.format === 'file-v2' && marker.fileAuthorityProjectionVersion === undefined);
@@ -169,13 +171,13 @@ export async function transitionAdaptiveStorage(root: string, targetFormat: 'sql
       sourceSnapshot = await snapshotStore(source, at);
     } else {
       if (options.prepareFileAuthority) throw new IndexedStorageError('invalid_scope');
-      if (targetFormat !== 'sqlite-v1' && !options.prepareProductPause || readdirSync(join(managedDirectory(root), 'stores')).length || readdirSync(join(managedDirectory(root), 'legacy-archives')).length) throw new IndexedStorageError('corrupt');
+      if (targetFormat !== 'sqlite-v1' && !options.prepareProductPause && !options.prepareRightsUseHolds || readdirSync(join(managedDirectory(root), 'stores')).length || readdirSync(join(managedDirectory(root), 'legacy-archives')).length) throw new IndexedStorageError('corrupt');
       sourceFormat = 'legacy-file'; sourceSnapshot = snapshotLegacy(root, at);
     }
     if (sourceSnapshot.generation >= Number.MAX_SAFE_INTEGER) throw new IndexedStorageError('capacity');
-    const schema: 1 | 2 = options.prepareProductPause || previous?.version === 2 ? 2 : 1;
-    const desired = targetSnapshot(sourceSnapshot, schema, at);
-    const transition: ManagedTransition = { ...(schema === 2 ? { version: 2 as const, canonicalSchemaVersion: 2 as const, controlsSchemaVersion: 2 as const, productPauseEnforcementVersion: 1 as const, ...(targetFormat === 'file-v2' ? { fileAuthorityProjectionVersion: 1 as const } : {}), expectedTargetDigest: desired.digest } : { version: 1 as const }), state: 'transition', rootId: previous?.rootId ?? randomUUID(), id: randomUUID(), phase: 'prepared',
+    const schema:1|2|3=options.prepareRightsUseHolds || previous?.version===3 ? 3 : options.prepareProductPause || previous?.version===2 ? 2 : 1;
+    const desired = targetSnapshot(sourceSnapshot, schema, at,source?digest([source.identity.incarnation,source.identity.generation]):'canonical');
+    const transition: ManagedTransition = { ...(schema===3?{version:3 as const,canonicalSchemaVersion:3 as const,controlsSchemaVersion:3 as const,productPauseEnforcementVersion:1 as const,rightsUseHoldEnforcementVersion:1 as const,...(targetFormat==='file-v2'?{fileAuthorityProjectionVersion:2 as const}:{}),expectedTargetDigest:desired.digest}:schema === 2 ? { version: 2 as const, canonicalSchemaVersion: 2 as const, controlsSchemaVersion: 2 as const, productPauseEnforcementVersion: 1 as const, ...(targetFormat === 'file-v2' ? { fileAuthorityProjectionVersion: 1 as const } : {}), expectedTargetDigest: desired.digest } : { version: 1 as const }), state: 'transition', rootId: previous?.rootId ?? randomUUID(), id: randomUUID(), phase: 'prepared',
       sourceFormat, ...(previous ? { previous } : { legacyArchive: randomUUID() }), sourceDigest: sourceSnapshot.digest,
       sourceWatermark: sourceSnapshot.watermark, targetFormat, targetStore: randomUUID(), generation: sourceSnapshot.generation + 1 };
     writeDurableJson(markerPath(root), transition); options.afterPhase?.('prepared', transition.id);
@@ -200,6 +202,9 @@ export async function transitionAdaptiveStorage(root: string, targetFormat: 'sql
 }
 /** Explicit FILE/current FILEv2 -> new SQLite target. This function does not
  * activate optional memory/analytics/learning features or change server policy. */
+export function prepareRightsUseHoldsAdaptiveStorage(root:string,format:'sqlite-v1'|'file-v2',options:TransitionOptions):Promise<TransitionResult>{
+ return transitionAdaptiveStorage(root,format,{...options,prepareRightsUseHolds:true});
+}
 export function prepareProductPauseAdaptiveStorage(root: string, targetFormat: 'sqlite-v1' | 'file-v2', options: TransitionOptions): Promise<TransitionResult> {
   return transitionAdaptiveStorage(root, targetFormat, { ...options, prepareProductPause: true });
 }
@@ -228,7 +233,7 @@ export async function finalizeManagedTransition(root: string, options: { quiesce
     const targetMetadata = metadataOf(target);
     if (targetMetadata.incarnation !== transition.targetIdentity.incarnation || targetMetadata.generation !== transition.targetIdentity.generation) throw new IndexedStorageError('corrupt');
     const actual = await snapshotStore(target, at);
-    if (actual.digest !== transition.targetDigest || actual.digest !== targetSnapshot(current.snapshot, requiredCanonicalSchema(transition), at).digest || actual.watermark < transition.sourceWatermark) throw new IndexedStorageError('corrupt');
+    if (actual.digest !== transition.targetDigest || actual.digest !== targetSnapshot(current.snapshot, requiredCanonicalSchema(transition), at,source?digest([source.identity.incarnation,source.identity.generation]):'canonical').digest || actual.watermark < transition.sourceWatermark) throw new IndexedStorageError('corrupt');
     if (transition.sourceFormat === 'legacy-file') poisonLegacy(root, transition, at, options.reclaimDeadLease === true); else verifyPoison(root, transition.rootId);
     const ready = readyFor(transition, Math.max(current.snapshot.watermark, actual.watermark)); writeDurableJson(markerPath(root), ready);
     return { format: ready.format, identity: ready.identity, accounts: actual.rows.length, stateDigest: actual.digest,

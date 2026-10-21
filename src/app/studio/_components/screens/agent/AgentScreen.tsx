@@ -196,7 +196,7 @@ export function AgentScreen({ id, from }: { id: string; /** The route this profi
                   <span className="vx-over vx-num">{c.formingDay(agent.formingDay ?? 1)}</span>
                   <span>{c.editableBefore}<b className="vx-num vx-strong-num">{timeLeft(c.timeLeft, agent.lockAt)}</b>{c.editableAfter}</span>
                 </div>
-                {agent.canEdit && <button type="button" className="vx-btn vx-btn-secondary vx-btn-sm" onClick={() => nav.push({ name: 'spawn', draftId: agent.id })}>{c.refine}</button>}
+                {agent.canEdit && <button type="button" className="vx-btn vx-btn-secondary vx-btn-sm" onClick={() => nav.push({ name: 'spawn', draftId: agent.id, refine: true })}>{c.refine}</button>}
               </div>
             </Enter>
           )}

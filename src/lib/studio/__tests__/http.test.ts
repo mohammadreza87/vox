@@ -5,6 +5,7 @@ import { InMemoryRelationshipStore, RelationshipLoop } from '../../relationships
 import { handleStudioRequest, MAX_STUDIO_JSON_BYTES, MAX_STUDIO_UPLOAD_BYTES, type RouterOptions } from '../http';
 import { StudioRateLimiter } from '../ratelimit';
 import { draftJson, hire, ID, makeStudio, seedOrg, type Harness } from './helpers';
+import { fixtureCatalog } from '../skills/__tests__/fixtures';
 import { expectContentFreeTelegramLogs, telegramCanaryError } from '@/test/telegram-diagnostics';
 
 const BOT_TOKEN = '555:voxx-test-token';
@@ -469,5 +470,138 @@ describe('authenticated relationship settings', () => {
     expect((await loop.status(bob)).pausedUntil).toBeUndefined();
     expect((await call(req('GET', 'relationship-observations'))).status).toBe(403);
     expect((await call(req('PUT', path, { body: { action: 'resume' } }))).json.relationship.pausedUntil).toBeUndefined();
+  });
+});
+
+describe('skill library routes', () => {
+  beforeEach(() => { h.studio.deps.catalog = fixtureCatalog(); });
+
+  it('serves the catalog view to members with a short private cache', async () => {
+    const r = await call(req('GET', 'catalog'));
+    expect(r.status).toBe(200);
+    expect(r.res.headers.get('cache-control')).toBe('private, max-age=300');
+    expect(r.json.version).toBe(h.studio.deps.catalog!.version);
+    expect(r.json.packs.map((p: { id: string }) => p.id)).toEqual(['lifestyle', 'tech', 'mobile', 'publisher']);
+    expect(JSON.stringify(r.json)).not.toMatch(/"(method|qualityBar|pitfalls|keywords|voice)"/);
+    const pending = await call(req('GET', 'catalog', { as: ID.pending }));
+    expect(pending.status).toBe(403);
+    expect(pending.res.headers.get('cache-control')).toBe('no-store');
+  });
+
+  it('routes a brief for members and refuses pending members', async () => {
+    const r = await call(req('POST', 'catalog/route', { body: { text: 'A running coach who keeps me honest' } }));
+    expect(r.status).toBe(200);
+    expect(r.json).toMatchObject({ roleId: 'lifestyle.running-coach', pack: 'lifestyle', source: 'local', skillIds: expect.any(Array), alternatives: expect.any(Array) });
+    expect((await call(req('POST', 'catalog/route', { as: ID.pending, body: { text: 'A running coach' } }))).status).toBe(403);
+    expect((await call(req('GET', 'catalog/route'))).status).toBe(404);
+  });
+
+  it('passes exclude and answer through', async () => {
+    const asked = await call(req('POST', 'catalog/route', { body: { text: 'a coach who keeps me honest about deadlines' } }));
+    expect(asked.json.clarify.options.map((o: { value: string }) => o.value)).toEqual(['work', 'personal']);
+    const answered = await call(req('POST', 'catalog/route', { body: { text: 'a coach who keeps me honest about deadlines', answer: 'work', final: false } }));
+    expect(answered.json.roleId).toBe('tech.delivery-lead');
+    const excluded = await call(req('POST', 'catalog/route', { body: { text: 'A running coach who keeps me honest', exclude: ['lifestyle.running-coach'] } }));
+    expect(excluded.json.roleId).not.toBe('lifestyle.running-coach');
+  });
+
+  it.each([
+    ['no text', {}],
+    ['non-string text', { text: 42 }],
+    ['text over 1200 characters', { text: 'x'.repeat(1201) }],
+    ['a non-boolean final', { text: 'coach', final: 'yes' }],
+    ['a non-list exclude', { text: 'coach', exclude: 'tech.delivery-lead' }],
+    ['more than 20 excluded roles', { text: 'coach', exclude: Array.from({ length: 21 }, (_, i) => `tech.role-${i}`) }],
+    ['a non-string excluded role', { text: 'coach', exclude: [7] }],
+    ['an answer over 64 characters', { text: 'coach', answer: 'w'.repeat(65) }],
+  ])('rejects %s with 400', async (_, body) => {
+    const r = await call(req('POST', 'catalog/route', { body }));
+    expect(r.status).toBe(400);
+    expect(r.json.error).toEqual(expect.any(String));
+  });
+
+  it('spends the generation budget only on submitted routes', async () => {
+    const options: RouterOptions = { ...opts, rateLimiter: new StudioRateLimiter({ policies: { expensive: { requests: 1, windowMs: 60_000 } } }) };
+    const decide = vi.fn(async () => ({}));
+    h.studio.deps.decider = { decide };
+    for (let i = 0; i < 3; i++) expect((await call(req('POST', 'catalog/route', { body: { text: 'a running coach' } }), options)).status).toBe(200);
+    expect(decide).not.toHaveBeenCalled();
+    expect((await call(req('POST', 'catalog/route', { body: { text: 'a running coach', final: true } }), options)).status).toBe(200);
+    expect(decide).toHaveBeenCalledTimes(1);
+    expect((await call(req('POST', 'catalog/route', { body: { text: 'a running coach', final: true } }), options)).status).toBe(429);
+    expect((await call(req('POST', 'catalog/route', { body: { text: 'a running coach' } }), options)).status).toBe(200);
+    expect(decide).toHaveBeenCalledTimes(1);
+  });
+
+  it('a submitted route with an invalid body still spends the budget', async () => {
+    const options: RouterOptions = { ...opts, rateLimiter: new StudioRateLimiter({ policies: { expensive: { requests: 1, windowMs: 60_000 } } }) };
+    h.studio.deps.decider = { decide: vi.fn(async () => ({})) };
+    expect((await call(req('POST', 'catalog/route', { body: { text: 'x'.repeat(1201), final: true } }), options)).status).toBe(400);
+    expect((await call(req('POST', 'catalog/route', { body: { text: 'coach', final: true } }), options)).status).toBe(429);
+  });
+
+  it('a submitted route without a Decisions provider costs no generation budget', async () => {
+    const options: RouterOptions = { ...opts, rateLimiter: new StudioRateLimiter({ policies: { expensive: { requests: 1, windowMs: 60_000 } } }) };
+    for (let i = 0; i < 3; i++) expect((await call(req('POST', 'catalog/route', { body: { text: 'a running coach', final: true } }), options)).status).toBe(200);
+  });
+
+  it('reports which router the client gets', async () => {
+    expect((await call(req('GET', 'me'))).json.features.skillRouting).toBe('local');
+    h.studio.deps.decider = { decide: vi.fn(async () => ({})) };
+    expect((await call(req('GET', 'me'))).json.features.skillRouting).toBe('decisions');
+  });
+
+  it('drafts from a library role and rejects unknown ones', async () => {
+    h.personaLLM.push(draftJson());
+    const created = await call(req('POST', 'agents', { body: { brief: { roleId: 'mobile.ua-manager', routing: { source: 'picked' } } } }));
+    expect(created.status).toBe(201);
+    expect(created.json.agent.persona).toMatchObject({ roleId: 'mobile.ua-manager', skillIds: ['ua.campaign-plan', 'ua.creative-testing', 'ua.roas-model', 'core.weekly-review'] });
+    expect(created.json.agent.look.hue).toBe('lagoon');
+    const unknown = await call(req('POST', 'agents', { body: { brief: { roleId: 'tech.nope' } } }));
+    expect(unknown.status).toBe(400);
+    expect(unknown.json.error).toMatch(/Unknown role/);
+  });
+});
+
+describe('successor template', () => {
+  async function fired(persona: { roleId?: string; skillIds?: string[] } = {}) {
+    const { agent } = await hire(h, org.alice);
+    await h.store.update((st) => { Object.assign(st.agents.find((a) => a.id === agent.id)!.persona, persona); });
+    await h.studio.fire(org.admin, agent.id, { reason: 'r', memoryPolicy: 'archive', confirmName: 'Nova' });
+    return agent;
+  }
+
+  it('gives any member the fired predecessor’s name, role and skills, and nothing else', async () => {
+    const agent = await fired({ roleId: 'mobile.ua-manager', skillIds: ['ua.campaign-plan', 'ua.roas-model'] });
+    // Bob neither created it nor can see it: fired agents stay admin-only everywhere else.
+    expect((await call(req('GET', `agents/${agent.id}`, { as: ID.bob }))).status).toBe(404);
+    const r = await call(req('GET', `agents/${agent.id}/successor`, { as: ID.bob }));
+    expect(r.status).toBe(200);
+    expect(r.res.headers.get('cache-control')).toBe('no-store');
+    expect(r.json).toStrictEqual({ name: 'Nova', roleId: 'mobile.ua-manager', skillIds: ['ua.campaign-plan', 'ua.roas-model'] });
+  });
+
+  it('returns only the name for a predecessor without a library role', async () => {
+    const agent = await fired();
+    expect((await call(req('GET', `agents/${agent.id}/successor`, { as: ID.bob }))).json).toStrictEqual({ name: 'Nova' });
+  });
+
+  it('404s for an active, a draft or an unknown agent, exactly as drafting a successor would', async () => {
+    const { agent: active } = await hire(h, org.alice);
+    h.personaLLM.push(draftJson());
+    const { agent: draft } = await h.studio.draft(org.bob, {});
+    for (const id of [active.id, draft.id, 'agnope']) {
+      const r = await call(req('GET', `agents/${id}/successor`, { as: ID.bob }));
+      expect(r.status).toBe(404);
+      expect(r.json).toEqual({ error: expect.any(String) });
+      expect((await call(req('POST', 'agents', { as: ID.bob, body: { brief: {}, successorOf: id } }))).status).toBe(404);
+    }
+  });
+
+  it('refuses pending members', async () => {
+    const agent = await fired({ roleId: 'mobile.ua-manager' });
+    const r = await call(req('GET', `agents/${agent.id}/successor`, { as: ID.pending }));
+    expect(r.status).toBe(403);
+    expect(JSON.stringify(r.json)).not.toContain('mobile.ua-manager');
   });
 });

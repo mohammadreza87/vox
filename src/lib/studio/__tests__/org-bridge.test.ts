@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { defaultVoiceId } from '../media';
-import { agentToPersona, groupId, personId, studioToOrg, studioToOrgConfig } from '../org-bridge';
+import { agentCraft, agentSkillSet, agentToPersona, groupId, personId, studioToOrg, studioToOrgConfig } from '../org-bridge';
+import type { Catalog } from '../skills/catalog';
+import type { AgentRole, AgentSkill } from '../skills/types';
 import type { Agent, StudioState } from '../types';
 import { fakeMember, ID, personaSpec, T0 } from './helpers';
 
@@ -71,5 +73,60 @@ describe('studio → runtime org', () => {
     const g = studioToOrg(s).getGroupByChatId(-100777)!;
     expect(g.memberIds).toContain(personId(ID.pending));
     expect(g.hasGuests).toBe(true);
+  });
+});
+
+describe('character, voice examples and craft reach the runtime persona', () => {
+  const skill = (id: string, title: string): AgentSkill => ({
+    id, title, summary: title, whenToUse: `Use when ${title.toLowerCase()} matters.`, method: ['First.', 'Second.', 'Third.'],
+    qualityBar: ['Clear.', 'Short.', 'True.'], pitfalls: ['Vague.', 'Long.'], frameworks: [], sources: [{ name: 'Fixture', url: 'https://example.com/f' }],
+  });
+  const role: AgentRole = {
+    id: 'mobile.live-ops-producer', pack: 'mobile', space: 'work', title: 'Live-ops Producer', summary: 'Runs events.',
+    mission: 'Keep the live game fresh.', knowledge: ['Event calendars', 'Cohorts', 'Featuring'], pointOfView: ['Cut scope first.', 'No Friday releases.'],
+    voice: 'Numbers first.', boundaries: 'Defers legal.', skills: ['core.scope', 'core.risk'], optionalSkills: ['core.extra'],
+    starters: ['a', 'b', 'c'], hue: 'sky', traits: { warmDirect: 50, playfulSerious: 50, conciseExpansive: 50 }, keywords: ['a1', 'b1', 'c1', 'd1', 'e1', 'f1'],
+  };
+  const catalog: Catalog = { version: 'fixture', packs: [], roles: [role], skills: [skill('core.scope', 'Scope trade-off'), skill('core.risk', 'Release risk'), skill('core.extra', 'Extra skill')] };
+
+  it('renders the role with its default skills, or exactly the skills the agent carries', () => {
+    const byDefault = agentToPersona(agent({ persona: personaSpec({ roleId: role.id }) }), 'o', { catalog });
+    expect(byDefault.craft).toContain('Your role: Live-ops Producer.');
+    expect(byDefault.craft).toContain('<skill name="Scope trade-off">');
+    expect(byDefault.craft).toContain('<skill name="Release risk">');
+    const chosen = agentToPersona(agent({ persona: personaSpec({ roleId: role.id, skillIds: ['core.extra', 'core.gone', 'core.extra'] }) }), 'o', { catalog });
+    expect(chosen.craft).toContain('<skill name="Extra skill">');
+    expect(chosen.craft).not.toContain('Scope trade-off');
+    expect(chosen.craft!.match(/<skill /g)).toHaveLength(1);
+    expect(agentCraft({ roleId: role.id, skillIds: [] }, catalog)).not.toContain('<skill');
+  });
+
+  it('fills the routed skill set alongside the full craft, with pinned playbooks kept out of selection', () => {
+    const pinned: AgentSkill = { ...skill('core.safety', 'Safety referral'), pinned: true };
+    const withPinned: Catalog = { ...catalog, skills: [...catalog.skills, pinned] };
+    const p = personaSpec({ roleId: role.id, skillIds: ['core.scope', 'core.safety', 'core.risk'] });
+    const persona = agentToPersona(agent({ persona: p }), 'o', { catalog: withPinned });
+    expect(persona.craft).toContain('<skill name="Safety referral">');
+    expect(persona.skillSet?.role).toContain('Your role: Live-ops Producer.');
+    expect(persona.skillSet?.routable.map((s) => s.id)).toEqual(['core.scope', 'core.risk']);
+    expect(persona.skillSet?.pinned.map((s) => s.id)).toEqual(['core.safety']);
+    expect(persona.skillSet?.pinned[0].playbook).toContain('<skill name="Safety referral">');
+    // Cached per catalog with the craft: rebuilt orgs reuse the same objects.
+    expect(agentSkillSet(p, withPinned)).toBe(persona.skillSet);
+    expect(agentToPersona(agent({ persona: p }), 'o', { catalog: withPinned }).skillSet).toBe(persona.skillSet);
+    // Fewer than two routable skills: the agent always gets the full craft.
+    const single = agentToPersona(agent({ persona: personaSpec({ roleId: role.id, skillIds: ['core.scope', 'core.safety'] }) }), 'o', { catalog: withPinned });
+    expect(single.craft).toContain('<skill name="Scope trade-off">');
+    expect(single).not.toHaveProperty('skillSet');
+    expect(agentToPersona(agent({ persona: personaSpec() }), 'o', { catalog })).not.toHaveProperty('skillSet');
+  });
+
+  it('custom agents get no craft; character and voice examples always pass through', () => {
+    const custom = agentToPersona(agent({ persona: personaSpec({ voiceExamples: [{ user: 'hi', reply: 'Morning. What are we shipping?' }], opinions: ['Ship small.'] }) }), 'o', { catalog });
+    expect(custom.craft).toBeUndefined();
+    expect(custom.character).toContain('Views you hold: Ship small.');
+    expect(custom.voiceExamples).toEqual([{ user: 'hi', reply: 'Morning. What are we shipping?' }]);
+    expect(agentToPersona(agent({ persona: personaSpec({ roleId: 'tech.unknown' }) }), 'o', { catalog }).craft).toBeUndefined();
+    expect(studioToOrgConfig(state(), 'HOOR', { catalog }).personas[0].character).toContain('Personality: Curious and candid');
   });
 });

@@ -564,9 +564,10 @@
       ],
       "evidence": [
         "docs/implementation/DELIVERY_RESULT.md",
-        "docs/implementation/OBSERVATION_LEARNING.md"
+        "docs/implementation/OBSERVATION_LEARNING.md",
+        "docs/implementation/LEARNING_CASES.md"
       ],
-      "progress_note": "Account/shared scheduled cleanup now has durable paginated leases, restart recovery and expiry tests; observer consent revocation purges journal and derived findings in the same transaction. Maintenance release switch remains off. Provider/backup residual retention and production restore qualification remain open."
+      "progress_note": "Account/shared scheduled cleanup now has durable paginated leases, restart recovery and expiry tests; observer consent revocation purges journal and derived findings in the same transaction. Maintenance release switch remains off. Provider/backup residual retention and production restore qualification remain open. LC1 now invalidates whole frozen synthetic corpora on source/case expiry or withdrawal, preserves final-use/exclusion history across explicit migration/restart, and refuses unsafe capacity/downgrade paths. Independent local acceptance passed; physical audit retirement and external deletion remain open."
     },
     {
       "id": "VOX-015",
@@ -600,9 +601,11 @@
       ],
       "evidence": [
         "docs/implementation/DELIVERY_RESULT.md",
-        "docs/implementation/INDEXED_STORAGE.md"
+        "docs/implementation/INDEXED_STORAGE.md",
+        "docs/implementation/LEGACY_INVENTORY.md",
+        "docs/implementation/LEGACY_OFFLINE_INVENTORY.md"
       ],
-      "progress_note": "Legacy unscoped history/auto-memory remains denied without silent consent migration. Current adaptive FILE/SQLite/FILEv2 format transition, recovery and current-state rollback tooling is implemented and independently source-tested (INDEXED_STORAGE.md). Broader legacy application inventory, ownership/purpose reconciliation, quarantine mapping and production residual/restore qualification remain open; storage-format conversion does not grant historical data new consent."
+      "progress_note": "Legacy unscoped history/auto-memory remains denied without silent consent migration. Current adaptive FILE/SQLite/FILEv2 format transition, recovery and current-state rollback tooling is implemented and independently source-tested (INDEXED_STORAGE.md). Broader legacy application inventory, ownership/purpose reconciliation, quarantine mapping and production residual/restore qualification remain open; storage-format conversion does not grant historical data new consent. LIP1 isolated synthetic inventory/planner is implemented on candidate `bbff2304792f998a357eabe0c6888955c3909c57` (tree `de57f234ecd9ecb9091e4b4cdb0717895931c528`; base `cf63acf64c6eadf5a2247d2436e0a22bc114386b`). Author reported 122 tests, lint and full TypeScript pass. Independent fixed 86-case and supplemental 18-case runs both passed on this candidate; privacy source review closed the three prior findings. Independent E1 acceptance passed 104/104 (86 original + 18 supplement), zero failures/skips/retries; final report SHA256 b7e2bddb008cf33ce8a6e8e8ed492aaa820d1fc3574f9266db3569019580ac33, execution receipt SHA256 559f1ba598e36f297d3d15abd17936bcdcbe2795a363b9814808d76f841aad92. Candidate a15ebc8 is rejected: its original 86/86 pass was later shown incomplete by three privacy findings; supplemental replay produced 14 failures/4 passes. Evidence remains preserved. LIP1 only plans an in-memory quarantine result over caller-supplied synthetic fixtures; no live inventory/import/restore/runtime link or permission is added. Real legacy source acquisition, ownership/purpose reconciliation, backup/restore and VOX-009/010/011/014 dependencies remain open; VOX-015 stays in progress. فارسی: بخش آزمایشی LIP1 برای فهرست‌برداری ساختگی و طرح قرنطینه روی نامزد `bbff2304792f998a357eabe0c6888955c3909c57` پیاده‌سازی شد؛ آزمون مستقل ۸۶ موردی و ۱۸ مورد تکمیلی هر دو موفق شدند و بازبینی حریم خصوصی سه ایراد قبلی را بست. پذیرش مستقل E1 با ۱۰۴ از ۱۰۴ موفق شد؛ هش گزارش `b7e2bddb008cf33ce8a6e8e8ed492aaa820d1fc3574f9266db3569019580ac33` و رسید `559f1ba598e36f297d3d15abd17936bcdcbe2795a363b9814808d76f841aad92` است. نامزد `a15ebc8` رد است: با وجود قبولی اولیهٔ ۸۶ مورد، سه ایراد حریم خصوصی بعداً یافت شد و اجرای تکمیلی ۱۴ شکست/۴ موفقیت داشت؛ شواهد حفظ شده‌اند. LIP1 فقط دادهٔ ساختگیِ صریح را به طرح قرنطینهٔ درون‌حافظه‌ای تبدیل می‌کند؛ فهرست‌برداری زنده، واردسازی، بازیابی، اتصال زمان اجرا یا مجوز ایجاد نمی‌کند. دریافت و تطبیق دادهٔ واقعی، پشتیبان/بازیابی و وابستگی‌های VOX-009/010/011/014 باز هستند؛ VOX-015 در حال انجام می‌ماند. LIA1 source bc2f1d7 now has independent synthetic acceptance 123/123 and privacy closure: selected native Tireh file through inherited descriptors to a minimized deny-all report, fixed static CLI with source parity, truthful cancelled-read accounting. No live snapshot, mapping, import, restore or consent grant. CI/merge/deployment for the LIA1 integration remain pending. فارسی: LIA1 در منبع bc2f1d7 با ۱۲۳ از ۱۲۳ آزمون مستقل ساختگی و تأیید حریم خصوصی پذیرفته شد؛ فایل بومی منتخب از طریق توصیفگر موروثی به گزارش محدود با استفادهٔ ممنوع تبدیل می‌شود، CLI ثابت با تطابق منبع و شمارش صحیح خواندنِ لغوشده دارد. snapshot زنده، نگاشت، واردسازی، بازیابی یا رضایت جدید ایجاد نمی‌کند. CI، ادغام و استقرار نسخهٔ LIA1 هنوز باز است."
     },
     {
       "id": "VOX-016",
@@ -850,9 +853,10 @@
       "evidence": [
         "docs/implementation/DELIVERY_RESULT.md",
         "docs/implementation/OBSERVATION_LEARNING.md",
-        "docs/implementation/MAINTENANCE_HEALTH.md"
+        "docs/implementation/MAINTENANCE_HEALTH.md",
+        "docs/implementation/RELEASE_MAINTENANCE_2026_10_20.md"
       ],
-      "progress_note": "Own-space Studio measurements show response/playback denominators, queue lag/failure, deterministic findings and explicit unavailable task success/usage. Owner/superadmin operations view shows local workflow metadata only. Organization/cohort dashboards remain open. The next bounded source slice adds strict read-only system-wide maintenance status for current operators: retained progress, activity time, recorded failure, lease expiry and explicit unavailable states in EN/FA. Counts are not unique people or verified deletions. Independent/compiled/CI acceptance is tracked per candidate in MAINTENANCE_HEALTH.md."
+      "progress_note": "Own-space Studio measurements show response/playback denominators, queue lag/failure, deterministic findings and explicit unavailable task success/usage. Owner/superadmin operations view shows local workflow metadata only. Organization/cohort dashboards remain open. The next bounded source slice adds strict read-only system-wide maintenance status for current operators: retained progress, activity time, recorded failure, lease expiry and explicit unavailable states in EN/FA. Counts are not unique people or verified deletions. Independent/compiled/CI acceptance is tracked per candidate in MAINTENANCE_HEALTH.md. The bounded maintenance-status slice passed independent compiled/ENFA and CI acceptance and was deployed as b419309 on 20 October; 40 local/public routes and five active-bot ownership checks passed with unchanged configuration. This does not close alerting, actual scheduling/load, backup or provider-deletion gates."
     },
     {
       "id": "VOX-023",
@@ -1611,9 +1615,10 @@
         "Dataset manifests"
       ],
       "evidence": [
-        "docs/implementation/OBSERVATION_LEARNING.md"
+        "docs/implementation/OBSERVATION_LEARNING.md",
+        "docs/implementation/LEARNING_CASES.md"
       ],
-      "progress_note": "Signed minimized synthetic/approved aggregate finding import, lineage expiry/revocation and private-content rejection implemented for local routing workflow. No automatic export of real user observations; production curation/rights integration remains open."
+      "progress_note": "Signed minimized synthetic/approved aggregate finding import, lineage expiry/revocation and private-content rejection implemented for local routing workflow. No automatic export of real user observations; production curation/rights integration remains open. LC1 connects exact signed finding provenance and human-reviewed closed recipes to evaluator-frozen corpora, private current authority, optimization, reserved paired evaluation, real protected Docker companion, human approval and restart readiness. Independent e05e460 acceptance passed 41 external cases and 45 scanner checks; a cumulative audit-capacity P1 was reproduced and repaired before acceptance. This synthetic-only local slice does not complete real-data curation, rights integration, production IAM or measured model benefit."
     },
     {
       "id": "VOX-044",
@@ -1977,9 +1982,10 @@
       ],
       "evidence": [
         "docs/implementation/OBSERVATION_LEARNING.md",
-        "docs/implementation/MAINTENANCE_HEALTH.md"
+        "docs/implementation/MAINTENANCE_HEALTH.md",
+        "docs/implementation/RELEASE_MAINTENANCE_2026_10_20.md"
       ],
-      "progress_note": "Local account sweep pagination, competing leases, crash recovery, expiry, snapshot reconciliation and bounded observer retries tested. Background maintenance is supported only in the persistent file/polling runtime; unsupported activation fails startup. Production load/SLOs, full backup restoration and provider residual deletion remain open. A separate read-only FILE checkpoint health capability and EN/FA operator status view are implemented without activating maintenance or changing cleanup semantics. Disabled execution preserves readable retained evidence; current committed operator/auth fences protect publication. Alert delivery, actual scheduled-worker/load qualification and backup/provider guarantees remain open."
+      "progress_note": "Local account sweep pagination, competing leases, crash recovery, expiry, snapshot reconciliation and bounded observer retries tested. Background maintenance is supported only in the persistent file/polling runtime; unsupported activation fails startup. Production load/SLOs, full backup restoration and provider residual deletion remain open. A separate read-only FILE checkpoint health capability and EN/FA operator status view are implemented without activating maintenance or changing cleanup semantics. Disabled execution preserves readable retained evidence; current committed operator/auth fences protect publication. Alert delivery, actual scheduled-worker/load qualification and backup/provider guarantees remain open. The bounded maintenance-status slice passed independent compiled/ENFA and CI acceptance and was deployed as b419309 on 20 October; 40 local/public routes and five active-bot ownership checks passed with unchanged configuration. This does not close alerting, actual scheduling/load, backup or provider-deletion gates."
     },
     {
       "id": "VOX-053",
@@ -2144,9 +2150,11 @@
         "docs/implementation/OBSERVATION_LEARNING.md",
         "docs/implementation/RIGHTS_INTAKE.md",
         "docs/implementation/RIGHTS_RETENTION.md",
-        "docs/implementation/GUEST_RIGHTS_INTAKE.md"
+        "docs/implementation/GUEST_RIGHTS_INTAKE.md",
+        "docs/implementation/RIGHTS_LOCAL_USE.md",
+        "docs/implementation/RELEASE_RF1_2026_10_20.md"
       ],
-      "progress_note": "Own-account Work/Personal export, EN/FA note correction, RI1 request intake and RI2 retention operations are implemented. RI2 binds original audit/closure floors, explicitly reassesses unresolved cases, purges only eligible terminal records and retains finite scoped continuity/410 receipts. Independent RI2 local acceptance passed 36 cases. Formal restriction/objection, guest verification, provider/backups and broader rights fulfillment remain open. Prior additional independent immediate-export race proof remains unavailable after automatic security review; no replacement execution is claimed. GI1 guest metadata intake, bounded separate ledger, current-operator queue, key continuity, final authority fences and finite retention/status receipts are implemented behind reviewed-policy/key configuration. Independent review caught and verified the fix for a short purge-receipt horizon. Actual compiled proxy testing also exposed internal/public-origin mismatch; all six affected handlers now use the trusted server URL. Composed independent acceptance passed 158 external cases and 117 repository regressions; compiled/CI/release evidence remains bound to its exact candidate. Guest recovery-code possession never proves identity or authorizes private-data disclosure."
+      "progress_note": "Own-account Work/Personal export, EN/FA note correction, RI1 request intake and RI2 retention operations are implemented. RI2 binds original audit/closure floors, explicitly reassesses unresolved cases, purges only eligible terminal records and retains finite scoped continuity/410 receipts. Independent RI2 local acceptance passed 36 cases. Formal restriction/objection, guest verification, provider/backups and broader rights fulfillment remain open. Prior additional independent immediate-export race proof remains unavailable after automatic security review; no replacement execution is claimed. GI1 guest metadata intake, bounded separate ledger, current-operator queue, key continuity, final authority fences and finite retention/status receipts are implemented behind reviewed-policy/key configuration. Independent review caught and verified the fix for a short purge-receipt horizon. Actual compiled proxy testing also exposed internal/public-origin mismatch; all six affected handlers now use the trusted server URL. Composed independent acceptance passed 158 external cases and 117 repository regressions; compiled/CI/release evidence remains bound to its exact candidate. Guest recovery-code possession never proves identity or authorizes private-data disclosure. RF1 scoped local-use slice on candidate 6c0718ec84a6e141e3cf22d0758782aa17611146 (tree 8dd033ed35801c0807f61765b844b507a1bc7cf9; base e5cf00f2f8b460bef956bc28f2535b4e1c7a8b0e) passed independent source acceptance (39/39, 11 files; 981 source hashes unchanged), production build, and CI230 tests/E2E (4,001 passed, 13 existing skips across 287 files). CI also passed 46 Node checks and 41 existing browser journeys; those browser journeys do not cover RF1 controls. Audit is not clean (exit 1; 14 findings, 8 moderate/6 high; continue-on-error). Compiled-app SQLite and FILE attempt09 each passed 13/13 (26 total); independent combined browser acceptance passed 26/26 (13 SQLite + 13 FILE), zero failures/skips/flaky; report and 110-file manifest are recorded in RIGHTS_LOCAL_USE.md. The runs use mock transport and synthetic identities; OS isolation, native browser zoom/language selection, physical-device and provider behavior remain unavailable. Candidate 25a2661 was rejected and historical evidence is preserved. RF1 covers requester account plus selected space/purpose only; it does not complete VOX-056 or establish legal compliance. RF1 PR #84 is merged and deployed as `cf63acf64c6eadf5a2247d2436e0a22bc114386b` (tree `a6a67d26f0e73addafb0dae4ff6b4e6301c82f0a`, build `FHheoV7JKPeQMsUBuCMEZ`); production legacy FILE and optional-policy configuration remain unchanged/off. 40 local/public unauthenticated route contracts and five bot ownership/configuration checks passed. No provider generation, authenticated live-user journey or device voice qualification occurred. RF1 does not complete VOX-056. Metadata retirement, RF2 erasure, provider/backup deletion, production IAM, legal eligibility and provider/device/user-flow gates remain open. فارسی: PR #84 ادغام و RF1 با ساخت `FHheoV7JKPeQMsUBuCMEZ` روی `cf63acf64c6eadf5a2247d2436e0a22bc114386b` مستقر شد؛ FILE قدیمی و سیاست‌های اختیاری بدون تغییر/خاموش ماندند. ۴۰ قرارداد مسیر محلی/عمومی بدون احراز هویت و پنج بررسی مالکیت/پیکربندی ربات موفق شدند. تولید ارائه‌دهنده، مسیر کاربر واردشده یا صلاحیت صدای دستگاه انجام نشد. RF1 کل VOX-056 را کامل نمی‌کند؛ بازنشستگی فراداده، RF2، حذف ارائه‌دهنده/پشتیبان، IAM، حقوقی و پذیرش کاربر/ارائه‌دهنده/دستگاه باز هستند."
     }
   ],
   "delivery_slices": [
@@ -2187,6 +2195,44 @@
       "deployed_revision": "9371894a2dc4bc6f9abca25289f2eaa9fe6e17b9",
       "evidence": "docs/implementation/RELEASE_GUEST_EVALUATION_2026_10_20.md",
       "note": "Independent source/browser and CI passed; exact merged build installed, 38 live route checks and four current active-bot ownership reads passed. Guest intake and other optional capabilities remain disabled pending their separate activation gates."
+    },
+    {
+      "id": "maintenance-status-release",
+      "status": "deployed_core_optional_features_off",
+      "baseline": "9371894a2dc4bc6f9abca25289f2eaa9fe6e17b9",
+      "deployed_revision": "b4193097a1003f38413f428a73ff55a0dfb1d79f",
+      "evidence": "docs/implementation/RELEASE_MAINTENANCE_2026_10_20.md",
+      "note": "Independent product and fixture-repair acceptance, CI218 and exact merged-build deployment passed. 40 live route checks, five active bots and unchanged configuration verified. Maintenance execution remains disabled; broader VOX-022/052 qualification stays open."
+    },
+    {
+      "id": "reviewed-synthetic-learning-cases",
+      "status": "deployed_core_optional_features_off",
+      "baseline": "b4193097a1003f38413f428a73ff55a0dfb1d79f",
+      "candidate": "e05e46074e1c4741b93b0a85d8bcc4e65a041773",
+      "evidence": "docs/implementation/RELEASE_LEARNING_CASES_2026_10_20.md",
+      "note": "Independent source, actual migration/old-reader and isolated Docker qualification passed after the recorded capacity fix. CI221 passed 3945 tests with 13 existing skips, 36 release checks and 41 browser checks. Exact merged artifact deployed; 40 live routes and five active-bot ownership checks passed with configuration unchanged. No workflow activation, real conversation export or broader roadmap completion.",
+      "deployed_revision": "a49f734e16e0a5b3430c1e1c088dab33feda5d53"
+    },
+    {
+      "id": "RR-01",
+      "status": "in_progress",
+      "baseline": "4be2b395789ce283ce88769616a08c7546ff2484",
+      "evidence": "docs/implementation/REQUESTED_ROUTINES.md",
+      "note": "Explicit requested daily agent lessons with adaptive local timing, own-private-Telegram delivery, durable occurrences and stop controls; independent acceptance and production verification pending."
+    },
+    {
+      "id": "RI-ACTIVATE",
+      "status": "in_progress",
+      "baseline": "4be2b395789ce283ce88769616a08c7546ff2484",
+      "evidence": "docs/implementation/REQUESTED_ROUTINES.md",
+      "note": "Provision basic rights intake and available per-account privacy controls; retain individual choices and explain unsupported features accurately. Live configuration and authenticated verification pending."
+    },
+    {
+      "id": "RI-PILOT-01",
+      "status": "in_progress",
+      "baseline": "2f0df5ffca7e180d9b246afc2acea9c848eee048",
+      "evidence": "docs/implementation/REQUESTED_ROUTINES.md",
+      "note": "Explicit internal-company operational availability for listed current owner/superadmin accounts, maximum 90 days, separate from jurisdiction approvals. Preserve adult/profile confirmation, purpose/agent/channel grants, pauses and holds. Exclude biometric recognition, content quality review and audio/image capabilities. Independent acceptance and deployment pending."
     }
   ]
 }

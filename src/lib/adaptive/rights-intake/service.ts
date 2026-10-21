@@ -1,5 +1,12 @@
 import { createCipheriv, createDecipheriv, createHmac, randomBytes, randomUUID } from 'crypto';
 import { z } from 'zod';
+import type { AdaptiveLifecycleService } from '../lifecycle/service';
+import { RightsLocalErasureWorkflow } from './local-erasure-service';
+import type { LocalErasureView, LocalErasurePlanInput, LocalErasureExecuteInput } from './local-erasure-contracts';
+import type { RightsUseHoldService } from '../rights-use-holds/service';
+import { RightsLocalUseWorkflow, type LocalUseView } from './local-use-service';
+import type { LocalUseScope, LocalUsePlanInput, LocalUseActionInput } from './local-use-contracts';
+import { hasLocalUseDependency } from './local-use-state';
 import { accountIdFor, digest } from '../persistence/repository';
 import { createInputSchema, retentionActionSchema, integer, operatorActionSchema, reference, requesterActionSchema, spaceSchema,
   type RetentionAction, type RetentionResult, type AccountLedger, type CreateInput, type OperatorAction, type RequestRecord, type RequesterAction,
@@ -9,9 +16,14 @@ import { fail, RightsError, RightsReplay, RightsRepository } from './repository'
 export interface PreparedRightsExport { data: { revision: number; [key: string]: unknown }; revalidate: () => void }
 export interface RightsOptions {
   policy: () => unknown;
+  localUse?: RightsUseHoldService;
+  localErasure?: AdaptiveLifecycleService;
+  assertPrivateMemoryNow?: (telegramId:number)=>void;
   /** Dedicated provisioned 256-bit key. Never derive from a bot token or expose to clients. */
   key?: Buffer;
   clock?: () => number;
+  /** Request-local, nonpersistent RF2 observation shared across publication reads. */
+  assertErasureClockNow?: (observedAt:number)=>void;
   /** Per-request signed authentication; never stored in the ledger. */
   assertRequestNow?: () => void;
   assertAccountNow: (telegramId: number) => void;
@@ -19,7 +31,7 @@ export interface RightsOptions {
   prepareExport?: (telegramId: number, space: RightsSpace) => Promise<PreparedRightsExport>;
 }
 const tokenSchema = z.object({ version: z.literal(1), type: z.enum(['operation', 'cursor']), operatorRef: z.string().regex(/^[a-f0-9]{64}$/), policy: z.string().regex(/^[a-f0-9]{64}$/), issuedAt: integer, expiresAt: integer,
-  accountId: z.string().regex(/^telegram-account:[1-9]\d{0,15}$/).optional(), requestId: reference.optional(), space: spaceSchema.optional(), after: z.string().regex(/^[a-f0-9]{64}$/).optional() }).strict();
+  accountId: z.string().regex(/^telegram-account:[1-9]\d{0,15}$/).optional(), requestId: reference.optional(), space: spaceSchema.optional(), after: z.string().regex(/^[a-f0-9]{64}$/).optional(), requestRevision:integer.positive().optional() }).strict();
 type Envelope = z.infer<typeof tokenSchema>;
 const terminal = (r: RequestRecord) => r.state === 'closed_unfulfilled';
 const safeAdd = (a: number, b: number) => { const n = a + b; if (!Number.isSafeInteger(n) || n <= a) return fail(503, 'reviewed_policy_unavailable'); return n; };
@@ -28,6 +40,50 @@ const bump = (n: number) => { if (!Number.isSafeInteger(n + 1)) return fail(503,
 /** Metadata-only intake. Account authentication never establishes natural-person identity. */
 export class RightsIntakeService {
   private observedTime = 0;
+  private erasureObservedTime=0;
+  private erasureWorkflow():RightsLocalErasureWorkflow {
+    return new RightsLocalErasureWorkflow(this.repository,{...this.options,assertErasureClockNow:observedAt=>{
+      if(observedAt<this.erasureObservedTime)return fail(503,'rights_clock_unavailable');
+      this.erasureObservedTime=observedAt;return this.options.assertErasureClockNow?.(observedAt);
+    }});
+  }
+  assertOperatorPublicationNow(operator: number): void { this.operator(operator); }
+  assertLocalUseOperatorPublication(operator: number, requestId: string, operationHandle: string, expected: LocalUseView): void {
+    const p = this.operator(operator), token = this.open(operationHandle,operator,p,'operation');
+    if(token.requestId !== requestId) return fail(403,'operation_handle_invalid');
+    this.assertLocalUsePublication(Number(token.accountId!.slice('telegram-account:'.length)),requestId,expected.status.scope,expected);
+    this.operator(operator,p);
+  }
+  localUseStatus(id: number, requestId: string, scope: LocalUseScope) { return new RightsLocalUseWorkflow(this.repository, this.options).status(id, requestId, scope); }
+  assertLocalUsePublication(id: number, requestId: string, scope: LocalUseScope, expected: LocalUseView): void {
+    const current = this.localUseStatus(id,requestId,scope);
+    const proof = (v: LocalUseView) => [v.status.scope, v.status.technical.current, v.status.selectedEffectId, v.status.useEpoch, v.status.effectiveBlocked, v.availableActions];
+    if (digest(proof(current)) !== digest(proof(expected))) return fail(409,'rights_conflict');
+  }
+  localUsePlan(id: number, requestId: string, space: RightsSpace, input: LocalUsePlanInput) { return new RightsLocalUseWorkflow(this.repository, this.options).plan(id, requestId, space, input); }
+  localUseAction(id: number, requestId: string, space: RightsSpace, input: LocalUseActionInput) { return new RightsLocalUseWorkflow(this.repository, this.options).act(id, requestId, space, input); }
+  async reconcileLocalUse(operator: number, requestId: string, operationHandle: string, commandEventId: string) {
+    const p = this.operator(operator), token = this.open(operationHandle, operator, p, 'operation');
+    if (token.requestId !== requestId) return fail(403,'operation_handle_invalid');
+    const id = Number(token.accountId!.slice('telegram-account:'.length));
+    return new RightsLocalUseWorkflow(this.repository, this.options).reconcile(id, requestId, commandEventId, () => { this.operator(operator,p); this.open(operationHandle,operator,p,'operation'); });
+  }
+  privateNoteErasureStatus(id:number,requestId:string,space:RightsSpace){return this.erasureWorkflow().status(id,requestId,space);}
+  privateNoteErasurePlan(id:number,requestId:string,space:RightsSpace,input:LocalErasurePlanInput){return this.erasureWorkflow().plan(id,requestId,space,input);}
+  assertPrivateNoteErasurePlanPublication(id:number,requestId:string,space:RightsSpace,plan:unknown){this.erasureWorkflow().assertPlanPublication(id,requestId,space,plan);}
+  privateNoteErasureExecute(id:number,requestId:string,space:RightsSpace,input:LocalErasureExecuteInput){return this.erasureWorkflow().execute(id,requestId,space,input);}
+  assertPrivateNoteErasurePublication(id:number,requestId:string,space:RightsSpace,expected:LocalErasureView):void {
+    const current=this.privateNoteErasureStatus(id,requestId,space);
+    const projection=(v:LocalErasureView)=>[v.requestId,v.requestRevision,v.space,v.available,v.operations.map(({observedAt:_at,...o})=>{void _at;return o;})];
+    if(digest(projection(current))!==digest(projection(expected)))return fail(409,'rights_conflict');
+  }
+  async reconcilePrivateNoteErasure(operator:number,requestId:string,operationHandle:string,commandEventId:string,eventId:string){
+    const p=this.operator(operator),token=this.open(operationHandle,operator,p,'operation');if(token.requestId!==requestId)return fail(403,'operation_handle_invalid');
+    const current=this.row(this.repository.read(token.accountId!),requestId,token.space!);if(token.requestRevision!==current.revision)return fail(403,'operation_handle_invalid');
+    const id=Number(token.accountId!.slice('telegram-account:'.length));
+    return this.erasureWorkflow().reconcile(id,requestId,token.space!,commandEventId,()=>{this.operator(operator,p);this.open(operationHandle,operator,p,'operation');},eventId,this.ref('operator',String(operator)),token.requestRevision!);
+  }
+  assertPrivateNoteErasureOperatorPublication(operator:number,requestId:string,handle:string,expected:LocalErasureView){const p=this.operator(operator),t=this.open(handle,operator,p,'operation');if(t.requestId!==requestId)return fail(403,'operation_handle_invalid');this.assertPrivateNoteErasurePublication(Number(t.accountId!.slice('telegram-account:'.length)),requestId,t.space!,expected);this.operator(operator,p);}
   constructor(readonly repository: RightsRepository, readonly options: RightsOptions) {}
   /** Request-local guard avoids mutating a shared service while awaits overlap. */
   forRequest(assertRequestNow: () => void): RightsIntakeService {
@@ -76,7 +132,7 @@ export class RightsIntakeService {
       decipher.setAAD(Buffer.from('vox-rights:envelope:v1')); decipher.setAuthTag(bytes.subarray(12, 28));
       const token = tokenSchema.parse(JSON.parse(Buffer.concat([decipher.update(bytes.subarray(28)), decipher.final()]).toString('utf8'))), now = this.now();
       if (token.type !== type || token.operatorRef !== this.ref('operator', String(operator)) || token.policy !== digest(p) || token.issuedAt > now || token.expiresAt <= now || token.expiresAt <= token.issuedAt ||
-        type === 'operation' && (!token.accountId || !token.requestId || !token.space || token.after) || type === 'cursor' && (!token.after || token.accountId || token.requestId || token.space)) return fail(403, 'operation_handle_invalid');
+        type === 'operation' && (!token.accountId || !token.requestId || !token.space || token.after) || type === 'cursor' && (!token.after || token.accountId || token.requestId || token.space || token.requestRevision)) return fail(403, 'operation_handle_invalid');
       return token;
     } catch (error) { if (RightsError.is(error) && error.code === 'authentication_required') throw error; return fail(403, 'operation_handle_invalid'); }
   }
@@ -121,21 +177,33 @@ export class RightsIntakeService {
     if (d!.tombstones.some(t => t.requestId === receipt.requestId)) return fail(410, 'rights_record_expired');
     return d!.requests.find(r => r.requestId === receipt.requestId) ?? fail(503, 'rights_storage_unavailable');
   }
-  private async readForMutation(id: number): Promise<AccountLedger | null> {
+  private readForMutation(id: number): Promise<AccountLedger | null> {
+    return this.readAfterMutation(() => this.read(id));
+  }
+  private async readAfterMutation(read: () => AccountLedger | null): Promise<AccountLedger | null> {
     const deadline = Date.now() + 3000;
     while (true) {
-      try { return this.read(id); }
+      try { return read(); }
       catch (error) {
         if (!RightsError.is(error) || error.code !== 'rights_storage_busy' || Date.now() >= deadline) throw error;
         await new Promise(resolve => setTimeout(resolve, 10));
       }
     }
   }
+  /** A concurrent exact retry can briefly hold the writer after our commit.
+   * Reuse bounded committed acquisition; do not reread a locked ledger after
+   * obtaining the publication snapshot. Current request/account fences remain. */
+  private async mutationDetail(id:number,space:RightsSpace,requestId:string,expectedPolicy?:RightsPolicy):Promise<Pick<RightsMutation,'request'|'policyStatus'>> {
+    const d=await this.readForMutation(id),now=this.now(d),r=this.row(d,requestId,space);
+    const result={request:this.view(r,now),policyStatus:this.available(d,now)?'available' as const:'unavailable' as const};
+    if(expectedPolicy)this.requirePolicy(this.now(d),expectedPolicy);else this.policy(this.now(d));
+    this.options.assertAccountNow(id);this.options.assertRequestNow?.();return result;
+  }
   private async replayResult(id: number, space: RightsSpace, eventId: string, fp: string): Promise<RightsMutation | undefined> {
     const d = await this.readForMutation(id), now = this.now(d), row = this.replay(d, eventId, fp, now);
     if (!row) return undefined;
     if (row.space !== space) return fail(409, 'rights_conflict');
-    return { ...this.detail(id, space, row.requestId), replayed: true };
+    return { ...await this.mutationDetail(id, space, row.requestId), replayed: true };
   }
   private admit(d: AccountLedger, p: RightsPolicy, now: number): void {
     if (d.requests.some(r => r.retention.reviewOrExpiryAt <= now)) return fail(503, 'rights_retention_review_required');
@@ -145,7 +213,8 @@ export class RightsIntakeService {
     this.requirePolicy(now, p);
   }
   private cleanContinuity(d: AccountLedger, now: number): void {
-    d.commandReceipts = d.commandReceipts.filter(r => r.retainUntil > now);
+    const linked=new Set(d.version===4?d.localErasure.operations.flatMap(o=>o.acknowledgement?.recordingAuthority?[o.acknowledgement.recordingAuthority.commandEventId]:[]):[]);
+    d.commandReceipts = d.commandReceipts.filter(r => r.retainUntil > now || linked.has(r.eventId));
     d.tombstones = d.tombstones.filter(t => t.retainUntil > now);
   }
   private receipt(d: AccountLedger, row: RequestRecord, input: { eventId: string; action?: string }, fp: string, now: number, p: RightsPolicy): void {
@@ -175,7 +244,7 @@ export class RightsIntakeService {
         d.requests.push(row); this.receipt(d, row, input, fp, now, p);
       }, () => { this.options.assertAccountNow(id); this.requirePolicy(this.now(), p); });
     } catch (e) { if (e instanceof RightsReplay) return (await this.replayResult(id, input.space, input.eventId, fp))!; throw e; }
-    this.requirePolicy(this.now(), p); return { ...this.detail(id, input.space, requestId), replayed: false };
+    this.requirePolicy(this.now(), p); return { ...await this.mutationDetail(id, input.space, requestId,p), replayed: false };
   }
   private transition(r: RequestRecord, action: string, reason: RequestRecord['reasonCode'], actor: 'requester' | 'privacy_operator' | 'service', actorId: string, now: number, p: RightsPolicy): void {
     if (terminal(r)) return fail(409, 'rights_conflict');
@@ -216,10 +285,34 @@ export class RightsIntakeService {
   private operationView(r: RequestRecord, operator: number, p: RightsPolicy, now: number): RightsOperationView {
     const { version, requestId, space, kind, revision, createdAt, updatedAt, state, reasonCode, deadline, coverage, retentionReviewRequired } = this.view(r, now);
     const retentionAt = terminal(r) ? this.purgeAt(r, p) : r.retention.reviewOrExpiryAt;
-    return { version, requestId, space, kind, revision, createdAt, updatedAt, state, ...(reasonCode ? { reasonCode } : {}), deadline, coverage, retentionReviewRequired,
-      ...(p.retentionOperations ? { retentionActions: terminal(r) ? (this.purgeAt(r, p) <= now ? ['reassess_retention', 'purge_terminal_record'] : ['reassess_retention']) : ['reassess_retention'], retentionPolicyRevision: p.revision, ...(retentionAt === Number.MAX_SAFE_INTEGER ? {} : { retentionAt }) } : {}),
-      accountRef: this.ref('account', r.accountId), operationHandle: this.seal({ version: 1, type: 'operation', operatorRef: this.ref('operator', String(operator)), policy: digest(p), issuedAt: now, expiresAt: safeAdd(now, p.handleLifetimeMs), accountId: r.accountId, requestId, space }),
+    const ledger = this.repository.read(r.accountId);
+    const localUses = (p.version === 2 || p.version === 3) && ['restriction','objection'].includes(r.kind) && (ledger?.version === 3 || ledger?.version === 4) ? (['optional.personalization','optional.product_analytics'] as const).map(purpose => {
+      const scope = { space: r.space, purpose }, account = Number(r.accountId.slice('telegram-account:'.length));
+      const workflow = new RightsLocalUseWorkflow(this.repository,this.options), view = workflow.status(account,r.requestId,scope);
+      const command = ledger.localUse.intents.find(i => i.requestId === r.requestId && i.scope.purpose === purpose && !ledger.localUse.acknowledgements.some(a => a.eventId === i.eventId) && !ledger.localUse.intents.some(s=>s.supersedesEventId===i.eventId));
+      const pending = !!command;
+      return { view: { ...view, availableActions: [] }, ...(command ? { commandEventId: command.eventId } : {}), reconcileAllowed: !!pending && (p.version === 2 || p.version === 3) && p.localFulfillment.allowedActions.includes('reconcile_recorded_effect') && p.localFulfillment.purposes.includes(purpose) && view.status.technical.current !== 'unknown' && view.status.reason === 'receipt_pending' };
+    }) : undefined;
+    const localErasures=p.version===3 && r.kind==='erasure' && ledger?.version===4 && this.options.localErasure && this.options.assertPrivateMemoryNow ? (()=>{
+      const workflow=this.erasureWorkflow(),view=workflow.status(Number(r.accountId.slice('telegram-account:'.length)),r.requestId,r.space);
+      const selected=ledger.localErasure.operations.filter(o=>o.requestId===r.requestId && o.space===r.space);
+      return selected.map((o,index)=>({view:view.operations[index],commandEventId:o.eventId,reconcileAllowed:!o.acknowledgement && view.operations[index].technical==='note_content_removed' && p.localErasure.allowedActions.includes('reconcile') && r.state!=='closed_unfulfilled' && r.retention.reviewOrExpiryAt>now}));
+    })():undefined;
+    return { version, requestId, space, kind, revision, createdAt, updatedAt, state, ...(localUses ? {localUses} : {}), ...(localErasures ? {localErasures} : {}), ...(reasonCode ? { reasonCode } : {}), deadline, coverage, retentionReviewRequired,
+      ...(p.retentionOperations ? { retentionActions: terminal(r) ? (this.purgeAt(r, p) <= now && ledger && !hasLocalUseDependency(ledger,r.requestId) ? ['reassess_retention', 'purge_terminal_record'] : ['reassess_retention']) : ['reassess_retention'], retentionPolicyRevision: p.revision, ...(retentionAt === Number.MAX_SAFE_INTEGER ? {} : { retentionAt }) } : {}),
+      accountRef: this.ref('account', r.accountId), operationHandle: this.seal({ version: 1, type: 'operation', operatorRef: this.ref('operator', String(operator)), policy: digest(p), issuedAt: now, expiresAt: safeAdd(now, p.handleLifetimeMs), accountId: r.accountId, requestId, space, ...(r.kind==='erasure'&&p.version===3?{requestRevision:r.revision}:{}) }),
       audit: r.audit.map(a => ({ seq: a.seq, at: a.at, action: a.action, actor: a.actor, from: a.from, to: a.to, ...(a.reasonCode ? { reasonCode: a.reasonCode } : {}), policyRevision: a.policyRevision })) };
+  }
+  assertErasureOperationsPublication(operator:number,expected:RightsOperations):void {
+    const p=this.operator(operator);
+    const project=(rows:NonNullable<RightsOperationView['localErasures']>)=>rows.map(({view:{observedAt:_time,...view},...rest})=>{void _time;return {...rest,view};});
+    for(const old of expected.requests) if(old.localErasures){
+      const t=this.open(old.operationHandle,operator,p,'operation');
+      if(t.requestId!==old.requestId || t.space!==old.space)return fail(409,'rights_conflict');
+      const d=this.repository.read(t.accountId!),r=this.row(d,old.requestId,old.space),fresh=this.operationView(r,operator,p,this.now(d));
+      if(r.revision!==old.revision || !fresh.localErasures || digest(project(old.localErasures))!==digest(project(fresh.localErasures)))return fail(409,'rights_conflict');
+    }
+    this.operator(operator,p);
   }
   async operations(operator: number, cursor?: string): Promise<RightsOperations> {
     const p = this.operator(operator), token = cursor === undefined ? undefined : this.open(cursor, operator, p, 'cursor');
@@ -258,7 +351,7 @@ export class RightsIntakeService {
         const r = this.row(d, requestId, space);
         if (r.revision !== input.expectedRevision) return fail(409, 'rights_conflict');
         if (input.action === 'purge_terminal_record') {
-          if (!terminal(r) || this.purgeAt(r, p) > now) return fail(409, 'rights_retention_not_eligible');
+          if (hasLocalUseDependency(d, requestId) || !terminal(r) || this.purgeAt(r, p) > now) return fail(409, 'rights_retention_not_eligible');
           if (d.tombstones.length >= 128) return fail(409, 'rights_capacity');
           this.receipt(d, r, input, fp, now, p);
           const retainUntil = Math.max(safeAdd(now, p.retentionOperations!.continuityRetentionMs), ...d.commandReceipts.filter(c => c.requestId === requestId).map(c => c.retainUntil));
@@ -272,7 +365,7 @@ export class RightsIntakeService {
           d.requests = d.requests.filter(row => row.requestId !== requestId);
         } else {
           if (r.audit.length >= 32) return fail(409, 'rights_capacity');
-          r.retention = { policyId: p.id, policyRevision: p.revision, auditRetainUntil: safeAdd(r.createdAt, p.retention.auditRetentionMs), ...(terminal(r) ? { terminalRetainUntil: safeAdd(r.audit.find(a => a.action === 'request_closed')!.at, p.retentionOperations!.terminalRetentionMs) } : {}), reviewOrExpiryAt: terminal(r) ? Math.max(safeAdd(r.audit.find(a => a.action === 'request_closed')!.at, p.retentionOperations!.terminalRetentionMs), safeAdd(r.createdAt, p.retention.auditRetentionMs)) : safeAdd(now, p.retention.requestReviewAfterMs) };
+          r.retention = { policyId: p.id, policyRevision: p.revision, auditRetainUntil: (d.version === 3 || d.version === 4) ? Math.max(r.retention.auditRetainUntil ?? 0, safeAdd(r.createdAt, p.retention.auditRetentionMs)) : safeAdd(r.createdAt, p.retention.auditRetentionMs), ...(terminal(r) ? { terminalRetainUntil: (d.version === 3 || d.version === 4) ? Math.max(r.retention.terminalRetainUntil ?? 0, safeAdd(r.audit.find(a => a.action === 'request_closed')!.at, p.retentionOperations!.terminalRetentionMs)) : safeAdd(r.audit.find(a => a.action === 'request_closed')!.at, p.retentionOperations!.terminalRetentionMs) } : {}), reviewOrExpiryAt: terminal(r) ? Math.max(safeAdd(r.audit.find(a => a.action === 'request_closed')!.at, p.retentionOperations!.terminalRetentionMs), safeAdd(r.createdAt, p.retention.auditRetentionMs)) : safeAdd(now, p.retention.requestReviewAfterMs) };
           r.revision = bump(r.revision); r.updatedAt = now;
           r.audit.push({ seq: r.audit.length + 1, at: now, action: 'retention_reassessed', actor: 'privacy_operator', actorRef: this.ref('privacy_operator', String(operator)), from: r.state, to: r.state, ...(r.reasonCode ? { reasonCode: r.reasonCode } : {}), policyRevision: p.revision });
           this.receipt(d, r, input, fp, now, p);
@@ -280,7 +373,11 @@ export class RightsIntakeService {
       }, () => { this.operator(operator, p); this.open(input.operationHandle, operator, p, 'operation'); });
     } catch (error) { if (error instanceof RightsReplay) replayed = true; else throw error; }
     this.operator(operator, p); this.open(input.operationHandle, operator, p, 'operation');
-    const current = this.repository.read(accountId); this.now(current); this.operator(operator, p);
+    const current = await this.readAfterMutation(() => {
+      this.operator(operator, p); this.open(input.operationHandle, operator, p, 'operation');
+      return this.repository.read(accountId);
+    });
+    this.now(current); this.operator(operator, p); this.open(input.operationHandle, operator, p, 'operation');
     return { replayed, requestId, outcome: current?.tombstones.some(t => t.requestId === requestId) ? 'purged' : 'reassessed' };
   }
   async operatorAction(operator: number, requestId: string, raw: OperatorAction): Promise<{ replayed: boolean; request: RightsOperationView; policyStatus: 'available' | 'unavailable' }> {

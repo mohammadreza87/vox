@@ -1,12 +1,14 @@
+import { rightsCopy, RIGHTS_COPY_VERSION } from '@/lib/adaptive/rights-intake/notice';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { RightsRequestPanel } from './RightsRequestPanel';
-import type { RightsRequestView, RightsSnapshot } from '../_lib/rights-client';
-const mocks = vi.hoisted(() => ({ session: 'account-a', read: vi.fn(), create: vi.fn(), act: vi.fn() }));
+import type { LocalErasureView, RightsRequestView, RightsSnapshot } from '../_lib/rights-client';
+import { rightsErasureCopy } from '../_lib/rights-erasure-copy';
+const mocks = vi.hoisted(() => ({ session: 'account-a', read: vi.fn(), create: vi.fn(), act: vi.fn(), privateNoteErasure: vi.fn(), privateNoteErasurePlan: vi.fn(), privateNoteErasureExecute: vi.fn() }));
 vi.mock('../_lib/client', () => ({ tg: () => ({ initData: mocks.session }) }));
 vi.mock('../_lib/rights-client', () => ({ rightsApi: mocks }));
 const ref = '00000000-0000-4000-8000-000000000001';
-const row = (space: 'work' | 'personal' = 'work'): RightsRequestView => ({ version: 1, requestId: ref, space, kind: 'access_export', revision: 1, createdAt: 1, updatedAt: 1, localeAtSubmission: 'en', intakePolicy: { id: 'synthetic', revision: 1, copyVersion: 'rights-intake-ri2-v1' }, requester: { assurance: 'signed_telegram_account', personVerification: 'not_established' }, state: 'received', deadline: { state: 'reviewed_policy_unavailable', dueAt: null, reason: 'jurisdiction_unresolved' }, coverage: { localAccount: 'not_started', shared: 'not_started', providers: 'unsupported', backups: 'unsupported', guests: 'unsupported', deletion: 'not_implemented', formalRestriction: 'not_implemented' }, retention: { policyId: 'synthetic', policyRevision: 1, reviewOrExpiryAt: 10000 }, retentionReviewRequired: false });
+const row = (space: 'work' | 'personal' = 'work'): RightsRequestView => ({ version: 1, requestId: ref, space, kind: 'access_export', revision: 1, createdAt: 1, updatedAt: 1, localeAtSubmission: 'en', intakePolicy: { id: 'synthetic', revision: 1, copyVersion: RIGHTS_COPY_VERSION }, requester: { assurance: 'signed_telegram_account', personVerification: 'not_established' }, state: 'received', deadline: { state: 'reviewed_policy_unavailable', dueAt: null, reason: 'jurisdiction_unresolved' }, coverage: { localAccount: 'not_started', shared: 'not_started', providers: 'unsupported', backups: 'unsupported', guests: 'unsupported', deletion: 'not_implemented', formalRestriction: 'not_implemented' }, retention: { policyId: 'synthetic', policyRevision: 1, reviewOrExpiryAt: 10000 }, retentionReviewRequired: false });
 const status = (requests: RightsRequestView[] = []): RightsSnapshot => ({ available: true, policyStatus: 'available', supportedKinds: ['access_export'], intakePolicy: row().intakePolicy, requests, supportContact: 'info@joyixir.com' });
 beforeEach(() => { vi.resetAllMocks(); mocks.session = 'account-a'; mocks.read.mockResolvedValue(status()); mocks.create.mockResolvedValue({ replayed: false, request: row(), policyStatus: 'available' }); });
 afterEach(cleanup);
@@ -38,7 +40,37 @@ it('a prepared replay shows current metadata without downloading a historical ex
   fireEvent.click(screen.getByRole('button', { name: 'Close request without fulfillment' })); expect(mocks.act).toHaveBeenCalledTimes(1); fireEvent.click(screen.getByRole('button', { name: 'Keep request open' })); expect(screen.queryByRole('button', { name: 'Confirm close without fulfillment' })).not.toBeInTheDocument(); makeURL.mockRestore();
 });
 it('erasure and restriction requests expose no automated completion or export action', async () => {
-  mocks.read.mockResolvedValue(status([{ ...row(), kind: 'erasure' }, { ...row(), requestId: '00000000-0000-4000-8000-000000000002', kind: 'restriction' }])); render(<RightsRequestPanel space="work" />); const articles = await screen.findAllByRole('article'); expect(articles).toHaveLength(2); articles.forEach(article => { expect(within(article).queryByRole('button', { name: 'Prepare current local export' })).toBeNull(); expect(within(article).getByText('Provider and backup actions are unsupported here. Deletion and formal restriction are not implemented by this request.')).toBeInTheDocument(); }); expect(mocks.act).not.toHaveBeenCalled();
+  mocks.read.mockResolvedValue(status([{ ...row(), kind: 'erasure' }, { ...row(), requestId: '00000000-0000-4000-8000-000000000002', kind: 'restriction' }])); render(<RightsRequestPanel space="work" />); const articles = await screen.findAllByRole('article'); expect(articles).toHaveLength(2); articles.forEach(article => { expect(within(article).queryByRole('button', { name: 'Prepare current local export' })).toBeNull(); expect(within(article).getByText('Local actions do not complete the full request. Provider and backup copies are not handled here.')).toBeInTheDocument(); }); expect(mocks.act).not.toHaveBeenCalled();
+});
+it.each((['en', 'fa'] as const).flatMap(locale => ([
+  { technical: 'note_content_removed', recording: 'recorded' },
+  { technical: 'note_content_removed', recording: 'acknowledgement_pending' },
+  { technical: 'unknown', recording: 'recorded' },
+] as const).map(result => ({ locale, ...result }))))('separates request submission from $technical / $recording in $locale', async ({ locale, technical, recording }) => {
+  mocks.read.mockResolvedValue(status([{ ...row(), kind: 'erasure' }]));
+  const view: LocalErasureView = { version: 1, requestId: ref, requestRevision: 1, space: 'work', available: false, operations: [{
+    operationRef: 'a'.repeat(64), technical, recording, observedAt: technical === 'unknown' ? null : 1800000000000, effectRevision: technical === 'unknown' ? null : 2,
+    coverage: { canonicalSelectedNote: technical === 'unknown' ? 'unknown' : 'removed', canonicalDependentNotes: technical === 'unknown' ? 'unknown' : 'no_active_payloads', queuedDerivedUse: 'unknown', noncanonicalDerivativeCopies: 'unverified', noncanonicalDerivativeUse: 'unverified', sharedCopies: 'not_implemented', otherPrivateData: 'outside_selected_scope', storageFileRemnants: 'unverified', providers: 'not_implemented', backups: 'not_implemented', requestFulfillment: 'not_established' },
+  }] };
+  mocks.privateNoteErasure.mockResolvedValue(view);
+  const { container } = render(<RightsRequestPanel space="work" locale={locale} />);
+  const c = rightsCopy[locale], local = rightsErasureCopy[locale];
+  await screen.findByText(technical === 'unknown' ? local.unknown : local.effect);
+  expect(screen.getByText(c.states.received)).toBeVisible();
+  expect(screen.getByText(c.intro)).toBeVisible();
+  expect(screen.getByText(c.coverage)).toBeVisible();
+  expect(screen.getByText(recording === 'recorded' ? local.recorded : local.pending)).toBeVisible();
+  expect(screen.getByText(local.residual)).toBeVisible();
+  expect(screen.getByText(local.newActionLabel).closest('p')).toHaveTextContent(`${local.newActionLabel} ${local.unavailable}`);
+  expect(container).not.toHaveTextContent('No data has been deleted and no processing has been stopped by this request.');
+  expect(container).not.toHaveTextContent('Deletion and formal restriction are not implemented by this request.');
+  expect(container).not.toHaveTextContent('این درخواست به‌تنهایی داده‌ای را حذف نکرده و پردازشی را متوقف نکرده است.');
+  expect(container).not.toHaveTextContent('حذف داده و محدودسازی رسمی با این درخواست اجرا نمی‌شوند.');
+  expect(screen.queryByRole('button', { name: local.action })).toBeNull();
+  expect(mocks.create).not.toHaveBeenCalled(); expect(mocks.act).not.toHaveBeenCalled();
+  expect(mocks.privateNoteErasurePlan).not.toHaveBeenCalled(); expect(mocks.privateNoteErasureExecute).not.toHaveBeenCalled();
+  if (technical === 'unknown') { expect(screen.queryByText(local.effect)).toBeNull(); expect(screen.getByRole('alert')).toHaveFocus(); }
+  expect(container.querySelector('section')).toHaveAttribute('dir', locale === 'fa' ? 'rtl' : 'ltr');
 });
 it('downloads only after a deliberate fresh export, releases object URLs and reads current metadata before another preparation', async () => {
   const prepared = { ...row(), revision: 2, state: 'local_export_prepared' as const };

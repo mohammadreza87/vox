@@ -160,3 +160,9 @@ it('rejects shape-valid stored audit actions, actors and reason/state pairs that
   ];
   for (const corrupt of corruptions) { const d = structuredClone(original); corrupt(d); await writeFile(file, JSON.stringify(d)); expect(() => f.service.snapshot(101, 'work')).toThrow('rights_storage_unavailable'); }
 });
+it('publishes a fresh committed result after a concurrent retry briefly holds the ledger writer',async()=>{
+ const f=await setup(),{createHash}=await import('node:crypto'),{join}=await import('node:path'),{mkdir,rmdir}=await import('node:fs/promises');
+ const lock=join(f.directory,`${createHash('sha256').update(accountIdFor(101)).digest('hex')}.json.lock`),transact=f.storage.transact.bind(f.storage);let unlocked:Promise<void>=Promise.resolve();
+ vi.spyOn(f.storage,'transact').mockImplementationOnce(async(...args)=>{const result=await transact(...args);await mkdir(lock);unlocked=new Promise<void>((resolve,reject)=>setTimeout(()=>{rmdir(lock).then(()=>resolve(),reject);},30));return result;});
+ const result=await f.service.create(101,f.input());await unlocked;expect(result).toMatchObject({replayed:false,request:{state:'received',revision:1}});expect(f.repository.read(accountIdFor(101))!.requests).toHaveLength(1);
+});

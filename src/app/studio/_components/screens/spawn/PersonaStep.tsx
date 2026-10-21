@@ -1,188 +1,265 @@
 'use client';
 
 import { AnimatePresence, motion } from 'framer-motion';
-import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { MAX_AGENT_SKILLS } from '@/lib/studio/skills/types';
 import { api, haptic, type PersonaSpec } from '../../../_lib/client';
-import { DUR, EASE, SPRING } from '../../../_lib/motion';
-import { spawnCopy, type SpawnCopy } from '../../../_lib/spawn-copy';
 import { AgentFace } from '../../Cloud';
-import { useNav } from '../../StudioApp';
-import { Composer, Icon, Spinner } from '../../ui';
-import { Dock, type StepProps } from './shared';
+import { errorMessage, useNav } from '../../StudioApp';
+import { Spinner } from '../../ui';
+import { useCatalog } from './catalog';
+import { spawnCopy } from './copy';
+import { useKeyboard } from './hooks';
+import { useSpawnMotion } from './motion';
+import { textAttrs } from './routing';
+import { Dock, EditableRow, ListRow, type StepProps } from './parts';
+import { RefineComposer, RoleLine, VoiceExamples } from './PersonaParts';
+import { mergeSelection, onIds, type SkillToggle } from './roles';
+import { SkillChips } from './SkillChips';
+import { SkillsSheet } from './SkillsSheet';
 
-type TextKey = 'role' | 'tagline' | 'backstory' | 'personality' | 'communicationStyle' | 'wontDo';
-type EditKey = 'name' | TextKey | 'values';
-
-/** The doc card's sections, in reading order (board spawn-2; interaction §3.4.3); labels come from spawnCopy. */
-const SECTIONS: ReadonlyArray<{ key: TextKey | 'values'; rows: number; tone?: 'warn' }> = [
+type TextField = 'role' | 'tagline' | 'personality' | 'communicationStyle' | 'backstory' | 'wontDo';
+const PERSONA_FIELDS: Array<{ key: TextField; rows: number }> = [
   { key: 'role', rows: 1 },
   { key: 'tagline', rows: 1 },
-  { key: 'backstory', rows: 4 },
   { key: 'personality', rows: 3 },
   { key: 'communicationStyle', rows: 3 },
-  { key: 'values', rows: 3 },
-  { key: 'wontDo', rows: 2, tone: 'warn' },
+  { key: 'backstory', rows: 4 },
+  { key: 'wontDo', rows: 2 },
 ];
-const EDITABLE: readonly EditKey[] = ['name', ...SECTIONS.map((s) => s.key)];
+const DIFFED = ['name', 'role', 'tagline', 'personality', 'communicationStyle', 'backstory', 'wontDo', 'values', 'expertise', 'languages', 'skillIds', 'voiceExamples'] as const;
+const SKILL_SAVE_MS = 600;
+const CHANGED_MS = 2000;
 
-/** Values are a list; they edit as one per line and read as a dotted line. */
-const show = (p: PersonaSpec, k: EditKey) => (k === 'values' ? p.values.join(' · ') : p[k]);
-const toDraft = (p: PersonaSpec, k: EditKey) => (k === 'values' ? p.values.join('\n') : p[k]);
-const fromDraft = (k: EditKey, v: string): Partial<PersonaSpec> =>
-  (k === 'values' ? { values: v.split('\n').map((x) => x.trim()).filter(Boolean) } : { [k]: v });
-
-interface Refined { keys: Set<EditKey>; before: Partial<PersonaSpec>; seq: number }
+const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+const changedFields = (before: PersonaSpec, after: PersonaSpec) => new Set<string>(DIFFED.filter((k) => !same(before[k], after[k])));
 
 /**
- * Draft (board spawn-2): pick a name, read the persona as one document, tap any section to edit it in
- * place, or ask Claude in the composer. Lines Claude rewrote get the volt sweep, with Undo.
+ * Step 2. Show, then tell: who they are (role, skills, how they sound) before
+ * the long-form profile. Refine-by-instruction is pinned above the CTA.
  */
-export function PersonaStep({ agent, names, busy, run, onUpdate, onNext, live, onSayHi }: StepProps & {
-  names: string[]; live?: boolean; onSayHi?: () => void;
-}) {
-  const c = spawnCopy[useNav().locale ?? 'en'].persona;
+export function PersonaStep({ agent, names, busy, run, onUpdate, onNext }: StepProps & { names: string[] }) {
+  const nav = useNav();
+  const catalog = useCatalog();
+  const t = spawnCopy.en;
+  const m = useSpawnMotion();
   const p = agent.persona;
-  const [editing, setEditing] = useState<EditKey | null>(null);
-  const [draft, setDraft] = useState('');
-  const [instruction, setInstruction] = useState('');
-  const [refined, setRefined] = useState<Refined | null>(null);
-  const seq = useRef(0);
   const editable = agent.canEdit;
+  const [editing, setEditing] = useState<string | null>(null);
+  const [draft, setDraft] = useState('');
+  const [refineFocused, setRefineFocused] = useState(false);
+  const [changed, setChanged] = useState<{ fields: Set<string>; n: number } | null>(null);
+  const [skillsOpen, setSkillsOpen] = useState(false);
+  const [advancing, setAdvancing] = useState(false);
+  const advancingRef = useRef(false);
+  const kb = useKeyboard(refineFocused);
 
-  const save = async (patch: Partial<PersonaSpec>) => {
+  // Skills: optimistic toggles, saved after a short pause with PATCH { skillIds } (merged server-side).
+  // One PATCH in flight at a time; the newest selection waits in `queued` and wins.
+  const saved = p.skillIds ?? [];
+  const [items, setItems] = useState<SkillToggle[]>(() => saved.map((id) => ({ id, on: true })));
+  const timer = useRef<{ handle: ReturnType<typeof setTimeout>; ids: string[] } | null>(null);
+  const queued = useRef<string[] | null>(null);
+  const inFlight = useRef<Promise<boolean> | null>(null);
+  const latest = useRef({ agent, onUpdate, nav });
+  latest.current = { agent, onUpdate, nav };
+  const savedKey = saved.join('|');
+  useEffect(() => {
+    // The server copy changed (refine, save): keep off chips in place, add new ones.
+    if (timer.current || queued.current || inFlight.current) return;
+    setItems((cur) => (same(onIds(cur), saved) ? cur : mergeSelection(cur, saved)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [savedKey]);
+
+  const pump = useCallback((): Promise<boolean> => {
+    if (inFlight.current) return inFlight.current;
+    const run = (async () => {
+      let ok = true;
+      while (queued.current) {
+        const ids = queued.current;
+        queued.current = null;
+        try {
+          const r = await api.updatePersona(latest.current.agent.id, { skillIds: ids });
+          if (r?.agent) { latest.current.agent = r.agent; latest.current.onUpdate(r.agent); }
+          ok = true;
+        } catch (e) {
+          ok = false;
+          if (queued.current) continue; // a newer selection is already waiting: try that instead
+          haptic.error();
+          latest.current.nav.toast(errorMessage(e), 'error');
+          // Roll back to what the server last confirmed.
+          setItems((latest.current.agent.persona.skillIds ?? []).map((id) => ({ id, on: true })));
+        }
+      }
+      inFlight.current = null;
+      return ok;
+    })();
+    inFlight.current = run;
+    return run;
+  }, []);
+
+  /** Sends any pending selection now and resolves when every skill save has settled. */
+  const flushSkills = useCallback(() => {
+    if (timer.current) {
+      clearTimeout(timer.current.handle);
+      queued.current = timer.current.ids;
+      timer.current = null;
+    }
+    return queued.current || inFlight.current ? pump() : Promise.resolve(true);
+  }, [pump]);
+  const skillsPending = () => !!(timer.current || queued.current || inFlight.current);
+
+  const setSkills = (next: SkillToggle[]) => {
+    setItems(next);
+    const ids = onIds(next).filter((id) => catalog.skills.has(id)).slice(0, MAX_AGENT_SKILLS);
+    if (timer.current) clearTimeout(timer.current.handle);
+    const handle = setTimeout(() => { timer.current = null; queued.current = ids; void pump(); }, SKILL_SAVE_MS);
+    timer.current = { handle, ids };
+  };
+  // Leaving the step (Back, Discard) mid-debounce still saves what the creator chose.
+  useEffect(() => () => {
+    if (!timer.current) return;
+    clearTimeout(timer.current.handle);
+    queued.current = timer.current.ids;
+    timer.current = null;
+    void pump();
+  }, [pump]);
+
+  const toggleSkill = (id: string) => {
+    const target = items.find((i) => i.id === id);
+    if (!target || (!target.on && onIds(items).length >= MAX_AGENT_SKILLS)) return;
+    setSkills(items.map((i) => (i.id === id ? { ...i, on: !i.on } : i)));
+  };
+
+  useEffect(() => {
+    if (!changed) return;
+    const timer = setTimeout(() => setChanged(null), CHANGED_MS);
+    return () => clearTimeout(timer);
+  }, [changed]);
+
+  const save = async (patch: Record<string, unknown>) => {
     const r = await run('save', () => api.updatePersona(agent.id, patch));
     if (r) { onUpdate(r.agent); setEditing(null); haptic.success(); }
     return !!r;
   };
-  const edit = (k: EditKey) => { if (!editable || busy) return; haptic.select(); setEditing(k); setDraft(toDraft(p, k)); };
-  const commit = () => { if (editing && draft.trim()) void save(fromDraft(editing, draft)); };
 
-  const refine = async () => {
-    const text = instruction.trim();
-    if (!text) return;
-    const before = p;
-    const r = await run('refine', () => api.refine(agent.id, text));
-    if (!r) return;
-    const after = r.agent.persona;
-    const keys = new Set(EDITABLE.filter((k) => String(show(before, k)) !== String(show(after, k))));
+  const refine = async (instruction: string) => {
+    if (skillsPending() && !(await flushSkills())) return false;
+    // Diff against what the creator sees (a just-flushed skill save is not Claude's change).
+    const before = { ...agent.persona, skillIds: agent.persona.skillIds === undefined && !items.length ? undefined : onIds(items) };
+    const r = await run('refine', () => api.refine(agent.id, instruction));
+    if (!r) return false;
     onUpdate(r.agent);
-    setInstruction('');
-    setEditing(null);
+    const fields = changedFields(before, r.agent.persona);
+    setChanged({ fields, n: fields.size });
     haptic.success();
-    const prev: Partial<PersonaSpec> = {};
-    for (const k of keys) Object.assign(prev, k === 'values' ? { values: before.values } : { [k]: before[k] });
-    setRefined(keys.size ? { keys, before: prev, seq: ++seq.current } : null);
-  };
-
-  const undo = async () => {
-    if (!refined) return;
-    const r = await run('undo', () => api.updatePersona(agent.id, refined.before));
-    if (r) { onUpdate(r.agent); setRefined(null); haptic.select(); }
+    return true;
   };
 
   const next = async () => {
-    if (busy || (editing !== null && !draft.trim())) return;
-    if (editing !== null && !(await save(fromDraft(editing, draft)))) return;
-    onNext();
+    if (busy || advancingRef.current || (editing !== null && !draft.trim())) return;
+    if (!skillsPending()) {
+      if (editing !== null && !(await save({ [editing]: draft }))) return;
+      onNext();
+      return;
+    }
+    // Re-entry guard: a second tap while skills save must not advance twice (and skip Look).
+    advancingRef.current = true;
+    setAdvancing(true);
+    try {
+      if (!(await flushSkills())) return;
+      if (editing !== null && !(await save({ [editing]: draft }))) return;
+      onNext();
+    } finally {
+      advancingRef.current = false;
+      setAdvancing(false);
+    }
   };
 
-  const changed = (k: EditKey) => refined?.keys.has(k) ?? false;
-  const n = refined?.keys.size ?? 0;
-  const cta = editing !== null ? c.saveNext : live ? c.nextLook : c.useName(p.name);
+  const showSkills = catalog.skills.size > 0 && (editable || items.length > 0);
+  // Expertise gives way to skills only when the skills are actually on screen.
+  const hasSkills = showSkills && onIds(items).some((id) => catalog.skills.has(id));
+  const role = p.roleId ? catalog.roles.get(p.roleId) : undefined;
+  const extra = role ? role.optionalSkills.filter((s) => catalog.skills.has(s) && !items.some((i) => i.id === s)).length : 0;
+  const isChanged = (k: string) => !!changed?.fields.has(k);
 
   return (
     <>
-      <div className="vx-scroll vx-form tall-dock">
+      <div className="vx-scroll vx-scroll-stack vx-catalog-layout-e3d94022" inert={skillsOpen} >
+        <div className="vx-catalog-layout-c44bd08c">
+          <motion.div initial={{ scale: 0.4, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={m.reduce ? { duration: 0.12 } : { type: 'spring', stiffness: 300, damping: 18 }}>
+            <AgentFace look={agent.look} size={88} expr="happy" label={p.name} />
+          </motion.div>
+          <div className="vx-catalog-layout-f29df839">
+            <h1 className="vx-title vx-catalog-layout-3e0ed9c0" {...textAttrs(p.name)} >{p.name}</h1>
+            <RoleLine t={t} persona={p} hue={agent.look.hue} />
+            {[p.culture, p.age, p.accent].some(Boolean) && <div className="vx-small vx-3" dir="auto">{[p.culture, p.age, p.accent].filter(Boolean).join(' · ')}</div>}
+          </div>
+        </div>
+
         {editable && names.length > 1 && (
-          <div className="vx-field" role="group" aria-label={c.suggests}>
-            <span className="vx-over" aria-hidden="true">{c.suggests}</span>
-            <div className="vx-chip-wrap">
-              {names.map((name) => (
-                <button key={name} type="button" className="vx-chip vx-chip-name" aria-pressed={name === p.name} disabled={!!busy}
-                  onClick={() => { if (name !== p.name) { haptic.select(); void save({ name }); } }}>{name}</button>
+          <div className="vx-catalog-layout-379fabac">
+            <span className="vx-over">{t.otherNames}</span>
+            <div className="vx-catalog-layout-a5afbd00">
+              {names.map((n) => (
+                <button key={n} type="button" className="vx-chip vx-name-chip vx-hit" {...textAttrs(n)} aria-pressed={n === p.name} onClick={() => { if (n !== p.name) { haptic.select(); void save({ name: n }); } }}>{n}</button>
               ))}
             </div>
           </div>
         )}
 
-        <article className="vx-doc" aria-label={c.persona(p.name)}>
-          <div className="vx-doc-head">
-            <AgentFace look={agent.look} size={56} stage={agent.stage} expr={busy === 'refine' ? 'thinking' : 'happy'} label={p.name} />
-            {editing === 'name' ? (
-              <Editor c={c} label={c.name} rows={1} value={draft} onChange={setDraft} onCancel={() => setEditing(null)} onSave={commit} saving={busy === 'save'} />
-            ) : (
-              <>
-                <div className="vx-doc-title">
-                  <AnimatePresence mode="popLayout" initial={false}>
-                    <motion.h1 key={p.name} className="vx-title" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, transition: { duration: DUR.instant, ease: EASE.exit } }} transition={SPRING.snappy}>{p.name}</motion.h1>
-                  </AnimatePresence>
-                  <span className="vx-small vx-2">{[p.culture, p.age, p.accent].filter(Boolean).join(' · ') || p.role}</span>
-                </div>
-                {editable && <button type="button" className="vx-icon-btn vx-doc-edit" aria-label={c.editName} disabled={!!busy} onClick={() => edit('name')}><Icon name="edit" size={18} /></button>}
-              </>
-            )}
-          </div>
-          {SECTIONS.map((s) => editing === s.key ? (
-            <Editor key={s.key} c={c} label={c.sections[s.key]} rows={s.rows} value={draft} onChange={setDraft} tone={s.tone}
-              onCancel={() => setEditing(null)} onSave={commit} saving={busy === 'save'} list={s.key === 'values'} />
-          ) : (
-            <button key={s.key} type="button" className="vx-doc-sec tap" disabled={!editable || !!busy} onClick={() => edit(s.key)}>
-              <span className={`vx-over${s.tone ? ` ${s.tone}` : ''}`}>{c.sections[s.key]}</span>
-              <span className={`vx-doc-text${s.tone ? ' vx-2' : ''}`} dir="auto">
-                {changed(s.key) ? <span key={refined!.seq} className="vx-changed">{show(p, s.key)}</span> : show(p, s.key) || <span className="vx-3">—</span>}
-              </span>
-            </button>
-          ))}
-        </article>
+        {p.tagline && <p {...textAttrs(p.tagline)} className="vx-catalog-layout-fae076cf">“<span className={isChanged('tagline') ? 'vx-changed' : undefined}>{p.tagline}</span>”</p>}
 
-        <div className="vx-hint" aria-live="polite">
-          <Icon name="spark" size={16} width={2} className="vx-hint-spark" />
-          {n > 0 ? (
-            <span>{c.updated(n)}
-              <button type="button" className="vx-link-btn" onClick={() => void undo()} disabled={!!busy}>{busy === 'undo' ? <Spinner size={12} /> : c.undo}</button>
-            </span>
-          ) : <span>{editable ? c.tapToEdit : c.readOnly(p.name)}</span>}
-          {onSayHi && <button type="button" className="vx-chip vx-hint-end" onClick={onSayHi}><Icon name="chat" size={14} />{c.tryChat}</button>}
-        </div>
-      </div>
-      <Dock stack>
-        {editable && (
-          <Composer value={instruction} onChange={setInstruction} onSend={() => void refine()} busy={busy === 'refine'} disabled={!!busy && busy !== 'refine'}
-            placeholder={c.askPlaceholder(p.name)} label={c.askLabel} sendLabel={c.sendToClaude} maxLength={400} />
+        {showSkills && (
+          <section className="vx-catalog-layout-379fabac">
+            <span className="vx-over">{t.skillsCount(onIds(items).length)}</span>
+            <SkillChips t={t} items={items} onToggle={toggleSkill} readOnly={!editable} extra={extra}
+              onAdd={editable ? () => setSkillsOpen(true) : undefined} />
+          </section>
         )}
-        <button type="button" className="vx-btn vx-btn-primary vx-btn-block" onClick={() => void next()} disabled={!!busy || (editing !== null && !draft.trim())}>
-          {busy === 'save' ? <Spinner /> : cta}
-        </button>
-      </Dock>
-    </>
-  );
-}
 
-/** A section opened for editing: hue rail, the field, Cancel / Save. Escape cancels, ⌘/Ctrl+Enter saves. */
-function Editor({ c, label, rows, value, onChange, onCancel, onSave, saving, tone, list }: {
-  c: SpawnCopy['persona']; label: string; rows: number; value: string; onChange: (v: string) => void; onCancel: () => void; onSave: () => void;
-  saving: boolean; tone?: 'warn'; list?: boolean;
-}) {
-  const field = useRef<HTMLTextAreaElement & HTMLInputElement>(null);
-  const id = useId();
-  useEffect(() => { field.current?.focus(); field.current?.scrollIntoView?.({ block: 'nearest' }); }, []);
-  const onKey = (e: KeyboardEvent) => {
-    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onCancel(); }
-    else if (e.key === 'Enter' && (rows === 1 || e.metaKey || e.ctrlKey)) { e.preventDefault(); onSave(); }
-  };
-  return (
-    <motion.div className="vx-doc-sec editing" layout transition={SPRING.snappy}>
-      <label className={`vx-over${tone ? ` ${tone}` : ''}`} htmlFor={id}>{label}{list ? c.onePerLine : ''}</label>
-      {rows > 1
-        ? <textarea ref={field} id={id} className="vx-textarea" rows={rows + 1} value={value} onChange={(e) => onChange(e.target.value)} onKeyDown={onKey} maxLength={800} dir="auto" />
-        : <input ref={field} id={id} className="vx-input" value={value} onChange={(e) => onChange(e.target.value)} onKeyDown={onKey} maxLength={120} dir="auto" />}
-      <div className="vx-doc-actions">
-        <button type="button" className="vx-btn vx-btn-xs vx-btn-ghost" onClick={onCancel}>{c.cancel}</button>
-        <button type="button" className="vx-btn vx-btn-xs vx-btn-hue" onClick={onSave} disabled={saving || !value.trim()} aria-busy={saving || undefined}>
-          {saving ? <Spinner size={14} /> : c.save}
-        </button>
+        <VoiceExamples t={t} agent={agent} />
+
+        <section className="vx-catalog-layout-379fabac">
+          <span className="vx-over">{t.profile}</span>
+          <div className="vx-group">
+            {editable && (
+              <EditableRow label={t.fields.name} value={p.name} rows={1} editing={editing === 'name'} draft={draft} changed={isChanged('name')}
+                onEdit={() => { setEditing('name'); setDraft(p.name); }} onDraft={setDraft} onCancel={() => setEditing(null)}
+                onSave={() => save({ name: draft })} saving={busy === 'save'} />
+            )}
+            {PERSONA_FIELDS.map((f) => (
+              <EditableRow key={f.key} label={t.fields[f.key]} value={p[f.key]} rows={f.rows} editing={editing === f.key} draft={draft} readOnly={!editable}
+                changed={isChanged(f.key)} tone={f.key === 'wontDo' ? 'warn' : undefined}
+                onEdit={() => { setEditing(f.key); setDraft(p[f.key]); }} onDraft={setDraft} onCancel={() => setEditing(null)}
+                onSave={() => save({ [f.key]: draft })} saving={busy === 'save'} />
+            ))}
+            <ListRow label={t.fields.values} items={p.values} changed={isChanged('values')} />
+            {!hasSkills && <ListRow label={t.fields.expertise} items={p.expertise} changed={isChanged('expertise')} />}
+            <ListRow label={t.fields.languages} items={p.languages} changed={isChanged('languages')} />
+          </div>
+        </section>
       </div>
-    </motion.div>
+      <Dock className="vx-dock-stack" inert={skillsOpen} style={kb.up && kb.inset ? { transform: `translateY(-${kb.inset}px)` } : undefined}>
+        <div className="vx-sr" role="status" aria-live="polite">{changed ? (changed.n ? t.updated(changed.n) : t.unchanged) : ''}</div>
+        <AnimatePresence initial={false}>
+          {changed && (
+            <motion.span key="hint" className="vx-small vx-2 vx-refine-hint" aria-hidden="true" initial={m.label.initial} animate={m.label.animate} exit={m.label.exit}>
+              {changed.n ? t.updated(changed.n) : t.unchanged}
+            </motion.span>
+          )}
+        </AnimatePresence>
+        {editable && <RefineComposer t={t} name={p.name} busy={busy === 'refine'} onSubmit={refine} onFocusChange={setRefineFocused} />}
+        {!refineFocused && (
+          <button type="button" className="vx-btn vx-btn-primary vx-btn-block" onClick={next} disabled={!!busy || advancing || (editing !== null && !draft.trim())}
+            aria-busy={busy === 'save' || advancing || undefined}
+            aria-label={busy === 'save' || advancing ? (editing !== null ? t.saveNext : t.personaCta(p.name)) : undefined}>
+            {busy === 'save' || advancing ? <Spinner /> : editing !== null ? t.saveNext : t.personaCta(p.name)}
+          </button>
+        )}
+      </Dock>
+      <SkillsSheet t={t} open={skillsOpen} onClose={() => setSkillsOpen(false)} roleId={p.roleId}
+        selected={onIds(items)} onChange={(ids) => setSkills(mergeSelection(items, ids))} />
+    </>
   );
 }

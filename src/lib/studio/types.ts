@@ -56,6 +56,23 @@ export interface PersonaSpec {
   withStrangers?: string;
   /** 0 (guarded) … 100 (chatty with anyone): how readily they engage strangers */
   openness?: number;
+  /** Library role this agent was built from (skills/catalog.ts); absent for custom agents. */
+  roleId?: string;
+  /** Library skills the agent carries, at most MAX_AGENT_SKILLS; rendered into its system prompt. */
+  skillIds?: string[];
+  /** Two or three short exchanges in the agent's own voice; few-shot style anchors for replies. */
+  voiceExamples?: VoiceExample[];
+  /** Two to four positions they hold about their field, each with a reason. */
+  opinions?: string[];
+  /** Habits that make them useful in a conversation (not catchphrases). */
+  signatureMoves?: string[];
+  /** Small things that bother them at work, said with good humour. */
+  petPeeves?: string[];
+}
+
+export interface VoiceExample {
+  user: string;
+  reply: string;
 }
 
 /** Optional inputs to the spawn brief; Claude fills the gaps. */
@@ -68,8 +85,14 @@ export interface SpawnBrief {
   accent?: string;
   domain?: string;
   role?: string;
-  /** 0..100 sliders */
+  /** 0..100 sliders; send only the ones the creator moved */
   traits?: { warmDirect?: number; playfulSerious?: number; conciseExpansive?: number };
+  /** Library role picked or accepted by the creator (validated against the catalog). */
+  roleId?: string;
+  /** Skills the creator kept on; defaults to the role's skills. */
+  skillIds?: string[];
+  /** How the role was chosen, content-free, for diagnostics. */
+  routing?: { source: 'decisions' | 'local' | 'picked' | 'successor'; confidence?: number };
 }
 
 export interface CloudFeatures {

@@ -68,8 +68,8 @@ export function readIndexedPrivateContext(adaptive: AdaptiveService, telegramId:
 /** Existing indexed qualification plus the explicitly prepared local FILE cohort.
  * This checks structural guard support; callers still qualify provider/Studio adapters. */
 export function hasCommittedPersonalizationTransport(storage: AdaptiveStorage): boolean {
-  return !!storage.indexed || storage.canonicalSchemaVersion === 2 && !!storage.identity &&
+  return !!storage.indexed || (storage.canonicalSchemaVersion === 2 || storage.canonicalSchemaVersion === 3) && !!storage.identity &&
     storage.supportsCommittedWriteFence === true && typeof storage.readCommittedForEffect === 'function' &&
-    typeof storage.sampleClock === 'function' && storage.fileAuthorityProjectionVersion === 1 &&
+    typeof storage.sampleClock === 'function' && storage.fileAuthorityProjectionVersion === (storage.canonicalSchemaVersion===3?2:1) &&
     typeof storage.readDirectAuthorityForEffect === 'function';
 }

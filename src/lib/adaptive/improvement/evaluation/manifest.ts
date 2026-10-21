@@ -2,13 +2,14 @@ import { canonical, hash } from '../contracts';
 import { corpusSchema, manifestSchema, type EvaluationCorpus, type EvaluationManifest } from './contracts';
 export function protocolCommitment(manifest: EvaluationManifest) {
   return { protocolMetadata: { manifestDigest: hash(canonical(manifest)), splitDigest: hash(canonical(manifest.split)), coverageDigest: hash(canonical([manifest.requiredScenarios,manifest.requiredLocales])), reviewedAt: manifest.reviewedAt, expiresAt: manifest.expiresAt, retentionApprovalReference: manifest.retention.approvalReference, counts: manifest.counts },
-    bindings: manifest.digests, budget: manifest.budget, retainUntil: manifest.retention.retainUntil };
+    bindings: manifest.digests, budget: manifest.budget, retainUntil: manifest.retention.retainUntil, ...(manifest.learningCases ? { learningCases: manifest.learningCases } : {}) };
 }
 export const evaluationProtocolDigest = (manifest: EvaluationManifest) => hash(canonical(protocolCommitment(manifest)));
 /** Evaluator-owned validation, before granting any adapter access to examples. */
 export function validateEvaluationInputs(rawManifest: unknown, rawCorpus: unknown, now: number): { manifest: EvaluationManifest; corpus: EvaluationCorpus } {
   const manifest = manifestSchema.parse(rawManifest), corpus = corpusSchema.parse(rawCorpus);
   if (!Number.isSafeInteger(now) || now < manifest.reviewedAt || now >= manifest.expiresAt || now >= manifest.retention.retainUntil) throw new Error('evaluation_protocol_expired');
+  if (manifest.schemaVersion !== corpus.schemaVersion) throw new Error('learning_case_version_mismatch');
   if (manifest.digests.corpus !== hash(canonical(corpus))) throw new Error('evaluation_corpus_mismatch');
   const partitions = ['optimization','validation','final'] as const;
   const ids = new Set<string>();
@@ -31,6 +32,7 @@ export function validateEvaluationInputs(rawManifest: unknown, rawCorpus: unknow
  * optimizer job must receive only this object, never the inputs used to build it. */
 export function optimizerProjection(rawManifest: unknown, rawCorpus: unknown, now: number) {
   const { manifest, corpus } = validateEvaluationInputs(rawManifest, rawCorpus, now);
+  if (manifest.learningCases) throw new Error('learning_case_authority_required');
   return { schemaVersion: 1 as const, purpose: 'optimization_only' as const, protocolDigest: evaluationProtocolDigest(manifest),
     evidence: 'synthetic_only' as const, budget: { maxCases: corpus.optimization.length }, cases: structuredClone(corpus.optimization) };
 }

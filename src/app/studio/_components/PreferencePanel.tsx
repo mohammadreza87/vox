@@ -14,6 +14,7 @@ const choices = {
 } as const;
 const names = { response_length: ['Reply length', 'اندازهٔ پاسخ'], language: ['Reply language', 'زبان پاسخ'], formatting: ['Reply format', 'قالب پاسخ'] } as const;
 const explanations = {
+  rights_use_restricted: ['Saved choices are not used because a local personalization restriction is active in this space. Managing your saved choices remains available.', 'انتخاب‌های ذخیره‌شده استفاده نمی‌شوند؛ محدودیت محلی شخصی‌سازی در این فضا فعال است. مدیریت انتخاب‌های ذخیره‌شده همچنان در دسترس است.'],
   explicit_choice: ['Used because you saved this choice for this agent and space.', 'به دلیل انتخاب ذخیره‌شدهٔ شما برای همین عامل و فضا استفاده می‌شود.'],
   explicit_reset: ['Default style is used because you explicitly reset this choice.', 'به دلیل بازنشانی صریح شما، شیوهٔ پیش‌فرض استفاده می‌شود.'],
   default: ['No saved choice; the default style is used.', 'انتخابی ذخیره نشده است؛ شیوهٔ پیش‌فرض استفاده می‌شود.'],

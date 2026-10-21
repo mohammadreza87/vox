@@ -1,3 +1,4 @@
+import { handleRequestedRoutineMessage, noteRequestedRoutineActivity } from './requested-routines';
 /**
  * What VoxxBot and the agent bots do with each Telegram update. Shared by the
  * long-polling runner (bots.ts, one always-on server) and the webhook route
@@ -94,6 +95,8 @@ export async function handleAgentUpdate(studio: Studio, agentId: string, update:
 
   const member = state.members.find((m) => m.telegramId === msg.from!.id);
   if (member && canUseAgent(member, live)) {
+    noteRequestedRoutineActivity(studio, agentId, msg);
+    if (await handleRequestedRoutineMessage(studio, agentId, msg, endpointId)) return;
     const turnId = createHash('sha256').update(JSON.stringify([agentId, endpointId ?? '', update.update_id])).digest('hex');
     const observe = await beginObservation(studio, member.telegramId, agentId, 'work', 'telegram', turnId);
     try {

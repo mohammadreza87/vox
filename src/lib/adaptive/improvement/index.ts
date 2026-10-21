@@ -3,13 +3,13 @@ const id = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/);
 const digest = z.string().regex(/^[a-f0-9]{64}$/);
 const revision = z.string().regex(/^[a-f0-9]{40,64}$/);
 export const improvementCandidateSchema = z.object({
-  schemaVersion: z.literal(1), id, authorServiceId: id, baselineRevision: revision,
+  schemaVersion: z.union([z.literal(1), z.literal(2)]), learningCases: z.object({ version: z.literal(1), lineageDigest: digest }).strict().optional(), id, authorServiceId: id, baselineRevision: revision,
   candidateRevision: revision, artifactDigest: digest, problemCode: z.enum(['audio_cancellation', 'latency_regression', 'routing_quality', 'response_style']),
   evidenceIds: z.array(id).min(1).max(32), evidenceKind: z.enum(['synthetic', 'approved_aggregate']),
   changedPaths: z.array(z.string().min(1).max(256)).min(1).max(64),
   evaluatorVersion: id, datasetVersion: id, promotionPolicyVersion: id, evaluationProtocolDigest: digest.optional(),
   rollbackRevision: revision, createdAt: z.number().int().nonnegative(),
-}).strict().refine(c => c.baselineRevision !== c.candidateRevision && c.rollbackRevision === c.baselineRevision);
+}).strict().refine(c => c.baselineRevision !== c.candidateRevision && c.rollbackRevision === c.baselineRevision && c.schemaVersion === (c.learningCases ? 2 : 1) && (!c.learningCases || !!c.evaluationProtocolDigest));
 export type ImprovementCandidate = z.infer<typeof improvementCandidateSchema>;
 
 const protectedPrefixes = ['.agents/', '.codex/', '.github/', 'e2e/', 'docs/implementation/',
@@ -24,6 +24,8 @@ export function isCandidatePathAllowed(path: string): boolean {
   return !protectedPrefixes.some(prefix => path.toLowerCase().startsWith(prefix.toLowerCase()));
 }
 export interface EvaluationReceipt {
+  readonly schemaVersion?: 2;
+  readonly learningCases?: { version: 1; lineageDigest: string };
   readonly candidateId: string;
   readonly candidateRevision: string;
   readonly artifactDigest: string;
@@ -40,6 +42,7 @@ export interface EvaluationReceipt {
   readonly evaluationProtocolDigest?: string;
 }
 const evaluationReceiptSchema = z.object({
+  schemaVersion: z.literal(2).optional(), learningCases: z.object({version:z.literal(1),lineageDigest:digest}).strict().optional(),
   candidateId: id, candidateRevision: revision, artifactDigest: digest, evaluatorServiceId: id,
   evaluatorVersion: id, datasetVersion: id, promotionPolicyVersion: id, baselineRevision: revision,
   status: z.enum(['passed', 'failed', 'incomplete']), privacyFailures: z.number().int().nonnegative(),
@@ -62,6 +65,9 @@ export async function assessPromotion(input: unknown, receipt: EvaluationReceipt
   const parsed = improvementCandidateSchema.safeParse(input);
   if (!parsed.success || !Number.isSafeInteger(gate.now) || gate.now < 0 || parsed.data.createdAt > gate.now) return { ready: false, reason: 'invalid_candidate' };
   const candidate = parsed.data;
+  // Pure structural gates cannot establish current LC1 authority. Workflow owns
+  // the guarded publication path and uses its private legacy projection there.
+  if (candidate.learningCases || receipt?.learningCases || receipt?.schemaVersion === 2) return { ready: false, reason: 'untrusted_receipt' };
   if (candidate.changedPaths.some(path => !isCandidatePathAllowed(path))) return { ready: false, reason: 'protected_path' };
   if (!receipt) return { ready: false, reason: 'missing_evaluation' };
   if (!evaluationReceiptSchema.safeParse(receipt).success) return { ready: false, reason: 'untrusted_receipt' };

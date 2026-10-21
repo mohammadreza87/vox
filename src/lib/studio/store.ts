@@ -7,6 +7,8 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs';
 import { join, basename } from 'path';
 import type { AuditEntry, StudioState } from './types';
+import { activeReadScope } from '../tireh/privacy/read-scope';
+import { RevisionCounter } from '../tireh/privacy/revisions';
 
 export const EMPTY_STATE: StudioState = { members: [], agents: [], groups: [], audit: [] };
 export const SAFE_FILE = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,120}$/;
@@ -31,6 +33,8 @@ export interface StudioStorage {
 export class StudioStore implements StudioStorage {
   private state: StudioState | null = null;
   private queue: Promise<unknown> = Promise.resolve();
+  /** Monotonic in-process revision of the state, bumped after every committed update. */
+  readonly revisions = new RevisionCounter('studio-file');
   readonly mediaDir: string;
   private readonly file: string;
 
@@ -55,8 +59,18 @@ export class StudioStore implements StudioStorage {
     renameSync(`${this.file}.tmp`, this.file);
   }
 
-  /** A deep copy: callers can't mutate stored state by accident. */
+  /** A deep copy: callers can't mutate stored state by accident. Inside a read
+   * scope every read of one turn snapshot is served from one committed state. */
   async read(): Promise<StudioState> {
+    const scope = activeReadScope();
+    if (scope) {
+      const loaded = await scope.document(this, 'state', async () => {
+        await this.queue.catch(() => undefined);
+        // Updates replace the state object and never mutate a published one.
+        return { probe: this.revisions.probe('state'), value: this.load() };
+      });
+      return structuredClone(loaded.value);
+    }
     await this.queue.catch(() => undefined);
     return structuredClone(this.load());
   }
@@ -72,12 +86,14 @@ export class StudioStore implements StudioStorage {
    * change and leaves the stored state untouched.
    */
   update<T>(fn: (state: StudioState) => T): Promise<T> {
+    activeReadScope()?.noteWrite();
     const run = async () => {
       const draft = structuredClone(this.load());
       const result = fn(draft);
       // Write first: if the disk write fails, memory must not move ahead of disk.
       this.persist(draft);
       this.state = draft;
+      this.revisions.bump('state');
       // Results often point into the draft; hand back a copy so callers can't
       // mutate stored state without going through update().
       return result === undefined ? result : structuredClone(result);

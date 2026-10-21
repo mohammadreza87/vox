@@ -1,1 +1,651 @@
-export { SpawnScreen } from './spawn/SpawnScreen';
+'use client';
+
+import { AnimatePresence, motion } from 'framer-motion';
+import { SpawnScreen as RefineScreen } from './spawn/SpawnScreen';
+import { TelegramPhoto } from '../look/TelegramPhoto';
+import { useEffect, useRef, useState } from 'react';
+import { api, haptic, mediaUrl, openTelegram, type AgentLook, type AgentView, type LibraryVoice, type VoiceOptions } from '../../_lib/client';
+import { AgentFace, Cloud, PALETTE } from '../Cloud';
+import { errorMessage, LoadingFill, useNav } from '../StudioApp';
+import { Icon, Spinner, Steps, TopBar } from '../ui';
+import { BriefStep } from './spawn/BriefStep';
+import { CatalogContext, useCatalog, useCatalogLoader } from './spawn/catalog';
+import { Dock, Field, type Busy, type StepProps } from './spawn/parts';
+import { PersonaStep } from './spawn/PersonaStep';
+
+const STEPS = ['Brief', 'Persona', 'Look', 'Voice', 'Test', 'Hire'] as const;
+const TEST_STARTERS = ['Introduce yourself', 'What would you never do?', 'How do you handle disagreement?'];
+const FAMILY_LABEL = { puff: 'Puff', tower: 'Tower', drift: 'Drift' } as const;
+const FEATURE_LABEL = { cheeks: 'Cheeks', lashes: 'Lashes', brows: 'Brows' } as const;
+const VOICE_LANGUAGE_CHOICES = [
+  { code: 'en', label: 'English' }, { code: 'fa', label: 'Persian' }, { code: 'vi', label: 'Vietnamese' },
+];
+const VOICE_LANGUAGE_CODES: Record<string, string> = {
+  english: 'en', en: 'en', persian: 'fa', farsi: 'fa', 'فارسی': 'fa', fa: 'fa', vietnamese: 'vi', 'tiếng việt': 'vi', vi: 'vi',
+  arabic: 'ar', turkish: 'tr', french: 'fr', german: 'de', spanish: 'es',
+};
+
+/** New hires keep the catalog/role/skill creation contract. Existing agents use the
+ * authored document-and-look refinement flow, preserving their server-owned library ids. */
+export function SpawnScreen({ refine, ...props }: { draftId?: string; successorOf?: string; refine?: boolean }) {
+  return refine && props.draftId ? <RefineScreen {...props} /> : <LibrarySpawnScreen {...props} />;
+}
+
+function LibrarySpawnScreen({ draftId, successorOf }: { draftId?: string; successorOf?: string }) {
+  const nav = useNav();
+  const catalog = useCatalogLoader();
+  const [agent, setAgent] = useState<AgentView | null>(null);
+  const [names, setNames] = useState<string[]>([]);
+  const [step, setStep] = useState(draftId ? -1 : 0);
+  const [busy, setBusy] = useState<Busy>(null);
+  const [operationError, setOperationError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!draftId) return;
+    api.agent(draftId)
+      .then((r) => { setAgent(r.agent); setStep(r.agent.status === 'awaiting_bot' ? 5 : 1); })
+      .catch((e) => { nav.toast(errorMessage(e), 'error'); nav.back(); });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftId]);
+
+  const run = async <T,>(label: string, fn: () => Promise<T>): Promise<T | undefined> => {
+    setOperationError(null);
+    setBusy(label);
+    try {
+      return await fn();
+    } catch (e) {
+      setOperationError(errorMessage(e));
+      haptic.error();
+      // A failed draft is shown inline on the Brief step; a second, transient toast would only repeat it.
+      if (label !== 'draft') nav.toast(errorMessage(e), 'error');
+      return undefined;
+    } finally {
+      setBusy(null);
+    }
+  };
+  const update = setAgent;
+  // An error belongs to the step it happened on.
+  useEffect(() => { setOperationError(null); }, [step]);
+
+  // Live agents being refined skip voice (fixed at hire) and the hire step.
+  // Step 5 with an active agent is the "just hired" screen, not a refine.
+  const live = agent?.status === 'active' && step !== 5;
+  const steps = live ? STEPS.slice(0, 5) : STEPS;
+  const next = () => { haptic.tap(); setStep((s) => (live && s === 2 ? 4 : Math.min(s + 1, steps.length - 1))); };
+  const prev = () => {
+    // An open sheet takes Back first, as Telegram's Back does: it closes and the step (and brief) stay.
+    if (nav.consumeBack()) return;
+    // Waiting on Telegram or already hired: Back leaves the wizard instead of stepping into it.
+    if (step === 5 && agent?.status === 'active') nav.reset({ name: 'home' }, { name: 'agent', id: agent.id });
+    else if (step <= (draftId ? 1 : 0) || (step === 5 && draftId && agent?.status === 'awaiting_bot')) nav.back();
+    else setStep((s) => (live && s === 4 ? 2 : s - 1));
+  };
+
+  if (step === -1 || (step > 0 && !agent)) return <><TopBar onBack={nav.back} backLabel="Agents" /><LoadingFill /></>;
+
+  return (
+    <CatalogContext.Provider value={catalog}>
+      <TopBar onBack={prev} backLabel={step === 0 ? 'Agents' : 'Back'} title={<Steps total={steps.length} current={step} />}
+        right={agent && agent.status === 'draft' ? (
+          <button className="vx-icon-btn" aria-label="Discard draft" onClick={async () => {
+            if (!confirm(`Discard ${agent.persona.name}?`)) return;
+            const ok = await run('discard', () => api.deleteDraft(agent.id));
+            if (ok) nav.reset({ name: 'home' });
+          }}><Icon name="trash" size={20} /></button>
+        ) : undefined} />
+      {/* The Brief step shows its own failure inline above the dock: one alert, never two. */}
+      {operationError && step !== 0 && <div role="alert" className="vx-catalog-layout-f08ff1e9">{operationError}</div>}
+      <AnimatePresence mode="wait" initial={false}>
+        <motion.div key={step} initial={{ opacity: 0, x: 24 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -24 }}
+          transition={{ duration: 0.24, ease: [0.2, 0, 0, 1] }} className="vx-catalog-layout-e782b946">
+          {step === 0 && (
+            <BriefStep busy={busy} successorOf={successorOf} error={operationError} onDraft={async (brief) => {
+              const r = await run('draft', () => api.draft(brief, successorOf));
+              if (r) { haptic.success(); setAgent(r.agent); setNames(r.names); setStep(1); }
+            }} />
+          )}
+          {step === 1 && agent && <PersonaStep agent={agent} names={names} busy={busy} run={run} onUpdate={update} onNext={next} />}
+          {step === 2 && agent && <LookStep agent={agent} busy={busy} run={run} onUpdate={update} onNext={next} />}
+          {step === 3 && agent && <VoiceStep agent={agent} busy={busy} run={run} onUpdate={update} onNext={next} />}
+          {step === 4 && agent && <TestStep agent={agent} onNext={live ? () => nav.back() : next} live={live} />}
+          {step === 5 && agent && <HireStep agent={agent} busy={busy} run={run} onUpdate={update} />}
+        </motion.div>
+      </AnimatePresence>
+    </CatalogContext.Provider>
+  );
+}
+
+/* ---------- 3. Look ---------- */
+
+function LookStep({ agent, busy, run, onUpdate, onNext }: StepProps) {
+  const nav = useNav();
+  const look = agent.look;
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [spin, setSpin] = useState(0);
+  const avatarsOn = nav.me.features.avatars;
+
+  const setLook = async (patch: Partial<AgentLook> | 'random') => {
+    haptic.select();
+    const r = await run('look', () => api.setLook(agent.id, patch));
+    if (r) onUpdate(r.agent);
+  };
+
+  return (
+    <>
+      <div className="vx-scroll vx-catalog-layout-cca61f62" >
+        <div className="vx-catalog-layout-52ffe45f">
+          <span className="vx-over">Their look</span>
+          <h1 className="vx-title">Shape {agent.persona.name}’s cloud</h1>
+        </div>
+
+        <div className="vx-catalog-layout-1f759640">
+          <div style={{ position: 'absolute', top: '50%', left: '50%', width: 200, height: 200, margin: '-100px 0 0 -100px', borderRadius: '50%', background: PALETTE[look.hue].glow, opacity: 0.18, filter: 'blur(30px)' }} />
+          <motion.div key={`${look.hue}-${look.family}-${spin}`} initial={{ scale: 0.7, rotate: spin ? -14 : 0 }} animate={{ scale: 1, rotate: 0 }}
+            transition={{ type: 'spring', stiffness: 420, damping: 16 }}>
+            <Cloud look={look} size={180} expr="happy" label={agent.persona.name} />
+          </motion.div>
+          <motion.button className="vx-icon-btn solid vx-catalog-layout-edfd718b" aria-label="Random look" whileTap={{ rotate: 90, scale: 0.9 }}
+            disabled={busy === 'look'} onClick={() => { setSpin((s) => s + 1); void setLook('random'); }}
+            >
+            {busy === 'look' ? <Spinner /> : <Icon name="dice" />}
+          </motion.button>
+        </div>
+
+        <div className="vx-catalog-layout-379fabac">
+          <span className="vx-over">Colour</span>
+          <div className="vx-catalog-layout-bd39fbd2">
+            {Object.entries(PALETTE).map(([hue, pal]) => (
+              <button key={hue} aria-label={pal.name} aria-pressed={hue === look.hue} onClick={() => setLook({ hue: hue as AgentLook['hue'] })}
+                style={{ aspectRatio: '1', borderRadius: '50%', border: 'none', cursor: 'pointer', background: `radial-gradient(circle at 35% 30%, ${pal.light}, ${pal.base} 60%, ${pal.shadow})`,
+                  boxShadow: hue === look.hue ? `0 0 0 2px var(--ground), 0 0 0 4px ${pal.base}` : 'none', transition: 'box-shadow .2s' }} />
+            ))}
+          </div>
+        </div>
+
+        <div className="vx-catalog-layout-379fabac">
+          <span className="vx-over">Shape</span>
+          <div className="vx-catalog-layout-bc496348">
+            {(['puff', 'tower', 'drift'] as const).map((family) => (
+              <button key={family} className="vx-card" aria-pressed={family === look.family} onClick={() => setLook({ family })}
+                style={{ padding: '10px 0 8px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, cursor: 'pointer', color: 'inherit',
+                  borderColor: family === look.family ? 'var(--volt)' : undefined }}>
+                <Cloud look={{ ...look, family }} size={64} label={FAMILY_LABEL[family]} />
+                <span className="vx-small">{FAMILY_LABEL[family]}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="vx-catalog-layout-379fabac">
+          <span className="vx-over">Features</span>
+          <div className="vx-catalog-layout-a9c77021">
+            {(Object.keys(FEATURE_LABEL) as Array<keyof typeof FEATURE_LABEL>).map((k) => (
+              <button key={k} className="vx-chip" aria-pressed={look.features[k]} onClick={() => setLook({ features: { ...look.features, [k]: !look.features[k] } })}>{FEATURE_LABEL[k]}</button>
+            ))}
+          </div>
+        </div>
+
+        <div className="vx-card vx-catalog-layout-0457ef8e" >
+          <div className="vx-catalog-layout-3490dbc8">
+            <div>
+              <div className="vx-head">Profile picture</div>
+              <div className="vx-small vx-2">Used as the Telegram bot photo. The cloud still animates in calls.</div>
+            </div>
+          </div>
+          <div className="vx-catalog-layout-d6e67701">{/* room for the selection ring */}
+            <AvatarOption selected={!look.avatar} label="Cloud" onClick={() => look.avatar && run('avatar', () => api.chooseAvatar(agent.id, null)).then((r) => r && onUpdate(r.agent))}>
+              <Cloud look={look} size={64} label="Cloud" />
+            </AvatarOption>
+            {(look.avatarVariants ?? []).map((f) => (
+              <AvatarOption key={f} selected={look.avatar === f} label={f.startsWith('up-') ? 'Your upload' : 'Generated'}
+                onClick={() => run('avatar', () => api.chooseAvatar(agent.id, f)).then((r) => r && onUpdate(r.agent))}>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={mediaUrl(f)} alt="" width={72} height={72} className="vx-catalog-layout-e4397fc7" />
+              </AvatarOption>
+            ))}
+            {busy === 'avatars' && [0, 1].map((i) => <div key={i} className="vx-skeleton vx-catalog-layout-94daf7eb"  />)}
+          </div>
+          <div className="vx-catalog-layout-a9c77021">
+            {avatarsOn && (
+              <button className="vx-btn vx-btn-secondary vx-btn-sm vx-catalog-layout-126244f1"  disabled={!!busy}
+                onClick={async () => { const r = await run('avatars', () => api.generateAvatars(agent.id, 2)); if (r) { onUpdate(r.agent); haptic.success(); } }}>
+                {busy === 'avatars' ? <Spinner /> : <Icon name="image" size={18} />}Generate
+              </button>
+            )}
+            <button className="vx-btn vx-btn-secondary vx-btn-sm vx-catalog-layout-126244f1"  disabled={!!busy} onClick={() => fileRef.current?.click()}>
+              {busy === 'upload' ? <Spinner /> : <Icon name="upload" size={18} />}Upload
+            </button>
+            <input className="vx-file-input" ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp" hidden onChange={async (e) => {
+              const file = e.target.files?.[0];
+              e.target.value = '';
+              if (!file) return;
+              const r = await run('upload', () => api.uploadAvatar(agent.id, file));
+              if (r) { onUpdate(r.agent); haptic.success(); }
+            }} />
+          </div>
+          {!avatarsOn && <span className="vx-small vx-3">Image generation is off on this server (no OpenAI key). Uploads still work.</span>}
+        </div>
+      </div>
+      <Dock>
+        <button className="vx-btn vx-btn-primary vx-btn-block" onClick={onNext} disabled={!!busy}>Next</button>
+      </Dock>
+    </>
+  );
+}
+
+function AvatarOption({ selected, label, onClick, children }: { selected: boolean; label: string; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button onClick={onClick} aria-pressed={selected} aria-label={label}
+      style={{ position: 'relative', flexShrink: 0, width: 80, height: 80, borderRadius: '50%', border: 'none', background: 'var(--s2)', cursor: 'pointer',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: selected ? '0 0 0 2px var(--ground), 0 0 0 4px var(--volt)' : 'none', transition: 'box-shadow .2s' }}>
+      {children}
+      {selected && (
+        <motion.span initial={{ scale: 0 }} animate={{ scale: 1 }} className="vx-catalog-layout-b66e791b">
+          <Icon name="check" size={14} width={3} />
+        </motion.span>
+      )}
+    </button>
+  );
+}
+
+/* ---------- 4. Voice ---------- */
+
+function usePlayer() {
+  const audio = useRef<HTMLAudioElement | null>(null);
+  const [playing, setPlaying] = useState<string | null>(null);
+  useEffect(() => () => { audio.current?.pause(); }, []);
+  const play = (key: string, src: string) => {
+    audio.current?.pause();
+    if (playing === key) { setPlaying(null); return; }
+    const a = new Audio(src);
+    audio.current = a;
+    a.onended = () => setPlaying(null);
+    a.play().then(() => setPlaying(key)).catch(() => setPlaying(null));
+  };
+  return { playing, play };
+}
+
+function VoiceStep({ agent, busy, run, onUpdate, onNext }: StepProps) {
+  const nav = useNav();
+  const [tab, setTab] = useState<'default' | 'design' | 'library'>('default');
+  const [brief, setBrief] = useState(agent.persona.voiceBrief);
+  const firstLanguage = agent.persona.languages[0]?.trim().toLowerCase() ?? '';
+  const initialLanguage = VOICE_LANGUAGE_CODES[firstLanguage] ?? (/^[a-z]{2,3}(?:[-_]|$)/.test(firstLanguage) ? firstLanguage.split(/[-_]/)[0] : '');
+  const [query, setQuery] = useState({ gender: agent.persona.presentation === 'feminine' ? 'female' : agent.persona.presentation === 'masculine' ? 'male' : '', accent: '', language: initialLanguage, search: '' });
+  const [results, setResults] = useState<LibraryVoice[] | null>(null);
+  const [options, setOptions] = useState<VoiceOptions | null>(null);
+  const [optionsError, setOptionsError] = useState<string | null>(null);
+  const [optionsLoading, setOptionsLoading] = useState(false);
+  const [optionsRetry, setOptionsRetry] = useState(0);
+  const libraryRequest = useRef(0);
+  const player = usePlayer();
+  const voicesOn = nav.me.features.voices;
+
+  useEffect(() => {
+    if (!voicesOn) return;
+    let cancelled = false;
+    setOptionsLoading(true);
+    setOptionsError(null);
+    api.voiceOptions().then((r) => { if (!cancelled) setOptions(r); })
+      .catch((e) => { if (!cancelled) setOptionsError(errorMessage(e)); })
+      .finally(() => { if (!cancelled) setOptionsLoading(false); });
+    return () => { cancelled = true; };
+  }, [voicesOn, optionsRetry]);
+
+  const model = options?.models.find((m) => m.id === options.ttsModel);
+  const languageNames = new Map<string, string>([['en', 'English'], ['fa', 'Persian (فارسی)'], ['vi', 'Vietnamese (Tiếng Việt)']]);
+  for (const m of options?.models ?? []) for (const language of m.languages) {
+    if (language.code !== 'fa' && language.code !== 'vi') languageNames.set(language.code, language.name);
+  }
+
+  const searchWith = async (filters: typeof query) => {
+    const request = ++libraryRequest.current;
+    const r = await run('search', () => api.searchVoices(filters));
+    if (r && request === libraryRequest.current) setResults(r.voices);
+  };
+  const search = () => searchWith(query);
+  const chooseLanguage = (language: string) => {
+    const filters = { ...query, language };
+    setQuery(filters);
+    setResults(null);
+    if (tab === 'library') void searchWith(filters);
+  };
+
+  const sample = async () => {
+    const language = query.language || initialLanguage;
+    const text = language === 'fa'
+      ? `سلام، من ${agent.persona.name} هستم. خوشحالم که با هم صحبت می‌کنیم.`
+      : language === 'vi' ? `Xin chào, tôi là ${agent.persona.name}. Rất vui được trò chuyện với bạn.`
+        : `Hi, I'm ${agent.persona.name}. ${agent.persona.tagline}`;
+    const blob = await run('speak', () => api.speak(agent.id, text));
+    if (blob) player.play('sample', URL.createObjectURL(blob));
+  };
+
+  if (!voicesOn) {
+    return (
+      <>
+        <div className="vx-scroll"><div className="vx-banner warn"><Icon name="warn" size={18} />Voices are off on this server (no ElevenLabs key). {agent.persona.name} will reply in text only.</div></div>
+        <Dock><button className="vx-btn vx-btn-primary vx-btn-block" onClick={onNext}>Next</button></Dock>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <div className="vx-scroll vx-catalog-layout-8b400c78" >
+        <div className="vx-catalog-layout-52ffe45f">
+          <span className="vx-over">Their voice</span>
+          <h1 className="vx-title">How does {agent.persona.name} sound?</h1>
+          <p className="vx-2 vx-catalog-layout-02419cff" >Same voice for everyone in {nav.me.org}. Fixed once hired.</p>
+          {options && <p className="vx-small vx-2 vx-catalog-layout-02419cff" >Voice messages: {model?.name ?? options.ttsModel}{query.language && model?.languages.some((l) => l.code === query.language) ? ` · ${VOICE_LANGUAGE_CHOICES.find((l) => l.code === query.language)?.label ?? languageNames.get(query.language) ?? query.language} supported` : ''}</p>}
+        </div>
+        <div role="group" aria-label="Language shortcuts" className="vx-catalog-layout-6e6921f4">
+          {VOICE_LANGUAGE_CHOICES.map((language) => <button key={language.code} className="vx-chip" aria-pressed={query.language === language.code}
+            disabled={!!busy} onClick={() => chooseLanguage(language.code)}>{language.label}</button>)}
+        </div>
+
+        {optionsLoading && <div role="status" className="vx-small vx-2"><Spinner size={14} />Loading voice options…</div>}
+        {optionsError && <div className="vx-banner warn vx-catalog-layout-b4574a72" >
+          <span role="alert">Can’t load voice options: {optionsError}</span>
+          <button className="vx-btn vx-btn-secondary vx-btn-sm" onClick={() => setOptionsRetry((n) => n + 1)}>Retry voice options</button>
+        </div>}
+        {options && !options.libraryAllowed && <div className="vx-banner warn">
+          {options.tier === 'free'
+            ? 'The server uses ElevenLabs’ free plan. Library voices need a paid plan for API use. Built-in voices are available; an existing library voice stays selected until you change it.'
+            : 'The server’s ElevenLabs subscription could not be checked. Library selection is unavailable until it can be verified.'}
+        </div>}
+        {options && <details className="vx-small vx-2">
+          <summary>Available speech models</summary>
+          <ul className="vx-catalog-layout-b9012620">
+            {options.models.map((m) => <li key={m.id}>{m.name} · {m.kind === 'realtime' ? 'Real-time' : m.kind === 'quality' ? 'Quality' : 'Earlier model'}{VOICE_LANGUAGE_CHOICES.filter((l) => m.languages.some((supported) => supported.code === l.code)).map((l) => ` · ${l.label} supported`).join('')}{m.id === options.ttsModel ? ' · Used for voice messages' : ''}</li>)}
+          </ul>
+        </details>}
+
+        {agent.voice && (
+          <div className="vx-card vx-catalog-layout-a7a927c6" >
+            <span className="vx-pill live"><Icon name="check" size={11} width={3} />CHOSEN</span>
+            <span className="vx-catalog-layout-96e25a8a">{agent.voice.label}</span>
+            <button className="vx-icon-btn solid" aria-label="Hear a sample" onClick={sample} disabled={busy === 'speak'}>
+              {busy === 'speak' ? <Spinner /> : <Icon name={player.playing === 'sample' ? 'pause' : 'play'} size={18} />}
+            </button>
+          </div>
+        )}
+
+        <div className="vx-catalog-layout-a9c77021">
+          <button className="vx-chip" aria-pressed={tab === 'default'} onClick={() => setTab('default')}>Built-in voices</button>
+          <button className="vx-chip" aria-pressed={tab === 'design'} onClick={() => setTab('design')}>Design new</button>
+          <button className="vx-chip" aria-pressed={tab === 'library'} onClick={() => { setTab('library'); if (!results) void search(); }}>Voice library</button>
+        </div>
+
+        {tab === 'default' ? (
+          <div className="vx-catalog-layout-18809276">
+            <p className="vx-small vx-2 vx-catalog-layout-02419cff" >One voice can speak the model’s supported languages. Accent and pronunciation vary; choose a voice, then hear an English, Persian or Vietnamese sample.</p>
+            {options?.defaultVoices.length === 0 && <p className="vx-small vx-2">No built-in voices are available from this account right now.</p>}
+            {options?.defaultVoices.map((v) => <div key={v.voiceId} className="vx-card vx-catalog-layout-394eb1bd" >
+              <button className="vx-icon-btn solid" aria-label={`Play ${v.name}`} disabled={!v.previewUrl} onClick={() => v.previewUrl && player.play(v.voiceId, v.previewUrl)}>
+                <Icon name={player.playing === v.voiceId ? 'pause' : 'play'} size={18} />
+              </button>
+              <div className="vx-catalog-layout-396e68ac"><div>{v.name}</div><div className="vx-small vx-2">{[v.gender, v.accent, 'Multilingual via speech model'].filter(Boolean).join(' · ')}</div></div>
+              <button className="vx-btn vx-btn-primary vx-btn-sm" disabled={!!busy} aria-label={`Use ${v.name}`} onClick={async () => {
+                const r = await run('choose', () => api.chooseDefaultVoice(agent.id, v.voiceId));
+                if (r) { onUpdate(r.agent); haptic.success(); }
+              }}>Use</button>
+            </div>)}
+          </div>
+        ) : tab === 'design' ? (
+          <div className="vx-catalog-layout-18809276">
+            <Field label="Describe the voice" hint="Accent, age, pace, warmth. ElevenLabs creates three options.">
+              <textarea className="vx-textarea" rows={3} value={brief} onChange={(e) => setBrief(e.target.value)} maxLength={1000} />
+            </Field>
+            <button className="vx-btn vx-btn-secondary" disabled={!!busy || brief.trim().length < 20}
+              onClick={async () => { const r = await run('design', () => api.designVoices(agent.id, brief)); if (r) onUpdate(r.agent); }}>
+              {busy === 'design' ? <><Spinner />Designing…</> : <><Icon name="spark" size={18} />Design voices</>}
+            </button>
+            {(agent.voicePreviews ?? []).map((v, i) => (
+              <motion.div key={v.generatedVoiceId} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.06 }}
+                className="vx-card vx-catalog-layout-394eb1bd" >
+                <button className="vx-icon-btn solid" aria-label={`Play option ${i + 1}`} onClick={() => player.play(v.file, mediaUrl(v.file))}>
+                  <Icon name={player.playing === v.file ? 'pause' : 'play'} size={18} />
+                </button>
+                <Bars active={player.playing === v.file} />
+                <span className="vx-catalog-layout-126244f1">Option {i + 1}</span>
+                <button className="vx-btn vx-btn-primary vx-btn-sm" disabled={!!busy}
+                  onClick={async () => { const r = await run('choose', () => api.chooseDesignedVoice(agent.id, v.generatedVoiceId)); if (r) { onUpdate(r.agent); haptic.success(); } }}>
+                  {busy === 'choose' ? <Spinner /> : 'Use'}
+                </button>
+              </motion.div>
+            ))}
+          </div>
+        ) : (
+          <div className="vx-catalog-layout-18809276">
+            <p className="vx-small vx-2 vx-catalog-layout-02419cff" >Language labels describe the library recording. Accent and pronunciation vary by voice; listen to the preview before choosing.</p>
+            <div className="vx-catalog-layout-911a9da1">
+              <select className="vx-input" value={query.gender} onChange={(e) => setQuery({ ...query, gender: e.target.value })} aria-label="Gender">
+                <option value="">Any gender</option><option value="female">Female</option><option value="male">Male</option><option value="neutral">Neutral</option>
+              </select>
+              <input className="vx-input" value={query.accent} onChange={(e) => setQuery({ ...query, accent: e.target.value })} placeholder="Accent" />
+              <select className="vx-input" aria-label="Voice language" value={query.language} disabled={!!busy} onChange={(e) => chooseLanguage(e.target.value)}>
+                <option value="">Any language</option>
+                {[...languageNames].sort((a, b) => a[1].localeCompare(b[1])).map(([code, name]) => <option key={code} value={code}>{name}</option>)}
+              </select>
+            </div>
+            <div className="vx-catalog-layout-a9c77021">
+              <input className="vx-input" value={query.search} onChange={(e) => setQuery({ ...query, search: e.target.value })} placeholder="calm, narrator, young…"
+                onKeyDown={(e) => { if (e.key === 'Enter') void search(); }} />
+              <button className="vx-icon-btn solid" aria-label="Search voices" onClick={search} disabled={busy === 'search'}>{busy === 'search' ? <Spinner /> : <Icon name="send" />}</button>
+            </div>
+            {results?.length === 0 && <span className="vx-small vx-2">No voices match. Loosen a filter.</span>}
+            {results?.map((v) => (
+              <div key={`${v.publicOwnerId}-${v.voiceId}`} className="vx-card vx-catalog-layout-394eb1bd" >
+                <button className="vx-icon-btn solid" aria-label={`Play ${v.name}`} disabled={!v.previewUrl && !v.verifiedLanguages?.some((l) => l.language === query.language && l.previewUrl)} onClick={() => {
+                  const url = v.verifiedLanguages?.find((l) => l.language === query.language && l.previewUrl)?.previewUrl ?? v.previewUrl;
+                  if (url) player.play(v.voiceId, url);
+                }}>
+                  <Icon name={player.playing === v.voiceId ? 'pause' : 'play'} size={18} />
+                </button>
+                <div className="vx-catalog-layout-396e68ac">
+                  <div className="vx-catalog-layout-01123aa5">{v.name}</div>
+                  <div className="vx-small vx-2 vx-catalog-layout-01123aa5" >{[v.gender, v.age, v.accent, v.descriptive, v.category === 'generated' ? 'Generated voice' : ''].filter(Boolean).join(' · ')}</div>
+                  {v.language && <div className="vx-small vx-2">{v.category === 'professional' ? 'Native language: ' : 'Language: '}{languageNames.get(v.language) ?? v.language}</div>}
+                  {v.description && <div className="vx-small vx-3">{v.description}</div>}
+                  {typeof v.rate === 'number' && v.rate > 1 && <div className="vx-small vx-2">Voice price multiplier: {v.rate}×</div>}
+                </div>
+                <button className="vx-btn vx-btn-primary vx-btn-sm" disabled={!!busy || !options?.libraryAllowed} aria-label={`Use ${v.name}`}
+                  onClick={async () => { const r = await run('choose', () => api.chooseLibraryVoice(agent.id, v)); if (r) { onUpdate(r.agent); haptic.success(); } }}>Use</button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      <Dock>
+        <button className="vx-btn vx-btn-primary vx-btn-block" onClick={onNext} disabled={!!busy}>{agent.voice ? 'Next' : 'Skip — text only'}</button>
+      </Dock>
+    </>
+  );
+}
+
+function Bars({ active }: { active: boolean }) {
+  return (
+    <svg width="40" height="20" viewBox="0 0 40 20" aria-hidden="true">
+      {[0, 1, 2, 3, 4, 5, 6].map((i) => (
+        <rect key={i} x={i * 6} y={2} width={3} height={16} rx={1.5} fill={active ? 'var(--volt)' : 'var(--text-3)'}
+          className={active ? 'vx-bar' : undefined} style={{ animationDelay: `${i * 0.11}s`, transformBox: 'fill-box', transform: active ? undefined : 'scaleY(.35)' }} />
+      ))}
+    </svg>
+  );
+}
+
+/* ---------- 5. Test ---------- */
+
+function TestStep({ agent, onNext, live }: { agent: AgentView; onNext: () => void; live: boolean }) {
+  const nav = useNav();
+  const catalog = useCatalog();
+  const role = agent.persona.roleId ? catalog.roles.get(agent.persona.roleId) : undefined;
+  const starters = role?.starters.length ? role.starters : TEST_STARTERS;
+  const [messages, setMessages] = useState<Array<{ role: 'user' | 'assistant'; content: string }>>([]);
+  const [text, setText] = useState('');
+  const [thinking, setThinking] = useState(false);
+  const end = useRef<HTMLDivElement>(null);
+  useEffect(() => { end.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, thinking]);
+
+  const send = async () => {
+    const content = text.trim();
+    if (!content || thinking) return;
+    const next = [...messages, { role: 'user' as const, content }];
+    setMessages(next);
+    setText('');
+    setThinking(true);
+    try {
+      const r = await api.test(agent.id, next);
+      setMessages([...next, { role: 'assistant', content: r.reply }]);
+    } catch (e) {
+      nav.toast(errorMessage(e), 'error');
+    } finally {
+      setThinking(false);
+    }
+  };
+
+  return (
+    <>
+      <div className="vx-scroll vx-catalog-layout-522e55ef" >
+        <div className="vx-catalog-layout-ff66b6e2">
+          <AgentFace look={agent.look} size={56} expr={thinking ? 'thinking' : 'idle'} preferCloud label={agent.persona.name} />
+          <div>
+            <h1 className="vx-title-m">Say hi to {agent.persona.name}</h1>
+            <div className="vx-small vx-2">Sandbox: nothing here becomes a memory.</div>
+          </div>
+        </div>
+        {messages.length === 0 && (
+          <div className="vx-catalog-layout-6e6921f4">
+            {starters.map((s) => (
+              <button key={s} className="vx-chip" dir="auto" onClick={() => setText(s)}>{s}</button>
+            ))}
+          </div>
+        )}
+        {messages.map((m, i) => (
+          <motion.div key={i} initial={{ opacity: 0, y: 8, scale: 0.98 }} animate={{ opacity: 1, y: 0, scale: 1 }}
+            style={{ alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start', maxWidth: '84%', padding: '10px 14px', borderRadius: 20,
+              background: m.role === 'user' ? 'var(--volt)' : 'var(--s2)', color: m.role === 'user' ? 'var(--ground)' : 'inherit', whiteSpace: 'pre-wrap', lineHeight: '21px', fontSize: 15 }}>
+            {m.content}
+          </motion.div>
+        ))}
+        {thinking && <div className="vx-small vx-2 vx-catalog-layout-f8df590e" ><Spinner size={14} />{agent.persona.name} is typing…</div>}
+        <div ref={end} />
+      </div>
+      <div className="vx-dock vx-catalog-layout-01d606c1" >
+        <div className="vx-catalog-layout-a9c77021">
+          <input className="vx-input vx-catalog-layout-6f3825c6" value={text} onChange={(e) => setText(e.target.value)} placeholder="Message" maxLength={2000}
+            onKeyDown={(e) => { if (e.key === 'Enter') void send(); }}  />
+          <button className="vx-icon-btn solid" aria-label="Send" onClick={send} disabled={!text.trim() || thinking}><Icon name="send" width={2} /></button>
+        </div>
+        <button className="vx-btn vx-btn-primary vx-btn-block" onClick={onNext}>{live ? 'Done' : 'Ready to hire'}</button>
+      </div>
+    </>
+  );
+}
+
+/* ---------- 6. Hire ---------- */
+
+function HireStep({ agent, busy, run, onUpdate }: Omit<StepProps, 'onNext'>) {
+  const nav = useNav();
+  const [link, setLink] = useState<string | null>(null);
+  const [statusError, setStatusError] = useState<string | null>(null);
+  const awaiting = agent.status === 'awaiting_bot';
+  const active = agent.status === 'active';
+  const profileReady = agent.profileSync?.status === 'synced';
+  const checking = awaiting || (active && !profileReady);
+
+  // Creation and applying the selected profile finish separately in Telegram.
+  useEffect(() => {
+    if (!checking) return;
+    let cancelled = false;
+    let inFlight = false;
+    const t = setInterval(async () => {
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        const r = await api.agent(agent.id);
+        if (cancelled) return;
+        setStatusError(null);
+        if (r.agent.status === 'active' && r.agent.profileSync?.status === 'synced') haptic.success();
+        onUpdate(r.agent);
+      } catch (e) {
+        if (!cancelled) setStatusError(errorMessage(e));
+      } finally {
+        inFlight = false;
+      }
+    }, 3000);
+    return () => { cancelled = true; clearInterval(t); };
+  }, [checking, agent.id, onUpdate]);
+
+  const publish = async () => {
+    const r = await run('publish', () => api.publish(agent.id));
+    if (r) { setLink(r.link); onUpdate(r.agent); openTelegram(r.link); }
+  };
+
+  const retryProfile = async () => {
+    const r = await run('profile', () => api.syncProfile(agent.id));
+    if (r) { setStatusError(null); onUpdate(r.agent); }
+  };
+
+  if (active) {
+    return (
+      <div className="vx-catalog-layout-12540e53">
+        <motion.div initial={{ scale: 0, rotate: -20 }} animate={{ scale: 1, rotate: 0 }} transition={{ type: 'spring', stiffness: 260, damping: 12 }}>
+          <AgentFace look={agent.look} size={160} expr={profileReady ? 'happy' : 'listening'} stage={1} label={agent.persona.name} />
+        </motion.div>
+        <h1 className="vx-title">{profileReady ? `${agent.persona.name} is hired` : `${agent.persona.name}’s bot is created`}</h1>
+        {agent.look.avatar && <TelegramPhoto agent={agent} size={40} />}
+        <p className="vx-2 vx-catalog-layout-351f2d90" >Live as @{agent.bot?.username}. For the next 7 days their personality can still be tuned; after that it’s locked for good.</p>
+        {!profileReady && (
+          <div className="vx-catalog-layout-2c8c50e0">
+            {agent.profileSync?.status === 'error'
+              ? <p role="alert" className="vx-catalog-layout-b543e3b3">Bot created. Telegram profile still needs {agent.profileSync.failed.join(', ') || 'an update'}.</p>
+              : <div role="status" className="vx-catalog-layout-d8c16219"><Spinner size={14} />Finishing Telegram profile…</div>}
+            {agent.profileSync?.status === 'error' && (agent.canManageAccess || agent.canEdit) && (
+              <button className="vx-btn vx-btn-secondary vx-btn-sm" onClick={retryProfile} disabled={!!busy}>
+                {busy === 'profile' ? <Spinner /> : 'Retry Telegram profile'}
+              </button>
+            )}
+            {statusError && <p role="alert" className="vx-catalog-layout-b543e3b3">Can’t check the bot’s status: {statusError}</p>}
+          </div>
+        )}
+        <div className="vx-catalog-layout-dcf3a7c2">
+          <button className="vx-btn vx-btn-secondary vx-catalog-layout-126244f1"  onClick={() => agent.bot && openTelegram(`https://t.me/${agent.bot.username}`)}>Message</button>
+          <button className="vx-btn vx-btn-primary vx-catalog-layout-126244f1"  onClick={() => nav.reset({ name: 'home' }, { name: 'agent', id: agent.id })}>Open</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <div className="vx-scroll vx-catalog-layout-ff5db210" >
+        <div className="vx-catalog-layout-f2fecb34"><AgentFace look={agent.look} size={140} expr={awaiting ? 'listening' : 'idle'} label={agent.persona.name} /></div>
+        <h1 className="vx-title">{awaiting ? 'Confirm in Telegram' : `Hire ${agent.persona.name}`}</h1>
+        <p className="vx-2 vx-catalog-layout-1ad779d7" >
+          {awaiting
+            ? `Telegram opened a “Create bot” screen. The name is filled in where supported; if it’s blank, enter ${agent.persona.name}. Confirm the username and tap Create. Vox then applies the chosen name and photo — this page updates when they’re ready.`
+            : `${agent.persona.name} becomes a real Telegram bot. It starts private (you, people you pick, and admins); you can open it to ${nav.me.org} or make it public later.`}
+        </p>
+        <div className="vx-group vx-catalog-layout-84132fd4" >
+          <div className="vx-row"><Icon name="cloud" size={20} /><span className="vx-catalog-layout-126244f1">Look & avatar</span><span className="vx-small vx-2">{agent.look.avatar ? 'Picture' : 'Cloud'}</span></div>
+          <div className="vx-row"><Icon name="mic" size={20} /><span className="vx-catalog-layout-126244f1">Voice</span><span className="vx-small vx-2">{agent.voice?.label ?? 'Text only'}</span></div>
+          <div className="vx-row"><Icon name="lock" size={20} /><span className="vx-catalog-layout-126244f1">Personality locks</span><span className="vx-small vx-2">7 days after hire</span></div>
+        </div>
+        {awaiting && (statusError
+          ? <p role="alert" className="vx-catalog-layout-b543e3b3">Can’t check the bot’s status: {statusError}</p>
+          : <div className="vx-small vx-2 vx-catalog-layout-378e7657" ><Spinner size={14} />Waiting for Telegram…</div>)}
+      </div>
+      <Dock>
+        {awaiting ? (
+          <button className="vx-btn vx-btn-secondary vx-btn-block" onClick={() => (link ? openTelegram(link) : publish())} disabled={!!busy}>Open Telegram again</button>
+        ) : (
+          <button className="vx-btn vx-btn-primary vx-btn-block" onClick={publish} disabled={!!busy}>
+            {busy === 'publish' ? <Spinner /> : <Icon name="check" width={2} />}Hire {agent.persona.name}
+          </button>
+        )}
+      </Dock>
+    </>
+  );
+}
