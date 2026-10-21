@@ -124,6 +124,11 @@ export function middleware(request: NextRequest) {
   const guestPost = ['/api/guest-rights/draft', '/api/guest-rights/requests', '/api/guest-rights/status', '/api/guest-rights/close', '/api/guest-rights/operations/actions'].includes(pathname) && request.method === 'POST';
   const guestApi = (guestGet || guestPost) && request.nextUrl.search === '';
   const guest = guestPage || guestApi;
+  const botConnections = ['GET', 'POST'].includes(request.method) &&
+    /^\/api\/agents\/[A-Za-z0-9_-]{1,128}\/connections(?:\/[A-Za-z0-9_.-]{1,200}){0,8}$/.test(pathname);
+  const connectionOAuth = request.method === 'GET' && (
+    pathname === '/oauth/callback/remote_mcp' && request.nextUrl.search.length <= 8192 ||
+    pathname === '/oauth/client-metadata.json' && request.nextUrl.search === '');
 
   if (process.env.STUDIO_ONLY === '1') {
     if (pathname === '/') {
@@ -146,12 +151,13 @@ export function middleware(request: NextRequest) {
     }
     const brokerControl = pathname === '/api/connections/broker' && request.method === 'POST' &&
       request.nextUrl.search === '' && hasBrokerControlConfiguration();
-    if (!brokerControl && !guest && !isPathOrChild(pathname, '/studio') && !isPathOrChild(pathname, '/api/studio') &&
+    if (!brokerControl && !botConnections && !connectionOAuth && !guest && !isPathOrChild(pathname, '/studio') && !isPathOrChild(pathname, '/api/studio') &&
       !pathname.startsWith('/_next/static/') && pathname !== '/favicon.ico') {
       return new NextResponse(null, { status: 404, headers: { 'Cache-Control': 'no-store' } });
     }
   }
   const response = NextResponse.next();
+  if (connectionOAuth) response.headers.set('Cache-Control', 'no-store');
   const isDev = process.env.NODE_ENV === 'development';
 
   // Generate unique request ID for tracing
@@ -165,13 +171,14 @@ export function middleware(request: NextRequest) {
   const isMiniApp = isPathOrChild(pathname, '/studio');
   if (!isMiniApp) response.headers.set('X-Frame-Options', 'DENY');
   response.headers.set('X-XSS-Protection', '1; mode=block');
-  response.headers.set('Referrer-Policy', guest ? 'no-referrer' : 'strict-origin-when-cross-origin');
+  response.headers.set('Referrer-Policy', guest || connectionOAuth ? 'no-referrer' : 'strict-origin-when-cross-origin');
   // self refers to the Studio origin even when Telegram embeds it. Telegram's
   // parent iframe must delegate microphone access; no wildcard is needed here.
-  response.headers.set('Permissions-Policy', guest ? PERMISSIONS_POLICY.replace('camera=(self)', 'camera=()').replace('microphone=(self)', 'microphone=()').replace('payment=(self)', 'payment=()') : PERMISSIONS_POLICY);
+  response.headers.set('Permissions-Policy', guest || connectionOAuth ? PERMISSIONS_POLICY.replace('camera=(self)', 'camera=()').replace('microphone=(self)', 'microphone=()').replace('payment=(self)', 'payment=()') : PERMISSIONS_POLICY);
 
   // CSP - use report-only in development to avoid blocking
-  const csp = guest ? ["default-src 'none'", "script-src 'self' 'unsafe-inline'", "style-src 'self' 'unsafe-inline'", "connect-src 'self'", "img-src 'self' data:", "font-src 'self'", "base-uri 'none'", "form-action 'self'", "frame-ancestors 'none'", "object-src 'none'", "media-src 'none'"].join('; ') : buildCSP(isDev, isMiniApp);
+  const csp = connectionOAuth ? ["default-src 'none'", "base-uri 'none'", "form-action 'none'", "frame-ancestors 'none'", "object-src 'none'"].join('; ')
+    : guest ? ["default-src 'none'", "script-src 'self' 'unsafe-inline'", "style-src 'self' 'unsafe-inline'", "connect-src 'self'", "img-src 'self' data:", "font-src 'self'", "base-uri 'none'", "form-action 'self'", "frame-ancestors 'none'", "object-src 'none'", "media-src 'none'"].join('; ') : buildCSP(isDev, isMiniApp);
   if (isDev) {
     response.headers.set('Content-Security-Policy-Report-Only', csp);
   } else {
