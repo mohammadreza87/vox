@@ -69,6 +69,7 @@ import { svgToPng } from './character/portrait';
 import { FirestoreStudioStore } from './firestore-store';
 import { FirestoreStudioRateLimiter } from './firestore-ratelimit';
 import { Studio, type StudioDeps } from './service';
+import { FilePetStore, FirestorePetStore } from './pet-store';
 import { StudioStore, type StudioStorage } from './store';
 import { RelationshipLoop, FileRelationshipStore, FirestoreRelationshipStore, FileObservationStore, FirestoreObservationStore, SafeRelationshipObserver, OpenAIFollowUpReview, OpenAIRelationshipFeedback } from '../relationships';
 import { StudioRelationshipAssessor } from './relationship-assessor';
@@ -246,11 +247,11 @@ export function stopStudioPreferenceLearning(): Promise<{ pending: number }> {
   return g.__voxPreferenceStop = g.__voxPreferenceTasks?.tasks.close() ?? Promise.resolve({ pending: 0 });
 }
 
-type RuntimeStorage = Pick<StudioDeps, 'store' | 'memory' | 'rateLimiter' | 'adaptive' | 'relationshipStore' | 'observations' | 'revisions'> & { sharedStorage: AdaptiveStorage; voiceIdentityStorage: AdaptiveStorage; maintenanceStorage: AdaptiveStorage; closeAdaptive?: () => void };
+type RuntimeStorage = Pick<StudioDeps, 'store' | 'pets' | 'memory' | 'rateLimiter' | 'adaptive' | 'relationshipStore' | 'observations' | 'revisions'> & { sharedStorage: AdaptiveStorage; voiceIdentityStorage: AdaptiveStorage; maintenanceStorage: AdaptiveStorage; closeAdaptive?: () => void };
 function fileStorage(dir: string, scopedRelationshipsEnabled: boolean, format: AdaptiveStorageFormat): RuntimeStorage {
   const managed = openLocalAdaptiveStorage(join(dir, 'adaptive'), format);
   try { const store = new StudioStore(dir);
-    return { store, memory: createFileStores(join(dir, 'memory.json')),
+    return { store, pets: new FilePetStore(join(dir, 'pets')), memory: createFileStores(join(dir, 'memory.json')),
     relationshipStore: new FileRelationshipStore(join(dir, 'scoped-relationships-v1.json')), observations: new FileObservationStore(join(dir, 'scoped-relationship-observations-v1.json')),
     adaptive: new AdaptiveService(new AdaptiveRepository(managed.storage),
       { ...adaptiveOptionsFromManifest(process.env.STUDIO_ADAPTIVE_POLICY_JSON, internalPilotAuthority(store)), scopedRelationshipsEnabled, voiceRecognitionEnabled: process.env.STUDIO_VOICE_RECOGNITION === '1' }),
@@ -268,6 +269,7 @@ async function firestoreStorage(bucketName: string, scopedRelationshipsEnabled: 
   const store = new FirestoreStudioStore(db, bucket);
   return {
     store,
+    pets: new FirestorePetStore(db),
     adaptive: new AdaptiveService(new AdaptiveRepository(new FirestoreAdaptiveStorage(db)),
       { ...adaptiveOptionsFromManifest(process.env.STUDIO_ADAPTIVE_POLICY_JSON, internalPilotAuthority(store)), scopedRelationshipsEnabled, voiceRecognitionEnabled: process.env.STUDIO_VOICE_RECOGNITION === '1' }),
     sharedStorage: new FirestoreAdaptiveStorage(db, 'adaptiveSharedMemory'),
@@ -317,6 +319,9 @@ async function create(): Promise<Studio> {
     const authority = new AdaptiveRelationshipService(storage.adaptive!);
     const studio = new Studio({
       store: storage.store,
+      // Wired here, not derived: route bundles carry their own copy of the store classes, so
+      // petStoreFor's instanceof checks fail on a Studio built by instrumentation.
+      pets: storage.pets,
       personaLLM: new AnthropicLLM(env.ANTHROPIC_API_KEY!, env.STUDIO_PERSONA_MODEL || 'claude-sonnet-5-5'),
       chatLLM: chatLLM(env),
       fastLLM: new AnthropicLLM(env.ANTHROPIC_API_KEY!, env.STUDIO_VOICE_MODEL || 'claude-haiku-5-5'),
