@@ -45,7 +45,7 @@ export type GroupAction = 'observe' | 'reply' | 'proactive' | 'remember';
 export interface RuntimePrivacyState {
   revision: string;
   /** `revision` without what a turn's own relationship observation bumps (the relationship store's
-   *  revision and rendered text), keeping its controls (epoch, stop, pause, forget). For callers that
+   *  revision and rendered text), keeping its controls (epoch, stop, pause, forgotten sources). For callers that
    *  fence a whole turn against one value taken before it; the gateway re-reads its own boundary. */
   authorityRevision?: string;
   memoryEnabled: boolean;

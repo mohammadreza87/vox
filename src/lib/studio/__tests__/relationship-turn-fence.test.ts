@@ -1,8 +1,8 @@
 /**
- * Legacy FILE adaptive storage (the production profile) with live scoped relationships: a Studio or
- * pet text turn records its own relationship observation, which bumps the relationship revision.
+ * Legacy FILE adaptive storage (the production profile) with live scoped relationships: a Studio,
+ * pet or voice turn records its own relationship observation, which bumps the relationship revision.
  * The turn's outer authority must not read that as a settings change, while a real relationship
- * control during the turn must still suppress the reply.
+ * control during the turn must still void the reply, before or after the provider returns.
  */
 import {afterEach, describe, expect, it, vi} from 'vitest';
 import {mkdtempSync, rmSync} from 'node:fs';
@@ -16,16 +16,19 @@ import {FileAdaptiveStorage} from '../../adaptive/persistence/storage';
 import {adaptiveOptionsFromManifest} from '../../adaptive/persistence/config';
 import {AdaptiveRelationshipService} from '../../adaptive/relationships/service';
 import {InMemoryRelationshipStore, RelationshipLoop} from '../../relationships';
+import type {LLMRequest} from '../../tireh/llm';
 import {handleConversationRequest} from '../conversation';
+import {handlePetRequest} from '../pet-http';
 import {signInitData} from '../auth';
 import {personId} from '../org-bridge';
 
-const NOW = T0.getTime(), TOKEN = '123:synthetic-manager';
+const NOW = T0.getTime(), TOKEN = '123:synthetic-manager', ORIGIN = 'https://vox.example', REPLY = 'Sure.';
 const paths: string[] = [];
 afterEach(() => {vi.restoreAllMocks(); for (const path of paths.splice(0)) rmSync(path, {recursive: true, force: true});});
 
 async function fixture() {
-  const h = makeStudio(), users = await seedOrg(h), {agent} = await hire(h, users.alice);
+  const h = makeStudio(), users = await seedOrg(h), {agent, token} = await hire(h, users.alice);
+  h.studio.deps.webAppUrl = `${ORIGIN}/studio`;
   let now = NOW;
   const directory = mkdtempSync(join(tmpdir(), 'vox-relationship-fence-')); paths.push(directory);
   const capabilities = ['core_text', 'personalization', 'auto_memory', 'proactive_suggestions'];
@@ -50,33 +53,95 @@ async function fixture() {
   Object.assign(h.studio.deps, {relationshipAuthority: authority, relationships: loop, relationshipStore: store,
     relationshipConfig: {mode: 'live', agentIds: [agent.id], personIds: [personId(ID.alice)]}});
   const permit = (await authority.resolve(ID.alice, agent.id, 'work'))!; expect(permit).not.toBeNull();
-  const request = (text: string) => new Request('https://vox.example/api/studio/conversation', {method: 'POST', headers: {origin: 'https://vox.example', 'content-type': 'application/json',
-    'x-telegram-init-data': signInitData({id: ID.alice, first_name: 'Alice'}, TOKEN)}, body: JSON.stringify({agentId: agent.id, space: 'work', text})});
-  return {h, store, permit, request};
+  const studioText = (text: string) => handleConversationRequest(h.studio, new Request(`${ORIGIN}/api/studio/conversation`, {method: 'POST',
+    headers: {origin: ORIGIN, 'content-type': 'application/json', 'x-telegram-init-data': signInitData({id: ID.alice, first_name: 'Alice'}, TOKEN)},
+    body: JSON.stringify({agentId: agent.id, space: 'work', text})}), TOKEN);
+  const petText = (text: string) => handlePetRequest(h.studio, new Request(`${ORIGIN}/api/studio/pet/${agent.id}/talk`, {method: 'POST',
+    headers: {origin: ORIGIN, 'content-type': 'application/json', 'x-pet-tz': 'UTC', 'x-telegram-init-data': signInitData({id: ID.alice, first_name: 'Alice'}, token)},
+    body: JSON.stringify({text})}), agent.id, ['talk']);
+  const voice = () => h.studio.callTurn(users.alice, agent.id, new ArrayBuffer(3), 'audio/webm');
+  /** Commits `action` once, either before the reply's provider call or after it returns. */
+  const controlDuring = (action: 'stop' | 'pause' | 'forget', timing: 'before' | 'after', sourceIds?: string[]) => {
+    const complete = h.chatLLM.complete.bind(h.chatLLM);
+    const fired = {value: false};
+    const control = async () => { if (!fired.value) { fired.value = true; await loop.control(permit.key, action, sourceIds ? {sourceIds} : {}); } };
+    vi.spyOn(h.chatLLM, 'complete').mockImplementation(async (request: LLMRequest) => {
+      if (timing === 'before') await control();
+      const out = await complete(request);
+      if (timing === 'after') await control();
+      return out;
+    });
+    return fired;
+  };
+  return {h, store, permit, studioText, petText, voice, controlDuring};
 }
 
-describe('relationship observation inside a FILE-profile text turn', () => {
-  it('replies to consecutive turns although each one bumps the relationship revision', async () => {
+describe('a FILE-profile turn and its own relationship observation', () => {
+  it('replies to consecutive Studio text turns although each one bumps the relationship revision', async () => {
     const f = await fixture();
     const before = (await f.store.read(f.permit.key)).revision;
     for (const text of ['Synthetic first turn', 'Synthetic second turn']) {
-      const response = await handleConversationRequest(f.h.studio, f.request(text), TOKEN);
+      const response = await f.studioText(text);
       expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({reply: REPLY});
     }
     expect(f.h.chatLLM.replyRequests).toHaveLength(2);
     expect((await f.store.read(f.permit.key)).revision).toBeGreaterThanOrEqual(before + 2);
   });
 
-  it.each(['stop', 'pause', 'forget'] as const)('still suppresses the reply when a relationship %s commits during inference', async (action) => {
+  it('replies to consecutive pet talk turns', async () => {
     const f = await fixture();
-    const complete = f.h.chatLLM.complete.bind(f.h.chatLLM);
-    let fired = false;
-    vi.spyOn(f.h.chatLLM, 'complete').mockImplementation(async (request) => {
-      if (!fired) { fired = true; await f.h.studio.deps.relationships!.control(f.permit.key, action); }
-      return complete(request);
-    });
-    const response = await handleConversationRequest(f.h.studio, f.request('Synthetic turn during a control'), TOKEN);
-    expect(fired).toBe(true);
+    for (const text of ['Synthetic pet hello', 'Synthetic pet again']) {
+      const response = await f.petText(text);
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({reply: REPLY});
+    }
+  });
+
+  it('replies to consecutive voice turns (pet hold-to-talk and Studio calls)', async () => {
+    const f = await fixture();
+    for (let i = 0; i < 2; i++) expect(await f.voice()).toMatchObject({reply: REPLY});
+  });
+});
+
+describe('a relationship control during the turn still voids it', () => {
+  it.each([
+    ['stop', 'before'], ['pause', 'before'], ['forget', 'before'],
+    ['stop', 'after'], ['pause', 'after'], ['forget', 'after'],
+  ] as const)('Studio text: %s committed %s the provider call', async (action, timing) => {
+    const f = await fixture();
+    const fired = f.controlDuring(action, timing);
+    const response = await f.studioText('Synthetic turn during a control');
+    expect(fired.value).toBe(true);
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({error: 'conversation_changed'});
+    if (timing === 'before') expect(f.h.chatLLM.replyRequests).toHaveLength(0);
+  });
+
+  it.each(['stop', 'forget'] as const)('pet talk: %s committed after the provider call', async (action) => {
+    const f = await fixture();
+    const fired = f.controlDuring(action, 'after');
+    const response = await f.petText('Synthetic pet turn during a control');
+    expect(fired.value).toBe(true);
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({error: 'conversation_failed', message: 'conversation_changed'});
+  });
+
+  it.each(['stop', 'forget'] as const)('voice: %s committed after the provider call', async (action) => {
+    const f = await fixture();
+    const fired = f.controlDuring(action, 'after');
+    await expect(f.voice()).rejects.toMatchObject({status: 409});
+    expect(fired.value).toBe(true);
+  });
+
+  it('a single-source forget still counts once the forgotten list is at its cap', async () => {
+    const f = await fixture();
+    await f.store.update(f.permit.key, s => { s.forgottenSourceIds = Array.from({length: 256}, (_, i) => `synthetic-old-${i}`); s.revision++; });
+    expect((await f.store.read(f.permit.key)).forgottenSourceIds).toHaveLength(256);
+    const fired = f.controlDuring('forget', 'after', ['synthetic-late-source']);
+    const response = await f.studioText('Synthetic turn during a capped forget');
+    expect(fired.value).toBe(true);
+    expect((await f.store.read(f.permit.key)).forgottenSourceIds).toHaveLength(256);
     expect(response.status).toBe(409);
   });
 });
