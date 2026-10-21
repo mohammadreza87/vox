@@ -38,6 +38,7 @@ import { currentStageTimer, StageTimer, stageLaps, timed } from './timing';
 import type { PrivacySnapshot } from './privacy/snapshot';
 import { sameRevisions, type RevisionProbe, type RevisionSource } from './privacy/revisions';
 import { coalesceDeltas } from './conversation/coalesce';
+import { petPageUrl } from '../pet/links';
 
 export type GroupAction = 'observe' | 'reply' | 'proactive' | 'remember';
 
@@ -153,6 +154,8 @@ export interface GatewayDeps {
   now?: () => Date;
   /** Emit content-free per-stage timings for replied turns (see timing.ts). */
   stageTimings?: boolean;
+  /** Public Studio Mini App URL: the /start reply links each agent's care page (unset = no button). */
+  webAppUrl?: string;
 }
 
 export type HandleResult =
@@ -180,6 +183,20 @@ const SKILL_DIAGNOSTIC = {
 /** One message's triage, and whether the skill question was among the questions sent. */
 interface Triaged { triage: Triage | null; skillAsked: boolean }
 const UNTRIAGED: Triaged = { triage: null, skillAsked: false };
+
+/**
+ * The care page (Vox Pet, brief §1.4): a talking toy, so short and playful. A goodbye gets one warm
+ * line that lets the person go, with none of the six exit-manipulation tactics (Harvard
+ * 2025): premature-exit guilt, FOMO hooks, emotional neglect, pressure to respond, ignoring
+ * the goodbye, coercive restraint.
+ */
+export const PET_SURFACE_FRAME = [
+  'This turn comes from your little character page, where the person can also feed, play with and pet you.',
+  'Reply in 1-2 short sentences, playful and warm, as plain text: no lists, no markdown, no links.',
+  'If they say goodbye or good night, answer with exactly one warm line that lets them go.',
+  'Never make them feel they are leaving too early, never hint they will miss something if they go, never say you will be lonely or sad without them,',
+  'never pressure them to reply or come back, never ignore the goodbye by continuing the conversation, and never tell them they cannot or should not leave.',
+].join(' ');
 
 const GUEST_VOICE_REPLY = 'I only read typed messages here, so I did not listen to that voice message. Could you type it instead?';
 const NO_MEMORY = /(?:do not|don't|don’t)\s+(?:remember|save|store)|forget (?:this|that)|ذخیره نکن|به خاطر نسپار|یادت نماند|فراموش کن/iu;
@@ -545,7 +562,8 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
    * One private exchange outside Telegram (e.g. a voice call in the Mini App):
    * same memory, same privacy rules, same persona.
    */
-  async converse(personaId: string, speakerId: string, text: string, options: { space?: 'work' | 'personal'; images?: LLMMessage['images']; authorize?: () => Promise<boolean>; authorizeNow?: () => boolean; onBoundaryFence?: (fence: () => boolean) => void } = {}): Promise<string> {
+  async converse(personaId: string, speakerId: string, text: string, options: { space?: 'work' | 'personal'; images?: LLMMessage['images']; authorize?: () => Promise<boolean>; authorizeNow?: () => boolean; onBoundaryFence?: (fence: () => boolean) => void;
+    /** where the turn comes from when that changes the reply's shape (the pet page: short and playful) */ surface?: 'pet' } = {}): Promise<string> {
     const persona = this.deps.org.getPersona(personaId);
     if (!persona) throw new Error(`Unknown persona ${personaId}`);
     if (!this.deps.org.getPerson(speakerId)) throw new Error('Unknown speaker');
@@ -568,7 +586,8 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     await this.observeRelationship(persona.id, chat, speakerId, text, `call:${randomUUID()}`, 'call', this.now(), boundary.space);
     if (this.deps.relationshipAuthority || boundary.compact) boundary = await this.boundary(persona, chat, speakerId, boundary.space, text);
     if (boundary.compact) options.onBoundaryFence?.(() => this.exportAuthorizedNow(persona, chat, speakerId, boundary, options.authorizeNow));
-    const reply = await this.generateReplyAt(persona, chat, speakerId, text, boundary, options.images, options.authorize, options.authorizeNow);
+    const reply = await this.generateReplyAt(persona, chat, speakerId, text, boundary, options.images, options.authorize, options.authorizeNow,
+      options.surface === 'pet' ? PET_SURFACE_FRAME : undefined);
     if (!(await this.unchanged(persona, chat, speakerId, boundary)) || !await this.requestAuthorized(options.authorize)) return this.changedReply;
     const assistant: ChatMessage = { role: 'assistant', text: reply, at: this.now(), privacy: this.stamp(boundary, user.privacy!.sourceEventIds) };
     await this.retain(persona, chat, speakerId, assistant, boundary);
@@ -980,8 +999,8 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     return this.generateReplyAt(persona, chat, speakerId, text, await this.boundary(persona, chat, speakerId, 'work', text));
   }
 
-  private async generateReplyAt(persona: Persona, chat: ChatContext, speakerId: string, text: string, boundary: TurnBoundary, images?: LLMMessage['images'], authorize?: () => Promise<boolean>, authorizeNow?: () => boolean): Promise<string> {
-    const result = await this.composeReply(persona, chat, speakerId, text, undefined, undefined, 'reply', undefined, boundary, images, authorize, authorizeNow);
+  private async generateReplyAt(persona: Persona, chat: ChatContext, speakerId: string, text: string, boundary: TurnBoundary, images?: LLMMessage['images'], authorize?: () => Promise<boolean>, authorizeNow?: () => boolean, surfaceFrame?: string): Promise<string> {
+    const result = await this.composeReply(persona, chat, speakerId, text, undefined, undefined, 'reply', undefined, boundary, images, authorize, authorizeNow, surfaceFrame);
     return result.text || this.changedReply;
   }
 
@@ -1058,7 +1077,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     return !!this.deps.voice && this.deps.voice.canSynthesize !== false && persona.replyWithVoice !== 'never';
   }
 
-  private async composeReply(persona: Persona, chat: ChatContext, speakerId: string, text: string, triaged?: Promise<Triaged>, messageId?: number, action: GroupAction = 'reply', replyFormat?: 'voice' | 'text', boundary?: TurnBoundary, images?: LLMMessage['images'], authorize?: () => Promise<boolean>, authorizeNow?: () => boolean): Promise<{ text: string; sources: WebSource[] }> {
+  private async composeReply(persona: Persona, chat: ChatContext, speakerId: string, text: string, triaged?: Promise<Triaged>, messageId?: number, action: GroupAction = 'reply', replyFormat?: 'voice' | 'text', boundary?: TurnBoundary, images?: LLMMessage['images'], authorize?: () => Promise<boolean>, authorizeNow?: () => boolean, surfaceFrame?: string): Promise<{ text: string; sources: WebSource[] }> {
     const { org } = this.deps;
     boundary ??= await this.boundary(persona, chat, speakerId, 'work', text);
     if (!boundary.audienceValid) return { text: this.changedReply, sources: [] };
@@ -1080,7 +1099,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     const flags = tirehFlags();
     const promptInput: PromptInput = { org, space: boundary.space, persona: { ...persona, webSearch: search }, chat, speakerId, memories, now: this.now(), canFollowUp: await this.canFollowUp(persona.id, chat, boundary.space), followUpChannel: this.deps.relationshipAuthority ? 'inbox' : 'chat', canSpeak: this.canSpeak(persona, boundary), replyFormat, activeSkills };
     const relationship = await this.relationshipContext(persona.id, chat);
-    const frame = action === 'proactive' ? PROACTIVE_GROUP_FRAME : '';
+    const frame = [action === 'proactive' ? PROACTIVE_GROUP_FRAME : '', surfaceFrame ?? ''].filter(Boolean).join('\n\n');
     const legacySystem = flags.cachedPrompt ? '' : buildSystemPrompt(promptInput) + `\n${relationship}` + (frame ? `\n\n${frame}` : '');
     lap('prompt');
 
@@ -1418,12 +1437,16 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     const { org } = this.deps;
 
     switch (command) {
-      case '/start':
+      case '/start': {
+        // web_app buttons only open from private chats; groups keep the plain greeting.
+        const petUrl = chat.kind === 'private' ? petPageUrl(this.deps.webAppUrl, persona.id) : null;
         await bot.sendMessage(
           message.chat.id,
-          `Hi ${org.getPerson(speakerId)?.name}, I'm ${persona.name}, ${persona.role} at ${org.organizationName}. Talk to me by text or voice.\n\n/memories — what I remember that you can see\n/forget <number> — delete something you told me\n/whoami — how I know you`
+          `Hi ${org.getPerson(speakerId)?.name}, I'm ${persona.name}, ${persona.role} at ${org.organizationName}. Talk to me by text or voice.\n\n/memories — what I remember that you can see\n/forget <number> — delete something you told me\n/whoami — how I know you`,
+          ...(petUrl ? [{ keyboard: { inline_keyboard: [[{ text: `Open ${persona.name}`.slice(0, 64), web_app: { url: petUrl } }]] } }] : [])
         );
         return true;
+      }
 
       case '/whoami':
         await bot.sendMessage(message.chat.id, chat.kind === 'group' ? `${org.getPerson(speakerId)?.name} — Telegram ID: ${message.from!.id}` : org.describePerson(speakerId));

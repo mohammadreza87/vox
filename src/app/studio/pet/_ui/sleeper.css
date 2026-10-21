@@ -1,0 +1,11 @@
+/* The quiet screens (private, outside Telegram, resting, offline): loaded with Sleeper only when one shows, so the
+   pet's own route CSS stays inside its budget. Tokens and .pet-breathe come from pet.css. */
+.pet-sleeper { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 24px; text-align: center; background-repeat: no-repeat; }
+.pet-sleeper-char { position: relative; margin-bottom: 14px; }
+.pet-zz { position: absolute; right: 10%; top: 4%; font: 700 22px/1 var(--f-display); color: #E6EEFF; animation: petZ 3.4s var(--ease-sine) infinite; }
+@keyframes petZ { 0% { opacity: 0; transform: translate(0, 6px) scale(.7); } 30% { opacity: .9; } 100% { opacity: 0; transform: translate(14px, -26px) scale(1.15); } }
+.pet-sleeper-title { margin: 0; font: 600 22px/28px var(--f-display); letter-spacing: -.01em; }
+.pet-sleeper-body { margin: 0; max-width: 280px; color: var(--text-2); }
+.pet-retry { width: auto; height: 48px; margin-top: 14px; }
+/* no engine here to carry data-tier: the OS setting directly (§2.9) */
+@media (prefers-reduced-motion: reduce) { .pet-sleeper :is(.pet-breathe, .pet-zz) { animation: none; } }

@@ -1,7 +1,7 @@
 'use client';
 
 import { AnimatePresence, motion, type Variants } from 'framer-motion';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, haptic, type AgentView } from '../../../_lib/client';
 import { spawnCopy } from '../../../_lib/spawn-copy';
 import { DUR, EASE, SPRING } from '../../../_lib/motion';
@@ -56,7 +56,15 @@ export function SpawnScreen({ draftId, successorOf }: { draftId?: string; succes
   /** A draft just landed: the Brief step's forming creature poofs into its look before Draft opens */
   const [drafted, setDrafted] = useState(false);
   const briefDirty = useRef(false);
+  /** The agent this session's Brief drafted: from then on there is a saved draft, not a brief, to lose */
+  const draftedId = useRef<string | null>(null);
+  /** The person left (Discard, or the screen went away) while a draft request was still out */
+  const left = useRef(false);
   const dir = useRef(1);
+
+  // Stable, so BriefStep's effect doesn't re-report a stale "dirty" after the draft landed (the text is still in its composer).
+  const onBriefDirty = useCallback((d: boolean) => { briefDirty.current = d && !draftedId.current; }, []);
+  useEffect(() => { left.current = false; return () => { left.current = true; }; }, []);
 
   useEffect(() => {
     if (!draftId) return;
@@ -98,8 +106,12 @@ export function SpawnScreen({ draftId, successorOf }: { draftId?: string; succes
     go(flow[index + 1]);
   };
 
-  /** Back leaves the wizard from its first reachable step and from Telegram's waiting/hired states. */
-  const leaves = step === 'brief' || (step === 'draft' && !!draftId)
+  /**
+   * Back leaves the wizard from its first reachable step and from Telegram's waiting/hired states.
+   * Draft is first once an agent exists (a reopened draft, or one the Brief just made): stepping back
+   * into an empty Brief would only draft a second agent and leave this one behind on Home.
+   */
+  const leaves = step === 'brief' || step === 'draft'
     || (step === 'hire' && (agent?.status === 'active' || (!!draftId && agent?.status === 'awaiting_bot')));
   const prev = async () => {
     // An open sheet takes Back first, as Telegram's Back does: it closes and the step (and brief) stay.
@@ -108,9 +120,14 @@ export function SpawnScreen({ draftId, successorOf }: { draftId?: string; succes
       nav.cache?.set(agent.id, agent);
       nav.reset({ name: 'home' }, { name: 'agent', id: agent.id });
     } else if (leaves) {
-      if (step === 'brief' && briefDirty.current && !(await confirm({
-        title: c.discardBriefTitle, confirmLabel: c.discard, tone: 'danger', body: c.discardBriefBody,
-      }))) return;
+      if (step === 'brief' && briefDirty.current) {
+        if (!(await confirm({ title: c.discardBriefTitle, confirmLabel: c.discard, tone: 'danger', body: c.discardBriefBody }))) return;
+        // "Won't be kept": a draft that landed while this dialog was open goes too.
+        const landed = draftedId.current;
+        if (landed) { nav.cache?.delete(landed); void api.deleteDraft(landed).catch(() => {}); }
+      }
+      // Leaving the Brief while a draft is still in flight: onDraft deletes it when it lands.
+      if (step === 'brief') left.current = true;
       nav.back();
     } else if (index > 0) go(flow[index - 1]);
   };
@@ -143,9 +160,14 @@ export function SpawnScreen({ draftId, successorOf }: { draftId?: string; succes
         <AnimatePresence mode="wait" initial={false} custom={ctx}>
           <motion.div key={step} className="vx-step" custom={ctx} variants={stepVariants} initial="enter" animate="center" exit="exit">
             {step === 'brief' && (
-              <BriefStep busy={busy} successorOf={successorOf} error={operationError} onDirty={(d) => { briefDirty.current = d; }} onDraft={async (brief) => {
+              <BriefStep busy={busy} successorOf={successorOf} error={operationError} onDirty={onBriefDirty} onDraft={async (brief) => {
+                left.current = false;   // asking for a draft means the person is here, whatever an earlier Close did
                 const r = await run('draft', () => api.draft(brief, successorOf));
-                if (r) { haptic.success(); briefDirty.current = false; update(r.agent); setNames(r.names); setDrafted(true); markFreshAgent(r.agent.id); }
+                if (!r) return;
+                // Discarded (or closed) while Claude was drafting: nothing is kept, so no orphan draft on Home.
+                if (left.current) { void api.deleteDraft(r.agent.id).catch(() => {}); return; }
+                draftedId.current = r.agent.id;
+                haptic.success(); briefDirty.current = false; update(r.agent); setNames(r.names); setDrafted(true); markFreshAgent(r.agent.id);
               }} drafted={drafted ? agent?.look : null} onDrafted={() => { setDrafted(false); go('draft'); }} />
             )}
             {step === 'draft' && agent && <PersonaStep agent={agent} names={names} busy={busy} run={run} onUpdate={update} onNext={next} live={live} onSayHi={() => setSayHi(true)} />}

@@ -172,6 +172,45 @@ describe('Spawn order and navigation (D15)', () => {
     expect(state.nav.back).toHaveBeenCalledTimes(1);
   });
 
+  it('deletes a draft that lands after its brief was discarded mid-draft', async () => {
+    let land!: (r: { agent: AgentView; names: string[] }) => void;
+    state.draft.mockReturnValue(new Promise((resolve) => { land = resolve; }));
+    state.deleteDraft.mockResolvedValue({ ok: true });
+    await act(async () => { render(<ConfirmProvider><SpawnScreen /></ConfirmProvider>); });
+    fireEvent.change(brief(), { target: { value: 'A careful analyst' } });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /draft with claude/i })); });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Close' })); });
+    await act(async () => { fireEvent.click(within(screen.getByRole('dialog', { name: 'Discard this brief?' })).getByRole('button', { name: 'Discard' })); });
+    expect(state.nav.back).toHaveBeenCalledTimes(1);
+
+    await act(async () => { land({ agent: agent(), names: ['Nova'] }); });
+    expect(state.deleteDraft).toHaveBeenCalledWith('fixture-agent');
+    expect(state.nav.cache.has('fixture-agent')).toBe(false);
+  });
+
+  it('once the draft has landed, Close keeps it as a draft: no brief to discard, no Back into an empty Brief', async () => {
+    state.draft.mockResolvedValue({ agent: agent(), names: ['Nova'] });
+    await act(async () => { render(<ConfirmProvider><SpawnScreen /></ConfirmProvider>); });
+    fireEvent.change(brief(), { target: { value: 'A careful analyst' } });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /draft with claude/i })); });
+
+    // During the poof the Brief is still up, but what was written is now a saved draft
+    expect(step(1)).toBeInTheDocument();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Close' })); });
+    expect(screen.queryByRole('dialog', { name: 'Discard this brief?' })).not.toBeInTheDocument();
+    expect(state.nav.back).toHaveBeenCalledTimes(1);
+
+    // On Draft the lead is ✕ too: it leaves (the draft waits on Home) instead of redrafting from an empty Brief
+    await act(async () => { await vi.advanceTimersByTimeAsync(2500); });
+    expect(step(2)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(state.nav.back).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole('heading', { name: 'Who do you need?' })).not.toBeInTheDocument();
+    expect(state.draft).toHaveBeenCalledTimes(1);
+    expect(state.deleteDraft).not.toHaveBeenCalled();
+    expect(state.nav.cache.get('fixture-agent')?.persona.name).toBe('Nova');
+  });
+
   it('closes an untouched brief at once; its one volt CTA is Surprise me until something is typed', async () => {
     const { container } = render(<SpawnScreen />);
     expectOneVolt(container);

@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { guestRightsCopy } from '@/lib/adaptive/guest-rights/notice';
 import type { GuestCreate } from '@/lib/adaptive/guest-rights/contracts';
-import { guestRightsApi, GuestClientError, type GuestNotice, type GuestDraft, type GuestCurrent } from '../studio/_lib/guest-rights-client';
+import { guestRightsApi, GuestClientError, type GuestNotice, type GuestDraft, type GuestCurrent } from '../../studio/_lib/guest-rights-client';
 export function GuestRightsPanel() {
     const [locale, setLocale] = useState<'en' | 'fa'>('en'), [notice, setNotice] = useState<GuestNotice>(), [draft, setDraft] = useState<GuestDraft>(), [reference, setReference] = useState(''), [credential, setCredential] = useState(''), [showCode, setShowCode] = useState(false), [saved, setSaved] = useState(false), [kind, setKind] = useState<GuestCreate['kind']>('access_export'), [context, setContext] = useState<GuestCreate['context']>('unknown'), [current, setCurrent] = useState<GuestCurrent>(), [busy, setBusy] = useState(false), [message, setMessage] = useState<'unknown' | 'error' | 'missing' | null>(null), [closing, setClosing] = useState(false);
     const [hydrated, setHydrated] = useState(false);
