@@ -48,6 +48,8 @@ export const COPY = {
   outsideBody: 'Tap the menu button in the bot’s chat.',
   restingTitle: 'Resting',
   restingBody: 'This one is not around right now.',
+  unavailableTitle: 'Can’t open this pet',
+  unavailableBody: 'Try again in a moment, or reopen it from the bot’s chat.',
   offlineTitle: 'Can’t reach the cloud',
   offlineBody: 'Check the connection and try again.',
   retry: 'Try again',

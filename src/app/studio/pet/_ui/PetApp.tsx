@@ -108,10 +108,15 @@ export function PetApp({ agentId, api }: { agentId: string; api?: PetApi }) {
   const current = scope.agentId === agentId && scope.signed === (tg()?.initData ?? '');
   if (!scope.active || !current) return <main className="pet-root" data-pet-root="" data-paused="" style={{ backgroundColor: PET_GROUND }} />;
   return <PetSession key={`${agentId}:${scope.generation}`} agentId={agentId} injected={api} signed={scope.signed}
-    onForget={() => { blocked.current = true; }} />;
+    onForget={() => { blocked.current = true; }} onRetry={() => {
+      // A retry starts with a fresh authenticated GET and fresh request/care/audio state.
+      // Never revive the quiesced session or retry across an account/foreground change.
+      if (blocked.current || !pageActive() || scopeRef.current.agentId !== agentId || scopeRef.current.signed !== (tg()?.initData ?? '')) return;
+      setScope((s) => ({ ...s, generation: s.generation + 1 }));
+    }} />;
 }
 
-function PetSession({ agentId, injected, signed, onForget }: { agentId: string; injected?: PetApi; signed: string; onForget(): void }) {
+function PetSession({ agentId, injected, signed, onForget, onRetry }: { agentId: string; injected?: PetApi; signed: string; onForget(): void; onRetry(): void }) {
   const baseApi = useMemo(() => injected ?? createPetApi(), [injected]);
   const alive = useRef(true);
   const allowed = useRef(true);
@@ -288,7 +293,9 @@ function PetSession({ agentId, injected, signed, onForget }: { agentId: string; 
   denyRef.current = (e) => {
     clearPrivate();
     const b = isPetError(e) && e.code === 'pet_private' && e.body && 'look' in e.body ? e.body : undefined;
-    setFatal({ kind: isPetError(e) && e.status === 401 ? 'outside' : b ? 'private' : 'resting', look: b?.look, stage: b?.stage, name: b?.name });
+    const kind = isPetError(e) && e.status === 401 ? 'outside' : b ? 'private'
+      : isPetError(e) && e.status === 404 && e.code === 'pet_unavailable' ? 'resting' : 'unavailable';
+    setFatal({ kind, look: b?.look, stage: b?.stage, name: b?.name });
   };
 
   function adoptView(v: PetView) {
@@ -669,7 +676,7 @@ function PetSession({ agentId, injected, signed, onForget }: { agentId: string; 
   if (fatal) {
     return (
       <Suspense fallback={<main className="pet-root" data-pet-root="" style={{ backgroundColor: bd?.edge ?? PET_GROUND }} />}>
-        <Sleeper kind={fatal.kind} look={fatal.look} stage={fatal.stage} name={fatal.name} onRetry={fatal.kind === 'offline' ? () => { setFatal(null); void load(); } : undefined} />
+        <Sleeper kind={fatal.kind} look={fatal.look} stage={fatal.stage} name={fatal.name} onRetry={fatal.kind === 'offline' || fatal.kind === 'unavailable' ? onRetry : undefined} />
       </Suspense>
     );
   }

@@ -287,6 +287,62 @@ describe('PetApp: talk outcomes, sleep, the cache and the page', () => {
     expect(localStorage.getItem(SNAPSHOT_KEY('x'))).toBeNull();
   });
 
+  it('shows a temporary service failure honestly and retries with a fresh working care session', async () => {
+    telegram();
+    const base = fast();
+    const get = vi.fn(base.get).mockRejectedValueOnce(new PetError(503, 'pet_unavailable', 'Unavailable'));
+    const care = vi.fn(base.care);
+    const { container } = render(<PetApp agentId="x" api={fast({ get, care })} />);
+    expect(await screen.findByRole('heading', { name: 'Can’t open this pet' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Resting' })).toBeNull();
+    expect(screen.queryByRole('textbox')).toBeNull();
+    expect(engines).toHaveLength(0);
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await ready(container);
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole('textbox', { name: 'Talk to Mochi' })).toBeInTheDocument();
+    act(() => { engine().fire.mockClear(); engines[0].opts.onCue?.({ type: 'care', action: 'feed' }); });
+    await waitFor(() => expect(care).toHaveBeenCalledTimes(1));
+  });
+
+  it('quiesces an access error and rechecks the server before restoring any private pet state', async () => {
+    telegram();
+    const base = fast();
+    const fresh = await base.get('x');
+    const get = vi.fn(base.get).mockResolvedValueOnce({ ...fresh, name: 'PRIVATE_BEFORE_DENIAL' });
+    const care = vi.fn(async () => { throw new PetError(403, 'origin_denied', 'Denied'); });
+    const { container } = render(<PetApp agentId="x" api={fast({ get, care })} />);
+    await ready(container);
+    expect(screen.getByRole('textbox', { name: 'Talk to PRIVATE_BEFORE_DENIAL' })).toBeInTheDocument();
+    act(() => { engines[0].opts.onCue?.({ type: 'care', action: 'feed' }); });
+    expect(await screen.findByRole('heading', { name: 'Can’t open this pet' })).toBeInTheDocument();
+    expect(container.textContent).not.toContain('PRIVATE_BEFORE_DENIAL');
+    expect(screen.queryByRole('textbox')).toBeNull();
+    expect(engines[0].e.stop).toHaveBeenCalled();
+    get.mockRejectedValueOnce(new PetError(401, 'authentication_required', 'Expired'));
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByRole('heading', { name: 'Open me in Telegram' })).toBeInTheDocument();
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole('textbox')).toBeNull();
+    expect(container.textContent).not.toContain('PRIVATE_BEFORE_DENIAL');
+    expect(engines).toHaveLength(1);
+  });
+
+  it.each([
+    { status: 401, code: 'authentication_required' as const, title: 'Open me in Telegram' },
+    { status: 404, code: 'pet_unavailable' as const, title: 'Resting' },
+    { status: 403, code: 'pet_private' as const, title: 'This one’s private' },
+  ])('keeps the explicit $code state distinct from temporary service failure', async ({ status, code, title }) => {
+    telegram();
+    const fresh = await fast().get('x');
+    const body = code === 'pet_private' ? { error: code, look: fresh.look, name: 'Private fixture', stage: fresh.stage } : undefined;
+    render(<PetApp agentId="x" api={fast({ get: async () => { throw new PetError(status, code, 'Denied', body); } })} />);
+    expect(await screen.findByRole('heading', { name: title })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+    expect(screen.queryByRole('textbox')).toBeNull();
+    expect(engines).toHaveLength(0);
+  });
+
   it('drops delayed previous-account GET and pending care when the signed session changes', async () => {
     const { app } = telegram();
     const fresh = await fast().get('x');

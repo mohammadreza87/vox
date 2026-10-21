@@ -186,6 +186,19 @@ describe('writes and limits', () => {
     h.studio.deps.pets = { update: vi.fn(async () => { throw new Error('disk'); }) } as never;
     expect(await (await call()).json()).toEqual({ error: 'pet_unavailable' });
   });
+
+  it('preserves the stale-care conflict from an instrumentation-owned store module', async () => {
+    const { h, call } = await setup();
+    vi.resetModules();
+    const { PetCareChangedError } = await import('../pet-store');
+    h.studio.deps.pets = {
+      erasureEpoch: async () => 'initial', erasureEpochNow: () => 'initial',
+      update: vi.fn(async () => { throw new PetCareChangedError('Pet care changed'); }),
+    } as never;
+    const res = await call();
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: 'conversation_failed', message: 'pet_care_changed' });
+  });
 });
 
 describe('the open event', () => {
