@@ -49,13 +49,13 @@ describe('RelationshipPanel', () => {
     vi.mocked(api.relationship).mockResolvedValueOnce({ relationship: make('work', { available: false, mode: 'off' }) });
     render(<RelationshipPanel agentId="nova" name="Nova" space="work" identityConfirmed />);
     expect(await screen.findByText(/Follow-ups are unavailable/)).toBeVisible();
-    fireEvent.click(screen.getByRole('button', { name: 'Stop follow-ups' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Off' }));
     await waitFor(() => expect(api.updateRelationship).toHaveBeenCalledWith('nova', expect.objectContaining({ action: 'stop', space: 'work' }), 'work'));
   });
 
   it('starts external alerts off and sends explicit scope when enabled', async () => {
     render(<RelationshipPanel agentId="nova" name="Nova" space="personal" identityConfirmed />);
-    const alerts = await screen.findByRole('checkbox', { name: 'Generic Telegram alerts' });
+    const alerts = await screen.findByRole('switch', { name: /^Generic Telegram alerts/ });
     expect(alerts).not.toBeChecked();
     fireEvent.click(alerts);
     await waitFor(() => expect(api.updateRelationship).toHaveBeenCalledWith('nova', { action: 'external', enabled: true, space: 'personal' }, 'personal'));
@@ -67,7 +67,7 @@ describe('RelationshipPanel', () => {
     expect(await screen.findByText('بررسی‌های خصوصی تا زمان تأیید هویت پنهان هستند.')).toBeVisible();
     expect(screen.queryByText('personal private check-in')).not.toBeInTheDocument();
     expect(container.querySelector('section')).toHaveAttribute('dir', 'rtl');
-    expect(screen.getByRole('button', { name: 'توقف پیگیری' })).toBeEnabled();
+    expect(screen.getByRole('tab', { name: 'خاموش' })).toBeEnabled();
   });
 });
 
@@ -79,9 +79,9 @@ it('removes cached derived check-ins across pause/resume boundaries while retain
   view.rerender(<RelationshipPanel agentId="nova" name="Nova" space="work" identityConfirmed />);
   expect(screen.queryByText('work private check-in')).toBeNull();
   expect(screen.getByRole('button', { name: 'Remove source' })).toBeEnabled();
-  expect(screen.getByRole('button', { name: 'Stop follow-ups' })).toBeEnabled();
+  expect(screen.getByRole('tab', { name: 'Off' })).toBeEnabled();
   expect(screen.getByRole('button', { name: 'Forget relationship context' })).toBeEnabled();
-  expect(screen.getByRole('checkbox', { name: 'Generic Telegram alerts' })).toBeDisabled();
+  expect(screen.getByRole('switch', { name: /^Generic Telegram alerts/ })).toBeDisabled();
   pauseState.coveredBlocked = false; pauseState.status = { productPaused: false, useEpoch: 2, accountId: 'account' };
   view.rerender(<RelationshipPanel agentId="nova" name="Nova" space="work" identityConfirmed />);
   expect(screen.queryByText('work private check-in')).toBeNull();
@@ -97,7 +97,7 @@ it('strips only derived rows from a pre-pause read settled after resume and admi
   const view = render(relationshipElement()); await waitFor(() => expect(api.relationship).toHaveBeenCalledTimes(1));
   relationshipPause(1, true); view.rerender(relationshipElement()); relationshipPause(2, false); view.rerender(relationshipElement());
   await act(async () => finish({ relationship: make('work', { preferences: [{ key: 'brevity', value: 'OWN_PRIMARY_KEEP' }], sources: [{ id: 'source-own', createdAt: 1 }] as RelationshipView['sources'], inbox: [{ ...make('work').inbox[0], text: 'OLD_DERIVED_READ' }] }) }));
-  expect(screen.queryByText('OLD_DERIVED_READ')).toBeNull(); expect(screen.getByText('OWN_PRIMARY_KEEP')).toBeVisible(); expect(screen.getByRole('button', { name: 'Remove source' })).toBeEnabled(); expect(screen.getByRole('button', { name: 'Stop follow-ups' })).toBeEnabled();
+  expect(screen.queryByText('OLD_DERIVED_READ')).toBeNull(); expect(screen.getByText('OWN_PRIMARY_KEEP')).toBeVisible(); expect(screen.getByRole('button', { name: 'Remove source' })).toBeEnabled(); expect(screen.getByRole('tab', { name: 'Off' })).toBeEnabled();
   expect(api.relationship).toHaveBeenCalledTimes(1);
   vi.mocked(api.relationship).mockResolvedValueOnce({ relationship: make('work', { inbox: [{ ...make('work').inbox[0], text: 'FRESH_AFTER_RESUME' }] }) });
   fireEvent.click(screen.getByRole('button', { name: 'Refresh relationship settings' })); await screen.findByText('FRESH_AFTER_RESUME'); expect(api.relationship).toHaveBeenCalledTimes(2); expect(screen.queryByText('OLD_DERIVED_READ')).toBeNull();
@@ -105,7 +105,7 @@ it('strips only derived rows from a pre-pause read settled after resume and admi
 it('retains a late primary mutation result without restoring the mutation’s old derived inbox after resume', async () => {
   relationshipPause(0, false); let finish!: (value: { relationship: RelationshipView }) => void;
   vi.mocked(api.updateRelationship).mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
-  const view = render(relationshipElement()); await screen.findByText('work private check-in'); fireEvent.click(screen.getByRole('button', { name: 'Stop follow-ups' }));
+  const view = render(relationshipElement()); await screen.findByText('work private check-in'); fireEvent.click(screen.getByRole('tab', { name: 'Off' }));
   await waitFor(() => expect(api.updateRelationship).toHaveBeenCalledTimes(1));
   relationshipPause(1, true); view.rerender(relationshipElement()); relationshipPause(2, false); view.rerender(relationshipElement());
   await act(async () => finish({ relationship: make('work', { disabled: true, preferences: [{ key: 'brevity', value: 'MUTATED_PRIMARY_KEEP' }], sources: [{ id: 'source-own', createdAt: 1 }] as RelationshipView['sources'], inbox: [{ ...make('work').inbox[0], text: 'OLD_DERIVED_MUTATION' }] }) }));
@@ -121,7 +121,7 @@ it.each(['pending', 'unknown'])('does not revive a read across a %s boundary eve
 it.each(['account', 'space'])('rejects an entire old primary/derived mutation after a %s switch', async change => {
   relationshipPause(0, false); let finish!: (value: { relationship: RelationshipView }) => void;
   vi.mocked(api.updateRelationship).mockReturnValueOnce(new Promise(resolve => { finish = resolve; })); const view = render(relationshipElement());
-  await screen.findByText('Work brevity'); fireEvent.click(screen.getByRole('button', { name: 'Stop follow-ups' })); await waitFor(() => expect(api.updateRelationship).toHaveBeenCalledTimes(1));
+  await screen.findByText('Work brevity'); fireEvent.click(screen.getByRole('tab', { name: 'Off' })); await waitFor(() => expect(api.updateRelationship).toHaveBeenCalledTimes(1));
   vi.mocked(api.relationship).mockResolvedValueOnce({ relationship: make(change === 'space' ? 'personal' : 'work', { preferences: [{ key: 'brevity', value: 'NEW_SCOPE_PRIMARY' }], inbox: [] }) });
   if (change === 'account') relationshipPause(0, false, 'account-b'); view.rerender(relationshipElement(change === 'space' ? 'personal' : 'work')); await screen.findByText('NEW_SCOPE_PRIMARY');
   await act(async () => finish({ relationship: make('work', { preferences: [{ key: 'brevity', value: 'OLD_SCOPE_PRIVATE' }] }) })); expect(screen.queryByText('OLD_SCOPE_PRIVATE')).toBeNull(); expect(screen.getByText('NEW_SCOPE_PRIMARY')).toBeVisible(); expect(screen.queryByText('work private check-in')).toBeNull();

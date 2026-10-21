@@ -3,6 +3,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { VoiceScope } from '@/lib/adaptive/voice-identity/contracts';
 import { voiceIdentityApi, voiceDeviceId, captureVoiceSample, type VoiceIdentitySnapshot } from '../_lib/voice-identity-client';
 import { adaptiveApi } from '../_lib/adaptive-client';
+import { haptic } from '../_lib/haptics';
+import { Check, Icon, Row, SheetHead, Spinner } from './ui';
 
 export function VoiceRecognitionPanel({ space, locale = 'en' }: { space: 'work' | 'personal'; locale?: 'en' | 'fa' }) {
   const [data, setData] = useState<VoiceIdentitySnapshot | null>(null);
@@ -54,7 +56,7 @@ export function VoiceRecognitionPanel({ space, locale = 'en' }: { space: 'work' 
       const result = await voiceIdentityApi.sample(scope, next.capture.id, audio, abort.signal);
       if (current !== generation.current || abort.signal.aborted) return;
       setData(result.status); setSelfOnly(false);
-      setMessage(mode === 'enroll' && result.status.enrollment === 'enrolled' ? t('Your enrollment is saved for this device session and space.', 'ثبت صدا برای این نشست دستگاه و این فضا ذخیره شد.') : result.hint?.outcome === 'possible_self' ? t('Possible match to your enrolled voice. Confirm the active profile in Privacy and memory before using private context.', 'احتمال شباهت به صدای ثبت‌شدهٔ شما وجود دارد. پیش از استفاده از زمینهٔ خصوصی، نمایهٔ فعال را در حریم خصوصی و حافظه تأیید کنید.') : t('No reliable hint. Use the authenticated profile controls.', 'نشانهٔ قابل اتکایی پیدا نشد. از کنترل‌های نمایهٔ احراز هویت‌شده استفاده کنید.'));
+      setMessage(mode === 'enroll' && result.status.enrollment === 'enrolled' ? t('Your enrollment is saved for this device session and space.', 'ثبت صدا برای این نشست دستگاه و این فضا ذخیره شد.') : result.hint?.outcome === 'possible_self' ? t('Possible match to your enrolled voice. Confirm the active profile in You before using private context.', 'احتمال شباهت به صدای ثبت‌شدهٔ شما وجود دارد. پیش از استفاده از زمینهٔ خصوصی، نمایهٔ فعال را در بخش «شما» تأیید کنید.') : t('No reliable hint. Use the authenticated profile controls.', 'نشانهٔ قابل اتکایی پیدا نشد. از کنترل‌های نمایهٔ احراز هویت‌شده استفاده کنید.'));
     } catch (e) {
       if (current === generation.current) setError(abort.signal.aborted ? t('Capture cancelled. Refresh to confirm the server enrollment status.', 'ضبط لغو شد. برای تأیید وضعیت ثبت صدا در سرور صفحه را تازه کنید.') : e instanceof DOMException && e.name === 'NotAllowedError' ? t('Microphone permission was denied. You can keep using text and ordinary calls.', 'مجوز میکروفون رد شد. می‌توانید از متن و تماس معمولی استفاده کنید.') : t('Capture was not completed. Refresh before trying again.', 'ضبط کامل نشد. پیش از تلاش دوباره صفحه را تازه کنید.'));
       if (current === generation.current) await voiceIdentityApi.cancel(scope).catch(() => undefined);
@@ -73,32 +75,38 @@ export function VoiceRecognitionPanel({ space, locale = 'en' }: { space: 'work' 
     controller.current?.abort();
     if (scope) void voiceIdentityApi.cancel(scope).catch(() => undefined);
   };
-  return <section className="vx-card vx-privacy-card" dir={fa ? 'rtl' : 'ltr'} lang={locale} aria-label={t('Optional voice recognition', 'تشخیص اختیاری صدا')} aria-busy={busy}>
-    <h2 className="vx-head">{t('Optional voice recognition', 'تشخیص اختیاری صدا')}</h2>
-    <p>{t('Recognition suggests a label for your own voice. It does not authenticate you or change private access. Voice cloning is separate. Text, ordinary calls and authenticated profile selection remain available.', 'تشخیص صدا فقط برچسبی برای صدای خودتان پیشنهاد می‌کند. این قابلیت شما را احراز هویت نمی‌کند و دسترسی خصوصی را تغییر نمی‌دهد. شبیه‌سازی صدا جداست. متن، تماس معمولی و انتخاب نمایهٔ احراز هویت‌شده همچنان در دسترس هستند.')}</p>
-    {error && <p role="alert">{error}</p>}{message && <p role="status">{message}</p>}
-    {!data && !error && <p role="status">{t('Loading…', 'در حال دریافت…')}</p>}
+  return <section className="vx-sheet-stack vx-voice" dir={fa ? 'rtl' : 'ltr'} lang={locale} aria-label={t('Optional voice recognition', 'تشخیص اختیاری صدا')} aria-busy={busy}>
+    <SheetHead title={t('Optional voice recognition', 'تشخیص اختیاری صدا')} sub={t('Recognition suggests a label for your own voice. It does not authenticate you or change private access. Voice cloning is separate. Text, ordinary calls and authenticated profile selection remain available.', 'تشخیص صدا فقط برچسبی برای صدای خودتان پیشنهاد می‌کند. این قابلیت شما را احراز هویت نمی‌کند و دسترسی خصوصی را تغییر نمی‌دهد. شبیه‌سازی صدا جداست. متن، تماس معمولی و انتخاب نمایهٔ احراز هویت‌شده همچنان در دسترس هستند.')} />
+    {error && <div className="vx-banner warn"><Icon name="warn" size={18} /><div className="vx-banner-body"><span role="alert">{error}</span></div></div>}
+    {message && <div className="vx-banner info"><Icon name="info" size={18} /><div className="vx-banner-body"><span role="status">{message}</span></div></div>}
+    {!data && !error && <p className="vx-rights-note" role="status"><Spinner size={14} /> {t('Loading…', 'در حال دریافت…')}</p>}
     {data && <>
-      <p role="status">{data.available ? data.enrollment === 'enrolled' ? t('Enrolled on this device session in this space.', 'در این نشست دستگاه و این فضا ثبت شده است.') : t('No active enrollment on this device session in this space.', 'در این نشست دستگاه و این فضا ثبت فعال وجود ندارد.') : data.reason === 'biometric_consent_required' ? t('Review the separate Voice recognition choice in Privacy and memory first.', 'ابتدا انتخاب جداگانهٔ تشخیص صدا را در حریم خصوصی و حافظه بررسی کنید.') : t('Recognition is unavailable for this profile, region or provider. No recognition microphone capture is enabled.', 'تشخیص صدا برای این نمایه، منطقه یا ارائه‌دهنده در دسترس نیست. ضبط میکروفون برای تشخیص فعال نمی‌شود.')}</p>
-      {data.deletion === 'provider_pending' && <p role="alert">{t('Recognition is blocked. Provider deletion is pending; retry deletion to check again.', 'تشخیص مسدود شده است. حذف نزد ارائه‌دهنده در انتظار است؛ برای بررسی دوباره، حذف را تکرار کنید.')}</p>}
-      {data.deletion === 'online_completed' && <p>{t('Online template deletion completed. Backup expiry follows the operator’s reviewed policy.', 'حذف الگوی آنلاین کامل شد. انقضای پشتیبان‌ها تابع سیاست بررسی‌شدهٔ بهره‌بردار است.')}</p>}
-      {data.notice && <div><h3>{data.notice.title}</h3><p>{data.notice.body}</p></div>}
+      <div className="vx-pause-state" style={{ '--status': data.available && data.enrollment === 'enrolled' ? 'var(--success)' : 'var(--text-3)' } as React.CSSProperties}>
+        <span className="vx-status-dot" aria-hidden="true" />
+        <p role="status">{data.available ? data.enrollment === 'enrolled' ? t('Enrolled on this device session in this space.', 'در این نشست دستگاه و این فضا ثبت شده است.') : t('No active enrollment on this device session in this space.', 'در این نشست دستگاه و این فضا ثبت فعال وجود ندارد.') : data.reason === 'biometric_consent_required' ? t('Review the separate Voice recognition choice in You first.', 'ابتدا انتخاب جداگانهٔ تشخیص صدا را در بخش «شما» بررسی کنید.') : t('Recognition is unavailable for this profile, region or provider. No recognition microphone capture is enabled.', 'تشخیص صدا برای این نمایه، منطقه یا ارائه‌دهنده در دسترس نیست. ضبط میکروفون برای تشخیص فعال نمی‌شود.')}</p>
+      </div>
+      {data.deletion === 'provider_pending' && <div className="vx-banner warn"><Icon name="warn" size={18} /><div className="vx-banner-body"><span role="alert">{t('Recognition is blocked. Provider deletion is pending; retry deletion to check again.', 'تشخیص مسدود شده است. حذف نزد ارائه‌دهنده در انتظار است؛ برای بررسی دوباره، حذف را تکرار کنید.')}</span></div></div>}
+      {data.deletion === 'online_completed' && <p className="vx-footnote">{t('Online template deletion completed. Backup expiry follows the operator’s reviewed policy.', 'حذف الگوی آنلاین کامل شد. انقضای پشتیبان‌ها تابع سیاست بررسی‌شدهٔ بهره‌بردار است.')}</p>}
+      {data.notice && <div className="vx-you-notice"><h3 className="vx-head">{data.notice.title}</h3><p>{data.notice.body}</p></div>}
       {data.available && data.enrollment !== 'purge_pending' && <>
-        {(data.receipt || data.enrollment === 'enrolled') && <label className="vx-privacy-checkbox"><input type="checkbox" checked={selfOnly} disabled={busy} onChange={e => setSelfOnly(e.target.checked)} />{t('Only I am present and speaking live. I want to use only my own voice; no recording or another person.', 'فقط خودم حضور دارم و زنده صحبت می‌کنم. فقط از صدای خودم استفاده می‌کنم، نه صدای ضبط‌شده یا فرد دیگر.')}</label>}
-        {data.enrollment === 'none' && !data.receipt && <button className="vx-btn vx-btn-secondary" disabled={busy} onClick={() => void mutate(() => voiceIdentityApi.present(scope!, data.revision, locale))}>{t('Review enrollment', 'بررسی ثبت صدا')}</button>}
-        {data.enrollment === 'none' && data.receipt && <button className="vx-btn vx-btn-secondary" disabled={busy || !selfOnly} onClick={() => void record('enroll')}>{t('Enroll my voice', 'ثبت صدای من')}</button>}
-        {data.enrollment === 'enrolled' && <button className="vx-btn vx-btn-secondary" disabled={busy || !selfOnly} onClick={() => void record('test')}>{t('Test my voice', 'آزمایش صدای من')}</button>}
+        {(data.receipt || data.enrollment === 'enrolled') && <div className="vx-group"><Row role="checkbox" aria-checked={selfOnly} plain align="top" end={<Check />} disabled={busy}
+          title={t('Only I am present and speaking live. I want to use only my own voice; no recording or another person.', 'فقط خودم حضور دارم و زنده صحبت می‌کنم. فقط از صدای خودم استفاده می‌کنم، نه صدای ضبط‌شده یا فرد دیگر.')}
+          onClick={() => { haptic.select(); setSelfOnly(!selfOnly); }} /></div>}
+        {data.enrollment === 'none' && !data.receipt && <button className="vx-btn vx-btn-secondary vx-btn-block" disabled={busy} onClick={() => void mutate(() => voiceIdentityApi.present(scope!, data.revision, locale))}>{t('Review enrollment', 'بررسی ثبت صدا')}</button>}
+        {data.enrollment === 'none' && data.receipt && <button className="vx-btn vx-btn-primary vx-btn-block" disabled={busy || !selfOnly} onClick={() => void record('enroll')}><Icon name="mic" size={18} />{t('Enroll my voice', 'ثبت صدای من')}</button>}
+        {data.enrollment === 'enrolled' && <button className="vx-btn vx-btn-secondary vx-btn-block" disabled={busy || !selfOnly} onClick={() => void record('test')}><Icon name="mic" size={18} />{t('Test my voice', 'آزمایش صدای من')}</button>}
       </>}
-      {capturing && <div role="status"><p>{t('Recording for up to 10 seconds. Read these numbers aloud:', 'ضبط تا ۱۰ ثانیه. این اعداد را بلند بخوانید:')} <strong dir="ltr">{challenge}</strong></p><button className="vx-btn vx-btn-secondary" onClick={cancel}>{t('Cancel capture', 'لغو ضبط')}</button></div>}
-      <p>{t('Deleting enrollment turns recognition off and deletes enrolled templates on every device in this space. Re-enrollment requires a new separate choice.', 'حذف ثبت صدا، تشخیص را خاموش می‌کند و الگوهای ثبت‌شده را از همهٔ دستگاه‌های این فضا حذف می‌کند. ثبت دوباره به انتخاب جداگانهٔ جدید نیاز دارد.')}</p>
-      <div className="vx-privacy-actions"><button className="vx-btn vx-btn-secondary" disabled={busy} onClick={() => void load()}>{t('Refresh', 'تازه‌سازی')}</button>
-        <button className="vx-btn vx-btn-secondary" disabled={!scope} onClick={() => { void stopAndChange(() => voiceIdentityApi.remove(scope!)); }}>{t('Delete enrollment in this space', 'حذف ثبت صدا در این فضا')}</button>
-        {data.consent === 'granted' && <button className="vx-btn vx-btn-secondary" onClick={() => { void stopAndChange(async () => {
+      {capturing && <div className="vx-voice-capture" role="status"><p>{t('Recording for up to 10 seconds. Read these numbers aloud:', 'ضبط تا ۱۰ ثانیه. این اعداد را بلند بخوانید:')}</p><strong dir="ltr" className="vx-voice-challenge">{challenge}</strong><button className="vx-btn vx-btn-secondary vx-btn-sm" onClick={cancel}>{t('Cancel capture', 'لغو ضبط')}</button></div>}
+      <div className="vx-group">
+        <Row plain lead={<Icon name="refresh" size={20} />} title={t('Refresh', 'تازه‌سازی')} disabled={busy} onClick={() => void load()} />
+        {data.consent === 'granted' && <Row plain lead={<Icon name="micOff" size={20} />} title={t('Turn recognition off in this space', 'خاموش کردن تشخیص در این فضا')} onClick={() => { void stopAndChange(async () => {
           const privacy = await adaptiveApi.read(space, locale), permission = privacy.purposes.find(p => p.purpose === 'optional.biometric_recognition')!;
           await adaptiveApi.consent(space, permission.purpose, permission.revision, 'withdrawn');
           return voiceIdentityApi.read(scope!);
-        }); }}>{t('Turn recognition off in this space', 'خاموش کردن تشخیص در این فضا')}</button>}
+        }); }} />}
+        <Row tone="danger" lead={<Icon name="trash" size={20} />} title={t('Delete enrollment in this space', 'حذف ثبت صدا در این فضا')} disabled={!scope} onClick={() => { void stopAndChange(() => voiceIdentityApi.remove(scope!)); }} />
       </div>
+      <p className="vx-footnote">{t('Deleting enrollment turns recognition off and deletes enrolled templates on every device in this space. Re-enrollment requires a new separate choice.', 'حذف ثبت صدا، تشخیص را خاموش می‌کند و الگوهای ثبت‌شده را از همهٔ دستگاه‌های این فضا حذف می‌کند. ثبت دوباره به انتخاب جداگانهٔ جدید نیاز دارد.')}</p>
     </>}
   </section>;
 }

@@ -34,7 +34,7 @@ export function RouteCard({ t, role, source, predecessorName, skills, onToggleSk
           <span className="vx-over" {...textAttrs(overline)}>{overline}</span>
           <AnimatePresence initial={false} mode="wait">
             <motion.div key={role.id} initial={{ opacity: 0 }} animate={{ opacity: 1, transition: { duration: 0.2 } }} exit={{ opacity: 0, transition: { duration: m.reduce ? 0.12 : 0.16 } }}
-              style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+              className="vx-catalog-layout-7be83166">
               <h2 id={`${id}-title`} className="vx-route-title" {...textAttrs(roleTitle(role, fa))}>{roleTitle(role, fa)}</h2>
               <p className="vx-route-sum" {...textAttrs(roleSummary(role, fa))}>{roleSummary(role, fa)}</p>
             </motion.div>

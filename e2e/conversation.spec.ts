@@ -118,7 +118,7 @@ async function runConversationJourney(page: Page, testInfo: { outputPath: (name:
 
   await page.getByRole('button', { name: 'Back' }).click();
   await page.getByRole('button', { name: 'Agents' }).click();
-  await page.getByRole('button', { name: 'Privacy' }).click();
+  await page.getByRole('button', { name: 'You', exact: true }).click();
   const voice = page.getByRole('region', { name: 'Optional voice recognition' });
   await expect(voice).toBeVisible();
   await expect(voice.getByRole('status')).toContainText('Recognition is unavailable');

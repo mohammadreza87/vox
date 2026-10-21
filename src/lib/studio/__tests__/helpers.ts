@@ -110,6 +110,8 @@ export type FakeTelegram = ReturnType<typeof fakeTelegram>;
 export function fakeOpenAI() {
   return {
     generateAvatar: vi.fn(async (prompt: string) => Buffer.from(`jpeg:${prompt.length}`)),
+    /** Portrait edit from the vector reference (the primary portrait path) */
+    editAvatar: vi.fn<(prompt: string, reference: Buffer) => Promise<Buffer>>(async (prompt) => Buffer.from(`edit:${prompt.length}`)),
     transcribe: vi.fn(async () => 'hello there'),
   };
 }
@@ -157,6 +159,7 @@ export interface Harness {
     deduper: InMemoryUpdateDeduper;
   };
   imageToJpeg: ReturnType<typeof vi.fn>;
+  svgToPng: ReturnType<typeof vi.fn>;
   /** The production-default adaptive service; undefined only with `adaptive: false`. */
   adaptive?: AdaptiveService;
   logger: { info: ReturnType<typeof vi.fn>; warn: ReturnType<typeof vi.fn>; error: ReturnType<typeof vi.fn> };
@@ -164,7 +167,7 @@ export interface Harness {
   advanceDays(days: number): void;
 }
 
-export function makeStudio(options: { openai?: boolean; eleven?: boolean; manager?: boolean; managerUsername?: string; adaptive?: boolean } = {}): Harness {
+export function makeStudio(options: { openai?: boolean; eleven?: boolean; manager?: boolean; managerUsername?: string; adaptive?: boolean; svgToPng?: boolean } = {}): Harness {
   const dir = tempDir();
   const store = new StudioStore(dir);
   const personaLLM = new ScriptedLLM();
@@ -185,6 +188,7 @@ export function makeStudio(options: { openai?: boolean; eleven?: boolean; manage
     deduper: new InMemoryUpdateDeduper(),
   };
   const imageToJpeg = vi.fn(async (data: Buffer) => Buffer.concat([Buffer.from('JPEG:'), data]));
+  const svgToPng = vi.fn(async (svg: string, size: number) => Buffer.from(`PNG:${size}:${svg.length}`));
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   const clock = { now: new Date(T0) };
   const adaptive = options.adaptive === false ? undefined
@@ -204,11 +208,12 @@ export function makeStudio(options: { openai?: boolean; eleven?: boolean; manage
     memory,
     ...(adaptive ? { adaptive, relationshipAuthority: new AdaptiveRelationshipService(adaptive) } : {}),
     imageToJpeg,
+    ...(options.svgToPng === false ? {} : { svgToPng }),
     logger,
     now: () => clock.now,
   });
   return {
-    studio, store, dir, personaLLM, chatLLM, openai, eleven, manager, bots, botFor, memory, imageToJpeg, logger, clock, adaptive,
+    studio, store, dir, personaLLM, chatLLM, openai, eleven, manager, bots, botFor, memory, imageToJpeg, svgToPng, logger, clock, adaptive,
     advanceDays(days: number) {
       clock.now = new Date(clock.now.getTime() + days * 86_400_000);
     },

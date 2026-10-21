@@ -48,7 +48,7 @@ export function Drafting({ t, role, roleName }: { t: SpawnCopy; role?: CatalogRo
       </AnimatePresence>
       <div aria-live="polite" className="vx-title-m" {...textAttrs(roleName)}>{role && roleName ? t.draftingRole(roleName) : t.draftingCustom}</div>
       <AnimatePresence mode="wait" initial={false}>
-        <motion.p key={beat} className="vx-2" style={{ margin: 0 }} aria-hidden="true"
+        <motion.p key={beat} className="vx-2 vx-catalog-layout-02419cff"  aria-hidden="true"
           initial={{ opacity: 0 }} animate={{ opacity: 1, transition: { duration: 0.24 } }} exit={{ opacity: 0, transition: { duration: 0.16 } }}>
           {t.beats[beat]}
         </motion.p>

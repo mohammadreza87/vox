@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  atLeast, canDeleteDraft, canEditPersona, canFire, canManageAccess, canSetAgentAdmin, canSpawn, canUseAgent,
+  atLeast, canDeleteDraft, canEditLook, canEditPersona, canFire, canManageAccess, canSetAgentAdmin, canSpawn, canUseAgent,
   checkRoleChange, formingDay, isLocked, visibleAgents,
 } from '../permissions';
 import type { Agent, Member, Role, StudioState } from '../types';
@@ -96,6 +96,28 @@ describe('persona editing', () => {
     expect(canEditPersona(alice, d)).toBe(true);
     expect(canEditPersona(admin, d)).toBe(true);
     expect(canEditPersona(bob, d)).toBe(false);
+  });
+});
+
+describe('look and photo editing', () => {
+  it('stays open after the lock for the creator and admins (personality stays locked)', () => {
+    const locked = agent({ lockAt: new Date(T0.getTime() - DAY).toISOString() });
+    expect(isLocked(locked, T0)).toBe(true);
+    for (const m of [alice, admin, sa]) {
+      expect(canEditLook(m, locked)).toBe(true);
+      expect(canEditPersona(m, locked, T0)).toBe(false);
+    }
+    expect(canEditLook(bob, locked)).toBe(false);
+    expect(canEditLook({ ...alice, role: 'pending' }, locked)).toBe(false);
+    expect(canEditLook(undefined, locked)).toBe(false);
+  });
+
+  it('drafts: creator and admins; fired agents: nobody', () => {
+    const d = agent({ status: 'draft', hiredAt: undefined, lockAt: undefined });
+    expect(canEditLook(alice, d)).toBe(true);
+    expect(canEditLook(admin, d)).toBe(true);
+    expect(canEditLook(bob, d)).toBe(false);
+    for (const m of [alice, admin, sa]) expect(canEditLook(m, agent({ status: 'fired' }))).toBe(false);
   });
 });
 

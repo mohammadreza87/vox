@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { startBots } from '../bots';
+import { TONES } from '../character';
 import { Studio } from '../service';
 import { StudioStore } from '../store';
+import { handleAgentUpdate } from '../updates';
+import type { TelegramUpdate } from '../../tireh/telegram/client';
 import { hire, makeStudio, seedOrg, type Harness } from './helpers';
 
 let h: Harness;
@@ -48,10 +51,11 @@ describe('Telegram profile reconciliation', () => {
     expect(hired.bot().setMyProfilePhoto).toHaveBeenCalledTimes(1);
     expect(h.imageToJpeg).toHaveBeenCalledTimes(1);
     const view = await h.studio.getAgent(org.alice, hired.agent.id);
-    expect(view.profileSync).toEqual({ status: 'synced', failed: [] });
+    expect(view.profileSync).toEqual({ status: 'synced', failed: [], updatedAt: h.clock.now.toISOString() });
   });
 
   it('reports missing selected media as a photo error rather than claiming success or substituting a cloud', async () => {
+    await legacy();
     await h.store.update((state) => {
       const agent = state.agents.find((a) => a.id === hired.agent.id)!;
       agent.look.avatar = 'av-missing.jpg';
@@ -65,7 +69,7 @@ describe('Telegram profile reconciliation', () => {
     expect(hired.bot().setMyDescription).toHaveBeenCalledTimes(1);
     expect(hired.bot().setMyCommands).toHaveBeenCalledTimes(1);
     expect((await stored()).profileSync).toMatchObject({ status: 'error', failed: ['photo'] });
-    expect((await h.studio.getAgent(org.alice, hired.agent.id)).profileSync).toEqual({ status: 'error', failed: ['photo'] });
+    expect((await h.studio.getAgent(org.alice, hired.agent.id)).profileSync).toMatchObject({ status: 'error', failed: ['photo'], retryAt: expect.any(String) });
   });
 
   it.each(['missing', 'rejecting'] as const)('persists a photo error when the JPEG converter is %s', async (converter) => {
@@ -96,6 +100,7 @@ describe('Telegram profile reconciliation', () => {
   });
 
   it('continues every cosmetic step after a webhook failure and exposes the failed step', async () => {
+    await legacy();
     h.studio.deps.webhookBase = 'https://fixture.example';
     hired.bot().setWebhook.mockRejectedValue(new Error('Synthetic webhook refusal'));
     expect(await h.studio.configureBotProfile(await stored())).toContain('webhook');
@@ -144,11 +149,12 @@ describe('Telegram profile reconciliation', () => {
     await h.store.update((state) => { const agent = state.agents.find((a) => a.id === hired.agent.id)!; agent.persona.name = 'Neda Latest'; agent.look.hue = 'rose'; });
     await h.studio.configureBotProfile(stale);
     expect(hired.bot().setMyName).toHaveBeenLastCalledWith('Neda Latest');
-    expect(String(h.imageToJpeg.mock.calls[0][0])).toContain('#FF9DB5');
+    expect(String(h.imageToJpeg.mock.calls[0][0])).toContain(TONES.rose.light);
     expect((await stored()).profileSync?.status).toBe('synced');
   });
 
   it('serializes overlapping updates and finishes with the latest profile', async () => {
+    await legacy();
     const stale = await stored();
     const firstStarted = deferred(), firstRelease = deferred(), secondStarted = deferred(), secondRelease = deferred();
     hired.bot().setMyProfilePhoto
@@ -186,7 +192,7 @@ describe('Telegram profile reconciliation', () => {
   it('synchronizes a changed cloud look and the automatically selected first generated avatar', async () => {
     await h.studio.setLook(org.alice, hired.agent.id, { hue: 'rose' });
     expect(hired.bot().setMyProfilePhoto).toHaveBeenCalledTimes(1);
-    expect(String(h.imageToJpeg.mock.calls[0][0])).toContain('#FF9DB5');
+    expect(String(h.imageToJpeg.mock.calls[0][0])).toContain(TONES.rose.light);
     const generated = await h.studio.generateAvatars(org.alice, hired.agent.id, 1);
     expect(generated.look.avatar).toBeDefined();
     expect(hired.bot().setMyProfilePhoto).toHaveBeenCalledTimes(2);
@@ -227,5 +233,217 @@ describe('Telegram profile reconciliation', () => {
       // Join the outstanding per-agent queue so no background fixture job leaks.
       await h.studio.configureBotProfile(await stored());
     }
+  });
+});
+
+describe('Telegram profile photo follows the latest character', () => {
+  it('regenerating for an agent that already has a picture pushes the new picture', async () => {
+    const first = await h.studio.generateAvatars(org.alice, hired.agent.id, 1);
+    const second = await h.studio.generateAvatars(org.alice, hired.agent.id, 1);
+    expect(second.look.avatar).not.toBe(first.look.avatar);
+    expect(second.look.avatarVariants).toEqual([second.look.avatar, first.look.avatar]);
+    expect(hired.bot().setMyProfilePhoto).toHaveBeenCalledTimes(2);
+    expect(hired.bot().setMyProfilePhoto).toHaveBeenLastCalledWith(await h.store.readMedia(second.look.avatar!));
+    expect(second.profileSync).toMatchObject({ status: 'synced', failed: [] });
+  });
+
+  it('adds variants without pushing when select is false, and choosing Cloud pushes the character JPEG', async () => {
+    const picked = await h.studio.generateAvatars(org.alice, hired.agent.id, 1);
+    clearCalls();
+    const added = await h.studio.generateAvatars(org.alice, hired.agent.id, 1, { select: false });
+    expect(added.look.avatar).toBe(picked.look.avatar);
+    expect(added.look.avatarVariants).toHaveLength(2);
+    expect(hired.bot().setMyProfilePhoto).not.toHaveBeenCalled();
+
+    const cloud = await h.studio.chooseAvatar(org.alice, hired.agent.id, null);
+    expect(cloud.look.avatar).toBeUndefined();
+    expect(String(h.imageToJpeg.mock.calls.at(-1)![0])).toMatch(new RegExp(`^<svg[\\s\\S]*${TONES.sky.light}`));
+    expect(String(hired.bot().setMyProfilePhoto.mock.calls[0][0])).toMatch(/^JPEG:<svg/);
+    expect(cloud.profileSync).toMatchObject({ status: 'synced', failed: [] });
+  });
+
+  it('a photo-only change calls only setMyProfilePhoto; Retry and legacy receipts push every step', async () => {
+    await h.studio.syncProfile(org.alice, hired.agent.id);
+    const variant = (await h.studio.generateAvatars(org.alice, hired.agent.id, 2, { select: false })).look.avatarVariants![1];
+    clearCalls();
+    const chosen = await h.studio.chooseAvatar(org.alice, hired.agent.id, variant);
+    const bot = hired.bot();
+    expect(bot.setMyProfilePhoto).toHaveBeenCalledTimes(1);
+    expect(bot.setMyProfilePhoto).toHaveBeenCalledWith(await h.store.readMedia(variant));
+    for (const other of [bot.setMyName, bot.setMyShortDescription, bot.setMyDescription, bot.setMyCommands, bot.setWebhook]) expect(other).not.toHaveBeenCalled();
+    expect(chosen.profileSync).toMatchObject({ status: 'synced', failed: [] });
+
+    expect((await h.studio.chooseAvatar(org.alice, hired.agent.id, variant)).profileSync?.status).toBe('synced');
+    expect(bot.setMyProfilePhoto).toHaveBeenCalledTimes(1);
+
+    clearCalls();
+    expect((await h.studio.syncProfile(org.alice, hired.agent.id)).failed).toEqual([]);
+    for (const step of [bot.setMyName, bot.setMyProfilePhoto, bot.setMyShortDescription, bot.setMyDescription, bot.setMyCommands]) expect(step).toHaveBeenCalledTimes(1);
+    clearCalls();
+    expect((await h.studio.syncProfile(org.alice, hired.agent.id, { force: false })).failed).toEqual([]);
+    expect(bot.setMyName).not.toHaveBeenCalled();
+    expect(bot.setMyProfilePhoto).not.toHaveBeenCalled();
+
+    await legacy();
+    await h.studio.configureBotProfile(await stored());
+    for (const step of [bot.setMyName, bot.setMyProfilePhoto, bot.setMyShortDescription, bot.setMyDescription, bot.setMyCommands]) expect(step).toHaveBeenCalledTimes(1);
+  });
+
+  it('a refused photo surfaces as failed:[photo] in the chooseAvatar response', async () => {
+    const variant = (await h.studio.generateAvatars(org.alice, hired.agent.id, 1, { select: false })).look.avatarVariants![0];
+    hired.bot().setMyProfilePhoto.mockRejectedValueOnce(new Error('Bad Request: PHOTO_INVALID_DIMENSIONS'));
+    const chosen = await h.studio.chooseAvatar(org.alice, hired.agent.id, variant);
+    expect(chosen.look.avatar).toBe(variant);
+    expect(chosen.profileSync).toMatchObject({ status: 'error', failed: ['photo'], retryAt: expect.any(String) });
+    // Retry pushes the same photo again.
+    const retried = await h.studio.syncProfile(org.alice, hired.agent.id);
+    expect(retried.failed).toEqual([]);
+    expect(hired.bot().setMyProfilePhoto).toHaveBeenCalledTimes(2);
+  });
+
+  it('a name rate limit never marks a photo change failed and is not retried until it is due', async () => {
+    const variant = (await h.studio.generateAvatars(org.alice, hired.agent.id, 1, { select: false })).look.avatarVariants![0];
+    // Synced name: a photo change doesn't even attempt it.
+    await h.studio.syncProfile(org.alice, hired.agent.id);
+    clearCalls();
+    await h.studio.chooseAvatar(org.alice, hired.agent.id, variant);
+    expect(hired.bot().setMyName).not.toHaveBeenCalled();
+
+    // A 429 on the name while backing off: the photo still goes, and the failure stays the name's.
+    hired.bot().setMyName.mockRejectedValueOnce(new Error('Too Many Requests: retry after 3600'));
+    expect((await h.studio.syncProfile(org.alice, hired.agent.id)).failed).toEqual(['name']);
+    clearCalls();
+    const cloud = await h.studio.chooseAvatar(org.alice, hired.agent.id, null);
+    expect(hired.bot().setMyProfilePhoto).toHaveBeenCalledTimes(1);
+    expect(hired.bot().setMyName).not.toHaveBeenCalled();
+    expect(cloud.profileSync).toMatchObject({ status: 'error', failed: ['name'] });
+
+    // Once due, the reconcile loop retries just the name.
+    advance(60_000);
+    await h.studio.reconcileBotProfiles();
+    expect(hired.bot().setMyName).toHaveBeenCalledTimes(1);
+    expect(hired.bot().setMyProfilePhoto).toHaveBeenCalledTimes(1);
+    expect((await stored()).profileSync).toMatchObject({ status: 'synced', failed: [] });
+  });
+
+  it('a look change while a picture is selected marks it stale without pushing, until a new photo is chosen', async () => {
+    const generated = await h.studio.generateAvatars(org.alice, hired.agent.id, 1);
+    expect(generated.look.avatarStale).toBe(false);
+    clearCalls();
+    const recoloured = await h.studio.setLook(org.alice, hired.agent.id, { hue: 'matcha' });
+    expect(recoloured.look).toMatchObject({ hue: 'matcha', avatar: generated.look.avatar, avatarStale: true });
+    expect(hired.bot().setMyProfilePhoto).not.toHaveBeenCalled();
+
+    expect((await h.studio.generateAvatars(org.alice, hired.agent.id, 1)).look.avatarStale).toBe(false);
+    expect((await h.studio.setLook(org.alice, hired.agent.id, { family: 'tower' })).look.avatarStale).toBe(true);
+    expect((await h.studio.chooseAvatar(org.alice, hired.agent.id, null)).look.avatarStale).toBe(false);
+    await h.studio.chooseAvatar(org.alice, hired.agent.id, generated.look.avatar!);
+    expect((await h.studio.getAgent(org.alice, hired.agent.id)).look.avatarStale).toBe(true);
+    expect((await h.studio.uploadAvatar(org.alice, hired.agent.id, Buffer.from('PNG'), 'image/png')).look.avatarStale).toBe(false);
+  });
+
+  it('look edits with sync:false wait for the editor to close, then push the photo once', async () => {
+    clearCalls();
+    await h.studio.setLook(org.alice, hired.agent.id, { hue: 'rose' }, { sync: false });
+    const edited = await h.studio.setLook(org.alice, hired.agent.id, { species: 'cat' }, { sync: false });
+    expect(edited.look).toMatchObject({ hue: 'rose', species: 'cat' });
+    // Held, not in flight: the status is what Telegram shows now, so clients neither spin nor poll.
+    expect(edited.profileSync).toMatchObject({ status: 'synced', failed: [], held: true });
+    expect((await h.studio.getAgent(org.alice, hired.agent.id)).profileSync).toMatchObject({ status: 'synced', held: true });
+    await h.studio.reconcileBotProfiles();
+    expect(hired.bot().setMyProfilePhoto).not.toHaveBeenCalled();
+    // The hold is stored, so another instance (webhook mode, a poll landing elsewhere) waits too.
+    const other = new Studio({ ...h.studio.deps, store: new StudioStore(h.dir), webhookBase: 'https://fixture.example' });
+    await other.getAgent(org.alice, hired.agent.id);
+    await other.reconcileBotProfiles();
+    await Promise.resolve();
+    expect(hired.bot().setMyProfilePhoto).not.toHaveBeenCalled();
+
+    const closed = await h.studio.syncProfile(org.alice, hired.agent.id, { force: false });
+    expect(closed.failed).toEqual([]);
+    expect(closed.agent.profileSync).toEqual({ status: 'synced', failed: [], updatedAt: h.clock.now.toISOString() });
+    expect((await stored()).profileHeldUntil).toBeUndefined();
+    expect(hired.bot().setMyProfilePhoto).toHaveBeenCalledTimes(1);
+    expect(hired.bot().setMyName).not.toHaveBeenCalled();
+    expect(String(h.imageToJpeg.mock.calls.at(-1)![0])).toContain(TONES.rose.light);
+
+    // An editor that never closes doesn't hold the bot back for long.
+    await h.studio.setLook(org.alice, hired.agent.id, { hue: 'butter' }, { sync: false });
+    await h.studio.reconcileBotProfiles();
+    expect(hired.bot().setMyProfilePhoto).toHaveBeenCalledTimes(1);
+    advance(120_000);
+    await h.studio.reconcileBotProfiles();
+    expect(hired.bot().setMyProfilePhoto).toHaveBeenCalledTimes(2);
+  });
+
+  it('an edit that reverts during the hold reports the receipt as is, and a hold without a receipt still says held', async () => {
+    await h.studio.syncProfile(org.alice, hired.agent.id);
+    await h.studio.setLook(org.alice, hired.agent.id, { hue: 'rose' }, { sync: false });
+    const reverted = await h.studio.setLook(org.alice, hired.agent.id, { hue: hired.agent.look.hue }, { sync: false });
+    expect(reverted.profileSync).toEqual({ status: 'synced', failed: [], updatedAt: expect.any(String) });
+    await legacy();
+    expect((await h.studio.setLook(org.alice, hired.agent.id, { hue: 'rose' }, { sync: false })).profileSync).toEqual({ status: 'pending', failed: [], held: true });
+    advance(120_000);
+    expect((await h.studio.getAgent(org.alice, hired.agent.id)).profileSync).toEqual({ status: 'pending', failed: [] });
+  });
+
+  it('a refused step waiting out its backoff is not another attempt: an editor closing with no net change keeps the retry time', async () => {
+    hired.bot().setMyName.mockRejectedValueOnce(new Error('Too Many Requests: retry after 3600'));
+    await h.studio.syncProfile(org.alice, hired.agent.id);
+    const refused = (await stored()).profileSync!;
+    expect(refused).toMatchObject({ status: 'error', failed: ['name'], attempts: 1 });
+    clearCalls();
+    advance(30_000);
+    for (let i = 0; i < 3; i++) {
+      await h.studio.setLook(org.alice, hired.agent.id, { hue: 'rose' }, { sync: false });
+      await h.studio.setLook(org.alice, hired.agent.id, { hue: hired.agent.look.hue }, { sync: false });
+      expect((await h.studio.syncProfile(org.alice, hired.agent.id, { force: false })).failed).toEqual(['name']);
+    }
+    expect(hired.bot().setMyName).not.toHaveBeenCalled();
+    expect((await stored()).profileSync).toEqual(refused);
+    advance(30_000);
+    await h.studio.reconcileBotProfiles();
+    expect(hired.bot().setMyName).toHaveBeenCalledTimes(1);
+    expect((await stored()).profileSync).toMatchObject({ status: 'synced', failed: [] });
+  });
+
+  it('a stage change makes the character photo stale and an editor opening the agent pushes the photo only (webhook mode)', async () => {
+    h.studio.deps.webhookBase = 'https://fixture.example';
+    await h.studio.syncProfile(org.alice, hired.agent.id);
+    clearCalls();
+    h.advanceDays(1);
+    await h.studio.getAgent(org.alice, hired.agent.id);
+    expect(hired.bot().setMyProfilePhoto).not.toHaveBeenCalled();
+
+    // Day 5: stage 3 (the photo never shows less than stage 2, so days 1–4 look the same).
+    h.advanceDays(3);
+    expect((await h.studio.getAgent(org.bob, hired.agent.id)).profileSync?.status).toBe('pending');
+    expect(hired.bot().setMyProfilePhoto).not.toHaveBeenCalled();
+    const view = await h.studio.getAgent(org.alice, hired.agent.id);
+    expect(view).toMatchObject({ stage: 3, profileSync: { status: 'pending' } });
+    await vi.waitFor(() => expect(hired.bot().setMyProfilePhoto).toHaveBeenCalledTimes(1));
+    await vi.waitFor(async () => expect((await h.studio.getAgent(org.bob, hired.agent.id)).profileSync?.status).toBe('synced'));
+    for (const other of [hired.bot().setMyName, hired.bot().setMyDescription, hired.bot().setWebhook]) expect(other).not.toHaveBeenCalled();
+    expect((await h.studio.getAgent(org.alice, hired.agent.id)).profileSync?.status).toBe('synced');
+    expect(hired.bot().setMyProfilePhoto).toHaveBeenCalledTimes(1);
+  });
+
+  it('an update reaching the bot repairs a stale profile in webhook mode', async () => {
+    h.studio.deps.webhookBase = 'https://fixture.example';
+    await h.studio.syncProfile(org.alice, hired.agent.id);
+    clearCalls();
+    h.advanceDays(4);
+    const from = { id: 999, is_bot: true, first_name: 'Other bot' };
+    await handleAgentUpdate(h.studio, hired.agent.id, { update_id: 1, message: { message_id: 1, date: 0, chat: { id: 999, type: 'private' }, from } } as TelegramUpdate);
+    await vi.waitFor(() => expect(hired.bot().setMyProfilePhoto).toHaveBeenCalledTimes(1));
+    await vi.waitFor(async () => expect((await stored()).profileSync?.status).toBe('synced'));
+    expect(hired.bot().setMyName).not.toHaveBeenCalled();
+  });
+
+  it('opening an agent never pushes in the polling runtime (its reconcile loop does)', async () => {
+    await h.store.update((state) => { state.agents.find((a) => a.id === hired.agent.id)!.look.hue = 'rose'; });
+    expect((await h.studio.getAgent(org.alice, hired.agent.id)).profileSync?.status).toBe('pending');
+    await Promise.resolve();
+    expect(hired.bot().setMyProfilePhoto).not.toHaveBeenCalled();
   });
 });

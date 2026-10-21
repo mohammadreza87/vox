@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import { briefToText, draftPersona, PersonaGenerationError, personaToRuntime, randomLook, refinePersona, suggestUsername, validatePersona } from '../persona';
 import { HUES } from '../types';
+import { ACCESSORIES, HAIR_STYLES, HAIR_TONES, SPECIES, isCompatible } from '../character';
+
+/** Seeded Park–Miller PRNG. */
+const rng = (seed: number) => { let s = seed; return () => (s = (s * 16807) % 2147483647) / 2147483647; };
+
 import type { AgentRole, AgentSkill } from '../skills/types';
 import { draftJson, personaSpec, ScriptedLLM } from './helpers';
 
@@ -65,6 +70,45 @@ describe('draftPersona', () => {
     expect(persona.name).toBe('Nova');
     expect(HUES).toContain(look.hue);
     expect(llm.requests).toHaveLength(1);
+  });
+
+  it('keeps Claude\'s v2 character parts', async () => {
+    const v2 = { hue: 'lagoon', family: 'tower', features: { cheeks: true, lashes: false, brows: false }, species: 'owl', hair: 'fringe', hairTone: 'cocoa', accessory: 'specs', accent: 'navy' };
+    const { look } = await draftPersona(new ScriptedLLM().push(draftJson({}, v2)), {}, 'HOOR');
+    expect(look).toEqual(v2);
+  });
+
+  it('drops only the clashing part when Claude picks an incompatible look', async () => {
+    const clash = { hue: 'rose', family: 'puff', features: { cheeks: true, lashes: true, brows: false }, species: 'bunny', hair: 'tuft', accessory: 'cap' };
+    const { look } = await draftPersona(new ScriptedLLM().push(draftJson({}, clash)), {}, 'HOOR');
+    expect(look).toMatchObject({ hue: 'rose', species: 'bunny', hair: 'tuft', accessory: 'none' });
+    expect(isCompatible(look).ok).toBe(true);
+    const chick = { hue: 'butter', family: 'puff', features: { cheeks: true, lashes: false, brows: false }, species: 'chick', hair: 'curls', accessory: 'bowtie' };
+    expect((await draftPersona(new ScriptedLLM().push(draftJson({}, chick)), {}, 'HOOR')).look).toMatchObject({ species: 'chick', hair: 'none', accessory: 'bowtie' });
+  });
+
+  it('falls back to a compatible random v2 look when Claude invents a species', async () => {
+    const llm = new ScriptedLLM().push(draftJson({ role: 'Customer support lead' }, { hue: 'sky', family: 'puff', features: { cheeks: true, lashes: false, brows: false }, species: 'fox' }));
+    const { look } = await draftPersona(llm, {}, 'HOOR');
+    expect(SPECIES).toContain(look.species);
+    expect(isCompatible(look).ok).toBe(true);
+    expect(llm.requests).toHaveLength(1);
+  });
+
+  it('asks Claude for species, hair and accessory from the enums and the role guide', async () => {
+    const llm = new ScriptedLLM().push(draftJson());
+    await draftPersona(llm, { role: 'Support' }, 'HOOR');
+    const look = promptedSchema(llm.requests[0].system).properties.look;
+    expect(look.properties.species.enum).toEqual([...SPECIES]);
+    expect(look.properties.hair.enum).toEqual([...HAIR_STYLES]);
+    expect(look.properties.accessory.enum).toEqual([...ACCESSORIES]);
+    expect(look.properties.hairTone.enum).toEqual([...HAIR_TONES]);
+    expect(look.required).toEqual(expect.arrayContaining(['hue', 'family', 'features', 'species', 'hair', 'accessory']));
+    expect(look.required).not.toContain('accent');
+    const system = llm.requests[0].system;
+    expect(system).toContain('support → headset');
+    expect(system).toContain('a chick with any hair');
+    expect(system).toContain('Never derive it from culture or gender');
   });
 
   it('applies schema defaults for optional fields', async () => {
@@ -344,6 +388,32 @@ describe('randomLook', () => {
   it('varies over many draws', () => {
     const hues = new Set(Array.from({ length: 200 }, () => randomLook('neutral').hue));
     expect(hues.size).toBeGreaterThan(4);
+  });
+
+  it('is always a complete, compatible v2 look (1,000 seeds)', () => {
+    const species = new Set<string>(), hair = new Set<string>(), accessories = new Set<string>();
+    for (let seed = 1; seed <= 1000; seed++) {
+      const look = randomLook((['feminine', 'masculine', 'neutral'] as const)[seed % 3], rng(seed), seed % 2 ? 'Data analyst' : undefined);
+      expect(isCompatible(look)).toEqual({ ok: true });
+      expect(look.accent).toBeDefined();
+      expect(look.hairTone).not.toBe(look.hue);
+      species.add(look.species!); hair.add(look.hair!); accessories.add(look.accessory!);
+    }
+    expect(species.size).toBe(SPECIES.length);
+    expect(hair.size).toBe(HAIR_STYLES.length);
+    expect(accessories.size).toBe(ACCESSORIES.length);
+  });
+
+  it('stays compatible for constant rand() edge values', () => {
+    for (const r of [0, 0.3, 0.5, 0.999999]) for (const role of [undefined, 'Engineer']) expect(isCompatible(randomLook('masculine', seq(r), role)).ok).toBe(true);
+  });
+
+  it('leans the accessory on the role', () => {
+    const r = rng(42);
+    const draws = Array.from({ length: 400 }, () => randomLook('neutral', r, 'Customer support').accessory);
+    expect(draws.filter((a) => a === 'headset').length / draws.length).toBeGreaterThan(0.6);
+    const design = Array.from({ length: 400 }, () => randomLook('neutral', r, 'Brand designer').accessory);
+    expect(design.filter((a) => ['beret', 'flower', 'star'].includes(a!)).length / design.length).toBeGreaterThan(0.6);
   });
 });
 

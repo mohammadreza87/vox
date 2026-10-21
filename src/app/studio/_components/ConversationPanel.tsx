@@ -1,25 +1,38 @@
 'use client';
+import { useReducedMotion } from 'framer-motion';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { LivePredictionConsumer, predictionHttpTransport } from '@/lib/adaptive/prediction/client';
 import { prepareSharedImage } from '@/lib/adaptive/prediction/image-browser';
 import { observeCommittedText } from '@/lib/adaptive/observation/committed-text';
+import type { CharacterLook, Stage } from '@/lib/studio/types';
 import { learningApi } from '../_lib/learning-client';
 import { TaskOutcome } from './TaskOutcome';
 import { MessageMemoryReview } from './MessageMemoryReview';
 import { useProductPause } from '../_lib/product-pause-client';
 import { pauseText } from '../_lib/product-pause-copy';
 import { tg, request as studioRequest } from '../_lib/client';
+import { haptic } from '../_lib/haptics';
 import { preferenceLearningApi } from '../_lib/preference-learning-client';
-import { Icon, Spinner } from './ui';
+import { AgentFace } from './Cloud';
+import { Banner, Composer, Icon, Seg, Sheet, SheetHead, Switch, Typing } from './ui';
+import { LiveSheet } from './screens/settings/kit';
 
 /** Typed fallback and explicit image sharing use the same scoped agent context
  * as calls. Draft processing is a separate, off-by-default user choice. */
 type Presentation = { density: 'compact' | 'comfortable'; receipt: string };
-type ConversationLine = { role: 'you' | 'agent'; text: string; turnId?: string; started?: number; epoch?: number; session?: string; presentation?: Presentation };
+type SharedImage = { sourceId: string; revision: number; dataUrl: string };
+type ConversationLine = {
+  id: string; role: 'you' | 'agent'; text: string; turnId?: string; started?: number; epoch?: number; session?: string; presentation?: Presentation;
+  /** Your line only: shown at once, then confirmed, or kept with Retry when it could not be sent. */
+  status?: 'sending' | 'failed'; image?: SharedImage;
+};
+export type ChatAgent = { name: string; look: CharacterLook; stage?: Stage };
 function presentation(raw: unknown): Presentation | undefined {
   if (!raw || typeof raw !== 'object' || !('density' in raw) || !['compact', 'comfortable'].includes(String(raw.density)) || !('receipt' in raw) || typeof raw.receipt !== 'string' || !/^[a-f0-9]{64}$/.test(raw.receipt)) return undefined;
   return { density: raw.density as Presentation['density'], receipt: raw.receipt };
 }
+let lineSeq = 0;
+const nextId = () => `line-${++lineSeq}`;
 function CommittedReply({ line, agentId, space, current }: { line: ConversationLine; agentId: string; space: 'work' | 'personal'; current(): boolean }) {
   const [presentationRejected, setPresentationRejected] = useState(false);
   const element = useRef<HTMLSpanElement | null>(null), reported = useRef(false), latestCurrent = useRef(current);
@@ -40,8 +53,15 @@ function CommittedReply({ line, agentId, space, current }: { line: ConversationL
   const density = line.presentation ? presentationRejected ? 'comfortable' : line.presentation.density : undefined;
   return <span ref={element} data-response-density={density} style={density === 'compact' ? { lineHeight: 1.35 } : undefined}>{line.text}</span>;
 }
-export function ConversationPanel({ agentId, space, locale = 'en', disabled = false }: {
+
+/**
+ * The chat (UI §5.3): bubbles, one composer with an attach tool, a thinking cloud while the agent replies,
+ * Retry on a message that could not be sent, and "Remember this" from your own bubble.
+ * Options (space, "Prepare while I type") live in a sheet the screen opens from its top bar.
+ */
+export function ConversationPanel({ agentId, space, locale = 'en', disabled = false, agent, optionsOpen = false, onOptionsClose, onSpaceChange }: {
   agentId: string; space: 'work' | 'personal'; locale?: 'en' | 'fa'; disabled?: boolean;
+  agent?: ChatAgent; optionsOpen?: boolean; onOptionsClose?: () => void; onSpaceChange?: (space: 'work' | 'personal') => void;
 }) {
   const session = tg()?.initData ?? '';
   const pause = useProductPause(space, session);
@@ -49,8 +69,9 @@ export function ConversationPanel({ agentId, space, locale = 'en', disabled = fa
   const paused = pause.status?.productPaused === true;
   const fa = locale === 'fa';
   const t = (en: string, persian: string) => fa ? persian : en;
+  const reduced = useReducedMotion();
   const [draft, setDraft] = useState('');
-  const [image, setImage] = useState<{ sourceId: string; revision: number; dataUrl: string }>();
+  const [image, setImage] = useState<SharedImage>();
   const [prepare, setPrepare] = useState(false);
   const [prepared, setPrepared] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -62,6 +83,8 @@ export function ConversationPanel({ agentId, space, locale = 'en', disabled = fa
   const consumer = useRef<LivePredictionConsumer | null>(null);
   const request = useRef<AbortController | null>(null);
   const imageRequest = useRef<AbortController | null>(null);
+  const fileInput = useRef<HTMLInputElement | null>(null);
+  const scroller = useRef<HTMLDivElement | null>(null);
   const generation = useRef(0);
   const sessionId = useRef('');
   const latest = useRef({ draft, prepare, disabled, historicBlocked });
@@ -91,8 +114,15 @@ export function ConversationPanel({ agentId, space, locale = 'en', disabled = fa
     // A changed use boundary invalidates old prepared work and pending output.
     generation.current++; consumer.current?.cancel(); request.current?.abort(); imageRequest.current?.abort();
     setReviewText(null); setMemoryStatus(''); setPrepared(false); setPrepare(false); setBusy(false); setLoadingImage(false);
+    // A message still in flight was never answered under the new boundary: keep its text, offer Retry.
+    setLines(previous => previous.map(line => line.status === 'sending' ? { ...line, status: 'failed' } : line));
     if (!disabled) startPredictionTurn();
   }, [pause.status?.accountId, pause.status?.useEpoch, historicBlocked, disabled, startPredictionTurn]);
+  // New lines land at the bottom of the thread.
+  useEffect(() => {
+    const el = scroller.current;
+    if (el && typeof el.scrollTo === 'function') el.scrollTo({ top: el.scrollHeight, behavior: reduced ? 'auto' : 'smooth' });
+  }, [lines.length, busy, reduced]);
   const updatePrediction = (text: string, selected = image) => {
     consumer.current?.update({ text, image: selected,
       stable: latest.current.prepare && !latest.current.disabled && !latest.current.historicBlocked && text.trim().length >= 12, question: selected ? 'image_route' : 'intent_route' });
@@ -107,90 +137,141 @@ export function ConversationPanel({ agentId, space, locale = 'en', disabled = fa
       if (controller.signal.aborted) return;
       const selected = { sourceId: crypto.randomUUID(), revision: 1, dataUrl };
       setImage(selected); updatePrediction(latest.current.draft, selected);
-    } catch { if (!controller.signal.aborted) setError(t('Choose a smaller PNG, JPEG or WebP image.', 'یک تصویر کوچک‌تر PNG، JPEG یا WebP انتخاب کنید.')); }
+    } catch { if (!controller.signal.aborted) { haptic.error(); setError(t('Choose a smaller PNG, JPEG or WebP image.', 'یک تصویر کوچک‌تر PNG، JPEG یا WebP انتخاب کنید.')); } }
     finally { if (imageRequest.current === controller) setLoadingImage(false); }
   };
-  const send = async () => {
-    if (busy || disabled || loadingImage || !draft.trim()) return;
+  const removeImage = () => { setImage(undefined); if (prepare && !historicBlocked) consumer.current?.update({ text: draft, stable: draft.trim().length >= 12 }); };
+  /** Sends `text` (and its image) as one turn. `retry` re-sends a failed line in place. */
+  const deliver = async (text: string, shared: SharedImage | undefined, retry?: string) => {
+    if (busy || disabled || loadingImage || !text.trim()) return;
     const current = generation.current, started = performance.now(), currentSession = tg()?.initData ?? '';
     const controller = new AbortController(); request.current?.abort(); request.current = controller;
     const logicalTurn = consumer.current?.snapshotTurn();
+    const id = retry ?? nextId();
     consumer.current?.suspend(); setPrepared(false); setBusy(true); setError('');
+    // Optimistic: your bubble appears at once and the composer clears.
+    setLines(previous => retry ? previous.map(line => line.id === id ? { ...line, status: 'sending' } : line) : [...previous, { id, role: 'you' as const, text, status: 'sending' as const, image: shared }].slice(-20));
+    if (!retry) { setDraft(''); setImage(undefined); }
     let completed = false;
     try {
       // A prediction is never promoted into authority, tool input or an answer.
       const response = await fetch('/api/studio/conversation', { method: 'POST', credentials: 'same-origin', signal: controller.signal,
         headers: { 'Content-Type': 'application/json', 'x-telegram-init-data': tg()?.initData ?? '' },
-        body: JSON.stringify({ agentId, space, text: draft, ...(logicalTurn ? { turn: logicalTurn } : {}), ...(image ? { image: image.dataUrl } : {}) }) });
+        body: JSON.stringify({ agentId, space, text, ...(logicalTurn ? { turn: logicalTurn } : {}), ...(shared ? { image: shared.dataUrl } : {}) }) });
       if (!response.ok) throw new Error('conversation_unavailable');
       const data: unknown = await response.json();
       if (!data || typeof data !== 'object' || !('reply' in data) || typeof data.reply !== 'string') throw new Error('invalid_reply');
       if (controller.signal.aborted || generation.current !== current) return;
       const reply = data.reply;
-      setLastTurnId('turnId' in data && typeof data.turnId === 'string' ? data.turnId : undefined);
-      setLines(previous => [...previous, { role: 'you', text: draft }, { role: 'agent', text: reply, epoch: current, session: currentSession, started, turnId: 'turnId' in data && typeof data.turnId === 'string' ? data.turnId : undefined, presentation: presentation('responsePresentation' in data ? data.responsePresentation : undefined) }].slice(-20) as typeof previous);
-      completed = true; setDraft(''); setImage(undefined);
+      const turnId = 'turnId' in data && typeof data.turnId === 'string' ? data.turnId : undefined;
+      setLastTurnId(turnId);
+      setLines(previous => [...previous.map(line => line.id === id ? { ...line, status: undefined } : line),
+        { id: nextId(), role: 'agent' as const, text: reply, epoch: current, session: currentSession, started, turnId, presentation: presentation('responsePresentation' in data ? data.responsePresentation : undefined) }].slice(-20));
+      completed = true;
     } catch {
-      if (!controller.signal.aborted && generation.current === current) setError(t('Your message could not be completed. Check Privacy and agent access before trying again.', 'پیام شما کامل نشد. پیش از تلاش دوباره حریم خصوصی و دسترسی عامل را بررسی کنید.'));
+      if (!controller.signal.aborted && generation.current === current) {
+        haptic.error();
+        setLines(previous => previous.map(line => line.id === id ? { ...line, status: 'failed' } : line));
+        setError(t('Your message could not be completed. Check your settings and agent access in You before trying again.', 'پیام شما کامل نشد. پیش از تلاش دوباره تنظیمات و دسترسی عامل را در بخش «شما» بررسی کنید.'));
+      }
     } finally {
       if (generation.current === current) { setBusy(false); if (completed && !disabled) startPredictionTurn(); }
     }
   };
-  return <section className="vx-chat" dir={fa ? 'rtl' : 'ltr'} lang={locale}
-    aria-label={t('Type or share an image', 'تایپ یا اشتراک تصویر')} aria-busy={busy || loadingImage}>
-    <div className="vx-chat-log">
-      <div className="vx-chat-intro">
-        {paused && <p className="vx-small" role="status">{pauseText(locale, space, 'conversation')}</p>}
-        <p className="vx-small vx-3">{paused ? pauseText(locale, space, 'history') : t('Uses the memories allowed in this space. Images are sent only for this turn; Vox does not save the image.', 'از حافظه‌های مجاز این فضا استفاده می‌کند. تصویر فقط برای همین نوبت ارسال می‌شود؛ وکس تصویر را ذخیره نمی‌کند.')}</p>
+  const send = () => void deliver(draft, image);
+  const lastAgent = lines.reduce((found, line, i) => line.role === 'agent' ? i : found, -1);
+  const failedId = [...lines].reverse().find(line => line.status === 'failed')?.id;
+  const reviewing = !historicBlocked && reviewText !== null && reviewText.agentId === agentId && reviewText.space === space;
+  const spaceName = space === 'work' ? t('Work', 'کاری') : t('Personal', 'شخصی');
+
+  return <section className="vx-chat" dir={fa ? 'rtl' : 'ltr'} lang={locale} aria-label={t('Chat', 'گفتگو')} aria-busy={busy || loadingImage}>
+    <div className="vx-chat-scroll" ref={scroller}>
+      {paused && <Banner tone="warn"><span role="status">{pauseText(locale, space, 'conversation')}</span></Banner>}
+      <p className="vx-footnote vx-chat-intro">{paused ? pauseText(locale, space, 'history') : t(`Uses ${spaceName} memories you allow. Images are sent for one message only and aren’t saved.`, `از حافظه‌های مجاز فضای ${spaceName} استفاده می‌کند. تصویر فقط برای یک پیام فرستاده و ذخیره نمی‌شود.`)}</p>
+      <div className="vx-thread" role="log" aria-label={t('Conversation', 'گفتگو')} aria-live="polite">
+          {lines.map((line, i) => line.role === 'agent'
+            ? <div key={line.id} className="vx-msg agent">
+              {/* Only the first bubble of a run carries the face (UI §5.3); a still disc below 56 px (UI §6.1) */}
+              {agent && (i === 0 || lines[i - 1].role !== 'agent')
+                ? <span className="vx-msg-face"><AgentFace look={agent.look} stage={agent.stage} size={28} variant="disc" still label={agent.name} /></span>
+                : <span className="vx-msg-face" aria-hidden="true" />}
+              <div className="vx-msg-col">
+                <div className="vx-bubble agent" dir="auto"><CommittedReply line={line} agentId={agentId} space={space} current={() => !disabled && line.epoch === generation.current && line.session === (tg()?.initData ?? '')} /></div>
+                {i === lastAgent && lastTurnId && line.turnId === lastTurnId && <TaskOutcome key={`${agentId}:${space}:${lastTurnId}`} agentId={agentId} space={space} turnId={lastTurnId} locale={locale} />}
+              </div>
+            </div>
+            : <div key={line.id} className={`vx-msg me${line.status ? ` ${line.status}` : ''}`}>
+              {line.status !== 'failed' && line.status !== 'sending' && <button type="button" className="vx-msg-more" aria-label={t('Review this text for memory', 'بررسی این متن برای حافظه')}
+                aria-describedby={historicBlocked ? 'vox-historic-review-reason' : undefined} disabled={busy || disabled || historicBlocked}
+                onClick={() => { haptic.light(); setMemoryStatus(''); setReviewText({ text: line.text, agentId, space }); }}><Icon name="more" size={18} /></button>}
+              <div className="vx-msg-col">
+                <div className={`vx-bubble me${line.status === 'failed' ? ' failed' : ''}`} dir="auto">
+                  {line.image && (
+                    // eslint-disable-next-line @next/next/no-img-element -- an in-memory data URL the user just chose; never fetched
+                    <img className="vx-msg-image" src={line.image.dataUrl} alt={t('Image shared with this message', 'تصویر همراه این پیام')} />
+                  )}
+                  {line.text}
+                </div>
+                {line.status === 'sending' && <span className="vx-bubble-meta me">{t('Sending…', 'در حال ارسال…')}</span>}
+                {line.status === 'failed' && <div className="vx-msg-failed">
+                  {line.id === failedId && error ? <span role="alert">{error}</span> : <span>{t('Not sent', 'ارسال نشد')}</span>}
+                  <button type="button" className="vx-btn vx-btn-secondary vx-btn-xs" disabled={busy || disabled || loadingImage} onClick={() => { haptic.tap(); void deliver(line.text, line.image, line.id); }}>
+                    <Icon name="refresh" size={14} />{t('Retry', 'تلاش دوباره')}</button>
+                </div>}
+              </div>
+            </div>)}
+          {busy && <div key="typing" className="vx-msg agent">
+            {agent && lines.at(-1)?.role !== 'agent'
+              ? <span className="vx-msg-face"><AgentFace look={agent.look} stage={agent.stage} size={28} variant="disc" still expr="thinking" label={t(`${agent.name} is thinking`, `${agent.name} در حال فکر کردن است`)} /></span>
+              : <span className="vx-msg-face" aria-hidden="true" />}
+            <Typing label={t('Replying…', 'در حال پاسخ…')} />
+          </div>}
+        {memoryStatus && <p className="vx-chat-system" role="status"><Icon name="check" size={14} width={2} />{memoryStatus}</p>}
       </div>
-      <div role="log" aria-label={t('Conversation', 'گفتگو')} aria-live="polite" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      {lines.map((line, i) => <div key={i} className={`vx-bubble-row ${line.role === 'you' ? 'mine' : ''}`}>
-        <p className={`vx-bubble ${line.role === 'you' ? 'mine' : ''}`}>
-          <strong className="vx-sr">{line.role === 'you' ? t('You: ', 'شما: ') : t('Agent: ', 'عامل: ')}</strong>
-          {line.role === 'agent' ? <CommittedReply line={line} agentId={agentId} space={space} current={() => !disabled && line.epoch === generation.current && line.session === (tg()?.initData ?? '')} /> : line.text}
-        </p>
-        {line.role === 'you' && <button className="vx-bubble-action" aria-describedby={historicBlocked ? 'vox-historic-review-reason' : undefined} disabled={busy || disabled || historicBlocked} onClick={() => { setMemoryStatus(''); setReviewText({ text: line.text, agentId, space }); }}>{t('Review this text for memory', 'بررسی این متن برای حافظه')}</button>}
-      </div>)}
-      {busy && <div className="vx-bubble-row"><p className="vx-bubble vx-typing" aria-hidden="true"><span /><span /><span /></p></div>}
-      </div>
+      {historicBlocked && <p id="vox-historic-review-reason" className="vx-footnote">{paused ? pauseText(locale, space, 'historicDisabled') : pauseText(locale, space, 'unverified')}</p>}
     </div>
-    <div className="vx-chat-dock">
-      {historicBlocked && <p id="vox-historic-review-reason" className="vx-small vx-2">{paused ? pauseText(locale, space, 'historicDisabled') : pauseText(locale, space, 'unverified')}</p>}
-      {!historicBlocked && reviewText !== null && reviewText.agentId === agentId && reviewText.space === space && <MessageMemoryReview key={`${agentId}:${space}`} text={reviewText.text} agentId={agentId} space={space} locale={locale} disabled={disabled}
-        onClose={() => setReviewText(null)} onSaved={count => { setReviewText(null); setMemoryStatus(t(`Saved ${count} private user-reviewed claims. Manage them in Privacy.`, `${count} ادعای خصوصیِ بررسی‌شده ذخیره شد. در حریم خصوصی مدیریت کنید.`)); }} />}
-      {memoryStatus && <p role="status" className="vx-banner info">{memoryStatus}</p>}
-      {lastTurnId && <TaskOutcome key={`${agentId}:${space}:${lastTurnId}`} agentId={agentId} space={space} turnId={lastTurnId} locale={locale} />}
-      {prepared && <p className="vx-small vx-2" role="status">{t('Context prepared for this draft. You can keep editing.', 'زمینهٔ این پیش‌نویس آماده شد. می‌توانید ویرایش را ادامه دهید.')}</p>}
-      {error && <p className="vx-banner danger" role="alert">{error}</p>}
+
+    <div className="vx-chat-dock" data-snack-anchor>
+      {prepared && <p className="vx-chat-prepared" role="status"><Icon name="spark" size={14} />{t('Context prepared for this draft. You can keep editing.', 'زمینهٔ این پیش‌نویس آماده شد. می‌توانید ویرایش را ادامه دهید.')}</p>}
+      {error && !failedId && <Banner tone="danger">{error}</Banner>}
       {image && <div className="vx-chat-attachment">
         {/* Inline, minimized user selection; no third-party fetch. */}
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src={image.dataUrl} alt={t('Image selected for this message', 'تصویر انتخاب‌شده برای این پیام')} />
-        <button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy || disabled} onClick={() => { setImage(undefined); if (prepare && !historicBlocked) consumer.current?.update({ text: draft, stable: draft.trim().length >= 12 }); }}>{t('Remove image', 'حذف تصویر')}</button>
+        <span>{t('Image for this message only', 'تصویر فقط برای این پیام')}</span>
+        <button type="button" className="vx-icon-btn" aria-label={t('Remove image', 'حذف تصویر')} disabled={busy || disabled} onClick={removeImage}><Icon name="close" size={18} /></button>
       </div>}
-      <div className="vx-chat-prepare">
-        <label className="vx-privacy-checkbox" style={{ minHeight: 32 }}><input type="checkbox" checked={prepare} disabled={busy || disabled || historicBlocked} onChange={e => {
-          setPrepare(e.target.checked); if (!e.target.checked) consumer.current?.suspend();
-          else { consumer.current?.update({ text: draft, image, stable: draft.trim().length >= 12 }); }
-        }} /><span className="vx-small">{t('Prepare while I type', 'آماده‌سازی هنگام تایپ')}</span></label>
-        <p className="vx-small vx-3">{t('When selected, your draft and selected image may be sent to OpenAI before you press Send. Preparation stays off when unavailable and never sends a message for you.', 'با انتخاب این گزینه، پیش‌نویس و تصویر انتخاب‌شده ممکن است پیش از زدن ارسال به OpenAI فرستاده شوند. اگر آماده‌سازی در دسترس نباشد خاموش می‌ماند و هرگز از طرف شما پیامی ارسال نمی‌کند.')}</p>
-      </div>
-      <div className="vx-composer">
-        <label className="vx-composer-attach" title={t('Image (optional)', 'تصویر (اختیاری)')}>
-          <span className="vx-sr">{t('Image (optional)', 'تصویر (اختیاری)')}</span>
-          <input type="file" accept="image/png,image/jpeg,image/webp" disabled={busy || disabled || loadingImage}
-            onChange={e => { void chooseImage(e.target.files?.[0]); e.target.value = ''; }} />
-          <Icon name="attach" size={20} />
-        </label>
-        <label className="vx-composer-field"><span className="vx-sr">{t('Message', 'پیام')}</span><textarea className="vx-textarea" value={draft} rows={1} maxLength={4096} disabled={busy || disabled}
-          placeholder={t('Message', 'پیام')}
-          onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }}
-          onChange={e => { setDraft(e.target.value); updatePrediction(e.target.value); }} /></label>
-        <button className="vx-composer-send" disabled={busy || disabled || loadingImage || !draft.trim()} onClick={() => void send()}>
-          {busy ? <Spinner size={18} /> : <Icon name="send" size={20} width={2.2} />}
-          <span className="vx-sr">{busy ? t('Replying…', 'در حال پاسخ…') : t('Send', 'ارسال')}</span>
-        </button>
-      </div>
+      <input ref={fileInput} className="vx-file" type="file" accept="image/png,image/jpeg,image/webp" tabIndex={-1} aria-label={t('Image (optional)', 'تصویر (اختیاری)')}
+        disabled={busy || disabled || loadingImage} onChange={e => { void chooseImage(e.target.files?.[0]); e.target.value = ''; }} />
+      <Composer multiline value={draft} maxLength={4096} label={t('Message', 'پیام')} sendLabel={t('Send', 'ارسال')}
+        placeholder={agent ? t(`Message ${agent.name}`, `پیام به ${agent.name}`) : t('Message', 'پیام')} busy={busy || loadingImage} disabled={busy || disabled}
+        onChange={value => { setDraft(value); updatePrediction(value); }} onSend={send}
+        tool={<button type="button" className="vx-composer-tool" aria-label={t('Attach an image', 'پیوست تصویر')} disabled={busy || disabled || loadingImage}
+          onClick={() => fileInput.current?.click()}><Icon name="attach" size={20} /></button>} />
     </div>
+
+    <LiveSheet open={reviewing} scope={`${agentId}:${space}:${session}:${pause.status?.accountId}:${pause.status?.useEpoch}:${historicBlocked}`} onClose={() => setReviewText(null)} label={t('Remember this', 'به خاطر سپردن')}>
+      {reviewing && <MessageMemoryReview key={`${agentId}:${space}`} text={reviewText.text} agentId={agentId} space={space} locale={locale} disabled={disabled}
+        onClose={() => setReviewText(null)} onSaved={count => { haptic.success(); setReviewText(null); setMemoryStatus(t(`Saved ${count} private user-reviewed claims. Manage them in You.`, `${count} ادعای خصوصیِ بررسی‌شده ذخیره شد. در بخش «شما» مدیریت کنید.`)); }} />}
+    </LiveSheet>
+
+    <Sheet open={optionsOpen} onClose={() => onOptionsClose?.()} label={t('Chat options', 'گزینه‌های گفتگو')}>
+      <div className="vx-sheet-stack">
+        <SheetHead title={t('Chat options', 'گزینه‌های گفتگو')} />
+        {onSpaceChange && <>
+          <Seg label={t('Conversation space', 'فضای گفتگو')} value={space} disabled={busy} onChange={onSpaceChange}
+            options={[{ value: 'work', label: t('Work', 'کاری') }, { value: 'personal', label: t('Personal', 'شخصی') }]} />
+          <p className="vx-footnote">{t('Switching space starts a new conversation with that space’s memories.', 'تغییر فضا گفتگوی تازه‌ای با حافظه‌های همان فضا شروع می‌کند.')}</p>
+        </>}
+        <div className="vx-group">
+          <Switch checked={prepare} disabled={busy || disabled || historicBlocked} label={t('Prepare while I type', 'آماده‌سازی هنگام تایپ')} sub={t('Off by default', 'به‌طور پیش‌فرض خاموش')}
+            onChange={next => {
+              setPrepare(next); if (!next) consumer.current?.suspend();
+              else { consumer.current?.update({ text: draft, image, stable: draft.trim().length >= 12 }); }
+            }} />
+        </div>
+        <p className="vx-footnote">{t('When on, your draft and selected image may be sent to OpenAI before you press Send. Preparation stays off when unavailable and never sends a message for you.', 'با روشن بودن، پیش‌نویس و تصویر انتخاب‌شده ممکن است پیش از زدن ارسال به OpenAI فرستاده شوند. اگر آماده‌سازی در دسترس نباشد خاموش می‌ماند و هرگز از طرف شما پیامی ارسال نمی‌کند.')}</p>
+      </div>
+    </Sheet>
   </section>;
 }

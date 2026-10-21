@@ -1,0 +1,301 @@
+/* Look editor, option rails, photo grid and Telegram sync ring (stream D).
+   Tokens come from .vx (studio.css) and motion.css; the agent hue arrives as --hue* via hueVars().
+   Motion is transform/opacity/clip-path only; reduced motion keeps every end state. */
+
+/* ---------- Telegram photo + sync ring (interaction §5.4, motion §4.11) ---------- */
+.vx-tgphoto { position: relative; display: inline-grid; place-items: center; flex-shrink: 0; border-radius: 50%; }
+.vx-tgphoto-img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; display: block; background: var(--s2); }
+.vx-tgphoto[data-sync="error-photo"] .vx-tgphoto-img { filter: saturate(.7); opacity: .85; }
+
+.vx-sync-ring { position: absolute; left: 50%; top: 50%; margin: 0; transform: translate(-50%, -50%) rotate(-90deg); pointer-events: none; overflow: visible; }
+.vx-sync-arc { fill: none; stroke: var(--volt); stroke-width: 2.5; stroke-linecap: round; stroke-dasharray: .25 1; stroke-dashoffset: 0; }
+/* syncing: a 90° volt arc turning once every 1.2 s */
+[data-sync="syncing"] > .vx-sync-ring { animation: vxRingTurn 1.2s linear infinite; }
+@keyframes vxRingTurn { from { transform: translate(-50%, -50%) rotate(-90deg); } to { transform: translate(-50%, -50%) rotate(270deg); } }
+/* synced: the arc closes to a full ring (300 ms), holds, then fades (400 ms) */
+[data-sync="synced"] .vx-sync-arc { stroke-dasharray: 1 1; animation: vxRingClose 300ms var(--ease-standard) both; }
+[data-sync="synced"] > .vx-sync-ring { animation: vxRingFade 400ms var(--ease-exit) 700ms both; }
+@keyframes vxRingClose { from { stroke-dashoffset: .75; } to { stroke-dashoffset: 0; } }
+@keyframes vxRingFade { to { opacity: 0; } }
+/* error: a still, full danger ring */
+[data-sync="error-photo"] .vx-sync-arc { stroke: var(--danger); stroke-dasharray: 1 1; }
+
+.vx-sync-badge { position: absolute; inset-inline-end: -3px; bottom: -3px; border-radius: 50%; display: grid; place-items: center;
+  box-shadow: 0 0 0 2px var(--s1); font-weight: 700; line-height: 1; animation: vxBadgePop var(--spring-pop) both; }
+.vx-sync-badge.ok { background: var(--success); color: var(--ground); }
+.vx-sync-badge.err { background: var(--danger); color: var(--ground); }
+.vx-sync-badge.old { background: var(--warn); inset-inline-end: 0; bottom: auto; top: 0; }
+@keyframes vxBadgePop { from { transform: scale(0); } to { transform: scale(1); } }
+
+/* status row: [photo] title / detail [actions] */
+.vx-sync { display: flex; align-items: center; gap: 12px; min-height: 64px; padding: 10px 12px; border-radius: var(--r-l, 20px); background: var(--s1); border: 1px solid var(--hair); }
+.vx-sync-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.vx-sync-title { font-size: 15px; line-height: 20px; font-weight: 600; transition: color var(--dur-base) var(--ease-standard); }
+.vx-sync-detail { font-size: 13px; line-height: 18px; color: var(--text-2); }
+.vx-sync[data-state="synced"] .vx-sync-title { color: var(--success); }
+.vx-sync[data-state="error-photo"] .vx-sync-title { color: var(--danger); }
+.vx-sync[data-state="outdated"] .vx-sync-title { color: var(--warn); }
+.vx-sync-icon { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; flex-shrink: 0; background: var(--s2); color: var(--text-2); }
+.vx-sync[data-state="synced"] .vx-sync-icon { color: var(--success); }
+.vx-sync[data-state="error-photo"] .vx-sync-icon { color: var(--danger); }
+.vx-sync[data-state="outdated"] .vx-sync-icon { color: var(--warn); }
+.vx-sync-btn { height: 32px; padding: 0 12px; font-size: 13px; border-radius: 999px; flex-shrink: 0; min-width: 64px; }
+.vx-sync-ghost { background: transparent; border: 1px solid var(--hair); color: var(--text); }
+.vx-sync[data-state="error-photo"] .vx-sync-btn { animation: vxShake 360ms ease-out; }
+
+/* compact: one pill under the profile handle */
+.vx-sync.compact { min-height: 0; display: inline-flex; gap: 8px; padding: 6px; padding-inline-end: 14px; border-radius: 999px; max-width: 100%; }
+.vx-sync.compact .vx-sync-title { font-size: 13px; line-height: 18px; font-weight: 500; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vx-sync.compact[data-state="synced"] .vx-sync-title { color: var(--success); }
+.vx-sync.compact[data-state="error-photo"] .vx-sync-title { color: var(--danger); }
+.vx-sync.compact[data-state="outdated"] .vx-sync-title { color: var(--warn); }
+.vx-sync.compact:has(.vx-sync-btn) { padding-inline-end: 6px; }
+.vx-sync.compact .vx-sync-btn { height: 28px; min-width: 0; padding: 0 10px; font-size: 12px; }
+
+/* ---------- photo picker ---------- */
+.vx-photos { display: flex; flex-direction: column; gap: 14px; }
+.vx-photos-head { display: flex; align-items: flex-start; gap: 12px; }
+.vx-photos-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.vx-photos-foot { margin: 0; font-size: 13px; line-height: 18px; color: var(--text-3); }
+.vx-photos-error { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: var(--r-m, 16px); background: rgba(255, 107, 94, .12); color: var(--text); font-size: 13px; line-height: 18px; }
+.vx-photos-error > span { flex: 1; min-width: 0; }
+.vx-photos-gen { gap: 8px; }
+
+.vx-photos-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.vx-ptile { position: relative; aspect-ratio: 1; border-radius: var(--r-l, 20px); border: 1px solid var(--hair); background: var(--s1); padding: 0; overflow: hidden;
+  display: grid; place-items: center; cursor: pointer; color: inherit; font: inherit; -webkit-tap-highlight-color: transparent;
+  transition: transform var(--spring-press), opacity var(--dur-base) var(--ease-standard); }
+.vx-ptile:active:not(:disabled):not([aria-disabled]) { transform: scale(var(--press-card, .98)); transition: transform var(--dur-instant) var(--ease-standard); }
+.vx-ptile:disabled, .vx-ptile[aria-disabled] { cursor: default; }
+.vx-ptile.add[aria-disabled] { opacity: .55; }
+.vx-ptile:focus-visible { outline: 2px solid var(--volt); outline-offset: 2px; }
+.vx-photos-grid[aria-busy="true"] .vx-ptile[role="radio"][aria-checked="false"] { opacity: .55; }
+.vx-ptile.vx-shake { animation: vxShake 360ms ease-out; }
+
+.vx-ptile.photo > img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+.vx-ptile.photo.stale > img { opacity: .55; }
+.vx-ptile-tag { position: absolute; top: 6px; inset-inline-start: 6px; height: 20px; padding: 0 8px; border-radius: 999px; background: rgba(14, 16, 19, .78);
+  color: var(--warn); font-size: 11px; line-height: 20px; font-weight: 600; }
+
+.vx-ptile.character { background: var(--hue-12, rgba(195, 166, 255, .12)); align-content: center; gap: 2px; padding-block: 8px; }
+.vx-ptile-disc { display: grid; place-items: center; height: 60px; }
+.vx-ptile-cap { display: flex; flex-direction: column; align-items: center; gap: 0; font-size: 11px; line-height: 14px; color: var(--text-2); text-align: center; padding-inline: 6px; }
+.vx-ptile-cap b { font-size: 12px; line-height: 16px; font-weight: 600; color: var(--text); }
+.vx-ptile.add { border-style: dashed; border-color: rgba(255, 255, 255, .16); background: transparent; color: var(--text-2); align-content: center; gap: 6px; }
+
+/* selection: ring draws round the tile (stroke-dashoffset 320 ms), check pops */
+.vx-ptile-ring { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+.vx-ptile-ring rect { fill: none; stroke: var(--volt); stroke-width: 2.5; vector-effect: non-scaling-stroke; stroke-dasharray: 1 1; stroke-dashoffset: 1;
+  transition: stroke-dashoffset var(--dur-medium) var(--ease-standard); }
+.vx-ptile-ring[data-on] rect { stroke-dashoffset: 0; }
+.vx-ptile-check { position: absolute; bottom: 6px; inset-inline-end: 6px; width: 22px; height: 22px; border-radius: 50%; background: var(--volt); color: var(--on-volt);
+  display: grid; place-items: center; box-shadow: 0 0 0 2px var(--ground); animation: vxBadgePop var(--spring-pop) both; }
+
+/* forming: mist condenses (--form 0→1) while the silhouette surfaces */
+.vx-ptile.forming { cursor: default; background: var(--s1); isolation: isolate; }
+.vx-mist { position: absolute; inset: -12%; border-radius: 50%; z-index: 0;
+  background: radial-gradient(closest-side at 42% 40%, var(--hue-light, #E6DBFF), transparent 70%), radial-gradient(closest-side at 60% 62%, var(--hue, #C3A6FF), transparent 75%);
+  opacity: calc(.32 + var(--form, 0) * .3); transform: scale(calc(1.08 - var(--form, 0) * .22));
+  transition: opacity 1s linear, transform 1s linear; animation: vxMistTurn 12s linear infinite; animation-delay: calc(var(--i, 0) * -3s); }
+.vx-mist::after { content: ''; position: absolute; inset: 18%; border-radius: 50%; background: radial-gradient(closest-side, var(--hue-glow, #B08CFF), transparent);
+  opacity: .5; animation: vxMistBreathe 2.4s var(--ease-sine) infinite; animation-delay: calc(var(--i, 0) * 150ms); }
+@keyframes vxMistTurn { to { rotate: 360deg; } }
+@keyframes vxMistBreathe { 0%, 100% { transform: scale(.9); opacity: .35; } 50% { transform: scale(1.08); opacity: .6; } }
+.vx-ghost { position: relative; z-index: 1; opacity: calc(var(--form, 0) * .5); transform: scale(calc(.86 + var(--form, 0) * .12)); transition: opacity 1s linear, transform 1s linear; }
+.vx-ptile.forming::after { content: ''; position: absolute; inset: 0; z-index: 2; transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .06), transparent); animation: vxSheen 1.6s var(--ease-sine) infinite; }
+.vx-ptile.forming.failed .vx-mist { opacity: .12; animation: none; }
+.vx-ptile.forming.failed .vx-ghost { opacity: .7; transform: scale(.8); }
+.vx-ptile.forming.failed { align-content: center; gap: 4px; }
+.vx-ptile.forming.failed .vx-ptile-cap { position: relative; z-index: 1; }
+
+/* landed: circular wipe 0 → 75 % over 480 ms, image settles 1.08 → 1, mist bursts out */
+.vx-reveal { position: absolute; inset: 0; z-index: 3; width: 100%; height: 100%; object-fit: cover; display: block;
+  animation: vxReveal var(--dur-slow) var(--ease-enter) both; }
+@keyframes vxReveal { from { clip-path: circle(0% at 50% 55%); transform: scale(1.08); } to { clip-path: circle(75% at 50% 55%); transform: scale(1); } }
+.vx-ptile.landed .vx-mist, .vx-ptile.landed .vx-ghost { opacity: 0; transition: opacity var(--dur-medium) var(--ease-exit) 120ms; }
+.vx-ptile.landed::after { animation: none; opacity: 0; }
+.vx-burst { position: absolute; inset: 0; z-index: 4; pointer-events: none; }
+.vx-burst i { position: absolute; left: 50%; top: 55%; width: 10px; height: 10px; margin: -5px; border-radius: 50%; background: var(--hue-light, #E6DBFF);
+  opacity: 0; animation: vxBurst 560ms var(--ease-enter) both; rotate: calc(var(--k) * 60deg + 15deg); }
+@keyframes vxBurst { 0% { opacity: .85; transform: translateY(0) scale(1); } 100% { opacity: 0; transform: translateY(-44px) scale(.3); } }
+
+/* generate progress pill: fill bar + narrative + elapsed */
+.vx-gen { position: relative; height: 52px; border-radius: 999px; background: var(--s2); border: 1px solid var(--hair); overflow: hidden;
+  display: flex; align-items: center; justify-content: center; gap: 10px; padding: 0 20px; font-weight: 600; font-size: 15px; }
+.vx-gen-fill { position: absolute; inset: 0; transform-origin: left center; background: var(--hue-22, rgba(176, 140, 255, .22)); transition: transform 1s linear; }
+[dir="rtl"] .vx-gen-fill { transform-origin: right center; }
+.vx-gen-label { position: relative; animation: vxLabelIn var(--dur-base) var(--ease-enter) both; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@keyframes vxLabelIn { from { opacity: 0; transform: translateY(4px); } }
+.vx-gen-time { position: relative; color: var(--text-2); font-weight: 500; }
+
+/* ---------- look editor (interaction §4.2–4.5, motion §4.10) ---------- */
+.vx-look-scroll { display: flex; flex-direction: column; gap: 18px; }
+/* the step's dock overlays the scroller's last ~110 px: the undo pill floats above it */
+.vx-look-scroll .vx-look { --undo-bottom: calc(116px + env(safe-area-inset-bottom)); }
+.vx-look-sheet { display: flex; flex-direction: column; gap: 16px; }
+.vx-look { position: relative; display: flex; flex-direction: column; gap: 18px; --look-bg: var(--ground); --look-card: var(--s1); }
+.vx-sheet .vx-look { --look-bg: var(--s2); --look-card: var(--s1); }
+.vx-look-head { display: flex; flex-direction: column; gap: 6px; }
+.vx-look-save { display: flex; align-items: center; gap: 10px; min-height: 24px; font-size: 13px; line-height: 18px; color: var(--text-3); }
+.vx-look-save-text { display: inline-flex; align-items: center; gap: 4px; min-width: 0; animation: vxLabelIn var(--dur-base) var(--ease-enter) both; }
+.vx-look-save[data-state="saving"] { color: var(--text-2); }
+.vx-look-save[data-state="saved"] { color: var(--success); }
+.vx-look-save[data-state="error"] { color: var(--danger); }
+.vx-look-save-why { color: var(--text-2); }
+.vx-look-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+/* stage: the character on its hue glow; the glow colour tweens (a masked solid, so background-color can transition) */
+.vx-look-stage { position: relative; height: 236px; display: grid; place-items: center; isolation: isolate; }
+.vx-look-glow { position: absolute; left: 50%; top: 50%; width: 320px; height: 300px; margin: -150px 0 0 -160px; border-radius: 50%; z-index: -1; pointer-events: none;
+  background-color: var(--hue-glow, #B08CFF); opacity: .3;
+  -webkit-mask-image: radial-gradient(closest-side, #000, rgba(0, 0, 0, .45) 48%, transparent);
+  mask-image: radial-gradient(closest-side, #000, rgba(0, 0, 0, .45) 48%, transparent);
+  transition: background-color 300ms var(--ease-standard); animation: vxGlowBreathe 4.2s var(--ease-sine) infinite; }
+@keyframes vxGlowBreathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.05); } }
+/* colour wash: spreads from the side of the tapped swatch */
+.vx-look-wash { position: absolute; z-index: -1; width: 240px; height: 240px; bottom: -120px; left: calc(var(--wx, .5) * 100% - 120px); border-radius: 50%; pointer-events: none;
+  -webkit-mask-image: radial-gradient(closest-side, #000, transparent); mask-image: radial-gradient(closest-side, #000, transparent); }
+[dir="rtl"] .vx-look-wash { left: calc((1 - var(--wx, .5)) * 100% - 120px); }
+.vx-look-burst { position: absolute; left: 50%; top: 50%; width: 260px; height: 260px; margin: -130px 0 0 -130px; display: grid; place-items: center; pointer-events: none; }
+.vx-look-poke { border: 0; padding: 0; background: none; color: inherit; border-radius: 50%; cursor: pointer; display: grid; place-items: center;
+  -webkit-tap-highlight-color: transparent; -webkit-touch-callout: none; user-select: none; touch-action: manipulation; }
+.vx-look-poke:disabled { cursor: default; }
+.vx-look-poke:focus-visible { outline: 2px solid var(--volt); outline-offset: 6px; }
+.vx-look-reel { position: relative; display: block; width: 200px; height: 200px; }
+.vx-look-frame { position: absolute; inset: 0; display: grid; place-items: center; transform-origin: 50% 83%; }
+.vx-look-dice { position: absolute; inset-inline-end: 0; bottom: 10px; }
+
+/* growth scrubber: Day 1 · 3 · 5 · 7 */
+.vx-stage { position: relative; display: flex; flex-direction: column; gap: 8px; padding-top: 4px; }
+.vx-stage-track { position: relative; height: 22px; margin-inline: 11px; }
+.vx-stage-track::before { content: ''; position: absolute; inset-inline: 0; top: 50%; height: 4px; margin-top: -2px; border-radius: 999px; background: var(--s3); }
+.vx-stage-fill { position: absolute; inset-inline: 0; top: 50%; height: 4px; margin-top: -2px; border-radius: 999px; background: var(--hue, #C3A6FF);
+  transform-origin: left center; transform: scaleX(var(--at, 0)); transition: transform var(--spring-snappy); }
+[dir="rtl"] .vx-stage-fill { transform-origin: right center; }
+.vx-stage-node { position: absolute; top: 50%; inset-inline-start: calc(var(--i) * 100%); width: 10px; height: 10px; margin-top: -5px; margin-inline-start: -5px;
+  border-radius: 50%; background: var(--s3); transition: background-color var(--dur-fast) var(--ease-standard), transform var(--spring-pop); }
+.vx-stage-node[data-on] { background: var(--hue, #C3A6FF); }
+.vx-stage-node[data-rest]::after { content: ''; position: absolute; inset: -5px; border-radius: 50%; border: 1.5px solid var(--hue-light, #E6DBFF); opacity: .55; }
+.vx-stage-thumbrail { position: absolute; inset: 0; transform: translateX(calc(var(--at, 0) * 100%)); transition: transform var(--spring-snappy); pointer-events: none; }
+[dir="rtl"] .vx-stage-thumbrail { transform: translateX(calc(var(--at, 0) * -100%)); }
+.vx-stage-thumb { position: absolute; top: 50%; inset-inline-start: 0; width: 22px; height: 22px; margin-top: -11px; margin-inline-start: -11px; border-radius: 50%;
+  background: var(--hue-light, #E6DBFF); box-shadow: 0 0 0 4px var(--look-bg, var(--ground)), 0 4px 14px rgba(0, 0, 0, .45); }
+.vx-stage-input { position: absolute; inset-inline: 0; top: -8px; width: 100%; height: 44px; margin: 0; opacity: 0; cursor: pointer; touch-action: pan-y; }
+.vx-stage:has(.vx-stage-input:focus-visible) .vx-stage-thumb { outline: 2px solid var(--volt); outline-offset: 3px; }
+.vx-stage-labels { display: flex; justify-content: space-between; }
+.vx-stage-labels > button { border: 0; background: none; padding: 2px 0; min-width: 44px; font: inherit; font-size: 12px; line-height: 16px; color: var(--text-3); cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-standard); }
+.vx-stage-labels > button:first-child { text-align: start; }
+.vx-stage-labels > button:last-child { text-align: end; }
+.vx-stage-labels > button[data-on] { color: var(--text); font-weight: 600; }
+.vx-stage-caption { margin: 0; text-align: center; font-size: 13px; line-height: 18px; color: var(--text-3); animation: vxLabelIn var(--dur-base) var(--ease-enter) both; }
+
+/* categories: sticky under the stage once the page scrolls */
+.vx-look-cats { position: sticky; top: 0; z-index: 4; margin-inline: calc(var(--gutter, 16px) * -1); padding: 6px var(--gutter, 16px); background: var(--look-bg, var(--ground)); }
+.vx-look-cats .vx-seg > button { font-size: 13px; padding-inline: 2px; }
+.vx-look-panelwrap { min-height: 176px; }
+.vx-look-panel { display: flex; flex-direction: column; gap: 14px; }
+.vx-look-sub { display: flex; flex-direction: column; gap: 8px; }
+.vx-look-foot { margin: 0; font-size: 13px; line-height: 18px; color: var(--text-3); }
+
+/* option rail: live mini characters, snapping */
+.vx-rail-wrap { display: flex; flex-direction: column; gap: 6px; }
+.vx-rail-note { display: flex; align-items: center; min-height: 18px; }
+.vx-rail-suggest { font-size: 12px; line-height: 16px; font-weight: 600; color: var(--volt); }
+.vx-rail { display: flex; gap: 10px; overflow-x: auto; overscroll-behavior-x: contain; scroll-snap-type: x mandatory; scroll-padding-inline: var(--gutter, 16px);
+  margin-inline: calc(var(--gutter, 16px) * -1); padding: 4px var(--gutter, 16px) 8px; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+.vx-rail::-webkit-scrollbar { display: none; }
+.vx-look-card { position: relative; flex: 0 0 84px; height: 96px; scroll-snap-align: start; border-radius: 16px; border: 1px solid var(--hair); background: var(--look-card, var(--s1));
+  padding: 0 4px 8px; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 2px; color: inherit; font: inherit; cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform var(--spring-press), background-color var(--dur-base) var(--ease-standard), border-color var(--dur-base) var(--ease-standard), opacity var(--dur-base) var(--ease-standard);
+  animation: vxCardIn var(--dur-medium) var(--ease-enter) both; animation-delay: calc(min(var(--i, 0), 8) * 30ms); }
+@keyframes vxCardIn { from { opacity: 0; transform: translateY(8px) scale(.96); } }
+.vx-look-card:active:not([aria-disabled]) { transform: scale(var(--press-card, .98)); transition: transform var(--dur-instant) var(--ease-standard); }
+.vx-look-card:focus-visible { outline: 2px solid var(--volt); outline-offset: 2px; }
+.vx-look-card[aria-checked="true"] { background: var(--hue-10, rgba(195, 166, 255, .1)); border-color: transparent; }
+.vx-look-card::after { content: ''; position: absolute; inset: -1px; border-radius: inherit; border: 2px solid var(--volt); opacity: 0; transform: scale(1.05); pointer-events: none;
+  transition: opacity var(--dur-fast) var(--ease-standard), transform var(--spring-pop); }
+.vx-look-card[aria-checked="true"]::after { opacity: 1; transform: scale(1); }
+.vx-look-card.blocked { opacity: .4; cursor: default; }
+.vx-look-card.vx-shake { animation: vxShake 360ms ease-out; }
+.vx-look-mini { display: grid; place-items: center; height: 68px; width: 100%; pointer-events: none; }
+/* face close-up: the 108 px character, cropped to its face */
+.vx-rail.zoom .vx-look-mini { height: 66px; overflow: hidden; border-radius: 15px 15px 8px 8px; }
+.vx-look-card-label { font-size: 12px; line-height: 16px; font-weight: 600; color: var(--text-2); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vx-look-card[aria-checked="true"] .vx-look-card-label { color: var(--text); }
+.vx-look-card-check { position: absolute; top: 6px; inset-inline-end: 6px; width: 18px; height: 18px; border-radius: 50%; background: var(--volt); color: var(--on-volt);
+  display: grid; place-items: center; animation: vxBadgePop var(--spring-pop) both; }
+.vx-look-card-spark { position: absolute; top: 5px; inset-inline-start: 8px; font-size: 11px; line-height: 14px; color: var(--volt); }
+.vx-rail-tip { display: flex; align-items: flex-start; gap: 8px; padding: 10px 12px; border-radius: 14px; background: var(--s3); color: var(--text-2);
+  font-size: 13px; line-height: 18px; animation: vxTipIn var(--dur-base) var(--ease-enter) both; }
+.vx-rail-tip b { color: var(--text); font-weight: 600; }
+.vx-rail-tip > svg { flex-shrink: 0; margin-top: 1px; color: var(--warn); }
+@keyframes vxTipIn { from { opacity: 0; transform: translateY(-4px); } }
+
+/* swatches: body hues (8 across) and scrolling tone rows */
+.vx-swatches.grid { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 8px; }
+.vx-swatches.row { display: flex; gap: 8px; overflow-x: auto; margin-inline: calc(var(--gutter, 16px) * -1); padding: 2px var(--gutter, 16px); scrollbar-width: none; }
+.vx-swatches.row::-webkit-scrollbar { display: none; }
+.vx-swatch { position: relative; aspect-ratio: 1; min-width: 0; max-width: 48px; width: 100%; justify-self: center; border: 0; padding: 0; background: transparent; border-radius: 50%;
+  cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.vx-swatches.row .vx-swatch { flex: 0 0 38px; width: 38px; }
+.vx-swatch-dot { position: absolute; inset: 5px; border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .1);
+  background: radial-gradient(circle at 35% 30%, var(--sw-light), var(--sw) 60%, var(--sw-shadow)); transition: transform var(--spring-press); }
+.vx-swatch:active .vx-swatch-dot { transform: scale(.88); transition: transform var(--dur-instant) var(--ease-standard); }
+.vx-swatch[aria-disabled] { opacity: .4; cursor: default; }
+.vx-swatch:focus-visible { outline: 2px solid var(--volt); outline-offset: 1px; }
+.vx-swatch-ring { position: absolute; inset: 0; border-radius: 50%; border: 2px solid var(--text); }
+
+/* undo pill: floats above the dock for 4 s */
+.vx-look-undo-slot { position: sticky; bottom: var(--undo-bottom, 12px); z-index: 5; height: 0; display: flex; justify-content: center; pointer-events: none; }
+.vx-look-undo { position: absolute; bottom: 0; display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 16px; border: 0; border-radius: 999px;
+  background: var(--s3); color: var(--text); font: inherit; font-size: 14px; font-weight: 600; white-space: nowrap; cursor: pointer; pointer-events: auto;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .45); -webkit-tap-highlight-color: transparent; }
+.vx-look-undo:active { transform: scale(var(--press-btn, .97)); }
+
+.vx-look-tg { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--hair); border-radius: 16px; background: var(--look-card, var(--s1)); }
+.vx-look-mode { position: relative; z-index: 5; }
+
+/* ---------- agent hero (D3) ---------- */
+.vx-hero { position: relative; display: flex; flex-direction: column; align-items: center; text-align: center; }
+.vx-hero-face { position: relative; display: grid; place-items: center; }
+.vx-halo { position: absolute; inset: 0; overflow: visible; pointer-events: none; }
+.vx-halo-track, .vx-halo-fill { fill: none; stroke-width: 6; stroke-linecap: round; }
+.vx-halo-track { stroke: var(--s3); }
+.vx-halo-fill { stroke: var(--hue, #C3A6FF); }
+.vx-halo-head { fill: var(--hue-light, #E6DBFF); transform-box: fill-box; transform-origin: center; }
+.vx-hero-poke { border: 0; padding: 0; background: none; color: inherit; border-radius: 50%; cursor: pointer; display: grid; place-items: center;
+  -webkit-tap-highlight-color: transparent; -webkit-touch-callout: none; user-select: none; touch-action: manipulation;
+  transition: transform var(--spring-press); }
+.vx-hero-poke:active { transform: scale(.97); transition: transform var(--dur-instant) var(--ease-standard); }
+.vx-hero-poke:focus-visible { outline: 2px solid var(--volt); outline-offset: 4px; }
+.vx-hero-seal { position: absolute; inset-inline-end: 18px; bottom: 18px; width: 40px; height: 40px; border-radius: 50%; background: var(--ice); color: var(--ground);
+  display: grid; place-items: center; box-shadow: 0 0 0 4px var(--ground); }
+.vx-icon-btn.vx-hero-edit { position: absolute; inset-inline-end: 14px; top: 14px; width: 36px; height: 36px; background: var(--s2); border: 1px solid var(--hair); color: var(--text);
+  box-shadow: 0 0 0 4px var(--ground); }
+.vx-hero-name { margin-top: 6px; }
+.vx-hero-admin, .vx-hero-grew { margin-top: 8px; }
+.vx-hero-pillslot { display: flex; justify-content: center; }
+.vx-hero-sync { margin-top: 12px; max-width: 100%; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.vx-hero-error { margin: 0; color: var(--danger); text-align: center; }
+.vx-hero-locked { display: inline-flex; align-items: center; gap: 6px; margin: 10px 0 0; font-size: 13px; line-height: 18px; color: var(--text-3); }
+.vx-hero-locked > svg { flex-shrink: 0; color: var(--ice); }
+
+/* ---------- reduced motion and lite tier: keep the end states ---------- */
+.vx[data-motion="lite"] .vx-mist, .vx[data-motion="lite"] .vx-mist::after, .vx[data-motion="lite"] .vx-ptile.forming::after, .vx[data-motion="lite"] .vx-look-glow { animation: none; }
+.vx[data-paused] .vx-look-glow { animation-play-state: paused; }
+@media (prefers-reduced-motion: reduce) {
+  [data-sync] > .vx-sync-ring, .vx-sync-arc, .vx-sync-badge, .vx-ptile-check, .vx-mist, .vx-mist::after, .vx-ptile.forming::after,
+  .vx-sync[data-state="error-photo"] .vx-sync-btn, .vx-ptile.vx-shake, .vx-gen-label { animation: none !important; }
+  [data-sync="syncing"] .vx-sync-arc { stroke-dasharray: 1 1; stroke-opacity: .5; }
+  [data-sync="synced"] > .vx-sync-ring { opacity: 0; }
+  .vx-reveal { animation: vxRevealFade var(--dur-base) linear both !important; }
+  @keyframes vxRevealFade { from { opacity: 0; } }
+  .vx-burst { display: none; }
+  .vx-look-glow, .vx-look-card, .vx-look-card-check, .vx-rail-tip, .vx-look-save-text, .vx-stage-caption { animation: none !important; }
+  .vx-look-card, .vx-look-card::after, .vx-swatch-dot, .vx-stage-fill, .vx-stage-thumbrail, .vx-stage-node, .vx-hero-poke, .vx-look-glow { transition: none !important; }
+  .vx-look-card:active, .vx-swatch:active .vx-swatch-dot, .vx-hero-poke:active, .vx-look-undo:active { transform: none; }
+  .vx-ptile-ring rect, .vx-mist, .vx-ghost, .vx-gen-fill, .vx-ptile { transition: none !important; }
+}

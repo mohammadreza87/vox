@@ -4,6 +4,8 @@ import { guestRightsCopy } from '@/lib/adaptive/guest-rights/notice';
 import type { GuestOperatorInput } from '@/lib/adaptive/guest-rights/contracts';
 import { guestRightsApi, GuestClientError, type GuestQueue } from '../_lib/guest-rights-client';
 import { tg } from '../_lib/client';
+import { haptic } from '../_lib/haptics';
+import { Banner, Icon, SkeletonRows, Spinner } from './ui';
 export function GuestRightsOperationsPanel({ locale = 'en', sessionKey = tg()?.initData ?? '' }: {
     locale?: 'en' | 'fa';
     sessionKey?: string;
@@ -50,8 +52,42 @@ export function GuestRightsOperationsPanel({ locale = 'en', sessionKey = tg()?.i
     } }
     if (hidden)
         return null;
-    return <section className="vx-card vx-privacy-card sentry-block" dir={locale === 'fa' ? 'rtl' : 'ltr'} data-guest-rights-private="true"><h2 className="vx-head">{c.operations}</h2><p className="vx-small">{c.operationsIntro}</p><button className="vx-btn vx-btn-secondary" disabled={busy} onClick={() => void refresh()}>{c.refresh}</button>{error && <p role="alert">{c.unknownOutcome}</p>}{busy && <p role="status">{c.pending}</p>}{queue?.requests.map(row => <article key={row.requestId}><h3><bdi>{row.requestId}</bdi></h3><p>{c.kinds[row.kind]} · {c[row.context]} · {c.states[row.state]}</p><p>{c.effect}</p><div className="vx-privacy-actions">{(['begin_review', 'request_requester_action', 'mark_operator_pending', 'close_unfulfilled', 'reassess_retention', 'purge_terminal_record'] as const).filter(action => row.state === 'closed_unfulfilled' ? ['reassess_retention', 'purge_terminal_record'].includes(action) : action !== 'purge_terminal_record' && (action !== 'begin_review' || row.state === 'received')).map(action => { const label = { begin_review: c.begin, request_requester_action: c.ask, mark_operator_pending: c.mark, close_unfulfilled: c.operatorClose, reassess_retention: c.reassess, purge_terminal_record: c.purge }[action]; return <button key={action} className="vx-btn vx-btn-secondary" disabled={busy} onClick={() => { if (action === 'close_unfulfilled' || action === 'purge_terminal_record')
-        setConfirm({ id: row.requestId, action });
-    else
-        void operate(row, action); }}>{label}</button>; })}</div>{confirm?.id === row.requestId && <div><p>{confirm.action === 'purge_terminal_record' ? c.confirmPurge : c.confirmClose}</p><button className="vx-btn vx-btn-danger" disabled={busy} onClick={() => void operate(row, confirm.action)}>{c.confirm}</button><button className="vx-btn vx-btn-secondary" disabled={busy} onClick={() => setConfirm(undefined)}>{c.cancel}</button></div>}</article>)}</section>;
+    const fa = locale === 'fa';
+    return <section className="vx-section vx-ops sentry-block" dir={fa ? 'rtl' : 'ltr'} lang={locale} aria-label={c.operations} aria-busy={busy} data-guest-rights-private="true">
+      <div className="vx-section-head">
+        <h2 className="vx-over">{c.operations}</h2>
+        <button type="button" className="vx-icon-btn" disabled={busy} onClick={() => void refresh()} aria-label={c.refresh}>{busy ? <Spinner /> : <Icon name="refresh" size={18} />}</button>
+      </div>
+      <p className="vx-section-foot vx-diag-lede">{c.operationsIntro}</p>
+      {error && <Banner tone="danger">{c.unknownOutcome}</Banner>}
+      {busy && !queue && <SkeletonRows rows={2} lead={false} label={c.pending} />}
+      {queue && <div className="vx-group">
+        {!queue.requests.length && <div className="vx-row"><span className="vx-row-sub">{fa ? 'درخواستی در صف نیست.' : 'No requests in the queue.'}</span></div>}
+        {queue.requests.map(row => <article key={row.requestId} className="vx-row top vx-ops-item" aria-label={`${c.kinds[row.kind]} · ${row.requestId}`}>
+          <span className="vx-row-main">
+            <span className="vx-ops-title"><span className="vx-row-title">{c.kinds[row.kind]}</span><span className="vx-pill">{c[row.context]}</span></span>
+            <span className="vx-row-sub vx-ops-state">{c.states[row.state]}</span>
+            <code className="vx-ref"><bdi>{row.requestId}</bdi></code>
+            <span className="vx-row-sub vx-3">{c.effect}</span>
+            <span className="vx-ops-actions">
+              {(['begin_review', 'request_requester_action', 'mark_operator_pending', 'close_unfulfilled', 'reassess_retention', 'purge_terminal_record'] as const)
+                .filter(action => row.state === 'closed_unfulfilled' ? ['reassess_retention', 'purge_terminal_record'].includes(action) : action !== 'purge_terminal_record' && (action !== 'begin_review' || row.state === 'received'))
+                .map(action => {
+                  const label = { begin_review: c.begin, request_requester_action: c.ask, mark_operator_pending: c.mark, close_unfulfilled: c.operatorClose, reassess_retention: c.reassess, purge_terminal_record: c.purge }[action];
+                  const destructive = action === 'close_unfulfilled' || action === 'purge_terminal_record';
+                  return <button key={action} type="button" className={`vx-btn vx-btn-xs ${destructive ? 'vx-btn-ghost vx-danger-text' : action === 'begin_review' ? 'vx-btn-tonal' : ''}`} disabled={busy}
+                    onClick={() => { if (destructive) { haptic.warn(); setConfirm({ id: row.requestId, action }); } else void operate(row, action); }}>{label}</button>;
+                })}
+            </span>
+            {confirm?.id === row.requestId && <div className="vx-you-confirm" role="group" aria-label={c.operatorClose}>
+              <p className="vx-small">{confirm.action === 'purge_terminal_record' ? c.confirmPurge : c.confirmClose}</p>
+              <div className="vx-dock-row">
+                <button type="button" className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy} onClick={() => setConfirm(undefined)}>{c.cancel}</button>
+                <button type="button" className="vx-btn vx-btn-danger vx-btn-sm" disabled={busy} onClick={() => void operate(row, confirm.action)}>{c.confirm}</button>
+              </div>
+            </div>}
+          </span>
+        </article>)}
+      </div>}
+    </section>;
 }

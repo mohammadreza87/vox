@@ -9,8 +9,8 @@ const snapshot = (space: 'work' | 'personal' = 'work') => ({ revision: 2, space,
   agents: [{ agentId: 'agent', allowed: true }], memories: [{ id: 'one', revision: 1, text: 'Launch March 5' }, { id: 'two', revision: 2, text: 'Tentative date' }] } as unknown as AdaptiveSnapshot);
 const agents = [{ id: 'agent', persona: { name: 'Synthetic Agent' } }] as AgentView[];
 const preview = () => ({ text: '<script>NOT_HTML</script> reviewed draft', receipt: 'signed-receipt', expiresAt: Date.now() + 120000, sourceRefs: [{ id: 'one', revision: 1 }, { id: 'two', revision: 2 }] });
-const select = (fa = false) => { fireEvent.change(screen.getByRole('combobox'), { target: { value: 'agent' } }); for (const box of screen.getAllByRole('checkbox')) fireEvent.click(box); fireEvent.click(screen.getByRole('button', { name: fa ? 'ساخت پیش‌نمایش خلاصه' : 'Create summary preview' })); };
-beforeEach(() => { vi.resetAllMocks(); api.reviewedPreview.mockResolvedValue(preview()); api.reviewedAccept.mockResolvedValue({ memoryId: 'summary', snapshot: snapshot() }); });
+const select = (fa = false) => { fireEvent.click(screen.getByRole('radio', { name: 'Synthetic Agent' })); for (const box of screen.getAllByRole('checkbox')) fireEvent.click(box); fireEvent.click(screen.getByRole('button', { name: fa ? 'ساخت پیش‌نمایش خلاصه' : 'Create summary preview' })); };
+beforeEach(() => { api.reviewedPreview.mockReset(); api.reviewedAccept.mockReset(); api.reviewedPreview.mockResolvedValue(preview()); api.reviewedAccept.mockResolvedValue({ memoryId: 'summary', snapshot: snapshot() }); });
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 it('requires selected notes and a separate explicit save; uses exact source versions and plain preview text', async () => {
   const saved = vi.fn(); const view = render(<ReviewedMemoryPanel snapshot={snapshot()} agents={agents} locale="en" disabled={false} onSaved={saved} />);

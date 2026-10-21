@@ -1,0 +1,330 @@
+/* Settings-family specifics only; prefer the shared primitives in studio.css (stream F).
+   Logical properties throughout so Persian mirrors for free. */
+
+/* ---------- shared: sheet content, fields ---------- */
+.vx-sheet-stack { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.vx-sheet-stack > p { margin: 0; }
+.vx-sheet-stack > .vx-sheet-head { margin-bottom: 0; }
+.vx-sheet-dock .vx-dock-row > .vx-btn { flex: 1; min-width: 0; height: auto; min-height: 52px; padding-block: 10px; white-space: normal; }
+
+/* Settings-family fields sit a touch tighter than the shared .vx-field (8px, Spawn's boards); scoped so they never leak there. */
+:is(.vx-sheet, .vx-settings-page, .vx-you) .vx-field { gap: 6px; }
+:is(.vx-sheet, .vx-settings-page, .vx-you) .vx-field > .vx-label { color: var(--text-2); padding-inline: 4px; }
+
+.vx-clamp-2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; white-space: pre-wrap; }
+.vx-clamp-3 { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; white-space: pre-wrap; }
+.vx-row-link { color: var(--text-2); font-weight: 600; }
+
+/* ---------- You hub ---------- */
+.vx-you { display: flex; flex-direction: column; gap: 20px; }
+.vx-you .vx-pagehead { margin-top: 4px; }
+.vx-you-compose { padding: 12px 12px 4px; }
+.vx-you-compose + .vx-row, .vx-you-compose + .vx-you-note > .vx-row { border-top: 0; }
+.vx-you-note + .vx-you-note > .vx-row, .vx-you-note + .vx-row { border-top: 1px solid var(--hair); }
+.vx-you-note > .vx-row { border-top: 0; }
+.vx-you-note .vx-row-title { font-weight: 400; }
+.vx-you-foot { display: flex; flex-direction: column; gap: 8px; padding-top: 4px; }
+.vx-you-foot a { color: var(--text-2); }
+.vx-you-ok { width: 40px; height: 40px; border-radius: var(--r-s); display: grid; place-items: center; background: var(--success-14); color: var(--success); flex-shrink: 0; }
+.vx-you-notice { max-height: 46vh; overflow-y: auto; padding: 14px 16px; border-radius: var(--r-m); background: var(--s1); border: 1px solid var(--hair);
+  font-size: 15px; line-height: 22px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.vx-you-note-text { white-space: pre-wrap; overflow-wrap: anywhere; font-weight: 500; font-size: 17px; line-height: 24px; letter-spacing: 0; }
+.vx-you-provenance { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border-radius: var(--r-s); background: var(--ice-12); color: var(--ice); font-size: 13px; line-height: 18px; }
+.vx-you-provenance > p { margin: 0; }
+.vx-you-confirm { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; border-radius: var(--r-m); background: var(--danger-12); }
+.vx-you-confirm > * { margin: 0; }
+
+/* ---------- Telegram account (UserInfo: the You hub's sheet and the splash states) ---------- */
+.vx-userinfo { width: 100%; display: flex; flex-direction: column; gap: 8px; text-align: start; }
+.vx-userinfo-id { color: var(--text); font-weight: 600; }
+.vx-userinfo-empty { padding-inline: 0; }
+
+/* ---------- Pause sheet ---------- */
+.vx-pause { display: flex; flex-direction: column; gap: 14px; min-width: 0; overflow-wrap: anywhere; }
+.vx-pause p { margin: 0; }
+.vx-pause-state { display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 10px 14px; border-radius: var(--r-m); background: var(--s1); border: 1px solid var(--hair); font-weight: 600; }
+.vx-pause-state > .vx-status-dot { width: 8px; height: 8px; border-radius: var(--r-full); background: var(--status, var(--text-3)); flex-shrink: 0; }
+.vx-pause-note { display: flex; align-items: center; gap: 8px; font-size: 13px; line-height: 18px; color: var(--text-2); }
+.vx-pause-prose { display: flex; flex-direction: column; gap: 8px; font-size: 13px; line-height: 18px; }
+.vx-pause-actions { display: flex; flex-direction: column; align-items: stretch; gap: 8px; }
+.vx-pause-actions > .vx-btn-sm { align-self: center; }
+.vx-pause-actions > .vx-btn, .vx-pause-confirm .vx-btn { height: auto; min-height: 48px; padding-block: 10px; white-space: normal; }
+.vx-pause-confirm { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; border-radius: var(--r-m); background: var(--s1); border: 1px solid var(--hair); }
+.vx-pause-confirm > * { margin: 0; }
+
+/* ---------- Note correction (inside the note sheet) ---------- */
+.vx-correct { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; border-radius: var(--r-m); background: var(--s1); border: 1px solid var(--hair); }
+.vx-correct p { margin: 0; }
+.vx-correct .vx-textarea { min-height: 96px; }
+.vx-correct-diff { display: flex; flex-direction: column; gap: 8px; }
+.vx-correct-diff > div { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border-radius: var(--r-s); background: var(--s2); }
+.vx-correct-diff h4 { margin: 0; }
+.vx-correct-diff p { white-space: pre-wrap; overflow-wrap: anywhere; }
+.vx-correct-diff .before p { color: var(--text-3); text-decoration: line-through; text-decoration-color: rgba(125, 130, 140, .6); }
+.vx-correct-diff .after { box-shadow: inset 3px 0 0 var(--volt); }
+.vx[dir="rtl"] .vx-correct-diff .after, [dir="rtl"] .vx-correct-diff .after { box-shadow: inset -3px 0 0 var(--volt); }
+.vx-correct-note { display: flex; flex-direction: column; gap: 2px; font-size: 14px; }
+.vx-correct > .vx-btn-ghost { align-self: center; }
+
+/* ---------- Chat (UI §5.3) ---------- */
+.vx-chat-screen { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.vx-chat-title { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vx-chat-actions { display: inline-flex; align-items: center; }
+.vx-chat { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.vx-chat-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
+  display: flex; flex-direction: column; gap: 12px; padding: 8px var(--gutter, 16px) 16px; }
+.vx-chat-scroll > * { flex-shrink: 0; }
+.vx-chat-intro { text-align: center; padding: 4px 24px 0; }
+.vx-chat .vx-thread { margin-top: auto; }
+.vx-msg { display: flex; align-items: flex-end; gap: 8px; min-width: 0; }
+.vx-msg.me { justify-content: flex-end; align-items: center; }
+.vx-msg-face { width: 28px; height: 28px; flex-shrink: 0; display: grid; place-items: center; align-self: flex-start; }
+.vx-msg-col { display: flex; flex-direction: column; gap: 6px; min-width: 0; max-width: 84%; }
+.vx-msg.me .vx-msg-col { align-items: flex-end; }
+.vx-msg .vx-bubble { max-width: 100%; }
+.vx-msg.sending .vx-bubble.me { opacity: .72; }
+.vx-msg.failed .vx-bubble.me { opacity: 1; background: var(--danger-14); color: var(--text); box-shadow: inset 0 0 0 1px rgba(255, 107, 94, .45); }
+.vx-msg-more { width: 32px; height: 32px; flex-shrink: 0; border: 0; border-radius: var(--r-full); background: transparent; color: var(--text-3); display: grid; place-items: center; cursor: pointer; }
+.vx-msg-more:disabled { opacity: .35; cursor: default; }
+.vx-msg-failed { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; font-size: 12px; line-height: 16px; color: var(--danger); text-align: end; }
+.vx-msg-image { display: block; max-width: min(220px, 100%); max-height: 180px; border-radius: 14px; object-fit: cover; margin-bottom: 6px; }
+.vx-chat-system { align-self: center; display: inline-flex; align-items: center; gap: 6px; margin: 4px 0 0; padding: 6px 12px; border-radius: var(--r-full);
+  background: var(--s1); border: 1px solid var(--hair); font-size: 12px; line-height: 16px; color: var(--text-2); }
+.vx-chat-dock { flex-shrink: 0; display: flex; flex-direction: column; gap: 8px; padding: 8px var(--gutter, 16px) calc(12px + env(safe-area-inset-bottom)); }
+.vx-chat-prepared { display: flex; align-items: center; gap: 6px; margin: 0; padding-inline: 8px; font-size: 12px; line-height: 16px; color: var(--volt); }
+.vx-chat-attachment { display: flex; align-items: center; gap: 10px; padding: 6px; padding-inline-end: 2px; border-radius: var(--r-m); background: var(--s1); border: 1px solid var(--hair);
+  font-size: 13px; color: var(--text-2); }
+.vx-chat-attachment > img { width: 40px; height: 40px; border-radius: 10px; object-fit: cover; flex-shrink: 0; }
+.vx-chat-attachment > span { flex: 1; min-width: 0; }
+.vx-file { position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden; clip-path: inset(50%); pointer-events: none; }
+.vx-chat-skel { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; gap: 10px; padding: 24px var(--gutter, 16px) 96px; }
+.vx-chat-skel > .vx-skeleton { display: block; height: 42px; width: 62%; border-radius: var(--r-l); }
+.vx-chat-skel > .vx-skeleton.me { align-self: flex-end; width: 46%; background: var(--s2); }
+
+/* Task outcome chips under the last reply */
+.vx-outcome { display: flex; flex-direction: column; gap: 6px; }
+.vx-outcome-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.vx-outcome-q { font-size: 12px; line-height: 16px; color: var(--text-2); margin-inline-end: 2px; }
+.vx-outcome .vx-chip { height: 28px; padding: 0 12px; font-size: 12px; }
+.vx-outcome-note { display: flex; align-items: flex-start; gap: 6px; margin: 0; font-size: 12px; line-height: 16px; color: var(--text-3); }
+.vx-outcome-note > svg { flex-shrink: 0; margin-top: 1px; color: var(--success); }
+
+/* "Remember this" sheet */
+.vx-remember-quote { margin: 0; padding: 12px 14px; border-radius: var(--r-m); background: var(--s1); border-inline-start: 3px solid var(--volt);
+  white-space: pre-wrap; overflow-wrap: anywhere; font-size: 15px; line-height: 21px; }
+.vx-remember-preview { display: flex; flex-direction: column; gap: 10px; }
+.vx-remember-preview > p { margin: 0; }
+.vx-remember-claims { list-style: none; margin: 0; padding: 0; counter-reset: claim; }
+.vx-remember-claims > li { counter-increment: claim; align-items: flex-start; white-space: pre-wrap; overflow-wrap: anywhere; }
+.vx-remember-claims > li::before { content: counter(claim); flex-shrink: 0; width: 22px; height: 22px; border-radius: var(--r-full); background: var(--s2);
+  color: var(--text-2); font-size: 12px; font-weight: 600; display: grid; place-items: center; }
+.vx-remember-actions { display: flex; flex-direction: column; align-items: stretch; gap: 8px; }
+.vx-remember-actions > .vx-btn-sm { align-self: center; }
+
+@media (prefers-reduced-motion: reduce) {
+  .vx-chat-scroll { scroll-behavior: auto; }
+}
+
+/* Bubbles rise in once on mount (CSS, so re-renders never replay it). */
+@keyframes vxMsgIn { from { opacity: 0; transform: translateY(8px) scale(.98); } }
+.vx-msg { animation: vxMsgIn var(--dur-medium, 320ms) var(--ease-enter, ease-out) both; transform-origin: 0 100%; }
+.vx-msg.me { transform-origin: 100% 100%; }
+[dir="rtl"] .vx-msg { transform-origin: 100% 100%; } [dir="rtl"] .vx-msg.me { transform-origin: 0 100%; }
+@media (prefers-reduced-motion: reduce) { .vx-msg { animation: none; } }
+.vx[data-motion="reduced"] .vx-msg { animation: none; }
+
+/* ---------- Staying in touch (RelationshipPanel) ---------- */
+.vx-rel { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+.vx-rel p { margin: 0; }
+.vx-rel-head { display: flex; align-items: flex-start; gap: 8px; }
+.vx-rel-title { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; padding-inline-start: 4px; }
+.vx-rel-head > .vx-icon-btn { margin-top: -6px; margin-inline-end: -8px; color: var(--text-2); }
+.vx-rel-dot { width: 8px; height: 8px; border-radius: var(--r-full); background: var(--volt); margin-top: 7px; flex-shrink: 0; }
+.vx-rel-dot.read { background: transparent; }
+.vx-rel-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+
+/* ---------- Memories (UI §5.4) ---------- */
+.vx-mem { display: flex; flex-direction: column; gap: 16px; }
+.vx-mem-head { display: flex; align-items: center; gap: 14px; }
+.vx-mem-head > .vx-title { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.vx-mem-face { width: 56px; height: 56px; flex-shrink: 0; }
+.vx-mem-item + .vx-mem-item > .vx-row { border-top: 1px solid var(--hair); }
+.vx-mem-item > .vx-row { border-top: 0; padding-inline-end: 4px; }
+.vx-mem-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; padding: 2px 0; background: none; border: 0; color: inherit; font: inherit;
+  text-align: start; cursor: pointer; font-size: 15px; line-height: 21px; overflow-wrap: anywhere; }
+.vx-mem-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; line-height: 18px; color: var(--text-2); }
+.vx-mem-meta > .vx-pill { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.vx-mem-more { color: var(--text-3); margin-top: -8px; }
+.vx-mem-quote { margin: 0; padding: 12px 14px; border-radius: var(--r-m); background: var(--s1); border: 1px solid var(--hair); font-size: 15px; line-height: 21px;
+  white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* ---------- Settings sub-pages (UI §5.2) ---------- */
+.vx-settings-page { display: flex; flex-direction: column; gap: 20px; }
+/* Leading tiles: 40px r12 (.vx-tile) on every entity row; the You hub's index rows use the compact .vx-tile.sm (studio.css). */
+
+/* ---------- Rights requests (sheet) ---------- */
+.vx-rights-prose { display: flex; flex-direction: column; gap: 6px; font-size: 13px; line-height: 18px; }
+.vx-rights-prose > p { margin: 0; }
+.vx-rights-note { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 13px; line-height: 18px; color: var(--text-2); }
+.vx-rights-row .vx-row-main { gap: 4px; }
+.vx-rights-ref { font: 12px/16px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--text-2); }
+.vx-rights-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.vx-rights-row .vx-you-confirm { margin-top: 6px; }
+
+/* ---------- Voice recognition (sheet) ---------- */
+.vx-voice-capture { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 16px; border-radius: var(--r-m); background: var(--s1); border: 1px solid var(--hair); text-align: center; }
+.vx-voice-capture > p { margin: 0; font-size: 14px; color: var(--text-2); }
+.vx-voice-challenge { font-family: var(--font-unbounded), sans-serif; font-weight: 500; font-size: 28px; line-height: 32px; letter-spacing: .12em; font-feature-settings: "tnum"; }
+.vx-voice .vx-you-notice > * { margin: 0; }
+.vx-voice .vx-you-notice { display: flex; flex-direction: column; gap: 6px; }
+
+/* ---------- Settings sub-page kit (F3/F4) ---------- */
+/* The app-level space switch, pinned under the top bar while the page scrolls under it (the You hub and every sub-page). */
+.vx-space-bar { position: sticky; top: 0; z-index: 3; margin: -12px 0 -12px; padding: 12px 0 14px;
+  background: linear-gradient(var(--ground) calc(100% - 10px), rgba(14, 16, 19, 0)); }
+.vx-stack-s { display: flex; flex-direction: column; gap: 16px; }
+.vx-tile.icon.ok { background: var(--success-14); color: var(--success); }
+.vx-tile.icon.warn { background: var(--warn-14); color: var(--warn); }
+.vx-tile.icon.volt { background: var(--volt-14); color: var(--volt); }
+.vx-tile.icon.vx-tile-add { background: transparent; border: 1.5px dashed rgba(255, 255, 255, .16); color: var(--text-2); }
+.vx-danger-text { color: var(--danger); }
+.vx-sheet-error { margin: 0; }
+.vx-section-head > .vx-icon-btn { width: 32px; height: 32px; margin-block: -8px; color: var(--text-2); }
+
+/* Fact rows: label on the start, value on the end; wraps instead of truncating (approval details must be readable). */
+.vx-fact { align-items: flex-start; gap: 16px; min-height: 48px; }
+.vx-fact .vx-row-main { flex: 0 1 auto; min-width: 96px; padding-top: 1px; }
+.vx-fact-value { flex: 1 1 auto; min-width: 0; text-align: end; font-size: 15px; line-height: 21px; overflow-wrap: anywhere; }
+.vx-fact-value.start { text-align: start; color: var(--text); }
+.vx-fact .vx-pill { vertical-align: middle; }
+
+/* − n + stepper */
+.vx-stepper { display: inline-flex; align-items: center; gap: 2px; padding: 3px; border-radius: var(--r-full); background: var(--s2); border: 1px solid var(--hair); flex-shrink: 0; }
+.vx-stepper-btn { width: 32px; height: 32px; border-radius: var(--r-full); border: 0; background: var(--s3); color: var(--text); display: grid; place-items: center; cursor: pointer;
+  -webkit-tap-highlight-color: transparent; transition: transform var(--d-press) var(--ease-standard), opacity var(--d-state) var(--ease-standard); }
+.vx-stepper-btn:active:not(:disabled) { transform: scale(.9); }
+.vx-stepper-btn:disabled { opacity: .35; cursor: default; }
+.vx-stepper-value { min-width: 32px; text-align: center; font-size: 15px; font-weight: 600; font-feature-settings: "tnum"; }
+
+/* Overlapping initials (audiences) */
+.vx-faces > .vx-initials { width: 26px; height: 26px; font-size: 11px; box-shadow: 0 0 0 2px var(--ground); }
+.vx-faces > .vx-initials.more { background: var(--s2); color: var(--text-2); }
+.vx-sheet .vx-faces > .vx-initials { box-shadow: 0 0 0 2px var(--s2); }
+
+/* Unread count on the You hub's Inbox row */
+.vx-count { min-width: 22px; height: 22px; padding: 0 7px; border-radius: var(--r-full); background: var(--volt); color: var(--on-volt);
+  font-size: 12px; font-weight: 700; line-height: 22px; text-align: center; font-feature-settings: "tnum"; flex-shrink: 0; }
+
+/* ---------- Preferences ---------- */
+.vx-prefs { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.vx-pref { flex-direction: column; align-items: stretch; gap: 10px; padding-block: 14px; }
+.vx-pref + .vx-pref { border-top: 1px solid var(--hair); }
+.vx-pref > p { margin: 0; }
+.vx-pref-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.vx-pref .vx-seg { width: 100%; }
+.vx-pref-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.vx-pref-actions > .vx-btn { height: auto; min-height: 32px; padding-block: 6px; white-space: normal; }
+.vx-pref-status { display: inline-flex; align-items: center; gap: 6px; margin: 0; padding-inline: 4px; font-size: 13px; color: var(--success); }
+.vx-pref-hint { text-align: center; padding: 4px 24px 0; }
+.vx-learn-text { display: block; margin: 6px 0 10px; font-size: 13px; line-height: 19px; color: var(--text-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.vx-learn-notice .vx-dock-row > .vx-btn { height: auto; min-height: 40px; white-space: normal; }
+.vx-learn-candidate .vx-row-main { gap: 4px; }
+.vx-learn-candidate .vx-pref-actions { margin-top: 6px; }
+.vx-hours { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.vx-row.vx-hours { display: grid; }
+
+/* ---------- Reminders ---------- */
+.vx-reminders { display: flex; flex-direction: column; gap: 20px; }
+.vx-rem-when { cursor: default; }
+.vx-rem-time { width: auto; max-width: 52%; height: 40px; padding: 8px 10px; font-size: 14px; color-scheme: dark; font-feature-settings: "tnum"; }
+.vx-rem-compose { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px 12px; border-top: 1px solid var(--hair); }
+.vx-rem-compose > .vx-row-sub { padding-inline: 8px; }
+.vx-rem-item > .vx-row { border-top: 0; }
+.vx-rem-item + .vx-rem-item > .vx-row { border-top: 1px solid var(--hair); }
+.vx-rem-item[aria-current="true"] > .vx-row { background: var(--volt-14); }
+.vx-rem-item:focus { outline: none; }
+.vx-rem-item:focus-visible > .vx-row { box-shadow: inset 0 0 0 2px var(--volt); }
+.vx-rem-unknown { display: block; margin-top: 2px; color: var(--warn); }
+
+/* ---------- Inbox ---------- */
+.vx-inbox-item > .vx-row { border-top: 0; }
+.vx-inbox-item + .vx-inbox-item > .vx-row { border-top: 1px solid var(--hair); }
+.vx-inbox-lead { position: relative; display: inline-flex; flex-shrink: 0; }
+.vx-unread { position: absolute; inset-inline-start: -11px; top: 50%; width: 8px; height: 8px; margin-top: -4px; border-radius: var(--r-full); background: var(--volt);
+  box-shadow: 0 0 0 3px rgba(214, 255, 92, .14); }
+.vx-inbox-time { font-size: 12px; line-height: 16px; color: var(--text-3); white-space: nowrap; font-feature-settings: "tnum"; padding-top: 2px; }
+
+/* ---------- Diagnostics and requests (operator views) ---------- */
+.vx-diag { gap: 10px; }
+.vx-diag .vx-section-head > .vx-pill { flex-shrink: 0; }
+.vx-diag-lede { margin-top: -4px; }
+.vx-stat-na { font-family: var(--f-body); font-size: 14px; line-height: 20px; color: var(--text-3); }
+.vx-stats-compact .vx-stat-value { font-family: var(--f-body); font-size: 14px; line-height: 20px; font-weight: 600; overflow-wrap: anywhere; }
+.vx-maint { display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: var(--r-m); background: var(--s1); border: 1px solid var(--hair); min-width: 0; }
+.vx-maint > .vx-section-foot { padding-inline: 0; }
+.vx-maint .vx-stat { background: var(--s2); }
+.vx-maint-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.vx-maint-head > h3 { margin: 0; }
+.vx-maint-head > .vx-pill { height: auto; min-height: var(--h-pill); white-space: normal; padding-block: 3px; }
+.vx-ops { gap: 10px; min-width: 0; overflow-wrap: anywhere; }
+.vx-ops-item .vx-row-main { gap: 6px; }
+.vx-ops-title { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.vx-ops-state { color: var(--text); }
+.vx-ops-refs { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.vx-ref { display: inline-block; max-width: 100%; padding: 2px 8px; border-radius: 8px; background: var(--s2); font: 12px/18px ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--text-2); overflow-wrap: anywhere; direction: ltr; }
+.vx-ops-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.vx-ops-actions > .vx-btn { height: auto; min-height: 32px; padding-block: 6px; white-space: normal; }
+.vx-ops-retention { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: var(--r-s); background: var(--s2); }
+.vx-ops .vx-you-confirm { padding: 12px 14px; gap: 8px; }
+.vx-ops .vx-you-confirm .vx-btn { height: auto; min-height: 40px; white-space: normal; }
+.vx-ops-pages { display: flex; justify-content: center; gap: 8px; }
+.vx-obs .vx-section-head > h2 { flex: 1; min-width: 0; }
+
+/* ---------- Connections ---------- */
+.vx-conn .vx-tile { font-family: var(--f-display); font-weight: 500; }
+.vx-conn-head { display: flex; align-items: center; gap: 14px; padding: 4px 4px 0; }
+.vx-conn-head > .vx-tile { width: 56px; height: 56px; border-radius: 18px; font-size: 22px; background: var(--s2); }
+.vx-conn-head-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.vx-conn-head-main > h1 { margin: 0; overflow-wrap: anywhere; }
+.vx-conn-provider + .vx-conn-provider { border-top: 1px solid var(--hair); }
+.vx-conn-provider > .vx-row { border-top: 0; }
+.vx-conn-reason { padding-block: 0 10px; padding-inline: calc(16px + 40px + 12px) 16px; }
+.vx-conn-reason > p { padding-inline: 0; }
+.vx-conn-id { font: 12px/16px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--text-3); overflow-wrap: anywhere; }
+.vx-conn-targets { list-style: none; margin: 0 0 6px; padding: 0 4px; display: flex; flex-direction: column; gap: 4px; font: 12px/18px ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--text-2); overflow-wrap: anywhere; }
+.vx-conn-list { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; font: 12px/16px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--text-3); overflow-wrap: anywhere; }
+.vx-conn-arg .vx-row-main { gap: 4px; }
+.vx-conn-arg-value { font-size: 15px; line-height: 21px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 40vh; overflow-y: auto; }
+.vx-conn-result { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 15px; line-height: 21px; }
+.vx-conn-op .vx-row-main { gap: 3px; }
+.vx-conn-wait { display: grid; place-items: center; padding-top: 6px; }
+.vx-conn-wait-ring { position: relative; width: 72px; height: 72px; border-radius: var(--r-full); display: grid; place-items: center; background: var(--s1); color: var(--text-2); }
+.vx-conn-wait-ring::before { content: ""; position: absolute; inset: 0; border-radius: inherit; border: 2px solid transparent; border-top-color: var(--volt); border-inline-end-color: var(--volt);
+  animation: vxConnSpin 1.1s linear infinite; }
+.vx-conn-wait-ring.done { background: var(--success-14); color: var(--success); }
+.vx-conn-wait-ring.done::before { animation: none; border-color: var(--success); }
+@keyframes vxConnSpin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .vx-conn-wait-ring::before { animation: none; border-color: rgba(214, 255, 92, .45); } }
+.vx[data-motion="reduced"] .vx-conn-wait-ring::before { animation: none; border-color: rgba(214, 255, 92, .45); }
+
+/* Scheduled checks */
+.vx-flow-field { gap: 12px; cursor: default; }
+.vx-flow-field > .vx-input { width: 52%; flex-shrink: 0; height: 40px; padding: 8px 10px; font-size: 14px; }
+.vx-flow-time { width: auto !important; color-scheme: dark; font-feature-settings: "tnum"; }
+
+/* ---------- Shared memories ---------- */
+.vx-shared-box .vx-section-head { align-items: center; justify-content: flex-start; gap: 10px; }
+.vx-shared-box .vx-section-head > h2 { flex: 1; min-width: 0; }
+.vx-shared-steps { display: flex; align-items: center; gap: 12px; margin-bottom: 2px; }
+.vx-shared-steps > .vx-over { color: var(--text-2); }
+.vx-shared-text { min-height: 120px; }
+.vx-shared-preview { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; border-radius: var(--r-m); background: var(--volt-14); border: 1px solid rgba(214, 255, 92, .24); }
+.vx-shared-preview > p { margin: 0; padding-inline: 0; }
+.vx-shared-preview-head { display: flex; align-items: center; gap: 12px; }
+.vx-shared-preview .vx-faces > .vx-initials { box-shadow: 0 0 0 2px var(--s2); }
+.vx-shared-names { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.vx-shared-names > li { padding: 4px 10px; border-radius: var(--r-full); background: var(--s2); font-size: 13px; }
+@media (prefers-reduced-motion: reduce) { .vx-stepper-btn { transition: none; } .vx-stepper-btn:active:not(:disabled) { transform: none; } }
+.vx[data-motion="reduced"] .vx-stepper-btn:active:not(:disabled) { transform: none; }

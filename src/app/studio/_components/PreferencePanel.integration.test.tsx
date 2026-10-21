@@ -39,15 +39,15 @@ it.each([{ locale: 'en', file: true }, { locale: 'fa', file: true }, { locale: '
   render(<Harness />);
   const fa = locale === 'fa';
   const flowText = (text: string) => screen.findByText(text, {}, { timeout: 5000 });
-  const select = await screen.findByLabelText(fa ? 'زبان پاسخ' : 'Reply language', {}, { timeout: 5000 });
-  fireEvent.change(select, { target: { value: 'fa' } });
+  await screen.findByLabelText(fa ? 'زبان پاسخ' : 'Reply language', {}, { timeout: 5000 });
   const row = screen.getByRole('article', { name: fa ? 'ترجیح: زبان پاسخ' : 'Reply language preference' });
-  fireEvent.click(within(row).getByRole('button', { name: fa ? 'ذخیرهٔ ترجیح' : 'Save preference' }));
+  // Choosing a value saves it (auto-save).
+  fireEvent.click(within(row).getByRole('tab', { name: fa ? 'فارسی' : 'Persian' }));
   expect(await flowText(fa ? 'ذخیره شد.' : 'Saved.')).toBeInTheDocument();
   expect((await f.factory().experience.readPreferences(ID.alice, 'work', agent.id)).settings).toEqual([{ key: 'language', value: 'fa' }]);
   fireEvent.click(within(screen.getByRole('article', { name: fa ? 'ترجیح: زبان پاسخ' : 'Reply language preference' })).getByRole('button', { name: fa ? 'بازنشانی' : 'Reset' }));
   if (!file) {
-    await waitFor(() => expect(screen.getByLabelText(fa ? 'زبان پاسخ' : 'Reply language')).toHaveValue('auto'), { timeout: 5000 });
+    await waitFor(() => expect(within(screen.getByRole('article', { name: fa ? 'ترجیح: زبان پاسخ' : 'Reply language preference' })).getByRole('tab', { name: fa ? 'خودکار' : 'Automatic' })).toHaveAttribute('aria-selected', 'true'), { timeout: 5000 });
     expect(screen.getAllByText(fa ? 'دلیل دقیق و واگرد اینجا در دسترس نیست. ذخیره و بازنشانی ترجیح همچنان ممکن است.'
       : 'Detailed explanations and undo are unavailable here. You can still save or reset a preference.')).toHaveLength(3);
     expect(screen.queryByRole('button', { name: fa ? 'واگرد آخرین تغییر' : 'Undo last change' })).not.toBeInTheDocument();
@@ -64,8 +64,7 @@ it.each([{ locale: 'en', file: true }, { locale: 'fa', file: true }, { locale: '
   expect((await f.state('personal')).entries.every(e => !e.saved)).toBe(true);
   // A stale tab still displays a pre-expiry token while server time advances.
   // Its genuine post-expiry HTTP attempt must fail without claiming undo.
-  fireEvent.change(screen.getByLabelText(fa ? 'اندازهٔ پاسخ' : 'Reply length'), { target: { value: 'brief' } });
-  fireEvent.click(within(screen.getByRole('article', { name: fa ? 'ترجیح: اندازهٔ پاسخ' : 'Reply length preference' })).getByRole('button', { name: fa ? 'ذخیرهٔ ترجیح' : 'Save preference' }));
+  fireEvent.click(within(screen.getByRole('article', { name: fa ? 'ترجیح: اندازهٔ پاسخ' : 'Reply length preference' })).getByRole('tab', { name: fa ? 'کوتاه' : 'Brief' }));
   await flowText(fa ? 'ذخیره شد.' : 'Saved.');
   f.setNow(NOW + 10 * 60_000 + 1);
   fireEvent.click(screen.getByRole('button', { name: fa ? 'واگرد آخرین تغییر' : 'Undo last change' }));

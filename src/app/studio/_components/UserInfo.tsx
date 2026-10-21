@@ -2,14 +2,30 @@
 
 import { useEffect, useState } from 'react';
 import { haptic, telegramUser, type Member, type TelegramUserInfo } from '../_lib/client';
-import { Icon } from './ui';
+import type { Locale } from '../_lib/i18n';
+import { Icon, Row } from './ui';
+
+const COPY = {
+  en: {
+    account: 'Your Telegram account', username: 'Username', first: 'First name', last: 'Last name', id: 'User ID',
+    copy: 'Copy', copied: 'Copied', copyId: 'Copy user ID', share: 'Share your User ID with an admin.',
+    openFromTelegram: 'Open Vox Studio from Telegram to see your User ID, then share it with an admin.',
+  },
+  fa: {
+    account: 'حساب تلگرام شما', username: 'نام کاربری', first: 'نام', last: 'نام خانوادگی', id: 'شناسهٔ کاربری',
+    copy: 'کپی', copied: 'کپی شد', copyId: 'کپی شناسهٔ کاربری', share: 'شناسهٔ کاربری خود را با یک مدیر به اشتراک بگذارید.',
+    openFromTelegram: 'Vox Studio را از تلگرام باز کنید تا شناسهٔ کاربری خود را ببینید، سپس آن را با یک مدیر به اشتراک بگذارید.',
+  },
+} as const;
 
 /**
  * Who you are on Telegram: username, first and last name, and the numeric user
  * id (what STUDIO_SUPERADMIN_IDS and access lists need). Reads Telegram's own
- * user data, so it works even before the server is configured.
+ * user data, so it works even before the server is configured. Handles and the
+ * id stay left-to-right inside a Persian row (they are copied verbatim).
  */
-export function UserInfo({ member }: { member?: Member }) {
+export function UserInfo({ member, locale = 'en' }: { member?: Member; locale?: Locale }) {
+  const c = COPY[locale];
   const [tgUser, setTgUser] = useState<TelegramUserInfo | null>(null);
   const [copied, setCopied] = useState(false);
   useEffect(() => { setTgUser(telegramUser()); }, []);
@@ -18,9 +34,7 @@ export function UserInfo({ member }: { member?: Member }) {
   const first = tgUser?.first_name ?? member?.name;
   const last = tgUser ? tgUser.last_name : undefined;
 
-  if (!id) {
-    return <p className="vx-small vx-2" style={{ margin: 0 }}>Open Vox Studio from Telegram to see your User ID, then share it with an admin.</p>;
-  }
+  if (!id) return <p className="vx-section-foot vx-userinfo-empty">{c.openFromTelegram}</p>;
 
   const copy = async () => {
     try {
@@ -31,28 +45,20 @@ export function UserInfo({ member }: { member?: Member }) {
     } catch { /* clipboard blocked: the id is still visible */ }
   };
 
-  const rows: Array<[string, string]> = [
-    ['Username', username ? `@${username}` : '—'],
-    ['First name', first || '—'],
-    ['Last name', last || '—'],
-  ];
-
   return (
-    <div className="vx-group" style={{ width: '100%', textAlign: 'left' }} aria-label="Your Telegram account">
-      {rows.map(([label, value]) => (
-        <div key={label} className="vx-row" style={{ minHeight: 48 }}>
-          <span className="vx-small vx-2" style={{ width: 92, flexShrink: 0 }}>{label}</span>
-          <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{value}</span>
-        </div>
-      ))}
-      <div className="vx-row" style={{ minHeight: 48 }}>
-        <span className="vx-small vx-2" style={{ width: 92, flexShrink: 0 }}>User ID</span>
-        <span className="vx-num" style={{ flex: 1, fontWeight: 600 }}>{id}</span>
-        <button className="vx-btn vx-btn-secondary vx-btn-sm" onClick={copy} aria-label="Copy user ID" style={{ height: 32, padding: '0 12px' }}>
-          {copied ? <><Icon name="check" size={16} width={2.5} />Copied</> : 'Copy'}
-        </button>
+    <div className="vx-userinfo">
+      <div className="vx-group" role="group" aria-label={c.account}>
+        <Row title={c.username} plain value={username ? <bdi dir="ltr">@{username}</bdi> : '—'} />
+        <Row title={c.first} plain value={first || '—'} />
+        <Row title={c.last} plain value={last || '—'} />
+        <Row title={c.id} plain value={<bdi dir="ltr" className="vx-num vx-userinfo-id">{id}</bdi>}
+          end={(
+            <button type="button" className="vx-btn vx-btn-xs" onClick={copy} aria-label={c.copyId}>
+              {copied ? <><Icon name="check" size={14} width={2.5} />{c.copied}</> : c.copy}
+            </button>
+          )} />
       </div>
-      <p className="vx-small vx-2" style={{ margin: 0, padding: '12px 16px' }}>Share your User ID with an admin.</p>
+      <p className="vx-section-foot">{c.share}</p>
     </div>
   );
 }

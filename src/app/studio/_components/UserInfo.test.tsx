@@ -73,3 +73,18 @@ describe('UserInfo identity display', () => {
     expect(within(view.container).getByText(/open vox studio from telegram/i)).toBeVisible();
   });
 });
+
+describe('UserInfo in Persian', () => {
+  it('labels the rows in Persian and keeps the handle and id left-to-right', () => {
+    Reflect.deleteProperty(window, 'Telegram');
+    const member: Member = { telegramId: 7777003, name: 'Fixture', username: 'fixture_fa', role: 'member', joinedAt: '2026-10-19T00:00:00.000Z' };
+    const view = render(<UserInfo member={member} locale="fa" />);
+    const account = within(view.container);
+    expect(account.getByRole('group', { name: 'حساب تلگرام شما' })).toBeVisible();
+    expect(account.getByText('شناسهٔ کاربری')).toBeVisible();
+    expect(account.getByText(String(member.telegramId))).toHaveAttribute('dir', 'ltr');
+    expect(account.getByText('@fixture_fa')).toHaveAttribute('dir', 'ltr');
+    expect(account.getByRole('button', { name: 'کپی شناسهٔ کاربری' })).toHaveClass('vx-btn-xs');
+    expect(view.container.querySelector('[style]')).toBeNull();
+  });
+});

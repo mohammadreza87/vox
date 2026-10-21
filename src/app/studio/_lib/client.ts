@@ -6,11 +6,11 @@
 
 import type { AgentView, SuccessorTemplate } from '@/lib/studio/service';
 import type { DefaultVoice, LibraryVoice, VoiceOptions } from '@/lib/studio/media';
-import type { AgentLook, AgentVisibility, GroupBehavior, Member, PersonaSpec, Role, SpawnBrief } from '@/lib/studio/types';
-// Client-safe: type-only imports from the skills contract (never catalog.ts / service.ts values).
-import type { CatalogView, RouteSuggestion } from '@/lib/studio/skills/types';
+import type { AgentLook, AgentVisibility, CharacterLook, GroupBehavior, LookPatch, Member, PersonaSpec, Role, SpawnBrief, Stage } from '@/lib/studio/types';
 
-export type { AgentView, AgentLook, AgentVisibility, GroupBehavior, Member, PersonaSpec, Role, SpawnBrief, SuccessorTemplate };
+export type { AgentView, AgentLook, AgentVisibility, CharacterLook, GroupBehavior, LookPatch, Member, PersonaSpec, Role, SpawnBrief, Stage };
+import type { CatalogView, RouteSuggestion } from '@/lib/studio/skills/types';
+export type { SuccessorTemplate };
 export type { DefaultVoice, LibraryVoice, VoiceOptions };
 export type { CatalogView, RouteSuggestion };
 
@@ -36,7 +36,7 @@ interface TelegramWebApp {
   };
 }
 
-export interface TelegramUserInfo { id: number; first_name: string; last_name?: string; username?: string }
+export interface TelegramUserInfo { id: number; first_name: string; last_name?: string; username?: string; language_code?: string }
 
 /** The signed-in Telegram user as the client sees it (available even if the server is down). */
 export function telegramUser(): TelegramUserInfo | null {
@@ -58,15 +58,7 @@ export function initTelegram() {
   app.disableVerticalSwipes?.();
 }
 
-export const haptic = {
-  tap: () => tg()?.HapticFeedback?.impactOccurred('light'),
-  soft: () => tg()?.HapticFeedback?.impactOccurred('soft'),
-  heavy: () => tg()?.HapticFeedback?.impactOccurred('heavy'),
-  select: () => tg()?.HapticFeedback?.selectionChanged(),
-  success: () => tg()?.HapticFeedback?.notificationOccurred('success'),
-  warn: () => tg()?.HapticFeedback?.notificationOccurred('warning'),
-  error: () => tg()?.HapticFeedback?.notificationOccurred('error'),
-};
+export { haptic } from './haptics';
 
 export function openTelegram(url: string) {
   const app = tg();
@@ -77,9 +69,18 @@ export function openTelegram(url: string) {
 }
 
 export class ApiError extends Error {
-  constructor(readonly status: number, message: string) {
+  /** Seconds until a rate-limited request may be retried (429) */
+  readonly retryAfter?: number;
+  constructor(readonly status: number, message: string, retryAfter?: number) {
     super(message);
+    if (retryAfter !== undefined) this.retryAfter = retryAfter;
   }
+}
+
+function retryAfterOf(res: Response, body: unknown): number | undefined {
+  const fromBody = body && typeof body === 'object' && 'retryAfter' in body ? Number(body.retryAfter) : NaN;
+  const seconds = Number.isFinite(fromBody) ? fromBody : Number(res.headers?.get('Retry-After') ?? NaN);
+  return Number.isFinite(seconds) && seconds >= 0 ? seconds : undefined;
 }
 
 export async function request<T>(method: string, path: string, body?: unknown, responseType: 'json' | 'blob' = 'json', signal?: AbortSignal): Promise<T> {
@@ -98,7 +99,7 @@ export async function request<T>(method: string, path: string, body?: unknown, r
     const err: unknown = await res.json().catch(() => null);
     const message = err && typeof err === 'object' && 'error' in err && typeof err.error === 'string'
       ? err.error : `Request failed (${res.status})`;
-    throw new ApiError(res.status, message);
+    throw new ApiError(res.status, message, res.status === 429 ? retryAfterOf(res, err) : undefined);
   }
   if (responseType === 'blob') return await res.blob() as T;
   const type = (res.headers.get('Content-Type') ?? '').split(';', 1)[0].trim().toLowerCase();
@@ -120,7 +121,7 @@ export interface Me {
 }
 
 export interface MemoryItem { id: string; content: string; type: string; scope: string; scopeLabel: string; from: string; mine: boolean; at: string; sensitivity: string }
-export interface GroupItem { chatId: number; title: string; hasGuests: boolean; memberCount: number; agents: Array<{ id: string; name: string; look: AgentLook }> }
+export interface GroupItem { chatId: number; title: string; hasGuests: boolean; memberCount: number; agents: Array<{ id: string; name: string; look: AgentLook; stage?: Stage }> }
 export type RelationshipMode = 'off' | 'shadow' | 'live';
 export type RelationshipSpace = 'work' | 'personal';
 export interface RelationshipInboxItem { id: string; text: string; createdAt: number; expiresAt: number; status: 'unread' | 'read' | 'dismissed' }
@@ -143,6 +144,7 @@ export interface RelationshipView {
 }
 
 const enc = encodeURIComponent;
+const withDefined = <T extends object>(o: T): Partial<T> => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as Partial<T>;
 
 export const api = {
   relationshipObservations: () => request<{ mode: 'off' | 'shadow' | 'live'; sampledEvents: number; counts: Record<string, number>; feedbackOutcomes?: Record<string, number>; windowStart: string | null; windowEnd: string | null; scope: string }>('GET', 'relationship-observations'),
@@ -157,9 +159,12 @@ export const api = {
   updatePersona: (id: string, persona: Partial<PersonaSpec>) => request<{ agent: AgentView }>('PATCH', `agents/${enc(id)}`, { persona }),
   deleteDraft: (id: string) => request<{ ok: true }>('DELETE', `agents/${enc(id)}`),
   refine: (id: string, instruction: string) => request<{ agent: AgentView }>('POST', `agents/${enc(id)}/refine`, { instruction }),
-  setLook: (id: string, look: Partial<AgentLook> | 'random') =>
-    request<{ agent: AgentView }>('POST', `agents/${enc(id)}/look`, look === 'random' ? { random: true } : { look }),
-  generateAvatars: (id: string, count = 2) => request<{ agent: AgentView }>('POST', `agents/${enc(id)}/avatars`, { count }),
+  /** `sync: false` saves without pushing to Telegram (the look editor pushes once on close) */
+  setLook: (id: string, look: LookPatch | Partial<AgentLook> | 'random', o: { sync?: boolean } = {}) =>
+    request<{ agent: AgentView }>('POST', `agents/${enc(id)}/look`, { ...(look === 'random' ? { random: true } : { look }), ...withDefined(o) }),
+  /** `select: false` only adds the variants; the default selects the newest and pushes it */
+  generateAvatars: (id: string, count = 2, o: { select?: boolean } = {}) =>
+    request<{ agent: AgentView }>('POST', `agents/${enc(id)}/avatars`, { count, ...withDefined(o) }),
   chooseAvatar: (id: string, file: string | null) => request<{ agent: AgentView }>('PUT', `agents/${enc(id)}/avatar`, { file }),
   uploadAvatar: (id: string, file: File) => {
     const form = new FormData();
@@ -184,7 +189,9 @@ export const api = {
   setVisibility: (id: string, visibility: AgentVisibility) => request<{ agent: AgentView }>('PUT', `agents/${enc(id)}/visibility`, { visibility }),
   setLiveWeb: (id: string, on: boolean) => request<{ agent: AgentView }>('PUT', `agents/${enc(id)}/live-web`, { on }),
   setGroupBehavior: (id: string, behavior: GroupBehavior) => request<{ agent: AgentView }>('PUT', `agents/${enc(id)}/group-behavior`, behavior),
-  syncProfile: (id: string) => request<{ agent: AgentView; failed: string[] }>('POST', `agents/${enc(id)}/profile-sync`),
+  /** `force: false` sends only the steps that changed; Retry forces every step */
+  syncProfile: (id: string, o: { force?: boolean } = {}) =>
+    request<{ agent: AgentView; failed: string[] }>('POST', `agents/${enc(id)}/profile-sync`, o.force === undefined ? undefined : { force: o.force }),
   unblock: (id: string, telegramId: number) => request<{ agent: AgentView }>('DELETE', `agents/${enc(id)}/blocked?telegramId=${telegramId}`),
   setAgentAdmin: (id: string, isAdmin: boolean) => request<{ agent: AgentView }>('PUT', `agents/${enc(id)}/admin`, { isAdmin }),
   fire: (id: string, input: { reason: string; memoryPolicy: string; confirmName: string }) =>

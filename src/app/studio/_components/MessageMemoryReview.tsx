@@ -2,6 +2,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { adaptiveApi } from '../_lib/adaptive-client';
 import type { MessageMemoryPreview } from '@/lib/adaptive/message-memory/contracts';
+import { Icon, SheetHead, Spinner } from './ui';
 
 /** Explicit selected text only. This component never consumes predictions,
  * assistant text, images, audio or an automatically collected transcript. */
@@ -35,24 +36,29 @@ export function MessageMemoryReview({ text, agentId, space, locale, disabled, on
         if (epoch.current !== current || abort.signal.aborted) return;
         setNow(Date.now()); setPreview(result);
       }
-    } catch { if (epoch.current === current && !abort.signal.aborted) setError(t('This review could not be confirmed. Check Privacy and agent access, then request a new preview.', 'این بررسی تأیید نشد. حریم خصوصی و دسترسی عامل را بررسی کنید و پیش‌نمایش تازه بخواهید.')); }
+    } catch { if (epoch.current === current && !abort.signal.aborted) setError(t('This review could not be confirmed. Check your settings and agent access in You, then request a new preview.', 'این بررسی تأیید نشد. تنظیمات و دسترسی عامل را در بخش «شما» بررسی کنید و پیش‌نمایش تازه بخواهید.')); }
     finally { if (epoch.current === current) { setBusy(false); setSaving(false); } }
   };
   const expired = !!preview && preview.expiresAt <= now;
-  return <section className="vx-card vx-privacy-card" aria-label={t('Review this message for private memory', 'بررسی این پیام برای حافظهٔ خصوصی')} aria-busy={busy} dir={locale === 'fa' ? 'rtl' : 'ltr'}>
-    <h3 className="vx-head">{t('Review memory from this text', 'بررسی حافظه از این متن')}</h3>
-    <p className="vx-small">{space === 'work' ? t('Work · Private to you', 'کاری · فقط برای شما') : t('Personal · Private to you', 'شخصی · فقط برای شما')}</p>
-    <p className="vx-small">{t('Preview sends only the selected text below to this agent’s AI provider. The source text and draft are temporary. Nothing is saved until you choose Save reviewed claims. Claims are user-provided and are not proof of authorship or verified facts. This enables no automatic memory or sharing.', 'پیش‌نمایش فقط متن انتخاب‌شدهٔ زیر را به ارائه‌دهندهٔ هوش مصنوعی این عامل می‌فرستد. متن منبع و پیش‌نویس موقت‌اند. تا انتخاب «ذخیرهٔ ادعاهای بررسی‌شده»، چیزی ذخیره نمی‌شود. این ادعاهای ارائه‌شدهٔ کاربر، اثبات نویسندگی یا واقعیتِ تأییدشده نیستند. حافظهٔ خودکار یا اشتراک‌گذاری فعال نمی‌شود.')}</p>
-    <blockquote aria-label={t('Exact selected text', 'متن دقیق انتخاب‌شده')} style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{text}</blockquote>
-    <button className="vx-btn vx-btn-secondary" disabled={busy || disabled || !text.trim() || text.length > 4096} onClick={() => void run(false)}>{t('Preview private claims', 'پیش‌نمایش ادعاهای خصوصی')}</button>
-    {preview && <div aria-label={t('Temporary claim preview', 'پیش‌نمایش موقت ادعاها')}>
-      <p className="vx-small">{t('Check attribution, dates and uncertainty. Saved claims expire after 90 days; inspect or delete them in Privacy.', 'انتساب، تاریخ‌ها و عدم قطعیت را بررسی کنید. ادعاهای ذخیره‌شده پس از ۹۰ روز منقضی می‌شوند؛ آن‌ها را در حریم خصوصی ببینید یا حذف کنید.')}</p>
-      {preview.claims.length ? <ol>{preview.claims.map((claim, index) => <li key={index} style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{claim}</li>)}</ol> : <p role="status">{t('No supported memory claim was proposed. Nothing was saved.', 'ادعای پشتیبانی‌شده‌ای برای حافظه پیشنهاد نشد. چیزی ذخیره نشد.')}</p>}
-      {expired && <p role="status">{t('This preview expired. Request a new one.', 'این پیش‌نمایش منقضی شد. پیش‌نمایش تازه بخواهید.')}</p>}
-      {preview.claims.length > 0 && <button className="vx-btn vx-btn-secondary" disabled={busy || disabled || expired} onClick={() => void run(true)}>{t('Save reviewed claims', 'ذخیرهٔ ادعاهای بررسی‌شده')}</button>}
+  return <section className="vx-sheet-stack vx-remember" aria-label={t('Review this message for private memory', 'بررسی این پیام برای حافظهٔ خصوصی')} aria-busy={busy} dir={locale === 'fa' ? 'rtl' : 'ltr'}>
+    <SheetHead title={t('Remember this', 'به خاطر سپردن')} sub={space === 'work' ? t('Work · Private to you', 'کاری · فقط برای شما') : t('Personal · Private to you', 'شخصی · فقط برای شما')} />
+    <blockquote className="vx-remember-quote" dir="auto" aria-label={t('Exact selected text', 'متن دقیق انتخاب‌شده')}>{text}</blockquote>
+    <p className="vx-footnote">{t('Preview sends only the selected text below to this agent’s AI provider. The source text and draft are temporary. Nothing is saved until you choose Save reviewed claims. Claims are user-provided and are not proof of authorship or verified facts. This enables no automatic memory or sharing.', 'پیش‌نمایش فقط متن انتخاب‌شدهٔ زیر را به ارائه‌دهندهٔ هوش مصنوعی این عامل می‌فرستد. متن منبع و پیش‌نویس موقت‌اند. تا انتخاب «ذخیرهٔ ادعاهای بررسی‌شده»، چیزی ذخیره نمی‌شود. این ادعاهای ارائه‌شدهٔ کاربر، اثبات نویسندگی یا واقعیتِ تأییدشده نیستند. حافظهٔ خودکار یا اشتراک‌گذاری فعال نمی‌شود.')}</p>
+    {preview && <div className="vx-remember-preview" aria-label={t('Temporary claim preview', 'پیش‌نمایش موقت ادعاها')}>
+      {preview.claims.length ? <ol className="vx-group vx-remember-claims">{preview.claims.map((claim, index) => <li key={index} className="vx-row" dir="auto">{claim}</li>)}</ol>
+        : <p className="vx-small vx-2" role="status">{t('No supported memory claim was proposed. Nothing was saved.', 'ادعای پشتیبانی‌شده‌ای برای حافظه پیشنهاد نشد. چیزی ذخیره نشد.')}</p>}
+      <p className="vx-footnote">{t('Check attribution, dates and uncertainty. Saved claims expire after 90 days; inspect or delete them in You.', 'انتساب، تاریخ‌ها و عدم قطعیت را بررسی کنید. ادعاهای ذخیره‌شده پس از ۹۰ روز منقضی می‌شوند؛ آن‌ها را در بخش «شما» ببینید یا حذف کنید.')}</p>
+      {expired && <p className="vx-small" role="status">{t('This preview expired. Request a new one.', 'این پیش‌نمایش منقضی شد. پیش‌نمایش تازه بخواهید.')}</p>}
     </div>}
-    {saving && <p className="vx-small">{t('Closing cancels pending work. A save already completed must be deleted in Privacy.', 'بستن، کار در انتظار را لغو می‌کند. اگر ذخیره قبلاً کامل شده، باید آن را در حریم خصوصی حذف کنید.')}</p>}
-    <button className="vx-btn vx-btn-secondary" onClick={close}>{saving ? t('Stop waiting and close', 'پایان انتظار و بستن') : t('Discard and close', 'کنارگذاشتن و بستن')}</button>
-    {error && <p role="alert">{error}</p>}
+    {error && <div className="vx-banner danger"><Icon name="warn" size={18} /><div className="vx-banner-body"><span role="alert">{error}</span></div></div>}
+    {saving && <p className="vx-footnote">{t('Closing cancels pending work. A save already completed must be deleted in You.', 'بستن، کار در انتظار را لغو می‌کند. اگر ذخیره قبلاً کامل شده، باید آن را در بخش «شما» حذف کنید.')}</p>}
+    <div className="vx-remember-actions">
+      {preview && preview.claims.length > 0
+        ? <button className="vx-btn vx-btn-primary vx-btn-block" disabled={busy || disabled || expired} onClick={() => void run(true)}>{saving ? <Spinner /> : null}{t('Save reviewed claims', 'ذخیرهٔ ادعاهای بررسی‌شده')}</button>
+        : null}
+      <button className={`vx-btn vx-btn-block ${preview?.claims.length ? 'vx-btn-ghost' : 'vx-btn-secondary'}`} disabled={busy || disabled || !text.trim() || text.length > 4096} onClick={() => void run(false)}>
+        {busy && !saving ? <Spinner /> : null}{t('Preview private claims', 'پیش‌نمایش ادعاهای خصوصی')}</button>
+      <button className="vx-btn vx-btn-ghost vx-btn-sm" onClick={close}>{saving ? t('Stop waiting and close', 'پایان انتظار و بستن') : t('Discard and close', 'کنارگذاشتن و بستن')}</button>
+    </div>
   </section>;
 }

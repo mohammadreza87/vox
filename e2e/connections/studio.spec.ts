@@ -23,7 +23,7 @@ test('Connections fits mobile shell, preserves zero grants, and supports Persian
     return route.fulfill({ status: 404, json: { error: 'fixture_route_unavailable' } });
   });
   await page.goto('/studio');
-  await page.getByRole('button', { name: 'Privacy', exact: true }).click();
+  await page.getByRole('button', { name: 'You', exact: true }).click();
   await page.getByRole('button', { name: 'Connections & agent access' }).click();
   await expect(page.getByRole('heading', { name: 'Connections', exact: true })).toBeVisible();
   await expect(page.getByText('No agent access', { exact: true })).toBeVisible();

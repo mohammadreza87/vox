@@ -52,13 +52,13 @@ export function FineTune({ t, open, onToggle, value, onChange, autoLanguages, di
   return (
     <div>
       <button type="button" className="vx-disclose" aria-expanded={open} aria-controls={`${id}-body`} onClick={onToggle} disabled={disabled}>
-        <span className="vx-head" style={{ fontSize: 15 }}>{t.fineTune}</span>
+        <span className="vx-head vx-catalog-layout-827f35e0" >{t.fineTune}</span>
         <span className="vx-disclose-sum" dir="auto">{fineTuneSummary(t, value, autoLanguages)}</span>
         <span className="vx-disclose-chev" aria-hidden="true"><Icon name="chevron" size={18} width={2} /></span>
       </button>
       <AnimatePresence initial={false}>
         {open && (
-          <motion.div key="body" initial={m.collapse.initial} animate={m.collapse.animate} exit={m.collapse.exit} style={{ overflow: 'hidden' }}>
+          <motion.div key="body" initial={m.collapse.initial} animate={m.collapse.animate} exit={m.collapse.exit} className="vx-catalog-layout-fe45d938">
             <fieldset id={`${id}-body`} role="region" aria-label={t.fineTune} className="vx-disclose-body" disabled={disabled}>
               <Field label={t.presentsAs} group>
                 <Chips options={(['feminine', 'masculine', 'neutral'] as const).map((p) => ({ value: p, label: t.presentations[p] }))}
@@ -68,9 +68,9 @@ export function FineTune({ t, open, onToggle, value, onChange, autoLanguages, di
                 hint={!value.languages && autoLanguages.length ? `${autoLanguages.join(', ')} ${t.fromBrief}` : undefined}>
                 <Chips multi options={LANGUAGES.map((l) => ({ value: l, label: l }))} value={langs} onChange={(v) => set({ languages: v })} />
               </Field>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div className="vx-catalog-layout-baf2fda5">
                 <span className="vx-over">{t.background}</span>
-                <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)', gap: 12 }}>
+                <div className="vx-catalog-layout-f83d7b60">
                   <input className="vx-input" dir="auto" value={value.culture} onChange={(e) => set({ culture: e.target.value })} placeholder={t.culturePh} aria-label={t.culture} maxLength={80} />
                   <input className="vx-input" dir="auto" value={value.age} onChange={(e) => set({ age: e.target.value })} placeholder={t.agePh} aria-label={t.age} maxLength={40} />
                 </div>
@@ -78,7 +78,7 @@ export function FineTune({ t, open, onToggle, value, onChange, autoLanguages, di
               <Field label={t.accent} hint={t.accentHint}>
                 <input className="vx-input" dir="auto" value={value.accent} onChange={(e) => set({ accent: e.target.value })} placeholder={t.accentPh} maxLength={80} />
               </Field>
-              <div role="group" aria-label={t.temperament} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <div role="group" aria-label={t.temperament} className="vx-catalog-layout-ff69c307">
                 <span className="vx-over">{t.temperament}</span>
                 {TRAITS.map((k) => (
                   <Slider key={k} left={t.sliders[k][0]} right={t.sliders[k][1]} value={value.traits[k] ?? TRAIT_DEFAULTS[k]}

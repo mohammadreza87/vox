@@ -271,7 +271,7 @@ export function BriefStep({ busy, successorOf, error, onDraft }: {
             {t.skip}
           </button>
         ) : (
-          <button type="button" className="vx-btn vx-btn-primary vx-btn-block" style={{ position: 'relative' }} disabled={!online || submitting}
+          <button type="button" className="vx-btn vx-btn-primary vx-btn-block vx-catalog-layout-4fa00029"  disabled={!online || submitting}
             aria-busy={submitting || undefined} onClick={() => void submit()}>
             {submitting ? <Spinner /> : online && <Icon name={ctaIcon} width={2} />}
             <AnimatePresence mode="popLayout" initial={false}>

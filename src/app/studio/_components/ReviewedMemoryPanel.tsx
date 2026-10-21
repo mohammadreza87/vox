@@ -4,6 +4,8 @@ import { adaptiveApi, type AdaptiveSnapshot } from '../_lib/adaptive-client';
 import type { AgentView } from '../_lib/client';
 import { pauseText } from '../_lib/product-pause-copy';
 import type { ReviewedMemoryPreview } from '@/lib/adaptive/reviewed-memory/contracts';
+import { haptic } from '../_lib/haptics';
+import { Check, Icon, Radio, Row, Section, SheetHead, Spinner } from './ui';
 
 export function ReviewedMemoryPanel({ snapshot, agents, locale, disabled, onSaved, pauseBlocked = false, personalizationPaused = false, pauseEpoch }: { snapshot: AdaptiveSnapshot; agents: AgentView[];
   locale: 'en' | 'fa'; disabled: boolean; pauseBlocked?: boolean; personalizationPaused?: boolean; pauseEpoch?: number; onSaved: (snapshot: AdaptiveSnapshot) => void }) {
@@ -46,28 +48,37 @@ export function ReviewedMemoryPanel({ snapshot, agents, locale, disabled, onSave
   };
   const available = agents.filter(agent => snapshot.agents.some(grant => grant.agentId === agent.id && grant.allowed));
   const expired = !!preview && preview.expiresAt <= now;
-  return <section className="vx-card vx-privacy-card" aria-label={t('Review private saved notes', 'بررسی یادداشت‌های خصوصی')} aria-busy={busy} dir={locale === 'fa' ? 'rtl' : 'ltr'}>
-    <h2 className="vx-head">{t('Review selected notes', 'بررسی یادداشت‌های انتخاب‌شده')}</h2>
-    <p className="vx-small">{t('Choose 2–8 of your saved notes in this space and an allowed agent. Only these notes go to its AI provider for a proposed summary. Nothing is saved until you choose Save reviewed summary. This does not turn on automatic memory or share anything.', '۲ تا ۸ یادداشت ذخیره‌شدهٔ خود در این فضا و یک عامل مجاز را انتخاب کنید. فقط همین یادداشت‌ها برای پیش‌نویس خلاصه به ارائه‌دهندهٔ هوش مصنوعی فرستاده می‌شوند. تا انتخاب «ذخیرهٔ خلاصهٔ بررسی‌شده»، چیزی ذخیره نمی‌شود. حافظهٔ خودکار یا اشتراک‌گذاری فعال نمی‌شود.')}</p>
-    <p className="vx-small">{snapshot.space === 'work' ? t('Work · Private to you', 'کاری · فقط برای شما') : t('Personal · Private to you', 'شخصی · فقط برای شما')}</p>
-    {blocked && <p id={reasonId} className="vx-small">{paused ? pauseText(locale, snapshot.space, 'summaryDisabled') : t('Pause status could not be verified. Check current status.', 'وضعیت مکث قابل تأیید نیست. وضعیت فعلی را بررسی کنید.')}</p>}
-    {invalidated && <p role="status">{pauseText(locale, snapshot.space, 'summaryInvalidated')}</p>}
-    <label>{t('Agent for this review', 'عامل این بررسی')}<select className="vx-input" aria-label={t('Agent for this review', 'عامل این بررسی')} value={agentId} disabled={busy || unavailable} onChange={event => { change(); setAgentId(event.target.value); }}>
-      <option value="">{t('Choose an allowed agent', 'عامل مجاز را انتخاب کنید')}</option>{available.map(agent => <option key={agent.id} value={agent.id}>{agent.persona.name}</option>)}
-    </select></label>
-    {!available.length && <p>{t('Allow an agent below before requesting a review.', 'پیش از درخواست بررسی، پایین همین صفحه به یک عامل دسترسی بدهید.')}</p>}
-    <fieldset disabled={busy || unavailable || !snapshot.identity.confirmed}><legend>{t('Notes to review', 'یادداشت‌های بررسی')}</legend>
-      {snapshot.memories.map(memory => <label className="vx-privacy-checkbox" key={memory.id}><input type="checkbox" checked={selected.includes(memory.id)} disabled={!selected.includes(memory.id) && selected.length >= 8}
-        onChange={event => { change(); setSelected(rows => event.target.checked ? [...rows, memory.id] : rows.filter(id => id !== memory.id)); }} />{memory.text}</label>)}
-    </fieldset>
-    <button className="vx-btn vx-btn-secondary" aria-describedby={blocked ? reasonId : undefined} disabled={busy || unavailable || !agentId || !available.some(agent => agent.id === agentId) || selected.length < 2 || !snapshot.identity.confirmed} onClick={() => void run(false)}>{t('Create summary preview', 'ساخت پیش‌نمایش خلاصه')}</button>
-    {preview && <div aria-label={t('Ephemeral summary preview', 'پیش‌نمایش موقت خلاصه')}>
-      <p className="vx-small">{t('AI draft: verify facts and qualifications before saving. Original notes remain. Deleting a source also removes summaries derived from it. Deleting a summary keeps its originals.', 'پیش‌نویس هوش مصنوعی: پیش از ذخیره، واقعیت‌ها و قیدها را بررسی کنید. اصل یادداشت‌ها می‌ماند. حذف منبع، خلاصه‌های مشتق از آن را نیز حذف می‌کند. حذف خلاصه، اصل یادداشت‌ها را نگه می‌دارد.')}</p>
-      <p style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{preview.text}</p>
-      {expired && <p role="status">{t('This preview expired. Request a new preview.', 'این پیش‌نمایش منقضی شد. پیش‌نمایش تازه بخواهید.')}</p>}
-      <button className="vx-btn vx-btn-secondary" aria-describedby={blocked ? reasonId : undefined} disabled={busy || unavailable || expired} onClick={() => void run(true)}>{t('Save reviewed summary', 'ذخیرهٔ خلاصهٔ بررسی‌شده')}</button>
-      <button className="vx-btn vx-btn-secondary" disabled={busy} onClick={() => change()}>{t('Discard preview', 'کنارگذاشتن پیش‌نمایش')}</button>
+  const ready = !busy && !unavailable && !!agentId && available.some(agent => agent.id === agentId) && selected.length >= 2 && snapshot.identity.confirmed;
+  return <section className="vx-sheet-stack" aria-label={t('Review private saved notes', 'بررسی یادداشت‌های خصوصی')} aria-busy={busy} dir={locale === 'fa' ? 'rtl' : 'ltr'}>
+    <SheetHead title={t('Review selected notes', 'بررسی یادداشت‌های انتخاب‌شده')} sub={snapshot.space === 'work' ? t('Work · Private to you', 'کاری · فقط برای شما') : t('Personal · Private to you', 'شخصی · فقط برای شما')} />
+    <p className="vx-footnote">{t('Choose 2–8 of your saved notes in this space and an allowed agent. Only these notes go to its AI provider for a proposed summary. Nothing is saved until you choose Save reviewed summary. This does not turn on automatic memory or share anything.', '۲ تا ۸ یادداشت ذخیره‌شدهٔ خود در این فضا و یک عامل مجاز را انتخاب کنید. فقط همین یادداشت‌ها برای پیش‌نویس خلاصه به ارائه‌دهندهٔ هوش مصنوعی فرستاده می‌شوند. تا انتخاب «ذخیرهٔ خلاصهٔ بررسی‌شده»، چیزی ذخیره نمی‌شود. حافظهٔ خودکار یا اشتراک‌گذاری فعال نمی‌شود.')}</p>
+    {blocked && <p id={reasonId} className="vx-small vx-2">{paused ? pauseText(locale, snapshot.space, 'summaryDisabled') : t('Pause status could not be verified. Check current status.', 'وضعیت مکث قابل تأیید نیست. وضعیت فعلی را بررسی کنید.')}</p>}
+    {invalidated && <p className="vx-small" role="status">{pauseText(locale, snapshot.space, 'summaryInvalidated')}</p>}
+    <Section title={t('Agent for this review', 'عامل این بررسی')}>
+      {!available.length ? <Row plain title={<span className="vx-2">{t('Allow an agent in Agent access before requesting a review.', 'پیش از درخواست بررسی، در «دسترسی عامل‌ها» به یک عامل اجازه بدهید.')}</span>} />
+        : <div role="radiogroup" aria-label={t('Agent for this review', 'عامل این بررسی')}>{available.map(agent =>
+          <Row key={agent.id} role="radio" aria-checked={agentId === agent.id} plain title={agent.persona.name} end={<Radio />} disabled={busy || unavailable}
+            onClick={() => { haptic.select(); change(); setAgentId(agent.id); }} />)}</div>}
+    </Section>
+    <Section title={t('Notes to review', 'یادداشت‌های بررسی')} foot={`${selected.length}/8`}>
+      {snapshot.memories.map(memory => {
+        const on = selected.includes(memory.id);
+        return <Row key={memory.id} role="checkbox" aria-checked={on} aria-label={memory.text} plain title={<span className="vx-clamp-2" dir="auto">{memory.text}</span>} end={<Check />}
+          disabled={busy || unavailable || !snapshot.identity.confirmed || (!on && selected.length >= 8)}
+          onClick={() => { haptic.select(); change(); setSelected(rows => on ? rows.filter(id => id !== memory.id) : [...rows, memory.id]); }} />;
+      })}
+    </Section>
+    {preview && <div className="vx-remember-preview" aria-label={t('Ephemeral summary preview', 'پیش‌نمایش موقت خلاصه')}>
+      <p className="vx-remember-quote" dir="auto">{preview.text}</p>
+      <p className="vx-footnote">{t('AI draft: verify facts and qualifications before saving. Original notes remain. Deleting a source also removes summaries derived from it. Deleting a summary keeps its originals.', 'پیش‌نویس هوش مصنوعی: پیش از ذخیره، واقعیت‌ها و قیدها را بررسی کنید. اصل یادداشت‌ها می‌ماند. حذف منبع، خلاصه‌های مشتق از آن را نیز حذف می‌کند. حذف خلاصه، اصل یادداشت‌ها را نگه می‌دارد.')}</p>
+      {expired && <p className="vx-small" role="status">{t('This preview expired. Request a new preview.', 'این پیش‌نمایش منقضی شد. پیش‌نمایش تازه بخواهید.')}</p>}
     </div>}
-    {error && <p role="alert">{error}</p>}
+    {error && <div className="vx-banner danger"><Icon name="warn" size={18} /><div className="vx-banner-body"><span role="alert">{error}</span></div></div>}
+    <div className="vx-remember-actions">
+      {preview && <button className="vx-btn vx-btn-primary vx-btn-block" aria-describedby={blocked ? reasonId : undefined} disabled={busy || unavailable || expired} onClick={() => void run(true)}>{t('Save reviewed summary', 'ذخیرهٔ خلاصهٔ بررسی‌شده')}</button>}
+      <button className={`vx-btn vx-btn-block ${preview ? 'vx-btn-ghost' : 'vx-btn-secondary'}`} aria-describedby={blocked ? reasonId : undefined} disabled={!ready} onClick={() => void run(false)}>
+        {busy && !preview ? <Spinner /> : null}{t('Create summary preview', 'ساخت پیش‌نمایش خلاصه')}</button>
+      {preview && <button className="vx-btn vx-btn-ghost vx-btn-sm" disabled={busy} onClick={() => change()}>{t('Discard preview', 'کنارگذاشتن پیش‌نمایش')}</button>}
+    </div>
   </section>;
 }

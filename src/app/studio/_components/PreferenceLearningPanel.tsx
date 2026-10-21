@@ -1,6 +1,7 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { preferenceLearningApi } from '../_lib/preference-learning-client';
+import { Banner, Icon, Row } from './ui';
 import { learningNotice, LEARNING_VERSION, type LearningPublicView } from '@/lib/adaptive/personalization/learning/contracts';
 const labels: Record<string, [string, string]> = {
   response_length: ['Reply length', 'اندازهٔ پاسخ'], language: ['Reply language', 'زبان پاسخ'], formatting: ['Reply format', 'قالب پاسخ'],
@@ -62,29 +63,48 @@ export function PreferenceLearningPanel({ agentId, space, confirmed, revisionHin
   };
   if (!agentId || !confirmed) return null;
   const view = state?.agentId === agentId && state.space === space ? state : null;
-  return <section aria-label={t('Suggested preferences', 'ترجیح‌های پیشنهادی')} dir={fa ? 'rtl' : 'ltr'} lang={locale} aria-busy={busy}>
-    <h3>{t('Suggested preferences', 'ترجیح‌های پیشنهادی')}</h3>
-    <p className="vx-small">{t('Off until you choose it. Suggestions never change a reply preference until you review and use them.', 'تا انتخاب شما خاموش است. پیشنهادها تا زمانی که بررسی و استفاده نکنید، ترجیح پاسخ را تغییر نمی‌دهند.')}</p>
-    {error && <p role="alert">{t('The change or current choices could not be confirmed. Refresh and review before trying again.', 'تغییر یا انتخاب فعلی تأیید نشد. پیش از تلاش دوباره تازه‌سازی و بررسی کنید.')}</p>}
-    <button className="vx-btn vx-btn-secondary" disabled={busy} onClick={() => void load()}>{t('Refresh suggestions', 'تازه‌سازی پیشنهادها')}</button>
-    {status && <p role="status">{status === 'used' ? t('Preference saved. Its Undo is in Reply preferences.', 'ترجیح ذخیره شد. واگرد آن در بخش ترجیح‌های پاسخ است.')
+  const title = t('Suggestion learning', 'یادگیری پیشنهادها');
+  const candidates = view?.candidates.filter(candidate => candidate.expiresAt > Date.now()) ?? [];
+  return <section aria-label={t('Suggested preferences', 'ترجیح‌های پیشنهادی')} className="vx-section vx-learn" dir={fa ? 'rtl' : 'ltr'} lang={locale} aria-busy={busy}>
+    <div className="vx-section-head">
+      <h3 className="vx-over">{t('Suggested preferences', 'ترجیح‌های پیشنهادی')}</h3>
+      <button type="button" className="vx-icon-btn" disabled={busy} onClick={() => void load()} aria-label={t('Refresh suggestions', 'تازه‌سازی پیشنهادها')}><Icon name="refresh" size={18} /></button>
+    </div>
+    {error && <Banner tone="danger">{t('The change or current choices could not be confirmed. Refresh and review before trying again.', 'تغییر یا انتخاب فعلی تأیید نشد. پیش از تلاش دوباره تازه‌سازی و بررسی کنید.')}</Banner>}
+    <div className="vx-group">
+      {!view && !error && <Row plain title={title} sub={t('Checking…', 'در حال بررسی…')} />}
+      {view && !view.available && <Row plain title={title} sub={view.reason === 'personalization_off' ? t('Personalization is off or expired. You can keep using the ordinary explicit preferences.', 'شخصی‌سازی خاموش یا منقضی است. ترجیح‌های صریح معمولی همچنان قابل استفاده‌اند.')
+        : view.reason === 'agent_grant_missing' ? t('This agent needs a current grant in this space.', 'این عامل در این فضا به مجوز فعلی نیاز دارد.') : t('Suggestion learning is unavailable here. Ordinary explicit preferences still work.', 'یادگیری پیشنهادها اینجا در دسترس نیست. ترجیح‌های صریح معمولی همچنان کار می‌کنند.')} />}
+      {view?.available && !view.enabled && view.presentation?.locale !== locale && <Row plain title={title} sub={t('Off', 'خاموش')}
+        end={<button type="button" className="vx-btn vx-btn-tonal vx-btn-xs" disabled={busy} onClick={() => void change('present')}>{t('Review suggestion learning', 'بررسی یادگیری پیشنهادها')}</button>} />}
+      {view?.available && !view.enabled && view.presentation?.locale === locale && <div className="vx-row top vx-learn-notice">
+        <span className="vx-row-main">
+          <span className="vx-row-title plain">{title}</span>
+          <span className="vx-learn-text" dir="auto">{learningNotice[locale]}</span>
+          {/* Equal weight on purpose: keeping it off is exactly as easy as turning it on. */}
+          <span className="vx-dock-row">
+            <button type="button" className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy} onClick={() => void change('off')}>{t('Keep off', 'خاموش بماند')}</button>
+            <button type="button" className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy} onClick={() => void change('on')}>{t('Enable suggestions', 'فعال کردن پیشنهادها')}</button>
+          </span>
+        </span>
+      </div>}
+      {view?.enabled && <Row plain title={title} sub={<>{t('On until: ', 'روشن تا: ')}{new Date(view.intentExpiresAt!).toLocaleString(locale)}</>}
+        end={<button type="button" className="vx-btn vx-btn-ghost vx-btn-xs" disabled={busy} onClick={() => void change('off')}>{t('Turn suggestion learning off', 'خاموش کردن یادگیری پیشنهادها')}</button>} />}
+      {candidates.map(candidate => <article key={candidate.id} className="vx-row top vx-learn-candidate" aria-label={`${labels[candidate.setting.key][fa ? 1 : 0]}: ${labels[candidate.setting.value][fa ? 1 : 0]}`}>
+        <span className="vx-tile icon" aria-hidden="true"><Icon name="spark" size={20} /></span>
+        <span className="vx-row-main">
+          <span className="vx-row-title">{labels[candidate.setting.key][fa ? 1 : 0]}: {labels[candidate.setting.value][fa ? 1 : 0]}</span>
+          <span className="vx-row-sub">{reasons[candidate.reason][fa ? 1 : 0]} {t('This is a suggestion, not a fact about you.', 'این یک پیشنهاد است، نه واقعیتی دربارهٔ شما.')}</span>
+          <span className="vx-row-sub">{t('Expires: ', 'پایان مهلت: ')}{new Date(candidate.expiresAt).toLocaleString(locale)}</span>
+          <span className="vx-pref-actions">
+            <button type="button" className="vx-btn vx-btn-tonal vx-btn-xs" disabled={busy} onClick={() => void change('use', candidate.id)}>{t('Use preference', 'استفاده از ترجیح')}</button>
+            <button type="button" className="vx-btn vx-btn-ghost vx-btn-xs" disabled={busy} onClick={() => void change('dismiss', candidate.id)}>{t('Dismiss suggestion', 'کنار گذاشتن پیشنهاد')}</button>
+          </span>
+        </span>
+      </article>)}
+    </div>
+    {status && <p className="vx-pref-status" role="status"><Icon name="check" size={14} width={2.5} />{status === 'used' ? t('Preference saved. Its Undo is in Reply preferences.', 'ترجیح ذخیره شد. واگرد آن در بخش ترجیح‌های پاسخ است.')
       : status === 'dismissed' ? t('Suggestion dismissed.', 'پیشنهاد کنار گذاشته شد.') : status === 'off' ? t('Suggestion learning is off.', 'یادگیری پیشنهادها خاموش است.') : t('Suggestion learning is on for this account confirmation.', 'یادگیری پیشنهادها برای این تأیید حساب روشن است.')}</p>}
-    {view && !view.available && <p>{view.reason === 'personalization_off' ? t('Personalization is off or expired. You can keep using the ordinary explicit preferences.', 'شخصی‌سازی خاموش یا منقضی است. ترجیح‌های صریح معمولی همچنان قابل استفاده‌اند.')
-      : view.reason === 'agent_grant_missing' ? t('This agent needs a current grant in this space.', 'این عامل در این فضا به مجوز فعلی نیاز دارد.') : t('Suggestion learning is unavailable here. Ordinary explicit preferences still work.', 'یادگیری پیشنهادها اینجا در دسترس نیست. ترجیح‌های صریح معمولی همچنان کار می‌کنند.')}</p>}
-    {view?.available && !view.enabled && view.presentation?.locale !== locale && <button className="vx-btn vx-btn-secondary" disabled={busy} onClick={() => void change('present')}>{t('Review suggestion learning', 'بررسی یادگیری پیشنهادها')}</button>}
-    {view?.available && !view.enabled && view.presentation?.locale === locale && <div>
-      <p>{learningNotice[locale]}</p>
-      <button className="vx-btn vx-btn-secondary" disabled={busy} onClick={() => void change('on')}>{t('Enable suggestions', 'فعال کردن پیشنهادها')}</button>
-      <button className="vx-btn vx-btn-secondary" disabled={busy} onClick={() => void change('off')}>{t('Keep off', 'خاموش بماند')}</button>
-    </div>}
-    {view?.enabled && <div><p>{t('On until: ', 'روشن تا: ')}{new Date(view.intentExpiresAt!).toLocaleString(locale)}</p>
-      <button className="vx-btn vx-btn-secondary" disabled={busy} onClick={() => void change('off')}>{t('Turn suggestion learning off', 'خاموش کردن یادگیری پیشنهادها')}</button></div>}
-    {view?.candidates.filter(candidate => candidate.expiresAt > Date.now()).map(candidate => <article key={candidate.id}>
-      <p>{labels[candidate.setting.key][fa ? 1 : 0]}: {labels[candidate.setting.value][fa ? 1 : 0]}</p>
-      <p className="vx-small">{reasons[candidate.reason][fa ? 1 : 0]} {t('This is a suggestion, not a fact about you.', 'این یک پیشنهاد است، نه واقعیتی دربارهٔ شما.')}</p>
-      <p className="vx-small">{t('Expires: ', 'پایان مهلت: ')}{new Date(candidate.expiresAt).toLocaleString(locale)}</p>
-      <button className="vx-btn vx-btn-secondary" disabled={busy} onClick={() => void change('use', candidate.id)}>{t('Use preference', 'استفاده از ترجیح')}</button>
-      <button className="vx-btn vx-btn-secondary" disabled={busy} onClick={() => void change('dismiss', candidate.id)}>{t('Dismiss suggestion', 'کنار گذاشتن پیشنهاد')}</button>
-    </article>)}
+    <p className="vx-section-foot">{t('Off until you choose it. Suggestions never change a reply preference until you review and use them.', 'تا انتخاب شما خاموش است. پیشنهادها تا زمانی که بررسی و استفاده نکنید، ترجیح پاسخ را تغییر نمی‌دهند.')}</p>
   </section>;
 }

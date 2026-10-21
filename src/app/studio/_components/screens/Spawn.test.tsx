@@ -33,7 +33,8 @@ vi.mock('../StudioApp', () => ({
 }));
 
 // These regressions exercise API failures, retry state and polling, not animation timing.
-vi.mock('framer-motion', async () => {
+vi.mock('framer-motion', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('framer-motion')>();
   const { createElement } = await import('react');
   const MOTION_PROPS = ['initial', 'animate', 'exit', 'transition', 'whileTap', 'whileHover', 'layoutId', 'layout', 'variants',
     'drag', 'dragConstraints', 'dragElastic', 'onDragEnd'];
@@ -45,6 +46,7 @@ vi.mock('framer-motion', async () => {
     return cache.get(tag)!;
   };
   return {
+    ...actual,
     AnimatePresence: ({ children }: { children?: ReactNode }) => children,
     motion: new Proxy({}, { get: (_target, tag: string) => element(tag) }),
     useReducedMotion: () => false,
@@ -338,7 +340,7 @@ describe('Telegram profile completion', () => {
     expect(screen.getByRole('button', { name: 'Open' })).toBeEnabled();
     await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
     expect(screen.getByRole('heading', { name: 'Nova is hired' })).toBeVisible();
-    expect(screen.getByRole('img', { name: 'Nova' })).toHaveAttribute('src', expect.stringContaining('fixture-avatar.jpg'));
+    expect(screen.getByRole('img', { name: 'Nova in Telegram' })).toHaveAttribute('src', expect.stringContaining('fixture-avatar.jpg'));
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
     await act(async () => { await vi.advanceTimersByTimeAsync(6000); });
     expect(state.agent).toHaveBeenCalledTimes(3);
@@ -383,9 +385,9 @@ describe('Telegram profile completion', () => {
     let finish!: (value: { agent: AgentView; failed: string[] }) => void;
     state.syncProfile.mockReturnValue(new Promise(resolve => { finish = resolve; }));
     await act(async () => { render(<AgentScreen id={failed.id} />); });
-    expect(screen.getByRole('alert')).toHaveTextContent('Telegram profile still needs photo.');
+    expect(screen.getByRole('status')).toHaveTextContent('Couldn’t update the photo');
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry Telegram profile' })); });
-    expect(screen.getByRole('alert')).toBeVisible();
+    expect(screen.getByRole('status')).toHaveTextContent('Couldn’t update the photo');
     expect(state.nav.toast).not.toHaveBeenCalled();
     await act(async () => { finish({ agent: ready, failed: [] }); });
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
@@ -399,11 +401,11 @@ describe('Telegram profile completion', () => {
     let finish!: (value: { agent: AgentView }) => void;
     state.agent.mockResolvedValueOnce({ agent: pending }).mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
     await act(async () => { render(<AgentScreen id={pending.id} />); });
-    expect(screen.getByRole('status')).toHaveTextContent('Finishing Telegram profile…');
+    expect(screen.getByRole('status')).toHaveTextContent('Updating Telegram…');
     await act(async () => { await vi.advanceTimersByTimeAsync(6000); });
     expect(state.agent).toHaveBeenCalledTimes(2);
     await act(async () => { finish({ agent: ready }); });
-    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('Updated in Telegram');
     await act(async () => { await vi.advanceTimersByTimeAsync(6000); });
     expect(state.agent).toHaveBeenCalledTimes(2);
     expect(state.nav.toast).not.toHaveBeenCalled();

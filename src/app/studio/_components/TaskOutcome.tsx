@@ -1,6 +1,8 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
 import { learningApi } from '../_lib/learning-client';
+import { haptic } from '../_lib/haptics';
+import { Icon } from './ui';
 /** Explicit optional feedback, correlated to a server-accepted turn. It never
  * proves an external task completed and accepts no private reason/free text. */
 export function TaskOutcome({ agentId, space, turnId, locale = 'en' }: {
@@ -8,8 +10,9 @@ export function TaskOutcome({ agentId, space, turnId, locale = 'en' }: {
 }) {
   const fa = locale === 'fa';
   const [state, setState] = useState<'idle' | 'busy' | 'saved' | 'unavailable'>('idle');
+  const [chosen, setChosen] = useState<string | null>(null);
   const generation = useRef(0), revision = useRef(0), busy = useRef(false);
-  useEffect(() => { const current = ++generation.current; revision.current = 0; busy.current = false; setState('idle'); return () => { generation.current = current + 1; }; }, [agentId, space, turnId]);
+  useEffect(() => { const current = ++generation.current; revision.current = 0; busy.current = false; setState('idle'); setChosen(null); return () => { generation.current = current + 1; }; }, [agentId, space, turnId]);
   const send = async (outcome: 'task_succeeded' | 'task_failed' | 'task_unknown') => {
     if (busy.current) return; busy.current = true; setState('busy'); const current = generation.current;
     try {
@@ -18,13 +21,14 @@ export function TaskOutcome({ agentId, space, turnId, locale = 'en' }: {
     } catch { if (current === generation.current) setState('unavailable'); }
     finally { if (current === generation.current) busy.current = false; }
   };
-  return <div dir={fa ? 'rtl' : 'ltr'} lang={locale} aria-label={fa ? 'نتیجهٔ گزارش‌شدهٔ کار' : 'Reported task outcome'}>
-    <p className="vx-small">{fa ? 'آیا این پاسخ به انجام کارتان کمک کرد؟ (اختیاری)' : 'Did this response help you complete your task? (optional)'}</p>
-    <div className="vx-privacy-actions">
+  return <div className="vx-outcome" dir={fa ? 'rtl' : 'ltr'} lang={locale} role="group" aria-label={fa ? 'نتیجهٔ گزارش‌شدهٔ کار' : 'Reported task outcome'}>
+    <div className="vx-outcome-row">
+      <span className="vx-outcome-q">{fa ? 'به انجام کارتان کمک کرد؟' : 'Did this help with your task?'}</span>
       {([['task_succeeded', 'Yes', 'بله'], ['task_failed', 'No', 'خیر'], ['task_unknown', 'Not sure', 'مطمئن نیستم']] as const).map(([outcome, en, persian]) =>
-        <button key={outcome} className="vx-btn vx-btn-secondary vx-btn-sm" disabled={state === 'busy'} onClick={() => void send(outcome)}>{fa ? persian : en}</button>)}
+        <button key={outcome} type="button" className="vx-chip" aria-pressed={chosen === outcome} disabled={state === 'busy'}
+          onClick={() => { haptic.select(); setChosen(outcome); void send(outcome); }}>{fa ? persian : en}</button>)}
     </div>
-    {state === 'saved' && <p className="vx-small" role="status">{fa ? 'گزارش شما ذخیره شد؛ این به معنی تأیید مستقل نتیجه نیست.' : 'Your report was saved; the outcome has not been independently verified.'}</p>}
-    {state === 'unavailable' && <p className="vx-small" role="status">{fa ? 'اندازه‌گیری اختیاری در دسترس نیست. گفتگو همچنان قابل استفاده است.' : 'Optional measurement is unavailable. You can continue the conversation.'}</p>}
+    {state === 'saved' && <p className="vx-outcome-note" role="status"><Icon name="check" size={14} width={2} />{fa ? 'گزارش شما ذخیره شد؛ این به معنی تأیید مستقل نتیجه نیست.' : 'Your report was saved; the outcome has not been independently verified.'}</p>}
+    {state === 'unavailable' && <p className="vx-outcome-note" role="status">{fa ? 'اندازه‌گیری اختیاری در دسترس نیست. گفتگو همچنان قابل استفاده است.' : 'Optional measurement is unavailable. You can continue the conversation.'}</p>}
   </div>;
 }

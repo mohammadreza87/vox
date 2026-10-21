@@ -20,7 +20,7 @@ export function BriefHeader({ t, hue, expr, successorName, successor }: {
       <div>
         <span className="vx-over">{successor ? (successorName ? t.overlineSuccessor(successorName) : t.overlineSuccessorPending) : t.overline}</span>
         <h1 className="vx-title">{successorName ? t.titleSuccessor(successorName) : t.title}</h1>
-        <p className="vx-2" style={{ margin: 0 }}>{t.sub}</p>
+        <p className="vx-2 vx-catalog-layout-02419cff" >{t.sub}</p>
       </div>
       <motion.div key={hue} className="vx-brief-cloud" aria-hidden="true"
         initial={m.reduce ? { opacity: 0 } : { opacity: 0, scale: 0.92 }}
@@ -34,7 +34,7 @@ export function BriefHeader({ t, hue, expr, successorName, successor }: {
 /** Level-1 templates: one chip per pack, shown only while the brief is empty. */
 export function PackRow({ t, packs, onPick }: { t: SpawnCopy; packs: PackId[]; onPick: (pack: PackId) => void }) {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+    <div className="vx-catalog-layout-379fabac">
       <span className="vx-over" id="vx-pack-row">{t.packRow}</span>
       <div className="vx-packs" role="group" aria-labelledby="vx-pack-row">
         {packs.map((p) => (
@@ -47,7 +47,7 @@ export function PackRow({ t, packs, onPick }: { t: SpawnCopy; packs: PackId[]; o
 
 /** Points to the inline end and flips under RTL. */
 export function ChevronEnd({ size = 16 }: { size?: number }) {
-  return <span className="vx-mirror" style={{ display: 'inline-flex' }}><Icon name="chevronEnd" size={size} width={2} /></span>;
+  return <span className="vx-mirror vx-catalog-layout-d348b10f" ><Icon name="chevronEnd" size={size} width={2} /></span>;
 }
 
 /** A quiet text action with a trailing chevron ("Browse roles ›", "Change ›"). */
@@ -63,7 +63,7 @@ export function LinkButton({ label, onClick }: { label: string; onClick: () => v
 export function CustomLine({ t, label, onUndo, onBrowse }: { t: SpawnCopy; label?: string; onUndo?: () => void; onBrowse?: () => void }) {
   return (
     <div className="vx-custom-line">
-      <span dir="auto" className="vx-ellipsis" style={{ minWidth: 0 }}>
+      <span dir="auto" className="vx-ellipsis vx-catalog-layout-d529e1f5" >
         {label ?? t.custom}{onUndo && <span className="vx-3"> · {t.keepingCustom}</span>}
       </span>
       {onUndo
@@ -79,10 +79,10 @@ export function DraftError({ t, message, onRetry }: { t: SpawnCopy; message: str
   useEffect(() => { ref.current?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' }); }, [message]);
   return (
     <div ref={ref} className="vx-banner danger vx-draft-error" role="alert">
-      <Icon name="warn" size={18} style={{ flexShrink: 0, color: 'var(--danger)' }} />
-      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
-        <span style={{ overflowWrap: 'anywhere' }}>{message.replace(/\.\s*$/, '')}. {t.errorSuffix}</span>
-        <button type="button" className="vx-link vx-link-strong" style={{ alignSelf: 'flex-end' }} onClick={onRetry}>
+      <Icon name="warn" size={18} className="vx-catalog-layout-17d2f14f" />
+      <div className="vx-catalog-layout-46818528">
+        <span className="vx-catalog-layout-3e0ed9c0">{message.replace(/\.\s*$/, '')}. {t.errorSuffix}</span>
+        <button type="button" className="vx-link vx-link-strong vx-catalog-layout-f08f579b"  onClick={onRetry}>
           {t.retry}<ChevronEnd />
         </button>
       </div>

@@ -185,22 +185,22 @@ export function PersonaStep({ agent, names, busy, run, onUpdate, onNext }: StepP
 
   return (
     <>
-      <div className="vx-scroll vx-scroll-stack" inert={skillsOpen} style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+      <div className="vx-scroll vx-scroll-stack vx-catalog-layout-e3d94022" inert={skillsOpen} >
+        <div className="vx-catalog-layout-c44bd08c">
           <motion.div initial={{ scale: 0.4, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={m.reduce ? { duration: 0.12 } : { type: 'spring', stiffness: 300, damping: 18 }}>
             <AgentFace look={agent.look} size={88} expr="happy" label={p.name} />
           </motion.div>
-          <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <h1 className="vx-title" {...textAttrs(p.name)} style={{ overflowWrap: 'anywhere' }}>{p.name}</h1>
+          <div className="vx-catalog-layout-f29df839">
+            <h1 className="vx-title vx-catalog-layout-3e0ed9c0" {...textAttrs(p.name)} >{p.name}</h1>
             <RoleLine t={t} persona={p} hue={agent.look.hue} />
             {[p.culture, p.age, p.accent].some(Boolean) && <div className="vx-small vx-3" dir="auto">{[p.culture, p.age, p.accent].filter(Boolean).join(' · ')}</div>}
           </div>
         </div>
 
         {editable && names.length > 1 && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div className="vx-catalog-layout-379fabac">
             <span className="vx-over">{t.otherNames}</span>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <div className="vx-catalog-layout-a5afbd00">
               {names.map((n) => (
                 <button key={n} type="button" className="vx-chip vx-name-chip vx-hit" {...textAttrs(n)} aria-pressed={n === p.name} onClick={() => { if (n !== p.name) { haptic.select(); void save({ name: n }); } }}>{n}</button>
               ))}
@@ -208,10 +208,10 @@ export function PersonaStep({ agent, names, busy, run, onUpdate, onNext }: StepP
           </div>
         )}
 
-        {p.tagline && <p {...textAttrs(p.tagline)} style={{ margin: 0, fontSize: 17, lineHeight: '24px' }}>“<span className={isChanged('tagline') ? 'vx-changed' : undefined}>{p.tagline}</span>”</p>}
+        {p.tagline && <p {...textAttrs(p.tagline)} className="vx-catalog-layout-fae076cf">“<span className={isChanged('tagline') ? 'vx-changed' : undefined}>{p.tagline}</span>”</p>}
 
         {showSkills && (
-          <section style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <section className="vx-catalog-layout-379fabac">
             <span className="vx-over">{t.skillsCount(onIds(items).length)}</span>
             <SkillChips t={t} items={items} onToggle={toggleSkill} readOnly={!editable} extra={extra}
               onAdd={editable ? () => setSkillsOpen(true) : undefined} />
@@ -220,7 +220,7 @@ export function PersonaStep({ agent, names, busy, run, onUpdate, onNext }: StepP
 
         <VoiceExamples t={t} agent={agent} />
 
-        <section style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <section className="vx-catalog-layout-379fabac">
           <span className="vx-over">{t.profile}</span>
           <div className="vx-group">
             {editable && (

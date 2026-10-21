@@ -2,6 +2,11 @@ import type { Metadata } from 'next';
 import Script from 'next/script';
 import './fonts.css';
 import './studio.css';
+import './catalog.css';
+import './shell.css';
+import './motion.css';
+import './look.css';
+import './settings.css';
 
 export const metadata: Metadata = {
   title: 'Vox Studio',

@@ -40,7 +40,8 @@ vi.mock('../../StudioApp', () => ({
   LoadingFill: () => null,
 }));
 
-vi.mock('framer-motion', async () => {
+vi.mock('framer-motion', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('framer-motion')>();
   const { createElement } = await import('react');
   const MOTION_PROPS = ['initial', 'animate', 'exit', 'transition', 'whileTap', 'whileHover', 'layoutId', 'layout', 'variants',
     'drag', 'dragConstraints', 'dragElastic', 'onDragEnd'];
@@ -52,6 +53,7 @@ vi.mock('framer-motion', async () => {
     return cache.get(tag)!;
   };
   return {
+    ...actual,
     AnimatePresence: ({ children }: { children?: ReactNode }) => children,
     motion: new Proxy({}, { get: (_target, tag: string) => element(tag) }),
     useReducedMotion: () => false,

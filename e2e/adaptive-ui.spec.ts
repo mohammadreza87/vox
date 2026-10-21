@@ -184,7 +184,7 @@ test('privacy, shared memory and experience controls stay explicit and isolated 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/studio');
   await expect.poll(() => h.calls.some(call => call.path === 'me'), { message: `url=${page.url()}; synthetic API requests: ${JSON.stringify(h.calls)}; browser details: ${browserErrors.join(' | ')}` }).toBeTruthy();
-  await page.getByRole('button', { name: 'Privacy' }).click();
+  await page.getByRole('button', { name: 'You', exact: true }).click();
   const privacy = page.locator('.vx-privacy');
   await expect(privacy.getByRole('heading', { name: 'Privacy & memory' })).toBeVisible();
   await expect(privacy).toHaveAttribute('dir', 'ltr');
@@ -322,7 +322,7 @@ test('learning evidence stays scoped, honest and downloadable in English and Per
   await installFixtures(page, h);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/studio');
-  await page.getByRole('button', { name: 'Privacy', exact: true }).click();
+  await page.getByRole('button', { name: 'You', exact: true }).click();
   await page.getByRole('button', { name: 'Preferences & notification inbox' }).click();
   const experience = page.locator('.vx-privacy').last();
   const learning = page.getByRole('region', { name: 'Learning evidence', exact: true });

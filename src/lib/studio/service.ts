@@ -52,16 +52,17 @@ import { accountIdFor } from '../adaptive/persistence/repository';
 import { committedLoader, type AdaptiveStorage } from '../adaptive/persistence/storage';
 import type { TelegramBotClient, TelegramChatMemberUpdated, TelegramManagedBotUpdated, TelegramUser } from '../tireh/telegram/client';
 import { decryptSecret, encryptSecret } from './crypto';
-import { cloudSvg } from './cloud-art';
+import { characterSvg, isCompatible, lookKey, normalizeLook, parseLookPatch, stageFor } from './character';
 import { callToken, MAX_CALL_SECONDS, voiceLlmKey, voiceLlmKeyId } from './voice-call';
-import { avatarPrompt, defaultVoiceId, type ElevenLabsStudio, type LibraryVoice, type OpenAIMedia, type VoiceOptions, StudioVoiceService } from './media';
+import { PORTRAIT_MOODS, renderPortrait } from './character/portrait';
+import { defaultVoiceId, type ElevenLabsStudio, type LibraryVoice, type OpenAIMedia, type VoiceOptions, StudioVoiceService } from './media';
 import { personId, studioToOrg, groupId } from './org-bridge';
 import { draftPersona, randomLook, refinePersona, suggestUsername, validatePersona } from './persona';
 import { catalogView, projectCatalog, CATALOG, type Catalog } from './skills/catalog';
 import { catalogRole, catalogSkills, routeBrief as routeSkillBrief, ROUTE_TEXT_CHARS, type RouteFallbackReason } from './skills/route';
 import { MAX_AGENT_SKILLS, type AgentRole, type AgentSkill, type CatalogView, type RouteSuggestion } from './skills/types';
 import {
-  atLeast, canDeleteDraft, canEditPersona, canFire, canManageAccess, canSetAgentAdmin, canSpawn, canUseAgent,
+  atLeast, canDeleteDraft, canEditLook, canEditPersona, canFire, canManageAccess, canSetAgentAdmin, canSpawn, canUseAgent,
   checkRoleChange, formingDay, isLocked, visibilityOf, visibleAgents,
 } from './permissions';
 import { StudioStore, type StudioStorage } from './store';
@@ -70,7 +71,8 @@ import { SharedMemoryRepository } from '../adaptive/shared/repository';
 import type { StudioRequestRateLimiter } from './ratelimit';
 import { AGENT_UPDATES, webhookSecret } from './updates';
 import {
-  FORMING_DAYS, HUES, type Agent, type AgentLook, type AgentVisibility, type GroupBehavior, type StudioState, type Member, type MemoryPolicy, type PersonaSpec, type Role, type SpawnBrief,
+  FORMING_DAYS, type Agent, type AgentLook, type AgentVisibility, type CharacterLook, type GroupBehavior, type StudioState, type Member, type MemoryPolicy, type PersonaSpec,
+  type ProfileStep, type Role, type SpawnBrief, type Stage,
 } from './types';
 
 export class StudioError extends Error {
@@ -114,6 +116,46 @@ function advanceLearningAuthority(row: { learningAuthorityRevision?: number }): 
 export type StrangerAction = 'reply' | 'decline' | 'ignore' | 'block';
 export type GuestStanding = 'ok' | 'blocked' | 'limit-reached' | 'over-limit';
 const lockedMessage = (agent: Agent) => `${agent.persona.name}'s personality is locked. To change it, fire and hire a successor.`;
+
+/** Picture variants kept per agent. */
+const AVATAR_CAP = 12;
+/** A look edit saved with sync:false holds automatic profile pushes this long; the editor pushes once on close. */
+const LOOK_EDIT_HOLD_MS = 120_000;
+/** Whether the look editor is still holding the agent's automatic profile pushes. */
+const profileHeld = (agent: Agent, now: Date) => !!agent.profileHeldUntil && Date.parse(agent.profileHeldUntil) > now.getTime();
+
+/** The newest variants up to the cap, never evicting the selected picture (it keeps the last slot). */
+export function keepSelected(list: string[], selected?: string, cap = AVATAR_CAP): string[] {
+  const uniq = [...new Set(list)];
+  if (!selected || uniq.slice(0, cap).includes(selected)) return uniq.slice(0, cap);
+  return [...uniq.filter((f) => f !== selected).slice(0, cap - 1), selected];
+}
+
+/** Drops avatarLooks/avatarVia entries for pictures that are no longer variants. */
+function pruneAvatarLooks(look: AgentLook): void {
+  const keep = <T>(map?: Record<string, T>) => {
+    const kept = Object.entries(map ?? {}).filter(([file]) => look.avatarVariants?.includes(file));
+    return kept.length ? Object.fromEntries(kept) : undefined;
+  };
+  const looks = keep(look.avatarLooks), via = keep(look.avatarVia);
+  if (looks) look.avatarLooks = looks; else delete look.avatarLooks;
+  if (via) look.avatarVia = via; else delete look.avatarVia;
+}
+
+/** A selected generated picture drawn from a look that has since changed. Legacy pictures (no record) never count. */
+function avatarStale(look: AgentLook): boolean {
+  const drawnFrom = look.avatar && look.avatarSource === 'generated' ? look.avatarLooks?.[look.avatar] : undefined;
+  return !!drawnFrom && drawnFrom !== lookKey(look);
+}
+
+/** Short stable hash of a profile step's desired value (stored per step; never the value itself). */
+const valueHash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('base64url').slice(0, 16);
+
+const noRasteriser = async (): Promise<Buffer> => { throw new Error('No SVG rasteriser configured.'); };
+
+/** One Telegram profile step: its desired-value hash and the Bot API call that applies it. */
+interface ProfileTask { step: ProfileStep; key: string; run: (bot: TelegramBotClient) => Promise<unknown> }
+
 
 /** Content-free: only why a submitted brief was routed without Decisions. */
 const ROUTE_FALLBACK_DIAGNOSTICS: Record<RouteFallbackReason, TelegramDiagnostic> = {
@@ -225,6 +267,10 @@ export interface StudioDeps {
   webhookBase?: string;
   memory: { memories: MemoryStore; offers: ShareOfferStore; history: ChatHistoryStore; deduper: UpdateDeduper };
   imageToJpeg?: (data: Buffer) => Promise<Buffer>;
+  /** Rasterises the vector reference for portrait edits; without it portraits are drawn from text alone. */
+  svgToPng?: (svg: string, size: number) => Promise<Buffer>;
+  /** 'text' draws portraits from the prompt alone (the switch if reference edits drift from the look). */
+  portraitVia?: 'edit' | 'text';
   logger?: Pick<Console, 'info' | 'warn' | 'error'>;
   now?: () => Date;
   /** STUDIO_STAGE_TIMINGS=1: content-free per-stage timings for replied turns. */
@@ -237,11 +283,19 @@ export interface AgentView {
   id: string;
   status: Agent['status'];
   persona: PersonaSpec;
-  look: AgentLook;
-  voice?: { label: string; source: string };
+  /** avatarStale: the selected generated portrait was drawn from an older look */
+  look: AgentLook & { avatarStale?: boolean };
+  /** Forming stage of the face; the server is the single source of truth */
+  stage: Stage;
+  /** choiceId: the voice as offered to the picker (built-in id, library id or design preview id) */
+  voice?: { label: string; source: string; choiceId?: string };
   voicePreviews?: Array<{ generatedVoiceId: string; file: string }>;
   bot?: { username: string };
-  profileSync?: { status: 'pending' | 'synced' | 'error'; failed: string[] };
+  /**
+   * held: the look editor has unpushed changes and Telegram updates when it closes; status is then
+   * the last push's outcome (what Telegram shows now), not a push in flight.
+   */
+  profileSync?: { status: 'pending' | 'synced' | 'error'; failed: string[]; retryAt?: string; updatedAt?: string; held?: true };
   hiredAt?: string;
   lockAt?: string;
   locked: boolean;
@@ -259,6 +313,8 @@ export interface AgentView {
   firedAt?: string;
   firedReason?: string;
   canEdit: boolean;
+  /** Look and photo can change (creator or admin, not fired); personality edits use canEdit */
+  canEditLook: boolean;
   canFire: boolean;
   canManageAccess: boolean;
 }
@@ -348,18 +404,26 @@ export class Studio {
 
   view(agent: Agent, actor: Member, members: Member[] = []): AgentView {
     const now = this.now();
+    // A receipt counts only for the profile we want now; anything older is still on its way,
+    // unless the look editor holds the push: then Telegram still shows what that receipt says.
+    const current = agent.status === 'active' && agent.profileSync?.fingerprint === this.profileFingerprint(agent);
+    const held = agent.status === 'active' && !current && profileHeld(agent, now);
+    const receipt = current || held ? agent.profileSync : undefined;
     return {
       id: agent.id,
       status: agent.status,
       persona: agent.persona,
-      look: agent.look,
-      voice: agent.voice ? { label: agent.voice.label, source: agent.voice.source } : undefined,
+      look: { ...agent.look, avatarStale: avatarStale(agent.look) },
+      stage: stageFor(formingDay(agent, now), agent.status),
+      // The account's own voice id never leaves the server: only built-in ids and what the picker offered.
+      voice: agent.voice ? { label: agent.voice.label, source: agent.voice.source, choiceId: agent.voice.sourceId ?? (agent.voice.source === 'default' ? agent.voice.voiceId : undefined) } : undefined,
       voicePreviews: agent.status === 'draft' ? agent.voicePreviews : undefined,
       bot: agent.bot ? { username: agent.bot.username } : undefined,
-      profileSync: agent.status === 'active' ? {
-        status: agent.profileSync?.fingerprint === this.profileFingerprint(agent) ? agent.profileSync.status : 'pending',
-        failed: agent.profileSync?.fingerprint === this.profileFingerprint(agent) ? agent.profileSync.failed : [],
-      } : undefined,
+      profileSync: agent.status !== 'active' ? undefined : receipt ? {
+        status: receipt.status, failed: receipt.failed, updatedAt: receipt.updatedAt,
+        ...(receipt.status !== 'synced' && receipt.retryAt ? { retryAt: receipt.retryAt } : {}),
+        ...(held ? { held: true as const } : {}),
+      } : { status: 'pending', failed: [], ...(held ? { held: true as const } : {}) },
       hiredAt: agent.hiredAt,
       lockAt: agent.lockAt,
       locked: isLocked(agent, now),
@@ -376,6 +440,7 @@ export class Studio {
       firedAt: agent.firedAt,
       firedReason: agent.firedReason,
       canEdit: canEditPersona(actor, agent, now),
+      canEditLook: canEditLook(actor, agent),
       canFire: canFire(actor, agent),
       canManageAccess: canManageAccess(actor, agent),
     };
@@ -398,6 +463,7 @@ export class Studio {
     const s = await this.deps.store.read();
     const agent = visibleAgents(s, actor).find((a) => a.id === id);
     if (!agent) throw notFound('Agent not found');
+    if (canEditLook(actor, agent) || canManageAccess(actor, agent)) this.nudgeBotProfile(agent);
     return this.view(agent, actor, s.members);
   }
 
@@ -551,6 +617,20 @@ export class Studio {
     return true;
   }
 
+  /** Look and photo stay editable after the personality lock (creator or admin, not retired). */
+  private assertLookEditable(actor: Member, agent: Agent): true {
+    if (agent.status === 'fired') throw forbidden(`${agent.persona.name} is retired, so the look can't change.`);
+    if (!canEditLook(actor, agent)) throw forbidden('Only the creator or an admin can change the look.');
+    return true;
+  }
+
+  private async requireLookEditable(actor: Member, id: string): Promise<Agent> {
+    const agent = (await this.deps.store.read()).agents.find((a) => a.id === id);
+    if (!agent) throw notFound('Agent not found');
+    this.assertLookEditable(actor, agent);
+    return agent;
+  }
+
   private async savePersona(actor: Member, id: string, persona: PersonaSpec): Promise<AgentView> {
     const agent = await this.mutateAgent(actor, id, (a) => this.assertEditable(actor, a), (a) => {
       a.persona = persona;
@@ -561,53 +641,102 @@ export class Studio {
     return this.present(agent, actor);
   }
 
-  async setLook(actor: Member, id: string, patch: Partial<Pick<AgentLook, 'hue' | 'family' | 'features'>> | 'random'): Promise<AgentView> {
-    const agent = await this.mutateAgent(actor, id, (a) => this.assertEditable(actor, a), (a) => {
+  /**
+   * Character fields only (photo fields have their own endpoints). `sync: false`
+   * saves without a Telegram push; the editor calls syncProfile once on close.
+   */
+  async setLook(actor: Member, id: string, patch: unknown, o: { sync?: boolean } = {}): Promise<AgentView> {
+    const agent = await this.mutateAgent(actor, id, (a) => this.assertLookEditable(actor, a), (a) => {
+      const current = normalizeLook(a.look);
+      let next: CharacterLook;
       if (patch === 'random') {
-        const next = randomLook(a.persona.presentation);
-        a.look = { ...a.look, hue: next.hue, family: next.family, features: next.features };
+        // Missing v2 fields keep the current choice; a clash keeps everything but colour and face.
+        const drawn = normalizeLook(randomLook(a.persona.presentation), current);
+        next = isCompatible(drawn).ok ? drawn : { ...current, hue: drawn.hue, features: drawn.features };
       } else {
-        if (patch.hue && !HUES.includes(patch.hue)) throw bad('Unknown colour');
-        if (patch.family && !['puff', 'tower', 'drift'].includes(patch.family)) throw bad('Unknown shape');
-        a.look = { ...a.look, ...patch, features: { ...a.look.features, ...(patch.features ?? {}) } };
+        const parsed = parseLookPatch(patch, current);
+        if (!parsed.ok) throw bad(parsed.error);
+        next = parsed.look;
       }
+      a.look = { ...a.look, ...next };
+      if (o.sync === false) a.profileHeldUntil = new Date(this.now().getTime() + LOOK_EDIT_HOLD_MS).toISOString();
+      else delete a.profileHeldUntil;
       return { ...a };
-    }, 'The look can only change while the agent is forming.');
-    if (agent.status === 'active' && !agent.look.avatar) await this.configureBotProfile(agent);
+    });
+    if (o.sync !== false) {
+      // The character is the photo only while no picture is selected (a picture is marked stale instead).
+      if (agent.status === 'active' && !agent.look.avatar) await this.configureBotProfile(agent).catch(() => logTelegramDiagnostic(this.log, 'profile_photo_failed'));
+    }
     return this.present(agent, actor);
   }
 
-  async generateAvatars(actor: Member, id: string, count = 2): Promise<AgentView> {
+  /**
+   * New portraits of the current look. By default the first one becomes the
+   * profile photo and is pushed to Telegram; `select: false` only adds them.
+   */
+  async generateAvatars(actor: Member, id: string, count = 2, o: { select?: boolean } = {}): Promise<AgentView> {
     if (!this.deps.openai) throw new StudioError(503, 'Avatar generation needs OPENAI_API_KEY.');
-    const agent = await this.requireEditable(actor, id);
     const n = Number.isFinite(count) ? Math.max(1, Math.min(4, Math.floor(count))) : 2;
-    const files = await Promise.all(Array.from({ length: n }, async (_, i) => {
-      const jpeg = await this.deps.openai!.generateAvatar(avatarPrompt(agent.persona, agent.look, i));
-      return this.deps.store.saveMedia(`av-${agent.id}-${randomUUID().slice(0, 8)}.jpg`, jpeg);
-    }));
-    const updated = await this.mutateAgent(actor, id, (a) => canEditPersona(actor, a, this.now()), (a) => {
-      a.look.avatarVariants = [...files, ...(a.look.avatarVariants ?? [])].slice(0, 12);
-      if (!a.look.avatar) { a.look.avatar = files[0]; a.look.avatarSource = 'generated'; }
+    // Moods are reserved in the store, so the parallel single-portrait requests of one tap differ on any instance.
+    let first = 0;
+    const agent = await this.mutateAgent(actor, id, (a) => this.assertLookEditable(actor, a), (a) => {
+      first = a.portraitSeq ?? 0;
+      a.portraitSeq = (first + n) % PORTRAIT_MOODS.length;
       return { ...a };
     });
-    if (updated.status === 'active' && updated.look.avatar !== agent.look.avatar) await this.configureBotProfile(updated);
+    const drawnFrom = lookKey(agent.look);
+    const portrait = {
+      openai: this.deps.openai, svgToPng: this.deps.svgToPng ?? noRasteriser,
+      prefer: this.deps.svgToPng ? this.deps.portraitVia : 'text' as const,
+      // Content-free: provider messages stay out of logs.
+      onFallback: () => this.log.warn({ type: 'studio_portrait', outcome: 'edit_failed', fallback: 'text' }),
+    };
+    const vias: Record<string, 'edit' | 'text'> = {};
+    const files = await Promise.all(Array.from({ length: n }, async (_, i) => {
+      // Re-renders the stage-4 vector so the portrait keeps species, hair and accessory; text-only is the fallback.
+      const { image, via } = await renderPortrait(portrait, agent.persona, agent.look, first + i);
+      this.log.info({ type: 'studio_portrait', via });
+      // Same 640 px JPEG as uploads, whatever the image model returned (Telegram needs JPG).
+      const jpeg = this.deps.imageToJpeg
+        ? await this.deps.imageToJpeg(image).catch(() => { throw new StudioError(502, "The new picture couldn't be read. Try again."); })
+        : image;
+      return { file: await this.deps.store.saveMedia(`av-${agent.id}-${randomUUID().slice(0, 8)}.jpg`, jpeg), via };
+    })).then((made) => { made.forEach((m) => { vias[m.file] = m.via; }); return made.map((m) => m.file); });
+    const select = o.select !== false;
+    const updated = await this.mutateAgent(actor, id, (a) => this.assertLookEditable(actor, a), (a) => {
+      if (select) { a.look.avatar = files[0]; a.look.avatarSource = 'generated'; delete a.profileHeldUntil; }
+      a.look.avatarVariants = keepSelected([...files, ...(a.look.avatarVariants ?? [])], a.look.avatar);
+      a.look.avatarLooks = { ...a.look.avatarLooks, ...Object.fromEntries(files.map((f) => [f, drawnFrom])) };
+      a.look.avatarVia = { ...a.look.avatarVia, ...vias };
+      pruneAvatarLooks(a.look);
+      return { ...a };
+    });
+    if (select && updated.status === 'active') await this.configureBotProfile(updated).catch(() => logTelegramDiagnostic(this.log, 'profile_photo_failed'));
     return this.present(updated, actor);
   }
 
+  /** Selects a picture (or the character, with null) and pushes it; the response carries the real sync outcome. */
   async chooseAvatar(actor: Member, id: string, file: string | null): Promise<AgentView> {
-    const agent = await this.mutateAgent(actor, id, (a) => this.assertEditable(actor, a), (a) => {
+    const agent = await this.mutateAgent(actor, id, (a) => this.assertLookEditable(actor, a), (a) => {
       if (file && !(a.look.avatarVariants ?? []).includes(file)) throw bad('Unknown avatar');
-      a.look.avatar = file ?? undefined;
-      a.look.avatarSource = file ? (file.startsWith('up-') ? 'custom' : 'generated') : undefined;
+      if (file) {
+        a.look.avatar = file;
+        a.look.avatarSource = file.startsWith('up-') ? 'custom' : 'generated';
+      } else {
+        delete a.look.avatar;
+        delete a.look.avatarSource;
+      }
+      delete a.profileHeldUntil;
       return { ...a };
-    }, 'The avatar can only change while the agent is forming.');
+    });
+    // Step failures land in the receipt that present() reads; only unexpected errors are logged here.
     if (agent.status === 'active') await this.configureBotProfile(agent).catch(() => logTelegramDiagnostic(this.log, 'profile_photo_failed'));
     return this.present(agent, actor);
   }
 
   /** Custom image upload: re-encoded to a clean 640×640 JPEG (Telegram needs JPG). */
   async uploadAvatar(actor: Member, id: string, data: Buffer, mime: string): Promise<AgentView> {
-    await this.requireEditable(actor, id);
+    await this.requireLookEditable(actor, id);
     if (data.length > 8 * 1024 * 1024) throw bad('Image is larger than 8 MB.');
     if (!/^image\/(jpeg|png|webp)$/.test(mime)) throw bad('Use a JPEG, PNG or WebP image.');
     let jpeg: Buffer;
@@ -615,8 +744,9 @@ export class Studio {
     else if (mime === 'image/jpeg') jpeg = data;
     else throw bad('Only JPEG uploads are supported on this server.');
     const file = await this.deps.store.saveMedia(`up-${id}-${randomUUID().slice(0, 8)}.jpg`, jpeg);
-    await this.mutateAgent(actor, id, (a) => canEditPersona(actor, a, this.now()), (a) => {
-      a.look.avatarVariants = [file, ...(a.look.avatarVariants ?? [])].slice(0, 12);
+    await this.mutateAgent(actor, id, (a) => this.assertLookEditable(actor, a), (a) => {
+      a.look.avatarVariants = keepSelected([file, ...(a.look.avatarVariants ?? [])], a.look.avatar);
+      pruneAvatarLooks(a.look);
     });
     return this.chooseAvatar(actor, id, file);
   }
@@ -645,7 +775,7 @@ export class Studio {
     if (!(agent.voicePreviews ?? []).some((p) => p.generatedVoiceId === generatedVoiceId)) throw bad('Unknown voice preview');
     const voiceId = await this.deps.eleven.saveDesignedVoice(generatedVoiceId, `${this.deps.orgName} ${agent.persona.name} ${agent.id}`, agent.persona.voiceBrief);
     const updated = await this.mutateAgent(actor, id, (a) => canEditPersona(actor, a, this.now()), (a) => {
-      a.voice = { provider: 'elevenlabs', voiceId, label: `Designed voice · ${a.persona.accent || 'custom'}`, source: 'design' };
+      a.voice = { provider: 'elevenlabs', voiceId, label: `Designed voice · ${a.persona.accent || 'custom'}`, source: 'design', sourceId: generatedVoiceId };
       return { ...a };
     });
     return this.present(updated, actor);
@@ -685,7 +815,7 @@ export class Studio {
       : 'The server’s ElevenLabs subscription could not be checked. Try again before choosing a library voice.');
     const voiceId = await this.deps.eleven.addLibraryVoice(v.publicOwnerId, v.voiceId, `${this.deps.orgName} ${v.name}`.slice(0, 60));
     const updated = await this.mutateAgent(actor, id, (a) => canEditPersona(actor, a, this.now()), (a) => {
-      a.voice = { provider: 'elevenlabs', voiceId, label: `${v.name} · voice library`, source: 'library' };
+      a.voice = { provider: 'elevenlabs', voiceId, label: `${v.name} · voice library`, source: 'library', sourceId: v.voiceId };
       return { ...a };
     });
     return this.present(updated, actor);
@@ -819,129 +949,196 @@ export class Studio {
 
   /**
    * Pushes the Studio name, descriptions, commands and photo to the agent's
-   * Telegram bot. Each step runs on its own so one refusal (a rate limit, an
-   * over-long text) can't skip the rest; returns the steps that failed.
+   * Telegram bot. Only steps whose desired value changed since their last
+   * success run (a photo change is one call); `force` runs every step. Each
+   * step runs on its own so one refusal (a rate limit, an over-long text)
+   * can't skip the rest; returns the steps that failed.
    */
-  async configureBotProfile(agent: Agent): Promise<string[]> {
+  async configureBotProfile(agent: Agent, o: { force?: boolean } = {}): Promise<string[]> {
     // Serialize profile writes per bot. An edit queued behind a slow upload must
     // re-read the latest selection instead of restoring an earlier avatar/name.
     const previous = this.profileJobs.get(agent.id);
     const job = (previous ?? Promise.resolve()).catch(() => undefined)
-      .then(() => this.applyBotProfile(agent.id));
+      .then(() => this.applyBotProfile(agent.id, o.force === true));
     this.profileJobs.set(agent.id, job);
     try { return await job; }
     finally { if (this.profileJobs.get(agent.id) === job) this.profileJobs.delete(agent.id); }
   }
 
-  private profileFingerprint(agent: Agent): string {
-    const { name, role, tagline } = agent.persona;
-    const { hue, family, features, avatar } = agent.look;
+  /** The profile photo the bot should show: the selected picture, else the character (never below stage 2). */
+  private profilePhoto(agent: Agent): { key: string; load: () => Promise<Buffer | null> } {
+    const avatar = agent.look.avatar;
+    if (avatar) return { key: `file:${avatar}`, load: () => this.deps.store.readMedia(avatar) };
+    const stage = Math.max(stageFor(formingDay(agent, this.now()), agent.status), 2) as Stage;
+    const svg = characterSvg(agent.look, { stage, size: 640, bg: 'halo', fit: 'circle', uid: 'tg' });
+    // The art hash re-pushes every bot photo when the character renderer changes.
+    return { key: `cloud:${lookKey(agent.look)}:s${stage}:${valueHash(svg)}`, load: () => this.cloudPhoto(svg) };
+  }
+
+  /** Every profile step with a hash of its desired value: what to push, what to skip, and the fingerprint. */
+  private profilePlan(agent: Agent): ProfileTask[] {
+    const p = agent.persona;
+    const org = this.deps.orgName;
+    const task = (step: ProfileStep, value: unknown, run: ProfileTask['run']): ProfileTask => ({ step, key: valueHash([agent.bot?.id ?? null, value]), run });
+    const tasks: ProfileTask[] = [];
+    if (this.deps.webhookBase) {
+      const url = `${this.deps.webhookBase.replace(/\/+$/, '')}/api/studio/telegram/${agent.id}`;
+      const secret = webhookSecret(this.deps.secret, agent.id);
+      tasks.push(task('webhook', [url, secret, AGENT_UPDATES, agent.tokenEnc ?? null], (bot) => bot.setWebhook(url, secret, AGENT_UPDATES)));
+    }
+    const who = { private: `${p.name} works with a few people at ${org}.`, org: `For the ${org} team.`, public: 'Anyone can say hi.' }[visibilityOf(agent)];
+    const name = p.name.slice(0, 64);
+    const photo = this.profilePhoto(agent);
+    const shortDescription = `${p.role} at ${org}. ${p.tagline}`.trim().slice(0, 120);
+    const description = `${p.name} · ${p.role}\n\n${p.tagline}\n\nTalk by text or voice. ${who}`.slice(0, 512);
+    const commands = [
+      { command: 'start', description: `Meet ${p.name}`.slice(0, 256) },
+      { command: 'memories', description: 'What I remember that you can see' },
+      { command: 'forget', description: 'Delete something you told me' },
+      { command: 'whoami', description: 'How I know you' },
+    ];
+    tasks.push(
+      task('name', name, (bot) => bot.setMyName(name)),
+      task('photo', photo.key, async (bot) => {
+        const image = await photo.load();
+        if (!image?.length) throw new Error('The selected profile image is unavailable.');
+        await bot.setMyProfilePhoto(image);
+      }),
+      task('short description', shortDescription, (bot) => bot.setMyShortDescription(shortDescription)),
+      task('description', description, (bot) => bot.setMyDescription(description)),
+      task('commands', commands, (bot) => bot.setMyCommands(commands)),
+    );
+    return tasks;
+  }
+
+  private profileFingerprint(agent: Agent, plan = this.profilePlan(agent)): string {
     return createHash('sha256').update(JSON.stringify({
-      version: 1, bot: agent.bot?.id, credential: agent.tokenEnc, name, role, tagline, org: this.deps.orgName,
-      visibility: visibilityOf(agent), avatar: avatar ?? null,
-      cloud: avatar ? null : { hue, family, cheeks: features.cheeks, lashes: features.lashes, brows: features.brows },
+      version: 2, bot: agent.bot?.id, credential: agent.tokenEnc, steps: plan.map((t) => [t.step, t.key]),
     })).digest('hex');
+  }
+
+  /** Whether the bot profile needs a push now: stale, or failed and due for a retry. */
+  private profileDue(agent: Agent): boolean {
+    if (agent.status !== 'active' || !agent.bot || this.profileJobs.has(agent.id)) return false;
+    if (profileHeld(agent, this.now())) return false;
+    const receipt = agent.profileSync;
+    if (receipt?.fingerprint !== this.profileFingerprint(agent)) return true;
+    if (receipt.status === 'synced') return false;
+    return !receipt.retryAt || new Date(receipt.retryAt).getTime() <= this.now().getTime();
+  }
+
+  /**
+   * Webhook deployments have no reconcile loop, so an editor opening the agent
+   * (or an update reaching its bot) starts an overdue push in the background.
+   */
+  nudgeBotProfile(agent: Agent): void {
+    if (!this.deps.webhookBase || !this.profileDue(agent)) return;
+    void this.configureBotProfile(agent).catch(() => logTelegramDiagnostic(this.log, 'profile_apply_failed'));
   }
 
   /** Repairs legacy profiles and failed/interrupted uploads in the polling runtime. */
   async reconcileBotProfiles(): Promise<void> {
     const { agents } = await this.deps.store.read();
     for (const agent of agents) {
-      if (agent.status !== 'active' || !agent.bot || this.profileJobs.has(agent.id)) continue;
-      const receipt = agent.profileSync;
-      if (receipt?.fingerprint === this.profileFingerprint(agent)) {
-        if (receipt.status === 'synced') continue;
-        if (receipt.retryAt && new Date(receipt.retryAt).getTime() > this.now().getTime()) continue;
-      }
-      await this.configureBotProfile(agent);
+      if (this.profileDue(agent)) await this.configureBotProfile(agent);
     }
   }
 
-  private async applyBotProfile(id: string): Promise<string[]> {
+  private async applyBotProfile(id: string, force: boolean): Promise<string[]> {
     const agent = (await this.deps.store.read()).agents.find((a) => a.id === id);
     if (!agent || agent.status !== 'active' || !agent.bot) return [];
-    const fingerprint = this.profileFingerprint(agent);
+    const plan = this.profilePlan(agent);
+    const fingerprint = this.profileFingerprint(agent, plan);
     const prior = agent.profileSync;
+    const now = this.now().getTime();
     const attempts = prior?.fingerprint === fingerprint && prior.status !== 'synced' ? prior.attempts + 1 : 1;
-    const retryAt = new Date(this.now().getTime() + Math.min(3_600_000, 60_000 * 2 ** Math.min(attempts - 1, 6))).toISOString();
+    const retryAt = new Date(now + Math.min(3_600_000, 60_000 * 2 ** Math.min(attempts - 1, 6))).toISOString();
+    // Legacy receipts (no steps) and manual retries push everything. A step whose same
+    // value was refused waits for the retry time instead of riding along with every edit.
+    const known = force ? undefined : prior?.steps;
+    const backingOff = !force && prior?.status === 'error' && !!prior.retryAt && new Date(prior.retryAt).getTime() > now;
+    const due = plan.filter((t) => !known || known[t.step] !== t.key);
+    const waiting = new Set(due.filter((t) => backingOff && known?.[t.step] === `!${t.key}`).map((t) => t.step));
+    // Nothing to try until the retry time: waiting out the backoff is not another attempt.
+    if (waiting.size && waiting.size === due.length && prior?.fingerprint === fingerprint) return due.map((t) => t.step);
     await this.deps.store.update((s) => {
       const current = s.agents.find((a) => a.id === id);
       if (current?.status === 'active') current.profileSync = {
         fingerprint, status: 'pending', failed: [], attempts, updatedAt: this.now().toISOString(), retryAt,
+        ...(current.profileSync?.steps ? { steps: current.profileSync.steps } : {}),
       };
     });
     let failed: string[];
+    let done: Partial<Record<ProfileStep, string>> = {};
     try {
       const token = this.botToken(agent);
-      failed = token ? await this.pushBotProfile(agent, this.deps.botFor(token)) : ['token'];
+      if (!token) failed = ['token'];
+      else ({ failed, done } = await this.pushBotProfile(agent.id, due, waiting, this.deps.botFor(token)));
     } catch {
       failed = ['profile'];
       logTelegramDiagnostic(this.log, 'profile_apply_failed');
     }
     await this.deps.store.update((s) => {
       const current = s.agents.find((a) => a.id === id);
-      // Edits and token refreshes during an upload still need their own sync.
-      if (current?.status !== 'active' || this.profileFingerprint(current) !== fingerprint || current.tokenEnc !== agent.tokenEnc) return;
+      if (current?.status !== 'active' || !current.profileSync) return;
+      const steps = { ...current.profileSync.steps, ...done };
+      // Edits and token refreshes during an upload still need their own sync, but
+      // what Telegram now shows is recorded so that sync doesn't repeat it.
+      if (this.profileFingerprint(current) !== fingerprint || current.tokenEnc !== agent.tokenEnc) {
+        if (current.bot?.id === agent.bot!.id) current.profileSync = { ...current.profileSync, steps };
+        return;
+      }
       current.profileSync = {
         fingerprint, status: failed.length ? 'error' : 'synced', failed, attempts,
-        updatedAt: this.now().toISOString(), ...(failed.length ? { retryAt } : {}),
+        updatedAt: this.now().toISOString(), ...(failed.length ? { retryAt } : {}), steps,
       };
     });
     return failed;
   }
 
-  private async pushBotProfile(agent: Agent, bot: TelegramBotClient): Promise<string[]> {
-    const p = agent.persona;
-    const org = this.deps.orgName;
-    const who = { private: `${p.name} works with a few people at ${org}.`, org: `For the ${org} team.`, public: 'Anyone can say hi.' }[visibilityOf(agent)];
-    const steps: Array<[string, () => Promise<unknown>]> = [];
-    if (this.deps.webhookBase) {
-      steps.push(['webhook', () => bot.setWebhook(`${this.deps.webhookBase!.replace(/\/+$/, '')}/api/studio/telegram/${agent.id}`, webhookSecret(this.deps.secret, agent.id), AGENT_UPDATES)]);
-    }
-    steps.push(
-      ['name', () => bot.setMyName(p.name.slice(0, 64))],
-      ['photo', async () => {
-        const photo = agent.look.avatar ? await this.deps.store.readMedia(agent.look.avatar) : await this.cloudPhoto(agent);
-        if (!photo?.length) throw new Error('The selected profile image is unavailable.');
-        await bot.setMyProfilePhoto(photo);
-      }],
-      ['short description', () => bot.setMyShortDescription(`${p.role} at ${org}. ${p.tagline}`.trim().slice(0, 120))],
-      ['description', () => bot.setMyDescription(`${p.name} · ${p.role}\n\n${p.tagline}\n\nTalk by text or voice. ${who}`.slice(0, 512))],
-      ['commands', () => bot.setMyCommands([
-        { command: 'start', description: `Meet ${p.name}`.slice(0, 256) },
-        { command: 'memories', description: 'What I remember that you can see' },
-        { command: 'forget', description: 'Delete something you told me' },
-        { command: 'whoami', description: 'How I know you' },
-      ])],
-    );
+  /** Runs the due steps in order; `done` maps each attempted step to its hash, `!`-prefixed when refused. */
+  private async pushBotProfile(id: string, due: ProfileTask[], waiting: Set<ProfileStep>, bot: TelegramBotClient): Promise<{ failed: string[]; done: Partial<Record<ProfileStep, string>> }> {
     const failed: string[] = [];
-    for (const [step, run] of steps) {
-      const current = (await this.deps.store.read()).agents.find((a) => a.id === agent.id);
-      if (current?.status !== 'active') return ['inactive'];
+    const done: Partial<Record<ProfileStep, string>> = {};
+    for (const { step, key, run } of due) {
+      if (waiting.has(step)) { failed.push(step); continue; }
+      const current = (await this.deps.store.read()).agents.find((a) => a.id === id);
+      if (current?.status !== 'active') return { failed: ['inactive'], done };
       try {
-        await run();
+        await run(bot);
+        done[step] = key;
       } catch {
         failed.push(step);
+        done[step] = `!${key}`;
         // Provider error objects can include token-bearing request URLs.
         logTelegramDiagnostic(this.log, profileStepDiagnostic(step));
       }
     }
-    return failed;
+    return { failed, done };
   }
 
-  /** The cloud character as a JPEG, for agents without a custom avatar. */
-  private async cloudPhoto(agent: Agent): Promise<Buffer> {
+  /** The character as a JPEG, for agents without a selected picture. */
+  private async cloudPhoto(svg: string): Promise<Buffer> {
     if (!this.deps.imageToJpeg) throw new Error('Profile image conversion is unavailable.');
-    return this.deps.imageToJpeg(Buffer.from(cloudSvg(agent.look)));
+    return this.deps.imageToJpeg(Buffer.from(svg));
   }
 
-  /** Re-applies the Studio name and photo to the live bot. */
-  async syncProfile(actor: Member, id: string): Promise<{ agent: AgentView; failed: string[] }> {
+  /**
+   * Re-applies the Studio profile to the live bot. `force` (the default, the
+   * manual Retry) pushes every step; `force: false` only what changed.
+   */
+  async syncProfile(actor: Member, id: string, o: { force?: boolean } = {}): Promise<{ agent: AgentView; failed: string[] }> {
     const agent = (await this.deps.store.read()).agents.find((a) => a.id === id);
     if (!agent) throw notFound('Agent not found');
-    if (!canManageAccess(actor, agent) && !canEditPersona(actor, agent, this.now())) throw forbidden();
-    if (agent.status !== 'active' || !agent.bot) throw bad(`${agent.persona.name} has no Telegram bot yet.`);
-    const failed = await this.configureBotProfile(agent).catch(() => {
+    if (!canManageAccess(actor, agent) && !canEditLook(actor, agent)) throw forbidden();
+    const force = o.force !== false;
+    if (agent.profileHeldUntil) await this.deps.store.update((s) => { delete s.agents.find((a) => a.id === id)?.profileHeldUntil; });
+    if (agent.status !== 'active' || !agent.bot) {
+      // The look editor closes the same way for drafts; there is nothing to push yet.
+      if (!force) return { agent: await this.present(agent, actor), failed: [] };
+      throw bad(`${agent.persona.name} has no Telegram bot yet.`);
+    }
+    const failed = await this.configureBotProfile(agent, { force }).catch(() => {
       logTelegramDiagnostic(this.log, 'profile_edit_failed');
       return ['webhook'];
     });
@@ -1117,11 +1314,14 @@ export class Studio {
   async listGroups(actor: Member) {
     if (!atLeast(actor, 'member')) throw forbidden();
     const s = await this.deps.store.read();
+    const now = this.now();
     return s.groups
       .filter((g) => g.memberIds.includes(actor.telegramId) || atLeast(actor, 'admin'))
       .map((g) => ({
         chatId: g.chatId, title: g.title, hasGuests: g.hasGuests, memberCount: g.memberIds.length,
-        agents: g.agentIds.map((id) => s.agents.find((a) => a.id === id)).filter(Boolean).map((a) => ({ id: a!.id, name: a!.persona.name, look: a!.look })),
+        // stage: the server's growth stage is the one source for every face (PLAN D7)
+        agents: g.agentIds.map((id) => s.agents.find((a) => a.id === id)).filter(Boolean)
+          .map((a) => ({ id: a!.id, name: a!.persona.name, look: a!.look, stage: stageFor(formingDay(a!, now), a!.status) })),
       }));
   }
 
