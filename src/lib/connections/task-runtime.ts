@@ -4,6 +4,7 @@ import type { ConnectionsApplication } from './application';
 import type { ConnectionActor, OperationReceipt } from './contracts';
 import { idSchema } from './contracts';
 import { getProviderToolDefinition } from './providers';
+import { McpConnectionsCatalog } from './mcp/catalog';
 import { providerInputJsonSchema } from './catalog';
 import { deny } from './errors';
 import { resolveConnectionSkill } from './skills';
@@ -38,7 +39,10 @@ export class ConnectionTaskRuntime {
     const providerDestination = `provider:${connection.providerId}`;
     if (!grant.destinationIds.includes(providerDestination) || !grant.destinationIds.includes('vox:private') || !grant.destinationIds.includes('model:studio')) return deny('task_destination_denied');
     const tools = grant.toolIds.flatMap(id => {
-      const reviewed = service.options.catalog.get(id);
+      const reviewed = service.catalogForConnection(connection).get(id);
+      if (connection.mcp?.catalog) { const dynamic = new McpConnectionsCatalog(connection.mcp.catalog).view().tools.find(t => t.id === id);
+        if (!dynamic || !reviewed || reviewed.catalogDigest !== grant.catalogDigest) return [];
+        return [{ id, title: dynamic.title, effect: reviewed.effect, input: dynamic.inputSchema }]; }
       const tool = getProviderToolDefinition(id);
       if (!tool || !reviewed || tool.providerId !== connection.providerId || reviewed.catalogDigest !== grant.catalogDigest ||
           tool.personalOnly && input.space !== 'personal') return [];
@@ -62,7 +66,7 @@ Reviewed task guidance: ${skill?.instructions ?? 'Complete the explicit task usi
     const operations: OperationReceipt[] = [];
     const deadlineAt = this.now() + 60_000;
     const assertCurrent = async () => {
-      await this.app.assertTaskCurrent?.(connection.providerId);
+      await this.app.assertTaskCurrent?.(connection.providerId, connection.agentId);
       await this.app.assertModelCurrent?.();
       if (this.now() >= deadlineAt) return deny('task_deadline_expired', 409);
       const context = await service.context(actor, input.space);
@@ -80,7 +84,7 @@ Reviewed task guidance: ${skill?.instructions ?? 'Complete the explicit task usi
         destinationId: 'model:studio', purpose: 'explicit.connection_task' });
       const inputBytes = Buffer.byteLength(system) + Buffer.byteLength(JSON.stringify(messages));
       if (inputBytes > 100_000) return deny('task_context_limit', 413);
-      await this.app.reserveTaskBudget?.(connection.providerId, `${input.requestId}:model:${step}`, 'model_tokens', inputBytes + STEP_MAX_TOKENS);
+      await this.app.reserveTaskBudget?.(connection.providerId, `${input.requestId}:model:${step}`, 'model_tokens', inputBytes + STEP_MAX_TOKENS, connection.agentId);
       await assertCurrent();
       await service.lineage.assertUse(actor, { space: input.space, sourceIds, agentId: input.agentId,
         destinationId: 'model:studio', purpose: 'explicit.connection_task' });

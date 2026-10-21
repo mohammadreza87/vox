@@ -32,7 +32,7 @@ const attestationSchema = z.object({ issuedAt: z.number().int().nonnegative(), e
   evidenceReference: z.string().trim().min(1).max(300), configurationDigest: hex,
   signature: z.string().regex(/^[A-Za-z0-9_-]{86}$/) }).strict();
 const profileSchema = z.object({ id: localId, accountId: z.string().regex(/^telegram-account:[1-9]\d{0,15}$/), space: z.enum(['work', 'personal']),
-  providerId: z.enum(['browser', 'ssh']), subject: z.string().regex(/^runner-service:[A-Za-z0-9_-]{1,100}$/),
+  agentId: idSchema.optional(), providerId: z.enum(['browser', 'ssh']), subject: z.string().regex(/^runner-service:[A-Za-z0-9_-]{1,100}$/),
   tenant: z.string().regex(/^runner-scope:[a-f0-9]{64}$/), displayLabel: z.string().trim().min(1).max(160),
   browserTargets: z.array(browserTargetSchema).max(50), sshTargets: z.array(sshTargetSchema).max(50), attestation: attestationSchema,
 }).strict().superRefine((profile, context) => {
@@ -43,7 +43,7 @@ const profileSchema = z.object({ id: localId, accountId: z.string().regex(/^tele
 });
 export const runnerAdmissionConfigurationSchema = z.object({ schemaVersion: z.literal(1), enabled: z.boolean(), releasePublicKeyFile: absolute,
   sandbox: sandboxSchema, profiles: z.array(profileSchema).max(100) }).strict().superRefine((configuration, context) => {
-  const keys = configuration.profiles.map(profile => JSON.stringify([profile.accountId, profile.space, profile.providerId]));
+  const keys = configuration.profiles.map(profile => JSON.stringify([profile.accountId, profile.space, profile.agentId ?? null, profile.providerId]));
   if (new Set(keys).size !== keys.length || new Set(configuration.profiles.map(profile => profile.id)).size !== configuration.profiles.length)
     context.addIssue({ code: 'custom', message: 'Duplicate runner authority partition' });
 });
@@ -51,23 +51,23 @@ export type RunnerAdmissionConfiguration = z.infer<typeof runnerAdmissionConfigu
 export type RunnerAdmissionProfile = z.infer<typeof profileSchema>;
 export const RUNNER_IDENTITY_ISSUER = 'https://connections.vox.invalid/worker-identity';
 const hash = (value: string | Uint8Array) => createHash('sha256').update(value).digest('hex');
-export const runnerScopeTenant = (accountId: string, space: string): string => `runner-scope:${hash(canonical({ accountId, space }))}`;
+export const runnerScopeTenant = (accountId: string, space: string, agentId?: string): string => `runner-scope:${hash(canonical({ accountId, space, ...(agentId ? { agentId } : {}) }))}`;
 /** Release signer computes this over non-secret exact deployment/target inventory; never sign arbitrary model input. */
 export function runnerProfileConfigurationDigest(configuration: Pick<RunnerAdmissionConfiguration, 'schemaVersion' | 'sandbox'>, profile: Omit<RunnerAdmissionProfile, 'attestation'> | RunnerAdmissionProfile): string {
   return hash(canonical({ schemaVersion: configuration.schemaVersion, sandbox: configuration.sandbox, profile: {
-    id: profile.id, accountId: profile.accountId, space: profile.space, providerId: profile.providerId, subject: profile.subject,
+    id: profile.id, accountId: profile.accountId, space: profile.space, ...(profile.agentId ? { agentId: profile.agentId } : {}), providerId: profile.providerId, subject: profile.subject,
     tenant: profile.tenant, displayLabel: profile.displayLabel, browserTargets: profile.browserTargets, sshTargets: profile.sshTargets,
   } }));
 }
 export function runnerAttestationPayload(profile: RunnerAdmissionProfile): string {
-  return canonical({ version: 1, profileId: profile.id, accountId: profile.accountId, space: profile.space, providerId: profile.providerId,
+  return canonical({ version: 1, profileId: profile.id, accountId: profile.accountId, space: profile.space, ...(profile.agentId ? { agentId: profile.agentId } : {}), providerId: profile.providerId,
     subject: profile.subject, tenant: profile.tenant, issuedAt: profile.attestation.issuedAt, expiresAt: profile.attestation.expiresAt,
     evidenceReference: profile.attestation.evidenceReference, configurationDigest: profile.attestation.configurationDigest });
 }
 export function verifyRunnerProfile(configuration: RunnerAdmissionConfiguration, profile: RunnerAdmissionProfile, publicKey: string | KeyObject, now: number): void {
   const key = typeof publicKey === 'string' ? createPublicKey(publicKey) : publicKey;
   if (key.type !== 'public' || key.asymmetricKeyType !== 'ed25519' || !configuration.enabled ||
-      profile.tenant !== runnerScopeTenant(profile.accountId, profile.space) || profile.attestation.issuedAt > now + 30000 ||
+      profile.tenant !== runnerScopeTenant(profile.accountId, profile.space, profile.agentId) || profile.attestation.issuedAt > now + 30000 ||
       profile.attestation.expiresAt <= now || profile.attestation.expiresAt <= profile.attestation.issuedAt ||
       profile.attestation.expiresAt - profile.attestation.issuedAt > 30 * 86400000 ||
       profile.attestation.configurationDigest !== runnerProfileConfigurationDigest(configuration, profile) ||
@@ -95,7 +95,7 @@ export class RunnerAdmissionRegistry {
   }
   private async selected(current: BrokerAuthority): Promise<RunnerAdmissionProfile> {
     await this.dependencies.assertConfigurationUnchanged?.();
-    const profile = this.configuration.profiles.find(profile => profile.accountId === current.context.accountId && profile.space === current.context.scope.spaceKind && profile.providerId === current.connection.providerId);
+    const profile = this.configuration.profiles.find(profile => profile.accountId === current.context.accountId && profile.space === current.context.scope.spaceKind && profile.providerId === current.connection.providerId && profile.agentId === (current.connection.schemaVersion === 2 ? current.connection.agentId : undefined));
     if (!profile || current.connection.ownerAccountId !== current.context.accountId || current.connection.ownerPersonId !== current.context.personId || !sameScope(current.connection.scope, current.context.scope)) throw new ProviderError('runner_attestation_scope_mismatch', 'not_dispatched');
     verifyRunnerProfile(this.configuration, profile, this.publicKey, this.now());
     return profile;

@@ -1,8 +1,10 @@
 import { promises as fs } from 'node:fs';
 import { resolve } from 'node:path';
 import { z } from 'zod';
+import { SelfServiceMcpBroker, McpConnectionsCatalog, createPendingMcpCatalog, McpBrokerExecutor, canonicalMcpUrl } from '../mcp';
+import type { ConnectionActor } from '../contracts';
 import { createConnectionsCatalog } from '../catalog';
-import { getProviderToolDefinition } from '../providers';
+import { catalogForProfiles, profilesForAgent } from '../inventory';
 import { ProviderRegistry } from '../providers/registry';
 import { readConnectionsConfiguration } from '../config';
 import type { BrokerAuthority } from './control';
@@ -25,6 +27,9 @@ export const brokerConfigurationSchema = z.object({ schemaVersion: z.literal(1),
   enabledProviderIds: z.array(z.string().min(1).max(100)).max(20), oauthProfiles: z.record(z.string(), profileSchema),
   operatorScopes: z.record(z.string(), z.array(z.string().min(1).max(200)).max(100)),
   connectionsManifestFile: z.string().min(1), runnerAdmissionFile: z.string().min(1).optional(),
+  selfServiceMcp: z.object({ enabled: z.boolean(), callbackUrl: z.string().url().max(2000), clientMetadataUrl: z.string().url().max(2000).optional(),
+    registeredClients: z.array(z.object({ issuer: z.string().url().max(2000), clientId: z.string().min(1).max(2000), clientSecret: z.string().min(1).max(16000).optional(),
+      scopes: z.array(z.string().min(1).max(200)).max(100) }).strict()).max(50).default([]), scopes: z.array(z.string().min(1).max(200)).max(100).default([]) }).strict().optional(),
   catalog: z.object({ resourceIdsByTool: z.record(z.string(), z.array(z.string()).max(100)), destinationIds: z.array(z.string()).max(100),
     endpointProfileIds: z.record(z.string(), z.string()).optional() }).strict(),
 }).strict();
@@ -54,26 +59,45 @@ export async function loadConnectionsBroker(configPath: string) {
   const scoped = async (current: BrokerAuthority) => {
     const manifest = await readConnectionsConfiguration(configuration.connectionsManifestFile);
     if (!manifest.enabled) throw new ConnectionsError(503, 'connections_paused');
-    const profiles = manifest.profiles.filter(p => p.accountId === current.context.accountId && p.space === current.context.scope.spaceKind);
-    const selected = profiles.find(p => p.providerId === current.connection.providerId);
-    if (!selected?.qualified) throw new ConnectionsError(503, 'broker_provider_unqualified');
-    const resourceIdsByTool: Record<string, string[]> = {}; const endpointProfileIds: Record<string, string> = {};
-    for (const profile of profiles) {
-      endpointProfileIds[profile.providerId] = profile.endpointProfileId;
-      if (!profile.qualified) continue;
-      for (const resource of profile.resources) for (const toolId of resource.toolIds) if (getProviderToolDefinition(toolId)?.effect === 'read') (resourceIdsByTool[toolId] ??= []).push(resource.id);
+    if (current.connection.providerId === 'remote_mcp') {
+      if (!configuration.selfServiceMcp?.enabled || !manifest.selfServiceMcp?.enabled || current.connection.schemaVersion !== 2 || !current.connection.mcp) throw new ConnectionsError(503, 'mcp_setup_unavailable');
+      const selectedCatalog = current.connection.mcp.catalog ? new McpConnectionsCatalog(current.connection.mcp.catalog) : createPendingMcpCatalog(current.connection.mcp.canonicalResourceUri);
+      if (current.connection.catalogDigest !== selectedCatalog.provider('remote_mcp')!.catalogDigest || current.connection.endpointProfileId !== selectedCatalog.endpointProfileId) throw new ConnectionsError(409, 'broker_configuration_changed');
+      return { selected: undefined, catalog: selectedCatalog };
     }
-    return { selected, catalog: createConnectionsCatalog({ resourceIdsByTool, endpointProfileIds,
-      destinationIds: ['vox:private', 'model:studio', ...profiles.map(p => `provider:${p.providerId}`)] }) };
+    const profiles = profilesForAgent(manifest, current.context.accountId, current.context.scope.spaceKind,
+      current.connection.schemaVersion === 2 ? current.connection.agentId : undefined);
+    const selected = profiles.find(profile => profile.providerId === current.connection.providerId);
+    if (!selected?.qualified) throw new ConnectionsError(503, 'broker_provider_unqualified');
+    const scopedCatalog = catalogForProfiles(profiles);
+    const registered = scopedCatalog.provider(selected.providerId);
+    if (!registered || current.connection.catalogDigest !== registered.catalogDigest ||
+        current.connection.endpointProfileId !== registered.endpointProfileId || current.connection.adapterId !== registered.adapterId ||
+        current.connection.adapterVersion !== registered.adapterVersion) throw new ConnectionsError(409, 'broker_configuration_changed');
+    return { selected, catalog: scopedCatalog };
   };
-  for (const providerId of configuration.enabledProviderIds) if (!catalog.provider(providerId)) throw new ConnectionsError(503, 'broker_provider_invalid');
+  for (const providerId of configuration.enabledProviderIds) if (!catalog.provider(providerId) && !(providerId === 'remote_mcp' && configuration.selfServiceMcp?.enabled)) throw new ConnectionsError(503, 'broker_provider_invalid');
   for (const [providerId, profile] of Object.entries(configuration.oauthProfiles)) if (providerId !== profile.providerId || !configuration.enabledProviderIds.includes(providerId)) throw new ConnectionsError(503, 'broker_oauth_configuration_invalid');
   const control = new HttpBrokerControlPlane(new AuthenticatedBrokerClient(configuration.studioOrigin, authKey, ['/api/connections/broker']));
-  const broker = new ConnectionsBroker({ control, vault: new FileBrokerVault(configuration.vaultDirectory, vaultKey, configuration.keyVersion),
+  const vault = new FileBrokerVault(configuration.vaultDirectory, vaultKey, configuration.keyVersion);
+  const actorFor = (current: BrokerAuthority): ConnectionActor => ({ accountId: current.context.accountId,
+    ...(current.context.botAgentId ? { botAgentId: current.context.botAgentId, botAuthenticationRevision: current.context.botAuthenticationRevision } : {}) });
+  const mcpConfig = configuration.selfServiceMcp;
+  if (mcpConfig?.enabled) {
+    canonicalMcpUrl(mcpConfig.callbackUrl);
+    if (mcpConfig.clientMetadataUrl && (new URL(canonicalMcpUrl(mcpConfig.clientMetadataUrl)).origin !== new URL(mcpConfig.callbackUrl).origin || new URL(mcpConfig.clientMetadataUrl).pathname !== '/oauth/client-metadata.json')) throw new ConnectionsError(503, 'mcp_client_metadata_configuration_invalid');
+    if (!configuration.enabledProviderIds.includes('remote_mcp')) throw new ConnectionsError(503, 'mcp_provider_not_enabled');
+  }
+  const mcp = mcpConfig?.enabled ? new SelfServiceMcpBroker({ control, vault, callbackUrl: mcpConfig.callbackUrl,
+    clients: { registeredClients: mcpConfig.registeredClients, clientMetadataUrl: mcpConfig.clientMetadataUrl, scopes: mcpConfig.scopes },
+    activate: async (current, activation) => { await control.call({ action: 'completeMcpEnrollment', actor: actorFor(current), space: current.context.scope.spaceKind,
+      connectionId: current.connection.id, expectedRevision: current.connection.revision, ...activation }); },
+  }) : undefined;
+  const broker = new ConnectionsBroker({ control, vault,
     oauth: new PinnedOAuthTransport({ identityQualifierForContext: async (identityContext, providerId) => {
       const current = await control.call<BrokerAuthority>({ action: 'context', actor: { accountId: identityContext.accountId }, space: identityContext.space, connectionId: identityContext.connectionId });
       const { selected } = await scoped(current); const admissions: IdentityAdmission[] = [];
-      if (providerId !== selected.providerId) throw new ConnectionsError(403, 'identity_provider_mismatch');
+      if (!selected || providerId !== selected.providerId) throw new ConnectionsError(403, 'identity_provider_mismatch');
       if (providerId === 'github' && selected.providerSubject.startsWith('credential:')) admissions.push({ providerId, kind: 'credential_resource',
         repositories: selected.resources.map(r => /^github:repo:([^/]+)\/(.+)$/.exec(r.id)).filter((m): m is RegExpExecArray => Boolean(m)).map(m => ({ owner: m[1], repository: m[2] })) });
       if (providerId === 'hetzner') admissions.push({ providerId, kind: 'credential_resource', serverIds: selected.resources.map(r => /^hetzner:server:(\d+)$/.exec(r.id)).filter((m): m is RegExpExecArray => Boolean(m)).map(m => Number(m[1])) });
@@ -92,11 +116,21 @@ export async function loadConnectionsBroker(configPath: string) {
     } }), catalog, executor: new ProviderRegistry({ catalog }),
     catalogForAuthority: async current => (await scoped(current)).catalog,
     runnerEnrollment: async current => { if (!runners) throw new ConnectionsError(503, 'runner_attestation_unavailable'); return runners.enrollmentIdentity(current); },
-    executorForAuthority: (current, scopedCatalog) => {
+    revokeForAuthority: async current => { if (!mcp) throw new ConnectionsError(503, 'mcp_setup_unavailable'); return mcp.revoke(current); },
+    credentialForAuthority: async current => { if (!mcp) throw new ConnectionsError(503, 'mcp_setup_unavailable'); const verified = await mcp.credentialForAuthority(current); return { accessToken: verified.accessToken, refreshToken: verified.refreshToken, expiresAt: verified.expiresAt, scopes: verified.scopes, subject: verified.subject, tenant: verified.tenant, issuer: verified.issuer, displayLabel: verified.displayLabel, connectionRevision: verified.connectionRevision, status: verified.status, scopeEvidence: verified.scopeEvidence }; },
+    executorForAuthority: (current, scopedCatalog, operation) => {
+      if (current.connection.providerId === 'remote_mcp') {
+        if (!mcp || !(scopedCatalog instanceof McpConnectionsCatalog)) throw new ConnectionsError(503, 'mcp_setup_unavailable');
+        return new McpBrokerExecutor(scopedCatalog, mcp.transport, async () => { await control.call({ action: 'assertDispatchable', actor: actorFor(current),
+          space: current.context.scope.spaceKind, operationId: operation.id }); });
+      }
       if (['browser', 'ssh'].includes(current.connection.providerId)) { if (!runners) throw new ConnectionsError(503, 'runner_attestation_unavailable'); return runners.executorForAuthority(current, scopedCatalog, control); }
       return new ProviderRegistry({ catalog: scopedCatalog });
     },
-    expectedIdentity: async current => { const { selected } = await scoped(current); return { subject: selected.providerSubject, tenant: selected.providerTenantId }; }, oauthProfiles: configuration.oauthProfiles,
+    expectedIdentity: async current => { const { selected } = await scoped(current);
+      if (current.connection.providerId === 'remote_mcp') { if (!current.providerAccount) throw new ConnectionsError(403, 'mcp_account_unavailable');
+        return { subject: current.providerAccount.providerSubject, tenant: current.providerAccount.providerTenantId }; }
+      if (!selected) throw new ConnectionsError(503, 'broker_provider_unqualified'); return { subject: selected.providerSubject, tenant: selected.providerTenantId }; }, oauthProfiles: configuration.oauthProfiles,
     enabledProviderIds: configuration.enabledProviderIds, readOnly: true, operatorScopes: configuration.operatorScopes });
-  return { broker, control, configuration, server: createConnectionsBrokerServer(broker, new BrokerAuthenticator(authKey)) };
+  return { broker, control, configuration, server: createConnectionsBrokerServer(broker, new BrokerAuthenticator(authKey), mcp && mcpConfig ? { broker: mcp, callbackUrl: mcpConfig.callbackUrl, clientMetadataUrl: mcpConfig.clientMetadataUrl } : undefined) };
 }

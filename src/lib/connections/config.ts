@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { readFileSync, lstatSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 import { z } from 'zod';
 import { isCanonicalProviderResource } from './catalog';
@@ -6,7 +7,7 @@ import { getProviderDefinition, getProviderToolDefinition } from './providers';
 import { idSchema } from './contracts';
 
 const profile = z.object({ accountId: z.string().regex(/^telegram-account:[1-9]\d{0,15}$/), space: z.enum(['work', 'personal']),
-  providerId: idSchema, providerSubject: idSchema, providerTenantId: idSchema, endpointProfileId: idSchema,
+  agentId: idSchema.optional(), providerId: idSchema, providerSubject: idSchema, providerTenantId: idSchema, endpointProfileId: idSchema,
   setup: z.enum(['oauth', 'operator']), qualified: z.boolean(), evidenceReference: z.string().max(500),
   dailyModelTokenCeiling: z.number().int().min(0).max(10_000_000).default(0),
   dailyToolCallCeiling: z.number().int().min(0).max(10_000).default(0),
@@ -16,11 +17,13 @@ export const connectionsConfigurationSchema = z.object({ schemaVersion: z.litera
   modelPolicy: z.object({ provider: z.literal('anthropic'), model: z.string().trim().min(1).max(160), qualified: z.boolean(),
     evidenceReference: z.string().trim().min(1).max(500) }).strict().optional(),
   profiles: z.array(profile).max(500),
+  selfServiceMcp: z.object({ enabled: z.boolean(), dailyModelTokenCeiling: z.number().int().min(0).max(10_000_000).default(0),
+    dailyToolCallCeiling: z.number().int().min(0).max(10_000).default(0) }).strict().optional(),
 }).strict().superRefine((value, context) => {
   const keys = new Set<string>();
   for (const item of value.profiles) {
-    const key = JSON.stringify([item.accountId, item.space, item.providerId]);
-    if (keys.has(key)) context.addIssue({ code: 'custom', message: 'Duplicate account/provider partition' });
+    const key = JSON.stringify([item.accountId, item.space, item.agentId ?? null, item.providerId]);
+    if (keys.has(key)) context.addIssue({ code: 'custom', message: 'Duplicate account/agent/provider partition' });
     keys.add(key);
     const provider = getProviderDefinition(item.providerId);
     if (!provider || item.qualified && !item.evidenceReference.trim() || item.providerId === 'gmail' && item.space !== 'personal')
@@ -42,5 +45,15 @@ export async function readConnectionsConfiguration(path: string | undefined): Pr
   if (!isAbsolute(path)) throw new Error('Connections configuration requires an absolute path');
   const text = await readFile(path, 'utf8');
   if (Buffer.byteLength(text) > 512_000) throw new Error('Connections configuration exceeds limit');
+  return connectionsConfigurationSchema.parse(JSON.parse(text));
+}
+
+/** Final effect admission in the same event turn as returning signed broker authority. */
+export function readConnectionsConfigurationNow(path: string | undefined): ConnectionsConfiguration {
+  if (!path) return disabledConnectionsConfiguration();
+  if (!isAbsolute(path)) throw new Error('Connections configuration requires an absolute path');
+  const stat = lstatSync(path);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 512_000) throw new Error('Connections configuration file invalid');
+  const text = readFileSync(path, 'utf8'); if (Buffer.byteLength(text) > 512_000) throw new Error('Connections configuration exceeds limit');
   return connectionsConfigurationSchema.parse(JSON.parse(text));
 }

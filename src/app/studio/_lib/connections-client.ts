@@ -8,8 +8,8 @@ import type { WorkflowChoice } from '@/lib/connections/workflows/recipes';
 import type { ConnectionWorkflow } from '@/lib/connections/contracts';
 
 export const connectionsApi = {
-  read: (space: SpaceKind) => request<ConnectionsDashboard>('GET', `connections?space=${space}`),
-  enroll: (space: SpaceKind, providerId: string, displayLabel: string) => request<ConnectionsSnapshot>('POST', 'connections/enroll', { space, providerId, displayLabel }),
+  read: (space: SpaceKind, agentId?: string) => request<ConnectionsDashboard>('GET', `connections?space=${space}${agentId ? `&agentId=${encodeURIComponent(agentId)}` : ''}`),
+  enroll: (space: SpaceKind, providerId: string, displayLabel: string, agentId?: string) => request<ConnectionsSnapshot>('POST', 'connections/enroll', { space, providerId, displayLabel, ...(agentId ? { agentId } : {}) }),
   resources: (space: SpaceKind, connectionId: string) => request<{ resources: ConnectionResourceView[] }>('GET', `connections/resources/${encodeURIComponent(connectionId)}?space=${space}`),
   grant: (input: GrantInput) => request<ConnectionsSnapshot>('POST', 'connections/grants', input),
   revoke: (space: SpaceKind, connectionId: string, expectedRevision: number, grantId?: string, expectedGrantRevision?: number) => request<ConnectionsSnapshot>('POST', 'connections/revoke', { space, connectionId, expectedRevision, ...(grantId ? { grantId, expectedGrantRevision } : {}) }),

@@ -19,30 +19,30 @@ export type Review = { receipt: OperationReceipt; arguments: Record<string, unkn
  * Dashboard for the app-level space. Data is stored with the space it was read for, so a space switch hides
  * the previous space's accounts in the same render (never a flash of Work labels while Personal loads).
  */
-export function useConnections() {
+export function useConnections(agentId?: string) {
   const nav = useNav();
   const space: SpaceKind = nav.space;
   const fa = nav.locale === 'fa';
   const c: Copy = connectionsCopy[nav.locale];
   const copy = useRef(c); copy.current = c;
-  const [stored, setStored] = useState<{ space: SpaceKind; data: ConnectionsDashboard } | null>(null);
-  const data = stored?.space === space ? stored.data : null;
+  const [stored, setStored] = useState<{ space: SpaceKind; agentId?: string; data: ConnectionsDashboard } | null>(null);
+  const data = stored?.space === space && stored.agentId === agentId ? stored.data : null;
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const generation = useRef(0), lock = useRef(false);
   const refresh = useCallback(async () => {
     const turn = ++generation.current;
     setStored(null); setError('');
-    try { const result = await connectionsApi.read(space); if (turn === generation.current) setStored({ space, data: result }); }
+    try { const result = await (agentId ? connectionsApi.read(space, agentId) : connectionsApi.read(space)); if (turn === generation.current) setStored({ space, agentId, data: result }); }
     catch (cause) { if (turn === generation.current) setError(cause instanceof ApiError && cause.message === 'profile_confirmation_required' ? copy.current.identity : copy.current.loadError); }
-  }, [space]);
+  }, [space, agentId]);
   const invalidate = useCallback(() => { generation.current++; }, []);
   useEffect(() => { void refresh(); return invalidate; }, [refresh, invalidate]);
   /** Re-read without blanking the screen (after a change). */
   const reload = async () => {
     const turn = generation.current;
-    const result = await connectionsApi.read(space);
-    if (turn === generation.current) setStored({ space, data: result });
+    const result = await (agentId ? connectionsApi.read(space, agentId) : connectionsApi.read(space));
+    if (turn === generation.current) setStored({ space, agentId, data: result });
   };
   /** One change at a time; a refused change says so and asks for a refresh, never a blind retry. */
   const act = async (task: (turn: number) => Promise<void>) => {
@@ -56,7 +56,7 @@ export function useConnections() {
   const agentName = (id: string) => data?.agents.find(a => a.id === id)?.name ?? id;
   const toolName = (id: string) => data?.providers.flatMap(p => p.tools).find(tool => tool.id === id)?.name ?? id;
   const when = (at: number) => formatWhen(at, fa);
-  return { nav, space, fa, c, data, error, busy, refresh, reload, act, current, agentName, toolName, when };
+  return { nav, space, agentId, fa, c, data, error, busy, refresh, reload, act, current, agentName, toolName, when };
 }
 export type Connections = ReturnType<typeof useConnections>;
 
@@ -115,7 +115,7 @@ export function AddServiceSheet({ x, open, onClose, onSetup }: { x: Connections;
   const { c, data } = x;
   const add = (provider: ConnectionsDashboard['providers'][number]) => data && x.act(async turn => {
     const before = new Set(data.connections.map(connection => connection.id));
-    const result = await connectionsApi.enroll(x.space, provider.id, provider.name);
+    const result = await (x.agentId ? connectionsApi.enroll(x.space, provider.id, provider.name, x.agentId) : connectionsApi.enroll(x.space, provider.id, provider.name));
     const created = result.connections.find(connection => !before.has(connection.id));
     await x.reload();
     if (!x.current(turn)) return;
@@ -155,10 +155,10 @@ export function GrantSheet({ x, connection, agentId, open, onClose }: { x: Conne
   const [picking, setPicking] = useState(false);
   useEffect(() => {
     if (!open) return;
-    setResources(null); setResourceIds([]); setToolIds([]); setAgent(agentId ?? ''); setHours('1'); setBase(Date.now());
+    setResources(null); setResourceIds([]); setToolIds([]); setAgent(agentId ?? connection.agentId ?? ''); setHours('1'); setBase(Date.now());
     void x.act(async turn => { const result = await connectionsApi.resources(x.space, connection.id); if (x.current(turn)) setResources(result.resources); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, connection.id]);
+  }, [open, connection.id, connection.agentId, agentId]);
   const provider = data?.providers.find(p => p.id === connection.providerId);
   const chosen = resources?.filter(r => resourceIds.includes(r.id)) ?? [];
   const tools = provider?.tools.filter(tool => chosen.length > 0 && chosen.every(r => r.toolIds.includes(tool.id))) ?? [];
@@ -166,9 +166,11 @@ export function GrantSheet({ x, connection, agentId, open, onClose }: { x: Conne
   const destinations = [...new Set(chosen.flatMap(r => r.destinationIds))];
   const expiry = Math.min(base + Number(hours) * 3_600_000, data?.maxGrantExpiryAt ?? 0);
   const toggle = (list: string[], id: string) => list.includes(id) ? list.filter(v => v !== id) : [...list, id];
-  const ready = !!agent && !!resourceIds.length && !!active.length && !!destinations.length;
+  const fixedAgent = agentId ?? connection.agentId;
+  const selectedAgent = fixedAgent ?? agent;
+  const ready = !!selectedAgent && !!data?.agents.some(item => item.id === selectedAgent) && !!resourceIds.length && !!active.length && !!destinations.length;
   const allow = () => x.act(async () => {
-    await connectionsApi.grant({ space: x.space, connectionId: connection.id, expectedRevision: connection.revision, agentId: agent,
+    await connectionsApi.grant({ space: x.space, connectionId: connection.id, expectedRevision: connection.revision, agentId: selectedAgent,
       toolIds: active.map(tool => tool.id), resourceIds, destinationIds: destinations, effects: [...new Set(active.map(tool => tool.effect))],
       expiresAt: expiry, maxCalls: 100, maxBytes: 1_000_000 });
     haptic.success(); onClose(); await x.reload(); x.nav.snack({ message: c.saved, tone: 'success' });
@@ -178,8 +180,8 @@ export function GrantSheet({ x, connection, agentId, open, onClose }: { x: Conne
     <div className="vx-sheet-stack">
       <SheetHead title={c.reviewAccess} sub={connection.displayLabel} />
       <div className="vx-group">
-        <Row plain lead={agent ? <LetterTile text={x.agentName(agent)} round /> : <IconTile name="user" />} title={c.agent} value={agent ? x.agentName(agent) : c.select}
-          chevron disabled={x.busy} onClick={() => setPicking(true)} aria-label={`${c.agent}: ${agent ? x.agentName(agent) : c.select}`} />
+        <Row plain lead={selectedAgent ? <LetterTile text={x.agentName(selectedAgent)} round /> : <IconTile name="user" />} title={c.agent} value={selectedAgent ? x.agentName(selectedAgent) : c.select}
+          chevron={!fixedAgent} disabled={x.busy || !!fixedAgent} onClick={() => { if (!fixedAgent) setPicking(true); }} aria-label={`${c.agent}: ${selectedAgent ? x.agentName(selectedAgent) : c.select}`} />
       </div>
       <Section title={x.fa ? 'می‌تواند بخواند' : 'Can read'}>
         {!resources && <SkeletonRows rows={2} lead={false} label={c.loading} />}
@@ -202,7 +204,7 @@ export function GrantSheet({ x, connection, agentId, open, onClose }: { x: Conne
       {x.error && <SheetError>{x.error}</SheetError>}
     </div>
   </Sheet>
-  <Picker open={picking} onClose={() => setPicking(false)} title={c.agent} value={agent || null} search={(data?.agents.length ?? 0) > 6}
+  <Picker open={picking && !fixedAgent} onClose={() => setPicking(false)} title={c.agent} value={agent || null} search={(data?.agents.length ?? 0) > 6}
     options={data?.agents.map(a => ({ value: a.id, label: a.name, lead: <LetterTile text={a.name} round /> })) ?? []} onChange={setAgent} /></>;
 }
 

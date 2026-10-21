@@ -13,7 +13,8 @@ import { registerSubscriptionSchema } from '../events/contracts';
 import type { ConnectionSubscription } from '../contracts';
 import type { BrokerVault, VaultBinding } from './vault';
 import { type BrokerOAuthTransport, type OAuthProfile, type OAuthToken, pkceChallenge, validateOAuthProfile } from './oauth';
-const actorSchema = z.object({ accountId: idSchema }).strict();
+const actorSchema = z.object({ accountId: idSchema, botAgentId: idSchema.optional(), botAuthenticationRevision: idSchema.optional() }).strict()
+  .refine(value => !!value.botAgentId === !!value.botAuthenticationRevision);
 const base = { actor: actorSchema, space: z.enum(['work', 'personal']) };
 export const enrollmentRequestSchema = z.object({ ...base, connectionId: idSchema, expectedRevision: z.number().int().positive(), providerId: idSchema }).strict();
 export const claimSetupSchema = z.object({ ...base, flowId: idSchema }).strict();
@@ -24,18 +25,20 @@ const credentialSchema = z.object({ accessToken: z.string().min(1).max(16000), r
   expiresAt: z.number().int().positive().optional(), scopes: z.array(z.string().min(1).max(200)).max(100),
   subject: idSchema, tenant: idSchema, issuer: z.string().url(), displayLabel: z.string().min(1).max(160),
   connectionRevision: z.number().int().positive(), status: z.enum(['sealed', 'active', 'refreshing', 'revoked']), scopeEvidence: z.enum(['oauth_response', 'operator_asserted', 'runner_attestation']) }).strict();
-type Credential = z.infer<typeof credentialSchema>;
+export type Credential = z.infer<typeof credentialSchema>;
 const flowSchema = z.object({ flowId: idSchema, bindingRevision: z.number().int().positive(), connectionRevision: z.number().int().positive(),
   stateHash: z.string().length(64), verifier: z.string().max(200), expiresAt: z.number().int().positive(),
   status: z.enum(['pending', 'exchanging', 'sealed', 'connected', 'cancelled', 'failed']), callbackUsed: z.boolean(),
-  issuer: z.string().url().optional(), reason: idSchema.optional() }).strict();
+  issuer: z.string().url().optional(), reason: idSchema.optional(), botAuthenticationRevision: idSchema.optional() }).strict();
 type Flow = z.infer<typeof flowSchema>;
-export interface BrokerExecutor { execute(toolId: string, args: unknown, context: { credential: { providerId: string; endpointProfileId: string; accessToken: string };
+export interface BrokerExecutor { execute(toolId: string, args: unknown, context: { credential: { providerId: string; endpointProfileId: string; accessToken: string; expiresAt?: number };
   operationId: string; scopeKind: SpaceKind; signal?: AbortSignal }): Promise<ProviderResult> }
 export interface ConnectionsBrokerOptions {
   control: BrokerControlPlane; vault: BrokerVault; oauth: BrokerOAuthTransport; catalog: ConnectionsCatalog; executor: BrokerExecutor;
   catalogForAuthority?: (current: BrokerAuthority) => Promise<ConnectionsCatalog>;
-  executorForAuthority?: (current: BrokerAuthority, catalog: ConnectionsCatalog) => BrokerExecutor | Promise<BrokerExecutor>;
+  executorForAuthority?: (current: BrokerAuthority, catalog: ConnectionsCatalog, operation: OperationClaim['operation']) => BrokerExecutor | Promise<BrokerExecutor>;
+  revokeForAuthority?: (current: BrokerAuthority) => Promise<{ futureUseStopped: true; providerRevocation: 'verified' | 'unavailable' }>;
+  credentialForAuthority?: (current: BrokerAuthority) => Promise<Credential>;
   runnerEnrollment?: (current: BrokerAuthority) => Promise<{ identity: { subject: string; tenant: string; displayLabel: string; issuer: string }; scopes: string[]; leaseMarker: string }>;
   expectedIdentity?: (current: BrokerAuthority) => Promise<{ subject: string; tenant: string }>;
   oauthProfiles: Readonly<Record<string, OAuthProfile>>; enabledProviderIds: readonly string[]; now?: () => number;
@@ -54,7 +57,7 @@ export function providerScopePermits(providerId: string, required: string, scope
 }
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 const bindingFor = (authority: BrokerAuthority): VaultBinding => ({ accountId: authority.context.accountId, personId: authority.context.personId,
-  space: authority.context.scope.spaceKind, connectionId: authority.connection.id, providerId: authority.connection.providerId });
+  space: authority.context.scope.spaceKind, connectionId: authority.connection.id, providerId: authority.connection.providerId, ...(authority.connection.schemaVersion === 2 ? { agentId: authority.connection.agentId } : {}) });
 /** Runs in the independent broker process. No direct Studio database or bot access. */
 export class ConnectionsBroker {
   private readonly now: () => number;
@@ -69,7 +72,10 @@ export class ConnectionsBroker {
     const current = await authority(this.options.control, actor, space, connectionId);
     if (current.context.accountId !== actor.accountId || current.context.scope.spaceKind !== space || current.connection.id !== connectionId ||
         current.connection.ownerAccountId !== actor.accountId || current.connection.ownerPersonId !== current.context.personId) throw new ConnectionsError(403, 'broker_authority_mismatch');
-    if (requireEnabled) this.enabled(current.connection.providerId);
+    if (requireEnabled) {
+      this.enabled(current.connection.providerId);
+      if (current.connection.schemaVersion === 2 && !current.context.currentAgentIds.includes(current.connection.agentId)) throw new ConnectionsError(403, 'broker_agent_unavailable');
+    }
     return current;
   }
   private async checkProviderIdentity(current: BrokerAuthority, identity: { subject: string; tenant: string }): Promise<void> {
@@ -91,7 +97,7 @@ export class ConnectionsBroker {
     const flowId = randomUUID(); const verifier = randomBytes(48).toString('base64url');
     const state = `${flowId}.${randomBytes(32).toString('base64url')}`;
     const flow: Flow = { flowId, bindingRevision: current.context.bindingRevision, connectionRevision: parsed.expectedRevision,
-      stateHash: hash(state), verifier, expiresAt: this.now() + 10 * 60_000, status: 'pending', callbackUsed: false,
+      stateHash: hash(state), verifier, ...(parsed.actor.botAuthenticationRevision ? { botAuthenticationRevision: parsed.actor.botAuthenticationRevision } : {}), expiresAt: this.now() + 10 * 60_000, status: 'pending', callbackUsed: false,
       ...(profile ? { issuer: profile.issuer } : { reason: 'operator_enrollment_required' }) };
     await this.options.vault.write('flow', flowId, binding, flow);
     if (!profile) return this.receipt(flow);
@@ -103,10 +109,11 @@ export class ConnectionsBroker {
   }
   private async flowFor(actor: ConnectionActor, space: SpaceKind, flowId: string): Promise<{ binding: VaultBinding; flow: Flow; current: BrokerAuthority }> {
     const binding = await this.options.vault.binding('flow', flowId);
-    if (!binding || binding.accountId !== actor.accountId || binding.space !== space) throw new ConnectionsError(404, 'enrollment_unavailable');
+    if (!binding || binding.accountId !== actor.accountId || binding.space !== space || actor.botAgentId && binding.agentId !== actor.botAgentId) throw new ConnectionsError(404, 'enrollment_unavailable');
     const current = await this.fresh(actor, space, binding.connectionId);
     if (current.context.personId !== binding.personId || current.connection.providerId !== binding.providerId) throw new ConnectionsError(403, 'enrollment_identity_mismatch');
     const flow = flowSchema.parse(await this.options.vault.read('flow', flowId, binding));
+    if (actor.botAuthenticationRevision && flow.botAuthenticationRevision !== actor.botAuthenticationRevision) throw new ConnectionsError(409, 'enrollment_identity_changed');
     if (flow.bindingRevision !== current.context.bindingRevision) throw new ConnectionsError(409, 'enrollment_identity_changed');
     return { binding, flow, current };
   }
@@ -124,7 +131,8 @@ export class ConnectionsBroker {
       const profile = this.options.oauthProfiles[providerId];
       if (!profile || flow.status !== 'pending' || flow.callbackUsed || flow.expiresAt <= this.now() || flow.issuer !== profile.issuer ||
           (query.iss && query.iss !== profile.issuer) || !timingSafeEqual(Buffer.from(hash(query.state)), Buffer.from(flow.stateHash))) throw new ConnectionsError(400, 'oauth_state_invalid');
-      const beforeExchange = await this.fresh({ accountId: binding.accountId }, binding.space, binding.connectionId);
+      const callbackActor: ConnectionActor = { accountId: binding.accountId, ...(flow.botAuthenticationRevision && binding.agentId ? { botAgentId: binding.agentId, botAuthenticationRevision: flow.botAuthenticationRevision } : {}) };
+      const beforeExchange = await this.fresh(callbackActor, binding.space, binding.connectionId);
       if (beforeExchange.connection.lifecycle !== 'pending' || beforeExchange.connection.revision !== flow.connectionRevision ||
           beforeExchange.context.personId !== binding.personId || beforeExchange.context.bindingRevision !== flow.bindingRevision)
         throw new ConnectionsError(409, 'enrollment_stale');
@@ -136,7 +144,7 @@ export class ConnectionsBroker {
         const token = await this.options.oauth.exchange(profile, query.code, flow.verifier);
         issuedToken = token;
         const identity = await this.options.oauth.identity(providerId, token.accessToken, { accountId: binding.accountId, space: binding.space, connectionId: binding.connectionId });
-        const afterExchange = await this.fresh({ accountId: binding.accountId }, binding.space, binding.connectionId);
+        const afterExchange = await this.fresh(callbackActor, binding.space, binding.connectionId);
         if (afterExchange.connection.lifecycle !== 'pending' || afterExchange.connection.revision !== flow.connectionRevision || afterExchange.context.bindingRevision !== flow.bindingRevision)
           throw new ConnectionsError(409, 'enrollment_stale');
         await this.checkProviderIdentity(afterExchange, identity);
@@ -227,7 +235,11 @@ export class ConnectionsBroker {
       await this.options.vault.write('flow', flow.flowId, binding, flow); return this.receipt(flow);
     });
   }
-  private async credential(current: BrokerAuthority): Promise<Credential> {
+  private async credential(current: BrokerAuthority, actor: ConnectionActor): Promise<Credential> {
+    if (current.connection.providerId === 'remote_mcp') {
+      if (!this.options.credentialForAuthority) throw new ConnectionsError(503, 'mcp_setup_unavailable');
+      return credentialSchema.parse(await this.options.credentialForAuthority(current));
+    }
     const binding = bindingFor(current);
     return this.options.vault.withLock(`credential:${binding.connectionId}`, async () => {
       const credential = credentialSchema.parse(await this.options.vault.read('credential', binding.connectionId, binding));
@@ -242,7 +254,7 @@ export class ConnectionsBroker {
         if (refreshed.scopes.some(scope => !credential.scopes.includes(scope))) throw new ConnectionsError(403, 'refresh_scope_expansion_denied');
         const identity = await this.options.oauth.identity(binding.providerId, refreshed.accessToken, { accountId: binding.accountId, space: binding.space, connectionId: binding.connectionId });
         if (identity.subject !== credential.subject || identity.tenant !== credential.tenant || identity.issuer !== credential.issuer) throw new ConnectionsError(403, 'refresh_identity_changed');
-        const afterRefresh = await this.fresh({ accountId: binding.accountId }, binding.space, binding.connectionId);
+        const afterRefresh = await this.fresh(actor, binding.space, binding.connectionId);
         if (afterRefresh.connection.lifecycle !== 'connected' || afterRefresh.connection.revision !== current.connection.revision || afterRefresh.context.bindingRevision !== current.context.bindingRevision)
           throw new ConnectionsError(403, 'refresh_authority_revoked');
         credential.accessToken = refreshed.accessToken; credential.expiresAt = refreshed.expiresAt;
@@ -258,16 +270,16 @@ export class ConnectionsBroker {
     const operation = claim.operation;
     const current = await this.fresh(parsed.actor, parsed.space, operation.connectionId);
     const catalog = await this.options.catalogForAuthority?.(current) ?? this.options.catalog;
-    const executor = await this.options.executorForAuthority?.(current, catalog) ?? this.options.executor;
+    const executor = await this.options.executorForAuthority?.(current, catalog, operation) ?? this.options.executor;
     const tool = catalog.get(operation.toolId);
     const provider = catalog.provider(current.connection.providerId);
     if (!tool || !provider || tool.catalogDigest !== operation.catalogDigest || tool.schemaDigest !== operation.schemaDigest ||
         current.connection.catalogDigest !== operation.catalogDigest || tool.effect !== operation.effect || tool.adapterVersion !== operation.adapterVersion ||
         digest(claim.arguments) !== operation.inputDigest) throw new ConnectionsError(409, 'broker_catalog_drift');
     if (operation.destinationId !== `provider:${current.connection.providerId}`) throw new ConnectionsError(403, 'provider_destination_mismatch');
-    if (this.options.readOnly && tool.effect !== 'read') throw new ConnectionsError(403, 'effect_requires_provider_audience_qualification');
+    if (this.options.readOnly && tool.effect !== 'read' && current.connection.providerId !== 'remote_mcp') throw new ConnectionsError(403, 'effect_requires_provider_audience_qualification');
     const definition = getProviderToolDefinition(tool.id);
-    const credential = await this.credential(current);
+    const credential = await this.credential(current, parsed.actor);
     await this.checkProviderIdentity(current, credential);
     if (definition && definition.requiredScopes.some(scope => !providerScopePermits(current.connection.providerId, scope, credential.scopes))) throw new ConnectionsError(403, 'credential_scope_denied');
     return { current, tool, provider, credential, executor };
@@ -298,7 +310,7 @@ export class ConnectionsBroker {
     let receipt: OperationReceipt;
     try {
       result = await executor.execute(tool.id, claim.arguments, { credential: { providerId: current.connection.providerId,
-        endpointProfileId: provider.endpointProfileId, accessToken: credential.accessToken }, operationId: operation.id, scopeKind: parsed.space,
+        endpointProfileId: provider.endpointProfileId, accessToken: credential.accessToken, ...(credential.expiresAt ? { expiresAt: credential.expiresAt } : {}) }, operationId: operation.id, scopeKind: parsed.space,
         signal: controller.signal });
       if (result.resourceIds.length !== operation.resourceIds.length || new Set(result.resourceIds).size !== result.resourceIds.length || result.resourceIds.some(id => !operation.resourceIds.includes(id)) || Buffer.byteLength(JSON.stringify(result.data)) > tool.maxOutputBytes ||
           JSON.stringify(result.data).includes(credential.accessToken)) throw new ProviderError('provider_result_denied', tool.effect === 'read' ? 'failed' : 'unknown');
@@ -377,6 +389,7 @@ export class ConnectionsBroker {
     const current = await this.fresh(parsed.actor, parsed.space, parsed.connectionId, false);
     if (current.connection.providerId !== parsed.providerId || !['revoked', 'deleted'].includes(current.connection.lifecycle)) throw new ConnectionsError(409, 'revoke_control_plane_first');
     for (const controller of this.active.get(current.connection.id) ?? []) controller.abort();
+    if (current.connection.providerId === 'remote_mcp') { if (!this.options.revokeForAuthority) throw new ConnectionsError(503, 'mcp_setup_unavailable'); return this.options.revokeForAuthority(current); }
     const binding = bindingFor(current);
     for (const flowId of await this.options.vault.listFlows()) {
       const candidate = await this.options.vault.binding('flow', flowId);
