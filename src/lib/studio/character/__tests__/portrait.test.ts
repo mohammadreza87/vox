@@ -29,9 +29,9 @@ describe('portrait prompt (one vocabulary with the renderer)', () => {
       expect(p).toContain(TONES[hue].light);
       expect(p).toContain(TONES[hue].shadow);
     }
-    const look: CharacterLook = { ...base, hair: 'curls', hairTone: 'cocoa', accessory: 'scarf', accent: 'navy' };
+    const look: CharacterLook = { ...base, hair: 'curls', hairTone: 'cocoa', accessory: 'bowtie', accent: 'navy' };
     expect(segment(describeLook(look), 'Hair')).toContain('cocoa brown');
-    // filled accessories are described in the pastel tone the renderer paints (a navy scarf is a powder denim)
+    // filled accessories are described in the pastel tone the renderer paints (a navy bowtie is a powder denim)
     expect(segment(describeLook(look), 'Accessory')).toContain(`powder denim ${accentColor('navy', true)}`);
     // glasses keep the true ink line
     expect(segment(describeLook({ ...base, accessory: 'glasses', accent: 'ink' }), 'Accessory')).toContain(`navy ink ${accentColor('ink')}`);

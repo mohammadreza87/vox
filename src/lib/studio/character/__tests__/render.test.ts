@@ -2,7 +2,7 @@ import sharp from 'sharp';
 import { describe, expect, it } from 'vitest';
 import {
   ACCESSORIES, ACCENT_COLORS, characterModel, characterSvg, circleFit, countDrawn, eyeFor, EYE, FAMILY_IDS, HAIR_STYLES, HAIR_TONES,
-  INK, isCompatible, MOUTH, mouthFor, mouthOpenness, beakLowerD, RIG_LAYERS, SPECIES, STAGE_EYE, talkMouth, type Expression, type SvgNode,
+  INK, isCompatible, MOUTH, mouthFor, normalizeLook, mouthOpenness, beakLowerD, RIG_LAYERS, SPECIES, STAGE_EYE, talkMouth, type Expression, type SvgNode,
 } from '..';
 import { accessoryParts } from '../accessories';
 import { bodyD, bodyOutline, edgesAt, pathPts, silhouette, stageScale } from '../geometry';
@@ -426,50 +426,11 @@ describe('character renderer (minimal)', () => {
     }
   });
 
-  it('wraps the scarf as a slim collar right under the mouth, its ends fading inside the body, with a knot and one tail, in a soft pastel', () => {
-    for (const family of FAMILY_IDS) for (const species of ['cloud', 'cat', 'dog', 'bunny', 'bear', 'owl', 'chick'] as const) for (const accent of ['navy', 'ink', 'sky', 'berry', 'rose'] as const) {
-      const look: CharacterLook = { hue: 'apricot', family, species, accessory: 'scarf', accent, features: { cheeks: true, lashes: false, brows: false } };
-      if (!isCompatible(look).ok) continue;
-      const m = characterModel(look, { uid: 's', mode: 'still' });
-      const sil = silhouette(family, 4, 100, species), H = 166 - sil.top;
-      const band = all(m.layers['acc-soft']).find((nd) => nd.attrs['data-part'] === 'scarf')!;
-      // (the round end caps' arc radii and flags are dropped: only the knots and handles count)
-      const d = String(band.attrs.d).replace(/A-?[\d.]+ -?[\d.]+ [\d.]+ [01] [01] /g, 'L');
-      const pts = [...d.matchAll(/(-?\d+(?:\.\d+)?) (-?\d+(?:\.\d+)?)/g)].map((x) => [Number(x[1]), Number(x[2])]);
-      const ys = pts.map((p) => p[1]), xs = pts.map((p) => p[0]);
-      // directly under the mouth, clear of it at the front (never a second mouth), and well above the hem: a collar,
-      // never a belt or a swim ring
-      const front = pts.filter((p) => Math.abs(p[0] - m.face.mouth.x) < 12).map((p) => p[1]);
-      expect(Math.min(...front) - m.face.mouth.y, `${family} ${species}`).toBeGreaterThan(5);
-      expect(Math.min(...front) - m.face.mouth.y, `${family} ${species}`).toBeLessThan(11);
-      expect(Math.min(...ys)).toBeGreaterThan(m.face.mouth.y);
-      expect(Math.max(...ys)).toBeLessThan(sil.top + 0.85 * H);
-      // its ends stop inside the silhouette (about 0.42 of the body width each side) and fade out there
-      expect((Math.max(...xs) - Math.min(...xs)) / sil.W).toBeLessThan(0.9);
-      expect((Math.max(...xs) - Math.min(...xs)) / sil.W).toBeGreaterThan(0.75);
-      const lo = pts.reduce((a, q) => (q[0] < a[0] ? q : a)), hi = pts.reduce((a, q) => (q[0] > a[0] ? q : a));
-      expect(lo[0], `${family} ${species}`).toBeGreaterThan(edgesAt(sil, lo[1])[0] + 4);
-      expect(hi[0], `${family} ${species}`).toBeLessThan(edgesAt(sil, hi[1])[1] - 4);
-      const g = all(m.layers['acc-soft']).find((nd) => nd.children?.includes(band))!;
-      expect(String(g.attrs.mask)).toMatch(/^url\(#/);
-      // a slim band (about 10 u) in a gentle smile: the ends sit a little higher than the front
-      const tb = Math.max(...front) - Math.min(...front);
-      expect(tb).toBeGreaterThan(8);
-      expect(tb).toBeLessThan(12);
-      expect(Math.max(...ys) - Math.min(...ys)).toBeLessThan(18);
-      // a small knot front-right and one short tail, kept at icon sizes
-      for (const size of [200, 48]) {
-        const mm = characterModel(look, { uid: 's', mode: 'still', size });
-        const knot = all(mm.layers['acc-soft']).find((nd) => nd.attrs['data-part'] === 'scarf-knot');
-        expect(knot, `${size}`).toBeDefined();
-        expect(Number(knot!.attrs.cx)).toBeGreaterThan(mm.face.mouth.x + 15);
-        expect(all(mm.layers['acc-soft']).filter((nd) => nd.attrs['data-part'] === 'scarf-tails')).toHaveLength(1);
-      }
-      // a soft pastel, lifted toward the body; never rose on an apricot body
-      const fill = String(band.attrs.fill);
-      expect(oklch(fill)[0], accent).toBeGreaterThan(0.7);
-      expect(hueDist(oklch(fill)[2], oklch(m.palette.base)[2]), accent).toBeGreaterThan(40);
-    }
+  it('dresses a stored look wearing the retired scarf in a bowtie', () => {
+    const look = { hue: 'apricot', family: 'puff', species: 'dog', accessory: 'scarf', accent: 'sky', features: { cheeks: true, lashes: false, brows: false } } as unknown as CharacterLook;
+    expect(normalizeLook(look)).toMatchObject({ accessory: 'bowtie', accent: 'sky' });
+    expect(characterSvg(look, { stage: 4 })).toBe(characterSvg({ ...look, accessory: 'bowtie' }, { stage: 4 }));
+    expect(PRESET_LOOKS.some((l) => (l.accessory as string) === 'scarf')).toBe(false);
   });
 
   it('seats the bowtie low on the base, well clear of the mouth, in a pastel', () => {

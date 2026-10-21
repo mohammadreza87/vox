@@ -9,7 +9,7 @@ export const FAMILY_IDS: readonly CloudFamily[] = ['puff', 'tower', 'drift'];
 export const SPECIES: readonly CloudSpecies[] = ['cloud', 'cat', 'dog', 'bunny', 'bear', 'owl', 'chick'];
 export const HAIR_STYLES: readonly HairStyle[] = ['none', 'tuft', 'fringe', 'bun', 'curls', 'spiky', 'pony'];
 export const HAIR_TONES: readonly HairTone[] = ['deep', 'cream', 'cocoa', 'ink', ...HUES];
-export const ACCESSORIES: readonly Accessory[] = ['none', 'glasses', 'specs', 'beret', 'cap', 'beanie', 'headphones', 'headset', 'bow', 'scarf', 'flower', 'star', 'bowtie'];
+export const ACCESSORIES: readonly Accessory[] = ['none', 'glasses', 'specs', 'beret', 'cap', 'beanie', 'headphones', 'headset', 'bow', 'flower', 'star', 'bowtie'];
 export const ACCENT_COLORS: readonly AccentColor[] = ['ink', 'cream', 'volt', 'coral', 'navy', 'berry', 'cocoa', ...HUES];
 
 /**
@@ -18,8 +18,11 @@ export const ACCENT_COLORS: readonly AccentColor[] = ['ink', 'cream', 'volt', 'c
  */
 export const DEFAULT_ACCENT: Record<Accessory, AccentColor> = {
   none: 'ink', glasses: 'ink', specs: 'ink', beret: 'berry', cap: 'sky', beanie: 'coral', headphones: 'sky',
-  headset: 'lilac', bow: 'coral', scarf: 'sky', flower: 'rose', star: 'butter', bowtie: 'coral',
+  headset: 'lilac', bow: 'coral', flower: 'rose', star: 'butter', bowtie: 'coral',
 };
+
+/** Retired accessories and what a stored look wearing one now wears (the scarf read as a belt on a neckless body). */
+const LEGACY_ACCESSORY: Record<string, Accessory> = { scarf: 'bowtie' };
 
 const DEFAULT_LOOK: CharacterLook = { hue: 'lilac', family: 'puff', features: { cheeks: true, lashes: false, brows: false } };
 
@@ -31,7 +34,7 @@ export function normalizeLook(raw: unknown, fallback: CharacterLook = DEFAULT_LO
   const r = isObj(raw) ? raw : {};
   const f = isObj(r.features) ? r.features : {};
   const fbf = fallback.features;
-  const accessory = pick(ACCESSORIES, r.accessory, fallback.accessory ?? 'none');
+  const accessory = pick(ACCESSORIES, LEGACY_ACCESSORY[r.accessory as string] ?? r.accessory, fallback.accessory ?? 'none');
   return {
     hue: pick<Hue>(HUES, r.hue, fallback.hue),
     family: pick(FAMILY_IDS, r.family, fallback.family),
@@ -120,8 +123,8 @@ const ROLE_ACCESSORIES: ReadonlyArray<[RegExp, Accessory[]]> = [
   [/research|analy|finance|account|data|legal/i, ['specs', 'glasses']],
   [/design|creative|market|brand|content|writer/i, ['beret', 'flower', 'star']],
   [/engineer|developer|dev\b|ops|infra|tech|it\b/i, ['headphones', 'cap', 'beanie']],
-  [/sales|exec|chief|ceo|director|host|partner/i, ['bowtie', 'scarf']],
-  [/coach|well|people|hr\b|care|mentor/i, ['flower', 'scarf']],
+  [/sales|exec|chief|ceo|director|host|partner/i, ['bowtie', 'bow']],
+  [/coach|well|people|hr\b|care|mentor/i, ['flower', 'bow']],
 ];
 
 /** Accessories that suit a role (character §6); the user can always override. */

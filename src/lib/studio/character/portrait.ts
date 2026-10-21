@@ -47,7 +47,6 @@ const ACCESSORY_TEXT: Record<Exclude<Accessory, 'none'>, string> = {
   headphones: 'soft pastel over-ear headphones: a soft band hugging the top of the head right on its outline and two small rounded cups on the sides of the body at eye height',
   headset: 'a soft headset: a band over the top of the head, two small rounded cups on the sides at eye height and a short boom microphone that ends well before the cheek',
   bow: 'a small flat ribbon bow (two rounded triangular loops and a centre knot) on the upper right of the head, well inside the outline',
-  scarf: 'a slim soft pastel scarf collar wrapped round the body just under the mouth, curving gently up toward the sides and fading out before the side edges, with a small knot at the front right and one short soft end falling over the right shoulder',
   flower: 'a small flat five-petal flower clip on the upper left of the dome',
   star: 'a small flat rounded star clip on the upper right of the dome',
   bowtie: 'a flat pastel bowtie low on the base of the body, well below the mouth',

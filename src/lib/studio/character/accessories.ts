@@ -1,11 +1,11 @@
 /**
  * Accessories (STYLE §5.4), from stage 4, in one accent colour. Small clips
  * (bow, flower, star, bowtie) are flat fills; worn pieces (hats, headphone
- * cups, the scarf) take the body's soft matte language, a two-stop gradient
+ * cups) take the body's soft matte language, a two-stop gradient
  * and a soft contact shade on the head, so nothing reads as a sticker.
  * Glasses are the reference rings, their ink tinted toward the body's deep
  * tone. Rigid pieces (lenses, hats, headphones) ride the head; soft ones
- * (bow, flower, star, scarf, bowtie) bounce on their own pivot.
+ * (bow, flower, star, bowtie) bounce on their own pivot.
  */
 
 import type { Accessory, HairStyle } from '../types';
@@ -18,7 +18,7 @@ export interface AccCtx {
   /** eye centres and the mouth line */
   eL: number; eR: number; ey: number; my: number;
   color: string;
-  /** body clip url (scarf, the hat's contact shade) */
+  /** body clip url (the hat's contact shade) */
   clip: string;
   /** id factory for the accessory's own paint servers and clips */
   id: (s: string) => string;
@@ -26,11 +26,11 @@ export interface AccCtx {
   lw?: number;
   /** the body's deep tone: frames are tinted toward it and hats cast it as a soft contact shade */
   deep?: string;
-  /** small LOD: drop the fiddly bits (the scarf knot, the headset boom) */
+  /** small LOD: drop the fiddly bits (the headset boom) */
   small?: boolean;
   /** the body's mid shade: the headphone band is tinted toward it, so it never reads as a thin dark line */
   tint?: string;
-  /** the body's base tone: the scarf is lifted toward it, so it contrasts less than the mouth ink */
+  /** the body's base tone */
   body?: string;
   /** 48 px and under: the glasses drop their bridge and thin their rings, so eyes, mouth and frame stay apart */
   micro?: boolean;
@@ -40,15 +40,6 @@ export interface AccCtx {
 
 export interface AccBuild { rigid: SvgNode[]; soft: SvgNode[]; pivot: Pt; box: Box; defs?: SvgNode[] }
 
-/**
- * The scarf: a slim collar directly under the mouth, where the dome meets the shoulders: its top edge `gap` under
- * the mouth line at the front, half-width `hw` of the body width (`hwSmall` at icon sizes; its ends fade out inside
- * the silhouette, never running into the edge like a belt), thickness `tc` (`tcSmall` at icon sizes), `curve` of its gentle smile (the
- * ends sit higher than the front), `fade` of each half where the ends fade out, `mix` toward the body tone, and a
- * small knot of radius `knot`, `kx` of the body width right of centre, with one short tail of length `tail` falling
- * over the right shoulder lobe.
- */
-export const SCARF = { gap: 7, hw: 0.42, hwSmall: 0.33, tc: 10, tcSmall: 12, curve: 5, fade: 0.16, mix: 0.1, knot: 5.5, tail: 16, kx: 0.17 };
 /** The bowtie: centre at `at` of the body height, scale over the sketch. */
 export const BOWTIE = { at: 0.86, k: 1.45 };
 /** Bow and flower scale at icon sizes (56 px and under), over their card size. */
@@ -79,7 +70,7 @@ export const ringsOf = (eL: number, eR: number, ey: number, k = 1) => {
 /** Ring line weight multiplier at 48 px and under (over the small-size line weight): thin rings keep the eyes apart. */
 export const MICRO_RING = 0.8;
 
-/** The soft matte two-stop material of worn pieces (hats, cups, scarf): the accent lifted at the top, a shade step below. */
+/** The soft matte two-stop material of worn pieces (hats, cups): the accent lifted at the top, a shade step below. */
 const matte = (id: string, color: string, k = 1) => n('linearGradient', { id, x1: 0, y1: 0, x2: 0.12, y2: 1 }, [
   n('stop', { offset: 0, 'stop-color': mix(color, '#FFFFFF', 0.2 * k) }), n('stop', { offset: 1, 'stop-color': mix(color, '#0B1622', 0.24 * k) }),
 ]);
@@ -194,60 +185,6 @@ export function accessoryParts(kind: Accessory, c: AccCtx): AccBuild | null {
         box: box(cL[0] - crx - 1, dcy - Rb - bw / 2 - 1, cR[0] + crx + 1, y1 + 1),
       };
     }
-    case 'scarf': {
-      // a slim soft collar directly under the mouth, where the dome meets the shoulders: a gentle smile-shaped band
-      // (its ends a little higher than the front), thinning toward the sides and fading out well inside the
-      // silhouette, so it reads as a scarf wrapping round the front and never as a belt or a stripe. A small round
-      // knot sits front-right with one short soft tail falling over the right shoulder lobe (kept at icon sizes:
-      // the knot is what says "scarf"). Fabric: the accent lifted only a little toward the body.
-      const tc = c.small ? SCARF.tcSmall : SCARF.tc, hwid = (c.small ? SCARF.hwSmall : SCARF.hw) * s.W, yc = my + SCARF.gap + tc / 2;
-      const cy = (x: number) => yc - SCARF.curve * ((x - fx) / hwid) ** 2;
-      const th = (x: number) => tc * (1 - 0.4 * ((x - fx) / hwid) ** 2);
-      const xs = [-1, -0.6, -0.2, 0.2, 0.6, 1].map((u) => fx + u * hwid);
-      const topE = xs.map((x): Pt => [x, cy(x) - th(x) / 2]), botE = xs.map((x): Pt => [x, cy(x) + th(x) / 2]).reverse();
-      // round caps at both ends (the band's half-thickness there), so no end is ever a square cut
-      const cap = (x: number, to: Pt) => { const r = th(x) / 2; return `A${r1(r)} ${r1(r)} 0 0 1 ${f(...to)}`; };
-      const band = openD(topE) + cap(xs[5], botE[0]) + openD(botE).slice(1).replace(/^[^C]*/, '') + cap(xs[0], topE[0]) + 'Z';
-      const tint = c.body ? mix(color, c.body, SCARF.mix) : color;
-      // the ends fade out (a horizontal mask), as if the band wrapped round out of sight inside the silhouette
-      const fid = c.id('sf'), mid = c.id('sm');
-      const defs: SvgNode[] = [
-        n('linearGradient', { id: fid, gradientUnits: 'userSpaceOnUse', x1: r1(fx - hwid), y1: 0, x2: r1(fx + hwid), y2: 0 }, [
-          n('stop', { offset: 0, 'stop-color': '#FFFFFF', 'stop-opacity': 0 }), n('stop', { offset: SCARF.fade / 2, 'stop-color': '#FFFFFF', 'stop-opacity': 1 }),
-          n('stop', { offset: 1 - SCARF.fade / 2, 'stop-color': '#FFFFFF', 'stop-opacity': 1 }), n('stop', { offset: 1, 'stop-color': '#FFFFFF', 'stop-opacity': 0 }),
-        ]),
-        n('mask', { id: mid, maskUnits: 'userSpaceOnUse', x: r1(fx - hwid - 8), y: r1(yc - 20), width: r1(2 * hwid + 16), height: 40 }, [
-          n('rect', { x: r1(fx - hwid - 8), y: r1(yc - 20), width: r1(2 * hwid + 16), height: 40, fill: `url(#${fid})` }),
-        ]),
-      ];
-      // one flat fold along the lower edge (no gloss), faded with the band
-      const foldD = openD(xs.map((x): Pt => [x, cy(x) + th(x) * 0.15])) + cap(xs[5], botE[0]) + openD(botE).slice(1).replace(/^[^C]*/, '') + 'Z';
-      const kids: SvgNode[] = [n('g', { mask: `url(#${mid})` }, [
-        n('path', { d: band, fill: tint, 'data-part': 'scarf', 'clip-path': c.clip }),
-        n('path', { d: foldD, ...fold, opacity: 0.09, 'clip-path': c.clip }),
-      ])];
-      // the knot front-right, and its one short tail falling down and out over the right shoulder lobe
-      const kx = fx + SCARF.kx * s.W, ky = cy(kx) + 0.5, kr = SCARF.knot * (c.small ? 1.25 : 1), tl = SCARF.tail * (c.small ? 1.1 : 1), w = c.small ? 12 : 9.5;
-      // the tail: a soft flared fabric end hanging from under the knot, down and out over the lobe (about 30° off
-      // vertical), wider at its softly slanted, rounded end than at its root
-      const ta = (30 * Math.PI) / 180, ux = Math.sin(ta), uy = Math.cos(ta);
-      const at = (along: number, across: number): Pt => [kx + ux * along + uy * across, ky + uy * along - ux * across];
-      const rw = w * 0.8, ew = w * 1.1;
-      const tail = `M${f(...at(0, -rw / 2))}C${f(...at(tl * 0.4, -rw / 2))} ${f(...at(tl * 0.7, -ew / 2))} ${f(...at(tl - 1, -ew / 2))}`
-        + `Q${f(...at(tl + ew * 0.35, -ew * 0.1))} ${f(...at(tl - 2.5, ew / 2))}`
-        + `C${f(...at(tl * 0.6, ew / 2))} ${f(...at(tl * 0.35, rw / 2))} ${f(...at(0, rw / 2))}Z`;
-      const [ex, ey] = at(tl + 2, ew / 2);
-      kids.push(
-        n('path', { d: tail, fill: tint, 'clip-path': c.clip, 'data-part': 'scarf-tails' }),
-        n('path', { d: tail, ...fold, opacity: 0.12, 'clip-path': c.clip }),
-        n('circle', { cx: r1(kx), cy: r1(ky), r: r1(kr), fill: mix(tint, '#FFFFFF', 0.1), 'data-part': 'scarf-knot' }),
-        n('path', { d: `M${f(kx - kr * 0.75, ky + kr * 0.25)}A${r1(kr)} ${r1(kr)} 0 0 0 ${f(kx + kr * 0.75, ky + kr * 0.25)}Q${f(kx, ky + kr * 0.55)} ${f(kx - kr * 0.75, ky + kr * 0.25)}Z`, ...fold, opacity: 0.12 }),
-      );
-      return {
-        rigid: [], soft: [n('g', {}, kids)], defs,
-        pivot: [fx, yc], box: box(fx - hwid, yc - SCARF.curve - tc / 2, Math.max(fx + hwid, ex + w), Math.min(GROUND, ey + w)),
-      };
-    }
     case 'beret': {
       // a soft beret seated on the dome: its band follows the head's curve, its puffy top overhangs to the right
       const P = (u: number, v: number): Pt => [dcx + u * R, dcy + v * R];
@@ -304,13 +241,3 @@ export function accessoryParts(kind: Accessory, c: AccCtx): AccBuild | null {
   }
 }
 
-/** An open smooth path through points (Catmull-Rom as cubics, ends clamped). */
-function openD(pts: Pt[]): string {
-  const m = pts.length, at = (i: number) => pts[Math.max(0, Math.min(m - 1, i))];
-  let d = `M${f(...pts[0])}`;
-  for (let i = 0; i < m - 1; i++) {
-    const p0 = at(i - 1), p1 = at(i), p2 = at(i + 1), p3 = at(i + 2);
-    d += `C${f(p1[0] + (p2[0] - p0[0]) / 6, p1[1] + (p2[1] - p0[1]) / 6)} ${f(p2[0] - (p3[0] - p1[0]) / 6, p2[1] - (p3[1] - p1[1]) / 6)} ${f(...p2)}`;
-  }
-  return d;
-}

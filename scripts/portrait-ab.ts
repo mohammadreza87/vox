@@ -23,7 +23,7 @@ import type { CharacterLook, PersonaSpec } from '../src/lib/studio/types';
 const OUT = path.resolve(__dirname, '../reports/portrait-ab');
 /** One per species, then the hardest attachments: cat bun + star, owl cap, cloud pony cap. */
 const DEFAULT_LOOKS = [0, 1, 2, 3, 4, 5, 6, 8, 11, 13];
-const ROLES: Record<string, string> = { headset: 'Customer support', specs: 'Research analyst', glasses: 'Finance analyst', beret: 'Brand designer', flower: 'Wellbeing coach', star: 'Creative producer', headphones: 'Backend engineer', cap: 'Ops engineer', beanie: 'Game developer', bowtie: 'Partnerships lead', scarf: 'Host', bow: 'Community manager' };
+const ROLES: Record<string, string> = { headset: 'Customer support', specs: 'Research analyst', glasses: 'Finance analyst', beret: 'Brand designer', flower: 'Wellbeing coach', star: 'Creative producer', headphones: 'Backend engineer', cap: 'Ops engineer', beanie: 'Game developer', bowtie: 'Partnerships lead', bow: 'Community manager' };
 
 const arg = (name: string) => process.argv.find((a) => a.startsWith(`--${name}=`))?.split('=')[1];
 const label = (l: CharacterLook) => [l.species, l.hair !== 'none' && l.hair, l.accessory !== 'none' && l.accessory].filter(Boolean).join('-');

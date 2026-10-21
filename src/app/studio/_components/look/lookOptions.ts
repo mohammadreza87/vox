@@ -20,7 +20,7 @@ export const FAMILY_LABEL: Record<CloudFamily, string> = { puff: 'Puff', tower: 
 export const HAIR_LABEL: Record<HairStyle, string> = { none: 'None', tuft: 'Tuft', fringe: 'Fringe', bun: 'Bun', curls: 'Curls', spiky: 'Spiky', pony: 'Pony' };
 export const ACCESSORY_LABEL: Record<Accessory, string> = {
   none: 'None', glasses: 'Glasses', specs: 'Specs', beret: 'Beret', cap: 'Cap', beanie: 'Beanie', headphones: 'Headphones',
-  headset: 'Headset', bow: 'Bow', scarf: 'Scarf', flower: 'Flower', star: 'Star', bowtie: 'Bow tie',
+  headset: 'Headset', bow: 'Bow', flower: 'Flower', star: 'Star', bowtie: 'Bow tie',
 };
 export const FEATURE_LABEL: Record<Feature, string> = { cheeks: 'Cheeks', lashes: 'Lashes', brows: 'Brows' };
 const NAMED_TONE: Record<string, string> = { deep: 'Deep', cream: 'Cream', cocoa: 'Cocoa', ink: 'Ink', volt: 'Volt', coral: 'Coral', navy: 'Navy', berry: 'Berry' };
