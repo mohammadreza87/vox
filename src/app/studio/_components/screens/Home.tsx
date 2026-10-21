@@ -143,7 +143,7 @@ export function HomeScreen() {
               onClick={() => (searching ? closeSearch() : setSearching(true))}>
               <Icon name={searching ? 'close' : 'search'} size={20} />
             </button>
-            <button type="button" className="vx-icon-btn initial" aria-label={c.you} onClick={() => nav.reset({ name: 'privacy' })}>
+            <button type="button" className="vx-icon-btn initial" aria-label={c.openProfile} onClick={() => nav.reset({ name: 'privacy' })}>
               {initial(nav.me.member.name)}
             </button>
           </div>

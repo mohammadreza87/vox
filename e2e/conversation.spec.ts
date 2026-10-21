@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { closeStudioSheet, setStudioLocale, activeScreen } from './helpers/studio-navigation';
 
 const PERSON = 780001;
 const AGENT_ID = 'fixture-conversation-agent';
@@ -74,10 +75,12 @@ async function runConversationJourney(page: Page, testInfo: { outputPath: (name:
   await page.goto('/studio');
   await page.getByRole('button', { name: 'Fixture Agent, Synthetic QA' }).click();
   await page.getByRole('button', { name: 'Chat', exact: true }).click();
-  const panel = page.getByRole('region', { name: 'Type or share an image' });
+  const panel = page.getByRole('region', { name: 'Chat', exact: true });
   await expect(panel).toBeVisible();
-  await expect(page.getByRole('group', { name: 'Conversation space' })).toBeVisible();
-  await expect(panel.getByRole('checkbox', { name: 'Prepare while I type' })).not.toBeChecked();
+  await page.getByRole('button', { name: 'Chat options', exact: true }).click();
+  await expect(page.getByRole('tablist', { name: 'Conversation space' })).toBeVisible();
+  await expect(page.getByRole('switch', { name: 'Prepare while I type' })).not.toBeChecked();
+  await closeStudioSheet(page);
 
   const message = 'Synthetic text with a selected image';
   await panel.getByLabel('Message').fill(message);
@@ -94,7 +97,9 @@ async function runConversationJourney(page: Page, testInfo: { outputPath: (name:
   expect(workTurn?.body?.image).toMatch(/^data:image\/jpeg;base64,/);
   expect(calls.some(call => /experience\/(predict|prediction-cancel|prediction-validate)$/.test(call.path))).toBe(false);
 
-  await page.getByRole('button', { name: 'Personal' }).click();
+  await page.getByRole('button', { name: 'Chat options', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Chat options' }).getByRole('tab', { name: 'Personal', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(panel.getByRole('log', { name: 'Conversation' })).toBeEmpty();
   const personalMessage = 'Synthetic personal message';
   await panel.getByLabel('Message').fill(personalMessage);
@@ -103,12 +108,17 @@ async function runConversationJourney(page: Page, testInfo: { outputPath: (name:
   expect(calls.filter(call => call.path === 'conversation').at(-1)?.body).toMatchObject({ agentId: AGENT_ID, space: 'personal', text: personalMessage });
   await page.screenshot({ path: testInfo.outputPath('conversation-en.png'), fullPage: true });
 
-  await page.getByRole('button', { name: 'فارسی' }).click();
-  const faPanel = page.getByRole('region', { name: 'تایپ یا اشتراک تصویر' });
+  await setStudioLocale(page, 'fa');
+  await page.getByRole('navigation', { name: 'اصلی' }).getByRole('button', { name: 'عامل‌ها', exact: true }).click();
+  await page.getByRole('button', { name: 'Fixture Agent، Synthetic QA' }).click();
+  await page.getByRole('button', { name: 'گفتگو', exact: true }).click();
+  const faPanel = page.getByRole('region', { name: 'گفتگو', exact: true });
   await expect(faPanel).toHaveAttribute('dir', 'rtl');
   await expect(faPanel).toHaveAttribute('lang', 'fa');
   await expect(faPanel.getByLabel('پیام')).toBeVisible();
-  await expect(faPanel.getByRole('checkbox', { name: 'آماده‌سازی هنگام تایپ' })).not.toBeChecked();
+  await page.getByRole('button', { name: 'گزینه‌های گفتگو', exact: true }).click();
+  await expect(page.getByRole('switch', { name: 'آماده‌سازی هنگام تایپ' })).not.toBeChecked();
+  await closeStudioSheet(page);
   const persianMessage = 'پیام آزمایشی فارسی';
   await faPanel.getByLabel('پیام').fill(persianMessage);
   await faPanel.getByRole('button', { name: 'ارسال' }).click();
@@ -116,14 +126,15 @@ async function runConversationJourney(page: Page, testInfo: { outputPath: (name:
   expect(calls.filter(call => call.path === 'conversation').at(-1)?.body).toMatchObject({ agentId: AGENT_ID, space: 'personal', text: persianMessage });
   await page.screenshot({ path: testInfo.outputPath('conversation-fa.png'), fullPage: true });
 
-  await page.getByRole('button', { name: 'Back' }).click();
-  await page.getByRole('button', { name: 'Agents' }).click();
-  await page.getByRole('button', { name: 'You', exact: true }).click();
+  await setStudioLocale(page, 'en');
+  await activeScreen(page).getByRole('button', { name: 'Voice recognition', exact: true }).click();
   const voice = page.getByRole('region', { name: 'Optional voice recognition' });
   await expect(voice).toBeVisible();
   await expect(voice.getByRole('status')).toContainText('Recognition is unavailable');
   await expect(voice.getByRole('button', { name: 'Review enrollment' })).toHaveCount(0);
-  await page.locator('.vx-privacy').getByLabel('Language').selectOption('fa');
+  await closeStudioSheet(page);
+  await setStudioLocale(page, 'fa');
+  await activeScreen(page).getByRole('button', { name: 'تشخیص صدا', exact: true }).click();
   const voiceFa = page.getByRole('region', { name: 'تشخیص اختیاری صدا' });
   await expect(voiceFa.getByRole('status')).toContainText('تشخیص صدا برای این نمایه');
   await expect(voiceFa.getByRole('button', { name: 'بررسی ثبت صدا' })).toHaveCount(0);

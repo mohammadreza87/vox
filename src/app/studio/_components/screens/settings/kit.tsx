@@ -72,7 +72,7 @@ export function SettingsPage({ title, back, busy, dock, children, className }: {
 }) {
   const nav = useNav();
   return <>
-    <TopBar lead="back" onLead={nav.back} leadLabel={back ?? (nav.locale === 'fa' ? 'شما' : 'You')} title={title} />
+    <TopBar lead="back" onLead={nav.back} leadLabel={back ?? (nav.locale === 'fa' ? 'بازگشت به شما' : 'Back to You')} title={<span role="heading" aria-level={1}>{title}</span>} />
     <section className={`vx-scroll vx-settings-page${className ? ` ${className}` : ''}`} dir={nav.dir} lang={nav.locale} aria-busy={busy || undefined}>
       {children}
     </section>

@@ -14,7 +14,7 @@ export type HomeFilter = 'All' | 'Mine' | 'Forming' | 'Drafts' | 'Retired';
 const homeEn = {
   over: (org: string, agents: number, forming: number) => `${org} · ${agents} agent${s(agents)}${forming ? ` · ${forming} forming` : ''}`,
   title: 'Your agents',
-  closeSearch: 'Close search', searchAgents: 'Search agents', you: 'You', searchPlaceholder: 'Name or role',
+  closeSearch: 'Close search', searchAgents: 'Search agents', you: 'You', openProfile: 'Open your profile', searchPlaceholder: 'Name or role',
   filterLabel: 'Filter agents',
   filters: { All: 'All', Mine: 'Mine', Forming: 'Forming', Drafts: 'Drafts', Retired: 'Retired' } as Record<HomeFilter, string>,
   loadError: 'Can’t load your agents', loading: 'Loading agents',
@@ -36,7 +36,7 @@ export const homeCopy: Record<Locale, typeof homeEn> = {
   fa: {
     over: (org, agents, forming) => `${org} · ${n(agents)} عامل${forming ? ` · ${n(forming)} در حال شکل‌گیری` : ''}`,
     title: 'عامل‌های شما',
-    closeSearch: 'بستن جستجو', searchAgents: 'جستجوی عامل‌ها', you: 'شما', searchPlaceholder: 'نام یا نقش',
+    closeSearch: 'بستن جستجو', searchAgents: 'جستجوی عامل‌ها', you: 'شما', openProfile: 'باز کردن نمایهٔ شما', searchPlaceholder: 'نام یا نقش',
     filterLabel: 'فیلتر عامل‌ها',
     filters: { All: 'همه', Mine: 'مال من', Forming: 'در حال شکل‌گیری', Drafts: 'پیش‌نویس‌ها', Retired: 'بازنشسته‌ها' },
     loadError: 'عامل‌های شما بارگذاری نشد', loading: 'در حال بارگذاری عامل‌ها',

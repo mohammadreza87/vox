@@ -70,7 +70,7 @@ describe('Home', () => {
     state.agents.mockResolvedValue({ agents: [agent('a')] });
     const { container } = await renderHome();
     expect(screen.getByRole('button', { name: 'Search agents' })).toBeVisible();
-    const you = screen.getByRole('button', { name: 'You' });
+    const you = screen.getByRole('button', { name: 'Open your profile' });
     expect(you).toHaveTextContent('R');
     fireEvent.click(you);
     expect(state.nav.reset).toHaveBeenCalledWith({ name: 'privacy' });
@@ -199,6 +199,8 @@ describe('Home', () => {
     expect(screen.getByText('قفل')).toHaveClass('vx-pill', 'lock');
     expect(screen.getByText('در حال شکل‌گیری · روز ۳ از ۷')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'جستجوی عامل‌ها' })).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'باز کردن نمایهٔ شما' }));
+    expect(state.nav.reset).toHaveBeenCalledWith({ name: 'privacy' });
     // no English left in the board copy
     expect(container.textContent).not.toMatch(/Your agents|Spawn|Forming|Draft|LOCKED|agents?\b/);
   });

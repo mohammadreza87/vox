@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { closeStudioSheet, setStudioLocale } from './helpers/studio-navigation';
 /** Real browser/product source, synthetic signed-API boundary. This is not a Telegram device/send qualification. */
 test('opaque notification opens its own personal reminder, with explicit EN/FA snooze and channel controls', async ({ page }, info) => {
   const calls: { path: string; body?: Record<string, unknown> }[] = [];
@@ -19,6 +20,9 @@ test('opaque notification opens its own personal reminder, with explicit EN/FA s
     else if (path === 'product-pause' && request.method() === 'GET') value = { version: 1, accountId: 'telegram-account:123',
       space: url.searchParams.get('space') === 'personal' ? 'personal' : 'work', available: false,
       reason: 'store_not_prepared', productPaused: null, useEpoch: null, canPause: false, canResume: false };
+    else if (path === 'adaptive') value = { schemaVersion: 1, revision: 1, space, scope: 'private_account_profile',
+      identity: { accountId: 'telegram-account:123', personId: 'synthetic-person', bindingId: 'synthetic-binding', bindingRevision: 1, confirmed: true, verification: 'account_confirmation', adultDeclared: true, declaredJurisdiction: 'EE' },
+      purposes: [], memories: [], agents: [], explicitMemoryAvailable: true };
     else if (path === 'agents') value = { agents: [{ id: 'fixture-agent', status: 'active', persona: { name: 'Fixture Agent', role: 'Synthetic', tagline: '', languages: ['en', 'fa'] }, look: { hue: 'ash', family: 'drift', features: {} }, visibility: 'private', access: [123], createdBy: 123 }] };
     else if (path === 'experience/reminders/reminder-personal') value = { space: 'personal' };
     else if (path === 'experience/reminder-channel/present') { presented = true; value = snapshot(space); }
@@ -32,14 +36,19 @@ test('opaque notification opens its own personal reminder, with explicit EN/FA s
   await expect(page.locator('#reminder-reminder-personal')).toHaveAttribute('aria-current', 'true');
   await expect(page.getByText('Delivery is uncertain.', { exact: false })).toBeVisible();
   expect(calls.filter(c => c.path === 'experience/reminder-channel')).toHaveLength(0);
+  await page.getByRole('button', { name: /^Telegram alerts/ }).click();
   await page.getByRole('button', { name: 'Review Telegram reminder choice' }).click();
   expect(calls.filter(c => c.path === 'experience/reminder-channel')).toHaveLength(0);
   await page.getByRole('button', { name: 'Allow generic alerts for up to 30 days' }).click();
+  await page.getByRole('button', { name: /^Telegram alerts/ }).click();
   await expect(page.getByRole('button', { name: 'Turn Telegram reminders off' })).toBeVisible();
   expect(calls.find(c => c.path === 'experience/reminder-channel')?.body).toMatchObject({ space: 'personal', enabled: true });
   await page.screenshot({ path: info.outputPath('reminders-en.png'), fullPage: true });
-  await page.getByRole('button', { name: 'فارسی', exact: true }).click();
-  await expect(page.locator('.vx-privacy').last()).toHaveAttribute('dir', 'rtl');
+  await closeStudioSheet(page);
+  await setStudioLocale(page, 'fa');
+  await page.getByRole('button', { name: 'یادآورها', exact: true }).click();
+  await expect(page.locator('.vx-settings-page')).toHaveAttribute('dir', 'rtl');
+  await page.getByRole('button', { name: /SYNTHETIC_PERSONAL_REMINDER/ }).click();
   await page.getByRole('button', { name: 'تعویق ۱۵ دقیقه' }).click();
   expect(calls.find(c => c.path === 'experience/reminder-action')?.body).toMatchObject({ space: 'personal', itemId: 'reminder-personal', action: 'snooze' });
   await expect(page.getByRole('button', { name: 'این یادآور را بررسی کردم' })).toBeVisible();
