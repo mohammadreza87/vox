@@ -4,7 +4,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { MAX_AGENT_SKILLS } from '@/lib/studio/skills/types';
 import { haptic } from '../../../_lib/client';
 import { skillTitle, useCatalog } from './catalog';
-import type { SpawnCopy } from './copy';
+import type { BriefCopy } from './copy';
 import { useSpawnMotion } from './motion';
 import { onIds, type SkillToggle } from './roles';
 import { textAttrs } from './routing';
@@ -14,7 +14,7 @@ import { textAttrs } from './routing';
  * undone with a second tap. At the cap, off chips can't be turned back on.
  */
 export function SkillChips({ t, items, onToggle, onAdd, extra = 0, readOnly, fa, label }: {
-  t: SpawnCopy; items: SkillToggle[]; onToggle: (id: string) => void; onAdd?: () => void;
+  t: BriefCopy; items: SkillToggle[]; onToggle: (id: string) => void; onAdd?: () => void;
   extra?: number; readOnly?: boolean; fa?: boolean; label?: string;
 }) {
   const catalog = useCatalog();
@@ -22,7 +22,7 @@ export function SkillChips({ t, items, onToggle, onAdd, extra = 0, readOnly, fa,
   const known = items.filter((i) => catalog.skills.has(i.id));
   const atCap = onIds(known).length >= MAX_AGENT_SKILLS;
   return (
-    <div className="vx-catalog-layout-baf2fda5">
+    <div className="vx-field">
       <div className="vx-skills" role="group" aria-label={label ?? t.skills}>
         <AnimatePresence initial={false}>
           {known.map((i, n) => {

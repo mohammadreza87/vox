@@ -1,6 +1,7 @@
 /**
- * Copy for the Brief and Persona steps (EN / FA). Phase 1 ships English chrome
- * with Persian-aware input; the FA table is ready for when all six steps have copy.
+ * Copy for the Brief (composer, routing, role and skill sheets, Fine-tune) and the
+ * Draft step's library parts (role line, skills, voice examples), EN / FA. Chrome
+ * follows the app locale (`nav.locale`); the wizard shell's copy is `_lib/spawn-copy`.
  */
 
 import type { PackId } from '@/lib/studio/skills/types';
@@ -54,6 +55,8 @@ const en = {
   presentsAs: 'Presents as',
   presentations: { feminine: 'Woman', masculine: 'Man', neutral: 'Neutral' },
   languages: 'Languages',
+  /** Labels for Fine-tune's language chips; the values sent to Claude stay English. */
+  languageNames: {} as Record<string, string>,
   fromBrief: '(from your brief)',
   background: 'Background',
   culture: 'Nationality / culture',
@@ -65,6 +68,7 @@ const en = {
   accentHint: 'ElevenLabs designs a voice to match; real accents work best.',
   temperament: 'Temperament',
   sliders: { warmDirect: ['Warm', 'Direct'], playfulSerious: ['Playful', 'Serious'], conciseExpansive: ['Concise', 'Expansive'] } as Record<TraitKey, [string, string]>,
+  range: (left: string, right: string) => `${left} to ${right}`,
   ctaEmpty: 'Surprise me',
   cta: 'Draft with Claude',
   ctaSuccessor: 'Draft the successor',
@@ -111,9 +115,9 @@ const en = {
   num: (n: number) => num(n, 'en'),
 };
 
-export type SpawnCopy = typeof en;
+export type BriefCopy = typeof en;
 
-const fa: SpawnCopy = {
+const fa: BriefCopy = {
   ...en,
   overline: 'ساخت همکار جدید',
   overlineSuccessor: (name) => `جانشین ${name}`,
@@ -157,13 +161,21 @@ const fa: SpawnCopy = {
   presentsAs: 'جنسیت',
   presentations: { feminine: 'زن', masculine: 'مرد', neutral: 'خنثی' },
   languages: 'زبان‌ها',
+  languageNames: {
+    English: 'انگلیسی', Persian: 'فارسی', Vietnamese: 'ویتنامی', Arabic: 'عربی', Turkish: 'ترکی', French: 'فرانسوی', German: 'آلمانی', Spanish: 'اسپانیایی',
+  },
   fromBrief: '(از توصیف شما)',
   background: 'پیشینه',
   culture: 'ملیت / فرهنگ',
+  culturePh: 'ایرانی، تهران',
   age: 'سن',
+  agePh: 'اوایل دههٔ ۳۰',
   accent: 'لهجه',
+  accentPh: 'انگلیسی با لهجهٔ ملایم تهرانی',
+  accentHint: 'ElevenLabs صدایی متناسب با آن طراحی می‌کند؛ لهجه‌های واقعی بهتر جواب می‌دهند.',
   temperament: 'خلق‌وخو',
   sliders: { warmDirect: ['گرم', 'رک'], playfulSerious: ['شوخ', 'جدی'], conciseExpansive: ['کوتاه', 'مفصل'] },
+  range: (left, right) => `${left} تا ${right}`,
   ctaEmpty: 'غافلگیرم کن',
   cta: 'پیش‌نویس با Claude',
   ctaSuccessor: 'پیش‌نویس جانشین',
@@ -201,4 +213,4 @@ const fa: SpawnCopy = {
   num: (n) => num(n, 'fa'),
 };
 
-export const spawnCopy: Record<Locale, SpawnCopy> = { en, fa };
+export const briefCopy: Record<Locale, BriefCopy> = { en, fa };

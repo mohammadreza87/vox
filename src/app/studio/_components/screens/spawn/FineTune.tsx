@@ -3,7 +3,7 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import { useId } from 'react';
 import { Icon } from '../../ui';
-import type { SpawnCopy, TraitKey } from './copy';
+import type { BriefCopy, TraitKey } from './copy';
 import { useSpawnMotion } from './motion';
 import { Chips, Field, Slider, type Presentation } from './parts';
 
@@ -27,11 +27,11 @@ export const EMPTY_FINE_TUNE: FineTuneValue = { languages: null, culture: '', ag
 export const effectiveLanguages = (v: FineTuneValue, auto: string[]) => v.languages ?? auto;
 
 /** "Woman · Persian, English · Early 30s +1", or "Claude decides". */
-export function fineTuneSummary(t: SpawnCopy, v: FineTuneValue, auto: string[]): string {
+export function fineTuneSummary(t: BriefCopy, v: FineTuneValue, auto: string[]): string {
   const langs = effectiveLanguages(v, auto);
   const items = [
     v.presentation && t.presentations[v.presentation],
-    langs.length ? langs.join(', ') : '',
+    langs.length ? langs.map((l) => t.languageNames[l] ?? l).join(', ') : '',
     v.culture.trim(), v.age.trim(), v.accent.trim(),
     Object.keys(v.traits).length ? t.temperament : '',
   ].filter(Boolean) as string[];
@@ -41,7 +41,7 @@ export function fineTuneSummary(t: SpawnCopy, v: FineTuneValue, auto: string[]):
 
 /** Everything personal, one tap away and collapsed by default. */
 export function FineTune({ t, open, onToggle, value, onChange, autoLanguages, disabled }: {
-  t: SpawnCopy; open: boolean; onToggle: () => void; value: FineTuneValue; onChange: (v: FineTuneValue) => void; autoLanguages: string[];
+  t: BriefCopy; open: boolean; onToggle: () => void; value: FineTuneValue; onChange: (v: FineTuneValue) => void; autoLanguages: string[];
   disabled?: boolean;
 }) {
   const id = useId();
@@ -65,10 +65,10 @@ export function FineTune({ t, open, onToggle, value, onChange, autoLanguages, di
                   value={value.presentation ? [value.presentation] : []} onChange={(v) => set({ presentation: v[0] })} />
               </Field>
               <Field label={t.languages} group
-                hint={!value.languages && autoLanguages.length ? `${autoLanguages.join(', ')} ${t.fromBrief}` : undefined}>
-                <Chips multi options={LANGUAGES.map((l) => ({ value: l, label: l }))} value={langs} onChange={(v) => set({ languages: v })} />
+                hint={!value.languages && autoLanguages.length ? `${autoLanguages.map((l) => t.languageNames[l] ?? l).join(', ')} ${t.fromBrief}` : undefined}>
+                <Chips multi options={LANGUAGES.map((l) => ({ value: l, label: t.languageNames[l] ?? l }))} value={langs} onChange={(v) => set({ languages: v })} />
               </Field>
-              <div className="vx-catalog-layout-baf2fda5">
+              <div className="vx-field">
                 <span className="vx-over">{t.background}</span>
                 <div className="vx-catalog-layout-f83d7b60">
                   <input className="vx-input" dir="auto" value={value.culture} onChange={(e) => set({ culture: e.target.value })} placeholder={t.culturePh} aria-label={t.culture} maxLength={80} />
@@ -78,10 +78,10 @@ export function FineTune({ t, open, onToggle, value, onChange, autoLanguages, di
               <Field label={t.accent} hint={t.accentHint}>
                 <input className="vx-input" dir="auto" value={value.accent} onChange={(e) => set({ accent: e.target.value })} placeholder={t.accentPh} maxLength={80} />
               </Field>
-              <div role="group" aria-label={t.temperament} className="vx-catalog-layout-ff69c307">
+              <div className="vx-field" role="group" aria-label={t.temperament}>
                 <span className="vx-over">{t.temperament}</span>
                 {TRAITS.map((k) => (
-                  <Slider key={k} left={t.sliders[k][0]} right={t.sliders[k][1]} value={value.traits[k] ?? TRAIT_DEFAULTS[k]}
+                  <Slider key={k} left={t.sliders[k][0]} right={t.sliders[k][1]} label={t.range(t.sliders[k][0], t.sliders[k][1])} value={value.traits[k] ?? TRAIT_DEFAULTS[k]}
                     onChange={(n) => set({ traits: { ...value.traits, [k]: n } })} />
                 ))}
               </div>

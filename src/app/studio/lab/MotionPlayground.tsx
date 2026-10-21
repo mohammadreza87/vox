@@ -15,7 +15,7 @@ import { Ticker } from '../_components/motion/Ticker';
 import { TierProvider } from '../_components/motion/tier';
 import { REDUCED_MOTION_QUERY, useMediaQuery } from '../_components/motion/activity';
 import { TransitionBench } from '../_components/motion/TransitionBench';
-import { Drafting } from '../_components/screens/spawn/Drafting.design';
+import { Drafting } from '../_components/screens/spawn/Drafting';
 import { Seg } from '../_components/ui';
 
 const MOMENTS: MomentKind[] = ['poof', 'evolve', 'born', 'retire', 'hop', 'perk', 'nod', 'wince', 'spin', 'squish', 'shy'];

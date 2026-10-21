@@ -207,6 +207,12 @@ export function VoiceStep({ agent, busy, run, onUpdate, onNext }: StepProps) {
             <div className="vx-group">
               <Row plain title={c.voiceLanguage} value={query.language ? languageLabel(query.language) : c.anyLanguage} chevron onClick={() => setLanguagePicker(true)} />
             </div>
+            {/* Accent narrows the library like gender and language; it applies with the next search. */}
+            <label className="vx-field">
+              <span className="vx-over">{c.accent}</span>
+              <input className="vx-input" value={query.accent} onChange={(e) => setQuery({ ...query, accent: e.target.value })} placeholder={c.accentPlaceholder}
+                dir="auto" maxLength={60} enterKeyHint="search" onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void searchWith(query); } }} />
+            </label>
             <form className="vx-composer" role="search" onSubmit={(e) => { e.preventDefault(); void searchWith(query); }}>
               <input value={query.search} onChange={(e) => setQuery({ ...query, search: e.target.value })} placeholder={c.searchPlaceholder} aria-label={c.searchVoices} dir="auto" />
               <button type="submit" className="vx-composer-send quiet" aria-label={c.search} disabled={busy === 'search'}>
@@ -230,6 +236,7 @@ export function VoiceStep({ agent, busy, run, onUpdate, onNext }: StepProps) {
                       sub={<>
                         <span className="vx-line">{[v.gender, v.age, v.accent, v.descriptive, v.category === 'generated' ? c.generated : ''].filter(Boolean).join(' · ')}</span>
                         {v.language && <span className="vx-line">{`${v.category === 'professional' ? c.nativeLanguage : c.language}${languageNames.get(v.language) ?? v.language}`}</span>}
+                        {v.description && <span className="vx-line vx-3" dir="auto">{v.description}</span>}
                         {typeof v.rate === 'number' && v.rate > 1 && <span className="vx-line">{c.costs(v.rate)}</span>}
                       </>}
                       end={<Choose chosen={chosen} label={c.choose(v.name)} busy={busy === `choose:${key}`} disabled={(!!busy && !chosen) || !options?.libraryAllowed}

@@ -84,6 +84,8 @@ function RequestPanel({ space, locale, session, dock, ...erasure }: { space: Rig
     {dock ? createPortal(<button className="vx-btn vx-btn-primary vx-btn-block" disabled={disabled} onClick={() => void run()}>{c.submit}</button>, dock) : <button className="vx-btn vx-btn-primary" disabled={disabled} onClick={() => void run()}>{c.submit}</button>}
     {data && !data.requests.length && <p className="vx-small">{c.empty}</p>}
     {data?.expiredRequests?.map(row => <p key={row.requestId} className="vx-small" role="status">{c.reference}: <bdi>{row.requestId}</bdi> · {c.expiredRecord} {rightsDate(row.retainUntil, locale)}</p>)}
+    {/* Pending exports and erasures change state on the server: a person can re-check without closing the sheet. */}
+    {!!data?.requests.length && !issue && <div><button type="button" className="vx-btn vx-btn-secondary vx-btn-xs" disabled={busy || !!erasure.mutationDisabled} onClick={() => void load()}><Icon name="refresh" size={14} />{c.refresh}</button></div>}
     {data?.requests.map(row => <article className="vx-card" key={row.requestId} style={{ minWidth: 0, overflowWrap: 'anywhere' }} aria-label={`${c.kinds[row.kind]} · ${row.requestId}`}>
       <h3 className="vx-head">{c.kinds[row.kind]} · {c[row.space]}</h3>
       <p className="vx-small">{c.reference}: <bdi>{row.requestId}</bdi></p>

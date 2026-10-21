@@ -3,7 +3,7 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
 import type { RouteSuggestion } from '../../../_lib/client';
 import { Spinner } from '../../ui';
-import type { SpawnCopy } from './copy';
+import type { BriefCopy } from './copy';
 import { textAttrs } from './routing';
 
 export type Clarify = NonNullable<RouteSuggestion['clarify']>;
@@ -13,7 +13,7 @@ export type Clarify = NonNullable<RouteSuggestion['clarify']>;
  * Answering *is* the submit, so drafting starts right after.
  */
 export function Clarifier({ t, clarify, subFor, pending, onAnswer }: {
-  t: SpawnCopy; clarify: Clarify; subFor: (value: string) => string | undefined; pending: string | null; onAnswer: (value: string) => void;
+  t: BriefCopy; clarify: Clarify; subFor: (value: string) => string | undefined; pending: string | null; onAnswer: (value: string) => void;
 }) {
   const id = useId();
   const options = useRef<Array<HTMLButtonElement | null>>([]);

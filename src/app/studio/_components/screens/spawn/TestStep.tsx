@@ -8,6 +8,7 @@ import { spawnCopy } from '../../../_lib/spawn-copy';
 import { useNav } from '../../StudioApp';
 import { AgentFace } from '../../Cloud';
 import { Bubble, Composer, Icon, Sheet, SheetHead, Typing } from '../../ui';
+import { useCatalog } from './catalog';
 
 type Message = { role: 'user' | 'assistant'; content: string; failed?: boolean };
 
@@ -22,6 +23,10 @@ export function SayHiSheet({ agent, open, onClose }: { agent: AgentView; open: b
   const [thinking, setThinking] = useState(false);
   const end = useRef<HTMLDivElement>(null);
   const name = agent.persona.name;
+  // A library role brings its own openers; custom agents get the general three.
+  const catalog = useCatalog();
+  const role = agent.persona.roleId ? catalog.roles.get(agent.persona.roleId) : undefined;
+  const starters = role?.starters.length ? role.starters : c.starters;
   useEffect(() => { end.current?.scrollIntoView?.({ behavior: 'smooth', block: 'end' }); }, [messages, thinking]);
 
   const send = async (history: Message[]) => {
@@ -57,7 +62,7 @@ export function SayHiSheet({ agent, open, onClose }: { agent: AgentView; open: b
       <div className="vx-thread vx-sayhi" role="log" aria-label={c.chatWith(name)}>
         {messages.length === 0 && (
           <div className="vx-chip-wrap">
-            {c.starters.map((s) => <button key={s} type="button" className="vx-chip" onClick={() => submit(s)}>{s}</button>)}
+            {starters.map((s) => <button key={s} type="button" className="vx-chip" dir="auto" onClick={() => submit(s)}>{s}</button>)}
           </div>
         )}
         {messages.map((m, i) => (

@@ -67,13 +67,13 @@ const PATHS: Record<string, string> = {
   refresh: 'M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6',
   minus: 'M5 12h14',
   telegram: 'M21 4L3 11.5l6 2M21 4l-3.5 16L9 13.5M21 4L9 13.5V19l3.2-3.4',
-  /** Points to the inline end; .vx-mirror flips it under RTL. */
+  /** Points to the inline end; mirrors in RTL (DIRECTIONAL). */
   chevron: 'M6 9l6 6 6-6',
   chevronEnd: 'M9 6l6 6-6 6',
 };
 
 /** Icons that point somewhere and therefore mirror in RTL. */
-const DIRECTIONAL = new Set(['back', 'forward', 'external']);
+const DIRECTIONAL = new Set(['back', 'forward', 'external', 'chevronEnd']);
 
 export type IconName = keyof typeof PATHS | 'more';
 
@@ -640,9 +640,10 @@ function Knob({ checked }: { checked: boolean }) {
   );
 }
 
-/** A full settings row with a switch (role=switch). The knob springs across and stretches mid-travel. */
-export function Switch({ checked, onChange, label, sub, disabled, lead }: {
-  checked: boolean; onChange: (v: boolean) => void; label: ReactNode; sub?: ReactNode; disabled?: boolean; lead?: ReactNode;
+/** A full settings row with a switch (role=switch). The knob springs across and stretches mid-travel.
+ *  `attention` marks a choice that is on but not in effect (it needs review): the track turns warn and the sub reads warn. */
+export function Switch({ checked, onChange, label, sub, disabled, lead, attention }: {
+  checked: boolean; onChange: (v: boolean) => void; label: ReactNode; sub?: ReactNode; disabled?: boolean; lead?: ReactNode; attention?: boolean;
 }) {
   return (
     <button type="button" role="switch" aria-checked={checked} disabled={disabled} className="vx-row vx-row-btn"
@@ -650,9 +651,9 @@ export function Switch({ checked, onChange, label, sub, disabled, lead }: {
       {lead}
       <span className="vx-row-main">
         <span className="vx-row-title plain">{label}</span>
-        {sub && <span className="vx-row-sub">{sub}</span>}
+        {sub && <span className={attention ? 'vx-row-sub warn' : 'vx-row-sub'}>{sub}</span>}
       </span>
-      <span className="vx-switch live" aria-hidden="true"><Knob checked={checked} /></span>
+      <span className={attention ? 'vx-switch live attention' : 'vx-switch live'} aria-hidden="true"><Knob checked={checked} /></span>
     </button>
   );
 }
@@ -907,7 +908,7 @@ export function NavRow({ label, detail, onClick, disabled }: { label: string; de
         <span>{label}</span>
         {detail && <span className="vx-small vx-2">{detail}</span>}
       </span>
-      <span className="vx-chev"><Icon name="chevronEnd" size={18} /></span>
+      <span className="vx-chev"><Icon name="chevronEnd" size={18} flip={false} /></span>
     </button>
   );
 }

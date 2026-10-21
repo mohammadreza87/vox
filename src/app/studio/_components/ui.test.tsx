@@ -191,6 +191,16 @@ describe('Switch, Toggle, Radio, Check', () => {
     expect(onChange).toHaveBeenCalledWith(true);
   });
 
+  it('Switch marks an on-but-not-in-effect choice with attention', () => {
+    const { rerender } = render(<Switch checked onChange={() => {}} label="Personalization" sub="Review needed" attention />);
+    const sw = screen.getByRole('switch', { name: /Personalization/ });
+    expect(sw.querySelector('.vx-switch.live.attention')).not.toBeNull();
+    expect(screen.getByText('Review needed')).toHaveClass('vx-row-sub', 'warn');
+    rerender(<Switch checked onChange={() => {}} label="Personalization" sub="In effect" />);
+    expect(sw.querySelector('.vx-switch.attention')).toBeNull();
+    expect(screen.getByText('In effect')).not.toHaveClass('warn');
+  });
+
   it('Toggle is the bare control with its own name', () => {
     const onChange = vi.fn();
     render(<Toggle checked onChange={onChange} label="Can use your notes" disabled />);
