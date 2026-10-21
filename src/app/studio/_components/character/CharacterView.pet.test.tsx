@@ -34,4 +34,18 @@ describe('CharacterView pet bindings', () => {
       .toBe(plain.match(/data-part="brows"[^>]*d="([^"]+)"/)?.[1] ?? plain.match(/d="([^"]+)"[^>]*data-part="brows"/)?.[1]);
     expect(plain).not.toContain('stroke-width:');
   });
+
+  it('draws the tongue, sparkles and dizzy swirls only when their bindings are given', () => {
+    const plain = renderToStaticMarkup(<CharacterView look={look} stage={4} expr="idle" size={200} lod="hero" label="Pet" />);
+    const rigged = renderToStaticMarkup(<CharacterView look={look} stage={4} expr="idle" size={200} lod="hero" label="Pet" rig={{ mouthD: motionValue('M92 125C96 120 104 120 108 125C104 140 96 140 92 125Z') }} />);
+    for (const html of [plain, rigged]) for (const part of ['tongue', 'sparkle', 'swirl']) expect(html).not.toContain(`data-part="${part}"`);
+    const { container } = render(
+      <CharacterView look={look} stage={4} expr="idle" size={200} lod="hero" label="Pet"
+        rig={{ mouthD: motionValue('M92 125C96 120 104 120 108 125C104 140 96 140 92 125Z'), tongue: { opacity: motionValue(1) }, sparkle: { opacity: motionValue(0.8) }, swirl: { opacity: motionValue(0), rotate: motionValue(90) } }} />,
+    );
+    expect(container.querySelector('[data-part="tongue"] clipPath path')?.getAttribute('d')).toContain('M92 125');
+    // the eye marks live inside the lids group, so a blink closes them too
+    expect(container.querySelector('[data-part="lids"] [data-part="sparkle"]')).not.toBeNull();
+    expect(container.querySelectorAll('[data-part="lids"] [data-part="swirl"]').length).toBe(2);
+  });
 });

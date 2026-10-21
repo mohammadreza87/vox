@@ -117,14 +117,21 @@ export const bored: Reaction<EventOf<'bored'>> = (_e, ctx) => {
   ], 'float');
 };
 
-/** A need in "wants" (30–54): a thought bubble with the toy, a glance at it (the toy wiggles in the UI). */
+/**
+ * A need in "wants" (30–54): a thought bubble with the toy, sparkly hopeful eyes on it (pupils 1.12), a perk and a
+ * little eager bounce, a tilt or lean toward it (the toy wiggles in the UI). Still an ambient beat: friendly, small.
+ */
 export const wants: Reaction<EventOf<'wants'>> = (e, ctx) => {
   const v = variant(ctx, 'wants');
+  const s = side(ctx);
   return end([
-    cue(0, { thought: e.need, look: TOY[e.need] }),
-    beat(0, { pupil: 1.06 }, 'float'),
-    ...(v === 0 ? [beat(100, { headTilt: 4 * side(ctx) }, 'float')] : v === 1 ? [beat(100, { lean: 3 * side(ctx) }, 'float')] : [beat(80, { sy: 1 }, 'snap', { hop: { h: 4, land: 0.06 } })]),
-    beat(1500, { headTilt: 0, lean: 0, pupil: 1 }, 'float', { look: 'user' }),
+    cue(0, { thought: e.need, look: TOY[e.need], mouth: 'o' }),
+    beat(0, { pupil: 1.12, sparkle: 0.8, sy: 1.05 }, 'snap'),
+    beat(140, { sy: 1 }, 'jelly', { osc: osc('sy', 0.03, 3, 900) }),
+    ...(eared(ctx) ? [beat(0, { earL: 8, earR: -8 }, 'snap'), beat(500, { earL: 0, earR: 0 }, 'jelly')] : []),
+    ...(v === 0 ? [beat(100, { headTilt: 8 * s }, 'float')] : v === 1 ? [beat(100, { lean: 5 * s, headTilt: 4 * s }, 'float')] : [beat(80, { sy: 1 }, 'snap', { hop: { h: 7, land: 0.08 } })]),
+    cue(700, { mouth: 'smile' }),
+    beat(1500, { headTilt: 0, lean: 0, pupil: 1, sparkle: 0 }, 'float', { look: 'user' }),
   ], 'float');
 };
 

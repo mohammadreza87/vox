@@ -147,6 +147,8 @@ export interface PoseTargets {
   mouthOpen: number;
   /** −1 pucker (OO) … +1 wide (EE) */
   mouthWidth: number;
+  /** the eating gape over the mouth: 0 none, 1 the 'aah' (with a tongue), 2 the widest (~45 % of the face) */
+  gape: number;
 
   /* cheeks */
   /** puff scale about each cheek (bite 1.12); chased by the `cheek` follower */
@@ -154,6 +156,12 @@ export interface PoseTargets {
   /** shy/bliss blush opacity 0 … 1 (shy grows the discs to 1.32) */
   blush: number;
   blushScale: number;
+  /** chewing cheeks 0 … 1: the body outline bulges at the cheek line and the blush swells (chased by a `cheek` follower) */
+  puff: number;
+
+  /* pet-only eye marks */
+  /** sparkly, wanting eyes 0 … 1: two white highlights per eye (pair with pupil 1.12+) */
+  sparkle: number;
 
   /* secondary (L5 follower targets) */
   /** ear / tuft / sprout / wing rotation offsets (all draw in `ear-l` / `ear-r` groups) */
@@ -193,8 +201,8 @@ export const NEUTRAL_POSE: Readonly<PoseTargets> = {
   headX: 0, headY: 0, headTilt: 0,
   lidL: 1, lidR: 1, gazeX: 0, gazeY: 0, pupil: 1,
   browL: 0, browR: 0, browInner: 0,
-  mouthOpen: 0, mouthWidth: 0,
-  cheek: 1, blush: 0, blushScale: 1,
+  mouthOpen: 0, mouthWidth: 0, gape: 0,
+  cheek: 1, blush: 0, blushScale: 1, puff: 0, sparkle: 0,
   earL: 0, earR: 0, earDroop: 0, tail: 0, hair: 0, acc: 0, shadow: 1,
   glow: 0, dim: 0, morph: 0, fx: 0,
 };
@@ -220,7 +228,7 @@ export type PetExpr = Expression
 /** Rhubarb / Preston Blair visemes: X rest, A closed (MBP), B teeth (EE), C open (EH), D wide (AA), E round (AO), F pucker (OO). */
 export type Viseme = 'X' | 'A' | 'B' | 'C' | 'D' | 'E' | 'F';
 /** Mouth targets a beat can name; lipsync.ts maps each to a talkMouth()/MOUTH shape. */
-export type MouthKey = Viseme | 'smile' | 'grin' | 'o' | 'w' | 'yawn' | 'sleep' | 'smirk';
+export type MouthKey = Viseme | 'smile' | 'grin' | 'o' | 'w' | 'yawn' | 'sleep' | 'smirk' | 'aah' | 'wide' | 'chew';
 
 /* ---------- particles (§3.2 layer 3): HTML divs, transform + opacity only ---------- */
 
@@ -290,6 +298,8 @@ export interface Beat {
   osc?: Oscillation | Oscillation[];
   /** freeze body channels this long (impact read); off on lite and reduced */
   hitStop?: number;
+  /** a swallow: a bulge travels down the body outline from the cheeks to the base over this many ms (off on reduced) */
+  gulp?: number;
   blink?: 'once' | 'double' | 'slow' | 'suppress' | 'allow';
   /** exempt from the ±12 % time / ±15 % amplitude jitter (chomp rhythm) */
   fixed?: boolean;

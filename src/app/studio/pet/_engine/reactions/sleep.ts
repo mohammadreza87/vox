@@ -6,22 +6,27 @@
  */
 
 import type { Beat, EventOf, Reaction } from '../types';
-import { beat, browsOn, burst, coin, cue, eared, end, osc, side, variant } from './util';
+import { beat, browsOn, burst, coin, cue, eared, end, jiggle, osc, side, variant } from './util';
 
-/** Yawn: stretch sy 1.07 (float), mouth opens over 400, eyes squeezed, a tiny tear 30 % of the time. */
+/**
+ * Yawn: a big stretch (sy 1.12, float, head back), the mouth gaping round over ~400 ms (the tongue shows), eyes
+ * squeezed, a shiver at the top, a tiny tear 30 % of the time; the exhale slumps it soft and low.
+ */
 export const yawn: Reaction<EventOf<'yawn'>> = (_e, ctx) => {
   const v = variant(ctx, 'yawn');
   const tear = coin(ctx, 0.3);
   const beats: Beat[] = [
-    beat(0, { sy: 1.07, headY: -1.5 }, 'float', { haptic: 'soft', blink: 'suppress' }),
+    beat(0, { sy: 1.12, headY: -2.5 }, 'float', { haptic: 'soft', blink: 'suppress' }),
     // the shiver at the top of the yawn
-    beat(420, {}, 'float', { osc: osc('sx', 0.012, 9, 240) }),
+    beat(420, {}, 'float', { osc: [osc('sx', 0.02, 9, 260), osc('headY', 0.5, 11, 260)] }),
     cue(60, { mouth: 'yawn', expr: 'squeeze' }),
+    beat(120, { gape: 1.2 }, 'snap'),
     ...(tear ? [cue(500, { particles: burst('tear', 1, side(ctx) < 0 ? 'eyeL' : 'eyeR') })] : []),
-    ...(v === 1 ? [beat(100, { headTilt: 6 * side(ctx) }, 'float')] : v === 2 && eared(ctx) ? [beat(100, { earDroop: 14 }, 'float')] : []),
-    ...(v === 0 ? [beat(200, {}, 'float', { osc: osc('rot', 1.5, 1.2, 700) })] : []),
+    ...(v === 1 ? [beat(100, { headTilt: 8 * side(ctx) }, 'float')] : v === 2 && eared(ctx) ? [beat(100, { earDroop: 18 }, 'float')] : []),
+    ...(v === 0 ? [beat(200, {}, 'float', { osc: osc('rot', 2.5, 1.2, 700) })] : []),
     // the exhale lets it all go: a slump, then back up slowly
-    beat(650, { sy: 0.95, headY: 1 }, 'pop', { springs: { headY: 'float' }, mouth: 'sleep', expr: 'idle' }),
+    beat(620, { gape: 0 }, 'snap'),
+    beat(650, { sy: 0.92, headY: 1.5 }, 'pop', { springs: { headY: 'float' }, mouth: 'sleep', expr: 'idle' }),
     beat(950, { sy: 1, headY: 0, headTilt: 0, earDroop: 0 }, 'sleepy', { mouth: 'X', blink: 'allow' }),
   ];
   return end(beats, 'sleepy');
@@ -83,9 +88,11 @@ export const wake: Reaction<EventOf<'wake'>> = (e, ctx) => {
         beat(60, { [first]: 1 }, 'snap'),
         beat(180, { [second]: 1 }, 'snap'),
         cue(330, { blink: 'double' }),
-        beat(400, { sy: 1.06, headY: -1 }, 'float', { mouth: 'yawn' }),
-        beat(800, { sy: 1, headY: 0 }, 'float', { mouth: 'X' }),
-        ...(v === 2 ? [beat(820, {}, 'pop', { osc: osc('rot', 2, 5, 400) })] : []),
+        // the big morning stretch with a gaping mini yawn, then a shake-off (a wiggle that ripples the body)
+        beat(400, { sy: 1.13, headY: -2 }, 'float', { mouth: 'yawn' }),
+        beat(440, { gape: 0.9 }, 'float'),
+        beat(800, { sy: 0.94, headY: 0.5, gape: 0 }, 'snap', { mouth: 'X' }),
+        beat(900, { sy: 1, headY: 0 }, 'jelly', { osc: [osc('rot', v === 2 ? 4 : 3, 5, 450), ...jiggle(ctx, 0.04, 9, 450)] }),
       ];
   if (e.grumpy) {
     beats.push(cue(850, { expr: 'grumpy', mouth: 'A' }));

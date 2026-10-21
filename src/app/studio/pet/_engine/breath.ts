@@ -46,8 +46,11 @@ const TONE: Record<MoodTone, { period: number; peak: [number, number]; inhale: n
   happy: { period: 0.9, peak: [0.98, 1.04], inhale: 0.45, sway: 1.5, swayK: 1, lid: 1, pupil: 1.06, blink: 3.2, slow: 0.03, drift: [3500, 8000], home: 0.75, inner: 0 },
 };
 
-/** The sleeper's breath: slow, deep, mostly sideways (§2.6 asleep loop). */
-const ASLEEP = { period: BREATHE.period.sleeping, peak: [BREATHE.sleepHigh.sx, BREATHE.sleepHigh.sy] as [number, number], inhale: 0.45, sway: 1, swayPeriod: 9 };
+/**
+ * The sleeper's breath (§2.6 asleep loop): slow and deep, the whole body filling up on each inhale (a pet-only
+ * peak, about 2.5× the Studio sleeper's BREATHE.sleepHigh, so the chest rise reads from across the room).
+ */
+const ASLEEP = { period: BREATHE.period.sleeping, peak: [1.03, 1.055] as [number, number], inhale: 0.45, sway: 1, swayPeriod: 9 };
 
 export function idleParams(mood: Mood, stage: Stage, t: Tuning): IdleParams {
   const tone = TONE[mood.tone] ?? TONE.content;

@@ -11,6 +11,7 @@
 import { cancelFrame, frame, type MotionStyle } from 'framer-motion';
 import { BOND_MILESTONE, type Mood } from '@/lib/pet/types';
 import { characterModel, GROUND, modelEye, stageGrowth, type CharacterModel } from '@/lib/studio/character';
+import { TONGUE_R } from '@/lib/studio/character/petFace';
 import type { CharacterLook, Stage } from '@/lib/studio/types';
 import { LISTEN, TALK } from '../../_components/character/poses';
 import { onsetDetector } from '../../_components/character/rig';
@@ -20,7 +21,7 @@ import type { EngineCue, EngineDom, GestureEvent, PetEngine, PetEngineOptions, P
 import { CROSSFADE, prepareBeats, type PreparedBeat } from './beats';
 import { BLINK_MEDIAN, Blinker } from './blink';
 import { idleParams, type IdleParams } from './breath';
-import { CLOSED_EYES, eyeOpenness, lidEye, mixMouth, petEye, petMouth, structural } from './face';
+import { CLOSED_EYES, eyeOpenness, gapeMouth, lidEye, mixMouth, petEye, petMouth, structural, tongueOf, type Bulge } from './face';
 import { follow, makeFollower, resetFollower } from './follower';
 import { Gaze } from './gaze';
 import { createGestureClassifier } from './gestures';
@@ -71,6 +72,8 @@ export interface EngineDebug {
   readonly playing: ReadonlyArray<Pick<Playing, 'kind' | 'cls' | 'start'>>;
   particles(): Array<{ kind: string; x: number; y: number; s: number; o: number }>;
   ball(): { x: number; y: number; r: number; active: boolean };
+  /** the cookie as last written (stage px; o 0 when parked) */
+  cookie(): { x: number; y: number; s: number; o: number };
   /** the spring preset most recently retargeted (frame-sheet overlay) */
   readonly lastSpring: string;
 }
@@ -83,7 +86,7 @@ export function createPetEngine(o: PetEngineOptions & EngineExtras): DebugEngine
 
 /* ---------- small helpers ---------- */
 
-const EYE_KEYS = ['w', 't', 'b', 'dx', 'dy'] as const;
+const EYE_KEYS = ['w', 't', 'b', 'dx', 'dy', 'v', 'sw'] as const;
 const MOUTH_KEYS = ['w', 'lift', 'u', 'l', 'dx'] as const;
 type ShapeSprings<K extends string> = Record<K, Spring>;
 const shapeSprings = <K extends string>(keys: readonly K[], v: Record<K, number>, p: SpringPreset): ShapeSprings<K> =>
@@ -93,6 +96,14 @@ const clamp = (v: number, a: number, b: number) => (v < a ? a : v > b ? b : v);
 const GAZE_UNITS = { eyeX: 2.4, eyeY: 1.8, headX: 2.2, headY: 1.4, lean: 2.5, lidDown: 0.18 } as const;
 
 interface ActiveOsc extends Oscillation { start: number }
+/** Swallow bulge: the bump's peak size (of the half-width) and spread (view-box units). */
+const GULP = { a: 0.12, s: 12 } as const;
+/** Chewing cheeks at puff 1: the outline bulge at the cheek line, its spread, and how much the blush swells. */
+const PUFF = { a: 0.11, s: 11, blush: 0.4 } as const;
+/** The tapped cookie's flight (ms) and where it hangs before the bite (u from the mouth, at a 200 px character). */
+const FEED_FLY = { arc: 420, hover: 280, pop: 90, hoverAt: { x: -34, y: 30 }, stretch: 0.12 } as const;
+/** Dizzy swirls turn this fast (°/s). */
+const SWIRL_SPIN = 420;
 interface Job { at: number; fn: () => void }
 
 class Engine implements PetEngine {
@@ -133,6 +144,7 @@ class Engine implements PetEngine {
   private player: Player;
   private particles: Particles;
   private oscs: ActiveOsc[] = [];
+  private gulps: Array<{ start: number; ms: number }> = [];
   private hop = new Hop();
   private hopLand = 0.12;
   /** a hop asked for while still airborne: it takes off from the landing squash instead (never a mid-air jump) */
@@ -147,7 +159,7 @@ class Engine implements PetEngine {
   private freezeFrom = -Infinity;
   private freezeUntil = -Infinity;
   private pose: PoseTargets = { ...NEUTRAL_POSE };
-  private sec = { earL: 0, earR: 0, tail: 0, hairY: 0, hairSy: 1, accY: 0, cheek: 1, shadow: 1 };
+  private sec = { earL: 0, earR: 0, tail: 0, hairY: 0, hairSy: 1, accY: 0, cheek: 1, shadow: 1, puff: 0 };
 
   /* faces and gaze overrides */
   private exprOv: { expr: PetExpr; id: number } | null = null;
@@ -176,6 +188,8 @@ class Engine implements PetEngine {
   private lip: TextLipSync | AudioLipSync | null = null;
   private lipOut = { open: 0, width: 0 };
   private onset = onsetDetector(TALK);
+  /** the cookie as last written (frame sheets draw it) */
+  private cookieDrawn = { x: 0, y: 0, s: 1, o: 0 };
   private cookie: { el: HTMLElement | null; state: 'idle' | 'held' | 'flying' | 'back'; pos: Point; from: Point; t0: number; reach: boolean } = { el: null, state: 'idle', pos: { x: 0, y: 0 }, from: { x: 0, y: 0 }, t0: 0, reach: false };
   private bop: { ball: Ball; el: HTMLElement | null; on: boolean; t0: number; bops: number; misses: number; respawnAt: number; jumpAt: number; follow: Spring } = { ball: new Ball(), el: null, on: false, t0: 0, bops: 0, misses: 0, respawnAt: Infinity, jumpAt: -Infinity, follow: makeSpring(0, 'float') };
 
@@ -248,7 +262,7 @@ class Engine implements PetEngine {
       release: (c, kc) => {
         const s = this.shot[c];
         // a full spin releases from the same angle (360 ≡ 0), never back the way it came
-        if (c === 'rot' && Math.abs(s.x) >= 180) { const w = 360 * Math.round(s.x / 360); s.x -= w; s.t -= w; }
+        if (c === 'rot' && Math.abs(s.x) >= 180) { const w = 360 * Math.round(s.x / 360); s.x -= w; s.t -= w; this.secondary.unwind(w); }
         retarget(s, NEUTRAL_POSE[c], kc);
       },
       effects: (b, p, now) => this.effects(b, p, now),
@@ -468,6 +482,7 @@ class Engine implements PetEngine {
       get tuning() { return me().tuning; },
       get playing() { return me().player.playing.map((p) => ({ kind: p.kind, cls: p.cls, start: p.start })); },
       particles: () => me().particles.snapshot(),
+      cookie: () => ({ ...me().cookieDrawn }),
       ball: () => ({ x: me().bop.ball.x, y: me().bop.ball.y, r: me().bop.ball.r, active: me().bop.ball.active }),
       get lastSpring() { return me().lastSpring; },
     };
@@ -514,7 +529,7 @@ class Engine implements PetEngine {
   /** Is anything still moving (or due within a frame)? */
   private busy(now: number): boolean {
     if (!this.running) return false;
-    if (this.player.playing.length || this.oscs.length || this.lip || this.drag || this.settle || this.hop.active || this.fling.active || this.home) return true;
+    if (this.player.playing.length || this.oscs.length || this.gulps.length || this.lip || this.drag || this.settle || this.hop.active || this.fling.active || this.home) return true;
     if (this.bop.on || this.cookie.state !== 'idle' || this.particles.live > 0 || now < this.freezeUntil) return true;
     if (this.talkState === 'thinking' || this.blink.busy(now) || this.blink.nextWake() <= now + 16) return true;
     if (!this.gaze.atRest() || !atRest(this.impact) || !atRest(this.swell) || !Object.values(this.breath).every((s) => atRest(s))) return true;
@@ -609,7 +624,9 @@ class Engine implements PetEngine {
     if (closed) Object.assign(t, { lidL: 1, lidR: 1, pupil: 1, browInner: 0, y: 1.5, headY: 1, sy: 0.985, earDroop: 10, dim: this.asleep ? 0.55 : 0 });
     if (this.mood.level === 'droopy' && !closed) t.earDroop = 8;
     if (this.mood.tone === 'tired' && this.look.species === 'bunny' && !closed) t.earDroop = 20;
-    if (this.cookie.state === 'held') Object.assign(t, { pupil: 1.12, lidL: 1, lidR: 1 });
+    // the cookie is up: sparkly, dilated, wide-open eyes locked on it (wanting)
+    t.sparkle = 0;
+    if (this.cookie.state === 'held' || this.cookie.state === 'flying') Object.assign(t, { pupil: 1.16, lidL: 1, lidR: 1, sparkle: 1 });
     if (this.drag) t.shadow = 0.8;
     const perk: ReadonlySet<Channel> = new Set<Channel>(listening ? ['sx', 'sy', 'pupil', 'browL', 'browR', 'earL', 'earR'] : []);
     for (const c of Object.keys(t) as Channel[]) {
@@ -643,8 +660,8 @@ class Engine implements PetEngine {
   }
 
   private eyeTarget(expr: PetExpr) {
-    const e = modelEye(this.model, petEye(expr, this.stage));
-    return { w: e.w, t: e.t, b: e.b, dx: e.dx ?? 0, dy: e.dy ?? 0 };
+    const pe = petEye(expr, this.stage), e = modelEye(this.model, pe);
+    return { w: e.w, t: e.t, b: e.b, dx: e.dx ?? 0, dy: e.dy ?? 0, v: pe.v ?? 0, sw: pe.sw ?? 0 };
   }
 
   /** The current face: the reaction's override, else the state's. */
@@ -669,6 +686,8 @@ class Engine implements PetEngine {
 
   private stepFace(now: number, dt: number): void {
     const expr = this.currentExpr();
+    // suppression first: a reaction that holds the eyes open (the cookie notice) never gets a face-change blink
+    this.blink.suppress(CLOSED_EYES.has(expr) || this.suppressBy !== null || this.asleep || this.dozing, now);
     const key = `${expr}|${this.stage}`;
     if (key !== this.eyeKey) {
       this.eyeKey = key;
@@ -749,7 +768,11 @@ class Engine implements PetEngine {
     } else if (this.fling.active || this.home || this.fling.x !== 0 || this.fling.y !== 0) {
       x += this.fling.x + (this.home ? this.hop.x : 0); y += this.fling.y; rot += this.fling.rot; vy = this.fling.vy;
     }
-    if (vs && vy !== 0 && !this.drag) stretch *= velocityStretch(vy * 0.5);
+    // in flight the body stretches along its velocity (a sideways throw goes long and flat, a lob tall and thin)
+    if (vs && !this.drag && this.fling.active) {
+      const fx = this.fling.vx, fy = this.fling.vy, v = Math.hypot(fx, fy), e = v > 1 ? (fy * fy - fx * fx) / (v * v) : 0;
+      stretch *= 1 + (velocityStretch(v * 0.5) - 1) * e;
+    } else if (vs && vy !== 0 && !this.drag) stretch *= velocityStretch(vy * 0.5);
     // speaking: each syllable lifts the body a little and stretches it from the ground (TALK, existing rig numbers)
     const o = this.lipOut.open;
     if (o > 0.001) { y -= TALK.lift * o; stretch *= 1 + TALK.stretch * o; mul('sx', 1 - TALK.narrow * o); }
@@ -760,6 +783,11 @@ class Engine implements PetEngine {
     if (this.swell.x > 0.001 && this.talkState === 'listening') { const s = 1 + this.swell.x * LISTEN.levelSwell; mul('sx', s); mul('sy', s); }
     // thinking sways slowly (±2°, 2.4 s)
     if (this.talkState === 'thinking' && this.tier !== 'reduced') rot += 2 * Math.sin(((now - this.thinkSince) / 2400) * Math.PI * 2);
+    // the held "aaah": a tiny tremble of the wide-open mouth and body while the cookie is right there
+    if (this.cookie.reach && this.tier !== 'reduced') {
+      const g = clamp((this.base.gape.x - 1.3) / 0.6, 0, 1), ts = now / 1000;
+      if (g > 0) { add('gape', 0.1 * g * Math.sin(2 * Math.PI * 11 * ts)); mul('sx', 1 + 0.012 * g * Math.sin(2 * Math.PI * 13 * ts)); add('headY', 0.35 * g * Math.sin(2 * Math.PI * 9 * ts)); }
+    }
     // the Bop shuffle under the ball
     if (this.bop.on && this.tier !== 'reduced') x += this.bop.follow.x;
     if (x) add('x', x);
@@ -908,12 +936,23 @@ class Engine implements PetEngine {
     const ex = this.gaze.ex.x + p.gazeX, ey = this.gaze.ey.x + p.gazeY;
     const eye = (i: 0 | 1) => {
       const sp = this.eyes[i];
-      const base = { w: sp.w.x, t: sp.t.x, b: sp.b.x, dx: sp.dx.x + ex * GAZE_UNITS.eyeX, dy: sp.dy.x + ey * GAZE_UNITS.eyeY };
+      const base = { w: sp.w.x, t: sp.t.x, b: sp.b.x, dx: sp.dx.x + ex * GAZE_UNITS.eyeX, dy: sp.dy.x + ey * GAZE_UNITS.eyeY, v: sp.v.x, sw: sp.sw.x };
       return lidEye(base, (i ? p.lidR : p.lidL) * (1 - down), clamp(p.pupil, 0.6, 1.3));
     };
     const eL = eye(0), eR = eye(1);
     const oL = eyeOpenness(eL), oR = eyeOpenness(eR);
     const mouthBase = { w: this.mouth.w.x, lift: this.mouth.lift.x, u: this.mouth.u.x, l: this.mouth.l.x, dx: this.mouth.dx.x };
+    const mouth = gapeMouth(mixMouth(mouthBase, clamp(p.mouthOpen + this.lipOut.open, 0, 1), p.mouthWidth + this.lipOut.width, this.stage), clamp(p.gape, 0, 2.3), this.stage);
+    const mo = m.face.mouth, tg = m.face.mouthKind === 'lens' && this.stage >= 2 ? tongueOf(mouth, mo.x, mo.y) : null;
+    const puff = Math.max(0, s.puff);
+    // the cheeks puff out on the outline; a swallow's bump travels from the cheeks down to the base
+    const bulges: Bulge[] = [];
+    if (puff > 1e-3 && this.tier !== 'reduced') bulges.push({ y: m.face.cheeks.y + 2, a: PUFF.a * puff, s: PUFF.s });
+    this.gulps = this.gulps.filter((g) => now - g.start < g.ms);
+    for (const g of this.gulps) {
+      const u = (now - g.start) / g.ms;
+      bulges.push({ y: m.face.cheeks.y + 4 + (GROUND - 10 - m.face.cheeks.y - 4) * u * u * (3 - 2 * u), a: GULP.a * Math.sin(Math.PI * u), s: GULP.s });
+    }
     const amp = this.breath.amp.x;
     const idle = this.idle;
     // the stage-up: the body grows from the old stage's size while its path tweens
@@ -932,14 +971,18 @@ class Engine implements PetEngine {
       shadow: { y: 0, rot: 0, s: s.shadow, o: clamp(0.55 + 0.45 * s.shadow, 0, 1) * this.spinShade(p) },
       earL: s.earL, earR: s.earR, tail: s.tail,
       lids: lid,
-      blush: { o: clamp(p.blush, 0, 1), s: p.blushScale },
-      cheeks: s.cheek,
+      blush: { o: clamp(p.blush, 0, 1), s: p.blushScale * (1 + PUFF.blush * puff) },
+      cheeks: s.cheek * (1 + PUFF.blush * puff),
       eyeL: eL, eyeR: eR,
       eyeStroke: [1 - oL, 1 - oR],
       glint: 0.72 * Math.min(oL, oR),
-      mouth: mixMouth(mouthBase, clamp(p.mouthOpen + this.lipOut.open, 0, 1), p.mouthWidth + this.lipOut.width, this.stage),
+      mouth,
       brows: { l: p.browL, r: p.browR, inner: p.browInner, arch: this.asleep || this.dozing ? 0.3 : 1 },
       morph: clamp(p.morph, 0, 1),
+      bulges,
+      tongue: tg ? { x: tg.x - mo.x, y: tg.y - mo.y, sx: tg.rx / TONGUE_R, sy: tg.ry / TONGUE_R, o: tg.o } : { x: 0, y: 0, sx: 1, sy: 1, o: 0 },
+      sparkle: { x: eL.dx ?? 0, y: eL.dy ?? 0, o: clamp(p.sparkle, 0, 1) * Math.min(oL, oR) },
+      swirl: { x: eL.dx ?? 0, y: eL.dy ?? 0, rot: ((now / 1000) * SWIRL_SPIN) % 360, o: clamp(Math.min(eL.sw ?? 0, eR.sw ?? 0), 0, 1) },
       dim: clamp(p.dim, 0, 0.55),
       glow: clamp(p.glow, 0, 1),
     };
@@ -991,6 +1034,7 @@ class Engine implements PetEngine {
     if (b.hop) this.launchHop(b.hop.h, b.hop.land ?? 0.12);
     if (b.osc) for (const q of Array.isArray(b.osc) ? b.osc : [b.osc]) this.oscs.push({ ...q, start: now });
     // hit-stop: once the impact pose has (nearly) arrived, hold the body there (the impact read)
+    if (b.gulp) this.gulps.push({ start: now, ms: b.gulp });
     if (b.hitStop) { this.freezeFrom = now + b.settleMs * 0.45; this.freezeUntil = this.freezeFrom + b.hitStop; }
     if (b.blink === 'suppress') this.suppressBy = p.id;
     else if (b.blink === 'allow') { if (this.suppressBy === p.id) this.suppressBy = null; }
@@ -1020,7 +1064,7 @@ class Engine implements PetEngine {
         if (this.dozing) { this.wakeUp(now, 'doze'); return true; }
         // the first deformation lands in this same handler: squash toward the ground, leaning off the finger
         const sideK = e.hit.side;
-        const squash = e.hit.zone === 'head' ? 0.92 : e.hit.zone === 'eye' ? 0.96 : 0.9;
+        const squash = e.hit.zone === 'head' ? 0.88 : e.hit.zone === 'eye' ? 0.92 : 0.87;
         this.player.play('poke', 'touch', prepareBeats([
           { at: 0, target: { sy: squash, x: -sideK * 1.2 }, spring: 'eye' },
           { at: 140, target: {}, spring: 'jelly', release: 'jelly' },
@@ -1127,6 +1171,7 @@ class Engine implements PetEngine {
   private mouthStage(): Point { return toStage(anchorModel('mouth', this.model, null), this.scene, this.placement()); }
 
   private writeCookie(p: Point, s: number, o: number): void {
+    this.cookieDrawn = { x: p.x, y: p.y, s, o };
     const el = this.cookie.el;
     if (!el) return;
     if (o <= 0) { park(el); return; }
@@ -1155,6 +1200,8 @@ class Engine implements PetEngine {
     // missed the mouth: it springs back to its slot
     this.cookie = { ...this.cookie, state: 'back', from: at, t0: now, reach: false };
     retarget(this.base.mouthOpen, 0, presetKC('snap'));
+    retarget(this.base.gape, 0, presetKC('snap'));
+    retarget(this.base.headY, 0, presetKC('snap'));
     this.applyState(now);
   }
 
@@ -1163,21 +1210,38 @@ class Engine implements PetEngine {
     if (this.cookie.state !== 'idle' || this.player.top() === 'eat') return;
     this.cookie = { ...this.cookie, state: 'flying', from: this.scene.toys.cookie, pos: this.scene.toys.cookie, t0: now, reach: false };
     this.play({ type: 'feed', phase: 'notice' }, now);
+    this.applyState(now);
     this.wake();
   }
 
-  /** The cookie in flight or held: the mouth opens as it comes in reach (1 − dist/120, shape D), lean + stretch. */
+  /**
+   * The cookie in flight or held. Tapped, it arcs up to just under the chin (FEED_FLY.arc), hangs there while the
+   * mouth holds its wide "aaah" (FEED_FLY.hover), then pops in (FEED_FLY.pop). In reach (120 u) the mouth gapes
+   * with the distance: closed → 'aah' → widest by 45 u; the body stretches toward it (sy up to 1.12, volume kept)
+   * and leans after it.
+   */
   private stepCookie(now: number): void {
     const c = this.cookie;
     if (c.state === 'idle') return;
     const mouth = this.mouthStage();
     if (c.state === 'flying') {
-      // an arc from the toy slot into the mouth over 450 ms
-      const u = clamp((now - c.t0) / 450, 0, 1), e = u * u * (3 - 2 * u);
-      const apex = 60 * this.k;
-      c.pos = { x: c.from.x + (mouth.x - c.from.x) * e, y: c.from.y + (mouth.y - c.from.y) * e - apex * 4 * u * (1 - u) };
-      this.writeCookie(c.pos, 1 - 0.2 * u, 1);
-      if (u >= 1) { this.eat(now); return; }
+      const t = now - c.t0, F = FEED_FLY;
+      const hover = { x: mouth.x + F.hoverAt.x * this.k, y: mouth.y + F.hoverAt.y * this.k };
+      if (t < F.arc) {
+        const u = t / F.arc, e = u * u * (3 - 2 * u), apex = 60 * this.k;
+        c.pos = { x: c.from.x + (hover.x - c.from.x) * e, y: c.from.y + (hover.y - c.from.y) * e - apex * 4 * u * (1 - u) };
+        this.writeCookie(c.pos, 1 - 0.1 * u, 1);
+      } else if (t < F.arc + F.hover) {
+        // it hangs there, bobbing a little: the held breath before the bite
+        const h = (t - F.arc) / 1000;
+        c.pos = { x: hover.x, y: hover.y - Math.sin(2 * Math.PI * 3 * h) * 2 * this.k };
+        this.writeCookie(c.pos, 0.9, 1);
+      } else {
+        const u = clamp((t - F.arc - F.hover) / F.pop, 0, 1), e = u * u;
+        c.pos = { x: hover.x + (mouth.x - hover.x) * e, y: hover.y + (mouth.y - hover.y) * e };
+        this.writeCookie(c.pos, 0.9 - 0.3 * e, 1);
+        if (u >= 1) { this.eat(now); return; }
+      }
     } else if (c.state === 'back') {
       const u = clamp((now - c.t0) / 320, 0, 1), e = 1 - (1 - u) ** 3;
       const slot = this.scene.toys.cookie;
@@ -1188,21 +1252,34 @@ class Engine implements PetEngine {
     } else this.writeCookie(c.pos, 1.1, 1);
     const d = Math.hypot(c.pos.x - mouth.x, c.pos.y - mouth.y) / this.k;
     const reach = d < 120;
-    const open = reach ? clamp(1 - d / 120, 0, 1) : 0;
+    // 0 at the edge of reach, 1 from 45 u in: the gape runs closed → 'aah' → widest along it
+    const near = reach ? clamp((120 - d) / 75, 0, 1) : 0;
+    const open = near * near * (3 - 2 * near);
     if (reach && !c.reach) this.play({ type: 'feed', phase: 'approach', dist: d }, now);
+    // the wanting face holds for as long as the cookie stays in reach
+    if (reach) this.player.extend('feed', now + 150);
     if (reach !== c.reach) { c.reach = reach; this.mouthKeyNow = ''; }
     // continuous: the mouth follows the distance, the body leans and stretches toward it
-    retarget(this.base.mouthOpen, open, presetKC('snap'));
-    retarget(this.base.sy, 1 + 0.06 * open, presetKC('snap'));
-    retarget(this.base.sx, volumeSx(1 + 0.06 * open, this.tuning.alpha), presetKC('snap'));
-    if (this.tier !== 'reduced') retarget(this.base.lean, this.tuning.leanBias + clamp((c.pos.x - mouth.x) / this.k / 20, -4, 4) * open, presetKC('float'));
+    const reduced = this.tier === 'reduced';
+    retarget(this.base.gape, 2 * open, presetKC('snap'));
+    const sy = 1 + (reduced ? 0.03 : FEED_FLY.stretch) * open;
+    retarget(this.base.sy, sy, presetKC('snap'));
+    retarget(this.base.sx, volumeSx(sy, this.tuning.alpha), presetKC('snap'));
+    if (!reduced) {
+      retarget(this.base.lean, this.tuning.leanBias + clamp((c.pos.x - mouth.x) / this.k / 12, -7, 7) * open, presetKC('float'));
+      retarget(this.base.headY, -2.5 * open, presetKC('snap'));
+    }
   }
 
   /** Bite → chomp ×3–4 → swallow → satisfied; the care cue goes out when the bite lands. */
   private eat(now: number): void {
     this.cookie = { ...this.cookie, state: 'idle', reach: false };
     this.writeCookie(this.mouthStage(), 0.6, 0);
+    // the mouth snaps shut on the cookie and the reach stretch lets go at once (the bite's squash reads in full)
     retarget(this.base.mouthOpen, 0, presetKC('eye'));
+    retarget(this.base.gape, 0, presetKC('eye'));
+    for (const c of ['sy', 'sx', 'headY'] as const) retarget(this.base[c], NEUTRAL_POSE[c], presetKC('eye'));
+    retarget(this.base.lean, this.tuning.leanBias, presetKC('snap'));
     this.applyState(now);
     const chain: Array<ReactionEvent> = [
       { type: 'feed', phase: 'bite' },

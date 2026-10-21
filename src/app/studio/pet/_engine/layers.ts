@@ -7,10 +7,10 @@
  */
 
 import { motionValue, type MotionStyle, type MotionValue } from 'framer-motion';
-import { BEAK_DROP, beakLowerD, beakMouth, eyeD, GROUND, INK, mouthD, mouthOpenness, type CharacterModel, type EyeShape, type MouthShape } from '@/lib/studio/character';
+import { BEAK_DROP, beakLowerD, beakMouth, GROUND, INK, mouthD, type CharacterModel } from '@/lib/studio/character';
 import type { RigBindings } from '../../_components/character/CharacterView';
 import { BREATH_VARS } from './breath';
-import { browsD, lerpPath } from './face';
+import { beakOpen, browsD, bulgePath, lerpPath, petEyeD, petMouthD, type Bulge, type PetEyeShape, type PetMouthShape } from './face';
 import { follow, followerAtRest, makeFollower, resetFollower, retune } from './follower';
 import type { Tuning } from './species';
 import { atRest, makeSpring, settle, step } from './spring';
@@ -55,9 +55,9 @@ export const BODY: ReadonlySet<Channel> = new Set<Channel>(['x', 'y', 'sx', 'sy'
 /** Head height above the ground (px at 200): a stretch moves the head by (sy − 1)·this. */
 const HEAD_H = 118;
 /** Ear swing per px of vertical lag, per ° of rotation lag (floppy ears swing more). */
-const EAR_GAIN = { v: 0.42, floppyV: 0.9, r: 0.9 };
+const EAR_GAIN = { v: 0.42, floppyV: 0.9, r: 0.9, rMax: 24 };
 
-export interface SecondaryOut { earL: number; earR: number; tail: number; hairY: number; hairSy: number; accY: number; cheek: number; shadow: number }
+export interface SecondaryOut { earL: number; earR: number; tail: number; hairY: number; hairSy: number; accY: number; cheek: number; shadow: number; puff: number }
 
 export class Secondary {
   private earL: Follower;
@@ -67,10 +67,11 @@ export class Secondary {
   private hairV: Follower;
   private tailR: Follower;
   private cheek: Follower = makeFollower(1, 'cheek');
+  private puff: Follower = makeFollower(0, 'cheek');
   private shadow: Follower = makeFollower(1, 'shadow');
   private floppy = false;
   private acc = 0;
-  out: SecondaryOut = { earL: 0, earR: 0, tail: 0, hairY: 0, hairSy: 1, accY: 0, cheek: 1, shadow: 1 };
+  out: SecondaryOut = { earL: 0, earR: 0, tail: 0, hairY: 0, hairSy: 1, accY: 0, cheek: 1, shadow: 1, puff: 0 };
 
   constructor(private t: Tuning) {
     const ear = t.ear ?? FOLLOWERS.ear;
@@ -104,29 +105,36 @@ export class Secondary {
     const lagH = follow(this.hairV, v, dt) - v;
     this.out = {
       // ears flop outward when the head leaves them behind, and trail the body's rotation
-      earL: tl - gv * lagV + EAR_GAIN.r * lagR,
-      earR: tr + gv * lagV + EAR_GAIN.r * lagR,
+      // (a spin's rotation lag is capped: the ears trail it, they never wind round the head)
+      earL: tl - gv * lagV + EAR_GAIN.r * Math.max(-EAR_GAIN.rMax, Math.min(EAR_GAIN.rMax, lagR)),
+      earR: tr + gv * lagV + EAR_GAIN.r * Math.max(-EAR_GAIN.rMax, Math.min(EAR_GAIN.rMax, lagR)),
       tail: follow(this.tailR, rot + p.tail, dt) - rot + lagH * 0.4,
       hairY: p.hair + lagH * 0.16,
       hairSy: 1 + Math.max(-0.06, Math.min(0.06, lagH * 0.004)),
       accY: p.acc + lagH * 0.24,
       cheek: follow(this.cheek, p.cheek, dt),
+      puff: follow(this.puff, p.puff, dt),
       // the contact shadow shrinks and fades as the body leaves the ground
       shadow: follow(this.shadow, p.shadow * (1 - Math.min(1, Math.max(0, -p.y / 120)) * 0.45), dt),
     };
     return this.out;
   }
 
+  /** A full spin was let go from the same angle (rot − w): the followers that trail the rotation move with it. */
+  unwind(w: number): void {
+    for (const f of [this.headR, this.tailR]) { f.y -= w; f.xp -= w; }
+  }
+
   atRest(): boolean {
     // every follower is checked (and settled) even after one is found moving
-    return [this.earL, this.earR, this.headV, this.headR, this.hairV, this.tailR, this.cheek, this.shadow].map((f) => followerAtRest(f)).every(Boolean);
+    return [this.earL, this.earR, this.headV, this.headR, this.hairV, this.tailR, this.cheek, this.shadow, this.puff].map((f) => followerAtRest(f)).every(Boolean);
   }
 
   reset(p: PoseTargets): void {
     const v = p.y - (p.sy - 1) * HEAD_H, rot = p.rot + p.lean + p.headTilt;
     resetFollower(this.earL, p.earL - p.earDroop); resetFollower(this.earR, p.earR + p.earDroop);
     resetFollower(this.headV, v); resetFollower(this.headR, rot); resetFollower(this.hairV, v); resetFollower(this.tailR, rot + p.tail);
-    resetFollower(this.cheek, p.cheek); resetFollower(this.shadow, p.shadow);
+    resetFollower(this.cheek, p.cheek); resetFollower(this.shadow, p.shadow); resetFollower(this.puff, p.puff);
     this.update(p, 0, 'full');
   }
 }
@@ -150,15 +158,22 @@ export interface RigFrame {
   lids: number;
   blush: { o: number; s: number };
   cheeks: number;
-  eyeL: EyeShape;
-  eyeR: EyeShape;
+  eyeL: PetEyeShape;
+  eyeR: PetEyeShape;
   /** eye stroke weight (0 a filled oval … the model's stroke on a closed arc) and the catch-light opacity */
   eyeStroke: [number, number];
   glint: number;
-  mouth: MouthShape;
+  mouth: PetMouthShape;
   brows: { l: number; r: number; inner: number; arch: number };
   /** stage-up body tween 0 old … 1 new */
   morph: number;
+  /** body outline bumps (puffed cheeks, a gulp travelling down); empty at rest */
+  bulges: Bulge[];
+  /** pet-only marks: the tongue (offset/scale of its base circle at the mouth centre), sparkle highlights (offset with
+   *  the gaze), dizzy swirls (offset, turn); each opacity 0 at rest */
+  tongue: { x: number; y: number; sx: number; sy: number; o: number };
+  sparkle: { x: number; y: number; o: number };
+  swirl: { x: number; y: number; rot: number; o: number };
   dim: number;
   glow: number;
 }
@@ -180,7 +195,7 @@ const r2 = (n: number) => Math.round(n * 100) / 100;
 const r3 = (n: number) => Math.round(n * 1000) / 1000;
 
 /** Transform groups by priority: the first ones win when a frame is over budget (the rest go next frame). */
-const GROUPS = ['face', 'lids', 'earL', 'earR', 'shadow', 'blush', 'cheeks', 'hair', 'accSoft', 'accRigid', 'tail', 'fx'] as const;
+const GROUPS = ['face', 'lids', 'earL', 'earR', 'shadow', 'blush', 'cheeks', 'tongue', 'sparkle', 'swirl', 'hair', 'accSoft', 'accRigid', 'tail', 'fx'] as const;
 type Group = (typeof GROUPS)[number];
 const MORPHS = ['mouth', 'beak', 'eyeL', 'eyeR', 'brows', 'body'] as const;
 type Morph = (typeof MORPHS)[number];
@@ -212,6 +227,9 @@ export class RigWriter {
       glint: { opacity: n('glint', 0.72) },
       blush: { opacity: n('blushO', 0), scale: n('blushS', 1) },
       cheeks: { scale: n('cheeks', 1) },
+      tongue: { x: n('tgX', 0), y: n('tgY', 0), scaleX: n('tgSx', 1), scaleY: n('tgSy', 1), opacity: n('tgO', 0) },
+      sparkle: { x: n('spX', 0), y: n('spY', 0), opacity: n('spO', 0) },
+      swirl: { x: n('swX', 0), y: n('swY', 0), rotate: n('swR', 0), opacity: n('swO', 0) },
       earL: { rotate: n('earL', 0) },
       earR: { rotate: n('earR', 0) },
       tail: { rotate: n('tail', 0) },
@@ -266,6 +284,10 @@ export class RigWriter {
       shadow: [['shY', -f.body.y / (f.body.sy * g)], ['shR', -f.body.rot], ['shS', f.shadow.s], ['shO', f.shadow.o]],
       blush: [['blushO', f.blush.o], ['blushS', f.blush.s]],
       cheeks: [['cheeks', f.cheeks]],
+      // an invisible mark only writes its opacity (talking moves the mouth every frame: no hidden tongue work)
+      tongue: f.tongue.o < 0.01 ? [['tgO', 0]] : [['tgX', f.tongue.x], ['tgY', f.tongue.y], ['tgSx', f.tongue.sx], ['tgSy', f.tongue.sy], ['tgO', f.tongue.o]],
+      sparkle: f.sparkle.o < 0.01 ? [['spO', 0]] : [['spX', f.sparkle.x], ['spY', f.sparkle.y], ['spO', f.sparkle.o]],
+      swirl: f.swirl.o < 0.01 ? [['swO', 0]] : [['swX', f.swirl.x], ['swY', f.swirl.y], ['swR', f.swirl.rot], ['swO', f.swirl.o]],
       hair: [['hairY', f.hair.y], ['hairSy', f.hair.sy]],
       accSoft: [['asY', f.accSoft.y]],
       accRigid: [['arX', f.accRigid.x], ['arY', f.accRigid.y], ['arR', f.accRigid.rot]],
@@ -289,12 +311,12 @@ export class RigWriter {
     const e = m.face.eyes, bk = m.face.beak;
     const mouth = bk ? beakMouth(f.mouth) : f.mouth;
     const paths: Record<Morph, string | null> = {
-      mouth: mouthD(m.face.mouth.x, m.face.mouth.y, mouth),
-      beak: bk ? beakLowerD(bk.x, bk.top, bk.k, Math.round(mouthOpenness(f.mouth) * BEAK_DROP * bk.k * 10) / 10) : null,
-      eyeL: eyeD(e[0].cx, e[0].cy, f.eyeL),
-      eyeR: eyeD(e[1].cx, e[1].cy, f.eyeR),
+      mouth: bk ? mouthD(m.face.mouth.x, m.face.mouth.y, mouth) : petMouthD(m.face.mouth.x, m.face.mouth.y, mouth),
+      beak: bk ? beakLowerD(bk.x, bk.top, bk.k, Math.round(beakOpen(f.mouth) * BEAK_DROP * bk.k * 10) / 10) : null,
+      eyeL: petEyeD(e[0].cx, e[0].cy, f.eyeL, 1),
+      eyeR: petEyeD(e[1].cx, e[1].cy, f.eyeR, -1),
       brows: browsD(e, f.brows.l, f.brows.r, f.brows.inner, f.brows.arch),
-      body: lerpPath(geom.fromBodyD, m.bodyD, f.morph),
+      body: bulgePath(lerpPath(geom.fromBodyD, m.bodyD, f.morph), m.pivots.body[0], f.bulges),
     };
     const key: Record<Morph, keyof typeof this.s> = { mouth: 'mouthD', beak: 'beakD', eyeL: 'eyeLD', eyeR: 'eyeRD', brows: 'browsD', body: 'bodyD' };
     const mBudget = tier === 'reduced' ? Infinity : TIER_BUDGET[tier].morphs;

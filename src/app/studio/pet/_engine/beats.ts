@@ -27,7 +27,7 @@ export const CROSSFADE = springKC(0.15, 0);
 /** Channels a reduced-motion beat never moves (translation, rotation, secondary swing). */
 export const REDUCED_DROP: ReadonlySet<Channel> = new Set<Channel>(['x', 'y', 'rot', 'lean', 'headX', 'headY', 'headTilt', 'earL', 'earR', 'earDroop', 'tail', 'hair', 'acc']);
 /** Channels whose values are levels, not amplitudes: never jittered. */
-const LEVELS: ReadonlySet<Channel> = new Set<Channel>(['dim', 'glow', 'morph', 'fx', 'blush', 'mouthOpen', 'lidL', 'lidR', 'gazeX', 'gazeY']);
+const LEVELS: ReadonlySet<Channel> = new Set<Channel>(['dim', 'glow', 'morph', 'fx', 'blush', 'mouthOpen', 'lidL', 'lidR', 'gazeX', 'gazeY', 'sparkle']);
 /** Reduced motion keeps scale changes small (a crossfade, not a squash). */
 const REDUCED_SCALE = 0.04;
 
@@ -41,7 +41,7 @@ export interface PrepareOpts {
   exact?: boolean;
 }
 
-const clampLevel = (c: Channel, v: number) => (c === 'lidL' || c === 'lidR' ? Math.max(0.05, v) : c === 'blush' || c === 'mouthOpen' || c === 'fx' || c === 'glow' || c === 'morph' ? Math.max(0, Math.min(1, v)) : v);
+const clampLevel = (c: Channel, v: number) => (c === 'lidL' || c === 'lidR' ? Math.max(0.05, v) : c === 'blush' || c === 'mouthOpen' || c === 'fx' || c === 'glow' || c === 'morph' || c === 'sparkle' ? Math.max(0, Math.min(1, v)) : v);
 
 export function prepareBeats(beats: readonly Beat[], o: PrepareOpts): PreparedBeat[] {
   const tf = (o.exact ? 1 : range(o.rng, 1 - JITTER.time, 1 + JITTER.time)) / (o.tempo ?? 1);
@@ -79,6 +79,7 @@ export function prepareBeats(beats: readonly Beat[], o: PrepareOpts): PreparedBe
       if (reduced) delete prepared.osc;
       else prepared.osc = (Array.isArray(b.osc) ? b.osc : [b.osc]).map((x): Oscillation => ({ ...x, amp: x.amp * a, ms: x.ms * t, hz: x.hz / t }));
     }
+    if (b.gulp !== undefined) { if (reduced) delete prepared.gulp; else prepared.gulp = b.gulp * t; }
     if (b.hitStop !== undefined) { if (budget.hitStop) prepared.hitStop = b.hitStop; else delete prepared.hitStop; }
     if (b.particles) prepared.particles = particlesFor(b.particles, o.tier);
     if (reduced && b.look === 'away') delete prepared.look;
@@ -103,6 +104,6 @@ export function particlesFor(p: ParticleBurst | ParticleBurst[], tier: Tier): Pa
 }
 
 /** When a prepared timeline has played out: the last moment any beat's springs are still travelling. */
-export const timelineEnd = (beats: readonly PreparedBeat[]) => beats.reduce((m, b) => Math.max(m, b.at + b.settleMs * 0.8 + (b.hitStop ?? 0) + oscMs(b) + hopMs(b)), 0);
+export const timelineEnd = (beats: readonly PreparedBeat[]) => beats.reduce((m, b) => Math.max(m, b.at + b.settleMs * 0.8 + (b.hitStop ?? 0) + oscMs(b) + hopMs(b), b.at + (b.gulp ?? 0)), 0);
 const oscMs = (b: Beat) => (b.osc ? Math.max(...(Array.isArray(b.osc) ? b.osc : [b.osc]).map((o) => o.ms)) : 0);
 const hopMs = (b: Beat) => (b.hop ? 2 * Math.sqrt((2 * b.hop.h) / 2400) * 1000 + 160 : 0);

@@ -92,9 +92,13 @@ export const nod: Reaction<EventOf<'nod'>> = (_e, ctx) => {
 export const wave: Reaction<EventOf<'wave'>> = (_e, ctx) => {
   const v = variant(ctx, 'wave');
   const ear = eared(ctx) && v !== 1;
+  // a big friendly wave: an ear (or the whole body rocking ±9°) swinging, the head swaying with it, a bounce, a hop
   const beats: Beat[] = [
-    beat(0, { sy: 1.02 }, 'snap', { expr: 'happy', mouth: 'grin', haptic: 'light', look: 'user', osc: ear ? osc('earR', -16, 2.4, 900, false) : osc('rot', 6, 2.2, 900, false) }),
-    beat(900, { sy: 1 }, 'snap', { hop: { h: v === 2 ? 8 : 6, land: 0.08 } }),
+    beat(0, { sy: 1.06 }, 'snap', { expr: 'happy', mouth: 'grin', haptic: 'light', look: 'user', osc: [ear ? osc('earR', -24, 2.4, 900, false) : osc('rot', 9, 2.2, 900, false), osc('headTilt', ear ? 5 : -4, 2.4, 900, false), osc('sy', 0.025, 4.8, 900)] }),
+    beat(160, { sy: 1 }, 'jelly'),
+    beat(820, { sy: 0.9 }, 'snap'),
+    beat(920, { sy: 1.08 }, 'snap', { hop: { h: v === 2 ? 12 : 9, land: 0.12 } }),
+    beat(1050, { sy: 1 }, 'pop'),
     cue(1400, { expr: 'idle', mouth: 'smile' }),
   ];
   return end(beats, 'jelly');

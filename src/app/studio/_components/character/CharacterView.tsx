@@ -6,7 +6,8 @@ import {
   characterModel, circleFit, lookKey, mix, mix3, RIG_LAYERS, rootTransform,
   type CharacterModel, type Expression, type Lod, type Material, type RigLayer, type SvgNode,
 } from '@/lib/studio/character';
-import { HIGHLIGHT } from '@/lib/studio/character/palette';
+import { HIGHLIGHT, INK } from '@/lib/studio/character/palette';
+import { SPARKLE, TONGUE, dotD, sparklePts, swirlD, swirlR, tongueBase } from '@/lib/studio/character/petFace';
 import type { CharacterLook, Stage } from '@/lib/studio/types';
 
 /** Motion bindings the rig (Cloud) drives; transform origins come from the model's pivots. */
@@ -34,6 +35,12 @@ export interface RigBindings {
   glint?: MotionStyle;
   /** the pet rig: the drawn cheek blush, scaling about each cheek (puff and jiggle while chewing) */
   cheeks?: MotionStyle;
+  /** the pet rig: a tongue inside the open mouth (clipped by the mouth path; lens mouths only); drawn only when bound */
+  tongue?: MotionStyle;
+  /** the pet rig: two white highlights per eye for sparkly, wanting eyes (inside the lids); drawn only when bound */
+  sparkle?: MotionStyle;
+  /** the pet rig: a dizzy swirl over each eye, turning about the eye centre (inside the lids); drawn only when bound */
+  swirl?: MotionStyle;
 }
 
 export interface CharacterViewProps {
@@ -83,6 +90,7 @@ function renderNodes(nodes: SvgNode[], model: CharacterModel, rig: RigBindings |
       if (rig.cheeks && nd.tag === 'ellipse' && String(nd.attrs.fill).endsWith('bl)')) {
         return <m.ellipse key={key} {...props} style={{ transformBox: 'fill-box', originX: '50%', originY: '50%', ...rig.cheeks }} />;
       }
+      if (part === 'lids' && (rig.sparkle || rig.swirl)) kids?.push(...petEyeParts(model, rig, key));
       if (part === 'lids' && rig.lids) return <m.g key={key} {...props} style={{ ...origin([model.pivots.face[0], model.face.eyes[0].cy]), ...rig.lids }}>{kids}</m.g>;
       const [ear, pivot] = (typeof rigName === 'string' && EAR[rigName]) || [];
       if (ear && pivot && rig[ear]) return <m.g key={key} {...props} style={{ ...origin(model.pivots[pivot]), ...rig[ear] }}>{kids}</m.g>;
@@ -94,6 +102,35 @@ function renderNodes(nodes: SvgNode[], model: CharacterModel, rig: RigBindings |
     }
     return createElement(nd.tag, { key, ...props }, kids);
   });
+}
+
+/** Pet-only eye marks (sparkle highlights, dizzy swirls), drawn inside the lids group only when bound. */
+function petEyeParts(model: CharacterModel, rig: RigBindings, key: string): ReactNode[] {
+  const out: ReactNode[] = [];
+  if (rig.sparkle) {
+    out.push(<m.path key={`${key}sp`} data-part="sparkle" d={sparklePts(model).map((p) => dotD(p.cx, p.cy, p.r)).join('')} fill={SPARKLE} style={{ opacity: 0, ...rig.sparkle }} />);
+  }
+  if (rig.swirl) {
+    const r = swirlR(model);
+    model.face.eyes.forEach(({ cx, cy }, i) => out.push(
+      <m.path key={`${key}sw${i}`} data-part="swirl" d={swirlD(cx, cy, r)} fill="none" stroke={INK} strokeWidth={model.face.strokeW * 0.7} strokeLinecap="round" strokeLinejoin="round"
+        style={{ ...origin([cx, cy]), opacity: 0, ...rig.swirl }} />,
+    ));
+  }
+  return out;
+}
+
+/** The pet's tongue: a pink disc clipped by the (morphing) mouth path, so only a mound shows inside an open mouth. */
+function Tongue({ model, uid, mouthD, style }: { model: CharacterModel; uid: string; mouthD: MotionValue<string>; style: MotionStyle }) {
+  const t = tongueBase(model);
+  return (
+    <g data-part="tongue" aria-hidden="true">
+      <clipPath id={`${uid}mc`}><m.path d={mouthD} /></clipPath>
+      <g clipPath={`url(#${uid}mc)`}>
+        <m.ellipse cx={t.cx} cy={t.cy} rx={t.r} ry={t.r} fill={TONGUE} style={{ transformBox: 'fill-box', originX: '50%', originY: '50%', opacity: 0, ...style }} />
+      </g>
+    </g>
+  );
 }
 
 /** The shy blush: two cheek discs in the model's blush paint, each scaling about its own centre (under the eyes). */
@@ -126,6 +163,7 @@ export function CharacterView({ look, stage, expr, size, lod, label, rig, fit }:
   const layers = useMemo(() => RIG_LAYERS.filter((l) => model.layers[l].length).map((l) => {
     const kids = renderNodes(model.layers[l], model, rig, `${l}.`);
     if (l === 'face' && rig?.blush) kids.unshift(<ShyBlush key="shy" model={model} uid={uid} style={rig.blush} />);
+    if (l === 'face' && rig?.tongue && rig.mouthD && model.face.mouthKind === 'lens') kids.push(<Tongue key="tongue" model={model} uid={uid} mouthD={rig.mouthD} style={rig.tongue} />);
     const style = rig?.layer?.[l];
     return style
       ? <m.g key={l} data-rig={l} style={{ ...origin(model.pivots[l]), ...style }}>{kids}</m.g>

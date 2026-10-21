@@ -4,9 +4,10 @@
  * modelToSvg writes them. Pure (no React, no DOM): scripts/pet-frames.ts tiles these into frame sheets.
  */
 
-import { BEAK_DROP, beakLowerD, beakMouth, eyeD, GROUND, INK, mouthD, mouthOpenness, nodesToSvg, RIG_LAYERS, rootTransform, type CharacterModel, type RigLayer, type SvgNode } from '@/lib/studio/character';
+import { BEAK_DROP, beakLowerD, beakMouth, GROUND, INK, mouthD, nodesToSvg, RIG_LAYERS, rootTransform, type CharacterModel, type RigLayer, type SvgNode } from '@/lib/studio/character';
 import { HIGHLIGHT } from '@/lib/studio/character/palette';
-import { browsD, lerpPath } from './face';
+import { SPARKLE, TONGUE, dotD, sparklePts, swirlD, swirlR, tongueBase } from '@/lib/studio/character/petFace';
+import { beakOpen, browsD, bulgePath, lerpPath, petEyeD, petMouthD } from './face';
 import type { Geom, RigFrame } from './layers';
 
 const r = (n: number) => Math.round(n * 1000) / 1000;
@@ -45,13 +46,23 @@ export function poseToSvg(geom: Geom, f: RigFrame, o: PoseSvgOpts = {}): string 
     const part = nd.attrs['data-part'], rig = nd.attrs['data-rig'];
     const kids = nd.children ? rewrite(nd.children) : undefined;
     const out: SvgNode = { ...nd, attrs: { ...nd.attrs }, ...(kids ? { children: kids } : {}) };
-    if (nd.tag === 'path' && nd.attrs.d === m.bodyD) out.attrs.d = lerpPath(geom.fromBodyD, m.bodyD, f.morph);
-    if (part === 'eye-l') Object.assign(out.attrs, { d: eyeD(e[0].cx, e[0].cy, f.eyeL), ...eyePaint(0) });
-    if (part === 'eye-r') Object.assign(out.attrs, { d: eyeD(e[1].cx, e[1].cy, f.eyeR), ...eyePaint(1) });
-    if (part === 'mouth') out.attrs.d = mouthD(m.face.mouth.x, m.face.mouth.y, mouth);
-    if (part === 'beak-lo' && bk) out.attrs.d = beakLowerD(bk.x, bk.top, bk.k, Math.round(mouthOpenness(f.mouth) * BEAK_DROP * bk.k * 10) / 10);
+    if (nd.tag === 'path' && nd.attrs.d === m.bodyD) out.attrs.d = bulgePath(lerpPath(geom.fromBodyD, m.bodyD, f.morph), m.pivots.body[0], f.bulges);
+    if (part === 'eye-l') Object.assign(out.attrs, { d: petEyeD(e[0].cx, e[0].cy, f.eyeL, 1), ...eyePaint(0) });
+    if (part === 'eye-r') Object.assign(out.attrs, { d: petEyeD(e[1].cx, e[1].cy, f.eyeR, -1), ...eyePaint(1) });
+    if (part === 'mouth') out.attrs.d = bk ? mouthD(m.face.mouth.x, m.face.mouth.y, mouth) : petMouthD(m.face.mouth.x, m.face.mouth.y, mouth);
+    if (part === 'beak-lo' && bk) out.attrs.d = beakLowerD(bk.x, bk.top, bk.k, Math.round(beakOpen(f.mouth) * BEAK_DROP * bk.k * 10) / 10);
     if (part === 'brows') out.attrs.d = browsD(e, f.brows.l, f.brows.r, f.brows.inner, f.brows.arch);
-    if (part === 'lids') out.attrs.transform = about([pivot('face')[0], e[0].cy], { sy: f.lids });
+    if (part === 'lids') {
+      out.attrs.transform = about([pivot('face')[0], e[0].cy], { sy: f.lids });
+      // the pet-only eye marks live inside the lids (a blink closes them too), as CharacterView draws them when bound
+      const extra: SvgNode[] = [];
+      if (f.sparkle.o > 0.01) extra.push({ tag: 'path', attrs: { 'data-part': 'sparkle', d: sparklePts(m).map((q) => dotD(q.cx, q.cy, q.r)).join(''), fill: SPARKLE, opacity: r(f.sparkle.o), transform: about([0, 0], { x: f.sparkle.x, y: f.sparkle.y }) } });
+      if (f.swirl.o > 0.01) {
+        const sr = swirlR(m);
+        for (const q of e) extra.push({ tag: 'path', attrs: { 'data-part': 'swirl', d: swirlD(q.cx, q.cy, sr), fill: 'none', stroke: INK, 'stroke-width': r(sw * 0.7), 'stroke-linecap': 'round', 'stroke-linejoin': 'round', opacity: r(f.swirl.o), transform: about([q.cx, q.cy], { x: f.swirl.x, y: f.swirl.y, rot: f.swirl.rot }) } });
+      }
+      out.children = [...(out.children ?? []), ...extra];
+    }
     if (nd.tag === 'path' && part === undefined && nd.attrs.fill === HIGHLIGHT) out.attrs.opacity = r(f.glint);
     if (nd.tag === 'ellipse' && String(nd.attrs.fill).endsWith('bl)')) {
       const cx = Number(nd.attrs.cx), cy = Number(nd.attrs.cy);
@@ -76,6 +87,13 @@ export function poseToSvg(geom: Geom, f: RigFrame, o: PoseSvgOpts = {}): string 
           const c = m.face.cheeks;
           const shy: SvgNode[] = c.x.map((x) => ({ tag: 'ellipse', attrs: { cx: x, cy: c.y, rx: r(c.rx * 1.08), ry: r(c.ry * 1.08), fill: `url(#${uid}bl)`, opacity: r(f.blush.o), transform: about([x, c.y], { sx: f.blush.s, sy: f.blush.s }) } }));
           nodes = [...shy, ...nodes];
+        }
+        if (f.tongue.o > 0.01 && m.face.mouthKind === 'lens') {
+          const tb = tongueBase(m);
+          nodes = [...nodes,
+            { tag: 'clipPath', attrs: { id: `${uid}mc` }, children: [{ tag: 'path', attrs: { d: petMouthD(m.face.mouth.x, m.face.mouth.y, mouth) } }] },
+            { tag: 'g', attrs: { 'clip-path': `url(#${uid}mc)` }, children: [{ tag: 'ellipse', attrs: { cx: tb.cx, cy: tb.cy, rx: tb.r, ry: tb.r, fill: TONGUE, opacity: r(f.tongue.o), transform: about([tb.cx, tb.cy], { x: f.tongue.x, y: f.tongue.y, sx: f.tongue.sx, sy: f.tongue.sy }) } }] },
+          ];
         }
         break;
       }

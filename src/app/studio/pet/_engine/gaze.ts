@@ -17,6 +17,9 @@ export const PURSUIT = 0.15;
 /** The head engages beyond this distance and carries this share of the gaze. */
 export const HEAD_ENGAGE = 0.4, HEAD_SHARE = 0.55;
 
+/** The quickest saccade spring the 1/120 s semi-implicit substep keeps stable (critically damped: d > ~63 ms; margin to 80). */
+const SACCADE_MIN_S = 0.08;
+
 const clamp1 = (v: number) => (v < -1 ? -1 : v > 1 ? 1 : v);
 
 export class Gaze {
@@ -43,7 +46,8 @@ export class Gaze {
     if (!pursuit || jump > PURSUIT) {
       // a saccade: the amplitude sets the eye spring's speed (max ~87 ms across the full range)
       const ms = saccadeMs(Math.min(1, jump) * GAZE_DEG);
-      const kc = springKC((ms * 1.15) / 1000, 0);
+      // never stiffer than the 1/120 s substep integrates stably (a tiny saccade's 24 ms spring diverged)
+      const kc = springKC(Math.max(SACCADE_MIN_S, (ms * 1.15) / 1000), 0);
       this.ex.k = this.ey.k = kc.k;
       this.ex.c = this.ey.c = kc.c;
     }

@@ -7,7 +7,7 @@
 import type { Beat, EventOf, Reaction } from '../types';
 import { celebrate } from './celebrate';
 import { sad } from './mood';
-import { beat, browsOn, burst, cue, eared, end, osc, squashX, variant } from './util';
+import { beat, browsOn, burst, cue, eared, end, jiggle, laugh, osc, squashX, variant } from './util';
 
 export const playStart: Reaction<EventOf<'playStart'>> = (e, ctx) => {
   const v = variant(ctx, 'playStart');
@@ -30,38 +30,48 @@ export const playStart: Reaction<EventOf<'playStart'>> = (e, ctx) => {
   ], 'pop');
 };
 
-/** Ball in reach: crouch 120 ms (sx 1.08 / sy 0.9, snap), then jump with a sy 1.1 stretch. */
+/** Ball in reach: a deep crouch (sy 0.84, ears back), then a jump stretched tall (sy 1.18), eyes sparkling on it. */
 export const ballNear: Reaction<EventOf<'ballNear'>> = (_e, ctx) => {
   const v = variant(ctx, 'ballNear');
   return end([
-    beat(0, { sy: 0.9 }, 'snap', { look: 'ball', mouth: 'o' }),
-    beat(120, { sy: 1.1 }, 'snap', { hop: { h: [24, 27, 22][v], land: 0.12 } }),
-    ...(v === 2 ? [beat(120, { headTilt: 6 }, 'snap'), beat(420, { headTilt: 0 }, 'pop')] : []),
-    beat(300, { sy: 1 }, 'pop'),
+    beat(0, { sy: 0.84, pupil: 1.12, sparkle: 0.8 }, 'snap', { look: 'ball', mouth: 'o', expr: 'surprised' }),
+    ...(eared(ctx) ? [beat(0, { earL: -10, earR: 10 }, 'snap'), beat(120, { earL: 12, earR: -12 }, 'snap'), beat(420, { earL: 0, earR: 0 }, 'jelly')] : []),
+    beat(120, { sy: 1.18 }, 'snap', { hop: { h: [26, 30, 24][v], land: 0.14 }, mouth: 'grin' }),
+    ...(v === 2 ? [beat(120, { headTilt: 8 }, 'snap'), beat(420, { headTilt: 0 }, 'pop')] : []),
+    // round again by the apex (the hang); the fall's velocity stretch and the landing squash take it from there
+    beat(220, { sy: 1 }, 'pop'),
+    beat(700, { pupil: 1, sparkle: 0 }, 'float', { expr: 'idle' }),
   ], 'jelly');
 };
 
-/** Bop: a head squash 0.88 with a 40 ms hit-stop, happy. */
+/** Bop: a head squash 0.8 with a 50 ms hit-stop and stars, a rebound past round, a jelly ring-out, happy. */
 export const bop: Reaction<EventOf<'bop'>> = (e, ctx) => {
   const v = variant(ctx, 'bop');
   return end([
-    beat(0, { sy: 0.88, rot: -e.nx * 4 }, 'eye', { hitStop: 40, haptic: 'light', expr: 'happy', mouth: 'grin', particles: burst('sparkle', 2, 'head') }),
-    beat(80, { sy: 1.05, rot: 0 }, 'jelly'),
-    ...(v === 1 && eared(ctx) ? [beat(0, { earL: -10, earR: 10 }, 'eye'), beat(80, { earL: 0, earR: 0 }, 'jelly')] : []),
-    ...(v === 2 ? [beat(60, { blush: 0.4 }, 'float'), beat(600, { blush: 0 }, 'float')] : []),
-    beat(260, { sy: 1 }, 'jelly', { look: 'ball' }),
+    beat(0, { sy: 0.8, headY: 2, rot: -e.nx * 6 }, 'eye', { hitStop: 50, haptic: 'light', expr: 'squeeze', mouth: 'grin', particles: burst('sparkle', 4, 'head') }),
+    beat(90, { sy: 1.12, headY: -1, rot: 0 }, 'snap', { expr: 'happy' }),
+    beat(180, { sy: 1, headY: 0 }, 'jelly', { osc: jiggle(ctx, 0.06, 4.5, 650) }),
+    ...laugh(90, 360, 8, 0.5),
+    ...(eared(ctx) ? [beat(0, { earL: v === 1 ? -16 : -10, earR: v === 1 ? 16 : 10 }, 'eye'), beat(90, { earL: 0, earR: 0 }, 'jelly')] : []),
+    ...(v === 2 ? [beat(60, { blush: 0.7 }, 'float'), beat(700, { blush: 0 }, 'float')] : []),
+    cue(320, { look: 'ball' }),
   ], 'jelly');
 };
 
-/** Miss: eyes follow the ball away, "aww" (brows up-in, mouth E, a shrug sx 1.04) 300 ms. */
+/**
+ * Miss: an exaggerated "oops!" (a jolt up, eyes huge on the ball as it gets away, brows shot up), then the "aww"
+ * shrug (squashed wide, ears down, mouth E, brows up-in), a little head shake, back to it.
+ */
 export const miss: Reaction<EventOf<'miss'>> = (_e, ctx) => {
   const v = variant(ctx, 'miss');
   const beats: Beat[] = [
-    beat(0, { ...squashX(ctx, 1.04), headY: 1 }, 'snap', { look: 'ball', mouth: 'E', expr: 'sad', say: 'aww' }),
-    ...(browsOn(ctx) ? [beat(0, { browInner: 2 }, 'snap')] : []),
-    ...(eared(ctx) ? [beat(0, { earDroop: 12 }, 'float')] : []),
-    ...(v === 1 ? [beat(120, { headTilt: 6 }, 'float')] : v === 2 ? [cue(150, { blink: 'slow' })] : []),
-    beat(300, { sx: 1, sy: 1, headY: 0, browInner: 0, earDroop: 0, headTilt: 0 }, 'float', { mouth: 'X', expr: 'idle' }),
+    beat(0, { sy: 1.12, headY: -2, pupil: 1.22 }, 'snap', { look: 'ball', mouth: 'o', expr: 'surprised', haptic: 'soft' }),
+    ...(browsOn(ctx) ? [beat(0, { browL: 2.4, browR: 2.4 }, 'snap'), beat(220, { browL: 0, browR: 0, browInner: 2.4 }, 'float')] : []),
+    ...(eared(ctx) ? [beat(0, { earL: 12, earR: -12 }, 'snap'), beat(220, { earL: 0, earR: 0, earDroop: 18 }, 'float')] : []),
+    // the shrug: wide and low, the "aww"
+    beat(220, { ...squashX(ctx, 1.1), headY: 1.5, pupil: 1.1 }, 'pop', { mouth: 'E', expr: 'sad', say: 'aww' }),
+    ...(v === 0 ? [beat(320, {}, 'pop', { osc: osc('headTilt', 7, 3, 600) })] : v === 1 ? [beat(320, { headTilt: 8 }, 'float')] : [cue(360, { blink: 'slow' })]),
+    beat(850, { sx: 1, sy: 1, headY: 0, browInner: 0, earDroop: 0, headTilt: 0, pupil: 1 }, 'float', { mouth: 'X', expr: 'idle' }),
   ];
   return end(beats, 'float');
 };
@@ -76,9 +86,10 @@ export const playEnd: Reaction<EventOf<'playEnd'>> = (e, ctx) => {
   if (e.misses >= 3) return sad({ type: 'sad' }, ctx);
   const v = variant(ctx, 'playEnd');
   return end([
-    beat(0, { sy: 0.93 }, 'snap', { expr: 'happy', mouth: 'smile', look: 'user' }),
-    beat(110, { sy: 1.05 }, 'snap', { hop: { h: [9, 11, 8][v], land: 0.1 }, haptic: 'light' }),
-    beat(160, { blush: 0.6 }, 'float'),
+    beat(0, { sy: 0.88 }, 'snap', { expr: 'happy', mouth: 'grin', look: 'user' }),
+    beat(110, { sy: 1.1 }, 'snap', { hop: { h: [14, 16, 12][v], land: 0.14 }, haptic: 'light' }),
+    beat(160, { blush: 0.7 }, 'float'),
+    beat(500, {}, 'jelly', { osc: jiggle(ctx, 0.05, 4.5, 600) }),
     ...(v === 1 ? [beat(420, { headTilt: 6 }, 'float')] : v === 2 ? [beat(380, {}, 'pop', { particles: burst('heart', 2, 'head') })] : [beat(380, {}, 'pop', { mouth: 'grin' })]),
     ...(eared(ctx) ? [beat(110, { earL: 8, earR: -8 }, 'snap'), beat(500, { earL: 0, earR: 0 }, 'jelly')] : []),
     beat(1000, { sy: 1, headTilt: 0, blush: 0 }, 'float', { expr: 'idle', mouth: 'X' }),

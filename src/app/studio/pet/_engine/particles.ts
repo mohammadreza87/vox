@@ -20,7 +20,7 @@ interface Particle {
 const KIND: Record<ParticleKind, { ttl: number; g: number; launch: (rng: Rng) => [number, number]; s: [number, number] }> = {
   crumb: { ttl: 400, g: 1600, launch: (r) => [range(r, -90, 90), range(r, -260, -120)], s: [0.5, 0.8] },
   heart: { ttl: 900, g: -60, launch: (r) => [range(r, -50, 50), range(r, -150, -90)], s: [0.8, 1.1] },
-  z: { ttl: 1600, g: 0, launch: () => [10, -42], s: [0.7, 1] },
+  z: { ttl: 2300, g: 0, launch: () => [12, -38], s: [0.85, 1.15] },
   sparkle: { ttl: 620, g: 0, launch: (r) => { const a = range(r, 0, Math.PI * 2), v = range(r, 140, 260); return [Math.cos(a) * v, Math.sin(a) * v - 60]; }, s: [0.6, 1.1] },
   note: { ttl: 1200, g: -20, launch: (r) => [range(r, 20, 50), range(r, -90, -60)], s: [0.8, 1] },
   wisp: { ttl: 1400, g: -10, launch: (r) => [range(r, -40, 40), range(r, -50, -25)], s: [0.7, 1.2] },
@@ -103,9 +103,11 @@ export class Particles {
         p.y += p.vy * dt;
         p.rot += p.spin * dt * (p.kind === 'sparkle' ? 2 : 0.3);
         x = p.x;
-        if (p.kind === 'z' || p.kind === 'note' || p.kind === 'wisp') x += Math.sin(p.phase + u * Math.PI * 2) * 6 * k;
+        if (p.kind === 'z' || p.kind === 'note' || p.kind === 'wisp') x += Math.sin(p.phase + u * Math.PI * 2) * (p.kind === 'z' ? 9 : 6) * k;
         if (p.kind === 'sparkle') s = p.s * Math.sin(Math.min(1, u * 1.4) * Math.PI);
-        if (p.kind === 'heart' || p.kind === 'z') s = p.s * (0.6 + 0.4 * Math.min(1, u * 4));
+        if (p.kind === 'heart') s = p.s * (0.6 + 0.4 * Math.min(1, u * 4));
+        // a Z puffs up from small as it rises (a little overshoot), rocking gently as it sways
+        if (p.kind === 'z') { const g = Math.min(1, u * 3.5); s = p.s * (0.35 + 0.65 * g + 0.12 * Math.sin(Math.PI * g)); p.rot = 14 * Math.sin(p.phase + u * Math.PI * 2); }
       }
       // fade in fast, out over the last 40 %
       o = Math.min(1, u * 8) * (u > 0.6 ? 1 - (u - 0.6) / 0.4 : 1);

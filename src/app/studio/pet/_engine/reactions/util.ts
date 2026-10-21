@@ -23,6 +23,19 @@ export const alpha = (ctx: ReactionCtx) => tuningFor(ctx.species, ctx.family).al
 export const squashX = (ctx: ReactionCtx, sx: number): Partial<PoseTargets> => ({ sx, sy: Math.pow(sx, -1 / alpha(ctx)) });
 
 export const osc = (channel: Channel, amp: number, hz: number, ms: number, decay = true): Oscillation => ({ channel, amp, hz, ms, decay });
+/**
+ * A jelly wobble about round (the vinyl ringing after an impact): sy swings ±amp, stretch first, and sx against it
+ * at the jelly α (volume kept to first order), dying away over ms. 4–5 Hz over ~700 ms reads as 2–3 clear swings.
+ */
+export const jiggle = (ctx: ReactionCtx, amp: number, hz = 4.5, ms = 700): Oscillation[] => {
+  const a = Math.max(alpha(ctx), 0.8);
+  return [osc('sy', amp, hz, ms), osc('sx', -amp * a, hz, ms)];
+};
+/** A laugh: the grin gapes open and round (the tongue shows) and chatters "ha-ha-ha" for ms, then closes. */
+export const laugh = (at: number, ms: number, hz = 9, open = 0.7): Beat[] => [
+  beat(at, { gape: open }, 'snap', { mouth: 'grin', osc: osc('gape', 0.28, hz, ms) }),
+  beat(at + ms, { gape: 0 }, 'snap'),
+];
 export const burst = (kind: ParticleKind, n: number, at: Anchor = 'head'): ParticleBurst => ({ kind, n, at });
 
 /** The species' ears answer: true when there are ear groups to move. */

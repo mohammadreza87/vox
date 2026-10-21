@@ -193,11 +193,14 @@ describe('the loop (brief §3.1, §4 rows 5–6)', () => {
     expect(open).toBeGreaterThan(6);
   });
 
-  it('feeds: a tapped cookie arcs into the mouth, the bite posts the care action, the chain plays out', () => {
+  it('feeds: a tapped cookie arcs up to the chin, hangs for the wide "aaah", pops in; the bite posts the care action, the chain plays out', () => {
     const h = harness();
     h.engine.toy({ type: 'cookieTap' });
-    h.run(300);
+    h.run(600);
+    // still hanging under the chin with the mouth wide open (and the eyes sparkly)
     expect(h.cues.some((c) => c.type === 'care')).toBe(false);
+    expect(h.engine.debug.pose.gape).toBeGreaterThan(1.5);
+    expect(h.engine.debug.frame!.sparkle.o).toBeGreaterThan(0.5);
     h.run(400);
     expect(h.cues.find((c) => c.type === 'care')).toMatchObject({ action: 'feed' });
     h.run(3500);
