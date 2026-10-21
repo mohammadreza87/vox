@@ -3,6 +3,7 @@ import { vi } from 'vitest';
 import { parseOrgConfig } from '../org/config';
 import { OrgDirectory } from '../org/directory';
 import { LLMAuthorizationError, type LLM, type LLMRequest } from '../llm';
+import { systemText } from '../llm-content';
 import type { TelegramBotClient, TelegramMessage, TelegramUpdate } from '../telegram/client';
 import type { VoiceService } from '../voice';
 import {
@@ -75,14 +76,17 @@ export class FakeLLM implements LLM {
     if (authorize && !await authorize()) throw new LLMAuthorizationError();
     // Record provider data, not the local function identity. This preserves
     // exact noninterference comparisons of every outgoing content field.
-    if (request.system.startsWith('You extract long-term memories')) {
+    if (systemText(request.system).startsWith('You extract long-term memories')) {
       this.extractionCalls++;
       this.extractionRequests.push(payload);
       const out = this.nextExtraction;
       this.nextExtraction = { memories: [] };
       return typeof out === 'string' ? out : JSON.stringify(out);
     }
-    this.replyPrompts.push(request.system);
+    // With blocks or extras (TIREH_CACHED_PROMPT), record the full model-visible
+    // text: system blocks, then the newest user turn's trailing text, then the tail.
+    const extras = typeof request.system !== 'string' || request.systemTail !== undefined || request.messages.some((m) => m.trailingText?.length || m.cacheControl);
+    this.replyPrompts.push(extras ? [systemText(request.system), ...([...request.messages].reverse().find((m) => m.role === 'user')?.trailingText ?? []), ...(request.systemTail !== undefined ? [request.systemTail] : [])].join('\n\n') : request.system as string);
     this.replyRequests.push(payload);
     return this.nextReply;
   }
