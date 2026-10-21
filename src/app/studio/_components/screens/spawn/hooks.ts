@@ -5,7 +5,7 @@ import { tg } from '../../../_lib/client';
 import { useNav } from '../../StudioApp';
 import type { Locale } from './copy';
 
-/** Telegram's language, for content (examples, role titles). Chrome stays English in phase 1. */
+/** Telegram's language, for content (the Brief's examples). Chrome follows the app locale (`nav.locale`). */
 export function useStudioLocale(): Locale {
   const code = (tg()?.initDataUnsafe?.user as { language_code?: unknown } | undefined)?.language_code;
   return typeof code === 'string' && code.toLowerCase().startsWith('fa') ? 'fa' : 'en';

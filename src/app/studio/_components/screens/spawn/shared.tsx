@@ -1,22 +1,32 @@
 'use client';
 
-import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { haptic, type AgentView, type PersonaSpec } from '../../../_lib/client';
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import type { Hue } from '@/lib/studio/types';
+import { haptic, type AgentView, type PersonaSpec, type SpawnBrief } from '../../../_lib/client';
+import { Cloud } from '../../Cloud';
+import { familyFor } from './catalog';
 
 export type Busy = null | string;
 export type Run = <T>(label: string, fn: () => Promise<T>) => Promise<T | undefined>;
 export interface StepProps { agent: AgentView; busy: Busy; run: Run; onUpdate: (a: AgentView) => void; onNext: () => void }
+export type Presentation = NonNullable<SpawnBrief['presentation']>;
 
-/** Bottom CTA area. `stack` puts a composer or helper line above the CTA row. */
-export function Dock({ children, stack }: { children: ReactNode; stack?: boolean }) {
-  return <div className={`vx-dock${stack ? ' stack' : ''}`}>{children}</div>;
+/**
+ * Bottom CTA area. `stack` puts a composer or helper line above the CTA row; `inert` while a
+ * sheet is open over the step; `style` lifts it above the on-screen keyboard.
+ */
+export function Dock({ children, stack, className, style, inert }: {
+  children: ReactNode; stack?: boolean; className?: string; style?: CSSProperties; inert?: boolean;
+}) {
+  const cls = ['vx-dock', stack && 'stack', className].filter(Boolean).join(' ');
+  return <div className={cls} style={style} inert={inert || undefined}>{children}</div>;
 }
 
 /** `group` for chip sets: a <label> around buttons would name (and click) the first chip. */
-export function Field({ label, children, hint, group }: { label: string; children: ReactNode; hint?: string; group?: boolean }) {
+export function Field({ label, children, hint, group }: { label: ReactNode; children: ReactNode; hint?: string; group?: boolean }) {
   const Tag = group ? 'div' : 'label';
   return (
-    <Tag className="vx-field" role={group ? 'group' : undefined} aria-label={group ? label : undefined}>
+    <Tag className="vx-field" role={group ? 'group' : undefined} aria-label={group && typeof label === 'string' ? label : undefined}>
       <span className="vx-over">{label}</span>
       {children}
       {hint && <span className="vx-small vx-3">{hint}</span>}
@@ -95,4 +105,30 @@ export function sampleLine(p: Pick<PersonaSpec, 'name' | 'tagline' | 'languages'
   if (language === 'fa') return `سلام، من ${p.name} هستم. خوشحالم که با هم صحبت می‌کنیم.`;
   if (language === 'vi') return `Xin chào, tôi là ${p.name}. Rất vui được trò chuyện với bạn.`;
   return `Hi, I'm ${p.name}. ${p.tagline}`.trim();
+}
+
+/** A still cloud in a role's hue (role cards and the role sheet): no animation, hidden from assistive tech. */
+export function MiniCloud({ hue, id, size }: { hue: Hue; id: string; size: number }) {
+  return (
+    <span className="vx-still" aria-hidden="true" style={{ flexShrink: 0, width: size, height: size, display: 'block' }}>
+      <Cloud look={{ hue, family: familyFor(id), features: { cheeks: true, lashes: false, brows: false } }} size={size} still expr="idle" label="" />
+    </span>
+  );
+}
+
+/**
+ * The scrolling part of a sheet. The shared Sheet is draggable on y, which
+ * (via touch-action: pan-x) blocks native vertical scrolling inside it; this
+ * is its own scroller and keeps pointerdowns from starting the sheet drag.
+ */
+export function SheetScroll({ children }: { children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const stop = (e: PointerEvent) => e.stopPropagation();
+    el.addEventListener('pointerdown', stop);
+    return () => el.removeEventListener('pointerdown', stop);
+  }, []);
+  return <div ref={ref} className="vx-sheet-scroll">{children}</div>;
 }

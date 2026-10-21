@@ -34,6 +34,11 @@ it('reconciles a lost create acknowledgement through GET before allowing another
   mocks.create.mockRejectedValue(new Error('private server error')); render(<RightsRequestPanel space="work" />); fireEvent.click(await screen.findByRole('button', { name: 'Submit request' })); await screen.findByRole('alert'); expect(screen.getByRole('button', { name: 'Submit request' })).toBeDisabled(); expect(screen.queryByText('private server error')).not.toBeInTheDocument();
   mocks.read.mockResolvedValue(status([row()])); fireEvent.click(screen.getByRole('button', { name: 'Refresh request status' })); await screen.findByText(ref); expect(mocks.create).toHaveBeenCalledTimes(1); expect(screen.getByRole('button', { name: 'Submit request' })).toBeEnabled();
 });
+it('offers a standing status refresh only once requests exist, and re-reads without closing', async () => {
+  mocks.read.mockResolvedValue(status([row()])); render(<RightsRequestPanel space="work" />); await screen.findByText(ref);
+  mocks.read.mockResolvedValue(status([{ ...row(), state: 'local_export_prepared', revision: 2 }])); fireEvent.click(screen.getByRole('button', { name: 'Refresh request status' }));
+  await screen.findByText(ref); expect(mocks.read).toHaveBeenCalledTimes(2); expect(mocks.create).not.toHaveBeenCalled(); expect(screen.getAllByRole('button', { name: 'Refresh request status' })).toHaveLength(1);
+});
 it('a prepared replay shows current metadata without downloading a historical export; closure needs confirmation', async () => {
   mocks.read.mockResolvedValue(status([row()])); mocks.act.mockResolvedValue({ type: 'metadata', value: { replayed: true, policyStatus: 'available', request: { ...row(), state: 'local_export_prepared', revision: 2 } } });
   const makeURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:synthetic'); render(<RightsRequestPanel space="work" />); fireEvent.click(await screen.findByRole('button', { name: 'Prepare current local export' })); await screen.findByText('Local account export prepared. Provider/backup data and delivery are unverified.'); expect(makeURL).not.toHaveBeenCalled();

@@ -6,7 +6,7 @@ import { haptic } from '../../../_lib/client';
 import { Icon } from '../../ui';
 import { LinkButton } from './BriefBits';
 import { packTitle, roleSummary, roleTitle, useCatalog, type CatalogRole } from './catalog';
-import type { SpawnCopy } from './copy';
+import type { BriefCopy } from './copy';
 import { useSpawnMotion } from './motion';
 import { MiniCloud } from './parts';
 import { textAttrs, type RoutingSource } from './routing';
@@ -15,7 +15,7 @@ import { SkillChips } from './SkillChips';
 
 /** The applied role: who they start as, which skills they carry, and two ways out (✕, Change). */
 export function RouteCard({ t, role, source, predecessorName, skills, onToggleSkill, onMoreSkills, onChange, onDetach, fa }: {
-  t: SpawnCopy; role: CatalogRole; source: RoutingSource; predecessorName?: string; skills: SkillToggle[];
+  t: BriefCopy; role: CatalogRole; source: RoutingSource; predecessorName?: string; skills: SkillToggle[];
   onToggleSkill: (id: string) => void; onMoreSkills: () => void; onChange: () => void; onDetach: () => void; fa: boolean;
 }) {
   const catalog = useCatalog();

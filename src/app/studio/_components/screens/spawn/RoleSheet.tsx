@@ -4,14 +4,14 @@ import { useId, useRef, useState, type KeyboardEvent, type RefObject } from 'rea
 import type { PackId } from '@/lib/studio/skills/types';
 import { Icon, Sheet } from '../../ui';
 import { packTitle, roleSummary, roleTitle, useCatalog, type CatalogRole } from './catalog';
-import type { SpawnCopy } from './copy';
+import type { BriefCopy } from './copy';
 import { useBackGuard, useSheetA11y } from './hooks';
 import { MiniCloud, SheetScroll } from './parts';
 import { textAttrs } from './routing';
 
 /** The role library, browsable by pack. Picking a row applies it at once (reversible on the card). */
 export function RoleSheet({ t, open, onClose, initialPack, closest, selectedId, onPick, fa, returnFocus }: {
-  t: SpawnCopy; open: boolean; onClose: () => void; initialPack?: PackId; closest: string[];
+  t: BriefCopy; open: boolean; onClose: () => void; initialPack?: PackId; closest: string[];
   selectedId: string | null; onPick: (roleId: string | null) => void; fa: boolean; returnFocus?: RefObject<HTMLElement | null>;
 }) {
   useBackGuard(open, onClose);
@@ -23,7 +23,7 @@ export function RoleSheet({ t, open, onClose, initialPack, closest, selectedId, 
 }
 
 function RoleBody({ t, onClose, initialPack, closest, selectedId, onPick, fa, returnFocus }: {
-  t: SpawnCopy; onClose: () => void; initialPack?: PackId; closest: string[]; selectedId: string | null;
+  t: BriefCopy; onClose: () => void; initialPack?: PackId; closest: string[]; selectedId: string | null;
   onPick: (roleId: string | null) => void; fa: boolean; returnFocus?: RefObject<HTMLElement | null>;
 }) {
   const catalog = useCatalog();
@@ -78,14 +78,14 @@ function RoleBody({ t, onClose, initialPack, closest, selectedId, onPick, fa, re
       )}
       <SheetScroll>
         {near.length > 0 && (
-          <section className="vx-catalog-layout-baf2fda5">
+          <section className="vx-section">
             <span className="vx-over">{t.closest}</span>
             <div className="vx-group vx-pick-list">{near.map(row)}</div>
           </section>
         )}
         {shelf && (
           <section id={`${id}-panel`} role={shelves.length > 1 ? 'tabpanel' : undefined}
-            aria-labelledby={shelves.length > 1 ? `${id}-tab-${shelf.pack}` : undefined} className="vx-catalog-layout-baf2fda5">
+            aria-labelledby={shelves.length > 1 ? `${id}-tab-${shelf.pack}` : undefined} className="vx-section">
             <span className="vx-over">{packTitle(catalog, shelf.pack, t.packFull[shelf.pack], fa)}</span>
             <div className="vx-group vx-pick-list">{shelf.roles.map(row)}</div>
           </section>

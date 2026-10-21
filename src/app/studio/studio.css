@@ -316,6 +316,7 @@
 .vx-switch.live::after { content: none; }
 [aria-checked="true"] > .vx-switch.live { justify-content: flex-end; }
 .vx-switch.live[aria-checked="true"] { justify-content: flex-end; }
+[aria-checked="true"] > .vx-switch.attention { background: var(--warn); }
 .vx-toggle { border: 0; cursor: pointer; -webkit-tap-highlight-color: transparent; }
 .vx-toggle:disabled { opacity: .45; cursor: default; }
 .vx-switch-knob { width: 20px; height: 20px; display: block; }
@@ -385,17 +386,18 @@
 }
 
 /* Disclosures: secondary detail stays one tap away. */
-.vx details { border-radius: 12px; }
-.vx details > summary {
+/* .vx-disclosure brings its own summary and chevron; these defaults are for plain details. */
+.vx details:not(.vx-disclosure) { border-radius: 12px; }
+.vx details:not(.vx-disclosure) > summary {
   list-style: none; cursor: pointer; display: flex; align-items: center; gap: 6px; min-height: 36px;
   color: var(--text-2); font-size: 13px; font-weight: 600;
 }
-.vx details > summary::-webkit-details-marker { display: none; }
-.vx details > summary::before {
+.vx details:not(.vx-disclosure) > summary::-webkit-details-marker { display: none; }
+.vx details:not(.vx-disclosure) > summary::before {
   content: ""; width: 7px; height: 7px; border: solid currentColor; border-width: 0 2px 2px 0; transform: rotate(-45deg); transition: transform .16s var(--ease); margin-inline: 2px 4px;
 }
-.vx [dir="rtl"] details > summary::before, .vx[dir="rtl"] details > summary::before { transform: rotate(135deg); }
-.vx details[open] > summary::before { transform: rotate(45deg); }
+.vx [dir="rtl"] details:not(.vx-disclosure) > summary::before, .vx[dir="rtl"] details:not(.vx-disclosure) > summary::before { transform: rotate(135deg); }
+.vx details:not(.vx-disclosure)[open] > summary::before { transform: rotate(45deg); }
 .vx fieldset { border: 0; padding: 0; margin: 0; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 .vx fieldset > legend { padding: 0; margin-bottom: 6px; }
 .vx-input::placeholder, .vx-textarea::placeholder { color: var(--text-3); }
@@ -688,9 +690,6 @@ h2.vx-section-head, h3.vx-section-head { margin: 0; }
 .vx-slider { display: flex; flex-direction: column; gap: 2px; }
 .vx-slider + .vx-slider { margin-top: 6px; }
 .vx-slider-ends { display: flex; justify-content: space-between; }
-/* Board spawn-1: a text-only 15px secondary at its own width, the volt CTA takes the rest on one line (fits 358px) */
-.vx-dock > .vx-dock-aside { flex-shrink: 0; padding-inline: 18px; font-size: 15px; }
-.vx-dock > .vx-dock-grow { flex: 1; min-width: 0; padding-inline: 12px; white-space: nowrap; }
 .vx-dock > .vx-dock-row { flex: 1; }
 .vx-dock.stack > .vx-composer { width: 100%; }
 /* Draft doc card: name header, tap-to-edit sections, the editing section gets a hue rail */
@@ -755,46 +754,44 @@ h2.vx-section-head, h3.vx-section-head { margin: 0; }
    ====================================================================== */
 
 /* Telegram's own safe-area var covers fullscreen mode, where env() can be 0. */
-.vx-dock { padding-bottom: calc(16px + max(env(safe-area-inset-bottom), var(--tg-safe-area-inset-bottom, 0px))); transition: transform .18s var(--ease); }
+.vx-dock { padding-bottom: calc(24px + max(env(safe-area-inset-bottom), var(--tg-safe-area-inset-bottom, 0px))); transition: transform .18s var(--ease); }
 
 /* ---- utilities ---- */
-.vx-sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .vx-hit { position: relative; }
 .vx-hit::after { content: ""; position: absolute; inset-inline: 0; top: calc(50% - 22px); height: 44px; }
-.vx-hit-44 { position: relative; }
-.vx-hit-44::after { content: ""; position: absolute; inset: -4px; }
 .vx-clamp2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .vx-still, .vx-still * { animation: none !important; }
-.vx-ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.vx-link { min-height: 44px; display: inline-flex; align-items: center; gap: 4px; background: none; border: 0; padding: 0; color: var(--text-2); font-size: 13px; font-weight: 600; cursor: pointer; transition: color .18s var(--ease); }
-.vx-link:active { color: var(--text); }
-.vx-link-strong { color: var(--text); }
-.vx [dir="rtl"] .vx-mirror { transform: scaleX(-1); }
+/* Text-only button links (brief, route card, role sheet). Anchors keep the inline .vx-link (volt, underlined). */
+button.vx-link { min-height: 44px; display: inline-flex; align-items: center; gap: 4px; background: none; border: 0; padding: 0; color: var(--text-2); text-decoration: none; font-size: 13px; font-weight: 600; cursor: pointer; transition: color .18s var(--ease); }
+button.vx-link:active { color: var(--text); }
+button.vx-link.vx-link-strong { color: var(--text); }
+/* chevronEnd mirrors itself in RTL (ui.tsx DIRECTIONAL), so no .vx-mirror rule: it would flip it back. */
 /* Tracking and uppercase break Arabic-script joining. */
 .vx [dir="rtl"] :is(.vx-display, .vx-title, .vx-title-m, .vx-over, .vx-pill) { letter-spacing: 0; text-transform: none; }
 /* Persian content inside English chrome carries lang="fa" (dir="auto" alone can't be selected on). */
 .vx :lang(fa) { letter-spacing: 0; text-transform: none; }
-.vx-over-warn { color: var(--warn); }
 
 /* ---- brief ---- */
-.vx-brief { position: relative; display: flex; flex-direction: column; gap: 20px; }
+/* The brief step's scroll column (.vx-brief alone is the voice step's panel, styled above) */
+.vx-scroll.vx-brief { position: relative; display: flex; flex-direction: column; gap: 20px; cursor: auto; }
 .vx-brief-head { display: flex; align-items: flex-end; gap: 12px; }
 .vx-brief-head > :first-child { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
 .vx-brief-cloud { flex-shrink: 0; width: 64px; height: 64px; margin-bottom: 2px; }
-.vx-composer { position: relative; background: var(--s1); border: 1px solid var(--hair); border-radius: 20px; padding: 14px 16px 6px; transition: border-color .18s var(--ease); cursor: text; }
-.vx-composer-bare { padding-bottom: 14px; }
-.vx-composer:focus-within { border-color: rgba(214, 255, 92, .4); }
-.vx-composer-input { display: block; width: 100%; min-height: 72px; max-height: 144px; padding: 0; border: 0; background: transparent; color: var(--text); font: inherit; font-size: 17px; line-height: 24px; resize: none; outline: none; }
-.vx-composer-input:focus-visible { outline: none; }
-.vx-composer-input:read-only { color: var(--text-2); }
+/* The brief composer card (BriefComposer): scoped so the shared Composer pill (ui.tsx) keeps its own look */
+.vx-scroll.vx-brief .vx-composer { position: relative; display: block; min-height: 0; background: var(--s1); border: 1px solid var(--hair); border-radius: 20px; padding: 14px 16px 6px; transition: border-color .18s var(--ease); cursor: text; }
+.vx-scroll.vx-brief .vx-composer-bare { padding-bottom: 14px; }
+.vx-scroll.vx-brief .vx-composer:focus-within { border-color: rgba(214, 255, 92, .4); }
+.vx-scroll.vx-brief .vx-composer-input { display: block; width: 100%; min-height: 72px; max-height: 144px; padding: 0; border: 0; background: transparent; color: var(--text); font: inherit; font-size: 17px; line-height: 24px; resize: none; outline: none; }
+.vx-scroll.vx-brief .vx-composer-input:focus-visible { outline: none; }
+.vx-scroll.vx-brief .vx-composer-input:read-only { color: var(--text-2); }
 .vx-composer-ph { position: absolute; inset-inline: 16px; top: 14px; color: var(--text-3); font-size: 17px; line-height: 24px; pointer-events: none; }
 .vx-composer-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 44px; }
-.vx-count { font-size: 11px; line-height: 14px; color: var(--text-3); font-feature-settings: "tnum"; }
+/* Character counter, not the volt unread badge (.vx-count in settings.css) */
+.vx-composer-foot > .vx-count { min-width: 0; height: auto; padding: 0; border-radius: 0; background: none; color: var(--text-3); font-size: 11px; font-weight: 400; line-height: 14px; text-align: start; font-feature-settings: "tnum"; }
 .vx-packs { display: flex; gap: 8px; overflow-x: auto; margin-inline: -16px; padding-inline: 16px; padding-block: 2px; scrollbar-width: none; }
 .vx-packs::-webkit-scrollbar { display: none; }
 .vx-packs .vx-chip { height: 40px; padding: 0 16px; font-size: 14px; flex-shrink: 0; }
 .vx-draft-error { align-items: flex-start; padding-bottom: 4px; scroll-margin-bottom: calc(120px + env(safe-area-inset-bottom)); }
-.vx-drafting { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 24px; text-align: center; }
 .vx-drafting > .vx-2 { min-height: 21px; }
 
 /* ---- route card ---- */
@@ -844,14 +841,15 @@ h2.vx-section-head, h3.vx-section-head { margin: 0; }
 .vx-disclose-sum { flex: 1; min-width: 0; text-align: end; color: var(--text-2); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .vx-disclose-chev { flex-shrink: 0; display: inline-flex; color: var(--text-2); transition: transform .24s var(--ease); }
 .vx-disclose[aria-expanded="true"] .vx-disclose-chev { transform: rotate(180deg); }
-.vx-disclose-body { display: flex; flex-direction: column; gap: 20px; margin: 0; min-inline-size: 0; padding: 16px; background: var(--s1); border: 1px solid var(--hair); border-top: 0; border-radius: 0 0 16px 16px; }
-.vx-disclose:disabled, .vx-disclose-body:disabled { opacity: .6; cursor: default; }
+/* .vx fieldset (native controls) is more specific than a bare class: qualify so the panel keeps its frame */
+.vx .vx-disclose-body { display: flex; flex-direction: column; gap: 20px; margin: 0; min-inline-size: 0; padding: 16px; background: var(--s1); border: 1px solid var(--hair); border-top: 0; border-radius: 0 0 16px 16px; }
+.vx-disclose:disabled, .vx .vx-disclose-body:disabled { opacity: .6; cursor: default; }
 
-/* ---- sheet lists (RoleSheet, SkillsSheet) ---- */
-.vx-sheet-body { display: flex; flex-direction: column; gap: 16px; }
+/* ---- sheet lists (RoleSheet, SkillsSheet): their own body inside the Sheet's scrolling body ---- */
+.vx-sheet-body .vx-sheet-body { flex: none; min-height: 0; overflow: visible; padding: 0; display: flex; flex-direction: column; gap: 16px; }
 .vx-sheet-scroll { display: flex; flex-direction: column; gap: 16px; max-height: 60vh; max-height: 60dvh; overflow-y: auto; overscroll-behavior: contain; touch-action: pan-y; margin-inline: -16px; padding: 2px 16px 4px; }
 .vx-sheet-scroll > * { flex-shrink: 0; }
-.vx-sheet-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.vx-sheet-body .vx-sheet-body > .vx-sheet-head { flex-direction: row; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 0; }
 .vx-tabs { display: flex; gap: 8px; overflow-x: auto; margin-inline: -16px; padding: 4px 16px; scrollbar-width: none; }
 .vx-tabs::-webkit-scrollbar { display: none; }
 .vx-tabs [role="tab"] { height: 36px; flex-shrink: 0; font-size: 14px; }
@@ -865,39 +863,26 @@ h2.vx-section-head, h3.vx-section-head { margin: 0; }
 .vx-pick-row > div { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .vx-pick-check { flex-shrink: 0; display: inline-flex; color: var(--text-3); }
 .vx-pick-row[aria-pressed="true"] .vx-pick-check { color: var(--volt); }
-.vx-search { display: flex; align-items: center; gap: 8px; height: 44px; padding-inline: 14px; border-radius: 12px; border: 1px solid var(--hair); background: var(--s1); color: var(--text-3); transition: border-color .18s var(--ease); }
-.vx-search:focus-within { border-color: rgba(214, 255, 92, .4); }
-.vx-search input { flex: 1; min-width: 0; height: 100%; border: 0; background: transparent; color: var(--text); font: inherit; font-size: 15px; outline: none; }
-.vx-search input::placeholder { color: var(--text-3); }
+/* Skills search: one framed field with an inline icon (the Picker's .vx-search wraps a .vx-input instead) */
+.vx-sheet-scroll .vx-search { display: flex; align-items: center; gap: 8px; height: 44px; padding-inline: 14px; border-radius: 12px; border: 1px solid var(--hair); background: var(--s1); color: var(--text-3); transition: border-color .18s var(--ease); }
+.vx-sheet-scroll .vx-search > svg { position: static; flex-shrink: 0; }
+.vx-sheet-scroll .vx-search:focus-within { border-color: rgba(214, 255, 92, .4); }
+.vx-sheet-scroll .vx-search input { flex: 1; min-width: 0; height: 100%; border: 0; background: transparent; color: var(--text); font: inherit; font-size: 15px; outline: none; }
+.vx-sheet-scroll .vx-search input::placeholder { color: var(--text-3); }
 
 /* ---- persona ---- */
-.vx-scroll-stack { padding-bottom: calc(184px + env(safe-area-inset-bottom)); }
 .vx-role-line { display: flex; align-items: center; gap: 6px; color: var(--text-2); font-size: 15px; line-height: 21px; min-width: 0; }
 .vx-hue-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--hue, var(--text-3)); flex-shrink: 0; }
-.vx-chip.vx-name-chip { height: 40px; padding: 0 18px; font-family: var(--font-unbounded), sans-serif; font-weight: 500; font-size: 15px; }
-.vx-edit-row { width: 100%; background: none; border: 0; border-top: 1px solid var(--hair); text-align: start; cursor: pointer; align-items: flex-start; color: inherit; }
-.vx-edit-row:disabled { cursor: default; }
 .vx-samples { padding: 16px; display: flex; flex-direction: column; gap: 8px; border-radius: 20px; }
-.vx-bubble { max-width: 84%; padding: 10px 14px; border-radius: 20px; font-size: 15px; line-height: 21px; white-space: pre-wrap; overflow-wrap: anywhere; }
-.vx-bubble.me { align-self: flex-end; background: var(--s3); border-end-end-radius: 6px; }
+/* Voice examples: the person's line is quiet s3 here, not the chat's volt .vx-bubble.me */
+.vx-samples .vx-bubble.me { background: var(--s3); color: var(--text); }
 .vx-bubble.them { align-self: flex-start; background: var(--s2); border-end-start-radius: 6px; }
 .vx-said { display: flex; align-items: flex-end; gap: 8px; align-self: flex-start; max-width: 92%; }
 .vx-said > .vx-bubble { max-width: none; }
-.vx-dock-stack { flex-direction: column; }
-.vx-refine-hint { text-align: center; }
-.vx-refine { display: flex; align-items: center; gap: 8px; height: 48px; margin: 0; padding-inline: 16px 6px; border-radius: 999px; background: var(--s2); border: 1px solid var(--hair); transition: border-color .18s var(--ease); }
-.vx-refine:focus-within { border-color: rgba(214, 255, 92, .4); }
-.vx-refine input { flex: 1; min-width: 0; height: 100%; border: 0; background: transparent; color: var(--text); font: inherit; font-size: 15px; outline: none; }
-.vx-refine input::placeholder { color: var(--text-3); }
-.vx-send { width: 36px; height: 36px; flex-shrink: 0; border-radius: 999px; border: 0; background: var(--volt); color: var(--on-volt); display: grid; place-items: center; cursor: pointer; transition: background .18s var(--ease), transform .12s var(--ease); }
-.vx-send:active { transform: scale(.94); }
-.vx-send:disabled { background: var(--s3); color: var(--text-3); cursor: default; transform: none; }
-@keyframes vxSweep { from { background-size: 0% 2px; } to { background-size: 100% 2px; } }
-.vx-changed { background-image: linear-gradient(var(--volt), var(--volt)); background-repeat: no-repeat; background-position: 0 100%; animation: vxSweep .7s var(--ease) both; }
-.vx [dir="rtl"] .vx-changed, .vx .vx-changed:lang(fa) { background-position: 100% 100%; }
+/* .vx-changed and vxSweep live in motion.css; Persian text inside English chrome sweeps from the right too */
+.vx .vx-changed:lang(fa) { background-position: 100% 100%; }
 
 @media (prefers-reduced-motion: reduce) {
-  .vx-changed { animation: none; background-size: 100% 2px; }
   .vx-skill, .vx-skill-add, .vx-ask-option, .vx-disclose, .vx-disclose-chev, .vx-composer, .vx-dock, .vx-link, .vx-pick-row { transition-duration: .01s; }
-  .vx-ask-option:active, .vx-skill-add:active, .vx-send:active { transform: none; }
+  .vx-ask-option:active, .vx-skill-add:active { transform: none; }
 }

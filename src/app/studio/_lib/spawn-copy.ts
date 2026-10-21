@@ -8,7 +8,8 @@ const n = (v: number) => formatNumber(v, 'fa');
 const s = (v: number) => (v === 1 ? '' : 's');
 
 export type SpawnPresentation = 'feminine' | 'masculine' | 'neutral';
-export type PersonaSection = 'role' | 'tagline' | 'backstory' | 'personality' | 'communicationStyle' | 'values' | 'wontDo';
+export type PersonaSection = 'role' | 'tagline' | 'backstory' | 'personality' | 'communicationStyle' | 'values' | 'wontDo'
+  | 'expertise' | 'opinions' | 'signatureMoves' | 'petPeeves';
 
 const en = {
   // wizard
@@ -42,7 +43,9 @@ const en = {
   persona: {
     sections: {
       role: 'Role', tagline: 'In one line', backstory: 'Backstory', personality: 'Personality',
-      communicationStyle: 'How they talk', values: 'Values', wontDo: 'Won’t do',
+      // "How they talk" is the voice-examples card; this section is the written description.
+      communicationStyle: 'Speaking style', values: 'Values', wontDo: 'Won’t do',
+      expertise: 'Expertise', opinions: 'Opinions', signatureMoves: 'Signature moves', petPeeves: 'Pet peeves',
     } as Record<PersonaSection, string>,
     saveNext: 'Save & next', nextLook: 'Next · look', useName: (name: string) => `Use ${name} · choose a voice`,
     suggests: 'Claude suggests · pick a name', persona: (name: string) => `${name}’s persona`,
@@ -72,7 +75,7 @@ const en = {
     designThree: 'Design 3 voices', designMore: 'Design 3 more',
     take: (letter: string) => `Take ${letter}`, playTake: (letter: string) => `Play take ${letter}`, chooseTake: (letter: string) => `Choose take ${letter}`,
     voiceLibrary: 'Voice library', gender: 'Gender', genders: { female: 'Female', male: 'Male', neutral: 'Neutral' } as Record<string, string>,
-    voiceLanguage: 'Voice language', anyLanguage: 'Any language',
+    voiceLanguage: 'Voice language', anyLanguage: 'Any language', accent: 'Accent', accentPlaceholder: 'Any accent · British, Tehrani…',
     searchPlaceholder: 'calm, narrator, Persian accent…', searchVoices: 'Search voices', search: 'Search',
     libraryPlan: 'Library voices can’t be chosen on this workspace’s plan yet. Listen freely; built-in and designed voices work.', why: 'Why?',
     searching: 'Searching voices', noMatch: 'No voices match. Loosen a filter.',
@@ -154,6 +157,7 @@ export const spawnCopy: Record<Locale, SpawnCopy> = {
       sections: {
         role: 'نقش', tagline: 'در یک جمله', backstory: 'پیشینه', personality: 'شخصیت',
         communicationStyle: 'شیوهٔ حرف زدن', values: 'ارزش‌ها', wontDo: 'کارهایی که نمی‌کند',
+        expertise: 'تخصص‌ها', opinions: 'دیدگاه‌ها', signatureMoves: 'عادت‌های شاخص', petPeeves: 'چیزهایی که کلافه‌اش می‌کند',
       },
       saveNext: 'ذخیره و بعدی', nextLook: 'بعدی · ظاهر', useName: (name) => `تأیید ${name} · انتخاب صدا`,
       suggests: 'پیشنهاد Claude · یک نام انتخاب کنید', persona: (name) => `شخصیت ${name}`,
@@ -182,7 +186,7 @@ export const spawnCopy: Record<Locale, SpawnCopy> = {
       designThree: 'طراحی ۳ صدا', designMore: '۳ صدای دیگر',
       take: (letter) => `نسخهٔ ${letter}`, playTake: (letter) => `پخش نسخهٔ ${letter}`, chooseTake: (letter) => `انتخاب نسخهٔ ${letter}`,
       voiceLibrary: 'کتابخانهٔ صدا', gender: 'جنسیت', genders: { female: 'زن', male: 'مرد', neutral: 'خنثی' },
-      voiceLanguage: 'زبان صدا', anyLanguage: 'هر زبانی',
+      voiceLanguage: 'زبان صدا', anyLanguage: 'هر زبانی', accent: 'لهجه', accentPlaceholder: 'هر لهجه‌ای · بریتانیایی، تهرانی…',
       searchPlaceholder: 'آرام، راوی، لهجهٔ فارسی…', searchVoices: 'جستجوی صداها', search: 'جستجو',
       libraryPlan: 'در طرح فعلی این فضای کاری هنوز نمی‌توان صدای کتابخانه را انتخاب کرد. آزادانه گوش دهید؛ صداهای آماده و طراحی‌شده کار می‌کنند.', why: 'چرا؟',
       searching: 'در حال جستجوی صداها', noMatch: 'صدایی پیدا نشد. یکی از فیلترها را بردارید.',
