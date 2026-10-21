@@ -18,10 +18,13 @@ export async function waitStudioSettled(page: Page) {
 }
 export async function closeStudioSheet(page: Page) {
   const dialogs = page.getByRole('dialog');
-  if (await dialogs.count()) {
+  for (let depth = 0; depth < 8; depth++) {
+    const before = await dialogs.count();
+    if (!before) return;
     await page.keyboard.press('Escape');
-    await expect(dialogs).toHaveCount(0);
+    await expect.poll(() => dialogs.count()).toBeLessThan(before);
   }
+  await expect(dialogs).toHaveCount(0);
 }
 export async function openYou(page: Page) {
   await closeStudioSheet(page);

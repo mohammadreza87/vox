@@ -214,6 +214,12 @@ test('legacy memory sharing and admin observations remain separate from private 
   await expect(page.getByRole('button', { name: 'Stop sharing' })).toBeEnabled();
   await page.getByRole('button', { name: 'Stop sharing' }).click();
   await expect.poll(() => mutations.find(m => m.path.endsWith('/revoke-memory'))?.body).toEqual({ memoryId: memory.id });
+  // Receiving the request is not confirmation that the client finished the mutation.
+  const memorySheet = page.getByRole('dialog', { name: 'Memory', exact: true });
+  await expect(memorySheet.getByRole('button', { name: 'Forget', exact: true })).toBeEnabled();
+  await expect(memorySheet.getByRole('button', { name: 'Share', exact: true })).toBeEnabled();
+  await expect(memorySheet.getByRole('button', { name: 'Stop sharing', exact: true })).toHaveCount(0);
+  await expect(memorySheet.getByText(/Private to you/)).toBeVisible();
 
   await openYou(page);
   await page.getByRole('navigation', { name: 'Main' }).getByRole('button', { name: 'Org', exact: true }).click();
