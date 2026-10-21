@@ -20,16 +20,16 @@ export type VoiceIdentityRow = z.infer<typeof rowSchema>;
 const schema = z.object({ schemaVersion: z.literal(1), accountId: id, rows: z.array(rowSchema).max(20) }).strict();
 export class VoiceIdentityRepository {
   constructor(readonly storage: AdaptiveStorage) {}
-  all<T>(accountId: string, personId: string, fn: (rows: VoiceIdentityRow[]) => T): Promise<T> {
+  all<T>(accountId: string, personId: string, fn: (rows: VoiceIdentityRow[]) => T, beforeCommit?: () => void): Promise<T> {
     if (!/^telegram-account:[1-9]\d{0,15}$/.test(accountId) || !personId) throw new Error('Invalid voice scope');
     return this.storage.transact(accountId, raw => {
       const document = raw === null ? { schemaVersion: 1 as const, accountId, rows: [] as VoiceIdentityRow[] } : schema.parse(raw);
       if (document.accountId !== accountId || new Set(document.rows.map(r => JSON.stringify([r.space, r.deviceId]))).size !== document.rows.length || document.rows.some(r => r.personId !== personId)) throw new Error('Invalid voice partition');
       const result = fn(document.rows); schema.parse(document);
       return { document, result };
-    });
+    }, beforeCommit);
   }
-  transaction<T>(accountId: string, personId: string, scope: VoiceScope, fn: (row: VoiceIdentityRow) => T, allocate = true): Promise<T> {
+  transaction<T>(accountId: string, personId: string, scope: VoiceScope, fn: (row: VoiceIdentityRow) => T, allocate = true, beforeCommit?: () => void): Promise<T> {
     return this.all(accountId, personId, rows => {
       let row = rows.find(r => r.space === scope.space && r.deviceId === scope.deviceId);
       if (!row) {
@@ -48,12 +48,24 @@ export class VoiceIdentityRepository {
         }
       }
       return fn(row);
-    });
+    }, beforeCommit);
   }
   /** Inspect/update an existing scope without allocating a device placeholder.
    * An absent row is an ephemeral empty projection and is never persisted. */
-  existing<T>(accountId: string, personId: string, scope: VoiceScope, fn: (row: VoiceIdentityRow) => T): Promise<T> {
-    return this.transaction(accountId, personId, scope, fn, false);
+  existing<T>(accountId: string, personId: string, scope: VoiceScope, fn: (row: VoiceIdentityRow) => T, beforeCommit?: () => void): Promise<T> {
+    return this.transaction(accountId, personId, scope, fn, false, beforeCommit);
+  }
+  /** Final effect fence: no asynchronous gap and no enrollment-row allocation. */
+  currentForEffect(accountId: string, personId: string, scope: VoiceScope): VoiceIdentityRow | undefined {
+    const current = this.storage.readCommittedForEffect?.(accountId);
+    if (!current || current.status !== 'ready') throw new AdaptiveError(503, 'voice_authority_unavailable');
+    if (current.document === null) return;
+    const document = schema.parse(current.document);
+    if (document.accountId !== accountId || document.rows.some(row => row.personId !== personId) ||
+        new Set(document.rows.map(row => JSON.stringify([row.space, row.deviceId]))).size !== document.rows.length) {
+      throw new AdaptiveError(503, 'voice_authority_unavailable');
+    }
+    return structuredClone(document.rows.find(row => row.space === scope.space && row.deviceId === scope.deviceId));
   }
 }
 /** Separate encryption key supplied by reviewed runtime key management. It is

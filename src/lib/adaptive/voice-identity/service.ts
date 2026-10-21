@@ -1,7 +1,7 @@
 import { randomUUID, randomInt } from 'crypto';
 import type { AdaptiveService } from '../persistence/service';
 import { AdaptiveError } from '../persistence/service';
-import { accountIdFor, digest, spaceIdFor, type SpaceKind } from '../persistence/repository';
+import { accountIdFor, digest, spaceIdFor, type SpaceKind, type AdaptiveAuthorityDocument } from '../persistence/repository';
 import { MAX_VOICE_BYTES, MAX_VOICE_DURATION_MS, VOICE_NOTICE_VERSION, type VoiceHint, type VoiceIdentitySnapshot, type VoiceNotice, type VoiceScope } from './contracts';
 import type { VoiceIdentityProvider, VoiceProviderApproval } from './provider';
 import { VoiceIdentityRepository, VoiceTemplateCipher, voiceDigest, type VoiceIdentityRow } from './repository';
@@ -30,7 +30,7 @@ async function boundedPurgeBatch<T>(values: readonly T[], work: (value: T) => Pr
 interface Authority { accountId: string; personId: string; fingerprint: string; allowed: boolean; reason?: string; expiresAt: number; consent: VoiceIdentitySnapshot['consent'] }
 export interface VoiceIdentityOptions {
   provider?: VoiceIdentityProvider; providerApproval?: VoiceProviderApproval; cipher?: VoiceTemplateCipher;
-  enabled?: boolean; now?: () => number;
+  enabled?: boolean; now?: () => number; readinessReason?: string;
 }
 /** Deliberate self-only capture. No call stream, passive enrollment, global search,
  * identity mutation, memory grant, transcript or audio persistence exists here. */
@@ -49,18 +49,29 @@ export class VoiceIdentityService {
       Number.isSafeInteger(a.consentTtlMs) && a.consentTtlMs > 0 && a.consentTtlMs <= 365 * 86400_000 &&
       !!a.disclosure.en.trim() && !!a.disclosure.fa.trim();
   }
-  private authority(telegramId: number, space: SpaceKind): Promise<Authority> {
-    return this.adaptive.withAccountDocument(telegramId, (d, now) => {
+  private evaluateAuthority(d: AdaptiveAuthorityDocument, space: SpaceKind, now: number): Authority {
       const p = d.permissions.find(p => p.spaceId === spaceIdFor(d.accountId, space) && p.purpose === 'optional.biometric_recognition')!;
       const eligibility = this.adaptive.capabilityStatus(d, 'biometric_recognition', now);
       const confirmed = this.adaptive.isProfileConfirmed(d, now), provider = this.providerReady();
       const allowed = confirmed && provider && this.adaptive.isPurposeAllowed(d, space, 'optional.biometric_recognition', now);
       return { accountId: d.accountId, personId: d.personId, allowed,
         fingerprint: voiceDigest([d.accountId, d.personId, d.binding, p.epoch, p.state, p.expiresAt, eligibility, this.options.providerApproval]),
-        reason: !confirmed ? 'profile_confirmation_required' : !provider ? 'provider_unavailable' : !eligibility.eligible ? eligibility.reason : p.state !== 'granted' || p.expiresAt <= now ? 'biometric_consent_required' : undefined,
+        reason: !confirmed ? 'profile_confirmation_required' : !provider ? this.options.readinessReason ?? 'provider_unavailable' : !eligibility.eligible ? eligibility.reason : p.state !== 'granted' || p.expiresAt <= now ? 'biometric_consent_required' : undefined,
         expiresAt: Math.min(p.expiresAt, eligibility.validUntil ?? now, d.binding?.expiresAt ?? now, this.options.providerApproval?.expiresAt ?? now),
         consent: p.state === 'granted' && p.expiresAt > now ? 'granted' : p.state === 'withdrawn' ? 'withdrawn' : p.state === 'expired' || p.expiresAt <= now && p.state === 'granted' ? 'expired' : 'not_asked' };
+  }
+  private authority(telegramId: number, space: SpaceKind): Promise<Authority> {
+    return this.adaptive.withAccountDocument(telegramId, (d, now) => this.evaluateAuthority(d, space, now));
+  }
+  private authorityNow(telegramId: number, space: SpaceKind, fingerprint: string): Authority {
+    const current = this.adaptive.readDirectAuthorityForEffect(telegramId, space, (d, now) => {
+      const value = this.evaluateAuthority(d, space, now);
+      return { value, denied: !value.allowed, deadline: value.expiresAt };
     });
+    if (current.status !== 'ready' || !current.value.allowed || current.value.fingerprint !== fingerprint || current.value.expiresAt <= this.now()) {
+      return fail(409, 'capture_cancelled');
+    }
+    return current.value;
   }
   private key(accountId: string, scope: VoiceScope): string { return JSON.stringify([accountId, scope.space, scope.deviceId]); }
   private stop(accountId: string, scope: VoiceScope): void {
@@ -130,7 +141,7 @@ export class VoiceIdentityService {
       row.receipt = { id: receipt, expiresAt: Math.min(this.now() + 10 * 60_000, a.expiresAt), copyHash: notice.copyHash, locale, authority: a.fingerprint };
       row.revision++;
       return { ...this.snapshot(a, row), notice, receipt };
-    });
+    }, true, () => this.authorityNow(telegramId, scope.space, a.fingerprint));
   }
   async acceptEnrollment(telegramId: number, scope: VoiceScope, expectedRevision: number, receipt: string): Promise<VoiceIdentitySnapshot> {
     const a = await this.authority(telegramId, scope.space), now = this.now();
@@ -146,7 +157,7 @@ export class VoiceIdentityService {
       row.evidence = { copyHash: r.copyHash, locale: r.locale, decidedAt: now, statement: 'enroll_my_voice' };
       delete row.receipt;
       return this.snapshot(a, row);
-    });
+    }, () => this.authorityNow(telegramId, scope.space, a.fingerprint));
   }
   async begin(telegramId: number, scope: VoiceScope, expectedRevision: number, mode: 'enroll' | 'test'): Promise<VoiceIdentitySnapshot> {
     await this.read(telegramId, scope);
@@ -161,7 +172,7 @@ export class VoiceIdentityService {
         expiresAt: Math.min(now + CAPTURE_TTL, a.expiresAt, row.intentExpiresAt!), epoch: row.epoch, authority: a.fingerprint };
       row.revision++;
       return { ...this.snapshot(a, row), capture: { ...row.capture, maxBytes: MAX_VOICE_BYTES, maxDurationMs: MAX_VOICE_DURATION_MS } };
-    });
+    }, () => this.authorityNow(telegramId, scope.space, a.fingerprint));
     this.stop(a.accountId, scope);
     return result;
   }
@@ -198,36 +209,55 @@ export class VoiceIdentityService {
       timeout = setTimeout(() => controller.abort(), Math.max(0, row.capture!.expiresAt - this.now()));
       activeKey = this.key(a.accountId, scope);
       const controllers = this.active.get(activeKey) ?? new Set<AbortController>(); controllers.add(controller); this.active.set(activeKey, controllers);
+      const effectFence = () => {
+        if (controller.signal.aborted || row.capture!.expiresAt <= this.now()) return fail(409, 'capture_cancelled');
+        this.authorityNow(telegramId, scope.space, a.fingerprint);
+        const current = this.repository.currentForEffect(a.accountId, a.personId, scope);
+        if (!current || current.intent !== 'accepted' || current.epoch !== row.epoch || current.authority !== a.fingerprint ||
+            (current.intentExpiresAt ?? 0) <= this.now()) return fail(409, 'capture_cancelled');
+        // The stores are independent: fence canonical authority again after the
+        // final voice-store read, immediately before the effect, without await.
+        this.authorityNow(telegramId, scope.space, a.fingerprint);
+      };
+      const effect = <T>(work: () => Promise<T>): Promise<T> => { effectFence(); return work(); };
       const fresh = async () => {
         if (controller.signal.aborted) return fail(409, 'capture_cancelled');
         const latest = await this.authority(telegramId, scope.space);
         const valid = await this.repository.existing(a.accountId, a.personId, scope, r => r.intent === 'accepted' && r.epoch === row.epoch && r.authority === latest.fingerprint && (r.intentExpiresAt ?? 0) > this.now());
         if (!latest.allowed || !valid || row.capture!.expiresAt <= this.now() || controller.signal.aborted) return fail(409, 'capture_cancelled');
+        effectFence();
       };
       const provider = this.options.provider!;
       await fresh();
-      const inspection = await boundedProvider(provider.inspect({ audio, mimeType, challenge: row.capture!.challenge, maxDurationMs: MAX_VOICE_DURATION_MS, signal: controller.signal }), controller.signal);
+      const inspection = await boundedProvider(effect(() => provider.inspect({ audio, mimeType, challenge: row.capture!.challenge, maxDurationMs: MAX_VOICE_DURATION_MS, signal: controller.signal, authorize: effectFence, captureContext: captureId })), controller.signal);
       await fresh();
-      if (inspection !== 'eligible_single_live') return { status: await this.read(telegramId, scope), hint: { outcome: 'unknown', authenticationRequired: true, identityChanged: false } };
-      query = await boundedProvider(provider.extract({ audio, mimeType, signal: controller.signal }), controller.signal, value => value.fill(0));
+      if (inspection !== 'eligible_single_live') {
+        const status = await this.read(telegramId, scope); effectFence();
+        return { status, hint: { outcome: 'unknown', authenticationRequired: true, identityChanged: false } };
+      }
+      query = await boundedProvider(effect(() => provider.extract({ audio, mimeType, signal: controller.signal, authorize: effectFence, captureContext: captureId })), controller.signal, value => value.fill(0));
       await fresh();
       if (!query.byteLength || query.byteLength > 65_536) return fail(502, 'invalid_provider_template');
       if (row.capture!.mode === 'enroll') {
         const encrypted = this.options.cipher!.encrypt(query, { ...scope, accountId: a.accountId, personId: a.personId, epoch: row.epoch });
         await fresh();
         await this.repository.existing(a.accountId, a.personId, scope, current => {
+          this.authorityNow(telegramId, scope.space, a.fingerprint);
           if (current.epoch !== row.epoch || current.intent !== 'accepted' || current.template) return fail(409, 'capture_cancelled');
           current.template = encrypted; current.templateEpoch = row.epoch; current.templateExpiresAt = Math.min(current.intentExpiresAt!, this.now() + this.options.providerApproval!.templateTtlMs);
           current.providerId = provider.id; current.providerVersion = provider.version; current.deletion = 'not_required'; delete current.lastPurgeAt; current.revision++;
-        });
-        return { status: await this.read(telegramId, scope) };
+        }, () => this.authorityNow(telegramId, scope.space, a.fingerprint));
+        const status = await this.read(telegramId, scope); effectFence();
+        return { status };
       }
       if (!row.template || row.templateEpoch === undefined || (row.templateExpiresAt ?? 0) <= this.now()) return fail(409, 'enrollment_required');
+      effectFence();
       reference = this.options.cipher!.decrypt(row.template, { ...scope, accountId: a.accountId, personId: a.personId, epoch: row.templateEpoch });
       await fresh();
-      const match = await boundedProvider(provider.compare({ query, candidates: [{ id: 'self', template: reference }], signal: controller.signal }), controller.signal);
+      const match = await boundedProvider(effect(() => provider.compare({ query: query!, candidates: [{ id: 'self', template: reference! }], signal: controller.signal, authorize: effectFence, captureContext: captureId })), controller.signal);
       await fresh();
-      return { status: await this.read(telegramId, scope), hint: { outcome: match.candidateId === 'self' ? 'possible_self' : 'unknown', authenticationRequired: true, identityChanged: false } };
+      const status = await this.read(telegramId, scope); effectFence();
+      return { status, hint: { outcome: match.candidateId === 'self' ? 'possible_self' : 'unknown', authenticationRequired: true, identityChanged: false } };
     } finally {
       audio.fill(0); query?.fill(0); reference?.fill(0); clearTimeout(timeout); signal?.removeEventListener('abort', onAbort);
       if (activeKey) { const controllers = this.active.get(activeKey); controllers?.delete(controller); if (!controllers?.size) this.active.delete(activeKey); }

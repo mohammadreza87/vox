@@ -18,6 +18,14 @@ export function VoiceRecognitionPanel({ space, locale = 'en' }: { space: 'work' 
   const generation = useRef(0), controller = useRef<AbortController | null>(null);
   const fa = locale === 'fa';
   const t = (en: string, persian: string) => fa ? persian : en;
+  const unavailable = (reason?: string) => {
+    if (reason === 'biometric_consent_required') return t('Review the separate Voice recognition choice in You first.', 'ابتدا انتخاب جداگانهٔ تشخیص صدا را در بخش «شما» بررسی کنید.');
+    if (reason === 'inspection_not_qualified' || reason === 'matching_not_qualified') return t('Local voice recognition is still being tested and is not ready for enrollment. Your microphone stays off.', 'تشخیص محلی صدا هنوز در حال آزمایش است و برای ثبت صدا آماده نیست. میکروفون شما خاموش می‌ماند.');
+    if (reason === 'recognition_not_configured' || reason === 'recognition_disabled') return t('Voice recognition has not been enabled on this server. Your microphone stays off.', 'تشخیص صدا در این سرور فعال نشده است. میکروفون شما خاموش می‌ماند.');
+    if (reason === 'local_engine_unavailable') return t('The local voice service is unavailable. You can refresh or delete an existing enrollment.', 'سرویس محلی صدا در دسترس نیست. می‌توانید صفحه را تازه کنید یا ثبت صدای قبلی را حذف کنید.');
+    if (reason === 'recognition_release_not_configured' || reason === 'recognition_release_expired') return t('Voice recognition is waiting for its service review. Your microphone stays off.', 'تشخیص صدا در انتظار بررسی سرویس است. میکروفون شما خاموش می‌ماند.');
+    return t('Recognition is unavailable for this profile, region or provider. No recognition microphone capture is enabled.', 'تشخیص صدا برای این نمایه، منطقه یا ارائه‌دهنده در دسترس نیست. ضبط میکروفون برای تشخیص فعال نمی‌شود.');
+  };
   const load = useCallback(async () => {
     const current = ++generation.current;
     controller.current?.abort(); setCapturing(false); setBusy(false); setData(null); setSelfOnly(false); setMessage(''); setError('');
@@ -83,7 +91,7 @@ export function VoiceRecognitionPanel({ space, locale = 'en' }: { space: 'work' 
     {data && <>
       <div className="vx-pause-state" style={{ '--status': data.available && data.enrollment === 'enrolled' ? 'var(--success)' : 'var(--text-3)' } as React.CSSProperties}>
         <span className="vx-status-dot" aria-hidden="true" />
-        <p role="status">{data.available ? data.enrollment === 'enrolled' ? t('Enrolled on this device session in this space.', 'در این نشست دستگاه و این فضا ثبت شده است.') : t('No active enrollment on this device session in this space.', 'در این نشست دستگاه و این فضا ثبت فعال وجود ندارد.') : data.reason === 'biometric_consent_required' ? t('Review the separate Voice recognition choice in You first.', 'ابتدا انتخاب جداگانهٔ تشخیص صدا را در بخش «شما» بررسی کنید.') : t('Recognition is unavailable for this profile, region or provider. No recognition microphone capture is enabled.', 'تشخیص صدا برای این نمایه، منطقه یا ارائه‌دهنده در دسترس نیست. ضبط میکروفون برای تشخیص فعال نمی‌شود.')}</p>
+        <p role="status">{data.available ? data.enrollment === 'enrolled' ? t('Enrolled on this device session in this space.', 'در این نشست دستگاه و این فضا ثبت شده است.') : t('No active enrollment on this device session in this space.', 'در این نشست دستگاه و این فضا ثبت فعال وجود ندارد.') : unavailable(data.reason)}</p>
       </div>
       {data.deletion === 'provider_pending' && <div className="vx-banner warn"><Icon name="warn" size={18} /><div className="vx-banner-body"><span role="alert">{t('Recognition is blocked. Provider deletion is pending; retry deletion to check again.', 'تشخیص مسدود شده است. حذف نزد ارائه‌دهنده در انتظار است؛ برای بررسی دوباره، حذف را تکرار کنید.')}</span></div></div>}
       {data.deletion === 'online_completed' && <p className="vx-footnote">{t('Online template deletion completed. Backup expiry follows the operator’s reviewed policy.', 'حذف الگوی آنلاین کامل شد. انقضای پشتیبان‌ها تابع سیاست بررسی‌شدهٔ بهره‌بردار است.')}</p>}

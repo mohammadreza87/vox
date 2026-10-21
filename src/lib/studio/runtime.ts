@@ -94,6 +94,7 @@ import { DecisionService, OpenAIDecisionProvider } from '../adaptive/decisions';
 import { studioDecider } from '../tireh/decisions/service-decider';
 import { VoiceIdentityService } from '../adaptive/voice-identity/service';
 import { VoiceIdentityRepository } from '../adaptive/voice-identity/repository';
+import { localVoiceIdentityOptions } from '../adaptive/voice-identity/runtime-config';
 import { canUseAgent } from './permissions';
 import { sharedAuthorityFromStudioStore } from './shared-authority';
 import { z } from 'zod';
@@ -411,21 +412,22 @@ async function create(): Promise<Studio> {
         enabled: true, endpointId: reminderEndpointId, botToken: config.token, webAppUrl: config.webAppUrl,
       });
     }
-    // No matching provider is qualified by this release. Status/delete remain
-    // reachable, while every capture/enrollment operation fails before audio.
-    studio.deps.voiceIdentity = new VoiceIdentityService(storage.adaptive!, new VoiceIdentityRepository(storage.voiceIdentityStorage), { enabled: false });
+    // Local recognition keeps the canonical explicit enrollment/erasure path.
+    // Missing model/inspection/release qualification never enables capture.
+    const localVoice = await localVoiceIdentityOptions(env, { storage: config.storage === 'firestore' ? 'firestore' : 'file' });
+    studio.deps.voiceIdentity = new VoiceIdentityService(storage.adaptive!, new VoiceIdentityRepository(storage.voiceIdentityStorage), localVoice.options);
     storage.adaptive!.setVoiceIdentityInvalidator(async ({ telegramId, space }) => {
       await studio.deps.voiceIdentity!.invalidate(telegramId, space);
     });
     // S11L: with STUDIO_VOICE_RECOGNITION and VOICEPRINT_KEY unset nothing is wired (base behaviour).
     const voiceprintIdentity = await import('./identity');
-    const vp = voiceprintIdentity.voiceprintConfigFromEnv(env, { storage: config.storage === 'firestore' ? 'firestore' : 'file', production: config.production });
+    const vp = voiceprintIdentity.voiceprintConfigFromEnv(localVoice.selected ? { ...env, STUDIO_VOICE_RECOGNITION: '0' } : env, { storage: config.storage === 'firestore' ? 'firestore' : 'file', production: config.production });
     if (vp) {
       const store = config.storage === 'firestore'
         ? new voiceprintIdentity.FirestoreVoiceprintStore(await (await import('@/lib/firebase-admin')).getAdminDb())
         : new voiceprintIdentity.FileVoiceprintStore(join(config.dataDir, 'voiceprints-v1.json'));
       studio.deps.voiceprints = new voiceprintIdentity.VoiceprintService({ store, cipher: vp.cipher, provider: vp.provider, thresholds: vp.thresholds,
-        orgKey: studio.deps.orgName, adaptive: storage.adaptive!, echoVoices: voiceprintIdentity.echoVoicesFromStudio(studio.deps.store, studio.deps.eleven) });
+        orgKey: studio.deps.orgName, adaptive: storage.adaptive!, flags: () => ({ voiceRecognition: vp.enabled }), echoVoices: voiceprintIdentity.echoVoicesFromStudio(studio.deps.store, studio.deps.eleven) });
       // Keeps the existing VoiceIdentityService invalidation and adds voiceprint deletion.
       storage.adaptive!.setVoiceIdentityInvalidator(voiceprintIdentity.chainVoiceInvalidators(studio.deps.voiceIdentity!, studio.deps.voiceprints));
     }
