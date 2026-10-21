@@ -1,6 +1,6 @@
 # Vox: intelligent, fast agents with layered shared memory
 
-Research, project review and solution. Prepared 19–20 October 2026 against branch `develop` at commit `9fb73d3`.
+Research, project review and solution. Prepared 19–20 October 2026 against branch `develop` at commit `9fb73d3`. **Status, 20 October 2026:** step 0 of section 5 is deployed (revision `504203f`, [receipt](implementation/RELEASE_INTELLIGENCE_STEP0_2026_10_20.md)) except its measurement gate; step 1 has only the committed-document privacy read; steps 2 to 15 are not started. Section 3 findings that step 0 closed are marked in place.
 
 Status: a product and architecture proposal. No production turn was measured; latency and cost figures are engineering estimates from documented prices, third-party benchmarks and a line-by-line reading of the code. Where a number is unverified it says so. Nothing here replaces counsel on GDPR, the AI Act, BIPA or CUBI.
 
@@ -111,7 +111,7 @@ Forty commits landed on 19 October 2026 (memory strategy, privacy plan, adaptive
 
 ### 3.2 The production state nobody should be surprised by
 
-In every runtime that `src/lib/studio/runtime.ts` builds, the adaptive service is wired and its `runtimePrivacy.read` returns `memoryEnabled: false, historyEnabled: false` unconditionally ("legacy unscoped stores have no authoritative source lineage: never unlock them", `src/lib/adaptive/persistence/service.ts`). `gateway.boundary()` derives both flags from it. Consequently, in production: no chat history is replayed, no TIREH memories are retrieved, no extraction runs, and each live-call turn is answered without the previous turns of the same call. Replies are the persona prompt plus the current message plus any adaptive "saved context" strings. `docs/PRODUCTION.md` documents this as the deliberate default-disabled transition. The Studio test helper never wires the adaptive service, so most memory tests exercise a path production does not take.
+In every runtime that `src/lib/studio/runtime.ts` builds, the adaptive service is wired and its `runtimePrivacy.read` returns `memoryEnabled: false, historyEnabled: false` unconditionally ("legacy unscoped stores have no authoritative source lineage: never unlock them", `src/lib/adaptive/persistence/service.ts`). `gateway.boundary()` derives both flags from it. Consequently, in production: no chat history is replayed, no TIREH memories are retrieved, no extraction runs, and each live-call turn is answered without the previous turns of the same call. Replies are the persona prompt plus the current message plus any adaptive "saved context" strings. `docs/PRODUCTION.md` documents this as the deliberate default-disabled transition. (Fixed in step 0, `04ebc3b`: `makeStudio()` now wires the adaptive service by default, and the two group-guest answer tests that assumed the legacy path run on an explicit legacy harness.) Before that, the Studio test helper never wires the adaptive service, so most memory tests exercise a path production does not take.
 
 This is not a bug to patch quietly. It is a product decision to reverse under consent, with the notice, retention copy and DPIA updated at the same time (section 5, step 4).
 
@@ -133,8 +133,8 @@ This is not a bug to patch quietly. It is a product decision to reverse under co
 
 ### 3.4 Privacy and security findings to fix first
 
-- **Stranger voice notes bypass the stranger gate.** For a public agent, a non-member's text goes through `decideOnStranger`, but a voice note is routed straight to the gateway, which downloads it and posts it to OpenAI or ElevenLabs STT before any decision (`src/lib/studio/updates.ts:111`, `gateway.ts:306`). Guest-group voice notes are transcribed when the persona is addressed. This contradicts PRIV-020 and PRIV-023.
-- **Legacy ElevenLabs custom-LLM routes are unauthenticated.** `/api/convai/llm` and `/api/convai/chat/completions` forward any body to Gemini with no bearer check; only `STUDIO_ONLY=1` hides them. `/api/convai/session` issues signed URLs with no caller binding. The legacy `/app` surface also includes `/api/clone-voice` (ElevenLabs cloning from user uploads), a second Telegram webhook, `/api/user/data` and the old memory stack; none of it was in scope of the privacy plan.
+- **Fixed in step 0 (`bf02807`).** Stranger voice notes bypassed the stranger gate. For a public agent, a non-member's text goes through `decideOnStranger`, but a voice note is routed straight to the gateway, which downloads it and posts it to OpenAI or ElevenLabs STT before any decision (`src/lib/studio/updates.ts:111`, `gateway.ts:306`). Guest-group voice notes are transcribed when the persona is addressed. This contradicts PRIV-020 and PRIV-023.
+- **Fixed in step 0 (`e38647c`): the `/api/convai/llm` and `chat/completions` proxies are deleted and session issuance is bound to a signed-in user.** Legacy ElevenLabs custom-LLM routes were unauthenticated. `/api/convai/llm` and `/api/convai/chat/completions` forward any body to Gemini with no bearer check; only `STUDIO_ONLY=1` hides them. `/api/convai/session` issues signed URLs with no caller binding. The legacy `/app` surface also includes `/api/clone-voice` (ElevenLabs cloning from user uploads), a second Telegram webhook, `/api/user/data` and the old memory stack; none of it was in scope of the privacy plan.
 - **Group memory goes dark on membership growth.** `isVisibleToAudience` requires every current member to be in the creation-time snapshot, so one new member makes every earlier group memory invisible to everyone, forever; there is no re-authorisation path (fail-closed, so not a leak, but it destroys the value of group memory).
 - **Successor agents inherit everything.** `inheritMemories` copies all records of a fired agent, including private and sensitive ones, with no grant check and an empty tombstone set, contradicting the strategy.
 - **Subjects have no rights.** Only the utterer can see, share or delete a claim; `aboutPersonIds` is never consulted for access or deletion.
@@ -366,7 +366,7 @@ Four concepts stay distinct, as `src/lib/adaptive/types.ts` already encodes: aut
 
 Baselines are estimates for the Firestore profile (text about 7 s p50, voice note about 12 s, live call 3.6 s to first token then 15 to 30 s per reply). The Mac file profile is faster per recomputation but has the same shape. Step 0 replaces these with measurements.
 
-**Measured: step 1 (boundary once), Mac file profile, 20 October 2026.** Vox-side work only. The model is a local stub (zero latency for text; twelve deltas 25 ms apart for live), so no network or model time is included. Harness: `src/lib/studio/__tests__/turn-latency.bench.test.ts` (opt-in, `VOX_TURN_BENCH=1`), content-free timers on the gateway's boundary and recheck calls, a consented account with three saved notes, an explicit preference and shared memory wired. Each figure is the median of three runs of 15 turns after 3 warm-up turns, before (`0ba1ddd`) and after on the same machine. Step 0's product timers had not landed, so the harness wraps the gateway methods instead. Absolute numbers move with machine load (an earlier "before" run measured 540 ms for the same text turn); the counts and ratios are stable. Firestore was not measured.
+**Measured: step 1 (boundary once), Mac file profile, 20 October 2026.** Vox-side work only. The model is a local stub (zero latency for text; twelve deltas 25 ms apart for live), so no network or model time is included. Harness: `src/lib/studio/__tests__/turn-latency.bench.test.ts` (opt-in, `VOX_TURN_BENCH=1`), content-free timers on the gateway's boundary and recheck calls, a consented account with three saved notes, an explicit preference and shared memory wired. Each figure is the median of three runs of 15 turns after 3 warm-up turns, before (`0ba1ddd`) and after on the same machine. When this was first measured, Step 0's product timers had not landed, so the harness wraps the gateway methods instead. Absolute numbers move with machine load (an earlier "before" run measured 540 ms for the same text turn); the counts and ratios are stable. Firestore was not measured.
 
 | Stage (ms unless a count) | Private text before | Private text after | Live call before | Live call after |
 |---|---|---|---|---|
@@ -389,6 +389,16 @@ Baselines are estimates for the Firestore profile (text about 7 s p50, voice not
 | Request to provider call | 136 | 46 | 271 | 33 |
 | Request to first SSE content | | | 415 | 60 |
 | Turn total, Vox side | 303 | 52 | 1,754 | 343 (300 is the stub stream) |
+
+**Measured on develop `39ef433` with step 1 merged (`step1-into-develop`), same harness and machine.** On this branch the change is confined to `boundary()`, `unchanged()` and the live recheck loop, and file-format snapshots read through `readCommittedForEffect`. A repeated `boundary()` in the same turn (after relationship observation, before memory writes) replays the snapshot instead of loading it again.
+
+| Stage (ms unless a count) | Private text, develop | Private text, branch | Live call, develop | Live call, branch |
+|---|---|---|---|---|
+| Full boundary computations per turn (count) | 7 | 1 | 16 | 1 |
+| All privacy work | 296 | 20 | 711 | 19 |
+| Request to provider call | 124 | 16 | 174 | 20 |
+| Request to first SSE content | | | 247 | 46 |
+| Turn total, Vox side | 297 | 22 | 1,025 | 329 (300 is the stub stream) |
 
 ### 4.12 What it costs
 

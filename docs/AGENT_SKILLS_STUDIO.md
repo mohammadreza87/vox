@@ -1,6 +1,6 @@
 # Vox agents: a premium skill library, a human voice and a smarter creation flow
 
-Prepared 20 October 2026 on branch `feat/agent-skills-studio` (base `d56dfa7`, which is `develop` plus step 0 of `AGENT_INTELLIGENCE_SOLUTION.md`).
+Prepared 20 October 2026 on branch `feat/agent-skills-studio` (base `d56dfa7`, which is `develop` plus step 0 of `AGENT_INTELLIGENCE_SOLUTION.md`). Merged into `develop` the same day through PR #87, with follow-ups in PR #92 (merge regressions) and PR #95 (each message's skill playbook chosen with OpenAI Decisions).
 
 The ask: agents "talk like a stupid bot". We want world-class role skills and knowledge for lifestyle, tech, AI, mobile and publishing teams, a premium but minimal creation flow, and smart decision routing. This document says what was built, why, what was decided along the way, and what is still unverified. The research behind it is in `docs/agent-skills/`:
 
@@ -10,7 +10,7 @@ The ask: agents "talk like a stupid bot". We want world-class role skills and kn
 | [VOICE.md](agent-skills/VOICE.md) | Why agents sounded robotic (traced to code), the voice charter, persona drafting rules, Persian register, eval kit |
 | [CREATION_UX.md](agent-skills/CREATION_UX.md) | Teardown of 13 agent builders, principles, the new Brief and Persona steps state by state |
 
-It builds on `AGENT_INTELLIGENCE_SOLUTION.md` and does not change its privacy spine. Because skills make the stable part of each prompt larger, this branch also turns on the simplest form of that plan's prompt caching (§4.7): the stable prefix is sent as one cached block.
+It builds on `AGENT_INTELLIGENCE_SOLUTION.md` and does not change its privacy spine. Because skills make the stable part of each prompt larger, this work also turns on the simplest form of that plan's prompt caching (§4.7): the stable prefix is sent as one cached block.
 
 ---
 
@@ -220,7 +220,7 @@ Motion uses the existing ease tokens, with one animated cloud on screen, haptics
    - per-turn skill selection with Decisions (inject only the matching playbook);
    - Persian screens once all six steps are translated.
 
-### Also fixed in this branch (found while reviewing)
+### Also fixed in this work (found while reviewing)
 
 - **The same token-budget bug in other Claude calls.** Each now sends an effort level and has room for thinking:
 

@@ -1,5 +1,7 @@
 # VOX Production Readiness Specification
 
+> **Historical document (2025 to January 2026).** It describes the Firebase-hosted voice-contacts web app. The current product is the Telegram-based Vox Studio; see [README.md](README.md), [docs/VOX_STUDIO.md](docs/VOX_STUDIO.md) and [docs/implementation/PLAN.md](docs/implementation/PLAN.md). Most of its items (JWT, validation, security headers, audit log, structured logging, rate limiting, health route) have since shipped for the legacy surface; its test and version figures are out of date.
+
 > **Version:** 1.0
 > **Date:** December 28, 2025
 > **Status:** Draft

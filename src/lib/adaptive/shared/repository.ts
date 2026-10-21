@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { AdaptiveStorage } from '../persistence/storage';
+import { committedLoader, CommittedReadBusy, type AdaptiveStorage } from '../persistence/storage';
 import { digest } from '../persistence/repository';
 import { activeReadScope, memoized, type TurnReadScope } from '../../tireh/privacy/read-scope';
 import type { SharedRecipient, SharedSpace } from './contracts';
@@ -80,9 +80,9 @@ export class SharedMemoryRepository {
   }
   /** Starts the read-only load of the shared document in the active read scope; no-op outside one. */
   async preload(): Promise<void> {
-    const scope = activeReadScope(), load = this.storage.load?.bind(this.storage);
+    const scope = activeReadScope(), load = committedLoader(this.storage);
     if (!scope || !load) return;
-    await scope.document(this.storage, this.key, () => load(this.key));
+    await scope.document(this.storage, this.key, () => load(this.key)).catch(() => undefined);
   }
   private parse(raw: unknown): SharedDocument {
     const parsed = raw === null ? undefined : documentSchema.safeParse(raw);
@@ -97,9 +97,14 @@ export class SharedMemoryRepository {
    * rewritten. A callback that changes the document (pruning, audience
    * invalidation) commits through the ordinary transaction instead. */
   private async served<T>(scope: TurnReadScope, fn: (document: SharedDocument) => T): Promise<T> {
-    const load = this.storage.load?.bind(this.storage);
+    const load = committedLoader(this.storage);
     if (!load) { scope.passThrough(); scope.noteWrite(); return this.committed(fn); }
-    const loaded = await scope.document(this.storage, this.key, () => load(this.key));
+    let loaded;
+    try { loaded = await scope.document(this.storage, this.key, () => load(this.key)); }
+    catch (error) {
+      if (!(error instanceof CommittedReadBusy)) throw error;
+      scope.passThrough(); return this.committed(fn);
+    }
     const parsed = memoized(loaded, 'shared:parsed', () => this.parse(loaded.value));
     const canonical = memoized(loaded, 'shared:canonical', () => JSON.stringify(parsed));
     const draft = structuredClone(parsed);

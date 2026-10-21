@@ -159,9 +159,10 @@ describe('recheck cost', () => {
     const rechecks = vi.spyOn(proto, 'unchanged');
     const reads = vi.spyOn(InProcessRevisionSource.prototype, 'read');
     expect(await gateway.handleUpdate(agent.id, privateText(ID.alice, 'Synthetic counted turn'))).toBe('replied');
+    // One snapshot load; every later boundary (after relationship observation,
+    // before memory writes) and every recheck is one revision read plus a replay.
     expect(snapshots).toHaveBeenCalledTimes(1);
-    expect(boundaries).toHaveBeenCalledTimes(1); // no recheck fell back to a full recompute
     expect(rechecks.mock.calls.length).toBeGreaterThan(0);
-    expect(reads.mock.calls.length).toBeLessThanOrEqual(rechecks.mock.calls.length);
+    expect(reads.mock.calls.length).toBeLessThanOrEqual(rechecks.mock.calls.length + boundaries.mock.calls.length - 1);
   });
 });

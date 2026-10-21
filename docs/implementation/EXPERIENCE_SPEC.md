@@ -1,5 +1,7 @@
 # Vox Studio experience contract — first delivery stage
 
+**Status, 20 October 2026:** the Privacy, Reminder and Voice recognition screens specified here exist in `src/app/studio/_components` and `src/app/studio/_components/screens`; this file remains the design reference, not a status record.
+
 Design version: `experience.v1-draft`, 19 October 2026. Tasks: **VOX-003, VOX-004; design-only VOX-005**. Author role: `vox_ux_designer`. Source baseline: `ebb75a67c79bf317d1dec40381b216c75bb90ffa`, with the supplied uncommitted implementation planning package. Owned artifact: this file only.
 
 **Disposition: ready for product/privacy review, not approved for collection or release.** This is an implementable design specification derived from source and synthetic scenarios. No usability participants, browser sessions, legal approvals, provider calls, implementation completion or deployed behavior are claimed. The six walkthroughs below are deterministic review scripts with expected outcomes, not reports that the application passed them. EN/FA copy needs native-language and privacy review before publication. Existing plan dependencies and launch gates remain authoritative.

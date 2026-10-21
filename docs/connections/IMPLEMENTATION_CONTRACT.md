@@ -1,5 +1,7 @@
 # Connections foundation implementation contract
 
+**Status, 20 October 2026:** merged into `develop`; the branch name below is historical.
+
 Candidate: `codex/studio-connections`, base `d8d6766`. Implementation evidence is synthetic. This file supersedes proposed foundation shapes where the exported source differs; it does not admit a provider or production identity.
 
 The server constructs `ConnectionsService(repository, {resolveContext, catalog, now})`. The resolver uses the authenticated account's current verified person binding and exact Work/Personal scope, with current usable agent IDs. Browser scope, provider subjects and Studio roles cannot supply this authority. Only a private one-person audience is currently admitted. Enrollment accepts a provider ID and label, creates a pending connection and zero grants. Only the broker's verified enrollment callback can attach the external subject/tenant/scopes. Reconnect creates a new connection; revoked identifiers and grants cannot be silently reused.

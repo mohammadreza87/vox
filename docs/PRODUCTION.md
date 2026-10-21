@@ -246,6 +246,14 @@ requests, and counts request bytes before parsing. File-mode counters are
 process-local. Firebase uses transaction-backed shared counters, Firestore state
 and webhook delivery instead of long polling.
 
+Connections stays disabled unless all three of `STUDIO_CONNECTIONS_CONFIG_FILE`,
+`STUDIO_CONNECTIONS_BROKER_URL` and `STUDIO_CONNECTIONS_BROKER_AUTH_KEY_FILE` are
+set and every profile in the manifest is marked qualified; the broker is read-only
+by construction. The install script preserves these keys, and none is set on the
+Mac Studio host. See [connections/ACCOUNT_ONBOARDING.md](connections/ACCOUNT_ONBOARDING.md).
+`src/lib/env.ts` validates only the legacy web-app variables and is not used by
+Studio, which reads its `STUDIO_*` and `VOXX_*` variables in `src/lib/studio/runtime.ts`.
+
 Telegram Web framing is allowed only from `https://web.telegram.org`. Calls still
 require microphone permission and delegation by the Telegram client. See
 [Telegram clients](https://telegram.org/apps),
