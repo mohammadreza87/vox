@@ -71,7 +71,6 @@ import { FirestoreStudioRateLimiter } from './firestore-ratelimit';
 import { Studio, type StudioDeps } from './service';
 import { FilePetStore, FirestorePetStore } from './pet-store';
 import { StudioStore, type StudioStorage } from './store';
-import { FilePetStore } from './pet-store';
 import { RelationshipLoop, FileRelationshipStore, FirestoreRelationshipStore, FileObservationStore, FirestoreObservationStore, SafeRelationshipObserver, OpenAIFollowUpReview, OpenAIRelationshipFeedback } from '../relationships';
 import { StudioRelationshipAssessor } from './relationship-assessor';
 import { relationshipConfig } from './relationship-config';
