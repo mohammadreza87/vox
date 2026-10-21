@@ -108,7 +108,7 @@ export const LENS_EYE = 1;
 /** Lensed eye proportions over the kit (multipliers on [half-width, height]): a touch shorter, so the eye fills about 60 % of the ring with clear air above and below (A1/B1). */
 const LENS_TUNE: [number, number] = [1, 0.88];
 /** Small clips whose colour must read on the body (contrast rule): [ΔL, hue distance]. */
-const CLIP_CONTRAST: Partial<Record<string, [number, number]>> = { star: [0.1, 60], bow: [0.08, 45], flower: [0.08, 45], scarf: [0.08, 60], bowtie: [0.08, 45] };
+const CLIP_CONTRAST: Partial<Record<string, [number, number]>> = { star: [0.1, 60], bow: [0.08, 45], flower: [0.08, 45], bowtie: [0.08, 45] };
 /** At 48 px and under, lensed eyes shrink by this much (so rings, eyes and mouth stay separate marks). */
 const MICRO_LENS_EYE = 0.85;
 

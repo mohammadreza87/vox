@@ -116,7 +116,7 @@ export function settle(el: HTMLElement | null, reduced: boolean) {
 /* ---------- part choreography (motion §4.10) ---------- */
 
 const HATS: ReadonlySet<Accessory> = new Set(['beret', 'cap', 'beanie', 'headphones', 'headset', 'bow', 'flower', 'star']);
-const UNFURL: ReadonlySet<Accessory> = new Set(['scarf', 'bowtie']);
+const UNFURL: ReadonlySet<Accessory> = new Set(['bowtie']);
 
 /** Parts start hidden at their pivots, ready to pop in after a swap. */
 export function hideParts(p: RigParts, which: { ears?: boolean; hair?: boolean; acc?: Accessory | false }) {

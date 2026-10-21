@@ -189,7 +189,7 @@ export function softFill(c: string): string {
 const FILL_ACCENT: Partial<Record<AccentColor, string>> = { navy: '#9DB4D8', ink: '#AEB6C8', cocoa: '#C9A28C', berry: '#D98AA0' };
 /**
  * Accessory colour: hue accents take the hue's shade so they read against a pastel body. Filled pieces (`fill`)
- * are clamped into the matte pastel band (L ≥ .72, C ≤ .12): a navy bowtie, cup or scarf is the heaviest mark in
+ * are clamped into the matte pastel band (L ≥ .72, C ≤ .12): a navy bowtie or cup is the heaviest mark in
  * the frame and pulls focus off the eyes. Lines (glasses, specs) keep the true accent; ink is for lines only.
  */
 export const accentColor = (a: AccentColor, fill = false) => {

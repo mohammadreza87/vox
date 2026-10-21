@@ -81,7 +81,7 @@ export function randomLooks(count: number, seed = 7): CharacterLook[] {
 const ACCENT_OPTIONS: Record<Accessory, AccentColor[]> = {
   none: ['ink'], glasses: ['ink', 'cocoa'], specs: ['ink', 'cocoa', 'navy'], beret: ['berry', 'navy', 'ink'], cap: ['navy', 'coral', 'ink'],
   beanie: ['coral', 'navy', 'cream'], headphones: ['ink', 'navy', 'cream'], headset: ['navy', 'ink'], bow: ['coral', 'berry', 'cream'],
-  scarf: ['berry', 'navy', 'coral'], flower: ['cream', 'butter'], star: ['volt'], bowtie: ['navy', 'berry', 'ink'],
+  flower: ['cream', 'butter'], star: ['volt'], bowtie: ['navy', 'berry', 'ink'],
 };
 
 // ---- sheets

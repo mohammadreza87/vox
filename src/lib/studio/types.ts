@@ -134,7 +134,7 @@ export type CloudSpecies = 'cloud' | 'cat' | 'dog' | 'bunny' | 'bear' | 'owl' | 
 export type HairStyle = 'none' | 'tuft' | 'fringe' | 'bun' | 'curls' | 'spiky' | 'pony';
 export type HairTone = 'deep' | 'cream' | 'cocoa' | 'ink' | Hue;
 export type Accessory = 'none' | 'glasses' | 'specs' | 'beret' | 'cap' | 'beanie' | 'headphones'
-  | 'headset' | 'bow' | 'scarf' | 'flower' | 'star' | 'bowtie';
+  | 'headset' | 'bow' | 'flower' | 'star' | 'bowtie';
 export type AccentColor = 'ink' | 'cream' | 'volt' | 'coral' | 'navy' | 'berry' | 'cocoa' | Hue;
 /** Forming stage of the progressive face: 1 wisp · 2 puff · 3 shaped · 4 formed */
 export type Stage = 1 | 2 | 3 | 4;

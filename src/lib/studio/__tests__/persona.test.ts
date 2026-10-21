@@ -83,8 +83,8 @@ describe('draftPersona', () => {
     const { look } = await draftPersona(new ScriptedLLM().push(draftJson({}, clash)), {}, 'HOOR');
     expect(look).toMatchObject({ hue: 'rose', species: 'bunny', hair: 'tuft', accessory: 'none' });
     expect(isCompatible(look).ok).toBe(true);
-    const chick = { hue: 'butter', family: 'puff', features: { cheeks: true, lashes: false, brows: false }, species: 'chick', hair: 'curls', accessory: 'scarf' };
-    expect((await draftPersona(new ScriptedLLM().push(draftJson({}, chick)), {}, 'HOOR')).look).toMatchObject({ species: 'chick', hair: 'none', accessory: 'scarf' });
+    const chick = { hue: 'butter', family: 'puff', features: { cheeks: true, lashes: false, brows: false }, species: 'chick', hair: 'curls', accessory: 'bowtie' };
+    expect((await draftPersona(new ScriptedLLM().push(draftJson({}, chick)), {}, 'HOOR')).look).toMatchObject({ species: 'chick', hair: 'none', accessory: 'bowtie' });
   });
 
   it('falls back to a compatible random v2 look when Claude invents a species', async () => {

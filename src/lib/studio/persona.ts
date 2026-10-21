@@ -128,7 +128,7 @@ const LOOK_RULES = `Also design their mascot "look": a cute vinyl-toy cloud crea
 - family: "puff" (wide and round), "tower" (a little taller, two shoulder puffs) or "drift" (asymmetric, the larger puff on the right).
 - species: "cloud" (pure cloud) or a light animal hint that suits their personality: cat, dog, bunny, bear, owl or chick. Never derive it from culture or gender.
 - hair: none, tuft, fringe, bun, curls, spiky or pony; optional hairTone: deep (a darker shade of the body), cream, cocoa, ink or a hue name.
-- accessory: one small item hinting at their work. Role guide: support → headset; research, analyst, finance → specs or glasses; design, creative, marketing → beret, flower or star; engineering, ops → headphones, cap or beanie; sales, exec, host → bowtie or scarf; coach, wellbeing → flower or scarf; anything else → none or bow.
+- accessory: one small item hinting at their work. Role guide: support → headset; research, analyst, finance → specs or glasses; design, creative, marketing → beret, flower or star; engineering, ops → headphones, cap or beanie; sales, exec, host → bowtie; coach, wellbeing → flower or bow; anything else → none or bow.
 - features: cheeks, lashes and brows (on/off). Presentation may inform but never dictates any part.
 Combinations that never work: a beret, cap or beanie with tuft, bun or spiky hair; a chick with any hair (its crest is its hair); an owl with hair other than none or fringe; a bunny with a cap, a beanie or spiky hair; a drift dog with headphones or a headset.
 Surprise us: vary looks between agents.`;
