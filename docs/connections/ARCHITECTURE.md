@@ -1,5 +1,7 @@
 # Per-agent Connections: architecture and execution contract
 
+**Status, 20 October 2026:** proposal-era component names (`ToolRuntime`, `ExecutionBroker`, `remote_mcp`, `SafeHealth`) differ from the shipped code (`ConnectionTaskRuntime`, `ConnectionsBroker`, protocols `rest`, `mcp`, `browser_worker`, `ssh_worker`); Notion, Google Workspace and Slack ship as REST adapters, not remote MCP. See [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md).
+
 Task `CONN-PLAN-ARCH`. Research/design only, 19 October 2026. Vox source inspected at `42a1a57113e655b6185ddc731b6f9617aaa4bb4e` (`develop` baseline). Nothing in this document implements a connection, accesses a connected account, starts workers, changes Telegram delivery, or admits a provider to production. All types, endpoints, states, limits and rollout stages below are **proposals** unless explicitly marked observed.
 
 ## Decision and boundaries

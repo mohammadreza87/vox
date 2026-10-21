@@ -1,5 +1,7 @@
 # Vox privacy, consent and voice recognition implementation requirements
 
+**Status, 20 October 2026:** the requirements below are historical. The consent ledger and receipts, the `PRIV-*` checks, Work/Personal spaces, rights intake and the public `/privacy` notice are implemented in `src/lib/adaptive` and `src/app/studio` and deployed; [PLAN.md](PLAN.md) carries the current baseline. Legal sign-off of the notice text and of the processing roles remains open.
+
 Planning review: **19 October 2026**. Status: **proposed requirements and bilingual draft copy; no implementation, collection, legal sign-off or deployment**. Registered operator name supplied by the user: **Joyixir OÜ**. Intended launch audience: **adults only (18+) in the EU/EEA and US**. The user confirmed **info@joyixir.com** as Joyixir's privacy contact on 19 October 2026. Mailbox operation and legal approval have not been verified. The [registered address is verified from the official Estonian register](OPERATOR_DETAILS.md). Mailbox operation, processing roles and the full legal notice still require qualification.
 
 **اطلاعات تماس تأییدشده توسط کاربر:** کاربر در ۱۹ اکتبر ۲۰۲۶ نشانی **info@joyixir.com** را برای تماس دربارهٔ حریم خصوصی Joyixir تأیید کرد. کارکرد صندوق ایمیل و تأیید حقوقی بررسی نشده است. نام شخصیت حقوقی ثبت‌شده، **Joyixir OÜ**، توسط کاربر تأیید شد؛ نشانی ثبت‌شده از سامانهٔ رسمی شرکت‌های استونی بررسی شده است؛ نقش‌های پردازش و تأیید کامل متن حقوقی هنوز تکمیل نشده‌اند.

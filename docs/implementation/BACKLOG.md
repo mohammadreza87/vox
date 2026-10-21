@@ -313,7 +313,7 @@ Propagate revocation/deletion across history projections, summaries, cache/searc
 
 **Requirements:** REQ-03, REQ-19. **Depends on:** VOX-009, VOX-010, VOX-011, VOX-014.
 
-**Implementation progress:** Legacy unscoped history/auto-memory remains denied without silent consent migration. Current adaptive FILE/SQLite/FILEv2 format transition, recovery and current-state rollback tooling is implemented and independently source-tested (INDEXED_STORAGE.md). Broader legacy application inventory, ownership/purpose reconciliation, quarantine mapping and production residual/restore qualification remain open; storage-format conversion does not grant historical data new consent.
+**Implementation progress:** Legacy unscoped history/auto-memory remains denied without silent consent migration. Current adaptive FILE/SQLite/FILEv2 format transition, recovery and current-state rollback tooling is implemented and independently source-tested (INDEXED_STORAGE.md). Broader legacy application inventory, ownership/purpose reconciliation, quarantine mapping and production residual/restore qualification remain open; storage-format conversion does not grant historical data new consent. LIP1 isolated synthetic inventory/planner is implemented on candidate `bbff2304792f998a357eabe0c6888955c3909c57` (tree `de57f234ecd9ecb9091e4b4cdb0717895931c528`; base `cf63acf64c6eadf5a2247d2436e0a22bc114386b`). Author reported 122 tests, lint and full TypeScript pass. Independent fixed 86-case and supplemental 18-case runs both passed on this candidate; privacy source review closed the three prior findings. Independent E1 acceptance passed 104/104 (86 original + 18 supplement), zero failures/skips/retries; final report SHA256 b7e2bddb008cf33ce8a6e8e8ed492aaa820d1fc3574f9266db3569019580ac33, execution receipt SHA256 559f1ba598e36f297d3d15abd17936bcdcbe2795a363b9814808d76f841aad92. Candidate a15ebc8 is rejected: its original 86/86 pass was later shown incomplete by three privacy findings; supplemental replay produced 14 failures/4 passes. Evidence remains preserved. LIP1 only plans an in-memory quarantine result over caller-supplied synthetic fixtures; no live inventory/import/restore/runtime link or permission is added. Real legacy source acquisition, ownership/purpose reconciliation, backup/restore and VOX-009/010/011/014 dependencies remain open; VOX-015 stays in progress. فارسی: بخش آزمایشی LIP1 برای فهرست‌برداری ساختگی و طرح قرنطینه روی نامزد `bbff2304792f998a357eabe0c6888955c3909c57` پیاده‌سازی شد؛ آزمون مستقل ۸۶ موردی و ۱۸ مورد تکمیلی هر دو موفق شدند و بازبینی حریم خصوصی سه ایراد قبلی را بست. پذیرش مستقل E1 با ۱۰۴ از ۱۰۴ موفق شد؛ هش گزارش `b7e2bddb008cf33ce8a6e8e8ed492aaa820d1fc3574f9266db3569019580ac33` و رسید `559f1ba598e36f297d3d15abd17936bcdcbe2795a363b9814808d76f841aad92` است. نامزد `a15ebc8` رد است: با وجود قبولی اولیهٔ ۸۶ مورد، سه ایراد حریم خصوصی بعداً یافت شد و اجرای تکمیلی ۱۴ شکست/۴ موفقیت داشت؛ شواهد حفظ شده‌اند. LIP1 فقط دادهٔ ساختگیِ صریح را به طرح قرنطینهٔ درون‌حافظه‌ای تبدیل می‌کند؛ فهرست‌برداری زنده، واردسازی، بازیابی، اتصال زمان اجرا یا مجوز ایجاد نمی‌کند. دریافت و تطبیق دادهٔ واقعی، پشتیبان/بازیابی و وابستگی‌های VOX-009/010/011/014 باز هستند؛ VOX-015 در حال انجام می‌ماند. LIA1 source bc2f1d7 now has independent synthetic acceptance 123/123 and privacy closure: selected native Tireh file through inherited descriptors to a minimized deny-all report, fixed static CLI with source parity, truthful cancelled-read accounting. No live snapshot, mapping, import, restore or consent grant. LIA1 merged into develop through PR #91 with its CI qualification; it is not yet part of an installed release. فارسی: LIA1 در منبع bc2f1d7 با ۱۲۳ از ۱۲۳ آزمون مستقل ساختگی و تأیید حریم خصوصی پذیرفته شد؛ فایل بومی منتخب از طریق توصیفگر موروثی به گزارش محدود با استفادهٔ ممنوع تبدیل می‌شود، CLI ثابت با تطابق منبع و شمارش صحیح خواندنِ لغوشده دارد. snapshot زنده، نگاشت، واردسازی، بازیابی یا رضایت جدید ایجاد نمی‌کند. LIA1 از طریق درخواست ادغام ۹۱ در develop ادغام شد؛ هنوز در نسخهٔ نصب‌شده نیست.
 
 Create dry-run inventory/mapping for Studio and older app memory, identity and notifications flags; quarantine ambiguous ownership/purpose/history.
 
@@ -326,7 +326,7 @@ Create dry-run inventory/mapping for Studio and older app memory, identity and n
 
 **Deliverables:** Versioned migration and rollback; Reconciliation report.
 
-**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/INDEXED_STORAGE.md"]
+**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/INDEXED_STORAGE.md", "docs/implementation/LEGACY_INVENTORY.md", "docs/implementation/LEGACY_OFFLINE_INVENTORY.md"]
 
 ### VOX-016 — Enforce storage, key and service-account isolation
 
@@ -355,7 +355,7 @@ Implement database/IAM rules, restricted evidence and future biometric storage b
 
 **Requirements:** REQ-01, REQ-02, REQ-03, REQ-09, REQ-17, REQ-22. **Depends on:** VOX-002, VOX-009, VOX-010, VOX-011, VOX-014, VOX-016.
 
-**Implementation progress:** Own-account Work/Personal export, EN/FA note correction, RI1 request intake and RI2 retention operations are implemented. RI2 binds original audit/closure floors, explicitly reassesses unresolved cases, purges only eligible terminal records and retains finite scoped continuity/410 receipts. Independent RI2 local acceptance passed 36 cases. Formal restriction/objection, guest verification, provider/backups and broader rights fulfillment remain open. Prior additional independent immediate-export race proof remains unavailable after automatic security review; no replacement execution is claimed. GI1 guest metadata intake, bounded separate ledger, current-operator queue, key continuity, final authority fences and finite retention/status receipts are implemented behind reviewed-policy/key configuration. Independent review caught and verified the fix for a short purge-receipt horizon. Actual compiled proxy testing also exposed internal/public-origin mismatch; all six affected handlers now use the trusted server URL. Composed independent acceptance passed 158 external cases and 117 repository regressions; compiled/CI/release evidence remains bound to its exact candidate. Guest recovery-code possession never proves identity or authorizes private-data disclosure.
+**Implementation progress:** Own-account Work/Personal export, EN/FA note correction, RI1 request intake and RI2 retention operations are implemented. RI2 binds original audit/closure floors, explicitly reassesses unresolved cases, purges only eligible terminal records and retains finite scoped continuity/410 receipts. Independent RI2 local acceptance passed 36 cases. Formal restriction/objection, guest verification, provider/backups and broader rights fulfillment remain open. Prior additional independent immediate-export race proof remains unavailable after automatic security review; no replacement execution is claimed. GI1 guest metadata intake, bounded separate ledger, current-operator queue, key continuity, final authority fences and finite retention/status receipts are implemented behind reviewed-policy/key configuration. Independent review caught and verified the fix for a short purge-receipt horizon. Actual compiled proxy testing also exposed internal/public-origin mismatch; all six affected handlers now use the trusted server URL. Composed independent acceptance passed 158 external cases and 117 repository regressions; compiled/CI/release evidence remains bound to its exact candidate. Guest recovery-code possession never proves identity or authorizes private-data disclosure. RF1 scoped local-use slice on candidate 6c0718ec84a6e141e3cf22d0758782aa17611146 (tree 8dd033ed35801c0807f61765b844b507a1bc7cf9; base e5cf00f2f8b460bef956bc28f2535b4e1c7a8b0e) passed independent source acceptance (39/39, 11 files; 981 source hashes unchanged), production build, and CI230 tests/E2E (4,001 passed, 13 existing skips across 287 files). CI also passed 46 Node checks and 41 existing browser journeys; those browser journeys do not cover RF1 controls. Audit is not clean (exit 1; 14 findings, 8 moderate/6 high; continue-on-error). Compiled-app SQLite and FILE attempt09 each passed 13/13 (26 total); independent combined browser acceptance passed 26/26 (13 SQLite + 13 FILE), zero failures/skips/flaky; report and 110-file manifest are recorded in RIGHTS_LOCAL_USE.md. The runs use mock transport and synthetic identities; OS isolation, native browser zoom/language selection, physical-device and provider behavior remain unavailable. Candidate 25a2661 was rejected and historical evidence is preserved. RF1 covers requester account plus selected space/purpose only; it does not complete VOX-056 or establish legal compliance. RF1 PR #84 is merged and deployed as `cf63acf64c6eadf5a2247d2436e0a22bc114386b` (tree `a6a67d26f0e73addafb0dae4ff6b4e6301c82f0a`, build `FHheoV7JKPeQMsUBuCMEZ`); production legacy FILE and optional-policy configuration remain unchanged/off. 40 local/public unauthenticated route contracts and five bot ownership/configuration checks passed. No provider generation, authenticated live-user journey or device voice qualification occurred. RF1 does not complete VOX-056. Metadata retirement, RF2 erasure, provider/backup deletion, production IAM, legal eligibility and provider/device/user-flow gates remain open. فارسی: PR #84 ادغام و RF1 با ساخت `FHheoV7JKPeQMsUBuCMEZ` روی `cf63acf64c6eadf5a2247d2436e0a22bc114386b` مستقر شد؛ FILE قدیمی و سیاست‌های اختیاری بدون تغییر/خاموش ماندند. ۴۰ قرارداد مسیر محلی/عمومی بدون احراز هویت و پنج بررسی مالکیت/پیکربندی ربات موفق شدند. تولید ارائه‌دهنده، مسیر کاربر واردشده یا صلاحیت صدای دستگاه انجام نشد. RF1 کل VOX-056 را کامل نمی‌کند؛ بازنشستگی فراداده، RF2، حذف ارائه‌دهنده/پشتیبان، IAM، حقوقی و پذیرش کاربر/ارائه‌دهنده/دستگاه باز هستند.
 
 Implement accessible EN/FA access/export, correction, erasure, restriction, objection, portability and withdrawal requests with proportionate requester verification, a no-account guest route, operator queue, jurisdiction deadlines and status receipts. Wire the privacy center to these real handlers.
 
@@ -370,7 +370,7 @@ Implement accessible EN/FA access/export, correction, erasure, restriction, obje
 
 **Deliverables:** Rights service and operator queue; Scoped export and correction handlers; EN/FA privacy-center and guest request flows; Rights/deadline/access tests.
 
-**Evidence:** ["docs/implementation/OBSERVATION_LEARNING.md", "docs/implementation/RIGHTS_INTAKE.md", "docs/implementation/RIGHTS_RETENTION.md", "docs/implementation/GUEST_RIGHTS_INTAKE.md"]
+**Evidence:** ["docs/implementation/OBSERVATION_LEARNING.md", "docs/implementation/RIGHTS_INTAKE.md", "docs/implementation/RIGHTS_RETENTION.md", "docs/implementation/GUEST_RIGHTS_INTAKE.md", "docs/implementation/RIGHTS_LOCAL_USE.md", "docs/implementation/RELEASE_RF1_2026_10_20.md"]
 
 ## P2 — Reliable observation
 
@@ -422,7 +422,7 @@ Add state-plus-outbox writes, idempotent consumers, bounded backoff, dead-letter
 
 **Requirements:** REQ-05, REQ-16. **Depends on:** VOX-017, VOX-008.
 
-**Implementation progress:** Actual voice response and private Telegram terminal outcomes now feed the new observer. Voice playback is correlated by server-issued turn ID. Provider usage, token cost and stage-level latency remain unavailable.
+**Implementation progress:** Actual voice response and private Telegram terminal outcomes now feed the new observer. Voice playback is correlated by server-issued turn ID. Content-free per-stage turn timings shipped in revision 504203f behind STUDIO_STAGE_TIMINGS=1 with `npm run timings:report`, and returned provider usage including cache tokens is captured by the LLM client. The flag is unset in production, so no p50/p95 baseline has been measured; token cost reporting remains open.
 
 Add turn trace correlation across STT/retrieval/decision/generation/TTS and actual provider metadata via an architect-approved LLM interface change.
 
@@ -435,7 +435,7 @@ Add turn trace correlation across STT/retrieval/decision/generation/TTS and actu
 
 **Deliverables:** Studio trace instrumentation; Usage model fixtures.
 
-**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/OBSERVATION_LEARNING.md"]
+**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/OBSERVATION_LEARNING.md", "docs/implementation/RELEASE_INTELLIGENCE_STEP0_2026_10_20.md"]
 
 ### VOX-020 — Capture client experience and explicit outcomes
 
@@ -701,7 +701,7 @@ Add capability-gated partial-transcript and minimized shared-image prediction; c
 
 **Requirements:** REQ-01, REQ-09, REQ-10, REQ-11. **Depends on:** VOX-005, VOX-011, VOX-012.
 
-**Implementation progress:** Authenticated EN/FA inbox, category/settings controls, requested reminders and feedback implemented. Snooze, Telegram channel controls and external receipts remain open.
+**Implementation progress:** Authenticated EN/FA inbox, category/settings controls, requested reminders and feedback implemented. Snooze, Telegram channel controls and external receipts remain open. Scoped terminal inbox feedback (FB0) is merged; see SCOPED_FEEDBACK_RESULT.md.
 
 Create authenticated inbox and purpose/category/channel choices with snooze/mute/why-this; keep proactive off and marketing disabled.
 
@@ -714,7 +714,7 @@ Create authenticated inbox and purpose/category/channel choices with snooze/mute
 
 **Deliverables:** Notification settings/inbox; Preference tests.
 
-**Evidence:** ["docs/implementation/DELIVERY_RESULT.md"]
+**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/SCOPED_FEEDBACK_RESULT.md"]
 
 ### VOX-033 — Implement candidate ranking and deterministic eligibility
 
@@ -786,7 +786,7 @@ Deliver only to an explicitly opted-in, authenticated existing Telegram DM. Send
 
 **Requirements:** REQ-05, REQ-10, REQ-18. **Depends on:** VOX-020, VOX-032, VOX-035.
 
-**Implementation progress:** Private useful/dismiss feedback endpoint and UI implemented. Cohort-level reporting and real usefulness measurements remain open.
+**Implementation progress:** Private useful/dismiss feedback endpoint and UI implemented. Cohort-level reporting and real usefulness measurements remain open. Scoped terminal inbox feedback (FB0) is merged; see SCOPED_FEEDBACK_RESULT.md.
 
 Instrument explicit useful/not-useful, snooze/mute, suppression, opt-out and verified task outcomes with compatible exposure.
 
@@ -799,7 +799,7 @@ Instrument explicit useful/not-useful, snooze/mute, suppression, opt-out and ver
 
 **Deliverables:** Notification outcome views; Exposure/feedback fixtures.
 
-**Evidence:** ["docs/implementation/DELIVERY_RESULT.md"]
+**Evidence:** ["docs/implementation/DELIVERY_RESULT.md", "docs/implementation/SCOPED_FEEDBACK_RESULT.md"]
 
 ### VOX-037 — Qualify browser push as a separate follow-up channel
 
@@ -1140,11 +1140,13 @@ Load-test approved synthetic workloads, queue/provider outage, lost receipts, re
 
 ### VOX-053 — Finalize public notices, support and launch materials
 
-**Owner:** `vox_docs_analyst` · **Reviewer:** `vox_privacy_security` · **Model:** `gpt-6-luna` · **Size:** M · **Priority:** P1 · **Status:** planned
+**Owner:** `vox_docs_analyst` · **Reviewer:** `vox_privacy_security` · **Model:** `gpt-6-luna` · **Size:** M · **Priority:** P1 · **Status:** in_progress
 
 **Requirements:** REQ-01, REQ-09, REQ-12, REQ-22. **Depends on:** VOX-002, VOX-012, VOX-032, VOX-048, VOX-056.
 
 **When enabling voice_recognition:** VOX-038, VOX-042.
+
+**Implementation progress:** The public privacy notice page with its contact fallback (/privacy and the guest rights panel) is deployed since revision 9371894; see RELEASE_GUEST_EVALUATION_2026_10_20.md. Legal sign-off of the notice text, support channel operation and launch materials remain open.
 
 Align public privacy/biometric notices and English/Persian UX/support content with implemented data routes, retention, providers and actual enabled markets.
 
@@ -1156,6 +1158,8 @@ Align public privacy/biometric notices and English/Persian UX/support content wi
 **Verification:** Copy-to-implementation traceability and legal/localization review.
 
 **Deliverables:** Launch notice/support package; Approval/version record.
+
+**Evidence:** ["docs/implementation/RELEASE_GUEST_EVALUATION_2026_10_20.md"]
 
 ### VOX-054 — Run independent release gate and staged production pilot
 

@@ -1,5 +1,7 @@
 # Vox Studio Connections — delivery plan
 
+**Status, 20 October 2026:** this is the original planning package. The capability is implemented and merged, read-only and disabled until an operator qualifies an account; see [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md).
+
 19 October 2026 · Planning package v1 · Source baseline `42a1a57113e655b6185ddc731b6f9617aaa4bb4e` (`develop`). This package designs future work. It does not connect accounts, enable agent tools, change production, or certify provider access. The user requested research, a detailed plan and skilled development-agent definitions; implementation is a subsequent assignment.
 
 **Recommendation:** add a Connections capability to the existing Studio. A person connects an app account once, selects resources, assigns named agents and chooses permitted actions. A server-side broker enforces these choices on every use. Use official MCP servers where their authentication, scopes and available tools meet the requirement; use narrow API adapters where they do not. Ship useful vertical slices rather than a catalogue of connected logos.

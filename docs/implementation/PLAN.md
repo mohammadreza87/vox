@@ -2,7 +2,7 @@
 
 Prepared 19 October 2026 for Joyixir OÜ. Product scope: adults in the EU/EEA and US; English and Persian interfaces; Work and Personal spaces. The recorded RF1 release is `cf63acf64c6eadf5a2247d2436e0a22bc114386b` (20 October 2026); see the [historical receipt](RELEASE_RF1_2026_10_20.md). The prior learning-case release is documented in [its receipt](RELEASE_LEARNING_CASES_2026_10_20.md). RF1 was deployed with its optional policy off; VOX-056 remains open.
 
-**Later runtime observation:** at 2026-10-20T13:33Z the existing Studio host served healthy `504203f0a798e780dc23e6eee5c51d89dcf5cdb3`, build `6QvxjYDllUGBSqlhTaxRG`, installed by another session. This is a dated runtime observation, not qualification of every intervening source change or optional feature. RF2 [private-note erasure](RIGHTS_PRIVATE_NOTE_ERASURE.md) is being implemented and independently evaluated. **فارسی:** رسید RF1 تاریخی است؛ در ۲۰ اکتبر، ساعت ۱۳:۳۳ UTC، میزبان موجود نسخهٔ سالم `504203f` با ساخت `6QvxjYDllUGBSqlhTaxRG` را از نصب جلسه‌ای دیگر اجرا می‌کرد. این مشاهدهٔ زمان‌دار، پذیرش همهٔ تغییرات یا قابلیت‌های اختیاری نیست. پیاده‌سازی و ارزیابی مستقل حذف محدود یادداشت خصوصی RF2 ادامه دارد.
+**Later runtime observation:** at 2026-10-20T13:33Z the existing Studio host served healthy `504203f0a798e780dc23e6eee5c51d89dcf5cdb3`, build `6QvxjYDllUGBSqlhTaxRG`, installed by another session. Its local validation, partial CI evidence and the installed step 0 scope are recorded in the [agent intelligence step 0 release receipt](RELEASE_INTELLIGENCE_STEP0_2026_10_20.md). This is a dated runtime observation, not qualification of every intervening source change or optional feature. RF2 [private-note erasure](RIGHTS_PRIVATE_NOTE_ERASURE.md) is being implemented and independently evaluated. **فارسی:** رسید RF1 تاریخی است؛ در ۲۰ اکتبر، ساعت ۱۳:۳۳ UTC، میزبان موجود نسخهٔ سالم `504203f` با ساخت `6QvxjYDllUGBSqlhTaxRG` را از نصب جلسه‌ای دیگر اجرا می‌کرد. این مشاهدهٔ زمان‌دار، پذیرش همهٔ تغییرات یا قابلیت‌های اختیاری نیست. پیاده‌سازی و ارزیابی مستقل حذف محدود یادداشت خصوصی RF2 ادامه دارد.
 
 **Delivery status:** the observation/lifecycle/improvement work and the complementary scoped chat, image prediction, bounded retrieval and optional voice lifecycle are now integrated in the completion candidate. See [adaptive completion](ADAPTIVE_COMPLETION_RESULT.md) for implementation, independent review and precise release evidence. Existing source/release receipts remain historical. Optional capabilities stay off without reviewed configuration; provider/device/privacy qualification and the unfinished roadmap entries remain open.
 
@@ -29,6 +29,7 @@ Prepared 19 October 2026 for Joyixir OÜ. Product scope: adults in the EU/EEA an
 | [Scoped local-use restrictions](RIGHTS_LOCAL_USE.md) | RF1 is deployed on the existing Studio host with optional policy off; source/browser/CI evidence and open activation/rights gates are recorded. The security audit has 14 findings and is not clean |
 | [Private-note erasure / حذف یادداشت خصوصی](RIGHTS_PRIVATE_NOTE_ERASURE.md) | RF2 source review and 312 local synthetic checks passed; compiled/CI/release gates remain open / بازبینی منبع و ۳۱۲ آزمون محلی موفق؛ پذیرش برنامهٔ کامپایل‌شده، CI و انتشار باز است |
 | [RF1 production release receipt](RELEASE_RF1_2026_10_20.md) | Exact deployed revision/build, unchanged production policy/configuration, route/bot probes and outstanding release gates |
+| [Agent intelligence step 0 release receipt](RELEASE_INTELLIGENCE_STEP0_2026_10_20.md) | Step 0 security gaps and timers plus the committed boundary read; exact deployed revision, local and partial CI evidence, unchanged configuration |
 | [Synthetic legacy inventory](LEGACY_INVENTORY.md) | Isolated LIP1 implementation and independent synthetic acceptance; no live inventory, import or restore |
 | [Selected offline inventory / فهرست آفلاین منتخب](LEGACY_OFFLINE_INVENTORY.md) | LIA1 native file → bounded deny-all report; independent synthetic acceptance / فایل بومی تا گزارش محدود با استفادهٔ ممنوع؛ پذیرش مستقل ساختگی |
 | [Reviewed synthetic learning cases](LEARNING_CASES.md) | Exact finding/review provenance, current-use authority, migration/capacity safety and independent local acceptance |
@@ -38,6 +39,31 @@ Prepared 19 October 2026 for Joyixir OÜ. Product scope: adults in the EU/EEA an
 | [Observation and lifecycle delivery](OBSERVATION_LEARNING.md) | Durable observer, scoped export, maintenance and local routing workflow; activation limits |
 | [Integrated local delivery](DELIVERY_RESULT.md) | Historical local foundation, evidence and remaining gates |
 | [First foundation result](FOUNDATION_RESULT.md) | Implemented code, independent acceptance, 480-test evidence and remaining integration |
+| [Adaptive extension release compatibility](ADAPTIVE_EXTENSION_COMPATIBILITY.md) | Release admission reads persisted extension metadata next to the canonical markers |
+| [Experience contract](EXPERIENCE_SPEC.md) | Design reference for the Privacy, Reminder and Voice recognition screens; walkthrough scripts |
+| [Foundation contract v1](FOUNDATION_CONTRACT.md) | Historical pure-TypeScript contract for the adaptive module before persistence and endpoints |
+| [Guest privacy request tracking / پیگیری درخواست مهمان](GUEST_RIGHTS_INTAKE.md) | VOX-056 GI1 integration candidate and its independent acceptance |
+| [Indexed private memory](INDEXED_STORAGE.md) | FILE, SQLite and FILEv2 formats, migration, recovery and rollback tooling for VOX-013 |
+| [Adaptive develop integration](INTEGRATION_RELEASE.md) | How develop was assembled from the foundation, Mac Studio and relationship lines |
+| [Live voice access correction](LIVE_VOICE_ACCESS_FIX.md) | Access rechecks before signed live-call URLs and during streaming |
+| [Atomic memory correction hotfix](MEMORY_REPLACEMENT_HOTFIX_RESULT.md) | Local source and synthetic evidence for the memory replacement fix |
+| [Bounded memory retrieval](MEMORY_RETRIEVAL_RESULT.md) | Retrieval optimisation supporting the memory strategy; not legacy migration |
+| [Explicit message memory / حافظه از پیام](MESSAGE_MEMORY_RESULT.md) | Reviewed message-memory slice of VOX-013 without automatic memory |
+| [Model patch author / نویسندهٔ اصلاح کد](MODEL_PATCH_AUTHOR.md) | v2 model-authored software patches with their receipts |
+| [Explicit personalization controls](PERSONALIZATION_CONTROLS_RESULT.md) | Work/Personal controls and the command-lock integration fix |
+| [Read-only preview inventory / فهرست پیش‌نمایش](PREVIEW_INVENTORY.md) | Bounded Firebase preview channel inventory after quota failures |
+| [Private saved note correction](PRIVATE_NOTE_CORRECTION_RESULT.md) | VOX-056 and VOX-013 note correction with compiled-browser qualification |
+| [Personalization pause / مکث شخصی‌سازی](PRODUCT_PAUSE.md) | PR 74 pause control, source qualification and its remaining deployment gate |
+| [Reviewed preference learning](REVIEWED_PREFERENCE_LEARNING_RESULT.md) | VOX-027 integration acceptance and resolved review findings |
+| [Reviewed private memory / حافظهٔ خصوصی](REVIEWED_PRIVATE_MEMORY_RESULT.md) | Access restoration and authority revision evidence |
+| [Retention acknowledgement / تأیید نگهداری](RIGHTS_ACKNOWLEDGEMENT.md) | Acknowledgement flow for retention outcomes |
+| [Account privacy requests / درخواست حریم خصوصی](RIGHTS_INTAKE.md) | RI1 request intake, independent acceptance and later status clarifications |
+| [Terminal inbox feedback / بازخورد صندوق](SCOPED_FEEDBACK_RESULT.md) | FB0 scoped useful/dismiss feedback for VOX-032 and VOX-036 |
+| [Software patch workflow](SOFTWARE_PATCH_WORKFLOW.md) | v1 deterministic-author patch evaluation; v2 is the model author |
+| [Prepared conversation qualification](SQLITE_CONVERSATION_QUALIFICATION.md) | Synthetic guarded-transport fixture for schema-2 SQLite and FILEv2 |
+| [Turn telemetry](TURN_TELEMETRY_RESULT.md) | VOX-019 and VOX-020 stage, usage and outcome instrumentation evidence |
+| [Scoped voice identity lifecycle](VOICE_IDENTITY_RESULT.md) | VOX-039 to VOX-041 author evidence for the optional voice identity service |
+| [Voice provider decision](VOICE_PROVIDER_INTEGRATION.md) | Provider research and provisional transcript decision of 19 October 2026 |
 | [Prior memory strategy](../AGENT_MEMORY_STRATEGY.md) and [research](../SELF_DEVELOPMENT_RESEARCH.md) | Research rationale and source findings |
 
 **Agreed product decisions.** Work and Personal are separate spaces. Each contains private memory per person, group memory, and memory shared with an exact set of selected people independently of a chat group. Agent ownership never grants access to everyone's private memory. Prediction can prepare reversible work; permission checks remain deterministic. Voice recognition is optional and must not unlock private data. The user confirmed **Joyixir OÜ** as the registered operator name. The user confirmed **info@joyixir.com** as the privacy contact on 19 October 2026; mailbox operation and legal approval remain unverified. The [registered address is verified from the official Estonian register](OPERATOR_DETAILS.md); the complete notice still needs legal approval.

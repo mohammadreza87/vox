@@ -1,5 +1,7 @@
 # VOX - Investor Pitch Deck (Revised)
 
+> **Historical document (2025 to January 2026).** It describes the Firebase-hosted voice-contacts web app. The current product is the Telegram-based Vox Studio; see [README.md](README.md), [docs/VOX_STUDIO.md](docs/VOX_STUDIO.md) and [docs/implementation/PLAN.md](docs/implementation/PLAN.md).
+
 > *"One App. All AI Models. Every Voice."*
 
 ---
