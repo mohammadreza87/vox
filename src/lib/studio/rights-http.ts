@@ -12,6 +12,8 @@ import { StudioError } from './service';
 import { verifyInitData } from './auth';
 import { boundedStudioRequest } from './http';
 import { StudioRateLimiter, StudioRateLimitError } from './ratelimit';
+import { petStoreFor } from './pet-store';
+import type { PetCare } from '../pet/types';
 const localLimiters = new WeakMap<Studio, StudioRateLimiter>();
 const json = (value: unknown, status = 200, headers: Record<string, string> = {}) => Response.json(value, { status, headers: { 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', ...headers } });
 
@@ -24,6 +26,18 @@ export function assertRightsAccountNow(studio: Studio, id: number, mode: 'metada
   if (mode === 'export' && rows[0].role === 'pending') return fail(403, 'export_access_denied');
   if (mode === 'operator' && !['owner','superadmin'].includes(rows[0].role)) return fail(403, 'privacy_operator_required');
 }
+/** Pet care for a rights export: the records, or a flag that they could not be read this time. */
+async function petCareForExport(studio: Studio, id: number): Promise<{ petCare: PetCare[] } | { petCareUnavailable: true }> {
+  try { return { petCare: await (await petStoreFor(studio)).listForUser(id) }; }
+  catch { (studio.deps.logger ?? console).warn('[studio] pet_export_failed'); return { petCareUnavailable: true }; }
+}
+
+/** Pet care erasure at intake: never fails the filed request (replaying it retries). */
+async function erasePetCare(studio: Studio, id: number): Promise<void> {
+  try { await (await petStoreFor(studio)).eraseUser(id); }
+  catch { (studio.deps.logger ?? console).warn('[studio] pet_erasure_failed'); }
+}
+
 export async function handleRightsRequest(studio: Studio, request: Request, path: string[], botToken: string): Promise<Response> {
   try {
     if (!botToken.trim()) return json({ error: 'rights_unavailable' }, 503);
@@ -107,14 +121,30 @@ export async function handleRightsRequest(studio: Studio, request: Request, path
       const input = createInputSchema.parse(body);
       if (space !== undefined && input.space !== space) return json({ error: 'invalid_request' }, 400);
       const result = await rights.create(user.id, input);
+      // Pet care (toy needs, Bond, zone and visit times; no conversation content) has no review step:
+      // an erasure request deletes it for every agent at once, whatever the space, and a later
+      // withdrawal cannot bring it back (the pet page's "forget me" does the same on its own). The
+      // request itself still goes to review. The request is filed either way: a pet store failure is
+      // logged and retried by replaying the request (idempotent).
+      if (input.kind === 'erasure') await erasePetCare(studio, user.id);
       return respond(result, result.replayed ? 200 : 201);
     }
     if (path.length === 3 && path[0] === 'requests' && path[2] === 'actions') {
       const result = await rights.requesterAction(user.id, space!, reference.parse(path[1]), requesterActionSchema.parse(body));
+      // Pet care is per person and agent, not per space: every export carries all of it. Read
+      // before the fences below, which must stay free of awaits. A pet store failure never fails the
+      // export: it says the pet part is missing instead.
+      const petCare = result.prepared ? await petCareForExport(studio, user.id) : undefined;
       if (result.prepared) {
         // Serialization precedes the last synchronous authority check. There is
         // no await between this fence and constructing the attachment response.
-        const serialized = JSON.stringify(result.prepared.data);
+        let root = true;
+        // The replacer sees the root after its own toJSON, so the export serializes exactly as before plus petCare.
+        const serialized = JSON.stringify(result.prepared.data, (_key, value: unknown) => {
+          if (!root) return value;
+          root = false;
+          return { ...(value as object), ...petCare };
+        });
         assertRightsAccountNow(studio, user.id, 'export');
         result.prepared.revalidate();
         assertRightsAccountNow(studio, user.id, 'export');

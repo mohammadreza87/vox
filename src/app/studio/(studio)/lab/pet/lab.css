@@ -1,0 +1,3 @@
+/* The lab's framed pet stage (data-embed): the page's fixed full-screen root and stage, set in a card. */
+.pet-root[data-embed] { position: relative; inset: auto; height: auto; border-radius: 28px; }
+.pet-stage[data-embed] { position: relative; inset: auto; width: 100%; height: 100%; border-radius: 28px; overflow: hidden; }

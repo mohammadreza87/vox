@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import "./globals.css";
+import "../globals.css";
 import { Providers } from "@/components/Providers";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 
@@ -65,6 +65,11 @@ const themeScript = `
   })();
 `;
 
+/**
+ * The root layout of every page outside /studio (a route group, so URLs are unchanged): the legacy app's
+ * Tailwind CSS, providers and theme. /studio has its own root layout (studio/layout.tsx), so the Mini
+ * App surfaces never load this CSS; crossing between the two is a full page load.
+ */
 export default function RootLayout({
   children,
 }: Readonly<{

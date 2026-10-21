@@ -262,6 +262,11 @@ export class TelegramBotClient {
     return this.call('setChatMenuButton', { menu_button: { type: 'web_app', text, web_app: { url: webAppUrl } } });
   }
 
+  /** Back to Telegram's default menu (the command list), e.g. when an agent retires. */
+  resetChatMenuButton(): Promise<boolean> {
+    return this.call('setChatMenuButton', { menu_button: { type: 'default' } });
+  }
+
   getChatMember(chatId: number, userId: number): Promise<{ status: string; user: TelegramUser; is_member?: boolean }> {
     return this.call('getChatMember', { chat_id: chatId, user_id: userId });
   }

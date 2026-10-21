@@ -3,7 +3,7 @@ import { hasCommittedPersonalizationTransport } from '../adaptive/persistence/in
 import { isSchemaValidationError } from '../error-contract';
 import { logicalTurnSchema } from '../adaptive/personalization/learning/contracts';
 import { z } from 'zod';
-import { verifyInitData } from './auth';
+import { verifyInitData, type InitDataUser } from './auth';
 import { canUseAgent } from './permissions';
 import { boundedStudioRequest } from './http';
 import { StudioError, type Studio } from './service';
@@ -25,14 +25,30 @@ const json = (data: unknown, status = 200, headers: Record<string, string> = {})
 });
 const limiters = new WeakMap<Studio, StudioRateLimiter>();
 
+export type ConversationInput = z.infer<typeof inputSchema>;
+/** A finished turn as data: the Mini App route serializes it as is; other surfaces (the pet page) add their own fields. */
+export type ConversationOutcome =
+  | { ok: true; reply: string; turnId?: string; responsePresentation?: unknown }
+  | { ok: false; status: number; error: string; headers?: Record<string, string> };
+
+function outcomeResponse(outcome: ConversationOutcome): Response {
+  if (!outcome.ok) return json({ error: outcome.error }, outcome.status, outcome.headers);
+  const { reply, turnId, responsePresentation } = outcome;
+  return json({ reply, ...(turnId ? { turnId } : {}), ...(responsePresentation ? { responsePresentation } : {}) });
+}
+
+function conversationLimiter(studio: Studio) {
+  let limiter = studio.deps.rateLimiter ?? limiters.get(studio);
+  if (!limiter) { const local = new StudioRateLimiter(); limiter = local; limiters.set(studio, local); }
+  return limiter;
+}
+
 /** A current-turn text/image surface. The client cannot submit history, identity,
  * model instructions, a predicted route, or a memory access decision. */
 export async function handleConversationRequest(studio: Studio, request: Request, botToken: string): Promise<Response> {
-  let observe: Awaited<ReturnType<typeof beginObservation>> | undefined;
   try {
     if (!botToken.trim() || !studio.deps.adaptive) return json({ error: 'conversation_unavailable' }, 503);
-    let limiter = studio.deps.rateLimiter ?? limiters.get(studio);
-    if (!limiter) { const local = new StudioRateLimiter(); limiter = local; limiters.set(studio, local); }
+    const limiter = conversationLimiter(studio);
     await limiter.consume('ingress', 'all');
     const initData = request.headers.get('x-telegram-init-data') ?? '';
     const user = initData.length <= 16_384 ? verifyInitData(initData, botToken) : null;
@@ -51,6 +67,30 @@ export async function handleConversationRequest(studio: Studio, request: Request
     let body: unknown;
     try { body = await bounded.json(); } catch { return json({ error: 'invalid_json' }, 400); }
     const input = inputSchema.parse(body);
+    return outcomeResponse(await converseAuthorized(studio, user, input, request.signal));
+  } catch (error) {
+    if (isSchemaValidationError(error)) return json({ error: 'invalid_request' }, 400);
+    if (AdaptiveError.is(error)) return json({ error: error.code }, error.status);
+    if (StudioRateLimitError.is(error)) return json({ error: 'rate_limited' }, 429, { 'Retry-After': String(error.retryAfterSeconds) });
+    if (StudioError.is(error)) return json({ error: 'invalid_request' }, error.status);
+    return json({ error: 'conversation_unavailable' }, 503);
+  }
+}
+
+/**
+ * One authorized private turn for a user the caller has already authenticated (signed initData) and
+ * whose surface already passed its own origin and rate checks. Every adaptive, Studio and block
+ * fence of the Mini App conversation applies. The chat is the DM's `private-<person>` key, so the
+ * agent remembers both surfaces. `surface` shapes the reply (the pet page: short and playful).
+ * Never throws: failures are outcomes.
+ */
+export async function converseAuthorized(studio: Studio, user: Pick<InitDataUser, 'id'>, input: ConversationInput, signal: AbortSignal,
+  o: { surface?: 'pet' } = {}): Promise<ConversationOutcome> {
+  const fail = (status: number, error: string, headers?: Record<string, string>): ConversationOutcome => ({ ok: false, status, error, ...(headers ? { headers } : {}) });
+  let observe: Awaited<ReturnType<typeof beginObservation>> | undefined;
+  try {
+    if (!studio.deps.adaptive) return fail(503, 'conversation_unavailable');
+    const limiter = conversationLimiter(studio);
     const adaptive = studio.deps.adaptive;
     const indexed = hasCommittedPersonalizationTransport(adaptive.repository.storage);
     const scopeEvaluation: DirectAuthorityEvaluator<string | null> = (d, now, namespace) => {
@@ -99,59 +139,59 @@ export async function handleConversationRequest(studio: Studio, request: Request
       return current.status === 'ready' && current.value === scope.value ? digest([scope.value, studioAuthority]) : null;
     };
     const before = await authority();
-    if (!before) return json({ error: 'conversation_not_permitted' }, 403);
-    if (request.signal.aborted) return json({ error: 'conversation_cancelled' }, 409);
+    if (!before) return fail(403, 'conversation_not_permitted');
+    if (signal.aborted) return fail(409, 'conversation_cancelled');
     // Authorization precedes image processing/export. No URL fetching or uploads
     // to persistent provider file storage; raw original bytes never reach here.
     let images: LLMImage[] | undefined;
     if (input.image) {
       let image: string;
-      try { image = minimizeImageDataUrl(input.image); } catch { return json({ error: 'invalid_image' }, 400); }
+      try { image = minimizeImageDataUrl(input.image); } catch { return fail(400, 'invalid_image'); }
       const comma = image.indexOf(',');
       images = [{ mimeType: image.slice(5, image.indexOf(';')) as LLMImage['mimeType'], data: image.slice(comma + 1) }];
     }
     await limiter.consume('expensive', user.id);
     observe = await beginObservation(studio, user.id, input.agentId, input.space, 'text');
     const { gateway } = await studio.gateway();
-    if (request.signal.aborted || await authority() !== before) {
-      await observe('cancelled'); return json({ error: 'conversation_changed' }, 409);
+    if (signal.aborted || await authority() !== before) {
+      await observe('cancelled'); return fail(409, 'conversation_changed');
     }
     let contextFence: (() => boolean) | undefined;
-    const reply = await observe.run(() => gateway.converse(input.agentId, personId(user.id), input.text, { space: input.space, images,
-      authorize: async () => !request.signal.aborted && await authority() === before,
-      ...(indexed ? {authorizeNow: () => !request.signal.aborted && authorityNow() === before,
+    const reply = await observe.run(() => gateway.converse(input.agentId, personId(user.id), input.text, { space: input.space, images, ...(o.surface ? { surface: o.surface } : {}),
+      authorize: async () => !signal.aborted && await authority() === before,
+      ...(indexed ? {authorizeNow: () => !signal.aborted && authorityNow() === before,
         onBoundaryFence: (fence: () => boolean) => {contextFence = fence;}} : {}) }));
     // Gateway also checks memory/source policy around provider export and output.
-    if (request.signal.aborted || await authority() !== before) {
-      await observe('cancelled'); return json({ error: 'conversation_changed' }, 409);
+    if (signal.aborted || await authority() !== before) {
+      await observe('cancelled'); return fail(409, 'conversation_changed');
     }
     const correlation = await observe('responded');
-    if (request.signal.aborted || await authority() !== before) {
-      await observe('cancelled'); return json({ error: 'conversation_changed' }, 409);
+    if (signal.aborted || await authority() !== before) {
+      await observe('cancelled'); return fail(409, 'conversation_changed');
     }
     if (input.turn && !input.image) studio.deps.preferenceLearning?.enqueue({ telegramId: user.id, agentId: input.agentId,
-      space: input.space, turn: input.turn, text: input.text }, request.signal);
+      space: input.space, turn: input.turn, text: input.text }, signal);
     // An experiment may only decorate an already authorized response. Failure
     // to prepare optional presentation keeps the normal conversation working.
     const presentation = correlation && studio.deps.experiments
       ? await studio.deps.experiments.prepare(user.id, input.agentId, input.space, correlation).catch(() => undefined)
       : undefined;
-    if (correlation && studio.deps.experiments && (request.signal.aborted || await authority() !== before)) {
-      await observe('cancelled'); return json({ error: 'conversation_changed' }, 409);
+    if (correlation && studio.deps.experiments && (signal.aborted || await authority() !== before)) {
+      await observe('cancelled'); return fail(409, 'conversation_changed');
     }
     let currentPresentation;
     try {
       if (presentation && studio.deps.experiments?.current(user.id, input.agentId, input.space, presentation)) currentPresentation = presentation;
     } catch { /* Optional presentation failure retains the normal reply. */ }
-    if (indexed && (request.signal.aborted || !contextFence || !contextFence())) return json({error: 'conversation_changed'}, 409);
-    return json({ reply, ...(correlation ? { turnId: correlation } : {}), ...(currentPresentation ? { responsePresentation: currentPresentation } : {}) });
+    if (indexed && (signal.aborted || !contextFence || !contextFence())) return fail(409, 'conversation_changed');
+    return { ok: true, reply, ...(correlation ? { turnId: correlation } : {}), ...(currentPresentation ? { responsePresentation: currentPresentation } : {}) };
   } catch (error) {
-    await observe?.(request.signal.aborted || LLMAuthorizationError.is(error) ? 'cancelled' : 'failed');
-    if (LLMAuthorizationError.is(error)) return json({ error: 'conversation_changed' }, 409);
-    if (isSchemaValidationError(error)) return json({ error: 'invalid_request' }, 400);
-    if (AdaptiveError.is(error)) return json({ error: error.code }, error.status);
-    if (StudioRateLimitError.is(error)) return json({ error: 'rate_limited' }, 429, { 'Retry-After': String(error.retryAfterSeconds) });
-    if (StudioError.is(error)) return json({ error: 'invalid_request' }, error.status);
-    return json({ error: 'conversation_unavailable' }, 503);
+    await observe?.(signal.aborted || LLMAuthorizationError.is(error) ? 'cancelled' : 'failed');
+    if (LLMAuthorizationError.is(error)) return fail(409, 'conversation_changed');
+    if (isSchemaValidationError(error)) return fail(400, 'invalid_request');
+    if (AdaptiveError.is(error)) return fail(error.status, error.code);
+    if (StudioRateLimitError.is(error)) return fail(429, 'rate_limited', { 'Retry-After': String(error.retryAfterSeconds) });
+    if (StudioError.is(error)) return fail(error.status, 'invalid_request');
+    return fail(503, 'conversation_unavailable');
   }
 }

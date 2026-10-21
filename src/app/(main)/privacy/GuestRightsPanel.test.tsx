@@ -1,5 +1,5 @@
 import React from'react';import{renderToString}from'react-dom/server';import{hydrateRoot,type Root}from'react-dom/client';import{act,cleanup,fireEvent,render,screen}from'@testing-library/react';import{beforeEach,afterEach,it,expect,vi}from'vitest';
-const api=vi.hoisted(()=>({notice:vi.fn(),draft:vi.fn(),create:vi.fn(),status:vi.fn(),close:vi.fn()}));vi.mock('../studio/_lib/guest-rights-client',()=>({guestRightsApi:api,GuestClientError:class extends Error{constructor(readonly status:number){super('unavailable');}}}));
+const api=vi.hoisted(()=>({notice:vi.fn(),draft:vi.fn(),create:vi.fn(),status:vi.fn(),close:vi.fn()}));vi.mock('../../studio/_lib/guest-rights-client',()=>({guestRightsApi:api,GuestClientError:class extends Error{constructor(readonly status:number){super('unavailable');}}}));
 import{GuestRightsPanel}from'./GuestRightsPanel';
 const draft={version:1,requestId:'11111111-1111-4111-8111-111111111111',credential:'a'.repeat(43),ticket:'synthetic',expiresAt:Date.now()+100000,policyRevision:1};
 beforeEach(()=>{vi.resetAllMocks();api.notice.mockResolvedValue({available:true,supportedKinds:['erasure'],policyRevision:1,copyVersion:'guest-rights-gi1-v1',supportContact:'info@joyixir.com'});api.draft.mockResolvedValue(draft);});afterEach(cleanup);
