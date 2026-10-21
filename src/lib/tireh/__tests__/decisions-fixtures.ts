@@ -16,7 +16,10 @@ export type ProviderScript = Record<string, { choice?: string; confidence?: numb
 export function scriptedProvider(script: ProviderScript = {}) {
   const calls: Array<{ input: DecisionInput; options?: DecisionProviderOptions }> = [];
   const provider: DecisionProvider = {
+    committedExportFence: true,
     evaluate: vi.fn(async (input: DecisionInput, _signal: AbortSignal, _now?: () => boolean, options?: DecisionProviderOptions) => {
+      // Model the real guarded adapter at its final mock transport boundary.
+      if (_signal.aborted || options?.authorize && !await options.authorize() || _now && !_now()) throw new Error('synthetic_authority_changed');
       calls.push({ input, options });
       return {
         model: 'gpt-6-luna', usage: { input_tokens: 42 },

@@ -1,10 +1,10 @@
 /** Local JSON persistence. Mutations reload under a process-independent lock.
- * Revision and epoch probes reload under the lock when taken; their in-process
- * re-reads see every change committed through this process (the single-process
- * Mac profile, as StudioStore already assumes). */
+ * Revision and epoch probes reload under the lock when taken and compare
+ * the committed numeric counters on every recheck, including other writers. */
 import { chmodSync, existsSync, readFileSync, renameSync, writeFileSync } from 'fs';
 import { mkdir, rmdir } from 'fs/promises';
 import type { ChatMessage, MemoryRecord, ShareOffer } from '../types';
+import type { RevisionProbe } from '../privacy/revisions';
 import { InMemoryChatHistoryStore, InMemoryMemoryStore, InMemoryShareOfferStore, InMemoryUpdateDeduper } from './store';
 
 interface FileState {
@@ -73,6 +73,17 @@ export function createFileStores(path: string) {
       (store as Record<keyof T, unknown>)[name] = (...args: unknown[]) => withLock(async () => {
         const result = await original(...args);
         if (mutations.includes(name)) save();
+        if (name === 'revisionProbe' || name === 'epochProbe') {
+          const probe = result as RevisionProbe, personaId = args[0] as string;
+          return { ...probe, local: () => {
+            if (existsSync(`${path}.lock`)) throw new Error('Memory persistence lock is busy.');
+            const committed = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) as FileState : undefined;
+            if (existsSync(`${path}.lock`)) throw new Error('Memory persistence lock is busy.');
+            const value = (name === 'revisionProbe' ? committed?.revisions : committed?.epochs)?.[personaId] ?? 0;
+            if (!Number.isSafeInteger(value) || value < 0) throw new Error('Invalid committed memory revision.');
+            return value;
+          } };
+        }
         return result;
       });
     }

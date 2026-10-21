@@ -4,7 +4,7 @@
  *
  * Callers (the gateway, Studio) have already run their own authority checks
  * (groupAllowed, unchanged()) before deciding, exactly as for OpenAIMedia; the
- * service's authorize hook here is a constant fingerprint. The adapter never
+ * supplied per-request authority is revalidated at the guarded transport. The adapter never
  * throws: refusals, invalid input, timeouts and an open circuit all give {},
  * so readTriage returns null and the reply takes the full path.
  */
@@ -14,7 +14,7 @@ import {
   type DecisionInput, type DecisionQuestion as ServiceQuestion,
 } from '../../adaptive/decisions';
 import { tirehFlags } from '../flags';
-import { TRIAGE_TIMEOUT_MS, type DecideDetail, type Decider, type DeciderPart, type DecisionAnswer, type DecisionQuestion } from '../triage';
+import { TRIAGE_TIMEOUT_MS, type DecideDetail, type DeciderAuthority, type Decider, type DeciderPart, type DecisionAnswer, type DecisionQuestion } from '../triage';
 
 type Evidence = DecisionInput['input'];
 
@@ -31,25 +31,25 @@ export class ServiceDecider implements Decider {
     this.now = options.now ?? (() => performance.now());
   }
 
-  async decide(input: string, questions: DecisionQuestion[], timeoutMs?: number): Promise<Record<string, DecisionAnswer>> {
-    return (await this.decideDetailed(input, questions, timeoutMs)).answers;
+  async decide(input: string, questions: DecisionQuestion[], timeoutMs?: number, authority?: DeciderAuthority): Promise<Record<string, DecisionAnswer>> {
+    return (await this.decideDetailed(input, questions, timeoutMs, authority)).answers;
   }
 
-  decideDetailed(input: string, questions: DecisionQuestion[], timeoutMs?: number): Promise<DecideDetail> {
-    return this.run(() => input, questions, timeoutMs);
+  decideDetailed(input: string, questions: DecisionQuestion[], timeoutMs?: number, authority?: DeciderAuthority): Promise<DecideDetail> {
+    return this.run(() => input, questions, timeoutMs, authority);
   }
 
-  async decideParts(input: readonly DeciderPart[], questions: DecisionQuestion[], timeoutMs?: number): Promise<Record<string, DecisionAnswer>> {
+  async decideParts(input: readonly DeciderPart[], questions: DecisionQuestion[], timeoutMs?: number, authority?: DeciderAuthority): Promise<Record<string, DecisionAnswer>> {
     const evidence = (): Evidence => [{
       role: 'user',
       content: input.map((part) => part.type === 'text'
         ? { type: 'input_text' as const, text: part.text }
         : { type: 'input_image' as const, image_url: `data:${part.image.mimeType};base64,${part.image.data}`, detail: 'low' as const }),
     }];
-    return (await this.run(evidence, questions, timeoutMs)).answers;
+    return (await this.run(evidence, questions, timeoutMs, authority)).answers;
   }
 
-  private async run(evidence: () => Evidence, questions: DecisionQuestion[], timeoutMs: number | undefined): Promise<DecideDetail> {
+  private async run(evidence: () => Evidence, questions: DecisionQuestion[], timeoutMs: number | undefined, authority?: DeciderAuthority): Promise<DecideDetail> {
     const start = this.now();
     try {
       const requested = typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) && timeoutMs >= 1 ? timeoutMs : DEFAULT_DECISION_DEADLINE_MS;
@@ -59,7 +59,8 @@ export class ServiceDecider implements Decider {
         enabled: true,
         revision: 0,
         currentRevision: () => 0,
-        authorize: async () => 'tireh-decider-v1',
+        authorize: authority?.authorize ?? (async () => 'tireh-current-input-v1'),
+        ...(authority ? { authorizeAtTransport: authority.authorize, ...(authority.authorizeNow ? { authorizeNow: authority.authorizeNow } : {}) } : {}),
         // Evidence is built lazily, after authorization, as the seam requires.
         loadInput: async () => ({ input: evidence(), questions: mapped } as DecisionInput),
         deadlineMs,

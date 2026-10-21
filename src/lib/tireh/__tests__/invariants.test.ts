@@ -278,6 +278,8 @@ describe('sharing invariants (section 4.6)', () => {
     await expect(carrier.add(newMemory({ personaId: next.id, scope: { kind: 'group', groupId: 'chat-1' }, source: gone.source }))).rejects.toBeInstanceOf(StaleMemoryWriteError);
 
     const plain = new InMemoryMemoryStore();
+    // An older adapter lacking the optional S06 tombstone carrier.
+    Object.defineProperties(plain, { tombstonesOf: { value: undefined }, addTombstones: { value: undefined } });
     const plainRun = await scenario(plain);
     expect(await plain.listActive(plainRun.next.id)).toEqual([]);
   });

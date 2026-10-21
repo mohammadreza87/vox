@@ -5,7 +5,7 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import OpenAI from 'openai';
-import { DecisionService, OpenAIDecisionProvider, DECISIONS_MODEL, type DecisionContext, type DecisionInput } from '.';
+import { DecisionService, OpenAIDecisionProvider, DECISIONS_MODEL, MAX_DECISION_QUESTIONS, type DecisionContext, type DecisionInput } from '.';
 import { SYNTHETIC_IMAGE } from '../prediction/fixtures';
 
 const API_KEY = 'synthetic-not-a-secret';
@@ -119,7 +119,7 @@ describe('OpenAIDecisionProvider timeout option', () => {
 describe('OpenAIDecisionProvider zod boundary', () => {
   const question = (index: number) => ({ name: `q${index}`, type: 'predicate' as const, instructions: 'Synthetic question?' });
   it.each([
-    ['eight questions', { input: 'SYNTHETIC', questions: Array.from({ length: 8 }, (_, i) => question(i)) }],
+    ['more than the configured question limit', { input: 'SYNTHETIC', questions: Array.from({ length: MAX_DECISION_QUESTIONS + 1 }, (_, i) => question(i)) }],
     ['an unknown top-level key', { ...input, transcript: 'SYNTHETIC_PRIVATE' }],
     ['an input_audio part', { input: [{ role: 'user', content: [{ type: 'input_text', text: 'SYNTHETIC' }, { type: 'input_audio', input_audio: { data: 'AAAA', format: 'wav' } }] }], questions: input.questions }],
   ])('rejects %s before any fetch', async (_label, request) => {

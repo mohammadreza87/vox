@@ -89,10 +89,27 @@ function encode(document: unknown): string {
  * an operator must inspect/remove it after verifying no writer still owns it. */
 export class FileAdaptiveStorage implements AdaptiveStorage {
   readonly supportsCommittedWriteFence = true as const;
-  /** In-process revision bus: bumped after each atomic rename in this process. */
+  /** Revision bus also advances when a committed file changed in another writer. */
   readonly revisions = new RevisionCounter('file-adaptive');
+  private readonly committedDigests = new Map<string, string>();
   constructor(readonly directory: string) {}
-  revisionProbe(accountId: string): RevisionProbe { return this.revisions.probe(accountId); }
+  private committedRevision(accountId: string): number {
+    const file = join(this.directory, `${key(accountId)}.json`);
+    if (existsSync(`${file}.lock`)) throw new CommittedReadBusy();
+    let digest: string;
+    try { digest = createHash('sha256').update(readFileSync(file)).digest('hex'); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; digest = 'missing'; }
+    // A writer racing the synchronous read never vouches for a cached document.
+    if (existsSync(`${file}.lock`)) throw new CommittedReadBusy();
+    const previous = this.committedDigests.get(accountId);
+    if (previous !== undefined && previous !== digest) this.revisions.bump(accountId);
+    this.committedDigests.set(accountId, digest);
+    return this.revisions.get(accountId);
+  }
+  revisionProbe(accountId: string): RevisionProbe {
+    const value = this.committedRevision(accountId), probe = this.revisions.probe(accountId);
+    return { key: probe.key, value, local: () => this.committedRevision(accountId) };
+  }
   readCommittedForEffect(accountId: string): { status: 'ready'; document: unknown | null } | { status: 'busy' } {
     const file = join(this.directory, `${key(accountId)}.json`);
     if (existsSync(`${file}.lock`)) return { status: 'busy' };
@@ -150,6 +167,7 @@ export class FileAdaptiveStorage implements AdaptiveStorage {
         // deadlines cannot change between the last check and atomic commit.
         beforeCommit(); renameSync(temporary, file);
       } else await fs.rename(temporary, file);
+      this.committedDigests.set(accountId, createHash('sha256').update(json).digest('hex'));
       this.revisions.bump(accountId);
       const directory = await fs.open(this.directory, 'r');
       try { await directory.sync(); } finally { await directory.close(); }
