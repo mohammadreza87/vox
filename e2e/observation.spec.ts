@@ -19,8 +19,9 @@ async function fixtures(page: Page, correctionFailure = false) {
     else if (path === 'product-pause') data = { version: 1, accountId: 'synthetic-account', space: url.searchParams.get('space') ?? 'work', available: true, productPaused: false, useEpoch: 0, commandSeq: 0, canPause: true, canResume: false };
     else if (path === 'conversation') data = { reply: 'PRIVATE_REPLY_CANARY', turnId: `accepted-turn-${++turn}`, responsePresentation: { density: 'compact', receipt: turn.toString(16).padStart(64, '0') } };
     else if (path === 'learning/events') {
-      events.push(body);
       if (body.outcome === 'text_rendered') visibleAtReport = await page.locator('[data-response-density="compact"]').last().evaluate(el => !!el.textContent?.trim() && getComputedStyle(el).visibility !== 'hidden' && el.getBoundingClientRect().width > 0);
+      // Publish only after its visibility evidence is ready for the assertions.
+      events.push(body);
       data = { recorded: true, duplicate: false };
     } else if (path === 'experiments/exposure') { exposures.push(body); data = { recorded: true }; }
     else if (path === 'learning/correction-authority') data = { policyReceipt: 'a'.repeat(64) };
