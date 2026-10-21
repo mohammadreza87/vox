@@ -1,6 +1,7 @@
 import { expect, test, type Page, type Locator } from '@playwright/test';
 import type { PreferenceInput, PreferenceState, StoredPreference } from '../src/lib/adaptive/runtime/contracts';
 import type { PreferenceValue } from '../src/lib/adaptive/personalization';
+import { activeScreen, openYou, setStudioLocale, chooseSettingsAgent, switchStudioSpace } from './helpers/studio-navigation';
 import type { MaintenanceHealth } from '../src/lib/adaptive/lifecycle/maintenance-health-contracts';
 
 const PERSON = 710001;
@@ -158,12 +159,12 @@ async function installFixtures(page: Page, h: ReturnType<typeof makeHarness>) {
 }
 
 async function checkNoHorizontalOverflow(page: Page) {
-  const dimensions = await page.locator('.vx-privacy').last().evaluate(el => ({ scroll: el.scrollWidth, client: el.clientWidth }));
+  const dimensions = await activeScreen(page).locator('.vx-you, .vx-settings-page').evaluate(el => ({ scroll: el.scrollWidth, client: el.clientWidth }));
   expect(dimensions.scroll, `horizontal overflow ${dimensions.scroll}px > ${dimensions.client}px`).toBeLessThanOrEqual(dimensions.client + 1);
 }
 
 async function waitForScreenSettled(page: Page) {
-  const screens = page.locator('.vx-privacy');
+  const screens = activeScreen(page).locator('.vx-you, .vx-settings-page');
   await expect(screens).toHaveCount(1);
   await expect.poll(() => screens.evaluate(el => {
     const style = getComputedStyle(el.parentElement!);
@@ -173,6 +174,8 @@ async function waitForScreenSettled(page: Page) {
 }
 
 test('privacy, shared memory and experience controls stay explicit and isolated on mobile', async ({ page }, testInfo) => {
+  // This journey deliberately traverses the visible settings stack in both locales, including three wizard steps.
+  test.setTimeout(60_000);
   const h = makeHarness();
   const browserErrors: string[] = [];
   page.on('pageerror', error => browserErrors.push(error.message));
@@ -184,94 +187,109 @@ test('privacy, shared memory and experience controls stay explicit and isolated 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/studio');
   await expect.poll(() => h.calls.some(call => call.path === 'me'), { message: `url=${page.url()}; synthetic API requests: ${JSON.stringify(h.calls)}; browser details: ${browserErrors.join(' | ')}` }).toBeTruthy();
-  await page.getByRole('button', { name: 'You', exact: true }).click();
-  const privacy = page.locator('.vx-privacy');
-  await expect(privacy.getByRole('heading', { name: 'Privacy & memory' })).toBeVisible();
+  await openYou(page);
+  const privacy = activeScreen(page).locator('.vx-you');
+  await expect(privacy.getByRole('heading', { name: 'You', exact: true })).toBeVisible();
   await expect(privacy).toHaveAttribute('dir', 'ltr');
   await checkNoHorizontalOverflow(page);
   await waitForScreenSettled(page);
   await page.screenshot({ path: testInfo.outputPath('privacy-en.png'), fullPage: true });
 
-  await privacy.getByLabel('Language').selectOption('fa');
+  await setStudioLocale(page, 'fa');
   await expect(privacy).toHaveAttribute('dir', 'rtl');
   await expect(privacy).toHaveAttribute('lang', 'fa');
-  await expect(privacy.getByRole('heading', { name: 'حریم خصوصی و حافظه' })).toBeVisible();
+  await expect(privacy.getByRole('heading', { name: 'شما', exact: true })).toBeVisible();
   await checkNoHorizontalOverflow(page);
   await waitForScreenSettled(page);
   await page.screenshot({ path: testInfo.outputPath('privacy-fa.png'), fullPage: true });
-  await privacy.getByLabel('زبان').selectOption('en');
+  await setStudioLocale(page, 'en');
 
-  const personalization = privacy.locator('.vx-privacy-purpose').filter({ has: page.getByRole('heading', { name: 'Personalization' }) });
-  await personalization.getByRole('button', { name: 'Review choice' }).click();
-  await expect(personalization.getByRole('button', { name: 'Keep off' })).toBeVisible();
-  await expect(personalization.locator('.vx-pill')).toHaveText('Off');
-  await personalization.getByRole('button', { name: 'Keep off' }).click();
-  await expect(personalization.locator('.vx-pill')).toHaveText('Off');
-  await personalization.getByRole('button', { name: 'Review choice' }).click();
-  await personalization.getByRole('button', { name: 'Turn on' }).click();
-  await expect(personalization.locator('.vx-pill')).toHaveText('On');
+  const personalization = privacy.getByRole('switch', { name: /^Personalization\b/ });
+  await expect(personalization).toHaveAttribute('aria-checked', 'false');
+  await personalization.click();
+  const notice = page.getByRole('dialog', { name: 'Optional choice', exact: true });
+  await expect(notice.getByRole('button', { name: 'Keep off' })).toBeVisible();
+  await notice.getByRole('button', { name: 'Keep off' }).click();
+  await expect(notice).toHaveCount(0);
+  await expect(personalization).toHaveAttribute('aria-checked', 'false');
+  await personalization.click();
+  await notice.getByRole('button', { name: 'Turn on' }).click();
+  await expect(notice).toHaveCount(0);
+  await expect(personalization).toHaveAttribute('aria-checked', 'true');
   expect(h.calls.filter(c => c.path === 'adaptive/consents/present')).toHaveLength(2);
   expect(h.calls.filter(c => c.path === 'adaptive/consents').map(c => c.body?.state)).toEqual(['declined', 'granted']);
 
   await privacy.getByRole('button', { name: 'Shared memories' }).click();
-  const shared = page.locator('.vx-privacy').last();
+  const shared = activeScreen(page).locator('.vx-shared');
   await expect(shared.getByText('Synthetic work note')).toBeVisible();
   await expect(shared.getByText('Synthetic personal note')).toHaveCount(0);
   await checkNoHorizontalOverflow(page);
   await waitForScreenSettled(page);
   await page.screenshot({ path: testInfo.outputPath('shared-en.png'), fullPage: true });
-  await page.getByRole('button', { name: 'فارسی' }).last().click();
+  await setStudioLocale(page, 'fa');
+  await privacy.getByRole('button', { name: 'حافظه‌های مشترک' }).click();
   await expect(shared).toHaveAttribute('dir', 'rtl');
   await checkNoHorizontalOverflow(page);
   await waitForScreenSettled(page);
   await page.screenshot({ path: testInfo.outputPath('shared-fa.png'), fullPage: true });
-  await page.getByRole('button', { name: 'English' }).last().click();
+  await setStudioLocale(page, 'en');
+  await privacy.getByRole('button', { name: 'Shared memories' }).click();
 
-  await shared.getByRole('button', { name: 'Personal' }).click();
+  await switchStudioSpace(page, 'personal');
   await expect(shared.getByText('Synthetic personal note')).toBeVisible();
   await expect(shared.getByText('Synthetic work note')).toHaveCount(0);
-  await shared.getByRole('button', { name: 'Work' }).click();
-  await shared.getByRole('checkbox', { name: 'Synthetic Guest' }).check();
-  await shared.getByRole('checkbox', { name: 'Fixture Agent' }).check();
-  await shared.getByLabel('Note').fill('Synthetic explicitly shared note');
-  await shared.getByRole('button', { name: 'Preview exact audience' }).click();
-  await expect(shared.getByRole('heading', { name: 'These people will be able to read this note' })).toBeVisible();
+  await switchStudioSpace(page, 'work');
+  await activeScreen(page).getByRole('button', { name: 'New shared note', exact: true }).click();
+  const composer = page.getByRole('dialog', { name: 'A new shared note' });
+  await composer.getByRole('checkbox', { name: 'Synthetic Guest', exact: true }).click();
+  await composer.getByRole('button', { name: 'Next', exact: true }).click();
+  await composer.getByRole('checkbox', { name: /Fixture Agent/ }).click();
+  await composer.getByRole('button', { name: 'Next', exact: true }).click();
+  await composer.getByLabel('Note', { exact: true }).fill('Synthetic explicitly shared note');
+  await composer.getByRole('button', { name: 'Preview exact audience' }).click();
+  const audience = composer.getByRole('group', { name: 'These people will be able to read this note' });
+  await expect(audience).toBeVisible();
+  await expect(audience.getByText('Synthetic Owner', { exact: true })).toBeVisible();
+  await expect(audience.getByText('Synthetic Guest', { exact: true })).toBeVisible();
   expect(h.calls.filter(c => c.path === 'shared/containers')).toHaveLength(0);
-  await shared.getByRole('button', { name: 'Share this note' }).click();
+  await composer.getByRole('button', { name: 'Share with 2 people', exact: true }).click();
+  await expect(composer).toHaveCount(0);
   await expect(shared.getByText('Synthetic explicitly shared note')).toBeVisible();
   const previewIndex = h.calls.findIndex(c => c.path === 'shared/preview');
   const createIndex = h.calls.findIndex(c => c.path === 'shared/containers');
   expect(previewIndex).toBeGreaterThanOrEqual(0);
   expect(createIndex).toBeGreaterThan(previewIndex);
-  expect(h.calls[createIndex].body).toMatchObject({ previewToken: 'synthetic-preview-token', text: 'Synthetic explicitly shared note' });
+  expect(h.calls[previewIndex].body).toMatchObject({ space: 'work', kind: 'selected', recipientTelegramIds: [PERSON, OTHER] });
+  expect(h.calls[createIndex].body).toMatchObject({ previewToken: 'synthetic-preview-token', text: 'Synthetic explicitly shared note', agentIds: [AGENT] });
 
-  await page.getByRole('button', { name: 'Back' }).last().click();
-  await page.locator('.vx-privacy').getByRole('button', { name: 'Preferences & notification inbox' }).click();
-  const experience = page.locator('.vx-privacy').last();
-  await expect(page.getByText('Your experience').last()).toBeVisible();
+  await openYou(page);
+  await privacy.getByRole('button', { name: 'Preferences', exact: true }).click();
+  const experience = activeScreen(page).locator('.vx-settings-page');
+  await expect(activeScreen(page).getByRole('heading', { name: 'Preferences', exact: true })).toBeVisible();
   await expect(experience).toHaveAttribute('dir', 'ltr');
   await checkNoHorizontalOverflow(page);
   await waitForScreenSettled(page);
   await page.screenshot({ path: testInfo.outputPath('experience-en.png'), fullPage: true });
-  await page.getByRole('button', { name: 'فارسی' }).last().click();
+  await setStudioLocale(page, 'fa');
+  await privacy.getByRole('button', { name: 'ترجیح‌ها', exact: true }).click();
   await expect(experience).toHaveAttribute('dir', 'rtl');
   await checkNoHorizontalOverflow(page);
   await waitForScreenSettled(page);
   await page.screenshot({ path: testInfo.outputPath('experience-fa.png'), fullPage: true });
-  await page.getByRole('button', { name: 'English' }).last().click();
-  await experience.getByRole('combobox', { name: 'Agent' }).selectOption(AGENT);
+  await setStudioLocale(page, 'en');
+  await privacy.getByRole('button', { name: 'Preferences', exact: true }).click();
+  await chooseSettingsAgent(page, 'Fixture Agent');
   const replyLength = experience.getByRole('article', { name: 'Reply length preference', exact: true });
   const replyLanguage = experience.getByRole('article', { name: 'Reply language preference', exact: true });
-  await expect(experience.locator('.vx-preference-row')).toHaveCount(3);
-  await replyLength.getByRole('combobox', { name: 'Reply length', exact: true }).selectOption('detailed');
-  await replyLength.getByRole('button', { name: 'Save preference', exact: true }).click();
+  await expect(experience.locator('.vx-pref')).toHaveCount(3);
+  await replyLength.getByRole('tab', { name: 'Detailed', exact: true }).click();
   await expect.poll(() => h.preferenceValue('work', AGENT, 'response_length')).toBe('detailed');
   await expect(replyLength.getByText('Saved choice: Detailed')).toBeVisible();
-  await expect(replyLanguage.getByRole('combobox', { name: 'Reply language', exact: true })).toHaveValue('auto');
+  await expect(replyLanguage.getByRole('tab', { name: 'Automatic', exact: true })).toHaveAttribute('aria-selected', 'true');
   await replyLength.getByRole('button', { name: 'Reset', exact: true }).click();
   await expect.poll(() => h.preferenceValue('work', AGENT, 'response_length')).toBeUndefined();
-  await expect(replyLength.getByRole('combobox', { name: 'Reply length', exact: true })).toHaveValue('balanced');
-  const resetReplyLength = await replyLength.getByRole('combobox', { name: 'Reply length', exact: true }).inputValue();
+  await expect(replyLength.getByRole('tab', { name: 'Balanced', exact: true })).toHaveAttribute('aria-selected', 'true');
+  const resetReplyLength = (await replyLength.getByRole('tab', { name: 'Balanced', exact: true }).getAttribute('aria-selected')) === 'true' ? 'balanced' : 'unexpected';
   expect(h.preferences[`work:${AGENT}:response_length`].status).toBe('reset');
   const preferenceWrites = h.calls.filter(c => c.path === 'experience/preferences' && c.method === 'PUT');
   expect(preferenceWrites.map(c => c.body)).toMatchObject([
@@ -279,33 +297,34 @@ test('privacy, shared memory and experience controls stay explicit and isolated 
     { agentId: AGENT, space: 'work', action: 'reset', setting: { key: 'response_length', value: 'detailed' }, expectedRevision: 2 },
   ]);
   expect(h.calls.some(c => c.path === 'experience/preferences' && c.method === 'GET' && c.space === 'work')).toBeTruthy();
-  await experience.getByRole('button', { name: 'Personal', exact: true }).click();
-  await expect(experience.getByRole('combobox', { name: 'Agent', exact: true })).toHaveValue('');
+  await switchStudioSpace(page, 'personal');
+  await expect(experience.getByRole('button', { name: 'Agent: Choose an agent', exact: true })).toBeVisible();
   await expect(replyLength).toHaveCount(0);
-  await experience.getByRole('combobox', { name: 'Agent', exact: true }).selectOption(AGENT);
-  await expect(replyLength.getByRole('combobox', { name: 'Reply length', exact: true })).toHaveValue('balanced');
-  await replyLength.getByRole('combobox', { name: 'Reply length', exact: true }).selectOption('brief');
-  await replyLength.getByRole('button', { name: 'Save preference', exact: true }).click();
+  await chooseSettingsAgent(page, 'Fixture Agent');
+  await expect(replyLength.getByRole('tab', { name: 'Balanced', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await replyLength.getByRole('tab', { name: 'Brief', exact: true }).click();
   await expect.poll(() => h.preferenceValue('personal', AGENT, 'response_length')).toBe('brief');
   await expect(replyLength.getByText('Saved choice: Brief')).toBeVisible();
-  await experience.getByRole('button', { name: 'Work', exact: true }).click();
-  await expect(experience.getByRole('combobox', { name: 'Agent', exact: true })).toHaveValue('');
-  await experience.getByRole('combobox', { name: 'Agent', exact: true }).selectOption(AGENT);
-  await expect(replyLength.getByRole('combobox', { name: 'Reply length', exact: true })).toHaveValue('balanced');
+  await switchStudioSpace(page, 'work');
+  await expect(experience.getByRole('button', { name: 'Agent: Choose an agent', exact: true })).toBeVisible();
+  await chooseSettingsAgent(page, 'Fixture Agent');
+  await expect(replyLength.getByRole('tab', { name: 'Balanced', exact: true })).toHaveAttribute('aria-selected', 'true');
   expect(h.preferenceValue('work', AGENT, 'response_length')).toBeUndefined();
   expect(h.preferenceValue('personal', AGENT, 'response_length')).toBe('brief');
-  await experience.getByLabel('Enable inbox').check();
-  await experience.getByLabel('Selected timezone').fill('Europe/Tallinn');
-  await experience.getByRole('button', { name: 'Save notification settings' }).click();
+  await experience.getByRole('switch', { name: 'Enable inbox', exact: true }).click();
   await expect.poll(() => h.settings.work.inboxEnabled).toBe(true);
-  expect(h.calls.some(c => c.path === 'experience/settings' && c.body?.space === 'work' && c.body?.inboxEnabled === true)).toBeTruthy();
+  await experience.getByRole('button', { name: /^Time zone/ }).click();
+  await page.getByRole('radio', { name: 'Europe/Tallinn', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  expect(h.settings.timezone).toBe('Europe/Tallinn');
+  expect(h.calls.some(c => c.path === 'experience/settings' && c.body?.space === 'work' && c.body?.inboxEnabled === true && c.body?.timezone === 'Europe/Tallinn')).toBeTruthy();
   await testInfo.attach('reply-length-after-reset.txt', { body: `Displayed value after successful reset: ${resetReplyLength}\n`, contentType: 'text/plain' });
   expect(resetReplyLength, 'Reset should return the displayed Reply length to Balanced').toBe('balanced');
 });
 
 
 async function checkActionLabelsFit(region: Locator) {
-  const geometry = await region.locator('.vx-learning-actions > button').evaluateAll(buttons => buttons.map(button => {
+  const geometry = await region.getByRole('button', { name: /^(Refresh measurements|Export my learning data|تازه‌سازی اندازه‌گیری‌ها|دریافت داده‌های یادگیری من)$/ }).evaluateAll(buttons => buttons.map(button => {
     const bounds = button.getBoundingClientRect();
     const label = document.createRange();
     label.selectNodeContents(button);
@@ -322,27 +341,27 @@ test('learning evidence stays scoped, honest and downloadable in English and Per
   await installFixtures(page, h);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/studio');
-  await page.getByRole('button', { name: 'You', exact: true }).click();
-  await page.getByRole('button', { name: 'Preferences & notification inbox' }).click();
-  const experience = page.locator('.vx-privacy').last();
+  await openYou(page);
+  await activeScreen(page).getByRole('button', { name: 'Diagnostics', exact: true }).click();
   const learning = page.getByRole('region', { name: 'Learning evidence', exact: true });
   await expect(learning.getByText('Your Work space')).toBeVisible();
   await expect(learning.locator('dd').first()).toHaveText('12');
-  await expect(learning.getByText(/Waiting to process/)).toHaveText('Waiting to process: 2 · Processing failures: 1');
+  await expect(learning.locator('.vx-fact').filter({ hasText: 'Waiting to process' }).locator('.vx-fact-value')).toHaveText('2');
+  await expect(learning.locator('.vx-fact').filter({ hasText: 'Processing failures' }).locator('.vx-fact-value')).toHaveText('1');
   await expect(learning.getByText('Playback is client reported. Verified task success is unknown.')).toBeVisible();
-  await expect(learning.getByText('Average response time: Unavailable')).toBeVisible();
+  await expect(learning.locator('.vx-fact').filter({ hasText: 'Average response time' }).locator('.vx-fact-value')).toHaveText('Unavailable');
   await expect(learning).not.toContainText('PRIVATE_');
-  await experience.locator('summary').filter({ hasText: /^Admin tools$/ }).click();
   await expect(page.getByRole('region', { name: 'Maintenance status', exact: true }).getByRole('status')).toHaveText('No run recorded');
   await checkNoHorizontalOverflow(page);
   await checkActionLabelsFit(learning);
   await learning.screenshot({ path: testInfo.outputPath('learning-en.png') });
   await learning.getByRole('button', { name: 'Refresh measurements', exact: true }).click();
   await expect(learning.locator('dd').first()).toHaveText('13');
-  await expect(learning.getByText(/Waiting to process/)).toHaveText('Waiting to process: 0 · Processing failures: 1');
+  await expect(learning.locator('.vx-fact').filter({ hasText: 'Waiting to process' }).locator('.vx-fact-value')).toHaveText('0');
+  await expect(learning.locator('.vx-fact').filter({ hasText: 'Processing failures' }).locator('.vx-fact-value')).toHaveText('1');
   expect(h.calls.find(c => c.path === 'learning/observations/process')).toMatchObject({ method: 'POST', space: 'work', body: {} });
 
-  await experience.getByRole('button', { name: 'Personal', exact: true }).click();
+  await switchStudioSpace(page, 'personal');
   await expect(learning.getByText('Your Personal space')).toBeVisible();
   await expect(learning.getByText(/Optional usage analytics is off or unavailable/)).toBeVisible();
   await expect(learning.locator('dd').first()).toHaveText('Unavailable');
@@ -357,7 +376,8 @@ test('learning evidence stays scoped, honest and downloadable in English and Per
   expect(h.calls.filter(c => c.path === 'learning/export')).toEqual([expect.objectContaining({ method: 'GET', space: 'personal' })]);
   await testInfo.attach('learning-personal-export.json', { body: exported, contentType: 'application/json' });
 
-  await page.getByRole('button', { name: 'فارسی', exact: true }).click();
+  await setStudioLocale(page, 'fa');
+  await activeScreen(page).getByRole('button', { name: 'عیب‌یابی', exact: true }).click();
   const persian = page.getByRole('region', { name: 'شواهد یادگیری', exact: true });
   await expect(persian).toHaveAttribute('dir', 'rtl');
   await expect(persian).toHaveAttribute('lang', 'fa');
@@ -365,7 +385,7 @@ test('learning evidence stays scoped, honest and downloadable in English and Per
   await expect(persian.locator('dd').first()).toHaveText('در دسترس نیست');
   await checkNoHorizontalOverflow(page);
   await persian.screenshot({ path: testInfo.outputPath('learning-fa-personal.png') });
-  await experience.getByRole('button', { name: 'کاری', exact: true }).click();
+  await switchStudioSpace(page, 'work');
   await expect(persian.locator('dd').first()).toHaveText('۱۳');
   await expect(persian.getByText('پخش توسط مرورگر گزارش شده است. موفقیت تأییدشدهٔ کار نامشخص است.')).toBeVisible();
   await checkActionLabelsFit(persian);
