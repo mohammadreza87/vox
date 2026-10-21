@@ -13,7 +13,9 @@ import { brandError, namedError } from '../error-contract';
 import { relationshipSourceIds, type RelationshipLoop, type RelationshipStore, type ObservationStore, type RelationshipKey, type RelationshipState, type Intention } from '../relationships';
 import { composeFollowUp } from '../relationships/compose';
 import type { RelationshipConfig } from './relationship-config';
-import { ownerSharePatch, ownerRevokePatch, validateShareRecipients } from '../tireh/memory/sharing';
+import { ownerSharePatch, ownerRevokePatch, validateShareRecipients, isInheritable, successorCopy, resnapshotPatch, type TombstoneCarrier } from '../tireh/memory/sharing';
+import { tirehFlags } from '../tireh/flags';
+import { chatKeyHash, type AuditStore, type SupersededNoticeStore } from '../tireh/audit';
 import { historyMessageForChat } from '../tireh/memory/visibility';
 import { logTelegramDiagnostic, profileStepDiagnostic, type TelegramDiagnostic } from '../tireh/telegram/diagnostics';
 import type { DirectAuthorityEvaluator } from '../adaptive/persistence/authority';
@@ -52,7 +54,7 @@ import { decryptSecret, encryptSecret } from './crypto';
 import { cloudSvg } from './cloud-art';
 import { callToken, MAX_CALL_SECONDS, voiceLlmKey, voiceLlmKeyId } from './voice-call';
 import { avatarPrompt, defaultVoiceId, type ElevenLabsStudio, type LibraryVoice, type OpenAIMedia, type VoiceOptions, StudioVoiceService } from './media';
-import { personId, studioToOrg } from './org-bridge';
+import { personId, studioToOrg, groupId } from './org-bridge';
 import { draftPersona, randomLook, refinePersona, suggestUsername, validatePersona } from './persona';
 import { catalogView, projectCatalog, CATALOG, type Catalog } from './skills/catalog';
 import { catalogRole, catalogSkills, routeBrief as routeSkillBrief, ROUTE_TEXT_CHARS, type RouteFallbackReason } from './skills/route';
@@ -169,6 +171,10 @@ export interface StudioDeps {
   adaptive?: AdaptiveService;
   relationshipAuthority?: AdaptiveRelationshipService;
   shared?: SharedMemoryService;
+  /** S08 TIREH_AUDIT_LOG: content-free vox_audit rows. */
+  audit?: AuditStore;
+  /** S08 TIREH_SHARING_V2: supersede notices for recipients. */
+  memoryNotices?: SupersededNoticeStore;
   experience?: AdaptiveExperienceService;
   /** Turn rechecks read the snapshot's revisions here: Firestore runtimes pass a
    * FirestoreRevisionSource; the default reads in-process counters. */
@@ -1059,11 +1065,39 @@ export class Studio {
     const s = await this.deps.store.read();
     const predecessor = s.agents.find((a) => a.id === agent.successorOf);
     if (!predecessor || predecessor.memoryPolicy !== 'transfer') return;
-    for (const m of await this.deps.memory.memories.listActive(predecessor.id)) {
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      const { id, createdAt, updatedAt, ...rest } = m;
-      await this.deps.memory.memories.add({ ...rest, personaId: agent.id });
+    if (!tirehFlags().sharingV2) {
+      for (const m of await this.deps.memory.memories.listActive(predecessor.id)) {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const { id, createdAt, updatedAt, ...rest } = m;
+        await this.deps.memory.memories.add({ ...rest, personaId: agent.id });
+      }
+      return;
     }
+    // S08: tombstones travel with the copies, so a store that cannot carry them inherits nothing (fail closed).
+    const store = this.deps.memory.memories as MemoryStore & TombstoneCarrier;
+    if (typeof store.tombstonesOf !== 'function' || typeof store.addTombstones !== 'function') {
+      await this.deps.store.audit({ actor: 'system', action: 'memory.inherit', target: agent.id, detail: 'skipped: tombstones unsupported' });
+      return;
+    }
+    try {
+      await store.addTombstones(agent.id, await store.tombstonesOf(predecessor.id));
+    } catch {
+      await this.deps.store.audit({ actor: 'system', action: 'memory.inherit', target: agent.id, detail: 'skipped: tombstone carry failed' });
+      return;
+    }
+    let copied = 0;
+    let skipped = 0;
+    for (const m of await store.listActive(predecessor.id)) {
+      // TODO(S08 follow-up): per-record owner approval path for private records (docs/AGENT_INTELLIGENCE_SOLUTION.md 4.6 Successor agent); no grant model for 'transfer' exists yet.
+      if (!isInheritable(m)) { skipped++; continue; }
+      try {
+        await store.add(successorCopy(m, agent.id));
+        copied++;
+      } catch {
+        skipped++;
+      }
+    }
+    await this.deps.store.audit({ actor: 'system', action: 'memory.inherit', target: agent.id, detail: `copied ${copied}, skipped ${skipped}` });
   }
 
   // ============================================
@@ -1086,6 +1120,72 @@ export class Studio {
         chatId: g.chatId, title: g.title, hasGuests: g.hasGuests, memberCount: g.memberIds.length,
         agents: g.agentIds.map((id) => s.agents.find((a) => a.id === id)).filter(Boolean).map((a) => ({ id: a!.id, name: a!.persona.name, look: a!.look })),
       }));
+  }
+
+  /**
+   * S08 (TIREH_SHARING_V2): an admin re-snapshots one group's existing
+   * normal-sensitivity group records for one named member, so they can see
+   * history from before they joined. Preview counts first; apply adds exactly
+   * that member through updateIfShareVersion and is audited. Never removes anyone.
+   */
+  async resnapshotGroupMemory(actor: Member, chatId: number, telegramId: number, apply: boolean): Promise<{ count: number; applied: boolean }> {
+    if (!tirehFlags().sharingV2) throw notFound();
+    if (!atLeast(actor, 'admin')) throw forbidden();
+    if (!Number.isSafeInteger(chatId) || chatId === 0 || !Number.isSafeInteger(telegramId) || telegramId <= 0) throw bad('Choose a group member.');
+    const s = await this.deps.store.read();
+    const group = s.groups.find((g) => g.chatId === chatId);
+    if (!group) throw notFound('Group not found');
+    const target = s.members.find((m) => m.telegramId === telegramId && m.role !== 'pending');
+    if (!target || !group.memberIds.includes(telegramId)) throw bad('Choose a group member.');
+    const memories = this.deps.memory.memories;
+    const gid = groupId(chatId);
+    const person = personId(telegramId);
+    let count = 0;
+    const touched: Array<{ agentId: string; ids: string[] }> = [];
+    for (const agentId of group.agentIds) {
+      const agent = s.agents.find((a) => a.id === agentId);
+      if (!agent || !canUseAgent(target, agent)) continue;
+      const ids: string[] = [];
+      for (const m of await memories.listActive(agentId)) {
+        const patch = resnapshotPatch(m, gid, person);
+        if (!patch) continue;
+        if (apply && !await memories.updateIfShareVersion(m.id, m.shareVersion ?? 0, patch)) continue;
+        ids.push(m.id);
+      }
+      count += ids.length;
+      if (ids.length) touched.push({ agentId, ids });
+    }
+    if (apply) await this.deps.store.audit({ actor: actor.telegramId, action: 'memory.resnapshot', target: `group:${chatId}`, detail: `member ${telegramId}: ${count} records` });
+    const audit = this.deps.audit;
+    if (tirehFlags().auditLog && audit) {
+      for (const { agentId, ids } of touched) for (let i = 0; i < ids.length; i += 200) {
+        try {
+          await audit.append({ kind: 'resnapshot', personaId: agentId, chatKeyHash: chatKeyHash(`group-${gid}`), audiencePersonIds: [person],
+            memoryIds: ids.slice(i, i + 200), policyKey: 'group.resnapshot.v1', actorPersonId: personId(actor.telegramId), outcome: apply ? 'applied' : 'previewed', at: this.now() });
+        } catch { /* best effort: the audit never changes the result */ }
+      }
+    }
+    return { count, applied: apply };
+  }
+
+  /** S08 (TIREH_SHARING_V2): content-free "updated" notices for records shared with the actor. */
+  async memoryNoticesFor(actor: Member, agentId: string): Promise<Array<{ id: string; from: string; at: string; stillShared: boolean; newMemoryId?: string }>> {
+    const notices = this.deps.memoryNotices;
+    if (!tirehFlags().sharingV2 || !notices) return [];
+    const s = await this.deps.store.read();
+    const agent = s.agents.find((a) => a.id === agentId);
+    if (!agent || !canUseAgent(actor, agent)) throw notFound('Agent not found');
+    const org = studioToOrg(s, this.deps.orgName, this.orgOptions());
+    const me = personId(actor.telegramId);
+    const rows = await notices.listFor(agentId, me, new Date(this.now().getTime() - 30 * 86_400_000));
+    const out: Array<{ id: string; from: string; at: string; stillShared: boolean; newMemoryId?: string }> = [];
+    for (const notice of rows) {
+      const newer = await this.deps.memory.memories.get(notice.newMemoryId);
+      const stillShared = !!newer && newer.personaId === agentId && isVisibleToAudience(org, newer, [me]);
+      out.push({ id: notice.id, from: org.getPerson(notice.ownerPersonId)?.name ?? 'Someone', at: notice.at.toISOString(), stillShared,
+        ...(stillShared ? { newMemoryId: notice.newMemoryId } : {}) });
+    }
+    return out;
   }
 
   /** The agent's bot was added to or removed from a group. */

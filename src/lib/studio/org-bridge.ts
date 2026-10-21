@@ -143,6 +143,7 @@ export function studioToOrgConfig(state: StudioState, orgName = 'HOOR', options:
     // only the group's own memories are safe there.
     hasGuests: g.hasGuests || g.memberIds.some((id) => !members.has(personId(id))),
     audienceEpoch: g.audienceEpoch ?? 0,
+    ...(g.historyPolicy === 'all_authorized_history' || g.historyPolicy === 'since_membership' ? { historyPolicy: g.historyPolicy } : {}),
   }));
 
   return {
