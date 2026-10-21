@@ -21,6 +21,9 @@ const bubbleText = (c: HTMLElement) => c.querySelector('.pet-bubble')?.textConte
 
 describe('PetApp live (real engine, mock API)', () => {
   beforeEach(() => {
+    // These interaction cases require a waking pet, independently of the machine's wall clock.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(2026, 9, 21, 12, 0));
     window.history.replaceState({}, '', '/studio/pet/mock');
     Object.defineProperty(window, 'innerWidth', { value: 390, configurable: true });
     Object.defineProperty(window, 'innerHeight', { value: 844, configurable: true });

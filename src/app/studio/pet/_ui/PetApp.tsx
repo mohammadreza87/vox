@@ -1,5 +1,6 @@
 'use client';
 
+import { flushSync } from 'react-dom';
 import { domMin, LazyMotion } from 'framer-motion';
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Expression } from '@/lib/studio/character';
@@ -9,9 +10,9 @@ import { pageActive, REDUCED_MOTION_QUERY, subscribeActivity } from '../../_comp
 import { createPetEngine } from '../_engine/loop';
 import type { Tier } from '../_engine/types';
 import { createPetApi, isPetError } from './api';
-import { moodOf, openLocal } from './care-local';
+import { moodOf } from './care-local';
 import { CareSync, type CareUpdate } from './careSync';
-import { SNAPSHOT_KEY, type EngineCue, type PetApi, type PetEngine, type PetSnapshot, type TalkState, type ToyEvent, type ToyKind } from './contract';
+import { type EngineCue, type PetApi, type PetEngine, type PetRequestOpts, type TalkState, type ToyEvent, type ToyKind } from './contract';
 import { COPY, sayText } from './copy';
 import { Bubble, REVEAL_CPS, Thought, type BubbleMsg } from './Bubble';
 import { Dock, type Needs } from './Dock';
@@ -22,27 +23,9 @@ import { Stage } from './Stage';
 import { TalkPill } from './TalkPill';
 import { backdrop, characterBox, daysTogether, PET_GROUND, sceneAnchors, type CharacterBox } from './scene';
 import {
-  bootTelegram, closeApp, confirmNative, firstName, hideKeyboard, holdClosing, LAYOUT_EVENTS, openDm, paintChrome, readStored, readStoredSync,
-  readyAfterPaint, settingsButton, startAccelerometer, startIntent, syncSafeAreas, tg, writeStored,
+  bootTelegram, closeApp, confirmNative, firstName, hideKeyboard, holdClosing, LAYOUT_EVENTS, openDm, paintChrome, clearLegacyPetSnapshots,
+  readyAfterPaint, settingsButton, startAccelerometer, startIntent, syncSafeAreas, tg,
 } from './telegram';
-
-/* ---------- snapshot (instant first paint) ---------- */
-
-function parseSnapshot(raw: string | null): PetView | null {
-  if (!raw) return null;
-  try {
-    const s = JSON.parse(raw) as PetSnapshot;
-    return s?.v === 1 && s.view?.look && s.view.care ? s.view : null;
-  } catch { return null; }
-}
-
-function saveSnapshot(agentId: string, view: PetView, care?: PetCare | null) {
-  // one-shot open events never replay from the cache
-  const cached: PetView = { ...view, ...(care ? { care } : {}) };
-  delete cached.welcome; delete cached.stageUp; delete cached.bondMilestone;
-  const snap: PetSnapshot = { v: 1, view: cached, savedAt: Date.now() };
-  writeStored(SNAPSHOT_KEY(agentId), JSON.stringify(snap));
-}
 
 /* ---------- small helpers ---------- */
 
@@ -83,24 +66,90 @@ function useAudio() {
 
 /** A talk turn that hears nothing back in this long fails like any other (the pet never thinks forever). */
 const TALK_TIMEOUT_MS = 45_000;
-/** A reply's audio that cannot resume after the page comes back (no gesture yet) ends as text instead. */
-const AUDIO_RESUME_MS = 800;
 
 interface Fatal { kind: SleeperKind; look?: PetView['look']; stage?: StageN; name?: string }
 
-/**
- * The pet page (brief §1.1): the character alive on a hue backdrop, three toys in need rings and a
- * talk pill, nothing else. Open sequence: paint from the cached snapshot → ready() → hello, then the
- * server view reconciles (mood eases, never snaps) and plays welcome-back / stage-up / a Bond
- * milestone once. React renders only on rare changes (layout, expression, bubble, rings); every
- * frame belongs to the engine.
- */
-export function PetApp({ agentId, api: injected }: { agentId: string; api?: PetApi }) {
-  const api = useMemo(() => injected ?? createPetApi(), [injected]);
+/** Private state exists only inside one freshly verified foreground/session. Nothing is persisted. */
+export function PetApp({ agentId, api }: { agentId: string; api?: PetApi }) {
+  const [scope, setScope] = useState(() => ({ agentId, signed: tg()?.initData ?? '', generation: 0, active: true }));
+  const blocked = useRef(false);
+  const scopeRef = useRef(scope);
+  scopeRef.current = scope;
+  useLayoutEffect(() => {
+    clearLegacyPetSnapshots(agentId);
+    const update = (activity = false) => {
+      const previous = scopeRef.current;
+      const signed = tg()?.initData ?? '';
+      const identityChanged = previous.agentId !== agentId || previous.signed !== signed;
+      if (identityChanged) blocked.current = false;
+      if (blocked.current && !identityChanged) return;
+      const active = pageActive();
+      if (!identityChanged && (!activity || (!active && !previous.active))) return;
+      const next = { agentId, signed, generation: previous.generation + 1, active };
+      scopeRef.current = next;
+      // Native lifecycle callbacks must remove the previous account's DOM before the next paint.
+      flushSync(() => setScope(next));
+    };
+    const off = subscribeActivity(() => update(true));
+    const onPointer = () => update();
+    document.addEventListener('pointerdown', onPointer, true);
+    // Check the signed SDK session before every visible frame, including a switch without an event.
+    let frame = 0;
+    const checkFrame = () => { update(); frame = requestAnimationFrame(checkFrame); };
+    frame = requestAnimationFrame(checkFrame);
+    // A prop/identity change during React rendering is already before paint.
+    const signed = tg()?.initData ?? '';
+    if (scopeRef.current.agentId !== agentId || scopeRef.current.signed !== signed || !pageActive()) {
+      blocked.current = false;
+      setScope((s) => ({ agentId, signed, generation: s.generation + 1, active: pageActive() }));
+    }
+    return () => { off(); cancelAnimationFrame(frame); document.removeEventListener('pointerdown', onPointer, true); };
+  }, [agentId]);
+  const current = scope.agentId === agentId && scope.signed === (tg()?.initData ?? '');
+  if (!scope.active || !current) return <main className="pet-root" data-pet-root="" data-paused="" style={{ backgroundColor: PET_GROUND }} />;
+  return <PetSession key={`${agentId}:${scope.generation}`} agentId={agentId} injected={api} signed={scope.signed}
+    onForget={() => { blocked.current = true; }} />;
+}
+
+function PetSession({ agentId, injected, signed, onForget }: { agentId: string; injected?: PetApi; signed: string; onForget(): void }) {
+  const baseApi = useMemo(() => injected ?? createPetApi(), [injected]);
+  const alive = useRef(true);
+  const allowed = useRef(true);
+  const requests = useRef(new Set<AbortController>());
+  const denyRef = useRef<(e: unknown) => void>(() => {});
+  const valid = useCallback(() => alive.current && allowed.current && signed === (tg()?.initData ?? '') && pageActive(), [signed]);
+  const api = useMemo<PetApi>(() => {
+    const call = async <T,>(run: (o: PetRequestOpts) => Promise<T>, o: PetRequestOpts = {}): Promise<T> => {
+      if (!valid()) throw new DOMException('Pet session ended', 'AbortError');
+      const ac = new AbortController();
+      const abort = () => ac.abort();
+      o.signal?.addEventListener('abort', abort, { once: true });
+      if (o.signal?.aborted) ac.abort();
+      requests.current.add(ac);
+      try {
+        const result = await run({ ...o, signal: ac.signal });
+        if (!valid() || ac.signal.aborted) throw new DOMException('Pet session ended', 'AbortError');
+        return result;
+      } catch (e) {
+        if (valid() && isPetError(e) && (e.status === 401 || e.status === 403 || e.code === 'pet_unavailable')) denyRef.current(e);
+        throw e;
+      } finally { requests.current.delete(ac); o.signal?.removeEventListener('abort', abort); }
+    };
+    return {
+      get: (id, o) => call((opts) => baseApi.get(id, opts), o),
+      care: (id, req, o) => call((opts) => baseApi.care(id, req, opts), o),
+      talk: (id, req, o) => call((opts) => baseApi.talk(id, req, opts), o),
+      talkVoice: (id, blob, o) => call((opts) => baseApi.talkVoice(id, blob, opts), o),
+      forget: (id, o) => call((opts) => baseApi.forget(id, opts), o),
+    };
+    // Each mounted session owns these refs and its signed authority; never re-used after a switch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [baseApi, signed]);
   const { get: audio, ctx: audioCtx } = useAudio();
   const [mounted, setMounted] = useState(false);
   const [view, setView] = useState<PetView | null>(null);
   const [fatal, setFatal] = useState<Fatal | null>(null);
+  const [forgetState, setForgetState] = useState<'pending' | 'uncertain' | 'done' | null>(null);
   const [engine, setEngine] = useState<PetEngine | null>(null);
   const [tier, setTier] = useState<Tier>('full');
   const [stage, setStage] = useState<StageN>(1);
@@ -136,8 +185,6 @@ export function PetApp({ agentId, api: injected }: { agentId: string; api?: PetA
   /** celebrations that came while asleep: they play once the pet is awake (never on a sleeping pet) */
   const afterWake = useRef<(() => void)[]>([]);
   const rootRef = useRef<HTMLElement>(null);
-  /** the person asked to forget their pet: nothing may write it back (no snapshot, no tap flush) */
-  const forgotten = useRef(false);
   const toyEls = useRef<Partial<Record<ToyKind, HTMLElement | null>>>({});
   const bottomRef = useRef<HTMLDivElement>(null);
   const pillRef = useRef<HTMLDivElement>(null);
@@ -152,6 +199,7 @@ export function PetApp({ agentId, api: injected }: { agentId: string; api?: PetA
   /* ---------- care: optimistic, batched, eased to the server ---------- */
 
   const onCare = useCallback((u: CareUpdate) => {
+    if (!valid()) return;
     const wasAsleep = careRef.current?.asleep;
     careRef.current = u.care;
     setNeeds(needsOf(u.care));
@@ -186,20 +234,23 @@ export function PetApp({ agentId, api: injected }: { agentId: string; api?: PetA
   const sync = useMemo(() => new CareSync({ api, agentId, onCare }), [api, agentId, onCare]);
   useEffect(() => sync.attach(), [sync]);
 
-  /* ---------- mount: tier, Telegram boot, snapshot ---------- */
+  /* ---------- mount: fresh authenticated GET only ---------- */
 
-  const booted = useRef<string | null>(null);
   useLayoutEffect(() => {
-    // once per agent (StrictMode replays effects; GET is the "open" event and must not run twice)
-    if (booted.current === agentId) return;
-    booted.current = agentId;
+    const pendingRequests = requests.current;
+    alive.current = true;
+    allowed.current = true;
     setMounted(true);
     setTier(initialTier());
-    const snap = parseSnapshot(readStoredSync(SNAPSHOT_KEY(agentId)));
-    bootTelegram(snap ? backdrop(snap.look).edge : PET_GROUND);
-    if (snap) adoptView(snap, false);
-    else void readStored(SNAPSHOT_KEY(agentId)).then((raw) => { const s = parseSnapshot(raw); if (s && !viewRef.current) adoptView(s, false); });
+    bootTelegram(PET_GROUND);
     void load();
+    return () => {
+      alive.current = false;
+      clearPrivate();
+      for (const ac of pendingRequests) ac.abort();
+      pendingRequests.clear();
+    };
+    // Each mount/re-attachment needs its own verified response; old requests are aborted.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agentId]);
   // the OS reduced-motion switch flips the tier live (a ?tier= override stays put)
@@ -213,42 +264,54 @@ export function PetApp({ agentId, api: injected }: { agentId: string; api?: PetA
   }, []);
   useEffect(() => () => { for (const t of timers.current) clearTimeout(t); }, []);
 
-  function adoptView(v: PetView, fromServer: boolean) {
+  function clearPrivate() {
+    allowed.current = false;
+    sync.dispose();
+    for (const ac of requests.current) ac.abort();
+    requests.current.clear();
+    speakToken.current++;
+    stopAudio();
+    stopWaiting();
+    recHold.current?.(); recHold.current = null;
+    const ctx = audioCtx.current;
+    if (ctx) void ctx.close?.().catch(() => {});
+    for (const t of timers.current) clearTimeout(t);
+    timers.current.clear();
+    queued.current = []; afterWake.current = [];
+    viewRef.current = null; careRef.current = null; moodRef.current = null;
+    engineRef.current?.stop();
+    setView(null); setNeeds(null); setMood(null); setBubble(null); setThought(null); setScore(null); setDays(null);
+    talkRef.current = 'idle'; setTalk('idle');
+  }
+
+  denyRef.current = (e) => {
+    clearPrivate();
+    const b = isPetError(e) && e.code === 'pet_private' && e.body && 'look' in e.body ? e.body : undefined;
+    setFatal({ kind: isPetError(e) && e.status === 401 ? 'outside' : b ? 'private' : 'resting', look: b?.look, stage: b?.stage, name: b?.name });
+  };
+
+  function adoptView(v: PetView) {
+    if (!valid()) return;
     const prev = viewRef.current;
     viewRef.current = v;
     setView(v);
-    // a stage-up keeps drawing the old stage until its celebration morphs it
     if (!prev || prev.stage !== v.stage) setStage(v.stageUp ? v.stageUp.from : v.stage);
-    // The cached snapshot is opened the way the server will open it (decay, then the welcome-back floors
-    // and quiet-hours sleep): days away paint a pet ready to celebrate, never the floors (§1.6).
-    if (fromServer) sync.adopt(v.care, v.now);
-    else sync.adopt(openLocal(v.care, sync.now(), v.stage).care);
-    if (fromServer) {
-      paintChrome(backdrop(v.look).edge);
-      saveSnapshot(agentId, v);
-      engineRef.current?.setLook(v.look, v.stageUp ? v.stageUp.from : v.stage);
-    }
+    sync.adopt(v.care, v.now);
+    paintChrome(backdrop(v.look).edge);
+    engineRef.current?.setLook(v.look, v.stageUp ? v.stageUp.from : v.stage);
   }
 
   async function load() {
     try {
       const v = await api.get(agentId);
-      adoptView(v, true);
+      if (!valid()) return;
+      adoptView(v);
       setFatal(null);
       afterHello(900, () => playOpenEvents(v));
     } catch (e) {
-      const has = !!viewRef.current;
-      if (isPetError(e)) {
-        if (e.code === 'pet_private') {
-          const b = e.body && 'look' in e.body ? e.body : undefined;
-          setFatal({ kind: 'private', look: b?.look, stage: b?.stage, name: b?.name });
-          return;
-        }
-        if (e.code === 'authentication_required') { setFatal({ kind: 'outside' }); return; }
-        if (e.code === 'pet_unavailable') { setFatal({ kind: 'resting' }); return; }
-      }
-      // offline with a cached character: keep it alive and quiet; without one, the retry screen
-      if (!has) setFatal({ kind: 'offline' });
+      if (!valid()) return;
+      if (isPetError(e) && (e.status === 401 || e.status === 403 || e.code === 'pet_unavailable')) { denyRef.current(e); return; }
+      setFatal({ kind: 'offline' });
     }
   }
 
@@ -352,8 +415,7 @@ export function PetApp({ agentId, api: injected }: { agentId: string; api?: PetA
     if (!engine) return;
     let stopAccel: (() => void) | null = null;
     let touched = false;
-    /** the reply audio was playing when the page went away: it resumes with the page */
-    let resumeAudio = false;
+
     const first = () => {
       const ctx = audio();
       if (ctx?.state === 'suspended') void ctx.resume();
@@ -367,49 +429,40 @@ export function PetApp({ agentId, api: injected }: { agentId: string; api?: PetA
         paused(false);
         engine.start();
         if (touched && !stopAccel) stopAccel = startAccelerometer((a) => engine.accel(a));
-        const ctx = audioCtx.current;
-        if (resumeAudio && ctx) {
-          resumeAudio = false;
-          void ctx.resume().catch(() => {});
-          // still suspended (no gesture since): the rest of the reply is text, never a stuck "speaking"
-          later(AUDIO_RESUME_MS, () => { if (ctx.state !== 'running' && source.current) { const token = speakToken.current; stopAudio(); finishSpeaking(token); } });
-        }
       } else {
         paused(true);
         engine.stop();
         stopAccel?.(); stopAccel = null;
-        // only a context a gesture made, and only if it is running (never a new one outside a gesture)
-        const ctx = audioCtx.current;
-        if (ctx?.state === 'running') { resumeAudio = !!source.current; void ctx.suspend().catch(() => {}); }
-        void sync.flush({ keepalive: true });
-        const v = viewRef.current;
-        if (v && !forgotten.current) saveSnapshot(agentId, v, sync.current);
+        // The session boundary discards private state on hide; foreground starts a fresh GET.
+        stopAudio();
+
       }
     });
     return () => { document.removeEventListener('pointerdown', first, { capture: true }); unsub(); stopAccel?.(); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [engine, audio, sync, agentId]);
 
-  // Telegram's ⋯ menu → Settings: forget my pet (the page's self-service rights path; guests have no other).
+  // Forget is quiescent before dispatch. A lost acknowledgement never resumes care or opens a GET.
+  async function forgetPet() {
+    if (!alive.current || signed !== (tg()?.initData ?? '')) return;
+    onForget();
+    clearPrivate();
+    clearLegacyPetSnapshots(agentId);
+    setForgetState('pending');
+    try {
+      await baseApi.forget(agentId);
+      if (!alive.current || signed !== (tg()?.initData ?? '')) return;
+      setForgetState('done');
+      closeApp();
+    } catch {
+      if (alive.current && signed === (tg()?.initData ?? '')) setForgetState('uncertain');
+    }
+  }
   useEffect(() => {
     if (!view) return;
     const name = view.name;
     return settingsButton(() => {
-      void confirmNative(COPY.forgetAsk(name)).then(async (ok) => {
-        if (!ok) return;
-        // stop every write first (waiting taps, answers, the snapshot), so nothing recreates what is erased
-        forgotten.current = true;
-        sync.dispose();
-        try { await api.forget(agentId); } catch {
-          forgotten.current = false;
-          sync.attach();
-          setBubble({ id: performance.now(), text: COPY.talkFailed });
-          return;
-        }
-        try { localStorage.removeItem(SNAPSHOT_KEY(agentId)); } catch { /* private mode */ }
-        writeStored(SNAPSHOT_KEY(agentId), '');
-        closeApp();
-      });
+      if (!valid()) return;
+      void confirmNative(COPY.forgetAsk(name)).then((ok) => { if (ok && valid()) void forgetPet(); });
     });
   }, [!!view, api, agentId]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -429,6 +482,7 @@ export function PetApp({ agentId, api: injected }: { agentId: string; api?: PetA
 
   const cueRef = useRef<(c: EngineCue) => void>(() => {});
   cueRef.current = (c: EngineCue) => {
+    if (!valid()) return;
     switch (c.type) {
       case 'expr': setExpr(c.expr); break;
       case 'say': setBubble({ id: performance.now(), text: sayText(c.line, firstName()) }); break;
@@ -444,7 +498,7 @@ export function PetApp({ agentId, api: injected }: { agentId: string; api?: PetA
 
   const onToy = useCallback((t: ToyEvent) => {
     const e = engineRef.current, care = careRef.current;
-    if (!e) return;
+    if (!e || !valid()) return;
     const full = !!care && care.tummy >= FULL_AT;
     if (full && t.type === 'cookieTap') { e.fire({ type: 'tooFull' }); return; }
     if (full && t.type === 'cookieDrop') {
@@ -457,7 +511,7 @@ export function PetApp({ agentId, api: injected }: { agentId: string; api?: PetA
     // too tired is the care rule (Energy < TIRED_BELOW), the same one the server applies to the play
     if (t.type === 'ballTap' && !t.at) { e.toy({ ...t, tired: !!care && care.energy < TIRED_BELOW }); return; }
     e.toy(t);
-  }, []);
+  }, [valid]);
   const toyRef = useCallback((k: ToyKind, el: HTMLElement | null) => { toyEls.current[k] = el; }, []);
 
   /* ---------- talk ---------- */
@@ -466,12 +520,12 @@ export function PetApp({ agentId, api: injected }: { agentId: string; api?: PetA
 
   const onListen = useCallback((source: 'text' | 'mic') => {
     const e = engineRef.current;
-    if (!e || talkRef.current === 'thinking' || talkRef.current === 'speaking') return;
+    if (!valid() || !e || talkRef.current === 'thinking' || talkRef.current === 'speaking') return;
     talkRef.current = 'listening';
     // the engine plays the perk on entering listening (once; the mic gets its own variant)
     e.talk('listening', source);
     setTalk('listening');
-  }, []);
+  }, [valid]);
   const onIdle = useCallback(() => {
     if (talkRef.current !== 'listening') return;
     setTalkState('idle');
@@ -501,6 +555,7 @@ export function PetApp({ agentId, api: injected }: { agentId: string; api?: PetA
   function stopWaiting() { closing.current?.(); closing.current = null; }
 
   function speak(reply: string, care?: PetCare, isGoodbye?: boolean, audioB64?: string, bondMilestone?: number) {
+    if (!valid()) return;
     const e = engineRef.current;
     stopWaiting();
     stopAudio();
@@ -511,7 +566,7 @@ export function PetApp({ agentId, api: injected }: { agentId: string; api?: PetA
     setBubble({ id: performance.now(), text: reply });
     setTalkState('speaking');
     // a safety net for text: never leave the mouth "speaking" if a spoken cue goes missing
-    const speakText = () => { e?.speakText(reply, REVEAL_CPS); later((reply.length / REVEAL_CPS) * 1000 + 1500, () => finishSpeaking(token)); };
+    const speakText = () => { if (!valid() || token !== speakToken.current) return; e?.speakText(reply, REVEAL_CPS); later((reply.length / REVEAL_CPS) * 1000 + 1500, () => finishSpeaking(token)); };
     if (audioB64 && e) void playAudio(audioB64, token).catch(speakText);
     else speakText();
   }
@@ -528,13 +583,13 @@ export function PetApp({ agentId, api: injected }: { agentId: string; api?: PetA
     src.connect(an);
     an.connect(ctx.destination);
     // a newer turn may have started while this decoded
-    if (token !== speakToken.current) return;
+    if (!valid() || token !== speakToken.current) return;
     stopAudio();
     source.current = src;
     // only this reply's end may close this reply's mouth (a newer one owns the lip-sync by then)
     src.onended = () => {
       if (source.current === src) source.current = null;
-      if (token !== speakToken.current) return;
+      if (!valid() || token !== speakToken.current) return;
       e.stopSpeaking();
       finishSpeaking(token);
     };
@@ -543,6 +598,7 @@ export function PetApp({ agentId, api: injected }: { agentId: string; api?: PetA
   }
 
   function talkFailed(err: unknown) {
+    if (!valid()) return;
     stopWaiting();
     const v = viewRef.current;
     if (isPetError(err) && err.code === 'guest_talk' && v) { setTalkState('idle'); openDm(v.botUsername); return; }
@@ -561,18 +617,22 @@ export function PetApp({ agentId, api: injected }: { agentId: string; api?: PetA
 
   /** Resolves false when the turn failed, so the pill puts the words back. */
   const onSend = async (text: string): Promise<boolean> => {
+    if (!valid()) return false;
     startThinking();
     try {
       const r = await withTimeout((signal) => api.talk(agentId, { text }, { signal }));
+      if (!valid()) return false;
       speak(r.reply, r.care, r.goodbye, undefined, r.bondMilestone);
       return true;
     } catch (err) { talkFailed(err); return false; }
   };
 
   const onVoice = async (blob: Blob) => {
+    if (!valid()) return false;
     startThinking();
     try {
       const r = await withTimeout((signal) => api.talkVoice(agentId, blob, { signal }));
+      if (!valid()) return;
       // nothing heard (silence, noise): a gentle "try again", never an empty bubble
       if (!r.transcript || !r.reply) {
         stopWaiting();
@@ -594,10 +654,14 @@ export function PetApp({ agentId, api: injected }: { agentId: string; api?: PetA
 
   /* ---------- render ---------- */
 
+  if (forgetState) return <main className="pet-root" data-pet-root="" style={{ backgroundColor: PET_GROUND }}>
+    <div role="status">{forgetState === 'pending' ? 'Forgetting your care…' : forgetState === 'done' ? 'Your care has been forgotten.' : 'We could not confirm that your care was forgotten. Your pet is paused. Retry to confirm deletion.'}</div>
+    {forgetState === 'uncertain' && <button type="button" onClick={() => void forgetPet()}>Retry forgetting</button>}
+  </main>;
   if (fatal) {
     return (
       <Suspense fallback={<main className="pet-root" data-pet-root="" style={{ backgroundColor: bd?.edge ?? PET_GROUND }} />}>
-        <Sleeper kind={fatal.kind} look={fatal.look ?? view?.look} stage={fatal.stage ?? view?.stage} name={fatal.name ?? view?.name} onRetry={fatal.kind === 'offline' ? () => { setFatal(null); void load(); } : undefined} />
+        <Sleeper kind={fatal.kind} look={fatal.look} stage={fatal.stage} name={fatal.name} onRetry={fatal.kind === 'offline' ? () => { setFatal(null); void load(); } : undefined} />
       </Suspense>
     );
   }

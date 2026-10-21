@@ -1,9 +1,11 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { StrictMode } from 'react';
 import { motionValue } from 'framer-motion';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { EngineCue, PetApi, PetEngine, PetEngineOptions, PetSnapshot } from './contract';
 import { SNAPSHOT_KEY } from './contract';
 import { createMockApi } from './mock';
+import { PetError } from './errors';
 
 /* The engine is written against the same contract in parallel: a recording double stands in for it. */
 const engines: { opts: PetEngineOptions; e: PetEngine & Record<string, ReturnType<typeof vi.fn>> }[] = [];
@@ -42,12 +44,16 @@ const fired = () => engine().fire.mock.calls.map((c) => (c[0] as { type: string 
 
 describe('PetApp open sequence', () => {
   beforeEach(() => {
+    // These interaction cases require a waking pet, independently of the machine's wall clock.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(2026, 9, 21, 12, 0));
     engines.length = 0;
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
     window.history.replaceState({}, '', '/studio/pet/x?mock=1');
     Object.defineProperty(window, 'innerWidth', { value: 390, configurable: true });
     Object.defineProperty(window, 'innerHeight', { value: 844, configurable: true });
   });
-  afterEach(() => { delete (window as { Telegram?: unknown }).Telegram; localStorage.clear(); });
+  afterEach(() => { delete (window as { Telegram?: unknown }).Telegram; localStorage.clear(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
   it('boots Telegram, paints the character, then ready(), then hello', async () => {
     const { app, calls } = telegram();
@@ -64,23 +70,48 @@ describe('PetApp open sequence', () => {
     expect(screen.getByRole('textbox', { name: 'Talk to Mochi' })).toBeInTheDocument();
   });
 
-  it('paints from the snapshot before the server answers', async () => {
+  it('never paints a prior account snapshot before the fresh authenticated GET', async () => {
     const { app } = telegram();
-    const snapView = await (async () => {
-      vi.useFakeTimers();
-      const p = createMockApi({ look: 2 }).get('x');
-      await vi.runAllTimersAsync();
-      vi.useRealTimers();
-      return p;
-    })();
-    const snap: PetSnapshot = { v: 1, view: { ...snapView, name: 'Cached' }, savedAt: Date.now() };
+    const fresh = await createMockApi({ latency: { care: 0, talk: 0 } }).get('x');
+    const snap: PetSnapshot = { v: 1, view: { ...fresh, name: 'PREVIOUS_ACCOUNT_PRIVATE_PET', care: { ...fresh.care, userId: 300 } }, savedAt: Date.now() };
     localStorage.setItem(SNAPSHOT_KEY('x'), JSON.stringify(snap));
-    render(<PetApp agentId="x" />);
-    // the cached name is on screen at once; the GET (120 ms in the fake) has not answered yet
-    expect(screen.getByRole('textbox', { name: 'Talk to Cached' })).toBeInTheDocument();
-    await waitFor(() => expect(app.ready).toHaveBeenCalled());
-    await waitFor(() => expect(screen.getByRole('textbox', { name: 'Talk to Mochi' })).toBeInTheDocument());
+    app.initData = 'signed-current-400'; app.initDataUnsafe.user.id = 400;
+    const getStored = vi.fn();
+    const setStored = vi.fn();
+    Object.assign(app, { DeviceStorage: { getItem: getStored, setItem: setStored } });
+    let resolve!: (v: typeof fresh) => void;
+    const get = vi.fn(() => new Promise<typeof fresh>((r) => { resolve = r; }));
+    const { container } = render(<PetApp agentId="x" api={{ ...createMockApi(), get }} />);
+    expect(screen.queryByRole('textbox')).toBeNull();
+    expect(container.textContent).not.toContain('PREVIOUS_ACCOUNT_PRIVATE_PET');
+    expect(engines).toHaveLength(0);
+    expect(localStorage.getItem(SNAPSHOT_KEY('x'))).toBeNull();
+    expect(getStored).not.toHaveBeenCalled();
+    expect(setStored).toHaveBeenCalledWith(SNAPSHOT_KEY('x'), '');
+    await act(async () => { resolve({ ...fresh, care: { ...fresh.care, userId: 400 } }); });
+    expect(await screen.findByRole('textbox', { name: 'Talk to Mochi' })).toBeInTheDocument();
     expect(engines).toHaveLength(1);
+    expect(localStorage.getItem(SNAPSHOT_KEY('x'))).toBeNull();
+    expect(setStored.mock.calls.every(([, value]) => value === '')).toBe(true);
+  });
+
+  it('StrictMode reattachment discards its aborted initial GET and accepts only the fresh response', async () => {
+    telegram();
+    const fresh = await createMockApi().get('x');
+    const answers: Array<(v: typeof fresh) => void> = [];
+    const signals: AbortSignal[] = [];
+    const get = vi.fn((_id: string, o?: Parameters<PetApi['get']>[1]) => {
+      signals.push(o!.signal!);
+      return new Promise<typeof fresh>((r) => answers.push(r));
+    });
+    const { container } = render(<StrictMode><PetApp agentId="x" api={{ ...createMockApi(), get }} /></StrictMode>);
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(signals[0].aborted).toBe(true);
+    await act(async () => answers[0]({ ...fresh, name: 'ABORTED_PRIVATE_VIEW' }));
+    expect(container.textContent).not.toContain('ABORTED_PRIVATE_VIEW');
+    expect(screen.queryByRole('textbox')).toBeNull();
+    await act(async () => answers[1](fresh));
+    expect(await screen.findByRole('textbox', { name: 'Talk to Mochi' })).toBeInTheDocument();
   });
 
   it('posts a finished care action and keeps the rings in step', async () => {
@@ -150,12 +181,16 @@ describe('PetApp open sequence', () => {
 
 describe('PetApp: talk outcomes, sleep, the cache and the page', () => {
   beforeEach(() => {
+    // These interaction cases require a waking pet, independently of the machine's wall clock.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(2026, 9, 21, 12, 0));
     engines.length = 0;
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
     window.history.replaceState({}, '', '/studio/pet/x');
     Object.defineProperty(window, 'innerWidth', { value: 390, configurable: true });
     Object.defineProperty(window, 'innerHeight', { value: 844, configurable: true });
   });
-  afterEach(() => { delete (window as { Telegram?: unknown }).Telegram; localStorage.clear(); });
+  afterEach(() => { delete (window as { Telegram?: unknown }).Telegram; localStorage.clear(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
   const fast = (over: Partial<PetApi> = {}, care: Parameters<typeof createMockApi>[0] = {}): PetApi => ({ ...createMockApi({ latency: { care: 0, talk: 0 }, ...care }), ...over });
   const bubble = (c: HTMLElement) => c.querySelector('.pet-bubble')?.textContent ?? '';
@@ -225,23 +260,123 @@ describe('PetApp: talk outcomes, sleep, the cache and the page', () => {
     expect(screen.queryByRole('button', { name: 'Hold to talk' })).toBeNull();
   });
 
-  it('a cached snapshot from days ago paints a pet ready to celebrate, not the floors', async () => {
+  it('an unavailable fresh GET never opens even an old valid snapshot', async () => {
     telegram();
-    const day = 86_400_000;
-    vi.useFakeTimers({ toFake: ['Date'] });
-    vi.setSystemTime(Date.UTC(2026, 9, 10, 12));
-    const old = await createMockApi({ latency: { care: 0, talk: 0 }, care: { tummy: 50, joy: 50, energy: 50 } }).get('x');
-    vi.setSystemTime(Date.UTC(2026, 9, 14, 12));
-    const snap: PetSnapshot = { v: 1, view: { ...old, care: { ...old.care, tz: 'UTC' } }, savedAt: Date.now() - 4 * day };
+    const old = await createMockApi({ latency: { care: 0, talk: 0 } }).get('x');
+    const snap: PetSnapshot = { v: 1, view: { ...old, name: 'PRIVATE_OFFLINE_CACHE' }, savedAt: Date.now() };
     localStorage.setItem(SNAPSHOT_KEY('x'), JSON.stringify(snap));
-    const { container } = render(<PetApp agentId="x" api={fast({ get: () => new Promise(() => {}) })} />);
-    vi.useRealTimers();
-    await waitFor(() => expect(engines).toHaveLength(1));
-    // the engine is born content (welcome floors applied locally), never droopy
-    expect(engines[0].opts.mood.level).not.toBe('droopy');
-    const ring = (k: string) => Number(container.querySelector(`[data-toy="${k}"] .pet-ring-fill`)!.getAttribute('stroke-dashoffset'));
-    const C = 2 * Math.PI * 30;
-    for (const k of ['cookie', 'ball', 'moon']) expect(ring(k)).toBeLessThanOrEqual(C * 0.4 + 1e-6);
+    const { container } = render(<PetApp agentId="x" api={fast({ get: async () => { throw new Error('offline'); } })} />);
+    await screen.findByRole('button', { name: /try again/i });
+    expect(engines).toHaveLength(0);
+    expect(screen.queryByRole('textbox')).toBeNull();
+    expect(container.textContent).not.toContain('PRIVATE_OFFLINE_CACHE');
+    expect(localStorage.getItem(SNAPSHOT_KEY('x'))).toBeNull();
+  });
+
+  it('drops delayed previous-account GET and pending care when the signed session changes', async () => {
+    const { app } = telegram();
+    const fresh = await fast().get('x');
+    let oldGet!: (v: typeof fresh) => void;
+    let newGet!: (v: typeof fresh) => void;
+    const signals: AbortSignal[] = [];
+    const get = vi.fn((_id: string, o?: Parameters<PetApi['get']>[1]) => {
+      signals.push(o!.signal!);
+      return new Promise<typeof fresh>((r) => { if (signals.length === 1) oldGet = r; else newGet = r; });
+    });
+    const care = vi.fn(fast().care);
+    const { container } = render(<PetApp agentId="x" api={fast({ get, care })} />);
+    app.initData = 'signed-other-account'; app.initDataUnsafe.user.id = 2;
+    fireEvent.pointerDown(document.body);
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(signals[0].aborted).toBe(true);
+    await act(async () => { oldGet({ ...fresh, name: 'PRIVATE_OLD_ACCOUNT' }); });
+    expect(container.textContent).not.toContain('PRIVATE_OLD_ACCOUNT');
+    expect(engines).toHaveLength(0);
+    await act(async () => { newGet({ ...fresh, name: 'Current', care: { ...fresh.care, userId: 2 } }); });
+    expect(await screen.findByRole('textbox', { name: 'Talk to Current' })).toBeInTheDocument();
+    act(() => { engines.at(-1)!.opts.onCue?.({ type: 'care', action: 'pet' }); });
+    app.initData = 'signed-third-account'; app.initDataUnsafe.user.id = 3;
+    fireEvent.pointerDown(document.body);
+    await new Promise((r) => setTimeout(r, 2100));
+    expect(care).not.toHaveBeenCalled();
+    expect(container.querySelector('.pet-body')).toBeNull();
+  });
+
+  it('a delayed talk reply cannot return private content after foreground revalidation', async () => {
+    telegram();
+    let resolve!: (r: Awaited<ReturnType<PetApi['talk']>>) => void;
+    let signal: AbortSignal | undefined;
+    const talk = vi.fn((_id, _req, o) => { signal = o?.signal; return new Promise<Awaited<ReturnType<PetApi['talk']>>>((r) => { resolve = r; }); });
+    const api = fast({ talk });
+    const get = vi.spyOn(api, 'get');
+    const { container } = render(<PetApp agentId="x" api={api} />);
+    await ready(container);
+    const old = engine();
+    const input = screen.getByRole('textbox');
+    fireEvent.change(input, { target: { value: 'hello' } }); fireEvent.submit(input.closest('form')!);
+    expect(talk).toHaveBeenCalledTimes(1);
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+    act(() => document.dispatchEvent(new Event('visibilitychange')));
+    expect(signal?.aborted).toBe(true);
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    act(() => document.dispatchEvent(new Event('visibilitychange')));
+    expect(screen.queryByRole('textbox')).toBeNull();
+    await ready(container);
+    await act(async () => { resolve({ reply: 'PRIVATE_DELAYED_REPLY', turnId: 'old' }); });
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(container.textContent).not.toContain('PRIVATE_DELAYED_REPLY');
+    expect(old.speakText).not.toHaveBeenCalled();
+    expect(engine().speakText).not.toHaveBeenCalled();
+    expect(localStorage.getItem(SNAPSHOT_KEY('x'))).toBeNull();
+  });
+
+  it.each([401, 403])('clears private state and queued care after a %s care denial', async (status) => {
+    telegram();
+    const care = vi.fn(async () => { throw new PetError(status, status === 401 ? 'authentication_required' : 'pet_private', 'denied'); });
+    const { container } = render(<PetApp agentId="x" api={fast({ care })} />);
+    await ready(container);
+    const old = engine();
+    act(() => { engines.at(-1)!.opts.onCue?.({ type: 'care', action: 'pet' }); });
+    act(() => { engines.at(-1)!.opts.onCue?.({ type: 'care', action: 'feed' }); });
+    await waitFor(() => expect(container.querySelector('.pet-stage')).toBeNull());
+    expect(screen.queryByRole('textbox')).toBeNull();
+    expect(old.dispose).toHaveBeenCalled();
+    await new Promise((r) => setTimeout(r, 2100));
+    expect(care).toHaveBeenCalledTimes(1);
+    expect(localStorage.getItem(SNAPSHOT_KEY('x'))).toBeNull();
+  });
+
+  it('an uncertain forget remains paused, discards late replies, and retries deletion without GET or care replay', async () => {
+    const { app } = telegram();
+    let onSettings!: () => void;
+    Object.assign(app, {
+      SettingsButton: { show: vi.fn(), hide: vi.fn(), onClick: (cb: () => void) => { onSettings = cb; }, offClick: vi.fn() },
+      showConfirm: (_message: string, cb: (ok: boolean) => void) => cb(true), close: vi.fn(),
+    });
+    let reply!: (r: Awaited<ReturnType<PetApi['talk']>>) => void;
+    const talk = vi.fn(() => new Promise<Awaited<ReturnType<PetApi['talk']>>>((r) => { reply = r; }));
+    const forget = vi.fn().mockRejectedValueOnce(new Error('ack lost')).mockResolvedValueOnce({ erased: 1 });
+    const care = vi.fn(fast().care);
+    const api = fast({ talk, forget, care }); const get = vi.spyOn(api, 'get');
+    const { container } = render(<PetApp agentId="x" api={api} />);
+    await ready(container);
+    act(() => { engines.at(-1)!.opts.onCue?.({ type: 'care', action: 'pet' }); });
+    const input = screen.getByRole('textbox');
+    fireEvent.change(input, { target: { value: 'hello' } }); fireEvent.submit(input.closest('form')!);
+    act(() => onSettings());
+    const retry = await screen.findByRole('button', { name: 'Retry forgetting' });
+    expect(screen.getByRole('status')).toHaveTextContent('could not confirm');
+    expect(container.querySelector('.pet-body')).toBeNull();
+    await act(async () => { reply({ reply: 'ERASED_PRIVATE_REPLY', turnId: 'erased' }); });
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true }); act(() => document.dispatchEvent(new Event('visibilitychange')));
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true }); act(() => document.dispatchEvent(new Event('visibilitychange')));
+    await new Promise((r) => setTimeout(r, 2100));
+    expect(container.textContent).not.toContain('ERASED_PRIVATE_REPLY');
+    expect(get).toHaveBeenCalledTimes(1); expect(care).not.toHaveBeenCalled(); expect(app.close).not.toHaveBeenCalled();
+    fireEvent.click(retry);
+    await waitFor(() => expect(app.close).toHaveBeenCalledTimes(1));
+    expect(forget).toHaveBeenNthCalledWith(1, 'x'); expect(forget).toHaveBeenNthCalledWith(2, 'x');
+    expect(get).toHaveBeenCalledTimes(1); expect(care).not.toHaveBeenCalled();
   });
 
   it('celebrations wait for a sleeping pet to wake', async () => {
@@ -264,7 +399,7 @@ describe('PetApp: talk outcomes, sleep, the cache and the page', () => {
     expect(engine().toy).toHaveBeenLastCalledWith({ type: 'ballTap', tired: false });
   });
 
-  it('reply audio: a new turn stops the old reply; hiding suspends and showing resumes it (never a stuck mouth)', async () => {
+  it('reply audio stops on hide; foreground verifies fresh state and a new turn can speak', async () => {
     telegram();
     const sources: Array<{ stop: ReturnType<typeof vi.fn>; onended: (() => void) | null }> = [];
     const made: FakeContext[] = [];
@@ -290,6 +425,7 @@ describe('PetApp: talk outcomes, sleep, the cache and the page', () => {
     expect(FakeContext.made).toBe(0);
     Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
     act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+    await ready(container);
     // a touch makes the one context; a voice reply plays through it
     fireEvent.pointerDown(document.body);
     class Recorder {
@@ -311,14 +447,20 @@ describe('PetApp: talk outcomes, sleep, the cache and the page', () => {
     await waitFor(() => expect(engine().speakAudio).toHaveBeenCalled());
     const ctx = () => FakeContext.made;
     expect(ctx()).toBe(1);
-    // hide mid-reply: suspended; back: resumed, the reply carries on (the engine keeps its lip-sync)
+    // Hide discards private audio and the old engine. Foreground gets a fresh verified view.
+    const oldEngine = engine();
     Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
     act(() => { document.dispatchEvent(new Event('visibilitychange')); });
-    expect(made[0].suspend).toHaveBeenCalledTimes(1);
-    expect(engine().stopSpeaking).not.toHaveBeenCalled();
+    expect(sources[0].stop).toHaveBeenCalled();
+    expect(sources[0].onended).toBeNull();
+    expect(oldEngine.dispose).toHaveBeenCalled();
+    expect(screen.queryByRole('textbox')).toBeNull();
     Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
     act(() => { document.dispatchEvent(new Event('visibilitychange')); });
-    expect(made[0].resume).toHaveBeenCalled();
+    expect(screen.queryByRole('textbox')).toBeNull();
+    await ready(container);
+    expect(engine()).not.toBe(oldEngine);
+    expect(made[0].resume).not.toHaveBeenCalled();
     // a new message while it speaks: the old reply stops, and its end can no longer close the new reply's mouth
     const input = screen.getByRole('textbox', { name: 'Talk to Mochi' });
     fireEvent.change(input, { target: { value: 'and you?' } });
@@ -353,7 +495,7 @@ describe('PetApp: talk outcomes, sleep, the cache and the page', () => {
     const { container } = render(<PetApp agentId="x" api={fast({ forget })} />);
     await ready(container);
     expect(app.SettingsButton.show).toHaveBeenCalled();
-    expect(localStorage.getItem(SNAPSHOT_KEY('x'))).toBeTruthy();
+    expect(localStorage.getItem(SNAPSHOT_KEY('x'))).toBeNull();
     act(() => { onSettings!(); });
     await waitFor(() => expect(app.close).toHaveBeenCalled());
     expect(app.showConfirm.mock.calls[0][0]).toMatch(/^Forget Mochi’s care for you\?/);
@@ -361,18 +503,22 @@ describe('PetApp: talk outcomes, sleep, the cache and the page', () => {
     expect(localStorage.getItem(SNAPSHOT_KEY('x'))).toBeFalsy();
   });
 
-  it('mirrors the page going away onto the root, so CSS loops pause too', async () => {
+  it('discards the private DOM on hide and revalidates before showing it again', async () => {
     telegram();
-    const { container } = render(<PetApp agentId="x" api={fast()} />);
+    const api = fast();
+    const get = vi.spyOn(api, 'get');
+    const { container } = render(<PetApp agentId="x" api={api} />);
     await ready(container);
-    const root = container.querySelector('.pet-root')!;
-    expect(root.hasAttribute('data-paused')).toBe(false);
+    const old = engine();
     Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
     act(() => { document.dispatchEvent(new Event('visibilitychange')); });
-    expect(root.hasAttribute('data-paused')).toBe(true);
-    expect(engine().stop).toHaveBeenCalled();
+    expect(container.querySelector('.pet-body')).toBeNull();
+    expect(old.dispose).toHaveBeenCalled();
     Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
     act(() => { document.dispatchEvent(new Event('visibilitychange')); });
-    expect(root.hasAttribute('data-paused')).toBe(false);
+    expect(screen.queryByRole('textbox')).toBeNull();
+    await ready(container);
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(engine()).not.toBe(old);
   });
 });

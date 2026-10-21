@@ -59,14 +59,32 @@ export const TalkPill = memo(function TalkPill(p: TalkPillProps) {
   const pause = useRef<ReturnType<typeof setTimeout> | null>(null);
   const rec = useRef<{ recorder: MediaRecorder; stream: MediaStream; started: number; cancel: boolean; meter?: () => void } | null>(null);
   const pending = useRef(false);
+  const mounted = useRef(true);
+  const generation = useRef(0);
   /** the finger is up (a release can land while the permission prompt is still open) */
   const released = useRef(false);
   const latest = useRef(p);
   latest.current = p;
 
-  useEffect(() => () => {
-    if (pause.current) clearTimeout(pause.current);
-    stopTracks();
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      // This is a request-generation counter, not a DOM ref; invalidate the latest request.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      generation.current++;
+      pending.current = false;
+      released.current = true;
+      if (pause.current) clearTimeout(pause.current);
+      const r = rec.current;
+      if (r) {
+        r.cancel = true;
+        r.recorder.onstop = null; r.recorder.ondataavailable = null;
+        try { r.recorder.stop(); } catch { /* already stopped */ }
+        stopTracks(); rec.current = null;
+        latest.current.onRecording?.(false);
+      }
+    };
   }, []);
   useEffect(() => { if (p.autoFocus) input.current?.focus(); }, [p.autoFocus]);
   useEffect(() => {
@@ -75,8 +93,7 @@ export const TalkPill = memo(function TalkPill(p: TalkPillProps) {
     return () => clearTimeout(t);
   }, [hint]);
 
-  function stopTracks() {
-    const r = rec.current;
+  function stopTracks(r = rec.current) {
     if (!r) return;
     r.meter?.();
     for (const t of r.stream.getTracks()) t.stop();
@@ -97,7 +114,7 @@ export const TalkPill = memo(function TalkPill(p: TalkPillProps) {
     setText('');
     if (pause.current) clearTimeout(pause.current);
     setChip({ id: Date.now(), text: t });
-    void p.onSend(t)?.then((ok) => { if (!ok) setText((now) => (now ? now : t)); });
+    void p.onSend(t)?.then((ok) => { if (mounted.current && !ok) setText((now) => (now ? now : t)); });
   };
 
   const meter = (stream: MediaStream): (() => void) | undefined => {
@@ -130,12 +147,19 @@ export const TalkPill = memo(function TalkPill(p: TalkPillProps) {
     const type = pickMicType();
     if (type === null || !navigator.mediaDevices?.getUserMedia) { fallback(); return; }
     pending.current = true;
+    const ticket = ++generation.current;
     let stream: MediaStream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
     } catch {
-      pending.current = false;
-      fallback();
+      if (mounted.current && ticket === generation.current) { pending.current = false; fallback(); }
+      return;
+    }
+    // Permission may outlive a release, cancellation, identity change or the entire page.
+    // Never construct/start a recorder for that abandoned request; stop every returned track.
+    if (!mounted.current || ticket !== generation.current || released.current || latest.current.busy || latest.current.guest || !latest.current.onVoice) {
+      for (const track of stream.getTracks()) track.stop();
+      if (ticket === generation.current) pending.current = false;
       return;
     }
     pending.current = false;
@@ -152,8 +176,9 @@ export const TalkPill = memo(function TalkPill(p: TalkPillProps) {
     rec.current = r;
     recorder.ondataavailable = (ev) => { if (ev.data.size) chunks.push(ev.data); };
     recorder.onstop = () => {
-      stopTracks();
-      rec.current = null;
+      stopTracks(r);
+      if (rec.current === r) rec.current = null;
+      if (!mounted.current || ticket !== generation.current) return;
       setRecording(false);
       latest.current.onRecording?.(false);
       const held = performance.now() - r.started;
@@ -175,7 +200,14 @@ export const TalkPill = memo(function TalkPill(p: TalkPillProps) {
   const micUp = (cancel: boolean) => {
     released.current = true;
     const r = rec.current;
-    if (!r) return;
+    if (!r) {
+      if (pending.current) {
+        generation.current++; pending.current = false;
+        if (!cancel) setHint(COPY.holdToTalk);
+        latest.current.onIdle();
+      }
+      return;
+    }
     r.cancel = cancel;
     try { r.recorder.stop(); } catch { stopTracks(); rec.current = null; setRecording(false); latest.current.onRecording?.(false); }
   };

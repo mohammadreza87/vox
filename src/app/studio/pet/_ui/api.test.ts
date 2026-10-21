@@ -24,6 +24,19 @@ describe('pet api', () => {
     expect(JSON.parse(talkInit.body as string)).toEqual({ text: 'yo' });
   });
 
+  it('uses only the deletion generation issued by the latest open for care and talk', async () => {
+    const fetch = vi.fn(async () => json(200, { careEpoch: 'fresh-deletion-generation' }));
+    const api = createHttpApi({ fetch, initData: () => 'signed' });
+    await api.get('a');
+    await api.care('a', { action: 'feed' });
+    await api.talk('a', { text: 'hello' });
+    await api.talkVoice('a', new Blob(['x'], { type: 'audio/webm' }));
+    for (const call of fetch.mock.calls.slice(1)) {
+      const init = (call as unknown as [string, RequestInit])[1];
+      expect((init.headers as Record<string, string>)['x-pet-care-epoch']).toBe('fresh-deletion-generation');
+    }
+  });
+
   it('posts voice as multipart `audio`', async () => {
     const fetch = vi.fn(async () => json(200, { transcript: 't', reply: 'r' }));
     await createHttpApi({ fetch, initData: () => 'x' }).talkVoice('a', new Blob(['x'], { type: 'audio/mp4' }));

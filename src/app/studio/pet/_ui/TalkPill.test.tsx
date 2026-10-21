@@ -82,6 +82,57 @@ describe('TalkPill', () => {
       Object.defineProperty(navigator, 'mediaDevices', { value: { getUserMedia: vi.fn(async () => stream) }, configurable: true });
     });
 
+    it.each(['release', 'cancel', 'unmount'] as const)('never starts recording when permission resolves after %s', async (end) => {
+      let allow!: (stream: MediaStream) => void;
+      const stop = vi.fn();
+      Object.defineProperty(navigator, 'mediaDevices', { value: { getUserMedia: vi.fn(() => new Promise<MediaStream>((r) => { allow = r; })) }, configurable: true });
+      const props = { name: 'Mochi', onListen: vi.fn(), onIdle: vi.fn(), onSend: vi.fn(), onVoice: vi.fn(), onRecording: vi.fn() };
+      const ui = render(<TalkPill {...props} />);
+      const mic = screen.getByRole('button', { name: 'Hold to talk' });
+      fireEvent.pointerDown(mic);
+      expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledTimes(1);
+      if (end === 'unmount') ui.unmount();
+      else if (end === 'cancel') fireEvent.pointerCancel(mic);
+      else fireEvent.pointerUp(mic);
+      await act(async () => { allow({ getTracks: () => [{ stop }] } as unknown as MediaStream); });
+      expect(stop).toHaveBeenCalledTimes(1);
+      expect(FakeRecorder.last).toBeNull();
+      expect(props.onVoice).not.toHaveBeenCalled();
+      expect(props.onRecording).not.toHaveBeenCalledWith(true);
+    });
+
+    it('a stale permission grant cannot consume or cancel a newer hold', async () => {
+      const permits: Array<(stream: MediaStream) => void> = [];
+      Object.defineProperty(navigator, 'mediaDevices', { value: { getUserMedia: vi.fn(() => new Promise<MediaStream>((r) => permits.push(r))) }, configurable: true });
+      const { p } = setup();
+      const mic = screen.getByRole('button', { name: 'Hold to talk' });
+      fireEvent.pointerDown(mic); fireEvent.pointerCancel(mic); fireEvent.pointerDown(mic);
+      const oldStop = vi.fn(), currentStop = vi.fn();
+      await act(async () => { permits[0]({ getTracks: () => [{ stop: oldStop }] } as unknown as MediaStream); });
+      expect(oldStop).toHaveBeenCalledTimes(1); expect(FakeRecorder.last).toBeNull();
+      const now = vi.spyOn(performance, 'now').mockReturnValue(1000);
+      await act(async () => { permits[1]({ getTracks: () => [{ stop: currentStop }] } as unknown as MediaStream); });
+      expect(FakeRecorder.last).not.toBeNull();
+      expect(mic).toHaveAttribute('aria-pressed', 'true');
+      now.mockReturnValue(2000); fireEvent.pointerUp(mic);
+      expect(currentStop).toHaveBeenCalledTimes(1); expect(p.onVoice).toHaveBeenCalledTimes(1);
+      now.mockRestore();
+    });
+
+    it('unmounting an active recorder stops its tracks without submitting a clip', async () => {
+      const stop = vi.fn();
+      Object.defineProperty(navigator, 'mediaDevices', { value: { getUserMedia: vi.fn(async () => ({ getTracks: () => [{ stop }] })) }, configurable: true });
+      const props = { name: 'Mochi', onListen: vi.fn(), onIdle: vi.fn(), onSend: vi.fn(), onVoice: vi.fn(), onRecording: vi.fn() };
+      const ui = render(<TalkPill {...props} />);
+      await act(async () => { fireEvent.pointerDown(screen.getByRole('button', { name: 'Hold to talk' })); });
+      expect(FakeRecorder.last).not.toBeNull();
+      ui.unmount();
+      expect(stop).toHaveBeenCalledTimes(1); expect(props.onVoice).not.toHaveBeenCalled();
+      expect(FakeRecorder.last?.onstop).toBeNull();
+      expect(FakeRecorder.last?.ondataavailable).toBeNull();
+      expect(props.onRecording).toHaveBeenLastCalledWith(false);
+    });
+
     it('picks the first supported container', () => {
       expect(pickMicType(FakeRecorder)).toBe('audio/mp4');
       expect(pickMicType({ isTypeSupported: () => false })).toBe('');

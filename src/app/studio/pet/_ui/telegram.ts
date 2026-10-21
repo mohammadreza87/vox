@@ -38,6 +38,7 @@ export interface PetTelegram {
   Accelerometer?: { start(params: { refresh_rate?: number }, cb?: (ok: boolean) => void): void; stop(cb?: (ok: boolean) => void): void; x: number; y: number; z: number };
   DeviceStorage?: {
     getItem(key: string, cb: (err: string | null, value?: string | null) => void): void;
+    removeItem?(key: string, cb?: (err: string | null, ok?: boolean) => void): void;
     setItem(key: string, value: string, cb?: (err: string | null, ok?: boolean) => void): void;
   };
 }
@@ -222,4 +223,23 @@ export function readStoredSync(key: string): string | null {
 export function writeStored(key: string, value: string, app: PetTelegram | null = tg()) {
   try { localStorage.setItem(key, value); } catch { /* private mode */ }
   safely(() => app?.DeviceStorage?.setItem(key, value));
+}
+
+/** Migration only: erase legacy private snapshots, without ever reading their values into the UI.
+ * DeviceStorage has no key enumeration here; clear the current agent and keys discovered locally.
+ */
+export function clearLegacyPetSnapshots(agentId: string, app: PetTelegram | null = tg()) {
+  const keys = new Set([`vox-pet:${agentId}`]);
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key?.startsWith('vox-pet:')) keys.add(key);
+    }
+    for (const key of keys) localStorage.removeItem(key);
+  } catch { /* storage unavailable */ }
+  for (const key of keys) safely(() => {
+    const ds = app?.DeviceStorage;
+    if (ds?.removeItem) ds.removeItem(key);
+    else ds?.setItem(key, '');
+  });
 }

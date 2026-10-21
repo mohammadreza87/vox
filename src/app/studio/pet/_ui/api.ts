@@ -31,10 +31,11 @@ export function createHttpApi(d: HttpDeps = {}): PetApi {
   const doFetch = d.fetch ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
   const initData = d.initData ?? (() => tg()?.initData ?? '');
   const tz = d.tz ?? petTz;
+  const epochs = new Map<string, string>();
   const url = (agentId: string, action?: string) => `${PET_API_BASE}/${encodeURIComponent(agentId)}${action ? `/${action}` : ''}`;
 
-  async function call<T>(method: 'GET' | 'POST', path: string, body: unknown, o?: PetRequestOpts): Promise<T> {
-    const headers: Record<string, string> = { 'X-Telegram-Init-Data': initData(), [PET_TZ_HEADER]: tz(), Accept: 'application/json' };
+  async function call<T>(method: 'GET' | 'POST', path: string, body: unknown, o?: PetRequestOpts, epoch?: string): Promise<T> {
+    const headers: Record<string, string> = { 'X-Telegram-Init-Data': initData(), [PET_TZ_HEADER]: tz(), Accept: 'application/json', ...(epoch ? { 'x-pet-care-epoch': epoch } : {}) };
     let payload: BodyInit | undefined;
     if (body instanceof FormData) payload = body;
     else if (body !== undefined) { headers['Content-Type'] = 'application/json'; payload = JSON.stringify(body); }
@@ -55,13 +56,17 @@ export function createHttpApi(d: HttpDeps = {}): PetApi {
   }
 
   return {
-    get: (agentId, o) => call<PetView>('GET', url(agentId), undefined, o),
-    care: (agentId, req: CareRequest, o) => call<CareResponse>('POST', url(agentId, 'care'), req, o),
-    talk: (agentId, req: TalkRequest, o) => call<TalkResponse>('POST', url(agentId, 'talk'), req, o),
+    get: async (agentId, o) => {
+      const view = await call<PetView>('GET', url(agentId), undefined, o);
+      epochs.set(agentId, view.careEpoch ?? 'initial');
+      return view;
+    },
+    care: (agentId, req: CareRequest, o) => call<CareResponse>('POST', url(agentId, 'care'), req, o, epochs.get(agentId)),
+    talk: (agentId, req: TalkRequest, o) => call<TalkResponse>('POST', url(agentId, 'talk'), req, o, epochs.get(agentId)),
     talkVoice: (agentId, audio, o) => {
       const form = new FormData();
       form.append('audio', audio, `voice.${audio.type.includes('mp4') ? 'm4a' : audio.type.includes('ogg') ? 'ogg' : 'webm'}`);
-      return call<TalkVoiceResponse>('POST', url(agentId, 'talk-voice'), form, o);
+      return call<TalkVoiceResponse>('POST', url(agentId, 'talk-voice'), form, o, epochs.get(agentId));
     },
     forget: (agentId, o) => call<PetForgetResponse>('POST', url(agentId, 'forget'), {}, o),
   };

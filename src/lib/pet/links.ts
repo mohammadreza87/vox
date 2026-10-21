@@ -13,7 +13,7 @@ export const MENU_MAX_CHARS = 16;
 
 /** `https://host/studio/pet/<agentId>`, or null when the Studio URL can't host a Mini App. */
 export function petPageUrl(webAppUrl: string | undefined, agentId: string): string | null {
-  if (!webAppUrl || !AGENT_ID.test(agentId)) return null;
+  if (process.env.STUDIO_PET_DISABLED === '1' || !webAppUrl || !AGENT_ID.test(agentId)) return null;
   let base: URL;
   try { base = new URL(webAppUrl); } catch { return null; }
   if (base.protocol !== 'https:' || base.username || base.password || base.search || base.hash) return null;

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { bootTelegram, holdClosing, readStored, readyAfterPaint, startAccelerometer, syncSafeAreas, type PetTelegram } from './telegram';
+import { clearLegacyPetSnapshots, bootTelegram, holdClosing, readStored, readyAfterPaint, startAccelerometer, syncSafeAreas, type PetTelegram } from './telegram';
 
 /** A WebApp double that records every call in order. */
 function fakeApp(over: Partial<PetTelegram> = {}) {
@@ -119,5 +119,29 @@ describe('pet Telegram boot (§3.5)', () => {
     localStorage.setItem('k2', 'from-local');
     await expect(readStored('k2', 50, app)).resolves.toBe('from-local');
     expect(getItem).toHaveBeenCalledTimes(1);
+  });
+});
+
+
+describe('legacy private pet snapshot migration', () => {
+  afterEach(() => localStorage.clear());
+  it('clears every known legacy key without reading stored private values', () => {
+    localStorage.setItem('vox-pet:previous', 'PRIVATE_PREVIOUS');
+    localStorage.setItem('unrelated-setting', 'keep');
+    const getItem = vi.fn(); const removeItem = vi.fn(); const setItem = vi.fn();
+    const { app } = fakeApp({ DeviceStorage: { getItem, removeItem, setItem } });
+    clearLegacyPetSnapshots('current', app);
+    expect(localStorage.getItem('vox-pet:previous')).toBeNull();
+    expect(localStorage.getItem('vox-pet:current')).toBeNull();
+    expect(localStorage.getItem('unrelated-setting')).toBe('keep');
+    expect(removeItem.mock.calls).toEqual([['vox-pet:current'], ['vox-pet:previous']]);
+    expect(getItem).not.toHaveBeenCalled(); expect(setItem).not.toHaveBeenCalled();
+  });
+  it('overwrites known DeviceStorage keys with empty values on clients without removeItem', () => {
+    const getItem = vi.fn(); const setItem = vi.fn();
+    const { app } = fakeApp({ DeviceStorage: { getItem, setItem } });
+    clearLegacyPetSnapshots('current', app);
+    expect(setItem).toHaveBeenCalledWith('vox-pet:current', '');
+    expect(getItem).not.toHaveBeenCalled();
   });
 });

@@ -9,8 +9,9 @@
  * put a need outside [floor, 100].
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs';
-import { join } from 'path';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, rmdirSync, writeFileSync } from 'fs';
+import { join, resolve } from 'path';
+import { randomUUID } from 'node:crypto';
 import type { DocumentReference, Firestore } from 'firebase-admin/firestore';
 import { clampNeeds, NEW_PET, safeZone } from '../pet/care';
 import { QUIET_HOURS, type PetCare, type Stage } from '../pet/types';
@@ -24,11 +25,15 @@ export const PET_COLLECTION = 'studio_pets';
 
 export interface PetStore {
   get(agentId: string, userId: number): Promise<PetCare | null>;
+  /** Durable deletion generation; old requests cannot recreate erased care. */
+  erasureEpoch(userId: number): Promise<string>;
+  /** Synchronous committed effect fence. Unsupported stores cannot serve private pet turns. */
+  erasureEpochNow?(userId: number): string | null;
   /**
    * Atomic read-modify-write of one record: `fn` gets the current care (null on a first meeting) and
    * returns the care to save plus a result. `fn` may run more than once (Firestore retries).
    */
-  update<T>(agentId: string, userId: number, fn: (current: PetCare | null) => { care: PetCare; result: T }): Promise<T>;
+  update<T>(agentId: string, userId: number, fn: (current: PetCare | null) => { care: PetCare; result: T }, expectedEpoch?: string): Promise<T>;
   /** Rights export: every agent's care for one person. */
   listForUser(userId: number): Promise<PetCare[]>;
   /** Rights erasure: deletes one person's care for every agent; returns how many records went. */
@@ -79,8 +84,10 @@ function assertUser(userId: number) {
 type AgentFile = Record<string, PetCare>;
 
 /** Local disk: one JSON file per agent, written atomically, every change serialized through one queue. */
+const fileQueues = new Map<string, Promise<unknown>>();
+export class PetCareChangedError extends Error {}
+
 export class FilePetStore implements PetStore {
-  private queue: Promise<unknown> = Promise.resolve();
 
   constructor(readonly dir: string) {}
 
@@ -99,14 +106,43 @@ export class FilePetStore implements PetStore {
     mkdirSync(this.dir, { recursive: true });
     const file = this.file(agentId);
     if (!Object.keys(records).length) { rmSync(file, { force: true }); return; }
-    writeFileSync(`${file}.tmp`, JSON.stringify(records));
+    writeFileSync(`${file}.tmp`, JSON.stringify(records), { mode: 0o600 });
     renameSync(`${file}.tmp`, file);
   }
 
   private serial<T>(run: () => T): Promise<T> {
-    const next = this.queue.then(run, run);
-    this.queue = next.catch(() => undefined);
+    const key = resolve(this.dir);
+    const execute = () => {
+      mkdirSync(this.dir, { recursive: true, mode: 0o700 });
+      const lock = join(this.dir, '.writer.lock');
+      // Cross-process exclusion fails closed. A crashed lock requires an operator recovery.
+      mkdirSync(lock, { mode: 0o700 });
+      try { return run(); } finally { rmdirSync(lock); }
+    };
+    const next = (fileQueues.get(key) ?? Promise.resolve()).then(execute, execute);
+    const settled = next.catch(() => undefined);
+    fileQueues.set(key, settled);
+    void settled.then(() => { if (fileQueues.get(key) === settled) fileQueues.delete(key); });
     return next;
+  }
+
+  private epoch(userId: number): string {
+    const file = join(this.dir, '.epochs', `${userId}.json`);
+    if (!existsSync(file)) return 'initial';
+    const record = JSON.parse(readFileSync(file, 'utf8'));
+    if (record.v !== 1 || typeof record.epoch !== 'string' || !/^[a-f0-9-]{36}$/.test(record.epoch)) throw new Error('Invalid pet erasure epoch');
+    return record.epoch;
+  }
+
+  async erasureEpoch(userId: number): Promise<string> {
+    assertUser(userId);
+    return this.serial(() => this.epoch(userId));
+  }
+
+  erasureEpochNow(userId: number): string | null {
+    assertUser(userId);
+    if (existsSync(join(this.dir, '.writer.lock'))) return null;
+    try { const epoch = this.epoch(userId); return existsSync(join(this.dir, '.writer.lock')) ? null : epoch; } catch { return null; }
   }
 
   private agents(): string[] {
@@ -119,9 +155,10 @@ export class FilePetStore implements PetStore {
     return this.serial(() => sanitizeCare(this.load(agentId)[userId], agentId, userId));
   }
 
-  async update<T>(agentId: string, userId: number, fn: (current: PetCare | null) => { care: PetCare; result: T }): Promise<T> {
+  async update<T>(agentId: string, userId: number, fn: (current: PetCare | null) => { care: PetCare; result: T }, expectedEpoch?: string): Promise<T> {
     assertAgent(agentId); assertUser(userId);
     return this.serial(() => {
+      if (expectedEpoch !== undefined && this.epoch(userId) !== expectedEpoch) throw new PetCareChangedError('Pet care changed');
       const records = this.load(agentId);
       const { care, result } = fn(sanitizeCare(records[userId], agentId, userId));
       records[userId] = structuredClone({ ...care, agentId, userId });
@@ -141,6 +178,11 @@ export class FilePetStore implements PetStore {
   async eraseUser(userId: number): Promise<number> {
     assertUser(userId);
     return this.serial(() => {
+      const epochs = join(this.dir, '.epochs');
+      mkdirSync(epochs, { recursive: true, mode: 0o700 });
+      const file = join(epochs, `${userId}.json`);
+      writeFileSync(`${file}.tmp`, JSON.stringify({ v: 1, epoch: randomUUID() }), { mode: 0o600 });
+      renameSync(`${file}.tmp`, file);
       let erased = 0;
       for (const agentId of this.agents()) {
         const records = this.load(agentId);
@@ -196,6 +238,13 @@ const BATCH = 400;
 export class FirestorePetStore implements PetStore {
   constructor(private readonly db: Firestore, private readonly collection = PET_COLLECTION) {}
 
+  private epochRef(userId: number) { return this.db.collection(`${this.collection}_epochs`).doc(String(userId)); }
+
+  async erasureEpoch(userId: number): Promise<string> {
+    assertUser(userId);
+    return (await this.epochRef(userId).get()).data()?.epoch ?? 'initial';
+  }
+
   private ref(agentId: string, userId: number) {
     return this.db.collection(this.collection).doc(`${agentId}_${userId}`);
   }
@@ -206,10 +255,12 @@ export class FirestorePetStore implements PetStore {
     return snap.exists ? sanitizeCare(snap.data()?.care, agentId, userId) : null;
   }
 
-  async update<T>(agentId: string, userId: number, fn: (current: PetCare | null) => { care: PetCare; result: T }): Promise<T> {
+  async update<T>(agentId: string, userId: number, fn: (current: PetCare | null) => { care: PetCare; result: T }, expectedEpoch?: string): Promise<T> {
     assertAgent(agentId); assertUser(userId);
     const ref = this.ref(agentId, userId);
     return this.db.runTransaction(async (tx) => {
+      const epoch = (await tx.get(this.epochRef(userId))).data()?.epoch ?? 'initial';
+      if (expectedEpoch !== undefined && epoch !== expectedEpoch) throw new PetCareChangedError('Pet care changed');
       const snap = await tx.get(ref);
       const { care, result } = fn(snap.exists ? sanitizeCare(snap.data()?.care, agentId, userId) : null);
       tx.set(ref, { agentId, userId, seenAt: care.lastSeenAt, care: stored({ ...care, agentId, userId }), updatedAt: Date.now() });
@@ -243,6 +294,11 @@ export class FirestorePetStore implements PetStore {
 
   async eraseUser(userId: number): Promise<number> {
     assertUser(userId);
+    // Rotate before deleting: concurrent transactions on the old epoch must retry and fail.
+    await this.db.runTransaction(async (tx) => {
+      await tx.get(this.epochRef(userId));
+      tx.set(this.epochRef(userId), { epoch: randomUUID() });
+    });
     return this.deleteWhere('userId', userId);
   }
 

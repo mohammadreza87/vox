@@ -20,11 +20,13 @@ import { normalizeLook, stageFor } from './character';
 import { converseAuthorized } from './conversation';
 import { boundedStudioRequest } from './http';
 import { canUseAgent, formingDay, visibilityOf } from './permissions';
-import { petStoreFor, sweepPetCare } from './pet-store';
+import { petStoreFor, sweepPetCare, PetCareChangedError } from './pet-store';
 import { StudioRateLimiter, StudioRateLimitError, type StudioRequestRateLimiter } from './ratelimit';
 import { trustedStudioRequestOrigin } from './request-origin';
 import { StudioError, type Studio } from './service';
 import type { Agent, StudioState } from './types';
+import type { DirectAuthorityEvaluator } from '../adaptive/persistence/authority';
+import { digest } from '../adaptive/persistence/repository';
 import { isSchemaValidationError } from '../error-contract';
 import { apply, decay, newCare, open, talk, type CareResult } from '../pet/care';
 import { isGoodbye } from '../pet/goodbye';
@@ -146,6 +148,7 @@ async function jsonBody(request: Request, maxBytes: number): Promise<unknown> {
 
 export async function handlePetRequest(studio: Studio, request: Request, agentId: string, path: string[]): Promise<Response> {
   try {
+    if (process.env.STUDIO_PET_DISABLED === '1') return fail('pet_unavailable', 503);
     const limiter = limiterFor(studio);
     const method = request.method.toUpperCase();
     const route = routeOf(method, path);
@@ -196,6 +199,9 @@ export async function handlePetRequest(studio: Studio, request: Request, agentId
       return json(body);
     }
 
+    const currentEpoch = await pets.erasureEpoch(user.id);
+    const expectedEpoch = method === 'POST' ? request.headers.get('x-pet-care-epoch') ?? 'initial' : currentEpoch;
+    if (expectedEpoch !== currentEpoch) throw new PetCareChangedError('Pet care changed');
     const now = clock(studio);
     const stage = stageFor(formingDay(agent, new Date(now)), agent.status);
     const role = petRole(state, agent, user.id);
@@ -204,25 +210,38 @@ export async function handlePetRequest(studio: Studio, request: Request, agentId
       return json(body, 403);
     }
     const tz = request.headers.get(PET_TZ_HEADER) ?? undefined;
+    const currentPetNow = () => {
+      if (request.signal.aborted) return false;
+      try {
+        const current = studio.deps.store.readCommittedForEffect?.();
+        const active = current?.agents.find(a => a.id === agent.id && a.status === 'active');
+        return !!current && !!active && active.tokenEnc === agent.tokenEnc && petRole(current, active, user.id) !== null;
+      } catch { return false; }
+    };
+    const finalCareFence = () => {
+      if (!currentPetNow() || pets.erasureEpochNow?.(user.id) !== expectedEpoch) throw new PetCareChangedError('Pet care changed');
+    };
     /**
      * Decay (and first meeting), then `fn`, saved atomically, on the clock at the moment of the write:
      * never earlier than the record, so a slow request (a talk turn) can't roll the cap windows back.
      */
     const step = <T>(fn: (care: PetCare, at: number) => { care: PetCare; result: T }) => pets.update(agent.id, user.id, (current) => {
+      if (!currentPetNow()) throw new PetCareChangedError('Pet care changed');
       const at = Math.max(clock(studio), current?.lastUpdatedAt ?? 0);
       return fn(decay(current ?? newCare(agent.id, user.id, at, tz ?? 'UTC', stage), at, tz), at);
-    });
+    }, expectedEpoch);
 
     if (route === 'view') {
       const opened = await step((care, at) => { const o = open(care, at, stage); return { care: o.care, result: { ...o, at } }; });
       const view: PetView = {
-        agentId: agent.id, name: agent.persona.name, look: normalizeLook(agent.look), stage, formingDay: formingDay(agent, new Date(now)),
+        careEpoch: expectedEpoch, agentId: agent.id, name: agent.persona.name, look: normalizeLook(agent.look), stage, formingDay: formingDay(agent, new Date(now)),
         botUsername: agent.bot.username, voice: !!agent.voice && !!studio.deps.eleven,
         listen: role !== 'guest' && (!!studio.deps.openai || !!studio.deps.eleven), role, care: opened.care, now: opened.at,
         ...(opened.welcome ? { welcome: { souvenir: souvenir(agent.id, user.id, opened.at), awayMs: opened.welcome.awayMs } } : {}),
         ...(opened.stageUp ? { stageUp: opened.stageUp } : {}),
         ...(opened.bondMilestone === undefined ? {} : { bondMilestone: opened.bondMilestone }),
       };
+      finalCareFence();
       return json(view);
     }
 
@@ -230,6 +249,7 @@ export async function handlePetRequest(studio: Studio, request: Request, agentId
       if (contentType(request) !== 'application/json') return fail('json_required', 415);
       const input = careSchema.parse(await jsonBody(request, MAX_CARE_BYTES));
       const done = await step((care, at) => { const r = apply(care, input.action, at, input.n); return { care: r.care, result: { ...r, at } }; });
+      finalCareFence();
       return json(careResponse(done, done.at));
     }
 
@@ -237,13 +257,52 @@ export async function handlePetRequest(studio: Studio, request: Request, agentId
     if (role === 'guest') return fail('guest_talk', 403, { botUsername: agent.bot.username });
     await limiter.consume('mutation', user.id);
 
+    // Synchronous, committed final fence also applies to legacy FILE, not just indexed transport.
+    const admission: DirectAuthorityEvaluator<string | null> = (d, at) => {
+      const adaptive = studio.deps.adaptive!;
+      const grants = d.agentGrants.filter(g => g.agentId === agent.id && g.space === 'work');
+      const allowed = adaptive.isCoreAllowed(d, at) && grants.some(g => g.allowed);
+      const policy = adaptive.capabilityStatus(d, 'core_text', at);
+      return { value: allowed ? digest([adaptive.coreFingerprint(d, at), grants]) : null, denied: !allowed,
+        ...(allowed ? { deadline: Math.min(d.binding!.expiresAt, policy.validUntil ?? at) } : {}) };
+    };
+    const readAdmissionNow = (): string | null => {
+      const adaptive = studio.deps.adaptive;
+      if (!adaptive || !currentPetNow() || pets.erasureEpochNow?.(user.id) !== expectedEpoch) return null;
+      try {
+        const first = adaptive.readDirectAuthorityForEffect(user.id, 'work', admission);
+        if (first.status !== 'ready' || !first.value) return null;
+        const authority = studio.replyAuthorityNow(agent.id, user.id);
+        const second = adaptive.readDirectAuthorityForEffect(user.id, 'work', admission);
+        return second.status === 'ready' && second.value === first.value &&
+          studio.replyAuthorityNow(agent.id, user.id) === authority && pets.erasureEpochNow?.(user.id) === expectedEpoch
+          ? digest([first.value, authority]) : null;
+      } catch { return null; }
+    };
+    if (!studio.deps.adaptive) return fail('conversation_failed', 503, { message: 'conversation_unavailable' });
+    // Prime authority through the canonical path, then compare committed data synchronously.
+    await studio.deps.adaptive.withAccountDocument(user.id, () => undefined);
+    const admitted = readAdmissionNow();
+    if (!admitted) return fail('conversation_failed', 403, { message: 'conversation_not_permitted' });
+    const authorizeNow = () => readAdmissionNow() === admitted;
+    const authorize = async () => {
+      await studio.deps.adaptive!.withAccountDocument(user.id, () => undefined);
+      await pets.erasureEpoch(user.id);
+      return authorizeNow();
+    };
+    let settled: CareResult | undefined;
+    const beforeDelivery = async () => {
+      if (!await authorize()) throw new StudioError(409, 'The conversation settings changed.');
+      settled = await step((care, at) => { const r = talk(care, at); return { care: r.care, result: r }; });
+    };
+
     if (route === 'talk') {
       if (contentType(request) !== 'application/json') return fail('json_required', 415);
       const input = talkSchema.parse(await jsonBody(request, MAX_TALK_BYTES));
       // Same private chat and space as the DM (gateway: private-<person>, 'work'), so one memory.
-      const turn = await converseAuthorized(studio, user, { agentId: agent.id, space: 'work', text: input.text }, request.signal, { surface: 'pet' });
+      const turn = await converseAuthorized(studio, user, { agentId: agent.id, space: 'work', text: input.text }, request.signal, { surface: 'pet', authorize, authorizeNow, beforeDelivery });
       if (!turn.ok) return fail('conversation_failed', turn.status, { message: turn.error }, turn.headers);
-      const done = await step((care, at) => { const r = talk(care, at); return { care: r.care, result: r }; });
+      const done = settled!;
       const body: TalkResponse = { reply: turn.reply, ...(turn.turnId ? { turnId: turn.turnId } : {}), care: done.care,
         ...(isGoodbye(input.text) ? { goodbye: true } : {}), ...(done.bondMilestone === undefined ? {} : { bondMilestone: done.bondMilestone }) };
       return json(body);
@@ -261,12 +320,12 @@ export async function handlePetRequest(studio: Studio, request: Request, agentId
     if (audio === null || typeof audio === 'string') return fail('invalid_request', 400);
     // Spoken replies only when the agent has its own voice (brief §5 #8): otherwise no speech is made at all.
     const spoken = !!agent.voice;
-    const turn = await studio.callTurn(member, agent.id, await audio.arrayBuffer(), audio.type || 'audio/webm', 'work', request.signal, { surface: 'pet', speak: spoken });
+    const turn = await studio.callTurn(member, agent.id, await audio.arrayBuffer(), audio.type || 'audio/webm', 'work', request.signal, { surface: 'pet', speak: spoken, authorize, authorizeNow, beforeDelivery });
     if (!turn.transcript) {
       const empty: TalkVoiceResponse = { transcript: '', reply: '' };
       return json(empty);
     }
-    const done = await step((care, at) => { const r = talk(care, at); return { care: r.care, result: r }; });
+    const done = settled!;
     const body: TalkVoiceResponse = {
       transcript: turn.transcript, reply: turn.reply,
       ...(turn.audio && spoken ? { audio: turn.audio } : {}),
@@ -276,6 +335,7 @@ export async function handlePetRequest(studio: Studio, request: Request, agentId
     };
     return json(body);
   } catch (error) {
+    if (error instanceof PetCareChangedError) return fail('conversation_failed', 409, { message: 'pet_care_changed' });
     if (StudioRateLimitError.is(error)) return fail('rate_limited', 429, {}, { 'Retry-After': String(error.retryAfterSeconds) });
     if (isSchemaValidationError(error)) return fail('invalid_request', 400);
     // 409/503 come from the call path (settings changed, no listening provider); the rest are the request's fault.

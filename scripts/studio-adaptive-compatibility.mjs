@@ -15,6 +15,7 @@ export const ADAPTIVE_RELEASE_CAPABILITIES = Object.freeze({
   supportedExperimentLedgerSchemas: Object.freeze([1]),
   supportedGuestRightsLedgerSchemas: Object.freeze([1]),
   supportedImprovementWorkflowSchemas: Object.freeze([1, 2]),
+  supportedPetCareSchemas: Object.freeze([1]),
 });
 const fail = () => { throw new Error('Adaptive storage is incompatible with this release; current personalization controls must be preserved.'); };
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -483,9 +484,46 @@ function scanImprovement(env, required, budget) {
   if (names.length) required.improvementWorkflowSchema = version;
 }
 /** Bounded structural metadata admission; this does not replace runtime validation. */
+// Pet care is a separate rights-controlled store. Old code may serve only after
+// candidate care rows are cleared; durable erasure epochs must remain in place.
+function scanPetCare(env, required, budget) {
+  const root = join(env.STUDIO_DATA_DIR, 'pets');
+  if (!safePath(root, 'directory', true)) return;
+  if (stat(join(root, '.writer.lock'))) fail();
+  const dir = opendirSync(root);
+  let rows = 0;
+  try {
+    let entry;
+    while ((entry = dir.readSync())) {
+      if (++rows > MAX_ACCOUNTS) fail();
+      if (entry.name === '.epochs') {
+        const epochs = safePath(join(root, entry.name), 'directory');
+        const epochDir = opendirSync(epochs);
+        try {
+          let epoch;
+          while ((epoch = epochDir.readSync())) {
+            if (++rows > MAX_ACCOUNTS || !/^[1-9]\d*\.json$/.test(epoch.name)) fail();
+            const value = readPlainJson(join(epochs, epoch.name), 256, budget);
+            if (!keys(value, ['v', 'epoch']) || value.v !== 1 || !uuid(value.epoch)) fail();
+          }
+        } finally { epochDir.closeSync(); }
+        continue;
+      }
+      if (!/^[A-Za-z0-9_-]{1,128}\.json$/.test(entry.name)) fail();
+      const records = readPlainJson(join(root, entry.name), MAX_ACCOUNT_BYTES, budget);
+      if (!object(records)) fail();
+      const agent = entry.name.slice(0, -5);
+      for (const [user, record] of Object.entries(records)) {
+        if (!/^[1-9]\d*$/.test(user) || !object(record) || record.v !== 1 || record.agentId !== agent || record.userId !== Number(user)) fail();
+        required.petCareSchema = 1;
+      }
+    }
+  } finally { dir.closeSync(); }
+}
+
 export function requiredAdaptiveCapabilities(env) {
   try { safePath(env.STUDIO_DATA_DIR, 'directory', true); const required = coreCapabilities(env), budget = { bytes: 0 };
-    scanAdaptive(env, required, budget); scanSeparate(env, required, budget); scanImprovement(env, required, budget); return required;
+    scanAdaptive(env, required, budget); scanSeparate(env, required, budget); scanImprovement(env, required, budget); scanPetCare(env, required, budget); return required;
   } catch { fail(); }
 }
 
@@ -511,6 +549,7 @@ export function assertReleaseAdaptiveCompatibility(env, manifest) {
     ['supportedExperimentLedgerSchemas', 'experimentLedgerSchema', [1]],
     ['supportedGuestRightsLedgerSchemas', 'guestRightsLedgerSchema', [1]],
     ['supportedImprovementWorkflowSchemas', 'improvementWorkflowSchema', [1, 2]],
+    ['supportedPetCareSchemas', 'petCareSchema', [1]],
   ]) {
     const versions = Object.hasOwn(supported, field) ? supported[field] : ['supportedRightsLedgerVersions', 'supportedImprovementWorkflowSchemas'].includes(field) ? [1] : [];
     if (!Array.isArray(versions) || versions.length > allowed.length || new Set(versions).size !== versions.length || versions.some(v => !allowed.includes(v)) || required[requiredKey] !== undefined && !versions.includes(required[requiredKey])) fail();

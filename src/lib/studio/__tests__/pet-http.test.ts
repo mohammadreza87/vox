@@ -245,6 +245,7 @@ describe('talk', () => {
 
   it('voice: hears, replies on the call path, returns audio only for an agent with its own voice', async () => {
     const { h, call, mochi } = await setup();
+    await allowTalk(h, mochi.agent.id, ID.alice);
     const form = () => { const f = new FormData(); f.append('audio', new Blob([new Uint8Array(8)], { type: 'audio/webm' })); return f; };
     const res = await call(['talk-voice'], { raw: form() });
     expect(res.status).toBe(200);
@@ -265,8 +266,39 @@ describe('talk', () => {
     expect((await call(['talk-voice'], { body: { audio: 'x' } })).status).toBe(415);
   });
 
+  it('refuses microphone export without an exact permitted account and suppresses a late voice reply after withdrawal', async () => {
+    const { h, call, mochi } = await setup();
+    const form = () => { const f = new FormData(); f.append('audio', new Blob([new Uint8Array(8)], { type: 'audio/webm' })); return f; };
+    expect((await call(['talk-voice'], { raw: form() })).status).not.toBe(200);
+    expect(h.openai.transcribe).not.toHaveBeenCalled();
+    await allowTalk(h, mochi.agent.id, ID.alice);
+    const pets = await petStoreFor(h.studio), update = pets.update.bind(pets);
+    vi.spyOn(pets, 'update').mockImplementationOnce(async (...args) => {
+      const current = await h.studio.deps.adaptive!.read(ID.alice, 'work');
+      await h.studio.deps.adaptive!.setAgentAccess(ID.alice, mochi.agent.id, {
+        space: 'work', allowed: false, expectedRevision: current.revision, eventId: 'revoke-pet-voice' });
+      return update(...args);
+    });
+    h.chatLLM.nextReply = 'PRIVATE_VOICE_AFTER_WITHDRAWAL';
+    const response = await call(['talk-voice'], { raw: form() });
+    expect(h.openai.transcribe).toHaveBeenCalledTimes(1);
+    expect(response.status).not.toBe(200);
+    expect(await response.text()).not.toContain('PRIVATE_VOICE_AFTER_WITHDRAWAL');
+  });
+
+  it('rejects an unversioned mutation after forget until an explicit fresh open supplies its epoch', async () => {
+    const { call } = await setup();
+    expect((await call()).status).toBe(200);
+    expect((await call(['forget'], { body: {} })).status).toBe(200);
+    expect((await call(['care'], { body: { action: 'feed' } })).status).toBe(409);
+    const view = await (await call()).json() as PetView;
+    expect(view.careEpoch).not.toBe('initial');
+    expect((await call(['care'], { body: { action: 'feed' }, headers: { 'x-pet-care-epoch': view.careEpoch! } })).status).toBe(200);
+  });
+
   it('voice without any listening provider is a clean 501, and the page is told not to show the mic', async () => {
-    const { call } = await setup({ harness: makeStudio({ openai: false, eleven: false }) });
+    const { h, call, mochi } = await setup({ harness: makeStudio({ openai: false, eleven: false }) });
+    await allowTalk(h, mochi.agent.id, ID.alice);
     expect(((await (await call()).json()) as PetView).listen).toBe(false);
     const f = new FormData();
     f.append('audio', new Blob([new Uint8Array(8)]));

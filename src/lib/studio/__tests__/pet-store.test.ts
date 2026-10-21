@@ -67,6 +67,20 @@ function roundTrip(name: string, make: () => PetStore) {
       expect(await store.sweep(T, () => true)).toBe(0);
     });
 
+    it('rejects an old in-flight care write after erasure, while a new visit can begin again', async () => {
+      const store = make();
+      const admitted = await store.erasureEpoch(7);
+      await store.update('agent-a', 7, () => ({ care: care('agent-a', 7), result: null }), admitted);
+      await store.eraseUser(7);
+      expect(await store.get('agent-a', 7)).toBeNull();
+      await expect(store.update('agent-a', 7, () => ({ care: care('agent-a', 7), result: null }), admitted)).rejects.toThrow('Pet care changed');
+      expect(await store.listForUser(7)).toEqual([]);
+      const fresh = await store.erasureEpoch(7);
+      expect(fresh).not.toBe(admitted);
+      await store.update('agent-a', 7, () => ({ care: care('agent-a', 7, { bond: 0 }), result: null }), fresh);
+      expect((await store.get('agent-a', 7))?.bond).toBe(0);
+    });
+
     it('rejects ids that are not agent ids or Telegram user ids', async () => {
       const store = make();
       await expect(store.get('../etc', 7)).rejects.toThrow('Invalid agent id');
@@ -135,4 +149,16 @@ describe('petStoreFor', () => {
     await expect(petStoreFor(studio)).rejects.toThrow('Pet care storage is unavailable');
     await expect(petStoreFor(studio)).rejects.toThrow('Pet care storage is unavailable');
   });
+});
+
+it('FILE erasure generation survives another store instance and rejects its old admitted write', async () => {
+  const dir = join(tempDir(), 'pets');
+  const first = new FilePetStore(dir), second = new FilePetStore(dir);
+  const old = await first.erasureEpoch(7);
+  await first.update('agent-a', 7, () => ({ care: care('agent-a', 7), result: null }), old);
+  await second.eraseUser(7);
+  const restarted = new FilePetStore(dir);
+  expect(await restarted.erasureEpoch(7)).not.toBe(old);
+  await expect(first.update('agent-a', 7, () => ({ care: care('agent-a', 7), result: null }), old)).rejects.toThrow('Pet care changed');
+  expect(await restarted.listForUser(7)).toEqual([]);
 });

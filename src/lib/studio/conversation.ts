@@ -85,7 +85,7 @@ export async function handleConversationRequest(studio: Studio, request: Request
  * Never throws: failures are outcomes.
  */
 export async function converseAuthorized(studio: Studio, user: Pick<InitDataUser, 'id'>, input: ConversationInput, signal: AbortSignal,
-  o: { surface?: 'pet' } = {}): Promise<ConversationOutcome> {
+  o: { surface?: 'pet'; authorize?: () => Promise<boolean>; authorizeNow?: () => boolean; beforeDelivery?: () => Promise<void> } = {}): Promise<ConversationOutcome> {
   const fail = (status: number, error: string, headers?: Record<string, string>): ConversationOutcome => ({ ok: false, status, error, ...(headers ? { headers } : {}) });
   let observe: Awaited<ReturnType<typeof beginObservation>> | undefined;
   try {
@@ -139,7 +139,7 @@ export async function converseAuthorized(studio: Studio, user: Pick<InitDataUser
       return current.status === 'ready' && current.value === scope.value ? digest([scope.value, studioAuthority]) : null;
     };
     const before = await authority();
-    if (!before) return fail(403, 'conversation_not_permitted');
+    if (!before || o.authorize && !await o.authorize()) return fail(403, 'conversation_not_permitted');
     if (signal.aborted) return fail(409, 'conversation_cancelled');
     // Authorization precedes image processing/export. No URL fetching or uploads
     // to persistent provider file storage; raw original bytes never reach here.
@@ -158,8 +158,8 @@ export async function converseAuthorized(studio: Studio, user: Pick<InitDataUser
     }
     let contextFence: (() => boolean) | undefined;
     const reply = await observe.run(() => gateway.converse(input.agentId, personId(user.id), input.text, { space: input.space, images, ...(o.surface ? { surface: o.surface } : {}),
-      authorize: async () => !signal.aborted && await authority() === before,
-      ...(indexed ? {authorizeNow: () => !signal.aborted && authorityNow() === before,
+      authorize: async () => !signal.aborted && await authority() === before && (!o.authorize || await o.authorize()),
+      ...((indexed || o.authorizeNow) ? {authorizeNow: () => !signal.aborted && (!indexed || authorityNow() === before) && (!o.authorizeNow || o.authorizeNow()),
         onBoundaryFence: (fence: () => boolean) => {contextFence = fence;}} : {}) }));
     // Gateway also checks memory/source policy around provider export and output.
     if (signal.aborted || await authority() !== before) {
@@ -183,6 +183,13 @@ export async function converseAuthorized(studio: Studio, user: Pick<InitDataUser
     try {
       if (presentation && studio.deps.experiments?.current(user.id, input.agentId, input.space, presentation)) currentPresentation = presentation;
     } catch { /* Optional presentation failure retains the normal reply. */ }
+    // Surface persistence may await I/O. Complete it before the final authority fence.
+    if (o.beforeDelivery) {
+      await o.beforeDelivery();
+      if (signal.aborted || await authority() !== before) return fail(409, 'conversation_changed');
+    }
+    if (o.authorize && !await o.authorize()) return fail(409, 'conversation_changed');
+    if (o.authorizeNow && !o.authorizeNow()) return fail(409, 'conversation_changed');
     if (indexed && (signal.aborted || !contextFence || !contextFence())) return fail(409, 'conversation_changed');
     return { ok: true, reply, ...(correlation ? { turnId: correlation } : {}), ...(currentPresentation ? { responsePresentation: currentPresentation } : {}) };
   } catch (error) {

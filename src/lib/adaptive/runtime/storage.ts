@@ -5,6 +5,11 @@ import { RevisionCounter } from '../../tireh/privacy/revisions';
 export class MemoryAdaptiveStorage implements AdaptiveStorage {
   private readonly documents = new Map<string, unknown>();
   readonly revisions = new RevisionCounter('memory-adaptive');
+  /** Synthetic equivalent of the FILE synchronous effect fence; transactions commit without awaits. */
+  readCommittedForEffect(accountId: string): { status: 'ready'; document: unknown | null } {
+    const document = this.documents.get(accountId);
+    return { status: 'ready', document: document === undefined ? null : structuredClone(document) };
+  }
   async load(accountId: string): Promise<AdaptiveLoad> {
     const probe = this.revisions.probe(accountId);
     const value = this.documents.get(accountId);

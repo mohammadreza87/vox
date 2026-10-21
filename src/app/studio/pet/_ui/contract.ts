@@ -39,7 +39,7 @@ export interface PetApiError extends Error {
   body?: PetErrorBody | PetPrivateView;
 }
 
-/** First-paint cache in Telegram DeviceStorage (fallback localStorage, every access in try/catch). */
+/** Legacy snapshot format/key, retained only for migration fixtures. Never read or persist private views. */
 export const SNAPSHOT_KEY = (agentId: string) => `vox-pet:${agentId}`;
 export interface PetSnapshot { v: 1; view: PetView; savedAt: number }
 

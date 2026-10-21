@@ -592,3 +592,21 @@ test('workflow capability declaration must be a supported unique version array',
     assert.throws(() => assertReleaseAdaptiveCompatibility(f.env, { ...ADAPTIVE_RELEASE_CAPABILITIES, supportedImprovementWorkflowSchemas: value }), /incompatible/);
   }
 }));
+
+test('pet care blocks old-code rollback until care is cleared, preserving deletion epochs', () => fixture(f => {
+  f.setMarker(ready(1));
+  const pets = join(f.env.STUDIO_DATA_DIR, 'pets');
+  mkdirSync(join(pets, '.epochs'), { recursive: true });
+  writeFileSync(join(pets, '.epochs', '7.json'), JSON.stringify({ v: 1, epoch: uuid }));
+  const old = { ...ADAPTIVE_RELEASE_CAPABILITIES };
+  delete old.supportedPetCareSchemas;
+  assert.doesNotThrow(() => assertReleaseAdaptiveCompatibility(f.env, old));
+  writeFileSync(join(pets, 'agent-a.json'), JSON.stringify({ 7: { v: 1, agentId: 'agent-a', userId: 7 } }));
+  assert.throws(() => assertReleaseAdaptiveCompatibility(f.env, old), /incompatible/);
+  assert.equal(assertReleaseAdaptiveCompatibility(f.env, ADAPTIVE_RELEASE_CAPABILITIES).petCareSchema, 1);
+  rmSync(join(pets, 'agent-a.json'));
+  assert.doesNotThrow(() => assertReleaseAdaptiveCompatibility(f.env, old));
+  assert.ok(existsSync(join(pets, '.epochs', '7.json')));
+  mkdirSync(join(pets, '.writer.lock'));
+  assert.throws(() => assertReleaseAdaptiveCompatibility(f.env, ADAPTIVE_RELEASE_CAPABILITIES), /incompatible/);
+}));

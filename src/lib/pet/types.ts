@@ -112,6 +112,8 @@ export const BUBBLE_MAX_CHARS = 220;
 
 /** GET /api/studio/pet/:id: the trimmed agent view (no access lists, no blocked ids). */
 export interface PetView {
+  /** Opaque deletion generation issued by the latest authenticated open. */
+  careEpoch?: string;
   agentId: string;
   /** the agent's display name ("Talk to {name}") */
   name: string;
