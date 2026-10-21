@@ -2,8 +2,8 @@ import { createServer, request, type Server } from 'node:http';
 import { mkdtemp, rm, readFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { randomBytes } from 'node:crypto';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { randomBytes, generateKeyPairSync, sign, webcrypto } from 'node:crypto';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SelfServiceMcpBroker } from '../broker';
 import { McpPublicTransport, canonicalMcpUrl, type McpPinnedSender } from '../transport';
 import { McpConnectionsCatalog, createPendingMcpCatalog, mcpToolId, snapshotMcpCatalog } from '../catalog';
@@ -15,7 +15,14 @@ import type { BrokerAuthority, BrokerControlPlane } from '../../broker/control';
 const resource = 'https://mcp.fixture.net/tenant-a/mcp';
 const issuer = 'https://auth.fixture.net/tenant/';
 const callbackUrl = 'https://broker.fixture.net/oauth/callback/remote_mcp';
-const accessToken = 'synthetic-mcp-token-fixture-987654';
+let accessToken: string;
+const keys = generateKeyPairSync('rsa', { modulusLength: 2048 });
+const jwk = { ...keys.publicKey.export({ format: 'jwk' }), kid: 'fixture-rsa', use: 'sig' };
+function signedToken(claims: Record<string, unknown> = {}) {
+  const h = Buffer.from(JSON.stringify({ alg: 'RS256', kid: jwk.kid })).toString('base64url');
+  const p = Buffer.from(JSON.stringify({ iss: issuer, aud: resource, exp: Math.floor(Date.now() / 1000) + 3600, scope: 'files', ...claims })).toString('base64url');
+  return `${h}.${p}.${sign('RSA-SHA256', Buffer.from(`${h}.${p}`), keys.privateKey).toString('base64url')}`;
+}
 const refreshToken = 'synthetic-refresh-fixture-1234';
 const tool = { name: 'files.get', description: 'Untrusted server description', inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'], additionalProperties: false }, annotations: { readOnlyHint: true, destructiveHint: false } };
 const actor = { accountId: 'account-a', botAgentId: 'agent-a', botAuthenticationRevision: 'bot-revision-1' };
@@ -31,10 +38,12 @@ describe('self-service MCP synthetic HTTP/OAuth broker', () => {
   let tokenResponse: Record<string, unknown>; let resourceMetadata: Record<string, unknown>; let authMetadata: Record<string, unknown>;
   let tools: unknown[]; let sse: boolean; let failTool: boolean; let leakToken: boolean; let activationCount: number; let revokeOnCall: boolean; let revokeOnRefresh: boolean;
   beforeEach(async () => {
+    vi.stubGlobal('crypto', webcrypto); vi.stubGlobal('CryptoKey', webcrypto.CryptoKey);
     seen = []; current = currentAuthority(); tools = [structuredClone(tool)]; sse = true; failTool = false; leakToken = false; activationCount = 0; revokeOnCall = false; revokeOnRefresh = false;
+    accessToken = signedToken();
     tokenResponse = { access_token: accessToken, refresh_token: refreshToken, token_type: 'Bearer', expires_in: 3600, scope: 'files', resource };
     resourceMetadata = { resource, authorization_servers: [issuer], scopes_supported: ['files'] };
-    authMetadata = { issuer, authorization_endpoint: 'https://auth.fixture.net/authorize', token_endpoint: 'https://auth.fixture.net/token', response_types_supported: ['code'],
+    authMetadata = { issuer, jwks_uri: 'https://auth.fixture.net/jwks', authorization_endpoint: 'https://auth.fixture.net/authorize', token_endpoint: 'https://auth.fixture.net/token', response_types_supported: ['code'],
       code_challenge_methods_supported: ['S256'], token_endpoint_auth_methods_supported: ['none'], authorization_response_iss_parameter_supported: true, client_id_metadata_document_supported: true };
     server = createServer(async (req, res) => {
       const chunks: Buffer[] = []; for await (const chunk of req) chunks.push(Buffer.from(chunk)); const raw = Buffer.concat(chunks).toString();
@@ -45,6 +54,7 @@ describe('self-service MCP synthetic HTTP/OAuth broker', () => {
       if (req.url === '/.well-known/oauth-authorization-server/tenant' || req.url === '/tenant/.well-known/openid-configuration') {
         if (authMetadata.fixtureOidcOnly && req.url.includes('oauth-authorization-server')) { res.statusCode = 404; res.setHeader('content-type', 'text/html'); res.end('missing'); return; }
         res.end(JSON.stringify(authMetadata)); return; }
+      if (req.url === '/jwks') { res.end(JSON.stringify({ keys: [jwk] })); return; }
       if (req.url === '/token') { if (revokeOnRefresh && body.grant_type === 'refresh_token') current.connection.lifecycle = 'revoked'; res.end(JSON.stringify(tokenResponse)); return; }
       if (req.url !== '/tenant-a/mcp') { res.statusCode = 404; res.end('{}'); return; }
       if (req.headers.authorization !== `Bearer ${accessToken}`) { res.statusCode = 401; res.setHeader('www-authenticate', `Bearer resource_metadata="https://mcp.fixture.net/.well-known/oauth-protected-resource/tenant-a/mcp"`); res.end('{}'); return; }
@@ -80,7 +90,7 @@ describe('self-service MCP synthetic HTTP/OAuth broker', () => {
     broker = new SelfServiceMcpBroker({ control, vault, callbackUrl, transport, clients: { registeredClients: [{ issuer, clientId: 'vox-fixture', scopes: ['files'] }] },
       activate: async (_before, activation) => { activationCount++; current.connection.lifecycle = 'connected'; current.connection.revision++; current.connection.catalogDigest = activation.catalog.catalogDigest; } });
   });
-  afterEach(async () => { await new Promise<void>(resolve => server.close(() => resolve())); await rm(directory, { recursive: true, force: true }); });
+  afterEach(async () => { await new Promise<void>(resolve => server.close(() => resolve())); await rm(directory, { recursive: true, force: true }); vi.unstubAllGlobals(); });
   async function begin() {
     const setup = await broker.beginSetup({ actor, space: 'personal', connectionId: 'connection-a', expectedRevision: 1, endpointUrl: resource });
     return { setup, auth: new URL(setup.authorizationUrl!) };
@@ -88,6 +98,47 @@ describe('self-service MCP synthetic HTTP/OAuth broker', () => {
   async function sealed() { const begun = await begin(); await broker.callback({ state: begun.auth.searchParams.get('state'), code: 'synthetic-code', iss: issuer }); return begun; }
   async function active() { const begun = await sealed(); const preview = await broker.previewSetup({ actor, space: 'personal', flowId: begun.setup.flowId });
     await broker.claimSetup({ actor, space: 'personal', flowId: begun.setup.flowId, acceptedCatalogDigest: preview.catalog.catalogDigest }); return { ...begun, preview }; }
+  it('resumes the exact sealed setup after a new server-side broker instance without client storage', async () => {
+    const first = await sealed(); const restarted = new SelfServiceMcpBroker(broker.options);
+    const resumed = await restarted.beginSetup({ actor, space: 'personal', connectionId: 'connection-a', expectedRevision: 1, endpointUrl: resource });
+    expect(resumed).toMatchObject({ flowId: first.setup.flowId, status: 'pending', reason: 'catalog_review_required' });
+    expect(resumed.authorizationUrl).toBeUndefined(); expect(activationCount).toBe(0);
+    expect(seen.filter(call => call.path === '/token')).toHaveLength(1);
+    expect((await restarted.previewSetup({ actor, space: 'personal', flowId: resumed.flowId })).catalog.resource).toBe(resource);
+  });
+  it('a deliberate restart invalidates the previous uncompleted authorization callback', async () => {
+    const first = await begin(); const second = await begin(); expect(second.setup.flowId).not.toBe(first.setup.flowId);
+    await expect(broker.callback({ state: first.auth.searchParams.get('state'), code: 'old', iss: issuer })).rejects.toThrow('mcp_oauth_state_invalid');
+    expect(seen.filter(call => call.path === '/token')).toHaveLength(0);
+  });
+  it.each([
+    { aud: 'https://mcp.fixture.net/tenant-b/mcp' }, { iss: 'https://other.fixture.net/' },
+    { aud: [resource, 'https://api.fixture.net/'] }, { exp: 1 }, { exp: undefined },
+    { nbf: Math.floor(Date.now() / 1000) + 3600 }, { scope: 'files admin' },
+  ])('rejects a genuinely signed token with invalid claims before any MCP bearer request %j', async claims => {
+    tokenResponse.access_token = signedToken(claims); const { auth } = await begin();
+    await expect(broker.callback({ state: auth.searchParams.get('state'), code: 'x', iss: issuer })).rejects.toThrow('mcp_oauth_verification_failed');
+    expect(seen.filter(call => call.path === '/tenant-a/mcp')).toHaveLength(0); expect(activationCount).toBe(0);
+  });
+  it('rejects a general opaque provider token instead of forwarding it to the custom MCP server', async () => {
+    tokenResponse.access_token = 'opaque-general-provider-credential'; delete tokenResponse.resource;
+    const { auth } = await begin();
+    await expect(broker.callback({ state: auth.searchParams.get('state'), code: 'x', iss: issuer })).rejects.toThrow('mcp_oauth_verification_failed');
+    expect(seen.filter(call => call.path === '/tenant-a/mcp')).toHaveLength(0);
+  });
+  it('reconciles an activation commit whose response was lost without deleting its credential', async () => {
+    const { setup } = await sealed(); const preview = await broker.previewSetup({ actor, space: 'personal', flowId: setup.flowId });
+    broker.options.activate = async (_before, activation) => {
+      activationCount++; current.connection.lifecycle = 'connected'; current.connection.revision++; current.connection.catalogDigest = activation.catalog.catalogDigest;
+      current.connection.providerScopes = activation.providerScopes;
+      current.providerAccount = { status: 'active', identityEvidence: 'unavailable', issuer: activation.issuer,
+        providerSubject: activation.providerSubject, providerTenantId: activation.providerTenantId } as BrokerAuthority['providerAccount'];
+      throw Error('lost synthetic response after commit');
+    };
+    const result = await broker.claimSetup({ actor, space: 'personal', flowId: setup.flowId, acceptedCatalogDigest: preview.catalog.catalogDigest });
+    expect(result.status).toBe('connected'); expect(activationCount).toBe(1);
+    expect((await broker.credentialForAuthority(current)).accessToken).toBe(accessToken);
+  });
   it('binds PKCE/resource to full URI; callback seals only; fresh same-bot reviewed claim activates zero grants', async () => {
     const { setup, auth } = await begin(); expect(auth.searchParams.get('resource')).toBe(resource); expect(auth.searchParams.get('code_challenge_method')).toBe('S256');
     expect(auth.searchParams.get('state')).toMatch(/^[a-f0-9-]{36}\.[A-Za-z0-9_-]{43}$/);

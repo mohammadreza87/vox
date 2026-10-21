@@ -14,7 +14,7 @@ import { canonicalMcpUrl, McpPublicTransport } from './transport';
 const actorSchema = z.object({ accountId: idSchema, botAgentId: idSchema.optional(), botAuthenticationRevision: idSchema.optional() }).strict().refine(value => !!value.botAgentId === !!value.botAuthenticationRevision);
 const base = { actor: actorSchema, space: z.enum(['personal', 'work']) };
 const flowInput = z.object({ ...base, flowId: z.string().uuid() }).strict();
-const metadataSchema = z.object({ resource: z.string(), issuer: z.string(), authorizationEndpoint: z.string(), tokenEndpoint: z.string(), scopesSupported: z.array(z.string()), clientMetadataSupported: z.boolean(), tokenAuthMethods: z.array(z.string()), issuerParameterSupported: z.boolean() }).strict();
+const metadataSchema = z.object({ resource: z.string(), issuer: z.string(), authorizationEndpoint: z.string(), tokenEndpoint: z.string(), scopesSupported: z.array(z.string()), clientMetadataSupported: z.boolean(), tokenAuthMethods: z.array(z.string()), issuerParameterSupported: z.boolean(), jwksUri: z.string().optional() }).strict();
 const clientSchema = z.object({ clientId: z.string(), clientSecret: z.string().optional(), scopes: z.array(z.string()), registration: z.enum(['preregistered', 'client_id_metadata']) }).strict();
 const tokenSchema = z.object({ accessToken: z.string(), refreshToken: z.string().optional(), expiresAt: z.number().optional(), scopes: z.array(z.string()) }).strict();
 const flowSchema = z.object({ kind: z.literal('self_service_mcp_v1'), flowId: z.string().uuid(), stateHash: z.string().length(64), verifier: z.string(),
@@ -41,6 +41,7 @@ const bindingFor = (current: BrokerAuthority): VaultBinding => ({ accountId: cur
   space: current.context.scope.spaceKind, connectionId: current.connection.id, providerId: current.connection.providerId,
   ...(current.connection.schemaVersion === 2 ? { agentId: current.connection.agentId } : {}) });
 const configId = (id: string) => `mcp:configuration:${id}`;
+const setupId = (id: string) => `mcp:setup:${id}`;
 /** Broker-process-only OAuth setup. Neither callback nor a URL submitted by the browser activates a credential. */
 export class SelfServiceMcpBroker {
   readonly transport: McpPublicTransport;
@@ -67,11 +68,31 @@ export class SelfServiceMcpBroker {
   }
   async beginSetup(input: unknown): Promise<SetupReceipt> {
     const parsed = z.object({ ...base, connectionId: idSchema, expectedRevision: z.number().int().positive(), endpointUrl: z.string().max(2000) }).strict().parse(input);
+    return this.options.vault.withLock(`mcp:setup:${parsed.connectionId}`, async () => {
     const current = await this.fresh(parsed.actor, parsed.space, parsed.connectionId);
     if (current.connection.lifecycle !== 'pending' || current.connection.revision !== parsed.expectedRevision) throw new ConnectionsError(409, 'mcp_enrollment_stale');
     const resource = canonicalMcpUrl(parsed.endpointUrl);
     const declared = (current.connection as unknown as { mcp?: { canonicalResourceUri: string } }).mcp?.canonicalResourceUri;
     if (declared !== resource) throw new ConnectionsError(403, 'mcp_resource_mismatch');
+    const binding = bindingFor(current);
+    const previous = await this.options.vault.read('credential', setupId(parsed.connectionId), binding);
+    if (previous) {
+      const saved = z.object({ flowId: z.string().uuid() }).strict().parse(previous);
+      const resumed = await this.options.vault.withLock(`mcp:flow:${saved.flowId}`, async () => {
+        const { flow, current: latest } = await this.load(parsed.actor, parsed.space, saved.flowId);
+        if (latest.connection.revision !== parsed.expectedRevision || latest.connection.lifecycle !== 'pending' || flow.metadata.resource !== resource) throw new ConnectionsError(409, 'mcp_enrollment_stale');
+        if (flow.status === 'sealed' && flow.expiresAt > this.now() && flow.connectionRevision === parsed.expectedRevision && flow.catalog) {
+          const pending = tokenSchema.parse(await this.options.vault.read('credential', `mcp:pending:${flow.flowId}`, binding));
+          if (pending.expiresAt && pending.expiresAt > this.now()) return { ...this.receipt(flow), reason: 'catalog_review_required' };
+        }
+        if (flow.status === 'exchanging') throw new ConnectionsError(409, 'mcp_setup_in_progress');
+        if (flow.status === 'connected') throw new ConnectionsError(409, 'mcp_enrollment_stale');
+        flow.status = 'cancelled'; flow.verifier = '';
+        await this.options.vault.write('flow', flow.flowId, binding, flow);
+        await this.options.vault.delete('credential', `mcp:pending:${flow.flowId}`);
+      });
+      if (resumed) return resumed;
+    }
     const setupCheck = async () => { const latest = await this.fresh(parsed.actor, parsed.space, parsed.connectionId);
       if (latest.connection.lifecycle !== 'pending' || latest.connection.revision !== parsed.expectedRevision || latest.context.bindingRevision !== current.context.bindingRevision) throw new ConnectionsError(409, 'mcp_enrollment_stale'); };
     const metadata = await this.oauth.discover(resource, setupCheck); const client = this.oauth.selectClient(metadata, this.options.clients);
@@ -83,7 +104,9 @@ export class SelfServiceMcpBroker {
       bindingRevision: current.context.bindingRevision, connectionRevision: parsed.expectedRevision, expiresAt: this.now() + 600_000,
       callbackUsed: false, status: 'pending', metadata, client, authorizationId: randomUUID() };
     await this.options.vault.write('flow', flowId, bindingFor(current), flow);
+    await this.options.vault.write('credential', setupId(parsed.connectionId), bindingFor(current), { flowId });
     return { ...this.receipt(flow), authorizationUrl: this.oauth.authorizationUrl(metadata, client, this.options.callbackUrl, state, pkceChallenge(verifier)) };
+    });
   }
   private async load(actor: ConnectionActor, space: SpaceKind, flowId: string) {
     const binding = await this.options.vault.binding('flow', flowId);
@@ -137,8 +160,24 @@ export class SelfServiceMcpBroker {
     return this.options.vault.withLock(`mcp:flow:${parsed.flowId}`, async () => {
       const { flow, binding, current } = await this.load(parsed.actor, parsed.space, parsed.flowId);
       if (flow.status === 'connected') return this.receipt(flow);
-      if (flow.status !== 'sealed' || flow.expiresAt <= this.now() || !flow.catalog || parsed.acceptedCatalogDigest !== flow.catalog.catalogDigest ||
-          current.connection.lifecycle !== 'pending' || current.connection.revision !== flow.connectionRevision) throw new ConnectionsError(409, 'mcp_review_stale');
+      if (flow.status !== 'sealed' || flow.expiresAt <= this.now() || !flow.catalog || parsed.acceptedCatalogDigest !== flow.catalog.catalogDigest) throw new ConnectionsError(409, 'mcp_review_stale');
+      const finish = async () => {
+        flow.status = 'connected'; delete flow.reason; await this.options.vault.write('flow', flow.flowId, binding, flow);
+        await this.options.vault.delete('credential', `mcp:pending:${flow.flowId}`); return this.receipt(flow);
+      };
+      const activated = (authority: BrokerAuthority, credential: McpBrokerCredential | undefined) =>
+        !!credential && credential.status === 'active' && credential.connectionRevision === flow.connectionRevision + 1 &&
+        credential.subject === `authorization:${flow.authorizationId}` && authority.connection.lifecycle === 'connected' &&
+        authority.connection.revision === credential.connectionRevision && authority.connection.catalogDigest === flow.catalog!.catalogDigest &&
+        authority.providerAccount?.status === 'active' && authority.providerAccount.identityEvidence === 'unavailable' &&
+        authority.providerAccount.providerSubject === credential.subject && authority.providerAccount.providerTenantId === credential.tenant &&
+        authority.providerAccount.issuer === credential.issuer && canonical(authority.connection.providerScopes) === canonical(credential.scopes);
+      if (current.connection.lifecycle === 'connected') {
+        const credential = await this.options.vault.read('credential', binding.connectionId, binding) as McpBrokerCredential | undefined;
+        if (!activated(current, credential)) throw new ConnectionsError(409, 'mcp_review_stale');
+        return finish();
+      }
+      if (current.connection.lifecycle !== 'pending' || current.connection.revision !== flow.connectionRevision) throw new ConnectionsError(409, 'mcp_review_stale');
       const token = tokenSchema.parse(await this.options.vault.read('credential', `mcp:pending:${flow.flowId}`, binding));
       if (token.expiresAt && token.expiresAt <= this.now()) throw new ConnectionsError(409, 'mcp_reauth_required');
       // External human identity is deliberately unavailable. This random subject identifies only this authorization.
@@ -149,9 +188,19 @@ export class SelfServiceMcpBroker {
       try {
         await this.options.activate(current, { catalog: flow.catalog, issuer: credential.issuer, providerSubject: credential.subject, providerTenantId: credential.tenant,
           providerScopes: credential.scopes, displayLabel: credential.displayLabel, identityEvidence: 'unavailable' });
-      } catch { await this.options.vault.delete('credential', binding.connectionId); await this.options.vault.delete('credential', configId(binding.connectionId)); throw new ConnectionsError(409, 'mcp_activation_failed'); }
-      flow.status = 'connected'; await this.options.vault.write('flow', flow.flowId, binding, flow);
-      await this.options.vault.delete('credential', `mcp:pending:${flow.flowId}`); return this.receipt(flow);
+      } catch {
+        let latest: BrokerAuthority;
+        try { latest = await this.fresh(parsed.actor, parsed.space, binding.connectionId); }
+        catch {
+          flow.reason = 'activation_unconfirmed'; await this.options.vault.write('flow', flow.flowId, binding, flow);
+          throw new ConnectionsError(409, 'mcp_activation_unconfirmed');
+        }
+        if (activated(latest, credential)) return finish();
+        await this.options.vault.delete('credential', binding.connectionId);
+        await this.options.vault.delete('credential', configId(binding.connectionId));
+        throw new ConnectionsError(409, 'mcp_activation_failed');
+      }
+      return finish();
     });
   }
   async cancelSetup(input: unknown): Promise<SetupReceipt> {
@@ -207,6 +256,7 @@ export class SelfServiceMcpBroker {
     await this.options.vault.withLock(`mcp:credential:${binding.connectionId}`, async () => {
       await this.options.vault.delete('credential', binding.connectionId);
       await this.options.vault.delete('credential', configId(binding.connectionId));
+      await this.options.vault.delete('credential', setupId(binding.connectionId));
     });
     return { futureUseStopped: true, providerRevocation: 'unavailable' };
   }

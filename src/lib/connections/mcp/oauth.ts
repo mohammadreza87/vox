@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { ConnectionsError } from '../errors';
 import { canonicalMcpUrl, McpPublicTransport } from './transport';
+import { verifyMcpAccessToken } from './token-verifier';
 export function canonicalOAuthIssuer(value: string): string {
   let canonical: string; try { canonical = canonicalMcpUrl(new URL(value).href); } catch { throw new ConnectionsError(400, 'mcp_oauth_issuer_invalid'); }
   if (value.length > 500 || value !== canonical && `${value}/` !== canonical) throw new ConnectionsError(400, 'mcp_oauth_issuer_invalid');
@@ -10,6 +11,7 @@ export interface McpOAuthMetadata {
   resource: string; issuer: string; authorizationEndpoint: string; tokenEndpoint: string;
   scopesSupported: string[]; clientMetadataSupported: boolean; tokenAuthMethods: string[];
   issuerParameterSupported: boolean;
+  jwksUri?: string;
 }
 export interface McpRegisteredClient { issuer: string; clientId: string; clientSecret?: string; scopes: readonly string[] }
 export interface McpClientConfiguration { registeredClients?: readonly McpRegisteredClient[]; clientMetadataUrl?: string; scopes?: readonly string[] }
@@ -20,7 +22,8 @@ const protectedMetadata = z.object({ resource: z.string().max(2000), authorizati
 const authMetadata = z.object({ issuer: z.string().max(2000), authorization_endpoint: z.string().max(2000), token_endpoint: z.string().max(2000),
   response_types_supported: z.array(z.string()).max(50), code_challenge_methods_supported: z.array(z.string()).max(20),
   grant_types_supported: z.array(z.string()).max(20).optional(), token_endpoint_auth_methods_supported: z.array(z.string()).max(20).optional(),
-  client_id_metadata_document_supported: z.boolean().optional(), authorization_response_iss_parameter_supported: z.boolean().optional() }).passthrough();
+  client_id_metadata_document_supported: z.boolean().optional(), authorization_response_iss_parameter_supported: z.boolean().optional(),
+  jwks_uri: z.string().max(2000).optional() }).passthrough();
 export class McpOAuth {
   constructor(private readonly transport: McpPublicTransport, private readonly now = Date.now) {}
   async discover(resourceInput: string, assertCurrent: () => Promise<void> = async () => undefined): Promise<McpOAuthMetadata> {
@@ -61,8 +64,12 @@ export class McpOAuth {
     if (!metadata || metadata.issuer !== issuer || !metadata.response_types_supported.includes('code') ||
         !metadata.code_challenge_methods_supported.includes('S256') || metadata.grant_types_supported && !metadata.grant_types_supported.includes('authorization_code')) throw new ConnectionsError(400, 'mcp_oauth_protocol_unsupported');
     const authorizationEndpoint = canonicalMcpUrl(metadata.authorization_endpoint); const tokenEndpoint = canonicalMcpUrl(metadata.token_endpoint);
+    if (!metadata.jwks_uri) throw new ConnectionsError(400, 'mcp_token_verification_unsupported');
+    const jwksUri = canonicalMcpUrl(metadata.jwks_uri);
     await this.transport.validateDestination(authorizationEndpoint); await this.transport.validateDestination(tokenEndpoint);
+    await this.transport.validateDestination(jwksUri);
     return { resource, issuer, authorizationEndpoint, tokenEndpoint, scopesSupported: protectedResource.scopes_supported ?? [],
+      jwksUri,
       clientMetadataSupported: metadata.client_id_metadata_document_supported === true,
       tokenAuthMethods: metadata.token_endpoint_auth_methods_supported ?? ['client_secret_basic'],
       issuerParameterSupported: metadata.authorization_response_iss_parameter_supported === true };
@@ -86,6 +93,7 @@ export class McpOAuth {
     return url.href;
   }
   async token(metadata: McpOAuthMetadata, client: McpOAuthClient, form: Record<string, string>, signal?: AbortSignal, assertCurrent: () => Promise<void> = async () => undefined): Promise<McpOAuthToken> {
+    if (!metadata.jwksUri) throw new ConnectionsError(400, 'mcp_token_verification_unsupported');
     const response = await this.transport.json({ url: metadata.tokenEndpoint, method: 'POST', maxBytes: 32_000, signal, beforeSend: assertCurrent,
       headers: { accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ ...form,
         client_id: client.clientId, ...(client.clientSecret ? { client_secret: client.clientSecret } : {}), resource: metadata.resource }).toString() });
@@ -94,7 +102,9 @@ export class McpOAuth {
       token_type: z.string().refine(value => value.toLowerCase() === 'bearer'), expires_in: z.number().int().min(1).max(31_536_000).optional(), scope: z.string().max(20_000).optional(), resource: z.string().optional() }).passthrough().parse(response.value);
     const scopes = token.scope === undefined ? client.scopes : token.scope.split(' ').filter(Boolean);
     if (scopes.some(item => !client.scopes.includes(item)) || token.resource !== undefined && token.resource !== metadata.resource) throw new ConnectionsError(403, 'mcp_oauth_token_binding_denied');
+    const signedExpiresAt = await verifyMcpAccessToken({ accessToken: token.access_token, issuer: metadata.issuer, resource: metadata.resource,
+      jwksUri: metadata.jwksUri, scopes, transport: this.transport, now: this.now, signal, assertCurrent });
     return { accessToken: token.access_token, ...(token.refresh_token ? { refreshToken: token.refresh_token } : {}),
-      ...(token.expires_in ? { expiresAt: this.now() + token.expires_in * 1000 } : {}), scopes: [...scopes] };
+      expiresAt: Math.min(signedExpiresAt, token.expires_in ? this.now() + token.expires_in * 1000 : signedExpiresAt), scopes: [...scopes] };
   }
 }

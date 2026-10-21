@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { decodeJwt } from 'jose';
 import { z } from 'zod';
 import { ConnectionsError } from '../errors';
 import type { ProviderExecutionContext, ProviderResult } from '../providers/types';
@@ -40,14 +41,28 @@ export class McpSession {
     this.resource = canonicalMcpUrl(resource);
     if (accessToken && (!/^[\x21-\x7e]{1,16000}$/.test(accessToken))) throw new ConnectionsError(400, 'mcp_token_invalid');
   }
+  private async current(): Promise<void> {
+    await this.beforeRequest();
+    if (this.signal?.aborted) throw new ConnectionsError(409, 'mcp_cancelled');
+    // Signature/issuer are verified at credential admission. Recheck the admitted
+    // JWT's clock after every awaited authority/DNS/socket preparation.
+    if (this.accessToken) {
+      try {
+        const claims = decodeJwt(this.accessToken);
+        if (typeof claims.exp !== 'number' || claims.exp * 1000 <= Date.now() ||
+            (Array.isArray(claims.aud) ? claims.aud.length !== 1 || claims.aud[0] !== this.resource : claims.aud !== this.resource)) throw Error();
+      } catch { throw new ConnectionsError(401, 'mcp_reauth_required'); }
+    }
+  }
   async rpc(method: string, params: unknown, notification = false): Promise<unknown> {
-    await this.beforeRequest(); if (this.signal?.aborted) throw new ConnectionsError(409, 'mcp_cancelled');
+    await this.current();
     const id = randomUUID(); const headers: Record<string, string> = { accept: 'application/json, text/event-stream', 'content-type': 'application/json' };
     if (this.accessToken) headers.authorization = `Bearer ${this.accessToken}`;
     if (this.initialized) headers['mcp-protocol-version'] = MCP_PROTOCOL_VERSION;
     if (this.sessionId) headers['mcp-session-id'] = this.sessionId;
-    const response = await this.transport.request({ url: this.resource, method: 'POST', headers, signal: this.signal, beforeSend: this.beforeRequest,
+    const response = await this.transport.request({ url: this.resource, method: 'POST', headers, signal: this.signal, beforeSend: () => this.current(),
       body: JSON.stringify({ jsonrpc: '2.0', ...(!notification ? { id } : {}), method, params }) });
+    await this.current();
     if (response.status === 401) throw new ConnectionsError(401, 'mcp_reauth_required');
     if (response.status < 200 || response.status >= 300) throw new ConnectionsError(502, 'mcp_request_failed');
     if (notification) { if (response.status !== 202 || response.bytes.byteLength) throw new ConnectionsError(502, 'mcp_notification_failed'); return; }
