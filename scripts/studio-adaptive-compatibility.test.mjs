@@ -610,3 +610,127 @@ test('pet care blocks old-code rollback until care is cleared, preserving deleti
   mkdirSync(join(pets, '.writer.lock'));
   assert.throws(() => assertReleaseAdaptiveCompatibility(f.env, ADAPTIVE_RELEASE_CAPABILITIES), /incompatible/);
 }));
+
+function connectionGeneration(f, rows, generationId = uuid) {
+  const hash = value => createHash('sha256').update(value).digest('hex');
+  const partitionId = hash(JSON.stringify(['telegram-account:7', 'work']));
+  const partition = join(f.env.STUDIO_DATA_DIR, 'connections', hash(partitionId));
+  const generation = `generation-${generationId}`;
+  const records = join(partition, generation, 'connections');
+  mkdirSync(records, { recursive: true });
+  const files = rows.map((row, index) => {
+    const value = { id: `connection-${index}`, partitionId, ownerAccountId: 'telegram-account:7',
+      scope: { spaceKind: 'work' }, revision: 1, ...row };
+    const file = join(records, `${hash(value.id)}.json`);
+    writeFileSync(file, JSON.stringify(value));
+    return file;
+  });
+  const pointer = join(partition, 'current.json');
+  writeFileSync(pointer, JSON.stringify({ generation }));
+  return { partition, records, pointer, files };
+}
+
+test('bound-agent connection records block older code without migrating legacy records', () => fixture(f => {
+  f.setMarker(ready(1));
+  const old = { ...ADAPTIVE_RELEASE_CAPABILITIES };
+  delete old.supportedConnectionRecordSchemas;
+  let state = connectionGeneration(f, [{ schemaVersion: 1 }]);
+  assert.doesNotThrow(() => assertReleaseAdaptiveCompatibility(f.env, old));
+  state = connectionGeneration(f, [{ schemaVersion: 1 }, { schemaVersion: 2, agentId: 'agent-b' }]);
+  const before = state.files.map(file => readFileSync(file, 'utf8'));
+  assert.throws(() => assertReleaseAdaptiveCompatibility(f.env, old), /incompatible/);
+  assert.deepEqual(assertReleaseAdaptiveCompatibility(f.env, ADAPTIVE_RELEASE_CAPABILITIES).connectionRecordSchemas, [1, 2]);
+  assert.throws(() => assertReleaseAdaptiveCompatibility(f.env, { ...ADAPTIVE_RELEASE_CAPABILITIES, supportedConnectionRecordSchemas: [2] }), /incompatible/);
+  assert.deepEqual(state.files.map(file => readFileSync(file, 'utf8')), before);
+}));
+
+test('only the committed connection generation determines rollback compatibility', () => fixture(f => {
+  f.setMarker(ready(1));
+  const committed = connectionGeneration(f, [{ schemaVersion: 1 }]);
+  connectionGeneration(f, [{ schemaVersion: 2, agentId: 'agent-b' }], 'c3c708bb-58bd-4504-93da-bc0c95f485e3');
+  writeFileSync(committed.pointer, JSON.stringify({ generation: `generation-${uuid}` }));
+  const old = { ...ADAPTIVE_RELEASE_CAPABILITIES }; delete old.supportedConnectionRecordSchemas;
+  assert.deepEqual(assertReleaseAdaptiveCompatibility(f.env, old).connectionRecordSchemas, [1]);
+  mkdirSync(join(committed.partition, 'lock'));
+  assert.throws(() => assertReleaseAdaptiveCompatibility(f.env, ADAPTIVE_RELEASE_CAPABILITIES), /incompatible/);
+}));
+
+test('connection admission rejects unsupported or inconsistent identity metadata', () => fixture(f => {
+  f.setMarker(ready(1));
+  for (const row of [
+    { schemaVersion: 3 }, { schemaVersion: 1, agentId: 'agent-a' }, { schemaVersion: 2 },
+    { schemaVersion: 2, agentId: 'agent-a', partitionId: 'wrong-partition' },
+    { schemaVersion: 2, agentId: 'agent-a', ownerAccountId: 'telegram-account:8' },
+  ]) {
+    connectionGeneration(f, [row]);
+    assert.throws(() => assertReleaseAdaptiveCompatibility(f.env, ADAPTIVE_RELEASE_CAPABILITIES), /incompatible/);
+  }
+}));
+
+test('connection admission rejects redirected pointers and linked active records', () => fixture(f => {
+  f.setMarker(ready(1));
+  let state = connectionGeneration(f, [{ schemaVersion: 2, agentId: 'agent-a' }]);
+  writeFileSync(state.pointer, JSON.stringify({ generation: '../outside' }));
+  assert.throws(() => assertReleaseAdaptiveCompatibility(f.env, ADAPTIVE_RELEASE_CAPABILITIES), /incompatible/);
+  state = connectionGeneration(f, [{ schemaVersion: 2, agentId: 'agent-a' }]);
+  const outside = join(f.dir, 'outside-connection.json');
+  writeFileSync(outside, readFileSync(state.files[0])); rmSync(state.files[0]); symlinkSync(outside, state.files[0]);
+  assert.throws(() => assertReleaseAdaptiveCompatibility(f.env, ADAPTIVE_RELEASE_CAPABILITIES), /incompatible/);
+}));
+
+test('bound-agent release capability declarations stay bounded and explicit', () => fixture(f => {
+  f.setMarker(ready(1)); connectionGeneration(f, [{ schemaVersion: 2, agentId: 'agent-a' }]);
+  for (const value of [null, [1], [1, 1], [3], [], '2']) {
+    assert.throws(() => assertReleaseAdaptiveCompatibility(f.env, { ...ADAPTIVE_RELEASE_CAPABILITIES, supportedConnectionRecordSchemas: value }), /incompatible/);
+  }
+}));
+
+test('an agent-bound provider profile blocks old strict parsers before first enrollment', () => fixture(f => {
+  f.setMarker(ready(1));
+  const configFile = join(f.dir, 'connections-config.json');
+  const env = { ...f.env, STUDIO_CONNECTIONS_CONFIG_FILE: configFile };
+  const old = { ...ADAPTIVE_RELEASE_CAPABILITIES }; delete old.supportedConnectionRecordSchemas;
+  writeFileSync(configFile, JSON.stringify({ schemaVersion: 1, enabled: false, profiles: [{ agentId: 'agent-a' }] }));
+  assert.throws(() => assertReleaseAdaptiveCompatibility(env, old), /incompatible/);
+  assert.deepEqual(assertReleaseAdaptiveCompatibility(env, ADAPTIVE_RELEASE_CAPABILITIES).connectionRecordSchemas, [2]);
+  writeFileSync(configFile, JSON.stringify({ schemaVersion: 1, enabled: false, profiles: [{}] }));
+  assert.doesNotThrow(() => assertReleaseAdaptiveCompatibility(env, old));
+}));
+
+test('pending MCP enrollment requires its own release capability before a catalog exists', () => fixture(f => {
+  f.setMarker(ready(1));
+  const state = connectionGeneration(f, [{ schemaVersion: 2, agentId: 'agent-a',
+    mcp: { canonicalResourceUri: 'https://mcp.company.com/private/account', catalog: null } }]);
+  const old = { ...ADAPTIVE_RELEASE_CAPABILITIES }; delete old.supportedSelfServiceMcpSchemas;
+  const before = readFileSync(state.files[0], 'utf8');
+  assert.throws(() => assertReleaseAdaptiveCompatibility(f.env, old), /incompatible/);
+  assert.equal(assertReleaseAdaptiveCompatibility(f.env, ADAPTIVE_RELEASE_CAPABILITIES).selfServiceMcpSchema, 1);
+  assert.equal(readFileSync(state.files[0], 'utf8'), before);
+  for (const declaration of [[], null, [2], [1, 1]])
+    assert.throws(() => assertReleaseAdaptiveCompatibility(f.env, { ...ADAPTIVE_RELEASE_CAPABILITIES, supportedSelfServiceMcpSchemas: declaration }), /incompatible/);
+}));
+
+test('unavailable provider identity still prevents an incompatible rollback after connection removal', () => fixture(f => {
+  f.setMarker(ready(1)); const state = connectionGeneration(f, []);
+  const hash = value => createHash('sha256').update(value).digest('hex');
+  const directory = join(state.records, '..', 'providerAccounts'); mkdirSync(directory);
+  const partitionId = hash(JSON.stringify(['telegram-account:7', 'work']));
+  const row = { schemaVersion: 1, id: 'authorization-record', partitionId, ownerAccountId: 'telegram-account:7',
+    scope: { spaceKind: 'work' }, revision: 1, identityEvidence: 'unavailable' };
+  writeFileSync(join(directory, `${hash(row.id)}.json`), JSON.stringify(row));
+  const old = { ...ADAPTIVE_RELEASE_CAPABILITIES }; delete old.supportedSelfServiceMcpSchemas;
+  assert.throws(() => assertReleaseAdaptiveCompatibility(f.env, old), /incompatible/);
+  assert.equal(assertReleaseAdaptiveCompatibility(f.env, ADAPTIVE_RELEASE_CAPABILITIES).selfServiceMcpSchema, 1);
+  row.identityEvidence = 'verified'; writeFileSync(join(directory, `${hash(row.id)}.json`), JSON.stringify(row));
+  assert.throws(() => assertReleaseAdaptiveCompatibility(f.env, ADAPTIVE_RELEASE_CAPABILITIES), /incompatible/);
+}));
+
+test('disabled self-service configuration blocks old strict parsers without writing an enrollment', () => fixture(f => {
+  f.setMarker(ready(1)); const configFile = join(f.dir, 'connections-config.json');
+  const env = { ...f.env, STUDIO_CONNECTIONS_CONFIG_FILE: configFile };
+  writeFileSync(configFile, JSON.stringify({ schemaVersion: 1, enabled: false, profiles: [],
+    selfServiceMcp: { enabled: false, dailyModelTokenCeiling: 0, dailyToolCallCeiling: 0 } }));
+  const old = { ...ADAPTIVE_RELEASE_CAPABILITIES }; delete old.supportedSelfServiceMcpSchemas;
+  assert.throws(() => assertReleaseAdaptiveCompatibility(env, old), /incompatible/);
+  assert.equal(assertReleaseAdaptiveCompatibility(env, ADAPTIVE_RELEASE_CAPABILITIES).selfServiceMcpSchema, 1);
+}));
