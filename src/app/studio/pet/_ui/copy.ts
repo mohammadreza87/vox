@@ -53,6 +53,6 @@ export const COPY = {
   retry: 'Try again',
   talkFailed: 'Hmm, I lost my words. Try again?',
   didntCatch: 'I didn’t catch that. Try again?',
-  forgetAsk: (name: string) => `Forget ${name}’s care for you? Needs and Bond start over; your chats stay.`,
+  forgetAsk: (name: string) => `Forget care for all your pets, including ${name}? Needs and Bond start over for every pet; your chats stay.`,
   score: (n: number) => `${n}`,
 } as const;
