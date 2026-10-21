@@ -14,9 +14,12 @@ import { canonicalMcpUrl, McpPublicTransport } from './transport';
 const actorSchema = z.object({ accountId: idSchema, botAgentId: idSchema.optional(), botAuthenticationRevision: idSchema.optional() }).strict().refine(value => !!value.botAgentId === !!value.botAuthenticationRevision);
 const base = { actor: actorSchema, space: z.enum(['personal', 'work']) };
 const flowInput = z.object({ ...base, flowId: z.string().uuid() }).strict();
-const metadataSchema = z.object({ resource: z.string(), issuer: z.string(), authorizationEndpoint: z.string(), tokenEndpoint: z.string(), scopesSupported: z.array(z.string()), clientMetadataSupported: z.boolean(), tokenAuthMethods: z.array(z.string()), issuerParameterSupported: z.boolean(), jwksUri: z.string().optional() }).strict();
+const metadataSchema = z.object({ resource: z.string(), issuer: z.string(), authorizationEndpoint: z.string(), tokenEndpoint: z.string(), scopesSupported: z.array(z.string()), clientMetadataSupported: z.boolean(), tokenAuthMethods: z.array(z.string()), issuerParameterSupported: z.boolean(), jwksUri: z.string() }).strict();
 const clientSchema = z.object({ clientId: z.string(), clientSecret: z.string().optional(), scopes: z.array(z.string()), registration: z.enum(['preregistered', 'client_id_metadata']) }).strict();
-const tokenSchema = z.object({ accessToken: z.string(), refreshToken: z.string().optional(), expiresAt: z.number().optional(), scopes: z.array(z.string()) }).strict();
+const verificationSchema = z.object({ schemaVersion: z.literal(1), tokenDigest: z.string().regex(/^[a-f0-9]{64}$/), issuer: z.string(),
+  resource: z.string(), jwksUri: z.string(), expiresAt: z.number().int().positive() }).strict();
+const tokenSchema = z.object({ accessToken: z.string(), refreshToken: z.string().optional(), expiresAt: z.number().optional(), scopes: z.array(z.string()),
+  verification: verificationSchema }).strict();
 const flowSchema = z.object({ kind: z.literal('self_service_mcp_v1'), flowId: z.string().uuid(), stateHash: z.string().length(64), verifier: z.string(),
   callbackUrl: z.string(), botAuthenticationRevision: z.string().optional(), bindingRevision: z.number(), connectionRevision: z.number(), expiresAt: z.number(),
   callbackUsed: z.boolean(), status: z.enum(['pending', 'exchanging', 'sealed', 'connected', 'failed', 'cancelled']),
@@ -55,6 +58,7 @@ export class SelfServiceMcpBroker {
   }
   private async fresh(actor: ConnectionActor, space: SpaceKind, connectionId: string): Promise<BrokerAuthority> {
     const current = await this.options.control.call<BrokerAuthority>({ action: 'context', actor, space, connectionId });
+    if ((current as BrokerAuthority & { providerEnabled?: boolean }).providerEnabled !== true) throw new ConnectionsError(503, 'mcp_paused');
     if (current.connection.schemaVersion !== 2 || current.connection.providerId !== MCP_PROVIDER_ID || current.connection.id !== connectionId ||
         current.context.accountId !== actor.accountId || current.context.scope.spaceKind !== space || current.connection.ownerAccountId !== actor.accountId ||
         current.connection.ownerPersonId !== current.context.personId || !current.context.currentAgentIds.includes(current.connection.agentId) ||
@@ -65,6 +69,12 @@ export class SelfServiceMcpBroker {
     return { flowId: flow.flowId, status: flow.expiresAt <= this.now() && flow.status !== 'connected' ? 'expired' :
       ['connected', 'failed', 'cancelled'].includes(flow.status) ? flow.status as 'connected' | 'failed' | 'cancelled' : 'pending', expiresAt: flow.expiresAt,
       ...(flow.reason ? { reason: flow.reason } : {}) };
+  }
+  private admitted(token: McpOAuthToken | undefined, metadata: { issuer: string; resource: string; jwksUri?: string }): boolean {
+    const receipt = verificationSchema.safeParse(token?.verification);
+    return !!token && receipt.success && receipt.data.tokenDigest === hash(token.accessToken) && receipt.data.issuer === metadata.issuer &&
+      receipt.data.resource === metadata.resource && receipt.data.jwksUri === metadata.jwksUri &&
+      typeof token.expiresAt === 'number' && token.expiresAt <= receipt.data.expiresAt;
   }
   async beginSetup(input: unknown): Promise<SetupReceipt> {
     const parsed = z.object({ ...base, connectionId: idSchema, expectedRevision: z.number().int().positive(), endpointUrl: z.string().max(2000) }).strict().parse(input);
@@ -137,7 +147,7 @@ export class SelfServiceMcpBroker {
           if (latest.current.connection.revision !== flow.connectionRevision || latest.current.connection.lifecycle !== 'pending' || flow.expiresAt <= this.now()) throw new ConnectionsError(409, 'mcp_enrollment_stale');
         };
         const token = await this.oauth.token(flow.metadata, flow.client, { grant_type: 'authorization_code', code: query.code, code_verifier: flow.verifier, redirect_uri: flow.callbackUrl }, undefined, check);
-        const catalog = await new McpSession(flow.metadata.resource, this.transport, token.accessToken, undefined, check).discover();
+        const catalog = await new McpSession(flow.metadata.resource, this.transport, token.accessToken, undefined, check, token.expiresAt).discover();
         const text = JSON.stringify(catalog);
         if ([token.accessToken, token.refreshToken, flow.verifier, flow.client.clientSecret].some(secret => secret && text.includes(secret))) throw new ConnectionsError(502, 'mcp_catalog_secret_denied');
         await check(); await this.options.vault.write('credential', `mcp:pending:${flowId}`, binding, token);
@@ -166,7 +176,7 @@ export class SelfServiceMcpBroker {
         await this.options.vault.delete('credential', `mcp:pending:${flow.flowId}`); return this.receipt(flow);
       };
       const activated = (authority: BrokerAuthority, credential: McpBrokerCredential | undefined) =>
-        !!credential && credential.status === 'active' && credential.connectionRevision === flow.connectionRevision + 1 &&
+        !!credential && this.admitted(credential, flow.metadata) && credential.status === 'active' && credential.connectionRevision === flow.connectionRevision + 1 &&
         credential.subject === `authorization:${flow.authorizationId}` && authority.connection.lifecycle === 'connected' &&
         authority.connection.revision === credential.connectionRevision && authority.connection.catalogDigest === flow.catalog!.catalogDigest &&
         authority.providerAccount?.status === 'active' && authority.providerAccount.identityEvidence === 'unavailable' &&
@@ -179,6 +189,7 @@ export class SelfServiceMcpBroker {
       }
       if (current.connection.lifecycle !== 'pending' || current.connection.revision !== flow.connectionRevision) throw new ConnectionsError(409, 'mcp_review_stale');
       const token = tokenSchema.parse(await this.options.vault.read('credential', `mcp:pending:${flow.flowId}`, binding));
+      if (!this.admitted(token, flow.metadata)) throw new ConnectionsError(409, 'mcp_reauth_required');
       if (token.expiresAt && token.expiresAt <= this.now()) throw new ConnectionsError(409, 'mcp_reauth_required');
       // External human identity is deliberately unavailable. This random subject identifies only this authorization.
       const credential: McpBrokerCredential = { ...token, subject: `authorization:${flow.authorizationId}`, tenant: `resource:${hash(flow.metadata.resource)}`,
@@ -214,6 +225,7 @@ export class SelfServiceMcpBroker {
   }
   /** ConnectionsBroker credentialForAuthority hook. No token is returned by a browser/control endpoint. */
   async credentialForAuthority(current: BrokerAuthority): Promise<McpBrokerCredential> {
+    if ((current as BrokerAuthority & { providerEnabled?: boolean }).providerEnabled !== true) throw new ConnectionsError(503, 'mcp_paused');
     const binding = bindingFor(current);
     return this.options.vault.withLock(`mcp:credential:${binding.connectionId}`, async () => {
       const credential = await this.options.vault.read('credential', binding.connectionId, binding) as McpBrokerCredential | undefined;
@@ -223,7 +235,7 @@ export class SelfServiceMcpBroker {
       if (actor.accountId !== binding.accountId || actor.botAgentId && actor.botAgentId !== binding.agentId) throw new ConnectionsError(403, 'mcp_credential_unavailable');
       const resource = (current.connection as unknown as { mcp?: { canonicalResourceUri: string } }).mcp?.canonicalResourceUri;
       if (resource !== config.metadata.resource || config.catalog.resource !== config.metadata.resource) throw new ConnectionsError(403, 'mcp_resource_mismatch');
-      if (!credential || credential.status !== 'active' || credential.connectionRevision !== current.connection.revision || config.connectionRevision !== current.connection.revision ||
+      if (!credential || !this.admitted(credential, config.metadata) || credential.status !== 'active' || credential.connectionRevision !== current.connection.revision || config.connectionRevision !== current.connection.revision ||
           config.catalog.catalogDigest !== current.connection.catalogDigest || current.connection.lifecycle !== 'connected' || canonical(bindingFor(current)) !== canonical(binding)) throw new ConnectionsError(403, 'mcp_credential_unavailable');
       if (!credential.expiresAt || credential.expiresAt > this.now() + 30_000) return credential;
       if (!credential.refreshToken) throw new ConnectionsError(401, 'mcp_reauth_required');

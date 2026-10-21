@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { createHash } from 'node:crypto';
 import { ConnectionsError } from '../errors';
 import { canonicalMcpUrl, McpPublicTransport } from './transport';
 import { verifyMcpAccessToken } from './token-verifier';
@@ -11,12 +12,13 @@ export interface McpOAuthMetadata {
   resource: string; issuer: string; authorizationEndpoint: string; tokenEndpoint: string;
   scopesSupported: string[]; clientMetadataSupported: boolean; tokenAuthMethods: string[];
   issuerParameterSupported: boolean;
-  jwksUri?: string;
+  jwksUri: string;
 }
 export interface McpRegisteredClient { issuer: string; clientId: string; clientSecret?: string; scopes: readonly string[] }
 export interface McpClientConfiguration { registeredClients?: readonly McpRegisteredClient[]; clientMetadataUrl?: string; scopes?: readonly string[] }
 export interface McpOAuthClient { clientId: string; clientSecret?: string; scopes: string[]; registration: 'preregistered' | 'client_id_metadata' }
-export interface McpOAuthToken { accessToken: string; refreshToken?: string; expiresAt?: number; scopes: string[] }
+export interface McpOAuthToken { accessToken: string; refreshToken?: string; expiresAt?: number; scopes: string[];
+  verification: { schemaVersion: 1; tokenDigest: string; issuer: string; resource: string; jwksUri: string; expiresAt: number } }
 const scope = z.string().min(1).max(200).regex(/^[\x21\x23-\x5b\x5d-\x7e]+$/);
 const protectedMetadata = z.object({ resource: z.string().max(2000), authorization_servers: z.array(z.string().max(2000)).min(1).max(8), scopes_supported: z.array(scope).max(100).optional() }).passthrough();
 const authMetadata = z.object({ issuer: z.string().max(2000), authorization_endpoint: z.string().max(2000), token_endpoint: z.string().max(2000),
@@ -98,6 +100,7 @@ export class McpOAuth {
       headers: { accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ ...form,
         client_id: client.clientId, ...(client.clientSecret ? { client_secret: client.clientSecret } : {}), resource: metadata.resource }).toString() });
     if (response.status !== 200) throw new ConnectionsError(502, 'mcp_oauth_exchange_failed');
+    const receivedAt = this.now();
     const token = z.object({ access_token: z.string().regex(/^[\x21-\x7e]{1,16000}$/), refresh_token: z.string().regex(/^[\x21-\x7e]{1,16000}$/).optional(),
       token_type: z.string().refine(value => value.toLowerCase() === 'bearer'), expires_in: z.number().int().min(1).max(31_536_000).optional(), scope: z.string().max(20_000).optional(), resource: z.string().optional() }).passthrough().parse(response.value);
     const scopes = token.scope === undefined ? client.scopes : token.scope.split(' ').filter(Boolean);
@@ -105,6 +108,8 @@ export class McpOAuth {
     const signedExpiresAt = await verifyMcpAccessToken({ accessToken: token.access_token, issuer: metadata.issuer, resource: metadata.resource,
       jwksUri: metadata.jwksUri, scopes, transport: this.transport, now: this.now, signal, assertCurrent });
     return { accessToken: token.access_token, ...(token.refresh_token ? { refreshToken: token.refresh_token } : {}),
-      expiresAt: Math.min(signedExpiresAt, token.expires_in ? this.now() + token.expires_in * 1000 : signedExpiresAt), scopes: [...scopes] };
+      expiresAt: Math.min(signedExpiresAt, token.expires_in ? receivedAt + token.expires_in * 1000 : signedExpiresAt), scopes: [...scopes],
+      verification: { schemaVersion: 1, tokenDigest: createHash('sha256').update(token.access_token).digest('hex'), issuer: metadata.issuer,
+        resource: metadata.resource, jwksUri: metadata.jwksUri, expiresAt: signedExpiresAt } };
   }
 }

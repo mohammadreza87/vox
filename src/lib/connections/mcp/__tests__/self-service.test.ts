@@ -27,7 +27,7 @@ const refreshToken = 'synthetic-refresh-fixture-1234';
 const tool = { name: 'files.get', description: 'Untrusted server description', inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'], additionalProperties: false }, annotations: { readOnlyHint: true, destructiveHint: false } };
 const actor = { accountId: 'account-a', botAgentId: 'agent-a', botAuthenticationRevision: 'bot-revision-1' };
 function currentAuthority(): BrokerAuthority {
-  return { context: { accountId: 'account-a', personId: 'person-a', bindingId: 'binding-a', bindingRevision: 1, bindingExpiresAt: Date.now() + 3_600_000,
+  return { providerEnabled: true, context: { accountId: 'account-a', personId: 'person-a', bindingId: 'binding-a', bindingRevision: 1, bindingExpiresAt: Date.now() + 3_600_000,
     currentAgentIds: ['agent-a', 'agent-b'], botAgentId: 'agent-a', scope: { tenantId: 'tenant-a', spaceId: 'personal-a', spaceKind: 'personal', containerId: 'container-a', audiencePersonIds: ['person-a'], audienceRevision: '1' } },
     connection: { schemaVersion: 2, id: 'connection-a', agentId: 'agent-a', providerId: 'remote_mcp', ownerAccountId: 'account-a', ownerPersonId: 'person-a', lifecycle: 'pending', revision: 1,
       mcp: { canonicalResourceUri: resource, catalog: null }, catalogDigest: createPendingMcpCatalog(resource).snapshot.catalogDigest } } as BrokerAuthority;
@@ -138,6 +138,23 @@ describe('self-service MCP synthetic HTTP/OAuth broker', () => {
     const result = await broker.claimSetup({ actor, space: 'personal', flowId: setup.flowId, acceptedCatalogDigest: preview.catalog.catalogDigest });
     expect(result.status).toBe('connected'); expect(activationCount).toBe(1);
     expect((await broker.credentialForAuthority(current)).accessToken).toBe(accessToken);
+  });
+  it.each(['missing', 'digest', 'issuer', 'resource', 'jwks'])('rejects a restored credential without exact signature-admission evidence: %s', async mode => {
+    await active(); const binding = (await vault.binding('credential', 'connection-a'))!;
+    const credential = await broker.credentialForAuthority(current);
+    const changed = structuredClone(credential) as unknown as Record<string, unknown>;
+    if (mode === 'missing') delete changed.verification;
+    else (changed.verification as Record<string, unknown>)[{ digest: 'tokenDigest', issuer: 'issuer', resource: 'resource', jwks: 'jwksUri' }[mode]!] = 'wrong';
+    await vault.write('credential', 'connection-a', binding, changed);
+    await expect(broker.credentialForAuthority(current)).rejects.toThrow();
+    expect(seen.filter(call => call.body.method === 'tools/call')).toHaveLength(0);
+  });
+  it('paused setup and cached credentials fail closed while explicit revoke cleanup still works', async () => {
+    await active(); (current as BrokerAuthority & { providerEnabled: boolean }).providerEnabled = false;
+    await expect(broker.credentialForAuthority(current)).rejects.toThrow('mcp_paused');
+    current.connection.lifecycle = 'revoked';
+    expect(await broker.revoke(current)).toEqual({ futureUseStopped: true, providerRevocation: 'unavailable' });
+    expect(await vault.binding('credential', 'connection-a')).toBeUndefined();
   });
   it('binds PKCE/resource to full URI; callback seals only; fresh same-bot reviewed claim activates zero grants', async () => {
     const { setup, auth } = await begin(); expect(auth.searchParams.get('resource')).toBe(resource); expect(auth.searchParams.get('code_challenge_method')).toBe('S256');

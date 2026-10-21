@@ -37,7 +37,8 @@ export class McpSession {
   private initialized = false;
   readonly resource: string;
   constructor(resource: string, private readonly transport: McpPublicTransport, private readonly accessToken?: string,
-    private readonly signal?: AbortSignal, private readonly beforeRequest: () => Promise<void> = async () => undefined) {
+    private readonly signal?: AbortSignal, private readonly beforeRequest: () => Promise<void> = async () => undefined,
+    private readonly expiresAt?: number) {
     this.resource = canonicalMcpUrl(resource);
     if (accessToken && (!/^[\x21-\x7e]{1,16000}$/.test(accessToken))) throw new ConnectionsError(400, 'mcp_token_invalid');
   }
@@ -49,7 +50,7 @@ export class McpSession {
     if (this.accessToken) {
       try {
         const claims = decodeJwt(this.accessToken);
-        if (typeof claims.exp !== 'number' || claims.exp * 1000 <= Date.now() ||
+        if (typeof claims.exp !== 'number' || claims.exp * 1000 <= Date.now() || this.expiresAt !== undefined && this.expiresAt <= Date.now() ||
             (Array.isArray(claims.aud) ? claims.aud.length !== 1 || claims.aud[0] !== this.resource : claims.aud !== this.resource)) throw Error();
       } catch { throw new ConnectionsError(401, 'mcp_reauth_required'); }
     }
@@ -100,7 +101,7 @@ export class McpBrokerExecutor {
     if (!descriptor || !provider || context.credential.providerId !== 'remote_mcp' || context.credential.endpointProfileId !== provider.endpointProfileId) throw new ProviderError('mcp_binding_mismatch', 'not_dispatched');
     const args = this.catalog.validateArguments(toolId, rawArguments); let dispatched = false;
     try {
-      const session = new McpSession(this.catalog.snapshot.resource, this.transport, context.credential.accessToken, context.signal, this.assertCurrent);
+      const session = new McpSession(this.catalog.snapshot.resource, this.transport, context.credential.accessToken, context.signal, this.assertCurrent, context.credential.expiresAt);
       const live = await session.discover();
       if (live.catalogDigest !== this.catalog.snapshot.catalogDigest) throw new ConnectionsError(409, 'mcp_catalog_drift');
       await this.assertCurrent(); dispatched = true;

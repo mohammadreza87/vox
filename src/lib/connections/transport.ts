@@ -13,6 +13,7 @@ export interface ProviderCredential {
   readonly providerId: string;
   readonly endpointProfileId: string;
   readonly accessToken: string;
+  readonly expiresAt?: number;
 }
 export interface ProviderHttpRequest {
   readonly profileId: string;
