@@ -1,5 +1,5 @@
 'use client';
-import { useCallback, useEffect, useId, useRef, useState, type Ref } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type Ref } from 'react';
 import { rightsApi, type LocalErasurePlan, type LocalErasureView, type RightsRequestView } from '../_lib/rights-client';
 import type { AdaptiveSnapshot } from '../_lib/adaptive-client';
 import { rightsErasureCopy } from '../_lib/rights-erasure-copy';
@@ -50,7 +50,7 @@ function ErasurePanel({ row, locale, session, snapshot, notesStale, disabled, on
     const expiry = setTimeout(() => { setSelected(null); setPlan(null); setPhase('stale'); }, Math.max(0, Math.min(plan.expiresAt - Date.now(), 2_147_483_647)));
     return () => clearTimeout(expiry);
   }, [phase, plan]);
-  useEffect(() => { if (phase === 'review') heading.current?.focus(); else if (phase === 'unknown' || phase === 'stale') alert.current?.focus(); else if (phase === 'idle') action.current?.focus(); else if (phase === 'current' && view?.operations.some(status => status.technical === 'unknown')) alert.current?.focus(); else if (phase === 'current' && dispatched.current) result.current?.focus(); }, [phase, view]);
+  useLayoutEffect(() => { if (phase === 'review') heading.current?.focus(); else if (phase === 'unknown' || phase === 'stale') alert.current?.focus(); else if (phase === 'idle') action.current?.focus(); else if (phase === 'current' && view?.operations.some(status => status.technical === 'unknown')) alert.current?.focus(); else if (phase === 'current' && dispatched.current) result.current?.focus(); }, [phase, view]);
   const sourceReady = !!snapshot && snapshot.space === row.space && snapshot.scope === 'private_account_profile' && snapshot.identity.confirmed && snapshot.identity.verification === 'account_confirmation' && snapshot.explicitMemoryAvailable && (!snapshot.identity.bindingExpiresAt || snapshot.identity.bindingExpiresAt > Date.now()) && (!snapshot.explicitMemoryValidUntil || snapshot.explicitMemoryValidUntil > Date.now());
   const eligible = sourceReady && !notesStale ? snapshot.memories.filter(note => !note.origin && !note.sourceRefs && note.expiresAt > Date.now()) : [];
   const note = eligible.find(item => item.id === selected);
