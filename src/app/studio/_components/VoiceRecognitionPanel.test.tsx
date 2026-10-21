@@ -18,6 +18,13 @@ beforeEach(() => {
   vi.mocked(voiceIdentityApi.remove).mockResolvedValue(make({ revision: 6, deletion: 'online_completed' }));
 });
 describe('VoiceRecognitionPanel', () => {
+  it('explains an unqualified local engine without inviting microphone capture', async () => {
+    vi.mocked(voiceIdentityApi.read).mockResolvedValueOnce(make({ available: false, reason: 'inspection_not_qualified' }));
+    render(<VoiceRecognitionPanel space="work" />);
+    expect(await screen.findByText(/Local voice recognition is still being tested/)).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Review enrollment' })).toBeNull();
+    expect(captureVoiceSample).not.toHaveBeenCalled();
+  });
   it('shows unavailable state and manual fallback without recording or prompting', async () => {
     vi.mocked(voiceIdentityApi.read).mockResolvedValueOnce(make({ available: false, reason: 'provider_unavailable', consent: 'not_asked' }));
     render(<VoiceRecognitionPanel space="work" />);

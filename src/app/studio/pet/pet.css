@@ -86,6 +86,7 @@
 /* ---------- dock: three toys in need rings ---------- */
 .pet-bottom { position: absolute; left: 0; right: 0; bottom: 0; z-index: 4; display: flex; flex-direction: column; align-items: center; gap: 16px; padding: 0 16px calc(var(--pet-safe-bottom,env(safe-area-inset-bottom,0px)) + 14px); pointer-events: none; }
 .pet-bottom > * { pointer-events: auto; }
+.pet-connect { display: grid; min-height: 44px; place-items: center; padding: 0 12px; color: var(--text-2); font: 500 13px/18px var(--f-body); text-underline-offset: 3px; touch-action: manipulation; }
 .pet-dock { display: flex; gap: 30px; justify-content: center; transition: opacity .6s var(--ease-sine); }
 .pet-root[data-asleep] .pet-dock { opacity: .55; }
 .pet-toy { position: relative; width: 68px; height: 68px; padding: 0; border: 0; border-radius: 50%; background: none; display: grid; place-items: center; touch-action: none; transition: transform .18s var(--ease-over); }

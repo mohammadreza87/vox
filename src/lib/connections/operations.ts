@@ -46,7 +46,7 @@ export class OperationsLedger {
       if (!operation) return deny('operation_unavailable', 404);
       if (!['queued', 'authorized'].includes(operation.state) || operation.dispatchedAt !== null ||
           (operation.leaseUntil !== null && operation.leaseUntil > now)) deny('operation_not_dispatchable', 409);
-      currentOperation(records, context, operation, this.service.options.catalog, now);
+      currentOperation(records, context, operation, this.service.catalogForConnection, now);
       const args = this.argumentsFor(records, context, operation);
       operation.leaseOwner = input.workerId; operation.leaseUntil = Math.min(now + input.leaseMs, operation.deadlineAt);
       operation.fence++; operation.revision++; operation.updatedAt = now;
@@ -82,7 +82,7 @@ export class OperationsLedger {
       if (!operation) return deny('operation_unavailable', 404);
       this.assertLease(operation, input, now);
       if (!['queued', 'authorized'].includes(operation.state) || operation.dispatchedAt !== null) deny('operation_already_dispatched', 409);
-      currentOperation(records, context, operation, this.service.options.catalog, now);
+      currentOperation(records, context, operation, this.service.catalogForConnection, now);
       this.argumentsFor(records, context, operation);
       if (operation.effect !== 'read') {
         const approval = records.approvals.find(a => a.id === operation.approvalId);
@@ -159,7 +159,7 @@ export class OperationsLedger {
       const operation = records.operations.find(o => o.id === operationId);
       if (!operation || operation.state !== 'sending' || operation.dispatchedAt === null || operation.leaseOwner === null ||
           operation.leaseUntil === null || operation.leaseUntil <= now || operation.cancellationRequestedAt !== null) return deny('operation_not_dispatchable', 409);
-      currentOperation(records, context, operation, this.service.options.catalog, now);
+      currentOperation(records, context, operation, this.service.catalogForConnection, now);
     });
   }
   /** Before model continuation, memory, cache, external egress and final delivery. */
@@ -169,7 +169,7 @@ export class OperationsLedger {
     await this.service.repository.transaction(context, records => {
       const operation = records.operations.find(o => o.id === operationId);
       if (!operation || !['committed', 'verified'].includes(operation.state)) return deny('result_unavailable');
-      currentOperation(records, context, operation, this.service.options.catalog, this.service.now());
+      currentOperation(records, context, operation, this.service.catalogForConnection, this.service.now());
     });
   }
 }

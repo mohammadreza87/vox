@@ -1,3 +1,4 @@
+import { getProviderToolDefinition } from '../providers';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { idSchema, workflowScheduleSchema, type ConnectionActor, type ConnectionContext, type ConnectionWorkflow,
@@ -59,7 +60,7 @@ export class ConnectionsWorkflowService {
         workflow.connectionRevision !== connection.revision || workflow.expiresAt <= now || !sameScope(workflow.scope, context.scope) ||
         !resolveConnectionSkill(workflow.skillId, Number(workflow.skillVersion), context.scope.spaceKind, connection.providerId, grant)) deny('workflow_stale', 409);
     for (const step of workflow.steps) {
-      const tool = this.core.options.catalog.get(step.toolId);
+      const tool = this.core.catalogForConnection(connection).get(step.toolId);
       if (!tool) return deny('workflow_tool_drift', 409);
       if (tool.effect !== 'read' || tool.version !== step.toolVersion || tool.catalogDigest !== step.catalogDigest || tool.schemaDigest !== step.schemaDigest) deny('workflow_tool_drift', 409);
       assertGrant(context, connection, grant, tool, { agentId: workflow.agentId, resourceIds: step.resourceIds,
@@ -83,11 +84,11 @@ export class ConnectionsWorkflowService {
       if (parsed.expiresAt <= now || parsed.expiresAt > Math.min(grant.expiresAt, context.bindingExpiresAt) || parsed.maxCalls < parsed.steps.length ||
           !resolveConnectionSkill(parsed.skillId, parsed.skillVersion, parsed.space, connection.providerId, grant)) deny('workflow_authority_denied');
       const steps = parsed.steps.map(step => {
-        const tool = this.core.options.catalog.get(step.toolId);
+        const tool = this.core.catalogForConnection(connection).get(step.toolId);
         if (!tool || tool.effect !== 'read') return deny('workflow_effect_unavailable');
-        const args = this.core.options.catalog.validateArguments(step.toolId, step.arguments); safeMetadataArguments(args);
+        const args = this.core.catalogForConnection(connection).validateArguments(step.toolId, step.arguments); safeMetadataArguments(args);
         return { toolId: tool.id, toolVersion: tool.version, catalogDigest: tool.catalogDigest, schemaDigest: tool.schemaDigest,
-          arguments: args, resourceIds: [...this.core.options.catalog.mapResources(tool.id, args)] };
+          arguments: args, resourceIds: [...this.core.catalogForConnection(connection).mapResources(tool.id, args)] };
       });
       if (parsed.schedule.kind === 'event' && !['github.repository.get', 'slack.channel.get'].includes(steps[0].toolId)) deny('workflow_native_readback_required');
       const workflow: ConnectionWorkflow = { ...baseRecord(context, now), name: parsed.name, agentId: parsed.agentId,
@@ -222,7 +223,7 @@ export class ConnectionsWorkflowService {
           const step = item.workflow.steps[index]; const requestId = occurrenceUuid(item.occurrence.id, `step:${index}`);
           const receipt = await this.core.proposeGenerated(actor, { space: parsed.space, requestId, idempotencyKey: requestId,
             connectionId: item.workflow.connectionId, grantId: item.workflow.grantId, agentId: item.workflow.agentId, toolId: step.toolId,
-            arguments: step.arguments, destinationId: `provider:${this.core.options.catalog.get(step.toolId)!.providerId}`, expectedTargetRevision: null, sourceIds: [], retention: 'ephemeral', deadlineAt: this.now() + 30_000 },
+            arguments: step.arguments, destinationId: `provider:${getProviderToolDefinition(step.toolId)!.providerId}`, expectedTargetRevision: null, sourceIds: [], retention: 'ephemeral', deadlineAt: this.now() + 30_000 },
             { sourceIds: [], isolated: true, workflow: { workflowId: item.workflow.id, workflowRevision: item.workflow.revision, occurrenceId: item.occurrence.id } });
           await this.core.repository.transaction(context, records => {
             const occurrence = records.occurrences.find(o => o.id === item.occurrence.id)!;

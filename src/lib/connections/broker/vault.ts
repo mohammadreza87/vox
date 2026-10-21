@@ -6,7 +6,7 @@ import { idSchema } from '../contracts';
 import { canonical } from '../repository';
 import { ConnectionsError } from '../errors';
 export const vaultBindingSchema = z.object({ accountId: idSchema, personId: idSchema, space: z.enum(['work', 'personal']),
-  connectionId: idSchema, providerId: idSchema }).strict();
+  connectionId: idSchema, providerId: idSchema, agentId: idSchema.optional() }).strict();
 export type VaultBinding = z.infer<typeof vaultBindingSchema>;
 const envelopeSchema = z.object({ id: idSchema, version: z.literal(1), keyVersion: z.string().min(1).max(50), kind: z.enum(['credential', 'flow']),
   binding: vaultBindingSchema, iv: z.string().max(100), tag: z.string().max(100), ciphertext: z.string().max(200_000) }).strict();

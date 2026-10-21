@@ -16,6 +16,8 @@ export const ADAPTIVE_RELEASE_CAPABILITIES = Object.freeze({
   supportedGuestRightsLedgerSchemas: Object.freeze([1]),
   supportedImprovementWorkflowSchemas: Object.freeze([1, 2]),
   supportedPetCareSchemas: Object.freeze([1]),
+  supportedConnectionRecordSchemas: Object.freeze([1, 2]),
+  supportedSelfServiceMcpSchemas: Object.freeze([1]),
 });
 const fail = () => { throw new Error('Adaptive storage is incompatible with this release; current personalization controls must be preserved.'); };
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -521,9 +523,102 @@ function scanPetCare(env, required, budget) {
   } finally { dir.closeSync(); }
 }
 
+/** Only the committed generation is authoritative. Never revive orphan records or
+ * inspect broker credentials; the broker vault has its own deployment boundary. */
+function scanConnections(env, required, budget) {
+  const versions = new Set();
+  const identifier = value => boundedText(value, 200) && /^[\p{L}\p{N}_.:@/-]+$/u.test(value);
+  const configPath = env.STUDIO_CONNECTIONS_CONFIG_FILE?.trim();
+  let configDigest;
+  const verifyConfig = () => {
+    if (configPath && canonicalHash(readPlainJson(configPath, 512_000, budget)) !== configDigest) fail();
+  };
+  if (configPath) {
+    if (!isAbsolute(configPath)) fail();
+    const config = readPlainJson(configPath, 512_000, budget);
+    configDigest = canonicalHash(config);
+    if (!object(config) || config.schemaVersion !== 1 || !Array.isArray(config.profiles) || config.profiles.length > 500) fail();
+    if (Object.hasOwn(config, 'selfServiceMcp')) {
+      if (!object(config.selfServiceMcp)) fail();
+      required.selfServiceMcpSchema = 1; // Old strict parsers reject even disabled setup.
+    }
+    for (const profile of config.profiles) {
+      if (!object(profile)) fail();
+      if (Object.hasOwn(profile, 'agentId')) {
+        if (!identifier(profile.agentId)) fail();
+        versions.add(2); // Older strict configuration parsers reject even unused bound profiles.
+      }
+    }
+  }
+  const root = join(env.STUDIO_DATA_DIR, 'connections');
+  if (!safePath(root, 'directory', true)) {
+    verifyConfig();
+    if (versions.size) required.connectionRecordSchemas = [...versions].sort();
+    return;
+  }
+  const partitions = entries(root).sort();
+  const generation = name => typeof name === 'string' && name.startsWith('generation-') && uuid(name.slice(11));
+  let count = 0;
+  for (const partition of partitions) {
+    if (!digest(partition)) fail();
+    const directory = safePath(join(root, partition), 'directory');
+    const names = entries(directory, 100).sort();
+    if (names.includes('lock') || names.some(name => name !== 'current.json' && !generation(name))) fail();
+    for (const name of names.filter(generation)) safePath(join(directory, name), 'directory');
+    if (!names.includes('current.json')) continue; // Empty partition or abandoned, uncommitted generation.
+    const pointerPath = join(directory, 'current.json');
+    const pointer = readPlainJson(pointerPath, 256, budget);
+    if (!keys(pointer, ['generation']) || !generation(pointer.generation) || !names.includes(pointer.generation)) fail();
+    const records = safePath(join(directory, pointer.generation, 'connections'), 'directory');
+    const files = entries(records, 2000).sort();
+    for (const file of files) {
+      if (++count > MAX_ACCOUNTS || !/^[a-f0-9]{64}\.json$/.test(file)) fail();
+      const row = readPlainJson(join(records, file), 300_000, budget);
+      if (!object(row) || ![1, 2].includes(row.schemaVersion) || !identifier(row.id) ||
+          file !== `${hash(row.id)}.json` || !identifier(row.ownerAccountId) ||
+          !object(row.scope) || !['work', 'personal'].includes(row.scope.spaceKind) || !positive(row.revision) ||
+          row.partitionId !== hash(JSON.stringify([row.ownerAccountId, row.scope.spaceKind])) || hash(row.partitionId) !== partition ||
+          (row.schemaVersion === 1 ? Object.hasOwn(row, 'agentId') : !identifier(row.agentId))) fail();
+      versions.add(row.schemaVersion);
+      if (Object.hasOwn(row, 'mcp')) {
+        if (row.schemaVersion !== 2 || !keys(row.mcp, ['canonicalResourceUri', 'catalog']) ||
+            !boundedText(row.mcp.canonicalResourceUri, 2000) ||
+            row.mcp.catalog !== null && (!object(row.mcp.catalog) || row.mcp.catalog.schemaVersion !== 1)) fail();
+        required.selfServiceMcpSchema = 1;
+      }
+    }
+    // An account record can outlive its connection. Its new unavailable-identity
+    // disclosure must also block rollback to a strict historical parser.
+    const accounts = safePath(join(directory, pointer.generation, 'providerAccounts'), 'directory', true);
+    const accountFiles = accounts ? entries(accounts, 2000).sort() : [];
+    for (const file of accountFiles) {
+      if (++count > MAX_ACCOUNTS || !/^[a-f0-9]{64}\.json$/.test(file)) fail();
+      const row = readPlainJson(join(accounts, file), 300_000, budget);
+      if (!object(row) || row.schemaVersion !== 1 || !identifier(row.id) || file !== `${hash(row.id)}.json` ||
+          !identifier(row.ownerAccountId) || !object(row.scope) || !['work', 'personal'].includes(row.scope.spaceKind) ||
+          !positive(row.revision) || row.partitionId !== hash(JSON.stringify([row.ownerAccountId, row.scope.spaceKind])) ||
+          hash(row.partitionId) !== partition) fail();
+      if (Object.hasOwn(row, 'identityEvidence')) {
+        if (row.identityEvidence !== 'unavailable') fail();
+        required.selfServiceMcpSchema = 1;
+      }
+    }
+    // Recheck pointer and directory identities after the bounded read. Install
+    // repeats admission after quiescing the application before changing code.
+    if (canonical(readPlainJson(pointerPath, 256, budget)) !== canonical(pointer) ||
+        canonical(entries(directory, 100).sort()) !== canonical(names) ||
+        canonical(entries(records, 2000).sort()) !== canonical(files) ||
+        accounts && canonical(entries(accounts, 2000).sort()) !== canonical(accountFiles) ||
+        !accounts && safePath(join(directory, pointer.generation, 'providerAccounts'), 'directory', true)) fail();
+  }
+  if (canonical(entries(root).sort()) !== canonical(partitions)) fail();
+  verifyConfig();
+  if (versions.size) required.connectionRecordSchemas = [...versions].sort();
+}
+
 export function requiredAdaptiveCapabilities(env) {
   try { safePath(env.STUDIO_DATA_DIR, 'directory', true); const required = coreCapabilities(env), budget = { bytes: 0 };
-    scanAdaptive(env, required, budget); scanSeparate(env, required, budget); scanImprovement(env, required, budget); scanPetCare(env, required, budget); return required;
+    scanAdaptive(env, required, budget); scanSeparate(env, required, budget); scanImprovement(env, required, budget); scanPetCare(env, required, budget); scanConnections(env, required, budget); return required;
   } catch { fail(); }
 }
 
@@ -550,9 +645,16 @@ export function assertReleaseAdaptiveCompatibility(env, manifest) {
     ['supportedGuestRightsLedgerSchemas', 'guestRightsLedgerSchema', [1]],
     ['supportedImprovementWorkflowSchemas', 'improvementWorkflowSchema', [1, 2]],
     ['supportedPetCareSchemas', 'petCareSchema', [1]],
+    ['supportedSelfServiceMcpSchemas', 'selfServiceMcpSchema', [1]],
   ]) {
     const versions = Object.hasOwn(supported, field) ? supported[field] : ['supportedRightsLedgerVersions', 'supportedImprovementWorkflowSchemas'].includes(field) ? [1] : [];
     if (!Array.isArray(versions) || versions.length > allowed.length || new Set(versions).size !== versions.length || versions.some(v => !allowed.includes(v)) || required[requiredKey] !== undefined && !versions.includes(required[requiredKey])) fail();
   }
+  // Historical releases support only legacy unbound schema1 records. A new
+  // bound-agent record must block their rollback even if the feature is off.
+  const connectionVersions = Object.hasOwn(supported, 'supportedConnectionRecordSchemas') ? supported.supportedConnectionRecordSchemas : [1];
+  if (!Array.isArray(connectionVersions) || connectionVersions.length > 2 || new Set(connectionVersions).size !== connectionVersions.length ||
+      connectionVersions.some(version => ![1, 2].includes(version)) ||
+      (required.connectionRecordSchemas ?? []).some(version => !connectionVersions.includes(version))) fail();
   return required;
 }

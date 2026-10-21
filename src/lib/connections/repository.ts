@@ -17,10 +17,12 @@ export function canonical(value: unknown): string {
 }
 export const digest = (value: unknown): string => createHash('sha256').update(canonical(value)).digest('hex');
 export class ConnectionsRepository {
-  constructor(readonly storage: ConnectionsStorage) {}
-  transaction<T>(context: ConnectionContext, mutate: (records: ConnectionsRecords) => T): Promise<T> {
+  constructor(readonly storage: ConnectionsStorage, private readonly assertCurrent?: (context: ConnectionContext) => void) {}
+  async transaction<T>(context: ConnectionContext, mutate: (records: ConnectionsRecords) => T): Promise<T> {
     const partitionId = partitionIdFor(context.accountId, context.scope.spaceKind);
-    return this.storage.transact(partitionId, current => {
+    this.assertCurrent?.(context);
+    const result = await this.storage.transact(partitionId, current => {
+      this.assertCurrent?.(context);
       const records = {} as ConnectionsRecords;
       for (const name of CONNECTION_COLLECTIONS) {
         const rows = current[name].map(row => recordSchemas[name].parse(row));
@@ -43,7 +45,10 @@ export class ConnectionsRepository {
         if (row.partitionId !== partitionId || row.ownerAccountId !== context.accountId || row.ownerPersonId !== context.personId ||
             row.scope.tenantId !== context.scope.tenantId || row.scope.spaceId !== context.scope.spaceId || row.scope.containerId !== context.scope.containerId || row.scope.spaceKind !== context.scope.spaceKind) deny('corrupt_partition', 500);
       }
+      this.assertCurrent?.(context);
       return { records, result };
     });
+    this.assertCurrent?.(context);
+    return result;
   }
 }

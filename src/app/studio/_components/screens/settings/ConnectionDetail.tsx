@@ -11,13 +11,16 @@ import { ErrorBanner, GrantSheet, SetupSheet, TaskSheet, lifecycleTone, useConne
  * One connected account (UI §4.13): who may use it and for what (each grant revocable with a confirmation),
  * ask an agent a question about it, and a separate danger group to disconnect.
  */
-export function ConnectionDetailPage({ connectionId, agentId }: { connectionId: string; agentId?: string }) {
-  const x = useConnections();
+export function ConnectionDetailPage(props: { connectionId: string; agentId?: string }) {
+  return <ScopedConnectionDetail key={`${props.connectionId}:${props.agentId ?? 'account'}`} {...props} />;
+}
+function ScopedConnectionDetail({ connectionId, agentId }: { connectionId: string; agentId?: string }) {
+  const x = useConnections(agentId);
   const { c, data, fa } = x;
   const confirm = useConfirm();
   const setup = useSetup(x);
   const [sheet, setSheet] = useState<'grant' | 'task' | null>(null);
-  const connection = data?.connections.find(item => item.id === connectionId) ?? null;
+  const connection = data?.connections.find(item => item.id === connectionId && (!agentId || item.agentId === agentId)) ?? null;
   const provider = data?.providers.find(p => p.id === connection?.providerId);
   const grants = data?.grants.filter(g => g.connectionId === connectionId && g.status !== 'revoked' && (!agentId || g.agentId === agentId)) ?? [];
   const agentIds = [...new Set(grants.map(g => g.agentId))];
@@ -32,7 +35,7 @@ export function ConnectionDetailPage({ connectionId, agentId }: { connectionId: 
   const disconnect = async () => {
     if (!connection) return;
     const ok = await confirm({ title: fa ? `اتصال ${connection.displayLabel} قطع شود؟` : `Disconnect ${connection.displayLabel}?`,
-      body: fa ? 'دسترسی همهٔ عامل‌ها به این حساب متوقف می‌شود. پاک‌سازی سرویس ممکن است کمی طول بکشد.' : 'Every agent loses access to this account. Provider cleanup may take a little longer.',
+      body: connection.agentId ? (fa ? 'دسترسی همین عامل به این اتصال متوقف می‌شود. پاک‌سازی سرویس ممکن است کمی طول بکشد.' : 'This agent loses access to this connection. Provider cleanup may take a little longer.') : fa ? 'دسترسی همهٔ عامل‌ها به این حساب متوقف می‌شود. پاک‌سازی سرویس ممکن است کمی طول بکشد.' : 'Every agent loses access to this account. Provider cleanup may take a little longer.',
       confirmLabel: c.disconnect, cancelLabel: fa ? 'نگه داشتن' : 'Keep', tone: 'danger' });
     if (!ok) return;
     const done = await x.act(async () => { await connectionsApi.revoke(x.space, connection.id, connection.revision); await x.reload(); });
@@ -50,12 +53,13 @@ export function ConnectionDetailPage({ connectionId, agentId }: { connectionId: 
         <div className="vx-conn-head-main">
           <h1 className="vx-title-m">{connection.displayLabel}</h1>
           <span className="vx-row-sub">{provider?.name ?? connection.providerId}{connection.checkedAt ? ` · ${x.when(connection.checkedAt)}` : ''}</span>
+          {connection.agentId && <span className="vx-row-sub">{c.agent}: {x.agentName(connection.agentId)}</span>}
         </div>
         <span className={`vx-pill${lifecycleTone(connection.lifecycle) ? ` ${lifecycleTone(connection.lifecycle)}` : ''}`}>{c[connection.lifecycle]}</span>
       </header>
       {connection.health !== 'healthy' && connection.health !== 'unknown' && <Banner tone="warn">{c.health}: <bdi>{connection.health.replace(/_/g, ' ')}</bdi></Banner>}
       {connection.lifecycle === 'pending' && <Section>
-        <Row plain lead={<IconTile name="plug" tone="warn" />} title={c.finish} sub={c.returnNote} chevron disabled={x.busy} onClick={() => void setup.start(connection)} />
+        <Row plain lead={<IconTile name="plug" tone="warn" />} title={connection.mcp ? (fa ? 'برای تکمیل اتصال، مینی‌اپ تلگرام همین عامل را باز کنید.' : 'Open this agent’s Telegram Mini App to finish setup.') : c.finish} sub={c.returnNote} chevron disabled={x.busy || !!connection.mcp} onClick={() => void setup.start(connection)} />
       </Section>}
 
       <Section title={c.grants} foot={live && !grants.length ? c.zero : undefined}>
@@ -77,7 +81,7 @@ export function ConnectionDetailPage({ connectionId, agentId }: { connectionId: 
         <Row plain lead={<IconTile name="chat" />} title={c.task} chevron disabled={x.busy || !grants.length || data.canRunTasks === false} onClick={() => setSheet('task')} />
       </Section>}
 
-      {['connected', 'pending', 'paused'].includes(connection.lifecycle) && <Section>
+      {(!agentId || connection.agentId === agentId) && ['connected', 'pending', 'paused'].includes(connection.lifecycle) && <Section>
         <Row tone="danger" lead={<Icon name="close" size={20} />} title={c.disconnect} disabled={x.busy} onClick={() => void disconnect()} />
       </Section>}
 

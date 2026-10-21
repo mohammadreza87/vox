@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { canonicalMcpUrl } from './mcp/transport';
+import { mcpCatalogSnapshotSchema, type McpCatalogSnapshot } from './mcp/catalog';
 
 export const CONNECTIONS_SCHEMA_VERSION = 1 as const;
 export const CONNECTIONS_POLICY_VERSION = 'connections-v1';
@@ -14,25 +16,40 @@ const space = z.enum(['work', 'personal']);
 export const scopeSchema = z.object({ tenantId: idSchema, spaceId: idSchema, spaceKind: space,
   containerId: idSchema, audiencePersonIds: ids, audienceRevision: idSchema }).strict();
 export type ScopeBinding = z.infer<typeof scopeSchema>;
-export interface ConnectionActor { accountId: string }
+export interface ConnectionActor { accountId: string;
+  /** Minted by route-scoped bot authentication or signed broker control, never browser input. */
+  botAgentId?: string; botAuthenticationRevision?: string;
+}
 /** Returned only by authoritative authenticated-person/scope middleware. Never wire input. */
 export interface ConnectionContext {
   accountId: string; personId: string; bindingId: string; bindingRevision: number; bindingExpiresAt: number;
-  scope: ScopeBinding; currentAgentIds: readonly string[];
+  scope: ScopeBinding; currentAgentIds: readonly string[]; botAgentId?: string; botAuthenticationRevision?: string;
 }
 const base = { schemaVersion: z.literal(1), id: idSchema, partitionId: idSchema, revision, createdAt: integer,
   updatedAt: integer, retentionUntil: integer };
 const scoped = { ...base, ownerAccountId: idSchema, ownerPersonId: idSchema, scope: scopeSchema };
 export const providerAccountSchema = z.object({ ...scoped, providerId: idSchema, issuer: z.string().url().max(500),
-  providerSubject: idSchema, providerTenantId: idSchema, displayLabel: label, status: z.enum(['active', 'revoked']) }).strict();
+  providerSubject: idSchema, providerTenantId: idSchema, displayLabel: label, status: z.enum(['active', 'revoked']), identityEvidence: z.literal('unavailable').optional() }).strict();
 export type ProviderAccountRecord = z.infer<typeof providerAccountSchema>;
-export const connectionSchema = z.object({ ...scoped, providerId: idSchema, displayLabel: label,
+const legacyConnectionSchema = z.object({ ...scoped, providerId: idSchema, displayLabel: label,
   providerAccountId: idSchema.nullable(), adapterId: idSchema, adapterVersion: idSchema,
   catalogDigest: idSchema, endpointProfileId: idSchema, providerScopes: z.array(idSchema).max(100),
   lifecycle: z.enum(['pending', 'connected', 'paused', 'revoked', 'deleted']), revocationEpoch: integer,
   health: z.enum(['unknown', 'healthy', 'degraded', 'reauth_required', 'scope_required', 'policy_blocked', 'unavailable']),
   checkedAt: integer.nullable() }).strict();
+const agentConnectionSchema = legacyConnectionSchema.extend({ schemaVersion: z.literal(2), agentId: idSchema,
+  mcp: z.object({ canonicalResourceUri: z.string().max(2000), catalog: mcpCatalogSnapshotSchema.nullable() }).strict().optional(),
+}).superRefine((value, context) => {
+  if ((value.providerId === 'remote_mcp') !== !!value.mcp) context.addIssue({ code: 'custom', message: 'MCP metadata/provider mismatch' });
+  if (value.mcp) {
+    try { if (canonicalMcpUrl(value.mcp.canonicalResourceUri) !== value.mcp.canonicalResourceUri || value.mcp.catalog && value.mcp.catalog.resource !== value.mcp.canonicalResourceUri) throw new Error(); }
+    catch { context.addIssue({ code: 'custom', message: 'MCP resource binding mismatch' }); }
+  }
+});
+export const connectionSchema = z.discriminatedUnion('schemaVersion', [legacyConnectionSchema, agentConnectionSchema]);
 export type ConnectionRecord = z.infer<typeof connectionSchema>;
+/** Legacy connections stay unbound; no automatic assignment or credential reuse. */
+export const connectionAgentId = (connection: { id: string; agentId?: string }): string | undefined => connection.agentId;
 export const grantSchema = z.object({ ...scoped, connectionId: idSchema, agentId: idSchema, toolIds: ids,
   resourceIds: ids, destinationIds: ids, effects: z.array(z.enum(EFFECTS)).min(1).max(6),
   purpose: z.literal('explicit.connection_task'), purposeVersion: z.literal(1),
@@ -144,8 +161,8 @@ export interface ConnectionsCatalog {
   /** Code-owned resource mapping; never model/client authority. */
   mapResources(toolId: string, args: Record<string, unknown>): readonly string[];
 }
-export const listInputSchema = z.object({ space }).strict();
-export const enrollmentInputSchema = z.object({ space, providerId: idSchema, displayLabel: label }).strict();
+export const listInputSchema = z.object({ space, agentId: idSchema.optional() }).strict();
+export const enrollmentInputSchema = z.object({ space, agentId: idSchema.optional(), providerId: idSchema, displayLabel: label }).strict();
 export const grantInputSchema = z.object({ space, connectionId: idSchema, expectedRevision: revision,
   agentId: idSchema, toolIds: ids, resourceIds: ids, destinationIds: ids, effects: z.array(z.enum(EFFECTS)).min(1).max(6),
   expiresAt: integer, maxCalls: integer.min(1).max(1000), maxBytes: integer.min(1).max(10_000_000) }).strict();
@@ -161,7 +178,7 @@ export type EnrollmentInput = z.infer<typeof enrollmentInputSchema>;
 export type GrantInput = z.infer<typeof grantInputSchema>;
 export type ProposeInput = z.infer<typeof proposeInputSchema>;
 /** Explicit allowlist: credential handles, payloads, provider subjects and source labels never enter client views. */
-export type ConnectionView = Pick<ConnectionRecord, 'id' | 'providerId' | 'displayLabel' | 'revision' | 'lifecycle' | 'health' | 'checkedAt' | 'revocationEpoch'>;
+export type ConnectionView = Pick<ConnectionRecord, 'id' | 'providerId' | 'displayLabel' | 'revision' | 'lifecycle' | 'health' | 'checkedAt' | 'revocationEpoch'> & { agentId?: string; mcp?: { canonicalResourceUri: string; catalog: McpCatalogSnapshot | null } };
 export interface OperationReceipt {
   schemaVersion: 1; operationId: string; requestId: string; revision: number; state: OperationState;
   effect: Effect; toolId: string; agentId: string; proposalDigest: string; resourceIds: string[];

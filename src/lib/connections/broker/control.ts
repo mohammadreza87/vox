@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { mcpCatalogSnapshotSchema } from '../mcp/catalog';
 import { idSchema, type ConnectionActor, type ConnectionContext, type ConnectionRecord, type ConnectionGrantRecord, type ConnectionSubscription, type ProviderAccountRecord, type OperationRecord, type SpaceKind } from '../contracts';
 import { assertOwner } from '../policy';
 import { ConnectionsError } from '../errors';
@@ -7,7 +8,8 @@ import type { OperationClaim } from '../operations';
 import { verifiedEventSchema, registerSubscriptionSchema } from '../events/contracts';
 import { ConnectionsWorkflowService } from '../workflows/service';
 import type { BrokerJsonClient } from './auth';
-const actor = z.object({ accountId: idSchema }).strict();
+const actor = z.object({ accountId: idSchema, botAgentId: idSchema.optional(), botAuthenticationRevision: idSchema.optional() }).strict()
+  .refine(value => !!value.botAgentId === !!value.botAuthenticationRevision);
 const space = z.enum(['work', 'personal']);
 const base = { actor, space };
 const lease = { ...base, operationId: idSchema, workerId: idSchema, fence: z.number().int().positive() };
@@ -24,6 +26,9 @@ export const brokerControlSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('settle'), ...lease, outcome: z.enum(['committed', 'verified', 'failed', 'outcome_unknown']), providerReceiptRef: idSchema.optional() }).strict(),
   z.object({ action: z.literal('assertDispatchable'), ...base, operationId: idSchema }).strict(),
   z.object({ action: z.literal('assertUsable'), ...base, operationId: idSchema }).strict(),
+  z.object({ action: z.literal('completeMcpEnrollment'), ...base, connectionId: idSchema, expectedRevision: z.number().int().positive(),
+    catalog: mcpCatalogSnapshotSchema, issuer: z.string().url().max(2000), providerSubject: idSchema, providerTenantId: idSchema,
+    providerScopes: z.array(idSchema).max(100), displayLabel: z.string().min(1).max(160), identityEvidence: z.literal('unavailable') }).strict(),
   z.object({ action: z.literal('completeEnrollment'), ...base, connectionId: idSchema, expectedRevision: z.number().int().positive(),
     issuer: z.string().url().max(500), providerSubject: idSchema, providerTenantId: idSchema, providerScopes: z.array(idSchema).max(100), displayLabel: z.string().min(1).max(160) }).strict(),
   z.object({ action: z.literal('registerResult'), ...base, operationId: idSchema, resourceId: idSchema, resourceRevision: idSchema }).strict(),
@@ -31,7 +36,7 @@ export const brokerControlSchema = z.discriminatedUnion('action', [
 export type BrokerControlInput = z.infer<typeof brokerControlSchema>;
 export interface BrokerSubscriptionAuthority extends BrokerAuthority { subscription: ConnectionSubscription }
 export interface BrokerGrantAuthority extends BrokerAuthority { grant: ConnectionGrantRecord }
-export interface BrokerAuthority { context: ConnectionContext; connection: ConnectionRecord; providerAccount?: ProviderAccountRecord }
+export interface BrokerAuthority { providerEnabled?: boolean; context: ConnectionContext; connection: ConnectionRecord; providerAccount?: ProviderAccountRecord }
 export interface BrokerControlPlane {
   call<T>(input: BrokerControlInput): Promise<T>;
 }
@@ -75,6 +80,7 @@ export async function dispatchBrokerControl(service: ConnectionsService, input: 
     case 'settle': return service.operations.settle(currentActor, parsed);
     case 'assertDispatchable': await service.operations.assertDispatchable(currentActor, currentSpace, parsed.operationId); return { allowed: true };
     case 'assertUsable': await service.operations.assertUsable(currentActor, currentSpace, parsed.operationId); return { allowed: true };
+    case 'completeMcpEnrollment': await service.completeMcpEnrollment(currentActor, parsed); return { completed: true };
     case 'completeEnrollment': await service.completeEnrollment(currentActor, parsed); return { completed: true };
     case 'registerResult': return service.lineage.registerResult(currentActor, parsed);
   }

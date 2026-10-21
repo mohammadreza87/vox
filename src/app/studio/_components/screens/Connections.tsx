@@ -10,16 +10,21 @@ import { Activity, AddServiceSheet, ErrorBanner, ReviewSheet, SetupSheet, lifecy
  * Connections (UI §4.13): one row per connected account, each pushing its detail page; actions waiting for your review;
  * scheduled checks; recent activity. Language and space are app-level (nav).
  */
-export function ConnectionsScreen({ agentId }: { onBack?: () => void; agentId?: string }) {
-  const x = useConnections();
+export function ConnectionsScreen(props: { onBack?: () => void; agentId?: string }) {
+  return <AgentConnectionsScreen key={props.agentId ?? 'account'} {...props} />;
+}
+function AgentConnectionsScreen({ agentId }: { onBack?: () => void; agentId?: string }) {
+  const x = useConnections(agentId);
   const { c, data } = x;
   const setup = useSetup(x);
   const [adding, setAdding] = useState(false);
   const [review, setReview] = useState<Review | null>(null);
   const first = useFirstLoad(!!data);
-  const visible = data?.connections.filter(connection => connection.lifecycle !== 'deleted') ?? [];
+  const visible = data?.connections.filter(connection => connection.lifecycle !== 'deleted' && (!agentId || connection.agentId === agentId)) ?? [];
   const grantsFor = (id: string) => data?.grants.filter(g => g.connectionId === id && g.status !== 'revoked' && (!agentId || g.agentId === agentId)) ?? [];
   const sub = (id: string) => {
+    const bound = data?.connections.find(connection => connection.id === id)?.agentId;
+    if (bound) return `${x.agentName(bound)} · ${grantsFor(id).length ? (x.fa ? 'دسترسی دارد' : 'Access allowed') : c.noAccess}`;
     const agents = new Set(grantsFor(id).map(g => g.agentId)).size;
     return agents ? (x.fa ? `${agents.toLocaleString('fa-IR')} عامل` : `${agents} agent${agents === 1 ? '' : 's'}`) : c.noAccess;
   };
@@ -31,7 +36,7 @@ export function ConnectionsScreen({ agentId }: { onBack?: () => void; agentId?: 
       {!data.enabled && <Banner tone="info">{c.unavailable}</Banner>}
       {setup.pending && !setup.open && <Banner tone="info" icon="plug" action={<button type="button" className="vx-btn vx-btn-secondary vx-btn-xs" onClick={() => setup.setOpen(true)}>{c.finish}</button>}>{c.waiting}</Banner>}
       <Enter i={0} first={first}>
-        <Section title={x.fa ? 'حساب‌های متصل' : 'Your connections'} foot={c.intro}>
+        <Section title={agentId && data.agents.some(a => a.id === agentId) ? `${x.agentName(agentId)} · ${c.title}` : x.fa ? 'حساب‌های متصل' : 'Your connections'} foot={agentId ? (x.fa ? 'اتصال‌ها و منابع این عامل جداگانه انتخاب می‌شوند.' : 'Choose this agent’s accounts and resources separately.') : c.intro}>
           {!visible.length && <div className="vx-row"><span className="vx-row-sub">{c.empty}</span></div>}
           {visible.map(connection => {
             const tone = lifecycleTone(connection.lifecycle);
@@ -39,7 +44,7 @@ export function ConnectionsScreen({ agentId }: { onBack?: () => void; agentId?: 
             return <Row key={connection.id} size="l" chevron lead={<LetterTile text={connection.displayLabel} />} title={connection.displayLabel}
               sub={attention ? `${c.health}: ${connection.health.replace(/_/g, ' ')}` : sub(connection.id)} subTone={attention ? 'warn' : undefined}
               end={<span className={`vx-pill${tone ? ` ${tone}` : ''}`}>{c[connection.lifecycle]}</span>}
-              onClick={() => x.nav.push({ name: 'settings', page: 'connection', params: { connectionId: connection.id, ...(agentId ? { agentId } : {}) } })} />;
+              onClick={() => x.nav.push({ name: 'settings', page: 'connection', params: { connectionId: connection.id, ...(connection.agentId ? { agentId: connection.agentId } : agentId ? { agentId } : {}) } })} />;
           })}
           <Row plain lead={<span className="vx-tile icon vx-tile-add" aria-hidden="true"><Icon name="plus" size={20} /></span>} title={c.add}
             disabled={x.busy} onClick={() => setAdding(true)} />

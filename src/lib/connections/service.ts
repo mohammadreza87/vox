@@ -1,9 +1,12 @@
 import { randomUUID } from 'crypto';
-import { CONNECTIONS_POLICY_VERSION, enrollmentInputSchema, grantInputSchema, listInputSchema, revokeInputSchema,
+import { CONNECTIONS_POLICY_VERSION, connectionSchema, enrollmentInputSchema, grantInputSchema, listInputSchema, revokeInputSchema,
   proposeInputSchema, approveInputSchema, cancelInputSchema, type ConnectionActor, type ConnectionContext,
   type ConnectionsCatalog, type ConnectionsRecords, type ConnectionsSnapshot, type ConnectionRecord,
-  type OperationRecord, type OperationReceipt, type SpaceKind, type SourceLabel, type ReviewedTool } from './contracts';
+  type OperationRecord, type OperationReceipt, type SpaceKind, type SourceLabel, type ReviewedTool, connectionAgentId, idSchema } from './contracts';
 import { ConnectionsRepository, digest, canonical, partitionIdFor } from './repository';
+import { canonicalMcpUrl } from './mcp/transport';
+import { createPendingMcpCatalog, McpConnectionsCatalog, mcpCatalogSnapshotSchema, type McpCatalogSnapshot } from './mcp/catalog';
+import { z } from 'zod';
 import { assertContext, assertOwner, assertGrant, assertSourceUse, assertCurrentOperation } from './policy';
 import { deny } from './errors';
 import { OperationsLedger, EphemeralPayloads } from './operations';
@@ -13,8 +16,11 @@ export const RECEIPT_RETENTION_MS = 90 * DAY;
 export const MAX_OPERATION_LIFETIME_MS = 15 * 60_000;
 export interface ConnectionsServiceOptions {
   resolveContext: (actor: ConnectionActor, space: SpaceKind) => Promise<ConnectionContext | undefined>;
+  assertContextCurrent?: (actor: ConnectionActor, context: ConnectionContext) => void;
   catalog: ConnectionsCatalog; now?: () => number;
   singleConnectionPerProvider?: boolean;
+  catalogForAgent?: (agentId: string | undefined) => ConnectionsCatalog;
+  catalogForConnection?: (connection: { id: string; agentId?: string; providerId?: string; mcp?: { canonicalResourceUri: string; catalog: McpCatalogSnapshot | null } }) => ConnectionsCatalog;
 }
 export const baseRecord = (context: ConnectionContext, now: number, retentionUntil = now + RECEIPT_RETENTION_MS) => ({
   schemaVersion: 1 as const, id: randomUUID(), partitionId: partitionIdFor(context.accountId, context.scope.spaceKind), revision: 1,
@@ -43,7 +49,8 @@ export function resolveSources(records: ConnectionsRecords, sourceIds: readonly 
     if (!connection || !grant || connection.lifecycle !== 'connected' || connection.revocationEpoch !== source.connectionEpoch ||
         grant.status !== 'active' || grant.revision !== source.grantRevision || grant.expiresAt <= now ||
         grant.bindingRevision !== context.bindingRevision || grant.connectionRevision !== connection.revision ||
-        grant.ownerPersonId !== context.personId || !context.currentAgentIds.includes(grant.agentId) || records.tombstones.some(t => t.sourceId === source.id ||
+        grant.ownerPersonId !== context.personId || !context.currentAgentIds.includes(grant.agentId) ||
+        connection.schemaVersion === 2 && connection.agentId !== grant.agentId || records.tombstones.some(t => t.sourceId === source.id ||
           (t.connectionId === source.connectionId && t.reason === 'disconnect'))) deny('source_revoked');
     for (const parentId of source.parentSourceIds) resolve(parentId);
     visiting.delete(id); validated.add(id);
@@ -52,7 +59,7 @@ export function resolveSources(records: ConnectionsRecords, sourceIds: readonly 
   return sourceIds.map(resolve);
 }
 export function currentOperation(records: ConnectionsRecords, context: ConnectionContext, operation: OperationRecord,
-  catalog: ConnectionsCatalog, now: number): ReviewedTool {
+  catalog: ConnectionsCatalog | ((connection: ConnectionRecord) => ConnectionsCatalog), now: number): ReviewedTool {
   if (operation.workflowId) {
     const workflow = records.workflows.find(w => w.id === operation.workflowId);
     const occurrence = records.occurrences.find(o => o.id === operation.occurrenceId && o.workflowId === workflow?.id);
@@ -62,7 +69,7 @@ export function currentOperation(records: ConnectionsRecords, context: Connectio
   }
   const connection = records.connections.find(c => c.id === operation.connectionId);
   const grant = records.grants.find(g => g.id === operation.grantId);
-  const tool = catalog.get(operation.toolId);
+  const tool = connection && (typeof catalog === 'function' ? catalog(connection) : catalog).get(operation.toolId);
   if (!connection || !grant || !tool) return deny('operation_unavailable', 404);
   assertCurrentOperation(context, operation, connection, grant, tool, resolveSources(records, operation.sourceIds, context, now), now);
   return tool;
@@ -81,38 +88,103 @@ export class ConnectionsService {
     this.operations = new OperationsLedger(this);
     this.lineage = new ConnectionsLineage(this);
   }
+  readonly catalogForConnection = (connection: { id: string; agentId?: string; mcp?: { canonicalResourceUri: string; catalog: McpCatalogSnapshot | null } }): ConnectionsCatalog =>
+    connection.mcp ? (connection.mcp.catalog ? new McpConnectionsCatalog(connection.mcp.catalog) : createPendingMcpCatalog(connection.mcp.canonicalResourceUri)) :
+      this.options.catalogForConnection?.(connection) ?? this.options.catalogForAgent?.(connectionAgentId(connection)) ?? this.options.catalog;
   async context(actor: ConnectionActor, space: SpaceKind): Promise<ConnectionContext> {
     const context = await this.options.resolveContext(actor, space);
-    if (!context || context.scope.spaceKind !== space) return deny('identity_unverified');
+    if (!context || context.scope.spaceKind !== space || actor.botAgentId !== context.botAgentId) return deny('identity_unverified');
     assertContext(context, actor.accountId, this.now());
+    this.assertContextCurrent(actor, context);
     return structuredClone(context);
   }
+  assertContextCurrent(actor: ConnectionActor, context: ConnectionContext): void { this.options.assertContextCurrent?.(actor, context); }
   async list(actor: ConnectionActor, input: unknown): Promise<ConnectionsSnapshot> {
     const parsed = listInputSchema.parse(input);
     const context = await this.context(actor, parsed.space);
-    return this.repository.transaction(context, records => ({ schemaVersion: 1, scope: context.scope,
-      connections: records.connections.filter(c => c.lifecycle !== 'deleted').map(c => {
-        assertOwner(context, c);
-        return { id: c.id, providerId: c.providerId, displayLabel: c.displayLabel, revision: c.revision,
-          lifecycle: c.lifecycle, health: c.health, checkedAt: c.checkedAt, revocationEpoch: c.revocationEpoch };
-      }), grants: records.grants.filter(g => g.status === 'active'), operations: records.operations.map(operationReceipt) }));
+    if (context.botAgentId && parsed.agentId && context.botAgentId !== parsed.agentId) deny('agent_connection_mismatch');
+    if (parsed.agentId && !context.currentAgentIds.includes(parsed.agentId)) deny('agent_unavailable');
+    return this.repository.transaction(context, records => {
+      const agentId = context.botAgentId ?? parsed.agentId;
+      const selected = records.connections.filter(c => c.lifecycle !== 'deleted' && (!agentId || connectionAgentId(c) === agentId));
+      const ids = new Set(selected.map(c => c.id));
+      return { schemaVersion: 1, scope: context.scope,
+        connections: selected.map(c => {
+          assertOwner(context, c);
+          return { id: c.id, providerId: c.providerId, displayLabel: c.displayLabel, revision: c.revision,
+            lifecycle: c.lifecycle, health: c.health, checkedAt: c.checkedAt, revocationEpoch: c.revocationEpoch,
+            ...(c.schemaVersion === 2 ? { agentId: c.agentId, ...(c.mcp ? { mcp: c.mcp } : {}) } : {}) };
+        }), grants: records.grants.filter(g => g.status === 'active' && ids.has(g.connectionId)),
+        operations: records.operations.filter(o => ids.has(o.connectionId)).map(operationReceipt) };
+    });
   }
   async enroll(actor: ConnectionActor, input: unknown): Promise<ConnectionsSnapshot> {
     const parsed = enrollmentInputSchema.parse(input);
     const context = await this.context(actor, parsed.space);
-    const provider = this.options.catalog.provider(parsed.providerId);
+    if (parsed.agentId && !context.currentAgentIds.includes(parsed.agentId)) deny('agent_unavailable');
+    if (context.botAgentId && parsed.agentId !== context.botAgentId) deny('agent_connection_mismatch');
+    const provider = (this.options.catalogForAgent?.(parsed.agentId) ?? this.options.catalog).provider(parsed.providerId);
     if (!provider) return deny('provider_unavailable', 404);
     const now = this.now();
     await this.repository.transaction(context, records => {
-      if (this.options.singleConnectionPerProvider && records.connections.some(c => c.providerId === parsed.providerId && !['revoked', 'deleted'].includes(c.lifecycle))) deny('connection_exists', 409);
+      if (this.options.singleConnectionPerProvider && records.connections.some(c => c.providerId === parsed.providerId && connectionAgentId(c) === parsed.agentId && !['revoked', 'deleted'].includes(c.lifecycle))) deny('connection_exists', 409);
       if (records.connections.filter(c => c.lifecycle !== 'deleted').length >= 50) deny('connection_limit', 409);
-      const connection: ConnectionRecord = { ...baseRecord(context, now), providerId: parsed.providerId,
+      const connection = connectionSchema.parse({ ...baseRecord(context, now), ...(parsed.agentId ? { schemaVersion: 2 as const, agentId: parsed.agentId } : {}), providerId: parsed.providerId,
         displayLabel: parsed.displayLabel, providerAccountId: null, ...provider, providerScopes: [],
-        lifecycle: 'pending', revocationEpoch: 0, health: 'unknown', checkedAt: null };
+        lifecycle: 'pending', revocationEpoch: 0, health: 'unknown', checkedAt: null });
       records.connections.push(connection);
       audit(records, context, now, 'connection_enrolled', connection.id);
     });
-    return this.list(actor, { space: parsed.space });
+    return this.list(actor, { space: parsed.space, ...(parsed.agentId ? { agentId: parsed.agentId } : {}) });
+  }
+  /** Explicit self-service URL only; registration does not contact a provider or grant tools. */
+  async enrollMcp(actor: ConnectionActor, input: unknown): Promise<ConnectionsSnapshot> {
+    const parsed = z.object({ space: z.enum(['work', 'personal']), agentId: idSchema, endpointUrl: z.string().max(2000),
+      displayLabel: z.string().trim().min(1).max(160) }).strict().parse(input);
+    const context = await this.context(actor, parsed.space);
+    if (!context.currentAgentIds.includes(parsed.agentId) || context.botAgentId && context.botAgentId !== parsed.agentId) return deny('agent_connection_mismatch');
+    const resource = canonicalMcpUrl(parsed.endpointUrl), provider = createPendingMcpCatalog(resource).provider('remote_mcp')!;
+    const now = this.now();
+    await this.repository.transaction(context, records => {
+      if (records.connections.some(c => c.schemaVersion === 2 && c.agentId === parsed.agentId && c.mcp?.canonicalResourceUri === resource && !['revoked', 'deleted'].includes(c.lifecycle))) deny('connection_exists', 409);
+      if (records.connections.filter(c => c.lifecycle !== 'deleted').length >= 50) deny('connection_limit', 409);
+      records.connections.push(connectionSchema.parse({ ...baseRecord(context, now), schemaVersion: 2, agentId: parsed.agentId,
+        providerId: 'remote_mcp', displayLabel: parsed.displayLabel, providerAccountId: null, ...provider, providerScopes: [],
+        lifecycle: 'pending', revocationEpoch: 0, health: 'unknown', checkedAt: null, mcp: { canonicalResourceUri: resource, catalog: null } }));
+    });
+    return this.list(actor, { space: parsed.space, agentId: parsed.agentId });
+  }
+  /** Authenticated independent broker activation of the exact catalog the owner reviewed. */
+  async completeMcpEnrollment(actor: ConnectionActor, input: { space: SpaceKind; connectionId: string; expectedRevision: number;
+    catalog: McpCatalogSnapshot; issuer: string; providerSubject: string; providerTenantId: string; providerScopes: string[];
+    displayLabel: string; identityEvidence: 'unavailable' }): Promise<void> {
+    const catalog = mcpCatalogSnapshotSchema.parse(input.catalog), context = await this.context(actor, input.space), now = this.now();
+    await this.repository.transaction(context, records => {
+      const connection = records.connections.find(c => c.id === input.connectionId);
+      if (!connection) return deny('connection_unavailable', 404);
+      assertOwner(context, connection);
+      if (connection.schemaVersion !== 2 || !connection.mcp || connection.providerId !== 'remote_mcp' ||
+          !context.currentAgentIds.includes(connection.agentId) || catalog.resource !== connection.mcp.canonicalResourceUri ||
+          records.tombstones.some(t => t.connectionId === connection.id)) return deny('enrollment_stale', 409);
+      if (connection.lifecycle === 'connected') {
+        const account = records.providerAccounts.find(row => row.id === connection.providerAccountId);
+        if (connection.revision !== input.expectedRevision + 1 || connection.catalogDigest !== catalog.catalogDigest ||
+            !connection.mcp.catalog || canonical(connection.mcp.catalog) !== canonical(catalog) ||
+            canonical(connection.providerScopes) !== canonical(input.providerScopes) || !account || account.status !== 'active' ||
+            account.ownerAccountId !== context.accountId || account.ownerPersonId !== context.personId || account.providerId !== 'remote_mcp' ||
+            account.issuer !== input.issuer || account.providerSubject !== input.providerSubject || account.providerTenantId !== input.providerTenantId ||
+            account.identityEvidence !== 'unavailable' || input.identityEvidence !== 'unavailable') return deny('enrollment_stale', 409);
+        return;
+      }
+      if (connection.lifecycle !== 'pending' || connection.revision !== input.expectedRevision) return deny('enrollment_stale', 409);
+      const account = { ...baseRecord(context, now), providerId: 'remote_mcp', issuer: input.issuer, providerSubject: input.providerSubject,
+        providerTenantId: input.providerTenantId, displayLabel: input.displayLabel, status: 'active' as const, identityEvidence: 'unavailable' as const };
+      records.providerAccounts.push(account); connection.providerAccountId = account.id;
+      Object.assign(connection, new McpConnectionsCatalog(catalog).provider('remote_mcp'));
+      connection.mcp.catalog = catalog; connection.providerScopes = [...input.providerScopes]; connection.lifecycle = 'connected';
+      connection.health = 'healthy'; connection.checkedAt = now; connection.revision++; connection.updatedAt = now;
+      audit(records, context, now, 'mcp_authorization_activated', connection.id);
+    });
   }
   /** Broker-only verified callback; never expose this method as an HTTP action.
    * The adapter has already checked issuer, subject, tenant, exact scopes and callback binding.
@@ -146,10 +218,11 @@ export class ConnectionsService {
       if (!connection) return deny('connection_unavailable', 404);
       assertOwner(context, connection);
       if (connection.revision !== parsed.expectedRevision) deny('revision_conflict', 409);
+      if (connection.schemaVersion === 2 && connection.agentId !== parsed.agentId) deny('agent_connection_mismatch');
       if (connection.lifecycle !== 'connected' || !context.currentAgentIds.includes(parsed.agentId) || parsed.expiresAt <= now ||
           parsed.expiresAt > Math.min(now + 30 * DAY, context.bindingExpiresAt)) deny('grant_denied');
       for (const toolId of parsed.toolIds) {
-        const tool = this.options.catalog.get(toolId);
+        const tool = this.catalogForConnection(connection).get(toolId);
         if (!tool || tool.providerId !== connection.providerId || tool.catalogDigest !== connection.catalogDigest ||
             parsed.resourceIds.some(id => tool.resourceIds.length > 0 && !tool.resourceIds.includes(id)) || parsed.destinationIds.some(id => !tool.destinationIds.includes(id)) ||
             !parsed.effects.includes(tool.effect)) deny('grant_denied');
@@ -212,19 +285,23 @@ export class ConnectionsService {
     if (sourceIds.length > 100) deny('source_limit', 400);
     const context = await this.context(actor, parsed.space);
     const now = this.now();
-    const tool = this.options.catalog.get(parsed.toolId);
-    if (!tool) return deny('tool_unavailable', 404);
-    const args = this.options.catalog.validateArguments(tool.id, parsed.arguments);
-    const bytes = Buffer.byteLength(canonical(args));
-    if (bytes > tool.maxInputBytes || parsed.deadlineAt <= now || parsed.deadlineAt > now + MAX_OPERATION_LIFETIME_MS) deny('operation_limits', 400);
-    const resources = [...this.options.catalog.mapResources(tool.id, args)];
-    const inputDigest = digest(args);
     const ephemeralId = parsed.retention === 'ephemeral' ? randomUUID() : null;
-    let usedEphemeral = false;
+    let prepared: { args: Record<string, unknown>; inputDigest: string } | undefined;
     const receipt = await this.repository.transaction(context, records => {
       const connection = records.connections.find(c => c.id === parsed.connectionId);
       const grant = records.grants.find(g => g.id === parsed.grantId);
       if (!connection || !grant) return deny('connection_unavailable', 404);
+      assertOwner(context, connection);
+      if (connection.schemaVersion === 2 && connection.agentId !== parsed.agentId) deny('agent_connection_mismatch');
+      const catalog = this.catalogForConnection(connection);
+      const tool = catalog.get(parsed.toolId);
+      if (!tool) return deny('tool_unavailable', 404);
+      const args = catalog.validateArguments(tool.id, parsed.arguments);
+      const bytes = Buffer.byteLength(canonical(args));
+      if (bytes > tool.maxInputBytes || parsed.deadlineAt <= now || parsed.deadlineAt > now + MAX_OPERATION_LIFETIME_MS) deny('operation_limits', 400);
+      const resources = [...catalog.mapResources(tool.id, args)];
+      const inputDigest = digest(args);
+      prepared = undefined;
       assertGrant(context, connection, grant, tool, { agentId: parsed.agentId, resourceIds: resources, destinationId: parsed.destinationId, bytes }, now);
       const sources = resolveSources(records, sourceIds, context, now);
       assertSourceUse(context, sources, { agentId: parsed.agentId, destinationId: parsed.destinationId,
@@ -260,13 +337,13 @@ export class ConnectionsService {
       records.operations.push(operation);
       if (payload.kind === 'retained') records.payloads.push({ ...baseRecord(context, now, parsed.deadlineAt), id: argumentsRef,
         operationId, arguments: args, inputDigest, sourceIds, expiresAt: parsed.deadlineAt });
-      else usedEphemeral = true;
+      else prepared = { args, inputDigest };
       if (operation.state === 'queued') records.outbox.push({ ...baseRecord(context, now), operationId, kind: 'dispatch',
         status: 'pending', connectionId: connection.id, sourceIds, availableAt: now });
       audit(records, context, now, 'operation_proposed', operation.id, operation.id);
       return operationReceipt(operation);
     });
-    if (usedEphemeral && ephemeralId) this.ephemeral.put(ephemeralId, context, receipt.operationId, args, inputDigest, parsed.deadlineAt);
+    if (prepared && ephemeralId) this.ephemeral.put(ephemeralId, context, receipt.operationId, prepared.args, prepared.inputDigest, parsed.deadlineAt);
     return receipt;
   }
   /** Server-only runtime seam: lineage is the union of ALL context visible to this generation,
@@ -282,7 +359,7 @@ export class ConnectionsService {
       const operation = records.operations.find(o => o.id === parsed.operationId);
       if (!operation) return deny('operation_unavailable', 404);
       if (operation.revision !== parsed.expectedRevision) deny('revision_conflict', 409);
-      currentOperation(records, context, operation, this.options.catalog, this.now());
+      currentOperation(records, context, operation, this.catalogForConnection, this.now());
       const args = this.operations.argumentsFor(records, context, operation);
       return { receipt: operationReceipt(operation), arguments: args };
     });
@@ -295,7 +372,7 @@ export class ConnectionsService {
       const operation = records.operations.find(o => o.id === parsed.operationId);
       if (!operation) return deny('operation_unavailable', 404);
       if (operation.revision !== parsed.expectedRevision || operation.proposalDigest !== parsed.proposalDigest || operation.state !== 'needs_approval') deny('approval_stale', 409);
-      currentOperation(records, context, operation, this.options.catalog, now);
+      currentOperation(records, context, operation, this.catalogForConnection, now);
       this.operations.argumentsFor(records, context, operation);
       const approval = { ...baseRecord(context, now), operationId: operation.id, proposalDigest: operation.proposalDigest,
         approverPersonId: context.personId, bindingRevision: context.bindingRevision, expiresAt: Math.min(now + 5 * 60_000, operation.deadlineAt),

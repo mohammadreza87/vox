@@ -14,7 +14,7 @@ export class ConnectionsLineage {
     return this.service.repository.transaction(context, records => {
       const operation = records.operations.find(o => o.id === input.operationId);
       if (!operation || !['committed', 'verified'].includes(operation.state) || !operation.resourceIds.includes(input.resourceId)) return deny('result_unavailable');
-      currentOperation(records, context, operation, this.service.options.catalog, now);
+      currentOperation(records, context, operation, this.service.catalogForConnection, now);
       const grant = records.grants.find(g => g.id === operation.grantId)!;
       const parents = resolveSources(records, operation.sourceIds, context, now);
       // No memory authority is inferred from an operation grant. A separate reviewed memory bridge must grant it.

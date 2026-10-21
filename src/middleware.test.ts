@@ -19,6 +19,33 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllEnvs());
 
 describe('Studio production routes', () => {
+  it.each([
+    ['/api/agents/agent-a/connections?space=personal', 'GET'],
+    ['/api/agents/agent-a/connections/mcp/enroll', 'POST'],
+    ['/api/agents/agent-a/connections/connection-a/resources?space=work', 'GET'],
+    ['/oauth/callback/remote_mcp?state=synthetic&code=synthetic', 'GET'],
+    ['/oauth/client-metadata.json', 'GET'],
+  ])('admits the exact bot Connections or public OAuth route to its own handler: %s %s', (path, method) => {
+    expect(middleware(new NextRequest(`https://studio.example.com${path}`, { method })).headers.get('x-middleware-next')).toBe('1');
+  });
+  it.each([
+    ['/api/agents', 'GET'], ['/api/agents/agent-a', 'GET'], ['/api/agents/agent-a/connections-other', 'POST'],
+    ['/api/agents/agent-a/connections', 'DELETE'], ['/api/agents/agent-a/connections', 'OPTIONS'],
+    ['/oauth/callback/remote_mcp', 'POST'], ['/oauth/callback/remote_mcp/other', 'GET'],
+    ['/oauth/client-metadata.json?override=1', 'GET'], ['/oauth/client-metadata.json', 'POST'],
+    ['/oauth/other', 'GET'], ['/api/connections/mcp', 'POST'],
+  ])('keeps lookalike routes and unsupported methods denied: %s %s', (path, method) => {
+    expect(middleware(new NextRequest(`https://studio.example.com${path}`, { method })).status).toBe(404);
+  });
+  it('isolates OAuth callback and client metadata from referrers, active content, media and caches', () => {
+    for (const path of ['/oauth/callback/remote_mcp?code=synthetic', '/oauth/client-metadata.json']) {
+      const response = middleware(request(path));
+      expect(response.headers.get('Referrer-Policy')).toBe('no-referrer');
+      expect(response.headers.get('Cache-Control')).toBe('no-store');
+      expect(response.headers.get('Content-Security-Policy')).toContain("default-src 'none'");
+      expect(response.headers.get('Permissions-Policy')).toContain('microphone=()');
+    }
+  });
   it('redirects the entry point to Studio and retains launch query parameters', () => {
     const response = middleware(request('/?startapp=welcome'));
     expect(response.status).toBe(307);

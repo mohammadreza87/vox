@@ -211,3 +211,55 @@ describe('Scheduled checks', () => {
     expect(api.execute).not.toHaveBeenCalled();
   });
 });
+
+
+describe('separate per-agent setup and access', () => {
+  const scoped = () => dashboard({
+    connections: [
+      { ...dashboard().connections[0], agentId: 'qa-agent' },
+      { ...dashboard().connections[0], id: 'other', displayLabel: 'OTHER_AGENT_PRIVATE_ACCOUNT', agentId: 'other-agent' },
+      { ...dashboard().connections[0], id: 'legacy', displayLabel: 'LEGACY_GLOBAL_ACCOUNT' },
+    ], agents: [{ id: 'qa-agent', name: 'QA Agent' }, { id: 'other-agent', name: 'Other Agent' }],
+  });
+  it('lists only this agent’s bound accounts and preserves its identity in detail navigation', async () => {
+    api.read.mockResolvedValue(scoped()); render(list('qa-agent'));
+    await screen.findByText('QA_WORK_PRIVATE');
+    expect(api.read).toHaveBeenCalledWith('work', 'qa-agent');
+    expect(screen.queryByText('OTHER_AGENT_PRIVATE_ACCOUNT')).not.toBeInTheDocument();
+    expect(screen.queryByText('LEGACY_GLOBAL_ACCOUNT')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /QA_WORK_PRIVATE/ }));
+    expect(nav.push).toHaveBeenCalledWith({ name: 'settings', page: 'connection', params: { connectionId: 'qa-connection', agentId: 'qa-agent' } });
+    expect(api.grant).not.toHaveBeenCalled();
+  });
+  it('passes the current agent explicitly when creating a separate provider connection', async () => {
+    api.read.mockResolvedValue(dashboard({ connections: [] }));
+    const created = { ...dashboard().connections[0], id: 'new-bound', agentId: 'qa-agent', lifecycle: 'pending' };
+    api.enroll.mockResolvedValue(dashboard({ connections: [created] }));
+    api.setup.mockResolvedValue({ flowId: 'bound-flow', status: 'pending', expiresAt: Date.now() + 60_000 });
+    render(list('qa-agent')); await screen.findByRole('button', { name: 'Add connection', exact: true });
+    fireEvent.click(screen.getByRole('button', { name: 'Add connection', exact: true }));
+    await act(async () => { fireEvent.click(await screen.findByRole('button', { name: /Add connection: QA Service/ })); });
+    expect(api.enroll).toHaveBeenCalledExactlyOnceWith('work', 'qa', 'QA Service', 'qa-agent');
+    expect(api.setup).toHaveBeenCalledWith('work', 'new-bound');
+    expect(api.grant).not.toHaveBeenCalled();
+  });
+  it('locks the access review to the selected agent, even when the dashboard includes another agent', async () => {
+    api.read.mockResolvedValue(scoped()); api.grant.mockResolvedValue(scoped());
+    api.resources.mockResolvedValue({ resources: [{ id: 'qa-resource', label: 'Selected QA page', toolIds: ['qa.read'], destinationIds: ['qa-private'] }] });
+    render(<App view={() => <ConnectionDetailPage connectionId="qa-connection" agentId="qa-agent" />} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Choose access', exact: true }));
+    const sheet = await screen.findByRole('dialog', { name: 'Review access' }); await within(sheet).findByText('Selected QA page');
+    const fixed = within(sheet).getByRole('button', { name: 'Agent: QA Agent' }); expect(fixed).toBeDisabled(); fireEvent.click(fixed);
+    expect(screen.queryByRole('radio', { name: 'Other Agent' })).not.toBeInTheDocument();
+    fireEvent.click(within(sheet).getByRole('checkbox', { name: /Selected QA page/ }));
+    fireEvent.click(await within(sheet).findByRole('checkbox', { name: /Read selected page/ }));
+    await act(async () => { fireEvent.click(within(sheet).getByRole('button', { name: 'Allow access' })); });
+    expect(api.grant).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ agentId: 'qa-agent', connectionId: 'qa-connection' }));
+  });
+  it('does not expose an unbound global connection through an agent detail URL', async () => {
+    api.read.mockResolvedValue(dashboard());
+    render(<App view={() => <ConnectionDetailPage connectionId="qa-connection" agentId="qa-agent" />} />);
+    expect(await screen.findByText('This connection isn’t in this space')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Disconnect' })).not.toBeInTheDocument();
+  });
+});

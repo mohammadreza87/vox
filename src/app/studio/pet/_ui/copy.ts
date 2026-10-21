@@ -31,6 +31,8 @@ export const NEED_LABEL: Record<NeedKey, string> = { tummy: 'Tummy', joy: 'Joy',
 export const COPY = {
   talkTo: (name: string) => `Talk to ${name}`,
   chatInTelegram: 'Chat in Telegram',
+  connectAccount: 'Connect an account',
+  connectAccountFor: (name: string) => `Connect an account for ${name}`,
   send: 'Send',
   holdToTalk: 'Hold to talk',
   recording: 'Listening… release to send',

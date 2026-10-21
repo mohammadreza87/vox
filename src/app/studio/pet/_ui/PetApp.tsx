@@ -704,6 +704,8 @@ function PetSession({ agentId, injected, signed, onForget, onRetry }: { agentId:
             onListen={onListen} onIdle={onIdle} onTypingPause={onTypingPause} onSend={onSend}
             onVoice={view.listen !== false ? (b) => void onVoice(b) : undefined} onMicLevel={onMicLevel} onRecording={onRecording} audioContext={audio} autoFocus={focusTalk} />
         </div>
+        <a className="pet-connect" href={`/studio/connect/${encodeURIComponent(agentId)}`} aria-label={COPY.connectAccountFor(view.name)}
+          onClick={(event) => { if (!valid()) event.preventDefault(); }}>{COPY.connectAccount}</a>
       </div>
     </main>
     </LazyMotion>

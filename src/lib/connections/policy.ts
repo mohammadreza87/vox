@@ -11,12 +11,17 @@ export function assertContext(context: ConnectionContext, accountId: string, now
   // Current release is per-person Work/Personal. Group contexts require a separate authority resolver/release.
   if (context.scope.audiencePersonIds.length !== 1) deny('unsupported_audience');
 }
+const ownerScope = (scope: ScopeBinding) => ({ tenantId: scope.tenantId, spaceId: scope.spaceId, spaceKind: scope.spaceKind,
+  containerId: scope.containerId, audiencePersonIds: [...scope.audiencePersonIds].sort() });
+/** A same-person profile confirmation renews management authority, not old grants or content access. */
 export function assertOwner(context: ConnectionContext, connection: ConnectionRecord): void {
-  if (connection.ownerAccountId !== context.accountId || connection.ownerPersonId !== context.personId || !sameScope(context.scope, connection.scope)) deny('connection_unavailable', 404);
+  if (context.botAgentId && (connection.schemaVersion !== 2 || connection.agentId !== context.botAgentId)) deny('connection_unavailable', 404);
+  if (connection.ownerAccountId !== context.accountId || connection.ownerPersonId !== context.personId || canonical(ownerScope(context.scope)) !== canonical(ownerScope(connection.scope))) deny('connection_unavailable', 404);
 }
 export function assertGrant(context: ConnectionContext, connection: ConnectionRecord, grant: ConnectionGrantRecord,
   tool: ReviewedTool, input: { agentId: string; resourceIds: readonly string[]; destinationId: string; bytes: number }, now: number): void {
   assertOwner(context, connection);
+  if (connection.schemaVersion === 2 && connection.agentId !== input.agentId) deny('agent_connection_mismatch');
   if (connection.lifecycle !== 'connected' || grant.status !== 'active' || grant.expiresAt <= now || grant.bindingRevision !== context.bindingRevision ||
       grant.connectionId !== connection.id || grant.connectionRevision !== connection.revision || grant.connectionEpoch !== connection.revocationEpoch ||
       !sameScope(grant.scope, context.scope) || grant.ownerPersonId !== context.personId || grant.grantorPersonId !== context.personId ||
