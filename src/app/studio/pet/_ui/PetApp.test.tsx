@@ -512,7 +512,7 @@ describe('PetApp: talk outcomes, sleep, the cache and the page', () => {
     expect(localStorage.getItem(SNAPSHOT_KEY('x'))).toBeNull();
     act(() => { onSettings!(); });
     await waitFor(() => expect(app.close).toHaveBeenCalled());
-    expect(app.showConfirm.mock.calls[0][0]).toMatch(/^Forget Mochi’s care for you\?/);
+    expect(app.showConfirm.mock.calls[0][0]).toBe('Forget care for all your pets, including Mochi? Needs and Bond start over for every pet; your chats stay.');
     expect(forget).toHaveBeenCalledWith('x');
     expect(localStorage.getItem(SNAPSHOT_KEY('x'))).toBeFalsy();
   });
