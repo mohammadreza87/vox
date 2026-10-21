@@ -11,23 +11,41 @@ import { MAX_IMAGE_URL_LENGTH, minimizeImageDataUrl } from '../prediction/image'
  * https://developers.openai.com/api/reference/resources/decisions/methods/create
  */
 export const DECISIONS_MODEL = 'gpt-6-luna';
+/** Default end-to-end deadline: authorization, loading and provider work. */
+export const DEFAULT_DECISION_DEADLINE_MS = 500;
+/** Largest deadline a caller may request; larger values are clamped. */
+export const MAX_DECISION_DEADLINE_MS = 5_000;
+export const MAX_DECISION_QUESTIONS = 24;
+export const MAX_DECISION_CHOICES = 32;
+export const MAX_DECISION_LEVELS = 12;
+export const MAX_DECISION_TEXT_PARTS = 8;
+export const MAX_DECISION_IMAGE_PARTS = 1;
 const text = z.string().min(1).max(2048);
 const base = { name: z.string().regex(/^[a-z][a-z0-9_]{0,63}$/), instructions: text };
 const choice = z.object({ value: z.string().min(1).max(64), description: text }).strict();
 export const questionSchema = z.discriminatedUnion('type', [
   z.object({ ...base, type: z.literal('predicate') }).strict(),
-  z.object({ ...base, type: z.literal('choice'), choices: z.array(choice).min(2).max(16) }).strict(),
-  z.object({ ...base, type: z.literal('score'), levels: z.array(z.object({ label: text, description: text }).strict()).min(2).max(8) }).strict(),
+  z.object({ ...base, type: z.literal('choice'), choices: z.array(choice).min(2).max(MAX_DECISION_CHOICES) }).strict(),
+  z.object({ ...base, type: z.literal('score'), levels: z.array(z.object({ label: text, description: text }).strict()).min(2).max(MAX_DECISION_LEVELS) }).strict(),
 ]);
 export type DecisionQuestion = z.infer<typeof questionSchema>;
 const imageUrl = z.string().max(MAX_IMAGE_URL_LENGTH).transform((v, ctx) => {
   try { return minimizeImageDataUrl(v); } catch { ctx.addIssue({ code: 'custom', message: 'invalid_image' }); return z.NEVER; }
 });
-export const decisionEvidenceSchema = z.union([z.string().min(1).max(8192), z.array(z.object({
-  role: z.literal('user'), content: z.tuple([z.object({ type: z.literal('input_text'), text: z.string().min(1).max(4096) }).strict(),
-    z.object({ type: z.literal('input_image'), image_url: imageUrl, detail: z.literal('low') }).strict()]),
-}).strict()).length(1)]);
-const requestSchema = z.object({ input: decisionEvidenceSchema, questions: z.array(questionSchema).min(1).max(7) }).strict()
+export const decisionTextPartSchema = z.object({ type: z.literal('input_text'), text: z.string().min(1).max(4096) }).strict();
+export const decisionImagePartSchema = z.object({ type: z.literal('input_image'), image_url: imageUrl, detail: z.literal('low') }).strict();
+export const decisionPartSchema = z.discriminatedUnion('type', [decisionTextPartSchema, decisionImagePartSchema]);
+export type DecisionPart = z.input<typeof decisionPartSchema>;
+/** A string, or exactly one user message: up to 8 text parts plus at most one
+ * low-detail image, at least one text part, text parts totalling at most 8192
+ * chars. The earlier [input_text, input_image] tuple remains valid. */
+export const decisionEvidenceSchema = z.union([z.string().min(1).max(8192), z.array(z.object({ role: z.literal('user'),
+  content: z.array(decisionPartSchema).min(1).max(MAX_DECISION_TEXT_PARTS + MAX_DECISION_IMAGE_PARTS)
+    .refine(p => p.filter(x => x.type === 'input_image').length <= MAX_DECISION_IMAGE_PARTS)
+    .refine(p => p.filter(x => x.type === 'input_text').length <= MAX_DECISION_TEXT_PARTS)
+    .refine(p => p.some(x => x.type === 'input_text'))
+    .refine(p => p.reduce((n, x) => n + (x.type === 'input_text' ? x.text.length : 0), 0) <= 8192) }).strict()).length(1)]);
+export const requestSchema = z.object({ input: decisionEvidenceSchema, questions: z.array(questionSchema).min(1).max(MAX_DECISION_QUESTIONS) }).strict()
   .refine(r => new Set(r.questions.map(q => q.name)).size === r.questions.length)
   .refine(r => r.questions.every(q => q.type !== 'choice' || new Set(q.choices.map(c => c.value)).size === q.choices.length));
 export type DecisionInput = z.infer<typeof requestSchema>;
@@ -46,9 +64,11 @@ export type DecisionUnknownReason = 'disabled' | 'invalid_input' | 'unauthorized
 export type DecisionResult =
   | { status: 'unknown'; reason: DecisionUnknownReason; elapsedMs: number; inputTokens?: number }
   | { status: 'answered'; model: string; answers: DecisionAnswer[]; elapsedMs: number; inputTokens?: number };
+/** Per-request provider options; `timeoutMs` is the service's effective deadline. */
+export interface DecisionProviderOptions { readonly timeoutMs?: number }
 export interface DecisionProvider {
   readonly committedExportFence?: true;
-  evaluate(input: DecisionInput, signal: AbortSignal, authorizeNow?: () => boolean): Promise<unknown>;
+  evaluate(input: DecisionInput, signal: AbortSignal, authorizeNow?: () => boolean, options?: DecisionProviderOptions): Promise<unknown>;
 }
 const decisionAuthority = new AsyncLocalStorage<{ signal: AbortSignal; authorizeNow?: () => boolean }>();
 const guardedProvider = Symbol('guarded-decision-transport');
@@ -100,6 +120,8 @@ export interface DecisionContext {
   /** Loads only minimized input AFTER authorization. Never persisted in diagnostics. */
   readonly loadInput: () => Promise<DecisionInput>;
   readonly signal?: AbortSignal;
+  /** End-to-end deadline in ms (authorization, loading and provider work).
+   * Defaults to 500; values are clamped to 1..5000. Non-finite or < 1 is invalid_input. */
   readonly deadlineMs?: number;
 }
 
@@ -157,7 +179,7 @@ export class DecisionService {
     let stopReason: 'timeout' | 'cancelled' = 'timeout';
     let timer: ReturnType<typeof setTimeout> | undefined;
     let cancel: (() => void) | undefined;
-    const deadline = Math.min(500, Math.max(1, context.deadlineMs ?? 500));
+    const deadline = Math.min(MAX_DECISION_DEADLINE_MS, Math.max(1, context.deadlineMs ?? DEFAULT_DECISION_DEADLINE_MS));
     const stop = new Promise<DecisionResult>(resolve => {
       cancel = () => { stopReason = 'cancelled'; controller.abort(); resolve(unknown('cancelled')); };
       context.signal?.addEventListener('abort', cancel, { once: true });
@@ -176,7 +198,7 @@ export class DecisionService {
         if (await context.authorize() !== before || context.currentRevision() !== context.revision) return unknown('stale');
         if (controller.signal.aborted) return unknown(stopReason);
         if (context.authorizeNow && !context.authorizeNow()) return unknown('unauthorized');
-        const raw = await this.provider.evaluate(parsed.data, controller.signal, context.authorizeNow);
+        const raw = await this.provider.evaluate(parsed.data, controller.signal, context.authorizeNow, { timeoutMs: deadline });
         if (controller.signal.aborted) return unknown(stopReason);
         const result = validateAnswers(raw, parsed.data);
         if (!result) return unknown('malformed');

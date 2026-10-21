@@ -16,6 +16,7 @@ import type { AdaptiveRelationshipService } from '../adaptive/relationships/serv
 import { LLMAuthorizationError, streamText, type LLM, type LLMMessage, type WebSource } from './llm';
 import { askedSkill, explicitReplyFormat, readTriage, TRIAGE_TIMEOUT_MS, triageInput, triageQuestions, type Decider, type Triage } from './triage';
 import { skillQuestion, type SkillChoice, type SkillRouting } from './skill-routing';
+import { recordTriageDecision, type DecisionLogSink } from './decisions/log';
 import type { OrgDirectory } from './org/directory';
 import type { ChatContext, ChatMessage, MemoryRecord, MemoryScope, Persona } from './types';
 import type { ChatHistoryStore, MemoryStore, ShareOfferStore, UpdateDeduper } from './memory/store';
@@ -125,6 +126,8 @@ export interface GatewayDeps {
   fastLlm?: LLM;
   /** Fast pre-reply triage (see triage.ts); without it every reply takes the full path */
   decider?: Decider;
+  /** Content-free decision log for calibration (TIREH_DECISION_LOG); never receives text. */
+  decisionLog?: DecisionLogSink;
   /** Per-message skill selection inside triage (skill-routing.ts); default `on`. */
   skillRouting?: SkillRouting;
   relationships?: RelationshipLoop;
@@ -979,11 +982,15 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
    * questions actually sent. Never throws.
    */
   private async triage(persona: Persona, chat: ChatContext, askAddressed: boolean, source: ChatMessage, action: GroupAction, boundary: TurnBoundary): Promise<Triaged> {
-    const { decider, org } = this.deps;
+    const { decider, org, decisionLog } = this.deps;
     // This optional adapter has no final configured-transport authority seam.
     // Indexed turns go directly to the qualified ordinary reply model.
     if (!decider || boundary.compact) return UNTRIAGED;
     let skillAsked = false;
+    let questions: ReturnType<typeof triageQuestions> | undefined;
+    let started: number | undefined;
+    // Content-free row fields only; latestText feeds a script-ratio label and is never stored.
+    const logged = { personaId: persona.id, chatKind: chat.kind, space: boundary.space, webSearch: !!persona.webSearch, fastLlm: !!this.deps.fastLlm, latestText: source.text };
     try {
       const prior = await this.historyAt(persona, chat, boundary, 6);
       const recent = [...prior.filter((m) => m !== source && (chat.kind !== 'group' || (m.telegramMessageId ?? Infinity) < source.telegramMessageId!)), source].slice(-6);
@@ -992,12 +999,18 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
       if (!await this.unchanged(persona, chat, source.personId!, boundary)) return UNTRIAGED;
       // Pick a playbook only when this message may get a reply.
       const routable = action === 'reply' || askAddressed ? this.routableSkills(persona, boundary) : undefined;
-      const questions = triageQuestions(persona, askAddressed, routable);
+      questions = triageQuestions(persona, askAddressed, routable);
       skillAsked = askedSkill(questions);
-      const answers = await decider.decide(triageInput(persona, lines), questions, TRIAGE_TIMEOUT_MS);
-      return { triage: readTriage(answers, askAddressed, persona.groupParticipation ?? 'mentions', skillAsked ? routable : undefined), skillAsked };
+      const input = triageInput(persona, lines);
+      started = performance.now();
+      const detail = decider.decideDetailed ? await decider.decideDetailed(input, questions, TRIAGE_TIMEOUT_MS) : undefined;
+      const answers = detail ? detail.answers : await decider.decide(input, questions, TRIAGE_TIMEOUT_MS);
+      const triage = readTriage(answers, askAddressed, persona.groupParticipation ?? 'mentions', skillAsked ? routable : undefined);
+      if (decisionLog) recordTriageDecision(decisionLog, { ...logged, questions, answers, detail, elapsedMs: detail?.elapsedMs ?? performance.now() - started, triage, at: this.now() });
+      return { triage, skillAsked };
     } catch {
       logTelegramDiagnostic(this.log, 'triage_failed');
+      if (decisionLog && questions && started !== undefined) recordTriageDecision(decisionLog, { ...logged, questions, answers: null, detail: undefined, elapsedMs: performance.now() - started, triage: null, at: this.now() });
       return { triage: null, skillAsked };
     }
   }
