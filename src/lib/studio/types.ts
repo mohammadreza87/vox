@@ -168,7 +168,7 @@ export interface TelegramProfileSync {
   steps?: Partial<Record<ProfileStep, string>>;
 }
 
-export type ProfileStep = 'webhook' | 'name' | 'photo' | 'short description' | 'description' | 'commands' | 'token' | 'profile' | 'inactive';
+export type ProfileStep = 'webhook' | 'name' | 'photo' | 'short description' | 'description' | 'commands' | 'menu' | 'token' | 'profile' | 'inactive';
 
 export interface Agent {
   /** Monotonic source authority; never decrement or restore. */

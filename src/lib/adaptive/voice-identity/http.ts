@@ -1,3 +1,4 @@
+import { trustedStudioRequestOrigin } from '../../studio/request-origin';
 import { isSchemaValidationError } from '../../error-contract';
 import { z } from 'zod';
 import { verifyInitData } from '../../studio/auth';
@@ -28,7 +29,9 @@ export async function handleVoiceIdentityRequest(studio: Studio, service: VoiceI
       return json(await service.read(user.id, scope));
     }
     if (request.method !== 'POST') return json({ error: 'not_found' }, 404);
-    if (request.headers.get('origin') !== url.origin || request.headers.get('sec-fetch-site') === 'cross-site') return json({ error: 'origin_denied' }, 403);
+    const expectedOrigin = trustedStudioRequestOrigin(url, studio.deps.webAppUrl);
+    if (!expectedOrigin) return json({ error: 'origin_unavailable' }, 503);
+    if (request.headers.get('origin') !== expectedOrigin || request.headers.get('sec-fetch-site') === 'cross-site') return json({ error: 'origin_denied' }, 403);
     await limiter.consume('mutation', user.id);
     if (route === 'POST sample') {
       const scope = voiceScopeSchema.parse({ space: url.searchParams.get('space'), deviceId: url.searchParams.get('deviceId') });

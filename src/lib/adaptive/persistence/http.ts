@@ -1,3 +1,4 @@
+import { trustedStudioRequestOrigin } from '../../studio/request-origin';
 import { isSchemaValidationError } from '../../error-contract';
 import { z } from 'zod';
 import { canUseAgent } from '../../studio/permissions';
@@ -35,7 +36,9 @@ export async function handleAdaptiveRequest(studio: Studio, service: AdaptiveSer
     if (request.method === 'GET' && path.length === 0) return response(await service.read(user.id, space, locale));
     if (!['POST', 'PUT', 'DELETE'].includes(request.method)) return response({ error: 'not_found' }, 404);
     // Authenticated browser mutation must originate from this origin, not a hostile page.
-    if (request.headers.get('origin') !== url.origin || request.headers.get('sec-fetch-site') === 'cross-site') return response({ error: 'origin_denied' }, 403);
+    const expectedOrigin = trustedStudioRequestOrigin(url, studio.deps.webAppUrl);
+    if (!expectedOrigin) return response({ error: 'origin_unavailable' }, 503);
+    if (request.headers.get('origin') !== expectedOrigin || request.headers.get('sec-fetch-site') === 'cross-site') return response({ error: 'origin_denied' }, 403);
     if (request.headers.get('content-type')?.split(';')[0].trim().toLowerCase() !== 'application/json') return response({ error: 'json_required' }, 415);
     await limiter.consume('mutation', user.id);
     const bounded = await boundedStudioRequest(request, path[0] === 'message-memory' ? 20_480 : path[0] === 'reviewed' ? 16_384 : 8192);

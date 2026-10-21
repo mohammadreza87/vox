@@ -6,8 +6,8 @@ import {
   type Expression,
 } from '@/lib/studio/character';
 import { HUES, type CharacterLook, type Stage } from '@/lib/studio/types';
-import { Cloud } from '../_components/Cloud';
-import { CharacterView } from '../_components/character/CharacterView';
+import { Cloud } from '../../_components/Cloud';
+import { CharacterView } from '../../_components/character/CharacterView';
 
 const STAGES: Stage[] = [1, 2, 3, 4];
 const EXPRESSIONS: Expression[] = ['idle', 'listening', 'thinking', 'speaking', 'happy', 'sleeping'];

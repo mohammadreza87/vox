@@ -31,36 +31,6 @@
 /* Screen-reader-only text (keeps accessible names on icon controls). */
 .vx-sr { position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 
-/* ---- Chat (in-app conversation) ---- */
-.vx-chat { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.vx-chat p { margin: 0; }
-.vx-chat-log { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 4px 16px 12px; display: flex; flex-direction: column; gap: 10px; overflow-wrap: anywhere; }
-.vx-chat-intro { text-align: center; padding: 8px 12px 4px; display: flex; flex-direction: column; gap: 6px; }
-.vx-bubble-row { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
-.vx-bubble-row.mine { align-items: flex-end; }
-.vx-bubble { max-width: 82%; padding: 10px 14px; border-radius: 20px 20px 20px 6px; background: var(--s2); border: 1px solid var(--hair); white-space: pre-wrap; }
-.vx-bubble.mine { background: var(--volt); color: var(--on-volt); border-color: transparent; border-radius: 20px 20px 6px 20px; }
-[dir="rtl"] .vx-bubble { border-radius: 20px 20px 6px 20px; }
-[dir="rtl"] .vx-bubble.mine { border-radius: 20px 20px 20px 6px; }
-.vx-bubble-action { background: none; border: none; color: var(--text-3); font-size: 12px; font-weight: 600; cursor: pointer; padding: 2px 4px; }
-.vx-bubble-action:disabled { opacity: .5; cursor: default; }
-.vx-typing { display: inline-flex; gap: 4px; align-items: center; height: 40px; }
-.vx-typing span { width: 6px; height: 6px; border-radius: 50%; background: var(--text-2); animation: vxPulse 1.2s ease-in-out infinite; }
-.vx-typing span:nth-child(2) { animation-delay: .2s; } .vx-typing span:nth-child(3) { animation-delay: .4s; }
-.vx-chat-dock { border-top: 1px solid var(--hair); background: var(--ground); padding: 10px 12px calc(12px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 8px; max-height: 60%; overflow-y: auto; }
-.vx-chat-prepare { display: flex; flex-direction: column; gap: 2px; padding-inline: 4px; }
-.vx-chat-attachment { display: flex; align-items: center; gap: 10px; }
-.vx-chat-attachment img { width: 56px; height: 56px; object-fit: cover; border-radius: 12px; border: 1px solid var(--hair); }
-.vx-composer { display: flex; align-items: flex-end; gap: 8px; }
-.vx-composer-field { flex: 1; min-width: 0; display: block; }
-.vx-composer-field .vx-textarea { border-radius: 22px; min-height: 44px; max-height: 140px; padding: 11px 16px; field-sizing: content; }
-.vx-composer-attach, .vx-composer-send { width: 44px; height: 44px; border-radius: 50%; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; position: relative; }
-.vx-composer-attach { background: var(--s2); border: 1px solid var(--hair); color: var(--text-2); }
-.vx-composer-attach input[type="file"] { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; }
-.vx-composer-send { background: var(--volt); color: var(--on-volt); border: none; transition: transform .12s var(--ease), opacity .18s; }
-.vx-composer-send:active { transform: scale(.94); }
-.vx-composer-send:disabled { opacity: .35; cursor: default; transform: none; }
-
 /* Call options: tucked under the call header, never over the conversation. */
 .vx-call-options { position: relative; z-index: 2; padding: 4px 16px 0; text-align: start; }
 .vx-call-options > summary { justify-content: center; }

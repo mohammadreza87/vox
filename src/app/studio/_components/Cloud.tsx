@@ -1,6 +1,6 @@
 'use client';
 
-import { animate, motion, motionValue, useMotionValue, useSpring, useTransform, type MotionValue } from 'framer-motion';
+import { animate, domMax, LazyMotion, motion, motionValue, useMotionValue, useSpring, useTransform, type MotionValue } from 'framer-motion';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent, type ReactNode } from 'react';
 import {
   BEAK_DROP, PALETTE, beakLowerD, beakMouth, characterModel, derivePalette, eyeD, eyeFor, lookKey, modelEye, mouthD, mouthFor, mouthOpenness, MOUTH, stageFor, stageGrowth, talkMouth,
@@ -560,7 +560,10 @@ function Rig({ look, size, expr = 'idle', stage = 4, label = 'Agent', lod: lodPr
       )}
       <motion.div className="vx-char-bob" style={{ y: bob, scaleX: talkX, scaleY: talkY, originX: 0.5, originY: 0.83 }}>
         <div className="vx-char-breathe">
-          <CharacterView look={display} stage={st} expr={dExpr} size={size} lod={mode} label={label} rig={rig} fit={fit} />
+          {/* CharacterView's parts are m.* elements: the Studio already carries framer's full feature set */}
+          <LazyMotion features={domMax}>
+            <CharacterView look={display} stage={st} expr={dExpr} size={size} lod={mode} label={label} rig={rig} fit={fit} />
+          </LazyMotion>
         </div>
       </motion.div>
       {sheen > 0 && (
