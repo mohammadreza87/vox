@@ -7,12 +7,12 @@ import type { Hue } from '@/lib/studio/types';
 import { haptic } from '../../../_lib/client';
 import { Cloud, type Expression } from '../../Cloud';
 import { Icon } from '../../ui';
-import type { SpawnCopy } from './copy';
+import type { BriefCopy } from './copy';
 import { CLOUD_SPRING, useSpawnMotion } from './motion';
 
 /** Overline, title and one line, with the step's single animated cloud at the inline end. */
 export function BriefHeader({ t, hue, expr, successorName, successor }: {
-  t: SpawnCopy; hue: Hue; expr: Expression; successor: boolean; successorName?: string;
+  t: BriefCopy; hue: Hue; expr: Expression; successor: boolean; successorName?: string;
 }) {
   const m = useSpawnMotion();
   return (
@@ -20,7 +20,7 @@ export function BriefHeader({ t, hue, expr, successorName, successor }: {
       <div>
         <span className="vx-over">{successor ? (successorName ? t.overlineSuccessor(successorName) : t.overlineSuccessorPending) : t.overline}</span>
         <h1 className="vx-title">{successorName ? t.titleSuccessor(successorName) : t.title}</h1>
-        <p className="vx-2 vx-catalog-layout-02419cff" >{t.sub}</p>
+        <span className="vx-2">{t.sub}</span>
       </div>
       <motion.div key={hue} className="vx-brief-cloud" aria-hidden="true"
         initial={m.reduce ? { opacity: 0 } : { opacity: 0, scale: 0.92 }}
@@ -32,9 +32,9 @@ export function BriefHeader({ t, hue, expr, successorName, successor }: {
 }
 
 /** Level-1 templates: one chip per pack, shown only while the brief is empty. */
-export function PackRow({ t, packs, onPick }: { t: SpawnCopy; packs: PackId[]; onPick: (pack: PackId) => void }) {
+export function PackRow({ t, packs, onPick }: { t: BriefCopy; packs: PackId[]; onPick: (pack: PackId) => void }) {
   return (
-    <div className="vx-catalog-layout-379fabac">
+    <div className="vx-field">
       <span className="vx-over" id="vx-pack-row">{t.packRow}</span>
       <div className="vx-packs" role="group" aria-labelledby="vx-pack-row">
         {packs.map((p) => (
@@ -60,10 +60,10 @@ export function LinkButton({ label, onClick }: { label: string; onClick: () => v
 }
 
 /** "Custom agent" with Undo for a few seconds after a detach, then a way back to the library. */
-export function CustomLine({ t, label, onUndo, onBrowse }: { t: SpawnCopy; label?: string; onUndo?: () => void; onBrowse?: () => void }) {
+export function CustomLine({ t, label, onUndo, onBrowse }: { t: BriefCopy; label?: string; onUndo?: () => void; onBrowse?: () => void }) {
   return (
     <div className="vx-custom-line">
-      <span dir="auto" className="vx-ellipsis vx-catalog-layout-d529e1f5" >
+      <span dir="auto" className="vx-ellipsis">
         {label ?? t.custom}{onUndo && <span className="vx-3"> · {t.keepingCustom}</span>}
       </span>
       {onUndo
@@ -74,15 +74,15 @@ export function CustomLine({ t, label, onUndo, onBrowse }: { t: SpawnCopy; label
 }
 
 /** The draft failure, inline above the dock (the step's only role="alert"). */
-export function DraftError({ t, message, onRetry }: { t: SpawnCopy; message: string; onRetry: () => void }) {
+export function DraftError({ t, message, onRetry }: { t: BriefCopy; message: string; onRetry: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => { ref.current?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' }); }, [message]);
   return (
     <div ref={ref} className="vx-banner danger vx-draft-error" role="alert">
       <Icon name="warn" size={18} className="vx-catalog-layout-17d2f14f" />
-      <div className="vx-catalog-layout-46818528">
+      <div className="vx-row-main">
         <span className="vx-catalog-layout-3e0ed9c0">{message.replace(/\.\s*$/, '')}. {t.errorSuffix}</span>
-        <button type="button" className="vx-link vx-link-strong vx-catalog-layout-f08f579b"  onClick={onRetry}>
+        <button type="button" className="vx-link vx-link-strong vx-catalog-layout-f08f579b" onClick={onRetry}>
           {t.retry}<ChevronEnd />
         </button>
       </div>

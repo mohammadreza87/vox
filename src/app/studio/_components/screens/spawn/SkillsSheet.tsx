@@ -5,7 +5,7 @@ import { MAX_AGENT_SKILLS } from '@/lib/studio/skills/types';
 import { haptic } from '../../../_lib/client';
 import { Icon, Sheet } from '../../ui';
 import { roleTitle, skillSummary, skillTitle, useCatalog, type CatalogSkill } from './catalog';
-import type { SpawnCopy } from './copy';
+import type { BriefCopy } from './copy';
 import { useBackGuard, useSheetA11y } from './hooks';
 import { SheetScroll } from './parts';
 import { textAttrs } from './routing';
@@ -18,7 +18,7 @@ const MAX_RESULTS = 40;
  * search over the whole library. Capped at MAX_AGENT_SKILLS.
  */
 export function SkillsSheet({ t, open, onClose, roleId, selected, onChange, fa, returnFocus }: {
-  t: SpawnCopy; open: boolean; onClose: () => void; roleId?: string; selected: string[];
+  t: BriefCopy; open: boolean; onClose: () => void; roleId?: string; selected: string[];
   onChange: (next: string[]) => void; fa?: boolean; returnFocus?: RefObject<HTMLElement | null>;
 }) {
   useBackGuard(open, onClose);
@@ -30,7 +30,7 @@ export function SkillsSheet({ t, open, onClose, roleId, selected, onChange, fa, 
 }
 
 function SkillsBody({ t, onClose, roleId, selected, onChange, fa, returnFocus }: {
-  t: SpawnCopy; onClose: () => void; roleId?: string; selected: string[]; onChange: (next: string[]) => void; fa: boolean;
+  t: BriefCopy; onClose: () => void; roleId?: string; selected: string[]; onChange: (next: string[]) => void; fa: boolean;
   returnFocus?: RefObject<HTMLElement | null>;
 }) {
   const catalog = useCatalog();
@@ -88,7 +88,7 @@ function SkillsBody({ t, onClose, roleId, selected, onChange, fa, returnFocus }:
         <h2 className="vx-title-m">{t.skillsSheet}</h2>
         <span className="vx-small vx-2 vx-num">{t.num(selected.length)}/{t.num(MAX_AGENT_SKILLS)}</span>
       </div>
-      {atCap && <p className="vx-small vx-2 vx-catalog-layout-02419cff" role="status" >{t.cap}</p>}
+      {atCap && <div className="vx-small vx-2" role="status">{t.cap}</div>}
       <SheetScroll>
         {!role && search}
         {on.length > 0 && <Section title={t.on}>{on.map(row)}</Section>}
@@ -97,7 +97,7 @@ function SkillsBody({ t, onClose, roleId, selected, onChange, fa, returnFocus }:
         {q
           ? matches.length > 0
             ? <Section title={t.moreSkillsSection}>{matches.map(row)}</Section>
-            : <p className="vx-small vx-2 vx-catalog-layout-02419cff" >{t.noSkillMatch}</p>
+            : <div className="vx-small vx-2">{t.noSkillMatch}</div>
           : picks.length > 0 && <Section title={t.topPicks}>{picks.map(row)}</Section>}
       </SheetScroll>
       <button type="button" className="vx-btn vx-btn-secondary vx-btn-block" onClick={onClose}>{t.done}</button>
@@ -107,7 +107,7 @@ function SkillsBody({ t, onClose, roleId, selected, onChange, fa, returnFocus }:
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section className="vx-catalog-layout-baf2fda5">
+    <section className="vx-section">
       <span className="vx-over">{title}</span>
       <div className="vx-group vx-pick-list">{children}</div>
     </section>

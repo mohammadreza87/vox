@@ -1,6 +1,6 @@
 'use client';
 
-import { useReducedMotion } from 'framer-motion';
+import { useTier } from '../../motion/tier';
 
 type Bezier = [number, number, number, number];
 
@@ -19,10 +19,10 @@ export const CLOUD_SPRING = { type: 'spring', stiffness: 420, damping: 16 } as c
 
 /**
  * Enter/exit presets for cards, the clarifier and collapsible rows. Under
- * reduced motion every one of them becomes a 120 ms opacity fade.
+ * the reduced motion tier (OS setting or the lab's override) every one of them becomes a 120 ms opacity fade.
  */
 export function useSpawnMotion() {
-  const reduce = !!useReducedMotion();
+  const reduce = useTier() === 'reduced';
   const fade = { duration: 0.12, ease: EASE.standard };
   return {
     reduce,

@@ -11,6 +11,7 @@ const state = vi.hoisted(() => {
     catalog: vi.fn(), route: vi.fn(), draft: vi.fn(), agent: vi.fn(), successorTemplate: vi.fn(), updatePersona: vi.fn(), refine: vi.fn(),
     guards,
     nav: {
+      locale: 'en' as 'en' | 'fa', dir: 'ltr', tier: 'full', cache: new Map<string, AgentView>(), snack: vi.fn(),
       me: { org: 'Fixture team', member: { telegramId: 7777001, role: 'member' },
         features: { avatars: false, voices: false, calls: false, skillRouting: 'decisions' as 'decisions' | 'local' | undefined } },
       back: vi.fn(), reset: vi.fn(), push: vi.fn(), toast: vi.fn(), refreshMe: vi.fn(),
@@ -40,15 +41,17 @@ vi.mock('../../StudioApp', () => ({
   LoadingFill: () => null,
 }));
 
+// Render presence synchronously, but keep framer's real hooks and motion values (the character rig uses them).
 vi.mock('framer-motion', async (importOriginal) => {
   const actual = await importOriginal<typeof import('framer-motion')>();
   const { createElement } = await import('react');
-  const MOTION_PROPS = ['initial', 'animate', 'exit', 'transition', 'whileTap', 'whileHover', 'layoutId', 'layout', 'variants',
+  const MOTION_PROPS = ['initial', 'animate', 'exit', 'transition', 'whileTap', 'whileHover', 'layoutId', 'layout', 'layoutScroll', 'variants', 'custom',
     'drag', 'dragConstraints', 'dragElastic', 'onDragEnd'];
-  const cache = new Map<string, (props: { children?: ReactNode; [key: string]: unknown }) => ReactNode>();
+  const cache = new Map<string, (props: { children?: ReactNode; style?: Record<string, unknown>; [key: string]: unknown }) => ReactNode>();
   const element = (tag: string) => {
-    if (!cache.has(tag)) cache.set(tag, function MotionElement({ children, ...props }) {
-      return createElement(tag, Object.fromEntries(Object.entries(props).filter(([key]) => !MOTION_PROPS.includes(key))), children);
+    if (!cache.has(tag)) cache.set(tag, function MotionElement({ children, style, ...props }) {
+      const plain = style && Object.fromEntries(Object.entries(style).filter(([, v]) => typeof v !== 'object'));
+      return createElement(tag, { ...Object.fromEntries(Object.entries(props).filter(([key]) => !MOTION_PROPS.includes(key))), style: plain }, children);
     });
     return cache.get(tag)!;
   };
@@ -58,6 +61,12 @@ vi.mock('framer-motion', async (importOriginal) => {
     motion: new Proxy({}, { get: (_target, tag: string) => element(tag) }),
     useReducedMotion: () => false,
   };
+});
+// The character renderer is covered by its own tests; here it only has to be present.
+vi.mock('../../Cloud', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../Cloud')>();
+  const Face = ({ label }: { label?: string }) => <span role="img" aria-label={label} />;
+  return { ...actual, Cloud: Face, AgentFace: Face };
 });
 
 const skill = (id: string, title: string) => ({ id, title, summary: `${title}, done well.` });
@@ -358,7 +367,8 @@ describe('Successor', () => {
 });
 
 describe('Back while a sheet is open', () => {
-  const topBack = (name: 'Agents' | 'Back') => screen.getByRole('button', { name, exact: true });
+  // The wizard's lead is ✕ ("Close") wherever Back leaves it: the Brief, and Draft when reopening a draft.
+  const topBack = (name: 'Close' | 'Back') => screen.getByRole('button', { name, exact: true });
 
   it('Telegram Back closes the role sheet and keeps the brief; with no sheet open, Back leaves', async () => {
     await open();
@@ -380,13 +390,17 @@ describe('Back while a sheet is open', () => {
     await open();
     type('A calm product lead');
     fireEvent.click(screen.getByRole('button', { name: 'Browse roles' }));
-    fireEvent.click(topBack('Agents'));
+    fireEvent.click(topBack('Close'));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(composer()).toHaveValue('A calm product lead');
     expect(state.nav.back).not.toHaveBeenCalled();
 
-    fireEvent.click(topBack('Agents'));
+    // The brief has text, so leaving asks first (outside a ConfirmProvider the native dialog stands in).
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    await act(async () => { fireEvent.click(topBack('Close')); });
+    expect(confirm).toHaveBeenCalledTimes(1);
     expect(state.nav.back).toHaveBeenCalledTimes(1);
+    confirm.mockRestore();
   });
 
   it('closes the Persona step’s skills sheet without leaving the step', async () => {
@@ -394,9 +408,9 @@ describe('Back while a sheet is open', () => {
     await open({ draftId: 'fixture-agent' });
     fireEvent.click(screen.getByRole('button', { name: /add skills/i }));
     expect(screen.getByRole('dialog', { name: 'Skills' })).toBeVisible();
-    fireEvent.click(topBack('Back'));
+    fireEvent.click(topBack('Close'));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /use nova · pick a look/i })).toBeVisible();
+    expect(screen.getByRole('button', { name: /use nova · choose a voice/i })).toBeVisible();
     expect(state.nav.back).not.toHaveBeenCalled();
     expect(state.guards).toHaveLength(0);
   });
@@ -426,7 +440,7 @@ describe('Persona step', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(600); });
     expect(state.updatePersona).toHaveBeenCalledExactlyOnceWith(current.id, { skillIds: ['growth.paid-ua', 'growth.roas'] });
     expect(screen.getByRole('button', { name: 'Creative testing' })).toHaveAttribute('aria-pressed', 'false');
-    expect(screen.getByRole('button', { name: /use nova · pick a look/i })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /use nova · choose a voice/i })).toBeEnabled();
     expect(state.nav.toast).not.toHaveBeenCalled();
   });
 
@@ -562,14 +576,15 @@ describe('Persona skills saving', () => {
     state.updatePersona.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
     await open({ draftId: current.id });
     fireEvent.click(screen.getByRole('button', { name: 'Creative testing' }));
-    const cta = screen.getByRole('button', { name: /use nova · pick a look/i });
+    const cta = screen.getByRole('button', { name: /use nova · choose a voice/i });
     await act(async () => { fireEvent.click(cta); });
     expect(cta).toBeDisabled();
     expect(cta).toHaveAttribute('aria-busy', 'true');
     await act(async () => { fireEvent.click(cta); });
     await act(async () => { finish(withSkills(['growth.paid-ua', 'growth.roas'])); await vi.advanceTimersByTimeAsync(10); });
     expect(state.updatePersona).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole('heading', { name: 'Shape Nova’s cloud' })).toBeVisible();
+    // Draft → Voice → Look → Hire: the next step is the voice.
+    expect(screen.getByRole('heading', { name: 'Nova’s voice' })).toBeVisible();
   });
 
   it('keeps one skill PATCH in flight, sends the newest selection next, and rolls back to the server copy on failure', async () => {

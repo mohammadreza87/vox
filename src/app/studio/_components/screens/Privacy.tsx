@@ -186,7 +186,7 @@ export function PrivacyScreen({ onShared, onExperience, onConnections, onCorrect
               : !on && !snapshot.identity.confirmed ? y.needsIdentity
               : on && paused && COVERED.includes(p.purpose) ? pauseText(locale, space, 'consent')
               : copy?.body ?? p.notice.body;
-            return <Switch key={p.purpose} checked={on} label={title} sub={sub} disabled={busy || locked || (!on && (!p.available || !snapshot.identity.confirmed))}
+            return <Switch key={p.purpose} checked={on} attention={on && !p.available} label={title} sub={sub} disabled={busy || locked || (!on && (!p.available || !snapshot.identity.confirmed))}
               onChange={next => go(() => { if (next) void review(p.purpose, p.revision); else void withdraw(p.purpose, p.revision, title); })} />;
           })}
         </Section>
