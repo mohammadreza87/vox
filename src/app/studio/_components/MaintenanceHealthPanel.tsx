@@ -1,5 +1,6 @@
 'use client';
 import { maintenanceHealthSchema } from '@/lib/adaptive/lifecycle/maintenance-health-contracts';
+import { Banner, Stat, Stats } from './ui';
 
 /** Recorded operator metadata only. This view does not derive worker liveness. */
 export function MaintenanceHealthPanel({ health, locale }: { health: unknown; locale: 'en' | 'fa' }) {
@@ -36,19 +37,19 @@ export function MaintenanceHealthPanel({ health, locale }: { health: unknown; lo
     [t('Accounts in recorded progress', 'حساب‌ها در پیشرفت ثبت‌شده'), number(checkpoint?.checkpointedAccounts)],
     ...(value?.leaseExpiresAt != null ? [[t('Recorded lease expiry', 'زمان انقضای مجوز موقت ثبت‌شده'), date(value.leaseExpiresAt)]] : []),
   ];
-  return <section aria-label={t('Maintenance status', 'وضعیت نگهداری')} dir={fa ? 'rtl' : 'ltr'} lang={locale}
-    style={{ display: 'grid', gap: 12, borderBlockStart: '1px solid var(--hair)', paddingBlockStart: 16, minWidth: 0, overflowWrap: 'anywhere' }}>
-    <h3 className="vx-head" style={{ fontSize: 18 }}>{t('Maintenance status', 'وضعیت نگهداری')}</h3>
-    <p className="vx-small vx-2">{t('System-wide status, independent of your selected space. This view does not run maintenance.', 'وضعیت کل سامانه، مستقل از فضای انتخاب‌شدهٔ شما. این نما نگهداری را اجرا نمی‌کند.')}</p>
-    <p className="vx-small" role="status">{value ? states[value.state] : unavailable}</p>
-    {value?.state === 'not_configured' && <p className="vx-small vx-2">{t('Status observation is not configured.', 'مشاهدهٔ وضعیت پیکربندی نشده است.')}</p>}
-    <dl style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 14rem), 1fr))', gap: 12, margin: 0 }}>
-      {items.map(([label, content]) => <div key={String(label)} style={{ minWidth: 0 }}>
-        <dt className="vx-small vx-2">{label}</dt><dd className="vx-small" style={{ margin: '4px 0 0' }}>{content}</dd>
-      </div>)}
-    </dl>
-    <p className="vx-small vx-2">{t('Checkpoint counts do not measure unique people or deletions.', 'این شمارنده‌های پیشرفت، تعداد افراد یکتا یا حذف داده‌ها را نشان نمی‌دهند.')}</p>
-    {checkpoint?.failure === 'sweep_failed' && <p className="vx-small">{t('A maintenance failure was recorded.', 'یک خطای نگهداری ثبت شده است.')}</p>}
-    <p className="vx-small vx-2">{t('Recorded progress is not proof of deletion or a running worker.', 'پیشرفت ثبت‌شده، انجام حذف یا در حال اجرا بودن فرایند را ثابت نمی‌کند.')}</p>
+  const tone = value?.state === 'failed' || value?.state === 'stale' || checkpoint?.failure === 'sweep_failed' ? 'warn' : value?.state === 'completed' ? 'live' : '';
+  return <section aria-label={t('Maintenance status', 'وضعیت نگهداری')} dir={fa ? 'rtl' : 'ltr'} lang={locale} className="vx-maint">
+    <div className="vx-maint-head">
+      <h3 className="vx-row-title">{t('Maintenance status', 'وضعیت نگهداری')}</h3>
+      <span className={`vx-pill${tone ? ` ${tone}` : ''}`} role="status"><span className="vx-pill-dot" aria-hidden="true" />{value ? states[value.state] : unavailable}</span>
+    </div>
+    <p className="vx-section-foot">{t('System-wide status, independent of your selected space. This view does not run maintenance.', 'وضعیت کل سامانه، مستقل از فضای انتخاب‌شدهٔ شما. این نما نگهداری را اجرا نمی‌کند.')}</p>
+    {value?.state === 'not_configured' && <p className="vx-section-foot">{t('Status observation is not configured.', 'مشاهدهٔ وضعیت پیکربندی نشده است.')}</p>}
+    {checkpoint?.failure === 'sweep_failed' && <Banner tone="warn">{t('A maintenance failure was recorded.', 'یک خطای نگهداری ثبت شده است.')}</Banner>}
+    <Stats compact>
+      {items.map(([label, content]) => <Stat key={String(label)} label={label} value={content} />)}
+    </Stats>
+    <p className="vx-section-foot">{t('Checkpoint counts do not measure unique people or deletions.', 'این شمارنده‌های پیشرفت، تعداد افراد یکتا یا حذف داده‌ها را نشان نمی‌دهند.')}</p>
+    <p className="vx-section-foot">{t('Recorded progress is not proof of deletion or a running worker.', 'پیشرفت ثبت‌شده، انجام حذف یا در حال اجرا بودن فرایند را ثابت نمی‌کند.')}</p>
   </section>;
 }

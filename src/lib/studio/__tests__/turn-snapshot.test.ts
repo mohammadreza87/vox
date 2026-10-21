@@ -11,8 +11,8 @@ describe('Studio.loadTurnSnapshot', () => {
     const evaluate = () => h.studio.adaptiveContext(agent.id, chat.personId, 'work');
     const transact = vi.spyOn(accountStorage, 'transact');
     const sharedTransact = vi.spyOn(sharedStorage, 'transact');
-    const accountLoads = vi.spyOn(accountStorage, 'load');
-    const sharedLoads = vi.spyOn(sharedStorage, 'load');
+    const accountLoads = vi.spyOn(accountStorage, 'readCommittedForEffect');
+    const sharedLoads = vi.spyOn(sharedStorage, 'readCommittedForEffect');
     await h.studio.adaptiveContext(agent.id, chat.personId, 'work'); // settle any first-read normalisation
     transact.mockClear(); sharedTransact.mockClear(); accountLoads.mockClear(); sharedLoads.mockClear();
 
@@ -37,7 +37,7 @@ describe('Studio.loadTurnSnapshot', () => {
     const { h, f, agent, chat, accountStorage } = await fileStudio();
     await h.studio.adaptiveContext(agent.id, chat.personId, 'work');
     const snapshot = await h.studio.loadTurnSnapshot(chat, () => h.studio.adaptiveContext(agent.id, chat.personId, 'work'));
-    const loads = vi.spyOn(accountStorage, 'load');
+    const loads = vi.spyOn(accountStorage, 'readCommittedForEffect');
     const read = vi.spyOn(h.store, 'read');
     expect(await snapshot.replay!()).toEqual({ value: snapshot.value });
     expect(loads).not.toHaveBeenCalled();
@@ -70,8 +70,9 @@ describe('Studio.loadTurnSnapshot', () => {
   });
 });
 
+/** Without its commit-revision probe a file store has no read-only scope path. */
 async function withoutReadOnlyLoads<T>(storages: FileAdaptiveStorage[], fn: () => Promise<T>): Promise<T> {
-  const saved = storages.map(storage => storage.load);
-  for (const storage of storages) (storage as { load?: unknown }).load = undefined;
-  try { return await fn(); } finally { storages.forEach((storage, index) => { storage.load = saved[index]; }); }
+  const saved = storages.map(storage => storage.revisionProbe);
+  for (const storage of storages) (storage as { revisionProbe?: unknown }).revisionProbe = undefined;
+  try { return await fn(); } finally { storages.forEach((storage, index) => { storage.revisionProbe = saved[index]; }); }
 }

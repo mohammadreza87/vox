@@ -54,7 +54,7 @@ function RoleBody({ t, onClose, initialPack, closest, selectedId, onPick, fa, re
       <button key={r.id} type="button" className="vx-pick-row" aria-pressed={selected} onClick={() => onPick(r.id)}>
         <MiniCloud hue={r.hue} id={r.id} size={36} />
         <div>
-          <span {...textAttrs(roleTitle(r, fa))} style={{ fontWeight: 600 }}>{roleTitle(r, fa)}</span>
+          <span {...textAttrs(roleTitle(r, fa))} className="vx-catalog-layout-3d9df89e">{roleTitle(r, fa)}</span>
           <span {...textAttrs(roleSummary(r, fa))} className="vx-small vx-2 vx-clamp2">{roleSummary(r, fa)}</span>
         </div>
         {selected && <span className="vx-pick-check" aria-hidden="true"><Icon name="check" size={20} width={2.25} /></span>}
@@ -78,19 +78,19 @@ function RoleBody({ t, onClose, initialPack, closest, selectedId, onPick, fa, re
       )}
       <SheetScroll>
         {near.length > 0 && (
-          <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <section className="vx-catalog-layout-baf2fda5">
             <span className="vx-over">{t.closest}</span>
             <div className="vx-group vx-pick-list">{near.map(row)}</div>
           </section>
         )}
         {shelf && (
           <section id={`${id}-panel`} role={shelves.length > 1 ? 'tabpanel' : undefined}
-            aria-labelledby={shelves.length > 1 ? `${id}-tab-${shelf.pack}` : undefined} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            aria-labelledby={shelves.length > 1 ? `${id}-tab-${shelf.pack}` : undefined} className="vx-catalog-layout-baf2fda5">
             <span className="vx-over">{packTitle(catalog, shelf.pack, t.packFull[shelf.pack], fa)}</span>
             <div className="vx-group vx-pick-list">{shelf.roles.map(row)}</div>
           </section>
         )}
-        <button type="button" className="vx-link" style={{ alignSelf: 'flex-start' }} onClick={() => onPick(null)}>{t.detach}</button>
+        <button type="button" className="vx-link vx-catalog-layout-3f7001a7"  onClick={() => onPick(null)}>{t.detach}</button>
       </SheetScroll>
     </div>
   );

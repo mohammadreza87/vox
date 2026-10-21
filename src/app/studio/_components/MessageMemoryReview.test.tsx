@@ -7,7 +7,7 @@ const api = vi.hoisted(() => ({ messagePreview: vi.fn(), messageAccept: vi.fn() 
 vi.mock('../_lib/adaptive-client', () => ({ adaptiveApi: api }));
 const preview = () => ({ claims: ['Ali reportedly said the date may be March 5.'], sourceTextHash: 'a'.repeat(64), receipt: 'signed-receipt', expiresAt: Date.now() + 120000 });
 const props = () => ({ text: '  SELECTED_ONLY_TEXT\n', agentId: 'agent', space: 'work' as const, locale: 'en' as const, disabled: false, onClose: vi.fn(), onSaved: vi.fn() });
-beforeEach(() => { vi.resetAllMocks(); api.messagePreview.mockResolvedValue(preview()); api.messageAccept.mockResolvedValue({ memoryIds: ['claim'] }); });
+beforeEach(() => { api.messagePreview.mockReset(); api.messageAccept.mockReset(); api.messagePreview.mockResolvedValue(preview()); api.messageAccept.mockResolvedValue({ memoryIds: ['claim'] }); });
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 it('displays exact source, requires explicit preview then separate save, and renders claims as plain text', async () => {
   const p = props(), view = render(<MessageMemoryReview {...p} />);

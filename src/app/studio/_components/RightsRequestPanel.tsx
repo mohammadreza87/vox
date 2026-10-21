@@ -1,5 +1,6 @@
 'use client';
 import { useCallback, useId, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { rightsApi, type RightsRequestView, type RightsSnapshot, type RightsSpace } from '../_lib/rights-client';
 import { rightsCopy, rightsDate, rightsState, rightsTitle, type RightsLocale } from '../_lib/rights-copy';
 import { RightsLocalUsePanel } from './RightsLocalUsePanel';
@@ -7,21 +8,24 @@ import { RightsErasurePanel } from './RightsErasurePanel';
 import type { AdaptiveSnapshot } from '../_lib/adaptive-client';
 type ErasureProps = { memorySnapshot?: AdaptiveSnapshot | null; notesStale?: boolean; mutationDisabled?: boolean; onRefreshNotes?: () => void; onErasurePendingChange?: (token: string, pending: boolean) => boolean; onErasureDispatched?: () => void };
 import { tg } from '../_lib/client';
+import { Icon, Picker, Row, Seg, Spinner } from './ui';
 
-/** A remount boundary drops all prior account/space metadata before the next fetch. */
-export function RightsRequestPanel({ space, locale = 'en', sessionKey = tg()?.initData ?? '', ...erasure }: { space: RightsSpace; locale?: RightsLocale; sessionKey?: string } & ErasureProps) {
-  return <RequestPanel key={JSON.stringify([sessionKey, space])} space={space} locale={locale} session={sessionKey} {...erasure} />;
+type Kind = RightsRequestView['kind'];
+/** A remount boundary drops prior account/space metadata before the next fetch. */
+export function RightsRequestPanel({ space, locale = 'en', sessionKey = tg()?.initData ?? '', dock, ...erasure }: { space: RightsSpace; locale?: RightsLocale; sessionKey?: string; dock?: HTMLElement | null } & ErasureProps) {
+  return <RequestPanel key={JSON.stringify([sessionKey, space])} space={space} locale={locale} session={sessionKey} dock={dock ?? null} {...erasure} />;
 }
-function RequestPanel({ space, locale, session, ...erasure }: { space: RightsSpace; locale: RightsLocale; session: string } & ErasureProps) {
+function RequestPanel({ space, locale, session, dock, ...erasure }: { space: RightsSpace; locale: RightsLocale; session: string; dock: HTMLElement | null } & ErasureProps) {
   const c = rightsCopy[locale], id = useId();
   const [data, setData] = useState<RightsSnapshot | null>(null), [busy, setBusy] = useState(true), [issue, setIssue] = useState<'' | 'unknown' | 'error'>(''), [notice, setNotice] = useState('');
-  const [kind, setKind] = useState<RightsRequestView['kind']>('access_export'), [closing, setClosing] = useState<string | null>(null);
+  const [kind, setKind] = useState<Kind>('access_export'), [closing, setClosing] = useState<string | null>(null);
+  const [picking, setPicking] = useState(false);
   const controller = useRef<AbortController | null>(null), generation = useRef(0), lock = useRef(true), alive = useRef(true);
   const valid = useCallback((g: number) => alive.current && generation.current === g && tg()?.initData === session, [session]);
   const load = useCallback(async () => {
     if (lock.current && controller.current) return;
     const g = ++generation.current, abort = new AbortController(); controller.current = abort; lock.current = true;
-    setBusy(true); setIssue(''); setNotice(''); setClosing(null); setData(null);
+    setBusy(true); setIssue(''); setNotice(''); setClosing(null); setPicking(false); setData(null);
     try { const value = await rightsApi.read(space, session, abort.signal); if (valid(g)) { setData(value); setKind(current => value.supportedKinds.includes(current) ? current : value.supportedKinds[0] ?? 'access_export'); } }
     catch { if (valid(g)) setIssue('error'); }
     finally { if (valid(g)) { lock.current = false; setBusy(false); controller.current = null; } }
@@ -58,19 +62,26 @@ function RequestPanel({ space, locale, session, ...erasure }: { space: RightsSpa
     finally { if (valid(g)) { lock.current = false; setBusy(false); controller.current = null; } }
   };
   const disabled = busy || !!erasure.mutationDisabled || !!issue || !data?.available || !data.supportedKinds.includes(kind);
+  const kinds = data?.supportedKinds ?? [];
+  const kindControl = !kinds.length ? null
+    : kinds.length === 1 ? <div className="vx-group"><Row title={c.kind} plain value={c.kinds[kinds[0]]} /></div>
+    : kinds.length <= 3 ? <div className="vx-field"><span className="vx-label" aria-hidden="true">{c.kind}</span>
+      <Seg label={c.kind} value={kind} disabled={disabled} onChange={setKind} options={kinds.map(value => ({ value, label: c.kinds[value] }))} /></div>
+    : <>
+      <div className="vx-group"><Row title={c.kind} plain value={c.kinds[kind]} chevron disabled={disabled} aria-haspopup="dialog" onClick={() => setPicking(true)} /></div>
+      <Picker open={picking && !disabled} onClose={() => setPicking(false)} title={c.kind} value={kind} onChange={value => { if (!disabled) setKind(value); }} options={kinds.map(value => ({ value, label: c.kinds[value] }))} />
+    </>;
   return <section className="vx-card vx-privacy-card" dir={locale === 'fa' ? 'rtl' : 'ltr'} lang={locale} aria-labelledby={`${id}-title`} aria-busy={busy} style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
     <h2 className="vx-head" id={`${id}-title`}>{rightsTitle(space, locale)}</h2>
     <p className="vx-small">{c.scope}</p><p className="vx-small">{c.intro}</p><p className="vx-small vx-2">{c.immediate}</p>
-    {busy && <p role="status">{data ? c.pending : c.loading}</p>}
-    {issue && <p role="alert">{c[issue]}</p>}
+    {busy && <p role="status"><Spinner size={14} />{data ? c.pending : c.loading}</p>}
+    {issue && <div className="vx-banner warn"><Icon name="warn" size={18} /><div className="vx-banner-body"><span role="alert">{c[issue]}</span>
+      <button type="button" className="vx-btn vx-btn-secondary vx-btn-xs" disabled={busy || !!erasure.mutationDisabled} onClick={() => void load()}>{c.refresh}</button></div></div>}
     {data && (!data.available || data.policyStatus !== 'available') && <p role="status">{c.unavailable}</p>}
     {notice === 'prepared' && <p role="status">{c.prepared}</p>}
     <p className="vx-small vx-2">{c.support}: <a href="mailto:info@joyixir.com" dir="ltr" style={{ color: 'var(--text-2)' }}>info@joyixir.com</a></p>
-    <label className="vx-small" htmlFor={`${id}-kind`}>{c.kind}</label>
-    <select id={`${id}-kind`} className="vx-input" value={kind} disabled={disabled} onChange={event => setKind(event.target.value as RightsRequestView['kind'])}>
-      {(data?.supportedKinds ?? []).map(value => <option key={value} value={value}>{c.kinds[value]}</option>)}
-    </select>
-    <div className="vx-privacy-actions" style={{ flexWrap: 'wrap' }}><button className="vx-btn vx-btn-secondary" disabled={disabled} onClick={() => void run()}>{c.submit}</button><button className="vx-btn vx-btn-secondary" disabled={busy || !!erasure.mutationDisabled} onClick={() => void load()}>{c.refresh}</button></div>
+    {kindControl}
+    {dock ? createPortal(<button className="vx-btn vx-btn-primary vx-btn-block" disabled={disabled} onClick={() => void run()}>{c.submit}</button>, dock) : <button className="vx-btn vx-btn-primary" disabled={disabled} onClick={() => void run()}>{c.submit}</button>}
     {data && !data.requests.length && <p className="vx-small">{c.empty}</p>}
     {data?.expiredRequests?.map(row => <p key={row.requestId} className="vx-small" role="status">{c.reference}: <bdi>{row.requestId}</bdi> · {c.expiredRecord} {rightsDate(row.retainUntil, locale)}</p>)}
     {data?.requests.map(row => <article className="vx-card" key={row.requestId} style={{ minWidth: 0, overflowWrap: 'anywhere' }} aria-label={`${c.kinds[row.kind]} · ${row.requestId}`}>

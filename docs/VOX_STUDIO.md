@@ -45,6 +45,12 @@ The Mac polling runtime repairs active bots without a profile receipt at startup
 
 Roles: `owner > superadmin > admin > member > pending`. New people who press /start in @VoxxBot are `pending` until an admin approves them. The Telegram IDs in `STUDIO_SUPERADMIN_IDS` are the founding **owners**: they always stay owners and can make other owners, superadmins and admins. Superadmins can grant up to superadmin but never make or change owners. The last owner can't be removed.
 
+### Images in Telegram (off by default)
+
+`STUDIO_IMAGES=1` lets agents understand photos and JPEG/PNG image documents in private chats only; in groups and chats with guests, images are ignored as before and a caption is still read as text. While it reads an image, the bot may first reply "Looking at your image…". Images are never saved, and nothing from an image is remembered unless the member asks (for example "remember this") and the image is not a sensitive document such as an ID, bank card or payslip. People shown in a photo are never described or identified in memory. Image triage needs a decider with image support (`STUDIO_DECIDER=service`, after S09); without it, replies still work but nothing from an image is remembered.
+
+**فارسی:** با `STUDIO_IMAGES=1` عامل‌ها عکس‌ها و فایل‌های تصویری JPEG/PNG را فقط در گفت‌وگوی خصوصی می‌فهمند؛ در گروه‌ها و گفت‌وگوهای دارای مهمان، تصویرها مثل قبل نادیده گرفته می‌شوند و فقط کپشن به‌صورت متن خوانده می‌شود. ربات ممکن است هنگام بررسی تصویر ابتدا بنویسد «دارم تصویرت رو نگاه می‌کنم…». تصویرها هرگز ذخیره نمی‌شوند و چیزی از آن‌ها به خاطر سپرده نمی‌شود، مگر اینکه عضو خودش بخواهد (مثلاً «یادت باشه») و تصویر سند حساسی مثل کارت شناسایی، کارت بانکی یا فیش حقوقی نباشد. چهره یا هویت افرادی که در عکس هستند هرگز در حافظه توصیف یا شناسایی نمی‌شود. تشخیص نوع تصویر به تصمیم‌گیرنده‌ای با پشتیبانی از تصویر نیاز دارد (`STUDIO_DECIDER=service` پس از S09)؛ بدون آن پاسخ‌ها کار می‌کنند، اما چیزی از تصویر به خاطر سپرده نمی‌شود.
+
 ## Production (Firebase)
 
 Production runs serverless, so Studio switches modes there: bots receive updates by **webhook** (`/api/studio/telegram/[key]`, one derived secret per bot), state lives in **Firestore** (`studio/state`), media in **Cloud Storage** (`studio/media/`), and memories in the TIREH Firestore collections. Pushing to `main` deploys it and reconnects every bot.

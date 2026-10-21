@@ -1,3 +1,7 @@
+/* Vox Studio — "Soft Weather" design system (scoped to .vx).
+   Tokens, base type, components and the shared primitives (UI spec §7). Every value maps to the
+   reference boards. Logical properties throughout, so Persian (dir="rtl") mirrors for free.
+   Durations, easings, press scales, keyframes and reduced motion live in motion.css (loaded after). */
 /* Vox Studio — "Soft Weather" design system (scoped to .vx) */
 
 .vx-privacy { display: flex; flex-direction: column; gap: 16px; scroll-padding-block-end: calc(120px + env(safe-area-inset-bottom)); }
@@ -78,7 +82,9 @@
 .vx-privacy-note { padding-top: 14px; display: flex; flex-direction: column; gap: 10px; }
 .vx-privacy [dir="rtl"], .vx-privacy[dir="rtl"] { text-align: right; }
 
+/* ---------- 1. Tokens ---------- */
 .vx {
+  /* surfaces + text */
   --ground: #0E1013;
   --s1: #16191E;
   --s2: #1E2228;
@@ -88,20 +94,49 @@
   --text-3: #7D828C;
   --hair: rgba(255, 255, 255, .08);
   --volt: #D6FF5C;
+  --volt-hi: #E6FF99;
   --on-volt: #0E1013;
   --success: #5BE49B;
   --warn: #FFC24B;
   --danger: #FF6B5E;
   --ice: #8FB8FF;
-  --ease: cubic-bezier(.2, 0, 0, 1);
-  --ease-in: cubic-bezier(.05, .7, .1, 1);
-  --ease-over: cubic-bezier(.34, 1.56, .64, 1);
+  --switch-off: var(--s3);
+  --scrim: rgba(0, 0, 0, .5);
+  --caption-bg: rgba(0, 0, 0, .45);
+  --glass: rgba(22, 25, 30, .92);
+
+  /* status tints: pills .14, banners .12, selected cards .10 (board values) */
+  --volt-14: rgba(214, 255, 92, .14);
+  --success-14: rgba(91, 228, 155, .14); --success-12: rgba(91, 228, 155, .12);
+  --warn-14: rgba(255, 194, 75, .14);  --warn-12: rgba(255, 194, 75, .12);
+  --danger-14: rgba(255, 107, 94, .14); --danger-12: rgba(255, 107, 94, .12);
+  --ice-14: rgba(143, 184, 255, .14);  --ice-12: rgba(143, 184, 255, .12);
+
+  /* agent hue: set per screen/card with hueVars(pal); fallbacks = lilac */
+  --hue: #C3A6FF; --hue-light: #E6DBFF; --hue-shadow: #8D6BDB; --hue-glow: #B08CFF;
+  --hue-10: rgba(195, 166, 255, .10); --hue-12: rgba(195, 166, 255, .12); --hue-22: rgba(176, 140, 255, .22);
+
+  /* radii */
+  --r-full: 999px; --r-xl: 24px; --r-l: 20px; --r-m: 16px; --r-s: 12px; --r-sheet: 28px;
+  /* spacing: 4-pt base; 6/10/14/18 are the board's tight steps */
+  --gutter: 16px;
+  /* sizes */
+  --tap: 44px; --h-btn: 52px; --h-btn-sm: 40px; --h-chip: 32px; --h-meta: 28px; --h-pill: 22px;
+  /* elevation: flat, three shadows only */
+  --shadow-fab: 0 12px 32px rgba(214, 255, 92, .22);
+  --shadow-sheet: 0 16px 40px rgba(0, 0, 0, .5);
+  --shadow-toast: 0 12px 32px rgba(0, 0, 0, .4);
+  /* type families: Vazirmatn carries Persian (Onest/Unbounded have no Arabic script) */
+  --f-display: var(--font-unbounded), var(--font-vazir), sans-serif;
+  --f-body: var(--font-onest), var(--font-vazir), system-ui, sans-serif;
+  /* primitive timings, aliased to the motion tokens (motion.css owns the values) */
+  --d-press: var(--dur-instant, 90ms); --d-state: var(--dur-fast, 140ms); --d-fade: var(--dur-base, 220ms);
 
   position: fixed;
   inset: 0;
   background: var(--ground);
   color: var(--text);
-  font-family: var(--font-onest), system-ui, sans-serif;
+  font-family: var(--f-body);
   font-size: 15px;
   line-height: 21px;
   -webkit-font-smoothing: antialiased;
@@ -109,11 +144,15 @@
   display: flex;
   flex-direction: column;
 }
+/* Persian: Vazirmatn leads so punctuation and digits match the letters; Latin still falls to Onest */
+.vx:lang(fa) { --f-body: var(--font-vazir), var(--font-onest), system-ui, sans-serif; --f-display: var(--font-vazir), var(--font-unbounded), sans-serif; }
 
 .vx * { box-sizing: border-box; }
 /* :where keeps this at class specificity so .vx-btn-primary, .vx-tab etc. can set their own colour */
 .vx :where(button) { font: inherit; color: inherit; }
 .vx :focus-visible { outline: 2px solid var(--volt); outline-offset: 2px; }
+/* Directional icons (chevrons, forward arrows) mirror in RTL; media, clocks and waveforms don't. */
+.vx[dir="rtl"] .vx-flip, [dir="rtl"] .vx-flip { transform: scaleX(-1); }
 
 .vx-scroll {
   flex: 1;
@@ -124,35 +163,61 @@
 }
 /* Flex-column scrollers must scroll, not squash children (overflow:hidden groups would shrink to 0). */
 .vx-scroll > * { flex-shrink: 0; }
+.vx-stack { display: flex; flex-direction: column; gap: 20px; }
 
-.vx-display { font-family: var(--font-unbounded), sans-serif; font-weight: 600; font-size: 32px; line-height: 36px; letter-spacing: -0.02em; margin: 0; }
-.vx-title { font-family: var(--font-unbounded), sans-serif; font-weight: 500; font-size: 24px; line-height: 28px; letter-spacing: -0.015em; margin: 0; }
-.vx-title-m { font-family: var(--font-unbounded), sans-serif; font-weight: 500; font-size: 19px; line-height: 24px; letter-spacing: -0.01em; margin: 0; }
+/* ---------- 2. Type ---------- */
+.vx-display { font-family: var(--f-display); font-weight: 600; font-size: 32px; line-height: 36px; letter-spacing: -0.02em; margin: 0; }
+.vx-title-l { font-family: var(--f-display); font-weight: 600; font-size: 28px; line-height: 32px; letter-spacing: -0.02em; margin: 0; }
+.vx-title { font-family: var(--f-display); font-weight: 500; font-size: 24px; line-height: 28px; letter-spacing: -0.015em; margin: 0; }
+.vx-title-m { font-family: var(--f-display); font-weight: 500; font-size: 19px; line-height: 24px; letter-spacing: -0.01em; margin: 0; }
+.vx-wordmark { font-family: var(--f-display); font-weight: 600; font-size: 18px; letter-spacing: -0.02em; }
 .vx-head { font-weight: 600; font-size: 17px; line-height: 22px; }
+.vx-body-l { font-size: 16px; line-height: 22px; }
 .vx-small { font-size: 13px; line-height: 18px; }
+.vx-label { font-size: 12px; line-height: 16px; font-weight: 600; }
 .vx-over { font-size: 11px; line-height: 14px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--text-2); }
 .vx-2 { color: var(--text-2); }
 .vx-3 { color: var(--text-3); }
-.vx-num { font-feature-settings: "tnum"; }
+.vx-num { font-feature-settings: "tnum"; font-variant-numeric: tabular-nums; }
+.vx-line { display: block; }
+.vx-ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+/* Persian: no uppercase or tracking on Arabic script, slightly larger overline */
+.vx:lang(fa) .vx-over, .vx [lang="fa"] .vx-over, .vx:lang(fa) .vx-caption-who { letter-spacing: 0; text-transform: none; font-size: 12px; }
+.vx:lang(fa) .vx-display, .vx:lang(fa) .vx-title, .vx:lang(fa) .vx-title-l, .vx:lang(fa) .vx-title-m, .vx:lang(fa) .vx-wordmark { letter-spacing: 0; }
+.vx:lang(fa) .vx-pill.lock { letter-spacing: 0; }
 
-.vx-card { background: var(--s1); border: 1px solid var(--hair); border-radius: 24px; }
-.vx-group { background: var(--s1); border: 1px solid var(--hair); border-radius: 16px; overflow: hidden; }
+/* ---------- 3. Surfaces ---------- */
+.vx-card { background: var(--s1); border: 1px solid var(--hair); border-radius: var(--r-xl); }
+.vx-group { background: var(--s1); border: 1px solid var(--hair); border-radius: var(--r-m); overflow: hidden; }
 .vx-row { display: flex; align-items: center; gap: 12px; min-height: 56px; padding: 10px 16px; border-top: 1px solid var(--hair); }
 .vx-row:first-child { border-top: none; }
 
+/* ---------- 4. Buttons ---------- */
 .vx-btn {
-  height: 52px; border: none; border-radius: 999px; padding: 0 22px; cursor: pointer;
+  height: var(--h-btn); border: none; border-radius: var(--r-full); padding: 0 22px; cursor: pointer;
   font-weight: 600; font-size: 16px; display: inline-flex; align-items: center; justify-content: center; gap: 8px;
-  transition: transform .12s var(--ease), filter .12s, background .18s, opacity .18s;
-  text-decoration: none;
+  text-decoration: none; -webkit-tap-highlight-color: transparent;
 }
-.vx-btn:active { transform: scale(.97); filter: brightness(.92); }
-.vx-btn:disabled { opacity: .45; cursor: default; transform: none; }
+.vx-btn:active:not(:disabled) { filter: brightness(.92); }
+.vx-btn:disabled { opacity: .45; cursor: default; }
+/* A button waiting on its own request keeps full strength: the spinner is the state, not a dimmed label */
+.vx-btn[aria-busy="true"]:disabled { opacity: 1; }
+/* In-list actions: s3 by default; a colour class below overrides it */
+.vx-btn-xs { height: 32px; padding: 0 12px; font-size: 13px; background: var(--s3); color: var(--text); }
+.vx-btn-sm { height: var(--h-btn-sm); padding: 0 16px; font-size: 14px; }
 .vx-btn-primary { background: var(--volt); color: var(--on-volt); }
+/* Board disabled CTA = s3 fill + text-3 label, never a 45%-opacity volt */
+.vx-btn-primary:disabled { opacity: 1; background: var(--s3); color: var(--text-3); }
 .vx-btn-secondary { background: var(--s2); border: 1px solid var(--hair); color: var(--text); }
-.vx-btn-danger { background: rgba(255, 107, 94, .14); color: var(--danger); }
-.vx-btn-sm { height: 40px; padding: 0 16px; font-size: 14px; }
+.vx-btn-tonal { background: var(--volt-14); color: var(--volt); }
+.vx-btn-ghost { background: transparent; border: 1px solid var(--hair); color: var(--text); }
+.vx-btn-hue { background: var(--hue); color: var(--on-volt); }
+.vx-btn-danger { background: var(--danger-14); color: var(--danger); }
+.vx-btn-danger.solid { background: var(--danger); color: var(--ground); }
 .vx-btn-block { width: 100%; }
+.vx-choose { min-width: 84px; }
+/* Label swaps (Choose → Chosen, label → spinner) keep the button's width steady */
+.vx-btn > .vx-btn-busy { display: inline-grid; place-items: center; }
 /* Learning action labels can wrap to several lines in Persian on mobile. */
 .vx-learning-actions > .vx-btn { height: auto; min-height: 52px; padding-block: 10px; }
 /* Privacy actions must contain wrapped labels at narrow widths and zoom. */
@@ -163,23 +228,126 @@
 .vx-privacy .vx-privacy-actions > .vx-btn { flex: 1 1 140px; }
 
 .vx-icon-btn {
-  width: 44px; height: 44px; border-radius: 999px; border: none; background: transparent; color: var(--text);
-  display: inline-flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0;
+  width: var(--tap); height: var(--tap); border-radius: var(--r-full); border: none; background: transparent; color: var(--text);
+  display: inline-flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; -webkit-tap-highlight-color: transparent;
 }
 .vx-icon-btn.solid { background: var(--s1); border: 1px solid var(--hair); }
+.vx-icon-btn:disabled { opacity: .45; cursor: default; }
+/* Profile initial disc (Home header → You) */
+.vx-icon-btn.initial { background: var(--s3); font-size: 15px; font-weight: 600; }
 
-.vx-chip {
-  height: 32px; padding: 0 14px; border-radius: 999px; border: none; cursor: pointer; white-space: nowrap;
-  font-size: 13px; font-weight: 500; background: var(--s2); color: var(--text);
-  transition: background .18s var(--ease), color .18s, transform .12s;
+/* Round labelled actions (profile: Chat · Call · Groups · Memories) */
+.vx-actions { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.vx-action { display: flex; flex-direction: column; align-items: center; gap: 6px; background: none; border: 0; padding: 0; color: var(--text); cursor: pointer; font-size: 13px; line-height: 18px; font-weight: 500; min-width: 0; -webkit-tap-highlight-color: transparent; }
+.vx-action:disabled { opacity: .45; cursor: default; }
+.vx-action-disc { width: 56px; height: 56px; border-radius: var(--r-full); background: var(--s2); border: 1px solid var(--hair); display: grid; place-items: center; }
+
+/* Floating spawn button: 16px above the overlay tab bar. Folds to its icon while the grid scrolls down. */
+.vx-fab { position: absolute; inset-inline-end: var(--gutter); bottom: calc(var(--tabbar-h, 0px) + var(--gutter)); z-index: 7; height: 56px; padding-inline: 16px 20px; overflow: hidden; white-space: nowrap;
+  border: 0; border-radius: var(--r-full); background: var(--volt); color: var(--on-volt); display: inline-flex; align-items: center; gap: 8px;
+  font-weight: 600; font-size: 16px; box-shadow: var(--shadow-fab); cursor: pointer; -webkit-tap-highlight-color: transparent; }
+
+/* Call controls (60 round, 72 end) */
+.vx-ctrls { display: flex; align-items: center; justify-content: center; gap: 16px; padding: 0 var(--gutter) calc(36px + env(safe-area-inset-bottom)); }
+.vx-ctrl { width: 60px; height: 60px; border-radius: var(--r-full); border: 0; background: var(--s3); color: var(--text); display: grid; place-items: center; cursor: pointer; }
+.vx-ctrl[aria-pressed="true"] { background: var(--text); color: var(--ground); }
+.vx-ctrl-end { width: 72px; height: 72px; background: var(--danger); color: var(--ground); }
+
+/* Press for the primitives motion.css doesn't cover: fast in, springy out (motion §5.1) */
+.vx-back, .vx-action-disc, .vx-fab, .vx-ctrl, .vx-composer-send, .vx-composer-tool, .vx-seg > button, .vx-option.tap, .vx-chip-name {
+  transition: transform var(--spring-press), background-color var(--d-fade) var(--ease-standard), color var(--d-fade) var(--ease-standard), border-color var(--d-state) var(--ease-standard);
 }
-.vx-chip:active { transform: scale(.96); }
+.vx-back:active:not(:disabled), .vx-composer-tool:active:not(:disabled), .vx-composer-send:active:not(:disabled), .vx-action:active:not(:disabled) .vx-action-disc, .vx-ctrl:active:not(:disabled) {
+  transform: scale(var(--press-round, .92)); transition: transform var(--d-press) var(--ease-standard);
+}
+.vx-fab:active:not(:disabled) { transform: scale(.95); transition: transform var(--d-press) var(--ease-standard); }
+.vx-seg > button:active:not(:disabled), .vx-chip-name:active:not(:disabled) { transform: scale(var(--press-chip, .96)); transition: transform var(--d-press) var(--ease-standard); }
+.vx-option.tap:active { transform: scale(var(--press-card, .98)); transition: transform var(--d-press) var(--ease-standard); }
+
+/* ---------- 5. Chips, pills, meta ---------- */
+.vx-chip {
+  height: var(--h-chip); padding: 0 14px; border-radius: var(--r-full); border: none; cursor: pointer; white-space: nowrap;
+  font-size: 13px; font-weight: 500; background: var(--s2); color: var(--text); display: inline-flex; align-items: center; gap: 6px;
+  -webkit-tap-highlight-color: transparent;
+}
 .vx-chip[aria-pressed="true"] { background: var(--text); color: var(--ground); }
+.vx-chip:disabled { opacity: .45; cursor: default; }
+.vx-chip-count { color: var(--text-3); font-feature-settings: "tnum"; }
+.vx-chip[aria-pressed="true"] .vx-chip-count { color: rgba(14, 16, 19, .55); }
+/* Filter chips with a sliding highlight (layoutId pill behind the label) */
+.vx-chips { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; margin-inline: calc(var(--gutter) * -1); padding-inline: var(--gutter); }
+.vx-chips::-webkit-scrollbar { display: none; }
+.vx-chips.live > .vx-chip { position: relative; }
+.vx-chips.live > .vx-chip[aria-pressed="true"] { background: var(--s2); color: var(--ground); }
+/* Pills sit at z 0 and every label at z 1, so a pill sliding across a neighbour never hides its label */
+.vx-chip-pill, .vx-seg-pill { position: absolute; inset: 0; border-radius: inherit; background: var(--text); z-index: 0; }
+.vx-chip-label, .vx-seg-label { position: relative; z-index: 1; display: inline-flex; align-items: center; gap: 6px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+/* Name chip (Unbounded): spawn-2 name picker */
+.vx-chip-name { height: 40px; padding: 0 18px; font-family: var(--f-display); font-weight: 500; font-size: 15px; }
+
+.vx-pill { height: var(--h-pill); padding: 0 8px; white-space: nowrap; border-radius: var(--r-full); font-size: 11px; font-weight: 600; display: inline-flex; align-items: center; gap: 5px; background: var(--s2); color: var(--text-2); }
+.vx-pill.lock { background: var(--ice-14); color: var(--ice); letter-spacing: .08em; }
+.vx-pill.live { background: var(--success-14); color: var(--success); }
+.vx-pill.volt { background: var(--volt-14); color: var(--volt); }
+.vx-pill.warn { background: var(--warn-14); color: var(--warn); }
+.vx-pill.danger { background: var(--danger-14); color: var(--danger); }
+.vx-pill-dot { width: 6px; height: 6px; border-radius: var(--r-full); background: currentColor; flex-shrink: 0; }
+
+/* Meta chips (non-interactive facts): profile "In 3 groups · Everyone in HOOR · Hired by Reza" */
+.vx-meta { height: var(--h-meta); padding: 0 10px; border-radius: var(--r-full); background: var(--s2); color: var(--text-2); font-size: 13px; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.vx-metas { display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* ---------- 6. Selection controls ---------- */
+/* Segmented control: spawn-3 voice tabs. .live = the Seg component's sliding pill. */
+.vx-seg { display: grid; grid-auto-columns: minmax(0, 1fr); grid-auto-flow: column; gap: 4px; padding: 4px; border-radius: var(--r-full); background: var(--s2); }
+.vx-seg > button { position: relative; height: 36px; border: 0; border-radius: var(--r-full); background: transparent; color: var(--text-2); font-size: 14px; font-weight: 600; cursor: pointer; min-width: 0; padding-inline: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; -webkit-tap-highlight-color: transparent; }
+.vx-seg > button[aria-selected="true"], .vx-seg > button[aria-pressed="true"] { background: var(--text); color: var(--ground); }
+.vx-seg.live > button[aria-selected="true"] { background: transparent; }
+.vx-seg > button:disabled { opacity: .45; cursor: default; }
+
+/* Switch: s3 off, volt on, ground knob. The ::after knob serves plain markup;
+   the Switch component renders a real knob (.vx-switch.live) so it can spring and stretch. */
+.vx-switch { position: relative; width: 44px; height: 26px; flex-shrink: 0; border-radius: var(--r-full); background: var(--switch-off); transition: background-color var(--d-state) var(--ease-standard); }
+.vx-switch::after { content: ""; position: absolute; top: 3px; inset-inline-start: 3px; width: 20px; height: 20px; border-radius: var(--r-full); background: var(--text-2); transition: transform var(--spring-snappy, .2s), background-color var(--d-state); }
+[aria-checked="true"] > .vx-switch, .vx-switch[aria-checked="true"] { background: var(--volt); }
+[aria-checked="true"] > .vx-switch:not(.live)::after, .vx-switch[aria-checked="true"]:not(.live)::after { background: var(--ground); transform: translateX(18px); }
+[dir="rtl"] [aria-checked="true"] > .vx-switch:not(.live)::after, [dir="rtl"] .vx-switch[aria-checked="true"]:not(.live)::after { transform: translateX(-18px); }
+.vx-switch.live { display: flex; align-items: center; justify-content: flex-start; padding: 3px; }
+.vx-switch.live::after { content: none; }
+[aria-checked="true"] > .vx-switch.live { justify-content: flex-end; }
+.vx-switch.live[aria-checked="true"] { justify-content: flex-end; }
+.vx-toggle { border: 0; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.vx-toggle:disabled { opacity: .45; cursor: default; }
+.vx-switch-knob { width: 20px; height: 20px; display: block; }
+.vx-switch-knob > span { display: block; width: 100%; height: 100%; border-radius: var(--r-full); background: var(--text-2); transition: background-color var(--d-state) var(--ease-standard); }
+[aria-checked="true"] > .vx-switch .vx-switch-knob > span, .vx-switch[aria-checked="true"] .vx-switch-knob > span { background: var(--ground); }
+:disabled > .vx-switch { opacity: .45; }
+
+/* Radio + check marks (decorative spans inside a role=radio / role=checkbox row) */
+.vx-radio { width: 20px; height: 20px; border-radius: var(--r-full); border: 2px solid var(--text-3); flex-shrink: 0; display: grid; place-items: center; transition: border-color var(--d-state) var(--ease-standard); }
+.vx-radio::after { content: ""; width: 10px; height: 10px; border-radius: var(--r-full); background: var(--volt); transform: scale(0); transition: transform var(--spring-pop, .3s); }
+[aria-checked="true"] > .vx-radio { border-color: var(--volt); }
+[aria-checked="true"] > .vx-radio::after { transform: scale(1); }
+.vx-check { width: 22px; height: 22px; border-radius: 7px; border: 2px solid var(--text-3); flex-shrink: 0; display: grid; place-items: center; color: var(--on-volt); transition: background-color var(--d-state), border-color var(--d-state); }
+.vx-check > svg { transform: scale(0); transition: transform var(--spring-pop, .3s); }
+[aria-checked="true"] > .vx-check, [aria-pressed="true"] > .vx-check { background: var(--volt); border-color: var(--volt); }
+[aria-checked="true"] > .vx-check > svg, [aria-pressed="true"] > .vx-check > svg { transform: scale(1); }
+.vx-row.danger[aria-checked="true"] > .vx-radio { border-color: var(--danger); }
+.vx-row.danger[aria-checked="true"] > .vx-radio::after { background: var(--danger); }
+
+/* Styled native select (keeps the native picker, removes the raw OS chrome). Time-of-day only. */
+.vx-select { appearance: none; -webkit-appearance: none; width: 100%; height: 48px; border-radius: var(--r-s); border: 1px solid var(--hair); background-color: var(--s2); color: var(--text);
+  font: inherit; font-size: 15px; padding-inline: 14px 40px; cursor: pointer;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 24' fill='none' stroke='%23A9ADB5' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 12px center; }
+[dir="rtl"] .vx-select { background-position: left 12px center; padding-inline: 14px 40px; }
 
 .vx-input, .vx-textarea {
-  width: 100%; border-radius: 12px; border: 1px solid var(--hair); background: var(--s2); color: var(--text);
-  font: inherit; font-size: 15px; padding: 12px 14px; outline: none;
+  width: 100%; border-radius: var(--r-s); border: 1px solid var(--hair); background: var(--s2); color: var(--text);
+  font: inherit; font-size: 15px; padding: 12px 14px; outline: none; transition: border-color var(--d-state) var(--ease-standard);
 }
+.vx-input:focus, .vx-textarea:focus { border-color: rgba(255, 255, 255, .22); }
+.vx-input[aria-invalid="true"], .vx-textarea[aria-invalid="true"] { border-color: var(--danger); }
 .vx-textarea { resize: none; line-height: 21px; }
 
 /* ---- Native controls in the house style (every panel gets these without new markup) ---- */
@@ -232,79 +400,354 @@
 .vx fieldset > legend { padding: 0; margin-bottom: 6px; }
 .vx-input::placeholder, .vx-textarea::placeholder { color: var(--text-3); }
 .vx-range { width: 100%; accent-color: var(--volt); }
+/* Search field: icon inside a pill input */
+.vx-search { position: relative; display: flex; align-items: center; }
+.vx-search > svg { position: absolute; inset-inline-start: 14px; color: var(--text-3); pointer-events: none; }
+.vx-search > .vx-input { padding-inline-start: 42px; border-radius: var(--r-full); height: 44px; }
 
-.vx-pill { height: 22px; padding: 0 8px; white-space: nowrap; border-radius: 999px; font-size: 11px; font-weight: 600; display: inline-flex; align-items: center; gap: 5px; }
-.vx-pill.lock { background: rgba(143, 184, 255, .14); color: var(--ice); letter-spacing: .08em; }
-.vx-pill.live { background: rgba(91, 228, 155, .14); color: var(--success); }
-.vx-pill.volt { background: rgba(214, 255, 92, .14); color: var(--volt); }
-.vx-pill.warn { background: rgba(255, 194, 75, .14); color: var(--warn); }
-.vx-pill.danger { background: rgba(255, 107, 94, .14); color: var(--danger); }
+/* ---------- 7. Lists & sections (the settings family) ---------- */
+.vx-section { display: flex; flex-direction: column; gap: 8px; }
+.vx-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding-inline: 4px; }
+.vx-section-head > h2 { margin: 0; }
+.vx-section-foot { padding-inline: 4px; font-size: 13px; line-height: 18px; color: var(--text-3); margin: 0; }
+.vx-row-btn { width: 100%; background: none; border: 0; border-top: 1px solid var(--hair); color: inherit; text-align: start; cursor: pointer; font: inherit; -webkit-tap-highlight-color: transparent; }
+.vx-row-btn:first-child { border-top: 0; }
+.vx-row-btn:disabled { cursor: default; opacity: .55; }
+.vx-row.l { min-height: 68px; }
+.vx-row.top { align-items: flex-start; }
+.vx-row.danger { color: var(--danger); }
+.vx-row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.vx-row-title { font-size: 15px; line-height: 21px; font-weight: 600; overflow-wrap: anywhere; }
+.vx-row-title.plain { font-weight: 400; }
+.vx-row-sub { font-size: 13px; line-height: 18px; color: var(--text-2); }
+.vx-row-sub.warn { color: var(--warn); }
+.vx-row-value { font-size: 15px; color: var(--text-2); text-align: end; flex-shrink: 0; max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vx-chev { color: var(--text-3); flex-shrink: 0; display: inline-flex; }
+[dir="rtl"] .vx-chev { transform: scaleX(-1); }
 
-.vx-banner { display: flex; gap: 10px; padding: 12px 14px; border-radius: 16px; font-size: 13px; line-height: 18px; }
-.vx-banner.warn { background: rgba(255, 194, 75, .12); }
-.vx-banner.info { background: rgba(143, 184, 255, .12); }
-.vx-banner.danger { background: rgba(255, 107, 94, .12); }
+/* Leading tiles */
+.vx-tile { width: 40px; height: 40px; border-radius: var(--r-s); flex-shrink: 0; display: grid; place-items: center; font-weight: 600; font-size: 15px; background: var(--s2); color: var(--text); }
+.vx-tile.hue { background: var(--hue); color: var(--on-volt); }
+.vx-tile.icon { background: var(--s2); color: var(--text-2); }
+/* Compact index tile (the You hub's settings rows); entity rows keep the 40px tile. */
+.vx-tile.sm { width: 32px; height: 32px; }
+.vx-tile.sm > svg { width: 18px; height: 18px; }
+.vx-initials { width: 40px; height: 40px; border-radius: var(--r-full); background: var(--s3); display: grid; place-items: center; font-weight: 600; font-size: 14px; flex-shrink: 0; }
 
+/* ---------- 8. Cards, panels, banners ---------- */
+.vx-panel { background: var(--s1); border: 1px solid var(--hair); border-radius: var(--r-m); padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+.vx-panel > p { margin: 0; }
+.vx-panel-divide { display: flex; align-items: center; gap: 10px; padding-top: 10px; border-top: 1px solid var(--hair); }
+.vx-doc { background: var(--s1); border: 1px solid var(--hair); border-radius: var(--r-xl); padding: 18px; display: flex; flex-direction: column; gap: 14px; }
+.vx-doc-sec { display: flex; flex-direction: column; gap: 4px; }
+.vx-doc-sec > p { margin: 0; }
+.vx-strip { display: flex; align-items: center; gap: 12px; padding-block: 12px; padding-inline: 16px 12px; border-radius: var(--r-m); background: var(--hue-12); }
+.vx-strip .vx-over { color: var(--hue); }
+
+/* Selectable option card: voice previews (72 tall, r16; selected = hue tint + hue border) */
+.vx-option { display: flex; align-items: center; gap: 12px; min-height: 72px; padding-block: 10px; padding-inline: 14px; border-radius: var(--r-m); background: var(--s1); border: 1px solid var(--hair); transition: background-color var(--d-state) var(--ease-standard), border-color var(--d-state) var(--ease-standard); }
+.vx-option.tap { width: 100%; text-align: start; color: inherit; font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.vx-option[aria-checked="true"], .vx-option.selected { background: var(--hue-10); border-color: var(--hue); }
+.vx-option-play { width: 44px; height: 44px; border-radius: var(--r-full); border: 0; background: var(--hue); color: var(--on-volt); display: grid; place-items: center; flex-shrink: 0; cursor: pointer; }
+.vx-option-play.s3 { width: 40px; height: 40px; background: var(--s3); color: var(--text); }
+.vx-option-play:disabled { opacity: .45; cursor: default; }
+
+.vx-banner { display: flex; align-items: flex-start; gap: 10px; padding: 12px 14px; border-radius: var(--r-m); font-size: 13px; line-height: 18px; }
+.vx-banner.warn { background: var(--warn-12); }
+.vx-banner.info { background: var(--ice-12); }
+.vx-banner.danger { background: var(--danger-12); }
+.vx-banner.success { background: var(--success-12); }
+.vx-banner > svg { flex-shrink: 0; margin-top: 0; }
+.vx-banner.warn > svg { color: var(--warn); } .vx-banner.info > svg { color: var(--ice); } .vx-banner.danger > svg { color: var(--danger); } .vx-banner.success > svg { color: var(--success); }
+.vx-banner-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.vx-banner-body > .vx-btn { align-self: flex-start; }
+
+.vx-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 0; }
+.vx-stat { background: var(--s1); border: 1px solid var(--hair); border-radius: var(--r-m); padding: 12px 14px; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.vx-stat-value { font-family: var(--f-display); font-weight: 500; font-size: 22px; line-height: 26px; font-feature-settings: "tnum"; margin: 0; }
+.vx-stat-label { font-size: 12px; line-height: 16px; color: var(--text-2); margin: 0; order: 1; }
+
+.vx-disclosure > summary { list-style: none; display: flex; align-items: center; gap: 6px; min-height: var(--tap); color: var(--text-2); font-size: 13px; font-weight: 600; cursor: pointer; }
+.vx-disclosure > summary::-webkit-details-marker { display: none; }
+.vx-disclosure > summary::after { content: ""; width: 8px; height: 8px; border: solid currentColor; border-width: 0 1.75px 1.75px 0; transform: rotate(45deg) translateY(-2px); transition: transform var(--d-state) var(--ease-standard); margin-inline-start: 2px; }
+.vx-disclosure[open] > summary::after { transform: rotate(-135deg) translateY(-1px); }
+.vx-code { margin: 0; padding: 12px; border-radius: var(--r-s); background: var(--s2); font: 12px/18px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--text-2); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 280px; overflow: auto; direction: ltr; text-align: left; }
+
+/* Empty / error: character + title + body + optional action */
+.vx-empty { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px; padding: 40px 24px; }
+.vx-empty > p { margin: 0; color: var(--text-2); max-width: 300px; }
+.vx-empty > .vx-btn { margin-top: 6px; }
+.vx-footnote { font-size: 12px; line-height: 17px; color: var(--text-3); margin: 0; padding-inline: 4px; }
+
+/* ---------- 9. Conversation ---------- */
+.vx-thread { display: flex; flex-direction: column; gap: 8px; }
+.vx-bubble { max-width: 84%; padding: 10px 14px; border-radius: 20px; font-size: 15px; line-height: 21px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.vx-bubble.me { align-self: flex-end; background: var(--volt); color: var(--on-volt); border-end-end-radius: 6px; }
+.vx-bubble.agent { align-self: flex-start; background: var(--s2); border-end-start-radius: 6px; }
+.vx-bubble.failed { opacity: .6; }
+.vx-bubble-meta { font-size: 12px; color: var(--text-3); padding-inline: 6px; }
+.vx-bubble-meta.me { align-self: flex-end; }
+.vx-typing { display: inline-flex; gap: 4px; padding-block: 6px; }
+.vx-typing > span { width: 6px; height: 6px; border-radius: var(--r-full); background: var(--text-2); animation: vxPulse 1.2s ease-in-out infinite; }
+.vx-typing > span:nth-child(2) { animation-delay: .2s; } .vx-typing > span:nth-child(3) { animation-delay: .4s; }
+/* Composer pill: spawn-2 "Ask Claude" (48 tall, s2, send = 36 volt disc) */
+.vx-composer { display: flex; align-items: flex-end; gap: 8px; min-height: 48px; padding-block: 6px; padding-inline: 16px 6px; border-radius: 24px; background: var(--s2); border: 1px solid var(--hair); transition: border-color var(--d-state) var(--ease-standard); }
+.vx-composer:focus-within { border-color: rgba(255, 255, 255, .18); }
+.vx-composer.has-tool { padding-inline-start: 6px; }
+.vx-composer > input, .vx-composer > textarea { flex: 1; min-width: 0; align-self: center; border: 0; background: transparent; color: var(--text); font: inherit; font-size: 15px; line-height: 21px; outline: none; resize: none; padding-block: 6px; max-height: calc(21px * 5 + 12px); }
+.vx-composer > input::placeholder, .vx-composer > textarea::placeholder { color: var(--text-3); }
+.vx-composer :focus-visible { outline: none; }
+.vx-composer-send { width: 36px; height: 36px; border-radius: var(--r-full); border: 0; background: var(--volt); color: var(--on-volt); display: grid; place-items: center; flex-shrink: 0; cursor: pointer; }
+.vx-composer-send:disabled { background: var(--s3); color: var(--text-3); cursor: default; }
+.vx-composer-tool { width: 36px; height: 36px; border-radius: var(--r-full); border: 0; background: transparent; color: var(--text-2); display: grid; place-items: center; flex-shrink: 0; cursor: pointer; }
+
+/* ---------- 10. Call ---------- */
+.vx-status { position: relative; overflow: hidden; height: 32px; padding: 0 14px; border-radius: var(--r-full); background: var(--s1); border: 1px solid var(--hair); display: inline-flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 500; }
+.vx-status-dot { width: 8px; height: 8px; border-radius: var(--r-full); background: var(--status, var(--success)); transition: background-color var(--d-fade); }
+.vx-caption { margin: 0 var(--gutter); padding: 14px 16px; border-radius: var(--r-m); background: var(--caption-bg); min-height: 64px; }
+.vx-caption-who { font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--who, var(--text-2)); }
+.vx-caption > p { margin: 4px 0 0; font-size: 16px; line-height: 22px; }
+.vx-wave { display: flex; align-items: center; justify-content: center; gap: 3px; height: 40px; }
+.vx-wave > span { width: 3px; border-radius: 2px; background: var(--wave, var(--text)); }
+.vx-tilegrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.vx-ptile { height: 112px; border-radius: var(--r-l); background: var(--s1); border: 1px solid var(--hair); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; position: relative; }
+.vx-infobar { height: 40px; border-radius: var(--r-s); background: var(--s1); border: 1px solid var(--hair); display: flex; align-items: center; gap: 8px; padding-inline: 12px; font-size: 13px; color: var(--text-2); }
+
+/* ---------- 11. Avatars & hero ---------- */
+.vx-avatar { position: relative; display: grid; place-items: center; flex-shrink: 0; }
+.vx-avatar > img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.vx-avatar.disc { border-radius: var(--r-full); background: var(--hue-12); overflow: hidden; }
+.vx-avatar.disc > img, .vx-avatar.disc > svg { width: 86%; height: 86%; }
+.vx-avatars { display: flex; }
+.vx-avatars > * { box-shadow: 0 0 0 2px var(--s1); border-radius: var(--r-full); }
+.vx-avatars > * + * { margin-inline-start: -8px; }
+.vx-hero-glow { position: absolute; pointer-events: none; inset-inline-start: 50%; translate: -50% 0; border-radius: 50%; background: radial-gradient(closest-side, var(--hue-22), transparent); }
+.vx-card-glow { position: absolute; top: 18px; inset-inline-start: 50%; width: 120px; height: 120px; margin-inline-start: -60px; border-radius: 50%; background: var(--hue-glow); opacity: .16; pointer-events: none; }
+[dir="rtl"] .vx-hero-glow { translate: 50% 0; }
+
+/* Agent card (Home grid): r24, 204 tall, 12/14/14 padding */
+.vx-agent-card { position: relative; height: 204px; padding: 12px 14px 14px; display: flex; flex-direction: column; text-align: start; cursor: pointer; overflow: hidden; color: inherit; font: inherit; width: 100%; -webkit-tap-highlight-color: transparent; }
+.vx-agent-card-face { display: flex; justify-content: center; margin-top: 6px; position: relative; }
+.vx-agent-card-pill { position: absolute; top: 12px; inset-inline-start: 12px; z-index: 1; }
+.vx-agent-card-pill.end { inset-inline-start: auto; inset-inline-end: 12px; }
+.vx-agent-card-text { margin-top: auto; display: flex; flex-direction: column; min-width: 0; position: relative; }
+.vx-agent-card-status { margin-top: 8px; height: 22px; display: flex; align-items: center; gap: 6px; position: relative; }
+.vx-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+
+/* ---------- 12. Bottom CTA area ---------- */
+/* Board: 132px fade (transparent → ground at 32%), CTA 24px from the bottom, 13px helper above */
 .vx-dock {
-  position: absolute; left: 0; right: 0; bottom: 0; padding: 12px 16px calc(16px + env(safe-area-inset-bottom));
-  background: linear-gradient(rgba(14, 16, 19, 0), var(--ground) 35%); display: flex; gap: 10px; z-index: 5;
+  position: absolute; inset-inline: 0; bottom: 0; z-index: 5; display: flex; gap: 10px;
+  padding: 28px var(--gutter) calc(24px + env(safe-area-inset-bottom));
+  background: linear-gradient(rgba(14, 16, 19, 0), var(--ground) 32%);
 }
+.vx-dock.stack { flex-direction: column; }
+.vx-dock-row { display: flex; gap: 10px; }
+.vx-dock-row > .vx-btn { flex: 1; min-width: 0; }
+.vx-dock-note { font-size: 13px; color: var(--text-2); text-align: center; margin: 0; }
 
-.vx-tabbar {
-  position: relative; flex-shrink: 0; z-index: 6;
-  padding: 8px 8px calc(10px + env(safe-area-inset-bottom));
-  background: rgba(22, 25, 30, .92); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
-  border-top: 1px solid var(--hair); display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
-}
-.vx-tab { display: flex; flex-direction: column; align-items: center; gap: 3px; background: none; border: none; cursor: pointer; color: var(--text-3); font-size: 11px; font-weight: 600; padding: 0; }
-.vx-tab { min-width: 0; padding-inline: 4px; }
-.vx-tab-label { max-width: 100%; overflow-wrap: anywhere; }
-.vx-tab[aria-current="page"] { color: var(--text); }
-.vx-tab-pill { width: 48px; height: 32px; border-radius: 999px; display: flex; align-items: center; justify-content: center; position: relative; }
+/* ---------- 13. Top bar (centred title whatever the side widths) ---------- */
+/* --tb-side (set by TopBar): both side tracks share the wider side's width, so a long title ellipsizes
+   instead of running under the end actions, and the title stays centred */
+.vx-topbar { display: grid; grid-template-columns: minmax(var(--tb-side, 44px), 1fr) minmax(0, auto) minmax(var(--tb-side, 44px), 1fr); align-items: center; gap: 4px; min-height: 44px; padding: 12px 16px 0; flex-shrink: 0; position: relative; z-index: 2; }
+.vx-topbar > :first-child { justify-self: start; min-width: 0; max-width: 100%; }
+.vx-topbar > :last-child { justify-self: end; display: flex; align-items: center; gap: 4px; }
+.vx-topbar-title { text-align: center; display: flex; flex-direction: column; align-items: center; min-width: 0; max-width: 100%; }
+.vx-topbar-title > * { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vx-topbar-title > :first-child { font-size: 17px; line-height: 22px; font-weight: 600; }
+.vx-topbar-title > :nth-child(2) { font-size: 13px; line-height: 18px; color: var(--text-2); font-feature-settings: "tnum"; }
+.vx-back { display: inline-flex; align-items: center; gap: 2px; height: 44px; min-width: 44px; max-width: 100%; padding-inline: 0 8px; background: none; border: 0; border-radius: var(--r-full); color: var(--text); font-size: 15px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.vx-back.icon { justify-content: center; padding: 0; width: 44px; }
+.vx-back > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Spawn step dots */
+.vx-steps { display: flex; gap: 6px; height: 22px; align-items: center; }
+.vx-steps > span { display: block; height: 4px; border-radius: var(--r-full); background: var(--s3); transition: background-color var(--d-fade) var(--ease-standard); }
+.vx-steps > span.on { background: var(--volt); }
+/* Tab-root header (Agents, Groups, Org, You) */
+.vx-pagehead { display: flex; flex-direction: column; gap: 6px; margin-top: 16px; }
+.vx-pagehead-row { display: flex; align-items: center; gap: 12px; }
+.vx-pagehead-row > :first-child { flex: 1; min-width: 0; }
+/* Home header: wordmark + Search + initial disc */
+.vx-apphead { display: flex; align-items: center; justify-content: space-between; height: 44px; gap: 8px; }
+.vx-apphead-brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.vx-apphead-end { display: flex; align-items: center; gap: 8px; }
 
-.vx-sheet-scrim { position: absolute; inset: 0; background: rgba(0, 0, 0, .5); z-index: 20; }
+/* ---------- 14. Sheets ---------- */
+.vx-sheet-scrim { position: absolute; inset: 0; z-index: 20; }
+.vx-sheet-scrim > span { position: absolute; inset: 0; background: var(--scrim); }
 .vx-sheet {
-  position: absolute; left: 0; right: 0; bottom: 0; z-index: 21; max-height: 92%; overflow-y: auto;
-  background: var(--s2); border-radius: 28px 28px 0 0; padding: 20px 16px calc(20px + env(safe-area-inset-bottom));
-  box-shadow: 0 16px 40px rgba(0, 0, 0, .5);
+  position: absolute; inset-inline: 0; bottom: 0; z-index: 21; max-height: 92%; display: flex; flex-direction: column;
+  background: var(--s2); border-radius: var(--r-sheet) var(--r-sheet) 0 0; box-shadow: var(--shadow-sheet); outline: none;
 }
-.vx-grabber { width: 36px; height: 4px; border-radius: 999px; background: var(--text-3); margin: -8px auto 14px; opacity: .5; }
+/* The spring overshoots upward a few px; keep the sheet's colour under it instead of a gap */
+.vx-sheet::after { content: ""; position: absolute; inset-inline: 0; top: 100%; height: 64px; background: var(--s2); pointer-events: none; }
+/* Sheets are s2, so the s2 controls inside step up to s3: a Seg keeps its track and a chip its body.
+   :where keeps this at one class, so pressed chips, hue chips and bare textareas still win. */
+.vx-sheet :where(.vx-seg, .vx-chip, .vx-composer, .vx-input, .vx-textarea, .vx-select) { background-color: var(--s3); }
+.vx-sheet.top-layer { z-index: 31; }
+.vx-sheet-scrim.top-layer { z-index: 30; }
+/* Drag handle: a full-width 28px strip, so the grab target is bigger than the 4px bar */
+.vx-sheet-grab { flex-shrink: 0; height: 24px; display: grid; place-items: center; cursor: grab; touch-action: none; }
+.vx-grabber { width: 36px; height: 4px; border-radius: var(--r-full); background: var(--text-3); opacity: .5; }
+.vx-sheet-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; padding: 6px var(--gutter) calc(20px + env(safe-area-inset-bottom)); }
+.vx-sheet.has-dock .vx-sheet-body { padding-bottom: 8px; }
+.vx-sheet-dock { flex-shrink: 0; display: flex; flex-direction: column; gap: 10px; padding: 12px var(--gutter) calc(16px + env(safe-area-inset-bottom)); }
+.vx-sheet-head { display: flex; flex-direction: column; gap: 4px; margin-bottom: 14px; }
+.vx-confirm { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px; padding-top: 4px; }
+.vx-confirm > p { margin: 0; color: var(--text-2); max-width: 320px; }
+.vx-confirm-actions { display: flex; flex-direction: column; gap: 10px; width: 100%; margin-top: 10px; }
 
-.vx-toast {
-  position: absolute; left: 16px; right: 16px; top: calc(12px + env(safe-area-inset-top)); z-index: 40;
-  background: var(--s3); border: 1px solid var(--hair); border-radius: 16px; padding: 12px 14px; font-size: 14px;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, .4);
-  pointer-events: none; /* never block the top bar underneath */
-}
+/* ---------- 15. Skeletons (shape only; the sheen is motion.css .vx-skeleton) ---------- */
+.vx-skel-bar { display: block; height: 10px; border-radius: var(--r-full); background: var(--s2); }
+.vx-skel-bar.title { height: 14px; }
+.vx-skel-dot { width: 40px; height: 40px; border-radius: var(--r-full); background: var(--s2); flex-shrink: 0; }
+.vx-skel-dot.tile { border-radius: var(--r-s); }
+.vx-skeleton.vx-group, .vx-skeleton.vx-skel-card { background: var(--s1); }
+.vx-skeleton.vx-group { border-radius: var(--r-m); }
+.vx-skeleton.vx-skel-card { height: 204px; border-radius: var(--r-xl); border: 1px solid var(--hair); padding: 12px 14px 14px; display: flex; flex-direction: column; }
+.vx-skel-card-face { display: flex; justify-content: center; margin-top: 14px; color: var(--s2); }
+.vx-skel-card-text { margin-top: auto; display: flex; flex-direction: column; gap: 8px; }
 
-.vx-skeleton { background: linear-gradient(90deg, var(--s1), var(--s2), var(--s1)); background-size: 200% 100%; animation: vxShimmer 1.4s linear infinite; border-radius: 16px; }
-@keyframes vxShimmer { to { background-position: -200% 0; } }
+/* ---------- 16. Board screens (E3): Home, Agent, Groups, Add to groups, Spawn ---------- */
+/* A screen-level hue scope that doesn't add a box (the screen stays one flex column) */
+.vx-hue-scope { display: contents; }
+/* Animated list items wrapping rows keep the group's dividers */
+.vx-group > .vx-li + .vx-li > .vx-row { border-top: 1px solid var(--hair); }
+.vx-over.warn { color: var(--warn); }
+.vx-link { color: var(--volt); text-decoration: underline; text-underline-offset: 2px; }
+.vx-link-btn { background: none; border: 0; padding: 0 4px; margin-inline-start: 2px; color: var(--volt); font: inherit; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; -webkit-tap-highlight-color: transparent; }
+.vx-link-btn.danger { color: var(--danger); }
+.vx-link-btn:disabled { opacity: .45; cursor: default; }
+.vx-inline-icon { vertical-align: -2px; margin-inline-end: 4px; }
+.vx-self-start { align-self: flex-start; }
+.vx-self-center { align-self: center; }
+.vx-center { display: flex; justify-content: center; }
+.vx-grow { flex: 1; min-width: 0; }
+.vx-btn-icon { display: inline-flex; }
+.vx-stack > .vx-pagehead { margin-top: 4px; }
+h2.vx-section-head, h3.vx-section-head { margin: 0; }
 
-/* ---- Cloud character motion ---- */
-@keyframes vxBreathe { 0%, 100% { transform: translateY(0) scale(1, 1); } 50% { transform: translateY(-2px) scale(.99, 1.025); } }
-@keyframes vxBlink { 0%, 93%, 100% { transform: scaleY(1); } 96% { transform: scaleY(.1); } }
-@keyframes vxTalk { 0%, 100% { transform: scaleY(.3); } 25% { transform: scaleY(1); } 50% { transform: scaleY(.55); } 75% { transform: scaleY(.9); } }
-@keyframes vxOrbit { to { transform: rotate(360deg); } }
-@keyframes vxRise { 0% { transform: translateY(0); opacity: 0; } 30% { opacity: .8; } 100% { transform: translateY(-26px); opacity: 0; } }
-@keyframes vxHop { 0%, 100% { transform: translateY(0) scale(1, 1); } 40% { transform: translateY(-10px) scale(.96, 1.04); } 70% { transform: translateY(0) scale(1.06, .94); } }
-@keyframes vxPulse { 0%, 100% { opacity: .35; } 50% { opacity: .7; } }
-@keyframes vxBar { 0%, 100% { transform: scaleY(.15); } 50% { transform: scaleY(1); } }
-@keyframes vxSpin { to { transform: rotate(360deg); } }
+/* Home */
+.vx-home-search { margin-top: 16px; overflow: hidden; }
+.vx-home-filters, .vx-home-grid { margin-top: 16px; }
+.vx-agent-card-face.dim { opacity: .5; }
+/* "Grew since you last looked": 8px volt dot, top-end, pulsing (vxHead) */
+.vx-agent-card-dot { position: absolute; top: 14px; inset-inline-end: 14px; z-index: 1; width: 8px; height: 8px; border-radius: var(--r-full); background: var(--volt); box-shadow: 0 0 0 3px var(--s1); }
+.vx-fab.folded { width: 56px; padding-inline: 0; justify-content: center; gap: 0; }
+.vx-fab-icon { display: inline-flex; flex-shrink: 0; }
+.vx-fab-label { display: inline-block; }
 
-.vx-breathe { animation: vxBreathe 4.2s cubic-bezier(.37, 0, .63, 1) infinite; transform-box: fill-box; transform-origin: 50% 100%; }
-.vx-slow { animation-duration: 6.5s; }
-.vx-hop { animation: vxHop 1.8s var(--ease-over) infinite; transform-box: fill-box; transform-origin: 50% 100%; }
-.vx-blink { animation: vxBlink 5.2s infinite; transform-box: fill-box; transform-origin: center; }
-.vx-talk { animation: vxTalk .42s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
-.vx-orbit { animation: vxOrbit 1.6s linear infinite; transform-box: view-box; transform-origin: 150px 60px; }
-.vx-rise { animation: vxRise 2.4s ease-out infinite; transform-box: fill-box; }
-.vx-d1 { animation-delay: .8s; } .vx-d2 { animation-delay: 1.6s; }
-.vx-glow { animation: vxPulse 4.2s ease-in-out infinite; }
-.vx-bar { animation: vxBar .9s ease-in-out infinite; transform-origin: center; }
-.vx-spin { animation: vxSpin .9s linear infinite; }
+/* Agent profile */
+.vx-profile { padding-top: 0; }
+.vx-profile-body { position: relative; margin-top: 16px; display: flex; flex-direction: column; gap: 12px; }
+.vx-profile.stale .vx-profile-body > :not(.vx-banner) { opacity: .6; transition: opacity var(--d-fade) var(--ease-standard); }
+.vx-strip-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.vx-strong-num { font-family: var(--f-display); font-weight: 500; }
+.vx-voice-play { width: 36px; height: 36px; border-radius: var(--r-full); border: 0; background: var(--hue); color: var(--on-volt); display: grid; place-items: center; flex-shrink: 0; cursor: pointer; transition: transform var(--spring-press); -webkit-tap-highlight-color: transparent; }
+.vx-voice-play:active:not(:disabled) { transform: scale(var(--press-round, .92)); transition: transform var(--d-press) var(--ease-standard); }
+.vx-voice-play.off { background: var(--s3); color: var(--text-2); cursor: default; }
+.vx-voice-title { font-size: 14px; line-height: 20px; font-weight: 600; overflow-wrap: anywhere; }
+.vx-more > .vx-doc { margin-top: 4px; }
+.vx-doc-quiet { padding: 16px; border-radius: var(--r-m); gap: 12px; }
+.vx-skel-profile.vx-skeleton { background: transparent; display: flex; flex-direction: column; align-items: center; gap: 10px; padding-top: 26px; }
+.vx-skel-profile > .vx-skel-bar.title { width: 140px; }
+.vx-skel-profile > .vx-skel-bar:not(.title) { width: 180px; }
+.vx-skel-halo { width: 168px; height: 168px; border-radius: var(--r-full); background: var(--s1); margin-bottom: 14px; }
+.vx-skel-discs { display: grid; grid-template-columns: repeat(4, 56px); justify-content: space-around; width: 100%; margin-top: 24px; }
+.vx-skel-discs > .vx-skel-dot { width: 56px; height: 56px; }
 
+/* Sheets with several groups */
+.vx-sheet-groups { display: flex; flex-direction: column; gap: 16px; }
+.vx-sheet-groups > .vx-sheet-head { margin-bottom: 0; }
+.vx-sheet-lead { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+.vx-sheet-lead > .vx-sheet-head { margin-bottom: 0; min-width: 0; }
+.vx-sheet-note { margin: 0; padding-inline: 4px; }
+
+/* Groups and Add to groups */
+.vx-avatar.disc.s24 { width: 24px; height: 24px; }
+.vx-avatar.disc.s40 { width: 40px; height: 40px; }
+.vx-ring-track { stroke: var(--s3); }
+.vx-avatar.disc.more { background: var(--s3); color: var(--text-2); font-size: 10px; font-weight: 600; }
+.vx-subhead { display: flex; align-items: center; gap: 12px; padding-top: 8px; }
+.vx-subhead-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.vx-row-wait { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }
+
+/* Spawn wizard */
+.vx-step { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.vx-spawn-error { padding: 8px var(--gutter) 0; flex-shrink: 0; }
+.vx-form { display: flex; flex-direction: column; gap: 18px; }
+/* A composer above the CTA makes the dock ~160px tall */
+.vx-scroll.tall-dock { padding-bottom: calc(200px + env(safe-area-inset-bottom)); }
+.vx-step-head, .vx-intro { display: flex; flex-direction: column; gap: 6px; }
+.vx-step-head { padding-top: 4px; }
+.vx-step-head > p, .vx-intro > p { margin: 0; }
+.vx-step-head.center { align-items: center; text-align: center; }
+.vx-step-head.center > p { max-width: 320px; }
+.vx-field { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.vx-chip-wrap { display: flex; flex-wrap: wrap; gap: 8px; }
+.vx-slider { display: flex; flex-direction: column; gap: 2px; }
+.vx-slider + .vx-slider { margin-top: 6px; }
+.vx-slider-ends { display: flex; justify-content: space-between; }
+/* Board spawn-1: a text-only 15px secondary at its own width, the volt CTA takes the rest on one line (fits 358px) */
+.vx-dock > .vx-dock-aside { flex-shrink: 0; padding-inline: 18px; font-size: 15px; }
+.vx-dock > .vx-dock-grow { flex: 1; min-width: 0; padding-inline: 12px; white-space: nowrap; }
+.vx-dock > .vx-dock-row { flex: 1; }
+.vx-dock.stack > .vx-composer { width: 100%; }
+/* Draft doc card: name header, tap-to-edit sections, the editing section gets a hue rail */
+.vx-doc-head { display: flex; align-items: center; gap: 12px; }
+.vx-doc-title { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.vx-doc-title > .vx-title { overflow-wrap: anywhere; }
+.vx-doc-edit { width: 36px; height: 36px; color: var(--text-2); }
+.vx-doc-sec.tap { background: none; border: 0; margin-inline: -10px; padding: 6px 10px; border-radius: var(--r-s); text-align: start; color: inherit; font: inherit; cursor: pointer; transition: background-color var(--d-state) var(--ease-standard); -webkit-tap-highlight-color: transparent; }
+.vx-doc-sec.tap:active:not(:disabled) { background: rgba(255, 255, 255, .04); }
+.vx-doc-sec.tap:disabled { cursor: default; }
+.vx-doc-text { display: block; font-size: 15px; line-height: 21px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.vx-doc-sec.editing { gap: 8px; padding-inline-start: 12px; border-inline-start: 2px solid var(--hue); }
+.vx-doc-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.vx-hint { display: flex; align-items: center; gap: 6px; min-height: 32px; font-size: 13px; line-height: 18px; color: var(--text-2); }
+.vx-hint-spark { color: var(--volt); flex-shrink: 0; }
+.vx-hint-end { margin-inline-start: auto; }
+/* Voice */
+.vx-with-info { display: flex; align-items: center; flex-wrap: wrap; gap: 2px; }
+.vx-info-btn { width: 32px; height: 32px; color: var(--text-3); }
+.vx-options { display: flex; flex-direction: column; gap: 10px; }
+.vx-brief { gap: 6px; cursor: text; }
+/* Voice step: language shortcuts, then the chosen voice's sample in that language at the inline end */
+.vx-voice-langs { display: flex; align-items: flex-start; gap: 8px; }
+.vx-voice-langs > .vx-chip-wrap { flex: 1; min-width: 0; }
+.vx-chip-sample { flex-shrink: 0; background: var(--hue-12); color: var(--hue); }
+.vx-chip-sample[aria-pressed="true"] { background: var(--hue); color: var(--on-volt); }
+.vx-textarea.bare { background: transparent; border: 0; border-radius: 0; padding: 0; }
+.vx-composer-send.quiet { background: var(--s3); color: var(--text); }
+.vx-bars { flex-shrink: 0; }
+.vx-bars rect { fill: var(--text-3); transform-box: fill-box; transform-origin: center; transform: scaleY(.3); transition: fill var(--d-state) var(--ease-standard); }
+.vx-bars rect:nth-child(3n + 2) { transform: scaleY(.5); animation-delay: .22s; }
+.vx-bars rect:nth-child(4n + 3) { transform: scaleY(.38); animation-delay: .44s; }
+.vx-bars rect:nth-child(5n + 4) { transform: scaleY(.62); animation-delay: .66s; }
+.vx-bars[data-on] rect { fill: var(--hue); }
+.vx-bars[data-on] rect.vx-bar { transform: none; }
+/* Hire */
+.vx-hire-hero { position: relative; display: flex; align-items: center; justify-content: center; min-height: 176px; padding-top: 8px; }
+.vx-hire-burst { position: absolute; inset: 0; pointer-events: none; }
+.vx-hire-burst > svg { inset: 0; margin: auto; }
+.vx-hire-glow { width: 360px; height: 300px; top: -60px; }
+.vx-tgcard-status { padding: 12px 16px; border-top: 1px solid var(--hair); }
+/* Say hi */
+.vx-sayhi { min-height: 180px; padding-bottom: 8px; }
+.vx-bubble-row { width: 100%; display: flex; flex-direction: column; gap: 4px; }
+.vx-bubble-row.me { align-items: flex-end; }
+.vx-bubble-row.agent { align-items: flex-start; }
+.vx-bubble.me.failed { opacity: 1; background: var(--danger-14); color: var(--danger); }
+
+/* ---------- reduced motion (primitive transitions; loops and press live in motion.css) ---------- */
 @media (prefers-reduced-motion: reduce) {
-  .vx-breathe, .vx-hop, .vx-blink, .vx-talk, .vx-orbit, .vx-rise, .vx-glow, .vx-bar, .vx-skeleton { animation: none !important; }
+  .vx-switch, .vx-switch::after, .vx-switch-knob > span, .vx-radio, .vx-radio::after, .vx-check, .vx-check > svg, .vx-option, .vx-seg > button,
+  .vx-ctrl, .vx-action-disc, .vx-disclosure > summary::after, .vx-steps > span, .vx-back, .vx-fab, .vx-composer-send, .vx-composer-tool, .vx-chip-name,
+  .vx-voice-play, .vx-doc-sec.tap, .vx-bars rect { transition: none !important; }
+  .vx-back:active, .vx-composer-tool:active, .vx-composer-send:active, .vx-action:active .vx-action-disc, .vx-ctrl:active, .vx-fab:active,
+  .vx-seg > button:active, .vx-chip-name:active, .vx-option.tap:active, .vx-voice-play:active { transform: none; }
+  .vx-agent-card-dot { animation: none; }
+  .vx-typing > span { animation: none; opacity: .7; }
 }
 
 /* ======================================================================

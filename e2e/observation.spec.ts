@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { openYou, setStudioLocale } from './helpers/studio-navigation';
 // Author regression only: compiled Studio UI with synthetic HTTP responses.
 // Real signed handler/canonical FILE evidence is in learning-integration.test.ts.
 const PERSON = 780001, AGENT = 'observation-fixture-agent';
@@ -46,7 +47,9 @@ test('actual visible committed text reports once with applied presentation and d
   expect(f.events.some(e => e.outcome === 'task_succeeded')).toBe(false);
   await page.getByRole('button', { name: 'Yes', exact: true }).click(); await expect.poll(() => f.events.length).toBe(2);
   expect(f.events[1].outcome).toBe('task_succeeded'); expect(JSON.stringify(f.events)).not.toContain('PRIVATE_');
-  await page.getByRole('button', { name: 'Personal', exact: true }).click(); await expect(page.getByRole('log')).toBeEmpty();
+  await page.getByRole('button', { name: 'Chat options', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Chat options' }).getByRole('tab', { name: 'Personal', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0); await expect(page.getByRole('log')).toBeEmpty();
   await page.waitForTimeout(60); expect(f.events).toHaveLength(2);
 });
 test('hidden committed output is not reported until actually visible', async ({ page }) => {
@@ -57,9 +60,10 @@ test('hidden committed output is not reported until actually visible', async ({ 
   await expect.poll(() => f.events.length).toBe(1); expect(f.visible()).toBe(true);
 });
 for (const locale of ['en', 'fa'] as const) for (const failure of [false, true]) test(`correction ${failure ? 'unconfirmed' : 'saved'} ${locale} produces only fixed feedback metadata`, async ({ page }) => {
-  const f = await fixtures(page, failure); await page.goto('/studio'); await page.getByRole('button', { name: 'Privacy', exact: true }).click();
-  if (locale === 'fa') await page.getByRole('combobox', { name: 'Language', exact: true }).selectOption('fa');
-  const fa = locale === 'fa'; await page.getByRole('button', { name: fa ? 'ویرایش یادداشت' : 'Edit note', exact: true }).click();
+  const f = await fixtures(page, failure); await page.goto('/studio'); await openYou(page);
+  if (locale === 'fa') await setStudioLocale(page, 'fa');
+  const fa = locale === 'fa'; await page.getByRole('button', { name: /PRIVATE_ORIGINAL_CANARY/ }).click();
+  await page.getByRole('button', { name: fa ? 'ویرایش یادداشت' : 'Edit note', exact: true }).click();
   await page.getByLabel(fa ? 'یادداشت اصلاح‌شده' : 'Corrected note', { exact: true }).fill('PRIVATE_CORRECTION_CANARY');
   await page.getByRole('button', { name: fa ? 'بررسی اصلاح' : 'Review correction', exact: true }).click();
   await page.getByRole('button', { name: fa ? 'ذخیرهٔ اصلاح' : 'Save correction', exact: true }).click();

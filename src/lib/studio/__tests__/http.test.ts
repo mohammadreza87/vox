@@ -97,8 +97,14 @@ describe('request limits', () => {
     h.personaLLM.push(draftJson());
     const created = await call(req('POST', 'agents', { body: {} }), options);
     expect(created.status).toBe(201);
-    expect((await call(req('POST', `agents/${created.json.agent.id}/avatars`, { body: { count: 1 } }), options)).status).toBe(429);
+    const limited = await call(req('POST', `agents/${created.json.agent.id}/avatars`, { body: { count: 1 } }), options);
+    expect(limited.status).toBe(429);
+    // The client turns this into ApiError.retryAfter for the picker's countdown.
+    const wait = Number(limited.res.headers.get('Retry-After'));
+    expect(wait).toBeGreaterThan(0);
+    expect(limited.json).toEqual({ error: 'Too many requests. Please try again shortly.', retryAfter: wait });
     expect(h.openai.generateAvatar).not.toHaveBeenCalled();
+    expect(h.openai.editAvatar).not.toHaveBeenCalled();
     expect((await call(req('GET', 'agents'), options)).status).toBe(200);
   });
 
@@ -122,7 +128,16 @@ describe('request limits', () => {
       policies: { mutation: { requests: 1, windowMs: 60_000 } },
     }) };
     await call(req('PUT', `agents/${agent.id}/access`, { body: { access: 'everyone' } }), options);
-    expect((await call(req('PUT', `agents/${agent.id}/access`, { body: { access: 'everyone' } }), options)).status).toBe(429);
+    const limited = await call(req('PUT', `agents/${agent.id}/access`, { body: { access: 'everyone' } }), options);
+    expect(limited.status).toBe(429);
+    // Only look and photo routes add retryAfter to the body; every 429 has the header.
+    expect(limited.json).toEqual({ error: 'Too many requests. Please try again shortly.' });
+    expect(Number(limited.res.headers.get('Retry-After'))).toBeGreaterThan(0);
+    for (const [method, action, body] of [['POST', 'look', { look: { hue: 'rose' } }], ['PUT', 'avatar', { file: null }], ['POST', 'profile-sync', {}]] as const) {
+      const r = await call(req(method, `agents/${agent.id}/${action}`, { body }), options);
+      expect(r.status).toBe(429);
+      expect(r.json.retryAfter).toBe(Number(r.res.headers.get('Retry-After')));
+    }
     expect((await call(req('GET', 'agents'), options)).status).toBe(200);
   });
 
@@ -288,6 +303,7 @@ describe('agents', () => {
   it('hides internal errors behind a 500 and logs them', async () => {
     h.personaLLM.push(draftJson());
     const id = (await call(req('POST', 'agents', { body: {} }))).json.agent.id;
+    h.openai.editAvatar.mockRejectedValueOnce(new Error('secret edit detail'));
     h.openai.generateAvatar.mockRejectedValueOnce(new Error('secret upstream detail'));
     const r = await call(req('POST', `agents/${id}/avatars`, { body: { count: 1 } }));
     expect(r.status).toBe(500);
@@ -300,6 +316,33 @@ describe('agents', () => {
     await seedOrg(h);
     const r = await call(req('GET', 'voices?gender=female'));
     expect(r.status).toBe(503);
+  });
+
+  it('look, avatars and profile-sync pass sync, select and force through; a look carrying avatar fields leaves them alone', async () => {
+    const { agent, bot } = await hire(h, org.alice);
+    const generated = await call(req('POST', `agents/${agent.id}/avatars`, { body: { count: 1, select: false } }));
+    expect(generated.status).toBe(200);
+    expect(generated.json.agent.look.avatar).toBeUndefined();
+    const file = generated.json.agent.look.avatarVariants[0];
+    expect((await call(req('PUT', `agents/${agent.id}/avatar`, { body: { file } }))).json.agent.look.avatar).toBe(file);
+
+    const forged = await call(req('POST', `agents/${agent.id}/look`, { body: { look: { hue: 'rose', avatar: 'av-other.jpg', avatarVariants: ['av-other.jpg'] } } }));
+    expect(forged.status).toBe(200);
+    expect(forged.json.agent.look).toMatchObject({ hue: 'rose', avatar: file, avatarVariants: [file], avatarStale: true });
+    const clash = await call(req('POST', `agents/${agent.id}/look`, { body: { look: { species: 'bunny', hair: 'spiky' } } }));
+    expect(clash.status).toBe(400);
+    expect(clash.json.error).toMatch(/bunny/i);
+
+    await call(req('PUT', `agents/${agent.id}/avatar`, { body: { file: null } }));
+    bot().setMyProfilePhoto.mockClear(); bot().setMyName.mockClear();
+    expect((await call(req('POST', `agents/${agent.id}/look`, { body: { look: { hue: 'sky' }, sync: false } }))).json.agent.profileSync).toMatchObject({ status: 'synced', held: true });
+    expect(bot().setMyProfilePhoto).not.toHaveBeenCalled();
+    const closed = await call(req('POST', `agents/${agent.id}/profile-sync`, { body: { force: false } }));
+    expect(closed.json).toMatchObject({ failed: [], agent: { profileSync: { status: 'synced' } } });
+    expect(bot().setMyProfilePhoto).toHaveBeenCalledTimes(1);
+    expect(bot().setMyName).not.toHaveBeenCalled();
+    expect((await call(req('POST', `agents/${agent.id}/profile-sync`))).json.failed).toEqual([]);
+    expect(bot().setMyName).toHaveBeenCalledTimes(1);
   });
 
   it('accepts a custom avatar upload (multipart) and re-encodes it', async () => {

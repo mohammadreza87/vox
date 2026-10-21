@@ -10,6 +10,7 @@
  *
  * Personality is editable only while an agent is forming (7 days after its
  * bot is created). After that it is locked for good: change means fire & re-hire.
+ * Look and photo are cosmetic, so they stay editable after the lock.
  */
 
 import type { Agent, AgentVisibility, Member, Role, StudioState } from './types';
@@ -53,6 +54,16 @@ export function canEditPersona(member: Member | undefined, agent: Agent, now = n
   if (agent.status === 'draft' || agent.status === 'awaiting_bot') {
     return agent.createdBy === member!.telegramId || atLeast(member, 'admin');
   }
+  return agent.createdBy === member!.telegramId || atLeast(member, 'admin');
+}
+
+/**
+ * Look and profile photo: the creator or an admin, for any agent that isn't
+ * fired. Not lock-gated: the lock freezes personality only. To lock them too, return
+ * canEditPersona(member, agent) here.
+ */
+export function canEditLook(member: Member | undefined, agent: Agent): boolean {
+  if (!atLeast(member, 'member') || agent.status === 'fired') return false;
   return agent.createdBy === member!.telegramId || atLeast(member, 'admin');
 }
 

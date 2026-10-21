@@ -4,6 +4,7 @@ import { adaptiveApi, type AdaptiveSnapshot, type AdaptiveSpace } from '../_lib/
 import { learningApi } from '../_lib/learning-client';
 import { tg } from '../_lib/client';
 import type { PrivacyLocale } from '../_lib/adaptive-copy';
+import { Icon, Spinner } from './ui';
 type Note = AdaptiveSnapshot['memories'][number];
 export const MEMORY_CORRECTION_SAVE_TIMEOUT_MS = 15_000;
 type PendingSave = { controller: AbortController; timer?: ReturnType<typeof setTimeout>; release(): void };
@@ -76,23 +77,33 @@ export function MemoryCorrectionEditor({ note, snapshot, locale, disabled, onSav
     } catch { if (epoch === generation.current) { report('correction_client_unconfirmed'); setError(true); } }
     finally { clearTimeout(pending.timer); if (request.current === pending) request.current = null; pending.release(); if (epoch === generation.current) setBusy(false); }
   };
-  if (stage === 'closed') return <button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={!allowed} onClick={() => { if (request.current) return; setText(note.text); setPrepared(''); setError(false); setStage('edit'); }}>{t('Edit note', 'ویرایش یادداشت')}</button>;
-  return <section aria-label={t('Correct private note', 'اصلاح یادداشت خصوصی')} dir={fa ? 'rtl' : 'ltr'} lang={locale} aria-busy={busy}>
-    <p className="vx-small">{t('Private to you', 'خصوصی برای شما')} · {snapshot.space === 'work' ? t('Work', 'کاری') : t('Personal', 'شخصی')}</p>
-    <p className="vx-small">{t('Saving replaces this note and removes summaries that depend on its old version. Its original expiry and sharing permissions stay the same.', 'ذخیره، این یادداشت را جایگزین و خلاصه‌های وابسته به نسخهٔ قبلی را حذف می‌کند. مهلت اصلی و مجوزهای اشتراک آن تغییر نمی‌کنند.')}</p>
+  if (stage === 'closed') return <button className="vx-btn vx-btn-secondary vx-btn-block" disabled={!allowed} onClick={() => { if (request.current) return; setText(note.text); setPrepared(''); setError(false); setStage('edit'); }}>
+    <Icon name="edit" size={18} />{t('Edit note', 'ویرایش یادداشت')}</button>;
+  const spaceName = snapshot.space === 'work' ? t('Work', 'کاری') : t('Personal', 'شخصی');
+  return <section className="vx-correct" aria-label={t('Correct private note', 'اصلاح یادداشت خصوصی')} dir={fa ? 'rtl' : 'ltr'} lang={locale} aria-busy={busy}>
+    <span className="vx-over">{t('Private to you', 'خصوصی برای شما')} · {spaceName}</span>
     {stage === 'edit' ? <>
-      <label className="vx-small" htmlFor={labelId}>{t('Corrected note', 'یادداشت اصلاح‌شده')}</label>
-      <textarea ref={inputRef} id={labelId} className="vx-textarea" value={text} rows={3} maxLength={2000} disabled={busy || !allowed} onChange={event => setText(event.target.value)} />
-      <button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={!allowed || busy || !text.trim() || text.trim() === note.text} onClick={() => { if (request.current) return; setPrepared(text.trim()); setStage('review'); }}>{t('Review correction', 'بررسی اصلاح')}</button>
+      <label className="vx-field" htmlFor={labelId}><span className="vx-label">{t('Corrected note', 'یادداشت اصلاح‌شده')}</span></label>
+      <textarea ref={inputRef} id={labelId} className="vx-textarea" dir="auto" value={text} rows={4} maxLength={2000} disabled={busy || !allowed} onChange={event => setText(event.target.value)} />
+      <p className="vx-footnote">{t('Saving replaces this note and removes summaries that depend on its old version. Its original expiry and sharing permissions stay the same.', 'ذخیره، این یادداشت را جایگزین و خلاصه‌های وابسته به نسخهٔ قبلی را حذف می‌کند. مهلت اصلی و مجوزهای اشتراک آن تغییر نمی‌کنند.')}</p>
+      <div className="vx-dock-row">
+        <button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy || error} onClick={clear}>{t('Cancel', 'انصراف')}</button>
+        <button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={!allowed || busy || !text.trim() || text.trim() === note.text} onClick={() => { if (request.current) return; setPrepared(text.trim()); setStage('review'); }}>{t('Review correction', 'بررسی اصلاح')}</button>
+      </div>
     </> : <>
-      <h4 ref={reviewRef} tabIndex={-1}>{t('Before', 'پیش از اصلاح')}</h4><p style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{note.text}</p>
-      <h4>{t('After saving', 'پس از ذخیره')}</h4><p style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{prepared}</p>
-      <button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={!allowed || busy || error} onClick={() => void save()}>{t('Save correction', 'ذخیرهٔ اصلاح')}</button>
-      <button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy || error} onClick={() => { if (request.current) return; setStage('edit'); setPrepared(''); setError(false); }}>{t('Back to edit', 'بازگشت به ویرایش')}</button>
+      <div className="vx-correct-diff">
+        <div className="before"><h4 ref={reviewRef} tabIndex={-1} className="vx-over">{t('Before', 'پیش از اصلاح')}</h4><p dir="auto">{note.text}</p></div>
+        <div className="after"><h4 className="vx-over">{t('After saving', 'پس از ذخیره')}</h4><p dir="auto">{prepared}</p></div>
+      </div>
+      <p className="vx-footnote">{t('Saving replaces this note and removes summaries that depend on its old version. Its original expiry and sharing permissions stay the same.', 'ذخیره، این یادداشت را جایگزین و خلاصه‌های وابسته به نسخهٔ قبلی را حذف می‌کند. مهلت اصلی و مجوزهای اشتراک آن تغییر نمی‌کنند.')}</p>
+      <div className="vx-dock-row">
+        <button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy || error} onClick={() => { if (request.current) return; setStage('edit'); setPrepared(''); setError(false); }}>{t('Back to edit', 'بازگشت به ویرایش')}</button>
+        <button className="vx-btn vx-btn-primary vx-btn-sm" disabled={!allowed || busy || error} onClick={() => void save()}>{busy ? <Spinner size={16} /> : null}{t('Save correction', 'ذخیرهٔ اصلاح')}</button>
+      </div>
+      <button className="vx-btn vx-btn-ghost vx-btn-sm" disabled={busy || error} onClick={clear}>{t('Cancel', 'انصراف')}</button>
     </>}
-    <button className="vx-btn vx-btn-secondary vx-btn-sm" disabled={busy || error} onClick={clear}>{t('Cancel', 'انصراف')}</button>
-    {busy && <div role="status" aria-live="polite"><p>{snapshot.space === 'work' ? t('Saving in Work…', 'در حال ذخیره در فضای کاری…') : t('Saving in Personal…', 'در حال ذخیره در فضای شخصی…')}</p><p className="vx-small">{t('Please wait for the result. Closing the app may not stop this save; reopen Privacy and refresh notes to check.', 'لطفاً منتظر نتیجه بمانید. بستن برنامه ممکن است ذخیره را متوقف نکند؛ برای بررسی، حریم خصوصی را دوباره باز و یادداشت‌ها را تازه‌سازی کنید.')}</p></div>}
-    {error && <div role="alert"><p>{snapshot.space === 'work' ? t('The correction may have been saved in Work. Refresh notes to check before editing again.', 'ممکن است اصلاح در فضای کاری ذخیره شده باشد. پیش از ویرایش دوباره، یادداشت‌ها را تازه‌سازی و بررسی کنید.') : t('The correction may have been saved in Personal. Refresh notes to check before editing again.', 'ممکن است اصلاح در فضای شخصی ذخیره شده باشد. پیش از ویرایش دوباره، یادداشت‌ها را تازه‌سازی و بررسی کنید.')}</p>
-      <button className="vx-btn vx-btn-secondary vx-btn-sm" onClick={() => { clear(); onRefresh(); }}>{t('Refresh notes', 'تازه‌سازی یادداشت‌ها')}</button></div>}
+    {busy && <div className="vx-correct-note" role="status" aria-live="polite"><p>{snapshot.space === 'work' ? t('Saving in Work…', 'در حال ذخیره در فضای کاری…') : t('Saving in Personal…', 'در حال ذخیره در فضای شخصی…')}</p><p className="vx-small vx-2">{t('Please wait for the result. Closing the app may not stop this save; reopen You and refresh notes to check.', 'لطفاً منتظر نتیجه بمانید. بستن برنامه ممکن است ذخیره را متوقف نکند؛ برای بررسی، بخش «شما» را دوباره باز و یادداشت‌ها را تازه‌سازی کنید.')}</p></div>}
+    {error && <div className="vx-banner warn" role="alert"><Icon name="warn" size={18} /><div className="vx-banner-body"><span>{snapshot.space === 'work' ? t('The correction may have been saved in Work. Refresh notes to check before editing again.', 'ممکن است اصلاح در فضای کاری ذخیره شده باشد. پیش از ویرایش دوباره، یادداشت‌ها را تازه‌سازی و بررسی کنید.') : t('The correction may have been saved in Personal. Refresh notes to check before editing again.', 'ممکن است اصلاح در فضای شخصی ذخیره شده باشد. پیش از ویرایش دوباره، یادداشت‌ها را تازه‌سازی و بررسی کنید.')}</span>
+      <button className="vx-btn vx-btn-secondary vx-btn-xs" onClick={() => { clear(); onRefresh(); }}>{t('Refresh notes', 'تازه‌سازی یادداشت‌ها')}</button></div></div>}
   </section>;
 }

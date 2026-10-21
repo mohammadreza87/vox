@@ -2,6 +2,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { learningApi, type LearningSpace, type ObserverSnapshot, type LearningOperations } from '../_lib/learning-client';
 import { MaintenanceHealthPanel } from './MaintenanceHealthPanel';
+import { Fact, IconTile } from './screens/settings/kit';
+import { Banner, Icon, Row, SkeletonRows, Spinner, Stat, Stats } from './ui';
 
 /** Personal evidence only. Operations and cross-account improvement reports have separate access. */
 export function LearningPanel({ space, locale = 'en', showOperations = false }: { space: LearningSpace; locale?: 'en' | 'fa'; showOperations?: boolean }) {
@@ -64,46 +66,50 @@ export function LearningPanel({ space, locale = 'en', showOperations = false }: 
     playback_failure: t('Playback failures were reported by the client.', 'برخی خطاهای پخش از سوی مرورگر گزارش شده‌اند.'),
     interruption: t('Interrupted playback was reported by the client.', 'قطع شدن پخش از سوی مرورگر گزارش شده است.'),
   };
-  return <><section className="vx-card vx-privacy-card" aria-label={t('Learning evidence', 'شواهد یادگیری')} aria-busy={!!busy} dir={fa ? 'rtl' : 'ltr'} lang={locale}
-    style={{ background: 'linear-gradient(145deg, var(--s1), var(--ground))', gap: 18 }}>
-    <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'space-between', gap: 10 }}>
-      <h2 className="vx-head">{t('Learning evidence', 'شواهد یادگیری')}</h2>
-      <span className="vx-small" style={{ border: '1px solid var(--hair)', borderRadius: 24, padding: '5px 10px', color: 'var(--volt)' }}>{space === 'work' ? t('Your Work space', 'فضای کاری شما') : t('Your Personal space', 'فضای شخصی شما')}</span>
+  const ms = (value: number | null | undefined) => available && value != null ? `${Math.round(value).toLocaleString(fa ? 'fa-IR' : 'en-US')} ${t('ms', 'میلی‌ثانیه')}` : t('Unavailable', 'در دسترس نیست');
+  const pair = (a: number | null | undefined, b: number | null | undefined) => `${number(a)} / ${number(b)}`;
+  const details: Array<[string, string]> = data ? [
+    [t('Waiting to process', 'در انتظار پردازش'), number(data.queue.pending + data.queue.leased)],
+    [t('Processing failures', 'خطاهای پردازش'), number(data.queue.failed)],
+    [t('Playback not reported', 'پخش گزارش‌نشده'), number(p?.playbackUnknown)],
+    [t('Interrupted playback', 'پخش قطع‌شده'), number(p?.interruptions)],
+    [t('Average response time', 'میانگین زمان پاسخ'), ms(p?.meanResponseMs)],
+    [t('Client-reported time to playback', 'زمان پخش گزارش‌شدهٔ مرورگر'), ms(p?.telemetry?.clientMeanTimeToPlaybackMs)],
+    [t('Client-reported text displayed', 'نمایش متن گزارش‌شدهٔ مرورگر'), number(p?.clientExperience?.textRendered)],
+    [t('Time to text', 'زمان تا نمایش متن'), ms(p?.clientExperience?.meanTimeToTextMs)],
+    [t('Reported corrections saved / unconfirmed', 'اصلاح‌های ذخیره‌شده / تأییدنشدهٔ گزارش‌شده'), pair(p?.clientExperience?.correctionSaved, p?.clientExperience?.correctionUnconfirmed)],
+    [t('Reported task success / failure', 'موفقیت / شکست گزارش‌شدهٔ کار'), pair(p?.telemetry?.reportedTaskSucceeded, p?.telemetry?.reportedTaskFailed)],
+    [t('Provider input / output tokens observed', 'توکن‌های ورودی / خروجی مشاهده‌شدهٔ ارائه‌دهنده'), pair(p?.telemetry?.inputTokens, p?.telemetry?.outputTokens)],
+    [t('Usage complete', 'کامل بودن مصرف'), p?.telemetry?.usageComplete ? t('Yes', 'بله') : t('No; missing usage is unknown', 'خیر؛ مصرف ثبت‌نشده نامشخص است')],
+    [t('Billed cost', 'هزینهٔ صورتحساب'), t('Unavailable', 'در دسترس نیست')],
+    ...(p?.telemetry?.stages.map(stage => [`${stageCopy[stage.stage]} (${number(stage.samples)} ${t('samples', 'نمونه')})`, ms(stage.meanMs)] as [string, string]) ?? []),
+    [t('Last measurement update', 'آخرین به‌روزرسانی اندازه‌گیری‌ها'), available && data.queue.lastProcessedAt != null ? new Date(data.queue.lastProcessedAt).toLocaleString(fa ? 'fa-IR' : 'en-US') : t('Unavailable', 'در دسترس نیست')],
+  ] : [];
+  return <><section className="vx-section vx-diag" aria-label={t('Learning evidence', 'شواهد یادگیری')} aria-busy={!!busy} dir={fa ? 'rtl' : 'ltr'} lang={locale}>
+    <div className="vx-section-head">
+      <h2 className="vx-over">{t('Learning evidence', 'شواهد یادگیری')}</h2>
+      <span className="vx-pill volt">{space === 'work' ? t('Your Work space', 'فضای کاری شما') : t('Your Personal space', 'فضای شخصی شما')}</span>
     </div>
-    <p className="vx-small vx-2">{t('See the measurements behind your experience. These observations describe recorded behavior; they do not explain why it happened.', 'اندازه‌گیری‌های تجربهٔ خود را ببینید. این مشاهدات رفتار ثبت‌شده را نشان می‌دهند؛ علت آن را توضیح نمی‌دهند.')}</p>
-    {busy === 'load' && <p role="status">{t('Loading your evidence…', 'در حال دریافت شواهد شما…')}</p>}
+    <p className="vx-section-foot vx-diag-lede">{t('See the measurements behind your experience. These observations describe recorded behavior; they do not explain why it happened.', 'اندازه‌گیری‌های تجربهٔ خود را ببینید. این مشاهدات رفتار ثبت‌شده را نشان می‌دهند؛ علت آن را توضیح نمی‌دهند.')}</p>
+    {busy === 'load' && <SkeletonRows rows={2} lead={false} label={t('Loading your evidence…', 'در حال دریافت شواهد شما…')} />}
     {data && <>
-      {!available && <p className="vx-small vx-2">{t('Optional usage analytics is off or unavailable. Measurements are unavailable.', 'تحلیل اختیاری استفاده خاموش است یا در دسترس نیست. اندازه‌گیری‌ها در دسترس نیستند.')}</p>}
-      <dl style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 10, margin: 0 }}>
-        {metrics.map(([label, value]) => <div key={label} style={{ border: '1px solid var(--hair)', borderRadius: 16, padding: '14px 12px', minWidth: 0 }}><dt className="vx-small vx-2">{label}</dt><dd className="vx-num" style={{ margin: '8px 0 0', fontSize: available ? 28 : 14, overflowWrap: 'anywhere' }}>{value}</dd></div>)}
-      </dl>
-      <div className="vx-small vx-2" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        <p>{t('Waiting to process', 'در انتظار پردازش')}: {number(data.queue.pending + data.queue.leased)} · {t('Processing failures', 'خطاهای پردازش')}: {number(data.queue.failed)}</p>
-        <p>{t('Playback not reported', 'پخش گزارش‌نشده')}: {number(p?.playbackUnknown)} · {t('Interrupted playback', 'پخش قطع‌شده')}: {number(p?.interruptions)}</p>
-        <p>{t('Average response time', 'میانگین زمان پاسخ')}: {available && p?.meanResponseMs != null ? `${Math.round(p.meanResponseMs).toLocaleString(fa ? 'fa-IR' : 'en-US')} ${t('ms', 'میلی‌ثانیه')}` : t('Unavailable', 'در دسترس نیست')}</p>
-        <p>{t('Client-reported time to playback', 'زمان پخش گزارش‌شدهٔ مرورگر')}: {number(p?.telemetry?.clientMeanTimeToPlaybackMs)} {t('ms', 'میلی‌ثانیه')}</p>
-        <p>{t('Client-reported text displayed', 'نمایش متن گزارش‌شدهٔ مرورگر')}: {number(p?.clientExperience?.textRendered)} · {t('Time to text', 'زمان تا نمایش متن')}: {number(p?.clientExperience?.meanTimeToTextMs)} {t('ms', 'میلی‌ثانیه')}</p>
-        <p>{t('Reported corrections saved / unconfirmed', 'اصلاح‌های ذخیره‌شده / تأییدنشدهٔ گزارش‌شده')}: {number(p?.clientExperience?.correctionSaved)} / {number(p?.clientExperience?.correctionUnconfirmed)}</p>
-        <p>{t('Reported task success / failure', 'موفقیت / شکست گزارش‌شدهٔ کار')}: {number(p?.telemetry?.reportedTaskSucceeded)} / {number(p?.telemetry?.reportedTaskFailed)}</p>
-        <p>{t('Provider input / output tokens observed', 'توکن‌های ورودی / خروجی مشاهده‌شدهٔ ارائه‌دهنده')}: {number(p?.telemetry?.inputTokens)} / {number(p?.telemetry?.outputTokens)}</p>
-        <p>{t('Usage complete', 'کامل بودن مصرف')}: {p?.telemetry?.usageComplete ? t('Yes', 'بله') : t('No; missing usage is unknown', 'خیر؛ مصرف ثبت‌نشده نامشخص است')} · {t('Billed cost unavailable', 'هزینهٔ صورتحساب در دسترس نیست')}</p>
-        {p?.telemetry?.stages.map(stage => <p key={stage.stage}>{stageCopy[stage.stage]}: {number(stage.meanMs)} {t('ms', 'میلی‌ثانیه')} ({number(stage.samples)} {t('samples', 'نمونه')})</p>)}
-        <p>{t('Last measurement update', 'آخرین به‌روزرسانی اندازه‌گیری‌ها')}: {available && data.queue.lastProcessedAt != null ? new Date(data.queue.lastProcessedAt).toLocaleString(fa ? 'fa-IR' : 'en-US') : t('Unavailable', 'در دسترس نیست')}</p>
-      </div>
-      <div className="vx-privacy-note">
-        <p className="vx-small">{t('Playback is client reported. Verified task success is unknown.', 'پخش توسط مرورگر گزارش شده است. موفقیت تأییدشدهٔ کار نامشخص است.')}</p>
-        <p className="vx-small vx-2">{t('Coverage includes instrumented stages and returned provider usage only; partial or missing usage is unknown. Live provider audio and verified task outcomes are unavailable.', 'پوشش شامل مرحله‌های ثبت‌شده و مصرف بازگشتی ارائه‌دهنده است؛ مصرف ناقص یا ثبت‌نشده نامشخص است. صدای ارائه‌دهندهٔ زنده و نتیجهٔ تأییدشدهٔ کار در دسترس نیستند.')}</p>
-        {available && data.findings.map(finding => <p className="vx-small" key={finding.rule}>{findingCopy[finding.rule]} <span className="vx-2">({number(finding.count)})</span></p>)}
-        {available && !data.findings.length && <p className="vx-small vx-2">{t('No findings in the processed evidence yet.', 'هنوز یافته‌ای در شواهد پردازش‌شده وجود ندارد.')}</p>}
-      </div>
+      {!available && <Banner tone="info">{t('Optional usage analytics is off or unavailable. Measurements are unavailable.', 'تحلیل اختیاری استفاده خاموش است یا در دسترس نیست. اندازه‌گیری‌ها در دسترس نیستند.')}</Banner>}
+      <Stats>{metrics.map(([label, value]) => <Stat key={label} label={label} value={<span className={available ? undefined : 'vx-stat-na'}>{value}</span>} />)}</Stats>
+      <div className="vx-group">{details.map(([label, value]) => <Fact key={label} label={label}>{value}</Fact>)}</div>
+      <Banner tone="info">{t('Playback is client reported. Verified task success is unknown.', 'پخش توسط مرورگر گزارش شده است. موفقیت تأییدشدهٔ کار نامشخص است.')}</Banner>
+      {available && data.findings.map(finding => <Banner key={finding.rule} tone="warn">{findingCopy[finding.rule]} <span className="vx-2">({number(finding.count)})</span></Banner>)}
+      {available && !data.findings.length && <p className="vx-section-foot">{t('No findings in the processed evidence yet.', 'هنوز یافته‌ای در شواهد پردازش‌شده وجود ندارد.')}</p>}
+      <p className="vx-section-foot">{t('Coverage includes instrumented stages and returned provider usage only; partial or missing usage is unknown. Live provider audio and verified task outcomes are unavailable.', 'پوشش شامل مرحله‌های ثبت‌شده و مصرف بازگشتی ارائه‌دهنده است؛ مصرف ناقص یا ثبت‌نشده نامشخص است. صدای ارائه‌دهندهٔ زنده و نتیجهٔ تأییدشدهٔ کار در دسترس نیستند.')}</p>
     </>}
-    {error && <div className="vx-banner danger" role="alert">{error === 'export' ? t('The export could not be downloaded. Try again.', 'بارگیری خروجی انجام نشد. دوباره تلاش کنید.') : t('Measurements could not be updated. Try again.', 'اندازه‌گیری‌ها به‌روز نشدند. دوباره تلاش کنید.')}</div>}
-    {status && <p className="vx-small" role="status">{status === 'exported' ? t('Your JSON download is ready.', 'بارگیری JSON شما آماده است.') : t('Measurements refreshed. Some events may still be waiting.', 'اندازه‌گیری‌ها تازه شدند. ممکن است برخی رویدادها هنوز در انتظار باشند.')}</p>}
-    <div className="vx-privacy-actions vx-learning-actions">
-      <button className="vx-btn vx-btn-secondary" disabled={!!busy} onClick={() => void run('refresh')}>{busy === 'refresh' ? t('Refreshing…', 'در حال تازه‌سازی…') : error && error !== 'export' ? t('Retry measurements', 'تلاش دوباره برای اندازه‌گیری‌ها') : t('Refresh measurements', 'تازه‌سازی اندازه‌گیری‌ها')}</button>
-      <button className="vx-btn vx-btn-secondary" disabled={!!busy} onClick={() => void run('export')}>{busy === 'export' ? t('Preparing…', 'در حال آماده‌سازی…') : t('Export my learning data', 'دریافت داده‌های یادگیری من')}</button>
+    {error && <Banner tone="danger">{error === 'export' ? t('The export could not be downloaded. Try again.', 'بارگیری خروجی انجام نشد. دوباره تلاش کنید.') : t('Measurements could not be updated. Try again.', 'اندازه‌گیری‌ها به‌روز نشدند. دوباره تلاش کنید.')}</Banner>}
+    {status && <Banner tone="success"><span role="status">{status === 'exported' ? t('Your JSON download is ready.', 'بارگیری JSON شما آماده است.') : t('Measurements refreshed. Some events may still be waiting.', 'اندازه‌گیری‌ها تازه شدند. ممکن است برخی رویدادها هنوز در انتظار باشند.')}</span></Banner>}
+    <div className="vx-group">
+      <Row plain lead={busy === 'refresh' ? <span className="vx-tile icon"><Spinner /></span> : <IconTile name="refresh" />} disabled={!!busy} onClick={() => void run('refresh')}
+        title={busy === 'refresh' ? t('Refreshing…', 'در حال تازه‌سازی…') : error && error !== 'export' ? t('Retry measurements', 'تلاش دوباره برای اندازه‌گیری‌ها') : t('Refresh measurements', 'تازه‌سازی اندازه‌گیری‌ها')} />
+      <Row plain lead={busy === 'export' ? <span className="vx-tile icon"><Spinner /></span> : <IconTile name="download" />} disabled={!!busy} onClick={() => void run('export')}
+        title={busy === 'export' ? t('Preparing…', 'در حال آماده‌سازی…') : t('Export my learning data', 'دریافت داده‌های یادگیری من')} />
     </div>
-    <p className="vx-small vx-2">{t('Refresh updates a small batch of measurements. Export downloads your saved preferences, memories and measurements for this space.', 'تازه‌سازی، دستهٔ کوچکی از اندازه‌گیری‌ها را به‌روز می‌کند. خروجی، ترجیح‌ها، حافظه‌ها و اندازه‌گیری‌های ذخیره‌شدهٔ شما در این فضا را دریافت می‌کند.')}</p>
+    <p className="vx-section-foot">{t('Refresh updates a small batch of measurements. Export downloads your saved preferences, memories and measurements for this space.', 'تازه‌سازی، دستهٔ کوچکی از اندازه‌گیری‌ها را به‌روز می‌کند. خروجی، ترجیح‌ها، حافظه‌ها و اندازه‌گیری‌های ذخیره‌شدهٔ شما در این فضا را دریافت می‌کند.')}</p>
   </section>{showOperations && <OperationsPanel key={space} locale={locale} />}</>;
 }
 
@@ -134,20 +140,29 @@ export function OperationsPanel({ locale }: { locale: 'en' | 'fa' }) {
   }, [load, cancel]);
   const report = data?.report;
   const configured = (value: boolean) => value === true ? t('Configured', 'پیکربندی شده') : value === false ? t('Not configured', 'پیکربندی نشده') : t('Unavailable', 'در دسترس نیست');
-  return <section className="vx-card vx-privacy-card" aria-label={t('Software improvement operations', 'عملیات بهبود نرم‌افزار')} aria-busy={busy} dir={locale === 'fa' ? 'rtl' : 'ltr'} lang={locale}>
-    <h2 className="vx-head">{t('Software improvement', 'بهبود نرم‌افزار')}</h2>
-    <p className="vx-small vx-2">{t('Operator view · Local workflow evidence. Configuration does not prove a scheduled run or a production change.', 'نمای اپراتور · شواهد روند محلی. پیکربندی به معنی اجرای زمان‌بندی‌شده یا تغییر محیط عملیاتی نیست.')}</p>
-    {busy && <p role="status">{t('Loading operations…', 'در حال دریافت عملیات…')}</p>}
-    {error && <p role="alert">{t('Operations evidence is unavailable. Refresh to try again.', 'شواهد عملیات در دسترس نیست. برای تلاش دوباره، عملیات را تازه‌سازی کنید.')}</p>}
+  const n = (value: number) => value.toLocaleString(locale === 'fa' ? 'fa-IR' : 'en-US');
+  return <section className="vx-section vx-diag" aria-label={t('Software improvement operations', 'عملیات بهبود نرم‌افزار')} aria-busy={busy} dir={locale === 'fa' ? 'rtl' : 'ltr'} lang={locale}>
+    <div className="vx-section-head">
+      <h2 className="vx-over">{t('Software improvement', 'بهبود نرم‌افزار')}</h2>
+      <button type="button" className="vx-icon-btn" disabled={busy} onClick={() => void load()} aria-label={busy ? t('Loading operations…', 'در حال دریافت عملیات…') : t('Refresh operations', 'تازه‌سازی عملیات')}>
+        {busy ? <Spinner /> : <Icon name="refresh" size={18} />}</button>
+    </div>
+    <p className="vx-section-foot vx-diag-lede">{t('Operator view · Local workflow evidence. Configuration does not prove a scheduled run or a production change.', 'نمای اپراتور · شواهد روند محلی. پیکربندی به معنی اجرای زمان‌بندی‌شده یا تغییر محیط عملیاتی نیست.')}</p>
+    {busy && <SkeletonRows rows={2} lead={false} label={t('Loading operations…', 'در حال دریافت عملیات…')} />}
+    {error && <Banner tone="danger">{t('Operations evidence is unavailable. Refresh to try again.', 'شواهد عملیات در دسترس نیست. برای تلاش دوباره، عملیات را تازه‌سازی کنید.')}</Banner>}
     {data && <>
-      <p className="vx-small">{t('Maintenance', 'نگهداری')}: {configured(data.maintenanceConfigured)} · {t('Improvement workflow', 'روند بهبود')}: {configured(data.improvementConfigured)}</p>
+      <div className="vx-group">
+        <Fact label={t('Maintenance', 'نگهداری')}>{configured(data.maintenanceConfigured)}</Fact>
+        <Fact label={t('Improvement workflow', 'روند بهبود')}>{configured(data.improvementConfigured)}</Fact>
+      </div>
       <MaintenanceHealthPanel health={data.maintenance} locale={locale} />
-      {report ? <>
-        <p className="vx-small">{t('Audit events', 'رویدادهای ممیزی')}: {report.auditEvents.toLocaleString(locale === 'fa' ? 'fa-IR' : 'en-US')} · {t('Candidates', 'نامزدها')}: {report.candidates.length.toLocaleString(locale === 'fa' ? 'fa-IR' : 'en-US')}</p>
-        <p className="vx-small">{t('Evaluations passed', 'ارزیابی‌های پذیرفته‌شده')}: {report.candidates.filter(c => c.evaluationStatus === 'passed').length.toLocaleString(locale === 'fa' ? 'fa-IR' : 'en-US')} · {t('Signed approvals', 'تأییدهای امضاشده')}: {report.candidates.filter(c => c.humanDecision === 'approve').length.toLocaleString(locale === 'fa' ? 'fa-IR' : 'en-US')}</p>
-      </> : <p className="vx-small">{t('Local workflow report: unavailable.', 'گزارش روند محلی: در دسترس نیست.')}</p>}
+      {report ? <Stats>
+        <Stat label={t('Audit events', 'رویدادهای ممیزی')} value={n(report.auditEvents)} />
+        <Stat label={t('Candidates', 'نامزدها')} value={n(report.candidates.length)} />
+        <Stat label={t('Evaluations passed', 'ارزیابی‌های پذیرفته‌شده')} value={n(report.candidates.filter(c => c.evaluationStatus === 'passed').length)} />
+        <Stat label={t('Signed approvals', 'تأییدهای امضاشده')} value={n(report.candidates.filter(c => c.humanDecision === 'approve').length)} />
+      </Stats> : <Banner tone="info">{t('Local workflow report: unavailable.', 'گزارش روند محلی: در دسترس نیست.')}</Banner>}
     </>}
-    <p className="vx-small vx-2">{t('CI, deployment, production impact and cost: unavailable. Proposed causes remain hypotheses.', 'CI، استقرار، اثر عملیاتی و هزینه: در دسترس نیست. علت‌های پیشنهادی همچنان فرضیه هستند.')}</p>
-    <button className="vx-btn vx-btn-secondary" disabled={busy} onClick={() => void load()}>{busy ? t('Loading operations…', 'در حال دریافت عملیات…') : t('Refresh operations', 'تازه‌سازی عملیات')}</button>
+    <p className="vx-section-foot">{t('CI, deployment, production impact and cost: unavailable. Proposed causes remain hypotheses.', 'CI، استقرار، اثر عملیاتی و هزینه: در دسترس نیست. علت‌های پیشنهادی همچنان فرضیه هستند.')}</p>
   </section>;
 }

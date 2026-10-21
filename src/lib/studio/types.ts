@@ -50,7 +50,7 @@ export interface PersonaSpec {
   accent: string;
   /** Description fed to ElevenLabs Voice Design */
   voiceBrief: string;
-  /** Short accessory/feature hint for the avatar, respectful of culture */
+  /** Legacy free-text avatar hint; no longer requested or read (portraits use the look's accessory) */
   avatarHint: string;
   /** How they treat people outside the org when public: what they share, when they stop */
   withStrangers?: string;
@@ -110,17 +110,46 @@ export interface AgentLook {
   hue: Hue;
   family: CloudFamily;
   features: CloudFeatures;
+  /** Character v2 (all optional so legacy looks render unchanged). Default 'cloud'. */
+  species?: CloudSpecies;
+  /** Default 'none' */
+  hair?: HairStyle;
+  /** Default 'deep' */
+  hairTone?: HairTone;
+  /** Default 'none' */
+  accessory?: Accessory;
+  /** Default per accessory */
+  accent?: AccentColor;
   /** Media file name under the studio data dir, served by /api/studio/media/[file] */
   avatar?: string;
   avatarSource?: 'generated' | 'custom';
   avatarVariants?: string[];
+  /** Per generated variant: lookKey() of the look it was drawn from */
+  avatarLooks?: Record<string, string>;
+  /** Per generated variant: how it was drawn (reference edit or text-only fallback), for portrait QA */
+  avatarVia?: Record<string, 'edit' | 'text'>;
 }
+
+export type CloudSpecies = 'cloud' | 'cat' | 'dog' | 'bunny' | 'bear' | 'owl' | 'chick';
+export type HairStyle = 'none' | 'tuft' | 'fringe' | 'bun' | 'curls' | 'spiky' | 'pony';
+export type HairTone = 'deep' | 'cream' | 'cocoa' | 'ink' | Hue;
+export type Accessory = 'none' | 'glasses' | 'specs' | 'beret' | 'cap' | 'beanie' | 'headphones'
+  | 'headset' | 'bow' | 'flower' | 'star' | 'bowtie';
+export type AccentColor = 'ink' | 'cream' | 'volt' | 'coral' | 'navy' | 'berry' | 'cocoa' | Hue;
+/** Forming stage of the progressive face: 1 wisp · 2 puff · 3 shaped · 4 formed */
+export type Stage = 1 | 2 | 3 | 4;
+
+/** The fields that define how the character looks (no photo fields). */
+export type CharacterLook = Pick<AgentLook, 'hue' | 'family' | 'features' | 'species' | 'hair' | 'hairTone' | 'accessory' | 'accent'>;
+export type LookPatch = Partial<CharacterLook>;
 
 export interface AgentVoice {
   provider: 'elevenlabs';
   voiceId: string;
   label: string;
   source: 'design' | 'library' | 'default';
+  /** What the person picked when voiceId is the account's own copy: the library voice id or the Voice Design preview id */
+  sourceId?: string;
 }
 
 export type AgentStatus = 'draft' | 'awaiting_bot' | 'active' | 'fired';
@@ -135,7 +164,11 @@ export interface TelegramProfileSync {
   attempts: number;
   updatedAt: string;
   retryAt?: string;
+  /** Hash of each step's desired value at its last success; absent on legacy receipts */
+  steps?: Partial<Record<ProfileStep, string>>;
 }
+
+export type ProfileStep = 'webhook' | 'name' | 'photo' | 'short description' | 'description' | 'commands' | 'token' | 'profile' | 'inactive';
 
 export interface Agent {
   /** Monotonic source authority; never decrement or restore. */
@@ -154,6 +187,10 @@ export interface Agent {
   lockAt?: string;
   bot?: { id: number; username: string };
   profileSync?: TelegramProfileSync;
+  /** Automatic profile pushes wait until then: the look editor is open and pushes once on close (stored so every instance sees it) */
+  profileHeldUntil?: string;
+  /** Next portrait mood, reserved in the store so parallel single-portrait requests on any instance differ */
+  portraitSeq?: number;
   /** AES-GCM encrypted bot token */
   tokenEnc?: string;
   suggestedUsername?: string;
@@ -202,6 +239,8 @@ export interface StudioGroup {
   /** Monotonic audience epoch; leave/rejoin must not restore old sharing rights. */
   audienceEpoch?: number;
   agentIds: string[];
+  /** Declared history policy; absent = since_membership. Never widens a record by itself. */
+  historyPolicy?: 'since_membership' | 'all_authorized_history';
   addedBy?: number;
   addedAt: string;
   /** Content-free throttle shared by all agents in this group. */

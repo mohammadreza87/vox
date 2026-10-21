@@ -63,6 +63,8 @@ export async function handleAgentUpdate(studio: Studio, agentId: string, update:
   let gateway = initial.gateway;
   const live = state.agents.find((a) => a.id === agentId);
   if (!live || live.status !== 'active') return;
+  // Webhook deployments have no reconcile loop: traffic reaching the bot repairs a stale profile.
+  studio.nudgeBotProfile(live);
   if (update.my_chat_member) {
     await studio.onBotChatMember(live, update.my_chat_member);
     return;

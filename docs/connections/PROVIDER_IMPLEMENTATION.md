@@ -1,5 +1,7 @@
 # Typed provider adapters: implementation evidence
 
+**Status, 20 October 2026:** the candidate described below is committed and merged into `develop` (`src/lib/connections/providers/*.ts`); the "uncommitted" wording is historical.
+
 Tasks CONN-011/012/015–023 (bounded source slice), 19 October 2026. Candidate starts at `d8d6766` on `codex/studio-connections`; implementation is uncommitted and must be evaluated as its actual diff. These source/fixture results do not admit a live account or capability to production.
 
 The code-owned catalog contains 14 API providers and 37 finite tools. Adapters produce real provider API or native Gamend MCP requests; no arbitrary URL, method, header, operation name, shell, SQL or provider tool passthrough is exposed. Production admission remains separately gated in each provider's metadata (`requires_account_qualification`, `accountEvidence: unavailable`, `disabled_pending_qualification`). A catalog entry is not an OAuth installation, verified scope, live provider check or release decision.

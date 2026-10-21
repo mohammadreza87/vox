@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { chooseSettingsAgent, closeStudioSheet, openYou, setStudioLocale, switchStudioSpace } from './helpers/studio-navigation';
 import type { LearningPublicView } from '../src/lib/adaptive/personalization/learning/contracts';
 import type { PreferenceState } from '../src/lib/adaptive/runtime/contracts';
 
@@ -109,13 +110,22 @@ async function installStudioFixtures(page: Page, externalAvailable = false) {
 
 async function enterExperience(page: Page) {
   await page.goto('/studio');
-  await page.getByRole('button', { name: 'Privacy', exact: true }).click();
-  await page.getByRole('button', { name: 'Preferences & notification inbox' }).click();
-  await expect(page.getByText('Your experience', { exact: true })).toBeVisible();
-  await page.getByRole('combobox', { name: 'Agent', exact: true }).selectOption(agent.id);
-  await expect(page.getByRole('heading', { name: 'Staying in touch' })).toBeVisible();
+  await openYou(page);
+  await page.getByRole('button', { name: 'Preferences', exact: true }).click();
+  await chooseSettingsAgent(page, 'Nova');
   await expect(page.getByText('Suggestion learning is unavailable here. Ordinary explicit preferences still work.')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Enable suggestions', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: /^Staying in touch/ }).click();
+  await expect(page.getByRole('heading', { name: 'Staying in touch' })).toBeVisible();
+}
+
+async function personalRelationship(page: Page) {
+  await closeStudioSheet(page);
+  const personalSettings = page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/experience') && new URL(response.url()).searchParams.get('space') === 'personal');
+  await switchStudioSpace(page, 'personal');
+  await personalSettings;
+  await chooseSettingsAgent(page, 'Nova');
+  await page.getByRole('button', { name: /^Staying in touch/ }).click();
 }
 
 test('scoped check-ins clear on Work/Personal switch, localize, and support inbox/source controls', async ({ page }) => {
@@ -127,24 +137,23 @@ test('scoped check-ins clear on Work/Personal switch, localize, and support inbo
   await expect(page.getByText(workCheckin)).toBeVisible();
   await expect.poll(() => reads.some(read => read.path.endsWith('/relationship') && read.query === '?space=work')).toBe(true);
 
-  const personalSettings = page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/experience') && new URL(response.url()).searchParams.get('space') === 'personal');
-  await page.getByLabel('Experience space').getByRole('button', { name: 'Personal', exact: true }).click();
-  await personalSettings;
-  await expect(page.getByText('Loading…', { exact: true })).not.toBeVisible();
+  await personalRelationship(page);
   await expect(page.getByText(workCheckin)).not.toBeVisible();
-  await page.getByRole('combobox', { name: 'Agent', exact: true }).selectOption(agent.id);
   await expect(page.getByText('Personal-only preference')).toBeVisible();
   await expect(page.getByText(personalCheckin)).toBeVisible();
   await expect.poll(() => reads.some(read => read.path.endsWith('/relationship') && read.query === '?space=personal')).toBe(true);
 
-  await page.getByRole('button', { name: 'فارسی' }).click();
-  await expect(page.locator('.vx-scroll.vx-privacy')).toHaveAttribute('dir', 'rtl');
-  await expect(page.getByRole('button', { name: 'مکث برای ۷ روز' })).toBeVisible();
+  await setStudioLocale(page, 'fa');
+  await page.getByRole('button', { name: 'ترجیح‌ها', exact: true }).click();
+  await chooseSettingsAgent(page, 'Nova');
+  await page.getByRole('button', { name: /^در ارتباط ماندن/ }).click();
+  await expect(page.getByRole('region', { name: 'در ارتباط ماندن' })).toHaveAttribute('dir', 'rtl');
+  await expect(page.getByRole('tab', { name: 'مکث ۷ روزه' })).toBeVisible();
   await page.getByRole('button', { name: 'علامت‌گذاری به‌عنوان خوانده‌شده' }).focus();
   await page.keyboard.press('Enter');
   await expect.poll(() => mutations.some(m => m.body.action === 'read' && m.body.space === 'personal' && m.body.itemId === 'personal-checkin')).toBe(true);
   await expect(page.getByRole('button', { name: 'علامت‌گذاری به‌عنوان خوانده‌شده' })).not.toBeVisible();
-  await page.getByRole('button', { name: 'بستن', exact: true }).click();
+  await page.getByRole('region', { name: 'در ارتباط ماندن' }).getByRole('button', { name: 'بستن', exact: true }).click();
   await expect(page.getByText(personalCheckin)).not.toBeVisible();
   await page.getByRole('button', { name: 'حذف منبع' }).click();
   await expect.poll(() => mutations.some(m => m.body.action === 'source-delete' && m.body.space === 'personal' && m.body.sourceId === 'personal-source')).toBe(true);
@@ -154,7 +163,7 @@ test('scoped check-ins clear on Work/Personal switch, localize, and support inbo
 test('external alerts stay off and disabled without the separate permission', async ({ page }) => {
   await installStudioFixtures(page);
   await enterExperience(page);
-  const alerts = page.getByRole('checkbox', { name: 'Generic Telegram alerts' });
+  const alerts = page.getByRole('switch', { name: 'Generic Telegram alerts' });
   await expect(alerts).not.toBeChecked();
   await expect(alerts).toBeDisabled();
   await expect(page.getByText(/never include conversation content/i)).toBeVisible();
@@ -166,12 +175,8 @@ test('external alerts stay off and disabled without the separate permission', as
 test('permitted generic alert can be enabled by keyboard in the selected scope', async ({ page }) => {
   const { mutations } = await installStudioFixtures(page, true);
   await enterExperience(page);
-  const personalSettings = page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/experience') && new URL(response.url()).searchParams.get('space') === 'personal');
-  await page.getByLabel('Experience space').getByRole('button', { name: 'Personal', exact: true }).click();
-  await personalSettings;
-  await expect(page.getByText('Loading…', { exact: true })).not.toBeVisible();
-  await page.getByRole('combobox', { name: 'Agent', exact: true }).selectOption(agent.id);
-  const alerts = page.getByRole('checkbox', { name: 'Generic Telegram alerts' });
+  await personalRelationship(page);
+  const alerts = page.getByRole('switch', { name: 'Generic Telegram alerts' });
   await expect(alerts).toBeEnabled();
   await alerts.focus();
   await page.keyboard.press('Space');
@@ -183,9 +188,9 @@ test('pause, stop and forget remain available after feature eligibility is withd
   const { mutations } = await installStudioFixtures(page);
   await enterExperience(page);
   // This fixture models an existing relationship whose current feature gate is unavailable.
-  await page.getByRole('button', { name: 'Stop follow-ups' }).click();
+  await page.getByRole('tab', { name: 'Off', exact: true }).click();
   await expect.poll(() => mutations.some(m => m.body.action === 'stop' && m.body.space === 'work')).toBe(true);
-  await page.getByRole('button', { name: 'Pause for 7 days' }).click();
+  await page.getByRole('tab', { name: 'Pause 7 days', exact: true }).click();
   await expect.poll(() => mutations.some(m => m.body.action === 'pause' && m.body.space === 'work')).toBe(true);
   await page.getByRole('button', { name: 'Forget relationship context' }).click();
   await expect(page.getByRole('group', { name: 'Forget relationship confirmation' })).toBeVisible();
@@ -200,17 +205,24 @@ test('legacy memory sharing and admin observations remain separate from private 
   await page.getByRole('button', { name: 'Memories', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'What Nova remembers' })).toBeVisible();
   await expect(page.getByText(memory.content)).toBeVisible();
+  await page.getByRole('button', { name: 'Memory options', exact: true }).click();
   await page.getByRole('button', { name: 'Share', exact: true }).click();
-  await page.getByLabel('Fixture Teammate').check();
+  await page.getByRole('checkbox', { name: 'Fixture Teammate', exact: true }).click();
+  await expect(page.getByRole('checkbox', { name: 'Fixture Teammate', exact: true })).toBeChecked();
   await page.getByRole('button', { name: 'Share with selected' }).click();
   await expect.poll(() => mutations.find(m => m.path.endsWith('/memories') && m.method === 'PUT')?.body).toEqual({ memoryId: memory.id, recipients: [77002] });
-  await page.getByRole('button', { name: 'Share', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Stop sharing' })).toBeEnabled();
   await page.getByRole('button', { name: 'Stop sharing' }).click();
   await expect.poll(() => mutations.find(m => m.path.endsWith('/revoke-memory'))?.body).toEqual({ memoryId: memory.id });
+  // Receiving the request is not confirmation that the client finished the mutation.
+  const memorySheet = page.getByRole('dialog', { name: 'Memory', exact: true });
+  await expect(memorySheet.getByRole('button', { name: 'Forget', exact: true })).toBeEnabled();
+  await expect(memorySheet.getByRole('button', { name: 'Share', exact: true })).toBeEnabled();
+  await expect(memorySheet.getByRole('button', { name: 'Stop sharing', exact: true })).toHaveCount(0);
+  await expect(memorySheet.getByText(/Private to you/)).toBeVisible();
 
-  await page.getByRole('button', { name: 'Nova', exact: true }).click();
-  await page.getByRole('button', { name: 'Agents', exact: true }).click();
-  await page.getByRole('button', { name: 'Org', exact: true }).click();
+  await openYou(page);
+  await page.getByRole('navigation', { name: 'Main' }).getByRole('button', { name: 'Org', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Conversation activity' })).toBeVisible();
   await expect(page.getByText('Helpful check-ins', { exact: true })).toBeVisible();
   await expect(page.getByText(/Likes a concise design review/)).not.toBeVisible();

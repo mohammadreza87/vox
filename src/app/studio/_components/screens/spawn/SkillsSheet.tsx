@@ -67,7 +67,7 @@ function SkillsBody({ t, onClose, roleId, selected, onChange, fa, returnFocus }:
     return (
       <button key={s.id} type="button" className="vx-pick-row vx-pick-row-56" aria-pressed={isOn} disabled={!isOn && atCap} onClick={() => toggle(s.id)}>
         <div>
-          <span {...textAttrs(skillTitle(s, fa))} style={{ fontWeight: 600 }}>{skillTitle(s, fa)}</span>
+          <span {...textAttrs(skillTitle(s, fa))} className="vx-catalog-layout-3d9df89e">{skillTitle(s, fa)}</span>
           <span {...textAttrs(skillSummary(s, fa))} className="vx-small vx-2">{skillSummary(s, fa)}</span>
         </div>
         <span className="vx-pick-check" aria-hidden="true"><Icon name={isOn ? 'check' : 'plus'} size={20} width={2} /></span>
@@ -88,7 +88,7 @@ function SkillsBody({ t, onClose, roleId, selected, onChange, fa, returnFocus }:
         <h2 className="vx-title-m">{t.skillsSheet}</h2>
         <span className="vx-small vx-2 vx-num">{t.num(selected.length)}/{t.num(MAX_AGENT_SKILLS)}</span>
       </div>
-      {atCap && <p className="vx-small vx-2" role="status" style={{ margin: 0 }}>{t.cap}</p>}
+      {atCap && <p className="vx-small vx-2 vx-catalog-layout-02419cff" role="status" >{t.cap}</p>}
       <SheetScroll>
         {!role && search}
         {on.length > 0 && <Section title={t.on}>{on.map(row)}</Section>}
@@ -97,7 +97,7 @@ function SkillsBody({ t, onClose, roleId, selected, onChange, fa, returnFocus }:
         {q
           ? matches.length > 0
             ? <Section title={t.moreSkillsSection}>{matches.map(row)}</Section>
-            : <p className="vx-small vx-2" style={{ margin: 0 }}>{t.noSkillMatch}</p>
+            : <p className="vx-small vx-2 vx-catalog-layout-02419cff" >{t.noSkillMatch}</p>
           : picks.length > 0 && <Section title={t.topPicks}>{picks.map(row)}</Section>}
       </SheetScroll>
       <button type="button" className="vx-btn vx-btn-secondary vx-btn-block" onClick={onClose}>{t.done}</button>
@@ -107,7 +107,7 @@ function SkillsBody({ t, onClose, roleId, selected, onChange, fa, returnFocus }:
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+    <section className="vx-catalog-layout-baf2fda5">
       <span className="vx-over">{title}</span>
       <div className="vx-group vx-pick-list">{children}</div>
     </section>

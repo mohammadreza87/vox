@@ -1,0 +1,187 @@
+{
+  "variant": 0,
+  "model": null,
+  "dry": true,
+  "results": [
+    {
+      "index": 0,
+      "look": {
+        "hue": "lilac",
+        "family": "puff",
+        "species": "cloud",
+        "hair": "curls",
+        "hairTone": "deep",
+        "accessory": "specs",
+        "accent": "ink",
+        "features": {
+          "cheeks": true,
+          "lashes": true,
+          "brows": false
+        }
+      },
+      "dir": "00-cloud-curls-specs"
+    },
+    {
+      "index": 1,
+      "look": {
+        "hue": "lagoon",
+        "family": "puff",
+        "species": "cat",
+        "hair": "fringe",
+        "hairTone": "ink",
+        "accessory": "bow",
+        "accent": "coral",
+        "features": {
+          "cheeks": true,
+          "lashes": true,
+          "brows": false
+        }
+      },
+      "dir": "01-cat-fringe-bow"
+    },
+    {
+      "index": 2,
+      "look": {
+        "hue": "apricot",
+        "family": "puff",
+        "species": "dog",
+        "hair": "tuft",
+        "hairTone": "cocoa",
+        "accessory": "headphones",
+        "accent": "navy",
+        "features": {
+          "cheeks": true,
+          "lashes": false,
+          "brows": true
+        }
+      },
+      "dir": "02-dog-tuft-headphones"
+    },
+    {
+      "index": 3,
+      "look": {
+        "hue": "rose",
+        "family": "tower",
+        "species": "bunny",
+        "hair": "none",
+        "hairTone": "deep",
+        "accessory": "flower",
+        "accent": "cream",
+        "features": {
+          "cheeks": true,
+          "lashes": true,
+          "brows": false
+        }
+      },
+      "dir": "03-bunny-flower"
+    },
+    {
+      "index": 4,
+      "look": {
+        "hue": "sky",
+        "family": "puff",
+        "species": "bear",
+        "hair": "none",
+        "hairTone": "deep",
+        "accessory": "scarf",
+        "accent": "berry",
+        "features": {
+          "cheeks": true,
+          "lashes": false,
+          "brows": false
+        }
+      },
+      "dir": "04-bear-scarf"
+    },
+    {
+      "index": 5,
+      "look": {
+        "hue": "matcha",
+        "family": "puff",
+        "species": "owl",
+        "hair": "none",
+        "hairTone": "deep",
+        "accessory": "glasses",
+        "accent": "cocoa",
+        "features": {
+          "cheeks": true,
+          "lashes": false,
+          "brows": false
+        }
+      },
+      "dir": "05-owl-glasses"
+    },
+    {
+      "index": 6,
+      "look": {
+        "hue": "butter",
+        "family": "puff",
+        "species": "chick",
+        "hair": "none",
+        "hairTone": "deep",
+        "accessory": "beret",
+        "accent": "berry",
+        "features": {
+          "cheeks": true,
+          "lashes": false,
+          "brows": false
+        }
+      },
+      "dir": "06-chick-beret"
+    },
+    {
+      "index": 8,
+      "look": {
+        "hue": "sky",
+        "family": "tower",
+        "species": "cat",
+        "hair": "bun",
+        "hairTone": "deep",
+        "accessory": "star",
+        "accent": "volt",
+        "features": {
+          "cheeks": true,
+          "lashes": true,
+          "brows": false
+        }
+      },
+      "dir": "08-cat-bun-star"
+    },
+    {
+      "index": 11,
+      "look": {
+        "hue": "apricot",
+        "family": "tower",
+        "species": "owl",
+        "hair": "fringe",
+        "hairTone": "deep",
+        "accessory": "cap",
+        "accent": "navy",
+        "features": {
+          "cheeks": true,
+          "lashes": false,
+          "brows": false
+        }
+      },
+      "dir": "11-owl-fringe-cap"
+    },
+    {
+      "index": 13,
+      "look": {
+        "hue": "matcha",
+        "family": "tower",
+        "species": "cloud",
+        "hair": "pony",
+        "hairTone": "deep",
+        "accessory": "cap",
+        "accent": "coral",
+        "features": {
+          "cheeks": true,
+          "lashes": true,
+          "brows": false
+        }
+      },
+      "dir": "13-cloud-pony-cap"
+    }
+  ]
+}

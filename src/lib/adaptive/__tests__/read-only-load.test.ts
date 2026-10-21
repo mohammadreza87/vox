@@ -90,7 +90,7 @@ describe('read-only adaptive load path', () => {
 
   it('loads one copy per turn snapshot and parses it once', async () => {
     const { f, storage } = await consented();
-    const load = vi.spyOn(storage, 'load');
+    const load = vi.spyOn(storage, 'readCommittedForEffect');
     const scope = TurnReadScope.load();
     await scope.run(() => readAll(f));
     scope.close();
@@ -129,5 +129,23 @@ describe('read-only adaptive load path', () => {
     const count = transactions;
     expect(await readOnce(() => repository.transaction('telegram-account:5', 100, d => d.revision))).toBe(2);
     expect(transactions).toBe(count);
+  });
+});
+
+describe('committed read seam', () => {
+  it('reads file-format accounts through readCommittedForEffect and falls back to the transaction while a writer holds the lock', async () => {
+    const { f, storage } = await consented();
+    const committed = vi.spyOn(storage, 'readCommittedForEffect');
+    const transact = vi.spyOn(storage, 'transact');
+    await f.adaptive.readPrivateContext(f.telegramId, 'work', f.agentId);
+    expect(committed).toHaveBeenCalled();
+    expect(transact).not.toHaveBeenCalled();
+    committed.mockReturnValueOnce({ status: 'busy' });
+    const scope = TurnReadScope.load();
+    const value = await scope.run(() => f.adaptive.readPrivateContext(f.telegramId, 'work', f.agentId));
+    scope.close();
+    expect(value.memories.map(m => m.text)).toEqual(['Synthetic read-only note']);
+    expect(transact).toHaveBeenCalledTimes(1);
+    expect(scope.incomplete).toBe(true);
   });
 });

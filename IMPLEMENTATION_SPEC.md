@@ -1,5 +1,7 @@
 # Vox Implementation Specification
 
+> **Historical document (2025 to January 2026).** It describes the Firebase-hosted voice-contacts web app. The current product is the Telegram-based Vox Studio; see [README.md](README.md), [docs/VOX_STUDIO.md](docs/VOX_STUDIO.md) and [docs/implementation/PLAN.md](docs/implementation/PLAN.md). Phase 1 of its plan (stores, repositories, services) shipped; the Supabase, BullMQ and Edge Config phases never started and are not the direction of the codebase.
+
 **Version**: 1.0
 **Created**: January 2026
 **Status**: Ready for Implementation

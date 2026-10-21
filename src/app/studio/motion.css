@@ -1,0 +1,246 @@
+/* Vox Studio motion: tokens, press, skeleton, one-shots, character rig loops, tiers and reduced motion.
+   Mirrors _lib/motion.ts. Loaded after studio.css and shell.css. */
+.vx {
+  /* durations */
+  --dur-instant: 90ms; --dur-fast: 140ms; --dur-base: 220ms; --dur-medium: 320ms; --dur-slow: 480ms; --dur-slower: 640ms;
+  /* easings (keep old names as aliases: --ease = standard, --ease-in was actually decelerate) */
+  --ease-standard: cubic-bezier(.2, 0, 0, 1);
+  --ease-enter: cubic-bezier(.05, .7, .1, 1);
+  --ease-exit: cubic-bezier(.3, 0, .8, .15);
+  --ease-over: cubic-bezier(.34, 1.56, .64, 1);
+  --ease-sine: cubic-bezier(.37, 0, .63, 1);
+  --ease: var(--ease-standard);
+  --ease-in: var(--ease-enter);
+  /* CSS springs: fallbacks first, linear() where supported (Chrome 113+, Safari 17.2+) */
+  --spring-press: 260ms var(--ease-over);
+  --spring-snappy: 300ms var(--ease-standard);
+  --spring-pop: 520ms var(--ease-over);
+  /* distances */
+  --d-xs: 4px; --d-s: 8px; --d-m: 12px; --d-l: 24px; --d-xl: 48px;
+  /* press scales */
+  --press-btn: .97; --press-chip: .96; --press-card: .98; --press-round: .92;
+}
+@supports (transition-timing-function: linear(0, 1)) {
+  .vx {
+    --spring-press: 400ms linear(0, 0.3572, 0.8147, 1.0325, 1.0665, 1.0363, 1.0081, 0.9966, 0.9958, 0.998, 0.9997, 1, 1);
+    --spring-snappy: 400ms linear(0, 0.2322, 0.5714, 0.8083, 0.9336, 0.9868, 1.0038, 1.0062, 1.0045, 1.0024, 1.001, 1.0003, 1);
+    --spring-pop: 800ms linear(0, 0.0763, 0.2549, 0.4723, 0.6834, 0.8606, 0.9915, 1.0748, 1.1165, 1.1261, 1.1143, 1.0908, 1.0631, 1.0368, 1.0152, 0.9994, 0.9896, 0.9849, 0.9841, 0.9859, 0.989, 0.9925, 0.9957, 0.9984, 1.0003, 1.0014, 1);
+  }
+}
+
+/* ---- press: fast in, springy out ---- */
+.vx-btn, .vx-chip, .vx-icon-btn, .vx-tap { transition: transform var(--spring-press), background-color var(--dur-base) var(--ease-standard), color var(--dur-base) var(--ease-standard), opacity var(--dur-base) var(--ease-standard); }
+.vx-btn:active:not(:disabled) { transform: scale(var(--press-btn)); transition: transform var(--dur-instant) var(--ease-standard); }
+.vx-chip:active:not(:disabled) { transform: scale(var(--press-chip)); transition: transform var(--dur-instant) var(--ease-standard); }
+.vx-icon-btn:active:not(:disabled) { transform: scale(var(--press-round)); transition: transform var(--dur-instant) var(--ease-standard); }
+.vx-tap:active { transform: scale(var(--press-card)); transition: transform var(--dur-instant) var(--ease-standard); }
+.vx-row { transition: background-color var(--dur-fast) var(--ease-standard); }
+.vx-row:active { background-color: rgba(255, 255, 255, .04); }
+
+/* ---- skeleton: compositor-only shimmer (replaces background-position animation) ---- */
+.vx-skeleton { position: relative; overflow: hidden; background: var(--s1); animation: none; }
+.vx-skeleton::after { content: ''; position: absolute; inset: 0; transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .05), transparent); animation: vxSheen 1.4s var(--ease-sine) infinite; }
+.vx-skeleton[data-delay] { opacity: 0; animation: vxFadeIn var(--dur-base) var(--ease-enter) 150ms forwards; } /* don't flash for fast loads */
+@keyframes vxSheen { to { transform: translateX(100%); } }
+@keyframes vxFadeIn { to { opacity: 1; } }
+
+/* ---- one-shots ---- */
+@keyframes vxShake { 0%, 100% { transform: translateX(0); } 15% { transform: translateX(-8px); } 30% { transform: translateX(7px); } 45% { transform: translateX(-5px); } 60% { transform: translateX(4px); } 75% { transform: translateX(-2px); } }
+.vx-shake { animation: vxShake 360ms ease-out; }
+@keyframes vxSweep { from { background-size: 0% 2px; } to { background-size: 100% 2px; } } /* board: spawn-2 changed text */
+.vx-changed { background-image: linear-gradient(var(--volt), var(--volt)); background-repeat: no-repeat; background-position: 0 100%; animation: vxSweep .7s var(--ease-standard) both; }
+[dir="rtl"] .vx-changed { background-position: 100% 100%; } /* sweeps with the reading direction */
+@keyframes vxHead { 0%, 100% { opacity: 1; } 50% { opacity: .45; } } /* board: forming halo leading dot */
+.vx-head-dot { animation: vxHead 1.6s ease-in-out infinite; }
+/* board: group-call speaking ring — transform/opacity version of vxRing (no box-shadow repaint) */
+.vx-ring { position: relative; }
+.vx-ring::after { content: ''; position: absolute; inset: -3px; border-radius: inherit; border: 2px solid rgba(140, 200, 255, .9); animation: vxRingPulse 1.2s var(--ease-sine) infinite; pointer-events: none; }
+@keyframes vxRingPulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.06); opacity: .4; } }
+
+/* ---- character secondary motion (applies to rig layers; see SPEC §4) ---- */
+@keyframes vxSway { 0%, 100% { transform: rotate(calc(var(--sway, 2.5deg) * -1)); } 50% { transform: rotate(var(--sway, 2.5deg)); } }
+@keyframes vxWag { 0%, 100% { transform: rotate(calc(var(--wag, 4deg) * -1)); } 50% { transform: rotate(var(--wag, 4deg)); } }
+.vx-rig-hair, .vx-rig-ear, .vx-rig-acc-soft { animation: vxSway 4.2s var(--ease-sine) infinite; animation-delay: var(--lag, .18s); transform-box: fill-box; }
+.vx-rig-tail { animation: vxWag 2.6s var(--ease-sine) infinite; transform-box: fill-box; }
+.vx-rig-tail.wag { animation-duration: .31s; --wag: 14deg; }
+
+/* ---- motion tiers ---- */
+.vx[data-motion="lite"] .vx-rig-hair, .vx[data-motion="lite"] .vx-rig-ear, .vx[data-motion="lite"] .vx-rig-tail, .vx[data-motion="lite"] .vx-glow { animation: none; }
+.vx[data-motion="lite"] .vx-skeleton::after { animation-duration: 2.2s; }
+
+@media (prefers-reduced-motion: reduce) {
+  .vx-btn:active, .vx-chip:active, .vx-icon-btn:active, .vx-tap:active { transform: none; }
+  .vx-skeleton::after, .vx-shake, .vx-head-dot, .vx-ring::after, .vx-rig-hair, .vx-rig-ear, .vx-rig-acc-soft, .vx-rig-tail { animation: none !important; }
+  .vx-changed { animation: none; background-size: 100% 2px; }
+  .vx-skeleton[data-delay] { animation: none; opacity: 1; }
+}
+
+/* ---- skeleton shape (moved from studio.css; the sheen above replaces the old shimmer) ---- */
+.vx-skeleton { border-radius: 16px; }
+
+/* ---- Cloud character motion ---- */
+@keyframes vxBreathe { 0%, 100% { transform: translateY(0) scale(1, 1); } 50% { transform: translateY(-2px) scale(.99, 1.025); } }
+@keyframes vxBlink { 0%, 93%, 100% { transform: scaleY(1); } 96% { transform: scaleY(.1); } }
+@keyframes vxTalk { 0%, 100% { transform: scaleY(.3); } 25% { transform: scaleY(1); } 50% { transform: scaleY(.55); } 75% { transform: scaleY(.9); } }
+@keyframes vxOrbit { to { transform: rotate(360deg); } }
+@keyframes vxRise { 0% { transform: translateY(0); opacity: 0; } 30% { opacity: .8; } 100% { transform: translateY(-26px); opacity: 0; } }
+@keyframes vxHop { 0%, 100% { transform: translateY(0) scale(1, 1); } 40% { transform: translateY(-10px) scale(.96, 1.04); } 70% { transform: translateY(0) scale(1.06, .94); } }
+@keyframes vxPulse { 0%, 100% { opacity: .35; } 50% { opacity: .7; } }
+@keyframes vxBar { 0%, 100% { transform: scaleY(.15); } 50% { transform: scaleY(1); } }
+@keyframes vxSpin { to { transform: rotate(360deg); } }
+
+.vx-breathe { animation: vxBreathe 4.2s cubic-bezier(.37, 0, .63, 1) infinite; transform-box: fill-box; transform-origin: 50% 100%; }
+.vx-slow { animation-duration: 6.5s; }
+.vx-hop { animation: vxHop 1.8s var(--ease-over) infinite; transform-box: fill-box; transform-origin: 50% 100%; }
+.vx-blink { animation: vxBlink 5.2s infinite; transform-box: fill-box; transform-origin: center; }
+.vx-talk { animation: vxTalk .42s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+.vx-orbit { animation: vxOrbit 1.6s linear infinite; transform-box: view-box; transform-origin: 150px 60px; }
+.vx-rise { animation: vxRise 2.4s ease-out infinite; transform-box: fill-box; }
+.vx-d1 { animation-delay: .8s; } .vx-d2 { animation-delay: 1.6s; }
+.vx-glow { animation: vxPulse 4.2s ease-in-out infinite; }
+.vx-bar { animation: vxBar .9s ease-in-out infinite; transform-origin: center; }
+.vx-spin { animation: vxSpin .9s linear infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .vx-breathe, .vx-hop, .vx-blink, .vx-talk, .vx-orbit, .vx-rise, .vx-glow, .vx-bar, .vx-skeleton { animation: none !important; }
+}
+
+/* ---- backgrounded (P8): Telegram minimised or tab hidden → every CSS loop holds its frame ---- */
+.vx[data-paused] *, .vx[data-paused] *::before, .vx[data-paused] *::after { animation-play-state: paused !important; }
+
+/* ---- hold to fire: a slight tremble past 70 % (transform only) ---- */
+@keyframes vxTremble { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-.6px); } 75% { transform: translateX(.6px); } }
+.vx-tremble { animation: vxTremble 66ms linear infinite; }
+@media (prefers-reduced-motion: reduce) { .vx-tremble { animation: none; } }
+
+/* ==== live character rig (Cloud.tsx; motion §4.1–4.3, 4.12–4.13) ====
+   div.vx-char (framer gestures, origin on the ground line)
+     span.vx-char-aura (CSS radial, no SVG blur) › span (pulse)
+     div.vx-char-bob (speech bob, listening swell) › div.vx-char-breathe (CSS idle) › svg
+   Secondary motion animates the individual `rotate` property, so it composes with the framer
+   transforms the rig writes on the same groups (choreography, ear perks, twitches). */
+.vx-char { position: relative; flex-shrink: 0; display: block; --breathe-dur: 4.2s; }
+.vx-char > svg, .vx-char-breathe > svg { display: block; }
+.vx-char-bob, .vx-char-breathe { transform-origin: 50% 83%; }
+.vx-char-aura { position: absolute; inset: 4% 2% 8%; pointer-events: none; transform-origin: 50% 60%; }
+.vx-char-aura > span { position: absolute; inset: 0; border-radius: 50%; }
+.vx-char[data-pulse] .vx-char-aura > span { animation: vxAura 4.2s var(--ease-sine) infinite; }
+@keyframes vxAura { 0%, 100% { opacity: .78; } 50% { opacity: 1; } }
+
+/* breathe (character/poses.ts BREATHE): a slow stretch up from the base, which never leaves the ground;
+   the period matures with the stage; a sleeper breathes slower and deeper, mostly sideways, and sinks a little */
+.vx-char[data-stage="1"] { --breathe-dur: 3.4s; }
+.vx-char[data-stage="2"] { --breathe-dur: 3.8s; }
+.vx-char[data-stage="3"] { --breathe-dur: 4.2s; }
+.vx-char[data-stage="4"] { --breathe-dur: 4.6s; }
+.vx-char[data-expr="sleeping"] { --breathe-dur: 6.8s; }
+.vx-char[data-loop] .vx-char-breathe { animation: vxBreatheBase var(--breathe-dur) var(--ease-sine) infinite; }
+.vx-char[data-loop][data-expr="sleeping"] .vx-char-breathe { animation-name: vxBreatheSleep; }
+@keyframes vxBreatheBase { 0%, 100% { transform: scale(1, 1); } 50% { transform: scale(.985, 1.032); } }
+/* a sleeper's breath: a slow inhale, a long exhale */
+@keyframes vxBreatheSleep { 0%, 100% { transform: scale(1, 1); } 40% { transform: scale(1.018, 1.022); } }
+.vx-char[data-loop][data-stage="1"] .vx-char-breathe { animation-name: vxBreatheWisp; }
+.vx-char[data-loop][data-stage="1"] .vx-char-bob { animation: vxDrift 5s var(--ease-sine) infinite; }
+.vx-char[data-expr="sleeping"] .vx-char-breathe { translate: 0 calc(var(--k, 1) * 3px); }
+/* A sleeper desaturates. Never a filter over the breathing/bobbing wrappers (it would re-run every frame, D18):
+   cards and icons filter the still svg inside them (a static layer the transforms just move); the hero rig,
+   whose svg animates, bakes it into its gradient stops instead (Cloud.tsx saturateHex). */
+.vx-char[data-expr="sleeping"]:not([data-lod="hero"]) > svg,
+.vx-char[data-expr="sleeping"]:not([data-lod="hero"]) .vx-char-breathe > svg { filter: saturate(.6); }
+@keyframes vxBreatheWisp { 0%, 100% { transform: translateY(0) scale(1, 1); } 50% { transform: translateY(-2.4px) scale(.988, 1.03); } }
+@keyframes vxDrift { 0%, 100% { rotate: -1.2deg; } 50% { rotate: 1.2deg; } }
+
+/* secondary motion (hero, full tier, stage ≥ 3): hair, floppy ears, tail, soft accessories, phase-locked to the breath */
+@keyframes vxSwayR { 0%, 100% { rotate: calc(var(--sway, 2deg) * -1); } 50% { rotate: var(--sway, 2deg); } }
+.vx-char[data-sway] [data-rig="hair"], .vx-char[data-sway] [data-rig="hair-back"] { --sway: var(--hair-sway, 2deg); animation: vxSwayR var(--breathe-dur) var(--ease-sine) var(--hair-lag, .18s) infinite; }
+.vx-char[data-sway][data-ears="floppy"] [data-rig^="ear-"] { --sway: 3deg; animation: vxSwayR var(--breathe-dur) var(--ease-sine) .22s infinite; }
+.vx-char[data-sway] [data-rig="tail"] { --sway: 6deg; animation: vxSwayR 3.6s var(--ease-sine) infinite; }
+.vx-char[data-sway] [data-rig="acc-soft"] { --sway: 3deg; animation: vxSwayR var(--breathe-dur) var(--ease-sine) .2s infinite; }
+/* joy: the tail wags (or floppy ears flap) for 1.6 s */
+.vx-char[data-wag] [data-rig="tail"] { --sway: 14deg; animation: vxSwayR .31s var(--ease-sine) infinite; }
+.vx-char[data-wag][data-ears="floppy"] [data-rig^="ear-"] { --sway: 10deg; animation: vxSwayR .42s var(--ease-sine) infinite; }
+
+/* thinking: the two tiny cloud puffs drift up one after the other and fade; a sleeper's z's do the same, slower */
+.vx-char[data-loop] [data-part^="puff-"], .vx-char[data-loop] [data-part^="z-"] { transform-box: fill-box; transform-origin: 50% 50%; }
+.vx-char[data-loop][data-expr="thinking"] [data-part^="puff-"] { animation: vxPuffDrift 3.2s var(--ease-sine) infinite; }
+.vx-char[data-loop][data-expr="thinking"] [data-part="puff-2"] { animation-delay: -1.6s; }
+.vx-char[data-loop][data-expr="sleeping"] [data-part^="z-"] { animation: vxZDrift 4.4s var(--ease-sine) infinite; }
+.vx-char[data-loop][data-expr="sleeping"] [data-part="z-2"] { animation-delay: -2.2s; }
+@keyframes vxPuffDrift {
+  0% { translate: 0 5px; scale: .55; opacity: 0; }
+  22% { opacity: .85; scale: .9; }
+  75% { opacity: .85; }
+  100% { translate: 2px -8px; scale: 1.12; opacity: 0; }
+}
+@keyframes vxZDrift {
+  0% { translate: -2px 4px; scale: .7; opacity: 0; }
+  25% { opacity: .8; }
+  70% { opacity: .8; }
+  100% { translate: 3px -9px; scale: 1.1; opacity: 0; }
+}
+/* hero touch (tap squish, long-press blush): no callout or text selection under a long-press */
+.vx-char[data-touch] { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; touch-action: manipulation; }
+
+/* one-shot overlays */
+.vx-char-sheen { position: absolute; inset: 22% 16% 16%; border-radius: 50% / 46%; overflow: hidden; pointer-events: none; }
+.vx-char-sheen > span { position: absolute; inset: -10% 0; width: 45%; background: linear-gradient(100deg, rgba(255, 255, 255, 0), rgba(255, 255, 255, .3), rgba(255, 255, 255, 0)); }
+.vx-particles { position: absolute; inset: 0; pointer-events: none; overflow: visible; }
+.vx-puff { overflow: visible; }
+.vx-puff::before, .vx-puff::after { content: ''; position: absolute; border-radius: 50%; background: inherit; }
+.vx-puff::before { width: 70%; height: 70%; left: -38%; top: 32%; }
+.vx-puff::after { width: 62%; height: 62%; right: -34%; top: 38%; }
+
+/* off screen (64 px margin) or backgrounded: hold every loop */
+.vx-char[data-off] *, .vx-char[data-off] *::before, .vx-char[data-off] *::after { animation-play-state: paused !important; }
+/* lite: no sway, no aura pulse, no drifting fx (they repaint the svg); breathe and blinks stay */
+[data-motion="lite"] .vx-char [data-rig], [data-motion="lite"] .vx-char-aura > span,
+[data-motion="lite"] .vx-char [data-part^="puff-"], [data-motion="lite"] .vx-char [data-part^="z-"] { animation: none !important; }
+/* reduced: a still face (no breathe, drift, sway or pulse) */
+[data-motion="reduced"] .vx-char *, [data-motion="reduced"] .vx-char-bob { animation: none !important; }
+@media (prefers-reduced-motion: reduce) {
+  .vx-char *, .vx-char-bob { animation: none !important; }
+}
+
+/* ---- spawn drafting: vapor gathers inward while the creature forms (motion §4.9) ---- */
+.vx-drafting { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 24px; text-align: center; }
+.vx-drafting-stage { position: relative; display: grid; place-items: center; }
+.vx-gather { position: absolute; inset: 0; pointer-events: none; }
+.vx-gather > span {
+  position: absolute; left: 50%; top: 52%; width: 34px; height: 34px; margin: -17px 0 0 -17px; border-radius: 50%; opacity: 0;
+  background: radial-gradient(closest-side, var(--gather, #E6DBFF), transparent);
+  animation: vxGather 1.2s var(--ease-enter) infinite;
+}
+.vx-gather.last > span { animation-iteration-count: 1; animation-duration: .3s; }
+@keyframes vxGather {
+  0% { transform: rotate(var(--a)) translateX(78px) scale(1.1); opacity: 0; }
+  40% { opacity: .6; }
+  100% { transform: rotate(var(--a)) translateX(18px) scale(.45); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) { .vx-gather { display: none; } }
+[data-motion="reduced"] .vx-gather { display: none; }
+
+/* ---- hero arrival (motion §3.3): the face flies, the screen's ground and content follow it in ----
+   The arriving screen stays opaque to framer (the face inside it must never be see-through); its
+   ground fades in under 220 ms and its blocks rise in turn, skipping whichever block holds the face. */
+.vx-screen[data-arrive="hero"] { animation: vxArriveGround 220ms var(--ease-enter) both, vxArriveDone 640ms linear; }
+@keyframes vxArriveGround { from { background-color: rgba(14, 16, 19, 0); } }
+@keyframes vxArriveDone { to { visibility: inherit; } }
+.vx-screen[data-arrive="hero"] > :not(.vx-scroll):not(:has([data-hero])),
+.vx-screen[data-arrive="hero"] .vx-scroll > :not(:has([data-hero])) { animation: vxArriveIn 320ms var(--ease-enter) both; animation-delay: calc(120ms + var(--n, 0) * 40ms); }
+.vx-screen[data-arrive="hero"] .vx-scroll > :nth-child(2) { --n: 1; }
+.vx-screen[data-arrive="hero"] .vx-scroll > :nth-child(3) { --n: 2; }
+.vx-screen[data-arrive="hero"] .vx-scroll > :nth-child(4) { --n: 3; }
+.vx-screen[data-arrive="hero"] .vx-scroll > :nth-child(n+5) { --n: 4; }
+@keyframes vxArriveIn { from { opacity: 0; transform: translateY(12px); } }
+/* agent → call: the glow blooms, the controls rise one by one, the caption area follows */
+.vx-screen[data-arrive="hero"] .vx-call { animation: none; }
+.vx-screen[data-arrive="hero"] .vx-call-glow { animation: vxBloom 550ms var(--ease-enter) both; }
+.vx-screen[data-arrive="hero"] .vx-call-stage > :not(.vx-call-face) { animation: vxArriveIn 320ms var(--ease-enter) 200ms both; }
+.vx-screen[data-arrive="hero"] .vx-ctrls > * { animation: vxArriveRise 380ms var(--ease-enter) both; animation-delay: calc(140ms + var(--n, 0) * 50ms); }
+.vx-screen[data-arrive="hero"] .vx-ctrls > :nth-child(2) { --n: 1; }
+.vx-screen[data-arrive="hero"] .vx-ctrls > :nth-child(3) { --n: 2; }
+.vx-screen[data-arrive="hero"] .vx-ctrls > :nth-child(4) { --n: 3; }
+@keyframes vxBloom { from { opacity: 0; transform: scale(.6); } }
+@keyframes vxArriveRise { from { opacity: 0; transform: translateY(40px); } }
+@media (prefers-reduced-motion: reduce) { .vx-screen[data-arrive] , .vx-screen[data-arrive] * { animation: none !important; } }

@@ -1,5 +1,10 @@
 import '@testing-library/jest-dom';
-import { vi } from 'vitest';
+import { MotionGlobalConfig } from 'framer-motion';
+import { beforeEach, vi } from 'vitest';
+import { memoryStorage, resetBrowserStubs, stubIntersectionObserver, stubMatchMedia } from './browser';
+
+// Animations complete instantly: tests assert end states, not timing.
+MotionGlobalConfig.skipAnimations = true;
 
 // Mock Firebase
 vi.mock('@/lib/firebase', () => ({
@@ -41,31 +46,14 @@ vi.mock('next/navigation', () => ({
   useParams: () => ({}),
 }));
 
-// Mock window.matchMedia
-Object.defineProperty(window, 'matchMedia', {
-  writable: true,
-  value: vi.fn().mockImplementation((query) => ({
-    matches: false,
-    media: query,
-    onchange: null,
-    addListener: vi.fn(),
-    removeListener: vi.fn(),
-    addEventListener: vi.fn(),
-    removeEventListener: vi.fn(),
-    dispatchEvent: vi.fn(),
-  })),
-});
+// Mock window.matchMedia (no query matches unless a test calls setMediaQueries)
+stubMatchMedia();
 
-// Mock localStorage
-const localStorageMock = {
-  getItem: vi.fn(),
-  setItem: vi.fn(),
-  removeItem: vi.fn(),
-  clear: vi.fn(),
-};
+// In-memory localStorage behind vi.fn spies; a test can make it throw (private mode) with breakLocalStorage()
 Object.defineProperty(window, 'localStorage', {
-  value: localStorageMock,
+  value: memoryStorage,
 });
+beforeEach(resetBrowserStubs);
 
 // Mock document.documentElement.classList
 Object.defineProperty(document.documentElement, 'classList', {
@@ -81,16 +69,8 @@ vi.spyOn(document, 'querySelector').mockImplementation(() => ({
   setAttribute: vi.fn(),
 } as unknown as Element));
 
-// Mock ResizeObserver
-global.ResizeObserver = vi.fn().mockImplementation(() => ({
-  observe: vi.fn(),
-  unobserve: vi.fn(),
-  disconnect: vi.fn(),
-}));
+// Inert ResizeObserver: a plain class, so it constructs with `new` and survives vi.resetAllMocks()
+global.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
 
-// Mock IntersectionObserver
-global.IntersectionObserver = vi.fn().mockImplementation(() => ({
-  observe: vi.fn(),
-  unobserve: vi.fn(),
-  disconnect: vi.fn(),
-}));
+// IntersectionObserver that reports every observed element as in view
+stubIntersectionObserver();

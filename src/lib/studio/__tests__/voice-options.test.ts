@@ -42,7 +42,7 @@ describe('voice catalogue and built-in selection', () => {
   it('persists a provider-verified built-in voice without creating a library copy', async () => {
     const response = await request('POST', `agents/${agentId}/voice`, { action: 'choose-default', voiceId: 'fixture-sarah', name: 'Forged label' });
     expect(response.status).toBe(200);
-    expect(response.body.agent.voice).toEqual({ label: 'Sarah · built-in', source: 'default' });
+    expect(response.body.agent.voice).toEqual({ label: 'Sarah · built-in', source: 'default', choiceId: 'fixture-sarah' });
     expect((await h.store.read()).agents[0].voice).toEqual({ provider: 'elevenlabs', voiceId: 'fixture-sarah', label: 'Sarah · built-in', source: 'default' });
     expect(h.eleven.addLibraryVoice).not.toHaveBeenCalled();
     expect(h.eleven.saveDesignedVoice).not.toHaveBeenCalled();

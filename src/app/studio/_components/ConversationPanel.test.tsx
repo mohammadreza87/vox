@@ -16,8 +16,8 @@ afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 describe('scoped conversation UI', () => {
   it('keeps drafts local until Send with preparation off by default', async () => {
     controls.fetch.mockResolvedValue(Response.json({ reply: 'Scoped answer' }));
-    render(<ConversationPanel agentId="agent1" space="personal" />);
-    expect(screen.getByLabelText('Prepare while I type')).not.toBeChecked();
+    render(<ConversationPanel optionsOpen agentId="agent1" space="personal" />);
+    expect(screen.getByRole('switch', { name: /Prepare while I type/ })).not.toBeChecked();
     fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'A private message' } });
     expect(controls.fetch).not.toHaveBeenCalled(); expect(controls.update).toHaveBeenCalledWith(expect.objectContaining({ stable: false }));
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
@@ -27,8 +27,8 @@ describe('scoped conversation UI', () => {
   it('late image decoding uses the corrected draft, never the old text', async () => {
     let finish!: (value: string) => void;
     controls.image.mockReturnValue(new Promise(resolve => { finish = resolve; }));
-    render(<ConversationPanel agentId="agent1" space="work" />);
-    fireEvent.click(screen.getByLabelText('Prepare while I type'));
+    render(<ConversationPanel optionsOpen agentId="agent1" space="work" />);
+    fireEvent.click(screen.getByRole('switch', { name: /Prepare while I type/ }));
     fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'PRIVATE_OLD_DRAFT_CANARY' } });
     fireEvent.change(screen.getByLabelText('Image (optional)'), { target: { files: [new File(['source'], 'image.png', { type: 'image/png' })] } });
     fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'Corrected message instead' } });
@@ -40,11 +40,11 @@ describe('scoped conversation UI', () => {
   it('changing space aborts the old response and clears private displayed lines', async () => {
     let finish!: (value: Response) => void;
     controls.fetch.mockReturnValue(new Promise(resolve => { finish = resolve; }));
-    const view = render(<ConversationPanel agentId="agent1" space="work" />);
+    const view = render(<ConversationPanel optionsOpen agentId="agent1" space="work" />);
     fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'Work question' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
     const signal = controls.fetch.mock.calls[0][1].signal as AbortSignal;
-    view.rerender(<ConversationPanel agentId="agent1" space="personal" />);
+    view.rerender(<ConversationPanel optionsOpen agentId="agent1" space="personal" />);
     expect(signal.aborted).toBe(true);
     await act(async () => { finish(Response.json({ reply: 'WORK_ONLY_CANARY' })); });
     expect(screen.queryByText('WORK_ONLY_CANARY')).not.toBeInTheDocument();
@@ -52,7 +52,7 @@ describe('scoped conversation UI', () => {
   });
   it('exposes Persian labels and safe failure without echoing provider errors', async () => {
     controls.fetch.mockResolvedValue(Response.json({ error: 'PRIVATE_PROVIDER_CANARY' }, { status: 503 }));
-    render(<ConversationPanel agentId="agent1" space="work" locale="fa" />);
+    render(<ConversationPanel optionsOpen agentId="agent1" space="work" locale="fa" />);
     fireEvent.change(screen.getByLabelText('پیام'), { target: { value: 'سلام، لطفاً کمک کن' } });
     fireEvent.click(screen.getByRole('button', { name: 'ارسال' }));
     await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument());
@@ -63,8 +63,8 @@ describe('scoped conversation UI', () => {
 it('reuses one logical turn regardless of preparation toggle and supplies it only as correlation on final Send', async () => {
   const turn = { sessionId: 'logical-session', turnId: 'logical-turn', revision: 4, contextKey: 'logical-context' };
   controls.snapshot.mockReturnValue(turn); controls.fetch.mockResolvedValue(Response.json({ reply: 'Correlated answer' }));
-  render(<ConversationPanel agentId="agent1" space="work" />);
-  expect(controls.start).toHaveBeenCalledOnce(); fireEvent.click(screen.getByLabelText('Prepare while I type')); fireEvent.click(screen.getByLabelText('Prepare while I type'));
+  render(<ConversationPanel optionsOpen agentId="agent1" space="work" />);
+  expect(controls.start).toHaveBeenCalledOnce(); fireEvent.click(screen.getByRole('switch', { name: /Prepare while I type/ })); fireEvent.click(screen.getByRole('switch', { name: /Prepare while I type/ }));
   expect(controls.start).toHaveBeenCalledOnce(); fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'Please keep replies brief.' } });
   fireEvent.click(screen.getByRole('button', { name: 'Send' })); await screen.findByText('Correlated answer');
   expect(JSON.parse(controls.fetch.mock.calls[0][1].body).turn).toEqual(turn); expect(controls.suspend).toHaveBeenCalled(); expect(controls.start).toHaveBeenCalledTimes(2);
@@ -72,16 +72,16 @@ it('reuses one logical turn regardless of preparation toggle and supplies it onl
 
 it('keeps visible own history but disables its memory shortcut and drops pending output across pause', async () => {
   controls.fetch.mockResolvedValueOnce(Response.json({ reply: 'Visible own reply' }));
-  const view = render(<ConversationPanel agentId="agent1" space="work" />);
+  const view = render(<ConversationPanel optionsOpen agentId="agent1" space="work" />);
   fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'Own historical input' } }); fireEvent.click(screen.getByRole('button', { name: 'Send' })); await screen.findByText('Visible own reply');
   fireEvent.click(screen.getByRole('button', { name: 'Review this text for memory' })); expect(screen.getByLabelText('Exact selected text')).toHaveTextContent('Own historical input');
   let finish!: (value: Response) => void; controls.fetch.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
   fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'Pending before pause' } }); fireEvent.click(screen.getByRole('button', { name: 'Send' }));
   const signal = controls.fetch.mock.calls.at(-1)![1].signal as AbortSignal;
   controls.pause.coveredBlocked = true; controls.pause.status = { productPaused: true, accountId: 'account', useEpoch: 1 };
-  view.rerender(<ConversationPanel agentId="agent1" space="work" />);
+  view.rerender(<ConversationPanel optionsOpen agentId="agent1" space="work" />);
   expect(screen.getByText('Visible own reply')).toBeVisible(); expect(screen.getByRole('button', { name: 'Review this text for memory' })).toBeDisabled(); expect(screen.queryByLabelText('Exact selected text')).toBeNull();
-  expect(screen.getByLabelText('Prepare while I type')).toBeDisabled(); expect(screen.getByLabelText('Message')).toBeEnabled(); expect(signal.aborted).toBe(true);
+  expect(screen.getByRole('switch', { name: /Prepare while I type/ })).toBeDisabled(); expect(screen.getByLabelText('Message')).toBeEnabled(); expect(signal.aborted).toBe(true);
   await act(async () => finish(Response.json({ reply: 'STALE_UNSENT_CANARY' }))); expect(screen.queryByText('STALE_UNSENT_CANARY')).toBeNull();
   expect(screen.queryByRole('button', { name: 'Review current text for memory' })).toBeNull();
 });
@@ -136,4 +136,19 @@ it('ignores presentation metadata without the exact bounded server receipt', asy
   controls.fetch.mockResolvedValue(Response.json({ reply: 'Safe reply', turnId: 'accepted-turn', responsePresentation: { density: 'compact', receipt: 'unbounded-experiment-canary' } }));
   render(<ConversationPanel agentId="agent1" space="work" />); fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'Scoped request' } }); fireEvent.click(screen.getByRole('button', { name: 'Send' }));
   const reply = await screen.findByText('Safe reply'); expect(reply).not.toHaveAttribute('data-response-density'); expect(reply.style.lineHeight).toBe(''); expect(controls.exposure).not.toHaveBeenCalled();
+});
+
+it('agent bubbles carry a still 28 px disc face, the thinking row too (UI §5.3, §6.1)', async () => {
+  let finish!: (value: Response) => void;
+  controls.fetch.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+  const agent = { name: 'Nova', look: { hue: 'sky', family: 'drift', features: { cheeks: true, lashes: false, brows: true } }, stage: 2 } as const;
+  const { container } = render(<ConversationPanel agentId="agent1" space="work" agent={agent} />);
+  fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'Hello' } }); fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+  expect(container.querySelector('.vx-msg.agent .vx-msg-face > .vx-avatar.disc')).toHaveStyle({ width: '28px' });
+  expect(screen.getByRole('img', { name: /^Nova is thinking/ })).toBeInTheDocument();
+  await act(async () => { finish(Response.json({ reply: 'Hi there' })); });
+  await screen.findByText('Hi there');
+  const faces = container.querySelectorAll('.vx-msg.agent .vx-msg-face > .vx-avatar.disc');
+  expect(faces).toHaveLength(1);
+  expect(screen.getAllByRole('img', { name: /^Nova\b/ })).toHaveLength(1);
 });

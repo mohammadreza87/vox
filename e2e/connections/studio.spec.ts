@@ -1,8 +1,9 @@
 import { test, expect } from '@playwright/test';
+import { openYou, setStudioLocale } from '../helpers/studio-navigation';
 
 /** Browser rendering only. All APIs intercepted with synthetic data. This does
  * not establish Telegram authentication, OAuth, real provider or device proof. */
-test('Connections fits mobile shell, preserves zero grants, and supports Persian RTL', async ({ page }) => {
+test('Connections fits mobile shell, preserves zero grants, and supports Persian RTL', async ({ page }, info) => {
   const mutations: string[] = [];
   await page.route('**/api/studio/**', async route => {
     const url = new URL(route.request().url());
@@ -23,19 +24,20 @@ test('Connections fits mobile shell, preserves zero grants, and supports Persian
     return route.fulfill({ status: 404, json: { error: 'fixture_route_unavailable' } });
   });
   await page.goto('/studio');
-  await page.getByRole('button', { name: 'Privacy', exact: true }).click();
-  await page.getByRole('button', { name: 'Connections & agent access' }).click();
+  await openYou(page);
+  await page.getByRole('button', { name: 'Connections', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Connections', exact: true })).toBeVisible();
   await expect(page.getByText('No agent access', { exact: true })).toBeVisible();
-  const screen = page.locator('section.vx-privacy').filter({ has: page.getByRole('heading', { name: /^(Connections|اتصال‌ها)$/ }) });
-  await expect(page.locator('section.vx-privacy')).toHaveCount(1);
+  const screen = page.locator('section.vx-settings-page.vx-conn');
+  await expect(page.locator('section.vx-settings-page.vx-conn')).toHaveCount(1);
   await expect(screen.locator('..')).toHaveCSS('opacity', '1');
   expect(await screen.evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
-  await page.screenshot({ path: 'docs/connections/evidence/ui-connections-en.png', fullPage: true });
-  await screen.getByRole('combobox', { name: 'Language', exact: true }).selectOption('fa');
+  await page.screenshot({ path: info.outputPath('ui-connections-en.png'), fullPage: true });
+  await setStudioLocale(page, 'fa');
+  await page.getByRole('button', { name: 'اتصال‌ها', exact: true }).click();
   await expect(screen).toHaveAttribute('dir', 'rtl');
   await expect(page.getByRole('heading', { name: 'اتصال‌ها', exact: true })).toBeVisible();
   await expect(page.getByText('بدون دسترسی عامل', { exact: true })).toBeVisible();
-  await page.screenshot({ path: 'docs/connections/evidence/ui-connections-fa.png', fullPage: true });
+  await page.screenshot({ path: info.outputPath('ui-connections-fa.png'), fullPage: true });
   expect(mutations).toEqual([]);
 });

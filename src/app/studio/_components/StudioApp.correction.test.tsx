@@ -18,9 +18,9 @@ beforeEach(() => { vi.clearAllMocks(); mocks.backs.clear(); mocks.me.mockResolve
 afterEach(cleanup);
 it('disables Main navigation while a token owns Save and ignores an older release', async () => {
   render(<StudioApp />); await screen.findByRole('heading', { name: 'Home probe' });
-  fireEvent.click(screen.getByRole('button', { name: 'Privacy', exact: true }));
+  fireEvent.click(screen.getByRole('button', { name: 'You', exact: true }));
   fireEvent.click(screen.getByRole('button', { name: 'Start one' }));
-  for (const name of ['Agents', 'Groups', 'Org', 'Privacy']) expect(screen.getByRole('button', { name, exact: true })).toBeDisabled();
+  for (const name of ['Agents', 'Groups', 'Org', 'You']) expect(screen.getByRole('button', { name, exact: true })).toBeDisabled();
   fireEvent.click(screen.getByRole('button', { name: 'Agents', exact: true })); await waitFor(() => expect(screen.getByRole('heading', { name: 'Privacy probe' })).toBeVisible());
   fireEvent.click(screen.getByRole('button', { name: 'Finish one' }));fireEvent.click(screen.getByRole('button', { name: 'Start two' }));
   fireEvent.click(screen.getByRole('button', { name: 'Finish one' })); expect(screen.getByRole('button', { name: 'Agents', exact: true })).toBeDisabled();

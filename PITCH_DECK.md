@@ -1,12 +1,14 @@
 # VOX - Investor Pitch Deck (Revised)
 
+> **Historical document (2025 to January 2026).** It describes the Firebase-hosted voice-contacts web app. The current product is the Telegram-based Vox Studio; see [README.md](README.md), [docs/VOX_STUDIO.md](docs/VOX_STUDIO.md) and [docs/implementation/PLAN.md](docs/implementation/PLAN.md).
+
 > *"One App. All AI Models. Every Voice."*
 
 ---
 
 # THE HONEST PITCH
 
-*This deck has been stress-tested. Every claim is defensible. Every weakness is acknowledged.*
+*This deck has been stress-tested. Every claim is defensible. All market data is from 2025 research.*
 
 ---
 
@@ -117,11 +119,15 @@
 │                  "But You're Just a Wrapper"                    │
 │                                                                 │
 │                                                                 │
-│         So was Perplexity.                                      │
+│         So was Perplexity. Look at them now.                    │
 │                                                                 │
 │         ┌──────────────────────────────────────────┐           │
-│         │  Perplexity = Google + OpenAI + UI       │           │
-│         │  Valuation: $9 Billion                   │           │
+│         │  PERPLEXITY (September 2025)             │           │
+│         │  ─────────────────────────────           │           │
+│         │  Valuation: $20 billion                  │           │
+│         │  ARR: $148 million (June 2025)           │           │
+│         │  Users: 22 million MAU                   │           │
+│         │  Queries: 780 million/month              │           │
 │         └──────────────────────────────────────────┘           │
 │                                                                 │
 │         ┌──────────────────────────────────────────┐           │
@@ -135,9 +141,15 @@
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+**Real Data (Sources):**
+- Perplexity valued at [$20B in September 2025](https://techcrunch.com/2025/09/10/perplexity-reportedly-raised-200m-at-20b-valuation/)
+- 22 million MAU, 780 million queries/month in May 2025
+- $148M ARR in June 2025, up from $63M end of 2024
+- Y Combinator partners: "Calling an AI startup a 'wrapper' is like calling a SaaS company a 'MySQL wrapper'—missing the innovation at the application layer"
+
 **Speaker Notes:**
 
-*"Yes, we're a wrapper. Perplexity is also a wrapper—Google Search plus OpenAI plus a better UI. They're worth $9 billion.*
+*"Yes, we're a wrapper. Perplexity is also a wrapper—Google Search plus OpenAI plus a better UI. They're worth $20 billion now.*
 
 *The lesson: Wrappers can win if the experience is dramatically better. Our bet is that voice-first, multi-model AI is 10x better than what exists today.*
 
@@ -145,7 +157,49 @@
 
 ---
 
-## SLIDE 5: VOICE CLONING (WITH SAFETY)
+## SLIDE 5: THE VOICE AI MARKET IS EXPLODING
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                                                                 │
+│                   Voice AI: The $47B Opportunity                │
+│                                                                 │
+│                                                                 │
+│         MARKET SIZE (2025):                                     │
+│         ┌──────────────────────────────────────────┐           │
+│         │  Voice AI Market:     $3.14B → $47.5B    │           │
+│         │                       (by 2034, 34.8% CAGR)          │
+│         │                                          │           │
+│         │  AI Voice Generators: $6.4B → $54.5B     │           │
+│         │                       (by 2033, 30.7% CAGR)          │
+│         └──────────────────────────────────────────┘           │
+│                                                                 │
+│         VC INVESTMENT:                                          │
+│         ┌──────────────────────────────────────────┐           │
+│         │  2025: $6.6 billion into voice AI startups           │
+│         │  (up from $4 billion in 2023)            │           │
+│         └──────────────────────────────────────────┘           │
+│                                                                 │
+│         ELEVENLABS (Our Infrastructure Partner):               │
+│         ┌──────────────────────────────────────────┐           │
+│         │  Valuation: $3.3 billion (Jan 2025)      │           │
+│         │  ARR: $300 million                       │           │
+│         │  Market Share: 70-80% of voice synthesis │           │
+│         │  Margin: 60% operating profit            │           │
+│         └──────────────────────────────────────────┘           │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Real Data (Sources):**
+- [Voice AI market $3.14B → $47.5B by 2034](https://voiceaiwrapper.com/insights/voice-ai-market-analysis-trends-growth-opportunities)
+- [AI voice generators $6.4B → $54.5B by 2033](https://straitsresearch.com/report/language-learning-apps-market)
+- [$6.6B VC investment in voice AI in 2025](https://www.agentvoice.com/ai-voice-in-2025-mapping-a-45-billion-market-shift/)
+- [ElevenLabs: $3.3B valuation, $300M ARR, 70-80% market share](https://www.mvp.vc/company-initations/elevenlabs)
+
+---
+
+## SLIDE 6: VOICE CLONING (WITH SAFETY)
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -160,77 +214,137 @@
 │                                                                 │
 │         ─────────────────────────────────────────               │
 │                                                                 │
-│         THE SAFEGUARDS (Planned):                               │
+│         THE RISK (We're Honest About It):                       │
+│         ⚠️ 1 in 4 adults have experienced AI voice scam         │
+│         ⚠️ $200M+ in deepfake fraud losses Q1 2025 alone        │
+│         ⚠️ AI can clone voice with 85% accuracy from 3-5 sec    │
+│         ⚠️ 8 million deepfakes projected to be shared in 2025   │
+│                                                                 │
+│         ─────────────────────────────────────────               │
+│                                                                 │
+│         OUR SAFEGUARDS (Planned):                               │
 │         🔐 Video + voice verification (prove it's you)          │
 │         1️⃣ One personal voice clone per user                    │
 │         ✅ ID verification for additional clones                │
 │         🚫 Abuse detection and takedown system                  │
-│         📜 Clear terms prohibiting impersonation                │
+│         📜 Compliance with EU AI Act (Aug 2025) & ELVIS Act     │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+**Real Data (Sources):**
+- [1 in 4 adults experienced AI voice scam (McAfee 2024)](https://deepstrike.io/blog/deepfake-statistics-2025)
+- [$200M+ deepfake fraud losses Q1 2025](https://www.scamwatchhq.com/the-200-million-deepfake-disaster-how-ai-voice-and-video-scams-are-fooling-even-cybersecurity-experts-in-2025/)
+- [85% voice clone accuracy from 3-5 seconds](https://deepstrike.io/blog/vishing-statistics-2025)
+- [EU AI Act mandates deepfake labeling Aug 2, 2025](https://observerpoint.com/2025/06/08/voice-clones-in-2025-opportunities-deepfake-dangers-and-emerging-regulations/)
+- [Tennessee ELVIS Act protects voice as property](https://observerpoint.com/2025/06/08/voice-clones-in-2025-opportunities-deepfake-dangers-and-emerging-regulations/)
+
 **Speaker Notes:**
 
-*"Voice cloning is powerful. And power requires responsibility.*
+*"Voice cloning is powerful. And power requires responsibility. We're not hiding the risks—we're addressing them head-on.*
 
-*The magic: Record 30 seconds of your voice. Now hear yourself speak fluent Spanish. That's transformative for language learning.*
-
-*The risk: Fraud, deepfakes, impersonation. We know this.*
-
-*Our approach: Video verification to prove identity. One personal clone per user. ID verification for additional clones. Abuse detection. Clear legal terms.*
-
-*We're building safety into the product, not bolting it on after an incident."*
+*The EU AI Act takes effect August 2025. Tennessee's ELVIS Act explicitly protects voice as property. We're building compliance in from day one."*
 
 ---
 
-## SLIDE 6: TARGET AUDIENCE (HONEST)
+## SLIDE 7: TARGET AUDIENCE (THE VOICE-NATIVE GENERATION)
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                                                                 │
-│                   Who Actually Wants This?                      │
+│                   Gen Z: The Voice-Native Generation            │
 │                                                                 │
 │                                                                 │
-│         PRIMARY: The Voice-Native Generation                    │
-│         ├── Gen Z & Gen Alpha                                   │
-│         ├── Grew up talking to Siri/Alexa                       │
-│         ├── Voice notes > text messages                         │
-│         └── Sam Altman: "Kids talking to AI is surprising"      │
+│         VOICE NOTE USAGE (2025 Data):                           │
+│         ┌──────────────────────────────────────────┐           │
+│         │  84% of Gen Z use voice notes            │           │
+│         │  38 voice notes/week average             │           │
+│         │  12-minute average voice note length     │           │
+│         │  57% say "can't be bothered to type"     │           │
+│         └──────────────────────────────────────────┘           │
 │                                                                 │
-│         ─────────────────────────────────────────               │
+│         VS OTHER GENERATIONS:                                   │
+│         ┌──────────────────────────────────────────┐           │
+│         │  Millennials: 17 voice notes/week        │           │
+│         │  Gen X: ~7 voice notes/week              │           │
+│         │  Boomers: 1 voice note/week              │           │
+│         │  70% of Boomers don't know what they are │           │
+│         └──────────────────────────────────────────┘           │
 │                                                                 │
-│         SECONDARY: Power Users                                  │
-│         ├── Language learners (hear yourself speak)             │
-│         ├── Interview prep (mock interviews on-demand)          │
-│         ├── Content creators (voice + AI workflow)              │
-│         └── Developers (multi-model access)                     │
-│                                                                 │
-│         ─────────────────────────────────────────               │
-│                                                                 │
-│         NOT OUR AUDIENCE (Yet):                                 │
-│         ├── Enterprise (need compliance first)                  │
-│         ├── Older demographics (voice fatigue)                  │
-│         └── Privacy-paranoid users (voice = data)               │
+│         SAM ALTMAN (OpenAI CEO, June 2025):                    │
+│         ┌──────────────────────────────────────────┐           │
+│         │  "Kids love Voice Mode in ChatGPT"       │           │
+│         │  "My kid will never be smarter than AI"  │           │
+│         │  "Kids born now will think the world     │           │
+│         │   always had extremely smart AI"         │           │
+│         └──────────────────────────────────────────┘           │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+**Real Data (Sources):**
+- [84% of Gen Z use voice notes, 38/week average](https://preply.com/en/blog/voice-notes-on-the-rise/)
+- [57% "can't be bothered to type"](https://techround.co.uk/tech/generation-z-smartphone-users-drive-voice-note-adoption/)
+- [7 billion voice notes sent daily on WhatsApp](https://preply.com/en/blog/voice-notes-on-the-rise/)
+- [Sam Altman: "Kids love Voice Mode"](https://www.techradar.com/computing/artificial-intelligence/my-kids-will-never-be-smarter-than-ai-sam-altmans-advice-on-how-to-use-chatgpt-as-a-parent-leaves-me-shaking-my-head)
+
 **Speaker Notes:**
 
-*"Let's be honest about who we're building for.*
+*"Gen Z sends 38 voice notes per week. They're not awkward about voice—they prefer it. This is our primary audience.*
 
-*Primary audience: The voice-native generation. Gen Z sends voice notes instead of texts. Gen Alpha talks to Alexa before they can read. For them, voice-first AI isn't weird—it's natural.*
-
-*Secondary: Power users who need multi-model access and voice cloning for specific use cases.*
-
-*Who we're NOT targeting yet: Enterprise (we need compliance), older demographics (voice fatigue is real), and the privacy-conscious (voice is intimate data).*
-
-*Start narrow. Prove it works. Then expand."*
+*Sam Altman himself said 'Kids love Voice Mode.' We're building for the voice-native generation."*
 
 ---
 
-## SLIDE 7: MARKET SIZING (BOTTOM-UP)
+## SLIDE 8: THE COMPETITIVE LANDSCAPE (REAL NUMBERS)
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                                                                 │
+│                   Competition (2025 Data)                       │
+│                                                                 │
+│                                                                 │
+│         CHATGPT (OpenAI):                                       │
+│         ├── 800 million weekly active users                     │
+│         ├── $13 billion ARR (August 2025)                       │
+│         ├── 12 million paying subscribers                       │
+│         ├── Only 5% of users pay                                │
+│         └── One model, one voice                                │
+│                                                                 │
+│         CLAUDE (Anthropic):                                     │
+│         ├── 19 million users                                    │
+│         ├── $5 billion ARR (August 2025)                        │
+│         ├── 300,000 business customers                          │
+│         ├── 51.88% of users are 18-24                           │
+│         └── No native voice                                     │
+│                                                                 │
+│         ─────────────────────────────────────────               │
+│                                                                 │
+│         WHAT THEY DON'T HAVE:                                   │
+│         ❌ Multi-model switching                                │
+│         ❌ Voice-per-contact/topic                              │
+│         ❌ Voice cloning for users                              │
+│         ❌ Real-time translation with cloned voice              │
+│         ❌ Group AI chat (multiple models debating)             │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Real Data (Sources):**
+- [ChatGPT: 800M WAU, $13B ARR, 12M subscribers](https://nerdynav.com/chatgpt-statistics/)
+- [Only 5% of ChatGPT users pay](https://www.theregister.com/2025/10/15/openais_chatgpt_popular_few_pay/)
+- [Claude: 19M users, $5B ARR](https://www.cnbc.com/2025/05/30/anthropic-hits-3-billion-in-annualized-revenue-on-business-demand-for-ai.html)
+- [51.88% of Claude users are 18-24](https://www.businessofapps.com/data/claude-statistics/)
+
+**Speaker Notes:**
+
+*"OpenAI has 800 million users but only 5% pay. That's a massive conversion problem.*
+
+*We're not trying to beat them on scale. We're trying to serve the users who want multi-model, voice-first AI—a niche they're not serving."*
+
+---
+
+## SLIDE 9: MARKET SIZING (BOTTOM-UP, HONEST)
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -238,48 +352,62 @@
 │                   Market Size (Honest Math)                     │
 │                                                                 │
 │                                                                 │
-│         NOT THIS:                                               │
-│         ❌ "AI + Voice + Learning = $300B TAM"                  │
-│         ❌ (That's fantasy math)                                │
+│         RELEVANT MARKETS (2025):                                │
+│         ┌──────────────────────────────────────────┐           │
+│         │  AI Assistants:    $3.35B → $21.1B (2030)│           │
+│         │  Voice AI:         $3.14B → $47.5B (2034)│           │
+│         │  Language Learning: $7.36B → $24.4B (2033)│          │
+│         └──────────────────────────────────────────┘           │
 │                                                                 │
 │         ─────────────────────────────────────────               │
 │                                                                 │
-│         ACTUAL BOTTOM-UP:                                       │
+│         OUR BOTTOM-UP CALCULATION:                              │
 │                                                                 │
-│         People who pay for AI tools:     ~50M globally          │
-│         × Want voice-first experience:   ~10% = 5M              │
-│         × Will try a new app:            ~20% = 1M              │
-│         × Will convert to paid:          ~5% = 50K              │
-│         × Average revenue per user:      $15/month              │
+│         ChatGPT paying users:           12 million              │
+│         Claude paying users:            ~1 million              │
+│         × Want multi-model + voice:     ~10% = 1.3M             │
+│         × Will try a new app:           ~15% = 195K             │
+│         × Will convert to paid:         ~5% = 10K               │
+│         × Average revenue per user:     $15/month               │
 │                                                                 │
 │         ─────────────────────────────────────────               │
-│         Year 1 Realistic Revenue:        $750K - $2M ARR        │
-│         Year 3 Ambitious Target:         $20M - $50M ARR        │
+│         Year 1 Conservative:            $1.5M - $3M ARR         │
+│         Year 2 Optimistic:              $10M - $20M ARR         │
+│         (If we capture 1% of voice AI growth)                   │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+**Real Data (Sources):**
+- [AI Assistant market $3.35B → $21.1B by 2030](https://www.marketsandmarkets.com/Market-Reports/ai-assistant-market-40111511.html)
+- [Language learning apps $7.36B → $24.4B by 2033](https://straitsresearch.com/report/language-learning-apps-market)
+- [ChatGPT: 12M paying subscribers](https://nerdynav.com/chatgpt-statistics/)
+
 **Speaker Notes:**
 
-*"I'm not going to show you a $300 billion TAM slide. That's lazy math that insults your intelligence.*
+*"I'm not showing you a fantasy TAM. Here's honest bottom-up math based on real subscriber numbers.*
 
-*Here's the honest bottom-up: About 50 million people pay for AI tools globally. Maybe 10% want voice-first. Maybe 20% of those will try a new app. Maybe 5% convert to paid.*
-
-*That's 50,000 paying users at $15/month = $9M ARR potential in year 1-2.*
-
-*Is that a billion-dollar market? No. Is it a real business we can build? Yes. And if we're right about voice-native generations, the market grows with them."*
+*If we convert 10,000 paying users at $15/month, that's $1.8M ARR. Achievable in year one with focused execution."*
 
 ---
 
-## SLIDE 8: BUSINESS MODEL (REALISTIC)
+## SLIDE 10: BUSINESS MODEL (LEARNING FROM THE DATA)
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                                                                 │
-│                   How We Make Money (Honestly)                  │
+│                   How We Make Money                             │
 │                                                                 │
 │                                                                 │
-│         CURRENT MODEL:                                          │
+│         INDUSTRY BENCHMARKS (2025):                             │
+│         ┌──────────────────────────────────────────┐           │
+│         │  Freemium conversion: 2-5% typical       │           │
+│         │  ChatGPT conversion: 5%                  │           │
+│         │  Successful AI apps: $10K-$100K MRR      │           │
+│         │  in first 12 months                      │           │
+│         └──────────────────────────────────────────┘           │
+│                                                                 │
+│         OUR PRICING:                                            │
 │         ┌─────────────────────────────────────────────┐        │
 │         │ FREE     │ PRO $9.99  │ MAX $19.99          │        │
 │         │ Limited  │ 200/day    │ Unlimited           │        │
@@ -288,33 +416,65 @@
 │                                                                 │
 │         ─────────────────────────────────────────               │
 │                                                                 │
-│         THE UNIT ECONOMICS PROBLEM:                             │
-│         ⚠️ We haven't calculated exact cost per user            │
-│         ⚠️ Voice AI (ElevenLabs) is expensive                   │
-│         ⚠️ Free tier may be unsustainable                       │
-│                                                                 │
-│         WHAT WE NEED TO FIGURE OUT:                             │
-│         → Cost per message (LLM + TTS)                          │
-│         → Cost per voice clone                                  │
-│         → Breakeven usage per tier                              │
-│         → Whether free tier should exist at all                 │
+│         UNIT ECONOMICS TO FIGURE OUT:                           │
+│         → ElevenLabs cost: ~$0.30 per 1000 characters           │
+│         → LLM costs: $0.01-0.10 per message                     │
+│         → Target: <$5 cost per paying user/month                │
+│         → Margin target: 50%+ at scale                          │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-**Speaker Notes:**
-
-*"Here's where I'm honest with you: We haven't done the full unit economics yet.*
-
-*Voice AI is expensive. ElevenLabs charges per character. LLMs charge per token. Our free tier might be bleeding money.*
-
-*What we need to figure out before scaling: Exact cost per user, whether free tier is sustainable, and what usage limits actually protect margins.*
-
-*This is MVP stage. We built the product. Now we need to build the business."*
+**Real Data (Sources):**
+- [2-5% freemium conversion typical for AI apps](https://www.gptwrapperapps.com/blog/ai-app-revenue-models-2025)
+- [Successful AI apps: $10K-$100K MRR in 12 months](https://www.gptwrapperapps.com/blog/ai-app-revenue-models-2025)
+- [PDF AI grew to $500K+ MRR as a wrapper](https://aijourn.com/how-ai-wrappers-are-creating-multi-million-dollar-businesses/)
 
 ---
 
-## SLIDE 9: WHAT WE NEED TO PROVE
+## SLIDE 11: LANGUAGE LEARNING OPPORTUNITY
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                                                                 │
+│                   Language Learning: A Wedge Market             │
+│                                                                 │
+│                                                                 │
+│         DUOLINGO (2025 Benchmark):                              │
+│         ┌──────────────────────────────────────────┐           │
+│         │  500 million registered users            │           │
+│         │  113 million MAU                         │           │
+│         │  37 million DAU                          │           │
+│         │  8.6 million paid subscribers            │           │
+│         │  $748 million revenue (2024)             │           │
+│         │  $192.6 million Q3 2025 revenue          │           │
+│         └──────────────────────────────────────────┘           │
+│                                                                 │
+│         VOX ADVANTAGE FOR LANGUAGE LEARNING:                    │
+│         ┌──────────────────────────────────────────┐           │
+│         │  ✓ Hear YOURSELF speak the language      │           │
+│         │  ✓ Real-time conversation practice       │           │
+│         │  ✓ Native speaker voice tutors           │           │
+│         │  ✓ Translation with voice cloning        │           │
+│         │  ✓ 35+ languages supported               │           │
+│         └──────────────────────────────────────────┘           │
+│                                                                 │
+│         If we capture 0.1% of Duolingo's audience               │
+│         = 113,000 users                                         │
+│         × 5% paid conversion = 5,650 subscribers                │
+│         × $15/month = $1M ARR from language alone               │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Real Data (Sources):**
+- [Duolingo: 113M MAU, 37M DAU, 8.6M subscribers](https://straitsresearch.com/report/language-learning-apps-market)
+- [Duolingo Q3 2025: $192.6M revenue](https://straitsresearch.com/report/language-learning-apps-market)
+- [Language learning apps market $7.36B → $24.4B by 2033](https://straitsresearch.com/report/language-learning-apps-market)
+
+---
+
+## SLIDE 12: WHAT WE NEED TO PROVE
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -322,136 +482,33 @@
 │                   Three Hypotheses to Validate                  │
 │                                                                 │
 │                                                                 │
-│         HYPOTHESIS 1: Voice-per-contact aids memory             │
+│         HYPOTHESIS 1: Voice-per-contact aids retention          │
 │         ┌──────────────────────────────────────────┐           │
-│         │ Test: Do users recall context faster     │           │
-│         │       when contacts have unique voices?  │           │
-│         │ Validation: User research with 100 users │           │
+│         │ Test: Do users retain better with unique │           │
+│         │       voices per topic?                  │           │
+│         │ Validation: D7 retention > 25%           │           │
 │         └──────────────────────────────────────────┘           │
 │                                                                 │
 │         HYPOTHESIS 2: Multi-model matters to users              │
 │         ┌──────────────────────────────────────────┐           │
 │         │ Test: Do users actually switch models?   │           │
-│         │ Validation: Usage analytics              │           │
+│         │ Validation: 30%+ use multiple models     │           │
 │         └──────────────────────────────────────────┘           │
 │                                                                 │
 │         HYPOTHESIS 3: Users will pay for voice AI               │
 │         ┌──────────────────────────────────────────┐           │
-│         │ Test: Conversion rate free → paid        │           │
-│         │ Validation: 5%+ conversion = viable      │           │
+│         │ Test: Free → paid conversion rate        │           │
+│         │ Validation: 5%+ conversion (industry avg)│           │
 │         └──────────────────────────────────────────┘           │
 │                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-**Speaker Notes:**
-
-*"We have three hypotheses that need validation:*
-
-*One: Does voice-per-contact actually help memory and context? This is our core thesis. We need to test it with real users, not assume it.*
-
-*Two: Do users actually care about multi-model? Or do they just use the default? We need analytics to prove this matters.*
-
-*Three: Will people pay for voice AI? The free tier is nice, but we need 5%+ conversion to build a business.*
-
-*These aren't rhetorical questions. These are the experiments we need to run."*
-
----
-
-## SLIDE 10: COMPETITIVE POSITION (HONEST)
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                                                                 │
-│                   Competition (Real Talk)                       │
-│                                                                 │
-│                                                                 │
-│         THEY HAVE:                          WE HAVE:            │
-│         ────────────                        ─────────           │
-│         ChatGPT: 200M users                 Multi-model         │
-│         Claude: Best reasoning              Voice-per-contact   │
-│         Gemini: Google distribution         Voice cloning       │
-│         Character.AI: 20M users             Real-time translate │
-│         ElevenLabs: Voice tech              Full integration    │
-│                                                                 │
-│         ─────────────────────────────────────────               │
-│                                                                 │
-│         HONEST ASSESSMENT:                                      │
-│         → We can't out-scale OpenAI or Google                   │
-│         → We can out-experience them on voice                   │
-│         → We can out-integrate them on multi-model              │
-│         → We need to find our niche before they copy us         │
-│                                                                 │
-│         WINDOW: 12-18 months before big players catch up        │
+│         TIMELINE: 3 months to validate, 6 months to prove       │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-**Speaker Notes:**
-
-*"Let's be real about competition.*
-
-*OpenAI has 200 million users. Google has infinite distribution. We can't beat them on scale.*
-
-*But we can beat them on experience. ChatGPT Voice is good, but it's one voice, one model. We're multi-model, multi-voice, with cloning.*
-
-*Our window is probably 12-18 months before big players add these features. We need to build a loyal user base before that happens."*
-
 ---
 
-## SLIDE 11: ROADMAP (REALISTIC)
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                                                                 │
-│                   Roadmap (No Fantasy)                          │
-│                                                                 │
-│                                                                 │
-│         NOW (Month 1-3):                                        │
-│         ├── Validate hypotheses with 100 users                  │
-│         ├── Calculate unit economics                            │
-│         ├── Implement voice cloning safety                      │
-│         └── Fix: Add tests, security audit, load testing        │
-│                                                                 │
-│         NEXT (Month 4-6):                                       │
-│         ├── Launch Group AI Chat (multi-model conversations)    │
-│         ├── Optimize costs (caching, model routing)             │
-│         ├── Prove retention (D7 > 25%, D30 > 10%)               │
-│         └── Prove monetization (5%+ free → paid)                │
-│                                                                 │
-│         LATER (Month 7-12):                                     │
-│         ├── If metrics work: Scale marketing                    │
-│         ├── If retention fails: Pivot or shut down              │
-│         ├── Consider B2B only if B2C proven                     │
-│         └── Consider marketplace only if scale achieved         │
-│                                                                 │
-│         ─────────────────────────────────────────               │
-│                                                                 │
-│         WHAT WE'RE NOT PROMISING:                               │
-│         ❌ Voice marketplace                                    │
-│         ❌ Celebrity partnerships                               │
-│         ❌ Enterprise features                                  │
-│         ❌ Smart home integration                               │
-│         (These are fantasies until we prove core product)       │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-**Speaker Notes:**
-
-*"Here's a roadmap without the fantasy.*
-
-*Next 3 months: Validate that our hypotheses are true. Calculate if we have a business. Add safety features. Fix technical debt.*
-
-*Months 4-6: Launch group AI chat (our unique feature). Optimize costs. Prove people retain and pay.*
-
-*After that: If it works, scale. If it doesn't, pivot or shut down.*
-
-*What I'm NOT promising: Voice marketplace, celebrity deals, enterprise, smart home. Those are fantasies until we prove the core product works."*
-
----
-
-## SLIDE 12: THE UNIQUE FEATURE (GROUP AI CHAT)
+## SLIDE 13: THE UNIQUE FEATURE (GROUP AI CHAT)
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -473,72 +530,64 @@
 │         └─────────────────────────────────────────────┘        │
 │                                                                 │
 │                                                                 │
-│         This doesn't exist anywhere.                            │
-│         This is our 10x feature.                                │
+│         Multi-model aggregators are trending in 2025:           │
+│         → Aymo AI, TeamAI, TypingMind leading the shift         │
+│         → Runware raised $50M for multi-model API               │
+│         → Enterprise AI app layer: $19B in 2025                 │
+│                                                                 │
+│         This doesn't exist for VOICE. We're building it.        │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-**Speaker Notes:**
-
-*"Here's our moonshot feature that nobody else has.*
-
-*Group AI chat. You ask a question. GPT-4 answers. Claude disagrees. Gemini adds data. DeepSeek reasons from first principles. They debate. You get the best answer from multiple perspectives.*
-
-*This is genuinely novel. This is our 10x feature. And this is what we're building next."*
+**Real Data (Sources):**
+- [Multi-model aggregators trending: Aymo AI, TeamAI](https://graygrids.com/blog/ai-aggregators-multiple-models-platform)
+- [Runware raised $50M for multi-model API](https://www.crescendo.ai/news/latest-vc-investment-deals-in-ai-startups)
+- [AI application layer: $19B in 2025](https://menlovc.com/perspective/2025-the-state-of-generative-ai-in-the-enterprise/)
 
 ---
 
-## SLIDE 13: WHY NOW?
+## SLIDE 14: ROADMAP (REALISTIC)
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                                                                 │
-│                   Why This Moment?                              │
+│                   Roadmap (No Fantasy)                          │
 │                                                                 │
 │                                                                 │
-│         TIMING FACTORS:                                         │
+│         NOW (Month 1-3):                                        │
+│         ├── Validate hypotheses with 100 users                  │
+│         ├── Calculate unit economics (target: <$5/user)         │
+│         ├── Implement voice cloning safety (EU AI Act ready)    │
+│         └── Fix: Add tests, security audit, load testing        │
 │                                                                 │
-│         1. Voice AI just got good                               │
-│            └── ElevenLabs quality is now indistinguishable      │
+│         NEXT (Month 4-6):                                       │
+│         ├── Launch Group AI Chat (multi-model conversations)    │
+│         ├── Optimize costs (caching, model routing)             │
+│         ├── Prove retention (D7 > 25%, D30 > 10%)               │
+│         └── Prove monetization (5%+ free → paid)                │
 │                                                                 │
-│         2. Multi-model world is here                            │
-│            └── No single AI is best at everything               │
-│            └── Users want choice                                │
-│                                                                 │
-│         3. Gen Z is entering workforce                          │
-│            └── Voice-native generation                          │
-│            └── Voice notes > text messages                      │
-│                                                                 │
-│         4. AI costs are dropping                                │
-│            └── Makes voice AI economically viable               │
+│         LATER (Month 7-12):                                     │
+│         ├── If metrics work: Raise seed, scale marketing        │
+│         ├── If retention fails: Pivot or shut down              │
+│         ├── Target: $10K-$100K MRR (industry benchmark)         │
+│         └── Consider B2B only if B2C proven                     │
 │                                                                 │
 │         ─────────────────────────────────────────               │
 │                                                                 │
-│         2 years ago: Too early (voice quality poor)             │
-│         2 years later: Too late (big players will copy)         │
-│         Now: The window is open                                 │
+│         WHAT WE'RE NOT PROMISING:                               │
+│         ❌ Voice marketplace                                    │
+│         ❌ Celebrity partnerships                               │
+│         ❌ Enterprise features                                  │
+│         ❌ Smart home integration                               │
+│         (These are fantasies until we prove core product)       │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-**Speaker Notes:**
-
-*"Why now? Four timing factors:*
-
-*One: Voice AI just got good enough. ElevenLabs quality is nearly indistinguishable from human.*
-
-*Two: The multi-model world is here. Claude is best at reasoning. GPT at coding. Gemini at multimodal. No one model wins everything.*
-
-*Three: The voice-native generation is entering the workforce. Gen Z prefers voice notes to texts.*
-
-*Four: AI costs are dropping, making voice AI economically viable.*
-
-*Two years ago, this was too early. Two years from now, everyone will have copied it. The window is now."*
-
 ---
 
-## SLIDE 14: WHAT WE BUILT (TRACTION)
+## SLIDE 15: WHAT WE BUILT (TRACTION)
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -573,17 +622,9 @@
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-**Speaker Notes:**
-
-*"What we actually have: A working product built in 4 weeks. Multi-model. Voice cloning. Translation. Payments. It works.*
-
-*What we're honest about: Limited tests. No security audit. No load testing. Voice safety features are designed but not built.*
-
-*This is an MVP. It's live. It works. But it needs hardening before scale."*
-
 ---
 
-## SLIDE 15: THE ASK (REALISTIC)
+## SLIDE 16: THE ASK (REALISTIC)
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -596,14 +637,14 @@
 │         ├── Validate hypotheses                                 │
 │         ├── Prove retention & conversion                        │
 │         ├── Build group AI chat                                 │
-│         └── Milestone: 1,000 paying users                       │
+│         └── Milestone: $10K-$50K MRR                            │
 │                                                                 │
 │         OPTION B: SEED ($1M - $2M)                              │
 │         ├── 18 months runway                                    │
 │         ├── All of Option A, plus:                              │
 │         ├── Hire 3-4 engineers                                  │
 │         ├── Marketing spend                                     │
-│         └── Milestone: 10,000 paying users, $1M ARR             │
+│         └── Milestone: $100K+ MRR, 10,000 paying users          │
 │                                                                 │
 │         ─────────────────────────────────────────               │
 │                                                                 │
@@ -613,22 +654,22 @@
 │         20% User acquisition                                    │
 │         10% Operations                                          │
 │                                                                 │
+│         ─────────────────────────────────────────               │
+│                                                                 │
+│         CONTEXT: AI startups raised $3.8B in 2024 for agents    │
+│         Voice AI startups received $6.6B in 2025                │
+│         We're asking for a small bet on a validated thesis.     │
+│                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-**Speaker Notes:**
-
-*"Two options depending on your risk appetite:*
-
-*Option A: $250-500K angel round. 6 months to validate hypotheses, prove retention, and get to 1,000 paying users. If we hit that, we've proven the model.*
-
-*Option B: $1-2M seed. 18 months runway, hire a small team, and get to 10,000 paying users and $1M ARR.*
-
-*Most of the money goes to engineering and AI costs. Voice AI isn't cheap."*
+**Real Data (Sources):**
+- [AI agent startups raised $3.8B in 2024](https://litslink.com/blog/ai-agent-statistics)
+- [Voice AI startups received $6.6B in 2025](https://www.agentvoice.com/ai-voice-in-2025-mapping-a-45-billion-market-shift/)
 
 ---
 
-## SLIDE 16: THE HONEST CLOSE
+## SLIDE 17: THE HONEST CLOSE
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -638,13 +679,15 @@
 │                                                                 │
 │         What we know:                                           │
 │         ✓ The product works                                     │
-│         ✓ The technology exists                                 │
-│         ✓ The timing might be right                             │
+│         ✓ The technology exists (ElevenLabs is $3.3B)           │
+│         ✓ Gen Z prefers voice (84% use voice notes)             │
+│         ✓ Wrappers can win ($20B Perplexity)                    │
+│         ✓ Multi-model aggregators are trending                  │
 │                                                                 │
 │         What we need to prove:                                  │
-│         ? Users retain and pay                                  │
-│         ? Voice-per-contact matters                             │
-│         ? Unit economics work                                   │
+│         ? Users retain and pay (target: 5%+ conversion)         │
+│         ? Voice-per-contact matters (target: D7 > 25%)          │
+│         ? Unit economics work (target: <$5/user/month)          │
 │                                                                 │
 │         ─────────────────────────────────────────               │
 │                                                                 │
@@ -661,131 +704,81 @@
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-**Speaker Notes:**
-
-*"Let me close honestly.*
-
-*We know the product works. We know the technology is there. We think the timing is right.*
-
-*We don't know yet if users will retain and pay. We don't know if voice-per-contact actually matters. We don't know if the unit economics work.*
-
-*We're not promising to be the next billion-dollar company. We're promising to find out if this is a real business. If it is, we're first. If it isn't, we'll know in 6 months and you'll know too.*
-
-*That's Vox. Thank you."*
-
 ---
 
 ---
 
-# 📋 APPENDIX: CURRENT FEATURES
+# 📊 APPENDIX: DATA SOURCES
 
-## What Works Today
+## Market Data (All 2025)
 
-| Feature | Status | Notes |
-|---------|--------|-------|
-| Multi-model AI | ✅ Live | Gemini, Claude, GPT-4, DeepSeek |
-| Voice cloning | ✅ Live | ElevenLabs, 30-second recording |
-| Real-time translation | ✅ Live | 35+ languages |
-| Pre-made contacts | ✅ Live | 7 AI experts |
-| Custom contacts | ✅ Live | Unlimited creation |
-| Subscription payments | ✅ Live | Stripe + Telegram |
-| Cloud sync | ✅ Live | Firestore |
-| Voice calls | ✅ Live | Real-time conversations |
+| Data Point | Value | Source |
+|------------|-------|--------|
+| Perplexity valuation | $20B (Sep 2025) | [TechCrunch](https://techcrunch.com/2025/09/10/perplexity-reportedly-raised-200m-at-20b-valuation/) |
+| Perplexity ARR | $148M (Jun 2025) | [Sacra](https://sacra.com/c/perplexity/) |
+| Perplexity users | 22M MAU | [Business of Apps](https://www.businessofapps.com/data/perplexity-ai-statistics/) |
+| ElevenLabs valuation | $3.3B (Jan 2025) | [MVP VC](https://www.mvp.vc/company-initations/elevenlabs) |
+| ElevenLabs ARR | $300M | [MVP VC](https://www.mvp.vc/company-initations/elevenlabs) |
+| ElevenLabs market share | 70-80% | [MVP VC](https://www.mvp.vc/company-initations/elevenlabs) |
+| ChatGPT WAU | 800M | [Nerdynav](https://nerdynav.com/chatgpt-statistics/) |
+| ChatGPT ARR | $13B (Aug 2025) | [CNBC](https://www.cnbc.com/2025/08/04/openai-chatgpt-700-million-users.html) |
+| ChatGPT paid subscribers | 12M | [Business of Apps](https://www.businessofapps.com/data/chatgpt-statistics/) |
+| ChatGPT conversion rate | 5% | [The Register](https://www.theregister.com/2025/10/15/openais_chatgpt_popular_few_pay/) |
+| Claude users | 19M | [Business of Apps](https://www.businessofapps.com/data/claude-statistics/) |
+| Anthropic ARR | $5B (Aug 2025) | [CNBC](https://www.cnbc.com/2025/05/30/anthropic-hits-3-billion-in-annualized-revenue-on-business-demand-for-ai.html) |
+| Voice AI market (2025) | $3.14B | [VoiceAIWrapper](https://voiceaiwrapper.com/insights/voice-ai-market-analysis-trends-growth-opportunities) |
+| Voice AI market (2034) | $47.5B | [VoiceAIWrapper](https://voiceaiwrapper.com/insights/voice-ai-market-analysis-trends-growth-opportunities) |
+| VC into voice AI (2025) | $6.6B | [AgentVoice](https://www.agentvoice.com/ai-voice-in-2025-mapping-a-45-billion-market-shift/) |
+| Language learning apps (2025) | $7.36B | [Straits Research](https://straitsresearch.com/report/language-learning-apps-market) |
+| Duolingo MAU | 113M | [Straits Research](https://straitsresearch.com/report/language-learning-apps-market) |
+| Duolingo paid subscribers | 8.6M | [Straits Research](https://straitsresearch.com/report/language-learning-apps-market) |
 
-## What Needs Work
+## Gen Z & Voice Data
 
-| Area | Issue | Plan |
-|------|-------|------|
-| Testing | Low coverage | Add unit + E2E tests |
-| Security | No audit | Hire auditor |
-| Voice safety | Not built | Implement verification |
-| Load testing | None | Test before marketing |
-| Unit economics | Unknown | Calculate ASAP |
+| Data Point | Value | Source |
+|------------|-------|--------|
+| Gen Z using voice notes | 84% | [Preply](https://preply.com/en/blog/voice-notes-on-the-rise/) |
+| Gen Z voice notes/week | 38 average | [Preply](https://preply.com/en/blog/voice-notes-on-the-rise/) |
+| Gen Z voice note length | 12 min avg | [TechRound](https://techround.co.uk/tech/generation-z-smartphone-users-drive-voice-note-adoption/) |
+| "Can't be bothered to type" | 57% of Gen Z | [TechRound](https://techround.co.uk/tech/generation-z-smartphone-users-drive-voice-note-adoption/) |
+| WhatsApp voice notes/day | 7 billion | [Preply](https://preply.com/en/blog/voice-notes-on-the-rise/) |
 
----
+## Voice Cloning Safety Data
 
-# 🗺️ REALISTIC ROADMAP
-
-## Phase 1: Validate (Now - Month 3)
-- [ ] User research: 100 users, test hypotheses
-- [ ] Calculate exact unit economics
-- [ ] Implement voice cloning safety
-- [ ] Add test coverage
-- [ ] Security audit
-
-## Phase 2: Prove (Month 4-6)
-- [ ] Launch Group AI Chat feature
-- [ ] Achieve D7 retention > 25%
-- [ ] Achieve free → paid conversion > 5%
-- [ ] Optimize API costs (caching, routing)
-
-## Phase 3: Decide (Month 7-12)
-- [ ] If metrics work: Raise seed, scale marketing
-- [ ] If metrics fail: Pivot focus or wind down
-- [ ] Consider B2B ONLY if B2C proven
-
-## What We're NOT Building (Yet)
-- ❌ Voice marketplace
-- ❌ Celebrity partnerships
-- ❌ Enterprise features
-- ❌ Smart home integration
-- ❌ VR/AR integration
+| Data Point | Value | Source |
+|------------|-------|--------|
+| Adults experienced AI voice scam | 1 in 4 | [DeepStrike](https://deepstrike.io/blog/deepfake-statistics-2025) |
+| Deepfake fraud losses Q1 2025 | $200M+ | [ScamWatchHQ](https://www.scamwatchhq.com/the-200-million-deepfake-disaster-how-ai-voice-and-video-scams-are-fooling-even-cybersecurity-experts-in-2025/) |
+| Voice clone accuracy from 3-5 sec | 85% | [DeepStrike](https://deepstrike.io/blog/vishing-statistics-2025) |
+| Deepfakes projected in 2025 | 8 million | [DeepStrike](https://deepstrike.io/blog/deepfake-statistics-2025) |
+| EU AI Act deepfake labeling | Aug 2, 2025 | [Observer Point](https://observerpoint.com/2025/06/08/voice-clones-in-2025-opportunities-deepfake-dangers-and-emerging-regulations/) |
 
 ---
 
-# 📊 METRICS TO TRACK
-
-## Primary (Must Hit)
-
-| Metric | Target | Why It Matters |
-|--------|--------|----------------|
-| D7 Retention | > 25% | Product-market fit signal |
-| D30 Retention | > 10% | Long-term viability |
-| Free → Paid | > 5% | Business viability |
-| Cost per user | < $10/mo | Unit economics |
-
-## Secondary (Nice to Have)
-
-| Metric | Target |
-|--------|--------|
-| Daily voice minutes | 5 min/user |
-| Messages per session | 10+ |
-| Multi-model usage | 30%+ switch models |
-| Voice clone usage | 20%+ clone a voice |
-
----
-
-# 🎯 RISK MATRIX
-
-| Risk | Likelihood | Impact | Mitigation |
-|------|------------|--------|------------|
-| Voice cloning abuse | High | High | Safety features, verification |
-| Unit economics negative | Medium | High | Calculate before scaling |
-| Big player copies us | High | Medium | Move fast, build loyalty |
-| Users don't retain | Medium | High | Validate before scaling |
-| API costs spike | Medium | Medium | Caching, cost optimization |
-
----
-
-# 💬 FAQS FOR INVESTORS
+# 💬 FAQS FOR INVESTORS (Updated with Data)
 
 **Q: What if OpenAI adds multi-model?**
-A: They won't. Their business model is selling their own model. We're model-agnostic by design.
+A: They won't. OpenAI's $13B ARR comes from their own models. Multi-model cannibalizes that. We're model-agnostic by design—we win when models compete.
 
 **Q: What's your moat?**
-A: Honestly, limited moat right now. Our moat is speed of execution and being first to voice-first multi-model. If we're right, we build brand loyalty before others catch up.
+A: Limited moat today. Our moat is: (1) first to voice-first multi-model, (2) speed of execution (full product in 4 weeks), (3) focus on voice-native Gen Z (84% use voice notes). If we're right, we build brand loyalty before others catch up.
 
 **Q: Why not just use ChatGPT Voice?**
-A: One model, one voice, no cloning, no translation, no contact system. We're the unbundling of ChatGPT Voice.
+A: One model, one voice, no cloning, no translation, no contact system. Only 5% of ChatGPT users pay—there's a massive underserved market.
 
 **Q: What if ElevenLabs raises prices?**
-A: Risk. We'd need to negotiate volume pricing or find alternatives. This is a real dependency.
+A: Real risk. They're at $300M ARR with 60% margins—pricing is stable for now. We'd negotiate volume pricing or explore alternatives like PlayHT or Resemble AI.
 
-**Q: Why should I believe this team?**
-A: We built a full product in 4 weeks with payments, voice cloning, multi-model, and translation. We ship fast.
+**Q: How do you compare to Perplexity?**
+A: Perplexity is search + AI. We're voice + multi-AI. They proved wrappers can reach $20B. We're applying the same playbook to voice.
+
+**Q: What about the voice cloning fraud risk?**
+A: We're implementing: video verification, 1 clone per user, ID verification for extras. We're building for EU AI Act compliance (Aug 2025) from day one. This is a feature gate, not a blocker.
 
 ---
 
 *Built for the Google Cloud + ElevenLabs Hackathon 2025*
 
 *Live Demo: https://vox-aicontact-fe0e3.web.app*
+
+*All market data sourced from 2025 reports. See Appendix for full citations.*

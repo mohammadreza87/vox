@@ -21,7 +21,7 @@ export function Dock({ children, className, style, inert }: { children: ReactNod
 export function Field({ label, children, hint, group }: { label: ReactNode; children: ReactNode; hint?: string; group?: boolean }) {
   const Tag = group ? 'div' : 'label';
   return (
-    <Tag role={group ? 'group' : undefined} aria-label={group && typeof label === 'string' ? label : undefined} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+    <Tag role={group ? 'group' : undefined} aria-label={group && typeof label === 'string' ? label : undefined} className="vx-catalog-layout-baf2fda5">
       <span className="vx-over">{label}</span>
       {children}
       {hint && <span className="vx-small vx-2">{hint}</span>}
@@ -33,7 +33,7 @@ export function Chips<T extends string>({ options, value, onChange, multi }: {
   options: Array<{ value: T; label: string }>; value: T[]; onChange: (v: T[]) => void; multi?: boolean;
 }) {
   return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+    <div className="vx-catalog-layout-6e6921f4">
       {options.map((o) => {
         const on = value.includes(o.value);
         return (
@@ -50,9 +50,9 @@ export function Chips<T extends string>({ options, value, onChange, multi }: {
 
 export function Slider({ left, right, value, onChange }: { left: string; right: string; value: number; onChange: (v: number) => void }) {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+    <div className="vx-catalog-layout-2befb59f">
       <input className="vx-range" type="range" min={0} max={100} value={value} onChange={(e) => onChange(Number(e.target.value))} aria-label={`${left} to ${right}`} />
-      <div style={{ display: 'flex', justifyContent: 'space-between' }} className="vx-small vx-2"><span>{left}</span><span>{right}</span></div>
+      <div  className="vx-small vx-2 vx-catalog-layout-9de9ed28"><span>{left}</span><span>{right}</span></div>
     </div>
   );
 }
@@ -65,12 +65,12 @@ export function EditableRow({ label, value, rows, editing, draft, readOnly, onEd
   const over = tone === 'warn' ? 'vx-over vx-over-warn' : 'vx-over';
   if (editing) {
     return (
-      <div className="vx-row" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 8 }}>
+      <div className="vx-row vx-catalog-layout-5885720f" >
         <span className={over}>{label}</span>
         {rows > 1
           ? <textarea className="vx-textarea" {...textAttrs(draft)} rows={rows + 1} value={draft} onChange={(e) => onDraft(e.target.value)} autoFocus maxLength={800} />
           : <input className="vx-input" {...textAttrs(draft)} value={draft} onChange={(e) => onDraft(e.target.value)} autoFocus maxLength={120} />}
-        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+        <div className="vx-catalog-layout-f52cd19a">
           <button className="vx-btn vx-btn-secondary vx-btn-sm" onClick={onCancel}>Cancel</button>
           <button className="vx-btn vx-btn-primary vx-btn-sm" onClick={onSave} disabled={saving || !draft.trim()}>{saving ? <Spinner /> : 'Save'}</button>
         </div>
@@ -79,13 +79,13 @@ export function EditableRow({ label, value, rows, editing, draft, readOnly, onEd
   }
   return (
     <button className="vx-row vx-edit-row" onClick={readOnly ? undefined : onEdit} disabled={readOnly}>
-      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
+      <div className="vx-catalog-layout-ca36bfb9">
         <span className={over}>{label}</span>
-        <span {...textAttrs(value)} style={{ fontSize: 15, lineHeight: '21px', overflowWrap: 'anywhere' }}>
+        <span {...textAttrs(value)} className="vx-catalog-layout-d500d689">
           {value ? <span className={changed ? 'vx-changed' : undefined}>{value}</span> : <span className="vx-3">—</span>}
         </span>
       </div>
-      {!readOnly && <span className="vx-small vx-3" style={{ paddingTop: 2 }}>Edit</span>}
+      {!readOnly && <span className="vx-small vx-3 vx-catalog-layout-97dc0f2c" >Edit</span>}
     </button>
   );
 }
@@ -93,10 +93,10 @@ export function EditableRow({ label, value, rows, editing, draft, readOnly, onEd
 export function ListRow({ label, items, changed }: { label: string; items: string[]; changed?: boolean }) {
   if (!items.length) return null;
   return (
-    <div className="vx-row" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 8 }}>
+    <div className="vx-row vx-catalog-layout-e12143c1" >
       <span className={changed ? 'vx-over vx-changed' : 'vx-over'}>{label}</span>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-        {items.map((i) => <span key={i} {...textAttrs(i)} className="vx-chip" style={{ cursor: 'default', height: 28, display: 'inline-flex', alignItems: 'center' }}>{i}</span>)}
+      <div className="vx-catalog-layout-79d8e3d8">
+        {items.map((i) => <span key={i} {...textAttrs(i)} className="vx-chip vx-catalog-layout-4bb36cc6" >{i}</span>)}
       </div>
     </div>
   );

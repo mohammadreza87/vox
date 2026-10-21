@@ -28,7 +28,8 @@ describe('Learning evidence', () => {
     mocks.read.mockResolvedValue(value);
     const { container } = render(<LearningPanel space="work" />);
     await screen.findByText('Responses completed');
-    expect(screen.getByText(/Waiting to process/)).toHaveTextContent('Waiting to process: 1 · Processing failures: 0');
+    expect(screen.getByText('Waiting to process').closest('.vx-row')).toHaveTextContent('Waiting to process1');
+    expect(screen.getByText('Processing failures').closest('.vx-row')).toHaveTextContent('Processing failures0');
     expect(screen.getByText(/Verified task success is unknown/)).toBeInTheDocument();
     expect(screen.getByText(/Playback failures were reported by the client/)).toBeInTheDocument();
     expect(container.textContent).not.toMatch(/PRIVATE_|network_or_device_failure/);
@@ -87,15 +88,17 @@ describe('Learning evidence', () => {
     rerender(<LearningPanel space="work" showOperations />);
     await screen.findByText('Local workflow report: unavailable.');
     expect(screen.getByText(/CI, deployment, production impact and cost: unavailable/)).toBeInTheDocument();
-    expect(screen.getByText(/Maintenance: Not configured/)).toBeInTheDocument();
+    expect(screen.getByText('Maintenance').closest('.vx-row')).toHaveTextContent('Not configured');
   });
   it('shows aggregate operator evidence without exposing candidate IDs or audit digests', async () => {
     mocks.operations.mockResolvedValue({ maintenanceConfigured: true, maintenance: maintenance(), improvementConfigured: true, report: {
       auditEvents: 4, auditHead: 'PRIVATE_AUDIT', candidates: [{ candidateId: 'PRIVATE_CANDIDATE', evaluationStatus: 'passed', humanDecision: 'approve' }],
     } });
     const { container } = render(<LearningPanel space="work" showOperations />);
-    await screen.findByText('Audit events: 4 · Candidates: 1');
-    expect(screen.getByText('Evaluations passed: 1 · Signed approvals: 1')).toBeInTheDocument();
+    expect((await screen.findByText('Audit events')).nextElementSibling).toHaveTextContent('4');
+    expect(screen.getByText('Candidates').nextElementSibling).toHaveTextContent('1');
+    expect(screen.getByText('Evaluations passed').nextElementSibling).toHaveTextContent('1');
+    expect(screen.getByText('Signed approvals').nextElementSibling).toHaveTextContent('1');
     expect(container.textContent).not.toContain('PRIVATE_');
   });
   it('discards a pending export after switching spaces', async () => {
@@ -118,7 +121,7 @@ describe('Learning evidence', () => {
       checkpoint: { ...maintenance().checkpoint!, recordedStatus: 'failed', failure: 'sweep_failed' } }));
     const { container } = render(<LearningPanel space="work" showOperations />);
     await screen.findByText('Worker lease recorded');
-    expect(screen.getByText(/Maintenance: Not configured/)).toBeInTheDocument();
+    expect(screen.getByText('Maintenance').closest('.vx-row')).toHaveTextContent('Not configured');
     expect(screen.getByText('A maintenance failure was recorded.')).toBeInTheDocument();
     expect(screen.getByText('System-wide status, independent of your selected space. This view does not run maintenance.')).toBeInTheDocument();
     expect(mocks.operations).toHaveBeenCalledWith(expect.any(AbortSignal));

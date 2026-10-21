@@ -1,5 +1,7 @@
 # Isolated read runners: source and fixture operations
 
+**Status, 20 October 2026:** the candidate described below is committed and merged into `develop`; the "uncommitted" wording is historical.
+
 CONN-024/025 bounded read slice, 19 October 2026. Source starts at `d8d6766`, with an uncommitted candidate requiring independent diff review. Browser and server diagnostics appear as separate code-owned provider profiles. They remain `disabled_pending_qualification`; neither cloud access nor an API connection confers worker authority.
 
 `browser.page.read` accepts one registered `targetId`. The server resolves its exact public HTTPS URL, checks every DNS answer, pins the socket and bounds one HTML response. Redirects, compressed content, non-HTML, private/transition addresses and content over 128KB fail closed. No cookies or authorization header are sent. The worker renders that snapshot in a fresh Chromium context with `chromiumSandbox:true`, JavaScript disabled, request routing aborted, downloads blocked, popup/dialog closure and a no-source CSP. The container has `--network none`, so a route-hook bypass still cannot create external network access. Outputs are bounded title and visible text plus explicit `offline`, `javascript:false`, `interactive:false` flags; no DOM, storage, credentials, screenshots or browser session is returned. This is a public-page read path. Authenticated login/session handoff and interactive actions are unavailable.

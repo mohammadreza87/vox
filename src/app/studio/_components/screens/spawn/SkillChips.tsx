@@ -22,7 +22,7 @@ export function SkillChips({ t, items, onToggle, onAdd, extra = 0, readOnly, fa,
   const known = items.filter((i) => catalog.skills.has(i.id));
   const atCap = onIds(known).length >= MAX_AGENT_SKILLS;
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+    <div className="vx-catalog-layout-baf2fda5">
       <div className="vx-skills" role="group" aria-label={label ?? t.skills}>
         <AnimatePresence initial={false}>
           {known.map((i, n) => {

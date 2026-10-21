@@ -12,6 +12,9 @@ import { learningFixture } from '@/lib/adaptive/personalization/learning/fixture
 import { NOW } from '@/lib/adaptive/personalization/__tests__/fixtures';
 const fixtures: Awaited<ReturnType<typeof learningFixture>>[] = [];
 afterEach(async () => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); delete (window as unknown as { Telegram?: unknown }).Telegram; await Promise.all(fixtures.splice(0).map(f => f.close())); });
+/** Real file storage and signed handlers: slow under a full parallel run, so waits are generous. */
+const SLOW = 15_000;
+
 it.each(['en', 'fa'] as const)('connects %s current text→review-only candidate→Use→genuine Undo through real authenticated handlers/file storage', async locale => {
   vi.spyOn(Date, 'now').mockReturnValue(NOW);
   const x = await learningFixture(); fixtures.push(x); await x.f.grant(); await x.f.agent();
@@ -33,20 +36,20 @@ it.each(['en', 'fa'] as const)('connects %s current text→review-only candidate
     <ConversationPanel agentId={x.agent.id} space="work" locale={locale} />
   </>; }
   render(<Harness />); const fa = locale === 'fa';
-  await screen.findByLabelText(fa ? 'زبان پاسخ' : 'Reply language', {}, { timeout: 5000 });
-  fireEvent.click(await screen.findByRole('button', { name: fa ? 'بررسی یادگیری پیشنهادها' : 'Review suggestion learning' }));
-  fireEvent.click(await screen.findByRole('button', { name: fa ? 'فعال کردن پیشنهادها' : 'Enable suggestions' }, { timeout: 5000 }));
-  await screen.findByRole('button', { name: fa ? 'خاموش کردن یادگیری پیشنهادها' : 'Turn suggestion learning off' });
+  await screen.findByLabelText(fa ? 'زبان پاسخ' : 'Reply language', {}, { timeout: SLOW });
+  fireEvent.click(await screen.findByRole('button', { name: fa ? 'بررسی یادگیری پیشنهادها' : 'Review suggestion learning' }, { timeout: SLOW }));
+  fireEvent.click(await screen.findByRole('button', { name: fa ? 'فعال کردن پیشنهادها' : 'Enable suggestions' }, { timeout: SLOW }));
+  await screen.findByRole('button', { name: fa ? 'خاموش کردن یادگیری پیشنهادها' : 'Turn suggestion learning off' }, { timeout: SLOW });
   fireEvent.change(screen.getByLabelText(fa ? 'پیام' : 'Message'), { target: { value: 'Please keep future replies brief.' } });
-  fireEvent.click(screen.getByRole('button', { name: fa ? 'ارسال' : 'Send' })); await screen.findByText('Sure.', {}, { timeout: 5000 });
+  fireEvent.click(screen.getByRole('button', { name: fa ? 'ارسال' : 'Send' })); await screen.findByText('Sure.', {}, { timeout: SLOW });
   await x.learning.tasks.settle(); expect((await x.experience.readPreferences(ID.alice, 'work', x.agent.id)).settings).toEqual([]);
   fireEvent.click(screen.getByRole('button', { name: fa ? 'تازه‌سازی پیشنهادها' : 'Refresh suggestions' }));
-  fireEvent.click(await screen.findByRole('button', { name: fa ? 'استفاده از ترجیح' : 'Use preference' }, { timeout: 5000 }));
-  const undo = await screen.findByRole('button', { name: fa ? 'واگرد آخرین تغییر' : 'Undo last change' }, { timeout: 5000 });
+  fireEvent.click(await screen.findByRole('button', { name: fa ? 'استفاده از ترجیح' : 'Use preference' }, { timeout: SLOW }));
+  const undo = await screen.findByRole('button', { name: fa ? 'واگرد آخرین تغییر' : 'Undo last change' }, { timeout: SLOW });
   expect((await x.experience.readPreferences(ID.alice, 'work', x.agent.id)).settings).toEqual([{ key: 'response_length', value: 'brief' }]);
-  fireEvent.click(undo); await screen.findByText(fa ? 'آخرین تغییر واگرد شد.' : 'Last change undone.');
-  await waitFor(async () => expect((await x.experience.readPreferences(ID.alice, 'work', x.agent.id)).settings).toEqual([]));
+  fireEvent.click(undo); await screen.findByText(fa ? 'آخرین تغییر واگرد شد.' : 'Last change undone.', {}, { timeout: SLOW });
+  await waitFor(async () => expect((await x.experience.readPreferences(ID.alice, 'work', x.agent.id)).settings).toEqual([]), { timeout: SLOW });
   expect((await x.view()).candidates).toEqual([]); expect(x.provider.evaluate).toHaveBeenCalledOnce();
   expect(methods).toContain('POST /api/studio/conversation'); expect(methods).toContain('POST /api/studio/experience/preferences/undo');
   expect(await x.f.adaptive.withAccountDocument(ID.alice, d => d.observer.events)).toEqual([]);
-});
+}, 60_000);

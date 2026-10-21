@@ -10,6 +10,7 @@ import { PersonaGenerationError } from './persona';
 import { ElevenLabsSpeechError } from './media';
 import { ROUTE_TEXT_CHARS } from './skills/route';
 import { logTelegramDiagnostic, type TelegramDiagnostic } from '../tireh/telegram/diagnostics';
+import { tirehFlags } from '../tireh/flags';
 import type { AgentVisibility, Member, MemoryPolicy, Role, SpawnBrief } from './types';
 
 type Json = Record<string, unknown>;
@@ -150,6 +151,7 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
     if (generation && action === 'avatars') await limiter.consume('avatar', me.telegramId);
     if (voiceSearch || (generation && ['voice', 'speak'].includes(action))) await limiter.consume('voice', me.telegramId);
     if (generation && ['call', 'test', 'live-call'].includes(action)) await limiter.consume('call', me.telegramId);
+    if (root === 'voice-enroll' && method === 'POST' && studio.deps.voiceprints) { await limiter.consume('expensive', me.telegramId); await limiter.consume('call', me.telegramId); }
     req = await boundedStudioRequest(req);
 
     if (root === 'members') {
@@ -160,6 +162,7 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
       }
     }
     if (root === 'groups' && method === 'GET') return json({ groups: await studio.listGroups(me) });
+    if (root === 'groups' && id && action === 'resnapshot' && !path[3] && method === 'POST' && tirehFlags().sharingV2) { const b = await body(req); return json(await studio.resnapshotGroupMemory(me, Number(id), typeof b.telegramId === 'number' ? b.telegramId : NaN, b.apply === true)); }
     if (root === 'relationship-observations' && method === 'GET') return json(await studio.relationshipObservations(me));
     if (root === 'audit' && method === 'GET') return json({ audit: await studio.auditLog(me) });
     if (root === 'voices' && method === 'GET') {
@@ -171,6 +174,25 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
         language: q.get('language') ?? undefined, search: q.get('search') ?? undefined,
         category: q.get('category') ?? undefined,
       }) });
+    }
+
+    // S11L voiceprint enrollment (STUDIO_VOICE_RECOGNITION). Without voiceprints wired this
+    // falls through to the base 404. The template and consent event id never leave the server.
+    if (root === 'voice-enroll' && !id && studio.deps.voiceprints) {
+      const spaceOf = (value: unknown): 'work' | 'personal' => {
+        if (value !== 'work' && value !== 'personal') throw new StudioError(400, 'Choose Work or Personal.');
+        return value;
+      };
+      if (method === 'GET') return json(await studio.voiceprintStatus(me, spaceOf(new URL(req.url).searchParams.get('space') ?? 'work')));
+      if (method === 'DELETE') return json(await studio.deleteVoiceprint(me, spaceOf(new URL(req.url).searchParams.get('space') ?? 'work')));
+      if (method === 'POST') {
+        const form = await req.formData().catch(() => { throw new StudioError(400, 'Expected audio'); });
+        const audio = form.get('audio');
+        if (!(audio instanceof Blob)) throw new StudioError(400, 'Expected audio');
+        if (form.get('statement') !== 'enroll_my_voice') throw new StudioError(400, 'Confirm the explicit consent statement first.');
+        const space = spaceOf(form.get('space') ?? 'work');
+        return json(await studio.enrollVoice(me, await audio.arrayBuffer(), audio.type || 'audio/webm', space));
+      }
     }
 
     if (root === 'catalog') {
@@ -202,9 +224,12 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
           case 'POST refine': return json({ agent: await studio.refine(me, id, str((await body(req)).instruction, 500) ?? '') });
           case 'POST look': {
             const b = await body(req);
-            return json({ agent: await studio.setLook(me, id, b.random ? 'random' : (b.look ?? {}) as Json) });
+            return json({ agent: await studio.setLook(me, id, b.random ? 'random' : b.look ?? {}, { sync: b.sync !== false }) });
           }
-          case 'POST avatars': return json({ agent: await studio.generateAvatars(me, id, Number((await body(req)).count ?? 2)) });
+          case 'POST avatars': {
+            const b = await body(req);
+            return json({ agent: await studio.generateAvatars(me, id, Number(b.count ?? 2), { select: b.select !== false }) });
+          }
           case 'PUT avatar': return json({ agent: await studio.chooseAvatar(me, id, str((await body(req)).file, 140) ?? null) });
           case 'POST avatar-upload': {
             const form = await req.formData().catch(() => { throw new StudioError(400, 'Expected an image upload'); });
@@ -254,7 +279,11 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
           }
           case 'PUT live-web': return json({ agent: await studio.setLiveWeb(me, id, (await body(req)).on === true) });
           case 'PUT group-behavior': return json({ agent: await studio.setGroupBehavior(me, id, await body(req)) });
-          case 'POST profile-sync': return json(await studio.syncProfile(me, id));
+          case 'POST profile-sync': {
+            // Retry sends no body and forces every step; the look editor sends { force: false }.
+            const b = req.headers.get('content-type')?.includes('application/json') ? await body(req) : {};
+            return json(await studio.syncProfile(me, id, { force: b.force !== false }));
+          }
           case 'DELETE blocked': {
             const telegramId = Number(new URL(req.url).searchParams.get('telegramId'));
             if (!Number.isSafeInteger(telegramId) || telegramId <= 0) throw new StudioError(400, 'Invalid Telegram id');
@@ -303,7 +332,7 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
             await studio.revokeMemory(me, id, str(b.memoryId, 200) ?? '');
             return json({ ok: true });
           }
-          case 'GET memories': return json({ memories: await studio.memoriesFor(me, id) });
+          case 'GET memories': return json({ memories: await studio.memoriesFor(me, id), ...(tirehFlags().sharingV2 ? { notices: await studio.memoryNoticesFor(me, id) } : {}) });
           case 'DELETE memories': {
             const memoryId = new URL(req.url).searchParams.get('memoryId') ?? '';
             await studio.forgetMemory(me, id, memoryId);
@@ -315,7 +344,7 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
     return json({ error: 'Not found' }, 404);
   } catch (error) {
     let failure: { response: Response; diagnostic?: TelegramDiagnostic };
-    try { failure = studioFailureResponse(error); }
+    try { failure = studioFailureResponse(error, path[0] === 'agents' && PHOTO_ACTIONS.has(path[2])); }
     catch {
       // Error objects are untrusted too. Inspection must not escape the HTTP
       // boundary or turn a hostile accessor into a second exported exception.
@@ -327,14 +356,20 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
   }
 }
 
-function studioFailureResponse(error: unknown): { response: Response; diagnostic?: TelegramDiagnostic } {
+/** Look and photo routes: their 429 body also carries `retryAfter` (seconds) for the picker's countdown. */
+const PHOTO_ACTIONS = new Set(['look', 'avatars', 'avatar', 'avatar-upload', 'profile-sync']);
+
+function studioFailureResponse(error: unknown, photo = false): { response: Response; diagnostic?: TelegramDiagnostic } {
   if (ElevenLabsSpeechError.is(error)) {
     const status = error.code === 'payment_required' ? 402
       : error.code === 'quota_exceeded' || error.code === 'rate_limited' ? 429
         : error.code === 'permission_denied' ? 403 : error.code === 'unavailable' ? 503 : 502;
     return { response: json({ error: new ElevenLabsSpeechError(error.status, error.code).message, code: error.code }, status), diagnostic: 'studio_http_voice_failed' };
   }
-  if (StudioRateLimitError.is(error)) return { response: json({ error: 'Too many requests. Please try again shortly.' }, 429, { 'Retry-After': String(error.retryAfterSeconds) }) };
+  if (StudioRateLimitError.is(error)) {
+    const seconds = error.retryAfterSeconds;
+    return { response: json({ error: 'Too many requests. Please try again shortly.', ...(photo ? { retryAfter: seconds } : {}) }, 429, { 'Retry-After': String(seconds) }) };
+  }
   if (StudioError.is(error)) return { response: json({ error: error.message }, error.status) };
   if (error instanceof PersonaGenerationError) return { response: json({ error: error.message }, 502), diagnostic: 'studio_http_persona_failed' };
   if (error && typeof error === 'object' && 'issues' in error) return { response: json({ error: "Claude's answer didn't fit the persona format. Try again." }, 502) };

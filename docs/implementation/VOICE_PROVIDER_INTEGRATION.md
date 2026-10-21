@@ -47,3 +47,40 @@ Validation: **83 tests / 8 files passed**, with ESLint on owned/shared changed p
 مسیر فعال‌سازی، پیکربندی همان عامل و نسخه را فقط می‌خواند و فهرست رویدادها، مقصد مدل و مرجع کلید را بررسی می‌کند؛ سپس نشانی امضاشده را به همان نسخه متصل می‌کند. نبود اطلاعات، خطا یا پایان مهلت، قابلیت اختیاری را غیرفعال نگه می‌دارد و تماس معمولی ادامه دارد. سیاست متن اصلی، مجوز عامل در فضای انتخاب‌شده و سرویس Decisions نیز لازم‌اند. پیکربندی حساب واقعی و تحویل رویداد روی دستگاه هنوز در این کار آزمایش نشده‌اند؛ هیچ تغییر حسابی خودکار انجام نمی‌شود.
 
 تشخیص گوینده با ECAPA به سرویس محلی، مدل و نسخهٔ تأییدشده، بازرسی معتبر پیش از استخراج، سیاست حقوقی/نگهداری و ارزیابی انگلیسی و فارسی نیاز دارد. ECAPA به‌تنهایی اثبات زنده‌بودن یا مقابله با صدای بازپخش‌شده و مصنوعی نیست. هیچ صدای واقعی ثبت نشده و هیچ تغییر حساب یا فراخوانی پولی انجام نشده است. زمان پخش گزارش‌شدهٔ مرورگر، اثبات شنیدن یا زمان واقعی پایان گفتار نیست؛ اندازه‌گیری‌های زنده‌ای که دادهٔ معتبر ندارند همچنان ناموجود هستند.
+
+## Voiceprints (S11L): key management and release gates
+
+S11L ([spec](agent-intelligence/S11L-voice-lib.md)) adds a separate voiceprint library in `src/lib/studio/identity`, behind `STUDIO_VOICE_RECOGNITION=1` and in shadow mode. It does not touch the adaptive voice-identity subsystem above, which stays disabled. Everything below is off by default; with `STUDIO_VOICE_RECOGNITION` and `VOICEPRINT_KEY` unset nothing is wired.
+
+**Store.** Templates live in an isolated store named `vox_voiceprints`:
+
+- On the file profile it is `voiceprints-v1.json` in `STUDIO_DATA_DIR`, written with mode 0600 through a temporary file, fsync and rename.
+- On Firebase it is the Firestore collection `vox_voiceprints`, with two kinds of document. `person` documents hold a person's template; `echo` documents hold templates of the persona voices Vox generates, used by the self-echo guard. Document ids are hashes, so no person id appears in an id.
+- A person row has exactly these fields: `personId`, `space`, `provider`, `modelVersion`, `channel`, `consentEventId`, `createdAt`, the optional `lastConfirmedAt` and the sealed `template`.
+- Raw samples are never persisted. Audio is held in memory only for the provider call, and the service zero-fills its own copies.
+
+**Encryption.** Templates are sealed with AES-256-GCM using `VOICEPRINT_KEY` (base64, exactly 32 bytes). The key is bound to the row through AAD (person, space, provider, model version, consent event). It is its own key: startup refuses a key equal to `STUDIO_SECRET`, its first 32 bytes or its SHA-256. Rows carry a key id (`vpk1.<keyId>.…`), so a later rotation can tell keys apart.
+
+**Firebase gate.** Firebase requires Cloud KMS envelope encryption: a data key per row, wrapped by a KMS key-encryption key. This is not implemented. Runtime therefore refuses `STUDIO_VOICE_RECOGNITION=1` on Firestore in production.
+
+**Mac file profile gate.** A written key and backup scheme is a release gate before enabling the flag. It must say where the key lives, how it rotates by key id, and how backups of the data directory either exclude `voiceprints-v1.json` or re-encrypt it. The current environment-variable key is the interim design. Losing the key makes templates unreadable; that is acceptable because people can re-enrol.
+
+**Status/delete-only mode.** `VOICEPRINT_KEY` set with the flag off wires status and delete only, so existing templates stay deletable. Consent withdrawal and profile changes delete templates through the chained adaptive voice-identity invalidator. Expired permissions are deleted lazily on the next status or verification.
+
+**Provider.** pyannoteAI is used through its media input, `/v1/voiceprint` and `/v1/identify` jobs. These are written from public documentation and must be verified on a live account before enabling. Settings:
+
+- `PYANNOTE_API_KEY` enables the provider.
+- `PYANNOTE_BASE_URL` is the EU-residency option; it must be an https origin.
+- pyannoteAI keeps media-input files and returned voiceprints for at most 24 hours. Verify this on the account dashboard; it is the figure the UX-07 `{sample_deletion_term}` must state.
+- The processor-table row belongs to S15 (PRIV-009).
+
+**Thresholds.** `VOICE_MATCH_THRESHOLDS_JSON` sets per-org bands as `{"default":{"match","uncertain","echo"},"orgs":{"<org>":{…}}}`, with `0 < echo <= uncertain < match <= 1`. Bands must be calibrated on consenting members in English and Farsi, per channel and duration, until FAR ≤ 0.5% at FRR ≤ 5% on ≥ 5 s audio is measured. The net-speech estimator is a packet-size heuristic; calibrate it in the same study.
+
+**Shadow mode.** Verification runs beside speech-to-text only on 1:1 Telegram voice notes from non-guest enrolled members with the persona's agent grant. The band is discarded until S10 decides how it lowers identity; it never grants access. It can add up to 3 s per voice note, so measure with `STUDIO_STAGE_TIMINGS` before enabling.
+
+**Remaining legal gates.** These must be closed before any non-shadow use:
+
+- counsel's opinion on verification versus remote identification;
+- the jurisdiction registry (Illinois and Texas blocked until a written release and destruction schedule exist), the BIPA/CUBI release and destruction schedule, the DPIA and the PRIV-019 local-first review.
+
+**Open work.** Deleting templates when a member leaves, and after 12 months of inactivity, is not implemented yet. CUBI's one-year clock is the outer limit.

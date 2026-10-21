@@ -18,6 +18,8 @@ export default defineConfig({
     screenshot: 'only-on-failure',
     trace: 'retain-on-failure',
   },
+  // The API is synthetic (page.route), so the flow can run twice: as is, and with the OS asking for less motion.
+  projects: [{ name: 'chromium' }, { name: 'chromium-reduced-motion', use: { contextOptions: { reducedMotion: 'reduce' } } }],
   webServer: {
     command: production
       ? 'node e2e/start-conversation-server.mjs'
