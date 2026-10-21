@@ -335,7 +335,7 @@ export async function handlePetRequest(studio: Studio, request: Request, agentId
     };
     return json(body);
   } catch (error) {
-    if (error instanceof PetCareChangedError) return fail('conversation_failed', 409, { message: 'pet_care_changed' });
+    if (PetCareChangedError.is(error)) return fail('conversation_failed', 409, { message: 'pet_care_changed' });
     if (StudioRateLimitError.is(error)) return fail('rate_limited', 429, {}, { 'Retry-After': String(error.retryAfterSeconds) });
     if (isSchemaValidationError(error)) return fail('invalid_request', 400);
     // 409/503 come from the call path (settings changed, no listening provider); the rest are the request's fault.

@@ -19,6 +19,7 @@ import { FirestoreStudioStore } from './firestore-store';
 import { canUseAgent } from './permissions';
 import { StudioStore } from './store';
 import type { Studio } from './service';
+import { brandError, namedError } from '../error-contract';
 
 const AGENT_ID = /^[A-Za-z0-9_-]{1,128}$/;
 export const PET_COLLECTION = 'studio_pets';
@@ -85,7 +86,16 @@ type AgentFile = Record<string, PetCare>;
 
 /** Local disk: one JSON file per agent, written atomically, every change serialized through one queue. */
 const fileQueues = new Map<string, Promise<unknown>>();
-export class PetCareChangedError extends Error {}
+export class PetCareChangedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PetCareChangedError';
+    brandError(this, 'PetCareChangedError');
+  }
+  static is(error: unknown): error is PetCareChangedError {
+    return namedError(error, 'PetCareChangedError');
+  }
+}
 
 export class FilePetStore implements PetStore {
 
