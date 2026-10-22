@@ -19,7 +19,7 @@ import {
 import { OrgDirectory } from '../org/directory';
 import { auditMemoryStore, InMemoryAuditStore, InMemorySupersededNoticeStore } from '../audit';
 import { buildSystemPrompt } from '../conversation/prompt';
-import type { ChatContext, ChatMessage, MemoryRecord, MemoryScope, MemorySensitivity } from '../types';
+import type { ChatContext, ChatMessage, MemoryRecord, MemoryScope } from '../types';
 import { callback, GAMEEND_CHAT, groupText, LEADS_CHAT, makeGateway, memory, privateText, TG, testOrg, testOrgConfig } from './fixtures';
 import { groupId as studioGroupId, personId, studioToOrg } from '../../studio/org-bridge';
 import { draftJson, hire, ID, makeStudio, memberOf, seedOrg, T0 } from '../../studio/__tests__/helpers';
