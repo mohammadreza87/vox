@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { groupAddressing } from '../group-addressing';
+import { groupAddressing, targetsSomeoneElse } from '../group-addressing';
 import type { TelegramMessage, TelegramUser } from '../telegram/client';
 import type { Persona } from '../types';
 
@@ -93,7 +93,37 @@ describe('groupAddressing', () => {
     const persian = { ...neda, name: 'ندا سهرابی' };
     expect(groupAddressing(persian, message('ندا سهرابی، نظرت چیه؟')).direct).toBe(true);
     expect(groupAddressing(persian, message('ندا، نظرت چیه؟')).direct).toBe(false);
-    expect(groupAddressing({ ...neda, name: 'ندا' }, message('ندا\u200cجان')).direct).toBe(false);
+    expect(groupAddressing({ ...neda, name: 'ندا' }, message('ندا\u200cکار')).direct).toBe(false);
+    expect(groupAddressing({ ...neda, name: 'ندا' }, message('نداکار')).direct).toBe(false);
+  });
+
+  it.each(['کوکی\u200cجان، هستی؟', 'کوکی\u200cجون', 'کوکیه که جواب نمیده', 'کوکی؟', 'کوکی\u200cیه', 'کوکیم'])('accepts a Persian enclitic after the name in %s', (text) => {
+    expect(groupAddressing({ ...neda, name: 'کوکی' }, message(text)).direct).toBe(true);
+  });
+
+  it.each([['بهار', 'بهاره امروز نمیاد'], ['پارس', 'پارسا کجاست؟'], ['بهار', 'بهارم کجاست'], ['پارس', 'پارست کو']])('does not take another name built on %s for it: %s', (name, text) => {
+    expect(groupAddressing({ ...neda, name }, message(text)).direct).toBe(false);
+  });
+
+  it.each(['بهار‌جان، هستی؟', 'بهارجان', 'بهار‌م کو', 'بهار؟'])('still accepts a ZWNJ or جان enclitic on a consonant-final name in %s', (text) => {
+    expect(groupAddressing({ ...neda, name: 'بهار' }, message(text)).direct).toBe(true);
+  });
+
+  it.each(["Cookie's turn",'Cookie’s idea', 'cookie?'])('accepts English possessives and punctuation after the name in %s', (text) => {
+    expect(groupAddressing({ ...neda, name: 'Cookie' }, message(text)).direct).toBe(true);
+  });
+
+  it.each(['Cookies are great', 'کوکی\u200cپز'])('does not match another word built on the name in %s', (text) => {
+    expect(groupAddressing({ ...neda, name: text.startsWith('C') ? 'Cookie' : 'کوکی' }, message(text)).direct).toBe(false);
+  });
+
+  it('tells a message aimed at another person from one left open', () => {
+    expect(targetsSomeoneElse(neda, message('@alice, lunch?'))).toBe(true);
+    expect(targetsSomeoneElse(neda, message('Agreed', { reply_to_message: reply(user(200)) }))).toBe(true);
+    expect(targetsSomeoneElse(neda, message('Ask her', { entities: [{ type: 'text_mention', offset: 4, length: 3, user: user(200) }] }))).toBe(true);
+    expect(targetsSomeoneElse(neda, message('And another thing', { reply_to_message: reply(user(100)) }))).toBe(false);
+    expect(targetsSomeoneElse(neda, message('@hoor_neda_bot and @weatherbot?'))).toBe(false);
+    expect(targetsSomeoneElse(neda, message('so what now?'))).toBe(false);
   });
 
   it('normalizes canonically equivalent names and treats name punctuation literally', () => {

@@ -7,10 +7,15 @@ import { handleRequestedRoutineMessage, noteRequestedRoutineActivity } from './r
 
 import { createHash, createHmac, timingSafeEqual } from 'crypto';
 import { beginObservation, observationCancelled } from './observation';
-import type { TelegramUpdate } from '../tireh/telegram/client';
+import type { InlineKeyboard, TelegramBotClient, TelegramCallbackQuery, TelegramMessage, TelegramUpdate, TelegramUser } from '../tireh/telegram/client';
 import { canUseAgent, visibilityOf } from './permissions';
-import type { Studio } from './service';
+import type { ChoiceOutcome, Studio } from './service';
+import type { Agent, JoinChoice } from './types';
 import { logTelegramDiagnostic } from '../tireh/telegram/diagnostics';
+import { cardCallback, parseCardCallback, parseStartPayload, type CardAction } from '../circles/codec';
+import { agentCard, choiceReceipt, circleCopy, localeOf } from '../circles/notice';
+import { petPageUrl } from '../pet/links';
+import { parseExplicitControl } from '../relationships/policy';
 
 export const MANAGER_UPDATES = ['message', 'managed_bot'];
 export const AGENT_UPDATES = ['message', 'callback_query', 'my_chat_member', 'chat_member'];
@@ -73,6 +78,12 @@ export async function handleAgentUpdate(studio: Studio, agentId: string, update:
     if (await studio.deps.memory.deduper.firstSeen(`audience:${agentId}:${update.update_id}`)) await studio.onGroupChatMember(update.chat_member);
     return;
   }
+  // Circles card buttons (c*:) are decided here, before the gateway's share/keep callbacks.
+  if (update.callback_query && studio.circlesMode() !== 'off' && parseCardCallback(update.callback_query.data)) {
+    const token = studio.botToken(live);
+    if (token && await studio.deps.memory.deduper.firstSeen(`${agentId}__${update.update_id}`)) await circleCallback(studio, live, update.callback_query, studio.deps.botFor(token));
+    return;
+  }
   const msg = update.message;
   if (!msg) {
     await gateway.handleUpdate(agentId, update);
@@ -122,6 +133,10 @@ export async function handleAgentUpdate(studio: Studio, agentId: string, update:
   }
 
   // Public agent, someone outside the team (or not yet approved).
+  if (studio.circlesMode() !== 'off') {
+    await circleDirect(studio, live, msg, update, bot, endpoint);
+    return;
+  }
   const standing = await studio.admitGuest(agentId, msg.from);
   if (standing === 'blocked' || standing === 'over-limit') return;
   if (standing === 'limit-reached') {
@@ -148,6 +163,113 @@ export async function handleAgentUpdate(studio: Studio, agentId: string, update:
     await studio.blockByAgent(agentId, msg.from.id, text);
     await bot.sendMessage(msg.chat.id, decision.message!);
   }
+}
+
+const CHOICES: Partial<Record<CardAction, JoinChoice>> = { cj: 'joined', cr: 'reply_only', cd: 'declined' };
+const REFUSED = { expired: 'expired', not_yours: 'notYours', used: 'used', early: 'early', unavailable: 'expired' } as const satisfies Record<Extract<ChoiceOutcome, { ok: false }>['reason'], string>;
+/** Relationship and memory controls; a participant has no stored context for them to act on, and they must not create any. */
+const CONTROL_COMMANDS = new Set(['/memories', '/forget', '/forgetall', '/pause', '/resume', '/stop']);
+const PRESENT = new Set(['creator', 'administrator', 'member']);
+/** Gateway commands a participant may run without the stranger decision: they read no stored context. */
+const DIRECT_COMMANDS = new Set(['/whoami']);
+
+/**
+ * A public agent's DM from a non-member while Circles is on (GROUP_AGENTS_SPEC R2, §9 S1). Pressing
+ * Start grants nothing: it shows the agent card. Until they choose, every message gets the card again,
+ * with no model call and no stranger decision. Join and Only reply get core replies with no stored
+ * context; Not me stops processing at once; /leave withdraws the choice before saying so, always: it
+ * is never counted against or blocked by the guest limit.
+ */
+async function circleDirect(studio: Studio, live: Agent, msg: TelegramMessage, update: TelegramUpdate, bot: TelegramBotClient, endpoint?: { personaId: string; id: string }): Promise<void> {
+  // A redelivered update answers once (the gateway's own key still guards what it is handed).
+  if (!await studio.deps.memory.deduper.firstSeen(`circles:${live.id}:${update.update_id}`)) return;
+  const from = msg.from!;
+  const copy = circleCopy(localeOf(from.language_code));
+  const text = msg.text ?? msg.caption ?? '';
+  const [head = '', payload] = text.trim().split(/\s+/);
+  const command = text.startsWith('/') ? head.split('@')[0].toLowerCase() : '';
+  if (command === '/leave') {
+    const had = await studio.withdrawAgentChoice(live.id, from.id);
+    if (!(live.blocked ?? []).includes(from.id)) await bot.sendMessage(msg.chat.id, had ? copy.left(live.persona.name) : copy.notChosen);
+    return;
+  }
+  const choice = (await studio.agentChoice(live.id, from.id))?.choice;
+  if (choice === 'declined' && command !== '/start') return;
+  const standing = await studio.admitGuest(live.id, from);
+  if (standing === 'blocked' || standing === 'over-limit') return;
+  if (standing === 'limit-reached') {
+    await bot.sendMessage(msg.chat.id, copy.limit);
+    return;
+  }
+  if (command === '/start') {
+    const start = parseStartPayload(payload);
+    const group = start?.kind === 'join' ? await joinLinkGroup(studio, live, bot, start.code, from.id) : undefined;
+    if (start?.kind === 'join' && group === undefined) await bot.sendMessage(msg.chat.id, copy.notInGroup);
+    else await sendAgentCard(studio, live, bot, msg.chat.id, from, choice, group);
+    return;
+  }
+  if (!choice) {
+    await sendAgentCard(studio, live, bot, msg.chat.id, from);
+    return;
+  }
+  if (CONTROL_COMMANDS.has(command) || (!command && parseExplicitControl(text))) {
+    await bot.sendMessage(msg.chat.id, copy.nothingKept);
+    return;
+  }
+  const { gateway } = await studio.gateway(endpoint);
+  if (DIRECT_COMMANDS.has(command)) {
+    await gateway.handleUpdate(live.id, update);
+    return;
+  }
+  // They chose to talk; the agent still decides in character, so declines and blocks keep working.
+  // Any other slash text is a message like the rest: it never skips this decision.
+  const decision = await studio.decideOnStranger(live, text || (msg.voice ? STRANGER_VOICE_PLACEHOLDER : ''));
+  if (decision.action === 'reply') await gateway.handleUpdate(live.id, update);
+  else if (decision.action === 'decline') await bot.sendMessage(msg.chat.id, decision.message!);
+  else if (decision.action === 'block') {
+    await studio.blockByAgent(live.id, from.id, text);
+    await bot.sendMessage(msg.chat.id, decision.message!);
+  }
+}
+
+/** The card is recorded (receipt) before it is sent, so its buttons answer only this person. */
+async function sendAgentCard(studio: Studio, live: Agent, bot: TelegramBotClient, chatId: number, from: TelegramUser, current?: JoinChoice, group?: number): Promise<void> {
+  const pet = petPageUrl(studio.deps.webAppUrl, live.id);
+  const card = agentCard(live.persona.name, localeOf(from.language_code), current, !!pet);
+  const receipt = await studio.presentAgentCard(live.id, from.id, card, group);
+  const keyboard: InlineKeyboard = { inline_keyboard: [
+    [{ text: card.labels.join, callback_data: cardCallback('cj', receipt.id) }],
+    [{ text: card.labels.reply, callback_data: cardCallback('cr', receipt.id) }, { text: card.labels.decline, callback_data: cardCallback('cd', receipt.id) }],
+    ...(pet ? [[{ text: card.labels.open, web_app: { url: pet } }]] : []),
+  ] };
+  await bot.sendMessage(chatId, card.text, { keyboard });
+}
+
+/** A j_ code is unverified intent: it must name a group with this agent, and the person must be present there now. */
+async function joinLinkGroup(studio: Studio, live: Agent, bot: TelegramBotClient, code: string, telegramId: number): Promise<number | undefined> {
+  const group = (await studio.deps.store.read()).groups.find((g) => g.joinCode === code && g.agentIds.includes(live.id));
+  if (!group) return undefined;
+  try {
+    const member = await bot.getChatMember(group.chatId, telegramId);
+    return PRESENT.has(member.status) || (member.status === 'restricted' && member.is_member === true) ? group.chatId : undefined;
+  } catch { return undefined; }
+}
+
+/** A tap on an agent card: recorded durably first, then the tapper's alert, then the card loses its choices. */
+async function circleCallback(studio: Studio, live: Agent, query: TelegramCallbackQuery, bot: TelegramBotClient): Promise<void> {
+  const card = parseCardCallback(query.data)!;
+  const copy = circleCopy(localeOf(query.from.language_code));
+  const choice = CHOICES[card.action];
+  if ((live.blocked ?? []).includes(query.from.id)) { await bot.answerCallbackQuery(query.id); return; }
+  if (!choice) { await bot.answerCallbackQuery(query.id, copy.soon); return; }
+  if (query.message?.chat.type !== 'private') { await bot.answerCallbackQuery(query.id, copy.expired, true); return; }
+  const outcome = await studio.recordAgentChoice(live.id, query.from.id, card.id, choice, query.id);
+  if (!outcome.ok) { await bot.answerCallbackQuery(query.id, copy[REFUSED[outcome.reason]], true); return; }
+  const locale = outcome.join.notice.locale, said = choiceReceipt(live.persona.name, choice, locale);
+  await bot.answerCallbackQuery(query.id, said, true);
+  const pet = choice === 'declined' ? null : petPageUrl(studio.deps.webAppUrl, live.id);
+  await bot.editMessageText(query.message.chat.id, query.message.message_id, said,
+    pet ? { inline_keyboard: [[{ text: circleCopy(locale).open(live.persona.name).slice(0, 64), web_app: { url: pet } }]] } : undefined).catch(() => undefined);
 }
 
 /** Per-bot webhook secret, derived so nothing extra needs storing. */

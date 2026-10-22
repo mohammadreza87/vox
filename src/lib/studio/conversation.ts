@@ -129,7 +129,8 @@ export async function converseAuthorized(studio: Studio, user: Pick<InitDataUser
       // The canonical store may itself await I/O. A block applied during that
       // await must be seen at the provider callback, before any content export.
       // These fresh fences do not make the two storage systems atomic.
-      return await studioAllowed() ? digest([scope, context?.revision]) : null;
+      // authorityRevision, not revision: the turn's own relationship observation bumps the latter.
+      return await studioAllowed() ? digest([scope, context?.authorityRevision ?? context?.revision]) : null;
     };
     const authorityNow = (): string | null => {
       if (!indexed) return null;

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GroupAction } from '../../tireh/gateway';
 import { groupId, personId } from '../org-bridge';
+import { GroupWindow } from '../../tireh/conversation/group-window';
 import { Studio } from '../service';
 import { StudioStore } from '../store';
 import type { Agent, StudioState } from '../types';
@@ -113,6 +114,17 @@ describe('Studio.claimGroupReply', () => {
     expect(await h.studio.claimGroupReply(first.id, CHAT, 7)).toBe(false);
     advance(180_000);
     expect(await h.studio.claimGroupReply(first.id, CHAT, 7)).toBe(true);
+  });
+
+  it('names why a claim was refused, for content-free diagnostics', async () => {
+    expect(await h.studio.groupReplyClaim(first.id, CHAT, 10)).toBe(true);
+    expect(await h.studio.groupReplyClaim(second.id, CHAT, 10)).toBe('duplicate');
+    expect(await h.studio.groupReplyClaim(second.id, CHAT, 11)).toBe('cooldown');
+    for (const messageId of [11, 12]) { advance(45_000); expect(await h.studio.groupReplyClaim(first.id, CHAT, messageId)).toBe(true); }
+    advance(45_000);
+    expect(await h.studio.groupReplyClaim(first.id, CHAT, 13)).toBe('window');
+    await h.studio.setGroupBehavior(org.alice, first.id, { participation: 'mentions', remember: true });
+    expect(await h.studio.groupReplyClaim(first.id, CHAT, 14)).toBe(false);
   });
 
   it('serializes competing claims from two agents into one group reply', async () => {
@@ -253,5 +265,38 @@ describe('Studio.claimGroupMemory', () => {
     expect(await h.studio.claimGroupMemory(first.id, CHAT, 20)).toBe(false);
     await h.studio.fire(org.admin, second.id, { confirmName: 'Second', reason: '', memoryPolicy: 'archive' });
     expect(await h.studio.claimGroupMemory(second.id, CHAT, 20)).toBe(false);
+  });
+});
+
+describe('the RAM group window held by Studio', () => {
+  const windowOf = (studio: Studio) => (studio as unknown as { groupWindow: GroupWindow }).groupWindow;
+  const keyFor = (agent: Agent, chatId = CHAT) => ({ personaId: agent.id, chatKey: `group-${groupId(chatId)}`, epoch: 'e' });
+  const fill = (agent: Agent, chatId = CHAT) => windowOf(h.studio).record(keyFor(agent, chatId), { personId: 'p', text: 'said before', at: 0, messageId: 1 }, 0);
+  const lines = (agent: Agent, chatId = CHAT) => windowOf(h.studio).before(keyFor(agent, chatId), 9, 0).length;
+
+  it('empties a guest group’s window when its head count changes or cannot be read, with no join event', async () => {
+    await h.store.update((s) => { s.groups.find((g) => g.chatId === CHAT)!.hasGuests = true; });
+    const bot = h.bots.get(h.studio.botToken(first)!)!;
+    bot.getChatMemberCount.mockResolvedValue(5);
+    await h.studio.verifyGroupAudience(first.id, CHAT);
+    fill(first);
+    await h.studio.verifyGroupAudience(first.id, CHAT);
+    expect(lines(first)).toBe(1);
+    bot.getChatMemberCount.mockResolvedValue(6); // A silent newcomer.
+    await h.studio.verifyGroupAudience(first.id, CHAT);
+    expect(lines(first)).toBe(0);
+    fill(first);
+    bot.getChatMemberCount.mockRejectedValue(new Error('unavailable'));
+    await h.studio.verifyGroupAudience(first.id, CHAT);
+    expect(lines(first)).toBe(0);
+  });
+
+  it('purges eagerly on audience and membership changes, never only when the chat is next opened', async () => {
+    for (const agent of [first, second]) for (const chat of [CHAT, OTHER_CHAT]) fill(agent, chat);
+    await h.studio.noteGroupSpeaker(CHAT, { id: 777_001, first_name: 'Guest' });
+    expect([lines(first), lines(second), lines(first, OTHER_CHAT)]).toEqual([0, 0, 1]);
+    await h.studio.noteGroupMembership(OTHER_CHAT, { id: 777_002, is_bot: false, first_name: 'Guest' }, 'member');
+    // Its history epoch moved too: every window of the group's agents goes.
+    for (const chat of [CHAT, OTHER_CHAT]) expect([lines(first, chat), lines(second, chat)]).toEqual([0, 0]);
   });
 });

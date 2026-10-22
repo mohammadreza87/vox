@@ -5,7 +5,7 @@
  * read (floors, mood bands, quiet hours) live here.
  */
 
-import type { CharacterLook, Stage } from '../studio/types';
+import type { AgentJoin, CharacterLook, Stage } from '../studio/types';
 
 export type { CharacterLook, Stage };
 
@@ -183,8 +183,10 @@ export interface TalkVoiceResponse {
  * carries). POST /forget: deletes it all; the next visit meets the pet anew. Anyone whose initData the
  * agent's bot signed may call both, whatever their role, so guests have their own rights path.
  */
-export interface PetExportResponse { petCare: PetCare[] }
-export interface PetForgetResponse { erased: number }
+/** agentChoices: the person's agent-card choices with their evidence (Circles), present only when any exist. */
+export interface PetExportResponse { petCare: PetCare[]; agentChoices?: AgentJoin[] }
+/** choicesErased: agent-card choices removed alongside pet care, present only when any were. */
+export interface PetForgetResponse { erased: number; choicesErased?: number }
 
 export type PetErrorCode =
   | 'authentication_required' // initData missing, stale, or signed by another bot

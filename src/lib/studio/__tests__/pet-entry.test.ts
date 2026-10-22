@@ -220,4 +220,25 @@ describe('rights export and erasure', () => {
     expect(await pets.get('agent-a', ID.bob)).not.toBeNull();
     expect((await request('requests', input)).status).toBe(200);
   });
+
+  it('agent-card choices (Circles) a member made as an outsider are exported and erased with the rest; none adds nothing', async () => {
+    const { f, h, request } = await setup();
+    const exportNow = async () => {
+      const row = (await (await request('requests', f.input('access_export'))).json()).request;
+      return (await request(`requests/${row.requestId}/actions?space=work`, { version: 1, eventId: randomUUID(), expectedRevision: row.revision, action: 'prepare_local_export' })).json();
+    };
+    expect(await exportNow()).not.toHaveProperty('agentChoices');
+    // Just enough of a public agent for each tap, gone again before the export.
+    for (const id of [ID.alice, ID.bob]) {
+      const receipt = await h.studio.presentAgentCard('agent-a', id, { copyHash: 'a'.repeat(64), locale: 'en' });
+      h.clock.now = new Date(h.clock.now.getTime() + 1000);
+      await h.studio.deps.store.update((s) => { s.agents.push({ id: 'agent-a', status: 'active', visibility: 'public' } as never); });
+      expect(await h.studio.recordAgentChoice('agent-a', id, receipt.id, 'reply_only', `cb-${id}`)).toMatchObject({ ok: true });
+      await h.studio.deps.store.update((s) => { s.agents = s.agents.filter((a) => a.id !== 'agent-a'); });
+    }
+    expect((await exportNow()).agentChoices).toEqual([expect.objectContaining({ agentId: 'agent-a', telegramId: ID.alice, choice: 'reply_only' })]);
+    expect((await request('requests', f.input('erasure'))).status).toBe(201);
+    expect(await h.studio.deps.choices!.listForUser(ID.alice)).toEqual([]);
+    expect(await h.studio.deps.choices!.listForUser(ID.bob)).toHaveLength(1);
+  });
 });

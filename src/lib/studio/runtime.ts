@@ -46,6 +46,8 @@ import { StudioExperimentRuntime } from '../adaptive/experiments/runtime';
  *   STUDIO_WEB_SEARCH        off = agents never search the web (default: on, per-agent toggle)
  *   STUDIO_PERSONA_MODEL     model for persona design (default: stronger Claude model)
  *   STUDIO_ORG_NAME          default HOOR
+ *   STUDIO_CIRCLES           off (default) | reply: agent cards and reply-only DMs for outsiders of
+ *                            public agents (S1) | circles: full. Read per use: the kill switch
  *
  * Voiceprints (S11L, shadow mode; docs/implementation/VOICE_PROVIDER_INTEGRATION.md):
  *   STUDIO_VOICE_RECOGNITION=1  voiceprint enrollment and shadow verification; capability
@@ -102,6 +104,8 @@ import { ImprovementWorkflow } from '../adaptive/improvement/workflow';
 import { validateTrust, type TrustStore } from '../adaptive/improvement/contracts';
 import { createStudioReminderDelivery } from './reminder-delivery';
 import { digest } from '../adaptive/persistence/repository';
+import { parseCirclesMode } from '../circles/codec';
+import { FileAgentChoiceStore, FirestoreAgentChoiceStore } from '../circles/choice-store';
 
 /** Internal availability is bound to current committed company roles, never a
  * bootstrap/environment list. Unsupported distributed synchronous reads deny. */
@@ -248,11 +252,11 @@ export function stopStudioPreferenceLearning(): Promise<{ pending: number }> {
   return g.__voxPreferenceStop = g.__voxPreferenceTasks?.tasks.close() ?? Promise.resolve({ pending: 0 });
 }
 
-type RuntimeStorage = Pick<StudioDeps, 'store' | 'pets' | 'memory' | 'rateLimiter' | 'adaptive' | 'relationshipStore' | 'observations' | 'revisions'> & { sharedStorage: AdaptiveStorage; voiceIdentityStorage: AdaptiveStorage; maintenanceStorage: AdaptiveStorage; closeAdaptive?: () => void };
+type RuntimeStorage = Pick<StudioDeps, 'store' | 'pets' | 'choices' | 'memory' | 'rateLimiter' | 'adaptive' | 'relationshipStore' | 'observations' | 'revisions'> & { sharedStorage: AdaptiveStorage; voiceIdentityStorage: AdaptiveStorage; maintenanceStorage: AdaptiveStorage; closeAdaptive?: () => void };
 function fileStorage(dir: string, scopedRelationshipsEnabled: boolean, format: AdaptiveStorageFormat): RuntimeStorage {
   const managed = openLocalAdaptiveStorage(join(dir, 'adaptive'), format);
   try { const store = new StudioStore(dir);
-    return { store, pets: new FilePetStore(join(dir, 'pets')), memory: createFileStores(join(dir, 'memory.json')),
+    return { store, pets: new FilePetStore(join(dir, 'pets')), choices: new FileAgentChoiceStore(join(dir, 'circles')), memory: createFileStores(join(dir, 'memory.json')),
     relationshipStore: new FileRelationshipStore(join(dir, 'scoped-relationships-v1.json')), observations: new FileObservationStore(join(dir, 'scoped-relationship-observations-v1.json')),
     adaptive: new AdaptiveService(new AdaptiveRepository(managed.storage),
       { ...adaptiveOptionsFromManifest(process.env.STUDIO_ADAPTIVE_POLICY_JSON, internalPilotAuthority(store)), scopedRelationshipsEnabled, voiceRecognitionEnabled: process.env.STUDIO_VOICE_RECOGNITION === '1' }),
@@ -271,6 +275,7 @@ async function firestoreStorage(bucketName: string, scopedRelationshipsEnabled: 
   return {
     store,
     pets: new FirestorePetStore(db),
+    choices: new FirestoreAgentChoiceStore(db),
     adaptive: new AdaptiveService(new AdaptiveRepository(new FirestoreAdaptiveStorage(db)),
       { ...adaptiveOptionsFromManifest(process.env.STUDIO_ADAPTIVE_POLICY_JSON, internalPilotAuthority(store)), scopedRelationshipsEnabled, voiceRecognitionEnabled: process.env.STUDIO_VOICE_RECOGNITION === '1' }),
     sharedStorage: new FirestoreAdaptiveStorage(db, 'adaptiveSharedMemory'),
@@ -323,6 +328,7 @@ async function create(): Promise<Studio> {
       // Wired here, not derived: route bundles carry their own copy of the store classes, so
       // petStoreFor's instanceof checks fail on a Studio built by instrumentation.
       pets: storage.pets,
+      choices: storage.choices,
       personaLLM: new AnthropicLLM(env.ANTHROPIC_API_KEY!, env.STUDIO_PERSONA_MODEL || 'claude-sonnet-5-5'),
       chatLLM: chatLLM(env),
       fastLLM: new AnthropicLLM(env.ANTHROPIC_API_KEY!, env.STUDIO_VOICE_MODEL || 'claude-haiku-5-5'),
@@ -345,6 +351,7 @@ async function create(): Promise<Studio> {
       relationshipAuthority: authority,
       // Content-free per-stage timings for a latency baseline (scripts/stage-timings.ts).
       stageTimings: env.STUDIO_STAGE_TIMINGS === '1',
+      circles: () => parseCirclesMode(process.env.STUDIO_CIRCLES),
       rateLimiter: storage.rateLimiter,
       imageToJpeg: toJpeg,
       // The portrait edit reference; STUDIO_PORTRAITS=text skips it (PLAN §7 A/B gate).

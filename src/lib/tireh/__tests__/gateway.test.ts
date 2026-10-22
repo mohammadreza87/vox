@@ -263,7 +263,8 @@ describe('shared group memory', () => {
         })
       )
     ).toBe('replied');
-    expect(await gateway.handleUpdate('aria', groupText(GAMEEND_CHAT, TG.milad, 'Ariana Grande is touring'))).toBe('ignored');
+    // Another speaker: Milad's own next message would be a follow-up to the reply.
+    expect(await gateway.handleUpdate('aria', groupText(GAMEEND_CHAT, TG.reza, 'Ariana Grande is touring'))).toBe('ignored');
     expect(bot.sendMessage).toHaveBeenCalledTimes(2);
   });
 

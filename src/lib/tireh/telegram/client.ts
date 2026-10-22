@@ -10,6 +10,8 @@ export interface TelegramUser {
   first_name: string;
   last_name?: string;
   username?: string;
+  /** IETF tag of the user's Telegram language; picks card copy only, never authority. */
+  language_code?: string;
 }
 
 export interface TelegramChat {
@@ -140,13 +142,14 @@ export class TelegramBotClient {
   sendMessage(
     chatId: number,
     text: string,
-    options: { replyTo?: number; keyboard?: InlineKeyboard; signal?: AbortSignal; authorizeNow?: () => boolean } = {}
+    options: { replyTo?: number; keyboard?: InlineKeyboard; signal?: AbortSignal; authorizeNow?: () => boolean; silent?: boolean } = {}
   ): Promise<TelegramMessage> {
     return this.call('sendMessage', {
       chat_id: chatId,
       text: text.slice(0, 4096),
       ...(options.replyTo ? { reply_parameters: { message_id: options.replyTo, allow_sending_without_reply: true } } : {}),
       ...(options.keyboard ? { reply_markup: options.keyboard } : {}),
+      ...(options.silent ? { disable_notification: true } : {}),
     }, options.signal, options.authorizeNow);
   }
 
@@ -173,12 +176,14 @@ export class TelegramBotClient {
     return this.call('sendChatAction', { chat_id: chatId, action });
   }
 
-  answerCallbackQuery(callbackQueryId: string, text?: string): Promise<boolean> {
-    return this.call('answerCallbackQuery', { callback_query_id: callbackQueryId, ...(text ? { text } : {}) });
+  /** showAlert: a modal only the tapper sees (Circles receipts), instead of a passing toast. */
+  answerCallbackQuery(callbackQueryId: string, text?: string, showAlert?: boolean): Promise<boolean> {
+    return this.call('answerCallbackQuery', { callback_query_id: callbackQueryId, ...(text ? { text } : {}), ...(showAlert ? { show_alert: true } : {}) });
   }
 
-  editMessageText(chatId: number, messageId: number, text: string): Promise<unknown> {
-    return this.call('editMessageText', { chat_id: chatId, message_id: messageId, text });
+  /** Edits never notify. A keyboard replaces the message's buttons; without one Telegram removes them. */
+  editMessageText(chatId: number, messageId: number, text: string, keyboard?: InlineKeyboard): Promise<unknown> {
+    return this.call('editMessageText', { chat_id: chatId, message_id: messageId, text, ...(keyboard ? { reply_markup: keyboard } : {}) });
   }
 
   async downloadFile(fileId: string, maxBytes = 20 * 1024 * 1024): Promise<ArrayBuffer> {

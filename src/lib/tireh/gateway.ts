@@ -25,13 +25,15 @@ import type { VoiceNoteVerifier } from './identity/voice-band';
 import type { TelegramBotClient, TelegramCallbackQuery, TelegramMessage, TelegramUpdate } from './telegram/client';
 import { attachTurnBlock, buildPromptLayout, buildSystemPrompt, LIVE_CALL_FRAME, PROACTIVE_GROUP_FRAME, type PromptInput } from './conversation/prompt';
 import { tirehFlags } from './flags';
-import { emptyReplyFallback, toPlainChat } from './conversation/format';
+import { emptyReplyFallback, isDegenerateReply, toPlainChat } from './conversation/format';
+import { registerFor } from './conversation/register';
+import { GroupWindow, quotedLine, replyQuote, speakerLabel, UNANSWERED_MARK, type ReplyQuote, type VisibleLine, type WindowKey } from './conversation/group-window';
 import { selectAdaptiveContext } from './memory/adaptive-context';
 import { lineageEventIds } from './memory/store';
 import { selectMemories } from './memory/retrieval';
 import { decideScope, extractCandidates, resolveCandidateSource, firstNewIndex } from './memory/extraction';
 import { canPersonSee, describeScope, hasGuestAudience, isVisibleToAudience, audienceOf, historyMessageForChat, selectHistoryForChat, snapshotScopeAudience } from './memory/visibility';
-import { groupAddressing } from './group-addressing';
+import { groupAddressing, targetsSomeoneElse } from './group-addressing';
 import { forceQuickTriage, ingestTelegramImage } from './images';
 import { logTelegramDiagnostic, voiceFailureDiagnostic } from './telegram/diagnostics';
 import { currentStageTimer, StageTimer, stageLaps, timed } from './timing';
@@ -44,6 +46,10 @@ export type GroupAction = 'observe' | 'reply' | 'proactive' | 'remember';
 
 export interface RuntimePrivacyState {
   revision: string;
+  /** `revision` without what a turn's own relationship observation bumps (the relationship store's
+   *  revision and rendered text), keeping its controls (epoch, stop, pause, forgotten sources). For callers that
+   *  fence a whole turn against one value taken before it; the gateway re-reads its own boundary. */
+  authorityRevision?: string;
   memoryEnabled: boolean;
   historyEnabled: boolean;
   /** False forbids all persisted or unknown-provenance context for this turn. */
@@ -78,6 +84,10 @@ export interface RuntimePrivacy {
   readSharedAuthority?(personaId: string, chat: ChatContext, space: 'work' | 'personal'): Promise<{ revision: string }>;
   /** Fresh server membership/access check; snapshot directory alone is insufficient. */
   validateAudience?(personaId: string, chat: ChatContext): Promise<boolean>;
+  /** When validateAudience fails: in a group the agent and the captured audience still hold but a reader
+   * is a guest or unapproved; in a DM a non-member chose to be answered (Circles). True answers from the
+   * current public turn, never stored context. */
+  validatePublicAudience?(personaId: string, chat: ChatContext): Promise<boolean>;
 }
 
 /** Every input of the turn boundary key, in hash order. Each one has a
@@ -89,6 +99,8 @@ type BoundaryHashInput = typeof BOUNDARY_HASH_INPUTS[number];
 interface PrivacyInputs {
   allowed: boolean;
   audienceValid: boolean;
+  /** An audience valid for the current public turn only: never stored context or indexed fences. */
+  publicOnly?: boolean;
   states: RuntimePrivacyState[];
   shared?: { revision: string; context?: string[] };
 }
@@ -148,7 +160,8 @@ export interface GatewayDeps {
   botFor(personaId: string): TelegramBotClient;
   /** Recheck live membership/settings before provider calls and side effects. */
   groupAllowed?(personaId: string, chatId: number, telegramId: number, action: GroupAction): Promise<boolean>;
-  claimGroupReply?(personaId: string, chatId: number, messageId: number): Promise<boolean>;
+  /** A proactive contribution's shared throttle; a refusal may name its reason (content-free). */
+  claimGroupReply?(personaId: string, chatId: number, messageId: number): Promise<boolean | GroupClaimMiss>;
   claimGroupMemory?(personaId: string, chatId: number, messageId: number): Promise<boolean>;
   logger?: Pick<Console, 'info' | 'warn' | 'error'>;
   now?: () => Date;
@@ -156,7 +169,16 @@ export interface GatewayDeps {
   stageTimings?: boolean;
   /** Public Studio Mini App URL: the /start reply links each agent's care page (unset = no button). */
   webAppUrl?: string;
+  /** RAM-only recent visible group lines, follow-ups and reply claims; share one across rebuilt gateways. */
+  groupWindow?: GroupWindow;
 }
+
+/** Why a proactive claim was refused. */
+export type GroupClaimMiss = 'cooldown' | 'window' | 'duplicate';
+const CLAIM_DIAGNOSTIC = { cooldown: 'group_skip_claim_cooldown', window: 'group_skip_claim_window', duplicate: 'group_skip_claim_duplicate' } as const;
+
+/** What a group turn adds to triage and the reply: the replied-to text and, without stored history, recent visible lines. */
+interface TurnExtras { quote?: ReplyQuote | null; recent?: VisibleLine[] }
 
 export type HandleResult =
   | 'replied'
@@ -205,9 +227,11 @@ export class PersonaGateway {
   private readonly log: Pick<Console, 'info' | 'warn' | 'error'>;
   /** User turns that carried an image of people (process memory only; S12). */
   private readonly peopleImageTurns = new WeakSet<ChatMessage>();
+  private readonly groupWindow: GroupWindow;
 
   constructor(private readonly deps: GatewayDeps) {
     this.log = deps.logger ?? console;
+    this.groupWindow = deps.groupWindow ?? new GroupWindow();
     deps.history.bindMemoryStore?.(deps.memories);
   }
 
@@ -292,6 +316,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
 
   /** All channels share this deletion path; never let an LLM merely promise a forget. */
   private async forgetOwnedContext(personaId: string, speakerId: string, space: 'work' | 'personal' = 'work'): Promise<string> {
+    this.groupWindow.clearPersona(personaId);
     if (this.deps.runtimePrivacy && this.deps.relationshipAuthority) {
       const match = /^tg-([1-9]\d*)$/.exec(speakerId);
       if (match) await this.deps.relationshipAuthority.invalidate(Number(match[1]), space, { agentId: personaId, reason: 'owner_forget_all' });
@@ -405,7 +430,17 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     }
 
     const targeting = groupAddressing(persona, message);
-    const addressed = chat.kind === 'private' || targeting.direct;
+    // Content-free attention: the person this agent just answered keeps it while nobody else, person or
+    // agent, speaks. Inferred, never explicit: only where this agent follows unaddressed messages, typed
+    // only (group voice needs a mention or reply), and never a message aimed at someone or something else.
+    const windowKey = chat.kind === 'group' ? await this.windowKey(persona, chat) : undefined;
+    const followUp = chat.kind === 'group' && !!windowKey && !message.voice && !targeting.direct && !targeting.otherTarget
+      && persona.groupParticipation !== 'mentions' && persona.groupObservation !== false
+      && !targetsSomeoneElse(persona, message) && !this.addressesCoAgent(persona, chat, message)
+      && this.groupWindow.followUp(windowKey, speaker.id, this.now().getTime())
+      && await this.groupAllowed(persona, chat, speaker.id, 'observe');
+    const heard = windowKey ? this.groupWindow.noteSpeaker(windowKey, speaker.id, this.now().getTime()) : undefined;
+    const addressed = chat.kind === 'private' || targeting.direct || followUp;
     if (!addressed && (persona.groupObservation === false || !(await this.groupAllowed(persona, chat, speaker.id, 'observe')))) return 'ignored';
 
     // Group voice notes are transcribed only when the persona is addressed,
@@ -450,12 +485,22 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     currentStageTimer()?.markOnce('ingress');
     let boundary = await measureStage('retrieval', () => this.boundary(persona, chat, speaker.id, 'work', text, this.compactPrivacy()));
     const privacyEpoch = boundary.compact ? undefined : await this.deps.history.getEpoch(persona.id);
-    if (!boundary.audienceValid) return 'ignored';
+    if (!boundary.audienceValid) {
+      if (chat.kind === 'group') logTelegramDiagnostic(this.log, 'group_audience_invalid');
+      return 'ignored';
+    }
     const userMessage: ChatMessage = {
       role: 'user', personId: speaker.id, text, at: sourceAt, telegramMessageId: message.message_id,
       ...(chat.kind === 'group' ? { groupPolicyVersion: 1 as const, groupOtherTarget: targeting.otherTarget } : {}),
     };
     if (!(await this.groupAllowed(persona, chat, speaker.id, addressed ? 'reply' : 'observe'))) return 'ignored';
+    // Visible to everyone in the chat: never an image description, never stored or extracted.
+    if (windowKey) this.groupWindow.record(windowKey, { personId: speaker.id, text: imageTurn ? rawText : text, at: this.now().getTime(), messageId: message.message_id }, this.now().getTime());
+    const extras: TurnExtras = {
+      quote: replyQuote(message, persona.name, (from) => this.ownBot(persona, from), (id) => org.getPersonByTelegramId(id)?.name),
+      // Stored history, when allowed, is the conversation; otherwise the RAM window of visible lines.
+      recent: windowKey && !boundary.historyEnabled ? this.groupWindow.before(windowKey, message.message_id, this.now().getTime()) : undefined,
+    };
     userMessage.privacy = this.stamp(boundary, [randomUUID()]);
     await this.retain(persona, chat, speaker.id, userMessage, boundary);
     await this.observeRelationship(persona.id, chat, speaker.id, text, `telegram:${this.deps.relationshipEndpoint?.personaId === persona.id ? `${this.deps.relationshipEndpoint.id}:` : ''}${message.chat.id}:${message.message_id}`, 'telegram', sourceAt);
@@ -464,35 +509,57 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     const askAddressed = !addressed && chat.kind === 'group' && !isVoice && !targeting.otherTarget
       && persona.groupParticipation !== 'mentions';
     const triaged = this.deps.decider
-      ? timed('triage', () => this.triage(persona, chat, askAddressed, userMessage, addressed ? 'reply' : 'observe', boundary))
-      : this.triage(persona, chat, askAddressed, userMessage, addressed ? 'reply' : 'observe', boundary);
+      ? timed('triage', () => this.triage(persona, chat, askAddressed, userMessage, addressed ? 'reply' : 'observe', boundary, extras))
+      : this.triage(persona, chat, askAddressed, userMessage, addressed ? 'reply' : 'observe', boundary, extras);
     const settled = (await triaged).triage;
     let assistantMessage: ChatMessage | undefined;
     let shouldReply = addressed;
-    if (askAddressed && (settled?.addressed || settled?.proactive)
-      && await this.groupAllowed(persona, chat, speaker.id, 'proactive')) {
-      // Unsolicited replies require a shared throttle; standalone runtimes without
-      // one can still answer direct messages but cannot interrupt the group.
-      shouldReply = await this.deps.claimGroupReply?.(persona.id, message.chat.id, message.message_id) ?? false;
+    let action: 'reply' | 'proactive' = 'reply';
+    const now = this.now().getTime();
+    if (chat.kind === 'group' && targeting.direct) this.groupWindow.claim(message.chat.id, message.message_id, now);
+    else if (followUp && !this.groupWindow.claim(message.chat.id, message.message_id, now)) {
+      shouldReply = false;
+      logTelegramDiagnostic(this.log, 'group_skip_claim_duplicate');
     }
-    if (shouldReply && await this.groupAllowed(persona, chat, speaker.id, addressed ? 'reply' : 'proactive')) {
+    if (askAddressed) {
+      if (!settled) logTelegramDiagnostic(this.log, 'group_skip_triage_null');
+      else if (settled.addressed) {
+        // Meant for this agent: a reply, never throttled; one agent answers each message.
+        if (await this.groupAllowed(persona, chat, speaker.id, 'reply')) {
+          shouldReply = this.groupWindow.claim(message.chat.id, message.message_id, now);
+          if (!shouldReply) logTelegramDiagnostic(this.log, 'group_skip_claim_duplicate');
+        }
+      } else if (!settled.proactive) logTelegramDiagnostic(this.log, 'group_skip_triage_below');
+      else if (await this.groupAllowed(persona, chat, speaker.id, 'proactive')) {
+        // Unsolicited replies require a shared throttle; standalone runtimes without
+        // one can still answer direct messages but cannot interrupt the group.
+        const claim = await this.deps.claimGroupReply?.(persona.id, message.chat.id, message.message_id) ?? false;
+        shouldReply = claim === true && this.groupWindow.claim(message.chat.id, message.message_id, now);
+        action = 'proactive';
+        if (!shouldReply) logTelegramDiagnostic(this.log, typeof claim === 'string' ? CLAIM_DIAGNOSTIC[claim] : claim === true ? 'group_skip_claim_duplicate' : 'group_skip_claim_refused');
+      }
+    } else if (!addressed && chat.kind === 'group') logTelegramDiagnostic(this.log, 'group_skip_not_asked');
+    if (shouldReply && await this.groupAllowed(persona, chat, speaker.id, action)) {
       const format = await this.replyFormat(persona, chat, speaker.id, message, text, boundary);
       const voiceWanted = format !== 'text' && (format === 'voice' || isVoice || persona.replyWithVoice === 'always' || settled?.wantsVoice === true);
       const canSpeak = this.canSpeak(persona, boundary);
       await bot.sendChatAction(message.chat.id, voiceWanted && canSpeak ? 'record_voice' : 'typing').catch(() => undefined);
       let generated: { text: string; sources: WebSource[] };
       try {
-        generated = await this.composeReply(persona, chat, speaker.id, text, imageTurn?.forceQuick ? forceQuickTriage(triaged) : triaged, message.message_id, addressed ? 'reply' : 'proactive', voiceWanted && canSpeak ? 'voice' : 'text', boundary, imageTurn?.images);
+        generated = await this.composeReply(persona, chat, speaker.id, text, imageTurn?.forceQuick ? forceQuickTriage(triaged) : triaged, message.message_id, action, voiceWanted && canSpeak ? 'voice' : 'text', boundary, imageTurn?.images, undefined, undefined, undefined, extras);
       } catch {
         logTelegramDiagnostic(this.log, 'reply_generation_failed');
         return 'ignored';
       }
       const { text: reply, sources } = generated;
-      if (!reply) return 'ignored';
-      if (!(await this.groupAllowed(persona, chat, speaker.id, addressed ? 'reply' : 'proactive'))) return 'ignored';
-      const delivered = await this.sendReply(persona, chat, message, reply, voiceWanted, sources, addressed ? 'reply' : 'proactive', privacyEpoch, async () => this.unchanged(persona, chat, speaker.id, boundary),
+      const voided = () => { if (chat.kind === 'group') logTelegramDiagnostic(this.log, 'group_reply_voided'); return 'ignored' as const; };
+      if (!reply) return voided();
+      if (!(await this.groupAllowed(persona, chat, speaker.id, action))) return voided();
+      const delivered = await this.sendReply(persona, chat, message, reply, voiceWanted, sources, action, privacyEpoch, async () => this.unchanged(persona, chat, speaker.id, boundary),
         boundary.compact ? () => this.exportAuthorizedNow(persona, chat, speaker.id, boundary) : undefined);
-      if (delivered === null) return 'ignored';
+      if (delivered === null) return voided();
+      // A proactive contribution never opens a follow-up: the throttle governs that person's next line.
+      if (windowKey) this.groupWindow.answered(windowKey, message.message_id, speaker.id, delivered, this.now().getTime(), { heard, followUp: action === 'reply' });
       currentStageTimer()?.markOnce('total');
       assistantMessage = {
         privacy: this.stamp(boundary, userMessage.privacy!.sourceEventIds),
@@ -609,6 +676,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
   }
 
   async invalidateHistory(personaId: string): Promise<void> {
+    this.groupWindow.clearPersona(personaId);
     await this.deps.memories.invalidate(personaId);
     await this.deps.history.clear(personaId);
     await this.deps.relationships?.invalidatePersona(personaId, { reason: 'privacy_changed' });
@@ -689,6 +757,14 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
       try { audienceValid = await this.deps.runtimePrivacy.validateAudience(persona.id, chat); }
       catch { audienceValid = false; }
       if (!audienceValid) allowed = false;
+      // A guest or unapproved reader gates stored context, never the turn: the group (or a DM
+      // whose outsider chose replies) gets the current public turn, no per-member reads, no memory.
+      if (!audienceValid && this.deps.runtimePrivacy.validatePublicAudience) {
+        let publicOnly = false;
+        try { publicOnly = await this.deps.runtimePrivacy.validatePublicAudience(persona.id, chat) === true; }
+        catch { publicOnly = false; }
+        if (publicOnly) return { allowed: false, audienceValid: true, states: [], publicOnly };
+      }
     }
     try {
       if (this.deps.runtimePrivacy) {
@@ -709,7 +785,8 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
   private boundaryFrom(inputs: PrivacyInputs, chat: ChatContext, speakerId: string, space: 'work' | 'personal', memoryRevision: number): TurnBoundary {
     let { allowed, audienceValid } = inputs;
     const { states, shared } = inputs;
-    const members = audienceOf(chat), compact = this.compactPrivacy();
+    // A public-only turn exports no stored context, so it needs no indexed fences.
+    const members = audienceOf(chat), compact = this.compactPrivacy() && !inputs.publicOnly;
     // An audience that is not fully known (hasGuests, unknown or unverified readers)
     // gets neither memory nor history, with or without a runtime privacy adapter.
     const scopedOnly = compact && states.length === members.length && states.length > 0 && states.every(v => v.memoryEnabled === false && v.historyEnabled === false);
@@ -937,6 +1014,28 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     return null;
   }
 
+  /** RAM window identity: a changed audience or a forget/clearPersona (history epoch) starts empty. */
+  private async windowKey(persona: Persona, chat: Extract<ChatContext, { kind: 'group' }>): Promise<WindowKey> {
+    return { personaId: persona.id, chatKey: chat.chatKey, epoch: `${chat.group.audienceEpoch ?? 0}:${await this.deps.history.getEpoch(persona.id)}` };
+  }
+
+  /** Named, @mentioned or replied to as another agent of this group. */
+  private addressesCoAgent(persona: Persona, chat: Extract<ChatContext, { kind: 'group' }>, message: TelegramMessage): boolean {
+    return (chat.group.agentIds ?? this.deps.org.config.personas.map((p) => p.id)).some((id) => {
+      const other = id !== persona.id ? this.deps.org.getPersona(id) : undefined;
+      return !!other && groupAddressing(other, message).direct;
+    });
+  }
+
+  private ownBot(persona: Persona, from: NonNullable<TelegramMessage['from']>): boolean {
+    const username = persona.telegramUsername?.replace(/^@/, '').toLowerCase();
+    return from.is_bot && (persona.telegramId !== undefined ? from.id === persona.telegramId : !!username && from.username?.toLowerCase() === username);
+  }
+
+  private visibleLines(persona: Persona, lines: VisibleLine[] = []) {
+    return lines.map((l) => ({ role: l.role, who: l.role === 'assistant' ? persona.name : speakerLabel(this.deps.org.getPerson(l.personId ?? '')?.name ?? ''), text: l.text, answered: l.answered !== false }));
+  }
+
   private isAddressed(persona: Persona, message: TelegramMessage): boolean {
     return groupAddressing(persona, message).direct;
   }
@@ -1009,7 +1108,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
    * there is no decider, or it fails or is slow. `skillAsked` reflects the
    * questions actually sent. Never throws.
    */
-  private async triage(persona: Persona, chat: ChatContext, askAddressed: boolean, source: ChatMessage, action: GroupAction, boundary: TurnBoundary): Promise<Triaged> {
+  private async triage(persona: Persona, chat: ChatContext, askAddressed: boolean, source: ChatMessage, action: GroupAction, boundary: TurnBoundary, extras?: TurnExtras): Promise<Triaged> {
     const { decider, org, decisionLog } = this.deps;
     // This optional adapter has no final configured-transport authority seam.
     // Indexed turns go directly to the qualified ordinary reply model.
@@ -1022,14 +1121,15 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     try {
       const prior = await this.historyAt(persona, chat, boundary, 6);
       const recent = [...prior.filter((m) => m !== source && (chat.kind !== 'group' || (m.telegramMessageId ?? Infinity) < source.telegramMessageId!)), source].slice(-6);
-      const lines = recent.map((m) => ({ who: m.role === 'assistant' ? persona.name : org.getPerson(m.personId ?? '')?.name ?? 'Someone', text: m.text }));
+      const lines = [...this.visibleLines(persona, extras?.recent).map(({ role, who, text, answered }) => ({ who: role === 'user' && !answered ? `${who} ${UNANSWERED_MARK}` : who, text })),
+        ...recent.map((m) => ({ who: m.role === 'assistant' ? persona.name : org.getPerson(m.personId ?? '')?.name ?? 'Someone', text: m.text }))];
       if (!(await this.groupAllowed(persona, chat, source.personId!, action))) return UNTRIAGED;
       if (!await this.unchanged(persona, chat, source.personId!, boundary)) return UNTRIAGED;
       // Pick a playbook only when this message may get a reply.
       const routable = action === 'reply' || askAddressed ? this.routableSkills(persona, boundary) : undefined;
       questions = triageQuestions(persona, askAddressed, routable);
       skillAsked = askedSkill(questions);
-      const input = triageInput(persona, lines);
+      const input = triageInput(persona, lines, extras?.quote ? quotedLine(extras.quote, `${persona.name}'s`) : undefined);
       started = performance.now();
       const authority = { authorize: async () => await this.groupAllowed(persona, chat, source.personId!, action) &&
         await this.unchanged(persona, chat, source.personId!, boundary) ? boundary.key : null,
@@ -1077,7 +1177,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     return !!this.deps.voice && this.deps.voice.canSynthesize !== false && persona.replyWithVoice !== 'never';
   }
 
-  private async composeReply(persona: Persona, chat: ChatContext, speakerId: string, text: string, triaged?: Promise<Triaged>, messageId?: number, action: GroupAction = 'reply', replyFormat?: 'voice' | 'text', boundary?: TurnBoundary, images?: LLMMessage['images'], authorize?: () => Promise<boolean>, authorizeNow?: () => boolean, surfaceFrame?: string): Promise<{ text: string; sources: WebSource[] }> {
+  private async composeReply(persona: Persona, chat: ChatContext, speakerId: string, text: string, triaged?: Promise<Triaged>, messageId?: number, action: GroupAction = 'reply', replyFormat?: 'voice' | 'text', boundary?: TurnBoundary, images?: LLMMessage['images'], authorize?: () => Promise<boolean>, authorizeNow?: () => boolean, surfaceFrame?: string, extras?: TurnExtras): Promise<{ text: string; sources: WebSource[] }> {
     const { org } = this.deps;
     boundary ??= await this.boundary(persona, chat, speakerId, 'work', text);
     if (!boundary.audienceValid) return { text: this.changedReply, sources: [] };
@@ -1097,7 +1197,12 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     lap('retrieval');
     // TIREH_CACHED_PROMPT (S03): cache-stable blocks; unset keeps the legacy string byte for byte.
     const flags = tirehFlags();
-    const promptInput: PromptInput = { org, space: boundary.space, persona: { ...persona, webSearch: search }, chat, speakerId, memories, now: this.now(), canFollowUp: await this.canFollowUp(persona.id, chat, boundary.space), followUpChannel: this.deps.relationshipAuthority ? 'inbox' : 'chat', canSpeak: this.canSpeak(persona, boundary), replyFormat, activeSkills };
+    // Earlier group lines without stored history: the RAM window, public to this chat only.
+    const visible = chat.kind === 'group' && !boundary.historyEnabled ? this.visibleLines(persona, extras?.recent) : [];
+    // Persian تو/شما: this message's, else the speaker's last in the window, so a neutral line never flips it.
+    const register = registerFor(text, visible.length ? (extras?.recent ?? []).filter((l) => l.role === 'user' && l.personId === speakerId).map((l) => l.text) : []);
+    const promptInput: PromptInput = { org, space: boundary.space, persona: { ...persona, webSearch: search }, chat, speakerId, memories, now: this.now(), canFollowUp: await this.canFollowUp(persona.id, chat, boundary.space), followUpChannel: this.deps.relationshipAuthority ? 'inbox' : 'chat', canSpeak: this.canSpeak(persona, boundary), replyFormat, activeSkills,
+      historyVisible: boundary.historyEnabled || visible.length > 0, recentWindow: visible.length > 0, ...(extras?.quote ? { replyQuote: { ...extras.quote } } : {}), ...(register ? { register } : {}) };
     const relationship = await this.relationshipContext(persona.id, chat);
     const frame = [action === 'proactive' ? PROACTIVE_GROUP_FRAME : '', surfaceFrame ?? ''].filter(Boolean).join('\n\n');
     const legacySystem = flags.cachedPrompt ? '' : buildSystemPrompt(promptInput) + `\n${relationship}` + (frame ? `\n\n${frame}` : '');
@@ -1119,6 +1224,10 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
 
     // An unknown audience can use the current public turn, never stored history.
     if (recent.at(-1)?.role !== 'user' || recent.at(-1)?.text !== text) messages.push({ role: 'user', content: text });
+    if (visible.length) messages.unshift(...visible.map(({ role, who, text: line, answered }) =>
+      ({ role, content: role === 'assistant' ? line : `${who}${answered ? '' : ` ${UNANSWERED_MARK}`}: ${line}` })));
+    // The replied-to message is quoted data for this turn only; history and extraction keep the plain text.
+    if (extras?.quote && messages.at(-1)?.role === 'user') messages.at(-1)!.content = `${quotedLine(extras.quote)}\n${messages.at(-1)!.content}`;
     // Current explicitly attached images are ephemeral provider input only;
     // history, extraction, observations and memory stores never receive them.
     if (images?.length && chat.kind === 'private') (messages.at(-1)! as LLMMessage).images = images.map(image => ({ ...image }));
@@ -1138,18 +1247,31 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     if (boundary.compact && llm.committedExportFence !== true) return {text: this.changedReply, sources: []};
     // Strangers get fewer searches: each one costs money.
     const maxSearches = org.getPerson(speakerId)?.guest ? 1 : 3;
-    if (!(await this.groupAllowed(persona, chat, speakerId, action))) return { text: '', sources: [] };
-    // Run after all asynchronous boundary/history loads, immediately at export.
-    if (!await this.requestAuthorized(authorize)) return { text: this.changedReply, sources: [] };
-    if (request.authorizeNow && !request.authorizeNow()) return {text: this.changedReply, sources: []};
-    const { text: raw, sources } = await timed('llm_done', async () => search && llm.completeWithWeb
-      ? await llm.completeWithWeb({ ...request, maxSearches })
-      : { text: await llm.complete(request), sources: [] });
-    if (!await this.unchanged(persona, chat, speakerId, boundary) || !await this.requestAuthorized(authorize)) return { text: this.changedReply, sources: [] };
-    if (boundary.compact && !this.exportAuthorizedNow(persona, chat, speakerId, boundary, authorizeNow)) return {text: this.changedReply, sources: []};
-    // Composed replies become plain words here (no markdown): Telegram text, the
-    // transcript of a voice reply and Mini App call turns. Live calls stream raw.
-    const reply = typeof raw === 'string' ? toPlainChat(raw) : '';
+    const generate = async (model: LLM, maxTokens: number): Promise<{ text: string; sources: WebSource[] } | 'denied' | 'changed'> => {
+      if (!(await this.groupAllowed(persona, chat, speakerId, action))) return 'denied';
+      // Run after all asynchronous boundary/history loads, immediately at export.
+      if (!await this.requestAuthorized(authorize)) return 'changed';
+      if (request.authorizeNow && !request.authorizeNow()) return 'changed';
+      const { text: raw, sources } = await timed('llm_done', async () => search && model.completeWithWeb
+        ? await model.completeWithWeb({ ...request, maxTokens, maxSearches })
+        : { text: await model.complete({ ...request, maxTokens }), sources: [] });
+      if (!await this.unchanged(persona, chat, speakerId, boundary!) || !await this.requestAuthorized(authorize)) return 'changed';
+      if (boundary!.compact && !this.exportAuthorizedNow(persona, chat, speakerId, boundary!, authorizeNow)) return 'changed';
+      // Composed replies become plain words here (no markdown): Telegram text, the
+      // transcript of a voice reply and Mini App call turns. Live calls stream raw.
+      return { text: typeof raw === 'string' ? toPlainChat(raw) : '', sources };
+    };
+    let result = await generate(llm, request.maxTokens);
+    // Punctuation alone ("......") says nothing: one retry, on the main model where its fence allows.
+    if (typeof result === 'object' && isDegenerateReply(result.text)) {
+      logTelegramDiagnostic(this.log, 'reply_degenerate');
+      const main = boundary.compact && this.deps.llm.committedExportFence !== true ? llm : this.deps.llm;
+      result = await generate(main, REPLY_MAX_TOKENS.thoughtful);
+      if (typeof result === 'object' && isDegenerateReply(result.text)) { logTelegramDiagnostic(this.log, 'reply_degenerate'); result = { text: '', sources: [] }; }
+    }
+    if (result === 'denied') return { text: '', sources: [] };
+    if (result === 'changed') return { text: this.changedReply, sources: [] };
+    const { text: reply, sources } = result;
     if (!reply) logTelegramDiagnostic(this.log, 'reply_empty');
     // An unprompted group contribution that came out empty is simply not sent.
     if (!reply && action === 'proactive') return { text: '', sources: [] };

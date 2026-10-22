@@ -43,6 +43,11 @@ export function toPlainChat(text: string): string {
   return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
+/** A reply with no word, number or emoji ("......", "؟!") says nothing; treat it like an empty one. */
+export function isDegenerateReply(text: string): boolean {
+  return !!text.trim() && !/[\p{L}\p{N}\p{Extended_Pictographic}]/u.test(text);
+}
+
 /** When the model returns no text: in the speaker's script, never a canned English line in a Persian chat. */
 export function emptyReplyFallback(latest: string): string {
   // Arabic script is Persian here unless it carries Arabic-only letters (ة ي ك) and no Persian-only ones (پ چ ژ گ ک ی).
