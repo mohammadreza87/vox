@@ -238,6 +238,13 @@ export interface ChatMessage {
   privacyEpoch?: number;
   /** Addressing result captured with Telegram entity/reply metadata intact. */
   groupOtherTarget?: boolean;
+  /**
+   * S12 retention verdict for both rows of an image turn (STUDIO_IMAGES only;
+   * absent otherwise). Content-free. `suppressed` rows never reach memory
+   * extraction on that turn or any later one; while a `people` row is in the
+   * extraction window, extraction carries the image people rule.
+   */
+  imageDerived?: { suppressed: boolean; people: boolean };
 }
 
 /** Where a conversation happens and who can read it */

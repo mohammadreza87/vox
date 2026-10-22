@@ -39,11 +39,11 @@ export type MemoryCandidate = z.infer<typeof candidateSchema>;
 
 /** Optional per-turn extraction rules; absent or empty changes nothing. */
 export interface ExtractionOptions {
-  /** The newest message shared an image that shows people (S12, STUDIO_IMAGES). */
+  /** A message in the extraction window shared an image that shows people (S12, STUDIO_IMAGES). */
   imagePeopleRule?: boolean;
 }
 
-export const IMAGE_PEOPLE_RULE = 'The newest message shared an image that shows people. Never record who appears in the image, what anyone looks like (face, body, clothing, apparent age or background), or any guess about identity, even when the caption names someone. Record only facts the human stated in words that stay useful without the image.';
+export const IMAGE_PEOPLE_RULE = 'A message in this conversation shared an image that shows people. Never record who appears in the image, what anyone looks like (face, body, clothing, apparent age or background), or any guess about identity, even when the caption names someone. Record only facts the human stated in words that stay useful without the image.';
 
 /** Defence in depth for IMAGE_PEOPLE_RULE: lexical markers of image or appearance descriptions. */
 export const IMAGE_PEOPLE_DESCRIPTION = /\b(?:photo|picture|image|pictured|selfie|wearing|wears|dressed|hair|beard|eyes|face|looks like|appears|tattoo\w*|smil\w*)\b|عکس|تصویر|سلفی|چهره|لباس|ریش|چشم|لبخند/iu;

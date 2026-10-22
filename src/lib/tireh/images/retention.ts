@@ -4,6 +4,7 @@
  * sensitive document. Unknown triage fails closed.
  */
 
+import type { ChatMessage } from '../types';
 import type { ImageTriage } from './questions';
 
 export const SENSITIVE_DOCUMENT_THRESHOLD = 0.5;
@@ -29,4 +30,21 @@ export function suppressImageMemory(triage: ImageTriage | null, text: string): b
 /** Fixed, content-free acknowledgement sent when triage is slow. */
 export function imageAckText(text: string): string {
   return /[؀-ۿ]/.test(text) ? 'یک لحظه، دارم عکس را نگاه می‌کنم.' : "One moment, I'm looking at your photo.";
+}
+
+/**
+ * Fixed, content-free history text kept in place of a reply the model wrote
+ * from a sensitive document, or from an image whose triage is unknown. The
+ * reply is delivered; its text is never stored.
+ */
+export const IMAGE_WITHHELD_REPLY_TEXT = '(replied about a shared image; the details were not kept)';
+
+/** True when the reply to this image must not be kept in history. Unknown triage fails closed. */
+export function withholdImageReply(triage: ImageTriage | null): boolean {
+  return triage === null || triage.containsSensitiveDocument >= SENSITIVE_DOCUMENT_THRESHOLD;
+}
+
+/** The content-free retention verdict stored on both rows of an image turn. */
+export function imageDerivedMark(turn: { suppressMemory: boolean; containsPeople: boolean }): Required<Pick<ChatMessage, 'imageDerived'>> {
+  return { imageDerived: { suppressed: turn.suppressMemory, people: turn.containsPeople } };
 }
