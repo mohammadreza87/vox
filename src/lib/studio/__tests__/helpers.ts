@@ -27,6 +27,8 @@ import type { ElevenLabsStudio, OpenAIMedia, VoiceOptions } from '../media';
 import { Studio } from '../service';
 import { StudioStore } from '../store';
 import { FileAgentChoiceStore } from '../../circles/choice-store';
+import { CircleRepository } from '../../circles/repository';
+import { CircleService } from '../../circles/service';
 import type { AgentVisibility, Member, PersonaSpec, Role } from '../types';
 
 export const SECRET = 'test-secret-that-is-at-least-32-characters-long';
@@ -213,6 +215,8 @@ export function makeStudio(options: { openai?: boolean; eleven?: boolean; manage
     logger,
     now: () => clock.now,
     choices: new FileAgentChoiceStore(join(dir, 'circles')),
+    // Wired like runtime.ts; inert until a test turns STUDIO_CIRCLES=circles and allowlists a chat.
+    circleLedger: new CircleService(new CircleRepository(new FileAdaptiveStorage(join(dir, 'circles', 'ledger')))),
   });
   return {
     studio, store, dir, personaLLM, chatLLM, openai, eleven, manager, bots, botFor, memory, imageToJpeg, svgToPng, logger, clock, adaptive,

@@ -63,3 +63,19 @@ export function receiptOwner(id: string): number | undefined {
   const owner = match ? parseInt(match[1], 36) : NaN;
   return Number.isSafeInteger(owner) && owner > 0 ? owner : undefined;
 }
+
+/** STUDIO_CIRCLE_CHATS: the pilot allowlist of group chat ids, comma-separated; anything malformed is ignored (fail closed). */
+export function parseCircleChats(value?: string): ReadonlySet<number> {
+  return new Set((value ?? '').split(',').map((v) => v.trim()).filter((v) => /^-?[1-9]\d{0,15}$/.test(v)).map(Number).filter(Number.isSafeInteger));
+}
+
+/** A group card's id in its callback data: 12 random base64url characters, never a receipt id (no '-' owner part). */
+export const newCardId = () => `g${randomBytes(9).toString('base64url').replace(/-/g, '_')}`;
+
+/**
+ * The URL button on every group card, welcome and nudge. S2: the DM hop `t.me/<bot>?start=j_<joinCode>`.
+ * S4 switches this one function to the direct Mini App link (R2 decision 5).
+ */
+export function circleJoinUrl(botUsername: string, joinCode: string): string {
+  return `https://t.me/${botUsername}?start=${startPayload('join', joinCode)}`;
+}

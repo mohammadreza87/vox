@@ -93,6 +93,9 @@ export const PURPOSES = [
   'optional.biometric_recognition', 'optional.reminder_delivery',
   'optional.proactive_suggestions', 'optional.content_quality_review', 'optional.relationship_outreach',
   'optional.marketing', 'model_training',
+  // Circles group notes (GROUP_AGENTS_SPEC §8.1): vocabulary only. Its consent lives in the per-chat
+  // circle ledger, never in the account document, so it is not an OPTIONAL_PURPOSES row (still 16).
+  'optional.group_memory',
 ] as const;
 export type Purpose = typeof PURPOSES[number];
 

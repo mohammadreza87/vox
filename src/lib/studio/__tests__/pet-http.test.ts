@@ -390,6 +390,24 @@ describe('the person’s own pet data (guest rights)', () => {
     expect(await (await call(['export'], { as: ID.stranger })).json()).toEqual({ petCare: [] });
     expect(await (await call(['forget'], { as: ID.stranger, body: {} })).json()).toEqual({ erased: 0 });
   });
+
+  it('export and forget include the person\'s own circle participation (Circles S2), and only theirs', async () => {
+    const { h, call } = await setup({ visibility: 'public' });
+    const chatId = -100888, ledger = h.studio.deps.circleLedger!;
+    await ledger.open({ chatId, agentId: 'agent-x', openedBy: ID.alice, at: h.clock.now, card: { id: 'gcard', copyHash: 'a'.repeat(64), locale: 'en', noticeVersion: 'circle-v1' } });
+    h.clock.now = new Date(h.clock.now.getTime() + 1000);
+    for (const id of [ID.stranger, 4242]) {
+      await ledger.index(id, chatId);
+      expect(await ledger.decide(chatId, { telegramId: id, choice: 'joined', cardId: 'gcard', eventId: `cb-${id}`, at: h.clock.now, surface: 'group_card' })).toMatchObject({ ok: true });
+    }
+    const exported = await (await call(['export'], { as: ID.stranger })).json();
+    expect(exported.circles).toEqual([expect.objectContaining({ chatId, state: 'joined', windows: [{ joinedAt: h.clock.now.toISOString() }],
+      evidence: expect.objectContaining({ eventId: `cb-${ID.stranger}`, adultDeclared: true }) })]);
+    expect(JSON.stringify(exported)).not.toContain('4242');
+    expect(await (await call(['forget'], { as: ID.stranger, body: {} })).json()).toEqual({ erased: 0, circlesErased: 1 });
+    expect((await ledger.get(chatId))!.participants.map((p) => p.telegramId)).toEqual([4242]);
+    expect(await (await call(['export'], { as: ID.stranger })).json()).toEqual({ petCare: [] });
+  });
 });
 
 describe('slow requests and the cap windows', () => {

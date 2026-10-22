@@ -22,7 +22,7 @@ import type { ChatContext, ChatMessage, MemoryRecord, MemoryScope, Persona } fro
 import type { ChatHistoryStore, MemoryStore, ShareOfferStore, UpdateDeduper } from './memory/store';
 import type { VoiceService } from './voice';
 import type { VoiceNoteVerifier } from './identity/voice-band';
-import type { TelegramBotClient, TelegramCallbackQuery, TelegramMessage, TelegramUpdate } from './telegram/client';
+import type { InlineKeyboard, TelegramBotClient, TelegramCallbackQuery, TelegramMessage, TelegramUpdate, TelegramUser } from './telegram/client';
 import { attachTurnBlock, buildPromptLayout, buildSystemPrompt, LIVE_CALL_FRAME, PROACTIVE_GROUP_FRAME, type PromptInput } from './conversation/prompt';
 import { tirehFlags } from './flags';
 import { emptyReplyFallback, isDegenerateReply, toPlainChat } from './conversation/format';
@@ -171,6 +171,8 @@ export interface GatewayDeps {
   webAppUrl?: string;
   /** RAM-only recent visible group lines, follow-ups and reply claims; share one across rebuilt gateways. */
   groupWindow?: GroupWindow;
+  /** Circles: URL buttons for an addressed group reply (the once-a-day join nudge); undefined = none. */
+  replyKeyboard?(personaId: string, chatId: number, from: TelegramUser): Promise<InlineKeyboard | undefined>;
 }
 
 /** Why a proactive claim was refused. */
@@ -1316,10 +1318,13 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
       }
     }
     if (!await canSend()) return null;
+    const nudge = chat.kind === 'group' && action === 'reply' && message.from && this.deps.replyKeyboard
+      ? await this.deps.replyKeyboard(persona.id, message.chat.id, message.from).catch(() => undefined) : undefined;
+    const extra = nudge ? { keyboard: nudge } : {};
     if (audioSent) {
       // A failed transcript must not report that an already-delivered voice failed.
       if (canDeliverNow && !canDeliverNow()) return null;
-      try { await timed('send', () => bot.sendMessage(message.chat.id, withSources(reply, sources), { replyTo, ...(canDeliverNow ? {authorizeNow: canDeliverNow} : {}) })); }
+      try { await timed('send', () => bot.sendMessage(message.chat.id, withSources(reply, sources), { replyTo, ...extra, ...(canDeliverNow ? {authorizeNow: canDeliverNow} : {}) })); }
       catch { logTelegramDiagnostic(this.log, 'voice_transcript_failed'); }
       return reply;
     }
@@ -1328,7 +1333,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
       : "I couldn't send the voice message. Here's the text instead:";
     const delivered = voiceWanted ? `${fallback}\n\n${reply}` : reply;
     if (canDeliverNow && !canDeliverNow()) return null;
-    await timed('send', () => bot.sendMessage(message.chat.id, withSources(delivered, sources), { replyTo, ...(canDeliverNow ? {authorizeNow: canDeliverNow} : {}) }));
+    await timed('send', () => bot.sendMessage(message.chat.id, withSources(delivered, sources), { replyTo, ...extra, ...(canDeliverNow ? {authorizeNow: canDeliverNow} : {}) }));
     return delivered;
   }
 
