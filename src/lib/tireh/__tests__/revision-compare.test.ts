@@ -5,6 +5,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LLMRequest } from '../llm';
+import { systemText } from '../llm-content';
 import { PersonaGateway } from '../gateway';
 import { InMemoryChatHistoryStore, InMemoryMemoryStore, InMemoryShareOfferStore, InMemoryUpdateDeduper } from '../memory/store';
 import { OrgDirectory } from '../org/directory';
@@ -71,7 +72,8 @@ describe('history-privacy cases through revision compares', () => {
     await x.gateway.converse('aria', 'reza', 'hello', { space: 'personal' });
     const request = x.llm.replyRequests.at(-1)!;
     expect(JSON.stringify(request)).not.toContain('WORK_CANARY');
-    expect(request.messages[0].content).toContain('PERSONAL_EXPLICIT_CONTEXT');
+    // TIREH_CACHED_PROMPT moves saved context from an unshifted message into the per-turn block.
+    expect([request.messages[0].content, ...request.messages.flatMap(m => m.trailingText ?? []), request.systemTail ?? ''].join('\n')).toContain('PERSONAL_EXPLICIT_CONTEXT');
   });
 
   it('drops output if the server audience changes while generation is running', async () => {
@@ -90,7 +92,7 @@ describe('history-privacy cases through revision compares', () => {
     const entered = gate(), release = gate();
     const original = x.llm.complete.bind(x.llm);
     x.llm.complete = async (request: LLMRequest) => {
-      if (request.system.startsWith('You extract')) { entered.open(); await release.opened; return JSON.stringify(fact('WITHDRAWN_CANARY')); }
+      if (systemText(request.system).startsWith('You extract')) { entered.open(); await release.opened; return JSON.stringify(fact('WITHDRAWN_CANARY')); }
       return original(request);
     };
     const turn = x.gateway.converse('aria', 'reza', 'WITHDRAWN_CANARY');
@@ -111,7 +113,7 @@ describe('history-privacy cases through revision compares', () => {
     const entered = gate(), release = gate();
     const original = x.llm.complete.bind(x.llm);
     x.llm.complete = async (request: LLMRequest) => {
-      if (request.system.startsWith('You extract')) { entered.open(); await release.opened; return JSON.stringify(fact('RACE_CANARY')); }
+      if (systemText(request.system).startsWith('You extract')) { entered.open(); await release.opened; return JSON.stringify(fact('RACE_CANARY')); }
       return original(request);
     };
     const turn = x.gateway.converse('aria', 'reza', 'say more');
@@ -140,7 +142,7 @@ describe('gateway privacy mutation fences through revision compares', () => {
     const atModel = gate(), generated = gate<string>();
     const original = x.llm.complete.bind(x.llm);
     x.llm.complete = async (request: LLMRequest) => {
-      if (request.system.startsWith('You extract')) return original(request);
+      if (systemText(request.system).startsWith('You extract')) return original(request);
       atModel.open(); return generated.opened;
     };
     const running = x.gateway.handleUpdate('aria', kind === 'group' ? groupText(GAMEEND_CHAT, TG.reza, 'Aria, can you remind me?') : privateText(TG.reza, 'Can you remind me?'));
@@ -158,7 +160,7 @@ describe('gateway privacy mutation fences through revision compares', () => {
     const atExtractor = gate(), extracted = gate<string>();
     const original = x.llm.complete.bind(x.llm);
     x.llm.complete = async (request: LLMRequest) => {
-      if (!request.system.startsWith('You extract')) return original(request);
+      if (!systemText(request.system).startsWith('You extract')) return original(request);
       atExtractor.open(); return extracted.opened;
     };
     const running = x.gateway.handleUpdate('aria', kind === 'group' ? groupText(GAMEEND_CHAT, TG.reza, 'Aria, remember my appointment on Friday') : privateText(TG.reza, 'Remember my appointment on Friday'));

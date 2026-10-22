@@ -12,6 +12,9 @@ import {
   containsBytes, IMAGE_CANARIES, imageAnswers, imageBot, photoLadder, privatePhoto, scriptedDecider, textAnswers, VisionFakeLLM,
 } from './images-fixtures';
 
+/** Model-visible prompt text: system blocks plus any per-turn block (TIREH_CACHED_PROMPT puts memories there). */
+const visibleText = (request: LLMRequest): string => [systemText(request.system), ...request.messages.flatMap((m) => m.trailingText ?? []), request.systemTail ?? ''].join('\n\n');
+
 type Decider = ReturnType<typeof scriptedDecider>;
 
 function makeImageGateway(opts: { decider?: Decider; fastLlm?: boolean; runtimePrivacy?: RuntimePrivacy; withGuest?: boolean } = {}) {
@@ -146,7 +149,7 @@ describe('S12 gateway: flag on', () => {
     expect(last.content).toBe(IMAGE_PLACEHOLDER_TEXT);
     expect(last.images).toHaveLength(1);
     const data = last.images![0].data;
-    const system = systemText(request.system);
+    const system = visibleText(request);
     expect(system).not.toContain(data);
     expect(system).not.toContain(data.slice(0, 32));
     expect(system).not.toMatch(/photo_of_people|contains_people|contains_sensitive_document|image_task|image_kind/);
@@ -194,11 +197,11 @@ describe('S12 gateway: flag on', () => {
     expect(stored.map((m) => m.content)).toEqual(["Reza's flight to Berlin is on Friday"]);
     expect(stored.some((m) => IMAGE_PEOPLE_DESCRIPTION.test(m.content))).toBe(false);
     expect(stored.some((m) => m.type === 'relationship')).toBe(false);
-    for (const request of h.replies()) expect(systemText(request.system)).not.toMatch(/red jacket|photo_of_people|contains_people/);
+    for (const request of h.replies()) expect(visibleText(request)).not.toMatch(/red jacket|photo_of_people|contains_people/);
 
     // A later text turn sees the kept fact but no description.
     await h.gateway.handleUpdate('aria', { update_id: 991_000, message: { message_id: 99_500, from: { id: TG.reza, is_bot: false, first_name: 'x' }, chat: { id: TG.reza, type: 'private' }, date: 0, text: 'when is my trip?' } });
-    const next = systemText(h.replies().at(-1)!.system);
+    const next = visibleText(h.replies().at(-1)!);
     expect(next).toContain('Berlin');
     expect(next).not.toMatch(/red jacket|wearing/);
     expect(h.replies().at(-1)!.messages.every((m) => !m.images)).toBe(true);
