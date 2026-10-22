@@ -27,15 +27,14 @@ Official guide and API reference checked 19 October 2026:
 - https://developers.openai.com/api/docs/guides/decisions
 - https://developers.openai.com/api/reference/resources/decisions/methods/create
 
-The installed `openai` SDK is 7.x (7.30.0 or later; the lockfile pins 7.39.0), which
-requires Node 22. `OpenAIDecisionProvider` calls the typed helper
-`client.decisions.create` when the client exposes it and otherwise falls back to the
-public `client.post('/decisions')`, both against the documented `POST /v1/decisions`.
-Both paths send the same body `{ model, input, questions, prompt_cache_options: { mode: 'explicit' } }`
-with `maxRetries: 0`, the caller's signal and a timeout of `options.timeoutMs`
-(clamped to 1–5000 ms; 500 ms by default). The request is re-validated with zod before
-either path. `openai-compat.test.ts` proves the URL, body and transport fence with a
-mocked fetch, without network or credentials.
+The installed SDK is openai 7.34.0 (>= 7.30.0, which requires Node 22).
+`OpenAIDecisionProvider` calls the SDK's `client.decisions.create` when present and
+otherwise the public `post('/decisions')`. Both send the identical documented
+`POST /v1/decisions` body with `maxRetries: 0`, and a provider timeout of
+`options.timeoutMs`, clamped to 1-5000 ms, defaulting to 500. Mocked-fetch tests
+(`decisions.test.ts`, `transport-fence.test.ts`, `openai-compat.test.ts`) verify the URL,
+body, signal, error names and the authority fence on both paths without network or
+credentials.
 `prompt_cache_options: { mode: 'explicit' }` with no breakpoints requests no prompt
 caching. This is not a provider retention or regional processing guarantee.
 
