@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MemoryRecord, MemoryScope } from '../../tireh/types';
 import { groupText } from '../../tireh/__tests__/fixtures';
 import { decryptSecret } from '../crypto';
@@ -611,24 +611,31 @@ describe('fire and successor', () => {
   });
 
   it('a successor inherits memories at hire time when the predecessor was fired with transfer', async () => {
-    const { agent: old } = await hire(h, org.alice);
-    await h.memory.memories.add(mem(old.id, { content: 'Alice prefers mornings', scope: { kind: 'private', personId: personId(ID.alice) } }));
-    await h.studio.fire(org.admin, old.id, { reason: 'reset', memoryPolicy: 'transfer', confirmName: 'Nova' });
+    // Pins the base copy (flag unset). TIREH_SHARING_V2=1 filters private records out; that arm is
+    // covered by invariants (12) and sharing-v2 (d).
+    vi.stubEnv('TIREH_SHARING_V2', '');
+    try {
+      const { agent: old } = await hire(h, org.alice);
+      await h.memory.memories.add(mem(old.id, { content: 'Alice prefers mornings', scope: { kind: 'private', personId: personId(ID.alice) } }));
+      await h.studio.fire(org.admin, old.id, { reason: 'reset', memoryPolicy: 'transfer', confirmName: 'Nova' });
 
-    h.personaLLM.push(draftJson({ name: 'Nova Two' }));
-    const { agent: draft } = await h.studio.draft(org.alice, {}, old.id);
-    expect(draft.successorOf).toBe(old.id);
-    expect(await h.memory.memories.listActive(draft.id)).toHaveLength(0); // not before hire
+      h.personaLLM.push(draftJson({ name: 'Nova Two' }));
+      const { agent: draft } = await h.studio.draft(org.alice, {}, old.id);
+      expect(draft.successorOf).toBe(old.id);
+      expect(await h.memory.memories.listActive(draft.id)).toHaveLength(0); // not before hire
 
-    await h.studio.publish(org.alice, draft.id);
-    await h.studio.onManagedBot({ user: { id: ID.alice, is_bot: false, first_name: 'A' }, bot: { id: 777, is_bot: true, first_name: 'N', username: 'hoor_novatwo_bot' } });
-    const inherited = await h.memory.memories.listActive(draft.id);
-    expect(inherited.map((m) => m.content)).toEqual(['Alice prefers mornings']);
-    expect(inherited[0].scope).toEqual({ kind: 'private', personId: personId(ID.alice) });
-    expect(await h.memory.memories.listActive(old.id)).toHaveLength(1);
-    // A token refresh does not copy them twice.
-    await h.studio.onManagedBot({ user: { id: ID.alice, is_bot: false, first_name: 'A' }, bot: { id: 777, is_bot: true, first_name: 'N', username: 'hoor_novatwo_bot' } });
-    expect(await h.memory.memories.listActive(draft.id)).toHaveLength(1);
+      await h.studio.publish(org.alice, draft.id);
+      await h.studio.onManagedBot({ user: { id: ID.alice, is_bot: false, first_name: 'A' }, bot: { id: 777, is_bot: true, first_name: 'N', username: 'hoor_novatwo_bot' } });
+      const inherited = await h.memory.memories.listActive(draft.id);
+      expect(inherited.map((m) => m.content)).toEqual(['Alice prefers mornings']);
+      expect(inherited[0].scope).toEqual({ kind: 'private', personId: personId(ID.alice) });
+      expect(await h.memory.memories.listActive(old.id)).toHaveLength(1);
+      // A token refresh does not copy them twice.
+      await h.studio.onManagedBot({ user: { id: ID.alice, is_bot: false, first_name: 'A' }, bot: { id: 777, is_bot: true, first_name: 'N', username: 'hoor_novatwo_bot' } });
+      expect(await h.memory.memories.listActive(draft.id)).toHaveLength(1);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it('no inheritance when the predecessor was archived', async () => {

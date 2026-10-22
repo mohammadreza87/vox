@@ -333,6 +333,10 @@ describe('sharing invariants (section 4.6)', () => {
     const realRun = await scenario(real);
     expect((await real.listActive(realRun.next.id)).map((m) => m.content).sort()).toEqual(['GROUP', 'PEOPLE', 'PROJECT']);
     expect(await real.tombstonesOf(realRun.next.id)).toEqual(await real.tombstonesOf(realRun.old.id));
+    // Non-vacuous: the carried set holds the deleted record's and the pre-tombstoned lineage's events,
+    // and the successor cannot relearn the deleted record from a replay.
+    expect(await real.tombstonesOf(realRun.next.id)).toEqual(expect.arrayContaining(['src-GONE', 'src-LINEAGE']));
+    await expect(real.add(newMemory({ personaId: realRun.next.id, scope: { kind: 'group', groupId: 'chat-1' }, source: realRun.gone.source }))).rejects.toBeInstanceOf(StaleMemoryWriteError);
 
     // A store without the optional methods still inherits nothing (fail closed).
     const plain = new NoTombstoneStore();

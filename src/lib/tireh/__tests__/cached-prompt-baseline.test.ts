@@ -6,7 +6,7 @@
  * bodies and the gateway reply requests. With TIREH_CACHED_PROMPT unset every
  * later commit must reproduce it exactly. Never regenerate it with `-u`.
  */
-import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AnthropicLLM, GeminiLLM, type LLMRequest } from '../llm';
 import { buildSystemPrompt, type PromptInput } from '../conversation/prompt';
 import { PersonaGateway, type RuntimePrivacy, type RuntimePrivacyState } from '../gateway';
@@ -41,6 +41,10 @@ const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
 afterEach(() => { vi.useRealTimers(); });
 afterAll(() => { vi.unstubAllEnvs(); });
+
+/** The goldens are defined for every flag unset: pin the other steps' flags off so an exported env cannot change them. */
+const OTHER_FLAGS = ['TIREH_RETRIEVAL_V2', 'TIREH_VECTOR_RETRIEVAL', 'TIREH_SHARING_V2', 'TIREH_AUDIT_LOG', 'STUDIO_DECIDER', 'TRIAGE_QUESTION_SET', 'TIREH_DECISION_LOG', 'STUDIO_IMAGES', 'STUDIO_VOICE_RECOGNITION'];
+beforeEach(() => { for (const flag of OTHER_FLAGS) vi.stubEnv(flag, ''); });
 
 function skillPersona(): Persona {
   const persona = testOrg().getPersona('aria')!;

@@ -65,8 +65,10 @@ describe('identity hints never reach the adaptive policy inputs', () => {
     for (const name of files) {
       const text = source(`../${name}`);
       expect(text, name).not.toMatch(/\b(AccessRequest|IdentityContext|PolicySnapshot|authorizeAccess|resolveVerifiedPerson)\b/);
-      for (const line of text.split('\n').filter(l => /^\s*(import|export)\b.*\bfrom\s+'/.test(l))) {
-        const specifier = /from\s+'([^']+)'/.exec(line)?.[1] ?? '';
+      // Any module specifier: single-line or the closing line of a multi-line import/export, plus import('...') and require('...').
+      expect(text, `${name}: dynamic import or require`).not.toMatch(/\b(import|require)\s*\(/);
+      for (const line of text.split('\n').filter(l => /\bfrom\s+'/.test(l) || /^\s*import\s+'/.test(l))) {
+        const specifier = /(?:from\s+|^\s*import\s+)'([^']+)'/.exec(line)?.[1] ?? '';
         expect(specifier, `${name}: ${line}`).not.toMatch(/adaptive\/policy|adaptive\/persistence|gateway|studio|llm/);
         if (specifier.includes('adaptive')) adaptiveImports.push(`${name}: ${line.trim()}`);
       }
