@@ -52,7 +52,8 @@ describe('proactive group conversations', () => {
     expect(await h.gateway.handleUpdate('aria', groupText(GAMEEND_CHAT, TG.milad, 'Any ideas to improve onboarding?'))).toBe('replied');
     expect(h.claimGroupReply).toHaveBeenCalledOnce();
     h.claimGroupReply.mockResolvedValue(false);
-    expect(await h.gateway.handleUpdate('aria', groupText(GAMEEND_CHAT, TG.milad, 'Another open question?'))).toBe('ignored');
+    // Another speaker: Milad's own next message would be a follow-up to the reply.
+    expect(await h.gateway.handleUpdate('aria', groupText(GAMEEND_CHAT, TG.reza, 'Another open question?'))).toBe('ignored');
     expect(h.bot.sendMessage).toHaveBeenCalledOnce();
   });
 
@@ -63,7 +64,7 @@ describe('proactive group conversations', () => {
     expect(await h.gateway.handleUpdate('aria', groupText(GAMEEND_CHAT, TG.milad, 'Aria, can you help?'))).toBe('replied');
     expect(h.claimGroupReply).not.toHaveBeenCalled();
     expect(JSON.stringify(h.logger.warn.mock.calls)).not.toContain('PRIVATE_PROVIDER_PAYLOAD');
-    expect(await h.gateway.handleUpdate('aria', groupText(GAMEEND_CHAT, TG.milad, 'Anyone?'))).toBe('ignored');
+    expect(await h.gateway.handleUpdate('aria', groupText(GAMEEND_CHAT, TG.reza, 'Anyone?'))).toBe('ignored');
     expect(h.bot.sendMessage).toHaveBeenCalledOnce();
   });
 
