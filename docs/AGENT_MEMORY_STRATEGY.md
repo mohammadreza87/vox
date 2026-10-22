@@ -126,6 +126,18 @@ When group membership is unknown, historical group memory is usable only if its 
 
 Revocation prevents future use; it cannot erase what recipients already heard or copied. Deletion should immediately suppress retrieval, invalidate derived context, then purge eligible source content, summaries, vectors, offers and caches. Keep minimal deletion tombstones to prevent relearning during replay or backup restoration. Display purge completion and backup expiry truthfully.
 
+### Personal notes and Circles
+
+Status, 23 October 2026: Circles slices S1–S3 on `feat/group-agents-consent`, behind `STUDIO_CIRCLES=circles` and the `STUDIO_CIRCLE_CHATS` allowlist; not deployed. Rules are in [PRIVACY_AND_CONSENT.md](implementation/PRIVACY_AND_CONSENT.md) (`optional.group_memory`, PRIV-032, PRIV-039).
+
+Circles add a narrow **personal notes** container for people outside the Studio, including outsiders who join a public agent. It is separate from the private, group and selected-people containers above, and from the 16-row account ledger.
+
+- **Per person.** Each Telegram person who tapped Join has one notes document (`circle-notes:v1:<sha256(telegramId)>`). Every Vox agent the person joined can use it, but only copies that name that agent.
+- **Explicit saves only.** "Remember this" in a DM saves one copy for the asker. "Remember for us" in a circle-complete group saves one copy into each joined member's own notes, all sharing one `noteId` with the group title, author and save time. Only the asker can confirm the save. Each recipient also gets a quiet DM copy. A `NoteSelector` seam keeps a disabled `decisions` option for later automatic selection.
+- **Recall.** In a DM, the person's own copies are used. In a group, a note is used only when the turn is circle-complete for that agent and every current reader still holds an un-erased copy, so erasing your copy also stops its use there. Notes are turn context only: never extracted into other memory.
+- **Leaving and erasing.** Leaving a circle only stops new copies. Erasing removes only your own copy, and "forget me" removes all of your own copies and choices. Other members keep theirs: this rule is **PENDING PRIVACY OWNER SIGN-OFF**, and counsel is asked whether an author's erasure must reach other members' copies.
+- **Bounds.** Each copy is kept 365 days. A person holds at most 500 active copies of up to 2,000 characters, and at most 12 people join one group's notes.
+
 ## The memory record
 
 Proposed fields, rather than an existing API schema:

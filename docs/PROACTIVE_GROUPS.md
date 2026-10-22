@@ -65,6 +65,16 @@ These probes used no user transcripts. They establish bounded provider access an
 
 This release targets the Mac Studio polling runtime, which processes each bot’s updates serially. Concurrent webhook memory writes are not fully qualified: two simultaneous corrections to the same author/topic can leave conflicting active records because memory replacement is not an atomic ordered write. The receipt window prevents duplicate extraction claims; it does not promise atomic ordered memory updates. Do not use this release report as Firebase/webhook qualification.
 
+### Circles: joining a group's notes (pilot, off by default)
+
+Circles let people in a group choose **Join · 18+**, **Only reply to me** or **Not me** for a public Vox agent, and keep explicit notes. They run only with `STUDIO_CIRCLES=circles`, in chats on `STUDIO_CIRCLE_CHATS`, and only after a host adds the agent. Privacy rules and card copy are in [PRIVACY_AND_CONSENT.md](implementation/PRIVACY_AND_CONSENT.md) (UX-16, UX-17).
+
+- **Cap:** at most 12 people can join one group's notes. Notes are used in the group only while every human reading it has joined; other bots count as readers.
+- **Leaves:** Vox bots join as non-admins, so Telegram does not send them member updates. A leave is seen on the next service message or the next membership check during a turn. Until then the group fails closed: notes stay off when the count cannot be confirmed.
+- **Safe mode needs ordinary messages:** the RAM-only window (8 lines, 15 minutes) sees unaddressed lines only when **Group Privacy** is disabled or the bot is a group admin (see above). Otherwise it sees only mentions and replies; behaviour stays correct, just less fluent.
+- **Notifications are Telegram-native:** cards, welcomes, save proposals and confirmations are quiet messages, and counters change by edits, which never notify. Only "Everyone's in" notifies, at most once a day. Each person's own Telegram mute settings control the rest; Vox asks for no notification permission. A group save also reaches each joined member as a quiet DM ("📌 Saved from <group>: …").
+- **Pet in the group:** after a one-time BotFather setup of a Main Mini App on the Vox manager bot, the card's **Details & pet 🐾** button opens each person's own pet over the group chat. Until then it opens the agent's DM.
+
 ## فارسی
 
 بررسی مخاطبان فعلی نیز اعمال می‌شود: اگر مخاطبان گروه نامعلوم باشند، فقط گفت‌وگوی جاری به مدل می‌رسد و حافظهٔ ذخیره‌شده یا تاریخچهٔ قبلی ارسال نمی‌شود. برای مخاطبان معلوم، تاریخچهٔ قبلی گروه باید نشان سیاست گروه را داشته باشد؛ همهٔ خوانندگان فعلی باید برای تاریخچه و حافظه‌ها مجاز باشند. خطاب مستقیم نیز این بررسی‌ها را دور نمی‌زند؛ فقط از بودجهٔ پاسخ خودجوش مستثناست. جایی که تاریخچه ذخیره نمی‌شود (مخاطبان نامعلوم یا تاریخچهٔ خاموش)، عامل حداکثر ۸ خط آخرِ قابل‌دیدن همان گفت‌وگو از ۱۵ دقیقهٔ گذشته را هم می‌بیند: فقط در حافظهٔ برنامهٔ در حال اجرا، بدون ذخیره، بدون استخراج به حافظه و بدون رسیدن به درخواست عامل دیگر؛ و با تغییر مخاطبان (از جمله تغییر یا ناخوانا بودن تعداد اعضا)، خروج یا حذف عامل، تغییر اشتراک‌گذاری یا فراموش کردن تاریخچه‌اش خالی می‌شود.
@@ -129,3 +139,13 @@ This release targets the Mac Studio polling runtime, which processes each bot’
 در این بررسی‌ها از متن گفت‌وگوی کاربران استفاده نشد. نتیجه فقط شواهد محدود دسترسی به سرویس و ساختار پاسخ را نشان می‌دهد؛ توزیع تأخیر، کیفیت گفت‌وگوی گروهی، آزمون سرتاسری تلگرام یا انتشار روی محیط عملیاتی را ثابت نمی‌کند. این سند ادعا نمی‌کند قابلیت منتشر شده است. پذیرش انتشار باید دریافت واقعی پیام‌های یک گروه، پاسخ‌گویی انتخابی، یادسپاری در حالت سکوت، جداسازی حافظه، بازیابی پس از خطا و نسخهٔ دقیق در حال سرویس‌دهی را جداگانه بررسی کند.
 
 هدف این انتشار، اجرای polling روی Mac Studio است که پیام‌های هر ربات را به‌ترتیب پردازش می‌کند. نوشتن هم‌زمان حافظه در اجرای webhook هنوز به‌طور کامل تأیید نشده است: دو اصلاح هم‌زمان از یک گوینده دربارهٔ یک موضوع ممکن است رکوردهای فعال متناقض باقی بگذارند، چون جایگزینی حافظه یک نوشتن اتمی و مرتب نیست. پنجرهٔ رسید، درخواست تکراری استخراج را محدود می‌کند؛ تضمین به‌روزرسانی اتمی و مرتب حافظه نمی‌دهد. این گزارش، تأیید اجرای Firebase یا webhook نیست.
+
+### حلقه‌ها: پیوستن به یادداشت‌های گروه (آزمایشی، پیش‌فرض خاموش)
+
+با حلقه‌ها، افراد یک گروه برای یک عامل عمومی Vox یکی از **می‌پیوندم · ۱۸+**، **فقط به من جواب بده** یا **مرا حساب نکن** را انتخاب می‌کنند و یادداشت‌های صریح نگه داشته می‌شوند. این قابلیت فقط با `STUDIO_CIRCLES=circles`، در گفت‌وگوهای فهرست `STUDIO_CIRCLE_CHATS` و فقط پس از اضافه شدن عامل توسط میزبان کار می‌کند. قواعد حریم خصوصی و متن کارت‌ها در [PRIVACY_AND_CONSENT.md](implementation/PRIVACY_AND_CONSENT.md) (UX-16 و UX-17) آمده است.
+
+- **سقف:** حداکثر ۱۲ نفر می‌توانند به یادداشت‌های یک گروه بپیوندند. یادداشت‌ها در گروه فقط وقتی به کار می‌روند که همهٔ انسان‌هایی که گروه را می‌خوانند پیوسته باشند؛ ربات‌های دیگر هم خواننده حساب می‌شوند.
+- **خروج اعضا:** ربات‌های Vox بدون دسترسی مدیر به گروه می‌پیوندند، پس تلگرام تغییرات اعضا را برایشان نمی‌فرستد. خروج یک نفر با پیام سرویس بعدی یا بررسی بعدی اعضا در هنگام پاسخ دیده می‌شود. تا آن موقع گروه محتاطانه عمل می‌کند: وقتی تعداد تأیید نشود، یادداشت‌ها خاموش می‌مانند.
+- **حالت امن به پیام‌های معمولی نیاز دارد:** پنجرهٔ موقت در حافظهٔ برنامه (۸ خط، ۱۵ دقیقه) فقط وقتی خط‌های بدون خطاب را می‌بیند که **Group Privacy / حریم خصوصی گروه** غیرفعال باشد یا ربات مدیر گروه باشد (بالاتر را ببینید). در غیر این صورت فقط منشن‌ها و پاسخ‌ها را می‌بیند؛ رفتار درست می‌ماند، فقط روانی کمتری دارد.
+- **اعلان‌ها از خود تلگرام است:** کارت‌ها، خوشامدها، پیشنهاد ذخیره و تأییدها بی‌صدا فرستاده می‌شوند و شمارنده‌ها با ویرایش تغییر می‌کنند که هرگز اعلان نمی‌دهد. فقط «همه پیوستند» اعلان می‌دهد، حداکثر روزی یک بار. بقیه را تنظیمات بی‌صدا کردن تلگرامِ خود هر فرد کنترل می‌کند؛ Vox اجازهٔ اعلان نمی‌خواهد. ذخیره در گروه به‌صورت پیام خصوصی بی‌صدا («📌 از <گروه> ذخیره شد: …») هم به هر عضو پیوسته می‌رسد.
+- **پت در گروه:** پس از یک بار تنظیم Main Mini App برای ربات مدیر Vox در BotFather، دکمهٔ **جزئیات و پت 🐾** روی کارت، پت خود هر فرد را روی همان گفت‌وگوی گروه باز می‌کند. تا آن زمان، گفت‌وگوی خصوصی عامل را باز می‌کند.
