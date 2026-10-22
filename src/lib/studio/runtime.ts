@@ -46,16 +46,6 @@ import { StudioExperimentRuntime } from '../adaptive/experiments/runtime';
  *   STUDIO_WEB_SEARCH        off = agents never search the web (default: on, per-agent toggle)
  *   STUDIO_PERSONA_MODEL     model for persona design (default: stronger Claude model)
  *   STUDIO_ORG_NAME          default HOOR
- *
- * Voiceprints (S11L, shadow mode; docs/implementation/VOICE_PROVIDER_INTEGRATION.md):
- *   STUDIO_VOICE_RECOGNITION=1  voiceprint enrollment and shadow verification; capability
- *                            approval and biometric consent are still required (default off)
- *   VOICEPRINT_KEY           base64 of 32 bytes: the dedicated template key. Must never equal
- *                            or derive from STUDIO_SECRET. Required with the flag; alone it
- *                            keeps existing templates deletable (status/delete only)
- *   PYANNOTE_API_KEY         pyannoteAI voiceprint provider (absent = provider unavailable)
- *   PYANNOTE_BASE_URL        optional https origin (EU residency); default https://api.pyannote.ai
- *   VOICE_MATCH_THRESHOLDS_JSON  {"default":{match,uncertain,echo},"orgs":{"<org>":{...}}}
  */
 
 import { isAbsolute, join, parse, relative, resolve, sep } from 'path';
@@ -398,17 +388,17 @@ async function create(): Promise<Studio> {
     storage.adaptive!.setVoiceIdentityInvalidator(async ({ telegramId, space }) => {
       await studio.deps.voiceIdentity!.invalidate(telegramId, space);
     });
-    // S11L: with STUDIO_VOICE_RECOGNITION and VOICEPRINT_KEY unset nothing is wired (base behaviour).
-    const voiceprintIdentity = await import('./identity');
-    const vp = voiceprintIdentity.voiceprintConfigFromEnv(env, { storage: config.storage === 'firestore' ? 'firestore' : 'file', production: config.production });
-    if (vp) {
-      const store = config.storage === 'firestore'
-        ? new voiceprintIdentity.FirestoreVoiceprintStore(await (await import('@/lib/firebase-admin')).getAdminDb())
-        : new voiceprintIdentity.FileVoiceprintStore(join(config.dataDir, 'voiceprints-v1.json'));
-      studio.deps.voiceprints = new voiceprintIdentity.VoiceprintService({ store, cipher: vp.cipher, provider: vp.provider, thresholds: vp.thresholds,
-        orgKey: studio.deps.orgName, adaptive: storage.adaptive!, echoVoices: voiceprintIdentity.echoVoicesFromStudio(studio.deps.store, studio.deps.eleven) });
-      // Keeps the existing VoiceIdentityService invalidation and adds voiceprint deletion.
-      storage.adaptive!.setVoiceIdentityInvalidator(voiceprintIdentity.chainVoiceInvalidators(studio.deps.voiceIdentity!, studio.deps.voiceprints));
+    {
+      const { createStudioVoiceprints } = await import('./identity');
+      const voiceprints = await createStudioVoiceprints({ env, storage: config.storage === 'firestore' ? 'firestore' : 'file', dataDir: config.dataDir, orgKey: studio.deps.orgName, adaptive: storage.adaptive!, readState: () => storage.store.read(), eleven: studio.deps.eleven, logger: console });
+      if (voiceprints) {
+        studio.deps.voiceprints = voiceprints;
+        storage.adaptive!.setVoiceIdentityInvalidator(async (input) => {
+          await Promise.all([studio.deps.voiceIdentity!.invalidate(input.telegramId, input.space), voiceprints.invalidate(input.telegramId, input.space)]);
+        });
+        void voiceprints.sweep().catch(() => undefined);
+        if (process.env.STUDIO_VOICE_RECOGNITION === '1') void voiceprints.warmSelfEcho().catch(() => undefined);
+      }
     }
     studio.deps.observer = new AdaptiveObserverService(storage.adaptive!);
     const experimentDirectory = join(config.dataDir, 'controlled-experiments', 'v1');
