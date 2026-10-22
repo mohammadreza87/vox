@@ -8,7 +8,9 @@
  * exist first).
  */
 
-import OpenAI from 'openai';
+// Type-only: the SDK is loaded lazily on first embed, so importing cosine()
+// from retrieval.ts (and so from the gateway) never loads it.
+import type OpenAI from 'openai';
 import type { MemoryRecord } from '../types';
 import { contentHash } from './record-v2';
 
@@ -55,8 +57,11 @@ export class OpenAIEmbeddingProvider implements EmbeddingProvider {
     this.dimensions = options.dimensions ?? DEFAULT_EMBEDDING_DIMENSIONS;
   }
 
-  private openai(): OpenAI {
-    this.client ??= new OpenAI({ apiKey: this.apiKey, fetch: this.fetchImpl, maxRetries: 0, timeout: 10_000 });
+  private async openai(): Promise<OpenAI> {
+    if (!this.client) {
+      const { default: OpenAIClient } = await import('openai');
+      this.client = new OpenAIClient({ apiKey: this.apiKey, fetch: this.fetchImpl, maxRetries: 0, timeout: 10_000 });
+    }
     return this.client;
   }
 
@@ -70,7 +75,8 @@ export class OpenAIEmbeddingProvider implements EmbeddingProvider {
       const input = texts.slice(start, start + EMBEDDING_CHUNK);
       let data: Array<{ index: number; embedding: number[] }>;
       try {
-        const response = await this.openai().embeddings.create(
+        const client = await this.openai();
+        const response = await client.embeddings.create(
           { model: this.model, input, dimensions: this.dimensions, encoding_format: 'float' },
           { signal },
         );
