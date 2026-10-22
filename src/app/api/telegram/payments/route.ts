@@ -1,34 +1,12 @@
 import { NextResponse } from 'next/server';
 import { withAuth } from '@/lib/middleware/withAuth';
+import { TELEGRAM_PAYMENT_CURRENCY, TELEGRAM_PRICES, type TelegramPriceId } from '@/lib/telegram/prices';
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_PAYMENT_TOKEN = process.env.TELEGRAM_PAYMENT_TOKEN;
 
-// Price IDs for Telegram (in smallest currency unit - cents for USD)
-const PRICES = {
-  pro_monthly: {
-    amount: 999, // $9.99
-    label: 'Vox Pro - Monthly',
-    description: 'Unlimited messages, 3 voice clones, 10 custom contacts',
-  },
-  pro_annual: {
-    amount: 9999, // $99.99
-    label: 'Vox Pro - Annual',
-    description: 'Unlimited messages, 3 voice clones, 10 custom contacts (Save 17%)',
-  },
-  max_monthly: {
-    amount: 2999, // $29.99
-    label: 'Vox Max - Monthly',
-    description: 'Everything in Pro + unlimited voice clones & custom contacts',
-  },
-  max_annual: {
-    amount: 29999, // $299.99
-    label: 'Vox Max - Annual',
-    description: 'Everything in Pro + unlimited voice clones & custom contacts (Save 17%)',
-  },
-};
-
-type PriceId = keyof typeof PRICES;
+const PRICES = TELEGRAM_PRICES;
+type PriceId = TelegramPriceId;
 
 /**
  * POST /api/telegram/payments
@@ -36,8 +14,12 @@ type PriceId = keyof typeof PRICES;
  *
  * The invoice payload's userId is the verified Firebase uid, never a
  * caller-supplied id. Payment updates (pre_checkout_query and
- * successful_payment) are handled only by /api/telegram/webhook, behind
- * Telegram's secret-token check; this route has no update handler.
+ * successful_payment) are handled only by /api/telegram/webhook, which checks
+ * the payload's price, amount and currency against the same table. That route
+ * verifies Telegram's secret token only when TELEGRAM_WEBHOOK_SECRET is set (or
+ * rejects everything with TELEGRAM_WEBHOOK_FAIL_CLOSED=1); without either it is
+ * unauthenticated, so a deployment must set the secret before taking payments.
+ * This route has no update handler.
  */
 export const POST = withAuth(async (request) => {
   try {
@@ -85,7 +67,7 @@ export const POST = withAuth(async (request) => {
           description: price.description,
           payload: JSON.stringify({ priceId, userId, telegramId }),
           provider_token: TELEGRAM_PAYMENT_TOKEN,
-          currency: 'USD',
+          currency: TELEGRAM_PAYMENT_CURRENCY,
           prices: [
             {
               label: price.label,
