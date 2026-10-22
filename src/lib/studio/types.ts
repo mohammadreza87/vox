@@ -201,6 +201,8 @@ export interface StudioGroup {
   hasGuests: boolean;
   /** Monotonic audience epoch; leave/rejoin must not restore old sharing rights. */
   audienceEpoch?: number;
+  /** Who sees group-scoped history from before they joined. Default since_membership; only an explicit, audited admin re-snapshot widens. */
+  historyPolicy?: 'since_membership' | 'all_authorized_history';
   agentIds: string[];
   addedBy?: number;
   addedAt: string;

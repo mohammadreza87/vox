@@ -13,7 +13,9 @@ import { brandError, namedError } from '../error-contract';
 import { relationshipSourceIds, type RelationshipLoop, type RelationshipStore, type ObservationStore, type RelationshipKey, type RelationshipState, type Intention } from '../relationships';
 import { composeFollowUp } from '../relationships/compose';
 import type { RelationshipConfig } from './relationship-config';
-import { ownerSharePatch, ownerRevokePatch, validateShareRecipients } from '../tireh/memory/sharing';
+import { ownerSharePatch, ownerRevokePatch, validateShareRecipients, isSuccessorTransferable, successorCopy, resnapshotPatch, type TombstoneCarrier } from '../tireh/memory/sharing';
+import { tirehFlags } from '../tireh/flags';
+import type { AuditStore, SupersededNoticeStore } from '../tireh/audit';
 import { historyMessageForChat } from '../tireh/memory/visibility';
 import { logTelegramDiagnostic, profileStepDiagnostic, type TelegramDiagnostic } from '../tireh/telegram/diagnostics';
 import type { DirectAuthorityEvaluator } from '../adaptive/persistence/authority';
@@ -36,6 +38,8 @@ import type { LLM } from '../tireh/llm';
 import { TRIAGE_TIMEOUT_MS, triageInput, type Decider } from '../tireh/triage';
 import { readSkillPick, SANDBOX_SKILL_TIMEOUT_MS, skillQuestion, SKILL_QUESTION, type SkillRouting } from '../tireh/skill-routing';
 import type { ChatHistoryStore, MemoryStore, ShareOfferStore, UpdateDeduper } from '../tireh/memory/store';
+import { StaleMemoryWriteError } from '../tireh/memory/store';
+import type { MemoryRecord } from '../tireh/types';
 import type { Persona } from '../tireh/types';
 import { isVisibleToAudience, describeScope } from '../tireh/memory/visibility';
 import { buildSystemPrompt } from '../tireh/conversation/prompt';
@@ -52,7 +56,7 @@ import { decryptSecret, encryptSecret } from './crypto';
 import { cloudSvg } from './cloud-art';
 import { callToken, MAX_CALL_SECONDS, voiceLlmKey, voiceLlmKeyId } from './voice-call';
 import { avatarPrompt, defaultVoiceId, type ElevenLabsStudio, type LibraryVoice, type OpenAIMedia, type VoiceOptions, StudioVoiceService } from './media';
-import { personId, studioToOrg } from './org-bridge';
+import { personId, studioToOrg, groupId } from './org-bridge';
 import { draftPersona, randomLook, refinePersona, suggestUsername, validatePersona } from './persona';
 import { catalogView, projectCatalog, CATALOG, type Catalog } from './skills/catalog';
 import { catalogRole, catalogSkills, routeBrief as routeSkillBrief, ROUTE_TEXT_CHARS, type RouteFallbackReason } from './skills/route';
@@ -169,6 +173,10 @@ export interface StudioDeps {
   adaptive?: AdaptiveService;
   relationshipAuthority?: AdaptiveRelationshipService;
   shared?: SharedMemoryService;
+  /** S08 TIREH_AUDIT_LOG: content-free vox_audit rows. */
+  audit?: AuditStore;
+  /** S08 TIREH_SHARING_V2: supersede notices for recipients. */
+  memoryNotices?: SupersededNoticeStore;
   experience?: AdaptiveExperienceService;
   /** Turn rechecks read the snapshot's revisions here: Firestore runtimes pass a
    * FirestoreRevisionSource; the default reads in-process counters. */
@@ -1059,10 +1067,28 @@ export class Studio {
     const s = await this.deps.store.read();
     const predecessor = s.agents.find((a) => a.id === agent.successorOf);
     if (!predecessor || predecessor.memoryPolicy !== 'transfer') return;
-    for (const m of await this.deps.memory.memories.listActive(predecessor.id)) {
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      const { id, createdAt, updatedAt, ...rest } = m;
-      await this.deps.memory.memories.add({ ...rest, personaId: agent.id });
+    if (!tirehFlags().sharingV2) {
+      for (const m of await this.deps.memory.memories.listActive(predecessor.id)) {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const { id, createdAt, updatedAt, ...rest } = m;
+        await this.deps.memory.memories.add({ ...rest, personaId: agent.id });
+      }
+      return;
+    }
+    // S08 (TIREH_SHARING_V2): tombstones travel with the copies, so a store that cannot carry them inherits nothing (fail closed).
+    const store = this.deps.memory.memories as MemoryStore & TombstoneCarrier;
+    if (!store.tombstonesOf || !store.addTombstones) return;
+    const t = await store.tombstonesOf(predecessor.id);
+    if (t.length) await store.addTombstones(agent.id, t);
+    for (const m of await store.listActive(predecessor.id)) {
+      // TODO(S08 follow-up): per-record owner approval to transfer private records; voiceprints and style profiles never transfer.
+      if (!isSuccessorTransferable(m)) continue;
+      try {
+        await store.add(successorCopy(m, agent.id));
+      } catch (e) {
+        // A tombstoned lineage is skipped; any other failure is real.
+        if (!(e instanceof StaleMemoryWriteError)) throw e;
+      }
     }
   }
 
@@ -1086,6 +1112,83 @@ export class Studio {
         chatId: g.chatId, title: g.title, hasGuests: g.hasGuests, memberCount: g.memberIds.length,
         agents: g.agentIds.map((id) => s.agents.find((a) => a.id === id)).filter(Boolean).map((a) => ({ id: a!.id, name: a!.persona.name, look: a!.look })),
       }));
+  }
+
+  /**
+   * S08 (TIREH_SHARING_V2): an admin re-snapshots one group's existing
+   * normal-sensitivity group records for one named member, so they can see
+   * group memory from before they joined. Preview (apply false) returns only
+   * a count; apply adds exactly that member through updateIfShareVersion and
+   * is audited. Never removes anyone, never returns content and never replays
+   * old group history (its stamps still exclude the new member).
+   */
+  async resnapshotGroupMemory(actor: Member, chatId: number, telegramId: number, apply: boolean): Promise<{ count: number; applied: boolean }> {
+    if (!tirehFlags().sharingV2) throw new StudioError(404, 'Not found');
+    if (!atLeast(actor, 'admin')) throw forbidden('Only admins can change who sees group memory.');
+    if (!Number.isSafeInteger(chatId) || !Number.isSafeInteger(telegramId) || telegramId <= 0) throw bad('Choose a group member.');
+    const s = await this.deps.store.read();
+    const group = s.groups.find((g) => g.chatId === chatId);
+    if (!group) throw notFound('Group not found');
+    const gid = groupId(chatId);
+    const person = personId(telegramId);
+    const member = s.members.find((m) => m.telegramId === telegramId);
+    const org = studioToOrg(s, this.deps.orgName, this.orgOptions());
+    if (!member || !atLeast(member, 'member') || !group.memberIds.includes(telegramId) || !org.isGroupMember(person, gid)) {
+      throw bad('Choose an approved member of this group.');
+    }
+    const memories = this.deps.memory.memories;
+    const targets: Array<{ agentId: string; memory: MemoryRecord; patch: Pick<MemoryRecord, 'authorizedPersonIds' | 'shareVersion'> }> = [];
+    for (const agentId of group.agentIds) {
+      const agent = s.agents.find((a) => a.id === agentId);
+      if (!agent || !canUseAgent(member, agent) || (agent.blocked ?? []).includes(telegramId)) continue;
+      for (const m of await memories.listActive(agentId)) {
+        const patch = resnapshotPatch(m, gid, person);
+        if (patch) targets.push({ agentId, memory: m, patch });
+      }
+    }
+    const audit = tirehFlags().auditLog ? this.deps.audit : undefined;
+    const rows = async (outcome: 'previewed' | 'applied', ids: Array<{ agentId: string; id: string }>) => {
+      if (!audit) return;
+      for (const agentId of [...new Set(ids.map((t) => t.agentId))]) {
+        await audit.append({ kind: 'resnapshot', personaId: agentId, audiencePersonIds: [person], memoryIds: ids.filter((t) => t.agentId === agentId).map((t) => t.id),
+          actorPersonId: personId(actor.telegramId), outcome, at: this.now() }).catch(() => undefined);
+      }
+    };
+    if (!apply) {
+      await rows('previewed', targets.map((t) => ({ agentId: t.agentId, id: t.memory.id })));
+      return { count: targets.length, applied: false };
+    }
+    const done: Array<{ agentId: string; id: string }> = [];
+    for (const t of targets) {
+      if (await memories.updateIfShareVersion(t.memory.id, t.memory.shareVersion ?? 0, t.patch)) done.push({ agentId: t.agentId, id: t.memory.id });
+    }
+    const count = done.length;
+    await this.deps.store.audit({ actor: actor.telegramId, action: 'memory.resnapshot', target: String(chatId), detail: `${telegramId}:${count}` });
+    await rows('applied', done);
+    return { count, applied: true };
+  }
+
+  /** S08 (TIREH_SHARING_V2): content-free "updated" notices for shared records the actor could see. */
+  async memoryNoticesFor(actor: Member, agentId: string): Promise<Array<{ id: string; oldMemoryId: string; newMemoryId: string; from: string; at: string; replacementVisible: boolean }>> {
+    const s = await this.deps.store.read();
+    const agent = s.agents.find((a) => a.id === agentId);
+    if (!agent || !canUseAgent(actor, agent)) throw notFound('Agent not found');
+    const notices = this.deps.memoryNotices;
+    if (!tirehFlags().sharingV2 || !notices) return [];
+    const org = studioToOrg(s, this.deps.orgName, this.orgOptions());
+    const me = personId(actor.telegramId);
+    const out: Array<{ id: string; oldMemoryId: string; newMemoryId: string; from: string; at: string; replacementVisible: boolean }> = [];
+    for (const notice of (await notices.listFor(agentId, me)).slice(0, 50)) {
+      // Once the old record is forgotten, or the actor was never among its readers, the notice disappears.
+      const old = await this.deps.memory.memories.get(notice.oldMemoryId);
+      const readers = old?.authorizedPersonIds ?? (old?.scope.kind === 'people' ? old.scope.personIds : []);
+      if (!old || old.personaId !== agentId || !readers.includes(me)) continue;
+      const replacement = await this.deps.memory.memories.get(notice.newMemoryId);
+      out.push({ id: notice.id, oldMemoryId: notice.oldMemoryId, newMemoryId: notice.newMemoryId,
+        from: org.getPerson(notice.ownerPersonId)?.name ?? 'Someone', at: notice.at.toISOString(),
+        replacementVisible: !!replacement && replacement.personaId === agentId && isVisibleToAudience(org, replacement, [me]) });
+    }
+    return out;
   }
 
   /** The agent's bot was added to or removed from a group. */

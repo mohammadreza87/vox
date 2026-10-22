@@ -1,6 +1,7 @@
 /** Explicit source-owner grants. Scope mutation alone is never authorization. */
 import type { MemoryRecord } from '../types';
 import type { OrgDirectory } from '../org/directory';
+import type { NewMemory } from './store';
 
 export const MAX_SHARE_RECIPIENTS = 30;
 
@@ -41,4 +42,51 @@ export function ownerSharePatch(org: OrgDirectory, memory: MemoryRecord, actorId
 export function ownerRevokePatch(memory: MemoryRecord, actorId: string): Pick<MemoryRecord, 'scope' | 'authorizedPersonIds' | 'shareVersion'> {
   assertOwner(memory, actorId);
   return { scope: { kind: 'private', personId: actorId }, authorizedPersonIds: [actorId], shareVersion: (memory.shareVersion ?? 0) + 1 };
+}
+
+/** Scopes a successor agent may inherit (docs/AGENT_INTELLIGENCE_SOLUTION.md 4.6 Successor agent). */
+export const SUCCESSOR_SCOPES = ['group', 'people', 'project'] as const;
+
+/** Normal-sensitivity group, people or project records that are still active. Private records never transfer here. */
+export function isSuccessorTransferable(memory: MemoryRecord): boolean {
+  return memory.sensitivity === 'normal' && !memory.supersededBy &&
+    (SUCCESSOR_SCOPES as readonly string[]).includes(memory.scope.kind);
+}
+
+/**
+ * A successor's copy: same scope, authorization snapshot, shareVersion, source
+ * lineage (eventIds) and aboutPersonIds; no id, times or supersession links
+ * (copying `supersedes` would make add() throw for every corrected record).
+ */
+export function successorCopy(memory: MemoryRecord, successorId: string): NewMemory {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { id, createdAt, updatedAt, supersedes, supersededBy, ...rest } = memory;
+  return { ...rest, personaId: successorId };
+}
+
+/** Structural view of the optional S06 MemoryStore tombstone methods. */
+export interface TombstoneCarrier {
+  tombstonesOf?(personaId: string): Promise<string[]>;
+  addTombstones?(personaId: string, eventIds: readonly string[]): Promise<void>;
+}
+
+/**
+ * Adds exactly one named member to a group record's authorization snapshot.
+ * Null when nothing may change: sensitive, other scope or group, superseded,
+ * legacy rows without a snapshot (never widened) or already authorized.
+ */
+export function resnapshotPatch(memory: MemoryRecord, groupId: string, personId: string): Pick<MemoryRecord, 'authorizedPersonIds' | 'shareVersion'> | null {
+  if (memory.sensitivity !== 'normal' || memory.scope.kind !== 'group' || memory.scope.groupId !== groupId ||
+      memory.supersededBy || !memory.authorizedPersonIds || memory.authorizedPersonIds.includes(personId)) return null;
+  return {
+    authorizedPersonIds: [...new Set([...memory.authorizedPersonIds, personId])].sort(),
+    shareVersion: (memory.shareVersion ?? 0) + 1,
+  };
+}
+
+/** Who saw a shared record and must be told it was updated (never the owner). */
+export function supersedeNoticeRecipients(predecessor: MemoryRecord): string[] {
+  if (predecessor.sensitivity !== 'normal' || (predecessor.scope.kind !== 'people' && predecessor.scope.kind !== 'project')) return [];
+  const audience = predecessor.authorizedPersonIds ?? (predecessor.scope.kind === 'people' ? predecessor.scope.personIds : []);
+  return [...new Set(audience)].filter((id) => id !== predecessor.source.personId).sort();
 }
