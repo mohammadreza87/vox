@@ -245,6 +245,21 @@ describe('S12 gateway: flag on', () => {
     expect(h.decider.decideParts).not.toHaveBeenCalled();
   });
 
+  it('with runtime memory and history paused, a remember-this image stores no memory, history row or image bytes', async () => {
+    vi.stubEnv('STUDIO_IMAGES', '1');
+    const runtimePrivacy: RuntimePrivacy = { validateAudience: async () => true, read: async () => ({ revision: 'r1', memoryEnabled: false, historyEnabled: false }) };
+    const h = makeImageGateway({ runtimePrivacy, decider: scriptedDecider({ text: textAnswers(), image: imageAnswers({ kind: 'receipt', task: 'remember', people: 0.1, sensitive: 0.1 }) }) });
+    h.llm.nextExtraction = { memories: [{ content: 'Reza paid for the team dinner on Friday', type: 'event', kind: 'work', saidBy: 'reza', about: ['reza'] }] };
+    expect(await h.gateway.handleUpdate('aria', privatePhoto(TG.reza, h.ladder.sizes, `keep this receipt for later ${IMAGE_CANARIES.caption}`))).toBe('replied');
+    // Positive control: the image did reach the reply model as ephemeral input.
+    expect(h.replies().some((r) => imageData(r).length > 0)).toBe(true);
+    expect(h.llm.extractionCalls + h.fast.extractionCalls).toBe(0);
+    expect(await h.memories.listActive('aria')).toEqual([]);
+    expect(await h.rows()).toEqual([]);
+    const stored = JSON.stringify([...h.history.chats.entries()]);
+    for (const prefix of base64Of(h)) expect(stored).not.toContain(prefix);
+  });
+
   it('puts no image bytes, captions or EXIF into any log line', async () => {
     const consoleCalls = [vi.spyOn(console, 'log').mockImplementation(() => undefined), vi.spyOn(console, 'warn').mockImplementation(() => undefined),
       vi.spyOn(console, 'error').mockImplementation(() => undefined), vi.spyOn(console, 'info').mockImplementation(() => undefined)];
