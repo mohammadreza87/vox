@@ -100,3 +100,18 @@ conservative defense in depth, not an OS/IAM sandbox. Protected receipt and huma
 approval callbacks must use evaluator/release credentials unavailable to the
 candidate author. Production credentials, artifact verification and worker
 isolation must be independently established before an improvement service runs.
+
+## Reply-style procedural memory (not wired)
+
+`personalization/procedural.ts` is a Beta-Bernoulli Thompson-sampling bandit over fixed, low-risk reply-style arms
+(length, register, structure and closing question by default; modality and language opt-in), one posterior per (person,
+persona, space, route) with the person stored only as a hashed subject key. Precedence is explicit request this turn >
+explicit stored preference (`resolvePreferences` source `explicit` only) > sampled arm > persona default; pinned
+dimensions are never sampled, logged or learned. It samples only in private, non-guest chats after the caller's
+`optional.personalization` authorize callback, and `settle()` re-checks it before any write. The composite reward
+(reactions, thanks, accepted share offers, reciprocated voice, corrections) never learns from reply-rate alone, and
+pseudo-counts decay with a 90-day half-life. `reset()` and `withdraw()` delete posteriors and evaluation rows.
+Evaluation rows (`{context, armChosen, propensity, unchosenArms, reward}`) are content-free with 90-day retention, in
+`vox_reply_style` / `vox_reply_style_eval`. It is NOT constructed by the Studio runtime or gateway: enabling it is gated
+by the DPIA covering behavioural adaptation (docs/AGENT_INTELLIGENCE_SOLUTION.md section 4.10, Step 14) and by
+confirming that `message_reaction` updates reach persona bots in private chats.
