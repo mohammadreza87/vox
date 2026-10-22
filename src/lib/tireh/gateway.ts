@@ -470,7 +470,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
       const voiceWanted = format !== 'text' && (format === 'voice' || isVoice || persona.replyWithVoice === 'always' || settled?.wantsVoice === true);
       const canSpeak = this.canSpeak(persona, boundary);
       await bot.sendChatAction(message.chat.id, voiceWanted && canSpeak ? 'record_voice' : 'typing').catch(() => undefined);
-      let generated: { text: string; sources: WebSource[] };
+      let generated: { text: string; sources: WebSource[]; peopleContext?: true };
       try {
         generated = await this.composeReply(persona, chat, speaker.id, text, imageTurn?.forceQuick ? forceQuickTriage(triaged) : triaged, message.message_id, addressed ? 'reply' : 'proactive', voiceWanted && canSpeak ? 'voice' : 'text', boundary, imageTurn?.images);
       } catch {
