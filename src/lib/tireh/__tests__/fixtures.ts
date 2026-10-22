@@ -76,7 +76,8 @@ export class FakeLLM implements LLM {
     if (authorize && !await authorize()) throw new LLMAuthorizationError();
     // Record provider data, not the local function identity. This preserves
     // exact noninterference comparisons of every outgoing content field.
-    if (systemText(request.system).startsWith('You extract long-term memories')) {
+    const system = systemText(request.system);
+    if (system.startsWith('You extract long-term memories')) {
       this.extractionCalls++;
       this.extractionRequests.push(payload);
       const out = this.nextExtraction;
@@ -85,8 +86,9 @@ export class FakeLLM implements LLM {
     }
     // With blocks or extras (TIREH_CACHED_PROMPT), record the full model-visible
     // text: system blocks, then the newest user turn's trailing text, then the tail.
-    const extras = typeof request.system !== 'string' || request.systemTail !== undefined || request.messages.some((m) => m.trailingText?.length || m.cacheControl);
-    this.replyPrompts.push(extras ? [systemText(request.system), ...([...request.messages].reverse().find((m) => m.role === 'user')?.trailingText ?? []), ...(request.systemTail !== undefined ? [request.systemTail] : [])].join('\n\n') : request.system as string);
+    const lastUser = [...request.messages].reverse().find((m) => m.role === 'user');
+    const extended = typeof request.system !== 'string' || request.systemTail !== undefined || request.messages.some((m) => m.trailingText?.length || m.cacheControl);
+    this.replyPrompts.push(extended || typeof request.system !== 'string' ? [system, ...(lastUser?.trailingText ?? []), ...(request.systemTail ? [request.systemTail] : [])].join('\n\n') : request.system);
     this.replyRequests.push(payload);
     return this.nextReply;
   }
