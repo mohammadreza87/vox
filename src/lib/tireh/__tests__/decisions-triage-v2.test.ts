@@ -5,12 +5,13 @@
  * Never regenerate those snapshots: a diff there is a v1 drift.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { readTriage, readTriageV2, triageInput, triageQuestions, type DecisionAnswer } from '../triage';
+import { createHash } from 'crypto';
+import { MAX_TRIAGE_QUESTIONS, readTriage, readTriageV2, triageInput, triageQuestions, V2_LIVE_CORRECTION_PROBABILITY, V2_LIVE_SMALLTALK_CONFIDENCE, type DecisionAnswer } from '../triage';
 import type { SkillChoice } from '../skill-routing';
 import type { Persona } from '../types';
 import { memory, privateText, TG, testOrgConfig } from './fixtures';
 import { questionSchema, MAX_DECISION_QUESTIONS } from '../../adaptive/decisions';
-import { PERSONA_HEADER_PREFIX, TRIAGE_V2_QUESTION_NAMES } from '../decisions/catalog';
+import { PERSONA_HEADER_PREFIX, TRIAGE_V2_QUESTIONS, triageQuestionSetNow, V2_QUESTION_NAMES } from '../decisions/catalog';
 import { decisionsGateway, v1Answers } from './decisions-fixtures';
 
 const basePersona = (): Persona => testOrgConfig().personas.find((p) => p.id === 'aria')!;
@@ -160,6 +161,41 @@ describe('V1 GOLDEN (captured at base 6d00b80; never regenerate)', () => {
 });
 
 // ---------------------------------------------------------------------------
+// V1 FREEZE: sha256(JSON.stringify(triageQuestions(...))) computed with the
+// base 6d00b80 triage.ts (before any S09 edit) for four fixture cases.
+
+const SIXTEEN: SkillChoice[] = Array.from({ length: 16 }, (_, i) => ({ id: `x.s${i}`, title: `Skill ${i}`, whenToUse: `Use when task ${i} is asked for.` }));
+const BASE_HASHES: Array<[string, () => [Persona, boolean, SkillChoice[] | undefined], string]> = [
+  ['private, no routable', () => [basePersona(), false, undefined], 'abea70bfa66b33f6dd1982e0d853bbbc0957e0d568013f12f7d64c01c6b1c949'],
+  ['group balanced, askAddressed', () => [{ ...basePersona(), groupParticipation: 'balanced' }, true, undefined], '5cdbfac70d2e6d155e5d05ec7a3f90980994d58a14d58ee12fd07cc432820a3f'],
+  ['group active, askAddressed, 2 routable', () => [{ ...basePersona(), groupParticipation: 'active' }, true, ROUTABLE], 'cf9258923de29b7f93c8da4d6896b6e6f489fc915942619d73862f8197fb4f19'],
+  ['mentions, askAddressed, 16 routable', () => [{ ...basePersona(), groupParticipation: 'mentions' }, true, SIXTEEN], '4dede3e01880a8d5ace65af9b77e8e77e43df1cbfc462f08a045b92581e9770b'],
+];
+const sha = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+
+describe('V1 FREEZE (base hashes)', () => {
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it.each(BASE_HASHES)('%s: no set argument, explicit v1 and TRIAGE_QUESTION_SET=v2 with no argument all equal the base', (_label, args, hash) => {
+    const [persona, askAddressed, routable] = args();
+    expect(sha(triageQuestions(persona, askAddressed, routable))).toBe(hash);
+    expect(sha(triageQuestions(persona, askAddressed, routable, 'v1'))).toBe(hash);
+    vi.stubEnv('TRIAGE_QUESTION_SET', 'v2');
+    expect(sha(triageQuestions(persona, askAddressed, routable))).toBe(hash);
+    vi.stubEnv('TRIAGE_QUESTION_SET', 'v2-live');
+    expect(sha(triageQuestions(persona, askAddressed, routable))).toBe(hash);
+  });
+
+  it('readTriage keeps the v1 default under TRIAGE_QUESTION_SET=v2-live (no v2 key, no adjustment)', () => {
+    vi.stubEnv('TRIAGE_QUESTION_SET', 'v2-live');
+    const answers = { ...v1Answers(), route: { type: 'choice' as const, choice: 'smalltalk', confidence: 0.99 }, explicit_correction: pred(0.99) };
+    const out = readTriage(answers, false);
+    expect(out).toEqual({ effort: 'thoughtful', needsWeb: false, memorable: false, wantsVoice: false });
+    expect(out).not.toHaveProperty('v2');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // v2 (everything below is written after the golden capture)
 
 const v2Answers = (extra: Record<string, DecisionAnswer> = {}): Record<string, DecisionAnswer> => ({
@@ -179,7 +215,7 @@ describe('v2 question set', () => {
       const v1 = triageQuestions(persona, askAddressed, routable, 'v1').map((q) => q.name);
       for (const set of ['v2', 'v2-live'] as const) {
         const names = triageQuestions(persona, askAddressed, routable, set).map((q) => q.name);
-        expect(names).toEqual([...v1, ...TRIAGE_V2_QUESTION_NAMES]);
+        expect(names).toEqual([...v1, ...V2_QUESTION_NAMES]);
         expect(names.length).toBeLessThanOrEqual(MAX_DECISION_QUESTIONS);
       }
     });
@@ -187,16 +223,51 @@ describe('v2 question set', () => {
     expect(triageQuestions(persona, askAddressed, routable, 'v2').map((q) => q.name).indexOf('skill')).toBe(4);
   });
 
-  it('reads the set from TRIAGE_QUESTION_SET at call time', () => {
+  it('triageQuestionSetNow reads TRIAGE_QUESTION_SET at call time; the pure default stays v1', () => {
+    expect(triageQuestionSetNow()).toBe('v1');
     vi.stubEnv('TRIAGE_QUESTION_SET', ' V2 ');
-    expect(triageQuestions(basePersona(), false).map((q) => q.name)).toContain('route');
+    expect(triageQuestionSetNow()).toBe('v2');
+    expect(triageQuestions(basePersona(), false).map((q) => q.name)).not.toContain('route');
     vi.stubEnv('TRIAGE_QUESTION_SET', 'v2-live');
-    expect(triageQuestions(basePersona(), false).map((q) => q.name)).toContain('explicit_correction');
+    expect(triageQuestionSetNow()).toBe('v2-live');
+    vi.stubEnv('TRIAGE_QUESTION_SET', 'v3');
+    expect(triageQuestionSetNow()).toBe('v1');
+  });
+
+  it('names are unique, the skill question appears in exactly the v1 cases, and v1 stays within MAX_TRIAGE_QUESTIONS', () => {
+    for (const [, persona, askAddressed, routable] of goldenCases()) {
+      const v1 = triageQuestions(persona, askAddressed, routable, 'v1');
+      expect(v1.length).toBeLessThanOrEqual(MAX_TRIAGE_QUESTIONS);
+      for (const set of ['v2', 'v2-live'] as const) {
+        const names = triageQuestions(persona, askAddressed, routable, set).map((q) => q.name);
+        expect(new Set(names).size).toBe(names.length);
+        expect(names.includes('skill')).toBe(v1.some((q) => q.name === 'skill'));
+      }
+    }
+  });
+
+  it('mutating a returned v2 question never changes TRIAGE_V2_QUESTIONS', () => {
+    const before = JSON.stringify(TRIAGE_V2_QUESTIONS);
+    const v2 = triageQuestions(basePersona(), false, undefined, 'v2');
+    const route = v2.find((q) => q.name === 'route')!;
+    route.instructions = 'MUTATED';
+    if (route.type === 'choice') route.choices[0].description = 'MUTATED';
+    expect(JSON.stringify(TRIAGE_V2_QUESTIONS)).toBe(before);
+    expect(Object.isFrozen(TRIAGE_V2_QUESTIONS)).toBe(true);
+    expect(JSON.stringify(triageQuestions(basePersona(), false, undefined, 'v2'))).not.toContain('MUTATED');
+  });
+
+  it('triageInput does not depend on the set', () => {
+    const lines = Array.from({ length: 8 }, (_, i) => ({ who: i % 2 ? 'Aria' : 'Reza', text: `line ${i}` }));
+    const plain = triageInput(basePersona(), lines);
+    vi.stubEnv('TRIAGE_QUESTION_SET', 'v2');
+    expect(triageInput(basePersona(), lines)).toBe(plain);
+    expect(plain.split('\n\n')[1].split('\n')).toHaveLength(6);
   });
 
   it('every v2 question parses under the Decisions questionSchema and carries no persona data', () => {
     const p = { ...basePersona(), personality: 'PERSONALITY_CANARY_7', communicationStyle: 'STYLE_CANARY_7' };
-    const v2 = triageQuestions(p, true, ROUTABLE, 'v2').slice(-TRIAGE_V2_QUESTION_NAMES.length);
+    const v2 = triageQuestions(p, true, ROUTABLE, 'v2').slice(-V2_QUESTION_NAMES.length);
     for (const q of v2) expect(questionSchema.safeParse(q).success).toBe(true);
     const text = JSON.stringify(v2);
     for (const forbidden of [p.name, p.role, 'PERSONALITY_CANARY_7', 'STYLE_CANARY_7', PERSONA_HEADER_PREFIX]) expect(text).not.toContain(forbidden);
@@ -235,8 +306,9 @@ describe('readTriage under v2 (shadow)', () => {
     expect(Object.keys(readTriage(missing, false, 'mentions', undefined, 'v2')!.v2!)).toHaveLength(6);
   });
 
-  it('has no v2 key without v2 answers, and v2 answers never rescue an invalid v1 result', () => {
-    expect(readTriage(v1Answers(), false, 'mentions', undefined, 'v2')).not.toHaveProperty('v2');
+  it('set v1 has no v2 key; v2 without v2 answers has an empty v2; v2 never rescues an invalid v1 result', () => {
+    expect(readTriage({ ...v1Answers(), ...v2Answers() }, false, 'mentions', undefined, 'v1')).not.toHaveProperty('v2');
+    expect(readTriage(v1Answers(), false, 'mentions', undefined, 'v2')).toEqual({ ...readTriage(v1Answers(), false), v2: {} });
     expect(readTriage({ ...v2Answers(), live_info: pred(0) }, false, 'mentions', undefined, 'v2')).toBeNull();
     expect(readTriageV2({} as Record<string, DecisionAnswer>)).toEqual({});
   });
@@ -245,15 +317,23 @@ describe('readTriage under v2 (shadow)', () => {
 describe('readTriage under v2-live', () => {
   const live = (extra: Record<string, DecisionAnswer>) => readTriage({ ...v1Answers(), ...v2Answers(extra) }, false, 'mentions', undefined, 'v2-live');
 
-  it('route smalltalk at 0.7 makes effort quick; at 0.5 it stays thoughtful', () => {
-    expect(live({ route: { type: 'choice', choice: 'smalltalk', confidence: 0.7 } })!.effort).toBe('quick');
-    expect(live({ route: { type: 'choice', choice: 'smalltalk', confidence: 0.5 } })!.effort).toBe('thoughtful');
+  it('thresholds are 0.6 and 0.5', () => {
+    expect([V2_LIVE_SMALLTALK_CONFIDENCE, V2_LIVE_CORRECTION_PROBABILITY]).toEqual([0.6, 0.5]);
   });
 
-  it('route correction at 0.6 or explicit_correction at 0.6 makes the message memorable; 0.4 does not', () => {
+  it('route smalltalk at 0.6 makes effort quick; at 0.59 nothing changes', () => {
+    expect(live({ route: { type: 'choice', choice: 'smalltalk', confidence: 0.6 } })!.effort).toBe('quick');
+    const below = live({ route: { type: 'choice', choice: 'smalltalk', confidence: 0.59 } })!;
+    const { v2: _v2, ...rest } = below;
+    void _v2;
+    expect(rest).toEqual(readTriage(v1Answers(), false));
+  });
+
+  it('route correction at 0.6 or explicit_correction at 0.5 makes the message memorable; below does not', () => {
     expect(live({ route: { type: 'choice', choice: 'correction', confidence: 0.6 } })!.memorable).toBe(true);
-    expect(live({ explicit_correction: pred(0.6) })!.memorable).toBe(true);
-    expect(live({ explicit_correction: pred(0.4) })!.memorable).toBe(false);
+    expect(live({ route: { type: 'choice', choice: 'correction', confidence: 0.59 } })!.memorable).toBe(false);
+    expect(live({ explicit_correction: pred(0.5) })!.memorable).toBe(true);
+    expect(live({ explicit_correction: pred(0.49) })!.memorable).toBe(false);
   });
 
   it('never changes needsWeb, wantsVoice, addressed, proactive or skills', () => {
