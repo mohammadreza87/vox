@@ -80,3 +80,17 @@ All wiring (GatewayDeps.identity, TurnSnapshot.identity.level, policy key, bound
 - The file store assumes one writing process.
 - In-memory session state is lost on restart; the only effect is a later hint.
 - `test.ts` is a source file, not a test file.
+
+## Implementation notes and deviations
+
+- Branch `aiq/identity-lib` in the harness worktree (the run's computed task names this branch), not `agent-intel/s10l-identity-confidence` in `$TMPDIR`.
+- Fusion: the style-alone floor applies unless a negative voice band (UNCERTAIN or NO_MATCH) contributed, and a MATCH is ignored when there is no account. Taken literally ("no voice band contributed a non-zero term"), a MATCH (+1) plus an inconsistent style (-3) on the unverified ceiling would make style alone produce an inconsistent session, which breaks the invariant.
+- Fusion: structurally malformed input (non-object signals, voice or style; a non-string account; an unknown band string; non-finite style messages; an unknown consistency or source) returns the conservative fallback. Well-formed but ineligible evidence (fewer than 5 messages, a MATCH for another person or from another source) is ignored as the algorithm says.
+- `verifyVoiceNote` treats any `guestAudience` other than `false` as a guest (fail closed), and a delegate result without a known band becomes `provider_error`.
+- Profile weights are capped at 1e6 and means clamped to [0, 1], so a flood of messages keeps the profile schema-valid.
+- `forget()` rejects with the fixed `Error('identity_forget_failed')` when the store fails, so erasure failures are visible; `applyFairness` re-reads each profile under the per-person lock before disabling it; the service serialises read-modify-write per person and space in-process.
+- The extractor inspects at most 16,384 UTF-16 units and replaces lone surrogates (`toWellFormed`) before NFC.
+- `FINGLISH_LEXICON` has about 80 entries including the spec's list; `jan` is excluded as ambiguous.
+- Tests resolve source files with `path.resolve(dirname(fileURLToPath(import.meta.url)), ...)` because Vite rewrites `new URL(relative, import.meta.url)` into non-file URLs under vitest.
+- The lifecycle canary test has a 60 s timeout: the file store's ~240 atomic writes take 20-45 ms each under the sandboxed temp directory.
+- `simulateWeeks` enrolls the owner itself and answers the first prompt of a flagged session through `recordPromptOutcome` (option `answerPrompts`, default true). The synthetic owner is highly separable (owner messages almost always reach the +4 clamp), so the budget and detection results prove mechanics and determinism, not calibration.
