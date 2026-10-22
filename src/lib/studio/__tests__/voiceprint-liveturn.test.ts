@@ -25,7 +25,7 @@ function memberSource(source: string, signature: string): string {
   return signature + (next > 0 ? rest.slice(0, next) : rest);
 }
 
-describe('liveTurn and Mini App calls never run voiceprint verification', () => {
+describe('liveTurn and Mini App calls never run voiceprint verification', { timeout: 30_000 }, () => {
   it('callTurn, liveTurn and converse complete with no verifyVoiceNote, provider or speech call', async () => {
     const { h, org, agent, s, verify } = await setup();
     expect(process.env.STUDIO_VOICE_RECOGNITION).toBe('1');

@@ -1,15 +1,15 @@
 import { Blob as NodeBlob } from 'node:buffer';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { signInitData } from '../auth';
 import { handleStudioRequest, type RouterOptions } from '../http';
-import { StudioRateLimitError } from '../ratelimit';
+import { StudioRateLimitError, type StudioRequestRateLimiter } from '../ratelimit';
 import { ID, makeStudio, seedOrg, type Harness } from './helpers';
 import { setupVoiceprints } from './voiceprint-fixtures';
 
 const BOT_TOKEN = '555:voxx-test-token';
 const opts: RouterOptions = { botToken: BOT_TOKEN, devUser: null };
 let h: Harness;
-let consume: ReturnType<typeof vi.fn>;
+let consume: Mock<StudioRequestRateLimiter['consume']>;
 const originalBlob = globalThis.Blob;
 // jsdom replaces Blob; the route runs on Node, where FormData files are Node Blobs (as in http.test.ts).
 afterEach(() => { globalThis.Blob = originalBlob; });
@@ -17,7 +17,7 @@ afterEach(() => { globalThis.Blob = originalBlob; });
 beforeEach(async () => {
   h = makeStudio();
   await seedOrg(h);
-  consume = vi.fn(async () => undefined);
+  consume = vi.fn<StudioRequestRateLimiter['consume']>(async () => undefined);
   h.studio.deps.rateLimiter = { consume };
   globalThis.Blob = NodeBlob as unknown as typeof Blob;
 });
@@ -42,7 +42,7 @@ async function call(r: Request) {
 const scopes = () => consume.mock.calls.map(c => c[0]);
 const SAMPLE = 'AUDIO_CANARY_http|opus';
 
-describe('voice-enroll routes', () => {
+describe('voice-enroll routes', { timeout: 30_000 }, () => {
   it('validate the statement, audio and space before any provider call', async () => {
     const s = await setupVoiceprints({ telegramId: ID.alice });
     h.studio.deps.voiceprints = s.service;

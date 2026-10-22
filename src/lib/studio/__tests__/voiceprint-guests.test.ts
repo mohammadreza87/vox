@@ -123,6 +123,13 @@ describe('gateway.transcribe runs shadow verification beside STT', () => {
     expect(shadow.llm.replyRequests[0].messages).toEqual(without.llm.replyRequests[0].messages);
   });
 
+  it('gateway.liveTurn and gateway.converse never call the verifier', async () => {
+    const h = harness();
+    for await (const part of h.gateway.liveTurn('aria', 'reza', [{ role: 'user', content: 'help' }])) void part;
+    await h.gateway.converse('aria', 'reza', 'hello');
+    expect(h.verifier!.verifyVoiceNote).not.toHaveBeenCalled();
+  });
+
   it('a rejecting verifier or a timeout result does not change the reply', async () => {
     const baseline = harness({ verifier: null });
     const failing = harness({ verifier: { verifyVoiceNote: vi.fn(async () => { throw new Error('verifier down'); }) } });

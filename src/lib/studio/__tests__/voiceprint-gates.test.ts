@@ -44,7 +44,7 @@ describe('voiceprint enrollment gates', () => {
   });
 
   it.each([
-    ['not_asked', async (_s: Setup) => undefined],
+    ['not_asked', async (): Promise<void> => undefined],
     ['presented only', async (s: Setup) => { await s.present(); }],
     ['declined', async (s: Setup) => { await s.consent('work', 'declined'); }],
     ['withdrawn', async (s: Setup) => { await s.consent('work'); await s.consent('work', 'withdrawn'); }],
@@ -60,8 +60,12 @@ describe('voiceprint enrollment gates', () => {
     expect(biometricGrant(doc, 'work', s.now())).not.toBeNull();
     const permission = doc.permissions.find(p => p.purpose === 'optional.biometric_recognition' && p.spaceId.endsWith(':work'))!;
     const withoutEvidence = structuredClone(doc);
-    withoutEvidence.consentEvents = withoutEvidence.consentEvents.map(e => e.eventId === permission.lastEventId
-      ? (({ evidence: _evidence, ...rest }) => rest)(e) : e) as AdaptiveDocument['consentEvents'];
+    withoutEvidence.consentEvents = withoutEvidence.consentEvents.map(e => {
+      if (e.eventId !== permission.lastEventId) return e;
+      const copy: Record<string, unknown> = { ...e };
+      delete copy.evidence;
+      return copy;
+    }) as AdaptiveDocument['consentEvents'];
     expect(biometricGrant(withoutEvidence, 'work', s.now())).toBeNull();
     const notAffirmative = structuredClone(doc);
     notAffirmative.consentEvents = notAffirmative.consentEvents.map(e => e.eventId === permission.lastEventId && e.evidence

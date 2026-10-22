@@ -86,13 +86,13 @@ export class FakeVoiceprintProvider implements VoiceprintProvider {
 
 export class FakeSpeechActivity implements SpeechActivity {
   result = { netSpeechMs: 12_000, speakers: 1 };
-  measure = vi.fn(async (_audio: Uint8Array, _mimeType: string, _signal: AbortSignal) => ({ ...this.result }));
+  measure = vi.fn<SpeechActivity['measure']>(async () => ({ ...this.result }));
 }
 
 export class FakeEchoSource implements SelfEchoSource {
   list: { id: string; template: Uint8Array }[] | null = [{ id: 'echo-0', template: new TextEncoder().encode('ECHO_TEMPLATE_0') }];
-  templates = vi.fn(async (_signal: AbortSignal) => this.list ? this.list.map(e => ({ id: e.id, template: new Uint8Array(e.template) })) : null);
-  warm = vi.fn(async (_signal?: AbortSignal) => undefined);
+  templates = vi.fn<SelfEchoSource['templates']>(async () => this.list ? this.list.map(e => ({ id: e.id, template: new Uint8Array(e.template) })) : null);
+  warm = vi.fn<SelfEchoSource['warm']>(async () => undefined);
 }
 
 const directories: string[] = [];
@@ -153,7 +153,7 @@ export async function setupVoiceprints(o: SetupOptions = {}) {
     adaptive, store, cipher, provider, speech, selfEcho, thresholds: o.thresholds === undefined ? THRESHOLDS : o.thresholds,
     orgKey: 'HOOR', pilot: o.pilot ?? false, eligiblePerson, now: () => now, logger, ...o.service,
   });
-  const voiceIdentity = { invalidate: vi.fn(async (_telegramId: number, _space?: 'work' | 'personal') => undefined) };
+  const voiceIdentity = { invalidate: vi.fn<(telegramId: number, space?: 'work' | 'personal') => Promise<void>>(async () => undefined) };
   if (o.chain ?? true) {
     // Exactly as runtime.ts: the single invalidator slot chains VoiceIdentityService and voiceprints.
     adaptive.setVoiceIdentityInvalidator(async (input) => {
