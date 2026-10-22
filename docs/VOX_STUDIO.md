@@ -45,6 +45,10 @@ The Mac polling runtime repairs active bots without a profile receipt at startup
 
 Roles: `owner > superadmin > admin > member > pending`. New people who press /start in @VoxxBot are `pending` until an admin approves them. The Telegram IDs in `STUDIO_SUPERADMIN_IDS` are the founding **owners**: they always stay owners and can make other owners, superadmins and admins. Superadmins can grant up to superadmin but never make or change owners. The last owner can't be removed.
 
+### Photos (STUDIO_IMAGES)
+
+Photos are off by default. With `STUDIO_IMAGES=1` on the server, members can send a photo or an image file (JPEG or PNG) to an agent in a private chat, and the agent looks at it for that reply. Groups, guests and strangers are unchanged: only a caption is read, and the image is never downloaded. Images are used for that reply only and never saved; memory is formed only when you ask the agent to remember and the image is not an ID or similar private document, and a follow-up message cannot see the earlier image. Image triage needs a decider that supports image parts (`STUDIO_DECIDER=service` after S09); without one, photos still get a reply from the main model but nothing is remembered.
+
 ## Production (Firebase)
 
 Production runs serverless, so Studio switches modes there: bots receive updates by **webhook** (`/api/studio/telegram/[key]`, one derived secret per bot), state lives in **Firestore** (`studio/state`), media in **Cloud Storage** (`studio/media/`), and memories in the TIREH Firestore collections. Pushing to `main` deploys it and reconnects every bot.
