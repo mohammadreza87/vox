@@ -45,7 +45,7 @@ function configure(overrides: NodeJS.ProcessEnv = {}): string {
 }
 
 const spyFetch = () => {
-  const fetchMock = vi.fn(async () => { throw new Error('network disabled in tests'); });
+  const fetchMock = vi.fn<(input: unknown, init?: unknown) => Promise<Response>>(async () => { throw new Error('network disabled in tests'); });
   vi.stubGlobal('fetch', fetchMock);
   return fetchMock;
 };
