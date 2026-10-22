@@ -306,8 +306,11 @@ describe('red team r2: an image of a sensitive document is never stored', () => 
 
       // History keeps the content-free verdict and the fixed placeholder for the image turn.
       const rows = [...history.chats.values()].flat();
-      const imageRows = rows.filter((m) => m.imageDerived);
+      const imageRows = rows.filter((m) => m.imageDerived?.suppressed);
       expect(imageRows.map((m) => [m.role, m.imageDerived])).toEqual([['user', { suppressed: true, people: true }], ['assistant', { suppressed: true, people: true }]]);
+      // Later replies composed with the people-marked rows in context inherit only the people mark.
+      expect(rows.filter((m) => m.imageDerived && !m.imageDerived.suppressed).map((m) => [m.role, m.imageDerived]))
+        .toEqual([['assistant', { suppressed: false, people: true }], ['assistant', { suppressed: false, people: true }]]);
       expect(imageRows[1].text).toBe(IMAGE_WITHHELD_REPLY_TEXT);
 
       // Every store, every row file and every log line: no document text, image bytes, metadata or file name.

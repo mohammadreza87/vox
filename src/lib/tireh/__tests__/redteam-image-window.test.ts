@@ -3,14 +3,11 @@
  *
  * redteam-image-followup.test.ts checks one turn after a people photo. The reply to a
  * non-sensitive people photo is kept in history, so the model can repeat the appearance
- * description on a later turn. That later assistant row carries no imageDerived mark, so
- * once the image turn's two rows leave EXTRACTION_WINDOW (6 rows) the people rule and its
- * lexical filter switch off while the repeated description is still in the window.
- *
- * KNOWN GAP: this is written as `it.fails` so the suite stays green and documents the leak.
- * When the gateway propagates the people mark (or keeps the rule while any row derived
- * from a people-photo context is in the window), this test will start failing: turn it
- * into a plain `it`.
+ * description on a later turn. Before the fix that later assistant row carried no
+ * imageDerived mark, so once the image turn's two rows left EXTRACTION_WINDOW (6 rows) the
+ * people rule and its lexical filter switched off while the repeated description was still
+ * in the window. The gateway now stamps any reply composed with a people-marked row in its
+ * context with { suppressed: false, people: true }, carrying the rule forward.
  */
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { PersonaGateway } from '../gateway';
@@ -42,7 +39,7 @@ const OTHER_FLAGS = ['TIREH_CACHED_PROMPT', 'TIREH_PROMPT_SYSTEM_TAIL', 'TIREH_R
 beforeEach(() => { for (const flag of OTHER_FLAGS) vi.stubEnv(flag, ''); vi.stubEnv('STUDIO_IMAGES', '1'); });
 afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); });
 
-it.fails('KNOWN GAP: a people-photo description repeated on a later turn never becomes an appearance memory, even after the image rows leave the window', async () => {
+it('a people-photo description repeated on a later turn never becomes an appearance memory, even after the image rows leave the window', async () => {
   const llm = new AppearanceExtractor('claude-fable-5-1');
   const fast = new AppearanceExtractor('claude-haiku-5-5');
   const epochs = new Map<string, number>();
@@ -69,7 +66,7 @@ it.fails('KNOWN GAP: a people-photo description repeated on a later turn never b
   expect(requests).toHaveLength(3); // the image turn itself is suppressed
   // Positive control: the repeated description reached every later extraction.
   expect(requests.every((r) => requestText(r).includes('FACECANARY'))).toBe(true);
-  // The rule must hold while that description is in the window (fails on the 4th turn today).
+  // The rule holds while that description is in the window, including the 4th turn.
   expect(requests.map((r) => systemText(r.system).includes(IMAGE_PEOPLE_RULE))).toEqual([true, true, true]);
   expect(JSON.stringify(await memories.listActive('aria'))).not.toContain('FACECANARY');
 });

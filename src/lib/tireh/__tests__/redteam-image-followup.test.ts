@@ -27,9 +27,12 @@ const requestText = (r: Pick<LLMRequest, 'system' | 'messages'>) => `${systemTex
 class EchoingExtractor extends VisionFakeLLM {
   override async complete(request: LLMRequest): Promise<string> {
     if (systemText(request.system).startsWith('You extract long-term memories')) {
-      this.nextExtraction = requestText(request).includes(DOC)
+      const shown = requestText(request);
+      this.nextExtraction = shown.includes(DOC)
         ? { memories: [{ content: `Reza's card number is ${DOC}`, type: 'fact', kind: 'personal', saidBy: 'reza', about: ['reza'], confidence: 0.9 }] }
-        : { memories: [] };
+        : shown.includes('FACECANARY')
+          ? { memories: [{ content: 'Ali wears a FACECANARY red jacket and has a beard', type: 'fact', kind: 'personal', saidBy: 'reza', about: ['reza'], confidence: 0.9 }] }
+          : { memories: [] };
     }
     return super.complete(request);
   }
@@ -100,6 +103,9 @@ describe('red team: image-derived text never outlives the image turn', () => {
     expect(text).not.toContain('my brother Ali');
     expect(text.split(FACE)).toHaveLength(2); // only the new turn's echo, never the image turn's row
     expect(systemText(requests[0].system)).toContain(IMAGE_PEOPLE_RULE);
+    // The echoing reply inherits the people mark, and no appearance fact became a memory.
+    expect(stored(h).map((m) => m.imageDerived)).toEqual([{ suppressed: true, people: true }, { suppressed: true, people: true }, undefined, { suppressed: false, people: true }]);
+    expect(JSON.stringify(await h.memories.listActive('aria'))).not.toContain('FACECANARY');
   });
 
   it('a text turn with no image row in its window carries no image marks and no people rule', async () => {

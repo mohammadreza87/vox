@@ -474,7 +474,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
         logTelegramDiagnostic(this.log, 'reply_generation_failed');
         return 'ignored';
       }
-      const { text: reply, sources } = generated;
+      const { text: reply, sources, peopleContext } = generated;
       if (!reply) return 'ignored';
       if (!(await this.groupAllowed(persona, chat, speaker.id, addressed ? 'reply' : 'proactive'))) return 'ignored';
       const delivered = await this.sendReply(persona, chat, message, reply, voiceWanted, sources, addressed ? 'reply' : 'proactive', privacyEpoch, async () => this.unchanged(persona, chat, speaker.id, boundary),
@@ -485,7 +485,9 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
         privacy: this.stamp(boundary, userMessage.privacy!.sourceEventIds),
         role: 'assistant', text: imageTurn && withholdImageReply(imageTurn.triage) ? IMAGE_WITHHELD_REPLY_TEXT : delivered, at: this.now(), telegramMessageId: message.message_id,
         ...(chat.kind === 'group' ? { groupPolicyVersion: 1 as const } : {}),
-        ...(imageTurn ? imageDerivedMark(imageTurn) : {}),
+        // S12: a reply that could repeat a people-photo description carries the people
+        // mark forward, so the extraction rule holds while that text is in the window.
+        ...(imageTurn ? imageDerivedMark(imageTurn) : peopleContext ? imageDerivedMark({ suppressMemory: false, containsPeople: true }) : {}),
       };
       await this.retain(persona, chat, speaker.id, assistantMessage, boundary);
     } else {
@@ -1080,7 +1082,7 @@ ${liveFrame}`;
     return !!this.deps.voice && this.deps.voice.canSynthesize !== false && persona.replyWithVoice !== 'never';
   }
 
-  private async composeReply(persona: Persona, chat: ChatContext, speakerId: string, text: string, triaged?: Promise<Triaged>, messageId?: number, action: GroupAction = 'reply', replyFormat?: 'voice' | 'text', boundary?: TurnBoundary, images?: LLMMessage['images'], authorize?: () => Promise<boolean>, authorizeNow?: () => boolean): Promise<{ text: string; sources: WebSource[] }> {
+  private async composeReply(persona: Persona, chat: ChatContext, speakerId: string, text: string, triaged?: Promise<Triaged>, messageId?: number, action: GroupAction = 'reply', replyFormat?: 'voice' | 'text', boundary?: TurnBoundary, images?: LLMMessage['images'], authorize?: () => Promise<boolean>, authorizeNow?: () => boolean): Promise<{ text: string; sources: WebSource[]; peopleContext?: true }> {
     const { org } = this.deps;
     boundary ??= await this.boundary(persona, chat, speakerId, 'work', text);
     if (!boundary.audienceValid) return { text: this.changedReply, sources: [] };
@@ -1159,7 +1161,10 @@ ${liveFrame}`;
     if (!reply) logTelegramDiagnostic(this.log, 'reply_empty');
     // An unprompted group contribution that came out empty is simply not sent.
     if (!reply && action === 'proactive') return { text: '', sources: [] };
-    return { text: reply || emptyReplyFallback(text), sources: reply ? sources : [] };
+    // S12: a reply composed while a people-photo row was in context can repeat that
+    // description, so its stored row inherits the people mark (see handleUpdate).
+    const peopleContext = recent.some((m) => 'imageDerived' in m && m.imageDerived?.people === true);
+    return { text: reply || emptyReplyFallback(text), sources: reply ? sources : [], ...(peopleContext ? { peopleContext: true as const } : {}) };
   }
 
   private async sendReply(
