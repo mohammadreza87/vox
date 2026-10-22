@@ -12,10 +12,10 @@ import { NextRequest, NextResponse } from 'next/server';
 export function verifyTelegramWebhookToken(request: NextRequest): boolean {
   const webhookSecret = process.env.TELEGRAM_WEBHOOK_SECRET;
 
-  // If no secret is configured, skip verification (but log a warning)
+  // Fail closed: without a configured secret no request can be verified.
   if (!webhookSecret) {
-    console.warn('TELEGRAM_WEBHOOK_SECRET not configured - webhook verification skipped');
-    return true;
+    console.error('TELEGRAM_WEBHOOK_SECRET not configured - webhook request rejected');
+    return false;
   }
 
   const providedToken = request.headers.get('X-Telegram-Bot-Api-Secret-Token');

@@ -4,6 +4,7 @@ import { useState, useCallback } from 'react';
 import { useAuthStore } from '@/stores/authStore';
 import { usePlatformStore } from '@/stores/platformStore';
 import { getTelegramWebApp } from '@/lib/platform';
+import { auth } from '@/lib/firebase';
 
 type PriceId = 'pro_monthly' | 'pro_annual' | 'max_monthly' | 'max_annual';
 
@@ -23,10 +24,12 @@ export function useTelegramPayment() {
     setError(null);
 
     try {
-      // Create invoice link
+      // Create invoice link (the server takes the user from the ID token)
+      const token = await auth?.currentUser?.getIdToken();
+      if (!token) throw new Error('User not authenticated');
       const response = await fetch('/api/telegram/payments', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({
           priceId,
           userId: user.uid,
