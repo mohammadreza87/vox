@@ -155,3 +155,37 @@ describe('port of voice-call.test.ts live calls under TIREH_CACHED_PROMPT=1', ()
     await h.studio.endLiveCall(org.bob, agent.id);
   });
 });
+
+describe('port of visibility.test.ts "live web search" under TIREH_CACHED_PROMPT=1', () => {
+  it('agents search by default and link their sources; strangers get fewer searches', async () => {
+    // Legacy (non-adaptive) harness, as in the original: strangers to public agents are answered.
+    const h = makeStudio({ adaptive: false });
+    const org = await seedOrg(h);
+    const { agent, bot } = await hire(h, org.alice, { name: 'Nova' }, undefined, 'public');
+    const real = h.chatLLM.complete.bind(h.chatLLM);
+    const search = vi.fn(async (req: Pick<LLMRequest, 'system' | 'messages' | 'systemTail'> & { maxSearches: number }) => {
+      await real({ system: req.system, messages: [] });
+      return { text: 'Sunny, 18°C.', sources: [{ url: 'https://weather.example/teh', title: 'Weather' }] };
+    });
+    h.studio.deps.chatLLM = {
+      complete: async (req) => (systemText(req.system).includes('Decide, in character') ? JSON.stringify({ action: 'reply' }) : real(req)),
+      completeWithWeb: search,
+    };
+    await handleAgentUpdate(h.studio, agent.id, dm(ID.bob, 'Weather in Tehran?'));
+    const call = search.mock.lastCall![0];
+    expect(call.maxSearches).toBe(3);
+    expect(systemText(call.system)).toContain('## Live information');
+    // Web-search turns never use the system tail: the per-turn block rides in the newest user turn.
+    expect(call.systemTail).toBeUndefined();
+    expect(call.messages.at(-1)?.trailingText?.join('\n')).toContain('## For this turn');
+    expect(modelText(call)).toContain('## Live information');
+    expect(bot().sendMessage).toHaveBeenLastCalledWith(ID.bob, 'Sunny, 18°C.\n\nSources:\nhttps://weather.example/teh', expect.anything());
+    // Memory keeps the reply, not the links, and history never stores the per-turn block.
+    const history = await h.memory.history.recent(agent.id, `private-${personId(ID.bob)}`, 5);
+    expect(history.at(-1)?.text).toBe('Sunny, 18°C.');
+    expect(history.map((m) => m.text).join('\n')).not.toContain('For this turn');
+
+    await handleAgentUpdate(h.studio, agent.id, dm(ID.stranger, 'Weather?'));
+    expect(search.mock.lastCall?.[0].maxSearches).toBe(1);
+  });
+});

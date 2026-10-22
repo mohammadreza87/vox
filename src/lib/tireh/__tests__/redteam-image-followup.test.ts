@@ -36,7 +36,8 @@ class EchoingExtractor extends VisionFakeLLM {
 }
 
 function harness(image: ReturnType<typeof imageAnswers>, flag = true) {
-  if (flag) vi.stubEnv('STUDIO_IMAGES', '1');
+  // Pin the flag both ways so an exported STUDIO_IMAGES=1 (the flag matrix) cannot flip the flag-off case.
+  vi.stubEnv('STUDIO_IMAGES', flag ? '1' : '');
   const llm = new EchoingExtractor('claude-fable-5-1');
   const fast = new EchoingExtractor('claude-haiku-5-5');
   const epochs = new Map<string, number>();
