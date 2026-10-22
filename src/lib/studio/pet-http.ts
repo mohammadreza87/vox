@@ -190,12 +190,16 @@ export async function handlePetRequest(studio: Studio, request: Request, agentId
     // The person's own pet data, whatever their role (a guest, someone removed from Studio, a blocked
     // person): the signed initData proves who they are.
     if (route === 'export') {
-      const body: PetExportResponse = { petCare: await pets.listForUser(user.id) };
+      // A failing choice store never blocks the pet export: pet care still goes out.
+      const choices = await studio.agentChoicesFor(user.id).catch(() => []);
+      const body: PetExportResponse = { petCare: await pets.listForUser(user.id), ...(choices.length ? { agentChoices: choices } : {}) };
       return json(body, 200, { 'Content-Disposition': 'attachment; filename="vox-pet-export.json"' });
     }
     if (route === 'forget') {
       await limiter.consume('mutation', user.id);
-      const body: PetForgetResponse = { erased: await pets.eraseUser(user.id) };
+      // Choices are erased first, so a failing choice store fails the request before pet care is touched.
+      const choices = await studio.forgetAgentChoices(user.id), erased = await pets.eraseUser(user.id);
+      const body: PetForgetResponse = { erased, ...(choices ? { choicesErased: choices } : {}) };
       return json(body);
     }
 

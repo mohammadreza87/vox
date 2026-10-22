@@ -369,6 +369,27 @@ describe('the person’s own pet data (guest rights)', () => {
     expect(await (await call(['forget'], { as: ID.bob, body: {} })).json()).toEqual({ erased: 1 });
     expect((await h.store.read()).members.some((m) => m.telegramId === ID.stranger)).toBe(false);
   });
+
+  it('export and forget include the person\'s own agent choices (Circles), and only theirs', async () => {
+    const { h, call, mochi } = await setup({ visibility: 'public' });
+    h.studio.deps.circles = () => 'reply';
+    const choose = async (telegramId: number) => {
+      const receipt = await h.studio.presentAgentCard(mochi.agent.id, telegramId, { copyHash: 'a'.repeat(64), locale: 'en' });
+      h.clock.now = new Date(h.clock.now.getTime() + 1000);
+      expect(await h.studio.recordAgentChoice(mochi.agent.id, telegramId, receipt.id, 'joined', `cb-${telegramId}`)).toMatchObject({ ok: true });
+    };
+    await choose(ID.stranger);
+    await choose(4242);
+    const exported = await (await call(['export'], { as: ID.stranger })).json();
+    expect(exported.agentChoices).toEqual([expect.objectContaining({ agentId: mochi.agent.id, telegramId: ID.stranger, choice: 'joined', adultDeclaredAt: expect.any(String),
+      notice: expect.objectContaining({ copyHash: 'a'.repeat(64), locale: 'en' }) })]);
+    expect(await (await call(['forget'], { as: ID.stranger, body: {} })).json()).toEqual({ erased: 0, choicesErased: 1 });
+    expect(await h.studio.deps.choices!.listForUser(ID.stranger)).toEqual([]);
+    expect((await h.studio.deps.choices!.listForUser(4242)).map((r) => r.join?.choice)).toEqual(['joined']);
+    // Nothing chosen: the bodies are exactly today's.
+    expect(await (await call(['export'], { as: ID.stranger })).json()).toEqual({ petCare: [] });
+    expect(await (await call(['forget'], { as: ID.stranger, body: {} })).json()).toEqual({ erased: 0 });
+  });
 });
 
 describe('slow requests and the cap windows', () => {

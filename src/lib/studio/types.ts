@@ -249,6 +249,57 @@ export interface StudioGroup {
   memoryWatermarks?: Record<string, number>;
   /** Claimed IDs above the floor, bounded to the most recent 256-message-ID range. */
   memoryClaims?: Record<string, number[]>;
+  /** Circles (later slices): absent = 'group'. */
+  kind?: 'group' | 'channel';
+  /** 22 random base64url chars, rotatable; a routing hint only, never authority. */
+  joinCode?: string;
+  /** Denormalized, fail-closed hint; the circle document is authoritative. */
+  circle?: { enabled: boolean; revision: string; card?: { agentId: string; messageId: number; editedAt?: string } };
+}
+
+/** A person's choice for one agent (Circles S1): what the agent DM card offered and what they tapped.
+ * Kept outside StudioState, one record per (agent, person): circles/choice-store.ts. */
+export type JoinChoice = 'joined' | 'reply_only' | 'declined';
+export type JoinSurface = 'dm_card' | 'group_card' | 'mini_app';
+
+/** What was shown, captured when shown (PRIV-010/012). */
+export interface JoinNotice {
+  id: string;
+  version: string;
+  /** sha256 of the exact rendered text plus button labels */
+  copyHash: string;
+  locale: 'en' | 'fa';
+  presentedAt: string;
+}
+
+export interface AgentJoin {
+  agentId: string;
+  telegramId: number;
+  choice: JoinChoice;
+  notice: JoinNotice;
+  /** Always later than notice.presentedAt */
+  decidedAt: string;
+  surface: JoinSurface;
+  /** Monotonic per (agent, person); bumps on every decision */
+  revision: number;
+  /** callback_query.id or a server id */
+  eventId: string;
+  receiptId?: string;
+  /** Set only on Join (PRIV-004) */
+  adultDeclaredAt?: string;
+}
+
+/** A card shown to one person; its callbacks are honoured only for that person, once, until expiry. */
+export interface JoinReceipt {
+  id: string;
+  agentId: string;
+  telegramId: number;
+  surface: JoinSurface;
+  notice: JoinNotice;
+  /** The group a j_ link resolved to, after a membership check */
+  chatId?: number;
+  expiresAt: string;
+  consumedAt?: string;
 }
 
 export interface AuditEntry {

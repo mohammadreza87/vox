@@ -26,6 +26,7 @@ import { FakeLLM } from '../../tireh/__tests__/fixtures';
 import type { ElevenLabsStudio, OpenAIMedia, VoiceOptions } from '../media';
 import { Studio } from '../service';
 import { StudioStore } from '../store';
+import { FileAgentChoiceStore } from '../../circles/choice-store';
 import type { AgentVisibility, Member, PersonaSpec, Role } from '../types';
 
 export const SECRET = 'test-secret-that-is-at-least-32-characters-long';
@@ -211,6 +212,7 @@ export function makeStudio(options: { openai?: boolean; eleven?: boolean; manage
     ...(options.svgToPng === false ? {} : { svgToPng }),
     logger,
     now: () => clock.now,
+    choices: new FileAgentChoiceStore(join(dir, 'circles')),
   });
   return {
     studio, store, dir, personaLLM, chatLLM, openai, eleven, manager, bots, botFor, memory, imageToJpeg, svgToPng, logger, clock, adaptive,

@@ -88,6 +88,13 @@ describe('LIP1 synthetic inventory planner', () => {
     expect(wrapped.status).toBe('complete'); expect(wrapped.rows).toEqual(direct.rows); expect(wrapped.counts).toEqual(direct.counts);
   });
 
+  it('knows the Circles group fields (kind, joinCode, circle), so a Studio state carrying them stays complete', async () => {
+    const state = studioFixture();
+    Object.assign(state.groups[0], { kind: 'group', joinCode: 'abcdefghijklmnopqrstuv', circle: { enabled: true, revision: 'r1', card: { agentId: 'studio-agent', messageId: 5, editedAt: AT } } });
+    const r = await run('studio-state/1', [{ json: JSON.stringify(state) }]);
+    expect(r.status).toBe('complete'); expect(r.counts.unresolvedFragments).toBe(0); expect(r.rows.map(x => [x.kind, x.reasons])).toEqual((await run('studio-state/1', [studioFixture()])).rows.map(x => [x.kind, x.reasons]));
+  });
+
   it('marks missing and unsupported containers as unavailable rather than zero', async () => {
     for (const payload of [{ offers: [], chats: {} }, { memories: [], offers: [], chats: null }, { memories: [], offers: [], chats: {}, [CANARY]: { raw: CANARY } }]) {
       const r = await run('tireh-file-state/1', [payload]);

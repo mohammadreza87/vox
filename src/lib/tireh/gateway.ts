@@ -84,8 +84,9 @@ export interface RuntimePrivacy {
   readSharedAuthority?(personaId: string, chat: ChatContext, space: 'work' | 'personal'): Promise<{ revision: string }>;
   /** Fresh server membership/access check; snapshot directory alone is insufficient. */
   validateAudience?(personaId: string, chat: ChatContext): Promise<boolean>;
-  /** Groups only, when validateAudience fails: the agent and the captured audience still hold but a
-   * reader is a guest or unapproved. True answers from the current public turn, never stored context. */
+  /** When validateAudience fails: in a group the agent and the captured audience still hold but a reader
+   * is a guest or unapproved; in a DM a non-member chose to be answered (Circles). True answers from the
+   * current public turn, never stored context. */
   validatePublicAudience?(personaId: string, chat: ChatContext): Promise<boolean>;
 }
 
@@ -98,7 +99,7 @@ type BoundaryHashInput = typeof BOUNDARY_HASH_INPUTS[number];
 interface PrivacyInputs {
   allowed: boolean;
   audienceValid: boolean;
-  /** A group audience valid for the current public turn only: never stored context or indexed fences. */
+  /** An audience valid for the current public turn only: never stored context or indexed fences. */
   publicOnly?: boolean;
   states: RuntimePrivacyState[];
   shared?: { revision: string; context?: string[] };
@@ -756,9 +757,9 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
       try { audienceValid = await this.deps.runtimePrivacy.validateAudience(persona.id, chat); }
       catch { audienceValid = false; }
       if (!audienceValid) allowed = false;
-      // A guest or unapproved reader gates stored context, never the turn: the group
-      // still gets the current public turn, with no per-member reads and no memory.
-      if (!audienceValid && chat.kind === 'group' && this.deps.runtimePrivacy.validatePublicAudience) {
+      // A guest or unapproved reader gates stored context, never the turn: the group (or a DM
+      // whose outsider chose replies) gets the current public turn, no per-member reads, no memory.
+      if (!audienceValid && this.deps.runtimePrivacy.validatePublicAudience) {
         let publicOnly = false;
         try { publicOnly = await this.deps.runtimePrivacy.validatePublicAudience(persona.id, chat) === true; }
         catch { publicOnly = false; }

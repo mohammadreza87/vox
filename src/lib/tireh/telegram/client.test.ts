@@ -41,3 +41,27 @@ describe('setMyProfilePhoto wire shape (Bot API 9.4, InputProfilePhotoStatic)', 
     await expect(new TelegramBotClient('123:abc', fetch).setMyProfilePhoto(Buffer.from('x'))).rejects.toBeInstanceOf(TelegramApiError);
   });
 });
+
+describe('Circles wire options (silent sends, keyboard edits, alerts)', () => {
+  const body = (fetch: ReturnType<typeof fakeFetch>, call = 0) => JSON.parse(String(fetch.mock.calls[call][1]?.body)) as Record<string, unknown>;
+
+  it('adds disable_notification, reply_markup and show_alert only when asked, so existing calls are unchanged', async () => {
+    const fetch = fakeFetch({ message_id: 1, chat: { id: 5, type: 'private' }, date: 0 });
+    const bot = new TelegramBotClient('123:abc', fetch);
+    const keyboard = { inline_keyboard: [[{ text: 'Open', web_app: { url: 'https://x.example/p' } }]] };
+    await bot.sendMessage(5, 'hi');
+    await bot.sendMessage(5, 'quiet', { silent: true });
+    await bot.editMessageText(5, 9, 'edited');
+    await bot.editMessageText(5, 9, 'edited', keyboard);
+    await bot.answerCallbackQuery('q1', 'toast');
+    await bot.answerCallbackQuery('q2', 'alert', true);
+    expect([0, 1, 2, 3, 4, 5].map((i) => body(fetch, i))).toEqual([
+      { chat_id: 5, text: 'hi' },
+      { chat_id: 5, text: 'quiet', disable_notification: true },
+      { chat_id: 5, message_id: 9, text: 'edited' },
+      { chat_id: 5, message_id: 9, text: 'edited', reply_markup: keyboard },
+      { callback_query_id: 'q1', text: 'toast' },
+      { callback_query_id: 'q2', text: 'alert', show_alert: true },
+    ]);
+  });
+});

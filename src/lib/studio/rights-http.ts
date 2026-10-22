@@ -14,6 +14,7 @@ import { boundedStudioRequest } from './http';
 import { StudioRateLimiter, StudioRateLimitError } from './ratelimit';
 import { petStoreFor } from './pet-store';
 import type { PetCare } from '../pet/types';
+import type { AgentJoin } from './types';
 const localLimiters = new WeakMap<Studio, StudioRateLimiter>();
 const json = (value: unknown, status = 200, headers: Record<string, string> = {}) => Response.json(value, { status, headers: { 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', ...headers } });
 
@@ -36,6 +37,16 @@ async function petCareForExport(studio: Studio, id: number): Promise<{ petCare: 
 async function erasePetCare(studio: Studio, id: number): Promise<void> {
   try { await (await petStoreFor(studio)).eraseUser(id); }
   catch { (studio.deps.logger ?? console).warn('[studio] pet_erasure_failed'); }
+}
+/** Agent-card choices (Circles) for a rights export: present only when any exist, or a flag that they could not be read. */
+async function agentChoicesForExport(studio: Studio, id: number): Promise<{ agentChoices?: AgentJoin[] } | { agentChoicesUnavailable: true }> {
+  try { const choices = await studio.agentChoicesFor(id); return choices.length ? { agentChoices: choices } : {}; }
+  catch { (studio.deps.logger ?? console).warn('[studio] choice_export_failed'); return { agentChoicesUnavailable: true }; }
+}
+/** Agent-card choice erasure at intake, like pet care: never fails the filed request. */
+async function eraseAgentChoices(studio: Studio, id: number): Promise<void> {
+  try { await studio.forgetAgentChoices(id); }
+  catch { (studio.deps.logger ?? console).warn('[studio] choice_erasure_failed'); }
 }
 
 export async function handleRightsRequest(studio: Studio, request: Request, path: string[], botToken: string): Promise<Response> {
@@ -126,7 +137,7 @@ export async function handleRightsRequest(studio: Studio, request: Request, path
       // withdrawal cannot bring it back (the pet page's "forget me" does the same on its own). The
       // request itself still goes to review. The request is filed either way: a pet store failure is
       // logged and retried by replaying the request (idempotent).
-      if (input.kind === 'erasure') await erasePetCare(studio, user.id);
+      if (input.kind === 'erasure') { await erasePetCare(studio, user.id); await eraseAgentChoices(studio, user.id); }
       return respond(result, result.replayed ? 200 : 201);
     }
     if (path.length === 3 && path[0] === 'requests' && path[2] === 'actions') {
@@ -134,7 +145,7 @@ export async function handleRightsRequest(studio: Studio, request: Request, path
       // Pet care is per person and agent, not per space: every export carries all of it. Read
       // before the fences below, which must stay free of awaits. A pet store failure never fails the
       // export: it says the pet part is missing instead.
-      const petCare = result.prepared ? await petCareForExport(studio, user.id) : undefined;
+      const petCare = result.prepared ? { ...await petCareForExport(studio, user.id), ...await agentChoicesForExport(studio, user.id) } : undefined;
       if (result.prepared) {
         // Serialization precedes the last synchronous authority check. There is
         // no await between this fence and constructing the attachment response.
