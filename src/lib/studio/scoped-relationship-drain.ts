@@ -3,6 +3,7 @@ import type { Intention, DrainReport } from '../relationships';
 import { relationshipId } from '../relationships';
 import { composeFollowUp } from '../relationships/compose';
 import { buildSystemPrompt } from '../tireh/conversation/prompt';
+import { systemText } from '../tireh/llm-content';
 import { agentToPersona, personId, studioToOrg } from './org-bridge';
 import { canUseAgent } from './permissions';
 import type { Studio } from './service';
@@ -72,7 +73,7 @@ export async function drainScopedRelationships(studio: Studio, limit: number): P
     compose: async (job, context) => {
       if (!await authorize(job)) throw new Error('Relationship context changed');
       const snapshot = snapshots.get(job.id)!;
-      return composeFollowUp({ complete: request => studio.deps.chatLLM.complete({ ...request, system: `${request.system}\n\n${snapshot.system}` }) }, job.purpose, context, job.timing);
+      return composeFollowUp({ complete: request => studio.deps.chatLLM.complete({ ...request, system: `${systemText(request.system)}\n\n${snapshot.system}` }) }, job.purpose, context, job.timing);
     },
     send: async (job, text, signal) => {
       if (signal?.aborted || !await authorize(job) || !await loop.mayDeliver(job) || !await authorize(job) || signal?.aborted) throw new Error('Relationship changed before publication');

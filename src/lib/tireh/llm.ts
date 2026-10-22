@@ -11,6 +11,9 @@ import Anthropic from '@anthropic-ai/sdk';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { logTelegramDiagnostic } from './telegram/diagnostics';
+import { systemText, type CacheControl, type LLMMessageExtras, type LLMResponseMeta, type LLMStopReason, type LLMSystem, type SystemBlock } from './llm-content';
+
+export type { CacheControl, SystemBlock, LLMSystem, LLMResponseMeta, LLMStopReason } from './llm-content';
 
 function isUnavailableWebTool(error: unknown): boolean {
   // Provider content is used only for the existing fallback decision, never
@@ -27,7 +30,7 @@ export interface LLMImage {
   data: string;
 }
 
-export interface LLMMessage {
+export interface LLMMessage extends LLMMessageExtras {
   role: 'user' | 'assistant';
   content: string;
   images?: LLMImage[];
@@ -37,7 +40,8 @@ export interface LLMMessage {
 export type LLMEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 export interface LLMRequest {
-  system: string;
+  /** A string keeps cachedSystem() exactly as before; blocks are sent as given. */
+  system: LLMSystem;
   messages: LLMMessage[];
   maxTokens?: number;
   temperature?: number;
@@ -50,6 +54,10 @@ export interface LLMRequest {
   /** Optional final synchronous committed-authority fence, never serialized. */
   authorizeNow?: () => boolean;
   signal?: AbortSignal;
+  /** A/B arm TIREH_PROMPT_SYSTEM_TAIL: Anthropic sends a trailing {role:'system'} message via a narrow body type (like EffortBody); Gemini appends it to systemInstruction. */
+  systemTail?: string;
+  /** Content-free metadata; called once per provider response (complete, stream at end, completeWithWeb final). Never throws into delivery. */
+  onMeta?: (meta: LLMResponseMeta) => void;
 }
 
 export class LLMAuthorizationError extends Error {
@@ -100,14 +108,19 @@ export async function* streamText(llm: LLM, request: LLMRequest): AsyncIterable<
 export function normalizeTurns(messages: LLMMessage[]): LLMMessage[] {
   const merged: LLMMessage[] = [];
   for (const message of messages) {
-    if (!message.content.trim() && !message.images?.length) continue;
+    if (!message.content.trim() && !message.images?.length && !message.trailingText?.length) continue;
     const last = merged[merged.length - 1];
     if (last && last.role === message.role) {
       last.content = `${last.content}\n${message.content}`;
       if (message.role === 'user' && message.images?.length) last.images = [...(last.images ?? []), ...message.images];
+      if (message.role === 'user' && message.trailingText?.length) last.trailingText = [...(last.trailingText ?? []), ...message.trailingText];
+      if (message.cacheControl) last.cacheControl = { ...message.cacheControl };
     } else {
+      // Extras appear only when set, so turns without them stay deep-equal to before.
       merged.push({ role: message.role, content: message.content,
-        ...(message.role === 'user' && message.images?.length ? { images: [...message.images] } : {}) });
+        ...(message.role === 'user' && message.images?.length ? { images: [...message.images] } : {}),
+        ...(message.role === 'user' && message.trailingText?.length ? { trailingText: [...message.trailingText] } : {}),
+        ...(message.cacheControl ? { cacheControl: { ...message.cacheControl } } : {}) });
     }
   }
   while (merged.length > 0 && merged[0].role === 'assistant') merged.shift();
@@ -116,16 +129,59 @@ export function normalizeTurns(messages: LLMMessage[]): LLMMessage[] {
 
 /** Provider wire formats contain only the explicit current user's attachments. */
 export function anthropicTurns(messages: LLMMessage[]): Anthropic.MessageParam[] {
-  return normalizeTurns(messages).map(message => ({ role: message.role,
-    content: message.images?.length ? [
-      ...message.images.map(image => ({ type: 'image' as const, source: { type: 'base64' as const, media_type: image.mimeType, data: image.data } })),
-      { type: 'text' as const, text: message.content || 'Describe the shared image.' },
-    ] : message.content,
-  }));
+  return normalizeTurns(messages).map((message): Anthropic.MessageParam => {
+    const imageBlocks = (message.images ?? []).map(image => ({ type: 'image' as const, source: { type: 'base64' as const, media_type: image.mimeType, data: image.data } }));
+    if (!message.trailingText?.length && !message.cacheControl) return { role: message.role,
+      content: message.images?.length ? [...imageBlocks, { type: 'text' as const, text: message.content || 'Describe the shared image.' }] : message.content };
+    // Image blocks always come first; trailing text blocks (the per-turn block)
+    // follow the message text. Anthropic rejects empty text blocks, so none is sent.
+    const texts = [message.content || (message.images?.length ? 'Describe the shared image.' : ''), ...(message.trailingText ?? [])]
+      .filter((text) => text !== '')
+      .map((text): Anthropic.TextBlockParam => ({ type: 'text', text }));
+    const content: Array<Anthropic.ImageBlockParam | Anthropic.TextBlockParam> = [...imageBlocks, ...texts];
+    if (message.cacheControl && content.length) content[content.length - 1] = { ...content[content.length - 1], cache_control: anthropicCache(message.cacheControl) };
+    return { role: message.role, content };
+  });
+}
+
+/** Anthropic cache marker; ttl is serialized only when set. */
+export function anthropicCache(c: CacheControl): Anthropic.CacheControlEphemeral {
+  return { type: 'ephemeral', ...(c.ttl ? { ttl: c.ttl } : {}) };
+}
+
+/** Array system: blocks in the given order, empty-text blocks dropped, cache_control kept. */
+export function anthropicSystem(blocks: SystemBlock[]): Anthropic.TextBlockParam[] {
+  return blocks.filter((b) => b.text !== '').map((b): Anthropic.TextBlockParam => ({ type: 'text', text: b.text, ...(b.cache_control ? { cache_control: anthropicCache(b.cache_control) } : {}) }));
+}
+
+/**
+ * A mid-conversation `{role:'system'}` message (the TIREH_PROMPT_SYSTEM_TAIL
+ * A/B arm). @anthropic-ai/sdk 0.71 types only user and assistant roles on
+ * MessageParam but serializes the body as given, so the tail is added through
+ * this narrow type, like EffortBody.
+ */
+type SystemTailParam = { role: 'system'; content: string };
+
+/** Appends the system tail after the last turn; a missing or blank tail changes nothing. */
+export function withSystemTail(turns: Anthropic.MessageParam[], tail?: string): Anthropic.MessageParam[] {
+  if (!tail?.trim()) return turns;
+  // The single narrowing cast for the system-tail turn.
+  return [...turns, { role: 'system', content: tail } as SystemTailParam as unknown as Anthropic.MessageParam];
+}
+
+const STOP_REASONS: readonly LLMStopReason[] = ['end_turn', 'max_tokens', 'stop_sequence', 'tool_use', 'pause_turn', 'refusal'];
+/** One of the six SDK stop reasons; null and anything else read as 'unknown'. */
+export function stopReason(value: unknown): LLMStopReason {
+  return STOP_REASONS.find((reason) => reason === value) ?? 'unknown';
+}
+
+/** Message text plus any trailing text, for providers without content blocks. */
+export function geminiText(message: LLMMessage): string {
+  return [message.content, ...(message.trailingText ?? [])].join('\n\n');
 }
 
 export function geminiParts(message: LLMMessage) {
-  return [{ text: message.content }, ...(message.role === 'user' ? message.images ?? [] : []).map(image => ({ inlineData: { mimeType: image.mimeType, data: image.data } }))];
+  return [{ text: geminiText(message) }, ...(message.role === 'user' ? message.images ?? [] : []).map(image => ({ inlineData: { mimeType: image.mimeType, data: image.data } }))];
 }
 
 function supportsCustomSampling(model: string): boolean {
@@ -157,6 +213,18 @@ export function supportsEffort(model: string): boolean {
  * field is added through this narrow type instead of a cast to `any`.
  */
 type EffortBody = { output_config?: { effort: LLMEffort } };
+
+type TokenMeta = Pick<LLMResponseMeta, 'inputTokens' | 'outputTokens' | 'cacheReadInputTokens' | 'cacheCreationInputTokens'>;
+/** Content-free token fields; a null, missing, malformed or throwing value is omitted, never guessed. */
+function tokenMeta(read: Record<keyof TokenMeta, () => unknown>): TokenMeta {
+  const out: TokenMeta = {};
+  for (const key of Object.keys(read) as Array<keyof TokenMeta>) {
+    let value: unknown;
+    try { value = read[key](); } catch { value = undefined; }
+    if (typeof value === 'number' && Number.isFinite(value)) out[key] = value;
+  }
+  return out;
+}
 
 /**
  * The persona system prompt (conversation/prompt.ts) puts everything that is
@@ -223,7 +291,7 @@ export class AnthropicLLM implements LLM {
       model: this.model,
       max_tokens: maxTokens,
       ...(supportsCustomSampling(this.model) ? { temperature } : {}),
-      system: cachedSystem(system),
+      system: typeof system === 'string' ? cachedSystem(system) : anthropicSystem(system),
       ...(effort && supportsEffort(this.model) ? { output_config: { effort } } : {}),
     };
   }
@@ -247,8 +315,29 @@ export class AnthropicLLM implements LLM {
     });
   }
 
+  /** The provider turns plus the optional system tail (TIREH_PROMPT_SYSTEM_TAIL arm). */
+  private turns(request: LLMRequest): Anthropic.MessageParam[] {
+    return withSystemTail(anthropicTurns(request.messages), request.systemTail);
+  }
+
+  /**
+   * Content-free metadata for one provider response: stop reason and token
+   * counts only, never text. A throwing getter or callback never changes delivery.
+   */
+  private emitMeta(request: LLMRequest, response: { stop_reason?: unknown; usage?: Partial<Record<'input_tokens' | 'output_tokens' | 'cache_read_input_tokens' | 'cache_creation_input_tokens', number | null>> | null }): void {
+    if (!request.onMeta) return;
+    try {
+      let stop: unknown;
+      try { stop = response.stop_reason; } catch { stop = undefined; }
+      request.onMeta({ provider: 'anthropic', model: this.model, stopReason: stopReason(stop),
+        ...tokenMeta({ inputTokens: () => response.usage?.input_tokens, outputTokens: () => response.usage?.output_tokens,
+          cacheReadInputTokens: () => response.usage?.cache_read_input_tokens, cacheCreationInputTokens: () => response.usage?.cache_creation_input_tokens }) });
+    } catch { /* Metadata is best-effort. */ }
+  }
+
   async complete(request: LLMRequest): Promise<string> {
-    const response = await this.create(request, { ...this.params(request), messages: anthropicTurns(request.messages) });
+    const response = await this.create(request, { ...this.params(request), messages: this.turns(request) });
+    this.emitMeta(request, response);
     if (request.requireComplete && response.stop_reason === 'max_tokens') throw new Error('LLM completion truncated');
     return response.content
       .flatMap((block) => (block.type === 'text' ? [block.text] : []))
@@ -259,19 +348,23 @@ export class AnthropicLLM implements LLM {
   async *stream(request: LLMRequest): AsyncIterable<string> {
     this.getClient();
     await authorizeRequest(request);
-    const body = { ...this.params(request), messages: anthropicTurns(request.messages) };
+    const body = { ...this.params(request), messages: this.turns(request) };
     authorizeImmediate(request);
     const stream = transportAuthority.run({ authorizeNow: request.authorizeNow, signal: request.signal }, () => request.authorize || request.authorizeNow || request.signal
       ? this.client!.messages.stream(body, { maxRetries: 0, ...(request.signal ? { signal: request.signal } : {}) }) : this.client!.messages.stream(body));
     const started = performance.now();
     let completed = false;
+    let sawStart = false;
+    let stop: unknown;
     let inputTokens: number | undefined, outputTokens: number | undefined, cacheReadTokens: number | null | undefined, cacheWriteTokens: number | null | undefined;
     try {
       for await (const event of stream) {
         try {
           if (event.type === 'message_start') { inputTokens = event.message?.usage?.input_tokens; outputTokens = event.message?.usage?.output_tokens;
             cacheReadTokens = event.message?.usage?.cache_read_input_tokens; cacheWriteTokens = event.message?.usage?.cache_creation_input_tokens; }
+          if (event.type === 'message_start') sawStart = true;
           if (event.type === 'message_delta' && event.usage?.output_tokens !== undefined) outputTokens = event.usage.output_tokens;
+          if (event.type === 'message_delta' && event.delta?.stop_reason !== undefined) stop = event.delta.stop_reason;
         } catch { /* Optional measurement must not change content delivery. */ }
         if (event.type === 'message_stop') completed = true;
         if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') yield event.delta.text;
@@ -280,13 +373,14 @@ export class AnthropicLLM implements LLM {
       // Streaming usage is cumulative, so emit one receipt rather than summing deltas.
       observedUsage('anthropic', 'claude', { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens }, !completed);
       recordStage('generation', completed ? 'succeeded' : 'unknown', performance.now() - started);
+      if (sawStart) this.emitMeta(request, { stop_reason: stop, usage: { input_tokens: inputTokens, output_tokens: outputTokens, cache_read_input_tokens: cacheReadTokens, cache_creation_input_tokens: cacheWriteTokens } });
     }
   }
 
   async completeWithWeb(request: LLMRequest & { maxSearches: number }): Promise<{ text: string; sources: WebSource[] }> {
     if (this.webUnavailable || request.maxSearches < 1) return { text: await this.complete(request), sources: [] };
     this.getClient();
-    const messages: Anthropic.MessageParam[] = anthropicTurns(request.messages);
+    const messages: Anthropic.MessageParam[] = this.turns(request);
     const tools: Anthropic.ToolUnion[] = [{ type: 'web_search_20250305', name: 'web_search', max_uses: request.maxSearches }];
     try {
       let response = await this.create(request, { ...this.params(request), messages, tools });
@@ -294,6 +388,7 @@ export class AnthropicLLM implements LLM {
         messages.push({ role: 'assistant', content: response.content });
         response = await this.create(request, { ...this.params(request), messages, tools });
       }
+      this.emitMeta(request, response);
       return webAnswer(response.content);
     } catch (error) {
       // A model or account without web search answers from what it knows.
@@ -321,12 +416,12 @@ export class GeminiLLM implements LLM {
   constructor(private readonly apiKey: string, private readonly model: string) {}
   get identity() { return { provider: 'gemini', model: this.model }; }
 
-  async complete({ system, messages, maxTokens = 1024, temperature = 0.7, requireComplete, authorize, authorizeNow, signal }: LLMRequest): Promise<string> {
+  async complete({ system, systemTail, messages, maxTokens = 1024, temperature = 0.7, requireComplete, authorize, authorizeNow, signal }: LLMRequest): Promise<string> {
     const turns = normalizeTurns(messages);
     const last = turns.pop();
     if (!last) return '';
     this.client ??= new GoogleGenerativeAI(this.apiKey);
-    const model = this.client.getGenerativeModel({ model: this.model, systemInstruction: system });
+    const model = this.client.getGenerativeModel({ model: this.model, systemInstruction: systemText(system) + (systemTail ? '\n\n' + systemTail : '') });
     const chat = model.startChat({
       history: turns.map((m) => ({ role: m.role === 'user' ? 'user' : 'model', parts: geminiParts(m) })),
       generationConfig: { maxOutputTokens: maxTokens, temperature },
@@ -336,7 +431,7 @@ export class GeminiLLM implements LLM {
       let returned = false;
       try {
       authorizeImmediate({ authorizeNow, signal });
-      const outgoing = last.images?.length ? geminiParts(last) : last.content;
+      const outgoing = last.images?.length ? geminiParts(last) : geminiText(last);
       const result = await (signal ? chat.sendMessage(outgoing, { signal }) : chat.sendMessage(outgoing));
       returned = true;
       captureUsage('gemini', 'gemini', () => ({ inputTokens: result.response.usageMetadata?.promptTokenCount,

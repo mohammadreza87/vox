@@ -2,6 +2,7 @@ import { appendFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { composeFollowUp, FileObservationStore, FileRelationshipStore, OpenAIRelationshipFeedback, RelationshipLoop, SafeRelationshipObserver } from '..';
 import { AnthropicLLM, LLMAuthorizationError, type LLM, type LLMRequest } from '../../tireh/llm';
+import { systemText } from '../../tireh/llm-content';
 import { PersonaGateway } from '../../tireh/gateway';
 import { parseOrgConfig } from '../../tireh/org/config';
 import { OrgDirectory } from '../../tireh/org/directory';
@@ -32,7 +33,7 @@ class ScriptedLLM implements LLM {
     const { authorize, ...payload } = request;
     if (authorize && !await authorize()) throw new LLMAuthorizationError();
     this.requests.push(structuredClone(payload));
-    if (request.system.startsWith('You extract long-term memories')) return '{"memories":[]}';
+    if (systemText(request.system).startsWith('You extract long-term memories')) return '{"memories":[]}';
     return 'I hear you. Tell me a little more about what would feel useful right now.';
   }
 }
