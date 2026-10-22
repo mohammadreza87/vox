@@ -1,62 +1,79 @@
 #!/usr/bin/env node
 /**
- * Offline calibration report for the triage pre-pass (S09).
+ * Offline calibration report for the triage pre-pass (Step 9 of
+ * docs/AGENT_INTELLIGENCE_SOLUTION.md).
  *
- *   node --import tsx scripts/decisions-calibration.ts --log <decision-log-v1.jsonl> --labels <labels.csv> \
- *     [--thresholds 0.2,0.5,0.8] [--question route] [--since 2026-10-01]
+ *   npx tsx scripts/decisions-calibration.ts --log <decision-log-v1.jsonl> --labels <labels.csv> \
+ *     [--since ISO] [--until ISO] [--thresholds 0.2,0.5,0.8] [--firestore]
  *
- * Reads a content-free decision log (TIREH_DECISION_LOG file store) and a
- * labelled CSV (`id,question,label[,language]`), then prints precision and
- * recall per question, threshold and language. Local files only: no network
- * and no Firestore mode. Logic lives in src/lib/tireh/decisions/calibration.ts.
+ * Reads the content-free decision log (TIREH_DECISION_LOG): the JSONL file
+ * store, or with --firestore the 'vox_decision_log' collection (needs the
+ * Firebase Admin credentials of the environment; --log is then ignored).
+ * Labels are a CSV with exactly `row_id,question,label`. The log carries no
+ * content to label from, by design: labels must come from a separately
+ * consented or synthetic evaluation run whose harness recorded the row ids.
+ *
+ * Prints precision and recall per question, choice value, script language
+ * and threshold, plus a 'support n/200' gate line per question and language.
+ * Never prints row ids or label contents. Logic: src/lib/tireh/decisions/calibration.ts.
  */
 import { readFileSync } from 'fs';
-import { calibrationReport, DEFAULT_THRESHOLDS, formatCalibrationReport, parseDecisionLogJsonl, parseLabelsCsv } from '../src/lib/tireh/decisions/calibration';
+import { computeCalibration, DEFAULT_THRESHOLDS, formatCalibration, parseLabelsCsv, unmatchedLabelCount } from '../src/lib/tireh/decisions/calibration';
+import { createFileDecisionLogStore, FirestoreDecisionLogStore, type DecisionLogStore } from '../src/lib/tireh/decisions/log';
 
-const USAGE = 'usage: node --import tsx scripts/decisions-calibration.ts --log <decision-log-v1.jsonl> --labels <labels.csv> [--thresholds 0.2,0.5,0.8] [--question <name>] [--since <YYYY-MM-DD>]';
+const USAGE = 'usage: npx tsx scripts/decisions-calibration.ts --log <decision-log-v1.jsonl> --labels <labels.csv> [--since ISO] [--until ISO] [--thresholds 0.2,0.5,0.8] [--firestore]';
 
-function fail(message?: string): never {
-  if (message) process.stderr.write(`${message}\n`);
-  process.stderr.write(`${USAGE}\n`);
+function fail(message: string): never {
+  process.stderr.write(`${message}\n${USAGE}\n`);
   process.exit(2);
 }
 
-function parseArgs(argv: readonly string[]): { log: string; labels: string; thresholds: readonly number[]; question?: string; since?: Date } {
-  const allowed = new Set(['--log', '--labels', '--thresholds', '--question', '--since']);
-  const flags = new Map<string, string>();
+interface Args { log?: string; labels: string; since?: Date; until?: Date; thresholds: readonly number[]; firestore: boolean }
+
+function parseArgs(argv: readonly string[]): Args {
+  const valued = new Set(['--log', '--labels', '--since', '--until', '--thresholds']);
+  const values = new Map<string, string>();
+  let firestore = false;
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i];
+    if (flag === '--firestore') { firestore = true; continue; }
     const value = argv[i + 1];
-    if (!allowed.has(flag) || flags.has(flag) || value === undefined || value.startsWith('--')) fail(`bad argument: ${flag}`);
-    flags.set(flag, value);
+    if (!valued.has(flag) || values.has(flag) || value === undefined || value.startsWith('--')) fail(`bad argument: ${flag}`);
+    values.set(flag, value);
     i++;
   }
-  const log = flags.get('--log'), labels = flags.get('--labels');
-  if (!log || !labels) fail('--log and --labels are required');
+  const labels = values.get('--labels');
+  const log = values.get('--log');
+  if (!labels) fail('--labels is required');
+  if (!log && !firestore) fail('--log is required unless --firestore is given');
+  const date = (flag: string): Date | undefined => {
+    const raw = values.get(flag);
+    if (raw === undefined) return undefined;
+    const parsed = new Date(raw);
+    if (Number.isNaN(parsed.getTime())) fail(`${flag} must be an ISO date`);
+    return parsed;
+  };
   let thresholds = DEFAULT_THRESHOLDS;
-  const rawThresholds = flags.get('--thresholds');
-  if (rawThresholds !== undefined) {
-    thresholds = rawThresholds.split(',').map((t) => Number(t.trim()));
+  const raw = values.get('--thresholds');
+  if (raw !== undefined) {
+    thresholds = raw.split(',').map((t) => Number(t.trim()));
     if (!thresholds.length || thresholds.some((t) => !Number.isFinite(t) || t <= 0 || t >= 1)) fail('--thresholds must be numbers between 0 and 1');
   }
-  const question = flags.get('--question');
-  if (question !== undefined && !/^[a-z][a-z0-9_]{0,63}$/.test(question)) fail('--question must be a question name');
-  const rawSince = flags.get('--since');
-  const since = rawSince === undefined ? undefined : new Date(rawSince);
-  if (since && Number.isNaN(since.getTime())) fail('--since must be a date');
-  return { log, labels, thresholds, ...(question ? { question } : {}), ...(since ? { since } : {}) };
+  return { ...(log ? { log } : {}), labels, since: date('--since'), until: date('--until'), thresholds, firestore };
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
-  let logText: string, labelText: string;
-  try { logText = readFileSync(args.log, 'utf8'); } catch { return fail('cannot read --log file'); }
-  try { labelText = readFileSync(args.labels, 'utf8'); } catch { return fail('cannot read --labels file'); }
+  let labelText: string;
+  try { labelText = readFileSync(args.labels, 'utf8'); } catch { return fail('cannot read the --labels file'); }
   let labels;
   try { labels = parseLabelsCsv(labelText); } catch (error) { return fail(error instanceof Error ? error.message : 'invalid labels'); }
-  const rows = parseDecisionLogJsonl(logText).filter((r) => !args.since || r.at.getTime() >= args.since.getTime());
-  const selected = args.question ? labels.filter((l) => l.question === args.question) : labels;
-  process.stdout.write(formatCalibrationReport(calibrationReport(rows, selected, args.thresholds)));
+  const store: DecisionLogStore = args.firestore
+    ? new FirestoreDecisionLogStore(await (await import('@/lib/firebase-admin')).getAdminDb())
+    : createFileDecisionLogStore(args.log!);
+  const rows = await store.list({ since: args.since, until: args.until, limit: 10_000 });
+  process.stdout.write(formatCalibration(computeCalibration(rows, labels, args.thresholds)));
+  process.stdout.write(`unmatched label rows: ${unmatchedLabelCount(rows, labels)}\n`);
 }
 
-main();
+main().catch(() => fail('calibration failed'));
