@@ -249,6 +249,17 @@ class TombstoneStore extends InMemoryMemoryStore {
   }
 }
 
+/** A store without S06's optional tombstone methods: inheritance must fail closed. */
+class NoTombstoneStore extends InMemoryMemoryStore {
+  declare tombstonesOf: undefined;
+  declare addTombstones: undefined;
+  constructor() {
+    super();
+    Object.defineProperty(this, 'tombstonesOf', { value: undefined });
+    Object.defineProperty(this, 'addTombstones', { value: undefined });
+  }
+}
+
 async function successorScenario(store: InMemoryMemoryStore) {
   const h = makeStudio({ adaptive: false });
   const org = await seedOrg(h);
@@ -270,7 +281,7 @@ async function successorScenario(store: InMemoryMemoryStore) {
   await store.delete(forgotten.id);
   // An active record whose lineage the predecessor already tombstoned.
   const lineage = await add('TOMBSTONED_LINEAGE', { kind: 'group', groupId: 'chat-1' }, { source: { personId: personId(ID.alice), chatKind: 'private', at: T0, eventIds: ['lineage-1'] } });
-  if (store instanceof TombstoneStore) await store.addTombstones(old.id, ['lineage-1']);
+  if (typeof store.addTombstones === 'function') await store.addTombstones(old.id, ['lineage-1']);
   await h.studio.fire(org.admin, old.id, { reason: 'reset', memoryPolicy: 'transfer', confirmName: 'Nova' });
   h.personaLLM.push(draftJson({ name: 'Nova Two' }));
   const { agent: next } = await hire(h, org.alice, { name: 'Nova Two' }, old.id);
@@ -309,8 +320,15 @@ describe('(d) inheritMemories', () => {
       expect(JSON.stringify((await h.store.read()).audit)).not.toMatch(/FACT|SECRET|CORRECTED|CANARY/);
     });
 
-    it('inherits nothing when the store cannot carry tombstones (fail closed)', async () => {
+    it('carries tombstones with the real InMemoryMemoryStore once S06 is merged', async () => {
       const store = new InMemoryMemoryStore();
+      const { old, next } = await successorScenario(store);
+      expect((await store.listActive(next.id)).map((m) => m.content).sort()).toEqual(['CORRECTED', 'GROUP_FACT', 'PEOPLE_FACT', 'PROJECT_FACT']);
+      expect(await store.tombstonesOf(next.id)).toEqual(await store.tombstonesOf(old.id));
+    });
+
+    it('inherits nothing when the store cannot carry tombstones (fail closed)', async () => {
+      const store = new NoTombstoneStore();
       const { next } = await successorScenario(store);
       expect(await store.listActive(next.id)).toEqual([]);
     });
