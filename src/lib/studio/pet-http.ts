@@ -193,14 +193,15 @@ export async function handlePetRequest(studio: Studio, request: Request, agentId
       // A failing choice store never blocks the pet export: pet care still goes out.
       const choices = await studio.agentChoicesFor(user.id).catch(() => []);
       const circles = await studio.circleParticipationFor(user.id).catch(() => []);
-      const body: PetExportResponse = { petCare: await pets.listForUser(user.id), ...(choices.length ? { agentChoices: choices } : {}), ...(circles.length ? { circles } : {}) };
+      const notes = await studio.notesFor(user.id).catch(() => []);
+      const body: PetExportResponse = { petCare: await pets.listForUser(user.id), ...(choices.length ? { agentChoices: choices } : {}), ...(circles.length ? { circles } : {}), ...(notes.length ? { notes } : {}) };
       return json(body, 200, { 'Content-Disposition': 'attachment; filename="vox-pet-export.json"' });
     }
     if (route === 'forget') {
       await limiter.consume('mutation', user.id);
-      // Circle rows and choices are erased first, so a failing store fails the request before pet care is touched.
-      const circles = await studio.forgetCircles(user.id), choices = await studio.forgetAgentChoices(user.id), erased = await pets.eraseUser(user.id);
-      const body: PetForgetResponse = { erased, ...(choices ? { choicesErased: choices } : {}), ...(circles ? { circlesErased: circles } : {}) };
+      // Circle rows, note copies and choices are erased first, so a failing store fails the request before pet care is touched.
+      const circles = await studio.forgetCircles(user.id), notes = await studio.forgetNotes(user.id), choices = await studio.forgetAgentChoices(user.id), erased = await pets.eraseUser(user.id);
+      const body: PetForgetResponse = { erased, ...(choices ? { choicesErased: choices } : {}), ...(circles ? { circlesErased: circles } : {}), ...(notes ? { notesErased: notes } : {}) };
       return json(body);
     }
 

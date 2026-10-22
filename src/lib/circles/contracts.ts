@@ -162,3 +162,82 @@ export interface CircleParticipationExport {
   welcomed?: true;
   nudgedAt?: string;
 }
+
+/* ---------- S3 personal notes (R2 decision 2) ---------- */
+
+/** A note's text, at most this many characters. */
+export const NOTE_MAX_CHARS = 2000;
+/** Active copies one person may hold. */
+export const NOTES_MAX_ACTIVE = 500;
+/** Each copy is kept 365 days (R2), erasable any time. */
+export const NOTE_DAYS = 365;
+/** A save proposal lives 10 minutes. */
+export const NOTE_PROPOSAL_MS = 10 * 60_000;
+
+export type NoteOrigin = 'dm' | 'group';
+
+/**
+ * One person's copy of a note. A DM save is one copy; a group save writes one copy per recipient, all
+ * sharing one noteId. agentIds: the agents that may use it (a DM save: its agent; a group copy: the
+ * circle agents the recipient covered at save time). A deleted copy is a tombstone: no text.
+ */
+export interface NoteCopy {
+  /** `<owner base36>-<random>`: an [Erase] button names its owner and is refused for anyone else. */
+  copyId: string;
+  noteId: string;
+  text?: string;
+  origin: NoteOrigin;
+  savedByAgentId: string;
+  agentIds: string[];
+  /** Group origin only */
+  fromGroupId?: string;
+  groupTitle?: string;
+  authorTelegramId: number;
+  savedAt: string;
+  expiresAt: string;
+  status: 'active' | 'deleted';
+  deletedAt?: string;
+}
+
+/** "Save this?" before the asker's one-tap confirm; its id (`<owner base36>-<random>`) is the cs:/cn: callback id. */
+export interface NoteProposal {
+  id: string;
+  /** Minted with the proposal, so every copy of a retried save shares it. */
+  noteId: string;
+  agentId: string;
+  origin: NoteOrigin;
+  /** Where the confirm must be tapped: the DM or the group. */
+  chatId: number;
+  groupTitle?: string;
+  text: string;
+  locale: 'en' | 'fa';
+  createdAt: string;
+  expiresAt: string;
+  /** A group save in flight: the one tap that claimed it (a double tap neither writes nor posts twice). */
+  claimedAt?: string;
+}
+
+/** One person's notes (`circle-notes:v1:<sha256(telegramId)>`): their copies, open proposals and save events. */
+export interface PersonNotes {
+  v: 1;
+  copies: NoteCopy[];
+  proposals: NoteProposal[];
+  /** Idempotency: a save event (the proposal id) once committed, and the copy it made. */
+  events: Array<{ id: string; copyId: string }>;
+  /** When this person last used forget me: a save that began before it is refused (it would outlive the erasure). Kept a day. */
+  forgottenAt?: string;
+}
+
+/** Export: the requester's own active copies; anyone else is "another member". */
+export interface NoteExport {
+  copyId: string;
+  noteId: string;
+  text: string;
+  origin: NoteOrigin;
+  agentIds: string[];
+  fromGroupId?: string;
+  groupTitle?: string;
+  author: 'you' | 'another member';
+  savedAt: string;
+  expiresAt: string;
+}

@@ -88,11 +88,17 @@ export interface RuntimePrivacy {
    * is a guest or unapproved; in a DM a non-member chose to be answered (Circles). True answers from the
    * current public turn, never stored context. */
   validatePublicAudience?(personaId: string, chat: ChatContext): Promise<boolean>;
+  /** Circles notes this agent may use in this chat (a DM: the person's own; a group: notes every reader
+   * holds), labelled; undefined = none. Turn context only: never memory, never extracted. */
+  readNotes?(personaId: string, chat: ChatContext): Promise<{ revision: string; context: string[] } | undefined>;
+  readNotesAuthority?(personaId: string, chat: ChatContext): Promise<{ revision: string } | undefined>;
+  /** Synchronous, for the indexed send fence; throws where it cannot read synchronously. */
+  readNotesAuthorityNow?(personaId: string, chat: ChatContext): { revision: string } | undefined;
 }
 
 /** Every input of the turn boundary key, in hash order. Each one has a
  * monotonic revision writer that rechecks compare (see boundary-revisions.test). */
-export const BOUNDARY_HASH_INPUTS = ['space', 'speakerId', 'chat', 'allowed', 'audienceValid', 'shared', 'states', 'config'] as const;
+export const BOUNDARY_HASH_INPUTS = ['space', 'speakerId', 'chat', 'allowed', 'audienceValid', 'shared', 'states', 'config', 'notes'] as const;
 type BoundaryHashInput = typeof BOUNDARY_HASH_INPUTS[number];
 
 /** What the boundary reads through RuntimePrivacy, before any derivation. */
@@ -103,6 +109,8 @@ interface PrivacyInputs {
   publicOnly?: boolean;
   states: RuntimePrivacyState[];
   shared?: { revision: string; context?: string[] };
+  /** Circles notes for this turn; absent when there are none (the boundary key is then as without notes). */
+  notes?: { revision: string; context?: string[] };
 }
 
 /** Present when the boundary came from a privacy snapshot: what rechecks compare. */
@@ -129,6 +137,8 @@ interface TurnBoundary {
   memorySources?: string[];
   memoryIds?: string[];
   revisions?: TurnRevisions;
+  /** The notes revision this turn's context used; set only when it used notes (send-time fence). */
+  notesRevision?: string;
 }
 
 export interface GatewayDeps {
@@ -173,6 +183,8 @@ export interface GatewayDeps {
   groupWindow?: GroupWindow;
   /** Circles: URL buttons for an addressed group reply (the once-a-day join nudge); undefined = none. */
   replyKeyboard?(personaId: string, chatId: number, from: TelegramUser): Promise<InlineKeyboard | undefined>;
+  /** Circles notes: /notes, /forget <n> and explicit "remember this" proposals; true = handled (nothing else runs). */
+  notes?: { intercept(personaId: string, chat: ChatContext, message: TelegramMessage, text: string, addressed: boolean): Promise<boolean> };
 }
 
 /** Why a proactive claim was refused. */
@@ -426,6 +438,8 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
       await this.handleCommand(persona, chat, speaker.id, message, '/forgetall');
       return 'command';
     }
+    // Circles notes: an explicit "remember this" is detected here, deterministically (no model call).
+    if (this.deps.notes && await this.deps.notes.intercept(persona.id, chat, message, rawText, chat.kind === 'private' || groupAddressing(persona, message).direct)) return 'command';
     if (rawText.startsWith('/')) {
       const handled = await this.handleCommand(persona, chat, speaker.id, message, rawText);
       if (handled) return 'command';
@@ -558,7 +572,8 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
       if (!reply) return voided();
       if (!(await this.groupAllowed(persona, chat, speaker.id, action))) return voided();
       const delivered = await this.sendReply(persona, chat, message, reply, voiceWanted, sources, action, privacyEpoch, async () => this.unchanged(persona, chat, speaker.id, boundary),
-        boundary.compact ? () => this.exportAuthorizedNow(persona, chat, speaker.id, boundary) : undefined);
+        boundary.compact ? () => this.exportAuthorizedNow(persona, chat, speaker.id, boundary) : undefined,
+        boundary.notesRevision !== undefined ? () => this.notesCurrent(persona, chat, boundary) : undefined);
       if (delivered === null) return voided();
       // A proactive contribution never opens a follow-up: the throttle governs that person's next line.
       if (windowKey) this.groupWindow.answered(windowKey, message.message_id, speaker.id, delivered, this.now().getTime(), { heard, followUp: action === 'reply' });
@@ -694,7 +709,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
   private compactPrivacy(): boolean {
     const privacy = this.deps.runtimePrivacy;
     return privacy?.legacyStores === 'unavailable' && typeof privacy.readAuthority === 'function' &&
-      (!privacy.readShared || typeof privacy.readSharedAuthority === 'function');
+      (!privacy.readShared || typeof privacy.readSharedAuthority === 'function') && (!privacy.readNotes || typeof privacy.readNotesAuthority === 'function');
   }
 
   private boundary(persona: Persona, chat: ChatContext, speakerId: string, space: 'work' | 'personal' = 'work', query = '', authorityOnly = false): Promise<TurnBoundary> {
@@ -765,7 +780,10 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
         let publicOnly = false;
         try { publicOnly = await this.deps.runtimePrivacy.validatePublicAudience(persona.id, chat) === true; }
         catch { publicOnly = false; }
-        if (publicOnly) return { allowed: false, audienceValid: true, states: [], publicOnly };
+        if (publicOnly) {
+          const notes = await this.notesInput(persona, chat, false);
+          return { allowed: false, audienceValid: true, states: [], publicOnly, ...(notes ? { notes } : {}) };
+        }
       }
     }
     try {
@@ -781,7 +799,24 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
         if (shared && typeof shared.revision !== 'string') { allowed = false; audienceValid = false; }
       }
     } catch { allowed = false; }
-    return { allowed, audienceValid, states, shared };
+    const notes = audienceValid ? await this.notesInput(persona, chat, authorityOnly && compact) : undefined;
+    return { allowed, audienceValid, states, shared, ...(notes ? { notes } : {}) };
+  }
+
+  /** The turn's notes; a failed read is no notes (fail closed: a recheck that reads them again differs). */
+  private async notesInput(persona: Persona, chat: ChatContext, authorityOnly: boolean): Promise<PrivacyInputs['notes']> {
+    const privacy = this.deps.runtimePrivacy;
+    if (!privacy?.readNotes) return undefined;
+    try {
+      const notes = authorityOnly && privacy.readNotesAuthority ? await privacy.readNotesAuthority(persona.id, chat) : await privacy.readNotes(persona.id, chat);
+      return notes && typeof notes.revision === 'string' ? notes : undefined;
+    } catch { return undefined; }
+  }
+
+  /** The send-time notes fence: the notes this turn used are still exactly what this agent may use here. */
+  private async notesCurrent(persona: Persona, chat: ChatContext, boundary: TurnBoundary): Promise<boolean> {
+    try { return (await this.deps.runtimePrivacy?.readNotesAuthority?.(persona.id, chat))?.revision === boundary.notesRevision; }
+    catch { return false; }
   }
 
   private boundaryFrom(inputs: PrivacyInputs, chat: ChatContext, speakerId: string, space: 'work' | 'personal', memoryRevision: number): TurnBoundary {
@@ -797,9 +832,11 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     const memoryEnabled = storedContextAllowed && allowed && space === 'work' && (!this.deps.runtimePrivacy || states.every((v) => v.memoryEnabled === true));
     const historyEnabled = storedContextAllowed && allowed && space === 'work' && states.every((v) => v.historyEnabled === true);
     if (compact && !this.syncPrivacyAvailable()) { allowed = false; audienceValid = false; }
-    const key = this.boundaryKey(chat, speakerId, space, allowed, audienceValid, scopedOnly, states, shared);
-    return { key, compact: scopedOnly, memoryRevision, memoryEnabled, historyEnabled, audienceValid,
-      context: allowed && storedContextAllowed ? (chat.kind === 'private' ? states[0]?.context ?? [] : shared?.context ?? []).filter((v): v is string => typeof v === 'string') : [],
+    // Notes: on a public turn (outsiders) whenever the audience holds; otherwise only with stored context allowed.
+    const notes = inputs.notes && audienceValid && (inputs.publicOnly || (allowed && storedContextAllowed)) ? inputs.notes : undefined;
+    const key = this.boundaryKey(chat, speakerId, space, allowed, audienceValid, scopedOnly, states, shared, notes);
+    return { key, compact: scopedOnly, memoryRevision, memoryEnabled, historyEnabled, audienceValid, ...(notes ? { notesRevision: notes.revision } : {}),
+      context: [...(allowed && storedContextAllowed ? (chat.kind === 'private' ? states[0]?.context ?? [] : shared?.context ?? []) : []), ...(notes?.context ?? [])].filter((v): v is string => typeof v === 'string'),
       priorityContext: allowed && storedContextAllowed && chat.kind === 'private' ? (states[0]?.priorityContext ?? []).filter((v): v is string => typeof v === 'string') : [],
       reviewedContext: allowed && storedContextAllowed && chat.kind === 'private' ? (states[0]?.reviewedContext ?? []) : [], space };
   }
@@ -807,17 +844,19 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
   private syncPrivacyAvailable(): boolean {
     const privacy = this.deps.runtimePrivacy;
     return typeof privacy?.finalReadNow === 'function' && typeof privacy.validateAudienceNow === 'function' &&
-      (!privacy.readShared || typeof privacy.readSharedAuthorityNow === 'function');
+      (!privacy.readShared || typeof privacy.readSharedAuthorityNow === 'function') && (!privacy.readNotes || typeof privacy.readNotesAuthorityNow === 'function');
   }
 
   private boundaryKey(chat: ChatContext, speakerId: string, space: 'work' | 'personal', allowed: boolean, audienceValid: boolean,
-    scopedOnly: boolean, states: RuntimePrivacyState[], shared?: {revision: string; context?: string[]}): string {
+    scopedOnly: boolean, states: RuntimePrivacyState[], shared?: {revision: string; context?: string[]}, notes?: {revision: string; context?: string[]}): string {
     const hashed: Record<BoundaryHashInput, unknown> = {
       space, speakerId: chat.kind === 'private' ? speakerId : undefined, chat, allowed, audienceValid, shared: scopedOnly ? shared?.revision : shared, states: states.map((v) => scopedOnly
         ? [v.revision, v.memoryEnabled, v.historyEnabled, ...(v.storedContextAllowed === undefined ? [] : [v.storedContextAllowed])]
         : [v?.revision, v?.memoryEnabled, v?.historyEnabled, ...(v?.storedContextAllowed === undefined ? [] : [v.storedContextAllowed]), v?.context, v?.priorityContext, v?.reviewedContext]),
       // Also invalidate legacy history on directory/identity/membership changes.
       config: this.deps.org.config,
+      // Undefined (no notes) drops out of the JSON: the key is then exactly as before notes existed.
+      notes: notes ? (scopedOnly ? notes.revision : notes) : undefined,
     };
     return createHash('sha256').update(JSON.stringify(Object.fromEntries(BOUNDARY_HASH_INPUTS.map(name => [name, hashed[name]])))).digest('hex');
   }
@@ -834,8 +873,10 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
       const shared = chat.kind === 'group' && privacy.readShared ? privacy.readSharedAuthorityNow!(persona.id, chat, boundary.space) : undefined;
       if (shared && (typeof shared.revision !== 'string' || !Number.isSafeInteger(shared.validUntil))) return null;
       if (chat.kind === 'group' && privacy.readShared && !shared) return null;
+      const notes = boundary.notesRevision !== undefined ? privacy.readNotesAuthorityNow!(persona.id, chat) : undefined;
+      if (boundary.notesRevision !== undefined && notes?.revision !== boundary.notesRevision) return null;
       const deadline = Math.min(...states.map(s => s.validUntil), shared?.validUntil ?? Number.MAX_SAFE_INTEGER);
-      const key = this.boundaryKey(chat, speakerId, boundary.space, true, true, true, states, shared);
+      const key = this.boundaryKey(chat, speakerId, boundary.space, true, true, true, states, shared, notes);
       return Number.isSafeInteger(deadline) && this.now().getTime() < deadline && boundary.key === key ? deadline : null;
     } catch { return null; }
   }
@@ -1290,13 +1331,16 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     action: GroupAction = 'reply',
     privacyEpoch?: number,
     canDeliver: () => Promise<boolean> = async () => true,
-    canDeliverNow?: () => boolean
+    canDeliverNow?: () => boolean,
+    /** Circles: the notes this reply used are still usable here; checked in every send gate and once more last. */
+    notesFence?: () => Promise<boolean>
   ): Promise<string | null> {
     const bot = this.deps.botFor(persona.id);
     if (canDeliverNow && bot.committedSendFence !== true) return null;
     const canSend = async () => {
       await this.deps.beforeSend?.(persona.id, chat);
       if (!await canDeliver() || (privacyEpoch !== undefined && await this.deps.history.getEpoch(persona.id) !== privacyEpoch)) return false;
+      if (notesFence && !await notesFence()) return false;
       const speaker = message.from && this.deps.org.getPersonByTelegramId(message.from.id);
       return !!speaker && await this.groupAllowed(persona, chat, speaker.id, action);
     };
@@ -1321,6 +1365,8 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     const nudge = chat.kind === 'group' && action === 'reply' && message.from && this.deps.replyKeyboard
       ? await this.deps.replyKeyboard(persona.id, message.chat.id, message.from).catch(() => undefined) : undefined;
     const extra = nudge ? { keyboard: nudge } : {};
+    // The final notes fence: nothing awaits between it and the send below.
+    if (notesFence && !await notesFence()) return null;
     if (audioSent) {
       // A failed transcript must not report that an already-delivered voice failed.
       if (canDeliverNow && !canDeliverNow()) return null;

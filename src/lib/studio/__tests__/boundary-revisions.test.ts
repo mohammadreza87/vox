@@ -78,7 +78,9 @@ type Coverage =
   | { kind: 'turn'; because: string }
   | { kind: 'derived'; from: HashInput[] }
   | { kind: 'revision'; writer: string; mutate(env: Env): Promise<void> }
-  | { kind: 'replayed'; writer: string; mutate(env: Env): void };
+  | { kind: 'replayed'; writer: string; mutate(env: Env): void }
+  /** Read outside the snapshot's probes: the read marks the turn volatile, so every recheck re-reads it in full. */
+  | { kind: 'volatile'; because: string };
 
 /** One entry per boundary hash input. Adding a hash input without a writer fails here. */
 const COVERAGE: Record<HashInput, Coverage> = {
@@ -95,6 +97,7 @@ const COVERAGE: Record<HashInput, Coverage> = {
     mutate: async env => { await env.adaptive.setAgentAccess(ID.bob, env.agent.id, { space: 'work', allowed: false, expectedRevision: (await env.adaptive.read(ID.bob, 'work')).revision, eventId: 'withdraw-bob' }); } },
   config: { kind: 'replayed', writer: 'the gateway OrgDirectory (built from Studio state per gateway); every replay re-hashes it',
     mutate: env => { env.org.getPerson(personId(ID.bob))!.name = 'Renamed in place'; } },
+  notes: { kind: 'volatile', because: 'Circles notes (S3) and the choice and circle stores they consult are read with markVolatile: rechecks recompute in full; absent notes leave the key unchanged' },
 };
 
 async function readAll(boundary: Boundary): Promise<{ probes: RevisionProbe[]; values: number[] }> {

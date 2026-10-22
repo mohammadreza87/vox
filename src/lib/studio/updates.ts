@@ -12,7 +12,7 @@ import { canUseAgent, visibilityOf } from './permissions';
 import type { ChoiceOutcome, Studio } from './service';
 import type { Agent, JoinChoice } from './types';
 import { logTelegramDiagnostic } from '../tireh/telegram/diagnostics';
-import { cardCallback, parseCardCallback, parseStartPayload, type CardAction } from '../circles/codec';
+import { cardCallback, parseCardCallback, parseNoteCallback, parseStartPayload, type CardAction } from '../circles/codec';
 import { agentCard, choiceReceipt, circleCopy, groupCopy, localeOf } from '../circles/notice';
 import { petPageUrl } from '../pet/links';
 import { parseExplicitControl } from '../relationships/policy';
@@ -76,6 +76,12 @@ export async function handleAgentUpdate(studio: Studio, agentId: string, update:
   }
   if (update.chat_member) {
     if (await studio.deps.memory.deduper.firstSeen(`audience:${agentId}:${update.update_id}`)) await studio.onGroupChatMember(update.chat_member);
+    return;
+  }
+  // Circles notes buttons (cs:/cn:/ce:, S3) only while Circles is 'circles'; otherwise they take the paths below as before.
+  if (update.callback_query && studio.circlesMode() === 'circles' && parseNoteCallback(update.callback_query.data)) {
+    const token = studio.botToken(live);
+    if (token && await studio.deps.memory.deduper.firstSeen(`${agentId}__${update.update_id}`)) await studio.circleNotes.onCallback(live, update.callback_query, studio.deps.botFor(token));
     return;
   }
   // Circles card buttons (c*:) are decided here, before the gateway's share/keep callbacks: in a group
@@ -228,7 +234,17 @@ async function circleDirect(studio: Studio, live: Agent, msg: TelegramMessage, u
     await sendAgentCard(studio, live, bot, msg.chat.id, from);
     return;
   }
-  if (CONTROL_COMMANDS.has(command) || (!command && parseExplicitControl(text))) {
+  // Circles notes (S3): /notes, /forget <n> and "remember this" go to the gateway's notes path, never the stranger decision.
+  if (studio.circleNotes.wants(live, text)) {
+    const { gateway } = await studio.gateway(endpoint);
+    await gateway.handleUpdate(live.id, update);
+    return;
+  }
+  const control = command ? undefined : parseExplicitControl(text);
+  if (CONTROL_COMMANDS.has(command) || control) {
+    // Circles notes (S3): the notes they saved are what this agent keeps of them; "nothing kept" only while they hold none.
+    const kind = command === '/memories' ? 'memories' : command === '/forgetall' || control === 'forget' ? 'forget' : 'other';
+    if (await studio.circleNotes.outsiderControl(live, msg, kind)) return;
     await bot.sendMessage(msg.chat.id, copy.nothingKept);
     return;
   }

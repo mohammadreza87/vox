@@ -14,7 +14,7 @@ export const parseCirclesMode = (value?: string): CirclesMode => {
   return mode === 'reply' || mode === 'circles' ? mode : 'off';
 };
 
-/** cj join · cr only reply · cd not me (DM card receipts); ci include agent · cs save · cn don't save (later slices). */
+/** cj join · cr only reply · cd not me (DM card receipts); ci include agent; cs/cn are notes buttons (parseNoteCallback). */
 export type CardAction = 'cj' | 'cr' | 'cd' | 'ci' | 'cs' | 'cn';
 const CALLBACK = /^(c[jrdisn]):([A-Za-z0-9_-]{1,40})$/;
 const ID = /^[A-Za-z0-9_-]{1,40}$/;
@@ -29,6 +29,24 @@ export function cardCallback(action: CardAction, id: string): string {
 export function parseCardCallback(data?: string): { action: CardAction; id: string } | null {
   const match = data && Buffer.byteLength(data) <= MAX_CALLBACK_BYTES ? CALLBACK.exec(data) : null;
   return match ? { action: match[1] as CardAction, id: match[2] } : null;
+}
+
+/**
+ * Notes buttons (S3): cs save · cn don't save (a proposal id) · ce erase (a copy id). Parsed apart from
+ * card taps so that with Circles off or at reply nothing routes differently from before S3.
+ */
+export type NoteAction = 'cs' | 'cn' | 'ce';
+const NOTE_CALLBACK = /^(c[sne]):([0-9a-z]{1,11}-[A-Za-z0-9_-]{12})$/;
+
+export function noteCallback(action: NoteAction, id: string): string {
+  const data = `${action}:${id}`;
+  if (!NOTE_CALLBACK.test(data) || Buffer.byteLength(data) > MAX_CALLBACK_BYTES) throw new Error('invalid_note_callback');
+  return data;
+}
+
+export function parseNoteCallback(data?: string): { action: NoteAction; id: string } | null {
+  const match = data && Buffer.byteLength(data) <= MAX_CALLBACK_BYTES ? NOTE_CALLBACK.exec(data) : null;
+  return match ? { action: match[1] as NoteAction, id: match[2] } : null;
 }
 
 /** j_ group join code · c_ channel code · a_ agent card. */

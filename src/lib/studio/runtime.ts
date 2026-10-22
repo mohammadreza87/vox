@@ -50,6 +50,8 @@ import { StudioExperimentRuntime } from '../adaptive/experiments/runtime';
  *                            public agents (S1) | circles: full. Read per use: the kill switch
  *   STUDIO_CIRCLE_CHATS      comma-separated group chat ids where circles may open (pilot allowlist;
  *                            S2 cards, in-group Join, N of M). Read per use; unset = none
+ *   STUDIO_NOTE_SELECTOR     explicit (default): notes are proposed only for an explicit "remember
+ *                            this" (S3) | decisions: a disabled placeholder that proposes nothing
  *
  * Voiceprints (S11L, shadow mode; docs/implementation/VOICE_PROVIDER_INTEGRATION.md):
  *   STUDIO_VOICE_RECOGNITION=1  voiceprint enrollment and shadow verification; capability
@@ -111,6 +113,8 @@ import { FileAgentChoiceStore, FirestoreAgentChoiceStore } from '../circles/choi
 import { parseCircleChats } from '../circles/codec';
 import { CircleRepository, CIRCLE_COLLECTION } from '../circles/repository';
 import { CircleService } from '../circles/service';
+import { CircleNotes, NotesRepository, NOTES_COLLECTION } from '../circles/notes';
+import { parseNoteSelector } from '../circles/note-selector';
 
 /** Internal availability is bound to current committed company roles, never a
  * bootstrap/environment list. Unsupported distributed synchronous reads deny. */
@@ -257,12 +261,13 @@ export function stopStudioPreferenceLearning(): Promise<{ pending: number }> {
   return g.__voxPreferenceStop = g.__voxPreferenceTasks?.tasks.close() ?? Promise.resolve({ pending: 0 });
 }
 
-type RuntimeStorage = Pick<StudioDeps, 'store' | 'pets' | 'choices' | 'circleLedger' | 'memory' | 'rateLimiter' | 'adaptive' | 'relationshipStore' | 'observations' | 'revisions'> & { sharedStorage: AdaptiveStorage; voiceIdentityStorage: AdaptiveStorage; maintenanceStorage: AdaptiveStorage; closeAdaptive?: () => void };
+type RuntimeStorage = Pick<StudioDeps, 'store' | 'pets' | 'choices' | 'circleLedger' | 'notesLedger' | 'memory' | 'rateLimiter' | 'adaptive' | 'relationshipStore' | 'observations' | 'revisions'> & { sharedStorage: AdaptiveStorage; voiceIdentityStorage: AdaptiveStorage; maintenanceStorage: AdaptiveStorage; closeAdaptive?: () => void };
 function fileStorage(dir: string, scopedRelationshipsEnabled: boolean, format: AdaptiveStorageFormat): RuntimeStorage {
   const managed = openLocalAdaptiveStorage(join(dir, 'adaptive'), format);
   try { const store = new StudioStore(dir);
     return { store, pets: new FilePetStore(join(dir, 'pets')), choices: new FileAgentChoiceStore(join(dir, 'circles')),
-    circleLedger: new CircleService(new CircleRepository(new FileAdaptiveStorage(join(dir, 'circles', 'ledger')))), memory: createFileStores(join(dir, 'memory.json')),
+    circleLedger: new CircleService(new CircleRepository(new FileAdaptiveStorage(join(dir, 'circles', 'ledger')))),
+    notesLedger: new CircleNotes(new NotesRepository(new FileAdaptiveStorage(join(dir, 'circles', 'notes')))), memory: createFileStores(join(dir, 'memory.json')),
     relationshipStore: new FileRelationshipStore(join(dir, 'scoped-relationships-v1.json')), observations: new FileObservationStore(join(dir, 'scoped-relationship-observations-v1.json')),
     adaptive: new AdaptiveService(new AdaptiveRepository(managed.storage),
       { ...adaptiveOptionsFromManifest(process.env.STUDIO_ADAPTIVE_POLICY_JSON, internalPilotAuthority(store)), scopedRelationshipsEnabled, voiceRecognitionEnabled: process.env.STUDIO_VOICE_RECOGNITION === '1' }),
@@ -283,6 +288,7 @@ async function firestoreStorage(bucketName: string, scopedRelationshipsEnabled: 
     pets: new FirestorePetStore(db),
     choices: new FirestoreAgentChoiceStore(db),
     circleLedger: new CircleService(new CircleRepository(new FirestoreAdaptiveStorage(db, CIRCLE_COLLECTION))),
+    notesLedger: new CircleNotes(new NotesRepository(new FirestoreAdaptiveStorage(db, NOTES_COLLECTION))),
     adaptive: new AdaptiveService(new AdaptiveRepository(new FirestoreAdaptiveStorage(db)),
       { ...adaptiveOptionsFromManifest(process.env.STUDIO_ADAPTIVE_POLICY_JSON, internalPilotAuthority(store)), scopedRelationshipsEnabled, voiceRecognitionEnabled: process.env.STUDIO_VOICE_RECOGNITION === '1' }),
     sharedStorage: new FirestoreAdaptiveStorage(db, 'adaptiveSharedMemory'),
@@ -337,6 +343,7 @@ async function create(): Promise<Studio> {
       pets: storage.pets,
       choices: storage.choices,
       circleLedger: storage.circleLedger,
+      notesLedger: storage.notesLedger,
       personaLLM: new AnthropicLLM(env.ANTHROPIC_API_KEY!, env.STUDIO_PERSONA_MODEL || 'claude-sonnet-5-5'),
       chatLLM: chatLLM(env),
       fastLLM: new AnthropicLLM(env.ANTHROPIC_API_KEY!, env.STUDIO_VOICE_MODEL || 'claude-haiku-5-5'),
@@ -361,6 +368,7 @@ async function create(): Promise<Studio> {
       stageTimings: env.STUDIO_STAGE_TIMINGS === '1',
       circles: () => parseCirclesMode(process.env.STUDIO_CIRCLES),
       circleChats: () => parseCircleChats(process.env.STUDIO_CIRCLE_CHATS),
+      noteSelector: () => parseNoteSelector(process.env.STUDIO_NOTE_SELECTOR),
       rateLimiter: storage.rateLimiter,
       imageToJpeg: toJpeg,
       // The portrait edit reference; STUDIO_PORTRAITS=text skips it (PLAN §7 A/B gate).

@@ -105,6 +105,13 @@ export class CircleRepository {
     return raw === null ? null : parseCircle(raw, groupId);
   }
 
+  /** The committed document, synchronously (the notes send fence); throws where the store has no synchronous read or a writer holds it. */
+  readNow(groupId: string): CircleDocument | null {
+    const read = this.storage.readCommittedForEffect?.(circleKey(groupId));
+    if (!read || read.status !== 'ready') throw new Error('circle_authority_unavailable');
+    return read.document === null ? null : parseCircle(read.document, groupId);
+  }
+
   async readIndex(telegramId: number): Promise<CirclePersonIndex> {
     const raw = await this.load(circlePersonKey(telegramId));
     return raw === null ? { v: 1, groupIds: [] } : indexSchema.parse(raw) as CirclePersonIndex;

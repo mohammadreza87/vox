@@ -67,7 +67,7 @@ export class StudioCircleGroups {
   }
 
   /** The agent that speaks for the circle: the card's, or the first agent still in it. */
-  private speaker(doc: CircleDocument): string | undefined {
+  speaker(doc: CircleDocument): string | undefined {
     const active = doc.agents.filter((a) => a.status === 'active').map((a) => a.agentId);
     return doc.card && active.includes(doc.card.agentId) ? doc.card.agentId : active[0];
   }
