@@ -170,6 +170,9 @@ export type HandleResult =
 
 const HISTORY_LIMIT = 20;
 const EXTRACTION_WINDOW = 6;
+/** S11L shadow voiceprint verification bound; it never delays a reply. */
+const VOICE_SHADOW_DEADLINE_MS = 3000;
+const voiceShadowOn = (): boolean => process.env.STUDIO_VOICE_SHADOW?.trim() === '1';
 const GROUP_FORMAT_FOLLOWUP_MS = 2 * 60_000;
 // Chat replies think briefly (effort low); thinking shares max_tokens, so the
 // caps leave headroom while the prompt keeps the visible reply short.
@@ -951,11 +954,16 @@ ${liveFrame}`;
       const mimeType = message.voice.mime_type ?? 'audio/ogg';
       const stt = timed('stt', () => this.deps.voice!.transcribe(audio, mimeType));
       const verifier = this.deps.voiceVerifier;
-      if (!verifier || chat.kind !== 'private') return await stt;
+      // S11L shadow verification needs its own STUDIO_VOICE_SHADOW=1: nothing consumes the result
+      // yet, so by default no audio is uploaded for it. When on, it runs beside STT but off the
+      // reply path (the reply never waits for it), bounded by VOICE_SHADOW_DEADLINE_MS.
       // guestAudience is false here: the Step 0 guard above already returned for hasGuestAudience.
-      const [text] = await Promise.all([stt, verifier.verifyVoiceNote({ personaId: persona.id, personId: speakerId, space: 'work', chatKind: 'private', guestAudience: false, audio, mimeType, durationSec: message.voice.duration, channel: 'telegram_voice_note' }).catch(() => undefined)]);
-      // TODO(S10): hand the VoiceVerification to IdentityService.assess. Shadow mode: discarded; it never grants access.
-      return text;
+      if (verifier && chat.kind === 'private' && voiceShadowOn()) {
+        const input = { personaId: persona.id, personId: speakerId, space: 'work' as const, chatKind: 'private' as const, guestAudience: false, audio, mimeType, durationSec: message.voice.duration, channel: 'telegram_voice_note' as const };
+        // TODO(S10): hand the VoiceVerification to IdentityService.assess. Shadow mode: discarded; it never grants access.
+        void (async () => verifier.verifyVoiceNote(input, AbortSignal.timeout(VOICE_SHADOW_DEADLINE_MS)))().catch(() => undefined);
+      }
+      return await stt;
     } catch {
       logTelegramDiagnostic(this.log, 'transcription_failed');
       return '';

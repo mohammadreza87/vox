@@ -84,6 +84,7 @@ Every flag defaults to off. With all of them unset, the runtime behaves as the i
 | `TIREH_DECISION_LOG=1` | S09 | off | Content-free decision log rows, kept 90 days |
 | `STUDIO_IMAGES=1` | S12 | off | Telegram photo and image-document ingestion, private chats only |
 | `STUDIO_VOICE_RECOGNITION=1` | S11L | off | Voiceprints; also needs `VOICEPRINT_KEY`, approval and consent |
+| `STUDIO_VOICE_SHADOW=1` | S11L (fixer) | off | Shadow verification of 1:1 voice notes, off the reply path; needs `STUDIO_VOICE_RECOGNITION` |
 | `TELEGRAM_WEBHOOK_FAIL_CLOSED=1` | fixer (legacy) | off | `/api/telegram/webhook` rejects every request when `TELEGRAM_WEBHOOK_SECRET` is unset; turn on only after the secret rollout (open issue 8) |
 
 S10L and S14 are libraries that are not wired in and have no flag.
@@ -160,7 +161,7 @@ These match the documented 6d00b80 baseline.
 7. **S11L:**
    - The pyannoteAI adapter has not been tested against a live account.
    - KMS envelope encryption and key custody are release gates. The runtime does not refuse to start on Firestore with the flag on; consider restoring the earlier guard.
-   - Shadow verification can delay a 1:1 voice-note reply by up to 3 s.
+   - Shadow verification no longer delays a reply: it runs fire-and-forget with a 3 s abort signal, and only with `STUDIO_VOICE_SHADOW=1`, so `STUDIO_VOICE_RECOGNITION=1` alone uploads no voice-note audio for verification. S10 will need to await the result, so measure that latency first.
    - `setVoiceIdentityInvalidator` is a single slot.
    - The EnrollScreen FA strings need native-language review.
 8. **S15:**

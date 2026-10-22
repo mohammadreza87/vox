@@ -41,8 +41,9 @@ describe('liveTurn and Mini App calls never run voiceprint verification', { time
     expect(s.speech.measure).not.toHaveBeenCalled();
   });
 
-  it('positive control: a private Telegram voice note reaches the wired verifier once', async () => {
+  it('positive control: with STUDIO_VOICE_SHADOW=1 a private Telegram voice note reaches the wired verifier once', async () => {
     const { h, agent, verify } = await setup();
+    vi.stubEnv('STUDIO_VOICE_SHADOW', '1');
     h.openai.transcribe.mockResolvedValueOnce('a voice note');
     const update: TelegramUpdate = { update_id: 940_001, message: { message_id: 940_001, date: 0, from: { id: ID.alice, is_bot: false, first_name: 'Alice' },
       chat: { id: ID.alice, type: 'private' }, voice: { file_id: 'voice-1', duration: 6, mime_type: 'audio/ogg' } } };
