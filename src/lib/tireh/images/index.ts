@@ -1,0 +1,234 @@
+/**
+ * Telegram image turns (S12, server flag STUDIO_IMAGES, default off).
+ *
+ * A member's photo or JPEG/PNG document in a private, guest-free chat becomes
+ * one ephemeral image for that turn: downloaded at a bounded size, stripped of
+ * metadata, triaged with four content-free questions, and handed to the reply
+ * model. Bytes never reach history, memory, logs, diagnostics or system
+ * prompt blocks, and are never replayed in a later turn.
+ */
+
+import { sharedImageForModel } from '../../adaptive/prediction/image';
+import { tirehFlags } from '../flags';
+import { isVisionCapable, VisionUnsupportedError } from '../llm-content';
+import { hasGuestAudience } from '../memory/visibility';
+import type { LLM, LLMImage } from '../llm';
+import type { OrgDirectory } from '../org/directory';
+import type { TelegramBotClient, TelegramMessage, TelegramPhotoSize } from '../telegram/client';
+import type { Decider, DecisionAnswer, DecisionQuestion, Triage } from '../triage';
+import type { ChatContext, Persona } from '../types';
+import {
+  MAX_REPLY_IMAGE_BYTES, pickPhotoSize, replyPhotoSize, sniffImageMime, stripImageMetadata, toLLMImage,
+  TRIAGE_MAX_BYTES, TRIAGE_MIN_EDGE, type ImageMime,
+} from './bytes';
+import { IMAGE_TRIAGE_QUESTIONS, imageTriageInput, readImageTriage, type ImageTriage } from './questions';
+import { imageAckText, suppressImageMemory } from './retention';
+
+export * from './bytes';
+export * from './questions';
+export * from './retention';
+
+export const IMAGE_PLACEHOLDER_TEXT = '(shared a photo)';
+export const IMAGE_ACK_AFTER_MS = 1_500;
+export const IMAGE_TRIAGE_TIMEOUT_MS = 2_000;
+export const IMAGE_LOG_PREFIX = 'tireh_image:';
+
+export type ImageLogCode = 'vision_unsupported' | 'download_failed' | 'unsupported_type' | 'too_large' | 'metadata_invalid' | 'triage_failed' | 'triage_timeout' | 'ack_failed';
+
+export interface ImageTurn {
+  /** Exactly one current-turn image. */
+  images: LLMImage[];
+  /** The caption, or IMAGE_PLACEHOLDER_TEXT when there is none. */
+  text: string;
+  triage: ImageTriage | null;
+  suppressMemory: boolean;
+  containsPeople: boolean;
+  forceQuick: boolean;
+}
+
+/** Local structural copy of S09's DeciderPart; the integrator may switch to the triage.ts import after S09 merges. */
+type ImageDeciderPart = { type: 'text'; text: string } | { type: 'image'; image: LLMImage };
+
+export type ImageDecider = Decider & {
+  decideParts?: (input: readonly ImageDeciderPart[], questions: DecisionQuestion[], timeoutMs?: number) => Promise<Record<string, DecisionAnswer>>;
+};
+
+export interface ImageIngestDeps {
+  org: OrgDirectory;
+  decider?: ImageDecider;
+  llm: LLM;
+  fastLlm?: LLM;
+  bot: TelegramBotClient;
+  log: Pick<Console, 'warn'>;
+}
+
+const FORCED_TASKS: ReadonlyArray<ImageTriage['task']> = ['explain', 'extract_text', 'decide', 'react'];
+const DOCUMENT_MIMES: ReadonlyArray<string> = ['image/jpeg', 'image/png'];
+
+type ImageSource =
+  | { kind: 'photo'; sizes: TelegramPhotoSize[] }
+  | { kind: 'document'; fileId: string; mime: ImageMime };
+
+function imageSource(message: TelegramMessage): ImageSource | null {
+  if (Array.isArray(message.photo) && message.photo.length > 0) return { kind: 'photo', sizes: message.photo };
+  const doc = message.document;
+  if (doc && typeof doc.file_id === 'string' && doc.file_id && doc.mime_type && DOCUMENT_MIMES.includes(doc.mime_type)
+    && (doc.file_size === undefined || doc.file_size <= MAX_REPLY_IMAGE_BYTES)) {
+    return { kind: 'document', fileId: doc.file_id, mime: doc.mime_type as ImageMime };
+  }
+  return null;
+}
+
+function hasImageSource(message: TelegramMessage): boolean {
+  return imageSource(message) !== null;
+}
+
+/** Cheap, I/O-free check the gateway uses before any image work. */
+export function imageIngestionWanted(message: TelegramMessage, chat: ChatContext): boolean {
+  return tirehFlags().images && chat.kind === 'private' && hasImageSource(message);
+}
+
+/** Routes an image reply to the fast model: quick effort, no web search; skill routing is kept. */
+export function forceQuickTriage<T extends { triage: Triage | null }>(triaged: Promise<T>): Promise<T> {
+  return triaged.then((outcome) => ({
+    ...outcome,
+    triage: {
+      ...(outcome.triage ?? { effort: 'quick', needsWeb: false, memorable: true, wantsVoice: false }),
+      effort: 'quick',
+      needsWeb: false,
+    },
+  }));
+}
+
+function logCode(log: Pick<Console, 'warn'>, code: ImageLogCode): void {
+  try { log.warn(`${IMAGE_LOG_PREFIX}${code}`); } catch { /* logging never affects the turn */ }
+}
+
+type Fetched = { ok: true; image: LLMImage } | { ok: false; code: ImageLogCode };
+
+/** Download, verify the magic bytes against the expected type, and strip metadata. */
+async function fetchImage(deps: ImageIngestDeps, fileId: string, maxBytes: number, expected?: ImageMime): Promise<Fetched> {
+  let bytes: Uint8Array;
+  try {
+    bytes = await deps.bot.downloadImage(fileId, { maxBytes });
+  } catch (error) {
+    return { ok: false, code: error instanceof Error && /file too large/.test(error.message) ? 'too_large' : 'download_failed' };
+  }
+  if (!ArrayBuffer.isView(bytes) || bytes.byteLength > maxBytes) return { ok: false, code: 'too_large' };
+  const mime = sniffImageMime(bytes);
+  if (!mime || (expected && mime !== expected)) return { ok: false, code: 'unsupported_type' };
+  try {
+    return { ok: true, image: toLLMImage(stripImageMetadata(bytes, mime), mime) };
+  } catch {
+    return { ok: false, code: 'metadata_invalid' };
+  }
+}
+
+async function runTriage(deps: ImageIngestDeps, persona: Persona, caption: string, image: LLMImage): Promise<ImageTriage | null> {
+  const decider = deps.decider;
+  if (!decider?.decideParts) return null;
+  let triageImage: LLMImage;
+  try {
+    // The seam's own contract: <=512 px, <=64 KiB, baseline JPEG/PNG, no metadata.
+    triageImage = sharedImageForModel(`data:${image.mimeType};base64,${image.data}`);
+  } catch {
+    return null;
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<'timeout'>((resolve) => { timer = setTimeout(() => resolve('timeout'), IMAGE_TRIAGE_TIMEOUT_MS); });
+  const asked = Promise.resolve()
+    .then(() => decider.decideParts!(
+      [{ type: 'text', text: imageTriageInput(persona, caption) }, { type: 'image', image: triageImage }],
+      [...IMAGE_TRIAGE_QUESTIONS],
+      IMAGE_TRIAGE_TIMEOUT_MS,
+    ))
+    .then((answers) => ({ answers }), () => 'failed' as const);
+  try {
+    const result = await Promise.race([asked, timeout]);
+    if (result === 'timeout') { logCode(deps.log, 'triage_timeout'); return null; }
+    if (result === 'failed') { logCode(deps.log, 'triage_failed'); return null; }
+    return readImageTriage(result.answers);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * The image for this turn, or null when the turn should be handled exactly as
+ * before (flag off, not a private member chat, a guest audience, no usable
+ * image, a non-Anthropic model, or a failed download). Never throws for
+ * ordinary failures; logs only fixed `tireh_image:<code>` strings.
+ */
+export async function ingestTelegramImage(
+  deps: ImageIngestDeps,
+  persona: Persona,
+  chat: ChatContext,
+  speakerId: string,
+  message: TelegramMessage,
+  text: string,
+): Promise<ImageTurn | null> {
+  // (a) No I/O unless this is a private, guest-free chat with its own member.
+  if (!tirehFlags().images || chat.kind !== 'private' || hasGuestAudience(deps.org, chat) || speakerId !== chat.personId) return null;
+  const source = imageSource(message);
+  if (!source) return null;
+
+  // (b) Both possible reply models must be approved for vision before any download.
+  try {
+    if (!isVisionCapable(deps.llm)) throw new VisionUnsupportedError(deps.llm.identity?.provider ?? 'unknown');
+    if (deps.fastLlm && !isVisionCapable(deps.fastLlm)) throw new VisionUnsupportedError(deps.fastLlm.identity?.provider ?? 'unknown');
+  } catch {
+    logCode(deps.log, 'vision_unsupported');
+    return null;
+  }
+
+  // (c) The triage-sized image.
+  const triageSize = source.kind === 'photo' ? pickPhotoSize(source.sizes, TRIAGE_MIN_EDGE) : null;
+  if (source.kind === 'photo' && !triageSize) { logCode(deps.log, 'unsupported_type'); return null; }
+  const first = source.kind === 'photo'
+    ? await fetchImage(deps, triageSize!.file_id, TRIAGE_MAX_BYTES)
+    : await fetchImage(deps, source.fileId, MAX_REPLY_IMAGE_BYTES, source.mime);
+  if (!first.ok) { logCode(deps.log, first.code); return null; }
+
+  // (e) One fixed acknowledgement when triage and the reply download are slow.
+  let finished = false;
+  let ack: Promise<unknown> | undefined;
+  const ackTimer = setTimeout(() => {
+    if (finished || ack) return;
+    ack = Promise.resolve()
+      .then(() => deps.bot.sendMessage(message.chat.id, imageAckText(text), { replyTo: message.message_id }))
+      .catch(() => logCode(deps.log, 'ack_failed'));
+  }, IMAGE_ACK_AFTER_MS);
+
+  let triage: ImageTriage | null = null;
+  let image: LLMImage = first.image;
+  try {
+    // (d) Content-free image triage, only through a decider that takes image parts.
+    triage = await runTriage(deps, persona, text, first.image);
+
+    // (f) The reply image at the resolution the task needs.
+    if (source.kind === 'photo') {
+      const size = replyPhotoSize(source.sizes, triage);
+      if (size && size.file_id !== triageSize!.file_id) {
+        const reply = await fetchImage(deps, size.file_id, MAX_REPLY_IMAGE_BYTES);
+        if (reply.ok) image = reply.image;
+        else logCode(deps.log, reply.code);
+      }
+    }
+  } finally {
+    finished = true;
+    clearTimeout(ackTimer);
+    // Keep the acknowledgement ahead of the reply when it was already sent.
+    if (ack) await ack;
+  }
+
+  // (g)
+  const turnText = text.trim() ? text : IMAGE_PLACEHOLDER_TEXT;
+  return {
+    images: [image],
+    text: turnText,
+    triage,
+    suppressMemory: suppressImageMemory(triage, turnText),
+    containsPeople: triage ? triage.containsPeople >= 0.5 : true,
+    forceQuick: !!triage && FORCED_TASKS.includes(triage.task),
+  };
+}

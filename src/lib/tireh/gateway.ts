@@ -33,6 +33,7 @@ import { selectMemories } from './memory/retrieval';
 import { decideScope, extractCandidates, resolveCandidateSource, firstNewIndex } from './memory/extraction';
 import { canPersonSee, describeScope, hasGuestAudience, isVisibleToAudience, audienceOf, historyMessageForChat, selectHistoryForChat, snapshotScopeAudience } from './memory/visibility';
 import { groupAddressing } from './group-addressing';
+import { forceQuickTriage, imageIngestionWanted, ingestTelegramImage, type ImageTurn } from './images';
 import { logTelegramDiagnostic, voiceFailureDiagnostic } from './telegram/diagnostics';
 import { currentStageTimer, StageTimer, stageLaps, timed } from './timing';
 import type { PrivacySnapshot } from './privacy/snapshot';
@@ -188,6 +189,7 @@ const NO_MEMORY = /(?:do not|don't|don’t)\s+(?:remember|save|store)|forget (?:
 
 export class PersonaGateway {
   private readonly log: Pick<Console, 'info' | 'warn' | 'error'>;
+  private readonly peopleImageTurns = new WeakSet<ChatMessage>();
 
   constructor(private readonly deps: GatewayDeps) {
     this.log = deps.logger ?? console;
@@ -414,6 +416,13 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
         return 'replied';
       }
     }
+    let imageTurn: ImageTurn | null = null;
+    if (!isVoice && imageIngestionWanted(message, chat)) {
+      const privacy = this.deps.runtimePrivacy;
+      const audienceOk = !privacy?.validateAudience || await privacy.validateAudience(persona.id, chat).catch(() => false);
+      imageTurn = audienceOk ? await ingestTelegramImage({ org, decider: this.compactPrivacy() ? undefined : this.deps.decider, llm: this.deps.llm, fastLlm: this.deps.fastLlm, bot, log: this.log }, persona, chat, speaker.id, message, text) : null;
+      if (imageTurn) text = imageTurn.text;
+    }
     if (!text.trim()) return 'ignored';
     if (parseExplicitControl(text) === 'forget') {
       await this.handleCommand(persona, chat, speaker.id, message, '/forgetall');
@@ -460,7 +469,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
       await bot.sendChatAction(message.chat.id, voiceWanted && canSpeak ? 'record_voice' : 'typing').catch(() => undefined);
       let generated: { text: string; sources: WebSource[] };
       try {
-        generated = await this.composeReply(persona, chat, speaker.id, text, triaged, message.message_id, addressed ? 'reply' : 'proactive', voiceWanted && canSpeak ? 'voice' : 'text', boundary);
+        generated = await this.composeReply(persona, chat, speaker.id, text, imageTurn?.forceQuick ? forceQuickTriage(triaged) : triaged, message.message_id, addressed ? 'reply' : 'proactive', voiceWanted && canSpeak ? 'voice' : 'text', boundary, imageTurn?.images);
       } catch {
         logTelegramDiagnostic(this.log, 'reply_generation_failed');
         return 'ignored';
@@ -484,9 +493,10 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
 
     // A useful group fact can be remembered without interrupting. A failed
     // classifier never causes passive extraction, and opt-outs are not saved.
-    const remember = chat.kind === 'group'
+    if (imageTurn?.containsPeople) this.peopleImageTurns.add(userMessage);
+    const remember = (chat.kind === 'group'
       ? persona.groupRemember !== false && !NO_MEMORY.test(text) && (settled?.memorable === true || (addressed && settled === null))
-      : settled?.memorable !== false;
+      : settled?.memorable !== false) && !imageTurn?.suppressMemory;
     if (remember) {
       try {
         if (chat.kind !== 'group' || (await this.groupAllowed(persona, chat, speaker.id, 'remember')
@@ -1239,7 +1249,7 @@ ${liveFrame}`;
       if (!await permitted()) throw new LLMAuthorizationError();
       return llm.complete({ ...request, authorize: permitted });
     } } : llm;
-    const candidates = await extractCandidates(extractionLlm, org, persona, chat, speakerId, transcript, known);
+    const candidates = await extractCandidates(extractionLlm, org, persona, chat, speakerId, transcript, known, currentTurn.some((m) => this.peopleImageTurns.has(m)) ? { imagePeopleRule: true } : undefined);
     if (!boundary.memoryEnabled || candidates.length === 0 || !(await this.unchanged(persona, chat, speakerId, boundary)) || !await this.requestAuthorized(authorize)) return;
     let expectedRevision = boundary.memoryRevision;
 
