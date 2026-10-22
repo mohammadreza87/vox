@@ -48,3 +48,17 @@ export function withholdImageReply(triage: ImageTriage | null): boolean {
 export function imageDerivedMark(turn: { suppressMemory: boolean; containsPeople: boolean }): Required<Pick<ChatMessage, 'imageDerived'>> {
   return { imageDerived: { suppressed: turn.suppressMemory, people: turn.containsPeople } };
 }
+
+/**
+ * The mark a reply inherits when it was composed with image-marked rows in its
+ * context. Such a reply can repeat what the image showed (a description of the
+ * people in it, or text read off a receipt), so it keeps the same content-free
+ * verdict: `suppressed` keeps it out of extraction, `people` keeps the people
+ * rule on while it is in the window. Undefined when no context row is marked.
+ * Only assistant rows inherit it; a member's own later words are not image-derived.
+ */
+export function inheritedImageMark(context: ReadonlyArray<{ imageDerived?: ChatMessage['imageDerived'] }>): Required<Pick<ChatMessage, 'imageDerived'>> | undefined {
+  const suppressed = context.some((m) => m.imageDerived?.suppressed === true);
+  const people = context.some((m) => m.imageDerived?.people === true);
+  return suppressed || people ? imageDerivedMark({ suppressMemory: suppressed, containsPeople: people }) : undefined;
+}

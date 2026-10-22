@@ -33,7 +33,7 @@ import { selectMemories } from './memory/retrieval';
 import { decideScope, extractCandidates, resolveCandidateSource, firstNewIndex } from './memory/extraction';
 import { canPersonSee, describeScope, hasGuestAudience, isVisibleToAudience, audienceOf, historyMessageForChat, selectHistoryForChat, snapshotScopeAudience } from './memory/visibility';
 import { groupAddressing } from './group-addressing';
-import { forceQuickTriage, IMAGE_WITHHELD_REPLY_TEXT, imageDerivedMark, imageIngestionWanted, ingestTelegramImage, withholdImageReply, type ImageTurn } from './images';
+import { forceQuickTriage, IMAGE_WITHHELD_REPLY_TEXT, imageDerivedMark, imageIngestionWanted, ingestTelegramImage, inheritedImageMark, withholdImageReply, type ImageTurn } from './images';
 import { logTelegramDiagnostic, voiceFailureDiagnostic } from './telegram/diagnostics';
 import { currentStageTimer, StageTimer, stageLaps, timed } from './timing';
 import type { PrivacySnapshot } from './privacy/snapshot';
@@ -185,6 +185,8 @@ const SKILL_DIAGNOSTIC = {
 } as const;
 /** One message's triage, and whether the skill question was among the questions sent. */
 interface Triaged { triage: Triage | null; skillAsked: boolean }
+/** A composed reply; `imageContext` is the S12 mark its stored row inherits (see inheritedImageMark). */
+interface ComposedReply { text: string; sources: WebSource[]; imageContext?: Required<Pick<ChatMessage, 'imageDerived'>> }
 const UNTRIAGED: Triaged = { triage: null, skillAsked: false };
 
 const GUEST_VOICE_REPLY = 'I only read typed messages here, so I did not listen to that voice message. Could you type it instead?';
@@ -470,14 +472,14 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
       const voiceWanted = format !== 'text' && (format === 'voice' || isVoice || persona.replyWithVoice === 'always' || settled?.wantsVoice === true);
       const canSpeak = this.canSpeak(persona, boundary);
       await bot.sendChatAction(message.chat.id, voiceWanted && canSpeak ? 'record_voice' : 'typing').catch(() => undefined);
-      let generated: { text: string; sources: WebSource[]; peopleContext?: true };
+      let generated: ComposedReply;
       try {
         generated = await this.composeReply(persona, chat, speaker.id, text, imageTurn?.forceQuick ? forceQuickTriage(triaged) : triaged, message.message_id, addressed ? 'reply' : 'proactive', voiceWanted && canSpeak ? 'voice' : 'text', boundary, imageTurn?.images);
       } catch {
         logTelegramDiagnostic(this.log, 'reply_generation_failed');
         return 'ignored';
       }
-      const { text: reply, sources, peopleContext } = generated;
+      const { text: reply, sources, imageContext } = generated;
       if (!reply) return 'ignored';
       if (!(await this.groupAllowed(persona, chat, speaker.id, addressed ? 'reply' : 'proactive'))) return 'ignored';
       const delivered = await this.sendReply(persona, chat, message, reply, voiceWanted, sources, addressed ? 'reply' : 'proactive', privacyEpoch, async () => this.unchanged(persona, chat, speaker.id, boundary),
@@ -488,9 +490,9 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
         privacy: this.stamp(boundary, userMessage.privacy!.sourceEventIds),
         role: 'assistant', text: imageTurn && withholdImageReply(imageTurn.triage) ? IMAGE_WITHHELD_REPLY_TEXT : delivered, at: this.now(), telegramMessageId: message.message_id,
         ...(chat.kind === 'group' ? { groupPolicyVersion: 1 as const } : {}),
-        // S12: a reply that could repeat a people-photo description carries the people
-        // mark forward, so the extraction rule holds while that text is in the window.
-        ...(imageTurn ? imageDerivedMark(imageTurn) : peopleContext ? imageDerivedMark({ suppressMemory: false, containsPeople: true }) : {}),
+        // S12: a reply that could repeat what an earlier image showed carries that
+        // turn's mark forward (suppressed and/or people), see inheritedImageMark.
+        ...(imageTurn ? imageDerivedMark(imageTurn) : imageContext ?? {}),
       };
       await this.retain(persona, chat, speaker.id, assistantMessage, boundary);
     } else {
@@ -577,9 +579,10 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     await this.observeRelationship(persona.id, chat, speakerId, text, `call:${randomUUID()}`, 'call', this.now(), boundary.space);
     if (this.deps.relationshipAuthority || boundary.compact) boundary = await this.boundary(persona, chat, speakerId, boundary.space, text);
     if (boundary.compact) options.onBoundaryFence?.(() => this.exportAuthorizedNow(persona, chat, speakerId, boundary, options.authorizeNow));
-    const reply = await this.generateReplyAt(persona, chat, speakerId, text, boundary, options.images, options.authorize, options.authorizeNow);
+    const { text: reply, imageContext } = await this.generateReplyAt(persona, chat, speakerId, text, boundary, options.images, options.authorize, options.authorizeNow);
     if (!(await this.unchanged(persona, chat, speakerId, boundary)) || !await this.requestAuthorized(options.authorize)) return this.changedReply;
-    const assistant: ChatMessage = { role: 'assistant', text: reply, at: this.now(), privacy: this.stamp(boundary, user.privacy!.sourceEventIds) };
+    // S12: same history key as Telegram private chats, so the image mark carries here too.
+    const assistant: ChatMessage = { role: 'assistant', text: reply, at: this.now(), privacy: this.stamp(boundary, user.privacy!.sourceEventIds), ...imageContext };
     await this.retain(persona, chat, speakerId, assistant, boundary);
     try {
       await this.formMemories(persona, chat, speakerId, boundary, [user, assistant]);
@@ -909,7 +912,8 @@ ${liveFrame}`;
       yield part;
     }
     if (reply) { timer?.add('llm_done', performance.now() - requested); timer?.markOnce('total'); }
-    if (reply.trim() && await this.requestAuthorized(options.authorize)) await this.retain(persona, chat, speakerId, { role: 'assistant', text: reply.trim(), at: this.now(), privacy: this.stamp(boundary, user.privacy!.sourceEventIds) }, boundary);
+    // S12: a live reply composed with image-marked rows in context inherits their mark.
+    if (reply.trim() && await this.requestAuthorized(options.authorize)) await this.retain(persona, chat, speakerId, { role: 'assistant', text: reply.trim(), at: this.now(), privacy: this.stamp(boundary, user.privacy!.sourceEventIds), ...inheritedImageMark(recent) }, boundary);
   }
 
   /** Forms memories from a finished private conversation (e.g. a voice call). */
@@ -1003,12 +1007,12 @@ ${liveFrame}`;
   }
 
   async generateReply(persona: Persona, chat: ChatContext, speakerId: string, text: string): Promise<string> {
-    return this.generateReplyAt(persona, chat, speakerId, text, await this.boundary(persona, chat, speakerId, 'work', text));
+    return (await this.generateReplyAt(persona, chat, speakerId, text, await this.boundary(persona, chat, speakerId, 'work', text))).text;
   }
 
-  private async generateReplyAt(persona: Persona, chat: ChatContext, speakerId: string, text: string, boundary: TurnBoundary, images?: LLMMessage['images'], authorize?: () => Promise<boolean>, authorizeNow?: () => boolean): Promise<string> {
+  private async generateReplyAt(persona: Persona, chat: ChatContext, speakerId: string, text: string, boundary: TurnBoundary, images?: LLMMessage['images'], authorize?: () => Promise<boolean>, authorizeNow?: () => boolean): Promise<Pick<ComposedReply, 'text' | 'imageContext'>> {
     const result = await this.composeReply(persona, chat, speakerId, text, undefined, undefined, 'reply', undefined, boundary, images, authorize, authorizeNow);
-    return result.text || this.changedReply;
+    return { text: result.text || this.changedReply, imageContext: result.imageContext };
   }
 
   /**
@@ -1090,7 +1094,7 @@ ${liveFrame}`;
     return !!this.deps.voice && this.deps.voice.canSynthesize !== false && persona.replyWithVoice !== 'never';
   }
 
-  private async composeReply(persona: Persona, chat: ChatContext, speakerId: string, text: string, triaged?: Promise<Triaged>, messageId?: number, action: GroupAction = 'reply', replyFormat?: 'voice' | 'text', boundary?: TurnBoundary, images?: LLMMessage['images'], authorize?: () => Promise<boolean>, authorizeNow?: () => boolean): Promise<{ text: string; sources: WebSource[]; peopleContext?: true }> {
+  private async composeReply(persona: Persona, chat: ChatContext, speakerId: string, text: string, triaged?: Promise<Triaged>, messageId?: number, action: GroupAction = 'reply', replyFormat?: 'voice' | 'text', boundary?: TurnBoundary, images?: LLMMessage['images'], authorize?: () => Promise<boolean>, authorizeNow?: () => boolean): Promise<ComposedReply> {
     const { org } = this.deps;
     boundary ??= await this.boundary(persona, chat, speakerId, 'work', text);
     if (!boundary.audienceValid) return { text: this.changedReply, sources: [] };
@@ -1169,10 +1173,10 @@ ${liveFrame}`;
     if (!reply) logTelegramDiagnostic(this.log, 'reply_empty');
     // An unprompted group contribution that came out empty is simply not sent.
     if (!reply && action === 'proactive') return { text: '', sources: [] };
-    // S12: a reply composed while a people-photo row was in context can repeat that
-    // description, so its stored row inherits the people mark (see handleUpdate).
-    const peopleContext = recent.some((m) => 'imageDerived' in m && m.imageDerived?.people === true);
-    return { text: reply || emptyReplyFallback(text), sources: reply ? sources : [], ...(peopleContext ? { peopleContext: true as const } : {}) };
+    // S12: a reply composed while an image-marked row was in context can repeat what
+    // the image showed, so its stored row inherits that mark (see inheritedImageMark).
+    const imageContext = inheritedImageMark(recent);
+    return { text: reply || emptyReplyFallback(text), sources: reply ? sources : [], ...(imageContext ? { imageContext } : {}) };
   }
 
   private async sendReply(

@@ -89,22 +89,23 @@ describe('red team: image-derived text never outlives the image turn', () => {
     expect(JSON.stringify(stored(h))).not.toContain(DOC);
   });
 
-  it('a suppressed people photo described on the image turn stays out of the next extraction, which keeps the people rule', async () => {
+  it('a suppressed people photo described on the image turn stays out of the next extraction, echo included, which keeps the people rule', async () => {
     const h = harness(imageAnswers({ kind: 'photo_of_people', task: 'react', people: 0.95 }));
     h.setReply(`Lovely photo, the man in the ${FACE} looks happy.`);
     expect(await h.gateway.handleUpdate('aria', privatePhoto(TG.reza, h.ladder.sizes, 'my brother Ali'))).toBe('replied');
     expect(stored(h).map((m) => m.imageDerived)).toEqual([{ suppressed: true, people: true }, { suppressed: true, people: true }]);
 
-    // The next reply still echoes the description (it is in history); extraction must carry the people rule anyway.
+    // The next reply still echoes the description (it is in history). That echo inherits the
+    // image turn's whole mark, so it stays out of extraction too; the people rule still applies.
     expect(await h.gateway.handleUpdate('aria', privateText(TG.reza, 'yes he just got back from Tabriz'))).toBe('replied');
     const requests = [...h.llm.extractionRequests, ...h.fast.extractionRequests];
     expect(requests).toHaveLength(1);
     const text = requestText(requests[0]);
+    expect(text).toContain('he just got back from Tabriz'); // positive control: the member's own words are extracted
     expect(text).not.toContain('my brother Ali');
-    expect(text.split(FACE)).toHaveLength(2); // only the new turn's echo, never the image turn's row
+    expect(text).not.toContain(FACE);
     expect(systemText(requests[0].system)).toContain(IMAGE_PEOPLE_RULE);
-    // The echoing reply inherits the people mark, and no appearance fact became a memory.
-    expect(stored(h).map((m) => m.imageDerived)).toEqual([{ suppressed: true, people: true }, { suppressed: true, people: true }, undefined, { suppressed: false, people: true }]);
+    expect(stored(h).map((m) => m.imageDerived)).toEqual([{ suppressed: true, people: true }, { suppressed: true, people: true }, undefined, { suppressed: true, people: true }]);
     expect(JSON.stringify(await h.memories.listActive('aria'))).not.toContain('FACECANARY');
   });
 

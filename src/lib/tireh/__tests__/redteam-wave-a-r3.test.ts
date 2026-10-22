@@ -3,8 +3,9 @@
  *
  * Telegram private chats and the Mini App (converse, liveTurn, reflect) share
  * one history key, `private-<personId>`. 042059a carries the S12 people mark
- * onto a Telegram reply composed with a people row in context, but only in
- * handleUpdate. These cases probe the paths around that fix.
+ * onto a Telegram reply composed with a people row in context; round 3 carries
+ * the whole mark (suppressed and people) through handleUpdate, converse and
+ * liveTurn. These cases probe the paths around that fix.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PersonaGateway } from '../gateway';
@@ -83,29 +84,74 @@ describe('red team round 3: image-derived text across channels', () => {
     expect(JSON.stringify(await h.memories.listActive('aria'))).not.toContain(DOC);
   });
 
-  // KNOWN GAP (round 3, finding 1). converse() goes through generateReplyAt(), which drops composeReply's
-  // peopleContext, so the Mini App reply that repeats a people-photo description is stored without the
-  // people mark (liveTurn never computes it at all). Once the Telegram image rows leave EXTRACTION_WINDOW,
-  // converse's own extraction runs without the people rule or its lexical filter and the appearance
-  // description becomes a memory. Written as it.fails so the suite stays green; it turns red once
-  // converse and liveTurn carry the mark like handleUpdate does.
-  it.fails('a people-photo description repeated in the Mini App never becomes an appearance memory after the image rows leave the window', async () => {
+  // Round 3, finding 1 (closed). converse() used to drop composeReply's image context, so a Mini App
+  // reply repeating a people-photo description was stored unmarked and, once the Telegram image rows left
+  // EXTRACTION_WINDOW, extraction ran without the people rule or its lexical filter. The image here was
+  // asked to be remembered, so it is not suppressed and only the people rule protects it.
+  it('a people-photo description repeated in the Mini App never becomes an appearance memory after the image rows leave the window', async () => {
+    const h = harness(imageAnswers({ kind: 'photo_of_people', task: 'react', people: 0.95 }));
+    h.setReply(`Lovely photo, the man in the ${FACE} looks happy.`);
+    expect(await h.gateway.handleUpdate('aria', privatePhoto(TG.reza, h.ladder.sizes, 'remember this, my brother Ali'))).toBe('replied');
+    for (const said of ['he just got back from Tabriz', 'he is staying for a week', 'we will go hiking on Friday']) {
+      await h.gateway.converse('aria', 'reza', said);
+    }
+    // Positive control: every extraction saw the repeated description.
+    const requests = [...h.llm.extractionRequests, ...h.fast.extractionRequests];
+    expect(requests).toHaveLength(4);
+    expect(requests.every((r) => requestText(r).includes('FACECANARY'))).toBe(true);
+    // The Mini App replies inherit the people mark, so the last turn (image rows out of the window) keeps the rule.
+    expect(h.stored().filter((m) => m.role === 'assistant').map((m) => m.imageDerived)).toEqual(Array(4).fill({ suppressed: false, people: true }));
+    expect(JSON.stringify(await h.memories.listActive('aria'))).not.toContain('FACECANARY');
+  });
+
+  it('an unrequested people photo repeated in the Mini App stays out of every extraction', async () => {
     const h = harness(imageAnswers({ kind: 'photo_of_people', task: 'react', people: 0.95 }));
     h.setReply(`Lovely photo, the man in the ${FACE} looks happy.`);
     expect(await h.gateway.handleUpdate('aria', privatePhoto(TG.reza, h.ladder.sizes, 'my brother Ali'))).toBe('replied');
     for (const said of ['he just got back from Tabriz', 'he is staying for a week', 'we will go hiking on Friday']) {
       await h.gateway.converse('aria', 'reza', said);
     }
-    // Positive control: every Mini App extraction saw the repeated description.
-    expect([...h.llm.extractionRequests, ...h.fast.extractionRequests].every((r) => requestText(r).includes('FACECANARY'))).toBe(true);
+    expect(h.replyText()).toContain('FACECANARY'); // positive control: the description is in the reply context
+    const requests = [...h.llm.extractionRequests, ...h.fast.extractionRequests];
+    expect(requests).toHaveLength(3);
+    expect(h.extractionText()).toContain('we will go hiking on Friday'); // the member's own words still form memory
+    expect(h.extractionText()).not.toContain('FACECANARY');
     expect(JSON.stringify(await h.memories.listActive('aria'))).not.toContain('FACECANARY');
   });
 
-  // KNOWN GAP (round 3, finding 2). The `suppressed` verdict covers only the image turn's own two rows.
-  // A later reply composed with that row in context can repeat what the image showed (here a pharmacy
-  // receipt the member asked to have explained, not remembered); that reply row carries no mark, so it
-  // reaches the extraction provider and, through it, memory. 042059a closed this for `people` only.
-  it.fails('text read out of a non-remember image and repeated on the next Telegram turn never reaches extraction or memory', async () => {
+  it('a live-call reply composed with an image-marked row in context inherits its mark, so reflect never extracts it', async () => {
+    const h = harness(imageAnswers({ kind: 'photo_of_people', task: 'react', people: 0.95 }));
+    h.setReply(`Lovely photo, the man in the ${FACE} looks happy.`);
+    expect(await h.gateway.handleUpdate('aria', privatePhoto(TG.reza, h.ladder.sizes, 'my brother Ali'))).toBe('replied');
+    const turns: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+    for (const said of ['tell me about him', 'he just got back from Tabriz', 'we will go hiking on Friday']) {
+      turns.push({ role: 'user', content: said });
+      let reply = '';
+      for await (const part of h.gateway.liveTurn('aria', 'reza', turns)) reply += part;
+      turns.push({ role: 'assistant', content: reply });
+    }
+    await h.gateway.reflect('aria', 'reza');
+    const live = h.stored().filter((m) => m.role === 'assistant').slice(1);
+    expect(live).toHaveLength(3);
+    expect(live.map((m) => m.imageDerived)).toEqual(Array(3).fill({ suppressed: true, people: true }));
+    expect(h.extractionText()).toContain('we will go hiking on Friday'); // positive control
+    expect(h.extractionText()).not.toContain('FACECANARY');
+    expect(JSON.stringify(await h.memories.listActive('aria'))).not.toContain('FACECANARY');
+  });
+
+  it('a Mini App or live turn with no image-marked row in context stores no image mark', async () => {
+    const h = harness(imageAnswers({ kind: 'photo_of_people', task: 'react', people: 0.95 }));
+    h.setReply('Sure.');
+    await h.gateway.converse('aria', 'reza', 'my flight to Berlin is on Friday');
+    for await (const part of h.gateway.liveTurn('aria', 'reza', [{ role: 'user', content: 'and back on Monday' }])) void part;
+    expect(h.stored()).toHaveLength(4);
+    expect(h.stored().every((m) => m.imageDerived === undefined)).toBe(true);
+  });
+
+  // Round 3, finding 2 (closed). The `suppressed` verdict used to cover only the image turn's own two rows;
+  // a later reply composed with that row in context could repeat what the image showed and reach extraction.
+  // That reply now inherits the whole mark (inheritedImageMark).
+  it('text read out of a non-remember image and repeated on the next Telegram turn never reaches extraction or memory', async () => {
     const h = harness(imageAnswers({ kind: 'receipt', task: 'explain', people: 0, sensitive: 0.1 }));
     h.setReply(`This receipt is for ${RX}, 3 pens.`);
     expect(await h.gateway.handleUpdate('aria', privatePhoto(TG.reza, h.ladder.sizes, 'what is this receipt for?'))).toBe('replied');
@@ -114,6 +160,9 @@ describe('red team round 3: image-derived text across channels', () => {
 
     // The model can read its own earlier reply in history and repeats it.
     expect(await h.gateway.handleUpdate('aria', privateText(TG.reza, 'and how much was it?'))).toBe('replied');
+    expect(h.replyText()).toContain('RXCANARY'); // positive control: the earlier reply was in context
+    expect(h.stored().map((m) => m.imageDerived)).toEqual([{ suppressed: true, people: false }, { suppressed: true, people: false }, undefined, { suppressed: true, people: false }]);
+    expect(h.extractionText()).toContain('and how much was it?'); // the member's own words are still extracted
     expect(h.extractionText()).not.toContain('RXCANARY');
     expect(JSON.stringify(await h.memories.listActive('aria'))).not.toContain('RXCANARY');
   });

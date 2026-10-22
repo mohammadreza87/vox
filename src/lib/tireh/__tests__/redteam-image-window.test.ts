@@ -55,7 +55,8 @@ it('a people-photo description repeated on a later turn never becomes an appeara
   const reply = (text: string) => { llm.nextReply = text; fast.nextReply = text; };
 
   reply(`Lovely photo, the man in the ${FACE} looks happy.`);
-  expect(await gateway.handleUpdate('aria', privatePhoto(TG.reza, ladder.sizes, 'my brother Ali'))).toBe('replied');
+  // Asked to remember, so the image turn is not suppressed and only the people rule protects it.
+  expect(await gateway.handleUpdate('aria', privatePhoto(TG.reza, ladder.sizes, 'remember this, my brother Ali'))).toBe('replied');
   // Turn 2: the model repeats the description it can read in history.
   expect(await gateway.handleUpdate('aria', privateText(TG.reza, 'yes he just got back from Tabriz'))).toBe('replied');
   reply('Nice.');
@@ -63,10 +64,10 @@ it('a people-photo description repeated on a later turn never becomes an appeara
   expect(await gateway.handleUpdate('aria', privateText(TG.reza, 'we will go hiking on Friday'))).toBe('replied');
 
   const requests = [...llm.extractionRequests, ...fast.extractionRequests];
-  expect(requests).toHaveLength(3); // the image turn itself is suppressed
-  // Positive control: the repeated description reached every later extraction.
+  expect(requests).toHaveLength(4); // the image turn asked to be remembered, so it is extracted too
+  // Positive control: the repeated description reached every extraction.
   expect(requests.every((r) => requestText(r).includes('FACECANARY'))).toBe(true);
   // The rule holds while that description is in the window, including the 4th turn.
-  expect(requests.map((r) => systemText(r.system).includes(IMAGE_PEOPLE_RULE))).toEqual([true, true, true]);
+  expect(requests.map((r) => systemText(r.system).includes(IMAGE_PEOPLE_RULE))).toEqual([true, true, true, true]);
   expect(JSON.stringify(await memories.listActive('aria'))).not.toContain('FACECANARY');
 });
