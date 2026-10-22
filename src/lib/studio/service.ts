@@ -187,7 +187,7 @@ export interface StudioDeps {
   fastLLM?: LLM;
   /** Fast decisions (OpenAI Decisions API) for reply triage, strangers and skill routing; optional */
   decider?: Decider;
-  /** Content-free decision log (TIREH_DECISION_LOG). */ decisionLog?: import('../tireh/decisions/log').DecisionLogSink;
+  decisionLog?: import('../tireh/decisions/log').DecisionLogSink;
   /** Per-message skill selection (STUDIO_SKILL_ROUTING); default `on`. */
   skillRouting?: SkillRouting;
   /** The skill library (default: the shipped CATALOG); injectable so tests use fixtures. */
