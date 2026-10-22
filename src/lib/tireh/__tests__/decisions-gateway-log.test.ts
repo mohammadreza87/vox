@@ -2,7 +2,7 @@
  * S09: gateway triage with the decision log and the versioned question sets.
  * A fake decider and a recorder sink; no provider or network.
  */
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DecisionService } from '../../adaptive/decisions';
 import { ServiceDecider } from '../decisions/service-decider';
 import { V2_QUESTION_NAMES } from '../decisions/catalog';
@@ -21,6 +21,9 @@ const sentText = (h: ReturnType<typeof decisionsGateway>) => h.bot.sent.find((s)
 afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); });
 
 describe('gateway decision log (TIREH_DECISION_LOG sink)', () => {
+  // Pin v1 so the suite also passes under the flag matrix (TRIAGE_QUESTION_SET=v2).
+  beforeEach(() => { vi.stubEnv('TRIAGE_QUESTION_SET', ''); });
+
   it('a private text turn produces exactly one content-free row matching the questions sent', async () => {
     const sink = recorder();
     const h = decisionsGateway({ decisionLog: sink });

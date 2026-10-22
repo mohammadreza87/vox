@@ -224,6 +224,7 @@ describe('v2 question set', () => {
   });
 
   it('triageQuestionSetNow reads TRIAGE_QUESTION_SET at call time; the pure default stays v1', () => {
+    vi.stubEnv('TRIAGE_QUESTION_SET', '');
     expect(triageQuestionSetNow()).toBe('v1');
     vi.stubEnv('TRIAGE_QUESTION_SET', ' V2 ');
     expect(triageQuestionSetNow()).toBe('v2');
