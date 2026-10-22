@@ -1,81 +1,99 @@
 /**
- * Test-only fakes for the S11L voiceprint library. No network: the pyannote
- * adapter is never constructed; FakeVoiceprintProvider derives "templates"
- * from a speaker tag inside synthetic audio ('SPEAKER:<tag>|...').
+ * Test-only fakes for the S11L voiceprint library. No tests here and no
+ * network: the pyannote adapter is never constructed with a real key.
+ * Temporary directories come from os.tmpdir() (honours TMPDIR).
  */
 import { afterEach, vi } from 'vitest';
 import { mkdtemp, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import type { Firestore } from 'firebase-admin/firestore';
 import { AdaptiveService } from '../../adaptive/persistence/service';
 import { AdaptiveRepository, accountIdFor } from '../../adaptive/persistence/repository';
 import { FileAdaptiveStorage } from '../../adaptive/persistence/storage';
 import { adaptiveOptionsFromManifest } from '../../adaptive/persistence/config';
-import { AesGcmVoiceprintCipher } from '../identity/crypto';
+import type { VoiceThresholdConfig } from '../identity/config';
+import { VoiceprintCipher } from '../identity/crypto';
+import { VoiceprintProviderError, type SpeechActivity, type VoiceprintProvider } from '../identity/provider';
+import type { SelfEchoSource } from '../identity/self-echo';
 import { FileVoiceprintStore, InMemoryVoiceprintStore, type VoiceprintStore } from '../identity/store';
-import type { NetSpeechEstimator } from '../identity/net-speech';
-import { chainVoiceInvalidators, VoiceprintService, type EchoVoiceSource, type VoiceThresholdConfig, type VoiceprintProvider } from '../identity/voice';
+import { VoiceprintService, type VoiceprintServiceOptions } from '../identity/voice';
 
 export const VP_NOW = Date.UTC(2026, 9, 20, 12);
 export const TELEGRAM_ID = 123;
 export const PERSON_ID = `tg-${TELEGRAM_ID}`;
-export const TEST_KEY = new Uint8Array(32).fill(9);
-export const THRESHOLDS: VoiceThresholdConfig = { default: { match: 0.8, uncertain: 0.6, echo: 0.5 } };
+export const PERSONA_ID = 'aria';
+/** Fixed 32-byte test key; never a real key. */
+export const TEST_KEY = new Uint8Array(32).map((_, i) => (i * 7 + 3) & 0xff);
+export const TEMPLATE_CANARY = 'VP_TEMPLATE_CANARY';
+export const AUDIO_CANARY_TEXT = 'AUDIO_CANARY_7f3a9c';
+export const AUDIO_CANARY = new TextEncoder().encode(`${AUDIO_CANARY_TEXT}|opus-bytes-that-are-not-real`);
+export const THRESHOLDS: VoiceThresholdConfig = { default: { match: 0.8, noMatch: 0.4, selfEcho: 0.7 } };
 
-export const speakerAudio = (tag: string, extra = ''): ArrayBuffer => {
-  const bytes = new TextEncoder().encode(`SPEAKER:${tag}|${extra}`);
+export const audioBuffer = (bytes: Uint8Array = AUDIO_CANARY): ArrayBuffer => {
   const out = new ArrayBuffer(bytes.byteLength);
   new Uint8Array(out).set(bytes);
   return out;
 };
-const text = (bytes: Uint8Array) => Buffer.from(bytes).toString('utf8');
-const tagOf = (bytes: Uint8Array) => /SPEAKER:([^|]+)\|/.exec(text(bytes))?.[1] ?? 'unknown';
+const decode = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
 
+export function deferred<T = void>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
+}
+
+/** Deterministic provider: voiceprint returns the template canary; identify returns scripted scores per label. */
 export class FakeVoiceprintProvider implements VoiceprintProvider {
   readonly id = 'fake-vp';
-  readonly modelVersion = 'fake-1';
-  /** `${queryTag}->${templateTag}` → score; default 0.9 for the same tag, 0.1 otherwise. */
-  readonly scores = new Map<string, number>();
-  mode: 'ok' | 'throw' | 'hang' = 'ok';
-  delay?: Promise<void>;
-  readonly voiceprintCalls: Array<{ tag: string; mimeType: string }> = [];
-  readonly identifyCalls: Array<{ tag: string; candidateIds: string[]; templateTags: string[] }> = [];
-  voiceprint = vi.fn(async (audio: Uint8Array, mimeType: string, signal: AbortSignal): Promise<Uint8Array> => {
-    this.voiceprintCalls.push({ tag: tagOf(audio), mimeType });
+  modelVersion = 'fake-vp:1';
+  /** Score per candidate label; owner defaults to 0.9 and echo labels to 0.1. */
+  readonly scores = new Map<string, number>([['owner', 0.9]]);
+  mode: 'ok' | 'throw' | 'hang' | 'mixed' = 'ok';
+  /** When set, voiceprint waits for it (used to race withdrawal). */
+  voiceprintGate?: Promise<void>;
+  readonly identifyCalls: Array<{ labels: string[]; templates: string[]; queryLength: number }> = [];
+
+  voiceprint = vi.fn(async (_audio: Uint8Array, _mimeType: string, signal: AbortSignal): Promise<Uint8Array> => {
     await this.gate(signal);
-    return new TextEncoder().encode(`TPL:${tagOf(audio)}`);
+    if (this.voiceprintGate) await this.voiceprintGate;
+    return new TextEncoder().encode(TEMPLATE_CANARY);
   });
+
   identify = vi.fn(async (query: Uint8Array, candidates: readonly { id: string; template: Uint8Array }[], signal: AbortSignal) => {
-    const tag = tagOf(query);
-    const templateTags = candidates.map(c => text(c.template).replace(/^TPL:/, ''));
-    this.identifyCalls.push({ tag, candidateIds: candidates.map(c => c.id), templateTags });
+    this.identifyCalls.push({ labels: candidates.map(c => c.id), templates: candidates.map(c => decode(c.template)), queryLength: query.byteLength });
     await this.gate(signal);
+    if (this.mode === 'mixed') throw new VoiceprintProviderError('mixed_speakers');
     let best: { candidateId?: string; score: number } = { score: 0 };
-    candidates.forEach((c, i) => {
-      const score = this.scores.get(`${tag}->${templateTags[i]}`) ?? (tag === templateTags[i] ? 0.9 : 0.1);
+    for (const c of candidates) {
+      const score = this.scores.get(c.id) ?? (c.id.startsWith('echo-') ? 0.1 : 0);
       if (best.candidateId === undefined || score > best.score) best = { candidateId: c.id, score };
-    });
+    }
     return best;
   });
+
+  /** True when any label ever sent to identify contains a person id. */
+  labelsContainPersonIds(): boolean {
+    return this.identifyCalls.some(call => call.labels.some(label => label.includes('tg-')));
+  }
+
   private async gate(signal: AbortSignal) {
-    if (this.mode === 'throw') throw new Error('synthetic provider failure');
+    if (this.mode === 'throw') throw new VoiceprintProviderError('http');
     if (this.mode === 'hang') await new Promise(() => undefined);
-    if (this.delay) await this.delay;
     void signal;
   }
 }
 
-export function fakeEstimator(netMs: number, grossMs = Math.max(netMs, 1)) {
-  const state: { value: { netMs: number; grossMs: number } | null } = { value: { netMs, grossMs } };
-  const estimator: NetSpeechEstimator & { estimate: ReturnType<typeof vi.fn> } = {
-    estimate: vi.fn(() => state.value),
-  };
-  return Object.assign(estimator, { set(value: { netMs: number; grossMs: number } | null) { state.value = value; } });
+export class FakeSpeechActivity implements SpeechActivity {
+  result = { netSpeechMs: 12_000, speakers: 1 };
+  measure = vi.fn(async (_audio: Uint8Array, _mimeType: string, _signal: AbortSignal) => ({ ...this.result }));
 }
 
-export const echoSource = (voices: string[] = ['persona-voice-1']): EchoVoiceSource & ReturnType<typeof vi.fn> =>
-  vi.fn(async () => voices.map(voiceId => ({ voiceId, synthesize: async () => ({ audio: speakerAudio(`echo-${voiceId}`), mimeType: 'audio/mpeg' }) })));
+export class FakeEchoSource implements SelfEchoSource {
+  list: { id: string; template: Uint8Array }[] | null = [{ id: 'echo-0', template: new TextEncoder().encode('ECHO_TEMPLATE_0') }];
+  templates = vi.fn(async (_signal: AbortSignal) => this.list ? this.list.map(e => ({ id: e.id, template: new Uint8Array(e.template) })) : null);
+  warm = vi.fn(async (_signal?: AbortSignal) => undefined);
+}
 
 const directories: string[] = [];
 afterEach(async () => {
@@ -84,91 +102,93 @@ afterEach(async () => {
 });
 
 export interface SetupOptions {
-  flag?: boolean; approve?: boolean; consent?: boolean; confirm?: boolean; echo?: boolean;
-  store?: 'memory' | 'file'; estimator?: ReturnType<typeof fakeEstimator>; thresholds?: VoiceThresholdConfig | null; deadlineMs?: number;
+  /** STUDIO_VOICE_RECOGNITION, stubbed in the environment (default on). */
+  flag?: boolean;
+  /** AdaptiveService voiceRecognitionEnabled (default true). */
+  voiceRecognitionEnabled?: boolean;
+  /** Manifest approval for biometric_recognition (default true). */
+  approve?: boolean;
+  confirm?: boolean;
+  /** Grant optional.biometric_recognition in work (default when the gates allow it). */
+  consent?: boolean;
+  /** Grant the persona agent access in work (default true when consent is granted). */
+  agent?: boolean;
+  store?: 'memory' | 'file';
+  thresholds?: VoiceThresholdConfig | null;
+  pilot?: boolean;
   telegramId?: number;
+  service?: Partial<VoiceprintServiceOptions>;
+  /** Install the chained invalidator exactly as runtime.ts does (default true). */
+  chain?: boolean;
 }
 
 export async function setupVoiceprints(o: SetupOptions = {}) {
-  const flag = o.flag ?? true, approve = o.approve ?? true;
-  const telegramId = o.telegramId ?? TELEGRAM_ID, personId = `tg-${telegramId}`;
+  const flag = o.flag ?? true;
+  const recognition = o.voiceRecognitionEnabled ?? true;
+  const approve = o.approve ?? true;
+  const telegramId = o.telegramId ?? TELEGRAM_ID;
+  const personId = `tg-${telegramId}`;
   let now = VP_NOW, event = 0;
-  const directory = await mkdtemp(join(tmpdir(), 'vox-voiceprint-')); directories.push(directory);
+  const directory = await mkdtemp(join(tmpdir(), 'vox-voiceprint-'));
+  directories.push(directory);
   const capabilities = ['core_text', ...(approve ? ['biometric_recognition'] : [])];
   const manifest = JSON.stringify({ schemaVersion: 1, configurationVersion: 'synthetic-voiceprint-config', enabledCapabilities: capabilities,
     accounts: [{ accountId: accountIdFor(telegramId), jurisdictionKeys: ['SYNTHETIC'], allowDeclaredAdult: true }],
     approvals: capabilities.map((capability, i) => ({ schemaVersion: 1, id: `synthetic-${i}`, revision: 1, createdAt: VP_NOW, updatedAt: VP_NOW,
       jurisdiction: 'SYNTHETIC', capability, state: 'approved', configurationVersion: 'synthetic-voiceprint-config', effectiveAt: VP_NOW,
-      reviewExpiresAt: VP_NOW + 800 * 86400_000, owner: 'synthetic-owner', approvalReference: 'synthetic-only' })) });
+      reviewExpiresAt: VP_NOW + 800 * 86_400_000, owner: 'synthetic-owner', approvalReference: 'synthetic-only' })) });
   vi.stubEnv('STUDIO_VOICE_RECOGNITION', flag ? '1' : '');
   const adaptive = new AdaptiveService(new AdaptiveRepository(new FileAdaptiveStorage(join(directory, 'adaptive'))),
-    { ...adaptiveOptionsFromManifest(manifest), voiceRecognitionEnabled: flag, now: () => now });
-  const store: VoiceprintStore = o.store === 'file' ? new FileVoiceprintStore(join(directory, 'voiceprints-v1.json')) : new InMemoryVoiceprintStore();
-  const cipher = new AesGcmVoiceprintCipher(TEST_KEY);
+    { ...adaptiveOptionsFromManifest(manifest), voiceRecognitionEnabled: recognition, now: () => now });
+  const storePath = join(directory, 'voiceprints', 'voiceprints-v1.json');
+  const store: VoiceprintStore = o.store === 'file' ? new FileVoiceprintStore(storePath) : new InMemoryVoiceprintStore();
+  const cipher = new VoiceprintCipher(TEST_KEY);
   const provider = new FakeVoiceprintProvider();
-  const estimator = o.estimator ?? fakeEstimator(12_000, 15_000);
-  const echoVoices = o.echo === false ? undefined : echoSource();
+  const speech = new FakeSpeechActivity();
+  const selfEcho = new FakeEchoSource();
+  const members = new Map<number, boolean>([[telegramId, true]]);
+  const eligiblePerson = vi.fn(async (id: number) => members.get(id) === true);
+  const logger = { warn: vi.fn(), info: vi.fn(), error: vi.fn() };
   const service = new VoiceprintService({
-    store, cipher, provider, adaptive, thresholds: o.thresholds === undefined ? THRESHOLDS : o.thresholds, orgKey: 'HOOR',
-    ...(echoVoices ? { echoVoices } : {}), netSpeech: estimator, now: () => new Date(now),
-    ...(o.deadlineMs !== undefined ? { deadlineMs: o.deadlineMs } : {}),
+    adaptive, store, cipher, provider, speech, selfEcho, thresholds: o.thresholds === undefined ? THRESHOLDS : o.thresholds,
+    orgKey: 'HOOR', pilot: o.pilot ?? false, eligiblePerson, now: () => now, logger, ...o.service,
   });
-  const otherInvalidator = { invalidate: vi.fn(async () => undefined) };
-  adaptive.setVoiceIdentityInvalidator(chainVoiceInvalidators(otherInvalidator, service));
+  const voiceIdentity = { invalidate: vi.fn(async (_telegramId: number, _space?: 'work' | 'personal') => undefined) };
+  if (o.chain ?? true) {
+    // Exactly as runtime.ts: the single invalidator slot chains VoiceIdentityService and voiceprints.
+    adaptive.setVoiceIdentityInvalidator(async (input) => {
+      await Promise.all([voiceIdentity.invalidate(input.telegramId, input.space), service.invalidate(input.telegramId, input.space)]);
+    });
+  }
   const confirm = () => adaptive.confirm(telegramId, { confirm: true, adultConfirmed: true, declaredJurisdiction: 'EE' });
-  const changeConsent = async (space: 'work' | 'personal' = 'work', state: 'granted' | 'withdrawn' = 'granted') => {
-    const purpose = 'optional.biometric_recognition';
-    let current = await adaptive.read(telegramId, space);
+  const purpose = 'optional.biometric_recognition' as const;
+  const revisionOf = async (space: 'work' | 'personal') => (await adaptive.read(telegramId, space)).purposes.find(p => p.purpose === purpose)!.revision;
+  const present = async (space: 'work' | 'personal' = 'work') => adaptive.present(telegramId, { space, purpose, locale: 'en',
+    expectedRevision: await revisionOf(space), eventId: `present-voiceprint-${++event}`, deliberateReopen: true });
+  /** Moves optional.biometric_recognition to `state`; 'granted' presents first and uses the receipt. */
+  const consent = async (space: 'work' | 'personal' = 'work', state: 'granted' | 'withdrawn' | 'declined' = 'granted') => {
     let receipt: string | undefined;
-    if (state === 'granted') {
-      const presented = await adaptive.present(telegramId, { space, purpose, locale: 'en', expectedRevision: current.purposes.find(p => p.purpose === purpose)!.revision,
-        eventId: `present-voiceprint-${++event}`, deliberateReopen: true });
-      receipt = presented.receipt; current = presented;
-    }
-    return adaptive.changeConsent(telegramId, { space, purpose, state, expectedRevision: current.purposes.find(p => p.purpose === purpose)!.revision,
+    if (state !== 'withdrawn') receipt = (await present(space)).receipt;
+    return adaptive.changeConsent(telegramId, { space, purpose, state, expectedRevision: await revisionOf(space),
       eventId: `consent-voiceprint-${++event}`, ...(receipt ? { receipt } : {}) });
   };
-  const grantAgent = async (agentId: string, space: 'work' | 'personal' = 'work', allowed = true) => {
+  const grantAgent = async (agentId = PERSONA_ID, space: 'work' | 'personal' = 'work', allowed = true) => {
     const current = await adaptive.read(telegramId, space);
     return adaptive.setAgentAccess(telegramId, agentId, { space, allowed, expectedRevision: current.revision, eventId: `agent-voiceprint-${++event}` });
   };
   if (o.confirm ?? true) await confirm();
-  if (o.consent ?? (flag && approve)) await changeConsent();
-  const enroll = (space: 'work' | 'personal' = 'work', audio = speakerAudio('reza', 'enrollment sample')) =>
-    service.enroll({ telegramId: telegramId, personId: personId, space, audio, mimeType: 'audio/webm;codecs=opus', channel: 'mini_app' });
-  return { adaptive, store, cipher, provider, estimator, echoVoices, service, directory, otherInvalidator, confirm, changeConsent, grantAgent, enroll, telegramId, personId,
-    setNow: (value: number) => { now = value; }, now: () => now };
-}
-
-/** Minimal Firestore double: collection/doc/get/set/delete and chained equality where(). */
-export function fakeFirestore() {
-  const docs = new Map<string, Record<string, unknown>>();
-  const key = (collection: string, id: string) => `${collection}/${id}`;
-  const ref = (collection: string, id: string) => ({
-    id,
-    get: vi.fn(async () => {
-      const data = docs.get(key(collection, id));
-      return { exists: !!data, id, data: () => (data ? { ...data } : undefined) };
-    }),
-    set: vi.fn(async (data: Record<string, unknown>) => {
-      for (const [field, value] of Object.entries(data)) if (value === undefined) throw new Error(`undefined field ${field}`);
-      docs.set(key(collection, id), { ...data });
-    }),
-    delete: vi.fn(async () => { docs.delete(key(collection, id)); }),
+  const consented = o.consent ?? (recognition && approve && (o.confirm ?? true));
+  if (consented) await consent();
+  if (o.agent ?? consented) await grantAgent();
+  const enroll = (space: 'work' | 'personal' = 'work', audio: Uint8Array = AUDIO_CANARY) =>
+    service.enroll({ telegramId, audio, mimeType: 'audio/webm;codecs=opus', space, channel: 'mini_app' });
+  const voiceNote = (overrides: Partial<Parameters<VoiceprintService['verifyVoiceNote']>[0]> = {}) => ({
+    personaId: PERSONA_ID, personId, space: 'work' as const, chatKind: 'private' as const, guestAudience: false,
+    audio: audioBuffer(), mimeType: 'audio/ogg', durationSec: 6, channel: 'telegram_voice_note' as const, ...overrides,
   });
-  const query = (collection: string, filters: Array<[string, unknown]>) => ({
-    where: (field: string, op: string, value: unknown) => {
-      if (op !== '==') throw new Error('equality only');
-      return query(collection, [...filters, [field, value]]);
-    },
-    get: vi.fn(async () => {
-      const prefix = `${collection}/`;
-      const matches = [...docs.entries()].filter(([k, data]) => k.startsWith(prefix) && filters.every(([f, v]) => data[f] === v));
-      return { docs: matches.map(([k, data]) => ({ id: k.slice(prefix.length), data: () => ({ ...data }), ref: ref(collection, k.slice(prefix.length)) })) };
-    }),
-  });
-  const db = {
-    collection: (name: string) => ({ doc: (id: string) => ref(name, id), where: (f: string, op: string, v: unknown) => query(name, []).where(f, op, v) }),
+  return {
+    adaptive, store, storePath, cipher, provider, speech, selfEcho, service, directory, voiceIdentity, members, eligiblePerson, logger,
+    confirm, present, consent, grantAgent, enroll, voiceNote, telegramId, personId,
+    setNow: (value: number) => { now = value; }, now: () => now,
   };
-  return { db: db as unknown as Firestore, docs };
 }
