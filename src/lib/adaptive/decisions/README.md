@@ -14,8 +14,11 @@ predicates/choices/scores, never identity or access decisions. The provider reje
 extra request properties and validates named answers, probabilities and score
 arithmetic. All refusals currently fall back for the whole batch.
 
-The default deadline includes authorization, loading and provider work and is
-capped at 500 ms. Caller cancellation/revisions discard late work. Three provider
+The default deadline is `DEFAULT_DECISION_DEADLINE_MS` (500 ms) and covers
+authorization, loading and provider work; callers may pass `deadlineMs` up to
+`MAX_DECISION_DEADLINE_MS` (5 s), the effective value is passed to the provider
+as `options.timeoutMs`, and `OpenAIDecisionProvider` still applies its own
+500 ms request timeout until the SDK step. Caller cancellation/revisions discard late work. Three provider
 errors/timeouts/rate limits open a local 30-second circuit. No retries occur.
 `PredictionSession` allows one in-flight request and two evaluations per turn;
 `revise` invalidates partial work while `startTurn` resets the budget. The caller
