@@ -307,6 +307,14 @@ export class AnthropicLLM implements LLM {
   }
 }
 
+/**
+ * @deprecated Not used by Vox Studio (src/lib/studio/runtime.ts constructs AnthropicLLM only).
+ * Reachable only via createLLMFromEnv with TIREH_LLM_PROVIDER=gemini: the standalone TIREH
+ * webhook runtime (src/lib/tireh/runtime.ts, /api/tireh/telegram/[personaId]) and
+ * scripts/tireh-local.ts. No web search, no prompt caching, not approved for Telegram image
+ * turns. Kept until the standalone runtime is retired or kept by decision; see
+ * docs/TIREH_PERSONAS.md.
+ */
 export class GeminiLLM implements LLM {
   private client: GoogleGenerativeAI | null = null;
 
@@ -341,10 +349,14 @@ export class GeminiLLM implements LLM {
   }
 }
 
-export function createLLMFromEnv(env: NodeJS.ProcessEnv = process.env): LLM {
+/** Fixed string: no env values, keys, model ids or content. */
+export const GEMINI_DEPRECATION_WARNING = 'tireh_llm_gemini_deprecated: TIREH_LLM_PROVIDER=gemini is deprecated; Vox Studio runs on Anthropic only. See docs/TIREH_PERSONAS.md.';
+
+export function createLLMFromEnv(env: NodeJS.ProcessEnv = process.env, log: Pick<Console, 'warn'> = console): LLM {
   const provider = env.TIREH_LLM_PROVIDER ?? 'anthropic';
   if (provider === 'gemini') {
     if (!env.GEMINI_API_KEY) throw new Error('GEMINI_API_KEY is required for TIREH_LLM_PROVIDER=gemini');
+    log.warn(GEMINI_DEPRECATION_WARNING);
     return new GeminiLLM(env.GEMINI_API_KEY, env.TIREH_LLM_MODEL ?? 'gemini-2.0-flash-001');
   }
   if (provider !== 'anthropic') throw new Error(`Unknown TIREH_LLM_PROVIDER "${provider}"`);

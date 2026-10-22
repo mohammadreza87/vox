@@ -27,10 +27,14 @@ Official guide and API reference checked 19 October 2026:
 - https://developers.openai.com/api/docs/guides/decisions
 - https://developers.openai.com/api/reference/resources/decisions/methods/create
 
-The installed `openai` SDK is 6.9.1; the guide's dedicated JavaScript Decisions
-helper needs 7.30.0+. `OpenAIDecisionProvider` uses the installed SDK's public
-`post('/decisions')` against the documented `POST /v1/decisions`. A mocked SDK fetch
-test verifies the complete URL/body/signal without network or credentials.
+The installed SDK is openai 7.34.0 (>= 7.30.0, which requires Node 22).
+`OpenAIDecisionProvider` calls the SDK's `client.decisions.create` when present and
+otherwise the public `post('/decisions')`. Both send the identical documented
+`POST /v1/decisions` body with `maxRetries: 0`, and a provider timeout of
+`options.timeoutMs`, clamped to 1-5000 ms, defaulting to 500. Mocked-fetch tests
+(`decisions.test.ts`, `transport-fence.test.ts`, `openai-compat.test.ts`) verify the URL,
+body, signal, error names and the authority fence on both paths without network or
+credentials.
 `prompt_cache_options: { mode: 'explicit' }` with no breakpoints requests no prompt
 caching. This is not a provider retention or regional processing guarantee.
 
