@@ -112,6 +112,11 @@ export interface DecisionContext {
   readonly deadlineMs?: number;
 }
 
+/** The deadline the service enforces and hands to the provider as options.timeoutMs. */
+export function effectiveDecisionDeadline(deadlineMs?: number): number {
+  return Math.min(MAX_DECISION_DEADLINE_MS, Math.max(1, deadlineMs ?? DEFAULT_DECISION_DEADLINE_MS));
+}
+
 function validateAnswers(raw: unknown, input: DecisionInput): { answers: DecisionAnswer[]; model: string; inputTokens?: number } | null {
   const response = z.object({ model: z.literal(DECISIONS_MODEL), answers: z.array(answerSchema),
     usage: z.object({ input_tokens: z.number().int().nonnegative() }).optional() }).safeParse(raw);
@@ -166,7 +171,7 @@ export class DecisionService {
     let stopReason: 'timeout' | 'cancelled' = 'timeout';
     let timer: ReturnType<typeof setTimeout> | undefined;
     let cancel: (() => void) | undefined;
-    const deadline = Math.min(MAX_DECISION_DEADLINE_MS, Math.max(1, context.deadlineMs ?? DEFAULT_DECISION_DEADLINE_MS));
+    const deadline = effectiveDecisionDeadline(context.deadlineMs);
     const stop = new Promise<DecisionResult>(resolve => {
       cancel = () => { stopReason = 'cancelled'; controller.abort(); resolve(unknown('cancelled')); };
       context.signal?.addEventListener('abort', cancel, { once: true });
