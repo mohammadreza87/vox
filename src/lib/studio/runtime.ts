@@ -242,7 +242,7 @@ function fileStorage(dir: string, scopedRelationshipsEnabled: boolean, format: A
     return { store, memory: createFileStores(join(dir, 'memory.json')),
     relationshipStore: new FileRelationshipStore(join(dir, 'scoped-relationships-v1.json')), observations: new FileObservationStore(join(dir, 'scoped-relationship-observations-v1.json')),
     adaptive: new AdaptiveService(new AdaptiveRepository(managed.storage),
-      { ...adaptiveOptionsFromManifest(process.env.STUDIO_ADAPTIVE_POLICY_JSON, internalPilotAuthority(store)), scopedRelationshipsEnabled }),
+      { ...adaptiveOptionsFromManifest(process.env.STUDIO_ADAPTIVE_POLICY_JSON, internalPilotAuthority(store)), scopedRelationshipsEnabled, voiceRecognitionEnabled: process.env.STUDIO_VOICE_RECOGNITION === '1' }),
     sharedStorage: new FileAdaptiveStorage(join(dir, 'shared-memory')),
     voiceIdentityStorage: new FileAdaptiveStorage(join(dir, 'voice-identity')),
     maintenanceStorage: new FileAdaptiveStorage(join(dir, 'adaptive-maintenance')), closeAdaptive: managed.close };
@@ -258,7 +258,7 @@ async function firestoreStorage(bucketName: string, scopedRelationshipsEnabled: 
   return {
     store,
     adaptive: new AdaptiveService(new AdaptiveRepository(new FirestoreAdaptiveStorage(db)),
-      { ...adaptiveOptionsFromManifest(process.env.STUDIO_ADAPTIVE_POLICY_JSON, internalPilotAuthority(store)), scopedRelationshipsEnabled }),
+      { ...adaptiveOptionsFromManifest(process.env.STUDIO_ADAPTIVE_POLICY_JSON, internalPilotAuthority(store)), scopedRelationshipsEnabled, voiceRecognitionEnabled: process.env.STUDIO_VOICE_RECOGNITION === '1' }),
     sharedStorage: new FirestoreAdaptiveStorage(db, 'adaptiveSharedMemory'),
     voiceIdentityStorage: new FirestoreAdaptiveStorage(db, 'adaptiveVoiceIdentity'),
     maintenanceStorage: new FirestoreAdaptiveStorage(db, 'adaptiveMaintenance'),
@@ -413,6 +413,18 @@ async function create(): Promise<Studio> {
     storage.adaptive!.setVoiceIdentityInvalidator(async ({ telegramId, space }) => {
       await studio.deps.voiceIdentity!.invalidate(telegramId, space);
     });
+    {
+      const { createStudioVoiceprints } = await import('./identity');
+      const voiceprints = await createStudioVoiceprints({ env, storage: config.storage === 'firestore' ? 'firestore' : 'file', dataDir: config.dataDir, orgKey: studio.deps.orgName, adaptive: storage.adaptive!, readState: () => storage.store.read(), eleven: studio.deps.eleven, logger: console });
+      if (voiceprints) {
+        studio.deps.voiceprints = voiceprints;
+        storage.adaptive!.setVoiceIdentityInvalidator(async (input) => {
+          await Promise.all([studio.deps.voiceIdentity!.invalidate(input.telegramId, input.space), voiceprints.invalidate(input.telegramId, input.space)]);
+        });
+        void voiceprints.sweep().catch(() => undefined);
+        if (process.env.STUDIO_VOICE_RECOGNITION === '1') void voiceprints.warmSelfEcho().catch(() => undefined);
+      }
+    }
     studio.deps.observer = new AdaptiveObserverService(storage.adaptive!);
     const experimentDirectory = join(config.dataDir, 'controlled-experiments', 'v1');
     const retainedExperiments = config.storage === 'file' && !!lstatSync(join(config.dataDir, 'controlled-experiments'), { throwIfNoEntry: false });

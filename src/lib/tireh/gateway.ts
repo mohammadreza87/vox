@@ -22,6 +22,7 @@ import type { OrgDirectory } from './org/directory';
 import type { ChatContext, ChatMessage, MemoryRecord, MemoryScope, Persona } from './types';
 import type { ChatHistoryStore, MemoryStore, ShareOfferStore, UpdateDeduper } from './memory/store';
 import type { VoiceService } from './voice';
+import type { VoiceNoteVerifier } from './identity/voice-band';
 import type { TelegramBotClient, TelegramCallbackQuery, TelegramMessage, TelegramUpdate } from './telegram/client';
 import { buildSystemPrompt } from './conversation/prompt';
 import { emptyReplyFallback, toPlainChat } from './conversation/format';
@@ -141,6 +142,8 @@ export interface GatewayDeps {
   history: ChatHistoryStore;
   deduper: UpdateDeduper;
   voice: VoiceService | null;
+  /** S11L: shadow voiceprint verification for 1:1 member voice notes; the verifier checks STUDIO_VOICE_RECOGNITION itself. */
+  voiceVerifier?: VoiceNoteVerifier;
   /** Telegram client for a persona's bot */
   botFor(personaId: string): TelegramBotClient;
   /** Recheck live membership/settings before provider calls and side effects. */
@@ -924,7 +927,14 @@ You are on a live voice call. Answer in one to three short spoken sentences. No 
     try {
       const audio = await bot.downloadFile(message.voice.file_id);
       if (!(await this.groupAllowed(persona, chat, speakerId, 'reply'))) return '';
-      return await timed('stt', () => this.deps.voice!.transcribe(audio, message.voice!.mime_type ?? 'audio/ogg'));
+      const mimeType = message.voice.mime_type ?? 'audio/ogg';
+      const stt = timed('stt', () => this.deps.voice!.transcribe(audio, mimeType));
+      const verifier = this.deps.voiceVerifier;
+      if (!verifier || chat.kind !== 'private') return await stt;
+      // guestAudience is false here: the Step 0 guard above already returned for hasGuestAudience.
+      const [text] = await Promise.all([stt, verifier.verifyVoiceNote({ personaId: persona.id, personId: speakerId, space: 'work', chatKind: 'private', guestAudience: false, audio, mimeType, durationSec: message.voice.duration, channel: 'telegram_voice_note' }).catch(() => undefined)]);
+      // TODO(S10): hand the VoiceVerification to IdentityService.assess. Shadow mode: discarded; it never grants access.
+      return text;
     } catch {
       logTelegramDiagnostic(this.log, 'transcription_failed');
       return '';
