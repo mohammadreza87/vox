@@ -1,9 +1,9 @@
-/** S09: the ServiceDecider adapter and studioDecider selection. Fake providers only; no network. */
+/** S09: the ServiceDecider adapter over DecisionService. Fake providers only; no network. */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DecisionService, requestSchema, type DecisionProvider } from '../../adaptive/decisions';
 import { minimizeImageDataUrl } from '../../adaptive/prediction/image';
-import { ServiceDecider, studioDecider } from '../decisions/service-decider';
-import { triageInput, triageQuestions, type Decider, type DecisionQuestion } from '../triage';
+import { ServiceDecider, toServiceQuestion } from '../decisions/service-decider';
+import { readTriage, triageInput, triageQuestions, type DecisionQuestion } from '../triage';
 import { routeBrief } from '../../studio/skills/route';
 import { fixtureCatalog } from '../../studio/skills/__tests__/fixtures';
 import type { Persona } from '../types';
@@ -17,6 +17,17 @@ const predicate = (name: string): DecisionQuestion => ({ type: 'predicate', name
 const persona = (): Persona => testOrgConfig().personas.find((p) => p.id === 'aria')!;
 
 afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+
+describe('toServiceQuestion', () => {
+  it('fills description from value or label and passes the seam schema; predicates unchanged', () => {
+    const qs: DecisionQuestion[] = [predicate('memorable'),
+      { type: 'choice', name: 'pick', instructions: 'Pick.', choices: [{ value: 'a' }, { value: 'b' }] },
+      { type: 'score', name: 'level', instructions: 'Level?', levels: [{ label: 'low' }, { label: 'high' }] }];
+    const mapped = qs.map(toServiceQuestion);
+    expect(mapped[0]).toEqual(qs[0]);
+    expect(requestSchema.safeParse({ input: 'x', questions: mapped }).success).toBe(true);
+  });
+});
 
 describe('ServiceDecider mapping', () => {
   it('fills missing choice and level descriptions and keeps instructions unchanged', async () => {
@@ -61,9 +72,44 @@ describe('ServiceDecider unknown outcomes give {}', () => {
     await expect(new ServiceDecider(new DecisionService(provider)).decide('text', [predicate('memorable')])).resolves.toEqual({});
   });
 
-  it('a service that throws gives {} with reason threw', async () => {
+  it('a service that throws gives {} with reason provider_error and elapsedMs from options.now', async () => {
     const service = { evaluate: async () => { throw new Error('unexpected'); } } as unknown as DecisionService;
-    expect(await new ServiceDecider(service).decideDetailed('text', [predicate('memorable')])).toMatchObject({ answers: {}, outcome: 'unknown', unknownReason: 'threw' });
+    let t = 1000;
+    const decider = new ServiceDecider(service, { now: () => (t += 7) });
+    expect(await decider.decideDetailed('text', [predicate('memorable')])).toEqual({ answers: {}, outcome: 'unknown', unknownReason: 'provider_error', elapsedMs: 7 });
+    await expect(decider.decide('text', [predicate('memorable')])).resolves.toEqual({});
+    await expect(decider.decideParts([{ type: 'text', text: 'x' }], [predicate('memorable')])).resolves.toEqual({});
+  });
+
+  it('a 9000-char input is invalid_input without a provider call', async () => {
+    const { provider } = scripted();
+    const detail = await new ServiceDecider(new DecisionService(provider)).decideDetailed('x'.repeat(9000), [predicate('memorable')]);
+    expect(detail).toMatchObject({ answers: {}, outcome: 'unknown', unknownReason: 'invalid_input' });
+    expect(provider.evaluate).not.toHaveBeenCalled();
+  });
+
+  it('a provider that never resolves times out at timeoutMs 50', async () => {
+    vi.useFakeTimers();
+    try {
+      const provider: DecisionProvider = { evaluate: () => new Promise(() => {}) };
+      const decider = new ServiceDecider(new DecisionService(provider));
+      let detail: unknown, answers: unknown;
+      void decider.decideDetailed('text', [predicate('memorable')], 50).then((d) => { detail = d; });
+      void decider.decide('text', [predicate('memorable')], 50).then((a) => { answers = a; });
+      await vi.advanceTimersByTimeAsync(49);
+      expect(detail).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(detail).toMatchObject({ answers: {}, outcome: 'unknown', unknownReason: 'timeout' });
+      expect(answers).toEqual({});
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('readTriage of an unknown outcome is null (the reply takes the full path)', async () => {
+    const { provider } = scripted({ memorable: 'refusal' });
+    const questions = triageQuestions(persona(), false);
+    expect(readTriage(await new ServiceDecider(new DecisionService(provider)).decide('text', questions), false)).toBeNull();
+    const ok = scripted();
+    expect(readTriage(await new ServiceDecider(new DecisionService(ok.provider)).decide('text', questions), false)).not.toBeNull();
   });
 
   it('25 questions or instructions over 2048 chars give {} without a provider call', async () => {
@@ -81,6 +127,9 @@ describe('ServiceDecider deadline', () => {
     [2000, 800, 800],
     [undefined, undefined, 500],
     [NaN, undefined, 500],
+    [0, undefined, 500],
+    [undefined, 800, 800],
+    [9000, undefined, 5000],
   ])('timeoutMs %s with options.deadlineMs %s gives %s', async (timeoutMs, deadlineMs, expected) => {
     const { provider, calls } = scripted();
     await new ServiceDecider(new DecisionService(provider), deadlineMs === undefined ? {} : { deadlineMs }).decide('text', [predicate('memorable')], timeoutMs);
@@ -120,6 +169,17 @@ describe('ServiceDecider circuit', () => {
 });
 
 describe('consumer compatibility through ServiceDecider', () => {
+  it('a stranger question whose persona text pushes instructions past 2048 chars gives {} (falls back), never a clipped request', async () => {
+    const { provider } = scripted();
+    const character = `You are Aria. Personality: ${'warm '.repeat(500)}`;
+    const answers = await new ServiceDecider(new DecisionService(provider)).decide('hello', [{
+      type: 'choice', name: 'decision', instructions: `${character}\n\nWhat do you do?`,
+      choices: [{ value: 'reply', description: 'Reply.' }, { value: 'ignore', description: 'Ignore.' }],
+    }], 2000);
+    expect(answers).toEqual({});
+    expect(provider.evaluate).not.toHaveBeenCalled();
+  });
+
   it('the stranger decision question passes the schema', async () => {
     const { provider, calls } = scripted({ decision: { choice: 'decline', confidence: 0.9 } });
     const character = 'You are Aria, Product Lead. Personality: Analytical and warm. Style: Concise.';
@@ -151,32 +211,5 @@ describe('consumer compatibility through ServiceDecider', () => {
         expect(requestSchema.safeParse({ input: triageInput(p, lines), questions }).success).toBe(true);
       }
     }
-  });
-});
-
-describe('studioDecider', () => {
-  const fallback: Decider = { decide: async () => ({}) };
-
-  it('unset returns the identical fallback object', () => {
-    vi.stubEnv('STUDIO_DECIDER', undefined);
-    expect(studioDecider(fallback, { OPENAI_API_KEY: 'k' })).toBe(fallback);
-    expect(studioDecider(fallback)).toBe(fallback);
-  });
-
-  it('service without OPENAI_API_KEY returns the fallback', () => {
-    expect(studioDecider(fallback, { STUDIO_DECIDER: 'service' })).toBe(fallback);
-  });
-
-  it('" Service " with a key returns a ServiceDecider and makes no request', () => {
-    // The suite runs under jsdom; the server SDK refuses browser-like globals.
-    vi.stubGlobal('navigator', undefined);
-    const fetchSpy = vi.spyOn(globalThis, 'fetch');
-    const decider = studioDecider(fallback, { STUDIO_DECIDER: ' Service ', OPENAI_API_KEY: 'synthetic-not-a-secret' });
-    expect(decider).toBeInstanceOf(ServiceDecider);
-    expect(fetchSpy).not.toHaveBeenCalled();
-  });
-
-  it('any other value returns the fallback', () => {
-    expect(studioDecider(fallback, { STUDIO_DECIDER: 'other', OPENAI_API_KEY: 'k' })).toBe(fallback);
   });
 });
