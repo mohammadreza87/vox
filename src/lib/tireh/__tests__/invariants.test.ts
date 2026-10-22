@@ -47,6 +47,17 @@ class TombstoneStore extends InMemoryMemoryStore {
   }
 }
 
+/** A store without S06's optional tombstone methods: inheritance must fail closed. */
+class NoTombstoneStore extends InMemoryMemoryStore {
+  declare tombstonesOf: undefined;
+  declare addTombstones: undefined;
+  constructor() {
+    super();
+    Object.defineProperty(this, 'tombstonesOf', { value: undefined });
+    Object.defineProperty(this, 'addTombstones', { value: undefined });
+  }
+}
+
 describe('sharing invariants (section 4.6)', () => {
   it('(1) every memory reaching a reply prompt is authorized for every reader and allowed by its scope', async () => {
     const { gateway, llm, memories, org } = makeGateway();
@@ -304,7 +315,7 @@ describe('sharing invariants (section 4.6)', () => {
       await store.delete(gone.id);
       // Active, but its lineage was already tombstoned for the predecessor.
       await add('LINEAGE', { kind: 'group', groupId: 'chat-1' });
-      if (store instanceof TombstoneStore) await store.addTombstones(old.id, ['src-LINEAGE']);
+      if (typeof store.addTombstones === 'function') await store.addTombstones(old.id, ['src-LINEAGE']);
       await h.studio.fire(org.admin, old.id, { reason: 'reset', memoryPolicy: 'transfer', confirmName: 'Nova' });
       h.personaLLM.push(draftJson({ name: 'Nova Two' }));
       const { agent: next } = await hire(h, org.alice, { name: 'Nova Two' }, old.id);
@@ -316,7 +327,15 @@ describe('sharing invariants (section 4.6)', () => {
     expect(await carrier.tombstonesOf(next.id)).toEqual(await carrier.tombstonesOf(old.id));
     await expect(carrier.add(newMemory({ personaId: next.id, scope: { kind: 'group', groupId: 'chat-1' }, source: gone.source }))).rejects.toBeInstanceOf(StaleMemoryWriteError);
 
-    const plain = new InMemoryMemoryStore();
+    // Integration (after S06): the real InMemoryMemoryStore now implements the optional tombstone
+    // methods, so it carries exactly like the test subclass.
+    const real = new InMemoryMemoryStore();
+    const realRun = await scenario(real);
+    expect((await real.listActive(realRun.next.id)).map((m) => m.content).sort()).toEqual(['GROUP', 'PEOPLE', 'PROJECT']);
+    expect(await real.tombstonesOf(realRun.next.id)).toEqual(await real.tombstonesOf(realRun.old.id));
+
+    // A store without the optional methods still inherits nothing (fail closed).
+    const plain = new NoTombstoneStore();
     const plainRun = await scenario(plain);
     expect(await plain.listActive(plainRun.next.id)).toEqual([]);
   });

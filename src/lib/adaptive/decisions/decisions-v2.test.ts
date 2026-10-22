@@ -201,12 +201,20 @@ describe('provider compatibility', () => {
 });
 
 describe('OpenAIDecisionProvider (S15 handoff)', () => {
-  it('still sends timeout 500 and maxRetries 0 whatever options.timeoutMs says', async () => {
+  // Integration: after S15 merged, the class body honours options.timeoutMs (clamped to 5000) and keeps
+  // 500 ms when the option is absent. maxRetries stays 0 either way.
+  it('sends options.timeoutMs as the provider timeout and maxRetries 0', async () => {
     const post = vi.fn(async () => ({}));
-    // Through the interface: the class body (S15) still declares three parameters.
     const provider: DecisionProvider = new OpenAIDecisionProvider({ post } as never);
     await provider.evaluate({ input: 'text', questions: predicates(1) } as DecisionInput, new AbortController().signal, undefined, { timeoutMs: 2000 });
     expect(post).toHaveBeenCalledOnce();
+    expect(post.mock.calls[0]).toEqual(['/decisions', expect.objectContaining({ timeout: 2000, maxRetries: 0 })]);
+  });
+
+  it('keeps timeout 500 and maxRetries 0 when no options are passed', async () => {
+    const post = vi.fn(async () => ({}));
+    const provider: DecisionProvider = new OpenAIDecisionProvider({ post } as never);
+    await provider.evaluate({ input: 'text', questions: predicates(1) } as DecisionInput, new AbortController().signal);
     expect(post.mock.calls[0]).toEqual(['/decisions', expect.objectContaining({ timeout: 500, maxRetries: 0 })]);
   });
 });
