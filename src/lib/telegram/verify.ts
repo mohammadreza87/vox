@@ -12,10 +12,17 @@ import { NextRequest, NextResponse } from 'next/server';
 export function verifyTelegramWebhookToken(request: NextRequest): boolean {
   const webhookSecret = process.env.TELEGRAM_WEBHOOK_SECRET;
 
-  // Fail closed: without a configured secret no request can be verified.
   if (!webhookSecret) {
-    console.error('TELEGRAM_WEBHOOK_SECRET not configured - webhook request rejected');
-    return false;
+    // TELEGRAM_WEBHOOK_FAIL_CLOSED=1 rejects every request until the secret is set and
+    // registered as the setWebhook secret_token. Unset keeps the earlier behaviour
+    // (skip verification) so a deployment without the secret still receives payment
+    // updates; turn it on only once every legacy deployment has the secret.
+    if (process.env.TELEGRAM_WEBHOOK_FAIL_CLOSED === '1') {
+      console.error('TELEGRAM_WEBHOOK_SECRET not configured - webhook request rejected');
+      return false;
+    }
+    console.warn('TELEGRAM_WEBHOOK_SECRET not configured - webhook verification skipped');
+    return true;
   }
 
   const providedToken = request.headers.get('X-Telegram-Bot-Api-Secret-Token');

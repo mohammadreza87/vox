@@ -66,7 +66,10 @@ The sha256 of each shared file matches the contract:
 
 ## Flags
 
-Every flag defaults to off. With all of them unset, the runtime behaves as the integration base does. The only exception is the openai 7.x SDK's `X-Stainless-*` headers on Decisions requests; see S15.
+Every flag defaults to off. With all of them unset, the runtime behaves as the integration base does, with two exceptions:
+
+- The openai 7.x SDK's `X-Stainless-*` headers on Decisions requests; see S15.
+- **Legacy Telegram payments (fixer commit `169d16d`, an explicit exception kept on QA round 2's recommendation, pending product sign-off):** `PUT /api/telegram/payments` is deleted, because it wrote an active subscription from an unauthenticated, caller-supplied `successful_payment` and approved every `pre_checkout_query`. `POST /api/telegram/payments` now needs a Firebase ID token and takes the invoice `userId` from the token. Telegram delivers payment updates by POST to `/api/telegram/webhook`, which is unchanged. The fail-closed webhook verifier from the same commit is not part of the exception: it is behind `TELEGRAM_WEBHOOK_FAIL_CLOSED` (below), so with flags unset a deployment without `TELEGRAM_WEBHOOK_SECRET` still receives payment updates as before. Seven tests were removed with the PUT handler and the body-only `userId` contract: `returns 400 when userId is missing` (the user now comes from the ID token; replaced by the four ID-token tests), and the six PUT tests `accepts pre-checkout query`, `updates user subscription on successful payment`, `sets correct tier for max plan`, `sends confirmation message to user`, `returns success for empty webhook` and `returns 500 on processing error` (replaced by a test that no PUT handler is exported).
 
 | Env | Step | Default | Effect when set |
 |---|---|---|---|
@@ -81,6 +84,7 @@ Every flag defaults to off. With all of them unset, the runtime behaves as the i
 | `TIREH_DECISION_LOG=1` | S09 | off | Content-free decision log rows, kept 90 days |
 | `STUDIO_IMAGES=1` | S12 | off | Telegram photo and image-document ingestion, private chats only |
 | `STUDIO_VOICE_RECOGNITION=1` | S11L | off | Voiceprints; also needs `VOICEPRINT_KEY`, approval and consent |
+| `TELEGRAM_WEBHOOK_FAIL_CLOSED=1` | fixer (legacy) | off | `/api/telegram/webhook` rejects every request when `TELEGRAM_WEBHOOK_SECRET` is unset; turn on only after the secret rollout (open issue 8) |
 
 S10L and S14 are libraries that are not wired in and have no flag.
 
@@ -160,7 +164,7 @@ These match the documented 6d00b80 baseline.
    - `setVoiceIdentityInvalidator` is a single slot.
    - The EnrollScreen FA strings need native-language review.
 8. **S15:**
-   - `PUT /api/telegram/payments` is unauthenticated and writes subscriptions. This is a P0 follow-up that needs an owner.
+   - `PUT /api/telegram/payments` is deleted and `POST` needs a Firebase ID token (fixer commit `169d16d`; see the Flags exception). Still open: `TELEGRAM_WEBHOOK_SECRET` is set nowhere in the repo (no apphosting or env example), so the legacy webhook is unverified until it is set in every legacy deployment, registered as the setWebhook `secret_token`, and `TELEGRAM_WEBHOOK_FAIL_CLOSED=1` is turned on. Owner for that rollout: not yet named; Reza to assign.
    - openai 7.x needs Node 22 or later. Confirm that the Firebase/App Hosting runtime uses Node 22.
    - The main checkout needs `npm ci`.
 9. **S10L and S14:** not wired in, and they wait on the DPIA. S10L's calibration uses synthetic data only.
