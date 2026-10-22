@@ -240,9 +240,28 @@ describe('S12 gateway: flag on', () => {
     const runtimePrivacy: RuntimePrivacy = { validateAudience, read: async () => ({ revision: 'r1', memoryEnabled: true, historyEnabled: true }) };
     const h = makeImageGateway({ runtimePrivacy });
     expect(await h.gateway.handleUpdate('aria', privatePhoto(TG.reza, h.ladder.sizes))).toBe('ignored');
-    expect(validateAudience).toHaveBeenCalled();
+    expect(validateAudience).toHaveBeenCalledTimes(1); // the boundary's own check; the image path has none of its own
     expect(h.bot.downloadImage).not.toHaveBeenCalled();
     expect(h.decider.decideParts).not.toHaveBeenCalled();
+    expect(h.bot.sent).toEqual([]); // no acknowledgement either
+  });
+
+  it('downloads, triages and acknowledges only after the turn boundary, with one audience read', async () => {
+    vi.stubEnv('STUDIO_IMAGES', '1');
+    const order: string[] = [];
+    const runtimePrivacy: RuntimePrivacy = {
+      validateAudience: async () => { order.push('audience'); return true; },
+      read: async () => { order.push('read'); return { revision: 'r1', memoryEnabled: true, historyEnabled: true }; },
+    };
+    const h = makeImageGateway({ runtimePrivacy });
+    const download = h.bot.downloadImage.getMockImplementation()!;
+    h.bot.downloadImage.mockImplementation(async (...args) => { order.push('download'); return download(...args); });
+    expect(await h.gateway.handleUpdate('aria', privatePhoto(TG.reza, h.ladder.sizes, 'what is this?'))).toBe('replied');
+    const firstDownload = order.indexOf('download');
+    expect(firstDownload).toBeGreaterThan(0);
+    // The boundary (audience check, then privacy read) completes before any image I/O.
+    expect(order.slice(0, firstDownload)).toEqual(['audience', 'read']);
+    expect(h.decider.decideParts).toHaveBeenCalled();
   });
 
   it('with runtime memory and history paused, a remember-this image stores no memory, history row or image bytes', async () => {

@@ -33,7 +33,7 @@ import { selectMemories } from './memory/retrieval';
 import { decideScope, extractCandidates, resolveCandidateSource, firstNewIndex } from './memory/extraction';
 import { canPersonSee, describeScope, hasGuestAudience, isVisibleToAudience, audienceOf, historyMessageForChat, selectHistoryForChat, snapshotScopeAudience } from './memory/visibility';
 import { groupAddressing } from './group-addressing';
-import { forceQuickTriage, IMAGE_WITHHELD_REPLY_TEXT, imageDerivedMark, imageIngestionWanted, ingestTelegramImage, inheritedImageMark, withholdImageReply, type ImageTurn } from './images';
+import { forceQuickTriage, IMAGE_PLACEHOLDER_TEXT, IMAGE_WITHHELD_REPLY_TEXT, imageDerivedMark, imageIngestionWanted, ingestTelegramImage, inheritedImageMark, withholdImageReply, type ImageTurn } from './images';
 import { logTelegramDiagnostic, voiceFailureDiagnostic } from './telegram/diagnostics';
 import { currentStageTimer, StageTimer, stageLaps, timed } from './timing';
 import type { PrivacySnapshot } from './privacy/snapshot';
@@ -420,13 +420,11 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
         return 'replied';
       }
     }
-    let imageTurn: ImageTurn | null = null;
-    if (!isVoice && imageIngestionWanted(message, chat)) {
-      const privacy = this.deps.runtimePrivacy;
-      const audienceOk = !privacy?.validateAudience || await privacy.validateAudience(persona.id, chat).catch(() => false);
-      imageTurn = audienceOk ? await ingestTelegramImage({ org, decider: this.compactPrivacy() ? undefined : this.deps.decider, llm: this.deps.llm, fastLlm: this.deps.fastLlm, bot, log: this.log }, persona, chat, speaker.id, message, text) : null;
-      if (imageTurn) text = imageTurn.text;
-    }
+    // S12: only the turn text is settled before the boundary. The download, triage and
+    // acknowledgement wait until the boundary has validated the audience (below).
+    const imageWanted = !isVoice && imageIngestionWanted(message, chat);
+    const caption = text;
+    if (imageWanted && !caption.trim()) text = IMAGE_PLACEHOLDER_TEXT;
     if (!text.trim()) return 'ignored';
     if (parseExplicitControl(text) === 'forget') {
       await this.handleCommand(persona, chat, speaker.id, message, '/forgetall');
@@ -442,6 +440,12 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     let boundary = await measureStage('retrieval', () => this.boundary(persona, chat, speaker.id, 'work', text, this.compactPrivacy()));
     const privacyEpoch = boundary.compact ? undefined : await this.deps.history.getEpoch(persona.id);
     if (!boundary.audienceValid) return 'ignored';
+    let imageTurn: ImageTurn | null = null;
+    if (imageWanted) {
+      imageTurn = await ingestTelegramImage({ org, decider: boundary.compact || this.compactPrivacy() ? undefined : this.deps.decider, llm: this.deps.llm, fastLlm: this.deps.fastLlm, bot, log: this.log }, persona, chat, speaker.id, message, caption);
+      // A captionless image that could not be ingested is ignored, as before.
+      if (!imageTurn && !caption.trim()) return 'ignored';
+    }
     const userMessage: ChatMessage = {
       role: 'user', personId: speaker.id, text, at: sourceAt, telegramMessageId: message.message_id,
       ...(chat.kind === 'group' ? { groupPolicyVersion: 1 as const, groupOtherTarget: targeting.otherTarget } : {}),

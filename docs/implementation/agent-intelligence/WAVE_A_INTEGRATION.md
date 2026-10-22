@@ -155,7 +155,7 @@ These match the documented 6d00b80 baseline.
    - The default decider has no `decideParts`, so with only `STUDIO_IMAGES=1` set, image triage is null. Full routing needs `STUDIO_DECIDER=service`.
    - `image-v1` decision-log rows are not written.
    - Verify progressive JPEGs with a real Telegram photo.
-   - Download and triage happen before the turn boundary, so a paused memory or history setting still lets an image be triaged and answered. Revisit this against Step 1's `loadTurnSnapshot`.
+   - Download, triage and the acknowledgement now run after the turn boundary's audience check (QA round 3), but a paused memory or history setting still lets an image be triaged and answered. Revisit this against Step 1's `loadTurnSnapshot`.
    - Measure p95 latency.
    - An `extract_text` reply can put document text into the person's own private history. The privacy owner should review this.
 7. **S11L:**
