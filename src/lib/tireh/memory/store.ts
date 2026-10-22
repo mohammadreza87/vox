@@ -6,6 +6,7 @@
 import { createHash, randomUUID } from 'crypto';
 import { revisionOwnerId, type RevisionProbe } from '../privacy/revisions';
 import type { ChatMessage, MemoryRecord, ShareOffer } from '../types';
+import { stripEmbeddingUnlessNormal } from './record-v2';
 
 export type NewMemory = Omit<MemoryRecord, 'id' | 'createdAt' | 'updatedAt'>;
 
@@ -72,6 +73,23 @@ export interface MemoryStore {
   listActive(personaId: string): Promise<MemoryRecord[]>;
   update(id: string, patch: Partial<Omit<MemoryRecord, 'id' | 'personaId'>>, guard?: MemoryWriteGuard): Promise<void>;
   delete(id: string): Promise<void>;
+  /**
+   * Firestore only: nearest active records by embedding, pre-filtered by
+   * persona and at most 30 scope keys. Returns candidates, never a visibility
+   * decision: callers must still pass every row through selectMemories.
+   */
+  findNearest?(personaId: string, scopeKeys: string[], vector: number[], limit: number): Promise<MemoryRecord[]>;
+  /** Opaque source-event ids that may never be relearned; never source text. */
+  tombstonesOf?(personaId: string): Promise<string[]>;
+  /** Adds source-event tombstones. Never removes one and does not bump safetyRevision. */
+  addTombstones?(personaId: string, eventIds: readonly string[]): Promise<void>;
+}
+
+/** Tombstone ids are opaque, non-empty strings of at most 512 characters. */
+export function assertTombstoneIds(eventIds: readonly unknown[]): asserts eventIds is readonly string[] {
+  for (const id of eventIds) {
+    if (typeof id !== 'string' || id.length === 0 || id.length > 512) throw new TypeError('Invalid tombstone id.');
+  }
 }
 
 export interface ShareOfferStore {
@@ -135,7 +153,7 @@ export class InMemoryMemoryStore implements MemoryStore {
     const predecessor = memory.supersedes ? this.records.get(memory.supersedes) : undefined;
     if (memory.supersedes) assertReplacementTarget(memory, predecessor);
     const now = new Date();
-    const record: MemoryRecord = { ...memory, id: randomUUID(), createdAt: now, updatedAt: now };
+    const record: MemoryRecord = stripEmbeddingUnlessNormal({ ...memory, id: randomUUID(), createdAt: now, updatedAt: now }, memory.sensitivity);
     if (predecessor) {
       this.records.set(predecessor.id, { ...predecessor, supersededBy: record.id, shareVersion: (predecessor.shareVersion ?? 0) + 1, updatedAt: now });
       this.revisions.set(memory.personaId, (this.revisions.get(memory.personaId) ?? 0) + 1);
@@ -157,7 +175,8 @@ export class InMemoryMemoryStore implements MemoryStore {
     if (!existing) return;
     this.check(existing.personaId, guard);
     this.revisions.set(existing.personaId, (this.revisions.get(existing.personaId) ?? 0) + 1);
-    this.records.set(id, { ...existing, ...patch, updatedAt: new Date() });
+    const merged = { ...existing, ...patch, updatedAt: new Date() };
+    this.records.set(id, stripEmbeddingUnlessNormal(merged, merged.sensitivity));
   }
 
   async updateIfShareVersion(id: string, expectedVersion: number, patch: Partial<Omit<MemoryRecord, 'id' | 'personaId'>>, guard?: MemoryWriteGuard): Promise<boolean> {
@@ -165,7 +184,8 @@ export class InMemoryMemoryStore implements MemoryStore {
     if (!memory || (memory.shareVersion ?? 0) !== expectedVersion) return false;
     this.check(memory.personaId, guard);
     this.revisions.set(memory.personaId, (this.revisions.get(memory.personaId) ?? 0) + 1);
-    this.records.set(id, { ...memory, ...patch, updatedAt: new Date() });
+    const merged = { ...memory, ...patch, updatedAt: new Date() };
+    this.records.set(id, stripEmbeddingUnlessNormal(merged, merged.sensitivity));
     return true;
   }
 
@@ -180,6 +200,19 @@ export class InMemoryMemoryStore implements MemoryStore {
     }
     this.tombstones.set(target.personaId, tombstones);
     this.revisions.set(target.personaId, (this.revisions.get(target.personaId) ?? 0) + 1);
+  }
+
+  async tombstonesOf(personaId: string): Promise<string[]> {
+    return [...(this.tombstones.get(personaId) ?? [])].sort();
+  }
+
+  /** Union only; revisions, records and epochs are untouched. */
+  async addTombstones(personaId: string, eventIds: readonly string[]): Promise<void> {
+    assertTombstoneIds(eventIds);
+    if (eventIds.length === 0) return;
+    const tombstones = this.tombstones.get(personaId) ?? new Set<string>();
+    for (const id of eventIds) tombstones.add(id);
+    this.tombstones.set(personaId, tombstones);
   }
 }
 
