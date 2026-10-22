@@ -1,412 +1,371 @@
 /**
- * Voiceprint enrollment and verification (S11L), behind
- * STUDIO_VOICE_RECOGNITION=1 and in shadow mode.
+ * Voiceprint enrollment and 1:1 verification (S11L), shadow mode, behind
+ * STUDIO_VOICE_RECOGNITION=1.
  *
- * Gates (docs/AGENT_INTELLIGENCE_SOLUTION.md section 4.9, PRIV-017 to PRIV-025):
- * the flag, a confirmed profile, capability approval for biometric_recognition
- * (jurisdiction registry), a granted optional.biometric_recognition permission
- * with affirmative evidence, and for verification the persona's agent grant.
+ * Nothing runs unless every gate holds: the flag (tirehFlags() at call time),
+ * the adaptive capability approval for biometric_recognition (eligible(), with
+ * voiceRecognitionEnabled set from the flag in runtime.ts), a granted
+ * optional.biometric_recognition consent whose last event carries affirmative
+ * ConsentEvidence, a confirmed profile, a non-pending member and, for
+ * verification, the persona's agent grant. The internal-pilot manifest
+ * withholds the provider: employer availability is not member consent.
  *
- * A verification band is evidence that can only lower an identity level. It
- * never unlocks memory, approves sharing or overrides the account. Candidates
- * are the account's own template plus Vox persona voices (self-echo guard);
- * never other people (verification, not identification). Guests and groups get
- * no template read, no decode and no comparison. Raw audio is never persisted;
- * templates are sealed with VOICEPRINT_KEY in the isolated 'vox_voiceprints'
- * store. Nothing here logs.
+ * A band is evidence that can only lower an identity level; it never grants
+ * access (PRIV-017). Verification compares the account's own template only
+ * (plus Vox persona voices for the self-echo guard), never other people.
+ * Groups, guests, non-members and pending people get no template read and no
+ * provider contact (PRIV-020). Audio is never stored or logged; templates are
+ * sealed in the isolated 'vox_voiceprints' store. The only log line is the
+ * field-free 'voiceprint_provider_error'.
  */
-import { z } from 'zod';
+import { createHash } from 'node:crypto';
 import type { AdaptiveService } from '../../adaptive/persistence/service';
+import type { AdaptiveDocument } from '../../adaptive/persistence/repository';
 import { spaceIdFor } from '../../adaptive/persistence/repository';
 import { tirehFlags, type TirehFlags } from '../../tireh/flags';
-import { MIN_NET_SPEECH_MS, type VoiceBand, type VoiceNoteInput, type VoiceNoteVerifier, type VoiceVerification } from '../../tireh/identity/voice-band';
-import { defaultVoiceId, type ElevenLabsStudio } from '../media';
-import type { StudioStorage } from '../store';
+import type { VoiceNoteInput, VoiceNoteVerifier, VoiceVerification } from '../../tireh/identity/voice-band';
+import { bandFor, resolveThresholds, type BandThresholds, type VoiceThresholdConfig } from './config';
 import type { VoiceprintCipher } from './crypto';
-import { MAX_ENROLL_GROSS_MS, MIN_ENROLL_NET_SPEECH_MS, opusNetSpeech, type NetSpeechEstimator } from './net-speech';
-import type { EchoTemplateRow, VoiceprintRow, VoiceprintStore } from './store';
+import { ENROLL_MIN_NET_SPEECH_MS, grossTooShort, meetsNetSpeech, MIN_NET_SPEECH_MS } from './net-speech';
+import { VoiceprintProviderError, type SpeechActivity, type VoiceprintProvider } from './provider';
+import type { SelfEchoSource } from './self-echo';
+import type { VoiceChannel, VoiceprintStore, VoiceSpace } from './store';
 
-export interface VoiceprintProvider {
-  readonly id: string;
-  readonly modelVersion: string;
-  voiceprint(audio: Uint8Array, mimeType: string, signal: AbortSignal): Promise<Uint8Array>;
-  /** query = raw voice-note audio; candidates carry opaque ids only ('self', 'echo:<n>'). */
-  identify(query: Uint8Array, candidates: readonly { id: string; template: Uint8Array }[], signal: AbortSignal): Promise<{ candidateId?: string; score: number }>;
+export const MAX_VOICEPRINT_AUDIO_BYTES = 10 * 1024 * 1024;
+export const MAX_TEMPLATE_AGE_MS = 365 * 86_400_000;
+export const DEFAULT_VERIFY_DEADLINE_MS = 3_000;
+export const DEFAULT_ENROLL_DEADLINE_MS = 60_000;
+const MAX_IDENTIFY_CANDIDATES = 50;
+const PURPOSE = 'optional.biometric_recognition' as const;
+
+export type VoiceprintErrorCode =
+  | 'disabled' | 'provider_unavailable' | 'thresholds_unconfigured' | 'not_member' | 'capability_unavailable'
+  | 'biometric_consent_required' | 'profile_confirmation_required' | 'too_large' | 'self_echo_unavailable'
+  | 'mixed_speakers' | 'too_short' | 'self_echo' | 'timeout' | 'provider_error' | 'consent_changed';
+
+/** Content-free: a status and a code, never provider text. */
+export class VoiceprintError extends Error {
+  override readonly name = 'VoiceprintError';
+  constructor(readonly status: number, readonly code: VoiceprintErrorCode) { super(code); }
 }
-
-/** 0 < echo <= uncertain < match <= 1 */
-export interface VoiceBandThresholds { readonly match: number; readonly uncertain: number; readonly echo: number }
-export interface VoiceThresholdConfig { readonly default: VoiceBandThresholds; readonly orgs?: Readonly<Record<string, VoiceBandThresholds>> }
-
-const bandSchema = z.object({ match: z.number(), uncertain: z.number(), echo: z.number() }).strict()
-  .refine(t => t.echo > 0 && t.echo <= t.uncertain && t.uncertain < t.match && t.match <= 1);
-const thresholdSchema = z.object({ default: bandSchema, orgs: z.record(z.string().min(1).max(200), bandSchema).optional() }).strict();
-
-/** VOICE_MATCH_THRESHOLDS_JSON. Null when unset or blank; throws on any violation. */
-export function parseVoiceThresholds(raw: string | undefined): VoiceThresholdConfig | null {
-  if (raw === undefined || !raw.trim()) return null;
-  try {
-    const parsed = thresholdSchema.safeParse(JSON.parse(raw));
-    if (parsed.success) return parsed.data;
-  } catch { /* reported below without echoing the value */ }
-  throw new Error('VOICE_MATCH_THRESHOLDS_JSON is invalid');
-}
-
-export function bandFor(score: number, t: VoiceBandThresholds): VoiceBand {
-  if (score >= t.match) return 'MATCH';
-  if (score >= t.uncertain) return 'UNCERTAIN';
-  return 'NO_MATCH';
-}
-
-export type VoiceprintUnavailableReason = 'disabled' | 'adaptive_unavailable' | 'profile_confirmation_required' | 'capability_unavailable'
-  | 'biometric_consent_required' | 'provider_unavailable' | 'thresholds_missing' | 'echo_guard_unavailable';
 
 export interface VoiceprintStatus {
-  space: 'work' | 'personal';
+  space: VoiceSpace;
   available: boolean;
-  reason?: VoiceprintUnavailableReason;
+  reason?: VoiceprintErrorCode;
+  consent: 'granted' | 'missing';
   enrolled: boolean;
   provider?: string;
   modelVersion?: string;
-  channel?: VoiceprintRow['channel'];
+  channel?: VoiceChannel;
   createdAt?: string;
   lastConfirmedAt?: string;
 }
 
-export type VoiceprintErrorCode = VoiceprintUnavailableReason | 'empty_audio' | 'too_short' | 'too_long' | 'unsupported_audio'
-  | 'self_echo' | 'consent_changed' | 'provider_error';
-
-/** Content-free: carries only a code and an HTTP status. */
-export class VoiceprintError extends Error {
-  override readonly name = 'VoiceprintError';
-  constructor(readonly code: VoiceprintErrorCode, readonly status: number) { super(code); }
-  static is(error: unknown): error is VoiceprintError {
-    return error instanceof VoiceprintError || (!!error && typeof error === 'object' && (error as { name?: unknown }).name === 'VoiceprintError'
-      && typeof (error as { code?: unknown }).code === 'string' && typeof (error as { status?: unknown }).status === 'number');
-  }
-}
-
-export type EchoVoiceSource = () => Promise<readonly { voiceId: string; synthesize(signal: AbortSignal): Promise<{ audio: ArrayBuffer; mimeType: string }> }[]>;
-
-export interface VoiceprintServiceDeps {
+export interface VoiceprintServiceOptions {
+  adaptive: Pick<AdaptiveService, 'withAccountDocument' | 'isProfileConfirmed' | 'capabilityStatus' | 'isPurposeAllowed'>;
   store: VoiceprintStore;
   cipher: VoiceprintCipher;
   provider?: VoiceprintProvider;
-  adaptive?: Pick<AdaptiveService, 'withDirectAuthority' | 'isPurposeAllowed' | 'isProfileConfirmed' | 'capabilityStatus'>;
+  speech?: SpeechActivity;
+  selfEcho?: SelfEchoSource;
   thresholds: VoiceThresholdConfig | null;
-  /** Org name used to select per-org thresholds. */
   orgKey: string;
-  echoVoices?: EchoVoiceSource;
-  netSpeech?: NetSpeechEstimator;
+  pilot?: boolean;
+  eligiblePerson: (telegramId: number) => Promise<boolean>;
+  verifyDeadlineMs?: number;
+  enrollDeadlineMs?: number;
+  now?: () => number;
   flags?: () => Pick<TirehFlags, 'voiceRecognition'>;
-  now?: () => Date;
-  deadlineMs?: number;
-  enrollTimeoutMs?: number;
+  logger?: Pick<Console, 'warn'>;
 }
 
-export const VOICE_VERIFY_TIMEOUT_MS = 3_000;
-export const ENROLL_TIMEOUT_MS = 30_000;
-export const MAX_ENROLL_AUDIO_BYTES = 1_000_000;
-export const MAX_VERIFY_AUDIO_BYTES = 2_000_000;
-/** Neutral calibration sentence spoken by each persona voice for the self-echo guard. Never user content. */
-export const ECHO_CALIBRATION_TEXT = 'This is a calibration sample for the Vox voice guard. It is read aloud by a synthetic voice, '
-  + 'so that recordings of our own assistants are never mistaken for a person. The quick brown fox jumps over the lazy dog, '
-  + 'and seven bright kites drift slowly across the morning sky.';
-
-const PURPOSE = 'optional.biometric_recognition' as const;
-/** Reasons that mean the person's authority to keep a template has ended; only these trigger lazy deletion. */
-const REVOKED = new Set<VoiceprintUnavailableReason>(['profile_confirmation_required', 'capability_unavailable', 'biometric_consent_required']);
+/**
+ * The granted biometric permission of `space` and its event id, only when the
+ * last event is a 'granted' consent event for the same person and purpose with
+ * affirmative evidence. Anything else is null (fail closed).
+ */
+export function biometricGrant(d: AdaptiveDocument, space: VoiceSpace, now: number): { permissionId: string; eventId: string } | null {
+  const spaceId = spaceIdFor(d.accountId, space);
+  const p = d.permissions.find(x => x.spaceId === spaceId && x.purpose === PURPOSE);
+  if (!p || p.state !== 'granted' || !(p.expiresAt > now) || !p.lastEventId) return null;
+  const event = (d.consentEvents ?? []).find(e => e.eventId === p.lastEventId);
+  if (!event || event.state !== 'granted' || event.purpose !== PURPOSE || event.personId !== d.personId
+    || event.evidence?.kind !== 'consent' || event.evidence.affirmative !== true) return null;
+  return { permissionId: p.id, eventId: p.lastEventId };
+}
 
 interface Authority {
-  personAllowed: boolean;
-  agentAllowed: boolean;
-  reason?: VoiceprintUnavailableReason;
-  consentEventId?: string;
+  allowedEnroll: boolean;
+  allowedVerify: boolean;
+  grantEventId?: string;
+  reason?: 'capability_unavailable' | 'profile_confirmation_required' | 'biometric_consent_required';
+  fingerprint: string;
 }
 
-class DeadlineExceeded extends Error { constructor() { super('deadline'); this.name = 'DeadlineExceeded'; } }
+const DENIED: Authority = { allowedEnroll: false, allowedVerify: false, reason: 'biometric_consent_required', fingerprint: 'unavailable' };
+const NO_OPINION = (reason: Extract<VoiceVerification, { band: 'NO_OPINION' }>['reason'], netSpeechMs?: number): VoiceVerification =>
+  netSpeechMs === undefined ? { band: 'NO_OPINION', reason } : { band: 'NO_OPINION', reason, netSpeechMs };
+const personIdFor = (telegramId: number) => `tg-${telegramId}`;
+const telegramIdOf = (personId: string): number | null => {
+  const match = /^tg-([1-9]\d{0,15})$/.exec(personId);
+  const value = match ? Number(match[1]) : NaN;
+  return Number.isSafeInteger(value) ? value : null;
+};
+const iso = (d?: Date) => d?.toISOString();
+const batches = <T>(items: readonly T[], size: number): T[][] => {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
+};
 
-/** Runs `run` with a signal linked to `outer` and aborted after `ms`; rejects at the deadline even if `run` ignores the signal. */
-function withDeadline<T>(ms: number, outer: AbortSignal | undefined, run: (signal: AbortSignal) => Promise<T>): Promise<T> {
-  const controller = new AbortController();
-  const onOuter = () => controller.abort();
-  if (outer?.aborted) controller.abort(); else outer?.addEventListener('abort', onOuter, { once: true });
-  const timer = setTimeout(() => controller.abort(), ms);
+class Aborted extends Error { constructor() { super('aborted'); this.name = 'Aborted'; } }
+/** Rejects as soon as `signal` aborts, even when `run` ignores the signal. */
+function untilAborted<T>(signal: AbortSignal, run: () => Promise<T>): Promise<T> {
+  if (signal.aborted) return Promise.reject(new Aborted());
   return new Promise<T>((resolve, reject) => {
-    if (controller.signal.aborted) { reject(new DeadlineExceeded()); return; }
-    controller.signal.addEventListener('abort', () => reject(new DeadlineExceeded()), { once: true });
+    const onAbort = () => reject(new Aborted());
+    signal.addEventListener('abort', onAbort, { once: true });
     let started: Promise<T>;
-    try { started = run(controller.signal); } catch (error) { reject(error); return; }
-    started.then(resolve, reject);
-  }).finally(() => { clearTimeout(timer); outer?.removeEventListener('abort', onOuter); });
+    try { started = run(); } catch (error) { signal.removeEventListener('abort', onAbort); reject(error); return; }
+    started.then(value => { signal.removeEventListener('abort', onAbort); resolve(value); },
+      error => { signal.removeEventListener('abort', onAbort); reject(signal.aborted ? new Aborted() : error); });
+  });
 }
-
-const zero = (...buffers: (Uint8Array | undefined)[]) => { for (const b of buffers) b?.fill(0); };
-const iso = (d: Date | undefined) => d ? d.toISOString() : undefined;
 
 export class VoiceprintService implements VoiceNoteVerifier {
-  private echoFlight?: Promise<number>;
+  private readonly inflight = new Map<string, Set<AbortController>>();
 
-  constructor(readonly deps: VoiceprintServiceDeps) {}
+  constructor(private readonly o: VoiceprintServiceOptions) {}
 
-  private enabled(): boolean { return (this.deps.flags ?? tirehFlags)().voiceRecognition === true; }
-  private now(): Date { return this.deps.now?.() ?? new Date(); }
-  private get netSpeech(): NetSpeechEstimator { return this.deps.netSpeech ?? opusNetSpeech; }
-  private thresholds(): VoiceBandThresholds | null {
-    const config = this.deps.thresholds;
-    if (!config) return null;
-    return config.orgs && Object.hasOwn(config.orgs, this.deps.orgKey) ? config.orgs[this.deps.orgKey] : config.default;
-  }
+  private enabled(): boolean { return (this.o.flags ?? tirehFlags)().voiceRecognition === true; }
+  private now(): number { return this.o.now?.() ?? Date.now(); }
+  private ready(): boolean { return !!this.o.provider && !!this.o.speech && !!this.o.selfEcho && !this.o.pilot; }
 
-  /** Current biometric authority from the adaptive store. Any failure is "not allowed". */
-  private async authority(telegramId: number, space: 'work' | 'personal', agentId?: string): Promise<Authority> {
-    const adaptive = this.deps.adaptive;
-    if (!adaptive) return { personAllowed: false, agentAllowed: false, reason: 'disabled' };
+  /** Content-free authority snapshot read through the public adaptive transaction seam. Any failure denies. */
+  private async authority(telegramId: number, space: VoiceSpace, agentId?: string): Promise<Authority> {
+    const adaptive = this.o.adaptive;
     try {
-      return await adaptive.withDirectAuthority(telegramId, space, (d, now) => {
-        const p = d.permissions.find(x => x.spaceId === spaceIdFor(d.accountId, space) && x.purpose === PURPOSE);
+      return await adaptive.withAccountDocument(telegramId, (d, now): Authority => {
+        const spaceId = spaceIdFor(d.accountId, space);
+        const permission = d.permissions.find(x => x.spaceId === spaceId && x.purpose === PURPOSE);
+        const capability = adaptive.capabilityStatus(d, 'biometric_recognition', now);
         const confirmed = adaptive.isProfileConfirmed(d, now);
-        const eligibility = adaptive.capabilityStatus(d, 'biometric_recognition', now);
-        // isPurposeAllowed covers profile confirmation, capability approval (eligible()) and the
-        // flag-driven voiceRecognitionEnabled option. A granted state with lastEventId can only come
-        // from transitionConsent() with affirmative consent evidence.
-        const personAllowed = !!p && adaptive.isPurposeAllowed(d, space, PURPOSE, now) && p.state === 'granted' && p.expiresAt > now && !!p.lastEventId;
-        const agentAllowed = personAllowed && (!agentId || adaptive.isPurposeAllowed(d, space, PURPOSE, now, agentId));
-        const reason: VoiceprintUnavailableReason | undefined = personAllowed ? undefined
-          : !confirmed ? 'profile_confirmation_required'
-            : eligibility.reason === 'feature_not_released' ? 'disabled'
-              : !eligibility.eligible ? 'capability_unavailable' : 'biometric_consent_required';
-        const value: Authority = { personAllowed, agentAllowed, ...(reason ? { reason } : {}), ...(personAllowed ? { consentEventId: p!.lastEventId! } : {}) };
-        if (!personAllowed) return { value, denied: true };
-        return { value, deadline: Math.min(p!.expiresAt, eligibility.validUntil ?? p!.expiresAt, d.binding!.expiresAt) };
+        const grant = biometricGrant(d, space, now);
+        const purposeAllowed = adaptive.isPurposeAllowed(d, space, PURPOSE, now);
+        const allowedEnroll = confirmed && capability.eligible && purposeAllowed && !!grant;
+        const allowedVerify = allowedEnroll && !!agentId && adaptive.isPurposeAllowed(d, space, PURPOSE, now, agentId);
+        const agentGrant = agentId ? d.agentGrants.filter(g => g.space === space && g.agentId === agentId) : null;
+        const fingerprint = createHash('sha256').update(JSON.stringify([
+          d.accountId, d.personId, d.binding ?? null,
+          permission ? [permission.id, permission.revision, permission.epoch, permission.state, permission.expiresAt] : null,
+          capability, grant?.eventId ?? null, agentGrant,
+        ])).digest('hex');
+        // An unconfirmed profile is reported first: it is the step the member can take.
+        const reason = !confirmed ? 'profile_confirmation_required' as const
+          : !capability.eligible ? 'capability_unavailable' as const
+            : !allowedEnroll ? 'biometric_consent_required' as const : undefined;
+        return { allowedEnroll, allowedVerify, ...(grant ? { grantEventId: grant.eventId } : {}), ...(reason ? { reason } : {}), fingerprint };
       });
     } catch {
-      return { personAllowed: false, agentAllowed: false, reason: 'adaptive_unavailable' };
+      return DENIED;
     }
   }
 
-  async verifyVoiceNote(input: VoiceNoteInput, signal?: AbortSignal): Promise<VoiceVerification> {
-    const opened: Uint8Array[] = [];
-    try {
-      if (!this.enabled()) return { band: 'NO_OPINION', reason: 'disabled' };
-      // PRIV-020: no template read, decode or comparison when a guest or a group can hear.
-      if (input.chatKind !== 'private' || input.guestAudience) return { band: 'NO_OPINION', reason: 'guest_or_group' };
-      const { provider, adaptive } = this.deps;
-      const thresholds = this.thresholds();
-      if (!provider || !adaptive || !thresholds) return { band: 'NO_OPINION', reason: 'disabled' };
-      if (input.durationSec !== undefined && input.durationSec < MIN_NET_SPEECH_MS / 1000) return { band: 'NO_OPINION', reason: 'too_short' };
-      if (input.audio.byteLength > MAX_VERIFY_AUDIO_BYTES) return { band: 'NO_OPINION', reason: 'provider_error' };
-      const match = /^tg-([1-9]\d*)$/.exec(input.personId);
-      const telegramId = match ? Number(match[1]) : NaN;
-      if (!Number.isSafeInteger(telegramId)) return { band: 'NO_OPINION', reason: 'not_enrolled' };
-      const row = await this.deps.store.get(input.personId, input.space);
-      if (!row) return { band: 'NO_OPINION', reason: 'not_enrolled' };
-      const authority = await this.authority(telegramId, input.space, input.personaId);
-      if (!authority.personAllowed) {
-        if (authority.reason && REVOKED.has(authority.reason)) await this.deps.store.delete(input.personId, input.space);
-        return { band: 'NO_OPINION', reason: 'consent_missing' };
-      }
-      if (!authority.agentAllowed) return { band: 'NO_OPINION', reason: 'consent_missing' };
-      if (row.consentEventId !== authority.consentEventId) {
-        await this.deps.store.delete(input.personId, input.space);
-        return { band: 'NO_OPINION', reason: 'not_enrolled' };
-      }
-      if (row.provider !== provider.id || row.modelVersion !== provider.modelVersion) return { band: 'NO_OPINION', reason: 'not_enrolled' };
-      const echo = await this.deps.store.listEcho(provider.id, provider.modelVersion);
-      if (!echo.length) return { band: 'NO_OPINION', reason: 'disabled' };
-      // A read-only view: input.audio is shared with speech-to-text and is never mutated.
-      const bytes = new Uint8Array(input.audio);
-      const speech = this.netSpeech.estimate(bytes, input.mimeType);
-      if (!speech) return { band: 'NO_OPINION', reason: 'too_short' };
-      const netSpeechMs = speech.netMs;
-      if (netSpeechMs < MIN_NET_SPEECH_MS) return { band: 'NO_OPINION', reason: 'too_short', netSpeechMs };
-      const self = this.deps.cipher.open(row.template, [row.personId, row.space, row.provider, row.modelVersion, row.consentEventId]);
-      opened.push(self);
-      const candidates = [{ id: 'self', template: self }, ...this.openEcho(echo, opened)];
-      let result: { candidateId?: string; score: number };
-      try {
-        result = await withDeadline(this.deps.deadlineMs ?? VOICE_VERIFY_TIMEOUT_MS, signal, s => provider.identify(bytes, candidates, s));
-      } catch (error) {
-        if (error instanceof DeadlineExceeded || signal?.aborted) return { band: 'NO_OPINION', reason: 'timeout' };
-        return { band: 'NO_OPINION', reason: 'provider_error' };
-      }
-      const score = Number.isFinite(result.score) ? result.score : 0;
-      if (result.candidateId?.startsWith('echo:')) {
-        if (score >= thresholds.echo) return { band: 'NO_OPINION', reason: 'self_echo', netSpeechMs };
-        return { band: 'NO_MATCH', netSpeechMs, modelVersion: provider.modelVersion };
-      }
-      if (result.candidateId === 'self') return { band: bandFor(score, thresholds), netSpeechMs, modelVersion: provider.modelVersion };
-      return { band: 'NO_MATCH', netSpeechMs, modelVersion: provider.modelVersion };
-    } catch {
-      return { band: 'NO_OPINION', reason: 'provider_error' };
-    } finally {
-      zero(...opened);
+  private track(telegramId: number, space: VoiceSpace): { controller: AbortController; done: () => void } {
+    const key = `${telegramId}|${space}`;
+    const controller = new AbortController();
+    const set = this.inflight.get(key) ?? new Set<AbortController>();
+    set.add(controller);
+    this.inflight.set(key, set);
+    return { controller, done: () => { set.delete(controller); if (!set.size && this.inflight.get(key) === set) this.inflight.delete(key); } };
+  }
+
+  private abortInflight(telegramId: number, space?: VoiceSpace): void {
+    for (const s of space ? [space] : ['work', 'personal'] as const) {
+      for (const controller of this.inflight.get(`${telegramId}|${s}`) ?? []) controller.abort();
     }
   }
 
-  private openEcho(echo: readonly EchoTemplateRow[], opened: Uint8Array[]): { id: string; template: Uint8Array }[] {
-    return echo.map((e, i) => {
-      const template = this.deps.cipher.open(e.template, ['echo', e.voiceId, e.provider, e.modelVersion]);
-      opened.push(template);
-      return { id: `echo:${i}`, template };
-    });
-  }
-
-  async enroll(input: { telegramId: number; personId: string; space: 'work' | 'personal'; audio: ArrayBuffer; mimeType: string; channel: VoiceprintRow['channel'] },
-    signal?: AbortSignal): Promise<VoiceprintStatus> {
-    if (!this.enabled()) throw new VoiceprintError('disabled', 403);
-    const provider = this.deps.provider;
-    if (!provider) throw new VoiceprintError('provider_unavailable', 503);
-    const thresholds = this.thresholds();
-    if (!thresholds) throw new VoiceprintError('thresholds_missing', 503);
-    if (!input.audio.byteLength) throw new VoiceprintError('empty_audio', 400);
-    if (input.audio.byteLength > MAX_ENROLL_AUDIO_BYTES) throw new VoiceprintError('too_long', 413);
+  async enroll(input: { telegramId: number; audio: Uint8Array; mimeType: string; space: VoiceSpace; channel: VoiceChannel }, signal?: AbortSignal): Promise<VoiceprintStatus> {
+    if (!this.enabled()) throw new VoiceprintError(404, 'disabled');
+    const { provider, speech, selfEcho } = this.o;
+    if (!this.ready() || !provider || !speech || !selfEcho) throw new VoiceprintError(503, 'provider_unavailable');
+    const thresholds = resolveThresholds(this.o.thresholds, this.o.orgKey, input.channel);
+    if (!thresholds) throw new VoiceprintError(503, 'thresholds_unconfigured');
+    if (!(await this.o.eligiblePerson(input.telegramId))) throw new VoiceprintError(403, 'not_member');
     const before = await this.authority(input.telegramId, input.space);
-    if (!before.personAllowed) {
-      const reason = before.reason ?? 'biometric_consent_required';
-      throw new VoiceprintError(reason, reason === 'adaptive_unavailable' ? 503 : 403);
-    }
-    // Internal copy: the only buffer this service zero-fills.
-    const bytes = new Uint8Array(input.audio.byteLength);
-    bytes.set(new Uint8Array(input.audio));
-    const opened: Uint8Array[] = [];
+    if (!before.allowedEnroll || !before.grantEventId) throw new VoiceprintError(403, before.reason ?? 'biometric_consent_required');
+    if (input.audio.byteLength < 1 || input.audio.byteLength > MAX_VOICEPRINT_AUDIO_BYTES) throw new VoiceprintError(413, 'too_large');
+
+    const tracked = this.track(input.telegramId, input.space);
+    const combined = AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(this.o.enrollDeadlineMs ?? DEFAULT_ENROLL_DEADLINE_MS), tracked.controller.signal]);
     let template: Uint8Array | undefined;
+    const echoTemplates: Uint8Array[] = [];
     try {
-      const speech = this.netSpeech.estimate(bytes, input.mimeType);
-      if (!speech) throw new VoiceprintError('unsupported_audio', 415);
-      if (speech.netMs < MIN_ENROLL_NET_SPEECH_MS) throw new VoiceprintError('too_short', 422);
-      if (speech.grossMs > MAX_ENROLL_GROSS_MS) throw new VoiceprintError('too_long', 413);
-      await this.ensureEchoTemplates(signal);
-      const echo = await this.deps.store.listEcho(provider.id, provider.modelVersion);
-      if (!echo.length) throw new VoiceprintError('echo_guard_unavailable', 503);
-      const timeout = this.deps.enrollTimeoutMs ?? ENROLL_TIMEOUT_MS;
-      const candidates = this.openEcho(echo, opened);
-      const echoCheck = await this.providerCall(() => withDeadline(timeout, signal, s => provider.identify(bytes, candidates, s)));
-      if (Number.isFinite(echoCheck.score) && echoCheck.score >= thresholds.echo) throw new VoiceprintError('self_echo', 422);
-      template = await this.providerCall(() => withDeadline(timeout, signal, s => provider.voiceprint(bytes, input.mimeType, s)));
+      const echo = await untilAborted(combined, () => selfEcho.templates(combined)).catch(error => {
+        if (!(error instanceof Aborted)) return null;
+        throw tracked.controller.signal.aborted ? new VoiceprintError(409, 'consent_changed') : new VoiceprintError(504, 'timeout');
+      });
+      if (!echo) throw new VoiceprintError(503, 'self_echo_unavailable');
+      echoTemplates.push(...echo.map(e => e.template));
+      let measured: { netSpeechMs: number; speakers: number };
+      let echoScores: number[];
+      try {
+        [measured, template, ...echoScores] = await untilAborted(combined, () => Promise.all([
+          speech.measure(input.audio, input.mimeType, combined),
+          provider.voiceprint(input.audio, input.mimeType, combined),
+          ...batches(echo, MAX_IDENTIFY_CANDIDATES).map(batch => provider.identify(input.audio, batch, combined).then(r => r.score)),
+        ])) as [{ netSpeechMs: number; speakers: number }, Uint8Array, ...number[]];
+      } catch (error) {
+        if (tracked.controller.signal.aborted) throw new VoiceprintError(409, 'consent_changed');
+        if (error instanceof Aborted || combined.aborted) throw new VoiceprintError(504, 'timeout');
+        if (error instanceof VoiceprintProviderError && error.code === 'mixed_speakers') throw new VoiceprintError(422, 'mixed_speakers');
+        this.o.logger?.warn('voiceprint_provider_error');
+        throw new VoiceprintError(502, 'provider_error');
+      }
+      if (measured.speakers > 1) throw new VoiceprintError(422, 'mixed_speakers');
+      if (!meetsNetSpeech(measured.netSpeechMs, ENROLL_MIN_NET_SPEECH_MS)) throw new VoiceprintError(422, 'too_short');
+      if (echoScores.some(score => Number.isFinite(score) && score >= thresholds.selfEcho)) throw new VoiceprintError(422, 'self_echo');
+      if (tracked.controller.signal.aborted) throw new VoiceprintError(409, 'consent_changed');
+
       const during = await this.authority(input.telegramId, input.space);
-      if (!during.personAllowed || during.consentEventId !== before.consentEventId) throw new VoiceprintError('consent_changed', 409);
-      const consentEventId = before.consentEventId!;
-      const sealed = this.deps.cipher.seal(template, [input.personId, input.space, provider.id, provider.modelVersion, consentEventId]);
-      await this.deps.store.put({ personId: input.personId, space: input.space, provider: provider.id, modelVersion: provider.modelVersion,
-        channel: input.channel, consentEventId, createdAt: this.now(), template: sealed });
+      if (during.fingerprint !== before.fingerprint || !during.allowedEnroll) throw new VoiceprintError(409, 'consent_changed');
+      const personId = personIdFor(input.telegramId);
+      const provenance = { personId, space: input.space, provider: provider.id, modelVersion: provider.modelVersion, consentEventId: before.grantEventId };
+      const sealed = this.o.cipher.seal(template, provenance);
+      await this.o.store.put({ ...provenance, channel: input.channel, createdAt: new Date(this.now()), template: sealed });
       // Closes the race with a withdrawal whose invalidator ran before the put.
       const after = await this.authority(input.telegramId, input.space);
-      if (!after.personAllowed || after.consentEventId !== consentEventId) {
-        await this.deps.store.delete(input.personId, input.space);
-        throw new VoiceprintError('consent_changed', 409);
+      if (after.fingerprint !== before.fingerprint || !after.allowedEnroll || tracked.controller.signal.aborted) {
+        await this.o.store.delete(personId, input.space);
+        throw new VoiceprintError(409, 'consent_changed');
       }
     } finally {
-      zero(bytes, template, ...opened);
+      template?.fill(0);
+      for (const t of echoTemplates) t.fill(0);
+      tracked.done();
     }
-    return this.status(input);
+    return this.status(input.telegramId, input.space);
   }
 
-  private async providerCall<T>(run: () => Promise<T>): Promise<T> {
-    try { return await run(); } catch (error) {
-      if (VoiceprintError.is(error)) throw error;
-      throw new VoiceprintError('provider_error', 502);
-    }
-  }
-
-  async status(input: { telegramId: number; personId: string; space: 'work' | 'personal' }): Promise<VoiceprintStatus> {
-    let row = await this.deps.store.get(input.personId, input.space);
-    if (!this.enabled()) return { space: input.space, available: false, reason: 'disabled', enrolled: !!row };
-    const authority = await this.authority(input.telegramId, input.space);
-    // Lazy deletion: an expired or withdrawn permission, a changed profile or a re-granted consent ends the template.
-    if (row && ((!authority.personAllowed && authority.reason && REVOKED.has(authority.reason))
-      || (authority.personAllowed && row.consentEventId !== authority.consentEventId))) {
-      await this.deps.store.delete(input.personId, input.space);
+  /** Never returns template bytes or the consent event id. Works without the flag and without a provider. */
+  async status(telegramId: number, space: VoiceSpace): Promise<VoiceprintStatus> {
+    const personId = personIdFor(telegramId);
+    const authority = await this.authority(telegramId, space);
+    let row = await this.o.store.get(personId, space);
+    // A template from an earlier consent never survives re-consent.
+    if (row && authority.grantEventId && row.consentEventId !== authority.grantEventId) {
+      await this.o.store.delete(personId, space);
       row = null;
     }
-    const reason: VoiceprintUnavailableReason | undefined = !authority.personAllowed ? authority.reason ?? 'biometric_consent_required'
-      : !this.deps.provider ? 'provider_unavailable' : !this.thresholds() ? 'thresholds_missing' : undefined;
+    const reason: VoiceprintErrorCode | undefined = !this.enabled() ? 'disabled'
+      : !this.ready() ? 'provider_unavailable'
+        : !resolveThresholds(this.o.thresholds, this.o.orgKey, 'mini_app') ? 'thresholds_unconfigured'
+          : !authority.allowedEnroll ? authority.reason ?? 'biometric_consent_required' : undefined;
     return {
-      space: input.space, available: !reason, ...(reason ? { reason } : {}), enrolled: !!row,
+      space, available: !reason, ...(reason ? { reason } : {}), consent: authority.grantEventId ? 'granted' : 'missing', enrolled: !!row,
       ...(row ? { provider: row.provider, modelVersion: row.modelVersion, channel: row.channel, createdAt: iso(row.createdAt),
         ...(row.lastConfirmedAt ? { lastConfirmedAt: iso(row.lastConfirmedAt) } : {}) } : {}),
     };
   }
 
-  /** Works with the flag off and is idempotent. */
-  async delete(input: { personId: string; space?: 'work' | 'personal' }): Promise<{ deleted: number }> {
-    return { deleted: await this.deps.store.delete(input.personId, input.space) };
+  /** Always allowed, including with the flag off. Aborts in-flight work first. */
+  async delete(telegramId: number, space: VoiceSpace): Promise<VoiceprintStatus> {
+    this.abortInflight(telegramId, space);
+    await this.o.store.delete(personIdFor(telegramId), space);
+    return this.status(telegramId, space);
   }
 
-  /** Adaptive voice-identity invalidator: consent withdrawal (one space) or profile change (all spaces). */
-  async invalidate(telegramId: number, space?: 'work' | 'personal'): Promise<void> {
-    await this.deps.store.delete(`tg-${telegramId}`, space);
+  /** Adaptive invalidator: consent withdrawal or change (one space) or profile change (both spaces). */
+  async invalidate(telegramId: number, space?: VoiceSpace): Promise<void> {
+    this.abortInflight(telegramId, space);
+    await this.o.store.delete(personIdFor(telegramId), space);
   }
 
-  /** Single-flight: generates missing persona echo templates for the current provider/model. Returns the count. */
-  ensureEchoTemplates(signal?: AbortSignal): Promise<number> {
-    this.echoFlight ??= this.generateEcho(signal).finally(() => { this.echoFlight = undefined; });
-    return this.echoFlight;
-  }
-
-  private async generateEcho(signal?: AbortSignal): Promise<number> {
-    const provider = this.deps.provider;
-    if (!provider) return 0;
-    const existing = await this.deps.store.listEcho(provider.id, provider.modelVersion);
-    if (!this.deps.echoVoices) return existing.length;
-    const have = new Set(existing.map(e => e.voiceId));
-    let voices: Awaited<ReturnType<EchoVoiceSource>> = [];
-    try { voices = await this.deps.echoVoices(); } catch { voices = []; }
-    for (const voice of voices) {
-      if (have.has(voice.voiceId)) continue;
-      try {
-        const timeout = this.deps.enrollTimeoutMs ?? ENROLL_TIMEOUT_MS;
-        const { audio, mimeType } = await withDeadline(timeout, signal, s => voice.synthesize(s));
-        await this.registerEchoVoice(voice.voiceId, audio, mimeType, signal);
-        have.add(voice.voiceId);
-      } catch { /* swallowed per voice; enrollment refuses when no echo template exists */ }
+  /** Deletes rows older than MAX_TEMPLATE_AGE_MS and rows of people who are no longer members. Returns the count. */
+  async sweep(): Promise<number> {
+    const now = this.now();
+    let removed = 0;
+    for (const row of await this.o.store.list()) {
+      const telegramId = telegramIdOf(row.personId);
+      const expired = now - row.createdAt.getTime() > MAX_TEMPLATE_AGE_MS;
+      const member = telegramId !== null && await this.o.eligiblePerson(telegramId).catch(() => true);
+      if (expired || !member) removed += await this.o.store.delete(row.personId, row.space);
     }
-    return (await this.deps.store.listEcho(provider.id, provider.modelVersion)).length;
+    return removed;
   }
 
-  async registerEchoVoice(voiceId: string, audio: ArrayBuffer, mimeType: string, signal?: AbortSignal): Promise<void> {
-    if (!this.enabled()) throw new VoiceprintError('disabled', 403);
-    const provider = this.deps.provider;
-    if (!provider) throw new VoiceprintError('provider_unavailable', 503);
-    const bytes = new Uint8Array(audio.byteLength);
-    bytes.set(new Uint8Array(audio));
-    let template: Uint8Array | undefined;
+  async warmSelfEcho(signal?: AbortSignal): Promise<void> {
+    await this.o.selfEcho?.warm(signal);
+  }
+
+  async verifyVoiceNote(input: VoiceNoteInput, signal?: AbortSignal): Promise<VoiceVerification> {
+    let owner: Uint8Array | undefined;
+    const echoTemplates: Uint8Array[] = [];
     try {
-      template = await this.providerCall(() => withDeadline(this.deps.enrollTimeoutMs ?? ENROLL_TIMEOUT_MS, signal, s => provider.voiceprint(bytes, mimeType, s)));
-      const sealed = this.deps.cipher.seal(template, ['echo', voiceId, provider.id, provider.modelVersion]);
-      await this.deps.store.putEcho({ voiceId, provider: provider.id, modelVersion: provider.modelVersion, createdAt: this.now(), template: sealed });
+      if (!this.enabled()) return NO_OPINION('disabled');
+      const { provider, speech, selfEcho } = this.o;
+      const thresholds: BandThresholds | null = resolveThresholds(this.o.thresholds, this.o.orgKey, input.channel);
+      if (!this.ready() || !provider || !speech || !selfEcho || !thresholds) return NO_OPINION('disabled');
+      // PRIV-020: nothing is read, uploaded or compared when a group or a guest can hear.
+      if (input.chatKind !== 'private' || input.guestAudience) return NO_OPINION('guest_or_group');
+      const telegramId = telegramIdOf(input.personId);
+      if (telegramId === null) return NO_OPINION('not_enrolled');
+      if (!(await this.o.eligiblePerson(telegramId))) return NO_OPINION('guest_or_group');
+      if (grossTooShort(input.durationSec)) return NO_OPINION('too_short');
+      const before = await this.authority(telegramId, input.space, input.personaId);
+      if (!before.allowedVerify || !before.grantEventId) return NO_OPINION('consent_missing');
+      const row = await this.o.store.get(input.personId, input.space);
+      if (!row || row.modelVersion !== provider.modelVersion || row.provider !== provider.id
+        || this.now() - row.createdAt.getTime() > MAX_TEMPLATE_AGE_MS) return NO_OPINION('not_enrolled');
+      if (row.consentEventId !== before.grantEventId) {
+        await this.o.store.delete(input.personId, input.space);
+        return NO_OPINION('not_enrolled');
+      }
+      try {
+        owner = this.o.cipher.open(row.template, row);
+      } catch {
+        return NO_OPINION('provider_error');
+      }
+      const combined = AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(this.o.verifyDeadlineMs ?? DEFAULT_VERIFY_DEADLINE_MS)]);
+      const echo = await untilAborted(combined, () => selfEcho.templates(combined)).catch(() => null);
+      if (!echo) return NO_OPINION(combined.aborted ? 'timeout' : 'provider_error');
+      echoTemplates.push(...echo.map(e => e.template));
+      // A view, not a copy: STT reads the same buffer and nothing here mutates it.
+      const query = new Uint8Array(input.audio);
+      const ownerTemplate = owner;
+      let measured: { netSpeechMs: number; speakers: number };
+      let ownerResult: { candidateId?: string; score: number };
+      let echoScores: number[];
+      try {
+        [measured, ownerResult, ...echoScores] = await untilAborted(combined, () => Promise.all([
+          speech.measure(query, input.mimeType, combined),
+          provider.identify(query, [{ id: 'owner', template: ownerTemplate }], combined),
+          ...batches(echo, MAX_IDENTIFY_CANDIDATES).map(batch => provider.identify(query, batch, combined).then(r => r.score)),
+        ])) as [{ netSpeechMs: number; speakers: number }, { candidateId?: string; score: number }, ...number[]];
+      } catch (error) {
+        if (error instanceof Aborted || combined.aborted) return NO_OPINION('timeout');
+        // A second voice means a bystander: PRIV-020 applies.
+        if (error instanceof VoiceprintProviderError && error.code === 'mixed_speakers') return NO_OPINION('guest_or_group');
+        this.o.logger?.warn('voiceprint_provider_error');
+        return NO_OPINION('provider_error');
+      }
+      if (measured.speakers > 1) return NO_OPINION('guest_or_group');
+      const netSpeechMs = Math.max(0, Math.round(measured.netSpeechMs));
+      if (!meetsNetSpeech(netSpeechMs, MIN_NET_SPEECH_MS)) return NO_OPINION('too_short', netSpeechMs);
+      if (echoScores.some(score => Number.isFinite(score) && score >= thresholds.selfEcho)) return NO_OPINION('self_echo', netSpeechMs);
+      const after = await this.authority(telegramId, input.space, input.personaId);
+      if (after.fingerprint !== before.fingerprint || !after.allowedVerify) return NO_OPINION('consent_missing');
+      const ownerScore = ownerResult.candidateId === undefined || ownerResult.candidateId === 'owner' ? ownerResult.score : 0;
+      const band = bandFor(ownerScore, thresholds);
+      if (band === 'MATCH') await this.o.store.touch(input.personId, input.space, new Date(this.now())).catch(() => undefined);
+      return { band, netSpeechMs, modelVersion: provider.modelVersion };
+    } catch {
+      return NO_OPINION('provider_error');
     } finally {
-      zero(bytes, template);
+      owner?.fill(0);
+      for (const t of echoTemplates) t.fill(0);
     }
   }
-}
-
-/** Distinct voices of active agents (their ElevenLabs voice or the presentation default); [] without ElevenLabs. */
-export function echoVoicesFromStudio(store: StudioStorage, eleven: ElevenLabsStudio | null): EchoVoiceSource {
-  return async () => {
-    if (!eleven) return [];
-    const state = await store.read();
-    const ids = [...new Set(state.agents.filter(a => a.status === 'active')
-      .map(a => a.voice?.voiceId ?? defaultVoiceId(a.persona.presentation)))];
-    return ids.map(voiceId => ({
-      voiceId,
-      async synthesize(signal: AbortSignal) {
-        if (signal.aborted) throw new DeadlineExceeded();
-        const buffer = await eleven.speak(ECHO_CALIBRATION_TEXT, voiceId);
-        const audio = new ArrayBuffer(buffer.byteLength);
-        new Uint8Array(audio).set(buffer);
-        return { audio, mimeType: 'audio/mpeg' };
-      },
-    }));
-  };
-}
-
-/** One adaptive voiceIdentityInvalidator calling every handler; the first rejection is rethrown after all settle. */
-export function chainVoiceInvalidators(...handlers: { invalidate(telegramId: number, space?: 'work' | 'personal'): Promise<unknown> }[]):
-  (input: { telegramId: number; space?: 'work' | 'personal'; reason: string }) => Promise<void> {
-  return async input => {
-    const results = await Promise.allSettled(handlers.map(handler => Promise.resolve().then(() => handler.invalidate(input.telegramId, input.space))));
-    const failed = results.find((r): r is PromiseRejectedResult => r.status === 'rejected');
-    if (failed) throw failed.reason;
-  };
 }
