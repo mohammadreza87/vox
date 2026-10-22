@@ -51,6 +51,7 @@ afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); });
 
 describe('S12 gateway: flag off is the base behaviour', () => {
   it('ignores a captionless photo with no download, model call or history', async () => {
+    vi.stubEnv('STUDIO_IMAGES', '');
     const h = makeImageGateway();
     const result = await h.gateway.handleUpdate('aria', privatePhoto(TG.reza, h.ladder.sizes));
     expect(result).toBe('ignored');
@@ -62,6 +63,7 @@ describe('S12 gateway: flag off is the base behaviour', () => {
   });
 
   it('handles a captioned photo exactly like the same text', async () => {
+    vi.stubEnv('STUDIO_IMAGES', '');
     const photo = privatePhoto(TG.reza, photoLadder().sizes, 'hello');
     const a = makeImageGateway();
     const b = makeImageGateway();
@@ -77,6 +79,7 @@ describe('S12 gateway: flag off is the base behaviour', () => {
 
   it('a text turn with the flag on equals the flag-off run', async () => {
     const update: TelegramUpdate = { update_id: 990_001, message: { message_id: 99_001, from: { id: TG.reza, is_bot: false, first_name: 'x' }, chat: { id: TG.reza, type: 'private' }, date: 0, text: 'my launch moved to Friday' } };
+    vi.stubEnv('STUDIO_IMAGES', '');
     const off = makeImageGateway();
     const resultOff = await off.gateway.handleUpdate('aria', update);
     vi.stubEnv('STUDIO_IMAGES', '1');
@@ -204,6 +207,7 @@ describe('S12 gateway: flag on', () => {
   it('treats a group photo like the base: caption only, no download', async () => {
     const make = (): TelegramUpdate => ({ update_id: 992_000, message: { message_id: 99_600, from: { id: TG.reza, is_bot: false, first_name: 'x' },
       chat: { id: GAMEEND_CHAT, type: 'supergroup', title: 'g' }, date: 0, caption: '@hoor_aria_bot what do you think?', photo: photoLadder().sizes } });
+    vi.stubEnv('STUDIO_IMAGES', '');
     const off = makeImageGateway();
     const resultOff = await off.gateway.handleUpdate('aria', make());
     vi.stubEnv('STUDIO_IMAGES', '1');
