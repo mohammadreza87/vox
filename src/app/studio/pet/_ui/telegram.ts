@@ -11,7 +11,7 @@ type Handler = (payload?: unknown) => void;
 
 export interface PetTelegram {
   initData: string;
-  initDataUnsafe?: { user?: { id: number; first_name: string; language_code?: string }; start_param?: string };
+  initDataUnsafe?: { user?: { id: number; first_name: string; language_code?: string; allows_write_to_pm?: boolean }; start_param?: string };
   platform?: string;
   ready(): void;
   expand(): void;
@@ -24,6 +24,8 @@ export interface PetTelegram {
   enableClosingConfirmation?(): void;
   disableClosingConfirmation?(): void;
   hideKeyboard?(): void;
+  /** Bot API 6.9: lets the bot message the person (the quiet 📌 copies of group saves) */
+  requestWriteAccess?(cb?: (granted: boolean) => void): void;
   openTelegramLink?(url: string): void;
   onEvent?(event: string, cb: Handler): void;
   offEvent?(event: string, cb: Handler): void;
@@ -57,6 +59,18 @@ export const firstName = (): string | undefined => tg()?.initDataUnsafe?.user?.f
 export function startIntent(): 'feed' | 'talk' | 'play' | null {
   const p = tg()?.initDataUnsafe?.start_param;
   return p === 'feed' || p === 'talk' || p === 'play' ? p : null;
+}
+
+/**
+ * The group a pet opened over names (Circles S4): a launch code (`startapp=p_…`) or the DM button's `?j=`. Unverified
+ * intent, sent as is; the server maps it and checks membership.
+ */
+export function circleCode(): string | null {
+  const p = tg()?.initDataUnsafe?.start_param;
+  if (p && /^p_[\w-]{14,62}$/.test(p)) return p;
+  let j: string | null = null;
+  try { j = new URLSearchParams(location.search).get('j'); } catch { /* no location */ }
+  return j && /^[\w-]{16,53}$/.test(j) ? j : null;
 }
 
 const portrait = () => typeof window === 'undefined' || window.innerHeight >= window.innerWidth;

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { clearLegacyPetSnapshots, bootTelegram, holdClosing, readStored, readyAfterPaint, startAccelerometer, syncSafeAreas, type PetTelegram } from './telegram';
+import { circleCode, clearLegacyPetSnapshots, bootTelegram, holdClosing, readStored, readyAfterPaint, startAccelerometer, syncSafeAreas, type PetTelegram } from './telegram';
 
 /** A WebApp double that records every call in order. */
 function fakeApp(over: Partial<PetTelegram> = {}) {
@@ -143,5 +143,23 @@ describe('legacy private pet snapshot migration', () => {
     clearLegacyPetSnapshots('current', app);
     expect(setItem).toHaveBeenCalledWith('vox-pet:current', '');
     expect(getItem).not.toHaveBeenCalled();
+  });
+});
+
+describe('circleCode (Circles S4)', () => {
+  afterEach(() => { delete (window as { Telegram?: unknown }).Telegram; window.history.replaceState({}, '', '/'); });
+  const withStart = (start_param?: string) => { (window as unknown as { Telegram: unknown }).Telegram = { WebApp: { initData: 'x', initDataUnsafe: { start_param } } }; };
+
+  it('prefers a p_ launch code from start_param, else the DM button ?j=, and ignores everything else', () => {
+    withStart('p_AbCdEf12_abcdefghijklmnopqrstuv');
+    window.history.replaceState({}, '', '/studio/pet/x?j=zzzzzzzzzzzzzzzzzzzz');
+    expect(circleCode()).toBe('p_AbCdEf12_abcdefghijklmnopqrstuv');
+    withStart('feed');
+    expect(circleCode()).toBe('zzzzzzzzzzzzzzzzzzzz');
+    window.history.replaceState({}, '', '/studio/pet/x?j=short');
+    expect(circleCode()).toBeNull();
+    withStart(undefined);
+    window.history.replaceState({}, '', '/studio/pet/x');
+    expect(circleCode()).toBeNull();
   });
 });

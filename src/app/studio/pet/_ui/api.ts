@@ -34,7 +34,7 @@ export function createHttpApi(d: HttpDeps = {}): PetApi {
   const epochs = new Map<string, string>();
   const url = (agentId: string, action?: string) => `${PET_API_BASE}/${encodeURIComponent(agentId)}${action ? `/${action}` : ''}`;
 
-  async function call<T>(method: 'GET' | 'POST', path: string, body: unknown, o?: PetRequestOpts, epoch?: string): Promise<T> {
+  async function call<T>(method: 'GET' | 'POST' | 'DELETE', path: string, body: unknown, o?: PetRequestOpts, epoch?: string): Promise<T> {
     const headers: Record<string, string> = { 'X-Telegram-Init-Data': initData(), [PET_TZ_HEADER]: tz(), Accept: 'application/json', ...(epoch ? { 'x-pet-care-epoch': epoch } : {}) };
     let payload: BodyInit | undefined;
     if (body instanceof FormData) payload = body;
@@ -69,6 +69,7 @@ export function createHttpApi(d: HttpDeps = {}): PetApi {
       return call<TalkVoiceResponse>('POST', url(agentId, 'talk-voice'), form, o, epochs.get(agentId));
     },
     forget: (agentId, o) => call<PetForgetResponse>('POST', url(agentId, 'forget'), {}, o),
+    send: (agentId, method, action, body, o) => call(method, url(agentId, action), body, o),
   };
 }
 
@@ -97,5 +98,6 @@ export function createPetApi(search = typeof location === 'undefined' ? '' : loc
     talk: async (agentId, req, o) => (await fake).talk(agentId, req, o),
     talkVoice: async (agentId, audio, o) => (await fake).talkVoice(agentId, audio, o),
     forget: async (agentId, o) => (await fake).forget(agentId, o),
+    send: async (agentId, method, action, body, o) => (await fake).send!(agentId, method, action, body, o),
   };
 }

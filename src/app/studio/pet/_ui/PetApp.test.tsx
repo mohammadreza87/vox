@@ -165,6 +165,42 @@ describe('PetApp open sequence', () => {
     expect(screen.queryByRole('textbox')).toBeNull();
   });
 
+  it('Circles S4: opened over a group (?j= or a p_ start_param) the group halo loads with the pet, which keeps running', async () => {
+    window.history.replaceState({}, '', '/studio/pet/x?mock=1&j=abcdefghijklmnopqrst');
+    telegram();
+    render(<PetApp agentId="x" />);
+    expect(await screen.findByRole('button', { name: /Join group notes/ })).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Talk to Mochi' })).toBeInTheDocument();
+  });
+
+  it('Circles S4: a circle refusal (403 circle_not_member) is the sheet’s to show and never ends the pet', async () => {
+    const { app } = telegram();
+    Object.assign(app.initDataUnsafe, { start_param: 'p_AbCdEf12_abcdefghijklmnopqrstuv' });
+    const send = vi.fn(async () => { throw new PetError(403, 'circle_not_member', 'no'); });
+    render(<PetApp agentId="x" api={{ ...createMockApi(), send } as PetApi} />);
+    expect(await screen.findByRole('status')).toHaveTextContent("This link is for a group you're not in.");
+    expect(send).toHaveBeenCalledWith('x', 'GET', 'circle?code=p_AbCdEf12_abcdefghijklmnopqrstuv', undefined, expect.objectContaining({ signal: expect.any(AbortSignal) }));
+    expect(screen.getByRole('textbox', { name: 'Talk to Mochi' })).toBeInTheDocument();
+    expect(screen.queryByText('This one’s private')).toBeNull();
+  });
+
+  it('Circles S4: no group code, no circle request (the living page is as before)', async () => {
+    telegram();
+    const send = vi.fn();
+    render(<PetApp agentId="x" api={{ ...createMockApi(), send } as PetApi} />);
+    expect(await screen.findByRole('textbox', { name: 'Talk to Mochi' })).toBeInTheDocument();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('Circles S4: a pet launched through the manager bot talks in the DM', async () => {
+    telegram();
+    const mock = createMockApi();
+    const get = vi.fn(async (id: string, o?: Parameters<PetApi['get']>[1]) => ({ ...await mock.get(id, o), talkInDm: true as const }));
+    render(<PetApp agentId="x" api={{ ...mock, get }} />);
+    expect(await screen.findByRole('button', { name: 'Chat in Telegram' })).toBeInTheDocument();
+    expect(screen.queryByRole('textbox')).toBeNull();
+  });
+
   it('a full tummy turns a cookie tap into the "so full" reaction', async () => {
     telegram();
     const { container } = render(<PetApp agentId="x" />);

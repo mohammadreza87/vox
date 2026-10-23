@@ -23,7 +23,7 @@ import { Stage } from './Stage';
 import { TalkPill } from './TalkPill';
 import { backdrop, characterBox, daysTogether, PET_GROUND, sceneAnchors, type CharacterBox } from './scene';
 import {
-  bootTelegram, closeApp, confirmNative, firstName, hideKeyboard, holdClosing, LAYOUT_EVENTS, openDm, paintChrome, clearLegacyPetSnapshots,
+  bootTelegram, circleCode, closeApp, confirmNative, firstName, hideKeyboard, holdClosing, LAYOUT_EVENTS, openDm, paintChrome, clearLegacyPetSnapshots,
   readyAfterPaint, settingsButton, startAccelerometer, startIntent, syncSafeAreas, tg,
 } from './telegram';
 
@@ -46,6 +46,8 @@ function cssPx(name: string): number {
 
 /** The quiet screens load (with their CSS) only when one shows: the living page never carries them. */
 const Sleeper = lazy(() => import('./Sleeper').then((m) => ({ default: m.Sleeper })));
+/** Circles S4: the group halo and sheets, with their CSS, only for a page opened with a group code. */
+const Circle = lazy(() => import('./Circle').then((m) => ({ default: m.Circle })));
 
 /**
  * One AudioContext for the page, created and resumed inside the first pointerdown (Android gesture rule,
@@ -136,7 +138,8 @@ function PetSession({ agentId, injected, signed, onForget, onRetry }: { agentId:
         if (!valid() || ac.signal.aborted) throw new DOMException('Pet session ended', 'AbortError');
         return result;
       } catch (e) {
-        if (valid() && isPetError(e) && (e.status === 401 || e.status === 403 || e.code === 'pet_unavailable')) denyRef.current(e);
+        // A circle_* refusal is the group sheet's to show; it never ends the pet.
+        if (valid() && isPetError(e) && (e.status === 401 || (e.status === 403 && !e.code.startsWith('circle')) || e.code === 'pet_unavailable')) denyRef.current(e);
         throw e;
       } finally { requests.current.delete(ac); o.signal?.removeEventListener('abort', abort); }
     };
@@ -146,7 +149,8 @@ function PetSession({ agentId, injected, signed, onForget, onRetry }: { agentId:
       talk: (id, req, o) => call((opts) => baseApi.talk(id, req, opts), o),
       talkVoice: (id, blob, o) => call((opts) => baseApi.talkVoice(id, blob, opts), o),
       forget: (id, o) => call((opts) => baseApi.forget(id, opts), o),
-    };
+      ...(baseApi.send ? { send: (id, method, action, body, o) => call((opts) => baseApi.send!(id, method, action, body, opts), o) } : {}),
+    } as PetApi;
     // Each mounted session owns these refs and its signed authority; never re-used after a switch.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [baseApi, signed]);
@@ -169,6 +173,7 @@ function PetSession({ agentId, injected, signed, onForget, onRetry }: { agentId:
   const [focusTalk, setFocusTalk] = useState(false);
   const [box, setBox] = useState<CharacterBox>({ x: 0, y: 0, size: 200 });
   const [safeTop, setSafeTop] = useState(0);
+  const code = useMemo(circleCode, []);
 
   const viewRef = useRef<PetView | null>(null);
   viewRef.current = view;
@@ -700,13 +705,14 @@ function PetSession({ agentId, injected, signed, onForget, onRetry }: { agentId:
       <div className="pet-bottom" ref={bottomRef}>
         <Dock needs={needs} onToy={onToy} toyRef={toyRef} />
         <div ref={pillRef}>
-          <TalkPill name={view.name} guest={view.role === 'guest'} onOpenDm={onOpenDm} busy={talk === 'thinking'}
+          <TalkPill name={view.name} guest={view.role === 'guest' || !!view.talkInDm} onOpenDm={onOpenDm} busy={talk === 'thinking'}
             onListen={onListen} onIdle={onIdle} onTypingPause={onTypingPause} onSend={onSend}
             onVoice={view.listen !== false ? (b) => void onVoice(b) : undefined} onMicLevel={onMicLevel} onRecording={onRecording} audioContext={audio} autoFocus={focusTalk} />
         </div>
         <a className="pet-connect" href={`/studio/connect/${encodeURIComponent(agentId)}`} aria-label={COPY.connectAccountFor(view.name)}
           onClick={(event) => { if (!valid()) event.preventDefault(); }}>{COPY.connectAccount}</a>
       </div>
+      {code && api.send && <Suspense fallback={null}><Circle api={api} agentId={agentId} code={code} onJoy={(why) => whenAwake(() => engineRef.current?.fire({ type: 'celebrate', why }))} /></Suspense>}
     </main>
     </LazyMotion>
   );

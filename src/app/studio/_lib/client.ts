@@ -188,6 +188,7 @@ export const api = {
   setAccess: (id: string, access: 'everyone' | number[]) => request<{ agent: AgentView }>('PUT', `agents/${enc(id)}/access`, { access }),
   setVisibility: (id: string, visibility: AgentVisibility) => request<{ agent: AgentView }>('PUT', `agents/${enc(id)}/visibility`, { visibility }),
   setLiveWeb: (id: string, on: boolean) => request<{ agent: AgentView }>('PUT', `agents/${enc(id)}/live-web`, { on }),
+  setMainMiniApp: (id: string, on: boolean) => request<{ agent: AgentView }>('PUT', `agents/${enc(id)}/main-mini-app`, { on }),
   setGroupBehavior: (id: string, behavior: GroupBehavior) => request<{ agent: AgentView }>('PUT', `agents/${enc(id)}/group-behavior`, behavior),
   /** `force: false` sends only the steps that changed; Retry forces every step */
   syncProfile: (id: string, o: { force?: boolean } = {}) =>

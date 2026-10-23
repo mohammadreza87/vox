@@ -241,3 +241,30 @@ export interface NoteExport {
   savedAt: string;
   expiresAt: string;
 }
+
+/* ---------- the pet over a group (S4, R2 decision 5) ---------- */
+
+/** One of the requester's own copies, as the pet's notes panel shows it. byMe: they saved it (other authors stay unnamed). */
+export interface PetNote { copyId: string; text: string; savedAt: string; groupTitle?: string; byMe?: true }
+
+/**
+ * GET /api/studio/pet/:agentId/circle: the group a launch code names, for a verified present member only. Counts
+ * as the card shows them; `members`: first names of the other joined people, only for someone joined (never in the
+ * group). `card`: the group card's exact notice and button labels, its copyHash, and the card id a decision names.
+ */
+export interface PetCircle {
+  chatTitle: string;
+  agents: string[];
+  joined: number;
+  total: number | null;
+  on: boolean;
+  /** null: never chose here (or left the chat since) */
+  myState: ParticipantState | null;
+  members?: string[];
+  /**
+   * Set when the Mini App's own bot is not this agent's (the manager bot's Main Mini App, route b): its write access
+   * would never reach this agent's bot, which sends the 📌 copies, so the pet offers this agent's DM instead.
+   */
+  dm?: { bot: string; name: string };
+  card: { copy: { notice: string; join: string; reply: string; decline: string }; copyHash: string; revision: string; locale: 'en' | 'fa' };
+}

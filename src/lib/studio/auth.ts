@@ -43,9 +43,9 @@ export function verifyInitData(initData: string, botToken: string, maxAgeSeconds
   }
 }
 
-/** Test helper and local-dev tool: build a valid initData string. */
-export function signInitData(user: InitDataUser, botToken: string, authDate = Math.floor(Date.now() / 1000)): string {
-  const params = new URLSearchParams({ auth_date: String(authDate), user: JSON.stringify(user) });
+/** Test helper and local-dev tool: build a valid initData string. `extra`: more signed fields (start_param, chat_type…). */
+export function signInitData(user: InitDataUser, botToken: string, authDate = Math.floor(Date.now() / 1000), extra: Record<string, string> = {}): string {
+  const params = new URLSearchParams({ ...extra, auth_date: String(authDate), user: JSON.stringify(user) });
   const dataCheckString = [...params.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([k, v]) => `${k}=${v}`).join('\n');
   const secret = createHmac('sha256', 'WebAppData').update(botToken).digest();
   params.set('hash', createHmac('sha256', secret).update(dataCheckString).digest('hex'));

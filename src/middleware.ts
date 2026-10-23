@@ -156,7 +156,11 @@ export function middleware(request: NextRequest) {
       return new NextResponse(null, { status: 404, headers: { 'Cache-Control': 'no-store' } });
     }
   }
-  const response = NextResponse.next();
+  // Circles S4: the manager bot's Main Mini App is /studio. A pet launch over a group (startapp=p_…, which Telegram
+  // also passes as tgWebAppStartParam) renders the pet launch page in place: a rewrite, so the initData fragment stays.
+  const petLaunch = (pathname === '/studio' || pathname === '/studio/') && request.method === 'GET' &&
+    /^p_[A-Za-z0-9_-]{1,62}$/.test(request.nextUrl.searchParams.get('tgWebAppStartParam') ?? '');
+  const response = petLaunch ? NextResponse.rewrite(new URL(`/studio/pet/launch${request.nextUrl.search}`, request.url)) : NextResponse.next();
   if (connectionOAuth) response.headers.set('Cache-Control', 'no-store');
   const isDev = process.env.NODE_ENV === 'development';
 

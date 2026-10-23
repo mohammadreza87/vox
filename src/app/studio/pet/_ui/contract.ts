@@ -29,6 +29,8 @@ export interface PetApi {
   talkVoice(agentId: string, audio: Blob, o?: PetRequestOpts): Promise<TalkVoiceResponse>;
   /** POST …/forget: erase this person's care for every agent (the next visit meets the pet anew) */
   forget(agentId: string, o?: PetRequestOpts): Promise<PetForgetResponse>;
+  /** Circles S4: GET circle | notes, POST circle/decision | circle/leave, DELETE notes/:copyId (no care epoch) */
+  send?<T>(agentId: string, method: 'GET' | 'POST' | 'DELETE', action: string, body?: unknown, o?: PetRequestOpts): Promise<T>;
 }
 
 /** What api.ts throws: `network` for fetch failures and aborts, else the server's code. */

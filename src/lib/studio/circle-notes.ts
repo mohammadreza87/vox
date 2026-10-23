@@ -27,7 +27,7 @@ import type { InlineKeyboard, TelegramBotClient, TelegramCallbackQuery, Telegram
 import { activeReadScope } from '../tireh/privacy/read-scope';
 import { noteCallback, parseNoteCallback, receiptOwner } from '../circles/codec';
 import { activeAgents, activeJoin, CircleService, groupIdOf, joinedOf } from '../circles/service';
-import { NOTE_MAX_CHARS, type CircleDocument, type CircleParticipant, type NoteCopy, type NoteExport, type NoteProposal, type PersonNotes } from '../circles/contracts';
+import { NOTE_MAX_CHARS, type CircleDocument, type CircleParticipant, type NoteCopy, type NoteExport, type NoteProposal, type PersonNotes, type PetNote } from '../circles/contracts';
 import { claimed, usableCopies, type CircleNotes } from '../circles/notes';
 import { noteSelectorFor, type NoteSelection } from '../circles/note-selector';
 import { localeOf, notesCopy } from '../circles/notice';
@@ -49,6 +49,8 @@ const commandOf = (text: string) => {
 /** Bound to the bot it names: "/notes@OtherBot" is not this agent's command. */
 const forOther = (agent: Agent, target?: string) => !!target && target.toLowerCase() !== agent.bot?.username.toLowerCase();
 const NOTE_COMMANDS = new Set(['/notes', '/forget', '/forgetnote']);
+/** The pet's notes panel shows at most this many copies. */
+const PET_NOTES_MAX = 100;
 
 /** What one agent may use in one chat: who reads, and each reader's notes. */
 type Gathered = { kind: 'dm' | 'group'; readers: number[]; docs: Array<PersonNotes | null> };
@@ -464,6 +466,27 @@ export class StudioCircleNotes {
       // 403 / "can't initiate conversation": they never started this bot. Their copy is stored all the same.
       await bot.sendMessage(p.telegramId, copy.delivered(proposal.groupTitle!, proposal.text), { silent: true }).catch(() => this.log.warn('[studio] note_dm_failed'));
     }
+  }
+
+  /* ---------- the pet (S4) ---------- */
+
+  /**
+   * The person's own active copies this agent may use, newest first, split into "From this group" (copies of a
+   * save in `groupId`) and the rest ("My notes": DM saves and other groups'). Only their own document is read;
+   * nothing while Circles is not 'circles'. Authors are "you" or nobody: no other person's name or id leaves here.
+   */
+  async petNotes(agentId: string, telegramId: number, groupId?: string): Promise<{ mine: PetNote[]; group: PetNote[] } | undefined> {
+    if (!this.on()) return undefined;
+    const view = (c: NoteCopy): PetNote => ({ copyId: c.copyId, text: c.text!, savedAt: c.savedAt, ...(c.groupTitle ? { groupTitle: c.groupTitle } : {}), ...(c.authorTelegramId === telegramId ? { byMe: true as const } : {}) });
+    const copies = (await this.own(agentId, telegramId)).slice(0, PET_NOTES_MAX);
+    return { mine: copies.filter((c) => !groupId || c.fromGroupId !== groupId).map(view), group: groupId ? copies.filter((c) => c.fromGroupId === groupId).map(view) : [] };
+  }
+
+  /** Erase from the pet: only the requester's own copy (the id names its owner; anyone else's is never looked up), whatever the flag. */
+  async eraseOwn(telegramId: number, copyId: string): Promise<boolean> {
+    if (!this.ledger || receiptOwner(copyId) !== telegramId) return false;
+    for (const key of [...this.listed.keys()]) if (key.endsWith(`:${telegramId}`)) this.listed.delete(key);
+    return !!await this.ledger.erase(telegramId, copyId, this.host.now());
   }
 
   /* ---------- rights ---------- */

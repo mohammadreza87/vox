@@ -227,7 +227,7 @@ async function circleDirect(studio: Studio, live: Agent, msg: TelegramMessage, u
     const start = parseStartPayload(payload);
     const group = start?.kind === 'join' ? await joinLinkGroup(studio, live, bot, start.code, from.id) : undefined;
     if (start?.kind === 'join' && group === undefined) await bot.sendMessage(msg.chat.id, copy.notInGroup);
-    else await sendAgentCard(studio, live, bot, msg.chat.id, from, choice, group);
+    else await sendAgentCard(studio, live, bot, msg.chat.id, from, choice, group, group === undefined ? undefined : start!.code);
     return;
   }
   if (!choice) {
@@ -264,9 +264,12 @@ async function circleDirect(studio: Studio, live: Agent, msg: TelegramMessage, u
   }
 }
 
-/** The card is recorded (receipt) before it is sent, so its buttons answer only this person. */
-async function sendAgentCard(studio: Studio, live: Agent, bot: TelegramBotClient, chatId: number, from: TelegramUser, current?: JoinChoice, group?: number): Promise<void> {
-  const pet = petPageUrl(studio.deps.webAppUrl, live.id);
+/**
+ * The card is recorded (receipt) before it is sent, so its buttons answer only this person. From a group's j_ link
+ * (membership checked) the pet button carries `?j=<joinCode>`, so the pet offers that group's choices (S4).
+ */
+async function sendAgentCard(studio: Studio, live: Agent, bot: TelegramBotClient, chatId: number, from: TelegramUser, current?: JoinChoice, group?: number, joinCode?: string): Promise<void> {
+  const page = petPageUrl(studio.deps.webAppUrl, live.id), pet = page && joinCode ? `${page}?j=${joinCode}` : page;
   const card = agentCard(live.persona.name, localeOf(from.language_code), current, !!pet);
   const receipt = await studio.presentAgentCard(live.id, from.id, card, group);
   const keyboard: InlineKeyboard = { inline_keyboard: [

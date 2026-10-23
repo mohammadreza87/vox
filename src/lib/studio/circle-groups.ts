@@ -20,7 +20,7 @@ import type { InlineKeyboard, TelegramBotClient, TelegramCallbackQuery, Telegram
 import { logTelegramDiagnostic } from '../tireh/telegram/diagnostics';
 import { cardCallback, circleJoinUrl, newCardId, newJoinCode, parseCardCallback } from '../circles/codec';
 import { activeJoin, CircleService, joinedOf } from '../circles/service';
-import { CIRCLE_MAX_JOINED, type CardShown, type CircleAudience, type CircleDecision, type CircleDocument, type CircleGroupView, type CircleParticipationExport } from '../circles/contracts';
+import { CIRCLE_MAX_JOINED, type CardShown, type CircleAudience, type CircleDecision, type CircleDocument, type CircleGroupView, type CircleParticipationExport, type CircleSurface } from '../circles/contracts';
 import { agentList, GROUP_NOTICE, groupCard, groupCopy, includeCard, joinedAlert, localeOf, nameAlert, welcomeText, type CircleLocale } from '../circles/notice';
 import type { Studio } from './service';
 import type { Agent } from './types';
@@ -30,6 +30,11 @@ export const CARD_EDIT_MS = 10_000;
 const PRESENT = new Set(['creator', 'administrator', 'member']);
 const DECISIONS: Partial<Record<string, CircleDecision>> = { cj: 'joined', cr: 'reply_only', cd: 'declined' };
 const OFF: CircleAudience = { complete: false, joined: 0, humans: null, coveredBy: () => false, revision: 'circle:off' };
+
+/** decide(): committed (the caller acknowledges, then settle()), or why not. `error`: the ledger failed. */
+export type Decided =
+  | { ok: true; outcome: Extract<Awaited<ReturnType<CircleService['decide']>>, { ok: true }>; covered: Agent[] }
+  | { ok: false; reason: 'stale' | 'early' | 'full' | 'limit' | 'not_member' | 'blocked' | 'unavailable' | 'error' };
 
 export interface CircleHost {
   now(): Date;
@@ -56,7 +61,8 @@ export class StudioCircleGroups {
     try { return await this.ledger!.get(chatId); } catch { this.log.warn('[studio] circle_read_failed'); return null; }
   }
 
-  private async agents(ids: readonly string[]): Promise<Agent[]> {
+  /** Active agents among `ids`, in that order. */
+  async agents(ids: readonly string[]): Promise<Agent[]> {
     const state = await this.studio.deps.store.read();
     return ids.flatMap((id) => state.agents.filter((a) => a.id === id && a.status === 'active'));
   }
@@ -72,9 +78,10 @@ export class StudioCircleGroups {
     return doc.card && active.includes(doc.card.agentId) ? doc.card.agentId : active[0];
   }
 
+  /** S4 precedence (Studio.petLaunch): the agent's own Main Mini App, else the manager bot's, else the S2 DM hop. */
   private async joinUrl(chatId: number, agent: Agent): Promise<string | undefined> {
     const code = (await this.studio.deps.store.read()).groups.find((g) => g.chatId === chatId)?.joinCode;
-    return code && agent.bot?.username ? circleJoinUrl(agent.bot.username, code) : undefined;
+    return code && agent.bot?.username ? circleJoinUrl(agent.bot.username, code, this.studio.petLaunch(agent)) : undefined;
   }
 
   private keyboard(cardId: string, labels: { join: string; reply: string; decline: string; details: string }, url?: string): InlineKeyboard {
@@ -93,17 +100,33 @@ export class StudioCircleGroups {
   }
 
   /** In public supergroups anyone can press a button: only a present member counts. */
-  private async present(bot: TelegramBotClient, chatId: number, telegramId: number): Promise<boolean> {
+  async present(bot: TelegramBotClient, chatId: number, telegramId: number): Promise<boolean> {
     return (await this.membership(bot, chatId, telegramId)) === 'present';
   }
 
   /** present, gone (left, kicked, restricted non-member), or unknown (Telegram failed: neither). */
   private async membership(bot: TelegramBotClient, chatId: number, telegramId: number): Promise<'present' | 'gone' | 'unknown'> {
+    return (await this.member(bot, chatId, telegramId)).state;
+  }
+
+  private async member(bot: TelegramBotClient, chatId: number, telegramId: number): Promise<{ state: 'present' | 'gone' | 'unknown'; firstName?: string }> {
     try {
       const member = await bot.getChatMember(chatId, telegramId);
-      if (PRESENT.has(member.status) || (member.status === 'restricted' && member.is_member === true)) return 'present';
-      return ['left', 'kicked', 'restricted'].includes(member.status) ? 'gone' : 'unknown';
-    } catch { return 'unknown'; }
+      if (PRESENT.has(member.status) || (member.status === 'restricted' && member.is_member === true)) return { state: 'present', firstName: member.user.first_name };
+      return { state: ['left', 'kicked', 'restricted'].includes(member.status) ? 'gone' : 'unknown' };
+    } catch { return { state: 'unknown' }; }
+  }
+
+  /**
+   * S4: the first names of joined people Telegram says are still here (the pet only, never the group). Anyone it
+   * says is gone is marked left (as refresh() does) and never named; unknown is never named either.
+   */
+  async presentNames(bot: TelegramBotClient, chatId: number, telegramIds: readonly number[]): Promise<{ names: string[]; gone: number[] }> {
+    const checked = await Promise.all(telegramIds.map((id) => this.member(bot, chatId, id).then((m) => [id, m] as const)));
+    const gone = checked.filter(([, m]) => m.state === 'gone').map(([id]) => id);
+    if (gone.length) await this.onLeft(chatId, gone);
+    const names = checked.flatMap(([, m]) => m.state === 'present' && m.firstName?.trim() ? [m.firstName.trim().slice(0, 64)] : []);
+    return { names, gone };
   }
 
   /* ---------- F1: opening, include cards, agent removal ---------- */
@@ -176,44 +199,60 @@ export class StudioCircleGroups {
 
   /* ---------- F2: taps on the group card and include cards ---------- */
 
-  /**
-   * A tap on a circle button inside the group, checked in order: the card is current; the tapper is a
-   * present member; not blocked; Join keeps ≤12 joined; the flag and allowlist are on; the event is new
-   * (inside the commit). Every refusal is an alert only the tapper sees.
-   */
+  /** A tap on a circle button inside the group: decide() checks and commits, the tapper's alert, then settle(). Every refusal is an alert only the tapper sees. */
   async onCardTap(agent: Agent, query: TelegramCallbackQuery, bot: TelegramBotClient): Promise<void> {
     const parsed = parseCardCallback(query.data)!, chatId = query.message!.chat.id, from = query.from;
     const copy = groupCopy(localeOf(from.language_code)), alert = (text: string) => bot.answerCallbackQuery(query.id, text, true);
     if (parsed.action === 'ci') return this.onIncludeTap(agent, query, bot, parsed.id);
     const choice = DECISIONS[parsed.action];
     if (!choice) { await bot.answerCallbackQuery(query.id, copy.unavailable); return; }
+    const decided = await this.decide(agent, bot, chatId, from.id, choice, parsed.id, query.id, 'group_card');
+    if (!decided.ok) {
+      if (decided.reason === 'blocked') { await bot.answerCallbackQuery(query.id); return; }
+      if (decided.reason === 'error') { await alert(copy.unavailable).catch(() => undefined); return; }
+      await alert({ stale: copy.expired, early: copy.early, full: copy.full, limit: copy.limit, not_member: copy.notMember, unavailable: copy.unavailable }[decided.reason]);
+      return;
+    }
+    const said = choice === 'joined' ? joinedAlert(decided.covered.map((a) => a.persona.name), localeOf(from.language_code))
+      : copy.alert[choice]() + (decided.outcome.previous === 'joined' ? copy.keptSuffix : '');
+    await alert(said);
+    await this.settle(chatId, from.id, choice, decided, query.id, 'group_card');
+  }
+
+  /**
+   * One decision on the circle card, from the group card or the pet (S4: surface mini_app), checked in order: the
+   * card is current; the person is a present member; not blocked; Join keeps ≤12 joined; the flag and allowlist are
+   * on; the event is new (inside the commit). Index first, then one circle commit; a withdrawal that changed
+   * something is invalidated in every agent of the chat before this returns, so the caller acknowledges after it.
+   */
+  async decide(agent: Agent, bot: TelegramBotClient, chatId: number, telegramId: number, choice: CircleDecision, cardId: string, eventId: string, surface: CircleSurface): Promise<Decided> {
     const at = this.host.now(), ledger = this.ledger;
     const doc = ledger ? await ledger.get(chatId).catch(() => null) : null;
-    if (!doc || doc.status !== 'active' || doc.card?.id !== parsed.id) { await alert(copy.expired); return; }
-    if (!await this.present(bot, chatId, from.id)) { await alert(copy.notMember); return; }
-    if ((agent.blocked ?? []).includes(from.id)) { await bot.answerCallbackQuery(query.id); return; }
-    const already = doc.participants.some((p) => p.telegramId === from.id && activeJoin(p, at));
-    if (choice === 'joined' && !already && joinedOf(doc, at).length >= CIRCLE_MAX_JOINED) { await alert(copy.full); return; }
-    if (!this.on(chatId)) { await alert(copy.unavailable); return; }
+    if (!doc || doc.status !== 'active' || doc.card?.id !== cardId) return { ok: false, reason: 'stale' };
+    if (!await this.present(bot, chatId, telegramId)) return { ok: false, reason: 'not_member' };
+    if ((agent.blocked ?? []).includes(telegramId)) return { ok: false, reason: 'blocked' };
+    const already = doc.participants.some((p) => p.telegramId === telegramId && activeJoin(p, at));
+    if (choice === 'joined' && !already && joinedOf(doc, at).length >= CIRCLE_MAX_JOINED) return { ok: false, reason: 'full' };
+    if (!this.on(chatId)) return { ok: false, reason: 'unavailable' };
     let outcome: Awaited<ReturnType<CircleService['decide']>>;
     try {
       // The index first: a crash after it leaves a superset, never a row nobody can find for erasure.
-      await ledger!.index(from.id, chatId);
-      outcome = await ledger!.decide(chatId, { telegramId: from.id, choice, cardId: parsed.id, eventId: query.id, at, surface: 'group_card' });
-    } catch { this.log.warn('[studio] circle_decide_failed'); await alert(copy.unavailable).catch(() => undefined); return; }
-    if (!outcome.ok) { await alert({ stale: copy.expired, early: copy.early, full: copy.full, limit: copy.limit }[outcome.reason]); return; }
-    const wasJoined = outcome.previous === 'joined';
+      await ledger!.index(telegramId, chatId);
+      outcome = await ledger!.decide(chatId, { telegramId, choice, cardId, eventId, at, surface });
+    } catch { this.log.warn('[studio] circle_decide_failed'); return { ok: false, reason: 'error' }; }
+    if (!outcome.ok) return { ok: false, reason: outcome.reason };
     // Not me / Only reply that changed something: invalidated in every agent of the chat before the person is told.
     if (!outcome.replay && !outcome.unchanged && choice !== 'joined') await this.host.invalidate(chatId);
-    const covered = await this.agents(outcome.participant.coveredAgentIds);
-    const said = choice === 'joined' ? joinedAlert(covered.map((a) => a.persona.name), localeOf(from.language_code))
-      : copy.alert[choice]() + (wasJoined ? copy.keptSuffix : '');
-    await alert(said);
-    if (outcome.unchanged) return;
-    if (outcome.replay) return;
+    return { ok: true, outcome, covered: await this.agents(outcome.participant.coveredAgentIds) };
+  }
+
+  /** After the acknowledgement: a Join sets the person's agent choices for what it covers; then the card (debounced) and "Everyone's in". */
+  async settle(chatId: number, telegramId: number, choice: CircleDecision, decided: Extract<Decided, { ok: true }>, eventId: string, surface: CircleSurface): Promise<void> {
+    const { outcome, covered } = decided;
+    if (outcome.unchanged || outcome.replay) return;
     if (choice === 'joined') {
       const e = outcome.participant.evidence;
-      await this.studio.recordCircleChoice(covered.map((a) => a.id), from.id, { id: e.noticeId, version: e.noticeVersion, copyHash: e.copyHash, locale: e.locale, presentedAt: e.presentedAt }, query.id, e.decidedAt)
+      await this.studio.recordCircleChoice(covered.map((a) => a.id), telegramId, { id: e.noticeId, version: e.noticeVersion, copyHash: e.copyHash, locale: e.locale, presentedAt: e.presentedAt }, eventId, e.decidedAt, surface)
         .catch(() => this.log.warn('[studio] circle_choice_failed'));
     }
     await this.refresh(chatId).catch(() => this.log.warn('[studio] circle_card_failed'));

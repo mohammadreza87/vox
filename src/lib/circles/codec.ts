@@ -5,7 +5,7 @@
  * unverified intent: every use re-checks identity and membership on the server.
  */
 
-import { randomBytes } from 'crypto';
+import { createHmac, randomBytes, timingSafeEqual } from 'crypto';
 
 /** STUDIO_CIRCLES kill switch: off = today; reply = agent choices and reply-only DMs (S1); circles = full. */
 export type CirclesMode = 'off' | 'reply' | 'circles';
@@ -91,9 +91,37 @@ export function parseCircleChats(value?: string): ReadonlySet<number> {
 export const newCardId = () => `g${randomBytes(9).toString('base64url').replace(/-/g, '_')}`;
 
 /**
- * The URL button on every group card, welcome and nudge. S2: the DM hop `t.me/<bot>?start=j_<joinCode>`.
- * S4 switches this one function to the direct Mini App link (R2 decision 5).
+ * S4 direct Mini App launch (R2 decision 5): `p_<agent short>_<joinCode>`, at most 64 chars of [A-Za-z0-9_-].
+ * The agent short is 8 opaque characters (an HMAC of the agent id under the Studio secret), never the id; the
+ * fixed length keeps the split unambiguous. Both parts are unverified intent: the server maps them back to an
+ * agent in that group and re-checks the person's membership with getChatMember.
  */
-export function circleJoinUrl(botUsername: string, joinCode: string): string {
+const LAUNCH = /^p_([A-Za-z0-9_-]{8})_([A-Za-z0-9_-]{16,53})$/;
+/** A group's join code as the DM web_app button carries it (`?j=`). */
+export const JOIN_CODE = /^[A-Za-z0-9_-]{16,53}$/;
+export const agentShortCode = (secret: string, agentId: string) => createHmac('sha256', secret).update(`pet-launch:${agentId}`).digest('base64url').slice(0, 8);
+export const sameShort = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
+
+export function petLaunchCode(short: string, joinCode: string): string {
+  const code = `p_${short}_${joinCode}`;
+  if (code.length > 64 || !LAUNCH.test(code)) throw new Error('invalid_launch_code');
+  return code;
+}
+
+export function parsePetLaunch(code?: string | null): { short: string; joinCode: string } | null {
+  const match = code && code.length <= 64 ? LAUNCH.exec(code) : null;
+  return match ? { short: match[1], joinCode: match[2] } : null;
+}
+
+/** The bot whose Main Mini App opens an agent's pet over a group, and that agent's short code (Studio.petLaunch). */
+export interface PetLaunchRoute { bot: string; short: string }
+
+/**
+ * The URL button on every group card, welcome and nudge. With a launch route (S4: the agent's own Main Mini App,
+ * else the manager bot's) a direct Mini App link that opens the pet over the group itself; otherwise the S2 DM hop
+ * `t.me/<bot>?start=j_<joinCode>`, unchanged.
+ */
+export function circleJoinUrl(botUsername: string, joinCode: string, app?: PetLaunchRoute): string {
+  if (app) return `https://t.me/${app.bot}?startapp=${petLaunchCode(app.short, joinCode)}`;
   return `https://t.me/${botUsername}?start=${startPayload('join', joinCode)}`;
 }

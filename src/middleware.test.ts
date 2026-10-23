@@ -189,3 +189,20 @@ describe('isolated no-account guest privacy routes',()=>{
   it.each([['/privacy','GET'],['/api/guest-rights','GET'],['/api/guest-rights/draft','POST'],['/api/guest-rights/requests','POST'],['/api/guest-rights/status','POST'],['/api/guest-rights/close','POST'],['/api/guest-rights/operations/requests','GET'],['/api/guest-rights/operations/actions','POST']])('admits only the explicit public/credential/operator surface %s %s', (path,method)=>{const result=middleware(new NextRequest(`https://studio.example.com${path}`,{method}));expect(result.headers.get('x-middleware-next')).toBe('1');expect(result.headers.get('Referrer-Policy')).toBe('no-referrer');const csp=result.headers.get('Content-Security-Policy')!;expect(csp).toContain("connect-src 'self'");expect(csp).not.toMatch(/telegram|firebase|sentry|anthropic|openai|elevenlabs|stripe/);expect(result.headers.get('Permissions-Policy')).toContain('microphone=()');});
   it.each([['/privacy-other','GET'],['/privacy/other','GET'],['/api/guest-rights-other','GET'],['/api/guest-rights/private','GET'],['/api/guest-rights/status','GET'],['/api/guest-rights/status?credential=PRIVATE','POST'],['/api/guest-rights.jpg','GET'],['/api/guest-rights/requests','DELETE']])('retains denial for guest lookalikes/unknown methods/queries %s %s',(path,method)=>{expect(middleware(new NextRequest(`https://studio.example.com${path}`,{method})).status).toBe(404);});
 });
+describe('Circles S4 pet launch over a group', () => {
+  it('renders the pet launch page in place for the Main Mini App with a p_ start param (a rewrite keeps the initData fragment)', () => {
+    const code = 'p_AbCdEf12_abcdefghijklmnopqrstuv';
+    const response = middleware(request(`/studio?tgWebAppStartParam=${code}`));
+    expect(response.headers.get('x-middleware-rewrite')).toBe(`https://studio.example.com/studio/pet/launch?tgWebAppStartParam=${code}`);
+    expect(response.headers.has('location')).toBe(false);
+    expect(response.headers.get('Content-Security-Policy')).toContain('frame-ancestors https://web.telegram.org;');
+  });
+
+  it('leaves the Studio as it is for anything else', () => {
+    for (const path of ['/studio', '/studio?tgWebAppStartParam=welcome', '/studio?tgWebAppStartParam=p_', '/studio/pet/ag1?tgWebAppStartParam=p_AbCdEf12_abcdefghijklmnopqrstuv']) {
+      const response = middleware(request(path));
+      expect(response.headers.get('x-middleware-rewrite')).toBeNull();
+      expect(response.headers.get('x-middleware-next')).toBe('1');
+    }
+  });
+});

@@ -52,6 +52,10 @@ import { StudioExperimentRuntime } from '../adaptive/experiments/runtime';
  *                            S2 cards, in-group Join, N of M). Read per use; unset = none
  *   STUDIO_NOTE_SELECTOR     explicit (default): notes are proposed only for an explicit "remember
  *                            this" (S3) | decisions: a disabled placeholder that proposes nothing
+ *   STUDIO_MAIN_APP_BOT      the manager bot's username, set once its Main Mini App points at STUDIO_WEBAPP_URL
+ *                            in BotFather (S4): group cards then open each person's pet over the group
+ *                            (t.me/<bot>?startapp=p_…). Read per use; needs STUDIO_CIRCLES=circles; must name
+ *                            the VOXX_BOT_TOKEN bot (else ignored); unset = the S2 DM hop
  *
  * Voiceprints (S11L, shadow mode; docs/implementation/VOICE_PROVIDER_INTEGRATION.md):
  *   STUDIO_VOICE_RECOGNITION=1  voiceprint enrollment and shadow verification; capability
@@ -369,6 +373,7 @@ async function create(): Promise<Studio> {
       circles: () => parseCirclesMode(process.env.STUDIO_CIRCLES),
       circleChats: () => parseCircleChats(process.env.STUDIO_CIRCLE_CHATS),
       noteSelector: () => parseNoteSelector(process.env.STUDIO_NOTE_SELECTOR),
+      mainAppBot: () => process.env.STUDIO_MAIN_APP_BOT,
       rateLimiter: storage.rateLimiter,
       imageToJpeg: toJpeg,
       // The portrait edit reference; STUDIO_PORTRAITS=text skips it (PLAN §7 A/B gate).

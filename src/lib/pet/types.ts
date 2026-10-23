@@ -6,9 +6,9 @@
  */
 
 import type { AgentJoin, CharacterLook, Stage } from '../studio/types';
-import type { CircleParticipationExport, NoteExport } from '../circles/contracts';
+import type { CircleDecision, CircleParticipationExport, NoteExport, PetCircle, PetNote } from '../circles/contracts';
 
-export type { CharacterLook, Stage };
+export type { CharacterLook, PetCircle, PetNote, Stage };
 
 /* ---------- needs ---------- */
 
@@ -139,7 +139,16 @@ export interface PetView {
   stageUp?: { from: Stage; to: Stage };
   /** a Bond milestone was crossed since the last visit (0-based index into the six signature fidgets) */
   bondMilestone?: number;
+  /** opened over a group through the manager bot (Circles S4): talk happens in the agent's DM */
+  talkInDm?: true;
 }
+
+/* ---------- the pet over a group (Circles S4): GET circle answers PetCircle ---------- */
+
+/** POST circle/decision: the group card's three choices; `revision` is PetCircle.card.revision, `eventId` makes a double tap one decision. */
+export interface CircleDecisionRequest { code: string; choice: CircleDecision; revision: string; eventId?: string }
+/** GET notes: the requester's own copies; `group` holds the ones saved in the group the code names. */
+export interface PetNotesResponse { mine: PetNote[]; group: PetNote[] }
 
 /** POST /care. `tz` rides in PET_TZ_HEADER. */
 export interface CareRequest {
@@ -200,7 +209,13 @@ export type PetErrorCode =
   | 'json_required'
   | 'invalid_request'
   | 'rate_limited'
-  | 'conversation_failed';
+  | 'conversation_failed'
+  // Circles S4: shown in place by the group sheet, never the end of the pet session
+  | 'circle_unavailable' // Circles off here, no open circle, or a code that names nothing for this agent
+  | 'circle_not_member' // not a present member of that group (nothing about it is shown)
+  | 'circle_full' // 12 people already joined (or too many joins and leaves)
+  | 'circle_stale' // the card changed: reload and choose again
+  | 'circle_failed'; // a store failed under a circle route: try again (never ends the pet)
 
 export interface PetErrorBody { error: PetErrorCode; message?: string }
 /** 403 body for a private agent: enough to draw the character asleep on the "This one's private" screen. */

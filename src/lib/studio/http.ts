@@ -278,6 +278,7 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
             await studio.endLiveCall(me, id, space); return json({ ok: true });
           }
           case 'PUT live-web': return json({ agent: await studio.setLiveWeb(me, id, (await body(req)).on === true) });
+          case 'PUT main-mini-app': return json({ agent: await studio.setMainMiniApp(me, id, (await body(req)).on === true) });
           case 'PUT group-behavior': return json({ agent: await studio.setGroupBehavior(me, id, await body(req)) });
           case 'POST profile-sync': {
             // Retry sends no body and forces every step; the look editor sends { force: false }.
