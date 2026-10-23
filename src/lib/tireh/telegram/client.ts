@@ -37,6 +37,14 @@ export interface TelegramMessage {
   reply_to_message?: TelegramMessage;
   entities?: Array<{ type: string; offset: number; length: number; user?: TelegramUser }>;
   caption_entities?: Array<{ type: string; offset: number; length: number; user?: TelegramUser }>;
+  /** A channel post Telegram copied into its linked discussion group (sent on the channel's behalf). */
+  is_automatic_forward?: boolean;
+  sender_chat?: TelegramChat;
+}
+
+/** getChat's answer, as far as Vox reads it: a channel's linked discussion group. */
+export interface TelegramChatFullInfo extends TelegramChat {
+  linked_chat_id?: number;
 }
 
 export interface TelegramCallbackQuery {
@@ -51,7 +59,7 @@ export interface TelegramChatMemberUpdated {
   from: TelegramUser;
   date: number;
   old_chat_member: { status: string; user: TelegramUser; is_member?: boolean };
-  new_chat_member: { status: string; user: TelegramUser; is_member?: boolean };
+  new_chat_member: { status: string; user: TelegramUser; is_member?: boolean; can_post_messages?: boolean };
 }
 
 export interface TelegramManagedBotUpdated {
@@ -142,13 +150,14 @@ export class TelegramBotClient {
   sendMessage(
     chatId: number,
     text: string,
-    options: { replyTo?: number; keyboard?: InlineKeyboard; signal?: AbortSignal; authorizeNow?: () => boolean; silent?: boolean } = {}
+    options: { replyTo?: number; keyboard?: InlineKeyboard; signal?: AbortSignal; authorizeNow?: () => boolean; silent?: boolean; forceReply?: { placeholder?: string } } = {}
   ): Promise<TelegramMessage> {
     return this.call('sendMessage', {
       chat_id: chatId,
       text: text.slice(0, 4096),
       ...(options.replyTo ? { reply_parameters: { message_id: options.replyTo, allow_sending_without_reply: true } } : {}),
-      ...(options.keyboard ? { reply_markup: options.keyboard } : {}),
+      ...(options.keyboard ? { reply_markup: options.keyboard }
+        : options.forceReply ? { reply_markup: { force_reply: true, ...(options.forceReply.placeholder ? { input_field_placeholder: options.forceReply.placeholder.slice(0, 64) } : {}) } } : {}),
       ...(options.silent ? { disable_notification: true } : {}),
     }, options.signal, options.authorizeNow);
   }
@@ -272,8 +281,13 @@ export class TelegramBotClient {
     return this.call('setChatMenuButton', { menu_button: { type: 'default' } });
   }
 
-  getChatMember(chatId: number, userId: number): Promise<{ status: string; user: TelegramUser; is_member?: boolean }> {
+  /** can_post_messages: an administrator's right to post, in channels only. */
+  getChatMember(chatId: number, userId: number): Promise<{ status: string; user: TelegramUser; is_member?: boolean; can_post_messages?: boolean }> {
     return this.call('getChatMember', { chat_id: chatId, user_id: userId });
+  }
+
+  getChat(chatId: number): Promise<TelegramChatFullInfo> {
+    return this.call('getChat', { chat_id: chatId });
   }
 
   getChatMemberCount(chatId: number): Promise<number> {

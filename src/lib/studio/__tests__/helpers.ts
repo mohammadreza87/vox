@@ -30,6 +30,7 @@ import { FileAgentChoiceStore } from '../../circles/choice-store';
 import { CircleRepository } from '../../circles/repository';
 import { CircleService } from '../../circles/service';
 import { CircleNotes, NotesRepository } from '../../circles/notes';
+import { ChannelDrafts } from '../../circles/channels';
 import type { AgentVisibility, Member, PersonaSpec, Role } from '../types';
 
 export const SECRET = 'test-secret-that-is-at-least-32-characters-long';
@@ -219,6 +220,7 @@ export function makeStudio(options: { openai?: boolean; eleven?: boolean; manage
     // Wired like runtime.ts; inert until a test turns STUDIO_CIRCLES=circles and allowlists a chat.
     circleLedger: new CircleService(new CircleRepository(new FileAdaptiveStorage(join(dir, 'circles', 'ledger')))),
     notesLedger: new CircleNotes(new NotesRepository(new FileAdaptiveStorage(join(dir, 'circles', 'notes')))),
+    channelDrafts: new ChannelDrafts(new FileAdaptiveStorage(join(dir, 'circles', 'channel-drafts'))),
   });
   return {
     studio, store, dir, personaLLM, chatLLM, openai, eleven, manager, bots, botFor, memory, imageToJpeg, svgToPng, logger, clock, adaptive,

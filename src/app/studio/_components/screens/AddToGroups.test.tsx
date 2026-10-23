@@ -6,7 +6,7 @@ import { expectNoRawControls, expectOneVolt } from '../ui.testing';
 import { AddToGroupsScreen } from './AddToGroups';
 
 const state = vi.hoisted(() => ({
-  agent: vi.fn(), groups: vi.fn(), groupLink: vi.fn(), open: vi.fn(),
+  agent: vi.fn(), groups: vi.fn(), groupLink: vi.fn(), channels: vi.fn(), open: vi.fn(),
   events: new Map<string, () => void>(),
   nav: {
     locale: 'en' as 'en' | 'fa',
@@ -19,7 +19,7 @@ vi.mock('../../_lib/client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../_lib/client')>();
   return {
     ...actual,
-    api: { ...actual.api, agent: state.agent, groups: state.groups, groupLink: state.groupLink },
+    api: { ...actual.api, agent: state.agent, groups: state.groups, groupLink: state.groupLink, channels: state.channels },
     openTelegram: state.open,
     tg: () => ({ onEvent: (e: string, cb: () => void) => state.events.set(e, cb), offEvent: (e: string) => state.events.delete(e) }),
   };
@@ -43,6 +43,8 @@ beforeEach(() => {
   vi.clearAllMocks(); state.events.clear(); state.nav.cache.clear(); state.nav.locale = 'en';
   state.agent.mockResolvedValue({ agent: aria });
   state.groupLink.mockResolvedValue({ link: 'https://t.me/aria_bot?startgroup=hoor' });
+  // Circles off: the channels route answers 404 and nothing about channels shows.
+  state.channels.mockRejectedValue(new Error('Not found'));
 });
 afterEach(cleanup);
 
@@ -116,5 +118,27 @@ describe('Add to groups', () => {
     await renderScreen();
     expect(screen.getByText('Aria isn’t in Telegram yet')).toBeVisible();
     expect(screen.queryByText('Telegram asks you to confirm each group once.')).toBeNull();
+  });
+
+  it('Circles S5: Add to a channel sits next to Add to group for managers, and Post to channels opens the channel screen', async () => {
+    state.groups.mockResolvedValue({ groups: [group(2, 'Design Sync')] });
+    state.channels.mockResolvedValue({ channels: [{ chatId: -100, title: 'Aria News', comments: 'none' }], public: true, link: 'https://t.me/aria_bot?startchannel&admin=post_messages+edit_messages' });
+    const { container } = await renderScreen();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^Add to a channel…/ })); });
+    expect(state.open).toHaveBeenCalledWith('https://t.me/aria_bot?startchannel&admin=post_messages+edit_messages');
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^Post to channels/ })); });
+    expect(state.nav.push).toHaveBeenCalledWith({ name: 'channels', id: 'aria' });
+    expectNoRawControls(container);
+  });
+
+  it('Circles S5: without the manager link (or with Circles off) no channel row shows', async () => {
+    state.groups.mockResolvedValue({ groups: [group(2, 'Design Sync')] });
+    state.channels.mockResolvedValue({ channels: [], public: true });
+    await renderScreen();
+    expect(screen.queryByRole('button', { name: /channel/i })).toBeNull();
+    state.channels.mockRejectedValue(new Error('Not found'));
+    cleanup();
+    await renderScreen();
+    expect(screen.queryByRole('button', { name: /channel/i })).toBeNull();
   });
 });

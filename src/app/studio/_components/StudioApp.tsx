@@ -27,6 +27,7 @@ import { SharedMemoriesScreen } from './screens/SharedMemories';
 import { ExperienceScreen } from './screens/Experience';
 import { ConnectionsScreen } from './screens/Connections';
 import { AddToGroupsScreen } from './screens/AddToGroups';
+import { ChannelsScreen } from './screens/Channels';
 import { SettingsRouter } from './screens/settings/SettingsRouter';
 
 export type Route =
@@ -44,6 +45,7 @@ export type Route =
   | { name: 'memories'; id: string }
   | { name: 'fire'; id: string }
   | { name: 'add-groups'; id: string }
+  | { name: 'channels'; id: string }
   | { name: 'settings'; page: SettingsPage; params?: Record<string, string> };
 
 export type SettingsPage = 'preferences' | 'inbox' | 'reminders' | 'diagnostics' | 'requests' | 'connection' | 'voice-recognition' | 'agent-access';
@@ -446,6 +448,7 @@ export function StudioApp() {
                     {route.name === 'memories' && <MemoriesScreen id={route.id} />}
                     {route.name === 'fire' && <FireScreen id={route.id} />}
                     {route.name === 'add-groups' && <AddToGroupsScreen id={route.id} />}
+                    {route.name === 'channels' && <ChannelsScreen id={route.id} />}
                     {route.name === 'settings' && <SettingsRouter page={route.page} params={route.params} />}
                   </Page>
                 </AnimatePresence>

@@ -70,6 +70,12 @@ async function eraseCircles(studio: Studio, id: number): Promise<void> {
   catch { (studio.deps.logger ?? console).warn('[studio] circle_erasure_failed'); }
 }
 
+/** Channel post drafts (Circles S5: content-free, ≤30 minutes live) at intake, like pet care: never fails the filed request. Not exported: they hold no text. */
+async function eraseChannelDrafts(studio: Studio, id: number): Promise<void> {
+  try { await studio.forgetChannelDrafts(id); }
+  catch { (studio.deps.logger ?? console).warn('[studio] channel_draft_erasure_failed'); }
+}
+
 export async function handleRightsRequest(studio: Studio, request: Request, path: string[], botToken: string): Promise<Response> {
   try {
     if (!botToken.trim()) return json({ error: 'rights_unavailable' }, 503);
@@ -158,7 +164,7 @@ export async function handleRightsRequest(studio: Studio, request: Request, path
       // withdrawal cannot bring it back (the pet page's "forget me" does the same on its own). The
       // request itself still goes to review. The request is filed either way: a pet store failure is
       // logged and retried by replaying the request (idempotent).
-      if (input.kind === 'erasure') { await erasePetCare(studio, user.id); await eraseAgentChoices(studio, user.id); await eraseCircles(studio, user.id); await eraseNotes(studio, user.id); }
+      if (input.kind === 'erasure') { await erasePetCare(studio, user.id); await eraseAgentChoices(studio, user.id); await eraseCircles(studio, user.id); await eraseNotes(studio, user.id); await eraseChannelDrafts(studio, user.id); }
       return respond(result, result.replayed ? 200 : 201);
     }
     if (path.length === 3 && path[0] === 'requests' && path[2] === 'actions') {

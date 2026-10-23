@@ -244,8 +244,10 @@ export async function handlePetRequest(studio: Studio, request: Request, agentId
     }
     if (route === 'forget') {
       await limiter.consume('mutation', user.id);
-      // Circle rows, note copies and choices are erased first, so a failing store fails the request before pet care is touched.
-      const circles = await studio.forgetCircles(user.id), notes = await studio.forgetNotes(user.id), choices = await studio.forgetAgentChoices(user.id), erased = await pets.eraseUser(user.id);
+      // Circle rows, note copies, channel post drafts and choices are erased first, so a failing store fails the request before pet care is touched.
+      const circles = await studio.forgetCircles(user.id), notes = await studio.forgetNotes(user.id);
+      await studio.forgetChannelDrafts(user.id);
+      const choices = await studio.forgetAgentChoices(user.id), erased = await pets.eraseUser(user.id);
       const body: PetForgetResponse = { erased, ...(choices ? { choicesErased: choices } : {}), ...(circles ? { circlesErased: circles } : {}), ...(notes ? { notesErased: notes } : {}) };
       return json(body);
     }

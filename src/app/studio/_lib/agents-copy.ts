@@ -156,6 +156,44 @@ export const addGroupsCopy: Record<Locale, typeof addGroupsEn> = {
   },
 };
 
+/** Circles S5: Add to channel (next to Add to group) and Agent > Channels, post-only. */
+const channelsEn = {
+  section: 'In these channels', title: 'Channels', sub: 'Post-only · nothing is read from the channel',
+  addChannel: 'Add to a channel…', addChannelSub: 'Telegram asks you to pick a channel and allow posting',
+  post: 'Post to channels', count: (c: number) => `${c} channel${s(c)}`,
+  loading: 'Loading channels', loadError: 'Can’t load channels',
+  none: (name: string) => `${name} isn’t in a channel yet.`,
+  notPublic: (name: string) => `${name} posts to channels only while public.`,
+  comments: { none: 'No comments group', added: 'Also in the comments group', unknown: 'Comments group: unknown', offer: 'Has a comments group' },
+  needsRights: (name: string) => `Can’t post yet: in the channel’s admin settings, turn on Post messages for ${name}`,
+  full: (name: string, max: number) => `${name} is in ${max} channels, the most it can post to. Remove it from one to add another.`,
+  addComments: (name: string) => `Add ${name} to the comments group too`, addCommentsSub: 'Opens Telegram’s group picker; choose the channel’s comments group',
+  brief: 'What should the post say?', briefHint: 'A brief or the exact text. Only this and the agent’s character are used: no memories, no notes.',
+  write: 'Write post', writing: 'Writing…', preview: 'Preview', to: 'Post to', edit: 'Edit', done: 'Done editing',
+  notify: 'Notify subscribers', notifySub: 'Off sends silently', postNow: 'Post', posting: 'Posting…', cancel: 'Cancel',
+  posted: (title: string) => `Posted to ${title}`, meetNote: (name: string) => `Every post carries a “Meet ${name} 🐾” button to ${name}’s chat.`,
+};
+
+export const channelsCopy: Record<Locale, typeof channelsEn> = {
+  en: channelsEn,
+  fa: {
+    section: 'در این کانال‌ها', title: 'کانال‌ها', sub: 'فقط ارسال · چیزی از کانال خوانده نمی‌شود',
+    addChannel: 'افزودن به کانال…', addChannelSub: 'تلگرام از شما می‌خواهد کانالی انتخاب کنید و اجازه ارسال بدهید',
+    post: 'ارسال به کانال‌ها', count: (c) => `${n(c)} کانال`,
+    loading: 'در حال بارگذاری کانال‌ها', loadError: 'کانال‌ها بارگذاری نشد',
+    none: (name) => `${name} هنوز در هیچ کانالی نیست.`,
+    notPublic: (name) => `${name} فقط وقتی عمومی است در کانال‌ها پست می‌گذارد.`,
+    comments: { none: 'بدون گروه نظرات', added: 'در گروه نظرات هم هست', unknown: 'گروه نظرات: نامعلوم', offer: 'گروه نظرات دارد' },
+    needsRights: (name) => `هنوز نمی‌تواند پست بگذارد: در تنظیمات مدیران کانال، «ارسال پست» را برای ${name} روشن کنید`,
+    full: (name, max) => `${name} در ${n(max)} کانال است، بیشترین تعدادی که می‌تواند در آن پست بگذارد. برای افزودن کانال دیگر، آن را از یکی بردارید.`,
+    addComments: (name) => `${name} را به گروه نظرات هم اضافه کنید`, addCommentsSub: 'انتخابگر گروه تلگرام را باز می‌کند؛ گروه نظرات کانال را انتخاب کنید',
+    brief: 'پست چه بگوید؟', briefHint: 'یک توضیح کوتاه یا متن دقیق. فقط همین و شخصیت عامل به کار می‌رود: نه حافظه، نه یادداشت.',
+    write: 'نوشتن پست', writing: 'در حال نوشتن…', preview: 'پیش‌نمایش', to: 'ارسال به', edit: 'ویرایش', done: 'پایان ویرایش',
+    notify: 'اعلان برای مشترکان', notifySub: 'خاموش یعنی ارسال بی‌صدا', postNow: 'ارسال', posting: 'در حال ارسال…', cancel: 'لغو',
+    posted: (title) => `در ${title} ارسال شد`, meetNote: (name) => `هر پست دکمه «آشنایی با ${name} 🐾» را دارد که به گفتگو با ${name} می‌رود.`,
+  },
+};
+
 type Participation = GroupBehavior['participation'];
 
 const agentEn = {

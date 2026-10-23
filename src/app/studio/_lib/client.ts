@@ -13,6 +13,9 @@ import type { CatalogView, RouteSuggestion } from '@/lib/studio/skills/types';
 export type { SuccessorTemplate };
 export type { DefaultVoice, LibraryVoice, VoiceOptions };
 export type { CatalogView, RouteSuggestion };
+/** Circles S5: an agent's channels (post-only), the Add link for managers, the comments-group offer. */
+import type { ChannelDraftView, ChannelsView, ChannelView } from '@/lib/studio/circle-channels';
+export type { ChannelDraftView, ChannelsView, ChannelView };
 
 /** Body of POST catalog/route. `final: false` (typing) answers from the server's local router only. */
 export interface RouteRequest { text: string; final?: boolean; exclude?: string[]; answer?: string }
@@ -198,6 +201,12 @@ export const api = {
   fire: (id: string, input: { reason: string; memoryPolicy: string; confirmName: string }) =>
     request<{ agent: AgentView }>('POST', `agents/${enc(id)}/fire`, input),
   groupLink: (id: string) => request<{ link: string }>('GET', `agents/${enc(id)}/group-link`),
+  /** Circles S5; 404 unless STUDIO_CIRCLES=circles. */
+  channels: (id: string) => request<ChannelsView>('GET', `agents/${enc(id)}/channels`),
+  channelDraft: (id: string, brief: string) => request<{ draft: ChannelDraftView }>('POST', `agents/${enc(id)}/channel-draft`, { brief }),
+  channelPost: (id: string, input: { id: string; chatId: number; text: string; silent: boolean }) =>
+    request<{ posted: true; title: string }>('POST', `agents/${enc(id)}/channel-post`, input),
+  channelCancel: (id: string, draftId: string) => request<{ ok: true }>('POST', `agents/${enc(id)}/channel-cancel`, { id: draftId }),
   callTurn: (id: string, audio: Blob, space: 'work' | 'personal' = 'work') => {
     const form = new FormData();
     form.append('audio', audio, 'turn');
