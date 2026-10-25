@@ -6,6 +6,28 @@ deprecation, the PRIV-009 processor table and a route inventory.
 
 Base commit: `6d00b8066e5d8e8d444bb47d978aa571e20929df` (origin/develop at the merge of PR #100).
 
+> **Revision r2 (2026-10-22), supersedes the details below where they differ.**
+> - Version: openai **7.34.0** (published 2026-10-14), the newest 7.x at least seven days
+>   old; 7.39.0 (2026-10-19) and 7.42.0 (2026-10-22) were too new. Integrity
+>   `sha512-PMwuTQ/3cVyWZJOVpb6bzlrQj17uImlnUGQWqh5zHlN/snwK5ww4ZUHW8NYGtH6f9PQOEPxyD/f8WJVIHp1q2A==`.
+>   Commands: `npm install openai@7.34.0 --package-lock-only --ignore-scripts --cache "$TMPDIR/npm-cache"`
+>   then `npm ci --cache "$TMPDIR/npm-cache"` in a real (non-symlinked) `node_modules`, with
+>   `registry.npmjs.org` allowed.
+> - Provider: constructor `Pick<OpenAI, 'post'> & { readonly decisions?: unknown }`;
+>   `private static timeout(ms)` returns `Math.min(5000, Math.floor(ms))` for finite `ms >= 1`,
+>   otherwise 500; `decisions.create` detected inline and called as a method.
+> - `GEMINI_DEPRECATION_WARNING` starts with `tireh_llm_gemini_deprecated:`; the test file is
+>   `src/lib/tireh/__tests__/llm-gemini-deprecation.test.ts`.
+> - Processor table: "PRIV-009 processor table (draft, version 2026-10-22, base 6d00b80)".
+> - New compat tests run in the default jsdom environment with `dangerouslyAllowBrowser`,
+>   because `src/test/setup.ts` needs `window` and cannot load under a per-file node environment.
+>
+> **Integration onto main (2026-10-25).** The r2 age rule picked 7.34.0 on 22 Oct, but main
+> already deploys openai `^7.39.0` (lock 7.39.0). The wave A merge keeps main's
+> `package.json` and `package-lock.json` unchanged, so the installed SDK stays 7.39.0;
+> a downgrade would change main's deployed behaviour. The provider code and compat tests
+> hold on both versions (they require 7.x >= 7.30.0).
+
 ## Goal
 
 - Move `openai` from 6.9.1 to 7.39.0 (latest; floor 7.30.0) in a lockfile-only change.

@@ -103,7 +103,7 @@ Every memory records who said it, where, when and its scope.
 | `src/lib/tireh/gateway.ts` | Telegram update handling end to end |
 | `src/lib/tireh/telegram/client.ts` | minimal Bot API client |
 | `src/lib/tireh/voice.ts` | ElevenLabs speech-to-text and text-to-speech |
-| `src/lib/tireh/llm.ts` | model-independent LLM interface (Anthropic / Gemini) |
+| `src/lib/tireh/llm.ts` | model-independent LLM interface (Anthropic; Gemini deprecated) |
 | `src/lib/tireh/runtime.ts` | production wiring from env |
 | `src/app/api/tireh/telegram/[personaId]/route.ts` | webhook endpoint |
 | `scripts/tireh-set-webhooks.mjs` | register webhooks for persona bots |
@@ -128,11 +128,13 @@ Runs on your laptop or the Mac Studio. It uses long polling, so no public URL or
 3. In `.env.local`:
    ```
    TIREH_BOT_TOKEN_ARIA=<token from BotFather>
-   ANTHROPIC_API_KEY=<key>          # or GEMINI_API_KEY + TIREH_LLM_PROVIDER=gemini (deprecated)
+   ANTHROPIC_API_KEY=<key>          # GEMINI_API_KEY + TIREH_LLM_PROVIDER=gemini is deprecated
    ELEVENLABS_API_KEY=<key>         # optional, for voice
    ```
 4. `npm install`, then `npm run tireh:local`, and message the bot.
 5. Put the Telegram ID it replies with into `tireh.org.json` and restart. Do the same for Parastoo and the others to test shared memory.
+
+**Gemini (deprecated).** `TIREH_LLM_PROVIDER=gemini` still works, but it logs `tireh_llm_gemini_deprecated` once when the gateway is constructed. Vox Studio never uses it. It has no web search, no prompt caching and no approval for image turns. It will be removed together with the standalone runtime unless that runtime is kept by decision (see [the route inventory](implementation/ROUTE_INVENTORY.md)).
 
 `TIREH_STORE=firestore` (with `SERVICE_ACCOUNT_KEY`) uses Firestore instead of the local file. Running locally removes the bot's webhook; re-register it with `scripts/tireh-set-webhooks.mjs` when you deploy.
 
@@ -142,7 +144,7 @@ Runs on your laptop or the Mac Studio. It uses long polling, so no public URL or
 2. **Write the org config.** Copy `tireh.org.example.json` to `tireh.org.json` (gitignored) and fill in:
    - real **Telegram user ids** (each person can get theirs from @userinfobot)
    - groups with their **chat ids** and **complete member lists**. The member list is the audience for privacy. If someone not listed speaks in the group, the persona stays silent and logs a warning.
-3. **Set environment variables.** See `.env.example`, section "TIREH": `TIREH_WEBHOOK_SECRET`, `TIREH_BOT_TOKEN_ARIA`, `TIREH_ORG_CONFIG_PATH`, `ANTHROPIC_API_KEY` (or Gemini, deprecated), `ELEVENLABS_API_KEY` for voice, `SERVICE_ACCOUNT_KEY` for Firestore.
+3. **Set environment variables.** See `.env.example`, section "TIREH": `TIREH_WEBHOOK_SECRET`, `TIREH_BOT_TOKEN_ARIA`, `TIREH_ORG_CONFIG_PATH`, `ANTHROPIC_API_KEY`, `ELEVENLABS_API_KEY` for voice, `SERVICE_ACCOUNT_KEY` for Firestore.
 4. **Deploy, then register webhooks:**
    ```bash
    TIREH_PUBLIC_URL=https://your-host TIREH_WEBHOOK_SECRET=... TIREH_BOT_TOKEN_ARIA=... \
@@ -153,12 +155,6 @@ Runs on your laptop or the Mac Studio. It uses long polling, so no public URL or
 ### Adding a persona
 
 Add an entry to `personas` in the org config, create its bot, set `TIREH_BOT_TOKEN_<ID>`, and register its webhook. Bump `identityVersion` whenever the personality or voice changes on purpose.
-
-### Gemini (deprecated)
-
-- `TIREH_LLM_PROVIDER=gemini` still works for the standalone runtime and `npm run tireh:local`, but it logs a deprecation warning at startup.
-- Vox Studio never uses it, and Gemini is not approved for image turns.
-- It will be removed together with the standalone TIREH runtime; see [the route inventory](implementation/ROUTE_INVENTORY.md).
 
 ## Testing
 

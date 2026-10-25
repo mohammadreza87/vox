@@ -1,66 +1,63 @@
-# Routes outside /api/studio (inventory at 6d00b80)
+# Route inventory outside /api/studio
 
-Step 15 of [docs/AGENT_INTELLIGENCE_SOLUTION.md](../AGENT_INTELLIGENCE_SOLUTION.md).
-**This document changes no route.** It lists every `route.ts` under `src/app/api`
-outside `/api/studio` (30 files) at commit `6d00b80`, the authentication found by
-reading each file, and a recommendation: retire, keep or secure.
+Base commit `6d00b80`, dated 2026-10-22. **Documentation only: no route is changed by
+this document.** Studio routes under `/api/studio` are out of scope. The recommendations
+are inputs to the "legacy `/app` surface and standalone TIREH runtime: retire or keep by
+decision" item in [AGENT_INTELLIGENCE_SOLUTION.md](../AGENT_INTELLIGENCE_SOLUTION.md)
+section 7.
 
-**Production exposure.** `src/middleware.ts` returns 404 for every path outside
-`/studio` and `/api/studio` when `STUDIO_ONLY=1`, except two narrow exceptions:
-the guest-rights intake paths (exact paths and methods, no query string) and
-`POST /api/connections/broker` when the broker configuration is present.
-`STUDIO_ONLY=1` is the production setting (`.github/workflows/deploy.yml`,
-`scripts/firebase-production-env.mjs`, `docs/PRODUCTION.md`). Every other route
-below is therefore unreachable in production today, but stays one environment
-variable away from exposure. The recommendations assume that gate can be lost.
+The table lists exactly the 30 `route.ts` files under `src/app/api` outside
+`src/app/api/studio`, with the authentication found by reading each file at the base.
+
+**Production exposure.** `src/middleware.ts` returns 404 for every path outside `/studio`
+and `/api/studio` when `STUDIO_ONLY=1`, except the guest-rights intake paths (exact paths
+and methods, no query string) and `POST /api/connections/broker` when the broker
+configuration is present. `STUDIO_ONLY=1` is the production setting
+(`.github/workflows/deploy.yml`, `scripts/firebase-production-env.mjs`,
+`docs/PRODUCTION.md`), so most rows are unreachable in production today but stay one
+environment variable away from exposure. The recommendations assume that gate can be lost.
 
 Auth terms: *withAuth* is `src/lib/middleware/withAuth.ts` (Firebase ID token via
-`verifyIdToken`); *verifyIdToken* means the handler checks the bearer token itself.
+`verifyIdToken`); *ID token* means the handler verifies the Firebase bearer token itself.
 
-| Route | Methods | Auth at base (verified by reading the file) | Providers / data | Surface | Recommendation | Reason |
+| Route | Methods | Auth at base | Providers/data egress | Known callers | Recommendation | Reason and follow-up |
 |---|---|---|---|---|---|---|
-| `/api/auth/telegram` | POST, GET | POST: Telegram Mini App `initData` HMAC or Login Widget hash, 24-hour freshness; issues a session JWT. GET: none (returns whether Telegram login is enabled and the bot username) | Telegram bot token (HMAC key) | Legacy `/app` login | Keep, tied to the `/app` decision | Correct HMAC check; it only matters while `/app` exists |
-| `/api/chat` | POST | withAuth; chat rate limiter | OpenAI (SDK), Gemini (`@google/generative-ai`), DeepSeek (OpenAI SDK with a DeepSeek base URL); chat text | Legacy `/app` | Retire with legacy `/app` | Duplicates Studio chat on separate providers outside the privacy design |
-| `/api/chat/stream` | POST | withAuth; chat rate limiter | Same as `/api/chat`, streamed | Legacy `/app` | Retire with legacy `/app` | Same as `/api/chat` |
-| `/api/clone-voice` | POST | verifyIdToken; voice-clone rate limiter | ElevenLabs `voices/add` (voice cloning from uploaded audio) | Legacy `/app` | Retire | PRIV-025 allows no voice cloning in the first release |
-| `/api/connections/broker` | POST | Admitted by middleware only with explicit broker configuration; HMAC and current Studio profile authority in `handleStudioBrokerControl` | Connections broker control plane | Studio connections | Keep | Part of the Studio authority model; narrow, authenticated exception |
-| `/api/convai/session` | POST | withAuth; per-account rate limiter | ElevenLabs signed URL for the shared legacy agent | Legacy `/app` voice calls | Retire with `/app` | The unauthenticated `/api/convai` proxies were deleted in Step 0; Studio calls use `/api/studio/voice-llm` |
-| `/api/features` | GET | verifyIdToken | Feature flags for the signed-in user | Legacy `/app` | Keep with `/app` | Read-only; goes when `/app` goes |
-| `/api/guest-rights/[[...path]]` | GET, POST | Public intake by design; middleware admits only exact paths and methods without a query string; the handler applies the guest-rights policy | Guest rights requests (Studio guest-rights runtime) | Guest rights intake | Keep | Serves data-subject requests from people without accounts |
-| `/api/health` | GET | None | Firebase read, Redis and Stripe configuration and reachability, including provider error messages and the app version | Operations | Secure | Unauthenticated detail about infrastructure; return liveness only, or restrict to operators |
-| `/api/memory/extract` | POST | withAuth; no rate limiter found | Gemini; chat text | Legacy `/app` memory | Retire with `/app` | Old memory stack outside the TIREH privacy rules |
-| `/api/stripe/create-checkout` | POST | verifyIdToken | Stripe checkout session | Billing | Keep, by billing decision | Authenticated; depends on whether paid plans continue |
-| `/api/stripe/create-portal` | POST | verifyIdToken | Stripe customer portal | Billing | Keep, by billing decision | Authenticated; depends on whether paid plans continue |
-| `/api/stripe/webhook` | POST | Stripe signature (`constructEvent`) | Stripe events, subscription records | Billing | Keep, by billing decision | Correctly signed; needed while Stripe billing exists |
-| `/api/stt` | POST | withAuth; API rate limiter | ElevenLabs Scribe (`scribe_v1`); recorded audio | Legacy `/app` | Retire with `/app` | Studio has its own STT path |
-| `/api/telegram/payments` | POST, PUT | None | Telegram Bot API (invoice links, `answerPreCheckoutQuery`); writes a subscription document | Legacy Telegram payments | Secure or retire, highest priority | POST creates invoice links for any caller-supplied user; PUT approves every `pre_checkout_query` and, on a `successful_payment` body, writes an active subscription for the `userId` in the payload |
-| `/api/telegram/webhook` | POST, GET | POST: webhook rate limiter and `verifyTelegramWebhookToken`, which skips verification when `TELEGRAM_WEBHOOK_SECRET` is unset; GET: none | Legacy bot updates, payments; logs full update bodies to the console | Legacy Telegram bot | Retire, by decision (section 7) | Fails open without the secret and logs message content; Studio bots use their own ingress |
-| `/api/tireh/telegram/[personaId]` | POST | Secret header; 503 when `TIREH_WEBHOOK_SECRET` is unset | Standalone TIREH runtime (Anthropic, or deprecated Gemini via `TIREH_LLM_PROVIDER=gemini`), ElevenLabs | Standalone TIREH | Retire after the decision; keep the code until then | Superseded by Studio; still the only route that reaches `GeminiLLM` |
-| `/api/translate` | POST | withAuth; API rate limiter | OpenAI chat completions (raw fetch), ElevenLabs TTS; text to translate | Legacy translator | Retire with `/app` | Not part of Studio |
-| `/api/translator/messages` | GET, POST, DELETE | Firebase ID token (`getAdminAuth().verifyIdToken`) | Firestore translator history | Legacy translator | Retire with `/app` | Not part of Studio |
-| `/api/tts` | POST | withAuth; API rate limiter | ElevenLabs TTS; text to speak | Legacy `/app` | Retire with `/app` | Studio has its own TTS path |
-| `/api/tts/stream` | POST | verifyIdToken | ElevenLabs streaming TTS | Legacy `/app` | Retire with `/app` | Studio has its own TTS path |
-| `/api/user/data` | GET, POST | verifyIdToken; v2 API rate limiter | Firestore chats, preferences and contacts (load and save) | Legacy `/app` | Keep while `/app` exists | Serves the user's own data, which rights requests (access, export) rely on |
-| `/api/user/subscription` | GET | verifyIdToken | Firestore subscription status | Legacy `/app` billing | Keep while `/app` exists | Read-only status for signed-in users |
-| `/api/user/voices` | GET, POST, DELETE, PATCH | verifyIdToken | Firestore cloned-voice records, default translator voice | Legacy `/app` | Keep while `/app` exists | DELETE serves deletion of a user's cloned-voice records |
-| `/api/v2/chats` | GET, POST | verifyIdToken | Firestore chats | Legacy `/app` | Retire with `/app` | Legacy chat storage |
-| `/api/v2/chats/[chatId]` | GET, PATCH, DELETE | verifyIdToken | Firestore chat | Legacy `/app` | Retire with `/app` | Legacy chat storage |
-| `/api/v2/chats/[chatId]/messages` | GET, POST | verifyIdToken | Firestore chat messages | Legacy `/app` | Retire with `/app` | Legacy chat storage |
-| `/api/v2/migrate` | POST, GET | verifyIdToken | Firestore migration of legacy chat data | Legacy `/app` | Retire with `/app` | One-time migration helper |
-| `/api/v2/sync` | POST, GET | verifyIdToken | Firestore sync | Legacy `/app` | Retire with `/app` | Legacy chat storage |
-| `/api/voices` | GET | None; voices rate limiter only | Proxies the server ElevenLabs key's voice list (cached one hour) | Legacy `/app` | Secure (require auth) or retire | Unauthenticated use of a server credential |
+| `/api/auth/telegram` | GET, POST | POST: Telegram `initData` HMAC (or Login Widget hash), 24-hour freshness, exchanged for a Firebase token. GET: none (login enabled flag, bot username) | Telegram bot token as HMAC key; Firebase Auth | Login page, `TelegramProvider` | keep | Keep while `/app` exists; retire with `/app`. |
+| `/api/chat` | POST | withAuth plus chat rate limit | Google Gemini, Anthropic Claude, OpenAI, DeepSeek (OpenAI SDK with a DeepSeek base URL); chat text | `ChatService` | retire | Retire with `/app`; if kept, add processor rows to PRIV-009. |
+| `/api/chat/stream` | POST | Same as `/api/chat` | Same as `/api/chat`, streamed | `stream-chat` | retire | Retire with `/app`. |
+| `/api/clone-voice` | POST | Firebase ID token plus tier check; voice-clone rate limiter | ElevenLabs `voices/add` with uploaded voice samples | Legacy `/app` voice settings | retire | PRIV-003/PRIV-025 exclude voice cloning in this release, and there is no subject-consent check. |
+| `/api/connections/broker` | POST | Broker authenticator (HMAC plus current Studio profile authority); 503 when unconfigured | Connections broker control plane | Studio connections | keep | Narrow, authenticated part of the Studio authority model. |
+| `/api/convai/session` | POST | withAuth; per-account rate limiter | ElevenLabs signed URL for env `ELEVENLABS_AGENT_ID` | `features/call/useCall` | retire | Retire with `/app`; Studio live calls use `/api/studio`. The unauthenticated `/api/convai` proxies were deleted in Step 0. |
+| `/api/features` | GET | ID token | Feature flags for the signed-in user | Legacy `/app` | keep | Keep with `/app`; read-only. |
+| `/api/guest-rights/[[...path]]` | GET, POST | Telegram `initData` via `VOXX_BOT_TOKEN`; middleware admits exact paths and methods only | Studio guest privacy-rights requests | Studio guest rights | keep | Serves data-subject requests from people without accounts. |
+| `/api/health` | GET | None | Firebase read, Redis and Stripe configuration checks; returns Firebase `error.message` strings, environment and version | Operations | secure | Return public status only; put details behind auth. |
+| `/api/memory/extract` | POST | withAuth | Google Gemini 2.0 Flash over conversation text | `memory/context`, `MemoryService` | retire | Retire with `/app`; if kept, add a processor row. Old memory stack outside the TIREH privacy rules. |
+| `/api/stripe/create-checkout` | POST | ID token | Stripe checkout session | `/app` billing | keep | Keep with `/app` billing. |
+| `/api/stripe/create-portal` | POST | ID token | Stripe customer portal | `/app` billing | keep | Keep with `/app` billing. |
+| `/api/stripe/webhook` | POST | Stripe signature via `constructEvent` | Stripe events; logs userId and tier only | Stripe | keep | Correctly signed; needed while Stripe billing exists. |
+| `/api/stt` | POST | withAuth plus rate limit | ElevenLabs Scribe; recorded audio | Translator page | secure | `console.log('[STT] ElevenLabs response:', result)` logs transcript text, and provider error details are returned to the client. Remove both, or retire with `/app` (translator page). Not fixed in S15. |
+| `/api/telegram/payments` | POST, PUT | **None** | Telegram Bot API (invoice links, `answerPreCheckoutQuery`); writes `users/{userId}/data/subscription` | Legacy Telegram payments | secure | **P0 follow-up, not fixed in S15.** PUT accepts a caller-supplied `successful_payment` body and writes an active subscription for the payload's `userId` (an entitlement-escalation path), and auto-approves every `pre_checkout_query`. POST creates invoice links for a caller-supplied `userId`. Secure immediately, or retire PUT because `/api/telegram/webhook` already handles payments with secret-token verification. |
+| `/api/telegram/webhook` | GET, POST | POST: secret token verified (`verifyTelegramWebhookToken`, which skips the check when `TELEGRAM_WEBHOOK_SECRET` is unset) plus rate limit. GET: none | Legacy bot updates and payments; logs the full update body (`JSON.stringify(body)`), which can contain message text and user data | Legacy Telegram bot | secure | Remove the content logs and fail closed without the secret. Not fixed in S15. |
+| `/api/tireh/telegram/[personaId]` | POST | `TIREH_WEBHOOK_SECRET` header; disabled (503) when unset | Standalone TIREH runtime: Anthropic (or the deprecated `GeminiLLM` via `TIREH_LLM_PROVIDER=gemini`), ElevenLabs | Persona bot webhooks | retire | The only production path to the deprecated `GeminiLLM`. Retire after confirming with `getWebhookInfo` that no persona bot webhook points at it. |
+| `/api/translate` | POST | withAuth | OpenAI `gpt-4o-mini` chat completions via raw fetch, plus ElevenLabs TTS; text to translate | Translator page | retire | Retire with `/app`. |
+| `/api/translator/messages` | GET, POST, DELETE | ID token | Firestore translator history | Translator page | retire | Retire with `/app`. |
+| `/api/tts` | POST | withAuth | ElevenLabs TTS; text to speak | Legacy `/app` | retire | Retire with `/app`. |
+| `/api/tts/stream` | POST | ID token | ElevenLabs streaming TTS | Legacy `/app` | retire | Retire with `/app`. |
+| `/api/user/data` | GET, POST | ID token | Firestore chats, preferences and contacts | Legacy `/app` | keep | Keep with `/app`; access and export rights rely on it. |
+| `/api/user/subscription` | GET | ID token | Firestore subscription status | Legacy `/app` billing | keep | Keep with `/app`. |
+| `/api/user/voices` | GET, POST, DELETE, PATCH | ID token | Firestore cloned-voice records, default translator voice | Legacy `/app` | keep | Keep with `/app`; DELETE serves deletion of cloned-voice records. |
+| `/api/v2/chats` | GET, POST | ID token plus rate limit | Firestore chats | Legacy `/app` | keep | Keep with `/app`. |
+| `/api/v2/chats/[chatId]` | GET, PATCH, DELETE | ID token plus rate limit | Firestore chat | Legacy `/app` | keep | Keep with `/app`. |
+| `/api/v2/chats/[chatId]/messages` | GET, POST | ID token plus rate limit | Firestore chat messages | Legacy `/app` | keep | Keep with `/app`. |
+| `/api/v2/migrate` | GET, POST | ID token | Firestore v1-to-v2 migration of chat data | Legacy `/app` | retire | Retire once the v1-to-v2 migration is confirmed complete. |
+| `/api/v2/sync` | GET, POST | ID token plus rate limit | Firestore sync | Legacy `/app` | keep | Keep with `/app`. |
+| `/api/voices` | GET | None; rate-limited | Proxies the server ElevenLabs key's voice list, cached one hour | Legacy `/app` | secure | Unauthenticated use of a server credential: require auth, or retire with `/app`. |
 
 ## Decisions needed
 
-Each of these is a product decision, "by decision, not by drift"
-(docs/AGENT_INTELLIGENCE_SOLUTION.md section 7):
-
-- **The legacy `/app` surface.** Retiring it removes most rows above, the remaining
-  Gemini and DeepSeek call sites, and the old memory stack. Rights-related routes
-  (`/api/user/data`, `/api/user/voices`) need a replacement or a final export before removal.
-- **Billing.** Whether Stripe and Telegram payments continue. If Telegram payments stay,
-  `/api/telegram/payments` must be secured first (Telegram secret header plus a caller check).
-- **The standalone TIREH runtime** (`/api/tireh/telegram/[personaId]`, `scripts/tireh-local.ts`).
-  Retiring it also allows deleting `GeminiLLM` and the `TIREH_LLM_PROVIDER` switch.
-- **The legacy Telegram webhook** (`/api/telegram/webhook`). Retire or secure; it fails open
-  without `TELEGRAM_WEBHOOK_SECRET` and logs update bodies.
+1. Retire the legacy `/app` surface? Retiring it removes most rows above, the remaining
+   Gemini and DeepSeek call sites and the old memory stack. `/api/user/data` and
+   `/api/user/voices` need a replacement or a final export before removal.
+2. Retire the standalone TIREH runtime (`/api/tireh/telegram/[personaId]`,
+   `src/lib/tireh/runtime.ts`, `scripts/tireh-local.ts`), and with it `GeminiLLM`?
+3. Owner and date for the P0 fix of `PUT /api/telegram/payments`.

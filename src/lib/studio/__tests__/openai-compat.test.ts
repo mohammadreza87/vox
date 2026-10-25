@@ -17,6 +17,8 @@ function fetchReturning(response: () => Response) {
   return vi.fn<typeof fetch>(async () => response());
 }
 const firstCall = (fetchFn: ReturnType<typeof fetchReturning>) => fetchFn.mock.calls[0] as unknown as Call;
+/** Explicit models, so no environment value can leak into the pinned requests. */
+const explicitMedia = (fetchFn: typeof fetch) => new OpenAIMedia('synthetic-key', fetchFn, 'gpt-image-1', 'gpt-4o-mini-transcribe', 'gpt-6-luna');
 
 beforeEach(() => {
   // Constructor defaults read these at construction time; start from the defaults.
@@ -61,6 +63,22 @@ describe('OpenAIMedia.generateAvatar', () => {
     await expect(new OpenAIMedia('k', fetchFn).generateAvatar('prompt')).rejects.toThrow('OpenAI image generation failed: synthetic quota message');
   });
 
+  it('pins the request with explicit models and no response_format key', async () => {
+    const fetchFn = fetchReturning(() => json({ data: [{ b64_json: b64 }] }));
+    await explicitMedia(fetchFn).generateAvatar('Synthetic prompt');
+    const [url, init] = firstCall(fetchFn);
+    expect(String(url)).toBe('https://api.openai.com/v1/images/generations');
+    expect(init.headers).toEqual({ Authorization: 'Bearer synthetic-key', 'Content-Type': 'application/json' });
+    const body = JSON.parse(String(init.body));
+    expect(body).toEqual({ model: 'gpt-image-1', prompt: 'Synthetic prompt', size: '1024x1024', n: 1, output_format: 'jpeg', quality: 'medium' });
+    expect(body).not.toHaveProperty('response_format');
+  });
+
+  it('rejects a 200 response that carries only a url', async () => {
+    const fetchFn = fetchReturning(() => json({ data: [{ url: 'https://x' }] }));
+    await expect(explicitMedia(fetchFn).generateAvatar('prompt')).rejects.toThrow(/OpenAI image generation failed/);
+  });
+
   it('throws when an ok response has no b64_json', async () => {
     const fetchFn = fetchReturning(() => json({ data: [{}] }));
     await expect(new OpenAIMedia('k', fetchFn).generateAvatar('prompt')).rejects.toThrow('OpenAI image generation failed: HTTP 200');
@@ -90,6 +108,32 @@ describe('OpenAIMedia.transcribe', () => {
     expect(form.get('model')).toBe('gpt-4o-mini-transcribe');
   });
 
+  it('pins the request with explicit models', async () => {
+    const fetchFn = fetchReturning(() => json({ text: ' ok ' }));
+    expect(await explicitMedia(fetchFn).transcribe(audio)).toBe('ok');
+    const [url, init] = firstCall(fetchFn);
+    expect(String(url)).toBe('https://api.openai.com/v1/audio/transcriptions');
+    expect(init.headers).toEqual({ Authorization: 'Bearer synthetic-key' });
+    expect((init.body as FormData).get('model')).toBe('gpt-4o-mini-transcribe');
+  });
+
+  it('respects the mime type and filename arguments', async () => {
+    const fetchFn = fetchReturning(() => json({ text: 'ok' }));
+    await explicitMedia(fetchFn).transcribe(audio, 'audio/mp4', 'voice.m4a');
+    const file = (firstCall(fetchFn)[1].body as FormData).get('file') as File;
+    expect(file.type).toBe('audio/mp4');
+    expect(file.name).toBe('voice.m4a');
+    expect(file.size).toBe(4);
+  });
+
+  it('a 400 error carries the provider message but never the audio content', async () => {
+    const canaryAudio = new TextEncoder().encode(`audio ${CANARY}`).buffer as ArrayBuffer;
+    const fetchFn = fetchReturning(() => json({ error: { message: 'bad audio' } }, 400));
+    const error = await explicitMedia(fetchFn).transcribe(canaryAudio).then(() => null, (reason: unknown) => reason as Error);
+    expect(error?.message).toBe('OpenAI transcription failed: bad audio');
+    expect(String(error?.message)).not.toContain(CANARY);
+  });
+
   it('uses OPENAI_STT_MODEL when set before construction', async () => {
     vi.stubEnv('OPENAI_STT_MODEL', 'gpt-stt-x');
     const fetchFn = fetchReturning(() => json({ text: 'ok' }));
@@ -114,12 +158,13 @@ describe('OpenAIMedia.decide', () => {
 
   it('posts {model, input, questions} without prompt_cache_options (base divergence from the seam)', async () => {
     const fetchFn = fetchReturning(() => json({ answers: [] }));
-    await new OpenAIMedia('k', fetchFn).decide('Synthetic chat lines', questions);
+    await explicitMedia(fetchFn).decide('Synthetic chat lines', questions);
     const [url, init] = firstCall(fetchFn);
     expect(String(url)).toBe('https://api.openai.com/v1/decisions');
     expect(init.method).toBe('POST');
-    expect(init.headers).toEqual({ Authorization: 'Bearer k', 'Content-Type': 'application/json' });
+    expect(init.headers).toEqual({ Authorization: 'Bearer synthetic-key', 'Content-Type': 'application/json' });
     expect(JSON.parse(String(init.body))).toEqual({ model: 'gpt-6-luna', input: 'Synthetic chat lines', questions });
+    expect(JSON.parse(String(init.body))).not.toHaveProperty('prompt_cache_options');
     expect(init.signal).toBeInstanceOf(AbortSignal);
   });
 

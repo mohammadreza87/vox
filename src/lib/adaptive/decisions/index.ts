@@ -5,8 +5,8 @@ import { z } from 'zod';
 import { MAX_IMAGE_URL_LENGTH, minimizeImageDataUrl } from '../prediction/image';
 
 /** Verified against OpenAI's Decisions guide/API reference on 2026-10-19.
- * Installed SDK 7.39.0 supplies decisions.create; a structural public post()
- * fallback preserves older injected clients. Both use the same guarded transport.
+ * openai >= 7.30.0 exposes client.decisions.create; the provider uses it when present
+ * and falls back to the public post('/decisions'). Both send the same POST /v1/decisions body.
  * https://developers.openai.com/api/docs/guides/decisions
  * https://developers.openai.com/api/reference/resources/decisions/methods/create
  */
@@ -76,7 +76,9 @@ const guardedProvider = Symbol('guarded-decision-transport');
 /** No credentials are read here. Inject a configured, permitted SDK client. No auto-retry. */
 export class OpenAIDecisionProvider implements DecisionProvider {
   readonly committedExportFence?: true;
-  constructor(private readonly client: Pick<OpenAI, 'post'>, guard?: typeof guardedProvider) { if (guard === guardedProvider) this.committedExportFence = true; }
+  /** `decisions` is optional and typed unknown so the class compiles against openai 6.9.1 and 7.x;
+   * it is used only when it has a callable `create`. */
+  constructor(private readonly client: Pick<OpenAI, 'post'> & { readonly decisions?: unknown }, guard?: typeof guardedProvider) { if (guard === guardedProvider) this.committedExportFence = true; }
   /** SDK public constructor transport hook; no provider request is made here. */
   static guarded(options: { apiKey: string; dangerouslyAllowBrowser?: boolean }, transportFetch: typeof fetch = globalThis.fetch): OpenAIDecisionProvider {
     return new OpenAIDecisionProvider(new OpenAI({ ...options, maxRetries: 0, logLevel: 'off', fetch: async (input, init) => {
@@ -86,27 +88,27 @@ export class OpenAIDecisionProvider implements DecisionProvider {
       return transportFetch(input, init);
     } }), guardedProvider);
   }
-  /** client.decisions.create when present (openai >= 7.30.0), else client.post('/decisions');
-   * maxRetries 0; timeout = options.timeoutMs clamped to [1, 5000] ms, default 500. */
+  /** Finite ms >= 1 => Math.min(5_000, Math.floor(ms)); otherwise 500 (the base timeout). */
+  private static timeout(ms: number | undefined): number {
+    return typeof ms === 'number' && Number.isFinite(ms) && ms >= 1 ? Math.min(5_000, Math.floor(ms)) : 500;
+  }
+  /** client.decisions.create when present (openai >= 7.30.0), else client.post('/decisions'); same body,
+   * maxRetries 0, timeout from options.timeoutMs (absent => 500 ms). `options.authorize` is rechecked
+   * by the guarded fetch at the transport hop. */
   evaluate(input: DecisionInput, signal: AbortSignal, authorizeNow?: () => boolean, options?: DecisionProviderOptions): Promise<unknown> {
     // Parse again at provider boundary: unknown fields cannot be serialized to OpenAI.
     const parsed = requestSchema.parse(input);
     const body = { model: DECISIONS_MODEL, input: parsed.input, questions: parsed.questions, prompt_cache_options: { mode: 'explicit' as const } };
-    const request = { signal, timeout: OpenAIDecisionProvider.requestTimeoutMs(options?.timeoutMs), maxRetries: 0 as const };
-    const create = OpenAIDecisionProvider.typedCreate(this.client);
-    // Both paths stay inside the store: the guarded fetch reads it at transport time.
-    return decisionAuthority.run({ signal, authorizeNow, authorize: options?.authorize }, () => create ? create(body, request) : this.client.post<unknown>('/decisions', { body, ...request }));
-  }
-  private static requestTimeoutMs(value: number | undefined): number {
-    if (typeof value !== 'number' || !Number.isFinite(value)) return 500;
-    return Math.min(5_000, Math.max(1, Math.floor(value)));
-  }
-  /** Structural detection, so this compiles on SDK 6.9.1 and fakes shaped { post } keep working. */
-  private static typedCreate(client: object): ((body: object, options: { signal: AbortSignal; timeout: number; maxRetries: 0 }) => Promise<unknown>) | null {
-    const resource: unknown = Reflect.get(client, 'decisions');
-    const create: unknown = resource && typeof resource === 'object' ? Reflect.get(resource, 'create') : undefined;
-    if (typeof create !== 'function') return null;
-    return (b, o) => Promise.resolve((create as (this: unknown, body: object, options: object) => PromiseLike<unknown>).call(resource, b, o));
+    const request = { signal, timeout: OpenAIDecisionProvider.timeout(options?.timeoutMs), maxRetries: 0 };
+    // Both transports run inside the store: the guarded fetch reads it at transport time.
+    return decisionAuthority.run({ signal, authorizeNow, authorize: options?.authorize }, () => {
+      const resource = this.client.decisions;
+      if (resource !== null && typeof resource === 'object' && typeof (resource as { create?: unknown }).create === 'function') {
+        // Called as a method on `resource` so `this` stays bound inside the SDK.
+        return Promise.resolve((resource as { create(b: typeof body, o: typeof request): PromiseLike<unknown> }).create(body, request));
+      }
+      return this.client.post<unknown>('/decisions', { body, ...request });
+    });
   }
 }
 
@@ -126,6 +128,11 @@ export interface DecisionContext {
   /** End-to-end deadline in ms (authorization, loading and provider work).
    * Defaults to 500; values are clamped to 1..5000. Non-finite or < 1 is invalid_input. */
   readonly deadlineMs?: number;
+}
+
+/** The deadline the service enforces and hands to the provider as options.timeoutMs. */
+export function effectiveDecisionDeadline(deadlineMs?: number): number {
+  return Math.min(MAX_DECISION_DEADLINE_MS, Math.max(1, deadlineMs ?? DEFAULT_DECISION_DEADLINE_MS));
 }
 
 function validateAnswers(raw: unknown, input: DecisionInput): { answers: DecisionAnswer[]; model: string; inputTokens?: number } | null {
@@ -182,7 +189,7 @@ export class DecisionService {
     let stopReason: 'timeout' | 'cancelled' = 'timeout';
     let timer: ReturnType<typeof setTimeout> | undefined;
     let cancel: (() => void) | undefined;
-    const deadline = Math.min(MAX_DECISION_DEADLINE_MS, Math.max(1, context.deadlineMs ?? DEFAULT_DECISION_DEADLINE_MS));
+    const deadline = effectiveDecisionDeadline(context.deadlineMs);
     const stop = new Promise<DecisionResult>(resolve => {
       cancel = () => { stopReason = 'cancelled'; controller.abort(); resolve(unknown('cancelled')); };
       context.signal?.addEventListener('abort', cancel, { once: true });

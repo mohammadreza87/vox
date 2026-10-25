@@ -17,8 +17,8 @@ arithmetic. All refusals currently fall back for the whole batch.
 The deadline covers authorization, loading and provider work. It defaults to
 500 ms; callers may pass `deadlineMs` from 1 to 5,000 ms (larger values are
 clamped). The service hands the effective deadline to the provider as
-`options.timeoutMs`, but `OpenAIDecisionProvider` keeps its 500 ms transport
-timeout until S15 honours the option. Requests are capped at 24 questions, 32
+`options.timeoutMs`, which `OpenAIDecisionProvider` uses as its request
+timeout. Requests are capped at 24 questions, 32
 choices, 12 levels, and up to 8 text parts plus 1 low-detail image part.
 Caller cancellation/revisions discard late work. Three provider
 errors/timeouts/rate limits open a local 30-second circuit. No retries occur.
@@ -32,15 +32,14 @@ Official guide and API reference checked 19 October 2026:
 - https://developers.openai.com/api/docs/guides/decisions
 - https://developers.openai.com/api/reference/resources/decisions/methods/create
 
-The installed `openai` SDK is 7.x (7.30.0 or later; the lockfile pins 7.39.0), which
-requires Node 22. `OpenAIDecisionProvider` calls the typed helper
-`client.decisions.create` when the client exposes it and otherwise falls back to the
-public `client.post('/decisions')`, both against the documented `POST /v1/decisions`.
-Both paths send the same body `{ model, input, questions, prompt_cache_options: { mode: 'explicit' } }`
-with `maxRetries: 0`, the caller's signal and a timeout of `options.timeoutMs`
-(clamped to 1–5000 ms; 500 ms by default). The request is re-validated with zod before
-either path. `openai-compat.test.ts` proves the URL, body and transport fence with a
-mocked fetch, without network or credentials.
+The installed SDK is openai 7.39.0 (>= 7.30.0, which requires Node 22).
+`OpenAIDecisionProvider` calls the SDK's `client.decisions.create` when present and
+otherwise the public `post('/decisions')`. Both send the identical documented
+`POST /v1/decisions` body with `maxRetries: 0`, and a provider timeout of
+`options.timeoutMs`, clamped to 1-5000 ms, defaulting to 500. Mocked-fetch tests
+(`decisions.test.ts`, `transport-fence.test.ts`, `openai-compat.test.ts`) verify the URL,
+body, signal, error names and the authority fence on both paths without network or
+credentials.
 `prompt_cache_options: { mode: 'explicit' }` with no breakpoints requests no prompt
 caching. This is not a provider retention or regional processing guarantee.
 
