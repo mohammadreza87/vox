@@ -1,226 +1,178 @@
-# S14: Reply-style procedural memory library (Thompson-sampling bandit, not wired)
+# S14: Reply-style procedural memory library (not wired)
 
-Base commit: `6d00b8066e5d8e8d444bb47d978aa571e20929df`. Plan: `docs/AGENT_INTELLIGENCE_SOLUTION.md`
-section 2.6 (bullet "Personalisation"), section 4.10 bullets 1 and 3, section 5 row 14 (gate: the DPIA
-covers behavioural adaptation, so the library ships unused).
+Thompson-sampling bandit, composite reward, file and Firestore stores.
+
+- Base commit: `6d00b8066e5d8e8d444bb47d978aa571e20929df`.
+- Plan: `docs/AGENT_INTELLIGENCE_SOLUTION.md` section 2.6 (Personalisation), section 4.10 and the Step 14 row of section 5. The gate for wiring is that the DPIA covers behavioural adaptation.
+- Merge order: S14 goes first. It touches only new files plus one appended README section.
 
 ## Goal
 
-A pure, content-free library at `src/lib/adaptive/personalization/procedural.ts`, with file, Firestore
-and in-memory stores in `procedural-store.ts`. It learns reply-style choices per
-(personId, personaId, space, route) with Beta-Bernoulli Thompson sampling over six low-risk
-dimensions: length, register, structure, modality, language and closingQuestion.
+Add a pure, unwired library at `src/lib/adaptive/personalization/procedural.ts`: a Beta-Bernoulli Thompson-sampling bandit over low-risk reply-style arms, keyed by (personId, personaId, space, route).
 
-- Precedence: explicit request this turn > explicit stored preference (resolvePreferences semantics)
-  > sampled arm > persona default.
-- Reward is a composite in which reply-rate alone never moves a posterior.
-- Posteriors decay with a 90-day half-life and can be viewed, reset and deleted on withdrawal.
-- A content-free offline-evaluation record `{context, armChosen, propensity, unchosenArms, reward}`
-  is written per decision.
-- Every choose/settle call is gated on `optional.personalization` through a call-time check callback.
-- Nothing is wired into the gateway, Studio or runtime, and no flag is added (the shared contract says
-  S14 has none). With the library unused, runtime behaviour is byte-identical to the base.
+- Precedence is explicitRequestThisTurn > explicitStoredPreference > sampledArm > personaDefault. Stored preferences follow `resolvePreferences` semantics: only a resolved source of `'explicit'` pins a dimension.
+- The reward is composite. A bare reply, or a non-corrective follow-up with no strong signal, never changes a posterior.
+- Pseudo-counts decay toward the Beta(1,1) prior with a 90-day half-life.
+- Reset and consent withdrawal delete the stored rows.
+- Each sampled choice writes a content-free offline-evaluation row `{context, armChosen, propensity, unchosenArms, reward}`.
+- There are in-memory, file and Firestore stores (`vox_reply_style` for posteriors, `vox_reply_style_eval` for evaluation rows).
+- Every read, sample or learn path passes the `optional.personalization` gate, which the caller supplies through an `authorize` callback.
+
+Nothing is wired: `gateway.ts`, `runtime.ts`, `studio/service.ts`, `prompt.ts` and `personalization/index.ts` are untouched. There is no flag, and production behaviour is byte-identical to the base.
 
 ## Files
 
 | Path | Change |
 |---|---|
-| `src/lib/adaptive/personalization/procedural.ts` | new: constants, types, strict zod schemas, pure helpers, `ReplyStylePolicy` |
+| `src/lib/adaptive/personalization/procedural.ts` | new: types, constants, strict zod row and signal schemas, the `ReplyStyleStore` interface, pure helpers and `ReplyStyleBandit` |
 | `src/lib/adaptive/personalization/procedural-store.ts` | new: `InMemoryReplyStyleStore`, `FileReplyStyleStore`, `FirestoreReplyStyleStore` |
-| `src/lib/adaptive/personalization/procedural.test.ts` | new: the only test file for S14 |
-| `src/lib/adaptive/decisions/README.md` | append one final section after "Personalization and improvement" |
+| `src/lib/adaptive/personalization/procedural.test.ts` | new vitest suite |
+| `src/lib/adaptive/decisions/README.md` | append one final section only |
 
 ### procedural.ts
 
-Imports only `node:crypto` (`createHash`, `randomUUID`), `zod`, and `import type { ResolvedPreference } from './index'`.
-Nothing from gateway, studio, runtime or persistence.
+Imports: `z` from `zod`; `createHash` and `randomUUID` from `node:crypto`; `import type { ResolvedPreference } from './index'`. No store implementation, gateway, studio, firebase or LLM import, no I/O except through the injected store, no logging.
 
-1. Constants: `REPLY_STYLE_POLICY_VERSION = 1`; `REPLY_STYLE_ARMS`; `REPLY_STYLE_DIMENSIONS`
-   (length, register, structure, modality, language, closingQuestion); `DEFAULT_HALF_LIFE_MS` = 90 days;
-   `FOLLOW_UP_WINDOW_MS` = 10 minutes; `REWARD_WINDOW_MS` = 24 hours; `EVAL_RETENTION_MS` = 90 days;
-   `DEFAULT_PROPENSITY_SAMPLES = 200` (allowed 16..2000); `MAX_EVIDENCE = 10_000` (cap on alpha+beta).
-2. Types as in "Interfaces".
-3. Strict zod schemas `replyStylePosteriorDocSchema` and `replyStyleEvalRecordSchema`. Every string is
-   an enum, a 32- or 64-hex hash, or an id matching `/^[A-Za-z0-9_.:-]{1,128}$/`. Every object is
-   strict; a row with an unknown key such as `text` fails to parse.
-4. Pure helpers:
-   - `personKeyOf(personId)` = sha256(`'vox-reply-style:v1:' + personId`) hex, first 32 chars.
-   - `posteriorDocId(key)` = sha256(`JSON.stringify(['reply-style', personKeyOf(personId), personaId, space, route])`) hex.
-   - `decayPosterior(p, now, halfLifeMs)`: `w = now <= p.updatedAt ? 1 : 2 ** (-(now - p.updatedAt) / halfLifeMs)`;
-     `alpha = 1 + (alpha - 1) * w`; `beta = 1 + (beta - 1) * w`; never below Beta(1,1); updatedAt unchanged.
-   - `updatePosterior(p, reward, now, halfLifeMs)`: decay, then `alpha += reward`, `beta += 1 - reward`,
-     `updatedAt = now`; if `alpha + beta > MAX_EVIDENCE` scale the excess over the prior so the sum equals `MAX_EVIDENCE`.
-   - `sampleBeta(alpha, beta, random)` via Gamma: Marsaglia-Tsang for shape >= 1, `Gamma(a+1) * U^(1/a)` for
-     shape < 1, Box-Muller normals using `1 - random()`. Throws `RangeError` when `random()` returns NaN or a
-     value outside [0,1).
-   - `mulberry32(seed)`: deterministic RNG for tests and offline replay.
-   - `resolveReplyStyle(input)`, `pinsFromResolvedPreferences(resolved, personaDefault)`,
-     `styleFromExplicitRequest(req)` ('brief' -> length brief; 'detailed' -> length detailed;
-     'step_by_step' -> structure steps; 'listening' and 'unspecified' -> {}), `compositeReward(signals, replyAt)`,
-     `detectCorrectionPhrase(text)` (pure; the text is never retained, logged or returned).
-5. `class ReplyStylePolicy` with `choose`, `settle`, `describe`, `reset`, `withdraw`. Defaults:
-   `random = Math.random`, `now = Date.now`, `newId = randomUUID`, all six dimensions, 90-day half-life,
-   200 propensity samples, 90-day eval retention. The constructor throws on an empty, duplicate or
-   unknown dimension, `halfLifeMs <= 0`, or `propensitySamples` outside 16..2000.
+**Arms** (canonical orders):
 
-#### Arm table
+- `DIMENSION_ORDER = ['length','register','structure','closingQuestion','modality','language']`.
+- `ARMS`: length `brief|balanced|detailed`; register `formal|informal`; structure `plain|steps`; closingQuestion `no|yes`; modality `text|voice-default`; language `fa|en|mixed`.
+- `DEFAULT_DIMENSIONS = ['length','register','structure','closingQuestion']`, the 4 lowest-risk dimensions. modality and language are opt-in through `options.dimensions`.
+- The constructor validates `options.dimensions`: 4 to 6 distinct members of `DIMENSION_ORDER`, otherwise `RangeError('reply_style_dimensions')`.
+- `DEFAULT_REPLY_STYLE = {length:'balanced', register:'informal', structure:'plain', closingQuestion:'no', modality:'text', language:'auto'}`. `'auto'` (mirror the user) is a valid style value but never an arm.
 
-- length: brief | balanced | detailed
-- register: formal | informal
-- structure: plain | steps
-- modality: text | voice_default
-- language: fa | en | mixed
-- closingQuestion: yes | no
+**Precedence** (pure `resolveReplyStyle`): for every dimension, the first available of explicitThisTurn (`explicit_turn`), stored (`explicit_stored`), sampled (`sampled`), personaDefault (`persona_default`), `DEFAULT_REPLY_STYLE` (`persona_default`).
 
-#### Precedence (per dimension; first match wins; `sources[d]` records the winner)
+- `styleFromPreferences(resolved)` uses only entries with `source === 'explicit'`: response_length → length; formatting plain → structure `plain`, structured → `steps`; language en → `en`, fa → `fa`, auto → nothing. `hypothesis`, `reset` and `default` never pin; after a reset the bandit may sample again.
+- `explicitRequestFromTurn(style?, format?)`, with plain string unions (no S09 import): brief → `{length:'brief'}`; detailed → `{length:'detailed'}`; step_by_step → `{structure:'steps'}`; listening → `{length:'brief', closingQuestion:'no'}`; format voice → modality `voice-default`; format text → modality `text`; unspecified or undefined → `{}`.
+- A pinned dimension (explicit_turn or explicit_stored) is never sampled, never logged as an arm choice and never updated by a reward.
 
-1. `explicitThisTurn[d]` -> `explicit_turn`
-2. a stored pin -> `explicit_stored` or `reset`
-3. a sampled arm -> `sampled`
-4. `personaDefault[d]` -> `persona_default`
+**The gate**
 
-#### Stored pin mapping from `ResolvedPreference[]`
+- `choose()` samples only when `chatKind === 'private'`, `guestAudience === false` and `await deps.authorize(scope) === true` (a throw counts as false). The group and guest checks run before authorize, so authorize is not called for them.
+- When the gate fails: no store read, no sampling, no evaluation row, and stored preferences are ignored (fail closed). Only explicitThisTurn and the persona default apply.
+- `settle()` re-runs authorize on the exposure's scope before any posterior write. If it fails: no posterior change, and the evaluation row is marked settled with reward null and rewardKinds `[]`.
+- `reset()` and `withdraw()` are never gated: deletion is always allowed.
+- `posteriors()` is the "Why this?" view. It is not gated by consent; the caller must pass an authenticated scope.
 
-The caller ran `resolvePreferences` with its own `authorize`; this module never re-implements eligibility.
+**Sampling**
 
-- source `explicit`: `response_length v` -> length v; `language 'en' | 'fa'` -> language v;
-  `language 'auto'` -> language pinned to `personaDefault.language` (source `explicit_stored`);
-  `formatting 'plain'` -> structure plain; `formatting 'structured'` -> structure steps.
-- source `reset`: the key's mapped dimension is pinned to `personaDefault[d]` with source `reset`
-  (resets outrank inferences, as in index.ts).
-- source `hypothesis` or `default`: no pin. Hypotheses never outrank the bandit or pin arms.
-- register, modality and closingQuestion have no stored key, so only `explicitThisTurn` pins them.
+- `sampleBeta(alpha, beta, rng)` uses Marsaglia–Tsang gamma variates with Box–Muller normals from the injected rng; shapes below 1 use the `u^(1/a)` boost.
+- For each enabled, non-pinned dimension in `DIMENSION_ORDER`: one draw per arm in `ARMS` order, argmax chosen (ties to the first arm); then `propensitySamples` (default 256) further rounds count wins per arm; `propensity[dim] = (wins[chosen] + 1) / (propensitySamples + K)`.
+- `jointPropensity` is the product over sampled dimensions. `seededRng(seed)` is mulberry32; the default rng is `Math.random`.
 
-#### choose(input)
+**Reward** (pure `computeReward(signals, exposureAt)`)
 
-Never throws; any internal or store error falls back to the non-sampled resolution with no decisionId and propensity 1.
+- Signals are validated with the strict `rewardSignalSchema` (no text field). Invalid entries are dropped.
+- follow_up counts only when `0 ≤ at − exposureAt ≤ FOLLOW_UP_WINDOW_MS` (10 min); every other kind only within `SETTLE_WINDOW_MS` (24 h).
+- Negatives: reaction `negative`, `explicit_correction`, or follow_up with `corrective: true`. Any negative → reward 0 (negative beats positive).
+- Strong positives, deduplicated by kind: reaction positive 1, explicit_thanks 1, share_offer_accepted 1, voice_reciprocated 0.5.
+- Strong sum 0 → reward null, reason `reply_only` when a non-corrective follow_up or a reply was present, `no_signal` otherwise.
+- Otherwise reward = `min(1, strong + (non-corrective follow_up ? 0.25 : 0))`.
+- `reply` signals are accepted and always ignored: reply-rate alone never updates.
+- Update per sampled dimension: decay first, then `alpha += reward`, `beta += 1 − reward`.
 
-a. Compute pins from `explicitThisTurn` and `storedPreferences`.
-b. Skip sampling (no store read, no RNG call, no record) when `audience !== 'private'`, `guestAudience` is true,
-   every configured dimension is pinned, or `await input.personalizationAllowed()` is not exactly true
-   (evaluated after pins, before any store access).
-c. Read the posterior doc (absent = all arms Beta(1,1)); decay every arm to now in memory only.
-d. For each unpinned configured dimension (REPLY_STYLE_DIMENSIONS order, arms in table order): one `sampleBeta`
-   draw per arm, argmax (ties go to the earlier arm); then `propensitySamples` further rounds of per-arm draws,
-   counting how often the chosen arm wins; `propensity = min(1, max(count / n, 1 / (n + 1)))`.
-e. Joint propensity = product of per-dimension propensities.
-f. Recheck `personalizationAllowed()`; if no longer true, return the non-sampled resolution and write nothing.
-g. Write a `ReplyStyleEvalRecord` through `store.appendDecision` (reward null; `expiresAt = at + evalRetentionMs`;
-   `unchosenArms` = the other arms of each sampled dimension in table order).
-h. Return `{ style, sources, decisionId, propensity }`.
+**Follow-up classification** (pure `classifyFollowUp(text)`): NFKC, Arabic ي→ی and ك→ک, trim; corrective wins over thanks; the text is never returned, stored or logged. Patterns `EN_CORRECTION`, `FA_CORRECTION`, `EN_THANKS`, `FA_THANKS` as in the module. The caller turns `corrective` into `{kind:'follow_up', corrective:true}` and `thanks` into `{kind:'explicit_thanks'}` plus `{kind:'follow_up', corrective:false}`.
 
-#### settle(input)
+**Decay**: `decayBeta(p, elapsedMs, halfLifeMs = HALF_LIFE_MS)` returns `{alpha: 1 + (alpha − 1)·f, beta: 1 + (beta − 1)·f}` with `f = 0.5^(max(0, elapsed)/halfLife)`. It is applied to every arm of a row at read time (choose, posteriors) and before each update in settle, using `row.updatedAt`; settle writes `updatedAt = now`.
 
-Returns a `SettleResult`, never throws.
+**Keys**: `subjectKey(personId)` = sha256(`'vox_reply_style:' + personId`) hex, first 32 characters; a raw personId is never stored. `posteriorId(scope, dim)` = sha256(`JSON.stringify(['v1', subject, personaId, space, route, dim])`) hex, first 40 characters. Evaluation row ids come from `deps.newId` (default `randomUUID`).
 
-1. Gate not true -> `{updated:false, reason:'personalization_off'}`, no store call.
-2. `reward = compositeReward(signals, replyAt = decision.at)`; null -> `no_signal`, the row is untouched and can be settled later.
-3. Otherwise `store.settle(decisionId, mutate)`: missing -> `unknown_decision`; already rewarded -> `already_settled`;
-   `now - decision.at > REWARD_WINDOW_MS` -> `expired`; else update (decay, then add the reward) only the chosen arm of
-   each dimension whose `sources[d] === 'sampled'`, set `reward`, `rewardSignals`, `settledAt = now`, return
-   `{updated:true, reward}`. The posterior doc is located from the row's personKey, personaId, space and route.
+**Schemas**: all zod `.strict()`. personaId matches `/^[A-Za-z0-9_:-]{1,128}$/`; arms are validated against `ARMS[dim]`; numbers finite; alpha and beta in [1, 1e6]; `unchosenArms[dim]` equals `ARMS[dim]` minus `armChosen[dim]` in ARMS order. Rows are parsed on every store write and read; an invalid row is skipped on read and throws on write.
 
-#### Composite reward
+**Bandit methods**
 
-- Negatives (any one -> 0): `explicitCorrection`, `correctionPhrase`, `reaction === 'negative'`,
-  a corrective follow-up with `0 <= followUp.at - replyAt <= FOLLOW_UP_WINDOW_MS`.
-- Positives (no negative, any one -> 1): `reaction === 'positive'`, a non-corrective follow-up within the window,
-  `shareOfferAccepted`, `voiceReciprocated`, `explicitThanks`.
-- Otherwise null. `replied`, a follow-up with `corrective: 'unknown'` and an out-of-window follow-up never produce a
-  non-null reward.
-
-#### Correction phrases
-
-Normalize: NFKC; Arabic `ي` -> `ی`, `ك` -> `ک`; remove ZWNJ (U+200C) and tatweel (U+0640); trim; lowercase. Then:
-
-- EN: `/^(no|nope)\b(?!\s+(problem|worries|need|rush|thanks|thank you)\b)/`, `/\b(try|say|do( it)?|explain( it)?) again\b/`,
-  `/^again[.!?]*$/`, `/\bnot what i (meant|asked|wanted)\b/`, `/\byou misunderstood\b/`, `/\bthat'?s (wrong|not right|incorrect)\b/`
-- FA: `/^نه(?=$|[\s،,.!؟?])(?!\s*(ممنون|مرسی|مشکلی|نیازی))/`, `/دوباره(?=$|[\s،,.!؟?])/`, `/منظورم\s*(این|اون|آن)\s*نبود/`,
-  `/اشتباه\s*(متوجه|فهمیدی|گفتی|است|ه)/`, `/درست\s*نیست/`
-
-Reply-rate invariant: no code path updates a posterior when `compositeReward` returns null.
+- `choose` never throws. On a store read error it returns the gate-failed result. When at least one dimension is sampled it awaits `store.recordExposure(row)` before returning; if that fails it returns the non-sampled result (explicit, stored, persona) without an exposureId.
+- `settle` is idempotent through `store.transact`. Outcomes: `unknown_exposure`, `already_settled`, `expired` (now > at + 24 h; marked settled with reward null), `not_allowed`, `no_update` (reward null), `updated`. Pinned dimensions are never touched.
+- `reset({personId, personaId, space})` deletes posteriors and evaluation rows for that subject, persona and space across all routes.
+- `withdraw({personId, space?})` deletes them for that subject across all personas, in that space or both.
+- `sweep(now)` deletes evaluation rows with `expiresAt ≤ now` (`expiresAt = at + EVAL_RETENTION_MS`, 90 days) and posterior rows idle longer than `POSTERIOR_IDLE_DELETE_MS` (365 days).
 
 ### procedural-store.ts
 
-Sync `node:fs`, `node:path`, `randomUUID`, type-only `Firestore`. Every read and write goes through the strict
-schemas; parse failures throw, so the store fails closed and `ReplyStylePolicy` turns that into a no-sampling fallback.
+Imports `import type { Firestore } from 'firebase-admin/firestore'`, node fs and path, and the schemas, types and constants from `./procedural`. No tireh, studio or persistence import.
 
-1. `InMemoryReplyStyleStore`: Maps of posterior docs and eval rows, `structuredClone` on every read, `settle`
-   serialised on a promise-chain mutex, mutate runs on a draft that commits only if mutate does not throw.
-2. `FileReplyStyleStore(path)`: one JSON file `{schemaVersion:1, posteriors, decisions}`; directory mode 0o700,
-   file mode 0o600; every mutation loads and validates under an in-process mutex, mutates a draft, writes
-   `${path}.${randomUUID()}.tmp` (O_CREAT|O_EXCL|O_NOFOLLOW, fsync) and renames over the file; reads use O_NOFOLLOW
-   and refuse a symlink or a file over 4_000_000 bytes; caps of 5_000 posterior docs (creating a new doc beyond it
-   throws `reply_style_capacity`) and 20_000 decisions (oldest `at` dropped first); a corrupt file throws on every
-   call and is never replaced; single-process only.
-3. `FirestoreReplyStyleStore(db, { posteriors = 'vox_reply_style', decisions = 'vox_reply_style_eval' })`:
-   posterior doc id `posteriorDocId`, fields `{personKey, personaId, space, route, json, updatedAt: Date}`;
-   eval doc id `record.id`, fields `{personKey, personaId, space, at: Date, expiresAt: Date (TTL), settled, json}`;
-   `appendDecision` in a transaction refusing an existing id; `settle` in one transaction reading both docs;
-   list queries by personKey (plus personaId, space) or `at` range, ordered by `at`, limit <= 1000; `deleteScope`
-   and `sweep(now)` delete in `db.batch()` chunks of 400 until a query returns empty. No other collections; the raw
-   personId is never written.
+1. `InMemoryReplyStyleStore`: maps of posterior and evaluation rows; `transact` serialised through a promise queue with structuredClone in and out; writes validated before commit; a throw from fn commits nothing.
+2. `FileReplyStyleStore(path)`: one JSON file `{version:1, posteriors, evals}`; parent directory 0o700, file 0o600; every operation takes a `${path}.lock` mkdir lock (500 × 10 ms, then `Error('reply_style_lock_busy')`), reloads, applies, writes `${path}.tmp`, fsyncs and renames. A bad version or envelope throws `Error('invalid_reply_style_store')`. At most `MAX_FILE_EVAL_ROWS = 20_000` evaluation rows: the oldest settled rows are dropped first, then the oldest unsettled. Single-host only.
+3. `FirestoreReplyStyleStore(db, collections = {posteriors:'vox_reply_style', evals:'vox_reply_style_eval'})`: document ids are the row ids, numbers stored as plain numbers. `transact` uses `db.runTransaction`, reading every requested ref before any `tx.set`. `deleteSubject` and `sweep` use equality or one range filter, delete in `.limit(400)` pages with `db.batch().delete().commit()` until a page is empty, are idempotent on retry and return counts. No `firestore.indexes.json` edit (S06 owns it).
 
-### README
+### decisions/README.md
 
-Append `## Reply-style procedural memory (library, not wired)` after "Personalization and improvement": the
-policy, precedence, composite reward, decay/describe/reset/withdraw (integrators must call withdraw on
-`optional.personalization` withdrawal, product pause and epoch bump), the call-time gate, the content-free eval rows
-with 90-day TTL on `expiresAt` (enable Firestore TTL at deploy), and that wiring waits on the DPIA and confirmation of
-`message_reaction` delivery to persona bots.
+Append `## Reply-style procedural memory (not wired)`, one paragraph: the bandit and its key, precedence, private non-guest sampling after the authorize callback, composite reward never reply-rate alone, 90-day half-life, reset and withdrawal deletion, content-free evaluation rows with 90-day retention in `vox_reply_style` / `vox_reply_style_eval`, not constructed by the Studio runtime or gateway, enabling gated by the DPIA (section 4.10, Step 14) and by confirming that `message_reaction` updates reach persona bots in private chats.
 
 ## Interfaces
 
-See the exported types in `procedural.ts`; they follow the contract verbatim: `ReplyStyleKey`, `ArmPosterior`,
-`ReplyStylePosteriorDoc`, `ReplySignalKind`, `ReplyOutcomeSignals`, `CompositeReward`, `ReplyStyleEvalRecord`,
-`ReplyStyleStore`, `PersonalizationCheck`, `ChooseReplyStyleInput`, `ReplyStyleChoice`, `SettleReplyStyleInput`,
-`SettleResult`, `PosteriorView`, `ReplyStylePolicyOptions`, `ReplyStylePolicy`, and the helper functions above.
+```ts
+export const DIMENSION_ORDER = ['length', 'register', 'structure', 'closingQuestion', 'modality', 'language'] as const;
+export type StyleDimension = typeof DIMENSION_ORDER[number];
+export type ArmOf<D extends StyleDimension> = typeof ARMS[D][number];
+export interface ReplyStyle { length; register; structure; closingQuestion; modality; language: 'auto' | ArmOf<'language'> }
+export type StyleSource = 'explicit_turn' | 'explicit_stored' | 'sampled' | 'persona_default';
+export type ReplyRoute = 'quick' | 'thoughtful' | 'web' | 'untriaged';
+export type StyleSpace = 'work' | 'personal';
+export const HALF_LIFE_MS = 90 * 86_400_000; FOLLOW_UP_WINDOW_MS = 10 * 60_000; SETTLE_WINDOW_MS = 24 * 3_600_000;
+export const EVAL_RETENTION_MS = 90 * 86_400_000; POSTERIOR_IDLE_DELETE_MS = 365 * 86_400_000;
+export const DEFAULT_PROPENSITY_SAMPLES = 256; POLICY_VERSION = 'ts-beta-v1';
+export const REWARD_WEIGHTS = { reaction: 1, explicit_thanks: 1, share_offer_accepted: 1, voice_reciprocated: 0.5, follow_up: 0.25 };
+export interface ReplyStyleScope { personId; personaId; space: StyleSpace; route: ReplyRoute }
+export type RewardSignal = reaction | follow_up | explicit_thanks | explicit_correction | share_offer_accepted | voice_reciprocated | reply;
+export interface RewardResult { reward: number | null; kinds: RewardKind[]; reason: 'negative' | 'positive' | 'reply_only' | 'no_signal' }
+export interface PosteriorRow { schemaVersion: 1; id; subject; personaId; space; route; dimension; arms: Record<string, BetaParams>; updatedAt }
+export interface ReplyStyleEvalRow { schemaVersion: 1; id; policyVersion; context: { subject; personaId; space; route; chatKind: 'private'; pinned };
+  armChosen; propensity; jointPropensity; unchosenArms; reward: number | null; rewardKinds; at; expiresAt; settledAt? }
+export interface ReplyStyleStore { readPosteriors; recordExposure; transact; listEval; deleteSubject; sweep }
+export class ReplyStyleBandit { choose; settle; posteriors; reset; withdraw; sweep }
+export function resolveReplyStyle, styleFromPreferences, explicitRequestFromTurn, classifyFollowUp, computeReward,
+  decayBeta, sampleBeta, seededRng, subjectKey, posteriorId;
+// procedural-store.ts
+export const MAX_FILE_EVAL_ROWS = 20_000;
+export class InMemoryReplyStyleStore; export class FileReplyStyleStore; export class FirestoreReplyStyleStore;
+```
+
+The module source is authoritative for exact signatures.
 
 ## Flags
 
-None. The only gate is `personalizationAllowed`, evaluated at call time before any store access and rechecked
-before the eval record is written. No existing module imports `procedural.ts`.
+None. The shared contract says S14 is not wired and has no flag, so `src/lib/tireh/flags.ts` is not created. Gating is in the API surface: the bandit samples, reads posteriors and learns only when the injected `authorize(scope)` resolves true, the chat is private and `guestAudience` is false. Nothing constructs `ReplyStyleBandit`, so production behaviour is byte-identical to the base.
 
-## Tests (`src/lib/adaptive/personalization/procedural.test.ts`)
+## Tests (`procedural.test.ts`)
 
-Math.random is spied to throw; every policy gets `random: mulberry32(seed)` and an injected clock.
-
-- precedence: explicit beats sampled (turn > stored > sampled > persona default; gate off -> persona default).
-- stored mapping through the real `resolvePreferences` (structured -> steps, plain -> plain, auto -> persona
-  language, reset -> persona value with source `reset`, hypothesis pins nothing).
-- pinned dimensions are not learned (no propensity/unchosen entry; posterior unchanged after settle).
-- withdrawal deletes posteriors in all three stores; stale decisions return `unknown_decision` and recreate nothing;
-  reset deletes only that persona and space across routes.
-- reply-rate alone never updates (200 settles with `{replied:true}` leave posteriors deep-equal).
-- composite reward table; EN/FA correction phrases; 90-day decay; propensity logging; deterministic sampling with an
-  injected RNG; gate and audience; fail-closed store errors; content-free canaries; file store (persistence, 0o600,
-  concurrent settles, corrupt file, sweep); Firestore fake (collection names, Date expiresAt, failed commit,
-  deleteScope looping past 400).
+- Precedence: explicit this turn beats stored, which beats sampled, which beats the persona default; pinned dimensions are absent from armChosen, propensity and unchosenArms and appear in `context.pinned`.
+- Stored preferences pin only through the real `resolvePreferences` explicit semantics.
+- `explicitRequestFromTurn` mapping table.
+- Withdrawal and reset delete posteriors and evaluation rows with exact counts; a later settle returns `unknown_exposure` and writes nothing (memory, file, firestore).
+- Reply-rate alone never changes a posterior, including a 200-case property loop.
+- Composite reward cases, windows, strict schema, dedup; only sampled dimensions update.
+- Settle idempotence (sequential and `Promise.all`), expiry and `not_allowed`.
+- Decay: 90-day half-life exact numbers, in settle and in `posteriors()`.
+- Propensity and offline-evaluation logging; propensities sum to 1; skewed posterior > 0.95.
+- Content-free rows: canary text and raw personId never appear in any store; `evalRowSchema` rejects a `text` key.
+- Deterministic sampling with `seededRng`; sampler mean sanity.
+- Gate cases with a spy store.
+- Dimensions option validation.
+- `classifyFollowUp` EN/FA table.
+- Store contract over memory, file and firestore, including file mode, reload, the eval-row cap and Firestore paging over more than 400 rows.
 
 ## Acceptance
 
-- Only the four paths above change versus the base; nothing imports `procedural.ts`.
-- Lib-scoped strict tsc exits 0; the new test file passes; no new failing files versus the sandbox baseline; eslint clean.
-- No store writes a raw personId or message text; reply-rate alone never updates a posterior; explicit preferences
-  always override sampled arms and pinned dimensions are never learned; withdraw/reset delete in all stores.
+- Only the four paths above (plus this spec) differ from the base; no import of the new modules outside them.
+- Lib-scoped strict typecheck exits 0; the focused suite passes without network, 127.0.0.1 or a `/tmp` literal.
+- `npx vitest run src/lib/tireh src/lib/adaptive/decisions` passes as at the base; the full suite adds no new failing files beyond the sandbox baseline.
+- eslint is clean on the new files.
+- Every row passes its strict schema and holds no free text, message content, raw personId or model output.
 
 ## Out of scope
 
-Wiring (gateway, composeReply, prompt, Studio, runtime, http, Experience screen); calling withdraw from persistence
-paths (Step 1 territory); rendering a style into prompt text (S03); route choice (S09); producing reward signals;
-changes to `personalization/index.ts`, explicit.ts, learning/*, persistence, the PreferenceRecord schema; flags,
-decision log, `vox_audit`; Firestore index/TTL/firebase.json changes; contextual features or pooling; package files.
+Any wiring (runtime, gateway, prompt, StudioDeps/GatewayDeps); ingesting Telegram `message_reaction`, share-offer and voice reciprocity events; a "Why this?" or Reset UI or HTTP route; hooking `withdraw()` into the adaptive consent-withdrawal path (Step 1 owns persistence and shared/service.ts); any change to personalization/index.ts, explicit.ts or learning/**; flags.ts; Step 1 territory; firestore.indexes.json, TTL policies, firebase.json, package files; S09's TriageV2 import; joint-arm bandits and an offline IPS/DR evaluator; Privacy.tsx.
 
 ## Risks
 
-- Deployment gate not met (DPIA, `message_reaction` delivery), so the library stays unwired.
-- The language arm is the riskiest dimension; integrators should configure dimensions without `language` until an
-  EN/FA eval exists.
-- Correction-phrase heuristics have false positives/negatives; combine with S09's `explicit_correction`.
-- Propensity is a 200-sample Monte Carlo estimate floored at 1/(n+1); joint propensity assumes independent
-  per-dimension draws (true by construction).
-- `personKey` is a pseudonym (unsalted sha256), so eval rows remain personal data, covered by withdraw/reset and a
-  90-day TTL.
-- `FileReplyStyleStore` serialises writers within one process only.
-- Firestore TTL on `vox_reply_style_eval.expiresAt` must be enabled at deploy time, or `sweep()` scheduled.
-- The persona id regex may reject unusual ids; choose then fails closed.
+- Follow-ups only add +0.25 alongside a strong positive; alone they yield reward null. This resolves the tension between "non-corrective follow-up" as a reward component and "reply-rate alone never updates".
+- The bandit is factored per dimension and shares one composite reward, so it ignores interactions and credits every sampled dimension equally.
+- Propensities are Monte-Carlo Laplace estimates, not exact Thompson probabilities; the sample count and `policyVersion` are logged.
+- The hashed subject is pseudonymous, not anonymous; rows are behavioural personal data. Hence deletion on reset and withdrawal, 90-day eval retention and the DPIA gate.
+- Firestore `deleteSubject` and `sweep` are paged, not atomic across pages; they are idempotent and must be retried by future wiring.
+- `classifyFollowUp` is heuristic ("no problem" counts as corrective); calibrate on S09 labelled examples before wiring.
+- Reaction delivery to persona bots in private chats is unconfirmed; learning may be slow without it.
+- Language and modality arms are disabled by default.
+- The file store is single-host and rewrites the whole file per operation.

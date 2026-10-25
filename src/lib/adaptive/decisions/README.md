@@ -111,25 +111,17 @@ approval callbacks must use evaluator/release credentials unavailable to the
 candidate author. Production credentials, artifact verification and worker
 isolation must be independently established before an improvement service runs.
 
-## Reply-style procedural memory (library, not wired)
+## Reply-style procedural memory (not wired)
 
-`personalization/procedural.ts` is a Beta-Bernoulli Thompson-sampling policy over six
-fixed, low-risk reply-style dimensions (length, register, structure, modality, language,
-closing question), keyed by a hashed person key, persona, space and route. Precedence is
-explicit request this turn > explicit stored preference (`resolvePreferences` output;
-resets pin the persona default; hypotheses never pin) > sampled arm > persona default.
-Pinned dimensions are never sampled or learned. The reward is composite: a positive
-reaction, a non-corrective follow-up within 10 minutes, an accepted share offer, a
-reciprocated voice note or explicit thanks give 1; any explicit correction, EN/FA
-correction phrase, negative reaction or corrective follow-up gives 0. Reply-rate alone
-never changes a posterior. Posteriors decay toward Beta(1,1) with a 90-day half-life,
-are visible through `describe()`, deleted by `reset()`, and deleted together with
-evaluation rows by `withdraw()`, which integrators must call on `optional.personalization`
-withdrawal, product pause and epoch bump. `choose()` and `settle()` take a call-time
-`personalizationAllowed` check and do nothing when it is false, in groups or for guest
-audiences. Offline-evaluation rows (`vox_reply_style_eval`, 90-day TTL on `expiresAt`)
-hold only enums, a pseudonymous person key, the chosen arms, the propensity, the unchosen
-arms and a 0/1 reward; they hold no message text. Firestore TTL on
-`vox_reply_style_eval.expiresAt` must be enabled at deploy time. Wiring is deferred until
-the DPIA covers behavioural adaptation and `message_reaction` delivery to persona bots is
-confirmed (docs/AGENT_INTELLIGENCE_SOLUTION.md sections 4.10 and 5, step 14).
+`personalization/procedural.ts` is a Beta-Bernoulli Thompson-sampling bandit over fixed, low-risk reply-style arms
+(length, register, structure and closing question by default; modality and language opt-in), one posterior per (person,
+persona, space, route) with the person stored only as a hashed subject key. Precedence is explicit request this turn >
+explicit stored preference (`resolvePreferences` source `explicit` only) > sampled arm > persona default; pinned
+dimensions are never sampled, logged or learned. It samples only in private, non-guest chats after the caller's
+`optional.personalization` authorize callback, and `settle()` re-checks it before any write. The composite reward
+(reactions, thanks, accepted share offers, reciprocated voice, corrections) never learns from reply-rate alone, and
+pseudo-counts decay with a 90-day half-life. `reset()` and `withdraw()` delete posteriors and evaluation rows.
+Evaluation rows (`{context, armChosen, propensity, unchosenArms, reward}`) are content-free with 90-day retention, in
+`vox_reply_style` / `vox_reply_style_eval`. It is NOT constructed by the Studio runtime or gateway: enabling it is gated
+by the DPIA covering behavioural adaptation (docs/AGENT_INTELLIGENCE_SOLUTION.md section 4.10, Step 14) and by
+confirming that `message_reaction` updates reach persona bots in private chats.

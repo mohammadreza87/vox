@@ -1,436 +1,513 @@
 /**
- * Stores for reply-style procedural memory (procedural.ts): in-memory, a single
- * JSON file for the single-process Mac profile, and Firestore. Every read and
- * write goes through the strict content-free schemas; a parse failure throws,
- * so the store fails closed and ReplyStylePolicy falls back to no sampling.
- * The raw personId is never written: rows carry only the hashed person key.
+ * Stores for the reply-style bandit (procedural.ts): in-memory, single-host
+ * JSON file, and Firestore ('vox_reply_style' posteriors, 'vox_reply_style_eval'
+ * offline-evaluation rows).
+ *
+ * Every row is parsed with its strict schema on write (an invalid row throws)
+ * and on read (an invalid row is skipped). Deletion by subject matches raw
+ * fields, so a malformed row of a withdrawn subject is still deleted. Rows are
+ * content-free by schema: no message text, model output or raw personId.
  */
-import { closeSync, constants, fstatSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from 'node:fs';
+import { mkdir, rmdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { randomUUID } from 'node:crypto';
-import type { Firestore, Query } from 'firebase-admin/firestore';
+import type { DocumentReference, Firestore, Query } from 'firebase-admin/firestore';
 import {
-  posteriorDocId, posteriorDocIdForPersonKey, REPLY_STYLE_ID_PATTERN, replyStyleEvalRecordSchema, replyStylePosteriorDocSchema,
-  type ReplySpace, type ReplyStyleEvalRecord, type ReplyStyleKey, type ReplyStylePosteriorDoc, type ReplyStyleStore,
+  POSTERIOR_IDLE_DELETE_MS,
+  evalRowSchema,
+  posteriorRowSchema,
+} from './procedural';
+import type {
+  PosteriorRow,
+  ReplyStyleDeleteFilter,
+  ReplyStyleEvalFilter,
+  ReplyStyleEvalRow,
+  ReplyStyleStore,
+  ReplyStyleTxRead,
+  ReplyStyleTxSnapshot,
+  ReplyStyleTxWrite,
 } from './procedural';
 
-export type { ReplyStyleStore } from './procedural';
+/** File store cap on evaluation rows; the oldest settled rows are dropped first. */
+export const MAX_FILE_EVAL_ROWS = 20_000;
+export const DEFAULT_REPLY_STYLE_COLLECTIONS = Object.freeze({ posteriors: 'vox_reply_style', evals: 'vox_reply_style_eval' });
+const DEFAULT_LIST_LIMIT = 1_000;
+const MAX_LIST_LIMIT = 10_000;
+const DELETE_PAGE = 400;
+const MAX_DELETE_ROUNDS = 10_000;
+const LOCK_ATTEMPTS = 500;
+const LOCK_WAIT_MS = 10;
+const COLLECTION_NAME = /^[A-Za-z0-9_-]{1,100}$/;
 
-export const MAX_REPLY_STYLE_FILE_BYTES = 4_000_000;
-export const MAX_REPLY_STYLE_POSTERIOR_DOCS = 5_000;
-export const MAX_REPLY_STYLE_DECISIONS = 20_000;
-const MAX_LIST = 1000;
-const DELETE_CHUNK = 400;
-const MAX_DELETE_ROUNDS = 1000;
-const MAX_JSON_FIELD_CHARS = 200_000;
-
-type ScopeFilter = { personKey: string; personaId?: string; space?: ReplySpace };
-type DecisionFilter = { since?: number; until?: number; limit?: number };
-type Mutate<T> = (decision: ReplyStyleEvalRecord | null, doc: ReplyStylePosteriorDoc | null) =>
-  { decision?: ReplyStyleEvalRecord; doc?: ReplyStylePosteriorDoc; result: T };
+type Counts = { posteriors: number; evals: number };
 
 // ---------------------------------------------------------------------------
-// Validation shared by all stores
+// Shared row helpers
 // ---------------------------------------------------------------------------
 
-function parsePosterior(value: unknown, expectedId?: string): ReplyStylePosteriorDoc {
-  const doc = replyStylePosteriorDocSchema.parse(value);
-  if (doc.id !== posteriorDocIdForPersonKey(doc.personKey, doc.personaId, doc.space, doc.route)
-      || (expectedId !== undefined && doc.id !== expectedId)) throw new Error('reply_style_doc_identity');
-  return doc;
+function parsePosterior(raw: unknown): PosteriorRow | null {
+  const parsed = posteriorRowSchema.safeParse(raw);
+  return parsed.success ? parsed.data : null;
 }
 
-function parseDecision(value: unknown, expectedId?: string): ReplyStyleEvalRecord {
-  const record = replyStyleEvalRecordSchema.parse(value);
-  if (expectedId !== undefined && record.id !== expectedId) throw new Error('reply_style_decision_identity');
-  return record;
+function parseEval(raw: unknown): ReplyStyleEvalRow | null {
+  const parsed = evalRowSchema.safeParse(raw);
+  return parsed.success ? parsed.data : null;
 }
 
-function parseJsonField(value: unknown): unknown {
-  if (typeof value !== 'string' || value.length > MAX_JSON_FIELD_CHARS) throw new Error('reply_style_row_invalid');
-  try { return JSON.parse(value); } catch { throw new Error('reply_style_row_invalid'); }
-}
-
-/** Decision ids double as Firestore document ids, so they must never contain a path separator. */
-const isDecisionId = (id: unknown): id is string =>
-  typeof id === 'string' && REPLY_STYLE_ID_PATTERN.test(id) && id !== '.' && id !== '..' && !/^__.*__$/.test(id);
-
-const inScope = (filter: ScopeFilter, personKey: string, personaId: string, space: ReplySpace) =>
-  personKey === filter.personKey && (filter.personaId === undefined || personaId === filter.personaId)
-  && (filter.space === undefined || space === filter.space);
-
-const listLimit = (limit: number | undefined) =>
-  limit === undefined || !Number.isFinite(limit) ? MAX_LIST : Math.max(1, Math.min(MAX_LIST, Math.floor(limit)));
-
-// ---------------------------------------------------------------------------
-// Map-backed state shared by the in-memory and file stores
-// ---------------------------------------------------------------------------
-
-interface State { posteriors: Map<string, ReplyStylePosteriorDoc>; decisions: Map<string, ReplyStyleEvalRecord> }
-
-const emptyState = (): State => ({ posteriors: new Map(), decisions: new Map() });
-
-function stateAppend(state: State, record: ReplyStyleEvalRecord): void {
-  const parsed = parseDecision(structuredClone(record));
-  if (!isDecisionId(parsed.id)) throw new Error('reply_style_bad_decision_id');
-  if (state.decisions.has(parsed.id)) throw new Error('reply_style_duplicate_decision');
-  state.decisions.set(parsed.id, parsed);
-  if (state.decisions.size > MAX_REPLY_STYLE_DECISIONS) {
-    const oldest = [...state.decisions.values()].sort((a, b) => a.at - b.at || a.id.localeCompare(b.id));
-    for (const row of oldest.slice(0, state.decisions.size - MAX_REPLY_STYLE_DECISIONS)) state.decisions.delete(row.id);
+function field(raw: unknown, ...path: string[]): unknown {
+  let value: unknown = raw;
+  for (const key of path) {
+    if (!value || typeof value !== 'object') return undefined;
+    value = (value as Record<string, unknown>)[key];
   }
+  return value;
 }
 
-function stateSettle<T>(state: State, decisionId: string, mutate: Mutate<T>, posteriorCap: number): T {
-  const stored = isDecisionId(decisionId) ? state.decisions.get(decisionId) : undefined;
-  const decision = stored ? structuredClone(stored) : null;
-  const docId = decision ? posteriorDocIdForPersonKey(decision.context.personKey, decision.context.personaId,
-    decision.context.space, decision.context.route) : null;
-  const existing = docId ? state.posteriors.get(docId) : undefined;
-  const out = mutate(decision, existing ? structuredClone(existing) : null);
-  const nextDecision = out.decision ? parseDecision(structuredClone(out.decision), decisionId) : undefined;
-  if (nextDecision && !decision) throw new Error('reply_style_decision_identity');
-  const nextDoc = out.doc ? parsePosterior(structuredClone(out.doc), docId ?? undefined) : undefined;
-  if (nextDoc && !docId) throw new Error('reply_style_doc_identity');
-  if (nextDoc && !existing && state.posteriors.size >= posteriorCap) throw new Error('reply_style_capacity');
-  if (nextDecision) state.decisions.set(decisionId, nextDecision);
-  if (nextDoc) state.posteriors.set(nextDoc.id, nextDoc);
-  return out.result;
+function matchesPosterior(raw: unknown, filter: ReplyStyleDeleteFilter): boolean {
+  return field(raw, 'subject') === filter.subject
+    && (filter.personaId === undefined || field(raw, 'personaId') === filter.personaId)
+    && (filter.space === undefined || field(raw, 'space') === filter.space);
 }
 
-function stateListPosteriors(state: State, filter: ScopeFilter): ReplyStylePosteriorDoc[] {
-  return [...state.posteriors.values()].filter(doc => inScope(filter, doc.personKey, doc.personaId, doc.space))
-    .sort((a, b) => a.id.localeCompare(b.id)).slice(0, MAX_LIST).map(doc => structuredClone(doc));
+function matchesEval(raw: unknown, filter: ReplyStyleDeleteFilter): boolean {
+  return field(raw, 'context', 'subject') === filter.subject
+    && (filter.personaId === undefined || field(raw, 'context', 'personaId') === filter.personaId)
+    && (filter.space === undefined || field(raw, 'context', 'space') === filter.space);
 }
 
-function stateListDecisions(state: State, filter: DecisionFilter): ReplyStyleEvalRecord[] {
-  return [...state.decisions.values()]
-    .filter(row => (filter.since === undefined || row.at >= filter.since) && (filter.until === undefined || row.at <= filter.until))
-    .sort((a, b) => a.at - b.at || a.id.localeCompare(b.id)).slice(0, listLimit(filter.limit)).map(row => structuredClone(row));
+function validDeleteFilter(filter: ReplyStyleDeleteFilter): ReplyStyleDeleteFilter {
+  if (!filter || typeof filter.subject !== 'string' || !/^[0-9a-f]{32}$/.test(filter.subject)) throw new RangeError('reply_style_delete_filter');
+  return filter;
 }
 
-function stateDeleteScope(state: State, filter: ScopeFilter): { posteriors: number; decisions: number } {
-  let posteriors = 0;
-  let decisions = 0;
-  for (const [id, doc] of state.posteriors) if (inScope(filter, doc.personKey, doc.personaId, doc.space)) { state.posteriors.delete(id); posteriors++; }
-  for (const [id, row] of state.decisions) if (inScope(filter, row.context.personKey, row.context.personaId, row.context.space)) { state.decisions.delete(id); decisions++; }
-  return { posteriors, decisions };
+function listLimit(limit: number | undefined): number {
+  if (limit === undefined) return DEFAULT_LIST_LIMIT;
+  if (!Number.isInteger(limit) || limit < 1) throw new RangeError('reply_style_list_limit');
+  return Math.min(limit, MAX_LIST_LIMIT);
 }
 
-function stateSweep(state: State, now: number): number {
-  let removed = 0;
-  for (const [id, row] of state.decisions) if (row.expiresAt <= now) { state.decisions.delete(id); removed++; }
-  return removed;
+function selectEval(rows: Iterable<ReplyStyleEvalRow>, filter: ReplyStyleEvalFilter = {}): ReplyStyleEvalRow[] {
+  const limit = listLimit(filter.limit);
+  return [...rows]
+    .filter((row) => (filter.personaId === undefined || row.context.personaId === filter.personaId)
+      && (filter.since === undefined || row.at >= filter.since)
+      && (filter.until === undefined || row.at <= filter.until))
+    .sort((a, b) => a.at - b.at || a.id.localeCompare(b.id))
+    .slice(0, limit);
 }
 
-/** Promise-chain mutex: one task at a time, a failure never blocks later tasks. */
-class Serial {
-  private queue: Promise<unknown> = Promise.resolve();
-  run<T>(task: () => T | Promise<T>): Promise<T> {
-    const next = this.queue.then(task);
-    this.queue = next.then(() => undefined, () => undefined);
-    return next;
+/**
+ * Keeps at most max evaluation rows: drops the oldest settled rows first,
+ * then the oldest unsettled ones. Returns rows in (at, id) order.
+ */
+export function capEvalRows(rows: readonly ReplyStyleEvalRow[], max: number = MAX_FILE_EVAL_ROWS): ReplyStyleEvalRow[] {
+  const ordered = [...rows].sort((a, b) => a.at - b.at || a.id.localeCompare(b.id));
+  let excess = ordered.length - max;
+  if (excess <= 0) return ordered;
+  const drop = new Set<string>();
+  for (const row of ordered) {
+    if (excess === 0) break;
+    if (row.settledAt !== undefined) { drop.add(row.id); excess--; }
   }
+  for (const row of ordered) {
+    if (excess === 0) break;
+    if (!drop.has(row.id)) { drop.add(row.id); excess--; }
+  }
+  return ordered.filter((row) => !drop.has(row.id));
+}
+
+// ---------------------------------------------------------------------------
+// State shared by the memory and file stores (raw rows, parsed on read)
+// ---------------------------------------------------------------------------
+
+interface State { posteriors: Map<string, unknown>; evals: Map<string, unknown>; dirty: boolean }
+
+const emptyState = (): State => ({ posteriors: new Map(), evals: new Map(), dirty: false });
+
+function readPosteriorsFrom(state: State, ids: readonly string[]): PosteriorRow[] {
+  const out: PosteriorRow[] = [];
+  for (const id of new Set(ids)) {
+    const row = parsePosterior(state.posteriors.get(id));
+    if (row && row.id === id) out.push(structuredClone(row));
+  }
+  return out;
+}
+
+function recordExposureIn(state: State, row: ReplyStyleEvalRow): void {
+  const parsed = evalRowSchema.parse(structuredClone(row));
+  if (state.evals.has(parsed.id)) throw new Error('reply_style_duplicate_exposure');
+  state.evals.set(parsed.id, parsed);
+  state.dirty = true;
+}
+
+function transactIn<T>(state: State, read: ReplyStyleTxRead,
+  fn: (snapshot: ReplyStyleTxSnapshot) => ReplyStyleTxWrite<T>): T {
+  const exposures = new Map<string, ReplyStyleEvalRow>();
+  for (const id of new Set(read.exposureIds)) {
+    const row = parseEval(state.evals.get(id));
+    if (row && row.id === id) exposures.set(id, structuredClone(row));
+  }
+  const posteriors = new Map<string, PosteriorRow>();
+  for (const row of readPosteriorsFrom(state, read.posteriorIds)) posteriors.set(row.id, row);
+  const out = fn({ exposures, posteriors });
+  // Validate every write before applying any: a throw commits nothing.
+  const evalWrites = (out.exposures ?? []).map((row) => evalRowSchema.parse(structuredClone(row)));
+  const posteriorWrites = (out.posteriors ?? []).map((row) => posteriorRowSchema.parse(structuredClone(row)));
+  for (const row of evalWrites) state.evals.set(row.id, row);
+  for (const row of posteriorWrites) state.posteriors.set(row.id, row);
+  if (evalWrites.length + posteriorWrites.length > 0) state.dirty = true;
+  return structuredClone(out.result);
+}
+
+function listEvalFrom(state: State, filter?: ReplyStyleEvalFilter): ReplyStyleEvalRow[] {
+  const rows: ReplyStyleEvalRow[] = [];
+  for (const raw of state.evals.values()) {
+    const row = parseEval(raw);
+    if (row) rows.push(structuredClone(row));
+  }
+  return selectEval(rows, filter);
+}
+
+function deleteSubjectIn(state: State, filter: ReplyStyleDeleteFilter): Counts {
+  const counts: Counts = { posteriors: 0, evals: 0 };
+  for (const [id, raw] of state.posteriors) if (matchesPosterior(raw, filter)) { state.posteriors.delete(id); counts.posteriors++; }
+  for (const [id, raw] of state.evals) if (matchesEval(raw, filter)) { state.evals.delete(id); counts.evals++; }
+  if (counts.posteriors + counts.evals > 0) state.dirty = true;
+  return counts;
+}
+
+function sweepIn(state: State, now: number): Counts {
+  const counts: Counts = { posteriors: 0, evals: 0 };
+  const idleCutoff = now - POSTERIOR_IDLE_DELETE_MS;
+  for (const [id, raw] of state.posteriors) {
+    const updatedAt = field(raw, 'updatedAt');
+    if (typeof updatedAt === 'number' && updatedAt <= idleCutoff) { state.posteriors.delete(id); counts.posteriors++; }
+  }
+  for (const [id, raw] of state.evals) {
+    const expiresAt = field(raw, 'expiresAt');
+    if (typeof expiresAt === 'number' && expiresAt <= now) { state.evals.delete(id); counts.evals++; }
+  }
+  if (counts.posteriors + counts.evals > 0) state.dirty = true;
+  return counts;
+}
+
+function validNow(now: number): number {
+  if (typeof now !== 'number' || !Number.isFinite(now)) throw new RangeError('reply_style_now');
+  return now;
 }
 
 // ---------------------------------------------------------------------------
 // In-memory store
 // ---------------------------------------------------------------------------
 
+/** Process-local store for tests and single-process development. */
 export class InMemoryReplyStyleStore implements ReplyStyleStore {
-  private state = emptyState();
-  private readonly serial = new Serial();
+  private readonly state = emptyState();
+  private queue: Promise<unknown> = Promise.resolve();
 
-  async get(key: ReplyStyleKey): Promise<ReplyStylePosteriorDoc | null> {
-    const doc = this.state.posteriors.get(posteriorDocId(key));
-    return doc ? structuredClone(doc) : null;
+  /** seed: raw rows keyed by their id, validated only on read (fixtures and invalid-row tests). */
+  constructor(seed?: { posteriors?: readonly unknown[]; evals?: readonly unknown[] }) {
+    for (const raw of seed?.posteriors ?? []) {
+      const id = field(raw, 'id');
+      if (typeof id === 'string') this.state.posteriors.set(id, structuredClone(raw));
+    }
+    for (const raw of seed?.evals ?? []) {
+      const id = field(raw, 'id');
+      if (typeof id === 'string') this.state.evals.set(id, structuredClone(raw));
+    }
   }
 
-  appendDecision(record: ReplyStyleEvalRecord): Promise<void> {
-    return this.serial.run(() => this.transact(state => stateAppend(state, record)));
+  readPosteriors(ids: readonly string[]): Promise<PosteriorRow[]> {
+    return this.run(() => readPosteriorsFrom(this.state, [...ids]));
   }
 
-  settle<T>(decisionId: string, mutate: Mutate<T>): Promise<T> {
-    return this.serial.run(() => this.transact(state => stateSettle(state, decisionId, mutate, MAX_REPLY_STYLE_POSTERIOR_DOCS)));
+  recordExposure(row: ReplyStyleEvalRow): Promise<void> {
+    return this.run(() => recordExposureIn(this.state, row));
   }
 
-  async listPosteriors(filter: ScopeFilter): Promise<ReplyStylePosteriorDoc[]> {
-    return stateListPosteriors(this.state, filter);
+  transact<T>(read: ReplyStyleTxRead, fn: (snapshot: ReplyStyleTxSnapshot) => ReplyStyleTxWrite<T>): Promise<T> {
+    return this.run(() => transactIn(this.state, read, fn));
   }
 
-  async listDecisions(filter: DecisionFilter): Promise<ReplyStyleEvalRecord[]> {
-    return stateListDecisions(this.state, filter);
+  listEval(filter?: ReplyStyleEvalFilter): Promise<ReplyStyleEvalRow[]> {
+    return this.run(() => listEvalFrom(this.state, filter));
   }
 
-  deleteScope(filter: ScopeFilter): Promise<{ posteriors: number; decisions: number }> {
-    return this.serial.run(() => stateDeleteScope(this.state, filter));
+  deleteSubject(filter: ReplyStyleDeleteFilter): Promise<Counts> {
+    return this.run(() => deleteSubjectIn(this.state, validDeleteFilter(filter)));
   }
 
-  sweep(now: number): Promise<number> {
-    return this.serial.run(() => stateSweep(this.state, now));
+  sweep(now: number): Promise<Counts> {
+    return this.run(() => sweepIn(this.state, validNow(now)));
   }
 
-  /** Runs on a draft; the draft replaces the state only when the task does not throw. */
-  private transact<T>(task: (draft: State) => T): T {
-    const draft: State = { posteriors: new Map(this.state.posteriors), decisions: new Map(this.state.decisions) };
-    const result = task(draft);
-    this.state = draft;
-    return result;
+  /** Raw copy of every stored row, for content-free assertions in tests. */
+  dump(): { posteriors: unknown[]; evals: unknown[] } {
+    return structuredClone({ posteriors: [...this.state.posteriors.values()], evals: [...this.state.evals.values()] });
+  }
+
+  private run<T>(operation: () => T): Promise<T> {
+    const task = this.queue.then(operation);
+    this.queue = task.then(() => undefined, () => undefined);
+    return task;
   }
 }
 
 // ---------------------------------------------------------------------------
-// File store (single process only)
+// File store (single host)
 // ---------------------------------------------------------------------------
 
-interface FileShape { schemaVersion: 1; posteriors: ReplyStylePosteriorDoc[]; decisions: ReplyStyleEvalRecord[] }
+interface FileShape { version: 1; posteriors: unknown[]; evals: unknown[] }
 
 /**
- * One JSON file, 0600 in a 0700 directory, replaced atomically on every
- * mutation. Writers are serialised within this process only. A corrupt or
- * invalid file makes every call throw and is never silently replaced.
+ * One JSON file `{version:1, posteriors, evals}`, 0600 in a 0700 directory.
+ * Every operation takes a `${path}.lock` mkdir lock, reloads from disk,
+ * applies the change and replaces the file through an fsynced temp file. The
+ * lock coordinates processes on one host only; use Firestore for multiple
+ * instances. A bad version or envelope throws 'invalid_reply_style_store' and
+ * the file is never silently replaced.
  */
 export class FileReplyStyleStore implements ReplyStyleStore {
-  private readonly serial = new Serial();
-
   constructor(private readonly path: string) {
-    if (typeof path !== 'string' || path.length === 0) throw new Error('reply_style_bad_path');
+    if (typeof path !== 'string' || path.length === 0) throw new RangeError('reply_style_store_path');
   }
 
-  get(key: ReplyStyleKey): Promise<ReplyStylePosteriorDoc | null> {
-    return this.serial.run(() => this.load().posteriors.get(posteriorDocId(key)) ?? null);
+  readPosteriors(ids: readonly string[]): Promise<PosteriorRow[]> {
+    return this.withState((state) => readPosteriorsFrom(state, [...ids]));
   }
 
-  appendDecision(record: ReplyStyleEvalRecord): Promise<void> {
-    return this.serial.run(() => { const state = this.load(); stateAppend(state, record); this.write(state); });
+  recordExposure(row: ReplyStyleEvalRow): Promise<void> {
+    return this.withState((state) => recordExposureIn(state, row));
   }
 
-  settle<T>(decisionId: string, mutate: Mutate<T>): Promise<T> {
-    return this.serial.run(() => {
+  transact<T>(read: ReplyStyleTxRead, fn: (snapshot: ReplyStyleTxSnapshot) => ReplyStyleTxWrite<T>): Promise<T> {
+    return this.withState((state) => transactIn(state, read, fn));
+  }
+
+  listEval(filter?: ReplyStyleEvalFilter): Promise<ReplyStyleEvalRow[]> {
+    return this.withState((state) => listEvalFrom(state, filter));
+  }
+
+  deleteSubject(filter: ReplyStyleDeleteFilter): Promise<Counts> {
+    return this.withState((state) => deleteSubjectIn(state, validDeleteFilter(filter)));
+  }
+
+  sweep(now: number): Promise<Counts> {
+    return this.withState((state) => sweepIn(state, validNow(now)));
+  }
+
+  private async withState<T>(operation: (state: State) => T): Promise<T> {
+    mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 });
+    const lock = `${this.path}.lock`;
+    let acquired = false;
+    for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt++) {
+      try {
+        await mkdir(lock);
+        acquired = true;
+        break;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        await new Promise((resolve) => setTimeout(resolve, LOCK_WAIT_MS));
+      }
+    }
+    if (!acquired) throw new Error('reply_style_lock_busy');
+    try {
       const state = this.load();
-      const before = { posteriors: new Map(state.posteriors), decisions: new Map(state.decisions) };
-      const result = stateSettle(state, decisionId, mutate, MAX_REPLY_STYLE_POSTERIOR_DOCS);
-      if (changed(before, state)) this.write(state);
+      const result = operation(state);
+      if (state.dirty) this.write(state);
       return result;
-    });
-  }
-
-  listPosteriors(filter: ScopeFilter): Promise<ReplyStylePosteriorDoc[]> {
-    return this.serial.run(() => stateListPosteriors(this.load(), filter));
-  }
-
-  listDecisions(filter: DecisionFilter): Promise<ReplyStyleEvalRecord[]> {
-    return this.serial.run(() => stateListDecisions(this.load(), filter));
-  }
-
-  deleteScope(filter: ScopeFilter): Promise<{ posteriors: number; decisions: number }> {
-    return this.serial.run(() => {
-      const state = this.load();
-      const counts = stateDeleteScope(state, filter);
-      if (counts.posteriors + counts.decisions > 0) this.write(state);
-      return counts;
-    });
-  }
-
-  sweep(now: number): Promise<number> {
-    return this.serial.run(() => {
-      const state = this.load();
-      const removed = stateSweep(state, now);
-      if (removed > 0) this.write(state);
-      return removed;
-    });
+    } finally {
+      await rmdir(lock);
+    }
   }
 
   private load(): State {
-    let fd: number;
-    try {
-      fd = openSync(this.path, constants.O_RDONLY | constants.O_NOFOLLOW);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return emptyState();
-      throw new Error('reply_style_file_unreadable');
-    }
     let text: string;
     try {
-      const stat = fstatSync(fd);
-      if (!stat.isFile() || stat.size > MAX_REPLY_STYLE_FILE_BYTES) throw new Error('reply_style_file_refused');
-      text = readFileSync(fd, 'utf8');
-    } finally {
-      closeSync(fd);
+      text = readFileSync(this.path, 'utf8');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return emptyState();
+      throw error;
     }
-    if (Buffer.byteLength(text, 'utf8') > MAX_REPLY_STYLE_FILE_BYTES) throw new Error('reply_style_file_refused');
     let raw: unknown;
-    try { raw = JSON.parse(text); } catch { throw new Error('reply_style_file_corrupt'); }
+    try { raw = JSON.parse(text); } catch { throw new Error('invalid_reply_style_store'); }
     const shape = raw as Partial<FileShape> | null;
-    if (!shape || typeof shape !== 'object' || Array.isArray(shape) || shape.schemaVersion !== 1
-        || !Array.isArray(shape.posteriors) || !Array.isArray(shape.decisions)
-        || Object.keys(shape).some(key => key !== 'schemaVersion' && key !== 'posteriors' && key !== 'decisions')
-        || shape.posteriors.length > MAX_REPLY_STYLE_POSTERIOR_DOCS || shape.decisions.length > MAX_REPLY_STYLE_DECISIONS) {
-      throw new Error('reply_style_file_corrupt');
+    if (!shape || typeof shape !== 'object' || Array.isArray(shape) || shape.version !== 1
+        || !Array.isArray(shape.posteriors) || !Array.isArray(shape.evals)
+        || Object.keys(shape).some((key) => key !== 'version' && key !== 'posteriors' && key !== 'evals')) {
+      throw new Error('invalid_reply_style_store');
     }
     const state = emptyState();
-    try {
-      for (const value of shape.posteriors) {
-        const doc = parsePosterior(value);
-        if (state.posteriors.has(doc.id)) throw new Error('duplicate');
-        state.posteriors.set(doc.id, doc);
+    for (const [rows, target] of [[shape.posteriors, state.posteriors], [shape.evals, state.evals]] as const) {
+      for (const row of rows) {
+        const id = field(row, 'id');
+        if (typeof id !== 'string' || target.has(id)) throw new Error('invalid_reply_style_store');
+        target.set(id, row);
       }
-      for (const value of shape.decisions) {
-        const row = parseDecision(value);
-        if (!isDecisionId(row.id) || state.decisions.has(row.id)) throw new Error('duplicate');
-        state.decisions.set(row.id, row);
-      }
-    } catch {
-      throw new Error('reply_style_file_corrupt');
     }
     return state;
   }
 
   private write(state: State): void {
-    const decisions = [...state.decisions.values()].sort((a, b) => a.at - b.at || a.id.localeCompare(b.id));
-    const posteriors = [...state.posteriors.values()].sort((a, b) => a.id.localeCompare(b.id));
-    let json = JSON.stringify({ schemaVersion: 1, posteriors, decisions } satisfies FileShape);
-    // Keep the file readable under the read limit: drop the oldest evaluation rows first.
-    while (Buffer.byteLength(json, 'utf8') > MAX_REPLY_STYLE_FILE_BYTES && decisions.length > 0) {
-      decisions.splice(0, Math.max(1, Math.ceil(decisions.length / 10)));
-      json = JSON.stringify({ schemaVersion: 1, posteriors, decisions } satisfies FileShape);
+    const evals = [...state.evals.values()];
+    let keptEvals: unknown[] = evals;
+    if (evals.length > MAX_FILE_EVAL_ROWS) {
+      // Invalid rows are dropped first; capEvalRows then drops the oldest settled, then the oldest unsettled.
+      const valid = evals.map(parseEval).filter((row): row is ReplyStyleEvalRow => row !== null);
+      const invalid = evals.filter((row) => parseEval(row) === null);
+      const capped = capEvalRows(valid, MAX_FILE_EVAL_ROWS);
+      const room = MAX_FILE_EVAL_ROWS - capped.length;
+      keptEvals = [...(room > 0 ? invalid.slice(Math.max(0, invalid.length - room)) : []), ...capped];
     }
-    if (Buffer.byteLength(json, 'utf8') > MAX_REPLY_STYLE_FILE_BYTES) throw new Error('reply_style_capacity');
+    const body: FileShape = { version: 1, posteriors: [...state.posteriors.values()], evals: keptEvals };
+    const json = JSON.stringify(body);
     mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 });
-    const tmp = `${this.path}.${randomUUID()}.tmp`;
-    const fd = openSync(tmp, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
+    const tmp = `${this.path}.tmp`;
+    const fd = openSync(tmp, 'w', 0o600);
     try {
-      try {
-        writeFileSync(fd, json, 'utf8');
-        fsyncSync(fd);
-      } finally {
-        closeSync(fd);
-      }
-      renameSync(tmp, this.path);
-    } catch (error) {
-      try { unlinkSync(tmp); } catch { /* already gone */ }
-      throw error;
+      writeSync(fd, json);
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
     }
+    chmodSync(tmp, 0o600);
+    renameSync(tmp, this.path);
   }
-}
-
-function changed(before: State, after: State): boolean {
-  if (before.posteriors.size !== after.posteriors.size || before.decisions.size !== after.decisions.size) return true;
-  for (const [id, doc] of after.posteriors) if (before.posteriors.get(id) !== doc) return true;
-  for (const [id, row] of after.decisions) if (before.decisions.get(id) !== row) return true;
-  return false;
 }
 
 // ---------------------------------------------------------------------------
 // Firestore store
 // ---------------------------------------------------------------------------
 
+/** Firestore rejects undefined fields; rows hold only JSON values. */
+const toDoc = (row: object): Record<string, unknown> => JSON.parse(JSON.stringify(row)) as Record<string, unknown>;
+
 /**
- * Collections 'vox_reply_style' (posterior docs) and 'vox_reply_style_eval'
- * (offline-evaluation rows; enable the Firestore TTL policy on expiresAt at
- * deploy time, or schedule sweep()). No other collection is touched.
+ * Collections 'vox_reply_style' (posteriors) and 'vox_reply_style_eval'
+ * (evaluation rows). Document ids are the row ids; numbers are plain numbers.
+ * Queries use equality filters or one range filter, so single-field indexes
+ * suffice. deleteSubject and sweep delete in pages of 400; they are not
+ * atomic across pages, are idempotent and must be retried after a failure.
  */
 export class FirestoreReplyStyleStore implements ReplyStyleStore {
-  private readonly posteriorsName: string;
-  private readonly decisionsName: string;
+  private readonly collections: { posteriors: string; evals: string };
 
-  constructor(private readonly db: Firestore, options: { posteriors?: string; decisions?: string } = {}) {
-    this.posteriorsName = options.posteriors ?? 'vox_reply_style';
-    this.decisionsName = options.decisions ?? 'vox_reply_style_eval';
+  constructor(private readonly db: Firestore, collections: { posteriors: string; evals: string } = DEFAULT_REPLY_STYLE_COLLECTIONS) {
+    if (!COLLECTION_NAME.test(collections?.posteriors ?? '') || !COLLECTION_NAME.test(collections?.evals ?? '')
+        || collections.posteriors === collections.evals) {
+      throw new RangeError('reply_style_collections');
+    }
+    this.collections = { posteriors: collections.posteriors, evals: collections.evals };
   }
 
-  async get(key: ReplyStyleKey): Promise<ReplyStylePosteriorDoc | null> {
-    const id = posteriorDocId(key);
-    const snap = await this.db.collection(this.posteriorsName).doc(id).get();
-    return snap.exists ? parsePosterior(parseJsonField(snap.get('json')), id) : null;
+  async readPosteriors(ids: readonly string[]): Promise<PosteriorRow[]> {
+    const unique = [...new Set(ids)].filter((id) => /^[0-9a-f]{40}$/.test(id));
+    const snaps = await Promise.all(unique.map((id) => this.posteriorRef(id).get()));
+    const out: PosteriorRow[] = [];
+    snaps.forEach((snap, i) => {
+      if (!snap.exists) return;
+      const row = parsePosterior(snap.data());
+      if (row && row.id === unique[i]) out.push(row);
+    });
+    return out;
   }
 
-  async appendDecision(record: ReplyStyleEvalRecord): Promise<void> {
-    const parsed = parseDecision(structuredClone(record));
-    if (!isDecisionId(parsed.id)) throw new Error('reply_style_bad_decision_id');
-    const ref = this.db.collection(this.decisionsName).doc(parsed.id);
+  async recordExposure(row: ReplyStyleEvalRow): Promise<void> {
+    const parsed = evalRowSchema.parse(structuredClone(row));
+    const ref = this.evalRef(parsed.id);
     await this.db.runTransaction(async (tx) => {
       const snap = await tx.get(ref);
-      if (snap.exists) throw new Error('reply_style_duplicate_decision');
-      tx.set(ref, decisionRow(parsed));
+      if (snap.exists) throw new Error('reply_style_duplicate_exposure');
+      tx.set(ref, toDoc(parsed));
     });
   }
 
-  settle<T>(decisionId: string, mutate: Mutate<T>): Promise<T> {
+  transact<T>(read: ReplyStyleTxRead, fn: (snapshot: ReplyStyleTxSnapshot) => ReplyStyleTxWrite<T>): Promise<T> {
     return this.db.runTransaction(async (tx) => {
-      const evalRef = isDecisionId(decisionId) ? this.db.collection(this.decisionsName).doc(decisionId) : null;
-      const evalSnap = evalRef ? await tx.get(evalRef) : null;
-      const decision = evalSnap?.exists ? parseDecision(parseJsonField(evalSnap.get('json')), decisionId) : null;
-      const docId = decision ? posteriorDocIdForPersonKey(decision.context.personKey, decision.context.personaId,
-        decision.context.space, decision.context.route) : null;
-      const docRef = docId ? this.db.collection(this.posteriorsName).doc(docId) : null;
-      const docSnap = docRef ? await tx.get(docRef) : null;
-      const doc = docSnap?.exists ? parsePosterior(parseJsonField(docSnap.get('json')), docId ?? undefined) : null;
-      const out = mutate(decision, doc);
-      const nextDecision = out.decision ? parseDecision(structuredClone(out.decision), decisionId) : undefined;
-      const nextDoc = out.doc ? parsePosterior(structuredClone(out.doc), docId ?? undefined) : undefined;
-      if (nextDecision) {
-        if (!evalRef || !decision) throw new Error('reply_style_decision_identity');
-        tx.set(evalRef, decisionRow(nextDecision));
+      // Firestore rule: every read happens before any write.
+      const exposures = new Map<string, ReplyStyleEvalRow>();
+      for (const id of new Set(read.exposureIds)) {
+        if (!/^[A-Za-z0-9_-]{1,128}$/.test(id)) continue;
+        const snap = await tx.get(this.evalRef(id));
+        const row = snap.exists ? parseEval(snap.data()) : null;
+        if (row && row.id === id) exposures.set(id, row);
       }
-      if (nextDoc) {
-        if (!docRef) throw new Error('reply_style_doc_identity');
-        tx.set(docRef, posteriorRow(nextDoc));
+      const posteriors = new Map<string, PosteriorRow>();
+      for (const id of new Set(read.posteriorIds)) {
+        if (!/^[0-9a-f]{40}$/.test(id)) continue;
+        const snap = await tx.get(this.posteriorRef(id));
+        const row = snap.exists ? parsePosterior(snap.data()) : null;
+        if (row && row.id === id) posteriors.set(id, row);
       }
+      const out = fn({ exposures, posteriors });
+      const evalWrites = (out.exposures ?? []).map((row) => evalRowSchema.parse(structuredClone(row)));
+      const posteriorWrites = (out.posteriors ?? []).map((row) => posteriorRowSchema.parse(structuredClone(row)));
+      for (const row of evalWrites) tx.set(this.evalRef(row.id), toDoc(row));
+      for (const row of posteriorWrites) tx.set(this.posteriorRef(row.id), toDoc(row));
       return out.result;
     });
   }
 
-  async listPosteriors(filter: ScopeFilter): Promise<ReplyStylePosteriorDoc[]> {
-    const snap = await this.scopeQuery(this.posteriorsName, filter).limit(MAX_LIST).get();
-    return snap.docs.map(d => parsePosterior(parseJsonField(d.get('json')), d.id))
-      .filter(doc => inScope(filter, doc.personKey, doc.personaId, doc.space));
+  /**
+   * One equality or one range filter per query; the rest is filtered in
+   * memory over at most MAX_LIST_LIMIT fetched rows. For offline export only.
+   */
+  async listEval(filter: ReplyStyleEvalFilter = {}): Promise<ReplyStyleEvalRow[]> {
+    listLimit(filter.limit);
+    let query: Query = this.db.collection(this.collections.evals);
+    if (filter.personaId !== undefined) {
+      query = query.where('context.personaId', '==', filter.personaId);
+    } else {
+      if (filter.since !== undefined) query = query.where('at', '>=', filter.since);
+      if (filter.until !== undefined) query = query.where('at', '<=', filter.until);
+    }
+    const snap = await query.limit(MAX_LIST_LIMIT).get();
+    const rows = snap.docs.map((doc) => parseEval(doc.data())).filter((row): row is ReplyStyleEvalRow => row !== null);
+    return selectEval(rows, filter);
   }
 
-  async listDecisions(filter: DecisionFilter): Promise<ReplyStyleEvalRecord[]> {
-    let query: Query = this.db.collection(this.decisionsName);
-    if (filter.since !== undefined) query = query.where('at', '>=', new Date(filter.since));
-    if (filter.until !== undefined) query = query.where('at', '<=', new Date(filter.until));
-    const snap = await query.orderBy('at').limit(listLimit(filter.limit)).get();
-    return snap.docs.map(d => parseDecision(parseJsonField(d.get('json')), d.id));
+  async deleteSubject(filter: ReplyStyleDeleteFilter): Promise<Counts> {
+    const valid = validDeleteFilter(filter);
+    let posteriors: Query = this.db.collection(this.collections.posteriors).where('subject', '==', valid.subject);
+    let evals: Query = this.db.collection(this.collections.evals).where('context.subject', '==', valid.subject);
+    if (valid.personaId !== undefined) {
+      posteriors = posteriors.where('personaId', '==', valid.personaId);
+      evals = evals.where('context.personaId', '==', valid.personaId);
+    }
+    if (valid.space !== undefined) {
+      posteriors = posteriors.where('space', '==', valid.space);
+      evals = evals.where('context.space', '==', valid.space);
+    }
+    return { posteriors: await this.deleteAll(posteriors), evals: await this.deleteAll(evals) };
   }
 
-  async deleteScope(filter: ScopeFilter): Promise<{ posteriors: number; decisions: number }> {
-    const posteriors = await this.deleteAll(this.scopeQuery(this.posteriorsName, filter));
-    const decisions = await this.deleteAll(this.scopeQuery(this.decisionsName, filter));
-    return { posteriors, decisions };
+  async sweep(now: number): Promise<Counts> {
+    const at = validNow(now);
+    const evals = await this.deleteAll(this.db.collection(this.collections.evals).where('expiresAt', '<=', at));
+    const posteriors = await this.deleteAll(this.db.collection(this.collections.posteriors)
+      .where('updatedAt', '<=', at - POSTERIOR_IDLE_DELETE_MS));
+    return { posteriors, evals };
   }
 
-  sweep(now: number): Promise<number> {
-    return this.deleteAll(this.db.collection(this.decisionsName).where('expiresAt', '<=', new Date(now)));
+  private posteriorRef(id: string): DocumentReference {
+    return this.db.collection(this.collections.posteriors).doc(id);
   }
 
-  private scopeQuery(collection: string, filter: ScopeFilter): Query {
-    let query: Query = this.db.collection(collection).where('personKey', '==', filter.personKey);
-    if (filter.personaId !== undefined) query = query.where('personaId', '==', filter.personaId);
-    if (filter.space !== undefined) query = query.where('space', '==', filter.space);
-    return query;
+  private evalRef(id: string): DocumentReference {
+    return this.db.collection(this.collections.evals).doc(id);
   }
 
   private async deleteAll(query: Query): Promise<number> {
     let total = 0;
     for (let round = 0; round < MAX_DELETE_ROUNDS; round++) {
-      const snap = await query.limit(DELETE_CHUNK).get();
-      if (snap.empty) return total;
+      const page = await query.limit(DELETE_PAGE).get();
+      if (page.docs.length === 0) return total;
       const batch = this.db.batch();
-      for (const doc of snap.docs) batch.delete(doc.ref);
+      for (const doc of page.docs) batch.delete(doc.ref);
       await batch.commit();
-      total += snap.size;
+      total += page.docs.length;
     }
     throw new Error('reply_style_delete_incomplete');
   }
-}
-
-function posteriorRow(doc: ReplyStylePosteriorDoc) {
-  return { personKey: doc.personKey, personaId: doc.personaId, space: doc.space, route: doc.route,
-    json: JSON.stringify(doc), updatedAt: new Date(doc.updatedAt) };
-}
-
-function decisionRow(record: ReplyStyleEvalRecord) {
-  return { personKey: record.context.personKey, personaId: record.context.personaId, space: record.context.space,
-    at: new Date(record.at), expiresAt: new Date(record.expiresAt), settled: record.reward !== null, json: JSON.stringify(record) };
 }

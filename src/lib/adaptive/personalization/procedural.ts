@@ -1,599 +1,907 @@
 /**
- * Reply-style procedural memory: a Beta-Bernoulli Thompson-sampling policy over
- * six fixed, low-risk reply-style dimensions, keyed by a hashed person key,
- * persona, space and route (docs/AGENT_INTELLIGENCE_SOLUTION.md sections 2.6,
- * 4.10 and section 5 step 14).
+ * Reply-style procedural memory (S14 of docs/AGENT_INTELLIGENCE_SOLUTION.md,
+ * section 4.10). A factored Beta-Bernoulli Thompson-sampling bandit over a
+ * fixed set of low-risk reply-style arms, keyed by (person, persona, space,
+ * route).
  *
- * Library only: nothing in the gateway, Studio or runtime imports it. Every
- * choose/settle call takes a call-time optional.personalization check. Rows are
- * content-free: enums, hashes, ids, numbers and dates, enforced by strict
- * schemas. Reply-rate alone never changes a posterior.
+ * NOT WIRED: nothing in the Studio runtime or the gateway constructs it.
+ * Enabling it is gated on the DPIA covering behavioural adaptation and on
+ * confirming that message_reaction updates reach persona bots in private
+ * chats.
+ *
+ * Invariants:
+ * - Explicit choices always win: a dimension pinned by an explicit request
+ *   this turn or an explicit stored preference is never sampled, logged as an
+ *   arm choice or updated.
+ * - Sampling, posterior reads and learning happen only in private, non-guest
+ *   chats after the caller's optional.personalization authorize callback.
+ *   Reset, withdrawal and sweep are ungated deletions.
+ * - Reply-rate alone never changes a posterior: bare replies and
+ *   non-corrective follow-ups without a strong signal yield reward null.
+ * - Rows are content-free: enums, numbers, a hashed subject key and a persona
+ *   id. No message text, model output or raw personId is stored or logged.
+ *
+ * Pure apart from the injected store; no logging.
  */
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { ResolvedPreference } from './index';
 
 // ---------------------------------------------------------------------------
-// Constants
+// Arms and constants
 // ---------------------------------------------------------------------------
 
-export const REPLY_STYLE_POLICY_VERSION = 1 as const;
-export const REPLY_STYLE_ARMS = {
+export const DIMENSION_ORDER = ['length', 'register', 'structure', 'closingQuestion', 'modality', 'language'] as const;
+export type StyleDimension = typeof DIMENSION_ORDER[number];
+
+export const ARMS = {
   length: ['brief', 'balanced', 'detailed'],
   register: ['formal', 'informal'],
   structure: ['plain', 'steps'],
-  modality: ['text', 'voice_default'],
+  closingQuestion: ['no', 'yes'],
+  modality: ['text', 'voice-default'],
   language: ['fa', 'en', 'mixed'],
-  closingQuestion: ['yes', 'no'],
 } as const;
-export type ReplyStyleDimension = keyof typeof REPLY_STYLE_ARMS;
-export const REPLY_STYLE_DIMENSIONS: readonly ReplyStyleDimension[] = Object.freeze(
-  ['length', 'register', 'structure', 'modality', 'language', 'closingQuestion'] as const);
+export type ArmOf<D extends StyleDimension> = typeof ARMS[D][number];
 
-export const DEFAULT_HALF_LIFE_MS = 90 * 86_400_000;
-export const FOLLOW_UP_WINDOW_MS = 10 * 60_000;
-export const REWARD_WINDOW_MS = 24 * 3_600_000;
-export const EVAL_RETENTION_MS = 90 * 86_400_000;
-export const DEFAULT_PROPENSITY_SAMPLES = 200;
-export const MIN_PROPENSITY_SAMPLES = 16;
-export const MAX_PROPENSITY_SAMPLES = 2000;
-/** Cap on alpha + beta of one arm, so old evidence can always be outweighed. */
-export const MAX_EVIDENCE = 10_000;
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-export type ReplyStyle = { readonly [D in ReplyStyleDimension]: (typeof REPLY_STYLE_ARMS)[D][number] };
-export type ReplyStyleSource = 'explicit_turn' | 'explicit_stored' | 'reset' | 'sampled' | 'persona_default';
+export interface ReplyStyle {
+  length: ArmOf<'length'>;
+  register: ArmOf<'register'>;
+  structure: ArmOf<'structure'>;
+  closingQuestion: ArmOf<'closingQuestion'>;
+  modality: ArmOf<'modality'>;
+  /** 'auto' mirrors the user's language. It is a valid style value but never an arm. */
+  language: 'auto' | ArmOf<'language'>;
+}
+export type StyleSource = 'explicit_turn' | 'explicit_stored' | 'sampled' | 'persona_default';
 /** Same labels as S09 DecisionLogRow.routeTaken. */
 export type ReplyRoute = 'quick' | 'thoughtful' | 'web' | 'untriaged';
-export type ReplySpace = 'work' | 'personal';
-/** Structurally identical to S09 TriageV2.explicitStyleRequest; deliberately not imported. */
-export type ExplicitStyleRequest = 'brief' | 'detailed' | 'step_by_step' | 'listening' | 'unspecified';
+export type StyleSpace = 'work' | 'personal';
 
-export interface ReplyStyleKey { readonly personId: string; readonly personaId: string; readonly space: ReplySpace; readonly route: ReplyRoute }
+export const ROUTES: readonly ReplyRoute[] = ['quick', 'thoughtful', 'web', 'untriaged'];
+export const SPACES: readonly StyleSpace[] = ['work', 'personal'];
 
-/** Beta(alpha, beta); updatedAt in epoch ms. */
-export interface ArmPosterior { alpha: number; beta: number; updatedAt: number }
-export interface ReplyStylePosteriorDoc {
+/** The 4 lowest-risk dimensions. modality and language are opt-in through options.dimensions. */
+export const DEFAULT_DIMENSIONS: readonly StyleDimension[] = ['length', 'register', 'structure', 'closingQuestion'];
+export const DEFAULT_REPLY_STYLE: Readonly<ReplyStyle> = Object.freeze({
+  length: 'balanced', register: 'informal', structure: 'plain', closingQuestion: 'no', modality: 'text', language: 'auto',
+});
+export const HALF_LIFE_MS = 90 * 86_400_000;
+export const FOLLOW_UP_WINDOW_MS = 10 * 60_000;
+export const SETTLE_WINDOW_MS = 24 * 3_600_000;
+export const EVAL_RETENTION_MS = 90 * 86_400_000;
+export const POSTERIOR_IDLE_DELETE_MS = 365 * 86_400_000;
+export const DEFAULT_PROPENSITY_SAMPLES = 256;
+export const MIN_PROPENSITY_SAMPLES = 16;
+export const MAX_PROPENSITY_SAMPLES = 4096;
+export const POLICY_VERSION = 'ts-beta-v1';
+export const REWARD_WEIGHTS = { reaction: 1, explicit_thanks: 1, share_offer_accepted: 1, voice_reciprocated: 0.5, follow_up: 0.25 } as const;
+/** Upper bound for alpha and beta (schema limit). */
+export const MAX_BETA_PARAM = 1e6;
+
+/** Key of one bandit: person × persona × space × route. personId is hashed before storage. */
+export interface ReplyStyleScope {
+  readonly personId: string;
+  readonly personaId: string;
+  readonly space: StyleSpace;
+  readonly route: ReplyRoute;
+}
+
+// ---------------------------------------------------------------------------
+// Rewards
+// ---------------------------------------------------------------------------
+
+export type RewardSignal =
+  | { kind: 'reaction'; polarity: 'positive' | 'negative'; at: number }
+  | { kind: 'follow_up'; corrective: boolean; at: number }
+  | { kind: 'explicit_thanks'; at: number }
+  | { kind: 'explicit_correction'; at: number }
+  | { kind: 'share_offer_accepted'; at: number }
+  | { kind: 'voice_reciprocated'; at: number }
+  /** Accepted and always ignored: reply-rate alone never updates a posterior. */
+  | { kind: 'reply'; at: number };
+
+export const REWARD_KINDS = [
+  'reaction_positive', 'reaction_negative', 'follow_up', 'follow_up_corrective',
+  'explicit_thanks', 'explicit_correction', 'share_offer_accepted', 'voice_reciprocated',
+] as const;
+export type RewardKind = typeof REWARD_KINDS[number];
+
+export interface RewardResult {
+  reward: number | null;
+  kinds: RewardKind[];
+  reason: 'negative' | 'positive' | 'reply_only' | 'no_signal';
+}
+
+// ---------------------------------------------------------------------------
+// Rows
+// ---------------------------------------------------------------------------
+
+export interface BetaParams { alpha: number; beta: number }
+
+export interface PosteriorRow {
   schemaVersion: 1;
-  /** posteriorDocId(key), 64 hex. */
   id: string;
-  /** personKeyOf(personId), 32 hex; the raw personId is never stored. */
-  personKey: string;
-  personaId: string; space: ReplySpace; route: ReplyRoute;
-  /** Only arms of REPLY_STYLE_ARMS[D]. */
-  arms: { [D in ReplyStyleDimension]?: { [arm: string]: ArmPosterior } };
+  subject: string;
+  personaId: string;
+  space: StyleSpace;
+  route: ReplyRoute;
+  dimension: StyleDimension;
+  arms: Record<string, BetaParams>;
   updatedAt: number;
 }
 
-export type ReplySignalKind = 'reaction_positive' | 'reaction_negative' | 'follow_up' | 'corrective_follow_up' | 'share_offer_accepted'
-  | 'voice_reciprocated' | 'explicit_thanks' | 'explicit_correction' | 'correction_phrase';
-
-/** Content-free outcome signals computed by the caller; no field carries text. */
-export interface ReplyOutcomeSignals {
-  readonly reaction?: 'positive' | 'negative';
-  readonly followUp?: { readonly at: number; readonly corrective: boolean | 'unknown' };
-  readonly shareOfferAccepted?: boolean;
-  readonly voiceReciprocated?: boolean;
-  readonly explicitThanks?: boolean;
-  /** For example triage explicit_correction >= the caller's threshold. */
-  readonly explicitCorrection?: boolean;
-  /** The caller ran detectCorrectionPhrase on the follow-up; the text is not passed. */
-  readonly correctionPhrase?: boolean;
-  /** Ignored by design: reply-rate alone never produces a reward. */
-  readonly replied?: boolean;
-}
-export interface CompositeReward { readonly reward: 0 | 1 | null; readonly positives: ReplySignalKind[]; readonly negatives: ReplySignalKind[] }
-
-export interface ReplyStyleEvalRecord {
+export interface ReplyStyleEvalRow {
   schemaVersion: 1;
-  /** The decisionId. */
   id: string;
-  /** expiresAt = at + evalRetentionMs. */
-  at: number; expiresAt: number;
-  /** dimensions: the policy's configured dimensions at decision time. */
-  context: { personKey: string; personaId: string; space: ReplySpace; route: ReplyRoute; policyVersion: 1; dimensions: ReplyStyleDimension[] };
-  /** The full delivered style. */
-  armChosen: ReplyStyle;
-  sources: Record<ReplyStyleDimension, ReplyStyleSource>;
-  /** (0,1]; the product of dimensionPropensity. */
-  propensity: number;
-  /** Sampled dimensions only. */
-  dimensionPropensity: { [D in ReplyStyleDimension]?: number };
-  /** Sampled dimensions only, table order. */
-  unchosenArms: { [D in ReplyStyleDimension]?: string[] };
-  /** Null until settled. */
-  reward: 0 | 1 | null;
-  rewardSignals?: ReplySignalKind[];
+  policyVersion: typeof POLICY_VERSION;
+  context: {
+    subject: string;
+    personaId: string;
+    space: StyleSpace;
+    route: ReplyRoute;
+    chatKind: 'private';
+    pinned: Partial<Record<StyleDimension, 'explicit_turn' | 'explicit_stored'>>;
+  };
+  armChosen: Partial<Record<StyleDimension, string>>;
+  /** Per sampled dimension, in (0,1]. */
+  propensity: Partial<Record<StyleDimension, number>>;
+  jointPropensity: number;
+  unchosenArms: Partial<Record<StyleDimension, string[]>>;
+  reward: number | null;
+  rewardKinds: RewardKind[];
+  at: number;
+  expiresAt: number;
   settledAt?: number;
 }
 
+// ---------------------------------------------------------------------------
+// Store seam
+// ---------------------------------------------------------------------------
+
+export interface ReplyStyleTxRead { exposureIds: readonly string[]; posteriorIds: readonly string[] }
+export interface ReplyStyleTxSnapshot {
+  exposures: ReadonlyMap<string, ReplyStyleEvalRow>;
+  posteriors: ReadonlyMap<string, PosteriorRow>;
+}
+export interface ReplyStyleTxWrite<T> { exposures?: ReplyStyleEvalRow[]; posteriors?: PosteriorRow[]; result: T }
+export interface ReplyStyleDeleteFilter { subject: string; personaId?: string; space?: StyleSpace }
+export interface ReplyStyleEvalFilter { personaId?: string; since?: number; until?: number; limit?: number }
+
 export interface ReplyStyleStore {
-  get(key: ReplyStyleKey): Promise<ReplyStylePosteriorDoc | null>;
-  appendDecision(record: ReplyStyleEvalRecord): Promise<void>;
-  /** Atomic: loads the decision and its posterior doc, runs mutate, persists the returned values or nothing. */
-  settle<T>(decisionId: string, mutate: (decision: ReplyStyleEvalRecord | null, doc: ReplyStylePosteriorDoc | null) =>
-    { decision?: ReplyStyleEvalRecord; doc?: ReplyStylePosteriorDoc; result: T }): Promise<T>;
-  listPosteriors(filter: { personKey: string; personaId?: string; space?: ReplySpace }): Promise<ReplyStylePosteriorDoc[]>;
-  listDecisions(filter: { since?: number; until?: number; limit?: number }): Promise<ReplyStyleEvalRecord[]>;
-  deleteScope(filter: { personKey: string; personaId?: string; space?: ReplySpace }): Promise<{ posteriors: number; decisions: number }>;
-  /** Deletes eval rows with expiresAt <= now. */
-  sweep(now: number): Promise<number>;
+  /** Returns the valid rows among ids; missing and invalid rows are skipped. */
+  readPosteriors(ids: readonly string[]): Promise<PosteriorRow[]>;
+  /** Append; throws on a duplicate id or an invalid row. */
+  recordExposure(row: ReplyStyleEvalRow): Promise<void>;
+  /** Atomic: reads the requested rows, applies fn's writes; a throw commits nothing. */
+  transact<T>(read: ReplyStyleTxRead, fn: (snapshot: ReplyStyleTxSnapshot) => ReplyStyleTxWrite<T>): Promise<T>;
+  listEval(filter?: ReplyStyleEvalFilter): Promise<ReplyStyleEvalRow[]>;
+  deleteSubject(filter: ReplyStyleDeleteFilter): Promise<{ posteriors: number; evals: number }>;
+  /** Deletes eval rows with expiresAt <= now and posteriors with updatedAt <= now - POSTERIOR_IDLE_DELETE_MS. */
+  sweep(now: number): Promise<{ posteriors: number; evals: number }>;
 }
 
-/** optional.personalization, evaluated at call time. */
-export type PersonalizationCheck = () => boolean | Promise<boolean>;
+// ---------------------------------------------------------------------------
+// Bandit API types
+// ---------------------------------------------------------------------------
 
-export interface ChooseReplyStyleInput {
-  readonly key: ReplyStyleKey;
-  readonly audience: 'private' | 'group';
-  readonly guestAudience: boolean;
-  readonly personaDefault: ReplyStyle;
-  readonly explicitThisTurn?: Partial<ReplyStyle>;
-  readonly storedPreferences?: readonly ResolvedPreference[];
-  readonly personalizationAllowed: PersonalizationCheck;
+export interface ChooseInput {
+  scope: ReplyStyleScope;
+  chatKind: 'private' | 'group';
+  guestAudience: boolean;
+  personaDefault?: Partial<ReplyStyle>;
+  /** Output of resolvePreferences; only source 'explicit' pins. */
+  storedPreferences?: readonly ResolvedPreference[];
+  explicitThisTurn?: Partial<ReplyStyle>;
+  now?: number;
 }
 export interface ReplyStyleChoice {
-  readonly style: ReplyStyle;
-  readonly sources: Readonly<Record<ReplyStyleDimension, ReplyStyleSource>>;
-  /** Present only when a record was written. */
-  readonly decisionId?: string;
-  /** 1 when nothing was sampled. */
-  readonly propensity: number;
+  style: ReplyStyle;
+  sources: Record<StyleDimension, StyleSource>;
+  /** Present only when at least one dimension was sampled AND the eval row was recorded. */
+  exposureId?: string;
 }
-export interface SettleReplyStyleInput { readonly decisionId: string; readonly signals: ReplyOutcomeSignals; readonly personalizationAllowed: PersonalizationCheck }
-export type SettleResult = { readonly updated: true; readonly reward: 0 | 1 }
-  | { readonly updated: false; readonly reason: 'personalization_off' | 'no_signal' | 'unknown_decision' | 'already_settled' | 'expired' | 'store_error' };
-export interface PosteriorView { readonly route: ReplyRoute; readonly dimension: ReplyStyleDimension; readonly arm: string; readonly alpha: number; readonly beta: number; readonly mean: number; readonly updatedAt: number }
+export type SettleOutcome = 'updated' | 'no_update' | 'already_settled' | 'unknown_exposure' | 'expired' | 'not_allowed';
+export interface SettleInput {
+  exposureId: string;
+  signals: readonly unknown[];
+  now?: number;
+  /**
+   * The exposure's scope, needed to re-run authorize. Defaults to the scope
+   * this bandit instance remembered at choose() time (process memory only:
+   * raw personIds are never persisted). Without either, or when it does not
+   * match the exposure, settle returns 'not_allowed' and writes nothing.
+   */
+  scope?: ReplyStyleScope;
+}
+export interface SettleResult { outcome: SettleOutcome; reward: number | null; kinds: RewardKind[] }
+export interface PosteriorView {
+  route: ReplyRoute;
+  dimension: StyleDimension;
+  /** evidence = alpha + beta - 2 after decay. */
+  arms: Array<{ arm: string; mean: number; evidence: number }>;
+  updatedAt: number;
+}
 
-export interface ReplyStylePolicyOptions {
-  readonly store: ReplyStyleStore;
-  readonly random?: () => number;
-  readonly now?: () => number;
-  readonly newId?: () => string;
-  readonly dimensions?: readonly ReplyStyleDimension[];
-  readonly halfLifeMs?: number;
-  readonly propensitySamples?: number;
-  readonly evalRetentionMs?: number;
+export interface ReplyStyleBanditDeps {
+  store: ReplyStyleStore;
+  /** Caller's optional.personalization check for this person/persona/space; a throw counts as false. */
+  authorize: (scope: ReplyStyleScope) => Promise<boolean>;
+  /** [0,1); default Math.random. */
+  rng?: () => number;
+  /** Default Date.now. */
+  now?: () => number;
+  /** Default randomUUID. */
+  newId?: () => string;
+  /** 4..6 distinct dimensions; default DEFAULT_DIMENSIONS. */
+  dimensions?: readonly StyleDimension[];
+  /** Default 256, integer 16..4096. */
+  propensitySamples?: number;
 }
 
 // ---------------------------------------------------------------------------
-// Schemas (strict: an unknown key such as `text` fails to parse)
+// Schemas (all strict)
 // ---------------------------------------------------------------------------
 
-const SPACES = ['work', 'personal'] as const;
-const ROUTES = ['quick', 'thoughtful', 'web', 'untriaged'] as const;
-const SOURCES = ['explicit_turn', 'explicit_stored', 'reset', 'sampled', 'persona_default'] as const;
-const SIGNAL_KINDS = ['reaction_positive', 'reaction_negative', 'follow_up', 'corrective_follow_up', 'share_offer_accepted',
-  'voice_reciprocated', 'explicit_thanks', 'explicit_correction', 'correction_phrase'] as const;
-/** Persona ids and decision ids. */
-export const REPLY_STYLE_ID_PATTERN = /^[A-Za-z0-9_.:-]{1,128}$/;
-const ID_PATTERN = REPLY_STYLE_ID_PATTERN;
+const PERSONA_ID = /^[A-Za-z0-9_:-]{1,128}$/;
+const HEX32 = /^[0-9a-f]{32}$/;
+const HEX40 = /^[0-9a-f]{40}$/;
+const EVAL_ID = /^[A-Za-z0-9_-]{1,128}$/;
+const MAX_TIME = 8.64e15;
+const MAX_PERSON_ID_LENGTH = 512;
 
-const hex32 = z.string().regex(/^[0-9a-f]{32}$/);
-const hex64 = z.string().regex(/^[0-9a-f]{64}$/);
-const idString = z.string().regex(ID_PATTERN);
-const time = z.number().int().nonnegative().safe();
-const spaceSchema = z.enum(SPACES);
-const routeSchema = z.enum(ROUTES);
-const dimensionSchema = z.enum(REPLY_STYLE_DIMENSIONS as unknown as [ReplyStyleDimension, ...ReplyStyleDimension[]]);
-const evidence = z.number().finite().min(1).max(MAX_EVIDENCE);
-const armPosteriorSchema = z.object({ alpha: evidence, beta: evidence, updatedAt: time }).strict();
-const armEnum = <D extends ReplyStyleDimension>(d: D) => z.enum(REPLY_STYLE_ARMS[d] as unknown as [string, ...string[]]);
-const perDimension = <S extends z.ZodTypeAny>(make: (d: ReplyStyleDimension) => S) =>
-  Object.fromEntries(REPLY_STYLE_DIMENSIONS.map(d => [d, make(d)])) as Record<ReplyStyleDimension, S>;
-const armsOfDimension = (d: ReplyStyleDimension) =>
-  z.object(Object.fromEntries(REPLY_STYLE_ARMS[d].map(arm => [arm, armPosteriorSchema.optional()]))).strict().optional();
+const time = z.number().min(0).max(MAX_TIME);
+const betaParamsSchema = z.object({
+  alpha: z.number().min(1).max(MAX_BETA_PARAM),
+  beta: z.number().min(1).max(MAX_BETA_PARAM),
+}).strict();
+const spaceSchema = z.enum(['work', 'personal']);
+const routeSchema = z.enum(['quick', 'thoughtful', 'web', 'untriaged']);
+const dimensionSchema = z.enum(DIMENSION_ORDER);
 
-export const replyStylePosteriorDocSchema = z.object({
+export const posteriorRowSchema: z.ZodType<PosteriorRow> = z.object({
   schemaVersion: z.literal(1),
-  id: hex64,
-  personKey: hex32,
-  personaId: idString,
+  id: z.string().regex(HEX40),
+  subject: z.string().regex(HEX32),
+  personaId: z.string().regex(PERSONA_ID),
   space: spaceSchema,
   route: routeSchema,
-  arms: z.object(perDimension(armsOfDimension)).strict(),
+  dimension: dimensionSchema,
+  arms: z.record(z.string(), betaParamsSchema),
   updatedAt: time,
-}).strict() as unknown as z.ZodType<ReplyStylePosteriorDoc>;
+}).strict().superRefine((row, ctx) => {
+  const expected: readonly string[] = ARMS[row.dimension];
+  const keys = Object.keys(row.arms);
+  if (keys.length !== expected.length || !expected.every((arm) => Object.prototype.hasOwnProperty.call(row.arms, arm))) {
+    ctx.addIssue({ code: 'custom', message: 'arms_mismatch', path: ['arms'] });
+  }
+  if (row.id !== posteriorIdFor(row.subject, row.personaId, row.space, row.route, row.dimension)) {
+    ctx.addIssue({ code: 'custom', message: 'id_mismatch', path: ['id'] });
+  }
+});
 
-const propensityValue = z.number().gt(0).max(1);
-export const replyStyleEvalRecordSchema = z.object({
+const pinnedSource = z.enum(['explicit_turn', 'explicit_stored']);
+const pinnedSchema = z.object({
+  length: pinnedSource.optional(), register: pinnedSource.optional(), structure: pinnedSource.optional(),
+  closingQuestion: pinnedSource.optional(), modality: pinnedSource.optional(), language: pinnedSource.optional(),
+}).strict();
+const armChosenSchema = z.object({
+  length: z.enum(ARMS.length).optional(), register: z.enum(ARMS.register).optional(),
+  structure: z.enum(ARMS.structure).optional(), closingQuestion: z.enum(ARMS.closingQuestion).optional(),
+  modality: z.enum(ARMS.modality).optional(), language: z.enum(ARMS.language).optional(),
+}).strict();
+const probability = z.number().gt(0).max(1);
+const propensitySchema = z.object({
+  length: probability.optional(), register: probability.optional(), structure: probability.optional(),
+  closingQuestion: probability.optional(), modality: probability.optional(), language: probability.optional(),
+}).strict();
+const armList = z.array(z.string()).max(3);
+const unchosenSchema = z.object({
+  length: armList.optional(), register: armList.optional(), structure: armList.optional(),
+  closingQuestion: armList.optional(), modality: armList.optional(), language: armList.optional(),
+}).strict();
+
+export const evalRowSchema: z.ZodType<ReplyStyleEvalRow> = z.object({
   schemaVersion: z.literal(1),
-  id: idString,
+  id: z.string().regex(EVAL_ID),
+  policyVersion: z.literal(POLICY_VERSION),
+  context: z.object({
+    subject: z.string().regex(HEX32),
+    personaId: z.string().regex(PERSONA_ID),
+    space: spaceSchema,
+    route: routeSchema,
+    chatKind: z.literal('private'),
+    pinned: pinnedSchema,
+  }).strict(),
+  armChosen: armChosenSchema,
+  propensity: propensitySchema,
+  jointPropensity: probability,
+  unchosenArms: unchosenSchema,
+  reward: z.number().min(0).max(1).nullable(),
+  rewardKinds: z.array(z.enum(REWARD_KINDS)).max(REWARD_KINDS.length),
   at: time,
   expiresAt: time,
-  context: z.object({
-    personKey: hex32, personaId: idString, space: spaceSchema, route: routeSchema,
-    policyVersion: z.literal(REPLY_STYLE_POLICY_VERSION),
-    dimensions: z.array(dimensionSchema).min(1).max(REPLY_STYLE_DIMENSIONS.length),
-  }).strict(),
-  armChosen: z.object(perDimension(armEnum)).strict(),
-  sources: z.object(perDimension(() => z.enum(SOURCES))).strict(),
-  propensity: propensityValue,
-  dimensionPropensity: z.object(perDimension(() => propensityValue.optional())).strict(),
-  unchosenArms: z.object(perDimension(d => z.array(armEnum(d)).max(REPLY_STYLE_ARMS[d].length - 1).optional())).strict(),
-  reward: z.union([z.literal(0), z.literal(1), z.null()]),
-  rewardSignals: z.array(z.enum(SIGNAL_KINDS)).max(SIGNAL_KINDS.length).optional(),
   settledAt: time.optional(),
-}).strict().refine(r => r.expiresAt >= r.at) as unknown as z.ZodType<ReplyStyleEvalRecord>;
-
-// ---------------------------------------------------------------------------
-// Pure helpers
-// ---------------------------------------------------------------------------
-
-const sha256 = (text: string) => createHash('sha256').update(text, 'utf8').digest('hex');
-
-/** Pseudonymous person key: sha256 of a domain-separated personId, first 32 hex chars. */
-export function personKeyOf(personId: string): string {
-  return sha256(`vox-reply-style:v1:${personId}`).slice(0, 32);
-}
-
-/** Posterior doc id from an already hashed person key (stores locate docs from eval rows this way). */
-export function posteriorDocIdForPersonKey(personKey: string, personaId: string, space: ReplySpace, route: ReplyRoute): string {
-  return sha256(JSON.stringify(['reply-style', personKey, personaId, space, route]));
-}
-
-export function posteriorDocId(key: ReplyStyleKey): string {
-  return posteriorDocIdForPersonKey(personKeyOf(key.personId), key.personaId, key.space, key.route);
-}
-
-const prior = (updatedAt: number): ArmPosterior => ({ alpha: 1, beta: 1, updatedAt });
-
-/** Exponential decay toward the Beta(1,1) prior; never below it; updatedAt is unchanged. */
-export function decayPosterior(p: ArmPosterior, now: number, halfLifeMs: number = DEFAULT_HALF_LIFE_MS): ArmPosterior {
-  const w = now <= p.updatedAt ? 1 : 2 ** (-(now - p.updatedAt) / halfLifeMs);
-  return { alpha: 1 + Math.max(0, p.alpha - 1) * w, beta: 1 + Math.max(0, p.beta - 1) * w, updatedAt: p.updatedAt };
-}
-
-/** Decays to now, then adds one Bernoulli observation; evidence is capped at MAX_EVIDENCE. */
-export function updatePosterior(p: ArmPosterior, reward: 0 | 1, now: number, halfLifeMs: number = DEFAULT_HALF_LIFE_MS): ArmPosterior {
-  const decayed = decayPosterior(p, now, halfLifeMs);
-  let alpha = decayed.alpha + reward;
-  let beta = decayed.beta + (1 - reward);
-  if (alpha + beta > MAX_EVIDENCE) {
-    const scale = (MAX_EVIDENCE - 2) / ((alpha - 1) + (beta - 1));
-    alpha = 1 + (alpha - 1) * scale;
-    beta = 1 + (beta - 1) * scale;
+}).strict().superRefine((row, ctx) => {
+  const chosen = DIMENSION_ORDER.filter((d) => row.armChosen[d] !== undefined);
+  const issue = (message: string) => ctx.addIssue({ code: 'custom', message });
+  if (chosen.length === 0) issue('no_sampled_dimension');
+  let product = 1;
+  for (const d of DIMENSION_ORDER) {
+    const arm = row.armChosen[d];
+    const p = row.propensity[d];
+    const unchosen = row.unchosenArms[d];
+    if (arm === undefined) {
+      if (p !== undefined || unchosen !== undefined) issue('dimension_keys_mismatch');
+      continue;
+    }
+    if (p === undefined || unchosen === undefined) { issue('dimension_keys_mismatch'); continue; }
+    if (row.context.pinned[d] !== undefined) issue('pinned_dimension_sampled');
+    const expected = (ARMS[d] as readonly string[]).filter((a) => a !== arm);
+    if (unchosen.length !== expected.length || unchosen.some((a, i) => a !== expected[i])) issue('unchosen_arms_mismatch');
+    product *= p;
   }
-  return { alpha, beta, updatedAt: now };
+  if (chosen.length > 0 && Math.abs(product - row.jointPropensity) > 1e-9 * Math.max(1, product)) issue('joint_propensity_mismatch');
+  if (new Set(row.rewardKinds).size !== row.rewardKinds.length) issue('duplicate_reward_kind');
+  if (row.expiresAt < row.at) issue('expires_before_at');
+  if (row.settledAt !== undefined && row.settledAt < row.at) issue('settled_before_at');
+  if (row.settledAt === undefined && (row.reward !== null || row.rewardKinds.length > 0)) issue('unsettled_with_reward');
+});
+
+const signalAt = z.number().min(-MAX_TIME).max(MAX_TIME);
+export const rewardSignalSchema: z.ZodType<RewardSignal> = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('reaction'), polarity: z.enum(['positive', 'negative']), at: signalAt }).strict(),
+  z.object({ kind: z.literal('follow_up'), corrective: z.boolean(), at: signalAt }).strict(),
+  z.object({ kind: z.literal('explicit_thanks'), at: signalAt }).strict(),
+  z.object({ kind: z.literal('explicit_correction'), at: signalAt }).strict(),
+  z.object({ kind: z.literal('share_offer_accepted'), at: signalAt }).strict(),
+  z.object({ kind: z.literal('voice_reciprocated'), at: signalAt }).strict(),
+  z.object({ kind: z.literal('reply'), at: signalAt }).strict(),
+]);
+
+// ---------------------------------------------------------------------------
+// Keys
+// ---------------------------------------------------------------------------
+
+const sha256Hex = (value: string): string => createHash('sha256').update(value, 'utf8').digest('hex');
+
+/** sha256('vox_reply_style:' + personId), hex, first 32 characters. Pseudonymous, not anonymous. */
+export function subjectKey(personId: string): string {
+  return sha256Hex(`vox_reply_style:${personId}`).slice(0, 32);
 }
 
-function draw(random: () => number): number {
-  const u = random();
-  if (typeof u !== 'number' || !(u >= 0 && u < 1)) throw new RangeError('reply_style_rng_out_of_range');
-  return u;
+function posteriorIdFor(subject: string, personaId: string, space: StyleSpace, route: ReplyRoute, dimension: StyleDimension): string {
+  return sha256Hex(JSON.stringify(['v1', subject, personaId, space, route, dimension])).slice(0, 40);
 }
 
-function standardNormal(random: () => number): number {
-  const u1 = 1 - draw(random); // (0, 1]: log(0) cannot occur
-  const u2 = draw(random);
+export function posteriorId(scope: ReplyStyleScope, dimension: StyleDimension): string {
+  return posteriorIdFor(subjectKey(scope.personId), scope.personaId, scope.space, scope.route, dimension);
+}
+
+// ---------------------------------------------------------------------------
+// Precedence
+// ---------------------------------------------------------------------------
+
+function isDimension(value: unknown): value is StyleDimension {
+  return typeof value === 'string' && (DIMENSION_ORDER as readonly string[]).includes(value);
+}
+
+function isStyleValue(dimension: StyleDimension, value: unknown): boolean {
+  if (typeof value !== 'string') return false;
+  if (dimension === 'language' && value === 'auto') return true;
+  return (ARMS[dimension] as readonly string[]).includes(value);
+}
+
+/** Keeps only valid values; never throws. */
+function sanitizeStyle(input: unknown): Partial<ReplyStyle> {
+  const out: Partial<Record<StyleDimension, string>> = {};
+  if (!input || typeof input !== 'object') return {};
+  for (const d of DIMENSION_ORDER) {
+    const value = (input as Record<string, unknown>)[d];
+    if (isStyleValue(d, value)) out[d] = value as string;
+  }
+  return out as Partial<ReplyStyle>;
+}
+
+/**
+ * For each dimension, the first available of: explicit request this turn,
+ * explicit stored preference, sampled arm, persona default, DEFAULT_REPLY_STYLE.
+ */
+export function resolveReplyStyle(layers: {
+  explicitThisTurn?: Partial<ReplyStyle>;
+  stored?: Partial<ReplyStyle>;
+  sampled?: Partial<ReplyStyle>;
+  personaDefault?: Partial<ReplyStyle>;
+}): { style: ReplyStyle; sources: Record<StyleDimension, StyleSource> } {
+  const style: Record<string, string> = {};
+  const sources = {} as Record<StyleDimension, StyleSource>;
+  const ordered: Array<[Partial<ReplyStyle> | undefined, StyleSource]> = [
+    [layers.explicitThisTurn, 'explicit_turn'],
+    [layers.stored, 'explicit_stored'],
+    [layers.sampled, 'sampled'],
+    [layers.personaDefault, 'persona_default'],
+  ];
+  for (const d of DIMENSION_ORDER) {
+    const hit = ordered.find(([layer]) => isStyleValue(d, layer?.[d]));
+    style[d] = hit ? (hit[0] as Record<string, string>)[d] : DEFAULT_REPLY_STYLE[d];
+    sources[d] = hit ? hit[1] : 'persona_default';
+  }
+  return { style: style as unknown as ReplyStyle, sources };
+}
+
+/**
+ * Maps resolvePreferences output to pinned dimensions. Only source 'explicit'
+ * pins; 'hypothesis', 'reset' and 'default' never do (after a reset the
+ * bandit may sample again). language 'auto' does not pin.
+ */
+export function styleFromPreferences(resolved: readonly ResolvedPreference[]): Partial<ReplyStyle> {
+  const out: Partial<ReplyStyle> = {};
+  if (!Array.isArray(resolved)) return out;
+  for (const preference of resolved) {
+    if (!preference || preference.source !== 'explicit' || !preference.setting) continue;
+    const setting = preference.setting;
+    if (setting.key === 'response_length' && isStyleValue('length', setting.value)) out.length = setting.value;
+    else if (setting.key === 'formatting' && setting.value === 'plain') out.structure = 'plain';
+    else if (setting.key === 'formatting' && setting.value === 'structured') out.structure = 'steps';
+    else if (setting.key === 'language' && (setting.value === 'en' || setting.value === 'fa')) out.language = setting.value;
+  }
+  return out;
+}
+
+/** Structurally identical to S09's TriageV2.explicitStyleRequest; no import. */
+export function explicitRequestFromTurn(
+  style?: 'brief' | 'detailed' | 'step_by_step' | 'listening' | 'unspecified',
+  format?: 'voice' | 'text',
+): Partial<ReplyStyle> {
+  const out: Partial<ReplyStyle> = {};
+  if (style === 'brief') out.length = 'brief';
+  else if (style === 'detailed') out.length = 'detailed';
+  else if (style === 'step_by_step') out.structure = 'steps';
+  else if (style === 'listening') { out.length = 'brief'; out.closingQuestion = 'no'; }
+  if (format === 'voice') out.modality = 'voice-default';
+  else if (format === 'text') out.modality = 'text';
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Follow-up classification and reward
+// ---------------------------------------------------------------------------
+
+export const EN_CORRECTION = /^\s*(no|nope|nah)\b|\bnot what i (meant|asked)\b|\b(try|do|say|write) (it|that) again\b|^\s*again\b|\bthat'?s (wrong|not right|incorrect)\b/i;
+export const FA_CORRECTION = /^\s*(نه|نخیر)(?=\s|[،,.!؟?]|$)|منظورم\s*(این|اون)?\s*نبود|^\s*دوباره|دوباره\s*(بگو|بنویس|امتحان کن)|اشتباه\s*(ه|است|بود)/u;
+export const EN_THANKS = /\b(thanks|thank you|thx|ty|perfect)\b/i;
+export const FA_THANKS = /(ممنون|مرسی|سپاس|دستت درد نکنه|عالی بود)/u;
+
+/**
+ * Heuristic EN/FA classification of a follow-up message. Correction wins over
+ * thanks, so "no problem, thanks" is corrective. The text is never returned,
+ * stored or logged; only the label leaves this function.
+ */
+export function classifyFollowUp(text: string): 'corrective' | 'thanks' | 'neutral' {
+  if (typeof text !== 'string') return 'neutral';
+  const normalized = text.normalize('NFKC').replace(/ي/g, 'ی').replace(/ك/g, 'ک').trim();
+  if (EN_CORRECTION.test(normalized) || FA_CORRECTION.test(normalized)) return 'corrective';
+  if (EN_THANKS.test(normalized) || FA_THANKS.test(normalized)) return 'thanks';
+  return 'neutral';
+}
+
+/**
+ * Composite reward. Any negative wins (0). Strong positives, deduplicated by
+ * kind, sum to the reward; a non-corrective follow-up adds 0.25 only next to
+ * a strong positive. Bare replies and follow-ups alone yield null, which
+ * never changes a posterior.
+ */
+export function computeReward(signals: readonly unknown[], exposureAt: number): RewardResult {
+  const kinds = new Set<RewardKind>();
+  let negative = false;
+  let nonCorrectiveFollowUp = false;
+  let reply = false;
+  if (Array.isArray(signals) && Number.isFinite(exposureAt)) {
+    for (const raw of signals) {
+      const parsed = rewardSignalSchema.safeParse(raw);
+      if (!parsed.success) continue;
+      const signal = parsed.data;
+      const elapsed = signal.at - exposureAt;
+      const window = signal.kind === 'follow_up' ? FOLLOW_UP_WINDOW_MS : SETTLE_WINDOW_MS;
+      if (!(elapsed >= 0 && elapsed <= window)) continue;
+      switch (signal.kind) {
+        case 'reaction':
+          if (signal.polarity === 'positive') kinds.add('reaction_positive');
+          else { kinds.add('reaction_negative'); negative = true; }
+          break;
+        case 'follow_up':
+          if (signal.corrective) { kinds.add('follow_up_corrective'); negative = true; }
+          else { kinds.add('follow_up'); nonCorrectiveFollowUp = true; }
+          break;
+        case 'explicit_correction':
+          kinds.add('explicit_correction'); negative = true;
+          break;
+        case 'explicit_thanks':
+        case 'share_offer_accepted':
+        case 'voice_reciprocated':
+          kinds.add(signal.kind);
+          break;
+        case 'reply':
+          reply = true;
+          break;
+      }
+    }
+  }
+  const ordered = REWARD_KINDS.filter((k) => kinds.has(k));
+  if (negative) return { reward: 0, kinds: ordered, reason: 'negative' };
+  const strong = (kinds.has('reaction_positive') ? REWARD_WEIGHTS.reaction : 0)
+    + (kinds.has('explicit_thanks') ? REWARD_WEIGHTS.explicit_thanks : 0)
+    + (kinds.has('share_offer_accepted') ? REWARD_WEIGHTS.share_offer_accepted : 0)
+    + (kinds.has('voice_reciprocated') ? REWARD_WEIGHTS.voice_reciprocated : 0);
+  if (strong === 0) {
+    return { reward: null, kinds: ordered, reason: nonCorrectiveFollowUp || reply ? 'reply_only' : 'no_signal' };
+  }
+  const reward = Math.min(1, strong + (nonCorrectiveFollowUp ? REWARD_WEIGHTS.follow_up : 0));
+  return { reward, kinds: ordered, reason: 'positive' };
+}
+
+// ---------------------------------------------------------------------------
+// Decay and sampling
+// ---------------------------------------------------------------------------
+
+/** Pseudo-counts decay toward Beta(1,1): f = 0.5^(max(0, elapsed)/halfLife). Never below 1. */
+export function decayBeta(p: BetaParams, elapsedMs: number, halfLifeMs: number = HALF_LIFE_MS): BetaParams {
+  const elapsed = Number.isFinite(elapsedMs) ? Math.max(0, elapsedMs) : 0;
+  const f = halfLifeMs > 0 && Number.isFinite(halfLifeMs) ? Math.pow(0.5, elapsed / halfLifeMs) : 1;
+  return { alpha: 1 + Math.max(0, p.alpha - 1) * f, beta: 1 + Math.max(0, p.beta - 1) * f };
+}
+
+function draw(rng: () => number): number {
+  const value = rng();
+  if (typeof value !== 'number' || !(value >= 0 && value < 1)) throw new RangeError('reply_style_rng');
+  return value;
+}
+
+/** Box–Muller standard normal from two uniforms. */
+function normal(rng: () => number): number {
+  const u1 = 1 - draw(rng); // (0, 1]
+  const u2 = draw(rng);
   return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
 }
 
-const MAX_GAMMA_ITERATIONS = 1_000;
-function sampleGamma(shape: number, random: () => number): number {
-  if (shape < 1) return sampleGamma(shape + 1, random) * (1 - draw(random)) ** (1 / shape);
+/** Marsaglia–Tsang gamma variate; shapes below 1 use the u^(1/a) boost. */
+function sampleGamma(shape: number, rng: () => number): number {
+  if (shape < 1) {
+    const boosted = sampleGamma(shape + 1, rng);
+    return boosted * Math.pow(1 - draw(rng), 1 / shape);
+  }
   const d = shape - 1 / 3;
   const c = 1 / Math.sqrt(9 * d);
-  for (let i = 0; i < MAX_GAMMA_ITERATIONS; i++) {
+  for (let attempt = 0; attempt < 1_000; attempt++) {
     let x: number;
     let v: number;
-    do { x = standardNormal(random); v = 1 + c * x; } while (v <= 0);
+    do {
+      x = normal(rng);
+      v = 1 + c * x;
+    } while (v <= 0);
     v = v * v * v;
-    const u = draw(random);
-    if (u < 1 - 0.0331 * x ** 4) return d * v;
+    const u = draw(rng);
+    if (u < 1 - 0.0331 * x * x * x * x) return d * v;
     if (Math.log(u) < 0.5 * x * x + d * (1 - v + Math.log(v))) return d * v;
   }
-  throw new RangeError('reply_style_gamma_no_convergence');
+  return d; // Unreachable with a sane rng; bounded so a degenerate rng cannot hang.
 }
 
-/** One Beta(alpha, beta) draw via two Gamma draws. Throws RangeError on a bad RNG or bad shape. */
-export function sampleBeta(alpha: number, beta: number, random: () => number): number {
-  if (!Number.isFinite(alpha) || !Number.isFinite(beta) || alpha <= 0 || beta <= 0) throw new RangeError('reply_style_bad_shape');
-  const x = sampleGamma(alpha, random);
-  const y = sampleGamma(beta, random);
-  return x + y === 0 ? 0.5 : x / (x + y);
+export function sampleBeta(alpha: number, beta: number, rng: () => number): number {
+  if (!(alpha > 0) || !(beta > 0) || !Number.isFinite(alpha) || !Number.isFinite(beta)) throw new RangeError('reply_style_beta_params');
+  const x = sampleGamma(alpha, rng);
+  const y = sampleGamma(beta, rng);
+  const sum = x + y;
+  return sum > 0 ? x / sum : 0.5;
 }
 
-/** Deterministic 32-bit RNG for tests and offline replay. */
-export function mulberry32(seed: number): () => number {
-  let state = seed | 0;
+/** mulberry32: deterministic [0,1) generator for tests and offline replay. */
+export function seededRng(seed: number): () => number {
+  let state = seed >>> 0;
   return () => {
-    state = (state + 0x6D2B79F5) | 0;
-    let t = Math.imul(state ^ (state >>> 15), 1 | state);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    state = (state + 0x6d2b79f5) >>> 0;
+    let t = state;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4_294_967_296;
   };
 }
 
-const isArm = (d: ReplyStyleDimension, value: unknown): boolean =>
-  typeof value === 'string' && (REPLY_STYLE_ARMS[d] as readonly string[]).includes(value);
-
-type MutableStyle = { -readonly [D in ReplyStyleDimension]?: ReplyStyle[D] };
-
-/** Maps resolvePreferences output to pins. Hypotheses and defaults never pin. */
-export function pinsFromResolvedPreferences(resolved: readonly ResolvedPreference[], personaDefault: ReplyStyle):
-  { pins: Partial<ReplyStyle>; sources: Partial<Record<ReplyStyleDimension, 'explicit_stored' | 'reset'>> } {
-  const pins: MutableStyle = {};
-  const sources: Partial<Record<ReplyStyleDimension, 'explicit_stored' | 'reset'>> = {};
-  const pin = <D extends ReplyStyleDimension>(d: D, value: ReplyStyle[D], source: 'explicit_stored' | 'reset') => {
-    pins[d] = value as MutableStyle[D];
-    sources[d] = source;
-  };
-  for (const preference of resolved) {
-    const setting = preference.setting;
-    const dimension: ReplyStyleDimension | null = setting.key === 'response_length' ? 'length'
-      : setting.key === 'language' ? 'language' : setting.key === 'formatting' ? 'structure' : null;
-    if (!dimension) continue;
-    if (preference.source === 'reset') { pin(dimension, personaDefault[dimension], 'reset'); continue; }
-    if (preference.source !== 'explicit') continue;
-    if (setting.key === 'response_length' && isArm('length', setting.value)) pin('length', setting.value, 'explicit_stored');
-    else if (setting.key === 'language') {
-      if (setting.value === 'en' || setting.value === 'fa') pin('language', setting.value, 'explicit_stored');
-      else if (setting.value === 'auto') pin('language', personaDefault.language, 'explicit_stored');
-    } else if (setting.key === 'formatting') {
-      if (setting.value === 'plain') pin('structure', 'plain', 'explicit_stored');
-      else if (setting.value === 'structured') pin('structure', 'steps', 'explicit_stored');
-    }
-  }
-  return { pins: pins as Partial<ReplyStyle>, sources };
-}
-
-/** The pure precedence resolver: explicit this turn > stored pin > sampled > persona default. */
-export function resolveReplyStyle(input: { personaDefault: ReplyStyle; explicitThisTurn?: Partial<ReplyStyle>; stored?: ReturnType<typeof pinsFromResolvedPreferences>; sampled?: Partial<ReplyStyle> }):
-  { style: ReplyStyle; sources: Record<ReplyStyleDimension, ReplyStyleSource> } {
-  const style: MutableStyle = {};
-  const sources = {} as Record<ReplyStyleDimension, ReplyStyleSource>;
-  for (const d of REPLY_STYLE_DIMENSIONS) {
-    const turn = input.explicitThisTurn?.[d];
-    const stored = input.stored?.pins[d];
-    const sampled = input.sampled?.[d];
-    if (isArm(d, turn)) { style[d] = turn as never; sources[d] = 'explicit_turn'; }
-    else if (isArm(d, stored)) { style[d] = stored as never; sources[d] = input.stored?.sources[d] ?? 'explicit_stored'; }
-    else if (isArm(d, sampled)) { style[d] = sampled as never; sources[d] = 'sampled'; }
-    else { style[d] = input.personaDefault[d] as never; sources[d] = 'persona_default'; }
-  }
-  return { style: style as ReplyStyle, sources };
-}
-
-export function styleFromExplicitRequest(request: ExplicitStyleRequest): Partial<ReplyStyle> {
-  switch (request) {
-    case 'brief': return { length: 'brief' };
-    case 'detailed': return { length: 'detailed' };
-    case 'step_by_step': return { structure: 'steps' };
-    default: return {};
-  }
-}
-
-/** Composite reward. Any negative gives 0, else any positive gives 1, else null. `replied` is never read. */
-export function compositeReward(signals: ReplyOutcomeSignals, replyAt: number): CompositeReward {
-  const followUp = signals.followUp;
-  const inWindow = followUp !== undefined && Number.isFinite(followUp.at) && Number.isFinite(replyAt)
-    && followUp.at - replyAt >= 0 && followUp.at - replyAt <= FOLLOW_UP_WINDOW_MS;
-  const negatives: ReplySignalKind[] = [];
-  const positives: ReplySignalKind[] = [];
-  if (signals.explicitCorrection === true) negatives.push('explicit_correction');
-  if (signals.correctionPhrase === true) negatives.push('correction_phrase');
-  if (signals.reaction === 'negative') negatives.push('reaction_negative');
-  if (inWindow && followUp?.corrective === true) negatives.push('corrective_follow_up');
-  if (signals.reaction === 'positive') positives.push('reaction_positive');
-  if (inWindow && followUp?.corrective === false) positives.push('follow_up');
-  if (signals.shareOfferAccepted === true) positives.push('share_offer_accepted');
-  if (signals.voiceReciprocated === true) positives.push('voice_reciprocated');
-  if (signals.explicitThanks === true) positives.push('explicit_thanks');
-  return { reward: negatives.length > 0 ? 0 : positives.length > 0 ? 1 : null, positives, negatives };
-}
-
-const CORRECTION_PATTERNS: readonly RegExp[] = [
-  /^(no|nope)\b(?!\s+(problem|worries|need|rush|thanks|thank you)\b)/,
-  /\b(try|say|do( it)?|explain( it)?) again\b/,
-  /^again[.!?]*$/,
-  /\bnot what i (meant|asked|wanted)\b/,
-  /\byou misunderstood\b/,
-  /\bthat'?s (wrong|not right|incorrect)\b/,
-  /^نه(?=$|[\s،,.!؟?])(?!\s*(ممنون|مرسی|مشکلی|نیازی))/,
-  /دوباره(?=$|[\s،,.!؟?])/,
-  /منظورم\s*(این|اون|آن)\s*نبود/,
-  /اشتباه\s*(متوجه|فهمیدی|گفتی|است|ه)/,
-  /درست\s*نیست/,
-];
-
-/** Pure EN/FA heuristic for "no / again / not what I meant". The text is never retained, logged or returned. */
-export function detectCorrectionPhrase(text: string): boolean {
-  if (typeof text !== 'string') return false;
-  const normalized = text.normalize('NFKC')
-    .replace(/ي/g, 'ی')
-    .replace(/ك/g, 'ک')
-    .replace(/[‌ـ]/g, '')
-    .trim()
-    .toLowerCase();
-  return CORRECTION_PATTERNS.some(pattern => pattern.test(normalized));
-}
-
-// ---------------------------------------------------------------------------
-// Policy
-// ---------------------------------------------------------------------------
-
-const validKey = (key: ReplyStyleKey): boolean =>
-  typeof key.personId === 'string' && key.personId.length > 0 && ID_PATTERN.test(key.personaId)
-  && (SPACES as readonly string[]).includes(key.space) && (ROUTES as readonly string[]).includes(key.route);
-
-const argmax = (values: readonly number[]): number => {
+function argmax(values: readonly number[]): number {
   let best = 0;
   for (let i = 1; i < values.length; i++) if (values[i] > values[best]) best = i;
   return best;
-};
-
-export class ReplyStylePolicy {
-  private readonly store: ReplyStyleStore;
-  private readonly random: () => number;
-  private readonly now: () => number;
-  private readonly newId: () => string;
-  private readonly dimensions: readonly ReplyStyleDimension[];
-  private readonly halfLifeMs: number;
-  private readonly propensitySamples: number;
-  private readonly evalRetentionMs: number;
-
-  constructor(options: ReplyStylePolicyOptions) {
-    const dimensions = options.dimensions ?? REPLY_STYLE_DIMENSIONS;
-    if (dimensions.length === 0) throw new Error('reply_style_no_dimensions');
-    if (new Set(dimensions).size !== dimensions.length) throw new Error('reply_style_duplicate_dimension');
-    if (dimensions.some(d => !REPLY_STYLE_DIMENSIONS.includes(d))) throw new Error('reply_style_unknown_dimension');
-    const halfLifeMs = options.halfLifeMs ?? DEFAULT_HALF_LIFE_MS;
-    if (!Number.isFinite(halfLifeMs) || halfLifeMs <= 0) throw new Error('reply_style_bad_half_life');
-    const samples = options.propensitySamples ?? DEFAULT_PROPENSITY_SAMPLES;
-    if (!Number.isInteger(samples) || samples < MIN_PROPENSITY_SAMPLES || samples > MAX_PROPENSITY_SAMPLES) throw new Error('reply_style_bad_propensity_samples');
-    const evalRetentionMs = options.evalRetentionMs ?? EVAL_RETENTION_MS;
-    if (!Number.isSafeInteger(evalRetentionMs) || evalRetentionMs <= 0) throw new Error('reply_style_bad_retention');
-    this.store = options.store;
-    this.random = options.random ?? Math.random;
-    this.now = options.now ?? Date.now;
-    this.newId = options.newId ?? randomUUID;
-    // Fixed table order regardless of the order given.
-    this.dimensions = REPLY_STYLE_DIMENSIONS.filter(d => dimensions.includes(d));
-    this.halfLifeMs = halfLifeMs;
-    this.propensitySamples = samples;
-    this.evalRetentionMs = evalRetentionMs;
-  }
-
-  /** Never throws. Any gate, audience, store or RNG problem yields the non-sampled resolution. */
-  async choose(input: ChooseReplyStyleInput): Promise<ReplyStyleChoice> {
-    let fallback: ReplyStyleChoice;
-    try {
-      const stored = pinsFromResolvedPreferences(input.storedPreferences ?? [], input.personaDefault);
-      const base = resolveReplyStyle({ personaDefault: input.personaDefault, explicitThisTurn: input.explicitThisTurn, stored });
-      fallback = { style: base.style, sources: base.sources, propensity: 1 };
-      const unpinned = this.dimensions.filter(d => base.sources[d] === 'persona_default');
-      if (input.audience !== 'private' || input.guestAudience !== false || unpinned.length === 0) return fallback;
-      if (await input.personalizationAllowed() !== true) return fallback;
-      if (!validKey(input.key)) return fallback;
-
-      const doc = await this.store.get(input.key);
-      const at = this.now();
-      const sampled: MutableStyle = {};
-      const dimensionPropensity: ReplyStyleEvalRecord['dimensionPropensity'] = {};
-      const unchosenArms: ReplyStyleEvalRecord['unchosenArms'] = {};
-      let propensity = 1;
-      for (const d of unpinned) {
-        const arms = REPLY_STYLE_ARMS[d] as readonly string[];
-        const posteriors = arms.map(arm => decayPosterior(doc?.arms[d]?.[arm] ?? prior(at), at, this.halfLifeMs));
-        const drawAll = () => posteriors.map(p => sampleBeta(p.alpha, p.beta, this.random));
-        const chosen = argmax(drawAll());
-        let wins = 0;
-        for (let i = 0; i < this.propensitySamples; i++) if (argmax(drawAll()) === chosen) wins++;
-        const p = Math.min(1, Math.max(wins / this.propensitySamples, 1 / (this.propensitySamples + 1)));
-        sampled[d] = arms[chosen] as never;
-        dimensionPropensity[d] = p;
-        unchosenArms[d] = arms.filter((_, i) => i !== chosen);
-        propensity *= p;
-      }
-      const resolved = resolveReplyStyle({ personaDefault: input.personaDefault, explicitThisTurn: input.explicitThisTurn, stored, sampled });
-      if (await input.personalizationAllowed() !== true) return fallback;
-      const decisionId = this.newId();
-      await this.store.appendDecision({
-        schemaVersion: 1,
-        id: decisionId,
-        at,
-        expiresAt: at + this.evalRetentionMs,
-        context: { personKey: personKeyOf(input.key.personId), personaId: input.key.personaId, space: input.key.space,
-          route: input.key.route, policyVersion: REPLY_STYLE_POLICY_VERSION, dimensions: [...this.dimensions] },
-        armChosen: resolved.style,
-        sources: resolved.sources,
-        propensity,
-        dimensionPropensity,
-        unchosenArms,
-        reward: null,
-      });
-      return { style: resolved.style, sources: resolved.sources, decisionId, propensity };
-    } catch {
-      return fallbackChoice(input.personaDefault, input.explicitThisTurn, input.storedPreferences);
-    }
-  }
-
-  /** Never throws. Updates only sampled dimensions, only the chosen arm, only on a non-null composite reward. */
-  async settle(input: SettleReplyStyleInput): Promise<SettleResult> {
-    try {
-      if (await input.personalizationAllowed() !== true) return { updated: false, reason: 'personalization_off' };
-    } catch {
-      return { updated: false, reason: 'personalization_off' };
-    }
-    const signals = input.signals ?? {};
-    // A reward is only possible with a time-independent signal or a definite follow-up; skip the store otherwise.
-    const possible = compositeReward({ ...signals, followUp: undefined }, 0).reward !== null
-      || (signals.followUp !== undefined && typeof signals.followUp.corrective === 'boolean');
-    if (!possible) return { updated: false, reason: 'no_signal' };
-    try {
-      const now = this.now();
-      return await this.store.settle<SettleResult>(input.decisionId, (decision, doc) => {
-        if (!decision) return { result: { updated: false, reason: 'unknown_decision' } };
-        const outcome = compositeReward(signals, decision.at);
-        if (outcome.reward === null) return { result: { updated: false, reason: 'no_signal' } };
-        if (decision.reward !== null) return { result: { updated: false, reason: 'already_settled' } };
-        if (now - decision.at > REWARD_WINDOW_MS) return { result: { updated: false, reason: 'expired' } };
-        const reward = outcome.reward;
-        const { personKey, personaId, space, route } = decision.context;
-        const next: ReplyStylePosteriorDoc = doc ? structuredClone(doc) : {
-          schemaVersion: 1, id: posteriorDocIdForPersonKey(personKey, personaId, space, route),
-          personKey, personaId, space, route, arms: {}, updatedAt: now,
-        };
-        const sampledDimensions = REPLY_STYLE_DIMENSIONS.filter(d => decision.sources[d] === 'sampled');
-        for (const d of sampledDimensions) {
-          const arm = decision.armChosen[d];
-          const current = next.arms[d]?.[arm] ?? prior(now);
-          next.arms[d] = { ...(next.arms[d] ?? {}), [arm]: updatePosterior(current, reward, now, this.halfLifeMs) };
-        }
-        next.updatedAt = Math.max(next.updatedAt, now);
-        const settled: ReplyStyleEvalRecord = {
-          ...structuredClone(decision), reward,
-          rewardSignals: [...outcome.positives, ...outcome.negatives], settledAt: now,
-        };
-        return { decision: settled, ...(sampledDimensions.length > 0 ? { doc: next } : {}), result: { updated: true, reward } };
-      });
-    } catch {
-      return { updated: false, reason: 'store_error' };
-    }
-  }
-
-  /** The person's own view ("Why this?"), decayed to now. Not gated: it is an access right. */
-  async describe(scope: { personId: string; personaId: string; space: ReplySpace }): Promise<PosteriorView[]> {
-    const now = this.now();
-    const docs = await this.store.listPosteriors({ personKey: personKeyOf(scope.personId), personaId: scope.personaId, space: scope.space });
-    const views: PosteriorView[] = [];
-    for (const doc of [...docs].sort((a, b) => ROUTES.indexOf(a.route) - ROUTES.indexOf(b.route))) {
-      for (const d of REPLY_STYLE_DIMENSIONS) {
-        for (const arm of REPLY_STYLE_ARMS[d] as readonly string[]) {
-          const posterior = doc.arms[d]?.[arm];
-          if (!posterior) continue;
-          const decayed = decayPosterior(posterior, now, this.halfLifeMs);
-          views.push({ route: doc.route, dimension: d, arm, alpha: decayed.alpha, beta: decayed.beta,
-            mean: decayed.alpha / (decayed.alpha + decayed.beta), updatedAt: posterior.updatedAt });
-        }
-      }
-    }
-    return views;
-  }
-
-  /** Experience-screen Reset: deletes posteriors and eval rows for (person, persona, space), all routes. */
-  reset(scope: { personId: string; personaId: string; space: ReplySpace }): Promise<{ posteriors: number; decisions: number }> {
-    return this.store.deleteScope({ personKey: personKeyOf(scope.personId), personaId: scope.personaId, space: scope.space });
-  }
-
-  /** optional.personalization withdrawal, product pause or epoch bump: deletes every posterior and eval row of the person (in `space` when given). */
-  withdraw(personId: string, space?: ReplySpace): Promise<{ posteriors: number; decisions: number }> {
-    return this.store.deleteScope({ personKey: personKeyOf(personId), ...(space === undefined ? {} : { space }) });
-  }
 }
 
-function fallbackChoice(personaDefault: ReplyStyle, explicitThisTurn: Partial<ReplyStyle> | undefined,
-  storedPreferences: readonly ResolvedPreference[] | undefined): ReplyStyleChoice {
-  try {
-    const stored = pinsFromResolvedPreferences(storedPreferences ?? [], personaDefault);
-    const base = resolveReplyStyle({ personaDefault, explicitThisTurn, stored });
-    return { style: base.style, sources: base.sources, propensity: 1 };
-  } catch {
-    const sources = Object.fromEntries(REPLY_STYLE_DIMENSIONS.map(d => [d, 'persona_default'])) as Record<ReplyStyleDimension, ReplyStyleSource>;
-    return { style: personaDefault, sources, propensity: 1 };
+// ---------------------------------------------------------------------------
+// Bandit
+// ---------------------------------------------------------------------------
+
+const MAX_REMEMBERED_SCOPES = 10_000;
+
+function validScope(scope: unknown): ReplyStyleScope | null {
+  if (!scope || typeof scope !== 'object') return null;
+  const s = scope as Record<string, unknown>;
+  if (typeof s.personId !== 'string' || s.personId.length === 0 || s.personId.length > MAX_PERSON_ID_LENGTH) return null;
+  if (typeof s.personaId !== 'string' || !PERSONA_ID.test(s.personaId)) return null;
+  if (!SPACES.includes(s.space as StyleSpace) || !ROUTES.includes(s.route as ReplyRoute)) return null;
+  return Object.freeze({ personId: s.personId, personaId: s.personaId, space: s.space as StyleSpace, route: s.route as ReplyRoute });
+}
+
+function validTime(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= MAX_TIME ? value : null;
+}
+
+function clampParam(value: number): number {
+  return Math.min(MAX_BETA_PARAM, Math.max(1, value));
+}
+
+export class ReplyStyleBandit {
+  private readonly store: ReplyStyleStore;
+  private readonly authorize: (scope: ReplyStyleScope) => Promise<boolean>;
+  private readonly rng: () => number;
+  private readonly clock: () => number;
+  private readonly newId: () => string;
+  private readonly dimensions: readonly StyleDimension[];
+  private readonly propensitySamples: number;
+  /** exposureId → scope, process memory only, so settle can re-run authorize. */
+  private readonly scopes = new Map<string, ReplyStyleScope>();
+
+  constructor(deps: ReplyStyleBanditDeps) {
+    if (!deps || typeof deps.store !== 'object' || deps.store === null || typeof deps.authorize !== 'function') {
+      throw new TypeError('reply_style_deps');
+    }
+    const dimensions: readonly unknown[] = deps.dimensions ?? DEFAULT_DIMENSIONS;
+    if (!Array.isArray(dimensions) || dimensions.length < 4 || dimensions.length > 6
+        || new Set(dimensions).size !== dimensions.length || !dimensions.every(isDimension)) {
+      throw new RangeError('reply_style_dimensions');
+    }
+    const samples = deps.propensitySamples ?? DEFAULT_PROPENSITY_SAMPLES;
+    if (!Number.isInteger(samples) || samples < MIN_PROPENSITY_SAMPLES || samples > MAX_PROPENSITY_SAMPLES) {
+      throw new RangeError('reply_style_propensity_samples');
+    }
+    this.store = deps.store;
+    this.authorize = deps.authorize;
+    this.rng = deps.rng ?? Math.random;
+    this.clock = deps.now ?? Date.now;
+    this.newId = deps.newId ?? randomUUID;
+    this.dimensions = DIMENSION_ORDER.filter((d) => (dimensions as readonly string[]).includes(d));
+    this.propensitySamples = samples;
+  }
+
+  /** Never throws. Samples only in private, non-guest chats after authorize. */
+  async choose(input: ChooseInput): Promise<ReplyStyleChoice> {
+    const explicit = sanitizeStyle(input?.explicitThisTurn);
+    const persona = sanitizeStyle(input?.personaDefault);
+    // Fail closed: stored preferences are ignored too when the gate fails.
+    const closed = (): ReplyStyleChoice => resolveReplyStyle({ explicitThisTurn: explicit, personaDefault: persona });
+    try {
+      if (input.chatKind !== 'private' || input.guestAudience !== false) return closed();
+      const scope = validScope(input.scope);
+      if (!scope) return closed();
+      const now = validTime(input.now ?? this.clock());
+      if (now === null) return closed();
+      if (!(await this.allowed(scope))) return closed();
+
+      const stored = styleFromPreferences(Array.isArray(input.storedPreferences) ? input.storedPreferences : []);
+      const unsampled = (): ReplyStyleChoice => resolveReplyStyle({ explicitThisTurn: explicit, stored, personaDefault: persona });
+      const pinned: Partial<Record<StyleDimension, 'explicit_turn' | 'explicit_stored'>> = {};
+      const toSample: StyleDimension[] = [];
+      for (const d of this.dimensions) {
+        if (explicit[d] !== undefined) pinned[d] = 'explicit_turn';
+        else if (stored[d] !== undefined) pinned[d] = 'explicit_stored';
+        else toSample.push(d);
+      }
+      if (toSample.length === 0) return unsampled();
+
+      let rows: PosteriorRow[];
+      try {
+        rows = await this.store.readPosteriors(toSample.map((d) => posteriorId(scope, d)));
+      } catch {
+        return closed();
+      }
+      const byDimension = new Map<StyleDimension, PosteriorRow>();
+      for (const raw of Array.isArray(rows) ? rows : []) {
+        const parsed = posteriorRowSchema.safeParse(raw);
+        if (!parsed.success || parsed.data.id !== posteriorId(scope, parsed.data.dimension)) continue;
+        byDimension.set(parsed.data.dimension, parsed.data);
+      }
+
+      const sampled: Partial<Record<StyleDimension, string>> = {};
+      const propensity: Partial<Record<StyleDimension, number>> = {};
+      const unchosenArms: Partial<Record<StyleDimension, string[]>> = {};
+      let jointPropensity = 1;
+      for (const d of toSample) {
+        const arms: readonly string[] = ARMS[d];
+        const row = byDimension.get(d);
+        const params = arms.map((arm) => {
+          const stored = row?.arms[arm];
+          return stored ? decayBeta(stored, now - row.updatedAt) : { alpha: 1, beta: 1 };
+        });
+        const chosen = argmax(params.map((p) => sampleBeta(p.alpha, p.beta, this.rng)));
+        const wins = new Array<number>(arms.length).fill(0);
+        for (let round = 0; round < this.propensitySamples; round++) {
+          wins[argmax(params.map((p) => sampleBeta(p.alpha, p.beta, this.rng)))]++;
+        }
+        const p = (wins[chosen] + 1) / (this.propensitySamples + arms.length);
+        sampled[d] = arms[chosen];
+        propensity[d] = p;
+        unchosenArms[d] = arms.filter((_, i) => i !== chosen);
+        jointPropensity *= p;
+      }
+
+      const id = this.newId();
+      const row: ReplyStyleEvalRow = {
+        schemaVersion: 1,
+        id,
+        policyVersion: POLICY_VERSION,
+        context: {
+          subject: subjectKey(scope.personId), personaId: scope.personaId, space: scope.space, route: scope.route,
+          chatKind: 'private', pinned,
+        },
+        armChosen: sampled,
+        propensity,
+        jointPropensity,
+        unchosenArms,
+        reward: null,
+        rewardKinds: [],
+        at: now,
+        expiresAt: now + EVAL_RETENTION_MS,
+      };
+      try {
+        await this.store.recordExposure(evalRowSchema.parse(row));
+      } catch {
+        // Every sampled reply must be logged for offline evaluation; otherwise do not sample.
+        return unsampled();
+      }
+      this.remember(id, scope);
+      return {
+        ...resolveReplyStyle({ explicitThisTurn: explicit, stored, sampled: sampled as Partial<ReplyStyle>, personaDefault: persona }),
+        exposureId: id,
+      };
+    } catch {
+      return closed();
+    }
+  }
+
+  /** Idempotent. Re-runs authorize before any posterior write. */
+  async settle(input: SettleInput): Promise<SettleResult> {
+    const none = (outcome: SettleOutcome, kinds: RewardKind[] = []): SettleResult => ({ outcome, reward: null, kinds });
+    const exposureId = input?.exposureId;
+    if (typeof exposureId !== 'string' || !EVAL_ID.test(exposureId)) return none('unknown_exposure');
+    const now = validTime(input.now ?? this.clock());
+    if (now === null) throw new RangeError('reply_style_now');
+    const scope = input.scope !== undefined ? validScope(input.scope) : this.scopes.get(exposureId) ?? null;
+    const allowed = scope ? await this.allowed(scope) : false;
+    const posteriorIds = scope ? DIMENSION_ORDER.map((d) => posteriorId(scope, d)) : [];
+
+    const result = await this.store.transact<SettleResult>({ exposureIds: [exposureId], posteriorIds }, (snapshot) => {
+      const exposure = snapshot.exposures.get(exposureId);
+      if (!exposure) return { result: none('unknown_exposure') };
+      if (exposure.settledAt !== undefined) return { result: none('already_settled') };
+      const settled = (reward: number | null, kinds: RewardKind[]): ReplyStyleEvalRow =>
+        ({ ...exposure, reward, rewardKinds: kinds, settledAt: Math.max(now, exposure.at) });
+      if (now > exposure.at + SETTLE_WINDOW_MS) return { exposures: [settled(null, [])], result: none('expired') };
+      const context = exposure.context;
+      if (!scope || subjectKey(scope.personId) !== context.subject || scope.personaId !== context.personaId
+          || scope.space !== context.space || scope.route !== context.route) {
+        // Unknown or mismatched scope: write nothing, so the right caller can still settle.
+        return { result: none('not_allowed') };
+      }
+      if (!allowed) return { exposures: [settled(null, [])], result: none('not_allowed') };
+
+      const outcome = computeReward(input.signals, exposure.at);
+      if (outcome.reward === null) {
+        return { exposures: [settled(null, outcome.kinds)], result: none('no_update', outcome.kinds) };
+      }
+      const reward = outcome.reward;
+      const posteriors: PosteriorRow[] = [];
+      for (const d of DIMENSION_ORDER) {
+        const chosen = exposure.armChosen[d];
+        if (chosen === undefined) continue; // pinned or disabled dimensions are never touched
+        const id = posteriorId(scope, d);
+        const previous = snapshot.posteriors.get(id);
+        const arms: Record<string, BetaParams> = {};
+        for (const arm of ARMS[d] as readonly string[]) {
+          const current = previous?.arms[arm] ?? { alpha: 1, beta: 1 };
+          const decayed = previous ? decayBeta(current, now - previous.updatedAt) : current;
+          arms[arm] = arm === chosen
+            ? { alpha: clampParam(decayed.alpha + reward), beta: clampParam(decayed.beta + 1 - reward) }
+            : decayed;
+        }
+        posteriors.push({
+          schemaVersion: 1, id, subject: context.subject, personaId: context.personaId, space: context.space,
+          route: context.route, dimension: d, arms, updatedAt: now,
+        });
+      }
+      return {
+        exposures: [settled(reward, outcome.kinds)],
+        posteriors,
+        result: { outcome: 'updated', reward, kinds: outcome.kinds },
+      };
+    });
+    if (result.outcome !== 'not_allowed' || (scope && !allowed)) this.scopes.delete(exposureId);
+    return result;
+  }
+
+  /** "Why this?" view. Not consent-gated; the caller must pass an authenticated scope. */
+  async posteriors(scope: Omit<ReplyStyleScope, 'route'> & { route?: ReplyRoute }, now?: number): Promise<PosteriorView[]> {
+    const routes = scope?.route === undefined ? ROUTES : [scope.route];
+    const valid = routes.map((route) => validScope({ ...scope, route }));
+    if (valid.some((s) => s === null)) throw new RangeError('reply_style_scope');
+    const at = validTime(now ?? this.clock());
+    if (at === null) throw new RangeError('reply_style_now');
+    const wanted = new Map<string, { route: ReplyRoute; dimension: StyleDimension; order: number }>();
+    let order = 0;
+    for (const s of valid as ReplyStyleScope[]) {
+      for (const d of DIMENSION_ORDER) wanted.set(posteriorId(s, d), { route: s.route, dimension: d, order: order++ });
+    }
+    const rows = await this.store.readPosteriors([...wanted.keys()]);
+    const views: Array<PosteriorView & { order: number }> = [];
+    for (const raw of rows) {
+      const parsed = posteriorRowSchema.safeParse(raw);
+      if (!parsed.success) continue;
+      const key = wanted.get(parsed.data.id);
+      if (!key || key.dimension !== parsed.data.dimension) continue;
+      const row = parsed.data;
+      views.push({
+        route: key.route,
+        dimension: key.dimension,
+        arms: (ARMS[row.dimension] as readonly string[]).map((arm) => {
+          const p = decayBeta(row.arms[arm], at - row.updatedAt);
+          return { arm, mean: p.alpha / (p.alpha + p.beta), evidence: p.alpha + p.beta - 2 };
+        }),
+        updatedAt: row.updatedAt,
+        order: key.order,
+      });
+    }
+    return views.sort((a, b) => a.order - b.order)
+      .map((view) => ({ route: view.route, dimension: view.dimension, arms: view.arms, updatedAt: view.updatedAt }));
+  }
+
+  /** Deletes posteriors and eval rows for one subject, persona and space, across routes. Never gated. */
+  async reset(scope: { personId: string; personaId: string; space: StyleSpace }): Promise<{ posteriors: number; evals: number }> {
+    const valid = validScope({ ...scope, route: 'untriaged' });
+    if (!valid) throw new RangeError('reply_style_scope');
+    this.forget((s) => s.personId === valid.personId && s.personaId === valid.personaId && s.space === valid.space);
+    return this.store.deleteSubject({ subject: subjectKey(valid.personId), personaId: valid.personaId, space: valid.space });
+  }
+
+  /** Consent withdrawal: deletes everything of one subject across personas, in one space or both. Never gated. */
+  async withdraw(scope: { personId: string; space?: StyleSpace }): Promise<{ posteriors: number; evals: number }> {
+    const personId = scope?.personId;
+    if (typeof personId !== 'string' || personId.length === 0 || personId.length > MAX_PERSON_ID_LENGTH) throw new RangeError('reply_style_scope');
+    if (scope.space !== undefined && !SPACES.includes(scope.space)) throw new RangeError('reply_style_scope');
+    this.forget((s) => s.personId === personId && (scope.space === undefined || s.space === scope.space));
+    return this.store.deleteSubject({ subject: subjectKey(personId), ...(scope.space === undefined ? {} : { space: scope.space }) });
+  }
+
+  /** Retention: eval rows past expiresAt and posteriors idle for more than 365 days. */
+  async sweep(now?: number): Promise<{ posteriors: number; evals: number }> {
+    const at = validTime(now ?? this.clock());
+    if (at === null) throw new RangeError('reply_style_now');
+    return this.store.sweep(at);
+  }
+
+  private async allowed(scope: ReplyStyleScope): Promise<boolean> {
+    try {
+      return (await this.authorize(scope)) === true;
+    } catch {
+      return false;
+    }
+  }
+
+  private remember(exposureId: string, scope: ReplyStyleScope): void {
+    this.scopes.delete(exposureId);
+    this.scopes.set(exposureId, scope);
+    while (this.scopes.size > MAX_REMEMBERED_SCOPES) {
+      const oldest = this.scopes.keys().next().value;
+      if (oldest === undefined) break;
+      this.scopes.delete(oldest);
+    }
+  }
+
+  private forget(match: (scope: ReplyStyleScope) => boolean): void {
+    for (const [id, scope] of this.scopes) if (match(scope)) this.scopes.delete(id);
   }
 }
