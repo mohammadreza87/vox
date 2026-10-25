@@ -164,6 +164,21 @@ export function createFileAuditStore(path: string): AuditStore {
 export const AUDIT_SWEEP_EVERY_MS = 86_400_000;
 
 /**
+ * The 12-month retention when nothing appends: with both S08 flags off (after a rollback) withAuditRetention is
+ * not installed, so rows written while a flag was on would never age out. This sweeps once now and then every
+ * `sweepEveryMs` on an unref'd timer, best effort. A sweep never creates the file or collection.
+ */
+export function startAuditRetentionSweep(store: Pick<AuditStore, 'sweep'>, options: { now?: () => Date; sweepEveryMs?: number } = {}): { stop(): void; flush(): Promise<void> } {
+  const now = options.now ?? (() => new Date());
+  let pending: Promise<unknown> = Promise.resolve();
+  const sweep = () => { pending = Promise.resolve().then(() => store.sweep(auditCutoff(now()))).catch(() => undefined); };
+  sweep();
+  const timer = setInterval(sweep, options.sweepEveryMs ?? AUDIT_SWEEP_EVERY_MS);
+  (timer as { unref?: () => void }).unref?.();
+  return { stop: () => clearInterval(timer), async flush() { await pending; } };
+}
+
+/**
  * The 12-month retention, scheduled: the first append and then at most one
  * append per `sweepEveryMs` also start `sweep(auditCutoff(now))`. The sweep is
  * best effort and never delays or fails the append; `flush()` awaits it (tests).

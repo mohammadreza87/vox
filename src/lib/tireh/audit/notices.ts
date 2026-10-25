@@ -9,7 +9,9 @@
  *
  * Erasure: deleting either memory of a notice removes the notice
  * (memory-decorator.ts delete path), and a rights-intake erasure removes every
- * notice naming the person. Notice retention (a TTL) is not fixed by the plan
+ * notice naming the person. Both hold whatever the flags are now: after a
+ * rollback the runtime keeps an erasure-only handle (SupersededNoticeEraser)
+ * and, when notices are stored, an erasing memory store (noticeErasingMemoryStore). Notice retention (a TTL) is not fixed by the plan
  * and waits on product decision (f).
  */
 
@@ -27,7 +29,12 @@ export interface SupersededNoticeStore {
   deleteByMemoryIds(memoryIds: readonly string[]): Promise<number>;
   /** Erasure: removes every notice naming this person (owner or recipient); returns the count removed. */
   deleteForPerson(personId: string): Promise<number>;
+  /** True when any notice is stored. Never creates the file or collection. */
+  hasAny(): Promise<boolean>;
 }
+
+/** The erasure half of a notice store: what must keep working whatever the S08 flags are now. */
+export type SupersededNoticeEraser = Pick<SupersededNoticeStore, 'deleteByMemoryIds' | 'deleteForPerson' | 'hasAny'>;
 
 const MAX_RECIPIENTS = 200;
 export const MAX_NOTICE_LIST = 200;
@@ -78,6 +85,10 @@ export class InMemorySupersededNoticeStore implements SupersededNoticeStore {
     return this.remove((n) => namesPerson(n, personId));
   }
 
+  async hasAny(): Promise<boolean> {
+    return this.notices.length > 0;
+  }
+
   private remove(drop: (n: SupersededNotice) => boolean): number {
     const kept = this.notices.filter((n) => !drop(n));
     const removed = this.notices.length - kept.length;
@@ -121,5 +132,6 @@ export function createFileSupersededNoticeStore(path: string): SupersededNoticeS
     listFor: (personaId, recipientPersonId, since) => serial(async () => select(await readAll(), personaId, recipientPersonId, since)),
     deleteByMemoryIds: (memoryIds) => { const ids = new Set(memoryIds); return remove((n) => namesMemory(n, ids)); },
     deleteForPerson: (personId) => remove((n) => namesPerson(n, personId)),
+    hasAny: () => serial(async () => (await readAll()).length > 0),
   };
 }

@@ -113,6 +113,10 @@ export class FirestoreSupersededNoticeStore implements SupersededNoticeStore {
     return removed;
   }
 
+  async hasAny(): Promise<boolean> {
+    return !(await this.db.collection(NOTICE_COLLECTION).limit(1).get()).empty;
+  }
+
   /** Every copy of a notice that names the person, as owner or among its recipients. */
   async deleteForPerson(personId: string): Promise<number> {
     return await this.deleteWhere('ownerPersonId', '==', personId) + await this.deleteWhere('recipientPersonIds', 'array-contains', personId);

@@ -97,7 +97,7 @@ import { SharedMemoryRepository } from '../adaptive/shared/repository';
 import { FirestoreRevisionSource } from '../tireh/privacy/revisions';
 import { SharedMemoryService } from '../adaptive/shared/service';
 import { tirehFlags } from '../tireh/flags';
-import { auditMemoryStore, auditShareOfferStore, createFileAuditStore, createFileSupersededNoticeStore, FirestoreAuditStore, FirestoreSupersededNoticeStore, withAuditRetention } from '../tireh/audit';
+import { auditMemoryStore, auditShareOfferStore, createFileAuditStore, createFileSupersededNoticeStore, FirestoreAuditStore, FirestoreSupersededNoticeStore, noticeErasingMemoryStore, startAuditRetentionSweep, withAuditRetention } from '../tireh/audit';
 import { AdaptiveExperienceService } from '../adaptive/runtime/service';
 import { AdaptiveObserverService } from '../adaptive/observation/service';
 import { AdaptiveLifecycleService } from '../adaptive/lifecycle/service';
@@ -268,6 +268,31 @@ export function stopStudioPreferenceLearning(): Promise<{ pending: number }> {
   return g.__voxPreferenceStop = g.__voxPreferenceTasks?.tasks.close() ?? Promise.resolve({ pending: 0 });
 }
 
+/**
+ * S08 wiring (section 4.6 notices, section 6 audit). With TIREH_AUDIT_LOG or TIREH_SHARING_V2 set at startup:
+ * the audit and notice stores, the auditing memory and offer decorators and the 12-month sweep on append.
+ * Whatever the flags: an erasure-only notice handle for rights erasure, and (only when notices are stored) a
+ * memory store whose delete erases the notices naming that memory, plus a scheduled vox_audit sweep. Neither
+ * flags-off path creates the audit file, the notice file or a Firestore collection.
+ */
+export async function wireSharingAudit(studio: Pick<Studio, 'deps'>, dataDir: string, db: import('firebase-admin/firestore').Firestore | null): Promise<void> {
+  const flags = tirehFlags();
+  const auditStore = db ? new FirestoreAuditStore(db) : createFileAuditStore(join(dataDir, 'vox-audit.jsonl'));
+  const notices = db ? new FirestoreSupersededNoticeStore(db) : createFileSupersededNoticeStore(join(dataDir, 'supersede-notices.json'));
+  studio.deps.noticeEraser = notices;
+  if (flags.auditLog || flags.sharingV2) {
+    const audit = withAuditRetention(auditStore);
+    studio.deps.audit = audit;
+    studio.deps.memoryNotices = notices;
+    studio.deps.memory = { ...studio.deps.memory, memories: auditMemoryStore(studio.deps.memory.memories, audit, notices), offers: auditShareOfferStore(studio.deps.memory.offers, audit) };
+    return;
+  }
+  startAuditRetentionSweep(auditStore);
+  // A failed existence read assumes notices may be stored: erasure wins over a pure pass-through.
+  const stored = await notices.hasAny().catch(() => true);
+  if (stored) studio.deps.memory = { ...studio.deps.memory, memories: noticeErasingMemoryStore(studio.deps.memory.memories, notices) };
+}
+
 type RuntimeStorage = Pick<StudioDeps, 'store' | 'pets' | 'choices' | 'circleLedger' | 'notesLedger' | 'channelDrafts' | 'memory' | 'rateLimiter' | 'adaptive' | 'relationshipStore' | 'observations' | 'revisions'> & { sharedStorage: AdaptiveStorage; voiceIdentityStorage: AdaptiveStorage; maintenanceStorage: AdaptiveStorage; closeAdaptive?: () => void };
 function fileStorage(dir: string, scopedRelationshipsEnabled: boolean, format: AdaptiveStorageFormat): RuntimeStorage {
   const managed = openLocalAdaptiveStorage(join(dir, 'adaptive'), format);
@@ -422,8 +447,11 @@ async function create(): Promise<Studio> {
       }
     });
     studio.deps.shared = new SharedMemoryService(new SharedMemoryRepository(storage.sharedStorage), storage.adaptive!, sharedAuthorityFromStudioStore(storage.store));
-    // S08: content-free vox_audit rows and supersede notices, only when a flag is set at startup.
-    { const flags = tirehFlags(); if (flags.auditLog || flags.sharingV2) { const db = config.storage === 'firestore' ? await (await import('@/lib/firebase-admin')).getAdminDb() : null; const audit = withAuditRetention(db ? new FirestoreAuditStore(db) : createFileAuditStore(join(config.dataDir, 'vox-audit.jsonl'))); const notices = db ? new FirestoreSupersededNoticeStore(db) : createFileSupersededNoticeStore(join(config.dataDir, 'supersede-notices.json')); studio.deps.audit = audit; studio.deps.memoryNotices = notices; studio.deps.memory = { ...studio.deps.memory, memories: auditMemoryStore(studio.deps.memory.memories, audit, notices), offers: auditShareOfferStore(studio.deps.memory.offers, audit) }; } }
+    // S08: content-free vox_audit rows and supersede notices are written only when a flag is set at startup.
+    // Erasure and retention hold whatever the flags are now: after a rollback, notices recorded while
+    // TIREH_SHARING_V2 was on still go with their memories and on a rights erasure, and vox_audit rows still age
+    // out. Neither path creates a file or collection, so with both flags unset and nothing stored nothing changes.
+    await wireSharingAudit(studio, config.dataDir, config.storage === 'firestore' ? await (await import('@/lib/firebase-admin')).getAdminDb() : null);
     const reminderEndpointId = config.reminderDeliveryEnabled && config.token ? studio.relationshipEndpointId(config.token) : undefined;
     studio.deps.experience = new AdaptiveExperienceService(storage.adaptive!, {
       notificationsEnabled: config.reminderDeliveryEnabled,

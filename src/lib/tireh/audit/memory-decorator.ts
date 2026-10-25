@@ -31,7 +31,7 @@ import { tirehFlags } from '../flags';
 import { supersedeNoticeRecipients } from '../memory/sharing';
 import { isStaleMemoryWriteError, type MemoryStore, type NewMemory, type ShareOfferStore } from '../memory/store';
 import type { MemoryRecord, ShareOffer } from '../types';
-import type { SupersededNoticeStore } from './notices';
+import type { SupersededNoticeEraser, SupersededNoticeStore } from './notices';
 import { memoryPolicyKey, type AuditKind, type AuditOutcome, type AuditStore, type NewAuditRow } from './store';
 
 type MemoryPatch = Partial<Omit<MemoryRecord, 'id' | 'personaId'>>;
@@ -176,6 +176,22 @@ export function auditMemoryStore(inner: MemoryStore, audit: AuditStore, notices?
     },
   };
 
+  return proxy(inner, wrapped);
+}
+
+/**
+ * Erasure after a flag rollback: with both S08 flags off the audit decorator is not installed, yet notices
+ * recorded while TIREH_SHARING_V2 was on must still go with their memories. This proxy intercepts only delete:
+ * the store call first (its result or error unchanged), then every notice naming the id is erased, best effort.
+ * Every other method is the inner store's own.
+ */
+export function noticeErasingMemoryStore(inner: MemoryStore, notices: SupersededNoticeEraser): MemoryStore {
+  const wrapped: Pick<MemoryStore, 'delete'> = {
+    async delete(...args: Parameters<MemoryStore['delete']>) {
+      await inner.delete(...args);
+      await bestEffort(() => notices.deleteByMemoryIds([args[0]]));
+    },
+  };
   return proxy(inner, wrapped);
 }
 

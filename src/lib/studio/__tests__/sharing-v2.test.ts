@@ -584,9 +584,9 @@ describe('runtime wiring', () => {
     delete globalState.__voxStudio;
     for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
   });
-  const configure = (flags: NodeJS.ProcessEnv) => {
-    const dir = mkdtempSync(join(tmpdir(), 'vox-sharing-v2-runtime-'));
-    dirs.push(dir);
+  const configure = (flags: NodeJS.ProcessEnv, existing?: string) => {
+    const dir = existing ?? mkdtempSync(join(tmpdir(), 'vox-sharing-v2-runtime-'));
+    if (!existing) dirs.push(dir);
     const env: NodeJS.ProcessEnv = {
       NODE_ENV: 'production', STUDIO_SECRET: 'a-test-encryption-secret-with-32-characters', ANTHROPIC_API_KEY: 'test-anthropic-key',
       VOXX_BOT_TOKEN: '123456789:abcdefghijklmnopqrstuvwxyz0123456789', VOXX_BOT_USERNAME: 'VoxxBot', STUDIO_SUPERADMIN_IDS: '123, 456',
@@ -610,6 +610,40 @@ describe('runtime wiring', () => {
     await studio.deps.memory.memories.add(mem('agent-x', { scope: { kind: 'private', personId: 'tg-1' }, authorizedPersonIds: ['tg-1'] }));
     expect(existsSync(join(dir, 'vox-audit.jsonl'))).toBe(false);
     expect(existsSync(join(dir, 'supersede-notices.json'))).toBe(false);
+    // Erasure-only: a rights erasure with nothing stored removes nothing and creates nothing.
+    expect(await studio.forgetMemoryNotices(ID.alice)).toBe(0);
+    expect(existsSync(join(dir, 'supersede-notices.json'))).toBe(false);
+  });
+
+  it('after a rollback (flag on, restart with both flags unset) notices still go with their memory and on a rights erasure, and vox_audit still ages out', async () => {
+    const dir = configure({ TIREH_SHARING_V2: '1', TIREH_AUDIT_LOG: '1' });
+    let studio = await getStudio();
+    const owner = personId(ID.alice), recipient = personId(ID.bob);
+    const scope: MemoryScope = { kind: 'people', personIds: [owner, recipient] };
+    const kept = await studio.deps.memory.memories.add(mem('agent-x', { scope, authorizedPersonIds: [owner, recipient] }));
+    const erased = await studio.deps.memory.memories.add(mem('agent-x', { scope, authorizedPersonIds: [owner, recipient] }));
+    const at = new Date();
+    await studio.deps.memoryNotices!.record({ personaId: 'agent-x', oldMemoryId: erased.id, newMemoryId: 'm-new-1', ownerPersonId: owner, recipientPersonIds: [recipient], at });
+    await studio.deps.memoryNotices!.record({ personaId: 'agent-x', oldMemoryId: kept.id, newMemoryId: 'm-new-2', ownerPersonId: owner, recipientPersonIds: [recipient], at });
+    const old = new Date(Date.now() - 400 * 86_400_000);
+    await studio.deps.audit!.append({ kind: 'write', personaId: 'agent-x', memoryIds: ['m-old'], audiencePersonIds: [owner], outcome: 'applied', at: old });
+    expect(readFileSync(join(dir, 'vox-audit.jsonl'), 'utf8')).toContain('m-old');
+
+    delete globalState.__voxStudio;
+    configure({ TIREH_SHARING_V2: '', TIREH_AUDIT_LOG: '' }, dir);
+    studio = await getStudio();
+    expect(studio.deps.memoryNotices).toBeUndefined();
+    expect(studio.deps.audit).toBeUndefined();
+    const notices = () => JSON.parse(readFileSync(join(dir, 'supersede-notices.json'), 'utf8')) as Array<{ oldMemoryId: string }>;
+    expect(notices().map((n) => n.oldMemoryId).sort()).toEqual([erased.id, kept.id].sort());
+    // A memory delete erases the notices naming it, with the flags off.
+    await studio.deps.memory.memories.delete(erased.id);
+    expect(notices().map((n) => n.oldMemoryId)).toEqual([kept.id]);
+    // A rights erasure removes every notice naming the person.
+    expect(await studio.forgetMemoryNotices(ID.alice)).toBe(1);
+    expect(notices()).toEqual([]);
+    // The 12-month vox_audit sweep runs without any append.
+    await vi.waitFor(() => expect(readFileSync(join(dir, 'vox-audit.jsonl'), 'utf8')).not.toContain('m-old'));
   });
 
   it('with TIREH_AUDIT_LOG=1 decorates the stores and writes content-free rows to vox-audit.jsonl', async () => {
