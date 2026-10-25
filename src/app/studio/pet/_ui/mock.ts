@@ -144,12 +144,5 @@ export function createMockApi(o: MockOptions = {}): PetApi {
       else throw new PetError(404, 'circle_unavailable', 'No circle');
       return out as T;
     },
-    async forget(_agentId, opts) {
-      await sleep(o.latency?.care ?? 260, opts?.signal);
-      refuse();
-      const t = now();
-      care = { ...care, tummy: 75, joy: 80, energy: 85, bond: 0, seenBond: 0, asleep: false, lastUpdatedAt: t, lastSeenAt: t, firstMetAt: t };
-      return { erased: 1 };
-    },
   };
 }

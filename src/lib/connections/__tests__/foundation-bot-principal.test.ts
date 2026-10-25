@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Studio } from '../../studio/service';
 import type { StudioState } from '../../studio/types';
 import { signInitData } from '../../studio/auth';
+import { agentInit, TEST_INITDATA_KEY_HEX } from '../../studio/__tests__/initdata-keys';
+import { generateKeyPairSync } from 'crypto';
 import { AdaptiveRepository } from '../../adaptive/persistence/repository';
 import { AdaptiveService } from '../../adaptive/persistence/service';
 import { MemoryAdaptiveStorage } from '../../adaptive/runtime/storage';
@@ -22,7 +24,7 @@ async function fixture(confirmed = true) {
     tokenEnc: id, bot: { id: 100 + i, username: `synthetic_${id}_bot` }, access: [], persona: { name: id } })), groups: [], audit: [] } as unknown as StudioState;
   const ensureMember = vi.fn();
   const botToken = vi.fn((agent: { tokenEnc?: string }) => tokens[agent.tokenEnc as keyof typeof tokens] ?? null);
-  const studio = { ensureMember, botToken, deps: { adaptive, webAppUrl: `${publicOrigin}/studio`, store: { read: async () => structuredClone(state), readCommittedForEffect: () => structuredClone(state) },
+  const studio = { ensureMember, botToken, deps: { adaptive, initDataKey: TEST_INITDATA_KEY_HEX, webAppUrl: `${publicOrigin}/studio`, store: { read: async () => structuredClone(state), readCommittedForEffect: () => structuredClone(state) },
     chatLLM: { identity: { provider: 'anthropic', model: 'fixture' } } } } as unknown as Studio;
   const config = connectionsConfigurationSchema.parse({ schemaVersion: 1, enabled: true, profiles: ['alpha', 'beta'].map(agentId => ({
     accountId: 'telegram-account:123', space: 'personal', agentId, providerId: 'github', providerSubject: `subject-${agentId}`,
@@ -30,12 +32,13 @@ async function fixture(confirmed = true) {
     resources: [{ id: `github:repo:synthetic/${agentId}`, label: `PRIVATE_${agentId}`, toolIds: ['github.repository.get'] }] })) });
   const storage = new InMemoryConnectionsStorage();
   const broker = { begin: vi.fn(), claim: vi.fn(), cancel: vi.fn(), execute: vi.fn(), revoke: vi.fn() };
-  const factory = (actor: ConnectionActor, space: 'personal' | 'work') => createStudioConnectionsApplication(studio, actor, space, {
+  const factory = vi.fn((actor: ConnectionActor, space: 'personal' | 'work') => createStudioConnectionsApplication(studio, actor, space, {
     storage, configuration: async () => structuredClone(config), broker,
-  });
+  }));
+  const botIds: Record<string, number> = { alpha: 100, beta: 101 };
   const request = (agentId = 'alpha', action = '', body?: unknown, token: string = tokens.alpha) => new Request(
     `http://127.0.0.1:3000/api/agents/${agentId}/connections/${action}?space=personal`, {
-      method: body === undefined ? 'GET' : 'POST', headers: { 'x-telegram-init-data': signInitData({ id: 123, first_name: 'Synthetic' }, token),
+      method: body === undefined ? 'GET' : 'POST', headers: { 'x-telegram-init-data': agentInit({ id: 123, first_name: 'Synthetic' }, token, undefined, {}, botIds[agentId] ?? 100),
         origin: publicOrigin, ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
@@ -63,22 +66,52 @@ describe('agent-bot principal and own-account Connections surface', () => {
     const f = await fixture(); f.state.agents[0].visibility = visibility as 'private' | 'org';
     expect((await f.send()).status).toBe(403); expect(f.ensureMember).not.toHaveBeenCalled();
   });
-  it('requires explicit own-account profile confirmation and sets no adult/country/optional consent', async () => {
+  it('never confirms an identity on the agent-bot surface (its token holder could harvest the initData): 404, no binding', async () => {
     const f = await fixture(false);
+    const confirmSpy = vi.spyOn(f.adaptive, 'confirm');
     expect((await f.send()).status).toBe(403);
     const confirm = await f.send('alpha', ['profile', 'confirm'], { confirm: true });
-    expect(confirm.status).toBe(200); expect(await confirm.json()).toEqual({ confirmed: true });
-    expect((await f.send()).status).toBe(200); expect(f.ensureMember).not.toHaveBeenCalled();
+    expect(confirm.status).toBe(404); expect(await confirm.json()).toEqual({ error: 'not_found' });
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect((await f.send()).status).toBe(403); expect(f.ensureMember).not.toHaveBeenCalled();
     const document = await f.adaptive.repository.transaction('telegram-account:123', Date.now(), d => d);
-    expect(document.declaration?.adultConfirmed).not.toBe(true);
-    expect(document.permissions.some(p => p.state === 'granted')).toBe(false);
+    expect(document.binding).toBeUndefined();
+  });
+  it.each([
+    ['profile/confirm', { confirm: true }], ['enroll', { space: 'personal', providerId: 'github', displayLabel: 'X' }], ['grants', { space: 'personal' }],
+    ['revoke', { space: 'personal' }], ['tasks', { space: 'personal' }], ['setup', { space: 'personal' }], ['setup/claim', { space: 'personal' }],
+    ['setup/cancel', { space: 'personal' }], ['mcp/enroll', { space: 'personal' }], ['mcp/setup/preview', { space: 'personal' }],
+    ['mcp/setup/claim', { space: 'personal' }], ['mcp/setup/cancel', { space: 'personal' }], ['actions/approve', { space: 'personal' }],
+    ['actions/cancel', { space: 'personal' }], ['actions/execute', { space: 'personal' }], ['resources/select', { space: 'personal' }],
+    ['workflows/create', { space: 'personal' }], ['resources/connection-1', undefined], ['review/op-1', undefined], ['workflows', undefined],
+  ])('closes %s on the bot surface even with a valid Telegram signature, before building the app', async (action, body) => {
+    const f = await fixture();
+    const confirmSpy = vi.spyOn(f.adaptive, 'confirm');
+    const res = await f.send('alpha', action.split('/'), body);
+    expect(res.status).toBe(404);
+    expect(f.factory).not.toHaveBeenCalled(); expect(f.botToken).not.toHaveBeenCalled(); expect(confirmSpy).not.toHaveBeenCalled();
+    expect(f.broker.begin).not.toHaveBeenCalled(); expect(f.broker.execute).not.toHaveBeenCalled(); expect(f.broker.revoke).not.toHaveBeenCalled();
+  });
+  it("keeps the read-only dashboard, which needs Telegram's signature: forged or missing is 401", async () => {
+    const f = await fixture();
+    expect((await f.send()).status).toBe(200);
+    const send = (init: string) => handleAgentConnectionsRequest(f.studio, f.factory, new Request('http://127.0.0.1:3000/api/agents/alpha/connections?space=personal',
+      { headers: { 'x-telegram-init-data': init } }), 'alpha', []);
+    const who = { id: 123, first_name: 'Synthetic' };
+    expect((await send(signInitData(who, tokens.alpha))).status).toBe(401);
+    expect((await send(signInitData(who, tokens.alpha, undefined, {}, { botId: 100, privateKey: generateKeyPairSync('ed25519').privateKey }))).status).toBe(401);
+    expect((await send(agentInit(who, tokens.alpha, undefined, {}, 101))).status).toBe(401);
+    // the emergency shadow switch never relaxes connections
+    (f.studio.deps as { initDataSignature?: () => 'shadow' }).initDataSignature = () => 'shadow';
+    expect((await send(signInitData(who, tokens.alpha))).status).toBe(401);
   });
   it('ignores forged principal headers and rejects supplied cross-agent binding before enrollment', async () => {
     const f = await fixture();
     const req = f.request(); req.headers.set('x-vox-bot-agent', 'beta');
     expect((await authenticateAgentConnections(f.studio, req, 'alpha')).actor).toMatchObject({ botAgentId: 'alpha' });
-    expect((await f.send('alpha', ['enroll'], { space: 'personal', providerId: 'github', displayLabel: 'Synthetic', agentId: 'beta' })).status).toBe(403);
-    expect((await f.send('alpha', ['enroll'], { space: 'personal', providerId: 'github', displayLabel: 'Synthetic' })).status).toBe(403);
+    // enrollment is closed on the bot surface altogether (agent-signed trust hotfix)
+    expect((await f.send('alpha', ['enroll'], { space: 'personal', providerId: 'github', displayLabel: 'Synthetic', agentId: 'beta' })).status).toBe(404);
+    expect((await f.send('alpha', ['enroll'], { space: 'personal', providerId: 'github', displayLabel: 'Synthetic' })).status).toBe(404);
     expect(f.broker.begin).not.toHaveBeenCalled();
   });
   it('filters lists and fences every stored connection ID to the verified bot, even for the same owner', async () => {

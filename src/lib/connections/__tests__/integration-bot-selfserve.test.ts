@@ -8,7 +8,7 @@ import type { StudioState } from '../../studio/types';
 import { AdaptiveRepository } from '../../adaptive/persistence/repository';
 import { AdaptiveService } from '../../adaptive/persistence/service';
 import { MemoryAdaptiveStorage } from '../../adaptive/runtime/storage';
-import { signInitData } from '../../studio/auth';
+import { agentInit, TEST_INITDATA_KEY_HEX } from '../../studio/__tests__/initdata-keys';
 import { authenticateAgentConnections } from '../bot-principal';
 import { InMemoryConnectionsStorage } from '../storage';
 import { createStudioConnectionsApplication } from '../studio-application';
@@ -39,10 +39,10 @@ async function fixture() {
   const state = { members: [], agents: ['alpha', 'beta'].map((id, i) => ({ id, status: 'active', visibility: 'public', createdBy: 999,
     tokenEnc: id, bot: { id: 100 + i }, persona: { name: id }, access: [] })), groups: [], audit: [] } as unknown as StudioState;
   const llm = { identity: { provider: 'anthropic', model: 'synthetic' }, complete: vi.fn(async () => JSON.stringify({ kind: 'tool', toolId: mcpToolId(tool.name), arguments: { id: 'synthetic-own-document' }, expectedTargetRevision: null })) };
-  const studio = { botToken: (agent: { id: string }) => `SYNTHETIC_BOT_${agent.id}`, deps: { adaptive, store: { read: async () => structuredClone(state), readCommittedForEffect: () => structuredClone(state) }, chatLLM: llm } } as unknown as Studio;
+  const studio = { botToken: (agent: { id: string }) => `SYNTHETIC_BOT_${agent.id}`, deps: { adaptive, initDataKey: TEST_INITDATA_KEY_HEX, store: { read: async () => structuredClone(state), readCommittedForEffect: () => structuredClone(state) }, chatLLM: llm } } as unknown as Studio;
   const actorFor = (current: BrokerAuthority): ConnectionActor => ({ accountId: current.context.accountId, botAgentId: current.context.botAgentId, botAuthenticationRevision: current.context.botAuthenticationRevision });
   const actor = async (agentId: string) => (await authenticateAgentConnections(studio, new Request('https://vox.fixture.net', { headers: {
-    'x-telegram-init-data': signInitData({ id: 123, first_name: 'Synthetic' }, `SYNTHETIC_BOT_${agentId}`),
+    'x-telegram-init-data': agentInit({ id: 123, first_name: 'Synthetic' }, `SYNTHETIC_BOT_${agentId}`, undefined, {}, agentId === 'beta' ? 101 : 100),
   } }), agentId)).actor;
   const config = connectionsConfigurationSchema.parse({ schemaVersion: 1, enabled: true, profiles: [], selfServiceMcp: { enabled: true, dailyModelTokenCeiling: 500_000, dailyToolCallCeiling: 20 },
     modelPolicy: { provider: 'anthropic', model: 'synthetic', qualified: true, evidenceReference: 'synthetic-only' } });
