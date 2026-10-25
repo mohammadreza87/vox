@@ -11,7 +11,8 @@ import { connectPageUrl, CONNECTORS_COMMANDS, handleAgentUpdate } from '../updat
 import { TelegramApiError, type TelegramUpdate } from '../../tireh/telegram/client';
 import { connectionReceipts } from '../../connections/receipts';
 import type { ConnectionsSnapshot } from '../../connections/contracts';
-import { hire, ID, makeStudio, seedOrg, type Harness } from './helpers';
+import { agentShortCode } from '../../circles/codec';
+import { hire, ID, makeStudio, SECRET, seedOrg, type Harness } from './helpers';
 
 const BOT_TOKEN = '555:fixture-receipts-token';
 let h: Harness;
@@ -182,8 +183,10 @@ describe('/ask in the agent\'s private chat hands off to its Connections Mini Ap
     const before = h.chatLLM.replyRequests.length + h.chatLLM.extractionCalls;
     const append = vi.spyOn(h.studio.deps.memory.history, 'append');
     await handleAgentUpdate(h.studio, nova.agent.id, dm(ID.bob, '/ask'));
+    // Part 3: a Studio member also gets "Open in Vox" (Settings › Nova › Connectors through the manager bot).
     expect(sent()).toEqual([[ID.bob, 'Open Connectors to ask Nova with an app you connected. Each use is reviewed there, and answers stay private to you.',
-      { silent: true, keyboard: { inline_keyboard: [[{ text: 'Open Connectors', web_app: { url: `https://vox.example/studio/connect/${nova.agent.id}?ask=1` } }]] } }]]);
+      { silent: true, keyboard: { inline_keyboard: [[{ text: 'Open Connectors', web_app: { url: `https://vox.example/studio/connect/${nova.agent.id}?ask=1` } }],
+        [{ text: 'Open in Vox', url: `https://t.me/VoxxBot?start=s_${agentShortCode(SECRET, nova.agent.id)}_c` }]] } }]]);
     expect(h.chatLLM.replyRequests.length + h.chatLLM.extractionCalls).toBe(before);
     expect(append).not.toHaveBeenCalled();
     await handleAgentUpdate(h.studio, nova.agent.id, dm(ID.bob, '/connectors@nova_bot', undefined, 'fa'));

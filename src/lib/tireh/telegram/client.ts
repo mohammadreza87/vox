@@ -82,6 +82,15 @@ export interface InlineKeyboard {
   inline_keyboard: Array<Array<InlineButton>>;
 }
 
+/** Where a command menu applies (Telegram BotCommandScope). */
+export type BotCommandScope =
+  | { type: 'default' | 'all_private_chats' | 'all_group_chats' | 'all_chat_administrators' }
+  | { type: 'chat' | 'chat_administrators'; chat_id: number }
+  | { type: 'chat_member'; chat_id: number; user_id: number };
+/** A menu's scope and language; neither = the default menu for every language. */
+export interface BotCommandsTarget { scope?: BotCommandScope; languageCode?: string }
+const commandsTarget = (o: BotCommandsTarget) => ({ ...(o.scope ? { scope: o.scope } : {}), ...(o.languageCode ? { language_code: o.languageCode } : {}) });
+
 type FetchFn = typeof fetch;
 
 const CONNECT_RETRY_DELAYS_MS = [250, 1000];
@@ -165,7 +174,7 @@ export class TelegramBotClient {
   sendVoice(
     chatId: number,
     audio: ArrayBuffer,
-    options: { caption?: string; replyTo?: number; mimeType?: string; filename?: string; signal?: AbortSignal; authorizeNow?: () => boolean } = {}
+    options: { caption?: string; replyTo?: number; mimeType?: string; filename?: string; signal?: AbortSignal; authorizeNow?: () => boolean; keyboard?: InlineKeyboard; silent?: boolean } = {}
   ): Promise<TelegramMessage> {
     const form = new FormData();
     form.append('chat_id', String(chatId));
@@ -178,6 +187,8 @@ export class TelegramBotClient {
     if (options.replyTo) {
       form.append('reply_parameters', JSON.stringify({ message_id: options.replyTo, allow_sending_without_reply: true }));
     }
+    if (options.keyboard) form.append('reply_markup', JSON.stringify(options.keyboard));
+    if (options.silent) form.append('disable_notification', 'true');
     return this.call('sendVoice', form, options.signal, options.authorizeNow);
   }
 
@@ -260,8 +271,14 @@ export class TelegramBotClient {
     return this.call('setMyShortDescription', { short_description: shortDescription.slice(0, 120) });
   }
 
-  setMyCommands(commands: Array<{ command: string; description: string }>): Promise<boolean> {
-    return this.call('setMyCommands', { commands });
+  /** Without a target the body is exactly `{commands}` (the default menu), as before scopes existed. */
+  setMyCommands(commands: Array<{ command: string; description: string }>, target: BotCommandsTarget = {}): Promise<boolean> {
+    return this.call('setMyCommands', { commands, ...commandsTarget(target) });
+  }
+
+  /** Removes the menu for one scope and language; Telegram then falls back to the broader one. */
+  deleteMyCommands(target: BotCommandsTarget = {}): Promise<boolean> {
+    return this.call('deleteMyCommands', commandsTarget(target));
   }
 
   /** Telegram profile photos must be JPG */

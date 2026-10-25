@@ -6,7 +6,7 @@ import { adaptiveApi, type AdaptiveSnapshot } from '../../../_lib/adaptive-clien
 import { agentCopy } from '../../../_lib/agents-copy';
 import { api, tg, type AgentView, type ConnectorUsage } from '../../../_lib/client';
 import { connectorsCopy } from '../../../_lib/connectors-copy';
-import { agentRows, canSee, settingById, type AgentGroup, type AgentSection, type SettingDef, type SettingsCtx } from '../../../_lib/settings/registry';
+import { agentRows, canSee, settingById, settingRoute, type AgentGroup, type AgentSection, type SettingDef, type SettingsCtx } from '../../../_lib/settings/registry';
 import { rowText, settingsCopy } from '../../../_lib/settings-copy';
 import { useProfileSync } from '../../../_lib/useProfileSync';
 import { youCopy } from '../../../_lib/you-copy';
@@ -126,10 +126,10 @@ function AgentHub({ agent, onUpdate, back }: { agent: AgentView; onUpdate: (a: A
   const open = (d: SettingDef) => {
     const to = d.opens;
     if (!to) return;
-    if ('page' in to) nav.push({ name: 'settings', page: 'agent', params: { agentId: agent.id, section: to.page } });
-    else if ('sheet' in to) { setVisibility(true); actions.loadPeople(); }
-    else if ('route' in to && to.route === 'memories') nav.push({ name: 'memories', id: agent.id });
-    else if ('route' in to && to.route === 'agent-connections') nav.push({ name: 'settings', page: 'agent-connections', params: { agentId: agent.id, ...(to.view ? { view: to.view } : {}) } });
+    if ('sheet' in to) { setVisibility(true); actions.loadPeople(); return; }
+    // The same mapping Telegram deep links use (registry settingRoute).
+    const route = settingRoute(d, agent.id);
+    if (route) nav.push(route);
   };
   const row = (d: SettingDef) => (
     <Row key={d.id} plain lead={<IconTile name={d.icon} />} title={rowText(s.rows[d.id]?.title, p.name)} sub={summary(d.id)} chevron onClick={() => open(d)} />

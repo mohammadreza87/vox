@@ -65,7 +65,7 @@ const TEXT: Record<'en' | 'fa', (r: ReceiptInput & { agent: string }) => string>
 export const receiptText = (input: ReceiptInput, agentName: string): string => TEXT[input.locale ?? 'en']({ ...input, agent: agentName });
 
 /** Telegram's ways of saying this person never started the bot or turned it away. */
-const UNREACHABLE = /bot can't initiate|bot was blocked|user is deactivated|chat not found|forbidden/i;
+export const UNREACHABLE = /bot can't initiate|bot was blocked|user is deactivated|chat not found|forbidden/i;
 
 /** "example.com" from an MCP server URL, or undefined (never the path or query). */
 export function mcpHost(uri: string | undefined): string | undefined {

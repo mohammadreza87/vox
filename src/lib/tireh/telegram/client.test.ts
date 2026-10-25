@@ -78,3 +78,40 @@ describe('Circles wire options (silent sends, keyboard edits, alerts)', () => {
     expect(body(fetch, 2)).toEqual({ chat_id: -100 });
   });
 });
+
+describe('command menus with a scope and language (Settings v2)', () => {
+  const body = (fetch: ReturnType<typeof fakeFetch>, i = 0) => JSON.parse(String(fetch.mock.calls[i][1]?.body));
+  const commands = [{ command: 'settings', description: 'All my settings' }];
+  it('without a target the body is exactly {commands}, as before scopes existed', async () => {
+    const fetch = fakeFetch();
+    await new TelegramBotClient('1:a', fetch).setMyCommands(commands);
+    expect(String(fetch.mock.calls[0][0])).toBe('https://api.telegram.org/bot1:a/setMyCommands');
+    expect(body(fetch)).toEqual({ commands });
+  });
+  it('sends scope and language_code when given', async () => {
+    const fetch = fakeFetch();
+    await new TelegramBotClient('1:a', fetch).setMyCommands(commands, { scope: { type: 'all_private_chats' }, languageCode: 'fa' });
+    expect(body(fetch)).toEqual({ commands, scope: { type: 'all_private_chats' }, language_code: 'fa' });
+  });
+  it('deleteMyCommands removes one scope and language', async () => {
+    const fetch = fakeFetch();
+    const client = new TelegramBotClient('1:a', fetch);
+    await client.deleteMyCommands({ scope: { type: 'all_group_chats' }, languageCode: 'fa' });
+    await client.deleteMyCommands();
+    expect(String(fetch.mock.calls[0][0])).toBe('https://api.telegram.org/bot1:a/deleteMyCommands');
+    expect(body(fetch, 0)).toEqual({ scope: { type: 'all_group_chats' }, language_code: 'fa' });
+    expect(body(fetch, 1)).toEqual({});
+  });
+  it('sendVoice carries an inline keyboard and a silent flag when asked, and neither otherwise', async () => {
+    const fetch = fakeFetch({ message_id: 1, chat: { id: 5, type: 'private' }, date: 0 });
+    const client = new TelegramBotClient('1:a', fetch);
+    const keyboard = { inline_keyboard: [[{ text: 'Change voice in Vox', url: 'https://t.me/VoxxBot?start=s_AbCd-_12_v' }]] };
+    await client.sendVoice(5, new ArrayBuffer(4), { caption: 'I sound “Warm”.', keyboard, silent: true });
+    await client.sendVoice(5, new ArrayBuffer(4));
+    const [withKeyboard, plain] = fetch.mock.calls.map((c) => c[1]?.body as FormData);
+    expect(withKeyboard.get('reply_markup')).toBe(JSON.stringify(keyboard));
+    expect(withKeyboard.get('disable_notification')).toBe('true');
+    expect(plain.get('reply_markup')).toBeNull();
+    expect(plain.get('disable_notification')).toBeNull();
+  });
+});

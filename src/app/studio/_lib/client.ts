@@ -24,7 +24,8 @@ export interface RouteRequest { text: string; final?: boolean; exclude?: string[
 
 interface TelegramWebApp {
   initData: string;
-  initDataUnsafe?: { user?: TelegramUserInfo };
+  /** start_param: the `startapp` payload the Mini App was opened with (unsigned here; the server re-resolves it). */
+  initDataUnsafe?: { user?: TelegramUserInfo; start_param?: string };
   ready(): void;
   expand(): void;
   colorScheme?: 'light' | 'dark';
@@ -158,6 +159,8 @@ export interface ConnectorUsage { providers: Array<{ id: string; name: string; p
 export const api = {
   relationshipObservations: () => request<{ mode: 'off' | 'shadow' | 'live'; sampledEvents: number; counts: Record<string, number>; feedbackOutcomes?: Record<string, number>; windowStart: string | null; windowEnd: string | null; scope: string }>('GET', 'relationship-observations'),
   me: () => request<Me>('GET', 'me'),
+  /** Settings v2: where a Telegram settings link lands for me now; null = the hub (unknown, forbidden or malformed alike). */
+  settingsLink: (code: string) => request<{ target: { agentId: string; section?: string } | null }>('GET', `settings-link?code=${encodeURIComponent(code)}`),
   agents: () => request<{ agents: AgentView[] }>('GET', 'agents'),
   agent: (id: string) => request<{ agent: AgentView }>('GET', `agents/${enc(id)}`),
   /** Settings v2, managers only: per provider, how many people connected it to this agent (counts, never who). */

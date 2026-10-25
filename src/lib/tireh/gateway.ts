@@ -185,7 +185,15 @@ export interface GatewayDeps {
   replyKeyboard?(personaId: string, chatId: number, from: TelegramUser): Promise<InlineKeyboard | undefined>;
   /** Circles notes: /notes, /forget <n> and explicit "remember this" proposals; true = handled (nothing else runs). */
   notes?: { intercept(personaId: string, chat: ChatContext, message: TelegramMessage, text: string, addressed: boolean): Promise<boolean> };
+  /** Studio settings: a button under a command's private reply (e.g. "Open Memory settings"); undefined = none. */
+  commandKeyboard?(personaId: string, command: string, from: TelegramUser): Promise<InlineKeyboard | undefined>;
 }
+
+/** /whoami in a group answers by a private message: a person's details are never posted in a group. */
+const WHOAMI_GROUP = {
+  en: { sent: "I've sent you a message.", failed: 'Message me privately and send /whoami.' },
+  fa: { sent: 'برایتان پیام فرستادم.', failed: 'در گفتگوی خصوصی به من پیام بدهید و /whoami را بفرستید.' },
+} as const;
 
 /** Why a proactive claim was refused. */
 export type GroupClaimMiss = 'cooldown' | 'window' | 'duplicate';
@@ -1608,6 +1616,11 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     if (target && target.toLowerCase() !== persona.telegramUsername?.toLowerCase()) return false;
     const command = commandName.toLowerCase();
     const { org } = this.deps;
+    // The settings button under a private reply; replies without one are sent exactly as before.
+    const reply = async (text: string) => {
+      const keyboard = chat.kind === 'private' && message.from ? await this.deps.commandKeyboard?.(persona.id, command, message.from).catch(() => undefined) : undefined;
+      await bot.sendMessage(message.chat.id, text, ...(keyboard ? [{ keyboard }] : []));
+    };
 
     switch (command) {
       case '/start': {
@@ -1621,9 +1634,18 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
         return true;
       }
 
-      case '/whoami':
-        await bot.sendMessage(message.chat.id, chat.kind === 'group' ? `${org.getPerson(speakerId)?.name} — Telegram ID: ${message.from!.id}` : org.describePerson(speakerId));
+      case '/whoami': {
+        if (chat.kind !== 'group') {
+          await bot.sendMessage(message.chat.id, org.describePerson(speakerId));
+          return true;
+        }
+        // Never the Telegram ID or anyone's details in the group: a private message, and a short note here.
+        const copy = WHOAMI_GROUP[/^fa\b/i.test(message.from?.language_code ?? '') ? 'fa' : 'en'];
+        let delivered = true;
+        try { await bot.sendMessage(message.from!.id, org.describePerson(speakerId), { silent: true }); } catch { delivered = false; }
+        await bot.sendMessage(message.chat.id, delivered ? copy.sent : copy.failed, { replyTo: message.message_id, silent: true });
         return true;
+      }
 
       case '/memories': {
         // Always computed for the speaker alone, and only answered privately.
@@ -1633,14 +1655,14 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
         }
         const list = await this.memoriesVisibleTo(persona, speakerId);
         if (list.length === 0) {
-          await bot.sendMessage(message.chat.id, "I don't remember anything you can see yet.");
+          await reply("I don't remember anything you can see yet.");
           return true;
         }
         const lines = list.map((m, i) => {
           const mine = m.source.personId === speakerId ? '' : ` — from ${org.getPerson(m.source.personId)?.name}`;
           return `${i + 1}. ${m.content} [${describeScope(org, m.scope)}${mine}]`;
         });
-        await bot.sendMessage(message.chat.id, `What I remember that you can see:\n${lines.join('\n')}`);
+        await reply(`What I remember that you can see:\n${lines.join('\n')}`);
         return true;
       }
 
@@ -1649,7 +1671,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
           await bot.sendMessage(message.chat.id, 'Ask me in a private chat so I can clear what you told me.');
           return true;
         }
-        await bot.sendMessage(message.chat.id, await this.forgetOwnedContext(persona.id, speakerId));
+        await reply(await this.forgetOwnedContext(persona.id, speakerId));
         return true;
       }
 
@@ -1665,7 +1687,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
           await this.observeRelationship(persona.id, chat, speakerId, command, `control:${message.message_id}`, 'telegram');
         } else await this.deps.relationships?.control(this.relationshipKey(persona.id, chat), action,
           action === 'pause' ? { until: new Date(this.now().getTime() + 7 * 86_400_000) } : undefined);
-        await bot.sendMessage(message.chat.id, action === 'resume' ? 'Check-ins can resume when something is worth revisiting.' :
+        await reply(action === 'resume' ? 'Check-ins can resume when something is worth revisiting.' :
           action === 'pause' ? 'Check-ins are paused for a week. You can still talk with me whenever you like.' : 'I will stop initiating check-ins. Send /resume if you change your mind.');
         return true;
       }
@@ -1679,14 +1701,14 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
         const list = await this.memoriesVisibleTo(persona, speakerId);
         const target = list[index];
         if (!target) {
-          await bot.sendMessage(message.chat.id, 'Send /memories first, then /forget with a number from the list.');
+          await reply('Send /memories first, then /forget with a number from the list.');
         } else if (target.source.personId !== speakerId) {
-          await bot.sendMessage(message.chat.id, `Only ${org.getPerson(target.source.personId)?.name} can delete that one.`);
+          await reply(`Only ${org.getPerson(target.source.personId)?.name} can delete that one.`);
         } else {
           await this.deps.memories.delete(target.id);
           await this.deps.history.clearPersona(persona.id);
           await this.deps.relationships?.invalidatePersona(persona.id, { reason: 'memory_deleted' });
-          await bot.sendMessage(message.chat.id, `Forgotten: "${target.content}"`);
+          await reply(`Forgotten: "${target.content}"`);
         }
         return true;
       }

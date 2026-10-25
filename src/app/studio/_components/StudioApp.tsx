@@ -4,6 +4,7 @@ import { AnimatePresence, MotionConfig, motion, useIsPresent } from 'framer-moti
 import { createContext, forwardRef, useCallback, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api, ApiError, haptic, initTelegram, tg, type AgentView, type Me } from '../_lib/client';
 import { syncCloudPrefs, writeCloudPref } from '../_lib/cloud-prefs';
+import { agentSettingsStack, settingsLinkOf } from '../_lib/settings/links';
 import { dirOf, initialLocale, LOCALE_KEY, LOCALES, persistLocale, type Dir, type Locale } from '../_lib/i18n';
 import { COVER_ROUTES, detectTier, kindFor, screenVariants, SPRING, TAB_ROUTES, type MotionTier, type NavCtx, type NavKind } from '../_lib/motion';
 import { Cloud } from './Cloud';
@@ -164,6 +165,10 @@ export function StudioApp() {
   const dir = dirOf(locale);
   const cache = useRef(new Map<string, AgentView>()).current;
   const notificationOpened = useRef(false);
+  /** Settings v2 Telegram links: consumed once per page load; a link never overrides navigation made since the first load. */
+  const settingsLinkOpened = useRef(false);
+  const notificationRouted = useRef(false);
+  const navGen = useRef(0);
   /* ---- Settings v2: language and space also travel in Telegram CloudStorage ---- */
   const cloudPrefs = useRef(false);
   const [prefsReady, setPrefsReady] = useState(false);
@@ -277,6 +282,7 @@ export function StudioApp() {
     scrollMemory.set(routeKey(top(prev), prev.length), captureScroll(screen));
     if (screen?.contains(document.activeElement)) (document.activeElement as HTMLElement).blur?.();
     navCtx.current = k;
+    navGen.current += 1;
     stackRef.current = next;
     kinds.current = entered;
     const ms = reduced ? 170 : LOCK_MS[k.kind];
@@ -369,6 +375,7 @@ export function StudioApp() {
     if (notificationId && /^[A-Za-z0-9_-]{1,128}$/.test(notificationId)) {
       // An opaque link chooses a screen only. The inbox reloads current account,
       // space, consent and agent authority before showing any notification.
+      notificationRouted.current = true;
       commit([{ name: 'home' }, { name: 'settings', page: 'reminders', params: { notificationId } }], { kind: 'replace', delta: 0 }, ['replace', 'push']);
     }
     if (notificationId !== null) {
@@ -376,6 +383,35 @@ export function StudioApp() {
       window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
     }
   }, [me, appReady, commit]);
+
+  // Settings v2: /settings and /start s_… in the manager bot (`?settings=`) or a `startapp` link (start_param) open the
+  // right settings page. The hub needs nothing; an agent code is resolved by the server now (unknown and forbidden
+  // codes alike land on the hub). Anything else (p_…, welcome) is ignored; a notification link wins; and navigation
+  // made before the answer arrives is never overridden. Flag off: never read.
+  useEffect(() => {
+    if (!me || !appReady || !settingsV2 || me.member.role === 'pending' || settingsLinkOpened.current) return;
+    settingsLinkOpened.current = true;
+    const opened = settingsLinkOf(window.location.href, tg()?.initDataUnsafe?.start_param);
+    const url = new URL(window.location.href);
+    if (url.searchParams.has('settings')) {
+      url.searchParams.delete('settings');
+      window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
+    }
+    if (!opened || notificationRouted.current) return;
+    const gen = navGen.current;
+    const hub = () => commit([{ name: 'privacy' }], { kind: 'replace', delta: 0 }, ['replace']);
+    if (opened.link.kind === 'hub') { hub(); return; }
+    void api.settingsLink(opened.raw).then((r) => r.target, () => null).then(async (target) => {
+      if (navGen.current !== gen) return;
+      if (!target) { hub(); return; }
+      // A section opens only when this viewer can see it on the agent (else its hub, once); the read also warms the cache.
+      const agent = target.section ? await api.agent(target.agentId).then((r) => r.agent, () => null) : null;
+      if (navGen.current !== gen) return;
+      if (agent) cache.set(agent.id, agent);
+      const next = agentSettingsStack(target.agentId, target.section, agent ? { me, agent, locale } : undefined);
+      commit(next, { kind: 'replace', delta: 0 }, next.map((_, i) => (i === 0 ? 'replace' : 'push')));
+    });
+  }, [me, appReady, settingsV2, commit, cache, locale]);
 
   // Telegram's native back button mirrors the in-app stack and pops with the same transition.
   useEffect(() => {

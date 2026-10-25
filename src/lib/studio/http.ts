@@ -185,6 +185,11 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
         return json({ member: await studio.setRole(me, Number(id), str(b.role, 20) as Role) });
       }
     }
+    // Settings v2 deep links (Telegram start_param / ?settings=): where an opaque code lands for this person, re-checked
+    // on every open. Unknown, forbidden and malformed codes answer alike ({target: null}, the hub); flag off: not found.
+    if (root === 'settings-link' && !id && method === 'GET' && settingsV2()) {
+      return json({ target: await studio.settingsBot.resolveTarget(me, new URL(req.url).searchParams.get('code')) });
+    }
     if (root === 'groups' && method === 'GET') return json({ groups: await studio.listGroups(me) });
     if (root === 'groups' && id && action === 'resnapshot' && !path[3] && method === 'POST' && tirehFlags().sharingV2) { const b = await body(req); return json(await studio.resnapshotGroupMemory(me, Number(id), typeof b.telegramId === 'number' ? b.telegramId : NaN, b.apply === true)); }
     if (root === 'relationship-observations' && method === 'GET') return json(await studio.relationshipObservations(me));

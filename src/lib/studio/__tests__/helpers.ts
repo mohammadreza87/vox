@@ -104,6 +104,7 @@ export function fakeTelegram() {
     setMyDescription: vi.fn(async () => true),
     setMyShortDescription: vi.fn(async () => true),
     setMyCommands: vi.fn(async () => true),
+    deleteMyCommands: vi.fn(async () => true),
     setMyProfilePhoto: vi.fn(async () => true),
     setChatMenuButton: vi.fn(async () => true),
     getChatMemberCount: vi.fn(async () => 2),

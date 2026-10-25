@@ -313,6 +313,9 @@ export class StudioCircleNotes {
     if (!bot) return;
     const view = await this.listView(agent, from.id, localeOf(from.language_code));
     this.remember(agent.id, from.id, view.shown);
+    // Settings v2: "Open Memory settings" under the list (it is always a private chat), kept when an erase edits it.
+    const trailing = await this.studio.settingsBot.trailingKeyboard(agent.id, 'notes', from);
+    if (trailing) view.keyboard = { inline_keyboard: [...view.keyboard?.inline_keyboard ?? [], ...trailing.inline_keyboard] };
     if (messageId !== undefined) { await bot.editMessageText(chatId, messageId, view.text, view.keyboard).catch(() => undefined); return; }
     await bot.sendMessage(chatId, view.text, { ...(view.keyboard ? { keyboard: view.keyboard } : {}), ...(silent ? { silent: true } : {}) })
       .catch(() => this.log.warn('[studio] note_dm_failed'));
@@ -323,9 +326,10 @@ export class StudioCircleNotes {
     const copy = notesCopy(localeOf(from.language_code)), bot = this.botOf(agent);
     if (!bot) return;
     const target = this.listed.get(`${agent.id}:${from.id}`)?.[Number.parseInt(arg ?? '', 10) - 1];
-    if (!target) { await bot.sendMessage(chatId, copy.pick); return; }
+    const keyboard = await this.studio.settingsBot.trailingKeyboard(agent.id, 'forget', from), extra = keyboard ? [{ keyboard }] : [];
+    if (!target) { await bot.sendMessage(chatId, copy.pick, ...extra); return; }
     const erased = await this.ledger!.erase(from.id, target, this.host.now());
-    await bot.sendMessage(chatId, erased ? copy.erased(clip(erased.text!)) : copy.gone);
+    await bot.sendMessage(chatId, erased ? copy.erased(clip(erased.text!)) : copy.gone, ...extra);
   }
 
   /**
@@ -340,13 +344,15 @@ export class StudioCircleNotes {
     if (!mine.length || !bot) return false;
     const copy = notesCopy(localeOf(from.language_code));
     if (control === 'memories') { await this.list(agent, from, message.chat.id); return true; }
+    const keyboard = await this.studio.settingsBot.trailingKeyboard(agent.id, control === 'forget' ? 'forgetall' : 'notes', from);
+    const extra = keyboard ? [{ keyboard }] : [];
     if (control === 'forget') {
       const erased = await this.ledger!.eraseMany(from.id, mine.map((c) => c.copyId), this.host.now());
       this.listed.delete(`${agent.id}:${from.id}`);
-      await bot.sendMessage(message.chat.id, copy.erasedAll(erased, agent.persona.name));
+      await bot.sendMessage(message.chat.id, copy.erasedAll(erased, agent.persona.name), ...extra);
       return true;
     }
-    await bot.sendMessage(message.chat.id, copy.kept(agent.persona.name));
+    await bot.sendMessage(message.chat.id, copy.kept(agent.persona.name), ...extra);
     return true;
   }
 

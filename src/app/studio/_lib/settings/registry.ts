@@ -9,6 +9,7 @@
  * and every write still goes through its own typed route, permission check and audit row.
  */
 
+import { botCommandFor } from '@/lib/studio/settings-commands';
 import type { AgentView, Me } from '../client';
 import type { Locale } from '../i18n';
 
@@ -30,7 +31,10 @@ export type SettingTarget =
   | { route: 'memories' | 'agent-connections' | 'preferences' | 'inbox' | 'reminders' | 'voice-recognition' | 'shared-memories' | 'connections' | 'diagnostics' | 'requests'; view?: 'activity' }
   | { local: string };
 
-/** Part 3 mirrors some settings as bot commands in the agent's private chat; `aliases` are other commands the bot answers the same way. */
+/**
+ * Part 3 mirrors some settings as bot commands in the agent's private chat; `aliases` are other commands the bot
+ * answers the same way. Declared once in lib/studio/settings-commands.ts (BOT_SETTINGS_COMMANDS): entries take it from there.
+ */
 export interface SettingCommand { command: string; scope: 'private'; aliases?: readonly string[] }
 
 export interface SettingDef {
@@ -67,7 +71,7 @@ const hasBot = (ctx: SettingsCtx) => !!ctx.agent?.bot;
 export const SETTINGS: readonly SettingDef[] = [
   /* ---- an agent, for everyone ---- */
   agentSetting({ id: 'agent.profile', section: 'profile', group: 'everyone', audience: 'manager', spaceBound: false, requires: ['active'], kind: 'page', icon: 'user', opens: { page: 'profile' } }),
-  agentSetting({ id: 'agent.voice', section: 'voice', group: 'everyone', audience: 'creator', spaceBound: false, requires: ['active'], kind: 'page', icon: 'mic', opens: { page: 'voice' }, bot: { command: 'voice', scope: 'private' } }),
+  agentSetting({ id: 'agent.voice', section: 'voice', group: 'everyone', audience: 'creator', spaceBound: false, requires: ['active'], kind: 'page', icon: 'mic', opens: { page: 'voice' }, bot: botCommandFor('agent.voice') }),
   agentSetting({ id: 'agent.skills', section: 'skills', group: 'everyone', audience: 'creator', spaceBound: false, requires: ['active'], kind: 'page', icon: 'spark', opens: { page: 'skills' } }),
   agentSetting({ id: 'agent.access', section: 'access', group: 'everyone', audience: 'manager', spaceBound: false, requires: ['active'], kind: 'sheet', icon: 'lock', opens: { sheet: 'visibility' } }),
   agentSetting({ id: 'agent.groups', section: 'groups', group: 'everyone', audience: 'manager', spaceBound: false, requires: ['active'], kind: 'page', icon: 'groups', opens: { page: 'groups' } }),
@@ -75,11 +79,11 @@ export const SETTINGS: readonly SettingDef[] = [
   agentSetting({ id: 'agent.connector-usage', section: 'connector-usage', group: 'everyone', audience: 'manager', spaceBound: false, requires: ['active'], kind: 'page', icon: 'plug', opens: { page: 'connector-usage' } }),
   agentSetting({ id: 'agent.history', section: 'history', group: 'everyone', audience: 'manager', spaceBound: false, requires: ['active'], kind: 'page', icon: 'clock', opens: { page: 'history' } }),
   /* ---- an agent and you ---- */
-  agentSetting({ id: 'agent.memory', section: 'memory', group: 'you', audience: 'self', spaceBound: false, requires: ['active'], kind: 'link', icon: 'memory', opens: { route: 'memories' }, bot: { command: 'memory', scope: 'private' } }),
+  agentSetting({ id: 'agent.memory', section: 'memory', group: 'you', audience: 'self', spaceBound: false, requires: ['active'], kind: 'link', icon: 'memory', opens: { route: 'memories' }, bot: botCommandFor('agent.memory') }),
   agentSetting({ id: 'agent.permissions', section: 'permissions', group: 'you', audience: 'self', spaceBound: true, requires: ['active', 'identity'], kind: 'page', icon: 'shield', opens: { page: 'permissions' } }),
-  agentSetting({ id: 'agent.connectors', section: 'connectors', group: 'you', audience: 'self', spaceBound: true, requires: ['active', 'identity'], kind: 'page', icon: 'plug', opens: { page: 'connectors' }, bot: { command: 'connectors', scope: 'private', aliases: ['ask'] } }),
+  agentSetting({ id: 'agent.connectors', section: 'connectors', group: 'you', audience: 'self', spaceBound: true, requires: ['active', 'identity'], kind: 'page', icon: 'plug', opens: { page: 'connectors' }, bot: botCommandFor('agent.connectors') }),
   agentSetting({ id: 'agent.notifications', section: 'notifications', group: 'you', audience: 'self', spaceBound: true, requires: ['active', 'identity'], kind: 'page', icon: 'bell', opens: { page: 'notifications' } }),
-  agentSetting({ id: 'agent.activity', section: 'activity', group: 'you', audience: 'self', spaceBound: true, requires: ['active'], kind: 'link', icon: 'list', opens: { route: 'agent-connections', view: 'activity' }, bot: { command: 'activity', scope: 'private' } }),
+  agentSetting({ id: 'agent.activity', section: 'activity', group: 'you', audience: 'self', spaceBound: true, requires: ['active'], kind: 'link', icon: 'list', opens: { route: 'agent-connections', view: 'activity' }, bot: botCommandFor('agent.activity') }),
   /* ---- Vox-wide (the You tab) ---- */
   accountSetting({ id: 'account.space', section: 'general', audience: 'self', spaceBound: false, kind: 'switch', icon: 'sliders', opens: { local: 'space' } }),
   accountSetting({ id: 'account.preferences', section: 'general', audience: 'self', spaceBound: true, kind: 'link', icon: 'sliders', opens: { route: 'preferences' } }),
@@ -151,3 +155,18 @@ export const accountRows = (ctx: SettingsCtx, section: AccountSection): SettingD
 /** Settings mirrored as bot commands (Part 3 builds the agent's command menu from these). */
 export const settingCommands = (): Array<SettingCommand & { id: string }> =>
   SETTINGS.flatMap((d) => (d.bot ? [{ id: d.id, ...d.bot }] : []));
+
+/** Where a row's page or route lives in the app's navigation (the sheet and local targets open in place instead). */
+export type SettingRoute =
+  | { name: 'memories'; id: string }
+  | { name: 'settings'; page: 'agent' | 'agent-connections'; params: Record<string, string> };
+
+/** The screen a setting opens for one agent: used by the agent hub and by Telegram deep links, so they cannot drift. */
+export function settingRoute(def: SettingDef, agentId: string): SettingRoute | null {
+  const to = def.opens;
+  if (!to) return null;
+  if ('page' in to) return { name: 'settings', page: 'agent', params: { agentId, section: to.page } };
+  if ('route' in to && to.route === 'memories') return { name: 'memories', id: agentId };
+  if ('route' in to && to.route === 'agent-connections') return { name: 'settings', page: 'agent-connections', params: { agentId, ...(to.view ? { view: to.view } : {}) } };
+  return null;
+}
