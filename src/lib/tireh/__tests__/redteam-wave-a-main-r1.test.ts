@@ -54,7 +54,9 @@ function harness(opts: { image?: ReturnType<typeof imageAnswers>; runtimePrivacy
     org: testOrg(), llm, fastLlm: fast, decider, memories, offers: new InMemoryShareOfferStore(), history,
     deduper: new InMemoryUpdateDeduper(), voice: null, botFor: () => bot as unknown as TelegramBotClient,
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }, now: () => new Date('2026-10-19T10:00:00Z'),
-    ...(opts.runtimePrivacy ? { runtimePrivacy: opts.runtimePrivacy } : {}),
+    // With a runtime privacy adapter a Telegram image also needs imageAllowed (fixer r2); granted here so
+    // only the gates under test can refuse the image.
+    ...(opts.runtimePrivacy ? { runtimePrivacy: opts.runtimePrivacy, imageAllowed: async () => true } : {}),
   });
   const setReply = (text: string) => { llm.nextReply = text; fast.nextReply = text; };
   const replies = () => [...llm.replyRequests, ...fast.replyRequests];

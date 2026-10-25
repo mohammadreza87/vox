@@ -140,6 +140,7 @@ describe('red team wave A on main r2: the people rule is weaker than the main li
 // ('denies image export without its own capability, even with core text permission'), and so does the adaptive
 // runtime (requiresImage). The S12 Telegram path checks core text consent only: with STUDIO_IMAGES=1 a member's
 // photo is downloaded, sent to the decider and to the reply model while the same person's Mini App image is refused.
+// Closed by fixer r2 (GatewayDeps.imageAllowed, wired by Studio to single_party_image): plain `it` now.
 describe('red team wave A on main r2: Telegram photos skip the single_party_image capability', () => {
   async function studioHarness() {
     const h = makeStudio();
@@ -165,7 +166,7 @@ describe('red team wave A on main r2: Telegram photos skip the single_party_imag
     expect(status.eligible).toBe(false);
   });
 
-  it.fails('with STUDIO_IMAGES=1 their Telegram photo is not downloaded or exported either', async () => {
+  it('with STUDIO_IMAGES=1 their Telegram photo is not downloaded or exported either', async () => {
     vi.stubEnv('STUDIO_IMAGES', '1');
     const { h, vision, decideParts, downloadImage, photo, send } = await studioHarness();
     const status = await h.adaptive!.withAccountDocument(ID.alice, (d, now) => h.adaptive!.capabilityStatus(d, 'single_party_image', now));
@@ -174,5 +175,56 @@ describe('red team wave A on main r2: Telegram photos skip the single_party_imag
     expect(downloadImage).not.toHaveBeenCalled();
     expect(decideParts).not.toHaveBeenCalled();
     expect(vision.replyRequests.some((r) => r.messages.some((m) => m.images?.length))).toBe(false);
+  });
+
+  /** Grants single_party_image while `granted()` holds; every other capability is evaluated as before. */
+  function grantImage(h: Awaited<ReturnType<typeof studioHarness>>['h'], granted: () => boolean) {
+    const adaptive = h.adaptive!;
+    const original = adaptive.capabilityStatus.bind(adaptive);
+    vi.spyOn(adaptive, 'capabilityStatus').mockImplementation((d, capability, now) =>
+      capability === 'single_party_image' && granted() ? { eligible: true } : original(d, capability, now));
+  }
+
+  it('positive control: with the capability eligible the same photo is downloaded, triaged and answered with the image', async () => {
+    vi.stubEnv('STUDIO_IMAGES', '1');
+    const { h, vision, decideParts, downloadImage, photo, send } = await studioHarness();
+    grantImage(h, () => true);
+    await send(photo(ID.alice));
+    expect(downloadImage).toHaveBeenCalled();
+    expect(decideParts).toHaveBeenCalledTimes(1);
+    expect(vision.replyRequests.some((r) => r.messages.some((m) => m.images?.length))).toBe(true);
+  });
+
+  it('a capability withdrawn during the download drops the image before triage and the reply', async () => {
+    vi.stubEnv('STUDIO_IMAGES', '1');
+    const { h, vision, decideParts, downloadImage, photo, send } = await studioHarness();
+    let granted = true;
+    grantImage(h, () => granted);
+    const download = downloadImage.getMockImplementation()!;
+    downloadImage.mockImplementation(async (...args: Parameters<typeof download>) => { granted = false; return download(...args); });
+    await send(photo(ID.alice));
+    expect(downloadImage).toHaveBeenCalledTimes(1);
+    expect(decideParts).not.toHaveBeenCalled();
+    expect(vision.replyRequests.some((r) => r.messages.some((m) => m.images?.length))).toBe(false);
+  });
+});
+
+describe('red team wave A on main r2: the gateway image capability seam fails closed', () => {
+  it('a runtime privacy adapter without imageAllowed never downloads a photo; one that allows it does', async () => {
+    vi.stubEnv('STUDIO_IMAGES', '1');
+    const run = async (imageAllowed?: () => Promise<boolean>) => {
+      const h = harness(imageAnswers({ kind: 'other', task: 'explain', people: 0, sensitive: 0 }));
+      const deps = (h.gateway as unknown as { deps: Record<string, unknown> }).deps;
+      // A permissive adapter: every text gate passes, so only the image capability can refuse the image.
+      deps.runtimePrivacy = { read: async () => ({ revision: 'r1', memoryEnabled: true, historyEnabled: true }) };
+      if (imageAllowed) deps.imageAllowed = imageAllowed;
+      h.setReply('A whiteboard.');
+      await h.gateway.handleUpdate('aria', privatePhoto(TG.reza, h.ladder.sizes, 'what is this?'));
+      return h.bot.downloadImage.mock.calls.length;
+    };
+    expect(await run()).toBe(0);
+    expect(await run(async () => false)).toBe(0);
+    expect(await run(async () => { throw new Error('unavailable'); })).toBe(0);
+    expect(await run(async () => true)).toBeGreaterThan(0);
   });
 });

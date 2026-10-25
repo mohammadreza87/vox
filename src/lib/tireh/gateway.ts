@@ -189,6 +189,16 @@ export interface GatewayDeps {
   replyKeyboard?(personaId: string, chatId: number, from: TelegramUser): Promise<InlineKeyboard | undefined>;
   /** Circles notes: /notes, /forget <n> and explicit "remember this" proposals; true = handled (nothing else runs). */
   notes?: { intercept(personaId: string, chat: ChatContext, message: TelegramMessage, text: string, addressed: boolean): Promise<boolean> };
+  /**
+   * S12 Telegram images: the person's own image capability (Studio: the adaptive 'single_party_image'
+   * capability, the same one a Mini App image needs). Checked before the first download, again inside the
+   * image authority (after the download, before triage and at the guarded transport) and before the reply
+   * export. Absent with a runtimePrivacy adapter = no image (fail closed); absent without one (a runtime
+   * with no consent regime) = core text consent only, as before.
+   */
+  imageAllowed?(personaId: string, chat: ChatContext, personId: string, space: 'work' | 'personal'): Promise<boolean>;
+  /** Synchronous twin of imageAllowed for the indexed send fence; absent = the async check only. */
+  imageAllowedNow?(personaId: string, chat: ChatContext, personId: string, space: 'work' | 'personal'): boolean;
 }
 
 /** Why a proactive claim was refused. */
@@ -518,10 +528,14 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
       // its image is never downloaded or triaged, as when ingestion required validateAudience itself.
       // The image seam carries the turn's authority as text triage does (8a7dc55): it is re-checked
       // after the download, before the acknowledgement and triage, and again at the guarded transport.
+      // The image capability (imageAllowed) is part of that authority: a withdrawal during the download or
+      // triage drops the image, and no byte is fetched without it.
       const imageAuthority = { authorize: async () => await this.groupAllowed(persona, chat, speaker.id, 'reply') &&
+        await this.imageCapable(persona, chat, speaker.id, boundary.space) &&
         await this.unchanged(persona, chat, speaker.id, boundary) ? boundary.key : null,
-        ...(boundary.compact ? { authorizeNow: () => this.exportAuthorizedNow(persona, chat, speaker.id, boundary) } : {}) };
-      imageTurn = boundary.publicOnly ? null : await ingestTelegramImage({ org, decider: boundary.compact || this.compactPrivacy() ? undefined : this.deps.decider, llm: this.deps.llm, fastLlm: this.deps.fastLlm, bot, log: this.log,
+        ...(boundary.compact ? { authorizeNow: () => this.exportAuthorizedNow(persona, chat, speaker.id, boundary) &&
+          this.imageCapableNow(persona, chat, speaker.id, boundary.space) } : {}) };
+      imageTurn = boundary.publicOnly || !await this.imageCapable(persona, chat, speaker.id, boundary.space) ? null : await ingestTelegramImage({ org, decider: boundary.compact || this.compactPrivacy() ? undefined : this.deps.decider, llm: this.deps.llm, fastLlm: this.deps.fastLlm, bot, log: this.log,
         authority: imageAuthority }, persona, chat, speaker.id, message, caption);
       // A captionless image that could not be ingested is ignored, as before.
       if (!imageTurn && !caption.trim()) return 'ignored';
@@ -583,8 +597,10 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
       const canSpeak = this.canSpeak(persona, boundary);
       await bot.sendChatAction(message.chat.id, voiceWanted && canSpeak ? 'record_voice' : 'typing').catch(() => undefined);
       let generated: ComposedReply;
+      // The image capability is checked again before the image is exported to the reply model.
+      const replyImages = imageTurn && await this.imageCapable(persona, chat, speaker.id, boundary.space) ? imageTurn.images : undefined;
       try {
-        generated = await this.composeReply(persona, chat, speaker.id, text, imageTurn?.forceQuick ? forceQuickTriage(triaged) : triaged, message.message_id, action, voiceWanted && canSpeak ? 'voice' : 'text', boundary, imageTurn?.images, undefined, undefined, undefined, extras);
+        generated = await this.composeReply(persona, chat, speaker.id, text, imageTurn?.forceQuick ? forceQuickTriage(triaged) : triaged, message.message_id, action, voiceWanted && canSpeak ? 'voice' : 'text', boundary, replyImages, undefined, undefined, undefined, extras);
       } catch {
         logTelegramDiagnostic(this.log, 'reply_generation_failed');
         return 'ignored';
@@ -630,6 +646,17 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
       }
     }
     return shouldReply ? 'replied' : 'ignored';
+  }
+
+  /** S12: the person's own image capability (see GatewayDeps.imageAllowed). Any failure denies. */
+  private async imageCapable(persona: Persona, chat: ChatContext, speakerId: string, space: 'work' | 'personal'): Promise<boolean> {
+    if (!this.deps.imageAllowed) return !this.deps.runtimePrivacy;
+    try { return await this.deps.imageAllowed(persona.id, chat, speakerId, space) === true; } catch { return false; }
+  }
+
+  private imageCapableNow(persona: Persona, chat: ChatContext, speakerId: string, space: 'work' | 'personal'): boolean {
+    if (!this.deps.imageAllowedNow) return !!this.deps.imageAllowed || !this.deps.runtimePrivacy;
+    try { return this.deps.imageAllowedNow(persona.id, chat, speakerId, space) === true; } catch { return false; }
   }
 
   private async groupAllowed(persona: Persona, chat: ChatContext, speakerId: string, action: GroupAction): Promise<boolean> {

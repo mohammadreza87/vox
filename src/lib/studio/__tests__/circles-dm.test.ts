@@ -400,7 +400,11 @@ describe('kill switch and members', () => {
     vi.stubEnv('STUDIO_IMAGES', '1');
     try {
       const { h, org, bot, card, send, complete } = await setup();
-      // A vision-capable reply model, so only the audience and speaker gates can refuse the image.
+      // A vision-capable reply model and the single_party_image capability for everyone (fixer r2: Telegram
+      // images need it, as Mini App images do), so only the audience and speaker gates can refuse the image.
+      const adaptive = h.studio.deps.adaptive!;
+      const capabilityStatus = adaptive.capabilityStatus.bind(adaptive);
+      vi.spyOn(adaptive, 'capabilityStatus').mockImplementation((d, capability, now) => capability === 'single_party_image' ? { eligible: true } : capabilityStatus(d, capability, now));
       h.studio.deps.chatLLM = { complete, identity: { provider: 'anthropic', model: 'claude-test' } } as unknown as typeof h.studio.deps.chatLLM;
       const decideParts = vi.fn(async () => ({}));
       (h.studio.deps.decider as unknown as { decideParts: typeof decideParts }).decideParts = decideParts;
