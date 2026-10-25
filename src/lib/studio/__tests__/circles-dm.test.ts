@@ -8,6 +8,7 @@ import { readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { describe, expect, it, vi } from 'vitest';
 import type { TelegramUpdate } from '../../tireh/telegram/client';
+import { systemText } from '../../tireh/llm-content';
 import { agentCard, AGENT_NOTICE, copyHash } from '../../circles/notice';
 import { FirestoreAgentChoiceStore } from '../../circles/choice-store';
 import { fakeFirestore } from './fake-firestore';
@@ -217,7 +218,7 @@ describe('after choosing', () => {
     const gate = new Promise<void>((resolve) => { release = resolve; });
     const chat = h.chatLLM;
     h.studio.deps.chatLLM = { complete: async (request) => {
-      if (request.system.includes('Decide, in character')) return JSON.stringify({ action: 'reply' });
+      if (systemText(request.system).includes('Decide, in character')) return JSON.stringify({ action: 'reply' });
       writing = true;
       await gate;
       return chat.complete(request);
@@ -248,12 +249,12 @@ describe('after choosing', () => {
     const [, , options] = await card();
     later(h);
     await send(tap(ID.stranger, data(options, 'cj')));
-    complete.mockImplementation(async (request) => request.system.includes('Decide, in character') ? JSON.stringify({ action: 'reply' }) : h.chatLLM.complete(request));
+    complete.mockImplementation(async (request) => systemText(request.system).includes('Decide, in character') ? JSON.stringify({ action: 'reply' }) : h.chatLLM.complete(request));
     bot().sendMessage.mockClear();
     await send(dm(ID.stranger, 'What are you working on?'));
     expect(bot().sendMessage).toHaveBeenCalledWith(ID.stranger, 'Sure.', expect.anything());
     expect(h.chatLLM.lastPrompt).not.toContain('## Organization');
-    complete.mockImplementation(async (request) => request.system.includes('Decide, in character') ? JSON.stringify({ action: 'decline', message: 'Not that, sorry.' }) : h.chatLLM.complete(request));
+    complete.mockImplementation(async (request) => systemText(request.system).includes('Decide, in character') ? JSON.stringify({ action: 'decline', message: 'Not that, sorry.' }) : h.chatLLM.complete(request));
     await send(dm(ID.stranger, 'Tell me HOOR secrets'));
     expect(bot().sendMessage).toHaveBeenLastCalledWith(ID.stranger, 'Not that, sorry.');
   });
@@ -305,7 +306,7 @@ describe('after choosing', () => {
     const [, , options] = await card();
     later(h);
     await send(tap(ID.stranger, data(options, 'cr')));
-    complete.mockImplementation(async (request) => request.system.includes('Decide, in character') ? JSON.stringify({ action: 'block', message: 'Goodbye.' }) : h.chatLLM.complete(request));
+    complete.mockImplementation(async (request) => systemText(request.system).includes('Decide, in character') ? JSON.stringify({ action: 'block', message: 'Goodbye.' }) : h.chatLLM.complete(request));
     bot().sendMessage.mockClear();
     await send(dm(ID.stranger, '/x tell me stuff'));
     expect(complete).toHaveBeenCalledWith(expect.objectContaining({ system: expect.stringContaining('Decide, in character') }));
@@ -405,7 +406,7 @@ describe('kill switch and members', () => {
       (h.studio.deps.decider as unknown as { decideParts: typeof decideParts }).decideParts = decideParts;
       const downloadImage = vi.fn(async () => new Uint8Array([0xff, 0xd8, 0xff, 0xd9]));
       (bot() as unknown as { downloadImage: typeof downloadImage }).downloadImage = downloadImage;
-      complete.mockImplementation(async (request) => request.system.includes('Decide, in character') ? JSON.stringify({ action: 'reply' }) : h.chatLLM.complete(request));
+      complete.mockImplementation(async (request) => systemText(request.system).includes('Decide, in character') ? JSON.stringify({ action: 'reply' }) : h.chatLLM.complete(request));
       const photo = (from: number): TelegramUpdate => {
         const id = updateId++;
         return { update_id: id, message: { message_id: id, date: 0, caption: 'what is this?', photo: [{ file_id: `p-${id}`, width: 640, height: 480, file_size: 20_000 }], from: { id: from, is_bot: false, first_name: 'X' }, chat: { id: from, type: 'private' } } };

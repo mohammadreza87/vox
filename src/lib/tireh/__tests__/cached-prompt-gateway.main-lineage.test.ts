@@ -184,8 +184,8 @@ describe('system-tail arm', () => {
     const ctx = harness({ llm: new AnthropicLLM('fixture-key', 'claude-haiku-5-5') });
     await ctx.gateway.converse('aria', 'reza', 'first');
     const body = replyBodies(bodies).at(-1)!;
-    expect(body.messages.at(-1).role).toBe('system');
-    expect(body.messages.at(-1).content.startsWith('## For this turn')).toBe(true);
+    expect(body.messages.at(-1)!.role).toBe('system');
+    expect(body.messages.at(-1)!.content.startsWith('## For this turn')).toBe(true);
     await drain(ctx.gateway.liveTurn('aria', 'reza', [{ role: 'user', content: 'live question' }]));
     const live = provider.stream.mock.lastCall![0];
     expect(live.messages.at(-1).role).toBe('user');
@@ -294,7 +294,7 @@ function installWire(): AnyBody[] {
   });
   return bodies;
 }
-const replyBodies = (bodies: AnyBody[]) => bodies.filter((b) => !JSON.stringify(b.system).includes('You extract long-term memories')) as unknown as Array<WireBody & { messages: Array<{ role: string; content: any }> }>; // eslint-disable-line @typescript-eslint/no-explicit-any
+const replyBodies = (bodies: AnyBody[]) => bodies.filter((b) => !JSON.stringify(b.system).includes('You extract long-term memories')) as unknown as Array<Omit<WireBody, 'messages'> & { messages: Array<{ role: string; content: any }> }>; // eslint-disable-line @typescript-eslint/no-explicit-any
 async function drain(parts: AsyncIterable<string>) {
   const out: string[] = [];
   for await (const part of parts) out.push(part);

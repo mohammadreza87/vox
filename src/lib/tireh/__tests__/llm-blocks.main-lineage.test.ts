@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { AnthropicLLM, GeminiLLM, anthropicTurns, cachedSystem, normalizeTurns, type LLMMessage, type LLMRequest, type LLMResponseMeta, type SystemBlock } from '../llm';
+import { AnthropicLLM, GeminiLLM, anthropicSystem, anthropicTurns, cachedSystem, normalizeTurns, type LLMMessage, type LLMRequest, type LLMResponseMeta, type SystemBlock } from '../llm';
 import { systemText } from '../llm-content';
 
 const provider = vi.hoisted(() => ({
@@ -87,17 +87,17 @@ describe('string system keeps the base request shapes', () => {
 
 describe('array system', () => {
   it('passes blocks through in order, keeps cache_control and serializes ttl only when set', async () => {
-    expect(cachedSystem(blocks)).toEqual([
+    expect(anthropicSystem(blocks)).toEqual([
       { type: 'text', text: 'A identity', cache_control: { type: 'ephemeral', ttl: '1h' } },
       { type: 'text', text: 'B org', cache_control: { type: 'ephemeral', ttl: '1h' } },
       { type: 'text', text: 'C frame', cache_control: { type: 'ephemeral' } },
       { type: 'text', text: 'D unmarked' },
     ]);
-    const sent = cachedSystem(blocks) as Array<Record<string, unknown>>;
+    const sent = anthropicSystem(blocks) as unknown as Array<Record<string, unknown>>;
     expect(sent.map((b) => Object.keys(b).sort())).toEqual([['cache_control', 'text', 'type'], ['cache_control', 'text', 'type'], ['cache_control', 'text', 'type'], ['text', 'type']]);
     expect(Object.keys(sent[2].cache_control as object)).toEqual(['type']);
     await haiku().complete({ system: blocks, messages: [userTurn('hi')] });
-    expect(lastBody().system).toEqual(cachedSystem(blocks));
+    expect(lastBody().system).toEqual(anthropicSystem(blocks));
     expect(systemText(blocks)).toBe('A identity\n\nB org\n\nC frame\n\nD unmarked');
   });
 
