@@ -4,9 +4,9 @@
  * until the fix lands; when a fix lands, vitest reports the case as passing
  * unexpectedly, and `it.fails` must then become `it`.
  *
- *  - CQ1: main's S12 lineage treated "never" and "keep" as negations
- *    (images/policy.ts NEGATED_REMEMBER); wave A's IMAGE_NO_MEMORY dropped
- *    them, so a negated caption reads as an explicit remember request.
+ *  - CQ1 (fixed, fixer r1): main's S12 lineage treated "never" and "keep" as
+ *    negations (images/policy.ts NEGATED_REMEMBER); wave A's IMAGE_NO_MEMORY
+ *    dropped them. Both now read memory/requests.ts NEGATED_MEMORY_REQUEST.
  *  - CQ2: main's S12 lineage bounded each image download with
  *    AbortSignal.timeout(IMAGE_DOWNLOAD_TIMEOUT_MS = 5000); wave A's
  *    ingestTelegramImage passes no signal, so a stalled Telegram file
@@ -36,7 +36,7 @@ describe('CQ1: a negated caption is never an explicit remember request', () => {
   });
 
   for (const caption of ["don't keep this", 'never save this', 'dont save this', "please don't ever save this"]) {
-    it.fails(`"${caption}" is not an explicit remember request and suppresses image memory`, () => {
+    it(`"${caption}" is not an explicit remember request and suppresses image memory`, () => {
       expect(explicitRememberRequest(caption)).toBe(false);
       expect(suppressImageMemory(explainTriage, caption)).toBe(true);
     });

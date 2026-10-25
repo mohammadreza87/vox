@@ -32,6 +32,7 @@ import { GroupWindow, quotedLine, replyQuote, speakerLabel, UNANSWERED_MARK, typ
 import { selectAdaptiveContext } from './memory/adaptive-context';
 import { lineageEventIds } from './memory/store';
 import { selectMemories } from './memory/retrieval';
+import { NEGATED_MEMORY_REQUEST } from './memory/requests';
 import { decideScope, extractCandidates, resolveCandidateSource, firstNewIndex } from './memory/extraction';
 import { canPersonSee, describeScope, hasGuestAudience, isVisibleToAudience, audienceOf, historyMessageForChat, selectHistoryForChat, snapshotScopeAudience } from './memory/visibility';
 import { groupAddressing, targetsSomeoneElse } from './group-addressing';
@@ -242,7 +243,8 @@ export const PET_SURFACE_FRAME = [
 ].join(' ');
 
 const GUEST_VOICE_REPLY = 'I only read typed messages here, so I did not listen to that voice message. Could you type it instead?';
-const NO_MEMORY = /(?:do not|don't|don’t)\s+(?:remember|save|store)|forget (?:this|that)|ذخیره نکن|به خاطر نسپار|یادت نماند|فراموش کن/iu;
+/** The shared "do not keep this" rule (memory/requests.ts), also used by S12 image retention. */
+const NO_MEMORY = NEGATED_MEMORY_REQUEST;
 
 export class PersonaGateway {
   private readonly log: Pick<Console, 'info' | 'warn' | 'error'>;

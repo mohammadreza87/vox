@@ -3,9 +3,9 @@
  * the suite stays green and each turns red once the gap is closed (then make it
  * a plain `it`). Pure unit tests: no network, no providers, no filesystem.
  *
- * 1-2. Persian opt-out / remember regexes (images/retention.ts, a byte copy of
- *      gateway.ts NO_MEMORY) do not normalise ZWNJ or Arabic yeh/kaf, so the
- *      standard spellings of "don't keep it" and "save it" are not recognised.
+ * 1-2. (fixed, fixer r1 on main) Persian opt-out / remember regexes did not
+ *      accept ZWNJ or Arabic yeh/kaf; memory/requests.ts now does, for both
+ *      the gateway and images/retention.ts.
  * 3.   stripImageMetadata copies everything after the first JPEG SOS verbatim,
  *      so an APPn/COM segment between scans (legal in progressive JPEGs) leaves
  *      the process.
@@ -20,12 +20,12 @@ import { stripImageMetadata } from '../images/bytes';
 import { DecisionService, type DecisionContext } from '../../adaptive/decisions';
 
 describe('QA r3 code-quality known gaps', () => {
-  it.fails('recognises Persian opt-outs written with ZWNJ or an Arabic yeh', () => {
+  it('recognises Persian opt-outs written with ZWNJ or an Arabic yeh', () => {
     expect(IMAGE_NO_MEMORY.test('به‌خاطر نسپار')).toBe(true); // ZWNJ, standard orthography
     expect(IMAGE_NO_MEMORY.test('ذخيره نکن')).toBe(true); // Arabic yeh U+064A
   });
 
-  it.fails('recognises a Persian remember request written with ZWNJ', () => {
+  it('recognises a Persian remember request written with ZWNJ', () => {
     expect(explicitRememberRequest('ذخیره‌اش کن')).toBe(true);
   });
 

@@ -4,19 +4,20 @@
  * sensitive document. Unknown triage fails closed.
  */
 
+import { explicitMemoryRequest, MEMORY_REQUEST, NEGATED_MEMORY_REQUEST } from '../memory/requests';
 import type { ChatMessage } from '../types';
 import type { ImageTriage } from './questions';
 
 export const SENSITIVE_DOCUMENT_THRESHOLD = 0.5;
 
-/** An explicit request to keep what was shared (English and Persian). */
-export const IMAGE_REMEMBER_REQUEST = /\b(?:remember|save|keep|store)\s+(?:this|that|it)\b|یادت\s*(?:باشه|بمونه|بماند)|به\s*خاطر\s*بسپار|ذخیره(?:\s*اش)?\s*کن|نگهش\s*دار/iu;
+/** An explicit request to keep what was shared (English and Persian); see memory/requests.ts. */
+export const IMAGE_REMEMBER_REQUEST = MEMORY_REQUEST;
 
-/** Byte copy of gateway.ts NO_MEMORY (not exported there; gateway.ts is not edited for it). */
-export const IMAGE_NO_MEMORY = /(?:do not|don't|don’t)\s+(?:remember|save|store)|forget (?:this|that)|ذخیره نکن|به خاطر نسپار|یادت نماند|فراموش کن/iu;
+/** The shared negation rule the gateway also uses (memory/requests.ts). Any negation wins. */
+export const IMAGE_NO_MEMORY = NEGATED_MEMORY_REQUEST;
 
 export function explicitRememberRequest(text: string): boolean {
-  return !IMAGE_NO_MEMORY.test(text) && IMAGE_REMEMBER_REQUEST.test(text);
+  return explicitMemoryRequest(text);
 }
 
 /** True when memory extraction must not run for this image turn. */
