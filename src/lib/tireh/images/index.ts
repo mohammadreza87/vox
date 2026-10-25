@@ -244,10 +244,12 @@ export async function ingestTelegramImage(
     // (d) Content-free image triage, only through a decider that takes image parts.
     triage = await runTriage(deps, persona, text, first.image);
 
-    // (f) The reply image at the resolution the task needs.
+    // (f) The reply image at the resolution the task needs. The turn's authority (the image capability
+    // included) is read again first: no reply-tier byte is fetched after a withdrawal during triage.
     if (source.kind === 'photo') {
       const size = replyPhotoSize(source.sizes, triage);
       if (size && size.file_id !== triageSize!.file_id) {
+        if (deps.authority && !await stillAuthorized(deps.authority)) { logCode(deps.log, 'authority_changed'); return null; }
         const reply = await fetchImage(deps, size.file_id, MAX_REPLY_IMAGE_BYTES);
         if (reply.ok) image = reply.image;
         else logCode(deps.log, reply.code);

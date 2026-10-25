@@ -137,8 +137,10 @@ async function studioHarness(image = imageAnswers({ task: 'explain' })) {
 // window still exports the image bytes to the reply model. Triage gets the capability inside its guarded transport
 // authority (8a7dc55's principle); the reply does not. Event order observed in this harness for one photo:
 // capability > download > capability > decideParts > download (reply tier) > decide > capability > reply(image).
-// Fix: when composeReply carries images, add imageCapable() to request.authorize and imageCapableNow() to
-// request.authorizeNow (and drop the images, or fail closed, when it is denied at the transport).
+// Fixed in fixer r3: while images ride on the reply request, imageCapable() is part of request.authorize and
+// imageCapableNow() of request.authorizeNow; composeReply drops the images when the capability is gone at its
+// pre-export check, and the transport fails the export when it goes after that. ingestTelegramImage re-reads the
+// authority before the reply-tier download.
 describe('red team wave A on main r3: the reply export of a Telegram image is not fenced at the transport', () => {
   it('guard: a capability withdrawn during text triage (after image triage) keeps the image out of the reply', async () => {
     vi.stubEnv('STUDIO_IMAGES', '1');
@@ -152,16 +154,52 @@ describe('red team wave A on main r3: the reply export of a Telegram image is no
     expect(x.imageExported()).toBe(false);
   });
 
-  it.fails('a capability withdrawn right after the last check (while the reply is composed) never reaches the reply model', async () => {
+  it('a capability withdrawn right after the last check (while the reply is composed) never reaches the reply model', async () => {
     vi.stubEnv('STUDIO_IMAGES', '1');
     const x = await studioHarness();
-    let granted = true, checks = 0;
-    // The third single_party_image check is the gateway's "before the reply export" one: it passes, and the
-    // person withdraws the capability immediately afterwards, before composeReply reaches the provider.
-    x.grantImage(() => granted, () => { if (++checks === 3) granted = false; });
+    let granted = true, textTriaged = false, afterTriage = 0;
+    // The first single_party_image check after text triage is the gateway's "before the reply export" one: it
+    // passes, and the person withdraws the capability immediately afterwards, before composeReply reaches the
+    // provider. (Counted from text triage so earlier ingest checks do not shift it.)
+    x.grantImage(() => granted, () => { if (textTriaged && ++afterTriage === 1) granted = false; });
+    const decide = x.decide.getMockImplementation()!;
+    x.decide.mockImplementation(async (...args: Parameters<typeof decide>) => { textTriaged = true; return decide(...args); });
     await x.send(x.photo(ID.alice));
-    expect(checks).toBeGreaterThanOrEqual(3);
+    expect(afterTriage).toBeGreaterThanOrEqual(1);
+    expect(x.downloadImage).toHaveBeenCalledTimes(2); // the image was ingested at reply resolution
     expect(x.vision.replyRequests.length).toBeGreaterThan(0); // positive control: the text turn is still answered
+    expect(x.imageExported()).toBe(false);
+  });
+
+  // Fixer r3: the withdrawal can also land after composeReply's own pre-export check, inside the transport.
+  // The reply request's authorize carries the capability while the images ride on it, so the export fails.
+  it('a capability withdrawn between the pre-export check and the transport fails the export with the image', async () => {
+    vi.stubEnv('STUDIO_IMAGES', '1');
+    const x = await studioHarness();
+    let granted = true;
+    x.grantImage(() => granted);
+    const complete = x.vision.complete.bind(x.vision);
+    let calls = 0;
+    vi.spyOn(x.vision, 'complete').mockImplementation(async (request: LLMRequest) => {
+      if (request.messages.some((m) => m.images?.length)) { calls++; granted = false; }
+      return complete(request);
+    });
+    await x.send(x.photo(ID.alice));
+    expect(calls).toBeGreaterThan(0);
+    expect(x.imageExported()).toBe(false);
+  });
+
+  // Fixer r3: a withdrawal during image triage stops the reply-tier download (ingestTelegramImage step f).
+  it('a capability withdrawn during image triage fetches no reply-resolution bytes', async () => {
+    vi.stubEnv('STUDIO_IMAGES', '1');
+    const x = await studioHarness();
+    let granted = true;
+    x.grantImage(() => granted);
+    const triage = x.decideParts.getMockImplementation()!;
+    x.decideParts.mockImplementation(async (...args: Parameters<typeof triage>) => { granted = false; return triage(...args); });
+    await x.send(x.photo(ID.alice));
+    expect(x.decideParts).toHaveBeenCalledTimes(1);
+    expect(x.downloadImage).toHaveBeenCalledTimes(1);
     expect(x.imageExported()).toBe(false);
   });
 });

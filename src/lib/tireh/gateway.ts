@@ -206,7 +206,16 @@ export type GroupClaimMiss = 'cooldown' | 'window' | 'duplicate';
 const CLAIM_DIAGNOSTIC = { cooldown: 'group_skip_claim_cooldown', window: 'group_skip_claim_window', duplicate: 'group_skip_claim_duplicate' } as const;
 
 /** What a group turn adds to triage and the reply: the replied-to text and, without stored history, recent visible lines. */
-interface TurnExtras { quote?: ReplyQuote | null; recent?: VisibleLine[] }
+interface TurnExtras {
+  quote?: ReplyQuote | null; recent?: VisibleLine[];
+  /**
+   * S12: the image capability of the person whose Telegram image rides on this reply. It is part of the reply
+   * request's transport authority while the images are attached (8a7dc55's guarded-transport principle): a
+   * capability withdrawn while the reply is composed drops the images before export, and a withdrawal that
+   * lands after that check fails the export at the transport.
+   */
+  imageAuthority?: { authorize: () => Promise<boolean>; authorizeNow: () => boolean };
+}
 
 export type HandleResult =
   | 'replied'
@@ -598,9 +607,14 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
       await bot.sendChatAction(message.chat.id, voiceWanted && canSpeak ? 'record_voice' : 'typing').catch(() => undefined);
       let generated: ComposedReply;
       // The image capability is checked again before the image is exported to the reply model.
+      // It stays part of the reply request's transport authority while the images ride on it (composeReply).
       const replyImages = imageTurn && await this.imageCapable(persona, chat, speaker.id, boundary.space) ? imageTurn.images : undefined;
+      const replyBoundary = boundary;
+      const replyExtras: TurnExtras = replyImages ? { ...extras, imageAuthority: {
+        authorize: () => this.imageCapable(persona, chat, speaker.id, replyBoundary.space),
+        authorizeNow: () => this.imageCapableNow(persona, chat, speaker.id, replyBoundary.space) } } : extras;
       try {
-        generated = await this.composeReply(persona, chat, speaker.id, text, imageTurn?.forceQuick ? forceQuickTriage(triaged) : triaged, message.message_id, action, voiceWanted && canSpeak ? 'voice' : 'text', boundary, replyImages, undefined, undefined, undefined, extras);
+        generated = await this.composeReply(persona, chat, speaker.id, text, imageTurn?.forceQuick ? forceQuickTriage(triaged) : triaged, message.message_id, action, voiceWanted && canSpeak ? 'voice' : 'text', boundary, replyImages, undefined, undefined, undefined, replyExtras);
       } catch {
         logTelegramDiagnostic(this.log, 'reply_generation_failed');
         return 'ignored';
@@ -1363,15 +1377,24 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     // History, message assembly and saved context together; boundary time is counted on its own.
     lap('retrieval');
     if (!await this.unchanged(persona, chat, speakerId, boundary)) return { text: this.changedReply, sources: [] };
+    // S12: while a Telegram image rides on the request, its capability is part of the transport authority.
+    const imageAuthority = extras?.imageAuthority;
+    const carriesImages = () => messages.some((m) => !!(m as LLMMessage).images?.length);
+    const dropImages = () => { for (const m of messages) delete (m as LLMMessage).images; };
+    const imagesAuthorized = async () => !imageAuthority || !carriesImages() || await this.requestAuthorized(imageAuthority.authorize);
+    const imagesAuthorizedNow = () => !imageAuthority || !carriesImages() || this.requestAuthorizedNow(imageAuthority.authorizeNow);
     const request = { system, messages, maxTokens: quick ? REPLY_MAX_TOKENS.quick : REPLY_MAX_TOKENS.thoughtful, effort: CHAT_EFFORT, ...promptExtras,
-      authorize: async () => await this.unchanged(persona, chat, speakerId, boundary!) && await this.requestAuthorized(authorize),
-      ...(boundary.compact ? {authorizeNow: () => this.exportAuthorizedNow(persona, chat, speakerId, boundary!, authorizeNow)} : {}) };
+      authorize: async () => await this.unchanged(persona, chat, speakerId, boundary!) && await this.requestAuthorized(authorize) && await imagesAuthorized(),
+      ...(boundary.compact ? {authorizeNow: () => this.exportAuthorizedNow(persona, chat, speakerId, boundary!, authorizeNow) && imagesAuthorizedNow()} : {}) };
     const llm = quick ? this.deps.fastLlm! : this.deps.llm;
     if (boundary.compact && llm.committedExportFence !== true) return {text: this.changedReply, sources: []};
     // Strangers get fewer searches: each one costs money.
     const maxSearches = org.getPerson(speakerId)?.guest ? 1 : 3;
     const generate = async (model: LLM, maxTokens: number): Promise<{ text: string; sources: WebSource[] } | 'denied' | 'changed'> => {
       if (!(await this.groupAllowed(persona, chat, speakerId, action))) return 'denied';
+      // A withdrawn image capability drops the images; the caption is still answered, as when it was withdrawn
+      // before the reply. A withdrawal after this point fails the export at the transport (request.authorize).
+      if (!await imagesAuthorized() || !imagesAuthorizedNow()) dropImages();
       // Run after all asynchronous boundary/history loads, immediately at export.
       if (!await this.requestAuthorized(authorize)) return 'changed';
       if (request.authorizeNow && !request.authorizeNow()) return 'changed';

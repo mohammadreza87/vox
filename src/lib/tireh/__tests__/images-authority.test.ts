@@ -67,8 +67,10 @@ describe('image seam authority', () => {
     const turn = await ingestTelegramImage(deps, persona, rezaChat, 'reza', message, 'what is this?');
     expect(calls).toBeGreaterThan(1);
     expect(provider.evaluate).not.toHaveBeenCalled();
-    expect(turn?.triage).toBeNull();
-    expect(turn?.suppressMemory).toBe(true);
+    // Fixer r3: the authority is read again before the reply-tier download, so the withdrawn turn drops the
+    // image altogether (it used to continue with triage null and memory suppressed).
+    expect(turn).toBeNull();
+    expect(deps.bot.downloadImage).toHaveBeenCalledTimes(1);
   });
 });
 
