@@ -94,12 +94,57 @@ jobs:
           fail_ci_if_error: false
 
   # =====================================
+  # Privacy gates (docs/AGENT_INTELLIGENCE_SOLUTION.md section 5, step 8):
+  # the invariant suite, the red-team gate and the PolicySnapshotBuilder
+  # differential oracle, flags unset and again under the S08 flags. Making
+  # this job a required check is a branch-protection setting for the owner.
+  # =====================================
+  privacy-gates:
+    name: Privacy gates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Privacy core and red-team suites, flags unset
+        run: >-
+          npx vitest run
+          src/lib/tireh/__tests__/invariants.test.ts
+          src/lib/tireh/__tests__/policy-differential.test.ts
+          src/lib/tireh/__tests__/redteam
+          src/lib/tireh/__tests__/visibility.test.ts
+          src/lib/tireh/__tests__/memory-privacy.test.ts
+          src/lib/tireh/__tests__/history-privacy.test.ts
+          src/lib/tireh/__tests__/memory-requests.test.ts
+          src/lib/studio/__tests__/sharing-v2
+
+      - name: Invariants, differential oracle and red-team gate under TIREH_SHARING_V2 and TIREH_AUDIT_LOG
+        run: >-
+          npx vitest run
+          src/lib/tireh/__tests__/invariants.test.ts
+          src/lib/tireh/__tests__/policy-differential.test.ts
+          src/lib/tireh/__tests__/redteam-wave-a
+          src/lib/studio/__tests__/sharing-v2.test.ts
+        env:
+          TIREH_SHARING_V2: '1'
+          TIREH_AUDIT_LOG: '1'
+
+  # =====================================
   # Build Verification
   # =====================================
   build:
     name: Build
     runs-on: ubuntu-latest
-    needs: [lint, test]
+    needs: [lint, test, privacy-gates]
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -264,7 +309,7 @@ jobs:
   pr-summary:
     name: PR Summary
     runs-on: ubuntu-latest
-    needs: [lint, test, build, e2e]
+    needs: [lint, test, privacy-gates, build, e2e]
     if: github.event_name == 'pull_request'
     permissions:
       pull-requests: write
@@ -290,6 +335,7 @@ jobs:
             |-------|--------|
             | Lint & Type Check | ✅ Passed |
             | Tests | ✅ Passed |
+            | Privacy gates | ✅ Passed |
             | Build | ✅ Passed |
             | Browser journeys | ✅ Passed |
 
