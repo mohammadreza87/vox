@@ -17,7 +17,8 @@
  *  - Work space only: TIREH records are Work records.
  *  - purpose core.conversation with no consents: consent gates live in the
  *    turn boundary, not in visibility.
- *  - the agent grant comes from personaId.
+ *  - the agent grant comes from personaId; a record of another persona maps
+ *    to null (a denial).
  *  - joinedAt 0 for every snapshot member: TIREH has no join times, and the
  *    authorizedPersonIds snapshot is the history fence, so historyPolicy can
  *    never widen access by itself.
@@ -59,6 +60,8 @@ function scopeRuleHolds(org: OrgDirectory, memory: MemoryRecord, id: string): bo
 /** Builds one reader's snapshot and request; null means not representable, which is a denial. */
 export function buildPolicyMapping(input: PolicyMappingInput): PolicyMapping | null {
   const { org, memory, readerPersonId: reader, audience, personaId, now } = input;
+  // Another agent's record is never readable by this agent (main's guard, kept on the merge).
+  if (memory.personaId !== personaId) return null;
   const scope = memory.scope;
   const sensitive = memory.sensitivity !== 'normal';
   if (sensitive && scope.kind !== 'private') return null;

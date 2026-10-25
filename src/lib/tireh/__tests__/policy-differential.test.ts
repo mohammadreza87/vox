@@ -175,6 +175,19 @@ describe('visibility vs adaptive policy differential', () => {
     }
   });
 
+  it("another agent's record is denied by the oracle for every scope, while the same record of this agent is allowed", () => {
+    // visibility.ts has no persona argument: persona isolation is the stores' listActive(personaId).
+    // The oracle must not be more permissive than that, so it denies a record of another persona outright.
+    const org = testOrg();
+    for (const scope of [{ kind: 'private', personId: 'reza' }, { kind: 'people', personIds: ['reza', 'parastoo'] }, { kind: 'org' }] as MemoryScope[]) {
+      const own = memory({ content: 'x', scope });
+      const other = { ...own, personaId: 'other-agent' };
+      expect(adaptiveAllowsAudience(org, own, ['reza'], PERSONA, NOW)).toBe(true);
+      expect(buildPolicyMapping({ org, memory: other, readerPersonId: 'reza', audience: ['reza'], personaId: PERSONA, now: NOW })).toBeNull();
+      expect(adaptiveAllowsAudience(org, other, ['reza'], PERSONA, NOW)).toBe(false);
+    }
+  });
+
   it('an empty audience is denied', () => {
     const org = testOrg();
     const m = memory({ content: 'x', scope: { kind: 'org' } });
