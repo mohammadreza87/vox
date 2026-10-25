@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import type { AdaptiveService } from '../../adaptive/persistence/service';
 import { defaultVoiceId, type ElevenLabsStudio } from '../media';
 import type { StudioState } from '../types';
+import { tirehFlags } from '../../tireh/flags';
 import { voiceprintEnv } from './config';
 import { parseVoiceprintKey, VoiceprintCipher } from './crypto';
 import { PyannoteVoiceprintProvider } from './pyannote';
@@ -38,6 +39,9 @@ export {
  * malformed key or one that reuses STUDIO_SECRET. The provider, speech
  * activity and self-echo source exist only with PYANNOTE_API_KEY and outside
  * the internal-pilot manifest; status and delete work without them.
+ * Refuses at startup with the flag on, Firestore storage and a production
+ * runtime: an environment key stored beside the ciphertext is not acceptable
+ * there until Cloud KMS envelope encryption exists.
  */
 export async function createStudioVoiceprints(input: {
   env: NodeJS.ProcessEnv;
@@ -48,12 +52,20 @@ export async function createStudioVoiceprints(input: {
   readState: () => Promise<StudioState>;
   eleven: ElevenLabsStudio | null;
   logger?: Pick<Console, 'warn'>;
+  /** runtime.ts passes config.production; with Firestore storage and the flag on, startup refuses. */
+  production?: boolean;
   /** Override for the flag reader; runtime.ts passes a constant-off reader when the local voice engine is selected. */
   flags?: VoiceprintServiceOptions['flags'];
 }): Promise<VoiceprintService | null> {
   const { env } = input;
   const key = parseVoiceprintKey(env.VOICEPRINT_KEY, env.STUDIO_SECRET);
   if (!key) return null;
+  // The flag as the service will read it (input.flags, else the process env) or as the given env says (main's voiceprintConfigFromEnv).
+  const flagOn = input.flags ? input.flags().voiceRecognition : tirehFlags().voiceRecognition || tirehFlags(env).voiceRecognition;
+  if (input.storage === 'firestore' && input.production && flagOn) {
+    key.fill(0);
+    throw new Error('Voiceprints on Firebase require Cloud KMS envelope encryption (docs/implementation/VOICE_PROVIDER_INTEGRATION.md)');
+  }
   const config = voiceprintEnv(env);
   if (config.thresholdsInvalid) input.logger?.warn('voiceprint_thresholds_invalid');
   const store: VoiceprintStore = input.storage === 'firestore'

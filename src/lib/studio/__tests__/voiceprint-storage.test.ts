@@ -182,4 +182,24 @@ describe('createStudioVoiceprints', () => {
     expect(await service!.status(s.telegramId, 'work')).toMatchObject({ available: false, reason: 'disabled' });
     expect(fetch).not.toHaveBeenCalled();
   });
+
+  it('refuses Firestore in production with STUDIO_VOICE_RECOGNITION=1 until Cloud KMS exists; a constant-off flag reader still starts', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('network is not allowed in tests'); }));
+    const s = await setupVoiceprints();
+    expect(process.env.STUDIO_VOICE_RECOGNITION).toBe('1');
+    const getAdminDb = vi.fn(async () => ({ collection: () => ({}) }) as unknown as Firestore);
+    vi.doMock('@/lib/firebase-admin', () => ({ getAdminDb }));
+    try {
+      const base = { env: { VOICEPRINT_KEY: Buffer.from(TEST_KEY).toString('base64'), STUDIO_VOICE_RECOGNITION: '1' }, storage: 'firestore' as const, production: true,
+        dataDir: s.directory, orgKey: 'HOOR', adaptive: s.adaptive, readState, eleven: null };
+      await expect(createStudioVoiceprints(base))
+        .rejects.toThrow('Voiceprints on Firebase require Cloud KMS envelope encryption (docs/implementation/VOICE_PROVIDER_INTEGRATION.md)');
+      expect(getAdminDb).not.toHaveBeenCalled();
+      expect(await createStudioVoiceprints({ ...base, flags: () => ({ voiceRecognition: false }) })).not.toBeNull();
+      expect(await createStudioVoiceprints({ ...base, production: false })).not.toBeNull();
+    } finally {
+      vi.doUnmock('@/lib/firebase-admin');
+    }
+    expect(fetch).not.toHaveBeenCalled();
+  });
 });

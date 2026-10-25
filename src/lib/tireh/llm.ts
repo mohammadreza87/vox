@@ -108,7 +108,7 @@ export async function* streamText(llm: LLM, request: LLMRequest): AsyncIterable<
 export function normalizeTurns(messages: LLMMessage[]): LLMMessage[] {
   const merged: LLMMessage[] = [];
   for (const message of messages) {
-    if (!message.content.trim() && !message.images?.length) continue;
+    if (!message.content.trim() && !message.images?.length && !message.trailingText?.length) continue;
     const last = merged[merged.length - 1];
     if (last && last.role === message.role) {
       last.content = `${last.content}\n${message.content}`;
@@ -131,23 +131,57 @@ export function normalizeTurns(messages: LLMMessage[]): LLMMessage[] {
 export function anthropicTurns(messages: LLMMessage[]): Anthropic.MessageParam[] {
   return normalizeTurns(messages).map((message): Anthropic.MessageParam => {
     const imageBlocks = (message.images ?? []).map(image => ({ type: 'image' as const, source: { type: 'base64' as const, media_type: image.mimeType, data: image.data } }));
-    const extras = !!(message.trailingText?.length || message.cacheControl);
-    if (!extras) return { role: message.role,
+    if (!message.trailingText?.length && !message.cacheControl) return { role: message.role,
       content: message.images?.length ? [...imageBlocks, { type: 'text' as const, text: message.content || 'Describe the shared image.' }] : message.content };
-    // Image blocks always come first; trailing text blocks (the per-turn block) follow the message text.
-    const content: Array<Anthropic.ImageBlockParam | Anthropic.TextBlockParam> = [...imageBlocks,
-      { type: 'text', text: message.content || (message.images?.length ? 'Describe the shared image.' : '') },
-      ...(message.trailingText ?? []).map((text): Anthropic.TextBlockParam => ({ type: 'text', text }))];
-    if (message.cacheControl) {
-      const ttl: CacheControl['ttl'] = message.cacheControl.ttl;
-      content[content.length - 1] = { ...content[content.length - 1], cache_control: { type: 'ephemeral', ...(ttl ? { ttl } : {}) } };
-    }
+    // Image blocks always come first; trailing text blocks (the per-turn block)
+    // follow the message text. Anthropic rejects empty text blocks, so none is sent.
+    const texts = [message.content || (message.images?.length ? 'Describe the shared image.' : ''), ...(message.trailingText ?? [])]
+      .filter((text) => text !== '')
+      .map((text): Anthropic.TextBlockParam => ({ type: 'text', text }));
+    const content: Array<Anthropic.ImageBlockParam | Anthropic.TextBlockParam> = [...imageBlocks, ...texts];
+    if (message.cacheControl && content.length) content[content.length - 1] = { ...content[content.length - 1], cache_control: anthropicCache(message.cacheControl) };
     return { role: message.role, content };
   });
 }
 
+/** Anthropic cache marker; ttl is serialized only when set. */
+export function anthropicCache(c: CacheControl): Anthropic.CacheControlEphemeral {
+  return { type: 'ephemeral', ...(c.ttl ? { ttl: c.ttl } : {}) };
+}
+
+/** Array system: blocks in the given order, empty-text blocks dropped, cache_control kept. */
+export function anthropicSystem(blocks: SystemBlock[]): Anthropic.TextBlockParam[] {
+  return blocks.filter((b) => b.text !== '').map((b): Anthropic.TextBlockParam => ({ type: 'text', text: b.text, ...(b.cache_control ? { cache_control: anthropicCache(b.cache_control) } : {}) }));
+}
+
+/**
+ * A mid-conversation `{role:'system'}` message (the TIREH_PROMPT_SYSTEM_TAIL
+ * A/B arm). @anthropic-ai/sdk 0.71 types only user and assistant roles on
+ * MessageParam but serializes the body as given, so the tail is added through
+ * this narrow type, like EffortBody.
+ */
+type SystemTailParam = { role: 'system'; content: string };
+
+/** Appends the system tail after the last turn; a missing or blank tail changes nothing. */
+export function withSystemTail(turns: Anthropic.MessageParam[], tail?: string): Anthropic.MessageParam[] {
+  if (!tail?.trim()) return turns;
+  // The single narrowing cast for the system-tail turn.
+  return [...turns, { role: 'system', content: tail } as SystemTailParam as unknown as Anthropic.MessageParam];
+}
+
+const STOP_REASONS: readonly LLMStopReason[] = ['end_turn', 'max_tokens', 'stop_sequence', 'tool_use', 'pause_turn', 'refusal'];
+/** One of the six SDK stop reasons; null and anything else read as 'unknown'. */
+export function stopReason(value: unknown): LLMStopReason {
+  return STOP_REASONS.find((reason) => reason === value) ?? 'unknown';
+}
+
+/** Message text plus any trailing text, for providers without content blocks. */
+export function geminiText(message: LLMMessage): string {
+  return [message.content, ...(message.trailingText ?? [])].join('\n\n');
+}
+
 export function geminiParts(message: LLMMessage) {
-  return [{ text: [message.content, ...(message.role === 'user' ? message.trailingText ?? [] : [])].join('\n\n') }, ...(message.role === 'user' ? message.images ?? [] : []).map(image => ({ inlineData: { mimeType: image.mimeType, data: image.data } }))];
+  return [{ text: geminiText(message) }, ...(message.role === 'user' ? message.images ?? [] : []).map(image => ({ inlineData: { mimeType: image.mimeType, data: image.data } }))];
 }
 
 function supportsCustomSampling(model: string): boolean {
@@ -180,41 +214,16 @@ export function supportsEffort(model: string): boolean {
  */
 type EffortBody = { output_config?: { effort: LLMEffort } };
 
-/**
- * A mid-conversation `{role:'system'}` message (the TIREH_PROMPT_SYSTEM_TAIL
- * A/B arm). @anthropic-ai/sdk 0.71 does not type it on MessageParam; the SDK
- * serializes the body as given, so it is added through this narrow type.
- */
-type SystemTailTurn = { role: 'system'; content: string };
-type WireMessage = Anthropic.MessageParam | SystemTailTurn;
-type AnthropicBody = Omit<Anthropic.MessageCreateParamsNonStreaming, 'messages'> & EffortBody & { messages: WireMessage[] };
-
-function wireMessages(request: LLMRequest): WireMessage[] {
-  return request.systemTail ? [...anthropicTurns(request.messages), { role: 'system', content: request.systemTail }] : anthropicTurns(request.messages);
-}
-
-const STOP_REASONS: readonly LLMStopReason[] = ['end_turn', 'max_tokens', 'stop_sequence', 'tool_use', 'pause_turn', 'refusal'];
-function stopReasonOf(value: unknown): LLMStopReason {
-  return STOP_REASONS.find((reason) => reason === value) ?? 'unknown';
-}
-/** Reads one provider field; a throwing accessor reads as absent. */
-function safely(read: () => unknown): unknown {
-  try { return read(); } catch { return undefined; }
-}
 type TokenMeta = Pick<LLMResponseMeta, 'inputTokens' | 'outputTokens' | 'cacheReadInputTokens' | 'cacheCreationInputTokens'>;
-/** Content-free token fields; a missing, malformed or throwing value is omitted, never guessed. */
+/** Content-free token fields; a null, missing, malformed or throwing value is omitted, never guessed. */
 function tokenMeta(read: Record<keyof TokenMeta, () => unknown>): TokenMeta {
   const out: TokenMeta = {};
   for (const key of Object.keys(read) as Array<keyof TokenMeta>) {
-    const value = safely(read[key]);
+    let value: unknown;
+    try { value = read[key](); } catch { value = undefined; }
     if (typeof value === 'number' && Number.isFinite(value)) out[key] = value;
   }
   return out;
-}
-/** Optional observation: a throwing getter or callback never changes delivery. */
-function emitMeta(request: LLMRequest, build: () => LLMResponseMeta): void {
-  if (!request.onMeta) return;
-  try { request.onMeta(build()); } catch { /* Metadata is best-effort. */ }
 }
 
 /**
@@ -226,10 +235,7 @@ function emitMeta(request: LLMRequest, build: () => LLMResponseMeta): void {
  */
 export const SYSTEM_CACHE_BREAK = '</rules>';
 
-export function cachedSystem(system: LLMSystem): string | Anthropic.TextBlockParam[] {
-  // Blocks are passed through in order; only a set ttl is serialized.
-  if (typeof system !== 'string') return system.map((b: SystemBlock): Anthropic.TextBlockParam => ({ type: 'text', text: b.text,
-    ...(b.cache_control ? { cache_control: { type: 'ephemeral', ...(b.cache_control.ttl ? { ttl: b.cache_control.ttl } : {}) } } : {}) }));
+export function cachedSystem(system: string): string | Anthropic.TextBlockParam[] {
   const end = system.indexOf(SYSTEM_CACHE_BREAK);
   if (end < 0) return system;
   const cut = end + SYSTEM_CACHE_BREAK.length;
@@ -285,12 +291,12 @@ export class AnthropicLLM implements LLM {
       model: this.model,
       max_tokens: maxTokens,
       ...(supportsCustomSampling(this.model) ? { temperature } : {}),
-      system: cachedSystem(system),
+      system: typeof system === 'string' ? cachedSystem(system) : anthropicSystem(system),
       ...(effort && supportsEffort(this.model) ? { output_config: { effort } } : {}),
     };
   }
 
-  private async create(request: LLMRequest, body: AnthropicBody): Promise<Anthropic.Message> {
+  private async create(request: LLMRequest, body: Anthropic.MessageCreateParamsNonStreaming): Promise<Anthropic.Message> {
     this.getClient();
     await authorizeRequest(request);
     // Hidden SDK retries cannot recheck current authority. Scoped requests use
@@ -300,9 +306,7 @@ export class AnthropicLLM implements LLM {
       try {
       authorizeImmediate(request);
       const response = await transportAuthority.run({ authorizeNow: request.authorizeNow, signal: request.signal }, () => request.authorize || request.authorizeNow || request.signal
-        // The single narrowing cast: AnthropicBody only widens `messages` with the system-tail turn.
-        ? this.client!.messages.create(body as Anthropic.MessageCreateParamsNonStreaming, { maxRetries: 0, ...(request.signal ? { signal: request.signal } : {}) })
-        : this.client!.messages.create(body as Anthropic.MessageCreateParamsNonStreaming));
+        ? this.client!.messages.create(body, { maxRetries: 0, ...(request.signal ? { signal: request.signal } : {}) }) : this.client!.messages.create(body));
       returned = true;
       captureUsage('anthropic', 'claude', () => ({ inputTokens: response.usage?.input_tokens, outputTokens: response.usage?.output_tokens,
         cacheReadTokens: response.usage?.cache_read_input_tokens, cacheWriteTokens: response.usage?.cache_creation_input_tokens }));
@@ -311,15 +315,29 @@ export class AnthropicLLM implements LLM {
     });
   }
 
-  private emitResponseMeta(request: LLMRequest, response: Anthropic.Message): void {
-    emitMeta(request, () => ({ provider: 'anthropic', model: this.model, stopReason: stopReasonOf(safely(() => response.stop_reason)),
-      ...tokenMeta({ inputTokens: () => response.usage?.input_tokens, outputTokens: () => response.usage?.output_tokens,
-        cacheReadInputTokens: () => response.usage?.cache_read_input_tokens, cacheCreationInputTokens: () => response.usage?.cache_creation_input_tokens }) }));
+  /** The provider turns plus the optional system tail (TIREH_PROMPT_SYSTEM_TAIL arm). */
+  private turns(request: LLMRequest): Anthropic.MessageParam[] {
+    return withSystemTail(anthropicTurns(request.messages), request.systemTail);
+  }
+
+  /**
+   * Content-free metadata for one provider response: stop reason and token
+   * counts only, never text. A throwing getter or callback never changes delivery.
+   */
+  private emitMeta(request: LLMRequest, response: { stop_reason?: unknown; usage?: Partial<Record<'input_tokens' | 'output_tokens' | 'cache_read_input_tokens' | 'cache_creation_input_tokens', number | null>> | null }): void {
+    if (!request.onMeta) return;
+    try {
+      let stop: unknown;
+      try { stop = response.stop_reason; } catch { stop = undefined; }
+      request.onMeta({ provider: 'anthropic', model: this.model, stopReason: stopReason(stop),
+        ...tokenMeta({ inputTokens: () => response.usage?.input_tokens, outputTokens: () => response.usage?.output_tokens,
+          cacheReadInputTokens: () => response.usage?.cache_read_input_tokens, cacheCreationInputTokens: () => response.usage?.cache_creation_input_tokens }) });
+    } catch { /* Metadata is best-effort. */ }
   }
 
   async complete(request: LLMRequest): Promise<string> {
-    const response = await this.create(request, { ...this.params(request), messages: wireMessages(request) });
-    this.emitResponseMeta(request, response);
+    const response = await this.create(request, { ...this.params(request), messages: this.turns(request) });
+    this.emitMeta(request, response);
     if (request.requireComplete && response.stop_reason === 'max_tokens') throw new Error('LLM completion truncated');
     return response.content
       .flatMap((block) => (block.type === 'text' ? [block.text] : []))
@@ -330,12 +348,10 @@ export class AnthropicLLM implements LLM {
   async *stream(request: LLMRequest): AsyncIterable<string> {
     this.getClient();
     await authorizeRequest(request);
-    const body: AnthropicBody = { ...this.params(request), messages: wireMessages(request) };
+    const body = { ...this.params(request), messages: this.turns(request) };
     authorizeImmediate(request);
-    // Same narrowing cast as create(): only `messages` is widened.
-    const wire = body as Anthropic.MessageCreateParamsNonStreaming;
     const stream = transportAuthority.run({ authorizeNow: request.authorizeNow, signal: request.signal }, () => request.authorize || request.authorizeNow || request.signal
-      ? this.client!.messages.stream(wire, { maxRetries: 0, ...(request.signal ? { signal: request.signal } : {}) }) : this.client!.messages.stream(wire));
+      ? this.client!.messages.stream(body, { maxRetries: 0, ...(request.signal ? { signal: request.signal } : {}) }) : this.client!.messages.stream(body));
     const started = performance.now();
     let completed = false;
     let sawStart = false;
@@ -357,15 +373,14 @@ export class AnthropicLLM implements LLM {
       // Streaming usage is cumulative, so emit one receipt rather than summing deltas.
       observedUsage('anthropic', 'claude', { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens }, !completed);
       recordStage('generation', completed ? 'succeeded' : 'unknown', performance.now() - started);
-      if (sawStart) emitMeta(request, () => ({ provider: 'anthropic', model: this.model, stopReason: completed ? stopReasonOf(stop) : 'unknown',
-        ...tokenMeta({ inputTokens: () => inputTokens, outputTokens: () => outputTokens, cacheReadInputTokens: () => cacheReadTokens, cacheCreationInputTokens: () => cacheWriteTokens }) }));
+      if (sawStart) this.emitMeta(request, { stop_reason: stop, usage: { input_tokens: inputTokens, output_tokens: outputTokens, cache_read_input_tokens: cacheReadTokens, cache_creation_input_tokens: cacheWriteTokens } });
     }
   }
 
   async completeWithWeb(request: LLMRequest & { maxSearches: number }): Promise<{ text: string; sources: WebSource[] }> {
     if (this.webUnavailable || request.maxSearches < 1) return { text: await this.complete(request), sources: [] };
     this.getClient();
-    const messages: WireMessage[] = wireMessages(request);
+    const messages: Anthropic.MessageParam[] = this.turns(request);
     const tools: Anthropic.ToolUnion[] = [{ type: 'web_search_20250305', name: 'web_search', max_uses: request.maxSearches }];
     try {
       let response = await this.create(request, { ...this.params(request), messages, tools });
@@ -373,7 +388,7 @@ export class AnthropicLLM implements LLM {
         messages.push({ role: 'assistant', content: response.content });
         response = await this.create(request, { ...this.params(request), messages, tools });
       }
-      this.emitResponseMeta(request, response);
+      this.emitMeta(request, response);
       return webAnswer(response.content);
     } catch (error) {
       // A model or account without web search answers from what it knows.
@@ -416,7 +431,7 @@ export class GeminiLLM implements LLM {
       let returned = false;
       try {
       authorizeImmediate({ authorizeNow, signal });
-      const outgoing = last.images?.length ? geminiParts(last) : last.trailingText?.length ? [last.content, ...last.trailingText].join('\n\n') : last.content;
+      const outgoing = last.images?.length ? geminiParts(last) : geminiText(last);
       const result = await (signal ? chat.sendMessage(outgoing, { signal }) : chat.sendMessage(outgoing));
       returned = true;
       captureUsage('gemini', 'gemini', () => ({ inputTokens: result.response.usageMetadata?.promptTokenCount,

@@ -476,7 +476,7 @@ async function create(): Promise<Studio> {
       const { createStudioVoiceprints } = await import('./identity');
       const voiceprints = await createStudioVoiceprints({ env: localVoice.selected ? { ...env, STUDIO_VOICE_RECOGNITION: '0' } : env,
         ...(localVoice.selected ? { flags: () => ({ voiceRecognition: false }) } : {}),
-        storage: config.storage === 'firestore' ? 'firestore' : 'file', dataDir: config.dataDir, orgKey: studio.deps.orgName, adaptive: storage.adaptive!, readState: () => storage.store.read(), eleven: studio.deps.eleven, logger: console });
+        storage: config.storage === 'firestore' ? 'firestore' : 'file', production: config.production, dataDir: config.dataDir, orgKey: studio.deps.orgName, adaptive: storage.adaptive!, readState: () => storage.store.read(), eleven: studio.deps.eleven, logger: console });
       if (voiceprints) {
         studio.deps.voiceprints = voiceprints;
         // Keeps the existing VoiceIdentityService invalidation and adds voiceprint deletion.

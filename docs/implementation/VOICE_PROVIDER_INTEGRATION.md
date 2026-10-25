@@ -89,7 +89,7 @@ Authority is read again after the provider call. If anything changed, the templa
 - Raw samples, transcripts, query audio and scores are never persisted or logged.
 - Templates are sealed with AES-256-GCM. The AAD binds each template to person, space, provider, model version and consent event.
 
-**Firebase: KMS is required.** A `VOICEPRINT_KEY` from the environment, stored beside the Firestore ciphertext, is NOT acceptable in production. Cloud KMS envelope encryption must exist before the flag is enabled on Firebase: a per-collection data key wrapped by KMS, never `STUDIO_SECRET`. It is not implemented in this step.
+**Firebase: KMS is required.** A `VOICEPRINT_KEY` from the environment, stored beside the Firestore ciphertext, is NOT acceptable in production. Cloud KMS envelope encryption must exist before the flag is enabled on Firebase: a per-collection data key wrapped by KMS, never `STUDIO_SECRET`. It is not implemented in this step. Runtime therefore refuses `STUDIO_VOICE_RECOGNITION=1` on Firestore in production (`createStudioVoiceprints` throws at startup when `runtime.ts` passes `production: true`).
 
 **Mac file profile: an open gate.** The key custody and backup design is still open. It must say where the key lives, how it rotates, and how backups exclude or re-encrypt `voiceprints-v1.json`. Rotating or losing the key makes every template unreadable, which gives `provider_error` and requires re-enrollment.
 

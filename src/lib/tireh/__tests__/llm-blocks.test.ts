@@ -3,8 +3,11 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { AnthropicLLM, GeminiLLM, anthropicTurns, cachedSystem, normalizeTurns, type LLMMessage, type LLMRequest, type LLMResponseMeta, type SystemBlock } from '../llm';
-import { systemText } from '../llm-content';
+import {
+  AnthropicLLM, GeminiLLM, anthropicCache, anthropicSystem, anthropicTurns, cachedSystem, geminiParts, geminiText, normalizeTurns, stopReason, withSystemTail,
+  type LLMMessage, type LLMRequest, type LLMResponseMeta, type SystemBlock,
+} from '../llm';
+import { approxTokens, systemText } from '../llm-content';
 
 const provider = vi.hoisted(() => ({
   create: vi.fn(),
@@ -86,17 +89,18 @@ describe('string system keeps the base request shapes', () => {
 
 describe('array system', () => {
   it('passes blocks through in order, keeps cache_control and serializes ttl only when set', async () => {
-    expect(cachedSystem(blocks)).toEqual([
+    expect(anthropicSystem(blocks)).toEqual([
       { type: 'text', text: 'A identity', cache_control: { type: 'ephemeral', ttl: '1h' } },
       { type: 'text', text: 'B org', cache_control: { type: 'ephemeral', ttl: '1h' } },
       { type: 'text', text: 'C frame', cache_control: { type: 'ephemeral' } },
       { type: 'text', text: 'D unmarked' },
     ]);
-    const sent = cachedSystem(blocks) as Array<Record<string, unknown>>;
+    const sent = anthropicSystem(blocks) as unknown as Array<Record<string, unknown>>;
     expect(sent.map((b) => Object.keys(b).sort())).toEqual([['cache_control', 'text', 'type'], ['cache_control', 'text', 'type'], ['cache_control', 'text', 'type'], ['text', 'type']]);
     expect(Object.keys(sent[2].cache_control as object)).toEqual(['type']);
     await haiku().complete({ system: blocks, messages: [userTurn('hi')] });
-    expect(lastBody().system).toEqual(cachedSystem(blocks));
+    expect(lastBody().system).toEqual(anthropicSystem(blocks));
+    expect(JSON.stringify(lastBody().system)).not.toContain('"ttl":undefined');
     expect(systemText(blocks)).toBe('A identity\n\nB org\n\nC frame\n\nD unmarked');
   });
 
@@ -278,6 +282,113 @@ describe('content-free response metadata', () => {
     const onMeta = vi.fn();
     await new GeminiLLM('fixture-key', 'gemini-test').complete({ ...base, onMeta });
     expect(onMeta).not.toHaveBeenCalled();
+  });
+});
+
+describe('pure helpers', () => {
+  it('anthropicCache serializes ttl only when set', () => {
+    expect(anthropicCache({ type: 'ephemeral' })).toEqual({ type: 'ephemeral' });
+    expect(Object.keys(anthropicCache({ type: 'ephemeral' }))).toEqual(['type']);
+    expect(anthropicCache({ type: 'ephemeral', ttl: '1h' })).toEqual({ type: 'ephemeral', ttl: '1h' });
+    expect(anthropicCache({ type: 'ephemeral', ttl: '5m' })).toEqual({ type: 'ephemeral', ttl: '5m' });
+  });
+
+  it('anthropicSystem keeps order, drops empty-text blocks and adds no cache_control key to unmarked blocks', () => {
+    expect(anthropicSystem([{ type: 'text', text: '' }, { type: 'text', text: 'one' }, { type: 'text', text: '', cache_control: { type: 'ephemeral' } }, { type: 'text', text: 'two', cache_control: { type: 'ephemeral', ttl: '5m' } }]))
+      .toEqual([{ type: 'text', text: 'one' }, { type: 'text', text: 'two', cache_control: { type: 'ephemeral', ttl: '5m' } }]);
+  });
+
+  it('a string system still equals cachedSystem(string) with no ttl anywhere', async () => {
+    await haiku().complete({ system: RULES, messages: [userTurn('hi')] });
+    expect(lastBody().system).toEqual(cachedSystem(RULES));
+    expect(JSON.stringify(lastBody())).not.toContain('ttl');
+  });
+
+  it('withSystemTail returns the same turns for a missing or blank tail', () => {
+    const turns = anthropicTurns([userTurn('a')]);
+    expect(withSystemTail(turns)).toBe(turns);
+    expect(withSystemTail(turns, '  \n ')).toBe(turns);
+    expect(withSystemTail(turns, 'TAIL')).toEqual([...turns, { role: 'system', content: 'TAIL' }]);
+    expect(turns).toHaveLength(1);
+  });
+
+  it('stopReason maps the six SDK values and nothing else', () => {
+    for (const value of ['end_turn', 'max_tokens', 'stop_sequence', 'tool_use', 'pause_turn', 'refusal'] as const) expect(stopReason(value)).toBe(value);
+    for (const value of [null, undefined, 'something_new', 3, {}]) expect(stopReason(value)).toBe('unknown');
+  });
+
+  it('geminiText joins content and trailing text; geminiParts is unchanged without trailing text', () => {
+    expect(geminiText(userTurn('a'))).toBe('a');
+    expect(geminiText(userTurn('a', { trailingText: ['b', 'c'] }))).toBe('a\n\nb\n\nc');
+    expect(geminiParts(userTurn('a'))).toEqual([{ text: 'a' }]);
+    expect(geminiParts({ role: 'assistant', content: 'r', images: [{ mimeType: 'image/png', data: 'px' }] })).toEqual([{ text: 'r' }]);
+  });
+
+  it('systemText and approxTokens behave as the contract specifies', () => {
+    expect(systemText('plain')).toBe('plain');
+    expect(systemText([{ type: 'text', text: 'a' }, { type: 'text', text: 'b', cache_control: { type: 'ephemeral' } }])).toBe('a\n\nb');
+    expect(systemText([])).toBe('');
+    expect(approxTokens('')).toBe(0);
+    expect(approxTokens('abcdefg')).toBe(2);
+    expect(approxTokens('a'.repeat(8))).toBe(3);
+  });
+});
+
+describe('extras edge cases', () => {
+  it('keeps a user message with empty content but trailing text, and never sends an empty text block', () => {
+    expect(normalizeTurns([userTurn('', { trailingText: ['turn'] })])).toEqual([{ role: 'user', content: '', trailingText: ['turn'] }]);
+    expect(normalizeTurns([userTurn('')])).toEqual([]);
+    expect(anthropicTurns([userTurn('', { trailingText: ['turn'], cacheControl: { type: 'ephemeral' } })])).toEqual([{ role: 'user', content: [{ type: 'text', text: 'turn', cache_control: { type: 'ephemeral' } }] }]);
+    expect(anthropicTurns([userTurn('q', { trailingText: [''] })])).toEqual([{ role: 'user', content: [{ type: 'text', text: 'q' }] }]);
+  });
+
+  it('never serializes local request or message fields into any provider body', async () => {
+    const messages: LLMMessage[] = [userTurn('first'), { role: 'assistant', content: 'r', cacheControl: { type: 'ephemeral' } }, userTurn('latest', { trailingText: ['TURN'] })];
+    const request: LLMRequest = { system: blocks, messages, systemTail: 'TAIL', onMeta: () => undefined, authorize: async () => true, effort: 'low' };
+    await haiku().complete(request);
+    provider.stream.mockReturnValueOnce(streamOf([]));
+    await drain(haiku().stream(request));
+    await haiku().completeWithWeb({ ...request, maxSearches: 1 });
+    const bodies = JSON.stringify([...provider.create.mock.calls, ...provider.stream.mock.calls]);
+    for (const key of ['systemTail', 'onMeta', 'trailingText', 'cacheControl', 'authorize']) expect(bodies).not.toContain(`"${key}"`);
+  });
+
+  it('sends the same effort for string and array systems on consecutive calls', async () => {
+    const llm = haiku();
+    for (const system of [RULES, blocks] as const) {
+      await llm.complete({ system, messages: [userTurn('hi')], effort: 'low' });
+      const first = lastBody().output_config;
+      await llm.complete({ system, messages: [userTurn('hi')], effort: 'low' });
+      expect(lastBody().output_config).toEqual({ effort: 'low' });
+      expect(first).toEqual({ effort: 'low' });
+    }
+    await new AnthropicLLM('fixture-key', 'claude-haiku-4-5').complete({ system: RULES, messages: [userTurn('hi')], effort: 'low' });
+    expect(lastBody()).not.toHaveProperty('output_config');
+  });
+
+  it('sends no system-role message without a tail', async () => {
+    await haiku().complete({ system: blocks, messages: [userTurn('hi')] });
+    expect(lastBody().messages.some((m: { role: string }) => m.role === 'system')).toBe(false);
+    await haiku().complete({ system: blocks, messages: [userTurn('hi')], systemTail: ' ' });
+    expect(lastBody().messages.some((m: { role: string }) => m.role === 'system')).toBe(false);
+  });
+
+  it('stream maps a null stop reason to unknown', async () => {
+    provider.stream.mockReturnValueOnce(streamOf([
+      { type: 'message_start', message: { usage: { input_tokens: 1, output_tokens: 0, cache_read_input_tokens: null } } },
+      { type: 'message_delta', delta: { stop_reason: null }, usage: { output_tokens: 1 } },
+      { type: 'message_stop' },
+    ]));
+    const metas: LLMResponseMeta[] = [];
+    await drain(haiku().stream({ system: RULES, messages: [userTurn('hi')], onMeta: (m) => metas.push(m) }));
+    expect(metas).toEqual([{ provider: 'anthropic', model: 'claude-haiku-5-5', stopReason: 'unknown', inputTokens: 1, outputTokens: 1 }]);
+  });
+
+  it('complete maps a null stop reason to unknown', async () => {
+    provider.create.mockResolvedValueOnce(answer({ stop_reason: null }));
+    const metas: LLMResponseMeta[] = [];
+    await haiku().complete({ system: RULES, messages: [userTurn('hi')], onMeta: (m) => metas.push(m) });
+    expect(metas[0].stopReason).toBe('unknown');
   });
 });
 
