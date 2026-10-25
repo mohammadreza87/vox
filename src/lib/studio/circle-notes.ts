@@ -25,6 +25,7 @@ import { createHash } from 'crypto';
 import type { ChatContext } from '../tireh/types';
 import type { InlineKeyboard, TelegramBotClient, TelegramCallbackQuery, TelegramMessage, TelegramUser } from '../tireh/telegram/client';
 import { activeReadScope } from '../tireh/privacy/read-scope';
+import { tirehFlags } from '../tireh/flags';
 import { noteCallback, parseNoteCallback, receiptOwner } from '../circles/codec';
 import { activeAgents, activeJoin, CircleService, groupIdOf, joinedOf } from '../circles/service';
 import { NOTE_MAX_CHARS, type CircleDocument, type CircleParticipant, type NoteCopy, type NoteExport, type NoteProposal, type PersonNotes, type PetNote } from '../circles/contracts';
@@ -76,11 +77,30 @@ export class StudioCircleNotes {
   }
 
   /** The configured NoteSelector's pick; a disabled or failing selector proposes nothing. */
-  private pick(agent: Agent, text: string, chatKind: 'private' | 'group', message?: TelegramMessage): NoteSelection | null {
+  /**
+   * The selection, or 'type_it' when it would save the text of this agent's own message while S12 images are on:
+   * that text can be image-derived (a sensitive document read out, people described), which S12 delivers but never
+   * keeps, so the person is asked to type what to keep instead. Nothing records which bot messages came from an
+   * image, so every own-bot reply is refused while the flag is on.
+   */
+  private pick(agent: Agent, text: string, chatKind: 'private' | 'group', message?: TelegramMessage): NoteSelection | 'type_it' | null {
     try {
       const selector = noteSelectorFor(this.studio.deps.noteSelector?.() ?? 'explicit');
-      return selector.select({ text, chatKind, names: [agent.persona.name, ...(agent.bot ? [`@${agent.bot.username}`] : [])], replied: message?.reply_to_message?.text ?? message?.reply_to_message?.caption });
+      const request = { text, chatKind, names: [agent.persona.name, ...(agent.bot ? [`@${agent.bot.username}`] : [])] };
+      const repliedTo = message?.reply_to_message, replied = repliedTo?.text ?? repliedTo?.caption;
+      const ownImageEra = !!repliedTo && replied !== undefined && tirehFlags().images && this.fromOwnBot(agent, repliedTo);
+      const selection = selector.select({ ...request, replied: ownImageEra ? undefined : replied });
+      if (selection || !ownImageEra) return selection;
+      return selector.select({ ...request, replied }) ? 'type_it' : null;
     } catch { this.log.warn('[studio] note_selector_unavailable'); return null; }
+  }
+
+  /** Sent by this agent's own bot (structural: the Telegram sender id, or a bot with its username). */
+  private fromOwnBot(agent: Agent, message: TelegramMessage): boolean {
+    const from = message.from;
+    if (!from) return true; // unknown sender: fail closed
+    if (agent.bot && from.id === agent.bot.id) return true;
+    return from.is_bot === true && !!agent.bot && from.username?.toLowerCase() === agent.bot.username.toLowerCase();
   }
 
   /** An outsider's DM text the notes path owns while Circles is on: it skips the stranger decision. */
@@ -216,6 +236,7 @@ export class StudioCircleNotes {
       if (command || !addressed) return false;
       const pick = this.pick(agent, trimmed, 'group', message);
       if (!pick) return false;
+      if (pick === 'type_it') { await this.askToType(agent, message, true); return true; }
       await this.proposeGroup(agent, state, message, pick.text);
       return true;
     }
@@ -230,8 +251,16 @@ export class StudioCircleNotes {
     if (command) return false;
     const pick = this.pick(agent, trimmed, 'private', message);
     if (!pick) return false;
+    if (pick === 'type_it') { await this.askToType(agent, message, false); return true; }
     await this.proposeDm(agent, state, message, pick.text);
     return true;
+  }
+
+  /** "Remember this" on the agent's own message while images are on: nothing is proposed; the person types it. */
+  private async askToType(agent: Agent, message: TelegramMessage, group: boolean): Promise<void> {
+    const bot = this.botOf(agent), copy = notesCopy(localeOf(message.from?.language_code));
+    if (!bot) return;
+    await bot.sendMessage(message.chat.id, copy.typeIt, group ? { replyTo: message.message_id, silent: true } : undefined);
   }
 
   /** An outsider's /forget is always about notes (they have nothing else); a member's only while /notes is the list last shown. */

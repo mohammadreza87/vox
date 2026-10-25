@@ -213,9 +213,9 @@ describe('red team wave A on main r3: the reply export of a Telegram image is no
 // reply plus one tap stores the document's text in the notes ledger, a durable store, and every later DM turn puts
 // it into the reply model's context as "Your notes: ...". The same path stores a reply that described the people in
 // a photo (the S12 people rule protects third parties whatever the requester asks). Nothing in the notes path knows
-// a message was image-derived. Fix: refuse to save a replied-to message sent by this agent's own bot while
-// STUDIO_IMAGES is on unless it matches a stored, unmarked assistant row (or record content-free marks for
-// image-derived bot replies by Telegram message id and refuse those), and ask the person to type what to keep.
+// a message was image-derived. Fixed in fixer r3: while STUDIO_IMAGES is on, "remember this" that would save the
+// text of this agent's own bot message proposes nothing and asks the person to type what to keep (notes copy
+// typeIt); a reply to someone else's message, typed text, and every case with the flag unset are unchanged.
 describe('red team wave A on main r3: a Circles note saves the agent\'s reply about a sensitive document image', () => {
   async function documentTurn() {
     vi.stubEnv('STUDIO_IMAGES', '1');
@@ -238,7 +238,7 @@ describe('red team wave A on main r3: a Circles note saves the agent\'s reply ab
     expect(JSON.stringify(await x.h.memory.memories.listActive(x.hired.agent.id))).not.toContain('DOCCANARY');
   });
 
-  it.fails('"remember this" as a reply to that bot message never stores the document text as a note or brings it back into a prompt', async () => {
+  it('"remember this" as a reply to that bot message never stores the document text as a note or brings it back into a prompt', async () => {
     const x = await documentTurn();
     const botMessage: TelegramMessage = { message_id: 777_001, date: 0, text: x.sent![1] as string, chat: { id: ID.alice, type: 'private' },
       from: { id: x.hired.botId, is_bot: true, first_name: 'Cookie' } };
@@ -255,5 +255,30 @@ describe('red team wave A on main r3: a Circles note saves the agent\'s reply ab
     const lastPrompt = JSON.stringify(x.vision.replyRequests.at(-1) ?? null);
     expect(JSON.stringify(notes)).not.toContain('DOCCANARY');
     expect(lastPrompt).not.toContain('DOCCANARY');
+  });
+
+  it('guard: the refusal asks the person to type it, and typed text after "remember this:" is still proposed', async () => {
+    const x = await documentTurn();
+    const botMessage: TelegramMessage = { message_id: 777_002, date: 0, text: x.sent![1] as string, chat: { id: ID.alice, type: 'private' },
+      from: { id: x.hired.botId, is_bot: true, first_name: 'Cookie' } };
+    x.bot.sendMessage.mockClear();
+    await x.send(x.dm(ID.alice, 'remember this', { reply_to_message: botMessage }));
+    const said = x.bot.sendMessage.mock.calls.map(([, text]) => String(text));
+    expect(said.some((t) => t.includes('remember this:'))).toBe(true);
+    expect(said.join('\n')).not.toContain('DOCCANARY');
+    x.bot.sendMessage.mockClear();
+    await x.send(x.dm(ID.alice, 'remember this: the dentist is on Friday'));
+    expect(x.bot.sendMessage.mock.calls.some(([, text]) => String(text).includes('the dentist is on Friday'))).toBe(true);
+  });
+
+  it('guard: with STUDIO_IMAGES unset a reply to the agent\'s own message is proposed as before (main\'s Circles behaviour)', async () => {
+    const x = await studioHarness();
+    x.h.studio.deps.circles = () => 'circles';
+    const botMessage: TelegramMessage = { message_id: 777_003, date: 0, text: 'Your train leaves at 9', chat: { id: ID.alice, type: 'private' },
+      from: { id: x.hired.botId, is_bot: true, first_name: 'Cookie' } };
+    const bot = x.hired.bot();
+    bot.sendMessage.mockClear();
+    await x.send(x.dm(ID.alice, 'remember this', { reply_to_message: botMessage }));
+    expect(bot.sendMessage.mock.calls.some(([, text]) => String(text).includes('Your train leaves at 9'))).toBe(true);
   });
 });
