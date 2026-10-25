@@ -150,12 +150,13 @@ export function holdClosing(app: PetTelegram | null = tg()): () => void {
 
 export const hideKeyboard = (app: PetTelegram | null = tg()) => safely(() => app?.hideKeyboard?.());
 
-/** Guests talk in the DM: open the agent's bot chat (outside Telegram, a new tab). */
-export function openDm(botUsername: string, app: PetTelegram | null = tg()) {
-  const url = `https://t.me/${botUsername}`;
+/** Open a t.me link inside Telegram (outside it, a new tab). */
+export function openTelegram(url: string, app: PetTelegram | null = tg()) {
   if (app?.initData && app.openTelegramLink) safely(() => app.openTelegramLink!(url));
   else if (typeof window !== 'undefined') window.open(url, '_blank', 'noopener');
 }
+/** Guests talk in the DM: open the agent's bot chat. */
+export const openDm = (botUsername: string, app: PetTelegram | null = tg()) => openTelegram(`https://t.me/${botUsername}`, app);
 
 /** Telegram's BackButton while the "more" bubble is expanded (§3.5). Returns the cleanup. */
 export function backButton(onBack: () => void, app: PetTelegram | null = tg()): () => void {
@@ -165,7 +166,7 @@ export function backButton(onBack: () => void, app: PetTelegram | null = tg()): 
   return () => safely(() => { b.offClick(onBack); b.hide(); });
 }
 
-/** Telegram's ⋯ menu "Settings" item (the page's only settings: forget my pet). Returns the cleanup. */
+/** Telegram's ⋯ menu "Settings" item (the page's only settings: the person's data in Vox). Returns the cleanup. */
 export function settingsButton(onClick: () => void, app: PetTelegram | null = tg()): () => void {
   const b = app?.SettingsButton;
   if (!b) return () => {};

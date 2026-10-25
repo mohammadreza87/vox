@@ -23,7 +23,7 @@ import { Stage } from './Stage';
 import { TalkPill } from './TalkPill';
 import { backdrop, characterBox, daysTogether, PET_GROUND, sceneAnchors, type CharacterBox } from './scene';
 import {
-  bootTelegram, circleCode, closeApp, confirmNative, firstName, hideKeyboard, holdClosing, LAYOUT_EVENTS, openDm, paintChrome, clearLegacyPetSnapshots,
+  bootTelegram, circleCode, firstName, hideKeyboard, holdClosing, LAYOUT_EVENTS, openDm, openTelegram, paintChrome, clearLegacyPetSnapshots,
   readyAfterPaint, settingsButton, startAccelerometer, startIntent, syncSafeAreas, tg,
 } from './telegram';
 
@@ -74,7 +74,6 @@ interface Fatal { kind: SleeperKind; look?: PetView['look']; stage?: StageN; nam
 /** Private state exists only inside one freshly verified foreground/session. Nothing is persisted. */
 export function PetApp({ agentId, api }: { agentId: string; api?: PetApi }) {
   const [scope, setScope] = useState(() => ({ agentId, signed: tg()?.initData ?? '', generation: 0, active: true }));
-  const blocked = useRef(false);
   const scopeRef = useRef(scope);
   scopeRef.current = scope;
   useLayoutEffect(() => {
@@ -83,8 +82,6 @@ export function PetApp({ agentId, api }: { agentId: string; api?: PetApi }) {
       const previous = scopeRef.current;
       const signed = tg()?.initData ?? '';
       const identityChanged = previous.agentId !== agentId || previous.signed !== signed;
-      if (identityChanged) blocked.current = false;
-      if (blocked.current && !identityChanged) return;
       const active = pageActive();
       if (!identityChanged && (!activity || (!active && !previous.active))) return;
       const next = { agentId, signed, generation: previous.generation + 1, active };
@@ -102,7 +99,6 @@ export function PetApp({ agentId, api }: { agentId: string; api?: PetApi }) {
     // A prop/identity change during React rendering is already before paint.
     const signed = tg()?.initData ?? '';
     if (scopeRef.current.agentId !== agentId || scopeRef.current.signed !== signed || !pageActive()) {
-      blocked.current = false;
       setScope((s) => ({ agentId, signed, generation: s.generation + 1, active: pageActive() }));
     }
     return () => { off(); cancelAnimationFrame(frame); document.removeEventListener('pointerdown', onPointer, true); };
@@ -110,15 +106,15 @@ export function PetApp({ agentId, api }: { agentId: string; api?: PetApi }) {
   const current = scope.agentId === agentId && scope.signed === (tg()?.initData ?? '');
   if (!scope.active || !current) return <main className="pet-root" data-pet-root="" data-paused="" style={{ backgroundColor: PET_GROUND }} />;
   return <PetSession key={`${agentId}:${scope.generation}`} agentId={agentId} injected={api} signed={scope.signed}
-    onForget={() => { blocked.current = true; }} onRetry={() => {
+    onRetry={() => {
       // A retry starts with a fresh authenticated GET and fresh request/care/audio state.
-      // Never revive the quiesced session or retry across an account/foreground change.
-      if (blocked.current || !pageActive() || scopeRef.current.agentId !== agentId || scopeRef.current.signed !== (tg()?.initData ?? '')) return;
+      // Never retry across an account/foreground change.
+      if (!pageActive() || scopeRef.current.agentId !== agentId || scopeRef.current.signed !== (tg()?.initData ?? '')) return;
       setScope((s) => ({ ...s, generation: s.generation + 1 }));
     }} />;
 }
 
-function PetSession({ agentId, injected, signed, onForget, onRetry }: { agentId: string; injected?: PetApi; signed: string; onForget(): void; onRetry(): void }) {
+function PetSession({ agentId, injected, signed, onRetry }: { agentId: string; injected?: PetApi; signed: string; onRetry(): void }) {
   const baseApi = useMemo(() => injected ?? createPetApi(), [injected]);
   const alive = useRef(true);
   const allowed = useRef(true);
@@ -138,8 +134,8 @@ function PetSession({ agentId, injected, signed, onForget, onRetry }: { agentId:
         if (!valid() || ac.signal.aborted) throw new DOMException('Pet session ended', 'AbortError');
         return result;
       } catch (e) {
-        // A circle_* refusal is the group sheet's to show; it never ends the pet.
-        if (valid() && isPetError(e) && (e.status === 401 || (e.status === 403 && !e.code.startsWith('circle')) || e.code === 'pet_unavailable')) denyRef.current(e);
+        // A circle_* refusal is the group sheet's to show, and an expired talk window the bubble's: neither ends the pet.
+        if (valid() && isPetError(e) && ((e.status === 401 && e.code !== 'session_expired') || (e.status === 403 && !e.code.startsWith('circle')) || e.code === 'pet_unavailable')) denyRef.current(e);
         throw e;
       } finally { requests.current.delete(ac); o.signal?.removeEventListener('abort', abort); }
     };
@@ -148,7 +144,6 @@ function PetSession({ agentId, injected, signed, onForget, onRetry }: { agentId:
       care: (id, req, o) => call((opts) => baseApi.care(id, req, opts), o),
       talk: (id, req, o) => call((opts) => baseApi.talk(id, req, opts), o),
       talkVoice: (id, blob, o) => call((opts) => baseApi.talkVoice(id, blob, opts), o),
-      forget: (id, o) => call((opts) => baseApi.forget(id, opts), o),
       ...(baseApi.send ? { send: (id, method, action, body, o) => call((opts) => baseApi.send!(id, method, action, body, opts), o) } : {}),
     } as PetApi;
     // Each mounted session owns these refs and its signed authority; never re-used after a switch.
@@ -158,7 +153,6 @@ function PetSession({ agentId, injected, signed, onForget, onRetry }: { agentId:
   const [mounted, setMounted] = useState(false);
   const [view, setView] = useState<PetView | null>(null);
   const [fatal, setFatal] = useState<Fatal | null>(null);
-  const [forgetState, setForgetState] = useState<'pending' | 'uncertain' | 'done' | null>(null);
   const [engine, setEngine] = useState<PetEngine | null>(null);
   const [tier, setTier] = useState<Tier>('full');
   const [stage, setStage] = useState<StageN>(1);
@@ -454,30 +448,12 @@ function PetSession({ agentId, injected, signed, onForget, onRetry }: { agentId:
     return () => { document.removeEventListener('pointerdown', first, { capture: true }); unsub(); stopAccel?.(); };
   }, [engine, audio, sync, agentId]);
 
-  // Forget is quiescent before dispatch. A lost acknowledgement never resumes care or opens a GET.
-  async function forgetPet() {
-    if (!alive.current || signed !== (tg()?.initData ?? '')) return;
-    onForget();
-    clearPrivate();
-    clearLegacyPetSnapshots(agentId);
-    setForgetState('pending');
-    try {
-      await baseApi.forget(agentId);
-      if (!alive.current || signed !== (tg()?.initData ?? '')) return;
-      setForgetState('done');
-      closeApp();
-    } catch {
-      if (alive.current && signed === (tg()?.initData ?? '')) setForgetState('uncertain');
-    }
-  }
+  // ⋯ → Settings opens the person's own data (export, erase, notes) in Vox: VoxxBot signs that page, never this agent's bot.
+  const dataUrl = view?.dataUrl;
   useEffect(() => {
-    if (!view) return;
-    const name = view.name;
-    return settingsButton(() => {
-      if (!valid()) return;
-      void confirmNative(COPY.forgetAsk(name)).then((ok) => { if (ok && valid()) void forgetPet(); });
-    });
-  }, [!!view, api, agentId]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!dataUrl?.startsWith('https://t.me/')) return;
+    return settingsButton(() => { if (valid()) openTelegram(dataUrl); });
+  }, [dataUrl, valid]);
 
   /* ---------- engine cues ---------- */
 
@@ -622,7 +598,8 @@ function PetSession({ agentId, injected, signed, onForget, onRetry }: { agentId:
     if (isPetError(err) && err.code === 'guest_talk' && v) { setTalkState('idle'); openDm(v.botUsername); return; }
     setTalkState('idle');
     // the server cannot hear (no transcription provider): say so, the text field is right there
-    const text = isPetError(err) && err.message === 'voice_unavailable' ? COPY.micBlocked : COPY.talkFailed;
+    const text = isPetError(err) && err.code === 'session_expired' ? (/^fa\b/i.test(tg()?.initDataUnsafe?.user?.language_code ?? '') ? COPY.reopenFa : COPY.reopen)
+      : isPetError(err) && err.message === 'voice_unavailable' ? COPY.micBlocked : COPY.talkFailed;
     setBubble({ id: performance.now(), text });
   }
 
@@ -674,10 +651,6 @@ function PetSession({ agentId, injected, signed, onForget, onRetry }: { agentId:
 
   /* ---------- render ---------- */
 
-  if (forgetState) return <main className="pet-root" data-pet-root="" style={{ backgroundColor: PET_GROUND }}>
-    <div role="status">{forgetState === 'pending' ? 'Forgetting your care…' : forgetState === 'done' ? 'Your care has been forgotten.' : 'We could not confirm that your care was forgotten. Your pet is paused. Retry to confirm deletion.'}</div>
-    {forgetState === 'uncertain' && <button type="button" onClick={() => void forgetPet()}>Retry forgetting</button>}
-  </main>;
   if (fatal) {
     return (
       <Suspense fallback={<main className="pet-root" data-pet-root="" style={{ backgroundColor: bd?.edge ?? PET_GROUND }} />}>
@@ -709,8 +682,6 @@ function PetSession({ agentId, injected, signed, onForget, onRetry }: { agentId:
             onListen={onListen} onIdle={onIdle} onTypingPause={onTypingPause} onSend={onSend}
             onVoice={view.listen !== false ? (b) => void onVoice(b) : undefined} onMicLevel={onMicLevel} onRecording={onRecording} audioContext={audio} autoFocus={focusTalk} />
         </div>
-        <a className="pet-connect" href={`/studio/connect/${encodeURIComponent(agentId)}`} aria-label={COPY.connectAccountFor(view.name)}
-          onClick={(event) => { if (!valid()) event.preventDefault(); }}>{COPY.connectAccount}</a>
       </div>
       {code && api.send && <Suspense fallback={null}><Circle api={api} agentId={agentId} code={code} onJoy={(why) => whenAwake(() => engineRef.current?.fire({ type: 'celebrate', why }))} /></Suspense>}
     </main>

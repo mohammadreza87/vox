@@ -31,8 +31,6 @@ export const NEED_LABEL: Record<NeedKey, string> = { tummy: 'Tummy', joy: 'Joy',
 export const COPY = {
   talkTo: (name: string) => `Talk to ${name}`,
   chatInTelegram: 'Chat in Telegram',
-  connectAccount: 'Connect an account',
-  connectAccountFor: (name: string) => `Connect an account for ${name}`,
   send: 'Send',
   holdToTalk: 'Hold to talk',
   recording: 'Listening… release to send',
@@ -56,7 +54,8 @@ export const COPY = {
   offlineBody: 'Check the connection and try again.',
   retry: 'Try again',
   talkFailed: 'Hmm, I lost my words. Try again?',
+  reopen: 'Close and reopen me to keep talking.',
+  reopenFa: 'برای ادامهٔ گفتگو، مرا ببندید و دوباره باز کنید.',
   didntCatch: 'I didn’t catch that. Try again?',
-  forgetAsk: (name: string) => `Forget care for all your pets, including ${name}? Needs and Bond start over for every pet; your chats stay.`,
   score: (n: number) => `${n}`,
 } as const;

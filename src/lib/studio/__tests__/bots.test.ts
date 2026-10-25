@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TelegramUpdate } from '../../tireh/telegram/client';
 import { startBots } from '../bots';
 import { parseIds } from '../runtime';
-import { draftJson, hire, ID, makeStudio, seedOrg, type Harness } from './helpers';
+import { draftJson, fakeTelegram, hire, ID, makeStudio, seedOrg, type Harness } from './helpers';
+import { TelegramApiError } from '../../tireh/telegram/client';
 import { expectContentFreeTelegramLogs, telegramCanary, telegramCanaryError } from '@/test/telegram-diagnostics';
 
 let h: Harness;
@@ -239,5 +240,144 @@ describe('runtime env parsing', () => {
   it('parses superadmin ids from comma/space separated env, dropping junk', () => {
     expect(parseIds('1, 2 3,,x,-4,5.5')).toEqual([1, 2, 3, 5]);
     expect(parseIds(undefined)).toEqual([]);
+  });
+});
+
+describe('redirected updates (bot integrity): detect and alert, never act', () => {
+  const conflict = (text = "Conflict: can't use getUpdates method while webhook is active; use deleteWebhook to delete the webhook first") => new TelegramApiError('getUpdates', text, 409);
+  const integrityLogs = () => h.logger.warn.mock.calls.filter(([e]) => (e as { type?: string }).type === 'bot_integrity');
+  const alerts = () => h.manager.sendMessage.mock.calls.filter(([, text]) => String(text).startsWith('Vox alert'));
+  const audits = async () => (await h.store.read()).audit.filter((a) => a.action === 'agent.integrity');
+  /** An agent bot whose fake exists before its poller starts, so its first getUpdates is already scripted. */
+  async function agentBot() {
+    const hired = await hire(h, org.alice, { name: 'Nova' });
+    const bot = fakeTelegram();
+    h.bots.set(hired.token, bot);
+    return { ...hired, bot };
+  }
+
+  it('a foreign webhook: nothing for 60 s, then one log, one audit row and one DM per superadmin, without the URL or token', async () => {
+    vi.useFakeTimers();
+    const { agent, token, bot } = await agentBot();
+    bot.getUpdates.mockRejectedValue(conflict());
+    bot.getWebhookInfo.mockResolvedValue({ url: 'https://collector.invalid/SECRET_HOOK_PATH', pending_update_count: 3 });
+    stop = startBots(h.studio).stop;
+    await flush();
+    await vi.advanceTimersByTimeAsync(59_000);
+    expect(bot.getWebhookInfo).not.toHaveBeenCalled();
+    expect(integrityLogs()).toEqual([]);
+    expect(alerts()).toEqual([]);
+    // until a probe has seen the webhook, a conflict retries every 3 s like any failure: 0, 3, … 57
+    expect(bot.getUpdates).toHaveBeenCalledTimes(20);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(bot.getWebhookInfo).toHaveBeenCalledTimes(1);
+    // the probe saw a webhook (getUpdates cannot win an update while one is set): now every 15 s
+    expect(bot.getUpdates).toHaveBeenCalledTimes(21);
+    await vi.advanceTimersByTimeAsync(14_999);
+    expect(bot.getUpdates).toHaveBeenCalledTimes(21);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(bot.getUpdates).toHaveBeenCalledTimes(22);
+    expect(integrityLogs()).toEqual([[{ type: 'bot_integrity', target: agent.id, reason: 'webhook_foreign', outcome: 'alerted' }]]);
+    expect(await audits()).toEqual([expect.objectContaining({ actor: 'system', action: 'agent.integrity', target: agent.id, detail: 'webhook_foreign' })]);
+    expect(alerts().map(([chat]) => chat)).toEqual([ID.superadmin]);
+    const text = String(alerts()[0][1]);
+    expect(text).toContain('Nova');
+    expect(text).toContain('هشدار وکس');
+    for (const secret of ['SECRET_HOOK_PATH', 'collector.invalid', token]) expect(JSON.stringify([h.logger.warn.mock.calls, h.manager.sendMessage.mock.calls])).not.toContain(secret);
+    // never acts: no webhook set or removed beyond the loop's own start, and polling goes on
+    expect(bot.setWebhook).not.toHaveBeenCalled();
+    expect(bot.deleteWebhook).toHaveBeenCalledTimes(1);
+    const polls = bot.getUpdates.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(bot.getUpdates.mock.calls.length).toBeGreaterThan(polls);
+    // probed at most once a minute, alerted once per 6 h
+    expect(bot.getWebhookInfo.mock.calls.length).toBeLessThanOrEqual(11);
+    expect(alerts()).toHaveLength(1);
+    expect(integrityLogs()).toHaveLength(1);
+    expect(await audits()).toHaveLength(1);
+    expect((await h.store.read()).agents.find((a) => a.id === agent.id)!.status).toBe('active');
+  });
+
+  it('a competing poller: repeated conflicts between successes still alert poll_conflict; a single 409 does not', async () => {
+    vi.useFakeTimers();
+    const { bot } = await agentBot();
+    const terminated = conflict('Conflict: terminated by other getUpdates request; make sure that only one bot instance is running');
+    bot.getUpdates.mockRejectedValueOnce(terminated).mockResolvedValueOnce([]).mockImplementation(() => new Promise(() => undefined));
+    stop = startBots(h.studio).stop;
+    await flush();
+    await vi.advanceTimersByTimeAsync(20 * 60_000);
+    expect(integrityLogs()).toEqual([]);
+    expect(bot.getWebhookInfo).not.toHaveBeenCalled();
+    stop(); stop = undefined;
+
+    // now another poller keeps taking the updates: conflicts alternate with empty successes
+    const again = await agentBot();
+    let n = 0;
+    again.bot.getUpdates.mockImplementation(async () => { if (n++ % 2 === 0) throw terminated; return []; });
+    h.logger.warn.mockClear();
+    stop = startBots(h.studio).stop;
+    await flush();
+    await vi.advanceTimersByTimeAsync(3 * 60_000);
+    expect(integrityLogs()).toContainEqual([{ type: 'bot_integrity', target: again.agent.id, reason: 'poll_conflict', outcome: 'alerted' }]);
+    expect(again.bot.setWebhook).not.toHaveBeenCalled();
+  });
+
+  it('a competing poller never slows Vox down: every conflict retries in 3 s, before and after the alert', async () => {
+    vi.useFakeTimers();
+    const { agent, bot } = await agentBot();
+    const terminated = conflict('Conflict: terminated by other getUpdates request; make sure that only one bot instance is running');
+    bot.getUpdates.mockRejectedValue(terminated);
+    stop = startBots(h.studio).stop;
+    await flush();
+    expect(bot.getUpdates).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(2_999);
+    expect(bot.getUpdates).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(bot.getUpdates).toHaveBeenCalledTimes(2);
+    // past the probe (no webhook) and the poll_conflict alert, still every 3 s
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(bot.getWebhookInfo).toHaveBeenCalledTimes(1);
+    expect(integrityLogs()).toEqual([[{ type: 'bot_integrity', target: agent.id, reason: 'poll_conflict', outcome: 'alerted' }]]);
+    const polls = bot.getUpdates.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(bot.getUpdates).toHaveBeenCalledTimes(polls + 1);
+  });
+
+  it('a rejected token alerts token_rejected; the switch silences only the DMs', async () => {
+    vi.useFakeTimers();
+    h.studio.deps.integrityAlerts = () => false;
+    const { agent, bot } = await agentBot();
+    bot.getUpdates.mockRejectedValue(new TelegramApiError('getUpdates', 'Unauthorized', 401));
+    bot.getWebhookInfo.mockRejectedValue(new TelegramApiError('getWebhookInfo', 'Unauthorized', 401));
+    stop = startBots(h.studio).stop;
+    await flush();
+    await vi.advanceTimersByTimeAsync(61_000);
+    expect(integrityLogs()).toEqual([[{ type: 'bot_integrity', target: agent.id, reason: 'token_rejected', outcome: 'alerted' }]]);
+    expect(await audits()).toHaveLength(1);
+    expect(alerts()).toEqual([]);
+  });
+
+  it('the manager bot is watched the same way', async () => {
+    vi.useFakeTimers();
+    h.manager.getUpdates.mockRejectedValue(conflict());
+    h.manager.getWebhookInfo.mockResolvedValue({ url: 'https://collector.invalid/x' });
+    stop = startBots(h.studio).stop;
+    await flush();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(integrityLogs()).toEqual([[{ type: 'bot_integrity', target: 'manager', reason: 'webhook_foreign', outcome: 'alerted' }]]);
+    expect(alerts().map(([chat]) => chat)).toEqual([ID.superadmin]);
+    expect(String(alerts()[0][1])).toContain('@VoxxBot');
+    expect(h.manager.deleteWebhook).toHaveBeenCalledTimes(1);
+  });
+
+  it('network failures probe after 60 s but alert nothing without a webhook or conflict', async () => {
+    vi.useFakeTimers();
+    h.manager.getUpdates.mockRejectedValue(telegramCanaryError());
+    stop = startBots(h.studio).stop;
+    await flush();
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(h.manager.getWebhookInfo).toHaveBeenCalled();
+    expect(integrityLogs()).toEqual([]);
+    expectContentFreeTelegramLogs([...h.logger.warn.mock.calls, ...h.logger.error.mock.calls]);
   });
 });

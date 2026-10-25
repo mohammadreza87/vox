@@ -17,6 +17,7 @@ import { parsePostCallback, parsePostCommand } from '../circles/channels';
 import { agentCard, choiceReceipt, circleCopy, groupCopy, localeOf } from '../circles/notice';
 import { petPageUrl } from '../pet/links';
 import { parseExplicitControl } from '../relationships/policy';
+import { MY_DATA_CODE, MY_DATA_PAGE } from './my-data-contract';
 
 export const MANAGER_UPDATES = ['message', 'managed_bot'];
 /** Never channel_post or edited_channel_post: Vox reads nothing from channels (Circles S5 is post-only). */
@@ -33,6 +34,13 @@ export async function handleManagerUpdate(studio: Studio, update: TelegramUpdate
   }
   const msg = update.message;
   if (!msg?.from || msg.from.is_bot || msg.chat.type !== 'private') return;
+  // "My data" (the pet's Settings, t.me/<VoxxBot>?start=mydata): one web_app button to the VoxxBot-signed page. Before
+  // ensureMember, so someone who only uses public agents is never added to the pending list by asking for their data.
+  if (msg.chat.id === msg.from.id && new RegExp(`^/start(?:@\\w+)?\\s+${MY_DATA_CODE}$`).test(msg.text?.trim() ?? '')) {
+    const page = myDataPageUrl(studio.deps.webAppUrl);
+    if (page) await manager.sendMessage(msg.chat.id, MY_DATA_PROMPT, { keyboard: { inline_keyboard: [[{ text: MY_DATA_BUTTON, web_app: { url: page } }]] } });
+    return;
+  }
   const member = await studio.ensureMember(msg.from);
   if (member.role !== 'pending' && msg.chat.id === msg.from.id && studio.deps.reminderEndpointId) {
     // A verified private manager DM establishes this bot's reachable recipient.
@@ -53,6 +61,20 @@ export async function handleManagerUpdate(studio: Studio, update: TelegramUpdate
     `User ID: ${who.id}`,
   ].join('\n');
   await manager.sendMessage(msg.chat.id, `${text}\n\n${account}`, open ? { keyboard: open } : {});
+}
+
+/** EN and FA in one message: the manager bot does not know the person's language before they open the page. */
+const MY_DATA_PROMPT = 'Your Vox data: see it, copy it or erase it.\nداده‌های شما در وکس: ببینید، کپی کنید یا پاک کنید.';
+const MY_DATA_BUTTON = 'My data · داده‌های من';
+/** STUDIO_WEBAPP_URL is …/studio; the page sits beside it. Undefined when the Mini App URL is not configured. */
+function myDataPageUrl(webAppUrl: string | undefined): string | undefined {
+  if (!webAppUrl) return undefined;
+  try {
+    const url = new URL(webAppUrl);
+    if (url.protocol !== 'https:' && url.hostname !== 'localhost' && url.hostname !== '127.0.0.1') return undefined;
+    url.pathname = MY_DATA_PAGE; url.search = ''; url.hash = '';
+    return url.toString();
+  } catch { return undefined; }
 }
 
 /**

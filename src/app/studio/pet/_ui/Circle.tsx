@@ -74,7 +74,8 @@ export function Circle({ api, agentId, code, onJoy }: CircleProps) {
 
   const explain = useCallback((e: unknown) => {
     if (!isPetError(e)) return t.failed;
-    return e.code === 'circle_stale' ? t.stale : e.code === 'circle_full' ? t.full : e.code === 'circle_not_member' ? t.notMember : t.failed;
+    return e.code === 'circle_stale' ? t.stale : e.code === 'circle_full' ? t.full : e.code === 'circle_not_member' ? t.notMember
+      : e.code === 'circle_use_vox' ? t.useVox : e.code === 'session_expired' ? t.reopen : t.failed;
   }, [t]);
 
   const load = useCallback((attempt = 0) => {

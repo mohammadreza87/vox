@@ -103,10 +103,14 @@ function isConnectTimeout(error: unknown): boolean {
 }
 
 export class TelegramApiError extends Error {
-  constructor(readonly method: string, readonly description: string) {
+  /** Telegram's error_code when it sent one (its contents "are subject to change": never the only signal). */
+  constructor(readonly method: string, readonly description: string, readonly errorCode?: number) {
     super(`Telegram ${method} failed: ${description}`);
   }
 }
+
+/** getWebhookInfo, trimmed to what the integrity check reads. `url` is empty while the bot uses getUpdates. */
+export interface TelegramWebhookInfo { url: string; pending_update_count?: number }
 
 export class TelegramBotClient {
   readonly committedSendFence = true as const;
@@ -142,8 +146,9 @@ export class TelegramBotClient {
       }
     }
     // Response/body errors must not replay a potentially accepted POST.
-    const json = (await response.json().catch(() => ({}))) as { ok?: boolean; result?: T; description?: string };
-    if (!json.ok) throw new TelegramApiError(method, json.description ?? `HTTP ${response.status}`);
+    const json = (await response.json().catch(() => ({}))) as { ok?: boolean; result?: T; description?: string; error_code?: unknown };
+    if (!json.ok) throw new TelegramApiError(method, json.description ?? `HTTP ${response.status}`,
+      Number.isSafeInteger(json.error_code) ? json.error_code as number : Number.isSafeInteger(response.status) && response.status >= 400 ? response.status : undefined);
     return json.result as T;
   }
 
@@ -227,6 +232,11 @@ export class TelegramBotClient {
 
   deleteWebhook(): Promise<boolean> {
     return this.call('deleteWebhook', { drop_pending_updates: false });
+  }
+
+  /** Read-only: whether a webhook is set (and where). Used to detect a token holder redirecting this bot's updates. */
+  getWebhookInfo(): Promise<TelegramWebhookInfo> {
+    return this.call('getWebhookInfo', {});
   }
 
   /** Long polling; `timeoutSeconds` is how long Telegram holds the request open */
