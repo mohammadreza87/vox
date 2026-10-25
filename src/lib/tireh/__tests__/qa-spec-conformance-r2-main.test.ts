@@ -1,7 +1,6 @@
 /**
- * QA round 2 on main, lens spec-conformance. Known gaps written as `it.fails`
- * so the suite stays green; each turns red once the gap is closed, and must
- * then become a plain `it`.
+ * QA round 2 on main, lens spec-conformance. SC2-1 is closed (fixer r2): the
+ * cases below were `it.fails` and are now plain `it`.
  *
  * - SC2-1: fixer r1 (b142d00) made the gateway's flag-independent NO_MEMORY
  *   read memory/requests.ts NEGATED_MEMORY_REQUEST, whose "up to two words
@@ -22,10 +21,15 @@ describe('QA r2 main spec-conformance: memory request negation', () => {
     expect(explicitMemoryRequest('remember this')).toBe(true);
   });
 
-  for (const text of ["please don't forget to save this", "don't forget to remember this","don't forget to keep this"]) {
-    it.fails(`SC2-1: "${text}" is a remember request, not a negation`, () => {
+  for (const text of ["please don't forget to save this", "don't forget to remember this", "don't forget to keep this"]) {
+    it(`SC2-1: "${text}" is a remember request, not a negation`, () => {
       expect(negatedMemoryRequest(text)).toBe(false);
       expect(explicitMemoryRequest(text)).toBe(true);
     });
   }
+
+  it('SC2-1: "forget" never turns an unrelated sentence into a request or a refusal', () => {
+    expect(negatedMemoryRequest('I never forget to keep my keys')).toBe(false);
+    expect(explicitMemoryRequest('I never forget to keep my keys')).toBe(false);
+  });
 });

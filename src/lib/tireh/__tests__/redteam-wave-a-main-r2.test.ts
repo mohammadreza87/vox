@@ -67,6 +67,7 @@ function harness(image: ReturnType<typeof imageAnswers>) {
 // MEMORY_REQUEST matches "remember this": explicitMemoryRequest() is true, suppressImageMemory() turns extraction
 // ON for the image turn, and what the reply read off the image becomes a memory. The person said the opposite.
 // The same rule is the gateway's group NO_MEMORY, so a Circles group line phrased this way is remembered too.
+// Closed by fixer r2 (modal and desire negations, a wider gap, Persian "لازم نیست" / "نمی‌خوام"): plain `it` now.
 describe('red team wave A on main r2: a negated memory request is read as a request to remember', () => {
   const NEGATED = [
     "I don't want you to remember this",
@@ -81,16 +82,16 @@ describe('red team wave A on main r2: a negated memory request is read as a requ
       expect(negatedMemoryRequest(text), text).toBe(true);
   });
 
-  it.fails('every natural negation of "remember this" is a negation, never an explicit request', () => {
+  it('every natural negation of "remember this" is a negation, never an explicit request', () => {
     for (const text of NEGATED) expect(explicitMemoryRequest(text), text).toBe(false);
   });
 
-  it.fails('an image turn whose caption says not to keep it is never extracted, whatever triage says', () => {
+  it('an image turn whose caption says not to keep it is never extracted, whatever triage says', () => {
     const triage = { kind: 'other' as const, task: 'react' as const, containsPeople: 0.1, containsSensitiveDocument: 0.1 };
     for (const text of NEGATED) expect(suppressImageMemory(triage, text), text).toBe(true);
   });
 
-  it.fails('end to end: "I don\'t want you to remember this" on a Telegram photo forms no memory of what the photo showed', async () => {
+  it('end to end: "I don\'t want you to remember this" on a Telegram photo forms no memory of what the photo showed', async () => {
     vi.stubEnv('STUDIO_IMAGES', '1');
     const h = harness(imageAnswers({ kind: 'other', task: 'react', people: 0.1, sensitive: 0.1 }));
     h.setReply(`The ${PLAN}.`);

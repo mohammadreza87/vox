@@ -66,6 +66,10 @@ describe('QA tests-types r2: the gateway reads the shared negation rule (b142d00
     'no need to store it: the demo is Friday',
     'ذخیره‌اش نکن: جلسه جمعه است',
     'ذخيره نکن: جلسه جمعه است',
+    // fixer r2: modal and desire negations, a wider gap and Persian refusals
+    "I don't want you to remember this: the demo is Friday",
+    "you shouldn't keep this: the demo is Friday",
+    'نمی‌خوام یادت بمونه: جلسه جمعه است',
   ])('a group opt-out that only the shared rule recognises is never remembered: %s', async (text) => {
     const h = groupSetup();
     await h.gateway.handleUpdate('aria', groupText(GAMEEND_CHAT, TG.milad, text));

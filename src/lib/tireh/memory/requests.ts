@@ -4,34 +4,60 @@
  * One rule for "do not keep this": the gateway (group memory, relationship
  * observation) and S12 image retention both read NEGATED_MEMORY_REQUEST, so a
  * negation recognised in one place is recognised in the other. Any negation
- * wins over a remember request in the same text. The Persian patterns accept
+ * wins over a remember request in the same text, so the rule leans towards
+ * reading a refusal (fail closed: less memory). The Persian patterns accept
  * the standard orthography as typed: ZWNJ or a space between parts, and the
  * Arabic yeh/kaf code points (U+064A, U+0643) as well as the Persian ones.
+ *
+ * With every flag unset the gateway's NO_MEMORY reads this rule too, which is
+ * wider than the base `do not|don't` + verb rule (recorded as a base-behaviour
+ * exception in WAVE_A_ON_MAIN.md section 3): it only ever withholds memory.
  */
 
 const GAP = String.raw`[\s‌]*`;
 const YEH = '[یي]';
 const KAF = '[کك]';
 
-/** "don't keep this", "never save this", "dont save this", "forget that", "ذخیره‌اش نکن", ... */
+/** A negation, including modal and desire negations ("shouldn't", "I don't want you to ..."). */
+const NEGATION = String.raw`\b(?:do\s*not|don['’]?t|dont|never|no\s+need|rather\s+not|should\s*not|should\s*n['’]?t|must\s*not|must\s*n['’]?t|will\s+not|won['’]?t)`;
+/**
+ * Up to five words between the negation and the verb ("I don't want you to remember this"), never across a
+ * sentence or clause mark, and never through "forget" or "lose": "don't forget to save this" asks to keep it.
+ * A parenthetical set off by commas right after the negation is allowed ("do NOT, under any circumstances, keep this").
+ */
+const NEGATION_GAP = String.raw`\s*(?:,[^,.!?؟\n]{0,40},\s*)?(?:(?!forget\b|lose\b)[\w'’]+\s+){0,5}?`;
+const VERB = String.raw`(?:remember|save|store|keep)\b`;
+/** A Persian refusal ahead of the request in the same sentence: "لازم نیست ...", "نمی‌خوام ...". */
+const FA_REFUSAL = `(?:لازم${GAP}ن${YEH}ست|نم${YEH}${GAP}خوا(?:م|هم|د))[^.!?؟\\n]{0,30}?`;
+const FA_KEEP = `(?:${YEH}ادت|ذخ${YEH}ره|نگه|به${GAP}خاطر)`;
+
+/** "don't keep this", "I don't want you to remember this", "you shouldn't keep this", "forget that", "ذخیره‌اش نکن", ... */
 export const NEGATED_MEMORY_REQUEST = new RegExp([
-  String.raw`\b(?:do\s*not|don['’]?t|never|no\s+need\s+to)\s+(?:\w+\s+){0,2}?(?:remember|save|store|keep)\b`,
-  String.raw`\bforget\s+(?:this|that)\b`,
-  `ذخ${YEH}ره${GAP}(?:اش${GAP})?ن${KAF}ن`,
+  `${NEGATION}${NEGATION_GAP}${VERB}`,
+  String.raw`\bforget\s+(?:this|that|it)\b`,
+  `${FA_REFUSAL}${FA_KEEP}`,
+  `ذخ${YEH}ره${GAP}(?:ا?ش${GAP})?ن${KAF}ن`,
   `به${GAP}خاطر${GAP}نسپار`,
   `${YEH}ادت${GAP}(?:نماند|نمونه)`,
   `نگهش${GAP}ندار`,
-  `فراموش${GAP}${KAF}ن`,
+  // "فراموش کن" / "فراموشش کن" (forget it); never "فراموش نکن" (do not forget).
+  `فراموش${GAP}(?:ش${GAP})?${KAF}ن`,
 ].join('|'), 'iu');
 
-/** An explicit request to keep what was shared: "remember this", "save it", "ذخیره‌اش کن", ... */
+/**
+ * An explicit request to keep what was shared: "remember this", "save it", "ذخیره‌اش کن", ...
+ * The English verb must be in imperative position: at the start, after a clause mark, or after a polite or
+ * linking word ("please", "can you", "and", "don't forget to"). A question or statement about memory ("do you remember this?",
+ * "I can't remember this place") is not a request; nor is "keep it down".
+ */
+const IMPERATIVE_LEAD = String.raw`(?:^|[.!,;:\n—–-]\s*|\b(?:please|pls|plz|just|also|and|so|then|now|ok|okay|hey|can\s+you|could\s+you|would\s+you|will\s+you|(?:don['’]?t|dont|do\s+not|never)\s+forget\s+to)\s+)`;
 export const MEMORY_REQUEST = new RegExp([
-  String.raw`\b(?:remember|save|keep|store)\s+(?:this|that|it)\b`,
+  String.raw`${IMPERATIVE_LEAD}(?:remember|save|keep|store)\s+(?:this|that|it)\b(?!\s+(?:down|up|quiet|going|simple|short|together)\b)`,
   `${YEH}ادت${GAP}(?:باشه|بمونه|بماند)`,
   `به${GAP}خاطر${GAP}بسپار`,
-  `ذخ${YEH}ره${GAP}(?:اش${GAP})?${KAF}ن`,
+  `ذخ${YEH}ره${GAP}(?:ا?ش${GAP})?${KAF}ن`,
   `نگهش${GAP}دار`,
-].join('|'), 'iu');
+].join('|'), 'imu');
 
 /** True when the text asks not to keep it. */
 export function negatedMemoryRequest(text: string): boolean {
