@@ -1,333 +1,297 @@
 import { describe, expect, it, vi } from 'vitest';
-import { DAY_MS, MIN_PROFILE_MESSAGES, type StyleProfileKey } from '../profile';
-import { StyleIdentityService } from '../service';
+import { IdentityConfidenceService, type IdentityServiceOptions } from '../index';
+import { DAY_MS, newProfile, observeProfile, PROFILE_RETENTION_MS, WEEK_MS, type StyleProfile } from '../profile';
+import { styleVector } from '../style-features';
 import { InMemoryStyleProfileStore, type StyleProfileStore } from '../store';
-import { DEFAULT_THRESHOLD, FALSE_PROMPT_MUTE_MS, THRESHOLD_STEP } from '../test';
-import type { IdentityLog, IdentityLogEvent, IdentityService } from '../types';
-import type { VoiceNoteInput, VoiceNoteVerifier, VoiceVerification } from '../voice-band';
-import { makeFeatures, personA, personB, type TimedFeatures } from './style-fixtures';
+import { SESSION_IDLE_MS } from '../test';
+import type { StyleFeatures } from '../types';
+import type { VoiceNoteInput, VoiceNoteVerifier } from '../voice-band';
+import { impostorFeatures, mulberry32, ownerFeatures } from './style-fixtures';
 
-const KEY: StyleProfileKey = { personaId: 'persona-1', personId: 'member-a', space: 'work' };
-const MINUTE = 60_000;
+const T0 = Date.UTC(2026, 1, 2, 18, 0);
+const PERSONA = 'persona-1';
+const CANARY = 'S10L_IDENTITY_PRIVATE_TEXT_CANARY_7Q';
 
-function logSpy() {
-  const events: IdentityLogEvent[] = [];
-  const log: IdentityLog = { warn: event => { events.push(event); } };
-  return { events, log };
+function hostileError() {
+  const accessed = vi.fn(() => { throw new Error(CANARY); });
+  const error = new Error('synthetic hostile error');
+  for (const key of ['stack', 'message', 'name', 'cause', 'code', 'status', 'toJSON']) {
+    Object.defineProperty(error, key, { configurable: true, get: accessed });
+  }
+  return { error, accessed };
 }
 
-function setup(options: Partial<ConstructorParameters<typeof StyleIdentityService>[0]> = {}) {
+function setup(options: Partial<IdentityServiceOptions> = {}) {
   const store = new InMemoryStyleProfileStore();
-  const { events, log } = logSpy();
-  const service = new StyleIdentityService({ store, log, ...options });
-  const observe = (features: TimedFeatures['features'], at: number, key: StyleProfileKey = KEY, personalizationAllowed = true) =>
-    service.observeStyle({ ...key, features, at, personalizationAllowed });
-  const train = async (stream: readonly TimedFeatures[], key: StyleProfileKey = KEY) => {
-    for (const m of stream) await observe(m.features, m.at, key);
-  };
-  return { store, service, events, observe, train };
+  const log = { warn: vi.fn() };
+  const service = new IdentityConfidenceService({ store, log, ...options });
+  return { store, log, service };
 }
 
-/** Re-times a stream as one session starting at `start`, one message per minute. */
-const session = (stream: readonly TimedFeatures[], start: number): TimedFeatures[] => stream.map((m, i) => ({ features: m.features, at: start + i * MINUTE }));
+type Service = IdentityConfidenceService;
+const observe = (service: Service, features: StyleFeatures, at: number, extra: { personId?: string; space?: 'work' | 'personal'; personaId?: string; allowed?: boolean } = {}) =>
+  service.observeStyle({ personaId: extra.personaId ?? PERSONA, personId: extra.personId ?? 'alice', space: extra.space ?? 'work',
+    features, at, personalizationAllowed: extra.allowed ?? true });
+const enroll = (service: Service, at = T0, personId = 'alice', space: 'work' | 'personal' = 'work', allowed = true) =>
+  service.enroll({ personId, space, kind: 'style_baseline', at, personalizationAllowed: allowed });
 
-describe('StyleIdentityService.observeStyle', () => {
-  it('implements the IdentityService contract', () => {
-    const service: IdentityService = new StyleIdentityService({ store: new InMemoryStyleProfileStore() });
-    expect(typeof service.observeStyle).toBe('function');
+/** Feeds `count` owner messages in sessions of ten separated by an hour; returns the next free timestamp. */
+async function baseline(service: Service, rng: () => number, count: number, start = T0 + 60_000, space: 'work' | 'personal' = 'work'): Promise<number> {
+  let at = start;
+  for (let i = 0; i < count; i++) {
+    at = start + Math.floor(i / 10) * 3_600_000 + (i % 10) * 60_000;
+    await observe(service, ownerFeatures(rng, at), at, { space });
+  }
+  return at + 3_600_000;
+}
+
+function trainedProfile(personId: string, falsePrompts: number, rng: () => number): StyleProfile {
+  let p = newProfile(personId, 'work', 0, T0);
+  for (let i = 0; i < 60; i++) p = observeProfile(p, styleVector(ownerFeatures(rng, T0)), T0 + i * 60_000);
+  return { ...p, falsePrompts };
+}
+
+const voiceInput = (extra: Partial<VoiceNoteInput> = {}): VoiceNoteInput => ({
+  personaId: PERSONA, personId: 'alice', space: 'work', chatKind: 'private', guestAudience: false,
+  audio: new ArrayBuffer(16), mimeType: 'audio/ogg', durationSec: 6, channel: 'telegram_voice_note', ...extra,
+});
+
+describe('IdentityConfidenceService', () => {
+  it('(a) stores nothing without an enrollment', async () => {
+    const { store, service } = setup();
+    const rng = mulberry32(1);
+    expect(await observe(service, ownerFeatures(rng, T0), T0)).toEqual({ stored: false });
+    expect(await store.get('alice', 'work')).toBeNull();
   });
 
-  it('stores nothing without personalization consent and deletes existing rows', async () => {
-    const { store, observe, service } = setup();
-    const [first] = personA(1, 1);
-    expect(await observe(first.features, first.at, KEY, false)).toEqual({ stored: false });
-    expect(await store.get(KEY)).toBeNull();
-    expect((await observe(first.features, first.at)).stored).toBe(true);
-    expect(await store.get(KEY)).not.toBeNull();
-    expect(service.activeSessions).toBe(1);
-    expect(await observe(first.features, first.at + MINUTE, KEY, false)).toEqual({ stored: false });
-    expect(await store.get(KEY)).toBeNull();
-    expect(service.activeSessions).toBe(0);
+  it('(b) enrolls only with the personalization decision, stamped with the consent epoch', async () => {
+    const { store, service } = setup({ epochOf: () => 4 });
+    expect(await enroll(service, T0, 'alice', 'work', false)).toEqual({ enrolled: false, reason: 'personalization_not_allowed' });
+    expect(await store.get('alice', 'work')).toBeNull();
+    expect(await enroll(service)).toEqual({ enrolled: true });
+    expect(await store.get('alice', 'work')).toMatchObject({ purpose: 'optional.personalization', epoch: 4, messages: 0 });
+    expect(await service.enroll({ personId: 'alice', space: 'work', kind: 'other' as 'style_baseline', at: T0, personalizationAllowed: true }))
+      .toEqual({ enrolled: false, reason: 'invalid_input' });
+    expect(await service.enroll({ personId: '', space: 'work', kind: 'style_baseline', at: T0, personalizationAllowed: true }))
+      .toEqual({ enrolled: false, reason: 'invalid_input' });
+    expect(await service.enroll({ personId: 'alice', space: 'work', kind: 'style_baseline', at: Number.NaN, personalizationAllowed: true }))
+      .toEqual({ enrolled: false, reason: 'invalid_input' });
   });
 
-  it('gives no hint before 50 messages and a session-count hint after', async () => {
-    const { observe } = setup();
-    const stream = personA(2, 60);
-    for (const [i, m] of stream.entries()) {
-      const result = await observe(m.features, m.at);
-      if (i < MIN_PROFILE_MESSAGES - 1) expect(result.hint).toBeUndefined();
-      else expect(result.hint).toEqual({ source: 'style', consistency: 'consistent', messages: 1 });
+  it('(c) deletes the profile when personalization is withdrawn', async () => {
+    const { store, service } = setup();
+    await enroll(service);
+    await observe(service, ownerFeatures(mulberry32(2), T0), T0 + 1);
+    expect(await store.get('alice', 'work')).not.toBeNull();
+    expect(await observe(service, ownerFeatures(mulberry32(2), T0), T0 + 2, { allowed: false })).toEqual({ stored: false });
+    expect(await store.get('alice', 'work')).toBeNull();
+    expect(await observe(service, ownerFeatures(mulberry32(2), T0), T0 + 3)).toEqual({ stored: false });
+    await enroll(service);
+    expect(await enroll(service, T0, 'alice', 'work', false)).toMatchObject({ enrolled: false });
+    expect(await store.get('alice', 'work')).toBeNull();
+  });
+
+  it('(d) deletes the profile on a consent-epoch bump and fails closed when the epoch is unavailable', async () => {
+    let epoch: number | undefined = 1;
+    const { store, service } = setup({ epochOf: () => epoch });
+    await enroll(service);
+    epoch = 2;
+    expect(await observe(service, ownerFeatures(mulberry32(3), T0), T0 + 1)).toEqual({ stored: false });
+    expect(await store.get('alice', 'work')).toBeNull();
+
+    const failing = setup({ epochOf: () => { throw new Error(CANARY); } });
+    await failing.store.put(newProfile('alice', 'work', 1, T0));
+    expect(await observe(failing.service, ownerFeatures(mulberry32(3), T0), T0 + 1)).toEqual({ stored: false });
+    expect((await failing.store.get('alice', 'work'))!.messages).toBe(0);
+    expect(await enroll(failing.service)).toEqual({ enrolled: false, reason: 'epoch_unavailable' });
+    const rejecting = setup({ epochOf: async () => { throw new Error(CANARY); } });
+    expect(await enroll(rejecting.service)).toEqual({ enrolled: false, reason: 'epoch_unavailable' });
+  });
+
+  it('(e) gives no hint before 50 messages, then only from the fifth message of a session', async () => {
+    const { service } = setup();
+    const rng = mulberry32(4);
+    await enroll(service);
+    for (let i = 0; i < 50; i++) {
+      const at = T0 + 60_000 + Math.floor(i / 10) * 3_600_000 + (i % 10) * 60_000;
+      expect((await observe(service, ownerFeatures(rng, at), at)).hint).toBeUndefined();
     }
-    const later = session(personA(3, 3), stream[59].at + DAY_MS);
+    const start = T0 + DAY_MS;
     const hints = [];
-    for (const m of later) hints.push((await observe(m.features, m.at)).hint?.messages);
-    expect(hints).toEqual([1, 2, 3]);
+    for (let m = 0; m < 6; m++) hints.push((await observe(service, ownerFeatures(rng, start + m * 60_000), start + m * 60_000)).hint);
+    expect(hints.slice(0, 4)).toEqual([undefined, undefined, undefined, undefined]);
+    expect(hints[4]).toMatchObject({ source: 'style', messages: 5 });
+    expect(hints[5]!.messages).toBeGreaterThanOrEqual(5);
+    expect(Object.keys(hints[4]!).sort()).toEqual(['consistency', 'messages', 'source']);
   });
 
-  it('discards statistics on an epoch bump', async () => {
-    let epoch = 0;
-    const { observe, store, train } = setup({ epochOf: async () => epoch });
-    const stream = personA(4, 60);
-    await train(stream);
-    expect((await store.get(KEY))?.messages).toBeGreaterThanOrEqual(MIN_PROFILE_MESSAGES);
-    epoch = 1;
-    await observe(stream[0].features, stream[59].at + MINUTE);
-    const row = await store.get(KEY);
-    expect(row?.epoch).toBe(1);
-    expect(row?.messages).toBe(1);
-  });
-
-  it('resets statistics after 7 days of absence and keeps the calibration', async () => {
-    const { observe, store, train, service } = setup();
-    const stream = personA(5, 60);
-    await train(stream);
-    await service.recordPromptOutcome({ ...KEY, outcome: 'confirmed_self', at: stream[59].at, personalizationAllowed: true });
-    const before = (await store.get(KEY))!;
-    await observe(stream[0].features, before.lastAt + 8 * DAY_MS);
-    const after = (await store.get(KEY))!;
-    expect(after.messages).toBe(1);
-    expect(after.calibration.threshold).toBe(before.calibration.threshold);
-    expect(after.calibration.falsePrompts).toBe(1);
-  });
-
-  it('never learns from a session that ends uncertain', async () => {
-    const { observe, store, train } = setup();
-    const stream = personA(6, 60);
-    await train(stream);
-    const impostor = session(personB(7, 10), stream[59].at + DAY_MS);
-    const decisions: (string | undefined)[] = [];
-    decisions.push((await observe(impostor[0].features, impostor[0].at)).hint?.consistency);
-    const before = (await store.get(KEY))!.messages;
-    for (const m of impostor.slice(1)) decisions.push((await observe(m.features, m.at)).hint?.consistency);
-    expect(decisions.slice(0, 4).every(d => d === 'consistent')).toBe(true);
-    expect(decisions.slice(4).every(d => d === 'uncertain')).toBe(true);
-    const next = personA(8, 1)[0];
-    await observe(next.features, impostor[9].at + 2 * 3600_000);
-    expect((await store.get(KEY))!.messages).toBe(before);
-  });
-
-  it('folds consistent sessions with a 5-message lag', async () => {
-    const { observe, store, train } = setup();
-    const stream = personA(9, 60);
-    await train(stream);
-    const own = session(personA(10, 7), stream[59].at + DAY_MS);
-    await observe(own[0].features, own[0].at);
-    const m0 = (await store.get(KEY))!.messages;
-    const stored: boolean[] = [];
-    for (const m of own.slice(1)) stored.push((await observe(m.features, m.at)).stored);
-    expect((await store.get(KEY))!.messages).toBe(m0 + 2);
-    expect(stored.filter(Boolean)).toHaveLength(2);
-    const next = personA(11, 1)[0];
-    await observe(next.features, own[6].at + 2 * 3600_000);
-    expect((await store.get(KEY))!.messages).toBe(m0 + 7);
-  });
-
-  it('rejects invalid features without touching the store', async () => {
-    const { observe, store, events } = setup();
-    const spies = [vi.spyOn(store, 'update'), vi.spyOn(store, 'get'), vi.spyOn(store, 'delete')];
-    const bad = { ...makeFeatures(), raw: 'secret' } as unknown as TimedFeatures['features'];
-    expect(await observe(bad, 1000)).toEqual({ stored: false });
-    expect(await observe(makeFeatures(), Number.NaN)).toEqual({ stored: false });
-    expect(await observe(makeFeatures(), 1000, { ...KEY, personId: '' })).toEqual({ stored: false });
-    for (const spy of spies) expect(spy).not.toHaveBeenCalled();
-    expect(events).toEqual([{ type: 'identity', code: 'invalid_input' }, { type: 'identity', code: 'invalid_input' }, { type: 'identity', code: 'invalid_input' }]);
-  });
-
-  it('never rejects when the store throws', async () => {
-    const failing: StyleProfileStore = {
-      get: async () => { throw new Error('down'); }, update: async () => { throw new Error('down'); },
-      delete: async () => { throw new Error('down'); }, deletePerson: async () => { throw new Error('down'); },
-      deletePersona: async () => { throw new Error('down'); }, listPersona: async () => { throw new Error('down'); },
-      listPerson: async () => { throw new Error('down'); }, sweep: async () => { throw new Error('down'); },
-    };
-    const { events, log } = logSpy();
-    const service = new StyleIdentityService({ store: failing, log });
-    await expect(service.observeStyle({ ...KEY, features: makeFeatures(), at: 1, personalizationAllowed: true })).resolves.toEqual({ stored: false });
-    await expect(service.observeStyle({ ...KEY, features: makeFeatures(), at: 1, personalizationAllowed: false })).resolves.toEqual({ stored: false });
-    await expect(service.enroll({ personId: 'member-a', space: 'work', kind: 'style_baseline', at: 1, personalizationAllowed: true }))
-      .resolves.toEqual({ enrolled: false, reason: 'store_unavailable' });
-    await expect(service.recordPromptOutcome({ ...KEY, outcome: 'someone_else', at: 1, personalizationAllowed: true })).resolves.toEqual({ recorded: false });
-    await expect(service.recalibrate('persona-1', 1)).rejects.toThrow('style_profile_store_unavailable');
-    await expect(service.forgetPerson('member-a')).rejects.toThrow('style_profile_store_unavailable');
-    expect(events.every(e => e.code === 'store_error')).toBe(true);
-    expect(events.length).toBe(6);
-  });
-
-  it('bounds the in-process session map', async () => {
-    const { observe, service } = setup({ maxSessions: 5 });
-    for (let i = 0; i < 15; i++) await observe(makeFeatures(), 1000 + i, { ...KEY, personId: `member-${i}` });
-    expect(service.activeSessions).toBeLessThanOrEqual(5);
-  });
-
-  it('forgets a person and purges a persona, rows and sessions', async () => {
-    const { observe, service, store } = setup();
-    const keys: StyleProfileKey[] = [KEY, { ...KEY, space: 'personal' }, { ...KEY, personaId: 'persona-2' }, { ...KEY, personId: 'member-b' }];
-    for (const k of keys) await observe(makeFeatures(), 1000, k);
-    expect(service.activeSessions).toBe(4);
-    expect(await service.forgetPerson('member-a')).toBe(3);
-    expect(service.activeSessions).toBe(1);
-    expect(await store.get(KEY)).toBeNull();
-    expect(await store.get(keys[3])).not.toBeNull();
-    expect(await service.purgePersona('persona-1')).toBe(1);
-    expect(service.activeSessions).toBe(0);
-    expect(await store.listPersona('persona-1')).toEqual([]);
-  });
-});
-
-describe('StyleIdentityService.enroll', () => {
-  const enroll = (service: StyleIdentityService, personalizationAllowed: boolean, at = 5_000) =>
-    service.enroll({ personId: 'member-a', space: 'work', kind: 'style_baseline', at, personalizationAllowed });
-
-  it('refuses and deletes rows without consent', async () => {
-    const { service, observe, store } = setup();
-    await observe(makeFeatures(), 1000);
-    await observe(makeFeatures(), 1000, { ...KEY, space: 'personal' });
-    expect(await enroll(service, false)).toEqual({ enrolled: false, reason: 'personalization_not_allowed' });
-    expect(await store.get(KEY)).toBeNull();
-    expect(await store.get({ ...KEY, space: 'personal' })).not.toBeNull();
-  });
-
-  it('is idempotent and resets statistics while keeping the calibration', async () => {
-    const { service, store, train } = setup();
-    const stream = personA(12, 60);
-    await train(stream);
-    await service.recordPromptOutcome({ ...KEY, outcome: 'confirmed_self', at: stream[59].at, personalizationAllowed: true });
-    const before = (await store.get(KEY))!;
-    expect(await enroll(service, true, stream[59].at + 1)).toEqual({ enrolled: true });
-    const once = (await store.get(KEY))!;
-    expect(await enroll(service, true, stream[59].at + 1)).toEqual({ enrolled: true });
-    expect(await store.get(KEY)).toEqual(once);
-    expect(once.messages).toBe(0);
-    expect(once.calibration).toEqual(before.calibration);
-    expect(await enroll(service, true)).toEqual({ enrolled: true });
-  });
-
-  it('creates nothing when no row exists and validates input', async () => {
-    const { service, store } = setup();
-    expect(await enroll(service, true)).toEqual({ enrolled: true });
-    expect(await store.listPerson('member-a', 'work')).toEqual([]);
-    expect(await service.enroll({ personId: '', space: 'work', kind: 'style_baseline', at: 1, personalizationAllowed: true }))
-      .toEqual({ enrolled: false, reason: 'invalid_input' });
-    expect(await service.enroll({ personId: 'a', space: 'work', kind: 'voice' as 'style_baseline', at: 1, personalizationAllowed: true }))
-      .toEqual({ enrolled: false, reason: 'invalid_input' });
-    expect(await service.enroll({ personId: 'a', space: 'work', kind: 'style_baseline', at: Number.POSITIVE_INFINITY, personalizationAllowed: true }))
-      .toEqual({ enrolled: false, reason: 'invalid_input' });
-  });
-});
-
-describe('StyleIdentityService.verifyVoiceNote', () => {
-  const input = (overrides: Partial<VoiceNoteInput> = {}): VoiceNoteInput => ({
-    personaId: 'persona-1', personId: 'member-a', space: 'work', chatKind: 'private', guestAudience: false,
-    audio: new ArrayBuffer(8), mimeType: 'audio/ogg', durationSec: 6, channel: 'telegram_voice_note', ...overrides,
-  });
-  const MATCH: VoiceVerification = { band: 'MATCH', netSpeechMs: 5_000, modelVersion: 'fake-1' };
-
-  it('never calls the verifier for groups or guest audiences', async () => {
-    const verify = vi.fn(async () => MATCH);
-    const { service } = setup({ voice: { verifyVoiceNote: verify } });
-    expect(await service.verifyVoiceNote(input({ chatKind: 'group' }))).toEqual({ band: 'NO_OPINION', reason: 'guest_or_group' });
-    expect(await service.verifyVoiceNote(input({ guestAudience: true }))).toEqual({ band: 'NO_OPINION', reason: 'guest_or_group' });
-    expect(verify).not.toHaveBeenCalled();
-  });
-
-  it('returns disabled without a verifier', async () => {
-    const { service } = setup();
-    expect(await service.verifyVoiceNote(input())).toEqual({ band: 'NO_OPINION', reason: 'disabled' });
-  });
-
-  it('maps verifier failures and aborts, and never rejects', async () => {
-    const throwing: VoiceNoteVerifier = { verifyVoiceNote: async () => { throw new Error('provider down'); } };
-    const sync: VoiceNoteVerifier = { verifyVoiceNote: () => { throw new Error('sync'); } };
-    const hanging: VoiceNoteVerifier = { verifyVoiceNote: () => new Promise<VoiceVerification>(() => undefined) };
-    const a = setup({ voice: throwing });
-    expect(await a.service.verifyVoiceNote(input())).toEqual({ band: 'NO_OPINION', reason: 'provider_error' });
-    expect(a.events).toEqual([{ type: 'identity', code: 'verifier_error' }]);
-    expect(await setup({ voice: sync }).service.verifyVoiceNote(input())).toEqual({ band: 'NO_OPINION', reason: 'provider_error' });
-
-    const pre = new AbortController(); pre.abort();
-    const verify = vi.fn(async () => MATCH);
-    const b = setup({ voice: { verifyVoiceNote: verify } });
-    expect(await b.service.verifyVoiceNote(input(), pre.signal)).toEqual({ band: 'NO_OPINION', reason: 'timeout' });
-    expect(verify).not.toHaveBeenCalled();
-    expect(b.events).toEqual([{ type: 'identity', code: 'verifier_timeout' }]);
-
-    const during = new AbortController();
-    const c = setup({ voice: hanging });
-    const pending = c.service.verifyVoiceNote(input(), during.signal);
-    during.abort();
-    expect(await pending).toEqual({ band: 'NO_OPINION', reason: 'timeout' });
-    expect(await c.service.verifyVoiceNote(null as unknown as VoiceNoteInput)).toEqual({ band: 'NO_OPINION', reason: 'guest_or_group' });
-  });
-
-  it('passes a verifier result through unchanged', async () => {
-    const { service } = setup({ voice: { verifyVoiceNote: async () => MATCH } });
-    expect(await service.verifyVoiceNote(input(), new AbortController().signal)).toBe(MATCH);
-  });
-});
-
-describe('prompt outcomes and recalibration', () => {
-  it('raises the threshold and mutes hints for 7 days on a false prompt', async () => {
-    const { service, store, train, observe } = setup();
-    const stream = personA(13, 60);
-    await train(stream);
-    const at = stream[59].at + MINUTE;
-    expect(await service.recordPromptOutcome({ ...KEY, outcome: 'confirmed_self', at, personalizationAllowed: true })).toEqual({ recorded: true });
-    const row = (await store.get(KEY))!;
-    expect(row.calibration.threshold).toBe(DEFAULT_THRESHOLD + THRESHOLD_STEP);
-    expect(row.calibration.mutedUntil).toBe(at + FALSE_PROMPT_MUTE_MS);
-    const own = personA(14, 2);
-    expect((await observe(own[0].features, at + 3 * DAY_MS)).hint).toBeUndefined();
-    expect((await observe(own[1].features, at + FALSE_PROMPT_MUTE_MS)).hint).toBeDefined();
-  });
-
-  it('keeps the threshold on a true prompt and keeps the session uncertain', async () => {
-    const { service, store, train, observe } = setup();
-    const stream = personA(15, 60);
-    await train(stream);
-    const impostor = session(personB(16, 6), stream[59].at + DAY_MS);
-    let last;
-    for (const m of impostor) last = await observe(m.features, m.at);
-    expect(last?.hint?.consistency).toBe('uncertain');
-    expect(await service.recordPromptOutcome({ ...KEY, outcome: 'someone_else', at: impostor[5].at, personalizationAllowed: true })).toEqual({ recorded: true });
-    const row = (await store.get(KEY))!;
-    expect(row.calibration.threshold).toBe(DEFAULT_THRESHOLD);
-    expect(row.calibration.truePrompts).toBe(1);
-    const own = personA(17, 1)[0];
-    expect((await observe(own.features, impostor[5].at + MINUTE)).hint?.consistency).toBe('uncertain');
-  });
-
-  it('records nothing without consent or without a row', async () => {
-    const { service, store } = setup();
-    expect(await service.recordPromptOutcome({ ...KEY, outcome: 'confirmed_self', at: 1, personalizationAllowed: true })).toEqual({ recorded: false });
-    expect(await service.recordPromptOutcome({ ...KEY, outcome: 'confirmed_self', at: 1, personalizationAllowed: false })).toEqual({ recorded: false });
-    expect(await store.get(KEY)).toBeNull();
-  });
-
-  it('recalibrates with counts only and persists disabled', async () => {
-    const { service, store, observe } = setup();
-    const members = ['m-out', 'm1', 'm2', 'm3', 'm4', 'm5'];
-    for (const personId of members) {
-      const k = { ...KEY, personId };
-      await observe(makeFeatures(), 1000, k);
-      await store.update(k, current => current && {
-        ...current,
-        calibration: { ...current.calibration, sessions: personId === 'm-out' ? 20 : 50, falsePrompts: personId === 'm-out' ? 10 : 1 },
-      });
+  it('(f) never trains the owner profile from a flagged session', async () => {
+    const { store, service } = setup();
+    const rng = mulberry32(5);
+    await enroll(service);
+    const start = await baseline(service, rng, 60);
+    let flagged = false;
+    let at = start;
+    for (let m = 0; m < 8; m++) {
+      at = start + m * 60_000;
+      const result = await observe(service, impostorFeatures(rng, at), at);
+      if (result.hint && result.hint.consistency !== 'consistent') flagged = true;
     }
-    const result = await service.recalibrate('persona-1', 2000);
-    expect(Object.keys(result).sort()).toEqual(['disabled', 'gini']);
-    expect(result.disabled).toBe(1);
-    expect(result.gini).toBeGreaterThanOrEqual(0.4);
-    expect((await store.get({ ...KEY, personId: 'm-out' }))!.calibration.disabled).toBe(true);
-    expect((await store.get({ ...KEY, personId: 'm1' }))!.calibration.disabled).toBe(false);
+    expect(flagged).toBe(true);
+    const before = (await store.get('alice', 'work'))!;
+    for (let m = 1; m <= 5; m++) await observe(service, impostorFeatures(rng, at + m * 60_000), at + m * 60_000);
+    const after = (await store.get('alice', 'work'))!;
+    expect(after.mean).toEqual(before.mean);
+    expect(after.messages).toBe(before.messages);
   });
-});
 
-describe('assess', () => {
-  it('delegates to the fusion with the configured weights', () => {
+  it('(g) closes an idle session into the person\'s calibration scores', async () => {
+    const { store, service } = setup();
+    const rng = mulberry32(6);
+    await enroll(service);
+    const start = await baseline(service, rng, 50);
+    for (let m = 0; m < 6; m++) await observe(service, ownerFeatures(rng, start + m * 60_000), start + m * 60_000);
+    const before = (await store.get('alice', 'work'))!;
+    const next = start + 5 * 60_000 + SESSION_IDLE_MS + 1;
+    await observe(service, ownerFeatures(rng, next), next);
+    const after = (await store.get('alice', 'work'))!;
+    expect(after.selfScores.length).toBe(before.selfScores.length + 1);
+    expect(after.sessions).toBe(before.sessions + 1);
+  });
+
+  it('(h) records prompt answers: confirmed self calibrates, another person pins the session', async () => {
+    const { store, service } = setup();
+    const rng = mulberry32(7);
+    await enroll(service);
+    const start = await baseline(service, rng, 50);
+    for (let m = 0; m < 6; m++) await observe(service, ownerFeatures(rng, start + m * 60_000), start + m * 60_000);
+    const before = (await store.get('alice', 'work'))!;
+    await service.recordPromptOutcome({ personaId: PERSONA, personId: 'alice', space: 'work', outcome: 'confirmed_self', at: start + 6 * 60_000 });
+    const confirmed = (await store.get('alice', 'work'))!;
+    expect(confirmed.falsePrompts).toBe(before.falsePrompts + 1);
+    expect(confirmed.selfScores.length).toBe(before.selfScores.length + 1);
+    expect((await observe(service, ownerFeatures(rng, start + 7 * 60_000), start + 7 * 60_000)).hint).toBeUndefined();
+
+    let at = start + 8 * 60_000;
+    for (let m = 0; m < 5; m++, at += 60_000) await observe(service, ownerFeatures(rng, at), at);
+    await service.recordPromptOutcome({ personaId: PERSONA, personId: 'alice', space: 'work', outcome: 'other_person', at });
+    const pinned = (await store.get('alice', 'work'))!;
+    const result = await observe(service, ownerFeatures(rng, at + 60_000), at + 60_000);
+    expect(result.hint?.consistency).toBe('inconsistent');
+    const after = (await store.get('alice', 'work'))!;
+    expect(after.mean).toEqual(pinned.mean);
+    expect(after.messages).toBe(pinned.messages);
+    expect(after.falsePrompts).toBe(pinned.falsePrompts);
+  });
+
+  it('(i) disables the outlier by fairness and re-enables it on re-enrollment', async () => {
+    const { store, service } = setup();
+    const rng = mulberry32(8);
+    for (const [id, prompts] of [['m1', 0], ['m2', 0], ['m3', 0], ['m4', 0], ['m5', 12]] as const) await store.put(trainedProfile(id, prompts, rng));
+    expect(await service.applyFairness('work', T0 + 4 * WEEK_MS)).toBe(1);
+    const outlier = (await store.get('m5', 'work'))!;
+    expect(outlier).toMatchObject({ disabled: true });
+    expect(['gini', 'budget']).toContain(outlier.disabledReason);
+    expect((await store.get('m1', 'work'))!.disabled).toBe(false);
+    const start = T0 + 5 * WEEK_MS;
+    for (let m = 0; m < 8; m++) {
+      const result = await observe(service, ownerFeatures(rng, start + m * 60_000), start + m * 60_000, { personId: 'm5' });
+      expect(result.hint).toBeUndefined();
+    }
+    expect(await enroll(service, start + DAY_MS, 'm5')).toEqual({ enrolled: true });
+    expect(await store.get('m5', 'work')).toMatchObject({ disabled: false, messages: 0 });
+  });
+
+  it('(j) verifies voice notes only in 1:1 chats without guests, through the injected verifier', async () => {
+    const delegate = { verifyVoiceNote: vi.fn<VoiceNoteVerifier['verifyVoiceNote']>() };
+    delegate.verifyVoiceNote.mockResolvedValue({ band: 'MATCH', netSpeechMs: 5000, modelVersion: 'fake-1' });
+    const { service, log } = setup({ voice: delegate });
+    expect(await service.verifyVoiceNote(voiceInput({ chatKind: 'group' }))).toEqual({ band: 'NO_OPINION', reason: 'guest_or_group' });
+    expect(await service.verifyVoiceNote(voiceInput({ guestAudience: true }))).toEqual({ band: 'NO_OPINION', reason: 'guest_or_group' });
+    expect(delegate.verifyVoiceNote).not.toHaveBeenCalled();
+    const controller = new AbortController();
+    controller.abort();
+    expect(await service.verifyVoiceNote(voiceInput(), controller.signal)).toEqual({ band: 'NO_OPINION', reason: 'timeout' });
+    expect(delegate.verifyVoiceNote).not.toHaveBeenCalled();
+    expect(await service.verifyVoiceNote(voiceInput())).toEqual({ band: 'MATCH', netSpeechMs: 5000, modelVersion: 'fake-1' });
+    expect(delegate.verifyVoiceNote).toHaveBeenCalledTimes(1);
+
+    expect(await setup().service.verifyVoiceNote(voiceInput())).toEqual({ band: 'NO_OPINION', reason: 'disabled' });
+
+    const { error, accessed } = hostileError();
+    const throwing = setup({ voice: { verifyVoiceNote: vi.fn().mockRejectedValue(error) } });
+    expect(await throwing.service.verifyVoiceNote(voiceInput())).toEqual({ band: 'NO_OPINION', reason: 'provider_error' });
+    expect(throwing.log.warn.mock.calls).toEqual([['identity_voice_unavailable']]);
+    expect(accessed).not.toHaveBeenCalled();
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it('(k) never throws or leaks when the store fails with hostile errors', async () => {
+    const { error, accessed } = hostileError();
+    const failing: StyleProfileStore = {
+      get: vi.fn().mockRejectedValue(error), put: vi.fn().mockRejectedValue(error), delete: vi.fn().mockRejectedValue(error),
+      deleteAllFor: vi.fn().mockRejectedValue(error), list: vi.fn().mockRejectedValue(error), sweep: vi.fn().mockRejectedValue(error),
+    };
+    const log = { warn: vi.fn() };
+    const service = new IdentityConfidenceService({ store: failing, log });
+    const features = ownerFeatures(mulberry32(9), T0);
+    expect(await observe(service, features, T0)).toEqual({ stored: false });
+    expect(await observe(service, features, T0, { allowed: false })).toEqual({ stored: false });
+    expect(await enroll(service)).toEqual({ enrolled: false, reason: 'store_unavailable' });
+    expect(await enroll(service, T0, 'alice', 'work', false)).toEqual({ enrolled: false, reason: 'personalization_not_allowed' });
+    await expect(service.recordPromptOutcome({ personaId: PERSONA, personId: 'alice', space: 'work', outcome: 'confirmed_self', at: T0 })).resolves.toBeUndefined();
+    expect(await service.applyFairness('work', T0)).toBe(0);
+    expect(await service.sweep(T0)).toBe(0);
+    await expect(service.forget('alice')).rejects.toThrow(/^identity_forget_failed$/);
+    expect(log.warn.mock.calls.length).toBeGreaterThan(0);
+    for (const call of log.warn.mock.calls) {
+      expect(call).toHaveLength(1);
+      expect(['identity_style_store_unavailable', 'identity_voice_unavailable']).toContain(call[0]);
+    }
+    expect(accessed).not.toHaveBeenCalled();
+  });
+
+  it('(l) keeps work and personal profiles of one person apart', async () => {
+    const { store, service } = setup();
+    const rng = mulberry32(10);
+    await enroll(service, T0, 'alice', 'work');
+    await enroll(service, T0, 'alice', 'personal');
+    const personal = await store.get('alice', 'personal');
+    await baseline(service, rng, 20, T0 + 60_000, 'work');
+    expect(await store.get('alice', 'personal')).toEqual(personal);
+    expect((await store.get('alice', 'work'))!.messages).toBe(20);
+  });
+
+  it('(m) forgets both spaces and sweeps profiles idle for 180 days', async () => {
+    const { store, service } = setup();
+    await enroll(service, T0, 'alice', 'work');
+    await enroll(service, T0, 'alice', 'personal');
+    await enroll(service, T0 + 100 * DAY_MS, 'bob', 'work');
+    await service.forget('alice');
+    expect(await store.get('alice', 'work')).toBeNull();
+    expect(await store.get('alice', 'personal')).toBeNull();
+    await enroll(service, T0, 'carol', 'work');
+    await service.forget('carol', 'work');
+    expect(await store.get('carol', 'work')).toBeNull();
+    await enroll(service, T0, 'dave', 'personal');
+    expect(await service.sweep(T0 + PROFILE_RETENTION_MS + 1)).toBe(1);
+    expect(await store.get('dave', 'personal')).toBeNull();
+    expect(await store.get('bob', 'work')).not.toBeNull();
+  });
+
+  it('rejects malformed features and timestamps without storing', async () => {
+    const { store, service } = setup();
+    await enroll(service);
+    const features = ownerFeatures(mulberry32(11), T0);
+    expect(await observe(service, { ...features, text: CANARY } as unknown as StyleFeatures, T0 + 1)).toEqual({ stored: false });
+    expect(await observe(service, features, Number.NaN)).toEqual({ stored: false });
+    expect(await observe(service, features, T0 + 1, { personaId: '' })).toEqual({ stored: false });
+    expect((await store.get('alice', 'work'))!.messages).toBe(0);
+  });
+
+  it('assesses through the capped fusion', () => {
     const { service } = setup();
-    expect(service.assess({ accountPersonId: 'member-a', verifiedRecently: false })).toEqual({ level: 'account', session: 'consistent', logOdds: 4, capped: false });
-    expect(() => new StyleIdentityService({ store: new InMemoryStyleProfileStore(), weights: { priorAccount: 4, priorVerified: 5, voiceMatch: 1, voiceUncertain: -2, voiceNoMatch: -4.5, styleUncertain: -3.5 } }))
-      .toThrow(RangeError);
+    expect(service.assess({ accountPersonId: 'alice', verifiedRecently: false, style: { source: 'style', consistency: 'uncertain', messages: 6 } }))
+      .toEqual({ level: 'unverified', session: 'uncertain', logOdds: 1, capped: false });
   });
 });

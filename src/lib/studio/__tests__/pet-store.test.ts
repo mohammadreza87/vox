@@ -3,7 +3,7 @@ import { join } from 'path';
 import { describe, expect, it } from 'vitest';
 import { newCare } from '../../pet/care';
 import { NEED_FLOOR, type PetCare } from '../../pet/types';
-import { fakeFirestore } from '../../tireh/identity/__tests__/fake-firestore';
+import { fakeFirestore } from './fake-firestore';
 import { FilePetStore, FirestorePetStore, petStoreFor, sanitizeCare, type PetStore } from '../pet-store';
 import { Studio } from '../service';
 import { makeStudio, tempDir } from './helpers';

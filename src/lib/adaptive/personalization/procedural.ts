@@ -748,6 +748,9 @@ export class ReplyStyleBandit {
         at: now,
         expiresAt: now + EVAL_RETENTION_MS,
       };
+      // Re-check the gate immediately before the evaluation-row write, so a withdrawal that races
+      // choose() never leaves a fresh row behind (main-lineage hardening).
+      if (!(await this.allowed(scope))) return closed();
       try {
         await this.store.recordExposure(evalRowSchema.parse(row));
       } catch {

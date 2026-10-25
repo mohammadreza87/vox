@@ -1,239 +1,149 @@
 /**
- * Rolling per-person style profile (docs/AGENT_INTELLIGENCE_SOLUTION.md 4.6, 4.9).
+ * Rolling per-person style profile (S10L): a time-decayed exponential moving
+ * average of content-free style vectors with a 90-day half-life, a diagonal
+ * Gaussian per dimension, and re-baselining after long absences.
  *
- * A row holds ONLY aggregate statistics: decayed weights, means, second moments
- * and category counts over content-free features. It never holds text, a
- * single message's features, session state or hints. It exists only under
- * optional.personalization.
- *
- * Retention (resolves 4.9 phase 0 "7-day-expiring" against Step 10's rolling
- * profile): statistics reset after 7 days without a learned message, the
- * per-person calibration survives up to 90 days of inactivity, then the whole
- * row is deleted.
+ * Pure functions over an immutable StyleProfile; no I/O. Every field is a
+ * number, a boolean, a fixed literal or the person id needed for erasure: a
+ * profile can never hold message text. Profiles exist only under the
+ * optional.personalization purpose.
  */
+import { createHash } from 'crypto';
 import { z } from 'zod';
-import type { StyleFeatures } from './style-features';
+import { BINARY_VECTOR_DIMS, STYLE_VECTOR_DIM } from './style-features';
+import type { IdentitySpace } from './types';
 
 export const DAY_MS = 86_400_000;
-export const STYLE_PROFILE_VERSION = 1 as const;
+export const WEEK_MS = 7 * DAY_MS;
 export const HALF_LIFE_MS = 90 * DAY_MS;
 export const MIN_PROFILE_MESSAGES = 50;
-export const STYLE_PROFILE_TTL_MS = 7 * DAY_MS;
-export const ABSENCE_REBASELINE_MS = STYLE_PROFILE_TTL_MS;
-export const CALIBRATION_RETENTION_MS = 90 * DAY_MS;
+export const ABSENCE_REBASELINE_MS = 30 * DAY_MS;
+export const MIN_REBASELINE_MESSAGES = 20;
+export const REBASELINE_WEIGHT_CAP = 10;
 export const VARIANCE_FLOOR = 0.0025;
-/** Mirrors test.ts DEFAULT_THRESHOLD (kept separate to avoid an import cycle; a test asserts equality). */
-const INITIAL_THRESHOLD = 5;
+export const MAX_SELF_SCORES = 64;
+export const PROFILE_RETENTION_MS = 180 * DAY_MS;
+/** Keeps weights finite and schema-valid even under a flood of messages. */
+const MAX_WEIGHT = 1e6;
 
-export const BERNOULLI_KEYS = Object.freeze(['voice', 'followOn', 'edited', 'terminalPunctuation'] as const);
-export const CATEGORICAL_SIZES = Object.freeze({ hourBucket: 6, lengthBucket: 6, digitScript: 5, voiceDurationBucket: 4 } as const);
-export const GAUSSIAN_KEYS = Object.freeze([
-  'persianScriptRatio', 'latinScriptRatio', 'finglishRatio', 'punctuationRate', 'emoticonRate', 'zwnjRate',
-  'arabicVariantRatio', 'repeatedCharRate', 'uppercaseRatio',
-] as const);
+export interface GaussianModel { readonly mean: readonly number[]; readonly variance: readonly number[]; readonly weight: readonly number[] }
 
-export type BernoulliKey = typeof BERNOULLI_KEYS[number];
-export type CategoricalKey = keyof typeof CATEGORICAL_SIZES;
-export type GaussianKey = typeof GAUSSIAN_KEYS[number];
-
-export interface BernoulliStat { readonly w: number; readonly p: number }
-export interface CategoricalStat { readonly w: number; readonly counts: readonly number[] }
-export interface GaussianStat { readonly w: number; readonly mean: number; readonly m2: number }
-
-export interface StyleCalibration {
-  readonly threshold: number;
-  readonly sessions: number;
-  readonly falsePrompts: number;
-  readonly truePrompts: number;
-  readonly falsePromptAt: readonly number[];
-  readonly lastRelaxAt: number;
-  readonly mutedUntil: number;
-  readonly disabled: boolean;
-}
-
-export interface StyleProfileKey {
-  readonly personaId: string;
-  readonly personId: string;
-  readonly space: 'work' | 'personal';
-}
-
-export interface StyleProfile extends StyleProfileKey {
-  readonly version: typeof STYLE_PROFILE_VERSION;
-  readonly purpose: 'optional.personalization';
-  readonly epoch: number;
-  readonly messages: number;
-  readonly baselineAt: number;
-  readonly lastAt: number;
-  readonly expiresAt: number;
-  readonly bernoulli: Readonly<Record<BernoulliKey, BernoulliStat>>;
-  readonly categorical: Readonly<Record<CategoricalKey, CategoricalStat>>;
-  readonly gaussian: Readonly<Record<GaussianKey, GaussianStat>>;
-  readonly calibration: StyleCalibration;
-}
-
-const finite = z.number().refine(Number.isFinite, { message: 'not_finite' });
-const nonNegative = finite.refine(x => x >= 0, { message: 'negative' });
-const count = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
-const idSchema = z.string().min(1).max(200);
-
-const bernoulliStatSchema = z.object({ w: nonNegative, p: finite.refine(x => x >= 0 && x <= 1) }).strict();
-const gaussianStatSchema = z.object({ w: nonNegative, mean: finite, m2: nonNegative }).strict();
-const categoricalStatSchema = (size: number) => z.object({ w: nonNegative, counts: z.array(nonNegative).length(size) }).strict();
-
-const calibrationSchema = z.object({
-  threshold: finite.refine(x => x > 0),
-  sessions: count,
-  falsePrompts: count,
-  truePrompts: count,
-  falsePromptAt: z.array(nonNegative).max(8),
-  lastRelaxAt: nonNegative,
-  mutedUntil: nonNegative,
-  disabled: z.boolean(),
-}).strict();
-
-/** Strict at every level; ids 1..200 chars; all numbers finite; counts length = CATEGORICAL_SIZES. */
-export const styleProfileSchema: z.ZodType<StyleProfile> = z.object({
-  personaId: idSchema,
-  personId: idSchema,
-  space: z.enum(['work', 'personal']),
-  version: z.literal(STYLE_PROFILE_VERSION),
-  purpose: z.literal('optional.personalization'),
-  epoch: count,
-  messages: count,
-  baselineAt: nonNegative,
-  lastAt: nonNegative,
-  expiresAt: nonNegative,
-  bernoulli: z.object({
-    voice: bernoulliStatSchema, followOn: bernoulliStatSchema, edited: bernoulliStatSchema, terminalPunctuation: bernoulliStatSchema,
-  }).strict(),
-  categorical: z.object({
-    hourBucket: categoricalStatSchema(CATEGORICAL_SIZES.hourBucket),
-    lengthBucket: categoricalStatSchema(CATEGORICAL_SIZES.lengthBucket),
-    digitScript: categoricalStatSchema(CATEGORICAL_SIZES.digitScript),
-    voiceDurationBucket: categoricalStatSchema(CATEGORICAL_SIZES.voiceDurationBucket),
-  }).strict(),
-  gaussian: z.object({
-    persianScriptRatio: gaussianStatSchema, latinScriptRatio: gaussianStatSchema, finglishRatio: gaussianStatSchema,
-    punctuationRate: gaussianStatSchema, emoticonRate: gaussianStatSchema, zwnjRate: gaussianStatSchema,
-    arabicVariantRatio: gaussianStatSchema, repeatedCharRate: gaussianStatSchema, uppercaseRatio: gaussianStatSchema,
-  }).strict(),
-  calibration: calibrationSchema,
-}).strict();
-
-function initialCalibration(at: number): StyleCalibration {
-  return { threshold: INITIAL_THRESHOLD, sessions: 0, falsePrompts: 0, truePrompts: 0, falsePromptAt: [], lastRelaxAt: at, mutedUntil: 0, disabled: false };
-}
-
-function emptyStats(): Pick<StyleProfile, 'bernoulli' | 'categorical' | 'gaussian'> {
-  const bernoulli = Object.fromEntries(BERNOULLI_KEYS.map(k => [k, { w: 0, p: 0 }])) as Record<BernoulliKey, BernoulliStat>;
-  const zeros = (k: CategoricalKey): CategoricalStat => ({ w: 0, counts: new Array<number>(CATEGORICAL_SIZES[k]).fill(0) });
-  const categorical: Record<CategoricalKey, CategoricalStat> = {
-    hourBucket: zeros('hourBucket'), lengthBucket: zeros('lengthBucket'), digitScript: zeros('digitScript'),
-    voiceDurationBucket: zeros('voiceDurationBucket'),
-  };
-  const gaussian = Object.fromEntries(GAUSSIAN_KEYS.map(k => [k, { w: 0, mean: 0, m2: 0 }])) as Record<GaussianKey, GaussianStat>;
-  return { bernoulli, categorical, gaussian };
-}
-
-/** Next time the sweeper must act: the statistics TTL while there are statistics, else the row's deletion time. */
-function nextExpiry(messages: number, lastAt: number): number {
-  return lastAt + (messages > 0 ? STYLE_PROFILE_TTL_MS : CALIBRATION_RETENTION_MS);
-}
-
-export function emptyProfile(key: StyleProfileKey, epoch: number, at: number, calibration?: StyleCalibration): StyleProfile {
-  return {
-    personaId: key.personaId, personId: key.personId, space: key.space,
-    version: STYLE_PROFILE_VERSION, purpose: 'optional.personalization', epoch,
-    messages: 0, baselineAt: at, lastAt: at, expiresAt: nextExpiry(0, at),
-    ...emptyStats(),
-    calibration: calibration ?? initialCalibration(at),
-  };
-}
-
-export function decayFactor(dtMs: number): number {
-  if (!Number.isFinite(dtMs) || dtMs <= 0) return 1;
-  return 0.5 ** (dtMs / HALF_LIFE_MS);
-}
-
-function decayBernoulli(stat: BernoulliStat, d: number, x?: boolean): BernoulliStat {
-  const w = d * stat.w + (x === undefined ? 0 : 1);
-  if (x === undefined) return d === 1 ? stat : { w, p: stat.p };
-  return { w, p: stat.p + ((x ? 1 : 0) - stat.p) / w };
-}
-
-function decayCategorical(stat: CategoricalStat, d: number, index?: number): CategoricalStat {
-  if (index === undefined && d === 1) return stat;
-  const counts = stat.counts.map((c, i) => d * c + (i === index ? 1 : 0));
-  return { w: d * stat.w + (index === undefined ? 0 : 1), counts };
-}
-
-function decayGaussian(stat: GaussianStat, d: number, x?: number): GaussianStat {
-  if (x === undefined) return d === 1 ? stat : { w: d * stat.w, mean: stat.mean, m2: d * stat.m2 };
-  // Weighted Welford with exponential decay (new observation weight 1).
-  const w = d * stat.w + 1;
-  const delta = x - stat.mean;
-  const mean = stat.mean + delta / w;
-  const m2 = Math.max(0, d * stat.m2 + delta * (x - mean));
-  return { w, mean, m2 };
-}
+const UNKNOWN_VARIANCE: readonly number[] = Object.freeze(Array.from({ length: STYLE_VECTOR_DIM }, (_, d) =>
+  (BINARY_VECTOR_DIMS.includes(d) ? 0.25 : 1 / 12)));
 
 /**
- * Folds one message's features into the profile. Every statistic decays by the
- * elapsed time; only the dimensions present in this message receive the new
- * observation (text-only keys on text, voiceDurationBucket on voice). Pure.
+ * The explicit unknown class: an uninformed sender. Mean 0.5 everywhere; the
+ * variance of a fair coin on binary dims and of a uniform [0, 1] value
+ * otherwise. Weights are large finite numbers so every dim counts as learned.
  */
-export function foldFeatures(profile: StyleProfile, features: StyleFeatures, at: number): StyleProfile {
-  const d = decayFactor(at - profile.lastAt);
-  const text = features.modality === 'text' ? features.text : undefined;
-  const voiceBucket = features.modality === 'voice' ? features.voiceDurationBucket : undefined;
-  const bernoulli: Record<BernoulliKey, BernoulliStat> = {
-    voice: decayBernoulli(profile.bernoulli.voice, d, features.modality === 'voice'),
-    followOn: decayBernoulli(profile.bernoulli.followOn, d, features.followOn),
-    edited: decayBernoulli(profile.bernoulli.edited, d, features.edited),
-    terminalPunctuation: decayBernoulli(profile.bernoulli.terminalPunctuation, d, text?.terminalPunctuation),
+export const UNKNOWN_MODEL: GaussianModel = Object.freeze({
+  mean: Object.freeze(Array.from({ length: STYLE_VECTOR_DIM }, () => 0.5)),
+  variance: UNKNOWN_VARIANCE,
+  weight: Object.freeze(Array.from({ length: STYLE_VECTOR_DIM }, () => 1e6)),
+});
+
+export interface StyleProfile {
+  readonly version: 1; readonly personId: string; readonly space: 'work' | 'personal';
+  readonly purpose: 'optional.personalization'; readonly epoch: number;
+  readonly createdAt: number; readonly updatedAt: number; readonly lastObservedAt?: number; readonly rebaselinedAt?: number;
+  readonly messages: number; readonly sinceBaseline: number; readonly sessions: number;
+  readonly mean: readonly number[]; readonly variance: readonly number[]; readonly weight: readonly number[];
+  readonly selfScores: readonly number[]; readonly falsePrompts: number;
+  readonly disabled: boolean; readonly disabledReason?: 'gini' | 'budget';
+}
+
+const count = z.number().int().min(0);
+const time = z.number().int().min(0);
+const vector = (min: number, max: number) => z.array(z.number().min(min).max(max)).length(STYLE_VECTOR_DIM);
+
+/** Strict: unknown keys (e.g. `text`), wrong lengths and non-finite numbers are rejected. */
+export const styleProfileSchema: z.ZodType<StyleProfile> = z.object({
+  version: z.literal(1),
+  personId: z.string().min(1).max(200),
+  space: z.enum(['work', 'personal']),
+  purpose: z.literal('optional.personalization'),
+  epoch: count,
+  createdAt: time,
+  updatedAt: time,
+  lastObservedAt: time.optional(),
+  rebaselinedAt: time.optional(),
+  messages: count,
+  sinceBaseline: count,
+  sessions: count,
+  mean: vector(0, 1),
+  variance: vector(0, 1),
+  weight: vector(0, MAX_WEIGHT),
+  selfScores: z.array(z.number()).max(MAX_SELF_SCORES),
+  falsePrompts: count,
+  disabled: z.boolean(),
+  disabledReason: z.enum(['gini', 'budget']).optional(),
+}).strict();
+
+export function newProfile(personId: string, space: IdentitySpace, epoch: number, at: number): StyleProfile {
+  return {
+    version: 1, personId, space, purpose: 'optional.personalization', epoch,
+    createdAt: at, updatedAt: at,
+    messages: 0, sinceBaseline: 0, sessions: 0,
+    mean: Array.from({ length: STYLE_VECTOR_DIM }, () => 0.5),
+    variance: [...UNKNOWN_VARIANCE],
+    weight: Array.from({ length: STYLE_VECTOR_DIM }, () => 0),
+    selfScores: [], falsePrompts: 0, disabled: false,
   };
-  const categorical: Record<CategoricalKey, CategoricalStat> = {
-    hourBucket: decayCategorical(profile.categorical.hourBucket, d, features.hourBucket),
-    lengthBucket: decayCategorical(profile.categorical.lengthBucket, d, text?.lengthBucket),
-    digitScript: decayCategorical(profile.categorical.digitScript, d, text?.digitScript),
-    voiceDurationBucket: decayCategorical(profile.categorical.voiceDurationBucket, d, voiceBucket),
+}
+
+/** 2^(-dt / half-life); exactly 0.5 at one half-life, 1 for dt <= 0. */
+export function decayFactor(dtMs: number): number {
+  if (!Number.isFinite(dtMs)) return dtMs > 0 ? 0 : 1;
+  return 2 ** (-Math.max(0, dtMs) / HALF_LIFE_MS);
+}
+
+/** Folds one style vector into the profile; returns a new profile and never mutates its input. */
+export function observeProfile(profile: StyleProfile, vector: readonly (number | null)[], at: number): StyleProfile {
+  const last = profile.lastObservedAt;
+  let weight = [...profile.weight];
+  let sinceBaseline = profile.sinceBaseline;
+  let rebaselinedAt = profile.rebaselinedAt;
+  if (last !== undefined && at - last > ABSENCE_REBASELINE_MS) {
+    sinceBaseline = 0;
+    rebaselinedAt = at;
+    weight = weight.map(w => Math.min(w, REBASELINE_WEIGHT_CAP));
+  }
+  const decay = decayFactor(at - (last ?? at));
+  weight = weight.map(w => w * decay);
+  const mean = [...profile.mean];
+  const variance = [...profile.variance];
+  for (let d = 0; d < STYLE_VECTOR_DIM; d++) {
+    const raw = vector[d];
+    if (raw === null || raw === undefined || !Number.isFinite(raw)) continue;
+    const x = Math.min(1, Math.max(0, raw));
+    const W = weight[d] + 1;
+    const a = 1 / W;
+    const delta = x - mean[d];
+    mean[d] = Math.min(1, Math.max(0, mean[d] + a * delta));
+    variance[d] = Math.min(UNKNOWN_VARIANCE[d], Math.max(VARIANCE_FLOOR, (1 - a) * (variance[d] + a * delta * delta)));
+    weight[d] = Math.min(W, MAX_WEIGHT);
+  }
+  const next: StyleProfile = {
+    ...profile,
+    mean, variance, weight,
+    messages: profile.messages + 1,
+    sinceBaseline: sinceBaseline + 1,
+    updatedAt: at,
+    lastObservedAt: last === undefined ? at : Math.max(last, at),
   };
-  const gaussian = Object.fromEntries(GAUSSIAN_KEYS.map(k => [k, decayGaussian(profile.gaussian[k], d, text?.[k])])) as Record<GaussianKey, GaussianStat>;
-  const lastAt = Math.max(profile.lastAt, at);
-  const messages = profile.messages + 1;
-  return { ...profile, messages, lastAt, expiresAt: nextExpiry(messages, lastAt), bernoulli, categorical, gaussian };
+  return rebaselinedAt === undefined ? next : { ...next, rebaselinedAt };
 }
 
-/** Drops every statistic and keeps the calibration and the last-activity time. */
-export function resetStatistics(profile: StyleProfile, at: number): StyleProfile {
-  return { ...profile, ...emptyStats(), messages: 0, baselineAt: at, expiresAt: nextExpiry(0, profile.lastAt) };
+export function profileReady(p: StyleProfile): boolean {
+  return !p.disabled && p.messages >= MIN_PROFILE_MESSAGES &&
+    p.sinceBaseline >= (p.rebaselinedAt === undefined ? MIN_PROFILE_MESSAGES : MIN_REBASELINE_MESSAGES);
 }
 
-export function isScorable(profile: StyleProfile): boolean {
-  return profile.messages >= MIN_PROFILE_MESSAGES;
+export function personModel(p: StyleProfile): GaussianModel {
+  return { mean: [...p.mean], variance: [...p.variance], weight: [...p.weight] };
 }
 
-export function needsRebaseline(profile: StyleProfile, at: number, epoch: number): boolean {
-  return profile.epoch !== epoch || profile.version !== STYLE_PROFILE_VERSION || at - profile.lastAt >= ABSENCE_REBASELINE_MS;
-}
-
-/** lastAt + CALIBRATION_RETENTION_MS <= now. */
-export function needsDeletion(profile: StyleProfile, now: number): boolean {
-  return profile.lastAt + CALIBRATION_RETENTION_MS <= now;
-}
-
-export function bernoulliP(stat: BernoulliStat): number {
-  const p = (stat.w * stat.p + 1) / (stat.w + 2);
-  return Math.min(0.98, Math.max(0.02, p));
-}
-
-export function categoricalP(stat: CategoricalStat, index: number): number {
-  const size = stat.counts.length;
-  const c = stat.counts[index] ?? 0;
-  return (c + 1) / (stat.w + size);
-}
-
-export function gaussianParams(stat: GaussianStat): { mean: number; variance: number } {
-  const variance = stat.w > 0 ? stat.m2 / stat.w : VARIANCE_FLOOR;
-  return { mean: stat.mean, variance: Math.max(VARIANCE_FLOOR, Number.isFinite(variance) ? variance : VARIANCE_FLOOR) };
+/** Opaque storage id: sha256 over a versioned prefix, the space and the person id; 40 hex chars. */
+export function profileDocId(personId: string, space: IdentitySpace): string {
+  return createHash('sha256').update('vox-style-v1\u0000' + space + '\u0000' + personId).digest('hex').slice(0, 40);
 }

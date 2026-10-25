@@ -1,143 +1,89 @@
 import { describe, expect, it } from 'vitest';
 import { readdirSync, readFileSync } from 'fs';
-import { dirname, join, relative, resolve, sep } from 'path';
-import { authorizeAccess, resolveVerifiedPerson, type AccessRequest, type IdentityContext } from '../../../adaptive';
+import { dirname, resolve } from 'path';
+import { fileURLToPath } from 'url';
+import { authorizeAccess, isAuthorizationCurrent, resolveVerifiedPerson, type AccessRequest, type IdentityHint } from '../../../adaptive';
 import { fixture, NOW } from '../../../adaptive/__tests__/fixtures';
-import { StyleIdentityService } from '../service';
-import { InMemoryStyleProfileStore } from '../store';
-import type { IdentitySignals } from '../types';
+import { fuseIdentity } from '../fusion';
 
-const SRC = join(process.cwd(), 'src');
-const IDENTITY_DIR = join(SRC, 'lib', 'tireh', 'identity');
-const ADAPTIVE_DIR = join(SRC, 'lib', 'adaptive');
+const HINT: IdentityHint = { source: 'voice_match', claimedPersonId: 'bob', speakerLabel: 'Bob' };
+// Resolved from this file's path (Vite rewrites `new URL(relative, import.meta.url)` into asset URLs).
+const HERE = dirname(fileURLToPath(import.meta.url));
+const source = (relative: string): string => readFileSync(resolve(HERE, relative), 'utf8');
 
-function walk(dir: string): string[] {
-  return readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
-    const path = join(dir, entry.name);
-    if (entry.isDirectory()) return entry.name === 'node_modules' ? [] : walk(path);
-    return /\.(ts|tsx|mts)$/.test(entry.name) ? [path] : [];
-  });
+function hinted(request: AccessRequest): AccessRequest[] {
+  return [
+    { ...request, identity: { ...request.identity, ...HINT } } as AccessRequest,
+    { ...request, hint: HINT, identityHint: HINT, style: { source: 'style', consistency: 'inconsistent', messages: 9 },
+      voice: { hint: HINT, verification: { band: 'MATCH', netSpeechMs: 9000, modelVersion: 'fake' } },
+      identity: { ...request.identity, level: 'verified' } } as unknown as AccessRequest,
+  ];
 }
-const isTest = (path: string) => path.split(sep).includes('__tests__') || /\.(test|spec)\.tsx?$/.test(path);
-const within = (path: string, dir: string) => path === dir || path.startsWith(dir + sep);
 
-interface ImportRef { readonly specifier: string; readonly typeOnly: boolean; readonly statement: string }
-function importsOf(source: string): ImportRef[] {
-  const refs: ImportRef[] = [];
-  for (const m of source.matchAll(/\b(import|export)\s+(type\s+)?([^;'"]*?)\s*from\s*['"]([^'"]+)['"]/g)) {
-    refs.push({ specifier: m[4], typeOnly: Boolean(m[2]), statement: m[0] });
-  }
-  for (const m of source.matchAll(/\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)|\brequire\s*\(\s*['"]([^'"]+)['"]\s*\)|^\s*import\s+['"]([^'"]+)['"]/gm)) {
-    refs.push({ specifier: m[1] ?? m[2] ?? m[3], typeOnly: false, statement: m[0] });
-  }
-  return refs;
-}
-function resolveSpecifier(specifier: string, fromFile: string): string | null {
-  if (specifier.startsWith('.')) return resolve(dirname(fromFile), specifier);
-  if (specifier.startsWith('@/')) return join(SRC, specifier.slice(2));
-  return null;
-}
-const resolvesInto = (target: string | null, dir: string) =>
-  target !== null && (within(target, dir) || within(target.replace(/\.(ts|tsx)$/, ''), dir) || target === `${dir}.ts`);
-
-const identitySources = walk(IDENTITY_DIR).filter(path => !isTest(path));
-const adaptiveSources = walk(ADAPTIVE_DIR).filter(path => !isTest(path));
-
-describe('hint isolation at runtime', () => {
-  it('ignores hint keys spread into the identity context', () => {
+describe('identity hints never reach the adaptive policy inputs', () => {
+  it('(a) leaves authorizeAccess and isAuthorizationCurrent unchanged', () => {
     const { request, snapshot } = fixture();
     const clean = authorizeAccess(request, snapshot, NOW);
     expect(clean.allowed).toBe(true);
-    const polluted = { ...request, identity: { ...request.identity, source: 'voice_match', claimedPersonId: 'bob', speakerLabel: 'bob' } as unknown as IdentityContext };
-    expect(authorizeAccess(polluted, snapshot, NOW)).toEqual(clean);
+    if (!clean.allowed) return;
+    for (const variant of hinted(request)) {
+      const decision = authorizeAccess(variant, snapshot, NOW);
+      expect(decision).toEqual(clean);
+      if (decision.allowed) expect(decision.stamp.requestFingerprint).toBe(clean.stamp.requestFingerprint);
+      expect(isAuthorizationCurrent(clean.stamp, variant, snapshot, NOW)).toBe(true);
+    }
   });
 
-  it('ignores identity-confidence keys at the top level of the request', () => {
+  it('(b) never moves resolveVerifiedPerson to a claimed person', () => {
     const { request, snapshot } = fixture();
-    const clean = authorizeAccess(request, snapshot, NOW);
-    const polluted = {
-      ...request, identityHint: { source: 'voice_match', claimedPersonId: 'bob' }, styleHint: { source: 'style', consistency: 'consistent', messages: 50 },
-      voice: { band: 'MATCH' }, style: { consistency: 'consistent' }, level: 'verified',
-    } as unknown as AccessRequest;
-    expect(authorizeAccess(polluted, snapshot, NOW)).toEqual(clean);
+    expect(resolveVerifiedPerson(request.identity, snapshot.account, snapshot.binding, NOW)).toBe('alice');
+    const claimed = { ...request.identity, ...HINT };
+    expect(resolveVerifiedPerson(claimed, snapshot.account, snapshot.binding, NOW)).toBe('alice');
+    const unselected = { authenticatedAccountId: request.identity.authenticatedAccountId, ...HINT };
+    expect(resolveVerifiedPerson(unselected, snapshot.account, snapshot.binding, NOW)).toBeUndefined();
   });
 
-  it('never lets a hint stand in for a verified person', () => {
-    const { request, snapshot } = fixture();
-    const identity = { authenticatedAccountId: request.identity.authenticatedAccountId, source: 'voice_match', claimedPersonId: 'alice', speakerLabel: 'alice' } as unknown as IdentityContext;
-    expect(authorizeAccess({ ...request, identity }, snapshot, NOW)).toEqual({ allowed: false, reason: 'identity_unverified' });
-    expect(resolveVerifiedPerson(identity, snapshot.account, snapshot.binding, NOW)).toBeUndefined();
-    const withSelected = { ...request.identity, claimedPersonId: 'bob', speakerLabel: 'bob' } as unknown as IdentityContext;
-    expect(resolveVerifiedPerson(withSelected, snapshot.account, snapshot.binding, NOW))
-      .toBe(resolveVerifiedPerson(request.identity, snapshot.account, snapshot.binding, NOW));
-  });
-
-  it('never returns identity or person fields from assess', () => {
-    const service = new StyleIdentityService({ store: new InMemoryStyleProfileStore() });
-    const inputs: IdentitySignals[] = [
-      { accountPersonId: 'alice', verifiedRecently: true },
-      { accountPersonId: 'alice', verifiedRecently: false, voice: { hint: { source: 'voice_match', claimedPersonId: 'bob' }, verification: { band: 'NO_MATCH', netSpeechMs: 9000, modelVersion: 'fake' } } },
-      { accountPersonId: 'alice', verifiedRecently: false, style: { source: 'style', consistency: 'uncertain', messages: 9 } },
-    ];
-    for (const input of inputs) {
-      const keys = Object.keys(service.assess(input));
-      for (const forbidden of ['identity', 'authenticatedAccountId', 'selectedPerson', 'personId']) expect(keys).not.toContain(forbidden);
+  it('(c) keeps hints out of the policy, identity and persistence sources', () => {
+    const forbidden = /IdentityHint|claimedPersonId|speakerLabel|voice_match/;
+    for (const file of ['../../../adaptive/policy.ts', '../../../adaptive/identity.ts', '../../../adaptive/persistence/service.ts']) {
+      expect(source(file), file).not.toMatch(forbidden);
     }
-  });
-});
-
-describe('hint isolation in the source tree', () => {
-  it('finds the sources it scans', () => {
-    expect(identitySources.map(p => relative(IDENTITY_DIR, p)).sort()).toEqual(
-      ['fusion.ts', 'index.ts', 'profile.ts', 'service.ts', 'store.ts', 'style-features.ts', 'test.ts', 'types.ts', 'voice-band.ts']);
-    expect(adaptiveSources.length).toBeGreaterThan(10);
-  });
-
-  it('imports adaptive only as types from adaptive/types', () => {
-    for (const file of identitySources) {
-      for (const ref of importsOf(readFileSync(file, 'utf8'))) {
-        const target = resolveSpecifier(ref.specifier, file);
-        if (!resolvesInto(target, ADAPTIVE_DIR) && !ref.specifier.includes('adaptive')) continue;
-        expect({ file: relative(SRC, file), statement: ref.statement, typeOnly: ref.typeOnly, specifier: ref.specifier })
-          .toEqual({ file: relative(SRC, file), statement: ref.statement, typeOnly: true, specifier: '../../adaptive/types' });
-      }
+    const types = source('../../../adaptive/types.ts');
+    expect(types.match(/export interface IdentityHint\b/g)).toHaveLength(1);
+    for (const name of ['IdentityContext', 'AccessRequest']) {
+      const body = new RegExp(`export interface ${name} \\{([\\s\\S]*?)\\n\\}`).exec(types)?.[1];
+      expect(body, name).toBeDefined();
+      expect(body, name).not.toMatch(/hint|claimedPersonId|speakerLabel|voice_match|level/i);
     }
   });
 
-  it('never touches authorization or verified-identity APIs', () => {
-    for (const file of identitySources) {
-      const source = readFileSync(file, 'utf8');
-      for (const name of ['authorizeAccess', 'resolveVerifiedPerson', 'authenticatedAccountId', 'selectedPerson']) {
-        expect(source.includes(name), `${relative(SRC, file)} mentions ${name}`).toBe(false);
+  it('(d) keeps the identity library away from policy inputs and wiring', () => {
+    const dir = resolve(HERE, '..');
+    const files = readdirSync(dir).filter(name => name.endsWith('.ts'));
+    expect(files.sort()).toEqual(['fusion.ts', 'index.ts', 'profile.ts', 'store.ts', 'style-features.ts', 'test.ts', 'types.ts', 'voice-band.ts']);
+    const adaptiveImports: string[] = [];
+    for (const name of files) {
+      const text = source(`../${name}`);
+      expect(text, name).not.toMatch(/\b(AccessRequest|IdentityContext|PolicySnapshot|authorizeAccess|resolveVerifiedPerson)\b/);
+      for (const line of text.split('\n').filter(l => /^\s*(import|export)\b.*\bfrom\s+'/.test(l))) {
+        const specifier = /from\s+'([^']+)'/.exec(line)?.[1] ?? '';
+        expect(specifier, `${name}: ${line}`).not.toMatch(/adaptive\/policy|adaptive\/persistence|gateway|studio|llm/);
+        if (specifier.includes('adaptive')) adaptiveImports.push(`${name}: ${line.trim()}`);
       }
     }
+    expect(adaptiveImports).toEqual(["types.ts: import type { IdentityHint } from '../../adaptive/types';"]);
   });
 
-  it('keeps the adaptive policy free of identity-confidence imports and hint fields', () => {
-    for (const file of adaptiveSources) {
-      const source = readFileSync(file, 'utf8');
-      for (const ref of importsOf(source)) {
-        expect(resolvesInto(resolveSpecifier(ref.specifier, file), IDENTITY_DIR) || ref.specifier.includes('tireh/identity'),
-          `${relative(SRC, file)} imports ${ref.specifier}`).toBe(false);
-      }
-      if (file !== join(ADAPTIVE_DIR, 'types.ts')) {
-        expect(/claimedPersonId|speakerLabel/.test(source), `${relative(SRC, file)} reads hint fields`).toBe(false);
-      }
-    }
-  });
-
-  it('keeps the style identity library unwired except for the shared voice-band contract', () => {
-    const importers: string[] = [];
-    for (const file of walk(SRC)) {
-      if (isTest(file) || within(file, IDENTITY_DIR)) continue;
-      for (const ref of importsOf(readFileSync(file, 'utf8'))) {
-        if (resolvesInto(resolveSpecifier(ref.specifier, file), IDENTITY_DIR) || ref.specifier.includes('tireh/identity')) {
-          // S11L consumes the shared band/result contract; it does not wire style identity.
-          if (resolveSpecifier(ref.specifier, file)?.replace(/\.(ts|tsx)$/, '') !== join(IDENTITY_DIR, 'voice-band')) importers.push(`${relative(SRC, file)} -> ${ref.specifier}`);
-        }
+  it('(e) never copies a hint into the assessment', () => {
+    for (const band of ['MATCH', 'UNCERTAIN', 'NO_MATCH'] as const) {
+      for (const hint of [HINT, { source: 'voice_match' } as IdentityHint]) {
+        const result = fuseIdentity({ accountPersonId: 'alice', verifiedRecently: true,
+          voice: { hint, verification: { band, netSpeechMs: 7000, modelVersion: 'fake' } } });
+        expect(Object.keys(result).sort()).toEqual(['capped', 'level', 'logOdds', 'session']);
+        expect(Object.values(result)).not.toContain(hint);
+        const json = JSON.stringify(result);
+        for (const token of ['voice_match', 'bob', 'Bob', 'speakerLabel', 'claimedPersonId', 'alice']) expect(json).not.toContain(token);
       }
     }
-    expect(importers).toEqual([]);
-    expect(walk(join(SRC, 'lib', 'tireh')).some(p => p === join(SRC, 'lib', 'tireh', 'identity.ts'))).toBe(false);
   });
 });

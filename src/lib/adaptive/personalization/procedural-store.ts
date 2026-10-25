@@ -8,7 +8,7 @@
  * fields, so a malformed row of a withdrawn subject is still deleted. Rows are
  * content-free by schema: no message text, model output or raw personId.
  */
-import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from 'node:fs';
+import { chmodSync, closeSync, constants, fstatSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeSync } from 'node:fs';
 import { mkdir, rmdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import type { DocumentReference, Firestore, Query } from 'firebase-admin/firestore';
@@ -323,12 +323,22 @@ export class FileReplyStyleStore implements ReplyStyleStore {
   }
 
   private load(): State {
+    let fd: number;
+    try {
+      // O_NOFOLLOW: a symlink planted at the store path fails closed (ELOOP) instead of being read.
+      fd = openSync(this.path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT') return emptyState();
+      if (code === 'ELOOP') throw new Error('invalid_reply_style_store');
+      throw error;
+    }
     let text: string;
     try {
-      text = readFileSync(this.path, 'utf8');
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return emptyState();
-      throw error;
+      if (!fstatSync(fd).isFile()) throw new Error('invalid_reply_style_store');
+      text = readFileSync(fd, 'utf8');
+    } finally {
+      closeSync(fd);
     }
     let raw: unknown;
     try { raw = JSON.parse(text); } catch { throw new Error('invalid_reply_style_store'); }
@@ -364,15 +374,27 @@ export class FileReplyStyleStore implements ReplyStyleStore {
     const json = JSON.stringify(body);
     mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 });
     const tmp = `${this.path}.tmp`;
-    const fd = openSync(tmp, 'w', 0o600);
+    // Under the lock: drop a stale temp file, then create it exclusively without following a link
+    // (O_CREAT | O_EXCL | O_NOFOLLOW), so a planted symlink or pre-existing file is never written through.
     try {
-      writeSync(fd, json);
-      fsyncSync(fd);
-    } finally {
-      closeSync(fd);
+      unlinkSync(tmp);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
-    chmodSync(tmp, 0o600);
-    renameSync(tmp, this.path);
+    const fd = openSync(tmp, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
+    try {
+      try {
+        writeSync(fd, json);
+        fsyncSync(fd);
+      } finally {
+        closeSync(fd);
+      }
+      chmodSync(tmp, 0o600);
+      renameSync(tmp, this.path);
+    } catch (error) {
+      try { unlinkSync(tmp); } catch { /* already gone */ }
+      throw error;
+    }
   }
 }
 

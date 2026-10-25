@@ -1,294 +1,285 @@
 /**
- * Style profile stores: in-memory, local JSON file and Firestore
- * ('vox_style_profiles').
+ * Style profile stores (S10L): in-memory, file and Firestore ('vox_style_profiles').
  *
- * Rows hold aggregate numbers only (see profile.ts). Every written row is
- * parsed with the strict styleProfileSchema first, so an unknown key such as
- * `text` rejects before anything is written; rows that fail the schema on read
- * are treated as absent and deleted. Never stores text, a single message's
- * features, session state or hints. Errors thrown from here are content-free.
+ * Every write and every read is validated with the strict styleProfileSchema,
+ * so nothing outside the content-free profile shape (for example a `text`
+ * field) can be persisted or loaded. Invalid rows are rejected with the fixed
+ * error 'style_profile_invalid' (never carrying values) or, on read, deleted
+ * best-effort and treated as absent. Rows carry no content, message ids, chat
+ * ids or persona ids; Firestore document ids are hashed. No store logs.
  */
-import { createHash } from 'crypto';
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs';
-import { mkdir, rmdir } from 'fs/promises';
+import { chmod, mkdir, readFile, rename, writeFile } from 'fs/promises';
 import { dirname } from 'path';
 import type { Firestore } from 'firebase-admin/firestore';
-import { needsDeletion, resetStatistics, styleProfileSchema, type StyleProfile, type StyleProfileKey } from './profile';
+import { profileDocId, styleProfileSchema, type StyleProfile } from './profile';
+import type { IdentitySpace } from './types';
 
 export const STYLE_PROFILES_COLLECTION = 'vox_style_profiles';
-const FIRESTORE_BATCH_LIMIT = 400;
 
 export interface StyleProfileStore {
-  get(key: StyleProfileKey): Promise<StyleProfile | null>;
-  /** Atomic read-modify-write. Returning null deletes; returning `current` unchanged writes nothing. */
-  update(key: StyleProfileKey, fn: (current: StyleProfile | null) => StyleProfile | null): Promise<StyleProfile | null>;
-  delete(key: StyleProfileKey): Promise<boolean>;
-  /** Personalization withdrawal: every persona and space of that person. */
-  deletePerson(personId: string): Promise<number>;
-  /** Privacy epoch bump: every row of that persona. */
-  deletePersona(personaId: string): Promise<number>;
-  listPersona(personaId: string): Promise<StyleProfile[]>;
-  /** Used by enroll(). */
-  listPerson(personId: string, space: 'work' | 'personal'): Promise<StyleProfile[]>;
-  /** Resets expired statistics and deletes rows past the calibration retention. */
-  sweep(now: number): Promise<{ reset: number; deleted: number }>;
+  get(personId: string, space: 'work' | 'personal'): Promise<StyleProfile | null>;
+  put(profile: StyleProfile): Promise<void>;                 // strict-schema validated; rejects Error('style_profile_invalid')
+  delete(personId: string, space: 'work' | 'personal'): Promise<void>;
+  deleteAllFor(personId: string): Promise<number>;           // both spaces (erasure)
+  list(space: 'work' | 'personal'): Promise<StyleProfile[]>; // fairness evaluation only
+  sweep(cutoff: number): Promise<number>;                    // deletes updatedAt < cutoff
 }
 
-/** sha256 hex of JSON.stringify([personaId, personId, space]). */
-export function styleProfileDocId(key: StyleProfileKey): string {
-  return createHash('sha256').update(JSON.stringify([key.personaId, key.personId, key.space])).digest('hex');
+const SPACES: readonly IdentitySpace[] = ['work', 'personal'];
+
+/** Drops undefined optional fields so files and Firestore never see `undefined`. */
+function clean(profile: StyleProfile): StyleProfile {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(profile)) if (value !== undefined) out[key] = value;
+  return out as unknown as StyleProfile;
 }
 
-function sameKey(row: StyleProfileKey, key: StyleProfileKey): boolean {
-  return row.personaId === key.personaId && row.personId === key.personId && row.space === key.space;
-}
-
-/** Parses a candidate row; null when invalid. Never echoes the row. */
-function parseRow(value: unknown): StyleProfile | null {
+function parse(value: unknown): StyleProfile | null {
   const result = styleProfileSchema.safeParse(value);
-  return result.success ? result.data : null;
+  return result.success ? clean(result.data) : null;
 }
 
-/** Validates a row to write; throws a content-free error. */
-function validRowFor(key: StyleProfileKey, next: StyleProfile): StyleProfile {
-  if (!next || typeof next !== 'object' || !sameKey(next, key)) throw new Error('style_profile_key_mismatch');
-  const parsed = parseRow(next);
+function validated(profile: StyleProfile): StyleProfile {
+  const parsed = parse(profile);
   if (!parsed) throw new Error('style_profile_invalid');
   return parsed;
 }
 
-/** Detached copy so callers never alias stored rows (rows are plain JSON data). */
-function cloneRow(row: StyleProfile): StyleProfile {
-  return JSON.parse(JSON.stringify(row)) as StyleProfile;
-}
-
-/** Shared sweep decision. */
-function sweepRow(row: StyleProfile, now: number): StyleProfile | null | undefined {
-  if (row.expiresAt > now) return undefined;
-  if (needsDeletion(row, now)) return null;
-  return resetStatistics(row, now);
+/** A stored row is only usable for the key it was stored under. */
+function parseFor(value: unknown, docId: string): StyleProfile | null {
+  const parsed = parse(value);
+  return parsed && profileDocId(parsed.personId, parsed.space) === docId ? parsed : null;
 }
 
 export class InMemoryStyleProfileStore implements StyleProfileStore {
-  /** Exposed for tests: docId -> row. */
-  readonly rows = new Map<string, unknown>();
+  private readonly rows = new Map<string, StyleProfile>();
 
-  private read(id: string): StyleProfile | null {
-    if (!this.rows.has(id)) return null;
-    const row = parseRow(this.rows.get(id));
-    if (!row) this.rows.delete(id);
-    return row;
+  async get(personId: string, space: IdentitySpace): Promise<StyleProfile | null> {
+    const id = profileDocId(personId, space);
+    const row = this.rows.get(id);
+    if (row === undefined) return null;
+    const parsed = parseFor(row, id);
+    if (!parsed) { this.rows.delete(id); return null; }
+    return structuredClone(parsed);
   }
 
-  private all(): StyleProfile[] {
-    return [...this.rows.keys()].map(id => this.read(id)).filter((row): row is StyleProfile => row !== null);
+  async put(profile: StyleProfile): Promise<void> {
+    const row = validated(profile);
+    this.rows.set(profileDocId(row.personId, row.space), structuredClone(row));
   }
 
-  async get(key: StyleProfileKey): Promise<StyleProfile | null> {
-    const row = this.read(styleProfileDocId(key));
-    return row && sameKey(row, key) ? row : null;
+  async delete(personId: string, space: IdentitySpace): Promise<void> {
+    this.rows.delete(profileDocId(personId, space));
   }
 
-  async update(key: StyleProfileKey, fn: (current: StyleProfile | null) => StyleProfile | null): Promise<StyleProfile | null> {
-    const id = styleProfileDocId(key);
-    const stored = this.read(id);
-    const current = stored && sameKey(stored, key) ? stored : null;
-    const next = fn(current);
-    if (next === null) { this.rows.delete(id); return null; }
-    if (next === current) return current;
-    const row = validRowFor(key, next);
-    this.rows.set(id, cloneRow(row));
-    return row;
-  }
-
-  async delete(key: StyleProfileKey): Promise<boolean> {
-    return this.rows.delete(styleProfileDocId(key));
-  }
-
-  private deleteWhere(match: (row: StyleProfile) => boolean): number {
+  async deleteAllFor(personId: string): Promise<number> {
     let removed = 0;
-    for (const id of [...this.rows.keys()]) {
-      const row = this.read(id);
-      if (row && match(row)) { this.rows.delete(id); removed++; }
+    for (const space of SPACES) if (this.rows.delete(profileDocId(personId, space))) removed++;
+    return removed;
+  }
+
+  async list(space: IdentitySpace): Promise<StyleProfile[]> {
+    const out: StyleProfile[] = [];
+    for (const [id, row] of [...this.rows.entries()]) {
+      const parsed = parseFor(row, id);
+      if (!parsed) { this.rows.delete(id); continue; }
+      if (parsed.space === space) out.push(structuredClone(parsed));
+    }
+    return out;
+  }
+
+  async sweep(cutoff: number): Promise<number> {
+    let removed = 0;
+    for (const [id, row] of [...this.rows.entries()]) {
+      if (row.updatedAt < cutoff) { this.rows.delete(id); removed++; }
+    }
+    return removed;
+  }
+}
+
+interface FileState { version: 1; profiles: Record<string, unknown> }
+
+/**
+ * JSON file store for the Mac file profile. It assumes ONE writing process:
+ * mutations are serialised through an in-process promise chain, the file is
+ * reloaded at the start of every operation, and writes go through a 0600 temp
+ * file and an atomic rename (as memory/file-store.ts does). If the Studio ever
+ * runs several processes on one profile, port memory/file-store.ts's mkdir lock.
+ */
+export function createFileStyleProfileStore(path: string): StyleProfileStore {
+  let chain: Promise<unknown> = Promise.resolve();
+  const exclusive = <T>(operation: () => Promise<T>): Promise<T> => {
+    const run = chain.then(operation, operation);
+    chain = run.catch(() => undefined);
+    return run;
+  };
+
+  const load = async (): Promise<FileState> => {
+    let raw: string;
+    try {
+      raw = await readFile(path, 'utf8');
+    } catch {
+      return { version: 1, profiles: {} };
+    }
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (typeof parsed === 'object' && parsed !== null && (parsed as { version?: unknown }).version === 1) {
+        const profiles = (parsed as { profiles?: unknown }).profiles;
+        if (typeof profiles === 'object' && profiles !== null && !Array.isArray(profiles)) {
+          return { version: 1, profiles: { ...(profiles as Record<string, unknown>) } };
+        }
+      }
+    } catch {
+      // an unreadable file holds nothing usable
+    }
+    return { version: 1, profiles: {} };
+  };
+
+  const save = async (state: FileState): Promise<void> => {
+    await mkdir(dirname(path), { recursive: true });
+    const tmp = `${path}.tmp`;
+    await writeFile(tmp, JSON.stringify(state), { mode: 0o600 });
+    await chmod(tmp, 0o600);
+    await rename(tmp, path);
+  };
+
+  /** Validates every row; drops invalid ones from `state` and reports whether any were dropped. */
+  const validRows = (state: FileState): { rows: Map<string, StyleProfile>; dropped: boolean } => {
+    const rows = new Map<string, StyleProfile>();
+    let dropped = false;
+    for (const [id, value] of Object.entries(state.profiles)) {
+      const parsed = parseFor(value, id);
+      if (parsed) rows.set(id, parsed);
+      else { delete state.profiles[id]; dropped = true; }
+    }
+    return { rows, dropped };
+  };
+
+  const saveBestEffort = async (state: FileState): Promise<void> => {
+    try { await save(state); } catch { /* best-effort cleanup of invalid rows */ }
+  };
+
+  return {
+    get: (personId, space) => exclusive(async () => {
+      const state = await load();
+      const id = profileDocId(personId, space);
+      if (!(id in state.profiles)) return null;
+      const parsed = parseFor(state.profiles[id], id);
+      if (!parsed) {
+        delete state.profiles[id];
+        await saveBestEffort(state);
+        return null;
+      }
+      return parsed;
+    }),
+    put: (profile) => exclusive(async () => {
+      const row = validated(profile);
+      const state = await load();
+      state.profiles[profileDocId(row.personId, row.space)] = row;
+      await save(state);
+    }),
+    delete: (personId, space) => exclusive(async () => {
+      const state = await load();
+      const id = profileDocId(personId, space);
+      if (!(id in state.profiles)) return;
+      delete state.profiles[id];
+      await save(state);
+    }),
+    deleteAllFor: (personId) => exclusive(async () => {
+      const state = await load();
+      let removed = 0;
+      for (const space of SPACES) {
+        const id = profileDocId(personId, space);
+        if (id in state.profiles) { delete state.profiles[id]; removed++; }
+      }
+      if (removed > 0) await save(state);
+      return removed;
+    }),
+    list: (space) => exclusive(async () => {
+      const state = await load();
+      const { rows, dropped } = validRows(state);
+      if (dropped) await saveBestEffort(state);
+      return [...rows.values()].filter(row => row.space === space);
+    }),
+    sweep: (cutoff) => exclusive(async () => {
+      const state = await load();
+      const { rows, dropped } = validRows(state);
+      let removed = 0;
+      for (const [id, row] of rows) {
+        if (row.updatedAt < cutoff) { delete state.profiles[id]; removed++; }
+      }
+      if (removed > 0 || dropped) await save(state);
+      return removed;
+    }),
+  };
+}
+
+/** Firestore store: documents at vox_style_profiles/{profileDocId}. No composite index is needed. */
+export class FirestoreStyleProfileStore implements StyleProfileStore {
+  constructor(private readonly db: Firestore) {}
+
+  private collection() {
+    return this.db.collection(STYLE_PROFILES_COLLECTION);
+  }
+
+  async get(personId: string, space: IdentitySpace): Promise<StyleProfile | null> {
+    const id = profileDocId(personId, space);
+    const ref = this.collection().doc(id);
+    const snapshot = await ref.get();
+    if (!snapshot.exists) return null;
+    const parsed = parseFor(snapshot.data(), id);
+    if (!parsed) {
+      try { await ref.delete(); } catch { /* best-effort cleanup */ }
+      return null;
+    }
+    return parsed;
+  }
+
+  async put(profile: StyleProfile): Promise<void> {
+    const row = validated(profile);
+    await this.collection().doc(profileDocId(row.personId, row.space)).set(clean(row));
+  }
+
+  async delete(personId: string, space: IdentitySpace): Promise<void> {
+    await this.collection().doc(profileDocId(personId, space)).delete();
+  }
+
+  async deleteAllFor(personId: string): Promise<number> {
+    const ids = new Set(SPACES.map(space => profileDocId(personId, space)));
+    const snapshot = await this.collection().where('personId', '==', personId).get();
+    for (const doc of snapshot.docs) ids.add(doc.id);
+    let removed = 0;
+    for (const id of ids) {
+      const ref = this.collection().doc(id);
+      const existing = await ref.get();
+      if (!existing.exists) continue;
+      await ref.delete();
+      removed++;
     }
     return removed;
   }
 
-  async deletePerson(personId: string): Promise<number> { return this.deleteWhere(row => row.personId === personId); }
-  async deletePersona(personaId: string): Promise<number> { return this.deleteWhere(row => row.personaId === personaId); }
-  async listPersona(personaId: string): Promise<StyleProfile[]> { return this.all().filter(row => row.personaId === personaId); }
-  async listPerson(personId: string, space: 'work' | 'personal'): Promise<StyleProfile[]> {
-    return this.all().filter(row => row.personId === personId && row.space === space);
+  async list(space: IdentitySpace): Promise<StyleProfile[]> {
+    const snapshot = await this.collection().where('space', '==', space).get();
+    const out: StyleProfile[] = [];
+    for (const doc of snapshot.docs) {
+      const parsed = parseFor(doc.data(), doc.id);
+      if (parsed) { if (parsed.space === space) out.push(parsed); continue; }
+      try { await doc.ref.delete(); } catch { /* best-effort cleanup */ }
+    }
+    return out;
   }
 
-  async sweep(now: number): Promise<{ reset: number; deleted: number }> {
-    let reset = 0, deleted = 0;
-    for (const row of this.all()) {
-      const next = sweepRow(row, now);
-      if (next === undefined) continue;
-      const id = styleProfileDocId(row);
-      if (next === null) { this.rows.delete(id); deleted++; } else { this.rows.set(id, cloneRow(validRowFor(row, next))); reset++; }
-    }
-    return { reset, deleted };
-  }
-}
-
-interface StyleProfileFile {
-  version: 1;
-  profiles: unknown[];
-}
-
-/**
- * Local JSON persistence ({version: 1, profiles}), mode 0600, written through a
- * tmp file and rename. Every operation reloads under a process-independent
- * mkdir lock (the memory/file-store.ts pattern). Invalid rows are dropped on load.
- */
-export function createFileStyleProfileStore(path: string): StyleProfileStore {
-  const memory = new InMemoryStyleProfileStore();
-
-  const reload = (): boolean => {
-    memory.rows.clear();
-    if (!existsSync(path)) return false;
-    let state: Partial<StyleProfileFile> = {};
-    try { state = JSON.parse(readFileSync(path, 'utf8')) as Partial<StyleProfileFile>; } catch { return true; }
-    let dropped = !Array.isArray(state.profiles) || state.version !== 1;
-    for (const candidate of Array.isArray(state.profiles) ? state.profiles : []) {
-      const row = parseRow(candidate);
-      if (row) memory.rows.set(styleProfileDocId(row), row); else dropped = true;
-    }
-    return dropped;
-  };
-
-  let directoryReady = false;
-  const save = () => {
-    const state: StyleProfileFile = { version: 1, profiles: [...memory.rows.values()] };
-    writeFileSync(`${path}.tmp`, JSON.stringify(state), { mode: 0o600 });
-    chmodSync(`${path}.tmp`, 0o600);
-    renameSync(`${path}.tmp`, path);
-  };
-
-  const withLock = async <T>(operation: () => Promise<T>, mutates: boolean): Promise<T> => {
-    if (!directoryReady) { mkdirSync(dirname(path), { recursive: true }); directoryReady = true; }
-    let acquired = false;
-    for (let attempts = 0; attempts < 500; attempts++) {
-      try { await mkdir(`${path}.lock`); acquired = true; break; }
-      catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw new Error('style_profile_store_unavailable');
-        await new Promise(resolve => setTimeout(resolve, 10));
+  async sweep(cutoff: number): Promise<number> {
+    let removed = 0;
+    for (const space of SPACES) {
+      for (const row of await this.list(space)) {
+        if (row.updatedAt < cutoff) {
+          await this.collection().doc(profileDocId(row.personId, row.space)).delete();
+          removed++;
+        }
       }
     }
-    if (!acquired) throw new Error('style_profile_store_busy');
-    try {
-      const dropped = reload();
-      const before = mutates ? JSON.stringify([...memory.rows]) : '';
-      const result = await operation();
-      if (dropped || (mutates && JSON.stringify([...memory.rows]) !== before)) save();
-      return result;
-    } finally { await rmdir(`${path}.lock`); }
-  };
-
-  return {
-    get: key => withLock(() => memory.get(key), false),
-    update: (key, fn) => withLock(() => memory.update(key, fn), true),
-    delete: key => withLock(() => memory.delete(key), true),
-    deletePerson: personId => withLock(() => memory.deletePerson(personId), true),
-    deletePersona: personaId => withLock(() => memory.deletePersona(personaId), true),
-    listPersona: personaId => withLock(() => memory.listPersona(personaId), false),
-    listPerson: (personId, space) => withLock(() => memory.listPerson(personId, space), false),
-    sweep: now => withLock(() => memory.sweep(now), true),
-  };
-}
-
-/** Firestore store. Values are plain numbers (epoch ms), never Timestamps; no field is ever undefined. */
-export class FirestoreStyleProfileStore implements StyleProfileStore {
-  constructor(private readonly db: Firestore) {}
-
-  private get collection() {
-    return this.db.collection(STYLE_PROFILES_COLLECTION);
-  }
-
-  async get(key: StyleProfileKey): Promise<StyleProfile | null> {
-    const ref = this.collection.doc(styleProfileDocId(key));
-    const snap = await ref.get();
-    if (!snap.exists) return null;
-    const row = parseRow(snap.data());
-    if (!row) { await ref.delete(); return null; }
-    return sameKey(row, key) ? row : null;
-  }
-
-  async update(key: StyleProfileKey, fn: (current: StyleProfile | null) => StyleProfile | null): Promise<StyleProfile | null> {
-    const ref = this.collection.doc(styleProfileDocId(key));
-    return this.db.runTransaction(async tx => {
-      const snap = await tx.get(ref);
-      const stored = snap.exists ? parseRow(snap.data()) : null;
-      const current = stored && sameKey(stored, key) ? stored : null;
-      const next = fn(current);
-      if (next === null) {
-        if (snap.exists) tx.delete(ref);
-        return null;
-      }
-      if (next === current) return current;
-      const row = validRowFor(key, next);
-      tx.set(ref, row as unknown as Record<string, unknown>);
-      return row;
-    });
-  }
-
-  async delete(key: StyleProfileKey): Promise<boolean> {
-    const ref = this.collection.doc(styleProfileDocId(key));
-    const snap = await ref.get();
-    if (!snap.exists) return false;
-    await ref.delete();
-    return true;
-  }
-
-  private async deleteWhere(field: 'personId' | 'personaId', value: string): Promise<number> {
-    const snap = await this.collection.where(field, '==', value).get();
-    const refs = snap.docs.map(doc => doc.ref);
-    for (let i = 0; i < refs.length; i += FIRESTORE_BATCH_LIMIT) {
-      const batch = this.db.batch();
-      for (const ref of refs.slice(i, i + FIRESTORE_BATCH_LIMIT)) batch.delete(ref);
-      await batch.commit();
-    }
-    return refs.length;
-  }
-
-  deletePerson(personId: string): Promise<number> { return this.deleteWhere('personId', personId); }
-  deletePersona(personaId: string): Promise<number> { return this.deleteWhere('personaId', personaId); }
-
-  private async listWhere(field: 'personId' | 'personaId', value: string): Promise<StyleProfile[]> {
-    const snap = await this.collection.where(field, '==', value).get();
-    const rows: StyleProfile[] = [];
-    for (const doc of snap.docs) {
-      const row = parseRow(doc.data());
-      if (row) rows.push(row); else await doc.ref.delete();
-    }
-    return rows;
-  }
-
-  listPersona(personaId: string): Promise<StyleProfile[]> { return this.listWhere('personaId', personaId); }
-  async listPerson(personId: string, space: 'work' | 'personal'): Promise<StyleProfile[]> {
-    // Filter the space in memory so no composite index is needed.
-    return (await this.listWhere('personId', personId)).filter(row => row.space === space);
-  }
-
-  async sweep(now: number): Promise<{ reset: number; deleted: number }> {
-    const snap = await this.collection.where('expiresAt', '<=', now).get();
-    let reset = 0, deleted = 0;
-    for (const doc of snap.docs) {
-      const outcome = await this.db.runTransaction(async tx => {
-        const fresh = await tx.get(doc.ref);
-        if (!fresh.exists) return 'none' as const;
-        const row = parseRow(fresh.data());
-        const next = row ? sweepRow(row, now) : null;
-        if (next === undefined) return 'none' as const;
-        if (next === null || !row) { tx.delete(doc.ref); return 'deleted' as const; }
-        tx.set(doc.ref, validRowFor(row, next) as unknown as Record<string, unknown>);
-        return 'reset' as const;
-      });
-      if (outcome === 'reset') reset++;
-      else if (outcome === 'deleted') deleted++;
-    }
-    return { reset, deleted };
+    return removed;
   }
 }

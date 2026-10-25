@@ -10,7 +10,7 @@
  * wave A does not have, are omitted here and listed by case name in
  * docs/implementation/agent-intelligence/WAVE_A_MAIN_INTEGRATION.md.
  */
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { Firestore } from 'firebase-admin/firestore';
@@ -295,6 +295,19 @@ describe('main-lineage: gate and audience', () => {
     expect((await bandit(store, { authorize: async () => true }).choose(input())).exposureId).toBeDefined();
   });
 
+  it('a gate that flips to false before the write records nothing', async () => {
+    const store = new InMemoryReplyStyleStore();
+    const record = vi.spyOn(store, 'recordExposure');
+    const gate = vi.fn(async () => true).mockResolvedValueOnce(true).mockResolvedValue(false);
+    const choice = await bandit(store, { authorize: gate }).choose(input());
+    expect(gate).toHaveBeenCalledTimes(2);
+    expect(choice.exposureId).toBeUndefined();
+    expect(Object.values(choice.sources)).not.toContain('sampled');
+    expect(choice.style).toEqual(PERSONA_DEFAULT);
+    expect(record).not.toHaveBeenCalled();
+    expect(await store.listEval()).toEqual([]);
+  });
+
   it('groups and guest audiences never sample', async () => {
     const store = new InMemoryReplyStyleStore();
     const spies = spyAll(store);
@@ -377,6 +390,26 @@ describe('main-lineage: file store', () => {
       expect(choice.exposureId).toBeUndefined();
       expect(readFileSync(file, 'utf8')).toBe(content);
     }
+
+    // Symlinked file fails closed and is never overwritten (main opened with O_NOFOLLOW).
+    const target = tempFile();
+    await bandit(new FileReplyStyleStore(target)).choose(input());
+    const before = readFileSync(target, 'utf8');
+    const link = join(dirname(target), 'link.json');
+    symlinkSync(target, link);
+    const linked = new FileReplyStyleStore(link);
+    await expect(linked.listEval()).rejects.toThrow('invalid_reply_style_store');
+    expect((await bandit(linked).choose(input())).exposureId).toBeUndefined();
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(readFileSync(target, 'utf8')).toBe(before);
+
+    // A symlink planted at the temp path is never written through: the write replaces it, the target is untouched.
+    const victim = join(dirname(target), 'victim.json');
+    writeFileSync(victim, 'untouched');
+    symlinkSync(victim, `${target}.tmp`);
+    expect((await bandit(new FileReplyStyleStore(target)).choose(input())).exposureId).toBeDefined();
+    expect(readFileSync(victim, 'utf8')).toBe('untouched');
+    expect(existsSync(`${target}.tmp`)).toBe(false);
   });
 });
 

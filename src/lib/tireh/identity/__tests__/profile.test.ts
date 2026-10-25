@@ -1,11 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import {
-  ABSENCE_REBASELINE_MS, bernoulliP, CALIBRATION_RETENTION_MS, categoricalP, DAY_MS, decayFactor, emptyProfile, foldFeatures,
-  gaussianParams, HALF_LIFE_MS, isScorable, MIN_PROFILE_MESSAGES, needsDeletion, needsRebaseline, resetStatistics,
-  STYLE_PROFILE_TTL_MS, styleProfileSchema, VARIANCE_FLOOR, type StyleProfile,
+  ABSENCE_REBASELINE_MS, DAY_MS, decayFactor, HALF_LIFE_MS, newProfile, observeProfile, personModel, profileDocId,
+  profileReady, REBASELINE_WEIGHT_CAP, styleProfileSchema, UNKNOWN_MODEL, VARIANCE_FLOOR, type StyleProfile,
 } from '../profile';
-import { defaultCalibration } from '../test';
-import { FIXTURE_KEY, FIXTURE_T0, makeFeatures, personA, trainProfile } from './style-fixtures';
+import { BINARY_VECTOR_DIMS, STYLE_VECTOR_DIM } from '../style-features';
+
+const T0 = Date.UTC(2026, 0, 1);
+/** Small deterministic generator (LCG) so this suite has no fixture dependency. */
+function lcg(seed: number): () => number {
+  let state = seed >>> 0;
+  return () => { state = (Math.imul(state, 1664525) + 1013904223) >>> 0; return state / 4294967296; };
+}
+const constant = (value: number): number[] => Array.from({ length: STYLE_VECTOR_DIM }, () => value);
+const oneDim = (value: number): (number | null)[] => Array.from({ length: STYLE_VECTOR_DIM }, (_, d) => (d === 3 ? value : null));
 
 function deepFreeze<T>(value: T): T {
   if (value && typeof value === 'object') {
@@ -15,155 +22,128 @@ function deepFreeze<T>(value: T): T {
   return value;
 }
 
-const T0 = FIXTURE_T0;
-const empty = () => emptyProfile(FIXTURE_KEY, 0, T0);
+function observeDaily(profile: StyleProfile, vector: readonly (number | null)[], days: number, start: number): StyleProfile {
+  let p = profile;
+  for (let i = 0; i < days; i++) p = observeProfile(p, vector, start + i * DAY_MS);
+  return p;
+}
 
-describe('decay and half-life', () => {
-  it('halves weight every 90 days', () => {
-    expect(Math.abs(decayFactor(HALF_LIFE_MS) - 0.5)).toBeLessThan(1e-12);
-    expect(HALF_LIFE_MS).toBe(90 * DAY_MS);
+describe('style profile', () => {
+  it('(a) decays by half per half-life and never grows', () => {
+    expect(decayFactor(HALF_LIFE_MS)).toBe(0.5);
     expect(decayFactor(0)).toBe(1);
     expect(decayFactor(-5 * DAY_MS)).toBe(1);
-    expect(decayFactor(Number.NaN)).toBe(1);
+    expect(decayFactor(2 * HALF_LIFE_MS)).toBe(0.25);
   });
 
-  it('weights an observation 90 days old at one half', () => {
-    let p = foldFeatures(empty(), makeFeatures({ text: { zwnjRate: 1 } }), T0);
-    p = foldFeatures(p, makeFeatures({ text: { zwnjRate: 0 } }), T0 + HALF_LIFE_MS);
-    expect(p.gaussian.zwnjRate.w).toBeCloseTo(1.5, 12);
-    expect(Math.abs(p.gaussian.zwnjRate.mean - 1 / 3)).toBeLessThan(1e-9);
-    // Weighted variance: 0.5 * (1 - 1/3)^2 + 1 * (0 - 1/3)^2, over w = 1.5.
-    expect(p.gaussian.zwnjRate.m2 / p.gaussian.zwnjRate.w).toBeCloseTo((0.5 * (4 / 9) + 1 / 9) / 1.5, 9);
-  });
-
-  it('keeps categorical counts summing to the weight', () => {
-    const p = trainProfile(personA(5, 120));
-    for (const stat of Object.values(p.categorical)) {
-      expect(stat.counts.reduce((a, b) => a + b, 0)).toBeCloseTo(stat.w, 9);
+  it('(b) converges to the steady-state weight and the constant mean', () => {
+    const p = observeDaily(newProfile('alice', 'work', 1, T0), constant(0.3), 2000, T0);
+    const expected = 1 / (1 - 2 ** (-1 / 90));
+    expect(expected).toBeCloseTo(130.3, 0);
+    for (let d = 0; d < STYLE_VECTOR_DIM; d++) {
+      expect(Math.abs(p.weight[d] - expected) / expected).toBeLessThan(0.01);
+      expect(p.mean[d]).toBeCloseTo(0.3, 9);
     }
   });
-});
 
-describe('warm-up', () => {
-  it('scores only from 50 messages', () => {
-    const stream = personA(7, MIN_PROFILE_MESSAGES);
-    expect(isScorable(trainProfile(stream.slice(0, 49)))).toBe(false);
-    expect(isScorable(trainProfile(stream))).toBe(true);
-    expect(MIN_PROFILE_MESSAGES).toBe(50);
-  });
-});
-
-describe('modality-specific keys', () => {
-  it('does not move text-only keys on voice messages or voice duration on text', () => {
-    const base = trainProfile(personA(9, 30));
-    const at = base.lastAt;
-    const afterVoice = foldFeatures(base, makeFeatures({ modality: 'voice', voiceDurationBucket: 2 }), at);
-    expect(afterVoice.gaussian).toEqual(base.gaussian);
-    expect(afterVoice.categorical.lengthBucket).toEqual(base.categorical.lengthBucket);
-    expect(afterVoice.categorical.digitScript).toEqual(base.categorical.digitScript);
-    expect(afterVoice.bernoulli.terminalPunctuation).toEqual(base.bernoulli.terminalPunctuation);
-    expect(afterVoice.categorical.voiceDurationBucket).not.toEqual(base.categorical.voiceDurationBucket);
-
-    const afterText = foldFeatures(base, makeFeatures({ text: { zwnjRate: 0.5 } }), at);
-    expect(afterText.categorical.voiceDurationBucket).toEqual(base.categorical.voiceDurationBucket);
-    expect(afterText.gaussian.zwnjRate).not.toEqual(base.gaussian.zwnjRate);
-
-    // Later in time untouched keys only decay: their means and distributions stay put.
-    const later = foldFeatures(base, makeFeatures({ modality: 'voice' }), at + 10 * DAY_MS);
-    expect(later.gaussian.zwnjRate.mean).toBe(base.gaussian.zwnjRate.mean);
-    expect(gaussianParams(later.gaussian.zwnjRate).variance).toBeCloseTo(gaussianParams(base.gaussian.zwnjRate).variance, 12);
-    expect(later.bernoulli.terminalPunctuation.p).toBe(base.bernoulli.terminalPunctuation.p);
-  });
-});
-
-describe('re-baseline and retention', () => {
-  it('needs a re-baseline on epoch, version or 7 days of absence', () => {
-    const p = trainProfile(personA(11, 60));
-    expect(needsRebaseline(p, p.lastAt + DAY_MS, 0)).toBe(false);
-    expect(needsRebaseline(p, p.lastAt + DAY_MS, 1)).toBe(true);
-    expect(needsRebaseline({ ...p, version: 2 } as unknown as StyleProfile, p.lastAt, 0)).toBe(true);
-    expect(needsRebaseline(p, p.lastAt + ABSENCE_REBASELINE_MS - 1, 0)).toBe(false);
-    expect(needsRebaseline(p, p.lastAt + ABSENCE_REBASELINE_MS, 0)).toBe(true);
-    expect(ABSENCE_REBASELINE_MS).toBe(7 * DAY_MS);
-    expect(p.expiresAt).toBe(p.lastAt + STYLE_PROFILE_TTL_MS);
+  it('(c) weights recent behaviour more, exactly as an exponentially weighted mean', () => {
+    let p = newProfile('alice', 'work', 1, T0);
+    const xs: number[] = [];
+    for (let i = 0; i < 270; i++) xs.push(i < 180 ? 0.2 : 0.8);
+    p = xs.reduce((acc, x, i) => observeProfile(acc, oneDim(x), T0 + i * DAY_MS), p);
+    // Reference: weight of message i at the last timestamp is 2^(-(269 - i) days / half-life).
+    let num = 0, den = 0;
+    xs.forEach((x, i) => { const w = 2 ** (-((269 - i) * DAY_MS) / HALF_LIFE_MS); num += w * x; den += w; });
+    const unweighted = xs.reduce((a, b) => a + b, 0) / xs.length;
+    expect(p.mean[3]).toBeCloseTo(num / den, 9);
+    expect(p.mean[3]).toBeGreaterThan(0.2);
+    expect(p.mean[3]).toBeLessThan(0.8);
+    expect(Math.abs(p.mean[3] - 0.8)).toBeLessThan(Math.abs(unweighted - 0.8));
   });
 
-  it('resets statistics but keeps the calibration', () => {
-    const p = trainProfile(personA(13, 60));
-    const calibrated = { ...p, calibration: { ...p.calibration, threshold: 8, falsePrompts: 2 } };
-    const reset = resetStatistics(calibrated, p.lastAt + 8 * DAY_MS);
-    expect(reset.messages).toBe(0);
-    expect(reset.calibration).toEqual(calibrated.calibration);
-    expect(reset.baselineAt).toBe(p.lastAt + 8 * DAY_MS);
-    expect(reset.gaussian).toEqual(empty().gaussian);
-    expect(reset.categorical).toEqual(empty().categorical);
-    expect(reset.lastAt).toBe(p.lastAt);
-    // With no statistics left, the next sweeper action is deletion.
-    expect(reset.expiresAt).toBe(p.lastAt + CALIBRATION_RETENTION_MS);
+  it('(d) is ready only from 50 messages', () => {
+    const p49 = observeDaily(newProfile('alice', 'work', 1, T0), constant(0.5), 49, T0);
+    expect(profileReady(p49)).toBe(false);
+    expect(profileReady(observeProfile(p49, constant(0.5), T0 + 49 * DAY_MS))).toBe(true);
+    expect(profileReady({ ...observeProfile(p49, constant(0.5), T0 + 49 * DAY_MS), disabled: true })).toBe(false);
   });
 
-  it('deletes rows 90 days after the last activity', () => {
-    const p = trainProfile(personA(15, 10));
-    expect(needsDeletion(p, p.lastAt + CALIBRATION_RETENTION_MS - 1)).toBe(false);
-    expect(needsDeletion(p, p.lastAt + CALIBRATION_RETENTION_MS)).toBe(true);
+  it('(e) re-baselines after a 31-day absence', () => {
+    const before = observeDaily(newProfile('alice', 'work', 1, T0), constant(0.5), 60, T0);
+    expect(profileReady(before)).toBe(true);
+    const gapAt = (before.lastObservedAt ?? 0) + 31 * DAY_MS;
+    expect(31 * DAY_MS).toBeGreaterThan(ABSENCE_REBASELINE_MS);
+    let p = observeProfile(before, constant(0.5), gapAt);
+    expect(p.sinceBaseline).toBe(1);
+    expect(p.rebaselinedAt).toBe(gapAt);
+    expect(p.messages).toBe(61);
+    for (const w of p.weight) expect(w).toBeLessThanOrEqual(REBASELINE_WEIGHT_CAP);
+    expect(profileReady(p)).toBe(false);
+    for (let i = 1; i < 19; i++) p = observeProfile(p, constant(0.5), gapAt + i * DAY_MS);
+    expect(p.sinceBaseline).toBe(19);
+    expect(profileReady(p)).toBe(false);
+    p = observeProfile(p, constant(0.5), gapAt + 19 * DAY_MS);
+    expect(profileReady(p)).toBe(true);
   });
 
-  it('starts empty profiles with the default calibration', () => {
-    expect(empty().calibration).toEqual(defaultCalibration(T0));
-    expect(empty().purpose).toBe('optional.personalization');
-    expect(empty().version).toBe(1);
-  });
-});
-
-describe('probabilities', () => {
-  it('floors the Gaussian variance', () => {
-    let p = empty();
-    for (let i = 0; i < 100; i++) p = foldFeatures(p, makeFeatures({ text: { zwnjRate: 0.3 } }), T0 + i);
-    expect(gaussianParams(p.gaussian.zwnjRate).variance).toBe(VARIANCE_FLOOR);
-    expect(gaussianParams(empty().gaussian.zwnjRate).variance).toBe(VARIANCE_FLOOR);
-  });
-
-  it('smooths Bernoulli and categorical estimates', () => {
-    expect(bernoulliP({ w: 0, p: 0 })).toBe(0.5);
-    expect(bernoulliP({ w: 1000, p: 1 })).toBe(0.98);
-    expect(bernoulliP({ w: 1000, p: 0 })).toBe(0.02);
-    expect(categoricalP({ w: 0, counts: [0, 0, 0, 0] }, 2)).toBe(0.25);
-    expect(categoricalP({ w: 2, counts: [2, 0, 0, 0] }, 0)).toBe(0.5);
-  });
-});
-
-describe('styleProfileSchema', () => {
-  const valid = trainProfile(personA(17, 20));
-
-  it('accepts trained profiles', () => {
-    expect(styleProfileSchema.safeParse(valid).success).toBe(true);
+  it('(f) keeps variance within [floor, unknown variance]', () => {
+    const rng = lcg(7);
+    let p = newProfile('alice', 'work', 1, T0);
+    for (let i = 0; i < 400; i++) {
+      const v = Array.from({ length: STYLE_VECTOR_DIM }, (_, d) => (BINARY_VECTOR_DIMS.includes(d) ? (rng() < 0.5 ? 0 : 1) : rng()));
+      p = observeProfile(p, i % 50 === 0 ? constant(0.5) : v, T0 + i * 60_000);
+      for (let d = 0; d < STYLE_VECTOR_DIM; d++) {
+        expect(p.variance[d]).toBeGreaterThanOrEqual(VARIANCE_FLOOR);
+        expect(p.variance[d]).toBeLessThanOrEqual(UNKNOWN_MODEL.variance[d]);
+      }
+    }
+    expect(styleProfileSchema.safeParse(p).success).toBe(true);
   });
 
-  it('rejects extra keys at every level and non-finite numbers', () => {
-    const cases: unknown[] = [
-      { ...valid, text: 'secret' },
-      { ...valid, gaussian: { ...valid.gaussian, zwnjRate: { ...valid.gaussian.zwnjRate, sample: 'secret' } } },
-      { ...valid, bernoulli: { ...valid.bernoulli, extra: { w: 1, p: 0.5 } } },
-      { ...valid, calibration: { ...valid.calibration, note: 'secret' } },
-      { ...valid, messages: Number.NaN },
-      { ...valid, lastAt: Number.POSITIVE_INFINITY },
-      { ...valid, gaussian: { ...valid.gaussian, zwnjRate: { ...valid.gaussian.zwnjRate, mean: Number.NaN } } },
-      { ...valid, categorical: { ...valid.categorical, hourBucket: { w: 1, counts: [1, 0] } } },
-      { ...valid, personId: '' },
-      { ...valid, personId: 'x'.repeat(201) },
-      { ...valid, purpose: 'core.conversation' },
-    ];
-    for (const value of cases) expect(styleProfileSchema.safeParse(value).success).toBe(false);
+  it('(g) leaves null dims untouched', () => {
+    const p0 = newProfile('alice', 'work', 1, T0);
+    const p = observeProfile(p0, oneDim(0.9), T0);
+    for (let d = 0; d < STYLE_VECTOR_DIM; d++) {
+      if (d === 3) { expect(p.mean[d]).toBe(0.9); expect(p.weight[d]).toBe(1); continue; }
+      expect(p.mean[d]).toBe(p0.mean[d]);
+      expect(p.variance[d]).toBe(p0.variance[d]);
+      expect(p.weight[d]).toBe(0);
+    }
   });
-});
 
-describe('purity', () => {
-  it('never mutates its input', () => {
-    const frozen = deepFreeze(trainProfile(personA(19, 20)));
-    const snapshot = JSON.stringify(frozen);
-    expect(() => foldFeatures(frozen, makeFeatures({ text: { zwnjRate: 0.5 } }), frozen.lastAt + DAY_MS)).not.toThrow();
-    expect(() => foldFeatures(frozen, makeFeatures({ modality: 'voice' }), frozen.lastAt + DAY_MS)).not.toThrow();
-    expect(() => resetStatistics(frozen, frozen.lastAt)).not.toThrow();
-    expect(JSON.stringify(frozen)).toBe(snapshot);
+  it('(h) never moves lastObservedAt backwards', () => {
+    const p1 = observeProfile(newProfile('alice', 'work', 1, T0), constant(0.5), T0 + 10 * DAY_MS);
+    const p2 = observeProfile(p1, constant(0.5), T0 + 2 * DAY_MS);
+    expect(p2.lastObservedAt).toBe(T0 + 10 * DAY_MS);
+    expect(p2.weight[0]).toBe(2);
+  });
+
+  it('(i) never mutates its input', () => {
+    const input = deepFreeze(observeDaily(newProfile('alice', 'work', 1, T0), constant(0.4), 5, T0));
+    const snapshot = JSON.stringify(input);
+    expect(() => observeProfile(input, constant(0.9), T0 + 40 * DAY_MS)).not.toThrow();
+    expect(JSON.stringify(input)).toBe(snapshot);
+    const model = personModel(input);
+    expect(model.mean).not.toBe(input.mean);
+    expect(model.mean).toEqual(input.mean);
+  });
+
+  it('(j) derives a stable 40-hex document id per person and space', () => {
+    const work = profileDocId('alice', 'work');
+    expect(work).toMatch(/^[0-9a-f]{40}$/);
+    expect(profileDocId('alice', 'work')).toBe(work);
+    expect(profileDocId('alice', 'personal')).not.toBe(work);
+    expect(profileDocId('bob', 'work')).not.toBe(work);
+    expect(work).not.toContain('alice');
+  });
+
+  it('starts as an empty, valid, content-free profile', () => {
+    const p = newProfile('alice', 'personal', 3, T0);
+    expect(styleProfileSchema.safeParse(p).success).toBe(true);
+    expect(p).toMatchObject({ purpose: 'optional.personalization', epoch: 3, messages: 0, disabled: false });
+    expect(styleProfileSchema.safeParse({ ...p, text: 'x' }).success).toBe(false);
+    expect(styleProfileSchema.safeParse({ ...p, mean: p.mean.slice(1) }).success).toBe(false);
+    expect(styleProfileSchema.safeParse({ ...p, falsePrompts: Number.NaN }).success).toBe(false);
+    expect(styleProfileSchema.safeParse({ ...p, updatedAt: Infinity }).success).toBe(false);
   });
 });

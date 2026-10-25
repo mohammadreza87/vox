@@ -1,218 +1,162 @@
 import { describe, expect, it } from 'vitest';
 import {
-  extractStyleFeatures, FINGLISH_MARKERS, hourBucket, lengthBucket, MAX_ANALYSED_GRAPHEMES, quantize, styleFeaturesSchema,
-  voiceDurationBucket, type StyleFeatures, type TextStyleFeatures,
+  BINARY_VECTOR_DIMS, extractStyleFeatures, nextBurstIndex, SPLIT_WINDOW_MS, STYLE_FEATURE_KEYS,
+  STYLE_VECTOR_DIM, STYLE_VECTOR_KEYS, styleFeaturesSchema, styleVector, type StyleObservationInput,
 } from '../style-features';
+import type { StyleFeatures } from '../types';
 
-const AT = Date.UTC(2026, 9, 20, 9, 0);
-const text = (value: string, extra: Partial<{ previousAt: number; timeZone: string; edited: boolean }> = {}): TextStyleFeatures => {
-  const features = extractStyleFeatures({ modality: 'text', text: value, at: AT, ...extra });
-  expect(features.modality).toBe('text');
-  return features.text!;
-};
-const RATIO_KEYS = ['persianScriptRatio', 'latinScriptRatio', 'finglishRatio', 'punctuationRate', 'emoticonRate', 'zwnjRate',
-  'arabicVariantRatio', 'repeatedCharRate', 'uppercaseRatio'] as const;
-const onGrid = (x: number) => Math.abs(x * 20 - Math.round(x * 20)) < 1e-9 && x >= 0 && x <= 1;
+const AT = Date.UTC(2026, 9, 20, 12, 0);
+const text = (value: string, extra: Partial<StyleObservationInput> = {}): StyleFeatures =>
+  extractStyleFeatures({ kind: 'text', text: value, edited: false, at: AT, ...extra });
 
-describe('extractStyleFeatures: Persian', () => {
-  it('measures script, ZWNJ, emoticon runs and Persian punctuation', () => {
-    const f = text('سلام، می‌خواهم بیام)))');
+const RATIO_KEYS = ['persianScriptRatio', 'latinScriptRatio', 'finglishRatio', 'zwnjPerWord', 'persianDigitShare',
+  'arabicVariantShare', 'latinUpperShare', 'persianQuestionShare'] as const;
+
+describe('style features: Persian, English and Finglish', () => {
+  it('(a) extracts Persian script, ZWNJ, Persian digits, the Persian question mark and one emoji', () => {
+    const f = text('سلام، خوبی؟ می‌خواهم فردا ۳ تا جلسه بذاریم 🙂');
+    expect(f.kind).toBe('text');
     expect(f.persianScriptRatio).toBe(1);
     expect(f.latinScriptRatio).toBe(0);
-    expect(f.zwnjRate).toBeGreaterThan(0);
-    expect(f.emoticonRate).toBeGreaterThan(0);
-    expect(f.punctuationRate).toBeGreaterThan(0);
-    expect(f.digitScript).toBe(0);
-    // The ')))' run counts once, like a single emoticon.
-    const once = text('سلام، می‌خواهم بیام)');
-    expect(once.emoticonRate).toBe(0);
-    expect(text('سلام، می‌خواهم بیام))').emoticonRate).toBe(f.emoticonRate);
+    expect(f.zwnjPerWord).toBeGreaterThan(0);
+    expect(f.persianDigitShare).toBe(1);
+    expect(f.persianQuestionShare).toBe(1);
+    expect(f.emojiCount).toBe(1);
+    expect(f.emoticonCount).toBe(0);
+    expect(f.endsWithPunctuation).toBe(false);
   });
 
-  it('classifies digit scripts', () => {
-    expect(text('ساعت ۱۲۳').digitScript).toBe(2);
-    expect(text('ساعت ١٢٣').digitScript).toBe(3);
-    expect(text('at 123').digitScript).toBe(1);
-    expect(text('at 1 و ۲').digitScript).toBe(4);
-    expect(text('no digits').digitScript).toBe(0);
-  });
-
-  it('measures Arabic versus Persian yeh and kaf', () => {
-    expect(text('كتاب علي').arabicVariantRatio).toBe(1);
-    expect(text('کتاب علی').arabicVariantRatio).toBe(0);
-  });
-
-  it('normalizes presentation forms and combining marks via NFKC', () => {
-    // U+FEDB ARABIC LETTER KAF INITIAL FORM -> U+0643 (Arabic kaf).
-    const f = text('ﻛتاب');
-    expect(f.persianScriptRatio).toBe(1);
-    expect(f.arabicVariantRatio).toBe(1);
-    const combined = text('été');
-    expect(combined.latinScriptRatio).toBe(1);
-    expect(combined).toEqual(text('été'));
-  });
-
-  it('detects repeated letters in both scripts', () => {
-    expect(text('سلاممممم').repeatedCharRate).toBeGreaterThan(0);
-    expect(text('sooooo').repeatedCharRate).toBeGreaterThan(0);
-    expect(text('so good').repeatedCharRate).toBe(0);
-  });
-});
-
-describe('extractStyleFeatures: English and Finglish', () => {
-  it('measures Finglish markers', () => {
-    const f = text('salam khoobi? merci');
+  it('(b) extracts English script, repeated punctuation and an emoticon', () => {
+    const f = text('Hey, are we still on for 3pm?? :)');
     expect(f.latinScriptRatio).toBe(1);
-    expect(f.finglishRatio).toBeGreaterThanOrEqual(0.6);
-    expect(f.terminalPunctuation).toBe(false);
-  });
-
-  it('measures English punctuation and capitals', () => {
-    const f = text('Hello there, how are you?');
-    expect(f.finglishRatio).toBe(0);
-    expect(f.terminalPunctuation).toBe(true);
-    expect(f.uppercaseRatio).toBeGreaterThan(0);
     expect(f.persianScriptRatio).toBe(0);
+    expect(f.repeatedPunctuation).toBe(true);
+    expect(f.emoticonCount).toBe(1);
+    expect(f.persianQuestionShare).toBe(0);
+    expect(f.latinUpperShare).toBeGreaterThan(0);
+    expect(f.finglishRatio).toBe(0);
+    expect(f.persianDigitShare).toBe(0);
   });
 
-  it('counts ASCII emoticons and pictographs', () => {
-    expect(text('ok :)').emoticonRate).toBeGreaterThan(0);
-    expect(text('ok 🙂').emoticonRate).toBeGreaterThan(0);
-    expect(text('ok').emoticonRate).toBe(0);
+  it('(c) recognises Finglish from the fixed lexicon', () => {
+    expect(text('salam khobi? farda mikham biam').finglishRatio).toBeGreaterThanOrEqual(0.6);
   });
 
-  it('has a fixed, frozen Finglish marker set of 30 tokens', () => {
-    expect(FINGLISH_MARKERS.size).toBe(30);
-    expect(Object.isFrozen(FINGLISH_MARKERS)).toBe(true);
-    for (const word of FINGLISH_MARKERS) expect(word).toBe(word.toLowerCase());
+  it('(d) recognises Finglish digit-as-letter spellings', () => {
+    expect(text('ma3loom').finglishRatio).toBe(1);
+    expect(text('Meeting at 3pm').finglishRatio).toBe(0);
+  });
+
+  it('(e) measures Arabic-variant letters', () => {
+    expect(text('كتاب علي').arabicVariantShare).toBe(1);
+    expect(text('کتاب علی').arabicVariantShare).toBe(0);
+    expect(text('hello').arabicVariantShare).toBeNull();
+  });
+
+  it('(f) counts a ZWJ family once and flags per pair', () => {
+    expect(text('👨‍👩‍👧').emojiCount).toBe(1);
+    expect(text('🇮🇷🇺🇸').emojiCount).toBe(2);
+    expect(text('👍🏽 ok').emojiCount).toBe(1);
+    expect(text('🙂🙂🙂🙂🙂🙂🙂').emojiCount).toBe(5);
   });
 });
 
-describe('extractStyleFeatures: Unicode safety and bounds', () => {
-  it('treats a ZWJ family emoji as one grapheme', () => {
-    expect(text('👨‍👩‍👧').lengthBucket).toBe(0);
-  });
-
-  it('does not throw on lone surrogates', () => {
-    expect(() => extractStyleFeatures({ modality: 'text', text: '\uD800abc', at: AT })).not.toThrow();
-    expect(() => extractStyleFeatures({ modality: 'text', text: 'abc\uDC00', at: AT })).not.toThrow();
-    expect(text('\uD800abc').latinScriptRatio).toBe(1);
-  });
-
-  it('gives zeros for empty or whitespace-only text', () => {
-    for (const value of ['', '   \n\t ']) {
+describe('style features: Unicode safety and bands', () => {
+  it('(g) never throws on hostile Unicode and always passes the strict schema', () => {
+    const mixed = Array.from({ length: 10_000 }, (_, i) => 'aب ۱1؟?‌‍́🙂‏‎'[i % 13]).join('');
+    const inputs = ['', '   \n\t ', '\uD800abc', 'abc\uDC00', 'é́̂ ẹ̀', '‏‎سلام‫ hi ‬', mixed,
+      '‍‍', '﻿', '‌'];
+    for (const value of inputs) {
       const f = text(value);
-      for (const key of RATIO_KEYS) expect(f[key]).toBe(0);
-      expect(f.lengthBucket).toBe(0);
-      expect(f.terminalPunctuation).toBe(false);
+      expect(styleFeaturesSchema.safeParse(f).success).toBe(true);
+    }
+    expect(text('').punctuationPer100).toBeNull();
+    expect(text('').lengthBucket).toBe(0);
+    expect(text('').persianScriptRatio).toBeNull();
+  });
+
+  it('(h) maps grapheme and word counts to their bands', () => {
+    expect(text('abcd').lengthBucket).toBe(1);
+    expect(text('a'.repeat(251)).lengthBucket).toBe(6);
+    expect(text('a'.repeat(250)).lengthBucket).toBe(5);
+    expect(text('🙂🙂🙂🙂').lengthBucket).toBe(1);
+    expect(text('').wordBucket).toBe(0);
+    expect(text('!!').wordBucket).toBe(0);
+    expect(text('word').wordBucket).toBe(1);
+    expect(text(Array.from({ length: 32 }, () => 'w').join(' ')).wordBucket).toBe(6);
+    expect(text('one two').wordBucket).toBe(2);
+  });
+
+  it('(i) takes nothing from text for a voice note and buckets its duration', () => {
+    const base = { kind: 'voice' as const, edited: false, at: AT, durationSec: 10 };
+    const withText = extractStyleFeatures({ ...base, text: 'سلام Hey!! :) 🙂' });
+    const withoutText = extractStyleFeatures(base);
+    expect(withText).toEqual(withoutText);
+    expect(withText.lengthBucket).toBe(0);
+    expect(withText.wordBucket).toBe(0);
+    expect(withText.emojiCount).toBe(0);
+    expect(withText.emoticonCount).toBe(0);
+    expect(withText.repeatedPunctuation).toBe(false);
+    expect(withText.endsWithPunctuation).toBe(false);
+    for (const key of RATIO_KEYS) expect(withText[key]).toBeNull();
+    expect(withText.punctuationPer100).toBeNull();
+    expect([4, 10, 30, 60, 200].map(durationSec =>
+      extractStyleFeatures({ ...base, durationSec }).voiceDurationBucket)).toEqual([0, 1, 2, 3, 4]);
+    expect(extractStyleFeatures({ ...base, durationSec: undefined }).voiceDurationBucket).toBeNull();
+    expect(extractStyleFeatures({ ...base, durationSec: Number.NaN }).voiceDurationBucket).toBeNull();
+    expect(styleFeaturesSchema.safeParse(withText).success).toBe(true);
+  });
+
+  it('(j) buckets the local hour by the UTC offset', () => {
+    const at = Date.UTC(2026, 9, 20, 23, 30);
+    expect(text('hi', { at, utcOffsetMinutes: 210 }).hourBucket).toBe(1);
+    expect(text('hi', { at }).hourBucket).toBe(7);
+    expect(text('hi', { at, utcOffsetMinutes: 99_999 }).hourBucket).toBe(text('hi', { at, utcOffsetMinutes: 840 }).hourBucket);
+  });
+
+  it('(k) increments the burst index only within the split window', () => {
+    expect(nextBurstIndex(undefined, AT)).toBe(1);
+    expect(nextBurstIndex({ at: AT, burstIndex: 2 }, AT + 30_000)).toBe(3);
+    expect(nextBurstIndex({ at: AT, burstIndex: 2 }, AT + SPLIT_WINDOW_MS)).toBe(3);
+    expect(nextBurstIndex({ at: AT, burstIndex: 2 }, AT + SPLIT_WINDOW_MS + 1)).toBe(1);
+    expect(nextBurstIndex({ at: AT, burstIndex: 2 }, AT - 1)).toBe(1);
+    expect(text('hi', { burstIndex: 40 }).burstIndex).toBe(10);
+    expect(text('hi', { burstIndex: -3 }).burstIndex).toBe(1);
+    expect(text('hi').burstIndex).toBe(1);
+  });
+
+  it('(l) quantises every ratio to a multiple of 0.05', () => {
+    const samples = ['سلام Hello دنیا world ۱۲3', 'Mixed TEXT with some UPPER and lower', 'كي کی ي ك ی ک ?? ؟',
+      'salam DUDE chetori 5 ۵ ٥', 'می‌خواهم و می‌روم و نمی‌دانم'];
+    for (const sample of samples) {
+      const f = text(sample);
+      for (const key of RATIO_KEYS) {
+        const value = f[key];
+        if (value === null) continue;
+        expect(Math.abs(value * 20 - Math.round(value * 20))).toBeLessThan(1e-9);
+      }
     }
   });
 
-  it('bounds the work on a 100k-character input', () => {
-    const big = 'سلام دنیا hello world :) '.repeat(4000).slice(0, 100_000);
-    const start = performance.now();
-    const f = text(big);
-    expect(performance.now() - start).toBeLessThan(200);
-    expect(f.lengthBucket).toBe(5);
-    // Only the first MAX_ANALYSED_GRAPHEMES graphemes are analysed: equal to analysing that prefix.
-    const prefix = [...new Intl.Segmenter('und', { granularity: 'grapheme' }).segment(big)].slice(0, MAX_ANALYSED_GRAPHEMES).map(s => s.segment).join('');
-    expect(f).toEqual(text(prefix));
-  });
-
-  it('puts every ratio on the 0.05 grid', () => {
-    for (const value of ['سلام، می‌خواهم بیام)))', 'Hello there, how are you?', 'salam khoobi? merci', 'a'.repeat(37) + '!!', 'كتاب ک ی ي 😀😀 :) ;)']) {
-      const f = text(value);
-      for (const key of RATIO_KEYS) expect(onGrid(f[key])).toBe(true);
+  it('(m) maps features to a deterministic 21-dim unit vector', () => {
+    expect(STYLE_VECTOR_KEYS).toHaveLength(STYLE_VECTOR_DIM);
+    expect(STYLE_VECTOR_DIM).toBe(21);
+    expect(BINARY_VECTOR_DIMS.map(i => STYLE_VECTOR_KEYS[i])).toEqual(['kindVoice', 'repeatedPunctuation', 'endsWithPunctuation', 'edited']);
+    for (const f of [text('Hey, are we still on for 3pm?? :)'), text('سلام 🙂'), extractStyleFeatures({ kind: 'voice', edited: true, at: AT, durationSec: 30 })]) {
+      const v = styleVector(f);
+      expect(v).toHaveLength(21);
+      for (const x of v) if (x !== null) { expect(x).toBeGreaterThanOrEqual(0); expect(x).toBeLessThanOrEqual(1); }
+      expect(styleVector(f)).toEqual(v);
     }
-    expect(quantize(0.333)).toBe(0.35);
-    expect(quantize(Number.NaN)).toBe(0);
-    expect(quantize(7)).toBe(1);
-    expect(quantize(-1)).toBe(0);
+    expect(Object.keys(text('x'))).toEqual([...STYLE_FEATURE_KEYS]);
   });
 
-  it('never throws on hostile input and returns a frozen zero vector of the modality', () => {
-    const hostile = { get modality() { return 'text' as const; }, get text(): string { throw new Error('boom'); }, at: AT };
-    const f = extractStyleFeatures(hostile);
-    expect(f.modality).toBe('text');
-    expect(f.text?.lengthBucket).toBe(0);
-    expect(Object.isFrozen(f)).toBe(true);
-    expect(extractStyleFeatures(null as never).modality).toBe('text');
-  });
-
-  it('returns frozen objects without strings except the modality', () => {
-    const f = extractStyleFeatures({ modality: 'text', text: 'سلام PRIVATE_TEXT', at: AT });
-    expect(Object.isFrozen(f)).toBe(true);
-    expect(Object.isFrozen(f.text)).toBe(true);
-    const strings: string[] = [];
-    JSON.stringify(f, (_k, v) => { if (typeof v === 'string') strings.push(v); return v; });
-    expect(strings).toEqual(['text']);
-  });
-});
-
-describe('buckets, timing and modality', () => {
-  it('maps lengths to buckets', () => {
-    expect([0, 3, 4, 10, 11, 30, 31, 80, 81, 200, 201].map(lengthBucket)).toEqual([0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5]);
-  });
-
-  it('buckets the local hour and falls back to UTC', () => {
-    expect(hourBucket(Date.UTC(2026, 9, 20, 20, 0), 'Asia/Tehran')).toBe(5);
-    expect(hourBucket(Date.UTC(2026, 9, 20, 20, 0), 'Not/AZone')).toBe(5);
-    expect(hourBucket(Date.UTC(2026, 9, 20, 3, 0), 'Not/AZone')).toBe(0);
-    expect(hourBucket(Date.UTC(2026, 9, 20, 9, 0))).toBe(2);
-    expect(hourBucket(Number.NaN)).toBe(0);
-  });
-
-  it('marks follow-on messages within 60 s only', () => {
-    const at = (previousAt: number) => extractStyleFeatures({ modality: 'text', text: 'x', at: AT, previousAt }).followOn;
-    expect(at(AT - 59_000)).toBe(true);
-    expect(at(AT - 61_000)).toBe(false);
-    expect(at(AT + 1_000)).toBe(false);
-    expect(extractStyleFeatures({ modality: 'text', text: 'x', at: AT }).followOn).toBe(false);
-  });
-
-  it('never reads text for voice and buckets the duration', () => {
-    const withText = extractStyleFeatures({ modality: 'voice', text: 'PRIVATE TRANSCRIPT', voiceDurationSec: 12, at: AT });
-    const without = extractStyleFeatures({ modality: 'voice', voiceDurationSec: 12, at: AT });
-    expect(withText).toEqual(without);
-    expect(withText.text).toBeUndefined();
-    const reader = { modality: 'voice' as const, at: AT, get text(): string { throw new Error('text was read'); } };
-    expect(extractStyleFeatures(reader).voiceDurationBucket).toBe(3);
-    expect([0, 4.99, 5, 14.99, 15, 59.99, 60, undefined, -1, Number.NaN].map(voiceDurationBucket)).toEqual([0, 0, 1, 1, 2, 2, 3, 3, 3, 3]);
-  });
-
-  it('records the edit flag', () => {
-    expect(extractStyleFeatures({ modality: 'text', text: 'x', at: AT, edited: true }).edited).toBe(true);
-    expect(extractStyleFeatures({ modality: 'text', text: 'x', at: AT }).edited).toBe(false);
-  });
-});
-
-describe('styleFeaturesSchema', () => {
-  const valid = extractStyleFeatures({ modality: 'text', text: 'Hello :)', at: AT });
-  const voice = extractStyleFeatures({ modality: 'voice', voiceDurationSec: 3, at: AT });
-
-  it('accepts extracted features', () => {
-    expect(styleFeaturesSchema.safeParse(valid).success).toBe(true);
-    expect(styleFeaturesSchema.safeParse(voice).success).toBe(true);
-  });
-
-  it('rejects extra keys, raw text and mismatched modality blocks', () => {
-    const cases: unknown[] = [
-      { ...valid, raw: 'secret' },
-      { ...valid, text: 'secret' },
-      { ...valid, text: { ...valid.text, raw: 'secret' } },
-      { ...valid, text: undefined },
-      { version: 1, modality: 'text', hourBucket: 0, followOn: false, edited: false },
-      { ...valid, voiceDurationBucket: 1 },
-      { ...voice, text: valid.text },
-      { ...valid, text: { ...valid.text, emoticonRate: 0.123 } },
-      { ...valid, hourBucket: 6 },
-      { ...valid, version: 2 },
-    ];
-    for (const value of cases) expect(styleFeaturesSchema.safeParse(value).success).toBe(false);
-  });
-
-  it('types the parsed result as StyleFeatures', () => {
-    const parsed: StyleFeatures = styleFeaturesSchema.parse(valid);
-    expect(parsed).toEqual(valid);
+  it('rejects anything that is not exactly a feature set', () => {
+    const f = text('hello there');
+    expect(styleFeaturesSchema.safeParse({ ...f, text: 'hello there' }).success).toBe(false);
+    expect(styleFeaturesSchema.safeParse({ ...f, latinScriptRatio: 0.33 }).success).toBe(false);
+    expect(styleFeaturesSchema.safeParse({ ...f, lengthBucket: 7 }).success).toBe(false);
+    expect(styleFeaturesSchema.safeParse({ ...f, version: 2 }).success).toBe(false);
+    expect(styleFeaturesSchema.safeParse({ ...f, latinScriptRatio: Number.NaN }).success).toBe(false);
   });
 });

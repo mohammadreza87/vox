@@ -1,305 +1,367 @@
 /**
- * Content-free communication-style features of ONE message
- * (docs/AGENT_INTELLIGENCE_SOLUTION.md 4.9, "Communication style").
+ * Content-free communication-style features of ONE message (S10L,
+ * docs/AGENT_INTELLIGENCE_SOLUTION.md section 4.9).
  *
- * The output holds only quantized ratios, small buckets and booleans: never the
- * text, never tokens, never n-grams or hashes of text (hashed fragments are
- * dictionary-attackable and therefore not content-free). The function is pure,
- * never throws and never retains its input.
+ * Privacy contract: the raw text is read only inside extractStyleFeatures and
+ * never returned, cached, logged or kept in a closure. The result holds only
+ * small integers, booleans, null, ratios quantised to multiples of 0.05, the
+ * literal `version: 1` and the message kind. No word, token, character n-gram,
+ * hash of text or matched lexicon entry ever leaves the function. Character
+ * n-grams are deliberately excluded.
+ *
+ * Pure, synchronous and side-effect free; never throws on hostile Unicode.
  */
 import { z } from 'zod';
+import type { StyleFeatures } from './types';
 
-export const STYLE_FEATURES_VERSION = 1 as const;
-export const MAX_ANALYSED_GRAPHEMES = 4096;
-export const FOLLOW_ON_GAP_MS = 60_000;
-/** Raw UTF-16 code units considered before normalization; far above MAX_ANALYSED_GRAPHEMES for real text. */
-const MAX_RAW_CODE_UNITS = MAX_ANALYSED_GRAPHEMES * 16;
-
-/** Lowercased Persian-in-Latin (Finglish) tokens that are not English words. Fixed; never learned from members. */
-export const FINGLISH_MARKERS: ReadonlySet<string> = Object.freeze(new Set([
-  'salam', 'merci', 'mersi', 'khobi', 'khoobi', 'chetori', 'chetor', 'mamnoon', 'mamnun', 'mikham',
-  'mikhay', 'mikhad', 'nemidoonam', 'nemidonam', 'midoonam', 'midonam', 'begoo', 'begu', 'kojaei', 'kojai',
-  'chera', 'alan', 'farda', 'dige', 'hamin', 'behet', 'behem', 'bashe', 'khob', 'khoshhal',
-]));
-
-export type LengthBucket = 0 | 1 | 2 | 3 | 4 | 5;
-export type HourBucket = 0 | 1 | 2 | 3 | 4 | 5;
-/** 0 none, 1 ASCII, 2 Persian (U+06F0-06F9), 3 Arabic-Indic (U+0660-0669), 4 mixed. */
-export type DigitScript = 0 | 1 | 2 | 3 | 4;
-export type VoiceDurationBucket = 0 | 1 | 2 | 3;
-
-/** Every ratio is quantize()d to a 0.05 grid in [0,1]. */
-export interface TextStyleFeatures {
-  readonly lengthBucket: LengthBucket;
-  readonly persianScriptRatio: number;
-  readonly latinScriptRatio: number;
-  readonly finglishRatio: number;
-  readonly punctuationRate: number;
-  readonly emoticonRate: number;
-  readonly zwnjRate: number;
-  readonly arabicVariantRatio: number;
-  readonly repeatedCharRate: number;
-  readonly uppercaseRatio: number;
-  readonly terminalPunctuation: boolean;
-  readonly digitScript: DigitScript;
-}
-
-export interface StyleFeatures {
-  readonly version: typeof STYLE_FEATURES_VERSION;
-  readonly modality: 'text' | 'voice';
-  readonly hourBucket: HourBucket;
-  /** Message splitting: within FOLLOW_ON_GAP_MS of the same speaker's previous message. */
-  readonly followOn: boolean;
+export interface StyleObservationInput {
+  readonly kind: 'text' | 'voice';
+  readonly text?: string;              // read transiently; never retained; ignored for voice
   readonly edited: boolean;
-  /** Present iff modality === 'text'. */
-  readonly text?: TextStyleFeatures;
-  /** Present iff modality === 'voice'. */
-  readonly voiceDurationBucket?: VoiceDurationBucket;
+  readonly at: number;                 // epoch ms
+  readonly utcOffsetMinutes?: number;  // default 0, clamped [-840, 840]
+  readonly burstIndex?: number;        // from nextBurstIndex; default 1
+  readonly durationSec?: number;       // voice only
 }
 
-export interface StyleFeatureInput {
-  readonly modality: 'text' | 'voice';
-  readonly text?: string;
-  readonly voiceDurationSec?: number;
-  readonly at: number;
-  readonly previousAt?: number;
-  readonly edited?: boolean;
-  readonly timeZone?: string;
-}
+/** Messages sent within this window of the previous one count as one burst (message splitting). */
+export const SPLIT_WINDOW_MS = 90_000;
 
-const GRID = 20;
-const onGrid = (x: number): boolean => Number.isFinite(x) && x >= 0 && x <= 1 && Math.abs(x * GRID - Math.round(x * GRID)) < 1e-9;
-const ratioSchema = z.number().min(0).max(1).refine(onGrid, { message: 'off_grid' });
+/** Upper bound on the text inspected; every band saturates long before it. */
+const MAX_TEXT_CHARS = 16_384;
 
-const textFeaturesSchema = z.object({
-  lengthBucket: z.literal([0, 1, 2, 3, 4, 5]),
-  persianScriptRatio: ratioSchema,
-  latinScriptRatio: ratioSchema,
-  finglishRatio: ratioSchema,
-  punctuationRate: ratioSchema,
-  emoticonRate: ratioSchema,
-  zwnjRate: ratioSchema,
-  arabicVariantRatio: ratioSchema,
-  repeatedCharRate: ratioSchema,
-  uppercaseRatio: ratioSchema,
-  terminalPunctuation: z.boolean(),
-  digitScript: z.literal([0, 1, 2, 3, 4]),
-}).strict();
+export const STYLE_FEATURE_KEYS: readonly (keyof StyleFeatures)[] = Object.freeze([
+  'version', 'kind', 'lengthBucket', 'wordBucket', 'persianScriptRatio', 'latinScriptRatio',
+  'finglishRatio', 'zwnjPerWord', 'persianDigitShare', 'arabicVariantShare', 'latinUpperShare',
+  'punctuationPer100', 'persianQuestionShare', 'repeatedPunctuation', 'endsWithPunctuation',
+  'emojiCount', 'emoticonCount', 'burstIndex', 'edited', 'hourBucket', 'voiceDurationBucket',
+] as const);
 
-const commonFeatureShape = {
-  version: z.literal(STYLE_FEATURES_VERSION),
-  hourBucket: z.literal([0, 1, 2, 3, 4, 5]),
-  followOn: z.boolean(),
-  edited: z.boolean(),
-};
-
-/** Strict at every level: `text` must be the feature block (never a string) and presence must match the modality. */
-export const styleFeaturesSchema: z.ZodType<StyleFeatures> = z.discriminatedUnion('modality', [
-  z.object({ ...commonFeatureShape, modality: z.literal('text'), text: textFeaturesSchema }).strict(),
-  z.object({ ...commonFeatureShape, modality: z.literal('voice'), voiceDurationBucket: z.literal([0, 1, 2, 3]) }).strict(),
+export const STYLE_VECTOR_KEYS: readonly string[] = Object.freeze([
+  'kindVoice', 'lengthBucket', 'wordBucket', 'persianScriptRatio', 'latinScriptRatio',
+  'finglishRatio', 'zwnjPerWord', 'persianDigitShare', 'arabicVariantShare', 'latinUpperShare',
+  'punctuationPer100', 'persianQuestionShare', 'repeatedPunctuation', 'endsWithPunctuation',
+  'emojiCount', 'emoticonCount', 'burstIndex', 'edited', 'hourSin', 'hourCos', 'voiceDurationBucket',
 ]);
 
-/** Clamp to [0,1] and round to the 0.05 grid; non-finite gives 0. */
-export function quantize(x: number): number {
-  if (typeof x !== 'number' || !Number.isFinite(x)) return 0;
-  const clamped = Math.min(1, Math.max(0, x));
-  return Math.round(clamped * GRID) / GRID;
-}
+export const STYLE_VECTOR_DIM = 21;
 
-export function lengthBucket(graphemes: number): LengthBucket {
-  if (!Number.isFinite(graphemes) || graphemes <= 3) return 0;
-  if (graphemes <= 10) return 1;
-  if (graphemes <= 30) return 2;
-  if (graphemes <= 80) return 3;
-  if (graphemes <= 200) return 4;
-  return 5;
-}
+/** Indexes of the 0/1 dims in STYLE_VECTOR_KEYS: kindVoice, repeatedPunctuation, endsWithPunctuation, edited. */
+export const BINARY_VECTOR_DIMS: readonly number[] = Object.freeze([0, 12, 13, 17]);
 
-const hourFormatters = new Map<string, Intl.DateTimeFormat>();
-function hourFormatter(timeZone: string): Intl.DateTimeFormat {
-  let formatter = hourFormatters.get(timeZone);
-  if (!formatter) {
-    formatter = new Intl.DateTimeFormat('en-US', { timeZone, hour: 'numeric', hourCycle: 'h23' });
-    if (hourFormatters.size >= 64) hourFormatters.clear();
-    hourFormatters.set(timeZone, formatter);
-  }
-  return formatter;
-}
+/**
+ * Unambiguous romanised Persian words. A fixed code constant: it is matched
+ * against lowercase Latin words inside the extractor and only a ratio leaves.
+ * Ambiguous English words (to, man, are, na, in, ...) are excluded.
+ */
+export const FINGLISH_LEXICON: ReadonlySet<string> = new Set([
+  'salam', 'merci', 'mersi', 'mamnoon', 'mamnun', 'mamnoonam', 'mamnunam', 'chetori', 'chetorin',
+  'khobi', 'khoobi', 'khubi', 'khobam', 'khoobam', 'khubam', 'kheili', 'kheyli', 'khaili', 'khob',
+  'khoob', 'dige', 'alan', 'farda', 'emrooz', 'emruz', 'dirooz', 'diruz', 'mikham', 'mikhay',
+  'mikhaym', 'nemikham', 'nemidoonam', 'nemidunam', 'midoonam', 'midunam', 'bashe', 'baashe',
+  'begoo', 'begu', 'chera', 'chikar', 'chekar', 'kojaee', 'kojaei', 'koja', 'hamin', 'vali',
+  'vaghean', 'vaghan', 'lotfan', 'akhe', 'areh', 'mishe', 'nemishe', 'ghorboonet', 'ghorbunet',
+  'azizam', 'joon', 'baram', 'barat', 'behet', 'behem', 'bebin', 'bebakhshid', 'bebakhshin',
+  'bale', 'dorost', 'khodafez', 'khodahafez', 'inja', 'unja', 'oonja', 'chiz', 'kar', 'pas', 'ham',
+]);
 
-/** floor(local hour / 4); an invalid or absent time zone falls back to UTC. */
-export function hourBucket(at: number, timeZone?: string): HourBucket {
-  if (typeof at !== 'number' || !Number.isFinite(at)) return 0;
-  let hour: number;
-  try {
-    hour = localHour(at, typeof timeZone === 'string' && timeZone ? timeZone : 'UTC');
-  } catch (error) {
-    if (!(error instanceof RangeError)) return 0;
-    try { hour = localHour(at, 'UTC'); } catch { return 0; }
-  }
-  const bucket = Math.floor(hour / 4);
-  return (bucket >= 0 && bucket <= 5 ? bucket : 0) as HourBucket;
-}
-
-function localHour(at: number, timeZone: string): number {
-  const part = hourFormatter(timeZone).formatToParts(at).find(p => p.type === 'hour');
-  const hour = part ? Number.parseInt(part.value, 10) : 0;
-  return Number.isFinite(hour) ? hour % 24 : 0;
-}
-
-/** <5 s, <15 s, <60 s, >=60 s or unknown. */
-export function voiceDurationBucket(seconds: number | undefined): VoiceDurationBucket {
-  if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds < 0) return 3;
-  if (seconds < 5) return 0;
-  if (seconds < 15) return 1;
-  if (seconds < 60) return 2;
-  return 3;
-}
-
-const LONE_OR_PAIRED_SURROGATE = /[\uD800-\uDBFF][\uDC00-\uDFFF]|[\uD800-\uDFFF]/g; // non-u on purpose
+const DIGIT_AS_LETTER = /^[a-z]*[a-z][2378][a-z]+$/i;
+const WORD = /[\p{L}\p{M}\p{N}‌]+/gu;
 const LETTER = /\p{L}/u;
-const ARABIC_SCRIPT = /\p{Script=Arabic}/u;
-const LATIN_SCRIPT = /\p{Script=Latin}/u;
-const UPPERCASE = /\p{Lu}/u;
-const PUNCTUATION = /\p{P}/u;
+const ARABIC = /\p{Script=Arabic}/u;
+const LATIN = /\p{Script=Latin}/u;
+const UPPER = /\p{Lu}/u;
+const DIGIT = /\p{Nd}/u;
+const PUNCT = /\p{P}/u;
 const PICTOGRAPHIC = /\p{Extended_Pictographic}/u;
-const WHITESPACE_ONLY = /^\s*$/u;
-const ASCII_EMOTICON = /(?:[:;=8][-'^]?[)(DPpOo3\]\[|*]|<3|\^_\^)/g;
-const PAREN_RUN = /\){2,}|\({2,}/g;
-const REPEATED_LETTER = /(\p{L})\1{2,}/gu;
-const TERMINAL = new Set(['.', '!', '?', '…', '؟', '۔']);
+const REGIONAL_PAIR = /[\u{1F1E6}-\u{1F1FF}]{2}/u;
+const REPEATED_PUNCT = /(\p{P})\1+/u;
+const MARK = /\p{M}/u;
+const EMOTICON_RE = /(?:^|\s)(?::-?\)+|:-?\(+|:-?[DPp]|;-?\)+|[xX]D+|\^_\^|<3+|=\)+)(?=\s|$)/g;
 
-let graphemeSegmenter: Intl.Segmenter | undefined;
-let wordSegmenter: Intl.Segmenter | undefined;
+type Segmenter = { segment(input: string): Iterable<{ segment: string }> };
+let segmenter: Segmenter | null | undefined;
 
-function analysedText(raw: string): string {
-  const bounded = raw.length > MAX_RAW_CODE_UNITS ? raw.slice(0, MAX_RAW_CODE_UNITS) : raw;
-  const wellFormed = bounded.replace(LONE_OR_PAIRED_SURROGATE, m => (m.length === 2 ? m : '�'));
-  const normalized = wellFormed.normalize('NFKC');
-  graphemeSegmenter ??= new Intl.Segmenter('und', { granularity: 'grapheme' });
-  let out = '';
-  let count = 0;
-  for (const { segment } of graphemeSegmenter.segment(normalized)) {
-    if (count >= MAX_ANALYSED_GRAPHEMES) break;
-    out += segment;
-    count++;
+function graphemeSegmenter(): Segmenter | null {
+  if (segmenter !== undefined) return segmenter;
+  try {
+    const Ctor = (Intl as unknown as { Segmenter?: new (locale: undefined, options: { granularity: 'grapheme' }) => Segmenter }).Segmenter;
+    segmenter = Ctor ? new Ctor(undefined, { granularity: 'grapheme' }) : null;
+  } catch {
+    segmenter = null;
+  }
+  return segmenter;
+}
+
+function isRegionalIndicator(cp: string): boolean {
+  const code = cp.codePointAt(0) ?? 0;
+  return code >= 0x1f1e6 && code <= 0x1f1ff;
+}
+
+function isSkinTone(cp: string): boolean {
+  const code = cp.codePointAt(0) ?? 0;
+  return code >= 0x1f3fb && code <= 0x1f3ff;
+}
+
+/** Code-point fallback that keeps marks, ZWJ sequences, skin tones and flag pairs together. */
+function fallbackGraphemes(text: string): string[] {
+  const out: string[] = [];
+  let joinNext = false;
+  for (const cp of Array.from(text)) {
+    const last = out.length - 1;
+    if (last >= 0 && (joinNext || MARK.test(cp) || cp === '‍' || isSkinTone(cp) ||
+        (isRegionalIndicator(cp) && Array.from(out[last]).length === 1 && isRegionalIndicator(out[last])))) {
+      out[last] += cp;
+    } else {
+      out.push(cp);
+    }
+    joinNext = cp === '‍';
   }
   return out;
 }
 
-function ratio(numerator: number, denominator: number): number {
-  return denominator > 0 ? quantize(numerator / denominator) : 0;
+function graphemes(text: string): string[] {
+  const seg = graphemeSegmenter();
+  if (seg) {
+    try {
+      const out: string[] = [];
+      for (const part of seg.segment(text)) out.push(part.segment);
+      return out;
+    } catch {
+      // fall through to the code-point fallback
+    }
+  }
+  return fallbackGraphemes(text);
 }
 
-function textFeatures(raw: string): TextStyleFeatures {
-  const text = analysedText(raw);
-  graphemeSegmenter ??= new Intl.Segmenter('und', { granularity: 'grapheme' });
-  wordSegmenter ??= new Intl.Segmenter('und', { granularity: 'word' });
+function clamp(x: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, x));
+}
 
-  const graphemes: string[] = [];
-  for (const { segment } of graphemeSegmenter.segment(text)) graphemes.push(segment);
-  const visible = graphemes.filter(g => !WHITESPACE_ONLY.test(g));
-  const trimmed = text.trim();
-  const trimmedGraphemes = [...graphemeSegmenter.segment(trimmed)].length;
+function clamp01(x: number): number {
+  return Number.isFinite(x) ? clamp(x, 0, 1) : 0;
+}
 
-  let letters = 0, arabic = 0, latin = 0, latinUpper = 0, zwnj = 0, yehKafArabic = 0, yehKafPersian = 0;
-  let ascii = false, persianDigits = false, arabicIndicDigits = false;
-  for (const ch of text) {
-    const cp = ch.codePointAt(0) ?? 0;
-    if (cp === 0x200c) zwnj++;
-    else if (cp === 0x064a || cp === 0x0643) yehKafArabic++;
-    else if (cp === 0x06cc || cp === 0x06a9) yehKafPersian++;
-    if (cp >= 0x30 && cp <= 0x39) ascii = true;
-    else if (cp >= 0x06f0 && cp <= 0x06f9) persianDigits = true;
-    else if (cp >= 0x0660 && cp <= 0x0669) arabicIndicDigits = true;
-    if (!LETTER.test(ch)) continue;
-    letters++;
-    if (ARABIC_SCRIPT.test(ch)) arabic++;
-    else if (LATIN_SCRIPT.test(ch)) {
-      latin++;
-      if (UPPERCASE.test(ch)) latinUpper++;
+/** Every ratio is a multiple of 0.05. */
+function q(x: number): number {
+  return Math.round(clamp01(x) * 20) / 20;
+}
+
+function ratio(numerator: number, denominator: number): number | null {
+  return denominator > 0 ? q(numerator / denominator) : null;
+}
+
+function band(value: number, upperBounds: readonly number[]): number {
+  for (let i = 0; i < upperBounds.length; i++) if (value <= upperBounds[i]) return i;
+  return upperBounds.length;
+}
+
+const LENGTH_BANDS = [0, 4, 15, 40, 100, 250] as const;   // 0 | 1-4 | 5-15 | 16-40 | 41-100 | 101-250 | 251+
+const WORD_BANDS = [0, 1, 3, 7, 15, 31] as const;         // 0 | 1 | 2-3 | 4-7 | 8-15 | 16-31 | 32+
+
+function hourBucketOf(at: number, utcOffsetMinutes: number | undefined): number {
+  const offset = typeof utcOffsetMinutes === 'number' && Number.isFinite(utcOffsetMinutes)
+    ? clamp(Math.round(utcOffsetMinutes), -840, 840) : 0;
+  const date = new Date(typeof at === 'number' && Number.isFinite(at) ? at : 0);
+  const minutes = date.getUTCHours() * 60 + date.getUTCMinutes();
+  if (!Number.isFinite(minutes)) return 0;
+  const local = (((minutes + offset) % 1440) + 1440) % 1440;
+  return clamp(Math.floor(local / 180), 0, 7);
+}
+
+function voiceDurationBucketOf(durationSec: number | undefined): number | null {
+  if (typeof durationSec !== 'number' || !Number.isFinite(durationSec)) return null;
+  if (durationSec < 5) return 0;
+  if (durationSec < 15) return 1;
+  if (durationSec < 45) return 2;
+  if (durationSec < 120) return 3;
+  return 4;
+}
+
+function burstOf(value: number | undefined): number {
+  return typeof value === 'number' && Number.isFinite(value) ? clamp(Math.round(value), 1, 10) : 1;
+}
+
+function safeText(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  let text = value.length > MAX_TEXT_CHARS ? value.slice(0, MAX_TEXT_CHARS) : value;
+  try {
+    const wellFormed = (text as unknown as { toWellFormed?: () => string }).toWellFormed;
+    if (typeof wellFormed === 'function') text = wellFormed.call(text);
+  } catch {
+    // keep the raw slice; every later step tolerates lone surrogates
+  }
+  try {
+    text = text.normalize('NFC');
+  } catch {
+    // keep the un-normalised text
+  }
+  return text;
+}
+
+/** Content-free features of one message. Never throws; never returns or retains text. */
+export function extractStyleFeatures(input: StyleObservationInput): StyleFeatures {
+  const kind: 'text' | 'voice' = input?.kind === 'voice' ? 'voice' : 'text';
+  const edited = input?.edited === true;
+  const burstIndex = burstOf(input?.burstIndex);
+  const hourBucket = hourBucketOf(input?.at, input?.utcOffsetMinutes);
+
+  if (kind === 'voice') {
+    return {
+      version: 1, kind, lengthBucket: 0, wordBucket: 0,
+      persianScriptRatio: null, latinScriptRatio: null, finglishRatio: null, zwnjPerWord: null,
+      persianDigitShare: null, arabicVariantShare: null, latinUpperShare: null,
+      punctuationPer100: null, persianQuestionShare: null,
+      repeatedPunctuation: false, endsWithPunctuation: false, emojiCount: 0, emoticonCount: 0,
+      burstIndex, edited, hourBucket, voiceDurationBucket: voiceDurationBucketOf(input?.durationSec),
+    };
+  }
+
+  const text = safeText(input?.text);
+  const clusters = graphemes(text);
+
+  let letters = 0, arabicLetters = 0, latinLetters = 0, latinUpper = 0;
+  let digits = 0, persianDigits = 0, arabicVariants = 0, variantBase = 0;
+  let zwnj = 0, persianQ = 0, latinQ = 0;
+  for (const cp of Array.from(text)) {
+    const code = cp.codePointAt(0) ?? 0;
+    if (code === 0x200c) zwnj++;
+    else if (code === 0x061f) persianQ++;
+    else if (code === 0x3f) latinQ++;
+    if (code === 0x064a || code === 0x0643) { arabicVariants++; variantBase++; }
+    else if (code === 0x06cc || code === 0x06a9) variantBase++;
+    if (LETTER.test(cp)) {
+      letters++;
+      if (ARABIC.test(cp)) arabicLetters++;
+      else if (LATIN.test(cp)) {
+        latinLetters++;
+        if (UPPER.test(cp)) latinUpper++;
+      }
+    } else if (DIGIT.test(cp)) {
+      digits++;
+      if ((code >= 0x06f0 && code <= 0x06f9) || (code >= 0x0660 && code <= 0x0669)) persianDigits++;
     }
   }
 
   let words = 0, arabicWords = 0, latinWords = 0, finglishWords = 0;
-  for (const { segment, isWordLike } of wordSegmenter.segment(text)) {
-    if (!isWordLike) continue;
+  for (const match of text.matchAll(WORD)) {
+    const word = match[0];
+    let wordLetters = 0, wordArabic = 0, wordLatin = 0, wordDigits = 0;
+    for (const cp of Array.from(word)) {
+      if (LETTER.test(cp)) {
+        wordLetters++;
+        if (ARABIC.test(cp)) wordArabic++;
+        else if (LATIN.test(cp)) wordLatin++;
+      } else if (DIGIT.test(cp)) wordDigits++;
+    }
+    if (wordLetters === 0 && wordDigits === 0) continue;
     words++;
-    const word = segment.toLowerCase();
-    if (ARABIC_SCRIPT.test(word)) arabicWords++;
-    else if (LATIN_SCRIPT.test(word)) {
+    if (wordArabic > 0) arabicWords++;
+    if (wordLetters >= 2 && wordLatin === wordLetters) {
       latinWords++;
-      if (FINGLISH_MARKERS.has(word)) finglishWords++;
+      const lower = word.toLowerCase();
+      if (FINGLISH_LEXICON.has(lower) || DIGIT_AS_LETTER.test(lower)) finglishWords++;
     }
   }
 
-  let emoticons = visible.filter(g => PICTOGRAPHIC.test(g)).length;
-  const consumed = new Set<number>();
-  for (const match of text.matchAll(ASCII_EMOTICON)) {
-    emoticons++;
-    const start = match.index ?? 0;
-    for (let i = start; i < start + match[0].length; i++) consumed.add(i);
+  let punctuation = 0, emoji = 0;
+  for (const cluster of clusters) {
+    if (PUNCT.test(cluster)) punctuation++;
+    if (PICTOGRAPHIC.test(cluster) || REGIONAL_PAIR.test(cluster)) emoji++;
   }
-  for (const match of text.matchAll(PAREN_RUN)) {
-    const start = match.index ?? 0;
-    let overlaps = false;
-    for (let i = start; i < start + match[0].length; i++) if (consumed.has(i)) { overlaps = true; break; }
-    if (!overlaps) emoticons++;
+  let lastVisible: string | undefined;
+  for (let i = clusters.length - 1; i >= 0; i--) {
+    if (clusters[i].trim().length > 0) { lastVisible = clusters[i]; break; }
   }
-  const repeated = [...text.matchAll(REPEATED_LETTER)].length;
-  const punctuation = visible.filter(g => PUNCTUATION.test(g)).length;
-  const digitKinds = Number(ascii) + Number(persianDigits) + Number(arabicIndicDigits);
-  const digitScript: DigitScript = digitKinds === 0 ? 0 : digitKinds > 1 ? 4 : ascii ? 1 : persianDigits ? 2 : 3;
-  const last = [...trimmed].pop();
+  const emoticons = (text.match(EMOTICON_RE) ?? []).length;
 
   return {
-    lengthBucket: lengthBucket(trimmedGraphemes),
-    persianScriptRatio: ratio(arabic, letters),
-    latinScriptRatio: ratio(latin, letters),
+    version: 1, kind,
+    lengthBucket: band(clusters.length, LENGTH_BANDS),
+    wordBucket: band(words, WORD_BANDS),
+    persianScriptRatio: ratio(arabicLetters, letters),
+    latinScriptRatio: ratio(latinLetters, letters),
     finglishRatio: ratio(finglishWords, latinWords),
-    punctuationRate: ratio(punctuation, visible.length),
-    emoticonRate: ratio(Math.min(emoticons, visible.length), visible.length),
-    zwnjRate: ratio(Math.min(zwnj, arabicWords), arabicWords),
-    arabicVariantRatio: ratio(yehKafArabic, yehKafArabic + yehKafPersian),
-    repeatedCharRate: ratio(Math.min(repeated, words), words),
-    uppercaseRatio: ratio(latinUpper, latin),
-    terminalPunctuation: last !== undefined && TERMINAL.has(last),
-    digitScript,
+    zwnjPerWord: arabicWords > 0 ? q(zwnj / arabicWords) : null,
+    persianDigitShare: ratio(persianDigits, digits),
+    arabicVariantShare: ratio(arabicVariants, variantBase),
+    latinUpperShare: ratio(latinUpper, latinLetters),
+    punctuationPer100: clusters.length > 0 ? clamp(Math.round((punctuation * 100) / clusters.length), 0, 50) : null,
+    persianQuestionShare: ratio(persianQ, persianQ + latinQ),
+    repeatedPunctuation: REPEATED_PUNCT.test(text),
+    endsWithPunctuation: lastVisible !== undefined && PUNCT.test(lastVisible),
+    emojiCount: clamp(emoji, 0, 5),
+    emoticonCount: clamp(emoticons, 0, 5),
+    burstIndex, edited, hourBucket, voiceDurationBucket: null,
   };
 }
 
-const ZERO_TEXT: TextStyleFeatures = Object.freeze({
-  lengthBucket: 0, persianScriptRatio: 0, latinScriptRatio: 0, finglishRatio: 0, punctuationRate: 0,
-  emoticonRate: 0, zwnjRate: 0, arabicVariantRatio: 0, repeatedCharRate: 0, uppercaseRatio: 0,
-  terminalPunctuation: false, digitScript: 0,
-});
-
-function zeroFeatures(modality: 'text' | 'voice'): StyleFeatures {
-  return modality === 'voice'
-    ? Object.freeze({ version: STYLE_FEATURES_VERSION, modality, hourBucket: 0, followOn: false, edited: false, voiceDurationBucket: 0 })
-    : Object.freeze({ version: STYLE_FEATURES_VERSION, modality, hourBucket: 0, followOn: false, edited: false, text: ZERO_TEXT });
+/** Burst position from timestamps only: +1 within SPLIT_WINDOW_MS of the previous message, otherwise 1. */
+export function nextBurstIndex(previous: { at: number; burstIndex: number } | undefined, at: number): number {
+  if (!previous || !Number.isFinite(previous.at) || !Number.isFinite(at) || !Number.isFinite(previous.burstIndex)) return 1;
+  const dt = at - previous.at;
+  return dt >= 0 && dt <= SPLIT_WINDOW_MS ? previous.burstIndex + 1 : 1;
 }
 
-/** Pure, never throws, text never retained. For voice, `text` is never read. */
-export function extractStyleFeatures(input: StyleFeatureInput): StyleFeatures {
-  let modality: 'text' | 'voice' = 'text';
-  try {
-    modality = input.modality === 'voice' ? 'voice' : 'text';
-    const at = input.at;
-    const previousAt = input.previousAt;
-    const gap = typeof previousAt === 'number' && Number.isFinite(previousAt) && Number.isFinite(at) ? at - previousAt : NaN;
-    const common = {
-      version: STYLE_FEATURES_VERSION,
-      modality,
-      hourBucket: hourBucket(at, input.timeZone),
-      followOn: gap >= 0 && gap <= FOLLOW_ON_GAP_MS,
-      edited: input.edited === true,
-    };
-    if (modality === 'voice') {
-      return Object.freeze({ ...common, voiceDurationBucket: voiceDurationBucket(input.voiceDurationSec) });
-    }
-    const text = typeof input.text === 'string' ? input.text : '';
-    return Object.freeze({ ...common, text: Object.freeze(textFeatures(text)) });
-  } catch {
-    return zeroFeatures(modality);
-  }
+function unit(x: number | null): number | null {
+  return x === null ? null : clamp01(x);
 }
+
+/** 21 dims in STYLE_VECTOR_KEYS order, each in [0, 1] or null. */
+export function styleVector(f: StyleFeatures): (number | null)[] {
+  const bit = (value: boolean): number => (value ? 1 : 0);
+  const angle = (2 * Math.PI * f.hourBucket) / 8;
+  return [
+    bit(f.kind === 'voice'),
+    unit(f.lengthBucket / 6),
+    unit(f.wordBucket / 6),
+    unit(f.persianScriptRatio),
+    unit(f.latinScriptRatio),
+    unit(f.finglishRatio),
+    unit(f.zwnjPerWord),
+    unit(f.persianDigitShare),
+    unit(f.arabicVariantShare),
+    unit(f.latinUpperShare),
+    f.punctuationPer100 === null ? null : unit(f.punctuationPer100 / 50),
+    unit(f.persianQuestionShare),
+    bit(f.repeatedPunctuation),
+    bit(f.endsWithPunctuation),
+    unit(f.emojiCount / 5),
+    unit(f.emoticonCount / 5),
+    unit((f.burstIndex - 1) / 9),
+    bit(f.edited),
+    unit((Math.sin(angle) + 1) / 2),
+    unit((Math.cos(angle) + 1) / 2),
+    f.voiceDurationBucket === null ? null : unit(f.voiceDurationBucket / 4),
+  ];
+}
+
+const QUANTUM = 1e-9;
+const quantised = z.number().min(0).max(1).refine((v) => Math.abs(v * 20 - Math.round(v * 20)) < QUANTUM * 20);
+const ratioField = quantised.nullable();
+const int = (min: number, max: number) => z.number().int().min(min).max(max);
+
+/** Strict: anything that is not exactly a feature set (e.g. a `text` key) is rejected. */
+export const styleFeaturesSchema: z.ZodType<StyleFeatures> = z.object({
+  version: z.literal(1),
+  kind: z.enum(['text', 'voice']),
+  lengthBucket: int(0, 6),
+  wordBucket: int(0, 6),
+  persianScriptRatio: ratioField,
+  latinScriptRatio: ratioField,
+  finglishRatio: ratioField,
+  zwnjPerWord: ratioField,
+  persianDigitShare: ratioField,
+  arabicVariantShare: ratioField,
+  latinUpperShare: ratioField,
+  punctuationPer100: int(0, 50).nullable(),
+  persianQuestionShare: ratioField,
+  repeatedPunctuation: z.boolean(),
+  endsWithPunctuation: z.boolean(),
+  emojiCount: int(0, 5),
+  emoticonCount: int(0, 5),
+  burstIndex: int(1, 10),
+  edited: z.boolean(),
+  hourBucket: int(0, 7),
+  voiceDurationBucket: int(0, 4).nullable(),
+}).strict();

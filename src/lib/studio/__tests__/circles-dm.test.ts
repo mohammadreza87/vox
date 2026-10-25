@@ -10,7 +10,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { TelegramUpdate } from '../../tireh/telegram/client';
 import { agentCard, AGENT_NOTICE, copyHash } from '../../circles/notice';
 import { FirestoreAgentChoiceStore } from '../../circles/choice-store';
-import { fakeFirestore } from '../../tireh/identity/__tests__/fake-firestore';
+import { fakeFirestore } from './fake-firestore';
 import { personId } from '../org-bridge';
 import { handleAgentUpdate } from '../updates';
 import { hire, ID, makeStudio, seedOrg, T0, type Harness } from './helpers';

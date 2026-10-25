@@ -1,97 +1,96 @@
-# S10L: Identity confidence library (not wired)
+# S10L: identity confidence library (not wired)
 
-Step S10L of `docs/AGENT_INTELLIGENCE_SOLUTION.md` (sections 2.5, 4.6, 4.9 and the Step 10 row of section 5).
+Step S10L of docs/AGENT_INTELLIGENCE_SOLUTION.md (sections 2.5 and 4.9, Step 10 row of section 5).
 Base commit: `6d00b8066e5d8e8d444bb47d978aa571e20929df`.
 
 ## Goal
 
-Add a self-contained, unwired library under `src/lib/tireh/identity/` that implements the identity-confidence seam. Six parts:
+Add a self-contained library under `src/lib/tireh/identity/` that Step 10 can wire later. It has five parts:
 
-1. Content-free, Unicode-safe style features computed from one message.
-2. A rolling per-person profile: an exponential moving average with a 90-day half-life, at least 50 messages before scoring, statistics reset after 7 days of absence.
-3. A sequential CUSUM-style test over at least 5 messages. It compares the person's own profile against an explicit unknown class, uses per-person thresholds, enforces a budget of at most 1 false prompt per member per week, and auto-disables members by Gini of per-user error.
-4. Log-odds fusion of the account prior, the voice band and the style hint, with structural caps. Hints only ever lower the level, and style alone can move a session from consistent to uncertain and never to inconsistent.
-5. File, in-memory and Firestore (`vox_style_profiles`) stores. They hold only aggregate numbers, gated by `optional.personalization`, and rows are deleted on withdrawal or an epoch bump.
-6. An `IdentityService` implementation that matches the shared contract exactly.
+- A content-free style feature extractor.
+- A per-person rolling style profile: a time-decayed EMA with a 90-day half-life, at least 50 messages before scoring, and re-baselining after absences.
+- A windowed sequential log-likelihood-ratio test. It scores at least 5 messages against the person's own profile and an explicit unknown class, uses per-person thresholds that target fewer than one false prompt per week, and auto-disables a member using the Gini coefficient of per-user error.
+- Log-odds fusion of the account prior, a voice hint and a style hint, with hard caps: style alone can only move consistent to uncertain, and hints only ever lower the level.
+- In-memory, file and Firestore (`vox_style_profiles`) profile stores, written only under `optional.personalization` and deleted on withdrawal or a consent-epoch bump.
 
-Nothing in `gateway.ts`, the boundary, adaptive policy or persistence changes. No production code imports the library. There is no flag: with the library unused, runtime behaviour is byte-identical to the base.
+The `IdentityService` interface matches the shared contract exactly. Nothing outside `src/lib/tireh/identity` imports the library in this step: no gateway, boundary, Studio or runtime wiring, and no flag. With every flag unset, runtime behaviour is byte-identical to the base.
 
 ## Files
 
-| Path | Content |
+| File | Content |
 |---|---|
-| `voice-band.ts` | Byte-identical to the contract's shared file 3 (sha256 `b8d0a41d69e38129c3b47b4450194133e3a90b075dbc54c55c775b03e88421bd`). Never reformat. |
-| `types.ts` | Contract types verbatim (`IdentityLevel`, `SessionConsistency`, `StyleHint`, `IdentitySignals`, `IdentityAssessment`, `IdentityService`); re-exports `IdentityHint` and `StyleFeatures`; rank tables `IDENTITY_LEVEL_RANK`, `SESSION_RANK`; `lowerLevel()`/`lowerSession()`; `EnrollRefusal`, `IdentityLogEvent`, `IdentityLog`; compile-time `HintIsolationCheck` (Assert/Disjoint over keyof). Only adaptive import: `import type` from `../../adaptive/types`. |
-| `style-features.ts` | `extractStyleFeatures()`, strict zod `styleFeaturesSchema`, `quantize()`, `lengthBucket()`, `hourBucket()`, `voiceDurationBucket()`, `FINGLISH_MARKERS` (30 frozen tokens). |
-| `profile.ts` | Rolling profile as pure functions and strict zod `styleProfileSchema`. |
-| `test.ts` | Sequential test and calibration (a source module despite the name; vitest collects only `*.test.ts`). |
-| `fusion.ts` | `assessIdentity()`, `validateWeights()`, `DEFAULT_FUSION_WEIGHTS`. |
-| `store.ts` | `StyleProfileStore`, `InMemoryStyleProfileStore`, `createFileStyleProfileStore(path)`, `FirestoreStyleProfileStore(db)`, `styleProfileDocId(key)`. |
-| `service.ts` | `StyleIdentityService implements IdentityService`. |
-| `index.ts` | Barrel; nothing outside the directory imports it in this step. |
-| `__tests__/style-fixtures.ts`, `__tests__/fake-firestore.ts` | Strict-clean test helpers. |
-| `__tests__/*.test.ts` | style-features, profile, sequential-test, fusion-caps, hint-isolation, content-free, stores, service, voice-band. |
+| `voice-band.ts` | Shared file 3 of the contract, byte-identical with S11L (sha256 `b8d0a41d69e38129c3b47b4450194133e3a90b075dbc54c55c775b03e88421bd`). Never edited. |
+| `types.ts` | The S10L contract block verbatim (`IdentityLevel`, `SessionConsistency`, `StyleHint`, `IdentitySignals`, `IdentityAssessment`, `IdentityService`), `IdentitySpace`, `StyleFeatures`, `IDENTITY_LEVEL_RANK`. The only adaptive import is `import type { IdentityHint } from '../../adaptive/types';`. |
+| `style-features.ts` | Pure extractor `extractStyleFeatures`, `nextBurstIndex`, `styleVector` (21 dims), `STYLE_FEATURE_KEYS`, `STYLE_VECTOR_KEYS`, `STYLE_VECTOR_DIM`, `BINARY_VECTOR_DIMS`, `SPLIT_WINDOW_MS`, `FINGLISH_LEXICON`, strict zod `styleFeaturesSchema`. Raw text is read only inside the function; output holds only numbers, booleans, null, `version: 1` and `kind`. No character n-grams. Graphemes via `Intl.Segmenter` (fallback `Array.from`), NFC normalisation, ratios quantised to 0.05. |
+| `profile.ts` | Pure functions over an immutable `StyleProfile`: `newProfile`, `observeProfile` (time-decayed EMA, `HALF_LIFE_MS` 90 days, variance clamped to `[VARIANCE_FLOOR, unknown variance]`, re-baseline after 30-day absence with weights capped at 10), `profileReady` (50 messages, 20 after a re-baseline), `decayFactor`, `personModel`, `UNKNOWN_MODEL` (explicit unknown class), `profileDocId` (sha256, 40 hex), strict `styleProfileSchema`. |
+| `test.ts` | Pure sequential test: `messageLlr` (diagonal Gaussian LLR, per-dim clamp 2, per-message clamp 4, dims with weight < 5 skipped), `stepSequential` (window 12, no decision before 5 messages, sticky downgrades), `personThreshold` (default -10; otherwise quantile of self scores minus 1 targeting 0.5 false prompts per week, clamped to [-40, -4]), `quantile`, `gini`, `evaluateFairness` (budget rule and Gini auto-disable). Not a vitest file: the include glob is `src/**/*.{test,spec}.{ts,tsx}`. |
+| `fusion.ts` | Pure, never-throwing `fuseIdentity`: account prior in log-odds, voice bands (negative bands always apply; MATCH only for a well-formed `voice_match` hint for the account person; `speakerLabel` never read), style term capped at -3, session from log-odds, style-alone floor at uncertain, level never above the ceiling, frozen four-key result. |
+| `store.ts` | `StyleProfileStore`, `InMemoryStyleProfileStore`, `createFileStyleProfileStore(path)` (single writer, in-process mutex, tmp + chmod 0600 + rename), `FirestoreStyleProfileStore` (`vox_style_profiles/{profileDocId}`). Every put and read is strict-schema validated; failures reject with the fixed `Error('style_profile_invalid')`. No logging. |
+| `index.ts` | `IdentityConfidenceService implements IdentityService` plus re-exports. `verifyVoiceNote` (guest/group/abort/disabled/provider_error guards around an injected `VoiceNoteVerifier`), `observeStyle` (withdrawal delete, schema check, enrolled-only, epoch bump delete, in-memory bounded sessions with 30-minute idle close, score before update, profile frozen while a session is flagged), `enroll`, `assess`, plus `recordPromptOutcome`, `forget`, `applyFairness`, `sweep`. Logging only via `options.log?.warn('<fixed code>')`. |
 
-### Style features
+## Interfaces
 
-Preprocessing: lone surrogates become U+FFFD (non-`u` regex); NFKC; truncate to `MAX_ANALYSED_GRAPHEMES = 4096` graphemes via `Intl.Segmenter('und', {granularity: 'grapheme'})`; words come from the word segmenter with `isWordLike`, lowercased.
+```ts
+export interface IdentityService {
+  verifyVoiceNote(input: VoiceNoteInput, signal?: AbortSignal): Promise<VoiceVerification>;
+  observeStyle(input: { personaId: string; personId: string; space: 'work'|'personal'; features: StyleFeatures; at: number; personalizationAllowed: boolean }): Promise<{ stored: boolean; hint?: StyleHint }>;
+  enroll(input: { personId: string; space: 'work'|'personal'; kind: 'style_baseline'; at: number; personalizationAllowed: boolean }): Promise<{ enrolled: boolean; reason?: string }>;
+  assess(signals: IdentitySignals): IdentityAssessment; // hints only lower: level <= (verifiedRecently ? 'verified' : 'account')
+}
 
-Ratios (quantized to a 0.05 grid in [0,1], 0 when the denominator is 0):
+export interface IdentityServiceOptions {
+  readonly store: StyleProfileStore;
+  readonly voice?: VoiceNoteVerifier;
+  readonly epochOf?: (personId: string, space: 'work' | 'personal') => number | undefined | Promise<number | undefined>;
+  readonly unknown?: GaussianModel;
+  readonly log?: Pick<Console, 'warn'>; // 'identity_style_store_unavailable' | 'identity_voice_unavailable'
+}
+```
 
-- `persianScriptRatio` = `\p{Script=Arabic}` letters / `\p{L}` letters; `latinScriptRatio` likewise for Latin.
-- `finglishRatio` = Latin word tokens in `FINGLISH_MARKERS` / Latin word tokens.
-- `punctuationRate` = `\p{P}` graphemes / non-whitespace graphemes.
-- `emoticonRate` = (graphemes with `\p{Extended_Pictographic}` + ASCII emoticons `/(?:[:;=8][-'^]?[)(DPpOo3\]\[|*]|<3|\^_\^)/` + runs of 2+ `)` or `(` outside an emoticon match) / non-whitespace graphemes, capped at 1.
-- `zwnjRate` = U+200C count / Arabic-script word tokens, capped at 1.
-- `arabicVariantRatio` = (U+064A + U+0643) / (U+064A + U+0643 + U+06CC + U+06A9).
-- `repeatedCharRate` = matches of `/(\p{L})\1{2,}/gu` / word tokens, capped at 1.
-- `uppercaseRatio` = `\p{Lu}` among Latin letters / Latin letters.
-
-Other: `terminalPunctuation` (trimmed text ends with `. ! ? … ؟ ۔`); `digitScript` 0 none, 1 ASCII, 2 Persian, 3 Arabic-Indic, 4 mixed; `lengthBucket` by graphemes (<=3, <=10, <=30, <=80, <=200, above). Voice never reads `text`; `voiceDurationBucket` <5 s, <15 s, <60 s, >=60 s or unknown. `hourBucket = floor(hour/4)` in the given time zone (UTC fallback). `followOn` when `0 <= at - previousAt <= 60 s`. Pure, never throws, returns a frozen object without strings except the modality.
-
-### Profile
-
-Bernoulli keys (voice, followOn, edited, terminalPunctuation), categorical keys (hourBucket 6, lengthBucket 6, digitScript 5, voiceDurationBucket 4) and Gaussian keys (the nine ratios, weighted Welford with decay). Each update applies `d = 0.5 ** (max(0, at - lastAt) / HALF_LIFE_MS)`. Text-only keys update only on text, `voiceDurationBucket` only on voice. `expiresAt = lastAt + 7 days`; after expiry statistics reset (calibration kept); the whole row is deleted 90 days after `lastAt`. `isScorable` at >= 50 messages. `bernoulliP = (w*p+1)/(w+2)` clamped to [0.02, 0.98]; categorical add-one smoothing; Gaussian variance floor 0.0025. `needsRebaseline` on epoch or version mismatch or 7 days of absence. Rows carry `purpose: 'optional.personalization'`, `version: 1`, only ids, enums and finite numbers; strict schema at every level.
-
-### Sequential test and calibration
-
-`UNKNOWN_CLASS_V1` (uninformed: Bernoulli 0.5, uniform categoricals, Gaussian mean 0.5 / variance 0.09). `messageLlr` sums `log p_unknown - log p_person`, clamped to ±1.5, 0 when not scorable. `stepSequential`: `s = max(0, s + llr - 0.25)`; `'uncertain'` is sticky and requires `n >= 5` and `s >= threshold`; never `'inconsistent'`. Sessions expire after 30 minutes. A `'confirmed_self'` (false) prompt raises the threshold by 1.5 (max 12), mutes for 7 days and disables after 3 within 28 days; `'someone_else'` only increments true prompts. `relaxCalibration` lowers by 0.5 after 28 quiet days, never below 5. `giniCoefficient` and `autoDisable` (>= 5 members with >= 10 sessions, gini >= 0.4, outliers at >= 2x mean error and >= 0.05, plus anyone with >= 3 recent false prompts).
-
-### Fusion
-
-Defaults: priorAccount 4, priorVerified 5, voiceMatch 0, voiceUncertain -2, voiceNoMatch -4.5, styleUncertain -3.5. Voice counts only for `hint.source === 'voice_match'`, a non-NO_OPINION band and net speech >= 3000 ms; `claimedPersonId`/`speakerLabel` are never read. Style counts only for `source 'style'`, integer messages >= 5 and a non-consistent state (`inconsistent` treated as `uncertain`). `logOdds = min(prior, prior + evidence)`; consistent >= 2, uncertain >= 0, else inconsistent; style-only inconsistent is capped to uncertain. `level = consistent ? base : 'unverified'`. Invalid account id gives `{unverified, uncertain, 0, capped: true}`. Output frozen with exactly `capped, level, logOdds, session`.
-
-### Stores
-
-`update(key, fn)` is atomic read-modify-write: null deletes, a key mismatch throws, every written row is parsed with `styleProfileSchema` first. Invalid rows on read are treated as absent and deleted. File store: JSON `{version: 1, profiles}` via tmp file, chmod 0600, rename, mkdir lock with reload. Firestore: `runTransaction`, where-queries with batched deletes of up to 400, `sweep(now)` resets or deletes expired rows; plain numbers, never undefined. No text, single-message features, session state or hints are ever stored.
-
-### Service
-
-`verifyVoiceNote` never throws; NO_OPINION `guest_or_group` without calling the verifier for groups or guests; `disabled` without a verifier; `timeout` on abort; `provider_error` on a throw. `observeStyle` validates strictly, deletes on missing consent, re-baselines on epoch mismatch, keeps a bounded LRU of per-key sessions with a pending queue so uncertain sessions are never learned, writes through `store.update`, and returns a hint only when `hintAllowed`. `enroll` is idempotent and resets statistics while keeping calibration. Extra methods: `recordPromptOutcome`, `recalibrate` (counts only), `forgetPerson`, `purgePersona`. Logs carry only `{type: 'identity', code}`.
+Constants: `PRIOR_LOG_ODDS = { verified: 6, account: 3, unverified: 0 }`, `VOICE_LOG_LR = { MATCH: 1, UNCERTAIN: -2.5, NO_MATCH: -6 }`, `STYLE_LOG_LR = { consistent: 0, uncertain: -2, inconsistent: -3 }`, `STYLE_MAX_DROP = 3`, `SESSION_CONSISTENT_MIN = 1.5`, `SESSION_INCONSISTENT_MAX = -1.5`, `LOG_ODDS_BOUND = 12`, `MIN_SEQUENTIAL_MESSAGES = 5`, `SEQUENTIAL_WINDOW = 12`, `MAX_DIM_LLR = 2`, `MAX_MESSAGE_LLR = 4`, `DEFAULT_LOWER_THRESHOLD = -10`, `THRESHOLD_MARGIN = 1`, `MIN_SELF_SCORES = 20`, `TARGET_FALSE_PROMPTS_PER_WEEK = 0.5`, `FALSE_PROMPT_BUDGET_PER_WEEK = 1`, `SESSION_IDLE_MS = 30 min`, `MAX_SESSIONS = 10_000`, `GINI_DISABLE_THRESHOLD = 0.5`, `MIN_FAIRNESS_MEMBERS = 5`, `MIN_FAIRNESS_WEEKS = 2`, `HALF_LIFE_MS = 90 days`, `MIN_PROFILE_MESSAGES = 50`, `ABSENCE_REBASELINE_MS = 30 days`, `MIN_REBASELINE_MESSAGES = 20`, `REBASELINE_WEIGHT_CAP = 10`, `VARIANCE_FLOOR = 0.0025`, `MAX_SELF_SCORES = 64`, `PROFILE_RETENTION_MS = 180 days`.
 
 ## Flags
 
-None. S10L is not wired and reads no flag; `src/lib/tireh/flags.ts` is not created. Runtime gating is by parameters: nothing is stored unless `personalizationAllowed === true`; `verifyVoiceNote` returns NO_OPINION `disabled` unless a verifier is injected.
+S10L adds no flag and no env var, and does not create `src/lib/tireh/flags.ts`. Nothing outside `src/lib/tireh/identity/` imports the library, so the runtime is byte-identical to the base by construction. Gating is by parameters: `observeStyle` and `enroll` require `personalizationAllowed`, and `verifyVoiceNote` is `NO_OPINION 'disabled'` unless a verifier is injected.
 
-## Acceptance (summary)
+## Tests (all under `src/lib/tireh/identity/__tests__/`)
 
-- Only paths under `src/lib/tireh/identity/` (plus this spec) change; no `src/lib/tireh/identity.ts`.
-- `voice-band.ts` sha256 matches; contract declarations reproduced; `StyleIdentityService implements IdentityService` under strict lib tsc; `HintIsolationCheck` compiles.
-- Static scan proves no production importer; hints only lower; style-only never yields inconsistent; voice MATCH contributes 0.
-- Canary tests prove no message text in rows, file bytes, Firestore docs, return values or logs.
-- Consent, withdrawal, epoch bump, 7-day reset and 90-day deletion behave as specified.
-- Sequential test is deterministic, never alarms before 5 messages, catches the impostor fixture within 10 messages with zero alarms on held-out data; false-prompt budget and Gini auto-disable hold.
+- `style-features.test.ts`: Persian, English and Finglish extraction, the digit rule, Arabic variants, emoji clusters, Unicode safety, buckets, voice input, hour buckets, bursts, quantisation, the vector.
+- `profile.test.ts`: decay, EMA convergence and recency weighting, readiness, re-baselining, variance clamps, null dims, out-of-order timestamps, immutability, doc ids.
+- `sequential-test.test.ts`: decisions, clamps, the unknown class, sticky downgrades, thresholds, determinism, the false-prompt budget, detection, Gini and fairness.
+- `fusion.test.ts`: exhaustive cap table and the named consequences, hostile input.
+- `service.test.ts`: enrollment, withdrawal, epoch bump, readiness, flagged sessions, idle close, prompt outcomes, fairness, voice guards, hostile stores, space isolation, forget and sweep.
+- `store.test.ts`: the same behaviour suite over the in-memory, file and Firestore stores; strict rejection; file mode 0600 under `os.tmpdir()`.
+- `content-free.test.ts`: text and Persian canaries never reach features, stores, logs or results.
+- `hint-isolation.test.ts`: hints are ignored by `authorizeAccess`, `isAuthorizationCurrent` and `resolveVerifiedPerson`; source scans.
+- `voice-band.test.ts`: the shared file hash.
 
 ## Out of scope
 
-Wiring (GatewayDeps.identity, TurnSnapshot.identity.level, gateway/transcribe/liveTurn calls, Studio construction); all Step 1 code; effects of a lowered level; edits to `src/lib/adaptive/types.ts`, `policy.ts` or existing tests; voiceprints (S11L); `flags.ts`; outbox/worker extraction (Step 5) and `vox_audit` identity rows; reply adaptation and the bandit (S14); character or hashed n-grams and misspelling dictionaries (dictionary-attackable); any LLM "same author?" judge; benchmarks or threshold tuning on real members; Firestore index files and package files.
+All wiring (GatewayDeps.identity, TurnSnapshot.identity.level, policy key, boundary/unchanged, Studio.adaptiveContext, liveTurn), the effects of an uncertain session, live feature computation from Telegram updates, style-based adaptation, voiceprints (S11L), any change to `src/lib/adaptive/**`, character n-grams and LLM judges, flags.ts, diagnostics, audit rows, consent copy, DPIA, Firestore indexes, calibration on real members and any admin surface. The signal is never reported to admins.
 
 ## Risks
 
-- Section 4.9 phase 0 says no persisted identity model while Step 10 requires a rolling profile. Resolution: aggregate statistics only, reset after 7 days of inactivity, calibration kept up to 90 days. A member silent for a week needs 50 new messages before scoring resumes. Product/counsel to confirm in the DPIA.
-- `UNKNOWN_CLASS_V1`, thresholds, drift and weights are uninformed defaults; fixtures prove mechanics, not accuracy. Wiring stays off until an internal benchmark.
-- Warm-up poisoning: the first 50 messages can be from whoever holds the phone.
-- Per-process session map on multi-instance deployments weakens detection but never widens access.
-- Gini auto-disable needs >= 5 members with >= 10 sessions; small pilots rely on the absolute rule and the 7-day mute.
-- GDPR profiling: notice and DPIA under `optional.personalization` before wiring; callers must not log assessments or hints.
-- `voice-band.ts` merges cleanly with S11L only if byte-identical.
+- Section 4.9 phase 0 says there is no persisted identity model; this step persists per-person profiles. Mitigation: profiles exist only after an explicit enroll with personalization allowed, are deleted on withdrawal, epoch bump, `forget()` and after 180 days idle, and are never reported. Wiring waits for the DPIA.
+- All constants and the fixture false-prompt and detection numbers are synthetic and uncalibrated; they prove mechanics and determinism, not real accuracy.
+- The Finglish heuristic is weak by design and never stores matched words.
+- Imitation and drift: style can only lower to uncertain; profiles are frozen during flagged sessions; re-baselining and the half-life handle drift.
+- The Gini rule needs at least 5 profiled members per space; smaller orgs use the budget rule only.
+- Feature vectors are still personal data: ratios are quantised, nothing is keyed by chat or persona, Firestore ids are hashed, `personId` is kept for erasure.
+- The file store assumes one writing process.
+- In-memory session state is lost on restart; the only effect is a later hint.
+- `test.ts` is a source file, not a test file.
+
+## Implementation notes and deviations
+
+- Branch `aiq/identity-lib` in the harness worktree (the run's computed task names this branch), not `agent-intel/s10l-identity-confidence` in `$TMPDIR`.
+- Fusion: the style-alone floor applies unless a negative voice band (UNCERTAIN or NO_MATCH) contributed, and a MATCH is ignored when there is no account. Taken literally ("no voice band contributed a non-zero term"), a MATCH (+1) plus an inconsistent style (-3) on the unverified ceiling would make style alone produce an inconsistent session, which breaks the invariant.
+- Fusion: structurally malformed input (non-object signals, voice or style; a non-string account; an unknown band string; non-finite style messages; an unknown consistency or source) returns the conservative fallback. Well-formed but ineligible evidence (fewer than 5 messages, a MATCH for another person or from another source) is ignored as the algorithm says.
+- `verifyVoiceNote` treats any `guestAudience` other than `false` as a guest (fail closed), and a delegate result without a known band becomes `provider_error`.
+- Profile weights are capped at 1e6 and means clamped to [0, 1], so a flood of messages keeps the profile schema-valid.
+- `forget()` rejects with the fixed `Error('identity_forget_failed')` when the store fails, so erasure failures are visible; `applyFairness` re-reads each profile under the per-person lock before disabling it; the service serialises read-modify-write per person and space in-process.
+- The extractor inspects at most 16,384 UTF-16 units and replaces lone surrogates (`toWellFormed`) before NFC.
+- `FINGLISH_LEXICON` has about 80 entries including the spec's list; `jan` is excluded as ambiguous.
+- Tests resolve source files with `path.resolve(dirname(fileURLToPath(import.meta.url)), ...)` because Vite rewrites `new URL(relative, import.meta.url)` into non-file URLs under vitest.
+- The lifecycle canary test has a 60 s timeout: the file store's ~240 atomic writes take 20-45 ms each under the sandboxed temp directory.
+- `simulateWeeks` enrolls the owner itself and answers the first prompt of a flagged session through `recordPromptOutcome` (option `answerPrompts`, default true). The synthetic owner is highly separable (owner messages almost always reach the +4 clamp), so the budget and detection results prove mechanics and determinism, not calibration.
