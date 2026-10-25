@@ -12,6 +12,10 @@ export interface InitDataUser {
   first_name: string;
   last_name?: string;
   username?: string;
+  /** Signed with the rest; only read, never trusted for authority (locale of quiet records). */
+  language_code?: string;
+  /** Signed: false when the person turned off messages from the bot that opened the Mini App. */
+  allows_write_to_pm?: boolean;
 }
 
 export function verifyInitData(initData: string, botToken: string, maxAgeSeconds = 86_400, nowSeconds = Math.floor(Date.now() / 1000)): InitDataUser | null {

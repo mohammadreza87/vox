@@ -29,6 +29,9 @@ export function ConversationScreen({ id }: { id: string }) {
       title={agent ? <span className="vx-chat-title"><AgentFace look={agent.look} stage={agent.stage} size={24} variant="disc" still label={agent.persona.name} />{agent.persona.name}</span> : t('Conversation', 'گفتگو')}
       subtitle={agent ? `${spaceName} · ${agent.persona.role}` : undefined}
       end={agent && <span className="vx-chat-actions">
+        {/* Settings v2: connected apps are used from Connectors & plugins (Ask), never inside this chat's replies. */}
+        {nav.me?.features?.settingsV2 && agent.status === 'active' && <button type="button" className="vx-icon-btn" aria-label={t('Connectors', 'اتصال‌ها')}
+          onClick={() => { haptic.tap(); nav.push({ name: 'settings', page: 'agent', params: { agentId: id, section: 'connectors' } }); }}><Icon name="plug" size={20} /></button>}
         {bot && <button type="button" className="vx-icon-btn" aria-label={t('Open in Telegram', 'باز کردن در تلگرام')} onClick={() => { haptic.tap(); openTelegram(`https://t.me/${bot}`); }}>
           <Icon name="external" size={20} /></button>}
         <button type="button" className="vx-icon-btn" aria-label={t('Chat options', 'گزینه‌های گفتگو')} aria-haspopup="dialog" aria-expanded={options}

@@ -419,6 +419,9 @@ async function create(): Promise<Studio> {
         await studio.deps.relationships!.invalidate(key, { sourceIds, reason });
       }
     });
+    // Connections reach Studio as functions behind a dynamic import (no class crosses a route bundle, no instanceof).
+    studio.deps.connectionUsage = async (agentId, viewerTelegramId) => (await import('../connections/runtime')).connectionUsageFor(studio, agentId, viewerTelegramId);
+    studio.deps.connectionsRights = async () => (await import('../connections/runtime')).connectionsRightsFor(studio);
     studio.deps.shared = new SharedMemoryService(new SharedMemoryRepository(storage.sharedStorage), storage.adaptive!, sharedAuthorityFromStudioStore(storage.store));
     // S08: content-free vox_audit rows and supersede notices, only when a flag is set at startup.
     { const flags = tirehFlags(); if (flags.auditLog || flags.sharingV2) { const db = config.storage === 'firestore' ? await (await import('@/lib/firebase-admin')).getAdminDb() : null; const audit = db ? new FirestoreAuditStore(db) : createFileAuditStore(join(config.dataDir, 'vox-audit.jsonl')); const notices = db ? new FirestoreSupersededNoticeStore(db) : createFileSupersededNoticeStore(join(config.dataDir, 'supersede-notices.json')); studio.deps.audit = audit; studio.deps.memoryNotices = notices; studio.deps.memory = { ...studio.deps.memory, memories: auditMemoryStore(studio.deps.memory.memories, audit, notices), offers: auditShareOfferStore(studio.deps.memory.offers, audit) }; } }

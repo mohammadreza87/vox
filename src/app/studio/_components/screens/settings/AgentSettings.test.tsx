@@ -6,14 +6,15 @@ import { AgentSettingsScreen } from './AgentSettings';
 
 const state = vi.hoisted(() => ({
   agent: vi.fn(), groups: vi.fn(), speak: vi.fn(), voiceOptions: vi.fn(), chooseDefaultVoice: vi.fn(), updatePersona: vi.fn(), catalog: vi.fn(), members: vi.fn(),
-  read: vi.fn(), grant: vi.fn(), profileSync: vi.fn(),
+  read: vi.fn(), grant: vi.fn(), profileSync: vi.fn(), connectorUsage: vi.fn(), agentHistory: vi.fn(),
   nav: null as unknown as Record<string, unknown>,
 }));
 
 vi.mock('../../../_lib/client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../_lib/client')>();
   return { ...actual, tg: () => null, api: { ...actual.api, agent: state.agent, groups: state.groups, speak: state.speak, voiceOptions: state.voiceOptions,
-    chooseDefaultVoice: state.chooseDefaultVoice, updatePersona: state.updatePersona, catalog: state.catalog, members: state.members } };
+    chooseDefaultVoice: state.chooseDefaultVoice, updatePersona: state.updatePersona, catalog: state.catalog, members: state.members,
+    connectorUsage: state.connectorUsage, agentHistory: state.agentHistory } };
 });
 vi.mock('../../../_lib/adaptive-client', () => ({ adaptiveApi: { read: state.read, agent: state.grant } }));
 vi.mock('../../Cloud', async (importOriginal) => ({ ...await importOriginal<typeof import('../../Cloud')>(), Cloud: () => null, AgentFace: ({ label }: { label?: string }) => <span role="img" aria-label={label} /> }));
@@ -55,6 +56,8 @@ const rowTitles = (heading: string) => within(screen.getByRole('region', { name:
 beforeEach(() => {
   vi.clearAllMocks();
   state.members.mockResolvedValue({ people: [], agentAdmins: [] });
+  state.connectorUsage.mockResolvedValue({ providers: [] });
+  state.agentHistory.mockResolvedValue({ history: [] });
   state.groups.mockResolvedValue({ groups: [{ chatId: 1, title: 'Team', hasGuests: false, memberCount: 3, agents: [{ id: 'nova', name: 'Nova', look: {} }] }] });
   state.catalog.mockResolvedValue({ version: '1', packs: [], roles: [], skills: [
     { id: 'core.decision-memo', title: 'Decision memo', summary: 'Writes one' }, { id: 'core.weekly-review', title: 'Weekly review', summary: 'Reviews' },
@@ -70,7 +73,7 @@ describe('agent settings hub', () => {
     await open(agent());
     expect(screen.getByRole('heading', { name: 'Nova settings' })).toBeInTheDocument();
     expect(screen.getByText('Nova is forming: 5 days left to shape its voice and skills.')).toBeInTheDocument();
-    expect(rowTitles('Nova for everyone')).toEqual(['Profile & look', 'Voice', 'Skills', 'Who can talk', 'Groups & channels']);
+    expect(rowTitles('Nova for everyone')).toEqual(['Profile & look', 'Voice', 'Skills', 'Who can talk', 'Groups & channels', 'Connectors people use', 'Change history']);
     expect(rowTitles('Nova and you')).toEqual(['Memory', 'Permissions', 'Connectors & plugins', 'Notifications', 'Activity']);
     const everyone = within(screen.getByRole('region', { name: 'Nova for everyone' }));
     expect(everyone.getByText('Warm · built-in')).toBeInTheDocument();
@@ -80,7 +83,7 @@ describe('agent settings hub', () => {
     expect(state.groups).toHaveBeenCalledTimes(1);
   });
 
-  it('rows lead to section pages, the existing memories screen and the renamed connectors page', async () => {
+  it('rows lead to section pages, the existing memories screen and the Connectors & plugins page', async () => {
     nav(ALICE);
     await open(agent());
     const push = state.nav.push as ReturnType<typeof vi.fn>;
@@ -89,7 +92,7 @@ describe('agent settings hub', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Memory/ }));
     expect(push).toHaveBeenLastCalledWith({ name: 'memories', id: 'nova' });
     fireEvent.click(screen.getByRole('button', { name: /^Connectors & plugins/ }));
-    expect(push).toHaveBeenLastCalledWith({ name: 'settings', page: 'agent-connections', params: { agentId: 'nova' } });
+    expect(push).toHaveBeenLastCalledWith({ name: 'settings', page: 'agent', params: { agentId: 'nova', section: 'connectors' } });
     // Activity opens the agent's connector activity on its own, not the connections list again.
     fireEvent.click(screen.getByRole('button', { name: /^Activity/ }));
     expect(push).toHaveBeenLastCalledWith({ name: 'settings', page: 'agent-connections', params: { agentId: 'nova', view: 'activity' } });

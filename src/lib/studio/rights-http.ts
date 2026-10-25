@@ -16,6 +16,7 @@ import { petStoreFor } from './pet-store';
 import type { PetCare } from '../pet/types';
 import type { AgentJoin } from './types';
 import type { CircleParticipationExport, NoteExport } from '../circles/contracts';
+import type { ConnectionsExport } from '../connections/rights';
 const localLimiters = new WeakMap<Studio, StudioRateLimiter>();
 const json = (value: unknown, status = 200, headers: Record<string, string> = {}) => Response.json(value, { status, headers: { 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', ...headers } });
 
@@ -74,6 +75,17 @@ async function eraseCircles(studio: Studio, id: number): Promise<void> {
 async function eraseChannelDrafts(studio: Studio, id: number): Promise<void> {
   try { await studio.forgetChannelDrafts(id); }
   catch { (studio.deps.logger ?? console).warn('[studio] channel_draft_erasure_failed'); }
+}
+
+/** The requester's own connection records for this space (never tokens): present only when any exist, or a flag that they could not be read. */
+async function connectionsForExport(studio: Studio, id: number, space: 'work' | 'personal'): Promise<{ connections?: ConnectionsExport } | { connectionsUnavailable: true }> {
+  try { const connections = await studio.connectionsFor(id, space); return connections ? { connections } : {}; }
+  catch { (studio.deps.logger ?? console).warn('[studio] connections_export_failed'); return { connectionsUnavailable: true }; }
+}
+/** Connections at intake, like pet care: they stop at once and go once the broker drops each vault entry; never fails the filed request. */
+async function eraseConnectionRecords(studio: Studio, id: number, space: 'work' | 'personal'): Promise<void> {
+  try { await studio.forgetConnections(id, [space]); }
+  catch { (studio.deps.logger ?? console).warn('[studio] connections_erasure_failed'); }
 }
 
 export async function handleRightsRequest(studio: Studio, request: Request, path: string[], botToken: string): Promise<Response> {
@@ -164,7 +176,7 @@ export async function handleRightsRequest(studio: Studio, request: Request, path
       // withdrawal cannot bring it back (the pet page's "forget me" does the same on its own). The
       // request itself still goes to review. The request is filed either way: a pet store failure is
       // logged and retried by replaying the request (idempotent).
-      if (input.kind === 'erasure') { await erasePetCare(studio, user.id); await eraseAgentChoices(studio, user.id); await eraseCircles(studio, user.id); await eraseNotes(studio, user.id); await eraseChannelDrafts(studio, user.id); }
+      if (input.kind === 'erasure') { await erasePetCare(studio, user.id); await eraseAgentChoices(studio, user.id); await eraseCircles(studio, user.id); await eraseNotes(studio, user.id); await eraseChannelDrafts(studio, user.id); await eraseConnectionRecords(studio, user.id, input.space); }
       return respond(result, result.replayed ? 200 : 201);
     }
     if (path.length === 3 && path[0] === 'requests' && path[2] === 'actions') {
@@ -172,7 +184,7 @@ export async function handleRightsRequest(studio: Studio, request: Request, path
       // Pet care is per person and agent, not per space: every export carries all of it. Read
       // before the fences below, which must stay free of awaits. A pet store failure never fails the
       // export: it says the pet part is missing instead.
-      const petCare = result.prepared ? { ...await petCareForExport(studio, user.id), ...await agentChoicesForExport(studio, user.id), ...await circlesForExport(studio, user.id), ...await notesForExport(studio, user.id) } : undefined;
+      const petCare = result.prepared ? { ...await petCareForExport(studio, user.id), ...await agentChoicesForExport(studio, user.id), ...await circlesForExport(studio, user.id), ...await notesForExport(studio, user.id), ...await connectionsForExport(studio, user.id, space!) } : undefined;
       if (result.prepared) {
         // Serialization precedes the last synchronous authority check. There is
         // no await between this fence and constructing the attachment response.

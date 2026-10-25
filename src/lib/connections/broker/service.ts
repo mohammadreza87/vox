@@ -68,10 +68,13 @@ export class ConnectionsBroker {
     for (const profile of Object.values(options.oauthProfiles)) validateOAuthProfile(profile);
   }
   private enabled(providerId: string): void { if (!this.options.enabledProviderIds.includes(providerId)) throw new ConnectionsError(503, 'provider_not_enabled'); }
-  private async fresh(actor: ConnectionActor, space: SpaceKind, connectionId: string, requireEnabled = true): Promise<BrokerAuthority> {
-    const current = await authority(this.options.control, actor, space, connectionId);
+  private assertAuthority(current: BrokerAuthority, actor: ConnectionActor, space: SpaceKind, connectionId: string): void {
     if (current.context.accountId !== actor.accountId || current.context.scope.spaceKind !== space || current.connection.id !== connectionId ||
         current.connection.ownerAccountId !== actor.accountId || current.connection.ownerPersonId !== current.context.personId) throw new ConnectionsError(403, 'broker_authority_mismatch');
+  }
+  private async fresh(actor: ConnectionActor, space: SpaceKind, connectionId: string, requireEnabled = true): Promise<BrokerAuthority> {
+    const current = await authority(this.options.control, actor, space, connectionId);
+    this.assertAuthority(current, actor, space, connectionId);
     if (requireEnabled) {
       this.enabled(current.connection.providerId);
       if (current.connection.schemaVersion === 2 && !current.context.currentAgentIds.includes(current.connection.agentId)) throw new ConnectionsError(403, 'broker_agent_unavailable');
@@ -386,8 +389,22 @@ export class ConnectionsBroker {
   }
   async revoke(input: unknown): Promise<{ futureUseStopped: true; providerRevocation: 'verified' | 'unavailable' }> {
     const parsed = revokeRequestSchema.parse(input);
-    const current = await this.fresh(parsed.actor, parsed.space, parsed.connectionId, false);
-    if (current.connection.providerId !== parsed.providerId || !['revoked', 'deleted'].includes(current.connection.lifecycle)) throw new ConnectionsError(409, 'revoke_control_plane_first');
+    return this.revokeCurrent(await this.fresh(parsed.actor, parsed.space, parsed.connectionId, false), parsed.providerId);
+  }
+  /**
+   * Rights erasure (/v1/erase): the same vault revocation, for a connection Studio already revoked and marked
+   * erased, with no current identity confirmation (the person may never return). Studio answers 'erasedContext'
+   * only for such a connection and only for the plain account actor, so this can stop use and drop secrets, never use them.
+   */
+  async revokeErased(input: unknown): Promise<{ futureUseStopped: true; providerRevocation: 'verified' | 'unavailable' }> {
+    const parsed = revokeRequestSchema.parse(input);
+    if (parsed.actor.botAgentId) throw new ConnectionsError(400, 'broker_input_invalid');
+    const current = await this.options.control.call<BrokerAuthority>({ action: 'erasedContext', actor: parsed.actor, space: parsed.space, connectionId: parsed.connectionId });
+    this.assertAuthority(current, parsed.actor, parsed.space, parsed.connectionId);
+    return this.revokeCurrent(current, parsed.providerId);
+  }
+  private async revokeCurrent(current: BrokerAuthority, providerId: string): Promise<{ futureUseStopped: true; providerRevocation: 'verified' | 'unavailable' }> {
+    if (current.connection.providerId !== providerId || !['revoked', 'deleted'].includes(current.connection.lifecycle)) throw new ConnectionsError(409, 'revoke_control_plane_first');
     for (const controller of this.active.get(current.connection.id) ?? []) controller.abort();
     if (current.connection.providerId === 'remote_mcp') { if (!this.options.revokeForAuthority) throw new ConnectionsError(503, 'mcp_setup_unavailable'); return this.options.revokeForAuthority(current); }
     const binding = bindingFor(current);

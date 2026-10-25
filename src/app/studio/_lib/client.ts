@@ -15,6 +15,8 @@ export type { DefaultVoice, LibraryVoice, VoiceOptions };
 export type { CatalogView, RouteSuggestion };
 /** Circles S5: an agent's channels (post-only), the Add link for managers, the comments-group offer. */
 import type { ChannelDraftView, ChannelsView, ChannelView } from '@/lib/studio/circle-channels';
+import type { HistoryRow } from '@/lib/studio/history';
+export type { HistoryRow };
 export type { ChannelDraftView, ChannelsView, ChannelView };
 
 /** Body of POST catalog/route. `final: false` (typing) answers from the server's local router only. */
@@ -151,11 +153,17 @@ export interface RelationshipView {
 const enc = encodeURIComponent;
 const withDefined = <T extends object>(o: T): Partial<T> => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as Partial<T>;
 
+export interface ConnectorUsage { providers: Array<{ id: string; name: string; people: number }>; unavailable?: true }
+
 export const api = {
   relationshipObservations: () => request<{ mode: 'off' | 'shadow' | 'live'; sampledEvents: number; counts: Record<string, number>; feedbackOutcomes?: Record<string, number>; windowStart: string | null; windowEnd: string | null; scope: string }>('GET', 'relationship-observations'),
   me: () => request<Me>('GET', 'me'),
   agents: () => request<{ agents: AgentView[] }>('GET', 'agents'),
   agent: (id: string) => request<{ agent: AgentView }>('GET', `agents/${enc(id)}`),
+  /** Settings v2, managers only: per provider, how many people connected it to this agent (counts, never who). */
+  connectorUsage: (id: string) => request<ConnectorUsage>('GET', `agents/${enc(id)}/connector-usage`),
+  /** Settings v2, managers only: this agent's change history, scrubbed to roles and a fixed vocabulary. */
+  agentHistory: (id: string) => request<{ history: HistoryRow[] }>('GET', `agents/${enc(id)}/history`),
   /** A fired predecessor's name, role and skills, for any member drafting its successor. */
   successorTemplate: (id: string) => request<SuccessorTemplate>('GET', `agents/${enc(id)}/successor`),
   catalog: () => request<CatalogView>('GET', 'catalog'),

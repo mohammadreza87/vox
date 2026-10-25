@@ -11,6 +11,10 @@ import { ElevenLabsSpeechError } from './media';
 import { ROUTE_TEXT_CHARS } from './skills/route';
 import { logTelegramDiagnostic, type TelegramDiagnostic } from '../tireh/telegram/diagnostics';
 import { tirehFlags } from '../tireh/flags';
+import { settingsV2 } from './flags';
+import { MAX_AGENT_SKILLS } from './skills/types';
+import type { AgentView } from './service';
+import type { Agent } from './types';
 import type { AgentVisibility, Member, MemoryPolicy, Role, SpawnBrief } from './types';
 
 type Json = Record<string, unknown>;
@@ -119,6 +123,24 @@ async function authenticate(studio: Studio, req: Request, opts: RouterOptions, l
   return studio.ensureMember(user);
 }
 
+/** The verified initData's language (authenticate already checked the signature). */
+function localeOf(req: Request): 'en' | 'fa' {
+  try {
+    const user = JSON.parse(new URLSearchParams(req.headers.get('x-telegram-init-data') ?? '').get('user') ?? 'null') as { language_code?: unknown } | null;
+    return typeof user?.language_code === 'string' && user.language_code.toLowerCase().startsWith('fa') ? 'fa' : 'en';
+  } catch { return 'en'; }
+}
+
+/** Settings v2: the creator's quiet Telegram record when a voice or skills change committed (only they can make one). */
+function identityReceipts(studio: Studio, before: Agent | undefined, after: AgentView, locale: 'en' | 'fa'): void {
+  if (!before || !settingsV2() || after.status !== 'active') return;
+  const skills = (ids?: string[]) => [...(ids ?? [])].sort().join(',');
+  if ((before.voice?.label ?? '') !== (after.voice?.label ?? '') && after.voice?.label)
+    studio.receipts.queue({ agentId: after.id, telegramId: after.createdBy, locale, kind: 'voice', voice: after.voice.label });
+  if (skills(before.persona.skillIds) !== skills(after.persona.skillIds))
+    studio.receipts.queue({ agentId: after.id, telegramId: after.createdBy, locale, kind: 'skills', count: after.persona.skillIds?.length ?? 0, max: MAX_AGENT_SKILLS });
+}
+
 export async function handleStudioRequest(studio: Studio, req: Request, path: string[], opts: RouterOptions): Promise<Response> {
   const method = req.method.toUpperCase();
   try {
@@ -140,7 +162,7 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
         avatars: !!studio.deps.openai, voices: !!studio.deps.eleven, calls: !!studio.deps.openai || !!studio.deps.eleven, liveCalls: studio.liveCalls, legacyMemorySharing: !studio.deps.adaptive,
         skillRouting: studio.deps.decider ? 'decisions' : 'local',
         // Settings v2 (agent settings hub, regrouped You tab, Telegram CloudStorage prefs); read per request, default off.
-        settingsV2: process.env.STUDIO_SETTINGS_V2 === '1',
+        settingsV2: settingsV2(),
       } });
     }
     if (me.role === 'pending') throw new StudioError(403, 'Waiting for an admin to approve you.');
@@ -218,7 +240,12 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
       }
       if (id && !action) {
         if (method === 'GET') return json({ agent: await studio.getAgent(me, id) });
-        if (method === 'PATCH') return json({ agent: await studio.updatePersona(me, id, ((await body(req)).persona ?? {}) as Json) });
+        if (method === 'PATCH') {
+          const before = settingsV2() ? (await studio.deps.store.read()).agents.find((a) => a.id === id) : undefined;
+          const agent = await studio.updatePersona(me, id, ((await body(req)).persona ?? {}) as Json);
+          identityReceipts(studio, before, agent, localeOf(req));
+          return json({ agent });
+        }
         if (method === 'DELETE') { await studio.deleteDraft(me, id); return json({ ok: true }); }
       }
       if (id && action) {
@@ -242,15 +269,21 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
           case 'POST voice': {
             const b = await body(req);
             if (b.action === 'design') return json({ agent: await studio.designVoices(me, id, str(b.description, 1000)) });
-            if (b.action === 'choose-design') return json({ agent: await studio.chooseDesignedVoice(me, id, str(b.generatedVoiceId, 200) ?? '') });
-            if (b.action === 'choose-default') return json({ agent: await studio.chooseDefaultVoice(me, id, str(b.voiceId, 200) ?? '') });
-            if (b.action === 'choose-library') {
-              return json({ agent: await studio.chooseLibraryVoice(me, id, {
+            const before = settingsV2() ? (await studio.deps.store.read()).agents.find((a) => a.id === id) : undefined;
+            let agent: AgentView;
+            if (b.action === 'choose-design') agent = await studio.chooseDesignedVoice(me, id, str(b.generatedVoiceId, 200) ?? '');
+            else if (b.action === 'choose-default') agent = await studio.chooseDefaultVoice(me, id, str(b.voiceId, 200) ?? '');
+            else if (b.action === 'choose-library') {
+              agent = await studio.chooseLibraryVoice(me, id, {
                 publicOwnerId: str(b.publicOwnerId, 200) ?? '', voiceId: str(b.voiceId, 200) ?? '', name: str(b.name, 60) ?? 'Voice',
-              }) });
-            }
-            throw new StudioError(400, 'Unknown voice action');
+              });
+            } else throw new StudioError(400, 'Unknown voice action');
+            identityReceipts(studio, before, agent, localeOf(req));
+            return json({ agent });
           }
+          // Settings v2 (404 with the flag off): manager-only aggregates.
+          case 'GET connector-usage': return json(await studio.connectorUsage(me, id));
+          case 'GET history': return json(await studio.agentHistory(me, id));
           case 'POST speak': {
             const audio = await studio.previewSpeech(me, id, str((await body(req)).text, 300) ?? '');
             return new Response(new Uint8Array(audio), { headers: { 'Content-Type': 'audio/mpeg', 'Cache-Control': 'no-store' } });

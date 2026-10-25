@@ -106,3 +106,44 @@ describe('public agent Connections page', () => {
     expect(await screen.findByRole('button', { name: 'ادامه', exact: true })).toBeDisabled(); expect(m.api.grant).not.toHaveBeenCalled();
   });
 });
+describe('opened from /ask (Settings v2 handoff)', () => {
+  it('opens the first connection this agent may use, once, and never grants anything by itself', async () => {
+    m.api.read.mockResolvedValue(dashboard('Own account')); m.api.resources.mockResolvedValue({ resources: [] });
+    render(<AgentConnectionsApp agentId="alpha" ask />);
+    expect(await screen.findByRole('button', { name: 'Close access' })).toBeInTheDocument();
+    expect(m.api.grant).not.toHaveBeenCalled();
+  });
+  it('finds a Work connection too: with nothing usable in Personal it looks in Work', async () => {
+    m.api.read.mockImplementation(async (space: string) => space === 'work' ? dashboard('Work account') : dashboard());
+    m.api.resources.mockResolvedValue({ resources: [] });
+    render(<AgentConnectionsApp agentId="alpha" ask />);
+    expect(await screen.findByRole('button', { name: 'Close access' })).toBeInTheDocument();
+    expect(m.api.read.mock.calls.map(([space]) => space)).toEqual(['personal', 'work']);
+    expect(m.api.grant).not.toHaveBeenCalled();
+  });
+  it('with nothing usable in either space it settles back on Personal and opens nothing', async () => {
+    m.api.read.mockResolvedValue(dashboard());
+    render(<AgentConnectionsApp agentId="alpha" ask />);
+    await vi.waitFor(() => expect(m.api.read.mock.calls.map(([space]) => space)).toEqual(['personal', 'work', 'personal']));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(m.api.read).toHaveBeenCalledTimes(3);
+    expect(screen.queryByRole('button', { name: 'Close access' })).toBeNull();
+  });
+  it('without ask the page opens closed, as before', async () => {
+    m.api.read.mockResolvedValue(dashboard('Own account'));
+    render(<AgentConnectionsApp agentId="alpha" />);
+    expect(await screen.findByRole('button', { name: 'Choose access' })).toBeInTheDocument();
+  });
+});
+describe('the /studio/connect page and the flag', () => {
+  it('?ask=1 is a Settings v2 behaviour: with the flag off the page opens as it always did', async () => {
+    const { default: Page } = await import('../[agentId]/page');
+    const props = (ask: string) => ({ params: Promise.resolve({ agentId: 'alpha' }), searchParams: Promise.resolve({ ask }) });
+    vi.stubEnv('STUDIO_SETTINGS_V2', '0');
+    expect((await Page(props('1'))).props).toMatchObject({ agentId: 'alpha', ask: false });
+    vi.stubEnv('STUDIO_SETTINGS_V2', '1');
+    expect((await Page(props('1'))).props).toMatchObject({ agentId: 'alpha', ask: true });
+    expect((await Page(props('0'))).props).toMatchObject({ ask: false });
+    vi.unstubAllEnvs();
+  });
+});

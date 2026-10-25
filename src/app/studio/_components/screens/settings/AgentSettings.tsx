@@ -4,7 +4,8 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { MAX_AGENT_SKILLS } from '@/lib/studio/skills/types';
 import { adaptiveApi, type AdaptiveSnapshot } from '../../../_lib/adaptive-client';
 import { agentCopy } from '../../../_lib/agents-copy';
-import { api, tg, type AgentView } from '../../../_lib/client';
+import { api, tg, type AgentView, type ConnectorUsage } from '../../../_lib/client';
+import { connectorsCopy } from '../../../_lib/connectors-copy';
 import { agentRows, canSee, settingById, type AgentGroup, type AgentSection, type SettingDef, type SettingsCtx } from '../../../_lib/settings/registry';
 import { rowText, settingsCopy } from '../../../_lib/settings-copy';
 import { useProfileSync } from '../../../_lib/useProfileSync';
@@ -17,11 +18,13 @@ import { LookSheet } from '../agent/LookSheet';
 import { GroupBehaviorSheet, groupBehaviorOf, participationLabel, petLink, profileValue } from '../agent/ManageSheet';
 import { useAgentActions } from '../agent/useAgentActions';
 import { visibilityLabel, VisibilitySheet } from '../agent/VisibilitySheet';
+import { ConnectorsPage } from './ConnectorsPage';
 import { IdentityBanner, SkillsPage, VoicePage } from './IdentityPages';
 import { IconTile, SettingsPage, SpaceBar } from './kit';
+import { ConnectorUsagePage, HistoryPage } from './ManagerPages';
 import { NotesGrantRow } from './NotesGrant';
 
-const SECTIONS: readonly AgentSection[] = ['profile', 'voice', 'skills', 'access', 'groups', 'memory', 'permissions', 'connectors', 'notifications', 'activity'];
+const SECTIONS: readonly AgentSection[] = ['profile', 'voice', 'skills', 'access', 'groups', 'connector-usage', 'history', 'memory', 'permissions', 'connectors', 'notifications', 'activity'];
 const asSection = (v: string | undefined): AgentSection | undefined => (SECTIONS as readonly string[]).includes(v ?? '') ? v as AgentSection : undefined;
 
 /**
@@ -61,6 +64,9 @@ export function AgentSettingsScreen({ agentId, section, from }: { agentId: strin
     case 'groups': return <GroupsPage agent={agent} onUpdate={update} />;
     case 'permissions': return <PermissionsPage agent={agent} />;
     case 'notifications': return <NotificationsPage agent={agent} />;
+    case 'connectors': return <ConnectorsPage agent={agent} />;
+    case 'connector-usage': return <ConnectorUsagePage agent={agent} />;
+    case 'history': return <HistoryPage agent={agent} />;
     default: return hub;
   }
 }
@@ -76,6 +82,7 @@ function AgentHub({ agent, onUpdate, back }: { agent: AgentView; onUpdate: (a: A
   const actions = useAgentActions(agent, onUpdate);
   const [visibility, setVisibility] = useState(false);
   const [inGroups, setInGroups] = useState<number | null>(null);
+  const [usage, setUsage] = useState<ConnectorUsage | null>(null);
   const groups: Record<AgentGroup, SettingDef[]> = { everyone: agentRows(ctx, 'everyone'), you: agentRows(ctx, 'you') };
   const manages = groups.everyone.length > 0;
 
@@ -86,6 +93,14 @@ function AgentHub({ agent, onUpdate, back }: { agent: AgentView; onUpdate: (a: A
     api.groups().then((r) => { if (!cancelled) setInGroups(r.groups.filter((g) => g.agents.some((a) => a.id === agent.id)).length); }).catch(() => undefined);
     return () => { cancelled = true; };
   }, [manages, agent.id]);
+  // Counts for the "Connectors people use" row, only when the viewer sees it (managers, Settings v2).
+  const showsUsage = groups.everyone.some((d) => d.id === 'agent.connector-usage');
+  useEffect(() => {
+    if (!showsUsage) return;
+    let cancelled = false;
+    api.connectorUsage(agent.id).then((r) => { if (!cancelled) setUsage(r); }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [showsUsage, agent.id]);
 
   /** A short live summary from what is already loaded. */
   const summary = (id: string): string | undefined => {
@@ -100,6 +115,11 @@ function AgentHub({ agent, onUpdate, back }: { agent: AgentView; onUpdate: (a: A
         return [inGroups ? s.inGroups(inGroups) : '', `${participationLabel(b, locale)}${b.remember ? '' : c.noMemory}`].filter(Boolean).join(' · ');
       }
       case 'agent.notifications': return s.alertsAllAgents(nav.space === 'work' ? s.work : s.personal);
+      case 'agent.connector-usage': {
+        const k = connectorsCopy[locale];
+        if (!usage || usage.unavailable) return rowText(copy?.sub);
+        return usage.providers.length ? usage.providers.slice(0, 2).map((u) => k.usageRow(u.id === 'remote_mcp' ? k.customMcp : u.name, u.people)).join(', ') : k.usageNone(p.name);
+      }
       default: return copy?.sub ? rowText(copy.sub, p.name) : undefined;
     }
   };

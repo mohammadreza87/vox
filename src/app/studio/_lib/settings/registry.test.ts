@@ -26,7 +26,7 @@ describe('settings registry', () => {
 
   it('the creator of a forming agent sees and may change everything, voice and skills included', () => {
     const c = ctx(view({ canManageAccess: true, canManageSettings: true, canShapeIdentity: true }));
-    expect(ids(agentRows(c, 'everyone'))).toEqual(['agent.profile', 'agent.voice', 'agent.skills', 'agent.access', 'agent.groups']);
+    expect(ids(agentRows(c, 'everyone'))).toEqual(['agent.profile', 'agent.voice', 'agent.skills', 'agent.access', 'agent.groups', 'agent.connector-usage', 'agent.history']);
     expect(ids(agentRows(c, 'you'))).toEqual(['agent.memory', 'agent.permissions', 'agent.connectors', 'agent.notifications', 'agent.activity']);
     for (const d of agentRows(c, 'everyone')) expect(canChange(d, c), d.id).toBe(true);
   });
@@ -61,6 +61,19 @@ describe('settings registry', () => {
     expect(ids(accountRows(ctx(undefined, 'owner'), 'admin'))).toHaveLength(2);
   });
 
+  it('Part 2 rows: counts and history are manager-only pages; Connectors & plugins is a per-person page; all flag-only', () => {
+    for (const id of ['agent.connector-usage', 'agent.history']) {
+      const d = settingById(id)!;
+      expect(d).toMatchObject({ group: 'everyone', audience: 'manager', kind: 'page', flag: 'settingsV2', opens: { page: id.slice(6) } });
+      expect(canSee(d, ctx(view()))).toBe(false); // a plain user who may use the agent
+      expect(canSee(d, ctx(view({ canManageAccess: true, canManageSettings: true }), 'admin'))).toBe(true);
+      expect(canSee(d, ctx(view({ canManageAccess: true, canManageSettings: true }), 'admin', false))).toBe(false);
+      expect(canSee(d, ctx(view({ status: 'fired', canManageAccess: true, canManageSettings: false }), 'admin'))).toBe(false);
+    }
+    expect(settingById('agent.connectors')).toMatchObject({ group: 'you', audience: 'self', kind: 'page', opens: { page: 'connectors' }, spaceBound: true });
+    expect(settingById('agent.history')!.icon).toBe('clock');
+  });
+
   it('nothing shows with the flag off', () => {
     const c = ctx(view({ canManageAccess: true, canManageSettings: true, canShapeIdentity: true }), 'owner', false);
     expect(agentRows(c, 'everyone')).toEqual([]);
@@ -71,6 +84,7 @@ describe('settings registry', () => {
   it('groups the Vox-wide rows by section and lists the bot command mirrors for Part 3', () => {
     expect(ids(accountRows(ctx(), 'notifications'))).toEqual(['account.inbox', 'account.reminders']);
     expect(ids(accountRows(ctx(), 'privacy'))).toEqual(['account.agentAccess', 'account.sharedMemories', 'account.connections', 'account.pause', 'account.requests', 'account.purposes', 'account.notes']);
-    expect(settingCommands().map((c) => c.command)).toEqual(['voice', 'memory', 'connect', 'activity']);
+    expect(settingCommands().map((c) => c.command)).toEqual(['voice', 'memory', 'connectors', 'activity']);
+    expect(settingCommands().find((c) => c.id === 'agent.connectors')).toEqual({ id: 'agent.connectors', command: 'connectors', scope: 'private', aliases: ['ask'] });
   });
 });

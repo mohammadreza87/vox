@@ -17,6 +17,7 @@ import { parsePostCallback, parsePostCommand } from '../circles/channels';
 import { agentCard, choiceReceipt, circleCopy, groupCopy, localeOf } from '../circles/notice';
 import { petPageUrl } from '../pet/links';
 import { parseExplicitControl } from '../relationships/policy';
+import { settingsV2 } from './flags';
 
 export const MANAGER_UPDATES = ['message', 'managed_bot'];
 /** Never channel_post or edited_channel_post: Vox reads nothing from channels (Circles S5 is post-only). */
@@ -131,6 +132,10 @@ export async function handleAgentUpdate(studio: Studio, agentId: string, update:
   if (msg.chat.type !== 'private') return;
 
   const member = state.members.find((m) => m.telegramId === msg.from!.id);
+  // Settings v2: /ask or /connectors hands off to this agent's own Connections Mini App, where the reviewed task runs
+  // (each tool call reviewed and approved there). No question, connector data or result enters this chat or its history.
+  if (settingsV2() && CONNECTORS_COMMAND.test((msg.text ?? '').trim()) && (member && canUseAgent(member, live) || visibilityOf(live) === 'public')
+    && await connectorsHandoff(studio, live, msg, update.update_id)) return;
   if (member && canUseAgent(member, live)) {
     // Circles: a member's /leave withdraws from the circles where they cover this agent; otherwise today's path.
     if (studio.circlesMode() === 'circles' && /^\/leave(@\S+)?$/i.test((msg.text ?? '').trim())) {
@@ -199,6 +204,32 @@ export async function handleAgentUpdate(studio: Studio, agentId: string, update:
     await studio.blockByAgent(agentId, msg.from.id, text);
     await bot.sendMessage(msg.chat.id, decision.message!);
   }
+}
+
+/** The bot side of the registry's 'agent.connectors' command and its alias (settings/registry.ts; a test keeps them equal). */
+export const CONNECTORS_COMMANDS = ['connectors', 'ask'] as const;
+const CONNECTORS_COMMAND = new RegExp(`^/(${CONNECTORS_COMMANDS.join('|')})(@\\S+)?$`, 'i');
+const HANDOFF = {
+  en: { text: (name: string) => `Open Connectors to ask ${name} with an app you connected. Each use is reviewed there, and answers stay private to you.`, open: 'Open Connectors' },
+  fa: { text: (name: string) => `برای پرسیدن از ${name} با برنامه‌ای که وصل کرده‌اید، اتصال‌ها را باز کنید. هر استفاده همان‌جا بررسی می‌شود و پاسخ‌ها فقط برای شما می‌ماند.`, open: 'باز کردن اتصال‌ها' },
+};
+/** `https://host/studio/connect/<agentId>?ask=1`, or null when the Studio URL can't host a Mini App. */
+export function connectPageUrl(webAppUrl: string | undefined, agentId: string): string | null {
+  if (!webAppUrl || !/^[A-Za-z0-9_-]{1,128}$/.test(agentId)) return null;
+  let base: URL;
+  try { base = new URL(webAppUrl); } catch { return null; }
+  if (base.protocol !== 'https:' || base.username || base.password) return null;
+  return `${base.origin}/studio/connect/${agentId}?ask=1`;
+}
+/** A quiet reply with a web_app button to the agent's own Connections page; false (today's path) when there is no page to open. */
+async function connectorsHandoff(studio: Studio, live: Agent, msg: TelegramMessage, updateId: number): Promise<boolean> {
+  const url = connectPageUrl(studio.deps.webAppUrl, live.id), token = studio.botToken(live);
+  if (!url || !token) return false;
+  if (!await studio.deps.memory.deduper.firstSeen(`connectors:${live.id}:${updateId}`)) return true;
+  const copy = HANDOFF[localeOf(msg.from?.language_code)];
+  await studio.deps.botFor(token).sendMessage(msg.chat.id, copy.text(live.persona.name), { silent: true,
+    keyboard: { inline_keyboard: [[{ text: copy.open, web_app: { url } }]] } }).catch(() => logTelegramDiagnostic(studio.deps.logger ?? console, 'update_failed'));
+  return true;
 }
 
 const CHOICES: Partial<Record<CardAction, JoinChoice>> = { cj: 'joined', cr: 'reply_only', cd: 'declined' };

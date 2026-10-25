@@ -248,7 +248,10 @@ export async function handlePetRequest(studio: Studio, request: Request, agentId
       const circles = await studio.forgetCircles(user.id), notes = await studio.forgetNotes(user.id);
       await studio.forgetChannelDrafts(user.id);
       const choices = await studio.forgetAgentChoices(user.id), erased = await pets.eraseUser(user.id);
-      const body: PetForgetResponse = { erased, ...(choices ? { choicesErased: choices } : {}), ...(circles ? { circlesErased: circles } : {}), ...(notes ? { notesErased: notes } : {}) };
+      // Connections in both spaces, for every agent: best-effort, it never fails the forget (a vault entry may wait for the broker).
+      const connections = await studio.forgetConnections(user.id);
+      const body: PetForgetResponse = { erased, ...(choices ? { choicesErased: choices } : {}), ...(circles ? { circlesErased: circles } : {}), ...(notes ? { notesErased: notes } : {}),
+        ...(connections.erased ? { connectionsErased: connections.erased } : {}), ...(connections.pending ? { connectionsPending: connections.pending } : {}) };
       return json(body);
     }
 

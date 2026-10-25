@@ -42,7 +42,7 @@ export function createConnectionsBrokerServer(broker: ConnectionsBroker, authent
         for (const [key, value] of url.searchParams) { if (key in query) throw new ConnectionsError(400, 'oauth_query_invalid'); query[key] = value; }
         reply(response, 200, callback[1] === 'remote_mcp' && mcp ? await mcp.broker.callback(query) : await broker.callback(callback[1], query)); return;
       }
-      if (request.method !== 'POST' || !['/v1/enrollments', '/v1/enrollments/claim', '/v1/enrollments/cancel', '/v1/execute', '/v1/revoke', '/v1/invalidate', '/v1/mcp/enrollments', '/v1/mcp/enrollments/preview', '/v1/mcp/enrollments/claim', '/v1/mcp/enrollments/cancel', '/v1/mcp/callback', '/v1/mcp/client-metadata'].includes(path)) {
+      if (request.method !== 'POST' || !['/v1/enrollments', '/v1/enrollments/claim', '/v1/enrollments/cancel', '/v1/execute', '/v1/revoke', '/v1/erase', '/v1/invalidate', '/v1/mcp/enrollments', '/v1/mcp/enrollments/preview', '/v1/mcp/enrollments/claim', '/v1/mcp/enrollments/cancel', '/v1/mcp/callback', '/v1/mcp/client-metadata'].includes(path)) {
         reply(response, 404, { error: 'broker_route_unavailable' }); return;
       }
       if (request.headers['content-type'] !== 'application/json') throw new ConnectionsError(415, 'broker_content_type_invalid');
@@ -63,7 +63,7 @@ export function createConnectionsBrokerServer(broker: ConnectionsBroker, authent
         reply(response, 200, result); return;
       }
       const result = path === '/v1/enrollments' ? await broker.beginSetup(input) : path === '/v1/enrollments/claim' ? await broker.claimSetup(input) :
-        path === '/v1/enrollments/cancel' ? await broker.cancelSetup(input) : path === '/v1/execute' ? await broker.execute(input) : path === '/v1/invalidate' ? await broker.invalidate(input) : await broker.revoke(input);
+        path === '/v1/enrollments/cancel' ? await broker.cancelSetup(input) : path === '/v1/execute' ? await broker.execute(input) : path === '/v1/invalidate' ? await broker.invalidate(input) : path === '/v1/erase' ? await broker.revokeErased(input) : await broker.revoke(input);
       reply(response, 200, result);
     } catch (error) {
       const domainError = ConnectionsError.is(error) ? error : undefined;

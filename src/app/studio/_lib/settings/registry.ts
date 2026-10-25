@@ -16,7 +16,7 @@ export type SettingLevel = 'account' | 'agent';
 /** Who changes it: the viewer for themselves, the agent's creator while it forms, a manager, or a superadmin. */
 export type SettingAudience = 'self' | 'creator' | 'manager' | 'super';
 export type AccountSection = 'general' | 'language' | 'notifications' | 'voice-recognition' | 'privacy' | 'account' | 'admin';
-export type AgentSection = 'profile' | 'voice' | 'skills' | 'access' | 'groups' | 'memory' | 'permissions' | 'connectors' | 'notifications' | 'activity';
+export type AgentSection = 'profile' | 'voice' | 'skills' | 'access' | 'groups' | 'connector-usage' | 'history' | 'memory' | 'permissions' | 'connectors' | 'notifications' | 'activity';
 export type SettingSection = AccountSection | AgentSection;
 /** The two halves of an agent's hub: what changes it for everyone, and what is just between it and you. */
 export type AgentGroup = 'everyone' | 'you';
@@ -30,8 +30,8 @@ export type SettingTarget =
   | { route: 'memories' | 'agent-connections' | 'preferences' | 'inbox' | 'reminders' | 'voice-recognition' | 'shared-memories' | 'connections' | 'diagnostics' | 'requests'; view?: 'activity' }
   | { local: string };
 
-/** Part 3 mirrors some settings as bot commands in the agent's private chat. */
-export interface SettingCommand { command: string; scope: 'private' }
+/** Part 3 mirrors some settings as bot commands in the agent's private chat; `aliases` are other commands the bot answers the same way. */
+export interface SettingCommand { command: string; scope: 'private'; aliases?: readonly string[] }
 
 export interface SettingDef {
   id: string;
@@ -71,10 +71,13 @@ export const SETTINGS: readonly SettingDef[] = [
   agentSetting({ id: 'agent.skills', section: 'skills', group: 'everyone', audience: 'creator', spaceBound: false, requires: ['active'], kind: 'page', icon: 'spark', opens: { page: 'skills' } }),
   agentSetting({ id: 'agent.access', section: 'access', group: 'everyone', audience: 'manager', spaceBound: false, requires: ['active'], kind: 'sheet', icon: 'lock', opens: { sheet: 'visibility' } }),
   agentSetting({ id: 'agent.groups', section: 'groups', group: 'everyone', audience: 'manager', spaceBound: false, requires: ['active'], kind: 'page', icon: 'groups', opens: { page: 'groups' } }),
+  // Part 2: counts of people per connected app (never who), and the agent's scrubbed change history.
+  agentSetting({ id: 'agent.connector-usage', section: 'connector-usage', group: 'everyone', audience: 'manager', spaceBound: false, requires: ['active'], kind: 'page', icon: 'plug', opens: { page: 'connector-usage' } }),
+  agentSetting({ id: 'agent.history', section: 'history', group: 'everyone', audience: 'manager', spaceBound: false, requires: ['active'], kind: 'page', icon: 'clock', opens: { page: 'history' } }),
   /* ---- an agent and you ---- */
   agentSetting({ id: 'agent.memory', section: 'memory', group: 'you', audience: 'self', spaceBound: false, requires: ['active'], kind: 'link', icon: 'memory', opens: { route: 'memories' }, bot: { command: 'memory', scope: 'private' } }),
   agentSetting({ id: 'agent.permissions', section: 'permissions', group: 'you', audience: 'self', spaceBound: true, requires: ['active', 'identity'], kind: 'page', icon: 'shield', opens: { page: 'permissions' } }),
-  agentSetting({ id: 'agent.connectors', section: 'connectors', group: 'you', audience: 'self', spaceBound: true, requires: ['active', 'identity'], kind: 'link', icon: 'plug', opens: { route: 'agent-connections' }, bot: { command: 'connect', scope: 'private' } }),
+  agentSetting({ id: 'agent.connectors', section: 'connectors', group: 'you', audience: 'self', spaceBound: true, requires: ['active', 'identity'], kind: 'page', icon: 'plug', opens: { page: 'connectors' }, bot: { command: 'connectors', scope: 'private', aliases: ['ask'] } }),
   agentSetting({ id: 'agent.notifications', section: 'notifications', group: 'you', audience: 'self', spaceBound: true, requires: ['active', 'identity'], kind: 'page', icon: 'bell', opens: { page: 'notifications' } }),
   agentSetting({ id: 'agent.activity', section: 'activity', group: 'you', audience: 'self', spaceBound: true, requires: ['active'], kind: 'link', icon: 'list', opens: { route: 'agent-connections', view: 'activity' }, bot: { command: 'activity', scope: 'private' } }),
   /* ---- Vox-wide (the You tab) ---- */

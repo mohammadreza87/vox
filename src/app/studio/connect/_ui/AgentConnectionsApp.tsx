@@ -28,7 +28,8 @@ const errorText = (cause: unknown) => cause instanceof ApiError ? ({
 }[cause.message] ?? 'The change could not be confirmed. Refresh before trying again.') : 'The change could not be confirmed. Refresh before trying again.';
 
 /** A signed bot session owns all displayed state. Account switches/backgrounding discard it. */
-export function AgentConnectionsApp({ agentId }: { agentId: string }) {
+/** `ask`: opened from the bot's /ask (Settings v2): the first connection this agent may use opens on its Ask form. */
+export function AgentConnectionsApp({ agentId, ask = false }: { agentId: string; ask?: boolean }) {
   const [session, setSession] = useState(() => ({ signed: tg()?.initData ?? '', generation: 0, active: true }));
   const latest = useRef(session); latest.current = session;
   useLayoutEffect(() => {
@@ -45,20 +46,26 @@ export function AgentConnectionsApp({ agentId }: { agentId: string }) {
   }, [agentId]);
   if (!/^[A-Za-z0-9_-]{1,128}$/.test(agentId)) return <main className="vxc-root" role="alert">Open Connections from this agent’s Telegram bot to continue.</main>;
   if (!session.active || session.signed !== (tg()?.initData ?? '')) return <main className="vxc-root" aria-busy="true" />;
-  return <ConnectionsSession key={`${agentId}:${session.generation}`} agentId={agentId} signed={session.signed} />;
+  return <ConnectionsSession key={`${agentId}:${session.generation}`} agentId={agentId} signed={session.signed} ask={ask} />;
 }
 
-function ConnectionsSession({ agentId, signed }: { agentId: string; signed: string }) {
+function ConnectionsSession({ agentId, signed, ask }: { agentId: string; signed: string; ask: boolean }) {
   const [space, setSpace] = useState<SpaceKind>('personal');
+  // /ask looks in Personal first, then Work; with nothing usable in either it settles back on Personal.
+  const [asking, setAsking] = useState(ask);
+  const onAskMiss = useCallback(() => { if (space === 'personal') setSpace('work'); else { setAsking(false); setSpace('personal'); } }, [space]);
+  const onAskDone = useCallback(() => setAsking(false), []);
   // Telegram exists only on the client. Keep the initial markup identical to SSR.
   const [locale, setLocale] = useState<ConnectionsLocale>('en');
   useEffect(() => {
     const app = tg() as ReturnType<typeof tg> & { initDataUnsafe?: { user?: { language_code?: string } } };
     setLocale(app?.initDataUnsafe?.user?.language_code?.startsWith('fa') ? 'fa' : 'en');
   }, [signed]);
-  return <SpaceConnectionsSession key={space} agentId={agentId} signed={signed} space={space} setSpace={setSpace} locale={locale} setLocale={setLocale} />;
+  return <SpaceConnectionsSession key={space} agentId={agentId} signed={signed} space={space} setSpace={(next) => { setAsking(false); setSpace(next); }} locale={locale} setLocale={setLocale}
+    ask={asking} onAskMiss={onAskMiss} onAskDone={onAskDone} />;
 }
-function SpaceConnectionsSession({ agentId, signed, space, setSpace, locale, setLocale }: { agentId: string; signed: string; space: SpaceKind; setSpace: (space: SpaceKind) => void; locale: ConnectionsLocale; setLocale: (locale: ConnectionsLocale) => void }) {
+function SpaceConnectionsSession({ agentId, signed, space, setSpace, locale, setLocale, ask, onAskMiss, onAskDone }: { agentId: string; signed: string; space: SpaceKind; setSpace: (space: SpaceKind) => void; locale: ConnectionsLocale; setLocale: (locale: ConnectionsLocale) => void;
+  ask: boolean; onAskMiss: () => void; onAskDone: () => void }) {
   const t = useMemo(() => connectionsTranslate(locale), [locale]);
   const controller = useRef(new AbortController());
   const api = useMemo(() => createAgentConnectionsApi(agentId, signed, () => controller.current.signal), [agentId, signed]);
@@ -87,6 +94,15 @@ function SpaceConnectionsSession({ agentId, signed, space, setSpace, locale, set
   useLayoutEffect(() => { if (controller.current.signal.aborted) controller.current = new AbortController(); alive.current = true;
     return () => { alive.current = false; invalidate(); controller.current.abort(); }; }, [invalidate]);
   useEffect(() => { initTelegram(); void load(); return invalidate; }, [load, invalidate]);
+  // Opened from /ask: once, the first connection this agent may use opens (its Ask form shows when access is live); none here, try the other space.
+  const asked = useRef(!ask);
+  useEffect(() => {
+    if (asked.current || !data) return;
+    asked.current = true;
+    const mine = data.connections.filter(c => c.agentId === agentId && c.lifecycle === 'connected');
+    const live = mine.find(c => data.grants.some(g => g.connectionId === c.id && g.agentId === agentId && g.status === 'active' && g.expiresAt > Date.now()));
+    if (live ?? mine[0]) { setSelected((live ?? mine[0]).id); onAskDone(); } else onAskMiss();
+  }, [data, agentId, onAskMiss, onAskDone]);
   const act = async (task: () => Promise<void>) => {
     if (lock.current || !current()) return; lock.current = true; setBusy(true); setError('');
     try { await task(); } catch (cause) { onFailure(cause); }

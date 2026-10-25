@@ -1,6 +1,6 @@
 import { createHash } from 'crypto';
 import type { Firestore } from 'firebase-admin/firestore';
-import { recordSchemas, type ConnectionsRecords, type RecordCollection } from './contracts';
+import { connectionSchema, recordSchemas, type ConnectionsRecords, type RecordCollection } from './contracts';
 
 export const CONNECTION_COLLECTIONS = Object.keys(recordSchemas) as RecordCollection[];
 export type RawConnectionsRecords = Record<RecordCollection, unknown[]>;
@@ -8,6 +8,24 @@ export const emptyRecords = (): RawConnectionsRecords => ({ providerAccounts: []
 export interface ConnectionsStorage {
   /** Retry-safe synchronous callback, atomic commit, no provider/network I/O in callback. */
   transact<T>(partitionId: string, mutate: (records: RawConnectionsRecords) => { records: ConnectionsRecords; result: T }): Promise<T>;
+  /** Read-only snapshot of one partition (rights export): no lock, no write, nothing created. Empty when it never existed. */
+  peek?(partitionId: string): Promise<RawConnectionsRecords>;
+  /** Manager counts: distinct people with a live connection to this agent, per provider, never counting `excludeAccountId` (the viewer). Counts only, never who. */
+  countLivePeopleByAgent?(agentId: string, excludeAccountId?: string): Promise<Record<string, number>>;
+}
+/** Distinct owner accounts per provider among schema-2, connected rows bound to `agentId` (Work and Personal count once), without `excludeAccountId`. */
+export function countLivePeople(rows: Iterable<unknown>, agentId: string, excludeAccountId?: string): Record<string, number> {
+  const people = new Map<string, Set<string>>();
+  for (const row of rows) {
+    const parsed = connectionSchema.safeParse(row);
+    if (!parsed.success) continue;
+    const connection = parsed.data;
+    if (connection.schemaVersion !== 2 || connection.agentId !== agentId || connection.lifecycle !== 'connected' || connection.ownerAccountId === excludeAccountId) continue;
+    let set = people.get(connection.providerId);
+    if (!set) people.set(connection.providerId, set = new Set());
+    set.add(connection.ownerAccountId);
+  }
+  return Object.fromEntries([...people].map(([providerId, owners]) => [providerId, owners.size]));
 }
 const clone = <T>(value: T): T => value === undefined ? value : structuredClone(value);
 /** Transactional synthetic fixture. Serialized across all instances sharing this storage. */
@@ -24,6 +42,10 @@ export class InMemoryConnectionsStorage implements ConnectionsStorage {
       this.partitions.set(partitionId, clone(next.records));
       return clone(next.result);
     } finally { release(); }
+  }
+  async peek(partitionId: string): Promise<RawConnectionsRecords> { return clone(this.partitions.get(partitionId) ?? emptyRecords()); }
+  async countLivePeopleByAgent(agentId: string, excludeAccountId?: string): Promise<Record<string, number>> {
+    return countLivePeople([...this.partitions.values()].flatMap(records => records.connections), agentId, excludeAccountId);
   }
 }
 const key = (value: string) => createHash('sha256').update(value).digest('hex');
@@ -70,6 +92,18 @@ export class FirestoreConnectionsStorage implements ConnectionsStorage {
       return next.result;
     });
     return clone(result);
+  }
+  async peek(partitionId: string): Promise<RawConnectionsRecords> {
+    const current = emptyRecords();
+    const snapshots = await Promise.all(CONNECTION_COLLECTIONS.map(collection =>
+      this.db.collection(`${this.prefix}_${collection}`).where('partitionId', '==', partitionId).limit(2001).get()));
+    for (let i = 0; i < CONNECTION_COLLECTIONS.length; i++) for (const doc of snapshots[i].docs) current[CONNECTION_COLLECTIONS[i]].push(doc.data());
+    return current;
+  }
+  /** One single-field query (agentId); bounded. Needs no composite index. */
+  async countLivePeopleByAgent(agentId: string, excludeAccountId?: string): Promise<Record<string, number>> {
+    const snapshot = await this.db.collection(`${this.prefix}_connections`).where('agentId', '==', agentId).limit(5000).get();
+    return countLivePeople(snapshot.docs.map(doc => doc.data()), agentId, excludeAccountId);
   }
 }
 
@@ -159,5 +193,48 @@ export class FileConnectionsStorage implements ConnectionsStorage {
       if (!committed) await fs.rm(nextDirectory, { recursive: true, force: true });
       await fs.rmdir(lock);
     }
+  }
+  /** Lock-free read of one partition's current generation; retried when a writer swaps the generation mid-read. */
+  private async readCurrent(root: string, collections: readonly RecordCollection[]): Promise<RawConnectionsRecords> {
+    const { promises: fs } = await import('fs');
+    const { join } = await import('path');
+    for (let attempt = 0; ; attempt++) {
+      const current = emptyRecords();
+      try {
+        let raw: unknown;
+        try { raw = JSON.parse(await fs.readFile(join(root, 'current.json'), 'utf8')); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return current; throw error; }
+        if (!raw || typeof raw !== 'object' || !('generation' in raw) || typeof raw.generation !== 'string' ||
+            !/^generation-[0-9a-f-]{36}$/.test(raw.generation)) throw new Error('Invalid Connections generation');
+        for (const collection of collections) {
+          const files = await fs.readdir(join(root, raw.generation, collection));
+          if (files.length > 2000) throw new Error('Connections partition capacity reached');
+          for (const file of files) {
+            if (!/^[0-9a-f]{64}\.json$/.test(file)) throw new Error('Invalid Connections record file');
+            const json = await fs.readFile(join(root, raw.generation, collection, file), 'utf8');
+            if (Buffer.byteLength(json) > 300_000) throw new Error('Connections record capacity reached');
+            current[collection].push(JSON.parse(json));
+          }
+        }
+        return current;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || attempt >= 2) throw error;
+      }
+    }
+  }
+  async peek(partitionId: string): Promise<RawConnectionsRecords> {
+    const { join } = await import('path');
+    return this.readCurrent(join(this.directory, key(partitionId)), CONNECTION_COLLECTIONS);
+  }
+  /** O(partitions); callers cache it. Reads only each partition's connections. */
+  async countLivePeopleByAgent(agentId: string, excludeAccountId?: string): Promise<Record<string, number>> {
+    const { promises: fs } = await import('fs');
+    const { join } = await import('path');
+    let entries: string[];
+    try { entries = await fs.readdir(this.directory); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {}; throw error; }
+    const rows: unknown[] = [];
+    for (const entry of entries) if (/^[0-9a-f]{64}$/.test(entry)) rows.push(...(await this.readCurrent(join(this.directory, entry), ['connections'])).connections);
+    return countLivePeople(rows, agentId, excludeAccountId);
   }
 }

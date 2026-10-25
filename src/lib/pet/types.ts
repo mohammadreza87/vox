@@ -198,7 +198,7 @@ export interface TalkVoiceResponse {
 /** notes: the requester's own note copies (Circles S3), present only when any exist. */
 export interface PetExportResponse { petCare: PetCare[]; agentChoices?: AgentJoin[]; circles?: CircleParticipationExport[]; notes?: NoteExport[] }
 /** choicesErased / circlesErased / notesErased: agent-card choices, circle rows and own note copies removed alongside pet care, present only when any were. */
-export interface PetForgetResponse { erased: number; choicesErased?: number; circlesErased?: number; notesErased?: number }
+export interface PetForgetResponse { erased: number; choicesErased?: number; circlesErased?: number; notesErased?: number; connectionsErased?: number; connectionsPending?: number }
 
 export type PetErrorCode =
   | 'authentication_required' // initData missing, stale, or signed by another bot

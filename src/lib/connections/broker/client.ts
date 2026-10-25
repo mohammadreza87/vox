@@ -1,7 +1,7 @@
 import type { ConnectionActor, SpaceKind } from '../contracts';
 import type { SetupReceipt, ConnectionExecutionResult } from '../application';
 import { AuthenticatedBrokerClient, type BrokerJsonClient } from './auth';
-export const BROKER_ROUTES = ['/v1/enrollments', '/v1/enrollments/claim', '/v1/enrollments/cancel', '/v1/execute', '/v1/revoke', '/v1/invalidate'] as const;
+export const BROKER_ROUTES = ['/v1/enrollments', '/v1/enrollments/claim', '/v1/enrollments/cancel', '/v1/execute', '/v1/revoke', '/v1/invalidate', '/v1/erase'] as const;
 export class ConnectionsBrokerClient {
   readonly client: BrokerJsonClient;
   constructor(origin: string, key: Uint8Array, fetcher?: typeof fetch) { this.client = new AuthenticatedBrokerClient(origin, key, BROKER_ROUTES, fetcher); }
@@ -14,5 +14,9 @@ export class ConnectionsBrokerClient {
   invalidate(input: { actor: ConnectionActor; space: SpaceKind; connectionId: string; grantId: string }): Promise<{ futureUseStopped: true; providerEffects: 'unverified' }> { return this.client.call('/v1/invalidate', input); }
   revoke(input: { actor: ConnectionActor; space: SpaceKind; connectionId: string; providerId: string }): Promise<{ futureUseStopped: true; providerRevocation: 'verified' | 'unavailable' }> {
     return this.client.call('/v1/revoke', input);
+  }
+  /** Rights erasure of a connection Studio already revoked and marked erased; needs no current identity confirmation. */
+  erase(input: { actor: { accountId: string }; space: SpaceKind; connectionId: string; providerId: string }): Promise<{ futureUseStopped: true; providerRevocation: 'verified' | 'unavailable' }> {
+    return this.client.call('/v1/erase', input);
   }
 }
