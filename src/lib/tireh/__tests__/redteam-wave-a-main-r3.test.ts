@@ -63,14 +63,15 @@ function harness(image: ReturnType<typeof imageAnswers>) {
 // questions.ts at 7224f40), so the memory stayed suppressed. With STUDIO_IMAGES=1 an image the person never asked
 // to keep ("what is this?") forms a memory of what it showed whenever the decider is only 0.5 to 0.6 sure the
 // sender wanted it kept: a model output widens memory formation past the check main had. Same class as PR2-2
-// (the people rule), which fixer r2 ported. Fix: read 'remember' below 0.6 as 'unclear' (main's rule).
+// (the people rule), which fixer r2 ported. Fixed in fixer r3: 'remember' below IMAGE_REMEMBER_CONFIDENCE (0.6)
+// reads as 'unclear' (main's rule); the two pins are plain tests now.
 describe('red team wave A on main r3: an uncertain image remember task forms a memory main would not', () => {
-  it.fails('readImageTriage: a remember task at confidence 0.55 reads as unclear (main: IMAGE_REMEMBER_CONFIDENCE 0.6)', () => {
+  it('readImageTriage: a remember task at confidence 0.55 reads as unclear (main: IMAGE_REMEMBER_CONFIDENCE 0.6)', () => {
     const triage = readImageTriage(imageAnswers({ kind: 'other', task: 'remember', taskConfidence: 0.55, people: 0.1, sensitive: 0.05 }));
     expect(triage?.task).toBe('unclear');
   });
 
-  it.fails('end to end: "what is this?" on a photo the decider is 0.55 sure is to be kept forms no memory of it', async () => {
+  it('end to end: "what is this?" on a photo the decider is 0.55 sure is to be kept forms no memory of it', async () => {
     vi.stubEnv('STUDIO_IMAGES', '1');
     const h = harness(imageAnswers({ kind: 'other', task: 'remember', taskConfidence: 0.55, people: 0.1, sensitive: 0.05 }));
     h.setReply(`The ${PLAN}.`);

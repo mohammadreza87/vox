@@ -10,6 +10,11 @@ import type { Persona } from '../types';
 export const IMAGE_QUESTION_SET = 'image-v1' as const;
 /** Below this choice confidence the task is treated as unclear. */
 export const IMAGE_TASK_MIN_CONFIDENCE = 0.5;
+/**
+ * A 'remember' task widens memory formation, so it needs more: below this confidence it reads as 'unclear'
+ * (main's IMAGE_REMEMBER_CONFIDENCE, kept from the lineage the merge replaced).
+ */
+export const IMAGE_REMEMBER_CONFIDENCE = 0.6;
 
 export const IMAGE_KINDS = ['screenshot', 'document', 'receipt', 'chart', 'photo_of_people', 'meme', 'other'] as const;
 export const IMAGE_TASKS = ['explain', 'extract_text', 'decide', 'react', 'remember', 'unclear'] as const;
@@ -80,7 +85,8 @@ export function readImageTriage(answers: Record<string, DecisionAnswer>): ImageT
   if (sensitive?.type !== 'predicate' || !finite(sensitive.probability)) return null;
   const kindValue = kind?.type === 'choice' && (IMAGE_KINDS as readonly string[]).includes(kind.choice)
     ? kind.choice as ImageTriage['kind'] : 'other';
-  const taskValue = (IMAGE_TASKS as readonly string[]).includes(task.choice) && task.confidence >= IMAGE_TASK_MIN_CONFIDENCE
+  const minConfidence = task.choice === 'remember' ? IMAGE_REMEMBER_CONFIDENCE : IMAGE_TASK_MIN_CONFIDENCE;
+  const taskValue = (IMAGE_TASKS as readonly string[]).includes(task.choice) && task.confidence >= minConfidence
     ? task.choice as ImageTriage['task'] : 'unclear';
   return { kind: kindValue, task: taskValue, containsPeople: clamp(people.probability), containsSensitiveDocument: clamp(sensitive.probability) };
 }
