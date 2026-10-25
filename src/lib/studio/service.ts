@@ -39,7 +39,6 @@ import type { LLM } from '../tireh/llm';
 import { TRIAGE_TIMEOUT_MS, triageInput, type Decider } from '../tireh/triage';
 import { readSkillPick, SANDBOX_SKILL_TIMEOUT_MS, skillQuestion, SKILL_QUESTION, type SkillRouting } from '../tireh/skill-routing';
 import type { ChatHistoryStore, MemoryStore, ShareOfferStore, UpdateDeduper } from '../tireh/memory/store';
-import { isStaleMemoryWriteError } from '../tireh/memory/store';
 import type { MemoryRecord } from '../tireh/types';
 import type { Persona } from '../tireh/types';
 import { isVisibleToAudience, describeScope } from '../tireh/memory/visibility';
@@ -1359,21 +1358,40 @@ export class Studio {
       }
       return;
     }
-    // S08 (TIREH_SHARING_V2): tombstones travel with the copies, so a store that cannot carry them inherits nothing (fail closed).
+    // S08 (TIREH_SHARING_V2): tombstones travel with the copies, so a store that cannot carry them, or a carry
+    // that fails, inherits nothing (fail closed). Inheritance never fails the hire: the successor is already
+    // active, and a content-free 'memory.inherit' audit row tells admins what it inherited.
+    const inherited = (detail: string) => this.deps.store.audit({ actor: 'system', action: 'memory.inherit', target: agent.id, detail });
     const store = this.deps.memory.memories as MemoryStore & TombstoneCarrier;
-    if (!store.tombstonesOf || !store.addTombstones) return;
-    const t = await store.tombstonesOf(predecessor.id);
-    if (t.length) await store.addTombstones(agent.id, t);
-    for (const m of await store.listActive(predecessor.id)) {
+    if (typeof store.tombstonesOf !== 'function' || typeof store.addTombstones !== 'function') {
+      await inherited('skipped: tombstones unsupported');
+      return;
+    }
+    let records: MemoryRecord[];
+    try {
+      const t = await store.tombstonesOf(predecessor.id);
+      if (t.length) await store.addTombstones(agent.id, t);
+      records = await store.listActive(predecessor.id);
+    } catch {
+      await inherited('skipped: tombstone carry failed');
+      return;
+    }
+    const now = this.now();
+    let copied = 0;
+    let skipped = 0;
+    for (const m of records) {
       // TODO(S08 follow-up): per-record owner approval to transfer private records; voiceprints and style profiles never transfer.
-      if (!isSuccessorTransferable(m)) continue;
+      if (!isSuccessorTransferable(m, now)) { skipped++; continue; }
       try {
         await store.add(successorCopy(m, agent.id));
-      } catch (e) {
-        // A tombstoned lineage is skipped; any other failure is real. Structural check (no instanceof across bundles).
-        if (!isStaleMemoryWriteError(e)) throw e;
+        copied++;
+      } catch {
+        // A tombstoned lineage (a stale memory write) or any other failed copy is skipped and counted; the rest
+        // still transfer.
+        skipped++;
       }
     }
+    await inherited(`copied ${copied}, skipped ${skipped}`);
   }
 
   // ============================================

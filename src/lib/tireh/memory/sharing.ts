@@ -47,9 +47,14 @@ export function ownerRevokePatch(memory: MemoryRecord, actorId: string): Pick<Me
 /** Scopes a successor agent may inherit (docs/AGENT_INTELLIGENCE_SOLUTION.md 4.6 Successor agent). */
 export const SUCCESSOR_SCOPES = ['group', 'people', 'project'] as const;
 
-/** Normal-sensitivity group, people or project records that are still active. Private records never transfer here. */
-export function isSuccessorTransferable(memory: MemoryRecord): boolean {
-  return memory.sensitivity === 'normal' && !memory.supersededBy &&
+/**
+ * Valid normal-sensitivity group, people or project records (section 4.6): not superseded, not invalidated
+ * (S06) and not expired at `now` (section 4.3: "until superseded, revoked or expired"). Private records never
+ * transfer here.
+ */
+export function isSuccessorTransferable(memory: MemoryRecord, now: Date): boolean {
+  return memory.sensitivity === 'normal' && !memory.supersededBy && !memory.invalidatedAt &&
+    !(memory.expiresAt && memory.expiresAt.getTime() <= now.getTime()) &&
     (SUCCESSOR_SCOPES as readonly string[]).includes(memory.scope.kind);
 }
 

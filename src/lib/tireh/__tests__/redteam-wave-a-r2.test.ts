@@ -367,7 +367,7 @@ describe('red team r2: successor inheritance and re-snapshot never widen any rea
   it('a successor (TIREH_SHARING_V2 filter) shows no reader in any chat more than the predecessor did, in v1 and v2', () => {
     setFlags({ TIREH_SHARING_V2: '1' });
     const predecessor = records();
-    const successor = predecessor.filter(isSuccessorTransferable).map((m) => ({ ...successorCopy(m, 'aria-successor'), id: m.id, createdAt: m.createdAt, updatedAt: m.updatedAt }));
+    const successor = predecessor.filter((m) => isSuccessorTransferable(m, NOW)).map((m) => ({ ...successorCopy(m, 'aria-successor'), id: m.id, createdAt: m.createdAt, updatedAt: m.updatedAt }));
     // Never a private, personal, confidential or superseded record; the authorization snapshot travels unchanged.
     expect(successor.map((m) => m.id).sort()).toEqual(['s-about-reza', 's-gameend', 's-gameend-snap', 's-leads', 's-leads-legacy', 's-project'].sort());
     for (const m of successor) {
