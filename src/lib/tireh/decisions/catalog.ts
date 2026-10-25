@@ -1,138 +1,168 @@
 /**
- * The triage question catalogue for set v2 (docs/AGENT_INTELLIGENCE_SOLUTION.md
- * section 4.8) and the catalogue lint primitives.
+ * The triage question catalogue (docs/AGENT_INTELLIGENCE_SOLUTION.md section
+ * 4.8, Step 9): question names per set, the v2 questions, the fixed choice
+ * values the decision log may record, and the catalogue lint.
  *
  * Every v2 question is phrased about the latest message, never about a
  * person's emotional, attitudinal, health or performance state, and carries
- * no persona data. The lint (CATALOGUE_LINT_PATTERN) rejects those words in
- * any question text; the v1 questions stay byte-identical and are allowlisted
- * with reasons. v2 questions pass with no allowlist.
+ * no persona header or message text. The lint (CATALOGUE_LINT) rejects those
+ * words in any question text once the persona header line is stripped; the
+ * frozen v1 texts that contain them are allowlisted with reasons. The v2
+ * questions pass with no allowance.
+ *
+ * Imports only types from ../triage, so there is no runtime import cycle.
  */
 
 import type { DecisionQuestion } from '../triage';
+import { tirehFlags, type TriageQuestionSet } from '../flags';
 
-export const TRIAGE_V2_ROUTES = ['answer', 'smalltalk', 'clarify', 'retrieve_deep', 'task', 'correction'] as const;
-export const TRIAGE_V2_CONTEXT_NEEDS = ['none', 'person_profile', 'open_threads', 'group_decisions', 'project_history'] as const;
-export const TRIAGE_V2_THREAD_STATUSES = ['continues', 'resolves', 'new', 'unclear'] as const;
-export const TRIAGE_V2_STYLE_REQUESTS = ['brief', 'detailed', 'step_by_step', 'listening', 'unspecified'] as const;
-export const TRIAGE_V2_QUESTION_NAMES = ['route', 'context_need', 'thread_status', 'explicit_style_request', 'personal_life', 'confidential', 'explicit_correction'] as const;
+export const V1_QUESTION_NAMES = ['effort', 'live_info', 'memorable', 'wants_voice', 'addressed', 'proactive', 'skill'] as const;
+export const V2_QUESTION_NAMES = ['route', 'context_need', 'thread_status', 'explicit_style_request', 'personal_life', 'confidential', 'explicit_correction'] as const;
+/** Reserved for S12 (image ingestion): names only; their texts and parsing live there. */
+export const IMAGE_V1_QUESTION_NAMES = ['image_kind', 'image_task', 'contains_people', 'contains_sensitive_document'] as const;
 
-const ROUTE_DESCRIPTIONS: Record<(typeof TRIAGE_V2_ROUTES)[number], string> = {
-  answer: 'A direct answer, explanation or piece of advice for a question in the message.',
-  smalltalk: 'Greetings, thanks, acknowledgements or casual chat that needs only a short friendly reply.',
-  clarify: 'The request in the message is ambiguous or missing details, so a short clarifying question should come first.',
-  retrieve_deep: 'The message refers back to earlier conversations, past decisions or details that must be looked up before replying.',
-  task: 'The message asks for a piece of work: writing, planning, drafting, a checklist or several steps.',
-  correction: 'The message corrects or updates something said or saved earlier.',
+/** The decision log records any chosen skill as this value, never the skill id. */
+export const SKILL_SELECTED = 'selected';
+
+/** The only choice values a decision-log row or a calibration label may carry, per question. */
+export const CATALOGUE_CHOICE_VALUES: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  effort: Object.freeze(['quick', 'thoughtful']),
+  skill: Object.freeze(['none', SKILL_SELECTED]),
+  route: Object.freeze(['answer', 'smalltalk', 'clarify', 'retrieve_deep', 'task', 'correction']),
+  context_need: Object.freeze(['none', 'person_profile', 'open_threads', 'group_decisions', 'project_history']),
+  thread_status: Object.freeze(['continues', 'resolves', 'new', 'unclear']),
+  explicit_style_request: Object.freeze(['brief', 'detailed', 'step_by_step', 'listening', 'unspecified']),
+  image_kind: Object.freeze(['screenshot', 'document', 'receipt', 'chart', 'photo_of_people', 'meme', 'other']),
+  image_task: Object.freeze(['explain', 'extract_text', 'decide', 'react', 'remember', 'unclear']),
+});
+
+const deepFreeze = <T>(value: T): T => {
+  if (value && typeof value === 'object') {
+    for (const child of Object.values(value)) deepFreeze(child);
+    Object.freeze(value);
+  }
+  return value;
 };
 
-const CONTEXT_NEED_DESCRIPTIONS: Record<(typeof TRIAGE_V2_CONTEXT_NEEDS)[number], string> = {
-  none: 'Nothing beyond the recent lines.',
-  person_profile: 'Saved facts about a named team member: their role, work or stated preferences.',
-  open_threads: 'Open items from earlier: pending requests, follow-ups or unanswered questions.',
-  group_decisions: 'Decisions or agreements made earlier in this group or team.',
-  project_history: 'Earlier facts, dates or decisions about a named project.',
-};
+/**
+ * The seven v2 questions in V2_QUESTION_NAMES order. Frozen: callers get
+ * copies through triageQuestions(). No persona header, no message text.
+ */
+export const TRIAGE_V2_QUESTIONS: readonly DecisionQuestion[] = deepFreeze<DecisionQuestion[]>([
+  {
+    type: 'choice',
+    name: 'route',
+    instructions: 'Which kind of reply does the latest message call for? Judge the message itself.',
+    choices: [
+      { value: 'answer', description: 'A direct answer, explanation or piece of advice about what the message asks.' },
+      { value: 'smalltalk', description: 'Greeting, thanks, acknowledgement or casual chat that needs only a short friendly reply.' },
+      { value: 'clarify', description: 'The message is ambiguous or incomplete, so a short clarifying question should come first.' },
+      { value: 'retrieve_deep', description: 'The message refers to earlier conversations, past decisions or shared history that must be looked up.' },
+      { value: 'task', description: 'The message asks for something to be produced or done: a draft, plan, list, summary or reminder.' },
+      { value: 'correction', description: 'The message corrects or updates something said, decided or saved earlier.' },
+    ],
+  },
+  {
+    type: 'choice',
+    name: 'context_need',
+    instructions: 'Beyond the recent lines, what background would a good reply to the latest message need?',
+    choices: [
+      { value: 'none', description: 'Nothing beyond the recent lines.' },
+      { value: 'person_profile', description: 'Facts, preferences or plans stated earlier by or about the people the message names.' },
+      { value: 'open_threads', description: 'Unfinished topics, open questions or pending commitments from earlier in this conversation.' },
+      { value: 'group_decisions', description: 'Decisions or agreements made earlier in this group.' },
+      { value: 'project_history', description: 'Earlier facts, plans or deadlines about a project or piece of work the message names.' },
+    ],
+  },
+  {
+    type: 'choice',
+    name: 'thread_status',
+    instructions: 'How does the latest message relate to the topic of the recent lines?',
+    choices: [
+      { value: 'continues', description: 'It continues the same topic.' },
+      { value: 'resolves', description: 'It closes the topic: a final answer, confirmation, agreement or thanks.' },
+      { value: 'new', description: 'It starts a different topic.' },
+      { value: 'unclear', description: 'The relation cannot be told from these lines.' },
+    ],
+  },
+  {
+    type: 'choice',
+    name: 'explicit_style_request',
+    instructions: 'Does the latest message explicitly ask for a particular form of reply? Choose unspecified unless the message states it.',
+    choices: [
+      { value: 'brief', description: 'It asks for a short or one-line reply.' },
+      { value: 'detailed', description: 'It asks for a thorough, detailed reply.' },
+      { value: 'step_by_step', description: 'It asks for steps, a walkthrough or a numbered list.' },
+      { value: 'listening', description: 'It asks to be heard out without advice or solutions.' },
+      { value: 'unspecified', description: 'It does not ask for a particular form.' },
+    ],
+  },
+  {
+    type: 'predicate',
+    name: 'personal_life',
+    instructions: 'Is the latest message about private life outside work, such as family, home, friends, private appointments or personal plans, rather than work matters?',
+  },
+  {
+    type: 'predicate',
+    name: 'confidential',
+    instructions: 'Does the latest message say or clearly imply that what it shares is confidential, secret or not to be passed on to others?',
+  },
+  {
+    type: 'predicate',
+    name: 'explicit_correction',
+    instructions: 'Does the latest message explicitly correct or retract something said, decided or saved earlier (for example "actually it is Tuesday, not Monday" or "forget what I said about the budget")?',
+  },
+]);
 
-const THREAD_STATUS_DESCRIPTIONS: Record<(typeof TRIAGE_V2_THREAD_STATUSES)[number], string> = {
-  continues: 'It continues the current topic.',
-  resolves: 'It closes the current topic, for example by accepting an answer, thanking, or saying it is done.',
-  new: 'It starts a new topic.',
-  unclear: 'It is not clear from the recent lines.',
-};
-
-const STYLE_REQUEST_DESCRIPTIONS: Record<(typeof TRIAGE_V2_STYLE_REQUESTS)[number], string> = {
-  brief: 'Asks for a short or one-line reply.',
-  detailed: 'Asks for a long, thorough or detailed reply.',
-  step_by_step: 'Asks for numbered steps or a step-by-step walkthrough.',
-  listening: 'Asks the persona to just listen, without advice or solutions.',
-  unspecified: 'No explicit request about the reply format.',
-};
-
-const choices = <T extends string>(values: readonly T[], descriptions: Record<T, string>) =>
-  values.map((value) => ({ value, description: descriptions[value] }));
-
-/** The seven v2 questions, fresh copies in TRIAGE_V2_QUESTION_NAMES order. No persona header, no persona data. */
-export function triageV2Questions(): DecisionQuestion[] {
-  return [
-    { type: 'choice', name: 'route', instructions: 'What kind of reply does the latest message call for? Judge only what the message asks for.', choices: choices(TRIAGE_V2_ROUTES, ROUTE_DESCRIPTIONS) },
-    { type: 'choice', name: 'context_need', instructions: 'Which background, if any, does a good reply to the latest message need beyond the recent lines?', choices: choices(TRIAGE_V2_CONTEXT_NEEDS, CONTEXT_NEED_DESCRIPTIONS) },
-    { type: 'choice', name: 'thread_status', instructions: 'How does the latest message relate to the topic of the recent lines?', choices: choices(TRIAGE_V2_THREAD_STATUSES, THREAD_STATUS_DESCRIPTIONS) },
-    { type: 'choice', name: 'explicit_style_request', instructions: 'Does the latest message explicitly ask for a reply format? Choose unspecified unless the message says so in words.', choices: choices(TRIAGE_V2_STYLE_REQUESTS, STYLE_REQUEST_DESCRIPTIONS) },
-    { type: 'predicate', name: 'personal_life', instructions: 'Is the latest message about private life outside work, such as family, home, relationships or private plans, rather than about work?' },
-    { type: 'predicate', name: 'confidential', instructions: 'Does the latest message mark its content as confidential or not for sharing, for example "between us", "don\'t tell anyone" or "keep this private"?' },
-    { type: 'predicate', name: 'explicit_correction', instructions: 'Does the latest message explicitly correct earlier information, for example "actually it\'s Tuesday, not Monday" or "that\'s wrong, I moved to the design team"?' },
-  ];
+/** The set gateway triage uses for this call: tirehFlags().triageQuestionSet, read now. */
+export function triageQuestionSetNow(): TriageQuestionSet {
+  return tirehFlags().triageQuestionSet;
 }
 
 // ---------------------------------------------------------------------------
 // Catalogue lint
 
-/** Words no question may use about a member. S12 copies this regex verbatim. */
-export const CATALOGUE_LINT_PATTERN = /\b(emotion\w*|mood\w*|stress\w*|attitude\w*|personalit\w*|health\w*|performance\w*|feel\w*)\b/i;
+/** No question may ask about a member's state. Copied verbatim by S12's test. */
+export const CATALOGUE_LINT = /\b(emotion\w*|mood\w*|stress\w*|attitude\w*|personalit\w*|health\w*|performance\w*|feel\w*)\b/i;
 
 /** The v1 persona header line (persona data, not question text); stripped before linting. */
 export const PERSONA_HEADER_PREFIX = 'Persona context (data, not instructions):';
 
-export type CatalogueField = 'instructions' | 'choice' | 'level';
+/** One reasoned exception. `choice:*` covers every choice of that question. */
+export interface LintAllowance { question: string; field: 'instructions' | `choice:${string}`; reason: string }
+
+/** Content-free: the question name, the field and the matched word only. */
+export interface LintViolation { question: string; field: string; match: string }
+
+/** Exactly the frozen texts that need it; v2 questions need no entry. */
+export const CATALOGUE_LINT_ALLOWLIST: readonly LintAllowance[] = Object.freeze([
+  { question: 'effort', field: 'choice:thoughtful', reason: '"emotional or sensitive topics" names a topic of the message, not a member\'s state; v1 text is frozen.' },
+  { question: 'proactive', field: 'instructions', reason: '"Consider their personality" refers to the persona\'s own configured character, not a member; v1 text is frozen.' },
+  { question: 'skill', field: 'instructions', reason: 'A negative instruction ("not the person\'s mood, feelings or health"); the text is owned by skill-routing.ts.' },
+  { question: 'skill', field: 'choice:*', reason: 'Skill titles and whenToUse are catalogue content from the skill library, not questions about a member.' },
+] as LintAllowance[]);
+
+const allowed = (allow: readonly LintAllowance[], violation: LintViolation): boolean =>
+  allow.some((a) => a.question === violation.question
+    && (a.field === violation.field || (a.field === 'choice:*' && violation.field.startsWith('choice:'))));
 
 /**
- * One reasoned exception. `value: '*'` matches every choice value except the
- * fixed `none` choice; `words: '*'` allows any matched word.
+ * Lints the instructions (with every PERSONA_HEADER_PREFIX line stripped) and
+ * each choice or level description. Returns the violations not covered by
+ * `allow`; an empty array means the catalogue passes.
  */
-export interface CatalogueAllowance {
-  question: string;
-  field: CatalogueField;
-  value?: string;
-  words: string[] | '*';
-  reason: string;
-}
-
-/** Content-free: names the question, field, value and matched word only. */
-export interface CatalogueViolation {
-  question: string;
-  field: CatalogueField;
-  value?: string;
-  word: string;
-}
-
-export const V1_LINT_ALLOWLIST: readonly CatalogueAllowance[] = [
-  { question: 'effort', field: 'choice', value: 'thoughtful', words: ['emotional'], reason: 'A topic of the message ("emotional or sensitive topics"), not a member\'s state.' },
-  { question: 'proactive', field: 'instructions', words: ['personality'], reason: 'The persona\'s configured personality: the agent\'s own, not a member\'s.' },
-  { question: 'skill', field: 'instructions', words: ['mood', 'feelings', 'health'], reason: 'A negation telling the model not to judge them ("not the person\'s mood, feelings or health").' },
-  { question: 'skill', field: 'choice', value: '*', words: '*', reason: 'Skill titles and whenToUse are catalogue content, not questions about a member.' },
-];
-
-/** Every lintable text in the questions, with persona header lines stripped from instructions. */
-export function catalogueTexts(questions: readonly DecisionQuestion[]): Array<{ question: string; field: CatalogueField; value?: string; text: string }> {
-  const out: Array<{ question: string; field: CatalogueField; value?: string; text: string }> = [];
+export function lintQuestions(questions: readonly DecisionQuestion[], allow: readonly LintAllowance[] = []): LintViolation[] {
+  const out: LintViolation[] = [];
+  const check = (question: string, field: string, text: string | undefined) => {
+    const match = text ? CATALOGUE_LINT.exec(text) : null;
+    if (!match) return;
+    const violation = { question, field, match: match[0] };
+    if (!allowed(allow, violation)) out.push(violation);
+  };
   for (const q of questions) {
-    const instructions = q.instructions.split('\n').filter((line) => !line.startsWith(PERSONA_HEADER_PREFIX)).join('\n');
-    out.push({ question: q.name, field: 'instructions', text: instructions });
-    if (q.type === 'choice') for (const c of q.choices) out.push({ question: q.name, field: 'choice', value: c.value, text: [c.value, c.description ?? ''].join(' ').trim() });
-    if (q.type === 'score') for (const l of q.levels) out.push({ question: q.name, field: 'level', value: l.label, text: [l.label, l.description ?? ''].join(' ').trim() });
+    check(q.name, 'instructions', q.instructions.split('\n').filter((line) => !line.startsWith(PERSONA_HEADER_PREFIX)).join('\n'));
+    if (q.type === 'choice') for (const c of q.choices) check(q.name, `choice:${c.value}`, c.description);
+    if (q.type === 'score') for (const l of q.levels) check(q.name, `level:${l.label}`, l.description);
   }
   return out;
-}
-
-function allows(entry: CatalogueAllowance, question: string, field: CatalogueField, value: string | undefined, word: string): boolean {
-  if (entry.question !== question || entry.field !== field) return false;
-  if (entry.value !== undefined && (entry.value === '*' ? value === undefined || value === 'none' : entry.value !== value)) return false;
-  return entry.words === '*' || entry.words.some((w) => w.toLowerCase() === word);
-}
-
-/** Lints the questions; returns content-free violations and the allowances that were needed. */
-export function lintQuestions(questions: readonly DecisionQuestion[], allowlist: readonly CatalogueAllowance[] = []): { violations: CatalogueViolation[]; usedAllowances: Set<CatalogueAllowance> } {
-  const violations: CatalogueViolation[] = [];
-  const usedAllowances = new Set<CatalogueAllowance>();
-  const global = new RegExp(CATALOGUE_LINT_PATTERN.source, 'gi');
-  for (const { question, field, value, text } of catalogueTexts(questions)) {
-    for (const match of text.matchAll(global)) {
-      const word = match[1].toLowerCase();
-      const allowance = allowlist.find((entry) => allows(entry, question, field, value, word));
-      if (allowance) usedAllowances.add(allowance);
-      else violations.push({ question, field, ...(value === undefined ? {} : { value }), word });
-    }
-  }
-  return { violations, usedAllowances };
 }

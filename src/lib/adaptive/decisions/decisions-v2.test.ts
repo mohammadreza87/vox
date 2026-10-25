@@ -3,10 +3,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   DecisionService, OpenAIDecisionProvider, requestSchema, decisionEvidenceSchema,
   DEFAULT_DECISION_DEADLINE_MS, MAX_DECISION_DEADLINE_MS, MAX_DECISION_QUESTIONS, MAX_DECISION_CHOICES,
-  MAX_DECISION_LEVELS, MAX_DECISION_TEXT_PARTS, MAX_DECISION_IMAGE_PARTS,
+  MAX_DECISION_LEVELS, MAX_DECISION_TEXT_PARTS, MAX_DECISION_IMAGE_PARTS, effectiveDecisionDeadline,
   type DecisionContext, type DecisionInput, type DecisionProvider, type DecisionQuestion,
 } from './index';
 import { minimizeImageDataUrl } from '../prediction/image';
+import { SYNTHETIC_IMAGE } from '../prediction/fixtures';
 
 function crc32(bytes: Uint8Array): number {
   let crc = 0xffffffff;
@@ -90,6 +91,8 @@ describe('evidence', () => {
     ['8 text parts', message(Array.from({ length: 8 }, (_, i) => text(`part ${i}`)))],
     ['text plus one image', message([text('look'), image()])],
     ['image first then text', message([image(), text('look')])],
+    ['the legacy [input_text, input_image] tuple with SYNTHETIC_IMAGE', message([text('Inspect'), { type: 'input_image', image_url: SYNTHETIC_IMAGE, detail: 'low' }])],
+    ['8 text parts plus 1 image', message([...Array.from({ length: 8 }, (_, i) => text(`part ${i}`)), image()])],
   ])('accepts %s', (_label, input) => {
     expect(decisionEvidenceSchema.safeParse(input).success).toBe(true);
   });
@@ -115,6 +118,7 @@ describe('evidence', () => {
     ['an empty content array', message([])],
     ['an extra key on the message', message([text('x')], { name: 'someone' })],
     ['a high-detail image', message([text('x'), { ...image(), detail: 'high' }])],
+    ['a webp data URL', message([text('x'), { type: 'input_image', image_url: `data:image/webp;base64,${SYNTHETIC_IMAGE.split(',')[1]}`, detail: 'low' }])],
   ])('rejects %s as invalid_input without a provider call', async (_label, input) => {
     expect(decisionEvidenceSchema.safeParse(input).success).toBe(false);
     const provider = echoProvider();
@@ -175,6 +179,24 @@ describe('deadline', () => {
     const provider = echoProvider();
     expect(await new DecisionService(provider).evaluate(context(input, { deadlineMs }))).toMatchObject({ reason: 'invalid_input' });
     expect(provider.evaluate).not.toHaveBeenCalled();
+  });
+});
+
+describe('effectiveDecisionDeadline', () => {
+  it.each([[undefined, 500], [1, 1], [0.5, 1], [2000, 2000], [5000, 5000], [9000, 5000]] as Array<[number | undefined, number]>)('%s -> %s', (input, expected) => {
+    expect(effectiveDecisionDeadline(input)).toBe(expected);
+  });
+});
+
+describe('provider compatibility', () => {
+  it('a 3-parameter provider (evaluate(input, signal)) still answers', async () => {
+    const provider: DecisionProvider = {
+      evaluate: async (input: DecisionInput, signal: AbortSignal) => {
+        expect(signal).toBeInstanceOf(AbortSignal);
+        return { model: 'gpt-6-luna', answers: input.questions.map((q) => ({ name: q.name, type: 'predicate', probability: 0.4 })) };
+      },
+    };
+    expect(await new DecisionService(provider).evaluate(context({ input: 'text', questions: predicates(2) }))).toMatchObject({ status: 'answered' });
   });
 });
 

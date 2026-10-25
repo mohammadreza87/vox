@@ -1,45 +1,57 @@
 /**
  * The triage Decider over the vendor-neutral DecisionService seam
- * (src/lib/adaptive/decisions), selected only by STUDIO_DECIDER=service.
+ * (src/lib/adaptive/decisions). runtime.ts selects it only under
+ * STUDIO_DECIDER=service; nothing here reads credentials, flags or the network.
  *
- * Callers (the gateway, Studio) have already run their own authority checks
- * (groupAllowed, unchanged()) before deciding, exactly as for OpenAIMedia; the
- * supplied per-request authority is revalidated at the guarded transport. The adapter never
- * throws: refusals, invalid input, timeouts and an open circuit all give {},
- * so readTriage returns null and the reply takes the full path.
+ * Callers keep their own authority checks, exactly as with OpenAIMedia: the
+ * gateway calls unchanged() before deciding. When a caller supplies a
+ * per-request DeciderAuthority, it is the service's authorize hook and is
+ * revalidated at the guarded transport (authorizeAtTransport, plus
+ * authorizeNow when given); without one the hook is a constant fingerprint.
+ *
+ * Never throws. Any unknown outcome (refusal, malformed, timeout, invalid
+ * input, open circuit, a throwing service) gives answers {}, so readTriage
+ * returns null and the reply takes the full path.
  */
 
 import {
-  DecisionService, OpenAIDecisionProvider, DEFAULT_DECISION_DEADLINE_MS, MAX_DECISION_DEADLINE_MS,
-  type DecisionInput, type DecisionQuestion as ServiceQuestion,
+  DEFAULT_DECISION_DEADLINE_MS,
+  type DecisionInput, type DecisionQuestion as ServiceQuestion, type DecisionService,
 } from '../../adaptive/decisions';
-import { tirehFlags } from '../flags';
-import { TRIAGE_TIMEOUT_MS, type DecideDetail, type DeciderAuthority, type Decider, type DeciderPart, type DecisionAnswer, type DecisionQuestion } from '../triage';
+import type { DecideDetail, DeciderAuthority, Decider, DeciderPart, DecisionAnswer, DecisionQuestion } from '../triage';
 
 type Evidence = DecisionInput['input'];
 
 export interface ServiceDeciderOptions {
-  /** Upper bound for every call's deadline (default 5000 ms, the service maximum). */
+  /** Upper bound for every call's deadline; DecisionService clamps to 5 s anyway. */
   deadlineMs?: number;
+  /** Clock for elapsedMs when the service itself throws (default Date.now). */
   now?: () => number;
+}
+
+const usable = (ms: number | undefined): ms is number => typeof ms === 'number' && Number.isFinite(ms) && ms >= 1;
+
+/** Triage descriptions are optional; the seam requires them, so the value or label stands in. Never clipped. */
+export function toServiceQuestion(q: DecisionQuestion): ServiceQuestion {
+  if (q.type === 'predicate') return { type: 'predicate', name: q.name, instructions: q.instructions };
+  if (q.type === 'choice') return { type: 'choice', name: q.name, instructions: q.instructions, choices: q.choices.map((c) => ({ value: c.value, description: c.description ?? c.value })) };
+  return { type: 'score', name: q.name, instructions: q.instructions, levels: q.levels.map((l) => ({ label: l.label, description: l.description ?? l.label })) };
 }
 
 export class ServiceDecider implements Decider {
   private readonly now: () => number;
 
   constructor(private readonly service: DecisionService, private readonly options: ServiceDeciderOptions = {}) {
-    this.now = options.now ?? (() => performance.now());
+    this.now = options.now ?? Date.now;
   }
 
   async decide(input: string, questions: DecisionQuestion[], timeoutMs?: number, authority?: DeciderAuthority): Promise<Record<string, DecisionAnswer>> {
-    return (await this.decideDetailed(input, questions, timeoutMs, authority)).answers;
-  }
-
-  decideDetailed(input: string, questions: DecisionQuestion[], timeoutMs?: number, authority?: DeciderAuthority): Promise<DecideDetail> {
-    return this.run(() => input, questions, timeoutMs, authority);
+    return (await this.run(input, questions, timeoutMs, authority)).answers;
   }
 
   async decideParts(input: readonly DeciderPart[], questions: DecisionQuestion[], timeoutMs?: number, authority?: DeciderAuthority): Promise<Record<string, DecisionAnswer>> {
+    // Built lazily, after authorization, as the seam requires. Images go
+    // through the seam's minimizeImageDataUrl: png/jpeg, <=512 px, <=64 KiB.
     const evidence = (): Evidence => [{
       role: 'user',
       content: input.map((part) => part.type === 'text'
@@ -49,21 +61,29 @@ export class ServiceDecider implements Decider {
     return (await this.run(evidence, questions, timeoutMs, authority)).answers;
   }
 
-  private async run(evidence: () => Evidence, questions: DecisionQuestion[], timeoutMs: number | undefined, authority?: DeciderAuthority): Promise<DecideDetail> {
-    const start = this.now();
+  decideDetailed(input: string, questions: DecisionQuestion[], timeoutMs?: number, authority?: DeciderAuthority): Promise<DecideDetail> {
+    return this.run(input, questions, timeoutMs, authority);
+  }
+
+  /** min(timeoutMs, options.deadlineMs), ignoring missing or invalid values; 500 ms when neither is usable. */
+  private deadline(timeoutMs: number | undefined): number {
+    const bounds = [timeoutMs, this.options.deadlineMs].filter(usable);
+    return bounds.length ? Math.min(...bounds) : DEFAULT_DECISION_DEADLINE_MS;
+  }
+
+  private async run(input: string | (() => Evidence), questions: DecisionQuestion[], timeoutMs: number | undefined, authority?: DeciderAuthority): Promise<DecideDetail> {
+    const started = this.now();
     try {
-      const requested = typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) && timeoutMs >= 1 ? timeoutMs : DEFAULT_DECISION_DEADLINE_MS;
-      const deadlineMs = Math.min(requested, this.options.deadlineMs ?? MAX_DECISION_DEADLINE_MS);
-      const mapped = questions.map(serviceQuestion);
+      const mapped = questions.map(toServiceQuestion);
       const result = await this.service.evaluate({
         enabled: true,
         revision: 0,
         currentRevision: () => 0,
         authorize: authority?.authorize ?? (async () => 'tireh-current-input-v1'),
         ...(authority ? { authorizeAtTransport: authority.authorize, ...(authority.authorizeNow ? { authorizeNow: authority.authorizeNow } : {}) } : {}),
-        // Evidence is built lazily, after authorization, as the seam requires.
-        loadInput: async () => ({ input: evidence(), questions: mapped } as DecisionInput),
-        deadlineMs,
+        // The seam validates the request with its strict schema after loading.
+        loadInput: async () => ({ input: typeof input === 'string' ? input : input(), questions: mapped } as DecisionInput),
+        deadlineMs: this.deadline(timeoutMs),
       });
       const tokens = result.inputTokens === undefined ? {} : { inputTokens: result.inputTokens };
       if (result.status !== 'answered') return { answers: {}, elapsedMs: result.elapsedMs, ...tokens, outcome: 'unknown', unknownReason: result.reason };
@@ -75,24 +95,7 @@ export class ServiceDecider implements Decider {
       }
       return { answers, elapsedMs: result.elapsedMs, ...tokens, outcome: 'answered' };
     } catch {
-      return { answers: {}, outcome: 'unknown', unknownReason: 'threw', elapsedMs: Math.max(0, this.now() - start) };
+      return { answers: {}, elapsedMs: Math.max(0, this.now() - started), outcome: 'unknown', unknownReason: 'provider_error' };
     }
   }
-}
-
-/** Triage descriptions are optional; the seam requires them (value or label stands in). */
-function serviceQuestion(q: DecisionQuestion): ServiceQuestion {
-  if (q.type === 'predicate') return { type: 'predicate', name: q.name, instructions: q.instructions };
-  if (q.type === 'choice') return { type: 'choice', name: q.name, instructions: q.instructions, choices: q.choices.map((c) => ({ value: c.value, description: c.description ?? c.value })) };
-  return { type: 'score', name: q.name, instructions: q.instructions, levels: q.levels.map((l) => ({ label: l.label, description: l.description ?? l.label })) };
-}
-
-/**
- * The Studio decider. STUDIO_DECIDER=service with OPENAI_API_KEY gives a
- * ServiceDecider over a dedicated DecisionService (its own circuit); anything
- * else returns `fallback` itself. Read once at startup.
- */
-export function studioDecider(fallback: Decider, env: NodeJS.ProcessEnv = process.env): Decider {
-  if (tirehFlags(env).decider !== 'service' || !env.OPENAI_API_KEY) return fallback;
-  return new ServiceDecider(new DecisionService(OpenAIDecisionProvider.guarded({ apiKey: env.OPENAI_API_KEY })), { deadlineMs: TRIAGE_TIMEOUT_MS });
 }

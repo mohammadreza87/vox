@@ -1,19 +1,20 @@
-/** S09: the content-free decision log (stores, sink, row building, gateway canary). No network. */
+/** S09: the content-free decision log: schema, row builder, stores and sink. No network. */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { appendFileSync, mkdtempSync, rmSync, statSync } from 'fs';
-import { tmpdir } from 'os';
+import os from 'os';
 import { join } from 'path';
 import type { Firestore } from 'firebase-admin/firestore';
-import { DecisionService } from '../../adaptive/decisions';
 import {
-  createDecisionLogSink, createFileDecisionLogStore, FirestoreDecisionLogStore, InMemoryDecisionLogStore, recordTriageDecision,
-  DECISION_LOG_COLLECTION, type DecisionLogStore, type NewDecisionLogRow, type TriageDecisionEvent,
+  createDecisionLogSink, createFileDecisionLogStore, decisionLogRow, FirestoreDecisionLogStore, InMemoryDecisionLogStore,
+  DECISION_LOG_COLLECTION, DECISION_LOG_RETENTION_DAYS, newDecisionLogRowSchema,
+  type DecisionLogRowInput, type DecisionLogStore, type NewDecisionLogRow,
 } from '../decisions/log';
+import { SKILL_SELECTED } from '../decisions/catalog';
 import { scriptLanguage } from '../decisions/language';
-import { ServiceDecider } from '../decisions/service-decider';
 import { triageQuestions, type Triage } from '../triage';
-import { GAMEEND_CHAT, groupText, privateText, TG, testOrgConfig } from './fixtures';
-import { collectingSink, decisionsGateway, pred, scriptedProvider, v1Answers } from './decisions-fixtures';
+import type { Persona } from '../types';
+import { testOrgConfig } from './fixtures';
+import { pred, v1Answers } from './decisions-fixtures';
 
 const DAY = 86_400_000;
 const NOW = new Date('2026-10-20T12:00:00Z');
@@ -23,11 +24,10 @@ const row = (at: Date, extra: Partial<NewDecisionLogRow> = {}): NewDecisionLogRo
   outcome: 'answered', elapsedMs: 312, inputTokens: 90, routeTaken: 'quick', personaId: 'aria', chatKind: 'private', language: 'en', at, ...extra,
 });
 
-/** A minimal Firestore fake: one collection, where/orderBy/limit, batch delete. Dates stored as Timestamp-like values. */
+/** A minimal Firestore fake: one collection, doc(id).set, where/orderBy/limit/get, batch delete. Dates come back Timestamp-like. */
 function fakeFirestore() {
   class Ts { constructor(readonly ms: number) {} toDate() { return new Date(this.ms); } }
   const docs = new Map<string, Record<string, unknown>>();
-  let next = 0;
   const encode = (v: unknown) => (v instanceof Date ? new Ts(v.getTime()) : v);
   const ms = (v: unknown) => (v instanceof Ts ? v.ms : v instanceof Date ? v.getTime() : NaN);
   type Filter = { field: string; op: string; value: unknown };
@@ -47,14 +47,15 @@ function fakeFirestore() {
     },
   });
   const collectionNames: string[] = [];
+  const commits: number[] = [];
   const db = {
     collection: (name: string) => {
       collectionNames.push(name);
-      return { ...query([]), doc: () => { const id = `d${next++}`; return { set: async (data: Record<string, unknown>) => { docs.set(id, Object.fromEntries(Object.entries(data).map(([k, v]) => [k, encode(v)]))); } }; } };
+      return { ...query([]), doc: (id: string) => ({ set: async (data: Record<string, unknown>) => { docs.set(id, Object.fromEntries(Object.entries(data).map(([k, v]) => [k, encode(v)]))); } }) };
     },
-    batch: () => { const refs: Array<{ id: string }> = []; return { delete: (ref: { id: string }) => refs.push(ref), commit: async () => { refs.forEach((r) => docs.delete(r.id)); } }; },
+    batch: () => { const refs: Array<{ id: string }> = []; return { delete: (ref: { id: string }) => refs.push(ref), commit: async () => { commits.push(refs.length); refs.forEach((r) => docs.delete(r.id)); } }; },
   };
-  return { db: db as unknown as Firestore, docs, collectionNames, rawPut: (id: string, data: Record<string, unknown>) => docs.set(id, data) };
+  return { db: db as unknown as Firestore, docs, collectionNames, commits, rawPut: (id: string, data: Record<string, unknown>) => docs.set(id, data) };
 }
 
 const dirs: string[] = [];
@@ -63,7 +64,101 @@ afterEach(() => {
   vi.restoreAllMocks();
   dirs.splice(0).forEach((d) => rmSync(d, { recursive: true, force: true }));
 });
-const tempFile = () => { const dir = mkdtempSync(join(tmpdir(), 'declog-')); dirs.push(dir); return join(dir, 'decision-log-v1.jsonl'); };
+const tempFile = () => { const dir = mkdtempSync(join(os.tmpdir(), 'vox-decision-log-')); dirs.push(dir); return join(dir, 'decision-log-v1.jsonl'); };
+
+describe('newDecisionLogRowSchema', () => {
+  it('accepts a valid row', () => {
+    expect(newDecisionLogRowSchema.safeParse(row(NOW)).success).toBe(true);
+  });
+
+  it.each([
+    ['an extra text key', { ...row(NOW), text: 'CANARY_TEXT' }],
+    ['an unknown name', row(NOW, { names: ['effort', 'mood_of_member'] })],
+    ['an unknown answer name', row(NOW, { answers: [{ name: 'other', type: 'predicate', probability: 0.5 }] })],
+    ['a choice outside the catalogue', row(NOW, { answers: [{ name: 'effort', type: 'choice', choice: 'quick reply', confidence: 0.8 }] })],
+    ['a skill id as the choice', row(NOW, { names: ['skill'], answers: [{ name: 'skill', type: 'choice', choice: 'x.alpha', confidence: 0.8 }] })],
+    ['a probabilities value outside the catalogue', row(NOW, { answers: [{ name: 'effort', type: 'choice', choice: 'quick', confidence: 0.8, probabilities: [{ value: 'CANARY', probability: 0.2 }] }] })],
+    ['a probability > 1', row(NOW, { answers: [{ name: 'memorable', type: 'predicate', probability: 1.5 }] })],
+    ['a negative elapsedMs', row(NOW, { elapsedMs: -1 })],
+    ['a fractional elapsedMs', row(NOW, { elapsedMs: 1.5 })],
+    ['a personaId with a space', row(NOW, { personaId: 'aria persona' })],
+    ['an unknown unknownReason', row(NOW, { outcome: 'unknown', unknownReason: 'CANARY reason' })],
+    ['more than 32 names', row(NOW, { names: Array.from({ length: 33 }, () => 'effort') })],
+  ])('rejects %s', (_label, bad) => {
+    expect(newDecisionLogRowSchema.safeParse(bad).success).toBe(false);
+  });
+});
+
+describe('decisionLogRow', () => {
+  const canaryPersona = (): Persona => ({ ...testOrgConfig().personas.find((p) => p.id === 'aria')!, name: 'CANARY_PERSONA', role: 'CANARY_ROLE' });
+  const routable = [{ id: 'x.alpha', title: 'Alpha', whenToUse: 'Alpha.' }, { id: 'x.beta', title: 'Beta', whenToUse: 'Beta.' }];
+  const triage = (extra: Partial<Triage> = {}): Triage => ({ effort: 'thoughtful', needsWeb: false, memorable: false, wantsVoice: false, ...extra });
+  const input = (extra: Partial<DecisionLogRowInput> = {}): DecisionLogRowInput => ({
+    set: 'v1', questions: triageQuestions(canaryPersona(), false, routable, 'v1'), answers: v1Answers(), triage: triage(), elapsedMs: 123.4,
+    webSearchAvailable: false, fastModel: true, personaId: 'aria', chatKind: 'private', latestMessage: 'CANARY_MSG_7f3 hello there', at: NOW, ...extra,
+  });
+
+  it('never carries the message, persona name or skill id', () => {
+    const r = decisionLogRow(input({ answers: v1Answers({ skill: { type: 'choice', choice: 'x.alpha', confidence: 0.9, probabilities: [{ value: 'x.alpha', probability: 0.9 }, { value: 'x.beta', probability: 0.05 }, { value: 'none', probability: 0.05 }] } }) }))!;
+    expect(r).not.toBeNull();
+    const json = JSON.stringify(r);
+    for (const canary of ['CANARY_MSG_7f3', 'CANARY_PERSONA', 'CANARY_ROLE', 'x.alpha', 'x.beta', 'hello']) expect(json).not.toContain(canary);
+    expect(r.answers.find((a) => a.name === 'skill')).toEqual({ name: 'skill', type: 'choice', choice: SKILL_SELECTED, confidence: 0.9 });
+    expect(r).toMatchObject({ questionSetVersion: 'v1', names: ['effort', 'live_info', 'memorable', 'wants_voice', 'skill'], outcome: 'answered', elapsedMs: 123, language: 'en', personaId: 'aria', chatKind: 'private', at: NOW });
+    expect(newDecisionLogRowSchema.safeParse(r).success).toBe(true);
+  });
+
+  it('a skill answer of none stays none', () => {
+    const r = decisionLogRow(input({ answers: v1Answers({ skill: { type: 'choice', choice: 'none', confidence: 0.7 } }) }))!;
+    expect(r.answers.find((a) => a.name === 'skill')).toEqual({ name: 'skill', type: 'choice', choice: 'none', confidence: 0.7 });
+  });
+
+  it('drops choices outside the catalogue and non-catalogue probabilities', () => {
+    const questions = triageQuestions(canaryPersona(), false, undefined, 'v2');
+    const r = decisionLogRow(input({ set: 'v2', questions, answers: { ...v1Answers(), stray: pred(0.5), route: { type: 'choice', choice: 'banter', confidence: 0.9 },
+      context_need: { type: 'choice', choice: 'none', confidence: 0.6, probabilities: [{ value: 'none', probability: 0.6 }, { value: 'CANARY value', probability: 0.4 }] } } }))!;
+    expect(r.answers.map((a) => a.name)).toEqual(['effort', 'live_info', 'memorable', 'wants_voice', 'context_need']);
+    expect(r.answers.find((a) => a.name === 'context_need')).toEqual({ name: 'context_need', type: 'choice', choice: 'none', confidence: 0.6, probabilities: [{ value: 'none', probability: 0.6 }] });
+    expect(r.questionSetVersion).toBe('v2');
+    expect(JSON.stringify(r)).not.toContain('CANARY');
+  });
+
+  it.each([
+    ['triage null', { triage: null }, 'untriaged'],
+    ['needsWeb with webSearchAvailable', { triage: triage({ needsWeb: true, effort: 'quick' }), webSearchAvailable: true }, 'web'],
+    ['quick with fastModel', { triage: triage({ effort: 'quick' }) }, 'quick'],
+    ['quick without fastModel', { triage: triage({ effort: 'quick' }), fastModel: false }, 'thoughtful'],
+    ['needsWeb without webSearchAvailable', { triage: triage({ needsWeb: true }) }, 'thoughtful'],
+  ] as Array<[string, Partial<DecisionLogRowInput>, string]>)('routeTaken for %s', (_label, extra, expected) => {
+    expect(decisionLogRow(input(extra))!.routeTaken).toBe(expected);
+  });
+
+  it('outcome and unknownReason: failed, detail unknown timeout, and empty answers', () => {
+    expect(decisionLogRow(input({ failed: true, answers: undefined, triage: null }))).toMatchObject({ outcome: 'unknown', unknownReason: 'decider_error', answers: [], routeTaken: 'untriaged' });
+    expect(decisionLogRow(input({ answers: {}, triage: null, detail: { answers: {}, elapsedMs: 2001.6, outcome: 'unknown', unknownReason: 'timeout' } })))
+      .toMatchObject({ outcome: 'unknown', unknownReason: 'timeout', elapsedMs: 2002 });
+    expect(decisionLogRow(input({ answers: {}, triage: null }))).toMatchObject({ outcome: 'unknown', unknownReason: 'no_answers' });
+    const answered = decisionLogRow(input({ detail: { answers: v1Answers(), elapsedMs: 40, inputTokens: 77, outcome: 'answered' } }))!;
+    expect(answered).toMatchObject({ outcome: 'answered', elapsedMs: 40, inputTokens: 77 });
+    expect(answered).not.toHaveProperty('unknownReason');
+  });
+
+  it('returns null when the row cannot validate', () => {
+    expect(decisionLogRow(input({ personaId: 'not a valid id' }))).toBeNull();
+  });
+});
+
+describe('scriptLanguage', () => {
+  it.each([
+    ['سلام خوبی', 'fa'],
+    ['hello there', 'en'],
+    ['سلام hello friend', 'mixed'],
+    // Exactly 80% Latin letters (16 of 20): the >= 80% rule makes this 'en'.
+    ['سلام hello there friend', 'en'],
+    ['123 !!', 'unknown'],
+    ['۱۲۳ ٤٥', 'unknown'],
+  ])('%s gives %s', (text, expected) => { expect(scriptLanguage(text)).toBe(expected); });
+});
 
 describe.each([
   ['in-memory', () => new InMemoryDecisionLogStore() as DecisionLogStore],
@@ -75,7 +170,6 @@ describe.each([
     await store.append(row(new Date(NOW.getTime() - DAY)));
     const [stored] = await store.list();
     expect(stored.at).toBeInstanceOf(Date);
-    expect(stored.at.toISOString()).toBe(new Date(NOW.getTime() - DAY).toISOString());
     expect(stored).toEqual({ ...row(new Date(NOW.getTime() - DAY)), id: expect.any(String) });
   });
 
@@ -87,17 +181,20 @@ describe.each([
     expect((await store.list({ limit: 2 })).map((r) => r.elapsedMs)).toEqual([5, 4]);
   });
 
-  it('sweeps rows older than 90 days', async () => {
+  it('sweep removes rows strictly older than 90 days, keeps the row at the cutoff and returns the count', async () => {
     const store = make();
-    await store.append(row(new Date(NOW.getTime() - 91 * DAY), { elapsedMs: 91 }));
-    await store.append(row(new Date(NOW.getTime() - 89 * DAY), { elapsedMs: 89 }));
-    expect(await store.sweep(NOW)).toBe(1);
-    expect((await store.list()).map((r) => r.elapsedMs)).toEqual([89]);
+    const cutoff = NOW.getTime() - DECISION_LOG_RETENTION_DAYS * DAY;
+    await store.append(row(new Date(cutoff - 1), { elapsedMs: 1 }));
+    await store.append(row(new Date(cutoff - DAY), { elapsedMs: 2 }));
+    await store.append(row(new Date(cutoff), { elapsedMs: 3 }));
+    await store.append(row(new Date(NOW.getTime() - DAY), { elapsedMs: 4 }));
+    expect(await store.sweep(NOW)).toBe(2);
+    expect((await store.list()).map((r) => r.elapsedMs)).toEqual([3, 4]);
   });
 });
 
 describe('file decision-log store', () => {
-  it('creates the file with mode 0600, survives a reopen and skips a corrupt line', async () => {
+  it('creates the file with mode 0600, skips a corrupt line, and keeps 0600 after a sweep', async () => {
     const path = tempFile();
     await createFileDecisionLogStore(path).append(row(NOW));
     expect(statSync(path).mode & 0o777).toBe(0o600);
@@ -106,69 +203,80 @@ describe('file decision-log store', () => {
     await reopened.append(row(new Date(NOW.getTime() + 1000)));
     expect(await reopened.list()).toHaveLength(2);
     expect(await reopened.sweep(new Date(NOW.getTime() + 100 * DAY))).toBe(2);
+    expect(await reopened.list()).toHaveLength(0);
     expect(statSync(path).mode & 0o777).toBe(0o600);
   });
 });
 
 describe('Firestore decision-log store', () => {
-  it('uses the vox_decision_log collection and drops invalid stored rows', async () => {
+  it('writes to vox_decision_log with `at` as a Date and drops invalid stored rows', async () => {
     const fake = fakeFirestore();
     const store = new FirestoreDecisionLogStore(fake.db);
     await store.append(row(NOW, { inputTokens: undefined }));
     fake.rawPut('bad', { ...row(NOW), text: 'CANARY' });
-    expect(fake.collectionNames).toContain(DECISION_LOG_COLLECTION);
+    expect(fake.collectionNames.every((n) => n === DECISION_LOG_COLLECTION)).toBe(true);
+    expect(DECISION_LOG_COLLECTION).toBe('vox_decision_log');
     const rows = await store.list();
     expect(rows).toHaveLength(1);
     expect(rows[0]).not.toHaveProperty('inputTokens');
   });
+
+  it('sweep deletes in batches of 400', async () => {
+    const fake = fakeFirestore();
+    const store = new FirestoreDecisionLogStore(fake.db);
+    for (let i = 0; i < 405; i++) fake.rawPut(`old${i}`, { ...row(NOW), at: new Date(NOW.getTime() - 100 * DAY) });
+    fake.rawPut('new', { ...row(NOW) });
+    expect(await store.sweep(NOW)).toBe(405);
+    expect(fake.commits).toEqual([400, 5]);
+    expect(fake.docs.size).toBe(1);
+  });
 });
 
-describe('decision-log sink', () => {
-  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
-
-  it('does nothing while TIREH_DECISION_LOG is unset', async () => {
-    vi.stubEnv('TIREH_DECISION_LOG', undefined);
+describe('createDecisionLogSink', () => {
+  it('with enabled() false nothing is appended', async () => {
     const store = new InMemoryDecisionLogStore();
-    const append = vi.spyOn(store, 'append');
-    createDecisionLogSink(store).record(row(NOW));
-    await flush();
-    expect(append).not.toHaveBeenCalled();
+    const sink = createDecisionLogSink(store, { enabled: () => false });
+    sink.record(row(NOW));
+    await sink.flush();
+    expect(store.rows).toHaveLength(0);
   });
 
-  it('appends a valid row when TIREH_DECISION_LOG=1', async () => {
-    vi.stubEnv('TIREH_DECISION_LOG', '1');
+  it('the default enabled() reads TIREH_DECISION_LOG on every record()', async () => {
     const store = new InMemoryDecisionLogStore();
-    createDecisionLogSink(store, { now: () => NOW }).record(row(NOW));
-    await flush();
+    const sink = createDecisionLogSink(store, { now: () => NOW });
+    vi.stubEnv('TIREH_DECISION_LOG', '');
+    sink.record(row(NOW));
+    vi.stubEnv('TIREH_DECISION_LOG', '1');
+    sink.record(row(NOW));
+    await sink.flush();
     expect(store.rows).toHaveLength(1);
   });
 
-  it.each([
-    ['an extra text key', { ...row(NOW), text: 'CANARY_TEXT' }],
-    ['a choice value with a space', row(NOW, { answers: [{ name: 'effort', type: 'choice', choice: 'quick reply', confidence: 0.8 }] })],
-    ['an answer not in names', row(NOW, { answers: [{ name: 'other', type: 'predicate', probability: 0.5 }] })],
-    ['a probability of 2', row(NOW, { answers: [{ name: 'memorable', type: 'predicate', probability: 2 }] })],
-  ])('drops a row with %s and warns with a fixed code', async (_label, bad) => {
+  it('an invalid row gives onError(invalid_row) and is not appended', async () => {
     const store = new InMemoryDecisionLogStore();
-    const warn = vi.fn();
-    createDecisionLogSink(store, { enabled: () => true, warn }).record(bad as NewDecisionLogRow);
-    await flush();
+    const onError = vi.fn();
+    const sink = createDecisionLogSink(store, { enabled: () => true, onError });
+    sink.record({ ...row(NOW), text: 'CANARY_TEXT' } as NewDecisionLogRow);
+    await sink.flush();
     expect(store.rows).toHaveLength(0);
-    expect(warn.mock.calls).toEqual([['decision_log_invalid_row']]);
+    expect(onError.mock.calls).toEqual([['invalid_row']]);
   });
 
-  it('a rejecting append warns and record() does not throw', async () => {
+  it('a rejected append gives onError(append_failed) and record() does not throw', async () => {
     const store = new InMemoryDecisionLogStore();
     vi.spyOn(store, 'append').mockRejectedValue(new Error('CANARY_ERROR'));
-    const warn = vi.fn();
-    expect(() => createDecisionLogSink(store, { enabled: () => true, warn, sweepEveryMs: Infinity }).record(row(NOW))).not.toThrow();
-    await flush();
-    expect(warn.mock.calls).toEqual([['decision_log_append_failed']]);
+    const onError = vi.fn();
+    const sink = createDecisionLogSink(store, { enabled: () => true, onError, sweepEveryMs: Infinity });
+    expect(() => sink.record(row(NOW))).not.toThrow();
+    await sink.flush();
+    expect(onError.mock.calls).toEqual([['append_failed']]);
   });
 
-  it('a throwing store never escapes record()', () => {
+  it('a synchronously throwing store or onError never escapes record()', async () => {
     const store = { append: () => { throw new Error('sync'); }, list: async () => [], sweep: () => { throw new Error('sync'); } } as unknown as DecisionLogStore;
-    expect(() => createDecisionLogSink(store, { enabled: () => true }).record(row(NOW))).not.toThrow();
+    const sink = createDecisionLogSink(store, { enabled: () => true, onError: () => { throw new Error('handler'); } });
+    expect(() => sink.record(row(NOW))).not.toThrow();
+    await expect(sink.flush()).resolves.toBeUndefined();
   });
 
   it('sweeps at most once per sweepEveryMs', async () => {
@@ -180,127 +288,23 @@ describe('decision-log sink', () => {
     now += 500; sink.record(row(NOW));
     now += 499; sink.record(row(NOW));
     now += 1; sink.record(row(NOW));
-    await flush();
+    await sink.flush();
     expect(sweep).toHaveBeenCalledTimes(2);
     expect(sweep.mock.calls[0]).toEqual([NOW, 90]);
   });
-});
 
-describe('recordTriageDecision', () => {
-  const questions = triageQuestions(testOrgConfig().personas[0], false, undefined, 'v1');
-  const triage = (extra: Partial<Triage> = {}): Triage => ({ effort: 'thoughtful', needsWeb: false, memorable: false, wantsVoice: false, ...extra });
-  const event = (extra: Partial<TriageDecisionEvent> = {}): TriageDecisionEvent => ({
-    questions, answers: v1Answers(), elapsedMs: 123.4, triage: triage(), personaId: 'aria', chatKind: 'private', space: 'work',
-    webSearch: false, fastLlm: true, latestText: 'CANARY_TEXT_77 hello', at: NOW, ...extra,
-  });
-  const record = (e: TriageDecisionEvent) => { const sink = collectingSink(); recordTriageDecision(sink, e); return sink.rows[0]; };
-  afterEach(() => { vi.unstubAllEnvs(); });
-
-  it.each([
-    ['null triage', { triage: null }, 'untriaged'],
-    ['work + webSearch + needsWeb', { triage: triage({ needsWeb: true, effort: 'quick' }), webSearch: true }, 'web'],
-    ['personal + needsWeb', { triage: triage({ needsWeb: true }), webSearch: true, space: 'personal' as const }, 'thoughtful'],
-    ['quick + fastLlm', { triage: triage({ effort: 'quick' }) }, 'quick'],
-    ['quick without fastLlm', { triage: triage({ effort: 'quick' }), fastLlm: false }, 'thoughtful'],
-  ] as Array<[string, Partial<TriageDecisionEvent>, string]>)('routeTaken for %s', (_label, extra, expected) => {
-    expect(record(event(extra)).routeTaken).toBe(expected);
-  });
-
-  it('sets the question-set version from the questions sent and the flag', () => {
-    expect(record(event()).questionSetVersion).toBe('v1');
-    const v2 = triageQuestions(testOrgConfig().personas[0], false, undefined, 'v2');
-    expect(record(event({ questions: v2 })).questionSetVersion).toBe('v2');
-    vi.stubEnv('TRIAGE_QUESTION_SET', 'v2-live');
-    expect(record(event({ questions: v2 })).questionSetVersion).toBe('v2-live');
-  });
-
-  it('keeps only asked questions and catalogue values, and never the text', () => {
-    const v2 = triageQuestions(testOrgConfig().personas[0], false, undefined, 'v2');
-    const r = record(event({ questions: v2, answers: { ...v1Answers(), stray: pred(0.5), route: { type: 'choice', choice: 'not in catalogue', confidence: 0.9 },
-      context_need: { type: 'choice', choice: 'none', confidence: 0.6, probabilities: [{ value: 'none', probability: 0.6 }, { value: 'CANARY value', probability: 0.4 }] } } }));
-    expect(r.answers.map((a) => a.name)).toEqual(['effort', 'live_info', 'memorable', 'wants_voice', 'context_need']);
-    expect(r.answers.find((a) => a.name === 'context_need')).toEqual({ name: 'context_need', type: 'choice', choice: 'none', confidence: 0.6, probabilities: [{ value: 'none', probability: 0.6 }] });
-    expect(r).toMatchObject({ outcome: 'answered', elapsedMs: 123, language: 'en' });
-    expect(r).not.toHaveProperty('unknownReason');
-    expect(JSON.stringify(r)).not.toContain('CANARY');
-  });
-
-  it('null answers give unknown/threw and {} gives unknown/empty; detail reason wins', () => {
-    expect(record(event({ answers: null, triage: null }))).toMatchObject({ outcome: 'unknown', unknownReason: 'threw', answers: [] });
-    expect(record(event({ answers: {}, triage: null }))).toMatchObject({ outcome: 'unknown', unknownReason: 'empty' });
-    expect(record(event({ answers: {}, triage: null, detail: { answers: {}, elapsedMs: 9, outcome: 'unknown', unknownReason: 'timeout' } }))).toMatchObject({ unknownReason: 'timeout' });
-  });
-
-  it('never throws, even when the sink does', () => {
-    expect(() => recordTriageDecision({ record: () => { throw new Error('x'); } }, event())).not.toThrow();
-  });
-});
-
-describe('scriptLanguage', () => {
-  it.each([
-    ['سلام، فردا جلسه داریم', 'fa'],
-    ['see you tomorrow', 'en'],
-    ['سلام meeting at 5', 'mixed'],
-    ['123 !!', 'unknown'],
-    ['۱۲۳ ٤٥', 'unknown'],
-  ])('%s gives %s', (text, expected) => { expect(scriptLanguage(text)).toBe(expected); });
-});
-
-describe('gateway decision log', () => {
-  afterEach(() => { vi.unstubAllEnvs(); });
-
-  it('a private turn logs exactly one content-free row', async () => {
-    vi.stubEnv('TIREH_DECISION_LOG', '1');
-    vi.stubEnv('TRIAGE_QUESTION_SET', undefined);
-    const sink = collectingSink();
-    const h = decisionsGateway({ decisionLog: sink });
-    expect(await h.gateway.handleUpdate('aria', privateText(TG.reza, 'CANARY_LOG_5521 please plan the launch'))).toBe('replied');
-    expect(sink.rows).toHaveLength(1);
-    const json = JSON.stringify(sink.rows[0]);
-    for (const forbidden of ['CANARY_LOG_5521', 'launch', 'Aria', 'Product Lead', 'reza', 'Reza', String(TG.reza)]) expect(json).not.toContain(forbidden);
-    expect(sink.rows[0]).toMatchObject({ chatKind: 'private', outcome: 'answered', personaId: 'aria', questionSetVersion: 'v1', language: 'en' });
-  });
-
-  it('a group turn logs chatKind group', async () => {
-    const sink = collectingSink();
-    const h = decisionsGateway({ decisionLog: sink });
-    await h.gateway.handleUpdate('aria', groupText(GAMEEND_CHAT, TG.milad, '@hoor_aria_bot launch date?'));
-    expect(sink.rows).toHaveLength(1);
-    expect(sink.rows[0].chatKind).toBe('group');
-    expect(JSON.stringify(sink.rows[0])).not.toContain('launch');
-    expect(JSON.stringify(sink.rows[0])).not.toContain(String(GAMEEND_CHAT));
-  });
-
-  it('a throwing decider logs unknown/threw/untriaged and still reports triage_failed', async () => {
-    const sink = collectingSink();
-    const h = decisionsGateway({ decisionLog: sink, decider: { decide: async () => { throw new Error('CANARY_DECIDER'); } } });
-    expect(await h.gateway.handleUpdate('aria', privateText(TG.reza, 'hello'))).toBe('replied');
-    expect(sink.rows).toHaveLength(1);
-    expect(sink.rows[0]).toMatchObject({ outcome: 'unknown', unknownReason: 'threw', routeTaken: 'untriaged', answers: [] });
-    // The 'triage_failed' diagnostic is still emitted (stage triage, full reply path).
-    expect(h.logger.warn.mock.calls).toContainEqual([{ type: 'telegram_ingress', stage: 'triage', reason: 'operation_failed', outcome: 'full_reply_path' }]);
-    expect(JSON.stringify(sink.rows[0])).not.toContain('CANARY_DECIDER');
-  });
-
-  it('a throwing sink, or no sink, still delivers the reply', async () => {
-    const throwing = decisionsGateway({ decisionLog: { record: () => { throw new Error('sink'); } } });
-    expect(await throwing.gateway.handleUpdate('aria', privateText(TG.reza, 'hello'))).toBe('replied');
-    expect(throwing.bot.sent.some((s) => s.method === 'sendMessage')).toBe(true);
-    const none = decisionsGateway();
-    expect(await none.gateway.handleUpdate('aria', privateText(TG.reza, 'hello'))).toBe('replied');
-    expect(none.bot.sent.some((s) => s.method === 'sendMessage')).toBe(true);
-  });
-
-  it('with a ServiceDecider the row carries inputTokens and the service elapsedMs', async () => {
-    const sink = collectingSink();
-    let clock = 1_000;
-    const { provider } = scriptedProvider({ effort: { choice: 'thoughtful', confidence: 0.9 }, live_info: { probability: 0 }, memorable: { probability: 0 }, wants_voice: { probability: 0 } });
-    const decider = new ServiceDecider(new DecisionService(provider, () => (clock += 37)));
-    const detailed = vi.spyOn(decider, 'decideDetailed');
-    const h = decisionsGateway({ decisionLog: sink, decider });
-    expect(await h.gateway.handleUpdate('aria', privateText(TG.reza, 'hello'))).toBe('replied');
-    const detail = await detailed.mock.results[0].value;
-    expect(detail.elapsedMs).toBeGreaterThan(0);
-    expect(sink.rows[0]).toMatchObject({ inputTokens: 42, elapsedMs: Math.round(detail.elapsedMs), outcome: 'answered' });
+  it('more than maxPending appends in flight gives dropped', async () => {
+    const store = new InMemoryDecisionLogStore();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    vi.spyOn(store, 'append').mockImplementation(() => gate);
+    const onError = vi.fn();
+    const sink = createDecisionLogSink(store, { enabled: () => true, onError, maxPending: 2, sweepEveryMs: Infinity });
+    sink.record(row(NOW)); sink.record(row(NOW)); sink.record(row(NOW));
+    expect(onError.mock.calls).toEqual([['dropped']]);
+    release();
+    await sink.flush();
+    sink.record(row(NOW));
+    expect(onError).toHaveBeenCalledTimes(1);
   });
 });

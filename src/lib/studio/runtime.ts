@@ -40,6 +40,7 @@ import { StudioExperimentRuntime } from '../adaptive/experiments/runtime';
  *   STUDIO_CHAT_MODEL        model for chat replies (default: claude-sonnet-5-5)
  *   STUDIO_VOICE_MODEL       model for live calls (default: claude-haiku-5-5, the fastest)
  *   STUDIO_DECISIONS         off = no OpenAI Decisions triage (default: on with OPENAI_API_KEY)
+ *   STUDIO_DECIDER=service  triage through DecisionService (default: OpenAIMedia)
  *   STUDIO_SKILL_ROUTING     per-message playbook selection inside triage (docs/SKILL_ROUTING.md):
  *                            on (default) | shadow (ask and log, replies keep the full craft)
  *                            | off (never ask). Any other value is treated as off.
@@ -101,7 +102,6 @@ import { AdaptiveLifecycleService } from '../adaptive/lifecycle/service';
 import { AdaptiveMaintenanceRunner } from '../adaptive/lifecycle/maintenance';
 import { readMaintenanceHealth } from '../adaptive/lifecycle/maintenance-health';
 import { DecisionService, OpenAIDecisionProvider } from '../adaptive/decisions';
-import { studioDecider } from '../tireh/decisions/service-decider';
 import { VoiceIdentityService } from '../adaptive/voice-identity/service';
 import { VoiceIdentityRepository } from '../adaptive/voice-identity/repository';
 import { localVoiceIdentityOptions } from '../adaptive/voice-identity/runtime-config';
@@ -357,7 +357,7 @@ async function create(): Promise<Studio> {
       fastLLM: new AnthropicLLM(env.ANTHROPIC_API_KEY!, env.STUDIO_VOICE_MODEL || 'claude-haiku-5-5'),
       openai,
       // Reply triage and stranger decisions; STUDIO_DECISIONS=off skips them.
-      decider: openai && env.STUDIO_DECISIONS !== 'off' ? studioDecider(openai, env) : undefined,
+      decider: openai && env.STUDIO_DECISIONS !== 'off' ? openai : undefined,
       skillRouting: parseSkillRouting(env.STUDIO_SKILL_ROUTING),
       eleven: env.ELEVENLABS_API_KEY ? new ElevenLabsStudio(env.ELEVENLABS_API_KEY) : null,
       managerBot,
@@ -432,7 +432,22 @@ async function create(): Promise<Studio> {
       } : {}),
     });
     studio.deps.preferenceLearning = createStudioPreferenceLearning(studio);
-    if ((await import('../tireh/flags')).tirehFlags().decisionLog) { const { createDecisionLogSink, createFileDecisionLogStore, FirestoreDecisionLogStore } = await import('../tireh/decisions/log'); studio.deps.decisionLog = createDecisionLogSink(config.storage === 'firestore' ? new FirestoreDecisionLogStore(await (await import('@/lib/firebase-admin')).getAdminDb()) : createFileDecisionLogStore(join(config.dataDir, 'decision-log-v1.jsonl')), { warn: (code) => console.warn(`[decision-log] ${code}`) }); }
+    // Step 9 (docs/AGENT_INTELLIGENCE_SOLUTION.md): opt-in decider and decision log; unset flags keep the base wiring.
+    {
+      const [{ tirehFlags }, { ServiceDecider }, decisionLogModule] = await Promise.all([
+        import('../tireh/flags'), import('../tireh/decisions/service-decider'), import('../tireh/decisions/log')]);
+      const flags = tirehFlags();
+      if (flags.decider === 'service' && studio.deps.decider && env.OPENAI_API_KEY) {
+        // A dedicated DecisionService so triage failures never open the adaptive runtime's circuit.
+        studio.deps.decider = new ServiceDecider(new DecisionService(OpenAIDecisionProvider.guarded({ apiKey: env.OPENAI_API_KEY })));
+      }
+      if (flags.decisionLog) {
+        const store = config.storage === 'firestore'
+          ? new decisionLogModule.FirestoreDecisionLogStore(await (await import('@/lib/firebase-admin')).getAdminDb())
+          : decisionLogModule.createFileDecisionLogStore(join(config.dataDir, 'decision-log-v1.jsonl'));
+        studio.deps.decisionLog = decisionLogModule.createDecisionLogSink(store, { onError: (code) => console.warn(`[vox] decision_log ${code}`) });
+      }
+    }
     if (config.requestedRoutinesEnabled) {
       studio.deps.requestedRoutinesEnabled = () => process.env.STUDIO_REQUESTED_ROUTINES === '1';
       studio.deps.requestedRoutines = createStudioRequestedRoutines(studio, {

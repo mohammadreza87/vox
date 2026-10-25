@@ -1,14 +1,16 @@
 /**
- * A script-ratio label for calibration buckets. It is not language
- * identification: 'fa' means mostly Arabic-script letters (Persian, Arabic and
- * Urdu all land there). Pure: only the label leaves this function.
+ * A script-ratio label for decision-log calibration buckets. It is not
+ * language identification: 'fa' means mostly Arabic-script letters (Persian,
+ * Arabic and Urdu all land there). Pure: the text is never stored or returned,
+ * only the label leaves this function.
  */
 
 export type ScriptLanguage = 'fa' | 'en' | 'mixed' | 'unknown';
 
-// Arabic, Arabic Supplement, Arabic Presentation Forms-A and -B; digits excluded below.
+// Arabic, Arabic Supplement, Arabic Presentation Forms-A and -B.
 const ARABIC_SCRIPT = /[؀-ۿݐ-ݿﭐ-﷿ﹰ-﻿]/;
-const ARABIC_DIGITS = /[۰-۹٠-٩]/;
+// Arabic-Indic and Persian digits are excluded.
+const ARABIC_DIGITS = /[٠-٩۰-۹]/;
 const LATIN = /[A-Za-z]/;
 const SHARE = 0.8;
 
