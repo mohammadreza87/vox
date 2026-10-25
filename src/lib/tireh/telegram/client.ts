@@ -205,19 +205,20 @@ export class TelegramBotClient {
   }
 
   /**
-   * Bounded image download for one turn (S12). Errors are fixed strings: they
-   * never carry the URL, the bot token, the file path or any bytes.
+   * Bounded image download for the current turn only. Size limits are checked
+   * before and while fetching; error messages never carry the file URL or token.
    */
   async downloadImage(fileId: string, options: { maxBytes: number; signal?: AbortSignal }): Promise<Uint8Array> {
-    const file = await this.call<{ file_path?: string; file_size?: number }>('getFile', { file_id: fileId }, options.signal);
+    const { maxBytes, signal } = options;
+    const file = await this.call<{ file_path?: string; file_size?: number }>('getFile', { file_id: fileId }, signal);
     if (!file.file_path) throw new TelegramApiError('getFile', 'no file_path');
-    if (typeof file.file_size === 'number' && file.file_size > options.maxBytes) throw new TelegramApiError('getFile', 'file too large');
-    const response = await this.fetchFn(`${this.fileBase}/${file.file_path}`, { signal: options.signal });
+    if (file.file_size && file.file_size > maxBytes) throw new TelegramApiError('getFile', 'file too large');
+    const response = await this.fetchFn(`${this.fileBase}/${file.file_path}`, { signal });
     if (!response.ok) throw new TelegramApiError('downloadFile', `HTTP ${response.status}`);
-    const declared = Number(response.headers?.get('content-length'));
-    if (Number.isFinite(declared) && declared > options.maxBytes) throw new TelegramApiError('downloadFile', 'file too large');
+    const length = Number(response.headers?.get?.('content-length') ?? NaN);
+    if (Number.isFinite(length) && length > maxBytes) throw new TelegramApiError('downloadFile', 'file too large');
     const buffer = await response.arrayBuffer();
-    if (buffer.byteLength > options.maxBytes) throw new TelegramApiError('downloadFile', 'file too large');
+    if (buffer.byteLength > maxBytes) throw new TelegramApiError('downloadFile', 'file too large');
     return new Uint8Array(buffer);
   }
 

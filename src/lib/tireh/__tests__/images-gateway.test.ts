@@ -1,281 +1,278 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { LLMRequest } from '../llm';
-import { buildExtractionPrompt, IMAGE_PEOPLE_RULE } from '../memory/extraction';
+import { PersonaGateway, type RuntimePrivacy } from '../gateway';
 import { IMAGE_PLACEHOLDER_TEXT } from '../images';
-import type { TelegramUpdate } from '../telegram/client';
-import type { ChatContext, ChatMessage } from '../types';
-import { GAMEEND_CHAT, privateText, TG } from './fixtures';
+import { IMAGE_PEOPLE_DESCRIPTION, IMAGE_PEOPLE_RULE } from '../memory/extraction';
+import { InMemoryChatHistoryStore, InMemoryMemoryStore, InMemoryShareOfferStore, InMemoryUpdateDeduper } from '../memory/store';
+import { systemText } from '../llm-content';
+import { OrgDirectory } from '../org/directory';
+import type { LLMRequest } from '../llm';
+import type { TelegramBotClient, TelegramUpdate } from '../telegram/client';
+import { GAMEEND_CHAT, TG, testOrgConfig } from './fixtures';
 import {
-  base64Of,
-  defaultImageFiles,
-  GeminiFakeLLM,
-  historyRows,
-  imageAnswers,
-  jpegBytes,
-  makeImageGateway,
-  privateImageDocument,
-  privatePhoto,
-  scriptedImageDecider,
-  textAnswers,
-  VisionFakeLLM,
+  containsBytes, IMAGE_CANARIES, imageAnswers, imageBot, photoLadder, privatePhoto, scriptedDecider, textAnswers, VisionFakeLLM,
 } from './images-fixtures';
+
+/** Model-visible prompt text: system blocks plus any per-turn block (TIREH_CACHED_PROMPT puts memories there). */
+const visibleText = (request: LLMRequest): string => [systemText(request.system), ...request.messages.flatMap((m) => m.trailingText ?? []), request.systemTail ?? ''].join('\n\n');
+
+type Decider = ReturnType<typeof scriptedDecider>;
+
+function makeImageGateway(opts: { decider?: Decider; fastLlm?: boolean; runtimePrivacy?: RuntimePrivacy; withGuest?: boolean } = {}) {
+  const config = testOrgConfig();
+  if (opts.withGuest) config.people.push({ id: 'guest', name: 'Guest', role: 'Guest', telegramUserId: TG.stranger, companyIds: [], projectIds: [], guest: true });
+  const org = new OrgDirectory(config);
+  const llm = new VisionFakeLLM('claude-fable-5-1');
+  const fast = new VisionFakeLLM('claude-haiku-5-5');
+  const epochs = new Map<string, number>();
+  const memories = new InMemoryMemoryStore(epochs);
+  const history = new InMemoryChatHistoryStore(epochs);
+  const ladder = photoLadder();
+  const bot = imageBot(ladder.files);
+  const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  const decider = opts.decider ?? scriptedDecider({ text: textAnswers(), image: imageAnswers() });
+  const gateway = new PersonaGateway({
+    org, llm, ...(opts.fastLlm === false ? {} : { fastLlm: fast }), decider, memories, offers: new InMemoryShareOfferStore(), history,
+    deduper: new InMemoryUpdateDeduper(), voice: null, botFor: () => bot as unknown as TelegramBotClient, logger,
+    now: () => new Date('2026-10-19T10:00:00Z'), ...(opts.runtimePrivacy ? { runtimePrivacy: opts.runtimePrivacy } : {}),
+  });
+  const rows = () => history.recent('aria', 'private-reza', 50);
+  const replies = () => [...llm.replyRequests, ...fast.replyRequests];
+  return { gateway, llm, fast, memories, history, bot, logger, decider, ladder, rows, replies };
+}
+
+const textUpdateLike = (update: TelegramUpdate, text: string): TelegramUpdate => {
+  const message = { ...update.message!, text };
+  delete message.photo;
+  delete message.caption;
+  return { ...update, message };
+};
+
+const base64Of = (h: ReturnType<typeof makeImageGateway>) => Object.values(h.ladder.files).map((f) => Buffer.from(f).toString('base64').slice(0, 40));
+/** Decide calls with main's per-turn authority callbacks (8a7dc55) reduced to their presence: closures differ per gateway. */
+const decideCalls = (calls: unknown[][]) => JSON.parse(JSON.stringify(calls, (_key, value: unknown) => typeof value === 'function' ? '[function]' : value)) as unknown;
+const imageData = (request: LLMRequest) => request.messages.flatMap((m) => m.images ?? []).map((i) => i.data);
 
 afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); });
 
-const lastUser = (request: LLMRequest) => [...request.messages].reverse().find((m) => m.role === 'user')!;
-const rowView = (rows: ChatMessage[]) => rows.map(({ role, personId, text, telegramMessageId }) => ({ role, personId, text, telegramMessageId }));
-const TRIAGE_LABELS = ['image_kind', 'image_task', 'contains_people', 'contains_sensitive_document', 'photo_of_people'];
+describe('S12 gateway: flag off is the base behaviour', () => {
+  it('ignores a captionless photo with no download, model call or history', async () => {
+    vi.stubEnv('STUDIO_IMAGES', '');
+    const h = makeImageGateway();
+    const result = await h.gateway.handleUpdate('aria', privatePhoto(TG.reza, h.ladder.sizes));
+    expect(result).toBe('ignored');
+    expect(h.bot.downloadImage).not.toHaveBeenCalled();
+    expect(h.replies()).toHaveLength(0);
+    expect(h.llm.extractionCalls + h.fast.extractionCalls).toBe(0);
+    expect(h.decider.decide).not.toHaveBeenCalled();
+    expect(await h.rows()).toEqual([]);
+  });
 
-/** The same message as plain text: same ids, same words, no photo. */
-function textTwin(update: TelegramUpdate): TelegramUpdate {
-  const message = { ...update.message!, text: update.message!.caption ?? '' };
-  delete message.photo;
-  delete message.document;
-  delete message.caption;
-  return { update_id: update.update_id, message };
+  it('handles a captioned photo exactly like the same text', async () => {
+    vi.stubEnv('STUDIO_IMAGES', '');
+    const photo = privatePhoto(TG.reza, photoLadder().sizes, 'hello');
+    const a = makeImageGateway();
+    const b = makeImageGateway();
+    expect(await a.gateway.handleUpdate('aria', photo)).toBe(await b.gateway.handleUpdate('aria', textUpdateLike(photo, 'hello')));
+    expect(a.bot.downloadImage).not.toHaveBeenCalled();
+    expect(a.replies()).toEqual(b.replies());
+    expect(a.replies().every((r) => r.messages.every((m) => !('images' in m)))).toBe(true);
+    expect(a.llm.extractionRequests).toEqual(b.llm.extractionRequests);
+    const strip = (rows: Awaited<ReturnType<typeof a.rows>>) => rows.map(({ role, text, personId, telegramMessageId }) => ({ role, text, personId, telegramMessageId }));
+    expect(strip(await a.rows())).toEqual(strip(await b.rows()));
+    expect(decideCalls(a.decider.decide.mock.calls)).toEqual(decideCalls(b.decider.decide.mock.calls));
+  });
+
+  it('a text turn with the flag on equals the flag-off run', async () => {
+    const update: TelegramUpdate = { update_id: 990_001, message: { message_id: 99_001, from: { id: TG.reza, is_bot: false, first_name: 'x' }, chat: { id: TG.reza, type: 'private' }, date: 0, text: 'my launch moved to Friday' } };
+    vi.stubEnv('STUDIO_IMAGES', '');
+    const off = makeImageGateway();
+    const resultOff = await off.gateway.handleUpdate('aria', update);
+    vi.stubEnv('STUDIO_IMAGES', '1');
+    const on = makeImageGateway();
+    const resultOn = await on.gateway.handleUpdate('aria', update);
+    expect(resultOn).toBe(resultOff);
+    expect(on.replies()).toEqual(off.replies());
+    expect(on.llm.extractionRequests).toEqual(off.llm.extractionRequests);
+    expect(decideCalls(on.decider.decide.mock.calls)).toEqual(decideCalls(off.decider.decide.mock.calls));
+    expect(on.decider.decideParts).not.toHaveBeenCalled();
+    expect(on.bot.downloadImage).not.toHaveBeenCalled();
+  });
+});
+
+async function captionlessPhoto() {
+  vi.stubEnv('STUDIO_IMAGES', '1');
+  const h = makeImageGateway({ fastLlm: false, decider: scriptedDecider({ text: textAnswers(), image: imageAnswers({ kind: 'photo_of_people', task: 'react', people: 0.9 }) }) });
+  const result = await h.gateway.handleUpdate('aria', privatePhoto(TG.reza, h.ladder.sizes));
+  return { h, result };
 }
 
-describe.each([undefined, '0'])('STUDIO_IMAGES=%s leaves behaviour exactly as the base', (flag) => {
-  it('ignores a captionless photo with no download, provider or history', async () => {
-    vi.stubEnv('STUDIO_IMAGES', flag);
-    const decider = scriptedImageDecider(imageAnswers({ kind: 'other', task: 'explain', people: 0, sensitive: 0 }), textAnswers());
-    const ctx = makeImageGateway({ fastLlm: new VisionFakeLLM(), decider });
-    expect(await ctx.gateway.handleUpdate('aria', privatePhoto(TG.reza))).toBe('ignored');
-    expect(ctx.bot.downloadImage).not.toHaveBeenCalled();
-    expect(ctx.bot.sendMessage).not.toHaveBeenCalled();
-    expect(ctx.bot.sendChatAction).not.toHaveBeenCalled();
-    expect(decider.decide).not.toHaveBeenCalled();
-    expect(decider.decideParts).not.toHaveBeenCalled();
-    expect(ctx.llm.replyRequests).toHaveLength(0);
-    expect(ctx.llm.extractionCalls).toBe(0);
-    expect(historyRows(ctx.history)).toHaveLength(0);
-  });
-
-  it('treats a captioned photo exactly like the same text message', async () => {
-    vi.stubEnv('STUDIO_IMAGES', flag);
-    const photo = privatePhoto(TG.reza, { caption: 'what time is the launch?' });
-    const withPhoto = makeImageGateway();
-    const withText = makeImageGateway();
-    withPhoto.llm.nextExtraction = withText.llm.nextExtraction = { memories: [{ content: 'Reza asked about the launch time', type: 'event', kind: 'work', saidBy: 'reza' }] };
-    expect(await withPhoto.gateway.handleUpdate('aria', photo)).toBe('replied');
-    expect(await withText.gateway.handleUpdate('aria', textTwin(photo))).toBe('replied');
-    expect(withPhoto.llm.replyRequests).toEqual(withText.llm.replyRequests);
-    expect(withPhoto.llm.replyPrompts).toEqual(withText.llm.replyPrompts);
-    expect(withPhoto.llm.extractionRequests).toEqual(withText.llm.extractionRequests);
-    expect(withPhoto.llm.extractionRequests).toHaveLength(1);
-    expect(rowView(historyRows(withPhoto.history))).toEqual(rowView(historyRows(withText.history)));
-    expect(withPhoto.bot.sent).toEqual(withText.bot.sent);
-    expect(withPhoto.bot.downloadImage).not.toHaveBeenCalled();
-    expect(withPhoto.llm.replyRequests.some((r) => r.messages.some((m) => m.images))).toBe(false);
-  });
-});
-
-describe('STUDIO_IMAGES=1 in groups', () => {
-  it('handles a group photo exactly as with the flag off, with no download', async () => {
-    const run = async (flag: string | undefined) => {
-      vi.stubEnv('STUDIO_IMAGES', flag);
-      const ctx = makeImageGateway();
-      const update = privatePhoto(TG.reza, { chatId: GAMEEND_CHAT, chatType: 'supergroup', caption: '@hoor_aria_bot what is this?' });
-      update.update_id = 1; update.message!.message_id = 1;
-      const result = await ctx.gateway.handleUpdate('aria', update);
-      return { result, ctx };
-    };
-    const on = await run('1');
-    const off = await run(undefined);
-    expect(on.result).toBe(off.result);
-    expect(on.result).toBe('replied');
-    expect(on.ctx.llm.replyRequests).toEqual(off.ctx.llm.replyRequests);
-    expect(on.ctx.bot.sent).toEqual(off.ctx.bot.sent);
-    expect(rowView(historyRows(on.ctx.history))).toEqual(rowView(historyRows(off.ctx.history)));
-    expect(on.ctx.bot.downloadImage).not.toHaveBeenCalled();
-  });
-});
-
-describe('STUDIO_IMAGES=1 in a private chat', () => {
-  it('replies to a captionless photo with the image in the current turn only', async () => {
-    vi.stubEnv('STUDIO_IMAGES', '1');
-    const ctx = makeImageGateway({ fastLlm: new VisionFakeLLM() });
-    expect(await ctx.gateway.handleUpdate('aria', privatePhoto(TG.reza))).toBe('replied');
-    expect(ctx.llm.replyRequests).toHaveLength(1);
-    const data = base64Of(ctx.bot.files.get('photo-800')!);
-    expect(lastUser(ctx.llm.replyRequests[0]).images).toEqual([{ mimeType: 'image/jpeg', data }]);
-    expect(lastUser(ctx.llm.replyRequests[0]).content).toBe(IMAGE_PLACEHOLDER_TEXT);
-    const rows = historyRows(ctx.history);
-    expect(rows.find((m) => m.role === 'user')?.text).toBe(IMAGE_PLACEHOLDER_TEXT);
-    expect(JSON.stringify(rows)).not.toContain(data);
-    expect(JSON.stringify(ctx.llm.replyPrompts)).not.toContain(data);
-    expect(ctx.llm.replyRequests[0].system).not.toContain(data);
-    expect(ctx.llm.extractionCalls).toBe(0);
-  });
-
-  it('routes an explain image to the fast vision model without web search', async () => {
-    vi.stubEnv('STUDIO_IMAGES', '1');
-    const decider = scriptedImageDecider(imageAnswers({ kind: 'other', task: 'explain', people: 0, sensitive: 0 }), textAnswers({ effort: 'thoughtful', live: 1 }));
-    const llm = Object.assign(new VisionFakeLLM(), { completeWithWeb: vi.fn(async () => ({ text: 'web', sources: [] })) });
-    const fastLlm = Object.assign(new VisionFakeLLM(), { completeWithWeb: vi.fn(async () => ({ text: 'web', sources: [] })) });
-    const ctx = makeImageGateway({ llm, fastLlm, decider });
-    ctx.org.getPersona('aria')!.webSearch = true;
-    expect(await ctx.gateway.handleUpdate('aria', privatePhoto(TG.reza, { caption: 'what is this?' }))).toBe('replied');
-    expect(fastLlm.replyRequests).toHaveLength(1);
-    expect(fastLlm.replyRequests[0].maxTokens).toBe(1200);
-    expect(lastUser(fastLlm.replyRequests[0]).images).toHaveLength(1);
-    expect(llm.replyRequests).toHaveLength(0);
-    expect(llm.completeWithWeb).not.toHaveBeenCalled();
-    expect(fastLlm.completeWithWeb).not.toHaveBeenCalled();
-  });
-
-  it('routes a remember image to the main model', async () => {
-    vi.stubEnv('STUDIO_IMAGES', '1');
-    const decider = scriptedImageDecider(imageAnswers({ kind: 'other', task: 'remember', people: 0, sensitive: 0 }), textAnswers({ effort: 'thoughtful' }));
-    const fastLlm = new VisionFakeLLM();
-    const ctx = makeImageGateway({ fastLlm, decider });
-    expect(await ctx.gateway.handleUpdate('aria', privatePhoto(TG.reza, { caption: 'keep this for later' }))).toBe('replied');
-    expect(ctx.llm.replyRequests).toHaveLength(1);
-    expect(lastUser(ctx.llm.replyRequests[0]).images).toHaveLength(1);
-    expect(fastLlm.replyRequests).toHaveLength(0);
-  });
-
-  it('never sends an image to a Gemini main model', async () => {
-    vi.stubEnv('STUDIO_IMAGES', '1');
-    for (const decider of [undefined, scriptedImageDecider(imageAnswers({ kind: 'other', task: 'remember', people: 0, sensitive: 0 }))]) {
-      const gemini = new GeminiFakeLLM();
-      const fastLlm = new VisionFakeLLM();
-      const ctx = makeImageGateway({ llm: gemini, fastLlm, ...(decider ? { decider } : {}) });
-      expect(await ctx.gateway.handleUpdate('aria', privatePhoto(TG.reza, { caption: 'remember this' }))).toBe('replied');
-      expect(fastLlm.replyRequests).toHaveLength(1);
-      expect(lastUser(fastLlm.replyRequests[0]).images).toHaveLength(1);
-      expect([...gemini.replyRequests, ...gemini.extractionRequests].some((r) => r.messages.some((m) => m.images))).toBe(false);
-    }
-  });
-});
-
-describe('a sensitive document is never stored', () => {
-  const sensitiveAnswers = (sensitive: number) => imageAnswers({ kind: 'document', task: 'remember', taskConfidence: 0.9, people: 0, sensitive });
-  const candidate = { memories: [{ content: 'Reza passport number is X123', type: 'fact', kind: 'personal', saidBy: 'reza', about: ['reza'] }] };
-
-  it.each([
-    ['photo', () => privatePhoto(TG.reza, { caption: 'remember this' })],
-    ['image document', () => privateImageDocument(TG.reza, { mime: 'image/jpeg', caption: 'remember this' })],
-  ])('replies to a sensitive %s but extracts nothing', async (_label, update) => {
-    vi.stubEnv('STUDIO_IMAGES', '1');
-    const files = defaultImageFiles();
-    files.set('doc-1', jpegBytes());
-    const sensitive = makeImageGateway({ decider: scriptedImageDecider(sensitiveAnswers(0.9)), files });
-    sensitive.llm.nextExtraction = candidate;
-    expect(await sensitive.gateway.handleUpdate('aria', update())).toBe('replied');
-    expect(sensitive.bot.sent.some((s) => s.method === 'sendMessage' && s.text === 'Sure.')).toBe(true);
-    expect(sensitive.llm.extractionCalls).toBe(0);
-    expect(await sensitive.memories.listActive('aria')).toEqual([]);
-
-    const control = makeImageGateway({ decider: scriptedImageDecider(sensitiveAnswers(0.1)), files });
-    control.llm.nextExtraction = candidate;
-    expect(await control.gateway.handleUpdate('aria', update())).toBe('replied');
-    expect(control.llm.extractionCalls).toBe(1);
-  });
-});
-
-/** Models a compliant extractor: with the people rule it returns nothing about the photo. */
-class PromptAwareFakeLLM extends VisionFakeLLM {
-  async complete(request: LLMRequest): Promise<string> {
-    if (request.system.startsWith('You extract long-term memories')) {
-      this.nextExtraction = request.system.includes(IMAGE_PEOPLE_RULE)
-        ? { memories: [] }
-        : { memories: [{ content: 'Parastoo has a red beard', type: 'fact', kind: 'work', saidBy: 'reza', about: ['parastoo'], confidence: 0.9 }] };
-    }
-    return super.complete(request);
-  }
+async function explainWithFast() {
+  vi.stubEnv('STUDIO_IMAGES', '1');
+  const h = makeImageGateway({ decider: scriptedDecider({ text: textAnswers({ effort: 'thoughtful' }), image: imageAnswers({ kind: 'chart', task: 'explain' }) }) });
+  const result = await h.gateway.handleUpdate('aria', privatePhoto(TG.reza, h.ladder.sizes, `what does this show? ${IMAGE_CANARIES.caption}`));
+  return { h, result };
 }
 
-describe('a people image yields no identity text', () => {
-  it('adds the people rule to extraction and keeps triage and bytes out of every prompt', async () => {
-    vi.stubEnv('STUDIO_IMAGES', '1');
-    const llm = new PromptAwareFakeLLM();
-    const decider = scriptedImageDecider(imageAnswers({ kind: 'photo_of_people', task: 'remember', taskConfidence: 0.9, people: 0.95, sensitive: 0 }));
-    const ctx = makeImageGateway({ llm, decider });
-    llm.nextReply = 'A person with a red beard is smiling';
-    expect(await ctx.gateway.handleUpdate('aria', privatePhoto(TG.reza, { caption: 'remember this, team offsite' }))).toBe('replied');
-
-    expect(llm.extractionRequests).toHaveLength(1);
-    const extraction = llm.extractionRequests[0];
-    expect(extraction.system).toContain(IMAGE_PEOPLE_RULE);
-    const extractionMessages = JSON.stringify(extraction.messages);
-    const imageData = lastUser(llm.replyRequests[0]).images![0].data;
-    expect(extractionMessages).not.toContain(imageData);
-    for (const label of TRIAGE_LABELS) expect(extractionMessages).not.toContain(label);
-    expect(extractionMessages).not.toContain('0.95');
-    const newLines = extraction.messages[0].content.split('\n').filter((line) => line.startsWith('[new]'));
-    expect(newLines).toHaveLength(1);
-    expect(newLines[0]).toContain('remember this, team offsite');
-    for (const label of TRIAGE_LABELS) expect(llm.lastPrompt).not.toContain(label);
-    expect(llm.lastPrompt).not.toContain(imageData);
-    expect(await ctx.memories.listActive('aria')).toEqual([]);
-
-    expect(await ctx.gateway.handleUpdate('aria', privateText(TG.reza, 'The offsite is on Friday'))).toBe('replied');
-    expect(llm.extractionRequests).toHaveLength(2);
-    const followUp = llm.extractionRequests[1].system;
-    expect(followUp).not.toContain(IMAGE_PEOPLE_RULE);
-    const chat: ChatContext = { kind: 'private', chatKey: 'private-reza', personId: 'reza' };
-    expect(followUp).toBe(buildExtractionPrompt(ctx.org, ctx.org.getPersona('aria')!, chat, 'reza'));
-  });
-});
-
-const SCAN_CANARY = 'S12_SCAN_ASCII_CANARY';
-const TOKEN_CANARY = '123456:S12_FAKE_BOT_TOKEN_IN_ERROR';
-
-function slices(b64: string): string[] {
-  const mid = Math.floor(b64.length / 2);
-  return [b64, b64.slice(0, 24), b64.slice(mid, mid + 24), b64.slice(-24)];
+async function sensitiveDocument() {
+  vi.stubEnv('STUDIO_IMAGES', '1');
+  const h = makeImageGateway({ decider: scriptedDecider({ text: textAnswers({ memorable: 0.95 }), image: imageAnswers({ kind: 'document', task: 'remember', sensitive: 0.9 }) }) });
+  h.llm.nextExtraction = { memories: [{ content: 'Reza passport number is X1234567', type: 'fact', kind: 'personal', saidBy: 'reza', about: ['reza'] }] };
+  const result = await h.gateway.handleUpdate('aria', privatePhoto(TG.reza, h.ladder.sizes, `remember this ${IMAGE_CANARIES.caption}`));
+  return { h, result };
 }
 
-describe.each([false, true])('no image bytes in any log (stage timings %s)', (stageTimings) => {
-  it('keeps bytes, scan text and tokens out of logs, history, memory and every non-image field', async () => {
+async function rememberNotSensitive() {
+  vi.stubEnv('STUDIO_IMAGES', '1');
+  const h = makeImageGateway({ decider: scriptedDecider({ text: textAnswers(), image: imageAnswers({ kind: 'receipt', task: 'remember', people: 0.1, sensitive: 0.1 }) }) });
+  h.llm.nextExtraction = { memories: [{ content: 'Reza paid for the team dinner on Friday', type: 'event', kind: 'work', saidBy: 'reza', about: ['reza'] }] };
+  const result = await h.gateway.handleUpdate('aria', privatePhoto(TG.reza, h.ladder.sizes, `keep this receipt for later ${IMAGE_CANARIES.caption}`));
+  return { h, result };
+}
+
+async function peopleRemember() {
+  vi.stubEnv('STUDIO_IMAGES', '1');
+  const h = makeImageGateway({ decider: scriptedDecider({ text: textAnswers(), image: imageAnswers({ kind: 'photo_of_people', task: 'remember', people: 0.9 }) }) });
+  h.llm.nextExtraction = { memories: [
+    { content: 'Reza is wearing a red jacket in the photo', type: 'fact', kind: 'work', saidBy: 'reza', about: ['reza'] },
+    { content: 'Reza and Milad are friends', type: 'relationship', kind: 'work', saidBy: 'reza', about: ['reza', 'milad'] },
+    { content: "Reza's flight to Berlin is on Friday", type: 'event', kind: 'work', saidBy: 'reza', about: ['reza'], topic: 'berlin flight' },
+  ] };
+  const result = await h.gateway.handleUpdate('aria', privatePhoto(TG.reza, h.ladder.sizes, 'remember this: me and Milad before my flight to Berlin on Friday'));
+  return { h, result };
+}
+
+describe('S12 gateway: flag on', () => {
+  it('replies to a captionless photo with one ephemeral image', async () => {
+    const { h, result } = await captionlessPhoto();
+    expect(result).toBe('replied');
+    expect(h.bot.downloadImage).toHaveBeenCalled();
+    const request = h.replies().at(-1)!;
+    const last = request.messages.at(-1)!;
+    expect(last.content).toBe(IMAGE_PLACEHOLDER_TEXT);
+    expect(last.images).toHaveLength(1);
+    const data = last.images![0].data;
+    const system = visibleText(request);
+    expect(system).not.toContain(data);
+    expect(system).not.toContain(data.slice(0, 32));
+    expect(system).not.toMatch(/photo_of_people|contains_people|contains_sensitive_document|image_task|image_kind/);
+    expect(containsBytes(Buffer.from(data, 'base64'), IMAGE_CANARIES.exif)).toBe(false);
+    const rows = await h.rows();
+    expect(rows.filter((r) => r.role === 'user').map((r) => r.text)).toEqual([IMAGE_PLACEHOLDER_TEXT]);
+    expect(JSON.stringify(rows)).not.toContain(data.slice(0, 32));
+    expect(rows.every((r) => !('images' in r))).toBe(true);
+    // Unknown memory intent: nothing is extracted.
+    expect(h.llm.extractionCalls).toBe(0);
+  });
+
+  it('routes an explain request to the fast vision model only', async () => {
+    const { h, result } = await explainWithFast();
+    expect(result).toBe('replied');
+    expect(h.fast.replyRequests).toHaveLength(1);
+    expect(h.llm.replyRequests).toHaveLength(0);
+    expect(h.fast.replyRequests[0].messages.at(-1)!.images).toHaveLength(1);
+  });
+
+  it('never stores a sensitive document, even when asked', async () => {
+    const { h, result } = await sensitiveDocument();
+    expect(result).toBe('replied');
+    expect(h.llm.extractionCalls).toBe(0);
+    expect(h.fast.extractionCalls).toBe(0);
+    expect(await h.memories.listActive('aria')).toEqual([]);
+  });
+
+  it('runs extraction once for a requested, non-sensitive image, without image bytes', async () => {
+    const { h } = await rememberNotSensitive();
+    expect(h.llm.extractionCalls).toBe(1);
+    const json = JSON.stringify(h.llm.extractionRequests);
+    for (const prefix of base64Of(h)) expect(json).not.toContain(prefix);
+    for (const request of [...h.replies()]) for (const data of imageData(request)) expect(json).not.toContain(data.slice(0, 40));
+    expect(json).not.toContain(IMAGE_CANARIES.exif);
+    expect(systemText(h.llm.extractionRequests[0].system)).not.toContain(IMAGE_PEOPLE_RULE);
+    expect((await h.memories.listActive('aria')).map((m) => m.content)).toEqual(['Reza paid for the team dinner on Friday']);
+  });
+
+  it('never turns people in an image into identity or appearance memories', async () => {
+    const { h } = await peopleRemember();
+    expect(h.llm.extractionCalls).toBe(1);
+    expect(systemText(h.llm.extractionRequests[0].system)).toContain(IMAGE_PEOPLE_RULE);
+    const stored = await h.memories.listActive('aria');
+    expect(stored.map((m) => m.content)).toEqual(["Reza's flight to Berlin is on Friday"]);
+    expect(stored.some((m) => IMAGE_PEOPLE_DESCRIPTION.test(m.content))).toBe(false);
+    expect(stored.some((m) => m.type === 'relationship')).toBe(false);
+    for (const request of h.replies()) expect(visibleText(request)).not.toMatch(/red jacket|photo_of_people|contains_people/);
+
+    // A later text turn sees the kept fact but no description.
+    await h.gateway.handleUpdate('aria', { update_id: 991_000, message: { message_id: 99_500, from: { id: TG.reza, is_bot: false, first_name: 'x' }, chat: { id: TG.reza, type: 'private' }, date: 0, text: 'when is my trip?' } });
+    const next = visibleText(h.replies().at(-1)!);
+    expect(next).toContain('Berlin');
+    expect(next).not.toMatch(/red jacket|wearing/);
+    expect(h.replies().at(-1)!.messages.every((m) => !m.images)).toBe(true);
+  });
+
+  it('treats a group photo like the base: caption only, no download', async () => {
+    const make = (): TelegramUpdate => ({ update_id: 992_000, message: { message_id: 99_600, from: { id: TG.reza, is_bot: false, first_name: 'x' },
+      chat: { id: GAMEEND_CHAT, type: 'supergroup', title: 'g' }, date: 0, caption: '@hoor_aria_bot what do you think?', photo: photoLadder().sizes } });
+    vi.stubEnv('STUDIO_IMAGES', '');
+    const off = makeImageGateway();
+    const resultOff = await off.gateway.handleUpdate('aria', make());
     vi.stubEnv('STUDIO_IMAGES', '1');
-    if (stageTimings) vi.stubEnv('STUDIO_STAGE_TIMINGS', '1');
-    const consoles = (['log', 'info', 'warn', 'error'] as const).map((method) => vi.spyOn(console, method).mockImplementation(() => undefined));
-    const files = new Map([...defaultImageFiles().keys()].map((id) => [id, jpegBytes({ withExif: true, canary: `${SCAN_CANARY}_${id}` })] as const));
-    const decider = scriptedImageDecider(imageAnswers({ kind: 'other', task: 'remember', people: 0, sensitive: 0.1 }), textAnswers());
-    const ctx = makeImageGateway({ decider, files, stageTimings: process.env.STUDIO_STAGE_TIMINGS === '1' });
-    ctx.llm.nextExtraction = { memories: [{ content: 'The launch is on Friday', type: 'event', kind: 'work', saidBy: 'reza' }] };
+    const on = makeImageGateway();
+    const resultOn = await on.gateway.handleUpdate('aria', make());
+    expect(resultOff).toBe('replied');
+    expect(resultOn).toBe(resultOff);
+    expect(off.replies().at(-1)!.messages.at(-1)!.content).toContain('what do you think?');
+    expect(on.bot.downloadImage).not.toHaveBeenCalled();
+    expect(on.decider.decideParts).not.toHaveBeenCalled();
+    expect(on.replies()).toEqual(off.replies());
+    expect(on.replies().every((r) => r.messages.every((m) => !m.images))).toBe(true);
+  });
 
-    // Success run.
-    expect(await ctx.gateway.handleUpdate('aria', privatePhoto(TG.reza, { caption: 'remember this: launch is Friday' }))).toBe('replied');
-    expect(await ctx.memories.listActive('aria')).toHaveLength(1);
+  it('never downloads for a guest private chat', async () => {
+    vi.stubEnv('STUDIO_IMAGES', '1');
+    const h = makeImageGateway({ withGuest: true });
+    await h.gateway.handleUpdate('aria', privatePhoto(TG.stranger, h.ladder.sizes, 'look'));
+    expect(h.bot.downloadImage).not.toHaveBeenCalled();
+    expect(h.decider.decideParts).not.toHaveBeenCalled();
+    expect(h.replies().every((r) => r.messages.every((m) => !m.images))).toBe(true);
+  });
 
-    // Failure run: the download error carries the canary and a token everywhere.
-    const hostile = Object.assign(new Error(`https://api.telegram.org/file/bot${TOKEN_CANARY}/photos/x.jpg ${SCAN_CANARY}`, { cause: { token: TOKEN_CANARY, body: SCAN_CANARY } }), { providerBody: SCAN_CANARY, token: TOKEN_CANARY });
-    ctx.bot.downloadImage.mockRejectedValueOnce(hostile);
-    expect(await ctx.gateway.handleUpdate('aria', privatePhoto(TG.reza, { caption: 'and this one?' }))).toBe('replied');
-    expect(ctx.logger.warn.mock.calls).toContainEqual(['image_download_failed']);
+  it('never downloads when the live audience check fails', async () => {
+    vi.stubEnv('STUDIO_IMAGES', '1');
+    const validateAudience = vi.fn(async () => false);
+    const runtimePrivacy: RuntimePrivacy = { validateAudience, read: async () => ({ revision: 'r1', memoryEnabled: true, historyEnabled: true }) };
+    const h = makeImageGateway({ runtimePrivacy });
+    expect(await h.gateway.handleUpdate('aria', privatePhoto(TG.reza, h.ladder.sizes))).toBe('ignored');
+    expect(validateAudience).toHaveBeenCalled();
+    expect(h.bot.downloadImage).not.toHaveBeenCalled();
+    expect(h.decider.decideParts).not.toHaveBeenCalled();
+  });
 
-    const replyImages = ctx.llm.replyRequests.flatMap((r) => lastUser(r).images ?? []).map((image) => image.data);
-    const triageImages = decider.decideParts.mock.calls.map((call) => (call[0][1] as { image: { data: string } }).image.data);
-    expect(replyImages).toHaveLength(1);
-    expect(triageImages).toHaveLength(1);
-    const forbidden = [...new Set([...replyImages, ...triageImages])].flatMap(slices);
-    forbidden.push(SCAN_CANARY, TOKEN_CANARY);
-
-    const surfaces: Record<string, unknown> = {
-      logger: [ctx.logger.info.mock.calls, ctx.logger.warn.mock.calls, ctx.logger.error.mock.calls],
-      console: consoles.map((spy) => spy.mock.calls),
-      history: historyRows(ctx.history),
-      memories: await ctx.memories.listActive('aria'),
-      extractionRequests: ctx.llm.extractionRequests,
-      replyPrompts: ctx.llm.replyPrompts,
-      replyRequestsWithoutImages: ctx.llm.replyRequests.map((r) => ({ ...r, messages: r.messages.map((m) => ({ role: m.role, content: m.content })) })),
-      textTriage: decider.decide.mock.calls,
-      triageTextParts: decider.decideParts.mock.calls.map((call) => [call[0][0], call[1]]),
-      sent: ctx.bot.sendMessage.mock.calls.map((call) => call[1]),
-    };
-    for (const [name, value] of Object.entries(surfaces)) {
-      const serialized = JSON.stringify(value);
-      for (const needle of forbidden) expect(serialized.includes(needle), `${name} must not contain ${needle.slice(0, 12)}…`).toBe(false);
+  it('puts no image bytes, captions or EXIF into any log line', async () => {
+    const consoleCalls = [vi.spyOn(console, 'log').mockImplementation(() => undefined), vi.spyOn(console, 'warn').mockImplementation(() => undefined),
+      vi.spyOn(console, 'error').mockImplementation(() => undefined), vi.spyOn(console, 'info').mockImplementation(() => undefined)];
+    const runs = [await captionlessPhoto(), await explainWithFast(), await sensitiveDocument(), await rememberNotSensitive(), await peopleRemember()];
+    // A failing download also logs only a fixed code.
+    vi.stubEnv('STUDIO_IMAGES', '1');
+    const failing = makeImageGateway();
+    failing.bot.downloadImage.mockRejectedValue(new Error(`boom ${IMAGE_CANARIES.caption}`));
+    await failing.gateway.handleUpdate('aria', privatePhoto(TG.reza, failing.ladder.sizes, `x ${IMAGE_CANARIES.caption}`));
+    const harnesses = [...runs.map((r) => r.h), failing];
+    const calls = [
+      ...harnesses.flatMap((h) => [...h.logger.info.mock.calls, ...h.logger.warn.mock.calls, ...h.logger.error.mock.calls]),
+      ...consoleCalls.flatMap((spy) => spy.mock.calls),
+    ];
+    const json = JSON.stringify(calls, (_key, value) => value instanceof Error ? `${value.name}: ${value.message}` : value);
+    expect(json).not.toContain(IMAGE_CANARIES.caption);
+    expect(json).not.toContain(IMAGE_CANARIES.exif);
+    for (const h of harnesses) {
+      for (const prefix of base64Of(h)) expect(json).not.toContain(prefix);
+      for (const request of h.replies()) for (const data of imageData(request)) expect(json).not.toContain(data.slice(0, 40));
     }
-    const warnings = ctx.logger.warn.mock.calls.map((call) => call.join(' '));
-    expect(warnings.filter((w) => w.startsWith('image_'))).toEqual(['image_download_failed']);
-    if (stageTimings) {
-      const timingLines = ctx.logger.info.mock.calls.filter((call) => JSON.stringify(call).includes('"reason":"timing"'));
-      expect(timingLines.length).toBeGreaterThan(0);
-      for (const needle of forbidden) expect(JSON.stringify(timingLines)).not.toContain(needle);
+    const imageWarns = harnesses.flatMap((h) => h.logger.warn.mock.calls).filter((args) => args.some((a: unknown) => typeof a === 'string' && a.startsWith('tireh_image:')));
+    expect(imageWarns.length).toBeGreaterThan(0);
+    for (const args of imageWarns) {
+      expect(args).toHaveLength(1);
+      expect(args[0]).toMatch(/^tireh_image:[a-z_]+$/);
     }
   });
 });

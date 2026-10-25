@@ -1,111 +1,99 @@
 import { describe, expect, it } from 'vitest';
-import { sniffImageMime, stripImageMetadata, toLLMImage } from '../images';
-import { COMMENT_CANARY, EXIF_CANARY, jpegBytes, PNG_SIGNATURE, PNG_TEXT_CANARY, pngBytes, pngChunk } from './images-fixtures';
+import { minimizeImageDataUrl } from '../../adaptive/prediction/image';
+import { crc32, sniffImageMime, stripImageMetadata, toLLMImage } from '../images';
+import { containsBytes, IMAGE_CANARIES, tinyJpeg, tinyPng } from './images-fixtures';
 
-const latin1 = (bytes: Uint8Array): string => Buffer.from(bytes).toString('latin1');
-const indexOf = (haystack: Uint8Array, needle: number[]): number => Buffer.from(haystack).indexOf(Buffer.from(needle));
+const dataUrl = (bytes: Uint8Array, mime: string) => `data:${mime};base64,${Buffer.from(bytes).toString('base64')}`;
+
+function hasMarker(bytes: Uint8Array, marker: number): boolean {
+  for (let i = 0; i + 1 < bytes.length; i++) if (bytes[i] === 0xff && bytes[i + 1] === marker) return true;
+  return false;
+}
+
+function pngChunks(bytes: Uint8Array): Array<{ kind: string; crcOk: boolean }> {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const chunks: Array<{ kind: string; crcOk: boolean }> = [];
+  for (let offset = 8; offset < bytes.length;) {
+    const length = view.getUint32(offset);
+    const finish = offset + 12 + length;
+    chunks.push({ kind: String.fromCharCode(...bytes.subarray(offset + 4, offset + 8)), crcOk: crc32(bytes.subarray(offset + 4, finish - 4)) === view.getUint32(finish - 4) });
+    offset = finish;
+  }
+  return chunks;
+}
 
 describe('sniffImageMime', () => {
-  it('recognises JPEG and PNG by signature', () => {
-    expect(sniffImageMime(jpegBytes())).toBe('image/jpeg');
-    expect(sniffImageMime(pngBytes())).toBe('image/png');
+  it('recognises JPEG and PNG', () => {
+    expect(sniffImageMime(tinyJpeg(10, 10))).toBe('image/jpeg');
+    expect(sniffImageMime(tinyPng(10, 10))).toBe('image/png');
   });
 
-  it('rejects GIF, WebP and text', () => {
-    expect(sniffImageMime(new Uint8Array(Buffer.from('GIF89a\x01\x00\x01\x00', 'latin1')))).toBeNull();
-    expect(sniffImageMime(new Uint8Array(Buffer.from('RIFF\x10\x00\x00\x00WEBPVP8 ', 'latin1')))).toBeNull();
-    expect(sniffImageMime(new Uint8Array(Buffer.from('hello world')))).toBeNull();
+  it('rejects GIF, WebP and garbage', () => {
+    expect(sniffImageMime(Uint8Array.from(Buffer.from('GIF89a\x01\x00\x01\x00', 'latin1')))).toBeNull();
+    expect(sniffImageMime(Uint8Array.from(Buffer.from('RIFF\x10\x00\x00\x00WEBPVP8 ', 'latin1')))).toBeNull();
+    expect(sniffImageMime(Uint8Array.from([1, 2, 3, 4, 5, 6, 7, 8, 9]))).toBeNull();
     expect(sniffImageMime(new Uint8Array())).toBeNull();
   });
 });
 
-describe('stripImageMetadata (JPEG)', () => {
-  it('drops APP1 Exif and COM segments and keeps SOI, SOF0, SOS and EOI', () => {
-    const original = jpegBytes({ withExif: true, withComment: true, canary: 'PIXELS' });
-    expect(latin1(original)).toContain(EXIF_CANARY);
-    expect(latin1(original)).toContain(COMMENT_CANARY);
-    const stripped = stripImageMetadata(original, 'image/jpeg')!;
-    expect(stripped).not.toBeNull();
-    expect(latin1(stripped)).not.toContain(EXIF_CANARY);
-    expect(latin1(stripped)).not.toContain(COMMENT_CANARY);
-    expect(indexOf(stripped, [0xff, 0xe1])).toBe(-1);
-    expect(indexOf(stripped, [0xff, 0xfe])).toBe(-1);
-    expect([...stripped.subarray(0, 2)]).toEqual([0xff, 0xd8]);
-    expect([...stripped.subarray(-2)]).toEqual([0xff, 0xd9]);
-    // SOF0 and the scan (SOS to EOI) are copied unchanged.
-    const sof = indexOf(original, [0xff, 0xc0]);
-    const sofLength = (original[sof + 2] << 8) | original[sof + 3];
-    const sofBytes = [...original.subarray(sof, sof + 2 + sofLength)];
-    expect(indexOf(stripped, sofBytes)).toBeGreaterThan(0);
-    const sos = indexOf(original, [0xff, 0xda]);
-    expect([...stripped.subarray(indexOf(stripped, [0xff, 0xda]))]).toEqual([...original.subarray(sos)]);
-    expect(latin1(stripped)).toContain('PIXELS');
+describe('stripImageMetadata', () => {
+  it('removes EXIF/GPS and comments from a JPEG and keeps the image structure', () => {
+    const original = tinyJpeg(320, 240, { exifCanary: IMAGE_CANARIES.exif, comment: `note ${IMAGE_CANARIES.exif}` });
+    expect(containsBytes(original, IMAGE_CANARIES.exif)).toBe(true);
+    const stripped = stripImageMetadata(original, 'image/jpeg');
+    expect(containsBytes(stripped, IMAGE_CANARIES.exif)).toBe(false);
+    expect([stripped[0], stripped[1]]).toEqual([0xff, 0xd8]);
+    expect(hasMarker(stripped, 0xe0)).toBe(true);
+    expect(hasMarker(stripped, 0xe1)).toBe(false);
+    expect(hasMarker(stripped, 0xfe)).toBe(false);
+    expect(hasMarker(stripped, 0xc0)).toBe(true);
+    expect(hasMarker(stripped, 0xda)).toBe(true);
+    expect([stripped.at(-2), stripped.at(-1)]).toEqual([0xff, 0xd9]);
+    expect(() => minimizeImageDataUrl(dataUrl(stripped, 'image/jpeg'))).not.toThrow();
   });
 
-  it('is the identity on a JPEG without metadata', () => {
-    const plain = jpegBytes();
-    expect([...stripImageMetadata(plain, 'image/jpeg')!]).toEqual([...plain]);
+  it('keeps APP14 (Adobe colour transform)', () => {
+    const stripped = stripImageMetadata(tinyJpeg(32, 32, { app14: true, exifCanary: IMAGE_CANARIES.exif }), 'image/jpeg');
+    expect(hasMarker(stripped, 0xee)).toBe(true);
+    expect(containsBytes(stripped, IMAGE_CANARIES.exif)).toBe(false);
   });
 
-  it('rejects truncated files, bad lengths, a missing SOS and a missing EOI', () => {
-    const valid = jpegBytes({ withExif: true });
-    expect(stripImageMetadata(valid.subarray(0, 10), 'image/jpeg')).toBeNull();
-    const badLength = valid.slice();
-    const app0 = indexOf(badLength, [0xff, 0xe0]);
-    badLength[app0 + 2] = 0xff; badLength[app0 + 3] = 0xff;
-    expect(stripImageMetadata(badLength, 'image/jpeg')).toBeNull();
-    const noEoi = valid.subarray(0, valid.length - 2);
-    expect(stripImageMetadata(noEoi, 'image/jpeg')).toBeNull();
-    const noSos = valid.subarray(0, indexOf(valid, [0xff, 0xda]));
-    expect(stripImageMetadata(new Uint8Array([...noSos, 0xff, 0xd9]), 'image/jpeg')).toBeNull();
-    expect(stripImageMetadata(new Uint8Array([0xff, 0xd8, 0x00, 0x01]), 'image/jpeg')).toBeNull();
-  });
-});
-
-describe('stripImageMetadata (PNG)', () => {
-  it('drops tEXt and eXIf and keeps IHDR, IDAT and IEND', () => {
-    const original = pngBytes({ withText: true });
-    const stripped = stripImageMetadata(original, 'image/png')!;
-    expect(stripped).not.toBeNull();
-    const text = latin1(stripped);
-    expect(text).not.toContain(PNG_TEXT_CANARY);
-    expect(text).not.toContain(EXIF_CANARY);
-    expect(text).not.toContain('tEXt');
-    expect(text).not.toContain('eXIf');
-    for (const kept of ['IHDR', 'IDAT', 'IEND', 'pHYs']) expect(text).toContain(kept);
-    expect([...stripped.subarray(0, 8)]).toEqual(PNG_SIGNATURE);
-    expect([...stripImageMetadata(pngBytes(), 'image/png')!]).toEqual([...pngBytes()]);
+  it('removes PNG text chunks and keeps valid CRCs', () => {
+    const original = tinyPng(64, 48, { textCanary: IMAGE_CANARIES.exif });
+    expect(containsBytes(original, IMAGE_CANARIES.exif)).toBe(true);
+    const stripped = stripImageMetadata(original, 'image/png');
+    expect(containsBytes(stripped, IMAGE_CANARIES.exif)).toBe(false);
+    const chunks = pngChunks(stripped);
+    expect(chunks.map((c) => c.kind)).toEqual(['IHDR', 'IDAT', 'IEND']);
+    expect(chunks.every((c) => c.crcOk)).toBe(true);
+    expect(() => minimizeImageDataUrl(dataUrl(stripped, 'image/png'))).not.toThrow();
   });
 
-  it('rejects IHDR not first, trailing bytes, unknown critical chunks and a missing IEND', () => {
-    const ihdr = pngChunk('IHDR', [0, 0, 0, 1, 0, 0, 0, 1, 8, 2, 0, 0, 0]);
-    const idat = pngChunk('IDAT', [1, 2, 3]);
-    const iend = pngChunk('IEND', []);
-    expect(stripImageMetadata(new Uint8Array([...PNG_SIGNATURE, ...idat, ...ihdr, ...iend]), 'image/png')).toBeNull();
-    expect(stripImageMetadata(new Uint8Array([...pngBytes(), 0x00]), 'image/png')).toBeNull();
-    expect(stripImageMetadata(new Uint8Array([...PNG_SIGNATURE, ...ihdr, ...pngChunk('ZZZZ', [1]), ...idat, ...iend]), 'image/png')).toBeNull();
-    expect(stripImageMetadata(new Uint8Array([...PNG_SIGNATURE, ...ihdr, ...idat]), 'image/png')).toBeNull();
-    expect(stripImageMetadata(pngBytes().subarray(0, 20), 'image/png')).toBeNull();
+  it('throws invalid_image on truncated or malformed input', () => {
+    const jpeg = tinyJpeg(32, 32, { exifCanary: 'x' });
+    expect(() => stripImageMetadata(jpeg.subarray(0, jpeg.length - 3), 'image/jpeg')).toThrow('invalid_image');
+    expect(() => stripImageMetadata(jpeg.subarray(0, 20), 'image/jpeg')).toThrow('invalid_image');
+    expect(() => stripImageMetadata(Uint8Array.from([1, 2, 3, 4]), 'image/jpeg')).toThrow('invalid_image');
+    const png = tinyPng(16, 16);
+    expect(() => stripImageMetadata(png.subarray(0, png.length - 6), 'image/png')).toThrow('invalid_image');
+    const badCrc = png.slice(); badCrc[29] ^= 0xff;
+    expect(() => stripImageMetadata(badCrc, 'image/png')).toThrow('invalid_image');
+    expect(() => stripImageMetadata(tinyJpeg(8, 8), 'image/png')).toThrow('invalid_image');
+  });
+
+  it('rejects animated PNG', () => {
+    const png = tinyPng(16, 16);
+    const actl = Uint8Array.from([...Buffer.from('acTL', 'latin1'), 0, 0, 0, 1, 0, 0, 0, 0]);
+    const chunk = Uint8Array.from([0, 0, 0, 8, ...actl, ...Buffer.alloc(4)]);
+    new DataView(chunk.buffer).setUint32(chunk.length - 4, crc32(actl));
+    const animated = Uint8Array.from([...png.subarray(0, 33), ...chunk, ...png.subarray(33)]);
+    expect(() => stripImageMetadata(animated, 'image/png')).toThrow('invalid_image');
   });
 });
 
 describe('toLLMImage', () => {
-  it('returns null when the declared type disagrees with the bytes', () => {
-    expect(toLLMImage(jpegBytes(), 'image/png')).toBeNull();
-    expect(toLLMImage(pngBytes(), 'image/jpeg')).toBeNull();
-  });
-
-  it('returns null for unsupported or malformed bytes', () => {
-    expect(toLLMImage(new Uint8Array(Buffer.from('GIF89a')))).toBeNull();
-    expect(toLLMImage(jpegBytes().subarray(0, 30))).toBeNull();
-  });
-
-  it('base64-encodes the stripped bytes', () => {
-    const original = jpegBytes({ withExif: true });
-    const image = toLLMImage(original, 'image/jpeg')!;
-    expect(image.mimeType).toBe('image/jpeg');
-    expect(image.data).toBe(Buffer.from(stripImageMetadata(original, 'image/jpeg')!).toString('base64'));
-    expect(Buffer.from(image.data, 'base64').toString('latin1')).not.toContain(EXIF_CANARY);
-    expect(toLLMImage(pngBytes({ withText: true }))?.mimeType).toBe('image/png');
+  it('encodes base64 with the given mime type', () => {
+    const bytes = tinyJpeg(4, 4);
+    expect(toLLMImage(bytes, 'image/jpeg')).toEqual({ mimeType: 'image/jpeg', data: Buffer.from(bytes).toString('base64') });
   });
 });

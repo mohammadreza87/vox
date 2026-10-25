@@ -1,52 +1,64 @@
 import { describe, expect, it } from 'vitest';
-import { IMAGE_MIN_EDGE, pickPhotoSize } from '../images';
+import { pickPhotoSize, replyPhotoSize, type ImageTriage } from '../images';
 import type { TelegramPhotoSize } from '../telegram/client';
-import { photoSizes } from './images-fixtures';
 
-const size = (file_id: string, width: number, height: number, file_size?: number): TelegramPhotoSize =>
-  ({ file_id, width, height, ...(file_size !== undefined ? { file_size } : {}) });
+const size = (width: number, height: number, extra: Partial<TelegramPhotoSize> = {}): TelegramPhotoSize => ({ file_id: `f-${width}x${height}`, width, height, ...extra });
+const ladder = [size(90, 67), size(320, 240), size(800, 600), size(1280, 960)];
+const triage = (patch: Partial<ImageTriage>): ImageTriage => ({ kind: 'other', task: 'react', containsPeople: 0, containsSensitiveDocument: 0, ...patch });
 
 describe('pickPhotoSize', () => {
-  it('uses the documented minimum edges', () => {
-    expect(IMAGE_MIN_EDGE).toEqual({ low: 320, standard: 800, detail: 1092 });
-  });
-
-  it('picks the smallest size whose longest edge is at least 320 px', () => {
-    expect(pickPhotoSize(photoSizes())?.file_id).toBe('photo-320');
-  });
-
-  it('measures the longest edge of portrait photos', () => {
-    expect(pickPhotoSize([size('a', 67, 90), size('b', 240, 320)])?.file_id).toBe('b');
-  });
-
-  it('honours larger minimum edges', () => {
-    expect(pickPhotoSize(photoSizes(), 800)?.file_id).toBe('photo-800');
-    expect(pickPhotoSize(photoSizes(), IMAGE_MIN_EDGE.detail)?.file_id).toBe('photo-1280');
-  });
-
-  it('falls back to the largest size when none reaches the minimum', () => {
-    expect(pickPhotoSize([size('a', 90, 90), size('b', 200, 150)])?.file_id).toBe('b');
-  });
-
-  it('returns null for empty or all-invalid input and skips invalid entries', () => {
+  it('returns null for no sizes', () => {
     expect(pickPhotoSize([])).toBeNull();
-    const invalid = [size('zero', 0, 400), size('nan', 400, Number.NaN), size('', 400, 400)];
+  });
+
+  it('picks the smallest size whose longest edge is at least 320', () => {
+    expect(pickPhotoSize(ladder)).toEqual(size(320, 240));
+  });
+
+  it('uses the longest edge for portrait images', () => {
+    expect(pickPhotoSize([size(240, 320), size(600, 800)])).toEqual(size(240, 320));
+  });
+
+  it('falls back to the largest when every size is below the minimum', () => {
+    expect(pickPhotoSize([size(90, 67), size(200, 150), size(160, 120)])).toEqual(size(200, 150));
+  });
+
+  it('ignores invalid entries', () => {
+    const invalid = [
+      { width: 400, height: 300 } as TelegramPhotoSize,
+      size(0, 500), size(Number.NaN, 400), size(400, Number.POSITIVE_INFINITY), size(-5, 600), { ...size(330, 200), file_id: '' },
+    ];
+    expect(pickPhotoSize([...invalid, size(640, 480)])).toEqual(size(640, 480));
     expect(pickPhotoSize(invalid)).toBeNull();
-    expect(pickPhotoSize([...invalid, size('ok', 400, 300)])?.file_id).toBe('ok');
-    expect(pickPhotoSize([size('fraction', 400.5, 300), size('ok', 500, 300)])?.file_id).toBe('ok');
   });
 
-  it('breaks edge ties by the smaller known file size, then array order', () => {
-    expect(pickPhotoSize([size('big', 320, 240, 9_000), size('small', 240, 320, 5_000)])?.file_id).toBe('small');
-    expect(pickPhotoSize([size('unknown', 320, 240), size('known', 320, 200, 5_000)])?.file_id).toBe('known');
-    expect(pickPhotoSize([size('first', 320, 240), size('second', 320, 240)])?.file_id).toBe('first');
+  it('breaks ties by file_size and then by order', () => {
+    const a = size(320, 240, { file_id: 'a', file_size: 9000 });
+    const b = size(240, 320, { file_id: 'b', file_size: 4000 });
+    const c = size(320, 200, { file_id: 'c', file_size: 4000 });
+    expect(pickPhotoSize([a, b, c])?.file_id).toBe('b');
+    expect(pickPhotoSize([c, b])?.file_id).toBe('c');
+    expect(pickPhotoSize([size(320, 240, { file_id: 'x' }), size(320, 240, { file_id: 'y' })])?.file_id).toBe('x');
   });
 
-  it('never mutates its input', () => {
-    const sizes = photoSizes().reverse();
-    const before = JSON.stringify(sizes);
-    pickPhotoSize(sizes);
-    pickPhotoSize(sizes, 5000);
-    expect(JSON.stringify(sizes)).toBe(before);
+  it('honours a custom minimum edge', () => {
+    expect(pickPhotoSize(ladder, 1024)).toEqual(size(1280, 960));
+    expect(pickPhotoSize(ladder.slice(0, 3), 1024)).toEqual(size(800, 600));
+  });
+});
+
+describe('replyPhotoSize', () => {
+  it('uses 1024 px for unknown triage, text extraction and text-heavy kinds', () => {
+    const big = size(1280, 960);
+    expect(replyPhotoSize(ladder, null)).toEqual(big);
+    expect(replyPhotoSize(ladder, triage({ task: 'extract_text', kind: 'photo_of_people' }))).toEqual(big);
+    for (const kind of ['document', 'receipt', 'screenshot', 'chart'] as const) {
+      expect(replyPhotoSize(ladder, triage({ kind, task: 'react' }))).toEqual(big);
+    }
+  });
+
+  it('uses 640 px for other images', () => {
+    expect(replyPhotoSize(ladder, triage({ kind: 'photo_of_people', task: 'react' }))).toEqual(size(800, 600));
+    expect(replyPhotoSize(ladder, triage({ kind: 'meme', task: 'explain' }))).toEqual(size(800, 600));
   });
 });

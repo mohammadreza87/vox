@@ -35,7 +35,7 @@ import { selectMemories } from './memory/retrieval';
 import { decideScope, extractCandidates, resolveCandidateSource, firstNewIndex } from './memory/extraction';
 import { canPersonSee, describeScope, hasGuestAudience, isVisibleToAudience, audienceOf, historyMessageForChat, selectHistoryForChat, snapshotScopeAudience } from './memory/visibility';
 import { groupAddressing, targetsSomeoneElse } from './group-addressing';
-import { forceQuickTriage, ingestTelegramImage } from './images';
+import { forceQuickTriage, imageIngestionWanted, ingestTelegramImage, type ImageTurn } from './images';
 import { logTelegramDiagnostic, voiceFailureDiagnostic } from './telegram/diagnostics';
 import { currentStageTimer, StageTimer, stageLaps, timed } from './timing';
 import type { PrivacySnapshot } from './privacy/snapshot';
@@ -483,9 +483,11 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
         return 'replied';
       }
     }
-    let imageTurn: Awaited<ReturnType<typeof ingestTelegramImage>> = null;
-    if (addressed && !isVoice && (message.photo?.length || message.document)) {
-      imageTurn = await ingestTelegramImage({ org, decider: this.compactPrivacy() ? undefined : this.deps.decider, llm: this.deps.llm, fastLlm: this.deps.fastLlm, bot, log: this.log }, persona, chat, speaker.id, message, text);
+    let imageTurn: ImageTurn | null = null;
+    if (!isVoice && imageIngestionWanted(message, chat)) {
+      const privacy = this.deps.runtimePrivacy;
+      const audienceOk = !privacy?.validateAudience || await privacy.validateAudience(persona.id, chat).catch(() => false);
+      imageTurn = audienceOk ? await ingestTelegramImage({ org, decider: this.compactPrivacy() ? undefined : this.deps.decider, llm: this.deps.llm, fastLlm: this.deps.fastLlm, bot, log: this.log }, persona, chat, speaker.id, message, text) : null;
       if (imageTurn) text = imageTurn.text;
     }
     if (!text.trim()) return 'ignored';
@@ -512,7 +514,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     };
     if (!(await this.groupAllowed(persona, chat, speaker.id, addressed ? 'reply' : 'observe'))) return 'ignored';
     // Visible to everyone in the chat: never an image description, never stored or extracted.
-    if (windowKey) this.groupWindow.record(windowKey, { personId: speaker.id, text: imageTurn ? rawText : text, at: this.now().getTime(), messageId: message.message_id }, this.now().getTime());
+    if (windowKey) this.groupWindow.record(windowKey, { personId: speaker.id, text, at: this.now().getTime(), messageId: message.message_id }, this.now().getTime());
     const extras: TurnExtras = {
       quote: replyQuote(message, persona.name, (from) => this.ownBot(persona, from), (id) => org.getPersonByTelegramId(id)?.name),
       // Stored history, when allowed, is the conversation; otherwise the RAM window of visible lines.
@@ -1431,7 +1433,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
       if (!await permitted()) throw new LLMAuthorizationError();
       return llm.complete({ ...request, authorize: permitted });
     } } : llm;
-    const candidates = await extractCandidates(extractionLlm, org, persona, chat, speakerId, transcript, known, { imagePeopleRule: currentTurn.some(m => this.peopleImageTurns.has(m)) });
+    const candidates = await extractCandidates(extractionLlm, org, persona, chat, speakerId, transcript, known, currentTurn.some((m) => this.peopleImageTurns.has(m)) ? { imagePeopleRule: true } : undefined);
     if (!boundary.memoryEnabled || candidates.length === 0 || !(await this.unchanged(persona, chat, speakerId, boundary)) || !await this.requestAuthorized(authorize)) return;
     let expectedRevision = boundary.memoryRevision;
 

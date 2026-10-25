@@ -56,6 +56,8 @@ Nothing is unshifted as a first user message any more.
 - `cached-prompt-wire.test.ts`: real `AnthropicLLM` bodies. Nothing volatile appears before the last breakpoint, there are at most 4 markers, and 1 h markers come before 5 m ones.
 - `cached-prompt-ports.test.ts`: flag-on copies of the 10 existing tests that cannot run unmodified. They pass under both arms.
 - `cached-prompt-suite-*.test.ts`: 11 wrappers that re-run existing suites with the flag.
+- `cached-prompt-gateway-suite.test.ts` and `cached-prompt-gateway-suite-tail.test.ts` (main's lineage, kept on `agent-intelligence-wave-a-main`): re-run the whole of `gateway.test.ts` under `TIREH_CACHED_PROMPT=1`, with `TIREH_PROMPT_SYSTEM_TAIL` off and on (52 cases each), through a scoped `Array.prototype.startsWith` shim.
+- `prompt-layout.main-lineage.test.ts`, `cached-prompt-gateway.main-lineage.test.ts` and `llm-blocks.main-lineage.test.ts` (merge onto `agent-intelligence-wave-a-main`): the cases of main's earlier S03 lineage that pass against this layout. The cases not kept are listed in `WAVE_A_MAIN_INTEGRATION.md`.
 
 ## Expected flag-on failures in unmodified suites
 

@@ -395,6 +395,34 @@ describe('kill switch and members', () => {
     expect(await run('off')).toEqual(await run('unset'));
   });
 
+  it('STUDIO_IMAGES=1: an outsider\'s photo is never downloaded or triaged; a member\'s photo in the same harness is', async () => {
+    vi.stubEnv('STUDIO_IMAGES', '1');
+    try {
+      const { h, org, bot, card, send, complete } = await setup();
+      // A vision-capable reply model, so only the audience and speaker gates can refuse the image.
+      h.studio.deps.chatLLM = { complete, identity: { provider: 'anthropic', model: 'claude-test' } } as unknown as typeof h.studio.deps.chatLLM;
+      const decideParts = vi.fn(async () => ({}));
+      (h.studio.deps.decider as unknown as { decideParts: typeof decideParts }).decideParts = decideParts;
+      const downloadImage = vi.fn(async () => new Uint8Array([0xff, 0xd8, 0xff, 0xd9]));
+      (bot() as unknown as { downloadImage: typeof downloadImage }).downloadImage = downloadImage;
+      complete.mockImplementation(async (request) => request.system.includes('Decide, in character') ? JSON.stringify({ action: 'reply' }) : h.chatLLM.complete(request));
+      const photo = (from: number): TelegramUpdate => {
+        const id = updateId++;
+        return { update_id: id, message: { message_id: id, date: 0, caption: 'what is this?', photo: [{ file_id: `p-${id}`, width: 640, height: 480, file_size: 20_000 }], from: { id: from, is_bot: false, first_name: 'X' }, chat: { id: from, type: 'private' } } };
+      };
+      const [, , options] = await card();
+      later(h);
+      await send(tap(ID.stranger, data(options, 'cj')));
+      await send(photo(ID.stranger));
+      expect(downloadImage).not.toHaveBeenCalled();
+      expect(decideParts).not.toHaveBeenCalled();
+      await send(photo(org.bob.telegramId));
+      expect(downloadImage).toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('members keep their own path and never see a card', async () => {
     const { org, bot, send, h } = await setup();
     await send(dm(org.bob.telegramId, 'Hello'));

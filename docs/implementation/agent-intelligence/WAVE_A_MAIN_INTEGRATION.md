@@ -617,3 +617,175 @@ Deleted by the r2 lineage (its rewrite of the first run), recorded by name:
   environment: `guest-rights-http` (10, mkdtemp /tmp EPERM), `local-provider` (7, unix socket listen EPERM) and
   `prepared-conversation-qualification` (load timeout; passes alone, as does circles-group "forget me leaves no trace
   of the requester", which flaked once under load).
+
+## S03: cache-stable prompt (wave A `aeeab39`, aiq/prompt-caching-r2 `ce37a8b`)
+
+Main merged an earlier run (`fd1fc4e`, `a37fcc2`, `488958a`, then `33558b4` and `b23e090`). The merge commit `18d0415`
+records the `prompt.ts` and `gateway.ts` resolutions (wave A's r2 layout with every `962e877` hunk re-applied; main's
+`composeReply` and `liveTurn` with wave A's `placeTurn` in the cached arm) and the regenerated flag-off golden. This
+section adds what that commit did not record (fixes from the S03 verifier, landed with the S12 merge).
+
+### Resolution of the add/add files
+
+`src/lib/tireh/llm.ts`, `src/lib/tireh/__tests__/fixtures.ts`, `src/lib/tireh/conversation/__tests__/prompt-layout.test.ts`,
+`src/lib/tireh/__tests__/cached-prompt-gateway.test.ts` and `src/lib/tireh/__tests__/llm-blocks.test.ts` were resolved
+to wave A's side (each is byte-identical to `aeeab39`).
+
+### Correction: main's four flag-on wrappers
+
+The S03 merge deleted four main-only wrappers by hand and recorded them as matching wave A's r2. Wave A never had these
+files. Two are superseded: `cached-prompt-audience-boundary.test.ts` by `cached-prompt-suite-audience-boundary.test.ts`,
+and `cached-prompt-memory-privacy.test.ts` by `cached-prompt-suite-memory-privacy.test.ts` plus the parity matrix in
+`prompt-layout.test.ts`. The other two have no replacement and are restored unchanged from main:
+`cached-prompt-gateway-suite.test.ts` and `cached-prompt-gateway-suite-tail.test.ts`, which re-run all of
+`gateway.test.ts` under `TIREH_CACHED_PROMPT=1` with `TIREH_PROMPT_SYSTEM_TAIL` off and on (104/104).
+
+### Main-lineage cases kept
+
+The cases of main's earlier-lineage files that pass against wave A's layout are kept, unchanged apart from a header line:
+
+- `conversation/__tests__/prompt-layout.main-lineage.test.ts`: 13 cases (Block A stability, routing and floor; Block B
+  presence; Block C volatility, per-chat identity and the Conversation section; private memories and conflicts in the
+  legacy format; the personal block; tag neutralization; block order and hashes; `buildSystemPrompt` unchanged).
+- `__tests__/cached-prompt-gateway.main-lineage.test.ts`: 14 of main's 15 cases, among them "a hasGuests group caption
+  reply carries only the caption and the per-turn block" and "serializes the tail last on the wire and keeps trailing
+  text for live calls".
+- `__tests__/llm-blocks.main-lineage.test.ts`: all 21 of main's cases.
+
+### Replaced tests (earlier S03 lineage, `488958a`/`a37fcc2`/`fd1fc4e`) not kept
+
+`prompt-layout.test.ts`:
+
+- "pads deterministically and leaves long text unchanged": API absent (`padCacheBlock`; wave A has `padToCacheFloor`).
+- "matches its snapshot" (Block A): contradicts wave A. Main's Block A ends with the turn note; wave A moves
+  `TURN_NOTE` to Block C, so Block A ends at `</rules>`.
+- "equals the Organization section of the legacy prompt and is stable across speakers and dates": contradicts wave A.
+  Main asserted a 64-hex sha256 block hash; wave A's hash is 16 hex characters.
+- "carries the extra frame and the hooks when given, and is unchanged without them": contradicts wave A. Block C ends
+  with `TURN_NOTE`, not with the extra frame.
+- "carries the date, speaker, format, skill, memories, conflicts, saved and relationship context, then the final
+  reminder": contradicts wave A's per-turn header lines and their order.
+- "clips long memories by code point and keeps short ones whole": contradicts wave A. Wave A clips at 209 code points
+  plus "…" (main: 210), and conflicting memories are not clipped.
+- "puts the turn on the last user message and one breakpoint on the previous assistant", "sets no breakpoint without an
+  assistant message", "returns the tail in system-tail mode without trailing text", "adds a user turn when there is
+  none": API absent (`attachTurnBlock`; wave A has `placeTurn`, which pushes an empty-content user turn for an empty
+  history where main pushed `content=turn`). `prompt-layout.test.ts` covers `placeTurn`.
+
+`cached-prompt-gateway.test.ts`:
+
+- "puts no date, memory, saved context or per-turn text before the last cache breakpoint": contradicts wave A in its
+  last assertion. The live call's final system block ends with `TURN_NOTE`, not with the live-call frame. The rest of
+  its checks are covered by `cached-prompt-wire.test.ts`.
+
+## S12: image ingestion (wave A `1a3437c`, aiq/image-ingestion `2bdb95f`)
+
+Main merged an earlier run (`656c84f`, `a6141c3`, `134b572`, `ca56f47`, `9948fb9`, `bce2019`, `203d0c0`, `b0cbb7f`,
+merged by `d99e3a5`). Wave A is the chosen implementation. At this sha wave A's gateway branch still ingests before
+`boundary()` and keeps a process-only `peopleImageTurns` WeakSet. TAIL (`bfc9b39`, `19f3b37`, `6c90443`) moves the
+download, triage and acknowledgement after the turn boundary and persists the `imageDerived` marks.
+
+### Resolution
+
+| File | Resolution |
+| --- | --- |
+| `src/lib/tireh/images/{bytes,index,questions}.ts` (add/add) | Wave A's files. `retention.ts` added from wave A. |
+| `src/lib/tireh/images/policy.ts`, `select.ts` (main only) | Deleted. Only main's `images-policy` and `images-questions` tests imported them. |
+| `src/lib/tireh/memory/extraction.ts` (conflict) | Wave A's file: `ExtractionOptions`, `IMAGE_PEOPLE_RULE` in the group-aware rules line, and the `IMAGE_PEOPLE_DESCRIPTION` candidate filter. Main's gateway caller already passed `{ imagePeopleRule }`. |
+| `src/lib/tireh/telegram/client.ts` (conflict) | Main's file (Circles, Pet and channel additions unchanged) with only wave A's `downloadImage` body, which tolerates a missing `headers.get`. |
+| `src/lib/tireh/gateway.ts` (conflict) | Main's file with wave A's S12 branch: `imageIngestionWanted` (flag, private chat, image present) then `validateAudience` before `ingestTelegramImage`. This replaces main's `addressed && (photo or document)` condition. The `peopleImageTurns` field is declared once, beside main's `groupWindow`. The extraction call uses wave A's form (`{ imagePeopleRule: true }` or `undefined`). `composeReply` keeps main's argument list (`action`, the `extras`) and gets `imageTurn?.images`. `groupWindow.record` stores `text`: images are private-only, so a group window never sees an image turn. The import line keeps main's `targetsSomeoneElse`. |
+| `src/lib/tireh/__tests__/images-{bytes,fixtures,gateway,ingest,photo-size}` (add/add) | Wave A's files. In `images-gateway.test.ts`, the two decide-call equality checks compare the calls through a `decideCalls` helper. The helper reduces functions to a marker, because main's `8a7dc55` passes a per-turn authority object with closures to `decide`. Wave A's `a40e8f8` hunks for this suite are ported here, which `8fd2048` left for S12: `visibleText` reads the system, `trailingText` and `systemTail`, so the suite passes under `TIREH_CACHED_PROMPT=1`. |
+| `images-catalogue-lint`, `images-client`, `images-extraction` tests | Added from wave A. |
+| `images-telegram-client.test.ts` (main only) | Kept. 6/6 pass against the merged `downloadImage`. |
+| `docs/implementation/agent-intelligence/S12-image-ingestion.md` (add/add) | Wave A's spec. |
+| `docs/VOX_STUDIO.md` (conflict) | One "Photos (STUDIO_IMAGES)" section. It uses wave A's text, plus the acknowledgement wording and the people-in-photos sentence. The Persian paragraph is rewritten to match wave A's behaviour (acknowledgement «یک لحظه، دارم عکس را نگاه می‌کنم.»). |
+| `docs/implementation/PRIVACY_AND_CONSENT.md` (conflict) | Wave A's `core.conversation` (images) purpose-map row replaces main's. Main's Circles `optional.group_memory` row is kept verbatim. The processor-table rows for Decisions image triage (F022) arrive with TAIL. |
+
+### Risks checked
+
+- Circles outsider DMs: new `circles-dm` case "STUDIO_IMAGES=1: an outsider's photo is never downloaded or triaged; a
+  member's photo in the same harness is". It uses a vision-capable reply model, a `decideParts` decider and a
+  `downloadImage` spy. A joined outsider's photo causes no download and no triage. A member's photo in the same
+  harness is downloaded, which shows the gate is not vacuous. The outsider is refused at `validateAudience`, and
+  `ingestTelegramImage` would also refuse on `hasGuestAudience` or `speakerId !== chat.personId`.
+- Channel posts (`is_automatic_forward`, `sender_chat`): `resolveChat` gives a group context for every non-private
+  chat. `imageIngestionWanted` requires `chat.kind === 'private'`, so a channel photo is never ingested.
+
+### Main-lineage cases kept
+
+Main's replaced add/add test files, with main's fixtures as `images-main-lineage-fixtures.ts`, keep every case that
+passes against wave A's module:
+
+- `images-bytes.main-lineage.test.ts`: "recognises JPEG and PNG by signature", "rejects GIF, WebP and text", "drops APP1
+  Exif and COM segments and keeps SOI, SOF0, SOS and EOI", "is the identity on a JPEG without metadata".
+- `images-photo-size.main-lineage.test.ts`: 5 `pickPhotoSize` cases (smallest size of at least 320 px, portrait edges,
+  largest fallback, edge ties, no mutation).
+- `images-ingest.main-lineage.test.ts`: 17 cases: 13 gate cases (flag values, non-images, pdf/webp/gif/undefined documents, group,
+  foreign chat, guest speaker, oversize document, with the cap now `MAX_REPLY_IMAGE_BYTES`), "uses the caption as the
+  turn text, else the placeholder", "accepts a PNG image document and strips its text chunks", "re-downloads at detail
+  resolution for text extraction", "sends no acknowledgement for a fast triage".
+- `images-gateway.main-lineage.test.ts`: flag undefined and '0' base behaviour (4), "handles a group photo exactly as
+  with the flag off, with no download", "routes an explain image to the fast vision model without web search", "routes
+  a remember image to the main model", both sensitive-document cases, and "adds the people rule to extraction and keeps
+  triage and bytes out of every prompt" (its fake reads `systemText(request.system)`).
+- `images-main-lineage.test.ts` (from the deleted `images-policy` and `images-questions`): both `forceQuickTriage` cases,
+  "reuses the text triage timeout", "reads a complete answer", and "returns null when image_task / contains_people /
+  contains_sensitive_document is missing".
+
+### Main-lineage cases not kept
+
+- `images-policy.test.ts`: "stores nothing without triage and assumes people", "stores a remember task only below the
+  sensitive threshold", "honours an explicit caption request and its negation", "flags people by kind or by a protective
+  probability threshold", "forces the quick vision route for quick tasks, or whenever the main model cannot see",
+  "matches English and Persian requests", "lets any negation win", "maps triage to a resolution tier", "acknowledges in
+  Persian for a Persian caption and in English otherwise". API absent (`imagePolicy`, `explicitRemember`,
+  `replyDetail`, `ackText`). Wave A's `suppressImageMemory`, `explicitRememberRequest`, `replyPhotoSize` and
+  `imageAckText` are covered by `images-ingest` and `images-gateway`. Two of them contradict wave A: people are flagged
+  at 0.5, not at 0.3 or by kind, and a model that cannot see refuses the image instead of forcing the quick route.
+- `images-questions.test.ts`: "is question set image-v1 with exactly the four named questions", "passes the catalogue
+  lint with no allowlist", "fits the base seam caps and describes every choice", "offers exactly the kinds and tasks"
+  (API absent: `IMAGE_QUESTIONS`, `IMAGE_QUESTION_SET_VERSION`; covered by `images-catalogue-lint`); "carries the persona
+  header and the JSON-quoted caption only", "caps the caption at 600 characters and says none without one" (API absent:
+  `imageTriageText`; wave A's `imageTriageInput` has another format); "returns null when image_kind is missing", "returns
+  null for unknown choices and out-of-range or NaN probabilities", "downgrades a low-confidence remember to unclear"
+  (contradict wave A: a missing or unknown kind reads as 'other', an unknown task as 'unclear', probabilities are
+  clamped, and the task confidence floor is 0.5, not 0.6).
+- `images-bytes.test.ts`: "rejects truncated files, bad lengths, a missing SOS and a missing EOI" and "rejects IHDR not
+  first, trailing bytes, unknown critical chunks and a missing IEND" (wave A throws `invalid_image` where main returned
+  null); "drops tEXt and eXIf and keeps IHDR, IDAT and IEND" (wave A drops `pHYs`); the three `toLLMImage` cases (wave
+  A's `toLLMImage(bytes, mime)` only encodes; sniffing and stripping happen in `fetchImage`).
+- `images-photo-size.test.ts`: "uses the documented minimum edges" and "honours larger minimum edges" (API absent:
+  `IMAGE_MIN_EDGE`; wave A has `TRIAGE_MIN_EDGE` and `replyPhotoSize`); "returns null for empty or all-invalid input and
+  skips invalid entries" (contradicts: wave A accepts finite fractional dimensions).
+- `images-ingest.test.ts`: the log-string cases "refuses a model without vision identity before downloading", "refuses
+  Gemini as the only target before downloading", "logs one fixed string, never the error, when the download fails",
+  "rejects a document whose declared type does not match its bytes", "keeps the small image when the detail download
+  fails", "treats a rejected triage as missing", "times out a triage that never answers", "logs a failed acknowledgement
+  with a fixed string" (contradict: wave A logs `tireh_image:<code>`, not main's `image_*` strings). Also "rejects bytes
+  that are not a supported image" (main corrupts only the 800 px file; wave A triages from the 320 px copy and keeps
+  it when the reply-size copy is invalid), "downloads the 800 px size
+  once and never acknowledges without an image-capable decider" and "keeps the small image for a casual people photo"
+  (wave A always fetches a reply-size copy after the 320 px triage copy), "asks the four image questions once with the
+  caption and the small image" (`imageTriageInput` format), "treats a malformed triage as missing" (wave A reads it
+  leniently and logs nothing), "acknowledges a slow triage once, in reply to the photo" and "acknowledges in Persian for
+  a Persian caption" (API absent: `IMAGE_ACK_TEXT`), and "forces the quick vision route when the main model is not
+  vision-capable" (wave A refuses instead).
+- `images-gateway.test.ts`: "replies to a captionless photo with the image in the current turn only" (contradicts in
+  the image bytes: wave A's stripped reply-size copy), "never sends an image to a Gemini main model" (contradicts in the
+  shape: wave A sends no image at all when either model cannot see, which is stricter), and both "no image bytes in any
+  log (stage timings false/true)" cases (contradict in the expected log string; wave A's `images-gateway` content-free
+  logging case covers the same canaries).
+
+### Test results
+
+- `npx tsc --noEmit -p tsconfig.json`: clean.
+- Step suites, flags unset (`images-*`, `gateway.test.ts`, `tireh/telegram`, `tireh/memory`, `circles-dm`,
+  `circles-channels`, `pet-http`): 286/286 across 19 files.
+- `STUDIO_IMAGES=1 npx vitest run src/lib/tireh src/lib/studio/__tests__/circles-dm.test.ts`: 1970/1970.
+- Privacy core suites (the list before TAIL, plus `sharing-v2`), flags unset: 633/633 across 30 files, three runs. One
+  earlier run under load had a single failure that did not reproduce.
+- S03 fixes: `cached-prompt-gateway-suite` (both arms) 104/104; the three S03 main-lineage files 48/48.
+- `images-*` with `TIREH_CACHED_PROMPT=1`, and with `TIREH_CACHED_PROMPT=1 TIREH_PROMPT_SYSTEM_TAIL=1 STUDIO_IMAGES=1`: 132/132 each.
+- `src/lib/tireh`, `src/lib/studio`, `src/lib/circles`, `src/app/studio`, flags unset: 4549/4561. All 11 failures are
+  environment failures: `guest-rights-http` (10, mkdtemp /tmp EPERM) and `prepared-conversation-qualification` (1,
+  timeout under full-suite load).
