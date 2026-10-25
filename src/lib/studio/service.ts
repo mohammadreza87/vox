@@ -63,8 +63,8 @@ import { catalogView, projectCatalog, CATALOG, type Catalog } from './skills/cat
 import { catalogRole, catalogSkills, routeBrief as routeSkillBrief, ROUTE_TEXT_CHARS, type RouteFallbackReason } from './skills/route';
 import { MAX_AGENT_SKILLS, type AgentRole, type AgentSkill, type CatalogView, type RouteSuggestion } from './skills/types';
 import {
-  atLeast, canDeleteDraft, canEditLook, canEditPersona, canFire, canManageAccess, canSetAgentAdmin, canSpawn, canUseAgent,
-  checkRoleChange, formingDay, isLocked, visibilityOf, visibleAgents,
+  atLeast, canDeleteDraft, canEditLook, canEditPersona, canFire, canManageAccess, canManageSettings, canSetAgentAdmin, canShapeIdentity, canSpawn, canUseAgent,
+  checkRoleChange, formingDay, formingDaysLeft, isLocked, visibilityOf, visibleAgents,
 } from './permissions';
 import { StudioStore, type StudioStorage } from './store';
 import { FirestoreStudioStore } from './firestore-store';
@@ -137,6 +137,9 @@ function advanceLearningAuthority(row: { learningAuthorityRevision?: number }): 
 export type StrangerAction = 'reply' | 'decline' | 'ignore' | 'block';
 export type GuestStanding = 'ok' | 'blocked' | 'limit-reached' | 'over-limit';
 const lockedMessage = (agent: Agent) => `${agent.persona.name}'s personality is locked. To change it, fire and hire a successor.`;
+const formedMessage = (agent: Agent) => `${agent.persona.name} is formed. Its voice and skills now stay as they are, and it keeps learning from conversations.`;
+const retiredMessage = (agent: Agent) => `${agent.persona.name} is retired, so its settings can't change.`;
+const sameIds = (a: readonly unknown[], b: readonly unknown[]) => a.length === b.length && a.every((x, i) => x === b[i]);
 
 /** Picture variants kept per agent. */
 const AVATAR_CAP = 12;
@@ -209,6 +212,19 @@ function keepLibraryFields(refined: PersonaSpec, current: PersonaSpec): PersonaS
   const voiceExamples = refined.voiceExamples ?? current.voiceExamples;
   if (voiceExamples !== undefined) next.voiceExamples = voiceExamples;
   return next;
+}
+
+/** Library fields: only the creator changes them while the agent forms (canShapeIdentity). */
+const LIBRARY_FIELDS: Array<keyof PersonaSpec> = ['roleId', 'skillIds'];
+
+/** Take `keys` from the stored persona at write time, so an older snapshot can't revert them. */
+function withStoredFields(persona: PersonaSpec, stored: PersonaSpec, keys: Array<keyof PersonaSpec>): PersonaSpec {
+  const next = { ...persona } as Record<string, unknown>;
+  for (const key of keys) {
+    if (stored[key] === undefined) delete next[key];
+    else next[key] = stored[key];
+  }
+  return next as unknown as PersonaSpec;
 }
 
 /** Bump to re-apply the ElevenLabs agent config on the next call. */
@@ -358,6 +374,13 @@ export interface AgentView {
   canEditLook: boolean;
   canFire: boolean;
   canManageAccess: boolean;
+  // The server always sets the three below; they are optional only so older fixtures still type-check.
+  /** May change who can talk to it and how it behaves (a manager, not retired) */
+  canManageSettings?: boolean;
+  /** May change its voice and skills: the creator, while it forms (permissions.canShapeIdentity) */
+  canShapeIdentity?: boolean;
+  /** Whole days left in the forming period of an active agent; null otherwise */
+  formingDaysLeft?: number | null;
 }
 
 /** What a successor's brief starts from: the fired predecessor's name and library role, nothing else. */
@@ -472,7 +495,7 @@ export class Studio {
       stage: stageFor(formingDay(agent, now), agent.status),
       // The account's own voice id never leaves the server: only built-in ids and what the picker offered.
       voice: agent.voice ? { label: agent.voice.label, source: agent.voice.source, choiceId: agent.voice.sourceId ?? (agent.voice.source === 'default' ? agent.voice.voiceId : undefined) } : undefined,
-      voicePreviews: agent.status === 'draft' ? agent.voicePreviews : undefined,
+      voicePreviews: agent.status === 'draft' || canShapeIdentity(actor, agent, now) ? agent.voicePreviews : undefined,
       bot: agent.bot ? { username: agent.bot.username } : undefined,
       profileSync: agent.status !== 'active' ? undefined : receipt ? {
         status: receipt.status, failed: receipt.failed, updatedAt: receipt.updatedAt,
@@ -499,6 +522,9 @@ export class Studio {
       canEditLook: canEditLook(actor, agent),
       canFire: canFire(actor, agent),
       canManageAccess: canManageAccess(actor, agent),
+      canManageSettings: canManageSettings(actor, agent),
+      canShapeIdentity: canShapeIdentity(actor, agent, now),
+      formingDaysLeft: formingDaysLeft(agent, now),
     };
   }
 
@@ -618,7 +644,9 @@ export class Studio {
     const current = await this.requireEditable(actor, id);
     const library = { role: catalogRole(current.persona.roleId, this.library), skills: catalogSkills(current.persona.skillIds ?? [], this.library) };
     const refined = await refinePersona(this.deps.personaLLM, current.persona, instruction.slice(0, 500), library);
-    return this.savePersona(actor, id, keepLibraryFields(refined, current.persona));
+    // With no chosen voice, presentation picks the voice everyone hears: only a shaper's refine may move it.
+    const keepsVoice = !current.voice && !canShapeIdentity(actor, current, this.now());
+    return this.savePersona(actor, id, keepLibraryFields(refined, current.persona), { stored: keepsVoice ? ['presentation'] : [] });
   }
 
   /** The library role and skills a brief names, checked against the catalog. */
@@ -645,6 +673,10 @@ export class Studio {
 
   async updatePersona(actor: Member, id: string, patch: Partial<PersonaSpec>): Promise<AgentView> {
     const current = await this.requireEditable(actor, id);
+    // Role and skills are part of who the agent is: only its creator changes them, while it forms.
+    const reshapes = (patch.roleId !== undefined && patch.roleId !== current.persona.roleId)
+      || (patch.skillIds !== undefined && !(Array.isArray(patch.skillIds) && sameIds(patch.skillIds, current.persona.skillIds ?? [])));
+    if (reshapes) this.assertShapeable(actor, current);
     const persona = { ...current.persona };
     for (const key of Object.keys(patch) as Array<keyof PersonaSpec>) {
       const value = patch[key];
@@ -656,7 +688,13 @@ export class Studio {
     const checked = validatePersona(persona);
     if (!checked.ok) throw bad(`Invalid persona: ${checked.error}`);
     this.assertLibraryEdit(patch, checked.persona);
-    return this.savePersona(actor, id, checked.persona);
+    // Fields the patch doesn't name come from the stored persona, so a stale snapshot can't move the voice.
+    const stored: Array<keyof PersonaSpec> = patch.presentation === undefined ? ['presentation'] : [];
+    if (!reshapes) return this.savePersona(actor, id, checked.persona, { stored });
+    const view = await this.savePersona(actor, id, checked.persona, { reshape: true, stored });
+    // Content-free: the count of catalog skills, never names or free text.
+    await this.deps.store.audit({ actor: actor.telegramId, action: 'agent.skills', target: id, detail: String(view.persona.skillIds?.length ?? 0) });
+    return view;
   }
 
   private async requireEditable(actor: Member, id: string): Promise<Agent> {
@@ -670,6 +708,31 @@ export class Studio {
   private assertEditable(actor: Member, agent: Agent): true {
     if (isLocked(agent, this.now())) throw forbidden(lockedMessage(agent));
     if (!canEditPersona(actor, agent, this.now())) throw forbidden();
+    return true;
+  }
+
+  /**
+   * Voice and skills: the creator, while the agent forms (permissions.canShapeIdentity). Each refusal
+   * says why, so the Voice and Skills pages can show the same words the server used.
+   */
+  private assertShapeable(actor: Member, agent: Agent): true {
+    if (agent.status === 'fired') throw forbidden(retiredMessage(agent));
+    if (isLocked(agent, this.now())) throw forbidden(formedMessage(agent));
+    if (!canShapeIdentity(actor, agent, this.now())) throw forbidden(`Only the person who created ${agent.persona.name} can change its voice and skills.`);
+    return true;
+  }
+
+  private async requireShapeable(actor: Member, id: string): Promise<Agent> {
+    const agent = (await this.deps.store.read()).agents.find((a) => a.id === id);
+    if (!agent) throw notFound('Agent not found');
+    this.assertShapeable(actor, agent);
+    return agent;
+  }
+
+  /** Who can talk to it, live web, groups, Main Mini App: a manager, never on a retired agent. */
+  private assertManageable(actor: Member, agent: Agent): true {
+    if (agent.status === 'fired' && canManageAccess(actor, agent)) throw forbidden(retiredMessage(agent));
+    if (!canManageSettings(actor, agent)) throw forbidden();
     return true;
   }
 
@@ -687,12 +750,25 @@ export class Studio {
     return agent;
   }
 
-  private async savePersona(actor: Member, id: string, persona: PersonaSpec): Promise<AgentView> {
-    const agent = await this.mutateAgent(actor, id, (a) => this.assertEditable(actor, a), (a) => {
-      a.persona = persona;
+  /**
+   * Role and skills are taken from the stored persona unless this write is an authorised reshape,
+   * and `stored` fields likewise, so a slow refine or an older snapshot can't revert the creator's
+   * newer choice. With no chosen voice, presentation picks the default voice everyone hears, so
+   * changing it is a voice change: creator only while forming, audited as agent.voice.
+   */
+  private async savePersona(actor: Member, id: string, persona: PersonaSpec, o: { reshape?: boolean; stored?: Array<keyof PersonaSpec> } = {}): Promise<AgentView> {
+    let voiceMoved = false;
+    const check = (a: Agent) => this.assertEditable(actor, a) && (!o.reshape || this.assertShapeable(actor, a));
+    const agent = await this.mutateAgent(actor, id, check, (a) => {
+      const next = withStoredFields(persona, a.persona, [...(o.reshape ? [] : LIBRARY_FIELDS), ...(o.stored ?? [])]);
+      voiceMoved = !a.voice && next.presentation !== a.persona.presentation;
+      if (voiceMoved) this.assertShapeable(actor, a);
+      a.persona = next;
       if (a.status === 'active') a.identityVersion += 1;
       return { ...a };
     }, 'This personality can no longer be changed.');
+    // Content-free: only that the default voice moved with the presentation.
+    if (voiceMoved) await this.deps.store.audit({ actor: actor.telegramId, action: 'agent.voice', target: id, detail: 'presentation' });
     if (agent.status === 'active') await this.configureBotProfile(agent).catch(() => logTelegramDiagnostic(this.log, 'profile_edit_failed'));
     return this.present(agent, actor);
   }
@@ -809,17 +885,20 @@ export class Studio {
 
   async designVoices(actor: Member, id: string, description?: string): Promise<AgentView> {
     if (!this.deps.eleven) throw new StudioError(503, 'Voice design needs ELEVENLABS_API_KEY.');
-    const agent = await this.requireEditable(actor, id);
-    if (agent.status !== 'draft') throw forbidden('The voice is chosen before publishing.');
+    // While forming, not only as a draft: the creator may redesign the voice until the lock.
+    const agent = await this.requireShapeable(actor, id);
     const brief = (description ?? agent.persona.voiceBrief).slice(0, 1000);
     const previews = await this.deps.eleven.designVoices(brief);
     const saved = await Promise.all(previews.slice(0, 3).map(async (p) => ({
       generatedVoiceId: p.generatedVoiceId,
       file: await this.deps.store.saveMedia(`vp-${id}-${randomUUID().slice(0, 8)}.mp3`, p.audio),
     })));
-    const updated = await this.mutateAgent(actor, id, (a) => canEditPersona(actor, a, this.now()), (a) => {
+    const updated = await this.mutateAgent(actor, id, (a) => this.assertShapeable(actor, a), (a) => {
       a.voicePreviews = saved;
-      if (description) a.persona = { ...a.persona, voiceBrief: brief };
+      if (description && brief !== a.persona.voiceBrief) {
+        a.persona = { ...a.persona, voiceBrief: brief };
+        if (a.status === 'active') a.identityVersion += 1;
+      }
       return { ...a };
     });
     return this.present(updated, actor);
@@ -827,14 +906,12 @@ export class Studio {
 
   async chooseDesignedVoice(actor: Member, id: string, generatedVoiceId: string): Promise<AgentView> {
     if (!this.deps.eleven) throw new StudioError(503, 'Voice design needs ELEVENLABS_API_KEY.');
-    const agent = await this.requireEditable(actor, id);
+    const agent = await this.requireShapeable(actor, id);
     if (!(agent.voicePreviews ?? []).some((p) => p.generatedVoiceId === generatedVoiceId)) throw bad('Unknown voice preview');
+    // Choosing the voice already in use changes nothing (no new ElevenLabs voice, audit or identity bump).
+    if (agent.voice?.source === 'design' && agent.voice.sourceId === generatedVoiceId) return this.present(agent, actor);
     const voiceId = await this.deps.eleven.saveDesignedVoice(generatedVoiceId, `${this.deps.orgName} ${agent.persona.name} ${agent.id}`, agent.persona.voiceBrief);
-    const updated = await this.mutateAgent(actor, id, (a) => canEditPersona(actor, a, this.now()), (a) => {
-      a.voice = { provider: 'elevenlabs', voiceId, label: `Designed voice · ${a.persona.accent || 'custom'}`, source: 'design', sourceId: generatedVoiceId };
-      return { ...a };
-    });
-    return this.present(updated, actor);
+    return this.saveVoice(actor, id, { provider: 'elevenlabs', voiceId, label: `Designed voice · ${agent.persona.accent || 'custom'}`, source: 'design', sourceId: generatedVoiceId });
   }
 
   async searchVoices(actor: Member, filters: { gender?: string; age?: string; accent?: string; language?: string; search?: string; category?: string }): Promise<LibraryVoice[]> {
@@ -851,29 +928,39 @@ export class Studio {
 
   async chooseDefaultVoice(actor: Member, id: string, voiceId: string): Promise<AgentView> {
     if (!this.deps.eleven) throw new StudioError(503, 'Voices are unavailable on this server.');
-    await this.requireEditable(actor, id);
+    const agent = await this.requireShapeable(actor, id);
+    if (agent.voice?.source === 'default' && agent.voice.voiceId === voiceId) return this.present(agent, actor);
     const options = await this.deps.eleven.getVoiceOptions();
     const voice = options.defaultVoices.find((v) => v.voiceId === voiceId);
     if (!voice) throw bad('Choose a built-in voice from the list.');
-    const updated = await this.mutateAgent(actor, id, (a) => canEditPersona(actor, a, this.now()), (a) => {
-      a.voice = { provider: 'elevenlabs', voiceId: voice.voiceId, label: `${voice.name} · built-in`, source: 'default' };
-      return { ...a };
-    });
-    return this.present(updated, actor);
+    return this.saveVoice(actor, id, { provider: 'elevenlabs', voiceId: voice.voiceId, label: `${voice.name} · built-in`, source: 'default' });
   }
 
   async chooseLibraryVoice(actor: Member, id: string, v: { publicOwnerId: string; voiceId: string; name: string }): Promise<AgentView> {
     if (!this.deps.eleven) throw new StudioError(503, 'The voice library needs ELEVENLABS_API_KEY.');
-    await this.requireEditable(actor, id);
+    const agent = await this.requireShapeable(actor, id);
+    // The library voice already in use: adding it again would take another ElevenLabs voice slot.
+    if (agent.voice?.source === 'library' && agent.voice.sourceId === v.voiceId) return this.present(agent, actor);
     const options = await this.deps.eleven.getVoiceOptions();
     if (!options.libraryAllowed) throw new StudioError(options.tier === 'free' ? 402 : 503, options.tier === 'free'
       ? 'Voice library voices require a paid ElevenLabs plan for API use. Choose a built-in voice or upgrade the server’s ElevenLabs subscription.'
       : 'The server’s ElevenLabs subscription could not be checked. Try again before choosing a library voice.');
     const voiceId = await this.deps.eleven.addLibraryVoice(v.publicOwnerId, v.voiceId, `${this.deps.orgName} ${v.name}`.slice(0, 60));
-    const updated = await this.mutateAgent(actor, id, (a) => canEditPersona(actor, a, this.now()), (a) => {
-      a.voice = { provider: 'elevenlabs', voiceId, label: `${v.name} · voice library`, source: 'library', sourceId: v.voiceId };
+    return this.saveVoice(actor, id, { provider: 'elevenlabs', voiceId, label: `${v.name} · voice library`, source: 'library', sourceId: v.voiceId });
+  }
+
+  /**
+   * One voice for everyone. Re-checked inside the write (the lock may pass while ElevenLabs answers);
+   * a live agent's identity version moves so the next reply, voice note and call use the new voice.
+   */
+  private async saveVoice(actor: Member, id: string, voice: NonNullable<Agent['voice']>): Promise<AgentView> {
+    const updated = await this.mutateAgent(actor, id, (a) => this.assertShapeable(actor, a), (a) => {
+      a.voice = voice;
+      if (a.status === 'active') a.identityVersion += 1;
       return { ...a };
     });
+    // Content-free: where the voice came from, never its name or id.
+    await this.deps.store.audit({ actor: actor.telegramId, action: 'agent.voice', target: id, detail: voice.source });
     return this.present(updated, actor);
   }
 
@@ -1220,21 +1307,21 @@ export class Studio {
 
   async setAccess(actor: Member, id: string, access: 'everyone' | number[]): Promise<AgentView> {
     if (access !== 'everyone' && (!Array.isArray(access) || access.some((x) => !Number.isInteger(x)))) throw bad('Invalid access list');
-    const agent = await this.mutateAgent(actor, id, (a) => canManageAccess(actor, a), (a) => { advanceLearningAuthority(a); a.access = access; return { ...a }; });
+    const agent = await this.mutateAgent(actor, id, (a) => this.assertManageable(actor, a), (a) => { advanceLearningAuthority(a); a.access = access; return { ...a }; });
     this.deps.preferenceLearning?.tasks.cancelAgent(id);
     await this.deps.relationships?.invalidatePersona(id, { reason: 'access_changed' });
     return this.present(agent, actor);
   }
 
   async setLiveWeb(actor: Member, id: string, on: boolean): Promise<AgentView> {
-    const agent = await this.mutateAgent(actor, id, (a) => canManageAccess(actor, a), (a) => { a.liveWeb = on; return { ...a }; });
+    const agent = await this.mutateAgent(actor, id, (a) => this.assertManageable(actor, a), (a) => { a.liveWeb = on; return { ...a }; });
     await this.deps.store.audit({ actor: actor.telegramId, action: 'agent.live-web', target: id, detail: on ? 'on' : 'off' });
     return this.present(agent, actor);
   }
 
   /** Circles S4: the owner says this bot's Main Mini App is set in BotFather; its group cards then open the pet directly. */
   async setMainMiniApp(actor: Member, id: string, on: boolean): Promise<AgentView> {
-    const agent = await this.mutateAgent(actor, id, (a) => canManageAccess(actor, a), (a) => { if (on) a.mainMiniApp = true; else delete a.mainMiniApp; return { ...a }; });
+    const agent = await this.mutateAgent(actor, id, (a) => this.assertManageable(actor, a), (a) => { if (on) a.mainMiniApp = true; else delete a.mainMiniApp; return { ...a }; });
     await this.deps.store.audit({ actor: actor.telegramId, action: 'agent.main-mini-app', target: id, detail: on ? 'on' : 'off' });
     return this.present(agent, actor);
   }
@@ -1245,14 +1332,14 @@ export class Studio {
       throw bad('Choose mentions, balanced or active and whether to remember group facts.');
     }
     const behavior: GroupBehavior = { participation: value.participation!, remember: value.remember };
-    const agent = await this.mutateAgent(actor, id, (a) => canManageAccess(actor, a), (a) => { advanceLearningAuthority(a); a.groupBehavior = behavior; return { ...a }; });
+    const agent = await this.mutateAgent(actor, id, (a) => this.assertManageable(actor, a), (a) => { advanceLearningAuthority(a); a.groupBehavior = behavior; return { ...a }; });
     await this.deps.store.audit({ actor: actor.telegramId, action: 'agent.group-behavior', target: id, detail: JSON.stringify(behavior) });
     return this.present(agent, actor);
   }
 
   async setVisibility(actor: Member, id: string, visibility: AgentVisibility): Promise<AgentView> {
     if (!VISIBILITIES.includes(visibility)) throw bad('Choose private, org or public.');
-    const agent = await this.mutateAgent(actor, id, (a) => canManageAccess(actor, a), (a) => {
+    const agent = await this.mutateAgent(actor, id, (a) => this.assertManageable(actor, a), (a) => {
       advanceLearningAuthority(a); a.visibility = visibility;
       if (a.access === 'everyone') a.access = [];
       return { ...a };
@@ -1264,7 +1351,7 @@ export class Studio {
   }
 
   async unblock(actor: Member, id: string, telegramId: number): Promise<AgentView> {
-    const agent = await this.mutateAgent(actor, id, (a) => canManageAccess(actor, a), (a) => {
+    const agent = await this.mutateAgent(actor, id, (a) => this.assertManageable(actor, a), (a) => {
       advanceLearningAuthority(a); a.blocked = (a.blocked ?? []).filter((x) => x !== telegramId);
       return { ...a };
     });

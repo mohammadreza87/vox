@@ -9,6 +9,7 @@ import { RightsOperationsPanel } from '../../RightsOperationsPanel';
 import { VoiceRecognitionPanel } from '../../VoiceRecognitionPanel';
 import { Empty } from '../../ui';
 import { ConnectionsScreen } from '../Connections';
+import { AgentSettingsScreen } from './AgentSettings';
 import { ConnectionDetailPage } from './ConnectionDetail';
 import { InboxPage, PreferencesPage, RemindersPage } from './ExperiencePages';
 import { SettingsPage, SpaceBar } from './kit';
@@ -16,7 +17,7 @@ import { SettingsPage, SpaceBar } from './kit';
 const TITLE: Record<Page, [string, string]> = {
   preferences: ['Preferences', 'ترجیح‌ها'], inbox: ['Inbox', 'صندوق اعلان'], reminders: ['Reminders', 'یادآورها'], diagnostics: ['Diagnostics', 'عیب‌یابی'],
   requests: ['Privacy requests', 'درخواست‌های حریم خصوصی'], connection: ['Connection', 'اتصال'], 'voice-recognition': ['Voice recognition', 'تشخیص صدا'],
-  'agent-access': ['Agent access', 'دسترسی عامل‌ها'],
+  'agent-access': ['Agent access', 'دسترسی عامل‌ها'], 'agent-connections': ['Connectors & plugins', 'اتصال‌ها و افزونه‌ها'], agent: ['Settings', 'تنظیمات'],
 };
 
 /** One route for every settings page under You; pages are added here without touching StudioApp. */
@@ -30,7 +31,12 @@ export function SettingsRouter({ page, params }: { page: Page; params?: Record<s
     case 'inbox': return <InboxPage />;
     case 'reminders': return <RemindersPage notificationId={params?.notificationId} />;
     case 'connection': return params?.connectionId ? <ConnectionDetailPage connectionId={params.connectionId} agentId={params.agentId} /> : <ConnectionsScreen onBack={nav.back} agentId={params?.agentId} />;
-    case 'agent-access': return <ConnectionsScreen onBack={nav.back} agentId={params?.agentId} />;
+    // `agent-access` is the old name of `agent-connections` (it always opened connectors); old links keep working.
+    case 'agent-access':
+    case 'agent-connections': return <ConnectionsScreen onBack={nav.back} agentId={params?.agentId} view={params?.view === 'activity' ? 'activity' : undefined} />;
+    case 'agent': return nav.me.features?.settingsV2 && params?.agentId
+      ? <AgentSettingsScreen agentId={params.agentId} section={params.section} from={params.from} />
+      : <SettingsPage title={title}><Empty title={fa ? 'تنظیمات هنوز اینجا در دسترس نیست.' : 'Settings aren’t available here yet.'} /></SettingsPage>;
     case 'voice-recognition': return <SettingsPage title={title}><VoiceRecognitionPanel key={nav.space} space={nav.space} locale={nav.locale} /></SettingsPage>;
     default: break;
   }

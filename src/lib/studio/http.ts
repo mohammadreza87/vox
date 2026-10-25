@@ -139,6 +139,8 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
       return json({ member: me, org: studio.deps.orgName, bot: studio.deps.managerUsername, features: {
         avatars: !!studio.deps.openai, voices: !!studio.deps.eleven, calls: !!studio.deps.openai || !!studio.deps.eleven, liveCalls: studio.liveCalls, legacyMemorySharing: !studio.deps.adaptive,
         skillRouting: studio.deps.decider ? 'decisions' : 'local',
+        // Settings v2 (agent settings hub, regrouped You tab, Telegram CloudStorage prefs); read per request, default off.
+        settingsV2: process.env.STUDIO_SETTINGS_V2 === '1',
       } });
     }
     if (me.role === 'pending') throw new StudioError(403, 'Waiting for an admin to approve you.');

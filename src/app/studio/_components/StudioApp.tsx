@@ -3,7 +3,8 @@
 import { AnimatePresence, MotionConfig, motion, useIsPresent } from 'framer-motion';
 import { createContext, forwardRef, useCallback, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api, ApiError, haptic, initTelegram, tg, type AgentView, type Me } from '../_lib/client';
-import { dirOf, initialLocale, persistLocale, type Dir, type Locale } from '../_lib/i18n';
+import { syncCloudPrefs, writeCloudPref } from '../_lib/cloud-prefs';
+import { dirOf, initialLocale, LOCALE_KEY, LOCALES, persistLocale, type Dir, type Locale } from '../_lib/i18n';
 import { COVER_ROUTES, detectTier, kindFor, screenVariants, SPRING, TAB_ROUTES, type MotionTier, type NavCtx, type NavKind } from '../_lib/motion';
 import { Cloud } from './Cloud';
 import { ConfirmProvider, SheetHostContext, Spinner, UiLocaleProvider } from './ui';
@@ -48,7 +49,11 @@ export type Route =
   | { name: 'channels'; id: string }
   | { name: 'settings'; page: SettingsPage; params?: Record<string, string> };
 
-export type SettingsPage = 'preferences' | 'inbox' | 'reminders' | 'diagnostics' | 'requests' | 'connection' | 'voice-recognition' | 'agent-access';
+/**
+ * `agent` (Settings v2) is one agent's settings hub, params { agentId, section? }. `agent-connections` is that
+ * agent's connectors; `agent-access` is its old name, kept so existing links still land there.
+ */
+export type SettingsPage = 'preferences' | 'inbox' | 'reminders' | 'diagnostics' | 'requests' | 'connection' | 'voice-recognition' | 'agent-access' | 'agent-connections' | 'agent';
 export type { Locale };
 export type Space = 'work' | 'personal';
 
@@ -159,6 +164,9 @@ export function StudioApp() {
   const dir = dirOf(locale);
   const cache = useRef(new Map<string, AgentView>()).current;
   const notificationOpened = useRef(false);
+  /* ---- Settings v2: language and space also travel in Telegram CloudStorage ---- */
+  const cloudPrefs = useRef(false);
+  const [prefsReady, setPrefsReady] = useState(false);
 
   /* ---- unsaved-correction guard (Privacy owns the token) ---- */
   const correctionOwner = useRef<string | null>(null);
@@ -193,6 +201,26 @@ export function StudioApp() {
     initTelegram();
     void loadMe();
   }, [loadMe]);
+
+  // localStorage rendered the splash; with Settings v2 the travelling copy wins once, before the app shows,
+  // so a choice made on another device never flickers in. A choice made only on this device (before the
+  // flag, or offline) is copied up when the travelling copy has none. Flag off: CloudStorage is never
+  // touched and the app shows in the same render `me` arrives, as before.
+  const settingsV2 = me?.features?.settingsV2 === true;
+  const appReady = !!me && (!settingsV2 || prefsReady);
+  useEffect(() => {
+    if (!me || !settingsV2 || prefsReady) return;
+    let cancelled = false;
+    const local = { locale: stored<Locale>(LOCALE_KEY, LOCALES) ?? undefined, space: stored<Space>('vx:space', ['work', 'personal']) ?? undefined };
+    void syncCloudPrefs(local).then((prefs) => {
+      if (cancelled) return;
+      cloudPrefs.current = true;
+      if (prefs.locale) { setLocaleState(prefs.locale); persistLocale(prefs.locale); }
+      if (prefs.space) { setSpaceState(prefs.space); store('vx:space', prefs.space); }
+      setPrefsReady(true);
+    });
+    return () => { cancelled = true; };
+  }, [me, settingsV2, prefsReady]);
 
   /* ---- background pause (P8): CSS loops stop via .vx[data-paused], without re-rendering the app ---- */
   const rootRef = useRef<HTMLDivElement>(null);
@@ -324,8 +352,8 @@ export function StudioApp() {
     commit(next, k, next.map((_, i) => (i === next.length - 1 ? k.kind : i === 0 ? 'replace' : 'push')));
   }, [commit, currentScreen, heroReady, reduced, scrollMemory]);
 
-  const setLocale = useCallback((l: Locale) => { setLocaleState(l); persistLocale(l); }, []);
-  const setSpace = useCallback((s: Space) => { setSpaceState(s); store('vx:space', s); }, []);
+  const setLocale = useCallback((l: Locale) => { setLocaleState(l); persistLocale(l); if (cloudPrefs.current) writeCloudPref('locale', l); }, []);
+  const setSpace = useCallback((s: Space) => { setSpaceState(s); store('vx:space', s); if (cloudPrefs.current) writeCloudPref('space', s); }, []);
   const toast = useCallback((message: string, tone: 'info' | 'error' = 'info') => showSnack({ message, tone }), [showSnack]);
 
   const nav = useMemo<Nav | null>(() => me && {
@@ -334,7 +362,7 @@ export function StudioApp() {
   }, [me, loadMe, push, back, reset, toast, showSnack, locale, dir, setLocale, space, setSpace, cache, tier, guardBack, consumeBack]);
 
   useEffect(() => {
-    if (!me || me.member.role === 'pending' || notificationOpened.current) return;
+    if (!me || !appReady || me.member.role === 'pending' || notificationOpened.current) return;
     notificationOpened.current = true;
     const url = new URL(window.location.href);
     const notificationId = url.searchParams.get('notification');
@@ -347,7 +375,7 @@ export function StudioApp() {
       url.searchParams.delete('notification');
       window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
     }
-  }, [me, commit]);
+  }, [me, appReady, commit]);
 
   // Telegram's native back button mirrors the in-app stack and pops with the same transition.
   useEffect(() => {
@@ -360,7 +388,7 @@ export function StudioApp() {
   }, [stack.length, syncBackButton]);
 
   // Telegram's ⋯ menu "Settings" opens You (D14).
-  const ready = !!me && me.member.role !== 'pending';
+  const ready = appReady && me.member.role !== 'pending';
   useEffect(() => {
     const settings = shell()?.SettingsButton;
     if (!ready || !settings) return;
@@ -393,7 +421,7 @@ export function StudioApp() {
       </div>
     );
   }
-  if (!me || !nav) {
+  if (!me || !nav || !appReady) {
     return (
       <div className="vx" {...shellProps} style={{ alignItems: 'center', justifyContent: 'center', padding: 24, gap: 14 }}>
         {/* layoutId face-vox-logo: the splash cloud flies into the Home header logo when the app arrives */}

@@ -120,7 +120,9 @@ export interface Me {
   member: Member;
   org: string;
   bot: string;
-  features: { avatars: boolean; voices: boolean; calls: boolean; liveCalls?: boolean; legacyMemorySharing?: boolean; skillRouting?: 'decisions' | 'local' };
+  features: { avatars: boolean; voices: boolean; calls: boolean; liveCalls?: boolean; legacyMemorySharing?: boolean; skillRouting?: 'decisions' | 'local';
+    /** STUDIO_SETTINGS_V2=1: the agent settings hub, the regrouped You tab and Telegram CloudStorage prefs */
+    settingsV2?: boolean };
 }
 
 export interface MemoryItem { id: string; content: string; type: string; scope: string; scopeLabel: string; from: string; mine: boolean; at: string; sensitivity: string }

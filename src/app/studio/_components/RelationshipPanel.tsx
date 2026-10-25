@@ -11,8 +11,13 @@ import { LiveSheet } from './screens/settings/kit';
 type UseBoundary = Readonly<{ scope: string; accountId?: string; useEpoch: number | null | undefined; blocked: boolean; phase: string | undefined }>;
 type Props = { agentId: string; name: string; space?: RelationshipSpace; locale?: 'en' | 'fa'; identityConfirmed?: boolean;
   /** inline: the controls in place (settings pages). row: one "Staying in touch" row that opens them in a sheet (Memories). */
-  presentation?: 'inline' | 'row' };
-export function RelationshipPanel({ agentId, name, space = 'work', locale = 'en', identityConfirmed = false, presentation = 'inline' }: Props) {
+  presentation?: 'inline' | 'row';
+  /** Settings v2 splits the panel: check-ins on the agent's Permissions page, the Telegram alert on its Notifications page. */
+  part?: 'all' | 'checkins' | 'alerts';
+  /** Say under the alert switch that it covers every agent in this space (it is stored per space, not per agent).
+   *  part 'alerts' already says so in its heading, so the note is left out there. */
+  allAgentsNote?: boolean };
+export function RelationshipPanel({ agentId, name, space = 'work', locale = 'en', identityConfirmed = false, presentation = 'inline', part = 'all', allAgentsNote = false }: Props) {
   const headingId = useId();
   const [open, setOpen] = useState(false);
   const session = tg()?.initData ?? '';
@@ -104,8 +109,10 @@ export function RelationshipPanel({ agentId, name, space = 'work', locale = 'en'
   const body = <section className="vx-rel" dir={fa ? 'rtl' : 'ltr'} lang={fa ? 'fa' : 'en'} aria-labelledby={headingId} aria-busy={busy || loading}>
     <div className="vx-rel-head">
       <div className="vx-rel-title">
-        <h2 id={headingId} className="vx-title-m">{t('Staying in touch', 'در ارتباط ماندن')}</h2>
-        <p className="vx-small vx-2">{t(`Manage ${name}’s follow-ups and private check-ins in your ${space} space.`, `پیگیری‌ها و بررسی‌های خصوصی ${name} را در فضای ${space === 'work' ? 'کاری' : 'شخصی'} مدیریت کنید.`)}</p>
+        <h2 id={headingId} className="vx-title-m">{part === 'alerts' ? t('Check-in alerts', 'اعلان بررسی‌ها') : t('Staying in touch', 'در ارتباط ماندن')}</h2>
+        <p className="vx-small vx-2">{part === 'alerts'
+          ? t(`One switch for every agent in your ${space} space, ${name} included.`, `یک کلید برای همهٔ عامل‌های فضای ${space === 'work' ? 'کاری' : 'شخصی'} شما، از جمله ${name}.`)
+          : t(`Manage ${name}’s follow-ups and private check-ins in your ${space} space.`, `پیگیری‌ها و بررسی‌های خصوصی ${name} را در فضای ${space === 'work' ? 'کاری' : 'شخصی'} مدیریت کنید.`)}</p>
       </div>
       <button type="button" className="vx-icon-btn" aria-label={t('Refresh relationship settings', 'تازه‌سازی تنظیمات ارتباط')} disabled={busy || loading} onClick={() => void load()}>
         {loading ? <Spinner size={18} /> : <Icon name="refresh" size={20} />}</button>
@@ -113,18 +120,20 @@ export function RelationshipPanel({ agentId, name, space = 'work', locale = 'en'
     {!value && !error && <p className="vx-footnote" role="status">{t('Loading relationship settings…', 'در حال دریافت تنظیمات ارتباط…')}</p>}
     {error && <Banner tone="danger">{error}</Banner>}
     {value && <>
-      <div className="vx-section">
+      {part !== 'alerts' && <div className="vx-section">
         <Seg label={t('Follow-ups', 'پیگیری‌ها')} value={mode} disabled={busy} onChange={choose}
           options={[{ value: 'active', label: modeLabel.active }, { value: 'paused', label: paused ? modeLabel.paused : t('Pause 7 days', 'مکث ۷ روزه') }, { value: 'off', label: modeLabel.off }]} />
         <p className="vx-section-foot"><span role="status">{!available ? t('Follow-ups are unavailable in this space. You can still pause, stop, or clear existing context.', 'پیگیری در این فضا در دسترس نیست. همچنان می‌توانید آن را متوقف یا مکث کنید یا زمینهٔ موجود را پاک کنید.') : paused ? t('Follow-ups are paused.', 'پیگیری‌ها مکث شده‌اند.') : stopped ? t('Follow-ups are stopped.', 'پیگیری‌ها متوقف شده‌اند.') : t('Follow-ups are available for useful open conversations.', 'پیگیری برای گفتگوهای باز و مفید در دسترس است.')}</span>
           {' '}<span>{t('Resuming does not grant memory or notification permissions.', 'ازسرگیری، مجوز حافظه یا اعلان را فعال نمی‌کند.')}</span></p>
         {value.mode === 'off' && <p className="vx-section-foot">{t('Relationship features are currently unavailable. Review the settings in You for prerequisites.', 'ویژگی‌های ارتباطی اکنون در دسترس نیستند. پیش‌نیازها را در تنظیمات بخش «شما» ببینید.')}</p>}
-      </div>
-      <Section foot={blocked ? pauseReason : undefined}>
+      </div>}
+      {part !== 'checkins' && <Section foot={blocked ? pauseReason : undefined}>
         <Switch checked={value.externalEnabled} disabled={busy || (blocked || !value.externalAvailable) && !value.externalEnabled}
-          label={t('Generic Telegram alerts', 'اعلان عمومی تلگرام')} sub={t('Alerts say that a check-in is ready. They never include conversation content.', 'اعلان فقط می‌گوید بررسی آماده است و هرگز محتوای گفتگو را شامل نمی‌شود.')}
+          label={t('Generic Telegram alerts', 'اعلان عمومی تلگرام')} sub={<>{t('Alerts say that a check-in is ready. They never include conversation content.', 'اعلان فقط می‌گوید بررسی آماده است و هرگز محتوای گفتگو را شامل نمی‌شود.')}
+            {allAgentsNote && part !== 'alerts' && <> {t(`This applies to every agent in your ${space} space, not only ${name}.`, `این برای همهٔ عامل‌های فضای ${space === 'work' ? 'کاری' : 'شخصی'} شماست، نه فقط ${name}.`)}</>}</>}
           onChange={enabled => void update({ action: 'external', enabled })} />
-      </Section>
+      </Section>}
+      {part !== 'alerts' && <>
       <Section title={t('Communication preferences', 'ترجیح‌های ارتباطی')}>
         {value.preferences.length ? value.preferences.map((p, i) => <Row key={`${p.key}-${i}`} plain title={<span dir="auto">{p.value}</span>} />)
           : <Row plain title={<span className="vx-2">{t('No preferences saved.', 'ترجیحی ذخیره نشده است.')}</span>} />}
@@ -155,6 +164,7 @@ export function RelationshipPanel({ agentId, name, space = 'work', locale = 'en'
             <button type="button" className="vx-btn vx-btn-danger" disabled={busy} onClick={() => void update({ action: 'forget' })}>{t('Clear context', 'پاک کردن زمینه')}</button>
           </div>
         </div>}
+      </>}
     </>}
   </section>;
   if (presentation === 'inline') return body;
