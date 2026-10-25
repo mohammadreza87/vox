@@ -1,3 +1,7 @@
+> **Historical record.** This file records the develop-based branch `agent-intelligence-wave-a` (`7a9bd38`). The
+> integration of wave A onto main, which the team deploys from, is recorded in [WAVE_A_ON_MAIN.md](WAVE_A_ON_MAIN.md)
+> (summary) and [WAVE_A_MAIN_INTEGRATION.md](WAVE_A_MAIN_INTEGRATION.md) (per-step detail).
+
 # Wave A integration (agent intelligence, 22 Oct 2026)
 
 Branch `agent-intelligence-wave-a`, built in the worktree `$TMPDIR/vox-wave-a`. It is not pushed.

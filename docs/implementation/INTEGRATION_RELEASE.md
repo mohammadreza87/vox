@@ -4,7 +4,7 @@ This release combines the adaptive foundation (`dd1b317`), the Mac Studio voice/
 
 ## Agent intelligence wave A
 
-Branch `agent-intelligence-wave-a-main` merges the QA-hardened wave A steps of [the agent intelligence plan](../AGENT_INTELLIGENCE_SOLUTION.md) onto this release line, one step at a time. Every step flag defaults to off. The merge record, with each conflict resolution, every main-lineage test that was not kept and every re-derived golden, is [WAVE_A_MAIN_INTEGRATION.md](agent-intelligence/WAVE_A_MAIN_INTEGRATION.md); wave A's own record is [WAVE_A_INTEGRATION.md](agent-intelligence/WAVE_A_INTEGRATION.md).
+Branch `agent-intelligence-wave-a-main` merges the QA-hardened wave A steps of [the agent intelligence plan](../AGENT_INTELLIGENCE_SOLUTION.md) onto this release line, one step at a time. Every step flag defaults to off. The summary record (chosen side per module, verifier findings, results, flag matrix, deployment prerequisites and product decisions) is [WAVE_A_ON_MAIN.md](agent-intelligence/WAVE_A_ON_MAIN.md). The merge record, with each conflict resolution, every main-lineage test that was not kept and every re-derived golden, is [WAVE_A_MAIN_INTEGRATION.md](agent-intelligence/WAVE_A_MAIN_INTEGRATION.md); wave A's own record is [WAVE_A_INTEGRATION.md](agent-intelligence/WAVE_A_INTEGRATION.md).
 
 ## Runtime behavior
 
