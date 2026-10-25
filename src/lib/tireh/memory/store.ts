@@ -16,6 +16,11 @@ export class StaleMemoryWriteError extends Error {
   constructor() { super('Memory context was invalidated'); this.name = 'StaleMemoryWriteError'; }
 }
 
+/** Structural check: Studio route bundles carry their own copy of this class, so instanceof alone is not reliable. */
+export function isStaleMemoryWriteError(error: unknown): boolean {
+  return error instanceof StaleMemoryWriteError || (error as { name?: unknown } | null)?.name === 'StaleMemoryWriteError';
+}
+
 /** A correction must replace one still-active memory owned by the same source. */
 export function assertReplacementTarget(memory: NewMemory, target: MemoryRecord | null | undefined): asserts target is MemoryRecord {
   if (!target || target.id !== memory.supersedes || target.personaId !== memory.personaId ||

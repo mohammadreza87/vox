@@ -539,3 +539,81 @@ still withholds shared context" (the real `ProductPauseService` on `ManagedFileV
   transfer" (as recorded in WAVE_A_INTEGRATION.md; wave A's `05a4520` pins the flag unset and arrives with TAIL).
   Environment: `guest-rights-http` (10). Load: `prepared-conversation-qualification` and circles-group "review fixes:
   closing, erasure, cards > forget me leaves no trace of the requester", both passing alone with the flags set.
+
+### Fix-ups from the S08 verifier (landed with the S11L merge)
+
+- `inheritMemories` (`src/lib/studio/service.ts`) no longer uses `instanceof StaleMemoryWriteError` (QA F135). A shared
+  structural helper `isStaleMemoryWriteError(e)` in `src/lib/tireh/memory/store.ts` matches the class or the name, and
+  `audit/memory-decorator.ts` `errorOutcome` uses it too. A tombstoned lineage whose error comes from another bundle
+  copy is skipped again instead of failing the hire after the agent is marked active. New sharing-v2 case: "skips a
+  tombstoned lineage whose StaleMemoryWriteError comes from another bundle copy (structural check)".
+- `resnapshotGroupMemory` writes one `vox_audit` row per `MAX_AUDIT_IDS` (200) ids per agent, as main's parent did. The
+  audit store keeps at most 200 ids per row and drops the rest without an error, so a re-snapshot over more than 200
+  records per agent used to leave widened records out of the 'applied' trail. New sharing-v2 case: "with
+  TIREH_AUDIT_LOG=1 splits an applied re-snapshot over more than MAX_AUDIT_IDS records into batches and loses no id"
+  (201 records, two 'applied' rows, union equals all ids). The rows still carry no `policyKey` or `chatKeyHash`.
+
+## S11L: voiceprint library (wave A `17ddf29`, aiq/voice-lib-r2 `ca7c27c`)
+
+Superset step: main merged the first run (`ef3c8b3` via `7093ee7`); wave A's r2 continues it. After `7093ee7` main
+changed only `voice.ts` and added `voiceprint-authority-races.test.ts` (`8a7dc55`), wired the local voice engine
+mutually exclusive with voiceprints in `runtime.ts` (`c2c0bee`) and restyled the EnrollScreen consent checkbox
+(`9e14d6f`). Everything else (identity/*, the voiceprint tests, http.ts, service.ts, the S11L docs) auto-merged to
+wave A's r2, with main's Circles, Pet and channel routes in `http.ts` unchanged.
+
+### Resolution
+
+| File | Resolution |
+| --- | --- |
+| `src/lib/studio/identity/voice.ts` (conflict) | Wave A's r2 file (fingerprinted authority, track/abortInflight, selfEcho.templates, after-put recheck) with main's `8a7dc55` fence ported: a pure `decide()` over the direct authority controls shared by the transactional `authority()` and a new synchronous `authorityNow(telegramId, space, fingerprint, agentId?)` on `adaptive.readDirectAuthorityForEffect`. It is true only for status 'ready', the same fingerprint and `allowedVerify` (with an agent) or `allowedEnroll`. Called before `cipher.open` and at the start of each `untilAborted` export callback (before `speech.measure`, `provider.voiceprint`, `provider.identify`). Failure: `NO_OPINION('consent_missing')` in verify, `VoiceprintError(409, 'consent_changed')` in enroll. The adaptive Pick now includes `readDirectAuthorityForEffect`. The fingerprint carries the permission's `lastEventId` instead of the verified grant's event id (equal whenever a grant exists), so it can be computed from the evidence-free direct controls. |
+| `src/lib/studio/__tests__/voiceprint-authority-races.test.ts` | Main's three assertions ported to wave A's fixtures (`selfEcho.templates` spy for `ensureEchoTemplates`/`listEcho`, `store.get` for the awaited lookup, `consent('work', 'withdrawn')`), each run with the chained invalidator and with the fence alone, plus "does not upload a voice note after consent is withdrawn during the echo lookup" (the listed risk) and a no-false-deny case. Without the fence 5 of the 10 cases fail. |
+| `src/lib/studio/runtime.ts` (conflict) | Main's header (Circles, S11L; the thresholds line corrected to wave A's `{match,noMatch,selfEcho,channels?}`), main's `localVoiceIdentityOptions` and `VoiceIdentityService(..., localVoice.options)`, wave A's `createStudioVoiceprints` block with its `Promise.all` invalidator, `sweep` and `warmSelfEcho`. The `STUDIO_DECIDER` header line and the inline ServiceDecider block were already in place from S09. |
+| `src/lib/studio/identity/index.ts` | `createStudioVoiceprints` takes an optional `flags` reader. Needed for the mutual exclusion: wave A's service reads `tirehFlags()` from `process.env`, so the masked `env` alone (`STUDIO_VOICE_RECOGNITION: '0'`) would not have turned it off. `runtime.ts` passes both the masked env and `flags: () => ({ voiceRecognition: false })` when `localVoice.selected`; `warmSelfEcho` runs only when `!localVoice.selected && tirehFlags().voiceRecognition`. New voiceprint-storage case: "a constant-off flag reader (runtime.ts, local voice engine selected) keeps voiceprints off with STUDIO_VOICE_RECOGNITION=1". |
+| `src/app/studio/_components/screens/EnrollScreen.tsx` (conflict) | Wave A's r2 logic and EN/FA copy, with main's `9e14d6f` classes (`vx-privacy-checkbox` label, `vx-privacy-check` input). `npm run check:studio-style` passes. |
+| `src/lib/tireh/gateway.ts` | Main's file with wave A's r2 `voiceVerifier` doc and shadow block shape; `guestAudience` stays `hasGuestAudience(this.deps.org, chat)` (strictly safer; the guest guard returns earlier). The `Promise.all` beside STT is still there; TAIL's `07ecb14` replaces it with fire-and-forget behind `STUDIO_VOICE_SHADOW` (QA F023/F036). |
+
+### Main-lineage tests not kept
+
+Deleted by the r2 lineage (its rewrite of the first run), recorded by name:
+
+- `voiceprint-gateway.test.ts` (git pairs it as a rename with wave A's `voiceprint-guests.test.ts`): "gateway.transcribe
+  shadow voice verification > verifies a private member voice note once, with content-free inputs", "> starts STT and
+  verification concurrently and replies with the transcript unchanged", "> a rejecting verifier produces the same reply
+  as no verifier", "> an addressed group voice note runs STT but never the verifier; a hasGuests group runs neither",
+  "> without a verifier dependency the bot calls match a run without the field", "liveTurn stays untouched > liveTurn
+  and converse never call the verifier", "> the liveTurn source and voice-call.ts contain no voiceprint verification".
+  Wave A's `voiceprint-guests` and `voiceprint-liveturn` cover the gateway and live-turn paths.
+- `voiceprint-net-speech.test.ts` ("opusNetSpeech" > six container-parsing cases): API absent; wave A measures net
+  speech through the provider's `SpeechActivity`.
+- `voiceprint-no-audio.test.ts` ("enroll and verify leave no canary in files, Firestore docs, logs or audit rows"):
+  replaced by wave A's `voiceprint-storage` "no audio, transcript or score is persisted or logged".
+- `voiceprint-store.test.ts` ("AesGcmVoiceprintCipher", "voiceprintCipherFromEnv", "FileVoiceprintStore",
+  "FirestoreVoiceprintStore", "voiceprintConfigFromEnv" groups, 13 cases): API absent (echo rows, `voiceprintConfigFromEnv`,
+  `AesGcmVoiceprintCipher`); wave A's `voiceprint-storage` covers the cipher, key, file and Firestore stores.
+- `voiceprint-gates`, `voiceprint-http`, `voiceprint-verify`, `voiceprint-withdrawal`, `voiceprint-fixtures` and
+  `EnrollScreen.test.tsx`: main's versions were the first run, untouched on main after `7093ee7`; they auto-merged to
+  wave A's r2 rewrites.
+
+### Behaviour change on main
+
+- Voiceprint HTTP: the POST consent statement is `accepted` (was `enroll_my_voice`) and responses are
+  `{ voiceprint: status }`; `unsupported_audio` is gone (wave A refuses through the provider). `VoiceprintStatus` gains
+  `consent`; the reasons are wave A's codes.
+
+### Open issues carried
+
+- Firestore storage with `STUDIO_VOICE_RECOGNITION=1` has no production refusal guard: main's `production` argument to
+  `voiceprintConfigFromEnv` has no counterpart in `createStudioVoiceprints` (QA open item).
+- The local voice engine's `runtime-config.ts` reads `env.STUDIO_VOICE_RECOGNITION` directly (main's code, unchanged).
+
+### Test results
+
+- `npx tsc --noEmit -p tsconfig.json`: clean.
+- Focused suites, flags unset (voiceprint*, EnrollScreen, runtime, runtime-pet-wiring, live-authority-expiry,
+  relationship-turn-fence, VoiceRecognitionPanel): 226/226 across 15 files.
+- `STUDIO_VOICE_RECOGNITION=1` voiceprint suites: 101/101. `npm run check:studio-style`: pass.
+- Privacy core suites plus sharing-v2, audit-decorator and tireh/identity, flags unset: 783/783 across 48 files.
+- `src/lib/studio`, `src/lib/tireh`, `src/app/studio`, `src/lib/adaptive/voice-identity`, flags unset: 18 failed, all
+  environment: `guest-rights-http` (10, mkdtemp /tmp EPERM), `local-provider` (7, unix socket listen EPERM) and
+  `prepared-conversation-qualification` (load timeout; passes alone, as does circles-group "forget me leaves no trace
+  of the requester", which flaked once under load).

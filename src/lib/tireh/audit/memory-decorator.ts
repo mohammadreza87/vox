@@ -29,7 +29,7 @@
 
 import { tirehFlags } from '../flags';
 import { supersedeNoticeRecipients } from '../memory/sharing';
-import { StaleMemoryWriteError, type MemoryStore, type NewMemory, type ShareOfferStore } from '../memory/store';
+import { isStaleMemoryWriteError, type MemoryStore, type NewMemory, type ShareOfferStore } from '../memory/store';
 import type { MemoryRecord, ShareOffer } from '../types';
 import type { SupersededNoticeStore } from './notices';
 import { memoryPolicyKey, type AuditKind, type AuditOutcome, type AuditStore, type NewAuditRow } from './store';
@@ -41,7 +41,7 @@ export const AUDITED_MEMORY_METHODS = ['add', 'addIfEpoch', 'update', 'updateIfS
 export const AUDITED_OFFER_METHODS = ['create', 'setStatus'] as const;
 
 function errorOutcome(error: unknown): AuditOutcome {
-  return error instanceof StaleMemoryWriteError || (error as { name?: unknown } | null)?.name === 'StaleMemoryWriteError' ? 'denied' : 'failed';
+  return isStaleMemoryWriteError(error) ? 'denied' : 'failed';
 }
 
 /** Awaited, never throws: an audit or notice failure never changes a memory result. */

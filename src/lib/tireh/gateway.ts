@@ -165,7 +165,7 @@ export interface GatewayDeps {
   history: ChatHistoryStore;
   deduper: UpdateDeduper;
   voice: VoiceService | null;
-  /** S11L shadow voice verification on 1:1 voice notes; never grants access. */
+  /** S11L: shadow voiceprint verification for 1:1 member voice notes; the verifier checks STUDIO_VOICE_RECOGNITION itself. */
   voiceVerifier?: VoiceNoteVerifier;
   /** Telegram client for a persona's bot */
   botFor(personaId: string): TelegramBotClient;
@@ -1092,13 +1092,12 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
       if (!(await this.groupAllowed(persona, chat, speakerId, 'reply'))) return '';
       const mimeType = message.voice.mime_type ?? 'audio/ogg';
       const stt = timed('stt', () => this.deps.voice!.transcribe(audio, mimeType));
-      const verifier = chat.kind === 'private' ? this.deps.voiceVerifier : undefined;
-      if (!verifier) return await stt;
-      // S11L shadow mode: the band is computed beside STT and discarded. It never grants
-      // access. TODO(S10): pass it to IdentityService.assess, which may only lower identity.
-      // Telegram turns are space 'work' (the boundary default).
-      const [text] = await Promise.all([stt, verifier.verifyVoiceNote({ personaId: persona.id, personId: speakerId, space: 'work', chatKind: 'private',
-        guestAudience: hasGuestAudience(this.deps.org, chat), audio, mimeType, durationSec: message.voice.duration, channel: 'telegram_voice_note' }).catch(() => null)]);
+      const verifier = this.deps.voiceVerifier;
+      if (!verifier || chat.kind !== 'private') return await stt;
+      // The Step 0 guard above already returned for a guest audience; hasGuestAudience is kept as a
+      // strictly safer value (it changes nothing here). Telegram turns are space 'work' (the boundary default).
+      const [text] = await Promise.all([stt, verifier.verifyVoiceNote({ personaId: persona.id, personId: speakerId, space: 'work', chatKind: 'private', guestAudience: hasGuestAudience(this.deps.org, chat), audio, mimeType, durationSec: message.voice.duration, channel: 'telegram_voice_note' }).catch(() => undefined)]);
+      // TODO(S10): hand the VoiceVerification to IdentityService.assess. Shadow mode: discarded; it never grants access.
       return text;
     } catch {
       logTelegramDiagnostic(this.log, 'transcription_failed');

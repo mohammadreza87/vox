@@ -176,23 +176,24 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
       }) });
     }
 
-    // S11L voiceprint enrollment (STUDIO_VOICE_RECOGNITION). Without voiceprints wired this
-    // falls through to the base 404. The template and consent event id never leave the server.
+    // S11L voiceprints (STUDIO_VOICE_RECOGNITION). Only the actor's own row; there is no id path.
+    // Without voiceprints wired (VOICEPRINT_KEY unset) this falls through to the base 404.
     if (root === 'voice-enroll' && !id && studio.deps.voiceprints) {
       const spaceOf = (value: unknown): 'work' | 'personal' => {
         if (value !== 'work' && value !== 'personal') throw new StudioError(400, 'Choose Work or Personal.');
         return value;
       };
-      if (method === 'GET') return json(await studio.voiceprintStatus(me, spaceOf(new URL(req.url).searchParams.get('space') ?? 'work')));
-      if (method === 'DELETE') return json(await studio.deleteVoiceprint(me, spaceOf(new URL(req.url).searchParams.get('space') ?? 'work')));
       if (method === 'POST') {
         const form = await req.formData().catch(() => { throw new StudioError(400, 'Expected audio'); });
         const audio = form.get('audio');
         if (!(audio instanceof Blob)) throw new StudioError(400, 'Expected audio');
-        if (form.get('statement') !== 'enroll_my_voice') throw new StudioError(400, 'Confirm the explicit consent statement first.');
         const space = spaceOf(form.get('space') ?? 'work');
-        return json(await studio.enrollVoice(me, await audio.arrayBuffer(), audio.type || 'audio/webm', space));
+        if (form.get('statement') !== 'accepted') throw new StudioError(400, 'Explicit consent statement required.');
+        return json({ voiceprint: await studio.enrollVoice(me, await audio.arrayBuffer(), audio.type || 'audio/webm', space) });
       }
+      if (method === 'GET') return json({ voiceprint: await studio.voiceprintStatus(me, spaceOf(new URL(req.url).searchParams.get('space') ?? 'work')) });
+      if (method === 'DELETE') return json({ voiceprint: await studio.deleteVoiceprint(me, spaceOf(new URL(req.url).searchParams.get('space') ?? 'work')) });
+      throw new StudioError(404, 'Not found');
     }
 
     if (root === 'catalog') {

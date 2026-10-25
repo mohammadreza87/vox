@@ -20,7 +20,7 @@ import { getStudio } from '../runtime';
 import { handleStudioRequest, type RouterOptions } from '../http';
 import { groupId, personId, studioToOrg, studioToOrgConfig } from '../org-bridge';
 import type { StudioGroup, StudioState } from '../types';
-import { auditMemoryStore, InMemoryAuditStore, InMemorySupersededNoticeStore } from '../../tireh/audit';
+import { auditMemoryStore, InMemoryAuditStore, InMemorySupersededNoticeStore, MAX_AUDIT_IDS } from '../../tireh/audit';
 import { InMemoryMemoryStore, type NewMemory } from '../../tireh/memory/store';
 import { historyMessageForChat, selectHistoryForChat } from '../../tireh/memory/visibility';
 import type { ChatContext, Group, MemoryRecord, MemoryScope } from '../../tireh/types';
@@ -188,6 +188,20 @@ describe('(a) group re-snapshot', () => {
       }
       expect(JSON.stringify(audit.rows)).not.toContain(CANARY);
     });
+
+    it('with TIREH_AUDIT_LOG=1 splits an applied re-snapshot over more than MAX_AUDIT_IDS records into batches and loses no id', async () => {
+      vi.stubEnv('TIREH_AUDIT_LOG', '1');
+      const { h, org, agent, record } = await groupSetup();
+      const ids = [record.id];
+      for (let i = 0; i < 200; i++) ids.push((await h.memory.memories.add(mem(agent.id, { scope: groupScope(), authorizedPersonIds: AUTH(), source: groupSource() }))).id);
+      const audit = new InMemoryAuditStore();
+      h.studio.deps.audit = audit;
+      expect(await h.studio.resnapshotGroupMemory(org.admin, CHAT, ID.bob, true)).toEqual({ count: 201, applied: true });
+      const applied = audit.rows.filter((r) => r.outcome === 'applied');
+      expect(applied).toHaveLength(2);
+      expect(applied.every((r) => r.memoryIds.length <= MAX_AUDIT_IDS)).toBe(true);
+      expect(applied.flatMap((r) => r.memoryIds).sort()).toEqual([...ids].sort());
+    });
   });
 });
 
@@ -325,6 +339,22 @@ describe('(d) inheritMemories', () => {
       const { old, next } = await successorScenario(store);
       expect((await store.listActive(next.id)).map((m) => m.content).sort()).toEqual(['CORRECTED', 'GROUP_FACT', 'PEOPLE_FACT', 'PROJECT_FACT']);
       expect(await store.tombstonesOf(next.id)).toEqual(await store.tombstonesOf(old.id));
+    });
+
+    it('skips a tombstoned lineage whose StaleMemoryWriteError comes from another bundle copy (structural check)', async () => {
+      // A route bundle carries its own copy of the class, so the rejection is matched by name, not instanceof.
+      class ForeignStaleStore extends TombstoneStore {
+        private owner?: string;
+        override async add(memory: NewMemory, guard?: Parameters<InMemoryMemoryStore['add']>[1]): Promise<MemoryRecord> {
+          this.owner ??= memory.personaId;
+          if (memory.personaId !== this.owner && memory.content === 'GROUP_FACT') throw Object.assign(new Error('x'), { name: 'StaleMemoryWriteError' });
+          return super.add(memory, guard);
+        }
+      }
+      const store = new ForeignStaleStore();
+      const { next } = await successorScenario(store);
+      expect(next.status).toBe('active');
+      expect((await store.listActive(next.id)).map((m) => m.content).sort()).toEqual(['CORRECTED', 'PEOPLE_FACT', 'PROJECT_FACT']);
     });
 
     it('inherits nothing when the store cannot carry tombstones (fail closed)', async () => {

@@ -66,7 +66,9 @@ import { StudioExperimentRuntime } from '../adaptive/experiments/runtime';
  *                            keeps existing templates deletable (status/delete only)
  *   PYANNOTE_API_KEY         pyannoteAI voiceprint provider (absent = provider unavailable)
  *   PYANNOTE_BASE_URL        optional https origin (EU residency); default https://api.pyannote.ai
- *   VOICE_MATCH_THRESHOLDS_JSON  {"default":{match,uncertain,echo},"orgs":{"<org>":{...}}}
+ *   VOICE_MATCH_THRESHOLDS_JSON  {"default":{match,noMatch,selfEcho,channels?},"orgs":{"<org>":{...}}};
+ *                            unset or invalid = no opinion (verify) and 503 (enroll). Mutually exclusive
+ *                            with the local voice engine (c2c0bee): when it is selected, voiceprints stay off
  */
 
 import { isAbsolute, join, parse, relative, resolve, sep } from 'path';
@@ -467,17 +469,23 @@ async function create(): Promise<Studio> {
     storage.adaptive!.setVoiceIdentityInvalidator(async ({ telegramId, space }) => {
       await studio.deps.voiceIdentity!.invalidate(telegramId, space);
     });
-    // S11L: with STUDIO_VOICE_RECOGNITION and VOICEPRINT_KEY unset nothing is wired (base behaviour).
-    const voiceprintIdentity = await import('./identity');
-    const vp = voiceprintIdentity.voiceprintConfigFromEnv(localVoice.selected ? { ...env, STUDIO_VOICE_RECOGNITION: '0' } : env, { storage: config.storage === 'firestore' ? 'firestore' : 'file', production: config.production });
-    if (vp) {
-      const store = config.storage === 'firestore'
-        ? new voiceprintIdentity.FirestoreVoiceprintStore(await (await import('@/lib/firebase-admin')).getAdminDb())
-        : new voiceprintIdentity.FileVoiceprintStore(join(config.dataDir, 'voiceprints-v1.json'));
-      studio.deps.voiceprints = new voiceprintIdentity.VoiceprintService({ store, cipher: vp.cipher, provider: vp.provider, thresholds: vp.thresholds,
-        orgKey: studio.deps.orgName, adaptive: storage.adaptive!, flags: () => ({ voiceRecognition: vp.enabled }), echoVoices: voiceprintIdentity.echoVoicesFromStudio(studio.deps.store, studio.deps.eleven) });
-      // Keeps the existing VoiceIdentityService invalidation and adds voiceprint deletion.
-      storage.adaptive!.setVoiceIdentityInvalidator(voiceprintIdentity.chainVoiceInvalidators(studio.deps.voiceIdentity!, studio.deps.voiceprints));
+    {
+      // S11L: with VOICEPRINT_KEY unset nothing is wired (base behaviour). When the local voice
+      // engine (c2c0bee) is selected the voiceprints see STUDIO_VOICE_RECOGNITION='0' and a
+      // constant-off flag, so two biometric engines never run at once.
+      const { createStudioVoiceprints } = await import('./identity');
+      const voiceprints = await createStudioVoiceprints({ env: localVoice.selected ? { ...env, STUDIO_VOICE_RECOGNITION: '0' } : env,
+        ...(localVoice.selected ? { flags: () => ({ voiceRecognition: false }) } : {}),
+        storage: config.storage === 'firestore' ? 'firestore' : 'file', dataDir: config.dataDir, orgKey: studio.deps.orgName, adaptive: storage.adaptive!, readState: () => storage.store.read(), eleven: studio.deps.eleven, logger: console });
+      if (voiceprints) {
+        studio.deps.voiceprints = voiceprints;
+        // Keeps the existing VoiceIdentityService invalidation and adds voiceprint deletion.
+        storage.adaptive!.setVoiceIdentityInvalidator(async (input) => {
+          await Promise.all([studio.deps.voiceIdentity!.invalidate(input.telegramId, input.space), voiceprints.invalidate(input.telegramId, input.space)]);
+        });
+        void voiceprints.sweep().catch(() => undefined);
+        if (!localVoice.selected && (await import('../tireh/flags')).tirehFlags().voiceRecognition) void voiceprints.warmSelfEcho().catch(() => undefined);
+      }
     }
     studio.deps.observer = new AdaptiveObserverService(storage.adaptive!);
     const experimentDirectory = join(config.dataDir, 'controlled-experiments', 'v1');
