@@ -62,13 +62,15 @@ function stripJpeg(bytes: Uint8Array): Uint8Array {
   if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) invalid();
   if (bytes[bytes.length - 2] !== 0xff || bytes[bytes.length - 1] !== 0xd9) invalid();
   const kept: Uint8Array[] = [bytes.subarray(0, 2)];
-  let offset = 2;
+  let offset = 2, scanned = false;
   while (offset < bytes.length) {
     if (bytes[offset] !== 0xff) invalid();
     const marker = bytes[offset + 1];
     if (marker === undefined) invalid();
     // Fill bytes before a marker.
     if (marker === 0xff) { offset += 1; continue; }
+    // EOI ends the image once a scan was read; anything after it is dropped.
+    if (marker === 0xd9 && scanned) { kept.push(bytes.subarray(offset, offset + 2)); return concat(kept); }
     // A second SOI, EOI before any scan, or a stray standalone marker is malformed.
     if (marker === 0xd8 || marker === 0xd9 || marker === 0x00 || (marker >= 0xd0 && marker <= 0xd7) || marker === 0x01) invalid();
     if (offset + 4 > bytes.length) invalid();
@@ -76,9 +78,24 @@ function stripJpeg(bytes: Uint8Array): Uint8Array {
     const finish = offset + 2 + length;
     if (length < 2 || finish > bytes.length) invalid();
     if (marker === 0xda) {
-      // SOS: the entropy-coded data through EOI is copied unchanged.
-      kept.push(bytes.subarray(offset));
-      return concat(kept);
+      // SOS: the header, then its entropy-coded data up to the next marker. Inside it a 0xFF is
+      // always followed by a stuffed 0x00 or a restart marker (RST0-7), so the first other marker
+      // ends the scan. The markers between scans of a progressive JPEG (DHT, DQT, DRI, the next
+      // SOS, EOI) are then read by this same loop, which drops any APPn or COM among them.
+      let end = finish;
+      for (;;) {
+        if (end + 1 >= bytes.length) invalid();
+        if (bytes[end] === 0xff) {
+          const next = bytes[end + 1];
+          if (next === 0x00 || (next >= 0xd0 && next <= 0xd7)) { end += 2; continue; }
+          break;
+        }
+        end += 1;
+      }
+      kept.push(bytes.subarray(offset, end));
+      scanned = true;
+      offset = end;
+      continue;
     }
     // APP1-APP13, APP15 and COM carry EXIF, GPS, XMP, ICC, comments and vendor data.
     const metadata = (marker >= 0xe1 && marker <= 0xed) || marker === 0xef || marker === 0xfe;

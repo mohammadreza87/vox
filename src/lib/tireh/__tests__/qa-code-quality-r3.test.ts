@@ -6,9 +6,9 @@
  * 1-2. (fixed, fixer r1 on main) Persian opt-out / remember regexes did not
  *      accept ZWNJ or Arabic yeh/kaf; memory/requests.ts now does, for both
  *      the gateway and images/retention.ts.
- * 3.   stripImageMetadata copies everything after the first JPEG SOS verbatim,
- *      so an APPn/COM segment between scans (legal in progressive JPEGs) leaves
- *      the process.
+ * 3.   (fixed, fixer r1 on main) stripImageMetadata copied everything after the
+ *      first JPEG SOS verbatim, so an APPn/COM segment between scans (legal in
+ *      progressive JPEGs) left the process. It now walks every scan.
  * 4.   DecisionService maps provider timeouts by error.name, but openai 7.x
  *      error classes never set `name`, so an SDK timeout is reported as
  *      provider_error (decision-log unknownReason is wrong).
@@ -29,7 +29,7 @@ describe('QA r3 code-quality known gaps', () => {
     expect(explicitRememberRequest('ذخیره‌اش کن')).toBe(true);
   });
 
-  it.fails('removes an APP1 segment that sits between two JPEG scans', () => {
+  it('removes an APP1 segment that sits between two JPEG scans', () => {
     const canary = [...'Exif\0\0CANARY'].map((c) => c.charCodeAt(0));
     const app1 = [0xff, 0xe1, 0x00, canary.length + 2, ...canary];
     const sos = [0xff, 0xda, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3f, 0x00];
