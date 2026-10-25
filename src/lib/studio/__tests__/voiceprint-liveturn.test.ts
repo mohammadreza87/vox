@@ -1,6 +1,6 @@
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { TelegramUpdate } from '../../tireh/telegram/client';
 import { handleAgentUpdate } from '../updates';
 import { hire, ID, makeStudio, seedOrg } from './helpers';
@@ -26,8 +26,12 @@ function memberSource(source: string, signature: string): string {
 }
 
 describe('liveTurn and Mini App calls never run voiceprint verification', { timeout: 30_000 }, () => {
+  afterEach(() => { vi.unstubAllEnvs(); });
+
   it('callTurn, liveTurn and converse complete with no verifyVoiceNote, provider or speech call', async () => {
     const { h, org, agent, s, verify } = await setup();
+    // Shadow verification on, so a verifier wired into the call paths would actually run and fail this test.
+    vi.stubEnv('STUDIO_VOICE_SHADOW', '1');
     expect(process.env.STUDIO_VOICE_RECOGNITION).toBe('1');
     h.openai.transcribe.mockResolvedValueOnce('hello from the call');
     expect((await h.studio.callTurn(org.alice, agent.id, new ArrayBuffer(8), 'audio/webm')).transcript).toBe('hello from the call');
@@ -41,8 +45,9 @@ describe('liveTurn and Mini App calls never run voiceprint verification', { time
     expect(s.speech.measure).not.toHaveBeenCalled();
   });
 
-  it('positive control: a private Telegram voice note reaches the wired verifier once', async () => {
+  it('positive control: with STUDIO_VOICE_SHADOW=1 a private Telegram voice note reaches the wired verifier once', async () => {
     const { h, agent, verify } = await setup();
+    vi.stubEnv('STUDIO_VOICE_SHADOW', '1');
     h.openai.transcribe.mockResolvedValueOnce('a voice note');
     const update: TelegramUpdate = { update_id: 940_001, message: { message_id: 940_001, date: 0, from: { id: ID.alice, is_bot: false, first_name: 'Alice' },
       chat: { id: ID.alice, type: 'private' }, voice: { file_id: 'voice-1', duration: 6, mime_type: 'audio/ogg' } } };

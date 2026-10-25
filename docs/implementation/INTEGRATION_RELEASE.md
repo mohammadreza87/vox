@@ -2,6 +2,10 @@
 
 This release combines the adaptive foundation (`dd1b317`), the Mac Studio voice/profile/group release (`7b1e09b`), and the relationship foundation and role-pilot infrastructure (`2af7e8f`). `develop` was created from `main` (`68a1cd3`); the integration is reviewed as one candidate before deployment. Existing branch test reports remain historical evidence, not qualification of the combined source.
 
+## Agent intelligence wave A
+
+Branch `agent-intelligence-wave-a-main` merges the QA-hardened wave A steps of [the agent intelligence plan](../AGENT_INTELLIGENCE_SOLUTION.md) onto this release line, one step at a time. Every step flag defaults to off. The merge record, with each conflict resolution, every main-lineage test that was not kept and every re-derived golden, is [WAVE_A_MAIN_INTEGRATION.md](agent-intelligence/WAVE_A_MAIN_INTEGRATION.md); wave A's own record is [WAVE_A_INTEGRATION.md](agent-intelligence/WAVE_A_INTEGRATION.md).
+
 ## Runtime behavior
 
 - The deployment target is the existing Mac Studio file-store/polling service at `https://vox.joyixir.com/studio`. A merge into `develop` does not trigger the separate `main` Firebase production workflow or transfer Telegram webhook ownership.

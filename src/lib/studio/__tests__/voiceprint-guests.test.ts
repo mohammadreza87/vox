@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PersonaGateway } from '../../tireh/gateway';
 import { OrgDirectory } from '../../tireh/org/directory';
 import type { VoiceService } from '../../tireh/voice';
@@ -67,6 +67,9 @@ function groupVoice(chatId: number, from: number): TelegramUpdate {
 }
 
 describe('gateway.transcribe runs shadow verification beside STT', () => {
+  beforeEach(() => { vi.stubEnv('STUDIO_VOICE_SHADOW', '1'); });
+  afterEach(() => { vi.unstubAllEnvs(); });
+
   it('a private member voice note calls the verifier once with content-free inputs; the reply uses the STT text', async () => {
     const h = harness();
     expect(await h.gateway.handleUpdate('aria', privateVoice(TG.reza))).toBe('replied');
@@ -138,5 +141,44 @@ describe('gateway.transcribe runs shadow verification beside STT', () => {
     expect(failing.bot.sent).toEqual(baseline.bot.sent);
     expect(timeout.bot.sent).toEqual(baseline.bot.sent);
     expect(failing.llm.replyRequests[0].messages.at(-1)?.content).toBe('What is our top priority?');
+  });
+});
+
+describe('shadow verification never sits on the reply path (QA round 2)', () => {
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it('with STUDIO_VOICE_SHADOW unset a wired verifier is never called, so no audio leaves for it, and the reply matches a run without one', async () => {
+    vi.stubEnv('STUDIO_VOICE_SHADOW', '');
+    const without = harness({ verifier: null });
+    const wired = harness();
+    for (const h of [without, wired]) expect(await h.gateway.handleUpdate('aria', privateVoice(TG.reza))).toBe('replied');
+    expect(wired.verifier!.verifyVoiceNote).not.toHaveBeenCalled();
+    expect(wired.voice.transcribe).toHaveBeenCalledTimes(1);
+    expect(wired.bot.sent).toEqual(without.bot.sent);
+    expect(wired.llm.replyRequests[0].messages).toEqual(without.llm.replyRequests[0].messages);
+  });
+
+  it('with STUDIO_VOICE_SHADOW=1 the reply is sent while verification is still pending, and the verifier gets a bounded signal', async () => {
+    vi.stubEnv('STUDIO_VOICE_SHADOW', '1');
+    const verification = deferred<VoiceVerification>();
+    const verifier = { verifyVoiceNote: vi.fn<VoiceNoteVerifier['verifyVoiceNote']>(() => verification.promise) };
+    const h = harness({ verifier });
+    // The verifier never settles during the turn: the reply must not wait for it.
+    expect(await h.gateway.handleUpdate('aria', privateVoice(TG.reza))).toBe('replied');
+    expect(verifier.verifyVoiceNote).toHaveBeenCalledTimes(1);
+    expect(h.bot.sent.length).toBeGreaterThan(0);
+    expect(h.llm.replyRequests[0].messages.at(-1)?.content).toBe('What is our top priority?');
+    const signal = verifier.verifyVoiceNote.mock.calls[0][1];
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(signal!.aborted).toBe(false);
+    verification.resolve({ band: 'MATCH', netSpeechMs: 4000, modelVersion: 'fake-1' });
+  });
+
+  it('with STUDIO_VOICE_SHADOW=1 a verifier that throws synchronously still leaves the reply unchanged', async () => {
+    vi.stubEnv('STUDIO_VOICE_SHADOW', '1');
+    const baseline = harness({ verifier: null });
+    const throwing = harness({ verifier: { verifyVoiceNote: vi.fn((): Promise<VoiceVerification> => { throw new Error('sync failure'); }) } });
+    for (const h of [baseline, throwing]) expect(await h.gateway.handleUpdate('aria', privateVoice(TG.reza))).toBe('replied');
+    expect(throwing.bot.sent).toEqual(baseline.bot.sent);
   });
 });

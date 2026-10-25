@@ -14,7 +14,7 @@
  *
  * Only base-era APIs are used here, so the same file runs unchanged at the base.
  */
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AnthropicLLM, type LLMRequest } from '../llm';
 import { PersonaGateway, type RuntimePrivacyState } from '../gateway';
 import { InMemoryUpdateDeduper, type NewMemory } from '../memory/store';
@@ -38,6 +38,10 @@ afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllEnvs();
 });
+
+/** The goldens are defined for every flag unset: pin the other steps' flags off so an exported env cannot change them. */
+const OTHER_FLAGS = ['TIREH_RETRIEVAL_V2', 'TIREH_VECTOR_RETRIEVAL', 'TIREH_SHARING_V2', 'TIREH_AUDIT_LOG', 'STUDIO_DECIDER', 'TRIAGE_QUESTION_SET', 'TIREH_DECISION_LOG', 'STUDIO_IMAGES', 'STUDIO_VOICE_RECOGNITION'];
+beforeEach(() => { for (const flag of OTHER_FLAGS) vi.stubEnv(flag, ''); });
 
 /** Fixed update and message ids, so repeated runs in one process are identical. */
 function updates() {

@@ -347,7 +347,7 @@ function loadInspector() {
     }
     return exports;
   })();
-  // src/lib/legacy-inventory/adapters.ts SHA256 4d3d244a1665f837f81b7021312aaa47f04c54aa04ed8cd6cb99fe39b409fda3
+  // src/lib/legacy-inventory/adapters.ts SHA256 463042d1acb5f938d703b01428594048a581f501b7eb53812bbaf9839a06f8f7
   const __liaAdapters = (() => {
     "use strict";
     const exports = {};
@@ -364,7 +364,7 @@ function loadInspector() {
     const scope = shape({ kind: values('private', 'people', 'group', 'project', 'company', 'org'), personId: 'string', personIds: strings, groupId: 'string', projectId: 'string', companyId: 'string' }, ['kind']);
     const memory = shape({ id: 'string', personaId: 'string', authorizedPersonIds: strings, content: 'string', type: values('fact', 'decision', 'preference', 'event', 'relationship'), scope: object(scope), shareVersion: 'integer', sensitivity: values('normal', 'personal', 'confidential'), source: object(source), aboutPersonIds: strings, topic: 'string', supersedes: 'string', supersededBy: 'string', confidence: 'number', createdAt: 'timestamp', updatedAt: 'timestamp', active: 'boolean', scopeKey: 'string' }, ['id', 'personaId', 'content', 'type', 'scope', 'sensitivity', 'source', 'aboutPersonIds', 'confidence', 'createdAt', 'updatedAt']);
     const offer = shape({ id: 'string', personaId: 'string', memoryId: 'string', ownerPersonId: 'string', proposedScope: object(scope), proposedAudiencePersonIds: strings, memoryShareVersion: 'integer', status: values('pending', 'approved', 'declined'), createdAt: 'timestamp' }, ['id', 'personaId', 'memoryId', 'ownerPersonId', 'proposedScope', 'status', 'createdAt']);
-    const history = shape({ role: values('user', 'assistant'), personId: 'string', text: 'string', at: 'timestamp', telegramMessageId: 'integer', groupPolicyVersion: { values: [1] }, relationshipIntentionId: 'string', audiencePersonIds: strings, privacyEpoch: 'integer', groupOtherTarget: 'boolean', privacy: object(shape({ policyKey: 'string', memoryRevision: 'integer', sourceEventIds: strings, memoryIds: strings }, ['policyKey', 'memoryRevision', 'sourceEventIds', 'memoryIds'])) }, ['role', 'text', 'at']);
+    const history = shape({ role: values('user', 'assistant'), personId: 'string', text: 'string', at: 'timestamp', telegramMessageId: 'integer', groupPolicyVersion: { values: [1] }, relationshipIntentionId: 'string', audiencePersonIds: strings, privacyEpoch: 'integer', groupOtherTarget: 'boolean', imageDerived: object(shape({ suppressed: 'boolean', people: 'boolean' }, ['suppressed', 'people'])), privacy: object(shape({ policyKey: 'string', memoryRevision: 'integer', sourceEventIds: strings, memoryIds: strings }, ['policyKey', 'memoryRevision', 'sourceEventIds', 'memoryIds'])) }, ['role', 'text', 'at']);
     // Firestore append stamps personaId on message documents, not on local FileState turns.
     const documentHistory = shape({ ...history.fields, personaId: 'string' }, history.required);
     const fact = shape({ key: 'string', value: 'string', source: values('chat', 'call'), confidence: 'number', extractedAt: 'timestamp' }, ['key', 'value', 'source', 'confidence', 'extractedAt']);

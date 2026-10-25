@@ -465,6 +465,9 @@ describe('vectorCandidates', () => {
 
   it('reads the process environment when no env is given', async () => {
     const s = store([row('a')]);
+    // Pin the flags off first, so an exported TIREH_VECTOR_RETRIEVAL=1 cannot fail the off arm.
+    vi.stubEnv('TIREH_RETRIEVAL_V2', '');
+    vi.stubEnv('TIREH_VECTOR_RETRIEVAL', '');
     expect(await vectorCandidates(s, org, 'aria', rezaDm, [1, 0])).toEqual([]);
     vi.stubEnv('TIREH_RETRIEVAL_V2', '1');
     vi.stubEnv('TIREH_VECTOR_RETRIEVAL', '1');

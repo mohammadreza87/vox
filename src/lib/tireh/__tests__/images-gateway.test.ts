@@ -242,9 +242,58 @@ describe('S12 gateway: flag on', () => {
     const runtimePrivacy: RuntimePrivacy = { validateAudience, read: async () => ({ revision: 'r1', memoryEnabled: true, historyEnabled: true }) };
     const h = makeImageGateway({ runtimePrivacy });
     expect(await h.gateway.handleUpdate('aria', privatePhoto(TG.reza, h.ladder.sizes))).toBe('ignored');
-    expect(validateAudience).toHaveBeenCalled();
+    expect(validateAudience).toHaveBeenCalledTimes(1); // the boundary's own check; the image path has none of its own
     expect(h.bot.downloadImage).not.toHaveBeenCalled();
     expect(h.decider.decideParts).not.toHaveBeenCalled();
+    expect(h.bot.sent).toEqual([]); // no acknowledgement either
+  });
+
+  it('never downloads for a public-only audience (Circles outsider who chose replies), captioned or not', async () => {
+    vi.stubEnv('STUDIO_IMAGES', '1');
+    // Merge onto main: validatePublicAudience lets the boundary answer the current public turn, but an image
+    // is ingested only for a fully valid audience, as main's S12 lineage required validateAudience.
+    const runtimePrivacy: RuntimePrivacy = { validateAudience: async () => false, validatePublicAudience: async () => true, read: async () => ({ revision: 'r1', memoryEnabled: true, historyEnabled: true }) };
+    const h = makeImageGateway({ runtimePrivacy });
+    expect(await h.gateway.handleUpdate('aria', privatePhoto(TG.reza, h.ladder.sizes))).toBe('ignored');
+    expect(await h.gateway.handleUpdate('aria', privatePhoto(TG.reza, h.ladder.sizes, 'what is this?'))).toBe('replied');
+    expect(h.bot.downloadImage).not.toHaveBeenCalled();
+    expect(h.decider.decideParts).not.toHaveBeenCalled();
+    expect(h.replies().length).toBeGreaterThan(0);
+    expect(h.replies().every((r) => r.messages.every((m) => !m.images))).toBe(true);
+    expect(JSON.stringify([...h.history.chats.entries()])).not.toContain('imageDerived');
+  });
+
+  it('downloads, triages and acknowledges only after the turn boundary, with one audience read', async () => {
+    vi.stubEnv('STUDIO_IMAGES', '1');
+    const order: string[] = [];
+    const runtimePrivacy: RuntimePrivacy = {
+      validateAudience: async () => { order.push('audience'); return true; },
+      read: async () => { order.push('read'); return { revision: 'r1', memoryEnabled: true, historyEnabled: true }; },
+    };
+    const h = makeImageGateway({ runtimePrivacy });
+    const download = h.bot.downloadImage.getMockImplementation()!;
+    h.bot.downloadImage.mockImplementation(async (...args) => { order.push('download'); return download(...args); });
+    expect(await h.gateway.handleUpdate('aria', privatePhoto(TG.reza, h.ladder.sizes, 'what is this?'))).toBe('replied');
+    const firstDownload = order.indexOf('download');
+    expect(firstDownload).toBeGreaterThan(0);
+    // The boundary (audience check, then privacy read) completes before any image I/O.
+    expect(order.slice(0, firstDownload)).toEqual(['audience', 'read']);
+    expect(h.decider.decideParts).toHaveBeenCalled();
+  });
+
+  it('with runtime memory and history paused, a remember-this image stores no memory, history row or image bytes', async () => {
+    vi.stubEnv('STUDIO_IMAGES', '1');
+    const runtimePrivacy: RuntimePrivacy = { validateAudience: async () => true, read: async () => ({ revision: 'r1', memoryEnabled: false, historyEnabled: false }) };
+    const h = makeImageGateway({ runtimePrivacy, decider: scriptedDecider({ text: textAnswers(), image: imageAnswers({ kind: 'receipt', task: 'remember', people: 0.1, sensitive: 0.1 }) }) });
+    h.llm.nextExtraction = { memories: [{ content: 'Reza paid for the team dinner on Friday', type: 'event', kind: 'work', saidBy: 'reza', about: ['reza'] }] };
+    expect(await h.gateway.handleUpdate('aria', privatePhoto(TG.reza, h.ladder.sizes, `keep this receipt for later ${IMAGE_CANARIES.caption}`))).toBe('replied');
+    // Positive control: the image did reach the reply model as ephemeral input.
+    expect(h.replies().some((r) => imageData(r).length > 0)).toBe(true);
+    expect(h.llm.extractionCalls + h.fast.extractionCalls).toBe(0);
+    expect(await h.memories.listActive('aria')).toEqual([]);
+    expect(await h.rows()).toEqual([]);
+    const stored = JSON.stringify([...h.history.chats.entries()]);
+    for (const prefix of base64Of(h)) expect(stored).not.toContain(prefix);
   });
 
   it('puts no image bytes, captions or EXIF into any log line', async () => {

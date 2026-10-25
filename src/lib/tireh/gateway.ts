@@ -35,7 +35,7 @@ import { selectMemories } from './memory/retrieval';
 import { decideScope, extractCandidates, resolveCandidateSource, firstNewIndex } from './memory/extraction';
 import { canPersonSee, describeScope, hasGuestAudience, isVisibleToAudience, audienceOf, historyMessageForChat, selectHistoryForChat, snapshotScopeAudience } from './memory/visibility';
 import { groupAddressing, targetsSomeoneElse } from './group-addressing';
-import { forceQuickTriage, imageIngestionWanted, ingestTelegramImage, type ImageTurn } from './images';
+import { forceQuickTriage, IMAGE_PLACEHOLDER_TEXT, IMAGE_WITHHELD_REPLY_TEXT, imageDerivedMark, imageIngestionWanted, ingestTelegramImage, inheritedImageMark, withholdImageReply, type ImageTurn } from './images';
 import { logTelegramDiagnostic, voiceFailureDiagnostic } from './telegram/diagnostics';
 import { currentStageTimer, StageTimer, stageLaps, timed } from './timing';
 import type { PrivacySnapshot } from './privacy/snapshot';
@@ -140,6 +140,8 @@ interface TurnBoundary {
   revisions?: TurnRevisions;
   /** The notes revision this turn's context used; set only when it used notes (send-time fence). */
   notesRevision?: string;
+  /** Set when the audience is valid for the current public turn only (Circles outsiders); never hashed. */
+  publicOnly?: true;
 }
 
 export interface GatewayDeps {
@@ -207,6 +209,9 @@ export type HandleResult =
 
 const HISTORY_LIMIT = 20;
 const EXTRACTION_WINDOW = 6;
+/** S11L shadow voiceprint verification bound; it never delays a reply. */
+const VOICE_SHADOW_DEADLINE_MS = 3000;
+const voiceShadowOn = (): boolean => process.env.STUDIO_VOICE_SHADOW?.trim() === '1';
 const GROUP_FORMAT_FOLLOWUP_MS = 2 * 60_000;
 // Chat replies think briefly (effort low); thinking shares max_tokens, so the
 // caps leave headroom while the prompt keeps the visible reply short.
@@ -219,6 +224,8 @@ const SKILL_DIAGNOSTIC = {
 } as const;
 /** One message's triage, and whether the skill question was among the questions sent. */
 interface Triaged { triage: Triage | null; skillAsked: boolean }
+/** A composed reply; `imageContext` is the S12 mark its stored row inherits (see inheritedImageMark). */
+interface ComposedReply { text: string; sources: WebSource[]; imageContext?: Required<Pick<ChatMessage, 'imageDerived'>> }
 const UNTRIAGED: Triaged = { triage: null, skillAsked: false };
 
 /**
@@ -240,8 +247,6 @@ const NO_MEMORY = /(?:do not|don't|don’t)\s+(?:remember|save|store)|forget (?:
 
 export class PersonaGateway {
   private readonly log: Pick<Console, 'info' | 'warn' | 'error'>;
-  /** User turns that carried an image of people (process memory only; S12). */
-  private readonly peopleImageTurns = new WeakSet<ChatMessage>();
   private readonly groupWindow: GroupWindow;
 
   constructor(private readonly deps: GatewayDeps) {
@@ -483,13 +488,11 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
         return 'replied';
       }
     }
-    let imageTurn: ImageTurn | null = null;
-    if (!isVoice && imageIngestionWanted(message, chat)) {
-      const privacy = this.deps.runtimePrivacy;
-      const audienceOk = !privacy?.validateAudience || await privacy.validateAudience(persona.id, chat).catch(() => false);
-      imageTurn = audienceOk ? await ingestTelegramImage({ org, decider: this.compactPrivacy() ? undefined : this.deps.decider, llm: this.deps.llm, fastLlm: this.deps.fastLlm, bot, log: this.log }, persona, chat, speaker.id, message, text) : null;
-      if (imageTurn) text = imageTurn.text;
-    }
+    // S12: only the turn text is settled before the boundary. The download, triage and
+    // acknowledgement wait until the boundary has validated the audience (below).
+    const imageWanted = !isVoice && imageIngestionWanted(message, chat);
+    const caption = text;
+    if (imageWanted && !caption.trim()) text = IMAGE_PLACEHOLDER_TEXT;
     if (!text.trim()) return 'ignored';
     if (parseExplicitControl(text) === 'forget') {
       await this.handleCommand(persona, chat, speaker.id, message, '/forgetall');
@@ -508,9 +511,18 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
       if (chat.kind === 'group') logTelegramDiagnostic(this.log, 'group_audience_invalid');
       return 'ignored';
     }
+    let imageTurn: ImageTurn | null = null;
+    if (imageWanted) {
+      // A public-only audience (Circles: an outsider who chose replies) is valid for the current turn only:
+      // its image is never downloaded or triaged, as when ingestion required validateAudience itself.
+      imageTurn = boundary.publicOnly ? null : await ingestTelegramImage({ org, decider: boundary.compact || this.compactPrivacy() ? undefined : this.deps.decider, llm: this.deps.llm, fastLlm: this.deps.fastLlm, bot, log: this.log }, persona, chat, speaker.id, message, caption);
+      // A captionless image that could not be ingested is ignored, as before.
+      if (!imageTurn && !caption.trim()) return 'ignored';
+    }
     const userMessage: ChatMessage = {
       role: 'user', personId: speaker.id, text, at: sourceAt, telegramMessageId: message.message_id,
       ...(chat.kind === 'group' ? { groupPolicyVersion: 1 as const, groupOtherTarget: targeting.otherTarget } : {}),
+      ...(imageTurn ? imageDerivedMark(imageTurn) : {}),
     };
     if (!(await this.groupAllowed(persona, chat, speaker.id, addressed ? 'reply' : 'observe'))) return 'ignored';
     // Visible to everyone in the chat: never an image description, never stored or extracted.
@@ -563,14 +575,14 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
       const voiceWanted = format !== 'text' && (format === 'voice' || isVoice || persona.replyWithVoice === 'always' || settled?.wantsVoice === true);
       const canSpeak = this.canSpeak(persona, boundary);
       await bot.sendChatAction(message.chat.id, voiceWanted && canSpeak ? 'record_voice' : 'typing').catch(() => undefined);
-      let generated: { text: string; sources: WebSource[] };
+      let generated: ComposedReply;
       try {
         generated = await this.composeReply(persona, chat, speaker.id, text, imageTurn?.forceQuick ? forceQuickTriage(triaged) : triaged, message.message_id, action, voiceWanted && canSpeak ? 'voice' : 'text', boundary, imageTurn?.images, undefined, undefined, undefined, extras);
       } catch {
         logTelegramDiagnostic(this.log, 'reply_generation_failed');
         return 'ignored';
       }
-      const { text: reply, sources } = generated;
+      const { text: reply, sources, imageContext } = generated;
       const voided = () => { if (chat.kind === 'group') logTelegramDiagnostic(this.log, 'group_reply_voided'); return 'ignored' as const; };
       if (!reply) return voided();
       if (!(await this.groupAllowed(persona, chat, speaker.id, action))) return voided();
@@ -583,8 +595,11 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
       currentStageTimer()?.markOnce('total');
       assistantMessage = {
         privacy: this.stamp(boundary, userMessage.privacy!.sourceEventIds),
-        role: 'assistant', text: delivered, at: this.now(), telegramMessageId: message.message_id,
+        role: 'assistant', text: imageTurn && withholdImageReply(imageTurn.triage) ? IMAGE_WITHHELD_REPLY_TEXT : delivered, at: this.now(), telegramMessageId: message.message_id,
         ...(chat.kind === 'group' ? { groupPolicyVersion: 1 as const } : {}),
+        // S12: a reply that could repeat what an earlier image showed carries that
+        // turn's mark forward (suppressed and/or people), see inheritedImageMark.
+        ...(imageTurn ? imageDerivedMark(imageTurn) : imageContext ?? {}),
       };
       await this.retain(persona, chat, speaker.id, assistantMessage, boundary);
     } else {
@@ -593,7 +608,6 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
 
     // A useful group fact can be remembered without interrupting. A failed
     // classifier never causes passive extraction, and opt-outs are not saved.
-    if (imageTurn?.containsPeople) this.peopleImageTurns.add(userMessage);
     const remember = (chat.kind === 'group'
       ? persona.groupRemember !== false && !NO_MEMORY.test(text) && (settled?.memorable === true || (addressed && settled === null))
       : settled?.memorable !== false) && !imageTurn?.suppressMemory;
@@ -673,10 +687,11 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     await this.observeRelationship(persona.id, chat, speakerId, text, `call:${randomUUID()}`, 'call', this.now(), boundary.space);
     if (this.deps.relationshipAuthority || boundary.compact) boundary = await this.boundary(persona, chat, speakerId, boundary.space, text);
     if (boundary.compact) options.onBoundaryFence?.(() => this.exportAuthorizedNow(persona, chat, speakerId, boundary, options.authorizeNow));
-    const reply = await this.generateReplyAt(persona, chat, speakerId, text, boundary, options.images, options.authorize, options.authorizeNow,
+    const { text: reply, imageContext } = await this.generateReplyAt(persona, chat, speakerId, text, boundary, options.images, options.authorize, options.authorizeNow,
       options.surface === 'pet' ? PET_SURFACE_FRAME : undefined);
     if (!(await this.unchanged(persona, chat, speakerId, boundary)) || !await this.requestAuthorized(options.authorize)) return this.changedReply;
-    const assistant: ChatMessage = { role: 'assistant', text: reply, at: this.now(), privacy: this.stamp(boundary, user.privacy!.sourceEventIds) };
+    // S12: same history key as Telegram private chats, so the image mark carries here too.
+    const assistant: ChatMessage = { role: 'assistant', text: reply, at: this.now(), privacy: this.stamp(boundary, user.privacy!.sourceEventIds), ...imageContext };
     await this.retain(persona, chat, speakerId, assistant, boundary);
     try {
       await this.formMemories(persona, chat, speakerId, boundary, [user, assistant]);
@@ -839,6 +854,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     const notes = inputs.notes && audienceValid && (inputs.publicOnly || (allowed && storedContextAllowed)) ? inputs.notes : undefined;
     const key = this.boundaryKey(chat, speakerId, space, allowed, audienceValid, scopedOnly, states, shared, notes);
     return { key, compact: scopedOnly, memoryRevision, memoryEnabled, historyEnabled, audienceValid, ...(notes ? { notesRevision: notes.revision } : {}),
+      ...(inputs.publicOnly ? { publicOnly: true as const } : {}),
       context: [...(allowed && storedContextAllowed ? (chat.kind === 'private' ? states[0]?.context ?? [] : shared?.context ?? []) : []), ...(notes?.context ?? [])].filter((v): v is string => typeof v === 'string'),
       priorityContext: allowed && storedContextAllowed && chat.kind === 'private' ? (states[0]?.priorityContext ?? []).filter((v): v is string => typeof v === 'string') : [],
       reviewedContext: allowed && storedContextAllowed && chat.kind === 'private' ? (states[0]?.reviewedContext ?? []) : [], space };
@@ -1029,7 +1045,8 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
       yield part;
     }
     if (reply) { timer?.add('llm_done', performance.now() - requested); timer?.markOnce('total'); }
-    if (reply.trim() && await this.requestAuthorized(options.authorize)) await this.retain(persona, chat, speakerId, { role: 'assistant', text: reply.trim(), at: this.now(), privacy: this.stamp(boundary, user.privacy!.sourceEventIds) }, boundary);
+    // S12: a live reply composed with image-marked rows in context inherits their mark.
+    if (reply.trim() && await this.requestAuthorized(options.authorize)) await this.retain(persona, chat, speakerId, { role: 'assistant', text: reply.trim(), at: this.now(), privacy: this.stamp(boundary, user.privacy!.sourceEventIds), ...inheritedImageMark(recent) }, boundary);
   }
 
   /** Forms memories from a finished private conversation (e.g. a voice call). */
@@ -1096,12 +1113,17 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
       const mimeType = message.voice.mime_type ?? 'audio/ogg';
       const stt = timed('stt', () => this.deps.voice!.transcribe(audio, mimeType));
       const verifier = this.deps.voiceVerifier;
-      if (!verifier || chat.kind !== 'private') return await stt;
+      // S11L shadow verification needs its own STUDIO_VOICE_SHADOW=1: nothing consumes the result
+      // yet, so by default no audio is uploaded for it. When on, it runs beside STT but off the
+      // reply path (the reply never waits for it), bounded by VOICE_SHADOW_DEADLINE_MS.
       // The Step 0 guard above already returned for a guest audience; hasGuestAudience is kept as a
       // strictly safer value (it changes nothing here). Telegram turns are space 'work' (the boundary default).
-      const [text] = await Promise.all([stt, verifier.verifyVoiceNote({ personaId: persona.id, personId: speakerId, space: 'work', chatKind: 'private', guestAudience: hasGuestAudience(this.deps.org, chat), audio, mimeType, durationSec: message.voice.duration, channel: 'telegram_voice_note' }).catch(() => undefined)]);
-      // TODO(S10): hand the VoiceVerification to IdentityService.assess. Shadow mode: discarded; it never grants access.
-      return text;
+      if (verifier && chat.kind === 'private' && voiceShadowOn()) {
+        const input = { personaId: persona.id, personId: speakerId, space: 'work' as const, chatKind: 'private' as const, guestAudience: hasGuestAudience(this.deps.org, chat), audio, mimeType, durationSec: message.voice.duration, channel: 'telegram_voice_note' as const };
+        // TODO(S10): hand the VoiceVerification to IdentityService.assess. Shadow mode: discarded; it never grants access.
+        void (async () => verifier.verifyVoiceNote(input, AbortSignal.timeout(VOICE_SHADOW_DEADLINE_MS)))().catch(() => undefined);
+      }
+      return await stt;
     } catch {
       logTelegramDiagnostic(this.log, 'transcription_failed');
       return '';
@@ -1141,12 +1163,12 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
   }
 
   async generateReply(persona: Persona, chat: ChatContext, speakerId: string, text: string): Promise<string> {
-    return this.generateReplyAt(persona, chat, speakerId, text, await this.boundary(persona, chat, speakerId, 'work', text));
+    return (await this.generateReplyAt(persona, chat, speakerId, text, await this.boundary(persona, chat, speakerId, 'work', text))).text;
   }
 
-  private async generateReplyAt(persona: Persona, chat: ChatContext, speakerId: string, text: string, boundary: TurnBoundary, images?: LLMMessage['images'], authorize?: () => Promise<boolean>, authorizeNow?: () => boolean, surfaceFrame?: string): Promise<string> {
+  private async generateReplyAt(persona: Persona, chat: ChatContext, speakerId: string, text: string, boundary: TurnBoundary, images?: LLMMessage['images'], authorize?: () => Promise<boolean>, authorizeNow?: () => boolean, surfaceFrame?: string): Promise<Pick<ComposedReply, 'text' | 'imageContext'>> {
     const result = await this.composeReply(persona, chat, speakerId, text, undefined, undefined, 'reply', undefined, boundary, images, authorize, authorizeNow, surfaceFrame);
-    return result.text || this.changedReply;
+    return { text: result.text || this.changedReply, imageContext: result.imageContext };
   }
 
   /**
@@ -1233,7 +1255,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     return !!this.deps.voice && this.deps.voice.canSynthesize !== false && persona.replyWithVoice !== 'never';
   }
 
-  private async composeReply(persona: Persona, chat: ChatContext, speakerId: string, text: string, triaged?: Promise<Triaged>, messageId?: number, action: GroupAction = 'reply', replyFormat?: 'voice' | 'text', boundary?: TurnBoundary, images?: LLMMessage['images'], authorize?: () => Promise<boolean>, authorizeNow?: () => boolean, surfaceFrame?: string, extras?: TurnExtras): Promise<{ text: string; sources: WebSource[] }> {
+  private async composeReply(persona: Persona, chat: ChatContext, speakerId: string, text: string, triaged?: Promise<Triaged>, messageId?: number, action: GroupAction = 'reply', replyFormat?: 'voice' | 'text', boundary?: TurnBoundary, images?: LLMMessage['images'], authorize?: () => Promise<boolean>, authorizeNow?: () => boolean, surfaceFrame?: string, extras?: TurnExtras): Promise<ComposedReply> {
     const { org } = this.deps;
     boundary ??= await this.boundary(persona, chat, speakerId, 'work', text);
     if (!boundary.audienceValid) return { text: this.changedReply, sources: [] };
@@ -1335,7 +1357,10 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     if (!reply) logTelegramDiagnostic(this.log, 'reply_empty');
     // An unprompted group contribution that came out empty is simply not sent.
     if (!reply && action === 'proactive') return { text: '', sources: [] };
-    return { text: reply || emptyReplyFallback(text), sources: reply ? sources : [] };
+    // S12: a reply composed while an image-marked row was in context can repeat what
+    // the image showed, so its stored row inherits that mark (see inheritedImageMark).
+    const imageContext = inheritedImageMark(recent);
+    return { text: reply || emptyReplyFallback(text), sources: reply ? sources : [], ...(imageContext ? { imageContext } : {}) };
   }
 
   private async sendReply(
@@ -1416,7 +1441,9 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     // request leaves the process for a guest or unknown audience.
     if (!boundary.memoryEnabled || !(await this.unchanged(persona, chat, speakerId, boundary))) return;
     const retained = await this.historyAt(persona, chat, boundary, EXTRACTION_WINDOW);
-    const transcript = chat.kind === 'group' ? currentTurn.filter(m => m.role === 'user') : retained.length ? retained : currentTurn;
+    // S12: rows of a suppressed image turn never reach extraction, on that turn or any later one.
+    const transcript = (chat.kind === 'group' ? currentTurn.filter(m => m.role === 'user') : retained.length ? retained : currentTurn).filter(m => !m.imageDerived?.suppressed);
+    const imagePeopleRule = [...currentTurn, ...retained].some((m) => m.imageDerived?.people === true);
     if (!transcript.some((m) => m.role === 'user')) return;
     let existing = await memories.listActive(persona.id);
     // Only memories this audience may see are shown to the extractor.
@@ -1433,7 +1460,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
       if (!await permitted()) throw new LLMAuthorizationError();
       return llm.complete({ ...request, authorize: permitted });
     } } : llm;
-    const candidates = await extractCandidates(extractionLlm, org, persona, chat, speakerId, transcript, known, currentTurn.some((m) => this.peopleImageTurns.has(m)) ? { imagePeopleRule: true } : undefined);
+    const candidates = await extractCandidates(extractionLlm, org, persona, chat, speakerId, transcript, known, imagePeopleRule ? { imagePeopleRule: true } : undefined);
     if (!boundary.memoryEnabled || candidates.length === 0 || !(await this.unchanged(persona, chat, speakerId, boundary)) || !await this.requestAuthorized(authorize)) return;
     let expectedRevision = boundary.memoryRevision;
 

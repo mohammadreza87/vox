@@ -15,7 +15,7 @@ import { hasGuestAudience } from '../memory/visibility';
 import type { LLM, LLMImage } from '../llm';
 import type { OrgDirectory } from '../org/directory';
 import type { TelegramBotClient, TelegramMessage, TelegramPhotoSize } from '../telegram/client';
-import type { Decider, DecisionAnswer, DecisionQuestion, Triage } from '../triage';
+import type { Decider, DeciderPart, DecisionAnswer, DecisionQuestion, Triage } from '../triage';
 import type { ChatContext, Persona } from '../types';
 import {
   MAX_REPLY_IMAGE_BYTES, pickPhotoSize, replyPhotoSize, sniffImageMime, stripImageMetadata, toLLMImage,
@@ -46,8 +46,8 @@ export interface ImageTurn {
   forceQuick: boolean;
 }
 
-/** Local structural copy of S09's DeciderPart; the integrator may switch to the triage.ts import after S09 merges. */
-type ImageDeciderPart = { type: 'text'; text: string } | { type: 'image'; image: LLMImage };
+/** S09's single image part type (triage.ts DeciderPart). */
+type ImageDeciderPart = DeciderPart;
 
 export type ImageDecider = Decider & {
   decideParts?: (input: readonly ImageDeciderPart[], questions: DecisionQuestion[], timeoutMs?: number) => Promise<Record<string, DecisionAnswer>>;

@@ -65,8 +65,10 @@ if (!isVoice && imageIngestionWanted(message, chat)) {
 ```
 
 - `composeReply(..., imageTurn?.forceQuick ? forceQuickTriage(triaged) : triaged, ..., boundary, imageTurn?.images)`.
-- `if (imageTurn?.containsPeople) this.peopleImageTurns.add(userMessage);` and `const remember = (...) && !imageTurn?.suppressMemory;`.
-- `extractCandidates(..., known, currentTurn.some((m) => this.peopleImageTurns.has(m)) ? { imagePeopleRule: true } : undefined)`.
+- Both rows of an image turn carry the content-free verdict `imageDerived: { suppressed, people }` (`imageDerivedMark`); the field is absent when `STUDIO_IMAGES` is unset. `const remember = (...) && !imageTurn?.suppressMemory;`.
+- The assistant row of an image turn whose triage is `null` or a sensitive document stores `IMAGE_WITHHELD_REPLY_TEXT` instead of the reply (`withholdImageReply`). The reply is still delivered.
+- `extractMemories` drops `imageDerived.suppressed` rows from the transcript and the known-memory query on every later turn, and passes `{ imagePeopleRule: true }` while any row in the current turn or the retained extraction window has `imageDerived.people`. (QA round 1: the verdict used to live in an in-process `WeakSet` that only covered the image turn itself.)
+- A reply composed with an image-marked row in its context inherits that row's mark (`inheritedImageMark`: `suppressed` if any context row is suppressed, `people` if any has people). This holds for Telegram (`handleUpdate`), the Mini App (`converse`, through `generateReplyAt`) and live calls (`liveTurn`), which all share the `private-<personId>` history key. Only assistant rows inherit it; the member's own later rows stay unmarked, so their words still form memory. (QA round 3 findings 1 and 2: `042059a` carried only `people`, and only in `handleUpdate`; `redteam-wave-a-r3.test.ts` now covers both as plain tests.)
 
 No change to `boundary()`, `unchanged()`, `retain()`, `historyAt()`, `triage()`, `transcribe()`, the `composeReply` body, `liveTurn`, `GatewayDeps`, timing or diagnostics.
 
@@ -105,9 +107,9 @@ Step 1 (snapshot, revision vector, `boundary()`/`unchanged()`, `liveTurn` rechec
 
 - Until S09's `ServiceDecider.decideParts` is enabled, every image turn is untriaged (no Haiku routing, memory always suppressed, 1024 px reply on the main model).
 - `minimizeImageDataUrl` accepts only baseline JPEG/PNG; progressive 320 px Telegram JPEGs would silently skip triage. Verify with a real Telegram photo before enabling.
-- Download and triage happen before the turn boundary, as STT does; `validateAudience` covers revoked audiences, but paused memory/history still allows a reply. Revisit after Step 1.
+- Only the turn text (caption or placeholder) is settled before the turn boundary. Download, triage and the acknowledgement run after `boundary()` has validated the audience (`if (!boundary.audienceValid) return 'ignored'`), with the boundary's own `validateAudience` read; there is no separate image-path audience read (QA round 3). Paused memory/history still allows an image to be triaged and answered. Revisit after Step 1.
 - Latency: triage download, up to 2 s triage and an optional second download precede the reply; the 1.5 s acknowledgement covers the wait. Measure p95 first.
-- L1 history keeps the reply text, so an `extract_text` reply can put a document's text into the person's own private history (never memory). Flag to the privacy owner.
+- L1 history keeps the reply text for non-sensitive image turns, so the model can still echo an image description on a later turn. Every reply composed with an image-marked row in context inherits the mark, so an echo of a suppressed image never reaches extraction and an echo of a people image keeps the people rule (and its lexical filter, which may drop some legitimate candidates). The mark carries forward from reply to reply, so in a chat that keeps talking after an image, assistant rows stay out of extraction (or under the people rule) until a reply is composed with no marked row in its 20-row context. The reply to a sensitive or untriaged image is never stored: history keeps a fixed placeholder, so later replies cannot refer back to its details.
 - `IMAGE_PEOPLE_DESCRIPTION` is lexical: false positives and misses are possible; the prompt rule is the primary control.
 - Follow-ups cannot see the image. Albums produce N replies.
 - Merge with S03: image blocks must stay first; run the gateway image suite under `TIREH_CACHED_PROMPT=1`.

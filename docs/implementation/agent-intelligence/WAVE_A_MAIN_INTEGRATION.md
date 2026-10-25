@@ -726,8 +726,10 @@ passes against wave A's module:
   resolution for text extraction", "sends no acknowledgement for a fast triage".
 - `images-gateway.main-lineage.test.ts`: flag undefined and '0' base behaviour (4), "handles a group photo exactly as
   with the flag off, with no download", "routes an explain image to the fast vision model without web search", "routes
-  a remember image to the main model", both sensitive-document cases, and "adds the people rule to extraction and keeps
-  triage and bytes out of every prompt" (its fake reads `systemText(request.system)`).
+  a remember image to the main model", both sensitive-document cases, "adds the people rule to extraction and keeps
+  triage and bytes out of every prompt" (its fake reads `systemText(request.system)`; its follow-up assertions changed
+  in TAIL), and, added in TAIL, both "no image bytes in any log (stage timings false/true)" cases with the
+  `tireh_image:` log string: 12 cases.
 - `images-main-lineage.test.ts` (from the deleted `images-policy` and `images-questions`): both `forceQuickTriage` cases,
   "reuses the text triage timeout", "reads a complete answer", and "returns null when image_task / contains_people /
   contains_sensitive_document is missing".
@@ -772,9 +774,9 @@ passes against wave A's module:
   vision-capable" (wave A refuses instead).
 - `images-gateway.test.ts`: "replies to a captionless photo with the image in the current turn only" (contradicts in
   the image bytes: wave A's stripped reply-size copy), "never sends an image to a Gemini main model" (contradicts in the
-  shape: wave A sends no image at all when either model cannot see, which is stricter), and both "no image bytes in any
-  log (stage timings false/true)" cases (contradict in the expected log string; wave A's `images-gateway` content-free
-  logging case covers the same canaries).
+  shape: wave A sends no image at all when either model cannot see, which is stricter). Both "no image bytes in any log
+  (stage timings false/true)" cases were first listed here; the S12 verifier showed that only the log string differs,
+  so they are kept (see TAIL).
 
 ### Test results
 
@@ -789,3 +791,86 @@ passes against wave A's module:
 - `src/lib/tireh`, `src/lib/studio`, `src/lib/circles`, `src/app/studio`, flags unset: 4549/4561. All 11 failures are
   environment failures: `guest-rights-http` (10, mkdtemp /tmp EPERM) and `prepared-conversation-qualification` (1,
   timeout under full-suite load).
+
+## TAIL: integration fixes and QA rounds 1 to 3 (wave A `7a9bd38`)
+
+The tail of `agent-intelligence-wave-a` after the S12 merge: the integration fixes (`9235a6d`, `ca4035b`, `a40e8f8`,
+`d3dac45`, `56a4e98`), the wave A record `WAVE_A_INTEGRATION.md` (`2a07baf`), the three QA rounds with their red-team
+tests and fixes, and the legacy Telegram payments hardening (`169d16d`, `a70ca9a`, `7a9bd38`).
+
+### Resolution
+
+| File | Resolution |
+| --- | --- |
+| `src/lib/tireh/gateway.ts` (conflict) | Main's file with wave A's QA tail. `bfc9b39`: `imageWanted` and the `IMAGE_PLACEHOLDER_TEXT` turn text before the boundary, then `ingestTelegramImage` after `boundary.audienceValid` (main's `group_audience_invalid` diagnostic is kept). `19f3b37`: `imageDerivedMark` on the stored user and assistant rows, rows of a suppressed image turn filtered out of extraction, and `imagePeopleRule` derived from `imageDerived.people` on the current turn and the retained rows; main's `peopleImageTurns` WeakSet is gone. `042059a`/`6c90443`: `ComposedReply.imageContext` from `inheritedImageMark(recent)`, carried onto the Telegram assistant row (with `IMAGE_WITHHELD_REPLY_TEXT` for a withheld reply), `converse` (Mini App, Pet included: `generateReplyAt` keeps main's `surfaceFrame` and now returns `{ text, imageContext }`) and the `liveTurn` assistant row. `07ecb14`: shadow voiceprint verification runs only with `STUDIO_VOICE_SHADOW=1`, fire-and-forget with `AbortSignal.timeout(3000)`; main's `guestAudience: hasGuestAudience(...)` value is kept. `4d5b120` is superseded by `ComposedReply`. Every main hunk stays: group agents (`publicOnly`, GroupWindow follow-ups and claims, `TurnExtras`, the degenerate-reply retry), Circles (notes intercept, `notesFence` in `sendReply`), Pet `surfaceFrame`, Step 1, `8a7dc55` (no live recheck throttle; triage authority), `758875d`/`a0e59c4`. |
+| `src/lib/adaptive/decisions/decisions-v2.test.ts` (conflict) | Wave A's `9235a6d` version: "sends options.timeoutMs as the provider timeout and maxRetries 0" (timeout 2000 reaches the request, the assertion main's "passes the effective service deadline with maxRetries 0 through the S15 adapter" made) and "keeps timeout 500 and maxRetries 0 when no options are passed". |
+| `src/lib/tireh/__tests__/invariants.test.ts` (conflict) | Wave A's file: the real-store arm and the `NoTombstoneStore` fail-closed arm. Main's `Object.defineProperties(plain, { tombstonesOf: undefined, addTombstones: undefined })` arm is literally covered: `NoTombstoneStore` defines the same two instance properties as `undefined` on an `InMemoryMemoryStore`. |
+| `src/lib/studio/__tests__/sharing-v2.test.ts` (conflict) | Union: wave A's real-store and `NoTombstoneStore` cases plus main's "skips a tombstoned lineage whose StaleMemoryWriteError comes from another bundle copy (structural check)". |
+| `firestore.indexes.json`, `S12-image-ingestion.md`, `images/{index,retention}.ts`, `memory/extraction.ts`, `types.ts`, `images-gateway.test.ts`, `memory-v2-retrieval.test.ts`, `hint-isolation.test.ts` | Auto-merged to wave A's content (main's `decideCalls` helper in `images-gateway.test.ts` kept). |
+| `src/app/api/telegram/{payments,webhook}`, `src/lib/telegram/{prices,verify}.ts`, `verify.test.ts`, `useTelegramPayment.ts` | Wave A's files, merged cleanly. The explicit exception in `WAVE_A_INTEGRATION.md` (the deleted `PUT /api/telegram/payments`) and its record of the seven removed tests stand: "returns 400 when userId is missing", "accepts pre-checkout query", "updates user subscription on successful payment", "sets correct tier for max plan", "sends confirmation message to user", "returns success for empty webhook", "returns 500 on processing error". The fail-closed webhook verifier stays behind `TELEGRAM_WEBHOOK_FAIL_CLOSED` (default off, open issue 8). |
+| `scripts/legacy-offline-inventory.mjs` | The LIA1 inspector block regenerated from `renderInspectorBundle()` (TypeScript 5.9.3 at the pinned hash), as `cb3e952` did, after wave A's `imageDerived` history field landed in `adapters.ts` (main's `mainMiniApp` and Circles group fields kept). `node --test scripts/legacy-offline-inventory.test.mjs`: 17/17. |
+| `docs/implementation/PRIVACY_AND_CONSENT.md` | Unchanged by TAIL. The Decisions image-triage processor row (F022) is the OpenAI Decisions API row, already present. Wave A has no pyannoteAI processor row at `7a9bd38`, so there is none to port. |
+
+### Main behaviour kept on top of wave A's order
+
+Wave A ingests an image once `boundary.audienceValid` holds. On main, the boundary also admits a public-only audience
+(`validatePublicAudience`: a Circles outsider in a DM who chose replies). Main's S12 lineage refused such a photo,
+because it required `validateAudience` itself. The turn boundary now carries `publicOnly` (not hashed into the key), and
+the gateway skips ingestion for it: a captionless photo is ignored and a captioned one is answered from the caption
+alone. New case in `images-gateway.test.ts`: "never downloads for a public-only audience (Circles outsider who chose
+replies), captioned or not". It fails without the gate.
+
+### Main-lineage cases changed in TAIL
+
+- `images-gateway.main-lineage.test.ts` now keeps both "no image bytes in any log (stage timings false/true)" cases
+  ("keeps bytes, scan text and tokens out of logs, history, memory and every non-image field"). The only change is the
+  log string: `tireh_image:download_failed` for `image_download_failed`, and the `tireh_image:` prefix filter. They are
+  moved from "not kept" to kept in the S12 section above; the gateway main-lineage count is 12.
+- "adds the people rule to extraction and keeps triage and bytes out of every prompt": its image-turn assertions are
+  kept. Its two follow-up assertions are not, because they contradict wave A's `19f3b37` (F012/F050): main expected the
+  next text turn's extraction to drop `IMAGE_PEOPLE_RULE` and to equal `buildExtractionPrompt(...)`. Wave A persists
+  the people mark on the image turn's rows, so the rule holds while those rows are in the extraction window. The case
+  now asserts that.
+- `memory-v2-firestore.main-lineage.test.ts` "declares exactly the contract vector index": its whole-file equality
+  contradicts wave A's `d3dac45`, which adds the `vox_audit` composite index for `FirestoreAuditStore.list`. The case now
+  compares the `tireh_memories` entries and `fieldOverrides` only; the contracted vector index is asserted unchanged.
+
+### Goldens
+
+TAIL re-derives no golden. Against wave A, three snapshot files differ on this branch, all from earlier steps:
+`cached-prompt-flag-off.base.json` (re-derived at `7224f40` in the S03 merge, recorded in its header),
+`cached-prompt-baseline.test.ts.snap` (main's version, which carries `962e877`'s group-agent prompt wording) and
+`prompt-layout.test.ts.snap` (Block A gains `962e877`'s "Always answer in words" rules line).
+
+### Test results
+
+- `npx tsc --noEmit -p tsconfig.json`: clean. ESLint on the 180 `.ts`, `.tsx` and `.mjs` files changed since `7224f40`:
+  0 errors, 17 warnings (unused imports in main-lineage test files). `npm run check:studio-style`: passes.
+- Step suites, flags unset (`redteam-*`, `qa-*`, `images-*`, `cached-prompt-*`, `adaptive/decisions`,
+  `app/api/telegram`, `lib/telegram`, `legacy-inventory`, `tireh/identity`): 912 passed and 5 expected failures (the
+  QA known-gap tests) across 67 files. `node --test scripts/legacy-offline-inventory.test.mjs`: 17/17.
+- `STUDIO_IMAGES=1` on `redteam-image-window`, `redteam-image-followup`, `redteam-wave-a-r3` and `images-*`: 147/147.
+  `STUDIO_VOICE_SHADOW=1` on `voiceprint-*` and `qa-*`: 108 passed, 5 expected failures.
+- Privacy core suites plus the wave A red-team suites and `sharing-v2`, flags unset: 663/663 across 35 files.
+- `src/lib/tireh`, `src/lib/studio`, `src/lib/circles`, `src/app/studio`, flags unset: 4591 passed, 14 failed. All are
+  environment failures: `guest-rights-http` (10, mkdtemp /tmp EPERM), and `prepared-conversation-qualification` (3) and
+  `PreferenceLearningPanel.integration` (1), timeouts under load that pass alone (11/11).
+- Full `npx vitest run`, flags unset: 24 files and 107 tests failed, 7654 passed. Every failure is an environment
+  failure. mkdtemp /tmp EPERM: `guest-rights`, `guest-rights-http`, `rights-intake/storage`. Listen EPERM (TCP or unix
+  socket): `connections/mcp/self-service` (37), `connections/mcp/tls`, `voice-identity/local-provider` (7),
+  `integration-broker`, `foundation-broker`, `foundation-broker-error-http`, `runtime/reminders`. tsx child IPC:
+  `personalization/learning/rollback`. Timeouts under full-suite load that pass alone: `observation/service`,
+  `personalization/http`, `rights-intake/{rights-intake,local-erasure}`, `rights-use-holds/service`,
+  `voice-identity/service`, `routines/engine`, `circles-notes`, `indexed-reply-context`, `studio/service`,
+  `prepared-conversation-qualification`. `images-gateway` and `memory-v2-firestore.main-lineage` failed in that run
+  because it started before the fixes above; both pass now. None of the EPERM suites is touched by wave A.
+- Flag matrix (recorded results in `WAVE_A_INTEGRATION.md`):
+
+| Command | Result |
+|---|---|
+| `TIREH_CACHED_PROMPT=1 npx vitest run src/lib/tireh` | 10 failed / 1969 passed: exactly S03's expected 10 (`diagnostics` 1, `gateway` 5, `history-privacy` 3, `voice-delivery` 1) |
+| `TIREH_RETRIEVAL_V2=1` memory-privacy, visibility, memory-eval | 41/41 |
+| `TIREH_SHARING_V2=1 TIREH_AUDIT_LOG=1` invariants, policy-differential, `src/lib/studio` | 11 failed / 1586 passed: `guest-rights-http` (10, EPERM) and `prepared-conversation-qualification` (1, load timeout) |
+| `STUDIO_DECIDER=service TRIAGE_QUESTION_SET=v2 TIREH_DECISION_LOG=1` `src/lib/tireh src/lib/adaptive/decisions` | 2091 passed, 5 expected failures |
+| `STUDIO_IMAGES=1 npx vitest run src/lib/tireh` | 1979 passed, 5 expected failures |
+| `STUDIO_VOICE_RECOGNITION=1` `src/lib/studio/__tests__/voiceprint*` | 105/105 |

@@ -68,7 +68,8 @@ Authority is read again after the provider call. If anything changed, the templa
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `STUDIO_VOICE_RECOGNITION` | off | Enrollment and shadow verification. Approval and consent are still required. |
+| `STUDIO_VOICE_RECOGNITION` | off | Enrollment and verification (the service). Approval and consent are still required. |
+| `STUDIO_VOICE_SHADOW` | off | Runs shadow verification on 1:1 Telegram voice notes; needs `STUDIO_VOICE_RECOGNITION`. Unset, no voice-note audio is sent for verification. |
 | `VOICEPRINT_KEY` | unset (nothing constructed) | Base64 of exactly 32 bytes. Startup refuses `STUDIO_SECRET`, its UTF-8 bytes or its SHA-256. Development and pilot key only. |
 | `PYANNOTE_API_KEY` | unset (no provider) | Without it, enroll returns 503 `provider_unavailable` and verify returns `disabled`. Status and delete still work. |
 | `PYANNOTE_BASE_URL` | `https://api.pyannote.ai` | Must be https on a `*.pyannote.ai` host. This is the EU option: confirm the EU host on the account before setting it. |
@@ -100,7 +101,7 @@ Authority is read again after the provider call. If anything changed, the templa
 - re-consent, because a template whose `consentEventId` no longer matches is deleted on the next status or verification;
 - the startup sweep, which removes templates older than 365 days or belonging to people who are no longer members (inside CUBI's one-year bound).
 
-**Shadow mode.** Verification runs in `Promise.all` with speech-to-text, only on 1:1 Telegram voice notes from non-guest members. The result is discarded until S10 consumes it, and it never grants access. Because verification is job-based it can delay a voice-note reply by up to the 3 s deadline. Measure with `STUDIO_STAGE_TIMINGS` before any non-shadow use.
+**Shadow mode.** With `STUDIO_VOICE_SHADOW=1` (and `STUDIO_VOICE_RECOGNITION=1`), verification starts beside speech-to-text, only on 1:1 Telegram voice notes from non-guest members. It is fire-and-forget: the reply never waits for it, and a 3 s abort signal bounds the background work. The result is discarded until S10 consumes it, and it never grants access. With `STUDIO_VOICE_SHADOW` unset, no voice-note audio is uploaded for verification. A non-shadow use (S10) has to await the result, so measure its latency with `STUDIO_STAGE_TIMINGS` first.
 
 **Never done.** Vox never:
 

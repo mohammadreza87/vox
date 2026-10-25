@@ -369,8 +369,9 @@ describe('findNearest', () => {
 
 describe('firestore.indexes.json', () => {
   it('declares exactly the contract vector index', () => {
-    const parsed = JSON.parse(readFileSync(join(process.cwd(), 'firestore.indexes.json'), 'utf8'));
-    expect(parsed).toEqual({
+    const parsed = JSON.parse(readFileSync(join(process.cwd(), 'firestore.indexes.json'), 'utf8')) as { indexes: { collectionGroup: string }[]; fieldOverrides: unknown[] };
+    // Wave A's d3dac45 adds the vox_audit composite for FirestoreAuditStore.list; the memory index is unchanged.
+    expect({ ...parsed, indexes: parsed.indexes.filter((index) => index.collectionGroup === 'tireh_memories') }).toEqual({
       indexes: [{
         collectionGroup: 'tireh_memories',
         queryScope: 'COLLECTION',

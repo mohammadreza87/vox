@@ -1,40 +1,27 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { getAdminDb } from '@/lib/firebase-admin';
+import { NextResponse } from 'next/server';
+import { withAuth } from '@/lib/middleware/withAuth';
+import { TELEGRAM_PAYMENT_CURRENCY, TELEGRAM_PRICES, type TelegramPriceId } from '@/lib/telegram/prices';
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_PAYMENT_TOKEN = process.env.TELEGRAM_PAYMENT_TOKEN;
 
-// Price IDs for Telegram (in smallest currency unit - cents for USD)
-const PRICES = {
-  pro_monthly: {
-    amount: 999, // $9.99
-    label: 'Vox Pro - Monthly',
-    description: 'Unlimited messages, 3 voice clones, 10 custom contacts',
-  },
-  pro_annual: {
-    amount: 9999, // $99.99
-    label: 'Vox Pro - Annual',
-    description: 'Unlimited messages, 3 voice clones, 10 custom contacts (Save 17%)',
-  },
-  max_monthly: {
-    amount: 2999, // $29.99
-    label: 'Vox Max - Monthly',
-    description: 'Everything in Pro + unlimited voice clones & custom contacts',
-  },
-  max_annual: {
-    amount: 29999, // $299.99
-    label: 'Vox Max - Annual',
-    description: 'Everything in Pro + unlimited voice clones & custom contacts (Save 17%)',
-  },
-};
-
-type PriceId = keyof typeof PRICES;
+const PRICES = TELEGRAM_PRICES;
+type PriceId = TelegramPriceId;
 
 /**
  * POST /api/telegram/payments
- * Create a Telegram invoice link
+ * Create a Telegram invoice link for the signed-in user.
+ *
+ * The invoice payload's userId is the verified Firebase uid, never a
+ * caller-supplied id. Payment updates (pre_checkout_query and
+ * successful_payment) are handled only by /api/telegram/webhook, which checks
+ * the payload's price, amount and currency against the same table. That route
+ * verifies Telegram's secret token only when TELEGRAM_WEBHOOK_SECRET is set (or
+ * rejects everything with TELEGRAM_WEBHOOK_FAIL_CLOSED=1); without either it is
+ * unauthenticated, so a deployment must set the secret before taking payments.
+ * This route has no update handler.
  */
-export async function POST(request: NextRequest) {
+export const POST = withAuth(async (request) => {
   try {
     if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_PAYMENT_TOKEN) {
       return NextResponse.json(
@@ -44,7 +31,14 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { priceId, userId, telegramId } = body;
+    const { priceId, telegramId } = body;
+    const userId = request.userId;
+    if (body.userId !== undefined && body.userId !== userId) {
+      return NextResponse.json(
+        { error: 'User ID does not match the signed-in user' },
+        { status: 403 }
+      );
+    }
 
     if (!priceId || !PRICES[priceId as PriceId]) {
       return NextResponse.json(
@@ -73,7 +67,7 @@ export async function POST(request: NextRequest) {
           description: price.description,
           payload: JSON.stringify({ priceId, userId, telegramId }),
           provider_token: TELEGRAM_PAYMENT_TOKEN,
-          currency: 'USD',
+          currency: TELEGRAM_PAYMENT_CURRENCY,
           prices: [
             {
               label: price.label,
@@ -104,96 +98,4 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   }
-}
-
-/**
- * Webhook handler for Telegram payment updates
- * This should be called by Telegram's webhook
- */
-export async function PUT(request: NextRequest) {
-  try {
-    const body = await request.json();
-
-    // Handle pre_checkout_query (payment validation)
-    if (body.pre_checkout_query) {
-      const query = body.pre_checkout_query;
-
-      // Validate the payment - you can add custom validation here
-      // For now, we'll accept all payments
-      await fetch(
-        `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/answerPreCheckoutQuery`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            pre_checkout_query_id: query.id,
-            ok: true,
-          }),
-        }
-      );
-
-      return NextResponse.json({ success: true });
-    }
-
-    // Handle successful_payment
-    if (body.message?.successful_payment) {
-      const payment = body.message.successful_payment;
-      const payload = JSON.parse(payment.invoice_payload);
-      const { priceId, userId } = payload;
-
-      // Determine subscription tier and duration
-      const tier = priceId.startsWith('max') ? 'max' : 'pro';
-      const isAnnual = priceId.includes('annual');
-      const durationDays = isAnnual ? 365 : 30;
-
-      const now = new Date();
-      const expiresAt = new Date(now.getTime() + durationDays * 24 * 60 * 60 * 1000);
-
-      // Update user subscription in Firestore
-      const adminDb = await getAdminDb();
-      const userRef = adminDb.collection('users').doc(userId);
-      const subscriptionRef = userRef.collection('data').doc('subscription');
-
-      await subscriptionRef.set({
-        tier,
-        status: 'active',
-        provider: 'telegram',
-        telegramPaymentId: payment.telegram_payment_charge_id,
-        providerPaymentId: payment.provider_payment_charge_id,
-        priceId,
-        amount: payment.total_amount,
-        currency: payment.currency,
-        subscribedAt: now.toISOString(),
-        expiresAt: expiresAt.toISOString(),
-        // Reset usage counters
-        messagesUsed: 0,
-        voiceClonesUsed: 0,
-        customContactsUsed: 0,
-      }, { merge: true });
-
-      // Send confirmation message to user
-      const telegramId = body.message.from.id;
-      await fetch(
-        `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            chat_id: telegramId,
-            text: `🎉 Thank you for subscribing to Vox ${tier.charAt(0).toUpperCase() + tier.slice(1)}!\n\nYour subscription is now active and will expire on ${expiresAt.toLocaleDateString()}.\n\nEnjoy your premium features!`,
-          }),
-        }
-      );
-
-      return NextResponse.json({ success: true });
-    }
-
-    return NextResponse.json({ success: true });
-  } catch (error) {
-    console.error('Payment webhook error:', error);
-    return NextResponse.json(
-      { error: 'Webhook processing failed' },
-      { status: 500 }
-    );
-  }
-}
+});

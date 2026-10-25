@@ -2,15 +2,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LLMRequest } from '../llm';
 import { systemText } from '../llm-content';
-import { buildExtractionPrompt, IMAGE_PEOPLE_RULE } from '../memory/extraction';
-import { IMAGE_PLACEHOLDER_TEXT } from '../images';
+import { IMAGE_PEOPLE_RULE } from '../memory/extraction';
 import type { TelegramUpdate } from '../telegram/client';
-import type { ChatContext, ChatMessage } from '../types';
+import type { ChatMessage } from '../types';
 import { GAMEEND_CHAT, privateText, TG } from './fixtures';
 import {
-  base64Of,
   defaultImageFiles,
-  GeminiFakeLLM,
   historyRows,
   imageAnswers,
   jpegBytes,
@@ -187,10 +184,10 @@ describe('a people image yields no identity text', () => {
 
     expect(await ctx.gateway.handleUpdate('aria', privateText(TG.reza, 'The offsite is on Friday'))).toBe('replied');
     expect(llm.extractionRequests).toHaveLength(2);
-    const followUp = llm.extractionRequests[1].system;
-    expect(followUp).not.toContain(IMAGE_PEOPLE_RULE);
-    const chat: ChatContext = { kind: 'private', chatKey: 'private-reza', personId: 'reza' };
-    expect(followUp).toBe(buildExtractionPrompt(ctx.org, ctx.org.getPersona('aria')!, chat, 'reza'));
+    // Main's lineage asserted that this follow-up extraction drops the people rule. Wave A (19f3b37, F012/F050)
+    // persists the image turn's people mark on its history rows, so the rule holds while those rows are in the
+    // extraction window. The contradicting assertions are recorded in WAVE_A_MAIN_INTEGRATION.md (TAIL).
+    expect(systemText(llm.extractionRequests[1].system)).toContain(IMAGE_PEOPLE_RULE);
   });
 });
 
@@ -201,3 +198,56 @@ function slices(b64: string): string[] {
   const mid = Math.floor(b64.length / 2);
   return [b64, b64.slice(0, 24), b64.slice(mid, mid + 24), b64.slice(-24)];
 }
+
+describe.each([false, true])('no image bytes in any log (stage timings %s)', (stageTimings) => {
+  it('keeps bytes, scan text and tokens out of logs, history, memory and every non-image field', async () => {
+    vi.stubEnv('STUDIO_IMAGES', '1');
+    if (stageTimings) vi.stubEnv('STUDIO_STAGE_TIMINGS', '1');
+    const consoles = (['log', 'info', 'warn', 'error'] as const).map((method) => vi.spyOn(console, method).mockImplementation(() => undefined));
+    const files = new Map([...defaultImageFiles().keys()].map((id) => [id, jpegBytes({ withExif: true, canary: `${SCAN_CANARY}_${id}` })] as const));
+    const decider = scriptedImageDecider(imageAnswers({ kind: 'other', task: 'remember', people: 0, sensitive: 0.1 }), textAnswers());
+    const ctx = makeImageGateway({ decider, files, stageTimings: process.env.STUDIO_STAGE_TIMINGS === '1' });
+    ctx.llm.nextExtraction = { memories: [{ content: 'The launch is on Friday', type: 'event', kind: 'work', saidBy: 'reza' }] };
+
+    // Success run.
+    expect(await ctx.gateway.handleUpdate('aria', privatePhoto(TG.reza, { caption: 'remember this: launch is Friday' }))).toBe('replied');
+    expect(await ctx.memories.listActive('aria')).toHaveLength(1);
+
+    // Failure run: the download error carries the canary and a token everywhere.
+    const hostile = Object.assign(new Error(`https://api.telegram.org/file/bot${TOKEN_CANARY}/photos/x.jpg ${SCAN_CANARY}`, { cause: { token: TOKEN_CANARY, body: SCAN_CANARY } }), { providerBody: SCAN_CANARY, token: TOKEN_CANARY });
+    ctx.bot.downloadImage.mockRejectedValueOnce(hostile);
+    expect(await ctx.gateway.handleUpdate('aria', privatePhoto(TG.reza, { caption: 'and this one?' }))).toBe('replied');
+    expect(ctx.logger.warn.mock.calls).toContainEqual(['tireh_image:download_failed']);
+
+    const replyImages = ctx.llm.replyRequests.flatMap((r) => lastUser(r).images ?? []).map((image) => image.data);
+    const triageImages = decider.decideParts.mock.calls.map((call) => (call[0][1] as { image: { data: string } }).image.data);
+    expect(replyImages).toHaveLength(1);
+    expect(triageImages).toHaveLength(1);
+    const forbidden = [...new Set([...replyImages, ...triageImages])].flatMap(slices);
+    forbidden.push(SCAN_CANARY, TOKEN_CANARY);
+
+    const surfaces: Record<string, unknown> = {
+      logger: [ctx.logger.info.mock.calls, ctx.logger.warn.mock.calls, ctx.logger.error.mock.calls],
+      console: consoles.map((spy) => spy.mock.calls),
+      history: historyRows(ctx.history),
+      memories: await ctx.memories.listActive('aria'),
+      extractionRequests: ctx.llm.extractionRequests,
+      replyPrompts: ctx.llm.replyPrompts,
+      replyRequestsWithoutImages: ctx.llm.replyRequests.map((r) => ({ ...r, messages: r.messages.map((m) => ({ role: m.role, content: m.content })) })),
+      textTriage: decider.decide.mock.calls,
+      triageTextParts: decider.decideParts.mock.calls.map((call) => [call[0][0], call[1]]),
+      sent: ctx.bot.sendMessage.mock.calls.map((call) => call[1]),
+    };
+    for (const [name, value] of Object.entries(surfaces)) {
+      const serialized = JSON.stringify(value);
+      for (const needle of forbidden) expect(serialized.includes(needle), `${name} must not contain ${needle.slice(0, 12)}…`).toBe(false);
+    }
+    const warnings = ctx.logger.warn.mock.calls.map((call) => call.join(' '));
+    expect(warnings.filter((w) => w.startsWith('tireh_image:'))).toEqual(['tireh_image:download_failed']);
+    if (stageTimings) {
+      const timingLines = ctx.logger.info.mock.calls.filter((call) => JSON.stringify(call).includes('"reason":"timing"'));
+      expect(timingLines.length).toBeGreaterThan(0);
+      for (const needle of forbidden) expect(JSON.stringify(timingLines)).not.toContain(needle);
+    }
+  });
+});

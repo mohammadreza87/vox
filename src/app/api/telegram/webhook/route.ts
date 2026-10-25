@@ -6,8 +6,19 @@ import {
   getRateLimitIdentifier,
   checkRateLimitSecure,
 } from '@/lib/ratelimit';
+import { paidPlan } from '@/lib/telegram/prices';
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+
+/** Content-free diagnostics: a fixed code and the update kind, never the update body. */
+function updateKind(body: Record<string, unknown> | null): string {
+  if (!body || typeof body !== 'object') return 'invalid';
+  if (body.pre_checkout_query) return 'pre_checkout_query';
+  const message = body.message as Record<string, unknown> | undefined;
+  if (message?.successful_payment) return 'successful_payment';
+  if (message) return 'message';
+  return 'other';
+}
 
 /**
  * POST /api/telegram/webhook
@@ -33,30 +44,28 @@ export async function POST(request: NextRequest) {
 
     const body = await request.json();
 
-    console.log('Telegram webhook received:', JSON.stringify(body, null, 2));
+    console.info(`telegram_webhook:${updateKind(body)}`);
 
     // Handle pre_checkout_query (payment validation)
     if (body.pre_checkout_query) {
       const query = body.pre_checkout_query;
+      // Approve only an invoice for a known price at that price's amount and currency.
+      const valid = paidPlan(query) !== null;
+      if (!valid) console.warn('telegram_webhook:pre_checkout_rejected');
 
-      console.log('Pre-checkout query:', query);
-
-      // Validate the payment - accept all for now
-      // You can add custom validation here (check stock, user eligibility, etc.)
       const response = await fetch(
         `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/answerPreCheckoutQuery`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            pre_checkout_query_id: query.id,
-            ok: true,
-          }),
+          body: JSON.stringify(valid
+            ? { pre_checkout_query_id: query.id, ok: true }
+            : { pre_checkout_query_id: query.id, ok: false, error_message: 'This invoice is no longer valid. Please start the purchase again.' }),
         }
       );
 
-      const result = await response.json();
-      console.log('Pre-checkout response:', result);
+      const result = await response.json().catch(() => null);
+      if (!result?.ok) console.warn('telegram_webhook:pre_checkout_answer_failed');
 
       return NextResponse.json({ success: true });
     }
@@ -64,24 +73,16 @@ export async function POST(request: NextRequest) {
     // Handle successful_payment
     if (body.message?.successful_payment) {
       const payment = body.message.successful_payment;
-      const telegramId = body.message.from.id;
+      const telegramId = body.message.from?.id;
 
-      console.log('Successful payment:', payment);
-
-      let payload;
-      try {
-        payload = JSON.parse(payment.invoice_payload);
-      } catch {
-        console.error('Failed to parse payment payload:', payment.invoice_payload);
+      // The entitlement comes only from a known price paid in full in its currency;
+      // tier and duration come from the price table, never from the payload text.
+      const plan = paidPlan(payment);
+      if (!plan) {
+        console.warn('telegram_webhook:payment_rejected');
         return NextResponse.json({ success: true });
       }
-
-      const { priceId, userId } = payload;
-
-      // Determine subscription tier and duration
-      const tier = priceId.startsWith('max') ? 'max' : 'pro';
-      const isAnnual = priceId.includes('annual');
-      const durationDays = isAnnual ? 365 : 30;
+      const { priceId, userId, tier, durationDays } = plan;
 
       const now = new Date();
       const expiresAt = new Date(now.getTime() + durationDays * 24 * 60 * 60 * 1000);
@@ -109,7 +110,7 @@ export async function POST(request: NextRequest) {
       }, { merge: true });
 
       // Send confirmation message to user
-      await fetch(
+      if (telegramId) await fetch(
         `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`,
         {
           method: 'POST',
@@ -122,7 +123,7 @@ export async function POST(request: NextRequest) {
         }
       );
 
-      console.log(`Subscription updated for user ${userId}: ${tier} until ${expiresAt.toISOString()}`);
+      console.info('telegram_webhook:subscription_updated');
 
       return NextResponse.json({ success: true });
     }
@@ -158,7 +159,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ success: true });
   } catch (error) {
-    console.error('Telegram webhook error:', error);
+    console.error('telegram_webhook:error', error instanceof Error ? error.name : 'unknown');
     // Always return 200 to prevent Telegram from retrying
     return NextResponse.json({ success: true });
   }
