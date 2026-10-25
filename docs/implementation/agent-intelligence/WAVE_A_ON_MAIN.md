@@ -240,6 +240,45 @@ mutation of the fix turns the new test red).
 
 Contradictory tests: none. Every changed test asserts the chosen behaviour; no test was dropped.
 
+### QA round 3 on main, fixer round 3
+
+QA round 3 (`0421ae2`, `60a6632`, `681ef76`, `b39b4b6`) reported nine medium findings and no critical or high. All
+nine were applied in order; every code fix has a test that fails without it (the pinned `it.fails` cases are plain
+`it` now, and each new test was run against the code with its fix reverted).
+
+- `b39b4b6` **Firestore `hasAny` and the db branch of `wireSharingAudit` (tests-types).** Applied by QA itself; no
+  further change. `qa-tests-types-r3-main.test.ts` passes in the full run.
+- `da20dc3` **Image `remember` below 0.6 is `unclear` (privacy red team).** `readImageTriage` applies
+  `IMAGE_REMEMBER_CONFIDENCE = 0.6` (main's rule) to `remember` and keeps 0.5 for the other tasks.
+- `07e635e` **The reply export of a Telegram image is fenced at the transport (privacy red team).** While images ride
+  on the reply request, the person's `single_party_image` capability is part of `request.authorize` and (compact
+  turns) `request.authorizeNow`; `composeReply` drops the images when the capability is gone at its pre-export check
+  (the caption is still answered, as when it is withdrawn earlier) and the transport fails the export when it goes
+  after that. `ingestTelegramImage` re-reads the turn's authority before the reply-tier download.
+  `images-authority`'s "authority withdrawn after the post-download check" case now expects the image to be dropped
+  (`null`, one download) instead of a turn with triage `null`: stricter, same subject.
+- `556572a` **Circles notes and image-derived bot replies (privacy red team).** While `STUDIO_IMAGES` is on, "remember
+  this" that would save the text of this agent's own bot message proposes nothing and asks the person to type what to
+  keep (new notes copy `typeIt`, en and fa). Nothing records which bot messages came from an image, so every own-bot
+  reply is refused while the flag is on. Typed text, replies to other messages and every case with the flag unset are
+  unchanged (guards pin both).
+- `ee5e7e6` **The privacy-gates job runs section 4.6's whole gate (spec conformance).** 32 files flags unset
+  (negative-identity, the boundary suites, memory replacement, the combined runtime and their cached-prompt wrappers
+  added), a new step under `TIREH_RETRIEVAL_V2=1`, and the S08 record lists the exact file set.
+- `f1ae457` **The flags-unset `NO_MEMORY` change is recorded (spec conformance).** S12 spec: Files row for
+  `memory/requests.ts`, corrected `IMAGE_NO_MEMORY` row and base-behaviour line, a Deviations entry. Section 9 lists it
+  as exception (i) awaiting acknowledgement. Code unchanged (fail closed).
+- `e02e171` **`FirestoreVoiceprintStore.touch()` cannot restore a deleted template (code quality).** A field update of
+  `lastConfirmedAt` that never creates the document (NOT_FOUND is a no-op). `verifyVoiceNote` is registered with
+  `track()`, so `invalidate()` aborts an in-flight verification (no match, no touch).
+- `7b5ef94` **Notice erasure covers the forget closure (code quality).** `MemoryStore.delete` resolves to the ids it
+  removed; `auditMemoryStore` and `noticeErasingMemoryStore` erase the notices naming any of them.
+- `11a4e25` **Decision-log retention after a rollback (code quality).** `wireDecisionLog` (runtime.ts) wires the sink
+  only with `TIREH_DECISION_LOG` and runs `startDecisionLogRetentionSweep` at startup and daily whatever the flag is;
+  neither store's sweep creates the file or collection.
+
+Contradictory tests: none. No test was dropped; the one changed assertion (`images-authority`) is stricter.
+
 ## 5. Catch-up with main
 
 `git fetch https://github.com/mohammadreza87/vox.git main` succeeded on 25 Oct 2026. `FETCH_HEAD` is
@@ -248,7 +287,32 @@ caught up to `7224f40`.
 
 ## 6. Results for this tree
 
-### After fixer round 2 (HEAD of this record's last update)
+### After fixer round 3 (HEAD of this record's last update)
+
+- **`npx tsc --noEmit -p tsconfig.json`:** exit 0. **ESLint** on every file fixer r3 changed: exit 0.
+- **Full `npx vitest run`, flags unset:** 14 failed files, 97 failed tests, 7823 passed, 2 expected failures (CQ2-3
+  audit sweep `onError`, F030 `DecisionService` timeout naming), 14 skipped, 56 unhandled errors (listen EPERM). All
+  97 are environmental: the same mkdtemp `/tmp`, listen, unix-socket and tsx IPC set as after fixer r2 (93 tests), and
+  load timeouts that pass alone (`adaptive/lifecycle/longterm-simulation` 1, `adaptive/message-memory` 1 (a
+  `findByText` wait), `studio/__tests__/prepared-conversation-qualification` 3; the three files 49/49 alone).
+- **Flag matrix** (every other flag unset; fixer r3 touched images, the gateway, Circles notes, voiceprints, S08 and
+  the decision log, so every row was rerun):
+  - `TIREH_CACHED_PROMPT=1` `src/lib/tireh`: 10 failed / 2112 passed, 2 expected failures: exactly S03's 10
+    (`diagnostics` 1, `gateway` 5, `history-privacy` 3, `voice-delivery` 1).
+  - `TIREH_RETRIEVAL_V2=1` memory-privacy, visibility, memory-eval: 41/41.
+  - `TIREH_SHARING_V2=1 TIREH_AUDIT_LOG=1` invariants, policy-differential, `src/lib/studio`: 11 failed / 1603 passed:
+    `guest-rights-http` (10, mkdtemp EPERM) and `prepared-conversation-qualification` (1, load timeout).
+  - `STUDIO_DECIDER=service TRIAGE_QUESTION_SET=v2 TIREH_DECISION_LOG=1` `src/lib/tireh src/lib/adaptive/decisions`:
+    2234 passed, 2 expected failures.
+  - `STUDIO_IMAGES=1` `src/lib/tireh`, `circles-dm`, `circles-channels`: 2191 passed, 2 expected failures.
+  - `STUDIO_VOICE_RECOGNITION=1` voiceprint suites: 108/108; with `STUDIO_VOICE_SHADOW=1`, voiceprint-liveturn and
+    gateway: 54/54.
+  - Informational, every flag on, `src/lib/tireh`: 9 failed / 2113 passed (S03's 10 less `voice-delivery`).
+  - The CI `privacy-gates` steps, run locally: 613/613 flags unset (32 files), 296/296 under `TIREH_RETRIEVAL_V2=1`,
+    118/118 under the S08 flags.
+  Every row is at least the result after fixer r2 and in `WAVE_A_INTEGRATION.md`.
+
+### After fixer round 2
 
 - **`npx tsc --noEmit -p tsconfig.json`:** exit 0. **ESLint** on every file fixer r2 changed: exit 0.
 - **Full `npx vitest run`, flags unset:** 14 failed files, 96 failed tests, 7796 passed, 2 expected failures (the
@@ -361,7 +425,8 @@ Every matrix row is at least as good as the recorded wave A result.
 
 1. **Commit trailer.** The computed task asks for `Co-Authored-By: Claude Fable 5.1`; this session's attribution rule
    says `Claude Opus 5.5`. The step merges on this branch carry Fable 5.1; this run's commits carry Opus 5.5; fixer r1's
-   and fixer r2's commits carry Fable 5.1, as their tasks asked. Pick one before the branch is pushed.
+   and fixer r2's commits carry Fable 5.1, as their tasks asked; QA r3's and fixer r3's commits carry Opus 5.5 (the
+   session rule). Pick one before the branch is pushed.
 2. **Test files are not type-checked.** `tsconfig.json` excludes `*.test.ts(x)`. QA r1 counted 48 strict errors in the
    124 test files changed since `7224f40`. A test tsconfig over every file under `src` (types `vitest/globals`,
    `@testing-library/jest-dom/vitest`, `node`) reports 754 errors in about 80 files, most of them in main's own tests
@@ -383,7 +448,8 @@ Every matrix row is at least as good as the recorded wave A result.
    invisible replacement. The Telegram `/memories` notice line and reserved audit kinds are TODO. Notices are erased
    with their memories and on a rights erasure, also after a flag rollback, but have no TTL (product decision (f));
    `vox_audit` rows keep the 12-month sweep (also with both flags off) and have no per-person erasure (append-only by
-   design). A failed sweep leaves no signal yet (CQ2-3, still an `it.fails`). Before `TIREH_SHARING_V2` runs on
+   design). Notice erasure follows the whole forget closure (fixer r3). A failed sweep leaves no signal yet (CQ2-3,
+   still an `it.fails`). Before `TIREH_SHARING_V2` runs on
    Firestore, deploy the new `tireh_supersede_notices` index.
 7. **S11L.** The startup refusal for Firestore voiceprints in production with the flag on is in place (`18d0415`), and
    an invalid key or one reusing `STUDIO_SECRET` still fails startup. The one difference from main: a `VOICEPRINT_KEY`
@@ -402,7 +468,10 @@ Every matrix row is at least as good as the recorded wave A result.
    Telegram image also needs the person's `single_party_image` capability (as a Mini App image does), so where no
    approval for it exists (the internal pilot rejects it at startup) `STUDIO_IMAGES=1` answers captions only. Memory
    requests are still regex rules: they lean towards refusal, and a request phrased in a way neither rule knows is
-   treated as no request (image memory suppressed).
+   treated as no request (image memory suppressed). Fixer r3: the capability is part of the reply export's transport
+   authority. With Circles on and `STUDIO_IMAGES=1`, "remember this" on any of the agent's own messages asks the person
+   to type what to keep, because no content-free mark records which bot messages came from an image; a mark keyed by
+   the bot's sent message id would let non-image replies be saved again (follow-up).
 9. **S10L and S14.** Not wired; they wait on the DPIA. QA F025: S10L persists a per-person style profile against
    section 4.9 phase 0 (product decision (d)). At wiring time: honour net speech for a voice MATCH, re-check consent and
    epoch in `recordPromptOutcome('confirmed_self')`, catch throwing getters in `extractStyleFeatures`, and either
@@ -417,8 +486,12 @@ Every matrix row is at least as good as the recorded wave A result.
     happens to contain `999` (seen once in this run). The test should compare against the exact id field, not the
     whole serialized string. Left as main has it.
 
-13. **Privacy gates as a required check.** The `privacy-gates` CI job exists (fixer r2); making it a required status
-    check on `main` and `develop` is a branch-protection setting for the repository owner.
+13. **Privacy gates as a required check.** The `privacy-gates` CI job exists (fixer r2) and runs section 4.6's gate
+    (fixer r3); making it a required status check on `main` and `develop` is a branch-protection setting for the
+    repository owner. Gate cases that live in other suites (successor, voice replay, shared phone) run only in the
+    general `test` job.
+14. **S09 decision log.** The 90-day sweep now runs whatever `TIREH_DECISION_LOG` is (fixer r3). `image-v1` rows are
+    still not written (open issue 8).
 
 ## 8. Deployment prerequisites
 
