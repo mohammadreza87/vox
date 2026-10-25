@@ -8,14 +8,18 @@ import { ConnectionsError } from '../errors';
 export const vaultBindingSchema = z.object({ accountId: idSchema, personId: idSchema, space: z.enum(['work', 'personal']),
   connectionId: idSchema, providerId: idSchema, agentId: idSchema.optional() }).strict();
 export type VaultBinding = z.infer<typeof vaultBindingSchema>;
-const envelopeSchema = z.object({ id: idSchema, version: z.literal(1), keyVersion: z.string().min(1).max(50), kind: z.enum(['credential', 'flow']),
+/** `grantref`: per provider grant, which connections hold a token and which tokens wait to be revoked (sealed like credentials). */
+export type VaultKind = 'credential' | 'flow' | 'grantref';
+const envelopeSchema = z.object({ id: idSchema, version: z.literal(1), keyVersion: z.string().min(1).max(50), kind: z.enum(['credential', 'flow', 'grantref']),
   binding: vaultBindingSchema, iv: z.string().max(100), tag: z.string().max(100), ciphertext: z.string().max(200_000) }).strict();
 export interface BrokerVault {
-  binding(kind: 'credential' | 'flow', id: string): Promise<VaultBinding | undefined>;
-  read(kind: 'credential' | 'flow', id: string, binding: VaultBinding): Promise<unknown | undefined>;
-  write(kind: 'credential' | 'flow', id: string, binding: VaultBinding, value: unknown): Promise<void>;
-  delete(kind: 'credential' | 'flow', id: string): Promise<void>;
+  binding(kind: VaultKind, id: string): Promise<VaultBinding | undefined>;
+  read(kind: VaultKind, id: string, binding: VaultBinding): Promise<unknown | undefined>;
+  write(kind: VaultKind, id: string, binding: VaultBinding, value: unknown): Promise<void>;
+  delete(kind: VaultKind, id: string): Promise<void>;
   listFlows(): Promise<readonly string[]>;
+  /** Bindings of the connections' own credentials (never pending, webhook or grantref records): who still holds a provider grant. */
+  credentialBindings?(): Promise<readonly VaultBinding[]>;
   withLock<T>(key: string, run: () => Promise<T>): Promise<T>;
 }
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
@@ -24,12 +28,12 @@ export class FileBrokerVault implements BrokerVault {
   constructor(readonly directory: string, private readonly key: Uint8Array, private readonly keyVersion = '1') {
     if (key.byteLength !== 32) throw new ConnectionsError(503, 'vault_key_invalid');
   }
-  private file(kind: 'credential' | 'flow', id: string) { return join(this.directory, kind, `${hash(id)}.json`); }
-  async binding(kind: 'credential' | 'flow', id: string): Promise<VaultBinding | undefined> {
+  private file(kind: VaultKind, id: string) { return join(this.directory, kind, `${hash(id)}.json`); }
+  async binding(kind: VaultKind, id: string): Promise<VaultBinding | undefined> {
     try { return envelopeSchema.parse(JSON.parse(await fs.readFile(this.file(kind, id), 'utf8'))).binding; }
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined; throw new ConnectionsError(500, 'vault_record_invalid'); }
   }
-  async read(kind: 'credential' | 'flow', id: string, binding: VaultBinding): Promise<unknown | undefined> {
+  async read(kind: VaultKind, id: string, binding: VaultBinding): Promise<unknown | undefined> {
     let json: string;
     try {
       const file = this.file(kind, id); if ((await fs.stat(file)).size > 210_000) throw new ConnectionsError(500, 'vault_record_invalid');
@@ -44,7 +48,7 @@ export class FileBrokerVault implements BrokerVault {
       return JSON.parse(Buffer.concat([decipher.update(Buffer.from(envelope.ciphertext, 'base64')), decipher.final()]).toString('utf8'));
     } catch { throw new ConnectionsError(500, 'vault_record_invalid'); }
   }
-  async write(kind: 'credential' | 'flow', id: string, binding: VaultBinding, value: unknown): Promise<void> {
+  async write(kind: VaultKind, id: string, binding: VaultBinding, value: unknown): Promise<void> {
     const { randomUUID } = await import('node:crypto');
     vaultBindingSchema.parse(binding);
     const plaintext = JSON.stringify(value);
@@ -63,7 +67,7 @@ export class FileBrokerVault implements BrokerVault {
       try { await directoryHandle.sync(); } finally { await directoryHandle.close(); }
     } finally { await fs.unlink(temporary).catch(() => undefined); }
   }
-  async delete(kind: 'credential' | 'flow', id: string): Promise<void> {
+  async delete(kind: VaultKind, id: string): Promise<void> {
     await fs.unlink(this.file(kind, id)).catch(error => { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; });
   }
   async listFlows(): Promise<readonly string[]> {
@@ -72,6 +76,22 @@ export class FileBrokerVault implements BrokerVault {
       if (files.length > 2000) throw new ConnectionsError(503, 'vault_flow_capacity');
       return await Promise.all(files.map(async file => envelopeSchema.parse(JSON.parse(await fs.readFile(join(this.directory, 'flow', file), 'utf8'))).id));
     } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw error; }
+  }
+  /** Reads only the plaintext envelope bindings; nothing is decrypted. A record that cannot be read or parsed cannot be used, so it holds
+   * nothing and is skipped: one damaged file (any account's) must never block another account's revocation. */
+  async credentialBindings(): Promise<readonly VaultBinding[]> {
+    let files: string[];
+    try { files = (await fs.readdir(join(this.directory, 'credential'))).filter(file => /^[0-9a-f]{64}\.json$/.test(file)); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw error; }
+    if (files.length > 50_000) throw new ConnectionsError(503, 'vault_credential_capacity');
+    const bindings: VaultBinding[] = [];
+    for (const file of files) {
+      let envelope: z.infer<typeof envelopeSchema>;
+      try { envelope = envelopeSchema.parse(JSON.parse(await fs.readFile(join(this.directory, 'credential', file), 'utf8'))); }
+      catch { continue; }
+      if (envelope.kind === 'credential' && envelope.id === envelope.binding.connectionId) bindings.push(envelope.binding);
+    }
+    return bindings;
   }
   async withLock<T>(key: string, run: () => Promise<T>): Promise<T> {
     await fs.mkdir(join(this.directory, 'locks'), { recursive: true, mode: 0o700 });

@@ -159,7 +159,13 @@ export class TelegramBotClient {
   sendMessage(
     chatId: number,
     text: string,
-    options: { replyTo?: number; keyboard?: InlineKeyboard; signal?: AbortSignal; authorizeNow?: () => boolean; silent?: boolean; forceReply?: { placeholder?: string } } = {}
+    options: {
+      replyTo?: number; keyboard?: InlineKeyboard; signal?: AbortSignal; authorizeNow?: () => boolean; silent?: boolean; forceReply?: { placeholder?: string };
+      /** No link preview card, so a link in the text never makes Telegram fetch it. */
+      noPreview?: boolean;
+      /** Telegram blocks forwarding and saving of the message. */
+      protectContent?: boolean;
+    } = {}
   ): Promise<TelegramMessage> {
     return this.call('sendMessage', {
       chat_id: chatId,
@@ -168,7 +174,14 @@ export class TelegramBotClient {
       ...(options.keyboard ? { reply_markup: options.keyboard }
         : options.forceReply ? { reply_markup: { force_reply: true, ...(options.forceReply.placeholder ? { input_field_placeholder: options.forceReply.placeholder.slice(0, 64) } : {}) } } : {}),
       ...(options.silent ? { disable_notification: true } : {}),
+      ...(options.noPreview ? { link_preview_options: { is_disabled: true } } : {}),
+      ...(options.protectContent ? { protect_content: true } : {}),
     }, options.signal, options.authorizeNow);
+  }
+
+  /** Telegram lets a bot delete its own messages in a private chat only within 48 hours of sending; later it refuses. */
+  deleteMessage(chatId: number, messageId: number): Promise<boolean> {
+    return this.call('deleteMessage', { chat_id: chatId, message_id: messageId });
   }
 
   sendVoice(

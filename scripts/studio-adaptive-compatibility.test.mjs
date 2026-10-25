@@ -734,3 +734,103 @@ test('disabled self-service configuration blocks old strict parsers without writ
   assert.throws(() => assertReleaseAdaptiveCompatibility(env, old), /incompatible/);
   assert.equal(assertReleaseAdaptiveCompatibility(env, ADAPTIVE_RELEASE_CAPABILITIES).selfServiceMcpSchema, 1);
 }));
+
+function grantRows(f, state, rows, collection = 'grants') {
+  const hash = value => createHash('sha256').update(value).digest('hex');
+  const partitionId = hash(JSON.stringify(['telegram-account:7', 'work']));
+  const directory = join(state.records, '..', collection); mkdirSync(directory, { recursive: true });
+  return rows.map((row, index) => {
+    const value = { id: `${collection}-${index}`, partitionId, ...row };
+    const file = join(directory, `${hash(value.id)}.json`);
+    writeFileSync(file, JSON.stringify(value));
+    return file;
+  });
+}
+const withoutReplies = () => { const old = { ...ADAPTIVE_RELEASE_CAPABILITIES }; delete old.supportedReplyUseSchemas; return old; };
+const withoutTemplates = () => { const old = { ...ADAPTIVE_RELEASE_CAPABILITIES }; delete old.supportedProviderTemplateSchemas; return old; };
+
+test('Part 2b releases declare reply-use and provider-template readers; plain grants need neither', () => fixture(f => {
+  assert.deepEqual(ADAPTIVE_RELEASE_CAPABILITIES.supportedReplyUseSchemas, [1]);
+  assert.deepEqual(ADAPTIVE_RELEASE_CAPABILITIES.supportedProviderTemplateSchemas, [1]);
+  f.setMarker(ready(1));
+  const state = connectionGeneration(f, [{ schemaVersion: 2, agentId: 'agent-a' }]);
+  grantRows(f, state, [{ destinationIds: ['provider:google_drive', 'model:studio', 'vox:private'] }]);
+  mkdirSync(join(state.records, '..', 'replyUses')); // An empty collection directory holds no rows.
+  const old = withoutReplies(); delete old.supportedProviderTemplateSchemas;
+  const required = assertReleaseAdaptiveCompatibility(f.env, old);
+  assert.equal(required.replyUseSchema, undefined); assert.equal(required.providerTemplateSchema, undefined);
+}));
+
+test('a reply destination on a grant or any stored reply row blocks a release without the reply reader', () => fixture(f => {
+  f.setMarker(ready(1));
+  for (const [destination, extra] of [['studio:chat_reply', {}], ['telegram:agent_dm', {}], [null, { replyDestinationIds: [] }]]) {
+    const state = connectionGeneration(f, [{ schemaVersion: 2, agentId: 'agent-a' }]);
+    const files = grantRows(f, state, [{ destinationIds: ['vox:private', ...(destination ? [destination] : [])], ...extra }]);
+    const before = readFileSync(files[0], 'utf8');
+    assert.throws(() => assertReleaseAdaptiveCompatibility(f.env, withoutReplies()), /incompatible/);
+    assert.equal(assertReleaseAdaptiveCompatibility(f.env, ADAPTIVE_RELEASE_CAPABILITIES).replyUseSchema, 1);
+    assert.equal(readFileSync(files[0], 'utf8'), before);
+    rmSync(join(state.records, '..', 'grants'), { recursive: true });
+  }
+  for (const collection of ['replyUses', 'replyMessages']) {
+    const state = connectionGeneration(f, []);
+    grantRows(f, state, [{ kind: 'answer' }], collection);
+    assert.throws(() => assertReleaseAdaptiveCompatibility(f.env, withoutReplies()), /incompatible/);
+    assert.equal(assertReleaseAdaptiveCompatibility(f.env, ADAPTIVE_RELEASE_CAPABILITIES).replyUseSchema, 1);
+    rmSync(join(state.records, '..', collection), { recursive: true });
+    assert.doesNotThrow(() => assertReleaseAdaptiveCompatibility(f.env, withoutReplies()));
+  }
+}));
+
+test('a template connection blocks a release without the template reader', () => fixture(f => {
+  f.setMarker(ready(1));
+  connectionGeneration(f, [{ schemaVersion: 2, agentId: 'agent-a', template: { templateId: 'github-app', templateDigest: 'a'.repeat(64), selection: null } }]);
+  assert.throws(() => assertReleaseAdaptiveCompatibility(f.env, withoutTemplates()), /incompatible/);
+  assert.equal(assertReleaseAdaptiveCompatibility(f.env, ADAPTIVE_RELEASE_CAPABILITIES).providerTemplateSchema, 1);
+  for (const template of [null, 'github-app', []]) {
+    connectionGeneration(f, [{ schemaVersion: 2, agentId: 'agent-a', template }]);
+    assert.throws(() => assertReleaseAdaptiveCompatibility(f.env, ADAPTIVE_RELEASE_CAPABILITIES), /incompatible/);
+  }
+  connectionGeneration(f, [{ schemaVersion: 1, template: { templateId: 'github-app' } }]);
+  assert.throws(() => assertReleaseAdaptiveCompatibility(f.env, ADAPTIVE_RELEASE_CAPABILITIES), /incompatible/);
+}));
+
+test('switched-off chatReplies or providerTemplates configuration still requires the matching reader', () => fixture(f => {
+  f.setMarker(ready(1)); const configFile = join(f.dir, 'connections-config.json');
+  const env = { ...f.env, STUDIO_CONNECTIONS_CONFIG_FILE: configFile };
+  writeFileSync(configFile, JSON.stringify({ schemaVersion: 1, enabled: false, profiles: [], chatReplies: { enabled: false, surfaces: [] } }));
+  assert.throws(() => assertReleaseAdaptiveCompatibility(env, withoutReplies()), /incompatible/);
+  assert.equal(assertReleaseAdaptiveCompatibility(env, ADAPTIVE_RELEASE_CAPABILITIES).replyUseSchema, 1);
+  writeFileSync(configFile, JSON.stringify({ schemaVersion: 1, enabled: false, profiles: [], providerTemplates: [] }));
+  assert.throws(() => assertReleaseAdaptiveCompatibility(env, withoutTemplates()), /incompatible/);
+  assert.equal(assertReleaseAdaptiveCompatibility(env, ADAPTIVE_RELEASE_CAPABILITIES).providerTemplateSchema, 1);
+  for (const config of [{ chatReplies: null }, { chatReplies: [] }, { providerTemplates: 'github' }, { providerTemplates: null }]) {
+    writeFileSync(configFile, JSON.stringify({ schemaVersion: 1, enabled: false, profiles: [], ...config }));
+    assert.throws(() => assertReleaseAdaptiveCompatibility(env, ADAPTIVE_RELEASE_CAPABILITIES), /incompatible/);
+  }
+}));
+
+test('reply and template capability declarations stay bounded and explicit (fail closed)', () => fixture(f => {
+  f.setMarker(ready(1));
+  const state = connectionGeneration(f, [{ schemaVersion: 2, agentId: 'agent-a', template: { templateId: 'github-app' } }]);
+  grantRows(f, state, [{ destinationIds: ['studio:chat_reply'] }]);
+  for (const field of ['supportedReplyUseSchemas', 'supportedProviderTemplateSchemas'])
+    for (const value of [null, [], [2], [1, 1], '1', [1, 2]])
+      assert.throws(() => assertReleaseAdaptiveCompatibility(f.env, { ...ADAPTIVE_RELEASE_CAPABILITIES, [field]: value }), /incompatible/);
+  const required = assertReleaseAdaptiveCompatibility(f.env, ADAPTIVE_RELEASE_CAPABILITIES);
+  assert.equal(required.replyUseSchema, 1); assert.equal(required.providerTemplateSchema, 1);
+}));
+
+test('grant admission rejects malformed, misplaced or linked grant records', () => fixture(f => {
+  f.setMarker(ready(1));
+  for (const row of [{ destinationIds: 'studio:chat_reply' }, {}, { destinationIds: [], partitionId: 'another-partition' }]) {
+    const state = connectionGeneration(f, []);
+    grantRows(f, state, [row]);
+    assert.throws(() => assertReleaseAdaptiveCompatibility(f.env, ADAPTIVE_RELEASE_CAPABILITIES), /incompatible/);
+    rmSync(join(state.records, '..', 'grants'), { recursive: true });
+  }
+  const state = connectionGeneration(f, []);
+  const [file] = grantRows(f, state, [{ destinationIds: [] }]);
+  const outside = join(f.dir, 'outside-grant.json'); writeFileSync(outside, readFileSync(file)); rmSync(file); symlinkSync(outside, file);
+  assert.throws(() => assertReleaseAdaptiveCompatibility(f.env, ADAPTIVE_RELEASE_CAPABILITIES), /incompatible/);
+}));

@@ -107,6 +107,25 @@ export class FirestoreConnectionsStorage implements ConnectionsStorage {
   }
 }
 
+/**
+ * Collections a release added after file storage first shipped. Every generation any release wrote holds a directory for
+ * each other collection (tombstones and grants among them), so a missing one there is damage and fails closed. A release
+ * that adds a collection lists it here, so partitions written before it read as having none.
+ */
+export const COLLECTIONS_ADDED_LATER: readonly RecordCollection[] = [];
+/** A collection directory's record files, or null when the generation predates that (later) collection.
+ * Throws ENOENT when the generation directory or an always-written collection is missing, so nothing lost reads as empty. */
+export async function collectionFiles(generationDirectory: string, collection: RecordCollection, addedLater: readonly RecordCollection[] = COLLECTIONS_ADDED_LATER): Promise<string[] | null> {
+  const { promises: fs } = await import('fs');
+  const { join } = await import('path');
+  try { return await fs.readdir(join(generationDirectory, collection)); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || !addedLater.includes(collection)) throw error;
+    if (!(await fs.stat(generationDirectory)).isDirectory()) throw new Error('Invalid Connections generation');
+    return null;
+  }
+}
+const sameGeneration = (raw: unknown, generation: string) => !!raw && typeof raw === 'object' && 'generation' in raw && raw.generation === generation;
 /** Local polling deployments: normalized per-record files with an atomic generation pointer.
  * A crashed lock fails closed until an operator confirms no writer and removes the lock.
  * The pointer switches only after all new records are fsynced; old generations are purged.
@@ -148,7 +167,8 @@ export class FileConnectionsStorage implements ConnectionsStorage {
       for (const entry of await fs.readdir(root)) if (/^generation-[0-9a-f-]{36}$/.test(entry) && entry !== previousGeneration)
         await fs.rm(join(root, entry), { recursive: true, force: true });
       if (previousGeneration) for (const collection of CONNECTION_COLLECTIONS) {
-        const files = await fs.readdir(join(root, previousGeneration, collection));
+        // A collection added after this generation was written reads as empty; anything else missing still throws.
+        const files = await collectionFiles(join(root, previousGeneration), collection) ?? [];
         if (files.length > 2000) throw new Error('Connections partition capacity reached');
         for (const file of files) {
           if (!/^[0-9a-f]{64}\.json$/.test(file)) throw new Error('Invalid Connections record file');
@@ -206,8 +226,11 @@ export class FileConnectionsStorage implements ConnectionsStorage {
         catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return current; throw error; }
         if (!raw || typeof raw !== 'object' || !('generation' in raw) || typeof raw.generation !== 'string' ||
             !/^generation-[0-9a-f-]{36}$/.test(raw.generation)) throw new Error('Invalid Connections generation');
+        let absent = false;
         for (const collection of collections) {
-          const files = await fs.readdir(join(root, raw.generation, collection));
+          // A collection added after this generation was written reads as empty (checked against a stable pointer below).
+          const files = await collectionFiles(join(root, raw.generation), collection);
+          if (!files) { absent = true; continue; }
           if (files.length > 2000) throw new Error('Connections partition capacity reached');
           for (const file of files) {
             if (!/^[0-9a-f]{64}\.json$/.test(file)) throw new Error('Invalid Connections record file');
@@ -216,6 +239,10 @@ export class FileConnectionsStorage implements ConnectionsStorage {
             current[collection].push(JSON.parse(json));
           }
         }
+        // A writer removes an old generation only after moving the pointer, so an unchanged pointer means the
+        // directory was simply never created, not caught mid-removal. Otherwise retry like any generation swap.
+        if (absent && !sameGeneration(JSON.parse(await fs.readFile(join(root, 'current.json'), 'utf8')), raw.generation))
+          throw Object.assign(new Error('Connections generation changed'), { code: 'ENOENT' });
         return current;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || attempt >= 2) throw error;

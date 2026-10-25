@@ -115,3 +115,31 @@ describe('command menus with a scope and language (Settings v2)', () => {
     expect(plain.get('disable_notification')).toBeNull();
   });
 });
+
+describe('Part 2b wire options (deleteMessage, no link preview, protected content)', () => {
+  const body = (fetch: ReturnType<typeof fakeFetch>, call = 0) => JSON.parse(String(fetch.mock.calls[call][1]?.body)) as Record<string, unknown>;
+
+  it('adds link_preview_options and protect_content only when asked, so existing sends are byte-identical', async () => {
+    const fetch = fakeFetch({ message_id: 1, chat: { id: 5, type: 'private' }, date: 0 });
+    const bot = new TelegramBotClient('123:abc', fetch);
+    await bot.sendMessage(5, 'plain');
+    await bot.sendMessage(5, 'see https://x.example/a', { noPreview: true });
+    await bot.sendMessage(5, 'kept', { protectContent: true, replyTo: 4, silent: true });
+    await bot.sendMessage(5, 'off', { noPreview: false, protectContent: false });
+    expect([0, 1, 2, 3].map((i) => body(fetch, i))).toEqual([
+      { chat_id: 5, text: 'plain' },
+      { chat_id: 5, text: 'see https://x.example/a', link_preview_options: { is_disabled: true } },
+      { chat_id: 5, text: 'kept', reply_parameters: { message_id: 4, allow_sending_without_reply: true }, disable_notification: true, protect_content: true },
+      { chat_id: 5, text: 'off' },
+    ]);
+  });
+
+  it('deleteMessage posts chat_id and message_id and surfaces a refusal (for example, older than 48 hours)', async () => {
+    const fetch = fakeFetch(true);
+    expect(await new TelegramBotClient('123:abc', fetch).deleteMessage(5, 77)).toBe(true);
+    expect(String(fetch.mock.calls[0][0])).toBe('https://api.telegram.org/bot123:abc/deleteMessage');
+    expect(body(fetch, 0)).toEqual({ chat_id: 5, message_id: 77 });
+    const refusing = vi.fn(async () => new Response(JSON.stringify({ ok: false, description: "Bad Request: message can't be deleted" })));
+    await expect(new TelegramBotClient('123:abc', refusing).deleteMessage(5, 77)).rejects.toBeInstanceOf(TelegramApiError);
+  });
+});
