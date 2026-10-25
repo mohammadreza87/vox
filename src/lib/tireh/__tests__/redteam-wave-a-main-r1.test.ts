@@ -118,11 +118,11 @@ describe('red team wave A on main r1: Circles notes and outsiders under the S03 
 });
 
 describe('red team wave A on main r1: known gaps (it.fails until fixed)', () => {
-  // Gap 1. conversation.ts accepts an attached image on the Mini App (and any converse caller) without
-  // STUDIO_IMAGES; converse() stores the user row unmarked and the reply only inherits marks from older rows.
-  // So with STUDIO_IMAGES=1 a document read out of a Mini App image is retained and extracted on the same
-  // turn: S12's suppression and people rule cover Telegram images only. Pre-existing on main as well.
-  it.fails('a sensitive document read out of a Mini App image never reaches history, extraction or memory', async () => {
+  // Gap 1 (fixed, fixer r1). conversation.ts accepts an attached image on the Mini App (and any converse caller)
+  // without STUDIO_IMAGES; converse() stored the user row unmarked and the reply only inherited marks from older
+  // rows. With STUDIO_IMAGES=1 converse() now marks both rows as an untriaged image turn (suppressed, people)
+  // and keeps IMAGE_WITHHELD_REPLY_TEXT in history. With the flag unset the behaviour stays main's.
+  it('a sensitive document read out of a Mini App image never reaches history, extraction or memory', async () => {
     vi.stubEnv('STUDIO_IMAGES', '1');
     const h = harness();
     h.setReply(`The card number reads ${DOC}.`);
@@ -133,7 +133,7 @@ describe('red team wave A on main r1: known gaps (it.fails until fixed)', () => 
     expect(JSON.stringify(await h.memories.listActive('aria'))).not.toContain('DOCCANARY');
   });
 
-  it.fails('a people photo described in the Mini App never becomes an appearance memory', async () => {
+  it('a people photo described in the Mini App never becomes an appearance memory', async () => {
     vi.stubEnv('STUDIO_IMAGES', '1');
     const h = harness();
     h.setReply(`Lovely photo, the man in the ${FACE} looks happy.`);
@@ -185,5 +185,39 @@ describe('red team wave A on main r1: known gaps (it.fails until fixed)', () => 
     await store.delete(correction.id);
     await store.delete(old.id);
     expect(JSON.stringify(notices.notices)).not.toContain(old.id);
+  });
+});
+
+describe('red team wave A on main r1: Mini App image turns (fixer r1)', () => {
+  it('the reply reaches the caller while history keeps only the withheld text, both rows marked, even when asked to remember', async () => {
+    vi.stubEnv('STUDIO_IMAGES', '1');
+    const h = harness();
+    h.setReply(`The card number reads ${DOC}.`);
+    expect(await h.gateway.converse('aria', 'reza', 'remember this card', { images: [miniAppImage()] })).toContain('DOCCANARY');
+    const rows = h.stored();
+    expect(rows.map((m) => m.role)).toEqual(['user', 'assistant']);
+    for (const row of rows) expect(row.imageDerived).toEqual({ suppressed: true, people: true });
+    expect(rows[1].text).toBe('(replied about a shared image; the details were not kept)');
+    expect(h.llm.extractionCalls + h.fast.extractionCalls).toBe(0);
+  });
+
+  it('a later text turn never brings the image turn back into extraction', async () => {
+    vi.stubEnv('STUDIO_IMAGES', '1');
+    const h = harness();
+    h.setReply(`Lovely photo, the man in the ${FACE} looks happy.`);
+    await h.gateway.converse('aria', 'reza', 'this is my brother Ali', { images: [miniAppImage()] });
+    h.setReply('Noted.');
+    await h.gateway.converse('aria', 'reza', 'I start my new job on Monday');
+    expect(h.extractionText()).toContain('new job on Monday'); // positive control: the later turn is extracted
+    expect(h.extractionText()).not.toContain('FACECANARY');
+    expect(h.extractionText()).not.toContain('my brother Ali');
+  });
+
+  it('with STUDIO_IMAGES unset a Mini App image turn is stored as on main (no mark)', async () => {
+    const h = harness();
+    h.setReply('A nice photo.');
+    await h.gateway.converse('aria', 'reza', 'look at this', { images: [miniAppImage()] });
+    expect(h.stored().every((m) => m.imageDerived === undefined)).toBe(true);
+    expect(h.stored()[1].text).toBe('A nice photo.');
   });
 });

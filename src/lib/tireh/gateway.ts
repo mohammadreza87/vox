@@ -36,7 +36,7 @@ import { NEGATED_MEMORY_REQUEST } from './memory/requests';
 import { decideScope, extractCandidates, resolveCandidateSource, firstNewIndex } from './memory/extraction';
 import { canPersonSee, describeScope, hasGuestAudience, isVisibleToAudience, audienceOf, historyMessageForChat, selectHistoryForChat, snapshotScopeAudience } from './memory/visibility';
 import { groupAddressing, targetsSomeoneElse } from './group-addressing';
-import { forceQuickTriage, IMAGE_PLACEHOLDER_TEXT, IMAGE_WITHHELD_REPLY_TEXT, imageDerivedMark, imageIngestionWanted, ingestTelegramImage, inheritedImageMark, withholdImageReply, type ImageTurn } from './images';
+import { forceQuickTriage, IMAGE_PLACEHOLDER_TEXT, IMAGE_WITHHELD_REPLY_TEXT, imageDerivedMark, imageIngestionWanted, ingestTelegramImage, inheritedImageMark, suppressImageMemory, withholdImageReply, type ImageTurn } from './images';
 import { logTelegramDiagnostic, voiceFailureDiagnostic } from './telegram/diagnostics';
 import { currentStageTimer, StageTimer, stageLaps, timed } from './timing';
 import type { PrivacySnapshot } from './privacy/snapshot';
@@ -688,7 +688,12 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     currentStageTimer()?.markOnce('ingress');
     let boundary = await measureStage('retrieval', () => this.boundary(persona, chat, speakerId, options.space, text, this.compactPrivacy()));
     if (!await this.requestAuthorized(options.authorize)) return this.changedReply;
-    const user: ChatMessage = { role: 'user', personId: speakerId, text, at: this.now(), privacy: this.stamp(boundary, [randomUUID()]) };
+    // S12 (STUDIO_IMAGES): an image attached outside Telegram (the Mini App) has no image triage on this path,
+    // so it is treated exactly as a Telegram image whose triage is unknown: both rows are marked suppressed
+    // (no extraction, now or later) with the people rule on, and the reply text is withheld from history.
+    const untriagedImage = tirehFlags().images && (options.images?.length ?? 0) > 0
+      ? imageDerivedMark({ suppressMemory: suppressImageMemory(null, text), containsPeople: true }) : undefined;
+    const user: ChatMessage = { role: 'user', personId: speakerId, text, at: this.now(), privacy: this.stamp(boundary, [randomUUID()]), ...untriagedImage };
     await this.retain(persona, chat, speakerId, user, boundary);
     if (!await this.requestAuthorized(options.authorize)) return this.changedReply;
     await this.observeRelationship(persona.id, chat, speakerId, text, `call:${randomUUID()}`, 'call', this.now(), boundary.space);
@@ -698,7 +703,9 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
       options.surface === 'pet' ? PET_SURFACE_FRAME : undefined);
     if (!(await this.unchanged(persona, chat, speakerId, boundary)) || !await this.requestAuthorized(options.authorize)) return this.changedReply;
     // S12: same history key as Telegram private chats, so the image mark carries here too.
-    const assistant: ChatMessage = { role: 'assistant', text: reply, at: this.now(), privacy: this.stamp(boundary, user.privacy!.sourceEventIds), ...imageContext };
+    const assistant: ChatMessage = untriagedImage
+      ? { role: 'assistant', text: withholdImageReply(null) ? IMAGE_WITHHELD_REPLY_TEXT : reply, at: this.now(), privacy: this.stamp(boundary, user.privacy!.sourceEventIds), ...untriagedImage }
+      : { role: 'assistant', text: reply, at: this.now(), privacy: this.stamp(boundary, user.privacy!.sourceEventIds), ...imageContext };
     await this.retain(persona, chat, speakerId, assistant, boundary);
     try {
       await this.formMemories(persona, chat, speakerId, boundary, [user, assistant]);
