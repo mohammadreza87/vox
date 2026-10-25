@@ -1,3 +1,4 @@
+import { ArchiveCapturePendingError } from './telegram-archive';
 /**
  * Runs every Telegram bot from one process with long polling:
  *  - @VoxxBot (the manager): /start, opens the Mini App, receives managed_bot
@@ -21,7 +22,7 @@ const REFRESH_MS = 8000;
 
 interface Loop { stop: () => void; token?: string }
 
-function pollLoop(
+export function pollLoop(
   bot: TelegramBotClient,
   allowed: string[],
   handle: (u: TelegramUpdate) => Promise<void>,
@@ -35,8 +36,14 @@ function pollLoop(
       try {
         const updates = await bot.getUpdates(offset, 25, allowed);
         for (const update of updates) {
+          try { await handle(update); }
+          catch (error) {
+            logTelegramDiagnostic(log, 'update_failed');
+            // A failed eligible capture has no durable receipt. Keep this and
+            // later updates unacknowledged; unrelated send failures never retry.
+            if (error instanceof ArchiveCapturePendingError) throw error;
+          }
           offset = update.update_id + 1;
-          await handle(update).catch(() => logTelegramDiagnostic(log, 'update_failed'));
         }
       } catch {
         if (!running) break;
@@ -135,10 +142,21 @@ export function startBots(studio: Studio): { stop: () => void } {
   };
   const routineTimer = studio.deps.requestedRoutines ? setInterval(runRoutines, 60_000) : undefined;
   void runRoutines();
+  let archiving = false;
+  const archive = async () => {
+    if (stopped || archiving || !studio.deps.telegramArchive) return;
+    archiving = true;
+    try { await studio.deps.telegramArchive.drain(); }
+    catch { log.warn({type: 'telegram_archive', outcome: 'pending'}); }
+    finally { archiving = false; }
+  };
+  const archiveTimer = studio.deps.telegramArchive ? setInterval(archive, 15_000) : undefined;
+  void archive();
   return {
     stop: () => {
       stopped = true;
       clearInterval(timer);
+      if (archiveTimer) clearInterval(archiveTimer);
       clearInterval(relationshipTimer);
       if (maintenanceTimer) clearInterval(maintenanceTimer);
       maintenanceAbort.abort();

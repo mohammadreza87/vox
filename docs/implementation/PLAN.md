@@ -10,6 +10,9 @@ Prepared 19 October 2026 for Joyixir OÜ. Product scope: adults in the EU/EEA an
 
 | Read this | Purpose |
 |---|---|
+| [Agent memory production program](../agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md) | Authorized ongoing team implementation, independent acceptance, main merge and guarded deployment; first private Telegram archive slice |
+| [Unified agent memory specification](../agents/AGENT_MEMORY_MASTER_SPEC.md) | Full agent product direction, 22 work packages, routing/preparation, KPI and improvement program |
+| [T1 storage contract](../agents/TELEGRAM_STORAGE_DECISION_T1.md) | Telegram archive plus explicit service-side authority/pending/index state and recovery qualification |
 | [Task backlog](BACKLOG.md) | Detailed tasks, dependencies, owners, reviewers and acceptance criteria |
 | [Machine-readable backlog](BACKLOG.json) | Canonical task data for dispatch and progress tracking |
 | [Architecture and Decisions contract](ARCHITECTURE.md) | Components, data contracts, prediction and notification behavior |

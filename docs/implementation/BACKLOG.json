@@ -2155,6 +2155,716 @@
         "docs/implementation/RELEASE_RF1_2026_10_20.md"
       ],
       "progress_note": "Own-account Work/Personal export, EN/FA note correction, RI1 request intake and RI2 retention operations are implemented. RI2 binds original audit/closure floors, explicitly reassesses unresolved cases, purges only eligible terminal records and retains finite scoped continuity/410 receipts. Independent RI2 local acceptance passed 36 cases. Formal restriction/objection, guest verification, provider/backups and broader rights fulfillment remain open. Prior additional independent immediate-export race proof remains unavailable after automatic security review; no replacement execution is claimed. GI1 guest metadata intake, bounded separate ledger, current-operator queue, key continuity, final authority fences and finite retention/status receipts are implemented behind reviewed-policy/key configuration. Independent review caught and verified the fix for a short purge-receipt horizon. Actual compiled proxy testing also exposed internal/public-origin mismatch; all six affected handlers now use the trusted server URL. Composed independent acceptance passed 158 external cases and 117 repository regressions; compiled/CI/release evidence remains bound to its exact candidate. Guest recovery-code possession never proves identity or authorizes private-data disclosure. RF1 scoped local-use slice on candidate 6c0718ec84a6e141e3cf22d0758782aa17611146 (tree 8dd033ed35801c0807f61765b844b507a1bc7cf9; base e5cf00f2f8b460bef956bc28f2535b4e1c7a8b0e) passed independent source acceptance (39/39, 11 files; 981 source hashes unchanged), production build, and CI230 tests/E2E (4,001 passed, 13 existing skips across 287 files). CI also passed 46 Node checks and 41 existing browser journeys; those browser journeys do not cover RF1 controls. Audit is not clean (exit 1; 14 findings, 8 moderate/6 high; continue-on-error). Compiled-app SQLite and FILE attempt09 each passed 13/13 (26 total); independent combined browser acceptance passed 26/26 (13 SQLite + 13 FILE), zero failures/skips/flaky; report and 110-file manifest are recorded in RIGHTS_LOCAL_USE.md. The runs use mock transport and synthetic identities; OS isolation, native browser zoom/language selection, physical-device and provider behavior remain unavailable. Candidate 25a2661 was rejected and historical evidence is preserved. RF1 covers requester account plus selected space/purpose only; it does not complete VOX-056 or establish legal compliance. RF1 PR #84 is merged and deployed as `cf63acf64c6eadf5a2247d2436e0a22bc114386b` (tree `a6a67d26f0e73addafb0dae4ff6b4e6301c82f0a`, build `FHheoV7JKPeQMsUBuCMEZ`); production legacy FILE and optional-policy configuration remain unchanged/off. 40 local/public unauthenticated route contracts and five bot ownership/configuration checks passed. No provider generation, authenticated live-user journey or device voice qualification occurred. RF1 does not complete VOX-056. Metadata retirement, RF2 erasure, provider/backup deletion, production IAM, legal eligibility and provider/device/user-flow gates remain open. فارسی: PR #84 ادغام و RF1 با ساخت `FHheoV7JKPeQMsUBuCMEZ` روی `cf63acf64c6eadf5a2247d2436e0a22bc114386b` مستقر شد؛ FILE قدیمی و سیاست‌های اختیاری بدون تغییر/خاموش ماندند. ۴۰ قرارداد مسیر محلی/عمومی بدون احراز هویت و پنج بررسی مالکیت/پیکربندی ربات موفق شدند. تولید ارائه‌دهنده، مسیر کاربر واردشده یا صلاحیت صدای دستگاه انجام نشد. RF1 کل VOX-056 را کامل نمی‌کند؛ بازنشستگی فراداده، RF2، حذف ارائه‌دهنده/پشتیبان، IAM، حقوقی و پذیرش کاربر/ارائه‌دهنده/دستگاه باز هستند."
+    },
+    {
+      "id": "AM-01",
+      "phase": "P1",
+      "title": "Agent charter and bounded adaptation contract",
+      "status": "in_progress",
+      "priority": "P1",
+      "size": "L",
+      "owner": "vox_architect",
+      "reviewer": "vox_qa_evaluator",
+      "model": "gpt-6.1-sol",
+      "requirements": [],
+      "depends_on": [],
+      "scope": "Charter schema/compiler, creator publication rules, supported language/delivery boundaries; adversarial user/connector content cannot mutate core",
+      "acceptance_criteria": [
+        "Charter schema/compiler, creator publication rules, supported language/delivery boundaries; adversarial user/connector content cannot mutate core",
+        "Current authority, correction and forgetting hold across restart; independent acceptance and exact deployment evidence remain separate."
+      ],
+      "verification": "Scoped tests and non-author evaluation defined in docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md; source/provider/runtime evidence reported separately.",
+      "deliverables": [
+        "Agent charter and bounded adaptation contract"
+      ],
+      "evidence": [
+        "docs/agents/AGENT_MEMORY_MASTER_SPEC.md",
+        "docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md"
+      ],
+      "progress_note": "Freeze first-slice identity/scope contract using existing charter; full creator migration remains AM-04."
+    },
+    {
+      "id": "AM-02",
+      "phase": "P1",
+      "title": "Telegram archive feasibility",
+      "status": "in_progress",
+      "priority": "P0",
+      "size": "L",
+      "owner": "vox_architect",
+      "reviewer": "vox_qa_evaluator",
+      "model": "gpt-6.1-sol",
+      "requirements": [],
+      "depends_on": [
+        "AM-01"
+      ],
+      "scope": "New archive adapter prototype using synthetic data; manifest/root discovery, bot-specific file handles, crash/race/revocation/delete tests; T0 limitations and T1 field inventory",
+      "acceptance_criteria": [
+        "New archive adapter prototype using synthetic data; manifest/root discovery, bot-specific file handles, crash/race/revocation/delete tests; T0 limitations and T1 field inventory",
+        "Current authority, correction and forgetting hold across restart; independent acceptance and exact deployment evidence remain separate."
+      ],
+      "verification": "Scoped tests and non-author evaluation defined in docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md; source/provider/runtime evidence reported separately.",
+      "deliverables": [
+        "Telegram archive feasibility"
+      ],
+      "evidence": [
+        "docs/agents/AGENT_MEMORY_MASTER_SPEC.md",
+        "docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md",
+        "docs/agents/AGENT_MEMORY_ACCEPTANCE.md",
+        "docs/agents/AGENT_MEMORY_TEST_RUN.md",
+        "docs/agents/AGENT_MEMORY_RELEASE.md"
+      ],
+      "progress_note": "AM-RELEASE-01 implements the bounded private owner-DM received-text archive on canonical FILE, with 32-event recent context, explicit controls, 128-checkpoint horizon and conservative correction/forget barriers. Independent QA-owned 59 cases passed; 98 selected regression cases and 45 installer/admission cases passed. Whole-suite first run exposed two stale bot update expectations (fixed) and contention-sensitive failures; unchanged isolated six-suite replay passed 74/74. Exclusive full coverage passed 7,319 tests with 15 existing skips under two workers and unchanged deadlines. Production build passed. Hosted CI, merge and installation remain pending. Capture activation remains held for provider/retention/kill/recovery qualification; this does not complete the broader AM package."
+    },
+    {
+      "id": "AM-03",
+      "phase": "P1",
+      "title": "Frozen baseline/evaluation protocol",
+      "status": "in_progress",
+      "priority": "P0",
+      "size": "L",
+      "owner": "vox_qa_evaluator",
+      "reviewer": "vox_privacy_security",
+      "model": "gpt-6.1-sol",
+      "requirements": [],
+      "depends_on": [],
+      "scope": "Protected chronological fixtures, query labels, metric definitions, corpus splits, resource budgets and reporting; baseline quality/latency/cost recorded or UNAVAILABLE",
+      "acceptance_criteria": [
+        "Protected chronological fixtures, query labels, metric definitions, corpus splits, resource budgets and reporting; baseline quality/latency/cost recorded or UNAVAILABLE",
+        "Current authority, correction and forgetting hold across restart; independent acceptance and exact deployment evidence remain separate."
+      ],
+      "verification": "Scoped tests and non-author evaluation defined in docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md; source/provider/runtime evidence reported separately.",
+      "deliverables": [
+        "Frozen baseline/evaluation protocol"
+      ],
+      "evidence": [
+        "docs/agents/AGENT_MEMORY_MASTER_SPEC.md",
+        "docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md",
+        "docs/agents/AGENT_MEMORY_ACCEPTANCE.md",
+        "docs/agents/AGENT_MEMORY_TEST_RUN.md",
+        "docs/agents/AGENT_MEMORY_RELEASE.md"
+      ],
+      "progress_note": "AM-RELEASE-01 implements the bounded private owner-DM received-text archive on canonical FILE, with 32-event recent context, explicit controls, 128-checkpoint horizon and conservative correction/forget barriers. Independent QA-owned 59 cases passed; 98 selected regression cases and 45 installer/admission cases passed. Whole-suite first run exposed two stale bot update expectations (fixed) and contention-sensitive failures; unchanged isolated six-suite replay passed 74/74. Exclusive full coverage passed 7,319 tests with 15 existing skips under two workers and unchanged deadlines. Production build passed. Hosted CI, merge and installation remain pending. Capture activation remains held for provider/retention/kill/recovery qualification; this does not complete the broader AM package."
+    },
+    {
+      "id": "AM-04",
+      "phase": "P1",
+      "title": "Creator identity migration",
+      "status": "planned",
+      "priority": "P1",
+      "size": "L",
+      "owner": "vox_architect",
+      "reviewer": "vox_qa_evaluator",
+      "model": "gpt-6.1-sol",
+      "requirements": [],
+      "depends_on": [
+        "AM-01"
+      ],
+      "scope": "`studio/permissions.ts`, `service.ts`, `persona.ts`, `tireh/types.ts`, prompt rules; existing persona becomes v1, no private-memory copy on succession, replace timed lock, tested rollback",
+      "acceptance_criteria": [
+        "`studio/permissions.ts`, `service.ts`, `persona.ts`, `tireh/types.ts`, prompt rules; existing persona becomes v1, no private-memory copy on succession, replace timed lock, tested rollback",
+        "Current authority, correction and forgetting hold across restart; independent acceptance and exact deployment evidence remain separate."
+      ],
+      "verification": "Scoped tests and non-author evaluation defined in docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md; source/provider/runtime evidence reported separately.",
+      "deliverables": [
+        "Creator identity migration"
+      ],
+      "evidence": [
+        "docs/agents/AGENT_MEMORY_MASTER_SPEC.md",
+        "docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md"
+      ],
+      "progress_note": "Authorized staged roadmap; not implemented by this task registration."
+    },
+    {
+      "id": "AM-05",
+      "phase": "P1",
+      "title": "Source/event and coverage ledger",
+      "status": "in_progress",
+      "priority": "P0",
+      "size": "L",
+      "owner": "vox_architect",
+      "reviewer": "vox_qa_evaluator",
+      "model": "gpt-6.1-sol",
+      "requirements": [],
+      "depends_on": [
+        "AM-02"
+      ],
+      "scope": "Telegram text/edit/media envelope, deduplication, source revisions, delivery state, outbox/lease behavior supported by selected backend; no false complete-history claim",
+      "acceptance_criteria": [
+        "Telegram text/edit/media envelope, deduplication, source revisions, delivery state, outbox/lease behavior supported by selected backend; no false complete-history claim",
+        "Current authority, correction and forgetting hold across restart; independent acceptance and exact deployment evidence remain separate."
+      ],
+      "verification": "Scoped tests and non-author evaluation defined in docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md; source/provider/runtime evidence reported separately.",
+      "deliverables": [
+        "Source/event and coverage ledger"
+      ],
+      "evidence": [
+        "docs/agents/AGENT_MEMORY_MASTER_SPEC.md",
+        "docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md",
+        "docs/agents/AGENT_MEMORY_ACCEPTANCE.md",
+        "docs/agents/AGENT_MEMORY_TEST_RUN.md",
+        "docs/agents/AGENT_MEMORY_RELEASE.md"
+      ],
+      "progress_note": "AM-RELEASE-01 implements the bounded private owner-DM received-text archive on canonical FILE, with 32-event recent context, explicit controls, 128-checkpoint horizon and conservative correction/forget barriers. Independent QA-owned 59 cases passed; 98 selected regression cases and 45 installer/admission cases passed. Whole-suite first run exposed two stale bot update expectations (fixed) and contention-sensitive failures; unchanged isolated six-suite replay passed 74/74. Exclusive full coverage passed 7,319 tests with 15 existing skips under two workers and unchanged deadlines. Production build passed. Hosted CI, merge and installation remain pending. Capture activation remains held for provider/retention/kill/recovery qualification; this does not complete the broader AM package."
+    },
+    {
+      "id": "AM-06",
+      "phase": "P1",
+      "title": "Typed temporal graph",
+      "status": "planned",
+      "priority": "P1",
+      "size": "L",
+      "owner": "vox_architect",
+      "reviewer": "vox_qa_evaluator",
+      "model": "gpt-6.1-sol",
+      "requirements": [],
+      "depends_on": [
+        "AM-05"
+      ],
+      "scope": "Nodes/edges/manifests repository; separate relationship/shared roots; current/previous validity; authorized traversal, no duplicate evidence",
+      "acceptance_criteria": [
+        "Nodes/edges/manifests repository; separate relationship/shared roots; current/previous validity; authorized traversal, no duplicate evidence",
+        "Current authority, correction and forgetting hold across restart; independent acceptance and exact deployment evidence remain separate."
+      ],
+      "verification": "Scoped tests and non-author evaluation defined in docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md; source/provider/runtime evidence reported separately.",
+      "deliverables": [
+        "Typed temporal graph"
+      ],
+      "evidence": [
+        "docs/agents/AGENT_MEMORY_MASTER_SPEC.md",
+        "docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md"
+      ],
+      "progress_note": "Authorized staged roadmap; not implemented by this task registration."
+    },
+    {
+      "id": "AM-07",
+      "phase": "P1",
+      "title": "Conversation briefs and consolidation",
+      "status": "planned",
+      "priority": "P1",
+      "size": "L",
+      "owner": "vox_architect",
+      "reviewer": "vox_qa_evaluator",
+      "model": "gpt-6.1-sol",
+      "requirements": [],
+      "depends_on": [
+        "AM-06"
+      ],
+      "scope": "Eight-message checkpoint plus meaningful boundaries; structured episodes/claims/open situations; current correction overlay; stable restart and bounded background fan-out",
+      "acceptance_criteria": [
+        "Eight-message checkpoint plus meaningful boundaries; structured episodes/claims/open situations; current correction overlay; stable restart and bounded background fan-out",
+        "Current authority, correction and forgetting hold across restart; independent acceptance and exact deployment evidence remain separate."
+      ],
+      "verification": "Scoped tests and non-author evaluation defined in docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md; source/provider/runtime evidence reported separately.",
+      "deliverables": [
+        "Conversation briefs and consolidation"
+      ],
+      "evidence": [
+        "docs/agents/AGENT_MEMORY_MASTER_SPEC.md",
+        "docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md"
+      ],
+      "progress_note": "Authorized staged roadmap; not implemented by this task registration."
+    },
+    {
+      "id": "AM-08",
+      "phase": "P1",
+      "title": "Fibonacci priority/time policy",
+      "status": "planned",
+      "priority": "P1",
+      "size": "L",
+      "owner": "vox_architect",
+      "reviewer": "vox_qa_evaluator",
+      "model": "gpt-6.1-sol",
+      "requirements": [],
+      "depends_on": [
+        "AM-07",
+        "AM-03"
+      ],
+      "scope": "Layer assignment/reason/review, independent recency/importance/relevance, high-priority old and new facts; matched comparison to ordinary summary retrieval",
+      "acceptance_criteria": [
+        "Layer assignment/reason/review, independent recency/importance/relevance, high-priority old and new facts; matched comparison to ordinary summary retrieval",
+        "Current authority, correction and forgetting hold across restart; independent acceptance and exact deployment evidence remain separate."
+      ],
+      "verification": "Scoped tests and non-author evaluation defined in docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md; source/provider/runtime evidence reported separately.",
+      "deliverables": [
+        "Fibonacci priority/time policy"
+      ],
+      "evidence": [
+        "docs/agents/AGENT_MEMORY_MASTER_SPEC.md",
+        "docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md"
+      ],
+      "progress_note": "Authorized staged roadmap; not implemented by this task registration."
+    },
+    {
+      "id": "AM-09",
+      "phase": "P1",
+      "title": "Exact/semantic/graph retrieval",
+      "status": "planned",
+      "priority": "P1",
+      "size": "L",
+      "owner": "vox_architect",
+      "reviewer": "vox_qa_evaluator",
+      "model": "gpt-6.1-sol",
+      "requirements": [],
+      "depends_on": [
+        "AM-06",
+        "AM-07"
+      ],
+      "scope": "`tireh/memory/`, context builder; exact refs, date/entity/lexical candidates, evaluated semantic/hop expansion; token bounds, citation and ambiguity handling",
+      "acceptance_criteria": [
+        "`tireh/memory/`, context builder; exact refs, date/entity/lexical candidates, evaluated semantic/hop expansion; token bounds, citation and ambiguity handling",
+        "Current authority, correction and forgetting hold across restart; independent acceptance and exact deployment evidence remain separate."
+      ],
+      "verification": "Scoped tests and non-author evaluation defined in docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md; source/provider/runtime evidence reported separately.",
+      "deliverables": [
+        "Exact/semantic/graph retrieval"
+      ],
+      "evidence": [
+        "docs/agents/AGENT_MEMORY_MASTER_SPEC.md",
+        "docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md"
+      ],
+      "progress_note": "Authorized staged roadmap; not implemented by this task registration."
+    },
+    {
+      "id": "AM-10",
+      "phase": "P1",
+      "title": "Memory and source UI",
+      "status": "planned",
+      "priority": "P1",
+      "size": "L",
+      "owner": "vox_frontend_engineer",
+      "reviewer": "vox_qa_evaluator",
+      "model": "gpt-6.1-sol",
+      "requirements": [],
+      "depends_on": [
+        "AM-01",
+        "AM-06",
+        "AM-09"
+      ],
+      "scope": "Tree/timeline/source cards, inspect/correct/forget/importance controls, EN/FA RTL, coverage states; source links do not bypass audience",
+      "acceptance_criteria": [
+        "Tree/timeline/source cards, inspect/correct/forget/importance controls, EN/FA RTL, coverage states; source links do not bypass audience",
+        "Current authority, correction and forgetting hold across restart; independent acceptance and exact deployment evidence remain separate."
+      ],
+      "verification": "Scoped tests and non-author evaluation defined in docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md; source/provider/runtime evidence reported separately.",
+      "deliverables": [
+        "Memory and source UI"
+      ],
+      "evidence": [
+        "docs/agents/AGENT_MEMORY_MASTER_SPEC.md",
+        "docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md"
+      ],
+      "progress_note": "Authorized staged roadmap; not implemented by this task registration."
+    },
+    {
+      "id": "AM-11",
+      "phase": "P1",
+      "title": "File library and extraction",
+      "status": "planned",
+      "priority": "P1",
+      "size": "L",
+      "owner": "vox_architect",
+      "reviewer": "vox_qa_evaluator",
+      "model": "gpt-6.1-sol",
+      "requirements": [],
+      "depends_on": [
+        "AM-05",
+        "AM-06",
+        "AM-09"
+      ],
+      "scope": "PDF/document/spreadsheet first; normalized artifact IDs, fragments, versions, source citations; sandbox/size limits, unsupported state, replacement invalidation",
+      "acceptance_criteria": [
+        "PDF/document/spreadsheet first; normalized artifact IDs, fragments, versions, source citations; sandbox/size limits, unsupported state, replacement invalidation",
+        "Current authority, correction and forgetting hold across restart; independent acceptance and exact deployment evidence remain separate."
+      ],
+      "verification": "Scoped tests and non-author evaluation defined in docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md; source/provider/runtime evidence reported separately.",
+      "deliverables": [
+        "File library and extraction"
+      ],
+      "evidence": [
+        "docs/agents/AGENT_MEMORY_MASTER_SPEC.md",
+        "docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md"
+      ],
+      "progress_note": "Authorized staged roadmap; not implemented by this task registration."
+    },
+    {
+      "id": "AM-12",
+      "phase": "P1",
+      "title": "Conversation recovery",
+      "status": "in_progress",
+      "priority": "P0",
+      "size": "L",
+      "owner": "vox_architect",
+      "reviewer": "vox_qa_evaluator",
+      "model": "gpt-6.1-sol",
+      "requirements": [],
+      "depends_on": [
+        "AM-05",
+        "AM-07",
+        "AM-09"
+      ],
+      "scope": "`/continue` and implicit continuation, current charter/scope/correction/open-action reconstruction; unknown send outcomes never cause blind duplicate effects",
+      "acceptance_criteria": [
+        "`/continue` and implicit continuation, current charter/scope/correction/open-action reconstruction; unknown send outcomes never cause blind duplicate effects",
+        "Current authority, correction and forgetting hold across restart; independent acceptance and exact deployment evidence remain separate."
+      ],
+      "verification": "Scoped tests and non-author evaluation defined in docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md; source/provider/runtime evidence reported separately.",
+      "deliverables": [
+        "Conversation recovery"
+      ],
+      "evidence": [
+        "docs/agents/AGENT_MEMORY_MASTER_SPEC.md",
+        "docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md",
+        "docs/agents/AGENT_MEMORY_ACCEPTANCE.md",
+        "docs/agents/AGENT_MEMORY_TEST_RUN.md",
+        "docs/agents/AGENT_MEMORY_RELEASE.md"
+      ],
+      "progress_note": "AM-RELEASE-01 implements the bounded private owner-DM received-text archive on canonical FILE, with 32-event recent context, explicit controls, 128-checkpoint horizon and conservative correction/forget barriers. Independent QA-owned 59 cases passed; 98 selected regression cases and 45 installer/admission cases passed. Whole-suite first run exposed two stale bot update expectations (fixed) and contention-sensitive failures; unchanged isolated six-suite replay passed 74/74. Exclusive full coverage passed 7,319 tests with 15 existing skips under two workers and unchanged deadlines. Production build passed. Hosted CI, merge and installation remain pending. Capture activation remains held for provider/retention/kill/recovery qualification; this does not complete the broader AM package."
+    },
+    {
+      "id": "AM-13",
+      "phase": "P3",
+      "title": "Reply/Decisions routing",
+      "status": "planned",
+      "priority": "P1",
+      "size": "L",
+      "owner": "vox_architect",
+      "reviewer": "vox_qa_evaluator",
+      "model": "gpt-6.1-sol",
+      "requirements": [],
+      "depends_on": [
+        "AM-01",
+        "AM-09",
+        "AM-03"
+      ],
+      "scope": "R0–R5 typed registry, economical routine reply route, escalation/clarification/fallback; no permission inference, full task-level comparison",
+      "acceptance_criteria": [
+        "R0–R5 typed registry, economical routine reply route, escalation/clarification/fallback; no permission inference, full task-level comparison",
+        "Current authority, correction and forgetting hold across restart; independent acceptance and exact deployment evidence remain separate."
+      ],
+      "verification": "Scoped tests and non-author evaluation defined in docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md; source/provider/runtime evidence reported separately.",
+      "deliverables": [
+        "Reply/Decisions routing"
+      ],
+      "evidence": [
+        "docs/agents/AGENT_MEMORY_MASTER_SPEC.md",
+        "docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md"
+      ],
+      "progress_note": "Authorized staged roadmap; not implemented by this task registration."
+    },
+    {
+      "id": "AM-14",
+      "phase": "P3",
+      "title": "Trace and cost ledger",
+      "status": "planned",
+      "priority": "P1",
+      "size": "L",
+      "owner": "vox_architect",
+      "reviewer": "vox_qa_evaluator",
+      "model": "gpt-6.1-sol",
+      "requirements": [],
+      "depends_on": [
+        "AM-05",
+        "AM-13"
+      ],
+      "scope": "Content-free operation/job/relationship attribution, usage source and price version, bill reconciliation, cold-recovery and discarded-work costs; completeness measured",
+      "acceptance_criteria": [
+        "Content-free operation/job/relationship attribution, usage source and price version, bill reconciliation, cold-recovery and discarded-work costs; completeness measured",
+        "Current authority, correction and forgetting hold across restart; independent acceptance and exact deployment evidence remain separate."
+      ],
+      "verification": "Scoped tests and non-author evaluation defined in docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md; source/provider/runtime evidence reported separately.",
+      "deliverables": [
+        "Trace and cost ledger"
+      ],
+      "evidence": [
+        "docs/agents/AGENT_MEMORY_MASTER_SPEC.md",
+        "docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md"
+      ],
+      "progress_note": "Authorized staged roadmap; not implemented by this task registration."
+    },
+    {
+      "id": "AM-15",
+      "phase": "P3",
+      "title": "Bounded relationship growth",
+      "status": "planned",
+      "priority": "P1",
+      "size": "L",
+      "owner": "vox_architect",
+      "reviewer": "vox_qa_evaluator",
+      "model": "gpt-6.1-sol",
+      "requirements": [],
+      "depends_on": [
+        "AM-01",
+        "AM-07",
+        "AM-12",
+        "AM-13"
+      ],
+      "scope": "Familiarity/topic continuity within creator bounds, preferences with provenance/expiry, resolved situations stop outreach; no global persona mutation",
+      "acceptance_criteria": [
+        "Familiarity/topic continuity within creator bounds, preferences with provenance/expiry, resolved situations stop outreach; no global persona mutation",
+        "Current authority, correction and forgetting hold across restart; independent acceptance and exact deployment evidence remain separate."
+      ],
+      "verification": "Scoped tests and non-author evaluation defined in docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md; source/provider/runtime evidence reported separately.",
+      "deliverables": [
+        "Bounded relationship growth"
+      ],
+      "evidence": [
+        "docs/agents/AGENT_MEMORY_MASTER_SPEC.md",
+        "docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md"
+      ],
+      "progress_note": "Authorized staged roadmap; not implemented by this task registration."
+    },
+    {
+      "id": "AM-16",
+      "phase": "P3",
+      "title": "First external connector",
+      "status": "planned",
+      "priority": "P1",
+      "size": "L",
+      "owner": "vox_architect",
+      "reviewer": "vox_qa_evaluator",
+      "model": "gpt-6.1-sol",
+      "requirements": [],
+      "depends_on": [
+        "AM-05",
+        "AM-09",
+        "AM-13"
+      ],
+      "scope": "One named provider/resource, read-only first, freshness and revocation/correction behavior; signed tool receipts, no secrets in memory",
+      "acceptance_criteria": [
+        "One named provider/resource, read-only first, freshness and revocation/correction behavior; signed tool receipts, no secrets in memory",
+        "Current authority, correction and forgetting hold across restart; independent acceptance and exact deployment evidence remain separate."
+      ],
+      "verification": "Scoped tests and non-author evaluation defined in docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md; source/provider/runtime evidence reported separately.",
+      "deliverables": [
+        "First external connector"
+      ],
+      "evidence": [
+        "docs/agents/AGENT_MEMORY_MASTER_SPEC.md",
+        "docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md"
+      ],
+      "progress_note": "Authorized staged roadmap; not implemented by this task registration."
+    },
+    {
+      "id": "AM-17",
+      "phase": "P3",
+      "title": "Predictive preparation and five-worker pool",
+      "status": "planned",
+      "priority": "P1",
+      "size": "L",
+      "owner": "vox_architect",
+      "reviewer": "vox_qa_evaluator",
+      "model": "gpt-6.1-sol",
+      "requirements": [],
+      "depends_on": [
+        "AM-13",
+        "AM-14"
+      ],
+      "scope": "Extend the draft controller with at most five scoped concurrent preparation workers per parent agent, aggregate cost reservations, nonrecursive delegation, cancellation and final-input validation; reconcile inherited single-preparation limits; compare event-driven/fixed/phi pacing and measure benefit over prediction-off",
+      "acceptance_criteria": [
+        "Extend the draft controller with at most five scoped concurrent preparation workers per parent agent, aggregate cost reservations, nonrecursive delegation, cancellation and final-input validation; reconcile inherited single-preparation limits; compare event-driven/fixed/phi pacing and measure benefit over prediction-off",
+        "Current authority, correction and forgetting hold across restart; independent acceptance and exact deployment evidence remain separate."
+      ],
+      "verification": "Scoped tests and non-author evaluation defined in docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md; source/provider/runtime evidence reported separately.",
+      "deliverables": [
+        "Predictive preparation and five-worker pool"
+      ],
+      "evidence": [
+        "docs/agents/AGENT_MEMORY_MASTER_SPEC.md",
+        "docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md"
+      ],
+      "progress_note": "Authorized staged roadmap; not implemented by this task registration."
+    },
+    {
+      "id": "AM-18",
+      "phase": "P3",
+      "title": "Voice/image/sensor increments",
+      "status": "planned",
+      "priority": "P1",
+      "size": "L",
+      "owner": "vox_architect",
+      "reviewer": "vox_qa_evaluator",
+      "model": "gpt-6.1-sol",
+      "requirements": [],
+      "depends_on": [
+        "AM-05",
+        "AM-11"
+      ],
+      "scope": "Real partial transcripts only after producer qualification; deliberate capture; stop/background/denied permission; OCR/audio/video as separate measured capabilities",
+      "acceptance_criteria": [
+        "Real partial transcripts only after producer qualification; deliberate capture; stop/background/denied permission; OCR/audio/video as separate measured capabilities",
+        "Current authority, correction and forgetting hold across restart; independent acceptance and exact deployment evidence remain separate."
+      ],
+      "verification": "Scoped tests and non-author evaluation defined in docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md; source/provider/runtime evidence reported separately.",
+      "deliverables": [
+        "Voice/image/sensor increments"
+      ],
+      "evidence": [
+        "docs/agents/AGENT_MEMORY_MASTER_SPEC.md",
+        "docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md"
+      ],
+      "progress_note": "Authorized staged roadmap; not implemented by this task registration.",
+      "capability_dependencies": {
+        "predictive_modalities": [
+          "AM-17"
+        ]
+      }
+    },
+    {
+      "id": "AM-19",
+      "phase": "P3",
+      "title": "Creator feature/design releases",
+      "status": "planned",
+      "priority": "P1",
+      "size": "L",
+      "owner": "vox_architect",
+      "reviewer": "vox_qa_evaluator",
+      "model": "gpt-6.1-sol",
+      "requirements": [],
+      "depends_on": [
+        "AM-04",
+        "AM-10",
+        "AM-15"
+      ],
+      "scope": "Versioned identity/UI/memory/routing/tool manifests, preview/diff/publish/rollback, no history rewrite; accessibility and cross-version regression",
+      "acceptance_criteria": [
+        "Versioned identity/UI/memory/routing/tool manifests, preview/diff/publish/rollback, no history rewrite; accessibility and cross-version regression",
+        "Current authority, correction and forgetting hold across restart; independent acceptance and exact deployment evidence remain separate."
+      ],
+      "verification": "Scoped tests and non-author evaluation defined in docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md; source/provider/runtime evidence reported separately.",
+      "deliverables": [
+        "Creator feature/design releases"
+      ],
+      "evidence": [
+        "docs/agents/AGENT_MEMORY_MASTER_SPEC.md",
+        "docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md"
+      ],
+      "progress_note": "Authorized staged roadmap; not implemented by this task registration."
+    },
+    {
+      "id": "AM-20",
+      "phase": "P4",
+      "title": "Migration, load, recovery, and deletion qualification",
+      "status": "planned",
+      "priority": "P1",
+      "size": "L",
+      "owner": "vox_architect",
+      "reviewer": "vox_qa_evaluator",
+      "model": "gpt-6.1-sol",
+      "requirements": [],
+      "depends_on": [
+        "AM-02",
+        "AM-05",
+        "AM-06",
+        "AM-07",
+        "AM-08",
+        "AM-09",
+        "AM-10",
+        "AM-11",
+        "AM-12",
+        "AM-13",
+        "AM-14"
+      ],
+      "scope": "Reconciliation, cold reconstruction at declared scale, latest authority survives restore, archive gaps visible, no stale-grant/tombstone rollback",
+      "acceptance_criteria": [
+        "Reconciliation, cold reconstruction at declared scale, latest authority survives restore, archive gaps visible, no stale-grant/tombstone rollback",
+        "Current authority, correction and forgetting hold across restart; independent acceptance and exact deployment evidence remain separate."
+      ],
+      "verification": "Scoped tests and non-author evaluation defined in docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md; source/provider/runtime evidence reported separately.",
+      "deliverables": [
+        "Migration, load, recovery, and deletion qualification"
+      ],
+      "evidence": [
+        "docs/agents/AGENT_MEMORY_MASTER_SPEC.md",
+        "docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md"
+      ],
+      "progress_note": "Authorized staged roadmap; not implemented by this task registration."
+    },
+    {
+      "id": "AM-21",
+      "phase": "P4",
+      "title": "Pilot and guarded promotion",
+      "status": "planned",
+      "priority": "P1",
+      "size": "L",
+      "owner": "vox_release_engineer",
+      "reviewer": "vox_qa_evaluator",
+      "model": "gpt-6.1-sol",
+      "requirements": [],
+      "depends_on": [
+        "AM-02",
+        "AM-03",
+        "AM-05",
+        "AM-12",
+        "AM-20"
+      ],
+      "scope": "Exact artifact/config/provider/device evidence; private then shared scopes; capability-specific cohort reports, kill switch and repair drill",
+      "acceptance_criteria": [
+        "Exact artifact/config/provider/device evidence; private then shared scopes; capability-specific cohort reports, kill switch and repair drill",
+        "Current authority, correction and forgetting hold across restart; independent acceptance and exact deployment evidence remain separate."
+      ],
+      "verification": "Scoped tests and non-author evaluation defined in docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md; source/provider/runtime evidence reported separately.",
+      "deliverables": [
+        "Pilot and guarded promotion"
+      ],
+      "evidence": [
+        "docs/agents/AGENT_MEMORY_MASTER_SPEC.md",
+        "docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md"
+      ],
+      "progress_note": "Authorized staged roadmap; not implemented by this task registration.",
+      "capability_dependencies": {
+        "full_program": [
+          "AM-01",
+          "AM-02",
+          "AM-03",
+          "AM-04",
+          "AM-05",
+          "AM-06",
+          "AM-07",
+          "AM-08",
+          "AM-09",
+          "AM-10",
+          "AM-11",
+          "AM-12",
+          "AM-13",
+          "AM-14",
+          "AM-15",
+          "AM-16",
+          "AM-17",
+          "AM-18",
+          "AM-19",
+          "AM-20"
+        ]
+      }
+    },
+    {
+      "id": "AM-22",
+      "phase": "P4",
+      "title": "KPI review and next-sprint generation",
+      "status": "planned",
+      "priority": "P1",
+      "size": "L",
+      "owner": "vox_product_lead",
+      "reviewer": "vox_qa_evaluator",
+      "model": "gpt-6.1-sol",
+      "requirements": [],
+      "depends_on": [
+        "AM-03",
+        "AM-14"
+      ],
+      "scope": "Minimized evidence pipeline, versioned dashboard/report, reproducible issues, sprint proposal records and post-release evaluation; no automatic persona or policy changes",
+      "acceptance_criteria": [
+        "Minimized evidence pipeline, versioned dashboard/report, reproducible issues, sprint proposal records and post-release evaluation; no automatic persona or policy changes",
+        "Current authority, correction and forgetting hold across restart; independent acceptance and exact deployment evidence remain separate."
+      ],
+      "verification": "Scoped tests and non-author evaluation defined in docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md; source/provider/runtime evidence reported separately.",
+      "deliverables": [
+        "KPI review and next-sprint generation"
+      ],
+      "evidence": [
+        "docs/agents/AGENT_MEMORY_MASTER_SPEC.md",
+        "docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md"
+      ],
+      "progress_note": "Authorized staged roadmap; not implemented by this task registration."
     }
   ],
   "delivery_slices": [
@@ -2233,6 +2943,13 @@
       "baseline": "2f0df5ffca7e180d9b246afc2acea9c848eee048",
       "evidence": "docs/implementation/REQUESTED_ROUTINES.md",
       "note": "Explicit internal-company operational availability for listed current owner/superadmin accounts, maximum 90 days, separate from jurisdiction approvals. Preserve adult/profile confirmation, purpose/agent/channel grants, pauses and holds. Exclude biometric recognition, content quality review and audio/image capabilities. Independent acceptance and deployment pending."
+    },
+    {
+      "id": "AM-RELEASE-01",
+      "status": "in_progress",
+      "baseline": "7224f40d69cf816a49139a30092cbf92551d2a8e",
+      "evidence": "docs/agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md",
+      "note": "First integrated private owner-DM Telegram archive slice. T1 direction recorded; architectural/privacy/acceptance and production compatibility required. Remaining AM roadmap stays open."
     }
   ]
 }
