@@ -1,11 +1,12 @@
 'use client';
 
 import { AnimatePresence, motion, type Variants } from 'framer-motion';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { api, haptic, type AgentView } from '../../../_lib/client';
 import { spawnCopy } from '../../../_lib/spawn-copy';
 import { DUR, EASE, SPRING } from '../../../_lib/motion';
 import { PALETTE } from '../../Cloud';
+import { useFrozenExit } from '../../motion/useFrozenExit';
 import { markFreshAgent } from '../../motion/useStageUp';
 import { errorMessage, LoadingFill, useNav } from '../../StudioApp';
 import { Banner, hueVars, Icon, Steps, TopBar, useConfirm } from '../../ui';
@@ -36,6 +37,16 @@ const stepVariants: Variants = {
     ? { opacity: 0, transition: { duration: 0.1 } }
     : { opacity: 0, x: -24 * c.d * (c.rtl ? -1 : 1), transition: { duration: DUR.instant, ease: EASE.exit } }),
 };
+
+/**
+ * One step of the board. Its exit is fixed by the move that replaced it: a quick Next then Back would
+ * otherwise turn the running exit round, framer would never finish it, and `mode="wait"` would hold the
+ * next step back for good (a blank Spawn).
+ */
+function StepPane({ ctx, children }: { ctx: StepCtx; children: ReactNode }) {
+  const exit = useFrozenExit(stepVariants, ctx);
+  return <motion.div className="vx-step" custom={ctx} variants={stepVariants} initial="enter" animate="center" exit={exit}>{children}</motion.div>;
+}
 
 /**
  * One flow for new hires and refines. `refine` (the profile's Refine button) needs no branch of its
@@ -158,7 +169,7 @@ export function SpawnScreen({ draftId, successorOf }: { draftId?: string; succes
         {/* The Brief step shows its own failure inline with Retry, above the dock: one alert, never two. */}
         {operationError && step !== 'brief' && <div className="vx-spawn-error"><Banner tone="danger">{operationError}</Banner></div>}
         <AnimatePresence mode="wait" initial={false} custom={ctx}>
-          <motion.div key={step} className="vx-step" custom={ctx} variants={stepVariants} initial="enter" animate="center" exit="exit">
+          <StepPane key={step} ctx={ctx}>
             {step === 'brief' && (
               <BriefStep busy={busy} successorOf={successorOf} error={operationError} onDirty={onBriefDirty} onDraft={async (brief) => {
                 left.current = false;   // asking for a draft means the person is here, whatever an earlier Close did
@@ -174,7 +185,7 @@ export function SpawnScreen({ draftId, successorOf }: { draftId?: string; succes
             {step === 'voice' && agent && <VoiceStep agent={agent} busy={busy} run={run} onUpdate={update} onNext={next} />}
             {step === 'look' && agent && <LookStep agent={agent} busy={busy} run={run} onUpdate={update} onNext={next} />}
             {step === 'hire' && agent && <HireStep agent={agent} busy={busy} run={run} onUpdate={update} onSayHi={() => setSayHi(true)} onEdit={go} />}
-          </motion.div>
+          </StepPane>
         </AnimatePresence>
         {agent && <SayHiSheet agent={agent} open={sayHi} onClose={() => setSayHi(false)} />}
       </div>
