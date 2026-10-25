@@ -18,7 +18,8 @@
 }
 .pet-root *, .pet-root *::before, .pet-root *::after { box-sizing: border-box; }
 .pet-root :where(button) { font: inherit; color: inherit; cursor: pointer; }
-.pet-root :focus-visible { outline: 2px solid var(--volt); outline-offset: 3px; }
+.pet-root :focus-visible, .pet-close:focus-visible { outline: 2px solid var(--volt,#D6FF5C); outline-offset: 3px; }
+.pet-close { min-height: 44px; padding: 8px 14px; border: 1px solid #fff6; border-radius: 24px; background: #14202C; color: #F2F1EC; font: inherit; cursor: pointer; }
 .pet-sr { position: absolute !important; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
 /* ---------- stage (layer 1): static backdrop, floor light, glow, lights-off ---------- */

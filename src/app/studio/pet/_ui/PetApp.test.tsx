@@ -31,6 +31,7 @@ function telegram() {
   const app = {
     initData: 'signed', initDataUnsafe: { user: { id: 1, first_name: 'Sara' } },
     expand: rec('expand'), requestFullscreen: rec('requestFullscreen'), disableVerticalSwipes: rec('disableVerticalSwipes'),
+    enableVerticalSwipes: rec('enableVerticalSwipes'), unlockOrientation: rec('unlockOrientation'), close: rec('close'),
     lockOrientation: rec('lockOrientation'), setHeaderColor: rec('header'), setBackgroundColor: rec('background'), setBottomBarColor: rec('bottomBar'),
     ready: rec('ready'), hideKeyboard: rec('hideKeyboard'), enableClosingConfirmation: rec('enableClosing'), disableClosingConfirmation: rec('disableClosing'),
     onEvent: vi.fn(), offEvent: vi.fn(),
@@ -60,7 +61,7 @@ describe('PetApp open sequence', () => {
     let charOnReady = false;
     app.ready.mockImplementation(() => { calls.push('ready'); charOnReady = !!container.querySelector('.pet-body svg'); });
     const { container } = render(<PetApp agentId="x" />);
-    expect(calls.slice(0, 7)).toEqual(['expand', 'requestFullscreen', 'disableVerticalSwipes', 'lockOrientation', 'header', 'background', 'bottomBar']);
+    expect(calls.slice(0, 5)).toEqual(['enableVerticalSwipes', 'unlockOrientation', 'header', 'background', 'bottomBar']);
     expect(app.ready).not.toHaveBeenCalled();
     await waitFor(() => expect(app.ready).toHaveBeenCalledTimes(1));
     expect(charOnReady).toBe(true);
@@ -339,6 +340,36 @@ describe('PetApp: talk outcomes, sleep, the cache and the page', () => {
     expect(screen.getByRole('textbox', { name: 'Talk to Mochi' })).toBeInTheDocument();
     act(() => { engine().fire.mockClear(); engines[0].opts.onCue?.({ type: 'care', action: 'feed' }); });
     await waitFor(() => expect(care).toHaveBeenCalledTimes(1));
+  });
+
+  it('offers Close while the initial request is pending and after it fails', async () => {
+    const { app } = telegram();
+    let reject!: (e: unknown) => void;
+    render(<PetApp agentId="x" api={fast({ get: () => new Promise((_resolve, no) => { reject = no; }) })} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Close Mini App' }));
+    expect(app.close).toHaveBeenCalledOnce();
+    await act(async () => reject(new PetError(503, 'pet_unavailable', 'Unavailable')));
+    await screen.findByRole('heading', { name: 'Can’t open this pet' });
+    fireEvent.click(screen.getByRole('button', { name: 'Close Mini App' }));
+    expect(app.close).toHaveBeenCalledTimes(2);
+  });
+
+  it('explains a missing chat grant and releases closing confirmation after a denied send', async () => {
+    const { app, calls } = telegram();
+    const talk = vi.fn(async () => { throw new PetError(403, 'conversation_failed', 'conversation_not_permitted'); });
+    const { container } = render(<PetApp agentId="x" api={fast({ talk })} />);
+    await ready(container);
+    const input = screen.getByRole('textbox');
+    fireEvent.change(input, { target: { value: 'Hello' } });
+    fireEvent.submit(input.closest('form')!);
+    expect(await screen.findByRole('heading', { name: 'Chat access is off' })).toBeInTheDocument();
+    expect(screen.getByText(/Agent access and allow this agent/)).toBeInTheDocument();
+    expect(screen.queryByRole('textbox')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+    expect(calls).toContain('enableClosing');
+    expect(calls.at(-1)).toBe('disableClosing');
+    fireEvent.click(screen.getByRole('button', { name: 'Close Mini App' }));
+    expect(app.close).toHaveBeenCalledOnce();
   });
 
   it('quiesces an access error and rechecks the server before restoring any private pet state', async () => {
