@@ -126,16 +126,16 @@ Each step merge was checked by a verifier. The table lists every finding and its
 | S06 | low | The kept `findNearest` gate reads the process environment; `findNearest` checks the 30-key cap before removing duplicates | Open (vector retrieval is not wired; open issue 4) |
 | S08 | medium | `instanceof StaleMemoryWriteError` brought into successor inheritance | Closed: structural `isStaleMemoryWriteError`, with a cross-bundle test |
 | S08 | medium | Re-snapshot `vox_audit` rows no longer split into 200-id batches | Closed: one row per 200 ids, with a 201-record test |
-| S08 | low | The other-persona guard in `policy/snapshot.ts` was dropped with its unnamed main test | Open: the snapshot mapping takes `personaId` from its input; review at S08 enablement (open issue 6) |
+| S08 | low | The other-persona guard in `policy/snapshot.ts` was dropped with its unnamed main test | **Closed in fixer r1:** `2b66ced` restores it, with a policy-differential case |
 | S08 | low | Dropped list named 2 of 9 contradictory first-run tests | Closed: the record names the probe failures and the rewritten suites |
 | S08 | low | `memoryNoticesFor` returns `newMemoryId` even when the recipient cannot see the replacement | Open: an opaque id only, `replacementVisible` false; review with the notice copy (product decision (e)) |
-| S11L | medium | The production refusal for voiceprints on Firestore is gone | Open: release gate (open issue 7) |
+| S11L | medium | The production refusal for voiceprints on Firestore is gone | Closed by the S03 merge `18d0415` (`createStudioVoiceprints` takes `production`; `voiceprint-storage` case 'refuses Firestore in production with STUDIO_VOICE_RECOGNITION=1 until Cloud KMS exists…'). Corrected in fixer r1 |
 | S11L | low | Verify does not cap the voice-note audio size before upload | Open (enroll caps at `MAX_VOICEPRINT_AUDIO_BYTES`; open issue 7) |
 | S11L | low | The invalidator moved from `allSettled` to `Promise.all` | Open (open issue 7) |
 | S03 | critical | Main's flag-on `cached-prompt-gateway-suite` and `-tail` wrappers deleted with no replacement | Closed: restored unchanged from main (104/104) |
 | S03 | medium | Main's earlier-run S03 cases in add/add files replaced without being named | Closed: named in WAVE_A_MAIN_INTEGRATION.md (S03); passing ones kept in 3 `.main-lineage` files |
 | S03 | low | No committed test keeps `962e877`'s turn-context lines out of blocks A/B/C | Open (open issue 3) |
-| S03 | low | `STUDIO_VOICE_RECOGNITION=1` with a missing or invalid `VOICEPRINT_KEY` no longer fails at startup | Open, same gate as the Firestore refusal (open issue 7) |
+| S03 | low | `STUDIO_VOICE_RECOGNITION=1` with a missing `VOICEPRINT_KEY` no longer fails at startup (an invalid key, or one reusing `STUDIO_SECRET`, still does) | Open, missing-key case only (open issue 7, product decision (h)) |
 | S12 | medium | Main's 'no image bytes in any log (stage timings false/true)' privacy test dropped although it does not contradict | Closed: both cases kept in `images-gateway.main-lineage.test.ts` with wave A's log string |
 | S12 | low | The record overstated wave A's coverage for that case | Closed: corrected in the record |
 | TAIL | medium | `STUDIO_VOICE_SHADOW` read from `process.env`, not through `tirehFlags()` | **Closed in this run:** `97bf549` |
@@ -162,6 +162,37 @@ Each step merge was checked by a verifier. The table lists every finding and its
 both new fields. The spec records (S03, S06, S08, S09, S11L, S12) still quote the original hash as the contract each
 step was built against.
 
+### QA round 1 on main, fixer round 1
+
+The round 1 QA findings (privacy red team, spec conformance, tests and types, code quality) were applied in severity
+order. Each fix has a test that fails without it; every `it.fails` case those findings pinned is now a plain `it`.
+
+- `b142d00` **One negation rule for memory requests (high).** "don't keep this", "never save this", "dont save this"
+  and "please don't ever save this" were read as explicit remember requests on an image turn, so extraction ran where
+  the person said not to keep it. `src/lib/tireh/memory/requests.ts` holds the one rule (never, keep, dont, no need to,
+  up to two words between; Persian with ZWNJ and Arabic yeh/kaf); `gateway.ts` `NO_MEMORY` and `images/retention.ts`
+  both read it. CQ1 and the two Persian r3 cases flipped; `memory-requests.test.ts` added.
+- `4d17ecf` **Image seam authority and download deadline.** The gateway hands `ingestTelegramImage` the turn authority
+  built exactly as text triage's (8a7dc55). It is re-checked after the download, before the acknowledgement and
+  triage (a moved authority drops the image, `tireh_image:authority_changed`), and passed to `decideParts`, so the
+  guarded transport re-checks it again. Each download carries `AbortSignal.timeout(IMAGE_DOWNLOAD_TIMEOUT_MS = 5 s)`
+  (`tireh_image:download_timeout`), and `downloadImage` stops reading and cancels a streamed body once it passes the cap.
+- `04bccc5` **Mini App image turns.** With `STUDIO_IMAGES=1`, `converse()` marks both rows of an attached-image turn as a
+  Telegram image turn with unknown triage (suppressed, people rule on; it fails closed, an explicit remember request
+  included, because this path has no image triage) and keeps `IMAGE_WITHHELD_REPLY_TEXT` in history. The reply still
+  reaches the caller. Flag unset: main's behaviour.
+- `02d468e` **JPEG metadata between scans.** `stripImageMetadata` walks every scan of a progressive JPEG and drops APPn
+  and COM wherever they sit; anything after EOI is dropped.
+- `2b66ced` **Policy oracle other-persona guard** restored (above).
+- `19f8586` **Supersede-notice erasure and the audit sweep (F013).** A deleted memory erases every notice naming it
+  (decorator delete path, whatever the flags are now); a rights-intake erasure erases every notice naming the person.
+  `withAuditRetention` runs the 12-month `vox_audit` sweep on the first append and then at most daily.
+  `FirestoreSupersededNoticeStore.listFor` is ordered and bounded, with a new composite index.
+- `0fd2d43` Test typing of the image fixture decider.
+
+Not changed, with the reason: the test-file typecheck (open issue 2); a notice TTL (product decision (f)); per-person
+erasure of `vox_audit` rows (append-only by design, retention only).
+
 ## 5. Catch-up with main
 
 `git fetch https://github.com/mohammadreza87/vox.git main` succeeded on 25 Oct 2026. `FETCH_HEAD` is
@@ -169,6 +200,36 @@ step was built against.
 caught up to `7224f40`.
 
 ## 6. Results for this tree
+
+### After fixer round 1 (HEAD of this record's last update)
+
+- **`npx tsc --noEmit -p tsconfig.json`:** exit 0. **ESLint** on the `.ts`/`.tsx` files fixer r1 changed: exit 0.
+- **Full `npx vitest run`, flags unset:** 16 failed files, 99 failed tests, 7749 passed, 2 expected failures (the
+  remaining QA `it.fails`: S08 successor filter F-r3, `DecisionService` timeout naming F030), 14 skipped, 56 unhandled
+  errors (listen EPERM). All 99 are environmental:
+  - mkdtemp `/tmp` EPERM: `adaptive/guest-rights/guest-rights` (20), `studio/guest-rights-http` (10),
+    `adaptive/rights-intake/storage` (2), `connections/mcp/__tests__/tls` (1);
+  - listen 127.0.0.1 EPERM: `connections/mcp/__tests__/self-service` (37), `foundation-broker-error-http` (10),
+    `foundation-broker` (1), `integration-broker` (1), `adaptive/runtime/reminders/reminders` (2);
+  - unix-socket listen: `adaptive/voice-identity/local-provider` (7); tsx child IPC:
+    `adaptive/personalization/learning/rollback` (1);
+  - timeouts under full-suite load, each passing alone: `adaptive/lifecycle/longterm-simulation` (1),
+    `adaptive/message-memory/message-memory` (1), `adaptive/observation/service` (1),
+    `studio/__tests__/indexed-reply-context` (1), `studio/__tests__/prepared-conversation-qualification` (3).
+- **Flag matrix, rows for the areas fixer r1 touched** (every other flag unset):
+  - `TIREH_CACHED_PROMPT=1` `src/lib/tireh`: 10 failed / 2055 passed, 2 expected failures: exactly S03's 10
+    (`diagnostics` 1, `gateway` 5, `history-privacy` 3, `voice-delivery` 1).
+  - `TIREH_RETRIEVAL_V2=1` memory-privacy, visibility, memory-eval: 41/41.
+  - `TIREH_SHARING_V2=1 TIREH_AUDIT_LOG=1` invariants, policy-differential, `src/lib/studio`: 11 failed / 1588 passed:
+    `guest-rights-http` (10, mkdtemp EPERM) and `prepared-conversation-qualification` (1, load timeout).
+  - `STUDIO_DECIDER=service TRIAGE_QUESTION_SET=v2 TIREH_DECISION_LOG=1` `src/lib/tireh src/lib/adaptive/decisions`:
+    2177 passed, 2 expected failures.
+  - `STUDIO_IMAGES=1` `src/lib/tireh`, `circles-dm`, `circles-channels`: 2134 passed, 2 expected failures.
+  - Informational, every flag on, `src/lib/tireh`: 9 failed / 2056 passed (S03's 10 less `voice-delivery`).
+  Every row is at least the result recorded below and in `WAVE_A_INTEGRATION.md`. The voiceprint and webhook rows were
+  not rerun (code not touched).
+
+### Before fixer round 1
 
 All runs are in `$TMPDIR/vox-wave-a-main` with a real `node_modules` (`npm ci`, openai 7.39.0), at the commit that
 adds this record. "Flags unset" means every wave A flag removed from the environment with `env -u` (the 13 variables
@@ -221,11 +282,13 @@ Every matrix row is at least as good as the recorded wave A result.
 ## 7. Open issues
 
 1. **Commit trailer.** The computed task asks for `Co-Authored-By: Claude Fable 5.1`; this session's attribution rule
-   says `Claude Opus 5.5`. The step merges on this branch carry Fable 5.1; this run's commits carry Opus 5.5.
-2. **Test files are not type-checked.** `tsconfig.json` excludes `*.test.ts(x)`. A strict typecheck of the 120 test
-   files changed since `7224f40` reports 52 errors, all of which also exist on the wave A branch (jest-dom matchers
-   in `EnrollScreen.test.tsx`, `NextResponse | Response` in the payments test, fake-bot and `NoTombstoneStore`
-   typings, among others). They pass at runtime. Add a test tsconfig in a follow-up.
+   says `Claude Opus 5.5`. The step merges on this branch carry Fable 5.1; this run's commits carry Opus 5.5; fixer r1's
+   commits carry Fable 5.1, as its task asked. Pick one before the branch is pushed.
+2. **Test files are not type-checked.** `tsconfig.json` excludes `*.test.ts(x)`. QA r1 counted 48 strict errors in the
+   124 test files changed since `7224f40`. A test tsconfig over every file under `src` (types `vitest/globals`,
+   `@testing-library/jest-dom/vitest`, `node`) reports 754 errors in about 80 files, most of them in main's own tests
+   (`api/chat`, `api/v2/chats`, `api/user/subscription`, stores). A CI gate needs that cleanup first; it is a
+   follow-up, not part of this merge. They pass at runtime.
 3. **S03.** Cache hit rates are not measured, and no reply model was checked against a mid-conversation system
    message (staging). No committed test pins `962e877`'s turn-context lines out of blocks A/B/C. Under
    `TIREH_CACHED_PROMPT=1` the 10 expected failures remain (string-`system` suites; each has a port).
@@ -239,18 +302,24 @@ Every matrix row is at least as good as the recorded wave A result.
    rule picked openai 7.34.0; this branch keeps main's 7.39.0, which main already deploys.
 6. **S08.** Enable `TIREH_SHARING_V2` soon: the base successor copy includes private and sensitive records. The
    successor filter still copies records S06 marks invalidated or expired (QA r3 known gap, an `it.fails` test).
-   Review the dropped other-persona guard in `policy/snapshot.ts` and `newMemoryId` in notices for an invisible
-   replacement. The Telegram `/memories` notice line and reserved audit kinds are TODO.
-7. **S11L.** No startup refusal for Firestore voiceprints with the flag on, and no startup failure for a missing or
-   invalid `VOICEPRINT_KEY` (main had both); KMS envelope encryption and key custody are release gates. Verify does not
+   Review `newMemoryId` in notices for an invisible replacement. The Telegram `/memories` notice line and reserved
+   audit kinds are TODO. Notices are erased with their memories and on a rights erasure, but have no TTL (product
+   decision (f)); `vox_audit` rows keep the 12-month sweep and have no per-person erasure (append-only by design). Before
+   `TIREH_SHARING_V2` runs on Firestore, deploy the new `tireh_supersede_notices` index.
+7. **S11L.** The startup refusal for Firestore voiceprints in production with the flag on is in place (`18d0415`), and
+   an invalid key or one reusing `STUDIO_SECRET` still fails startup. The one difference from main: a `VOICEPRINT_KEY`
+   that is missing while the flag is on is treated as off instead of failing startup. KMS envelope encryption and key
+   custody are release gates. Verify does not
    cap the voice-note size. The invalidator uses `Promise.all`. `setVoiceIdentityInvalidator` is a single slot. The
    pyannoteAI adapter is untested against a live account. EnrollScreen FA strings need native review. Main's own
    `runtime.ts` (two `voiceRecognitionEnabled` lines) and `adaptive/voice-identity/runtime-config.ts` still read
    `STUDIO_VOICE_RECOGNITION` from the environment directly; they predate this merge and are left as main has them.
 8. **S12.** The default decider has no `decideParts`, so with only `STUDIO_IMAGES=1` image triage is null (full
    routing needs `STUDIO_DECIDER=service`); `image-v1` decision-log rows are not written; a paused memory or history
-   setting still lets an image be triaged and answered; progressive JPEGs and p95 latency need a real Telegram check;
-   an `extract_text` reply can put document text into the person's own private history (privacy owner review).
+   setting still lets an image be triaged and answered; progressive JPEGs (now stripped across every scan, but still
+   skipped by the triage seam's baseline-only check) and p95 latency need a real Telegram check; an `extract_text`
+   reply can put document text into the person's own private history (privacy owner review). A Mini App image turn has
+   no image triage, so with the flag on it is always suppressed and its reply withheld from history.
 9. **S10L and S14.** Not wired; they wait on the DPIA. QA F025: S10L persists a per-person style profile against
    section 4.9 phase 0 (product decision (d)). At wiring time: honour net speech for a voice MATCH, re-check consent and
    epoch in `recordPromptOutcome('confirmed_self')`, catch throwing getters in `extractStyleFeatures`, and either
@@ -271,7 +340,8 @@ Every matrix row is at least as good as the recorded wave A result.
 - **Node 22 or later:** openai 7.x requires it. `package.json` has no `engines` field; confirm the Firebase/App
   Hosting runtime.
 - **Firestore indexes:** deploy `firestore.indexes.json` by hand (`firebase deploy --only firestore:indexes`). It holds
-  the `tireh_memories` vector index (S06) and the `vox_audit` composite index (`personaId` ASC, `at` DESC, S08).
+  the `tireh_memories` vector index (S06), the `vox_audit` composite index (`personaId` ASC, `at` DESC, S08) and the
+  `tireh_supersede_notices` composite index (`personaId` ASC, `recipientPersonId` ASC, `at` DESC, S08, fixer r1).
   `firebase.json` does not reference the file.
 - **Environment per flag** (all default off; read only through `tirehFlags()` in `src/lib/tireh/flags.ts`):
 
@@ -281,7 +351,7 @@ Every matrix row is at least as good as the recorded wave A result.
 | `TIREH_PROMPT_SYSTEM_TAIL=1` | S03 | `TIREH_CACHED_PROMPT=1`; a reply model that accepts a mid-conversation system message |
 | `TIREH_RETRIEVAL_V2=1` | S06 | — |
 | `TIREH_VECTOR_RETRIEVAL=1` | S06 | `TIREH_RETRIEVAL_V2=1`, Firestore, the deployed vector index (not wired yet) |
-| `TIREH_SHARING_V2=1` | S08 | — |
+| `TIREH_SHARING_V2=1` | S08 | Firestore: the deployed `tireh_supersede_notices` index |
 | `TIREH_AUDIT_LOG=1` | S08 | Firestore: the deployed `vox_audit` index |
 | `STUDIO_DECIDER=service` | S09 | `OPENAI_API_KEY` (Decisions API) |
 | `TRIAGE_QUESTION_SET=v2\|v2-live` | S09 | best with `STUDIO_DECIDER=service`; measure refusal and malformed rates first |
@@ -311,6 +381,6 @@ From the recorded set (none is implemented here; each is the product lead's call
 
 New from this run:
 
-- **(h)** Whether to restore main's startup refusals for voiceprints (Firestore storage with the flag on, and a
-  missing or invalid `VOICEPRINT_KEY`) before `STUDIO_VOICE_RECOGNITION` is enabled anywhere, or to rely on the KMS
-  release gate alone.
+- **(h)** Narrowed in fixer r1: the Firestore production refusal and the invalid-key failure are in place. Left to
+  decide: whether a `VOICEPRINT_KEY` that is missing while `STUDIO_VOICE_RECOGNITION=1` should fail startup (main) or
+  leave voiceprints off (this branch).

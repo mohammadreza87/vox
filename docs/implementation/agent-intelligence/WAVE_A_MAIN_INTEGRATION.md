@@ -602,8 +602,13 @@ Deleted by the r2 lineage (its rewrite of the first run), recorded by name:
 
 ### Open issues carried
 
-- Firestore storage with `STUDIO_VOICE_RECOGNITION=1` has no production refusal guard: main's `production` argument to
-  `voiceprintConfigFromEnv` has no counterpart in `createStudioVoiceprints` (QA open item).
+- ~~Firestore storage with `STUDIO_VOICE_RECOGNITION=1` has no production refusal guard.~~ Corrected (fixer r1): the
+  S03 merge `18d0415` restored it. `createStudioVoiceprints` takes `production` (runtime.ts passes `config.production`)
+  and, with Firestore storage and the flag on, throws 'Voiceprints on Firebase require Cloud KMS envelope encryption'
+  before any store is built (`voiceprint-storage.test.ts`, 'refuses Firestore in production with
+  STUDIO_VOICE_RECOGNITION=1 until Cloud KMS exists…'). An invalid key, or one that reuses `STUDIO_SECRET`, still
+  throws at startup. The one remaining difference from main: a `VOICEPRINT_KEY` that is missing while the flag is on is
+  treated as off instead of failing startup.
 - The local voice engine's `runtime-config.ts` reads `env.STUDIO_VOICE_RECOGNITION` directly (main's code, unchanged).
 
 ### Test results
