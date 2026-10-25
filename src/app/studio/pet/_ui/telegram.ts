@@ -16,8 +16,12 @@ export interface PetTelegram {
   ready(): void;
   expand(): void;
   requestFullscreen?(): void;
+  isFullscreen?: boolean;
+  exitFullscreen?(): void;
   disableVerticalSwipes?(): void;
+  enableVerticalSwipes?(): void;
   lockOrientation?(): void;
+  unlockOrientation?(): void;
   setHeaderColor?(color: string): void;
   setBackgroundColor?(color: string): void;
   setBottomBarColor?(color: string): void;
@@ -59,21 +63,18 @@ export function startIntent(): 'feed' | 'talk' | 'play' | null {
   return p === 'feed' || p === 'talk' || p === 'play' ? p : null;
 }
 
-const portrait = () => typeof window === 'undefined' || window.innerHeight >= window.innerWidth;
-
 /**
- * Boot, in the documented order (§3.5): expand → requestFullscreen (a desktop/web `fullscreenFailed`
- * is ignored) → disableVerticalSwipes → lockOrientation while portrait → header/background/bottom bar
- * to the backdrop colour. `ready()` is NOT called here: the page calls readyAfterPaint() once the
+ * Keep Telegram's normal window and dismissal gestures. Restore controls a previous surface may
+ * have disabled; never expand or enter fullscreen automatically. `ready()` is NOT called here:
+ * the page calls readyAfterPaint() once the
  * character is on screen, so Telegram's loading screen hands straight over to the character. The
  * safe-area vars are the page's layout effect's (syncSafeAreas, subscribed before it measures).
  */
 export function bootTelegram(color: string, app: PetTelegram | null = tg()): void {
   if (!app) return;
-  safely(() => app.expand());
-  safely(() => app.requestFullscreen?.());
-  safely(() => app.disableVerticalSwipes?.());
-  if (portrait()) safely(() => app.lockOrientation?.());
+  if (app.isFullscreen) safely(() => app.exitFullscreen?.());
+  safely(() => app.enableVerticalSwipes?.());
+  safely(() => app.unlockOrientation?.());
   paintChrome(color, app);
 }
 

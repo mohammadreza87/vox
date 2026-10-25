@@ -71,11 +71,13 @@ interface Fatal { kind: SleeperKind; look?: PetView['look']; stage?: StageN; nam
 
 /** Private state exists only inside one freshly verified foreground/session. Nothing is persisted. */
 export function PetApp({ agentId, api }: { agentId: string; api?: PetApi }) {
+  const [telegramReady, setTelegramReady] = useState(false);
   const [scope, setScope] = useState(() => ({ agentId, signed: tg()?.initData ?? '', generation: 0, active: true }));
   const blocked = useRef(false);
   const scopeRef = useRef(scope);
   scopeRef.current = scope;
   useLayoutEffect(() => {
+    setTelegramReady(true);
     clearLegacyPetSnapshots(agentId);
     const update = (activity = false) => {
       const previous = scopeRef.current;
@@ -106,14 +108,20 @@ export function PetApp({ agentId, api }: { agentId: string; api?: PetApi }) {
     return () => { off(); cancelAnimationFrame(frame); document.removeEventListener('pointerdown', onPointer, true); };
   }, [agentId]);
   const current = scope.agentId === agentId && scope.signed === (tg()?.initData ?? '');
-  if (!scope.active || !current) return <main className="pet-root" data-pet-root="" data-paused="" style={{ backgroundColor: PET_GROUND }} />;
-  return <PetSession key={`${agentId}:${scope.generation}`} agentId={agentId} injected={api} signed={scope.signed}
+  const app = tg();
+  return <>
+    {(!scope.active || !current) ? <main className="pet-root" data-pet-root="" data-paused="" style={{ backgroundColor: PET_GROUND }} /> :
+    <PetSession key={`${agentId}:${scope.generation}`} agentId={agentId} injected={api} signed={scope.signed}
     onForget={() => { blocked.current = true; }} onRetry={() => {
       // A retry starts with a fresh authenticated GET and fresh request/care/audio state.
       // Never revive the quiesced session or retry across an account/foreground change.
       if (blocked.current || !pageActive() || scopeRef.current.agentId !== agentId || scopeRef.current.signed !== (tg()?.initData ?? '')) return;
       setScope((s) => ({ ...s, generation: s.generation + 1 }));
-    }} />;
+    }} />}
+    {telegramReady && app?.initData && app.close && <button type="button" className="pet-close" style={{ position: 'fixed', zIndex: 20,
+      top: 'calc(var(--pet-safe-top,env(safe-area-inset-top,0px)) + 8px)', right: 'max(12px,env(safe-area-inset-right,0px))' }}
+      onClick={() => closeApp()}>{COPY.close}</button>}
+  </>;
 }
 
 function PetSession({ agentId, injected, signed, onForget, onRetry }: { agentId: string; injected?: PetApi; signed: string; onForget(): void; onRetry(): void }) {
@@ -294,6 +302,7 @@ function PetSession({ agentId, injected, signed, onForget, onRetry }: { agentId:
     clearPrivate();
     const b = isPetError(e) && e.code === 'pet_private' && e.body && 'look' in e.body ? e.body : undefined;
     const kind = isPetError(e) && e.status === 401 ? 'outside' : b ? 'private'
+      : isPetError(e) && e.status === 403 && e.code === 'conversation_failed' && e.message === 'conversation_not_permitted' ? 'chat-access'
       : isPetError(e) && e.status === 404 && e.code === 'pet_unavailable' ? 'resting' : 'unavailable';
     setFatal({ kind, look: b?.look, stage: b?.stage, name: b?.name });
   };
