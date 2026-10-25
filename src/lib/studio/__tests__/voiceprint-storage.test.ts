@@ -102,6 +102,12 @@ function fakeFirestore() {
       for (const [field, value] of Object.entries(data)) if (value === undefined) throw new Error(`undefined field ${field}`);
       docs.set(`${collection}/${id}`, { ...data });
     }),
+    // As Firestore: update() never creates a document (NOT_FOUND, code 5).
+    update: vi.fn(async (data: Record<string, unknown>) => {
+      const current = docs.get(`${collection}/${id}`);
+      if (!current) throw Object.assign(new Error('NOT_FOUND'), { code: 5 });
+      docs.set(`${collection}/${id}`, { ...current, ...data });
+    }),
     delete: vi.fn(async () => { docs.delete(`${collection}/${id}`); }),
   });
   const db = {

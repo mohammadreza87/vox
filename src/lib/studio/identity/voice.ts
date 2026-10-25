@@ -364,6 +364,7 @@ export class VoiceprintService implements VoiceNoteVerifier {
 
   async verifyVoiceNote(input: VoiceNoteInput, signal?: AbortSignal): Promise<VoiceVerification> {
     let owner: Uint8Array | undefined;
+    let tracked: ReturnType<VoiceprintService['track']> | undefined;
     const echoTemplates: Uint8Array[] = [];
     try {
       if (!this.enabled()) return NO_OPINION('disabled');
@@ -376,6 +377,9 @@ export class VoiceprintService implements VoiceNoteVerifier {
       if (telegramId === null) return NO_OPINION('not_enrolled');
       if (!(await this.o.eligiblePerson(telegramId))) return NO_OPINION('guest_or_group');
       if (grossTooShort(input.durationSec)) return NO_OPINION('too_short');
+      // Registered like enroll: invalidate() aborts an in-flight verification (and its touch) before deleting.
+      tracked = this.track(telegramId, input.space);
+      const withdrawn = tracked.controller.signal;
       const before = await this.authority(telegramId, input.space, input.personaId);
       if (!before.allowedVerify || !before.grantEventId) return NO_OPINION('consent_missing');
       const row = await this.o.store.get(input.personId, input.space);
@@ -392,8 +396,9 @@ export class VoiceprintService implements VoiceNoteVerifier {
       } catch {
         return NO_OPINION('provider_error');
       }
-      const combined = AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(this.o.verifyDeadlineMs ?? DEFAULT_VERIFY_DEADLINE_MS)]);
+      const combined = AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(this.o.verifyDeadlineMs ?? DEFAULT_VERIFY_DEADLINE_MS), withdrawn]);
       const echo = await untilAborted(combined, () => selfEcho.templates(combined)).catch(() => null);
+      if (withdrawn.aborted) return NO_OPINION('consent_missing');
       if (!echo) return NO_OPINION(combined.aborted ? 'timeout' : 'provider_error');
       echoTemplates.push(...echo.map(e => e.template));
       // A view, not a copy: STT reads the same buffer and nothing here mutates it.
@@ -413,7 +418,7 @@ export class VoiceprintService implements VoiceNoteVerifier {
           ]);
         }) as [{ netSpeechMs: number; speakers: number }, { candidateId?: string; score: number }, ...number[]];
       } catch (error) {
-        if (error instanceof FenceLost) return NO_OPINION('consent_missing');
+        if (error instanceof FenceLost || withdrawn.aborted) return NO_OPINION('consent_missing');
         if (error instanceof Aborted || combined.aborted) return NO_OPINION('timeout');
         // A second voice means a bystander: PRIV-020 applies.
         if (error instanceof VoiceprintProviderError && error.code === 'mixed_speakers') return NO_OPINION('guest_or_group');
@@ -425,7 +430,7 @@ export class VoiceprintService implements VoiceNoteVerifier {
       if (!meetsNetSpeech(netSpeechMs, MIN_NET_SPEECH_MS)) return NO_OPINION('too_short', netSpeechMs);
       if (echoScores.some(score => Number.isFinite(score) && score >= thresholds.selfEcho)) return NO_OPINION('self_echo', netSpeechMs);
       const after = await this.authority(telegramId, input.space, input.personaId);
-      if (after.fingerprint !== before.fingerprint || !after.allowedVerify) return NO_OPINION('consent_missing');
+      if (withdrawn.aborted || after.fingerprint !== before.fingerprint || !after.allowedVerify) return NO_OPINION('consent_missing');
       const ownerScore = ownerResult.candidateId === undefined || ownerResult.candidateId === 'owner' ? ownerResult.score : 0;
       const band = bandFor(ownerScore, thresholds);
       if (band === 'MATCH') await this.o.store.touch(input.personId, input.space, new Date(this.now())).catch(() => undefined);
@@ -433,6 +438,7 @@ export class VoiceprintService implements VoiceNoteVerifier {
     } catch {
       return NO_OPINION('provider_error');
     } finally {
+      tracked?.done();
       owner?.fill(0);
       for (const t of echoTemplates) t.fill(0);
     }

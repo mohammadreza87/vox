@@ -191,6 +191,11 @@ const toDoc = (row: VoiceprintRow): Record<string, unknown> => {
   return { ...rest, ...(lastConfirmedAt ? { lastConfirmedAt } : {}) };
 };
 
+const notFound = (error: unknown): boolean => {
+  const code = error && typeof error === 'object' ? (error as { code?: unknown }).code : undefined;
+  return code === 5 || code === 'not-found' || code === 'NOT_FOUND';
+};
+
 /** Firestore collection 'vox_voiceprints'; doc ids from voiceprintDocId. Only the contract fields are written. */
 export class FirestoreVoiceprintStore implements VoiceprintStore {
   constructor(private readonly db: Firestore, private readonly collection = 'vox_voiceprints') {}
@@ -209,10 +214,18 @@ export class FirestoreVoiceprintStore implements VoiceprintStore {
     const next = required(row);
     await this.ref(next.personId, next.space).set(toDoc(next));
   }
+  /**
+   * A field update that cannot create the document: a withdrawal whose delete commits first leaves nothing to
+   * update (NOT_FOUND is a no-op), so the sealed template is never written back. Never a read-then-set.
+   */
   async touch(personId: string, space: VoiceSpace, lastConfirmedAt: Date): Promise<void> {
-    const row = await this.get(personId, space);
-    if (!row) return;
-    await this.ref(personId, space).set(toDoc(required({ ...row, lastConfirmedAt })));
+    if (!(lastConfirmedAt instanceof Date) || Number.isNaN(lastConfirmedAt.getTime())) throw new Error('invalid_voiceprint_row');
+    try {
+      await this.ref(personId, space).update({ lastConfirmedAt });
+    } catch (error) {
+      if (notFound(error)) return;
+      throw error;
+    }
   }
   async delete(personId: string, space?: VoiceSpace): Promise<number> {
     let count = 0;
