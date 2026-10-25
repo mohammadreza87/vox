@@ -33,6 +33,8 @@ export interface TirehFlags {
   readonly images: boolean;
   /** S11L STUDIO_VOICE_RECOGNITION=1: voiceprint enrollment and verification; approval and consent are still required. */
   readonly voiceRecognition: boolean;
+  /** S11L STUDIO_VOICE_SHADOW=1: shadow verification of 1:1 voice notes, off the reply path; needs STUDIO_VOICE_RECOGNITION */
+  readonly voiceShadow: boolean;
 }
 
 const on = (value: string | undefined): boolean => value?.trim() === '1';
@@ -53,5 +55,6 @@ export function tirehFlags(env: NodeJS.ProcessEnv = process.env): TirehFlags {
     decisionLog: on(env.TIREH_DECISION_LOG),
     images: on(env.STUDIO_IMAGES),
     voiceRecognition: on(env.STUDIO_VOICE_RECOGNITION),
+    voiceShadow: on(env.STUDIO_VOICE_SHADOW),
   };
 }

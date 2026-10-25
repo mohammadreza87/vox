@@ -211,7 +211,6 @@ const HISTORY_LIMIT = 20;
 const EXTRACTION_WINDOW = 6;
 /** S11L shadow voiceprint verification bound; it never delays a reply. */
 const VOICE_SHADOW_DEADLINE_MS = 3000;
-const voiceShadowOn = (): boolean => process.env.STUDIO_VOICE_SHADOW?.trim() === '1';
 const GROUP_FORMAT_FOLLOWUP_MS = 2 * 60_000;
 // Chat replies think briefly (effort low); thinking shares max_tokens, so the
 // caps leave headroom while the prompt keeps the visible reply short.
@@ -1118,7 +1117,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
       // reply path (the reply never waits for it), bounded by VOICE_SHADOW_DEADLINE_MS.
       // The Step 0 guard above already returned for a guest audience; hasGuestAudience is kept as a
       // strictly safer value (it changes nothing here). Telegram turns are space 'work' (the boundary default).
-      if (verifier && chat.kind === 'private' && voiceShadowOn()) {
+      if (verifier && chat.kind === 'private' && tirehFlags().voiceShadow) {
         const input = { personaId: persona.id, personId: speakerId, space: 'work' as const, chatKind: 'private' as const, guestAudience: hasGuestAudience(this.deps.org, chat), audio, mimeType, durationSec: message.voice.duration, channel: 'telegram_voice_note' as const };
         // TODO(S10): hand the VoiceVerification to IdentityService.assess. Shadow mode: discarded; it never grants access.
         void (async () => verifier.verifyVoiceNote(input, AbortSignal.timeout(VOICE_SHADOW_DEADLINE_MS)))().catch(() => undefined);
