@@ -82,4 +82,23 @@ describe('TelegramBotClient.downloadImage', () => {
     expect(JSON.parse(String((fetchFn.mock.calls[0][1] as RequestInit).body))).toEqual({ file_id: 'file-1' });
     expect(String(fetchFn.mock.calls[1][0])).toContain(`/file/bot${TOKEN}/${FILE_PATH}`);
   });
+
+  it('stops reading a streamed body without a content-length once it passes the cap, and cancels it', async () => {
+    let pulls = 0;
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) { pulls += 1; controller.enqueue(new Uint8Array(512)); },
+      cancel() { cancelled = true; },
+    });
+    const { bot } = client(getFileResponse({ file_path: FILE_PATH }), new Response(body, { status: 200 }));
+    expect((await rejection(bot.downloadImage('file-1', { maxBytes: 1024 }))).message).toContain('file too large');
+    expect(cancelled).toBe(true);
+    expect(pulls).toBeLessThanOrEqual(4);
+  });
+
+  it('returns a streamed body within the cap', async () => {
+    const body = new Uint8Array([0xff, 0xd8, 0xff, 1, 2, 3]);
+    const { bot } = client(getFileResponse({ file_path: FILE_PATH }), new Response(body, { status: 200 }));
+    expect([...await bot.downloadImage('file-1', { maxBytes: 1024 })]).toEqual([...body]);
+  });
 });

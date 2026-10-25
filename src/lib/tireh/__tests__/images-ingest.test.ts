@@ -97,7 +97,7 @@ describe('ingestTelegramImage triage', () => {
   it('asks decideParts exactly one text part and one stripped image part', async () => {
     const h = harness();
     await h.run(h.photo('what is this?'));
-    expect(h.bot.downloadImage.mock.calls[0]).toEqual(['p-320', { maxBytes: 1_048_576 }]);
+    expect(h.bot.downloadImage.mock.calls[0]).toEqual(['p-320', { maxBytes: 1_048_576, signal: expect.any(AbortSignal) }]);
     const [parts, questions, timeout] = h.decider!.decideParts!.mock.calls[0];
     expect(parts).toHaveLength(2);
     expect(parts[0]).toEqual({ type: 'text', text: 'Image shared with Aria in a private chat.\nCaption: what is this?' });
@@ -116,7 +116,7 @@ describe('ingestTelegramImage triage', () => {
     expect(turn).toMatchObject({ triage: null, suppressMemory: true, containsPeople: true, forceQuick: false, text: IMAGE_PLACEHOLDER_TEXT });
     expect(turn!.images).toHaveLength(1);
     expect(h.bot.downloadImage.mock.calls.map((c) => c[0])).toEqual(['p-320', 'p-1280']);
-    expect(h.bot.downloadImage.mock.calls[1][1]).toEqual({ maxBytes: MAX_REPLY_IMAGE_BYTES });
+    expect(h.bot.downloadImage.mock.calls[1][1]).toEqual({ maxBytes: MAX_REPLY_IMAGE_BYTES, signal: expect.any(AbortSignal) });
     expect(containsBytes(decoded(turn), IMAGE_CANARIES.exif)).toBe(false);
     expect(Buffer.from(decoded(turn)).subarray(0, 2)).toEqual(Buffer.from([0xff, 0xd8]));
   });

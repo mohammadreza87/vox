@@ -217,9 +217,29 @@ export class TelegramBotClient {
     if (!response.ok) throw new TelegramApiError('downloadFile', `HTTP ${response.status}`);
     const length = Number(response.headers?.get?.('content-length') ?? NaN);
     if (Number.isFinite(length) && length > maxBytes) throw new TelegramApiError('downloadFile', 'file too large');
-    const buffer = await response.arrayBuffer();
-    if (buffer.byteLength > maxBytes) throw new TelegramApiError('downloadFile', 'file too large');
-    return new Uint8Array(buffer);
+    const reader = typeof response.body?.getReader === 'function' ? response.body.getReader() : undefined;
+    if (!reader) {
+      const buffer = await response.arrayBuffer();
+      if (buffer.byteLength > maxBytes) throw new TelegramApiError('downloadFile', 'file too large');
+      return new Uint8Array(buffer);
+    }
+    // Streamed: stop reading, and cancel the body, as soon as the running total passes the cap.
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => undefined);
+        throw new TelegramApiError('downloadFile', 'file too large');
+      }
+      chunks.push(value);
+    }
+    const bytes = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+    return bytes;
   }
 
   getMe(): Promise<TelegramUser> {

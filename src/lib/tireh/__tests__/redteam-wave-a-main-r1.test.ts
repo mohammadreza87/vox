@@ -141,10 +141,10 @@ describe('red team wave A on main r1: known gaps (it.fails until fixed)', () => 
     expect(JSON.stringify(await h.memories.listActive('aria'))).not.toContain('FACECANARY');
   });
 
-  // Gap 2. Image triage (decideParts) runs after the boundary but receives no DeciderAuthority and is not
-  // preceded by unchanged(): an audience withdrawn during the download still exports the image to the
-  // decider. 8a7dc55 gave text triage that fence; the image seam has none (neither side had it).
-  it.fails('an image is not exported to the decider when the audience was withdrawn during its download', async () => {
+  // Gap 2 (fixed, fixer r1). Image triage (decideParts) ran after the boundary but received no DeciderAuthority
+  // and was not preceded by unchanged(): an audience withdrawn during the download still exported the image to
+  // the decider. The gateway now hands the image seam the turn authority, as 8a7dc55 did for text triage.
+  it('an image is not exported to the decider when the audience was withdrawn during its download', async () => {
     vi.stubEnv('STUDIO_IMAGES', '1');
     let withdrawn = false;
     const runtimePrivacy: RuntimePrivacy = {
@@ -159,7 +159,7 @@ describe('red team wave A on main r1: known gaps (it.fails until fixed)', () => 
     expect(h.decider.decideParts).not.toHaveBeenCalled();
   });
 
-  it.fails('image triage hands the decider the turn authority, as text triage does since 8a7dc55', async () => {
+  it('image triage hands the decider the turn authority, as text triage does since 8a7dc55', async () => {
     vi.stubEnv('STUDIO_IMAGES', '1');
     const h = harness();
     await h.gateway.handleUpdate('aria', privatePhoto(TG.reza, h.ladder.sizes, 'what is this?'));

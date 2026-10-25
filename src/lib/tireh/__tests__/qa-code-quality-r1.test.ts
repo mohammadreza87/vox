@@ -7,10 +7,9 @@
  *  - CQ1 (fixed, fixer r1): main's S12 lineage treated "never" and "keep" as
  *    negations (images/policy.ts NEGATED_REMEMBER); wave A's IMAGE_NO_MEMORY
  *    dropped them. Both now read memory/requests.ts NEGATED_MEMORY_REQUEST.
- *  - CQ2: main's S12 lineage bounded each image download with
- *    AbortSignal.timeout(IMAGE_DOWNLOAD_TIMEOUT_MS = 5000); wave A's
- *    ingestTelegramImage passes no signal, so a stalled Telegram file
- *    download holds the turn open with no deadline.
+ *  - CQ2 (fixed, fixer r1): main's S12 lineage bounded each image download
+ *    with AbortSignal.timeout(IMAGE_DOWNLOAD_TIMEOUT_MS = 5000); wave A's
+ *    ingestTelegramImage passed no signal. It now passes one again.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -44,7 +43,7 @@ describe('CQ1: a negated caption is never an explicit remember request', () => {
 });
 
 describe('CQ2: every image download carries a deadline', () => {
-  it.fails('ingestTelegramImage passes an AbortSignal to each downloadImage call', async () => {
+  it('ingestTelegramImage passes an AbortSignal to each downloadImage call', async () => {
     const ladder = photoLadder();
     const bot = imageBot(ladder.files);
     const deps: ImageIngestDeps = {

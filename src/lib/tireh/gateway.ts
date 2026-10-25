@@ -516,7 +516,13 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     if (imageWanted) {
       // A public-only audience (Circles: an outsider who chose replies) is valid for the current turn only:
       // its image is never downloaded or triaged, as when ingestion required validateAudience itself.
-      imageTurn = boundary.publicOnly ? null : await ingestTelegramImage({ org, decider: boundary.compact || this.compactPrivacy() ? undefined : this.deps.decider, llm: this.deps.llm, fastLlm: this.deps.fastLlm, bot, log: this.log }, persona, chat, speaker.id, message, caption);
+      // The image seam carries the turn's authority as text triage does (8a7dc55): it is re-checked
+      // after the download, before the acknowledgement and triage, and again at the guarded transport.
+      const imageAuthority = { authorize: async () => await this.groupAllowed(persona, chat, speaker.id, 'reply') &&
+        await this.unchanged(persona, chat, speaker.id, boundary) ? boundary.key : null,
+        ...(boundary.compact ? { authorizeNow: () => this.exportAuthorizedNow(persona, chat, speaker.id, boundary) } : {}) };
+      imageTurn = boundary.publicOnly ? null : await ingestTelegramImage({ org, decider: boundary.compact || this.compactPrivacy() ? undefined : this.deps.decider, llm: this.deps.llm, fastLlm: this.deps.fastLlm, bot, log: this.log,
+        authority: imageAuthority }, persona, chat, speaker.id, message, caption);
       // A captionless image that could not be ingested is ignored, as before.
       if (!imageTurn && !caption.trim()) return 'ignored';
     }

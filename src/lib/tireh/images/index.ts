@@ -15,7 +15,7 @@ import { hasGuestAudience } from '../memory/visibility';
 import type { LLM, LLMImage } from '../llm';
 import type { OrgDirectory } from '../org/directory';
 import type { TelegramBotClient, TelegramMessage, TelegramPhotoSize } from '../telegram/client';
-import type { Decider, DeciderPart, DecisionAnswer, DecisionQuestion, Triage } from '../triage';
+import type { Decider, DeciderAuthority, DeciderPart, DecisionAnswer, DecisionQuestion, Triage } from '../triage';
 import type { ChatContext, Persona } from '../types';
 import {
   MAX_REPLY_IMAGE_BYTES, pickPhotoSize, replyPhotoSize, sniffImageMime, stripImageMetadata, toLLMImage,
@@ -31,9 +31,11 @@ export * from './retention';
 export const IMAGE_PLACEHOLDER_TEXT = '(shared a photo)';
 export const IMAGE_ACK_AFTER_MS = 1_500;
 export const IMAGE_TRIAGE_TIMEOUT_MS = 2_000;
+/** Each Telegram file download (getFile plus the file fetch) is bounded by this deadline. */
+export const IMAGE_DOWNLOAD_TIMEOUT_MS = 5_000;
 export const IMAGE_LOG_PREFIX = 'tireh_image:';
 
-export type ImageLogCode = 'vision_unsupported' | 'download_failed' | 'unsupported_type' | 'too_large' | 'metadata_invalid' | 'triage_failed' | 'triage_timeout' | 'ack_failed';
+export type ImageLogCode = 'vision_unsupported' | 'download_failed' | 'download_timeout' | 'authority_changed' | 'unsupported_type' | 'too_large' | 'metadata_invalid' | 'triage_failed' | 'triage_timeout' | 'ack_failed';
 
 export interface ImageTurn {
   /** Exactly one current-turn image. */
@@ -50,7 +52,7 @@ export interface ImageTurn {
 type ImageDeciderPart = DeciderPart;
 
 export type ImageDecider = Decider & {
-  decideParts?: (input: readonly ImageDeciderPart[], questions: DecisionQuestion[], timeoutMs?: number) => Promise<Record<string, DecisionAnswer>>;
+  decideParts?: (input: readonly ImageDeciderPart[], questions: DecisionQuestion[], timeoutMs?: number, authority?: DeciderAuthority) => Promise<Record<string, DecisionAnswer>>;
 };
 
 export interface ImageIngestDeps {
@@ -60,6 +62,15 @@ export interface ImageIngestDeps {
   fastLlm?: LLM;
   bot: TelegramBotClient;
   log: Pick<Console, 'warn'>;
+  /**
+   * The turn's authority, built by the gateway exactly as for text triage
+   * (8a7dc55): `authorize` resolves to the turn's policy key while the
+   * boundary is unchanged, else null. It is checked once the image has been
+   * downloaded, before the acknowledgement and before triage, and is handed
+   * to decideParts so the guarded transport re-checks it before the image
+   * leaves the process. A withdrawn authority drops the image for the turn.
+   */
+  authority?: DeciderAuthority;
 }
 
 const FORCED_TASKS: ReadonlyArray<ImageTriage['task']> = ['explain', 'extract_text', 'decide', 'react'];
@@ -110,9 +121,11 @@ type Fetched = { ok: true; image: LLMImage } | { ok: false; code: ImageLogCode }
 async function fetchImage(deps: ImageIngestDeps, fileId: string, maxBytes: number, expected?: ImageMime): Promise<Fetched> {
   let bytes: Uint8Array;
   try {
-    bytes = await deps.bot.downloadImage(fileId, { maxBytes });
+    bytes = await deps.bot.downloadImage(fileId, { maxBytes, signal: AbortSignal.timeout(IMAGE_DOWNLOAD_TIMEOUT_MS) });
   } catch (error) {
-    return { ok: false, code: error instanceof Error && /file too large/.test(error.message) ? 'too_large' : 'download_failed' };
+    if (error instanceof Error && /file too large/.test(error.message)) return { ok: false, code: 'too_large' };
+    // Structural check (no instanceof across bundles): AbortSignal.timeout rejects with a TimeoutError.
+    return { ok: false, code: (error as { name?: unknown } | null)?.name === 'TimeoutError' ? 'download_timeout' : 'download_failed' };
   }
   if (!ArrayBuffer.isView(bytes) || bytes.byteLength > maxBytes) return { ok: false, code: 'too_large' };
   const mime = sniffImageMime(bytes);
@@ -121,6 +134,15 @@ async function fetchImage(deps: ImageIngestDeps, fileId: string, maxBytes: numbe
     return { ok: true, image: toLLMImage(stripImageMetadata(bytes, mime), mime) };
   } catch {
     return { ok: false, code: 'metadata_invalid' };
+  }
+}
+
+async function stillAuthorized(authority: DeciderAuthority): Promise<boolean> {
+  try {
+    if (authority.authorizeNow && !authority.authorizeNow()) return false;
+    return await authority.authorize() !== null;
+  } catch {
+    return false;
   }
 }
 
@@ -141,6 +163,7 @@ async function runTriage(deps: ImageIngestDeps, persona: Persona, caption: strin
       [{ type: 'text', text: imageTriageInput(persona, caption) }, { type: 'image', image: triageImage }],
       [...IMAGE_TRIAGE_QUESTIONS],
       IMAGE_TRIAGE_TIMEOUT_MS,
+      deps.authority,
     ))
     .then((answers) => ({ answers }), () => 'failed' as const);
   try {
@@ -188,6 +211,11 @@ export async function ingestTelegramImage(
     ? await fetchImage(deps, triageSize!.file_id, TRIAGE_MAX_BYTES)
     : await fetchImage(deps, source.fileId, MAX_REPLY_IMAGE_BYTES, source.mime);
   if (!first.ok) { logCode(deps.log, first.code); return null; }
+
+  // The turn's authority may have moved during the download (consent withdrawn,
+  // person removed, /forgetall): then the image is dropped before it is
+  // acknowledged or exported anywhere.
+  if (deps.authority && !await stillAuthorized(deps.authority)) { logCode(deps.log, 'authority_changed'); return null; }
 
   // (e) One fixed acknowledgement when triage and the reply download are slow.
   let finished = false;
