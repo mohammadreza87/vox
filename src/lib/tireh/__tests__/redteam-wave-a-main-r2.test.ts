@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PersonaGateway } from '../gateway';
 import { InMemoryChatHistoryStore, InMemoryMemoryStore, InMemoryShareOfferStore, InMemoryUpdateDeduper } from '../memory/store';
 import { explicitMemoryRequest, negatedMemoryRequest } from '../memory/requests';
-import { suppressImageMemory } from '../images';
+import { IMAGE_PEOPLE_THRESHOLD, imageShowsPeople, suppressImageMemory } from '../images';
 import { IMAGE_PEOPLE_RULE } from '../memory/extraction';
 import { systemText } from '../llm-content';
 import type { LLMRequest } from '../llm';
@@ -114,8 +114,9 @@ describe('red team wave A on main r2: a negated memory request is read as a requ
 // contains_people >= 0.5. Main's dropped images/policy.ts turned it on for kind 'photo_of_people' or
 // contains_people >= 0.3 ("leans protective"). A photo the decider itself classifies as a photo of people, with an
 // uncertain people probability, is extracted without IMAGE_PEOPLE_RULE and without the appearance filter.
+// Closed by fixer r2 (imageShowsPeople: kind photo_of_people or contains_people >= 0.3, main's rule): plain `it` now.
 describe('red team wave A on main r2: the people rule is weaker than the main lineage it replaced', () => {
-  it.fails('a photo triaged as photo_of_people turns the people rule on, whatever its people probability', async () => {
+  it('a photo triaged as photo_of_people turns the people rule on, whatever its people probability', async () => {
     vi.stubEnv('STUDIO_IMAGES', '1');
     const h = harness(imageAnswers({ kind: 'photo_of_people', task: 'remember', people: 0.4, sensitive: 0.05 }));
     h.setReply(`Nice, the man in the ${FACE} looks happy.`);
@@ -124,6 +125,34 @@ describe('red team wave A on main r2: the people rule is weaker than the main li
     expect(h.extractions().length).toBeGreaterThan(0); // positive control: an explicit remember request is extracted
     expect(shown).toContain(IMAGE_PEOPLE_RULE);
     expect(JSON.stringify(await h.memories.listActive('aria'))).not.toContain('FACECANARY');
+  });
+
+  it('main\'s threshold: an uncertain 0.3 people probability on any image kind turns the people rule on', async () => {
+    vi.stubEnv('STUDIO_IMAGES', '1');
+    const h = harness(imageAnswers({ kind: 'other', task: 'remember', people: 0.3, sensitive: 0.05 }));
+    h.setReply(`Nice, the man in the ${FACE} looks happy.`);
+    await h.gateway.handleUpdate('aria', privatePhoto(TG.reza, h.ladder.sizes, 'remember this, my brother Ali'));
+    expect(h.extractions().length).toBeGreaterThan(0);
+    expect(h.extractions().map((r) => systemText(r.system)).join('\n')).toContain(IMAGE_PEOPLE_RULE);
+    expect(JSON.stringify(await h.memories.listActive('aria'))).not.toContain('FACECANARY');
+  });
+
+  it('control: an image with no people (kind other, 0.1) is extracted without the people rule', async () => {
+    vi.stubEnv('STUDIO_IMAGES', '1');
+    const h = harness(imageAnswers({ kind: 'other', task: 'remember', people: 0.1, sensitive: 0.05 }));
+    h.setReply(`The ${PLAN}.`);
+    await h.gateway.handleUpdate('aria', privatePhoto(TG.reza, h.ladder.sizes, 'remember this'));
+    expect(h.extractions().length).toBeGreaterThan(0);
+    expect(h.extractions().map((r) => systemText(r.system)).join('\n')).not.toContain(IMAGE_PEOPLE_RULE);
+  });
+
+  it('imageShowsPeople: unknown triage, kind photo_of_people or contains_people >= 0.3', () => {
+    const triage = (kind: 'other' | 'photo_of_people', containsPeople: number) => ({ kind, task: 'react' as const, containsPeople, containsSensitiveDocument: 0 });
+    expect(IMAGE_PEOPLE_THRESHOLD).toBe(0.3);
+    expect(imageShowsPeople(null)).toBe(true);
+    expect(imageShowsPeople(triage('photo_of_people', 0))).toBe(true);
+    expect(imageShowsPeople(triage('other', 0.3))).toBe(true);
+    expect(imageShowsPeople(triage('other', 0.29))).toBe(false);
   });
 
   it('guard: at contains_people 0.5 the people rule and its filter keep the appearance out', async () => {

@@ -35,6 +35,17 @@ export const IMAGE_TRIAGE_TIMEOUT_MS = 2_000;
 export const IMAGE_DOWNLOAD_TIMEOUT_MS = 5_000;
 export const IMAGE_LOG_PREFIX = 'tireh_image:';
 
+/**
+ * The people rule (IMAGE_PEOPLE_RULE and the appearance filter) is on for an image the decider classed as a
+ * photo of people, or whose people probability reaches this threshold, or whose triage is unknown. Ported from
+ * main's S12 images/policy.ts ("leans protective"); wave A's 0.5 without the kind was weaker.
+ */
+export const IMAGE_PEOPLE_THRESHOLD = 0.3;
+
+export function imageShowsPeople(triage: ImageTriage | null): boolean {
+  return triage === null || triage.kind === 'photo_of_people' || triage.containsPeople >= IMAGE_PEOPLE_THRESHOLD;
+}
+
 export type ImageLogCode = 'vision_unsupported' | 'download_failed' | 'download_timeout' | 'authority_changed' | 'unsupported_type' | 'too_large' | 'metadata_invalid' | 'triage_failed' | 'triage_timeout' | 'ack_failed';
 
 export interface ImageTurn {
@@ -256,7 +267,7 @@ export async function ingestTelegramImage(
     text: turnText,
     triage,
     suppressMemory: suppressImageMemory(triage, turnText),
-    containsPeople: triage ? triage.containsPeople >= 0.5 : true,
+    containsPeople: imageShowsPeople(triage),
     forceQuick: !!triage && FORCED_TASKS.includes(triage.task),
   };
 }
