@@ -21,7 +21,7 @@ The gateway then:
 - for people images, adds `IMAGE_PEOPLE_RULE` to the extraction prompt plus a code-side filter, so memory candidates never carry identity or appearance;
 - sends a fixed acknowledgement when triage is slow.
 
-With the flag unset, every code path is byte-identical to the base: a caption is handled as text, and a photo without a caption is ignored.
+With the flag unset, a caption is handled as text and a photo without a caption is ignored, as in the base. One change applies with every flag unset: the gateway's `NO_MEMORY` reads the shared `memory/requests.ts` negation rule (see Deviations).
 
 ## Files
 
@@ -33,7 +33,8 @@ With the flag unset, every code path is byte-identical to the base: a caption is
 | `src/lib/tireh/images/index.ts` | New public surface: `IMAGE_PLACEHOLDER_TEXT`, `ImageTriage`, `ImageTurn`, `pickPhotoSize`, `ingestTelegramImage`, `imageIngestionWanted`, `replyPhotoSize`, `forceQuickTriage`, `IMAGE_ACK_AFTER_MS`, `IMAGE_TRIAGE_TIMEOUT_MS`, `IMAGE_LOG_PREFIX`, re-exports of `./questions`, `./bytes`, `./retention`. |
 | `src/lib/tireh/images/questions.ts` | `IMAGE_QUESTION_SET = 'image-v1'`, the four `IMAGE_TRIAGE_QUESTIONS`, `imageTriageInput`, `readImageTriage`, `IMAGE_TASK_MIN_CONFIDENCE = 0.5`, `IMAGE_REMEMBER_CONFIDENCE = 0.6` (a `remember` task below it reads as `unclear`, main's rule). |
 | `src/lib/tireh/images/bytes.ts` | Pure: `sniffImageMime`, `stripImageMetadata` (JPEG: drop APP1–APP13, APP15, COM; PNG: keep IHDR, PLTE, tRNS, gAMA, cHRM, sRGB, IDAT, IEND), `toLLMImage`, `pickPhotoSize`, `replyPhotoSize`, size constants. |
-| `src/lib/tireh/images/retention.ts` | `IMAGE_REMEMBER_REQUEST`, `IMAGE_NO_MEMORY` (byte copy of the gateway's `NO_MEMORY`), `explicitRememberRequest`, `suppressImageMemory`, `imageAckText`, `SENSITIVE_DOCUMENT_THRESHOLD = 0.5`. |
+| `src/lib/tireh/images/retention.ts` | `IMAGE_REMEMBER_REQUEST`, `IMAGE_NO_MEMORY` (`= NEGATED_MEMORY_REQUEST`, the rule the gateway's `NO_MEMORY` also reads), `explicitRememberRequest`, `suppressImageMemory`, `imageAckText`, `SENSITIVE_DOCUMENT_THRESHOLD = 0.5`. |
+| `src/lib/tireh/memory/requests.ts` | Integration (`b142d00`, widened by `bd3d1de`): `NEGATED_MEMORY_REQUEST` and `MEMORY_REQUEST`, the one deterministic EN/FA rule for "do not keep this" and "remember this", read by S12 retention and by the gateway's flag-independent `NO_MEMORY`. |
 | `src/lib/tireh/memory/extraction.ts` | Additive optional `ExtractionOptions { imagePeopleRule?: boolean }`, `IMAGE_PEOPLE_RULE`, `IMAGE_PEOPLE_DESCRIPTION`; the prompt and candidates are unchanged when the option is absent. |
 | `src/lib/tireh/gateway.ts` | Small, localized hunks: the `./images` import, a `WeakSet<ChatMessage>` field, one early block in `handleMessage`, the `composeReply` call arguments, the remember region and the `extractCandidates` argument. |
 | `docs/implementation/PRIVACY_AND_CONSENT.md` | One purpose-map row after `model_training`. The PRIV-009 processor table is S15's. |
@@ -99,6 +100,16 @@ No change to `boundary()`, `unchanged()`, `retain()`, `historyAt()`, `triage()`,
 - People images: the rule in the extraction prompt, description and relationship candidates dropped in code, triage labels never in the reply prompt.
 - No download for groups, guests, strangers, a non-chat-person speaker, a failed `validateAudience`, or a non-Anthropic `llm`/`fastLlm`.
 - No download without the person's image capability (fixer r2 on main): `GatewayDeps.imageAllowed`, which Studio wires to the adaptive `single_party_image` capability that a Mini App image also needs. It is checked before the first download, inside the image authority (after the download, before triage, at the guarded transport) and before the reply export. A runtime with a privacy adapter and no `imageAllowed` gets no image; the internal pilot, which rejects `single_party_image` at startup, therefore answers no Telegram image.
+
+## Deviations
+
+- **Base behaviour with every flag unset: the gateway's `NO_MEMORY`.** The spec promised byte-identical base behaviour
+  with `STUDIO_IMAGES` unset. Since `b142d00` (and `bd3d1de`) the gateway's flag-independent `NO_MEMORY`, which gates
+  group memory and relationship observation, reads `memory/requests.ts` `NEGATED_MEMORY_REQUEST` instead of the base
+  `do not|don't` + verb rule, so S12 retention and the gateway share one negation rule. It is a strict superset of the
+  base rule and only ever withholds memory (fail closed). It is a base-behaviour exception awaiting the product lead's
+  acknowledgement (`WAVE_A_ON_MAIN.md` section 9, item (i)); the header of `flags.ts` ("with all of them unset the
+  runtime behaves exactly as before") predates it and the legacy payments exception (a).
 
 ## Out of scope
 

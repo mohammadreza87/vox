@@ -467,6 +467,10 @@ From the recorded set (none is implemented here; each is the product lead's call
 
 New from this run:
 
+- **(i)** Base-behaviour exception awaiting acknowledgement (QA r3 SC3): with every flag unset the gateway's
+  `NO_MEMORY` (group memory, relationship observation) reads `memory/requests.ts` `NEGATED_MEMORY_REQUEST`, a strict
+  superset of the base rule that only withholds memory (section 3). Like (a), it contradicts the "behaves exactly as
+  before" promise in `flags.ts` and the S12 spec; the code stays fail closed until the product lead decides.
 - **(h)** Narrowed in fixer r1: the Firestore production refusal and the invalid-key failure are in place. Left to
   decide: whether a `VOICEPRINT_KEY` that is missing while `STUDIO_VOICE_RECOGNITION=1` should fail startup (main) or
   leave voiceprints off (this branch).
