@@ -77,7 +77,12 @@ export interface MemoryStore {
   /** All live (not superseded) memories for a persona */
   listActive(personaId: string): Promise<MemoryRecord[]>;
   update(id: string, patch: Partial<Omit<MemoryRecord, 'id' | 'personaId'>>, guard?: MemoryWriteGuard): Promise<void>;
-  delete(id: string): Promise<void>;
+  /**
+   * Removes the record's whole forget closure (forgetClosure: superseded predecessors and successors and every
+   * record sharing a source event) and resolves to the ids removed, so erasure can follow them (supersede notices).
+   * An unknown id removes nothing and resolves to [].
+   */
+  delete(id: string): Promise<string[]>;
   /**
    * Firestore only: nearest active records by embedding, pre-filtered by
    * persona and at most 30 scope keys. Returns candidates, never a visibility
@@ -194,9 +199,9 @@ export class InMemoryMemoryStore implements MemoryStore {
     return true;
   }
 
-  async delete(id: string): Promise<void> {
+  async delete(id: string): Promise<string[]> {
     const target = this.records.get(id);
-    if (!target) return;
+    if (!target) return [];
     const rows = forgetClosure([...this.records.values()].filter((r) => r.personaId === target.personaId), id);
     const tombstones = this.tombstones.get(target.personaId) ?? new Set<string>();
     for (const row of rows) {
@@ -205,6 +210,7 @@ export class InMemoryMemoryStore implements MemoryStore {
     }
     this.tombstones.set(target.personaId, tombstones);
     this.revisions.set(target.personaId, (this.revisions.get(target.personaId) ?? 0) + 1);
+    return rows.map((row) => row.id);
   }
 
   async tombstonesOf(personaId: string): Promise<string[]> {

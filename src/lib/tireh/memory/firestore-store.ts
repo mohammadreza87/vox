@@ -234,11 +234,11 @@ export class FirestoreMemoryStore implements MemoryStore {
     });
   }
 
-  async delete(id: string): Promise<void> {
-    await this.db.runTransaction(async (tx) => {
+  async delete(id: string): Promise<string[]> {
+    return this.db.runTransaction(async (tx): Promise<string[]> => {
       const ref = this.db.collection(MEMORIES).doc(id);
       const snap = await tx.get(ref);
-      if (!snap.exists) return;
+      if (!snap.exists) return [];
       const personaId = snap.data()!.personaId as string;
       const stateRef = this.db.collection(MEMORY_STATE).doc(personaId);
       const state = await tx.get(stateRef);
@@ -248,6 +248,7 @@ export class FirestoreMemoryStore implements MemoryStore {
       forgotten.forEach((m) => sourceEventIds(m).forEach((e) => tombstones.add(e)));
       forgotten.forEach((m) => tx.delete(this.db.collection(MEMORIES).doc(m.id)));
       tx.set(stateRef, { revision: Number(state.data()?.revision ?? 0) + 1, tombstones: [...tombstones] });
+      return forgotten.map((m) => m.id);
     });
   }
 

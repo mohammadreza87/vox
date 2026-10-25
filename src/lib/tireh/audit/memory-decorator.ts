@@ -61,6 +61,12 @@ function shareVersionKind(patch: MemoryPatch): AuditKind | null {
   return 'write';
 }
 
+/** The requested id and every id the store reports removed with it (its forget closure); defensive about the shape. */
+function forgottenIds(id: string, removed: unknown): string[] {
+  const ids = Array.isArray(removed) ? removed.filter((r): r is string => typeof r === 'string') : [];
+  return [...new Set([id, ...ids])];
+}
+
 function proxy<T extends object>(target: T, wrapped: Record<string, unknown>): T {
   return new Proxy(target, {
     get(object, prop) {
@@ -159,20 +165,23 @@ export function auditMemoryStore(inner: MemoryStore, audit: AuditStore, notices?
 
     async delete(...args: Parameters<MemoryStore['delete']>) {
       const [id] = args;
-      // Erasure: a deleted memory leaves no supersede notice naming it, whatever the flags are now
-      // (notices recorded while TIREH_SHARING_V2 was on must still go). Never a read of the memory store.
-      const eraseNotices = () => notices ? bestEffort(() => notices.deleteByMemoryIds([id])) : undefined;
-      if (!tirehFlags().auditLog) { await target.delete(...args); await eraseNotices(); return; }
+      // Erasure: a deleted memory leaves no supersede notice naming it or any record its forget closure removed,
+      // whatever the flags are now (notices recorded while TIREH_SHARING_V2 was on must still go). Never a read
+      // of the memory store.
+      const eraseNotices = (removed: string[]) => notices ? bestEffort(() => notices.deleteByMemoryIds(forgottenIds(id, removed))) : undefined;
+      if (!tirehFlags().auditLog) { const removed = await target.delete(...args); await eraseNotices(removed); return removed; }
       const before = await safeGet(target, id);
       let failure: { error: unknown } | null = null;
-      try { await target.delete(...args); } catch (error) { failure = { error }; }
+      let removed: string[] = [];
+      try { removed = await target.delete(...args); } catch (error) { failure = { error }; }
       // The store cannot attest who deleted, so the row has no actor.
       if (before) {
         await append({ kind: 'delete', personaId: before.personaId, audiencePersonIds: before.authorizedPersonIds ?? [], memoryIds: [id],
           policyKey: memoryPolicyKey(before), outcome: failure ? errorOutcome(failure.error) : 'applied', at: new Date() });
       }
       if (failure) throw failure.error;
-      await eraseNotices();
+      await eraseNotices(removed);
+      return removed;
     },
   };
 
@@ -182,14 +191,16 @@ export function auditMemoryStore(inner: MemoryStore, audit: AuditStore, notices?
 /**
  * Erasure after a flag rollback: with both S08 flags off the audit decorator is not installed, yet notices
  * recorded while TIREH_SHARING_V2 was on must still go with their memories. This proxy intercepts only delete:
- * the store call first (its result or error unchanged), then every notice naming the id is erased, best effort.
+ * the store call first (its result or error unchanged), then every notice naming the id or any id of its forget
+ * closure (the ids the store reports removed) is erased, best effort.
  * Every other method is the inner store's own.
  */
 export function noticeErasingMemoryStore(inner: MemoryStore, notices: SupersededNoticeEraser): MemoryStore {
   const wrapped: Pick<MemoryStore, 'delete'> = {
     async delete(...args: Parameters<MemoryStore['delete']>) {
-      await inner.delete(...args);
-      await bestEffort(() => notices.deleteByMemoryIds([args[0]]));
+      const removed = await inner.delete(...args);
+      await bestEffort(() => notices.deleteByMemoryIds(forgottenIds(args[0], removed)));
+      return removed;
     },
   };
   return proxy(inner, wrapped);

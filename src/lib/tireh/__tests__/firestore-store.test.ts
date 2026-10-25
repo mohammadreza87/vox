@@ -287,6 +287,17 @@ describe('Firestore synthetic transaction safety contract', () => {
     expect((await history.recent('other', 'current', 20))[0].text).toBe('OTHER_PERSONA_SURVIVES');
   });
 
+  it('delete resolves to every id of the forget closure it removed (QA r3: notice erasure follows them)', async () => {
+    const { db } = fakeFirestore();
+    const store = new FirestoreMemoryStore(db);
+    const first = await store.add({ ...baseMemory, source: { ...baseMemory.source, eventIds: ['closure-1'] } });
+    const second = await store.add({ ...baseMemory, content: 'second', supersedes: first.id, source: { ...baseMemory.source, eventIds: ['closure-2'] } });
+    const other = await store.add({ ...baseMemory, content: 'unrelated', source: { ...baseMemory.source, eventIds: ['closure-3'] } });
+    expect((await store.delete(second.id)).sort()).toEqual([first.id, second.id].sort());
+    expect(await store.get(other.id)).not.toBeNull();
+    expect(await store.delete('missing')).toEqual([]);
+  });
+
   it('rejects derived-source replay after ancestor deletion', async () => {
     const { db } = fakeFirestore();
     const store = new FirestoreMemoryStore(db);
