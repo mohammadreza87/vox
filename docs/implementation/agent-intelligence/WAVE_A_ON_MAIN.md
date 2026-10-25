@@ -39,7 +39,7 @@ Lineage per step:
 | S14 reply-style bandit library (`adaptive/personalization/procedural*.ts`) | `6fa457b`…`aa5ef60`, merged by `1ae38d4` | `aiq/bandit-lib` `57e2d6c`, merged as `7127eba` | wave A | Portable test cases in `procedural.main-lineage.test.ts`. The second `authorize()` check in `choose()` immediately before the evaluation row is written. `FileReplyStyleStore` `O_NOFOLLOW` read and `O_CREAT\|O_EXCL\|O_NOFOLLOW` temp-file write (S14 verifier fix-ups). Main's non-S14 README lines byte for byte. |
 | S10L identity library (`tireh/identity/*`) | `80252dd`…`83848b7`, merged by `b892138` | `aiq/identity-lib` `b34b7c0`, merged as `b278780`, plus QA `05a4520` | wave A | Main's richer Firestore fake moved to `src/lib/studio/__tests__/fake-firestore.ts` for the Circles DM and Pet store tests (import path change only). Portable cases in 9 `identity/__tests__/*.main-lineage.test.ts` files, including main's source-tree hint-isolation scans. `voice-band.ts` byte-identical (`b8d0a41d…21bd`). Main-only `identity/service.ts` deleted (no importer). |
 | S06 memory v2 (`tireh/memory/{retrieval,embeddings,record-v2,store,firestore-store}.ts`) | `e1d76cf`…`9a6751e`, merged by `7c74019` | `aiq/memory-v2-retrieval-2` `1bef816`, merged as `0ba3de6`, plus QA `39216c4`, `9e66c1a`, `05a4520` | wave A | Step 1 `revisionProbe`/`epochProbe`/`RevisionProbe` and `8a7dc55` file-store `local()` committed rereads, with the wrap lists as the union. `firestore.indexes.json` (wave A's is a superset). Embeddings client `logLevel: 'off'` (S06 verifier fix-up, with a test). Portable cases in 6 `memory-v2-*` / `negative-identity` `.main-lineage.test.ts` files. Main's `memory-eval/dataset.ts` deleted as an orphan. |
-| S12 image ingestion (`tireh/images/*`, gateway photo branch, extraction people rule) | `656c84f`…`b0cbb7f`, merged by `d99e3a5` | `aiq/image-ingestion` `2bdb95f`, merged as `1a3437c`, plus `56a4e98`, `19f3b37`, `eef8279`, `5cd59e5`, `042059a`, `6c90443`, `bfc9b39` | wave A | Main's `telegram/client.ts` (Circles, Pet and channel additions) with only wave A's `downloadImage` body. Main's outsider guarantee: the boundary carries `publicOnly` and the gateway never ingests for it (new test). Main's `images-telegram-client.test.ts` kept. Portable cases in 6 `images-*main-lineage*` files. Main's `images/policy.ts`, `select.ts` and the `peopleImageTurns` WeakSet removed. |
+| S12 image ingestion (`tireh/images/*`, gateway photo branch, extraction people rule) | `656c84f`…`b0cbb7f`, merged by `d99e3a5` | `aiq/image-ingestion` `2bdb95f`, merged as `1a3437c`, plus `56a4e98`, `19f3b37`, `eef8279`, `5cd59e5`, `042059a`, `6c90443`, `bfc9b39` | wave A | Main's `telegram/client.ts` (Circles, Pet and channel additions) with only wave A's `downloadImage` body. Main's outsider guarantee: the boundary carries `publicOnly` and the gateway never ingests for it (new test). Main's `images-telegram-client.test.ts` kept. Portable cases in 6 `images-*main-lineage*` files. Main's `images/policy.ts`, `select.ts` and the `peopleImageTurns` WeakSet removed. Main's people rule (kind `photo_of_people` or `contains_people >= 0.3`) ported by fixer r2 (`cb51710`): wave A's 0.5 without the kind was a weakened privacy check. |
 
 The reason is the same for all four: wave A's version went through three QA rounds and carries the red-team
 hardening (for S12, main's lineage had the exact defects F011, F012, F016, F035 and F050 that the red team fixed), and
@@ -162,6 +162,14 @@ Each step merge was checked by a verifier. The table lists every finding and its
 both new fields. The spec records (S03, S06, S08, S09, S11L, S12) still quote the original hash as the contract each
 step was built against.
 
+**Base-behaviour exception (flags unset): the gateway's `NO_MEMORY`.** Since `b142d00` (widened by fixer r2,
+`bd3d1de`) the gateway's flag-independent `NO_MEMORY`, which gates group memory and relationship observation, reads
+`memory/requests.ts` `NEGATED_MEMORY_REQUEST` instead of the base `do not|don't` + `remember|save|store` rule. It also
+recognises never, dont, no need, rather not, should/must not, won't, keep, up to five words between the negation and
+the verb ("I don't want you to remember this"), a comma parenthetical, "forget this/that/it" and the Persian refusals.
+It only ever withholds memory (fail closed); the gap never runs through "forget" or "lose", so "don't forget to save
+this" is still a request. Recorded here because it changes behaviour with every flag unset.
+
 ### QA round 1 on main, fixer round 1
 
 The round 1 QA findings (privacy red team, spec conformance, tests and types, code quality) were applied in severity
@@ -193,6 +201,45 @@ order. Each fix has a test that fails without it; every `it.fails` case those fi
 Not changed, with the reason: the test-file typecheck (open issue 2); a notice TTL (product decision (f)); per-person
 erasure of `vox_audit` rows (append-only by design, retention only).
 
+### QA round 2 on main, fixer round 2
+
+The round 2 findings (12: two high from the privacy red team and one from code quality, nine medium) were applied in
+severity order. Each fix has a test that fails without it (the pinned `it.fails` cases are plain `it` now, or a
+mutation of the fix turns the new test red).
+
+- `bd3d1de` **Refusals and questions in memory requests (high, PR2-1 / CQ2-1; medium, CQ2-2, SC2-1).**
+  `NEGATED_MEMORY_REQUEST` now reads modal and desire negations ("I don't want you to remember this", "you shouldn't
+  keep this"), up to five words between, a comma parenthetical ("do NOT, under any circumstances, keep this"), the
+  Persian "لازم نیست …" and "نمی‌خوام …" refusals, "فراموشش کن" and "ذخیره‌ش نکن"; "فراموش نکن" (do not forget) stays
+  a non-negation. The gap never runs through "forget" or "lose", so "don't forget to save this" is a request again
+  (SC2-1). `MEMORY_REQUEST` needs the English verb in imperative position (start, clause mark, "please", "can you",
+  "don't forget to", …), so "do you remember this?", "I can't remember this place" and "keep it down" are not image
+  remember requests. The base-behaviour exception is recorded in section 3.
+- `ed05751` **Telegram images need `single_party_image` (high, PR2-3).** `GatewayDeps.imageAllowed` (and
+  `imageAllowedNow` for the indexed fence) is checked before the first download, inside the image authority (after the
+  download, before triage, at the guarded transport) and before the reply export. A gateway with a privacy adapter and
+  no `imageAllowed` gets no image. Studio wires it to the adaptive `single_party_image` capability (as
+  `conversation.ts` does for Mini App images) and denies without an adaptive service or on a read failure. Tests:
+  the pinned case, a positive control, a withdrawal during the download, and a seam test. Test harnesses that give a
+  gateway a permissive privacy adapter (`images-gateway`, `redteam-wave-a-main-r1`) and `circles-dm`'s member-photo
+  case now grant the capability, so only the gate each test is about can refuse the image; no assertion was removed.
+- `cb51710` **Main's people rule (medium, PR2-2).** `imageShowsPeople()`: unknown triage, kind `photo_of_people` or
+  `contains_people >= IMAGE_PEOPLE_THRESHOLD (0.3)`.
+- `c5e7b89` **Successor filter and inheritance errors (medium, open issue 6 / F-r3, CQ2-5).**
+  `isSuccessorTransferable(memory, now)` refuses invalidated and expired records. A missing tombstone seam, a failed
+  carry or a failed copy never fails the hire; `memory.inherit` admin audit rows say what happened (main's lineage).
+- `53b9361` **Erasure after a flag rollback (medium, PR2-4, SC2-2, CQ2-6).** `wireSharingAudit()` keeps writes behind
+  the flags and adds, whatever the flags: an erasure-only notice handle (`Studio.forgetMemoryNotices` falls back to
+  it), a delete-only `noticeErasingMemoryStore` when notices are stored, and `startAuditRetentionSweep` (now and daily,
+  unref'd). Neither creates a file or collection, so "with both flags unset installs nothing" still holds. Runtime test:
+  record with the flags on, restart with them unset, delete a memory, file a rights erasure, see the sweep.
+- `43b9325` **Privacy gates in CI (medium, SC2-3).** A `privacy-gates` job runs the privacy core and red-team suites
+  with flags unset and invariants, policy-differential, the wave A red-team suites and `sharing-v2` under
+  `TIREH_SHARING_V2=1 TIREH_AUDIT_LOG=1`; build and the PR summary wait on it. Making it a required check is the
+  owner's branch-protection setting (open issue 13).
+
+Contradictory tests: none. Every changed test asserts the chosen behaviour; no test was dropped.
+
 ## 5. Catch-up with main
 
 `git fetch https://github.com/mohammadreza87/vox.git main` succeeded on 25 Oct 2026. `FETCH_HEAD` is
@@ -201,7 +248,38 @@ caught up to `7224f40`.
 
 ## 6. Results for this tree
 
-### After fixer round 1 (HEAD of this record's last update)
+### After fixer round 2 (HEAD of this record's last update)
+
+- **`npx tsc --noEmit -p tsconfig.json`:** exit 0. **ESLint** on every file fixer r2 changed: exit 0.
+- **Full `npx vitest run`, flags unset:** 14 failed files, 96 failed tests, 7796 passed, 2 expected failures (the
+  remaining QA `it.fails`: CQ2-3 audit sweep `onError`, F030 `DecisionService` timeout naming), 14 skipped, 56
+  unhandled errors (listen EPERM). All 96 are environmental:
+  - mkdtemp `/tmp` EPERM: `adaptive/guest-rights/guest-rights` (20), `studio/guest-rights-http` (10),
+    `adaptive/rights-intake/storage` (2), `connections/mcp/__tests__/tls` (1);
+  - listen 127.0.0.1 EPERM: `connections/mcp/__tests__/self-service` (37), `foundation-broker-error-http` (10),
+    `foundation-broker` (1), `integration-broker` (1), `adaptive/runtime/reminders/reminders` (2);
+  - unix-socket listen: `adaptive/voice-identity/local-provider` (7); tsx child IPC:
+    `adaptive/personalization/learning/rollback` (1);
+  - timeouts under full-suite load, each passing alone: `adaptive/observation/service` (1),
+    `adaptive/prediction/voice-integration` (1), `studio/__tests__/prepared-conversation-qualification` (2).
+- **Flag matrix** (every other flag unset; fixer r2 touched the gateway, images, S08 and the runtime, so every row was
+  rerun):
+  - `TIREH_CACHED_PROMPT=1` `src/lib/tireh`: 10 failed / 2096 passed, 2 expected failures: exactly S03's 10.
+  - `TIREH_RETRIEVAL_V2=1` memory-privacy, visibility, memory-eval: 41/41.
+  - `TIREH_SHARING_V2=1 TIREH_AUDIT_LOG=1` invariants, policy-differential, `src/lib/studio`: 12 failed / 1590 passed:
+    `guest-rights-http` (10, mkdtemp EPERM) and `prepared-conversation-qualification` (2, load timeout, 9/9 alone).
+    A first run also timed out `group-runtime` once (passes alone).
+  - `STUDIO_DECIDER=service TRIAGE_QUESTION_SET=v2 TIREH_DECISION_LOG=1` `src/lib/tireh src/lib/adaptive/decisions`:
+    2218 passed, 2 expected failures.
+  - `STUDIO_IMAGES=1` `src/lib/tireh`, `circles-dm`, `circles-channels`: 2175 passed, 2 expected failures.
+  - `STUDIO_VOICE_RECOGNITION=1` voiceprint suites: 105/105; with `STUDIO_VOICE_SHADOW=1`, voiceprint-liveturn and
+    gateway: 54/54.
+  - Informational, every flag on, `src/lib/tireh`: 9 failed / 2097 passed (S03's 10 less `voice-delivery`).
+  - The new CI `privacy-gates` steps, run locally: 188/188 flags unset, 106/106 under the S08 flags.
+  Every row is at least the result recorded below and in `WAVE_A_INTEGRATION.md` (failures are the same
+  environmental set; passes are higher).
+
+### After fixer round 1
 
 - **`npx tsc --noEmit -p tsconfig.json`:** exit 0. **ESLint** on the `.ts`/`.tsx` files fixer r1 changed: exit 0.
 - **Full `npx vitest run`, flags unset:** 16 failed files, 99 failed tests, 7749 passed, 2 expected failures (the
@@ -283,7 +361,7 @@ Every matrix row is at least as good as the recorded wave A result.
 
 1. **Commit trailer.** The computed task asks for `Co-Authored-By: Claude Fable 5.1`; this session's attribution rule
    says `Claude Opus 5.5`. The step merges on this branch carry Fable 5.1; this run's commits carry Opus 5.5; fixer r1's
-   commits carry Fable 5.1, as its task asked. Pick one before the branch is pushed.
+   and fixer r2's commits carry Fable 5.1, as their tasks asked. Pick one before the branch is pushed.
 2. **Test files are not type-checked.** `tsconfig.json` excludes `*.test.ts(x)`. QA r1 counted 48 strict errors in the
    124 test files changed since `7224f40`. A test tsconfig over every file under `src` (types `vitest/globals`,
    `@testing-library/jest-dom/vitest`, `node`) reports 754 errors in about 80 files, most of them in main's own tests
@@ -300,12 +378,13 @@ Every matrix row is at least as good as the recorded wave A result.
    `provider_error`. Do not run `src/lib/studio` under `TRIAGE_QUESTION_SET=v2` (v1-pinned triage tests, F051, F052).
    The decisions README and the S15 record still describe main's `requestTimeoutMs`/`typedCreate`. S15's 7-day age
    rule picked openai 7.34.0; this branch keeps main's 7.39.0, which main already deploys.
-6. **S08.** Enable `TIREH_SHARING_V2` soon: the base successor copy includes private and sensitive records. The
-   successor filter still copies records S06 marks invalidated or expired (QA r3 known gap, an `it.fails` test).
-   Review `newMemoryId` in notices for an invisible replacement. The Telegram `/memories` notice line and reserved
-   audit kinds are TODO. Notices are erased with their memories and on a rights erasure, but have no TTL (product
-   decision (f)); `vox_audit` rows keep the 12-month sweep and have no per-person erasure (append-only by design). Before
-   `TIREH_SHARING_V2` runs on Firestore, deploy the new `tireh_supersede_notices` index.
+6. **S08.** Enable `TIREH_SHARING_V2` soon: the base successor copy includes private and sensitive records. (The
+   v2 successor filter now refuses invalidated and expired records; fixer r2.) Review `newMemoryId` in notices for an
+   invisible replacement. The Telegram `/memories` notice line and reserved audit kinds are TODO. Notices are erased
+   with their memories and on a rights erasure, also after a flag rollback, but have no TTL (product decision (f));
+   `vox_audit` rows keep the 12-month sweep (also with both flags off) and have no per-person erasure (append-only by
+   design). A failed sweep leaves no signal yet (CQ2-3, still an `it.fails`). Before `TIREH_SHARING_V2` runs on
+   Firestore, deploy the new `tireh_supersede_notices` index.
 7. **S11L.** The startup refusal for Firestore voiceprints in production with the flag on is in place (`18d0415`), and
    an invalid key or one reusing `STUDIO_SECRET` still fails startup. The one difference from main: a `VOICEPRINT_KEY`
    that is missing while the flag is on is treated as off instead of failing startup. KMS envelope encryption and key
@@ -319,7 +398,11 @@ Every matrix row is at least as good as the recorded wave A result.
    setting still lets an image be triaged and answered; progressive JPEGs (now stripped across every scan, but still
    skipped by the triage seam's baseline-only check) and p95 latency need a real Telegram check; an `extract_text`
    reply can put document text into the person's own private history (privacy owner review). A Mini App image turn has
-   no image triage, so with the flag on it is always suppressed and its reply withheld from history.
+   no image triage, so with the flag on it is always suppressed and its reply withheld from history. Since fixer r2 a
+   Telegram image also needs the person's `single_party_image` capability (as a Mini App image does), so where no
+   approval for it exists (the internal pilot rejects it at startup) `STUDIO_IMAGES=1` answers captions only. Memory
+   requests are still regex rules: they lean towards refusal, and a request phrased in a way neither rule knows is
+   treated as no request (image memory suppressed).
 9. **S10L and S14.** Not wired; they wait on the DPIA. QA F025: S10L persists a per-person style profile against
    section 4.9 phase 0 (product decision (d)). At wiring time: honour net speech for a voice MATCH, re-check consent and
    epoch in `recordPromptOutcome('confirmed_self')`, catch throwing getters in `extractStyleFeatures`, and either
@@ -333,6 +416,9 @@ Every matrix row is at least as good as the recorded wave A result.
     events do not contain the stranger id `999`, but the events carry random 32-hex hashes, so it fails whenever a hash
     happens to contain `999` (seen once in this run). The test should compare against the exact id field, not the
     whole serialized string. Left as main has it.
+
+13. **Privacy gates as a required check.** The `privacy-gates` CI job exists (fixer r2); making it a required status
+    check on `main` and `develop` is a branch-protection setting for the repository owner.
 
 ## 8. Deployment prerequisites
 

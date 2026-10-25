@@ -48,7 +48,7 @@ With the flag unset, every code path is byte-identical to the base: a caption is
 (d) Triage only when `decider.decideParts` exists, on `sharedImageForModel(...)` (≤512 px, ≤64 KiB, baseline JPEG/PNG); if that throws, triage is skipped. `decideParts([text, image], IMAGE_TRIAGE_QUESTIONS, 2000)` raced against 2000 ms; rejection → `triage_failed`, timeout → `triage_timeout`.
 (e) Slow acknowledgement after 1500 ms if triage plus reply download are unfinished: one `sendMessage` replying to the photo; failure logs `ack_failed`; at most one per turn.
 (f) Reply image: photo → `replyPhotoSize(photo, triage)` (1024 px for text-like images or unknown triage, else 640), reusing triage bytes when the same file; fallback to the stripped triage image. Document → stripped document bytes.
-(g) `ImageTurn`: `text` = caption or `(shared a photo)`; `suppressMemory = suppressImageMemory(triage, text)`; `containsPeople = triage ? p >= 0.5 : true`; `forceQuick` for explain/extract_text/decide/react.
+(g) `ImageTurn`: `text` = caption or `(shared a photo)`; `suppressMemory = suppressImageMemory(triage, text)`; `containsPeople = imageShowsPeople(triage)` (unknown triage, kind `photo_of_people` or `p >= 0.3`; main's rule, ported by fixer r2 on main; it was `p >= 0.5`); `forceQuick` for explain/extract_text/decide/react.
 
 Logging is only `deps.log.warn('tireh_image:<code>')` with a fixed code; never an error object, caption, file id or bytes.
 
@@ -98,6 +98,7 @@ No change to `boundary()`, `unchanged()`, `retain()`, `historyAt()`, `triage()`,
 - A sensitive document never triggers extraction; a captionless or unrequested image never forms memory; triage `null` always suppresses memory.
 - People images: the rule in the extraction prompt, description and relationship candidates dropped in code, triage labels never in the reply prompt.
 - No download for groups, guests, strangers, a non-chat-person speaker, a failed `validateAudience`, or a non-Anthropic `llm`/`fastLlm`.
+- No download without the person's image capability (fixer r2 on main): `GatewayDeps.imageAllowed`, which Studio wires to the adaptive `single_party_image` capability that a Mini App image also needs. It is checked before the first download, inside the image authority (after the download, before triage, at the guarded transport) and before the reply export. A runtime with a privacy adapter and no `imageAllowed` gets no image; the internal pilot, which rejects `single_party_image` at startup, therefore answers no Telegram image.
 
 ## Out of scope
 

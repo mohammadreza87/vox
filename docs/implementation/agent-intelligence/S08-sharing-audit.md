@@ -58,7 +58,10 @@ Plus a `PolicySnapshotBuilder` with a differential oracle against adaptive `auth
 - `POST groups/:chatId/resnapshot` rejects a non-numeric `telegramId` (string ids give 400) and an extra path segment; the contract used `Number(b.telegramId)`.
 - org-bridge maps only the two known `historyPolicy` values.
 - The decorator rethrows store errors unchanged after writing a `denied`/`failed` row for `updateIfShareVersion`, `update` and `delete` as well as for `add`.
-- TODOs left in code: Telegram `/memories` notice (gateway.ts is not S08's), store-level `chatKeyHash`, the reserved kinds `retrieval`, `prompt_memory`, `consent_change`, `identity_change`, per-record owner approval for private successor records, the Step 7 forget-cascade closure in delete rows, the audit sweep scheduler.
+- Fixer r2 on main: `isSuccessorTransferable(memory, now)` also refuses records S06 marked `invalidatedAt` and records whose `expiresAt` has passed (sections 4.3 and 4.6). A failed tombstone carry or copy never fails the successor hire: it writes a content-free `memory.inherit` admin audit row (`skipped: tombstones unsupported`, `skipped: tombstone carry failed`, `copied N, skipped M`), as main's lineage did.
+- Fixer r2 on main: erasure and retention hold whatever the flags are now. `wireSharingAudit` (runtime.ts) keeps an erasure-only notice handle for rights erasure, installs a delete-only `noticeErasingMemoryStore` when notices are stored, and runs `startAuditRetentionSweep` with both flags off. Neither creates the audit file, the notice file or a Firestore collection.
+- CI (section 5 row 8): the `privacy-gates` job in `.github/workflows/ci.yml` runs the privacy core and red-team suites with flags unset and `invariants`, `policy-differential`, the wave A red-team suites and `sharing-v2` under `TIREH_SHARING_V2=1 TIREH_AUDIT_LOG=1`; build waits on it. Deviation until the owner acts: making it a required (protected) check is a branch-protection setting, not something the repository can do.
+- TODOs left in code: Telegram `/memories` notice (gateway.ts is not S08's), store-level `chatKeyHash`, the reserved kinds `retrieval`, `prompt_memory`, `consent_change`, `identity_change`, per-record owner approval for private successor records, the Step 7 forget-cascade closure in delete rows.
 
 ## Risks
 

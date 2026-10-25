@@ -747,8 +747,11 @@ passes against wave A's module:
   "matches English and Persian requests", "lets any negation win", "maps triage to a resolution tier", "acknowledges in
   Persian for a Persian caption and in English otherwise". API absent (`imagePolicy`, `explicitRemember`,
   `replyDetail`, `ackText`). Wave A's `suppressImageMemory`, `explicitRememberRequest`, `replyPhotoSize` and
-  `imageAckText` are covered by `images-ingest` and `images-gateway`. Two of them contradict wave A: people are flagged
-  at 0.5, not at 0.3 or by kind, and a model that cannot see refuses the image instead of forcing the quick route.
+  `imageAckText` are covered by `images-ingest` and `images-gateway`. Two of them contradicted wave A: people were
+  flagged at 0.5, not at 0.3 or by kind, and a model that cannot see refuses the image instead of forcing the quick
+  route. The first was a weakened privacy check, not only a contradictory threshold: fixer r2 on main (`cb51710`)
+  ported main's rule as `imageShowsPeople()` (unknown triage, kind `photo_of_people` or `contains_people >=
+  IMAGE_PEOPLE_THRESHOLD = 0.3`), pinned in `redteam-wave-a-main-r2.test.ts`. The vision refusal stays wave A's.
 - `images-questions.test.ts`: "is question set image-v1 with exactly the four named questions", "passes the catalogue
   lint with no allowlist", "fits the base seam caps and describes every choice", "offers exactly the kinds and tasks"
   (API absent: `IMAGE_QUESTIONS`, `IMAGE_QUESTION_SET_VERSION`; covered by `images-catalogue-lint`); "carries the persona
