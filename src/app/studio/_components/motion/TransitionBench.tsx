@@ -1,13 +1,25 @@
 'use client';
 
 import { AnimatePresence, motion } from 'framer-motion';
-import { useRef, useState } from 'react';
+import { useRef, useState, type ReactNode } from 'react';
 import { haptic } from '../../_lib/haptics';
 import { screenVariants, type NavCtx, type NavKind } from '../../_lib/motion';
+import { useFrozenExit } from './useFrozenExit';
 
 interface Card { id: number; layer: 'root' | 'page' | 'cover'; label: string; hue: string }
 const HUES = ['#C3A6FF', '#8CC8FF', '#6FE0D0', '#FF9DB5', '#A8E07A', '#FFC24B'];
 const TABS = ['Agents', 'Groups', 'Org', 'You'];
+
+/** One bench screen; it leaves the way the move that replaced it says, as StudioApp's Page does (useFrozenExit). */
+function BenchScreen({ card, ctx, children }: { card: Card; ctx: NavCtx; children: ReactNode }) {
+  const exit = useFrozenExit(screenVariants, ctx);
+  return (
+    <motion.div className="vx-screen" data-layer={card.layer} custom={ctx} variants={screenVariants} initial="initial" animate="enter" exit={exit}
+      style={{ padding: 16, gap: 10 }}>
+      {children}
+    </motion.div>
+  );
+}
 
 /**
  * Lab bench for the screen transitions: the real variants in a phone-sized stage, so push/pop
@@ -38,15 +50,14 @@ export function TransitionBench() {
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
       <div dir={rtl ? 'rtl' : 'ltr'} style={{ position: 'relative', width: '100%', maxWidth: 260, aspectRatio: '9 / 16', overflow: 'hidden', borderRadius: 28, border: '1px solid var(--hair)', background: 'var(--ground)' }}>
         <AnimatePresence initial={false} custom={ctx}>
-          <motion.div key={top.id} className="vx-screen" data-layer={top.layer} custom={ctx} variants={screenVariants} initial="initial" animate="enter" exit="exit"
-            style={{ padding: 16, gap: 10 }}>
+          <BenchScreen key={top.id} card={top} ctx={ctx}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 28 }}>
               {stack.length > 1 && <button className="vx-chip" onClick={back}>{top.layer === 'cover' ? 'Close' : 'Back'}</button>}
               <span className="vx-head">{top.label}</span>
             </div>
             <div style={{ height: 96, borderRadius: 20, background: `radial-gradient(closest-side, ${top.hue}55, transparent)` }} />
             {[0, 1, 2].map((i) => <div key={i} className="vx-card" style={{ height: 40, borderRadius: 14 }} />)}
-          </motion.div>
+          </BenchScreen>
         </AnimatePresence>
         {stack.length === 1 && (
           <div style={{ position: 'absolute', insetInline: 0, bottom: 0, display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', padding: '6px 4px 10px', background: 'rgba(22,25,30,.92)', borderTop: '1px solid var(--hair)', zIndex: 6 }}>

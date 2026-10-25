@@ -1,6 +1,6 @@
 'use client';
 
-import { AnimatePresence, MotionConfig, motion, useIsPresent } from 'framer-motion';
+import { AnimatePresence, MotionConfig, motion, PresenceContext, useIsPresent } from 'framer-motion';
 import { createContext, forwardRef, useCallback, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api, ApiError, haptic, initTelegram, tg, type AgentView, type Me } from '../_lib/client';
 import { dirOf, initialLocale, persistLocale, type Dir, type Locale } from '../_lib/i18n';
@@ -13,6 +13,8 @@ import { captureScroll, restoreScroll, SCROLLERS } from './motion/scrollMemory';
 import { Snackbar, snackDuration, type SnackItem } from './motion/Snackbar';
 import { TabBar, type TabItem } from './motion/TabBar';
 import { TierProvider } from './motion/tier';
+import { useExitWatch } from './motion/useExitWatch';
+import { useFrozenExit } from './motion/useFrozenExit';
 import { HomeScreen } from './screens/Home';
 import { AgentScreen } from './screens/Agent';
 import { SpawnScreen } from './screens/Spawn';
@@ -143,6 +145,13 @@ const isTabRoot = (s: readonly Route[]) => s.length === 1 && TAB_ROUTES.includes
 const top = (s: readonly Route[]) => s[s.length - 1];
 /** Input stays locked until the incoming screen settles, or this long at most (t90 + margin). */
 const LOCK_MS: Partial<Record<NavKind, number>> = { push: 420, pop: 420, hero: 460, 'hero-pop': 460, cover: 520, uncover: 520 };
+/**
+ * A screen still leaving this long after it started lost its exit (safety net, see Page): the slowest exit
+ * (a cover's scale-down, ~660 ms) with margin. Exits are frozen when they start (useFrozenExit), so a
+ * navigation landing on a screen still leaving is safe, and only the arrival holds input.
+ */
+const EXIT_DEADLINE_MS = 1200;
+let warnedStuck = false;
 /** A persistent error snack survives the navigation it arrived with (`toast(e); back()`), not the next one. */
 const SNACK_NAV_GRACE_MS = 400;
 /** motion.css `vxArriveDone`: a hero screen's staged arrival */
@@ -206,8 +215,10 @@ export function StudioApp() {
   const scrollMemory = useRef(new Map<string, number[]>()).current;
   const busy = useRef(false);
   const busyTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  const pendingBack = useRef(false);
+  /** A Back or reset asked for while the incoming screen arrives runs once it lands (the newest wins). */
+  const pending = useRef<(() => void) | null>(null);
   const backRef = useRef<() => void>(() => undefined);
+  const resetRef = useRef<(...routes: Route[]) => void>(() => undefined);
   const stageRef = useRef<HTMLDivElement>(null);
   /** The screen that is arriving or at rest (a leaving screen is inert). */
   const currentScreen = useCallback(() => stageRef.current?.querySelector<HTMLElement>('.vx-screen:not([inert])') ?? null, []);
@@ -239,7 +250,9 @@ export function StudioApp() {
     if (!busy.current) return;
     busy.current = false;
     stageRef.current?.removeAttribute('data-busy');
-    if (pendingBack.current) { pendingBack.current = false; backRef.current(); }
+    const next = pending.current;
+    pending.current = null;
+    next?.();
   }, []);
   useEffect(() => () => clearTimeout(busyTimer.current), []);
 
@@ -297,7 +310,7 @@ export function StudioApp() {
   }, [syncBackButton]);
   const back = useCallback(() => {
     if (consumeBack() || correctionOwner.current) return;
-    if (busy.current) { pendingBack.current = true; return; }   // e.g. a load error during the push: pop once it lands
+    if (busy.current) { pending.current = () => backRef.current(); return; }   // e.g. a load error during the push: pop once it lands
     const s = stackRef.current;
     if (s.length < 2) return;
     const k = kindFor('back', top(s), s[s.length - 2], { hero: kinds.current[s.length - 1] === 'hero' });
@@ -308,6 +321,8 @@ export function StudioApp() {
 
   const reset = useCallback((...routes: Route[]) => {
     if (correctionOwner.current) return;
+    // The tab bar, Telegram's Settings and in-app jumps mid-transition: take the person there once it lands
+    if (busy.current) { pending.current = () => resetRef.current(...routes); return; }
     const next = routes.length ? routes : [{ name: 'home' } as Route];
     const s = stackRef.current;
     if (s.length === 1 && next.length === 1 && routeKey(s[0], 1) === routeKey(next[0], 1)) {
@@ -320,9 +335,10 @@ export function StudioApp() {
     const to = top(next);
     const k = kindFor('reset', top(s), to, { hero: heroReady('id' in to ? to.id : undefined), fromDepth: s.length, toDepth: next.length });
     for (const key of [...scrollMemory.keys()]) if (!key.startsWith('1-')) scrollMemory.delete(key);
-    pendingBack.current = false;
+    pending.current = null;
     commit(next, k, next.map((_, i) => (i === next.length - 1 ? k.kind : i === 0 ? 'replace' : 'push')));
   }, [commit, currentScreen, heroReady, reduced, scrollMemory]);
+  resetRef.current = reset;
 
   const setLocale = useCallback((l: Locale) => { setLocaleState(l); persistLocale(l); }, []);
   const setSpace = useCallback((s: Space) => { setSpaceState(s); store('vx:space', s); }, []);
@@ -432,6 +448,7 @@ export function StudioApp() {
           <div ref={rootRef} className="vx" {...shellProps}>
             <ConfirmProvider>
               <div ref={stageRef} className="vx-stage">
+                {/* `custom` is the navigation in flight; a leaving Page freezes its exit from it once (useFrozenExit) */}
                 <AnimatePresence initial={false} custom={ctx}>
                   <Page key={key} ctx={ctx} layer={layer} saved={scrollMemory.get(key)} onSettled={settled}>
                     {route.name === 'home' && <HomeScreen />}
@@ -477,10 +494,18 @@ export function StudioApp() {
 /**
  * One screen in the stack. Direction-aware variants come from `ctx`; while it leaves it is inert
  * (taps fall through to the screen arriving underneath) and hidden from assistive tech.
+ *
+ * It leaves the way the navigation that removed it says, fixed when it starts (useFrozenExit). Should an exit
+ * still not have finished EXIT_DEADLINE_MS later, the screen is hidden (`data-stuck`) and released then and
+ * there (useExitWatch): it goes alone, and every other screen keeps its own exit. The check waits two frames
+ * so an exit a long task held up can finish first, and runs again when Telegram or the tab brings the app
+ * back, since a background webview throttles timers and pauses the exit itself.
  */
 const Page = forwardRef<HTMLDivElement, { ctx: NavCtx; layer: 'root' | 'page' | 'cover'; saved?: number[]; onSettled(): void; children: ReactNode }>(
   function Page({ ctx, layer, saved, onSettled, children }, ref) {
     const present = useIsPresent();
+    const exit = useFrozenExit(screenVariants, ctx);
+    const { context: presence, hung, release } = useExitWatch();
     const el = useRef<HTMLDivElement>(null);
     useImperativeHandle(ref, () => el.current as HTMLDivElement);
     // The screen hosts its own sheets (ui.Sheet portals here), so nested sheets cover the screen.
@@ -507,13 +532,38 @@ const Page = forwardRef<HTMLDivElement, { ctx: NavCtx; layer: 'root' | 'page' | 
       return () => clearTimeout(t);
     }, [heroArrival, arrived]);
     useLayoutEffect(() => (el.current && initial.current?.length ? restoreScroll(el.current, initial.current) : undefined), []);
+    // Safety net: a leaving screen whose exit is still unfinished at the deadline is hidden and released (never
+    // while the app is in the background, where its exit is only paused; each check first gives it two frames)
+    useEffect(() => {
+      // Released but still kept for another screen's exit, then brought back by a Back: show it again
+      if (present) { el.current?.removeAttribute('data-stuck'); return; }
+      const since = performance.now();
+      let frame = 0;
+      const check = () => {
+        const node = el.current;
+        if (!node?.isConnected || !pageActive() || performance.now() - since < EXIT_DEADLINE_MS || !hung()) return;
+        node.setAttribute('data-stuck', '');
+        if (!warnedStuck && process.env.NODE_ENV !== 'production') console.warn('[studio] a leaving screen never finished its exit; released at its deadline');
+        warnedStuck = true;
+        release();
+      };
+      const soon = () => {
+        cancelAnimationFrame(frame);
+        if (pageActive()) frame = requestAnimationFrame(() => { frame = requestAnimationFrame(check); });
+      };
+      const timer = setTimeout(soon, EXIT_DEADLINE_MS);
+      const off = subscribeActivity(soon);
+      return () => { clearTimeout(timer); cancelAnimationFrame(frame); off(); };
+    }, [present, hung, release]);
     return (
-      <motion.div ref={attach} className="vx-screen" data-layer={layer} tabIndex={-1} custom={ctx} variants={screenVariants}
-        data-arrive={arrive.current} initial="initial" animate="enter" exit="exit" inert={!present} aria-hidden={present ? undefined : true}
-        onAnimationComplete={(def) => { if (def === 'enter' && present && !heroArrival) onSettled(); }}
-        onAnimationEnd={(e) => { if (e.target === el.current && e.animationName === 'vxArriveDone') arrived(); }}>
-        <SheetHostContext.Provider value={host}>{children}</SheetHostContext.Provider>
-      </motion.div>
+      <PresenceContext.Provider value={presence}>
+        <motion.div ref={attach} className="vx-screen" data-layer={layer} tabIndex={-1} custom={ctx} variants={screenVariants}
+          data-arrive={arrive.current} initial="initial" animate="enter" exit={exit} inert={!present} aria-hidden={present ? undefined : true}
+          onAnimationComplete={(def) => { if (def === 'enter' && present && !heroArrival) onSettled(); }}
+          onAnimationEnd={(e) => { if (e.target === el.current && e.animationName === 'vxArriveDone') arrived(); }}>
+          <SheetHostContext.Provider value={host}>{children}</SheetHostContext.Provider>
+        </motion.div>
+      </PresenceContext.Provider>
     );
   },
 );
