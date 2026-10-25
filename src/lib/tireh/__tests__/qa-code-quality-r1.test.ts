@@ -23,7 +23,7 @@ const org = testOrg();
 const persona = org.getPersona('aria')!;
 const rezaChat: ChatContext = { kind: 'private', chatKey: 'private-reza', personId: 'reza' };
 
-const explainTriage: ImageTriage = { kind: 'photo', task: 'explain', containsPeople: 0, containsSensitiveDocument: 0 };
+const explainTriage: ImageTriage = { kind: 'other', task: 'explain', containsPeople: 0, containsSensitiveDocument: 0 };
 
 beforeEach(() => { vi.stubEnv('STUDIO_IMAGES', '1'); });
 afterEach(() => { vi.unstubAllEnvs(); });

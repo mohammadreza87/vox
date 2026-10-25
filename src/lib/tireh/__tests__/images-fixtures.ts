@@ -6,7 +6,7 @@ import { vi } from 'vitest';
 import { FakeLLM, fakeBot } from './fixtures';
 import { crc32 } from '../images/bytes';
 import type { TelegramPhotoSize, TelegramUpdate } from '../telegram/client';
-import type { DecisionAnswer, DecisionQuestion } from '../triage';
+import type { DeciderAuthority, DecisionAnswer, DecisionQuestion } from '../triage';
 import type { LLMImage } from '../llm';
 
 export const IMAGE_CANARIES = {
@@ -140,8 +140,8 @@ export function imageAnswers(opts: { kind?: string; task?: string; taskConfidenc
 
 /** decide and decideParts are recorded vi.fn; `parts: false` omits decideParts. */
 export function scriptedDecider(script: { text?: Answers; image?: Answers | (() => Promise<Answers>); parts?: boolean } = {}) {
-  const decide = vi.fn<(input: string, questions: DecisionQuestion[], timeoutMs?: number) => Promise<Answers>>(async () => script.text ?? {});
-  const decideParts = vi.fn<(input: ImageParts, questions: DecisionQuestion[], timeoutMs?: number) => Promise<Answers>>(async () =>
+  const decide = vi.fn<(input: string, questions: DecisionQuestion[], timeoutMs?: number, authority?: DeciderAuthority) => Promise<Answers>>(async () => script.text ?? {});
+  const decideParts = vi.fn<(input: ImageParts, questions: DecisionQuestion[], timeoutMs?: number, authority?: DeciderAuthority) => Promise<Answers>>(async () =>
     typeof script.image === 'function' ? script.image() : script.image ?? {});
   return script.parts === false ? { decide } : { decide, decideParts };
 }
