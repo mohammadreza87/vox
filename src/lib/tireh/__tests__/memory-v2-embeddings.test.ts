@@ -104,6 +104,22 @@ describe('OpenAIEmbeddingProvider', () => {
     expect((error as Error & { cause?: unknown }).cause).toBeUndefined();
   });
 
+  it('never logs through the SDK, even with OPENAI_LOG=debug, on success or failure', async () => {
+    vi.stubEnv('OPENAI_LOG', 'debug');
+    const methods = ['debug', 'info', 'log', 'warn', 'error'] as const;
+    const spies = methods.map((m) => vi.spyOn(console, m).mockImplementation(() => undefined));
+    const { fn } = okFetch();
+    await new OpenAIEmbeddingProvider({ apiKey: KEY, fetch: fn as unknown as typeof fetch, dimensions: 8 }).embed([CANARY]);
+    const failing = vi.fn(async () => new Response(JSON.stringify({ error: { message: `server echoed ${CANARY}` } }), { status: 500, headers: { 'content-type': 'application/json' } }));
+    await new OpenAIEmbeddingProvider({ apiKey: KEY, fetch: failing as unknown as typeof fetch, dimensions: 8 }).embed([CANARY]).catch(() => undefined);
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect(failing).toHaveBeenCalledTimes(1);
+    const logged = spies.flatMap((spy) => spy.mock.calls);
+    expect(JSON.stringify(logged.map((args) => args.map(String)))).not.toContain('CANARY');
+    expect(JSON.stringify(logged.map((args) => args.map(String)))).not.toContain(KEY);
+    expect(logged).toEqual([]);
+  });
+
   it('maps an abort to embedding_aborted', async () => {
     const controller = new AbortController();
     const fn = vi.fn((_input: unknown, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {

@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PersonaGateway, type RuntimePrivacy, type RuntimePrivacyState } from '../gateway';
 import { decideScope, type MemoryCandidate } from '../memory/extraction';
 import { selectMemories } from '../memory/retrieval';
-import { ownerSharePatch, validateShareRecipients } from '../memory/sharing';
+import { ownerRevokePatch, ownerSharePatch, validateShareRecipients } from '../memory/sharing';
 import {
   createInMemoryStores, InMemoryMemoryStore, InMemoryUpdateDeduper, StaleMemoryWriteError, type NewMemory,
 } from '../memory/store';
@@ -18,10 +18,11 @@ import {
 } from '../memory/visibility';
 import { OrgDirectory } from '../org/directory';
 import { auditMemoryStore, InMemoryAuditStore, InMemorySupersededNoticeStore } from '../audit';
-import type { ChatContext, ChatMessage, MemoryRecord, MemoryScope, MemorySensitivity } from '../types';
+import { buildSystemPrompt } from '../conversation/prompt';
+import type { ChatContext, ChatMessage, MemoryRecord, MemoryScope } from '../types';
 import { callback, GAMEEND_CHAT, groupText, LEADS_CHAT, makeGateway, memory, privateText, TG, testOrg, testOrgConfig } from './fixtures';
 import { groupId as studioGroupId, personId, studioToOrg } from '../../studio/org-bridge';
-import { draftJson, hire, ID, makeStudio, seedOrg, T0 } from '../../studio/__tests__/helpers';
+import { draftJson, hire, ID, makeStudio, memberOf, seedOrg, T0 } from '../../studio/__tests__/helpers';
 
 afterEach(() => { vi.unstubAllEnvs(); });
 // Studio hire flows are slow on a loaded machine.
@@ -47,38 +48,46 @@ class TombstoneStore extends InMemoryMemoryStore {
 }
 
 describe('sharing invariants (section 4.6)', () => {
-  it('(1) every reader of a visible record is authorized and currently allowed by its scope', () => {
-    const org = testOrg();
-    const scopes: MemoryScope[] = [
-      { kind: 'private', personId: 'reza' }, { kind: 'people', personIds: ['reza', 'parastoo'] }, { kind: 'group', groupId: 'gameend-team' },
-      { kind: 'group', groupId: 'leads' }, { kind: 'project', projectId: 'gameend' }, { kind: 'company', companyId: 'ludaxis' }, { kind: 'org' },
+  it('(1) every memory reaching a reply prompt is authorized for every reader and allowed by its scope', async () => {
+    const { gateway, llm, memories, org } = makeGateway();
+    const planted: MemoryRecord[] = [];
+    const plant = async (token: string, scope: MemoryScope, authorizedPersonIds: string[] | undefined, groupId?: string) => {
+      const at = new Date('2026-10-18T10:00:00Z');
+      planted.push(await memories.add(newMemory({ content: `Launch plan note ${token}`, scope, authorizedPersonIds,
+        source: groupId ? { personId: 'reza', chatKind: 'group', groupId, at, eventIds: [`src-${token}`] }
+          : { personId: 'reza', chatKind: 'private', at, eventIds: [`src-${token}`] } })));
+    };
+    await plant('TOKEN_PRIVATE_REZA', { kind: 'private', personId: 'reza' }, ['reza']);
+    await plant('TOKEN_PEOPLE_REZA_PARASTOO', { kind: 'people', personIds: ['parastoo', 'reza'] }, ['parastoo', 'reza']);
+    await plant('TOKEN_GROUP_GAMEEND', { kind: 'group', groupId: 'gameend-team' }, ['milad', 'parastoo', 'reza'], 'gameend-team');
+    await plant('TOKEN_GROUP_PARTIAL', { kind: 'group', groupId: 'gameend-team' }, ['parastoo', 'reza'], 'gameend-team');
+    await plant('TOKEN_LEGACY_ORG', { kind: 'org' }, undefined);
+    // Not authorized for Reza: must never reach a prompt Reza can read.
+    await plant('UNAUTHORIZED_CANARY', { kind: 'people', personIds: ['milad', 'parastoo'] }, ['milad', 'parastoo']);
+    const turns = [
+      ...(['reza', 'parastoo', 'milad', 'sina'] as const).map((id) => ({ audience: [id as string], update: privateText(TG[id], 'What is the launch plan?') })),
+      { audience: ['reza', 'parastoo', 'milad'], update: groupText(GAMEEND_CHAT, TG.reza, 'Aria, what is the launch plan?') },
+      { audience: ['reza', 'parastoo'], update: groupText(LEADS_CHAT, TG.parastoo, 'Aria, what is the launch plan?') },
     ];
-    const corpus: MemoryRecord[] = [];
-    for (const scope of scopes) for (const sensitivity of ['normal', 'personal', 'confidential'] as MemorySensitivity[]) {
-      const base = memory({ content: 'x', scope, sensitivity });
-      corpus.push(base, { ...base, authorizedPersonIds: undefined }, { ...base, authorizedPersonIds: base.authorizedPersonIds?.slice(0, -1) });
-    }
-    const people = ['reza', 'parastoo', 'milad', 'sina', 'ghost'];
-    const audiences: string[][] = [];
-    for (let i = 0; i < people.length; i++) {
-      audiences.push([people[i]]);
-      for (let j = i + 1; j < people.length; j++) {
-        audiences.push([people[i], people[j]]);
-        for (let k = j + 1; k < people.length; k++) audiences.push([people[i], people[j], people[k]]);
+    let seen = 0;
+    for (const turn of turns) {
+      const before = llm.replyPrompts.length;
+      await gateway.handleUpdate('aria', turn.update);
+      expect(llm.replyPrompts.length).toBe(before + 1);
+      const prompt = llm.replyPrompts.at(-1)!;
+      for (const m of planted) {
+        if (!prompt.includes(m.content)) continue;
+        seen++;
+        for (const reader of turn.audience) {
+          expect(m.authorizedPersonIds ?? [], `${m.content.split(' ').at(-1)} -> ${reader}`).toContain(reader);
+          expect(canPersonSee(org, reader, m.scope)).toBe(true);
+        }
       }
+      if (turn.audience.includes('reza')) expect(prompt).not.toContain('UNAUTHORIZED_CANARY');
+      expect(prompt).not.toContain('TOKEN_LEGACY_ORG');
     }
-    let visible = 0;
-    for (const m of corpus) for (const audience of audiences) {
-      if (!isVisibleToAudience(org, m, audience)) continue;
-      visible++;
-      const implicit = m.scope.kind === 'private' ? [m.scope.personId] : m.scope.kind === 'people' ? m.scope.personIds : [];
-      for (const reader of audience) {
-        const owner = m.sensitivity !== 'normal' && m.scope.kind === 'private' && reader === m.scope.personId;
-        expect(owner || (m.authorizedPersonIds ?? implicit).includes(reader), `${m.id} ${reader}`).toBe(true);
-        expect(canPersonSee(org, reader, m.scope)).toBe(true);
-      }
-    }
-    expect(visible).toBeGreaterThan(20);
+    expect(llm.replyPrompts[0]).toContain('TOKEN_PRIVATE_REZA');
+    expect(seen).toBeGreaterThan(2);
   });
 
   it('(2) a private chat has exactly one reader and never sees another person\'s private memory', async () => {
@@ -99,11 +108,15 @@ describe('sharing invariants (section 4.6)', () => {
     const chat: ChatContext = { kind: 'group', chatKey: 'group-leads', group: leads };
     const record = memory({ content: 'MEMORY_CANARY', scope: { kind: 'group', groupId: 'leads' } });
     expect(isMemoryAllowedInChat(guestOrg, record, chat)).toBe(false);
+    expect(selectMemories(guestOrg, [record], chat, { query: 'what do we know' })).toEqual([]);
+    expect(buildSystemPrompt({ org: guestOrg, persona: guestOrg.getPersona('aria')!, chat, speakerId: 'reza', memories: [] })).not.toContain('## Organization');
     const stamped = historyMessageForChat(chat, { role: 'user', personId: 'parastoo', text: 'HISTORY_CANARY', at: new Date() });
     expect(selectHistoryForChat(guestOrg, [stamped], chat)).toEqual([]);
     const unknown: ChatContext = { kind: 'group', chatKey: 'group-leads', group: { ...testOrg().getGroup('leads')!, memberIds: ['reza', 'parastoo', 'ghost'] } };
     expect(isMemoryAllowedInChat(testOrg(), memory({ content: 'x', scope: { kind: 'group', groupId: 'leads' }, authorizedPersonIds: ['reza', 'parastoo', 'ghost'] }), unknown)).toBe(false);
     expect(selectHistoryForChat(testOrg(), [historyMessageForChat(unknown, { role: 'user', personId: 'reza', text: 'x', at: new Date() })], unknown)).toEqual([]);
+    expect(selectMemories(testOrg(), [memory({ content: 'x', scope: { kind: 'group', groupId: 'leads' }, authorizedPersonIds: ['reza', 'parastoo', 'ghost'] })], unknown, { query: 'x' })).toEqual([]);
+    expect(buildSystemPrompt({ org: testOrg(), persona: testOrg().getPersona('aria')!, chat: unknown, speakerId: 'reza', memories: [] })).not.toContain('## Organization');
 
     const ctx = makeGateway();
     const gateway = new PersonaGateway({ ...ctx, org: guestOrg, voice: null, deduper: new InMemoryUpdateDeduper(), botFor: () => ctx.bot as never });
@@ -203,6 +216,8 @@ describe('sharing invariants (section 4.6)', () => {
       source: { personId: personId(ID.alice), chatKind: 'private', at: T0, eventIds: ['rv-1'] } }));
     await h.memory.history.append(agent.id, `private-${personId(ID.bob)}`, { role: 'user', personId: personId(ID.bob), text: 'hello', at: T0 });
     expect((await h.studio.memoriesFor(org.bob, agent.id)).map((m) => m.id)).toEqual([record.id]);
+    const directory = studioToOrg(await h.store.read());
+    expect(isVisibleToAudience(directory, { ...record, ...ownerRevokePatch(record, personId(ID.alice)) }, [personId(ID.bob)])).toBe(false);
     const epoch = await h.memory.history.getEpoch(agent.id);
     await h.studio.revokeMemory(org.alice, agent.id, record.id);
     expect(await h.studio.memoriesFor(org.bob, agent.id)).toEqual([]);
@@ -210,29 +225,46 @@ describe('sharing invariants (section 4.6)', () => {
     expect(await h.memory.history.recent(agent.id, `private-${personId(ID.bob)}`, 20)).toEqual([]);
   });
 
-  it('(9) deletes leave tombstones and a replay cannot relearn the source', async () => {
-    const store = new InMemoryMemoryStore();
-    const input = newMemory({ scope: { kind: 'private', personId: 'reza' }, authorizedPersonIds: ['reza'], source: { personId: 'reza', chatKind: 'private', at: new Date(), eventIds: ['tomb-1'] } });
-    const record = await store.add(input);
-    await store.delete(record.id);
-    expect([...(store.tombstones.get('aria') ?? [])]).toContain('tomb-1');
-    await expect(store.add(input)).rejects.toBeInstanceOf(StaleMemoryWriteError);
+  it('(9) gateway forgetMemory removes the closure and leaves tombstones, so a replay cannot relearn', async () => {
+    const { gateway, memories } = makeGateway();
+    const source = { personId: 'reza', chatKind: 'private' as const, at: new Date('2026-10-18T10:00:00Z'), eventIds: ['tomb-1'] };
+    const input = newMemory({ scope: { kind: 'private', personId: 'reza' }, authorizedPersonIds: ['reza'], source });
+    const record = await memories.add(input);
+    const correction = await memories.add(newMemory({ scope: { kind: 'private', personId: 'reza' }, authorizedPersonIds: ['reza'], supersedes: record.id,
+      source: { ...source, eventIds: ['tomb-2'] } }));
+    await gateway.forgetMemory('aria', correction.id);
+    expect(await memories.get(record.id)).toBeNull();
+    expect(await memories.get(correction.id)).toBeNull();
+    expect([...(memories.tombstones.get('aria') ?? [])].sort()).toEqual(['tomb-1', 'tomb-2']);
+    await expect(memories.add(input)).rejects.toBeInstanceOf(StaleMemoryWriteError);
   });
 
-  it('(10) superseded records are never retrieved, and recipients are told it changed', async () => {
+  it('(10) superseded records are never retrieved, and recipients get a notice only under TIREH_SHARING_V2', async () => {
     const org = testOrg();
     const chat: ChatContext = { kind: 'private', chatKey: 'private-parastoo', personId: 'parastoo' };
     const old = memory({ content: 'Launch is Friday', scope: { kind: 'people', personIds: ['parastoo', 'reza'] }, supersededBy: 'm-new' });
     expect(isVisibleToAudience(org, old, ['parastoo'])).toBe(false);
     expect(selectMemories(org, [old], chat, { query: 'launch' })).toEqual([]);
 
+    const scenario = async () => {
+      const h = makeStudio({ adaptive: false });
+      const people = await seedOrg(h);
+      const { agent } = await hire(h, people.alice);
+      const notices = new InMemorySupersededNoticeStore();
+      h.studio.deps.memoryNotices = notices;
+      h.studio.deps.memory = { ...h.studio.deps.memory, memories: auditMemoryStore(h.memory.memories, new InMemoryAuditStore(), notices) };
+      const pair = [personId(ID.alice), personId(ID.bob)].sort();
+      const shared = await h.studio.deps.memory.memories.add(newMemory({ personaId: agent.id, scope: { kind: 'people', personIds: pair }, authorizedPersonIds: pair,
+        source: { personId: personId(ID.alice), chatKind: 'private', at: T0, eventIds: ['n-1'] } }));
+      await h.studio.deps.memory.memories.add(newMemory({ personaId: agent.id, scope: { kind: 'private', personId: personId(ID.alice) }, authorizedPersonIds: [personId(ID.alice)],
+        supersedes: shared.id, source: { personId: personId(ID.alice), chatKind: 'private', at: T0, eventIds: ['n-2'] } }));
+      return { notices: await h.studio.memoryNoticesFor(await memberOf(h, ID.bob), agent.id), shared, stored: notices.notices.length };
+    };
+    vi.stubEnv('TIREH_SHARING_V2', '');
+    expect(await scenario()).toMatchObject({ notices: [], stored: 0 });
     vi.stubEnv('TIREH_SHARING_V2', '1');
-    const notices = new InMemorySupersededNoticeStore();
-    const store = auditMemoryStore(new InMemoryMemoryStore(), new InMemoryAuditStore(), notices);
-    const shared = await store.add(newMemory({ scope: { kind: 'people', personIds: ['milad', 'parastoo', 'reza'] }, authorizedPersonIds: ['milad', 'parastoo', 'reza'] }));
-    const next = await store.add(newMemory({ scope: { kind: 'private', personId: 'reza' }, authorizedPersonIds: ['reza'], supersedes: shared.id }));
-    expect(notices.notices).toHaveLength(1);
-    expect(notices.notices[0]).toMatchObject({ oldMemoryId: shared.id, newMemoryId: next.id, ownerPersonId: 'reza', recipientPersonIds: ['milad', 'parastoo'] });
+    const on = await scenario();
+    expect(on.notices).toEqual([expect.objectContaining({ oldMemoryId: on.shared.id, from: 'Alice', replacementVisible: false })]);
   });
 
   it('(11) Work and Personal never cross', async () => {
@@ -247,6 +279,7 @@ describe('sharing invariants (section 4.6)', () => {
     state = { ...state, revision: '2' };
     await gateway.converse('aria', 'reza', 'hello', { space: 'personal' });
     expect(JSON.stringify(ctx.llm.replyRequests.at(-1))).not.toContain('WORK_CANARY');
+    expect(ctx.llm.replyPrompts.at(-1)).not.toContain('WORK_CANARY');
   });
 
   it('(12) a successor copies only normal group/people/project records and carries tombstones', async () => {
@@ -264,8 +297,14 @@ describe('sharing invariants (section 4.6)', () => {
       await add('PEOPLE', { kind: 'people', personIds: pair });
       await add('GROUP', { kind: 'group', groupId: 'chat-1' });
       await add('PROJECT', { kind: 'project', projectId: 'p1' });
+      await add('CONFIDENTIAL', { kind: 'group', groupId: 'chat-1' }, { sensitivity: 'confidential' });
+      await add('COMPANY', { kind: 'company', companyId: 'c1' });
+      await add('ORG', { kind: 'org' });
       const gone = await add('GONE', { kind: 'group', groupId: 'chat-1' });
       await store.delete(gone.id);
+      // Active, but its lineage was already tombstoned for the predecessor.
+      await add('LINEAGE', { kind: 'group', groupId: 'chat-1' });
+      if (store instanceof TombstoneStore) await store.addTombstones(old.id, ['src-LINEAGE']);
       await h.studio.fire(org.admin, old.id, { reason: 'reset', memoryPolicy: 'transfer', confirmName: 'Nova' });
       h.personaLLM.push(draftJson({ name: 'Nova Two' }));
       const { agent: next } = await hire(h, org.alice, { name: 'Nova Two' }, old.id);
@@ -305,13 +344,14 @@ describe('sharing invariants (section 4.6)', () => {
   });
 
   it('(14) model output never widens scope or grants access', async () => {
-    const { gateway, llm, memories } = makeGateway();
+    const { gateway, llm, memories, offers } = makeGateway();
     llm.nextExtraction = extraction({ content: 'Reza likes weekly demos', type: 'preference', kind: 'work', scope: { kind: 'org' },
       authorizedPersonIds: ['reza', 'parastoo', 'milad', 'sina'], sensitivity: 'normal' });
     await gateway.handleUpdate('aria', privateText(TG.reza, 'I like weekly demos'));
     const [stored] = await memories.listActive('aria');
     expect(stored.scope).toEqual({ kind: 'private', personId: 'reza' });
     expect(stored.authorizedPersonIds).toEqual(['reza']);
+    expect([...offers.offers.values()].every((offer) => offer.status === 'pending')).toBe(true);
 
     llm.nextExtraction = extraction({ content: 'Milad approved the budget', type: 'decision', kind: 'work', saidBy: 'milad' });
     await gateway.handleUpdate('aria', groupText(GAMEEND_CHAT, TG.parastoo, 'Aria, the budget is approved'));

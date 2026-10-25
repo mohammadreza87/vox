@@ -3,16 +3,16 @@
  * "Work fact told privately"): when the owner corrects a record they shared,
  * its recipients learn that it changed instead of it silently disappearing.
  * A notice holds ids, person ids and a time, never content or a topic. It
- * grants nothing: whether the new record is still visible is decided by
- * visibility.ts at read time.
+ * grants nothing: whether the replacement is visible is decided by
+ * visibility.ts at read time. Recorded only for people/project-scoped records
+ * under TIREH_SHARING_V2 (see memory-decorator.ts).
  */
 
 import { randomUUID } from 'crypto';
 import { chmod, readFile, rename, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
-import type { Firestore } from 'firebase-admin/firestore';
 import { z } from 'zod';
-import { auditIdSchema, toDate, withoutUndefined } from './store';
+import { auditIdSchema } from './store';
 
 export interface SupersededNotice { id: string; personaId: string; oldMemoryId: string; newMemoryId: string; ownerPersonId: string; recipientPersonIds: string[]; at: Date } // content-free
 export interface SupersededNoticeStore {
@@ -21,7 +21,8 @@ export interface SupersededNoticeStore {
 }
 
 const MAX_RECIPIENTS = 200;
-const LIST_LIMIT = 50;
+export const MAX_NOTICE_LIST = 200;
+export const MAX_NOTICE_FILE_ROWS = 5000;
 
 export const supersededNoticeSchema = z.object({
   personaId: auditIdSchema,
@@ -29,10 +30,11 @@ export const supersededNoticeSchema = z.object({
   newMemoryId: auditIdSchema,
   ownerPersonId: auditIdSchema,
   recipientPersonIds: z.array(auditIdSchema).min(1).max(MAX_RECIPIENTS),
-  at: z.date(),
+  at: z.date().refine((date) => !Number.isNaN(date.getTime()), 'invalid date'),
 }).strict();
 
-function validated(notice: Omit<SupersededNotice, 'id'>): SupersededNotice {
+/** Sorts and de-duplicates recipients, validates strictly and assigns an id. */
+export function validateNotice(notice: Omit<SupersededNotice, 'id'>): SupersededNotice {
   const parsed = supersededNoticeSchema.parse({ ...notice, recipientPersonIds: [...new Set(notice.recipientPersonIds ?? [])].sort() });
   return { id: randomUUID(), ...parsed };
 }
@@ -41,14 +43,14 @@ function select(notices: readonly SupersededNotice[], personaId: string, recipie
   return notices
     .filter((n) => n.personaId === personaId && n.recipientPersonIds.includes(recipientPersonId) && (since === undefined || n.at.getTime() >= since.getTime()))
     .sort((a, b) => b.at.getTime() - a.at.getTime())
-    .slice(0, LIST_LIMIT);
+    .slice(0, MAX_NOTICE_LIST);
 }
 
 export class InMemorySupersededNoticeStore implements SupersededNoticeStore {
   readonly notices: SupersededNotice[] = [];
 
   async record(n: Omit<SupersededNotice, 'id'>): Promise<void> {
-    this.notices.push(validated(n));
+    this.notices.push(validateNotice(n));
   }
 
   async listFor(personaId: string, recipientPersonId: string, since?: Date): Promise<SupersededNotice[]> {
@@ -56,7 +58,7 @@ export class InMemorySupersededNoticeStore implements SupersededNoticeStore {
   }
 }
 
-/** One JSON array file (mode 0o600), rewritten through tmp + rename, serialized in-process. */
+/** One JSON array file (mode 0o600), rewritten through tmp + rename, serialized in-process, capped at 5000 rows (oldest dropped). */
 export function createFileSupersededNoticeStore(path: string): SupersededNoticeStore {
   let chain: Promise<unknown> = Promise.resolve();
   const serial = <T>(operation: () => Promise<T>): Promise<T> => {
@@ -71,42 +73,14 @@ export function createFileSupersededNoticeStore(path: string): SupersededNoticeS
   };
   return {
     record: (n) => serial(async () => {
-      const notice = validated(n);
-      const rows = await readAll();
-      rows.push(notice);
+      const notice = validateNotice(n);
+      const rows = [...await readAll(), notice]
+        .sort((a, b) => a.at.getTime() - b.at.getTime())
+        .slice(-MAX_NOTICE_FILE_ROWS);
       await writeFile(`${path}.tmp`, JSON.stringify(rows), { mode: 0o600 });
       await chmod(`${path}.tmp`, 0o600);
       await rename(`${path}.tmp`, path);
     }),
     listFor: (personaId, recipientPersonId, since) => serial(async () => select(await readAll(), personaId, recipientPersonId, since)),
   };
-}
-
-const NOTICE_COLLECTION = 'tireh_supersede_notices';
-
-/**
- * Firestore collection `tireh_supersede_notices`.
- * Composite index the integrator must add to firestore.indexes.json (owned by S06):
- *  - tireh_supersede_notices: personaId ASC, recipientPersonIds ARRAY_CONTAINS
- * `since` is filtered in memory after a bounded read so no range index is needed.
- */
-export class FirestoreSupersededNoticeStore implements SupersededNoticeStore {
-  constructor(private readonly db: Firestore) {}
-
-  async record(n: Omit<SupersededNotice, 'id'>): Promise<void> {
-    const notice = validated(n);
-    await this.db.collection(NOTICE_COLLECTION).doc(notice.id).create(withoutUndefined(notice));
-  }
-
-  async listFor(personaId: string, recipientPersonId: string, since?: Date): Promise<SupersededNotice[]> {
-    const snapshot = await this.db.collection(NOTICE_COLLECTION)
-      .where('personaId', '==', personaId)
-      .where('recipientPersonIds', 'array-contains', recipientPersonId)
-      .limit(200).get();
-    const rows = snapshot.docs.map((doc) => {
-      const data = doc.data() as Omit<SupersededNotice, 'at'> & { at: unknown };
-      return { ...data, id: data.id ?? doc.id, at: toDate(data.at) };
-    });
-    return select(rows, personaId, recipientPersonId, since);
-  }
 }

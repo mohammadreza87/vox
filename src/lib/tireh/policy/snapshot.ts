@@ -1,37 +1,38 @@
 /**
- * PolicySnapshotBuilder: maps a TIREH MemoryRecord, its scope, the org
+ * PolicySnapshotBuilder (S08): maps a TIREH MemoryRecord, its scope, the org
  * directory (Studio groups included) and the agent onto the adaptive
- * PolicySnapshot / AccessRequest contract, the same way
- * src/lib/adaptive/shared/service.ts maps shared containers. Step 8 of
- * docs/AGENT_INTELLIGENCE_SOLUTION.md uses it as a CI oracle: the
- * differential test checks that the visibility module's audience decision and
- * adaptive authorizeAccess agree on every fixture.
+ * PolicySnapshot / AccessRequest contract, modelled on allowed() in
+ * src/lib/adaptive/shared/service.ts. The differential test uses it as an
+ * oracle: the visibility module's audience decision and adaptive
+ * authorizeAccess must agree on every fixture.
  *
- * To be a useful oracle this module must not reuse visibility.ts decisions:
- * scope membership is derived here from the org config directly (only the
- * scope key encoding is shared). The differential test greps this file for
- * the names of the visibility decision functions.
+ * To stay independent it never calls the visibility decision functions:
+ * memberships are derived from OrgDirectory primitives (getPerson,
+ * isGroupMember, isProjectMember, isCompanyMember). Only the scope-key
+ * encoding is shared, for a stable container id.
  *
- * Modelling choices (see MODELING_NOTES in the differential test):
- *  - identity is a synthetic, verified account_confirmation binding for the
- *    reader: TIREH has no binding records, so identity is not compared;
- *  - one Work space per organization until S06's `space` field lands;
+ * Modelling choices (documented in the differential test):
+ *  - identity: a synthetic, verified account_confirmation binding per reader.
+ *    TIREH trusts the transport-authenticated id; identity is not compared.
+ *  - Work space only: TIREH records are Work records.
  *  - purpose core.conversation with no consents: consent gates live in the
- *    turn boundary, not in visibility;
- *  - the agent grant comes from personaId (the store is per agent);
- *  - every record and membership starts at t0, the record's creation time:
- *    people outside the authorization snapshot get no membership at all, so
- *    historyPolicy can never widen access by itself.
+ *    turn boundary, not in visibility.
+ *  - the agent grant comes from personaId.
+ *  - joinedAt 0 for every snapshot member: TIREH has no join times, and the
+ *    authorizedPersonIds snapshot is the history fence, so historyPolicy can
+ *    never widen access by itself.
+ *
+ * Pure and synchronous: no I/O, no logging, no content read (metadata only).
  */
 
 import { authorizeAccess } from '../../adaptive/policy';
-import type { AccessRequest, Container, ContainerAudience, Grant, Membership, Person as PolicyPerson, PolicySnapshot } from '../../adaptive/types';
+import type { AccessRequest, ContainerAudience, Grant, Membership, Person as PolicyPerson, PolicySnapshot } from '../../adaptive/types';
 import { scopeKey } from '../memory/visibility';
 import type { OrgDirectory } from '../org/directory';
 import type { MemoryRecord } from '../types';
 
 export const TIREH_POLICY_VERSION = 'tireh-visibility-v1';
-const FOREVER = Number.MAX_SAFE_INTEGER;
+const MAX = Number.MAX_SAFE_INTEGER;
 const PURPOSE = 'core.conversation' as const;
 
 export interface PolicyMappingInput { org: OrgDirectory; memory: MemoryRecord; readerPersonId: string; audience: readonly string[]; personaId: string; now: number }
@@ -39,128 +40,96 @@ export interface PolicyMapping { snapshot: PolicySnapshot; request: AccessReques
 
 const unique = (ids: readonly string[]): string[] => [...new Set(ids)];
 
-/** Non-guest people in the org config, independent of visibility.ts. */
-function staff(org: OrgDirectory) {
-  return org.config.people.filter((person) => !person.guest);
-}
-
-/** The current members of a dynamic scope (project, company, org); null for the bounded scopes. */
-function dynamicScopeMembers(org: OrgDirectory, memory: MemoryRecord): string[] | null {
+/** The current scope rule for one person, written out from directory primitives. */
+function scopeRuleHolds(org: OrgDirectory, memory: MemoryRecord, id: string): boolean {
+  const person = org.getPerson(id);
+  if (!person) return false;
   const scope = memory.scope;
+  if (scope.kind === 'private') return id === scope.personId;
+  if (scope.kind === 'people') return scope.personIds.includes(id);
+  if (person.guest) return scope.kind === 'group' && org.isGroupMember(id, scope.groupId);
   switch (scope.kind) {
-    case 'project': {
-      const project = org.config.projects.find((p) => p.id === scope.projectId);
-      return staff(org).filter((person) => project?.memberIds.includes(person.id)).map((person) => person.id).sort();
-    }
-    case 'company': return staff(org).filter((person) => person.companyIds.includes(scope.companyId)).map((person) => person.id).sort();
-    case 'org': return staff(org).map((person) => person.id).sort();
-    default: return null;
-  }
-}
-
-function isCurrentScopeMember(org: OrgDirectory, memory: MemoryRecord, personId: string): boolean {
-  const scope = memory.scope;
-  switch (scope.kind) {
-    case 'private': return scope.personId === personId;
-    case 'people': return scope.personIds.includes(personId);
-    case 'group': return org.config.groups.find((g) => g.id === scope.groupId)?.memberIds.includes(personId) ?? false;
-    default: return dynamicScopeMembers(org, memory)?.includes(personId) ?? false;
-  }
-}
-
-function containerAudience(org: OrgDirectory, memory: MemoryRecord): ContainerAudience | null {
-  const scope = memory.scope;
-  switch (scope.kind) {
-    case 'private': return { kind: 'private', ownerPersonId: scope.personId };
-    case 'people': {
-      const personIds = unique(scope.personIds).sort();
-      return personIds.length ? { kind: 'exact_recipients', personIds } : null;
-    }
-    case 'group': return { kind: 'group', groupId: scope.groupId };
-    default: {
-      const personIds = dynamicScopeMembers(org, memory) ?? [];
-      return personIds.length ? { kind: 'exact_recipients', personIds } : null;
-    }
+    case 'group': return org.isGroupMember(id, scope.groupId);
+    case 'project': return org.isProjectMember(id, scope.projectId);
+    case 'company': return org.isCompanyMember(id, scope.companyId);
+    case 'org': return true;
   }
 }
 
 /** Builds one reader's snapshot and request; null means not representable, which is a denial. */
 export function buildPolicyMapping(input: PolicyMappingInput): PolicyMapping | null {
   const { org, memory, readerPersonId: reader, audience, personaId, now } = input;
-  if (memory.personaId !== personaId) return null;
-  if (memory.sensitivity !== 'normal' && memory.scope.kind !== 'private') return null;
-  const audienceKind = containerAudience(org, memory);
-  if (!audienceKind) return null;
+  const scope = memory.scope;
+  const sensitive = memory.sensitivity !== 'normal';
+  if (sensitive && scope.kind !== 'private') return null;
 
   const tenantId = `tireh:${org.config.organization.id}`;
   const spaceId = `${tenantId}:work`;
-  const containerId = `tireh:${scopeKey(memory.scope)}`;
+  const containerId = `${tenantId}:container:${scopeKey(scope)}`;
   const scoped = { tenantId, spaceId };
-  const t0 = Math.min(memory.createdAt.getTime(), now);
-  const base = { schemaVersion: 1 as const, revision: 1, createdAt: t0, updatedAt: t0 };
-  const accountId = `tireh-account:${reader}`;
-  const exists = (id: string) => org.config.people.some((person) => person.id === id);
+  const base = { schemaVersion: 1 as const, revision: 1, createdAt: 0, updatedAt: 0 };
+  const exists = (id: string) => !!org.getPerson(id);
 
-  const authorized = memory.authorizedPersonIds ??
-    (memory.scope.kind === 'private' ? [memory.scope.personId] : memory.scope.kind === 'people' ? memory.scope.personIds : []);
-  const eligible = (id: string): boolean => exists(id) && (memory.sensitivity !== 'normal'
-    ? memory.scope.kind === 'private' && id === memory.scope.personId
-    : authorized.includes(id) && isCurrentScopeMember(org, memory, id));
+  // Sensitive records map only to their private owner; normal ones use the snapshot with the base legacy fallback.
+  const authorized = sensitive ? [(scope as { personId: string }).personId]
+    : memory.authorizedPersonIds ?? (scope.kind === 'private' ? [scope.personId] : scope.kind === 'people' ? scope.personIds : []);
+  const memberIds = unique(authorized).filter((id) => exists(id) && scopeRuleHolds(org, memory, id)).sort();
+  const groupId = scope.kind === 'group' ? scope.groupId : undefined;
 
-  const involved = unique([reader, ...audience]);
-  const people: PolicyPerson[] = unique([reader, ...audience, memory.source.personId]).filter(exists)
-    .map((id) => ({ ...base, id, status: 'active' as const }));
-  const groupId = memory.scope.kind === 'group' ? memory.scope.groupId : undefined;
-  const historyPolicy: Container['historyPolicy'] = groupId
-    ? org.getGroup(groupId)?.historyPolicy ?? 'since_membership' : 'since_membership';
-  const members = involved.filter(eligible);
-  const memberships: Membership[] = members.map((id) => ({
-    ...base, ...scoped, id: `${containerId}:member:${id}`, containerId, personId: id,
-    ...(groupId ? { groupId } : {}), status: 'active' as const, joinedAt: t0, expiresAt: FOREVER, policyEpoch: 0,
+  let containerAudience: ContainerAudience;
+  if (scope.kind === 'private') containerAudience = { kind: 'private', ownerPersonId: scope.personId };
+  else if (groupId) containerAudience = { kind: 'group', groupId };
+  else {
+    if (!memberIds.length) return null;
+    containerAudience = { kind: 'exact_recipients', personIds: memberIds };
+  }
+  const historyPolicy = groupId ? (org.getGroup(groupId)?.historyPolicy ?? 'since_membership') : 'all_authorized_history';
+
+  const accountId = `acct:${reader}`;
+  const bindingId = `bind:${reader}`;
+  const people: PolicyPerson[] = unique([reader, ...audience, memory.source.personId, ...(scope.kind === 'people' ? scope.personIds : []),
+    ...(scope.kind === 'private' ? [scope.personId] : [])]).filter(exists).map((id) => ({ ...base, id, status: 'active' as const }));
+  const memberships: Membership[] = memberIds.map((id) => ({
+    ...base, ...scoped, id: `${containerId}:member:${id}`, containerId, personId: id, ...(groupId ? { groupId } : {}),
+    status: 'active' as const, joinedAt: 0, expiresAt: MAX, policyEpoch: 0,
   }));
-  const grants: Grant[] = [
-    ...members.map((id) => ({
-      ...base, ...scoped, id: `${containerId}:person:${id}`, containerId, principal: { kind: 'person' as const, id },
-      operations: ['read' as const], purpose: PURPOSE, purposeVersion: 1, status: 'active' as const, expiresAt: FOREVER, policyEpoch: 0,
-    })),
-    {
-      ...base, ...scoped, id: `${containerId}:agent:${personaId}`, containerId, principal: { kind: 'agent' as const, id: personaId },
-      operations: ['read' as const], purpose: PURPOSE, purposeVersion: 1, status: 'active' as const, expiresAt: FOREVER, policyEpoch: 0,
-    },
-  ];
+  const grant = (kind: 'person' | 'agent', id: string): Grant => ({
+    ...base, ...scoped, id: `${containerId}:${kind}:${id}`, containerId, principal: { kind, id }, operations: ['read'],
+    purpose: PURPOSE, purposeVersion: 1, status: 'active', expiresAt: MAX, policyEpoch: 0,
+  });
+  const createdAt = Math.max(0, Math.min(memory.createdAt.getTime(), now));
+  const updatedAt = Math.max(createdAt, Math.min(memory.updatedAt.getTime(), now));
 
   const snapshot: PolicySnapshot = {
     schemaVersion: 1,
     policyVersion: TIREH_POLICY_VERSION,
     account: { ...base, id: accountId, ownerPersonId: reader, status: 'active' },
     people,
-    binding: {
-      schemaVersion: 1, id: `tireh-binding:${reader}`, revision: 1, createdAt: t0, updatedAt: t0, accountId, personId: reader,
-      status: 'verified', method: 'account_confirmation', verifiedAt: t0, expiresAt: now + 1,
-    },
-    space: { ...base, id: spaceId, tenantId, kind: 'work', ownerAccountId: `tireh-org:${org.config.organization.id}`, status: 'active', policyEpoch: 0 },
-    container: { ...base, ...scoped, id: containerId, audience: audienceKind, status: 'active', policyEpoch: 0, spacePolicyEpoch: 0, historyPolicy },
+    binding: { ...base, id: bindingId, accountId, personId: reader, status: 'verified', method: 'account_confirmation', verifiedAt: 0, expiresAt: MAX },
+    space: { ...base, id: spaceId, tenantId, kind: 'work', ownerAccountId: `acct:org:${org.config.organization.id}`, status: 'active', policyEpoch: 0 },
+    container: { ...base, ...scoped, id: containerId, audience: containerAudience, status: 'active', policyEpoch: 0, spacePolicyEpoch: 0, historyPolicy },
     resource: {
-      ...base, ...scoped, id: memory.id, containerId, subjectPersonIds: [memory.source.personId],
-      status: memory.supersededBy ? 'deleted' : 'active', expiresAt: FOREVER, revocationEpoch: memory.shareVersion ?? 0,
+      schemaVersion: 1, revision: (memory.shareVersion ?? 0) + 1, createdAt, updatedAt, ...scoped, id: memory.id, containerId,
+      subjectPersonIds: [memory.source.personId], status: memory.supersededBy ? 'deleted' : 'active', expiresAt: MAX, revocationEpoch: 0,
     },
     memberships,
-    grants,
+    grants: [...memberIds.map((id) => grant('person', id)), grant('agent', personaId)],
     consents: [],
   };
   const request: AccessRequest = {
-    identity: { authenticatedAccountId: accountId, selectedPerson: { personId: reader, bindingId: `tireh-binding:${reader}`, bindingRevision: 1 } },
+    identity: { authenticatedAccountId: accountId, selectedPerson: { personId: reader, bindingId, bindingRevision: 1 } },
     tenantId, spaceId, containerId, resourceId: memory.id, operation: 'read', purpose: PURPOSE, purposeVersion: 1,
     consentPolicyVersion: TIREH_POLICY_VERSION, audience: { kind: 'known', personIds: unique(audience) }, agentId: personaId,
   };
   return { snapshot, request };
 }
 
-/** Adaptive policy's answer for one chat audience: every reader must be authorized. An empty audience is denied. */
+/** Adaptive policy's answer for one chat audience: every reader must be allowed. An empty audience is denied. */
 export function adaptiveAllowsAudience(org: OrgDirectory, memory: MemoryRecord, audience: readonly string[], personaId: string, now: number): boolean {
-  if (audience.length === 0) return false;
-  return audience.every((readerPersonId) => {
-    const mapping = buildPolicyMapping({ org, memory, readerPersonId, audience, personaId, now });
+  const readers = unique(audience);
+  if (readers.length === 0) return false;
+  return readers.every((readerPersonId) => {
+    const mapping = buildPolicyMapping({ org, memory, readerPersonId, audience: readers, personaId, now });
     return !!mapping && authorizeAccess(mapping.request, mapping.snapshot, now).allowed;
   });
 }

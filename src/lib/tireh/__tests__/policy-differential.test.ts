@@ -2,146 +2,194 @@
  * Differential oracle (docs/AGENT_INTELLIGENCE_SOLUTION.md section 5, Step 8):
  * visibility.isVisibleToAudience and adaptive authorizeAccess, through the
  * independent PolicySnapshotBuilder, must agree (allow/deny) on every fixture
- * and generated audience. Every case where they cannot agree yet is listed in
- * KNOWN_DIVERGENCES with a reason; an entry that no longer matches a real
- * divergence fails the test so the allowlist only shrinks.
+ * and every generated audience. Deterministic: no randomness.
+ *
+ * Modelling notes (documented non-divergences, not allowlist entries):
+ *  - Identity: TIREH trusts the transport-authenticated id; adaptive needs a
+ *    verified binding, so the builder always synthesizes one per reader.
+ *    Identity levels are not compared here.
+ *  - Time: joinedAt is 0 for every snapshot member. The history fence is the
+ *    authorizedPersonIds snapshot, so historyPolicy never widens by itself.
+ *  - Guests in a group chat (hasGuests) are handled by isMemoryAllowedInChat,
+ *    outside this per-audience comparison.
+ *  - Legacy rows without authorizedPersonIds: both deny for dynamic scopes
+ *    (no trustworthy original audience); private and people fall back to
+ *    their intrinsic audience in both.
  */
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { describe, expect, it } from 'vitest';
-import { isVisibleToAudience } from '../memory/visibility';
+import { isVisibleToAudience, scopeKey, snapshotScopeAudience } from '../memory/visibility';
 import { resnapshotPatch } from '../memory/sharing';
 import { OrgDirectory } from '../org/directory';
 import { adaptiveAllowsAudience, buildPolicyMapping } from '../policy/snapshot';
 import type { MemoryRecord, MemoryScope, MemorySensitivity, OrgConfig } from '../types';
 import { studioToOrg } from '../../studio/org-bridge';
 import type { StudioState } from '../../studio/types';
-import { memory, testOrgConfig } from './fixtures';
+import { memory, testOrg, testOrgConfig } from './fixtures';
 
 const NOW = Date.parse('2026-10-20T00:00:00Z');
 const PERSONA = 'aria';
 
-/** Documentation only: how TIREH records are modelled in the adaptive contract. */
-export const MODELING_NOTES = [
-  'Identity: a synthetic verified account_confirmation binding per reader. TIREH has no binding records, so identity is not compared; unknown readers still fail as inactive people.',
-  'Purpose: core.conversation with no consent rows. Optional-purpose consent gates live in the turn boundary, not in visibility.ts.',
-  'Space: one Work space per organization until S06 adds MemoryRecord.space.',
-  'Agent grant: derived from personaId, because the memory store is per agent; a record of another persona is not representable.',
-  'Time: every record and membership starts at the record creation time, so only the authorization snapshot (never historyPolicy) decides who joined late.',
-] as const;
+interface Divergence { name: string; backlog: string; reason: string; match(m: MemoryRecord, audience: readonly string[], org: OrgDirectory): boolean }
 
-interface Divergence { name: string; reason: string; matches(m: MemoryRecord, audience: readonly string[]): boolean }
-
-export const KNOWN_DIVERGENCES: Divergence[] = [
+/** Every entry must carry a reason and a backlog id, and must match only real divergences. Never silence a whole scope kind. */
+const KNOWN_DIVERGENCES: Array<Divergence> = [
   {
     name: 'duplicate-reader-sensitive-private',
-    reason: 'visibility.ts counts raw audience entries for personal/confidential records (length must be 1) and fails closed on a duplicated reader; the adaptive request carries a de-duplicated known audience. Chat audiences are de-duplicated by audienceOf(), so production never passes duplicates.',
-    matches: (m, audience) => m.sensitivity !== 'normal' && m.scope.kind === 'private' && !m.supersededBy &&
-      audience.length > 1 && audience.every((id) => m.scope.kind === 'private' && id === m.scope.personId),
+    backlog: 'S08-DIFF-1',
+    reason: 'visibility.ts counts raw audience entries for personal/confidential records (length must be exactly 1), so a duplicated owner id fails closed; adaptive requires a unique known audience, so the builder de-duplicates first. Chat audiences come from audienceOf(), which de-duplicates, so production never passes duplicates.',
+    match: (m, audience, org) => m.sensitivity !== 'normal' && m.scope.kind === 'private' && !m.supersededBy && audience.length > 1 &&
+      new Set(audience).size === 1 && audience[0] === m.scope.personId && !!org.getPerson(m.scope.personId),
   },
 ];
+const DOCUMENTED_DIVERGENCES = ['duplicate-reader-sensitive-private'];
 
-function differentialOrg(): OrgDirectory {
+function guestOrg(): OrgDirectory {
   const config = testOrgConfig();
   const withGuest: OrgConfig = {
     ...config,
-    people: [...config.people, { id: 'gwen', name: 'Gwen', role: 'Guest', companyIds: [], projectIds: [], guest: true }],
-    groups: config.groups.map((g) => (g.id === 'leads' ? { ...g, memberIds: [...g.memberIds, 'gwen'] } : g)),
+    people: [...config.people, { id: 'visitor', name: 'Visitor', role: 'Guest', companyIds: [], projectIds: [], guest: true }],
+    groups: config.groups.map((g) => (g.id === 'leads' ? { ...g, memberIds: [...g.memberIds, 'visitor'] } : g)),
   };
   return new OrgDirectory(withGuest);
 }
 
-const SCOPES: Array<{ label: string; scope: MemoryScope }> = [
-  { label: 'private-reza', scope: { kind: 'private', personId: 'reza' } },
-  { label: 'private-gwen', scope: { kind: 'private', personId: 'gwen' } },
-  { label: 'people-reza-parastoo', scope: { kind: 'people', personIds: ['reza', 'parastoo'] } },
-  { label: 'people-reza-gwen', scope: { kind: 'people', personIds: ['reza', 'gwen'] } },
-  { label: 'group-gameend', scope: { kind: 'group', groupId: 'gameend-team' } },
-  { label: 'group-leads', scope: { kind: 'group', groupId: 'leads' } },
-  { label: 'project-gameend', scope: { kind: 'project', projectId: 'gameend' } },
-  { label: 'company-ludaxis', scope: { kind: 'company', companyId: 'ludaxis' } },
-  { label: 'company-joyixir', scope: { kind: 'company', companyId: 'joyixir' } },
-  { label: 'org', scope: { kind: 'org' } },
-];
-const SENSITIVITIES: MemorySensitivity[] = ['normal', 'personal', 'confidential'];
-const AUTHORIZED: Array<{ label: string; of(defaults: string[] | undefined): string[] | undefined }> = [
-  { label: 'default', of: (d) => d },
-  { label: 'legacy-undefined', of: () => undefined },
-  { label: 'empty', of: () => [] },
-  { label: 'minus-last', of: (d) => d?.slice(0, -1) },
-  { label: 'plus-sina', of: (d) => [...new Set([...(d ?? []), 'sina'])] },
-];
+function openHistoryOrg(): OrgDirectory {
+  const base = guestOrg().config;
+  return new OrgDirectory({ ...base, groups: base.groups.map((g) => ({ ...g, historyPolicy: 'all_authorized_history' as const })) });
+}
 
-function corpus(): MemoryRecord[] {
-  const rows: MemoryRecord[] = [];
-  for (const { label, scope } of SCOPES) for (const sensitivity of SENSITIVITIES) for (const auth of AUTHORIZED) for (const superseded of [false, true]) {
-    const base = memory({ id: `m-${label}-${sensitivity}-${auth.label}${superseded ? '-superseded' : ''}`, content: 'differential fixture', scope, sensitivity });
-    rows.push({ ...base, authorizedPersonIds: auth.of(base.authorizedPersonIds), ...(superseded ? { supersededBy: 'x' } : {}) });
+const PEOPLE = ['reza', 'parastoo', 'milad', 'sina', 'visitor'];
+
+function subsets<T>(items: readonly T[], max: number): T[][] {
+  const out: T[][] = [];
+  const walk = (start: number, current: T[]) => {
+    if (current.length) out.push([...current]);
+    if (current.length === max) return;
+    for (let i = start; i < items.length; i++) walk(i + 1, [...current, items[i]]);
+  };
+  walk(0, []);
+  return out;
+}
+
+function scopes(): MemoryScope[] {
+  return [
+    ...PEOPLE.map((personId): MemoryScope => ({ kind: 'private', personId })),
+    ...subsets(PEOPLE, 3).map((personIds): MemoryScope => ({ kind: 'people', personIds })),
+    { kind: 'group', groupId: 'gameend-team' },
+    { kind: 'group', groupId: 'leads' },
+    { kind: 'project', projectId: 'gameend' },
+    { kind: 'company', companyId: 'ludaxis' },
+    { kind: 'company', companyId: 'joyixir' },
+    { kind: 'org' },
+  ];
+}
+
+const SENSITIVITIES: MemorySensitivity[] = ['normal', 'personal', 'confidential'];
+type AuthMode = 'default' | 'legacy' | 'subset' | 'empty' | 'snapshot';
+const AUTH_MODES: AuthMode[] = ['default', 'legacy', 'subset', 'empty', 'snapshot'];
+
+interface Case { m: MemoryRecord; label: string }
+
+function corpus(org: OrgDirectory): Case[] {
+  const rows: Case[] = [];
+  let n = 0;
+  for (const scope of scopes()) for (const sensitivity of SENSITIVITIES) for (const mode of AUTH_MODES) for (const superseded of [false, true]) {
+    const base = memory({ id: `diff-${n++}`, content: 'differential fixture', scope, sensitivity });
+    const authorizedPersonIds = mode === 'default' ? base.authorizedPersonIds
+      : mode === 'legacy' ? undefined
+        : mode === 'subset' ? base.authorizedPersonIds?.slice(0, -1)
+          : mode === 'empty' ? []
+            : snapshotScopeAudience(org, scope);
+    rows.push({
+      m: { ...base, authorizedPersonIds, ...(superseded ? { supersededBy: 'diff-next' } : {}) },
+      label: `${scopeKey(scope)} sensitivity=${sensitivity} auth=${mode}${superseded ? ' superseded' : ''}`,
+    });
   }
   return rows;
 }
 
-function audiences(org: OrgDirectory): string[][] {
-  const pool = ['reza', 'parastoo', 'milad', 'sina', 'gwen', 'ghost'];
-  const out: string[][] = [];
-  for (let i = 0; i < pool.length; i++) {
-    out.push([pool[i]]);
-    for (let j = i + 1; j < pool.length; j++) {
-      out.push([pool[i], pool[j]]);
-      for (let k = j + 1; k < pool.length; k++) out.push([pool[i], pool[j], pool[k]]);
-    }
-  }
-  for (const group of org.config.groups) out.push([...group.memberIds]);
-  out.push([], ['reza', 'reza']);
-  return out;
+function audiences(): string[][] {
+  return [...subsets([...PEOPLE, 'unknown-x'], 3), ['reza', 'reza'], ['visitor', 'visitor'], ['reza', 'parastoo', 'reza'], ['sina', 'sina']];
 }
 
-/** Ids, scope kind, sensitivity and audience only: never content. */
-const describeCase = (m: MemoryRecord, audience: readonly string[], visibility: boolean) =>
-  `${m.id} scope=${m.scope.kind} sensitivity=${m.sensitivity} audience=[${audience.join(',')}] visibility=${visibility}`;
+function compare(org: OrgDirectory) {
+  const unexplained: string[] = [];
+  const falseMatches: string[] = [];
+  const hits = new Map<string, number>();
+  let allowed = 0;
+  let checked = 0;
+  const groups = audiences();
+  for (const { m, label } of corpus(org)) for (const audience of groups) {
+    checked++;
+    const visibility = isVisibleToAudience(org, m, audience);
+    const adaptive = adaptiveAllowsAudience(org, m, audience, PERSONA, NOW);
+    if (visibility) allowed++;
+    const entry = KNOWN_DIVERGENCES.find((d) => d.match(m, audience, org));
+    // The message carries a scope key, sensitivity, authorization mode and audience; never content.
+    const message = `${label} audience=[${audience.join(',')}] visibility=${visibility} adaptive=${adaptive}`;
+    if (entry) {
+      if (visibility === adaptive) falseMatches.push(`${entry.name}: ${message}`);
+      else hits.set(entry.name, (hits.get(entry.name) ?? 0) + 1);
+    } else if (visibility !== adaptive) unexplained.push(message);
+  }
+  return { unexplained, falseMatches, hits, allowed, checked };
+}
 
 describe('visibility vs adaptive policy differential', () => {
-  it('snapshot.ts derives scope membership without the visibility decision functions', () => {
+  it('KNOWN_DIVERGENCES is exactly the documented list, each with a reason and a backlog id', () => {
+    expect(KNOWN_DIVERGENCES.map((d) => d.name)).toEqual(DOCUMENTED_DIVERGENCES);
+    for (const d of KNOWN_DIVERGENCES) {
+      expect(d.reason.length).toBeGreaterThan(40);
+      expect(d.backlog).toMatch(/^S08-DIFF-\d+$/);
+    }
+  });
+
+  it('snapshot.ts derives memberships without the visibility decision functions', () => {
     const source = readFileSync(join(__dirname, '..', 'policy', 'snapshot.ts'), 'utf8');
-    for (const name of ['canPersonSee', 'isVisibleToAudience', 'isMemoryAllowedInChat', 'snapshotScopeAudience']) {
+    for (const name of ['canPersonSee', 'isVisibleToAudience', 'isMemoryAllowedInChat', 'snapshotScopeAudience', 'audienceOf']) {
       expect(source.includes(name), `snapshot.ts must not use ${name}`).toBe(false);
     }
   });
 
-  it('agrees on every fixture and generated audience, except the documented divergences', () => {
-    const org = differentialOrg();
-    const rows = corpus();
-    const groups = audiences(org);
-    expect(rows).toHaveLength(300);
-    const unexplained: string[] = [];
-    const hits = new Map<string, number>();
-    const falseMatches: string[] = [];
-    let allowed = 0;
-    for (const m of rows) for (const audience of groups) {
-      const visibility = isVisibleToAudience(org, m, audience);
-      const adaptive = adaptiveAllowsAudience(org, m, audience, PERSONA, NOW);
-      if (visibility) allowed++;
-      const entry = KNOWN_DIVERGENCES.find((d) => d.matches(m, audience));
-      if (entry) {
-        if (visibility === adaptive) falseMatches.push(`${entry.name}: ${describeCase(m, audience, visibility)}`);
-        else hits.set(entry.name, (hits.get(entry.name) ?? 0) + 1);
-      } else if (visibility !== adaptive) unexplained.push(describeCase(m, audience, visibility));
-    }
-    expect(allowed).toBeGreaterThan(50);
-    expect(unexplained, 'unexplained divergences').toEqual([]);
-    expect(falseMatches, 'allowlist entries that match cases which do not diverge: narrow or remove them').toEqual([]);
-    for (const entry of KNOWN_DIVERGENCES) {
-      expect(entry.reason.length).toBeGreaterThan(20);
-      expect(hits.get(entry.name) ?? 0, `${entry.name} no longer matches a divergence: remove it`).toBeGreaterThan(0);
+  for (const [name, make] of [['testOrg', testOrg], ['guest org', guestOrg], ['all_authorized_history org', openHistoryOrg]] as const) {
+    it(`agrees on every fixture and generated audience: ${name}`, () => {
+      const org = make();
+      const { unexplained, falseMatches, hits, allowed, checked } = compare(org);
+      expect(checked).toBeGreaterThan(30_000);
+      expect(allowed).toBeGreaterThan(500);
+      expect(unexplained, 'unexplained divergences').toEqual([]);
+      expect(falseMatches, 'allowlist entries matching cases that do not diverge').toEqual([]);
+      for (const entry of KNOWN_DIVERGENCES) expect(hits.get(entry.name) ?? 0, `${entry.name} no longer diverges: remove it`).toBeGreaterThan(0);
+    });
+  }
+
+  it('buildPolicyMapping returns null for sensitive non-private records', () => {
+    const org = testOrg();
+    for (const sensitivity of ['personal', 'confidential'] as const) {
+      for (const scope of [{ kind: 'people', personIds: ['reza', 'parastoo'] }, { kind: 'group', groupId: 'leads' }, { kind: 'org' }] as MemoryScope[]) {
+        expect(buildPolicyMapping({ org, memory: memory({ content: 'x', scope, sensitivity }), readerPersonId: 'reza', audience: ['reza'], personaId: PERSONA, now: NOW })).toBeNull();
+      }
+      expect(buildPolicyMapping({ org, memory: memory({ content: 'x', scope: { kind: 'private', personId: 'reza' }, sensitivity }), readerPersonId: 'reza', audience: ['reza'], personaId: PERSONA, now: NOW })).not.toBeNull();
     }
   });
 
-  it('a record of another persona is not representable and is denied', () => {
-    const org = differentialOrg();
-    const m = memory({ content: 'x', scope: { kind: 'private', personId: 'reza' } });
-    expect(buildPolicyMapping({ org, memory: m, readerPersonId: 'reza', audience: ['reza'], personaId: 'other', now: NOW })).toBeNull();
-    expect(adaptiveAllowsAudience(org, m, ['reza'], 'other', NOW)).toBe(false);
-    expect(adaptiveAllowsAudience(org, m, ['reza'], PERSONA, NOW)).toBe(true);
+  it('an empty audience is denied', () => {
+    const org = testOrg();
+    const m = memory({ content: 'x', scope: { kind: 'org' } });
+    expect(adaptiveAllowsAudience(org, m, [], PERSONA, NOW)).toBe(false);
+    expect(isVisibleToAudience(org, m, [])).toBe(false);
+  });
+
+  it("historyPolicy 'all_authorized_history' does not make a non-snapshot member visible", () => {
+    const org = openHistoryOrg();
+    const m = memory({ content: 'x', scope: { kind: 'group', groupId: 'gameend-team' }, authorizedPersonIds: ['reza', 'parastoo'] });
+    expect(org.isGroupMember('milad', 'gameend-team')).toBe(true);
+    expect(buildPolicyMapping({ org, memory: m, readerPersonId: 'milad', audience: ['milad'], personaId: PERSONA, now: NOW })!.snapshot.container.historyPolicy).toBe('all_authorized_history');
+    expect(adaptiveAllowsAudience(org, m, ['milad'], PERSONA, NOW)).toBe(false);
+    expect(isVisibleToAudience(org, m, ['milad'])).toBe(false);
+    expect(adaptiveAllowsAudience(org, m, ['reza', 'parastoo'], PERSONA, NOW)).toBe(true);
   });
 });
 
@@ -160,7 +208,7 @@ describe('Studio-mapped groups and historyPolicy', () => {
     audit: [],
   } as unknown as StudioState;
 
-  it('a member who joined after creation is denied by both under both policies until re-snapshotted', () => {
+  it('a member who joined later is denied by both under both policies until re-snapshotted', () => {
     const org = studioToOrg(state);
     expect(org.getGroup('chat-1001')?.historyPolicy).toBe('all_authorized_history');
     expect('historyPolicy' in org.getGroup('chat-1002')!).toBe(false);

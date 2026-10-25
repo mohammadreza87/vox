@@ -45,15 +45,19 @@ export function ownerRevokePatch(memory: MemoryRecord, actorId: string): Pick<Me
 }
 
 /** Scopes a successor agent may inherit (docs/AGENT_INTELLIGENCE_SOLUTION.md 4.6 Successor agent). */
-export const INHERITABLE_SCOPE_KINDS = ['group', 'people', 'project'] as const;
+export const SUCCESSOR_SCOPES = ['group', 'people', 'project'] as const;
 
-/** Normal-sensitivity group, people or project records that are still active. */
-export function isInheritable(memory: MemoryRecord): boolean {
+/** Normal-sensitivity group, people or project records that are still active. Private records never transfer here. */
+export function isSuccessorTransferable(memory: MemoryRecord): boolean {
   return memory.sensitivity === 'normal' && !memory.supersededBy &&
-    (INHERITABLE_SCOPE_KINDS as readonly string[]).includes(memory.scope.kind);
+    (SUCCESSOR_SCOPES as readonly string[]).includes(memory.scope.kind);
 }
 
-/** A successor's copy: same scope, snapshot, shareVersion and source lineage, no supersession links. */
+/**
+ * A successor's copy: same scope, authorization snapshot, shareVersion, source
+ * lineage (eventIds) and aboutPersonIds; no id, times or supersession links
+ * (copying `supersedes` would make add() throw for every corrected record).
+ */
 export function successorCopy(memory: MemoryRecord, successorId: string): NewMemory {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { id, createdAt, updatedAt, supersedes, supersededBy, ...rest } = memory;

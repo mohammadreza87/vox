@@ -446,8 +446,96 @@ file store. Nothing outside the module calls a main-only export (`UNKNOWN_REVISI
   relies on people keys from `memories`; wave A "chunks more than 30 keys, dedupes by id and drops other-persona and
   superseded rows").
 
+### Main-lineage hardening ported into wave A's code (fix-up from the S06 verifier, landed with the S08 merge)
+
+- `src/lib/tireh/memory/embeddings.ts`: main's `logLevel: 'off'` on the OpenAI client is ported into wave A's lazy
+  client (`new OpenAIClient({ apiKey, fetch, maxRetries: 0, timeout: 10_000, logLevel: 'off' })`), so the SDK never
+  logs whatever `OPENAI_LOG` says. `memory-v2-embeddings.test.ts` gains "never logs through the SDK, even with
+  OPENAI_LOG=debug, on success or failure" (fails without the option: the SDK made 9 console calls).
+
 ### Open issues carried
 
 - `FirestoreMemoryStore.updateIfShareVersion` spreads `snapshot.data()`, so Timestamp fields become maps on both sides
   (known before this merge).
 - Tombstone additions do not bump the memory revision (wave A invariant), so Step 1 probes are unaffected.
+
+## S08: sharing v2 and audit (wave A `bedca98`, aiq/sharing-audit-r2 `0926957`)
+
+Superset step: main merged the first run (`546f49e`, `acfc3a8`, `dba13f6`, the same commits wave A's r2 continues), and
+`8a7dc55` changed only the older-adapter arm of two tests. Git found two merge bases (`0ba3de6` and `acfc3a8`). Main
+touched nothing in S08's production code after `acfc3a8`, so wave A's r2 bodies of `inheritMemories`,
+`resnapshotGroupMemory` and `memoryNoticesFor` auto-merged into main's `studio/service.ts` beside the Circles, Pet and
+channel code, which is unchanged. `runtime.ts` was not touched by the merge and holds exactly one S08 audit block.
+
+### Resolution
+
+| File | Resolution |
+| --- | --- |
+| `src/lib/studio/__tests__/sharing-v2.test.ts` (conflict) | Wave A's file, plus wave A's post-S06 fix `ca4035b` (a `NoTombstoneStore` for the fail-closed arm, since S06's `InMemoryMemoryStore` now carries tombstones, and "carries tombstones with the real InMemoryMemoryStore once S06 is merged"). The file now equals the wave A branch tip. |
+| `src/lib/studio/__tests__/sharing-v2.main-lineage.test.ts` | New: main's cases that pass against wave A's implementation and are not already in wave A's file (below). |
+| `src/lib/tireh/__tests__/invariants.test.ts` | Auto-merged: wave A's r2 cases with main's `8a7dc55` older-adapter arm in (12) (`Object.defineProperties` on an `InMemoryMemoryStore`), which is equivalent to wave A's later `NoTombstoneStore`. |
+| `src/lib/studio/service.ts`, `src/lib/studio/types.ts`, `src/lib/tireh/memory/sharing.ts`, `src/lib/tireh/audit/*`, `src/lib/tireh/policy/snapshot.ts`, `src/lib/adaptive/shared/service.ts`, audit and policy tests, the S08 spec | Auto-merged to wave A's r2. |
+
+Checked after the merge: with `TIREH_SHARING_V2` unset `inheritMemories` keeps the base copy; with it set, a store
+without `tombstonesOf`/`addTombstones` inherits nothing, tombstones are carried before any copy, and only
+normal-sensitivity group, people and project records are copied. `resnapshotGroupMemory` keeps the admin check, the
+approved-member and in-group checks, `canUseAgent` and the per-agent `blocked` list, and writes through
+`updateIfShareVersion`. Neither touches Circles per-person notes: notes live in `CircleNotes` (`notesLedger`), not in
+the memory store, and extraction never reads them.
+
+### Main-lineage cases kept
+
+`sharing-v2.main-lineage.test.ts`: "(a) org-bridge historyPolicy > maps the field only when it is set to a known value"
+(an unknown value is dropped; key order), "(b) HTTP with the flags off > resnapshot is the base 404 and GET memories
+has exactly the memories key", "(d) inheritMemories with the flag off > copies every record, private ones included,
+exactly as at the base" (no `memory.inherit` entry), "(h) SharedMemoryService.readContext consent decoupling > flag
+on: membership and the agent read grant are enough, and every other fence stays" and "> flag on: the product pause
+still withholds shared context" (the real `ProductPauseService` on `ManagedFileV2Storage`).
+
+### Main-lineage cases and assertions not kept
+
+- "(c) HTTP with TIREH_SHARING_V2=1 > only admins re-snapshot, with validation, preview and apply": contradictory on the
+  `StudioState.audit` entry (main `target: group:<chat>`, `detail: member <id>: <n> records`; wave A `target: <chat>`,
+  `detail: <id>:<n>`). Wave A's "(a) group re-snapshot" cases cover the validation, preview, apply and idempotence.
+- "(c) ... > a recipient sees a content-free notice after the owner privately corrects a shared record": contradictory
+  notice shape (main `stillShared`; wave A `oldMemoryId`, `newMemoryId`, `replacementVisible`). Wave A's "(e)
+  supersede notices" cases.
+- "(e) inheritMemories with TIREH_SHARING_V2=1 > copies only normal group/people/project records, strips supersession
+  and carries tombstones": contradictory on the `memory.inherit` audit entry (`copied 4, skipped 3`), which wave A
+  does not write. Wave A's "(d) inheritMemories > TIREH_SHARING_V2=1" cases.
+- "(e) ... > copies nothing when the store cannot carry tombstones" (`8a7dc55`): its fail-closed assertion is kept as
+  wave A's "inherits nothing when the store cannot carry tombstones (fail closed)" with `NoTombstoneStore`; its
+  `memory.inherit` detail `skipped: tombstones unsupported` is contradictory (wave A writes no inherit entry).
+- "(f) re-snapshot vox_audit rows > records previewed and applied rows with the admin as actor and no content":
+  contradictory on `policyKey: 'group.resnapshot.v1'` and `chatKeyHash`, which wave A's resnapshot rows do not carry.
+  Wave A's "with TIREH_AUDIT_LOG=1 writes content-free previewed and resnapshot rows".
+- Covered verbatim or as a subset by wave A, so not duplicated: "(g) group events never widen a snapshot" (wave A's
+  "(b)" runs it for every historyPolicy and flag state), "(h) flag off: a recipient without optional.personalization
+  sees nothing" (wave A's "(f) flag unset"), "(i) runtime wiring" (both cases; wave A's are supersets).
+- `audit-decorator`, `audit-store`, `policy-differential` and `invariants` (1), (9), (10): the first-run cases were
+  rewritten by wave A's r2 on top of the shared base `acfc3a8`, not by this merge. Run against the merged code, 9 of
+  the first-run cases fail (contradictory row shapes and classifications), for example audit-store "normalizes arrays
+  and rejects content-bearing or malformed rows" and audit-decorator "write, supersede, share_approve, revoke, denied,
+  resnapshot (no row) and delete".
+
+### Behaviour change on main
+
+- With `TIREH_SHARING_V2=1` successor inheritance no longer writes `memory.inherit` entries to `StudioState.audit`, and
+  a failing `addTombstones` now throws out of the hire step instead of being audited and skipped (no record is copied
+  in either case). A non-tombstone `add` failure is rethrown instead of counted.
+
+### Test results
+
+- `npx tsc --noEmit -p tsconfig.json`: clean.
+- Focused suites, flags unset (sharing-v2 and its main-lineage file, invariants, policy-differential, audit-*,
+  service, circles-notes, adaptive/shared, memory-v2-embeddings): 239/239. One run had a load flake in circles-notes
+  "rights > export returns only the requester's copies; forget me deletes only theirs", which passed alone three times
+  and on the rerun of the whole set.
+- Privacy core suites, flags unset: 623/623 across 30 files.
+- `src/lib/studio`, flags unset: 11 failed, all environment or baseline: `guest-rights-http` (10, mkdtemp /tmp EPERM)
+  and `prepared-conversation-qualification` (baseline timeout).
+- `TIREH_SHARING_V2=1 TIREH_AUDIT_LOG=1` on invariants, policy-differential and `src/lib/studio`: 13 failed / 1540
+  passed. By design: service.test "a successor inherits memories at hire time when the predecessor was fired with
+  transfer" (as recorded in WAVE_A_INTEGRATION.md; wave A's `05a4520` pins the flag unset and arrives with TAIL).
+  Environment: `guest-rights-http` (10). Load: `prepared-conversation-qualification` and circles-group "review fixes:
+  closing, erasure, cards > forget me leaves no trace of the requester", both passing alone with the flags set.

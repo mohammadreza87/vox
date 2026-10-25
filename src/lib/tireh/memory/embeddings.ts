@@ -60,7 +60,8 @@ export class OpenAIEmbeddingProvider implements EmbeddingProvider {
   private async openai(): Promise<OpenAI> {
     if (!this.client) {
       const { default: OpenAIClient } = await import('openai');
-      this.client = new OpenAIClient({ apiKey: this.apiKey, fetch: this.fetchImpl, maxRetries: 0, timeout: 10_000 });
+      // logLevel 'off': the SDK never logs, whatever OPENAI_LOG says (main's hardening, kept on merge).
+      this.client = new OpenAIClient({ apiKey: this.apiKey, fetch: this.fetchImpl, maxRetries: 0, timeout: 10_000, logLevel: 'off' });
     }
     return this.client;
   }

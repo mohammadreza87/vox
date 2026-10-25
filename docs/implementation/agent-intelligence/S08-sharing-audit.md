@@ -5,113 +5,65 @@ Base commit: `6d00b8066e5d8e8d444bb47d978aa571e20929df`.
 
 ## Goal
 
-Finish the sharing rules in section 4.6 behind two server flags that default off:
+Close the five sharing gaps of section 4.6 behind two server flags that default off:
 
-- a group `historyPolicy` with an explicit, previewed and audited admin re-snapshot for one named member;
-- a successor-inheritance filter that carries source-event tombstones;
-- content-free "updated" notices to recipients when a shared record is superseded;
-- reading shared context with membership plus a read grant instead of every participant's `optional.personalization`;
-- a content-free, append-only `vox_audit` log written through a `MemoryStore` decorator;
-- a `PolicySnapshotBuilder` with a differential test against adaptive `authorizeAccess`;
-- the 14-invariant suite.
+- group memory goes dark when membership grows: a group `historyPolicy` field plus an explicit, previewed and audited admin re-snapshot for one named member;
+- successors inherit everything: a successor filter that carries source-event tombstones;
+- recipients silently lose a corrected share: content-free supersede notices;
+- shared context needs every participant's `optional.personalization`: membership plus a read grant is enough;
+- no audit trail: a content-free, append-only `vox_audit` log.
 
-With `TIREH_SHARING_V2` and `TIREH_AUDIT_LOG` unset, every request, response, stored record and log line is byte-identical to the base.
+Plus a `PolicySnapshotBuilder` with a differential oracle against adaptive `authorizeAccess`, and the 14-invariant suite.
 
 ## Flags
 
 | Env | Effect when set |
 |---|---|
-| `TIREH_SHARING_V2=1` (`tirehFlags().sharingV2`) | successor-inheritance filter and tombstone carry in `Studio.inheritMemories`; supersede notices (recorded by `auditMemoryStore` when a notices store is passed), the `notices` key on `GET agents/:id/memories` and `Studio.memoryNoticesFor`; the readContext personalization decoupling in `SharedMemoryService`; `POST groups/:chatId/resnapshot` and `Studio.resnapshotGroupMemory` |
+| `TIREH_SHARING_V2=1` (`tirehFlags().sharingV2`) | successor filter and tombstone carry in `Studio.inheritMemories`; supersede notices (recorded by `auditMemoryStore`, exposed by `Studio.memoryNoticesFor` and the `notices` key of `GET agents/:id/memories`); the shared readContext consent decoupling; `Studio.resnapshotGroupMemory` and `POST groups/:chatId/resnapshot` |
 | `TIREH_AUDIT_LOG=1` (`tirehFlags().auditLog`) | content-free `vox_audit` rows from the decorators and the re-snapshot action |
 
-- `runtime.ts` installs the decorators and stores only when at least one flag is set at startup; the decorators re-check both flags on every call. With both unset, `studio.deps.memory` is the same object as at the base.
-- `src/lib/tireh/flags.ts` is the shared contract file, byte-identical (sha256 `6b8edcd4bf18ca2f4d7a160f0a83077e823d6f491834abf54268a31433566630`). No other env var is read.
+- `runtime.ts` installs the decorators and stores only when a flag is set at startup; the decorators re-check both flags on every call.
+- With both unset: no Proxy, no `historyPolicy` key from org-bridge, the route is the base 404, `GET memories` is `{memories}`, `inheritMemories` runs the base loop, the shared predicate is the base predicate, and no audit or notice file or collection is created.
+- `src/lib/tireh/flags.ts` is the shared contract file (sha256 `6b8edcd4bf18ca2f4d7a160f0a83077e823d6f491834abf54268a31433566630`).
+- Recommendation: enable `TIREH_SHARING_V2` promptly after merge; the base successor copy includes private and sensitive records.
 
 ## Files
 
-### `src/lib/tireh/types.ts` (Group only)
-`historyPolicy?: 'since_membership' | 'all_authorized_history'` after `agentIds`. Default since_membership; only an explicit, audited admin re-snapshot widens.
-
-### `src/lib/studio/types.ts`
-`StudioGroup.historyPolicy?` after `agentIds`. Never widens a record by itself.
-
-### `src/lib/studio/org-bridge.ts`
-Whitelisted conditional spread as the last property of the groups mapping, so a group without the field has no key at all.
-
-### `src/lib/tireh/memory/sharing.ts` (new pure helpers; existing functions unchanged)
-- `INHERITABLE_SCOPE_KINDS = ['group','people','project']`
-- `isInheritable(m)`: sensitivity normal, scope kind in the list, not superseded.
-- `successorCopy(m, successorId)`: a `NewMemory` without id/createdAt/updatedAt/supersedes/supersededBy, `personaId = successorId`; keeps scope, `authorizedPersonIds`, `shareVersion` and source (incl. eventIds).
-- `TombstoneCarrier`: structural optional `tombstonesOf` / `addTombstones` (identical to the S06 optional MemoryStore methods).
-- `resnapshotPatch(m, groupId, personId)`: null unless normal, `scope.kind==='group'`, matching groupId, not superseded, `authorizedPersonIds` defined (legacy rows never widen), person not already authorized; else `{ authorizedPersonIds: sorted unique [...ids, personId], shareVersion: +1 }`.
-- `supersedeNoticeRecipients(predecessor)`: [] unless normal and people/project scope; else sorted unique (`authorizedPersonIds ?? (people ? personIds : [])`) minus `source.personId`.
-
-### `src/lib/tireh/audit/store.ts` (new)
-`AuditKind`, `AuditOutcome`, `AuditRow`, `NewAuditRow`, `AuditStore`, `InMemoryAuditStore`, `createFileAuditStore`, `FirestoreAuditStore` (collection `vox_audit`), `chatKeyHash` (sha256 hex, first 32), `auditRowSchema` (strict zod), `normalizeAuditRow` (sort, dedupe, cap 200), `AUDIT_RETENTION_DAYS = 365`, `auditRetentionCutoff`, `sourceChatKey`.
-
-- ids `/^[A-Za-z0-9._:@-]{1,200}$/`, `chatKeyHash` `/^[0-9a-f]{32}$/`, `policyKey` `/^[a-z0-9._:-]{1,120}$/`; `.strict()` rejects content, topic or text.
-- File store: append-only JSONL (mode 0o600, serialized appends); `sweep` is the only rewrite (tmp + rename) for 12-month retention.
-- Firestore store: `create()` with undefined fields dropped; list by personaId, optional memoryIds array-contains, optional at >=, orderBy at desc, limit; sweep in batches of 400. Composite indexes are documented for the integrator.
-- `retrieval`, `prompt_memory`, `consent_change` and `identity_change` are reserved kinds (TODO worker / Step 1 / consent ledger).
-
-### `src/lib/tireh/audit/notices.ts` (new)
-`SupersededNotice`, `SupersededNoticeStore`, in-memory, file (JSON array, 0o600, tmp + rename) and Firestore (`tireh_supersede_notices`) stores. Content-free: ids, person ids and a time only. `listFor` returns notices whose recipients include the person, at >= since, newest first, limit 50.
-
-### `src/lib/tireh/audit/memory-decorator.ts` (new)
-- `auditMemoryStore(inner, audit, notices?)`: a Proxy intercepting `add`, `update`, `updateIfShareVersion`, `delete`; every other property via `Reflect.get(target, prop, target)` with functions bound to target (keeps #private fields, file-store wrappers and S06 optional methods).
-- With both flags off every wrapped method is a pure pass-through (no extra inner calls).
-- Row classification: add → write/supersede; updateIfShareVersion with `scope` in patch → share_approve or revoke (denied when the version is stale); patches without scope (re-snapshot) are not audited here; update → supersede / share_approve / revoke / write; delete → delete with no actor; a thrown add → denied (StaleMemoryWriteError) or failed, original error rethrown.
-- Under sharingV2 with a notices store, a supersede of a people/project record records a notice for recipients minus the owner.
-- Every audit append is awaited and errors are swallowed.
-- `auditShareOfferStore(inner, audit)`: create → share_offer applied; setStatus declined → share_offer denied; approved → no row.
-
-### `src/lib/tireh/audit/index.ts` (new)
-Re-exports.
-
-### `src/lib/tireh/policy/snapshot.ts` (new)
-`PolicyMappingInput`, `PolicyMapping`, `buildPolicyMapping`, `adaptiveAllowsAudience`, `TIREH_POLICY_VERSION = 'tireh-visibility-v1'`. Must not import `canPersonSee`, `isVisibleToAudience`, `isMemoryAllowedInChat` or `snapshotScopeAudience`; scope membership is derived independently from the org config. Synthetic identity binding, single Work space, `core.conversation` without consents, agent grant from personaId.
-
-### `src/lib/adaptive/shared/service.ts`
-Only the two `const personalized = ...` lines become `this.personalized(people)`; the flag-off branch is the base expression. Under sharingV2 only the product pause (`storedPersonalizationAllowed !== false`) applies; membership, per-container person and agent grants, binding expiry, group hasGuests and roster digests and retention are unchanged.
-
-### `src/lib/studio/service.ts`
-- Imports and two `StudioDeps` fields (`audit?`, `memoryNotices?`) after `shared?`.
-- `inheritMemories`: base loop when the flag is off; with the flag, fail closed unless the store has `tombstonesOf`/`addTombstones`, carry tombstones first, copy only `isInheritable` records with `successorCopy`, and write a counts-only `memory.inherit` StudioState.audit entry. Private records: TODO per-record owner approval path.
-- New `resnapshotGroupMemory(actor, chatId, telegramId, apply)` (admin+, preview or apply, `updateIfShareVersion` with no guard, StudioState.audit `memory.resnapshot`, `vox_audit` `resnapshot` rows) and `memoryNoticesFor(actor, agentId)` after `listGroups()`.
-
-### `src/lib/studio/http.ts`
-`POST groups/:chatId/resnapshot` (sharingV2 only; otherwise the base 404) and the `notices` key on `GET agents/:id/memories` under sharingV2.
-
-### `src/lib/studio/runtime.ts`
-One block after `studio.deps.shared = ...` installing the audit store, notice store and decorators when either flag is set.
+- `src/lib/tireh/types.ts`: `Group.historyPolicy?` (one line).
+- `src/lib/studio/types.ts`: `StudioGroup.historyPolicy?` after `audienceEpoch`. No setter route or UI.
+- `src/lib/studio/org-bridge.ts`: conditional spread of `historyPolicy` (known values only), so boundary keys and history stamps are unchanged when unset.
+- `src/lib/tireh/memory/sharing.ts`: `SUCCESSOR_SCOPES`, `isSuccessorTransferable`, `successorCopy`, `resnapshotPatch`, `supersedeNoticeRecipients`, `TombstoneCarrier` (structural, matches S06's optional store methods).
+- `src/lib/tireh/audit/store.ts`: types, `newAuditRowSchema` (strict; id regex without whitespace; `chatKeyHash` 32 hex; bounded `policyKey`), `normalizeAuditRow`, `memoryPolicyKey`, `chatKeyHash`, `AUDIT_RETENTION_DAYS`, `auditCutoff`, `InMemoryAuditStore`, `createFileAuditStore` (JSONL, 0o600, invalid lines skipped).
+- `src/lib/tireh/audit/firestore.ts`: `FirestoreAuditStore` (`vox_audit`, `create()`, list by personaId + `at` desc, batched sweep) and `FirestoreSupersededNoticeStore` (`tireh_supersede_notices`, one doc per recipient, two equality filters).
+- `src/lib/tireh/audit/notices.ts`: notice types, in-memory and file stores (JSON array, 0o600, cap 5000; `listFor` at most 200).
+- `src/lib/tireh/audit/memory-decorator.ts`: `auditMemoryStore` / `auditShareOfferStore` Proxies (intercept `add`, `addIfEpoch`, `update`, `updateIfShareVersion`, `delete`; `create`, `setStatus`).
+- `src/lib/tireh/audit/index.ts`: re-exports.
+- `src/lib/tireh/policy/snapshot.ts`: `buildPolicyMapping`, `adaptiveAllowsAudience`.
+- `src/lib/adaptive/shared/service.ts`: the two `personalized` lines call `contextPersonalized(people)`; flag off is the base predicate verbatim.
+- `src/lib/studio/service.ts`: StudioDeps `audit?`, `memoryNotices?`; `inheritMemories` body; `resnapshotGroupMemory` and `memoryNoticesFor` after `listGroups()`.
+- `src/lib/studio/http.ts`: the resnapshot route and the `notices` key.
+- `src/lib/studio/runtime.ts`: one block after `studio.deps.shared = ...`.
 
 ## Tests
 
-- `src/lib/tireh/__tests__/invariants.test.ts`: the 14 invariants of section 4.6 / the memory review.
-- `src/lib/tireh/__tests__/policy-differential.test.ts`: `isVisibleToAudience` vs `adaptiveAllowsAudience` on the fixture corpus and generated audiences, with an explicit `KNOWN_DIVERGENCES` allowlist (each entry must match and actually diverge) and `MODELING_NOTES`; Studio-mapped historyPolicy cases.
-- `src/lib/tireh/__tests__/audit-store.test.ts`: in-memory, file and fake-Firestore audit and notice stores.
-- `src/lib/tireh/__tests__/audit-decorator.test.ts`: pass-through with flags off, forwarding, classification, best effort, content-free canary, notices.
-- `src/lib/studio/__tests__/sharing-v2.test.ts`: org-bridge, HTTP flag off/on, inheritMemories off/on, re-snapshot audit row, group events never widen, SharedMemoryService.readContext decoupling and kept fences.
+- `src/lib/tireh/__tests__/audit-store.test.ts`
+- `src/lib/tireh/__tests__/audit-decorator.test.ts`
+- `src/lib/tireh/__tests__/policy-differential.test.ts`
+- `src/lib/tireh/__tests__/invariants.test.ts` (exactly 14 `it` blocks, `(1)` to `(14)`)
+- `src/lib/studio/__tests__/sharing-v2.test.ts`
 
-## Acceptance
+## Deviations and notes
 
-- `flags.ts` sha256 matches the contract; lib-scoped tsc exits 0; eslint clean on changed files.
-- No new failing vitest files compared with the base baseline (sandbox EPERM files named separately).
-- With every flag unset: `GET agents/:id/memories` returns exactly `{memories}`; the resnapshot route returns the base 404; inheritMemories copies as at the base; readContext unchanged; runtime creates no `vox-audit.jsonl` or `supersede-notices.json`; `studio.deps.memory` is the original object; `studioToOrgConfig` group output deep-strict-equal to the base.
-- `TIREH_SHARING_V2=1 TIREH_AUDIT_LOG=1` over the invariants, differential and `src/lib/studio`: green except the base test that pins the old behaviour, `fire and successor > a successor inherits memories at hire time when the predecessor was fired with transfer` (expected flag-on failure, not edited).
-- Differential test green with every allowlist entry justified and matching.
-- No audit row, notice, StudioState.audit entry or log line contains memory content, topic or message text (canary tests).
-- Diff touches only the files listed here.
+- Differential oracle: one documented divergence, `S08-DIFF-1`. A duplicated owner id (`[reza, reza]`) on a personal/confidential private record is denied by `visibility.ts` (raw length must be 1) and allowed by adaptive after the required audience de-duplication. Production audiences come from `audienceOf()`, which de-duplicates.
+- `POST groups/:chatId/resnapshot` rejects a non-numeric `telegramId` (string ids give 400) and an extra path segment; the contract used `Number(b.telegramId)`.
+- org-bridge maps only the two known `historyPolicy` values.
+- The decorator rethrows store errors unchanged after writing a `denied`/`failed` row for `updateIfShareVersion`, `update` and `delete` as well as for `add`.
+- TODOs left in code: Telegram `/memories` notice (gateway.ts is not S08's), store-level `chatKeyHash`, the reserved kinds `retrieval`, `prompt_memory`, `consent_change`, `identity_change`, per-record owner approval for private successor records, the Step 7 forget-cascade closure in delete rows, the audit sweep scheduler.
 
-## Out of scope
+## Risks
 
-Step 1 (loadTurnSnapshot, RevisionVector, boundary/unchanged, adaptiveContext*, liveTurn rechecks, persistence seams); any gateway.ts edit (Telegram `/memories` notice line is a TODO); retrieval/prompt_memory/consent_change/identity_change rows (reserved); a sweep scheduler; a historyPolicy setter route or UI; the owner approval flow for private inheritance; identity-level gating for group policy changes (S10L); firestore.indexes.json and firebase.json (S06); store implementations of tombstonesOf/addTombstones (S06); subject rights and the forget cascade; auditing adaptive shared-container mutations; the Privacy.tsx TS17008 base breakage.
-
-## Risks (summary)
-
-- With `TIREH_SHARING_V2=1`, two base tests fail by design and must not be edited: `service.test.ts` "a successor inherits memories at hire time ..." (asserts a private record is inherited) and `adaptive/__tests__/shared-memory.test.ts` "requires independent personalization and explicit per-container agent grants".
-- The base inheritance copies `supersedes`, private and sensitive records; the flag-on path fixes this. Enable `TIREH_SHARING_V2` promptly after merge.
-- Tombstone carry depends on S06's optional store methods; on this branch alone flag-on inheritance copies nothing (fail closed).
-- Firestore composite indexes required for `vox_audit` (personaId + at desc; personaId + memoryIds array-contains + at desc) and `tireh_supersede_notices` (personaId + recipientPersonIds array-contains).
-- Delete rows carry no actor; an admin may re-snapshot for themselves (audited, no four-eyes rule yet).
-- readContext decoupling widens prompt use of explicitly shared notes for recipients without `optional.personalization`; confirm the DPIA delta.
+- Firestore `vox_audit` list needs the composite index (personaId ASC, at DESC); S06 owns `firestore.indexes.json`, so the integrator adds it after both merge.
+- With `TIREH_SHARING_V2=1`, base tests that pin the old behaviour fail by design and are not edited: `src/lib/studio/__tests__/service.test.ts` "a successor inherits memories at hire time ..." and `src/lib/adaptive/__tests__/shared-memory.test.ts` "requires independent personalization ...".
+- Tombstone carry depends on S06's optional store methods; on this branch alone the real stores lack them, so flag-on inheritance copies nothing (fail closed). Re-run the inheritance tests against the real stores after S06 merges.
+- A re-snapshot apply bumps `safetyRevision` for that persona, so in-flight turns fail `unchanged()` once (fail closed).
+- Notices tell recipients that and when the owner corrected a shared fact; content-free, but the product copy should be reviewed.
