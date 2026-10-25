@@ -75,14 +75,20 @@ describe('gateway decision log (TIREH_DECISION_LOG sink)', () => {
     expect(h.logger.warn).not.toHaveBeenCalled();
   });
 
-  it('without a sink decideDetailed is never called and decide gets (input, questions, 2000) once', async () => {
+  it('without a sink decideDetailed is never called and decide gets (input, questions, 2000, authority) once', async () => {
     const decide = vi.fn(async () => v1Answers());
     const decideDetailed = vi.fn();
     const h = decisionsGateway({ decider: { decide, decideDetailed } });
     expect(await h.gateway.handleUpdate('aria', privateText(TG.reza, 'hello'))).toBe('replied');
     expect(decideDetailed).not.toHaveBeenCalled();
     expect(decide).toHaveBeenCalledOnce();
-    expect(decide.mock.calls[0]).toEqual([expect.any(String), expect.any(Array), TRIAGE_TIMEOUT_MS]);
+    // The fourth argument is main's per-request authority (8a7dc55), revalidated at the guarded transport.
+    const call = decide.mock.calls[0] as unknown as [string, unknown[], number, { authorize: () => Promise<string | null>; authorizeNow?: () => boolean }];
+    expect(call.slice(0, 3)).toEqual([expect.any(String), expect.any(Array), TRIAGE_TIMEOUT_MS]);
+    expect(call).toHaveLength(4);
+    expect(typeof call[3].authorize).toBe('function');
+    expect(call[3].authorizeNow).toBeUndefined();
+    expect(typeof await call[3].authorize()).toBe('string');
   });
 
   it('with a ServiceDecider the row carries elapsedMs and inputTokens from the detail', async () => {
