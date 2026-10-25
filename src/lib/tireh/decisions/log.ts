@@ -308,6 +308,24 @@ export class FirestoreDecisionLogStore implements DecisionLogStore {
   }
 }
 
+/**
+ * The 90-day retention, scheduled whatever TIREH_DECISION_LOG is now: once at startup and then every
+ * `sweepEveryMs` (default 24 h) on an unref'd timer, so rows written before a rollback still age out. Neither
+ * store's sweep creates the file or collection. Best effort; `flush()` awaits the sweep in flight (tests).
+ */
+export function startDecisionLogRetentionSweep(store: Pick<DecisionLogStore, 'sweep'>, options: { now?: () => Date; sweepEveryMs?: number; retentionDays?: number; onError?: (code: 'sweep_failed') => void } = {}): { stop(): void; flush(): Promise<void> } {
+  const now = options.now ?? (() => new Date());
+  const retentionDays = options.retentionDays ?? DECISION_LOG_RETENTION_DAYS;
+  let pending: Promise<unknown> = Promise.resolve();
+  const sweep = () => {
+    pending = pending.then(() => store.sweep(now(), retentionDays)).catch(() => { try { options.onError?.('sweep_failed'); } catch { /* never throws */ } });
+  };
+  sweep();
+  const timer = setInterval(sweep, options.sweepEveryMs ?? DAY_MS);
+  (timer as { unref?: () => void }).unref?.();
+  return { stop: () => clearInterval(timer), async flush() { await pending; } };
+}
+
 export type DecisionLogErrorCode = 'invalid_row' | 'append_failed' | 'sweep_failed' | 'dropped';
 
 export interface DecisionLogSinkOptions {

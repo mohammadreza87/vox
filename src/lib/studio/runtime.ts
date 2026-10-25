@@ -293,6 +293,20 @@ export async function wireSharingAudit(studio: Pick<Studio, 'deps'>, dataDir: st
   if (stored) studio.deps.memory = { ...studio.deps.memory, memories: noticeErasingMemoryStore(studio.deps.memory.memories, notices) };
 }
 
+/**
+ * Step 9 decision log (vox_decision_log / decision-log-v1.jsonl). The sink is wired only with TIREH_DECISION_LOG set
+ * at startup; the 90-day retention sweep runs whatever the flag is now (startup, then daily), so rows written before
+ * a rollback, or while no triage traffic arrives, still age out. The sweep never creates the file or collection.
+ */
+export async function wireDecisionLog(studio: Pick<Studio, 'deps'>, dataDir: string, db: import('firebase-admin/firestore').Firestore | null,
+  options: { now?: () => Date; sweepEveryMs?: number } = {}): Promise<{ stop(): void; flush(): Promise<void> }> {
+  const decisionLog = await import('../tireh/decisions/log');
+  const store = db ? new decisionLog.FirestoreDecisionLogStore(db) : decisionLog.createFileDecisionLogStore(join(dataDir, 'decision-log-v1.jsonl'));
+  const onError = (code: string) => console.warn(`[vox] decision_log ${code}`);
+  if (tirehFlags().decisionLog) studio.deps.decisionLog = decisionLog.createDecisionLogSink(store, { onError, ...(options.now ? { now: options.now } : {}) });
+  return decisionLog.startDecisionLogRetentionSweep(store, { onError, ...options });
+}
+
 type RuntimeStorage = Pick<StudioDeps, 'store' | 'pets' | 'choices' | 'circleLedger' | 'notesLedger' | 'channelDrafts' | 'memory' | 'rateLimiter' | 'adaptive' | 'relationshipStore' | 'observations' | 'revisions'> & { sharedStorage: AdaptiveStorage; voiceIdentityStorage: AdaptiveStorage; maintenanceStorage: AdaptiveStorage; closeAdaptive?: () => void };
 function fileStorage(dir: string, scopedRelationshipsEnabled: boolean, format: AdaptiveStorageFormat): RuntimeStorage {
   const managed = openLocalAdaptiveStorage(join(dir, 'adaptive'), format);
@@ -464,19 +478,14 @@ async function create(): Promise<Studio> {
     studio.deps.preferenceLearning = createStudioPreferenceLearning(studio);
     // Step 9 (docs/AGENT_INTELLIGENCE_SOLUTION.md): opt-in decider and decision log; unset flags keep the base wiring.
     {
-      const [{ tirehFlags }, { ServiceDecider }, decisionLogModule] = await Promise.all([
-        import('../tireh/flags'), import('../tireh/decisions/service-decider'), import('../tireh/decisions/log')]);
+      const { ServiceDecider } = await import('../tireh/decisions/service-decider');
       const flags = tirehFlags();
       if (flags.decider === 'service' && studio.deps.decider && env.OPENAI_API_KEY) {
         // A dedicated DecisionService so triage failures never open the adaptive runtime's circuit.
         studio.deps.decider = new ServiceDecider(new DecisionService(OpenAIDecisionProvider.guarded({ apiKey: env.OPENAI_API_KEY })));
       }
-      if (flags.decisionLog) {
-        const store = config.storage === 'firestore'
-          ? new decisionLogModule.FirestoreDecisionLogStore(await (await import('@/lib/firebase-admin')).getAdminDb())
-          : decisionLogModule.createFileDecisionLogStore(join(config.dataDir, 'decision-log-v1.jsonl'));
-        studio.deps.decisionLog = decisionLogModule.createDecisionLogSink(store, { onError: (code) => console.warn(`[vox] decision_log ${code}`) });
-      }
+      // The sink only with TIREH_DECISION_LOG; the 90-day sweep whatever the flag is now (see wireDecisionLog).
+      await wireDecisionLog(studio, config.dataDir, config.storage === 'firestore' ? await (await import('@/lib/firebase-admin')).getAdminDb() : null);
     }
     if (config.requestedRoutinesEnabled) {
       studio.deps.requestedRoutinesEnabled = () => process.env.STUDIO_REQUESTED_ROUTINES === '1';
