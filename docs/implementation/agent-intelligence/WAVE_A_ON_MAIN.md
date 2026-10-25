@@ -292,7 +292,7 @@ caught up to `7224f40`.
 - **`npx tsc --noEmit -p tsconfig.json`:** exit 0. **ESLint** on every file fixer r3 changed: exit 0.
 - **Full `npx vitest run`, flags unset:** 14 failed files, 97 failed tests, 7823 passed, 2 expected failures (CQ2-3
   audit sweep `onError`, F030 `DecisionService` timeout naming), 14 skipped, 56 unhandled errors (listen EPERM). All
-  97 are environmental: the same mkdtemp `/tmp`, listen, unix-socket and tsx IPC set as after fixer r2 (93 tests), and
+  97 are environmental: the same mkdtemp `/tmp`, listen, unix-socket and tsx IPC set as after fixer r2 (92 tests), and
   load timeouts that pass alone (`adaptive/lifecycle/longterm-simulation` 1, `adaptive/message-memory` 1 (a
   `findByText` wait), `studio/__tests__/prepared-conversation-qualification` 3; the three files 49/49 alone).
 - **Flag matrix** (every other flag unset; fixer r3 touched images, the gateway, Circles notes, voiceprints, S08 and
