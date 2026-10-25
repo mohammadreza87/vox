@@ -2,26 +2,26 @@
  * Firestore (Admin SDK) implementations of the TIREH stores.
  *
  * Collections:
- *   tireh_memories/{memoryId}                     personaId, active, scopeKey, …,
- *                                                 embedding (FieldValue.vector, normal sensitivity only)
- *   tireh_memory_state/{personaId}                revision, tombstones
+ *   tireh_memories/{memoryId}                     personaId, active, scopeKey, …
+ *     … embedding (vector, normal sensitivity only; composite vector index in firestore.indexes.json)
  *   tireh_share_offers/{offerId}
  *   tireh_chats/{personaId__chatKey}/messages/{auto}
  *   tireh_updates/{personaId__updateId}           webhook idempotency
  *
  * Visibility is never delegated to Firestore queries: stores return
  * candidates, and memory/visibility.ts decides what a conversation may use.
- * findNearest (TIREH_VECTOR_RETRIEVAL) needs the composite vector index in
- * firestore.indexes.json (personaId, active, scopeKey, embedding[1536]).
+ * findNearest is no exception: its pre-filter is an optimisation, never the
+ * authority.
  */
 
 import type { Firestore } from 'firebase-admin/firestore';
 import type { ChatMessage, MemoryRecord, ShareOffer } from '../types';
 import type { ChatHistoryStore, MemoryStore, MemoryWriteGuard, NewMemory, ShareOfferStore, UpdateDeduper } from './store';
-import { assertReplacementTarget, forgetClosure, lineageEventIds, sourceEventIds, StaleMemoryWriteError } from './store';
+import { assertReplacementTarget, assertTombstoneIds, forgetClosure, lineageEventIds, sourceEventIds, StaleMemoryWriteError } from './store';
 import { scopeKey } from './visibility';
 import type { RevisionProbe } from '../privacy/revisions';
 import { tirehFlags } from '../flags';
+import { stripEmbeddingUnlessNormal } from './record-v2';
 import { randomUUID } from 'crypto';
 
 const MEMORIES = 'tireh_memories';
@@ -31,31 +31,20 @@ const CHATS = 'tireh_chats';
 const UPDATES = 'tireh_updates';
 const EPOCHS = 'tireh_privacy_epochs';
 
-const EMBEDDING_KEYS = ['embedding', 'embeddingModel', 'embeddingVersion'] as const;
 const V2_DATE_KEYS = ['validFrom', 'invalidatedAt', 'lastRetrievedAt', 'expiresAt', 'reviewAfter'] as const;
-const MAX_FIND_NEAREST_KEYS = 30;
+const MAX_FIND_NEAREST_SCOPE_KEYS = 30;
 
-/** A Firestore VectorValue (or anything exposing toArray) must survive clean() untouched. */
-function isVectorValue(v: unknown): v is { toArray(): number[] } {
-  return !!v && typeof v === 'object' && typeof (v as { toArray?: unknown }).toArray === 'function';
-}
-
-function hasEmbeddingKeys(data: Record<string, unknown>): boolean {
-  return EMBEDDING_KEYS.some((key) => data[key] !== undefined);
-}
-
-/** Embeddings are derived data stored for normal-sensitivity records only. */
-function withoutSensitiveEmbedding<T extends object>(data: T, sensitivity: unknown = (data as Record<string, unknown>).sensitivity): T {
-  if (!hasEmbeddingKeys(data as Record<string, unknown>) || sensitivity === 'normal') return data;
-  const copy: Record<string, unknown> = { ...(data as Record<string, unknown>) };
-  for (const key of EMBEDDING_KEYS) delete copy[key];
-  return copy as T;
+/** Duck-typed Firestore VectorValue (FieldValue.vector()); never recursed into. */
+function isVectorValue(value: unknown): value is { toArray(): number[]; isEqual(other: unknown): boolean } {
+  return !!value && typeof value === 'object' &&
+    typeof (value as { toArray?: unknown }).toArray === 'function' &&
+    typeof (value as { isEqual?: unknown }).isEqual === 'function';
 }
 
 /** Firestore rejects undefined values; drop them recursively (Dates kept). */
 function clean<T>(value: T): T {
-  if (isVectorValue(value)) return value;
   if (Array.isArray(value)) return value.map(clean) as T;
+  if (isVectorValue(value)) return value;
   if (value && typeof value === 'object' && !(value instanceof Date)) {
     return Object.fromEntries(
       Object.entries(value as Record<string, unknown>)
@@ -83,7 +72,7 @@ function memoryFromDoc(id: string, data: Record<string, unknown>): MemoryRecord 
     createdAt: toDate(data.createdAt),
     updatedAt: toDate(data.updatedAt),
   };
-  // v2 fields: convert only keys present on the doc, so legacy docs map exactly as before.
+  // v2 keys are converted only when present, so legacy docs map to the base shape.
   for (const key of V2_DATE_KEYS) {
     if (data[key] !== undefined && data[key] !== null) record[key] = toDate(data[key]);
   }
@@ -91,20 +80,27 @@ function memoryFromDoc(id: string, data: Record<string, unknown>): MemoryRecord 
   return record;
 }
 
-/** Write-side embedding handling, applied to already-cleaned data. Without any
- * embedding key the payload is returned unchanged (byte-identical to before). */
-async function storedVector<T extends Record<string, unknown>>(data: T): Promise<T> {
-  if (!hasEmbeddingKeys(data)) return data;
-  if (data.sensitivity !== 'normal') return withoutSensitiveEmbedding(data);
-  if (!Array.isArray(data.embedding)) return data;
-  const { FieldValue } = await import('firebase-admin/firestore');
-  return { ...data, embedding: FieldValue.vector(data.embedding as number[]) };
+export interface FirestoreMemoryStoreOptions {
+  /** Builds a Firestore vector value; defaults to a lazy FieldValue.vector(). Tests inject a fake. */
+  vectorValue?: (values: number[]) => unknown;
+}
+
+/** Loaded only when an embedding is written or cleared, so legacy writes never import the Admin SDK. */
+async function adminFieldValue() {
+  return (await import('firebase-admin/firestore')).FieldValue;
 }
 
 export class FirestoreMemoryStore implements MemoryStore {
-  constructor(private readonly db: Firestore) {}
+  constructor(private readonly db: Firestore, private readonly options: FirestoreMemoryStoreOptions = {}) {}
+
+  private async vector(values: number[]): Promise<unknown> {
+    if (this.options.vectorValue) return this.options.vectorValue(values);
+    return (await adminFieldValue()).vector(values);
+  }
 
   async addIfEpoch(memory: NewMemory, expectedEpoch: number): Promise<MemoryRecord | null> {
+    memory = stripEmbeddingUnlessNormal(memory, memory.sensitivity);
+    const vector = Array.isArray(memory.embedding) ? await this.vector(memory.embedding) : undefined;
     const ref = this.db.collection(MEMORIES).doc();
     const epochRef = this.db.collection(EPOCHS).doc(memory.personaId);
     return this.db.runTransaction(async (transaction) => {
@@ -117,13 +113,13 @@ export class FirestoreMemoryStore implements MemoryStore {
       const target = predecessor?.exists ? memoryFromDoc(predecessor.id, predecessor.data()!) : undefined;
       if (memory.supersedes) assertReplacementTarget(memory, target);
       const now = new Date();
-      const data = withoutSensitiveEmbedding({ ...memory, createdAt: now, updatedAt: now });
-      const stored = await storedVector(clean({ ...data, active: !memory.supersededBy, scopeKey: scopeKey(memory.scope) }));
+      const data = { ...memory, createdAt: now, updatedAt: now };
       if (target && predecessorRef) {
         transaction.update(predecessorRef, { supersededBy: ref.id, shareVersion: (target.shareVersion ?? 0) + 1, updatedAt: now, active: false });
         transaction.set(this.db.collection(MEMORY_STATE).doc(memory.personaId), { ...state.data(), revision: Number(state.data()?.revision ?? 0) + 1 });
       }
-      transaction.set(ref, stored);
+      const doc = clean({ ...data, active: !memory.supersededBy, scopeKey: scopeKey(memory.scope) });
+      transaction.set(ref, vector === undefined ? doc : { ...doc, embedding: vector });
       return { ...data, id: ref.id };
     });
   }
@@ -148,9 +144,11 @@ export class FirestoreMemoryStore implements MemoryStore {
   }
 
   async add(memory: NewMemory, guard?: MemoryWriteGuard): Promise<MemoryRecord> {
+    memory = stripEmbeddingUnlessNormal(memory, memory.sensitivity);
+    const vector = Array.isArray(memory.embedding) ? await this.vector(memory.embedding) : undefined;
     const now = new Date();
     const ref = this.db.collection(MEMORIES).doc();
-    const data = withoutSensitiveEmbedding({ ...memory, createdAt: now, updatedAt: now });
+    const data = { ...memory, createdAt: now, updatedAt: now };
     await this.db.runTransaction(async (tx) => {
       const state = await tx.get(this.db.collection(MEMORY_STATE).doc(memory.personaId));
       const revision = Number(state.data()?.revision ?? 0);
@@ -166,7 +164,8 @@ export class FirestoreMemoryStore implements MemoryStore {
         tx.update(predecessorRef, { supersededBy: ref.id, shareVersion: (target.shareVersion ?? 0) + 1, updatedAt: now, active: false });
         tx.set(this.db.collection(MEMORY_STATE).doc(memory.personaId), { ...state.data(), revision: revision + 1 });
       }
-      tx.set(ref, await storedVector(clean({ ...data, active: !memory.supersededBy, scopeKey: scopeKey(memory.scope) })));
+      const doc = clean({ ...data, active: !memory.supersededBy, scopeKey: scopeKey(memory.scope) });
+      tx.set(ref, vector === undefined ? doc : { ...doc, embedding: vector });
     });
     return { ...data, id: ref.id };
   }
@@ -186,10 +185,17 @@ export class FirestoreMemoryStore implements MemoryStore {
   }
 
   async update(id: string, patch: Partial<Omit<MemoryRecord, 'id' | 'personaId'>>, guard?: MemoryWriteGuard): Promise<void> {
+    const patchVector = Array.isArray(patch.embedding) ? await this.vector(patch.embedding) : undefined;
     await this.db.runTransaction(async (tx) => {
       const ref = this.db.collection(MEMORIES).doc(id);
       const snap = await tx.get(ref);
       if (!snap.exists) return;
+      const existing = snap.data()!;
+      const sensitivity = (patch.sensitivity ?? existing.sensitivity) as MemoryRecord['sensitivity'] | undefined;
+      const hygienic = stripEmbeddingUnlessNormal(patch, sensitivity);
+      const clearEmbedding = sensitivity !== 'normal' &&
+        (existing.embedding !== undefined || existing.embeddingModel !== undefined || existing.embeddingVersion !== undefined);
+      const fieldValue = clearEmbedding ? await adminFieldValue() : undefined;
       const personaId = snap.data()!.personaId as string;
       const stateRef = this.db.collection(MEMORY_STATE).doc(personaId);
       const state = await tx.get(stateRef);
@@ -198,22 +204,18 @@ export class FirestoreMemoryStore implements MemoryStore {
       const extra: Record<string, unknown> = { updatedAt: new Date() };
       if (patch.scope) extra.scopeKey = scopeKey(patch.scope);
       if ('supersededBy' in patch) extra.active = !patch.supersededBy;
-      const payload: Record<string, unknown> = clean({ ...patch, ...extra });
-      const doc = snap.data() as Record<string, unknown>;
-      if (hasEmbeddingKeys(payload) || hasEmbeddingKeys(doc)) {
-        const { FieldValue } = await import('firebase-admin/firestore');
-        if ((patch.sensitivity ?? doc.sensitivity) !== 'normal') {
-          for (const key of EMBEDDING_KEYS) payload[key] = FieldValue.delete();
-        } else if (Array.isArray(payload.embedding)) {
-          payload.embedding = FieldValue.vector(payload.embedding as number[]);
-        }
+      let written: Record<string, unknown> = clean({ ...hygienic, ...extra });
+      if (patchVector !== undefined && Array.isArray(written.embedding)) written = { ...written, embedding: patchVector };
+      if (fieldValue) {
+        written = { ...written, embedding: fieldValue.delete(), embeddingModel: fieldValue.delete(), embeddingVersion: fieldValue.delete() };
       }
-      tx.update(ref, payload);
+      tx.update(ref, written);
       tx.set(stateRef, { ...state.data(), revision: revision + 1 });
     });
   }
 
   async updateIfShareVersion(id: string, expectedVersion: number, patch: Partial<Omit<MemoryRecord, 'id' | 'personaId'>>, guard?: MemoryWriteGuard): Promise<boolean> {
+    const patchVector = Array.isArray(patch.embedding) ? await this.vector(patch.embedding) : undefined;
     const ref = this.db.collection(MEMORIES).doc(id);
     return this.db.runTransaction(async (transaction) => {
       const snapshot = await transaction.get(ref);
@@ -221,9 +223,13 @@ export class FirestoreMemoryStore implements MemoryStore {
       const stateRef = this.db.collection(MEMORY_STATE).doc(snapshot.data()!.personaId as string);
       const state = await transaction.get(stateRef);
       if (guard && guard.expectedRevision !== Number(state.data()?.revision ?? 0)) throw new StaleMemoryWriteError();
-      const data = { ...snapshot.data(), ...patch, updatedAt: new Date() };
+      const merged: Record<string, unknown> = { ...snapshot.data(), ...patch, updatedAt: new Date() };
+      const data = stripEmbeddingUnlessNormal(merged, merged.sensitivity as MemoryRecord['sensitivity'] | undefined);
       transaction.set(stateRef, { ...state.data(), revision: Number(state.data()?.revision ?? 0) + 1 });
-      transaction.set(ref, await storedVector(clean({ ...data, active: !data.supersededBy, scopeKey: scopeKey(data.scope as MemoryRecord['scope']) })));
+      // An existing VectorValue from the snapshot passes through clean() untouched.
+      let doc: Record<string, unknown> = clean({ ...data, active: !data.supersededBy, scopeKey: scopeKey(data.scope as MemoryRecord['scope']) });
+      if (patchVector !== undefined && Array.isArray(doc.embedding)) doc = { ...doc, embedding: patchVector };
+      transaction.set(ref, doc);
       return true;
     });
   }
@@ -245,22 +251,25 @@ export class FirestoreMemoryStore implements MemoryStore {
     });
   }
 
-  /** Vector candidates only (TIREH_VECTOR_RETRIEVAL); never a visibility decision. */
+  /**
+   * Nearest active records by cosine, pre-filtered by persona and at most 30
+   * scope keys. Candidates only: visibility is decided afterwards in code.
+   */
   async findNearest(personaId: string, scopeKeys: string[], vector: number[], limit: number): Promise<MemoryRecord[]> {
+    // Defence in depth (main lineage): no Firestore vector query while TIREH_VECTOR_RETRIEVAL is off.
     if (!tirehFlags().vectorRetrieval) return [];
-    const keys = [...new Set(scopeKeys)];
-    if (keys.length === 0) return [];
-    if (keys.length > MAX_FIND_NEAREST_KEYS) throw new RangeError('findNearest: at most 30 scope keys');
-    const bounded = Math.min(1000, Math.max(1, Math.floor(Number.isFinite(limit) ? limit : 1)));
-    const snap = await this.db
-      .collection(MEMORIES)
+    if (scopeKeys.length === 0 || vector.length === 0) return [];
+    if (scopeKeys.length > MAX_FIND_NEAREST_SCOPE_KEYS) throw new RangeError('find_nearest_scope_keys');
+    const bounded = Math.min(1000, Math.max(1, Math.trunc(Number.isFinite(limit) ? limit : 1)));
+    const snap = await this.db.collection(MEMORIES)
       .where('personaId', '==', personaId)
       .where('active', '==', true)
-      .where('scopeKey', 'in', keys)
-      .findNearest({ vectorField: 'embedding', queryVector: vector, limit: bounded, distanceMeasure: 'COSINE' })
+      .where('scopeKey', 'in', [...new Set(scopeKeys)])
+      .findNearest({ vectorField: 'embedding', queryVector: [...vector], limit: bounded, distanceMeasure: 'COSINE' })
       .get();
     return snap.docs
       .map((d) => memoryFromDoc(d.id, d.data() as Record<string, unknown>))
+      // Only normal-sensitivity rows are ever embedded; drop anything else the index returns.
       .filter((m) => !m.supersededBy && m.sensitivity === 'normal');
   }
 
@@ -269,15 +278,16 @@ export class FirestoreMemoryStore implements MemoryStore {
     return [...((state.data()?.tombstones ?? []) as string[])].sort();
   }
 
-  /** Never removes ids and never changes the safety revision. */
+  /** Union only; never removes a tombstone and leaves the revision unchanged. */
   async addTombstones(personaId: string, eventIds: readonly string[]): Promise<void> {
-    const ids = eventIds.filter((id) => typeof id === 'string' && id !== '');
-    if (ids.length === 0) return;
+    assertTombstoneIds(eventIds);
+    if (eventIds.length === 0) return;
     await this.db.runTransaction(async (tx) => {
       const ref = this.db.collection(MEMORY_STATE).doc(personaId);
       const state = await tx.get(ref);
-      const tombstones = [...new Set([...((state.data()?.tombstones ?? []) as string[]), ...ids])].sort();
-      tx.set(ref, state.exists ? { ...state.data(), tombstones } : { tombstones });
+      const tombstones = new Set((state.data()?.tombstones ?? []) as string[]);
+      for (const id of eventIds) tombstones.add(id);
+      tx.set(ref, { ...state.data(), tombstones: [...tombstones].sort() });
     });
   }
 }

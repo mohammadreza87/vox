@@ -1,158 +1,264 @@
-// Default (jsdom) environment: src/test/setup.ts dereferences `window`, so a
-// node-environment pragma fails before any test runs.
-//
-// Glean-style negative identities: "the search result is the ground truth".
-// For every scope kind and every outsider, in every retrieval flag state, no
-// canary row reaches the outsider through selection, a warmed cache, a leaky
-// vector index or the full gateway pipeline. Positive controls prove an
-// authorised reader does get the canary, so nothing passes vacuously. The test
-// asserts on payloads only and never logs them.
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { randomUUID } from 'crypto';
-import type { ChatContext, MemoryRecord, MemoryScope, MemorySensitivity } from '../types';
-import type { TelegramBotClient } from '../telegram/client';
+/**
+ * Glean-style negative-identity tests: the search result is the ground truth.
+ * For every scope kind and sensitivity, a CANARY record is written through a
+ * real store, then every kind of outsider asks for it by its own words. They
+ * must get zero rows from selectMemories (v1 and v2), no scope key that
+ * matches the record, nothing through the full gateway pipeline in either flag
+ * state, and nothing through the vector path even when the index ignores every
+ * filter. Positive controls prove the record is reachable for an authorized
+ * reader, so the empty results are meaningful.
+ */
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { PersonaGateway } from '../gateway';
+import type { TelegramBotClient, TelegramUpdate } from '../telegram/client';
+import { createFileStores } from '../memory/file-store';
+import { FakeEmbeddingProvider } from '../memory/embeddings';
+import { audienceScopeKeys, selectMemories, vectorCandidates } from '../memory/retrieval';
+import {
+  InMemoryChatHistoryStore,
+  InMemoryMemoryStore,
+  InMemoryShareOfferStore,
+  InMemoryUpdateDeduper,
+  type MemoryStore,
+  type NewMemory,
+} from '../memory/store';
+import { scopeKey } from '../memory/visibility';
 import { OrgDirectory } from '../org/directory';
-import { InMemoryChatHistoryStore, InMemoryMemoryStore, InMemoryShareOfferStore, InMemoryUpdateDeduper } from '../memory/store';
-import { snapshotScopeAudience } from '../memory/visibility';
-import { activeMemoryCache, selectMemories, tokenize, vectorCandidates } from '../memory/retrieval';
-import { embedMemory, FakeEmbeddingProvider } from '../memory/embeddings';
-import { FakeLLM, fakeBot, GAMEEND_CHAT, groupText, LEADS_CHAT, privateText } from './fixtures';
-import { evalOrgConfig } from './memory-eval/dataset';
+import type { ChatContext, MemoryRecord, MemoryScope, MemorySensitivity } from '../types';
+import { fakeBot, FakeLLM, groupText, privateText } from './fixtures';
+import { CHAT_IDS, chatFor, EVAL_NOW, evalOrg, evalOrgConfig, TELEGRAM } from './memory-eval/org';
+import { fakeFirestore, vectorStore } from './memory-v2-fakes';
 
-const org = new OrgDirectory(evalOrgConfig());
-const NOW = new Date('2026-10-19T10:00:00Z');
-const TG: Record<string, number> = { reza: 1001, parastoo: 1002, milad: 1003, sina: 1004, nima: 1005, 'guest-ali': 9101, unknown: 4242 };
-const GROUP_CHAT: Record<string, number> = { leads: LEADS_CHAT, 'gameend-team': GAMEEND_CHAT };
+const org = evalOrg();
+/** The same org, but gameend-team is heard by guests (everyone else in it is authorized). */
+const guestOrg = new OrgDirectory({
+  ...evalOrgConfig(),
+  groups: evalOrgConfig().groups.map((g) => (g.id === 'gameend-team' ? { ...g, hasGuests: true } : g)),
+});
+const STRANGER_TG = 9999;
 
-/** A reader: a private chat with a person (or an unknown Telegram id), or a person speaking in a group. */
-type Reader = { person: string; group?: 'leads' | 'gameend-team' };
-const label = (r: Reader) => (r.group ? `${r.person}@${r.group}` : r.person);
+type OutsiderKind = 'stranger' | 'guest' | 'outside-scope' | 'removed-member' | 'other-group' | 'guest-group' | 'group-with-owner';
 
-interface Case { kind: string; scope: MemoryScope; sensitivity: MemorySensitivity; outsiders: Reader[]; control?: Reader }
-const others = (...ids: string[]) => ids.map((person) => ({ person }));
+interface Reader {
+  label: string;
+  kind: OutsiderKind | 'insider';
+  chat: ChatContext;
+  /** How the same reader reaches the gateway. */
+  update: (text: string) => TelegramUpdate;
+  guestOrg?: boolean;
+}
+
+const privateReader = (personId: keyof typeof TELEGRAM, kind: Reader['kind']): Reader => ({
+  label: `p:${personId}`, kind, chat: chatFor(org, `p:${personId}`), update: (text) => privateText(TELEGRAM[personId], text),
+});
+const stranger: Reader = {
+  label: 'stranger', kind: 'stranger', chat: { kind: 'private', chatKey: 'private-stranger', personId: 'stranger' },
+  update: (text) => privateText(STRANGER_TG, text),
+};
+const guest = { ...privateReader('negar', 'guest') };
+const groupReader = (groupId: 'gameend-team' | 'leads', kind: Reader['kind'], speaker: keyof typeof TELEGRAM = 'reza'): Reader => ({
+  label: `g:${groupId}`, kind, chat: chatFor(org, `g:${groupId}`), update: (text) => groupText(CHAT_IDS[groupId], TELEGRAM[speaker], text),
+});
+const guestGroup: Reader = {
+  label: 'g:gameend-team+guests', kind: 'guest-group',
+  chat: { kind: 'group', chatKey: 'group-gameend-team', group: { ...org.getGroup('gameend-team')!, hasGuests: true } },
+  update: (text) => groupText(CHAT_IDS['gameend-team'], TELEGRAM.milad, text), guestOrg: true,
+};
+
+interface Case {
+  name: string;
+  marker: string;
+  words: string;
+  scope: MemoryScope;
+  auth: string[];
+  sensitivity: MemorySensitivity;
+  outsiders: Reader[];
+  insiders: Reader[];
+}
+
+const privateOutsiders = [stranger, guest, privateReader('parastoo', 'outside-scope'), privateReader('sina', 'outside-scope'),
+  privateReader('arman', 'outside-scope'), groupReader('leads', 'group-with-owner'), groupReader('gameend-team', 'group-with-owner'), guestGroup];
+
 const CASES: Case[] = [
-  { kind: 'private', scope: { kind: 'private', personId: 'reza' }, sensitivity: 'normal', outsiders: others('parastoo', 'milad', 'sina', 'guest-ali'), control: { person: 'reza' } },
-  { kind: 'personal', scope: { kind: 'private', personId: 'reza' }, sensitivity: 'personal', outsiders: [...others('parastoo', 'milad', 'sina', 'nima', 'guest-ali'), { person: 'reza', group: 'leads' }], control: { person: 'reza' } },
-  { kind: 'confidential', scope: { kind: 'private', personId: 'reza' }, sensitivity: 'confidential', outsiders: [...others('parastoo', 'milad', 'sina', 'nima', 'guest-ali'), { person: 'reza', group: 'leads' }], control: { person: 'reza' } },
-  { kind: 'people', scope: { kind: 'people', personIds: ['reza', 'parastoo'] }, sensitivity: 'normal', outsiders: others('milad', 'sina', 'guest-ali'), control: { person: 'parastoo' } },
-  { kind: 'group', scope: { kind: 'group', groupId: 'leads' }, sensitivity: 'normal', outsiders: [...others('milad', 'sina', 'guest-ali'), { person: 'reza', group: 'gameend-team' }], control: { person: 'reza', group: 'leads' } },
-  { kind: 'project', scope: { kind: 'project', projectId: 'gameend' }, sensitivity: 'normal', outsiders: others('sina', 'nima', 'guest-ali'), control: { person: 'milad' } },
-  { kind: 'company', scope: { kind: 'company', companyId: 'ludaxis' }, sensitivity: 'normal', outsiders: others('sina', 'nima', 'guest-ali'), control: { person: 'parastoo' } },
-  { kind: 'org', scope: { kind: 'org' }, sensitivity: 'normal', outsiders: others('guest-ali', 'unknown'), control: { person: 'sina' } },
+  { name: 'private/normal', marker: 'CANARY_S06_PRIVATE_NORMAL_41', words: 'nebula codename roadmap', scope: { kind: 'private', personId: 'reza' }, auth: ['reza'], sensitivity: 'normal',
+    outsiders: privateOutsiders, insiders: [privateReader('reza', 'insider')] },
+  { name: 'private/personal', marker: 'CANARY_S06_PRIVATE_PERSONAL_42', words: 'orchid clinic appointment', scope: { kind: 'private', personId: 'reza' }, auth: ['reza'], sensitivity: 'personal',
+    outsiders: privateOutsiders, insiders: [privateReader('reza', 'insider')] },
+  { name: 'private/confidential', marker: 'CANARY_S06_PRIVATE_CONFIDENTIAL_43', words: 'granite equity grant', scope: { kind: 'private', personId: 'reza' }, auth: ['reza'], sensitivity: 'confidential',
+    outsiders: privateOutsiders, insiders: [privateReader('reza', 'insider')] },
+  { name: 'people', marker: 'CANARY_S06_PEOPLE_44', words: 'harbor acquisition shortlist', scope: { kind: 'people', personIds: ['parastoo', 'reza'] }, auth: ['parastoo', 'reza'], sensitivity: 'normal',
+    outsiders: [stranger, guest, privateReader('milad', 'outside-scope'), privateReader('sina', 'outside-scope'), privateReader('arman', 'outside-scope'),
+      groupReader('leads', 'other-group'), guestGroup],
+    insiders: [privateReader('parastoo', 'insider'), privateReader('reza', 'insider')] },
+  { name: 'group', marker: 'CANARY_S06_GROUP_45', words: 'lantern boss fight', scope: { kind: 'group', groupId: 'gameend-team' }, auth: ['arman', 'milad', 'parastoo', 'reza'], sensitivity: 'normal',
+    outsiders: [stranger, guest, privateReader('sina', 'outside-scope'), privateReader('arman', 'removed-member'), groupReader('leads', 'other-group'), guestGroup],
+    insiders: [groupReader('gameend-team', 'insider', 'milad'), privateReader('milad', 'insider')] },
+  { name: 'project', marker: 'CANARY_S06_PROJECT_46', words: 'saffron shader budget', scope: { kind: 'project', projectId: 'gameend' }, auth: ['arman', 'milad', 'parastoo', 'reza'], sensitivity: 'normal',
+    outsiders: [stranger, guest, privateReader('sina', 'outside-scope'), privateReader('arman', 'removed-member'), groupReader('gameend-team', 'other-group'), guestGroup],
+    insiders: [privateReader('milad', 'insider')] },
+  { name: 'company', marker: 'CANARY_S06_COMPANY_47', words: 'cobalt lease renewal', scope: { kind: 'company', companyId: 'joyixir' }, auth: ['sina'], sensitivity: 'normal',
+    outsiders: [stranger, guest, privateReader('reza', 'outside-scope'), privateReader('parastoo', 'outside-scope'), privateReader('arman', 'outside-scope'),
+      groupReader('leads', 'other-group'), guestGroup],
+    insiders: [privateReader('sina', 'insider')] },
+  { name: 'org', marker: 'CANARY_S06_ORG_48', words: 'meridian offsite venue', scope: { kind: 'org' }, auth: ['arman', 'milad', 'parastoo', 'reza', 'sina'], sensitivity: 'normal',
+    outsiders: [stranger, guest, groupReader('gameend-team', 'other-group'), groupReader('leads', 'other-group'), guestGroup],
+    insiders: [privateReader('arman', 'insider'), privateReader('sina', 'insider')] },
 ];
 
-const QUERY_EN = 'What is the budget launch plan?';
-const QUERY_FA = 'برنامه بودجه رونمایی چیست';
+const content = (c: Case) => `The ${c.words} detail is ${c.marker}`;
+const query = (c: Case) => `Aria, what is the ${c.words} detail?`;
+let event = 0;
 
-function canaries(c: Case): { records: MemoryRecord[]; tokens: string[] } {
-  const suffix = randomUUID().slice(0, 8);
-  const en = `CANARY-${c.kind}-${suffix}`;
-  const fa = `CANARYFA-${c.kind}-${suffix}`;
-  const at = new Date('2026-10-10T10:00:00Z');
-  const authorizedPersonIds = c.scope.kind === 'private' ? [c.scope.personId] : c.scope.kind === 'people' ? [...c.scope.personIds] : snapshotScopeAudience(org, c.scope);
-  const base = (id: string, content: string): MemoryRecord => ({
-    id, personaId: 'aria', content, type: 'decision', scope: c.scope, sensitivity: c.sensitivity,
-    source: { personId: 'reza', chatKind: c.scope.kind === 'group' ? 'group' : 'private', ...(c.scope.kind === 'group' ? { groupId: c.scope.groupId } : {}), at, eventIds: [`ev-${id}`] },
-    aboutPersonIds: [], authorizedPersonIds, confidence: 0.9, createdAt: at, updatedAt: at, importance: 10, status: 'confirmed',
-  });
+function newMemory(c: Case, extra: Partial<NewMemory> = {}): NewMemory {
   return {
-    records: [base(`${c.kind}-en-${suffix}`, `${en} budget launch plan is approved`), base(`${c.kind}-fa-${suffix}`, `برنامه بودجه رونمایی تایید شد ${fa}`)],
-    tokens: [en, fa],
+    personaId: 'aria',
+    content: content(c),
+    type: 'fact',
+    scope: c.scope,
+    authorizedPersonIds: [...c.auth],
+    sensitivity: c.sensitivity,
+    source: { personId: c.auth.includes('reza') ? 'reza' : c.auth[0], chatKind: c.scope.kind === 'group' ? 'group' : 'private', ...(c.scope.kind === 'group' ? { groupId: c.scope.groupId } : {}), eventIds: [`neg-${++event}`], at: new Date('2026-10-15T09:00:00Z') },
+    aboutPersonIds: [],
+    topic: c.words,
+    confidence: 0.9,
+    ...extra,
   };
 }
 
-function chatOf(r: Reader): ChatContext {
-  return r.group
-    ? { kind: 'group', chatKey: `g-${r.group}`, group: org.getGroup(r.group)! }
-    : { kind: 'private', chatKey: `p-${r.person}`, personId: r.person === 'unknown' ? 'unknown-person' : r.person };
+const dirs: string[] = [];
+afterAll(() => { for (const dir of dirs) rmSync(dir, { recursive: true, force: true }); });
+afterEach(() => { vi.unstubAllEnvs(); });
+
+function storeOf(kind: 'memory' | 'file'): MemoryStore {
+  if (kind === 'memory') return new InMemoryMemoryStore();
+  const dir = mkdtempSync(join(tmpdir(), 'tireh-negative-'));
+  dirs.push(dir);
+  return createFileStores(join(dir, 'state.json')).memories;
 }
 
-function makeGateway(records: MemoryRecord[]) {
+describe.each(['memory', 'file'] as const)('negative identity through selectMemories (%s store)', (storeKind) => {
+  for (const c of CASES) {
+    it(`${c.name}: every outsider gets zero rows in v1 and v2, and an insider gets the record`, async () => {
+      const store = storeOf(storeKind);
+      const written = await store.add(newMemory(c));
+      const active = await store.listActive('aria');
+      expect(active.map((m) => m.id)).toEqual([written.id]);
+      for (const mode of ['v1', 'v2'] as const) {
+        for (const reader of c.outsiders) {
+          const rows = selectMemories(org, active, reader.chat, { query: query(c), mode, now: EVAL_NOW });
+          expect([c.name, mode, reader.label, reader.kind, rows.length]).toEqual([c.name, mode, reader.label, reader.kind, 0]);
+          expect(audienceScopeKeys(org, reader.chat)).not.toContain(scopeKey(written.scope));
+        }
+        for (const reader of c.insiders) {
+          const rows = selectMemories(org, active, reader.chat, { query: query(c), mode, now: EVAL_NOW });
+          expect([c.name, mode, reader.label, rows.map((m) => m.id)]).toEqual([c.name, mode, reader.label, [written.id]]);
+        }
+      }
+    });
+  }
+});
+
+function gatewayFor(orgDirectory: OrgDirectory) {
   const llm = new FakeLLM();
   const epochs = new Map<string, number>();
   const memories = new InMemoryMemoryStore(epochs);
-  for (const r of records) memories.records.set(r.id, r);
+  const history = new InMemoryChatHistoryStore(epochs);
+  history.bindMemoryStore(memories);
   const bot = fakeBot();
-  const silent = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   const gateway = new PersonaGateway({
-    org, llm, memories, offers: new InMemoryShareOfferStore(), history: new InMemoryChatHistoryStore(epochs),
-    deduper: new InMemoryUpdateDeduper(), voice: null, botFor: () => bot as unknown as TelegramBotClient, logger: silent, now: () => NOW,
+    org: orgDirectory,
+    llm,
+    memories,
+    offers: new InMemoryShareOfferStore(),
+    history,
+    deduper: new InMemoryUpdateDeduper(),
+    voice: null,
+    botFor: () => bot as unknown as TelegramBotClient,
+    logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    now: () => EVAL_NOW,
   });
-  return { gateway, llm, bot };
+  const observed = () => JSON.stringify([llm.replyRequests, llm.extractionRequests, llm.replyPrompts, bot.sent, [...history.chats.entries()]]);
+  return { gateway, llm, memories, observed };
 }
 
-async function converse(r: Reader, records: MemoryRecord[]) {
-  const ctx = makeGateway(records);
-  for (const query of [QUERY_EN, QUERY_FA]) {
-    const update = r.group ? groupText(GROUP_CHAT[r.group], TG[r.person], `Aria, ${query}`) : privateText(TG[r.person], query);
-    await ctx.gateway.handleUpdate('aria', update);
+describe.each([['unset', ''], ['TIREH_RETRIEVAL_V2=1', '1']])('negative identity through the full gateway pipeline (%s)', (_label, flag) => {
+  for (const c of CASES) {
+    it(`${c.name}: no outsider prompt, reply, bot message or history row contains the canary`, async () => {
+      vi.stubEnv('TIREH_RETRIEVAL_V2', flag);
+      const outcomes: string[] = [];
+      for (const reader of c.outsiders) {
+        const { gateway, memories, observed } = gatewayFor(reader.guestOrg ? guestOrg : org);
+        await memories.add(newMemory(c));
+        outcomes.push(await gateway.handleUpdate('aria', reader.update(query(c))));
+        expect([c.name, reader.label, observed().includes(c.marker)]).toEqual([c.name, reader.label, false]);
+      }
+      // Most outsiders do get a reply composed: the canary is absent from a real prompt, not from a skipped turn.
+      expect(outcomes.filter((o) => o === 'replied').length).toBeGreaterThanOrEqual(c.outsiders.length - 2);
+      expect(outcomes).toContain('stranger');
+    });
   }
-  return ctx;
-}
 
-/** Every outgoing payload: provider requests, prompts, extraction requests and Telegram calls. */
-function payloads({ llm, bot }: ReturnType<typeof makeGateway>): string {
-  return JSON.stringify([llm.replyRequests, llm.replyPrompts, llm.extractionRequests, bot.sendMessage.mock.calls, bot.sendVoice.mock.calls, bot.editMessageText.mock.calls, bot.answerCallbackQuery.mock.calls]);
-}
+  for (const c of CASES.filter((x) => x.sensitivity === 'normal')) {
+    it(`${c.name}: positive control, an insider's reply prompt carries the record`, async () => {
+      vi.stubEnv('TIREH_RETRIEVAL_V2', flag);
+      const reader = c.insiders[0];
+      const { gateway, memories, llm } = gatewayFor(org);
+      await memories.add(newMemory(c));
+      expect(await gateway.handleUpdate('aria', reader.update(query(c)))).toBe('replied');
+      expect(JSON.stringify(llm.replyRequests)).toContain(c.marker);
+    });
+  }
+});
 
-const FLAG_STATES = [
-  { name: 'flags unset', env: { TIREH_RETRIEVAL_V2: undefined, TIREH_VECTOR_RETRIEVAL: undefined } },
-  { name: 'TIREH_RETRIEVAL_V2=1', env: { TIREH_RETRIEVAL_V2: '1', TIREH_VECTOR_RETRIEVAL: undefined } },
-  { name: 'TIREH_RETRIEVAL_V2=1 + TIREH_VECTOR_RETRIEVAL=1', env: { TIREH_RETRIEVAL_V2: '1', TIREH_VECTOR_RETRIEVAL: '1' } },
-] as const;
-
-const embedder = new FakeEmbeddingProvider({ dimensions: 128, tokenizer: tokenize });
-let queryVectors: number[][] = [];
-beforeAll(async () => { queryVectors = await embedder.embed([QUERY_EN, QUERY_FA]); });
-afterEach(() => { vi.unstubAllEnvs(); activeMemoryCache.clear(); });
-
-async function embedded(records: MemoryRecord[]): Promise<MemoryRecord[]> {
-  return Promise.all(records.map(async (r) => { const e = await embedMemory(r, embedder); return e ? { ...r, ...e } : r; }));
-}
-
-const OUTSIDER_ROWS = CASES.flatMap((c) => c.outsiders.map((r) => [c.kind, label(r), c, r] as const));
-const CONTROL_ROWS = CASES.filter((c) => c.control).map((c) => [c.kind, label(c.control!), c, c.control!] as const);
-
-describe.each(FLAG_STATES)('negative identities ($name)', ({ env }) => {
-  const stub = () => { for (const [k, v] of Object.entries(env)) vi.stubEnv(k, v); };
-
-  it.each(OUTSIDER_ROWS)('%s canary: outsider %s gets zero rows from selection, a warmed cache and a leaky index', async (_kind, _label, c, outsider) => {
-    stub();
-    const { records } = canaries(c);
-    const withVectors = await embedded(records);
-    const chat = chatOf(outsider);
-    for (const [i, query] of [QUERY_EN, QUERY_FA].entries()) {
-      // (a) selection, flag-resolved mode and explicit v2 with and without a query embedding
-      expect(selectMemories(org, withVectors, chat, { query, now: NOW })).toEqual([]);
-      expect(selectMemories(org, withVectors, chat, { query, now: NOW, mode: 'v2', queryEmbedding: queryVectors[i] })).toEqual([]);
-      // (b) warm the feature cache as an authorised reader, then ask as the outsider
-      if (c.control) expect(selectMemories(org, withVectors, chatOf(c.control), { query, now: NOW, mode: 'v2', queryEmbedding: queryVectors[i] })).toHaveLength(2);
-      expect(selectMemories(org, withVectors, chat, { query, now: NOW })).toEqual([]);
-      expect(selectMemories(org, withVectors, chat, { query, now: NOW, mode: 'v2', queryEmbedding: queryVectors[i] })).toEqual([]);
-      // (c) a vector index that returns every canary, piped through selection
-      const findNearest = vi.fn(async () => withVectors);
-      const candidates = await vectorCandidates({ findNearest }, org, chat, 'aria', queryVectors[i]);
-      expect(selectMemories(org, candidates, chat, { query, now: NOW, queryEmbedding: queryVectors[i] })).toEqual([]);
-      expect(selectMemories(org, await findNearest(), chat, { query, now: NOW, mode: 'v2', queryEmbedding: queryVectors[i] })).toEqual([]);
+describe('negative identity through the vector path (index ignores every filter)', () => {
+  it('vectorCandidates + listActive + selectMemories return zero canary rows for every outsider', async () => {
+    vi.stubEnv('TIREH_RETRIEVAL_V2', '1');
+    vi.stubEnv('TIREH_VECTOR_RETRIEVAL', '1');
+    const provider = new FakeEmbeddingProvider();
+    const fake = fakeFirestore({ ignoreNearestFilters: true });
+    const store = vectorStore(fake.db);
+    const written = new Map<string, MemoryRecord>();
+    for (const c of CASES) {
+      const [embedding] = await provider.embed([content(c)]);
+      written.set(c.name, await store.add(newMemory(c, { embedding, embeddingModel: provider.model, embeddingVersion: provider.version })));
     }
-  });
+    // Rows a correct store would never hold or return: a personal record that
+    // still has an embedding, and another persona's org record.
+    for (const c of CASES.filter((x) => x.sensitivity !== 'normal')) {
+      const [embedding] = await provider.embed([content(c)]);
+      fake.data.set(`tireh_memories/raw-${c.marker}`, {
+        ...newMemory(c), embedding, embeddingModel: provider.model, embeddingVersion: 1,
+        createdAt: new Date('2026-10-15T09:00:00Z'), updatedAt: new Date('2026-10-15T09:00:00Z'), active: true, scopeKey: scopeKey(c.scope),
+      });
+    }
+    for (const c of CASES) {
+      const [embedding] = await provider.embed([content(c)]);
+      fake.data.set(`tireh_memories/zeta-${c.marker}`, {
+        ...newMemory(c), personaId: 'zeta', scope: { kind: 'org' }, authorizedPersonIds: ['arman', 'milad', 'negar', 'parastoo', 'reza', 'sina', 'stranger'], sensitivity: 'normal', embedding,
+        createdAt: new Date('2026-10-15T09:00:00Z'), updatedAt: new Date('2026-10-15T09:00:00Z'), active: true, scopeKey: 'org',
+      });
+    }
 
-  it.each(OUTSIDER_ROWS)('%s canary: outsider %s sees no canary in any LLM or Telegram payload', async (_kind, _label, c, outsider) => {
-    stub();
-    const { records, tokens } = canaries(c);
-    const ctx = await converse(outsider, await embedded(records));
-    const sent = payloads(ctx);
-    for (const token of tokens) expect(sent.includes(token)).toBe(false);
-    if (outsider.person === 'unknown') expect(ctx.llm.replyRequests).toHaveLength(0);
-  });
-
-  it.each(CONTROL_ROWS)('%s canary: positive control %s receives the canary in the reply prompt', async (_kind, _label, c, reader) => {
-    stub();
-    const { records, tokens } = canaries(c);
-    const ctx = await converse(reader, await embedded(records));
-    expect(ctx.llm.replyPrompts.length).toBeGreaterThan(0);
-    const prompts = ctx.llm.replyPrompts.join('\n');
-    for (const token of tokens) expect(prompts.includes(token)).toBe(true);
+    for (const c of CASES) {
+      const [queryEmbedding] = await provider.embed([query(c)]);
+      for (const reader of c.outsiders) {
+        const candidates = await vectorCandidates(store, org, 'aria', reader.chat, queryEmbedding);
+        const active = await store.listActive('aria');
+        const union = [...new Map([...active, ...candidates].map((m) => [m.id, m])).values()];
+        const rows = selectMemories(org, union, reader.chat, { query: query(c), now: EVAL_NOW, queryEmbedding });
+        expect([c.name, reader.label, rows.filter((m) => m.content.includes(c.marker)).map((m) => m.id)]).toEqual([c.name, reader.label, []]);
+        expect(candidates.every((m) => m.personaId === 'aria')).toBe(true);
+      }
+      for (const reader of c.insiders) {
+        const candidates = await vectorCandidates(store, org, 'aria', reader.chat, queryEmbedding);
+        const union = [...new Map([...(await store.listActive('aria')), ...candidates].map((m) => [m.id, m])).values()];
+        const rows = selectMemories(org, union, reader.chat, { query: query(c), now: EVAL_NOW, queryEmbedding });
+        expect([c.name, reader.label, rows.some((m) => m.id === written.get(c.name)!.id)]).toEqual([c.name, reader.label, true]);
+      }
+    }
+    expect(fake.nearest.length).toBeGreaterThan(0);
   });
 });

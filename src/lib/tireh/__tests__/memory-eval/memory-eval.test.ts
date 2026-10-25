@@ -1,191 +1,130 @@
-// Default (jsdom) environment: src/test/setup.ts dereferences `window`, so a
-// node-environment pragma fails before any test runs.
-//
-// Synthetic EN/FA memory eval. The fake embedder is a hashing bag-of-words over
-// the v2 tokenizer: these numbers prove pipeline mechanics and Persian
-// tokenisation, not real text-embedding-3-small quality. The output table is
-// content-free (ids, labels and numbers only).
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import type { ChatContext, MemoryRecord } from '../../types';
-import { audienceOf } from '../../memory/visibility';
-import { selectMemories, tokenize } from '../../memory/retrieval';
+/**
+ * EN/FA memory eval (docs/AGENT_INTELLIGENCE_SOLUTION.md 4.4): recall@8 and
+ * leakage over a synthetic HOOR corpus, for v1, v2 lexical and v2 with fake
+ * embeddings. Modes are explicit, so the result does not depend on
+ * TIREH_RETRIEVAL_V2. Fake-embedding numbers are report-only: the fake has no
+ * semantics and says nothing about real Persian paraphrase recall.
+ */
+import { beforeAll, describe, expect, it } from 'vitest';
 import { embedMemory, FakeEmbeddingProvider } from '../../memory/embeddings';
-import { EVAL_MEMORIES, EVAL_NOW, EVAL_QUESTIONS, evalOrg, type EvalCategory, type EvalQuestion } from './dataset';
+import { selectMemories } from '../../memory/retrieval';
+import { isVisibleInChat } from '../../memory/visibility';
+import type { MemoryRecord } from '../../types';
+import { BY_ID, CORPUS, RECORDS } from './corpus';
+import { isStale, report, score, type EvalReport, type QuestionResult } from './metrics';
+import { ASKERS, chatFor, EVAL_NOW, evalOrg } from './org';
+import { QUESTIONS } from './questions';
 
 const org = evalOrg();
-const MODES = ['v1@8', 'v2-lexical', 'v2-embedding', 'v2-flag-default'] as const;
-type Mode = typeof MODES[number];
-const CATEGORIES: EvalCategory[] = ['single_session', 'multi_session', 'update', 'temporal', 'abstention', 'cross_person_leakage'];
 
-const embedder = new FakeEmbeddingProvider({ dimensions: 256, tokenizer: tokenize });
-let records: MemoryRecord[] = [];
-const queryVectors = new Map<string, number[]>();
-const readers = new Map(EVAL_MEMORIES.map((m) => [m.record.id, m.readers]));
-
-function chatFor(q: EvalQuestion): ChatContext {
-  return q.chat.kind === 'private'
-    ? { kind: 'private', chatKey: `eval-${q.chat.personId}`, personId: q.chat.personId }
-    : { kind: 'group', chatKey: `eval-${q.chat.groupId}`, group: org.getGroup(q.chat.groupId)! };
+function run(mode: 'v1' | 'v2' | 'v2+fake', records: readonly MemoryRecord[], embeddings?: Map<string, number[]>): QuestionResult[] {
+  return QUESTIONS.map((question) => {
+    const chat = chatFor(org, question.asker);
+    const options = mode === 'v1'
+      ? { query: question.query, now: EVAL_NOW, mode: 'v1' as const, limit: 8 }
+      : { query: question.query, now: EVAL_NOW, mode: 'v2' as const, queryEmbedding: mode === 'v2+fake' ? embeddings?.get(question.id) : undefined };
+    const returned = selectMemories(org, [...records], chat, options).map((m) => m.id);
+    return score(question, returned, EVAL_NOW);
+  });
 }
 
-function run(mode: Mode, q: EvalQuestion): string[] {
-  const chat = chatFor(q);
-  const base = { query: q.query, now: EVAL_NOW };
-  switch (mode) {
-    case 'v1@8': return selectMemories(org, records, chat, { ...base, mode: 'v1' }).slice(0, 8).map((m) => m.id);
-    case 'v2-lexical': return selectMemories(org, records, chat, { ...base, mode: 'v2' }).map((m) => m.id);
-    case 'v2-embedding': return selectMemories(org, records, chat, { ...base, mode: 'v2', queryEmbedding: queryVectors.get(q.id) }).map((m) => m.id);
-    case 'v2-flag-default': {
-      vi.stubEnv('TIREH_RETRIEVAL_V2', '1');
-      try { return selectMemories(org, records, chat, base).map((m) => m.id); } finally { vi.unstubAllEnvs(); }
+describe('memory eval fixture sanity', () => {
+  it('has 95-110 items, at least 10 per category and 45 per language', () => {
+    expect(QUESTIONS.length).toBeGreaterThanOrEqual(95);
+    expect(QUESTIONS.length).toBeLessThanOrEqual(110);
+    for (const category of ['single', 'multi', 'update', 'temporal', 'abstention', 'leakage'] as const) {
+      expect(QUESTIONS.filter((q) => q.category === category).length).toBeGreaterThanOrEqual(10);
     }
-  }
-}
-
-interface Result { q: EvalQuestion; mode: Mode; ids: string[]; recall: number | null; leaks: number; blockedHits: number }
-const results: Result[] = [];
-
-beforeAll(async () => {
-  records = await Promise.all(EVAL_MEMORIES.map(async ({ record }) => {
-    const embedded = await embedMemory(record, embedder);
-    return embedded ? { ...record, ...embedded } : record;
-  }));
-  const vectors = await embedder.embed(EVAL_QUESTIONS.map((q) => q.query));
-  EVAL_QUESTIONS.forEach((q, i) => queryVectors.set(q.id, vectors[i]));
-  for (const q of EVAL_QUESTIONS) {
-    const audience = audienceOf(chatFor(q));
-    for (const mode of MODES) {
-      const ids = run(mode, q);
-      const top = ids.slice(0, 8);
-      results.push({
-        q, mode, ids,
-        recall: q.expected.length ? q.expected.filter((id) => top.includes(id)).length / q.expected.length : null,
-        leaks: ids.filter((id) => !audience.every((person) => readers.get(id)?.includes(person))).length,
-        blockedHits: ids.filter((id) => q.blocked.includes(id)).length,
-      });
-    }
-  }
-  report();
-});
-
-afterEach(() => { vi.unstubAllEnvs(); });
-
-function recallOf(mode: Mode, filter: (q: EvalQuestion) => boolean): number | null {
-  const rows = results.filter((r) => r.mode === mode && r.recall !== null && filter(r.q));
-  return rows.length ? rows.reduce((s, r) => s + r.recall!, 0) / rows.length : null;
-}
-const sum = (mode: Mode, key: 'leaks' | 'blockedHits', filter: (q: EvalQuestion) => boolean = () => true) =>
-  results.filter((r) => r.mode === mode && filter(r.q)).reduce((s, r) => s + r[key], 0);
-
-function report() {
-  const fmt = (x: number | null) => (x === null ? '  -  ' : x.toFixed(3));
-  const lines = ['memory eval (synthetic, fake embeddings): recall@8 / leakage / blockedHits', `mode               ${['overall', 'fa', 'en', ...CATEGORIES].map((c) => c.slice(0, 12).padEnd(12)).join(' ')} leak blocked`];
-  for (const mode of MODES) {
-    const cells = [
-      recallOf(mode, () => true), recallOf(mode, (q) => q.lang === 'fa'), recallOf(mode, (q) => q.lang === 'en'),
-      ...CATEGORIES.map((c) => recallOf(mode, (q) => q.category === c)),
-    ].map((x) => fmt(x).padEnd(12));
-    lines.push(`${mode.padEnd(18)} ${cells.join(' ')} ${String(sum(mode, 'leaks')).padStart(4)} ${String(sum(mode, 'blockedHits')).padStart(7)}`);
-  }
-  lines.push(`blockedHits by category: ${MODES.map((mode) => `${mode} ${CATEGORIES.map((c) => `${c}=${sum(mode, 'blockedHits', (q) => q.category === c)}`).join(',')}`).join(' | ')}`);
-  lines.push('recall@8 by language and category');
-  for (const mode of MODES) {
-    for (const lang of ['fa', 'en'] as const) {
-      const cells = CATEGORIES.slice(0, 4).map((c) => fmt(recallOf(mode, (q) => q.lang === lang && q.category === c)).padEnd(12));
-      lines.push(`${`${mode}/${lang}`.padEnd(18)} ${cells.join(' ')}`);
-    }
-  }
-  console.info(lines.join('\n'));
-}
-
-describe('memory eval dataset guard', () => {
-  it('has exactly 100 questions with the documented category counts and a ~50/50 language split', () => {
-    expect(EVAL_QUESTIONS).toHaveLength(100);
-    const counts = Object.fromEntries(CATEGORIES.map((c) => [c, EVAL_QUESTIONS.filter((q) => q.category === c).length]));
-    expect(counts).toEqual({ single_session: 25, multi_session: 20, update: 15, temporal: 15, abstention: 10, cross_person_leakage: 15 });
-    for (const c of CATEGORIES) {
-      const fa = EVAL_QUESTIONS.filter((q) => q.category === c && q.lang === 'fa').length;
-      expect(Math.abs(fa - (counts[c] - fa))).toBeLessThanOrEqual(1);
-    }
-    expect(new Set(EVAL_QUESTIONS.map((q) => q.id)).size).toBe(100);
+    for (const lang of ['en', 'fa'] as const) expect(QUESTIONS.filter((q) => q.lang === lang).length).toBeGreaterThanOrEqual(45);
+    expect(new Set(QUESTIONS.map((q) => q.id)).size).toBe(QUESTIONS.length);
+    expect(CORPUS.length).toBeGreaterThanOrEqual(110);
+    expect(new Set(RECORDS.map((r) => r.id)).size).toBe(RECORDS.length);
+    expect(CORPUS.filter((r) => r.lang === 'fa').length).toBeGreaterThanOrEqual(50);
+    expect(new Set(RECORDS.map((r) => r.sensitivity))).toEqual(new Set(['normal', 'personal', 'confidential']));
+    expect(new Set(RECORDS.map((r) => r.scope.kind))).toEqual(new Set(['private', 'people', 'group', 'project', 'company', 'org']));
   });
 
-  it('has 70-90 memories, about half Persian, about half with v2 fields, all scope kinds and sensitivities', () => {
-    expect(EVAL_MEMORIES.length).toBeGreaterThanOrEqual(70);
-    expect(EVAL_MEMORIES.length).toBeLessThanOrEqual(90);
-    const fa = EVAL_MEMORIES.filter((m) => m.lang === 'fa').length;
-    expect(fa / EVAL_MEMORIES.length).toBeGreaterThan(0.4);
-    expect(fa / EVAL_MEMORIES.length).toBeLessThan(0.6);
-    const v2 = EVAL_MEMORIES.filter((m) => m.record.importance !== undefined).length;
-    expect(v2 / EVAL_MEMORIES.length).toBeGreaterThan(0.4);
-    expect(new Set(EVAL_MEMORIES.map((m) => m.record.scope.kind))).toEqual(new Set(['private', 'people', 'group', 'project', 'company', 'org']));
-    expect(new Set(EVAL_MEMORIES.map((m) => m.record.sensitivity))).toEqual(new Set(['normal', 'personal', 'confidential']));
-    expect(EVAL_MEMORIES.some((m) => m.record.supersededBy)).toBe(true);
-    expect(EVAL_MEMORIES.some((m) => m.record.invalidatedBy && m.record.invalidatedAt)).toBe(true);
-    expect(EVAL_MEMORIES.some((m) => m.record.expiresAt && m.record.expiresAt < EVAL_NOW)).toBe(true);
-    expect(new Set(EVAL_MEMORIES.map((m) => m.record.id)).size).toBe(EVAL_MEMORIES.length);
-  });
-
-  it('has at least 10 FA queries the v1 tokenizer cannot match', () => {
-    expect(EVAL_QUESTIONS.filter((q) => q.lang === 'fa' && q.v1Hard).length).toBeGreaterThanOrEqual(10);
-  });
-
-  it('references only known memories; expected rows are readable by the asker; blocked rows are not expected', () => {
-    for (const q of EVAL_QUESTIONS) {
-      const audience = audienceOf(chatFor(q));
-      for (const id of [...q.expected, ...q.blocked]) expect(readers.has(id), `${q.id} -> ${id}`).toBe(true);
-      for (const id of q.expected) expect(audience.every((p) => readers.get(id)!.includes(p)), `${q.id} -> ${id}`).toBe(true);
-      expect(q.expected.filter((id) => q.blocked.includes(id))).toEqual([]);
-      if (q.category === 'abstention' || q.category === 'cross_person_leakage') expect(q.expected).toEqual([]);
-      if (q.category !== 'single_session' && q.category !== 'multi_session') expect(q.blocked.length).toBeGreaterThan(0);
-    }
-  });
-
-  it('embeds only normal-sensitivity records', () => {
-    for (const r of records) expect(r.embedding !== undefined).toBe(r.sensitivity === 'normal');
-  });
-});
-
-describe('memory eval results', () => {
-  it.each(MODES)('leakage is 0 in mode %s', (mode) => {
-    expect(sum(mode, 'leaks')).toBe(0);
-  });
-
-  it('v2 never returns blocked rows for update, temporal and abstention', () => {
-    for (const mode of ['v2-lexical', 'v2-embedding', 'v2-flag-default'] as const) {
-      for (const category of ['update', 'temporal', 'abstention'] as const) {
-        expect(sum(mode, 'blockedHits', (q) => q.category === category), `${mode}/${category}`).toBe(0);
-      }
-      expect(sum(mode, 'blockedHits', (q) => q.category === 'cross_person_leakage'), mode).toBe(0);
-    }
-  });
-
-  it('v2 recall@8 >= v1@8 overall and per language', () => {
-    for (const mode of ['v2-lexical', 'v2-embedding', 'v2-flag-default'] as const) {
-      expect(recallOf(mode, () => true)!).toBeGreaterThanOrEqual(recallOf('v1@8', () => true)!);
-      for (const lang of ['fa', 'en'] as const) {
-        expect(recallOf(mode, (q) => q.lang === lang)!, `${mode}/${lang}`).toBeGreaterThanOrEqual(recallOf('v1@8', (q) => q.lang === lang)!);
+  it('labels agree with isVisibleInChat for every live record and asker', () => {
+    for (const row of CORPUS) {
+      if (row.record.supersededBy) continue;
+      for (const asker of ASKERS) {
+        expect([row.record.id, asker, row.visibleTo.includes(asker)]).toEqual([row.record.id, asker, isVisibleInChat(org, row.record, chatFor(org, asker))]);
       }
     }
   });
 
-  it('FA v2 lexical recall@8 is strictly better than FA v1@8', () => {
-    expect(recallOf('v2-lexical', (q) => q.lang === 'fa')!).toBeGreaterThan(recallOf('v1@8', (q) => q.lang === 'fa')!);
+  it('every gold id is visible to its asker and every forbidden id is invisible, superseded, invalidated or expired', () => {
+    for (const q of QUESTIONS) {
+      const chat = chatFor(org, q.asker);
+      if (q.category === 'abstention') expect(q.goldIds).toEqual([]);
+      for (const id of q.goldIds) {
+        const row = BY_ID.get(id);
+        expect([q.id, id, !!row && isVisibleInChat(org, row.record, chat) && !isStale(row.record, EVAL_NOW)]).toEqual([q.id, id, true]);
+      }
+      for (const id of q.forbiddenIds) {
+        const row = BY_ID.get(id)!;
+        expect(row).toBeDefined();
+        const excluded = !isVisibleInChat(org, row.record, chat) || !!row.record.supersededBy || isStale(row.record, EVAL_NOW);
+        expect([q.id, id, excluded]).toEqual([q.id, id, true]);
+      }
+    }
+  });
+});
+
+describe('memory eval gates', () => {
+  let v1: EvalReport;
+  let v2: EvalReport;
+  let fused: EvalReport;
+  const results: Record<string, QuestionResult[]> = {};
+
+  beforeAll(async () => {
+    const provider = new FakeEmbeddingProvider();
+    const embedded: MemoryRecord[] = [];
+    for (const record of RECORDS) {
+      const fields = await embedMemory(record, provider);
+      embedded.push(fields ? { ...record, ...fields } : record);
+    }
+    const queryEmbeddings = new Map<string, number[]>();
+    const vectors = await provider.embed(QUESTIONS.map((q) => q.query));
+    QUESTIONS.forEach((q, i) => queryEmbeddings.set(q.id, vectors[i]));
+
+    results.v1 = run('v1', RECORDS);
+    results.v2 = run('v2', RECORDS);
+    results.fused = run('v2+fake', embedded, queryEmbeddings);
+    v1 = report('v1', results.v1);
+    v2 = report('v2-lexical', results.v2);
+    fused = report('v2-fake-embedding', results.fused);
+    // Content-free report: numbers, categories and languages only.
+    console.info(JSON.stringify({ memoryEval: [v1, v2, fused] }));
   });
 
-  it('v2 with a query embedding reaches recall@8 >= 0.8 overall (synthetic tripwire, not a quality claim)', () => {
-    expect(recallOf('v2-embedding', () => true)!).toBeGreaterThanOrEqual(0.8);
-  });
-
-  it('the flag-default path equals explicit v2 lexical', () => {
-    for (const q of EVAL_QUESTIONS) {
-      const a = results.find((r) => r.q === q && r.mode === 'v2-flag-default')!.ids;
-      const b = results.find((r) => r.q === q && r.mode === 'v2-lexical')!.ids;
-      expect(a).toEqual(b);
+  it('never leaks in any mode, and abstention items return none of their forbidden ids', () => {
+    for (const r of [v1, v2, fused]) {
+      expect([r.mode, r.leakage]).toEqual([r.mode, 0]);
+      expect([r.mode, r.abstentionForbiddenReturned]).toEqual([r.mode, 0]);
     }
   });
 
-  it('returns at most 8 rows per question in every v2 mode', () => {
-    for (const r of results) if (r.mode !== 'v1@8') expect(r.ids.length).toBeLessThanOrEqual(8);
+  it('v2 never returns invalidated or expired records', () => {
+    expect(v2.staleReturned).toBe(0);
+    expect(fused.staleReturned).toBe(0);
+  });
+
+  it('meets the v2 lexical recall@8 gates and beats v1', () => {
+    expect(v2.recallAt8).toBeGreaterThanOrEqual(0.85);
+    expect(v2.byLanguage.en.recall).toBeGreaterThanOrEqual(0.85);
+    expect(v2.byLanguage.fa.recall).toBeGreaterThanOrEqual(0.80);
+    expect(v2.recallAt8).toBeGreaterThanOrEqual(v1.recallAt8 ?? 0);
+    expect(v2.byLanguage.fa.recall).toBeGreaterThan(v1.byLanguage.fa.recall ?? 0);
+  });
+
+  it('returns at most 8 memories per question in v2', () => {
+    for (const r of [...results.v2, ...results.fused]) expect(r.returned.length).toBeLessThanOrEqual(8);
+  });
+
+  it('keeps the report content-free', () => {
+    const text = JSON.stringify([v1, v2, fused]);
+    for (const row of CORPUS) expect(text).not.toContain(row.record.content.trim().slice(0, 12));
+    for (const q of QUESTIONS) expect(text).not.toContain(q.query.slice(0, 12));
   });
 });

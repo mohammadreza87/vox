@@ -271,3 +271,183 @@ throw on hostile Unicode). The prefix-equality half of the 100k case (wave A cap
   unwired and only created by an explicit `enroll()` under `optional.personalization`.
 - Wave A's `extractStyleFeatures` does not catch a throwing property getter on its input (main's did). Callers pass
   plain objects; harden at wiring time.
+
+## S09: decision pre-pass v2 (wave A `6cbe4bc`, aiq/prepass-v2-r2): main-lineage cases not kept
+
+Recorded with the S06 merge (verifier finding on S09). No code changed. The S09 merge took wave A's r2 versions of
+`decisions-log.test.ts`, `decisions-calibration.test.ts`, `decisions-service-decider.test.ts` and
+`decisions-triage-v2.test.ts`. On main these four files were byte-identical to `c6e8ab6`; the merge removed the main
+cases below (describe > it), besides the `decisions-catalog-lint.test.ts` cases recorded with that merge.
+
+`decisions-log.test.ts` (covered by wave A `decisions-log.test.ts` and `decisions-gateway-log.test.ts`):
+
+- "round-trips `at` as a Date" and "filters since <= at < until, sorts ascending and applies limit": same names in wave A.
+- "sweeps rows older than 90 days": wave A "sweep removes rows strictly older than 90 days, keeps the row at the cutoff
+  and returns the count".
+- file decision-log store > "creates the file with mode 0600, survives a reopen and skips a corrupt line": wave A
+  "creates the file with mode 0600, skips a corrupt line, and keeps 0600 after a sweep".
+- Firestore decision-log store > "uses the vox_decision_log collection and drops invalid stored rows": wave A "writes to
+  vox_decision_log with `at` as a Date and drops invalid stored rows".
+- decision-log sink > "does nothing while TIREH_DECISION_LOG is unset" and "appends a valid row when
+  TIREH_DECISION_LOG=1": wave A "with enabled() false nothing is appended" and "the default enabled() reads
+  TIREH_DECISION_LOG on every record()". "a rejecting append warns and record() does not throw": wave A "a rejected
+  append gives onError(append_failed) and record() does not throw". "a throwing store never escapes record()": wave A "a
+  synchronously throwing store or onError never escapes record()". "sweeps at most once per sweepEveryMs": same name in
+  wave A.
+- recordTriageDecision > "sets the question-set version from the questions sent and the flag", "keeps only asked
+  questions and catalogue values, and never the text", "null answers give unknown/threw and {} gives unknown/empty;
+  detail reason wins", "never throws, even when the sink does": API absent (wave A builds rows with `decisionLogRow`).
+  Covered by wave A "never carries the message, persona name or skill id", "drops choices outside the catalogue and
+  non-catalogue probabilities", "outcome and unknownReason: failed, detail unknown timeout, and empty answers" and the
+  gateway-log cases. Wave A reports a thrown decider as `decider_error`, not `threw`.
+- gateway decision log > "a private turn logs exactly one content-free row", "a group turn logs chatKind group", "a
+  throwing decider logs unknown/threw/untriaged and still reports triage_failed", "a throwing sink, or no sink, still
+  delivers the reply", "with a ServiceDecider the row carries inputTokens and the service elapsedMs": wave A
+  `decisions-gateway-log.test.ts` "a private text turn produces exactly one content-free row matching the questions
+  sent", "a group message logs chatKind group with no member names or chat ids", "a throwing decider logs unknown
+  decider_error; ...", "a sink whose record throws leaves the reply unaffected", "without a sink decideDetailed is never
+  called ..." and "with a ServiceDecider the row carries elapsedMs and inputTokens from the detail".
+
+`decisions-calibration.test.ts` (11 cases; API absent: main's `calibrationReport`, `formatCalibrationReport`,
+`parseDecisionLogJsonl` became wave A's `computeCalibration`, `formatCalibration`, `parseLabelsCsv`):
+
+- calibrationReport: predicates > "computes exact precision and recall per language at 0.2, 0.5 and 0.8", "gives a null
+  precision when nothing is predicted positive", "counts unanswered rows and excludes them; marks blocks under 200
+  insufficient; ignores unjoined labels", "a CSV language column overrides the row label", "is not insufficient at 200
+  examples": wave A "predicate memorable: exact tp/fp/fn, precision and recall per language", "defaults to thresholds
+  0.1..0.9 and counts unmatched labels without exposing them", and the `support n/200` gate lines.
+- calibrationReport: choices > "scores one-vs-rest per value from probabilities, falling back to confidence for the
+  chosen value": wave A "choice route = smalltalk: exact tp/fp/fn per language".
+- parsing > "rejects a bad label, an unknown catalogue value and a bad header with the line number", "accepts skill ids
+  and other catalogue-shaped values for questions without a fixed catalogue", "parseDecisionLogJsonl skips malformed
+  lines and rows that fail the schema": wave A "accepts 0/1/true/false for predicates (normalised) and catalogue values
+  for choices"; stored rows are schema-checked by the log stores ("drops invalid stored rows").
+- formatCalibrationReport > "prints a fixed-width table without row ids", "says so when nothing joined": wave A "prints a
+  TSV table and support n/200 gate lines per question and language, never row ids" and "a lower gate is reported as met".
+
+`decisions-service-decider.test.ts`:
+
+- studioDecider > "unset returns the identical fallback object", "service without OPENAI_API_KEY returns the fallback",
+  "any other value returns the fallback": wave A `decisions-runtime.test.ts` "flags unset: the decider is the base
+  OpenAIMedia (no decideDetailed) and there is no decision log", "STUDIO_DECIDER=service without OPENAI_API_KEY keeps no
+  decider", "STUDIO_DECIDER=service with STUDIO_DECISIONS=off keeps no decider".
+- ServiceDecider unknown outcomes give {} > "a service that throws gives {} with reason threw": **contradictory by
+  design**. Wave A "a service that throws gives {} with reason provider_error and elapsedMs from options.now".
+
+`decisions-triage-v2.test.ts` (all four contradictory by design for the chosen implementation):
+
+- v2 question set > "reads the set from TRIAGE_QUESTION_SET at call time": main's pure `triageQuestions` default
+  follows the flag. Wave A "triageQuestionSetNow reads TRIAGE_QUESTION_SET at call time; the pure default stays v1".
+- readTriage under v2-live > "route correction at 0.6 or explicit_correction at 0.6 makes the message memorable; 0.4
+  does not" and "route smalltalk at 0.7 makes effort quick; at 0.5 it stays thoughtful": the v2-live route-correction
+  threshold moves from main's 0.5 to wave A's 0.6. Wave A "thresholds are 0.6 and 0.5", "route smalltalk at 0.6 makes
+  effort quick; at 0.59 nothing changes", "route correction at 0.6 or explicit_correction at 0.5 makes the message
+  memorable; below does not".
+- readTriage under v2 (shadow) > "has no v2 key without v2 answers, and v2 answers never rescue an invalid v1 result":
+  main omits an empty `v2` key; wave A always sets it under v2. Wave A "set v1 has no v2 key; v2 without v2 answers has
+  an empty v2; v2 never rescues an invalid v1 result".
+
+## S06: memory record v2 and retrieval (wave A `0ba3de6`, aiq/memory-v2-retrieval-2 `1bef816`)
+
+Main merged an earlier run of the same spec (`e1d76cf`, `a45de43`, `eb48243`, `80881de`, `daac12d`, `7014326`, `4620bd3`,
+`d7d5d10`, `2849f1b`, `9a6751e`, merged by `7c74019`), then `8a7dc55` added the committed-counter `local()` probes to the
+file store. Nothing outside the module calls a main-only export (`UNKNOWN_REVISION`, `allowedScopeKeys`,
+`isInvalidated`, `isExpired`, `createEmbeddingProviderFromEnv`, `EmbeddingRequestError`, `activeMemoryCache`).
+
+### Resolution
+
+| File | Resolution |
+| --- | --- |
+| `src/lib/tireh/memory/{retrieval,embeddings,record-v2}.ts` | Wave A's files. |
+| `src/lib/tireh/memory/store.ts` | Wave A's file. Against `7224f40` only comments differ around Step 1: `revisionProbe`, `epochProbe`, `safetyRevision`, `lineageEventIds` and `StaleMemoryWriteError` are unchanged. Wave A replaces main's private `withoutSensitiveEmbedding` with `stripEmbeddingUnlessNormal` and validates tombstone ids (`assertTombstoneIds`). |
+| `src/lib/tireh/memory/firestore-store.ts` | Wave A's body (`stripEmbeddingUnlessNormal`, injectable `vectorValue`, vector patch in `update`/`updateIfShareVersion`), with Step 1's `RevisionProbe` import and `revisionProbe`/`epochProbe` exactly as on main. Main's two `findNearest` guards are kept as defence in depth: no Firestore query unless `tirehFlags().vectorRetrieval`, and rows that are not normal sensitivity are dropped. |
+| `src/lib/tireh/memory/file-store.ts`, `src/lib/tireh/types.ts` | Auto-merged to main's text, which already holds wave A's date keys, the union wrap lists (mutations `add`, `addIfEpoch`, `update`, `updateIfShareVersion`, `delete`, `invalidate`, `addTombstones`; reads `get`, `listActive`, `safetyRevision`, `revisionProbe`, `tombstonesOf`; history `recent`, `getEpoch`, `epochProbe`) and `8a7dc55`'s `local()` committed rereads. |
+| `firestore.indexes.json` | Wave A's file (same index as main, expanded formatting; the `vox_audit` composite arrives with a later step). |
+| `docs/implementation/MEMORY_RETRIEVAL_RESULT.md` | Base content plus wave A's S06 section; main's S06 follow-up section is replaced. |
+| `docs/implementation/agent-intelligence/S06-memory-v2-retrieval.md` | Wave A's spec. |
+| `src/lib/tireh/__tests__/memory-v2-{embeddings,firestore,record,retrieval,stores}.test.ts`, `negative-identity.test.ts`, `memory-eval/memory-eval.test.ts` | Wave A's files. `memory-v2-firestore.test.ts` "FirestoreMemoryStore.findNearest" now sets `TIREH_RETRIEVAL_V2=1` and `TIREH_VECTOR_RETRIEVAL=1` for the kept store gate and gains two cases: "makes no Firestore call while the vector flag is off" and "drops a non-normal row even when the index returns it". |
+| `src/lib/tireh/__tests__/memory-eval/dataset.ts` | Deleted (main only, orphaned by wave A's eval). |
+| `src/lib/tireh/__tests__/*.main-lineage.test.ts` (six files) | New: main's passing cases (see below). |
+
+### Main-lineage cases kept
+
+- `memory-v2-record.main-lineage.test.ts`: memoryV2 defaults (legacy record per type, type defaults, keeps valid v2
+  values, invalid importance NaN / '7' / Infinity, importance bounds 1 and 10, invalid dates, enum values and counts);
+  contentHash (both cases).
+- `memory-v2-stores.main-lineage.test.ts`: every case except the tombstone union case below (InMemory and file store).
+- `memory-v2-firestore.main-lineage.test.ts`: memoryFromDoc, writes, findNearest (including "flag off returns [] without
+  touching Firestore" and "filters out personal and superseded docs even if the index returns them", which the kept
+  store guards satisfy) and "firestore.indexes.json > declares exactly the contract vector index". That last case
+  asserts the whole file; when wave A's `vox_audit` composite index lands, narrow it to the `tireh_memories` entry.
+- `memory-v2-embeddings.main-lineage.test.ts`: cosine (both), "is deterministic, unit norm and sized as configured",
+  "sends dimensions only when configured", "maps shuffled response indexes back to input order", "an aborted signal
+  rejects".
+- `memory-v2-retrieval.main-lineage.test.ts`: v1 parity over 200 seeded fixtures, mode resolution, tokenize (Arabic
+  keyboard folding; diacritics, digits and stopwords), v2 fusion (3), v2 rescoring order (4), suppression by cosine and
+  by contentHash, v2 final gate (3), v2 purity, "ActiveMemoryCache > returns null above maxRecords or for mixed
+  personas", and vectorCandidates "flag off gives [] with zero store calls", "a throwing store or a store without
+  findNearest gives []", "no keys means no call", "candidates still go through the final gate" with the arguments
+  reordered to wave A's `(store, org, personaId, chat, vector)`. The fusion embedder drops the main-only `tokenizer`
+  option, which wave A's fake ignored at runtime.
+- `negative-identity.main-lineage.test.ts`: all three canary families in all three flag states (210 cases), with main's
+  `evalOrgConfig` inlined, the `activeMemoryCache` reset and `tokenizer` option dropped, and `vectorCandidates`
+  arguments reordered.
+
+### Main-lineage cases not kept
+
+- `memory-eval/memory-eval.test.ts` (whole file; depends on the deleted `dataset.ts` corpus): memory eval dataset guard >
+  "has exactly 100 questions with the documented category counts and a ~50/50 language split", "has 70-90 memories,
+  about half Persian, about half with v2 fields, all scope kinds and sensitivities", "has at least 10 FA queries the v1
+  tokenizer cannot match", "references only known memories; expected rows are readable by the asker; blocked rows are
+  not expected", "embeds only normal-sensitivity records"; memory eval results > "leakage is 0 in mode %s" (each mode),
+  "v2 never returns blocked rows for update, temporal and abstention", "v2 recall@8 >= v1@8 overall and per language",
+  "FA v2 lexical recall@8 is strictly better than FA v1@8", "v2 with a query embedding reaches recall@8 >= 0.8 overall
+  (synthetic tripwire, not a quality claim)", "the flag-default path equals explicit v2 lexical", "returns at most 8 rows
+  per question in every v2 mode". Covered by wave A's eval ("never leaks in any mode, ...", "v2 never returns
+  invalidated or expired records", "meets the v2 lexical recall@8 gates and beats v1", "returns at most 8 memories per
+  question in v2", fixture sanity cases).
+- `memory-v2-record.test.ts`: "invalid importance %s falls back to the type default" for 0, 11, 3.5 and -1:
+  contradictory (wave A clamps finite values into 1..10 and rounds; wave A "clamps or falls back for out-of-range
+  importance"). "never mutates the input" and isInvalidated / isExpired > "legacy records are neither invalidated nor
+  expired", "invalidatedBy alone invalidates", "invalidatedAt boundaries: past and == now invalidate, future does not",
+  "expiresAt boundaries: past and == now expire, future does not": API absent (`isInvalidated`, `isExpired`); wave A
+  checks the boundaries inside retrieval ("suppresses expired, invalidated, superseded and replaced records"). Main's
+  "invalidatedBy alone invalidates" is contradictory: wave A requires `invalidatedAt <= now`.
+- `memory-v2-stores.test.ts` and `memory-v2-firestore.test.ts`: "tombstonesOf/addTombstones: sorted union, idempotent,
+  revision unchanged" (InMemory and file store) and tombstones > "tombstonesOf/addTombstones round-trip with the revision
+  unchanged": contradictory. Main silently drops an empty id; wave A rejects it with `TypeError` (ids are non-empty and
+  at most 512 characters). Wave A "adds tombstones as a sorted, idempotent union without a revision bump or record
+  removal" and "FirestoreMemoryStore tombstones > reads and unions tombstones in tireh_memory_state without changing
+  revision".
+- `memory-v2-embeddings.test.ts`: FakeEmbeddingProvider > "keeps the zero vector for text with no tokens" (contradictory:
+  wave A hashes trigrams of the padded text), "counters hold counts only, never text", "throws failWith when set",
+  "accepts a custom tokenizer" (API absent; wave A "is deterministic and unit-norm, and counts calls without storing
+  text"); OpenAIEmbeddingProvider > "sends the documented body to /embeddings and makes no request on construction",
+  "batches 300 inputs into 3 sequential calls of at most 128", "embed([]) makes no call; a blank string throws before
+  fetch", "a 500 rejects after exactly one fetch call, with no input or key in the error", "throws
+  embedding_dimension_mismatch" (contradictory body, batch size 256, `EmbeddingError` and the codes `embedding_failed`
+  and `embedding_shape`; wave A's OpenAIEmbeddingProvider cases); embedMemory > "returns null for personal,
+  confidential and blank records without calling the provider", "embeds normalised content only and returns model,
+  version and hash" (contradictory on blank and untrimmed content only; personal and confidential return null on both
+  sides; wave A's embedMemory cases); createEmbeddingProviderFromEnv > all three cases (API absent; wave A "reads
+  OPENAI_EMBEDDING_MODEL in the constructor").
+- `memory-v2-retrieval.test.ts`: tokenize > "handles ZWNJ prefixes and plural suffixes", "stems English plurals
+  conservatively and keeps short codes with digits" (contradictory: wave A emits the surface form and the stem); v2
+  rescoring order > "relevance outranks the priors" (contradictory weights; wave A's RRF with K = 60 is documented in
+  MEMORY_RETRIEVAL_RESULT.md); v2 suppression > "drops invalidated, expired and superseded-target records; keeps future
+  expiry" (contradictory on `invalidatedBy` alone); ActiveMemoryCache > "hits for the same (persona, revision, set) and
+  misses on a revision change", "add() without a revision bump misses via the fingerprint; update() misses", "evicts
+  least-recently-used personas beyond maxPersonas", "an owner-warmed cache gives an outsider zero invisible rows" (API
+  absent: `stats()`, `maxPersonas`, the `activeMemoryCache` singleton; wave A's ActiveMemoryCache cases and the
+  negative-identity suites); allowedScopeKeys > "member: private, groups, org, projects, companies and people sets from
+  memories", "guest: only private and own groups; unknown person: none", "group: its own key; hasGuests group: none"
+  (API absent; wave A's audienceScopeKeys cases; the people-set enumeration is contradictory, wave A never enumerates
+  people scopes); vectorCandidates > "chunks 45 keys into 2 calls of at most 30 and merges duplicates" (contradictory:
+  relies on people keys from `memories`; wave A "chunks more than 30 keys, dedupes by id and drops other-persona and
+  superseded rows").
+
+### Open issues carried
+
+- `FirestoreMemoryStore.updateIfShareVersion` spreads `snapshot.data()`, so Timestamp fields become maps on both sides
+  (known before this merge).
+- Tombstone additions do not bump the memory revision (wave A invariant), so Step 1 probes are unaffected.

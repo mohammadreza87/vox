@@ -1,11 +1,11 @@
 /**
- * Read-side view of the v2 memory fields (docs/AGENT_INTELLIGENCE_SOLUTION.md
- * section 4.3, L3 row). Every v2 field is optional on read: legacy rows get
- * these defaults. Pure functions, no I/O, never mutates the input record.
+ * MemoryRecord v2 helpers (docs/AGENT_INTELLIGENCE_SOLUTION.md 4.3, L3 row).
+ * Pure: no I/O and no logging. Every v2 field is optional on read; legacy rows
+ * are viewed through memoryV2() with the documented defaults.
  */
 
 import { createHash } from 'crypto';
-import type { MemoryRecord, MemorySpace, MemoryStatus, MemoryType } from '../types';
+import type { MemoryRecord, MemorySensitivity, MemorySpace, MemoryStatus, MemoryType } from '../types';
 
 export interface MemoryV2View {
   space: MemorySpace;
@@ -20,38 +20,37 @@ export interface MemoryV2View {
 }
 
 export const DEFAULT_IMPORTANCE: Readonly<Record<MemoryType, number>> = Object.freeze({
+  fact: 5,
   decision: 7,
   preference: 6,
-  fact: 5,
   event: 5,
   relationship: 5,
 });
 
-const SPACES: readonly MemorySpace[] = ['work', 'personal'];
-const STATUSES: readonly MemoryStatus[] = ['asserted', 'inferred', 'confirmed', 'disputed'];
+const STATUSES: ReadonlySet<string> = new Set<MemoryStatus>(['asserted', 'inferred', 'confirmed', 'disputed']);
 
 function validDate(value: unknown): value is Date {
-  return value instanceof Date && Number.isFinite(value.getTime());
+  return value instanceof Date && !isNaN(value.getTime());
 }
 
+/** Read-side view of the v2 fields with defaults; never mutates the record. */
 export function memoryV2(m: MemoryRecord): MemoryV2View {
-  const importance = typeof m.importance === 'number' && Number.isInteger(m.importance) && m.importance >= 1 && m.importance <= 10
-    ? m.importance
+  const importance = typeof m.importance === 'number' && Number.isFinite(m.importance)
+    ? Math.min(10, Math.max(1, Math.round(m.importance)))
     : DEFAULT_IMPORTANCE[m.type] ?? 5;
-  const retrievalCount = typeof m.retrievalCount === 'number' && Number.isInteger(m.retrievalCount) && m.retrievalCount >= 0
-    ? m.retrievalCount
-    : 0;
-  return {
-    space: SPACES.includes(m.space as MemorySpace) ? m.space as MemorySpace : 'work',
-    status: STATUSES.includes(m.status as MemoryStatus) ? m.status as MemoryStatus : 'asserted',
+  const view: MemoryV2View = {
+    space: m.space === 'personal' ? 'personal' : 'work',
+    status: typeof m.status === 'string' && STATUSES.has(m.status) ? m.status : 'asserted',
     validFrom: validDate(m.validFrom) ? m.validFrom : m.source.at,
     importance,
-    retrievalCount,
+    retrievalCount: typeof m.retrievalCount === 'number' && Number.isSafeInteger(m.retrievalCount) && m.retrievalCount >= 0
+      ? m.retrievalCount : 0,
     subjectConfirmed: m.subjectConfirmed === true,
-    lastRetrievedAt: validDate(m.lastRetrievedAt) ? m.lastRetrievedAt : undefined,
-    expiresAt: validDate(m.expiresAt) ? m.expiresAt : undefined,
-    invalidatedAt: validDate(m.invalidatedAt) ? m.invalidatedAt : undefined,
   };
+  if (validDate(m.lastRetrievedAt)) view.lastRetrievedAt = m.lastRetrievedAt;
+  if (validDate(m.expiresAt)) view.expiresAt = m.expiresAt;
+  if (validDate(m.invalidatedAt)) view.invalidatedAt = m.invalidatedAt;
+  return view;
 }
 
 /** sha256 hex of the NFKC-normalised, trimmed content. */
@@ -59,12 +58,16 @@ export function contentHash(content: string): string {
   return createHash('sha256').update(content.normalize('NFKC').trim()).digest('hex');
 }
 
-/** Invalidated by a replacing record, or at an invalidation time that has passed (inclusive). */
-export function isInvalidated(m: MemoryRecord, now: Date): boolean {
-  return !!m.invalidatedBy || (validDate(m.invalidatedAt) && m.invalidatedAt.getTime() <= now.getTime());
-}
-
-/** Expired once expiresAt <= now. */
-export function isExpired(m: MemoryRecord, now: Date): boolean {
-  return validDate(m.expiresAt) && m.expiresAt.getTime() <= now.getTime();
+/**
+ * Embeddings exist only for normal-sensitivity records. Returns a copy without
+ * the embedding keys otherwise; the same reference when nothing changes.
+ */
+export function stripEmbeddingUnlessNormal<T extends Partial<MemoryRecord>>(record: T, sensitivity: MemorySensitivity | undefined): T {
+  if (sensitivity === 'normal') return record;
+  if (!('embedding' in record) && !('embeddingModel' in record) && !('embeddingVersion' in record)) return record;
+  const copy = { ...record };
+  delete copy.embedding;
+  delete copy.embeddingModel;
+  delete copy.embeddingVersion;
+  return copy;
 }

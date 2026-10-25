@@ -1,19 +1,25 @@
 /**
- * Embedding seam for memory retrieval (docs/AGENT_INTELLIGENCE_SOLUTION.md
- * sections 2.3 and 4.4). Only normal-sensitivity memory content is ever
- * embedded. Providers never log and never put input text or keys in errors.
- * Server-only: the OpenAI adapter must never be constructed in a client bundle.
+ * Embedding seam for memory retrieval (docs/AGENT_INTELLIGENCE_SOLUTION.md 4.4).
+ *
+ * Only normal-sensitivity memory text is ever embedded. Providers never log,
+ * and errors carry a code only: no input text, query or response body.
+ * Not imported by the gateway, Studio or runtime in this step; nothing
+ * constructs a provider in production yet (the PRIV-009 processor row must
+ * exist first).
  */
 
-import { createHash } from 'crypto';
-import OpenAI from 'openai';
+// Type-only: the SDK is loaded lazily on first embed, so importing cosine()
+// from retrieval.ts (and so from the gateway) never loads it.
+import type OpenAI from 'openai';
 import type { MemoryRecord } from '../types';
 import { contentHash } from './record-v2';
 
 export const EMBEDDING_VERSION = 1;
 export const DEFAULT_EMBEDDING_MODEL = 'text-embedding-3-small';
 export const DEFAULT_EMBEDDING_DIMENSIONS = 1536;
-export const MAX_EMBEDDING_BATCH = 128;
+
+const MAX_EMBEDDING_INPUTS = 2048;
+const EMBEDDING_CHUNK = 256;
 
 export interface EmbeddingProvider {
   readonly model: string;
@@ -22,60 +28,68 @@ export interface EmbeddingProvider {
   embed(texts: readonly string[], signal?: AbortSignal): Promise<number[][]>;
 }
 
-function assertNonBlank(texts: readonly string[]): void {
-  for (const text of texts) {
-    if (typeof text !== 'string' || text.trim() === '') throw new TypeError('embedding_input_empty');
+/** The message is the code only, never text. */
+export class EmbeddingError extends Error {
+  constructor(code: string) {
+    super(code);
+    this.name = 'EmbeddingError';
   }
 }
 
-/** A content-free error: only a fixed code and, when known, the HTTP status. */
-export class EmbeddingRequestError extends Error {
-  constructor(readonly code: 'embedding_request_failed' | 'embedding_aborted', readonly status?: number) {
-    super(status ? `${code}:${status}` : code);
-    this.name = code === 'embedding_aborted' ? 'AbortError' : 'EmbeddingRequestError';
-  }
+function isAbort(error: unknown, signal?: AbortSignal): boolean {
+  if (signal?.aborted) return true;
+  const name = (error as { name?: unknown } | null)?.name;
+  return name === 'AbortError' || name === 'APIUserAbortError';
 }
 
 export class OpenAIEmbeddingProvider implements EmbeddingProvider {
   readonly model: string;
   readonly version = EMBEDDING_VERSION;
   readonly dimensions: number;
-  private readonly client: OpenAI;
-  private readonly sendDimensions: boolean;
+  private readonly apiKey: string;
+  private readonly fetchImpl?: typeof fetch;
+  private client?: OpenAI;
 
   constructor(options: { apiKey: string; fetch?: typeof fetch; model?: string; dimensions?: number }) {
-    this.model = options.model ?? DEFAULT_EMBEDDING_MODEL;
+    this.apiKey = options.apiKey;
+    this.fetchImpl = options.fetch;
+    this.model = options.model ?? (process.env.OPENAI_EMBEDDING_MODEL?.trim() || DEFAULT_EMBEDDING_MODEL);
     this.dimensions = options.dimensions ?? DEFAULT_EMBEDDING_DIMENSIONS;
-    this.sendDimensions = !!options.dimensions;
-    this.client = new OpenAI({ apiKey: options.apiKey, fetch: options.fetch, maxRetries: 0, logLevel: 'off' });
+  }
+
+  private async openai(): Promise<OpenAI> {
+    if (!this.client) {
+      const { default: OpenAIClient } = await import('openai');
+      this.client = new OpenAIClient({ apiKey: this.apiKey, fetch: this.fetchImpl, maxRetries: 0, timeout: 10_000 });
+    }
+    return this.client;
   }
 
   async embed(texts: readonly string[], signal?: AbortSignal): Promise<number[][]> {
     if (texts.length === 0) return [];
-    assertNonBlank(texts);
+    if (texts.length > MAX_EMBEDDING_INPUTS || texts.some((text) => typeof text !== 'string' || !text.trim())) {
+      throw new EmbeddingError('embedding_invalid_input');
+    }
     const out: number[][] = [];
-    for (let start = 0; start < texts.length; start += MAX_EMBEDDING_BATCH) {
-      const batch = texts.slice(start, start + MAX_EMBEDDING_BATCH);
-      let response: OpenAI.Embeddings.CreateEmbeddingResponse;
+    for (let start = 0; start < texts.length; start += EMBEDDING_CHUNK) {
+      const input = texts.slice(start, start + EMBEDDING_CHUNK);
+      let data: Array<{ index: number; embedding: number[] }>;
       try {
-        response = await this.client.embeddings.create({
-          model: this.model,
-          input: batch,
-          encoding_format: 'float',
-          ...(this.sendDimensions ? { dimensions: this.dimensions } : {}),
-        }, { signal });
+        const client = await this.openai();
+        const response = await client.embeddings.create(
+          { model: this.model, input, dimensions: this.dimensions, encoding_format: 'float' },
+          { signal },
+        );
+        data = response.data as Array<{ index: number; embedding: number[] }>;
       } catch (error) {
-        // Never surface provider messages: a server may echo the input back.
-        if (signal?.aborted || (error as { name?: string })?.name === 'APIUserAbortError') {
-          throw new EmbeddingRequestError('embedding_aborted');
-        }
-        const status = (error as { status?: unknown })?.status;
-        throw new EmbeddingRequestError('embedding_request_failed', typeof status === 'number' ? status : undefined);
+        if (isAbort(error, signal)) throw new EmbeddingError('embedding_aborted');
+        const status = (error as { status?: unknown } | null)?.status;
+        throw new EmbeddingError('embedding_failed' + (typeof status === 'number' ? `:${status}` : ''));
       }
-      const rows = [...response.data].sort((a, b) => a.index - b.index);
-      if (rows.length !== batch.length) throw new Error('embedding_count_mismatch');
-      for (const row of rows) {
-        if (!Array.isArray(row.embedding) || row.embedding.length !== this.dimensions) throw new Error('embedding_dimension_mismatch');
+      if (!Array.isArray(data) || data.length !== input.length) throw new EmbeddingError('embedding_shape');
+      const sorted = [...data].sort((a, b) => a.index - b.index);
+      for (const row of sorted) {
+        if (!Array.isArray(row.embedding) || row.embedding.length !== this.dimensions) throw new EmbeddingError('embedding_shape');
         out.push(row.embedding);
       }
     }
@@ -83,70 +97,66 @@ export class OpenAIEmbeddingProvider implements EmbeddingProvider {
   }
 }
 
-const defaultFakeTokenizer = (text: string): string[] =>
-  text.normalize('NFKC').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((t) => t.length >= 2);
+function fnv1a(text: string): number {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash >>> 0;
+}
 
-/** Deterministic feature-hashing embedder for tests. No network. */
+/** Deterministic, network-free hashed-trigram embedding for tests and evals. */
 export class FakeEmbeddingProvider implements EmbeddingProvider {
   readonly model: string;
   readonly version = EMBEDDING_VERSION;
   readonly dimensions: number;
-  /** Counts only, never texts. */
   calls = 0;
-  inputs = 0;
-  private readonly tokenizer: (text: string) => string[];
-  private readonly failWith?: Error;
 
-  constructor(options: { dimensions?: number; model?: string; tokenizer?: (text: string) => string[]; failWith?: Error } = {}) {
+  constructor(options: { dimensions?: number; model?: string } = {}) {
     this.dimensions = options.dimensions ?? 64;
     this.model = options.model ?? 'fake-embedding';
-    this.tokenizer = options.tokenizer ?? defaultFakeTokenizer;
-    this.failWith = options.failWith;
   }
 
-  async embed(texts: readonly string[], signal?: AbortSignal): Promise<number[][]> {
+  async embed(texts: readonly string[]): Promise<number[][]> {
     this.calls++;
-    this.inputs += texts.length;
-    if (this.failWith) throw this.failWith;
-    if (signal?.aborted) throw new EmbeddingRequestError('embedding_aborted');
-    return texts.map((text) => {
-      const v = new Array<number>(this.dimensions).fill(0);
-      for (const token of this.tokenizer(text)) {
-        const h = createHash('sha256').update(token).digest();
-        const idx = h.readUInt32BE(0) % this.dimensions;
-        v[idx] += (h[4] & 1) ? 1 : -1;
-      }
-      const norm = Math.sqrt(v.reduce((s, x) => s + x * x, 0));
-      return norm === 0 ? v : v.map((x) => x / norm);
-    });
+    return texts.map((text) => this.vector(text));
+  }
+
+  private vector(text: string): number[] {
+    const values = new Array<number>(this.dimensions).fill(0);
+    const padded = ` ${text.normalize('NFKC').toLowerCase()} `;
+    const chars = [...padded];
+    for (let i = 0; i + 3 <= chars.length; i++) {
+      const hash = fnv1a(chars.slice(i, i + 3).join(''));
+      const bucket = hash % this.dimensions;
+      values[bucket] += (hash & 0x80000000) ? -1 : 1;
+    }
+    const norm = Math.sqrt(values.reduce((sum, v) => sum + v * v, 0));
+    return norm === 0 ? values : values.map((v) => v / norm);
   }
 }
 
 export function cosine(a: readonly number[], b: readonly number[]): number {
   if (a.length !== b.length || a.length === 0) return 0;
-  let dot = 0, na = 0, nb = 0;
+  let dot = 0;
+  let na = 0;
+  let nb = 0;
   for (let i = 0; i < a.length; i++) {
     dot += a[i] * b[i];
     na += a[i] * a[i];
     nb += b[i] * b[i];
   }
   if (na === 0 || nb === 0) return 0;
-  return Math.min(1, Math.max(-1, dot / (Math.sqrt(na) * Math.sqrt(nb))));
+  return dot / (Math.sqrt(na) * Math.sqrt(nb));
 }
 
-/** Embeds content only (never topic or source), and only for normal, non-blank records. */
+/** Embedding fields for a record, or null unless the record is normal sensitivity. */
 export async function embedMemory(
   m: MemoryRecord,
   p: EmbeddingProvider,
 ): Promise<Pick<MemoryRecord, 'embedding' | 'embeddingModel' | 'embeddingVersion' | 'contentHash'> | null> {
-  if (m.sensitivity !== 'normal' || m.content.trim() === '') return null;
-  const [embedding] = await p.embed([m.content.normalize('NFKC').trim()]);
+  if (m.sensitivity !== 'normal') return null;
+  const [embedding] = await p.embed([m.content]);
   return { embedding, embeddingModel: p.model, embeddingVersion: p.version, contentHash: contentHash(m.content) };
-}
-
-/** Configuration only, not a flag. Not wired anywhere in this step. */
-export function createEmbeddingProviderFromEnv(env: NodeJS.ProcessEnv = process.env): EmbeddingProvider | null {
-  const apiKey = env.OPENAI_API_KEY?.trim();
-  if (!apiKey) return null;
-  return new OpenAIEmbeddingProvider({ apiKey, model: env.OPENAI_EMBEDDING_MODEL?.trim() || DEFAULT_EMBEDDING_MODEL });
 }

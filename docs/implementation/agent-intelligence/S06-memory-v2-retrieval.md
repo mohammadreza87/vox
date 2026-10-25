@@ -1,93 +1,162 @@
-# S06: Memory record v2, embeddings and bounded fused retrieval
+# S06: Memory record v2, embeddings and bounded retrieval
 
-Step 6 of `docs/AGENT_INTELLIGENCE_SOLUTION.md` (sections 2.3, 4.3 L3 row, 4.4 and the Step 6 row of section 5).
-Base commit: `6d00b8066e5d8e8d444bb47d978aa571e20929df`. Flags: `TIREH_RETRIEVAL_V2`, `TIREH_VECTOR_RETRIEVAL` (both default off).
+Flagged, additive, not wired into the gateway. Plan: `docs/AGENT_INTELLIGENCE_SOLUTION.md`
+sections 2.3, 4.3 (L3 row), 4.4 and the Step 6 row of section 5.
+Base commit: `6d00b8066e5d8e8d444bb47d978aa571e20929df` (origin/develop at PR #100).
 
 ## Goal
 
-- Add the Graphiti / Generative-Agents style L3 fields to `MemoryRecord` as optional, read-tolerant data.
-- Add an `EmbeddingProvider` seam with an OpenAI `text-embedding-3-small` adapter and a deterministic fake.
-- Add a v2 retrieval path behind `TIREH_RETRIEVAL_V2=1`: Persian-aware tokenisation, reciprocal-rank fusion of lexical and cosine ranks, rescoring (recency since last retrieval, importance, about-audience, type, status, length), near-duplicate and superseded suppression, and `isMemoryAllowedInChat` / `inConversation` as the final gate. At most 8 memories by default.
-- Add an in-process feature cache keyed by `(personaId, safetyRevision)` plus an id/updatedAt fingerprint.
-- Add a Firestore `findNearest` candidate path behind `TIREH_VECTOR_RETRIEVAL=1` with its composite vector index file.
-- Add optional tombstone accessors for S08.
-- Ship a ~100-question EN/FA eval (recall@8 reported, leakage == 0 asserted) and Glean-style negative-identity tests through the full pipeline.
-- With every flag unset, behaviour, store reads/writes and request payloads are identical to the base.
+Add the L3 `MemoryRecord` v2 fields as optional, never-required-on-read fields across the
+InMemory, file and Firestore stores. Add an embedding seam: an OpenAI
+`text-embedding-3-small` adapter, a deterministic fake and cosine. Add a v2 retrieval path
+behind `TIREH_RETRIEVAL_V2=1` with:
 
-## Facts at the base this spec relies on
+- Persian-aware tokenisation;
+- reciprocal-rank fusion of lexical and cosine ranks;
+- rescoring by recency since last retrieval, importance, audience and type;
+- suppression of near-duplicates, superseded, invalidated and expired records;
+- `isMemoryAllowedInChat` and `inConversation` re-applied as the final gate;
+- a default limit of 8 only when no limit is given.
 
-- `retrieval.ts` has `selectMemories(org, memories, chat, {query, limit=20, now})` with a v1 tokenizer (length > 3, 29 English stopwords). It scores `overlap*2 + aboutAudience + recency(90d) + typeBoost + confidence*0.5` and exports `findConflicts`.
-- Callers are `gateway.ts` (3 calls with the default limit, 1 with `limit:30` for extraction) and `prompt.ts` (`findConflicts` only). S06 does not edit any caller.
-- `InMemoryMemoryStore` keeps `tombstones: Map<personaId, Set<eventId>>` and `revisions`; `add()` bumps the revision only when superseding.
-- `file-store.ts` wraps InMemory stores, reloads the JSON under a mkdir lock on every wrapped call and revives the dates listed in `DATE_KEYS`. Method lists passed to `wrap()` are explicit.
-- `firestore-store.ts` stores `active` and `scopeKey` on every `tireh_memories` doc and keeps tombstones in `tireh_memory_state/{personaId}.tombstones`. `memoryFromDoc` converts only `source.at`, `createdAt`, `updatedAt`. `clean()` rebuilds every non-Date object, which would destroy a `VectorValue`.
-- Installed: `@google-cloud/firestore` 7.11.6 (`Query.findNearest`, `VectorValue.toArray()`, `FieldValue.vector()`), `firebase-admin` 13.10.0, `openai` 6.9.1 (`fetch`, `maxRetries`, `logLevel`; `embeddings.create(body, {signal})`).
-- vitest runs in jsdom; the openai SDK refuses browser-like environments, so every new S06 test file starts with `// @vitest-environment node`.
-- `ChatContext` has no `space`, so v2 cannot filter by space in this run.
-- `firestore.indexes.json` does not exist; `firebase.json` has only `hosting`.
+Also: an in-process derived-feature cache keyed by (personaId, safetyRevision) plus an
+id+updatedAt fingerprint, and a Firestore `findNearest` candidate path behind
+`TIREH_VECTOR_RETRIEVAL=1` with its composite vector index. Two gates: a ~100-question EN/FA
+memory eval that reports recall@8 and requires leakage == 0, and Glean-style
+negative-identity tests through the full pipeline. With every flag unset, behaviour stays
+byte-identical to the base.
+
+No step in this run wires S06 into `gateway.ts`. `gateway.ts` keeps calling
+`selectMemories(org, all, chat, { query, now })` synchronously; reply call sites pass no
+limit and extraction passes `limit: 30`. The flag therefore changes reply ranking and count
+only; no query embedding or `findNearest` is used on the hot path yet.
 
 ## Files
 
 | Path | Change |
 |---|---|
-| `src/lib/tireh/flags.ts` | New, byte-identical to the shared contract (sha256 `6b8edcd4…6630`). Flags read via `tirehFlags()` at call time only. |
-| `src/lib/tireh/types.ts` | MEMORY section only: `MemorySpace`, `MemoryStatus` after `MemorySensitivity`; the v2 block (15 optional fields) after `confidence`. Nothing becomes required. |
-| `src/lib/tireh/memory/record-v2.ts` | New, pure. `memoryV2(m)` defaults (space work, status asserted, validFrom source.at, importance type default `{decision:7, preference:6, fact/event/relationship:5}` unless an integer 1-10, retrievalCount non-negative integer else 0, subjectConfirmed strict true, dates passed only when valid). `contentHash`, `DEFAULT_IMPORTANCE`, `isInvalidated`, `isExpired` (both inclusive of `== now`). Never mutates. |
-| `src/lib/tireh/memory/embeddings.ts` | New. `EMBEDDING_VERSION=1`, default model `text-embedding-3-small`, 1536 dims, batch 128. `OpenAIEmbeddingProvider` (one client, `maxRetries:0`, `logLevel:'off'`, injectable fetch, sequential batches, index re-ordering, dimension check, no text in errors, no logging). `FakeEmbeddingProvider` (sha256 feature hashing, L2-normalised, content-free counters, `failWith`). `cosine`, `embedMemory` (normal, non-blank content only), `createEmbeddingProviderFromEnv` (not wired). |
-| `src/lib/tireh/memory/retrieval.ts` | `findConflicts` unchanged. Base `selectMemories` body moved verbatim into `selectMemoriesV1`. Exported `selectMemories` dispatches on `options.mode ?? (tirehFlags().retrievalV2 ? 'v2' : 'v1')`. New: constants, Persian-aware `tokenize`, `ActiveMemoryCache` + module `activeMemoryCache`, `selectMemoriesV2`, `allowedScopeKeys`, `vectorCandidates`. |
-| `src/lib/tireh/memory/store.ts` | Optional `findNearest?`, `tombstonesOf?`, `addTombstones?` on `MemoryStore`. InMemory implements the two tombstone methods (sorted, union, never removes, never bumps revision). `withoutSensitiveEmbedding` strips embedding keys on add/update/updateIfShareVersion when the effective sensitivity is not normal; legacy records keep object identity. |
-| `src/lib/tireh/memory/file-store.ts` | `DATE_KEYS` adds `validFrom`, `invalidatedAt`, `lastRetrievedAt`, `expiresAt`, `reviewAfter`; `addTombstones` in the mutation list, `tombstonesOf` in the read list. |
-| `src/lib/tireh/memory/firestore-store.ts` | `clean()` passes VectorValue through; `memoryFromDoc` converts the five v2 dates and a VectorValue embedding (adds no absent keys); `storedVector()` converts or strips embeddings on add/addIfEpoch/updateIfShareVersion, `update()` converts or deletes; `findNearest` (flag gated, <=30 keys, limit clamp 1..1000, filters normal and non-superseded); `tombstonesOf` / `addTombstones` (revision unchanged). |
-| `firestore.indexes.json` | New composite vector index on `tireh_memories`: personaId, active, scopeKey ASC + `embedding` vectorConfig dimension 1536 flat. `firebase.json` untouched. |
-| `docs/implementation/MEMORY_RETRIEVAL_RESULT.md` | Append `## Follow-up: memory record v2 and fused retrieval (S06)` with flags, formula, suppression, cache key, sensitivity rules, index deploy command, measured eval numbers and the real-embedding gate. |
-| tests | `memory-v2-record`, `memory-v2-embeddings`, `memory-v2-retrieval`, `memory-v2-stores`, `memory-v2-firestore`, `memory-eval/dataset.ts` + `memory-eval/memory-eval.test.ts`, `negative-identity.test.ts`. All `// @vitest-environment node`, no network, temp files via `os.tmpdir()`. |
+| `src/lib/tireh/flags.ts` | NEW, byte-identical to the shared contract (sha256 `6b8edcd4…66630`). Not edited afterwards. |
+| `src/lib/tireh/types.ts` | MEMORY section only: `MemorySpace`, `MemoryStatus` after `MemorySensitivity`; the 15 optional v2 fields inside `MemoryRecord` after `confidence`. |
+| `src/lib/tireh/memory/record-v2.ts` | NEW pure helpers: `memoryV2()` defaults view, `contentHash()`, `stripEmbeddingUnlessNormal()`, `DEFAULT_IMPORTANCE`. |
+| `src/lib/tireh/memory/embeddings.ts` | NEW: `EMBEDDING_VERSION`, `EmbeddingProvider`, `EmbeddingError`, `OpenAIEmbeddingProvider` (injectable fetch, `maxRetries: 0`, `timeout: 10_000`, chunks of 256, max 2048 inputs, shape validation, content-free errors), `FakeEmbeddingProvider` (FNV-1a trigram hashing, L2-normalised, `calls` counter), `cosine`, `embedMemory` (normal sensitivity only). Not imported by gateway, Studio or runtime. |
+| `src/lib/tireh/memory/retrieval.ts` | v1 kept verbatim as `selectMemoriesV1`; `selectMemories` dispatches on `options.mode ?? (tirehFlags().retrievalV2 ? 'v2' : 'v1')`. v2: `tokenize`, RRF (K = 60), rescoring, suppression, final gate, `ActiveMemoryCache`, `audienceScopeKeys`, `vectorCandidates`, exported constants. `findConflicts` unchanged. |
+| `src/lib/tireh/memory/store.ts` | Optional `findNearest?`, `tombstonesOf?`, `addTombstones?`; InMemory implements the tombstone pair; `stripEmbeddingUnlessNormal` on `add`, `update`, `updateIfShareVersion`. `add()` never bumps `safetyRevision`. |
+| `src/lib/tireh/memory/file-store.ts` | `DATE_KEYS` adds the 5 v2 date keys; `addTombstones` (mutation) and `tombstonesOf` (read) run under the lock. |
+| `src/lib/tireh/memory/firestore-store.ts` | `FirestoreMemoryStoreOptions { vectorValue? }`; lazy `FieldValue.vector`; `clean()` passes VectorValues through; `memoryFromDoc` revives v2 dates and VectorValue embeddings only when present; embedding hygiene on all write paths (and `FieldValue.delete()` on update to non-normal); `findNearest`, `tombstonesOf`, `addTombstones`. |
+| `firestore.indexes.json` | NEW: one composite vector index on `tireh_memories` (personaId, active, scopeKey, embedding 1536 flat). `firebase.json` untouched. |
+| `docs/implementation/MEMORY_RETRIEVAL_RESULT.md` | Append `## Memory record v2 and bounded retrieval (S06, flags off)`. |
 
-## v2 retrieval (selectMemoriesV2)
+### v2 algorithm (selectMemoriesV2, pure)
 
-1. `visible = memories.filter(inConversation && isMemoryAllowedInChat && !isInvalidated && !isExpired)`, minus any record whose id is another visible record's `supersedes`.
-2. Lexical list: overlap of `tokenize(query)` with the cached feature tokens (`content + ' ' + topic`), overlap desc then id asc.
-3. Vector list (only with `queryEmbedding`): equal-length vectors with cosine >= 0.2, cosine desc then id asc.
-4. `rrf = Σ 1/(60 + rank)`; `relevance = 3 * rrf * 61 / listsUsed`.
-5. `score = relevance + exp(-0.1 * days since (lastRetrievedAt ?? updatedAt)) + importance/10 + aboutAudience + typeBoost(decision 0.5, relationship 0.3) + status(confirmed +0.25, disputed -0.5) - 0.5 * clamp((approxTokens-60)/60)`.
-6. Sort by score desc, updatedAt desc, id asc. Skip equal contentHash or cosine > 0.92 to a kept record.
-7. Take `limit ?? 8`; re-apply `inConversation && isMemoryAllowedInChat` as the final gate.
+1. `audience = audienceOf(chat)`; `gate = m => inConversation(m) && isMemoryAllowedInChat(org, m, chat)`.
+2. Candidates: pass `gate`, and not superseded (`supersededBy`), not invalidated
+   (`invalidatedAt <= now`), not expired (`expiresAt <= now`), and not referenced by another
+   input record's `supersedes`.
+3. Lexical: hashed `tokenize(query)` vs hashed `tokenize(content + ' ' + topic)`;
+   `lex = |q ∩ m| / sqrt(max(1, |m|))`; rank over `lex > 0` (lex desc, updatedAt desc, id asc).
+4. Semantic (only with a non-empty `queryEmbedding`): normal-sensitivity records with an
+   equal-length embedding; rank over `cos > 0`, same tie-breaks.
+5. RRF K = 60; `relevance = rrf / (lists / (K + 1))` in [0, 1].
+6. Score = 4·relevance + exp(−0.1·days since lastRetrievedAt ?? updatedAt) + importance/10 +
+   aboutAudience + typeBoost (decision 0.5, relationship 0.3) + statusBoost (confirmed +0.25,
+   disputed −0.25) + 0.5·confidence − 0.25 when content.length > 210. Sort score desc,
+   updatedAt desc, id asc.
+7. Distractor suppression in rank order: same contentHash, or cosine > 0.92 between
+   same-model, same-version, equal-length embeddings.
+8. `limit = options.limit ?? 8`; slice; re-apply `gate`.
 
-Never mutates or clips content, never writes `lastRetrievedAt` / `retrievalCount`, never logs.
+### Tokenizer
 
-## Tokenizer (v2 only)
+NFKC + lowercase; Arabic-script letter unification (ي ى ئ→ی, ك→ک, ة→ه, أ إ ٱ آ→ا, ؤ→و);
+remove `\p{M}`, tatweel, ZWJ, LRM, RLM, BOM; Persian/Arabic-Indic digits → ASCII; ZWNJ-aware
+prefix/suffix stripping then ZWNJ join; split on `[^\p{L}\p{N}]+`; light stems (ها/های suffix,
+می/نمی prefix, English plural s); length floors; EN and FA stopwords.
 
-NFKC + lowercase; Arabic-script variants folded (ي/ى→ی, ك→ک, ة/ۀ→ه, أ/إ/ٱ/آ→ا, ؤ→و, ئ→ی, Persian and Arabic-Indic digits → ASCII); diacritics U+064B-065F, U+0670, tatweel, LRM/RLM removed; ZWNJ, ZWJ, NBSP are separators; split on `[^\p{L}\p{N}]+`. Digits kept at any length; Arabic-script tokens kept at length >= 2 unless a Persian stopword, with one plural suffix (`هایی`, `های`, `ها`) stripped when length >= 5 and >= 3 letters remain; other tokens kept at length >= 3 unless an English stopword, with a trailing `s` stripped at length >= 5 unless ending in `ss`, `us`, `is`. Deduplicated in first-occurrence order.
+### Cache
+
+`ActiveMemoryCache`: per-persona entries `{revision, fingerprint, expiresAt, features}`;
+fingerprint = sha256 over sorted `id:updatedAtMs`; features hold only `updatedAtMs`, numeric
+FNV-1a term hashes, `termCount`, `contentHash`, optional `embeddingNorm`. LRU 64 personas,
+TTL 10 minutes; `null` above 300 records or with mixed personas.
+
+### Vector candidates
+
+`audienceScopeKeys(org, chat)`: `[]` for guest/unknown audiences; group chat → `group:<id>`;
+private chat → `private:P`, the groups P is in, and (non-guests) projects, companies and
+`org`. People scopes are not enumerable and stay on the in-process path.
+`vectorCandidates(...)` returns `[]` unless `tirehFlags().vectorRetrieval`, the store has
+`findNearest`, the query embedding is non-empty and the scope keys are non-empty; chunks keys
+by 30, limit 40, unions by id, keeps only the persona's non-superseded rows, swallows store
+errors. Candidates only: the caller must union with `listActive` and pass through
+`selectMemories`.
 
 ## Flags
 
-- `TIREH_RETRIEVAL_V2=1` (default off): `selectMemories` without an explicit mode uses v2; default limit 8 only when `limit` is undefined. Anything else gives v1, byte-identical to the base (default limit 20).
-- `TIREH_VECTOR_RETRIEVAL=1` (default off; effective only with `TIREH_RETRIEVAL_V2=1`): `FirestoreMemoryStore.findNearest` and `vectorCandidates` query Firestore; otherwise both return `[]` with no Firestore call.
-- `OPENAI_EMBEDDING_MODEL` (configuration): read only by `createEmbeddingProviderFromEnv`, which nothing calls in this run.
+- `TIREH_RETRIEVAL_V2=1` (default off, read at call time): v2 mode and default limit 8 when
+  limit is undefined. Unset gives the exact base v1 ranking and default limit 20.
+- `TIREH_VECTOR_RETRIEVAL=1` (default off; effective only with `TIREH_RETRIEVAL_V2=1`):
+  `vectorCandidates` may call `store.findNearest`. Not wired.
+- `OPENAI_EMBEDDING_MODEL` (not a flag): read in the provider constructor; default
+  `text-embedding-3-small`. No provider is constructed by runtime code in this run.
+
+## Tests
+
+- `memory-v2-record.test.ts`: defaults view, importance clamping, invalid dates,
+  `contentHash`, `stripEmbeddingUnlessNormal`.
+- `memory-v2-stores.test.ts`: InMemory and file store v2 round-trip, embedding hygiene,
+  legacy shape, tombstones, file-store date revival and lock/reload.
+- `memory-v2-firestore.test.ts`: own fake Firestore with `in`, `findNearest` capture and a
+  FakeVector; vector writes, reads, legacy shape, hygiene, `findNearest`, tombstones.
+- `memory-v2-embeddings.test.ts` (node environment): OpenAI adapter through an injected
+  fetch, fake provider, cosine, `embedMemory`; global fetch never called.
+- `memory-v2-retrieval.test.ts`: tokenizer, v1 byte-identity vs a frozen base copy on 200
+  seeded corpora, flag behaviour, v2 suppression and ranking, immutability, final gate,
+  cache, `audienceScopeKeys`, `vectorCandidates`.
+- `memory-eval/` (org, corpus, questions, metrics, test): ~100 EN/FA questions; recall@8 and
+  leakage == 0 in v1, v2 and v2 + fake embeddings; v2 lexical recall@8 ≥ 0.85 overall,
+  ≥ 0.85 EN, ≥ 0.80 FA; v2 ≥ v1 overall; v2 FA > v1 FA.
+- `negative-identity.test.ts`: scope kind × sensitivity × store × mode matrix for every
+  outsider kind; full gateway pipeline under both flag states; filter-ignoring vector fake;
+  positive controls.
 
 ## Acceptance
 
-- Flags unset: base gateway, prompt, extraction and store behaviour unchanged; `selectMemories` equals the base oracle on 200 seeded fixtures; write payloads without v2 fields equal the base.
-- Lib-scoped tsc exits 0; eslint clean on changed files; full tsc reports only the known `Privacy.tsx(111,6) TS17008`.
-- `add()` and tombstone additions never bump `safetyRevision`.
-- Embeddings are never stored for personal or confidential records; `findNearest` never returns them.
-- Under `TIREH_RETRIEVAL_V2=1` the memory-privacy and visibility suites stay green; default returns <= 8, explicit 30 honoured.
-- Eval reports recall@8 per category, language and mode; leakage 0 in every mode; v2 >= v1@8 overall and per language; FA v2 lexical > FA v1@8; v2 with embeddings >= 0.8.
-- Negative identity: zero rows for every outsider and scope kind in every flag state, with positive controls.
-- No network in tests; no new code logs content, queries, embeddings or keys.
+- Diff lists only the files above plus new tests under `src/lib/tireh/__tests__/`.
+- `flags.ts` sha256 matches the contract.
+- Lib-scoped `tsc` exits 0; full `tsc --noEmit` reports only the known
+  `Privacy.tsx(111,6) TS17008`.
+- `npx vitest run src/lib/tireh src/lib/adaptive/decisions` green; the full suite adds no
+  failing files beyond the documented sandbox baseline.
+- `TIREH_RETRIEVAL_V2=1 npx vitest run memory-privacy, visibility, memory-eval` passes.
+- Eval and negative-identity gates as above; flags-unset byte identity; no embedding ever
+  stored for personal or confidential records; no network; no content in caches or logs.
+- eslint clean on changed files; commits carry the Co-Authored-By trailer; branch not pushed.
 
 ## Out of scope
 
-Step 1 (turn snapshot, revision vector, boundary rework); wiring into `gateway.ts` (query embeddings per turn, `vectorCandidates`, in-process vs findNearest switch); writing v2 fields (Step 5 worker / Step 7 consolidation); space filtering; 60-token clipping (S03); supersede notices, audit decorator and tombstone carry (S08); editing `firebase.json` or deploying the index; real-embedding eval on Vox data (the gate before switching the default); upgrading openai (S15); `visibility.ts` semantics; `Privacy.tsx`.
+Step 1 (turn snapshot, revision vector, boundary/unchanged, Studio.adaptiveContext,
+persistence seams, liveTurn rechecks) and any gateway.ts edit; writing v2 fields at write
+time (Steps 5/7); 60-token clipping and the "## For this turn" rendering (S03); filtering by
+`space` (S08 / Step 1); sharing changes, audit rows and `historyPolicy` (S08); visibility.ts
+semantics; firebase.json and index deployment (documented only); package.json and the openai
+upgrade and the PRIV-009 processor row (S15); L2 cards, context packs, pgvector/Upstash; the
+pre-existing Firestore `clean()` Timestamp mangling in `updateIfShareVersion` (report only).
 
 ## Risks
 
-- The eval is synthetic and the fake embedder is a hashing bag-of-words: the numbers prove pipeline mechanics and Persian tokenisation, not real `text-embedding-3-small` quality on Persian. Do not flip `TIREH_RETRIEVAL_V2` on by default before the eval reruns with real embeddings on consented Vox data.
-- RRF with k=60 compresses relevance differences, so recency, importance and about-audience can reorder relevant records.
-- The default limit drops from 20 to 8 under the flag; gateway tests seeding more than 8 memories may change under the flag. The proactive purpose call also sees fewer memories.
-- The file profile re-parses the whole JSON on every locked call; 1536-float embeddings would make that expensive. Consider reduced dimensions, rounding or a sidecar before a worker writes embeddings there.
-- Without the `clean()` VectorValue guard, spreads of `snapshot.data()` would silently drop vectors from the index.
-- Firestore `in` allows at most 30 values; the vector index requires exactly 1536 dimensions.
-- Embeddings are derived personal data; Studio paths that serialise `MemoryRecord` should strip them before a worker writes embeddings.
-- `ActiveMemoryCache` worst case ~30 MB; it relies on the fingerprint because `add()` does not bump `safetyRevision`. Staleness affects ranking only, never visibility, since the gate runs every call.
-- Persian normalisation is lossy (آ→ا, suffix stripping); ranking only.
-- Merge order puts S06 before S08; the S08 audit decorator must forward the optional store methods.
+- Persian stemming heuristics are validated only on the synthetic eval; the flag stays off
+  until recall is measured on real Vox EN/FA data.
+- `text-embedding-3-small` Persian quality is unmeasured; fake-embedding numbers are
+  report-only.
+- The eval is authored with the ranker (overfitting risk); mitigated by fixture sanity, an
+  independent oracle and the v1 baseline.
+- With the flag on, replies get at most 8 memories instead of 20; extraction keeps 30.
+- Base bug: Firestore `updateIfShareVersion` runs `clean()` over snapshot data and turns
+  Timestamps into plain maps; S06 protects only VectorValues.
+- Lazy `firebase-admin/firestore` import for vector/delete sentinels; tests inject
+  `options.vectorValue`.
+- A missing vector index makes `findNearest` fail with FAILED_PRECONDITION and
+  `vectorCandidates` silently falls back to `[]`.
+- People scopes and sensitive records are never in the vector path; future wiring must union
+  with `listActive`.
+- Hashed term ids in the cache are dictionary-reversible; process memory only, bounded.
+- Merge: S08's audit decorator must forward the optional store methods.
