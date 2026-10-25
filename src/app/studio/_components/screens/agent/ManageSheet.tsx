@@ -15,6 +15,8 @@ export interface ManageSheetProps {
   isSuper: boolean;
   onVisibility: () => void;
   onToggleLiveWeb: () => void;
+  /** Circles S4: this bot's own Main Mini App opens its pet in groups */
+  onToggleMainMiniApp?: () => void;
   /** Opens the Group behaviour sheet */
   onGroupBehavior: () => void;
   onSyncProfile: () => void;
@@ -28,6 +30,13 @@ const PARTICIPATION: ReadonlyArray<GroupBehavior['participation']> = ['mentions'
 export const groupParticipationOptions = (locale: Locale = 'en') =>
   PARTICIPATION.map((value) => ({ value, ...agentCopy[locale].participation[value] }));
 export const GROUP_PARTICIPATION_OPTIONS = groupParticipationOptions('en');
+
+/**
+ * Circles S4 route a: the agent bot's Main Mini App is its own pet page (the same page as its menu button), so a group
+ * launch (`startapp=p_…`) and a plain "Open App" both open the pet, verified with that bot's token. Never /studio:
+ * Studio verifies only the manager bot's initData.
+ */
+const petLink = (agentId: string) => `${typeof window === 'undefined' ? '' : window.location.origin}/studio/pet/${agentId}`;
 
 export const groupBehaviorOf = (agent: AgentView): GroupBehavior => agent.groupBehavior ?? { participation: 'balanced', remember: true };
 export const participationLabel = (b: GroupBehavior, locale: Locale = 'en') =>
@@ -45,7 +54,7 @@ function profileValue(agent: AgentView, c: AgentCopy): string {
  * Manage (···): rows only (UI §4.3). Settings first, then Telegram and access, then admin, and a
  * separate danger group for Fire. Group behaviour has its own sheet.
  */
-export function ManageSheet({ agent, open, onClose, busy, isSuper, onVisibility, onToggleLiveWeb, onGroupBehavior, onSyncProfile, onToggleAdmin, onLook }: ManageSheetProps) {
+export function ManageSheet({ agent, open, onClose, busy, isSuper, onVisibility, onToggleLiveWeb, onToggleMainMiniApp, onGroupBehavior, onSyncProfile, onToggleAdmin, onLook }: ManageSheetProps) {
   const nav = useNav();
   const locale = nav.locale ?? 'en';
   const c = agentCopy[locale];
@@ -61,6 +70,9 @@ export function ManageSheet({ agent, open, onClose, busy, isSuper, onVisibility,
             <Row plain title={c.whoCanTalk(p.name)} value={visibilityLabel(agent, nav.me.org, locale)} chevron onClick={onVisibility} />
             <Switch checked={agent.liveWeb} onChange={onToggleLiveWeb} disabled={busy} label={c.liveWeb}
               sub={c.liveWebSub} />
+            {onToggleMainMiniApp && agent.bot && (
+              <Switch checked={agent.mainMiniApp} onChange={onToggleMainMiniApp} disabled={busy} label={c.mainMiniApp} sub={c.mainMiniAppSub(petLink(agent.id))} />
+            )}
             <Row plain title={c.groupBehaviour} value={`${participationLabel(behavior, locale)}${behavior.remember ? '' : c.noMemory}`} chevron onClick={onGroupBehavior} />
           </div>
         )}

@@ -6,8 +6,9 @@
  */
 
 import type { AgentJoin, CharacterLook, Stage } from '../studio/types';
+import type { CircleDecision, CircleParticipationExport, NoteExport, PetCircle, PetNote } from '../circles/contracts';
 
-export type { CharacterLook, Stage };
+export type { CharacterLook, PetCircle, PetNote, Stage };
 
 /* ---------- needs ---------- */
 
@@ -138,7 +139,16 @@ export interface PetView {
   stageUp?: { from: Stage; to: Stage };
   /** a Bond milestone was crossed since the last visit (0-based index into the six signature fidgets) */
   bondMilestone?: number;
+  /** opened over a group through the manager bot (Circles S4): talk happens in the agent's DM */
+  talkInDm?: true;
 }
+
+/* ---------- the pet over a group (Circles S4): GET circle answers PetCircle ---------- */
+
+/** POST circle/decision: the group card's three choices; `revision` is PetCircle.card.revision, `eventId` makes a double tap one decision. */
+export interface CircleDecisionRequest { code: string; choice: CircleDecision; revision: string; eventId?: string }
+/** GET notes: the requester's own copies; `group` holds the ones saved in the group the code names. */
+export interface PetNotesResponse { mine: PetNote[]; group: PetNote[] }
 
 /** POST /care. `tz` rides in PET_TZ_HEADER. */
 export interface CareRequest {
@@ -183,10 +193,12 @@ export interface TalkVoiceResponse {
  * carries). POST /forget: deletes it all; the next visit meets the pet anew. Anyone whose initData the
  * agent's bot signed may call both, whatever their role, so guests have their own rights path.
  */
-/** agentChoices: the person's agent-card choices with their evidence (Circles), present only when any exist. */
-export interface PetExportResponse { petCare: PetCare[]; agentChoices?: AgentJoin[] }
-/** choicesErased: agent-card choices removed alongside pet care, present only when any were. */
-export interface PetForgetResponse { erased: number; choicesErased?: number }
+/** agentChoices: the person's agent-card choices with their evidence (Circles), present only when any exist.
+ * circles: their own group-circle participation (evidence, membership windows), present only when any exists. */
+/** notes: the requester's own note copies (Circles S3), present only when any exist. */
+export interface PetExportResponse { petCare: PetCare[]; agentChoices?: AgentJoin[]; circles?: CircleParticipationExport[]; notes?: NoteExport[] }
+/** choicesErased / circlesErased / notesErased: agent-card choices, circle rows and own note copies removed alongside pet care, present only when any were. */
+export interface PetForgetResponse { erased: number; choicesErased?: number; circlesErased?: number; notesErased?: number }
 
 export type PetErrorCode =
   | 'authentication_required' // initData missing, stale, or signed by another bot
@@ -197,7 +209,13 @@ export type PetErrorCode =
   | 'json_required'
   | 'invalid_request'
   | 'rate_limited'
-  | 'conversation_failed';
+  | 'conversation_failed'
+  // Circles S4: shown in place by the group sheet, never the end of the pet session
+  | 'circle_unavailable' // Circles off here, no open circle, or a code that names nothing for this agent
+  | 'circle_not_member' // not a present member of that group (nothing about it is shown)
+  | 'circle_full' // 12 people already joined (or too many joins and leaves)
+  | 'circle_stale' // the card changed: reload and choose again
+  | 'circle_failed'; // a store failed under a circle route: try again (never ends the pet)
 
 export interface PetErrorBody { error: PetErrorCode; message?: string }
 /** 403 body for a private agent: enough to draw the character asleep on the "This one's private" screen. */

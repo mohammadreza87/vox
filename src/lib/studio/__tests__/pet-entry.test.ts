@@ -241,4 +241,25 @@ describe('rights export and erasure', () => {
     expect(await h.studio.deps.choices!.listForUser(ID.alice)).toEqual([]);
     expect(await h.studio.deps.choices!.listForUser(ID.bob)).toHaveLength(1);
   });
+
+  it('circle participation (Circles S2): the export carries only the requester\'s rows, and erasure removes only theirs', async () => {
+    const { f, h, request } = await setup();
+    const exportNow = async () => {
+      const row = (await (await request('requests', f.input('access_export'))).json()).request;
+      return (await request(`requests/${row.requestId}/actions?space=work`, { version: 1, eventId: randomUUID(), expectedRevision: row.revision, action: 'prepare_local_export' })).json();
+    };
+    expect(await exportNow()).not.toHaveProperty('circles');
+    const chatId = -100999, ledger = h.studio.deps.circleLedger!;
+    await ledger.open({ chatId, agentId: 'agent-a', openedBy: ID.alice, at: h.clock.now, card: { id: 'gcard', copyHash: 'a'.repeat(64), locale: 'en', noticeVersion: 'circle-v1' } });
+    h.clock.now = new Date(h.clock.now.getTime() + 1000);
+    for (const id of [ID.alice, ID.bob]) {
+      await ledger.index(id, chatId);
+      expect(await ledger.decide(chatId, { telegramId: id, choice: id === ID.alice ? 'joined' : 'declined', cardId: 'gcard', eventId: `cb-${id}`, at: h.clock.now, surface: 'group_card' })).toMatchObject({ ok: true });
+    }
+    const exported = await exportNow();
+    expect(exported.circles).toEqual([expect.objectContaining({ chatId, state: 'joined', windows: [{ joinedAt: h.clock.now.toISOString() }] })]);
+    expect(JSON.stringify(exported.circles)).not.toContain(String(ID.bob));
+    expect((await request('requests', f.input('erasure'))).status).toBe(201);
+    expect((await ledger.get(chatId))!.participants.map((p) => [p.telegramId, p.state])).toEqual([[ID.bob, 'declined']]);
+  });
 });

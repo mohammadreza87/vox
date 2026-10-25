@@ -145,7 +145,7 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
 
     const routing = root === 'catalog' && id === 'route' && !action && method === 'POST';
     if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) await limiter.consume(routing ? 'route' : 'mutation', me.telegramId);
-    const generation = root === 'agents' && method === 'POST' && (!id || ['refine', 'avatars', 'voice', 'speak', 'test', 'call', 'live-call'].includes(action));
+    const generation = root === 'agents' && method === 'POST' && (!id || ['refine', 'avatars', 'voice', 'speak', 'test', 'call', 'live-call', 'channel-draft'].includes(action));
     const voiceSearch = root === 'voices' && method === 'GET';
     if (generation || voiceSearch) await limiter.consume('expensive', me.telegramId);
     if (generation && action === 'avatars') await limiter.consume('avatar', me.telegramId);
@@ -278,6 +278,7 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
             await studio.endLiveCall(me, id, space); return json({ ok: true });
           }
           case 'PUT live-web': return json({ agent: await studio.setLiveWeb(me, id, (await body(req)).on === true) });
+          case 'PUT main-mini-app': return json({ agent: await studio.setMainMiniApp(me, id, (await body(req)).on === true) });
           case 'PUT group-behavior': return json({ agent: await studio.setGroupBehavior(me, id, await body(req)) });
           case 'POST profile-sync': {
             // Retry sends no body and forces every step; the look editor sends { force: false }.
@@ -297,6 +298,16 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
             }) });
           }
           case 'GET group-link': return json({ link: await studio.groupLink(me, id) });
+          // Circles S5 (STUDIO_CIRCLES=circles; otherwise 404): post-only channels.
+          case 'GET channel-link': return json({ link: await studio.channelLink(me, id) });
+          case 'GET channels': return json(await studio.circleChannels.list(me, id));
+          case 'POST channel-draft': return json({ draft: await studio.circleChannels.draft(me, id, str((await body(req)).brief, 2000) ?? '') });
+          case 'POST channel-post': {
+            const b = await body(req), chatId = Number(b.chatId);
+            if (!Number.isSafeInteger(chatId) || chatId === 0) throw new StudioError(400, 'Choose a channel.');
+            return json(await studio.circleChannels.post(me, id, { id: str(b.id, 40) ?? '', chatId, text: str(b.text, 4096) ?? '', silent: b.silent === true }));
+          }
+          case 'POST channel-cancel': { await studio.circleChannels.cancel(me, id, str((await body(req)).id, 40) ?? ''); return json({ ok: true }); }
           // Only name, roleId and skillIds of a fired predecessor: what a successor brief starts from.
           case 'GET successor': return json(await studio.successorTemplate(me, id));
           case 'POST call': {

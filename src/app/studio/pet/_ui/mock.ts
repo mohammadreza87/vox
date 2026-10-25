@@ -8,7 +8,7 @@ import { PRESET_LOOKS } from '@/lib/studio/character';
 import { PetError } from './errors';
 import { applyLocal, openLocal, talkLocal } from './care-local';
 import type { PetApi } from './contract';
-import type { PetCare, PetPrivateView, PetView, Stage, TalkResponse } from '@/lib/pet/types';
+import type { CircleDecisionRequest, PetCare, PetCircle, PetNote, PetPrivateView, PetView, Stage, TalkResponse } from '@/lib/pet/types';
 
 export interface MockOptions {
   /** PRESET_LOOKS index (default 0, the lagoon cloud) */
@@ -61,6 +61,19 @@ export function createMockApi(o: MockOptions = {}): PetApi {
     caps: { hourStart: t0, petJoy: 0, talkJoy: 0, careBond: 0, dayStart: t0 },
   };
   let turn = 0;
+  // Circles S4 demo (`?mock=1&j=<16+ chars>`): a two-person group card and a few notes, in memory.
+  let myState: PetCircle['myState'] = null;
+  let notes: PetNote[] = [
+    { copyId: 'm1-aaaaaaaaaaaa', text: 'We are going to Shiraz in May 🌸', savedAt: new Date(t0 - DAY).toISOString(), groupTitle: 'HOOR family' },
+    { copyId: 'm2-bbbbbbbbbbbb', text: 'Parastoo likes her tea with cardamom.', savedAt: new Date(t0 - 2 * DAY).toISOString(), groupTitle: 'HOOR family', byMe: true },
+    { copyId: 'm3-cccccccccccc', text: 'Water the basil on Sundays.', savedAt: new Date(t0 - 3 * DAY).toISOString(), byMe: true },
+  ];
+  const circle = (): PetCircle => ({
+    chatTitle: 'HOOR family', agents: [NAME], joined: myState === 'joined' ? 2 : 1, total: 2, on: myState === 'joined', myState,
+    ...(myState === 'joined' ? { members: ['Parastoo'] } : {}),
+    card: { copy: { notice: `🐾 ${NAME} can keep notes for this group: only things someone here asks to save. Every member who joins keeps their own copy. Adults (18+) only.`,
+      join: 'Join · 18+', reply: 'Only reply to me', decline: 'Not me' }, copyHash: '0'.repeat(64), revision: 'gmock', locale: 'en' },
+  });
 
   const refuse = () => {
     if (o.role === 'outside') throw new PetError(401, 'authentication_required', 'Open in Telegram');
@@ -117,6 +130,19 @@ export function createMockApi(o: MockOptions = {}): PetApi {
       refuse();
       if (o.role === 'guest') throw new PetError(403, 'guest_talk', 'Guests talk in the DM');
       return { transcript: '(voice note)', ...talkReply('') };
+    },
+    async send<T>(_agentId: string, method: 'GET' | 'POST' | 'DELETE', action: string, body?: unknown, opts?: { signal?: AbortSignal }): Promise<T> {
+      await sleep(o.latency?.care ?? 260, opts?.signal);
+      refuse();
+      const path = action.split('?')[0];
+      let out: unknown;
+      if (path === 'circle') out = circle();
+      else if (path === 'circle/decision') { myState = (body as CircleDecisionRequest).choice; out = circle(); }
+      else if (path === 'circle/leave') { out = { left: myState === 'joined' }; myState = 'withdrawn'; }
+      else if (path === 'notes') out = { mine: notes.filter((n) => !n.groupTitle), group: notes.filter((n) => n.groupTitle) };
+      else if (method === 'DELETE') { const id = decodeURIComponent(path.split('/')[1] ?? ''); out = { erased: notes.some((n) => n.copyId === id) }; notes = notes.filter((n) => n.copyId !== id); }
+      else throw new PetError(404, 'circle_unavailable', 'No circle');
+      return out as T;
     },
     async forget(_agentId, opts) {
       await sleep(o.latency?.care ?? 260, opts?.signal);

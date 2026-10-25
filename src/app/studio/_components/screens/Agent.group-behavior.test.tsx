@@ -6,7 +6,7 @@ import { expectNoRawControls, expectOneVolt } from '../ui.testing';
 import { AgentScreen } from './Agent';
 
 const state = vi.hoisted(() => ({
-  agent: vi.fn(), setGroupBehavior: vi.fn(), groups: vi.fn(), setVisibility: vi.fn(), members: vi.fn(), speak: vi.fn(), setLiveWeb: vi.fn(),
+  agent: vi.fn(), setGroupBehavior: vi.fn(), groups: vi.fn(), setVisibility: vi.fn(), members: vi.fn(), speak: vi.fn(), setLiveWeb: vi.fn(), setMainMiniApp: vi.fn(),
   nav: {
     locale: 'en' as 'en' | 'fa',
     me: { org: 'Fixture team', member: { telegramId: 7777001, role: 'member' } },
@@ -17,7 +17,7 @@ const state = vi.hoisted(() => ({
 vi.mock('../../_lib/client', async importOriginal => {
   const actual = await importOriginal<typeof import('../../_lib/client')>();
   return { ...actual, api: { ...actual.api, agent: state.agent, setGroupBehavior: state.setGroupBehavior, groups: state.groups,
-    setVisibility: state.setVisibility, members: state.members, speak: state.speak, setLiveWeb: state.setLiveWeb } };
+    setVisibility: state.setVisibility, members: state.members, speak: state.speak, setLiveWeb: state.setLiveWeb, setMainMiniApp: state.setMainMiniApp } };
 });
 
 // The character renderer is another stream's work; these tests are about layout and behaviour.
@@ -287,6 +287,21 @@ describe('Agent profile (board agent-profile-forming)', () => {
     expect(fire.parentElement?.children).toHaveLength(1);
     fireEvent.click(fire);
     expect(state.nav.push).toHaveBeenCalledWith({ name: 'fire', id: 'fixture-agent' });
+  });
+
+  it('Circles S4: the owner marks the bot’s own Main Mini App set, so its group cards open the pet directly', async () => {
+    state.setMainMiniApp.mockResolvedValue({ agent: agent({ bot: { username: 'nova_bot' }, mainMiniApp: true }) });
+    const manage = await openManage(agent({ bot: { username: 'nova_bot' }, mainMiniApp: false }));
+    const toggle = manage.getByRole('switch', { name: /^Pet opens in groups/ });
+    expect(toggle).toHaveAttribute('aria-checked', 'false');
+    // Its own pet page (the menu button's), never /studio: Studio verifies only the manager bot's initData.
+    expect(manage.getByText(/Main Mini App in BotFather/)).toHaveTextContent(`to its pet link: ${window.location.origin}/studio/pet/fixture-agent`);
+    await act(async () => { fireEvent.click(toggle); });
+    expect(state.setMainMiniApp).toHaveBeenCalledWith('fixture-agent', true);
+    // No bot yet: nothing to set in BotFather, no switch.
+    cleanup();
+    const bare = await openManage(agent());
+    expect(bare.queryByRole('switch', { name: /^Pet opens in groups/ })).toBeNull();
   });
 
   it('asks before making an agent public, and uses radio rows', async () => {

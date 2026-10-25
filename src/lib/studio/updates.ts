@@ -12,12 +12,14 @@ import { canUseAgent, visibilityOf } from './permissions';
 import type { ChoiceOutcome, Studio } from './service';
 import type { Agent, JoinChoice } from './types';
 import { logTelegramDiagnostic } from '../tireh/telegram/diagnostics';
-import { cardCallback, parseCardCallback, parseStartPayload, type CardAction } from '../circles/codec';
-import { agentCard, choiceReceipt, circleCopy, localeOf } from '../circles/notice';
+import { cardCallback, parseCardCallback, parseNoteCallback, parseStartPayload, type CardAction } from '../circles/codec';
+import { parsePostCallback, parsePostCommand } from '../circles/channels';
+import { agentCard, choiceReceipt, circleCopy, groupCopy, localeOf } from '../circles/notice';
 import { petPageUrl } from '../pet/links';
 import { parseExplicitControl } from '../relationships/policy';
 
 export const MANAGER_UPDATES = ['message', 'managed_bot'];
+/** Never channel_post or edited_channel_post: Vox reads nothing from channels (Circles S5 is post-only). */
 export const AGENT_UPDATES = ['message', 'callback_query', 'my_chat_member', 'chat_member'];
 /** What the stranger decision sees for an untranscribed voice note; never audio or a transcript. */
 export const STRANGER_VOICE_PLACEHOLDER = '(a voice message; it was not listened to)';
@@ -62,6 +64,8 @@ export async function handleManagerUpdate(studio: Studio, update: TelegramUpdate
  *    agent decides in character whether to answer, decline, ignore or block.
  */
 export async function handleAgentUpdate(studio: Studio, agentId: string, update: TelegramUpdate, endpointId?: string): Promise<void> {
+  // Circles S5: a channel admin bot hears every subscriber join and leave; channels are no audience, so nothing is built, deduped or kept for them.
+  if (update.chat_member?.chat.type === 'channel' && studio.circlesMode() === 'circles') return;
   const endpoint = endpointId ? { personaId: agentId, id: endpointId } : undefined;
   const initial = await studio.gateway(endpoint);
   const state = initial.state;
@@ -78,10 +82,26 @@ export async function handleAgentUpdate(studio: Studio, agentId: string, update:
     if (await studio.deps.memory.deduper.firstSeen(`audience:${agentId}:${update.update_id}`)) await studio.onGroupChatMember(update.chat_member);
     return;
   }
-  // Circles card buttons (c*:) are decided here, before the gateway's share/keep callbacks.
-  if (update.callback_query && studio.circlesMode() !== 'off' && parseCardCallback(update.callback_query.data)) {
+  // Circles notes buttons (cs:/cn:/ce:, S3) only while Circles is 'circles'; otherwise they take the paths below as before.
+  if (update.callback_query && studio.circlesMode() === 'circles' && parseNoteCallback(update.callback_query.data)) {
     const token = studio.botToken(live);
-    if (token && await studio.deps.memory.deduper.firstSeen(`${agentId}__${update.update_id}`)) await circleCallback(studio, live, update.callback_query, studio.deps.botFor(token));
+    if (token && await studio.deps.memory.deduper.firstSeen(`${agentId}__${update.update_id}`)) await studio.circleNotes.onCallback(live, update.callback_query, studio.deps.botFor(token));
+    return;
+  }
+  // Circles channel previews (pp/ps/pe/px, S5) only while Circles is 'circles'; otherwise they take the paths below as before.
+  if (update.callback_query && studio.circlesMode() === 'circles' && parsePostCallback(update.callback_query.data)) {
+    const token = studio.botToken(live);
+    if (token && await studio.deps.memory.deduper.firstSeen(`${agentId}__${update.update_id}`)) await studio.circleChannels.onCallback(live, update.callback_query, studio.deps.botFor(token));
+    return;
+  }
+  // Circles card buttons (c*:) are decided here, before the gateway's share/keep callbacks: in a group
+  // by the circle ledger (S2, STUDIO_CIRCLES=circles), in a DM by the agent card's receipts (S1).
+  if (update.callback_query && studio.circlesMode() !== 'off' && parseCardCallback(update.callback_query.data)) {
+    const token = studio.botToken(live), query = update.callback_query, type = query.message?.chat.type;
+    if (token && await studio.deps.memory.deduper.firstSeen(`${agentId}__${update.update_id}`)) {
+      if ((type === 'group' || type === 'supergroup') && studio.circlesMode() === 'circles') await studio.circleGroups.onCardTap(live, query, studio.deps.botFor(token));
+      else await circleCallback(studio, live, query, studio.deps.botFor(token));
+    }
     return;
   }
   const msg = update.message;
@@ -93,9 +113,15 @@ export async function handleAgentUpdate(studio: Studio, agentId: string, update:
 
   if (msg.chat.type === 'group' || msg.chat.type === 'supergroup') {
     if (!state.groups.some((g) => g.chatId === msg.chat.id && g.agentIds.includes(agentId))) return;
+    // Circles S5: a channel post Telegram mirrors into its comments group is the channel's, not a person's: nothing is kept of it.
+    if (msg.is_automatic_forward && studio.circlesMode() === 'circles') return;
     for (const user of msg.new_chat_members ?? []) await studio.noteGroupMembership(msg.chat.id, user, 'member');
     if (msg.left_chat_member) await studio.noteGroupMembership(msg.chat.id, msg.left_chat_member, 'left');
+    // Circles: one silent welcome per newcomer, from the agent that speaks for the circle.
+    if (msg.new_chat_members?.length) await studio.circleGroups.welcome(live, msg.chat.id, msg.new_chat_members);
     await studio.verifyGroupAudience(agentId, msg.chat.id);
+    // Circles: /leave in a circle chat withdraws before anything else sees it.
+    if (await studio.circleGroups.groupCommand(live, msg)) return;
     // Rebuild when the speaker is new to the group so they count in its audience right away.
     await studio.noteGroupSpeaker(msg.chat.id, msg.from);
     ({ gateway } = await studio.gateway(endpoint));
@@ -106,6 +132,16 @@ export async function handleAgentUpdate(studio: Studio, agentId: string, update:
 
   const member = state.members.find((m) => m.telegramId === msg.from!.id);
   if (member && canUseAgent(member, live)) {
+    // Circles: a member's /leave withdraws from the circles where they cover this agent; otherwise today's path.
+    if (studio.circlesMode() === 'circles' && /^\/leave(@\S+)?$/i.test((msg.text ?? '').trim())) {
+      const left = await studio.circleGroups.leaveAll(member.telegramId, agentId, `leave:dm:${agentId}:${update.update_id}`);
+      if (left) { await botOf(studio, live)?.sendMessage(msg.chat.id, groupCopy(localeOf(msg.from!.language_code)).leftGroups(left)); return; }
+    }
+    // Circles S5: /post and replies to its Edit prompt, before anything else sees them.
+    if (studio.circlesMode() === 'circles' && (parsePostCommand(msg.text) || msg.reply_to_message)) {
+      const bot = botOf(studio, live), key = `channels:${agentId}:${update.update_id}`;
+      if (bot && (await studio.circleChannels.command(live, member, msg, bot, key) || await studio.circleChannels.editReply(live, member, msg, bot, key))) return;
+    }
     noteRequestedRoutineActivity(studio, agentId, msg);
     if (await handleRequestedRoutineMessage(studio, agentId, msg, endpointId)) return;
     const turnId = createHash('sha256').update(JSON.stringify([agentId, endpointId ?? '', update.update_id])).digest('hex');
@@ -189,8 +225,11 @@ async function circleDirect(studio: Studio, live: Agent, msg: TelegramMessage, u
   const [head = '', payload] = text.trim().split(/\s+/);
   const command = text.startsWith('/') ? head.split('@')[0].toLowerCase() : '';
   if (command === '/leave') {
-    const had = await studio.withdrawAgentChoice(live.id, from.id);
-    if (!(live.blocked ?? []).includes(from.id)) await bot.sendMessage(msg.chat.id, had ? copy.left(live.persona.name) : copy.notChosen);
+    // Out of this agent's circles first (commit, then invalidation), then the choice, then the acknowledgement.
+    const circles = await studio.circleGroups.leaveAll(from.id, live.id, `leave:dm:${live.id}:${update.update_id}`);
+    const had = await studio.withdrawAgentChoice(live.id, from.id), group = groupCopy(localeOf(from.language_code));
+    const said = had ? copy.left(live.persona.name) + (circles ? ` ${group.leftCircles(circles)}` : '') : circles ? group.leftGroups(circles) : copy.notChosen;
+    if (!(live.blocked ?? []).includes(from.id)) await bot.sendMessage(msg.chat.id, said);
     return;
   }
   const choice = (await studio.agentChoice(live.id, from.id))?.choice;
@@ -205,14 +244,24 @@ async function circleDirect(studio: Studio, live: Agent, msg: TelegramMessage, u
     const start = parseStartPayload(payload);
     const group = start?.kind === 'join' ? await joinLinkGroup(studio, live, bot, start.code, from.id) : undefined;
     if (start?.kind === 'join' && group === undefined) await bot.sendMessage(msg.chat.id, copy.notInGroup);
-    else await sendAgentCard(studio, live, bot, msg.chat.id, from, choice, group);
+    else await sendAgentCard(studio, live, bot, msg.chat.id, from, choice, group, group === undefined ? undefined : start!.code);
     return;
   }
   if (!choice) {
     await sendAgentCard(studio, live, bot, msg.chat.id, from);
     return;
   }
-  if (CONTROL_COMMANDS.has(command) || (!command && parseExplicitControl(text))) {
+  // Circles notes (S3): /notes, /forget <n> and "remember this" go to the gateway's notes path, never the stranger decision.
+  if (studio.circleNotes.wants(live, text)) {
+    const { gateway } = await studio.gateway(endpoint);
+    await gateway.handleUpdate(live.id, update);
+    return;
+  }
+  const control = command ? undefined : parseExplicitControl(text);
+  if (CONTROL_COMMANDS.has(command) || control) {
+    // Circles notes (S3): the notes they saved are what this agent keeps of them; "nothing kept" only while they hold none.
+    const kind = command === '/memories' ? 'memories' : command === '/forgetall' || control === 'forget' ? 'forget' : 'other';
+    if (await studio.circleNotes.outsiderControl(live, msg, kind)) return;
     await bot.sendMessage(msg.chat.id, copy.nothingKept);
     return;
   }
@@ -232,9 +281,12 @@ async function circleDirect(studio: Studio, live: Agent, msg: TelegramMessage, u
   }
 }
 
-/** The card is recorded (receipt) before it is sent, so its buttons answer only this person. */
-async function sendAgentCard(studio: Studio, live: Agent, bot: TelegramBotClient, chatId: number, from: TelegramUser, current?: JoinChoice, group?: number): Promise<void> {
-  const pet = petPageUrl(studio.deps.webAppUrl, live.id);
+/**
+ * The card is recorded (receipt) before it is sent, so its buttons answer only this person. From a group's j_ link
+ * (membership checked) the pet button carries `?j=<joinCode>`, so the pet offers that group's choices (S4).
+ */
+async function sendAgentCard(studio: Studio, live: Agent, bot: TelegramBotClient, chatId: number, from: TelegramUser, current?: JoinChoice, group?: number, joinCode?: string): Promise<void> {
+  const page = petPageUrl(studio.deps.webAppUrl, live.id), pet = page && joinCode ? `${page}?j=${joinCode}` : page;
   const card = agentCard(live.persona.name, localeOf(from.language_code), current, !!pet);
   const receipt = await studio.presentAgentCard(live.id, from.id, card, group);
   const keyboard: InlineKeyboard = { inline_keyboard: [
@@ -270,6 +322,11 @@ async function circleCallback(studio: Studio, live: Agent, query: TelegramCallba
   const pet = choice === 'declined' ? null : petPageUrl(studio.deps.webAppUrl, live.id);
   await bot.editMessageText(query.message.chat.id, query.message.message_id, said,
     pet ? { inline_keyboard: [[{ text: circleCopy(locale).open(live.persona.name).slice(0, 64), web_app: { url: pet } }]] } : undefined).catch(() => undefined);
+}
+
+function botOf(studio: Studio, agent: Agent): TelegramBotClient | null {
+  const token = studio.botToken(agent);
+  return token ? studio.deps.botFor(token) : null;
 }
 
 /** Per-bot webhook secret, derived so nothing extra needs storing. */

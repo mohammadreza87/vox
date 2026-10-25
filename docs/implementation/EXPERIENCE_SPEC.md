@@ -193,7 +193,7 @@ A suggestion uses UX-13 as an inline card with **Use shorter replies** / **Keep 
 
 ## 5. Shared EN/FA interaction copy and accessibility
 
-Use privacy document UX-01 through UX-11 and UX-13 through UX-15 as the long-copy authority. The table adds short labels/recovery copy; both languages must map to identical stable message keys and placeholder sets. Placeholders resolve to verified facts and localized plural/date/retention text. These are draft translations, not publication approval.
+Use privacy document UX-01 through UX-11 and UX-13 through UX-17 as the long-copy authority. The table adds short labels/recovery copy; both languages must map to identical stable message keys and placeholder sets. Placeholders resolve to verified facts and localized plural/date/retention text. These are draft translations, not publication approval.
 
 | Key / intent | English | فارسی |
 |---|---|---|

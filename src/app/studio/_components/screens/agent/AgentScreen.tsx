@@ -285,6 +285,7 @@ export function AgentScreen({ id, from }: { id: string; /** The route this profi
 
       <ManageSheet agent={agent} open={sheet === 'manage'} onClose={() => setSheet(null)} busy={busy} isSuper={isSuper}
         onVisibility={openVisibility} onToggleLiveWeb={() => void write(() => api.setLiveWeb(agent.id, !agent.liveWeb))}
+        onToggleMainMiniApp={() => void write(() => api.setMainMiniApp(agent.id, !agent.mainMiniApp))}
         onGroupBehavior={() => setSheet('group')} onSyncProfile={syncProfile} onToggleAdmin={toggleAdmin}
         onLook={canLook ? () => setSheet('look') : undefined} />
       <GroupBehaviorSheet agent={agent} open={sheet === 'group'} onClose={() => setSheet(null)} busy={busy} onChange={updateGroupBehavior} />

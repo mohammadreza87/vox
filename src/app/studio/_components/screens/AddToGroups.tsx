@@ -2,8 +2,8 @@
 
 import { AnimatePresence, motion } from 'framer-motion';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { addGroupsCopy } from '../../_lib/agents-copy';
-import { api, haptic, openTelegram, tg, type AgentView, type GroupItem } from '../../_lib/client';
+import { addGroupsCopy, channelsCopy } from '../../_lib/agents-copy';
+import { api, haptic, openTelegram, tg, type AgentView, type ChannelsView, type GroupItem } from '../../_lib/client';
 import { SPRING, T } from '../../_lib/motion';
 import { Cloud, PALETTE, type CloudMoment } from '../Cloud';
 import { errorMessage, useNav } from '../StudioApp';
@@ -25,6 +25,7 @@ export function AddToGroupsScreen({ id }: { id: string }) {
   const nav = useNav();
   const locale = nav.locale ?? 'en';
   const c = addGroupsCopy[locale];
+  const cc = channelsCopy[locale];
   const [agent, setAgent] = useState<AgentView | null>(() => nav.cache?.get(id) ?? null);
   const [groups, setGroups] = useState<GroupItem[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -32,6 +33,8 @@ export function AddToGroupsScreen({ id }: { id: string }) {
   const [joined, setJoined] = useState<Set<number>>(() => new Set());
   const [opening, setOpening] = useState(false);
   const [moment, setMoment] = useState<CloudMoment | null>(null);
+  /** Circles S5: null while Circles is off (the endpoint answers 404) or before it loads. */
+  const [channels, setChannels] = useState<ChannelsView | null>(null);
   const link = useRef<string | null>(null);
   const before = useRef<Set<number> | null>(null);
 
@@ -52,6 +55,11 @@ export function AddToGroupsScreen({ id }: { id: string }) {
     } catch (e) { setLoadError(errorMessage(e)); return null; }
   }, []);
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    let off = false;
+    void Promise.resolve().then(() => api.channels(id)).then((r) => { if (!off) setChannels(r); }, () => undefined);
+    return () => { off = true; };
+  }, [id]);
 
   // Back from Telegram: see what changed since we opened the picker.
   const recheck = useCallback(async () => {
@@ -152,6 +160,19 @@ export function AddToGroupsScreen({ id }: { id: string }) {
                     sub={c.opensPicker} disabled={opening} onClick={() => void pick('other')}
                     end={asked === 'other' ? <Spinner size={16} /> : undefined} chevron={asked !== 'other'} />
                 </div>
+                {/* Circles S5: Add to a channel next to Add to group (people who can manage the agent), and the post screen. */}
+                {channels?.link && (
+                  <div className="vx-li">
+                    <Row size="l" plain lead={<span className="vx-tile icon" aria-hidden="true"><Icon name="telegram" size={20} /></span>}
+                      title={cc.addChannel} sub={cc.addChannelSub} chevron onClick={() => { haptic.tap(); openTelegram(channels.link!); }} />
+                  </div>
+                )}
+                {!!channels?.channels.length && (
+                  <div className="vx-li">
+                    <Row size="l" plain lead={<span className="vx-tile icon" aria-hidden="true"><Icon name="edit" size={20} /></span>}
+                      title={cc.post} sub={cc.count(channels.channels.length)} chevron onClick={() => nav.push({ name: 'channels', id: agent.id })} />
+                  </div>
+                )}
               </div>
             </section>
             {guests && (

@@ -211,6 +211,11 @@ export interface Agent {
   identityVersion: number;
   /** Searches the web for live information when it helps (missing = on) */
   liveWeb?: boolean;
+  /**
+   * Circles S4: the owner set this bot's Main Mini App in BotFather, so its group cards open the pet with
+   * `t.me/<bot>?startapp=` (verified with this agent's token). Missing = the manager bot's route, or the DM hop.
+   */
+  mainMiniApp?: boolean;
   groupBehavior?: GroupBehavior;
   successorOf?: string;
   firedAt?: string;

@@ -48,6 +48,14 @@ import { StudioExperimentRuntime } from '../adaptive/experiments/runtime';
  *   STUDIO_ORG_NAME          default HOOR
  *   STUDIO_CIRCLES           off (default) | reply: agent cards and reply-only DMs for outsiders of
  *                            public agents (S1) | circles: full. Read per use: the kill switch
+ *   STUDIO_CIRCLE_CHATS      comma-separated group chat ids where circles may open (pilot allowlist;
+ *                            S2 cards, in-group Join, N of M). Read per use; unset = none
+ *   STUDIO_NOTE_SELECTOR     explicit (default): notes are proposed only for an explicit "remember
+ *                            this" (S3) | decisions: a disabled placeholder that proposes nothing
+ *   STUDIO_MAIN_APP_BOT      the manager bot's username, set once its Main Mini App points at STUDIO_WEBAPP_URL
+ *                            in BotFather (S4): group cards then open each person's pet over the group
+ *                            (t.me/<bot>?startapp=p_…). Read per use; needs STUDIO_CIRCLES=circles; must name
+ *                            the VOXX_BOT_TOKEN bot (else ignored); unset = the S2 DM hop
  *
  * Voiceprints (S11L, shadow mode; docs/implementation/VOICE_PROVIDER_INTEGRATION.md):
  *   STUDIO_VOICE_RECOGNITION=1  voiceprint enrollment and shadow verification; capability
@@ -106,6 +114,12 @@ import { createStudioReminderDelivery } from './reminder-delivery';
 import { digest } from '../adaptive/persistence/repository';
 import { parseCirclesMode } from '../circles/codec';
 import { FileAgentChoiceStore, FirestoreAgentChoiceStore } from '../circles/choice-store';
+import { parseCircleChats } from '../circles/codec';
+import { CircleRepository, CIRCLE_COLLECTION } from '../circles/repository';
+import { CircleService } from '../circles/service';
+import { CircleNotes, NotesRepository, NOTES_COLLECTION } from '../circles/notes';
+import { ChannelDrafts, CHANNEL_DRAFT_COLLECTION } from '../circles/channels';
+import { parseNoteSelector } from '../circles/note-selector';
 
 /** Internal availability is bound to current committed company roles, never a
  * bootstrap/environment list. Unsupported distributed synchronous reads deny. */
@@ -252,11 +266,14 @@ export function stopStudioPreferenceLearning(): Promise<{ pending: number }> {
   return g.__voxPreferenceStop = g.__voxPreferenceTasks?.tasks.close() ?? Promise.resolve({ pending: 0 });
 }
 
-type RuntimeStorage = Pick<StudioDeps, 'store' | 'pets' | 'choices' | 'memory' | 'rateLimiter' | 'adaptive' | 'relationshipStore' | 'observations' | 'revisions'> & { sharedStorage: AdaptiveStorage; voiceIdentityStorage: AdaptiveStorage; maintenanceStorage: AdaptiveStorage; closeAdaptive?: () => void };
+type RuntimeStorage = Pick<StudioDeps, 'store' | 'pets' | 'choices' | 'circleLedger' | 'notesLedger' | 'channelDrafts' | 'memory' | 'rateLimiter' | 'adaptive' | 'relationshipStore' | 'observations' | 'revisions'> & { sharedStorage: AdaptiveStorage; voiceIdentityStorage: AdaptiveStorage; maintenanceStorage: AdaptiveStorage; closeAdaptive?: () => void };
 function fileStorage(dir: string, scopedRelationshipsEnabled: boolean, format: AdaptiveStorageFormat): RuntimeStorage {
   const managed = openLocalAdaptiveStorage(join(dir, 'adaptive'), format);
   try { const store = new StudioStore(dir);
-    return { store, pets: new FilePetStore(join(dir, 'pets')), choices: new FileAgentChoiceStore(join(dir, 'circles')), memory: createFileStores(join(dir, 'memory.json')),
+    return { store, pets: new FilePetStore(join(dir, 'pets')), choices: new FileAgentChoiceStore(join(dir, 'circles')),
+    circleLedger: new CircleService(new CircleRepository(new FileAdaptiveStorage(join(dir, 'circles', 'ledger')))),
+    notesLedger: new CircleNotes(new NotesRepository(new FileAdaptiveStorage(join(dir, 'circles', 'notes')))),
+    channelDrafts: new ChannelDrafts(new FileAdaptiveStorage(join(dir, 'circles', 'channel-drafts'))), memory: createFileStores(join(dir, 'memory.json')),
     relationshipStore: new FileRelationshipStore(join(dir, 'scoped-relationships-v1.json')), observations: new FileObservationStore(join(dir, 'scoped-relationship-observations-v1.json')),
     adaptive: new AdaptiveService(new AdaptiveRepository(managed.storage),
       { ...adaptiveOptionsFromManifest(process.env.STUDIO_ADAPTIVE_POLICY_JSON, internalPilotAuthority(store)), scopedRelationshipsEnabled, voiceRecognitionEnabled: process.env.STUDIO_VOICE_RECOGNITION === '1' }),
@@ -276,6 +293,9 @@ async function firestoreStorage(bucketName: string, scopedRelationshipsEnabled: 
     store,
     pets: new FirestorePetStore(db),
     choices: new FirestoreAgentChoiceStore(db),
+    circleLedger: new CircleService(new CircleRepository(new FirestoreAdaptiveStorage(db, CIRCLE_COLLECTION))),
+    notesLedger: new CircleNotes(new NotesRepository(new FirestoreAdaptiveStorage(db, NOTES_COLLECTION))),
+    channelDrafts: new ChannelDrafts(new FirestoreAdaptiveStorage(db, CHANNEL_DRAFT_COLLECTION)),
     adaptive: new AdaptiveService(new AdaptiveRepository(new FirestoreAdaptiveStorage(db)),
       { ...adaptiveOptionsFromManifest(process.env.STUDIO_ADAPTIVE_POLICY_JSON, internalPilotAuthority(store)), scopedRelationshipsEnabled, voiceRecognitionEnabled: process.env.STUDIO_VOICE_RECOGNITION === '1' }),
     sharedStorage: new FirestoreAdaptiveStorage(db, 'adaptiveSharedMemory'),
@@ -329,6 +349,9 @@ async function create(): Promise<Studio> {
       // petStoreFor's instanceof checks fail on a Studio built by instrumentation.
       pets: storage.pets,
       choices: storage.choices,
+      circleLedger: storage.circleLedger,
+      notesLedger: storage.notesLedger,
+      channelDrafts: storage.channelDrafts,
       personaLLM: new AnthropicLLM(env.ANTHROPIC_API_KEY!, env.STUDIO_PERSONA_MODEL || 'claude-sonnet-5-5'),
       chatLLM: chatLLM(env),
       fastLLM: new AnthropicLLM(env.ANTHROPIC_API_KEY!, env.STUDIO_VOICE_MODEL || 'claude-haiku-5-5'),
@@ -352,6 +375,9 @@ async function create(): Promise<Studio> {
       // Content-free per-stage timings for a latency baseline (scripts/stage-timings.ts).
       stageTimings: env.STUDIO_STAGE_TIMINGS === '1',
       circles: () => parseCirclesMode(process.env.STUDIO_CIRCLES),
+      circleChats: () => parseCircleChats(process.env.STUDIO_CIRCLE_CHATS),
+      noteSelector: () => parseNoteSelector(process.env.STUDIO_NOTE_SELECTOR),
+      mainAppBot: () => process.env.STUDIO_MAIN_APP_BOT,
       rateLimiter: storage.rateLimiter,
       imageToJpeg: toJpeg,
       // The portrait edit reference; STUDIO_PORTRAITS=text skips it (PLAN §7 A/B gate).

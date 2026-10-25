@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cardCallback, MAX_CALLBACK_BYTES, newJoinCode, parseCardCallback, parseCirclesMode, parseStartPayload, receiptIdFor, receiptOwner, startPayload } from '../codec';
+import { agentShortCode, cardCallback, circleJoinUrl, MAX_CALLBACK_BYTES, newJoinCode, parseCardCallback, parseCirclesMode, parsePetLaunch, parseStartPayload, petLaunchCode, receiptIdFor, receiptOwner, sameShort, startPayload } from '../codec';
 import { agentCard, AGENT_NOTICE, choiceReceipt, copyHash, localeOf } from '../notice';
 
 describe('circles codec', () => {
@@ -56,5 +56,34 @@ describe('agent card notice', () => {
       expect(choiceReceipt('Cookie', choice, locale).length).toBeLessThanOrEqual(200);
     }
     expect([localeOf('fa'), localeOf('fa-IR'), localeOf('en'), localeOf(undefined), localeOf('far')]).toEqual(['fa', 'fa', 'en', 'en', 'en']);
+  });
+});
+
+describe('S4 pet launch codes and the group card link', () => {
+  const SECRET = 'a-secret-that-is-at-least-32-characters-long';
+  it('a launch code is p_<8-char opaque short>_<joinCode>, at most 64 chars of [A-Za-z0-9_-], and parses back', () => {
+    const short = agentShortCode(SECRET, 'ag0123456789'), join = newJoinCode();
+    expect(short).toMatch(/^[A-Za-z0-9_-]{8}$/);
+    expect(short).not.toContain('ag0123');
+    expect(agentShortCode(SECRET, 'ag0123456789')).toBe(short);
+    expect(agentShortCode(SECRET, 'ag0123456788')).not.toBe(short);
+    expect(agentShortCode(`${SECRET}x`, 'ag0123456789')).not.toBe(short);
+    const code = petLaunchCode(short, join);
+    expect(code).toMatch(/^[A-Za-z0-9_-]{1,64}$/);
+    expect(code.length).toBeLessThanOrEqual(64);
+    expect(parsePetLaunch(code)).toEqual({ short, joinCode: join });
+    // A short or join code holding '_' still splits on the fixed width.
+    expect(parsePetLaunch('p_ab_cd_ef_ghijklmnopqrstuvwxyz0123')).toEqual({ short: 'ab_cd_ef', joinCode: 'ghijklmnopqrstuvwxyz0123' });
+    for (const bad of ['', 'p_', 'p_short_x', `p_${short}_${'a'.repeat(54)}`, `j_${join}`, `p_${short}_${join}!`]) expect(parsePetLaunch(bad)).toBeNull();
+    expect(() => petLaunchCode('short', join)).toThrow('invalid_launch_code');
+    expect(sameShort(short, short)).toBe(true);
+    expect(sameShort(short, `${short}x`)).toBe(false);
+  });
+
+  it('circleJoinUrl: a launch route opens the Main Mini App; none keeps the S2 DM hop exactly', () => {
+    const join = 'abcdefghijklmnopqrstuv';
+    expect(circleJoinUrl('cookie_bot', join)).toBe('https://t.me/cookie_bot?start=j_abcdefghijklmnopqrstuv');
+    expect(circleJoinUrl('cookie_bot', join, { bot: 'VoxxBot', short: 'AbCdEf12' })).toBe('https://t.me/VoxxBot?startapp=p_AbCdEf12_abcdefghijklmnopqrstuv');
+    expect(circleJoinUrl('cookie_bot', join, { bot: 'cookie_bot', short: 'AbCdEf12' })).toBe('https://t.me/cookie_bot?startapp=p_AbCdEf12_abcdefghijklmnopqrstuv');
   });
 });
