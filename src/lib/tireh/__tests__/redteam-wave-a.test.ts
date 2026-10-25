@@ -234,6 +234,8 @@ describe('red team: decision log, audit rows and notices carry no content', () =
       llm.nextExtraction = { memories: [{ content: CONTENT2, type: 'fact', kind: 'work', topic: TOPIC, saidBy: 'reza', about: ['reza'], confidence: 0.9 }] };
       expect(await gateway.handleUpdate('aria', privateText(TG.reza, CORRECTION))).toBe('replied');
 
+      // The notice as recorded, before the forget erases it (fixer r1: a deleted memory leaves no notice naming it).
+      const recordedNoticeBytes = existsSync(paths.notices) ? readFileSync(paths.notices, 'utf8') : '';
       for (const m of await memories.listActive('aria')) await gateway.forgetMemory('aria', m.id);
       await sink.flush();
 
@@ -245,10 +247,11 @@ describe('red team: decision log, audit rows and notices carry no content', () =
       expect(decisionBytes).toContain('"questionSetVersion":"v2"');
       expect(decisionBytes).toContain('personal_life');
       for (const kind of ['"write"', '"share_approve"', '"supersede"', '"delete"']) expect(auditBytes).toContain(kind);
-      expect(noticeBytes).toContain('parastoo');
+      expect(recordedNoticeBytes).toContain('parastoo');
+      expect(noticeBytes, 'the forget erased the notice').not.toContain('parastoo');
 
       const logged = JSON.stringify([logger.info.mock.calls, logger.warn.mock.calls, logger.error.mock.calls]);
-      for (const [label, bytes] of [['decision log', decisionBytes], ['audit', auditBytes], ['notices', noticeBytes], ['logger', logged]] as const) {
+      for (const [label, bytes] of [['decision log', decisionBytes], ['audit', auditBytes], ['notices', recordedNoticeBytes], ['logger', logged]] as const) {
         for (const forbidden of FORBIDDEN) expect(bytes, `${label} contains ${forbidden}`).not.toContain(forbidden);
       }
     } finally {

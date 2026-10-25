@@ -13,8 +13,8 @@
  *  - TODO(consent ledger): `consent_change`, the adaptive persistence path is owned elsewhere;
  *  - TODO(S10L): `identity_change`.
  *
- * TODO(S08 follow-up): no scheduler calls `sweep()` yet; wire it into the
- * maintenance runner with `auditCutoff(now)`.
+ * Retention: runtime.ts wraps the configured store in withAuditRetention, so
+ * appends run `sweep(auditCutoff(now))` at most once a day, best effort.
  */
 
 import { createHash, randomUUID } from 'crypto';
@@ -158,5 +158,33 @@ export function createFileAuditStore(path: string): AuditStore {
       await rename(`${path}.tmp`, path);
       return removed;
     }),
+  };
+}
+
+export const AUDIT_SWEEP_EVERY_MS = 86_400_000;
+
+/**
+ * The 12-month retention, scheduled: the first append and then at most one
+ * append per `sweepEveryMs` also start `sweep(auditCutoff(now))`. The sweep is
+ * best effort and never delays or fails the append; `flush()` awaits it (tests).
+ */
+export function withAuditRetention(store: AuditStore, options: { now?: () => Date; sweepEveryMs?: number } = {}): AuditStore & { flush(): Promise<void> } {
+  const now = options.now ?? (() => new Date());
+  const every = options.sweepEveryMs ?? AUDIT_SWEEP_EVERY_MS;
+  let lastSweep = -Infinity;
+  let pending: Promise<unknown> = Promise.resolve();
+  return {
+    async append(row) {
+      const stored = await store.append(row);
+      const at = now();
+      if (at.getTime() - lastSweep >= every) {
+        lastSweep = at.getTime();
+        pending = Promise.resolve().then(() => store.sweep(auditCutoff(at))).catch(() => undefined);
+      }
+      return stored;
+    },
+    list: (filter) => store.list(filter),
+    sweep: (cutoff) => store.sweep(cutoff),
+    async flush() { await pending; },
   };
 }

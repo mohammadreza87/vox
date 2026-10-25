@@ -158,8 +158,11 @@ export function auditMemoryStore(inner: MemoryStore, audit: AuditStore, notices?
     },
 
     async delete(...args: Parameters<MemoryStore['delete']>) {
-      if (!tirehFlags().auditLog) return target.delete(...args);
       const [id] = args;
+      // Erasure: a deleted memory leaves no supersede notice naming it, whatever the flags are now
+      // (notices recorded while TIREH_SHARING_V2 was on must still go). Never a read of the memory store.
+      const eraseNotices = () => notices ? bestEffort(() => notices.deleteByMemoryIds([id])) : undefined;
+      if (!tirehFlags().auditLog) { await target.delete(...args); await eraseNotices(); return; }
       const before = await safeGet(target, id);
       let failure: { error: unknown } | null = null;
       try { await target.delete(...args); } catch (error) { failure = { error }; }
@@ -169,6 +172,7 @@ export function auditMemoryStore(inner: MemoryStore, audit: AuditStore, notices?
           policyKey: memoryPolicyKey(before), outcome: failure ? errorOutcome(failure.error) : 'applied', at: new Date() });
       }
       if (failure) throw failure.error;
+      await eraseNotices();
     },
   };
 

@@ -221,7 +221,8 @@ describe('failure isolation', () => {
   it('a rejecting audit store, a rejecting notice store or an invalid row never changes a memory result', async () => {
     const expected = await scenario(new InMemoryMemoryStore(), new InMemoryShareOfferStore());
     const broken: AuditStore = { append: async () => { throw new Error('audit down'); }, list: async () => [], sweep: async () => 0 };
-    const brokenNotices = { record: async () => { throw new Error('notices down'); }, listFor: async () => [] };
+    const brokenNotices = { record: async () => { throw new Error('notices down'); }, listFor: async () => [],
+      deleteByMemoryIds: async () => { throw new Error('notices down'); }, deleteForPerson: async () => { throw new Error('notices down'); } };
     expect(await scenario(auditMemoryStore(new InMemoryMemoryStore(), broken, brokenNotices), auditShareOfferStore(new InMemoryShareOfferStore(), broken))).toEqual(expected);
 
     // Ids with whitespace make every row invalid; the strict schema rejects them inside append.
@@ -247,16 +248,19 @@ describe('content-free canary', () => {
     const correction = await store.add(newMemory({ supersedes: record.id }));
     await store.update(correction.id, { content: `${CANARY} again`, topic: TOPIC });
     await store.addIfEpoch(newMemory(), 0);
+    // The notice as recorded; deleting the correction then erases it (fixer r1).
+    const recorded = JSON.stringify(notices.notices);
+    expect(notices.notices).toHaveLength(1);
     await store.delete(correction.id);
-    return notices;
+    expect(notices.notices).toHaveLength(0);
+    return recorded;
   };
 
   it('never puts content or topics in rows, notices or the JSONL file', async () => {
     const audit = new InMemoryAuditStore();
     const notices = await everyPath(audit);
     expect(audit.rows.length).toBeGreaterThanOrEqual(7);
-    expect(notices.notices).toHaveLength(1);
-    for (const text of [JSON.stringify(audit.rows), JSON.stringify(notices.notices)]) {
+    for (const text of [JSON.stringify(audit.rows), notices]) {
       expect(text).not.toContain(CANARY);
       expect(text).not.toContain(TOPIC);
       expect(text).not.toContain('Reza likes');
@@ -278,6 +282,26 @@ describe('TIREH_SHARING_V2=1 supersede notices', () => {
     vi.stubEnv('TIREH_AUDIT_LOG', '');
     notices = new InMemorySupersededNoticeStore();
     store = auditMemoryStore(new InMemoryMemoryStore(), new InMemoryAuditStore(), notices);
+  });
+
+  it('deleting either memory of a notice erases the notice; an unrelated delete leaves it', async () => {
+    const shared = await store.add(peopleShared());
+    const next = await store.add(newMemory({ supersedes: shared.id }));
+    const other = await store.add(newMemory());
+    await store.delete(other.id);
+    expect(notices.notices).toHaveLength(1);
+    await store.delete(next.id);
+    expect(notices.notices).toEqual([]);
+  });
+
+  it('a failed delete keeps the notice', async () => {
+    const inner = new InMemoryMemoryStore();
+    const failing = auditMemoryStore(inner, new InMemoryAuditStore(), notices);
+    const shared = await failing.add(peopleShared());
+    const next = await failing.add(newMemory({ supersedes: shared.id }));
+    vi.spyOn(inner, 'delete').mockRejectedValueOnce(new Error('store down'));
+    await expect(failing.delete(next.id)).rejects.toThrow('store down');
+    expect(notices.notices).toHaveLength(1);
   });
 
   it('a people-scoped correction by the owner notifies the other recipients', async () => {

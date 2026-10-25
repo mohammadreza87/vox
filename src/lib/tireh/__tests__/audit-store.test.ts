@@ -9,7 +9,7 @@ import { join } from 'path';
 import { describe, expect, it } from 'vitest';
 import type { Firestore } from 'firebase-admin/firestore';
 import {
-  AUDIT_RETENTION_DAYS, auditCutoff, chatKeyHash, createFileAuditStore, createFileSupersededNoticeStore, FirestoreAuditStore,
+  AUDIT_RETENTION_DAYS, AUDIT_SWEEP_EVERY_MS, auditCutoff, withAuditRetention, chatKeyHash, createFileAuditStore, createFileSupersededNoticeStore, FirestoreAuditStore,
   FirestoreSupersededNoticeStore, InMemoryAuditStore, InMemorySupersededNoticeStore, memoryPolicyKey, newAuditRowSchema, normalizeAuditRow,
   POLICY_KEY_PATTERN, type AuditStore, type NewAuditRow, type SupersededNoticeStore,
 } from '../audit';
@@ -40,6 +40,8 @@ function fakeFirestore() {
     switch (op) {
       case '==': return doc[field] === value;
       case '<': return time(doc[field]) < time(value);
+      case '>=': return time(doc[field]) >= time(value);
+      case 'array-contains': return Array.isArray(doc[field]) && (doc[field] as unknown[]).includes(value);
       default: throw new Error(`unsupported op ${op}`);
     }
   };
@@ -234,6 +236,43 @@ async function exerciseNotices(store: SupersededNoticeStore) {
   await expect(store.record({ ...base, recipientPersonIds: ['x'], at: new Date(), content: CANARY } as never)).rejects.toThrow();
 }
 
+/** Erasure: by memory id (old or new) and by person (owner or any recipient); nothing else goes. */
+async function exerciseNoticeErasure(store: SupersededNoticeStore, count: () => Promise<number>) {
+  const at = T('2026-10-19T00:00:00Z');
+  await store.record({ personaId: 'aria', oldMemoryId: 'a-old', newMemoryId: 'a-new', ownerPersonId: 'reza', recipientPersonIds: ['parastoo', 'milad'], at });
+  await store.record({ personaId: 'aria', oldMemoryId: 'b-old', newMemoryId: 'b-new', ownerPersonId: 'sina', recipientPersonIds: ['parastoo'], at });
+  await store.record({ personaId: 'aria', oldMemoryId: 'c-old', newMemoryId: 'c-new', ownerPersonId: 'milad', recipientPersonIds: ['sina'], at });
+  const before = await count();
+  expect(await store.deleteByMemoryIds(['a-new'])).toBeGreaterThan(0);
+  expect((await store.listFor('aria', 'parastoo')).map((n) => n.oldMemoryId)).toEqual(['b-old']);
+  expect(await store.listFor('aria', 'milad')).toEqual([]);
+  expect(await store.deleteByMemoryIds(['a-old', 'nothing'])).toBe(0);
+  expect(await count()).toBeLessThan(before);
+  // milad owns c and was a recipient of a (already gone): every notice naming him goes, others stay.
+  expect(await store.deleteForPerson('milad')).toBeGreaterThan(0);
+  expect(await store.listFor('aria', 'sina')).toEqual([]);
+  expect((await store.listFor('aria', 'parastoo')).map((n) => n.oldMemoryId)).toEqual(['b-old']);
+  expect(await store.deleteForPerson('sina')).toBeGreaterThan(0);
+  expect(await count()).toBe(0);
+}
+
+describe('SupersededNoticeStore erasure', () => {
+  it('in memory', async () => {
+    const store = new InMemorySupersededNoticeStore();
+    await exerciseNoticeErasure(store, async () => store.notices.length);
+  });
+
+  it('file', async () => {
+    const path = join(mkdtempSync(join(tmpdir(), 'vox-notices-erasure-')), 'supersede-notices.json');
+    await exerciseNoticeErasure(createFileSupersededNoticeStore(path), async () => (JSON.parse(readFileSync(path, 'utf8')) as unknown[]).length);
+  });
+
+  it('firestore', async () => {
+    const { db, data } = fakeFirestore();
+    await exerciseNoticeErasure(new FirestoreSupersededNoticeStore(db), async () => data.size);
+  });
+});
+
 describe('SupersededNoticeStore implementations', () => {
   it('in memory', async () => {
     const store = new InMemorySupersededNoticeStore();
@@ -267,7 +306,7 @@ describe('SupersededNoticeStore implementations', () => {
     expect(stored.at(-1)!.oldMemoryId).toBe('newest');
   });
 
-  it('firestore: one tireh_supersede_notices doc per recipient, two equality filters', async () => {
+  it('firestore: one tireh_supersede_notices doc per recipient, two equality filters, newest first and bounded', async () => {
     const { db, data, queries } = fakeFirestore();
     await exerciseNotices(new FirestoreSupersededNoticeStore(db));
     expect([...data.keys()].every((key) => key.startsWith('tireh_supersede_notices/'))).toBe(true);
@@ -276,6 +315,40 @@ describe('SupersededNoticeStore implementations', () => {
     expect([...data.keys()].every((key) => /__[0-9a-f]{16}$/.test(key))).toBe(true);
     const listQuery = queries.find((q) => q.path === 'tireh_supersede_notices')!;
     expect(listQuery.filters.map(([field, op]) => `${field}${op}`)).toEqual(['personaId==', 'recipientPersonId==']);
-    expect(listQuery.order).toBeUndefined();
+    expect(listQuery.order).toEqual(['at', 'desc']);
+    expect(listQuery.max).toBe(200);
+    const sinceQuery = queries.filter((q) => q.path === 'tireh_supersede_notices').find((q) => q.filters.some(([field]) => field === 'at'))!;
+    expect(sinceQuery.filters.map(([field, op]) => `${field}${op}`)).toEqual(['personaId==', 'recipientPersonId==', 'at>=']);
+  });
+});
+
+describe('withAuditRetention', () => {
+  it('the first append and then one append a day sweep rows older than 12 months; list and sweep pass through', async () => {
+    const inner = new InMemoryAuditStore();
+    let now = T('2026-10-20T10:00:00Z');
+    const store = withAuditRetention(inner, { now: () => now });
+    await inner.append(row({ at: T('2025-10-01T00:00:00Z') }));
+    await store.append(row({ at: now }));
+    await store.flush();
+    expect(inner.rows.map((r) => r.at.toISOString())).toEqual([now.toISOString()]);
+    await inner.append(row({ at: T('2025-09-01T00:00:00Z') }));
+    now = new Date(now.getTime() + AUDIT_SWEEP_EVERY_MS - 1);
+    await store.append(row({ at: now }));
+    await store.flush();
+    expect(inner.rows).toHaveLength(3); // not yet a day: no second sweep
+    now = new Date(now.getTime() + 1);
+    await store.append(row({ at: now }));
+    await store.flush();
+    expect(inner.rows).toHaveLength(3);
+    expect(inner.rows.every((r) => r.at.getTime() >= auditCutoff(now).getTime())).toBe(true);
+    expect(await store.list({ personaId: 'aria' })).toHaveLength(3);
+  });
+
+  it('a failing sweep never fails the append', async () => {
+    const inner = new InMemoryAuditStore();
+    inner.sweep = async () => { throw new Error('sweep down'); };
+    const store = withAuditRetention(inner);
+    await expect(store.append(row())).resolves.toMatchObject({ kind: 'write' });
+    await store.flush();
   });
 });

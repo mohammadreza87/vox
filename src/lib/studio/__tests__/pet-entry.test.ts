@@ -15,6 +15,8 @@ import { PET_GUEST_RETENTION_MS, petStoreFor, sweepPetCare } from '../pet-store'
 import { assertRightsAccountNow, handleRightsRequest } from '../rights-http';
 import { Studio } from '../service';
 import { StudioStore } from '../store';
+import { personId } from '../org-bridge';
+import { InMemorySupersededNoticeStore } from '../../tireh/audit';
 import { hire, ID, makeStudio, seedOrg, type Harness } from './helpers';
 
 const STUDIO_URL = 'https://vox.example/studio';
@@ -240,6 +242,19 @@ describe('rights export and erasure', () => {
     expect((await request('requests', f.input('erasure'))).status).toBe(201);
     expect(await h.studio.deps.choices!.listForUser(ID.alice)).toEqual([]);
     expect(await h.studio.deps.choices!.listForUser(ID.bob)).toHaveLength(1);
+  });
+
+  it('an erasure request removes every S08 supersede notice naming the person, and only those', async () => {
+    const { f, h, request } = await setup();
+    const notices = new InMemorySupersededNoticeStore();
+    h.studio.deps.memoryNotices = notices;
+    const at = h.clock.now;
+    const alice = personId(ID.alice), bob = personId(ID.bob), carol = 'tg-900';
+    await notices.record({ personaId: 'agent-a', oldMemoryId: 'm1', newMemoryId: 'm2', ownerPersonId: alice, recipientPersonIds: [bob], at });
+    await notices.record({ personaId: 'agent-a', oldMemoryId: 'm3', newMemoryId: 'm4', ownerPersonId: bob, recipientPersonIds: [alice, carol], at });
+    await notices.record({ personaId: 'agent-a', oldMemoryId: 'm5', newMemoryId: 'm6', ownerPersonId: bob, recipientPersonIds: [carol], at });
+    expect((await request('requests', f.input('erasure'))).status).toBe(201);
+    expect(notices.notices.map((n) => n.oldMemoryId)).toEqual(['m5']);
   });
 
   it('circle participation (Circles S2): the export carries only the requester\'s rows, and erasure removes only theirs', async () => {

@@ -2,9 +2,8 @@
  * Privacy red team, wave A on main, round 1: where main's features (Circles notes and
  * outsiders, the Mini App / Pet converse path) meet wave A (S03 cached prompt, S12 images).
  *
- * Passing guards pin behaviour that holds on agent-intelligence-wave-a-main. The it.fails
- * cases are known gaps found in this round (see the QA report); each flips to a failure,
- * and must become a plain `it`, once its fix lands.
+ * Passing guards pin behaviour that holds on agent-intelligence-wave-a-main. The gaps found
+ * in this round were pinned as it.fails; fixer r1 closed them, so they are plain `it` now.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PersonaGateway, type RuntimePrivacy } from '../gateway';
@@ -117,7 +116,7 @@ describe('red team wave A on main r1: Circles notes and outsiders under the S03 
   });
 });
 
-describe('red team wave A on main r1: known gaps (it.fails until fixed)', () => {
+describe('red team wave A on main r1: gaps found in round 1, fixed by fixer r1', () => {
   // Gap 1 (fixed, fixer r1). conversation.ts accepts an attached image on the Mini App (and any converse caller)
   // without STUDIO_IMAGES; converse() stored the user row unmarked and the reply only inherited marks from older
   // rows. With STUDIO_IMAGES=1 converse() now marks both rows as an untriaged image turn (suppressed, people)
@@ -168,10 +167,11 @@ describe('red team wave A on main r1: known gaps (it.fails until fixed)', () => 
     expect(typeof (call[3] as { authorize?: unknown } | undefined)?.authorize).toBe('function');
   });
 
-  // Gap 3. S08 supersede notices (and vox_audit rows) have no delete path: once the owner forgets both the
-  // shared record and its correction, memoryNoticesFor hides the notice on read, but the stored row still
-  // pairs the owner with every recipient and both memory ids. Neither side has erasure for these stores (F013).
-  it.fails('forgetting a corrected shared record leaves no supersede notice naming its owner and recipients', async () => {
+  // Gap 3 (fixed for notices, fixer r1). S08 supersede notices had no delete path: once the owner forgot both the
+  // shared record and its correction, memoryNoticesFor hid the notice on read, but the stored row still paired
+  // the owner with every recipient and both memory ids (F013). A deleted memory now erases its notices, and a
+  // rights erasure erases every notice naming the person. vox_audit rows keep their 12-month retention.
+  it('forgetting a corrected shared record leaves no supersede notice naming its owner and recipients', async () => {
     vi.stubEnv('TIREH_SHARING_V2', '1');
     vi.stubEnv('TIREH_AUDIT_LOG', '1');
     const notices = new InMemorySupersededNoticeStore();
