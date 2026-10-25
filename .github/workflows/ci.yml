@@ -115,6 +115,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Section 4.6's red-team gate: invariants, the differential oracle, every red-team suite, negative-identity
+      # retrieval through the full pipeline, the audience/indexed boundary suites (members added or removed and
+      # consent revoked mid-turn), memory replacement, the combined runtime and their cached-prompt wrappers.
       - name: Privacy core and red-team suites, flags unset
         run: >-
           npx vitest run
@@ -125,7 +128,32 @@ jobs:
           src/lib/tireh/__tests__/memory-privacy.test.ts
           src/lib/tireh/__tests__/history-privacy.test.ts
           src/lib/tireh/__tests__/memory-requests.test.ts
+          src/lib/tireh/__tests__/negative-identity
+          src/lib/tireh/__tests__/audience-boundary.test.ts
+          src/lib/tireh/__tests__/indexed-boundary.test.ts
+          src/lib/tireh/__tests__/memory-replacement.test.ts
+          src/lib/tireh/__tests__/combined-runtime.test.ts
+          src/lib/tireh/__tests__/cached-prompt-suite-audience-boundary.test.ts
+          src/lib/tireh/__tests__/cached-prompt-suite-indexed-boundary.test.ts
+          src/lib/tireh/__tests__/cached-prompt-suite-memory-privacy.test.ts
+          src/lib/tireh/__tests__/cached-prompt-suite-memory-replacement.test.ts
+          src/lib/tireh/__tests__/cached-prompt-suite-combined-runtime.test.ts
+          src/lib/tireh/__tests__/cached-prompt-suite-visibility.test.ts
+          src/lib/tireh/__tests__/memory-eval
           src/lib/studio/__tests__/sharing-v2
+          src/lib/studio/__tests__/boundary-revisions.test.ts
+          src/lib/studio/__tests__/visibility.test.ts
+          src/lib/studio/__tests__/qa-code-quality-r2-successor.test.ts
+
+      - name: Negative-identity, visibility, memory privacy and the memory eval under TIREH_RETRIEVAL_V2
+        run: >-
+          npx vitest run
+          src/lib/tireh/__tests__/negative-identity
+          src/lib/tireh/__tests__/memory-privacy.test.ts
+          src/lib/tireh/__tests__/visibility.test.ts
+          src/lib/tireh/__tests__/memory-eval
+        env:
+          TIREH_RETRIEVAL_V2: '1'
 
       - name: Invariants, differential oracle and red-team gate under TIREH_SHARING_V2 and TIREH_AUDIT_LOG
         run: >-
