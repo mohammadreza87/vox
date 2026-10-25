@@ -35,6 +35,8 @@ export interface TirehFlags {
   readonly voiceRecognition: boolean;
   /** S11L STUDIO_VOICE_SHADOW=1: shadow verification of 1:1 voice notes, off the reply path; needs STUDIO_VOICE_RECOGNITION */
   readonly voiceShadow: boolean;
+  /** Legacy TELEGRAM_WEBHOOK_FAIL_CLOSED=1: /api/telegram/webhook rejects every request while TELEGRAM_WEBHOOK_SECRET is unset; stays off until the secret is rolled out */
+  readonly webhookFailClosed: boolean;
 }
 
 const on = (value: string | undefined): boolean => value?.trim() === '1';
@@ -56,5 +58,6 @@ export function tirehFlags(env: NodeJS.ProcessEnv = process.env): TirehFlags {
     images: on(env.STUDIO_IMAGES),
     voiceRecognition: on(env.STUDIO_VOICE_RECOGNITION),
     voiceShadow: on(env.STUDIO_VOICE_SHADOW),
+    webhookFailClosed: on(env.TELEGRAM_WEBHOOK_FAIL_CLOSED),
   };
 }

@@ -394,7 +394,7 @@ describe('extras edge cases', () => {
 
 describe('shared contract files', () => {
   it.each([
-    ['flags.ts', '79376fe7de8224f52caf7701aaf89829304a4c8456ff60540637bc1b241100e2'],
+    ['flags.ts', 'e398a12197110ffe8c1965ddf89b95e87d898cab0c2561a9cd93dc660d3ffd09'],
     ['llm-content.ts', '4c83fe241a05bca3e61a0d2f4470398ccd07d0e20a22527f1537cdd3e548e663'],
   ])('%s is byte-identical to the contract', (file, sha) => {
     expect(createHash('sha256').update(readFileSync(join(__dirname, '..', file))).digest('hex')).toBe(sha);

@@ -1,5 +1,6 @@
 import { createHmac } from 'crypto';
 import { NextRequest, NextResponse } from 'next/server';
+import { tirehFlags } from '@/lib/tireh/flags';
 
 /**
  * Verify Telegram webhook requests using the secret token
@@ -17,7 +18,7 @@ export function verifyTelegramWebhookToken(request: NextRequest): boolean {
     // registered as the setWebhook secret_token. Unset keeps the earlier behaviour
     // (skip verification) so a deployment without the secret still receives payment
     // updates; turn it on only once every legacy deployment has the secret.
-    if (process.env.TELEGRAM_WEBHOOK_FAIL_CLOSED === '1') {
+    if (tirehFlags().webhookFailClosed) {
       console.error('TELEGRAM_WEBHOOK_SECRET not configured - webhook request rejected');
       return false;
     }

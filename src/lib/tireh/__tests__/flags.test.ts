@@ -33,3 +33,13 @@ describe('tirehFlags voiceShadow (S11L STUDIO_VOICE_SHADOW)', () => {
     expect(tirehFlags().voiceShadow).toBe(false);
   });
 });
+
+describe('tirehFlags webhookFailClosed (legacy TELEGRAM_WEBHOOK_FAIL_CLOSED)', () => {
+  it('is off unless the value is 1, trimmed, and independent of the other flags', () => {
+    expect(tirehFlags({}).webhookFailClosed).toBe(false);
+    for (const value of ['', '0', 'true']) expect(tirehFlags({ TELEGRAM_WEBHOOK_FAIL_CLOSED: value }).webhookFailClosed).toBe(false);
+    expect(tirehFlags({ TELEGRAM_WEBHOOK_FAIL_CLOSED: '1' }).webhookFailClosed).toBe(true);
+    expect(tirehFlags({ TELEGRAM_WEBHOOK_FAIL_CLOSED: ' 1 ' }).webhookFailClosed).toBe(true);
+    expect({ ...tirehFlags({ TELEGRAM_WEBHOOK_FAIL_CLOSED: '1' }), webhookFailClosed: false }).toEqual(tirehFlags({}));
+  });
+});

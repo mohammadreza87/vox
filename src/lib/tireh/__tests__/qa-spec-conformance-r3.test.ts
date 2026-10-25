@@ -23,6 +23,7 @@ describe('QA r3 spec conformance: flag table', () => {
       cachedPrompt: false, promptSystemTail: false, retrievalV2: false, vectorRetrieval: false,
       sharingV2: false, auditLog: false, decider: 'default', triageQuestionSet: 'v1',
       decisionLog: false, images: false, voiceRecognition: false, voiceShadow: false,
+      webhookFailClosed: false,
     });
   });
 
