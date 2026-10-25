@@ -18,6 +18,7 @@ export const ADAPTIVE_RELEASE_CAPABILITIES = Object.freeze({
   supportedPetCareSchemas: Object.freeze([1]),
   supportedConnectionRecordSchemas: Object.freeze([1, 2]),
   supportedSelfServiceMcpSchemas: Object.freeze([1]),
+  supportedTelegramArchiveSchemas: Object.freeze([1]),
 });
 const fail = () => { throw new Error('Adaptive storage is incompatible with this release; current personalization controls must be preserved.'); };
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -330,6 +331,21 @@ function scanCanonical(doc, key, version, required) {
   if (!object(doc) || doc.schemaVersion !== version || !account(doc.accountId) || hash(doc.accountId) !== key ||
       doc.personId !== `account-profile:${hashValue(doc.accountId).slice(0, 32)}` || !positive(doc.revision) || !integer(doc.createdAt) || !integer(doc.updatedAt) || doc.updatedAt < doc.createdAt) fail();
   scanObserver(doc.observer, required, version);
+  // Even an empty optional extension is rejected by older strict readers.
+  // Full archive/source authority validation remains the runtime's responsibility.
+  if (Object.hasOwn(doc, 'telegramArchives')) {
+    if (!Array.isArray(doc.telegramArchives) || doc.telegramArchives.length > 4) fail();
+    const seen = new Set();
+    for (const row of doc.telegramArchives) {
+      if (!keys(row, ['agentId', 'space', 'enabled', 'generation', 'clearedAt', 'index', ...(Object.hasOwn(row, 'state') ? ['state'] : []), ...(Object.hasOwn(row, 'authorityStamp') ? ['authorityStamp'] : [])]) ||
+          typeof row.agentId !== 'string' || !row.agentId.length || row.agentId.length > 200 || !['personal', 'work'].includes(row.space) ||
+          typeof row.enabled !== 'boolean' || !integer(row.generation) || !integer(row.clearedAt) || !Array.isArray(row.index) || row.index.length > 32 ||
+          Object.hasOwn(row, 'authorityStamp') && !digest(row.authorityStamp) ||
+          Object.hasOwn(row, 'state') && (!object(row.state) || row.state.schemaVersion !== 1)) fail();
+      const scope = JSON.stringify([row.agentId, row.space]); if (seen.has(scope)) fail(); seen.add(scope);
+    }
+    required.telegramArchiveSchema = 1;
+  }
   if (version === 3) { if (!retentionNamespace(doc.retentionStoreIdentity)) fail(); scanRightsUseHolds(doc.rightsUseHolds); required.rightsUseHoldEnforcementVersion = 1; }
   else if (Object.hasOwn(doc, 'rightsUseHolds') || Object.hasOwn(doc, 'retentionStoreIdentity')) fail();
 }
@@ -646,6 +662,7 @@ export function assertReleaseAdaptiveCompatibility(env, manifest) {
     ['supportedImprovementWorkflowSchemas', 'improvementWorkflowSchema', [1, 2]],
     ['supportedPetCareSchemas', 'petCareSchema', [1]],
     ['supportedSelfServiceMcpSchemas', 'selfServiceMcpSchema', [1]],
+    ['supportedTelegramArchiveSchemas', 'telegramArchiveSchema', [1]],
   ]) {
     const versions = Object.hasOwn(supported, field) ? supported[field] : ['supportedRightsLedgerVersions', 'supportedImprovementWorkflowSchemas'].includes(field) ? [1] : [];
     if (!Array.isArray(versions) || versions.length > allowed.length || new Set(versions).size !== versions.length || versions.some(v => !allowed.includes(v)) || required[requiredKey] !== undefined && !versions.includes(required[requiredKey])) fail();

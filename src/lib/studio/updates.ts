@@ -1,3 +1,4 @@
+import { ArchiveAdmissionRefusedError, ArchiveCommandDeliveryError } from './telegram-archive';
 import { handleRequestedRoutineMessage, noteRequestedRoutineActivity } from './requested-routines';
 /**
  * What VoxxBot and the agent bots do with each Telegram update. Shared by the
@@ -20,7 +21,7 @@ import { parseExplicitControl } from '../relationships/policy';
 
 export const MANAGER_UPDATES = ['message', 'managed_bot'];
 /** Never channel_post or edited_channel_post: Vox reads nothing from channels (Circles S5 is post-only). */
-export const AGENT_UPDATES = ['message', 'callback_query', 'my_chat_member', 'chat_member'];
+export const AGENT_UPDATES = ['message', 'edited_message', 'callback_query', 'my_chat_member', 'chat_member'];
 /** What the stranger decision sees for an untranscribed voice note; never audio or a transcript. */
 export const STRANGER_VOICE_PLACEHOLDER = '(a voice message; it was not listened to)';
 
@@ -104,7 +105,7 @@ export async function handleAgentUpdate(studio: Studio, agentId: string, update:
     }
     return;
   }
-  const msg = update.message;
+  const msg = update.message ?? update.edited_message;
   if (!msg) {
     await gateway.handleUpdate(agentId, update);
     return;
@@ -132,6 +133,30 @@ export async function handleAgentUpdate(studio: Studio, agentId: string, update:
 
   const member = state.members.find((m) => m.telegramId === msg.from!.id);
   if (member && canUseAgent(member, live)) {
+    if (studio.deps.telegramArchive) {
+      if (update.edited_message) {
+        await studio.deps.telegramArchive.invalidateEditedMessage(agentId, msg);
+        return;
+      }
+      try {
+        if (await studio.deps.telegramArchive.command(agentId, msg)) return;
+        await studio.deps.telegramArchive.capture(agentId, msg, update.update_id);
+      } catch (error) {
+        if (error instanceof ArchiveCommandDeliveryError) {
+          logTelegramDiagnostic(studio.deps.logger ?? console, 'update_failed');
+          return;
+        }
+        if (error instanceof ArchiveAdmissionRefusedError) {
+          await botOf(studio, live)?.sendMessage(msg.chat.id, 'The archive is unavailable for this request. This message was not saved or processed. Use /archive status, /archive clear or /archive disable. You can resend your message after recovery.');
+          return;
+        }
+        if (/^\/archive(?:@\S+)?(?:\s|$)/i.test(msg.text ?? '')) {
+          await botOf(studio, live)?.sendMessage(msg.chat.id, 'The archive request is unavailable. Use /archive status to check the current state.');
+          return;
+        }
+        throw error;
+      }
+    }
     // Circles: a member's /leave withdraws from the circles where they cover this agent; otherwise today's path.
     if (studio.circlesMode() === 'circles' && /^\/leave(@\S+)?$/i.test((msg.text ?? '').trim())) {
       const left = await studio.circleGroups.leaveAll(member.telegramId, agentId, `leave:dm:${agentId}:${update.update_id}`);
