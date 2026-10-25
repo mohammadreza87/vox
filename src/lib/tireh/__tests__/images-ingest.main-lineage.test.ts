@@ -4,7 +4,6 @@ import {
   IMAGE_ACK_AFTER_MS,
   MAX_REPLY_IMAGE_BYTES,
   IMAGE_PLACEHOLDER_TEXT,
-  IMAGE_TRIAGE_TIMEOUT_MS,
   ingestTelegramImage,
   type ImageIngestDeps,
 } from '../images';
@@ -12,13 +11,11 @@ import { OrgDirectory } from '../org/directory';
 import type { LLM } from '../llm';
 import type { TelegramBotClient, TelegramUpdate } from '../telegram/client';
 import type { ChatContext } from '../types';
-import { FakeLLM, GAMEEND_CHAT, TG, testOrg, testOrgConfig } from './fixtures';
+import { GAMEEND_CHAT, TG, testOrg, testOrgConfig } from './fixtures';
 import {
   base64Of,
-  GeminiFakeLLM,
   imageAnswers,
   imageBot,
-  type ImageAnswers,
   type ImageBot,
   pngBytes,
   PNG_TEXT_CANARY,
@@ -26,7 +23,6 @@ import {
   privatePhoto,
   scriptedImageDecider,
   VisionFakeLLM,
-  jpegBytes,
   defaultImageFiles,
 } from './images-main-lineage-fixtures';
 
@@ -57,8 +53,6 @@ function setup(options: Setup = {}) {
     ingestTelegramImage(deps, persona, chat, speakerId, update.message!, update.message!.caption ?? update.message!.text ?? '');
   return { org, bot, log, deps, persona, run };
 }
-
-const sentTexts = (bot: ImageBot) => bot.sendMessage.mock.calls.map((call) => call[1]);
 
 beforeEach(() => { vi.stubEnv('STUDIO_IMAGES', '1'); });
 afterEach(() => { vi.unstubAllEnvs(); vi.useRealTimers(); });

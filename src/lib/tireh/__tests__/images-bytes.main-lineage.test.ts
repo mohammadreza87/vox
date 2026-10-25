@@ -1,7 +1,7 @@
 // Main's earlier S12 lineage (d99e3a5) cases that pass against the chosen wave A image module; the rest are recorded in WAVE_A_MAIN_INTEGRATION.md (S12).
 import { describe, expect, it } from 'vitest';
-import { sniffImageMime, stripImageMetadata, toLLMImage } from '../images';
-import { COMMENT_CANARY, EXIF_CANARY, jpegBytes, PNG_SIGNATURE, PNG_TEXT_CANARY, pngBytes, pngChunk } from './images-main-lineage-fixtures';
+import { sniffImageMime, stripImageMetadata } from '../images';
+import { COMMENT_CANARY, EXIF_CANARY, jpegBytes, pngBytes } from './images-main-lineage-fixtures';
 
 const latin1 = (bytes: Uint8Array): string => Buffer.from(bytes).toString('latin1');
 const indexOf = (haystack: Uint8Array, needle: number[]): number => Buffer.from(haystack).indexOf(Buffer.from(needle));

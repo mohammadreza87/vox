@@ -2,13 +2,11 @@
 /** S03: the cache-stable prompt layout (blocks A/B/C plus the per-turn block). */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { approxTokens } from '../../llm-content';
-import type { LLMMessage } from '../../llm';
 import { OrgDirectory } from '../../org/directory';
 import type { ChatContext, MemoryRecord, Persona } from '../../types';
 import { memory, testOrg, testOrgConfig } from '../../__tests__/fixtures';
 import {
-  attachTurnBlock, buildPromptLayout, buildSystemPrompt, LIVE_CALL_FRAME, MAX_PROMPT_MEMORY_CHARS, MIN_CACHE_BLOCK_TOKENS,
-  orgSnapshotBlock, padCacheBlock, personaBlock, PROACTIVE_GROUP_FRAME, SAVED_CONTEXT_HEADER, type PromptInput,
+  buildPromptLayout, buildSystemPrompt, LIVE_CALL_FRAME, MIN_CACHE_BLOCK_TOKENS, personaBlock, type PromptInput,
 } from '../prompt';
 
 afterEach(() => { vi.unstubAllEnvs(); });
