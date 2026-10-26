@@ -8,7 +8,7 @@ import { IMAGE_DOWNLOAD_TIMEOUT_MS, ingestTelegramImage, type ImageIngestDeps } 
 import { TelegramApiError, TelegramBotClient, type TelegramMessage } from '../telegram/client';
 import type { ChatContext } from '../types';
 import { TG, testOrg } from './fixtures';
-import { imageAnswers, imageBot, photoLadder, privateDocument, scriptedDecider, VisionFakeLLM } from './images-fixtures';
+import { imageAnswers, imageBot, privateDocument, scriptedDecider, VisionFakeLLM } from './images-fixtures';
 
 const TOKEN = '123456:SECRET-TOKEN-abc';
 const org = testOrg();

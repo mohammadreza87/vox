@@ -40,7 +40,7 @@ afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.restoreAllMocks(
 
 describe('F221: webhook Telegram calls have a deadline', () => {
   it('passes an 8 s AbortSignal to answerPreCheckoutQuery and to both sendMessage calls', async () => {
-    const fetchMock = vi.fn(async (..._args: FetchArgs) => new Response(JSON.stringify({ ok: true })));
+    const fetchMock = vi.fn<(...args: FetchArgs) => Promise<Response>>(async () => new Response(JSON.stringify({ ok: true })));
     vi.stubGlobal('fetch', fetchMock);
     const timeout = vi.spyOn(AbortSignal, 'timeout');
     await post(preCheckout);

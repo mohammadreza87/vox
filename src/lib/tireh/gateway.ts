@@ -534,7 +534,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     let imageTurn: ImageTurn | null = null;
     // S09 decision log for image-v1 triage (only while TIREH_DECISION_LOG is on, read now): the content-free row
     // is held here and recorded once the turn's text triage has settled, after that triage's own row. A turn that
-    // ends before then (image dropped on a withdrawn authority, reply refused) writes no image row.
+    // ends before then (a captionless image dropped after triage, a member no longer allowed to reply) writes none.
     const imageLogRows: NewDecisionLogRow[] = [];
     const imageDecisionLog: DecisionLogSink | undefined = imageWanted && tirehFlags().decisionLog && this.deps.decisionLog
       ? { record: (row) => { imageLogRows.push(row); } } : undefined;
