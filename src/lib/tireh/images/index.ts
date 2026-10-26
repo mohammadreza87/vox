@@ -21,14 +21,27 @@ import {
   MAX_REPLY_IMAGE_BYTES, pickPhotoSize, replyPhotoSize, sniffImageMime, stripImageMetadata, toLLMImage,
   TRIAGE_MAX_BYTES, TRIAGE_MIN_EDGE, type ImageMime,
 } from './bytes';
-import { IMAGE_TRIAGE_QUESTIONS, imageTriageInput, readImageTriage, type ImageTriage } from './questions';
-import { imageAckText, suppressImageMemory } from './retention';
+import { decisionLogRow, type DecisionLogSink } from '../decisions/log';
+import { IMAGE_QUESTION_SET, IMAGE_TRIAGE_QUESTIONS, imageTriageInput, readImageTriage, type ImageTriage } from './questions';
+import { imageAckText, imageTurnLanguage, suppressImageMemory, type ImageTextLanguage } from './retention';
 
 export * from './bytes';
 export * from './questions';
 export * from './retention';
 
 export const IMAGE_PLACEHOLDER_TEXT = '(shared a photo)';
+/** IMAGE_PLACEHOLDER_TEXT for a Persian speaker (imageTurnLanguage: no caption, a 'fa' Telegram language_code). */
+export const IMAGE_PLACEHOLDER_TEXT_FA = '(یک عکس فرستاد)';
+
+/** The placeholder turn text for a captionless image, in a language. */
+export function imagePlaceholderText(lang: ImageTextLanguage): string {
+  return lang === 'fa' ? IMAGE_PLACEHOLDER_TEXT_FA : IMAGE_PLACEHOLDER_TEXT;
+}
+
+/** True for the placeholder text in either language. */
+export function isImagePlaceholderText(text: string): boolean {
+  return text === IMAGE_PLACEHOLDER_TEXT || text === IMAGE_PLACEHOLDER_TEXT_FA;
+}
 export const IMAGE_ACK_AFTER_MS = 1_500;
 export const IMAGE_TRIAGE_TIMEOUT_MS = 2_000;
 /** Each Telegram file download (getFile plus the file fetch) is bounded by this deadline. */
@@ -82,6 +95,11 @@ export interface ImageIngestDeps {
    * leaves the process. A withdrawn authority drops the image for the turn.
    */
   authority?: DeciderAuthority;
+  /**
+   * S09 decision log for the image-v1 triage call. The gateway passes its sink only while
+   * TIREH_DECISION_LOG is on (read at call time); the row is content-free (decisions/log.ts).
+   */
+  decisionLog?: DecisionLogSink;
 }
 
 const FORCED_TASKS: ReadonlyArray<ImageTriage['task']> = ['explain', 'extract_text', 'decide', 'react'];
@@ -134,7 +152,8 @@ async function fetchImage(deps: ImageIngestDeps, fileId: string, maxBytes: numbe
   try {
     bytes = await deps.bot.downloadImage(fileId, { maxBytes, signal: AbortSignal.timeout(IMAGE_DOWNLOAD_TIMEOUT_MS) });
   } catch (error) {
-    if (error instanceof Error && /file too large/.test(error.message)) return { ok: false, code: 'too_large' };
+    // Structural: TelegramApiError carries code 'file_too_large' for an oversize file (no message matching).
+    if ((error as { code?: unknown } | null)?.code === 'file_too_large') return { ok: false, code: 'too_large' };
     // Structural check (no instanceof across bundles): AbortSignal.timeout rejects with a TimeoutError.
     return { ok: false, code: (error as { name?: unknown } | null)?.name === 'TimeoutError' ? 'download_timeout' : 'download_failed' };
   }
@@ -169,6 +188,7 @@ async function runTriage(deps: ImageIngestDeps, persona: Persona, caption: strin
   }
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<'timeout'>((resolve) => { timer = setTimeout(() => resolve('timeout'), IMAGE_TRIAGE_TIMEOUT_MS); });
+  const started = performance.now();
   const asked = Promise.resolve()
     .then(() => decider.decideParts!(
       [{ type: 'text', text: imageTriageInput(persona, caption) }, { type: 'image', image: triageImage }],
@@ -179,12 +199,36 @@ async function runTriage(deps: ImageIngestDeps, persona: Persona, caption: strin
     .then((answers) => ({ answers }), () => 'failed' as const);
   try {
     const result = await Promise.race([asked, timeout]);
-    if (result === 'timeout') { logCode(deps.log, 'triage_timeout'); return null; }
-    if (result === 'failed') { logCode(deps.log, 'triage_failed'); return null; }
+    const elapsedMs = Math.round(performance.now() - started);
+    if (result === 'timeout') {
+      logCode(deps.log, 'triage_timeout');
+      logTriageRow(deps, persona, caption, elapsedMs, { detail: { answers: {}, elapsedMs, outcome: 'unknown', unknownReason: 'timeout' } });
+      return null;
+    }
+    if (result === 'failed') { logCode(deps.log, 'triage_failed'); logTriageRow(deps, persona, caption, elapsedMs, { failed: true }); return null; }
+    logTriageRow(deps, persona, caption, elapsedMs, { answers: result.answers });
     return readImageTriage(result.answers);
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * One content-free S09 decision-log row for an image-v1 triage call (answered, failed or timed out),
+ * only when the gateway handed over its sink (TIREH_DECISION_LOG on). The row holds catalogue names,
+ * catalogue values and probabilities: never the caption (it feeds only the script-ratio label), the
+ * image or any person id. `triage: null` makes routeTaken 'untriaged' by construction: an image turn's
+ * reply route is settled by text triage and forceQuickTriage, not by these answers. Never affects the turn.
+ */
+function logTriageRow(deps: ImageIngestDeps, persona: Persona, caption: string, elapsedMs: number,
+  outcome: Pick<Parameters<typeof decisionLogRow>[0], 'answers' | 'detail' | 'failed'>): void {
+  const sink = deps.decisionLog;
+  if (!sink) return;
+  try {
+    const row = decisionLogRow({ set: IMAGE_QUESTION_SET, questions: [...IMAGE_TRIAGE_QUESTIONS], ...outcome, triage: null, elapsedMs,
+      webSearchAvailable: false, fastModel: !!deps.fastLlm, personaId: persona.id, chatKind: 'private', latestMessage: caption, at: new Date() });
+    if (row) sink.record(row);
+  } catch { /* the decision log never affects the turn */ }
 }
 
 /**
@@ -234,7 +278,7 @@ export async function ingestTelegramImage(
   const ackTimer = setTimeout(() => {
     if (finished || ack) return;
     ack = Promise.resolve()
-      .then(() => deps.bot.sendMessage(message.chat.id, imageAckText(text), { replyTo: message.message_id }))
+      .then(() => deps.bot.sendMessage(message.chat.id, imageAckText(text, message.from?.language_code), { replyTo: message.message_id }))
       .catch(() => logCode(deps.log, 'ack_failed'));
   }, IMAGE_ACK_AFTER_MS);
 
@@ -263,7 +307,7 @@ export async function ingestTelegramImage(
   }
 
   // (g)
-  const turnText = text.trim() ? text : IMAGE_PLACEHOLDER_TEXT;
+  const turnText = text.trim() ? text : imagePlaceholderText(imageTurnLanguage(text, message.from?.language_code));
   return {
     images: [image],
     text: turnText,
