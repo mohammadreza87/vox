@@ -5,7 +5,7 @@
  */
 
 import { scriptLanguage } from '../decisions/language';
-import { explicitMemoryRequest, negatedMemoryRequest } from '../memory/requests';
+import { explicitMemoryRequest, negatedMemoryRequest, secrecyRequest } from '../memory/requests';
 import type { ChatMessage } from '../types';
 import type { ImageTriage } from './questions';
 
@@ -29,9 +29,12 @@ export function textLanguage(text: string): ImageTextLanguage {
   return scriptLanguage(text) === 'fa' ? 'fa' : 'en';
 }
 
-/** True when memory extraction must not run for this image turn. */
+/**
+ * True when memory extraction must not run for this image turn. A refusal or a secrecy signal in the caption
+ * ("keep this between us", "پیش خودت نگهش دار") wins over everything, the decider's 'remember' task included.
+ */
 export function suppressImageMemory(triage: ImageTriage | null, text: string): boolean {
-  if (negatedMemoryRequest(text)) return true;
+  if (negatedMemoryRequest(text) || secrecyRequest(text)) return true;
   if (triage === null) return true;
   if (triage.containsSensitiveDocument >= SENSITIVE_DOCUMENT_THRESHOLD) return true;
   return !(triage.task === 'remember' || explicitMemoryRequest(text));

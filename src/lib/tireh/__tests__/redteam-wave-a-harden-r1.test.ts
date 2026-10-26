@@ -7,7 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PersonaGateway } from '../gateway';
 import { InMemoryChatHistoryStore, InMemoryMemoryStore, InMemoryShareOfferStore, InMemoryUpdateDeduper } from '../memory/store';
-import { explicitMemoryRequest, negatedMemoryRequest } from '../memory/requests';
+import { explicitMemoryRequest, negatedMemoryRequest, secrecyRequest } from '../memory/requests';
 import { isWithheldImageReplyText, suppressImageMemory } from '../images';
 import { readImageTriage } from '../images/questions';
 import { createDecisionLogSink, InMemoryDecisionLogStore } from '../decisions/log';
@@ -95,6 +95,69 @@ describe('red team harden r1: the Persian fold never opens image memory', () => 
       const triage = readImageTriage(imageAnswers({ kind: 'document', task: 'remember', taskConfidence: 0.95, people: 0.05, sensitive: 0.5 }));
       expect(suppressImageMemory(triage, text)).toBe(true);
     });
+});
+
+// Attack 1b (hardening round 1 fixer, medium "secrecy and style phrases count as explicit remember requests").
+// Before the fix MEMORY_REQUEST read keep, save or store + this/that/it after any lead as a request to remember, so
+// "Keep this between us" turned image memory on and the reply describing the image became a durable memory: the
+// person's own secrecy signal opened memory. Holds now: a secrecy phrase anywhere, or a style, format or secrecy
+// qualifier right after the verb, is never an explicit request, and a secrecy phrase suppresses image memory even
+// when the decider reads the task as remember. A miss only leaves the image suppressed (the default).
+describe('red team harden r1: secrecy, style and format phrases never open image memory', () => {
+  const NOT_REQUESTS = [
+    'Keep this between us.',
+    'keep this private please',
+    'keep it confidential',
+    'Explain this photo, keep it brief',
+    'can you save it as text?',
+    'این رو پیش خودت نگهش دار',
+    'keep this to yourself',
+    'please keep it secret',
+    'remember this, but it stays between you and me',
+    'ذخیره‌اش کن ولی محرمانه است',
+  ];
+  it.each(NOT_REQUESTS)('%j is not an explicit memory request', (text) => {
+    expect(explicitMemoryRequest(text)).toBe(false);
+  });
+
+  it.each(NOT_REQUESTS)('%j leaves an explain-task image suppressed', (text) => {
+    const triage = readImageTriage(imageAnswers({ kind: 'screenshot', task: 'explain', people: 0.05, sensitive: 0.2 }));
+    expect(suppressImageMemory(triage, text)).toBe(true);
+  });
+
+  it.each(['Keep this between us.', 'keep this private please', 'keep it confidential', 'این رو پیش خودت نگهش دار', 'keep this to yourself'])(
+    '%j is a secrecy signal and suppresses image memory even when the decider says remember', (text) => {
+      expect(secrecyRequest(text)).toBe(true);
+      const triage = readImageTriage(imageAnswers({ kind: 'screenshot', task: 'remember', taskConfidence: 0.95, people: 0.05, sensitive: 0.2 }));
+      expect(suppressImageMemory(triage, text)).toBe(true);
+    });
+
+  it.each(['remember this', 'please save it', 'keep that', 'keep this for later', 'keep it in mind', 'can you remember this for me?', 'نگهش دار', 'یادت باشه', 'ذخیره‌اش کن'])(
+    'positive control: %j is still an explicit request and opens memory for a non-sensitive image', (text) => {
+      expect(secrecyRequest(text)).toBe(false);
+      expect(explicitMemoryRequest(text)).toBe(true);
+      const triage = readImageTriage(imageAnswers({ kind: 'screenshot', task: 'explain', people: 0.05, sensitive: 0.2 }));
+      expect(suppressImageMemory(triage, text)).toBe(false);
+    });
+
+  it('Persian words are matched whole: "خصوصیات" (features) is not "خصوصی" (private)', () => {
+    expect(secrecyRequest('خصوصیات این گوشی رو یادت باشه')).toBe(false);
+    expect(secrecyRequest('این خصوصی است')).toBe(true);
+  });
+
+  it('end to end: "Keep this between us." on a whiteboard photo forms no memory; "remember this" does', async () => {
+    vi.stubEnv('STUDIO_IMAGES', '1');
+    const secret = harness(imageAnswers({ kind: 'screenshot', task: 'explain', people: 0.05, sensitive: 0.2 }));
+    secret.setReply(`The whiteboard says: ${DOC}.`);
+    expect(await secret.gateway.handleUpdate('aria', privatePhoto(TG.reza, secret.ladder.sizes, 'Keep this between us.'))).toBe('replied');
+    expect(secret.rows().every((m) => m.imageDerived?.suppressed === true)).toBe(true);
+    expect(JSON.stringify(await secret.memories.listActive('aria'))).not.toContain('DOCCANARY');
+
+    const control = harness(imageAnswers({ kind: 'screenshot', task: 'explain', people: 0.05, sensitive: 0.2 }));
+    control.setReply(`The whiteboard says: ${DOC}.`);
+    expect(await control.gateway.handleUpdate('aria', privatePhoto(TG.reza, control.ladder.sizes, 'remember this'))).toBe('replied');
+    expect(JSON.stringify(await control.memories.listActive('aria'))).toContain('DOCCANARY');
+  });
 });
 
 // Attack 2 (H2 image-v1 decision-log rows x the text-triage subject, c86bb6a). Attack: does the image row or its

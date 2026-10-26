@@ -22,6 +22,13 @@
  * With every flag unset the gateway's NO_MEMORY reads this rule too, which is
  * wider than the base `do not|don't` + verb rule (recorded as a base-behaviour
  * exception in WAVE_A_ON_MAIN.md section 3): it only ever withholds memory.
+ *
+ * "Keep this between us", "keep it private", "keep it brief" and "save it as
+ * text" are not requests to remember: a secrecy phrase anywhere in the text
+ * (secrecyRequest) and a style, format or secrecy qualifier right after the
+ * verb both stop explicitMemoryRequest (hardening round 1). Only S12 image
+ * retention reads explicitMemoryRequest and secrecyRequest, so neither changes
+ * flags-unset behaviour, and both only ever withhold memory.
  */
 
 import { foldPersian } from '../text/persian';
@@ -60,23 +67,53 @@ export const NEGATED_MEMORY_REQUEST = new RegExp([
  * An explicit request to keep what was shared: "remember this", "save it", "ذخیره‌اش کن", ...
  * The English verb must be in imperative position: at the start, after a clause mark, or after a polite or
  * linking word ("please", "can you", "and", "don't forget to"). A question or statement about memory ("do you remember this?",
- * "I can't remember this place") is not a request; nor is "keep it down".
+ * "I can't remember this place") is not a request; nor is "keep it down", "keep it brief", "keep this between us" or
+ * "save it as text": a style, format or secrecy qualifier right after the verb (NOT_MEMORY_QUALIFIER) means something else.
  */
 const IMPERATIVE_LEAD = String.raw`(?:^|[.!,;:\n—–-]\s*|\b(?:please|pls|plz|just|also|and|so|then|now|ok|okay|hey|can\s+you|could\s+you|would\s+you|will\s+you|(?:don['’]?t|dont|do\s+not|never)\s+forget\s+to)\s+)`;
+const NOT_MEMORY_QUALIFIER = String.raw`(?:down|up|quiet|going|simple|short|together|brief|light|real|clean|casual|professional|formal|private|privately|secret|confidential|hidden|between|to\s+(?:yourself|you|ourselves)|as|in\s+(?:english|persian|farsi|text|a\s+list|bullet))\b`;
 export const MEMORY_REQUEST = new RegExp([
-  String.raw`${IMPERATIVE_LEAD}(?:remember|save|keep|store)\s+(?:this|that|it)\b(?!\s+(?:down|up|quiet|going|simple|short|together)\b)`,
+  String.raw`${IMPERATIVE_LEAD}(?:remember|save|keep|store)\s+(?:this|that|it)\b(?![\s,]+${NOT_MEMORY_QUALIFIER})`,
   `${YEH}ادت${GAP}(?:باشه|بمونه|بماند)`,
   `به${GAP}خاطر${GAP}بسپار`,
   `ذخ${YEH}ره${GAP}(?:ا?ش${GAP})?${KAF}ن`,
   `نگهش${GAP}دار`,
 ].join('|'), 'imu');
 
+/**
+ * A secrecy or confidentiality signal ("between us", "keep it private", "to yourself", "confidential",
+ * "پیش خودت نگهش دار", "بین خودمون", "محرمانه"): the person marks what they share as not for keeping. Persian
+ * words are matched whole (no Arabic-script letter after them), so "خصوصیات" (features) is not "خصوصی" (private).
+ */
+const FA_END = '(?![\\u0600-\\u06FF])';
+export const SECRECY_REQUEST = new RegExp([
+  String.raw`\bbetween\s+(?:us|you\s+and\s+me|me\s+and\s+you|ourselves)\b`,
+  String.raw`\b(?:to|for)\s+yourself\b`,
+  String.raw`\b(?:private|privately|secret|secretly|confidential|confidentially|off\s+the\s+record)\b`,
+  String.raw`\b(?:don['’]?t|dont|do\s+not|never)\s+tell\s+(?:any\s*one|any\s*body|others|people)\b`,
+  `پ${YEH}ش${GAP}خودت${FA_END}`,
+  `ب${YEH}ن${GAP}خودمون${FA_END}`,
+  `ب${YEH}ن${GAP}خودمان${FA_END}`,
+  `ب${YEH}ن${GAP}خودم${GAP}و${GAP}خودت`,
+  `محرمانه`,
+  `خصوص${YEH}${FA_END}`,
+  `به${GAP}${KAF}س${YEH}${GAP}نگو`,
+].join('|'), 'iu');
+
+/** True when the text marks what is shared as secret or confidential, as typed or after the shared Persian fold. */
+export function secrecyRequest(text: string): boolean {
+  return SECRECY_REQUEST.test(text) || SECRECY_REQUEST.test(foldPersian(text));
+}
+
 /** True when the text asks not to keep it, as typed or after the shared Persian fold. */
 export function negatedMemoryRequest(text: string): boolean {
   return NEGATED_MEMORY_REQUEST.test(text) || NEGATED_MEMORY_REQUEST.test(foldPersian(text));
 }
 
-/** True when the text explicitly asks to keep it (as typed or folded) and no negation is present in either form. */
+/**
+ * True when the text explicitly asks to keep it (as typed or folded) and neither a negation nor a secrecy signal
+ * (secrecyRequest) is present in either form.
+ */
 export function explicitMemoryRequest(text: string): boolean {
-  return !negatedMemoryRequest(text) && (MEMORY_REQUEST.test(text) || MEMORY_REQUEST.test(foldPersian(text)));
+  return !negatedMemoryRequest(text) && !secrecyRequest(text) && (MEMORY_REQUEST.test(text) || MEMORY_REQUEST.test(foldPersian(text)));
 }
