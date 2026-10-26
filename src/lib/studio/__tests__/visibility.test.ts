@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { LLMRequest } from '../../tireh/llm';
+import { systemText } from '../../tireh/llm-content';
 import type { MemoryRecord, MemoryScope } from '../../tireh/types';
 import type { TelegramUpdate } from '../../tireh/telegram/client';
 import { personId } from '../org-bridge';
@@ -40,7 +42,7 @@ function groupMsg(from: number, chatId: number, text: string): TelegramUpdate {
 function scriptDecision(decision: unknown) {
   const real = h.chatLLM.complete.bind(h.chatLLM);
   h.studio.deps.chatLLM = {
-    complete: async (req) => (req.system.includes('Decide, in character') ? JSON.stringify(decision) : real(req)),
+    complete: async (req) => (systemText(req.system).includes('Decide, in character') ? JSON.stringify(decision) : real(req)),
   };
 }
 
@@ -199,12 +201,12 @@ describe('groups are open to everyone in them', () => {
 describe('live web search', () => {
   function webLLM() {
     const real = h.chatLLM.complete.bind(h.chatLLM);
-    const completeWithWeb = vi.fn(async (req: { system: string; maxSearches: number }) => {
+    const completeWithWeb = vi.fn(async (req: LLMRequest & { maxSearches: number }) => {
       await real({ system: req.system, messages: [] });
       return { text: 'Sunny, 18°C.', sources: [{ url: 'https://weather.example/teh', title: 'Weather' }] };
     });
     h.studio.deps.chatLLM = {
-      complete: async (req) => (req.system.includes('Decide, in character') ? JSON.stringify({ action: 'reply' }) : real(req)),
+      complete: async (req) => (systemText(req.system).includes('Decide, in character') ? JSON.stringify({ action: 'reply' }) : real(req)),
       completeWithWeb,
     };
     return completeWithWeb;
@@ -216,7 +218,7 @@ describe('live web search', () => {
     const search = webLLM();
     await handleAgentUpdate(h.studio, agent.id, dm(ID.bob, 'Weather in Tehran?'));
     expect(search.mock.lastCall?.[0].maxSearches).toBe(3);
-    expect(search.mock.lastCall?.[0].system).toContain('## Live information');
+    expect(systemText(search.mock.lastCall?.[0].system ?? '')).toContain('## Live information');
     expect(bot().sendMessage).toHaveBeenLastCalledWith(ID.bob, 'Sunny, 18°C.\n\nSources:\nhttps://weather.example/teh', expect.anything());
     // Memory keeps the reply, not the links.
     const history = await h.memory.history.recent(agent.id, `private-${personId(ID.bob)}`, 5);
