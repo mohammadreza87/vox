@@ -96,11 +96,20 @@ and applicable user-controlled settings remain authoritative.
 
 ## Public and private routes
 
-- Bot-owned UI: `/studio/connect/[agentId]`; agent `/start` already opens its Pet
-  Mini App, which links to this page in the same window.
+> **Agent-signed trust hotfix (October 2026).** An agent's creator owns its bot and
+> can read its token in BotFather, so agent-signed initData can be forged (now
+> blocked: Telegram's Ed25519 signature is required) or harvested by a repointed
+> menu (not blockable). The bot surface below is therefore a **read-only
+> dashboard**: every other route, including `profile/confirm`, answers 404, and
+> the page shows "Manage connections in Vox". Connecting, granting, tasks and
+> identity confirmation move to the VoxxBot-signed Vox Mini App. The pet no longer
+> links here. See [PRODUCTION.md](../PRODUCTION.md#agent-bot-tokens-are-not-voxs-alone).
+
+- Bot-owned UI: `/studio/connect/[agentId]` (read-only).
 - Authenticated bot API: `/api/agents/[agentId]/connections/[[...path]]`.
-  `POST profile/confirm` is the existing explicit account confirmation; it does
-  not set adult/country declarations or enable optional features.
+  Only the dashboard `GET` is served; `POST profile/confirm` and every other route
+  answer 404 on this surface (it previously minted the account's identity binding
+  for whoever presented initData signed with the agent's token).
 - `POST mcp/enroll` accepts only space, agentId, endpointUrl and displayLabel.
   `setup` starts/resumes sign-in; `mcp/setup/preview` returns a safe server catalog;
   `mcp/setup/claim` requires the exact accepted catalog digest. No automatic grants.

@@ -10,7 +10,6 @@ import type { ConnectionsApplication } from './application';
 import { ConnectionsError } from './errors';
 import { idSchema, type ConnectionActor, type ConnectionContext } from './contracts';
 import { authenticateAgentConnections } from './bot-principal';
-import { identityInput } from '../adaptive/persistence/validation';
 import { AdaptiveError } from '../adaptive/persistence/service';
 
 const spaceSchema = z.enum(['work', 'personal']);
@@ -25,6 +24,10 @@ const json = (value: unknown, status = 200, headers: Record<string, string> = {}
 /** There is deliberately no wire route for completeEnrollment, broker dispatch,
  * provider credentials, arbitrary URLs, model source labels or account IDs. */
 export async function handleConnectionsRequest(studio: Studio, application: ConnectionsApplication | ((actor: ConnectionActor, space: 'work' | 'personal') => Promise<ConnectionsApplication>), request: Request, path: string[], botToken: string, botAgentId?: string): Promise<Response> {
+  // The agent-bot surface is read-only: its initData is signed with a token the agent's creator holds, so it can be
+  // harvested by a repointed menu even with Telegram's signature. Identity confirmation, grants, tasks, setup, MCP
+  // enrollment, revoke, provider resources and action review are refused before anything is read or built.
+  if (botAgentId && !(request.method === 'GET' && path.length === 0)) return json({ error: 'not_found' }, 404);
   try {
     let limiter = studio.deps.rateLimiter ?? limiters.get(studio);
     if (!limiter) { limiter = new StudioRateLimiter(); limiters.set(studio, limiter); }
@@ -69,13 +72,6 @@ export async function handleConnectionsRequest(studio: Studio, application: Conn
     let body: unknown;
     try { body = await bounded.json(); } catch { return json({ error: 'invalid_json' }, 400); }
     if (botAgentId && body && typeof body === 'object' && 'agentId' in body && body.agentId !== botAgentId) return json({ error: 'agent_connection_mismatch' }, 403);
-    if (botAgentId && path.join('/') === 'profile/confirm') {
-      if (!studio.deps.adaptive) return json({ error: 'identity_unavailable' }, 503);
-      await authenticateAgentConnections(studio, request, botAgentId);
-      await studio.deps.adaptive.confirm(user.id, identityInput.parse(body), space);
-      const confirmedContext = await app.service.context(actor, space); app.service.assertContextCurrent(actor, confirmedContext);
-      return json({ confirmed: true });
-    }
     if (typeof application === 'function') {
       const mutationSpace = z.object({ space: spaceSchema }).parse(body).space;
       app = await application(actor, mutationSpace);

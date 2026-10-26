@@ -38,6 +38,8 @@ const COPY = {
     seeNotes: 'See my notes',
     retry: 'Group notes · tap to retry',
     copiesIn: (name: string) => `📌 Get your copies in ${name}’s chat`,
+    useVox: 'Your notes open in Vox now: tap ⋯, then Settings.',
+    reopen: 'Close and reopen me to choose here.',
   },
   fa: {
     here: (n: number, m: number | null) => m === null ? `${fa(n)} نفر اینجا` : `${fa(n)} از ${fa(m)} اینجا`,
@@ -63,6 +65,8 @@ const COPY = {
     seeNotes: 'دیدن یادداشت‌های من',
     retry: 'یادداشت‌های گروه · برای تلاش دوباره بزنید',
     copiesIn: (name: string) => `📌 نسخه‌هایتان را در گفتگو با ${name} بگیرید`,
+    useVox: 'یادداشت‌هایتان حالا در وکس باز می‌شوند: ⋯ و بعد «تنظیمات» را بزنید.',
+    reopen: 'برای انتخاب اینجا، مرا ببندید و دوباره باز کنید.',
   },
 } as const;
 

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
+import { MY_DATA_CODE, MY_DATA_PAGE } from './lib/studio/my-data-contract';
 
 /**
  * Security headers middleware for Vox
@@ -124,8 +125,9 @@ export function middleware(request: NextRequest) {
   const guestPost = ['/api/guest-rights/draft', '/api/guest-rights/requests', '/api/guest-rights/status', '/api/guest-rights/close', '/api/guest-rights/operations/actions'].includes(pathname) && request.method === 'POST';
   const guestApi = (guestGet || guestPost) && request.nextUrl.search === '';
   const guest = guestPage || guestApi;
-  const botConnections = ['GET', 'POST'].includes(request.method) &&
-    /^\/api\/agents\/[A-Za-z0-9_-]{1,128}\/connections(?:\/[A-Za-z0-9_.-]{1,200}){0,8}$/.test(pathname);
+  // The agent-bot connect page is a read-only dashboard (its initData is signed with a token the agent's creator holds):
+  // only the dashboard GET passes; the route itself refuses everything else too (connections/http.ts).
+  const botConnections = request.method === 'GET' && /^\/api\/agents\/[A-Za-z0-9_-]{1,128}\/connections$/.test(pathname);
   const connectionOAuth = request.method === 'GET' && (
     pathname === '/oauth/callback/remote_mcp' && request.nextUrl.search.length <= 8192 ||
     pathname === '/oauth/client-metadata.json' && request.nextUrl.search === '');
@@ -158,9 +160,13 @@ export function middleware(request: NextRequest) {
   }
   // Circles S4: the manager bot's Main Mini App is /studio. A pet launch over a group (startapp=p_…, which Telegram
   // also passes as tgWebAppStartParam) renders the pet launch page in place: a rewrite, so the initData fragment stays.
-  const petLaunch = (pathname === '/studio' || pathname === '/studio/') && request.method === 'GET' &&
-    /^p_[A-Za-z0-9_-]{1,62}$/.test(request.nextUrl.searchParams.get('tgWebAppStartParam') ?? '');
-  const response = petLaunch ? NextResponse.rewrite(new URL(`/studio/pet/launch${request.nextUrl.search}`, request.url)) : NextResponse.next();
+  const studioRoot = (pathname === '/studio' || pathname === '/studio/') && request.method === 'GET';
+  const startParam = studioRoot ? request.nextUrl.searchParams.get('tgWebAppStartParam') ?? '' : '';
+  const petLaunch = /^p_[A-Za-z0-9_-]{1,62}$/.test(startParam);
+  // The person's own data page (export, erase, notes): t.me/<VoxxBot>?startapp=mydata, signed by the manager bot only.
+  const myData = startParam === MY_DATA_CODE;
+  const response = petLaunch ? NextResponse.rewrite(new URL(`/studio/pet/launch${request.nextUrl.search}`, request.url))
+    : myData ? NextResponse.rewrite(new URL(`${MY_DATA_PAGE}${request.nextUrl.search}`, request.url)) : NextResponse.next();
   if (connectionOAuth) response.headers.set('Cache-Control', 'no-store');
   const isDev = process.env.NODE_ENV === 'development';
 
