@@ -310,6 +310,47 @@ test('source suppression marker requires its declared reader, even disabled or e
     assert.throws(() => requiredAdaptiveCapabilities(f.env), /incompatible/);
   }
 }));
+test('snapshot publication and retired effects require current readers even with both availability flags off', () => fixture(f => {
+  legacy(f);
+  const { supportedTelegramArchiveSnapshotPublicationVersions: version, ...old } = ADAPTIVE_RELEASE_CAPABILITIES;
+  assert.deepEqual(version, [1]);
+  f.env.STUDIO_TELEGRAM_ARCHIVE = '0'; f.env.STUDIO_TELEGRAM_ARCHIVE_SNAPSHOTS = '0';
+  const doc = document(), base = { agentId: 'agent', space: 'work', enabled: false, generation: 1, clearedAt: 100, index: [] };
+  const scope = { accountId, personId: doc.personId, agentId: 'agent', space: 'work', containerId: `private-tenant:${hash(accountId).slice(0, 24)}:work:private` };
+  const file = { fileId: 'synthetic-file', digest: 'a'.repeat(64), messageId: 1 }, head = { ...file, sequence: 1 };
+  const state = { schemaVersion: 1, scope, botId: 7, revision: 1, head, pending: [], receipts: [] };
+  const plan = { schemaVersion: 1, kind: 'snapshot-plan', scope, botId: 7, createdAt: 100, sourceRevision: 1, authorityRevision: 'authority',
+    authorityExpiresAt: 1000, suppressedEventIds: [], sourceHead: head, stateDigest: 'b'.repeat(64), authorityDigest: 'c'.repeat(64), receiptCount: 1,
+    sourceFiles: 2, sourceBytes: 1000, chunks: [{ ordinal: 0, digest: 'd'.repeat(64), bytes: 100, entries: 1 }] };
+  const publication = { id: 'pub', stage: 'prepared', authorityRevision: 'authority', authorityDigest: 'c'.repeat(64), sourceRevision: 1,
+    sourceStateDigest: 'b'.repeat(64), sourceHead: head, receiptCount: 1, receiptDigest: 'e'.repeat(64), createdAt: 100, validUntil: 1000,
+    planJson: JSON.stringify(plan), planDigest: 'f'.repeat(64), chunkRefs: [], ordinal: 0, budgetBytes: 4096, reservation: ' '.repeat(100) };
+  const snapshot = { version: 1, manifest: file, baseHead: head, receiptCount: 1, receiptDigest: 'e'.repeat(64), sourceStateDigest: 'b'.repeat(64), planDigest: 'f'.repeat(64), chunks: 1 };
+  const retiredOperation = { kind: 'snapshot', id: 'pub', scope, botId: 7, createdAt: 100, stage: 'unknown', files: [file] };
+  putCanonical(f, { ...doc, telegramArchives: [base] });
+  assert.doesNotThrow(() => assertReleaseAdaptiveCompatibility(f.env, old));
+  const rows = [{ ...base, snapshotPublicationVersion: 1 },
+    { ...base, snapshotPublicationVersion: 1, state: { ...state, publication } },
+    { ...base, snapshotPublicationVersion: 1, state: { ...state, snapshot } },
+    { ...base, snapshotPublicationVersion: 1, retiredOperation }];
+  for (const row of rows) {
+    putCanonical(f, { ...doc, telegramArchives: [row] });
+    assert.throws(() => assertReleaseAdaptiveCompatibility(f.env, old), /incompatible/);
+    assert.equal(assertReleaseAdaptiveCompatibility(f.env, ADAPTIVE_RELEASE_CAPABILITIES).telegramArchiveSnapshotPublicationVersion, 1);
+  }
+  const marked = { ...base, snapshotPublicationVersion: 1 };
+  for (const row of [{ ...base, snapshotPublicationVersion: 2 }, { ...base, retiredOperation },
+    { ...base, state: { ...state, publication } }, { ...base, state: { ...state, snapshot } },
+    { ...marked, retiredOperation: { ...retiredOperation, payload: 'forbidden' } },
+    { ...marked, retiredOperation: { ...retiredOperation, scope: { ...scope, personId: 'another-person' } } },
+    { ...marked, retiredOperation: { ...retiredOperation, files: [{ ...file, messageId: 0 }] } },
+    { ...marked, state: { ...state, snapshot: { ...snapshot, chunks: 17 } } },
+    { ...marked, state: { ...state, publication: { ...publication, stage: 'future' } } },
+    { ...marked, state: { ...state, publication: { ...publication, planJson: JSON.stringify({ ...plan, eventText: 'forbidden' }) } } }]) {
+    putCanonical(f, { ...doc, telegramArchives: [row] });
+    assert.throws(() => requiredAdaptiveCapabilities(f.env), /incompatible/);
+  }
+}));
 function putRights(f, version = 2) {
   const directory = join(f.env.STUDIO_DATA_DIR, 'rights-intake', 'v1'); mkdirSync(directory, { recursive: true });
   const file = join(directory, `${accountKey}.json`); writeFileSync(file, JSON.stringify({ version, accountId, revision: 1, observedServerTime: 200, requests: [], commandReceipts: [], ...(version === 2 ? { tombstones: [] } : {}) })); return file;

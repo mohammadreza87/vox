@@ -3,7 +3,7 @@ import { types } from 'node:util';
 import { archiveDigest, archiveEventSchema, archiveFileSchema, archiveHeadSchema, archiveScopeKey,
   archiveScopeSchema, archiveStateSchema, ArchiveUnavailableError, type ArchiveAuthority,
   type ArchiveEvent, type ArchiveState } from './contracts';
-import { MAX_ARCHIVE_CHECKPOINTS, MAX_ARCHIVE_FILE_BYTES, MAX_ARCHIVE_STATE_BYTES } from './service';
+import { MAX_ARCHIVE_CHECKPOINTS, MAX_ARCHIVE_FILE_BYTES, MAX_ARCHIVE_STATE_BYTES } from './limits';
 
 /** Offline prerequisite only. This format is NOT an archive head understood by
  * TelegramMemoryArchive. Nothing here uploads, publishes, prunes or frees capacity.
@@ -61,7 +61,7 @@ const parseFile = (bytes: Uint8Array): unknown => {
 function context(input: ArchiveSnapshotContext) {
   const now = integer.parse(input.now), state = archiveStateSchema.parse(input.state), authority = authoritySchema.parse(input.authority);
   if (encode(state).byteLength > MAX_ARCHIVE_STATE_BYTES || (state.head?.sequence ?? 0) > MAX_ARCHIVE_CHECKPOINTS) fail('capacity');
-  if (state.operation) fail('unknown_delivery');
+  if (state.operation || state.publication || state.snapshot) fail('unknown_delivery');
   if (archiveScopeKey(state.scope) !== archiveScopeKey(authority.scope) || state.botId !== authority.botId ||
     !/^telegram-account:[1-9]\d{0,15}$/.test(state.scope.accountId) || !Number.isSafeInteger(Number(state.scope.accountId.slice(17)))) fail('scope');
   if (authority.expiresAt <= now) fail('authority');
@@ -236,4 +236,46 @@ export function planArchiveSnapshot(input: ArchiveSnapshotContext & { files: rea
 export function verifyArchiveSnapshot(input: ArchiveSnapshotContext, artifacts: ArchiveSnapshotArtifacts,
   expectedManifestDigest: string): { events: ArchiveEvent[]; receipts: ArchiveState['receipts']; metrics: ArchiveSnapshotMetrics } {
   return guarded(() => verify(input, artifacts, expectedManifestDigest));
+}
+
+/** Metadata parsing only. It establishes no current authority or source proof. */
+export function readSnapshotPlanMetadata(planJson: string) {
+  return guarded(() => snapshotManifestSchema.parse(parseFile(new TextEncoder().encode(planJson))));
+}
+
+/** Historical codec validation for a separately trusted canonical published
+ * descriptor. The caller MUST compare its canonical receipt prefix and apply
+ * CURRENT authority/expiry before using any returned event. This does not relax
+ * the exact-current-state obligations of verifyArchiveSnapshot above. */
+export function readPublishedSnapshotArtifacts(planJson: string, chunks: readonly Uint8Array[], expectedPlanDigest: string) {
+  return guarded(() => {
+    const manifestBytes = new TextEncoder().encode(planJson);
+    if (manifestBytes.byteLength > MAX_ARCHIVE_FILE_BYTES || archiveDigest(manifestBytes) !== digest.parse(expectedPlanDigest)) fail('integrity');
+    const manifest = snapshotManifestSchema.parse(parseFile(manifestBytes));
+    if (manifest.authorityExpiresAt <= manifest.createdAt || !Array.isArray(chunks) || chunks.length !== manifest.chunks.length) fail('integrity');
+    const entries: SnapshotEntry[] = [];
+    for (let ordinal = 0; ordinal < chunks.length; ordinal++) {
+      if (!types.isUint8Array(chunks[ordinal]) || chunks[ordinal].byteLength > MAX_ARCHIVE_FILE_BYTES) fail('capacity');
+      const bytes = new Uint8Array(chunks[ordinal]), ref = manifest.chunks[ordinal];
+      if (bytes.byteLength > MAX_ARCHIVE_FILE_BYTES || ref.ordinal !== ordinal || ref.bytes !== bytes.byteLength || archiveDigest(bytes) !== ref.digest) fail('integrity');
+      const chunk = chunkSchema.parse(parseFile(bytes));
+      if (chunk.ordinal !== ordinal || chunk.entries.length !== ref.entries || entries.length + chunk.entries.length > MAX_RECEIPTS) fail('integrity');
+      entries.push(...chunk.entries);
+    }
+    if (entries.length !== manifest.receiptCount) fail('integrity');
+    const originalReceipts = entries.map(entry => entry.receipt);
+    const { latest } = receiptIndex({ receipts: originalReceipts } as ArchiveState);
+    const suppressed = new Set(manifest.suppressedEventIds);
+    for (const entry of entries) {
+      if (entry.disposition !== disposition(entry.receipt, entry.timing, latest, suppressed, manifest.createdAt)) fail('integrity');
+      if (entry.disposition === 'suppressed') { if (entry.timing || entry.event) fail('integrity'); continue; }
+      if (!entry.timing || entry.timing.receivedAt > manifest.createdAt || entry.timing.expiresAt <= entry.timing.receivedAt) fail('integrity');
+      if (entry.disposition !== 'active') { if (entry.event) fail('integrity'); continue; }
+      const event = entry.event;
+      if (!event || event.eventId !== entry.receipt.eventId || event.logicalId !== entry.receipt.logicalId ||
+        event.revision !== entry.receipt.sourceRevision || fingerprint(event) !== entry.receipt.fingerprint ||
+        !equal(entry.timing, { occurredAt: event.occurredAt, receivedAt: event.receivedAt, expiresAt: event.expiresAt })) return fail('integrity');
+    }
+    return { manifest, entries };
+  });
 }

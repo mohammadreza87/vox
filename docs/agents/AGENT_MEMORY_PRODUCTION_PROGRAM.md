@@ -53,7 +53,7 @@ Recurring development follow-up is separate from the already existing read-only 
 
 After the first installation, qualify the Telegram provider journey with an explicitly designated synthetic destination before activating capture. The next memory increment must address snapshot compaction and selective source lineage: reaching the first slice's fixed archive horizon must not become the long-term user experience, and correcting one fact should eventually invalidate its descendants without clearing unrelated history. Keep the existing bounded refusal and conservative clear behavior until those replacements independently pass recovery and deletion tests.
 
-## Current evidence
+## Original foundation evidence (historical)
 
 - Sol architect, runtime implementer, independent QA and release roles dispatched; release baseline completed.
 - Fresh dependency installation succeeded using Node 22.23.3 and the checked-in lockfile.
@@ -83,3 +83,11 @@ PR 115 merged as `6b410cd` with independent local and hosted acceptance; its bui
 The combined lineage release `5b360b9` was installed and verified with capture off; main CI 325 subsequently passed. The next bounded AM-05/AM-12 increment is the [pure snapshot planner/codec/verifier contract](AGENT_MEMORY_COMPACTION_CONTRACT.md) with synthetic qualification. It does not publish snapshots or raise archive capacity. A separate prerequisite repairs main `cd87918` dependency compatibility failures while preserving the existing Stripe wire API and UI behavior. Current source, dependency, independent QA and release reports remain separate evidence gates; preserve newer deployments before installation.
 
 Local fixed qualification passed 223 tests across eight suites plus TypeScript, scoped lint, Studio style and plan links; the independent reviewer owns acceptance of these exact bytes. Required hosted CI, merge and guarded installation remain pending at this source checkpoint. The interrupted compatibility run failed on temporary ENOSPC; the failure is retained and the bounded retry passed. No provider test was repeated.
+
+## Runtime snapshot publication — next bounded increment
+
+PR 120 merged as `632865ed` and was installed as build LGLTrOTFOJftJ3hsHIAXZ with independent acceptance, 7610 passing hosted tests, 55 browser tests and 18 local/public route checks; main CI 332 subsequently passed. These are dated receipts. On 26 October a newer Settings release `4a153f2` became live and main advanced to `ad6d4cc`. Preserve its source and changed configuration; global archive availability is now enabled by separate activation metadata, which does not prove per-user enrollment. This program will not repeat provider sends or activate new behavior from that flag.
+
+The next contract is an explicit, separately gated snapshot publication path with bounded durable staging, preserved uncertain-effect metadata, current-authority/state-fenced publication and snapshot-plus-later-bundle recovery. It keeps the existing receipt/checkpoint/retention limits. Independent contract and crash/concurrency acceptance precede publication qualification. Current main has a rights-lock handoff failure and a separate timestamp-sensitive privacy assertion; narrow repairs must preserve security criteria before promotion.
+
+The runtime publisher and installed-reader fence are now implemented behind a separate default-off switch; see [the bounded contract](AGENT_MEMORY_SNAPSHOT_PUBLICATION.md). The first independent run found a FILE transaction authority defect and fixture mismatches. Failed evidence is retained; the repaired five-file replay passed 102/102, while the unchanged Node gate passed 92/92 and static checks passed. No production/provider activation follows from these source results. Required hosted CI, merge and guarded installation remain separate gates. The next bounded feature is assistant-delivery provenance (generated, sent, failed and unknown), with horizon growth separately reviewed.
