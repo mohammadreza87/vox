@@ -10,6 +10,9 @@ import { ArchiveCapturePendingError } from './telegram-archive';
  *
  * The set of agent bots is refreshed every few seconds, so a newly hired agent
  * comes online without a restart and a fired one goes quiet.
+ *
+ * Every poll loop also watches for its updates being redirected (a foreign webhook or a competing poller: whoever
+ * holds an agent's token can do either) and alerts the operator through bot-integrity.ts. It never acts on it.
  */
 
 import type { TelegramBotClient, TelegramUpdate } from '../tireh/telegram/client';
@@ -17,8 +20,13 @@ import { logTelegramDiagnostic } from '../tireh/telegram/diagnostics';
 import type { Studio } from './service';
 import { AGENT_UPDATES, handleAgentUpdate, handleManagerUpdate, MANAGER_UPDATES } from './updates';
 import { randomUUID } from 'crypto';
+import { IntegrityWatch, integrityReporter, type IntegrityReason } from './bot-integrity';
 
 const REFRESH_MS = 8000;
+/** After any failure, a competing poller's conflict included: slowing down would hand the rival more updates. */
+const RETRY_MS = 3000;
+/** Only once a probe has seen a webhook (getUpdates cannot win any update while one is set): retry slower. */
+const WEBHOOK_RETRY_MS = 15_000;
 
 interface Loop { stop: () => void; token?: string }
 
@@ -26,15 +34,18 @@ export function pollLoop(
   bot: TelegramBotClient,
   allowed: string[],
   handle: (u: TelegramUpdate) => Promise<void>,
-  log: Pick<Console, 'info' | 'warn' | 'error'>
+  log: Pick<Console, 'info' | 'warn' | 'error'>,
+  onIntegrity?: (reason: IntegrityReason) => void
 ): Loop {
   let running = true;
   let offset: number | undefined;
+  const watch = new IntegrityWatch(bot);
   (async () => {
     await bot.deleteWebhook().catch(() => undefined);
     while (running) {
       try {
         const updates = await bot.getUpdates(offset, 25, allowed);
+        watch.succeeded();
         for (const update of updates) {
           try { await handle(update); }
           catch (error) {
@@ -45,10 +56,12 @@ export function pollLoop(
           }
           offset = update.update_id + 1;
         }
-      } catch {
+      } catch (error) {
         if (!running) break;
         logTelegramDiagnostic(log, 'poll_failed');
-        await new Promise((r) => setTimeout(r, 3000));
+        const reason = onIntegrity ? await watch.failed(error).catch(() => null) : null;
+        if (reason && running) onIntegrity!(reason);
+        await new Promise((r) => setTimeout(r, watch.webhookSeen ? WEBHOOK_RETRY_MS : RETRY_MS));
       }
     }
   })();
@@ -62,11 +75,13 @@ export function startBots(studio: Studio): { stop: () => void } {
   let refreshing = false;
   let profilesRefreshing = false;
 
+  const report = integrityReporter(studio);
+  const integrity = (target: string) => (reason: IntegrityReason) => { void report(target, reason).catch(() => undefined); };
   const manager = studio.deps.managerBot;
   if (manager) {
     const webAppUrl = studio.deps.webAppUrl;
     if (webAppUrl) manager.setChatMenuButton('Open Studio', webAppUrl).catch(() => logTelegramDiagnostic(log, 'menu_failed'));
-    loops.set('manager', pollLoop(manager, MANAGER_UPDATES, (update) => handleManagerUpdate(studio, update), log));
+    loops.set('manager', pollLoop(manager, MANAGER_UPDATES, (update) => handleManagerUpdate(studio, update), log, integrity('manager')));
   }
 
   const refresh = async () => {
@@ -87,7 +102,7 @@ export function startBots(studio: Studio): { stop: () => void } {
         if (current) { current.stop(); loops.delete(agent.id); }
         if (!token) continue;
         const bot = studio.deps.botFor(token);
-        loops.set(agent.id, { ...pollLoop(bot, AGENT_UPDATES, (update) => handleAgentUpdate(studio, agent.id, update, studio.relationshipEndpointId(token)), log), token });
+        loops.set(agent.id, { ...pollLoop(bot, AGENT_UPDATES, (update) => handleAgentUpdate(studio, agent.id, update, studio.relationshipEndpointId(token)), log, integrity(agent.id)), token });
         logTelegramDiagnostic(log, 'bot_online');
       }
       // Repairs legacy photos without delaying new/fired bot polling changes.

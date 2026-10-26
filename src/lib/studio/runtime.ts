@@ -429,6 +429,10 @@ async function create(): Promise<Studio> {
       circleChats: () => parseCircleChats(process.env.STUDIO_CIRCLE_CHATS),
       noteSelector: () => parseNoteSelector(process.env.STUDIO_NOTE_SELECTOR),
       mainAppBot: () => process.env.STUDIO_MAIN_APP_BOT,
+      // Agent-signed initData needs Telegram's Ed25519 signature (production key, auth.ts). The emergency switch
+      // STUDIO_INITDATA_SIGNATURE=shadow relaxes it for low-value pet routes only (initdata-trust.ts); read per use.
+      initDataSignature: () => (process.env.STUDIO_INITDATA_SIGNATURE?.trim() === 'shadow' ? 'shadow' : 'enforce'),
+      integrityAlerts: () => process.env.STUDIO_BOT_INTEGRITY_ALERTS?.trim() !== 'off',
       rateLimiter: storage.rateLimiter,
       imageToJpeg: toJpeg,
       // The portrait edit reference; STUDIO_PORTRAITS=text skips it (PLAN §7 A/B gate).

@@ -31,7 +31,7 @@ function fake(initial: PetCircle, fail?: PetError) {
     if (method === 'DELETE') return { erased: true };
     throw new Error(`unexpected ${method} ${action}`);
   });
-  const api = { get: vi.fn(), care: vi.fn(), talk: vi.fn(), talkVoice: vi.fn(), forget: vi.fn(), send } as unknown as PetApi;
+  const api = { get: vi.fn(), care: vi.fn(), talk: vi.fn(), talkVoice: vi.fn(), send } as unknown as PetApi;
   return { api, send };
 }
 
@@ -257,6 +257,32 @@ describe('the pet over a group (Circles S4)', () => {
     fireEvent.click(screen.getByRole('button', { name: /2 of 2 here/ }));
     await flush();
     expect(screen.getByRole('alert')).toHaveTextContent("That didn't work. Try again?");
+  });
+
+  it.each([['en', 'Your notes open in Vox now: tap ⋯, then Settings.'], ['fa', 'یادداشت‌هایتان حالا در وکس باز می‌شوند: ⋯ و بعد «تنظیمات» را بزنید.']])
+  ('agent-signed notes are refused (circle_use_vox): the sheet points to Vox, in %s', async (lang, line) => {
+    telegram(lang);
+    const { api, send } = fake(base({ myState: 'joined', joined: 2, on: true }));
+    render(<Circle api={api} agentId="ag1" code={CODE} onJoy={vi.fn()} />);
+    await flush();
+    send.mockImplementationOnce(async () => { throw new PetError(403, 'circle_use_vox', 'vox'); });
+    fireEvent.click(screen.getByRole('button', { name: lang === 'fa' ? /۲ از ۲ اینجا/ : /2 of 2 here/ }));
+    await flush();
+    expect(screen.getByRole('alert')).toHaveTextContent(line);
+  });
+
+  it.each([['en', 'Close and reopen me to choose here.'], ['fa', 'برای انتخاب اینجا، مرا ببندید و دوباره باز کنید.']])
+  ('a choice past the 1 h window (401 session_expired) asks to reopen, in %s, and the sheet stays', async (lang, line) => {
+    telegram(lang);
+    const { api, send } = fake(base());
+    render(<Circle api={api} agentId="ag1" code={CODE} onJoy={vi.fn()} />);
+    await flush(1500);
+    send.mockImplementationOnce(async () => { throw new PetError(401, 'session_expired', 'expired'); });
+    // the buttons are the group card's own copy (English here), the explanation follows the person's language
+    fireEvent.click(screen.getByRole('button', { name: 'Join · 18+' }));
+    await flush();
+    expect(screen.getByRole('alert')).toHaveTextContent(line);
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
   });
 
   it('a sheet takes focus when it opens (even by itself) and gives it back to the halo when it closes', async () => {

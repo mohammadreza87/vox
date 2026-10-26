@@ -61,12 +61,100 @@ describe('FILE Telegram user-message archive runtime',()=>{
     expect(JSON.stringify(x.h.chatLLM.replyRequests.at(-1))).toContain('SYNTHETIC_PROJECT_FERN');
     expect(await x.h.memory.history.recent(x.hired.agent.id,`private-tg-${ID.alice}`,20)).toEqual([]);
   });
-  it('keeps off-record messages out, and observed edits clear the whole archive',async()=>{
+  it('keeps off-record messages out, and observed edits suppress the accepted source',async()=>{
     const x=await setup();await x.archive.capture(x.hired.agent.id,x.message("Don't remember this SECRET",10),10);
     expect((await x.archive.context(ID.alice,x.hired.agent.id,'work')).text).toEqual([]);
     await x.archive.capture(x.hired.agent.id,x.message('OLD_EDIT',11),11);
     await handleAgentUpdate(x.h.studio,x.hired.agent.id,{update_id:12,edited_message:x.message('new text',11)});
     expect((await x.archive.context(ID.alice,x.hired.agent.id,'work')).text).toEqual([]);
+  });
+  it('keeps unrelated verified and pending sources through edit, FILE restart and recovery',async()=>{
+    const x=await setup(), scope=await x.archive.scope(ID.alice,x.hired.agent.id);
+    await x.archive.capture(x.hired.agent.id,x.message('EDITED_SOURCE',10),10);
+    await x.archive.capture(x.hired.agent.id,x.message('KEPT_VERIFIED',11),11);
+    await x.archive.archive(scope).checkpoint(scope,{force:true});
+    await x.archive.capture(x.hired.agent.id,x.message('KEPT_PENDING',12),12);
+    const before=await x.adaptive.withAccountView(ID.alice,d=>structuredClone(d.telegramArchives![0]));
+    await x.archive.invalidateEditedMessage(x.hired.agent.id,x.message('replacement is not archived',10));
+    const after=await x.adaptive.withAccountView(ID.alice,d=>structuredClone(d.telegramArchives![0]));
+    expect(after.state!.head).toEqual(before.state!.head);
+    expect(after.state!.receipts).toHaveLength(3);expect(after.state!.receipts[0].suppressed).toBe(true);
+    expect(after.state!.pending.map(e=>e.text)).toEqual(['KEPT_PENDING']);
+    expect(after.sourceSuppressionVersion).toBe(1);expect(after.clearedAt).toBe(before.clearedAt);
+    await x.archive.invalidateEditedMessage(x.hired.agent.id,x.message('another delayed edit',10));
+    expect(await x.adaptive.withAccountView(ID.alice,d=>d.telegramArchives![0].generation)).toBe(after.generation);
+    x.restart();await x.command('recover');
+    expect((await x.archive.archive(scope).recover(scope)).events.map(e=>e.text)).toEqual(['KEPT_VERIFIED','KEPT_PENDING']);
+    const context=(await x.archive.context(ID.alice,x.hired.agent.id,'work')).text.join();
+    expect(context).toContain('KEPT_VERIFIED');expect(context).toContain('KEPT_PENDING');expect(context).not.toContain('EDITED_SOURCE');
+    await x.archive.archive(scope).checkpoint(scope,{force:true});
+    expect((await x.archive.archive(scope).recover(scope)).events.map(e=>e.text)).toEqual(['KEPT_VERIFIED','KEPT_PENDING']);
+  });
+  it('keeps source suppression active with capture flag off, and untraced edits keep the full reset',async()=>{
+    const x=await setup();
+    await x.archive.capture(x.hired.agent.id,x.message('REMOVE_WHILE_OFF',10),10);
+    await x.archive.capture(x.hired.agent.id,x.message('KEPT_WHILE_OFF',11),11);
+    x.disable();await x.archive.invalidateEditedMessage(x.hired.agent.id,x.message('edit',10));
+    expect(await x.adaptive.withAccountView(ID.alice,d=>d.telegramArchives![0].state!.pending.map(e=>e.text))).toEqual(['KEPT_WHILE_OFF']);
+    await x.archive.invalidateEditedMessage(x.hired.agent.id,x.message('unknown edit',999));
+    const row=await x.adaptive.withAccountView(ID.alice,d=>d.telegramArchives![0]);
+    expect(row.state).toBeUndefined();expect(row.sourceSuppressionVersion).toBeUndefined();expect(row.index).toEqual([]);
+    expect(row.clearedAt).toBe(x.h.clock.now.getTime());
+  });
+  it('fences an upload racing an edit, retains unknown outcome and unrelated pending until owner reconciliation',async()=>{
+    const x=await setup(),scope=await x.archive.scope(ID.alice,x.hired.agent.id);
+    await x.archive.capture(x.hired.agent.id,x.message('EDIT_DURING_SEND',10),10);
+    await x.archive.capture(x.hired.agent.id,x.message('KEEP_AFTER_SEND',11),11);
+    const upload=vi.mocked(x.transport.upload).getMockImplementation()!;
+    vi.mocked(x.transport.upload).mockImplementationOnce(async(...args)=>{
+      const result=await upload(...args);
+      await x.archive.invalidateEditedMessage(x.hired.agent.id,x.message('changed',10));return result;
+    });
+    await expect(x.archive.archive(scope).checkpoint(scope,{force:true})).rejects.toMatchObject({code:'authority'});
+    x.restart();expect(await x.archive.archive(scope).status(scope)).toMatchObject({unknownDelivery:true,pending:1});
+    expect(await x.archive.archive(scope).checkpoint(scope,{force:true})).toEqual({status:'unknown'});
+    expect(x.transport.upload).toHaveBeenCalledTimes(1);
+    await x.command('retry-unknown confirm-duplicate-copies');await x.archive.archive(scope).checkpoint(scope,{force:true});
+    expect((await x.archive.archive(scope).recover(scope)).events.map(e=>e.text)).toEqual(['KEEP_AFTER_SEND']);
+  });
+  it('does not change legacy authority revisions before the first source suppression',async()=>{
+    const x=await setup(),scope=await x.archive.scope(ID.alice,x.hired.agent.id);
+    await x.archive.capture(x.hired.agent.id,x.message('LEGACY_PENDING',10),10);
+    // The existing row authority fields define the 9954c03 revision exactly.
+    const {digest}=await import('../../adaptive/persistence/repository');
+    await x.adaptive.withAccountDocument(ID.alice,d=>{
+      const row=d.telegramArchives![0];row.state!.operation={id:'legacy-prepared',sequence:1,
+        authorityRevision:digest([row.authorityStamp,row.generation,row.clearedAt,row.enabled]),
+        eventIds:['update:10'],stage:'prepared',createdAt:x.h.clock.now.getTime()};d.revision++;
+    });
+    x.restart();expect(await x.archive.archive(scope).checkpoint(scope,{force:true})).toMatchObject({status:'recoverable',sequence:1});
+  });
+  it('commits a conservative capacity reset and retains unknown external-effect metadata when tombstones cannot fit',async()=>{
+    const x=await setup(),scope=await x.archive.scope(ID.alice,x.hired.agent.id);
+    await x.archive.capture(x.hired.agent.id,x.message('FULL_LEDGER_SOURCE',10),10);
+    await x.archive.capture(x.hired.agent.id,x.message('UNRELATED_BEFORE_CAPACITY_RESET',11),11);
+    await x.archive.archive(scope).checkpoint(scope,{force:true});
+    const {MAX_ARCHIVE_STATE_BYTES}=await import('../../tireh/memory/telegram-archive/service');
+    await x.adaptive.withAccountDocument(ID.alice,d=>{
+      const state=d.telegramArchives![0].state!;
+      state.operation={id:'unknown-at-capacity',sequence:2,authorityRevision:'old',eventIds:['update:10'],stage:'unknown',createdAt:x.h.clock.now.getTime()};
+      for(let n=0;n<1000;n++){
+        state.receipts.push({eventId:`receipt-${n}-`.padEnd(200,'x'),logicalId:'telegram:10',sourceRevision:n+100,fingerprint:'a'.repeat(64)});
+        if(Buffer.byteLength(JSON.stringify(state))>MAX_ARCHIVE_STATE_BYTES){state.receipts.pop();break;}
+      }
+      expect(Buffer.byteLength(JSON.stringify(state))).toBeGreaterThan(MAX_ARCHIVE_STATE_BYTES-500);d.revision++;
+    });
+    await x.archive.invalidateEditedMessage(x.hired.agent.id,x.message('edit',10));x.restart();
+    const row=await x.adaptive.withAccountView(ID.alice,d=>d.telegramArchives![0]);
+    expect(row.state).toMatchObject({pending:[],receipts:[],operation:{id:'unknown-at-capacity',stage:'unknown'}});
+    expect(row.state!.head).toBeUndefined();expect(row.sourceSuppressionVersion).toBeUndefined();expect(row.index).toEqual([]);
+    expect(row.clearedAt).toBe(x.h.clock.now.getTime());
+    expect(await x.adaptive.withAccountView(ID.alice,d=>d.events.some(e=>e.kind==='archive_source_reset'&&e.resultId==='source_suppression_capacity'))).toBe(true);
+    expect(await x.archive.archive(scope).checkpoint(scope,{force:true})).toEqual({status:'unknown'});
+    await x.command('retry-unknown confirm-duplicate-copies');
+    x.h.clock.now=new Date(x.h.clock.now.getTime()+2000);await x.archive.capture(x.hired.agent.id,x.message('NEW_AFTER_CAPACITY_RESET',12),12);
+    await x.archive.archive(scope).checkpoint(scope,{force:true});
+    expect((await x.archive.archive(scope).recover(scope)).events.map(e=>e.text)).toEqual(['NEW_AFTER_CAPACITY_RESET']);
   });
   it('clear survives restart and suppresses stale captured text after re-enable',async()=>{
     const x=await setup(); const scope=await x.archive.scope(ID.alice,x.hired.agent.id);
@@ -112,6 +200,29 @@ describe('FILE Telegram user-message archive runtime',()=>{
 });
 
 describe('Telegram polling durable capture barrier',()=>{
+  it('retains a failed edited-source suppression and later updates until the edit commits durably',async()=>{
+    const x=await setup();await x.archive.capture(x.hired.agent.id,x.message('RETRY_EDITED_SOURCE',10),10);
+    await x.archive.capture(x.hired.agent.id,x.message('RETRY_KEPT_SOURCE',11),11);
+    vi.useFakeTimers();
+    const transaction=vi.spyOn(x.adaptive,'withAccountDocument').mockRejectedValueOnce(new Error('synthetic FILE commit failure'));
+    const edited={update_id:20,edited_message:x.message('replacement',10)},later={update_id:21};
+    let resumed!:()=>void;const complete=new Promise<void>(resolve=>{resumed=resolve;});
+    const getUpdates=vi.fn().mockResolvedValueOnce([edited,later]).mockResolvedValueOnce([edited,later]).mockImplementation(async()=>{resumed();return new Promise(()=>{});});
+    const after=vi.fn();
+    const loop=pollLoop({getUpdates,deleteWebhook:async()=>true} as unknown as TelegramBotClient,[],async update=>{
+      if(update.update_id===20) await x.archive.invalidateEditedMessage(x.hired.agent.id,edited.edited_message);
+      else after();
+    },{info:vi.fn(),warn:vi.fn(),error:vi.fn()});
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(transaction).toHaveBeenCalledTimes(1);expect(after).not.toHaveBeenCalled();expect(getUpdates).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(3000);
+      await complete;
+      expect(after).toHaveBeenCalledOnce();expect(getUpdates.mock.calls[1][0]).toBeUndefined();expect(getUpdates.mock.calls[2][0]).toBe(22);
+    } finally {loop.stop();vi.useRealTimers();}
+    x.restart();const context=(await x.archive.context(ID.alice,x.hired.agent.id,'work')).text.join();
+    expect(context).not.toContain('RETRY_EDITED_SOURCE');expect(context).toContain('RETRY_KEPT_SOURCE');
+  });
   it('does not advance offset or handle later updates before failed capture is service-durable',async()=>{
     vi.useFakeTimers();let attempt=0;const later=vi.fn();
     const getUpdates=vi.fn().mockResolvedValueOnce([{update_id:10},{update_id:11}]).mockImplementationOnce(async(offset:number|undefined)=>{expect(offset).toBeUndefined();return [{update_id:10},{update_id:11}];}).mockImplementation(async()=>new Promise(()=>{}));

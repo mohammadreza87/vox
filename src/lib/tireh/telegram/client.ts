@@ -108,11 +108,15 @@ export class TelegramApiError extends Error {
   /** A stable, structural classification (read without instanceof): set only for an oversize image download. */
   declare readonly code?: 'file_too_large';
 
-  constructor(readonly method: string, readonly description: string, code?: 'file_too_large') {
+  /** Telegram's error_code when it sent one (its contents "are subject to change": never the only signal). */
+  constructor(readonly method: string, readonly description: string, readonly errorCode?: number, code?: 'file_too_large') {
     super(`Telegram ${method} failed: ${description}`);
     if (code) this.code = code;
   }
 }
+
+/** getWebhookInfo, trimmed to what the integrity check reads. `url` is empty while the bot uses getUpdates. */
+export interface TelegramWebhookInfo { url: string; pending_update_count?: number }
 
 export class TelegramBotClient {
   readonly committedSendFence = true as const;
@@ -156,8 +160,9 @@ export class TelegramBotClient {
     const json = (await response.json().catch((error: unknown) => {
       if (rethrowAbort && signal?.aborted) throw signal.reason ?? error;
       return {};
-    })) as { ok?: boolean; result?: T; description?: string };
-    if (!json.ok) throw new TelegramApiError(method, json.description ?? `HTTP ${response.status}`);
+    })) as { ok?: boolean; result?: T; description?: string; error_code?: unknown };
+    if (!json.ok) throw new TelegramApiError(method, json.description ?? `HTTP ${response.status}`,
+      Number.isSafeInteger(json.error_code) ? json.error_code as number : Number.isSafeInteger(response.status) && response.status >= 400 ? response.status : undefined);
     return json.result as T;
   }
 
@@ -270,17 +275,17 @@ export class TelegramBotClient {
     const { maxBytes, signal } = options;
     const file = await this.call<{ file_path?: string; file_size?: number }>('getFile', { file_id: fileId }, signal, undefined, true);
     if (!file.file_path) throw new TelegramApiError('getFile', 'no file_path');
-    if (file.file_size && file.file_size > maxBytes) throw new TelegramApiError('getFile', 'file too large', 'file_too_large');
+    if (file.file_size && file.file_size > maxBytes) throw new TelegramApiError('getFile', 'file too large', undefined, 'file_too_large');
     const response = await this.fetchFn(`${this.fileBase}/${file.file_path}`, { signal });
     // An unread body holds its connection until garbage collection: cancel it before each early throw.
     const discard = async () => { await response.body?.cancel().catch(() => undefined); };
     if (!response.ok) { await discard(); throw new TelegramApiError('downloadFile', `HTTP ${response.status}`); }
     const length = Number(response.headers?.get?.('content-length') ?? NaN);
-    if (Number.isFinite(length) && length > maxBytes) { await discard(); throw new TelegramApiError('downloadFile', 'file too large', 'file_too_large'); }
+    if (Number.isFinite(length) && length > maxBytes) { await discard(); throw new TelegramApiError('downloadFile', 'file too large', undefined, 'file_too_large'); }
     const reader = typeof response.body?.getReader === 'function' ? response.body.getReader() : undefined;
     if (!reader) {
       const buffer = await response.arrayBuffer();
-      if (buffer.byteLength > maxBytes) throw new TelegramApiError('downloadFile', 'file too large', 'file_too_large');
+      if (buffer.byteLength > maxBytes) throw new TelegramApiError('downloadFile', 'file too large', undefined, 'file_too_large');
       return new Uint8Array(buffer);
     }
     // Streamed: stop reading, and cancel the body, as soon as the running total passes the cap.
@@ -292,7 +297,7 @@ export class TelegramBotClient {
       total += value.byteLength;
       if (total > maxBytes) {
         await reader.cancel().catch(() => undefined);
-        throw new TelegramApiError('downloadFile', 'file too large', 'file_too_large');
+        throw new TelegramApiError('downloadFile', 'file too large', undefined, 'file_too_large');
       }
       chunks.push(value);
     }
@@ -308,6 +313,11 @@ export class TelegramBotClient {
 
   deleteWebhook(): Promise<boolean> {
     return this.call('deleteWebhook', { drop_pending_updates: false });
+  }
+
+  /** Read-only: whether a webhook is set (and where). Used to detect a token holder redirecting this bot's updates. */
+  getWebhookInfo(): Promise<TelegramWebhookInfo> {
+    return this.call('getWebhookInfo', {});
   }
 
   /** Long polling; `timeoutSeconds` is how long Telegram holds the request open */

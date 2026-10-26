@@ -302,6 +302,29 @@ describe('PetApp: talk outcomes, sleep, the cache and the page', () => {
     expect(engine().talk).toHaveBeenLastCalledWith('idle');
   });
 
+  it.each([[undefined, 'Close and reopen me to keep talking.'], ['fa', 'برای ادامهٔ گفتگو، مرا ببندید و دوباره باز کنید.']])
+  ('talk past the 1 h window (401 session_expired) asks to reopen (%s) and never ends the pet', async (lang, line) => {
+    const { app } = telegram();
+    if (lang) Object.assign(app.initDataUnsafe.user, { language_code: lang });
+    const base = fast();
+    const get = vi.fn(base.get);
+    const talk = vi.fn<PetApi['talk']>(async () => { throw new PetError(401, 'session_expired', 'expired'); });
+    const api = fast({ get, talk });
+    const { container } = render(<PetApp agentId="x" api={api} />);
+    await ready(container);
+    const input = screen.getByRole('textbox', { name: 'Talk to Mochi' }) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'still there?' } });
+    fireEvent.submit(input.closest('form')!);
+    await waitFor(() => expect(bubble(container)).toBe(line));
+    await waitFor(() => expect(input.value).toBe('still there?'));
+    // the session lives on: no outsider screen, the pet and the pill stay, and the pill still sends
+    expect(screen.queryByRole('heading', { name: 'Open me in Telegram' })).toBeNull();
+    expect(container.querySelector('[data-toy="cookie"]')).toBeTruthy();
+    fireEvent.submit(input.closest('form')!);
+    await waitFor(() => expect(talk).toHaveBeenCalledTimes(2));
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
   it('no mic when the server cannot hear', async () => {
     telegram();
     const base = fast();
@@ -483,39 +506,6 @@ describe('PetApp: talk outcomes, sleep, the cache and the page', () => {
     expect(localStorage.getItem(SNAPSHOT_KEY('x'))).toBeNull();
   });
 
-  it('an uncertain forget remains paused, discards late replies, and retries deletion without GET or care replay', async () => {
-    const { app } = telegram();
-    let onSettings!: () => void;
-    Object.assign(app, {
-      SettingsButton: { show: vi.fn(), hide: vi.fn(), onClick: (cb: () => void) => { onSettings = cb; }, offClick: vi.fn() },
-      showConfirm: (_message: string, cb: (ok: boolean) => void) => cb(true), close: vi.fn(),
-    });
-    let reply!: (r: Awaited<ReturnType<PetApi['talk']>>) => void;
-    const talk = vi.fn(() => new Promise<Awaited<ReturnType<PetApi['talk']>>>((r) => { reply = r; }));
-    const forget = vi.fn().mockRejectedValueOnce(new Error('ack lost')).mockResolvedValueOnce({ erased: 1 });
-    const care = vi.fn(fast().care);
-    const api = fast({ talk, forget, care }); const get = vi.spyOn(api, 'get');
-    const { container } = render(<PetApp agentId="x" api={api} />);
-    await ready(container);
-    act(() => { engines.at(-1)!.opts.onCue?.({ type: 'care', action: 'pet' }); });
-    const input = screen.getByRole('textbox');
-    fireEvent.change(input, { target: { value: 'hello' } }); fireEvent.submit(input.closest('form')!);
-    act(() => onSettings());
-    const retry = await screen.findByRole('button', { name: 'Retry forgetting' });
-    expect(screen.getByRole('status')).toHaveTextContent('could not confirm');
-    expect(container.querySelector('.pet-body')).toBeNull();
-    await act(async () => { reply({ reply: 'ERASED_PRIVATE_REPLY', turnId: 'erased' }); });
-    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true }); act(() => document.dispatchEvent(new Event('visibilitychange')));
-    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true }); act(() => document.dispatchEvent(new Event('visibilitychange')));
-    await new Promise((r) => setTimeout(r, 2100));
-    expect(container.textContent).not.toContain('ERASED_PRIVATE_REPLY');
-    expect(get).toHaveBeenCalledTimes(1); expect(care).not.toHaveBeenCalled(); expect(app.close).not.toHaveBeenCalled();
-    fireEvent.click(retry);
-    await waitFor(() => expect(app.close).toHaveBeenCalledTimes(1));
-    expect(forget).toHaveBeenNthCalledWith(1, 'x'); expect(forget).toHaveBeenNthCalledWith(2, 'x');
-    expect(get).toHaveBeenCalledTimes(1); expect(care).not.toHaveBeenCalled();
-  });
-
   it('celebrations wait for a sleeping pet to wake', async () => {
     telegram();
     const base = fast();
@@ -620,24 +610,41 @@ describe('PetApp: talk outcomes, sleep, the cache and the page', () => {
     }
   });
 
-  it('Settings → forget my pet: confirms, erases on the server, forgets the cache and closes', async () => {
+  it('Settings opens the person’s data in Vox (VoxxBot-signed) and the pet itself never erases anything', async () => {
     const { app } = telegram();
     let onSettings: (() => void) | undefined;
     Object.assign(app, {
       SettingsButton: { show: vi.fn(), hide: vi.fn(), onClick: vi.fn((cb: () => void) => { onSettings = cb; }), offClick: vi.fn() },
-      showConfirm: vi.fn((_m: string, cb: (ok: boolean) => void) => cb(true)),
-      close: vi.fn(),
+      showConfirm: vi.fn(), close: vi.fn(), openTelegramLink: vi.fn(),
     });
-    const forget = vi.fn(async () => ({ erased: 1 }));
-    const { container } = render(<PetApp agentId="x" api={fast({ forget })} />);
+    const base = fast();
+    const api = fast({ get: async (id, o) => ({ ...(await base.get(id, o)), dataUrl: 'https://t.me/VoxxBot?startapp=mydata' }) });
+    expect(api).not.toHaveProperty('forget');
+    const fetchSpy = vi.fn(); vi.stubGlobal('fetch', fetchSpy);
+    const { container } = render(<PetApp agentId="x" api={api} />);
     await ready(container);
     expect(app.SettingsButton.show).toHaveBeenCalled();
-    expect(localStorage.getItem(SNAPSHOT_KEY('x'))).toBeNull();
     act(() => { onSettings!(); });
-    await waitFor(() => expect(app.close).toHaveBeenCalled());
-    expect(app.showConfirm.mock.calls[0][0]).toBe('Forget care for all your pets, including Mochi? Needs and Bond start over for every pet; your chats stay.');
-    expect(forget).toHaveBeenCalledWith('x');
-    expect(localStorage.getItem(SNAPSHOT_KEY('x'))).toBeFalsy();
+    expect(app.openTelegramLink).toHaveBeenCalledWith('https://t.me/VoxxBot?startapp=mydata');
+    expect(app.showConfirm).not.toHaveBeenCalled();
+    expect(app.close).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(container.querySelector('[data-toy="cookie"]')).toBeTruthy();
+  });
+
+  it('no Settings item without a t.me data link from the server, and no agent-signed connect link', async () => {
+    for (const dataUrl of [undefined, 'https://collector.invalid/mydata', 'javascript:alert(1)']) {
+      const { app } = telegram();
+      Object.assign(app, { SettingsButton: { show: vi.fn(), hide: vi.fn(), onClick: vi.fn(), offClick: vi.fn() } });
+      const base = fast();
+      const api = fast({ get: async (id, o) => ({ ...(await base.get(id, o)), ...(dataUrl ? { dataUrl } : {}) }) });
+      const { container, unmount } = render(<PetApp agentId="x" api={api} />);
+      await ready(container);
+      expect(app.SettingsButton.show).not.toHaveBeenCalled();
+      expect(container.querySelector('a[href*="/studio/connect/"]')).toBeNull();
+      expect(container.textContent).not.toContain('Connect an account');
+      unmount();
+    }
   });
 
   it('discards the private DOM on hide and revalidates before showing it again', async () => {

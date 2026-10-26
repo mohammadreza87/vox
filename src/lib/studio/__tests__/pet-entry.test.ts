@@ -10,7 +10,7 @@ import { NOW, rightsFixture, syntheticRightsPolicy } from '../../adaptive/rights
 import { RightsIntakeService } from '../../adaptive/rights-intake/service';
 import { newCare } from '../../pet/care';
 import { menuLabel, petPageUrl } from '../../pet/links';
-import { signInitData } from '../auth';
+import { agentInit } from './initdata-keys';
 import { PET_GUEST_RETENTION_MS, petStoreFor, sweepPetCare } from '../pet-store';
 import { assertRightsAccountNow, handleRightsRequest } from '../rights-http';
 import { Studio } from '../service';
@@ -170,7 +170,7 @@ describe('rights export and erasure', () => {
       } });
     const request = (path: string, body?: unknown) => {
       const req = new Request(`https://vox.synthetic/api/studio/rights/${path}`, { method: body === undefined ? 'GET' : 'POST',
-        headers: { origin: 'https://vox.synthetic', 'content-type': 'application/json', 'x-telegram-init-data': signInitData({ id: ID.alice, first_name: 'A' }, TOKEN) },
+        headers: { origin: 'https://vox.synthetic', 'content-type': 'application/json', 'x-telegram-init-data': agentInit({ id: ID.alice, first_name: 'A' }, TOKEN) },
         ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
       return handleRightsRequest(h.studio, req, path.split('?')[0].split('/').filter(Boolean), TOKEN);
     };

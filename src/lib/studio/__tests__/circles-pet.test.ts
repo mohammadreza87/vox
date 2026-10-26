@@ -7,7 +7,9 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TelegramChatMemberUpdated, TelegramUpdate, TelegramUser } from '../../tireh/telegram/client';
+import { agentInit } from './initdata-keys';
 import { signInitData } from '../auth';
+import { generateKeyPairSync } from 'crypto';
 import { handlePetLaunch, handlePetRequest } from '../pet-http';
 import { handleAgentUpdate } from '../updates';
 import { StudioRateLimiter } from '../ratelimit';
@@ -74,7 +76,7 @@ async function setup(o: { mode?: CirclesMode; mainApp?: string | null } = {}) {
     const extra: Record<string, string> = c.startParam ? { start_param: c.startParam, chat_type: 'supergroup', chat_instance: '-8812' } : {};
     const request = new Request(`${ORIGIN}/api/studio/pet/${agentId}${path.length ? `/${path.join('/')}` : ''}${c.query ?? ''}`, {
       method, headers: { origin: ORIGIN, 'content-type': 'application/json', 'x-pet-tz': 'UTC',
-        'x-telegram-init-data': signInitData({ id: c.as ?? ID.stranger, first_name: NAMES[c.as ?? ID.stranger] ?? 'S' }, c.token ?? MANAGER, undefined, extra) },
+        'x-telegram-init-data': agentInit({ id: c.as ?? ID.stranger, first_name: NAMES[c.as ?? ID.stranger] ?? 'S' }, c.token ?? MANAGER, undefined, extra) },
       ...(c.body !== undefined ? { body: JSON.stringify(c.body) } : {}),
     });
     return handlePetRequest(h.studio, request, agentId, path, c.manager ?? MANAGER);
@@ -296,7 +298,7 @@ describe('joining from the pet', () => {
     expect((await x.pet(['circle', 'leave'], { startParam: code, body: { code } })).status).toBe(429);
     expect((await x.pet(['notes', 'aa-aaaaaaaaaaaa'], { startParam: code, method: 'DELETE' })).status).toBe(429);
     const hostile = new Request(`${ORIGIN}/api/studio/pet/${x.cookie.agent.id}/circle/leave`, { method: 'POST', body: JSON.stringify({ code }),
-      headers: { origin: 'https://hostile.example', 'content-type': 'application/json', 'x-telegram-init-data': signInitData({ id: ID.stranger, first_name: 'P' }, MANAGER, undefined, { start_param: code }) } });
+      headers: { origin: 'https://hostile.example', 'content-type': 'application/json', 'x-telegram-init-data': agentInit({ id: ID.stranger, first_name: 'P' }, MANAGER, undefined, { start_param: code }) } });
     expect((await handlePetRequest(x.h.studio, hostile, x.cookie.agent.id, ['circle', 'leave'], MANAGER)).status).toBe(403);
   });
 });
@@ -352,15 +354,16 @@ describe('notes in the pet', () => {
     x.h.studio.deps.circles = () => 'reply';
     // The manager route is off with the flag; the agent's own bot sees no notes either.
     expect((await x.pet(['notes'], { startParam: code })).status).toBe(401);
+    // The agent's own bot never serves notes now (hotfix): they are read and erased in Vox.
     const own = await x.pet(['notes'], { token: x.cookie.token, query: `?code=${code}` });
-    expect(own.status).toBe(404);
-    expect(await own.json()).toEqual({ error: 'circle_unavailable' });
+    expect(own.status).toBe(403);
+    expect(await own.json()).toEqual({ error: 'circle_use_vox' });
   });
 });
 
 describe('the pet launch page resolver', () => {
   const resolve = (x: Awaited<ReturnType<typeof setup>>, code: string, token = MANAGER, manager = MANAGER) =>
-    handlePetLaunch(x.h.studio, new Request(`${ORIGIN}/api/studio/pet/launch`, { headers: { 'x-telegram-init-data': signInitData({ id: ID.stranger, first_name: 'P' }, token, undefined, { start_param: code }) } }), manager);
+    handlePetLaunch(x.h.studio, new Request(`${ORIGIN}/api/studio/pet/launch`, { headers: { 'x-telegram-init-data': agentInit({ id: ID.stranger, first_name: 'P' }, token, undefined, { start_param: code }) } }), manager);
 
   it('maps a signed launch code to its agent (manager bot, or the agent bot itself), and nothing else', async () => {
     const x = await setup();
@@ -373,6 +376,22 @@ describe('the pet launch page resolver', () => {
     expect((await resolve(x, 'p_junk')).status).toBe(404);
     x.h.studio.deps.circles = () => 'reply';
     expect((await resolve(x, code)).status).toBe(404);
+  });
+
+  it("the agent's own bot branch needs Telegram's signature: missing or forged is 401; the manager's present signature must verify", async () => {
+    const x = await setup({ mainApp: null });
+    await x.open();
+    const code = await x.codeFor(x.cookie.agent.id);
+    const launch = (init: string) => handlePetLaunch(x.h.studio, new Request(`${ORIGIN}/api/studio/pet/launch`, { headers: { 'x-telegram-init-data': init } }), MANAGER);
+    const who = { id: ID.stranger, first_name: 'P' };
+    expect((await launch(agentInit(who, x.cookie.token, undefined, { start_param: code }))).status).toBe(200);
+    expect((await launch(signInitData(who, x.cookie.token, undefined, { start_param: code }))).status).toBe(401);
+    const otherKey = generateKeyPairSync('ed25519').privateKey;
+    expect((await launch(signInitData(who, x.cookie.token, undefined, { start_param: code }, { botId: x.cookie.botId, privateKey: otherKey }))).status).toBe(401);
+    // the shadow switch relaxes this low-value lookup only for a missing signature, never a forged one
+    x.h.studio.deps.initDataSignature = () => 'shadow';
+    expect((await launch(signInitData(who, x.cookie.token, undefined, { start_param: code }))).status).toBe(200);
+    expect((await launch(signInitData(who, x.cookie.token, undefined, { start_param: code }, { botId: x.cookie.botId, privateKey: otherKey }))).status).toBe(401);
   });
 });
 
@@ -422,14 +441,16 @@ describe('S4 review fixes', () => {
     const x = await setup();
     await x.open();
     const code = await x.codeFor(x.cookie.agent.id);
-    const resolve = () => handlePetLaunch(x.h.studio, new Request(`${ORIGIN}/api/studio/pet/launch`, { headers: { 'x-telegram-init-data': signInitData({ id: ID.stranger, first_name: 'P' }, MANAGER, undefined, { start_param: code }) } }), MANAGER);
+    const resolve = () => handlePetLaunch(x.h.studio, new Request(`${ORIGIN}/api/studio/pet/launch`, { headers: { 'x-telegram-init-data': agentInit({ id: ID.stranger, first_name: 'P' }, MANAGER, undefined, { start_param: code }) } }), MANAGER);
     expect((await resolve()).status).toBe(200);
     expect((await x.pet([], { startParam: code })).status).toBe(200);
     x.h.studio.deps.circleChats = () => new Set();
     expect((await resolve()).status).toBe(404);
-    for (const [path, c] of [[[], {}], [['care'], { body: { action: 'feed' } }], [['export'], {}], [['circle'], {}]] as const) {
+    for (const [path, c] of [[[], {}], [['care'], { body: { action: 'feed' } }], [['circle'], {}]] as const) {
       expect((await x.pet([...path], { startParam: code, ...c })).status).toBe(401);
     }
+    // export left the pet altogether (moved to My data), whoever signs
+    expect((await x.pet(['export'], { startParam: code })).status).toBe(410);
     // The agent's own bot still opens its own pet (that never depended on the group).
     expect((await x.pet([], { token: x.cookie.token })).status).toBe(200);
   });

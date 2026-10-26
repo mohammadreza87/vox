@@ -8,7 +8,7 @@
 
 import {
   PET_API_BASE, PET_TZ_HEADER,
-  type CareRequest, type CareResponse, type PetErrorBody, type PetErrorCode, type PetForgetResponse, type PetView,
+  type CareRequest, type CareResponse, type PetErrorBody, type PetErrorCode, type PetView,
   type TalkRequest, type TalkResponse, type TalkVoiceResponse,
 } from '@/lib/pet/types';
 import type { PetApi, PetRequestOpts } from './contract';
@@ -68,7 +68,6 @@ export function createHttpApi(d: HttpDeps = {}): PetApi {
       form.append('audio', audio, `voice.${audio.type.includes('mp4') ? 'm4a' : audio.type.includes('ogg') ? 'ogg' : 'webm'}`);
       return call<TalkVoiceResponse>('POST', url(agentId, 'talk-voice'), form, o, epochs.get(agentId));
     },
-    forget: (agentId, o) => call<PetForgetResponse>('POST', url(agentId, 'forget'), {}, o),
     send: (agentId, method, action, body, o) => call(method, url(agentId, action), body, o),
   };
 }
@@ -97,7 +96,6 @@ export function createPetApi(search = typeof location === 'undefined' ? '' : loc
     care: async (agentId, req, o) => (await fake).care(agentId, req, o),
     talk: async (agentId, req, o) => (await fake).talk(agentId, req, o),
     talkVoice: async (agentId, audio, o) => (await fake).talkVoice(agentId, audio, o),
-    forget: async (agentId, o) => (await fake).forget(agentId, o),
     send: async (agentId, method, action, body, o) => (await fake).send!(agentId, method, action, body, o),
   };
 }

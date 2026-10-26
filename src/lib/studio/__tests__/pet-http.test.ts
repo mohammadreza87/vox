@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { signInitData, type InitDataUser } from '../auth';
+import { generateKeyPairSync } from 'crypto';
+import { agentInit } from './initdata-keys';
 import { handleStudioRequest } from '../http';
 import { handlePetRequest, petRole, plausibleInitData, souvenir } from '../pet-http';
+import { handleMyDataRequest } from '../my-data-http';
 import { petStoreFor } from '../pet-store';
 import { StudioRateLimiter } from '../ratelimit';
 import { handleAgentUpdate } from '../updates';
@@ -15,6 +18,7 @@ import type { AgentVisibility } from '../types';
 import { hire, ID, makeStudio, seedOrg, type Harness } from './helpers';
 
 const ORIGIN = 'https://vox.example';
+const MANAGER = '123:synthetic-manager';
 const user = (id: number): InitDataUser => ({ id, first_name: `U${id}` });
 
 interface Call { method?: string; as?: number; token?: string; body?: unknown; raw?: BodyInit; headers?: Record<string, string>; agentId?: string }
@@ -30,7 +34,7 @@ async function setup(o: { visibility?: AgentVisibility; harness?: Harness } = {}
     const request = new Request(`${ORIGIN}/api/studio/pet/${agentId}${path.length ? `/${path.join('/')}` : ''}`, {
       method,
       headers: { origin: ORIGIN, ...(c.raw instanceof FormData ? {} : { 'content-type': 'application/json' }), 'x-pet-tz': 'UTC',
-        'x-telegram-init-data': signInitData(user(c.as ?? ID.alice), c.token ?? mochi.token), ...c.headers },
+        'x-telegram-init-data': agentInit(user(c.as ?? ID.alice), c.token ?? mochi.token), ...c.headers },
       ...(c.raw !== undefined ? { body: c.raw } : c.body !== undefined ? { body: JSON.stringify(c.body) } : {}),
     });
     return handlePetRequest(h.studio, request, agentId, path);
@@ -300,9 +304,12 @@ describe('talk', () => {
   });
 
   it('rejects an unversioned mutation after forget until an explicit fresh open supplies its epoch', async () => {
-    const { call } = await setup();
+    const { h, call } = await setup();
     expect((await call()).status).toBe(200);
-    expect((await call(['forget'], { body: {} })).status).toBe(200);
+    // Forget now runs on the VoxxBot-signed My data page; the pet's epoch fence still sees it.
+    const forget = await handleMyDataRequest(h.studio, new Request(`${ORIGIN}/api/studio/my-data/forget`, { method: 'POST',
+      headers: { origin: ORIGIN, 'content-type': 'application/json', 'x-telegram-init-data': agentInit(user(ID.alice), MANAGER) }, body: JSON.stringify({ confirm: true }) }), ['forget'], MANAGER);
+    expect(forget.status).toBe(200);
     expect((await call(['care'], { body: { action: 'feed' } })).status).toBe(409);
     const view = await (await call()).json() as PetView;
     expect(view.careEpoch).not.toBe('initial');
@@ -329,7 +336,7 @@ describe('the pet entrance (rate limits, pre-auth)', () => {
     for (let i = 0; i < 3; i++) expect((await call()).status).toBe(200);
     expect((await call()).status).toBe(429);
     expect((await call([], { agentId: other.agent.id, token: other.token })).status).toBe(200);
-    const studioReq = new Request('https://vox.example/api/studio/me', { headers: { 'x-telegram-init-data': signInitData(user(ID.alice), '123:synthetic-manager') } });
+    const studioReq = new Request('https://vox.example/api/studio/me', { headers: { 'x-telegram-init-data': agentInit(user(ID.alice), '123:synthetic-manager') } });
     expect((await handleStudioRequest(h.studio, studioReq, ['me'], { botToken: '123:synthetic-manager', devUser: null })).status).toBe(200);
   });
 
@@ -337,7 +344,7 @@ describe('the pet entrance (rate limits, pre-auth)', () => {
     const { h, call, mochi } = await setup();
     expect((await call()).status).toBe(200);
     const read = vi.spyOn(h.store, 'read');
-    const signed = new URLSearchParams(signInitData(user(ID.alice), mochi.token));
+    const signed = new URLSearchParams(agentInit(user(ID.alice), mochi.token));
     const variant = (edit: (p: URLSearchParams) => void) => { const p = new URLSearchParams(signed); edit(p); return p.toString(); };
     for (const initData of [
       'junk', 'hash=zz', variant((p) => p.set('hash', 'x'.repeat(64))), variant((p) => p.delete('user')),
@@ -352,61 +359,126 @@ describe('the pet entrance (rate limits, pre-auth)', () => {
   });
 });
 
-describe('the person’s own pet data (guest rights)', () => {
-  it('anyone the bot signed for can export and forget their care, guests included', async () => {
+describe("Telegram's Ed25519 signature on agent-signed initData", () => {
+  /** Every agent-signed pet route, with a body that would pass its own validation. */
+  const ROUTES: Array<{ name: string; path: string[]; method?: string; body?: unknown; raw?: () => BodyInit; relaxable: boolean }> = [
+    { name: 'view', path: [], relaxable: true },
+    { name: 'care', path: ['care'], body: { action: 'feed' }, relaxable: true },
+    { name: 'circle', path: ['circle'], relaxable: false }, // discloses the group and its joined members: never relaxed
+    { name: 'talk', path: ['talk'], body: { text: 'hi' }, relaxable: false },
+    { name: 'talk-voice', path: ['talk-voice'], raw: () => { const f = new FormData(); f.append('audio', new Blob([new Uint8Array(8)])); return f; }, relaxable: false },
+    { name: 'circle/decision', path: ['circle', 'decision'], body: { code: 'A'.repeat(16), choice: 'joined', revision: 'r1' }, relaxable: false },
+    { name: 'circle/leave', path: ['circle', 'leave'], body: { code: 'A'.repeat(16) }, relaxable: false },
+    { name: 'notes', path: ['notes'], relaxable: false },
+    { name: 'notes erase', path: ['notes', 'aa-AAAAAAAAAAAA'], method: 'DELETE', relaxable: false },
+  ];
+  const forgedKey = generateKeyPairSync('ed25519').privateKey;
+  const inits = (token: string, botId: number, id = ID.alice) => ({
+    valid: agentInit(user(id), token),
+    missing: signInitData(user(id), token),
+    // a token holder signing with their own key, and a genuine signature for a different bot
+    forged: signInitData(user(id), token, undefined, {}, { botId, privateKey: forgedKey }),
+    otherBot: agentInit(user(id), token, undefined, {}, botId + 1),
+  });
+
+  for (const r of ROUTES) {
+    it(`${r.name}: a forged or missing signature is 401; a valid one is not`, async () => {
+      const { h, call, mochi } = await setup({ visibility: 'public' });
+      const i = inits(mochi.token, mochi.botId);
+      const send = (init: string) => call(r.path, { method: r.method, body: r.body, raw: r.raw?.(), headers: { 'x-telegram-init-data': init } });
+      for (const bad of [i.missing, i.forged, i.otherBot]) expect((await send(bad)).status).toBe(401);
+      expect((await send(i.valid)).status).not.toBe(401);
+      // the emergency switch relaxes a missing signature for the low-value routes only, never a forged one
+      h.studio.deps.initDataSignature = () => 'shadow';
+      expect((await send(i.forged)).status).toBe(401);
+      expect((await send(i.otherBot)).status).toBe(401);
+      if (r.relaxable) expect((await send(i.missing)).status).not.toBe(401);
+      else expect((await send(i.missing)).status).toBe(401);
+    });
+  }
+
+  it('reports content-free telemetry: missing and invalid outcomes, never an id or initData', async () => {
+    const { h, call, mochi } = await setup();
+    const i = inits(mochi.token, mochi.botId);
+    await call([], { headers: { 'x-telegram-init-data': i.missing } });
+    await call([], { headers: { 'x-telegram-init-data': i.forged } });
+    expect(h.logger.warn).toHaveBeenCalledWith({ type: 'initdata_signature', surface: 'pet', outcome: 'missing' });
+    expect(h.logger.warn).toHaveBeenCalledWith({ type: 'initdata_signature', surface: 'pet', outcome: 'invalid' });
+    expect(JSON.stringify(h.logger.warn.mock.calls)).not.toContain(String(ID.alice));
+  });
+
+  it('talk and consent accept agent-signed initData for one hour; view keeps 24 hours', async () => {
+    const { h, call, mochi } = await setup();
+    await allowTalk(h, mochi.agent.id, ID.alice);
+    const old = agentInit(user(ID.alice), mochi.token, Math.floor(Date.now() / 1000) - 2 * 3600);
+    expect((await call([], { headers: { 'x-telegram-init-data': old } })).status).toBe(200);
+    // genuine but past the hour: a distinct 401 the pet shows as "reopen me", never the outsider screen
+    for (const [path, body] of [[['talk'], { text: 'hi' }], [['circle', 'leave'], { code: 'A'.repeat(16) }],
+      [['circle', 'decision'], { code: 'A'.repeat(16), choice: 'joined', revision: 'r1' }]] as const) {
+      const res = await call([...path], { body, headers: { 'x-telegram-init-data': old } });
+      expect(res.status).toBe(401);
+      expect(await res.json()).toEqual({ error: 'session_expired' });
+    }
+    const fresh = agentInit(user(ID.alice), mochi.token, Math.floor(Date.now() / 1000) - 30 * 60);
+    expect((await call(['talk'], { body: { text: 'hi' }, headers: { 'x-telegram-init-data': fresh } })).status).toBe(200);
+  });
+
+  it('session_expired is only for genuine initData: forged, unsigned, other-bot or past-24 h stay authentication_required', async () => {
+    const { h, call, mochi } = await setup();
+    await allowTalk(h, mochi.agent.id, ID.alice);
+    const twoHours = Math.floor(Date.now() / 1000) - 2 * 3600;
+    const forgedKey = generateKeyPairSync('ed25519').privateKey;
+    const refused = [
+      signInitData(user(ID.alice), mochi.token, twoHours), // no signature
+      signInitData(user(ID.alice), mochi.token, twoHours, {}, { botId: mochi.botId, privateKey: forgedKey }), // token holder's own key
+      agentInit(user(ID.alice), mochi.token, twoHours, {}, mochi.botId + 1), // Telegram's signature for another bot
+      agentInit(user(ID.alice), 'token-999999', twoHours), // another bot's HMAC
+      agentInit(user(ID.alice), mochi.token, Math.floor(Date.now() / 1000) - 25 * 3600), // past the 24 h default too
+    ];
+    h.studio.deps.initDataSignature = () => 'shadow'; // the switch never relaxes talk, so never turns a missing signature into "expired"
+    for (const init of refused) {
+      const res = await call(['talk'], { body: { text: 'hi' }, headers: { 'x-telegram-init-data': init } });
+      expect(res.status).toBe(401);
+      expect(await res.json()).toEqual({ error: 'authentication_required' });
+    }
+  });
+});
+
+describe('the person’s own pet data moved to Vox (agent-signed trust hotfix)', () => {
+  it('export and forget answer 410 moved_to_vox for every signer, before any store is read or erased', async () => {
     const { h, call, mochi } = await setup({ visibility: 'public' });
     await call([], { as: ID.stranger });
-    const exported = await call(['export'], { as: ID.stranger });
-    expect(exported.status).toBe(200);
-    expect(exported.headers.get('content-disposition')).toMatch(/^attachment;/);
-    expect((await exported.json()).petCare).toEqual([expect.objectContaining({ agentId: mochi.agent.id, userId: ID.stranger })]);
-    expect((await call(['forget'], { as: ID.stranger, body: {}, headers: { origin: 'https://hostile.example' } })).status).toBe(403);
-    expect(await (await call(['forget'], { as: ID.stranger, body: {} })).json()).toEqual({ erased: 1 });
-    expect(await (await petStoreFor(h.studio)).listForUser(ID.stranger)).toEqual([]);
-    // a blocked person (who now sees the private screen) can still erase what was kept
-    await call([], { as: ID.bob });
-    await h.store.update((s) => { s.agents.find((a) => a.id === mochi.agent.id)!.blocked = [ID.bob]; });
-    expect(await (await call(['forget'], { as: ID.bob, body: {} })).json()).toEqual({ erased: 1 });
-    expect((await h.store.read()).members.some((m) => m.telegramId === ID.stranger)).toBe(false);
-  });
-
-  it('export and forget include the person\'s own agent choices (Circles), and only theirs', async () => {
-    const { h, call, mochi } = await setup({ visibility: 'public' });
-    h.studio.deps.circles = () => 'reply';
-    const choose = async (telegramId: number) => {
-      const receipt = await h.studio.presentAgentCard(mochi.agent.id, telegramId, { copyHash: 'a'.repeat(64), locale: 'en' });
-      h.clock.now = new Date(h.clock.now.getTime() + 1000);
-      expect(await h.studio.recordAgentChoice(mochi.agent.id, telegramId, receipt.id, 'joined', `cb-${telegramId}`)).toMatchObject({ ok: true });
-    };
-    await choose(ID.stranger);
-    await choose(4242);
-    const exported = await (await call(['export'], { as: ID.stranger })).json();
-    expect(exported.agentChoices).toEqual([expect.objectContaining({ agentId: mochi.agent.id, telegramId: ID.stranger, choice: 'joined', adultDeclaredAt: expect.any(String),
-      notice: expect.objectContaining({ copyHash: 'a'.repeat(64), locale: 'en' }) })]);
-    expect(await (await call(['forget'], { as: ID.stranger, body: {} })).json()).toEqual({ erased: 0, choicesErased: 1 });
-    expect(await h.studio.deps.choices!.listForUser(ID.stranger)).toEqual([]);
-    expect((await h.studio.deps.choices!.listForUser(4242)).map((r) => r.join?.choice)).toEqual(['joined']);
-    // Nothing chosen: the bodies are exactly today's.
-    expect(await (await call(['export'], { as: ID.stranger })).json()).toEqual({ petCare: [] });
-    expect(await (await call(['forget'], { as: ID.stranger, body: {} })).json()).toEqual({ erased: 0 });
-  });
-
-  it('export and forget include the person\'s own circle participation (Circles S2), and only theirs', async () => {
-    const { h, call } = await setup({ visibility: 'public' });
-    const chatId = -100888, ledger = h.studio.deps.circleLedger!;
-    await ledger.open({ chatId, agentId: 'agent-x', openedBy: ID.alice, at: h.clock.now, card: { id: 'gcard', copyHash: 'a'.repeat(64), locale: 'en', noticeVersion: 'circle-v1' } });
-    h.clock.now = new Date(h.clock.now.getTime() + 1000);
-    for (const id of [ID.stranger, 4242]) {
-      await ledger.index(id, chatId);
-      expect(await ledger.decide(chatId, { telegramId: id, choice: 'joined', cardId: 'gcard', eventId: `cb-${id}`, at: h.clock.now, surface: 'group_card' })).toMatchObject({ ok: true });
+    const read = vi.spyOn(h.store, 'read');
+    for (const as of [ID.stranger, ID.alice]) {
+      const exported = await call(['export'], { as });
+      expect(exported.status).toBe(410);
+      expect(await exported.json()).toEqual({ error: 'moved_to_vox' });
+      expect(exported.headers.get('content-disposition')).toBeNull();
+      expect((await call(['forget'], { as, body: {} })).status).toBe(410);
     }
-    const exported = await (await call(['export'], { as: ID.stranger })).json();
-    expect(exported.circles).toEqual([expect.objectContaining({ chatId, state: 'joined', windows: [{ joinedAt: h.clock.now.toISOString() }],
-      evidence: expect.objectContaining({ eventId: `cb-${ID.stranger}`, adultDeclared: true }) })]);
-    expect(JSON.stringify(exported)).not.toContain('4242');
-    expect(await (await call(['forget'], { as: ID.stranger, body: {} })).json()).toEqual({ erased: 0, circlesErased: 1 });
-    expect((await ledger.get(chatId))!.participants.map((p) => p.telegramId)).toEqual([4242]);
-    expect(await (await call(['export'], { as: ID.stranger })).json()).toEqual({ petCare: [] });
+    // even a manager-signed request (the S4 launch signer) and a forged one get the same answer
+    expect((await call(['export'], { token: MANAGER })).status).toBe(410);
+    expect((await call(['forget'], { token: MANAGER, body: {} })).status).toBe(410);
+    expect((await call(['forget'], { body: {}, headers: { 'x-telegram-init-data': 'hash=00' } })).status).toBe(410);
+    expect(read).not.toHaveBeenCalled();
+    expect(await (await petStoreFor(h.studio)).listForUser(ID.stranger)).toEqual([expect.objectContaining({ agentId: mochi.agent.id })]);
+  });
+
+  it('notes are refused on agent-signed initData with circle_use_vox, even with a valid signature', async () => {
+    const { call } = await setup({ visibility: 'public' });
+    const notes = await call(['notes']);
+    expect(notes.status).toBe(403);
+    expect(await notes.json()).toEqual({ error: 'circle_use_vox' });
+    expect((await call(['notes', 'aa-AAAAAAAAAAAA'], { method: 'DELETE' })).status).toBe(403);
+  });
+
+  it('the view carries the content-free My data link: startapp with the manager Main Mini App, else start', async () => {
+    const { h, call } = await setup();
+    expect(((await (await call()).json()) as PetView).dataUrl).toBe('https://t.me/VoxxBot?start=mydata');
+    h.studio.deps.mainAppBot = () => '@voxxbot';
+    expect(((await (await call()).json()) as PetView).dataUrl).toBe('https://t.me/VoxxBot?startapp=mydata');
+    h.studio.deps.managerBot = null;
+    expect(((await (await call()).json()) as PetView)).not.toHaveProperty('dataUrl');
   });
 });
 

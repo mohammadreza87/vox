@@ -1,6 +1,6 @@
 'use client';
 
-import { animate, AnimatePresence, motion } from 'framer-motion';
+import { animate, AnimatePresence, motion, type Variants } from 'framer-motion';
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { PRESET_LOOKS, normalizeLook } from '@/lib/studio/character';
 import type { CharacterLook, Hue, Stage } from '@/lib/studio/types';
@@ -8,6 +8,7 @@ import { haptic, type AgentView } from '../../_lib/client';
 import { DUR, EASE, SPRING } from '../../_lib/motion';
 import { Cloud, PALETTE, type CloudMoment, type Expression } from '../Cloud';
 import { Burst } from '../motion/Burst';
+import { useFrozenExit } from '../motion/useFrozenExit';
 import { errorMessage, useNav } from '../StudioApp';
 import { Icon, Seg, hueVars } from '../ui';
 import {
@@ -37,6 +38,28 @@ const partOf = (p: Change): keyof typeof STAGE_FOR | null =>
     : p.features ? (FEATURES.find((f) => p.features![f]) ?? null) : null;
 
 const CATEGORY_STAGE: Record<LookCategory, Stage> = { species: 2, colour: 1, hair: 3, accessory: 4, face: 3 };
+
+/** The category panel slides with the tab move (`d`: +1 toward the end of the bar, RTL already applied). */
+type PanelMove = { d: number; reduced: boolean };
+const panelVariants: Variants = {
+  in: (c: PanelMove) => (c.reduced ? { opacity: 0 } : { opacity: 0, x: 12 * c.d }),
+  on: (c: PanelMove) => ({ opacity: 1, x: 0, transition: c.reduced ? { duration: DUR.fast } : { duration: DUR.base, ease: EASE.enter } }),
+  exit: (c: PanelMove) => (c.reduced ? { opacity: 0, transition: { duration: DUR.instant } } : { opacity: 0, x: -12 * c.d, transition: { duration: DUR.instant, ease: EASE.exit } }),
+};
+
+/**
+ * One category's panel. Its exit is fixed by the switch that replaced it: a quick switch back the other way
+ * would otherwise turn the running fade round, framer would never finish it, and `mode="wait"` would hold
+ * every later panel back until the editor remounts.
+ */
+function CategoryPanel({ move, label, children }: { move: PanelMove; label?: string; children: ReactNode }) {
+  const exit = useFrozenExit(panelVariants, move);
+  return (
+    <motion.div className="vx-look-panel" role="tabpanel" aria-label={label} custom={move} variants={panelVariants} initial="in" animate="on" exit={exit}>
+      {children}
+    </motion.div>
+  );
+}
 
 function shuffled<T>(xs: readonly T[]): T[] {
   const a = [...xs];
@@ -201,6 +224,7 @@ export function LookEditor({ agent, onUpdate, mode, onDone, title, heading = 'h1
 
   const rtl = (nav.dir ?? 'ltr') === 'rtl' ? -1 : 1;
   const shown = reel ? reel.frames[reel.i] : look;
+  const move: PanelMove = { d: dir * rtl, reduced };
 
   return (
     <div className="vx-look" style={hueVars(pal)}>
@@ -251,17 +275,10 @@ export function LookEditor({ agent, onUpdate, mode, onDone, title, heading = 'h1
       </div>
 
       <div className="vx-look-panelwrap" ref={panel}>
-        <AnimatePresence mode="wait" initial={false} custom={dir * rtl}>
-          <motion.div key={cat} className="vx-look-panel" role="tabpanel" aria-label={CATEGORIES.find((c) => c.value === cat)?.label}
-            custom={dir * rtl}
-            variants={{
-              in: (d: number) => (reduced ? { opacity: 0 } : { opacity: 0, x: 12 * d }),
-              on: { opacity: 1, x: 0, transition: reduced ? { duration: DUR.fast } : { duration: DUR.base, ease: EASE.enter } },
-              out: (d: number) => (reduced ? { opacity: 0, transition: { duration: DUR.instant } } : { opacity: 0, x: -12 * d, transition: { duration: DUR.instant, ease: EASE.exit } }),
-            }}
-            initial="in" animate="on" exit="out">
+        <AnimatePresence mode="wait" initial={false} custom={move}>
+          <CategoryPanel key={cat} move={move} label={CATEGORIES.find((c) => c.value === cat)?.label}>
             <Panel cat={cat} look={look} name={name} role={agent.persona.role} change={change} pickHue={pickHue} reduced={reduced} />
-          </motion.div>
+          </CategoryPanel>
         </AnimatePresence>
       </div>
 
