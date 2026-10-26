@@ -98,6 +98,8 @@ it('scope separation, conflicting event IDs and stale CAS never change a prefere
 });
 it('the real FILE final-rename fence denies a Studio block during asynchronous temporary-file fsync', async () => {
   const x = await setup(); x.enqueue(); await x.learning.tasks.settle(); const view = await x.view();
+  // A missing candidate (seen under full-suite load) must fail here, not as a TypeError on candidates[0].id below.
+  expect(view.candidates).toHaveLength(1);
   const { promises: fs } = await import('node:fs'); const open = fs.open.bind(fs); let armed = true;
   vi.spyOn(fs, 'open').mockImplementation(async (...args) => {
     const handle = await open(...args);

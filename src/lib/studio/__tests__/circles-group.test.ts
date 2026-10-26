@@ -644,6 +644,9 @@ const removed = (from: number, chatId = CHAT): TelegramChatMemberUpdated => ({ .
 const everyoneOf = (bot: { sendMessage: { mock: { calls: Array<[number, string, unknown?]> } } }) => bot.sendMessage.mock.calls.filter(([, text]) => text.startsWith("Everyone's in"));
 /** A JSON view of the document without timestamps, message ids and counters, to look for a Telegram id. */
 const idTrace = (doc: unknown) => JSON.stringify(doc, (k, v) => (typeof v === 'string' && /^\d{4}-\d\d-\d\dT/.test(v)) || ['messageId', 'revision', 'epoch', 'chatId', 'humans', 'seen'].includes(k) ? undefined : v);
+/** A Telegram id as a whole token in an idTrace. Bounded by hex digits, not only decimal ones: events carry random
+ * 32-hex fingerprints and hashes, which contain an id's digits by chance (a substring check failed on `f2ee0935d5999…`). */
+const idToken = (id: number) => new RegExp(`(?<![0-9a-fA-F])${id}(?![0-9a-fA-F])`);
 const ledgerAt = () => {
   const storage = new MemoryAdaptiveStorage();
   return { storage, ledger: new CircleService(new CircleRepository(storage)) };
@@ -708,18 +711,22 @@ describe('review fixes: closing, erasure, cards', () => {
     later(x.h, 11_000);
     await x.send(tap(ID.alice, x.card().data('cj'), messageId));
     expect((await x.doc())!.events).toHaveLength(3);
+    // Controls for the bounded match: a stored id is found, the same digits inside a random hex hash are not.
+    expect(idTrace({ events: [{ telegramId: ID.stranger }] })).toMatch(idToken(ID.stranger));
+    expect(idTrace({ events: [{ personId: `tg-${ID.stranger}` }] })).toMatch(idToken(ID.stranger));
+    expect(idTrace({ events: [{ fingerprint: 'f2ee0935d5999decc' }] })).not.toMatch(idToken(ID.stranger));
     // Events are content-free: no Telegram id in them even before erasure.
-    expect(JSON.stringify((await x.doc())!.events)).not.toContain(String(ID.stranger));
+    expect(idTrace({ events: (await x.doc())!.events })).not.toMatch(idToken(ID.stranger));
     expect(await x.h.studio.forgetCircles(ID.stranger)).toBe(1);
     const after = (await x.doc())!;
     expect(after.events).toHaveLength(1);
-    expect(idTrace(after)).not.toMatch(new RegExp(`(?<!\\d)${ID.stranger}(?!\\d)`));
+    expect(idTrace(after)).not.toMatch(idToken(ID.stranger));
     // Alice opened it: her own erasure takes her id from openedBy too.
     expect(await x.h.studio.forgetCircles(ID.alice)).toBe(1);
     const none = (await x.doc())!;
     expect(none.openedBy).toEqual({ at: expect.any(String) });
     expect(none.events).toEqual([]);
-    expect(idTrace(none)).not.toMatch(new RegExp(`(?<!\\d)${ID.alice}(?!\\d)`));
+    expect(idTrace(none)).not.toMatch(idToken(ID.alice));
   });
 
   it('a card whose post failed is posted again (redelivered add, or a refresh a minute later); an include card too', async () => {
