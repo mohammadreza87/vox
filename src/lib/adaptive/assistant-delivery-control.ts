@@ -117,10 +117,17 @@ export function assistantCapacityProjection(d:AdaptiveDocument):AdaptiveDocument
   const wrapper=bytes({assistantDeliveryControl:''});
   return {...d,revision:MAX,updatedAt:MAX,assistantDeliveryControl:'x'.repeat(ASSISTANT_CONTROL_RESERVED_BYTES-wrapper)} as unknown as AdaptiveDocument;
 }
-export function assertAssistantDeliveryTransition(before:AdaptiveDocument|undefined,after:AdaptiveDocument,allowEffectMutation=false):void {
-  const prior=before?.assistantDeliveryControl,next=after.assistantDeliveryControl;
+export function assertAssistantDeliveryTransition(beforeImage:unknown,afterImage:unknown,allowEffectMutation=false):void {
+  // FILE is shared with non-account stores, whose empty/tombstone image is null.
+  // Presence, including corrupt null/false values, is distinct from no ARC field.
+  const ownsControl=(value:unknown):value is Record<string,unknown> => value!==null&&typeof value==='object'&&Object.hasOwn(value,'assistantDeliveryControl');
+  const priorPresent=ownsControl(beforeImage),nextPresent=ownsControl(afterImage);
+  if(!priorPresent&&!nextPresent)return;
+  const prior=priorPresent?parseAssistantDeliveryControl(beforeImage.assistantDeliveryControl):undefined;
+  const next=nextPresent?parseAssistantDeliveryControl(afterImage.assistantDeliveryControl):undefined;
+  const before=beforeImage as AdaptiveDocument|undefined,after=afterImage as AdaptiveDocument|null;
   if(!prior){if(next&&!allowEffectMutation)throw new AssistantControlError('conflict');if(next&&(next.effects.length||next.streams.length||next.noReplayBefore!==next.observedAt||next.revision!==0))throw new AssistantControlError('conflict');return;}
-  if(!next)throw new AssistantControlError('conflict');
+  if(!after||!next)throw new AssistantControlError('conflict');
   if(!allowEffectMutation && next.streams.some(s=>!prior.streams.some(p=>assistantStreamKey(p)===assistantStreamKey(s))))throw new AssistantControlError('conflict');
   if(assistantControlDigest(prior)===assistantControlDigest(next))return;
   if(after.revision<=before!.revision||next.revision<=prior.revision||next.observedAt<prior.observedAt||next.noReplayBefore<prior.noReplayBefore||next.sourceFenceSequence<prior.sourceFenceSequence||next.historyEpoch<prior.historyEpoch||next.deletionEpoch<prior.deletionEpoch)throw new AssistantControlError('revision');

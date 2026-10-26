@@ -335,6 +335,15 @@ describe('ARC1 independent actual FILE lifecycle and current-authority qualifica
     expect(readFileSync(accountPath(f.directory))).toEqual(before); expect(f.row().effectKey).toBe(c.state.effectKey);
   });
 
+  it('generic FILE null, undefined, primitive and non-account post-images cannot strip actual ARC controls', async () => {
+    const f = await fixture(), c = await f.claim(), before = readFileSync(accountPath(f.directory));
+    for (const document of [null, undefined, false, 0, '', [], { v: 1, drafts: [] }]) {
+      await expect(f.storage.transact(accountIdFor(OWNER), () => ({ document, result: undefined }))).rejects.toMatchObject({ name: 'AssistantControlError', code: 'conflict' });
+      expect(readFileSync(accountPath(f.directory))).toEqual(before);
+    }
+    expect(f.row().effectKey).toBe(c.state.effectKey); expect(f.row().phase).toBe('generated');
+  });
+
   it('hostile typed-array byteLength/species accessors are never invoked while snapshotting prepared bytes', async () => {
     const f = await fixture(), ingress = f.ingress(), prepared = f.prepare(ingress); let accessed = 0;
     for (const property of ['byteLength', 'constructor']) Object.defineProperty(prepared.bodyBytes, property,

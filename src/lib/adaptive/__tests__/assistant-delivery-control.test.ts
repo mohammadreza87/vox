@@ -25,7 +25,7 @@ import { assistantCapacityProjection, assistantFutureStateBytes, assertAssistant
   emptyAssistantDeliveryControl, exportAssistantDeliveryControl, invalidateAssistantDeliveryScope,
   invalidateAssistantDeliverySource, parseAssistantDeliveryControl, pruneAssistantDeliveryControl,
   ASSISTANT_CONTROL_IDLE_MS, ASSISTANT_CONTROL_RESERVED_BYTES, ASSISTANT_CONTROL_STATE_BYTES,
-  ASSISTANT_CONTROL_TTL_MS, type AssistantDeliveryControl } from '../assistant-delivery-control';
+  ASSISTANT_CONTROL_TTL_MS, AssistantControlError, type AssistantDeliveryControl } from '../assistant-delivery-control';
 import { stripTelegramArchiveForRollback } from '../telegram-archive-rollback';
 
 const NOW = Date.parse('2026-10-26T12:00:00Z');
@@ -158,6 +158,23 @@ describe('ARC1 independent canonical, retention and exact prior reader boundarie
       (c: AssistantDeliveryControl) => { const s = c.effects[0].state; s.revision++; s.phase = 'sent'; s.outcome = { reason: 'provider_accepted', observedAt: NOW,
         receipt: { messageId: 9898, botId: 7001, destinationChatId: OWNER, providerDateSeconds: NOW / 1000, textEvidence: 'matches-submitted' } }; },
     ]) expect(() => assertAssistantDeliveryTransition(before, changed(before, mutate))).toThrow();
+  });
+
+  it('transition guard no-ops only without ARC presence and explicitly refuses real controls replaced by non-account images', async () => {
+    const generic = { v: 1, drafts: [] };
+    for (const before of [undefined, null, generic, false, [], 'synthetic-generic-json']) {
+      for (const after of [undefined, null, generic, false, 0, [], 'synthetic-generic-json']) {
+        expect(() => assertAssistantDeliveryTransition(before as unknown as AdaptiveDocument, after as unknown as AdaptiveDocument)).not.toThrow();
+      }
+    }
+    const { document } = await canonical(), controlledAccount = controlled(document);
+    for (const after of [null, undefined, false, 0, '', [], generic]) {
+      expect(() => assertAssistantDeliveryTransition(controlledAccount, after as unknown as AdaptiveDocument)).toThrow(AssistantControlError);
+    }
+    for (const corrupt of [undefined, null, false, 0, '', [], {}]) {
+      const broken = { ...document, assistantDeliveryControl: corrupt } as unknown as AdaptiveDocument;
+      expect(() => assertAssistantDeliveryTransition(broken, generic as unknown as AdaptiveDocument)).toThrow(AssistantControlError);
+    }
   });
 
   it('worst-future state and exact aggregate reservation include receipt/invalidation/counter growth', async () => {
