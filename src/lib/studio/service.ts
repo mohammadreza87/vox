@@ -453,6 +453,13 @@ export class Studio {
       return { ...target };
     });
     this.deps.preferenceLearning?.tasks.cancel(targetId);
+    // S11L (STUDIO_VOICE_RECOGNITION): a person demoted below member loses their sealed voiceprint templates now,
+    // in both spaces, instead of at the next startup sweep. Verification already refuses them (eligiblePerson);
+    // this closes the retention gap. A failure never fails the role change; the startup sweep still removes the row.
+    const voiceprints = this.deps.voiceprints;
+    if (role === 'pending' && tirehFlags().voiceRecognition && voiceprints) {
+      await Promise.resolve().then(() => voiceprints.invalidate(targetId)).catch(() => { this.log.warn('[vox] voiceprint invalidate_failed'); });
+    }
     return changed;
   }
 
