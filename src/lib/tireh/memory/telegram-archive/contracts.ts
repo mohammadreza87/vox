@@ -23,7 +23,8 @@ const operationSchema = z.object({ id, sequence: integer.min(1), authorityRevisi
 export const archiveStateSchema = z.object({ schemaVersion: z.literal(1), scope: archiveScopeSchema,
   botId: integer.min(1), revision: integer, head: archiveHeadSchema.optional(),
   pending: z.array(archiveEventSchema).max(16), operation: operationSchema.optional(),
-  receipts: z.array(z.object({ eventId: id, logicalId: id, sourceRevision: integer.min(1), fingerprint: digest }).strict()).max(1024),
+  receipts: z.array(z.object({ eventId: id, logicalId: id, sourceRevision: integer.min(1), fingerprint: digest,
+    suppressed: z.literal(true).optional() }).strict()).max(1024),
 }).strict();
 export type ArchiveState = z.infer<typeof archiveStateSchema>;
 export interface ArchiveAuthority {

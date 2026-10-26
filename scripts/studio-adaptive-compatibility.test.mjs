@@ -289,6 +289,27 @@ test('Telegram archive extension prevents downgrade even when disabled or empty'
   putCanonical(f, { ...document(), telegramArchives: [{ agentId: 'agent', space: 'personal', enabled: false, generation: 1, clearedAt: 100, index: [], state: { schemaVersion: 2 } }] });
   assert.throws(() => requiredAdaptiveCapabilities(f.env), /incompatible/);
 }));
+test('source suppression marker requires its declared reader, even disabled or empty; malformed suppression fails closed', () => fixture(f => {
+  legacy(f);
+  const { supportedTelegramArchiveSourceSuppressionVersions: version, ...old } = ADAPTIVE_RELEASE_CAPABILITIES;
+  assert.deepEqual(version, [1]);
+  const base = { agentId: 'agent', space: 'work', enabled: false, generation: 1, clearedAt: 100, index: [] };
+  putCanonical(f, { ...document(), telegramArchives: [base] });
+  assert.doesNotThrow(() => assertReleaseAdaptiveCompatibility(f.env, old));
+  for (const row of [{ ...base, sourceSuppressionVersion: 1 },
+    { ...base, sourceSuppressionVersion: 1, state: { schemaVersion: 1, receipts: [] } },
+    { ...base, sourceSuppressionVersion: 1, state: { schemaVersion: 1, receipts: [{ logicalId: 'telegram:10', suppressed: true }] } }]) {
+    putCanonical(f, { ...document(), telegramArchives: [row] });
+    assert.throws(() => assertReleaseAdaptiveCompatibility(f.env, old), /incompatible/);
+    assert.equal(assertReleaseAdaptiveCompatibility(f.env, ADAPTIVE_RELEASE_CAPABILITIES).telegramArchiveSourceSuppressionVersion, 1);
+  }
+  for (const row of [{ ...base, sourceSuppressionVersion: 2 },
+    { ...base, state: { schemaVersion: 1, receipts: [{ suppressed: true }] } },
+    { ...base, sourceSuppressionVersion: 1, state: { schemaVersion: 1, receipts: [{ suppressed: false }] } }]) {
+    putCanonical(f, { ...document(), telegramArchives: [row] });
+    assert.throws(() => requiredAdaptiveCapabilities(f.env), /incompatible/);
+  }
+}));
 function putRights(f, version = 2) {
   const directory = join(f.env.STUDIO_DATA_DIR, 'rights-intake', 'v1'); mkdirSync(directory, { recursive: true });
   const file = join(directory, `${accountKey}.json`); writeFileSync(file, JSON.stringify({ version, accountId, revision: 1, observedServerTime: 200, requests: [], commandReceipts: [], ...(version === 2 ? { tombstones: [] } : {}) })); return file;
