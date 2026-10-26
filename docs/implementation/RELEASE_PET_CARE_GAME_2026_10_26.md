@@ -105,3 +105,17 @@ Installing this candidate follows `docs/PRODUCTION.md` §Mac Studio release: com
 این یک نامزد انتشار است، نه انتشار مستقرشده: چیزی نصب نشد، هیچ پرچم تولیدی تغییر نکرد و پیامی به کسی نرسید. موج A (`6c722cd`) پایه‌ها را ساخت: ذخیرهٔ بازی، رفع حالت صوتی، رشته‌های دوزبانه، چیدمان بدون اسکرول و حرکت. موج B (`3a7304a`) اتاق‌ها، لحظه‌های رشد، حالت بدون دست، پخش جمله‌به‌جمله و آداپتور گفتار Gemini را افزود. موج C (ثبت‌نشده) باغچه، کمد، بازی «کلمه‌ام را حدس بزن»، پرسش‌های P1، P2 و P7 تا P10، پیام‌های سرزدن و اتصال Decisions را آورد.
 
 همهٔ دروازه‌ها گذشتند؛ تنها ۱۱ شکست شناخته‌شدهٔ محیط آزمون باقی است. اندازهٔ صفحه ۱۹۹٬۴۸۲ بایت، موتور ۴۵٬۴۹۰ بایت و CSS برابر ۱۱٬۶۹۲ بایت است و در این موج هیچ سقفی بالا نرفت. سرزدن‌ها، Decisions و گفتار Gemini به‌طور پیش‌فرض خاموش‌اند. پیش از روشن‌کردن آن‌ها تأیید مسئول حریم خصوصی برای متن پیام‌ها، بررسی جدول روزهای سوگواری توسط HOOR، نتیجهٔ مقایسهٔ گفتار فارسی و تأیید حقوقی دربارهٔ ارائه‌دهندهٔ صدا لازم است. دیدوبازدید، پرداخت یادگاری‌ها، سرزدن‌های C5 و C11، نوع رشد `task` و انتخاب ارائه‌دهندهٔ گفتار برای هر همکار هنوز ساخته نشده‌اند.
+
+## Deployed
+
+PR [126](https://github.com/mohammadreza87/vox/pull/126) merged into `main` as `baae9494` on 26 October 2026; the deployed head is `6c1577e39df37b62eea47d163fbf9c16a87b5b6e` (main after PRs 125, 126 and 121), source tree `296a0dbde2b9b34314269dd15af79d70d637e331`, build `5slDUJoLKa25wVDqsvXQj`, built 18:39 UTC and installed on the Mac Studio polling runtime at 18:41 UTC with a stopped-process backup at `backups/2026-10-26T18-41-46-954Z`. The previous release was `5444cfb2` (build `EBqoCQPe_ya6dvZY2b-c_`).
+
+Before installing, the revision was verified locally: `tsc --noEmit` clean, 715 pet tests passing, copy lint clean across 854 strings, `next build` passing, bundle under every ceiling. Preflight passed for all providers. One build attempt in the root checkout failed with a webpack hasher crash until the stale `.next` cache was deleted; the rebuild verified the same revision.
+
+Public verification after install: `/api/studio/health` returns the deployed revision with `bots: true`; `/` redirects to `/studio`; `/studio` and `/studio/pet/launch` load; `/api/studio/me` answers 401 without initData; `/api/chat`, `/api/telegram/payments`, `/api/convai/session` and `/_next/image` answer 404; an unauthenticated POST to `/api/studio/pet/checkins/run` answers 404 because no trigger secret is configured.
+
+No pet flag was set: `STUDIO_PET_CHECKINS`, `STUDIO_PET_DECISIONS` and `STUDIO_TTS_PROVIDER` keep their defaults, so this release changes the pet's rooms, motion, strings and voice-mode fix for everyone and sends nothing new to anyone. The device checklist above and the sign-offs listed under "Needs sign-off" remain open; no authenticated Telegram journey, real voice turn or device test was performed as part of the install.
+
+### فارسی
+
+درخواست ادغام ۱۲۶ در `main` ادغام و نسخهٔ `6c1577e3` در ۲۶ اکتبر ۲۰۲۶ ساعت ۱۸:۴۱ UTC روی اجرای Mac Studio نصب شد. مسیر سلامت همین نسخه را با ربات‌های فعال گزارش می‌دهد و مسیرهای قدیمی بسته‌اند. هیچ پرچم مربوط به حیوان خانگی (پیام‌های سرزدن، Decisions، صدای Gemini) روشن نشده است. فهرست آزمون روی دستگاه و تأییدهای لازم همچنان باز هستند.
