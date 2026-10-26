@@ -84,7 +84,7 @@ nothing here runs and `DecisionService` is main's.
   only from `DECISIONS_SAFETY_ID_SALT` (at least 32 characters, not equal to `STUDIO_SECRET`): `'vox_' +
   sha256(\`${salt}:${subject}\`).hex.slice(0, 32)`. The provider adds `safety_identifier` to the body only when one is
   given and it matches `^[A-Za-z0-9_-]{1,64}$`; `requestSchema` is unchanged. Without a salt, or without a subject, the
-  body is byte-identical. The gateway does not name a subject yet (H2 wires it). That `/v1/decisions` accepts
+  body is byte-identical. The gateway names the speaking person as the subject of text triage (`source.personId`) and of image triage (`speaker.id`) since the hardening merge, so the identifier is sent only once a valid salt is set. That `/v1/decisions` accepts
   `safety_identifier` is unverified: confirm it against the Decisions OpenAPI spec before setting the salt.
 - **Readiness** (`tireh/decisions/readiness.ts`, section 4.8's pre-production gates). `decisionsReadiness(env)` returns
   content-free codes: `zdr_unconfirmed` (`DECISIONS_ZDR_APPROVED` is not `1`), `eu_endpoint_unconfirmed`
@@ -98,8 +98,8 @@ nothing here runs and `DecisionService` is main's.
 - **v2-live group and confidential rule (F233).** Under `TRIAGE_QUESTION_SET=v2-live` the correction adjustment
   (`memorable: true`) applies only when `askAddressed` is false, the new optional `readTriage(..., group)` argument is
   not set, and `confidential` and `personal_life` are absent or below `V2_LIVE_SENSITIVE_PROBABILITY` (0.5). The
-  smalltalk effort adjustment is unchanged. An addressed group message has `askAddressed` false, so the gateway should
-  pass `chat.kind === 'group'` as `group` (gateway is H2's).
+  smalltalk effort adjustment is unchanged. An addressed group message has `askAddressed` false, so the gateway passes
+  `chat.kind === 'group'` as `group` (wired by the hardening merge).
 - **Catalogue lint terms (F029).** `CATALOGUE_LINT_EXTENDED` adds anger, angry, upset, sad(ness), happy, happiness,
   anxi\*, frustrat\*, sentiment\*, sick\*, illness, wellbeing, well-being, burnout, morale, productiv\*, mental\*,
   depress\*, motivat\*, temper\*, "tone of the person/sender", and the Persian stems احساس, عاطف, روحیه, حال روحی,

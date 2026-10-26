@@ -549,7 +549,9 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
         await this.imageCapable(persona, chat, speaker.id, boundary.space) &&
         await this.unchanged(persona, chat, speaker.id, boundary) ? boundary.key : null,
         ...(boundary.compact ? { authorizeNow: () => this.exportAuthorizedNow(persona, chat, speaker.id, boundary) &&
-          this.imageCapableNow(persona, chat, speaker.id, boundary.space) } : {}) };
+          this.imageCapableNow(persona, chat, speaker.id, boundary.space) } : {}),
+        // Only a ServiceDecider with a configured DECISIONS_SAFETY_ID_SALT reads it, as an opaque salted hash.
+        subject: speaker.id };
       imageTurn = boundary.publicOnly || !await this.imageCapable(persona, chat, speaker.id, boundary.space) ? null : await ingestTelegramImage({ org, decider: boundary.compact || this.compactPrivacy() ? undefined : this.deps.decider, llm: this.deps.llm, fastLlm: this.deps.fastLlm, bot, log: this.log,
         authority: imageAuthority, ...(imageDecisionLog ? { decisionLog: imageDecisionLog, clock: () => this.now() } : {}) }, persona, chat, speaker.id, message, caption);
       // A captionless image that could not be ingested is ignored, as before.
@@ -1278,11 +1280,13 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
       const input = triageInput(persona, lines, extras?.quote ? quotedLine(extras.quote, `${persona.name}'s`) : undefined);
       const authority = { authorize: async () => await this.groupAllowed(persona, chat, source.personId!, action) &&
         await this.unchanged(persona, chat, source.personId!, boundary) ? boundary.key : null,
-        ...(boundary.compact ? { authorizeNow: () => this.exportAuthorizedNow(persona, chat, source.personId!, boundary) } : {}) };
+        ...(boundary.compact ? { authorizeNow: () => this.exportAuthorizedNow(persona, chat, source.personId!, boundary) } : {}),
+        // Only a ServiceDecider with a configured DECISIONS_SAFETY_ID_SALT reads it, as an opaque salted hash.
+        subject: source.personId! };
       // decideDetailed only when a decision log wants the outcome detail.
       const detail = decisionLog && decider.decideDetailed ? await decider.decideDetailed(input, questions, TRIAGE_TIMEOUT_MS, authority) : undefined;
       const answers = detail ? detail.answers : await decider.decide(input, questions, TRIAGE_TIMEOUT_MS, authority);
-      const triage = readTriage(answers, askAddressed, persona.groupParticipation ?? 'mentions', skillAsked ? routable : undefined, set);
+      const triage = readTriage(answers, askAddressed, persona.groupParticipation ?? 'mentions', skillAsked ? routable : undefined, set, chat.kind === 'group');
       logRow({ answers, detail, triage });
       return { triage, skillAsked };
     } catch {
