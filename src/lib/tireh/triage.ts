@@ -56,6 +56,9 @@ export interface DecideDetail {
 export interface DeciderAuthority {
   authorize: () => Promise<string | null>;
   authorizeNow?: () => boolean;
+  /** Optional stable end-user id for this turn (a person id). Never sent as is: a decider may send only
+   * an opaque salted hash of it (ServiceDeciderOptions.safetyIdentifier), and only when configured. */
+  subject?: string;
 }
 
 export interface Decider {

@@ -27,6 +27,12 @@ export interface ServiceDeciderOptions {
   deadlineMs?: number;
   /** Clock for elapsedMs when the service itself throws (default Date.now). */
   now?: () => number;
+  /**
+   * Maps DeciderAuthority.subject to the opaque safety identifier sent to the provider (section 4.8:
+   * a hashed safety_identifier). Built by the runtime only from a configured salt; absent, or
+   * returning undefined or throwing, means no identifier and a byte-identical request body.
+   */
+  safetyIdentifier?: (subject: string) => string | undefined;
 }
 
 const usable = (ms: number | undefined): ms is number => typeof ms === 'number' && Number.isFinite(ms) && ms >= 1;
@@ -65,6 +71,16 @@ export class ServiceDecider implements Decider {
     return this.run(input, questions, timeoutMs, authority);
   }
 
+  /** The opaque identifier for this call, only when the caller names a subject and the option is configured. */
+  private safetyIdentifierFor(authority: DeciderAuthority | undefined): string | undefined {
+    const subject = authority?.subject;
+    if (typeof subject !== 'string' || !subject || !this.options.safetyIdentifier) return undefined;
+    try {
+      const id = this.options.safetyIdentifier(subject);
+      return typeof id === 'string' && id && id !== subject ? id : undefined;
+    } catch { return undefined; }
+  }
+
   /** min(timeoutMs, options.deadlineMs), ignoring missing or invalid values; 500 ms when neither is usable. */
   private deadline(timeoutMs: number | undefined): number {
     const bounds = [timeoutMs, this.options.deadlineMs].filter(usable);
@@ -75,6 +91,7 @@ export class ServiceDecider implements Decider {
     const started = this.now();
     try {
       const mapped = questions.map(toServiceQuestion);
+      const safetyIdentifier = this.safetyIdentifierFor(authority);
       const result = await this.service.evaluate({
         enabled: true,
         revision: 0,
@@ -84,6 +101,7 @@ export class ServiceDecider implements Decider {
         // The seam validates the request with its strict schema after loading.
         loadInput: async () => ({ input: typeof input === 'string' ? input : input(), questions: mapped } as DecisionInput),
         deadlineMs: this.deadline(timeoutMs),
+        ...(safetyIdentifier ? { safetyIdentifier } : {}),
       });
       const tokens = result.inputTokens === undefined ? {} : { inputTokens: result.inputTokens };
       if (result.status !== 'answered') return { answers: {}, elapsedMs: result.elapsedMs, ...tokens, outcome: 'unknown', unknownReason: result.reason };

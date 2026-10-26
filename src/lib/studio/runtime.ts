@@ -480,10 +480,24 @@ async function create(): Promise<Studio> {
     {
       const { ServiceDecider } = await import('../tireh/decisions/service-decider');
       const flags = tirehFlags();
-      if (flags.decider === 'service' && studio.deps.decider && env.OPENAI_API_KEY) {
-        // A dedicated DecisionService so triage failures never open the adaptive runtime's circuit.
-        studio.deps.decider = new ServiceDecider(new DecisionService(OpenAIDecisionProvider.guarded({ apiKey: env.OPENAI_API_KEY })));
+      let serviceDecider = false;
+      if (flags.decider === 'service') {
+        const readiness = await import('../tireh/decisions/readiness');
+        // Section 4.8 pre-production gates (ZDR, EU endpoint, hashed safety_identifier): content-free codes only.
+        readiness.reportDecisionsReadiness(env, flags.decider);
+        if (studio.deps.decider && env.OPENAI_API_KEY) {
+          const { TRIAGE_TIMEOUT_MS } = await import('../tireh/triage');
+          const { structuralTimeouts } = await import('../adaptive/decisions');
+          const safetyIdentifier = readiness.safetyIdentifierHasher(env);
+          // A dedicated DecisionService so triage failures never open the adaptive runtime's circuit. Provider
+          // timeouts are reported as 'timeout' (F030); every call is capped at main's 2 s triage deadline (F177).
+          studio.deps.decider = new ServiceDecider(new DecisionService(structuralTimeouts(OpenAIDecisionProvider.guarded({ apiKey: env.OPENAI_API_KEY }))),
+            { deadlineMs: TRIAGE_TIMEOUT_MS, ...(safetyIdentifier ? { safetyIdentifier } : {}) });
+          serviceDecider = true;
+        }
       }
+      // F130: only the service decider has decideParts; without it every image turn has triage null (fail closed).
+      if (flags.images && !serviceDecider) console.warn('[vox] images_without_image_triage');
       // The sink only with TIREH_DECISION_LOG; the 90-day sweep whatever the flag is now (see wireDecisionLog).
       await wireDecisionLog(studio, config.dataDir, config.storage === 'firestore' ? await (await import('@/lib/firebase-admin')).getAdminDb() : null);
     }
