@@ -57,6 +57,8 @@ describe('F246: image-v1 decision-log rows from the gateway', () => {
     expect(rows.map((r) => r.questionSetVersion)).toEqual(['v1', 'image-v1']);
     expect(image[0]).toMatchObject({
       names: IMAGE_NAMES, outcome: 'answered', routeTaken: 'untriaged', personaId: 'aria', chatKind: 'private', language: 'en',
+      // Timed on the gateway's clock (fixed here), so paired runs log identical rows.
+      elapsedMs: 0, at: NOW,
       answers: expect.arrayContaining([
         { name: 'image_kind', type: 'choice', choice: 'receipt', confidence: 0.9 },
         { name: 'contains_sensitive_document', type: 'predicate', probability: 0.2 },

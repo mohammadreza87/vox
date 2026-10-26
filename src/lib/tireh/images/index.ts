@@ -100,6 +100,8 @@ export interface ImageIngestDeps {
    * TIREH_DECISION_LOG is on (read at call time); the row is content-free (decisions/log.ts).
    */
   decisionLog?: DecisionLogSink;
+  /** The clock for the decision-log row's elapsedMs and `at` (the gateway passes its own); defaults to the system clock. */
+  clock?: () => Date;
 }
 
 const FORCED_TASKS: ReadonlyArray<ImageTriage['task']> = ['explain', 'extract_text', 'decide', 'react'];
@@ -188,7 +190,8 @@ async function runTriage(deps: ImageIngestDeps, persona: Persona, caption: strin
   }
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<'timeout'>((resolve) => { timer = setTimeout(() => resolve('timeout'), IMAGE_TRIAGE_TIMEOUT_MS); });
-  const started = performance.now();
+  const clock = deps.clock ?? (() => new Date());
+  const started = clock().getTime();
   const asked = Promise.resolve()
     .then(() => decider.decideParts!(
       [{ type: 'text', text: imageTriageInput(persona, caption) }, { type: 'image', image: triageImage }],
@@ -199,7 +202,7 @@ async function runTriage(deps: ImageIngestDeps, persona: Persona, caption: strin
     .then((answers) => ({ answers }), () => 'failed' as const);
   try {
     const result = await Promise.race([asked, timeout]);
-    const elapsedMs = Math.round(performance.now() - started);
+    const elapsedMs = Math.max(0, clock().getTime() - started);
     if (result === 'timeout') {
       logCode(deps.log, 'triage_timeout');
       logTriageRow(deps, persona, caption, elapsedMs, { detail: { answers: {}, elapsedMs, outcome: 'unknown', unknownReason: 'timeout' } });
@@ -226,7 +229,7 @@ function logTriageRow(deps: ImageIngestDeps, persona: Persona, caption: string, 
   if (!sink) return;
   try {
     const row = decisionLogRow({ set: IMAGE_QUESTION_SET, questions: [...IMAGE_TRIAGE_QUESTIONS], ...outcome, triage: null, elapsedMs,
-      webSearchAvailable: false, fastModel: !!deps.fastLlm, personaId: persona.id, chatKind: 'private', latestMessage: caption, at: new Date() });
+      webSearchAvailable: false, fastModel: !!deps.fastLlm, personaId: persona.id, chatKind: 'private', latestMessage: caption, at: (deps.clock ?? (() => new Date()))() });
     if (row) sink.record(row);
   } catch { /* the decision log never affects the turn */ }
 }

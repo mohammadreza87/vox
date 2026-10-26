@@ -551,7 +551,7 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
         ...(boundary.compact ? { authorizeNow: () => this.exportAuthorizedNow(persona, chat, speaker.id, boundary) &&
           this.imageCapableNow(persona, chat, speaker.id, boundary.space) } : {}) };
       imageTurn = boundary.publicOnly || !await this.imageCapable(persona, chat, speaker.id, boundary.space) ? null : await ingestTelegramImage({ org, decider: boundary.compact || this.compactPrivacy() ? undefined : this.deps.decider, llm: this.deps.llm, fastLlm: this.deps.fastLlm, bot, log: this.log,
-        authority: imageAuthority, ...(imageDecisionLog ? { decisionLog: imageDecisionLog } : {}) }, persona, chat, speaker.id, message, caption);
+        authority: imageAuthority, ...(imageDecisionLog ? { decisionLog: imageDecisionLog, clock: () => this.now() } : {}) }, persona, chat, speaker.id, message, caption);
       // A captionless image that could not be ingested is ignored, as before.
       if (!imageTurn && !caption.trim()) return 'ignored';
     }
