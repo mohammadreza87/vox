@@ -12,7 +12,7 @@ import { verifyProviderEvent } from '../events/verification';
 import { registerSubscriptionSchema } from '../events/contracts';
 import type { ConnectionSubscription } from '../contracts';
 import type { BrokerVault, VaultBinding } from './vault';
-import { type BrokerOAuthTransport, type OAuthProfile, type OAuthToken, pkceChallenge, validateOAuthProfile } from './oauth';
+import { type BrokerOAuthTransport, type OAuthProfile, type OAuthToken, type VerifiedProviderIdentity, pkceChallenge, validateOAuthProfile } from './oauth';
 const actorSchema = z.object({ accountId: idSchema, botAgentId: idSchema.optional(), botAuthenticationRevision: idSchema.optional() }).strict()
   .refine(value => !!value.botAgentId === !!value.botAuthenticationRevision);
 const base = { actor: actorSchema, space: z.enum(['work', 'personal']) };
@@ -26,6 +26,18 @@ const credentialSchema = z.object({ accessToken: z.string().min(1).max(16000), r
   subject: idSchema, tenant: idSchema, issuer: z.string().url(), displayLabel: z.string().min(1).max(160),
   connectionRevision: z.number().int().positive(), status: z.enum(['sealed', 'active', 'refreshing', 'revoked']), scopeEvidence: z.enum(['oauth_response', 'operator_asserted', 'runner_attestation']) }).strict();
 export type Credential = z.infer<typeof credentialSchema>;
+/** `shared_grant_kept`: Vox dropped its token, but another connection still uses the same provider grant, so the provider was not asked to revoke it yet. */
+export type ProviderRevocation = 'verified' | 'unavailable' | 'shared_grant_kept';
+/**
+ * Tokens whose provider revocation waits for a connection that still holds the same provider grant, per OAuth client and
+ * Vox account. `subject` is the provider account the token was issued for (one grant), or null when its identity lookup failed.
+ * Who holds what is never stored here: it is read from the sealed credentials themselves, so it cannot drift.
+ */
+const DEFERRED_LIMIT = 100;
+const grantrefSchema = z.object({ version: z.literal(1),
+  deferred: z.array(z.object({ subject: idSchema.nullable(), token: z.string().min(1).max(16000) }).strict()).max(DEFERRED_LIMIT) }).strict();
+/** A token Vox is dropping, with the provider account it belongs to when known. */
+type DroppedToken = { accessToken: string; refreshToken?: string; subject?: string };
 const flowSchema = z.object({ flowId: idSchema, bindingRevision: z.number().int().positive(), connectionRevision: z.number().int().positive(),
   stateHash: z.string().length(64), verifier: z.string().max(200), expiresAt: z.number().int().positive(),
   status: z.enum(['pending', 'exchanging', 'sealed', 'connected', 'cancelled', 'failed']), callbackUsed: z.boolean(),
@@ -56,6 +68,11 @@ export function providerScopePermits(providerId: string, required: string, scope
     (scopes.includes('repo') || scopes.includes('public_repo'));
 }
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
+/** A grantref spans both spaces and every provider sharing one OAuth client, so it is sealed under an account-level binding. */
+const grantrefBinding = (accountId: string, id: string): VaultBinding => ({ accountId, personId: accountId, space: 'work', connectionId: id, providerId: 'grantref' });
+const vaultBusy = (error: unknown) => ConnectionsError.is(error) && error.code === 'vault_operation_busy';
+/** The provider account behind a token, only when the identity came from the profile's own issuer. */
+const subjectFor = (profile: OAuthProfile, identity: VerifiedProviderIdentity | undefined) => identity?.issuer === profile.issuer ? identity.subject : undefined;
 const bindingFor = (authority: BrokerAuthority): VaultBinding => ({ accountId: authority.context.accountId, personId: authority.context.personId,
   space: authority.context.scope.spaceKind, connectionId: authority.connection.id, providerId: authority.connection.providerId, ...(authority.connection.schemaVersion === 2 ? { agentId: authority.connection.agentId } : {}) });
 /** Runs in the independent broker process. No direct Studio database or bot access. */
@@ -68,10 +85,13 @@ export class ConnectionsBroker {
     for (const profile of Object.values(options.oauthProfiles)) validateOAuthProfile(profile);
   }
   private enabled(providerId: string): void { if (!this.options.enabledProviderIds.includes(providerId)) throw new ConnectionsError(503, 'provider_not_enabled'); }
-  private async fresh(actor: ConnectionActor, space: SpaceKind, connectionId: string, requireEnabled = true): Promise<BrokerAuthority> {
-    const current = await authority(this.options.control, actor, space, connectionId);
+  private assertAuthority(current: BrokerAuthority, actor: ConnectionActor, space: SpaceKind, connectionId: string): void {
     if (current.context.accountId !== actor.accountId || current.context.scope.spaceKind !== space || current.connection.id !== connectionId ||
         current.connection.ownerAccountId !== actor.accountId || current.connection.ownerPersonId !== current.context.personId) throw new ConnectionsError(403, 'broker_authority_mismatch');
+  }
+  private async fresh(actor: ConnectionActor, space: SpaceKind, connectionId: string, requireEnabled = true): Promise<BrokerAuthority> {
+    const current = await authority(this.options.control, actor, space, connectionId);
+    this.assertAuthority(current, actor, space, connectionId);
     if (requireEnabled) {
       this.enabled(current.connection.providerId);
       if (current.connection.schemaVersion === 2 && !current.context.currentAgentIds.includes(current.connection.agentId)) throw new ConnectionsError(403, 'broker_agent_unavailable');
@@ -140,10 +160,12 @@ export class ConnectionsBroker {
       await this.options.vault.write('flow', flowId, binding, flow);
       if (query.error || !query.code) { flow.status = 'cancelled'; flow.verifier = ''; await this.options.vault.write('flow', flowId, binding, flow); return; }
       let issuedToken: OAuthToken | undefined;
+      let issuedIdentity: VerifiedProviderIdentity | undefined;
       try {
         const token = await this.options.oauth.exchange(profile, query.code, flow.verifier);
         issuedToken = token;
         const identity = await this.options.oauth.identity(providerId, token.accessToken, { accountId: binding.accountId, space: binding.space, connectionId: binding.connectionId });
+        issuedIdentity = identity;
         const afterExchange = await this.fresh(callbackActor, binding.space, binding.connectionId);
         if (afterExchange.connection.lifecycle !== 'pending' || afterExchange.connection.revision !== flow.connectionRevision || afterExchange.context.bindingRevision !== flow.bindingRevision)
           throw new ConnectionsError(409, 'enrollment_stale');
@@ -154,7 +176,7 @@ export class ConnectionsBroker {
         flow.status = 'sealed'; flow.verifier = '';
         await this.options.vault.write('flow', flowId, binding, flow);
       } catch {
-        if (issuedToken) await this.options.oauth.revoke(profile, issuedToken.accessToken).catch(() => 'unavailable');
+        if (issuedToken) await this.dropToken(profile, { ...issuedToken, subject: subjectFor(profile, issuedIdentity) }, binding);
         flow.status = 'failed'; flow.reason = 'oauth_verification_failed'; flow.verifier = '';
         await this.options.vault.write('flow', flowId, binding, flow);
         throw new ConnectionsError(502, 'oauth_verification_failed');
@@ -260,7 +282,8 @@ export class ConnectionsBroker {
         credential.accessToken = refreshed.accessToken; credential.expiresAt = refreshed.expiresAt;
         credential.refreshToken = refreshed.refreshToken ?? credential.refreshToken; credential.scopes = refreshed.scopes; credential.status = 'active';
         await this.options.vault.write('credential', binding.connectionId, binding, credential);
-        } catch { await this.options.oauth.revoke(profile, refreshed.accessToken).catch(() => 'unavailable'); throw new ConnectionsError(409, 'credential_reauth_required'); }
+        // Minted from this credential's own refresh token, so it belongs to the same grant (and provider account).
+        } catch { await this.dropToken(profile, { ...refreshed, subject: credential.subject }, binding); throw new ConnectionsError(409, 'credential_reauth_required'); }
         } catch { credential.status = 'revoked'; await this.options.vault.write('credential', binding.connectionId, binding, credential); throw new ConnectionsError(409, 'credential_reauth_required'); }
       }
       return credential;
@@ -384,10 +407,24 @@ export class ConnectionsBroker {
     for (const controller of this.active.get(parsed.connectionId) ?? []) if (this.activeGrantIds.get(controller) === parsed.grantId) controller.abort();
     return { futureUseStopped: true, providerEffects: 'unverified' };
   }
-  async revoke(input: unknown): Promise<{ futureUseStopped: true; providerRevocation: 'verified' | 'unavailable' }> {
+  async revoke(input: unknown): Promise<{ futureUseStopped: true; providerRevocation: ProviderRevocation }> {
     const parsed = revokeRequestSchema.parse(input);
-    const current = await this.fresh(parsed.actor, parsed.space, parsed.connectionId, false);
-    if (current.connection.providerId !== parsed.providerId || !['revoked', 'deleted'].includes(current.connection.lifecycle)) throw new ConnectionsError(409, 'revoke_control_plane_first');
+    return this.revokeCurrent(await this.fresh(parsed.actor, parsed.space, parsed.connectionId, false), parsed.providerId);
+  }
+  /**
+   * Rights erasure (/v1/erase): the same vault revocation, for a connection Studio already revoked and marked
+   * erased, with no current identity confirmation (the person may never return). Studio answers 'erasedContext'
+   * only for such a connection and only for the plain account actor, so this can stop use and drop secrets, never use them.
+   */
+  async revokeErased(input: unknown): Promise<{ futureUseStopped: true; providerRevocation: ProviderRevocation }> {
+    const parsed = revokeRequestSchema.parse(input);
+    if (parsed.actor.botAgentId) throw new ConnectionsError(400, 'broker_input_invalid');
+    const current = await this.options.control.call<BrokerAuthority>({ action: 'erasedContext', actor: parsed.actor, space: parsed.space, connectionId: parsed.connectionId });
+    this.assertAuthority(current, parsed.actor, parsed.space, parsed.connectionId);
+    return this.revokeCurrent(current, parsed.providerId, true);
+  }
+  private async revokeCurrent(current: BrokerAuthority, providerId: string, erasing = false): Promise<{ futureUseStopped: true; providerRevocation: ProviderRevocation }> {
+    if (current.connection.providerId !== providerId || !['revoked', 'deleted'].includes(current.connection.lifecycle)) throw new ConnectionsError(409, 'revoke_control_plane_first');
     for (const controller of this.active.get(current.connection.id) ?? []) controller.abort();
     if (current.connection.providerId === 'remote_mcp') { if (!this.options.revokeForAuthority) throw new ConnectionsError(503, 'mcp_setup_unavailable'); return this.options.revokeForAuthority(current); }
     const binding = bindingFor(current);
@@ -399,20 +436,106 @@ export class ConnectionsBroker {
         if (flow.status === 'connected') return;
         const pending = await this.options.vault.read('credential', `pending:${flowId}`, candidate);
         if (pending) { const token = credentialSchema.parse(pending); const profile = this.options.oauthProfiles[binding.providerId];
-          if (profile) await this.options.oauth.revoke(profile, token.accessToken).catch(() => 'unavailable'); }
+          if (profile) await this.dropToken(profile, token, candidate); }
         await this.options.vault.delete('credential', `pending:${flowId}`);
         flow.status = 'cancelled'; flow.verifier = ''; await this.options.vault.write('flow', flowId, candidate, flow);
       });
     }
     return this.options.vault.withLock(`credential:${binding.connectionId}`, async () => {
+      const profile = this.options.oauthProfiles[binding.providerId];
       const raw = await this.options.vault.read('credential', binding.connectionId, binding);
-      if (!raw) return { futureUseStopped: true, providerRevocation: 'unavailable' };
+      // No credential left (a repeat or retried revocation): still revoke deferred tokens nothing holds any more. A failure
+      // here throws, so a rights erasure stays pending and retries until the grantref is cleared.
+      if (!raw) { if (profile) await this.revokeShared(profile, undefined, binding, true); return { futureUseStopped: true, providerRevocation: 'unavailable' }; }
       const credential = credentialSchema.parse(raw);
       credential.status = 'revoked'; await this.options.vault.write('credential', binding.connectionId, binding, credential);
-      const profile = this.options.oauthProfiles[binding.providerId];
-      const providerRevocation = profile ? await this.options.oauth.revoke(profile, credential.accessToken) : 'unavailable';
+      let unsettled: unknown;
+      // Never drop the only copy unrevoked: when the shared-grant bookkeeping fails, revoke it at once, as before grantrefs.
+      const providerRevocation: ProviderRevocation = profile ? await this.revokeShared(profile, credential, binding, true)
+        .catch(error => { unsettled = error; return this.revokeToken(profile, credential); }) : 'unavailable';
       await this.options.vault.delete('credential', binding.connectionId);
+      // Erasure retries until deferred tokens are revoked too (that retry finds no credential and only settles the grantref).
+      if (unsettled && erasing) throw unsettled;
       return { futureUseStopped: true, providerRevocation };
     });
+  }
+  private grantrefId(profile: OAuthProfile, accountId: string): string { return `grantref:${hash(JSON.stringify([profile.issuer, profile.clientId, accountId]))}`; }
+  /** The vault lock fails fast when held. Grantref updates are short, so wait for it briefly instead of failing a revoke. */
+  private async grantrefLock<T>(id: string, run: () => Promise<T>): Promise<T> {
+    for (let attempt = 0; ; attempt++) {
+      let entered = false;
+      try { return await this.options.vault.withLock(id, () => { entered = true; return run(); }); }
+      catch (error) {
+        if (entered || !vaultBusy(error) || attempt >= 100) throw error;
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+    }
+  }
+  /**
+   * Provider accounts that connections of this Vox account sign in as under this OAuth client, read from their sealed
+   * credentials (never an index that could drift). `except` is a connection whose credential is being deleted.
+   * A credential that cannot be read cannot be used either, so it holds nothing.
+   */
+  private async heldSubjects(accountId: string, id: string, except?: string): Promise<Set<string>> {
+    const subjects = new Set<string>();
+    for (const binding of await this.options.vault.credentialBindings?.() ?? []) {
+      const profile = this.options.oauthProfiles[binding.providerId];
+      if (binding.accountId !== accountId || binding.connectionId === except || !profile || this.grantrefId(profile, accountId) !== id) continue;
+      const credential = credentialSchema.safeParse(await this.options.vault.read('credential', binding.connectionId, binding).catch(() => undefined));
+      if (credential.success) subjects.add(credential.data.subject);
+    }
+    return subjects;
+  }
+  /** Drops a token Vox no longer keeps (a failed sign-in, refresh or setup); never ends a grant another connection still holds. */
+  private async dropToken(profile: OAuthProfile, token: DroppedToken, binding: VaultBinding): Promise<ProviderRevocation> {
+    return this.revokeShared(profile, token, binding, false).catch(() => this.revokeToken(profile, token));
+  }
+  /** The long-lived refresh token still ends the grant after the access token expired; the access token is the fallback. */
+  private async revokeToken(profile: OAuthProfile, token: DroppedToken): Promise<'verified' | 'unavailable'> {
+    for (const value of new Set([token.refreshToken, token.accessToken])) {
+      if (value && await this.options.oauth.revoke(profile, value).catch(() => 'unavailable' as const) === 'verified') return 'verified';
+    }
+    return 'unavailable';
+  }
+  /**
+   * Every OAuth provider revocation goes through here. One provider grant (Google: one OAuth client and one Google
+   * account) can back several Vox connections, and Google's revoke ends the whole grant. So a token is revoked at once
+   * unless another credential of this Vox account still holds the same grant (same client, same provider account); then
+   * it is sealed in the grantref and revoked once nothing holds that grant. A token whose provider account is unknown
+   * waits for every holder under the client. `releasing` leaves the connection's own credential out (the caller deletes
+   * it next); a dropped candidate token never does, so a connection keeps its own grant. The caller always drops its copy.
+   * Throws when the bookkeeping fails; callers holding a token then revoke it directly.
+   */
+  private async revokeShared(profile: OAuthProfile, token: DroppedToken | undefined, binding: VaultBinding, releasing: boolean): Promise<ProviderRevocation> {
+    // Without a revoke endpoint (GitHub) nothing can be revoked later either: drop the token, exactly as before.
+    if (!profile.revokeUrl) return token ? this.options.oauth.revoke(profile, token.accessToken).catch(() => 'unavailable' as const) : 'unavailable';
+    const id = this.grantrefId(profile, binding.accountId);
+    const plan = await this.grantrefLock(id, async () => {
+      const stored = await this.options.vault.read('grantref', id, grantrefBinding(binding.accountId, id));
+      if (!token && stored === undefined) return { kept: false, due: [] as string[] };
+      const index = stored === undefined ? { version: 1 as const, deferred: [] } : grantrefSchema.parse(stored);
+      const held = await this.heldSubjects(binding.accountId, id, releasing ? binding.connectionId : undefined);
+      const holds = (subject: string | null) => subject === null ? held.size > 0 : held.has(subject);
+      // Deferred tokens of a grant nothing holds any more are due now.
+      const due = index.deferred.filter(entry => !holds(entry.subject)).map(entry => entry.token);
+      index.deferred = index.deferred.filter(entry => holds(entry.subject));
+      const kept = !!token && holds(token.subject ?? null);
+      // Keep the long-lived refresh token when there is one: an expired access token can no longer end the grant.
+      const value = token?.refreshToken ?? token?.accessToken;
+      if (kept && value && !index.deferred.some(entry => entry.token === value)) index.deferred.push({ subject: token?.subject ?? null, token: value });
+      while (index.deferred.length > DEFERRED_LIMIT) {
+        // A deferred token of a provider account still held is redundant (that holder's own revocation ends the same grant),
+        // so it can go. One of unknown account cannot: revoke the oldest now rather than drop it unrevoked.
+        const redundant = index.deferred.findIndex(entry => entry.subject !== null);
+        if (redundant >= 0) index.deferred.splice(redundant, 1); else due.push(index.deferred.shift()!.token);
+      }
+      if (index.deferred.length) await this.options.vault.write('grantref', id, grantrefBinding(binding.accountId, id), grantrefSchema.parse(index));
+      else if (stored !== undefined) await this.options.vault.delete('grantref', id);
+      return { kept, due };
+    });
+    // Provider calls run after the lock is released, so a slow provider never holds up another claim or revoke.
+    const providerRevocation: ProviderRevocation = !token ? 'unavailable' : plan.kept ? 'shared_grant_kept' : await this.revokeToken(profile, token);
+    for (const deferred of plan.due) await this.options.oauth.revoke(profile, deferred).catch(() => 'unavailable');
+    return providerRevocation;
   }
 }

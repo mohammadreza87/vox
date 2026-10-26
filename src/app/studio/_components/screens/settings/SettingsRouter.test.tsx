@@ -3,22 +3,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SettingsRouter } from './SettingsRouter';
 import { INBOX_CHANGED, useInboxBadge } from './useInboxBadge';
 
-const mocks = vi.hoisted(() => ({ read: vi.fn(), role: 'member' }));
+const mocks = vi.hoisted(() => ({ read: vi.fn(), role: 'member', settingsV2: undefined as boolean | undefined }));
 vi.mock('../../../_lib/experience-client', () => ({ experienceApi: { read: mocks.read } }));
 vi.mock('../../../_lib/client', async importOriginal => ({ ...await importOriginal<typeof import('../../../_lib/client')>(), tg: () => ({ initData: 'session' }) }));
-vi.mock('../../StudioApp', () => ({ useNav: () => ({ locale: 'en', dir: 'ltr', space: 'personal', setSpace: vi.fn(), back: vi.fn(), push: vi.fn(), snack: vi.fn(), tier: 'full', cache: new Map(), me: { member: { role: mocks.role } } }) }));
+vi.mock('../../StudioApp', () => ({ useNav: () => ({ locale: 'en', dir: 'ltr', space: 'personal', setSpace: vi.fn(), back: vi.fn(), push: vi.fn(), snack: vi.fn(), tier: 'full', cache: new Map(), me: { member: { role: mocks.role }, ...(mocks.settingsV2 === undefined ? {} : { features: { settingsV2: mocks.settingsV2 } }) } }) }));
+vi.mock('./AgentSettings', () => ({ AgentSettingsScreen: (p: { agentId: string; section?: string }) => <div data-testid="agent-settings" data-agent={p.agentId} data-section={p.section ?? ''} /> }));
 vi.mock('../../LearningPanel', () => ({ LearningPanel: (p: { space: string; showOperations?: boolean }) => <div data-testid="learning" data-space={p.space} data-ops={String(!!p.showOperations)} /> }));
 vi.mock('../../RightsOperationsPanel', () => ({ RightsOperationsPanel: () => <div data-testid="rights-ops" /> }));
 vi.mock('../../GuestRightsOperationsPanel', () => ({ GuestRightsOperationsPanel: () => <div data-testid="guest-ops" /> }));
 vi.mock('../../VoiceRecognitionPanel', () => ({ VoiceRecognitionPanel: (p: { space: string }) => <div data-testid="voice" data-space={p.space} /> }));
-vi.mock('../Connections', () => ({ ConnectionsScreen: (p: { agentId?: string }) => <div data-testid="connections" data-agent={p.agentId ?? ''} /> }));
+vi.mock('../Connections', () => ({ ConnectionsScreen: (p: { agentId?: string; view?: string }) => <div data-testid="connections" data-agent={p.agentId ?? ''} data-view={p.view ?? ''} /> }));
 vi.mock('./ConnectionDetail', () => ({ ConnectionDetailPage: (p: { connectionId: string }) => <div data-testid="connection" data-id={p.connectionId} /> }));
 vi.mock('./ExperiencePages', () => ({
   PreferencesPage: () => <div data-testid="preferences" />, InboxPage: () => <div data-testid="inbox" />,
   RemindersPage: (p: { notificationId?: string }) => <div data-testid="reminders" data-notification={p.notificationId ?? ''} />,
 }));
 
-beforeEach(() => { mocks.read.mockReset(); mocks.role = 'member'; });
+beforeEach(() => { mocks.read.mockReset(); mocks.role = 'member'; mocks.settingsV2 = undefined; });
 afterEach(cleanup);
 
 describe('SettingsRouter', () => {
@@ -34,6 +35,24 @@ describe('SettingsRouter', () => {
     expect(screen.getByTestId('connection')).toHaveAttribute('data-id', 'c1');
     view.rerender(<SettingsRouter page="agent-access" params={{ agentId: 'a1' }} />);
     expect(screen.getByTestId('connections')).toHaveAttribute('data-agent', 'a1');
+  });
+  it('agent-connections opens the agent’s connectors; the old agent-access name still lands there', () => {
+    const view = render(<SettingsRouter page="agent-connections" params={{ agentId: 'a1' }} />);
+    expect(screen.getByTestId('connections')).toHaveAttribute('data-agent', 'a1');
+    view.rerender(<SettingsRouter page="agent-access" params={{ agentId: 'a2' }} />);
+    expect(screen.getByTestId('connections')).toHaveAttribute('data-agent', 'a2');
+    expect(screen.getByTestId('connections')).toHaveAttribute('data-view', '');
+    view.rerender(<SettingsRouter page="agent-connections" params={{ agentId: 'a2', view: 'activity' }} />);
+    expect(screen.getByTestId('connections')).toHaveAttribute('data-view', 'activity');
+  });
+  it('the agent settings hub exists only with Settings v2', () => {
+    const view = render(<SettingsRouter page="agent" params={{ agentId: 'a1', section: 'voice' }} />);
+    expect(screen.queryByTestId('agent-settings')).toBeNull();
+    expect(screen.getByText('Settings aren’t available here yet.')).toBeInTheDocument();
+    mocks.settingsV2 = false; view.rerender(<SettingsRouter page="agent" params={{ agentId: 'a1' }} />);
+    expect(screen.queryByTestId('agent-settings')).toBeNull();
+    mocks.settingsV2 = true; view.rerender(<SettingsRouter page="agent" params={{ agentId: 'a1', section: 'voice' }} />);
+    expect(screen.getByTestId('agent-settings')).toHaveAttribute('data-section', 'voice');
   });
   it('keeps Diagnostics and Requests for owners, with a pinned top bar and the app space', () => {
     const view = render(<SettingsRouter page="diagnostics" />);

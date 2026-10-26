@@ -18,6 +18,8 @@ import { parsePostCallback, parsePostCommand } from '../circles/channels';
 import { agentCard, choiceReceipt, circleCopy, groupCopy, localeOf } from '../circles/notice';
 import { petPageUrl } from '../pet/links';
 import { parseExplicitControl } from '../relationships/policy';
+import { settingsV2 } from './flags';
+import { BOT_SETTINGS_COMMANDS, commandNames } from './settings-commands';
 import { MY_DATA_CODE, MY_DATA_PAGE } from './my-data-contract';
 
 export const MANAGER_UPDATES = ['message', 'managed_bot'];
@@ -49,6 +51,9 @@ export async function handleManagerUpdate(studio: Studio, update: TelegramUpdate
     await studio.deps.experience?.noteReminderRecipient(member.telegramId, studio.deps.reminderEndpointId)
       .catch(() => logTelegramDiagnostic(studio.deps.logger ?? console, 'update_failed'));
   }
+  // Settings v2: the manager menu (once per process) and /settings, /start settings, /start s_<code>[_x]; anything else gets today's greeting.
+  void studio.settingsBot.syncManagerMenu();
+  if (await studio.settingsBot.managerCommand(member, msg)) return;
   const webAppUrl = studio.deps.webAppUrl;
   const open = webAppUrl ? { inline_keyboard: [[{ text: 'Open Vox Studio', web_app: { url: webAppUrl } }]] } : undefined;
   const text = member.role === 'pending'
@@ -145,6 +150,9 @@ export async function handleAgentUpdate(studio: Studio, agentId: string, update:
     await studio.verifyGroupAudience(agentId, msg.chat.id);
     // Circles: /leave in a circle chat withdraws before anything else sees it.
     if (await studio.circleGroups.groupCommand(live, msg)) return;
+    // Settings v2: /settings and the other settings commands answer by a private message, never in the group. New
+    // messages only: an edit (even into "/voice") never answers, admits a guest or spends speech; it goes on as an edit.
+    if (!update.edited_message && await studio.settingsBot.groupCommand(live, msg, state)) return;
     // Rebuild when the speaker is new to the group so they count in its audience right away.
     await studio.noteGroupSpeaker(msg.chat.id, msg.from);
     ({ gateway } = await studio.gateway(endpoint));
@@ -154,6 +162,15 @@ export async function handleAgentUpdate(studio: Studio, agentId: string, update:
   if (msg.chat.type !== 'private') return;
 
   const member = state.members.find((m) => m.telegramId === msg.from!.id);
+  // Settings v2 commands answer new messages only: an edit (even into "/settings") goes on to the archive's invalidation below.
+  if (!update.edited_message) {
+    // Settings v2: /ask or /connectors hands off to Vox (VoxxBot's Mini App), the only place connectors and app answers
+    // live. This chat gets fixed copy and a URL button: no question, connector data or result enters it or its history.
+    if (settingsV2() && CONNECTORS_COMMAND.test((msg.text ?? '').trim()) && (member && canUseAgent(member, live) || visibilityOf(live) === 'public')
+      && await connectorsHandoff(studio, live, msg, update.update_id, !!member && canUseAgent(member, live))) return;
+    // Settings v2: /settings, /memory, /activity, /voice and /start settings (members, and outsiders of a public agent).
+    if (await studio.settingsBot.privateCommand(live, msg, update.update_id, state)) return;
+  }
   if (member && canUseAgent(member, live)) {
     if (studio.deps.telegramArchive) {
       if (update.edited_message) {
@@ -182,7 +199,11 @@ export async function handleAgentUpdate(studio: Studio, agentId: string, update:
     // Circles: a member's /leave withdraws from the circles where they cover this agent; otherwise today's path.
     if (studio.circlesMode() === 'circles' && /^\/leave(@\S+)?$/i.test((msg.text ?? '').trim())) {
       const left = await studio.circleGroups.leaveAll(member.telegramId, agentId, `leave:dm:${agentId}:${update.update_id}`);
-      if (left) { await botOf(studio, live)?.sendMessage(msg.chat.id, groupCopy(localeOf(msg.from!.language_code)).leftGroups(left)); return; }
+      if (left) {
+        const keyboard = await studio.settingsBot.trailingKeyboard(agentId, 'leave', msg.from!);
+        await botOf(studio, live)?.sendMessage(msg.chat.id, groupCopy(localeOf(msg.from!.language_code)).leftGroups(left), ...(keyboard ? [{ keyboard }] : []));
+        return;
+      }
     }
     // Circles S5: /post and replies to its Edit prompt, before anything else sees them.
     if (studio.circlesMode() === 'circles' && (parsePostCommand(msg.text) || msg.reply_to_message)) {
@@ -248,6 +269,22 @@ export async function handleAgentUpdate(studio: Studio, agentId: string, update:
   }
 }
 
+/** The bot side of the registry's 'agent.connectors' command and its alias, from the one command table (settings-commands.ts). */
+export const CONNECTORS_COMMANDS: readonly string[] = commandNames(BOT_SETTINGS_COMMANDS.find((c) => c.settingId === 'agent.connectors')!);
+const CONNECTORS_COMMAND = new RegExp(`^/(${CONNECTORS_COMMANDS.join('|')})(@\\S+)?$`, 'i');
+/**
+ * A quiet reply: fixed copy and, for a member, one URL button into Vox (settings-bot.ts connectorsReply); false
+ * (today's path) when there is nothing to send. Never a web_app button to an agent-signed page.
+ */
+async function connectorsHandoff(studio: Studio, live: Agent, msg: TelegramMessage, updateId: number, member: boolean): Promise<boolean> {
+  const reply = studio.settingsBot.connectorsReply(live, msg.from, member), token = studio.botToken(live);
+  if (!reply || !token) return false;
+  if (!await studio.deps.memory.deduper.firstSeen(`connectors:${live.id}:${updateId}`)) return true;
+  await studio.deps.botFor(token).sendMessage(msg.chat.id, reply.text, { silent: true, keyboard: reply.keyboard })
+    .catch(() => logTelegramDiagnostic(studio.deps.logger ?? console, 'update_failed'));
+  return true;
+}
+
 const CHOICES: Partial<Record<CardAction, JoinChoice>> = { cj: 'joined', cr: 'reply_only', cd: 'declined' };
 const REFUSED = { expired: 'expired', not_yours: 'notYours', used: 'used', early: 'early', unavailable: 'expired' } as const satisfies Record<Extract<ChoiceOutcome, { ok: false }>['reason'], string>;
 /** Relationship and memory controls; a participant has no stored context for them to act on, and they must not create any. */
@@ -276,7 +313,10 @@ async function circleDirect(studio: Studio, live: Agent, msg: TelegramMessage, u
     const circles = await studio.circleGroups.leaveAll(from.id, live.id, `leave:dm:${live.id}:${update.update_id}`);
     const had = await studio.withdrawAgentChoice(live.id, from.id), group = groupCopy(localeOf(from.language_code));
     const said = had ? copy.left(live.persona.name) + (circles ? ` ${group.leftCircles(circles)}` : '') : circles ? group.leftGroups(circles) : copy.notChosen;
-    if (!(live.blocked ?? []).includes(from.id)) await bot.sendMessage(msg.chat.id, said);
+    if (!(live.blocked ?? []).includes(from.id)) {
+      const keyboard = await studio.settingsBot.trailingKeyboard(live.id, 'leave', from);
+      await bot.sendMessage(msg.chat.id, said, ...(keyboard ? [{ keyboard }] : []));
+    }
     return;
   }
   const choice = (await studio.agentChoice(live.id, from.id))?.choice;
@@ -309,7 +349,8 @@ async function circleDirect(studio: Studio, live: Agent, msg: TelegramMessage, u
     // Circles notes (S3): the notes they saved are what this agent keeps of them; "nothing kept" only while they hold none.
     const kind = command === '/memories' ? 'memories' : command === '/forgetall' || control === 'forget' ? 'forget' : 'other';
     if (await studio.circleNotes.outsiderControl(live, msg, kind)) return;
-    await bot.sendMessage(msg.chat.id, copy.nothingKept);
+    const keyboard = await studio.settingsBot.trailingKeyboard(live.id, command || (control === 'forget' ? 'forgetall' : control ?? ''), from);
+    await bot.sendMessage(msg.chat.id, copy.nothingKept, ...(keyboard ? [{ keyboard }] : []));
     return;
   }
   const { gateway } = await studio.gateway(endpoint);
@@ -396,6 +437,8 @@ export async function registerWebhooks(studio: Studio, publicUrl: string): Promi
   if (manager) {
     await manager.setWebhook(`${base}/api/studio/telegram/manager`, webhookSecret(studio.deps.secret, 'manager'), MANAGER_UPDATES);
     if (studio.deps.webAppUrl) await manager.setChatMenuButton('Open Studio', studio.deps.webAppUrl).catch(() => undefined);
+    // Settings v2: the manager's /settings menu (nothing with the flag off).
+    await studio.settingsBot.syncManagerMenu();
     result.manager = true;
   }
   const state = await studio.deps.store.read();

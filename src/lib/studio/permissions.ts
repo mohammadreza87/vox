@@ -10,6 +10,7 @@
  *
  * Personality is editable only while an agent is forming (7 days after its
  * bot is created). After that it is locked for good: change means fire & re-hire.
+ * Voice and skills follow the same lock and belong to the creator alone (canShapeIdentity).
  * Look and photo are cosmetic, so they stay editable after the lock.
  */
 
@@ -82,6 +83,32 @@ export function canSetAgentAdmin(member: Member | undefined): boolean {
 
 export function canManageAccess(member: Member | undefined, agent: Agent): boolean {
   return atLeast(member, 'admin') || agent.createdBy === member?.telegramId;
+}
+
+/**
+ * Changing how an agent works for everyone (who can talk, live web, groups, Main Mini App):
+ * a manager, while the agent isn't retired. Reading those settings stays canManageAccess.
+ */
+export function canManageSettings(member: Member | undefined, agent: Agent): boolean {
+  return agent.status !== 'fired' && canManageAccess(member, agent);
+}
+
+/**
+ * Voice and skills shape who an agent is, so only its creator shapes them, and only while it
+ * forms: as a draft, while its bot is being made, and in the 7 days after hiring. Admins and
+ * superadmins don't get this. Once the lock passes the agent is formed and keeps learning from
+ * conversations, but its voice and skills never change again.
+ */
+export function canShapeIdentity(member: Member | undefined, agent: Agent, now = new Date()): boolean {
+  if (!atLeast(member, 'member') || agent.createdBy !== member!.telegramId) return false;
+  if (agent.status === 'draft' || agent.status === 'awaiting_bot') return true;
+  return agent.status === 'active' && !isLocked(agent, now);
+}
+
+/** Whole days left to shape an active agent, rounded up (null outside the forming period). */
+export function formingDaysLeft(agent: Agent, now = new Date()): number | null {
+  if (agent.status !== 'active' || !agent.lockAt || isLocked(agent, now)) return null;
+  return Math.max(1, Math.ceil((new Date(agent.lockAt).getTime() - now.getTime()) / 86_400_000));
 }
 
 export type RoleChangeResult = { ok: true } | { ok: false; reason: string };

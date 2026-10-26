@@ -177,10 +177,10 @@ describe('a pet launched over the group', () => {
     expect((await x.pet(['circle', 'decision'], { startParam: cookieCode, agentId: x.mina.agent.id, body: { code: cookieCode, choice: 'joined', revision } })).status).toBe(401);
     // ...and a launch for Mina never opens Cookie.
     expect((await x.pet(['circle'], { startParam: minaCode })).status).toBe(401);
-    // Cookie's own bot with Mina's code: that code names nothing for Cookie.
+    // Cookie's own bot, any code: agent-signed initData never decides a circle (decision 8).
     const crossed = await x.pet(['circle', 'decision'], { token: x.cookie.token, body: { code: minaCode, choice: 'joined', revision } });
-    expect(crossed.status).toBe(404);
-    expect(await crossed.json()).toEqual({ error: 'circle_unavailable' });
+    expect(crossed.status).toBe(403);
+    expect(await crossed.json()).toEqual({ error: 'circle_use_vox' });
     // A manager-signed launch speaks only for its own signed code.
     expect((await x.pet(['circle'], { startParam: cookieCode, query: `?code=${minaCode}` })).status).toBe(404);
     expect((await x.doc())!.participants).toEqual([]);
@@ -304,7 +304,7 @@ describe('joining from the pet', () => {
 });
 
 describe('the DM hop (c) into the pet', () => {
-  it("a verified j_ link's DM card opens the pet with ?j=, and the agent's own initData reads that group with the bare join code", async () => {
+  it("a verified j_ link's DM card opens the pet with ?j=; the agent's own initData never reads that group (decision 8)", async () => {
     const x = await setup({ mainApp: null });
     await x.open();
     const code = await x.joinCode(), bot = x.cookie.bot();
@@ -313,8 +313,8 @@ describe('the DM hop (c) into the pet', () => {
     const pet = (sent[2] as { keyboard: { inline_keyboard: Array<Array<{ web_app?: { url: string } }>> } }).keyboard.inline_keyboard.flat().find((b) => b.web_app)!;
     expect(pet.web_app!.url).toBe(`${ORIGIN}/studio/pet/${x.cookie.agent.id}?j=${code}`);
     const read = await x.pet(['circle'], { token: x.cookie.token, query: `?code=${code}` });
-    expect(read.status).toBe(200);
-    expect(await read.json()).toMatchObject({ chatTitle: 'HOOR family', myState: null });
+    expect(read.status).toBe(403);
+    expect(await read.json()).toEqual({ error: 'circle_use_vox' });
     // A plain /start (no group) keeps the plain pet URL.
     await x.send({ update_id: updateId++, message: { message_id: updateId, date: 0, text: '/start', from: user(ID.stranger), chat: { id: ID.stranger, type: 'private' } } });
     const plain = (bot.sendMessage.mock.calls.at(-1)![2] as { keyboard: { inline_keyboard: Array<Array<{ web_app?: { url: string } }>> } }).keyboard.inline_keyboard.flat().find((b) => b.web_app)!;
@@ -396,7 +396,7 @@ describe('the pet launch page resolver', () => {
 });
 
 describe('S4 review fixes', () => {
-  it("route b says the 📌 copies come from the agent's own bot (dm), so the pet never asks write access for the manager; route a and the DM pet do not", async () => {
+  it("route b says the 📌 copies come from the agent's own bot (dm), so the pet never asks write access for the manager; route a and the DM pet read no circle", async () => {
     const x = await setup();
     await x.open();
     const code = await x.codeFor(x.cookie.agent.id);
@@ -405,9 +405,9 @@ describe('S4 review fixes', () => {
     const revision = viaManager.card.revision;
     const joined = await (await x.pet(['circle', 'decision'], { startParam: code, body: { code, choice: 'joined', revision } })).json() as PetCircle;
     expect(joined.dm).toEqual({ bot: x.cookie.agent.bot!.username, name: 'Cookie' });
-    // The agent's own bot opened it (route a, or the DM's ?j= pet): its write access is the right one, no dm.
-    expect(await (await x.pet(['circle'], { token: x.cookie.token, startParam: code, query: `?code=${code}` })).json()).not.toHaveProperty('dm');
-    expect(await (await x.pet(['circle'], { token: x.cookie.token, query: `?code=${await x.joinCode()}` })).json()).not.toHaveProperty('dm');
+    // The agent's own bot opened it (route a, or the DM's ?j= pet): agent-signed, so no circle at all (decision 8).
+    expect(await (await x.pet(['circle'], { token: x.cookie.token, startParam: code, query: `?code=${code}` })).json()).toEqual({ error: 'circle_use_vox' });
+    expect(await (await x.pet(['circle'], { token: x.cookie.token, query: `?code=${await x.joinCode()}` })).json()).toEqual({ error: 'circle_use_vox' });
   });
 
   it('someone Telegram says left the group is never named to the others, and is marked left', async () => {
@@ -461,16 +461,17 @@ describe('S4 review fixes', () => {
     await x.add(x.mina);
     x.later();
     await x.h.store.update((s) => { s.agents.find((a) => a.id === x.cookie.agent.id)!.blocked = [ID.stranger]; });
-    const revision = (await x.doc())!.card!.id, joinCode = await x.joinCode();
+    const revision = (await x.doc())!.card!.id, minaCode = await x.codeFor(x.mina.agent.id);
     expect((await x.doc())!.card!.agentIds).toEqual([x.cookie.agent.id]);
-    const viaMina = await x.pet(['circle', 'decision'], { token: x.mina.token, agentId: x.mina.agent.id, body: { code: joinCode, choice: 'joined', revision } });
+    // Mina's pet, opened through VoxxBot (agent-signed initData never decides a circle, decision 8).
+    const viaMina = await x.pet(['circle', 'decision'], { startParam: minaCode, agentId: x.mina.agent.id, body: { code: minaCode, choice: 'joined', revision } });
     expect(viaMina.status).toBe(404);
     expect(await viaMina.json()).toEqual({ error: 'circle_unavailable' });
     expect((await x.doc())!.participants).toEqual([]);
     expect(await x.h.studio.agentChoice(x.cookie.agent.id, ID.stranger)).toBeUndefined();
     // Unblocked, the same request joins.
     await x.h.store.update((s) => { s.agents.find((a) => a.id === x.cookie.agent.id)!.blocked = []; });
-    expect((await x.pet(['circle', 'decision'], { token: x.mina.token, agentId: x.mina.agent.id, body: { code: joinCode, choice: 'joined', revision } })).status).toBe(200);
+    expect((await x.pet(['circle', 'decision'], { startParam: minaCode, agentId: x.mina.agent.id, body: { code: minaCode, choice: 'joined', revision } })).status).toBe(200);
   });
 
   it('a store failing under a circle route answers circle_failed (shown in the sheet), never pet_unavailable', async () => {

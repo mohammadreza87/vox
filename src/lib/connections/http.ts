@@ -11,6 +11,12 @@ import { ConnectionsError } from './errors';
 import { idSchema, type ConnectionActor, type ConnectionContext } from './contracts';
 import { authenticateAgentConnections } from './bot-principal';
 import { AdaptiveError } from '../adaptive/persistence/service';
+import { settingsV2 } from '../studio/flags';
+import { connectionReceipts } from './receipts';
+import type { AgentConnectionsHandoff, ConnectionsSnapshot } from './contracts';
+
+/** Changes that leave the person a quiet Telegram record (Settings v2). */
+const RECEIPT_ROUTES = new Set(['setup/claim', 'mcp/setup/claim', 'grants', 'revoke']);
 
 const spaceSchema = z.enum(['work', 'personal']);
 const setupSchema = z.object({ space: spaceSchema, connectionId: idSchema }).strict();
@@ -24,9 +30,10 @@ const json = (value: unknown, status = 200, headers: Record<string, string> = {}
 /** There is deliberately no wire route for completeEnrollment, broker dispatch,
  * provider credentials, arbitrary URLs, model source labels or account IDs. */
 export async function handleConnectionsRequest(studio: Studio, application: ConnectionsApplication | ((actor: ConnectionActor, space: 'work' | 'personal') => Promise<ConnectionsApplication>), request: Request, path: string[], botToken: string, botAgentId?: string): Promise<Response> {
-  // The agent-bot surface is read-only: its initData is signed with a token the agent's creator holds, so it can be
+  // The agent-bot surface is content-free: its initData is signed with a token the agent's creator holds, so it can be
   // harvested by a repointed menu even with Telegram's signature. Identity confirmation, grants, tasks, setup, MCP
-  // enrollment, revoke, provider resources and action review are refused before anything is read or built.
+  // enrollment, revoke, provider resources and action review are refused before anything is read or built, and the
+  // one GET answers a handoff to Vox, never the dashboard.
   if (botAgentId && !(request.method === 'GET' && path.length === 0)) return json({ error: 'not_found' }, 404);
   try {
     let limiter = studio.deps.rateLimiter ?? limiters.get(studio);
@@ -38,6 +45,12 @@ export async function handleConnectionsRequest(studio: Studio, application: Conn
     const user = authenticated?.user ?? verifyInitData(init, botToken);
     if (!user) return json({ error: 'authentication_required' }, 401);
     await limiter.consume('api', user.id);
+    if (botAgentId) {
+      // Decision 8: no connection record, provider or profile state leaves through agent-signed initData. The app is never built.
+      const agent = (await studio.deps.store.read()).agents.find(a => a.id === botAgentId);
+      const body: AgentConnectionsHandoff = { agent: { id: botAgentId, name: agent?.persona.name ?? '' }, manageInVox: true };
+      return json(body);
+    }
     if (!authenticated) {
       const member = await studio.ensureMember(user);
       if (member.role === 'pending') return json({ error: 'approval_required' }, 403);
@@ -78,26 +91,43 @@ export async function handleConnectionsRequest(studio: Studio, application: Conn
     }
     if (actor.botAgentId) responseContext = await app.service.context(actor, z.object({ space: spaceSchema }).parse(body).space);
     if (['workflows/create', 'workflows/review'].includes(path.join('/'))) await app.assertWorkflowMutationAllowed?.();
-    switch (path.join('/')) {
-      case 'mcp/enroll': return app.enrollMcp ? respond(await app.enrollMcp(actor, body), 201) : json({ error: 'mcp_setup_unavailable' }, 503);
-      case 'mcp/setup/preview': { const input = flowSchema.parse(body); return app.previewMcpSetup ? respond(await app.previewMcpSetup(actor, input.space, input.flowId)) : json({ error: 'mcp_setup_unavailable' }, 503); }
-      case 'mcp/setup/claim': { const input = flowSchema.extend({ acceptedCatalogDigest: z.string().regex(/^[a-f0-9]{64}$/) }).parse(body); return app.claimMcpSetup ? respond(await app.claimMcpSetup(actor, input.space, input.flowId, input.acceptedCatalogDigest)) : json({ error: 'mcp_setup_unavailable' }, 503); }
-      case 'mcp/setup/cancel': { const input = flowSchema.parse(body); return app.cancelMcpSetup ? respond(await app.cancelMcpSetup(actor, input.space, input.flowId)) : json({ error: 'mcp_setup_unavailable' }, 503); }
-      case 'enroll': return respond(await (app.enroll ? app.enroll(actor, body) : app.service.enroll(actor, body)), 201);
-      case 'grants': return respond(await (app.grant ? app.grant(actor, body) : app.service.grant(actor, body)));
-      case 'revoke': return respond(await (app.revoke ? app.revoke(actor, body) : app.service.revoke(actor, body)));
-      case 'tasks': return app.task ? respond(await app.task(actor, body)) : json({ error: 'tasks_unavailable' }, 503);
-      case 'workflows/create': return app.workflows ? respond(await app.workflows.create(actor, body), 201) : json({ error: 'workflows_unavailable' }, 503);
-      case 'workflows/review': return app.workflows ? respond(await app.workflows.review(actor, body)) : json({ error: 'workflows_unavailable' }, 503);
-      case 'workflows/pause': return app.workflows ? respond(await app.workflows.pause(actor, body)) : json({ error: 'workflows_unavailable' }, 503);
-      case 'setup': { const input = setupSchema.parse(body); return respond(await app.beginSetup(actor, input.space, input.connectionId)); }
-      case 'setup/claim': { const input = flowSchema.parse(body); return respond(await app.claimSetup(actor, input.space, input.flowId)); }
-      case 'setup/cancel': { const input = flowSchema.parse(body); return respond(await app.cancelSetup(actor, input.space, input.flowId)); }
-      case 'actions/approve': return respond(await app.service.approve(actor, body));
-      case 'actions/cancel': return respond(await app.service.cancel(actor, body));
-      case 'actions/execute': { const input = operationSchema.parse(body); return respond(await app.execute(actor, input.space, input.operationId)); }
-      default: return json({ error: 'not_found' }, 404);
+    // Settings v2: the person's own snapshot before a recorded change, diffed after it for quiet Telegram records.
+    const route = path.join('/'), receiptSpace = z.object({ space: spaceSchema }).safeParse(body);
+    let before: ConnectionsSnapshot | undefined;
+    if (settingsV2() && studio.receipts && RECEIPT_ROUTES.has(route) && receiptSpace.success) before = await app.service.list(actor, { space: receiptSpace.data.space }).catch(() => undefined);
+    const dispatch = async (): Promise<Response> => {
+      switch (path.join('/')) {
+        case 'mcp/enroll': return app.enrollMcp ? respond(await app.enrollMcp(actor, body), 201) : json({ error: 'mcp_setup_unavailable' }, 503);
+        case 'mcp/setup/preview': { const input = flowSchema.parse(body); return app.previewMcpSetup ? respond(await app.previewMcpSetup(actor, input.space, input.flowId)) : json({ error: 'mcp_setup_unavailable' }, 503); }
+        case 'mcp/setup/claim': { const input = flowSchema.extend({ acceptedCatalogDigest: z.string().regex(/^[a-f0-9]{64}$/) }).parse(body); return app.claimMcpSetup ? respond(await app.claimMcpSetup(actor, input.space, input.flowId, input.acceptedCatalogDigest)) : json({ error: 'mcp_setup_unavailable' }, 503); }
+        case 'mcp/setup/cancel': { const input = flowSchema.parse(body); return app.cancelMcpSetup ? respond(await app.cancelMcpSetup(actor, input.space, input.flowId)) : json({ error: 'mcp_setup_unavailable' }, 503); }
+        case 'enroll': return respond(await (app.enroll ? app.enroll(actor, body) : app.service.enroll(actor, body)), 201);
+        case 'grants': return respond(await (app.grant ? app.grant(actor, body) : app.service.grant(actor, body)));
+        case 'revoke': return respond(await (app.revoke ? app.revoke(actor, body) : app.service.revoke(actor, body)));
+        case 'tasks': return app.task ? respond(await app.task(actor, body)) : json({ error: 'tasks_unavailable' }, 503);
+        case 'workflows/create': return app.workflows ? respond(await app.workflows.create(actor, body), 201) : json({ error: 'workflows_unavailable' }, 503);
+        case 'workflows/review': return app.workflows ? respond(await app.workflows.review(actor, body)) : json({ error: 'workflows_unavailable' }, 503);
+        case 'workflows/pause': return app.workflows ? respond(await app.workflows.pause(actor, body)) : json({ error: 'workflows_unavailable' }, 503);
+        case 'setup': { const input = setupSchema.parse(body); return respond(await app.beginSetup(actor, input.space, input.connectionId)); }
+        case 'setup/claim': { const input = flowSchema.parse(body); return respond(await app.claimSetup(actor, input.space, input.flowId)); }
+        case 'setup/cancel': { const input = flowSchema.parse(body); return respond(await app.cancelSetup(actor, input.space, input.flowId)); }
+        case 'actions/approve': return respond(await app.service.approve(actor, body));
+        case 'actions/cancel': return respond(await app.service.cancel(actor, body));
+        case 'actions/execute': { const input = operationSchema.parse(body); return respond(await app.execute(actor, input.space, input.operationId)); }
+        default: return json({ error: 'not_found' }, 404);
+      }
+    };
+    const response = await dispatch();
+    if (before && receiptSpace.success && response.ok) {
+      const space = receiptSpace.data.space, locale = user.language_code?.toLowerCase().startsWith('fa') ? 'fa' as const : 'en' as const;
+      // Connection records come from the manager bot, whose initData this is (the agent-bot surface never gets here).
+      const allowsWriteToPm = user.allows_write_to_pm;
+      studio.receipts.track((async () => {
+        const after = await app.service.list(actor, { space });
+        for (const receipt of connectionReceipts(before, after)) await studio.receipts.send({ ...receipt, telegramId: user.id, locale, ...(allowsWriteToPm === false ? { allowsWriteToPm } : {}) });
+      })());
     }
+    return response;
   } catch (error) {
     if (isSchemaValidationError(error)) return json({ error: 'invalid_request' }, 400);
     if (ConnectionsError.is(error) || AdaptiveError.is(error)) return json({ error: error.code }, error.status);

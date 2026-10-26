@@ -18,6 +18,8 @@ export const ADAPTIVE_RELEASE_CAPABILITIES = Object.freeze({
   supportedPetCareSchemas: Object.freeze([1]),
   supportedConnectionRecordSchemas: Object.freeze([1, 2]),
   supportedSelfServiceMcpSchemas: Object.freeze([1]),
+  supportedReplyUseSchemas: Object.freeze([1]),
+  supportedProviderTemplateSchemas: Object.freeze([1]),
   supportedTelegramArchiveSchemas: Object.freeze([1]),
   supportedTelegramArchiveSourceSuppressionVersions: Object.freeze([1]),
 });
@@ -550,6 +552,9 @@ function scanPetCare(env, required, budget) {
   } finally { dir.closeSync(); }
 }
 
+/** Destinations that let a connected app's answer reach a chat (Settings Part 2b); they live on grants only. */
+const REPLY_DESTINATIONS = Object.freeze(['studio:chat_reply', 'telegram:agent_dm']);
+const REPLY_COLLECTIONS = Object.freeze(['replyUses', 'replyMessages']);
 /** Only the committed generation is authoritative. Never revive orphan records or
  * inspect broker credentials; the broker vault has its own deployment boundary. */
 function scanConnections(env, required, budget) {
@@ -568,6 +573,15 @@ function scanConnections(env, required, budget) {
     if (Object.hasOwn(config, 'selfServiceMcp')) {
       if (!object(config.selfServiceMcp)) fail();
       required.selfServiceMcpSchema = 1; // Old strict parsers reject even disabled setup.
+    }
+    // Old strict parsers reject these keys even when switched off.
+    if (Object.hasOwn(config, 'chatReplies')) {
+      if (!object(config.chatReplies)) fail();
+      required.replyUseSchema = 1;
+    }
+    if (Object.hasOwn(config, 'providerTemplates')) {
+      if (!object(config.providerTemplates) && !Array.isArray(config.providerTemplates)) fail();
+      required.providerTemplateSchema = 1;
     }
     for (const profile of config.profiles) {
       if (!object(profile)) fail();
@@ -613,7 +627,28 @@ function scanConnections(env, required, budget) {
             row.mcp.catalog !== null && (!object(row.mcp.catalog) || row.mcp.catalog.schemaVersion !== 1)) fail();
         required.selfServiceMcpSchema = 1;
       }
+      if (Object.hasOwn(row, 'template')) {
+        if (row.schemaVersion !== 2 || !object(row.template)) fail();
+        required.providerTemplateSchema = 1;
+      }
     }
+    // A reply destination on a grant, or any stored reply row, needs a reader that knows them,
+    // even with the feature flags off: an older release would drop or misread them.
+    const grants = safePath(join(directory, pointer.generation, 'grants'), 'directory', true);
+    const grantFiles = grants ? entries(grants, 2000).sort() : [];
+    for (const file of grantFiles) {
+      if (!/^[a-f0-9]{64}\.json$/.test(file)) fail();
+      const row = readPlainJson(join(grants, file), 300_000, budget);
+      if (!object(row) || !identifier(row.id) || file !== `${hash(row.id)}.json` || !Array.isArray(row.destinationIds) ||
+          !identifier(row.partitionId) || hash(row.partitionId) !== partition) fail();
+      if (row.destinationIds.some(id => REPLY_DESTINATIONS.includes(id)) || Object.hasOwn(row, 'replyDestinationIds')) required.replyUseSchema = 1;
+    }
+    const replies = REPLY_COLLECTIONS.map(name => {
+      const path = safePath(join(directory, pointer.generation, name), 'directory', true);
+      const files = path ? entries(path, 2000).sort() : [];
+      if (files.length) required.replyUseSchema = 1;
+      return { name, path, files };
+    });
     // An account record can outlive its connection. Its new unavailable-identity
     // disclosure must also block rollback to a strict historical parser.
     const accounts = safePath(join(directory, pointer.generation, 'providerAccounts'), 'directory', true);
@@ -636,7 +671,11 @@ function scanConnections(env, required, budget) {
         canonical(entries(directory, 100).sort()) !== canonical(names) ||
         canonical(entries(records, 2000).sort()) !== canonical(files) ||
         accounts && canonical(entries(accounts, 2000).sort()) !== canonical(accountFiles) ||
-        !accounts && safePath(join(directory, pointer.generation, 'providerAccounts'), 'directory', true)) fail();
+        !accounts && safePath(join(directory, pointer.generation, 'providerAccounts'), 'directory', true) ||
+        grants && canonical(entries(grants, 2000).sort()) !== canonical(grantFiles) ||
+        !grants && safePath(join(directory, pointer.generation, 'grants'), 'directory', true) ||
+        replies.some(({ name, path, files }) => path ? canonical(entries(path, 2000).sort()) !== canonical(files)
+          : safePath(join(directory, pointer.generation, name), 'directory', true))) fail();
   }
   if (canonical(entries(root).sort()) !== canonical(partitions)) fail();
   verifyConfig();
@@ -673,6 +712,9 @@ export function assertReleaseAdaptiveCompatibility(env, manifest) {
     ['supportedImprovementWorkflowSchemas', 'improvementWorkflowSchema', [1, 2]],
     ['supportedPetCareSchemas', 'petCareSchema', [1]],
     ['supportedSelfServiceMcpSchemas', 'selfServiceMcpSchema', [1]],
+    // Fail closed: a release that does not declare these cannot admit reply rows or template connections.
+    ['supportedReplyUseSchemas', 'replyUseSchema', [1]],
+    ['supportedProviderTemplateSchemas', 'providerTemplateSchema', [1]],
     ['supportedTelegramArchiveSchemas', 'telegramArchiveSchema', [1]],
     ['supportedTelegramArchiveSourceSuppressionVersions', 'telegramArchiveSourceSuppressionVersion', [1]],
   ]) {

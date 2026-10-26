@@ -1,6 +1,6 @@
 /**
- * "My data" API (`/api/studio/my-data`): a person's own pet care, agent choices, group participation and notes, with
- * export and erase. It replaces the pet page's export and forget, which trusted agent-signed initData: an agent's
+ * "My data" API (`/api/studio/my-data`): a person's own pet care, agent choices, group participation, notes and
+ * connection records, with export and erase. It replaces the pet page's export and forget, which trusted agent-signed initData: an agent's
  * creator holds that bot's token (BotFather), so they could forge it for anyone, or harvest a genuine one by
  * repointing the bot's menu. Here only initData signed by the manager bot (VOXX_BOT_TOKEN, which only Vox holds) is
  * accepted, so the caller is the Telegram account itself.
@@ -23,6 +23,7 @@ import { StudioRateLimiter, StudioRateLimitError, type StudioRequestRateLimiter 
 import { trustedStudioRequestOrigin } from './request-origin';
 import { StudioError, type Studio } from './service';
 import type { MyDataErrorCode, MyDataForgetResponse, MyDataNoteEraseResponse, MyDataResponse } from './my-data-contract';
+import type { ConnectionsExport } from '../connections/rights';
 
 const MAX_INIT_DATA = 16_384;
 const MAX_BODY = 4 * 1024;
@@ -40,6 +41,15 @@ function limiterFor(studio: Studio): StudioRequestRateLimiter {
   let limiter = limiters.get(studio);
   if (!limiter) { limiter = new StudioRateLimiter(); limiters.set(studio, limiter); }
   return limiter;
+}
+
+/** The person's own connection records in both spaces (never tokens), present only when any exist; a flag when they could not be read. */
+async function connectionsForExport(studio: Studio, telegramId: number): Promise<Pick<MyDataResponse, 'connections' | 'connectionsUnavailable'>> {
+  try {
+    const found: ConnectionsExport[] = [];
+    for (const space of ['work', 'personal'] as const) { const one = await studio.connectionsFor(telegramId, space); if (one) found.push(one); }
+    return found.length ? { connections: found } : {};
+  } catch { (studio.deps.logger ?? console).warn('[studio] connections_export_failed'); return { connectionsUnavailable: true }; }
 }
 
 /** `managerToken`: VOXX_BOT_TOKEN. Agent bots' tokens are never tried here. */
@@ -71,13 +81,15 @@ export async function handleMyDataRequest(studio: Studio, request: Request, path
       const choices = await studio.agentChoicesFor(user.id).catch(() => []);
       const circles = await studio.circleParticipationFor(user.id).catch(() => []);
       const notes = await studio.notesFor(user.id).catch(() => []);
+      const connections = await connectionsForExport(studio, user.id);
       const petCare = await pets.listForUser(user.id);
       // Display names only for the agents the person's own records already name.
-      const named = new Set([...petCare.map((c) => c.agentId), ...choices.map((c) => c.agentId), ...notes.flatMap((n) => n.agentIds)]);
+      const named = new Set([...petCare.map((c) => c.agentId), ...choices.map((c) => c.agentId), ...notes.flatMap((n) => n.agentIds),
+        ...(connections.connections ?? []).flatMap((e) => [...e.connections.flatMap((c) => c.agentId ? [c.agentId] : []), ...e.grants.map((g) => g.agentId)])]);
       const state = await studio.deps.store.read();
       const agentNames: Record<string, string> = {};
       for (const agent of state.agents) if (named.has(agent.id)) agentNames[agent.id] = agent.persona.name;
-      const body: MyDataResponse = { petCare, ...(choices.length ? { agentChoices: choices } : {}), ...(circles.length ? { circles } : {}), ...(notes.length ? { notes } : {}), agentNames };
+      const body: MyDataResponse = { petCare, ...(choices.length ? { agentChoices: choices } : {}), ...(circles.length ? { circles } : {}), ...(notes.length ? { notes } : {}), ...connections, agentNames };
       return json(body, 200, { 'Content-Disposition': 'attachment; filename="vox-my-data.json"' });
     }
 
@@ -96,7 +108,10 @@ export async function handleMyDataRequest(studio: Studio, request: Request, path
     const circles = await studio.forgetCircles(user.id), notes = await studio.forgetNotes(user.id);
     await studio.forgetChannelDrafts(user.id);
     const choices = await studio.forgetAgentChoices(user.id), erased = await pets.eraseUser(user.id);
-    const body: MyDataForgetResponse = { erased, ...(choices ? { choicesErased: choices } : {}), ...(circles ? { circlesErased: circles } : {}), ...(notes ? { notesErased: notes } : {}) };
+    // Connections in both spaces, for every agent: best-effort, it never fails the forget (a vault entry may wait for the broker).
+    const connections = await studio.forgetConnections(user.id);
+    const body: MyDataForgetResponse = { erased, ...(choices ? { choicesErased: choices } : {}), ...(circles ? { circlesErased: circles } : {}), ...(notes ? { notesErased: notes } : {}),
+      ...(connections.erased ? { connectionsErased: connections.erased } : {}), ...(connections.pending ? { connectionsPending: connections.pending } : {}) };
     return json(body);
   } catch (error) {
     if (StudioRateLimitError.is(error)) return fail('rate_limited', 429, { 'Retry-After': String(error.retryAfterSeconds) });

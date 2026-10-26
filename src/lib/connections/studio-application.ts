@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { Studio } from '../studio/service';
-import type { ConnectionsApplication, ConnectionsDashboard, SetupReceipt, ConnectionExecutionResult, McpSetupPreview, ConnectionProviderView } from './application';
+import type { ConnectionsApplication, ConnectionsDashboard, SetupReceipt, ConnectionExecutionResult, McpSetupPreview, ConnectionProviderView, McpNeed, ProviderNeed, ProviderSetupState } from './application';
 import type { ConnectionActor, SpaceKind, ConnectionsSnapshot } from './contracts';
 import { connectionAgentId, enrollmentInputSchema, grantInputSchema, revokeInputSchema } from './contracts';
 import type { ConnectionsStorage } from './storage';
@@ -19,6 +19,12 @@ import type { ConnectionsBudgetLedger } from './budgets';
 import { CONNECTION_RUNTIME_SKILLS } from './skills';
 import { ConnectionsWorkflowService } from './workflows/service';
 import { workflowRecipe } from './workflows/recipes';
+import { settingsV2 } from '../studio/flags';
+import { retryErasedRevocations } from './rights';
+
+/** Providers the broker can sign in to in a browser (broker/oauth.ts); runners need an attested worker; the rest take an operator token. */
+const SIGN_IN_PROVIDERS = new Set(['github', 'google_drive', 'google_docs', 'google_sheets', 'google_slides', 'gmail', 'google_analytics']);
+const RUNNER_PROVIDERS = new Set(['browser', 'ssh']);
 
 export interface ConnectionsBrokerPort {
   begin(input: { actor: ConnectionActor; space: SpaceKind; connectionId: string; expectedRevision: number; providerId: string }): Promise<SetupReceipt>;
@@ -26,6 +32,8 @@ export interface ConnectionsBrokerPort {
   cancel(input: { actor: ConnectionActor; space: SpaceKind; flowId: string }): Promise<SetupReceipt>;
   execute(input: { actor: ConnectionActor; space: SpaceKind; operationId: string }): Promise<ConnectionExecutionResult>;
   revoke(input: { actor: ConnectionActor; space: SpaceKind; connectionId: string; providerId: string }): Promise<unknown>;
+  /** Rights erasure (/v1/erase): a connection Studio revoked and marked erased, with no current identity confirmation. */
+  erase?(input: { actor: { accountId: string }; space: SpaceKind; connectionId: string; providerId: string }): Promise<unknown>;
   mcpBegin?(input: { actor: ConnectionActor; space: SpaceKind; connectionId: string; expectedRevision: number; endpointUrl: string }): Promise<SetupReceipt>;
   mcpPreview?(input: { actor: ConnectionActor; space: SpaceKind; flowId: string }): Promise<McpSetupPreview>;
   mcpClaim?(input: { actor: ConnectionActor; space: SpaceKind; flowId: string; acceptedCatalogDigest: string }): Promise<SetupReceipt>;
@@ -71,6 +79,19 @@ export async function createStudioConnectionsApplication(studio: Studio, boundAc
       return { connection, account: records.providerAccounts.find(p => p.id === connection.providerAccountId) };
     });
   };
+  /**
+   * Custom MCP from the Vox main app (Settings v2): a manager-signed actor may add a server for an agent it can use
+   * (service.enrollMcp checks currentAgentIds = canUseAgent && !blocked). It needs the synchronous committed-state
+   * fence (file storage); without it the main-app path stays closed. Bot-signed actors keep their own path.
+   */
+  /** The main-app path's final fence exists: a committed Studio read and a committed identity read (authority.ts). */
+  const mainAppFence = (accountId: string) => !!studio.deps.store.readCommittedForEffect && !!studio.deps.adaptive
+    && studio.deps.adaptive.repository.readCommittedForEffect(accountId, Date.now()).status !== 'unsupported';
+  const assertMcpSurface = (actor: ConnectionActor) => {
+    if (actor.botAgentId) return;
+    if (!settingsV2()) return deny('mcp_open_agent_bot');
+    if (!mainAppFence(actor.accountId)) return deny('connection_authority_transport_unavailable', 503);
+  };
   const mcpAvailable = async () => { const current = await options.configuration(); return current.enabled && !!current.selfServiceMcp?.enabled && !!options.broker?.mcpBegin && !!options.broker.mcpPreview && !!options.broker.mcpClaim && !!options.broker.mcpCancel; };
   const assertMcpAvailable = async () => { if (!await mcpAvailable()) return deny('mcp_setup_unavailable', 503); };
   const currentModelPolicy = (config: ConnectionsConfiguration): boolean => {
@@ -103,8 +124,36 @@ export async function createStudioConnectionsApplication(studio: Studio, boundAc
       const current = await options.configuration();
       const state = await studio.deps.store.read();
       const enabled = current.enabled && !!options.broker;
-      const snapshot = await service.list(actor, { space, ...(agentId ? { agentId } : {}) });
+      let snapshot = await service.list(actor, { space, ...(agentId ? { agentId } : {}) });
+      // An erasure that could not reach the broker is finished here (paced per partition). /v1/erase needs no actor; the
+      // /v1/revoke fallback uses this actor only for connections it may act on (a bot actor: its own agent's).
+      if (snapshot.connections.some(c => c.lifecycle === 'revoked' || c.lifecycle === 'deleted')) {
+        const broker = options.broker;
+        const purged = await retryErasedRevocations({ storage: options.storage, ...(broker?.erase ? { erase: input => broker.erase!(input) } : {}),
+          ...(broker ? { revoke: input => broker.revoke(input) } : {}), log: studio.deps.logger ?? console,
+          actorFor: async (_, connection) => !actor.botAgentId || connection.schemaVersion === 2 && connection.agentId === actor.botAgentId ? actor : undefined },
+        boundActor.accountId, space);
+        if (purged > 0) snapshot = await service.list(actor, { space, ...(agentId ? { agentId } : {}) });
+      }
+      const v2 = settingsV2();
+      const modelReady = currentModelPolicy(current);
+      const providerState = (provider: ReturnType<typeof listProviderDefinitions>[number], profile: ConnectionProfile | undefined): ProviderSetupState => {
+        const how = SIGN_IN_PROVIDERS.has(provider.id) ? 'sign_in' as const : RUNNER_PROVIDERS.has(provider.id) ? 'runner' as const : 'vox_adds' as const;
+        if (provider.tools.some(t => t.personalOnly) && space !== 'personal') return { status: 'not_here', how, needs: ['personal_only'] };
+        const connection = agentId ? snapshot.connections.find(c => c.agentId === agentId && c.providerId === provider.id && ['connected', 'pending'].includes(c.lifecycle)) : undefined;
+        const until = connection && snapshot.grants.filter(g => g.connectionId === connection.id && g.agentId === agentId && g.status === 'active' && g.expiresAt > Date.now()).map(g => g.expiresAt).sort((a, b) => b - a)[0];
+        const needs: ProviderNeed[] = [...(!current.enabled ? ['connections_off' as const] : []), ...(!options.broker ? ['service_off' as const] : []), ...(!profile?.qualified ? ['not_set_up_for_you' as const] : [])];
+        const answers: ProviderNeed[] = modelReady ? [] : ['answers_off'];
+        if (connection?.lifecycle === 'connected') return { status: 'connected', how, needs: [...needs, ...answers], connectionId: connection.id, ...(until ? { connectedUntil: until } : {}) };
+        // Only browser sign-in finishes from a page; an operator token or a runner is finished by a Vox operator (broker CLI).
+        const enrolls: ProviderNeed[] = how === 'sign_in' ? [] : ['vox_enrolls'];
+        if (connection) return { status: 'pending', how, needs: [...needs, ...enrolls], connectionId: connection.id };
+        return needs.length || enrolls.length ? { status: 'needs_vox', how, needs: [...needs, ...enrolls] } : { status: 'available', how, needs: answers };
+      };
+      const mcpNeeds: McpNeed[] = [...(!current.enabled ? ['connections_off' as const] : []), ...(!options.broker?.mcpBegin || !options.broker.mcpPreview || !options.broker.mcpClaim || !options.broker.mcpCancel ? ['service_off' as const] : []),
+        ...(!current.selfServiceMcp?.enabled ? ['mcp_off' as const] : []), ...(!actor.botAgentId && !mainAppFence(actor.accountId) ? ['main_app_off' as const] : [])];
       return { ...snapshot, enabled, mcpAvailable: await mcpAvailable(),
+        ...(v2 ? { mcp: { available: !mcpNeeds.length, needs: [...mcpNeeds, ...(modelReady ? [] : ['answers_off' as const])] } } : {}),
         canRunTasks: enabled && currentModelPolicy(current), ...(studio.deps.chatLLM.identity ? { modelProcessor: studio.deps.chatLLM.identity } : {}),
         skills: CONNECTION_RUNTIME_SKILLS.filter(s => s.spaces.includes(space)).map(s => ({ id: s.id, version: s.version, title: s.title, providerIds: s.providerIds })),
         maxGrantExpiryAt: Math.min(context.bindingExpiresAt, Date.now() + 30 * 86_400_000),
@@ -116,6 +165,7 @@ export async function createStudioConnectionsApplication(studio: Studio, boundAc
             availability: enabled && profile?.qualified ? 'ready' : provider.tools.some(t => t.personalOnly) && space !== 'personal' ? 'unavailable' : 'setup_required',
             reason: profile?.qualified && enabled ? '' : provider.eligibilityReason,
             tools: provider.tools.filter(t => (!t.personalOnly || space === 'personal') && getProviderToolDefinition(t.id)?.effect === 'read').map(t => ({ id: t.id, name: t.title, effect: getProviderToolDefinition(t.id)!.effect })),
+            ...(v2 ? { state: providerState(provider, profile) } : {}),
           };
         }), ...(snapshot.connections.some(c => c.mcp?.catalog) ? [{ id: 'remote_mcp', name: 'MCP server', description: 'Your separately connected server', setup: 'oauth' as const,
           availability: 'unavailable' as const, reason: 'Add a separate server using Connect an MCP server.', tools: snapshot.connections.flatMap(c => c.mcp?.catalog ? new McpConnectionsCatalog(c.mcp.catalog).view().tools.map(t => ({ id: t.id, name: t.title, effect: t.effect })) : []) }] : [])],
@@ -136,9 +186,9 @@ export async function createStudioConnectionsApplication(studio: Studio, boundAc
       return profile.resources.map(r => ({ ...r, toolIds: r.toolIds.filter(id => getProviderToolDefinition(id)?.effect === 'read'),
         destinationIds: [`provider:${profile.providerId}`, 'model:studio', 'vox:private'] })).filter(r => r.toolIds.length > 0);
     },
-    async enrollMcp(actor, raw) { if (!actor.botAgentId) return deny('mcp_open_agent_bot'); await assertMcpAvailable(); return service.enrollMcp(actor, raw); },
-    async previewMcpSetup(actor, space, flowId) { if (!actor.botAgentId) return deny('mcp_open_agent_bot'); await service.context(actor, space); await assertMcpAvailable(); return options.broker!.mcpPreview!({ actor, space, flowId }); },
-    async claimMcpSetup(actor, space, flowId, acceptedCatalogDigest) { if (!actor.botAgentId) return deny('mcp_open_agent_bot'); await service.context(actor, space); await assertMcpAvailable(); return options.broker!.mcpClaim!({ actor, space, flowId, acceptedCatalogDigest }); },
+    async enrollMcp(actor, raw) { assertMcpSurface(actor); await assertMcpAvailable(); return service.enrollMcp(actor, raw); },
+    async previewMcpSetup(actor, space, flowId) { assertMcpSurface(actor); await service.context(actor, space); await assertMcpAvailable(); return options.broker!.mcpPreview!({ actor, space, flowId }); },
+    async claimMcpSetup(actor, space, flowId, acceptedCatalogDigest) { assertMcpSurface(actor); await service.context(actor, space); await assertMcpAvailable(); return options.broker!.mcpClaim!({ actor, space, flowId, acceptedCatalogDigest }); },
     async cancelMcpSetup(actor, space, flowId) { await service.context(actor, space); if (!options.broker?.mcpCancel) return deny('broker_unavailable', 503); return options.broker.mcpCancel({ actor, space, flowId }); },
     async enroll(actor, raw): Promise<ConnectionsSnapshot> {
       const input = enrollmentInputSchema.parse(raw);
@@ -169,7 +219,9 @@ export async function createStudioConnectionsApplication(studio: Studio, boundAc
     },
     async beginSetup(actor, space, connectionId) {
       const { connection } = await connectionFor(actor, space, connectionId);
-      if (connection.schemaVersion === 2 && connection.mcp) { if (actor.botAgentId !== connection.agentId) return deny('mcp_open_agent_bot'); await assertMcpAvailable();
+      if (connection.schemaVersion === 2 && connection.mcp) {
+        if (actor.botAgentId ? actor.botAgentId !== connection.agentId : (assertMcpSurface(actor), !(await service.context(actor, space)).currentAgentIds.includes(connection.agentId))) return deny('mcp_open_agent_bot');
+        await assertMcpAvailable();
         return { ...await options.broker!.mcpBegin!({ actor, space, connectionId, expectedRevision: connection.revision, endpointUrl: connection.mcp.canonicalResourceUri }), kind: 'remote_mcp' as const }; }
       await currentProfile(connection.providerId, connectionAgentId(connection));
       if (connection.lifecycle !== 'pending') return deny('connection_not_pending', 409);

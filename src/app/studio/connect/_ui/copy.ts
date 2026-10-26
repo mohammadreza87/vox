@@ -13,6 +13,7 @@ const fa: Record<string, string> = {
   'Your request and permitted results are sent to': 'درخواست و نتایج مجاز شما ارسال می‌شوند به',
   "Connections": "اتصال‌ها",
   "Manage connections in Vox. This page only shows them.": "اتصال‌ها را در وکس مدیریت کنید. این صفحه فقط آن‌ها را نشان می‌دهد.",
+  "Your connected apps are in Vox. Open Vox to see them or change what this agent may use.": "برنامه‌های وصل‌شدهٔ شما در وکس هستند. برای دیدن آن‌ها یا تغییر آنچه این عامل می‌تواند به کار ببرد، وکس را باز کنید.",
   "This agent": "این عامل",
   "Back to agent": "بازگشت به عامل",
   "Connect your own accounts and choose what this agent may use. Each agent has separate access.": "حساب‌های خود را متصل کنید و دسترسی این عامل را انتخاب کنید. دسترسی هر عامل جداگانه است.",

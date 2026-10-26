@@ -15,6 +15,8 @@ export type { DefaultVoice, LibraryVoice, VoiceOptions };
 export type { CatalogView, RouteSuggestion };
 /** Circles S5: an agent's channels (post-only), the Add link for managers, the comments-group offer. */
 import type { ChannelDraftView, ChannelsView, ChannelView } from '@/lib/studio/circle-channels';
+import type { HistoryRow } from '@/lib/studio/history';
+export type { HistoryRow };
 export type { ChannelDraftView, ChannelsView, ChannelView };
 
 /** Body of POST catalog/route. `final: false` (typing) answers from the server's local router only. */
@@ -22,7 +24,8 @@ export interface RouteRequest { text: string; final?: boolean; exclude?: string[
 
 interface TelegramWebApp {
   initData: string;
-  initDataUnsafe?: { user?: TelegramUserInfo };
+  /** start_param: the `startapp` payload the Mini App was opened with (unsigned here; the server re-resolves it). */
+  initDataUnsafe?: { user?: TelegramUserInfo; start_param?: string };
   ready(): void;
   expand(): void;
   colorScheme?: 'light' | 'dark';
@@ -120,7 +123,9 @@ export interface Me {
   member: Member;
   org: string;
   bot: string;
-  features: { avatars: boolean; voices: boolean; calls: boolean; liveCalls?: boolean; legacyMemorySharing?: boolean; skillRouting?: 'decisions' | 'local' };
+  features: { avatars: boolean; voices: boolean; calls: boolean; liveCalls?: boolean; legacyMemorySharing?: boolean; skillRouting?: 'decisions' | 'local';
+    /** STUDIO_SETTINGS_V2=1: the agent settings hub, the regrouped You tab and Telegram CloudStorage prefs */
+    settingsV2?: boolean };
 }
 
 export interface MemoryItem { id: string; content: string; type: string; scope: string; scopeLabel: string; from: string; mine: boolean; at: string; sensitivity: string }
@@ -149,11 +154,20 @@ export interface RelationshipView {
 const enc = encodeURIComponent;
 const withDefined = <T extends object>(o: T): Partial<T> => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as Partial<T>;
 
+/** chosenAudience: a private agent's managers pick who may use it, so no counts are shown (connector-usage.ts). */
+export interface ConnectorUsage { providers: Array<{ id: string; name: string; people: number }>; unavailable?: true; chosenAudience?: true }
+
 export const api = {
   relationshipObservations: () => request<{ mode: 'off' | 'shadow' | 'live'; sampledEvents: number; counts: Record<string, number>; feedbackOutcomes?: Record<string, number>; windowStart: string | null; windowEnd: string | null; scope: string }>('GET', 'relationship-observations'),
   me: () => request<Me>('GET', 'me'),
+  /** Settings v2: where a Telegram settings link lands for me now; null = the hub (unknown, forbidden or malformed alike). */
+  settingsLink: (code: string) => request<{ target: { agentId: string; section?: string } | null }>('GET', `settings-link?code=${encodeURIComponent(code)}`),
   agents: () => request<{ agents: AgentView[] }>('GET', 'agents'),
   agent: (id: string) => request<{ agent: AgentView }>('GET', `agents/${enc(id)}`),
+  /** Settings v2, managers only: per provider, how many people connected it to this agent (counts, never who). */
+  connectorUsage: (id: string) => request<ConnectorUsage>('GET', `agents/${enc(id)}/connector-usage`),
+  /** Settings v2, managers only: this agent's change history, scrubbed to roles and a fixed vocabulary. */
+  agentHistory: (id: string) => request<{ history: HistoryRow[] }>('GET', `agents/${enc(id)}/history`),
   /** A fired predecessor's name, role and skills, for any member drafting its successor. */
   successorTemplate: (id: string) => request<SuccessorTemplate>('GET', `agents/${enc(id)}/successor`),
   catalog: () => request<CatalogView>('GET', 'catalog'),

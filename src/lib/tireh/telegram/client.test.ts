@@ -78,3 +78,68 @@ describe('Circles wire options (silent sends, keyboard edits, alerts)', () => {
     expect(body(fetch, 2)).toEqual({ chat_id: -100 });
   });
 });
+
+describe('command menus with a scope and language (Settings v2)', () => {
+  const body = (fetch: ReturnType<typeof fakeFetch>, i = 0) => JSON.parse(String(fetch.mock.calls[i][1]?.body));
+  const commands = [{ command: 'settings', description: 'All my settings' }];
+  it('without a target the body is exactly {commands}, as before scopes existed', async () => {
+    const fetch = fakeFetch();
+    await new TelegramBotClient('1:a', fetch).setMyCommands(commands);
+    expect(String(fetch.mock.calls[0][0])).toBe('https://api.telegram.org/bot1:a/setMyCommands');
+    expect(body(fetch)).toEqual({ commands });
+  });
+  it('sends scope and language_code when given', async () => {
+    const fetch = fakeFetch();
+    await new TelegramBotClient('1:a', fetch).setMyCommands(commands, { scope: { type: 'all_private_chats' }, languageCode: 'fa' });
+    expect(body(fetch)).toEqual({ commands, scope: { type: 'all_private_chats' }, language_code: 'fa' });
+  });
+  it('deleteMyCommands removes one scope and language', async () => {
+    const fetch = fakeFetch();
+    const client = new TelegramBotClient('1:a', fetch);
+    await client.deleteMyCommands({ scope: { type: 'all_group_chats' }, languageCode: 'fa' });
+    await client.deleteMyCommands();
+    expect(String(fetch.mock.calls[0][0])).toBe('https://api.telegram.org/bot1:a/deleteMyCommands');
+    expect(body(fetch, 0)).toEqual({ scope: { type: 'all_group_chats' }, language_code: 'fa' });
+    expect(body(fetch, 1)).toEqual({});
+  });
+  it('sendVoice carries an inline keyboard and a silent flag when asked, and neither otherwise', async () => {
+    const fetch = fakeFetch({ message_id: 1, chat: { id: 5, type: 'private' }, date: 0 });
+    const client = new TelegramBotClient('1:a', fetch);
+    const keyboard = { inline_keyboard: [[{ text: 'Change voice in Vox', url: 'https://t.me/VoxxBot?start=s_AbCd-_12_v' }]] };
+    await client.sendVoice(5, new ArrayBuffer(4), { caption: 'I sound “Warm”.', keyboard, silent: true });
+    await client.sendVoice(5, new ArrayBuffer(4));
+    const [withKeyboard, plain] = fetch.mock.calls.map((c) => c[1]?.body as FormData);
+    expect(withKeyboard.get('reply_markup')).toBe(JSON.stringify(keyboard));
+    expect(withKeyboard.get('disable_notification')).toBe('true');
+    expect(plain.get('reply_markup')).toBeNull();
+    expect(plain.get('disable_notification')).toBeNull();
+  });
+});
+
+describe('Part 2b wire options (deleteMessage, no link preview, protected content)', () => {
+  const body = (fetch: ReturnType<typeof fakeFetch>, call = 0) => JSON.parse(String(fetch.mock.calls[call][1]?.body)) as Record<string, unknown>;
+
+  it('adds link_preview_options and protect_content only when asked, so existing sends are byte-identical', async () => {
+    const fetch = fakeFetch({ message_id: 1, chat: { id: 5, type: 'private' }, date: 0 });
+    const bot = new TelegramBotClient('123:abc', fetch);
+    await bot.sendMessage(5, 'plain');
+    await bot.sendMessage(5, 'see https://x.example/a', { noPreview: true });
+    await bot.sendMessage(5, 'kept', { protectContent: true, replyTo: 4, silent: true });
+    await bot.sendMessage(5, 'off', { noPreview: false, protectContent: false });
+    expect([0, 1, 2, 3].map((i) => body(fetch, i))).toEqual([
+      { chat_id: 5, text: 'plain' },
+      { chat_id: 5, text: 'see https://x.example/a', link_preview_options: { is_disabled: true } },
+      { chat_id: 5, text: 'kept', reply_parameters: { message_id: 4, allow_sending_without_reply: true }, disable_notification: true, protect_content: true },
+      { chat_id: 5, text: 'off' },
+    ]);
+  });
+
+  it('deleteMessage posts chat_id and message_id and surfaces a refusal (for example, older than 48 hours)', async () => {
+    const fetch = fakeFetch(true);
+    expect(await new TelegramBotClient('123:abc', fetch).deleteMessage(5, 77)).toBe(true);
+    expect(String(fetch.mock.calls[0][0])).toBe('https://api.telegram.org/bot123:abc/deleteMessage');
+    expect(body(fetch, 0)).toEqual({ chat_id: 5, message_id: 77 });
+    const refusing = vi.fn(async () => new Response(JSON.stringify({ ok: false, description: "Bad Request: message can't be deleted" })));
+    await expect(new TelegramBotClient('123:abc', refusing).deleteMessage(5, 77)).rejects.toBeInstanceOf(TelegramApiError);
+  });
+});

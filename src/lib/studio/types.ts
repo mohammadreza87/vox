@@ -325,6 +325,8 @@ export interface StudioState {
   guestUsage?: Record<string, { day: string; count: number }>;
   /** The shared ElevenLabs agent behind live calls (created on first call) */
   voiceAgent?: { id: string; llmUrl: string; secretId: string; keyId?: string; version: number };
+  /** Settings v2: a hash of the manager bot's private-chat menu last pushed (absent = none), so it is not re-pushed on every start */
+  managerMenu?: string;
 }
 
 export const FORMING_DAYS = 7;

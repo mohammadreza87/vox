@@ -274,10 +274,15 @@ The agent-signed trust hotfix (branch `fix/agent-signed-trust`) does four things
   for members, pending people and outsiders without creating a member. The pet's
   ⋯ → Settings opens `t.me/<VoxxBot>?startapp=mydata` (or `?start=mydata`, which
   the manager answers with a My data button before any member is created).
-- **The agent connect page is a read-only dashboard.** Identity confirmation,
-  enrollment, setup, grants, tasks, MCP, revoke, resources and action review
-  answer 404 on `/api/agents/:id/connections/*`; the middleware admits only the
-  dashboard GET.
+- **The agent connect page is a content-free pointer to Vox** (product decision 8,
+  Settings v2 merge). Identity confirmation, enrollment, setup, grants, tasks,
+  MCP, revoke, resources and action review answer 404 on
+  `/api/agents/:id/connections/*`; the one GET the middleware admits answers only
+  the agent's id and name (`{ agent, manageInVox: true }`), never a connection.
+- **Agent-signed initData only views and cares** (decision 8, Settings v2 merge).
+  Pet talk and talk-voice answer `403 talk_in_dm` and the pet's talk pill opens the
+  agent's DM; the circle view, join and leave answer `403 circle_use_vox` unless
+  the launch is VoxxBot-signed.
 - **Redirected updates are detected, never acted on.** Each poll loop watches for
   a foreign webhook or a competing poller (getUpdates conflicts) and a rejected
   token. After 60 s it probes `getWebhookInfo` at most once a minute and raises
@@ -293,10 +298,10 @@ Operator steps for this release:
    pet's Settings opens My data directly. Without it the `?start=mydata` fallback
    works through the VoxxBot chat.
 2. Release through the normal procedure, then smoke test on iOS, Android,
-   Desktop and Web: open a pet from the agent's menu and DM button, care and
-   talk; check `server.log` shows `initdata_signature` outcome `valid` and no
+   Desktop and Web: open a pet from the agent's menu and DM button, care, and
+   check the talk pill opens the agent's DM; check `server.log` shows `initdata_signature` outcome `valid` and no
    `missing`; open Settings → My data, export, erase one note and (test account)
-   Forget everything; the connect page shows only the list and a POST returns 404.
+   Forget everything; the connect page shows only the pointer to Vox and a POST returns 404.
 3. Watch for 24 h: `initdata_signature` `missing`/`invalid` lines, pet 401 rates
    and `bot_integrity` alerts. A pet 401 `session_expired` is not an attack: a
    genuine pet left open over an hour tried to talk or choose, and was asked to
@@ -319,8 +324,8 @@ Kill switches (a service restart applies them, no rebuild):
 
 There is deliberately no switch that brings back agent-signed erase or export.
 A creator can still harvest genuine agent-signed initData by repointing their
-bot's menu: that reaches pet view, care and talk (talk and consent only within
-an hour of opening) and the read-only connect list, never erase, export, notes,
+bot's menu: that reaches pet view and care and the agent's name on the connect
+page, never talk, circle consent, erase, export, notes, connection records,
 identity confirmation, grants or tasks. Reading past bot messages by message id,
 and redirecting updates, cannot be prevented, only detected (the latter). The
 Firebase webhook profile has no integrity probe yet.

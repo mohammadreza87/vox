@@ -79,6 +79,8 @@ export function PersonaStep({ agent, names, busy, run, onUpdate, onNext, live, o
   const advancingRef = useRef(false);
   const seq = useRef(0);
   const editable = agent.canEdit;
+  // Skills follow the voice rule (creator only, while forming); older views without the flag keep canEdit.
+  const shapeable = editable && agent.canShapeIdentity !== false;
 
   // Skills: optimistic toggles, saved after a short pause with PATCH { skillIds } (merged server-side).
   // One PATCH in flight at a time; the newest selection waits in `queued` and wins.
@@ -271,8 +273,8 @@ export function PersonaStep({ agent, names, busy, run, onUpdate, onNext, live, o
           {showSkills && (
             <section className="vx-doc-sec">
               <span className="vx-over">{t.skillsCount(onIds(items).length)}</span>
-              <SkillChips t={t} items={items} onToggle={toggleSkill} readOnly={!editable} extra={extra} fa={locale === 'fa'}
-                onAdd={editable ? () => setSkillsOpen(true) : undefined} />
+              <SkillChips t={t} items={items} onToggle={toggleSkill} readOnly={!shapeable} extra={extra} fa={locale === 'fa'}
+                onAdd={shapeable ? () => setSkillsOpen(true) : undefined} />
             </section>
           )}
           {sections.map((s) => editing === s.key ? (

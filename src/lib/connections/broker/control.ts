@@ -19,6 +19,8 @@ export const brokerControlSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('registerSubscription'), ...base, subscription: registerSubscriptionSchema }).strict(),
   z.object({ action: z.literal('ingestVerifiedEvent'), ...base, event: verifiedEventSchema }).strict(),
   z.object({ action: z.literal('context'), ...base, connectionId: idSchema }).strict(),
+  /** Rights erasure only: a revoked connection marked erased, for the plain account actor, with no identity confirmation. */
+  z.object({ action: z.literal('erasedContext'), ...base, connectionId: idSchema }).strict(),
   z.object({ action: z.literal('grantContext'), ...base, connectionId: idSchema, grantId: idSchema }).strict(),
   z.object({ action: z.literal('claim'), ...base, operationId: idSchema, workerId: idSchema, leaseMs: z.number().int().positive().max(60_000) }).strict(),
   z.object({ action: z.literal('abandonClaim'), ...lease, safeReason: z.literal('broker_preflight_failed') }).strict(),
@@ -46,13 +48,15 @@ export class HttpBrokerControlPlane implements BrokerControlPlane {
 }
 /** Root's route MUST verify BrokerAuthenticator over original bytes before calling.
  * Browser Telegram credentials never authorize this restricted control surface. */
-export async function dispatchBrokerControl(service: ConnectionsService, input: unknown, options: { workflows?: ConnectionsWorkflowService } = {}): Promise<unknown> {
+export async function dispatchBrokerControl(service: ConnectionsService, input: unknown, options: { workflows?: ConnectionsWorkflowService;
+  erasedContext?: (actor: ConnectionActor, space: SpaceKind, connectionId: string) => Promise<BrokerAuthority> } = {}): Promise<unknown> {
   const parsed = brokerControlSchema.parse(input);
   const { actor: currentActor, space: currentSpace } = parsed;
   switch (parsed.action) {
     case 'drainWorkflows': if (!options.workflows) throw new ConnectionsError(503, 'workflow_dispatch_unavailable'); return options.workflows.drain(currentActor, { space: currentSpace, maxOccurrences: parsed.maxOccurrences });
     case 'registerSubscription': return new ConnectionsWorkflowService(service, { dispatcher: async () => { throw new ConnectionsError(503, 'workflow_dispatch_unavailable'); } }).registerSubscription(currentActor, { space: currentSpace, ...parsed.subscription });
     case 'ingestVerifiedEvent': return new ConnectionsWorkflowService(service, { dispatcher: async () => { throw new ConnectionsError(503, 'workflow_dispatch_unavailable'); } }).acceptVerifiedEvent(currentActor, currentSpace, parsed.event);
+    case 'erasedContext': if (!options.erasedContext) throw new ConnectionsError(404, 'connection_unavailable'); return options.erasedContext(currentActor, currentSpace, parsed.connectionId);
     case 'context':
     case 'grantContext':
     case 'subscriptionContext': {

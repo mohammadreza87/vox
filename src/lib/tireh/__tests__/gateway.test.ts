@@ -399,6 +399,41 @@ describe('commands', () => {
     const { gateway, bot } = makeGateway();
     await gateway.handleUpdate('aria', privateText(TG.milad, '/whoami'));
     expect(bot.sent[0].text).toBe('Milad — Team member; reports to Parastoo; works on GameEnd');
+    expect(bot.sendMessage.mock.calls[0]).toHaveLength(2);
+  });
+
+  it('/whoami in a group answers by a private message and never posts the Telegram ID in the group', async () => {
+    const { gateway, bot } = makeGateway();
+    const update = groupText(GAMEEND_CHAT, TG.milad, '/whoami@hoor_aria_bot');
+    await gateway.handleUpdate('aria', update);
+    expect(bot.sent.map((m) => [m.chatId, m.text])).toEqual([[TG.milad, 'Milad — Team member; reports to Parastoo; works on GameEnd'], [GAMEEND_CHAT, "I've sent you a message."]]);
+    expect(bot.sent[1].options).toEqual({ replyTo: update.message!.message_id, silent: true });
+    expect(JSON.stringify(bot.sent.filter((m) => m.chatId === GAMEEND_CHAT))).not.toContain(String(TG.milad));
+  });
+
+  it('/whoami in a group, when the person never started the bot: a hint in their language, still no ID', async () => {
+    const { gateway, bot } = makeGateway();
+    bot.sendMessage.mockImplementationOnce(async () => { throw new Error("Forbidden: bot can't initiate conversation with a user"); });
+    await gateway.handleUpdate('aria', groupText(GAMEEND_CHAT, TG.milad, '/whoami', { from: { id: TG.milad, is_bot: false, first_name: 'x', language_code: 'fa' } }));
+    expect(bot.sent.map((m) => [m.chatId, m.text])).toEqual([[GAMEEND_CHAT, 'در گفتگوی خصوصی به من پیام بدهید و /whoami را بفرستید.']]);
+  });
+
+  it('a Studio commandKeyboard adds a button under private command replies only', async () => {
+    const { org, llm, memories, offers, history, bot } = makeGateway();
+    const { PersonaGateway } = await import('../gateway');
+    const { InMemoryUpdateDeduper } = await import('../memory/store');
+    const keyboard = { inline_keyboard: [[{ text: 'Open Memory settings', url: 'https://t.me/VoxxBot?start=s_AbCd-_12_m' }]] };
+    const commandKeyboard = vi.fn(async () => keyboard);
+    const gateway = new PersonaGateway({ org, llm, memories, offers, history, deduper: new InMemoryUpdateDeduper(), voice: null,
+      botFor: () => bot as never, logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }, now: () => new Date('2026-10-19T10:00:00Z'), commandKeyboard });
+    await gateway.handleUpdate('aria', privateText(TG.milad, '/memories'));
+    expect(bot.sent.at(-1)).toMatchObject({ chatId: TG.milad, options: { keyboard } });
+    expect(commandKeyboard).toHaveBeenCalledWith('aria', '/memories', expect.objectContaining({ id: TG.milad }));
+    await gateway.handleUpdate('aria', groupText(GAMEEND_CHAT, TG.milad, '/memories@hoor_aria_bot'));
+    expect(bot.sent.at(-1)).toMatchObject({ chatId: GAMEEND_CHAT, options: undefined });
+    commandKeyboard.mockResolvedValueOnce(undefined as never);
+    await gateway.handleUpdate('aria', privateText(TG.milad, '/pause'));
+    expect(bot.sendMessage.mock.calls.at(-1)).toHaveLength(2);
   });
 });
 

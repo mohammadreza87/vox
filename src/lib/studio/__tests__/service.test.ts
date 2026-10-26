@@ -416,9 +416,13 @@ describe('spawn: draft, refine, look, avatars, voice, sandbox, publish', () => {
     expect((await h.store.read()).agents[0].voice?.voiceId).toBe('voice-library');
   });
 
-  it('voice design is only for drafts and needs an ElevenLabs key', async () => {
+  it('voice design is for the creator while the agent forms (not only drafts) and needs an ElevenLabs key', async () => {
+    // Product rule (Settings v2): the creator may redesign the voice until the 7-day lock; admins never.
     const { agent } = await hire(h, org.alice);
-    await expectStudioError(h.studio.designVoices(org.alice, agent.id), 403, /before publishing/);
+    expect((await h.studio.designVoices(org.alice, agent.id)).voicePreviews).toHaveLength(3);
+    await expectStudioError(h.studio.designVoices(org.admin, agent.id), 403, /Only the person who created Nova/);
+    h.advanceDays(7);
+    await expectStudioError(h.studio.designVoices(org.alice, agent.id), 403, /is formed/);
     const bare = makeStudio({ eleven: false });
     const o = await seedOrg(bare);
     bare.personaLLM.push(draftJson());
@@ -648,10 +652,12 @@ describe('forming period and personality lock', () => {
     expect(view).toMatchObject({ locked: true, formingDay: null, canEdit: false, canEditLook: true });
 
     const locked = /locked\. To change it, fire and hire a successor/;
+    // Voice follows the identity rule (Settings v2): after the lock the agent is formed, for everyone.
+    const formed = /Nova is formed\. Its voice and skills now stay as they are/;
     for (const actor of [org.alice, org.admin, org.superadmin]) {
       await expectStudioError(h.studio.updatePersona(actor, agent.id, { tagline: 'x' }), 403, locked);
       await expectStudioError(h.studio.refine(actor, agent.id, 'nicer'), 403, locked);
-      await expectStudioError(h.studio.chooseLibraryVoice(actor, agent.id, { publicOwnerId: 'o', voiceId: 'v', name: 'n' }), 403, locked);
+      await expectStudioError(h.studio.chooseLibraryVoice(actor, agent.id, { publicOwnerId: 'o', voiceId: 'v', name: 'n' }), 403, formed);
     }
     expect(h.personaLLM.requests).toHaveLength(1); // only the original draft
     expect((await h.store.read()).agents[0].identityVersion).toBe(1);

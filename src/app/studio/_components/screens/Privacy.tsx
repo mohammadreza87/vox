@@ -1,13 +1,15 @@
 'use client';
 
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { adaptiveApi, type AdaptiveOptionalPurpose, type AdaptivePresentation, type AdaptiveSnapshot } from '../../_lib/adaptive-client';
 import { privacyCopy, purposeCopy, privacyUnavailableReason } from '../../_lib/adaptive-copy';
 import { api, haptic, tg, type AgentView } from '../../_lib/client';
 import { DUR, EASE, SPRING } from '../../_lib/motion';
 import { useProductPause } from '../../_lib/product-pause-client';
 import { pauseText } from '../../_lib/product-pause-copy';
+import { ACCOUNT_SECTIONS, accountRows } from '../../_lib/settings/registry';
+import { settingsCopy } from '../../_lib/settings-copy';
 import { LANGUAGES, youCopy } from '../../_lib/you-copy';
 import { AgentFace } from '../Cloud';
 import { MemoryCorrectionEditor } from '../MemoryCorrectionEditor';
@@ -19,6 +21,7 @@ import { UserInfo } from '../UserInfo';
 import { Banner, Check, Composer, Icon, PageHead, Picker, Row, Section, Seg, Sheet, SheetHead, SkeletonRows, Switch } from '../ui';
 import { VoiceRecognitionPanel } from '../VoiceRecognitionPanel';
 import { Enter, LiveSheet, useFirstLoad } from './settings/kit';
+import { NotesGrantRow } from './settings/NotesGrant';
 import { useInboxBadge } from './settings/useInboxBadge';
 
 type Panel = 'identity' | 'account' | 'agents' | 'voice' | 'rights' | 'summary' | 'language';
@@ -151,6 +154,80 @@ export function PrivacyScreen({ onShared, onExperience, onConnections, onCorrect
   const shownNotes = snapshot ? (allNotes ? snapshot.memories : snapshot.memories.slice(0, NOTES_SHOWN)) : [];
   const evaporate = reduced ? { opacity: 0, transition: { duration: DUR.fast } } : { opacity: 0, y: -24, scale: 0.96, transition: { duration: 0.6, ease: EASE.exit } };
 
+  /* ---------- rows and panels, built once: today's grouping, or the registry's sections with Settings v2 ---------- */
+  const settingsV2 = nav.me.features?.settingsV2 === true;
+  const sc = settingsCopy[locale];
+  const identityRow = snapshot && <Row plain lead={<IconTile name={snapshot.identity.confirmed && !adultDeclarationNeeded ? 'check' : 'user'} ok={snapshot.identity.confirmed && !adultDeclarationNeeded} />} chevron disabled={locked} onClick={() => go(() => setPanel('identity'))}
+    title={snapshot.identity.confirmed && !adultDeclarationNeeded ? y.identityConfirmed : y.identityConfirm}
+    sub={snapshot.identity.confirmed && !adultDeclarationNeeded ? [y.adult, snapshot.identity.declaredJurisdiction].filter(Boolean).join(' · ') : y.identityNeeded} />;
+  const telegramRow = <Row plain lead={<IconTile name="telegram" />} chevron disabled={locked} onClick={() => go(() => setPanel('account'))}
+    title={y.telegramAccount} sub={y.telegramAccountSub} />;
+  const purposesSection = snapshot && <Section title={y.maySection} foot={c.intro}>
+    {snapshot.purposes.map(p => {
+      const copy = purposeCopy[p.purpose]?.[locale];
+      const title = copy?.title ?? p.notice.title;
+      const on = p.state === 'granted';
+      const sub = !p.available && !on ? privacyUnavailableReason(p.reason, locale)
+        : REVIEW_STATES.includes(p.state) || (on && !p.available) ? c.reviewNeeded
+        : !on && !snapshot.identity.confirmed ? y.needsIdentity
+        : on && paused && COVERED.includes(p.purpose) ? pauseText(locale, space, 'consent')
+        : copy?.body ?? p.notice.body;
+      return <Switch key={p.purpose} checked={on} attention={on && !p.available} label={title} sub={sub} disabled={busy || locked || (!on && (!p.available || !snapshot.identity.confirmed))}
+        onChange={next => go(() => { if (next) void review(p.purpose, p.revision); else void withdraw(p.purpose, p.revision, title); })} />;
+    })}
+  </Section>;
+  const notesSection = snapshot && <Section title={y.notesSection} foot={<>{c.memoryBody} {c[space]} · {c.private}.{!snapshot.explicitMemoryAvailable && <> {privacyUnavailableReason(snapshot.explicitMemoryReason, locale)}</>}
+    {!snapshot.memoryCorrectionAvailable && snapshot.memories.some(m => !m.sourceRefs) && <> {locale === 'fa' ? 'ویرایش اینجا در دسترس نیست؛ هنوز می‌توانید یادداشت را حذف یا یادداشت تازه‌ای ذخیره کنید.' : 'Editing is unavailable here; you can still delete a note or save a new one.'}</>}</>}>
+    <div className="vx-you-compose">
+      <Composer multiline value={note} onChange={setNote} label={c.memoryLabel} sendLabel={c.saveMemory} placeholder={y.addNote} maxLength={2000}
+        disabled={busy || locked || notesStale || !snapshot.explicitMemoryAvailable}
+        onSend={() => void mutate(async () => { const result = await adaptiveApi.save(space, note, snapshot.revision); setNote(''); return result; }, c.saved)} />
+    </div>
+    {!snapshot.memories.length && <div className="vx-row"><span className="vx-row-sub">{c.empty}</span></div>}
+    {!notesStale && <AnimatePresence initial={false}>
+      {shownNotes.map(m => <motion.div key={m.id} className="vx-you-note" layout={!reduced} exit={evaporate} transition={SPRING.snappy}>
+        <Row chevron disabled={locked} onClick={() => go(() => { setRemoving(null); setNoteId(m.id); })}
+          title={<span className="vx-clamp-2" dir="auto">{m.text}</span>}
+          sub={[m.origin && y.noteProvenanceClaim, m.sourceRefs && y.noteProvenanceSummary(m.sourceRefs.length), `${c.expires} ${date(m.expiresAt)}`].filter(Boolean).join(' · ')} />
+      </motion.div>)}
+    </AnimatePresence>}
+    {snapshot.memories.length > NOTES_SHOWN && <Row title={<span className="vx-row-link">{allNotes ? y.showFewer : y.seeAll(snapshot.memories.length)}</span>} onClick={() => setAllNotes(v => !v)} />}
+    {snapshot.memories.length >= 2 && <Row plain lead={<IconTile name="spark" />} title={y.summarise} sub={y.summariseSub} chevron disabled={locked} onClick={() => go(() => setPanel('summary'))} />}
+  </Section>;
+  const sharedRow = <Row plain lead={<IconTile name="groups" />} title={y.sharedMemories} chevron disabled={locked} onClick={() => go(() => onShared ? onShared() : nav.push({ name: 'shared-memories' }))} />;
+  const agentAccessRow = <Row plain lead={<IconTile name="lock" />} title={y.agentAccess} value={snapshot ? y.agentsAllowed(allowedAgents) : undefined} chevron disabled={locked || !snapshot} onClick={() => go(() => setPanel('agents'))} />;
+  const connectionsRow = <Row plain lead={<IconTile name="plug" />} title={y.connections} chevron disabled={locked} onClick={() => go(() => onConnections ? onConnections() : nav.push({ name: 'connections' }))} />;
+  const preferencesRow = <Row plain lead={<IconTile name="sliders" />} title={y.preferences} chevron disabled={locked} onClick={() => go(() => onExperience ? onExperience() : nav.push({ name: 'settings', page: 'preferences' }))} />;
+  const inboxRow = <Row plain lead={<IconTile name="inbox" />} title={y.inbox} aria-label={unread ? `${y.inbox} · ${y.unread(unread)}` : undefined}
+    end={unread ? <span className="vx-count" aria-hidden="true">{unread.toLocaleString(locale === 'fa' ? 'fa-IR' : 'en-US')}</span> : undefined} chevron disabled={locked} onClick={() => go(() => nav.push({ name: 'settings', page: 'inbox' }))} />;
+  const remindersRow = <Row plain lead={<IconTile name="bell" />} title={y.reminders} chevron disabled={locked} onClick={() => go(() => nav.push({ name: 'settings', page: 'reminders' }))} />;
+  const voiceRow = <Row plain lead={<IconTile name="mic" />} title={y.voiceRecognition} chevron disabled={locked} onClick={() => go(() => setPanel('voice'))} />;
+  const pauseRow = <Row plain role="switch" aria-checked={pause.status?.productPaused === true} lead={<IconTile name="pause" />} title={y.pause}
+    sub={pause.status?.productPaused ? y.pauseOn : y.pauseOff} end={<span className="vx-switch" aria-hidden="true" />} onClick={() => setPauseOpen(true)} />;
+  const requestsRow = <Row plain lead={<IconTile name="download" />} title={y.requests} chevron disabled={locked} onClick={() => go(() => setPanel('rights'))} />;
+  const diagnosticsRow = <Row plain lead={<IconTile name="signal" />} title={y.diagnostics} chevron disabled={locked} onClick={() => go(() => nav.push({ name: 'settings', page: 'diagnostics' }))} />;
+  const operatorRow = <Row plain lead={<IconTile name="shield" />} title={y.operatorRequests} chevron disabled={locked} onClick={() => go(() => nav.push({ name: 'settings', page: 'requests' }))} />;
+  const languageRow = <Row plain lead={<IconTile name="globe" />} title={c.language} value={y.languageName} chevron disabled={busy || locked} onClick={() => go(() => setPanel('language'))} />;
+  const nodes: Partial<Record<string, ReactNode>> = {
+    'account.preferences': preferencesRow, 'account.language': languageRow, 'account.inbox': inboxRow, 'account.reminders': remindersRow,
+    'account.voiceRecognition': voiceRow, 'account.agentAccess': agentAccessRow, 'account.sharedMemories': sharedRow, 'account.connections': connectionsRow,
+    // Pause stays reachable while a note correction is pending: it is deliberately a separate channel.
+    'account.pause': pauseRow, 'account.requests': requestsRow, 'account.purposes': purposesSection, 'account.notes': notesSection,
+    'account.identity': identityRow, 'account.telegram': telegramRow, 'account.diagnostics': diagnosticsRow, 'account.operatorRequests': operatorRow,
+  };
+  let n = 0;
+  /** One registry section: its rows in one group, then any panels (consent switches, notes) under their own titles. */
+  const regrouped = (section: typeof ACCOUNT_SECTIONS[number]) => {
+    const defs = accountRows({ me: nav.me, locale }, section).filter(d => nodes[d.id]);
+    const rows = defs.filter(d => d.kind !== 'panel'), panels = defs.filter(d => d.kind === 'panel');
+    return <Fragment key={section}>
+      {rows.length > 0 && <Enter i={n++} first={first}>
+        <Section title={sc.sections[section]}>{rows.map(d => <Fragment key={d.id}>{nodes[d.id]}</Fragment>)}</Section>
+      </Enter>}
+      {panels.map(d => <Enter key={d.id} i={n++} first={first}>{nodes[d.id]}</Enter>)}
+    </Fragment>;
+  };
+
   return <section className="vx-scroll vx-you" dir={nav.dir} lang={locale} aria-busy={busy || locked}>
     <PageHead over={`${nav.me.org} · ${nav.me.member.name}`} title={y.you} />
     <div className="vx-space-bar">
@@ -164,95 +241,74 @@ export function PrivacyScreen({ onShared, onExperience, onConnections, onCorrect
     {notice && <Banner tone="info" icon="info"><span role="status">{notice}</span></Banner>}
 
     {!snapshot && !error && <SkeletonRows rows={4} lead="tile" label={c.loading} />}
+    {settingsV2 ? <>
+      {/* Settings v2: the registry's Vox-wide sections, then your agents' hubs; the controls are the same nodes. */}
+      {ACCOUNT_SECTIONS.filter(section => section !== 'admin').map(section => regrouped(section))}
+      {snapshot && <Enter i={n++} first={first}>
+        <Section title={sc.sections.agents}>
+          {!agents.length && <div className="vx-row"><span className="vx-row-sub">{sc.noAgents}</span></div>}
+          {agents.map(agent => <Row key={agent.id} plain chevron disabled={locked} title={agent.persona.name} sub={sc.agentRowSub}
+            lead={<AgentFace look={agent.look} stage={agent.stage} size={32} variant="disc" still label={agent.persona.name} />}
+            onClick={() => go(() => nav.push({ name: 'settings', page: 'agent', params: { agentId: agent.id, from: 'you' } }))} />)}
+        </Section>
+      </Enter>}
+      {regrouped('admin')}
+    </> : <>
     {snapshot && <>
       <Enter i={0} first={first}>
         <Section title={y.identitySection}>
-          <Row plain lead={<IconTile name={snapshot.identity.confirmed && !adultDeclarationNeeded ? 'check' : 'user'} ok={snapshot.identity.confirmed && !adultDeclarationNeeded} />} chevron disabled={locked} onClick={() => go(() => setPanel('identity'))}
-            title={snapshot.identity.confirmed && !adultDeclarationNeeded ? y.identityConfirmed : y.identityConfirm}
-            sub={snapshot.identity.confirmed && !adultDeclarationNeeded ? [y.adult, snapshot.identity.declaredJurisdiction].filter(Boolean).join(' · ') : y.identityNeeded} />
-          <Row plain lead={<IconTile name="telegram" />} chevron disabled={locked} onClick={() => go(() => setPanel('account'))}
-            title={y.telegramAccount} sub={y.telegramAccountSub} />
+          {identityRow}
+          {telegramRow}
         </Section>
       </Enter>
 
       <Enter i={1} first={first}>
-        <Section title={y.maySection} foot={c.intro}>
-          {snapshot.purposes.map(p => {
-            const copy = purposeCopy[p.purpose]?.[locale];
-            const title = copy?.title ?? p.notice.title;
-            const on = p.state === 'granted';
-            const sub = !p.available && !on ? privacyUnavailableReason(p.reason, locale)
-              : REVIEW_STATES.includes(p.state) || (on && !p.available) ? c.reviewNeeded
-              : !on && !snapshot.identity.confirmed ? y.needsIdentity
-              : on && paused && COVERED.includes(p.purpose) ? pauseText(locale, space, 'consent')
-              : copy?.body ?? p.notice.body;
-            return <Switch key={p.purpose} checked={on} attention={on && !p.available} label={title} sub={sub} disabled={busy || locked || (!on && (!p.available || !snapshot.identity.confirmed))}
-              onChange={next => go(() => { if (next) void review(p.purpose, p.revision); else void withdraw(p.purpose, p.revision, title); })} />;
-          })}
-        </Section>
+        {purposesSection}
       </Enter>
 
       <Enter i={2} first={first}>
-        <Section title={y.notesSection} foot={<>{c.memoryBody} {c[space]} · {c.private}.{!snapshot.explicitMemoryAvailable && <> {privacyUnavailableReason(snapshot.explicitMemoryReason, locale)}</>}
-          {!snapshot.memoryCorrectionAvailable && snapshot.memories.some(m => !m.sourceRefs) && <> {locale === 'fa' ? 'ویرایش اینجا در دسترس نیست؛ هنوز می‌توانید یادداشت را حذف یا یادداشت تازه‌ای ذخیره کنید.' : 'Editing is unavailable here; you can still delete a note or save a new one.'}</>}</>}>
-          <div className="vx-you-compose">
-            <Composer multiline value={note} onChange={setNote} label={c.memoryLabel} sendLabel={c.saveMemory} placeholder={y.addNote} maxLength={2000}
-              disabled={busy || locked || notesStale || !snapshot.explicitMemoryAvailable}
-              onSend={() => void mutate(async () => { const result = await adaptiveApi.save(space, note, snapshot.revision); setNote(''); return result; }, c.saved)} />
-          </div>
-          {!snapshot.memories.length && <div className="vx-row"><span className="vx-row-sub">{c.empty}</span></div>}
-          {!notesStale && <AnimatePresence initial={false}>
-            {shownNotes.map(m => <motion.div key={m.id} className="vx-you-note" layout={!reduced} exit={evaporate} transition={SPRING.snappy}>
-              <Row chevron disabled={locked} onClick={() => go(() => { setRemoving(null); setNoteId(m.id); })}
-                title={<span className="vx-clamp-2" dir="auto">{m.text}</span>}
-                sub={[m.origin && y.noteProvenanceClaim, m.sourceRefs && y.noteProvenanceSummary(m.sourceRefs.length), `${c.expires} ${date(m.expiresAt)}`].filter(Boolean).join(' · ')} />
-            </motion.div>)}
-          </AnimatePresence>}
-          {snapshot.memories.length > NOTES_SHOWN && <Row title={<span className="vx-row-link">{allNotes ? y.showFewer : y.seeAll(snapshot.memories.length)}</span>} onClick={() => setAllNotes(v => !v)} />}
-          {snapshot.memories.length >= 2 && <Row plain lead={<IconTile name="spark" />} title={y.summarise} sub={y.summariseSub} chevron disabled={locked} onClick={() => go(() => setPanel('summary'))} />}
-        </Section>
+        {notesSection}
       </Enter>
     </>}
 
     <Enter i={3} first={first}>
       <Section title={y.sharingSection} foot={c.sharingBody}>
-        <Row plain lead={<IconTile name="groups" />} title={y.sharedMemories} chevron disabled={locked} onClick={() => go(() => onShared ? onShared() : nav.push({ name: 'shared-memories' }))} />
-        <Row plain lead={<IconTile name="lock" />} title={y.agentAccess} value={snapshot ? y.agentsAllowed(allowedAgents) : undefined} chevron disabled={locked || !snapshot} onClick={() => go(() => setPanel('agents'))} />
-        <Row plain lead={<IconTile name="plug" />} title={y.connections} chevron disabled={locked} onClick={() => go(() => onConnections ? onConnections() : nav.push({ name: 'connections' }))} />
+        {sharedRow}
+        {agentAccessRow}
+        {connectionsRow}
       </Section>
     </Enter>
 
     <Enter i={4} first={first}>
       <Section title={y.experienceSection}>
-        <Row plain lead={<IconTile name="sliders" />} title={y.preferences} chevron disabled={locked} onClick={() => go(() => onExperience ? onExperience() : nav.push({ name: 'settings', page: 'preferences' }))} />
-        <Row plain lead={<IconTile name="inbox" />} title={y.inbox} aria-label={unread ? `${y.inbox} · ${y.unread(unread)}` : undefined}
-          end={unread ? <span className="vx-count" aria-hidden="true">{unread.toLocaleString(locale === 'fa' ? 'fa-IR' : 'en-US')}</span> : undefined} chevron disabled={locked} onClick={() => go(() => nav.push({ name: 'settings', page: 'inbox' }))} />
-        <Row plain lead={<IconTile name="bell" />} title={y.reminders} chevron disabled={locked} onClick={() => go(() => nav.push({ name: 'settings', page: 'reminders' }))} />
-        <Row plain lead={<IconTile name="mic" />} title={y.voiceRecognition} chevron disabled={locked} onClick={() => go(() => setPanel('voice'))} />
+        {preferencesRow}
+        {inboxRow}
+        {remindersRow}
+        {voiceRow}
       </Section>
     </Enter>
 
     <Enter i={5} first={first}>
       <Section title={y.controlSection}>
         {/* Pause stays reachable while a note correction is pending: it is deliberately a separate channel. */}
-        <Row plain role="switch" aria-checked={pause.status?.productPaused === true} lead={<IconTile name="pause" />} title={y.pause}
-          sub={pause.status?.productPaused ? y.pauseOn : y.pauseOff} end={<span className="vx-switch" aria-hidden="true" />} onClick={() => setPauseOpen(true)} />
-        <Row plain lead={<IconTile name="download" />} title={y.requests} chevron disabled={locked} onClick={() => go(() => setPanel('rights'))} />
+        {pauseRow}
+        {requestsRow}
       </Section>
     </Enter>
 
     {admin && <Enter i={6} first={first}>
       <Section title={y.adminSection}>
-        <Row plain lead={<IconTile name="signal" />} title={y.diagnostics} chevron disabled={locked} onClick={() => go(() => nav.push({ name: 'settings', page: 'diagnostics' }))} />
-        <Row plain lead={<IconTile name="shield" />} title={y.operatorRequests} chevron disabled={locked} onClick={() => go(() => nav.push({ name: 'settings', page: 'requests' }))} />
+        {diagnosticsRow}
+        {operatorRow}
       </Section>
     </Enter>}
 
     <Enter i={7} first={first}>
       <Section title={y.languageSection}>
-        <Row plain lead={<IconTile name="globe" />} title={c.language} value={y.languageName} chevron disabled={busy || locked} onClick={() => go(() => setPanel('language'))} />
+        {languageRow}
       </Section>
     </Enter>
+    </>}
 
     <footer className="vx-you-foot">
       <p className="vx-footnote"><strong>{c.ai}.</strong> {c.aiBody}</p>
@@ -331,10 +387,8 @@ export function PrivacyScreen({ onShared, onExperience, onConnections, onCorrect
           {!agents.length && <div className="vx-row"><span className="vx-row-sub">{c.noAgents}</span></div>}
           {agents.map(agent => {
             const allowed = snapshot.agents.some(g => g.agentId === agent.id && g.allowed);
-            return <Row key={agent.id} role="switch" aria-checked={allowed} aria-label={`${agent.persona.name}: ${y.canUseNotes}`}
-              lead={<AgentFace look={agent.look} stage={agent.stage} size={32} variant="disc" still label={agent.persona.name} />}
-              title={agent.persona.name} sub={y.canUseNotes} end={<span className="vx-switch" aria-hidden="true" />} disabled={busy || !snapshot.identity.confirmed}
-              onClick={() => { haptic.select(); void mutate(() => adaptiveApi.agent(space, agent.id, !allowed, snapshot.revision), c.saved); }} />;
+            return <NotesGrantRow key={agent.id} agent={agent} allowed={allowed} label={y.canUseNotes} disabled={busy || !snapshot.identity.confirmed}
+              onToggle={() => void mutate(() => adaptiveApi.agent(space, agent.id, !allowed, snapshot.revision), c.saved)} />;
           })}
         </div>
         {!snapshot.identity.confirmed && <p className="vx-footnote">{y.needsIdentity}</p>}

@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { startBots } from '../bots';
 import { TONES } from '../character';
@@ -445,5 +446,85 @@ describe('Telegram profile photo follows the latest character', () => {
     expect((await h.studio.getAgent(org.alice, hired.agent.id)).profileSync?.status).toBe('pending');
     await Promise.resolve();
     expect(hired.bot().setMyProfilePhoto).not.toHaveBeenCalled();
+  });
+});
+
+describe('Settings v2 command menus (scoped and localised)', () => {
+  /** The commands key exactly as the profile sync computed it before Part 3. */
+  const legacyKey = (botId: number, name: string) => createHash('sha256').update(JSON.stringify([botId, [
+    { command: 'start', description: `Meet ${name}` }, { command: 'memories', description: 'What I remember that you can see' },
+    { command: 'forget', description: 'Delete something you told me' }, { command: 'whoami', description: 'How I know you' },
+  ]])).digest('base64url').slice(0, 16);
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('flag off: the commands key is the pre-Part-3 value, so nothing re-pushes; one setMyCommands with one argument', async () => {
+    expect((await stored()).profileSync?.steps?.commands).toBe(legacyKey(hired.botId, 'Neda'));
+    await h.studio.reconcileBotProfiles();
+    expect(hired.bot().setMyCommands).not.toHaveBeenCalled();
+    await h.studio.configureBotProfile(await stored(), { force: true });
+    expect(hired.bot().setMyCommands.mock.calls).toEqual([[[
+      { command: 'start', description: 'Meet Neda' }, { command: 'memories', description: 'What I remember that you can see' },
+      { command: 'forget', description: 'Delete something you told me' }, { command: 'whoami', description: 'How I know you' }]]]);
+    expect(hired.bot().deleteMyCommands).not.toHaveBeenCalled();
+  });
+
+  it('flag on: one re-push of five menus (default, private EN/FA, group EN/FA); then nothing; flag back off: the default menu and the scoped ones removed, once', async () => {
+    // Settle the fixture first (hire() changes visibility after its own sync, so the description is stale).
+    await h.studio.reconcileBotProfiles();
+    clearCalls();
+    vi.stubEnv('STUDIO_SETTINGS_V2', '1');
+    expect((await h.studio.getAgent(org.alice, hired.agent.id)).profileSync?.status).toBe('pending');
+    await h.studio.reconcileBotProfiles();
+    const pushed = hired.bot().setMyCommands.mock.calls as unknown as Array<[Array<{ command: string }>, { scope?: { type: string }; languageCode?: string }?]>;
+    expect(pushed.map(([menu, target]) => [target?.scope?.type ?? 'default', target?.languageCode ?? 'en', menu.map((c) => c.command).join(',')])).toEqual([
+      ['default', 'en', 'start,memories,forget,whoami'],
+      ['all_private_chats', 'en', 'start,settings,memory,voice,activity,connectors,memories,forget,whoami'],
+      ['all_private_chats', 'fa', 'start,settings,memory,voice,activity,connectors,memories,forget,whoami'],
+      ['all_group_chats', 'en', 'settings,whoami'],
+      ['all_group_chats', 'fa', 'settings,whoami'],
+    ]);
+    expect(pushed[2][0][0]).toEqual({ command: 'start', description: 'آشنایی با Neda' });
+    // Only the commands step moved.
+    for (const other of [hired.bot().setMyName, hired.bot().setMyDescription, hired.bot().setMyShortDescription, hired.bot().setMyProfilePhoto]) expect(other).not.toHaveBeenCalled();
+    expect((await stored()).profileSync).toMatchObject({ status: 'synced', steps: { commands: expect.stringMatching(/^scoped:/) } });
+    clearCalls();
+    await h.studio.reconcileBotProfiles();
+    expect(hired.bot().setMyCommands).not.toHaveBeenCalled();
+
+    vi.stubEnv('STUDIO_SETTINGS_V2', '0');
+    await h.studio.reconcileBotProfiles();
+    expect(hired.bot().setMyCommands).toHaveBeenCalledTimes(1);
+    expect(hired.bot().setMyCommands.mock.calls[0]).toHaveLength(1);
+    expect(hired.bot().deleteMyCommands.mock.calls).toEqual([
+      [{ scope: { type: 'all_private_chats' } }], [{ scope: { type: 'all_private_chats' }, languageCode: 'fa' }],
+      [{ scope: { type: 'all_group_chats' } }], [{ scope: { type: 'all_group_chats' }, languageCode: 'fa' }],
+    ]);
+    expect((await stored()).profileSync?.steps?.commands).toBe(legacyKey(hired.botId, 'Neda'));
+    clearCalls(); hired.bot().deleteMyCommands.mockClear();
+    await h.studio.reconcileBotProfiles();
+    expect(hired.bot().setMyCommands).not.toHaveBeenCalled();
+    expect(hired.bot().deleteMyCommands).not.toHaveBeenCalled();
+  });
+
+  it('a refused cleanup keeps its marker and is retried when due', async () => {
+    vi.stubEnv('STUDIO_SETTINGS_V2', '1');
+    await h.studio.reconcileBotProfiles();
+    vi.stubEnv('STUDIO_SETTINGS_V2', '0');
+    hired.bot().deleteMyCommands.mockRejectedValueOnce(new Error('Too Many Requests'));
+    await h.studio.reconcileBotProfiles();
+    expect((await stored()).profileSync).toMatchObject({ status: 'error', failed: ['commands'], steps: { commands: expect.stringMatching(/^!scoped:/) } });
+    hired.bot().deleteMyCommands.mockClear();
+    advance(61_000);
+    await h.studio.reconcileBotProfiles();
+    expect(hired.bot().deleteMyCommands).toHaveBeenCalledTimes(4);
+    expect((await stored()).profileSync).toMatchObject({ status: 'synced', steps: { commands: legacyKey(hired.botId, 'Neda') } });
+  });
+
+  it('a bot that never had the flag on: a rename with the flag off never removes scoped menus', async () => {
+    await h.studio.updatePersona(org.alice, hired.agent.id, { name: 'Nima' });
+    await h.studio.reconcileBotProfiles();
+    expect(hired.bot().setMyCommands).toHaveBeenCalledTimes(1);
+    expect(hired.bot().setMyCommands.mock.calls[0]).toHaveLength(1);
+    expect(hired.bot().deleteMyCommands).not.toHaveBeenCalled();
   });
 });

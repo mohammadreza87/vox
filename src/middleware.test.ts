@@ -216,4 +216,13 @@ describe('Circles S4 pet launch over a group', () => {
       expect(response.headers.get('x-middleware-next')).toBe('1');
     }
   });
+
+  it('Settings v2: settings start params (s_…, settings) and ?settings= pass through to the Studio untouched', () => {
+    for (const path of ['/studio?tgWebAppStartParam=s_AbCd-_12', '/studio?tgWebAppStartParam=s_AbCd-_12_m', '/studio?tgWebAppStartParam=settings', '/studio?settings=account', '/studio?settings=s_AbCd-_12_v']) {
+      const response = middleware(request(path));
+      expect(response.headers.get('x-middleware-rewrite')).toBeNull();
+      expect(response.headers.has('location')).toBe(false);
+      expect(response.headers.get('x-middleware-next')).toBe('1');
+    }
+  });
 });

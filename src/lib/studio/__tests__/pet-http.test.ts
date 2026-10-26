@@ -444,6 +444,26 @@ describe("Telegram's Ed25519 signature on agent-signed initData", () => {
   });
 });
 
+describe('the circle lives in Vox (agent-signed initData never consents as the person)', () => {
+  it('the circle view, a join and a leave answer circle_use_vox on agent-signed initData before any ledger is read or written', async () => {
+    const { h, call, mochi } = await setup({ visibility: 'public' });
+    const code = 'A'.repeat(16);
+    // a real group with this agent in it, so only the refusal stands between the request and the ledger
+    await h.store.update((s) => { s.groups.push({ chatId: -7001, title: 'G', memberIds: [ID.alice], hasGuests: false, agentIds: [mochi.agent.id], addedBy: ID.alice,
+      addedAt: h.clock.now.toISOString(), joinCode: code }); });
+    const ledger = h.studio.deps.circleLedger!;
+    const get = vi.spyOn(ledger, 'get');
+    const leave = vi.spyOn(h.studio.circleGroups, 'leave');
+    for (const [path, body] of [[['circle'], undefined], [['circle', 'decision'], { code, choice: 'joined', revision: 'r1' }], [['circle', 'leave'], { code }]] as const) {
+      const res = await call([...path], body ? { body } : {});
+      expect(res.status).toBe(403);
+      expect(await res.json()).toEqual({ error: 'circle_use_vox' });
+    }
+    expect(get).not.toHaveBeenCalled();
+    expect(leave).not.toHaveBeenCalled();
+  });
+});
+
 describe('the person’s own pet data moved to Vox (agent-signed trust hotfix)', () => {
   it('export and forget answer 410 moved_to_vox for every signer, before any store is read or erased', async () => {
     const { h, call, mochi } = await setup({ visibility: 'public' });

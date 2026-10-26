@@ -91,3 +91,19 @@ describe('Conversation screen', () => {
     expect(await screen.findByRole('textbox', { name: 'Message' })).toBeEnabled();
   });
 });
+
+describe('Connectors entry (Settings v2)', () => {
+  it('flag on: a Connectors button opens this agent\'s Connectors & plugins page; flag off: no button', async () => {
+    setNav('en', 'personal');
+    (mocks.nav.current as Record<string, unknown>).me = { features: { settingsV2: true } };
+    render(<ConversationScreen id="nova" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Connectors' }));
+    expect((mocks.nav.current as { push: ReturnType<typeof vi.fn> }).push).toHaveBeenCalledWith({ name: 'settings', page: 'agent', params: { agentId: 'nova', section: 'connectors' } });
+    cleanup();
+    setNav('en', 'personal');
+    (mocks.nav.current as Record<string, unknown>).me = { features: { settingsV2: false } };
+    render(<ConversationScreen id="nova" />);
+    await screen.findByText('Personal · Designer');
+    expect(screen.queryByRole('button', { name: 'Connectors' })).toBeNull();
+  });
+});
