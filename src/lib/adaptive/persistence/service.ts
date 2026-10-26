@@ -1,3 +1,4 @@
+import { invalidateAssistantDeliveryScope, pruneAssistantDeliveryControl } from '../assistant-delivery-control';
 import { pruneTelegramArchives, resetTelegramArchives } from '../telegram-archive-state';
 import { rightsUseAllowed, rightsUseStamp } from '../rights-use-holds/state';
 import { mayUseStoredPersonalization, productPauseUseStamp } from '../product-pause/state';
@@ -135,6 +136,7 @@ export class AdaptiveService {
       const learningControl = () => digest([d.binding, d.permissions.filter(p => p.purpose === 'optional.personalization'),
         d.agentGrants, d.experience.preferences, d.experience.preferenceLearning?.intents,
         d.schemaVersion >= 2 ? ['work', 'personal'].map(s => productPauseUseStamp(d, s as SpaceKind)) : null]);
+      if (pruneAssistantDeliveryControl(d, now)) { d.revision++; d.updatedAt = now; }
       if (pruneTelegramArchives(d, now)) { d.revision++; d.updatedAt = now; }
       const priorLearning = learningControl();
       const revokeReminderIdentity = () => {
@@ -214,6 +216,7 @@ export class AdaptiveService {
         for (const item of d.relationships.inbox) if (item.key.scope.space === space && (!agentId || item.key.personaId === agentId) && (!sourceIds || item.sourceIds.some(id => sourceIds.includes(id)))) {
           item.status = 'cancelled'; item.text = '';
         }
+        if(invalidateAssistantDeliveryScope(d,now,space,agentId)) { d.revision++; d.updatedAt=now; }
         invalidations.push({ telegramId, space, reason, ...(agentId ? { agentId } : {}), ...(sourceIds ? { sourceIds } : {}) });
       };
       {
@@ -534,7 +537,7 @@ export class AdaptiveService {
     return d.permissions.find(p => p.spaceId === spaceIdFor(d.accountId, space) && p.purpose === purpose)!;
   }
   private invalidateExperience(d: AdaptiveDocument, space: SpaceKind, purpose: OptionalPurpose): void {
-    if (purpose === 'optional.auto_memory' || purpose === 'optional.personalization') resetTelegramArchives(d, this.sampleClock(this.now), space, undefined, true);
+    if (purpose === 'optional.auto_memory' || purpose === 'optional.personalization') { const now=this.sampleClock(this.now); resetTelegramArchives(d,now,space,undefined,true); invalidateAssistantDeliveryScope(d,now,space); }
     if (purpose === 'optional.product_analytics') d.experience.observations = d.experience.observations.filter(e => e.space !== space);
     if (purpose === 'optional.reminder_delivery' || purpose === 'optional.proactive_suggestions') {
       const category = purpose === 'optional.reminder_delivery' ? 'reminder' : 'proactive';
@@ -786,6 +789,7 @@ export class AdaptiveService {
       if (memory.text === input.text) return fail(409, 'memory_unchanged');
       this.requireCapacity(d);
       resetTelegramArchives(d, now, input.space);
+      invalidateAssistantDeliveryScope(d,now,input.space);
       memory.text = input.text; memory.revision++; memory.revocationEpoch++; memory.updatedAt = now;
       this.bump(d, now);
       purgeInvalidDerivedMemory(d, now, descendant => {
@@ -816,6 +820,7 @@ export class AdaptiveService {
   }
   private tombstone(d: AdaptiveDocument, memory: StoredMemory, now: number, eventId: string): void {
     resetTelegramArchives(d, now, memory.space);
+    invalidateAssistantDeliveryScope(d,now,memory.space,undefined,true);
     memory.status = 'deleted'; delete memory.text; memory.revision++; memory.revocationEpoch++; memory.updatedAt = now;
     this.bump(d, now);
     d.outbox.push({ eventId, kind: 'memory_deleted', space: memory.space, personId: d.personId,
@@ -845,7 +850,7 @@ export class AdaptiveService {
       if (!grant && d.agentGrants.length >= 100) return fail(409, 'storage_capacity');
       if (grant) { grant.allowed = input.allowed; grant.revision++; grant.updatedAt = now; }
       else d.agentGrants.push({ agentId, space: input.space, allowed: input.allowed, revision: 1, updatedAt: now });
-      if (!input.allowed) resetTelegramArchives(d, now, input.space, agentId, true);
+      if (!input.allowed) { resetTelegramArchives(d,now,input.space,agentId,true); invalidateAssistantDeliveryScope(d,now,input.space,agentId); }
       if (!input.allowed) for (const item of d.experience.inbox) if (item.space === input.space && item.agentId === agentId) { item.status = 'cancelled'; delete item.label; item.revision++; }
       this.bump(d, now); this.record(d, input.eventId, fingerprint, 'agent_grant', agentId);
       d.outbox.push({ eventId: input.eventId, kind: 'agent_grant_changed', space: input.space, personId: d.personId,

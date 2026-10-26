@@ -10,6 +10,7 @@ Prepared 19 October 2026 for Joyixir OÜ. Product scope: adults in the EU/EEA an
 
 | Read this | Purpose |
 |---|---|
+| [Durable assistant delivery control](../agents/AGENT_MEMORY_ASSISTANT_RUNTIME_CONTROL.md) | AM-05/AM-12: approved unwired FILE ledger, replay cutoffs, rights lifecycle and installed reader contract; qualification pending |
 | [Assistant delivery protocol](../agents/AGENT_MEMORY_ASSISTANT_DELIVERY_PROTOCOL.md) | AM-05/AM-12: pure unused identity, exact-wire and outcome prerequisite; live integration and control retention deferred |
 | [Snapshot publication](../agents/AGENT_MEMORY_SNAPSHOT_PUBLICATION.md) | PR 124 deployed as 6abf212; independently qualified bounded publication remains separately off, with existing horizons preserved |
 | [Snapshot contract](../agents/AGENT_MEMORY_COMPACTION_CONTRACT.md) | Pure planner/codec/verifier prerequisite; no retention or horizon growth |

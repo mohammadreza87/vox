@@ -1,3 +1,4 @@
+import { parseAssistantDeliveryControl, assistantCapacityProjection, assertAssistantDeliveryTransition, type AssistantDeliveryControl } from '../assistant-delivery-control';
 import { telegramArchivesSchema } from '../telegram-archive-state';
 import { rightsUseHoldsSchema, type RightsUseHolds, type RightsUseControls } from '../rights-use-holds/contracts';
 import { emptyRightsUseHolds, requireRightsUseHoldCapacity } from '../rights-use-holds/state';
@@ -8,7 +9,7 @@ import { z } from 'zod';
 import { activeReadScope, memoized, type TurnReadScope } from '../../tireh/privacy/read-scope';
 import type { ConsentEvent } from '../consent';
 import type { ConsentPermission, PersonAccountBinding } from '../types';
-import { committedLoader, CommittedReadBusy, type AdaptiveStorage } from './storage';
+import { committedLoader, CommittedReadBusy, FileAdaptiveStorage, type AdaptiveStorage } from './storage';
 import { emptyExperience, experienceDocumentSchema } from '../runtime/contracts';
 import { emptyRelationshipDocument, relationshipDocumentSchema } from '../relationships/contracts';
 import { emptyObserverDocument, observerDocumentSchema } from '../observation/contracts';
@@ -59,12 +60,14 @@ const legacyDocumentSchema = z.object({ schemaVersion: z.literal(1), accountId: 
   relationships: relationshipDocumentSchema.default(emptyRelationshipDocument),
   observer: observerDocumentSchema.default(emptyObserverDocument),
   telegramArchives: telegramArchivesSchema.optional(),
+  assistantDeliveryControl: z.unknown().optional(),
   consentEvents: z.array(z.unknown()).max(2000), outbox: z.array(outboxSchema).max(2000),
 }).strict();
 const productPauseDocumentSchema = legacyDocumentSchema.extend({ schemaVersion: z.literal(2), productPause: productPauseSchema }).strict();
 const rightsUseDocumentSchema = productPauseDocumentSchema.extend({schemaVersion:z.literal(3),rightsUseHolds:rightsUseHoldsSchema,retentionStoreIdentity:z.union([z.string().regex(/^[a-f0-9]{64}$/),z.literal('canonical')])}).strict();
 const documentSchema = z.union([legacyDocumentSchema, productPauseDocumentSchema, rightsUseDocumentSchema]);
-export type AdaptiveDocument = Omit<z.infer<typeof legacyDocumentSchema>, 'schemaVersion' | 'permissions' | 'binding' | 'consentEvents'> & {
+export type AdaptiveDocument = Omit<z.infer<typeof legacyDocumentSchema>, 'schemaVersion' | 'permissions' | 'binding' | 'consentEvents' | 'assistantDeliveryControl'> & {
+  assistantDeliveryControl?: AssistantDeliveryControl;
   schemaVersion: 1 | 2 | 3; productPause?: ProductPauseV1; rightsUseHolds?: RightsUseHolds; retentionStoreIdentity?:string;
   permissions: ConsentPermission[]; binding?: PersonAccountBinding; consentEvents: ConsentEvent[];
 };
@@ -128,6 +131,12 @@ function checkAdaptiveDocument(draft: AdaptiveDocument, accountId: string, now: 
     const retired = row.retiredOperation?.scope;
     if (retired && (retired.accountId !== accountId || retired.personId !== draft.personId || retired.agentId !== row.agentId || retired.space !== row.space || retired.containerId !== containerIdFor(accountId, row.space))) throw new Error('Invalid retired Telegram archive partition');
     if (row.state && row.retiredOperation && row.state.botId !== row.retiredOperation.botId) throw new Error('Invalid retired Telegram archive bot');
+  }
+  if(draft.assistantDeliveryControl!==undefined){
+    if(draft.schemaVersion!==1)throw new Error('Assistant control requires original FILE schema');
+    draft.assistantDeliveryControl=parseAssistantDeliveryControl(draft.assistantDeliveryControl,accountId,draft.personId,now);
+    if(Buffer.byteLength(JSON.stringify(assistantCapacityProjection(draft)))>700000)throw new Error('Assistant control reserved capacity exceeded');
+    requireProductPauseCapacity(assistantCapacityProjection(draft));requireRightsUseHoldCapacity(assistantCapacityProjection(draft));
   }
   if (draft.schemaVersion >= 2) {
     if (draft.productPause!.scopes.some(s => s.latest && s.latest.recordedAt > now)) throw new Error('Invalid pause receipt time');
@@ -214,8 +223,14 @@ export class AdaptiveRepository {
     if (!scope || !load || !/^telegram-account:[1-9]\d{0,15}$/.test(accountId)) return;
     await scope.document(this.storage, accountId, () => load(accountId)).catch(() => undefined);
   }
-  private committed<T>(accountId: string, at: number | (() => number), fn: (document: AdaptiveDocument, now: number) => T, beforeCommit?: () => void, existingOnly = false): Promise<T> {
-    return this.storage.transact(accountId, current => {
+  /** ARC only: bypasses read-scope drafts and selects the explicit FILE mutation seam. */
+  assistantDeliveryTransaction<T>(accountId:string,at:()=>number,fn:(document:AdaptiveDocument,now:number)=>T):Promise<T>{
+    if(!(this.storage instanceof FileAdaptiveStorage)||this.storage.constructor!==FileAdaptiveStorage)throw new Error('Original FILE required');
+    return this.committed(accountId,at,fn,undefined,true,true);
+  }
+  private committed<T>(accountId: string, at: number | (() => number), fn: (document: AdaptiveDocument, now: number) => T, beforeCommit?: () => void, existingOnly = false, assistantMutation=false): Promise<T> {
+    const transaction=assistantMutation?(this.storage as FileAdaptiveStorage).transactAssistantDeliveryControl.bind(this.storage):this.storage.transact.bind(this.storage);
+    return transaction(accountId, current => {
       // Sample after the backend acquires its serialization/lock and reads the
       // committed document. The same time drives validation and business expiry.
       const now = typeof at === 'function' ? this.storage.sampleClock?.(at) ?? at() : at;
@@ -224,7 +239,9 @@ export class AdaptiveRepository {
       const input = normalizeLegacyAdaptiveDocument(current, accountId, now);
       const draft = input === null ? create(accountId, now, this.storage.canonicalSchemaVersion ?? 1,this.storage.identity?digest([this.storage.identity.incarnation,this.storage.identity.generation]):undefined) : validateAdaptiveDocument(input, accountId, now);
       if(draft.schemaVersion===3 && this.storage.canonicalSchemaVersion!==3)throw new Error('Prepared rights storage required');
+      const prior=structuredClone(draft);
       const result = fn(draft, now);
+      assertAssistantDeliveryTransition(prior,draft,assistantMutation);
       validateAdaptiveDocument(draft, accountId, this.storage.sampleClock?.(() => typeof at === 'function' ? at() : at) ?? now);
       return { document: storedForm(draft), result };
     }, beforeCommit);

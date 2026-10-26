@@ -1,3 +1,4 @@
+import { exportAssistantDeliveryControl, pruneAssistantDeliveryControl } from '../assistant-delivery-control';
 import { accountIdFor, digest, type AdaptiveDocument, type SpaceKind } from '../persistence/repository';
 import { AdaptiveError, type AdaptiveService } from '../persistence/service';
 import { AdaptiveExperienceService } from '../runtime/service';
@@ -34,12 +35,13 @@ export class AdaptiveLifecycleService {
   privateNoteErasureProofNow(id:number,operation:LocalErasureOperation,guard:(observedAt?:number)=>void){return this.adaptive.privateNoteErasureProofNow(id,operation,guard);}
   eraseSelectedPrivateNote(id:number,operation:LocalErasureOperation,guard:()=>void){return this.adaptive.eraseSelectedPrivateNote(id,operation,guard);}
   private prune(d: AdaptiveDocument, now: number): void {
-    const before = digest([d.experience, d.relationships, d.receipts]);
+    const before = digest([d.experience, d.relationships, d.receipts, d.assistantDeliveryControl]);
     this.experience.pruneDocument(d, now);
     this.relationships.pruneDocument(d, now);
     d.receipts = d.receipts.filter(r => r.expiresAt > now);
     this.options.pruneObserver?.(d, now);
-    if (before !== digest([d.experience, d.relationships, d.receipts])) { d.revision++; d.updatedAt = now; }
+    pruneAssistantDeliveryControl(d,now);
+    if (before !== digest([d.experience, d.relationships, d.receipts, d.assistantDeliveryControl])) { d.revision++; d.updatedAt = now; }
   }
   async exportAccount(telegramId: number, space: SpaceKind) {
     return (await this.buildAccountExport(telegramId, space)).data;
@@ -49,6 +51,7 @@ export class AdaptiveLifecycleService {
     const built = await this.buildAccountExport(telegramId, space);
     const sharedFence = built.shared ? this.options.shared!.captureExportFence(telegramId, space, built.shared) : undefined;
     const payloadDeadline = Math.min(built.data.confirmedUntil,
+      ...(built.data.assistantDeliveryControl?.effects??[]).map(row=>row.retainUntil),
       ...[...built.data.memories, ...built.data.preferenceChanges, ...built.data.reminders,
         ...built.data.checkIns, ...built.data.observerEvents, ...(built.data.observerCorrections ?? []), ...built.data.sharedContributions,
         ...(built.data.preferenceLearning?.intents ?? []), ...(built.data.preferenceLearning?.candidates ?? []),
@@ -82,6 +85,7 @@ export class AdaptiveLifecycleService {
         this.adaptive.isPurposeRetentionAllowed(d, space, 'optional.product_analytics', now, e.agentId));
       return { schemaVersion: 1 as const, accountId: d.accountId, space, generatedAt: now,
         revision: d.revision, confirmedUntil: d.binding!.expiresAt,
+        ...(d.assistantDeliveryControl?{assistantDeliveryControl:exportAssistantDeliveryControl(d,space)}:{}),
         ...(d.schemaVersion===3?{rightsUseHolds:{...structuredClone(d.rightsUseHolds!),scopes:d.rightsUseHolds!.scopes.filter(s=>s.space===space),effects:d.rightsUseHolds!.effects.filter(e=>e.space===space)}}:{}),
         ...(d.schemaVersion >= 2 ? { productPause: structuredClone(d.productPause!.scopes.find(row => row.space === space)) } : {}),
         memories: d.memories.filter(m => m.space === space && m.status === 'active' && m.expiresAt > now)
