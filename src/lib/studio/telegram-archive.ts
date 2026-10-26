@@ -1,7 +1,9 @@
 import { parseExplicitControl } from '../relationships';
-import { containerIdFor, digest, type AdaptiveDocument } from '../adaptive/persistence/repository';
-import { resetTelegramArchives } from '../adaptive/telegram-archive-state';
-import { TelegramMemoryArchive } from '../tireh/memory/telegram-archive/service';
+import { containerIdFor, digest, requireProductPauseCapacity, type AdaptiveDocument } from '../adaptive/persistence/repository';
+import { MAX_ADAPTIVE_DOCUMENT_BYTES } from '../adaptive/persistence/storage';
+import { requireRightsUseHoldCapacity } from '../adaptive/rights-use-holds/state';
+import { resetTelegramArchives, suppressTelegramArchiveSource } from '../adaptive/telegram-archive-state';
+import { MAX_ARCHIVE_STATE_BYTES, TelegramMemoryArchive } from '../tireh/memory/telegram-archive/service';
 import { TelegramArchiveTransport } from '../tireh/memory/telegram-archive/transport';
 import { ArchiveUnavailableError, type ArchiveAuthority, type ArchiveEvent, type ArchiveRepository, type ArchiveScope, type ArchiveTransport } from '../tireh/memory/telegram-archive/contracts';
 import type { TelegramMessage } from '../tireh/telegram/client';
@@ -56,8 +58,12 @@ export class StudioTelegramArchive {
     const sourceAuthority = digest(['owner-dm-archive-v1', this.adaptive.storeIdentity, scope, studio, botId, digest(token),
       this.adaptive.coreFingerprint(d, now), purposes.map(p => this.adaptive.purposeFingerprint(d, scope.space, p, now, scope.agentId)),
       ]);
-    const revision = digest([sourceAuthority, row?.generation ?? 0, row?.clearedAt ?? 0, row?.enabled ?? false]);
-    return {scope, botId, allowed: allowed && (setup || row?.authorityStamp === sourceAuthority), expiresAt, suppressedEventIds: [], revision, sourceAuthority};
+    const suppressedEventIds = [...new Set(row?.state?.receipts.filter(r => r.suppressed).map(r => r.logicalId) ?? [])];
+    const revisionParts: unknown[] = [sourceAuthority, row?.generation ?? 0, row?.clearedAt ?? 0, row?.enabled ?? false];
+    // Preserve legacy in-flight operation fences until a source is suppressed.
+    if (suppressedEventIds.length) revisionParts.push(suppressedEventIds);
+    const revision = digest(revisionParts);
+    return {scope, botId, allowed: allowed && (setup || row?.authorityStamp === sourceAuthority), expiresAt, suppressedEventIds, revision, sourceAuthority};
   }
   private current(authority: ArchiveAuthority): boolean {
     try {
@@ -172,7 +178,32 @@ export class StudioTelegramArchive {
     const d = read.document;
     if (!d?.telegramArchives?.some(r => r.agentId === agentId && r.space === 'work')) return;
     await this.studio.replyAuthority(agentId, message.from.id);
-    await this.clear({accountId: d.accountId, personId: d.personId, agentId, space: 'work', containerId: containerIdFor(d.accountId, 'work')});
+    await this.adaptive.withAccountDocument(message.from.id, (current, now) => {
+      if (current.accountId !== d.accountId || current.personId !== d.personId) throw new ArchiveUnavailableError('scope');
+      const row = current.telegramArchives?.find(r => r.agentId === agentId && r.space === 'work');
+      if (!row) return;
+      if (!suppressTelegramArchiveSource(row, `telegram:${message.message_id}`)) resetTelegramArchives(current, now, 'work', agentId);
+      current.revision++; current.updatedAt = now;
+      let fits = (!row.state || Buffer.byteLength(JSON.stringify(row.state)) <= MAX_ARCHIVE_STATE_BYTES) &&
+        Buffer.byteLength(JSON.stringify(current.telegramArchives)) <= 256 * 1024 && Buffer.byteLength(JSON.stringify(current)) <= MAX_ADAPTIVE_DOCUMENT_BYTES;
+      try { requireProductPauseCapacity(current); requireRightsUseHoldCapacity(current); } catch { fits = false; }
+      if (!fits) {
+        // Legacy/full rows have no reserved marker bytes. Suppression still
+        // commits: conservatively clear content behind the existing time fence,
+        // retaining uncertain external-effect metadata for owner reconciliation.
+        const oldState = row.state;
+        resetTelegramArchives(current, now, 'work', agentId);
+        if (oldState?.operation) row.state = {schemaVersion: 1, scope: oldState.scope, botId: oldState.botId,
+          revision: oldState.revision + 1, pending: [], receipts: [], operation: {...oldState.operation, stage: 'unknown'}};
+        if (current.events.length < 1500) {
+          const receipt = {eventId: `archive-source-reset:${digest([agentId,row.generation])}`, fingerprint: digest([agentId,row.generation,'capacity']),
+            kind: 'archive_source_reset', resultId: 'source_suppression_capacity', revision: current.revision};
+          current.events.push(receipt);
+          try { requireProductPauseCapacity(current); requireRightsUseHoldCapacity(current); if (Buffer.byteLength(JSON.stringify(current)) > MAX_ADAPTIVE_DOCUMENT_BYTES) current.events.pop(); }
+          catch { current.events.pop(); }
+        }
+      }
+    });
   }
   async clear(scope: ArchiveScope, disable = false): Promise<void> {
     await this.adaptive.withAccountDocument(ownerId(scope), (d, now) => {
@@ -219,7 +250,7 @@ export class StudioTelegramArchive {
     const scope = await this.scope(telegramId, agentId, space);
     return this.adaptive.withAccountView(telegramId, (d, now) => {
       const authority = this.authority(d, scope, now), row = entry(d, scope);
-      const index = authority.allowed && row ? recent(row.index, now, row.clearedAt) : [];
+      const index = authority.allowed && row ? recent(row.index, now, row.clearedAt).filter(e => !authority.suppressedEventIds.includes(e.logicalId)) : [];
       return {revision: digest([authority.revision, index.map(e => [e.eventId, e.revision, e.expiresAt])]),
         text: authorityOnly ? [] : index.map(e => `Private conversation source (${new Date(e.occurredAt).toISOString()}, ${e.role}): ${e.text}`)};
     });
