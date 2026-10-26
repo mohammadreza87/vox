@@ -9,24 +9,26 @@
  * 3.   (fixed, fixer r1 on main) stripImageMetadata copied everything after the
  *      first JPEG SOS verbatim, so an APPn/COM segment between scans (legal in
  *      progressive JPEGs) left the process. It now walks every scan.
- * 4.   DecisionService maps provider timeouts by error.name, but openai 7.x
- *      error classes never set `name`, so an SDK timeout is reported as
- *      provider_error (decision-log unknownReason is wrong).
+ * 4.   (fixed, H3) DecisionService maps provider timeouts by error.name, but
+ *      openai 7.x error classes never set `name`, so an SDK timeout was
+ *      reported as provider_error. The S09 triage wiring now wraps its
+ *      provider in structuralTimeouts(); the bare DecisionService keeps main's
+ *      labels (STUDIO_DECISIONS_ENABLED path, flags unset).
  */
 import { describe, expect, it } from 'vitest';
 import { APIConnectionTimeoutError } from 'openai';
-import { explicitRememberRequest, IMAGE_NO_MEMORY } from '../images/retention';
+import { explicitMemoryRequest, NEGATED_MEMORY_REQUEST } from '../memory/requests';
 import { stripImageMetadata } from '../images/bytes';
-import { DecisionService, type DecisionContext } from '../../adaptive/decisions';
+import { DecisionService, structuralTimeouts, type DecisionContext } from '../../adaptive/decisions';
 
 describe('QA r3 code-quality known gaps', () => {
   it('recognises Persian opt-outs written with ZWNJ or an Arabic yeh', () => {
-    expect(IMAGE_NO_MEMORY.test('به‌خاطر نسپار')).toBe(true); // ZWNJ, standard orthography
-    expect(IMAGE_NO_MEMORY.test('ذخيره نکن')).toBe(true); // Arabic yeh U+064A
+    expect(NEGATED_MEMORY_REQUEST.test('به‌خاطر نسپار')).toBe(true); // ZWNJ, standard orthography
+    expect(NEGATED_MEMORY_REQUEST.test('ذخيره نکن')).toBe(true); // Arabic yeh U+064A
   });
 
   it('recognises a Persian remember request written with ZWNJ', () => {
-    expect(explicitRememberRequest('ذخیره‌اش کن')).toBe(true);
+    expect(explicitMemoryRequest('ذخیره‌اش کن')).toBe(true);
   });
 
   it('removes an APP1 segment that sits between two JPEG scans', () => {
@@ -38,13 +40,19 @@ describe('QA r3 code-quality known gaps', () => {
     expect(out).not.toContain('CANARY');
   });
 
-  it.fails('reports an openai SDK timeout as timeout, not provider_error', async () => {
-    const service = new DecisionService({ evaluate: async () => { throw new APIConnectionTimeoutError(); } });
-    const context: DecisionContext = {
-      enabled: true, revision: 0, currentRevision: () => 0, authorize: async () => 'k',
-      loadInput: async () => ({ input: 'text', questions: [{ type: 'predicate', name: 'q0', instructions: 'Q?' }] }),
-      deadlineMs: 2000,
-    };
+  const context: DecisionContext = {
+    enabled: true, revision: 0, currentRevision: () => 0, authorize: async () => 'k',
+    loadInput: async () => ({ input: 'text', questions: [{ type: 'predicate', name: 'q0', instructions: 'Q?' }] }),
+    deadlineMs: 2000,
+  };
+
+  it('reports an openai SDK timeout as timeout, not provider_error, through structuralTimeouts', async () => {
+    const service = new DecisionService(structuralTimeouts({ evaluate: async () => { throw new APIConnectionTimeoutError(); } }));
     expect(await service.evaluate(context)).toMatchObject({ status: 'unknown', reason: 'timeout' });
+  });
+
+  it('the bare DecisionService keeps main\'s labels: the same SDK timeout is provider_error (flags-unset path unchanged)', async () => {
+    const service = new DecisionService({ evaluate: async () => { throw new APIConnectionTimeoutError(); } });
+    expect(await service.evaluate(context)).toMatchObject({ status: 'unknown', reason: 'provider_error' });
   });
 });

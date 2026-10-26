@@ -59,7 +59,7 @@ export async function localVoiceIdentityOptions(env: NodeJS.ProcessEnv, profile:
     const cipher = new VoiceTemplateCipher(createHash('sha256').update(key).digest('hex').slice(0, 16), new Uint8Array(key));
     const provider = new LocalVoiceIdentityProvider({ socketPath: config.socketPath, authKey });
     const options: VoiceIdentityOptions = { provider, cipher, ...(config.approval ? { providerApproval: config.approval } : {}), enabled: false };
-    let readiness = env.STUDIO_VOICE_RECOGNITION !== '1' || !config.enabled ? 'recognition_disabled'
+    let readiness = !(await import('../../tireh/flags')).tirehFlags(env).voiceRecognition || !config.enabled ? 'recognition_disabled'
       : !config.approval ? 'recognition_release_not_configured'
         : config.approval.expiresAt <= Date.now() ? 'recognition_release_expired' : 'local_engine_unavailable';
     // Readiness exports no sample. The worker independently reports whether its

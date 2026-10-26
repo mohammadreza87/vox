@@ -1,10 +1,19 @@
 /**
  * Server feature flags for the agent-intelligence steps in
- * docs/AGENT_INTELLIGENCE_SOLUTION.md. Every flag defaults off: with all of
- * them unset the runtime behaves exactly as before. Values are read at call
- * time (tests use vi.stubEnv) and come only from the server environment, never
- * from message content or a model. Created byte-identically by every step that
- * reads a flag; change it only in a follow-up commit after the steps merge.
+ * docs/AGENT_INTELLIGENCE_SOLUTION.md. Every flag defaults off. With all of
+ * them unset the runtime behaves as main (7224f40) does, except for the three
+ * recorded exceptions in docs/implementation/agent-intelligence/WAVE_A_ON_MAIN.md:
+ * the openai request headers, the legacy Telegram payments route (product
+ * decision (a)) and the shared memory-request negation rule (decision (i)).
+ * Erasure and retention sweeps (supersede notices, vox_audit, the decision
+ * log) run whatever the flags are, so a rollback never strands stored rows.
+ * Values are read at call time (tests use vi.stubEnv) and come only from the
+ * server environment, never from message content or a model. Dependent flags
+ * are composed here (promptSystemTail, vectorRetrieval, voiceShadow), so a
+ * child flag is never on without its parent. Created byte-identically by every
+ * step that reads a flag; change it only in a follow-up commit after the steps
+ * merge, and move the sha256 pins in llm-blocks.test.ts and
+ * llm-blocks.main-lineage.test.ts with it.
  */
 
 export type TriageQuestionSet = 'v1' | 'v2' | 'v2-live';
@@ -17,7 +26,7 @@ export interface TirehFlags {
   readonly promptSystemTail: boolean;
   /** S06 TIREH_RETRIEVAL_V2=1: Persian-aware fused ranking, at most 8 memories for the prompt. */
   readonly retrievalV2: boolean;
-  /** S06 TIREH_VECTOR_RETRIEVAL=1: Firestore findNearest candidates. Needs retrievalV2. */
+  /** S06 TIREH_VECTOR_RETRIEVAL=1: Firestore findNearest candidates. Needs retrievalV2. Library only; no production caller yet, so it has no runtime effect. */
   readonly vectorRetrieval: boolean;
   /** S08 TIREH_SHARING_V2=1: successor filter, supersede notices, shared-context consent decoupling, group re-snapshot. */
   readonly sharingV2: boolean;
@@ -33,7 +42,7 @@ export interface TirehFlags {
   readonly images: boolean;
   /** S11L STUDIO_VOICE_RECOGNITION=1: voiceprint enrollment and verification; approval and consent are still required. */
   readonly voiceRecognition: boolean;
-  /** S11L STUDIO_VOICE_SHADOW=1: shadow verification of 1:1 voice notes, off the reply path; needs STUDIO_VOICE_RECOGNITION */
+  /** S11L STUDIO_VOICE_SHADOW=1: shadow verification of 1:1 voice notes, off the reply path. Needs voiceRecognition: off whenever STUDIO_VOICE_RECOGNITION is. */
   readonly voiceShadow: boolean;
   /** Legacy TELEGRAM_WEBHOOK_FAIL_CLOSED=1: /api/telegram/webhook rejects every request while TELEGRAM_WEBHOOK_SECRET is unset; stays off until the secret is rolled out */
   readonly webhookFailClosed: boolean;
@@ -45,6 +54,7 @@ export function tirehFlags(env: NodeJS.ProcessEnv = process.env): TirehFlags {
   const questionSet = env.TRIAGE_QUESTION_SET?.trim().toLowerCase();
   const cachedPrompt = on(env.TIREH_CACHED_PROMPT);
   const retrievalV2 = on(env.TIREH_RETRIEVAL_V2);
+  const voiceRecognition = on(env.STUDIO_VOICE_RECOGNITION);
   return {
     cachedPrompt,
     promptSystemTail: cachedPrompt && on(env.TIREH_PROMPT_SYSTEM_TAIL),
@@ -56,8 +66,8 @@ export function tirehFlags(env: NodeJS.ProcessEnv = process.env): TirehFlags {
     triageQuestionSet: questionSet === 'v2' || questionSet === 'v2-live' ? questionSet : 'v1',
     decisionLog: on(env.TIREH_DECISION_LOG),
     images: on(env.STUDIO_IMAGES),
-    voiceRecognition: on(env.STUDIO_VOICE_RECOGNITION),
-    voiceShadow: on(env.STUDIO_VOICE_SHADOW),
+    voiceRecognition,
+    voiceShadow: voiceRecognition && on(env.STUDIO_VOICE_SHADOW),
     webhookFailClosed: on(env.TELEGRAM_WEBHOOK_FAIL_CLOSED),
   };
 }

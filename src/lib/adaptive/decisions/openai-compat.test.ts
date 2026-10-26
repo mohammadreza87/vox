@@ -151,6 +151,8 @@ describe('8. provider-boundary zod on both transports', () => {
     ['an extra question key', { ...input, questions: [{ ...input.questions[0], temperature: 1 }] }],
     // From main (8a7dc55): the limit is the exported constant, not a literal.
     ['more than the configured question limit', { input: 'SYNTHETIC', questions: Array.from({ length: MAX_DECISION_QUESTIONS + 1 }, (_, i) => question(i)) }],
+    // S15 verifier: the provider's own requestSchema.parse rejects audio, not only the service parse.
+    ['an input_audio part', { input: [{ role: 'user', content: [{ type: 'input_text', text: 'SYNTHETIC' }, { type: 'input_audio', input_audio: { data: 'AAAA', format: 'wav' } }] }], questions: input.questions }],
   ];
   it.each(requests)('%s fails before the stubbed transports', async (_label, request) => {
     const post = vi.fn();
@@ -190,9 +192,10 @@ describe('9-10. real-SDK errors', () => {
       .then(() => null, (e: unknown) => e);
     expect(error).toBeInstanceOf(OpenAI.APIConnectionTimeoutError);
     expect((error as Error).constructor.name).toBe('APIConnectionTimeoutError');
-    // Pinned finding for S09 (owner of DecisionService): the SDK never sets error.name, so it
-    // is 'Error' on 6.9.1, 7.34.0 and 7.39.0 alike, and DecisionService's name check cannot match.
-    // Inside DecisionService its own deadline timer still reports 'timeout' first.
+    // SDK behaviour note: the SDK never sets error.name, so it is 'Error' on 6.9.1, 7.34.0 and
+    // 7.39.0 alike. DecisionService (main's, unchanged) classifies by name; the S09 triage wiring
+    // wraps the provider in structuralTimeouts(), which reports this as 'timeout' (F001, F030;
+    // driven through DecisionService in src/lib/tireh/__tests__/hardening-decisions-timeout.test.ts).
     expect((error as Error).name).toBe('Error');
     expect(fetch).toHaveBeenCalledOnce();
   });
@@ -236,7 +239,11 @@ describe('11. authority fence on the create path', () => {
     const controller = new AbortController();
     const pending = provider.evaluate(input, controller.signal, () => true);
     queueMicrotask(() => controller.abort());
-    await expect(pending).rejects.toBeDefined();
+    // F009: the SDK's own abort shape, not any rejection (a TypeError from a broken builder fails here).
+    const error = await pending.then(() => null, (e: unknown) => e);
+    expect(error).toBeInstanceOf(OpenAI.APIUserAbortError);
+    expect((error as Error).constructor.name).toBe('APIUserAbortError');
+    expect((error as Error).message).toBe('Request was aborted.');
     expect(fetcher).not.toHaveBeenCalled();
   });
 });
