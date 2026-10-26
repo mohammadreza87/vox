@@ -280,17 +280,22 @@ export async function wireSharingAudit(studio: Pick<Studio, 'deps'>, dataDir: st
   const auditStore = db ? new FirestoreAuditStore(db) : createFileAuditStore(join(dataDir, 'vox-audit.jsonl'));
   const notices = db ? new FirestoreSupersededNoticeStore(db) : createFileSupersededNoticeStore(join(dataDir, 'supersede-notices.json'));
   studio.deps.noticeEraser = notices;
+  // Fixed, content-free codes only: never a row field, an id or content.
+  const onError = (code: string) => console.warn(`[vox] audit ${code}`);
+  const log = console;
   if (flags.auditLog || flags.sharingV2) {
-    const audit = withAuditRetention(auditStore);
+    const audit = withAuditRetention(auditStore, { onError });
     studio.deps.audit = audit;
     studio.deps.memoryNotices = notices;
-    studio.deps.memory = { ...studio.deps.memory, memories: auditMemoryStore(studio.deps.memory.memories, audit, notices), offers: auditShareOfferStore(studio.deps.memory.offers, audit) };
+    studio.deps.memory = { ...studio.deps.memory, memories: auditMemoryStore(studio.deps.memory.memories, audit, notices, { log }), offers: auditShareOfferStore(studio.deps.memory.offers, audit, { log }) };
+    // TIREH_SHARING_V2 alone appends nothing, so the 12-month sweep also runs at startup and daily (F208).
+    startAuditRetentionSweep(auditStore, { onError });
     return;
   }
-  startAuditRetentionSweep(auditStore);
+  startAuditRetentionSweep(auditStore, { onError });
   // A failed existence read assumes notices may be stored: erasure wins over a pure pass-through.
   const stored = await notices.hasAny().catch(() => true);
-  if (stored) studio.deps.memory = { ...studio.deps.memory, memories: noticeErasingMemoryStore(studio.deps.memory.memories, notices) };
+  if (stored) studio.deps.memory = { ...studio.deps.memory, memories: noticeErasingMemoryStore(studio.deps.memory.memories, notices, { log }) };
 }
 
 /**

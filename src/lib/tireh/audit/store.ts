@@ -13,8 +13,13 @@
  *  - TODO(consent ledger): `consent_change`, the adaptive persistence path is owned elsewhere;
  *  - TODO(S10L): `identity_change`.
  *
- * Retention: runtime.ts wraps the configured store in withAuditRetention, so
- * appends run `sweep(auditCutoff(now))` at most once a day, best effort.
+ * Retention (12 months): runtime.ts wraps the configured store in
+ * withAuditRetention, so appends run `sweep(auditCutoff(now))` at most once a
+ * day, and it also runs startAuditRetentionSweep (once at startup, then daily)
+ * whatever the S08 flags are, so rows age out when nothing appends (TIREH_AUDIT_LOG
+ * off, a rollback, a quiet persona). Both are best effort and never throw; a
+ * rejected sweep is reported through `onError('sweep_failed')`, a fixed,
+ * content-free code. A sweep never creates the file or collection.
  */
 
 import { createHash, randomUUID } from 'crypto';
@@ -163,15 +168,32 @@ export function createFileAuditStore(path: string): AuditStore {
 
 export const AUDIT_SWEEP_EVERY_MS = 86_400_000;
 
+/** The only signal a retention sweep gives: fixed and content-free. */
+export type AuditRetentionErrorCode = 'sweep_failed';
+export interface AuditRetentionOptions {
+  now?: () => Date;
+  sweepEveryMs?: number;
+  /** Called with a fixed code when a sweep rejects; a throwing callback is ignored. */
+  onError?: (code: AuditRetentionErrorCode) => void;
+}
+
+/** One best-effort sweep: never rejects; a failure reaches onError('sweep_failed'). */
+function sweepBestEffort(store: Pick<AuditStore, 'sweep'>, cutoff: () => Date, onError?: (code: AuditRetentionErrorCode) => void): Promise<void> {
+  return Promise.resolve().then(() => store.sweep(cutoff())).then(() => undefined, () => {
+    try { onError?.('sweep_failed'); } catch { /* never throws */ }
+  });
+}
+
 /**
- * The 12-month retention when nothing appends: with both S08 flags off (after a rollback) withAuditRetention is
- * not installed, so rows written while a flag was on would never age out. This sweeps once now and then every
- * `sweepEveryMs` on an unref'd timer, best effort. A sweep never creates the file or collection.
+ * The 12-month retention when nothing appends: with TIREH_AUDIT_LOG off (TIREH_SHARING_V2 alone, or both S08 flags
+ * off after a rollback) nothing calls append, so rows written while the flag was on would never age out. This
+ * sweeps once now and then every `sweepEveryMs` on an unref'd timer, best effort; a rejected sweep is reported
+ * through `onError('sweep_failed')`. A sweep never creates the file or collection.
  */
-export function startAuditRetentionSweep(store: Pick<AuditStore, 'sweep'>, options: { now?: () => Date; sweepEveryMs?: number } = {}): { stop(): void; flush(): Promise<void> } {
+export function startAuditRetentionSweep(store: Pick<AuditStore, 'sweep'>, options: AuditRetentionOptions = {}): { stop(): void; flush(): Promise<void> } {
   const now = options.now ?? (() => new Date());
   let pending: Promise<unknown> = Promise.resolve();
-  const sweep = () => { pending = Promise.resolve().then(() => store.sweep(auditCutoff(now()))).catch(() => undefined); };
+  const sweep = () => { pending = sweepBestEffort(store, () => auditCutoff(now()), options.onError); };
   sweep();
   const timer = setInterval(sweep, options.sweepEveryMs ?? AUDIT_SWEEP_EVERY_MS);
   (timer as { unref?: () => void }).unref?.();
@@ -181,9 +203,10 @@ export function startAuditRetentionSweep(store: Pick<AuditStore, 'sweep'>, optio
 /**
  * The 12-month retention, scheduled: the first append and then at most one
  * append per `sweepEveryMs` also start `sweep(auditCutoff(now))`. The sweep is
- * best effort and never delays or fails the append; `flush()` awaits it (tests).
+ * best effort and never delays or fails the append; a rejected sweep is
+ * reported through `onError('sweep_failed')`. `flush()` awaits it (tests).
  */
-export function withAuditRetention(store: AuditStore, options: { now?: () => Date; sweepEveryMs?: number } = {}): AuditStore & { flush(): Promise<void> } {
+export function withAuditRetention(store: AuditStore, options: AuditRetentionOptions = {}): AuditStore & { flush(): Promise<void> } {
   const now = options.now ?? (() => new Date());
   const every = options.sweepEveryMs ?? AUDIT_SWEEP_EVERY_MS;
   let lastSweep = -Infinity;
@@ -194,7 +217,7 @@ export function withAuditRetention(store: AuditStore, options: { now?: () => Dat
       const at = now();
       if (at.getTime() - lastSweep >= every) {
         lastSweep = at.getTime();
-        pending = Promise.resolve().then(() => store.sweep(auditCutoff(at))).catch(() => undefined);
+        pending = sweepBestEffort(store, () => auditCutoff(at), options.onError);
       }
       return stored;
     },

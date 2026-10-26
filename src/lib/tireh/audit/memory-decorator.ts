@@ -15,16 +15,22 @@
  * arguments, same result or error, no extra store reads).
  *
  * Rows and notices are written best effort after the store call and awaited
- * (deterministic in tests); a rejected or invalid row never changes a memory
- * result. Rows carry ids, person ids, a hashed policy key and an outcome,
- * never content, topics or message text.
+ * (deterministic in tests), but each wait is bounded by AUDIT_WRITE_TIMEOUT_MS:
+ * a hung audit or notice write never stalls a memory write (the write itself
+ * may still complete later, which is acceptable for append-only rows). A
+ * rejected, invalid or timed-out write never changes a memory result; it is
+ * signalled by one fixed, content-free log line (`[vox] <code>`, see
+ * AuditSignalCode), never with row fields, ids or content. Rows carry ids,
+ * person ids, a hashed policy key and an outcome, never content, topics or
+ * message text.
+ *
+ * A delete row lists every id the store reports removed with the requested one
+ * (its forget closure), in rows of at most MAX_AUDIT_IDS ids.
  *
  * TODO(worker / Step 1): chatKeyHash is omitted at store level; supply it when
  * the worker or the Step 1 turn snapshot passes chat context.
  * TODO(worker / Step 1 / S10L): the reserved kinds retrieval, prompt_memory,
  * consent_change and identity_change are not written here.
- * TODO(Step 7): delete rows list only the requested id; the forget cascade
- * will record the full closure.
  */
 
 import { tirehFlags } from '../flags';
@@ -32,7 +38,7 @@ import { supersedeNoticeRecipients } from '../memory/sharing';
 import { isStaleMemoryWriteError, type MemoryStore, type NewMemory, type ShareOfferStore } from '../memory/store';
 import type { MemoryRecord, ShareOffer } from '../types';
 import type { SupersededNoticeEraser, SupersededNoticeStore } from './notices';
-import { memoryPolicyKey, type AuditKind, type AuditOutcome, type AuditStore, type NewAuditRow } from './store';
+import { MAX_AUDIT_IDS, memoryPolicyKey, type AuditKind, type AuditOutcome, type AuditStore, type NewAuditRow } from './store';
 
 type MemoryPatch = Partial<Omit<MemoryRecord, 'id' | 'personaId'>>;
 
@@ -44,9 +50,45 @@ function errorOutcome(error: unknown): AuditOutcome {
   return isStaleMemoryWriteError(error) ? 'denied' : 'failed';
 }
 
-/** Awaited, never throws: an audit or notice failure never changes a memory result. */
-async function bestEffort(operation: () => Promise<unknown>): Promise<void> {
-  await Promise.resolve().then(operation).catch(() => undefined);
+/** The longest a memory write waits for one audit or notice write. */
+export const AUDIT_WRITE_TIMEOUT_MS = 2000;
+
+/** The only strings the decorators log, each as `[vox] <code>`: fixed and content-free. */
+export type AuditSignalCode = 'audit_append_failed' | 'audit_append_timeout' | 'notice_record_failed' | 'notice_erasure_failed';
+export type AuditLogger = Pick<Console, 'warn'>;
+export interface AuditDecoratorOptions { /** Default console. Receives only `[vox] <AuditSignalCode>`. */ log?: AuditLogger }
+
+function signal(log: AuditLogger, code: AuditSignalCode): void {
+  try { log.warn(`[vox] ${code}`); } catch { /* a broken logger never changes a memory result */ }
+}
+
+/**
+ * Awaited for at most AUDIT_WRITE_TIMEOUT_MS, never throws: an audit or notice failure never changes a memory
+ * result. A rejection logs `code`; the timeout logs 'audit_append_timeout' for an audit append and `code` for a
+ * notice write. A write that settles after the timeout is not reported again.
+ */
+async function bestEffort(operation: () => Promise<unknown>, code: Exclude<AuditSignalCode, 'audit_append_timeout'>, log: AuditLogger): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  // The write's own promise never rejects (a late rejection after the timeout is not an unhandled rejection).
+  const write = Promise.resolve().then(operation).then(() => 'done' as const, () => 'failed' as const);
+  const timeout = new Promise<'timeout'>((resolve) => {
+    timer = setTimeout(() => resolve('timeout'), AUDIT_WRITE_TIMEOUT_MS);
+    (timer as { unref?: () => void }).unref?.();
+  });
+  try {
+    const outcome = await Promise.race([write, timeout]);
+    if (outcome === 'failed') signal(log, code);
+    else if (outcome === 'timeout') signal(log, code === 'audit_append_failed' ? 'audit_append_timeout' : code);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Splits ids into chunks of at most MAX_AUDIT_IDS (normalizeAuditRow caps a row at that many). */
+function chunkIds(ids: readonly string[]): string[][] {
+  const chunks: string[][] = [];
+  for (let i = 0; i < ids.length; i += MAX_AUDIT_IDS) chunks.push(ids.slice(i, i + MAX_AUDIT_IDS));
+  return chunks.length ? chunks : [[]];
 }
 
 async function safeGet(store: MemoryStore, id: string): Promise<MemoryRecord | null> {
@@ -77,9 +119,10 @@ function proxy<T extends object>(target: T, wrapped: Record<string, unknown>): T
   });
 }
 
-export function auditMemoryStore(inner: MemoryStore, audit: AuditStore, notices?: SupersededNoticeStore): MemoryStore {
+export function auditMemoryStore(inner: MemoryStore, audit: AuditStore, notices?: SupersededNoticeStore, options: AuditDecoratorOptions = {}): MemoryStore {
   const target = inner;
-  const append = (row: NewAuditRow) => bestEffort(() => audit.append(row));
+  const log = options.log ?? console;
+  const append = (row: NewAuditRow) => bestEffort(() => audit.append(row), 'audit_append_failed', log);
   const addRow = (memory: NewMemory, record: MemoryRecord | null, outcome: AuditOutcome): NewAuditRow => ({
     kind: memory.supersedes ? 'supersede' : 'write',
     personaId: memory.personaId,
@@ -110,7 +153,7 @@ export function auditMemoryStore(inner: MemoryStore, audit: AuditStore, notices?
       const newMemoryId = record.id;
       if (recipientPersonIds.length) {
         await bestEffort(() => notices!.record({ personaId: predecessor.personaId, oldMemoryId: predecessor.id, newMemoryId,
-          ownerPersonId: predecessor.source.personId, recipientPersonIds, at: new Date() }));
+          ownerPersonId: predecessor.source.personId, recipientPersonIds, at: new Date() }), 'notice_record_failed', log);
       }
     }
     return record;
@@ -168,16 +211,25 @@ export function auditMemoryStore(inner: MemoryStore, audit: AuditStore, notices?
       // Erasure: a deleted memory leaves no supersede notice naming it or any record its forget closure removed,
       // whatever the flags are now (notices recorded while TIREH_SHARING_V2 was on must still go). Never a read
       // of the memory store.
-      const eraseNotices = (removed: string[]) => notices ? bestEffort(() => notices.deleteByMemoryIds(forgottenIds(id, removed))) : undefined;
+      const eraseNotices = (removed: string[]) => notices
+        ? bestEffort(() => notices.deleteByMemoryIds(forgottenIds(id, removed)), 'notice_erasure_failed', log) : undefined;
       if (!tirehFlags().auditLog) { const removed = await target.delete(...args); await eraseNotices(removed); return removed; }
       const before = await safeGet(target, id);
       let failure: { error: unknown } | null = null;
       let removed: string[] = [];
       try { removed = await target.delete(...args); } catch (error) { failure = { error }; }
-      // The store cannot attest who deleted, so the row has no actor.
+      // The store cannot attest who deleted, so the row has no actor. A delete removes the record's whole forget
+      // closure, so the row lists every id the store reports removed (one row per MAX_AUDIT_IDS ids); a failed
+      // delete keeps the single requested id. audiencePersonIds stays the requested record's audience: the
+      // cascaded records are not read before the delete (a read per closure member would add store round trips
+      // and could race the delete), and their audiences are recorded on their own write and share rows.
       if (before) {
-        await append({ kind: 'delete', personaId: before.personaId, audiencePersonIds: before.authorizedPersonIds ?? [], memoryIds: [id],
-          policyKey: memoryPolicyKey(before), outcome: failure ? errorOutcome(failure.error) : 'applied', at: new Date() });
+        const outcome: AuditOutcome = failure ? errorOutcome(failure.error) : 'applied';
+        const at = new Date();
+        for (const memoryIds of chunkIds(failure ? [id] : forgottenIds(id, removed))) {
+          await append({ kind: 'delete', personaId: before.personaId, audiencePersonIds: before.authorizedPersonIds ?? [], memoryIds,
+            policyKey: memoryPolicyKey(before), outcome, at });
+        }
       }
       if (failure) throw failure.error;
       await eraseNotices(removed);
@@ -195,19 +247,21 @@ export function auditMemoryStore(inner: MemoryStore, audit: AuditStore, notices?
  * closure (the ids the store reports removed) is erased, best effort.
  * Every other method is the inner store's own.
  */
-export function noticeErasingMemoryStore(inner: MemoryStore, notices: SupersededNoticeEraser): MemoryStore {
+export function noticeErasingMemoryStore(inner: MemoryStore, notices: SupersededNoticeEraser, options: AuditDecoratorOptions = {}): MemoryStore {
+  const log = options.log ?? console;
   const wrapped: Pick<MemoryStore, 'delete'> = {
     async delete(...args: Parameters<MemoryStore['delete']>) {
       const removed = await inner.delete(...args);
-      await bestEffort(() => notices.deleteByMemoryIds(forgottenIds(args[0], removed)));
+      await bestEffort(() => notices.deleteByMemoryIds(forgottenIds(args[0], removed)), 'notice_erasure_failed', log);
       return removed;
     },
   };
   return proxy(inner, wrapped);
 }
 
-export function auditShareOfferStore(inner: ShareOfferStore, audit: AuditStore): ShareOfferStore {
+export function auditShareOfferStore(inner: ShareOfferStore, audit: AuditStore, options: AuditDecoratorOptions = {}): ShareOfferStore {
   const target = inner;
+  const log = options.log ?? console;
   const offerRow = (offer: Pick<ShareOffer, 'personaId' | 'memoryId' | 'ownerPersonId' | 'proposedAudiencePersonIds'>, outcome: AuditOutcome): NewAuditRow => ({
     kind: 'share_offer',
     personaId: offer.personaId,
@@ -221,7 +275,7 @@ export function auditShareOfferStore(inner: ShareOfferStore, audit: AuditStore):
     async create(...args: Parameters<ShareOfferStore['create']>) {
       if (!tirehFlags().auditLog) return target.create(...args);
       const offer = await target.create(...args);
-      await bestEffort(() => audit.append(offerRow(offer, 'applied')));
+      await bestEffort(() => audit.append(offerRow(offer, 'applied')), 'audit_append_failed', log);
       return offer;
     },
     async setStatus(...args: Parameters<ShareOfferStore['setStatus']>) {
@@ -231,7 +285,7 @@ export function auditShareOfferStore(inner: ShareOfferStore, audit: AuditStore):
       let offer: ShareOffer | null = null;
       try { offer = await target.get(id); } catch { offer = null; }
       await target.setStatus(...args);
-      if (offer) await bestEffort(() => audit.append(offerRow(offer!, 'denied')));
+      if (offer) await bestEffort(() => audit.append(offerRow(offer!, 'denied')), 'audit_append_failed', log);
     },
   };
   return proxy(inner, wrapped);
