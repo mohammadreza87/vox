@@ -193,3 +193,8 @@ Planning estimates to be replaced by AM-02 measurements. Assume 100 messages per
 - [Indexed private memory](../implementation/INDEXED_STORAGE.md), the existing service store the external fields map onto
 - [Privacy and consent](../implementation/PRIVACY_AND_CONSENT.md), retention schedule and deletion orchestration
 - [Event memory and prediction plan](../implementation/EVENT_MEMORY_PREDICTION_PLAN.md)
+
+
+## Assistant-delivery control extension (ARC1)
+
+The separately reviewed [ARC1 contract](AGENT_MEMORY_ASSISTANT_RUNTIME_CONTROL.md) adds an unwired original-FILE prerequisite. Outside Telegram it stores strict delivery identity/authority snapshots, keyed evidence digests, minimized outbound receipts and outcome state under a 7-day detail lifetime with expiry-gated use and lifecycle pruning; per-stream route/message floors and an account original-source-time barrier prevent replay after detail removal. These are personal/control data. Four streams, 32 detailed effects and a 160 KiB canonical reservation are engineering limits, not new permission to capture production conversations. Selected-space export, immediate detail erasure with replay fences, and lifecycle pruning are required. The permanent content-free format marker contains only a version and format kind. No assistant text, provider response body, secret, generated text or submitted wire bytes may be persisted by this extension. See the contract for the complete field inventory, relationship-life floor policy, fresh account bootstrap, actual FILE qualification and old-reader refusal. Production purpose/notice/retention and authenticated producer activation remain separate gates.

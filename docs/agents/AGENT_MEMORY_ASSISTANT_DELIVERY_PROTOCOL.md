@@ -115,3 +115,7 @@ Lead/root may approve routine protocol/product choices; independent Sol privacy/
 The implemented pure module has no production consumer. Independent fixed local execution passed 193 tests across the new protected ADP1 fixture and existing Telegram client suite, with exact source/dependency hashes unchanged. TypeScript, scoped lint, Studio style, plan links and diff checks passed. Python 3.9 could not parse the unchanged agent TOML definitions; this remains unavailable rather than a pass. The single test process reported 1.16 seconds total; that is test-harness duration, not conversation or provider latency. All provider responses were injected; no external sends or paid model calls occurred.
 
 Independent final acceptance, hosted CI, merge and guarded deployment are separate receipts. This does not repair current gateway/history delivery provenance, qualify durable restart behavior, increase memory horizons or enable capture. The next implementation needs the finite control-retention, replay-cutoff, source invalidation and reader-admission contract listed above.
+
+## Narrow follow-on consumer
+
+The independently reviewed [ARC1 contract](AGENT_MEMORY_ASSISTANT_RUNTIME_CONTROL.md) supersedes this prerequisite's no-consumer restriction only for its explicitly unwired canonical FILE control adapter/schema. ADP1 semantics are unchanged. This does not authorize a gateway, history, voice, archive or live transport consumer; those integrations require their own qualified contract and release evidence.

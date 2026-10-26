@@ -1,0 +1,16 @@
+{
+  "base": "803bfdd455afc7120bc7d10c29d3db6272666f63",
+  "purpose": "QA-owned unmodified actual prior scanner/runtime oracle; not candidate implementation",
+  "files": {
+    "studio-adaptive-compatibility.mjs": {
+      "source": "scripts/studio-adaptive-compatibility.mjs",
+      "sha256": "f7ceb0ee56b02e4d13654a157fa0fc7867f4d936dc544c3135cb809638b28982",
+      "bytes": 71897
+    },
+    "repository.ts.fixture": {
+      "source": "src/lib/adaptive/persistence/repository.ts",
+      "sha256": "fbd83c3b1c454a2549d2a571b1bf6cd5a05ecf7ffe6ecc7d46b7c04d37b48101",
+      "bytes": 22541
+    }
+  }
+}

@@ -1,6 +1,8 @@
 /** Separate account documents; never shares the administrator-readable Studio state. */
 import { createHash, randomUUID } from 'crypto';
-import { promises as fs, existsSync, readFileSync, renameSync } from 'fs';
+import { promises as fs, existsSync, readFileSync, renameSync, constants, openSync, closeSync, fstatSync, lstatSync } from 'fs';
+import { assertAssistantDeliveryTransition, parseAssistantDeliveryControl } from '../assistant-delivery-control';
+import type { AdaptiveDocument } from './repository';
 import { join } from 'path';
 import type { Firestore } from 'firebase-admin/firestore';
 import { FieldPath } from 'firebase-admin/firestore';
@@ -89,10 +91,33 @@ function encode(document: unknown): string {
  * an operator must inspect/remove it after verifying no writer still owns it. */
 export class FileAdaptiveStorage implements AdaptiveStorage {
   readonly supportsCommittedWriteFence = true as const;
+  private readonly assistantWriters = new WeakSet<object>();
   /** Revision bus also advances when a committed file changed in another writer. */
   readonly revisions = new RevisionCounter('file-adaptive');
   private readonly committedDigests = new Map<string, string>();
   constructor(readonly directory: string) {}
+  static readonly assistantControlMarker = 'assistant-delivery-control-v1.json';
+  static readonly assistantControlMarkerBytes = '{"version":1,"kind":"assistant-delivery-control"}\n';
+  assertAssistantDeliveryControlMarker(): void {
+    const directory=lstatSync(this.directory);
+    if(!directory.isDirectory()||directory.isSymbolicLink())throw new Error('Assistant control format unavailable');
+    const path=join(this.directory,FileAdaptiveStorage.assistantControlMarker), before=lstatSync(path);
+    if(!before.isFile()||before.isSymbolicLink()||before.nlink!==1||before.size>128)throw new Error('Assistant control format unavailable');
+    const fd=openSync(path,constants.O_RDONLY|constants.O_NOFOLLOW);
+    try {const stat=fstatSync(fd);if(!stat.isFile()||stat.nlink!==1||stat.ino!==before.ino||stat.dev!==before.dev||stat.size>128||readFileSync(fd,'utf8')!==FileAdaptiveStorage.assistantControlMarkerBytes)throw new Error('Assistant control format unavailable');}
+    finally{closeSync(fd);}
+  }
+  async ensureAssistantDeliveryControlMarker(): Promise<void> {
+    await fs.mkdir(this.directory,{recursive:true,mode:0o700});
+    const directory=await fs.lstat(this.directory);if(!directory.isDirectory()||directory.isSymbolicLink())throw new Error('Assistant control format unavailable');
+    let file;
+    try {file=await fs.open(join(this.directory,FileAdaptiveStorage.assistantControlMarker),'wx',0o600);}
+    catch(error){if((error as NodeJS.ErrnoException).code!=='EEXIST')throw error;this.assertAssistantDeliveryControlMarker();}
+    if(file){try{await file.writeFile(FileAdaptiveStorage.assistantControlMarkerBytes);await file.sync();}finally{await file.close();}}
+    else{const existing=await fs.open(join(this.directory,FileAdaptiveStorage.assistantControlMarker),constants.O_RDONLY|constants.O_NOFOLLOW);try{await existing.sync();}finally{await existing.close();}}
+    const handle=await fs.open(this.directory,'r');try{await handle.sync();}finally{await handle.close();}
+    this.assertAssistantDeliveryControlMarker();
+  }
   private committedRevision(accountId: string): number {
     const file = join(this.directory, `${key(accountId)}.json`);
     if (existsSync(`${file}.lock`)) throw new CommittedReadBusy();
@@ -113,8 +138,13 @@ export class FileAdaptiveStorage implements AdaptiveStorage {
   readCommittedForEffect(accountId: string): { status: 'ready'; document: unknown | null } | { status: 'busy' } {
     const file = join(this.directory, `${key(accountId)}.json`);
     if (existsSync(`${file}.lock`)) return { status: 'busy' };
-    try { return { status: 'ready', document: JSON.parse(readFileSync(file, 'utf8')) }; }
-    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { status: 'ready', document: null }; throw error; }
+    let raw:string;
+    try { raw=readFileSync(file,'utf8'); }
+    catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return {status:'ready',document:null};throw error;}
+    const document=JSON.parse(raw);
+    if(document?.assistantDeliveryControl!==undefined){try{this.assertAssistantDeliveryControlMarker();}catch{throw new Error('Assistant control format unavailable');}}
+    if(existsSync(`${file}.lock`))return {status:'busy'};
+    return {status:'ready',document};
   }
   async listAccounts(input: AdaptiveAccountPageInput): Promise<AdaptiveAccountPage> {
     pageInput(input);
@@ -137,6 +167,10 @@ export class FileAdaptiveStorage implements AdaptiveStorage {
     }
     return { accountIds, ...(keys.length > input.limit ? { next: chosen.at(-1)! } : {}) };
   }
+  /** Internal ARC adapter mutation seam; ordinary canonical writers cannot mint effects. */
+  async transactAssistantDeliveryControl<T>(accountId:string,mutate:(current:unknown|null)=>{document:unknown;result:T},beforeCommit?:()=>void):Promise<T>{
+    this.assistantWriters.add(mutate);try{return await this.transact(accountId,mutate,beforeCommit);}finally{this.assistantWriters.delete(mutate);}
+  }
   async transact<T>(accountId: string, mutate: (current: unknown | null) => { document: unknown; result: T }, beforeCommit?: () => void): Promise<T> {
     await fs.mkdir(this.directory, { recursive: true, mode: 0o700 });
     const file = join(this.directory, `${key(accountId)}.json`);
@@ -158,7 +192,11 @@ export class FileAdaptiveStorage implements AdaptiveStorage {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
         current = null;
       }
+      const before=current===null?undefined:structuredClone(current) as AdaptiveDocument;
       const { document, result } = mutate(current);
+      if(before?.assistantDeliveryControl || (document as AdaptiveDocument)?.assistantDeliveryControl)this.assertAssistantDeliveryControlMarker();
+      if((document as AdaptiveDocument)?.assistantDeliveryControl!==undefined){const d=document as AdaptiveDocument;if(d.schemaVersion!==1)throw new Error('Assistant control format unavailable');parseAssistantDeliveryControl(d.assistantDeliveryControl,accountId,d.personId,d.updatedAt);}
+      assertAssistantDeliveryTransition(before,document as AdaptiveDocument,this.assistantWriters.has(mutate));
       const json = encode(document);
       const handle = await fs.open(temporary, 'wx', 0o600);
       try { await handle.writeFile(json); await handle.sync(); } finally { await handle.close(); }

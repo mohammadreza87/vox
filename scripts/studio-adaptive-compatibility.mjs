@@ -20,6 +20,7 @@ export const ADAPTIVE_RELEASE_CAPABILITIES = Object.freeze({
   supportedSelfServiceMcpSchemas: Object.freeze([1]),
   supportedReplyUseSchemas: Object.freeze([1]),
   supportedProviderTemplateSchemas: Object.freeze([1]),
+  supportedAssistantDeliveryControlVersions: Object.freeze([1]),
   supportedTelegramArchiveSchemas: Object.freeze([1]),
   supportedTelegramArchiveSourceSuppressionVersions: Object.freeze([1]),
   supportedTelegramArchiveSnapshotPublicationVersions: Object.freeze([1]),
@@ -396,9 +397,70 @@ function scanArchivePublication(row, doc, required) {
     if (row.state && row.state.botId !== r.botId) fail();
   }
 }
+const ARC_MARKER = 'assistant-delivery-control-v1.json';
+const ARC_MARKER_BYTES = '{"version":1,"kind":"assistant-delivery-control"}\n';
+const arcNumber = n => integer(n) && !Object.is(n, -0);
+const arcPositive = n => arcNumber(n) && n > 0;
+const arcId = s => typeof s === 'string' && /^[A-Za-z0-9:_-]{1,128}(?![\s\S])/.test(s);
+const arcHash = s => typeof s === 'string' && /^[a-f0-9]{64}(?![\s\S])/.test(s);
+const arcUuid = s => typeof s === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}(?![\s\S])/.test(s);
+const arcBytes = value => Buffer.byteLength(JSON.stringify(value));
+function scanAssistantControl(doc, required) {
+  if (!Object.hasOwn(doc, 'assistantDeliveryControl')) return;
+  if (doc.schemaVersion !== 1 || required.assistantDeliveryControlVersion !== 1) fail();
+  const c = doc.assistantDeliveryControl;
+  if (!keys(c, ['version','policyVersion','revision','observedAt','noReplayBefore','sourceFenceSequence','historyEpoch','deletionEpoch','streams','effects']) || c.version !== 1 || c.policyVersion !== 'arc1-control-7d-v1' ||
+      !['revision','observedAt','noReplayBefore','sourceFenceSequence','historyEpoch','deletionEpoch'].every(k => arcNumber(c[k])) || c.noReplayBefore > c.observedAt || c.observedAt > doc.updatedAt ||
+      !Array.isArray(c.streams) || c.streams.length > 4 || !Array.isArray(c.effects) || c.effects.length > 32 || arcBytes({assistantDeliveryControl:c}) > 163840) fail();
+  const streamKeys = new Set(), effectKeys = new Set();
+  for (const t of c.streams) {
+    const streamKey = `${t?.botId}:${t?.destinationChatId}`;
+    if (!keys(t,['botId','destinationChatId','agentId','space','containerId','messageFloor','highMessageId','lastAcceptedAt']) || !arcPositive(t.botId) || !arcPositive(t.destinationChatId) ||
+        doc.accountId !== `telegram-account:${t.destinationChatId}` || !arcId(t.agentId) || !['work','personal'].includes(t.space) ||
+        t.containerId !== `private-tenant:${hashValue(doc.accountId).slice(0,24)}:${t.space}:private` || !arcNumber(t.messageFloor) || !arcNumber(t.highMessageId) || t.messageFloor > t.highMessageId ||
+        !arcNumber(t.lastAcceptedAt) || t.lastAcceptedAt > c.observedAt || streamKeys.has(streamKey)) fail();
+    streamKeys.add(streamKey);
+  }
+  for (const row of c.effects) {
+    if (!keys(row,['state','retainUntil']) || !arcNumber(row.retainUntil)) fail();
+    const s = row.state;
+    if (!object(s) || !keys(s,['schemaVersion','kind','effectKey','scope','binding','source','authority','generationId','attemptId','evidence','createdAt','lastTransitionAt','expiresAt','revision','phase','contentEligible',
+        ...(Object.hasOwn(s,'invalidatedAtFenceSequence')?['invalidatedAtFenceSequence']:[]),...(Object.hasOwn(s,'outcome')?['outcome']:[])]) || s.schemaVersion !== 1 || s.kind !== 'assistant-text-delivery' ||
+        !arcUuid(s.generationId) || !arcUuid(s.attemptId) || !['generated','sending','sent','failed','cancelled','unknown'].includes(s.phase) || typeof s.contentEligible !== 'boolean' ||
+        !['createdAt','lastTransitionAt','expiresAt','revision'].every(k=>arcNumber(s[k])) || s.createdAt > s.lastTransitionAt || s.lastTransitionAt > c.observedAt || s.expiresAt <= s.createdAt || s.expiresAt-s.createdAt>60000 ||
+        row.retainUntil !== s.createdAt+7*86400_000 || !Number.isSafeInteger(s.createdAt+7*86400_000) || arcBytes(s)>4096) fail();
+    const scope=s.scope,b=s.binding,source=s.source,a=s.authority,e=s.evidence;
+    if (!keys(scope,['accountId','personId','agentId','space','containerId','kind']) || !Object.values(scope).every(arcId) || scope.kind!=='private' || scope.accountId!==doc.accountId || scope.personId!==doc.personId ||
+        !keys(b,['botId','destinationChatId','endpointBindingId','credentialBindingId','bindingRevision']) || !arcPositive(b.botId) || !arcPositive(b.destinationChatId) || ![b.endpointBindingId,b.credentialBindingId,b.bindingRevision].every(arcId) ||
+        !keys(source,['messageId','updateId','revision','occurredAt','acceptedAt']) || !Object.values(source).every(arcNumber) || !arcPositive(source.messageId) || source.revision!==0 || source.occurredAt>source.acceptedAt || source.acceptedAt>s.createdAt ||
+        !keys(a,['authorityRevision','grantRevision','sourceFenceRevision','sourceFenceSequence','historyEpoch','deletionEpoch','expiresAt']) || ![a.authorityRevision,a.grantRevision,a.sourceFenceRevision].every(arcId) ||
+        ![a.sourceFenceSequence,a.historyEpoch,a.deletionEpoch,a.expiresAt].every(arcNumber) || s.expiresAt>a.expiresAt ||
+        !keys(e,['keyId','generatedHmac','generatedUtf16Length','submittedTextHmac','submittedUtf16Length','bodyHmac','bodyBytes']) || !arcId(e.keyId) || ![e.generatedHmac,e.submittedTextHmac,e.bodyHmac].every(arcHash) ||
+        !arcPositive(e.generatedUtf16Length) || e.generatedUtf16Length>65536 || !arcPositive(e.submittedUtf16Length) || e.submittedUtf16Length>4096 || !arcPositive(e.bodyBytes) || e.bodyBytes>32768) fail();
+    const stream=c.streams.find(t=>t.botId===b.botId&&t.destinationChatId===b.destinationChatId);
+    if (!stream || stream.agentId!==scope.agentId || stream.space!==scope.space || stream.containerId!==scope.containerId ||
+        s.effectKey!==JSON.stringify(['adp1','telegram',b.botId,b.destinationChatId,source.messageId,'initial','primary-text']) || effectKeys.has(s.effectKey)) fail();
+    effectKeys.add(s.effectKey);
+    if (s.contentEligible && (source.messageId<=stream.messageFloor || source.occurredAt<=c.noReplayBefore || a.sourceFenceSequence!==c.sourceFenceSequence || a.historyEpoch!==c.historyEpoch || a.deletionEpoch!==c.deletionEpoch)) fail();
+    if (Object.hasOwn(s,'invalidatedAtFenceSequence') && (!arcNumber(s.invalidatedAtFenceSequence) || s.invalidatedAtFenceSequence<=a.sourceFenceSequence || s.contentEligible)) fail();
+    const o=s.outcome;
+    if (['generated','sending'].includes(s.phase)) {if (o!==undefined || s.revision!==(s.phase==='generated'?0:1)) fail();}
+    else {
+      if (!object(o)||!arcNumber(o.observedAt)||o.observedAt>s.lastTransitionAt||o.observedAt<s.createdAt||s.revision<(['sent','unknown'].includes(s.phase)?2:1))fail();
+      if(s.phase==='sent'){
+        const r=o.receipt;
+        if(!keys(o,['reason','observedAt','receipt'])||o.reason!=='provider_accepted'||!keys(r,['messageId','botId','destinationChatId','providerDateSeconds','textEvidence'])||
+          !arcPositive(r.messageId)||r.botId!==b.botId||r.destinationChatId!==b.destinationChatId||!arcNumber(r.providerDateSeconds)||!Number.isSafeInteger(r.providerDateSeconds*1000)||!['matches-submitted','different','unavailable'].includes(r.textEvidence))fail();
+      }else if(!keys(o,['reason','observedAt']) || !(s.phase==='failed'?['pre_dispatch_failure']:s.phase==='cancelled'?['pre_dispatch_denied']:['dispatch_interrupted','transport_error','http_or_provider_rejection','invalid_response','invalid_receipt','receipt_commit_unconfirmed']).includes(o.reason))fail();
+    }
+  }
+  const payload={...doc};delete payload.assistantDeliveryControl;
+  if (arcBytes({...payload,revision:Number.MAX_SAFE_INTEGER,updatedAt:Number.MAX_SAFE_INTEGER})+163839>700000)fail();
+}
 function scanCanonical(doc, key, version, required) {
   if (!object(doc) || doc.schemaVersion !== version || !account(doc.accountId) || hash(doc.accountId) !== key ||
       doc.personId !== `account-profile:${hashValue(doc.accountId).slice(0, 32)}` || !positive(doc.revision) || !integer(doc.createdAt) || !integer(doc.updatedAt) || doc.updatedAt < doc.createdAt) fail();
+  scanAssistantControl(doc,required);
   scanObserver(doc.observer, required, version);
   // Even an empty optional extension is rejected by older strict readers.
   // Full archive/source authority validation remains the runtime's responsibility.
@@ -467,7 +529,9 @@ function scanSqlite(path, marker, required, budget) {
 function scanAdaptive(env, required, budget) {
   const root = join(env.STUDIO_DATA_DIR, 'adaptive'), format = env.STUDIO_ADAPTIVE_FORMAT?.trim() || 'file';
   if (format === 'file') {
-    for (const name of entries(root)) { if (!/^[a-f0-9]{64}\.json$/.test(name)) fail(); scanCanonical(readPlainJson(join(root, name), MAX_ACCOUNT_BYTES, budget), name.slice(0, -5), 1, required); }
+    const names=entries(root);
+    if(names.includes(ARC_MARKER)){if(readBounded(join(root,ARC_MARKER),128,budget)!==ARC_MARKER_BYTES)fail();required.assistantDeliveryControlVersion=1;}
+    for(const name of names){if(name===ARC_MARKER)continue;if(!/^[a-f0-9]{64}\.json$/.test(name))fail();scanCanonical(readPlainJson(join(root,name),MAX_ACCOUNT_BYTES,budget),name.slice(0,-5),1,required);}
     return;
   }
   const managed = `${resolve(root)}.managed`, marker = readPlainJson(join(managed, 'format.json'));
@@ -782,6 +846,7 @@ export function assertReleaseAdaptiveCompatibility(env, manifest) {
     // Fail closed: a release that does not declare these cannot admit reply rows or template connections.
     ['supportedReplyUseSchemas', 'replyUseSchema', [1]],
     ['supportedProviderTemplateSchemas', 'providerTemplateSchema', [1]],
+    ['supportedAssistantDeliveryControlVersions', 'assistantDeliveryControlVersion', [1]],
     ['supportedTelegramArchiveSchemas', 'telegramArchiveSchema', [1]],
     ['supportedTelegramArchiveSourceSuppressionVersions', 'telegramArchiveSourceSuppressionVersion', [1]],
     ['supportedTelegramArchiveSnapshotPublicationVersions', 'telegramArchiveSnapshotPublicationVersion', [1]],

@@ -912,3 +912,100 @@ test('grant admission rejects malformed, misplaced or linked grant records', () 
   const outside = join(f.dir, 'outside-grant.json'); writeFileSync(outside, readFileSync(file)); rmSync(file); symlinkSync(outside, file);
   assert.throws(() => assertReleaseAdaptiveCompatibility(f.env, ADAPTIVE_RELEASE_CAPABILITIES), /incompatible/);
 }));
+
+
+// ARC1 independent protected reader qualification. Frozen unmodified actual
+// baseline803 scanner, not a simulated current scanner with omitted capability.
+const ARC_PREVIOUS_SCANNER_SHA = 'f7ceb0ee56b02e4d13654a157fa0fc7867f4d936dc544c3135cb809638b28982';
+let arcPreviousScanner;
+async function previousArcScanner() {
+  if (!arcPreviousScanner) {
+    const bytes = readFileSync(new URL('./fixtures/assistant-delivery-control-prior-reader/studio-adaptive-compatibility.mjs', import.meta.url));
+    assert.equal(createHash('sha256').update(bytes).digest('hex'), ARC_PREVIOUS_SCANNER_SHA);
+    arcPreviousScanner = await import('./fixtures/assistant-delivery-control-prior-reader/studio-adaptive-compatibility.mjs');
+  }
+  return arcPreviousScanner;
+}
+const ARC_MARKER_NAME = 'assistant-delivery-control-v1.json';
+const ARC_MARKER_BYTES = '{"version":1,"kind":"assistant-delivery-control"}\n';
+const arcEmpty = () => ({ version: 1, policyVersion: 'arc1-control-7d-v1', revision: 0,
+  observedAt: 100, noReplayBefore: 100, sourceFenceSequence: 0, historyEpoch: 0, deletionEpoch: 0, streams: [], effects: [] });
+function arcMarker(f, bytes = ARC_MARKER_BYTES) {
+  const directory = join(f.env.STUDIO_DATA_DIR, 'adaptive'); mkdirSync(directory, { recursive: true });
+  const path = join(directory, ARC_MARKER_NAME); writeFileSync(path, bytes, { mode: 0o600 }); return path;
+}
+
+test('ARC1 actual baseline803 scanner refuses permanent marker before any personal control exists', async () => {
+  const prior = await previousArcScanner();
+  fixture(f => {
+    legacy(f); mkdirSync(join(f.env.STUDIO_DATA_DIR, 'adaptive'), { recursive: true });
+    assert.doesNotThrow(() => prior.assertReleaseAdaptiveCompatibility(f.env, prior.ADAPTIVE_RELEASE_CAPABILITIES));
+    const marker = arcMarker(f), before = readFileSync(marker);
+    assert.throws(() => prior.assertReleaseAdaptiveCompatibility(f.env, prior.ADAPTIVE_RELEASE_CAPABILITIES), /incompatible/);
+    assert.equal(requiredAdaptiveCapabilities(f.env).assistantDeliveryControlVersion, 1);
+    const { supportedAssistantDeliveryControlVersions, ...old } = ADAPTIVE_RELEASE_CAPABILITIES;
+    assert.deepEqual(supportedAssistantDeliveryControlVersions, [1]);
+    assert.throws(() => assertReleaseAdaptiveCompatibility(f.env, old), /incompatible/);
+    assert.equal(assertReleaseAdaptiveCompatibility(f.env, ADAPTIVE_RELEASE_CAPABILITIES).assistantDeliveryControlVersion, 1);
+    assert.deepEqual(readFileSync(marker), before);
+  });
+});
+
+test('ARC1 actual baseline803 scanner ignores extension alone but rejects exact marker with populated controls', async () => {
+  const prior = await previousArcScanner();
+  fixture(f => {
+    legacy(f); const doc = { ...document(), assistantDeliveryControl: arcEmpty() }; putCanonical(f, doc);
+    // This retained diagnostic proves why capability omission in the new scanner
+    // alone cannot establish safe admission by an already installed old release.
+    assert.doesNotThrow(() => prior.assertReleaseAdaptiveCompatibility(f.env, prior.ADAPTIVE_RELEASE_CAPABILITIES));
+    assert.throws(() => requiredAdaptiveCapabilities(f.env), /incompatible/);
+    arcMarker(f); const path = join(f.env.STUDIO_DATA_DIR, 'adaptive', `${accountKey}.json`), before = readFileSync(path);
+    assert.throws(() => prior.assertReleaseAdaptiveCompatibility(f.env, prior.ADAPTIVE_RELEASE_CAPABILITIES), /incompatible/);
+    assert.equal(assertReleaseAdaptiveCompatibility(f.env, ADAPTIVE_RELEASE_CAPABILITIES).assistantDeliveryControlVersion, 1);
+    assert.deepEqual(readFileSync(path), before);
+  });
+});
+
+test('ARC1 malformed marker bytes, newer versions and unexpected marker data fail closed even without accounts', () => fixture(f => {
+  legacy(f);
+  for (const bytes of ['', '{}', ARC_MARKER_BYTES.trimEnd(), ARC_MARKER_BYTES + '\n',
+    '{"version":2,"kind":"assistant-delivery-control"}\n',
+    '{"kind":"assistant-delivery-control","version":1}\n',
+    '{"version":1,"kind":"assistant-delivery-control","secret":"forbidden"}\n']) {
+    arcMarker(f, bytes); assert.throws(() => requiredAdaptiveCapabilities(f.env), /incompatible/);
+  }
+}));
+
+test('ARC1 marker symlink and hardlink cannot establish compatible storage', () => fixture(f => {
+  legacy(f); const marker = arcMarker(f), target = join(f.dir, 'qa-marker-target');
+  writeFileSync(target, ARC_MARKER_BYTES, { mode: 0o600 }); rmSync(marker); symlinkSync(target, marker);
+  assert.throws(() => requiredAdaptiveCapabilities(f.env), /incompatible/); rmSync(marker); linkSync(target, marker);
+  assert.throws(() => requiredAdaptiveCapabilities(f.env), /incompatible/);
+}));
+
+test('ARC1 empty and safety-only controls require reader while flags off; malformed controls never disappear', () => fixture(f => {
+  legacy(f); arcMarker(f); f.env.STUDIO_TELEGRAM_ARCHIVE = '0'; f.env.STUDIO_TELEGRAM_ARCHIVE_SNAPSHOTS = '0';
+  const { supportedAssistantDeliveryControlVersions: omitted, ...priorCapabilities } = ADAPTIVE_RELEASE_CAPABILITIES;
+  assert.deepEqual(omitted, [1]);
+  for (const value of [arcEmpty(), { ...arcEmpty(), revision: 8, observedAt: 900, noReplayBefore: 800,
+    sourceFenceSequence: 7, historyEpoch: 2, deletionEpoch: 2 }]) {
+    putCanonical(f, { ...document(), updatedAt: value.observedAt, assistantDeliveryControl: value });
+    assert.equal(requiredAdaptiveCapabilities(f.env).assistantDeliveryControlVersion, 1);
+    assert.throws(() => assertReleaseAdaptiveCompatibility(f.env, priorCapabilities), /incompatible/);
+  }
+  for (const value of [null, [], { ...arcEmpty(), version: 2 }, { ...arcEmpty(), policyVersion: 'unreviewed' },
+    { ...arcEmpty(), noReplayBefore: 101 }, { ...arcEmpty(), observedAt: -1 },
+    { ...arcEmpty(), payload: 'QA_FORBIDDEN_CONTENT' }, { ...arcEmpty(), effects: [{}] },
+    { ...arcEmpty(), sourceFenceSequence: Number.MAX_SAFE_INTEGER + 1 }]) {
+    putCanonical(f, { ...document(), assistantDeliveryControl: value });
+    assert.throws(() => requiredAdaptiveCapabilities(f.env), /incompatible/);
+  }
+}));
+
+test('ARC1 unsupported reader capability values cannot bypass marker or canonical requirements', () => fixture(f => {
+  legacy(f); arcMarker(f); putCanonical(f, { ...document(), assistantDeliveryControl: arcEmpty() });
+  for (const value of [null, [], [0], [2], [1, 1], [1, 2], '1', true]) {
+    assert.throws(() => assertReleaseAdaptiveCompatibility(f.env, { ...ADAPTIVE_RELEASE_CAPABILITIES,
+      supportedAssistantDeliveryControlVersions: value }), /incompatible/);
+  }
+}));
