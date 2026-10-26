@@ -22,11 +22,38 @@ Base commit: `6d00b8066e5d8e8d444bb47d978aa571e20929df` (origin/develop at the m
 > - New compat tests run in the default jsdom environment with `dangerouslyAllowBrowser`,
 >   because `src/test/setup.ts` needs `window` and cannot load under a per-file node environment.
 >
-> **Integration onto main (2026-10-25).** The r2 age rule picked 7.34.0 on 22 Oct, but main
-> already deploys openai `^7.39.0` (lock 7.39.0). The wave A merge keeps main's
-> `package.json` and `package-lock.json` unchanged, so the installed SDK stays 7.39.0;
-> a downgrade would change main's deployed behaviour. The provider code and compat tests
-> hold on both versions (they require 7.x >= 7.30.0).
+> **Integration onto main (2026-10-25/26).** This block describes the merged code on
+> `agent-intelligence-wave-a-main`; where it differs from the body below, it wins.
+> - SDK: the r2 age rule picked 7.34.0 on 22 Oct, but main already deploys openai `^7.39.0`
+>   (lock 7.39.0). The merge keeps main's `package.json` dependencies and `package-lock.json`,
+>   so the installed SDK stays 7.39.0; a downgrade would change main's deployed behaviour. The
+>   provider code and compat tests hold on both versions (they require 7.x >= 7.30.0).
+>   `package.json` now has `"engines": { "node": "22" }` (H8): openai 7.x requires Node 22, and
+>   firebase-tools 15.34.0 derives the SSR function runtime from it (`nodejs22`; a range such as
+>   `>=22` is rejected). The "package.json engines ... Firebase runtime config" exclusion under
+>   Out of scope no longer holds; see the deploy notes in `docs/VOX_STUDIO.md`.
+> - `timeout(ms)`: finite `ms >= 1` gives `min(5000, floor(ms))`, otherwise 500 (so 0 gives 500,
+>   not 1). `DecisionService` always passes its effective deadline, which is at least 1.
+> - `decisions.create` is detected inline in `evaluate()` (a `decisions` object with a callable
+>   `create`, called as a method); there is no `typedCreate` helper and no `requestTimeoutMs`.
+> - The Gemini test file is `src/lib/tireh/__tests__/llm-gemini-deprecation.test.ts`.
+> - `structuralTimeouts(provider)` (exported from `adaptive/decisions/index.ts`, H3): wraps a
+>   provider so a provider-side timeout (the SDK's `APIConnectionTimeoutError` by constructor
+>   name, `TimeoutError`, `ETIMEDOUT`, `UND_ERR_*TIMEOUT`, a "timed out" message) rejects as an
+>   `Error` named `APIConnectionTimeoutError` without the provider's message, so
+>   `DecisionService` reports reason `timeout` instead of `provider_error` (F030). Other errors
+>   pass through, `committedExportFence` is forwarded, and no `instanceof` is used (route bundles
+>   carry their own SDK copies). Only the S09 triage wiring (`STUDIO_DECIDER=service`) uses it;
+>   `DecisionService` itself and the flags-unset `STUDIO_DECISIONS_ENABLED` path are unchanged.
+> - `safety_identifier` option (H3): `DecisionProviderOptions.safetyIdentifier?` and
+>   `DecisionContext.safetyIdentifier?`. The provider adds `safety_identifier` to the body only
+>   when one is given and it matches `^[A-Za-z0-9_-]{1,64}$`; otherwise the body is byte-identical.
+>   Only `ServiceDecider` passes one, built from `DECISIONS_SAFETY_ID_SALT` (`vox_` plus 32 hex
+>   characters of a salted SHA-256 of `DeciderAuthority.subject`) and only when the caller names a
+>   subject. That `/v1/decisions` accepts `safety_identifier` is unverified: confirm it against
+>   the API before setting the salt.
+> - Provider-boundary `input_audio` rejection is asserted directly on every transport with zero
+>   fetches (section 8 of `openai-compat.test.ts`, H3).
 
 ## Goal
 

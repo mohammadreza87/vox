@@ -45,6 +45,20 @@ at least 1 ms. Mocked-fetch tests
 (`decisions.test.ts`, `transport-fence.test.ts`, `openai-compat.test.ts`) verify the URL,
 body, signal, error names and the authority fence on both paths without network or
 credentials.
+`structuralTimeouts(provider)` wraps a provider so that a provider-side timeout (the
+SDK's `APIConnectionTimeoutError`, recognised by constructor name, a `TimeoutError`,
+`ETIMEDOUT`, `UND_ERR_*TIMEOUT` or a "timed out" message) rejects as an `Error` named
+`APIConnectionTimeoutError` without the provider's message, so `DecisionService`
+reports `timeout` rather than `provider_error`. The check is structural (no
+`instanceof`, because route bundles carry their own SDK class copies); other errors
+pass through and `committedExportFence` is forwarded. Only the Studio triage wiring
+behind `STUDIO_DECIDER=service` uses it; `DecisionService` is unchanged.
+`DecisionContext.safetyIdentifier` and `DecisionProviderOptions.safetyIdentifier` carry
+an opaque, already-hashed end-user id; the provider adds `safety_identifier` to the
+body only when one is given and it matches `^[A-Za-z0-9_-]{1,64}$`, so without it the
+body is byte-identical. Studio sends one only under `STUDIO_DECIDER=service`, only with
+a configured `DECISIONS_SAFETY_ID_SALT` and only when the caller names a subject.
+Confirm that `/v1/decisions` accepts `safety_identifier` before configuring the salt.
 `prompt_cache_options: { mode: 'explicit' }` with no breakpoints requests no prompt
 caching. This is not a provider retention or regional processing guarantee.
 

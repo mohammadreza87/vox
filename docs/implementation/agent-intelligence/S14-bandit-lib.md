@@ -161,6 +161,30 @@ None. The shared contract says S14 is not wired and has no flag, so `src/lib/tir
 - eslint is clean on the new files.
 - Every row passes its strict schema and holds no free text, message content, raw personId or model output.
 
+## Integration onto main (2026-10-25/26)
+
+Main had merged an earlier, different run of this spec; wave A's implementation (`aiq/bandit-lib`, merged as `7127eba`
+onto `agent-intelligence-wave-a-main`) was chosen (`WAVE_A_ON_MAIN.md` section 2) and then hardened. This section
+describes the merged code; where it differs from the sections above, it wins. The library is still not wired.
+
+- **Second `authorize()` before `recordExposure`** (ported from main): `choose()` re-runs the gate immediately before it
+  writes the evaluation row, so a withdrawal that lands while posteriors are read leaves no row; main's case "a gate that
+  flips to false before the write records nothing" is restored in `procedural.main-lineage.test.ts`.
+- **File store hardening** (ported from main): `load()` opens the store with `O_RDONLY | O_NOFOLLOW` and checks
+  `fstat().isFile()`; a symlink or non-file fails closed as `invalid_reply_style_store`. The write path unlinks a stale
+  `${path}.tmp`, opens it with `O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW` and mode 0600, and removes it on failure, so a
+  planted link or pre-existing file is never written through.
+- **`listEval` query and index** (H1): `FirestoreReplyStyleStore.listEval` combines `context.personaId`, `since` and
+  `until` in one query ordered by `at`, on the new composite index `vox_reply_style_eval` (`context.personaId` ASC, `at`
+  ASC) in `firestore.indexes.json` (so "No `firestore.indexes.json` edit" above no longer holds). A full page is the
+  oldest `MAX_LIST_LIMIT` (10,000) rows inside the window, never an arbitrary subset; callers page by moving `since` past
+  the last row. `selectEval` stays the final filter. Offline export only.
+- **`startReplyStyleRetentionSweep(store, { now, everyMs, onError })`** (H1): runs `store.sweep(now())` once and then every
+  `everyMs` (default 24 h) on an unref'd timer, best effort, and reports a rejected sweep only as `sweep_failed`. It is
+  **not wired**: the library is unwired, and the evaluation-row retention period is product decision (f). `expiresAt` is
+  a plain number, which a Firestore TTL policy ignores, so retention holds only while something calls `sweep()`; main's
+  README sentence on a TTL policy for `vox_reply_style_eval.expiresAt` does not apply.
+
 ## Out of scope
 
 Any wiring (runtime, gateway, prompt, StudioDeps/GatewayDeps); ingesting Telegram `message_reaction`, share-offer and voice reciprocity events; a "Why this?" or Reset UI or HTTP route; hooking `withdraw()` into the adaptive consent-withdrawal path (Step 1 owns persistence and shared/service.ts); any change to personalization/index.ts, explicit.ts or learning/**; flags.ts; Step 1 territory; firestore.indexes.json, TTL policies, firebase.json, package files; S09's TriageV2 import; joint-arm bandits and an offline IPS/DR evaluator; Privacy.tsx.
