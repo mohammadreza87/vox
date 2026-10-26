@@ -1,5 +1,6 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { MotionGlobalConfig, type TargetAndTransition } from 'framer-motion';
+import { motion, MotionGlobalConfig, PresenceContext, type TargetAndTransition } from 'framer-motion';
+import { useContext, useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { haptic } from '../../_lib/client';
 import type { NavCtx } from '../../_lib/motion';
@@ -16,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   events: new Map<string, Set<() => void>>(), active: true,
   /** Simulates any lost exit completion: every screen exit runs for 1000 s */
   hang: false,
+  reentryProbe: false,
 }));
 vi.mock('../../_lib/client', () => ({
   api: { me: mocks.me }, ApiError: class extends Error {}, initTelegram: vi.fn(),
@@ -38,6 +40,7 @@ vi.mock('../screens/Home', () => ({ HomeScreen: function Home() {
   return (
     <>
       <h1>Home probe</h1>
+      {mocks.reentryProbe && <ReentryProbe />}
       <span data-hero="face-h" />
       <button onClick={() => nav.push({ name: 'agent', id: 'a' })}>Open agent</button>
       <button onClick={() => { nav.cache.set('h', { id: 'h' } as never); nav.push({ name: 'agent', id: 'h' }); }}>Fly agent</button>
@@ -46,6 +49,17 @@ vi.mock('../screens/Home', () => ({ HomeScreen: function Home() {
     </>
   );
 } }));
+
+/** A descendant with its own initial animation and state that must survive a retained exit. */
+function ReentryProbe() {
+  const presence = useContext(PresenceContext);
+  const [value, setValue] = useState('');
+  return <>
+    <motion.span data-testid="child-initial" data-presence-initial={String(presence?.initial)}
+      initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.5 }} />
+    <input aria-label="Retained draft" value={value} onChange={(e) => setValue(e.target.value)} />
+  </>;
+}
 vi.mock('../screens/Agent', () => ({ AgentScreen: function Agent({ id }: { id: string }) {
   const nav = useNav();
   return (
@@ -76,6 +90,7 @@ async function wait(ms: number) {
 }
 beforeEach(() => {
   vi.clearAllMocks(); mocks.backs.clear(); mocks.settings.clear(); mocks.events.clear(); mocks.active = true; mocks.hang = false;
+  mocks.reentryProbe = false;
   mocks.me.mockResolvedValue({ member: { role: 'member', telegramId: 1 }, org: 'Synthetic' });
   // Bot API 8.0 activity events, read by motion/activity
   (window as unknown as { Telegram: unknown }).Telegram = { WebApp: {
@@ -240,6 +255,31 @@ describe('stuck screens: navigation kind x gap', () => {
 });
 
 describe('stuck screens: input after a screen lands', () => {
+  it('keeps first paint still and restores a completed exiting screen with its descendant state', async () => {
+    mocks.reentryProbe = true;
+    await boot();
+    const home = screens()[0];
+    const child = screen.getByTestId('child-initial');
+    const draft = screen.getByRole('textbox', { name: 'Retained draft' });
+    expect(atRest(home)).toBe(true);
+    expect(child).toHaveAttribute('data-presence-initial', 'false');
+    expect(child).toHaveStyle({ opacity: '1' });
+    fireEvent.change(draft, { target: { value: 'Synthetic unsaved draft' } });
+
+    await tap('Hire');
+    await wait(420);
+    await telegramSettings();
+    await wait(420);
+    await tap('Agents');
+    await expectOneScreen('completed cover exit returns', 'Home probe');
+
+    expect(screens()[0]).toBe(home);
+    expect(screen.getByRole('textbox', { name: 'Retained draft' })).toBe(draft);
+    expect(draft).toHaveValue('Synthetic unsaved draft');
+    expect(screen.getByTestId('child-initial')).toBe(child);
+    expect(child).toHaveStyle({ opacity: '1' });
+  });
+
   it('a tap once the new page has landed runs on the tap, while the old page is still parallaxing away under it', async () => {
     await boot();
     await tap('Open agent');
