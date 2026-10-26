@@ -22,11 +22,38 @@ Base commit: `6d00b8066e5d8e8d444bb47d978aa571e20929df` (origin/develop at the m
 > - New compat tests run in the default jsdom environment with `dangerouslyAllowBrowser`,
 >   because `src/test/setup.ts` needs `window` and cannot load under a per-file node environment.
 >
-> **Integration onto main (2026-10-25).** The r2 age rule picked 7.34.0 on 22 Oct, but main
-> already deploys openai `^7.39.0` (lock 7.39.0). The wave A merge keeps main's
-> `package.json` and `package-lock.json` unchanged, so the installed SDK stays 7.39.0;
-> a downgrade would change main's deployed behaviour. The provider code and compat tests
-> hold on both versions (they require 7.x >= 7.30.0).
+> **Integration onto main (2026-10-25/26).** This block describes the merged code on
+> `agent-intelligence-wave-a-main`; where it differs from the body below, it wins.
+> - SDK: the r2 age rule picked 7.34.0 on 22 Oct, but main already deploys openai `^7.39.0`
+>   (lock 7.39.0). The merge keeps main's `package.json` dependencies and `package-lock.json`,
+>   so the installed SDK stays 7.39.0; a downgrade would change main's deployed behaviour. The
+>   provider code and compat tests hold on both versions (they require 7.x >= 7.30.0).
+>   `package.json` now has `"engines": { "node": "22" }` (H8): openai 7.x requires Node 22, and
+>   firebase-tools 15.34.0 derives the SSR function runtime from it (`nodejs22`; a range such as
+>   `>=22` is rejected). The "package.json engines ... Firebase runtime config" exclusion under
+>   Out of scope no longer holds; see the deploy notes in `docs/VOX_STUDIO.md`.
+> - `timeout(ms)`: finite `ms >= 1` gives `min(5000, floor(ms))`, otherwise 500 (so 0 gives 500,
+>   not 1). `DecisionService` always passes its effective deadline, which is at least 1.
+> - `decisions.create` is detected inline in `evaluate()` (a `decisions` object with a callable
+>   `create`, called as a method); there is no `typedCreate` helper and no `requestTimeoutMs`.
+> - The Gemini test file is `src/lib/tireh/__tests__/llm-gemini-deprecation.test.ts`.
+> - `structuralTimeouts(provider)` (exported from `adaptive/decisions/index.ts`, H3): wraps a
+>   provider so a provider-side timeout (the SDK's `APIConnectionTimeoutError` by constructor
+>   name, `TimeoutError`, `ETIMEDOUT`, `UND_ERR_*TIMEOUT`, a "timed out" message) rejects as an
+>   `Error` named `APIConnectionTimeoutError` without the provider's message, so
+>   `DecisionService` reports reason `timeout` instead of `provider_error` (F030). Other errors
+>   pass through, `committedExportFence` is forwarded, and no `instanceof` is used (route bundles
+>   carry their own SDK copies). Only the S09 triage wiring (`STUDIO_DECIDER=service`) uses it;
+>   `DecisionService` itself and the flags-unset `STUDIO_DECISIONS_ENABLED` path are unchanged.
+> - `safety_identifier` option (H3): `DecisionProviderOptions.safetyIdentifier?` and
+>   `DecisionContext.safetyIdentifier?`. The provider adds `safety_identifier` to the body only
+>   when one is given and it matches `^[A-Za-z0-9_-]{1,64}$`; otherwise the body is byte-identical.
+>   Only `ServiceDecider` passes one, built from `DECISIONS_SAFETY_ID_SALT` (`vox_` plus 32 hex
+>   characters of a salted SHA-256 of `DeciderAuthority.subject`) and only when the caller names a
+>   subject. That `/v1/decisions` accepts `safety_identifier` is unverified: confirm it against
+>   the API before setting the salt.
+> - Provider-boundary `input_audio` rejection is asserted directly on every transport with zero
+>   fetches (section 8 of `openai-compat.test.ts`, H3).
 
 ## Goal
 
@@ -60,7 +87,7 @@ Base commit: `6d00b8066e5d8e8d444bb47d978aa571e20929df` (origin/develop at the m
 | `package.json` | One line: `"openai": "^6.9.1"` becomes `"openai": "^7.39.0"`. No engines, no other dependency. |
 | `package-lock.json` | Generated with `npm install openai@^7.39.0 --package-lock-only --ignore-scripts --cache "$TMPDIR/npm-cache-s15"`. Only the root range and the `node_modules/openai` entry change. If the registry is unreachable, skip both files and record the commands. |
 | test environment (not committed) | Symlink farm: a real `node_modules` directory with every entry of the main checkout symlinked except `openai`, which points at an unpacked `openai-7.39.0` tarball in `$TMPDIR`. Tests run on both 7.39.0 (farm) and 6.9.1 (plain symlink). |
-| `src/lib/adaptive/decisions/index.ts` | Only the `OpenAIDecisionProvider` class body (S09 owns the rest). Constructor and `guarded()` unchanged. `evaluate` gains an optional 4th `options?: { readonly timeoutMs?: number }`; the zod re-parse is unchanged; same body `{model, input, questions, prompt_cache_options: {mode: 'explicit'}}`; request options `{signal, timeout, maxRetries: 0}`; typed `client.decisions.create` when present, else `client.post('/decisions', {body, ...request})`; both inside `decisionAuthority.run`. Private static `requestTimeoutMs` (500 when not finite, else `Math.floor` clamped to `[1, 5000]`) and `typedCreate` (structural detection via `Reflect.get`, no compile-time reference to `OpenAI['decisions']`). Header comment and schemas untouched. |
+| `src/lib/adaptive/decisions/index.ts` | Only the `OpenAIDecisionProvider` class body (S09 owns the rest). Constructor and `guarded()` unchanged. `evaluate` gains an optional 4th `options?: { readonly timeoutMs?: number }`; the zod re-parse is unchanged; same body `{model, input, questions, prompt_cache_options: {mode: 'explicit'}}`; request options `{signal, timeout, maxRetries: 0}`; typed `client.decisions.create` when present, else `client.post('/decisions', {body, ...request})`; both inside `decisionAuthority.run`. Private static `timeout(ms)`: a finite `ms >= 1` gives `min(5000, floor(ms))`, otherwise 500 (r2; the first run's `requestTimeoutMs` clamped 0 to 1). `decisions.create` is detected inline (a `decisions` object with a callable `create`, called as a method so `this` stays bound); there is no `typedCreate` helper and no compile-time reference to `OpenAI['decisions']`. Header comment and schemas untouched. |
 | `src/lib/adaptive/decisions/README.md` | Only the SDK paragraph. |
 | `src/lib/studio/media.ts` | No source change: `OpenAIMedia` uses injectable raw fetch, not the SDK. Pinned by a new test. |
 | `src/app/api/stt/route.ts`, `src/app/api/chat/route.ts`, `src/app/api/chat/stream/route.ts`, `src/lib/adaptive/improvement/software-author.ts`, `src/services/implementations/EmbeddingService.ts` | No change expected; a minimal type fix only if tsc or tests fail after the upgrade. |
@@ -70,7 +97,7 @@ Base commit: `6d00b8066e5d8e8d444bb47d978aa571e20929df` (origin/develop at the m
 | `docs/implementation/ROUTE_INVENTORY.md` (new) | Every `route.ts` under `src/app/api` outside `/api/studio`: methods, auth found at the base, providers/data, surface, retire/keep/secure and reason; a "Decisions needed" list. No route changes. |
 | `src/lib/adaptive/decisions/openai-compat.test.ts` (new) | Decisions provider compatibility tests. |
 | `src/lib/studio/__tests__/openai-compat.test.ts` (new) | `OpenAIMedia` wire-format pinning. |
-| `src/lib/tireh/__tests__/gemini-deprecation.test.ts` (new) | `createLLMFromEnv` warning tests. |
+| `src/lib/tireh/__tests__/llm-gemini-deprecation.test.ts` (new; r2 name) | `createLLMFromEnv` warning tests. |
 
 ## Interfaces
 
@@ -80,10 +107,11 @@ export class OpenAIDecisionProvider implements DecisionProvider {
   readonly committedExportFence?: true;
   constructor(client: Pick<OpenAI, 'post'>, guard?: typeof guardedProvider);                 // unchanged
   static guarded(options: { apiKey: string; dangerouslyAllowBrowser?: boolean }, transportFetch?: typeof fetch): OpenAIDecisionProvider; // unchanged
-  /** client.decisions.create when present (openai >= 7.30.0), else client.post('/decisions'); maxRetries 0; timeout = options.timeoutMs clamped [1, 5000], default 500. */
-  evaluate(input: DecisionInput, signal: AbortSignal, authorizeNow?: () => boolean, options?: { readonly timeoutMs?: number }): Promise<unknown>;
-  private static requestTimeoutMs(value: number | undefined): number;
-  private static typedCreate(client: object): ((body: object, options: { signal: AbortSignal; timeout: number; maxRetries: 0 }) => Promise<unknown>) | null;
+  /** client.decisions.create when present (openai >= 7.30.0), else client.post('/decisions'); maxRetries 0;
+   * timeout(options.timeoutMs): finite ms >= 1 gives min(5000, floor(ms)), otherwise 500. */
+  evaluate(input: DecisionInput, signal: AbortSignal, authorizeNow?: () => boolean, options?: DecisionProviderOptions): Promise<unknown>;
+  private static timeout(ms: number | undefined): number;
+  // decisions.create is detected inline in evaluate(); no typedCreate helper.
 }
 
 // src/lib/tireh/llm.ts (S15 regions only)
@@ -109,7 +137,7 @@ export function createLLMFromEnv(env?: NodeJS.ProcessEnv, log?: Pick<Console, 'w
   path (spy, single POST to `https://api.openai.com/v1/decisions`, bearer header, exact
   body, no signal/timeout/authorizeNow keys); fallback for `{ post }` fakes and for
   `decisions` objects without a `create` function; timeout clamping on both paths
-  (1200, 0 to 1, 60000 to 5000, 12.7 to 12, NaN/undefined to 500); zod boundary (eight
+  (1200, 0 to 500 (r2), 60000 to 5000, 12.7 to 12, NaN/undefined to 500); zod boundary (eight
   questions, an unknown key, `input_audio` reject before fetch; a low-detail image passes);
   transport fence on the typed path (authority flip and abort give 0 fetches; a concurrent
   permitted request gives exactly 1); no retries and `DecisionService` mapping through the
@@ -119,7 +147,7 @@ export function createLLMFromEnv(env?: NodeJS.ProcessEnv, log?: Pick<Console, 'w
 - Studio `openai-compat.test.ts`: `media.ts` has no SDK import; `generateAvatar`,
   `transcribe` and `decide` wire formats, errors and env overrides; a canary check that
   thrown messages and console calls never contain input, prompt or audio content.
-- `gemini-deprecation.test.ts`: the warning fires exactly once for gemini, with no env
+- `llm-gemini-deprecation.test.ts`: the warning fires exactly once for gemini, with no env
   values; never for anthropic; error branches unchanged and silent.
 - Regression: lib tsc on 7.39.0 and 6.9.1; focused vitest on both; eslint on changed files.
 

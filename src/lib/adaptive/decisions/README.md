@@ -37,10 +37,28 @@ The installed SDK is openai 7.39.0 (>= 7.30.0, which requires Node 22).
 `OpenAIDecisionProvider` calls the SDK's `client.decisions.create` when present and
 otherwise the public `post('/decisions')`. Both send the identical documented
 `POST /v1/decisions` body with `maxRetries: 0`, and a provider timeout of
-`options.timeoutMs`, clamped to 1-5000 ms, defaulting to 500. Mocked-fetch tests
+`options.timeoutMs`: a finite value of at least 1 is floored and capped at 5000 ms;
+values below 1 or non-finite fall back to 500, as does an absent value. The SDK
+method is detected inline (a `decisions` object with a `create` function); there is
+no separate helper. `DecisionService` always passes its effective deadline, which is
+at least 1 ms. Mocked-fetch tests
 (`decisions.test.ts`, `transport-fence.test.ts`, `openai-compat.test.ts`) verify the URL,
 body, signal, error names and the authority fence on both paths without network or
 credentials.
+`structuralTimeouts(provider)` wraps a provider so that a provider-side timeout (the
+SDK's `APIConnectionTimeoutError`, recognised by constructor name, a `TimeoutError`,
+`ETIMEDOUT`, `UND_ERR_*TIMEOUT` or a "timed out" message) rejects as an `Error` named
+`APIConnectionTimeoutError` without the provider's message, so `DecisionService`
+reports `timeout` rather than `provider_error`. The check is structural (no
+`instanceof`, because route bundles carry their own SDK class copies); other errors
+pass through and `committedExportFence` is forwarded. Only the Studio triage wiring
+behind `STUDIO_DECIDER=service` uses it; `DecisionService` is unchanged.
+`DecisionContext.safetyIdentifier` and `DecisionProviderOptions.safetyIdentifier` carry
+an opaque, already-hashed end-user id; the provider adds `safety_identifier` to the
+body only when one is given and it matches `^[A-Za-z0-9_-]{1,64}$`, so without it the
+body is byte-identical. Studio sends one only under `STUDIO_DECIDER=service`, only with
+a configured `DECISIONS_SAFETY_ID_SALT` and only when the caller names a subject.
+Confirm that `/v1/decisions` accepts `safety_identifier` before configuring the salt.
 `prompt_cache_options: { mode: 'explicit' }` with no breakpoints requests no prompt
 caching. This is not a provider retention or regional processing guarantee.
 
@@ -122,6 +140,8 @@ dimensions are never sampled, logged or learned. It samples only in private, non
 (reactions, thanks, accepted share offers, reciprocated voice, corrections) never learns from reply-rate alone, and
 pseudo-counts decay with a 90-day half-life. `reset()` and `withdraw()` delete posteriors and evaluation rows.
 Evaluation rows (`{context, armChosen, propensity, unchosenArms, reward}`) are content-free with 90-day retention, in
-`vox_reply_style` / `vox_reply_style_eval`. It is NOT constructed by the Studio runtime or gateway: enabling it is gated
+`vox_reply_style` / `vox_reply_style_eval`. `expiresAt` is a plain number, which a Firestore TTL policy ignores, so that
+retention holds only while something calls `sweep()`; there is no TTL policy to configure. `choose()` re-runs the
+authorize callback immediately before it writes an evaluation row, so a withdrawal during sampling leaves no row. It is NOT constructed by the Studio runtime or gateway: enabling it is gated
 by the DPIA covering behavioural adaptation (docs/AGENT_INTELLIGENCE_SOLUTION.md section 4.10, Step 14) and by
 confirming that `message_reaction` updates reach persona bots in private chats.

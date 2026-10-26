@@ -2,6 +2,9 @@
   "name": "vox",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": "22"
+  },
   "scripts": {
     "dev": "next dev",
     "dev:dd": "dotenv -e .env.local -- node --import dd-trace/initialize.mjs ./node_modules/.bin/next dev",
@@ -11,6 +14,7 @@
     "lint": "eslint",
     "check:studio-style": "node scripts/check-studio-style.mjs",
     "check:pet-bundle": "node scripts/check-pet-bundle.mjs",
+    "typecheck:tests": "tsc --noEmit -p tsconfig.test.json",
     "test": "vitest",
     "test:ui": "vitest --ui",
     "test:coverage": "vitest run --coverage",

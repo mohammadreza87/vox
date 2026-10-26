@@ -49,7 +49,7 @@ Imports: `z` from `zod`; `createHash` and `randomUUID` from `node:crypto`; `impo
 
 **The gate**
 
-- `choose()` samples only when `chatKind === 'private'`, `guestAudience === false` and `await deps.authorize(scope) === true` (a throw counts as false). The group and guest checks run before authorize, so authorize is not called for them.
+- `choose()` samples only when `chatKind === 'private'`, `guestAudience === false` and `await deps.authorize(scope) === true` (a throw counts as false). The group and guest checks run before authorize, so authorize is not called for them. Authorize is re-checked immediately before the exposure row is written (ported from main on integration), so a withdrawal that lands while `choose()` reads posteriors leaves no evaluation row.
 - When the gate fails: no store read, no sampling, no evaluation row, and stored preferences are ignored (fail closed). Only explicitThisTurn and the persona default apply.
 - `settle()` re-runs authorize on the exposure's scope before any posterior write. If it fails: no posterior change, and the evaluation row is marked settled with reward null and rewardKinds `[]`.
 - `reset()` and `withdraw()` are never gated: deletion is always allowed.
@@ -93,7 +93,7 @@ Imports: `z` from `zod`; `createHash` and `randomUUID` from `node:crypto`; `impo
 Imports `import type { Firestore } from 'firebase-admin/firestore'`, node fs and path, and the schemas, types and constants from `./procedural`. No tireh, studio or persistence import.
 
 1. `InMemoryReplyStyleStore`: maps of posterior and evaluation rows; `transact` serialised through a promise queue with structuredClone in and out; writes validated before commit; a throw from fn commits nothing.
-2. `FileReplyStyleStore(path)`: one JSON file `{version:1, posteriors, evals}`; parent directory 0o700, file 0o600; every operation takes a `${path}.lock` mkdir lock (500 × 10 ms, then `Error('reply_style_lock_busy')`), reloads, applies, writes `${path}.tmp`, fsyncs and renames. A bad version or envelope throws `Error('invalid_reply_style_store')`. At most `MAX_FILE_EVAL_ROWS = 20_000` evaluation rows: the oldest settled rows are dropped first, then the oldest unsettled. Single-host only.
+2. `FileReplyStyleStore(path)`: one JSON file `{version:1, posteriors, evals}`; parent directory 0o700, file 0o600; every operation takes a `${path}.lock` mkdir lock (500 × 10 ms, then `Error('reply_style_lock_busy')`), reloads, applies, writes `${path}.tmp`, fsyncs and renames. The store is read with `O_RDONLY | O_NOFOLLOW` plus an `fstat` regular-file check (a symlink fails closed as `invalid_reply_style_store`); the temp file is written with `O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW`, mode 0600, after a stale temp file is unlinked, and is removed on failure (ported from main on integration). A bad version or envelope throws `Error('invalid_reply_style_store')`. At most `MAX_FILE_EVAL_ROWS = 20_000` evaluation rows: the oldest settled rows are dropped first, then the oldest unsettled. Single-host only.
 3. `FirestoreReplyStyleStore(db, collections = {posteriors:'vox_reply_style', evals:'vox_reply_style_eval'})`: document ids are the row ids, numbers stored as plain numbers. `transact` uses `db.runTransaction`, reading every requested ref before any `tx.set`. `deleteSubject` and `sweep` use equality or one range filter, delete in `.limit(400)` pages with `db.batch().delete().commit()` until a page is empty, are idempotent on retry and return counts. No `firestore.indexes.json` edit (S06 owns it).
 
 ### decisions/README.md
@@ -160,6 +160,30 @@ None. The shared contract says S14 is not wired and has no flag, so `src/lib/tir
 - `npx vitest run src/lib/tireh src/lib/adaptive/decisions` passes as at the base; the full suite adds no new failing files beyond the sandbox baseline.
 - eslint is clean on the new files.
 - Every row passes its strict schema and holds no free text, message content, raw personId or model output.
+
+## Integration onto main (2026-10-25/26)
+
+Main had merged an earlier, different run of this spec; wave A's implementation (`aiq/bandit-lib`, merged as `7127eba`
+onto `agent-intelligence-wave-a-main`) was chosen (`WAVE_A_ON_MAIN.md` section 2) and then hardened. This section
+describes the merged code; where it differs from the sections above, it wins. The library is still not wired.
+
+- **Second `authorize()` before `recordExposure`** (ported from main): `choose()` re-runs the gate immediately before it
+  writes the evaluation row, so a withdrawal that lands while posteriors are read leaves no row; main's case "a gate that
+  flips to false before the write records nothing" is restored in `procedural.main-lineage.test.ts`.
+- **File store hardening** (ported from main): `load()` opens the store with `O_RDONLY | O_NOFOLLOW` and checks
+  `fstat().isFile()`; a symlink or non-file fails closed as `invalid_reply_style_store`. The write path unlinks a stale
+  `${path}.tmp`, opens it with `O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW` and mode 0600, and removes it on failure, so a
+  planted link or pre-existing file is never written through.
+- **`listEval` query and index** (H1): `FirestoreReplyStyleStore.listEval` combines `context.personaId`, `since` and
+  `until` in one query ordered by `at`, on the new composite index `vox_reply_style_eval` (`context.personaId` ASC, `at`
+  ASC) in `firestore.indexes.json` (so "No `firestore.indexes.json` edit" above no longer holds). A full page is the
+  oldest `MAX_LIST_LIMIT` (10,000) rows inside the window, never an arbitrary subset; callers page by moving `since` past
+  the last row. `selectEval` stays the final filter. Offline export only.
+- **`startReplyStyleRetentionSweep(store, { now, everyMs, onError })`** (H1): runs `store.sweep(now())` once and then every
+  `everyMs` (default 24 h) on an unref'd timer, best effort, and reports a rejected sweep only as `sweep_failed`. It is
+  **not wired**: the library is unwired, and the evaluation-row retention period is product decision (f). `expiresAt` is
+  a plain number, which a Firestore TTL policy ignores, so retention holds only while something calls `sweep()`; main's
+  README sentence on a TTL policy for `vox_reply_style_eval.expiresAt` does not apply.
 
 ## Out of scope
 
