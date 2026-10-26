@@ -92,9 +92,13 @@ describe('voiceprint withdrawal and deletion', () => {
     await s.consent('work', 'withdrawn');
     await s.consent('work', 'granted');
     expect(await s.store.get(s.personId, 'work')).not.toBeNull();
+    // F010: enrollment called the provider; clear it so "not called" covers every argument shape and label.
+    s.provider.identify.mockClear(); s.provider.voiceprint.mockClear(); s.speech.measure.mockClear();
     expect(await s.service.verifyVoiceNote(s.voiceNote())).toEqual({ band: 'NO_OPINION', reason: 'not_enrolled' });
     expect(await s.store.get(s.personId, 'work')).toBeNull();
-    expect(s.provider.identify).not.toHaveBeenCalledWith(expect.anything(), [expect.objectContaining({ id: 'owner' })], expect.anything());
+    expect(s.provider.identify).not.toHaveBeenCalled();
+    expect(s.provider.voiceprint).not.toHaveBeenCalled();
+    expect(s.speech.measure).not.toHaveBeenCalled();
   });
 
   it('the sweep deletes rows older than 365 days and rows of people who left', async () => {
