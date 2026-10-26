@@ -270,10 +270,12 @@ export function stopStudioPreferenceLearning(): Promise<{ pending: number }> {
 
 /**
  * S08 wiring (section 4.6 notices, section 6 audit). With TIREH_AUDIT_LOG or TIREH_SHARING_V2 set at startup:
- * the audit and notice stores, the auditing memory and offer decorators and the 12-month sweep on append.
- * Whatever the flags: an erasure-only notice handle for rights erasure, and (only when notices are stored) a
- * memory store whose delete erases the notices naming that memory, plus a scheduled vox_audit sweep. Neither
- * flags-off path creates the audit file, the notice file or a Firestore collection.
+ * the audit and notice stores, the auditing memory and offer decorators (writes bounded by a timeout, failures
+ * logged as fixed codes), the 12-month sweep on append, and the same sweep at startup and daily (TIREH_SHARING_V2
+ * alone appends nothing). Whatever the flags: an erasure-only notice handle for rights erasure, and (only when
+ * notices are stored) a memory store whose delete erases the notices naming that memory, plus a scheduled
+ * vox_audit sweep. A failed sweep logs `[vox] audit sweep_failed`. Neither flags-off path creates the audit file,
+ * the notice file or a Firestore collection.
  */
 export async function wireSharingAudit(studio: Pick<Studio, 'deps'>, dataDir: string, db: import('firebase-admin/firestore').Firestore | null): Promise<void> {
   const flags = tirehFlags();

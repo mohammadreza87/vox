@@ -16,9 +16,8 @@
  * raw text still counts, so both are strict supersets of the raw rule, and the
  * negation only ever fails closed (H4, F257).
  *
- * TODO(H4, not in H4's files): gateway.ts NO_MEMORY and images/retention.ts
- * IMAGE_NO_MEMORY call NEGATED_MEMORY_REQUEST.test(text) on the raw text, so
- * they do not see the fold yet. They should call negatedMemoryRequest(text).
+ * The gateway (group memory, relationship observation) and S12 image retention
+ * call negatedMemoryRequest(text), so both see the fold.
  *
  * With every flag unset the gateway's NO_MEMORY reads this rule too, which is
  * wider than the base `do not|don't` + verb rule (recorded as a base-behaviour

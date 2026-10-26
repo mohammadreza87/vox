@@ -5,23 +5,11 @@
  */
 
 import { scriptLanguage } from '../decisions/language';
-import { explicitMemoryRequest, NEGATED_MEMORY_REQUEST, negatedMemoryRequest } from '../memory/requests';
+import { explicitMemoryRequest, negatedMemoryRequest } from '../memory/requests';
 import type { ChatMessage } from '../types';
 import type { ImageTriage } from './questions';
 
 export const SENSITIVE_DOCUMENT_THRESHOLD = 0.5;
-
-/**
- * @deprecated Test-only alias of memory/requests.ts NEGATED_MEMORY_REQUEST; production code calls
- * negatedMemoryRequest(). It stays until qa-code-quality-r2, qa-code-quality-r3 and memory-requests.test.ts
- * import memory/requests.ts directly; the integrator deletes it then.
- */
-export const IMAGE_NO_MEMORY = NEGATED_MEMORY_REQUEST;
-
-/** @deprecated Test-only alias of memory/requests.ts explicitMemoryRequest(); see IMAGE_NO_MEMORY. */
-export function explicitRememberRequest(text: string): boolean {
-  return explicitMemoryRequest(text);
-}
 
 /** The language of an image turn's fixed, content-free texts. */
 export type ImageTextLanguage = 'fa' | 'en';

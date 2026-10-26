@@ -4,7 +4,6 @@
  */
 import { describe, expect, it } from 'vitest';
 import { explicitMemoryRequest, NEGATED_MEMORY_REQUEST, negatedMemoryRequest } from '../memory/requests';
-import { explicitRememberRequest, IMAGE_NO_MEMORY } from '../images/retention';
 
 describe('memory requests', () => {
   it.each([
@@ -12,9 +11,9 @@ describe('memory requests', () => {
     'forget this', 'ذخیره نکن', 'ذخیره‌اش نکن', 'ذخيره نکن', 'به‌خاطر نسپار', 'یادت نمونه', 'نگهش ندار', 'فراموش کن',
   ])('"%s" is a negation and never an explicit request', (text) => {
     expect(negatedMemoryRequest(text)).toBe(true);
-    expect(IMAGE_NO_MEMORY.test(text)).toBe(true);
+    expect(NEGATED_MEMORY_REQUEST.test(text)).toBe(true);
     expect(explicitMemoryRequest(text)).toBe(false);
-    expect(explicitRememberRequest(text)).toBe(false);
+    expect(explicitMemoryRequest(text)).toBe(false);
   });
 
   it.each(['remember this', 'please save it', 'keep that', 'ذخیره‌اش کن', 'یادت باشه', 'به خاطر بسپار', 'نگهش دار', "I don't know, save this"])(
@@ -68,6 +67,6 @@ describe('memory requests', () => {
     expect(negatedMemoryRequest('remember this')).toBe(false);
     expect(explicitMemoryRequest('hello there')).toBe(false);
     // The regexes themselves still read raw text; only the functions fold.
-    expect(IMAGE_NO_MEMORY.test('ذخیره نکن')).toBe(true);
+    expect(NEGATED_MEMORY_REQUEST.test('ذخیره نکن')).toBe(true);
   });
 });
