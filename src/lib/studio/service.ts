@@ -15,7 +15,7 @@ import { composeFollowUp } from '../relationships/compose';
 import type { RelationshipConfig } from './relationship-config';
 import { ownerSharePatch, ownerRevokePatch, validateShareRecipients, isSuccessorTransferable, successorCopy, resnapshotPatch, type TombstoneCarrier } from '../tireh/memory/sharing';
 import { tirehFlags } from '../tireh/flags';
-import { MAX_AUDIT_IDS, type AuditStore, type SupersededNoticeEraser, type SupersededNoticeStore } from '../tireh/audit';
+import { MAX_AUDIT_IDS, MAX_NOTICE_LIST, type AuditStore, type SupersededNoticeEraser, type SupersededNoticeStore } from '../tireh/audit';
 import { historyMessageForChat } from '../tireh/memory/visibility';
 import { logTelegramDiagnostic, profileStepDiagnostic, type TelegramDiagnostic } from '../tireh/telegram/diagnostics';
 import type { DirectAuthorityEvaluator } from '../adaptive/persistence/authority';
@@ -97,6 +97,13 @@ const isGroupHistoryPolicy = (value: unknown): value is GroupHistoryPolicy => ty
 
 /** S08 re-snapshot result. Preview adds the target ids and per-agent counts (ids only, never content). */
 export interface ResnapshotResult { count: number; applied: boolean; byAgent?: Record<string, number>; memoryIds?: string[] }
+
+/** S08 content-free supersede notice as returned to a recipient. */
+export interface MemoryNotice { id: string; oldMemoryId: string; newMemoryId: string; from: string; at: string; replacementVisible: boolean }
+/** At most this many notices are returned per request, after filtering. */
+const MAX_NOTICES_RETURNED = 50;
+/** Notices whose old and replacement records are read concurrently. */
+const NOTICE_READ_CHUNK = 10;
 
 export class StudioError extends Error {
   override readonly name = 'StudioError';
@@ -1545,7 +1552,7 @@ export class Studio {
   }
 
   /** S08 (TIREH_SHARING_V2): content-free "updated" notices for shared records the actor could see. */
-  async memoryNoticesFor(actor: Member, agentId: string): Promise<Array<{ id: string; oldMemoryId: string; newMemoryId: string; from: string; at: string; replacementVisible: boolean }>> {
+  async memoryNoticesFor(actor: Member, agentId: string): Promise<MemoryNotice[]> {
     const s = await this.deps.store.read();
     const agent = s.agents.find((a) => a.id === agentId);
     if (!agent || !canUseAgent(actor, agent)) throw notFound('Agent not found');
@@ -1553,16 +1560,26 @@ export class Studio {
     if (!tirehFlags().sharingV2 || !notices) return [];
     const org = studioToOrg(s, this.deps.orgName, this.orgOptions());
     const me = personId(actor.telegramId);
-    const out: Array<{ id: string; oldMemoryId: string; newMemoryId: string; from: string; at: string; replacementVisible: boolean }> = [];
-    for (const notice of (await notices.listFor(agentId, me)).slice(0, 50)) {
-      // Once the old record is forgotten, or the actor was never among its readers, the notice disappears.
-      const old = await this.deps.memory.memories.get(notice.oldMemoryId);
-      const readers = old?.authorizedPersonIds ?? (old?.scope.kind === 'people' ? old.scope.personIds : []);
-      if (!old || old.personaId !== agentId || !readers.includes(me)) continue;
-      const replacement = await this.deps.memory.memories.get(notice.newMemoryId);
-      out.push({ id: notice.id, oldMemoryId: notice.oldMemoryId, newMemoryId: notice.newMemoryId,
-        from: org.getPerson(notice.ownerPersonId)?.name ?? 'Someone', at: notice.at.toISOString(),
-        replacementVisible: !!replacement && replacement.personaId === agentId && isVisibleToAudience(org, replacement, [me]) });
+    const memories = this.deps.memory.memories;
+    // Filter first, then cap: every listed notice (at most MAX_NOTICE_LIST, newest first) is considered, so valid
+    // older notices are not hidden behind newer ones that no longer apply.
+    const listed = (await notices.listFor(agentId, me)).slice(0, MAX_NOTICE_LIST);
+    const out: MemoryNotice[] = [];
+    for (let i = 0; i < listed.length && out.length < MAX_NOTICES_RETURNED; i += NOTICE_READ_CHUNK) {
+      const chunk = await Promise.all(listed.slice(i, i + NOTICE_READ_CHUNK).map(async (notice) => {
+        const [old, replacement] = await Promise.all([memories.get(notice.oldMemoryId), memories.get(notice.newMemoryId)]);
+        return { notice, old, replacement };
+      }));
+      for (const { notice, old, replacement } of chunk) {
+        if (out.length >= MAX_NOTICES_RETURNED) break;
+        // Once the old record is forgotten, or the actor was never among its readers, the notice disappears.
+        const readers = old?.authorizedPersonIds ?? (old?.scope.kind === 'people' ? old.scope.personIds : []);
+        if (!old || old.personaId !== agentId || !readers.includes(me)) continue;
+        // newMemoryId is returned even when the replacement is not visible: product decision (e).
+        out.push({ id: notice.id, oldMemoryId: notice.oldMemoryId, newMemoryId: notice.newMemoryId,
+          from: org.getPerson(notice.ownerPersonId)?.name ?? 'Someone', at: notice.at.toISOString(),
+          replacementVisible: !!replacement && replacement.personaId === agentId && isVisibleToAudience(org, replacement, [me]) });
+      }
     }
     return out;
   }
