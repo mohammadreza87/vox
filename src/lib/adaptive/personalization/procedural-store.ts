@@ -408,9 +408,13 @@ const toDoc = (row: object): Record<string, unknown> => JSON.parse(JSON.stringif
 /**
  * Collections 'vox_reply_style' (posteriors) and 'vox_reply_style_eval'
  * (evaluation rows). Document ids are the row ids; numbers are plain numbers.
- * Queries use equality filters or one range filter, so single-field indexes
+ * listEval with a personaId and a date window needs the composite index
+ * (context.personaId ASC, at ASC) in firestore.indexes.json; every other
+ * query uses equality filters or one range field, so single-field indexes
  * suffice. deleteSubject and sweep delete in pages of 400; they are not
  * atomic across pages, are idempotent and must be retried after a failure.
+ * expiresAt is a plain number, which a Firestore TTL policy ignores: eval-row
+ * retention holds only while something calls sweep() (startReplyStyleRetentionSweep).
  */
 export class FirestoreReplyStyleStore implements ReplyStyleStore {
   private readonly collections: { posteriors: string; evals: string };
@@ -472,19 +476,20 @@ export class FirestoreReplyStyleStore implements ReplyStyleStore {
   }
 
   /**
-   * One equality or one range filter per query; the rest is filtered in
-   * memory over at most MAX_LIST_LIMIT fetched rows. For offline export only.
+   * personaId, since and until are combined in one query ordered by at
+   * (composite index (context.personaId ASC, at ASC)), so the fetched page is
+   * the oldest MAX_LIST_LIMIT rows inside the window. When the window holds
+   * more rows than that, the result is those oldest rows, never an arbitrary
+   * subset; page by moving `since` past the last row returned. selectEval
+   * re-checks the page and applies the caller's limit. For offline export only.
    */
   async listEval(filter: ReplyStyleEvalFilter = {}): Promise<ReplyStyleEvalRow[]> {
     listLimit(filter.limit);
     let query: Query = this.db.collection(this.collections.evals);
-    if (filter.personaId !== undefined) {
-      query = query.where('context.personaId', '==', filter.personaId);
-    } else {
-      if (filter.since !== undefined) query = query.where('at', '>=', filter.since);
-      if (filter.until !== undefined) query = query.where('at', '<=', filter.until);
-    }
-    const snap = await query.limit(MAX_LIST_LIMIT).get();
+    if (filter.personaId !== undefined) query = query.where('context.personaId', '==', filter.personaId);
+    if (filter.since !== undefined) query = query.where('at', '>=', filter.since);
+    if (filter.until !== undefined) query = query.where('at', '<=', filter.until);
+    const snap = await query.orderBy('at').limit(MAX_LIST_LIMIT).get();
     const rows = snap.docs.map((doc) => parseEval(doc.data())).filter((row): row is ReplyStyleEvalRow => row !== null);
     return selectEval(rows, filter);
   }
@@ -532,4 +537,30 @@ export class FirestoreReplyStyleStore implements ReplyStyleStore {
     }
     throw new Error('reply_style_delete_incomplete');
   }
+}
+
+// ---------------------------------------------------------------------------
+// Retention sweep
+// ---------------------------------------------------------------------------
+
+/** The only signal the reply-style retention sweep gives: fixed and content-free. */
+export type ReplyStyleRetentionErrorCode = 'sweep_failed';
+
+/**
+ * Eval-row and posterior retention, scheduled: `store.sweep(now)` once now and then every `everyMs` (default
+ * 24 h) on an unref'd timer, best effort; a rejected sweep is reported through `onError('sweep_failed')` and never
+ * throws. Mirrors startDecisionLogRetentionSweep. No store's sweep creates the file or collection. Not wired: the
+ * library (S14) is unwired, and the retention period itself is product decision (f). `flush()` awaits the sweep in
+ * flight (tests).
+ */
+export function startReplyStyleRetentionSweep(store: Pick<ReplyStyleStore, 'sweep'>, options: { now?: () => number; everyMs?: number; onError?: (code: ReplyStyleRetentionErrorCode) => void } = {}): { stop(): void; flush(): Promise<void> } {
+  const now = options.now ?? (() => Date.now());
+  let pending: Promise<unknown> = Promise.resolve();
+  const sweep = () => {
+    pending = pending.then(() => store.sweep(now())).catch(() => { try { options.onError?.('sweep_failed'); } catch { /* never throws */ } });
+  };
+  sweep();
+  const timer = setInterval(sweep, options.everyMs ?? 86_400_000);
+  (timer as { unref?: () => void }).unref?.();
+  return { stop: () => clearInterval(timer), async flush() { await pending; } };
 }
