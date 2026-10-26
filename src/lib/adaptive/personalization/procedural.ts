@@ -26,6 +26,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { ResolvedPreference } from './index';
+import { foldPersian } from '../../tireh/text/persian';
 
 // ---------------------------------------------------------------------------
 // Arms and constants
@@ -479,7 +480,8 @@ export const FA_THANKS = /(ممنون|مرسی|سپاس|دستت درد نکنه
  */
 export function classifyFollowUp(text: string): 'corrective' | 'thanks' | 'neutral' {
   if (typeof text !== 'string') return 'neutral';
-  const normalized = text.normalize('NFKC').replace(/ي/g, 'ی').replace(/ك/g, 'ک').trim();
+  // The shared Persian fold (NFKC, Arabic letter variants, marks, tatweel); never stored or logged.
+  const normalized = foldPersian(text).trim();
   if (EN_CORRECTION.test(normalized) || FA_CORRECTION.test(normalized)) return 'corrective';
   if (EN_THANKS.test(normalized) || FA_THANKS.test(normalized)) return 'thanks';
   return 'neutral';

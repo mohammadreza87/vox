@@ -8,6 +8,7 @@
 
 import { z } from 'zod';
 import { audienceOf, hasRestrictedAudience, isMemoryAllowedInChat } from './visibility';
+import { foldPersian } from '../text/persian';
 import type { LLM } from '../llm';
 import type { OrgDirectory } from '../org/directory';
 import type {
@@ -45,8 +46,15 @@ export interface ExtractionOptions {
 
 export const IMAGE_PEOPLE_RULE = 'A message in this conversation shared an image that shows people. Never record who appears in the image, what anyone looks like (face, body, clothing, apparent age or background), or any guess about identity, even when the caption names someone. Record only facts the human stated in words that stay useful without the image.';
 
-/** Defence in depth for IMAGE_PEOPLE_RULE: lexical markers of image or appearance descriptions. */
+/**
+ * Defence in depth for IMAGE_PEOPLE_RULE: lexical markers of image or appearance descriptions. The filter tests the
+ * candidate as written and after the shared Persian fold (Arabic kaf in 'عكس', tatweel, presentation forms).
+ */
 export const IMAGE_PEOPLE_DESCRIPTION = /\b(?:photo|picture|image|pictured|selfie|wearing|wears|dressed|hair|beard|eyes|face|looks like|appears|tattoo\w*|smil\w*)\b|عکس|تصویر|سلفی|چهره|لباس|ریش|چشم|لبخند/iu;
+
+function describesImagePeople(content: string): boolean {
+  return IMAGE_PEOPLE_DESCRIPTION.test(content) || IMAGE_PEOPLE_DESCRIPTION.test(foldPersian(content));
+}
 
 export function buildExtractionPrompt(
   org: OrgDirectory,
@@ -177,7 +185,7 @@ export async function extractCandidates(
   });
   const candidates = parseCandidates(org, output);
   // People in an image never become identity, relationship or appearance memories.
-  if (options?.imagePeopleRule) return candidates.filter((c) => c.type !== 'relationship' && !IMAGE_PEOPLE_DESCRIPTION.test(c.content));
+  if (options?.imagePeopleRule) return candidates.filter((c) => c.type !== 'relationship' && !describesImagePeople(c.content));
   return candidates;
 }
 
