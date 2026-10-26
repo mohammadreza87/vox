@@ -462,14 +462,14 @@ describe('the page seams (integration)', () => {
     expect(h.cues.some((c) => c.type === 'care' && c.action === 'wake')).toBe(true);
   });
 
-  it('Bond milestones unlock signature fidgets in the long-fidget tier (never before one)', () => {
+  it('Bond milestones unlock signature fidgets in the long-fidget tier (never before one; formed stage only, §10.3)', () => {
     /** Idle kinds played in the 30–90 s watch window (a doze ends it), over a few seeds. */
-    const idleKinds = (bond: number) => {
+    const idleKinds = (bond: number, stage: 3 | 4 = 4) => {
       const kinds = new Set<string>();
       for (let seed = 1; seed <= 8; seed++) {
         let t = 0;
         const engine = createPetEngine({
-          look: PRESET_LOOKS[0], stage: 3, size: 200, tier: 'full', mood: CONTENT, seed,
+          look: PRESET_LOOKS[0], stage, size: 200, tier: 'full', mood: CONTENT, seed,
           clock: { now: () => t, raf: () => 1, caf: () => {} }, timers: { set: () => 1, clear: () => {} }, activity: false,
         });
         engine.setScene(SCENE);
@@ -481,5 +481,7 @@ describe('the page seams (integration)', () => {
     };
     expect(idleKinds(60).has('signature')).toBe(true);
     expect(idleKinds(20).has('signature')).toBe(false);
+    // a shaped (stage 3) pet keeps its milestones for when it is formed
+    expect(idleKinds(60, 3).has('signature')).toBe(false);
   });
 });

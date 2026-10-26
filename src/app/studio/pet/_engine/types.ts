@@ -444,6 +444,11 @@ export interface SpeciesTuning {
   listenTilt: number;
   /** blink close / open ms (owl 90 / 140; default 60 / 90) */
   blink?: { close: number; open: number };
+  /**
+   * Felt weight (1 the vinyl baseline): heavier bodies settle slower and lower after an impact, lighter ones flick
+   * faster (scales the settle springs' duration by weight^0.5 and the flick springs' by weight^0.25).
+   */
+  weight?: number;
 }
 
 export interface FamilyTuning {
@@ -456,4 +461,40 @@ export interface FamilyTuning {
   gravity: number;
   /** extra idle lean toward the silhouette's side (deg; drift +1.5) */
   leanBias: number;
+  /** multiplier on the species weight (tower a little heavier, drift lighter) */
+  weight?: number;
 }
+
+/* ---------- motion vocabulary beyond the reaction table (rooms, growth, settle) ---------- */
+
+/** The rooms (design §4): one engine and one character across them; the room swaps the idle flavour. */
+export type Room = 'home' | 'play' | 'garden' | 'closet' | 'bedroom' | 'book';
+/** Left-to-right room order in English (design §4); a move to a higher index slides the backdrop left. */
+export const ROOM_ORDER: readonly Room[] = ['home', 'play', 'garden', 'closet', 'bedroom', 'book'];
+
+/**
+ * Engine-owned motions that are not reaction events (the UI calls them through named methods, never fire()):
+ * room transitions, per-room reactions (design §10.4, final names), lighting a growth moment (§10.3), the settle
+ * float (§3.1), the room idles and the anticipated happy hop. Played on the same Player as reactions.
+ */
+export type RoomReaction =
+  /* Play */ | 'catch' | 'nearMiss' | 'roundEnd'
+  /* Garden */ | 'rain'
+  /* Closet */ | 'admire'
+  /* Bedroom */ | 'storyNod'
+  /* Life Book */ | 'pageFlip' | 'ownDrawing';
+export type MotionKind = 'roomLeave' | 'roomIdle' | 'growthLit' | 'settle' | 'hopIdle' | RoomReaction;
+/** What the player plays: a reaction kind or an engine motion. */
+export type PlayKind = ReactionKind | MotionKind;
+
+
+/** Discrete motion cues for the UI (beyond EngineCue): subscribe with engine.onMotion(fn). */
+export type MotionCue =
+  /** about six minutes of continuous play: the pet floats content (the UI may show the T9 stopping cue) */
+  | { type: 'settle' }
+  /** mid room transition: swap the backdrop and the dock now (the character is at the top of its lean) */
+  | { type: 'roomSwap'; room: Room }
+  /** the growth moment's detail should fade in now (the glow is at its peak) */
+  | { type: 'litPeak' }
+  /** the frame-budget guard stepped the tier down (slow device) */
+  | { type: 'degraded'; tier: Tier; reason: 'frames' | 'script' };

@@ -33,14 +33,15 @@ export type DecisionLogAnswer =
 
 export interface DecisionLogRow {
   id: string;
-  questionSetVersion: 'v1' | 'v2' | 'v2-live' | 'image-v1';
+  questionSetVersion: 'v1' | 'v2' | 'v2-live' | 'image-v1' | 'pet-v1';
   names: string[];
   answers: DecisionLogAnswer[];
   outcome: 'answered' | 'unknown';
   unknownReason?: string;
   elapsedMs: number;
   inputTokens?: number;
-  routeTaken: 'quick' | 'thoughtful' | 'web' | 'untriaged';
+  /** `pet`: a pet decision (care game design §8.6), never a triage route. */
+  routeTaken: 'quick' | 'thoughtful' | 'web' | 'untriaged' | 'pet';
   personaId: string;
   chatKind: 'private' | 'group';
   language: 'fa' | 'en' | 'mixed' | 'unknown';
@@ -71,14 +72,14 @@ const answerSchema = z.discriminatedUnion('type', [
 ]);
 
 export const newDecisionLogRowSchema: z.ZodType<NewDecisionLogRow> = z.object({
-  questionSetVersion: z.enum(['v1', 'v2', 'v2-live', 'image-v1']),
+  questionSetVersion: z.enum(['v1', 'v2', 'v2-live', 'image-v1', 'pet-v1']),
   names: z.array(z.string().regex(NAME)).min(1).max(MAX_NAMES),
   answers: z.array(answerSchema).max(MAX_NAMES),
   outcome: z.enum(['answered', 'unknown']),
   unknownReason: z.enum(UNKNOWN_REASONS).optional(),
   elapsedMs: z.number().int().min(0).max(600_000),
   inputTokens: z.number().int().min(0).optional(),
-  routeTaken: z.enum(['quick', 'thoughtful', 'web', 'untriaged']),
+  routeTaken: z.enum(['quick', 'thoughtful', 'web', 'untriaged', 'pet']),
   personaId: z.string().regex(/^[A-Za-z0-9_.:-]{1,128}$/),
   chatKind: z.enum(['private', 'group']),
   language: z.enum(['fa', 'en', 'mixed', 'unknown']),

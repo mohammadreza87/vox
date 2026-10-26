@@ -1,64 +1,73 @@
 /**
- * Every word the pet page shows. Short, warm and never guilt-tripping (brief §1.6): no "I'm hungry",
- * no "I missed you", no numbers next to needs.
+ * The pet page's words, kept as the old names over the strings module (./strings, keyed by the copy keys file).
+ * New code calls `t(key)` directly. Short, warm and never guilt-tripping (brief §1.6): no "I'm hungry", no
+ * "I missed you", no numbers next to needs.
  */
 
 import type { NeedKey } from '@/lib/pet/types';
 import type { SayKey, SayLine } from '../_engine/types';
+import { cleanFirst, t, type PetStringKey } from './strings';
 
-const SAY: Record<SayKey, string> = {
-  hi: 'Hi!',
-  achoo: 'Achoo!',
-  hmph: 'Hmph.',
-  okayOkay: 'Okay, okay!',
-  yum: 'Yum!',
-  soFull: 'So full…',
-  napFirst: 'Nap first?',
-  fiveMore: 'Five more minutes…',
-  learned: 'I learned something new!',
-  aww: 'Aww.',
+const SAY: Record<SayKey, PetStringKey> = {
+  hi: 'say.hi',
+  achoo: 'say.achoo',
+  hmph: 'say.hmph',
+  okayOkay: 'say.okayOkay',
+  yum: 'say.yum',
+  soFull: 'say.soFull',
+  napFirst: 'say.napFirst',
+  fiveMore: 'say.fiveMore',
+  learned: 'say.learned',
+  aww: 'say.aww',
 };
 
-/** Bubble text for an engine `say` cue ("Hi Sara!" when we know the first name). */
+/** Bubble text for an engine `say` cue ("Hi Sara!" when we know a usable first name). */
 export function sayText(line: SayLine, name?: string): string {
   if (typeof line !== 'string') return line.text;
-  if (line === 'hi' && name) return `Hi ${name}!`;
-  return SAY[line];
+  const first = line === 'hi' ? cleanFirst(name) : undefined;
+  return first ? t('say.hiName', { first }) : t(SAY[line]);
 }
 
+/** Screen-reader words for the needs. Not in the copy keys file yet, so English only. */
 export const NEED_LABEL: Record<NeedKey, string> = { tummy: 'Tummy', joy: 'Joy', energy: 'Energy' };
 
+/** "First day together" / "{n} days together" (digits allowed here: it counts up, never down). */
+export const daysTogetherText = (d: number) => (d <= 1 ? t('chip.firstDay') : t('chip.daysTogether', { n: d }));
+
+/** The old flat names, read through `t` at use time (so they follow the page's language). */
 export const COPY = {
-  talkTo: (name: string) => `Talk to ${name}`,
-  chatInTelegram: 'Chat in Telegram',
+  talkTo: (name: string) => t('talk.placeholder', { name }),
+  get chatInTelegram() { return t('talk.chatInTelegram'); },
+  /** no key in the copy keys file yet: English only */
   send: 'Send',
-  holdToTalk: 'Hold to talk',
-  recording: 'Listening… release to send',
-  micBlocked: 'Mic is off, so type instead',
-  more: 'more',
-  less: 'less',
-  feed: 'Feed',
-  play: 'Play ball',
-  rest: 'Put to bed',
-  feedHint: 'Drag the cookie to the mouth, or tap it',
-  daysTogether: (d: number) => (d <= 1 ? 'First day together' : `${d} days together`),
-  privateTitle: 'This one’s private',
-  privateBody: 'Only the people this agent works with can visit.',
-  outsideTitle: 'Open me in Telegram',
-  outsideBody: 'Tap the menu button in the bot’s chat.',
-  restingTitle: 'Resting',
-  restingBody: 'This one is not around right now.',
-  unavailableTitle: 'Can’t open this pet',
-  unavailableBody: 'Try again in a moment, or reopen it from the bot’s chat.',
-  offlineTitle: 'Can’t reach the cloud',
-  offlineBody: 'Check the connection and try again.',
-  retry: 'Try again',
-  close: 'Close Mini App',
-  chatAccessTitle: 'Chat access is off',
-  chatAccessBody: 'Open Vox Studio, go to You, choose Work, then Agent access and allow this agent. Then reopen this Mini App.',
-  talkFailed: 'Hmm, I lost my words. Try again?',
-  reopen: 'Close and reopen me to keep talking.',
-  reopenFa: 'برای ادامهٔ گفتگو، مرا ببندید و دوباره باز کنید.',
-  didntCatch: 'I didn’t catch that. Try again?',
+  get holdToTalk() { return t('talk.holdToTalk'); },
+  get recording() { return t('talk.recording'); },
+  get micBlocked() { return t('talk.micBlocked'); },
+  get more() { return t('ui.more'); },
+  get less() { return t('ui.less'); },
+  get feed() { return t('toy.feed'); },
+  get play() { return t('toy.ball'); },
+  get rest() { return t('toy.moon'); },
+  get feedHint() { return t('toy.feedHint'); },
+  daysTogether: daysTogetherText,
+  get privateTitle() { return t('quiet.private.title'); },
+  get privateBody() { return t('quiet.private.body'); },
+  get outsideTitle() { return t('quiet.outside.title'); },
+  get outsideBody() { return t('quiet.outside.body'); },
+  get restingTitle() { return t('quiet.resting.title'); },
+  get restingBody() { return t('quiet.resting.body'); },
+  get unavailableTitle() { return t('quiet.unavailable.title'); },
+  get unavailableBody() { return t('quiet.unavailable.body'); },
+  get offlineTitle() { return t('quiet.offline.title'); },
+  get offlineBody() { return t('quiet.offline.body'); },
+  get retry() { return t('ui.retry'); },
+  get close() { return t('ui.close'); },
+  get chatAccessTitle() { return t('quiet.chatAccess.title'); },
+  get chatAccessBody() { return t('quiet.chatAccess.body'); },
+  get talkFailed() { return t('talk.failed'); },
+  get reopen() { return t('talk.reopen'); },
+  /** the Persian line whatever the page language (needs the Persian catalogue loaded) */
+  get reopenFa() { return t('talk.reopen', undefined, 'fa'); },
+  get didntCatch() { return t('talk.didntCatch'); },
   score: (n: number) => `${n}`,
-} as const;
+};

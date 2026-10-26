@@ -17,6 +17,7 @@ import { atRest, makeSpring, settle, step } from './spring';
 import { FOLLOWERS, MULTIPLY, NEUTRAL_POSE, TIER_BUDGET, type Channel, type Follower, type FollowerParams, type PoseTargets, type Spring, type SpringPreset, type Tier } from './types';
 
 export const CHANNELS = Object.keys(NEUTRAL_POSE) as Channel[];
+const clampAbs = (v: number, m: number) => (v < -m ? -m : v > m ? m : v);
 export const combine = (c: Channel, a: number, b: number) => (MULTIPLY.has(c) ? a * b : a + b);
 
 /* ---------- spring banks (L0–L2 base, L4 one-shots) ---------- */
@@ -37,8 +38,7 @@ export function bankAtRest(b: Bank): boolean {
 export const readBank = (b: Bank): PoseTargets => Object.fromEntries(CHANNELS.map((c) => [c, b[c].x])) as unknown as PoseTargets;
 
 /** base ⊕ shot ⊕ procedural, channel by channel. */
-export function compose(base: Bank, shot: Bank, proc: Partial<PoseTargets>): PoseTargets {
-  const out = {} as PoseTargets;
+export function compose(base: Bank, shot: Bank, proc: Partial<PoseTargets>, out = {} as PoseTargets): PoseTargets {
   for (const c of CHANNELS) {
     const v = combine(c, base[c].x, shot[c].x);
     const p = proc[c];
@@ -56,8 +56,14 @@ export const BODY: ReadonlySet<Channel> = new Set<Channel>(['x', 'y', 'sx', 'sy'
 const HEAD_H = 118;
 /** Ear swing per px of vertical lag, per ° of rotation lag (floppy ears swing more). */
 const EAR_GAIN = { v: 0.42, floppyV: 0.9, r: 0.9, rMax: 24 };
+/**
+ * Overlap on the soft parts (§10.2): the face slides a little after the body (view units per px of lag, capped),
+ * the cheeks jiggle with the body's vertical lag (scale per px), soft accessories and hair swing behind the
+ * body's rotation (degrees per degree of lag, capped). All chase the body on followers: nothing is keyframed.
+ */
+const SOFT = { faceY: 0.05, faceMax: 1.4, cheek: 0.006, cheekMax: 0.07, accRot: 0.45, accMax: 9, hairRot: 0.3, hairMax: 6 };
 
-export interface SecondaryOut { earL: number; earR: number; tail: number; hairY: number; hairSy: number; accY: number; cheek: number; shadow: number; puff: number }
+export interface SecondaryOut { earL: number; earR: number; tail: number; hairY: number; hairSy: number; hairRot: number; accY: number; accRot: number; faceY: number; cheek: number; shadow: number; puff: number }
 
 export class Secondary {
   private earL: Follower;
@@ -69,9 +75,13 @@ export class Secondary {
   private cheek: Follower = makeFollower(1, 'cheek');
   private puff: Follower = makeFollower(0, 'cheek');
   private shadow: Follower = makeFollower(1, 'shadow');
+  private accR: Follower = makeFollower(0, 'accessory');
+  private faceV: Follower = makeFollower(0, 'cheek');
+  private all: Follower[];
   private floppy = false;
   private acc = 0;
-  out: SecondaryOut = { earL: 0, earR: 0, tail: 0, hairY: 0, hairSy: 1, accY: 0, cheek: 1, shadow: 1, puff: 0 };
+  /** written in place every update (no per-frame allocation) */
+  readonly out: SecondaryOut = { earL: 0, earR: 0, tail: 0, hairY: 0, hairSy: 1, hairRot: 0, accY: 0, accRot: 0, faceY: 0, cheek: 1, shadow: 1, puff: 0 };
 
   constructor(private t: Tuning) {
     const ear = t.ear ?? FOLLOWERS.ear;
@@ -79,13 +89,14 @@ export class Secondary {
     this.headV = makeFollower(0, ear); this.headR = makeFollower(0, ear);
     this.hairV = makeFollower(0, 'accessory'); this.tailR = makeFollower(0, 'accessory');
     this.floppy = t.ear !== null && t.ear.f < 2.5;
+    this.all = [this.earL, this.earR, this.headV, this.headR, this.hairV, this.tailR, this.cheek, this.shadow, this.puff, this.accR, this.faceV];
   }
 
   /** Asleep or droopy: bunny ears go floppy (dog ears are always floppy). Keeps position and velocity. */
   setSleepy(sleepy: boolean): void {
     const p: FollowerParams | null = sleepy ? this.t.sleepEar : this.t.ear;
     if (!p) return;
-    for (const f of [this.earL, this.earR, this.headV, this.headR]) retune(f, p);
+    retune(this.earL, p); retune(this.earR, p); retune(this.headV, p); retune(this.headR, p);
     this.floppy = p.f < 2.5;
   }
 
@@ -103,31 +114,42 @@ export class Secondary {
     const gv = this.floppy ? EAR_GAIN.floppyV : EAR_GAIN.v;
     const tl = follow(this.earL, p.earL - p.earDroop, dt), tr = follow(this.earR, p.earR + p.earDroop, dt);
     const lagH = follow(this.hairV, v, dt) - v;
-    this.out = {
-      // ears flop outward when the head leaves them behind, and trail the body's rotation
-      // (a spin's rotation lag is capped: the ears trail it, they never wind round the head)
-      earL: tl - gv * lagV + EAR_GAIN.r * Math.max(-EAR_GAIN.rMax, Math.min(EAR_GAIN.rMax, lagR)),
-      earR: tr + gv * lagV + EAR_GAIN.r * Math.max(-EAR_GAIN.rMax, Math.min(EAR_GAIN.rMax, lagR)),
-      tail: follow(this.tailR, rot + p.tail, dt) - rot + lagH * 0.4,
-      hairY: p.hair + lagH * 0.16,
-      hairSy: 1 + Math.max(-0.06, Math.min(0.06, lagH * 0.004)),
-      accY: p.acc + lagH * 0.24,
-      cheek: follow(this.cheek, p.cheek, dt),
-      puff: follow(this.puff, p.puff, dt),
-      // the contact shadow shrinks and fades as the body leaves the ground
-      shadow: follow(this.shadow, p.shadow * (1 - Math.min(1, Math.max(0, -p.y / 120)) * 0.45), dt),
-    };
-    return this.out;
+    const lagA = follow(this.accR, rot, dt) - rot;
+    const lagF = follow(this.faceV, v, dt) - v;
+    const o = this.out, rl = clampAbs(lagR, EAR_GAIN.rMax);
+    // ears flop outward when the head leaves them behind, and trail the body's rotation
+    // (a spin's rotation lag is capped: the ears trail it, they never wind round the head)
+    o.earL = tl - gv * lagV + EAR_GAIN.r * rl;
+    o.earR = tr + gv * lagV + EAR_GAIN.r * rl;
+    o.tail = follow(this.tailR, rot + p.tail, dt) - rot + lagH * 0.4;
+    o.hairY = p.hair + lagH * 0.16;
+    o.hairSy = 1 + clampAbs(lagH * 0.004, 0.06);
+    // hair and soft accessories swing behind a turn (the bow trails a spin, then catches up and settles)
+    o.hairRot = clampAbs(lagA * SOFT.hairRot, SOFT.hairMax);
+    o.accY = p.acc + lagH * 0.24;
+    o.accRot = clampAbs(lagA * SOFT.accRot, SOFT.accMax);
+    // the face (eyes, mouth, brows) lands a beat after the body: it sinks into a landing and lifts after a hop
+    o.faceY = clampAbs(lagF * SOFT.faceY, SOFT.faceMax);
+    // the cheeks jiggle with the body's vertical lag on top of their own puff
+    o.cheek = follow(this.cheek, p.cheek, dt) * (1 + clampAbs(lagF * SOFT.cheek, SOFT.cheekMax));
+    o.puff = follow(this.puff, p.puff, dt);
+    // reduced motion: no overlap swing (the soft parts ride the body)
+    if (tier === 'reduced') { o.hairRot = 0; o.accRot = 0; o.faceY = 0; o.cheek = this.cheek.y; }
+    // the contact shadow shrinks and fades as the body leaves the ground
+    o.shadow = follow(this.shadow, p.shadow * (1 - Math.min(1, Math.max(0, -p.y / 120)) * 0.45), dt);
+    return o;
   }
 
   /** A full spin was let go from the same angle (rot − w): the followers that trail the rotation move with it. */
   unwind(w: number): void {
-    for (const f of [this.headR, this.tailR]) { f.y -= w; f.xp -= w; }
+    for (const f of [this.headR, this.tailR, this.accR]) { f.y -= w; f.xp -= w; }
   }
 
   atRest(): boolean {
     // every follower is checked (and settled) even after one is found moving
-    return [this.earL, this.earR, this.headV, this.headR, this.hairV, this.tailR, this.cheek, this.shadow, this.puff].map((f) => followerAtRest(f)).every(Boolean);
+    let rest = true;
+    for (const f of this.all) if (!followerAtRest(f)) rest = false;
+    return rest;
   }
 
   reset(p: PoseTargets): void {
@@ -135,6 +157,7 @@ export class Secondary {
     resetFollower(this.earL, p.earL - p.earDroop); resetFollower(this.earR, p.earR + p.earDroop);
     resetFollower(this.headV, v); resetFollower(this.headR, rot); resetFollower(this.hairV, v); resetFollower(this.tailR, rot + p.tail);
     resetFollower(this.cheek, p.cheek); resetFollower(this.shadow, p.shadow); resetFollower(this.puff, p.puff);
+    resetFollower(this.accR, rot); resetFollower(this.faceV, v);
     this.update(p, 0, 'full');
   }
 }
@@ -148,8 +171,8 @@ export interface RigFrame {
   breath: { bx: number; by: number; period: number; sway: number; swayPeriod: number };
   face: { x: number; y: number; rot: number };
   accRigid: { x: number; y: number; rot: number };
-  accSoft: { y: number };
-  hair: { y: number; sy: number };
+  accSoft: { y: number; rot: number };
+  hair: { y: number; sy: number; rot: number };
   fx: { y: number; o: number };
   shadow: { y: number; rot: number; s: number; o: number };
   earL: number;
@@ -196,7 +219,28 @@ const r3 = (n: number) => Math.round(n * 1000) / 1000;
 
 /** Transform groups by priority: the first ones win when a frame is over budget (the rest go next frame). */
 const GROUPS = ['face', 'lids', 'earL', 'earR', 'shadow', 'blush', 'cheeks', 'tongue', 'sparkle', 'swirl', 'hair', 'accSoft', 'accRigid', 'tail', 'fx'] as const;
-type Group = (typeof GROUPS)[number];
+/** each group's MotionValue keys, in the order fillGroups writes them (an opacity-only group's opacity is last) */
+const GROUP_KEYS: ReadonlyArray<readonly string[]> = [
+  ['faceX', 'faceY', 'faceR'], ['lids'], ['earL'], ['earR'], ['shY', 'shR', 'shS', 'shO'], ['blushO', 'blushS'], ['cheeks'],
+  ['tgX', 'tgY', 'tgSx', 'tgSy', 'tgO'], ['spX', 'spY', 'spO'], ['swX', 'swY', 'swR', 'swO'], ['hairY', 'hairSy', 'hairR'], ['asY', 'asR'],
+  ['arX', 'arY', 'arR'], ['tail'], ['fxY', 'fxO'],
+];
+const OPACITY_ONLY: readonly boolean[] = GROUPS.map((gr) => gr === 'tongue' || gr === 'sparkle' || gr === 'swirl');
+
+/** One frame's transform values into the preallocated rows (same order as GROUP_KEYS). */
+function row(r: number[], a: number, b = 0, c = 0, d = 0, e = 0): void { r[0] = a; r[1] = b; r[2] = c; r[3] = d; r[4] = e; }
+function fillGroups(V: number[][], f: RigFrame, g: number): void {
+  row(V[0], f.face.x, f.face.y, f.face.rot);
+  row(V[1], f.lids); row(V[2], f.earL); row(V[3], f.earR);
+  // the shadow stays on the ground while the body hops or is dragged up (decision 12)
+  row(V[4], -f.body.y / (f.body.sy * g), -f.body.rot, f.shadow.s, f.shadow.o);
+  row(V[5], f.blush.o, f.blush.s); row(V[6], f.cheeks);
+  row(V[7], f.tongue.x, f.tongue.y, f.tongue.sx, f.tongue.sy, f.tongue.o);
+  row(V[8], f.sparkle.x, f.sparkle.y, f.sparkle.o);
+  row(V[9], f.swirl.x, f.swirl.y, f.swirl.rot, f.swirl.o);
+  row(V[10], f.hair.y, f.hair.sy, f.hair.rot); row(V[11], f.accSoft.y, f.accSoft.rot);
+  row(V[12], f.accRigid.x, f.accRigid.y, f.accRigid.rot); row(V[13], f.tail); row(V[14], f.fx.y, f.fx.o);
+}
 const MORPHS = ['mouth', 'beak', 'eyeL', 'eyeR', 'brows', 'body'] as const;
 type Morph = (typeof MORPHS)[number];
 
@@ -210,6 +254,7 @@ export class RigWriter {
   private v: Record<string, Num> = {};
   private s: Record<'eyeLD' | 'eyeRD' | 'mouthD' | 'beakD' | 'browsD' | 'bodyD', MotionValue<string>>;
   private last = new Map<string, number | string>();
+  private vals: number[][] = GROUP_KEYS.map(() => [0, 0, 0, 0, 0]);
   /** the most recent frame written (tests, sheets) */
   frame: RigFrame | null = null;
 
@@ -236,8 +281,8 @@ export class RigWriter {
       layer: {
         face: { x: n('faceX', 0), y: n('faceY', 0), rotate: n('faceR', 0) },
         'acc-rigid': { x: n('arX', 0), y: n('arY', 0), rotate: n('arR', 0) },
-        'acc-soft': { y: n('asY', 0) },
-        hair: { y: n('hairY', 0), scaleY: n('hairSy', 1) },
+        'acc-soft': { y: n('asY', 0), rotate: n('asR', 0) },
+        hair: { y: n('hairY', 0), scaleY: n('hairSy', 1), rotate: n('hairR', 0) },
         fx: { y: n('fxY', 0), opacity: n('fxO', 1) },
         shadow: { y: n('shY', 0), rotate: n('shR', 0), scale: n('shS', 1), opacity: n('shO', 1) },
       },
@@ -273,34 +318,21 @@ export class RigWriter {
     this.set('sw', f.breath.sway, r2); this.set('swp', f.breath.swayPeriod, r2);
     this.dim.set(r3(f.dim)); this.glow.set(r3(f.glow));
 
-    // SVG transforms, as groups of values
+    // SVG transforms, as groups of values (filled into preallocated rows: no per-frame arrays)
     const g = m.growth;
-    const groups: Record<Group, Array<[string, number]>> = {
-      face: [['faceX', f.face.x], ['faceY', f.face.y], ['faceR', f.face.rot]],
-      lids: [['lids', f.lids]],
-      earL: [['earL', f.earL]],
-      earR: [['earR', f.earR]],
-      // the shadow stays on the ground while the body hops or is dragged up (decision 12)
-      shadow: [['shY', -f.body.y / (f.body.sy * g)], ['shR', -f.body.rot], ['shS', f.shadow.s], ['shO', f.shadow.o]],
-      blush: [['blushO', f.blush.o], ['blushS', f.blush.s]],
-      cheeks: [['cheeks', f.cheeks]],
-      // an invisible mark only writes its opacity (talking moves the mouth every frame: no hidden tongue work)
-      tongue: f.tongue.o < 0.01 ? [['tgO', 0]] : [['tgX', f.tongue.x], ['tgY', f.tongue.y], ['tgSx', f.tongue.sx], ['tgSy', f.tongue.sy], ['tgO', f.tongue.o]],
-      sparkle: f.sparkle.o < 0.01 ? [['spO', 0]] : [['spX', f.sparkle.x], ['spY', f.sparkle.y], ['spO', f.sparkle.o]],
-      swirl: f.swirl.o < 0.01 ? [['swO', 0]] : [['swX', f.swirl.x], ['swY', f.swirl.y], ['swR', f.swirl.rot], ['swO', f.swirl.o]],
-      hair: [['hairY', f.hair.y], ['hairSy', f.hair.sy]],
-      accSoft: [['asY', f.accSoft.y]],
-      accRigid: [['arX', f.accRigid.x], ['arY', f.accRigid.y], ['arR', f.accRigid.rot]],
-      tail: [['tail', f.tail]],
-      fx: [['fxY', f.fx.y], ['fxO', f.fx.o]],
-    };
+    const V = this.vals;
+    fillGroups(V, f, g);
     const budget = tier === 'reduced' ? Infinity : TIER_BUDGET[tier].transforms;
     let transforms = 0, deferred = 0;
-    for (const gr of GROUPS) {
-      const vals = groups[gr];
-      if (!vals.some(([key, v]) => this.dirty(key, v))) continue;
+    for (let gi = 0; gi < GROUPS.length; gi++) {
+      const keys = GROUP_KEYS[gi], vals = V[gi];
+      // an invisible mark only writes its opacity (talking moves the mouth every frame: no hidden tongue work)
+      const from = OPACITY_ONLY[gi] && vals[keys.length - 1] < 0.01 ? keys.length - 1 : 0;
+      let dirty = false;
+      for (let i = from; i < keys.length && !dirty; i++) dirty = this.dirty(keys[i], from ? 0 : vals[i]);
+      if (!dirty) continue;
       if (transforms >= budget) { deferred++; continue; }
-      for (const [key, v] of vals) this.set(key, v);
+      for (let i = from; i < keys.length; i++) this.set(keys[i], from ? 0 : vals[i]);
       transforms++;
     }
     // stroke weights and the glint are paint, not transforms

@@ -2,6 +2,7 @@
 
 import { memo, useEffect, useRef, useState, type FormEvent } from 'react';
 import { COPY } from './copy';
+import { t } from './strings';
 
 /** Container types in order of preference: Opus in WebM (Android/desktop), AAC in MP4 (iOS), Ogg. */
 export const MIC_TYPES = ['audio/webm;codecs=opus', 'audio/mp4', 'audio/ogg;codecs=opus', 'audio/webm'] as const;
@@ -102,7 +103,7 @@ export const TalkPill = memo(function TalkPill(p: TalkPillProps) {
   if (p.guest) {
     return (
       <div className="pet-talk">
-        <button type="button" className="pet-pill pet-pill-dm" onClick={p.onOpenDm}>{COPY.chatInTelegram}</button>
+        <button type="button" className="pet-pill pet-pill-dm" onClick={p.onOpenDm}>{t('talk.chatInTelegram')}</button>
       </div>
     );
   }
@@ -183,7 +184,7 @@ export const TalkPill = memo(function TalkPill(p: TalkPillProps) {
       latest.current.onRecording?.(false);
       const held = performance.now() - r.started;
       if (r.cancel || held < MIN_HOLD_MS || !chunks.length) {
-        if (!r.cancel && held < MIN_HOLD_MS) setHint(COPY.holdToTalk);
+        if (!r.cancel && held < MIN_HOLD_MS) setHint(t('talk.holdToTalk'));
         latest.current.onIdle();
         return;
       }
@@ -203,7 +204,7 @@ export const TalkPill = memo(function TalkPill(p: TalkPillProps) {
     if (!r) {
       if (pending.current) {
         generation.current++; pending.current = false;
-        if (!cancel) setHint(COPY.holdToTalk);
+        if (!cancel) setHint(t('talk.holdToTalk'));
         latest.current.onIdle();
       }
       return;
@@ -213,7 +214,7 @@ export const TalkPill = memo(function TalkPill(p: TalkPillProps) {
   };
 
   function fallback() {
-    setHint(COPY.micBlocked);
+    setHint(t('talk.micBlocked'));
     input.current?.focus();
   }
 
@@ -223,7 +224,7 @@ export const TalkPill = memo(function TalkPill(p: TalkPillProps) {
       {hint && <span className="pet-hint" role="status">{hint}</span>}
       <form className="pet-pill" data-recording={recording ? '' : undefined} onSubmit={submit}>
         <input ref={input} className="pet-input" value={text} enterKeyHint="send" autoComplete="off" maxLength={500}
-          placeholder={recording ? COPY.recording : COPY.talkTo(p.name)} aria-label={COPY.talkTo(p.name)}
+          placeholder={recording ? t('talk.recording') : t('talk.placeholder', { name: p.name })} aria-label={t('talk.placeholder', { name: p.name })}
           onFocus={() => p.onListen('text')}
           onBlur={() => { if (!text.trim() && !p.busy) p.onIdle(); }}
           onChange={(e) => {
@@ -234,7 +235,7 @@ export const TalkPill = memo(function TalkPill(p: TalkPillProps) {
         {text.trim()
           ? <button type="submit" className="pet-send" aria-label={COPY.send} disabled={p.busy}><SendIcon /></button>
           : p.onVoice && (
-            <button type="button" className="pet-mic" aria-label={COPY.holdToTalk} aria-pressed={recording} disabled={p.busy}
+            <button type="button" className="pet-mic" aria-label={t('talk.holdToTalk')} aria-pressed={recording} disabled={p.busy}
               onPointerDown={(e) => { e.preventDefault(); released.current = false; void micDown(); }}
               onPointerUp={() => micUp(false)}
               onPointerCancel={() => micUp(true)}

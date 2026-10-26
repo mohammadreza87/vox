@@ -13,6 +13,7 @@
  * them needs the rig bound without framer and the character model split. Lower the ceilings as
  * the route shrinks. Raise them only as a deliberate product call recorded in the commit message
  * (the face-range and eating pass bought ~2.7 KB of engine for the app's core moments).
+ * Sibling gate: check-pet-copy.mjs (the pet copy lint); both run under `npm run check:pet` (check-pet-gates.mjs).
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -27,8 +28,16 @@ const LAUNCH = '/studio/pet/launch/page';
 const LAYOUT = '/studio/layout';
 /** brief §3.3 */
 export const TARGET = { js: 130 * 1024, css: 12_000, engine: 25 * 1024 };
-/** today's weight plus a little slack: a regression fails, an improvement should lower these */
-export const CEILING = { js: 184 * 1024, css: TARGET.css, engine: 40 * 1024 };
+/**
+ * today's weight plus a little slack: a regression fails, an improvement should lower these.
+ * Raised 2026-10-26, product call "Wave A: motion polish, bilingual strings, layout classes and room rail":
+ * engine 39,784 B (38.9 KB) -> 45,268 B (44.2 KB) br, route JS 188,384 B (184.0 KB) -> 195,851 B (191.3 KB) br
+ * (the launch page, the heavier of the two), route CSS 11,798 B -> 11,692 B raw. The catalogues, rooms, fx.css,
+ * rooms.css and the motion extras already load lazily and are not counted; the stage vocabulary, micro-saccades,
+ * soft-part overlap and room/settle/growth stubs (~1.75 KB together) were kept for motion quality.
+ * Each ceiling is the measured weight plus 1 KB.
+ */
+export const CEILING = { js: 195_851 + 1024, css: TARGET.css, engine: 45_268 + 1024 };
 /** a string only the engine's chunk carries (a reaction kind) */
 const ENGINE_MARK = '"sleepPoke"';
 

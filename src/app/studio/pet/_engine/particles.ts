@@ -2,7 +2,8 @@
  * Particles (brief §3.2 layer 3, decision 10): a fixed pool of ≤ 16 divs the UI renders once; the loop writes
  * `data-kind`, transform and opacity straight into them (no React state, no Burst.tsx). Each kind has its own
  * small motion: crumbs fall, hearts and notes rise, Z marks drift up swaying, sparkles burst, wisps float off,
- * a tear drops. Lite: half the count (≤ 6 live) at 30 Hz. Reduced: one static icon that only fades.
+ * a tear drops. Lite: half the count (≤ 6 live) at 30 Hz. Reduced motion: none at all (§10.8; the model's own
+ * Z marks and faces still say what a burst would). The pool is fixed: no allocation per burst or per frame.
  */
 
 import { range } from './rng';
@@ -61,24 +62,23 @@ export class Particles {
 
   /** Spawn n of a kind at a stage point (k = px per unit). Respects the tier's live cap. */
   burst(kind: ParticleKind, n: number, at: Point, k: number, tier: Tier): void {
-    const cap = TIER_BUDGET[tier].particles || 1;
-    let live = this.pool.filter((p) => p.live).length;
+    const cap = TIER_BUDGET[tier].particles;
+    let live = this.live, slot = 0;
+    const d = KIND[kind];
     for (let i = 0; i < n && live < cap; i++) {
-      // reuse the oldest dead slot; when all are live the burst is trimmed (never steals a live one)
-      const p = this.pool.find((q) => !q.live);
-      if (!p) break;
-      const d = KIND[kind];
-      const [vx, vy] = tier === 'reduced' ? [0, 0] : d.launch(this.rng);
-      Object.assign(p, {
-        kind, x: at.x + (tier === 'reduced' ? 0 : range(this.rng, -6, 6) * k), y: at.y, vx: vx * k, vy: vy * k, age: 0,
-        ttl: tier === 'reduced' ? 600 : d.ttl * range(this.rng, 0.9, 1.1), s: range(this.rng, d.s[0], d.s[1]),
-        rot: range(this.rng, -20, 20), spin: range(this.rng, -180, 180), phase: range(this.rng, 0, Math.PI * 2), live: true,
-      });
+      // reuse the first dead slot; when all are live the burst is trimmed (never steals a live one)
+      while (slot < this.pool.length && this.pool[slot].live) slot++;
+      if (slot >= this.pool.length) break;
+      const p = this.pool[slot];
+      const [vx, vy] = d.launch(this.rng);
+      p.kind = kind; p.x = at.x + range(this.rng, -6, 6) * k; p.y = at.y; p.vx = vx * k; p.vy = vy * k; p.age = 0;
+      p.ttl = d.ttl * range(this.rng, 0.9, 1.1); p.s = range(this.rng, d.s[0], d.s[1]);
+      p.rot = range(this.rng, -20, 20); p.spin = range(this.rng, -180, 180); p.phase = range(this.rng, 0, Math.PI * 2); p.live = true;
       live++;
     }
   }
 
-  get live(): number { return this.pool.reduce((n, p) => n + (p.live ? 1 : 0), 0); }
+  get live(): number { let n = 0; for (const p of this.pool) if (p.live) n++; return n; }
 
   /** Advance and write. Lite updates at 30 Hz. */
   update(dtMs: number, k: number, tier: Tier): void {
@@ -86,14 +86,14 @@ export class Particles {
     if (tier === 'lite' && this.acc < 33) return;
     const dt = Math.min(64, this.acc) / 1000;
     this.acc = 0;
-    this.pool.forEach((p, i) => {
-      const el = this.els[i];
-      if (!p.live) return;
+    for (let i = 0; i < this.pool.length; i++) {
+      const p = this.pool[i], el = this.els[i];
+      if (!p.live) continue;
       p.age += dt * 1000;
       if (p.age >= p.ttl) {
         p.live = false;
         if (el) park(el);
-        return;
+        continue;
       }
       const u = p.age / p.ttl;
       let x = p.x, s = p.s, o = 1;
@@ -115,7 +115,7 @@ export class Particles {
         if (el.dataset.kind !== p.kind) el.dataset.kind = p.kind;
         place(el, `translate3d(${x.toFixed(1)}px,${p.y.toFixed(1)}px,0) translate(-50%,-50%) rotate(${p.rot.toFixed(0)}deg) scale(${s.toFixed(3)})`, o.toFixed(3));
       }
-    });
+    }
   }
 
   clear(): void { for (const p of this.pool) p.live = false; for (const el of this.els) park(el); }

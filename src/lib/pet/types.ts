@@ -7,6 +7,7 @@
 
 import type { AgentJoin, CharacterLook, Stage } from '../studio/types';
 import type { CircleDecision, CircleParticipationExport, NoteExport, PetCircle, PetNote } from '../circles/contracts';
+import type { PetPlay, PetPlayView } from './play';
 
 export type { CharacterLook, PetCircle, PetNote, Stage };
 
@@ -104,7 +105,7 @@ export type PetRole = 'owner' | 'member' | 'guest';
 
 /** Every request carries the user's zone in this header (GET has no body). */
 export const PET_TZ_HEADER = 'x-pet-tz';
-/** `/api/studio/pet/:agentId` and `/export` (GET), `/care`, `/talk`, `/talk-voice`, `/forget` (POST). */
+/** `/api/studio/pet/:agentId` and `/export`, `/play` (GET), `/care`, `/play`, `/talk`, `/talk-voice`, `/forget` (POST). */
 export const PET_API_BASE = '/api/studio/pet';
 /** Page route: `/studio/pet/:agentId`. The menu button and the /start web_app button point here. */
 export const PET_PAGE_BASE = '/studio/pet';
@@ -143,6 +144,8 @@ export interface PetView {
   talkInDm?: true;
   /** the person's own data page in Vox (t.me/<VoxxBot>?startapp=mydata): export, erase, notes. The ⋯ menu's Settings opens it. */
   dataUrl?: string;
+  /** the person's play record (pet/play.ts, design §3.4); absent when it could not be read this time (the pet still opens) */
+  play?: PetPlayView;
 }
 
 /* ---------- the pet over a group (Circles S4): GET circle answers PetCircle ---------- */
@@ -198,9 +201,11 @@ export interface TalkVoiceResponse {
 /** agentChoices: the person's agent-card choices with their evidence (Circles), present only when any exist.
  * circles: their own group-circle participation (evidence, membership windows), present only when any exists. */
 /** notes: the requester's own note copies (Circles S3), present only when any exist. */
-export interface PetExportResponse { petCare: PetCare[]; agentChoices?: AgentJoin[]; circles?: CircleParticipationExport[]; notes?: NoteExport[] }
+/** petPlay: their play records (design §3.4), present only when any exist. */
+export interface PetExportResponse { petCare: PetCare[]; agentChoices?: AgentJoin[]; circles?: CircleParticipationExport[]; notes?: NoteExport[]; petPlay?: PetPlay[] }
 /** choicesErased / circlesErased / notesErased: agent-card choices, circle rows and own note copies removed alongside pet care, present only when any were. */
-export interface PetForgetResponse { erased: number; choicesErased?: number; circlesErased?: number; notesErased?: number }
+/** playErased: play records removed with pet care, present only when any were. */
+export interface PetForgetResponse { erased: number; choicesErased?: number; circlesErased?: number; notesErased?: number; playErased?: number }
 
 export type PetErrorCode =
   | 'authentication_required' // initData missing, stale, or signed by another bot

@@ -10,10 +10,14 @@ import type {
   CareRequest, CareResponse, CharacterLook, Mood, NeedKey, PetAction, PetErrorBody, PetErrorCode, PetPrivateView, PetView,
   Stage, TalkRequest, TalkResponse, TalkVoiceResponse,
 } from '@/lib/pet/types';
+import type { PetPlayView, PlayRequest, PlayResponse } from '@/lib/pet/play';
 import type { RigBindings } from '../../_components/character/CharacterView';
 import type { Point, ReactionEvent, SayLine, Side, Tier, Zone } from '../_engine/types';
 
 /* ---------- API (brief §3.8): every call sends X-Telegram-Init-Data and the x-pet-tz header ---------- */
+
+/** The play record (design §3.4): `PetView.play` on open, and what POST …/play answers. */
+export type { PetPlayView, PlayRequest, PlayResponse };
 
 /** `keepalive`: the request outlives the page (care flushed on hide, before Telegram may close it). */
 export interface PetRequestOpts { signal?: AbortSignal; keepalive?: boolean }
@@ -23,6 +27,8 @@ export interface PetApi {
   get(agentId: string, o?: PetRequestOpts): Promise<PetView>;
   /** POST …/care. pet/tickle are flushed as tap counts every 2 s. */
   care(agentId: string, req: CareRequest, o?: PetRequestOpts): Promise<CareResponse>;
+  /** POST …/play (design §3.4): one idempotent play mutation, sent with the care epoch like care. Optional until the client implements it. */
+  play?(agentId: string, req: PlayRequest, o?: PetRequestOpts): Promise<PlayResponse>;
   /** POST …/talk */
   talk(agentId: string, req: TalkRequest, o?: PetRequestOpts): Promise<TalkResponse>;
   /** POST …/talk-voice, multipart `audio` (MediaRecorder blob) */

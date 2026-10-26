@@ -18,7 +18,12 @@ interface StageProps {
   style?: CSSProperties;
   /** the first pointerdown anywhere on the stage (AudioContext resume, accelerometer start) */
   onTouch?: () => void;
+  /** a fast horizontal flick on the background, never on the character (design §4: switches rooms) */
+  onSwipe?: (toward: 'left' | 'right') => void;
 }
+
+/** A flick, not a gaze drag: ≥ 60 px sideways, twice as far as up or down, within 320 ms. */
+export const SWIPE = { px: 60, ms: 320 } as const;
 
 /**
  * The scene (§3.2 layer 1): a static radial backdrop in the agent's hue (never animated), the floor
@@ -26,8 +31,9 @@ interface StageProps {
  * also owns pointer input: every sample goes to the engine (on the character it squashes in the same
  * frame; off it, the eyes follow the finger), and the pointer is captured when the engine takes it.
  */
-export function Stage({ engine, backdrop, box, children, over, embed, style, onTouch }: StageProps) {
+export function Stage({ engine, backdrop, box, children, over, embed, style, onTouch, onSwipe }: StageProps) {
   const origin = useRef<{ left: number; top: number }>({ left: 0, top: 0 });
+  const flick = useRef<{ id: number; x: number; y: number; t: number } | null>(null);
 
   const send = (e: ReactPointerEvent<HTMLDivElement>, kind: PointerSample['kind']) => {
     if (kind === 'down') {
@@ -38,6 +44,14 @@ export function Stage({ engine, backdrop, box, children, over, embed, style, onT
     if (kind === 'down' && took) {
       try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* synthetic events */ }
     }
+    // the engine took it (the character): poke, stroke, drag. Only a pointer it left alone can be a flick.
+    if (kind === 'down') flick.current = took ? null : { id: e.pointerId, x: e.clientX, y: e.clientY, t: performance.now() };
+    const f = flick.current;
+    if (kind === 'cancel' || (kind === 'up' && f?.id !== e.pointerId)) flick.current = null;
+    if (kind !== 'up' || !f || f.id !== e.pointerId) return;
+    flick.current = null;
+    const dx = e.clientX - f.x, dy = e.clientY - f.y, dt = performance.now() - f.t;
+    if (onSwipe && Math.abs(dx) >= SWIPE.px && Math.abs(dx) >= 2 * Math.abs(dy) && dt <= SWIPE.ms) onSwipe(dx < 0 ? 'left' : 'right');
   };
 
   const groundY = box.y + box.size * 0.83;

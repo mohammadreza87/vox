@@ -8,11 +8,11 @@
 
 import { timelineEnd, type KC, type PreparedBeat } from './beats';
 import { presetKC } from './spring';
-import { PRIORITY_ORDER, type Channel, type PriorityClass, type ReactionKind, type SpringPreset } from './types';
+import { PRIORITY_ORDER, type Channel, type PlayKind, type PriorityClass, type SpringPreset } from './types';
 
 export interface Playing {
   id: number;
-  kind: ReactionKind;
+  kind: PlayKind;
   cls: PriorityClass;
   start: number;
   beats: PreparedBeat[];
@@ -49,7 +49,7 @@ export class Player {
     return best;
   }
 
-  play(kind: ReactionKind, cls: PriorityClass, beats: PreparedBeat[], now: number, onEnd?: () => void, onCancel?: () => void): Playing | null {
+  play(kind: PlayKind, cls: PriorityClass, beats: PreparedBeat[], now: number, onEnd?: () => void, onCancel?: () => void): Playing | null {
     const top = this.top();
     if (top !== null && rank(cls) > rank(top)) return null;
     for (const p of [...this.playing]) if (rank(p.cls) > rank(cls) || p.kind === kind) this.stop(p, true, beats);
@@ -62,7 +62,15 @@ export class Player {
 
   /** Fire due beats; release reactions that have played out. */
   update(now: number): void {
+    // the common frame fires nothing and ends nothing: no copies, no allocation
+    let due = false;
+    for (let i = 0; i < this.playing.length && !due; i++) {
+      const p = this.playing[i];
+      due = (p.next < p.beats.length && p.start + p.beats[p.next].at <= now) || (p.next >= p.beats.length && now >= p.endAt);
+    }
+    if (!due) return;
     for (const p of [...this.playing]) {
+      if (!this.playing.includes(p)) continue;
       while (p.next < p.beats.length && p.start + p.beats[p.next].at <= now) {
         const b = p.beats[p.next++];
         for (const [c, v] of Object.entries(b.target) as Array<[Channel, number]>) {
@@ -79,12 +87,12 @@ export class Player {
   clear(): void { for (const p of [...this.playing]) this.stop(p, true); }
 
   /** Push a reaction's end (a hold that lasts while a finger is down). */
-  extend(kind: ReactionKind, until: number): void { for (const p of this.playing) if (p.kind === kind) p.endAt = Math.max(p.endAt, until); }
+  extend(kind: PlayKind, until: number): void { for (const p of this.playing) if (p.kind === kind) p.endAt = Math.max(p.endAt, until); }
 
   /** End a reaction early (finger lifted): it releases now. */
-  end(kind: ReactionKind): void { for (const p of [...this.playing]) if (p.kind === kind) this.stop(p, false); }
+  end(kind: PlayKind): void { for (const p of [...this.playing]) if (p.kind === kind) this.stop(p, false); }
 
-  has(kind: ReactionKind): boolean { return this.playing.some((p) => p.kind === kind); }
+  has(kind: PlayKind): boolean { return this.playing.some((p) => p.kind === kind); }
 
   /** Move every timeline later by `ms` (the page was hidden): what came due meanwhile plays on, not all at once. */
   shift(ms: number): void { for (const p of this.playing) { p.start += ms; p.endAt += ms; } }

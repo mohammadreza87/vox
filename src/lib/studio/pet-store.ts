@@ -23,6 +23,8 @@ import { brandError, namedError } from '../error-contract';
 
 const AGENT_ID = /^[A-Za-z0-9_-]{1,128}$/;
 export const PET_COLLECTION = 'studio_pets';
+/** The per-person erasure epochs (`studio_pets_epochs/{userId}`): one generation for care and play alike. */
+export const petEpochCollection = (collection: string = PET_COLLECTION) => `${collection}_epochs`;
 
 export interface PetStore {
   get(agentId: string, userId: number): Promise<PetCare | null>;
@@ -86,6 +88,51 @@ type AgentFile = Record<string, PetCare>;
 
 /** Local disk: one JSON file per agent, written atomically, every change serialized through one queue. */
 const fileQueues = new Map<string, Promise<unknown>>();
+
+/**
+ * One writer at a time for everything under a pet directory: the care files, the erasure epochs and the play files
+ * beside them (pet-play-store.ts), in this process (a queue) and across processes (a lock directory).
+ */
+export function petFileSerial<T>(dir: string, run: () => T): Promise<T> {
+  const key = resolve(dir);
+  const execute = () => {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const lock = join(dir, '.writer.lock');
+    // Cross-process exclusion fails closed. A crashed lock requires an operator recovery.
+    mkdirSync(lock, { mode: 0o700 });
+    try { return run(); } finally { rmdirSync(lock); }
+  };
+  const next = (fileQueues.get(key) ?? Promise.resolve()).then(execute, execute);
+  const settled = next.catch(() => undefined);
+  fileQueues.set(key, settled);
+  void settled.then(() => { if (fileQueues.get(key) === settled) fileQueues.delete(key); });
+  return next;
+}
+
+/** The person's erasure epoch under a pet directory (call inside petFileSerial). Care and play share it. */
+export function readPetFileEpoch(dir: string, userId: number): string {
+  const file = join(dir, '.epochs', `${userId}.json`);
+  if (!existsSync(file)) return 'initial';
+  const record = JSON.parse(readFileSync(file, 'utf8'));
+  if (record.v !== 1 || typeof record.epoch !== 'string' || !/^[a-f0-9-]{36}$/.test(record.epoch)) throw new Error('Invalid pet erasure epoch');
+  return record.epoch;
+}
+
+/** The epoch now, without waiting: null while a writer holds the lock or the record is unreadable. */
+export function readPetFileEpochNow(dir: string, userId: number): string | null {
+  if (existsSync(join(dir, '.writer.lock'))) return null;
+  try { const epoch = readPetFileEpoch(dir, userId); return existsSync(join(dir, '.writer.lock')) ? null : epoch; } catch { return null; }
+}
+
+/** Rotates the person's erasure epoch (call inside petFileSerial): every request holding the old one now fails. */
+export function rotatePetFileEpoch(dir: string, userId: number): void {
+  const epochs = join(dir, '.epochs');
+  mkdirSync(epochs, { recursive: true, mode: 0o700 });
+  const file = join(epochs, `${userId}.json`);
+  writeFileSync(`${file}.tmp`, JSON.stringify({ v: 1, epoch: randomUUID() }), { mode: 0o600 });
+  renameSync(`${file}.tmp`, file);
+}
+
 export class PetCareChangedError extends Error {
   constructor(message: string) {
     super(message);
@@ -121,27 +168,11 @@ export class FilePetStore implements PetStore {
   }
 
   private serial<T>(run: () => T): Promise<T> {
-    const key = resolve(this.dir);
-    const execute = () => {
-      mkdirSync(this.dir, { recursive: true, mode: 0o700 });
-      const lock = join(this.dir, '.writer.lock');
-      // Cross-process exclusion fails closed. A crashed lock requires an operator recovery.
-      mkdirSync(lock, { mode: 0o700 });
-      try { return run(); } finally { rmdirSync(lock); }
-    };
-    const next = (fileQueues.get(key) ?? Promise.resolve()).then(execute, execute);
-    const settled = next.catch(() => undefined);
-    fileQueues.set(key, settled);
-    void settled.then(() => { if (fileQueues.get(key) === settled) fileQueues.delete(key); });
-    return next;
+    return petFileSerial(this.dir, run);
   }
 
   private epoch(userId: number): string {
-    const file = join(this.dir, '.epochs', `${userId}.json`);
-    if (!existsSync(file)) return 'initial';
-    const record = JSON.parse(readFileSync(file, 'utf8'));
-    if (record.v !== 1 || typeof record.epoch !== 'string' || !/^[a-f0-9-]{36}$/.test(record.epoch)) throw new Error('Invalid pet erasure epoch');
-    return record.epoch;
+    return readPetFileEpoch(this.dir, userId);
   }
 
   async erasureEpoch(userId: number): Promise<string> {
@@ -151,8 +182,7 @@ export class FilePetStore implements PetStore {
 
   erasureEpochNow(userId: number): string | null {
     assertUser(userId);
-    if (existsSync(join(this.dir, '.writer.lock'))) return null;
-    try { const epoch = this.epoch(userId); return existsSync(join(this.dir, '.writer.lock')) ? null : epoch; } catch { return null; }
+    return readPetFileEpochNow(this.dir, userId);
   }
 
   private agents(): string[] {
@@ -188,11 +218,7 @@ export class FilePetStore implements PetStore {
   async eraseUser(userId: number): Promise<number> {
     assertUser(userId);
     return this.serial(() => {
-      const epochs = join(this.dir, '.epochs');
-      mkdirSync(epochs, { recursive: true, mode: 0o700 });
-      const file = join(epochs, `${userId}.json`);
-      writeFileSync(`${file}.tmp`, JSON.stringify({ v: 1, epoch: randomUUID() }), { mode: 0o600 });
-      renameSync(`${file}.tmp`, file);
+      rotatePetFileEpoch(this.dir, userId);
       let erased = 0;
       for (const agentId of this.agents()) {
         const records = this.load(agentId);
@@ -248,7 +274,7 @@ const BATCH = 400;
 export class FirestorePetStore implements PetStore {
   constructor(private readonly db: Firestore, private readonly collection = PET_COLLECTION) {}
 
-  private epochRef(userId: number) { return this.db.collection(`${this.collection}_epochs`).doc(String(userId)); }
+  private epochRef(userId: number) { return this.db.collection(petEpochCollection(this.collection)).doc(String(userId)); }
 
   async erasureEpoch(userId: number): Promise<string> {
     assertUser(userId);

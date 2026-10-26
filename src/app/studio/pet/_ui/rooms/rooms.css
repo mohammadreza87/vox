@@ -1,0 +1,4 @@
+/* Placeholder rooms (Wave A): loaded with the first room chunk, never on Home. Tokens come from pet.css. */
+.pet-soon{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;height:var(--pet-toy);text-align:center;animation:petFade .3s var(--ease-sine)}
+.pet-soon b{font:600 var(--pet-fs)/var(--pet-lh) var(--f-display)}
+.pet-soon span{font-size:13px;line-height:18px;color:var(--text-2)}

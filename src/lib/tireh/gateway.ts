@@ -192,7 +192,7 @@ export type GroupClaimMiss = 'cooldown' | 'window' | 'duplicate';
 const CLAIM_DIAGNOSTIC = { cooldown: 'group_skip_claim_cooldown', window: 'group_skip_claim_window', duplicate: 'group_skip_claim_duplicate' } as const;
 
 /** What a group turn adds to triage and the reply: the replied-to text and, without stored history, recent visible lines. */
-interface TurnExtras { quote?: ReplyQuote | null; recent?: VisibleLine[] }
+interface TurnExtras { quote?: ReplyQuote | null; recent?: VisibleLine[]; /** the person spoke this turn (per-turn line only) */ inputModality?: 'voice' | 'text' }
 
 export type HandleResult =
   | 'replied'
@@ -233,6 +233,12 @@ export const PET_SURFACE_FRAME = [
   'Never make them feel they are leaving too early, never hint they will miss something if they go, never say you will be lonely or sad without them,',
   'never pressure them to reply or come back, never ignore the goodbye by continuing the conversation, and never tell them they cannot or should not leave.',
 ].join(' ');
+
+/**
+ * The same frame for a spoken pet turn (design PET_CARE_GAME_DESIGN_2026_10_26 §8A.1): the person used hold-to-talk,
+ * so the reply is heard, not read. Chosen per turn in `converse`; it lives in the per-turn frame, never in block A.
+ */
+export const PET_SURFACE_FRAME_VOICE = `${PET_SURFACE_FRAME} The person said this out loud and is listening for your reply; answer as speech.`;
 
 const GUEST_VOICE_REPLY = 'I only read typed messages here, so I did not listen to that voice message. Could you type it instead?';
 const NO_MEMORY = /(?:do not|don't|don’t)\s+(?:remember|save|store)|forget (?:this|that)|ذخیره نکن|به خاطر نسپار|یادت نماند|فراموش کن/iu;
@@ -647,7 +653,9 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
    * same memory, same privacy rules, same persona.
    */
   async converse(personaId: string, speakerId: string, text: string, options: { space?: 'work' | 'personal'; images?: LLMMessage['images']; authorize?: () => Promise<boolean>; authorizeNow?: () => boolean; onBoundaryFence?: (fence: () => boolean) => void;
-    /** where the turn comes from when that changes the reply's shape (the pet page: short and playful) */ surface?: 'pet' } = {}): Promise<string> {
+    /** where the turn comes from when that changes the reply's shape (the pet page: short and playful) */ surface?: 'pet';
+    /** how the reply will be delivered (speech is synthesized afterwards); unset keeps the prompt as it was */ replyFormat?: 'voice' | 'text';
+    /** how the person sent the turn: 'voice' says they spoke it and are listening (per-turn lines only, never block A) */ inputModality?: 'voice' | 'text' } = {}): Promise<string> {
     const persona = this.deps.org.getPersona(personaId);
     if (!persona) throw new Error(`Unknown persona ${personaId}`);
     if (!this.deps.org.getPerson(speakerId)) throw new Error('Unknown speaker');
@@ -671,7 +679,8 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     if (this.deps.relationshipAuthority || boundary.compact) boundary = await this.boundary(persona, chat, speakerId, boundary.space, text);
     if (boundary.compact) options.onBoundaryFence?.(() => this.exportAuthorizedNow(persona, chat, speakerId, boundary, options.authorizeNow));
     const reply = await this.generateReplyAt(persona, chat, speakerId, text, boundary, options.images, options.authorize, options.authorizeNow,
-      options.surface === 'pet' ? PET_SURFACE_FRAME : undefined);
+      options.surface === 'pet' ? (options.inputModality === 'voice' ? PET_SURFACE_FRAME_VOICE : PET_SURFACE_FRAME) : undefined,
+      options.replyFormat, options.inputModality);
     if (!(await this.unchanged(persona, chat, speakerId, boundary)) || !await this.requestAuthorized(options.authorize)) return this.changedReply;
     const assistant: ChatMessage = { role: 'assistant', text: reply, at: this.now(), privacy: this.stamp(boundary, user.privacy!.sourceEventIds) };
     await this.retain(persona, chat, speakerId, assistant, boundary);
@@ -1141,8 +1150,9 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     return this.generateReplyAt(persona, chat, speakerId, text, await this.boundary(persona, chat, speakerId, 'work', text));
   }
 
-  private async generateReplyAt(persona: Persona, chat: ChatContext, speakerId: string, text: string, boundary: TurnBoundary, images?: LLMMessage['images'], authorize?: () => Promise<boolean>, authorizeNow?: () => boolean, surfaceFrame?: string): Promise<string> {
-    const result = await this.composeReply(persona, chat, speakerId, text, undefined, undefined, 'reply', undefined, boundary, images, authorize, authorizeNow, surfaceFrame);
+  private async generateReplyAt(persona: Persona, chat: ChatContext, speakerId: string, text: string, boundary: TurnBoundary, images?: LLMMessage['images'], authorize?: () => Promise<boolean>, authorizeNow?: () => boolean, surfaceFrame?: string, replyFormat?: 'voice' | 'text', inputModality?: 'voice' | 'text'): Promise<string> {
+    const result = await this.composeReply(persona, chat, speakerId, text, undefined, undefined, 'reply', replyFormat, boundary, images, authorize, authorizeNow, surfaceFrame,
+      inputModality ? { inputModality } : undefined);
     return result.text || this.changedReply;
   }
 
@@ -1245,7 +1255,8 @@ Follow-up capability: This agent can initiate a considerate check-in in this pri
     // Persian تو/شما: this message's, else the speaker's last in the window, so a neutral line never flips it.
     const register = registerFor(text, visible.length ? (extras?.recent ?? []).filter((l) => l.role === 'user' && l.personId === speakerId).map((l) => l.text) : []);
     const promptInput: PromptInput = { org, space: boundary.space, persona: { ...persona, webSearch: search }, chat, speakerId, memories, now: this.now(), canFollowUp: await this.canFollowUp(persona.id, chat, boundary.space), followUpChannel: this.deps.relationshipAuthority ? 'inbox' : 'chat', canSpeak: this.canSpeak(persona, boundary), replyFormat, activeSkills,
-      historyVisible: boundary.historyEnabled || visible.length > 0, recentWindow: visible.length > 0, ...(extras?.quote ? { replyQuote: { ...extras.quote } } : {}), ...(register ? { register } : {}) };
+      historyVisible: boundary.historyEnabled || visible.length > 0, recentWindow: visible.length > 0, ...(extras?.quote ? { replyQuote: { ...extras.quote } } : {}), ...(register ? { register } : {}),
+      ...(extras?.inputModality ? { inputModality: extras.inputModality } : {}) };
     const relationship = await this.relationshipContext(persona.id, chat);
     const frame = [action === 'proactive' ? PROACTIVE_GROUP_FRAME : '', surfaceFrame ?? ''].filter(Boolean).join('\n\n');
     const legacySystem = flags.cachedPrompt ? '' : buildSystemPrompt(promptInput) + `\n${relationship}` + (frame ? `\n\n${frame}` : '');

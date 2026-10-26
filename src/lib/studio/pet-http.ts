@@ -1,5 +1,5 @@
 /**
- * Vox Pet API (brief §3.6–3.8): `/api/studio/pet/:agentId[/care|/talk|/talk-voice]`, plus the circle routes of a pet
+ * Vox Pet API (brief §3.6–3.8): `/api/studio/pet/:agentId[/care|/play|/talk|/talk-voice]`, plus the circle routes of a pet
  * opened over a group (Circles S4: `circle`, `circle/decision`, `circle/leave`, `notes`, `notes/:copyId`) and
  * `/api/studio/pet/launch`, which maps a launch code to its agent.
  *
@@ -34,6 +34,7 @@ import { converseAuthorized } from './conversation';
 import { boundedStudioRequest } from './http';
 import { canUseAgent, formingDay, visibilityOf } from './permissions';
 import { petStoreFor, sweepPetCare, PetCareChangedError } from './pet-store';
+import { petPlayStoreFor, sweepPetPlay } from './pet-play-store';
 import { StudioRateLimiter, StudioRateLimitError, type StudioRequestRateLimiter } from './ratelimit';
 import { trustedStudioRequestOrigin } from './request-origin';
 import { StudioError, type Studio } from './service';
@@ -42,8 +43,12 @@ import type { DirectAuthorityEvaluator } from '../adaptive/persistence/authority
 import { digest } from '../adaptive/persistence/repository';
 import { isSchemaValidationError } from '../error-contract';
 import { agentShortCode, parsePetLaunch, sameShort } from '../circles/codec';
-import { apply, decay, newCare, open, talk, type CareResult } from '../pet/care';
+import { apply, decay, newCare, open, safeZone, talk, type CareResult } from '../pet/care';
 import { isGoodbye } from '../pet/goodbye';
+import {
+  activeSeason, applyPlay, ASK_IDS, BOOK_MOMENT_IDS, GAME_IDS, KEEPSAKE_IDS, newPlay, PLAY_ROOMS, playView, ROUND_OUTCOMES, SEASON_IDS,
+  SEED_KINDS, TIP_IDS, WEAR_SLOTS, WEARABLE_IDS, type PetPlayView, type PlayResponse, type SeasonId,
+} from '../pet/play';
 import {
   PET_ACTIONS, PET_TZ_HEADER, type CareResponse, type PetAction, type PetCare, type PetErrorCode,
   type PetPrivateView, type PetRole, type PetView, type TalkResponse, type TalkVoiceResponse,
@@ -67,6 +72,25 @@ const circleCode = z.string().regex(/^[A-Za-z0-9_-]{16,64}$/);
 const decisionSchema = z.object({ code: circleCode, choice: z.enum(['joined', 'reply_only', 'declined']), revision: z.string().regex(/^[A-Za-z0-9_-]{1,40}$/),
   eventId: z.string().regex(/^[A-Za-z0-9_-]{8,40}$/).optional() }).strict();
 const leaveSchema = z.object({ code: circleCode }).strict();
+const MAX_PLAY_BYTES = 1024;
+const oneOf = <T extends string>(list: readonly T[]) => z.enum(list as unknown as [T, ...T[]]);
+/** POST play (design §3.4): one small idempotent mutation over catalogue ids only; no free text can be sent. */
+const playSchema = z.discriminatedUnion('op', [
+  z.object({ op: z.literal('lightItem'), item: oneOf(KEEPSAKE_IDS) }).strict(),
+  z.object({ op: z.literal('wear'), slot: oneOf(WEAR_SLOTS), item: oneOf(WEARABLE_IDS).nullable() }).strict(),
+  z.object({ op: z.literal('plantSeed'), seed: oneOf(SEED_KINDS) }).strict(),
+  z.object({ op: z.literal('waterSeed') }).strict(),
+  z.object({ op: z.literal('bookMoment'), moment: oneOf(BOOK_MOMENT_IDS) }).strict(),
+  z.object({ op: z.literal('gameRound'), game: oneOf(GAME_IDS), outcome: oneOf(ROUND_OUTCOMES), round: z.string().regex(/^[A-Za-z0-9_-]{8,40}$/) }).strict(),
+  z.object({ op: z.literal('tipSeen'), tip: oneOf(TIP_IDS) }).strict(),
+  z.object({ op: z.literal('tipDismissed'), tip: oneOf(TIP_IDS) }).strict(),
+  z.object({ op: z.literal('askSeen'), ask: oneOf(ASK_IDS) }).strict(),
+  z.object({ op: z.literal('askDeclined'), ask: oneOf(ASK_IDS) }).strict(),
+  z.object({ op: z.literal('seasonCelebrated'), season: oneOf(SEASON_IDS) }).strict(),
+  z.object({ op: z.literal('roomVisited'), room: oneOf(PLAY_ROOMS) }).strict(),
+]);
+/** An open moves the play record's `seenAt` (the guest sweep's clock) at most this often: one small write a day, not one per open. */
+const PLAY_SEEN_EVERY_MS = 12 * 60 * 60 * 1000;
 
 const json = (data: unknown, status = 200, headers: Record<string, string> = {}) => Response.json(data, {
   status, headers: { 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', ...headers },
@@ -153,14 +177,14 @@ export function souvenir(agentId: string, userId: number, now: number): string {
 /** Server time the care rules run on (the Studio clock, so tests control it). */
 const clock = (studio: Studio) => (studio.deps.now?.() ?? new Date()).getTime();
 
-type PetRoute = 'view' | 'export' | 'care' | 'talk' | 'talk-voice' | 'forget' | 'circle' | 'circle-decision' | 'circle-leave' | 'notes' | 'notes-erase';
+type PetRoute = 'view' | 'export' | 'care' | 'play' | 'talk' | 'talk-voice' | 'forget' | 'circle' | 'circle-decision' | 'circle-leave' | 'notes' | 'notes-erase';
 /** What a manager-signed launch (S4) may do: the person's own pet and the circle. Talk stays with the agent's own bot (the DM). */
-const LAUNCH_ROUTES: ReadonlySet<PetRoute> = new Set(['view', 'care', 'circle', 'circle-decision', 'circle-leave', 'notes', 'notes-erase']);
+const LAUNCH_ROUTES: ReadonlySet<PetRoute> = new Set(['view', 'care', 'play', 'circle', 'circle-decision', 'circle-leave', 'notes', 'notes-erase']);
 /**
  * Low-value routes that may run on agent-signed initData without Telegram's signature, only under the shadow switch:
- * the person's own pet in this one agent. Never the circle view (it names the group and the other joined members).
+ * the person's own pet in this one agent (play is authorised exactly like care). Never the circle view (it names the group and the other joined members).
  */
-const RELAXABLE: ReadonlySet<PetRoute> = new Set(['view', 'care']);
+const RELAXABLE: ReadonlySet<PetRoute> = new Set(['view', 'care', 'play']);
 /** Agent-signed routes that act as the person (talk) or record their consent: a 1 h window instead of 24 h. */
 const STRICT_AGE: ReadonlySet<PetRoute> = new Set(['talk', 'talk-voice', 'circle-decision', 'circle-leave']);
 /** Moved to the VoxxBot-signed My data page (my-data-http.ts): never authorised by any pet initData again. */
@@ -168,11 +192,11 @@ const MOVED: ReadonlySet<PetRoute> = new Set(['export', 'forget']);
 const COPY_ID = /^[0-9a-z]{1,11}-[A-Za-z0-9_-]{12}$/;
 function routeOf(method: string, path: string[]): { route: PetRoute; copyId?: string } | null {
   const action = path.join('/');
-  if (method === 'GET') return action === '' ? { route: 'view' } : action === 'export' || action === 'circle' || action === 'notes' ? { route: action } : null;
+  if (method === 'GET') return action === '' ? { route: 'view' } : action === 'export' || action === 'play' || action === 'circle' || action === 'notes' ? { route: action } : null;
   if (method === 'DELETE') return path.length === 2 && path[0] === 'notes' && COPY_ID.test(path[1]) ? { route: 'notes-erase', copyId: path[1] } : null;
   if (method !== 'POST') return null;
   if (action === 'circle/decision' || action === 'circle/leave') return { route: action === 'circle/decision' ? 'circle-decision' : 'circle-leave' };
-  return action === 'care' || action === 'talk' || action === 'talk-voice' || action === 'forget' ? { route: action } : null;
+  return action === 'care' || action === 'play' || action === 'talk' || action === 'talk-voice' || action === 'forget' ? { route: action } : null;
 }
 
 /**
@@ -256,6 +280,7 @@ export async function handlePetRequest(studio: Studio, request: Request, agentId
     // Note texts are readable and erasable only in Vox (My data), or through a VoxxBot-signed launch (S4).
     if (route.startsWith('notes') && !launched) return fail('circle_use_vox', 403);
     void sweepPetCare(studio);
+    void sweepPetPlay(studio);
     const pets = await petStoreFor(studio);
 
     if (route.startsWith('circle') || route.startsWith('notes')) return await circleRoute(studio, limiter, request, route, routed.copyId, agent, user.id, state, launched);
@@ -292,21 +317,81 @@ export async function handlePetRequest(studio: Studio, request: Request, agentId
       return fn(decay(current ?? newCare(agent.id, user.id, at, tz ?? 'UTC', stage), at, tz), at);
     }, expectedEpoch);
 
+    const formed = formingDay(agent, new Date(now)) === null;
+    /**
+     * The person's play record as the page reads it (design §3.4), or undefined when the play store fails: a broken
+     * play store never closes the pet. An open moves `seenAt` (the guest sweep's clock) at most every 12 hours.
+     */
+    const readPlay = async (at: number, zone: string): Promise<PetPlayView | undefined> => {
+      try {
+        const plays = await petPlayStoreFor(studio);
+        let current = await plays.get(agent.id, user.id);
+        if (current && at - current.seenAt >= PLAY_SEEN_EVERY_MS) {
+          current = await plays.update(agent.id, user.id, (stored) => {
+            if (!currentPetNow()) throw new PetCareChangedError('Pet care changed');
+            const play = stored ? { ...stored, seenAt: Math.max(stored.seenAt, at) } : null;
+            return { play, result: play };
+          }, expectedEpoch);
+        }
+        return playView(current ?? newPlay(agent.id, user.id, at), at, zone);
+      } catch (error) {
+        if (PetCareChangedError.is(error)) throw error;
+        (studio.deps.logger ?? console).warn('[studio] pet_play_read_failed');
+        return undefined;
+      }
+    };
+
     if (route === 'view') {
       const dataUrl = studio.dataLink();
       const opened = await step((care, at) => { const o = open(care, at, stage); return { care: o.care, result: { ...o, at } }; });
+      const play = await readPlay(opened.at, opened.care.tz);
       const view: PetView = {
         careEpoch: expectedEpoch, agentId: agent.id, name: agent.persona.name, look: normalizeLook(agent.look), stage, formingDay: formingDay(agent, new Date(now)),
-        botUsername: agent.bot.username, voice: !!agent.voice && !!studio.deps.eleven,
+        botUsername: agent.bot.username, voice: !!agent.voice && (studio.deps.tts !== undefined ? !!studio.deps.tts?.canSynthesize : !!studio.deps.eleven),
         listen: role !== 'guest' && !launched && (!!studio.deps.openai || !!studio.deps.eleven), role, care: opened.care, now: opened.at,
         ...(launched ? { talkInDm: true as const } : {}),
         ...(dataUrl ? { dataUrl } : {}),
         ...(opened.welcome ? { welcome: { souvenir: souvenir(agent.id, user.id, opened.at), awayMs: opened.welcome.awayMs } } : {}),
         ...(opened.stageUp ? { stageUp: opened.stageUp } : {}),
         ...(opened.bondMilestone === undefined ? {} : { bondMilestone: opened.bondMilestone }),
+        ...(play ? { play } : {}),
       };
       finalCareFence();
       return json(view);
+    }
+
+    // Play (design §3.4): its own record beside care, on care's epoch and fences. Guests play too; strangers never reach here.
+    if (route === 'play') {
+      const plays = await petPlayStoreFor(studio);
+      const care = await pets.get(agent.id, user.id);
+      const zone = safeZone(tz ?? care?.tz);
+      if (method === 'GET') {
+        const current = await plays.get(agent.id, user.id);
+        const view = playView(current ?? newPlay(agent.id, user.id, now), now, zone);
+        finalCareFence();
+        return json({ play: view, now } satisfies PlayResponse);
+      }
+      if (contentType(request) !== 'application/json') return fail('json_required', 415);
+      const input = playSchema.parse(await jsonBody(request, MAX_PLAY_BYTES));
+      // A festival celebrates once per person per Persian year across all their agents (§4.10).
+      let celebratedElsewhere: ReadonlySet<SeasonId> | undefined;
+      if (input.op === 'seasonCelebrated') {
+        const on = activeSeason(now, zone);
+        if (on?.season === input.season) {
+          const elsewhere = (await plays.listForUser(user.id)).some((p) => p.agentId !== agent.id && p.seasons[input.season] === on.year);
+          if (elsewhere) celebratedElsewhere = new Set([input.season]);
+        }
+      }
+      const done = await plays.update(agent.id, user.id, (current) => {
+        if (!currentPetNow()) throw new PetCareChangedError('Pet care changed');
+        const at = Math.max(clock(studio), current?.updatedAt ?? 0);
+        const r = applyPlay(current ?? newPlay(agent.id, user.id, at), input, { now: at, tz: zone, stage, formed, bond: care?.bond ?? 0,
+          ...(celebratedElsewhere ? { celebratedElsewhere } : {}) });
+        return { play: r.play, result: { ...r, at } };
+      }, expectedEpoch);
+      finalCareFence();
+      const body: PlayResponse = { play: playView(done.play, done.at, zone), now: done.at, ...(done.guard ? { guard: done.guard } : {}) };
+      return json(body);
     }
 
     if (route === 'care') {

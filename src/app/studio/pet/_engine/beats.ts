@@ -6,6 +6,8 @@
  * oscillation and plays what is left (scale, face, light) as 150 ms crossfades.
  */
 
+import type { Stage } from '@/lib/studio/types';
+import { stageMotion, weightTime } from './motion';
 import { range } from './rng';
 import { alphaFor, volumeSx, type Tuning } from './species';
 import { presetKC } from './spring';
@@ -39,24 +41,33 @@ export interface PrepareOpts {
   tempo?: number;
   /** no jitter (tests, frame sheets of the bare timeline) */
   exact?: boolean;
+  /**
+   * the character's stage (§10.3, default 4): a wisp's beats land a little later and imprecisely on slower,
+   * softer springs with tiny hops; a puff's springs bounce more. Stage 4 is the tuned baseline.
+   */
+  stage?: Stage;
 }
 
 const clampLevel = (c: Channel, v: number) => (c === 'lidL' || c === 'lidR' ? Math.max(0.05, v) : c === 'blush' || c === 'mouthOpen' || c === 'fx' || c === 'glow' || c === 'morph' || c === 'sparkle' ? Math.max(0, Math.min(1, v)) : v);
 
 export function prepareBeats(beats: readonly Beat[], o: PrepareOpts): PreparedBeat[] {
+  const sm = stageMotion(o.stage ?? 4);
   const tf = (o.exact ? 1 : range(o.rng, 1 - JITTER.time, 1 + JITTER.time)) / (o.tempo ?? 1);
-  const af = o.exact ? 1 : range(o.rng, 1 - JITTER.amp, 1 + JITTER.amp);
+  const af = o.exact ? 1 : range(o.rng, 1 - JITTER.amp - sm.ampJitter, 1 + JITTER.amp + sm.ampJitter);
   const reduced = o.tier === 'reduced';
   const budget = TIER_BUDGET[o.tier];
   const out: PreparedBeat[] = [];
   // play order is time order (a stable sort keeps same-time beats as written)
   const sorted = beats.map((b, i) => [b, i] as const).sort((x, y) => x[0].at - y[0].at || x[1] - y[1]).map(([b]) => b);
+  let prevAt = 0;
   for (const b of sorted) {
-    const t = b.fixed ? 1 : tf, a = b.fixed ? 1 : af;
+    const t = b.fixed ? 1 : tf * sm.time, a = b.fixed ? 1 : af;
     const target: Partial<PoseTargets> = {};
     for (const [c, v0] of Object.entries(b.target) as Array<[Channel, number]>) {
       if (reduced && REDUCED_DROP.has(c)) continue;
-      const v = LEVELS.has(c) ? v0 : MULTIPLY.has(c) ? 1 + (v0 - 1) * a : v0 * a;
+      // a wisp squashes and stretches a little less deep (its springs are softer too)
+      const sq = c === 'sx' || c === 'sy' ? a * sm.squash : a;
+      const v = LEVELS.has(c) ? v0 : MULTIPLY.has(c) ? 1 + (v0 - 1) * sq : v0 * a;
       target[c] = clampLevel(c, v);
     }
     // the volume rule: a squash or stretch on sy alone keeps its volume; a pair written volume-true stays so after
@@ -66,13 +77,18 @@ export function prepareBeats(beats: readonly Beat[], o: PrepareOpts): PreparedBe
     else if (target.sx !== undefined && target.sy !== undefined && b.target.sx !== b.target.sy && b.target.sy !== 1 && b.target.sx !== 1
       && Math.abs((b.target.sx ?? 1) * Math.pow(b.target.sy ?? 1, al) - 1) < 0.02) target.sy = Math.pow(target.sx, -1 / al);
     if (reduced) for (const c of ['sx', 'sy'] as const) if (target[c] !== undefined) target[c] = 1 + Math.max(-REDUCED_SCALE, Math.min(REDUCED_SCALE, target[c]! - 1));
-    const prepared: PreparedBeat = { ...b, at: Math.round(b.at * t), target, kc: kcFor(b.spring, t, o.tuning, reduced), settleMs: SPRINGS[b.spring].visualDuration * 1000 * t };
+    // imprecision (a wisp): each beat lands a little off its mark, never before the one ahead of it
+    let at = Math.round(b.at * t);
+    if (sm.scatterMs && !b.fixed && !o.exact && at > 0) at = Math.max(prevAt, at + Math.round(range(o.rng, -sm.scatterMs, sm.scatterMs)));
+    prevAt = at;
+    const sp = b.fixed ? 1 : sm.spring;
+    const prepared: PreparedBeat = { ...b, at, target, kc: kcFor(b.spring, t, sp, o.tuning, reduced, sm.bounce), settleMs: SPRINGS[b.spring].visualDuration * 1000 * t * feel(b.spring, sp, o.tuning) };
     if (b.springs) {
       prepared.kcs = {};
-      for (const [c, p] of Object.entries(b.springs) as Array<[Channel, SpringPreset]>) prepared.kcs[c] = kcFor(p, t, o.tuning, reduced);
+      for (const [c, p] of Object.entries(b.springs) as Array<[Channel, SpringPreset]>) prepared.kcs[c] = kcFor(p, t, sp, o.tuning, reduced, sm.bounce);
     }
     if (b.hop) {
-      const hop: Hop = { h: b.hop.h * o.tuning.hop * a, land: (b.hop.land ?? 0.12) * o.tuning.land };
+      const hop: Hop = { h: b.hop.h * o.tuning.hop * a * sm.hop, land: (b.hop.land ?? 0.12) * o.tuning.land * (0.6 + 0.4 * sm.squash) };
       if (reduced) { delete prepared.hop; mergeTarget(prepared, { sy: 1 + REDUCED_SCALE * 0.75 }); } else prepared.hop = hop;
     }
     if (b.osc) {
@@ -88,17 +104,24 @@ export function prepareBeats(beats: readonly Beat[], o: PrepareOpts): PreparedBe
   return out;
 }
 
-function kcFor(p: SpringPreset, t: number, tuning: Tuning, reduced: boolean): KC {
+/**
+ * The felt duration factor of a spring: the stage's (a wisp is slower) times the weight's (§10.2: heavy settles
+ * slower, light flicks faster), held to 0.85–1.12 so no species on any stage leaves its reaction's ±20 % budget.
+ */
+const feel = (p: SpringPreset, stage: number, tuning: Tuning) => Math.min(1.12, Math.max(0.85, stage * weightTime(p, tuning.weight)));
+
+/** A beat's spring: the preset at the beat's time scale, the felt weight and stage, and the stage's bounce. */
+function kcFor(p: SpringPreset, t: number, stage: number, tuning: Tuning, reduced: boolean, bounce = 1): KC {
   if (reduced) return CROSSFADE;
-  return presetKC(p, t, p === 'jelly' ? tuning.jelly : 1);
+  return presetKC(p, t * feel(p, stage, tuning), (p === 'jelly' ? tuning.jelly : 1) * bounce);
 }
 
 function mergeTarget(b: PreparedBeat, t: Partial<PoseTargets>) { b.target = { ...t, ...b.target }; }
 
-/** Particle counts by tier: lite halves them (max 6 live), reduced shows one static icon. */
+/** Particle counts by tier: lite halves them (max 6 live); reduced motion has none (§10.8). */
 export function particlesFor(p: ParticleBurst | ParticleBurst[], tier: Tier): ParticleBurst[] {
   const list = Array.isArray(p) ? p : [p];
-  if (tier === 'reduced') return list.slice(0, 1).map((x) => ({ ...x, n: 1 }));
+  if (tier === 'reduced') return [];
   if (tier === 'lite') return list.map((x) => ({ ...x, n: Math.max(1, Math.min(TIER_BUDGET.lite.particles, Math.round(x.n * 0.5))) }));
   return list;
 }

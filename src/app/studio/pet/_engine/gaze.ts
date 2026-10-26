@@ -17,6 +17,12 @@ export const PURSUIT = 0.15;
 /** The head engages beyond this distance and carries this share of the gaze. */
 export const HEAD_ENGAGE = 0.4, HEAD_SHARE = 0.55;
 
+/**
+ * Micro-saccades (§10.2): inside a long look the eyes dart 2–3 times, tiny (0.3–0.5 of the eye range, which is
+ * 0.7–1.2 view units on the face) and quick (each held 30–50 ms), then return. Only while a look is held.
+ */
+export const DART = { afterMs: [700, 1400] as const, gapMs: [600, 1600] as const, holdMs: [30, 50] as const, amp: [0.3, 0.5] as const, perLook: [2, 3] as const };
+
 /** The quickest saccade spring the 1/120 s semi-implicit substep keeps stable (critically damped: d > ~63 ms; margin to 80). */
 const SACCADE_MIN_S = 0.08;
 
@@ -31,6 +37,14 @@ export class Gaze {
   gy = 0;
   private headAt = Infinity;
   private headGoal = { x: 0, y: 0 };
+  /** how far the eyes lead the head (ms range; §10.3: a wisp's head and eyes move together) */
+  lead: readonly [number, number] = [60, 80];
+  /** micro-saccades on (stage ≥ 3, not on reduced motion, never asleep) */
+  darts = false;
+  /** the current dart offset (eye-range units) and its schedule */
+  private dart = { x: 0, y: 0, until: -Infinity, next: Infinity, left: 0 };
+  /** the head joined a turn this big (range units) on the last look; the loop blinks on it */
+  lastHeadTurn = 0;
 
   constructor(private rng: Rng) {}
 
@@ -53,18 +67,44 @@ export class Gaze {
     }
     const far = Math.hypot(tx - this.hx.t, ty - this.hy.t) > HEAD_ENGAGE;
     const home = Math.hypot(tx, ty) < 0.25;
+    this.lastHeadTurn = 0;
     if (far || home) {
-      this.headGoal = home ? { x: 0, y: 0 } : { x: tx * HEAD_SHARE, y: ty * HEAD_SHARE };
-      this.headAt = now + (pursuit ? 0 : range(this.rng, 40, 80));
+      const goal = home ? { x: 0, y: 0 } : { x: tx * HEAD_SHARE, y: ty * HEAD_SHARE };
+      this.lastHeadTurn = Math.hypot(goal.x - this.hx.t, goal.y - this.hy.t);
+      this.headGoal = goal;
+      this.headAt = now + (pursuit ? 0 : range(this.rng, this.lead[0], this.lead[1]));
     }
+    // a new look: any dart ends, the next comes once this look has been held a while
+    this.dart.x = this.dart.y = 0; this.dart.until = -Infinity;
+    this.dart.left = pursuit ? 0 : Math.round(range(this.rng, DART.perLook[0], DART.perLook[1] + 0.99));
+    this.dart.next = this.darts && this.dart.left > 0 ? now + range(this.rng, DART.afterMs[0], DART.afterMs[1]) : Infinity;
     return jump;
   }
+
+  /** Darts on or off (off clears any dart in flight). */
+  setDarts(on: boolean): void {
+    this.darts = on;
+    if (!on) { this.dart.x = this.dart.y = 0; this.dart.until = -Infinity; this.dart.next = Infinity; }
+  }
+
+  /** When the loop must wake for the next dart (Infinity: none due). */
+  nextWake(): number { return this.dart.until > -Infinity ? this.dart.until : this.dart.next; }
 
   /** Total gaze offset in range units (eye-in-head + head). */
   get x() { return this.ex.x + this.hx.x; }
   get y() { return this.ey.x + this.hy.x; }
 
   update(now: number, dtMs: number): void {
+    const d = this.dart;
+    if (d.until > -Infinity && now >= d.until) {
+      d.x = d.y = 0; d.until = -Infinity;
+      d.next = d.left > 0 ? now + range(this.rng, DART.gapMs[0], DART.gapMs[1]) : Infinity;
+    } else if (this.darts && now >= d.next && d.left > 0) {
+      const a = range(this.rng, DART.amp[0], DART.amp[1]), th = range(this.rng, 0, Math.PI * 2);
+      d.x = Math.cos(th) * a; d.y = Math.sin(th) * a * 0.6;
+      d.until = now + range(this.rng, DART.holdMs[0], DART.holdMs[1]);
+      d.next = Infinity; d.left--;
+    }
     if (now >= this.headAt) {
       retarget(this.hx, this.headGoal.x);
       retarget(this.hy, this.headGoal.y);
@@ -73,8 +113,8 @@ export class Gaze {
     step(this.hx, dtMs);
     step(this.hy, dtMs);
     // counter-rotation: the eyes aim at target minus where the head is now
-    retarget(this.ex, clamp1(this.gx - this.hx.x));
-    retarget(this.ey, clamp1(this.gy - this.hy.x));
+    retarget(this.ex, clamp1(this.gx + d.x - this.hx.x));
+    retarget(this.ey, clamp1(this.gy + d.y - this.hy.x));
     step(this.ex, dtMs);
     step(this.ey, dtMs);
   }

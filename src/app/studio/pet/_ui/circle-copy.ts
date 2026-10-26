@@ -5,13 +5,15 @@
  */
 
 import type { ParticipantState } from '@/lib/circles/contracts';
+import { faDigits as fa, langOf, type PetLang } from './strings';
 
-export type CircleLang = 'en' | 'fa';
-export const circleLang = (code?: string): CircleLang => /^fa\b/i.test(code ?? '') ? 'fa' : 'en';
+/** The pet's language rule (strings module): Telegram's language_code, fa… → Persian. */
+export type CircleLang = PetLang;
+export const circleLang = (code?: string): CircleLang => langOf(code);
 
-const fa = (n: number) => String(n).replace(/\d/g, (d) => '۰۱۲۳۴۵۶۷۸۹'[Number(d)]);
-const list = (names: readonly string[], lang: CircleLang) =>
-  lang === 'fa' ? names.join(' و ') : names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
+/** "Sara, Ali and Mina" / «سارا، علی و مینا» (Persian: «، » between, «و» only before the last; copy file A.2). */
+const list = (names: readonly string[], lang: CircleLang) => names.length < 2 ? names.join('')
+  : lang === 'fa' ? `${names.slice(0, -1).join('، ')} و ${names.at(-1)}` : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
 
 const COPY = {
   en: {

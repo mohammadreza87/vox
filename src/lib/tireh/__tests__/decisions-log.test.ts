@@ -304,3 +304,63 @@ describe('gateway decision log', () => {
     expect(sink.rows[0]).toMatchObject({ inputTokens: 42, elapsedMs: Math.round(detail.elapsedMs), outcome: 'answered' });
   });
 });
+
+describe('pet decision rows (care game design §8.6)', () => {
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+  const petRow = (at: Date, extra: Partial<NewDecisionLogRow> = {}): NewDecisionLogRow => ({
+    questionSetVersion: 'pet-v1', names: ['checkin_pick', 'send_now'],
+    answers: [
+      { name: 'checkin_pick', type: 'choice', choice: 'ci.C4.hello', confidence: 0.7, probabilities: [{ value: 'ci.C4.hello', probability: 0.7 }, { value: 'ci.C2.stageUp', probability: 0.3 }] },
+      { name: 'send_now', type: 'predicate', probability: 0.4 },
+    ],
+    outcome: 'answered', elapsedMs: 210, routeTaken: 'pet', personaId: 'aria', chatKind: 'private', language: 'fa', at, ...extra,
+  });
+
+  it('accepts a pet-v1 row routed `pet` through the sink', async () => {
+    const store = new InMemoryDecisionLogStore();
+    const warn = vi.fn();
+    createDecisionLogSink(store, { enabled: () => true, warn, now: () => NOW }).record(petRow(NOW));
+    await flush();
+    expect(warn).not.toHaveBeenCalled();
+    expect(store.rows).toHaveLength(1);
+    expect(store.rows[0]).toMatchObject({ questionSetVersion: 'pet-v1', routeTaken: 'pet' });
+  });
+
+  it.each([
+    ['a free-text key', { ...petRow(NOW), message: 'CANARY_TEXT I missed you' }],
+    ['a free-text choice value', petRow(NOW, { answers: [{ name: 'checkin_pick', type: 'choice', choice: 'come back soon', confidence: 0.9 }] })],
+    ['a person id as persona', petRow(NOW, { personaId: 'tg user 42' })],
+    ['an unknown route', petRow(NOW, { routeTaken: 'pet-live' as NewDecisionLogRow['routeTaken'] })],
+    ['an unknown question set', petRow(NOW, { questionSetVersion: 'pet-v2' as NewDecisionLogRow['questionSetVersion'] })],
+  ])('still rejects a pet row with %s', async (_label, bad) => {
+    const store = new InMemoryDecisionLogStore();
+    const warn = vi.fn();
+    createDecisionLogSink(store, { enabled: () => true, warn }).record(bad as NewDecisionLogRow);
+    await flush();
+    expect(store.rows).toHaveLength(0);
+    expect(warn.mock.calls).toEqual([['decision_log_invalid_row']]);
+  });
+
+  it.each([
+    ['in-memory', () => new InMemoryDecisionLogStore() as DecisionLogStore],
+    ['file', () => createFileDecisionLogStore(tempFile())],
+    ['firestore', () => new FirestoreDecisionLogStore(fakeFirestore().db)],
+  ])('%s store round-trips pet rows and sweeps them after 90 days', async (_name, make) => {
+    const store = make();
+    await store.append(petRow(new Date(NOW.getTime() - 91 * DAY), { elapsedMs: 91 }));
+    await store.append(petRow(new Date(NOW.getTime() - 89 * DAY), { elapsedMs: 89 }));
+    expect(await store.sweep(NOW)).toBe(1);
+    const rows = await store.list();
+    expect(rows.map((r) => [r.elapsedMs, r.questionSetVersion, r.routeTaken])).toEqual([[89, 'pet-v1', 'pet']]);
+  });
+
+  it('the sink sweeps with the 90-day retention when it records a pet row', async () => {
+    const store = new InMemoryDecisionLogStore();
+    await store.append(petRow(new Date(NOW.getTime() - 91 * DAY)));
+    const sweep = vi.spyOn(store, 'sweep');
+    createDecisionLogSink(store, { enabled: () => true, now: () => NOW }).record(petRow(NOW));
+    await flush();
+    expect(sweep.mock.calls).toEqual([[NOW, 90]]);
+    expect(store.rows.map((r) => r.at.getTime())).toEqual([NOW.getTime()]);
+  });
+});

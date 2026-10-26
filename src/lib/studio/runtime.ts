@@ -23,6 +23,8 @@ import { StudioExperimentRuntime } from '../adaptive/experiments/runtime';
  * Optional:
  *   OPENAI_API_KEY           avatars (gpt-image) and speech-to-text
  *   ELEVENLABS_API_KEY       voice design, voice library, speech
+ *   STUDIO_TTS_PROVIDER      eleven (default) | gemini: speech for Mini App call and pet voice turns
+ *                            (tts/, design §8A.3). gemini has no adapter yet: replies stay text
  *   STUDIO_WEBAPP_URL        public https URL of /studio (menu button)
  *   STUDIO_DATA_DIR          default ./.vox-studio (file storage)
  *   STUDIO_ADAPTIVE_FORMAT   file (default), sqlite-v1 or file-v2; managed formats
@@ -76,11 +78,13 @@ import { createFileStores } from '../tireh/memory/file-store';
 import { FirestoreChatHistoryStore, FirestoreMemoryStore, FirestoreShareOfferStore, FirestoreUpdateDeduper } from '../tireh/memory/firestore-store';
 import { TelegramBotClient } from '../tireh/telegram/client';
 import { ElevenLabsStudio, OpenAIMedia } from './media';
+import { createSpeechSynthesizer, parseTtsProvider } from './tts';
 import { svgToPng } from './character/portrait';
 import { FirestoreStudioStore } from './firestore-store';
 import { FirestoreStudioRateLimiter } from './firestore-ratelimit';
 import { Studio, type StudioDeps } from './service';
 import { FilePetStore, FirestorePetStore } from './pet-store';
+import { FilePetPlayStore, FirestorePetPlayStore } from './pet-play-store';
 import { StudioStore, type StudioStorage } from './store';
 import { RelationshipLoop, FileRelationshipStore, FirestoreRelationshipStore, FileObservationStore, FirestoreObservationStore, SafeRelationshipObserver, OpenAIFollowUpReview, OpenAIRelationshipFeedback } from '../relationships';
 import { StudioRelationshipAssessor } from './relationship-assessor';
@@ -269,11 +273,11 @@ export function stopStudioPreferenceLearning(): Promise<{ pending: number }> {
   return g.__voxPreferenceStop = g.__voxPreferenceTasks?.tasks.close() ?? Promise.resolve({ pending: 0 });
 }
 
-type RuntimeStorage = Pick<StudioDeps, 'store' | 'pets' | 'choices' | 'circleLedger' | 'notesLedger' | 'channelDrafts' | 'memory' | 'rateLimiter' | 'adaptive' | 'relationshipStore' | 'observations' | 'revisions'> & { sharedStorage: AdaptiveStorage; voiceIdentityStorage: AdaptiveStorage; maintenanceStorage: AdaptiveStorage; closeAdaptive?: () => void };
+type RuntimeStorage = Pick<StudioDeps, 'store' | 'pets' | 'petPlay' | 'choices' | 'circleLedger' | 'notesLedger' | 'channelDrafts' | 'memory' | 'rateLimiter' | 'adaptive' | 'relationshipStore' | 'observations' | 'revisions'> & { sharedStorage: AdaptiveStorage; voiceIdentityStorage: AdaptiveStorage; maintenanceStorage: AdaptiveStorage; closeAdaptive?: () => void };
 function fileStorage(dir: string, scopedRelationshipsEnabled: boolean, format: AdaptiveStorageFormat): RuntimeStorage {
   const managed = openLocalAdaptiveStorage(join(dir, 'adaptive'), format);
   try { const store = new StudioStore(dir);
-    return { store, pets: new FilePetStore(join(dir, 'pets')), choices: new FileAgentChoiceStore(join(dir, 'circles')),
+    return { store, pets: new FilePetStore(join(dir, 'pets')), petPlay: new FilePetPlayStore(join(dir, 'pets')), choices: new FileAgentChoiceStore(join(dir, 'circles')),
     circleLedger: new CircleService(new CircleRepository(new FileAdaptiveStorage(join(dir, 'circles', 'ledger')))),
     notesLedger: new CircleNotes(new NotesRepository(new FileAdaptiveStorage(join(dir, 'circles', 'notes')))),
     channelDrafts: new ChannelDrafts(new FileAdaptiveStorage(join(dir, 'circles', 'channel-drafts'))), memory: createFileStores(join(dir, 'memory.json')),
@@ -295,6 +299,7 @@ async function firestoreStorage(bucketName: string, scopedRelationshipsEnabled: 
   return {
     store,
     pets: new FirestorePetStore(db),
+    petPlay: new FirestorePetPlayStore(db),
     choices: new FirestoreAgentChoiceStore(db),
     circleLedger: new CircleService(new CircleRepository(new FirestoreAdaptiveStorage(db, CIRCLE_COLLECTION))),
     notesLedger: new CircleNotes(new NotesRepository(new FirestoreAdaptiveStorage(db, NOTES_COLLECTION))),
@@ -345,12 +350,16 @@ async function create(): Promise<Studio> {
       managerUsername = (await managerBot.getMe().catch(() => null))?.username ?? '';
     }
     const openai = env.OPENAI_API_KEY ? new OpenAIMedia(env.OPENAI_API_KEY) : null;
+    const eleven = env.ELEVENLABS_API_KEY ? new ElevenLabsStudio(env.ELEVENLABS_API_KEY) : null;
+    const ttsProvider = parseTtsProvider(env.STUDIO_TTS_PROVIDER);
+    if (ttsProvider === 'gemini') console.warn('[studio] STUDIO_TTS_PROVIDER=gemini: the Gemini speech adapter has not landed; pet voice replies stay text');
     const authority = new AdaptiveRelationshipService(storage.adaptive!);
     const studio = new Studio({
       store: storage.store,
       // Wired here, not derived: route bundles carry their own copy of the store classes, so
       // petStoreFor's instanceof checks fail on a Studio built by instrumentation.
       pets: storage.pets,
+      petPlay: storage.petPlay,
       choices: storage.choices,
       circleLedger: storage.circleLedger,
       notesLedger: storage.notesLedger,
@@ -362,7 +371,9 @@ async function create(): Promise<Studio> {
       // Reply triage and stranger decisions; STUDIO_DECISIONS=off skips them.
       decider: openai && env.STUDIO_DECISIONS !== 'off' ? studioDecider(openai, env) : undefined,
       skillRouting: parseSkillRouting(env.STUDIO_SKILL_ROUTING),
-      eleven: env.ELEVENLABS_API_KEY ? new ElevenLabsStudio(env.ELEVENLABS_API_KEY) : null,
+      eleven,
+      // STUDIO_TTS_PROVIDER: eleven (default) adapts the client above; gemini is a stub until its adapter lands (text replies).
+      tts: createSpeechSynthesizer(ttsProvider, { eleven }),
       managerBot,
       managerUsername,
       botFor: (token) => new TelegramBotClient(token),

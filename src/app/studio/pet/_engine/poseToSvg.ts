@@ -71,7 +71,7 @@ export function poseToSvg(geom: Geom, f: RigFrame, o: PoseSvgOpts = {}): string 
     if (rig === 'ear-l' || rig === 'wing-l') out.attrs.transform = about(pivot(rig === 'ear-l' ? 'earL' : 'wingL'), { rot: f.earL });
     if (rig === 'ear-r' || rig === 'wing-r') out.attrs.transform = about(pivot(rig === 'ear-r' ? 'earR' : 'wingR'), { rot: f.earR });
     if (rig === 'tail') out.attrs.transform = about(pivot('tail'), { rot: f.tail });
-    if (rig === 'hair-back') out.attrs.transform = about(pivot('hair'), { y: f.hair.y, sy: f.hair.sy });
+    if (rig === 'hair-back') out.attrs.transform = about(pivot('hair'), { y: f.hair.y, rot: f.hair.rot, sy: f.hair.sy });
     return out;
   });
 
@@ -98,8 +98,8 @@ export function poseToSvg(geom: Geom, f: RigFrame, o: PoseSvgOpts = {}): string 
         break;
       }
       case 'acc-rigid': t = about(pivot('acc-rigid'), { x: f.accRigid.x, y: f.accRigid.y, rot: f.accRigid.rot }); break;
-      case 'acc-soft': t = about(pivot('acc-soft'), { y: f.accSoft.y }); break;
-      case 'hair': t = about(pivot('hair'), { y: f.hair.y, sy: f.hair.sy }); break;
+      case 'acc-soft': t = about(pivot('acc-soft'), { y: f.accSoft.y, rot: f.accSoft.rot }); break;
+      case 'hair': t = about(pivot('hair'), { y: f.hair.y, rot: f.hair.rot, sy: f.hair.sy }); break;
       case 'fx': t = about(pivot('fx'), { y: f.fx.y }); op = ` opacity="${r(f.fx.o)}"`; break;
       case 'shadow': t = about(pivot('shadow'), { y: -f.body.y / (f.body.sy * g), rot: -f.body.rot, sx: f.shadow.s, sy: f.shadow.s }); op = ` opacity="${r(f.shadow.o)}"`; break;
       default: break;

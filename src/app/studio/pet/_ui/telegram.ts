@@ -36,6 +36,8 @@ export interface PetTelegram {
   safeAreaInset?: Insets;
   contentSafeAreaInset?: Insets;
   viewportStableHeight?: number;
+  /** the live height: smaller than the stable one while the keyboard (or a drag of the sheet) is moving */
+  viewportHeight?: number;
   BackButton?: { show(): void; hide(): void; onClick(cb: () => void): void; offClick(cb: () => void): void };
   /** the "Settings" item in the Mini App's ⋯ menu (Bot API 7.0) */
   SettingsButton?: { show(): void; hide(): void; onClick(cb: () => void): void; offClick(cb: () => void): void };
@@ -134,6 +136,22 @@ export function syncSafeAreas(app: PetTelegram | null = tg()): () => void {
   write();
   for (const e of LAYOUT_EVENTS) safely(() => app.onEvent?.(e, write));
   return () => { for (const e of LAYOUT_EVENTS) safely(() => app.offEvent?.(e, write)); };
+}
+
+/**
+ * The box the page lays out in (design §9.1): width, Telegram's stable height (`--pet-vh`, else the window), the
+ * safe areas and the live height. `live` drops below `h` while the on-screen keyboard is up on clients that do not
+ * resize the stable viewport (iOS shrinks only the visual viewport).
+ */
+export function viewport(app: PetTelegram | null = tg()): { w: number; h: number; top: number; bottom: number; live: number } {
+  const css = (name: string) => {
+    try { return parseFloat(getComputedStyle(document.documentElement).getPropertyValue(name)) || 0; } catch { return 0; }
+  };
+  const w = window.innerWidth;
+  const h = css('--pet-vh') || app?.viewportStableHeight || window.innerHeight;
+  let live = app?.viewportHeight || h;
+  try { if (window.visualViewport?.height) live = Math.min(live, window.visualViewport.height); } catch { /* old WebView */ }
+  return { w, h, top: css('--pet-safe-top'), bottom: css('--pet-safe-bottom'), live };
 }
 
 /**

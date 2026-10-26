@@ -9,27 +9,27 @@ const BASE: SpeciesTuning = { alpha: 0.6, breath: 1, hop: 1, gravity: 1, land: 1
 
 export const SPECIES_TUNING: Readonly<Record<Species, SpeciesTuning>> = {
   // extra-soft body, breath ×1.2, hop 10 % floatier, wisp puffs when happy
-  cloud: { ...BASE, alpha: 0.8, breath: 1.2, gravity: 0.85, ear: null },
+  cloud: { ...BASE, alpha: 0.8, breath: 1.2, gravity: 0.85, ear: null, weight: 0.82 },
   // ear flick micro-fidget; ears flatten 15° on a face poke
   cat: { ...BASE },
   // floppy ears flap on every hop and landing; the biggest listening tilt
-  dog: { ...BASE, ear: 'floppy', listenTilt: 10 },
+  dog: { ...BASE, ear: 'floppy', listenTilt: 10, weight: 1.05 },
   // stiffer tall ears, floppy asleep or droopy; nose twitch
-  bunny: { ...BASE, earParams: { f: 3.5 }, sleepEar: 'floppy' },
+  bunny: { ...BASE, earParams: { f: 3.5 }, sleepEar: 'floppy', weight: 0.92 },
   // heavier: lower hops, bigger landing squash, less jelly
-  bear: { ...BASE, hop: 0.85, land: 1.15, jelly: 0.85, earParams: { z: 0.5 } },
+  bear: { ...BASE, hop: 0.85, land: 1.15, jelly: 0.85, earParams: { z: 0.5 }, weight: 1.25 },
   // tufts; up to 20° head tilt; slower blink
   owl: { ...BASE, earParams: { f: 2.6 }, tiltMax: 20, listenTilt: 8, blink: { close: 90, open: 140 } },
   // a very springy sprout; tiny rapid double hops when happy
-  chick: { ...BASE, earParams: { f: 4, z: 0.25 }, hop: 0.9 },
+  chick: { ...BASE, earParams: { f: 4, z: 0.25 }, hop: 0.9, weight: 0.85 },
 };
 
 export const FAMILY_TUNING: Readonly<Record<Family, FamilyTuning>> = {
   puff: { sway: 1, swayPeriod: 1, hop: 1, gravity: 1, leanBias: 0 },
   // firmer and top-heavy
-  tower: { alpha: 0.5, sway: 1.2, swayPeriod: 1, hop: 0.9, gravity: 1, leanBias: 0 },
+  tower: { alpha: 0.5, sway: 1.2, swayPeriod: 1, hop: 0.9, gravity: 1, leanBias: 0, weight: 1.06 },
   // floaty, leans toward its silhouette's side (the dome leans left)
-  drift: { sway: 1, swayPeriod: 1.15, hop: 1, gravity: 0.9, leanBias: -1.5 },
+  drift: { sway: 1, swayPeriod: 1.15, hop: 1, gravity: 0.9, leanBias: -1.5, weight: 0.92 },
 };
 
 /** One merged tuning for a look: what the beat preparer and the loop read. */
@@ -52,6 +52,8 @@ export interface Tuning {
   /** ear dynamics while asleep or droopy */
   sleepEar: FollowerParams | null;
   blink: { close: number; open: number };
+  /** felt weight (1 baseline; cloud 0.82 light, bear 1.25 heavy) */
+  weight: number;
 }
 
 export function tuningFor(species: Species = 'cloud', family: Family = 'puff'): Tuning {
@@ -65,6 +67,7 @@ export function tuningFor(species: Species = 'cloud', family: Family = 'puff'): 
     sway: f.sway, swayPeriod: f.swayPeriod, leanBias: f.leanBias, tiltMax: s.tiltMax, listenTilt: s.listenTilt,
     ear, sleepEar: s.sleepEar ? FOLLOWERS[s.sleepEar] : ear,
     blink: s.blink ?? { close: 60, open: 90 },
+    weight: (s.weight ?? 1) * (f.weight ?? 1),
   };
 }
 

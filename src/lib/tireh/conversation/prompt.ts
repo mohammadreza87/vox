@@ -56,6 +56,11 @@ export interface PromptInput {
   canSpeak?: boolean;
   /** The requested delivery format for this turn; audio is produced afterwards. */
   replyFormat?: 'voice' | 'text';
+  /**
+   * How the person sent this turn. 'voice' (they spoke it, e.g. the pet's hold-to-talk) adds one neutral line to the
+   * per-turn block; 'text' or undefined adds nothing, so typed turns keep their bytes. Never in block A.
+   */
+  inputModality?: 'voice' | 'text';
   /** Private proactive relationship integration is active for this person. */
   canFollowUp?: boolean;
   followUpChannel?: 'chat' | 'inbox';
@@ -311,6 +316,12 @@ function replyFormatLine(canSpeak: boolean, replyFormat: PromptInput['replyForma
   return undefined;
 }
 
+/** The per-turn line for a spoken turn (design PET_CARE_GAME_DESIGN_2026_10_26 §8A.1); nothing for typed text. */
+export const SPOKEN_INPUT_LINE = 'The person spoke this message aloud and is listening to your reply.';
+function inputModalityLine(inputModality: PromptInput['inputModality']): string | undefined {
+  return inputModality === 'voice' ? SPOKEN_INPUT_LINE : undefined;
+}
+
 /**
  * What this turn can see and how it is addressed: in a group, whether earlier
  * lines are visible (never "use this conversation" when there is none); a
@@ -363,10 +374,11 @@ export function buildSystemPrompt(input: PromptInput): string {
   const d = derive(input);
   // Personal conversations must not receive the Work directory, reporting
   // relationships, projects or legacy Work memories, even for an employee.
+  const spoken = inputModalityLine(input.inputModality);
   if (space === 'personal') return [
     stablePersonaPrefix(persona, org.organizationName, 'personal', d.routed),
     personalConversation(canFollowUp),
-    [`## This turn`, `Today is ${formatDate(now)}.`, ...turnContextLines(input)].join('\n'),
+    [`## This turn`, `Today is ${formatDate(now)}.`, ...(spoken ? [spoken] : []), ...turnContextLines(input)].join('\n'),
     ...(d.activeSkill ? [withoutOrgName(d.activeSkill, org.organizationName)] : []),
     FINAL_REMINDER,
   ].join('\n\n');
@@ -389,6 +401,7 @@ export function buildSystemPrompt(input: PromptInput): string {
 
   // ---- D: this turn ----
   const turn = [`Today is ${formatDate(now)}.`];
+  if (spoken) turn.push(spoken);
   const format = replyFormatLine(canSpeak, replyFormat);
   if (format) turn.push(format);
   turn.push(...turnContextLines(input));
@@ -486,12 +499,14 @@ export function buildPromptLayout(input: PromptInput & { savedContext?: string[]
   const d = derive(input);
   const a = personaBlock(persona, d.orgName, space, d.routed);
   const head = [`## For this turn`, `Today is ${formatDate(now)}.`];
+  const spoken = inputModalityLine(input.inputModality);
   const tail: string[] = [];
   let b: { text: string; key: string } | null = null;
   const frame: string[] = [];
 
   if (space === 'personal') {
     frame.push(personalConversation(canFollowUp));
+    if (spoken) head.push(spoken);
     head.push(...turnContextLines(input));
     if (d.activeSkill) tail.push(withoutOrgName(d.activeSkill, org.organizationName));
   } else {
@@ -507,6 +522,7 @@ export function buildPromptLayout(input: PromptInput & { savedContext?: string[]
     frame.push(`## Capabilities\n${capabilityLine(persona, canFollowUp, followUpChannel)}`);
 
     if (chat.kind === 'group') head.push(plain(`The latest message is from ${d.speakerName}.`));
+    if (spoken) head.push(spoken);
     const format = replyFormatLine(canSpeak, replyFormat);
     if (format) head.push(format);
     head.push(...turnContextLines(input));

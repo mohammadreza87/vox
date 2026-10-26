@@ -1,5 +1,5 @@
 /**
- * "My data" API (`/api/studio/my-data`): a person's own pet care, agent choices, group participation and notes, with
+ * "My data" API (`/api/studio/my-data`): a person's own pet care and play, agent choices, group participation and notes, with
  * export and erase. It replaces the pet page's export and forget, which trusted agent-signed initData: an agent's
  * creator holds that bot's token (BotFather), so they could forge it for anyone, or harvest a genuine one by
  * repointing the bot's menu. Here only initData signed by the manager bot (VOXX_BOT_TOKEN, which only Vox holds) is
@@ -19,6 +19,7 @@ import { isSchemaValidationError } from '../error-contract';
 import { verifyManagerInitData } from './initdata-trust';
 import { boundedStudioRequest } from './http';
 import { petStoreFor } from './pet-store';
+import { petPlayStoreFor } from './pet-play-store';
 import { StudioRateLimiter, StudioRateLimitError, type StudioRequestRateLimiter } from './ratelimit';
 import { trustedStudioRequestOrigin } from './request-origin';
 import { StudioError, type Studio } from './service';
@@ -72,12 +73,18 @@ export async function handleMyDataRequest(studio: Studio, request: Request, path
       const circles = await studio.circleParticipationFor(user.id).catch(() => []);
       const notes = await studio.notesFor(user.id).catch(() => []);
       const petCare = await pets.listForUser(user.id);
+      // Play (design §3.4) is content-free; a failing play store never blocks the export either.
+      const petPlay = await petPlayStoreFor(studio).then((plays) => plays.listForUser(user.id)).catch(() => {
+        (studio.deps.logger ?? console).warn('[studio] pet_play_export_failed');
+        return [];
+      });
       // Display names only for the agents the person's own records already name.
-      const named = new Set([...petCare.map((c) => c.agentId), ...choices.map((c) => c.agentId), ...notes.flatMap((n) => n.agentIds)]);
+      const named = new Set([...petCare.map((c) => c.agentId), ...petPlay.map((p) => p.agentId), ...choices.map((c) => c.agentId), ...notes.flatMap((n) => n.agentIds)]);
       const state = await studio.deps.store.read();
       const agentNames: Record<string, string> = {};
       for (const agent of state.agents) if (named.has(agent.id)) agentNames[agent.id] = agent.persona.name;
-      const body: MyDataResponse = { petCare, ...(choices.length ? { agentChoices: choices } : {}), ...(circles.length ? { circles } : {}), ...(notes.length ? { notes } : {}), agentNames };
+      const body: MyDataResponse = { petCare, ...(choices.length ? { agentChoices: choices } : {}), ...(circles.length ? { circles } : {}), ...(notes.length ? { notes } : {}),
+        ...(petPlay.length ? { petPlay } : {}), agentNames };
       return json(body, 200, { 'Content-Disposition': 'attachment; filename="vox-my-data.json"' });
     }
 
@@ -92,11 +99,15 @@ export async function handleMyDataRequest(studio: Studio, request: Request, path
     let input: unknown;
     try { input = await bounded.json(); } catch { return fail('invalid_request', 400); }
     forgetSchema.parse(input);
-    // Circle rows, note copies, channel post drafts and choices first, so a failing store fails before pet care is touched.
+    // Circle rows, note copies, channel post drafts, choices and play first, so a failing store fails before pet care is touched.
     const circles = await studio.forgetCircles(user.id), notes = await studio.forgetNotes(user.id);
     await studio.forgetChannelDrafts(user.id);
-    const choices = await studio.forgetAgentChoices(user.id), erased = await pets.eraseUser(user.id);
-    const body: MyDataForgetResponse = { erased, ...(choices ? { choicesErased: choices } : {}), ...(circles ? { circlesErased: circles } : {}), ...(notes ? { notesErased: notes } : {}) };
+    const choices = await studio.forgetAgentChoices(user.id);
+    // Play shares care's erasure epoch: both erasures rotate it, so no open from before this forget can write either.
+    const played = await (await petPlayStoreFor(studio)).eraseUser(user.id);
+    const erased = await pets.eraseUser(user.id);
+    const body: MyDataForgetResponse = { erased, ...(choices ? { choicesErased: choices } : {}), ...(circles ? { circlesErased: circles } : {}), ...(notes ? { notesErased: notes } : {}),
+      ...(played ? { playErased: played } : {}) };
     return json(body);
   } catch (error) {
     if (StudioRateLimitError.is(error)) return fail('rate_limited', 429, { 'Retry-After': String(error.retryAfterSeconds) });

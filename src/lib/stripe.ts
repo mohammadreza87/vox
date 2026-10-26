@@ -1,5 +1,8 @@
 import Stripe from 'stripe';
 
+/** The account's wire API version, kept across SDK updates. */
+const PINNED_STRIPE_API_VERSION: string = '2025-11-17.clover';
+
 // Lazy initialization to avoid build-time errors
 let _stripe: Stripe | null = null;
 
@@ -8,8 +11,9 @@ export function getStripe(): Stripe {
     _stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
       // Preserve the existing wire API version; an SDK update is not an API migration.
       // Stripe types only its latest version: https://github.com/stripe/stripe-node#using-old-api-versions-with-typescript
-      // @ts-expect-error stripe-version-2025-11-17.clover differs from this SDK's latest API type.
-      apiVersion: '2025-11-17.clover',
+      // Widened through `string` rather than `@ts-expect-error`, so it type-checks whether or not the installed SDK's
+      // latest version still equals the pinned one (a stale stripe 20.0.0 install types 2025-11-17.clover; the lockfile's 20.4.1 types a newer one, see de02aa2).
+      apiVersion: PINNED_STRIPE_API_VERSION as Stripe.LatestApiVersion,
       typescript: true,
     });
   }

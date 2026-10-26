@@ -11,6 +11,11 @@
  *
  * Besides one sheet per reaction, `feed-tap` and `feed-drag` run the whole feeding through the engine's toy API
  * (the cookie is drawn as a brown disc where the engine writes it).
+ *
+ *   node --import tsx scripts/pet-frames.ts --v2
+ *     → reports/character/motion-keyframes-v2.png (the polished reactions: anticipation, overlap, landing blinks),
+ *       stages-motion-v2.png (one hello per stage: the wisp → formed vocabulary), rooms-transitions-v2.png (each
+ *       room's transition and idle, a growth moment, the settle float, Garden rain, reduced motion)
  */
 
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -20,7 +25,11 @@ import type { Mood } from '../src/lib/pet/types';
 import { PRESET_LOOKS } from '../src/lib/studio/character';
 import type { CharacterLook } from '../src/lib/studio/types';
 import { breathPose, idleParams } from '../src/app/studio/pet/_engine/breath';
-import { createPetEngine } from '../src/app/studio/pet/_engine/loop';
+import { createPetEngine, type PetMotionControls } from '../src/app/studio/pet/_engine/loop';
+import * as motionExtras from '../src/app/studio/pet/_engine/extras';
+import { roomIdle } from '../src/app/studio/pet/_engine/reactions/rooms';
+import type { MotionCue, Room } from '../src/app/studio/pet/_engine/types';
+import type { Stage } from '../src/lib/studio/types';
 import { poseToSvg } from '../src/app/studio/pet/_engine/poseToSvg';
 import { tuningFor } from '../src/app/studio/pet/_engine/species';
 import { analyse, presetKC, stepResponse } from '../src/app/studio/pet/_engine/spring';
@@ -294,4 +303,169 @@ async function main() {
   if (failures.length) { console.error(`FAIL: ${failures.join('; ')}`); process.exitCode = 1; }
 }
 
-void main();
+/* ---------- v2 sheets (motion pass, design §10): rows of key frames, written to reports/character ---------- */
+
+type V2Engine = ReturnType<typeof createPetEngine>;
+interface V2Row {
+  label: string;
+  look: CharacterLook;
+  stage?: Stage;
+  tier?: Tier;
+  mood?: Mood;
+  /** run before the first sample (t = 0) */
+  start: (e: V2Engine, priv: { playBeats: (k: string, cls: string, b: unknown, now: number) => void; ctx: () => never; clock: { now(): number } }) => void;
+  /** sample times (ms after start) */
+  at: number[];
+  /** warm-up ms before start (a settled pose) */
+  warm?: number;
+  /** run before the warm-up (an instant room, a mood) */
+  setup?: (e: V2Engine) => void;
+  /** called before every tick with the ms since start (a finger, a toy) */
+  each?: (e: V2Engine, ms: number, t: number) => void;
+  /** zoomed out (a toss travels off the usual crop) */
+  wide?: boolean;
+}
+interface V2Frame { t: number; svg: string; mark: string; parts: Sample['parts']; sy: number; rot: number; y: number; cookie: Sample['cookie'] }
+
+async function runV2(row: V2Row): Promise<{ frames: V2Frame[]; cues: string[] }> {
+  let t = 0;
+  const cues: Array<{ t: number; c: MotionCue }> = [];
+  const eng = createPetEngine({
+    look: row.look, stage: row.stage ?? 4, size: 200, tier: row.tier ?? 'full', mood: row.mood ?? CONTENT, seed: 11,
+    clock: { now: () => t, raf: () => 1, caf: () => undefined }, ambient: false, activity: false, followOS: false, motionExtras, timers: { set: () => 0, clear: () => undefined },
+  });
+  const off = (eng as unknown as PetMotionControls).onMotion((c) => cues.push({ t, c }));
+  await (eng as unknown as PetMotionControls).loadRooms();
+  eng.start();
+  row.setup?.(eng);
+  for (let i = 0; i < Math.round((row.warm ?? 600) / (1000 / 60)); i++) { t += 1000 / 60; eng.debug.tick(t); }
+  cues.length = 0;
+  const t0 = t;
+  let lastSample = t0 - 0.5;
+  row.start(eng, eng as never);
+  const geom = () => (eng as unknown as { geom: Parameters<typeof poseToSvg>[0] }).geom;
+  const out: V2Frame[] = [];
+  const times = [...row.at].sort((a, b) => a - b);
+  let k = 0;
+  while (k < times.length) {
+    if (t - t0 >= times[k] - 1e-6) {
+      const f = eng.debug.frame!;
+      const cue = cues.find((c) => c.t > lastSample && c.t <= t);
+      lastSample = t;
+      out.push({ t: Math.round(t - t0), svg: poseToSvg(geom(), f), mark: cue ? cue.c.type : '', parts: eng.debug.particles(), sy: f.body.sy, rot: f.body.rot, y: f.body.y, cookie: eng.debug.cookie() });
+      k++;
+      continue;
+    }
+    row.each?.(eng, t - t0, t);
+    t += 1000 / 60;
+    eng.debug.tick(t);
+  }
+  off();
+  eng.dispose();
+  return { frames: out, cues: cues.map((c) => `${c.c.type}@${Math.round(c.t - t0)}`) };
+}
+
+/** Tile ids: every tile's paint servers get their own prefix (the model is built with uid 'pet'). */
+const reid = (svg: string, p: string) => svg.replace(/(id="|url\(#)pet/g, `$1${p}`);
+
+function v2Sheet(title: string, sub: string, rows: Array<{ row: V2Row; frames: V2Frame[]; note: string }>): string {
+  const tile = 118, pad = 8, lab = 20, left = 190, top = 60, rowH = tile + lab + pad + 8;
+  const cols = Math.max(...rows.map((r) => r.frames.length));
+  const W = left + cols * (tile + pad) + pad, H = top + rows.length * rowH + pad;
+  const vb = '-20 -10 240 220';
+  const body = rows.map(({ row, frames, note }, ri) => {
+    const y0 = top + ri * rowH;
+    const head = `<text x="12" y="${y0 + 22}" font-family="Helvetica,Arial" font-size="13" font-weight="bold" fill="#E8EDF5">${esc(row.label)}</text>`
+      + note.split('|').map((l, i) => `<text x="12" y="${y0 + 40 + i * 14}" font-family="Helvetica,Arial" font-size="10.5" fill="#8A93A3">${esc(l)}</text>`).join('');
+    const tiles = frames.map((f, i) => {
+      const x = left + i * (tile + pad);
+      const parts = f.parts.map((p) => `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${(3 * p.s).toFixed(1)}" fill="${PARTICLE_COLOR[p.kind] ?? '#fff'}" opacity="${p.o.toFixed(2)}"/>`).join('')
+        + (f.cookie.o > 0.01 ? `<circle cx="${f.cookie.x.toFixed(1)}" cy="${f.cookie.y.toFixed(1)}" r="${(16 * f.cookie.s).toFixed(1)}" fill="#C68B4E" stroke="#8A5A2B" stroke-width="2" opacity="${f.cookie.o.toFixed(2)}"/>` : '');
+      const ring = f.mark ? `<rect x="1" y="1" width="${tile - 2}" height="${tile - 2}" rx="9" fill="none" stroke="#FFD45C" stroke-width="2"/>` : '';
+      return `<g transform="translate(${x} ${y0})"><rect width="${tile}" height="${tile}" rx="10" fill="#1E2632"/>`
+        + `<line x1="10" x2="${tile - 10}" y1="${(tile * (176 + 10) / 220).toFixed(1)}" y2="${(tile * (176 + 10) / 220).toFixed(1)}" stroke="#2A3340"/>`
+        + `<svg x="0" y="0" width="${tile}" height="${tile}" viewBox="${row.wide ? '-40 -170 420 420' : vb}" overflow="hidden">${reid(f.svg, `r${ri}t${i}`)}${parts}</svg>${ring}`
+        + `<text x="4" y="${tile + 13}" font-family="Helvetica,Arial" font-size="10" fill="#C9D1DE">${f.t} ms${f.mark ? ` · ${f.mark}` : ''}</text></g>`;
+    }).join('');
+    return head + tiles;
+  }).join('');
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"><rect width="${W}" height="${H}" fill="#121821"/>`
+    + `<text x="12" y="26" font-family="Helvetica,Arial" font-size="17" font-weight="bold" fill="#E8EDF5">${esc(title)}</text>`
+    + `<text x="12" y="44" font-family="Helvetica,Arial" font-size="11.5" fill="#8A93A3">${esc(sub)}</text>${body}</svg>`;
+}
+
+const span = (to: number, n = 10) => Array.from({ length: n }, (_, i) => Math.round((i * to) / (n - 1)));
+const stats = (fr: V2Frame[]) => `sy ${Math.min(...fr.map((f) => f.sy)).toFixed(2)}…${Math.max(...fr.map((f) => f.sy)).toFixed(2)} · lift ${(-Math.min(...fr.map((f) => f.y))).toFixed(1)} px`;
+
+async function v2() {
+  const OUT2 = path.resolve(__dirname, '../reports/character');
+  const bunny = PRESET_LOOKS[22], cloud = PRESET_LOOKS[0], bowBunny = PRESET_LOOKS[3];
+  const fire = (e: ReactionEvent) => (eng: V2Engine) => eng.fire(e);
+  const motion = (fn: (m: PetMotionControls) => void) => (eng: V2Engine) => fn(eng as unknown as PetMotionControls);
+
+  // 1. the touched reactions, key frames (bunny with a tuft and a bow: hair and accessory overlap show)
+  const keyRows: V2Row[] = [
+    { label: 'hello', look: bunny, start: fire({ type: 'hello', firstName: 'Reza' }), at: [0, 50, 100, 140, 200, 260, 330, 400, 480, 600, 800] },
+    { label: 'celebrate (bond)', look: bunny, start: fire({ type: 'celebrate', why: 'bond' }), at: [0, 60, 120, 170, 260, 350, 450, 560, 700, 900, 1200] },
+    { label: 'land (1800 px/s)', look: bunny, start: fire({ type: 'land', v: 1800 }), at: [0, 30, 60, 100, 140, 200, 260, 340, 450, 600, 800] },
+    { label: 'feed: tap the cookie', look: bunny, start: (e) => e.toy({ type: 'cookieTap' }), at: [0, 150, 350, 600, 800, 850, 950, 1100, 1350, 1700, 2100] },
+    { label: 'pet (stroke ×3)', look: bunny, start: fire({ type: 'pet', speed: 300, dir: 1, passes: 3 }), at: [0, 60, 120, 200, 320, 480, 640, 800, 1000, 1200, 1500] },
+    { label: 'yawn', look: bunny, start: fire({ type: 'yawn' }), at: [0, 60, 120, 220, 330, 450, 560, 650, 750, 900, 1150] },
+    { label: 'sleep (drift off)', look: bunny, start: fire({ type: 'sleep' }), at: span(3200, 11) },
+    { label: 'signature 6 (lit-moment move)', look: bunny, start: fire({ type: 'signature', index: 6 }), at: [0, 100, 250, 400, 550, 700, 850, 1000, 1200, 1400, 1700] },
+    {
+      // a sideways toss: flight, landing squash (with a blink), then the crouch and the hop home
+      label: 'toss → land → hop home', look: bunny, wide: true,
+      start: () => undefined,
+      each: (e, ms, t) => {
+        const at = { x: 100 + ms * 1.4, y: 130 - ms * 0.9 };
+        if (ms === 0) e.pointer({ kind: 'down', id: 1, x: 100, y: 130, t });
+        else if (ms < 170) e.pointer({ kind: 'move', id: 1, ...at, t });
+        else if (ms < 187) e.pointer({ kind: 'up', id: 1, ...at, t });
+      },
+      at: [0, 120, 240, 360, 480, 600, 800, 1000, 1200, 1400, 1700],
+    },
+  ];
+  const keyFrames = await Promise.all(keyRows.map(async (row) => { const r = await runV2(row); return { row, frames: r.frames, note: `${stats(r.frames)}|${r.cues.join(' ')}` }; }));
+  await png(v2Sheet('Motion keyframes v2 · bunny (tuft + bow) · stage 4 · full tier',
+    'anticipation crouch before every hop · face and soft parts land a beat after the body · blink on landing and on big turns · weight-scaled settles', keyFrames), path.join(OUT2, 'motion-keyframes-v2.png'));
+
+  // 2. the four stages, the same hello and celebrate (a wisp soft and imprecise with tiny hops → formed)
+  const stageRows: V2Row[] = [];
+  for (const st of [1, 2, 3, 4] as Stage[]) stageRows.push({ label: `stage ${st} · hello`, look: cloud, stage: st, start: fire({ type: 'hello', firstName: 'Reza' }), at: [0, 60, 120, 180, 250, 330, 420, 520, 650, 800, 1000] });
+  for (const st of [1, 4] as Stage[]) stageRows.push({ label: `stage ${st} · celebrate`, look: cloud, stage: st, start: fire({ type: 'celebrate', why: 'bond' }), at: [0, 80, 160, 240, 330, 430, 540, 660, 800, 1000, 1300] });
+  const stageFrames = await Promise.all(stageRows.map(async (row) => { const r = await runV2(row); return { row, frames: r.frames, note: `${stats(r.frames)}` }; }));
+  await png(v2Sheet('Stages motion v2 · cloud · the same hello on each stage, then celebrate on a wisp and a formed one',
+    'wisp: slow springs, tiny hops, imprecise beats · puff: first real hops, more bounce · shaped: eye lead, darts · formed: snappiest, signatures', stageFrames), path.join(OUT2, 'stages-motion-v2.png'));
+
+  // 3. rooms: each transition (the swap cue is ringed), each room's idle, a growth moment, the settle, rain, reduced
+  const roomRows: V2Row[] = [];
+  const from: Record<Room, Room> = { home: 'play', play: 'home', garden: 'play', closet: 'garden', bedroom: 'closet', book: 'bedroom' };
+  for (const room of ['play', 'garden', 'closet', 'bedroom', 'book'] as Room[]) {
+    roomRows.push({
+      label: `→ ${room} · transition + idle`, look: bowBunny, warm: 900,
+      setup: (e) => (e as unknown as PetMotionControls).setRoom(from[room], { instant: true }),
+      start: (e) => (e as unknown as PetMotionControls).setRoom(room),
+      at: [0, 30, 60, 100, 150, 200, 260, 340, 600, 1400, 2400],
+    });
+  }
+  for (const room of ['play', 'garden', 'closet', 'bedroom', 'book'] as Room[]) {
+    roomRows.push({
+      label: `${room} · idle beat`, look: bowBunny, warm: 1200,
+      setup: (e) => (e as unknown as PetMotionControls).setRoom(room, { instant: true }),
+      start: (_e, priv) => priv.playBeats('roomIdle', 'idle', roomIdle(priv.ctx(), room), priv.clock.now()),
+      at: [0, 150, 300, 450, 600, 800, 1000, 1200, 1400, 1700, 2000],
+    });
+  }
+  roomRows.push({ label: 'growth moment (lit)', look: bowBunny, start: motion((m) => m.lightMoment({ fidget: 'release-planning' })), at: [0, 60, 120, 240, 400, 600, 750, 860, 1000, 1150, 1400] });
+  roomRows.push({ label: 'Garden rain', look: bowBunny, warm: 1200, setup: motion((m) => m.setRoom('garden', { instant: true })), start: motion((m) => m.roomReact('rain')), at: [0, 90, 300, 500, 750, 1000, 1250, 1400, 1700, 1900, 2300] });
+  roomRows.push({ label: 'Closet admire', look: bowBunny, warm: 1200, setup: motion((m) => m.setRoom('closet', { instant: true })), start: motion((m) => m.roomReact('admire')), at: [0, 60, 150, 300, 400, 480, 600, 750, 900, 1100, 1400] });
+  roomRows.push({ label: 'reduced · → garden', look: bowBunny, tier: 'reduced', start: motion((m) => m.setRoom('garden')), at: [0, 60, 120, 200, 300, 500] });
+  roomRows.push({ label: 'reduced · hello', look: bowBunny, tier: 'reduced', start: fire({ type: 'hello', firstName: 'Reza' }), at: [0, 60, 120, 200, 300, 500] });
+  const roomFrames = await Promise.all(roomRows.map(async (row) => { const r = await runV2(row); return { row, frames: r.frames, note: `${stats(r.frames)}|${r.cues.join(' ')}` }; }));
+  await png(v2Sheet('Rooms and transitions v2 · bunny with a bow · stage 4',
+    'transition: eyes lead, 60 ms counter-lean, lean with the slide on an arc, the backdrop swaps (ringed), one-overshoot settle into the room pose', roomFrames), path.join(OUT2, 'rooms-transitions-v2.png'));
+  console.log('v2 sheets → reports/character/{motion-keyframes,stages-motion,rooms-transitions}-v2.png');
+}
+
+if (process.argv.includes('--v2')) void v2(); else void main();
