@@ -80,4 +80,20 @@ describe('the character on the stage (P-17, design §9.2, §9.3)', () => {
     expect(characterBox(1200, 2000, 0, 1600, 'tall').size).toBe(520);
     expect(groundPoint({ x: 0, y: 0, size: 200 }).y).toBe(GROUND);
   });
+
+  it('a room\'s tray (Closet, Life Book) never covers the body: the pet stands on its top edge; no tray, as before', () => {
+    for (const [vw, vh, rail, trayH, cls] of [[360, 640, 442, 150, 'short'], [390, 844, 634, 184, 'regular'], [430, 932, 720, 184, 'tall']] as const) {
+      const tray = rail - 12 - trayH;
+      const none = characterBox(vw, vh, 0, rail, cls), b = characterBox(vw, vh, 0, rail, cls, tray);
+      expect(characterBox(vw, vh, 0, rail, cls, rail + 50)).toEqual(none);
+      // the body's foot (the box's ground line) above the tray's top; at most the shadow under it
+      expect(groundPoint(b).y).toBeLessThanOrEqual(tray);
+      expect(groundPoint(b).y).toBeGreaterThan(tray - 6);
+      // still the room's big pet, with the bubble zone above its head
+      expect(b.size).toBeGreaterThanOrEqual(none.size * 0.95);
+      expect(b.y + b.size * 0.2).toBeGreaterThanOrEqual(cls === 'short' ? 100 : 150);
+    }
+    // the no-tray composition is unchanged (390×844: the shadow near y 539)
+    expect(Math.round(groundPoint(characterBox(390, 844, 0, 634, 'regular')).y)).toBe(539);
+  });
 });

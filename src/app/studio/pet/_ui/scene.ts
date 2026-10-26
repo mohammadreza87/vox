@@ -77,18 +77,29 @@ const FIT = {
  * feet never meet the dock. Regular and Tall (`cls`): bigger, standing low on a floor line ~85% down the free stage,
  * so the stage is never half empty above the dock.
  */
-export function characterBox(vw: number, vh: number, top = 0, dockTop = vh, cls?: 'peek' | 'short' | 'regular' | 'tall'): CharacterBox {
+export function characterBox(vw: number, vh: number, top = 0, dockTop = vh, cls?: 'peek' | 'short' | 'regular' | 'tall', tray?: number): CharacterBox {
   const room = Math.max(120, dockTop - top);
+  let box: CharacterBox;
   if (cls === 'regular' || cls === 'tall') {
     const f = FIT[cls];
     const size = Math.round(Math.max(120, Math.min(vw * f.w, room * f.h, 520)));
     const ground = top + room * f.ground;
-    return { x: Math.round((vw - size) / 2), y: Math.round(ground - (size * GROUND) / 200), size };
+    box = { x: Math.round((vw - size) / 2), y: Math.round(ground - (size * GROUND) / 200), size };
+  } else {
+    const size = Math.round(Math.max(120, Math.min(vw * FIT.small.w, room * FIT.small.h, 520)));
+    const cy = Math.min(top + room * 0.52, vh * 0.45 + top * 0.5);
+    box = { x: Math.round((vw - size) / 2), y: Math.round(cy - size / 2), size };
   }
-  const size = Math.round(Math.max(120, Math.min(vw * FIT.small.w, room * FIT.small.h, 520)));
-  const cy = Math.min(top + room * 0.52, vh * 0.45 + top * 0.5);
-  return { x: Math.round((vw - size) / 2), y: Math.round(cy - size / 2), size };
+  // a room's tray (Closet, Life Book) rises over the stage: the pet stands on its top edge (the tray may cover the
+  // shadow, never the body), a little smaller only if the bubble zone above the head would not fit
+  if (tray === undefined || groundPoint(box).y <= tray - TRAY.gap) return box;
+  const ground = tray - TRAY.gap, zone = cls === 'tall' ? TRAY.zone.tall : cls === 'regular' ? TRAY.zone.regular : TRAY.zone.small;
+  const size = Math.round(Math.max(120, Math.min(box.size, (ground - top - zone) / (GROUND / 200 - 0.2))));
+  return { x: Math.round((vw - size) / 2), y: Math.round(ground - (size * GROUND) / 200), size };
 }
+
+/** Over a tray: the body's foot this far above the tray's top (px), and the bubble zone kept above the head (px). */
+const TRAY = { gap: 2, zone: { small: 100, regular: 150, tall: 170 } } as const;
 
 /** The character's ground point (where the shadow sits) in stage px. */
 export const groundPoint = (c: CharacterBox): Point => ({ x: c.x + c.size / 2, y: c.y + (c.size * GROUND) / 200 });

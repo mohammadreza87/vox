@@ -537,7 +537,11 @@ function PetSession({ agentId, injected, signed, onRetry }: { agentId: string; i
     // Wide: the character stands in the centred column
     const col = l.cls === 'wide' ? Math.min(w, COLUMN_MAX) : w;
     // Regular and Tall: a bigger character on a floor line about two thirds down (the stage is never half empty, P-17)
-    const c = characterBox(col, h, top, dockTop, l.h);
+    // a room's tray (Closet, Life Book) rises over the stage: the pet stands on its top edge, never under it. Its
+    // layout top (offsetTop: its entry animation's transform does not count) in viewport px
+    const tray = bottomRef.current?.querySelector<HTMLElement>('.pet-tray:not([data-s])');
+    const trayTop = tray?.offsetParent && !l.kb ? tray.offsetParent.getBoundingClientRect().top + tray.offsetTop : undefined;
+    const c = characterBox(col, h, top, dockTop, l.h, trayTop);
     const b = { ...c, x: c.x + Math.round((w - col) / 2) };
     setBox((p) => (p.x === b.x && p.y === b.y && p.size === b.size ? p : b));
     const e = engineRef.current;
@@ -559,13 +563,21 @@ function PetSession({ agentId, injected, signed, onRetry }: { agentId: string; i
     const vv = typeof window !== 'undefined' ? window.visualViewport : undefined;
     vv?.addEventListener?.('resize', measure);
     for (const ev of LAYOUT_EVENTS) app?.onEvent?.(ev, measure);
+    // a tray appearing, changing height or going away (a room's chunk, its tabs) moves the character's floor
+    const bottom = bottomRef.current;
+    const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(() => measure()) : null;
+    const watch = () => { ro?.disconnect(); if (bottom) { ro?.observe(bottom); for (const el of bottom.querySelectorAll('.pet-tray')) ro?.observe(el); } };
+    const mo = bottom && typeof MutationObserver === 'function' ? new MutationObserver(() => { watch(); measure(); }) : null;
+    if (bottom) { watch(); mo?.observe(bottom, { childList: true, subtree: true }); }
     return () => {
+      ro?.disconnect(); mo?.disconnect();
       offVars();
       window.removeEventListener('resize', measure);
       vv?.removeEventListener?.('resize', measure);
       for (const ev of LAYOUT_EVENTS) app?.offEvent?.(ev, measure);
     };
-  }, [mounted, engine, measure]);
+    // stringsOk: the bottom stack (and its trays) paints only once the words are in
+  }, [mounted, engine, measure, stringsOk]);
   // a new class, room or keyboard moves the dock zone: measure the character again against it. The bottom stack paints
   // only once the view and the strings are in, so whichever of them arrives last measures too (else the box keeps the
   // no-dock estimate and the character can stand over the dock until the next resize)

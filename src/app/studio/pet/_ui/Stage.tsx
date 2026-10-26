@@ -1,7 +1,7 @@
 'use client';
 
 import { m } from 'framer-motion';
-import { useLayoutEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
+import { useLayoutEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from 'react';
 import type { PointerSample, PetEngine } from './contract';
 import type { Backdrop, CharacterBox } from './scene';
 
@@ -60,6 +60,38 @@ function useRoomFade(bd: Backdrop, reduced: boolean, pool: CSSProperties) {
   </div>;
 }
 
+/** A new box (a room's tray rising or going, a class change) is eased to, never jumped to. */
+export const BOX_EASE_MS = 420;
+const EASE_OUT = 'cubic-bezier(.05, .7, .1, 1)';
+
+/**
+ * The character's box changed after the page settled: the character, its floor pool and glow start where they were
+ * and ease into the new place on the UI's out-ease (FLIP: one transform animation each, compositor only). Every one
+ * of them is laid out from the box, so one transform about the new box's corner maps the new onto the old. Reduced
+ * motion drops the travel: the box changes in place.
+ */
+function useBoxEase(box: CharacterBox, reduced: boolean, els: RefObject<HTMLElement | null>[]) {
+  const last = useRef<CharacterBox | null>(null);
+  const since = useRef(0);
+  useLayoutEffect(() => {
+    const was = last.current;
+    last.current = box;
+    if (!since.current) since.current = performance.now();
+    // the first measures place the character (no easing in from the placeholder box)
+    if (!was || reduced || performance.now() - since.current < 800) return;
+    const s = was.size / box.size, dx = was.x - box.x, dy = was.y - box.y;
+    if (Math.abs(dx) + Math.abs(dy) < 2 && Math.abs(s - 1) < 0.01) return;
+    const runs = els.map((r) => {
+      const el = r.current;
+      if (!el || typeof el.animate !== 'function') return null;
+      el.style.transformOrigin = `${box.x - el.offsetLeft}px ${box.y - el.offsetTop}px`;
+      return el.animate([{ transform: `translate(${dx}px,${dy}px) scale(${s})` }, { transform: 'none' }], { duration: BOX_EASE_MS, easing: EASE_OUT });
+    });
+    return () => { for (const a of runs) a?.cancel(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [box.x, box.y, box.size, reduced]);
+}
+
 /** A flick, not a gaze drag: ≥ 60 px sideways, twice as far as up or down, within 320 ms. */
 export const SWIPE = { px: 60, ms: 320 } as const;
 
@@ -96,18 +128,20 @@ export function Stage({ engine, backdrop, box, children, over, embed, style, onT
   const groundY = box.y + box.size * 0.83;
   const pool: CSSProperties = { left: box.x - box.size * 0.35, top: groundY - box.size * 0.22, width: box.size * 1.7, height: box.size * 0.44 };
   const fading = useRoomFade(backdrop, reduced, pool);
+  const charRef = useRef<HTMLDivElement>(null), poolRef = useRef<HTMLDivElement>(null), glowRef = useRef<HTMLDivElement>(null);
+  useBoxEase(box, reduced, [charRef, poolRef, glowRef]);
   return (
     <div className="pet-stage" data-embed={embed ? '' : undefined} style={{ backgroundImage: backdrop.image, backgroundColor: backdrop.edge, ...style }}
       onPointerDown={(e) => { onTouch?.(); send(e, 'down'); }}
       onPointerMove={(e) => send(e, 'move')}
       onPointerUp={(e) => send(e, 'up')}
       onPointerCancel={(e) => send(e, 'cancel')}>
-      <div className="pet-floor" aria-hidden="true" style={{ ...pool, backgroundImage: backdrop.floor }} />
+      <div ref={poolRef} className="pet-floor" aria-hidden="true" style={{ ...pool, backgroundImage: backdrop.floor }} />
       {/* the old room (and its pool) fades out over the new one */}
       {fading}
-      <m.div className="pet-glow" aria-hidden="true"
+      <m.div ref={glowRef} className="pet-glow" aria-hidden="true"
         style={{ left: box.x - box.size * 0.3, top: box.y - box.size * 0.25, width: box.size * 1.6, height: box.size * 1.4, backgroundImage: backdrop.glow, opacity: engine.glow }} />
-      <div className="pet-char" style={{ left: box.x, top: box.y, width: box.size, height: box.size }}>{children}</div>
+      <div ref={charRef} className="pet-char" style={{ left: box.x, top: box.y, width: box.size, height: box.size }}>{children}</div>
       <m.div className="pet-night" aria-hidden="true" style={{ opacity: engine.dim }} />
       {over}
     </div>

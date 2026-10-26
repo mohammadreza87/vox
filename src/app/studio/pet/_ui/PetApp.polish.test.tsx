@@ -211,4 +211,24 @@ describe('PetApp, visual QA polish', () => {
     // the old room's light fades out over the new one
     expect(container.querySelector('.pet-bd-out')).toBeTruthy();
   });
+
+  it('a room\'s tray rising over the stage lifts the pet onto its top edge, and lets it back down when it goes', async () => {
+    telegram();
+    const { container } = render(<PetApp agentId="x" api={fast()} />);
+    await ready(container);
+    const char = () => container.querySelector('.pet-char') as HTMLElement;
+    const foot = () => parseFloat(char().style.top) + parseFloat(char().style.height) * 0.83;
+    const before = foot();
+    // a tray whose top edge sits 120 px above the pet's foot (jsdom has no layout: its place is stubbed)
+    const bottom = container.querySelector('.pet-bottom')!;
+    const tray = document.createElement('div');
+    tray.className = 'pet-tray';
+    const parent = { getBoundingClientRect: () => ({ top: before - 120 }) } as unknown as Element;
+    Object.defineProperty(tray, 'offsetParent', { get: () => parent });
+    Object.defineProperty(tray, 'offsetTop', { get: () => 0 });
+    await act(async () => { bottom.appendChild(tray); await new Promise((r) => setTimeout(r, 0)); });
+    await waitFor(() => expect(foot()).toBeLessThanOrEqual(before - 120));
+    await act(async () => { tray.remove(); await new Promise((r) => setTimeout(r, 0)); });
+    await waitFor(() => expect(Math.abs(foot() - before)).toBeLessThan(1));
+  });
 });
