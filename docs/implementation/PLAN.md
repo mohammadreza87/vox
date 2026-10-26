@@ -10,7 +10,9 @@ Prepared 19 October 2026 for Joyixir OÜ. Product scope: adults in the EU/EEA an
 
 | Read this | Purpose |
 |---|---|
-| [Snapshot contract](../agents/AGENT_MEMORY_COMPACTION_CONTRACT.md) | Bounded pure planner/codec/verifier prerequisite; runtime publication deferred, current main dependency qualification required |
+| [Assistant delivery protocol](../agents/AGENT_MEMORY_ASSISTANT_DELIVERY_PROTOCOL.md) | AM-05/AM-12: pure unused identity, exact-wire and outcome prerequisite; live integration and control retention deferred |
+| [Snapshot publication](../agents/AGENT_MEMORY_SNAPSHOT_PUBLICATION.md) | PR 124 deployed as 6abf212; independently qualified bounded publication remains separately off, with existing horizons preserved |
+| [Snapshot contract](../agents/AGENT_MEMORY_COMPACTION_CONTRACT.md) | Pure planner/codec/verifier prerequisite; no retention or horizon growth |
 | [Selective source suppression](../agents/AGENT_MEMORY_SOURCE_LINEAGE.md) | AM-05/AM-12: PRs 115/116 deployed as 5b360b9 with capture off; source-lineage and edit-write recovery qualified within the documented scope |
 | [Agent memory production program](../agents/AGENT_MEMORY_PRODUCTION_PROGRAM.md) | Authorized ongoing team implementation, independent acceptance, main merge and guarded deployment; first private Telegram archive slice |
 | [Unified agent memory specification](../agents/AGENT_MEMORY_MASTER_SPEC.md) | Full agent product direction, 22 work packages, routing/preparation, KPI and improvement program |
