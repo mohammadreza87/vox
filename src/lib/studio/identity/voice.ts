@@ -42,6 +42,10 @@ export const MAX_VOICEPRINT_AUDIO_BYTES = 10 * 1024 * 1024;
 export const MAX_TEMPLATE_AGE_MS = 365 * 86_400_000;
 export const DEFAULT_VERIFY_DEADLINE_MS = 3_000;
 export const DEFAULT_ENROLL_DEADLINE_MS = 60_000;
+/** The no-opinion reason verifyVoiceNote gives for a voice note above MAX_VOICEPRINT_AUDIO_BYTES (see verifyVoiceNote). */
+export const VERIFY_TOO_LARGE_REASON = 'provider_error' as const;
+/** Default period of startVoiceprintSweep: daily. */
+export const VOICEPRINT_SWEEP_EVERY_MS = 86_400_000;
 const MAX_IDENTIFY_CANDIDATES = 50;
 const PURPOSE = 'optional.biometric_recognition' as const;
 
@@ -80,6 +84,11 @@ export interface VoiceprintServiceOptions {
   orgKey: string;
   pilot?: boolean;
   eligiblePerson: (telegramId: number) => Promise<boolean>;
+  /**
+   * Every eligible member's telegram id, read once per sweep (one Studio state read for N rows). Without it the
+   * sweep falls back to eligiblePerson per row.
+   */
+  eligiblePeople?: () => Promise<ReadonlySet<number>>;
   verifyDeadlineMs?: number;
   enrollDeadlineMs?: number;
   now?: () => number;
@@ -345,16 +354,32 @@ export class VoiceprintService implements VoiceNoteVerifier {
     await this.o.store.delete(personIdFor(telegramId), space);
   }
 
-  /** Deletes rows older than MAX_TEMPLATE_AGE_MS and rows of people who are no longer members. Returns the count. */
+  /**
+   * Deletes rows older than MAX_TEMPLATE_AGE_MS and rows of people who are no longer members. Returns the count.
+   * Iterates the store's keys only (never a sealed template) and reads membership once per sweep when
+   * eligiblePeople is wired. When that read fails, membership is unknown: only expired rows are deleted (a failed
+   * state read never mass-deletes templates), and the sweep rejects afterwards so the caller gets a signal.
+   */
   async sweep(): Promise<number> {
     const now = this.now();
-    let removed = 0;
-    for (const row of await this.o.store.list()) {
-      const telegramId = telegramIdOf(row.personId);
-      const expired = now - row.createdAt.getTime() > MAX_TEMPLATE_AGE_MS;
-      const member = telegramId !== null && await this.o.eligiblePerson(telegramId).catch(() => true);
-      if (expired || !member) removed += await this.o.store.delete(row.personId, row.space);
+    let people: ReadonlySet<number> | undefined;
+    let membershipUnknown = false;
+    if (this.o.eligiblePeople) {
+      try { people = await this.o.eligiblePeople(); } catch { membershipUnknown = true; }
     }
+    const isMember = async (telegramId: number): Promise<boolean> => {
+      if (membershipUnknown) return true;
+      if (people) return people.has(telegramId);
+      return this.o.eligiblePerson(telegramId).catch(() => true);
+    };
+    let removed = 0;
+    for await (const key of this.o.store.listKeys()) {
+      const telegramId = telegramIdOf(key.personId);
+      const expired = now - key.createdAt.getTime() > MAX_TEMPLATE_AGE_MS;
+      const member = telegramId !== null && await isMember(telegramId);
+      if (expired || !member) removed += await this.o.store.delete(key.personId, key.space);
+    }
+    if (membershipUnknown) throw new Error('voiceprint_membership_unavailable');
     return removed;
   }
 
@@ -368,6 +393,11 @@ export class VoiceprintService implements VoiceNoteVerifier {
     const echoTemplates: Uint8Array[] = [];
     try {
       if (!this.enabled()) return NO_OPINION('disabled');
+      // Same cap as enroll, before any read, authority, tracking or upload. The shared reason union
+      // (tireh/identity/voice-band.ts, byte-pinned by voice-band.test.ts) has no 'too_large', so this returns its
+      // generic bucket. TODO(H5): add 'too_large' to VoiceNoOpinionReason and use it here when that contract file and
+      // its sha256 pin next move (the file is outside this change).
+      if (input.audio.byteLength > MAX_VOICEPRINT_AUDIO_BYTES) return NO_OPINION(VERIFY_TOO_LARGE_REASON);
       const { provider, speech, selfEcho } = this.o;
       const thresholds: BandThresholds | null = resolveThresholds(this.o.thresholds, this.o.orgKey, input.channel);
       if (!this.ready() || !provider || !speech || !selfEcho || !thresholds) return NO_OPINION('disabled');
@@ -443,4 +473,41 @@ export class VoiceprintService implements VoiceNoteVerifier {
       for (const t of echoTemplates) t.fill(0);
     }
   }
+}
+
+/**
+ * One adaptive invalidator slot for several handlers (main's semantics): every handler runs even when an earlier one
+ * rejects, and the chain then rejects with the first rejection, so the adaptive service still sees the failure.
+ */
+export function chainVoiceInvalidators(...handlers: { invalidate(telegramId: number, space?: VoiceSpace): Promise<unknown> }[]):
+  (input: { telegramId: number; space?: VoiceSpace; reason: string }) => Promise<void> {
+  return async input => {
+    const results = await Promise.allSettled(handlers.map(handler => Promise.resolve().then(() => handler.invalidate(input.telegramId, input.space))));
+    const failed = results.find((r): r is PromiseRejectedResult => r.status === 'rejected');
+    if (failed) throw failed.reason;
+  };
+}
+
+/**
+ * Runs `service.sweep()` now and then every `everyMs` (default daily) on an unref'd timer, so expired templates and
+ * those of people who left are deleted without a restart. Never throws: a failed sweep reports only the fixed,
+ * content-free code 'sweep_failed'. A tick that finds the previous sweep still running is skipped. Returns a stop
+ * function.
+ */
+export function startVoiceprintSweep(
+  service: Pick<VoiceprintService, 'sweep'>,
+  options: { now?: boolean; everyMs?: number; onError?: (code: 'sweep_failed') => void } = {},
+): () => void {
+  const everyMs = options.everyMs ?? VOICEPRINT_SWEEP_EVERY_MS;
+  let running = false;
+  const report = () => { try { options.onError?.('sweep_failed'); } catch { /* a failing reporter never escapes */ } };
+  const run = () => {
+    if (running) return;
+    running = true;
+    void Promise.resolve().then(() => service.sweep()).then(() => undefined, report).finally(() => { running = false; });
+  };
+  if (options.now ?? true) run();
+  const timer = setInterval(run, everyMs);
+  timer.unref?.();
+  return () => clearInterval(timer);
 }

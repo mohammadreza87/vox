@@ -24,15 +24,26 @@ export {
   type BandThresholds, type VoiceThresholdConfig, type VoiceprintEnv,
 } from './config';
 export {
-  InMemoryVoiceprintStore, FileVoiceprintStore, FirestoreVoiceprintStore, voiceprintDocId,
-  type VoiceprintRow, type VoiceprintStore, type VoiceSpace, type VoiceChannel,
+  InMemoryVoiceprintStore, FileVoiceprintStore, FirestoreVoiceprintStore, voiceprintDocId, VOICEPRINT_KEY_PAGE,
+  type VoiceprintRow, type VoiceprintKey, type VoiceprintStore, type VoiceSpace, type VoiceChannel,
 } from './store';
 export { SELF_ECHO_PHRASES, PersonaVoiceEchoSource, type SelfEchoSource } from './self-echo';
 export {
   VoiceprintService, VoiceprintError, biometricGrant, MAX_VOICEPRINT_AUDIO_BYTES, MAX_TEMPLATE_AGE_MS,
-  DEFAULT_VERIFY_DEADLINE_MS, DEFAULT_ENROLL_DEADLINE_MS,
+  DEFAULT_VERIFY_DEADLINE_MS, DEFAULT_ENROLL_DEADLINE_MS, VERIFY_TOO_LARGE_REASON, VOICEPRINT_SWEEP_EVERY_MS,
+  chainVoiceInvalidators, startVoiceprintSweep,
   type VoiceprintErrorCode, type VoiceprintStatus, type VoiceprintServiceOptions,
 } from './voice';
+
+/**
+ * Telegram ids that eligiblePerson accepts: listed exactly once, with a role of at least member (not pending).
+ * A duplicated id is ambiguous and stays ineligible, as in eligiblePerson.
+ */
+export function eligibleMembers(members: readonly Pick<StudioState['members'][number], 'telegramId' | 'role'>[]): ReadonlySet<number> {
+  const counts = new Map<number, number>();
+  for (const m of members) counts.set(m.telegramId, (counts.get(m.telegramId) ?? 0) + 1);
+  return new Set(members.filter(m => counts.get(m.telegramId) === 1 && m.role !== 'pending').map(m => m.telegramId));
+}
 
 /**
  * Null when VOICEPRINT_KEY is unset (base behaviour). Throws at startup for a
@@ -94,6 +105,8 @@ export async function createStudioVoiceprints(input: {
       const matches = (await input.readState()).members.filter(m => m.telegramId === telegramId);
       return matches.length === 1 && matches[0].role !== 'pending';
     },
+    // The sweep's membership: one state read for every row, with the same rule as eligiblePerson.
+    eligiblePeople: async () => eligibleMembers((await input.readState()).members),
     ...(input.logger ? { logger: input.logger } : {}),
     ...(input.flags ? { flags: input.flags } : {}),
   });

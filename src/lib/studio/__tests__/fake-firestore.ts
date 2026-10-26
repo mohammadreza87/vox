@@ -19,7 +19,24 @@ interface FakeDocRef {
 interface FakeQueryDoc { readonly id: string; readonly ref: FakeDocRef; data(): DocData }
 interface FakeQuery {
   where(field: string, op: '==' | '<=', value: unknown): FakeQuery;
+  /** Field mask: data() of each result holds only these fields. */
+  select(...fields: string[]): FakeQuery;
+  /** A field name, or FieldPath.documentId() (any non-string, or '__name__') for document-id order. */
+  orderBy(field: unknown, direction?: 'asc' | 'desc'): FakeQuery;
+  limit(count: number): FakeQuery;
+  /** Exclusive cursor on the orderBy value (a document id for document-id order). */
+  startAfter(value: unknown): FakeQuery;
   get(): Promise<{ docs: FakeQueryDoc[] }>;
+}
+
+/** One executed query, for assertions (for example that a field mask left a field out). */
+export interface FakeQueryLog {
+  readonly collection: string;
+  readonly select: readonly string[] | null;
+  readonly orderBy: string | null;
+  readonly limit: number | null;
+  readonly startAfter: unknown;
+  readonly returned: number;
 }
 interface FakeCollection extends FakeQuery { doc(id: string): FakeDocRef }
 interface FakeTransaction {
@@ -34,6 +51,8 @@ export interface FakeFirestore {
   readonly data: Map<string, DocData>;
   /** Every value passed to set(), for assertions. */
   readonly writes: DocData[];
+  /** Every collection query run with get(), for assertions. */
+  readonly queries: FakeQueryLog[];
   /** Makes every operation reject with this error (for failure tests). */
   failWith?: Error;
 }
@@ -50,7 +69,8 @@ const clone = (value: DocData): DocData => JSON.parse(JSON.stringify(value)) as 
 export function fakeFirestore(): FakeFirestore {
   const data = new Map<string, DocData>();
   const writes: DocData[] = [];
-  const state: FakeFirestore = { db: undefined as unknown as Firestore, data, writes };
+  const queries: FakeQueryLog[] = [];
+  const state: FakeFirestore = { db: undefined as unknown as Firestore, data, writes, queries };
   const guard = () => { if (state.failWith) throw state.failWith; };
 
   const docRef = (path: string): FakeDocRef => ({
@@ -73,21 +93,60 @@ export function fakeFirestore(): FakeFirestore {
     },
   });
 
-  const query = (collection: string, filters: Array<[string, '==' | '<=', unknown]>): FakeQuery => ({
-    where: (field, op, value) => query(collection, [...filters, [field, op, value]]),
+  interface QuerySpec {
+    filters: Array<[string, '==' | '<=', unknown]>;
+    select?: string[];
+    /** '__name__' orders by document id. */
+    order?: { field: string; desc: boolean };
+    limit?: number;
+    after?: { value: unknown };
+  }
+  const compare = (a: unknown, b: unknown): number => {
+    if (typeof a === 'number' && typeof b === 'number') return a - b;
+    const x = String(a), y = String(b);
+    return x < y ? -1 : x > y ? 1 : 0;
+  };
+
+  const query = (collection: string, spec: QuerySpec): FakeQuery => ({
+    where: (field, op, value) => query(collection, { ...spec, filters: [...spec.filters, [field, op, value]] }),
+    select: (...fields) => query(collection, { ...spec, select: fields }),
+    orderBy: (field, direction = 'asc') => query(collection, {
+      ...spec, order: { field: typeof field === 'string' && field !== '__name__' ? field : '__name__', desc: direction === 'desc' },
+    }),
+    limit: count => query(collection, { ...spec, limit: count }),
+    startAfter: value => query(collection, { ...spec, after: { value } }),
     async get() {
       guard();
-      const docs = [...data.entries()]
+      let rows = [...data.entries()]
         .filter(([key]) => key.startsWith(`${collection}/`) && !key.slice(collection.length + 1).includes('/'))
-        .filter(([, value]) => filters.every(([field, op, expected]) => op === '=='
+        .filter(([, value]) => spec.filters.every(([field, op, expected]) => op === '=='
           ? value[field] === expected
           : typeof value[field] === 'number' && typeof expected === 'number' && (value[field] as number) <= expected))
-        .map(([key, value]) => ({ id: key.split('/').pop() ?? key, ref: docRef(key), data: () => clone(value) }));
+        .map(([key, value]) => ({ key, id: key.split('/').pop() ?? key, value }));
+      const order = spec.order;
+      if (order) {
+        const of = (row: { id: string; value: DocData }) => order.field === '__name__' ? row.id : row.value[order.field];
+        rows.sort((a, b) => compare(of(a), of(b)) * (order.desc ? -1 : 1));
+        if (spec.after) {
+          const cursor = spec.after.value;
+          rows = rows.filter(row => compare(of(row), cursor) * (order.desc ? -1 : 1) > 0);
+        }
+      }
+      if (spec.limit !== undefined) rows = rows.slice(0, spec.limit);
+      const fields = spec.select;
+      const project = (value: DocData): DocData => fields
+        ? Object.fromEntries(fields.filter(f => f in value).map(f => [f, value[f]]))
+        : value;
+      queries.push({
+        collection, select: fields ? [...fields] : null, orderBy: order?.field ?? null, limit: spec.limit ?? null,
+        startAfter: spec.after?.value, returned: rows.length,
+      });
+      const docs = rows.map(row => ({ id: row.id, ref: docRef(row.key), data: () => clone(project(row.value)) }));
       return { docs };
     },
   });
 
-  const collection = (name: string): FakeCollection => ({ ...query(name, []), doc: (id: string) => docRef(`${name}/${id}`) });
+  const collection = (name: string): FakeCollection => ({ ...query(name, { filters: [] }), doc: (id: string) => docRef(`${name}/${id}`) });
 
   let queue: Promise<void> = Promise.resolve();
   const db = {
