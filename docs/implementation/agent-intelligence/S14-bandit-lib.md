@@ -49,7 +49,7 @@ Imports: `z` from `zod`; `createHash` and `randomUUID` from `node:crypto`; `impo
 
 **The gate**
 
-- `choose()` samples only when `chatKind === 'private'`, `guestAudience === false` and `await deps.authorize(scope) === true` (a throw counts as false). The group and guest checks run before authorize, so authorize is not called for them.
+- `choose()` samples only when `chatKind === 'private'`, `guestAudience === false` and `await deps.authorize(scope) === true` (a throw counts as false). The group and guest checks run before authorize, so authorize is not called for them. Authorize is re-checked immediately before the exposure row is written (ported from main on integration), so a withdrawal that lands while `choose()` reads posteriors leaves no evaluation row.
 - When the gate fails: no store read, no sampling, no evaluation row, and stored preferences are ignored (fail closed). Only explicitThisTurn and the persona default apply.
 - `settle()` re-runs authorize on the exposure's scope before any posterior write. If it fails: no posterior change, and the evaluation row is marked settled with reward null and rewardKinds `[]`.
 - `reset()` and `withdraw()` are never gated: deletion is always allowed.
@@ -93,7 +93,7 @@ Imports: `z` from `zod`; `createHash` and `randomUUID` from `node:crypto`; `impo
 Imports `import type { Firestore } from 'firebase-admin/firestore'`, node fs and path, and the schemas, types and constants from `./procedural`. No tireh, studio or persistence import.
 
 1. `InMemoryReplyStyleStore`: maps of posterior and evaluation rows; `transact` serialised through a promise queue with structuredClone in and out; writes validated before commit; a throw from fn commits nothing.
-2. `FileReplyStyleStore(path)`: one JSON file `{version:1, posteriors, evals}`; parent directory 0o700, file 0o600; every operation takes a `${path}.lock` mkdir lock (500 × 10 ms, then `Error('reply_style_lock_busy')`), reloads, applies, writes `${path}.tmp`, fsyncs and renames. A bad version or envelope throws `Error('invalid_reply_style_store')`. At most `MAX_FILE_EVAL_ROWS = 20_000` evaluation rows: the oldest settled rows are dropped first, then the oldest unsettled. Single-host only.
+2. `FileReplyStyleStore(path)`: one JSON file `{version:1, posteriors, evals}`; parent directory 0o700, file 0o600; every operation takes a `${path}.lock` mkdir lock (500 × 10 ms, then `Error('reply_style_lock_busy')`), reloads, applies, writes `${path}.tmp`, fsyncs and renames. The store is read with `O_RDONLY | O_NOFOLLOW` plus an `fstat` regular-file check (a symlink fails closed as `invalid_reply_style_store`); the temp file is written with `O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW`, mode 0600, after a stale temp file is unlinked, and is removed on failure (ported from main on integration). A bad version or envelope throws `Error('invalid_reply_style_store')`. At most `MAX_FILE_EVAL_ROWS = 20_000` evaluation rows: the oldest settled rows are dropped first, then the oldest unsettled. Single-host only.
 3. `FirestoreReplyStyleStore(db, collections = {posteriors:'vox_reply_style', evals:'vox_reply_style_eval'})`: document ids are the row ids, numbers stored as plain numbers. `transact` uses `db.runTransaction`, reading every requested ref before any `tx.set`. `deleteSubject` and `sweep` use equality or one range filter, delete in `.limit(400)` pages with `db.batch().delete().commit()` until a page is empty, are idempotent on retry and return counts. No `firestore.indexes.json` edit (S06 owns it).
 
 ### decisions/README.md
