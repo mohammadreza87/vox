@@ -971,3 +971,12 @@ Calendar note: Yalda falls in late December, Chaharshanbe Suri and Nowruz in Mar
 - No user research with HOOR people was done for this design. The survey ceilings are proposed, not validated.
 - Whether each Persian line fits its layout limit was estimated by character count (about 34 characters per Peek bubble line, 40 per sheet line), not measured in Vazirmatn. Ten keys are flagged in the keys file; nothing was rewritten.
 - The Studio menu names quoted in `quiet.chatAccess.body` must match the Persian Studio UI exactly; the copywriter asks for a check before shipping.
+
+**Implementation status (26 Oct 2026).** A release candidate on `design/pet-pou-flow`, not deployed; see `docs/implementation/RELEASE_PET_CARE_GAME_2026_10_26.md`.
+
+- Landed in Wave A (6c722cd): the `PetPlay` store and play route, the voice-mode fix, the `SpeechSynthesizer` seam, the generated bilingual strings, the no-scroll layout classes and room rail, motion polish, the copy lint and `check:pet`.
+- Landed in Wave B (3a7304a): Play (Starfall, zen), Bedroom, Life Book, growth moments with the confirm step, tips v1, the UX-02 mic sheet, hands-free, sentence streaming and the Gemini adapter.
+- Landed in Wave C (uncommitted at the time of writing): Garden, Closet (overlay, and the creator's real look through the pet-signed `POST …/look`), Guess my word with its `bestGuess` page, asks P1, P2 and P7-P10, the `?ci=` replay, `pet_action`, the check-in planner, delivery, store, routes and trigger, the mourning-day table, and Decisions wiring.
+- Shadow only: Decisions (`STUDIO_PET_DECISIONS=shadow` logs `pet-v1` rows beside the local ranker; `on` consumes only the pairs in `STUDIO_PET_DECISIONS_CALIBRATED`, and none has passed calibration).
+- Off by default: check-ins (`STUDIO_PET_CHECKINS=off`; the page does not ask P1 while the server reports them off, and the trigger route is 404 without its secret), Decisions (`off`) and Gemini speech (`STUDIO_TTS_PROVIDER=eleven` until the Persian bake-off).
+- Not built yet: Visits (P10 records the flag only), keepsake payments, check-ins C5 and C11 (they cannot fire yet), the `task` growth kind, a per-agent speech provider.

@@ -26,3 +26,8 @@
 .pet-detail-in { transform-box: fill-box; transform-origin: center; animation: petDetailIn .42s var(--ease-over); }
 @keyframes petDetailIn { from { opacity: 0; transform: scale(.6); } }
 .pet-root[data-tier="reduced"] .pet-detail-in { animation: petFade .3s linear; }
+/* Wave C sheets (Asks.tsx): P1's "Choose moments" and its switches. */
+.pet-sheet-link { align-self: flex-start; padding: 2px 0; }
+.pet-switches { display: flex; flex-direction: column; }
+.pet-switches label { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 36px; font-size: var(--pet-sm); }
+.pet-switches input { width: 40px; height: 22px; accent-color: var(--volt); }

@@ -29,6 +29,8 @@ import { BODY, Secondary, bankAtRest, compose, makeBank, stepBank, RigWriter, ty
 import { lowerTier, polish, stageMotion, weightTime, type StageMotion } from './motion';
 import { AudioLipSync, TextLipSync } from './lipsync';
 import type { DetailName, Details } from './details';
+import type { GardenInput } from './garden';
+import type { Wearing } from './outfits';
 import { Particles, park, place } from './particles';
 import { Ball, Fling, Hop, velocityStretch, type Bounds } from './physics';
 import { Player, type Playing } from './player';
@@ -47,7 +49,7 @@ import { atRest, jump, makeSpring, presetKC, retarget, step } from './spring';
 import {
   EVENT_PRIORITY, LOOP, MULTIPLY, NEUTRAL_POSE, PHYSICS, PRIORITY_ORDER, TIER_BUDGET,
   type Beat, type Channel, type LookTarget, type MotionCue, type MouthKey, type Oscillation, type PetExpr, type Point, type PoseTargets, type ReactionCtx,
-  type PriorityClass, type ReactionEvent, type Rng, type Room, type RoomReaction, type RoomReactOpts, type Spring, type SpringPreset, type Tier, type VariantHistory,
+  type GuessBeat, type PriorityClass, type ReactionEvent, type Rng, type Room, type RoomReaction, type RoomReactOpts, type Spring, type SpringPreset, type Tier, type VariantHistory,
 } from './types';
 
 /** A hop never takes off sooner than this after a landing: the squash reads before the next stretch. */
@@ -104,6 +106,25 @@ export interface PetMotionControls {
   speakQueue(items: SpeakItem[], o?: { more?: boolean }): void;
   /** steer the eyes to a stage point (Starfall's nearest star), null to let go; a finger or a reaction's look still wins */
   setGaze(p: Point | null): void;
+  /**
+   * this person's closet overlay (§4.3), whole (PetPlay.wearing as it is: a slot left out wears nothing). What the
+   * stage can show is worn now (closet items come with the accessory slot, stage 4; a `wearing` cue says what), the
+   * rest waits; never PetCare, never the agent's look
+   */
+  setWearing(w: Wearing): void;
+  /**
+   * the Garden's seed on the floor (§4.5), right of the pet: planted, sprouted, bloomed (or play.ts's view state with
+   * `seed`, as PetPlayView.garden carries it), or null; rain and the bloom aim at it (a `details` cue carries it)
+   */
+  setGarden(g: GardenInput | null): void;
+  /**
+   * Guess my word (§4.2), never sad: `think` it has a word (a sly secret smile), `heard` a question landed (a perk and
+   * a nod), `right` a pleased bounce and a glint, `wrong` a playful head-shake and a wink, `reveal` it says the word;
+   * Zen one preset softer (same as roomReact('guessThink' | 'guessHeard' | 'guessRight' | 'guessWrong' | 'guessReveal'))
+   */
+  guessReact(k: GuessBeat, o?: { zen?: boolean }): void;
+  /** the Closet mirror (§4.3): a glance at the item, a turn to the mirror with a small pose, a blush (same as roomReact('tryOn', { id })) */
+  tryOn(id: string): void;
   /** a lit moment adds one signature move without touching Bond; returns false if it was already unlocked */
   unlockFidget(id: string): boolean;
   /** an erased moment takes its move back (silently) */
@@ -175,7 +196,7 @@ interface Job { at: number; fn: () => void }
 
 class Engine implements PetEngine {
   /* config */
-  private look: CharacterLook;
+  look: CharacterLook;
   private stage: Stage;
   private size: number;
   private k: number;
@@ -199,7 +220,7 @@ class Engine implements PetEngine {
   clock: NonNullable<PetEngineOptions['clock']>;
 
   /* geometry */
-  private model: CharacterModel;
+  model: CharacterModel;
   private hull: Point[];
   private geom: Geom;
   private growthFrom = 1;
@@ -289,7 +310,7 @@ class Engine implements PetEngine {
   /* loop */
   private classifier = createGestureClassifier();
   private ptr: number | null = null;
-  private touchAt: Point | null = null;
+  touchAt: Point | null = null;
   lastInput = 0;
   private jobs = new Map<string, Job>();
   private running = false;
@@ -448,6 +469,10 @@ class Engine implements PetEngine {
   setListening(on: boolean): void { this.withX((x) => x.setListening(this, on)); }
   speakQueue(items: SpeakItem[], o: { more?: boolean } = {}): void { this.withX((x) => x.speakQueue(this, items, o)); }
   setGaze(p: Point | null): void { this.finger = p; this.wake(); }
+  setWearing(w: Wearing): void { this.withX((x) => x.setWearing(this, w)); }
+  setGarden(g: GardenInput | null): void { this.withX((x) => x.setGarden(this, g)); }
+  guessReact(k: GuessBeat, o: { zen?: boolean } = {}): void { this.roomReact(`guess${k[0].toUpperCase()}${k.slice(1)}` as RoomReaction, o); }
+  tryOn(id: string): void { this.roomReact('tryOn', { id }); }
 
   /** Load the motion extras chunk once (preloaded after start; the UI may call it earlier). */
   loadRooms(): Promise<void> {
@@ -1278,7 +1303,7 @@ class Engine implements PetEngine {
     this.lastSpring = b.spring;
     if (b.haptic) haptic[b.haptic]?.();
     if (b.particles) for (const q of Array.isArray(b.particles) ? b.particles : [b.particles]) {
-      this.particles.burst(q.kind, q.n, toStage(anchorModel(q.at, this.model, this.touchAt), this.scene, this.placement()), this.k, this.tier);
+      this.particles.burst(q.kind, q.n, toStage(anchorModel(q.at, this.model, this.touchAt), this.scene, this.placement()), this.k, this.tier, q.w);
     }
     if (b.expr) this.exprOv = { expr: b.expr, id: p.id };
     if (b.mouth) this.mouthOv = { key: b.mouth, id: p.id };

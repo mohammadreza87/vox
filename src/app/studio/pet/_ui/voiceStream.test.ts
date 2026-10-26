@@ -187,3 +187,11 @@ describe('streamTurn (one streamed voice turn)', () => {
     expect(b.order).toEqual([]);
   });
 });
+
+describe('pet_action on the stream (design §8.4)', () => {
+  it('`done` carries the classified action into the turn, for the page to act on after the reply', async () => {
+    const fetch = vi.fn(async () => ndjson([line({ type: 'transcript', text: 'bed time' }), line({ type: 'reply', text: 'Okay!' }), line({ type: 'done', action: { kind: 'sleep', confidence: 0.92 } })]));
+    const r = await streamVoice(fetch as never, '/x?stream=1', {}, form(), () => {});
+    expect(r).toMatchObject({ transcript: 'bed time', reply: 'Okay!', action: { kind: 'sleep', confidence: 0.92 } });
+  });
+});

@@ -150,6 +150,18 @@ test('collect prefers the strings module and its voice map, and adds check-in te
   ]);
 }));
 
+test('collect lints the server check-in copy with its own voice map, and skips the code beside the templates', () => fixture({
+  'src/app/studio/pet/_ui/strings/en.ts': "export const en = { 'say.hi': 'Hi!' };\n",
+  'src/lib/pet/checkin-copy.ts': "export const CHECKIN_VOICE = { 'ci.C2.stageUp': 'pet', 'ci.why.growing': 'system' };\nexport const EN = { 'ci.C2.stageUp': ['Grew 2 sizes!'], 'ci.why.growing': ['Days 2, 4 and 6.'] };\n",
+  'src/lib/studio/pet-checkins/planner.ts': "const REASONS = ['C10', 'quiet_hours'];\n",
+  'src/lib/studio/pet-checkins/templates.ts': "export const CHECKINS = { 'ci.ok': 'Hi' };\n",
+}, (root) => {
+  const { sources, violations } = run(root);
+  assert.deepEqual(sources.map((s) => s.file), ['src/app/studio/pet/_ui/strings/en.ts', 'src/lib/pet/checkin-copy.ts', 'src/lib/studio/pet-checkins/templates.ts']);
+  // the pet's line may carry no digit; the system reason line may
+  assert.deepEqual(violations.map((v) => `${v.key}:${v.voice}:${v.rule}`), ['ci.C2.stageUp[0]:pet:digit-in-pet-voice']);
+}));
+
 test('collect falls back to today\'s copy and says so', () => fixture({
   'src/app/studio/pet/_ui/copy.ts': "export const COPY = { restingTitle: 'Resting', talkFailed: 'Lost 2 words' };\nconst other = 'Hurry';\n",
   'src/app/studio/pet/_ui/circle-copy.ts': "const COPY = { fa: { x: 'سلام, دنیا' } } as const;\n",

@@ -1,8 +1,9 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { KEEPSAKES, type KeepsakeId } from '@/lib/pet/play';
 import { isLit, momentWhy, pageKeys } from '../growth';
+import { Sheet } from '../Sheet';
 import { t, type PetStringKey } from '../strings';
 import type { RoomProps } from '.';
 import './rooms.css';
@@ -55,7 +56,9 @@ export function leaves(tab: Tab, host: NonNullable<RoomProps['host']>): Leaf[] {
 export default function BookRoom({ host }: RoomProps) {
   const [tab, setTab] = useState<Tab>('pages');
   const [at, setAt] = useState(0);
+  const [visits, setVisits] = useState<'note' | 'ask' | null>(null);
   const swipe = useRef<number | null>(null);
+  useEffect(() => { host?.busy('visits', visits === 'ask'); return () => host?.busy('visits', false); }, [host, visits]);
   if (!host) return null;
   const list = leaves(tab, host);
   const i = Math.min(at, list.length - 1);
@@ -67,7 +70,21 @@ export default function BookRoom({ host }: RoomProps) {
     setAt(n);
     host.engine()?.roomReact?.('pageFlip');
   };
-  const pick = (next: Tab) => { setTab(next); setAt(0); host.engine()?.roomReact?.('pageFlip'); };
+  const pick = (next: Tab) => { setTab(next); setAt(0); setVisits(null); host.engine()?.roomReact?.('pageFlip'); };
+  const name = host.view()?.name ?? '';
+  /** P10 (§4.8, §6.2): the first time Visits opens, the opt-in; Visits itself is phase 3, so it says it comes later */
+  const openVisits = () => {
+    const play = host.view()?.play;
+    const guest = host.view()?.role === 'guest';
+    if (play && !guest && !play.asks.P10) { setVisits('ask'); void host.play({ op: 'askSeen', ask: 'P10' }); return; }
+    setVisits('note');
+  };
+  const answerVisits = (yes: boolean) => {
+    setVisits('note');
+    // the answer is recorded, and a yes is the visits flag itself (`setVisits`, PetPlay.visitsOpen): Visits stays phase 3
+    void host.play({ op: yes ? 'askAccepted' : 'askDeclined', ask: 'P10' }).then(() => (yes ? host.play({ op: 'setVisits', open: true }) : null));
+    host.say(t(yes ? 'perm.P10.after.yes' : 'perm.P10.after.no', undefined, host.lang));
+  };
 
   return (
     <div className="pet-book" data-room="book">
@@ -78,10 +95,16 @@ export default function BookRoom({ host }: RoomProps) {
         onPointerDown={(e) => { swipe.current = e.clientX; }}
         onPointerUp={(e) => { const x = swipe.current; swipe.current = null; if (x === null || Math.abs(e.clientX - x) < 36) return; go((e.clientX < x) !== rtl ? 1 : -1); }}>
         <button type="button" aria-label={t('book.prev')} disabled={i === 0} onClick={() => go(-1)}>‹</button>
-        <div aria-live="polite"><b>{leaf.title}</b>{leaf.why && <small>{leaf.why}</small>}</div>
+        <div aria-live="polite">
+          {visits ? <small>{t('visits.later', { name }, host.lang)}</small> : <><b>{leaf.title}</b>{leaf.why && <small>{leaf.why}</small>}</>}
+        </div>
         <button type="button" aria-label={t('ui.more')} disabled={i >= list.length - 1} onClick={() => go(1)}>›</button>
       </div>
       {list.length > 1 && <div className="pet-dots" aria-hidden="true">{list.map((l, k) => <i key={l.key} data-on={k === i ? '' : undefined} />)}</div>}
+      {/* About me is one leaf (no dots): Visits opens from under it (§4: "Visits open from the Life Book") */}
+      {tab === 'about' && !visits && <button type="button" className="pet-link" onClick={openVisits}>{t('toy.book.visits')}</button>}
+      {visits === 'ask' && <Sheet title={t('perm.P10.title', { name })} body={t('perm.P10.body', { name, group: t('visits.group', undefined, host.lang) })}
+        yes={t('perm.P10.yes')} no={t('perm.P1.no')} onYes={() => answerVisits(true)} onNo={() => answerVisits(false)} />}
     </div>
   );
 }

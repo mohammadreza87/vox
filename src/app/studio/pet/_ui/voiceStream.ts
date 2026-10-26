@@ -7,7 +7,7 @@
 
 import type { PetErrorCode, PetCare, TalkVoiceResponse } from '@/lib/pet/types';
 import { readJson } from './api';
-import type { VoiceOpts, VoiceStreamEvent } from './contract';
+import type { TalkAction, TalkReplyB, VoiceOpts, VoiceStreamEvent } from './contract';
 import { PetError } from './errors';
 
 /* ---------- NDJSON ---------- */
@@ -86,6 +86,9 @@ export async function streamVoice(doFetch: typeof fetch, url: string, headers: R
       care = e.care ?? care;
       if (e.goodbye) out.goodbye = true;
       if (e.bondMilestone !== undefined) out.bondMilestone = e.bondMilestone;
+      // pet_action (§8.4), when the server classifies the turn: it rides on `done`
+      const action = (e as { action?: TalkAction }).action;
+      if (action) (out as TalkReplyB).action = action;
     }
     onEvent(e);
     if (e.type === 'error') throw new PetError(res.status, e.code as PetErrorCode, e.code);

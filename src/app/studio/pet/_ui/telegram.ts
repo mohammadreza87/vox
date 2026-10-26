@@ -30,6 +30,15 @@ export interface PetTelegram {
   hideKeyboard?(): void;
   /** Bot API 6.9: lets the bot message the person (the quiet 📌 copies of group saves) */
   requestWriteAccess?(cb?: (granted: boolean) => void): void;
+  /** Bot API 6.1 */
+  isVersionAtLeast?(version: string): boolean;
+  /** Bot API 8.0: the home-screen shortcut (P8); status unsupported | unknown | added | missed */
+  addToHomeScreen?(): void;
+  checkHomeScreenStatus?(cb?: (status: 'unsupported' | 'unknown' | 'added' | 'missed') => void): void;
+  /** Bot API 8.0: a prepared inline message (savePreparedInlineMessage) */
+  shareMessage?(msgId: string, cb?: (sent: boolean) => void): void;
+  /** Bot API 7.8: an HTTPS media URL into the story editor */
+  shareToStory?(mediaUrl: string, params?: { text?: string; widget_link?: { url: string; name?: string } }): void;
   openTelegramLink?(url: string): void;
   onEvent?(event: string, cb: Handler): void;
   offEvent?(event: string, cb: Handler): void;

@@ -13,6 +13,7 @@ import { createElement, useEffect, useMemo, useState, type ReactNode } from 'rea
 import { characterModel, rootTransform, type CharacterModel, type SvgNode } from '@/lib/studio/character';
 import type { CharacterLook, Stage } from '@/lib/studio/types';
 import { detailKey, detailLayers, NO_DETAILS, type ShownDetails } from '../_engine/details';
+import { NO_WEARING, outfitLayers, type ShownWearing } from '../_engine/outfits';
 import './extras.css';
 import type { PetEngine } from './contract';
 
@@ -24,7 +25,7 @@ function nodes(list: SvgNode[], fresh: string | null, swing: MotionStyle | undef
     const k = `${key}${i}`;
     const props: Record<string, unknown> = Object.fromEntries(Object.entries(n.attrs).map(([a, v]) => [prop(a), v]));
     const kids = n.children ? nodes(n.children, fresh, swing, `${k}.`) : undefined;
-    const d = n.attrs['data-detail'];
+    const d = n.attrs['data-detail'] ?? n.attrs['data-wear'];
     if (d !== undefined && d === fresh) props.className = 'pet-detail-in';
     // the charm hangs from its pivot and swings with the soft accessories
     const pivot = n.attrs['data-pivot'];
@@ -42,20 +43,27 @@ export interface DetailsProps { engine: PetEngine; look: CharacterLook; stage: S
 export default function Details({ engine, look, stage, size, part }: DetailsProps) {
   const [shown, setShown] = useState<ShownDetails>(NO_DETAILS);
   const [fresh, setFresh] = useState<string | null>(null);
+  /** the person's closet overlay (§4.3) as this stage can wear it (the engine's `wearing` cue): this screen only */
+  const [wearing, setWearing] = useState<ShownWearing>(NO_WEARING);
   useEffect(() => engine.onMotion?.((c) => {
     if (c.type === 'details') setShown(c.details);
     if (c.type === 'litPeak' && c.detail && c.shown !== false) setFresh(detailKey(c.detail, c.id));
-  }), [engine]);
+    if (c.type === 'wearing' && part === 'body') { setWearing(c.wearing); if (c.fresh) setFresh(c.fresh); }
+  }), [engine, part]);
   const model: CharacterModel = useMemo(() => characterModel(look, { uid: 'pd', mode: 'live', stage, expr: 'idle', size }), [look, stage, size]);
   const layers = useMemo(() => detailLayers(model, shown), [model, shown]);
+  const outfit = useMemo(() => outfitLayers(model, wearing, { look, uid: 'pw' }), [model, wearing, look]);
   const rig = engine.rig;
   if (part === 'floor') {
     if (!layers.floor.length) return null;
     return <svg className="pet-details" viewBox="0 0 200 200" aria-hidden="true">{nodes(layers.floor, fresh, undefined)}</svg>;
   }
-  if (!layers.lids.length && !layers.body.length) return null;
+  const dressed = outfit.face.length + outfit.head.length + outfit.body.length + outfit.hand.length > 0;
+  if (!layers.lids.length && !layers.body.length && !dressed) return null;
+  const soft = rig.layer?.['acc-soft'];
   return (
     <svg className="pet-details" viewBox="0 0 200 200" aria-hidden="true">
+      {outfit.defs.length > 0 && <defs>{nodes(outfit.defs, null, undefined, 'd')}</defs>}
       <g transform={rootTransform(model)}>
         {layers.lids.length > 0 && (
           <m.g style={{ ...origin(model.pivots.face), ...rig.layer?.face }}>
@@ -64,7 +72,12 @@ export default function Details({ engine, look, stage, size, part }: DetailsProp
             </m.g>
           </m.g>
         )}
-        {nodes(layers.body, fresh, rig.layer?.['acc-soft'])}
+        {nodes(layers.body, fresh, soft)}
+        {/* the closet overlay: face pieces ride the face, head pieces the rigid accessory layer, soft parts swing like the charm */}
+        {outfit.face.length > 0 && <m.g style={{ ...origin(model.pivots.face), ...rig.layer?.face }}>{nodes(outfit.face, fresh, soft, 'f')}</m.g>}
+        {outfit.head.length > 0 && <m.g style={{ ...origin(model.pivots['acc-rigid']), ...rig.layer?.['acc-rigid'] }}>{nodes(outfit.head, fresh, soft, 'h')}</m.g>}
+        {nodes(outfit.body, fresh, soft, 'b')}
+        {nodes(outfit.hand, fresh, soft, 'n')}
       </g>
     </svg>
   );

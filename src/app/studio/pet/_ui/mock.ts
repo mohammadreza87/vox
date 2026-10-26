@@ -8,8 +8,8 @@ import { PRESET_LOOKS } from '@/lib/studio/character';
 import { PetError } from './errors';
 import { applyLocal, openLocal, talkLocal } from './care-local';
 import { applyPlay, newPlay, playView, roomMoment, type PetPlay } from '@/lib/pet/play';
-import type { PetApi, PetGrowthView } from './contract';
-import type { CircleDecisionRequest, PetCare, PetCircle, PetNote, PetPrivateView, PetView, Stage, TalkResponse } from '@/lib/pet/types';
+import type { CheckinPrefs, PetActionKind, PetApi, PetGrowthView, TalkAction } from './contract';
+import type { CharacterLook, CircleDecisionRequest, PetCare, PetCircle, PetNote, PetPrivateView, PetView, Stage, TalkResponse } from '@/lib/pet/types';
 
 export interface MockOptions {
   /** PRESET_LOOKS index (default 0, the lagoon cloud) */
@@ -23,6 +23,14 @@ export interface MockOptions {
   stageUp?: boolean;
   /** Wave B: the mic sheet (UX-02) has not been answered yet */
   askMic?: boolean;
+  /** Wave C: the Garden's pot (seeded, ready to bloom on the next watering, bloomed) */
+  garden?: string;
+  /** Wave C: opened from a check-in (`?ci=C5`): the first GET carries `checkin` */
+  ci?: string;
+  /** Wave C: check-ins already on, or on and paused (the paused note) */
+  checkins?: string;
+  /** Wave C: two keepsakes already earned (the Closet, T14) */
+  items?: boolean;
   /** starting needs and Bond (default: Tummy in "wants" so the rings, wiggle and thought bubble show) */
   care?: Partial<Pick<PetCare, 'tummy' | 'joy' | 'energy' | 'bond'>>;
   /** latency per call in ms (default 260 for care, 1400 for talk) */
@@ -47,11 +55,19 @@ const sleep = (ms: number, signal?: AbortSignal) => new Promise<void>((resolve, 
   signal?.addEventListener('abort', () => { clearTimeout(t); reject(new PetError(0, 'network', 'Aborted')); }, { once: true });
 });
 
+/** pet_action demo (§8.4): a few plain requests the triage pre-pass would classify. */
+const ACTIONS: [RegExp, PetActionKind][] = [[/\b(bed|sleep|nap)\b/i, 'sleep'], [/\b(cookie|snack|eat)\b/i, 'feed'], [/\bball\b/i, 'play_ball'],
+  [/\bgarden\b/i, 'open_garden'], [/\bcloset\b/i, 'open_closet'], [/\b(guess|word game)\b/i, 'start_guess']];
+function actionOf(text: string): { action?: TalkAction } {
+  const hit = ACTIONS.find(([re]) => re.test(text));
+  return hit ? { action: { kind: hit[1], confidence: 0.9 } } : {};
+}
+
 const clampStage = (n: number | undefined): Stage => (n === 1 || n === 2 || n === 3 || n === 4 ? n : 3);
 
 export function createMockApi(o: MockOptions = {}): PetApi {
   const now = o.now ?? (() => Date.now());
-  const look = PRESET_LOOKS[Math.abs(o.look ?? 0) % PRESET_LOOKS.length];
+  let look: CharacterLook = PRESET_LOOKS[Math.abs(o.look ?? 0) % PRESET_LOOKS.length];
   const stage = clampStage(o.stage);
   const tz = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch { return 'UTC'; } })();
   const t0 = now();
@@ -68,6 +84,16 @@ export function createMockApi(o: MockOptions = {}): PetApi {
   let play: PetPlay = newPlay('mock', 1, t0 - 3 * DAY);
   // the demo person already said yes to the mic (UX-02), so hold-to-talk records at once (the sheet: ?mock=1&ask=mic)
   if (!o.askMic) play.asks.P3 = { lastAskedAt: t0 - DAY, declined: 0, acceptedAt: t0 - DAY };
+  const HOUR = DAY / 24;
+  if (o.garden === 'seeded') play.garden = { seed: 'flower', plantedAt: t0 - HOUR, waterings: 0 };
+  if (o.garden === 'ready') play.garden = { seed: 'flower', plantedAt: t0 - 2 * DAY, waterings: 2 };
+  if (o.garden === 'bloom') { play.garden = { seed: 'flower', plantedAt: t0 - 3 * DAY, waterings: 3, bloomedAt: t0 - HOUR }; play.items.push({ id: 'bloomPin', earnedAt: t0 - HOUR }); play.book.push({ id: 'bloom', at: t0 - HOUR }); }
+  if (o.items && !play.items.length) play.items.push({ id: 'bloomPin', earnedAt: t0 - DAY }, { id: 'starPin', earnedAt: t0 - DAY });
+  let checkin = o.ci ? { ref: 'mock-ci-reference-x', momentId: o.ci } : undefined;
+  let prefs: CheckinPrefs = { enabled: o.checkins === 'on' || o.checkins === 'paused', types: { growingUp: true, seasons: true, garden: true, hellos: false, careNudges: false },
+    sound: false, sentThisWeek: 0, live: true, ...(o.checkins === 'paused' ? { pausedAt: t0 - DAY, pausedNote: true as const } : {}) };
+  /** the paused note shows once per pause: the first read carries it, then it is marked shown (like the server) */
+  const readPrefs = (): CheckinPrefs => { const p = { ...prefs, types: { ...prefs.types } }; if (prefs.pausedNote) { const { pausedNote: _n, ...rest } = prefs; void _n; prefs = rest; } return p; };
   let growth: PetGrowthView = { mine: [], moments: [
     { id: 'release', kind: 'taught', title: 'I learned how you plan a release', hint: 'Tell me how your team plans a release, then say “remember this”' },
     { id: 'report', kind: 'task', title: 'I wrote our first weekly report together', hint: 'Ask me for a weekly report' },
@@ -105,10 +131,12 @@ export function createMockApi(o: MockOptions = {}): PetApi {
     care = opened.care;
     return {
       agentId: 'mock', name: NAME, look, stage, formingDay: 5, botUsername: 'vox_mochi_bot', voice: false, listen: o.role !== 'guest',
-      role: o.role === 'guest' ? 'guest' : 'owner', care, now: t, play: playView(play, t, tz), growth,
+      role: o.role === 'guest' ? 'guest' : 'owner', care, now: t, play: playView(play, t, tz), growth, canEditLook: o.role !== 'guest',
       ...(opened.welcome ? { welcome: { souvenir: 'I kept thinking about your trip to Shiraz.', awayMs: opened.welcome.awayMs } } : {}),
       ...(opened.stageUp ? { stageUp: opened.stageUp } : {}),
       ...(opened.bondMilestone === undefined ? {} : { bondMilestone: opened.bondMilestone }),
+      ...(checkin ? { checkin } : {}),
+      ...(prefs.enabled || prefs.pausedAt ? { checkins: readPrefs() } : {}),
     };
   };
 
@@ -118,14 +146,26 @@ export function createMockApi(o: MockOptions = {}): PetApi {
     return goodbye
       ? { reply: 'Bye for now! Come say hi whenever you like.', goodbye: true, care, turnId: `mock-${++turn}` }
       : /remember/i.test(text) ? { reply: 'Okay, I saved that note.', care, turnId: `mock-${++turn}`, savedNote: true } as TalkResponse
-      : { reply: REPLIES[turn++ % REPLIES.length], care, turnId: `mock-${turn}` };
+      : { reply: REPLIES[turn++ % REPLIES.length], care, turnId: `mock-${turn}`, ...actionOf(text) };
   };
 
   return {
     async get(_agentId, opts) {
       await sleep(120, opts?.signal);
       refuse();
-      return view();
+      const v = view();
+      // a check-in's moment replays once, on the open it came with
+      checkin = undefined;
+      return v;
+    },
+    async checkins(_agentId, req, opts) {
+      await sleep(o.latency?.care ?? 260, opts?.signal);
+      refuse();
+      if (req && 'op' in req) {
+        if (req.op === 'resume') { const { pausedAt: _p, pausedNote: _n, ...rest } = prefs; void _p; void _n; prefs = { ...rest, enabled: true }; }
+        else if (req.op === 'stop') prefs = req.type ? { ...prefs, types: { ...prefs.types, [req.type]: false } } : { ...prefs, enabled: false };
+      } else if (req) prefs = { ...prefs, enabled: req.enabled, ...(req.enabled && req.types ? { types: { ...prefs.types, ...req.types } } : {}) };
+      return readPrefs();
     },
     async care(_agentId, req, opts) {
       await sleep(o.latency?.care ?? 260, opts?.signal);
@@ -155,6 +195,13 @@ export function createMockApi(o: MockOptions = {}): PetApi {
       play = r.play;
       litMine();
       return { play: playView(play, t, tz), now: t, ...(r.guard ? { guard: r.guard } : {}), ...(req.op === 'roomVisited' || req.op === 'askAccepted' ? { growth } : {}) };
+    },
+    async look(_agentId, req, opts) {
+      await sleep(o.latency?.care ?? 260, opts?.signal);
+      refuse();
+      if (o.role === 'guest') throw new PetError(403, 'look_forbidden', 'look_forbidden');
+      look = { ...look, ...req.look, features: { ...look.features, ...req.look.features } };
+      return { look };
     },
     async growthConfirm(_agentId, momentId, opts) {
       await sleep(o.latency?.care ?? 260, opts?.signal);

@@ -40,4 +40,21 @@ describe('growth details on the character (lazy Details overlay)', () => {
     cue({ type: 'litPeak', detail: 'pin', shown: false });
     expect(container.querySelector('.pet-detail-in')).toBeTruthy();
   });
+
+  it('the closet overlay (§4.3) from the engine\'s wearing cue: keepsakes drawn in the body overlay, the fresh one fading in; the floor never', () => {
+    const { e, cue } = engine();
+    const look = PRESET_LOOKS[0];
+    const { container } = render(<LazyMotion features={domMin}>
+      <Details engine={e} look={look} stage={4} size={200} part="body" />
+      <Details engine={e} look={look} stage={4} size={200} part="floor" />
+    </LazyMotion>);
+    cue({ type: 'wearing', wearing: { head: 'pomegranateCrown', neck: 'sparkScarf', hand: null }, fresh: 'neck:sparkScarf' });
+    const svgs = container.querySelectorAll('svg.pet-details');
+    expect(svgs).toHaveLength(1);
+    expect(svgs[0].querySelector('[data-wear="head:pomegranateCrown"]')).toBeTruthy();
+    expect(svgs[0].querySelector('[data-wear="neck:sparkScarf"]')).toHaveClass('pet-detail-in');
+    expect(svgs[0].querySelector('[data-wear="head:pomegranateCrown"]')).not.toHaveClass('pet-detail-in');
+    cue({ type: 'wearing', wearing: { head: null, neck: null, hand: null } });
+    expect(container.querySelector('svg.pet-details')).toBeNull();
+  });
 });

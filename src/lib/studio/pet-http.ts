@@ -32,7 +32,7 @@ import { circleDecision, circleLeave, circleNotes, CirclePetError, circleView, g
 import { normalizeLook, stageFor } from './character';
 import { converseAuthorized } from './conversation';
 import { boundedStudioRequest } from './http';
-import { canUseAgent, formingDay, visibilityOf } from './permissions';
+import { canEditLook, canUseAgent, formingDay, visibilityOf } from './permissions';
 import { petStoreFor, sweepPetCare, PetCareChangedError } from './pet-store';
 import { petPlayStoreFor, sweepPetPlay } from './pet-play-store';
 import { lightAgentMoment, petGrowthStoreFor } from './pet-growth-store';
@@ -45,20 +45,31 @@ import { StudioError, type CallTurnSink, type Studio } from './service';
 import type { Agent, StudioState } from './types';
 import type { DirectAuthorityEvaluator } from '../adaptive/persistence/authority';
 import { digest } from '../adaptive/persistence/repository';
+import { hasCommittedPersonalizationTransport } from '../adaptive/persistence/indexed-private-context';
 import { isSchemaValidationError } from '../error-contract';
 import { agentShortCode, parsePetLaunch, sameShort } from '../circles/codec';
-import { apply, decay, newCare, open, safeZone, talk, type CareResult } from '../pet/care';
+import { apply, decay, mood, newCare, open, safeZone, talk, type CareResult } from '../pet/care';
 import { isGoodbye } from '../pet/goodbye';
+import { CHECKIN_REF_PARAM } from '../pet/checkins';
+import { checkinsRequestSchema, CheckinsRequestError, initDataLang, MAX_CHECKINS_BYTES, readCheckins, recordCheckinOpen, writeCheckins } from './pet-checkins/http';
+import { petDecisionContext } from './pet-decisions';
+import { startPetAction, viewDecisions } from './pet-view-decisions';
 import {
   activeSeason, applyPlay, ASK_IDS, BOOK_MOMENT_IDS, GAME_IDS, KEEPSAKE_IDS, MOMENT_ID, newPlay, PLAY_LIMITS, PLAY_ROOMS, playView, roomMoment, ROUND_OUTCOMES, SEASON_IDS,
   SEED_KINDS, TIP_IDS, WEAR_SLOTS, WEARABLE_IDS, type PetPlayView, type PlayResponse, type SeasonId,
 } from '../pet/play';
 import {
   PET_ACTIONS, PET_TZ_HEADER, type CareResponse, type GrowthConfirmResponse, type PetAction, type PetCare, type PetErrorCode,
-  type PetPrivateView, type PetRole, type PetView, type TalkResponse, type TalkVoiceResponse, type TalkVoiceStreamEvent,
+  type LookResponse, type PetPrivateView, type PetRole, type PetView, type TalkResponse, type TalkVoiceResponse, type TalkVoiceStreamEvent,
 } from '../pet/types';
 
 const AGENT_ID = /^[A-Za-z0-9_-]{1,128}$/;
+/**
+ * The static siblings of `pet/[agentId]` under src/app/api/studio/pet (`checkins/run`, the trigger; `launch`): Next.js
+ * matches a static segment before the dynamic one, so an agent with one of these ids would be unreachable. Studio's ids
+ * are `ag` + 10 hex (service.ts hire), so none can clash; the pet route refuses them too, so the two can never be confused.
+ */
+export const RESERVED_PET_SEGMENTS: ReadonlySet<string> = new Set(['checkins', 'launch']);
 const MAX_INIT_DATA = 16_384;
 /** verifyInitData's default max age (24 h, like the rest of Studio in v1) */
 const INIT_DATA_MAX_AGE_S = 86_400;
@@ -93,11 +104,20 @@ const playSchema = z.discriminatedUnion('op', [
   z.object({ op: z.literal('askAccepted'), ask: oneOf(ASK_IDS) }).strict(),
   z.object({ op: z.literal('seasonCelebrated'), season: oneOf(SEASON_IDS) }).strict(),
   z.object({ op: z.literal('roomVisited'), room: oneOf(PLAY_ROOMS) }).strict(),
+  z.object({ op: z.literal('setVisits'), open: z.boolean() }).strict(),
 ]);
 const NOTE_COPY_ID = /^[0-9a-z]{1,11}-[A-Za-z0-9_-]{12}$/;
 /** POST growth/confirm (design §4.11): the person tapped yes on "Shall I keep this as …?" after an explicit save. */
 const growthConfirmSchema = z.object({ momentId: z.string().regex(MOMENT_ID), noteId: z.string().regex(NOTE_COPY_ID).optional() }).strict();
 const MAX_GROWTH_BYTES = 512;
+const lookField = z.string().min(1).max(40).optional();
+/** POST look (the creator's closet "real look", design §4.3, open decision 3): catalogue values are checked by parseLookPatch. */
+const lookSchema = z.object({
+  look: z.object({ hue: lookField, family: lookField, species: lookField, hair: lookField, hairTone: lookField, accessory: lookField, accent: lookField,
+    features: z.object({ cheeks: z.boolean().optional(), lashes: z.boolean().optional(), brows: z.boolean().optional() }).strict().optional() }).strict(),
+  sync: z.boolean().optional(),
+}).strict();
+const MAX_LOOK_BYTES = 1024;
 /** An open moves the play record's `seenAt` (the guest sweep's clock) at most this often: one small write a day, not one per open. */
 const PLAY_SEEN_EVERY_MS = 12 * 60 * 60 * 1000;
 
@@ -186,7 +206,7 @@ export function souvenir(agentId: string, userId: number, now: number): string {
 /** Server time the care rules run on (the Studio clock, so tests control it). */
 const clock = (studio: Studio) => (studio.deps.now?.() ?? new Date()).getTime();
 
-type PetRoute = 'view' | 'export' | 'care' | 'play' | 'talk' | 'talk-voice' | 'forget' | 'circle' | 'circle-decision' | 'circle-leave' | 'notes' | 'notes-erase' | 'growth-confirm';
+type PetRoute = 'view' | 'export' | 'care' | 'play' | 'talk' | 'talk-voice' | 'forget' | 'circle' | 'circle-decision' | 'circle-leave' | 'notes' | 'notes-erase' | 'growth-confirm' | 'checkins' | 'look';
 /** What a manager-signed launch (S4) may do: the person's own pet and the circle. Talk stays with the agent's own bot (the DM). */
 const LAUNCH_ROUTES: ReadonlySet<PetRoute> = new Set(['view', 'care', 'play', 'circle', 'circle-decision', 'circle-leave', 'notes', 'notes-erase']);
 /**
@@ -195,17 +215,19 @@ const LAUNCH_ROUTES: ReadonlySet<PetRoute> = new Set(['view', 'care', 'play', 'c
  */
 const RELAXABLE: ReadonlySet<PetRoute> = new Set(['view', 'care', 'play']);
 /** Agent-signed routes that act as the person (talk) or record their consent: a 1 h window instead of 24 h. */
-const STRICT_AGE: ReadonlySet<PetRoute> = new Set(['talk', 'talk-voice', 'circle-decision', 'circle-leave', 'growth-confirm']);
+const STRICT_AGE: ReadonlySet<PetRoute> = new Set(['talk', 'talk-voice', 'circle-decision', 'circle-leave', 'growth-confirm', 'checkins', 'look']);
 /** Moved to the VoxxBot-signed My data page (my-data-http.ts): never authorised by any pet initData again. */
 const MOVED: ReadonlySet<PetRoute> = new Set(['export', 'forget']);
 const COPY_ID = /^[0-9a-z]{1,11}-[A-Za-z0-9_-]{12}$/;
 function routeOf(method: string, path: string[]): { route: PetRoute; copyId?: string } | null {
   const action = path.join('/');
-  if (method === 'GET') return action === '' ? { route: 'view' } : action === 'export' || action === 'play' || action === 'circle' || action === 'notes' ? { route: action } : null;
+  if (method === 'GET') return action === '' ? { route: 'view' } : action === 'export' || action === 'play' || action === 'circle' || action === 'notes' || action === 'checkins' ? { route: action } : null;
   if (method === 'DELETE') return path.length === 2 && path[0] === 'notes' && COPY_ID.test(path[1]) ? { route: 'notes-erase', copyId: path[1] } : null;
   if (method !== 'POST') return null;
   if (action === 'circle/decision' || action === 'circle/leave') return { route: action === 'circle/decision' ? 'circle-decision' : 'circle-leave' };
   if (action === 'growth/confirm') return { route: 'growth-confirm' };
+  if (action === 'checkins') return { route: 'checkins' };
+  if (action === 'look') return { route: 'look' };
   return action === 'care' || action === 'play' || action === 'talk' || action === 'talk-voice' || action === 'forget' ? { route: action } : null;
 }
 
@@ -236,7 +258,7 @@ export async function handlePetRequest(studio: Studio, request: Request, agentId
     const limiter = limiterFor(studio);
     const method = request.method.toUpperCase();
     const routed = routeOf(method, path);
-    if (!routed || !AGENT_ID.test(agentId)) return fail('pet_unavailable', 404);
+    if (!routed || !AGENT_ID.test(agentId) || RESERVED_PET_SEGMENTS.has(agentId)) return fail('pet_unavailable', 404);
     const { route } = routed;
     // Erase and export left the agent-signed page (a creator can forge or harvest its initData): nothing is read or erased.
     if (MOVED.has(route)) return fail('moved_to_vox', 410);
@@ -376,10 +398,34 @@ export async function handlePetRequest(studio: Studio, request: Request, agentId
       // Growth moments belong to the agent's circle (design §4.11): a guest of a public agent never sees them.
       const growth = role === 'guest' ? undefined : await readGrowth(play?.litMine ?? []);
       const listen = role !== 'guest' && !launched && (!!studio.deps.openai || !!studio.deps.eleven);
+      // Check-ins (design §5): members only, never over a manager-signed launch. The ?ci= replay, the opened mark, the
+      // zone the planner reads and the paused note; a broken check-in store never closes the pet.
+      let opens: Awaited<ReturnType<typeof recordCheckinOpen>> = {};
+      if (role !== 'guest' && !launched) {
+        try {
+          opens = await recordCheckinOpen(studio, { userId: user.id, agentId: agent.id, agentName: agent.persona.name, now: opened.at, ...(tz ? { tz } : {}),
+            lang: initDataLang(initData), expectedEpoch, ref: new URL(request.url).searchParams.get(CHECKIN_REF_PARAM) });
+        } catch (error) {
+          if (PetCareChangedError.is(error)) throw error;
+          (studio.deps.logger ?? console).warn('[studio] pet_checkins_read_failed');
+        }
+      }
+      // Decisions for this session (§8.2): shadow logs in the background; on consumes calibrated answers within 500 ms.
+      let suggest: PetView['suggest'];
+      const decisions = petDecisionContext(studio);
+      if (role !== 'guest' && decisions.mode !== 'off' && decisions.decider) {
+        try {
+          const raw = play ? await (await petPlayStoreFor(studio)).get(agent.id, user.id).catch(() => null) : null;
+          suggest = await viewDecisions(decisions, { agentId: agent.id, lang: initDataLang(initData), play: raw, now: opened.at, tz: opened.care.tz,
+            stage, formingDay: formingDay(agent, new Date(now)), welcome: !!opened.welcome, lastSeenAt: opened.welcome ? opened.at - opened.welcome.awayMs : opened.at, mood: mood(opened.care).level });
+        } catch { suggest = undefined; }
+      }
       const view: PetView = {
         careEpoch: expectedEpoch, agentId: agent.id, name: agent.persona.name, look: normalizeLook(agent.look), stage, formingDay: formingDay(agent, new Date(now)),
         botUsername: agent.bot.username, voice: !!agent.voice && (studio.deps.tts !== undefined ? !!studio.deps.tts?.canSynthesize : !!studio.deps.eleven),
         listen, role, care: opened.care, now: opened.at,
+        // the creator or an admin (who opens as `member`) may change the real look from the closet; never over a launch
+        canEditLook: role !== 'guest' && !launched && canEditLook(state.members.find((m) => m.telegramId === user.id), agent),
         // UX-02: who hears the audio is the transcription provider callTurn uses (OpenAI first); locations and retention are unresolved
         ...(listen ? { voiceNotice: { providers: studio.deps.openai ? 'OpenAI' : 'ElevenLabs' } } : {}),
         ...(launched ? { talkInDm: true as const } : {}),
@@ -389,6 +435,9 @@ export async function handlePetRequest(studio: Studio, request: Request, agentId
         ...(opened.bondMilestone === undefined ? {} : { bondMilestone: opened.bondMilestone }),
         ...(play ? { play } : {}),
         ...(growth ? { growth } : {}),
+        ...(opens.replay ? { checkin: opens.replay } : {}),
+        ...(opens.checkins ? { checkins: opens.checkins } : {}),
+        ...(suggest ? { suggest } : {}),
       };
       finalCareFence();
       return json(view);
@@ -481,6 +530,48 @@ export async function handlePetRequest(studio: Studio, request: Request, agentId
       return json(body);
     }
 
+    // The real look (design §4.3, open decision 3): the creator or an admin, agent-signed like talk, on the strict 1 h window.
+    // The same rule and the same save as Studio's look route; a visitor's overlay stays in play (wear).
+    if (route === 'look') {
+      const member = state.members.find((m) => m.telegramId === user.id);
+      if (role === 'guest' || !canEditLook(member, agent)) return fail('look_forbidden', 403);
+      if (contentType(request) !== 'application/json') return fail('json_required', 415);
+      await limiter.consume('mutation', user.id);
+      const input = lookSchema.parse(await jsonBody(request, MAX_LOOK_BYTES));
+      if (!currentPetNow()) throw new PetCareChangedError('Pet care changed');
+      const saved = await studio.setLook(member!, agent.id, input.look, { sync: input.sync !== false });
+      const body: LookResponse = { look: normalizeLook(saved.look) };
+      return json(body);
+    }
+
+    // Check-ins (design §5.2, §6.2 P1): members only, on the strict 1 h window; guests are never asked.
+    if (route === 'checkins') {
+      if (role === 'guest') return fail('checkins_unavailable', 403);
+      const call = { userId: user.id, agentId: agent.id, agentName: agent.persona.name, now, ...(tz ? { tz } : {}), lang: initDataLang(initData), expectedEpoch };
+      try {
+        if (method === 'GET') {
+          const body = await readCheckins(studio, call);
+          finalCareFence();
+          return json(body);
+        }
+        if (contentType(request) !== 'application/json') return fail('json_required', 415);
+        await limiter.consume('mutation', user.id);
+        const input = checkinsRequestSchema.parse(await jsonBody(request, MAX_CHECKINS_BYTES));
+        if (!currentPetNow()) throw new PetCareChangedError('Pet care changed');
+        const body = await writeCheckins(studio, call, input);
+        finalCareFence();
+        return json(body);
+      } catch (error) {
+        if (error instanceof CheckinsRequestError || (error as { name?: string })?.name === 'CheckinsRequestError') {
+          const e = error as CheckinsRequestError;
+          return fail(e.code === 'checkins_off' ? 'checkins_unavailable' : e.code, e.status);
+        }
+        if (PetCareChangedError.is(error) || StudioRateLimitError.is(error) || isSchemaValidationError(error) || StudioError.is(error)) throw error;
+        (studio.deps.logger ?? console).warn('[studio] pet_checkins_failed');
+        return fail('checkins_unavailable', 503);
+      }
+    }
+
     if (route === 'care') {
       if (contentType(request) !== 'application/json') return fail('json_required', 415);
       const input = careSchema.parse(await jsonBody(request, MAX_CARE_BYTES));
@@ -526,6 +617,14 @@ export async function handlePetRequest(studio: Studio, request: Request, agentId
       await pets.erasureEpoch(user.id);
       return authorizeNow();
     };
+    /** The pet_action pre-pass reads the turn's text only while the reply itself may still be delivered. */
+    const decisionAuthority = { authorize: async () => (await authorize().catch(() => false)) ? admitted : null, authorizeNow };
+    // Like the gateway's triage (which skips compact turns), no pre-pass where the prepared or indexed private context
+    // carries the turn: that adapter has no final configured-transport authority seam.
+    const storage = studio.deps.adaptive.repository.storage;
+    const prePass = !(storage.indexed || (storage.canonicalSchemaVersion ?? 1) !== 1 || hasCommittedPersonalizationTransport(storage));
+    const petActionFor = (text: string): ReturnType<typeof startPetAction> =>
+      prePass ? startPetAction(petDecisionContext(studio), { agentId: agent.id, text, authority: decisionAuthority }) : { result: async () => undefined };
     let settled: CareResult | undefined;
     const beforeDelivery = async () => {
       if (!await authorize()) throw new StudioError(409, 'The conversation settings changed.');
@@ -535,12 +634,16 @@ export async function handlePetRequest(studio: Studio, request: Request, agentId
     if (route === 'talk') {
       if (contentType(request) !== 'application/json') return fail('json_required', 415);
       const input = talkSchema.parse(await jsonBody(request, MAX_TALK_BYTES));
+      // pet_action (§8.4): the pre-pass runs beside the reply, under the same authority; shadow only logs.
+      const petAction = petActionFor(input.text);
       // Same private chat and space as the DM (gateway: private-<person>, 'work'), so one memory.
       const turn = await converseAuthorized(studio, user, { agentId: agent.id, space: 'work', text: input.text }, request.signal, { surface: 'pet', authorize, authorizeNow, beforeDelivery });
       if (!turn.ok) return fail('conversation_failed', turn.status, { message: turn.error }, turn.headers);
       const done = settled!;
+      const action = await petAction.result();
       const body: TalkResponse = { reply: turn.reply, ...(turn.turnId ? { turnId: turn.turnId } : {}), care: done.care,
-        ...(isGoodbye(input.text) ? { goodbye: true } : {}), ...(done.bondMilestone === undefined ? {} : { bondMilestone: done.bondMilestone }) };
+        ...(isGoodbye(input.text) ? { goodbye: true } : {}), ...(done.bondMilestone === undefined ? {} : { bondMilestone: done.bondMilestone }),
+        ...(action ? { action } : {}) };
       return json(body);
     }
 
@@ -558,7 +661,10 @@ export async function handlePetRequest(studio: Studio, request: Request, agentId
     const spoken = !!agent.voice;
     // Hands-free (§8A.2): a device-local mode; the page says so per turn and the prompt gets the hands-free frame.
     const handsFree = form.get('handsFree');
-    const options = { surface: 'pet' as const, speak: spoken, authorize, authorizeNow, beforeDelivery, ...(handsFree === 'true' || handsFree === '1' ? { handsFree: true } : {}) };
+    // pet_action (§8.4): started as soon as the transcript exists, beside the reply; shadow only logs.
+    let petAction: ReturnType<typeof startPetAction> = { result: async () => undefined };
+    const onTranscript = (text: string) => { petAction = petActionFor(text); };
+    const options = { surface: 'pet' as const, speak: spoken, authorize, authorizeNow, beforeDelivery, onTranscript, ...(handsFree === 'true' || handsFree === '1' ? { handsFree: true } : {}) };
     const bytes = await audio.arrayBuffer(), mime = audio.type || 'audio/webm';
     // ?stream=1 (§8A.3): NDJSON, one event per sentence as soon as it is spoken. Without it, one JSON body as before.
     if (new URL(request.url).searchParams.get('stream') === '1') {
@@ -572,8 +678,10 @@ export async function handlePetRequest(studio: Studio, request: Request, agentId
         if (!turn.transcript) { emit({ type: 'transcript', text: '' }); return { type: 'done' }; }
         // `settled` is set by beforeDelivery; a turn that somehow skipped it still ends cleanly (no care in the event).
         const done = settled;
+        const action = await petAction.result();
         return { type: 'done', ...(turn.turnId ? { turnId: turn.turnId } : {}), ...(done ? { care: done.care } : {}),
-          ...(isGoodbye(turn.transcript) ? { goodbye: true } : {}), ...(done?.bondMilestone === undefined ? {} : { bondMilestone: done.bondMilestone }) };
+          ...(isGoodbye(turn.transcript) ? { goodbye: true } : {}), ...(done?.bondMilestone === undefined ? {} : { bondMilestone: done.bondMilestone }),
+          ...(action ? { action } : {}) };
       });
     }
     const turn = await studio.callTurn(member, agent.id, bytes, mime, 'work', request.signal, options);
@@ -582,12 +690,14 @@ export async function handlePetRequest(studio: Studio, request: Request, agentId
       return json(empty);
     }
     const done = settled!;
+    const action = await petAction.result();
     const body: TalkVoiceResponse = {
       transcript: turn.transcript, reply: turn.reply,
       ...(turn.audio && spoken ? { audio: turn.audio } : {}),
       ...(turn.turnId ? { turnId: turn.turnId } : {}), care: done.care,
       ...(isGoodbye(turn.transcript) ? { goodbye: true } : {}),
       ...(done.bondMilestone === undefined ? {} : { bondMilestone: done.bondMilestone }),
+      ...(action ? { action } : {}),
     };
     return json(body);
   } catch (error) {

@@ -85,8 +85,52 @@ export function render(rows) {
   return { 'keys.ts': keys, 'en.ts': en, 'fa.ts': fa, 'voice.ts': voice, 'core.ts': core };
 }
 
+/**
+ * The server's copy of the check-in DM templates (care game design §5.3-§5.4), for src/lib/pet/checkin-copy.ts: the
+ * server cannot import this client folder. Every check-in key (`ci.*`, and `dm.*` / `checkin.*` if the keys file ever
+ * adds them) plus the P1 consent sheet (`perm.P1.*`, whose exact text the consent evidence hashes). Every value is an
+ * array of variants (one today); the FA object leaves out a key with no Persian yet (the server falls back to English).
+ * The copy lint reads this file with its own voice map (CHECKIN_VOICE).
+ */
+export const SERVER_CHECKIN_KEYS = /^(ci|dm|checkin)\.|^perm\.P1\./;
+export const SERVER_CHECKIN_FILE = join(HERE, '../../../../../lib/pet/checkin-copy.ts');
+
+export function renderCheckinCopy(rows) {
+  const picked = rows.filter((r) => SERVER_CHECKIN_KEYS.test(r.key));
+  const arr = (v) => `[${(Array.isArray(v) ? v : [v]).map((s) => JSON.stringify(s)).join(', ')}]`;
+  return `${HEAD}/* The check-in DM templates and the P1 consent sheet for the server (strings/generate.mjs renderCheckinCopy). Variants are arrays. */
+
+export type CheckinCopyKey =
+${picked.map((r) => `  | '${r.key}'`).join('\n')};
+export type CheckinLang = 'en' | 'fa';
+export type CheckinVoice = 'pet' | 'system' | 'person';
+export type CheckinCatalog = Readonly<Record<CheckinCopyKey, readonly string[]>>;
+
+/** Who speaks each line (voice guide §3); the copy lint reads this map. */
+export const CHECKIN_VOICE: Readonly<Record<CheckinCopyKey, CheckinVoice>> = {
+${picked.map((r) => `  '${r.key}': '${r.voice}',`).join('\n')}
+};
+
+export const EN: CheckinCatalog = {
+${picked.map((r) => `  '${r.key}': ${arr(r.en)},`).join('\n')}
+};
+
+/** The Persian copywriter's text, verbatim. A key missing here falls back to English. */
+export const FA: Readonly<Partial<Record<CheckinCopyKey, readonly string[]>>> = {
+${picked.filter((r) => r.fa !== null).map((r) => `  '${r.key}': ${arr(r.fa)},`).join('\n')}
+};
+
+for (const catalog of [CHECKIN_VOICE, EN, FA]) {
+  for (const value of Object.values(catalog)) if (Array.isArray(value)) Object.freeze(value);
+  Object.freeze(catalog);
+}
+`;
+}
+
 if (FILE && process.argv[1] === FILE) {
-  const files = render(parseKeysDoc(readFileSync(KEYS_DOC, 'utf8')));
+  const rows = parseKeysDoc(readFileSync(KEYS_DOC, 'utf8'));
+  const files = render(rows);
   for (const [name, text] of Object.entries(files)) writeFileSync(join(HERE, name), text);
-  console.log(`wrote ${Object.keys(files).join(', ')}`);
+  writeFileSync(SERVER_CHECKIN_FILE, renderCheckinCopy(rows));
+  console.log(`wrote ${Object.keys(files).join(', ')}, src/lib/pet/checkin-copy.ts`);
 }

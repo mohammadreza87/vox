@@ -165,4 +165,24 @@ describe('Life Book (design §4.7, §4.11, S13)', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'About me' }));
     expect(leafText()).toBe('I’m Mochi, an AI colleague. This little cloud is a game we play together.');
   });
+
+  it('P10 Visits: asked once; a yes records the answer, then sets the visits flag (setVisits); a no sets nothing', async () => {
+    const h = fakeHost();
+    const { unmount } = render(<BookRoom id="book" host={h} />);
+    fireEvent.click(screen.getByRole('tab', { name: 'About me' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Visits' }));
+    expect(h.play).toHaveBeenCalledWith({ op: 'askSeen', ask: 'P10' });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Yes, they can visit' })); });
+    expect(h.play).toHaveBeenCalledWith({ op: 'askAccepted', ask: 'P10' });
+    expect(h.play).toHaveBeenLastCalledWith({ op: 'setVisits', open: true });
+    expect(leafText()).toContain('Visits arrive in a later update.');
+    unmount();
+    const n = fakeHost();
+    render(<BookRoom id="book" host={n} />);
+    fireEvent.click(screen.getByRole('tab', { name: 'About me' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Visits' }));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Not now' })); });
+    expect(n.play).toHaveBeenCalledWith({ op: 'askDeclined', ask: 'P10' });
+    expect(n.play).not.toHaveBeenCalledWith({ op: 'setVisits', open: true });
+  });
 });

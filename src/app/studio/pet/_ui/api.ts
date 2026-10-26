@@ -11,8 +11,8 @@ import {
   type CareRequest, type CareResponse, type PetErrorBody, type PetErrorCode, type PetView,
   type TalkRequest, type TalkResponse, type TalkVoiceResponse,
 } from '@/lib/pet/types';
-import type { GrowthConfirmResponse } from '@/lib/pet/types';
-import type { PetApi, PetRequestOpts, PlayResponse } from './contract';
+import type { GrowthConfirmResponse, LookResponse } from '@/lib/pet/types';
+import type { CheckinPrefs, PetApi, PetRequestOpts, PlayResponse } from './contract';
 import { PetError } from './errors';
 import type { MockOptions } from './mock';
 import { tg } from './telegram';
@@ -38,12 +38,16 @@ export async function readJson<T>(res: Response): Promise<T> {
   return json as T;
 }
 
-interface HttpDeps { fetch?: typeof fetch; initData?: () => string; tz?: () => string }
+interface HttpDeps { fetch?: typeof fetch; initData?: () => string; tz?: () => string; search?: () => string }
+
+/** `?ci=<ref>` (a check-in's Open button, §5.1): an opaque reference passed on to GET, never identity. */
+export const ciRef = (search: string) => { const r = new URLSearchParams(search).get('ci'); return r && /^[\w-]{1,64}$/.test(r) ? r : null; };
 
 export function createHttpApi(d: HttpDeps = {}): PetApi {
   const doFetch = d.fetch ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
   const initData = d.initData ?? (() => tg()?.initData ?? '');
   const tz = d.tz ?? petTz;
+  const search = d.search ?? (() => (typeof location === 'undefined' ? '' : location.search));
   const epochs = new Map<string, string>();
   const url = (agentId: string, action?: string) => `${PET_API_BASE}/${encodeURIComponent(agentId)}${action ? `/${action}` : ''}`;
 
@@ -72,7 +76,8 @@ export function createHttpApi(d: HttpDeps = {}): PetApi {
 
   return {
     get: async (agentId, o) => {
-      const view = await call<PetView>('GET', url(agentId), undefined, o);
+      const ci = ciRef(search());
+      const view = await call<PetView>('GET', url(agentId) + (ci ? `?ci=${ci}` : ''), undefined, o);
       epochs.set(agentId, view.careEpoch ?? 'initial');
       return view;
     },
@@ -84,6 +89,12 @@ export function createHttpApi(d: HttpDeps = {}): PetApi {
       `${url(agentId, 'talk-voice')}?stream=1`, head(epochs.get(agentId), 'application/x-ndjson, application/json'), voiceForm(audio, o?.handsFree), onEvent, o),
     play: (agentId, req, o) => call<PlayResponse>('POST', url(agentId, 'play'), req, o, epochs.get(agentId)),
     growthConfirm: (agentId, momentId, o) => call<GrowthConfirmResponse>('POST', url(agentId, 'growth/confirm'), { momentId }, o, epochs.get(agentId)),
+    // a server without the route answers 404 pet_unavailable: that must never end the pet, so it is renamed
+    // POSTs carry the care epoch like every pet mutation (the server fences them on it); GET answers the current one
+    checkins: (agentId, req, o) => call<CheckinPrefs>(req ? 'POST' : 'GET', url(agentId, 'checkins'), req, o, req ? epochs.get(agentId) : undefined).catch((e: unknown) => {
+      throw e instanceof PetError && e.status === 404 ? new PetError(404, 'checkins_unavailable', 'checkins_unavailable') : e;
+    }),
+    look: (agentId, req, o) => call<LookResponse>('POST', url(agentId, 'look'), req, o, epochs.get(agentId)),
     send: (agentId, method, action, body, o) => call(method, url(agentId, action), body, o),
   };
 }
@@ -101,6 +112,9 @@ export function mockOptions(search: string): MockOptions | null {
     welcome: q.get('welcome') === '1',
     stageUp: q.get('stageup') === '1',
     ...(q.get('ask') === 'mic' ? { askMic: true } : {}),
+    // Wave C demos (mock.ts): ?garden=seeded|ready|bloom, ?ci=C5, ?checkins=on|paused, ?items=1; ?room= is the page's (Extras)
+    ...['garden', 'ci', 'checkins'].reduce((o, k) => (q.get(k) ? { ...o, [k]: q.get(k) } : o), {}),
+    ...(q.has('items') ? { items: true } : {}),
   };
 }
 
@@ -109,6 +123,6 @@ export function createPetApi(search = typeof location === 'undefined' ? '' : loc
   if (!mock) return createHttpApi();
   const fake = import('./mock').then((m) => m.createMockApi(mock));
   const out: Record<string, unknown> = {};
-  for (const k of ['get', 'care', 'talk', 'talkVoice', 'send', 'play', 'growthConfirm'] as const) out[k] = async (...a: unknown[]) => ((await fake)[k] as (...x: unknown[]) => unknown)(...a);
+  for (const k of ['get', 'care', 'talk', 'talkVoice', 'send', 'play', 'growthConfirm', 'checkins', 'look'] as const) out[k] = async (...a: unknown[]) => ((await fake)[k] as (...x: unknown[]) => unknown)(...a);
   return out as unknown as PetApi;
 }

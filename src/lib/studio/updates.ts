@@ -19,6 +19,7 @@ import { agentCard, choiceReceipt, circleCopy, groupCopy, localeOf } from '../ci
 import { petPageUrl } from '../pet/links';
 import { parseExplicitControl } from '../relationships/policy';
 import { MY_DATA_CODE, MY_DATA_PAGE } from './my-data-contract';
+import { onCheckinCallback, parseCheckinCallback } from './pet-checkins/deliver';
 
 export const MANAGER_UPDATES = ['message', 'managed_bot'];
 /** Never channel_post or edited_channel_post: Vox reads nothing from channels (Circles S5 is post-only). */
@@ -103,6 +104,12 @@ export async function handleAgentUpdate(studio: Studio, agentId: string, update:
   }
   if (update.chat_member) {
     if (await studio.deps.memory.deduper.firstSeen(`audience:${agentId}:${update.update_id}`)) await studio.onGroupChatMember(update.chat_member);
+    return;
+  }
+  // Pet check-in buttons (kw: Why this? · ks: Stop these · ka: Stop all, design §5.4), answered in the DM's own language.
+  if (update.callback_query && parseCheckinCallback(update.callback_query.data)) {
+    const token = studio.botToken(live);
+    if (token && await studio.deps.memory.deduper.firstSeen(`${agentId}__${update.update_id}`)) await onCheckinCallback(studio, live, update.callback_query, studio.deps.botFor(token));
     return;
   }
   // Circles notes buttons (cs:/cn:/ce:, S3) only while Circles is 'circles'; otherwise they take the paths below as before.

@@ -316,3 +316,42 @@ export function recordTriageDecision(sink: DecisionLogSink, event: TriageDecisio
     });
   } catch { /* never throws into delivery */ }
 }
+
+/** One pet decision (care game design §8.6): which questions were asked, and what came back. Content-free. */
+export interface PetDecisionEvent {
+  questions: readonly DecisionQuestion[];
+  /** null: the call failed or timed out before any answer */
+  detail: DecideDetail | null;
+  elapsedMs: number;
+  /** the agent (persona) id; never a person id */
+  personaId: string;
+  /** the person's language on the pet page (not a script ratio: pet inputs carry no text) */
+  language: 'fa' | 'en';
+  at: Date;
+}
+
+/** Builds and records one `pet-v1` row, routed `pet`. Only answers to the questions asked, with catalogue values. Never throws. */
+export function recordPetDecision(sink: DecisionLogSink, event: PetDecisionEvent): void {
+  try {
+    const answers = event.questions.flatMap((q) => {
+      const a = logAnswer(q, event.detail?.answers[q.name]);
+      return a ? [a] : [];
+    });
+    const outcome = answers.length > 0 ? 'answered' : 'unknown';
+    const inputTokens = event.detail?.inputTokens;
+    sink.record({
+      questionSetVersion: 'pet-v1',
+      names: event.questions.map((q) => q.name),
+      answers,
+      outcome,
+      ...(outcome === 'unknown' ? { unknownReason: event.detail?.unknownReason ?? (event.detail === null ? 'timeout' : 'empty') } : {}),
+      elapsedMs: Math.max(0, Math.round(event.elapsedMs)),
+      ...(typeof inputTokens === 'number' ? { inputTokens } : {}),
+      routeTaken: 'pet',
+      personaId: event.personaId,
+      chatKind: 'private',
+      language: event.language,
+      at: event.at,
+    });
+  } catch { /* never throws into a pet request */ }
+}

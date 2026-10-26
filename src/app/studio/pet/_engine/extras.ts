@@ -9,11 +9,14 @@
  */
 
 import type { Mood } from '@/lib/pet/types';
-import type { Stage } from '@/lib/studio/types';
+import { GROUND, type CharacterModel } from '@/lib/studio/character';
+import type { CharacterLook, Stage } from '@/lib/studio/types';
 import type { TalkState } from '../_ui/contract';
 import { REDUCED_MOTION_QUERY } from '../../_components/motion/activity';
 import type { IdleParams } from './breath';
-import { detailKey, fitDetails, type DetailName, type Details, type ShownDetails } from './details';
+import { detailKey, fitDetails, gardenX, type DetailName, type Details, type ShownDetails } from './details';
+import { fitGarden, GARDEN_K, soilY, type GardenInput, type GardenShown } from './garden';
+import { fitWearing, NO_WEARING, WEAR_SLOT, wearKey, type ShownWearing, type Wearing } from './outfits';
 import { CLOSE_TAU, TextLipSync, type MouthSample } from './lipsync';
 import type { StageMotion } from './motion';
 import type { Playing } from './player';
@@ -88,6 +91,7 @@ export const SPEECH = { pause: 0.18, minPauseMs: 60, maxPauseMs: 180, minCps: 6,
 export const MOTION_PRIORITY: Readonly<Record<MotionKind, PriorityClass>> = {
   roomLeave: 'touch', roomArrive: 'touch', growthLit: 'touch', settle: 'needs', roomIdle: 'idle', hopIdle: 'idle', breathe: 'needs', attend: 'talk', breath: 'talk',
   catch: 'play', nearMiss: 'play', roundEnd: 'play', rain: 'touch', admire: 'touch', storyNod: 'talk', pageFlip: 'needs', ownDrawing: 'touch',
+  bloom: 'touch', tryOn: 'touch', guessThink: 'talk', guessHeard: 'talk', guessRight: 'talk', guessWrong: 'talk', guessReveal: 'talk',
 };
 
 /* ---------- the host: what the engine lends this chunk ---------- */
@@ -107,6 +111,10 @@ export interface Host {
   readonly talkState: TalkState;
   /** where the eyes are steered (a finger off the character, or the page's setGaze point) */
   readonly finger: Point | null;
+  readonly model: CharacterModel;
+  readonly look: CharacterLook;
+  /** where a `touch` burst lands (model units): the last touch, or what a reaction aims at (the Garden's pot) */
+  touchAt: Point | null;
   room: Room;
   contentFloat: boolean;
   stretchStart: number | null;
@@ -144,11 +152,17 @@ interface XState {
   holdSide: -1 | 1;
   /** the side the bedroom's drifting lean is on */
   bedSide: -1 | 1;
+  /** what this person dressed the pet in (kept whole: an item the stage cannot show yet waits) and what it shows */
+  wearing: Wearing;
+  worn: ShownWearing;
+  wornStage: number;
+  /** the look the outfit was fitted to (null: never dressed) */
+  wornLook: CharacterLook | null;
 }
 const states = new WeakMap<Host, XState>();
 function state(h: Host): XState {
   let s = states.get(h);
-  if (!s) states.set(h, (s = { details: {}, shown: fitDetails({}, 4), fitStage: 0, fade: null, hold: false, holdSide: 1, bedSide: 1 }));
+  if (!s) states.set(h, (s = { details: {}, shown: fitDetails({}, 4), fitStage: 0, fade: null, hold: false, holdSide: 1, bedSide: 1, wearing: {}, worn: NO_WEARING, wornStage: 0, wornLook: null }));
   return s;
 }
 
@@ -174,8 +188,29 @@ export function setRoom(h: Host, room: Room, o: { dir?: -1 | 1; instant?: boolea
 export function roomReact(h: Host, kind: RoomReaction, o: RoomReactOpts): void {
   const now = h.clock.now();
   if (h.asleep || h.dozing) h.wakeUp(now, h.asleep ? 'sleep' : 'doze');
-  play(h, kind, roomReaction(h.ctx(), kind, o), now);
+  // rain and a bloom aim at the Garden's pot when a seed is planted: the drops (and the sparkle) land on its soil
+  const pot = kind === 'rain' || kind === 'bloom' ? potAim(h, kind) : null;
+  if (pot) h.touchAt = pot.at;
+  const slot = kind === 'tryOn' && o.id && o.id in WEAR_SLOT ? WEAR_SLOT[o.id as keyof typeof WEAR_SLOT] : undefined;
+  play(h, kind, roomReaction(h.ctx(), kind, o, { aim: pot?.dx, slot }), now);
   h.wake();
+}
+
+/** The body's drift toward the pot while it rains (view units, rooms.ts reads the aim and drifts by this share). */
+export const RAIN_DRIFT = 10;
+export const driftFor = (dx: number) => Math.min(RAIN_DRIFT, dx * 0.2);
+
+/**
+ * How far right of the body the pot stands (view units) and the model point a `touch` burst spawns from: rain from
+ * under the body over the pot (the body drifts toward it, so the point is set back by the drift), a bloom's sparkle
+ * just over the flower (set back by the room's hover, which lifts every burst with the body). Null: no seed.
+ */
+export function potAim(h: Pick<Host, 'model' | 'room' | 'tier'>, kind: 'rain' | 'bloom', garden = gardens.get(h as Host)): { dx: number; at: Point } | null {
+  if (!garden) return null;
+  const m = h.model, cx = m.pivots.body[0], g = m.growth, dx = gardenX(m) - cx;
+  if (kind === 'rain') return { dx, at: { x: cx + (dx - driftFor(dx)) / g, y: GROUND - 2 } };
+  const lift = h.tier === 'reduced' ? 0 : ROOMS[h.room].pose.y ?? 0, top = (soilY(garden.kind) - (garden.state === 'bloomed' ? 17 : 8)) * GARDEN_K;
+  return { dx, at: { x: cx + dx / g, y: GROUND + (top - lift) / g } };
 }
 
 /**
@@ -234,6 +269,8 @@ export function mouth(h: Host): MouthKey | undefined {
 export function flavour(h: Host, p: IdleParams): IdleParams {
   const st = state(h);
   if (st.fitStage !== h.motion.stage) refit(h, st);
+  // an outfit waits for its part: a stage-up (or a new look) puts on what was kept
+  if (st.wornLook && (st.wornStage !== h.motion.stage || st.wornLook !== h.look)) refitWear(h, st, false);
   if (h.asleep) return p;
   const r = ROOMS[h.room], fl = h.contentFloat;
   const depth = r.depth * (fl ? SETTLE.depth : 1);
@@ -406,6 +443,43 @@ export function setDetails(h: Host, d: Details): void {
   refit(h, st);
   h.wake();
 }
+
+/* ---------- the Garden's seed and the Closet's outfit (§4.5, §4.3) ---------- */
+
+/** What the floor shows of the seed, per engine (the details carry it to the page's floor layer). */
+const gardens = new WeakMap<Host, GardenShown>();
+
+/** The seed on the floor (planted, sprouted, bloomed), or null; every stage shows it (it is not worn). */
+export function setGarden(h: Host, g: GardenInput | null): void {
+  const st = state(h), fit = fitGarden(g);
+  if (fit) gardens.set(h, fit); else gardens.delete(h);
+  st.details = { ...st.details, garden: fit };
+  st.fitStage = -1;
+  refit(h, st);
+  h.wake();
+}
+
+/** The outfit this person chose (§4.3), whole: a slot left out (or null) wears nothing. */
+export function setWearing(h: Host, w: Wearing): void {
+  const st = state(h);
+  st.wearing = { ...w };
+  refitWear(h, st, true);
+  h.wake();
+}
+
+/** Refit the outfit to the stage and look; says what is worn when it changed (always after setWearing). */
+function refitWear(h: Host, st: XState, force: boolean): void {
+  const was = st.worn;
+  st.wornStage = h.motion.stage;
+  st.wornLook = h.look;
+  st.worn = fitWearing(st.wearing, h.motion.stage as Stage, h.look);
+  if (!force && JSON.stringify(was) === JSON.stringify(st.worn)) return;
+  const put = (['head', 'neck', 'hand'] as const).find((k) => st.worn[k] && st.worn[k] !== was[k]);
+  h.motionCue({ type: 'wearing', wearing: st.worn, ...(put ? { fresh: wearKey(put, st.worn[put]!) } : {}) });
+}
+
+/** What the character wears now (sheets, tests). */
+export const wearingState = (h: Host): ShownWearing => state(h).worn;
 
 /** Add one lit detail (at the litPeak); true when this stage shows it. */
 function light(h: Host, st: XState, detail: DetailName, id?: string): boolean {

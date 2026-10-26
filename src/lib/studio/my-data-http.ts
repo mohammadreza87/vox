@@ -20,6 +20,8 @@ import { verifyManagerInitData } from './initdata-trust';
 import { boundedStudioRequest } from './http';
 import { petStoreFor } from './pet-store';
 import { petPlayStoreFor } from './pet-play-store';
+import { petCheckinStoreFor } from './pet-checkins/store';
+import { noteCheckinStop } from './pet-checkins/deliver';
 import { StudioRateLimiter, StudioRateLimitError, type StudioRequestRateLimiter } from './ratelimit';
 import { trustedStudioRequestOrigin } from './request-origin';
 import { StudioError, type Studio } from './service';
@@ -78,13 +80,18 @@ export async function handleMyDataRequest(studio: Studio, request: Request, path
         (studio.deps.logger ?? console).warn('[studio] pet_play_export_failed');
         return [];
       });
+      // Check-ins (design §5) are content-free too; a failing store never blocks the export.
+      const petCheckins = await petCheckinStoreFor(studio).then((store) => store.get(user.id)).catch(() => {
+        (studio.deps.logger ?? console).warn('[studio] pet_checkins_export_failed');
+        return null;
+      });
       // Display names only for the agents the person's own records already name.
       const named = new Set([...petCare.map((c) => c.agentId), ...petPlay.map((p) => p.agentId), ...choices.map((c) => c.agentId), ...notes.flatMap((n) => n.agentIds)]);
       const state = await studio.deps.store.read();
       const agentNames: Record<string, string> = {};
       for (const agent of state.agents) if (named.has(agent.id)) agentNames[agent.id] = agent.persona.name;
       const body: MyDataResponse = { petCare, ...(choices.length ? { agentChoices: choices } : {}), ...(circles.length ? { circles } : {}), ...(notes.length ? { notes } : {}),
-        ...(petPlay.length ? { petPlay } : {}), agentNames };
+        ...(petPlay.length ? { petPlay } : {}), ...(petCheckins ? { petCheckins } : {}), agentNames };
       return json(body, 200, { 'Content-Disposition': 'attachment; filename="vox-my-data.json"' });
     }
 
@@ -105,9 +112,12 @@ export async function handleMyDataRequest(studio: Studio, request: Request, path
     const choices = await studio.forgetAgentChoices(user.id);
     // Play shares care's erasure epoch: both erasures rotate it, so no open from before this forget can write either.
     const played = await (await petPlayStoreFor(studio)).eraseUser(user.id);
+    // Check-ins go too; any check-in still being sent fails its final fence (noteCheckinStop).
+    noteCheckinStop(user.id);
+    const checkins = await (await petCheckinStoreFor(studio)).eraseUser(user.id);
     const erased = await pets.eraseUser(user.id);
     const body: MyDataForgetResponse = { erased, ...(choices ? { choicesErased: choices } : {}), ...(circles ? { circlesErased: circles } : {}), ...(notes ? { notesErased: notes } : {}),
-      ...(played ? { playErased: played } : {}) };
+      ...(played ? { playErased: played } : {}), ...(checkins ? { checkinsErased: checkins } : {}) };
     return json(body);
   } catch (error) {
     if (StudioRateLimitError.is(error)) return fail('rate_limited', 429, { 'Retry-After': String(error.retryAfterSeconds) });

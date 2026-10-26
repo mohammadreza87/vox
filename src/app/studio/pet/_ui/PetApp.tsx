@@ -81,7 +81,7 @@ function useAudio() {
 const REMEMBER = /\bremember (this|that)\b|یادت باشه|یادت بمونه/i;
 
 /** Where each PetApi method takes its options (the session wraps them all alike). */
-const OPTS_AT = { get: 1, care: 2, talk: 2, talkVoice: 2, play: 2, growthConfirm: 2, talkVoiceStream: 3, send: 4 } as const;
+const OPTS_AT = { get: 1, care: 2, talk: 2, talkVoice: 2, play: 2, growthConfirm: 2, checkins: 2, look: 2, talkVoiceStream: 3, send: 4 } as const;
 
 /** A talk turn that hears nothing back in this long fails like any other (the pet never thinks forever). */
 const TALK_TIMEOUT_MS = 45_000;
@@ -162,8 +162,8 @@ function PetSession({ agentId, injected, signed, onRetry }: { agentId: string; i
         if (!valid() || ac.signal.aborted) throw new DOMException('Pet session ended', 'AbortError');
         return result;
       } catch (e) {
-        // A circle_* refusal is the group sheet's to show, and an expired talk window the bubble's: neither ends the pet.
-        if (valid() && isPetError(e) && ((e.status === 401 && e.code !== 'session_expired') || (e.status === 403 && !e.code.startsWith('circle')) || e.code === 'pet_unavailable')) denyRef.current(e);
+        // A circle_*, checkins_* or look_forbidden refusal is its sheet's to show, and an expired talk window the bubble's: none ends the pet.
+        if (valid() && isPetError(e) && ((e.status === 401 && e.code !== 'session_expired') || (e.status === 403 && !/^(circle|checkins|look_)/.test(e.code)) || e.code === 'pet_unavailable')) denyRef.current(e);
         throw e;
       } finally { requests.current.delete(ac); o.signal?.removeEventListener('abort', abort); }
     };
@@ -430,7 +430,8 @@ function PetSession({ agentId, injected, signed, onRetry }: { agentId: string; i
     return readyAfterPaint(tg(), () => {
       helloAt.current = performance.now();
       const care = careRef.current;
-      if (!care?.asleep && !conversationStarted.current) engine.fire({ type: 'hello', firstName: firstName() });
+      // opened from a check-in (§5.1): its moment plays instead of the hello (Extras' Asks replays it)
+      if (!care?.asleep && !conversationStarted.current && !viewRef.current?.checkin) engine.fire({ type: 'hello', firstName: firstName() });
       if (care) {
         setDays(daysTogether(care.firstMetAt, sync.now()));
       }
@@ -487,8 +488,11 @@ function PetSession({ agentId, injected, signed, onRetry }: { agentId: string; i
       for (const ev of LAYOUT_EVENTS) app?.offEvent?.(ev, measure);
     };
   }, [mounted, engine, measure]);
-  // a new class, room or keyboard moves the dock zone: measure the character again against it
-  useLayoutEffect(() => { if (mounted) measure(); }, [mounted, measure, layout.cls, layout.h, layout.kb, room, talkOpen]);
+  // a new class, room or keyboard moves the dock zone: measure the character again against it. The bottom stack paints
+  // only once the view and the strings are in, so whichever of them arrives last measures too (else the box keeps the
+  // no-dock estimate and the character can stand over the dock until the next resize)
+  const painted = !!bd && stringsOk;
+  useLayoutEffect(() => { if (mounted) measure(); }, [mounted, measure, layout.cls, layout.h, layout.kb, room, talkOpen, painted]);
 
   const onFocusIn = useCallback((e: React.FocusEvent) => {
     if (!(e.target instanceof HTMLInputElement)) return;
@@ -736,7 +740,7 @@ function PetSession({ agentId, injected, signed, onRetry }: { agentId: string; i
   };
 
   /** A reply landed: the chunks hear whether it saved a note (the growth confirm step, §4.11). */
-  const replied = (r: TalkReplyB, said: string) => emit({ type: 'reply', saved: !!(r.savedNote || r.memorySaved) || REMEMBER.test(said), said, moment: r.growthMoment });
+  const replied = (r: TalkReplyB, said: string) => emit({ type: 'reply', saved: !!(r.savedNote || r.memorySaved) || REMEMBER.test(said), said, moment: r.growthMoment, action: r.action });
 
   const onVoice = async (blob: Blob, handsFree = false) => {
     if (!valid()) return false;
@@ -802,8 +806,8 @@ function PetSession({ agentId, injected, signed, onRetry }: { agentId: string; i
     setView(viewRef.current);
     emit({ type: 'view' });
   }
-  const live = useRef({ hostPlay, patchView, onVoice, stopAudio, setTalkState });
-  live.current = { hostPlay, patchView, onVoice, stopAudio, setTalkState };
+  const live = useRef({ hostPlay, patchView, onVoice, onSend, stopAudio, setTalkState });
+  live.current = { hostPlay, patchView, onVoice, onSend, stopAudio, setTalkState };
   bubbleRef.current = !!bubble;
   const host = useMemo<PetHost>(() => ({
     agentId, lang, api, openedAt: performance.now(),
@@ -817,6 +821,8 @@ function PetSession({ agentId, injected, signed, onRetry }: { agentId: string; i
     toyEvent: (e) => onToy(e),
     play: (req) => live.current.hostPlay(req),
     adoptGrowth: (growth) => live.current.patchView({ growth }),
+    patch: (p) => live.current.patchView(p),
+    send: (text) => live.current.onSend(text),
     focusTalk: () => { setTalkOpen(true); later(60, () => rootRef.current?.querySelector<HTMLInputElement>('.pet-input')?.focus()); },
     busy: (k, on) => { if (on) busyKeys.current.add(k); else busyKeys.current.delete(k); },
     isBusy: () => busyKeys.current.size > 0,

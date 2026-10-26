@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { daysTogetherText, sayText } from '../copy';
@@ -46,6 +46,23 @@ describe('the catalogue is the copy keys file', () => {
   it('has Persian for every key except where the keys file has none yet (on 26 Oct 2026: none)', () => {
     const rows = parseKeysDoc(readFileSync(KEYS_DOC, 'utf8'));
     expect(FA_MISSING).toEqual(rows.filter((r) => r.fa === null).map((r) => r.key));
+  });
+
+  it('Wave C lines live in the catalogue, with the copywriter’s Persian (strings/extra.ts is gone)', () => {
+    const WAVE_C = ['play.guess.start', 'play.guess.hint', 'play.guess.giveUp', 'play.guess.note', 'play.guess.ask',
+      'garden.seed.flower', 'garden.seed.sabzeh', 'garden.planted', 'garden.breathe.on',
+      'item.glasses', 'item.specs', 'item.beret', 'item.cap', 'item.beanie', 'item.headphones', 'item.headset', 'item.bow',
+      'item.flower', 'item.star', 'item.bowtie', 'item.none', 'closet.lookElsewhere', 'share.copied', 'visits.later',
+      'visits.group', 'book.page.bestGuess'] as const;
+    for (const k of WAVE_C) {
+      expect(EN[k], k).toBeTruthy();
+      expect(FA[k], k).toBeTruthy();
+    }
+    expect(voiceOf('play.guess.start')).toBe('person');
+    expect(voiceOf('book.page.bestGuess')).toBe('pet');
+    expect(EN['book.page.bestGuess']).toBe('We guessed it together!');
+    expect(FA['book.page.bestGuess']).toBe('با هم حدسش زدیم!');
+    expect(existsSync(join(HERE, 'extra.ts'))).toBe(false);
   });
 
   it('CORE (the first paint) is the English catalogue, line for line', () => {

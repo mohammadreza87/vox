@@ -22,6 +22,12 @@
  *       Garden rain with drops), details-v3.png (growth details across the four stages, and one fading in),
  *       starfall-reactions-v3.png (catch, near miss, round end won / not won, Zen, eyes on a star),
  *       listening-v3.png (the hands-free hold, the perk on speech, queued sentences, the guided breath, reduced)
+ *
+ *   node --import tsx scripts/pet-frames.ts --v4
+ *     → reports/character/outfits-v4.png (every wearable on every stage, species, the mirror's try-on, the soft
+ *       parts' swing), garden-v4.png (each seed's floor states, the layout with keepsakes, rain aimed at the pot,
+ *       the bloom, the sway, breathe-with-me's glow), guess-v4.png (Guess my word: think, heard, right, wrong,
+ *       reveal, Zen and reduced)
  */
 
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -35,6 +41,9 @@ import { createPetEngine, type PetMotionControls } from '../src/app/studio/pet/_
 import * as motionExtras from '../src/app/studio/pet/_engine/extras';
 import { roomIdle } from '../src/app/studio/pet/_engine/reactions/rooms';
 import { DETAIL_FADE_MS, detailFade, type Details } from '../src/app/studio/pet/_engine/details';
+import { swayAt, type GardenInput } from '../src/app/studio/pet/_engine/garden';
+import { WEAR_SLOT, type Wearing } from '../src/app/studio/pet/_engine/outfits';
+import { WEARABLE_IDS } from '../src/lib/pet/play';
 import type { MotionCue, Room } from '../src/app/studio/pet/_engine/types';
 import type { Stage } from '../src/lib/studio/types';
 import { poseToSvg } from '../src/app/studio/pet/_engine/poseToSvg';
@@ -337,6 +346,10 @@ interface V2Row {
   wide?: boolean;
   /** draw the growth details (the extras chunk's state) */
   details?: boolean;
+  /** draw the closet outfit (the extras chunk's state) */
+  outfit?: boolean;
+  /** draw the stage glow behind the character (Stage.tsx's `.pet-glow`, bound to engine.glow) */
+  glow?: boolean;
   /** this row's view box (a close-up) */
   vb?: string;
 }
@@ -365,11 +378,14 @@ async function runV2(row: V2Row): Promise<{ frames: V2Frame[]; cues: string[] }>
   while (k < times.length) {
     if (t - t0 >= times[k] - 1e-6) {
       const f = eng.debug.frame!;
-      const cue = cues.find((c) => c.t > lastSample && c.t <= t);
+      const cue = cues.find((c) => c.t > lastSample && c.t <= t && c.c.type !== 'wearing' && c.c.type !== 'details');
       lastSample = t;
       const ds = row.details ? motionExtras.detailState(eng as never, DETAIL_FADE_MS) : null;
-      const details = ds ? { shown: ds.shown, fade: ds.fade ? { key: ds.fade.key, ...detailFade(ds.fade.u, (row.tier ?? 'full') === 'reduced') } : null } : undefined;
-      out.push({ t: Math.round(t - t0), svg: poseToSvg(geom(), f, { details }), mark: cue ? cue.c.type : '', parts: eng.debug.particles(), sy: f.body.sy, rot: f.body.rot, y: f.body.y, cookie: eng.debug.cookie() });
+      const gd = ds?.shown.garden;
+      const details = ds ? { shown: ds.shown, fade: ds.fade ? { key: ds.fade.key, ...detailFade(ds.fade.u, (row.tier ?? 'full') === 'reduced') } : null, ...(gd && row.tier !== 'reduced' ? { sway: swayAt(gd, t - t0 + 850), shimmer: ((t - t0) / 2400) % 1 } : {}) } : undefined;
+      const outfit = row.outfit ? { shown: motionExtras.wearingState(eng as never), look: (eng as unknown as { look: CharacterLook }).look } : undefined;
+      const glow = row.glow && f.glow > 0.005 ? `<ellipse cx="100" cy="112" rx="96" ry="82" fill="url(#gl)" opacity="${f.glow.toFixed(3)}"/>` : '';
+      out.push({ t: Math.round(t - t0), svg: glow + poseToSvg(geom(), f, { details, outfit }), mark: cue ? cue.c.type : '', parts: eng.debug.particles(), sy: f.body.sy, rot: f.body.rot, y: f.body.y, cookie: eng.debug.cookie() });
       k++;
       continue;
     }
@@ -407,7 +423,7 @@ function v2Sheet(title: string, sub: string, rows: Array<{ row: V2Row; frames: V
     }).join('');
     return head + tiles;
   }).join('');
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"><rect width="${W}" height="${H}" fill="#121821"/>`
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"><defs><radialGradient id="gl"><stop offset="0" stop-color="#FFE9A8" stop-opacity="1"/><stop offset="0.55" stop-color="#FFD45C" stop-opacity="0.45"/><stop offset="1" stop-color="#FFD45C" stop-opacity="0"/></radialGradient></defs><rect width="${W}" height="${H}" fill="#121821"/>`
     + `<text x="12" y="26" font-family="Helvetica,Arial" font-size="17" font-weight="bold" fill="#E8EDF5">${esc(title)}</text>`
     + `<text x="12" y="44" font-family="Helvetica,Arial" font-size="11.5" fill="#8A93A3">${esc(sub)}</text>${body}</svg>`;
 }
@@ -584,4 +600,103 @@ async function v3() {
   void cloud;
 }
 
-if (process.argv.includes('--v3')) void v3(); else if (process.argv.includes('--v2')) void v2(); else void main();
+/* ---------- v4 sheets (Wave C, design §4.3, §4.5, §4.2): the closet, the garden floor, Guess my word ---------- */
+
+async function v4() {
+  const OUT4 = path.resolve(__dirname, '../reports/character');
+  const cloud = PRESET_LOOKS[0], bowBunny = PRESET_LOOKS[3];
+  type V4 = PetMotionControls & { setWearing(w: Wearing): void; setGarden(g: GardenInput | null): void; tryOn(id: string): void; guessReact(k: string, o?: { zen?: boolean }): void; setDetails(d: Details): void };
+  const mc = (eng: V2Engine) => eng as unknown as V4;
+  const build = async (rows: Array<V2Row & { labels?: string[] }>) => Promise.all(rows.map(async (row) => { const r = await runV2(row); return { row, frames: r.frames, labels: row.labels, note: `${stats(r.frames)}|${r.cues.filter((c) => !c.startsWith('wearing') && !c.startsWith('details')).slice(0, 5).join(' ')}` }; }));
+  const species = ['cloud', 'cat', 'dog', 'bunny', 'bear', 'owl', 'chick'].map((sp) => PRESET_LOOKS.find((l) => l.species === sp)!);
+
+  // 1. outfits: every wearable on each stage (a stage that cannot wear it yet keeps it), then species, the mirror, the swing
+  const items = ['none', ...WEARABLE_IDS] as const;
+  const wear = (id: string): Wearing => (id === 'none' ? {} : { [WEAR_SLOT[id as keyof typeof WEAR_SLOT]]: id });
+  const STEP = 60;
+  const everyItem = (look: CharacterLook, stage: Stage, label: string): V2Row & { labels?: string[] } => ({
+    label, look: { ...look, accessory: 'none' }, stage, warm: 300, outfit: true,
+    start: () => undefined,
+    each: (e, ms) => { const k = Math.floor(ms / STEP); if (k < items.length && ms % STEP < 17) mc(e).setWearing(wear(items[k])); },
+    at: items.map((_, i) => i * STEP + 40), labels: items.map((n) => n),
+  });
+  const outfitRows: Array<V2Row & { labels?: string[] }> = ([1, 2, 3, 4] as Stage[]).map((st) => everyItem(cloud, st, `cloud · stage ${st}`));
+  outfitRows.push(everyItem(PRESET_LOOKS.find((l) => l.species === 'cat')!, 4, 'cat · stage 4'));
+  outfitRows.push(everyItem(bowBunny, 4, 'bunny (own bow off) · 4'));
+  // the keepsakes together on every species (the look's own accessory stays)
+  outfitRows.push({
+    label: 'keepsakes on each species', look: cloud, warm: 300, outfit: true, start: () => undefined,
+    at: [40], labels: ['cloud'],
+    setup: (e) => mc(e).setWearing({ head: 'pomegranateCrown', neck: 'sparkScarf', hand: 'sabzehSprout' }),
+  });
+  for (const look of species.slice(1)) outfitRows[outfitRows.length - 1].labels!.push(look.species!);
+  const comboRows = species.map((look) => ({ label: look.species!, look, warm: 300, outfit: true, start: () => undefined, at: [40], setup: (e: V2Engine) => mc(e).setWearing({ head: 'pomegranateCrown', neck: 'sparkScarf', hand: 'sabzehSprout' }) }));
+  outfitRows.pop();
+  const comboFrames = (await build(comboRows)).map((r) => r.frames[0]);
+  const closet = (e: V2Engine) => mc(e).setRoom('closet', { instant: true });
+  const tryRow = (label: string, look: CharacterLook, w: Wearing, id: string): V2Row => ({
+    label, look, warm: 1200, outfit: true, setup: (e) => { closet(e); mc(e).setWearing(w); }, start: (e) => mc(e).tryOn(id), at: [0, 80, 200, 330, 430, 520, 640, 760, 900, 1100, 1400],
+  });
+  const tryRows: V2Row[] = [
+    tryRow('try on · crown (head)', cloud, { head: 'pomegranateCrown' }, 'pomegranateCrown'),
+    tryRow('try on · scarf (neck)', cloud, { neck: 'sparkScarf' }, 'sparkScarf'),
+    tryRow('try on · sabzeh (hand)', cloud, { hand: 'sabzehSprout' }, 'sabzehSprout'),
+    { label: 'soft parts swing (a poke)', look: { ...cloud, accessory: 'none' }, warm: 300, outfit: true, setup: (e) => mc(e).setWearing({ head: 'bow', neck: 'sparkScarf', hand: 'sabzehSprout' }),
+      start: (e) => e.fire({ type: 'poke', zone: 'head', side: 1, at: { x: 110, y: 60 }, hits: 1, coolOff: false }), at: [0, 60, 120, 180, 240, 320, 400, 500, 650, 800, 1000] },
+    { label: 'reduced · try on', look: cloud, tier: 'reduced', warm: 600, outfit: true, setup: (e) => { closet(e); mc(e).setWearing({ head: 'pomegranateCrown' }); }, start: (e) => mc(e).tryOn('pomegranateCrown'), at: [0, 150, 330, 520, 700, 1000, 1400] },
+  ];
+  const outfitFrames = [...await build(outfitRows), { row: { ...comboRows[0], label: 'crown + scarf + sabzeh' } as V2Row, frames: comboFrames, labels: species.map((l) => l.species!), note: 'every species, stage 4|the look’s own accessory stays' }, ...await build(tryRows)];
+  await png(v2Sheet('Outfits v4 · every wearable (head, neck, hand) · by stage, species, the mirror',
+    'closet items come with the accessory slot (stage 4): stages 1–3 keep what they were dressed in · hats the look rules forbid (bunny ears) are kept, not drawn · rigid pieces ride the head, soft ones swing', outfitFrames, { tile: 104, vb: '20 20 165 165' }), path.join(OUT4, 'outfits-v4.png'));
+
+  // 2. the garden floor
+  const g = (kind: 'flower' | 'sabzeh', state: string, wet?: boolean): GardenInput => ({ kind, state: state as never, ...(wet ? { wet } : {}) });
+  const gardenSets: Array<[string, GardenInput | null]> = [
+    ['none', null], ['flower planted', g('flower', 'planted')], ['flower sprouted', g('flower', 'sprouted')], ['… watered', g('flower', 'sprouted', true)], ['flower bloomed', g('flower', 'bloomed')],
+    ['sabzeh planted', g('sabzeh', 'planted')], ['sabzeh sprouted', g('sabzeh', 'sprouted')], ['… watered', g('sabzeh', 'sprouted', true)], ['sabzeh bloomed', g('sabzeh', 'bloomed')],
+  ];
+  const floorRow = (label: string, look: CharacterLook, stage: Stage, d: Details = {}): V2Row & { labels?: string[] } => ({
+    label, look, stage, warm: 300, details: true, setup: (e) => mc(e).setDetails(d), start: () => undefined,
+    each: (e, ms) => { const k = Math.floor(ms / 100); if (k < gardenSets.length && ms % 100 < 17) mc(e).setGarden(gardenSets[k][1]); },
+    at: gardenSets.map((_, i) => i * 100 + 60), labels: gardenSets.map(([n]) => n),
+  });
+  const garden = (e: V2Engine) => mc(e).setRoom('garden', { instant: true });
+  const gardenRows: Array<V2Row & { labels?: string[] }> = [
+    floorRow('stage 4', bowBunny, 4),
+    floorRow('stage 1 (a wisp)', bowBunny, 1),
+    floorRow('with keepsakes + yalda', bowBunny, 4, { keepsakes: ['play', 'book'], seasonal: 'yalda' }),
+    { label: 'play.ts states (seed)', look: bowBunny, warm: 300, details: true, start: () => undefined,
+      each: (e, ms) => { const st = ['seeded', 'sprouting', 'ready', 'watered', 'blooming', 'bloomed', 'empty'], k = Math.floor(ms / 100); if (k < st.length && ms % 100 < 17) mc(e).setGarden({ seed: 'flower', state: st[k] as never }); },
+      at: [60, 160, 260, 360, 460, 560, 660], labels: ['seeded', 'sprouting', 'ready', 'watered', 'blooming', 'bloomed', 'empty'] },
+    { label: 'rain aimed at the pot', look: bowBunny, warm: 1200, details: true, setup: (e) => { garden(e); mc(e).setGarden(g('flower', 'sprouted')); }, start: (e) => mc(e).roomReact('rain'), at: [0, 90, 300, 450, 560, 700, 860, 1000, 1250, 1700, 2200] },
+    { label: 'rain · sabzeh, cat', look: PRESET_LOOKS.find((l) => l.species === 'cat')!, warm: 1200, details: true, setup: (e) => { garden(e); mc(e).setGarden(g('sabzeh', 'sprouted')); }, start: (e) => mc(e).roomReact('rain'), at: [0, 300, 450, 560, 700, 860, 1000, 1250, 1700, 2200] },
+    { label: 'it blooms', look: bowBunny, warm: 1200, details: true, setup: (e) => { garden(e); mc(e).setGarden(g('flower', 'sprouted')); }, start: (e) => { mc(e).setGarden(g('flower', 'bloomed')); mc(e).roomReact('bloom'); }, at: [0, 70, 200, 420, 500, 600, 680, 800, 950, 1150, 1400] },
+    { label: 'sprout sway + bloom shimmer', look: bowBunny, warm: 300, details: true, setup: (e) => mc(e).setGarden(g('flower', 'bloomed')), start: () => undefined, at: span(3400, 9) },
+    { label: 'breathe with me · glow', look: bowBunny, warm: 1200, glow: true, setup: garden, start: (e) => mc(e).setGuidedBreath(6), at: span(6000, 11) },
+    { label: 'reduced · breathe · glow', look: bowBunny, tier: 'reduced', warm: 600, glow: true, setup: garden, start: (e) => mc(e).setGuidedBreath(6), at: span(6000, 11) },
+  ];
+  const gardenFrames = await build(gardenRows);
+  await png(v2Sheet('Garden v4 · the seed on the floor (right of the pet, left of the seasonal keepsake) · rain, the bloom, the breath',
+    'flower in a terracotta pot, Nowruz sabzeh in a turquoise dish (its red ribbon when lush) · never wilts · rain drifts over the pot and rains on its soil · bloom: eyes down, a ^^ blink, one sparkle · the breath’s glow swells in, fades out', gardenFrames, { tile: 118, vb: '0 20 210 175' }), path.join(OUT4, 'garden-v4.png'));
+
+  // 3. Guess my word
+  const guess = (k: string, o: { zen?: boolean } = {}) => (e: V2Engine) => mc(e).guessReact(k, o);
+  const T = [0, 60, 120, 200, 280, 380, 480, 600, 720, 860, 1000, 1200];
+  const guessRows: V2Row[] = [
+    { label: 'think (it has a word)', look: bowBunny, start: guess('think'), at: T },
+    { label: 'heard (a question)', look: bowBunny, start: guess('heard'), at: T },
+    { label: 'right', look: bowBunny, start: guess('right'), at: T },
+    { label: 'right · zen', look: bowBunny, start: guess('right', { zen: true }), at: T },
+    { label: 'wrong (never sad)', look: bowBunny, start: guess('wrong'), at: T },
+    { label: 'wrong · zen', look: bowBunny, start: guess('wrong', { zen: true }), at: T },
+    { label: 'reveal (says the word)', look: bowBunny, start: guess('reveal'), at: [0, 100, 200, 250, 300, 420, 500, 620, 680, 800, 1000, 1200] },
+    { label: 'wrong · cloud', look: cloud, start: guess('wrong'), at: T },
+    { label: 'reduced · right', look: bowBunny, tier: 'reduced', start: guess('right'), at: T },
+  ];
+  const guessFrames = await build(guessRows);
+  await png(v2Sheet('Guess my word v4 · bunny with a bow · the pet has a word',
+    'right: a crouch, a pleased hop, a glint · wrong: a playful head-shake, brows up, a wink, never droopy · reveal: a breath in, four speech shapes, a ta-da tilt · Zen one preset softer, nothing flashes', guessFrames, { tile: 118, vb: '10 20 180 165' }), path.join(OUT4, 'guess-v4.png'));
+  console.log('v4 sheets → reports/character/{outfits,garden,guess}-v4.png');
+}
+
+if (process.argv.includes('--v4')) void v4(); else if (process.argv.includes('--v3')) void v3(); else if (process.argv.includes('--v2')) void v2(); else void main();

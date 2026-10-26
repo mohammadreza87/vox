@@ -163,6 +163,7 @@ Companion to [`PET_CARE_GAME_DESIGN_2026_10_26.md`](./PET_CARE_GAME_DESIGN_2026_
 | `book.page.bestBop` | book | pet | My best Bop yet! | Peek 1 line | A new personal best in Bop, with no number shown | «بهترین روپایی‌ای که تا حالا زدم!» | Added after Wave A QA (26 Oct); FA: copywriter; Verb «روپایی زدن»; avoids a suffix on the game name |
 | `book.page.bestStarfall` | book | pet | We caught a whole sky of stars. | Peek 1 line | A new personal best in Starfall, no number | «یه آسمون ستاره گرفتیم!» | Added after Wave A QA (26 Oct); FA: copywriter |
 | `book.page.bestHum` | book | pet | We hummed it just right. | Peek 1 line | A new personal best in Hum, no number | «این بار هم‌آوازیمون حرف نداشت!» | Added after Wave A QA (26 Oct); FA: copywriter; «حرف نداشت» = was flawless |
+| `book.page.bestGuess` | book | pet | We guessed it together! | Peek 1 line | A new personal best in Guess my word, no number | «با هم حدسش زدیم!» | Added in Wave C (26 Oct); FA: as given in the Wave C QA brief; server page id `bestGuess` (`src/lib/pet/play.ts`) |
 | `book.why.met` | book (reason) | system | The first day you met {name}. | ≤ 1 line | One-line why under the page(s): met | «اولین روزی که با ⁨{name}⁩ آشنا شدید.» | Added after Wave A QA (26 Oct); FA: copywriter |
 | `book.why.stage` | book (reason) | system | A forming-week stage-up: {name} got ready to learn. | ≤ 1 line | One-line why under the page(s): stage2, stage3, stage4 | «رشد هفتهٔ اول: ⁨{name}⁩ آمادهٔ یاد گرفتن شد.» | Added after Wave A QA (26 Oct); FA: copywriter |
 | `book.why.formed` | book (reason) | system | The day {name}'s personality was set for good. | ≤ 1 line | One-line why under the page(s): formed | «روزی که شخصیت ⁨{name}⁩ برای همیشه شکل گرفت.» | Added after Wave A QA (26 Oct); FA: copywriter |
@@ -451,6 +452,38 @@ Keys QA found missing between this file and the code (Life Book page ids are abo
 | `bed.lamp.dim` | bubble | pet | Lights low… | Peek 1 line | Lamp dims the room | «نور کم شد…» | Added after Wave A QA (26 Oct); FA: copywriter |
 | `bed.tuck.notSleepy` | bubble | pet | Not sleepy yet, but cozy is nice. | Peek 1 line | Moon tapped while Energy is high; content, no "one more game" | «هنوز خوابم نمیاد، ولی گرم و نرمه.» | Added after Wave A QA (26 Oct); FA: copywriter |
 | `book.learned.empty` | book | pet | Nothing here yet. Teach me something and say “remember this”. | ≤ 2 lines | Empty What I've learned tab; an invitation, never pressure, no count | «دفترم هنوز سفیده. از کار تیمت تعریف کن، آخرش بگو «یادت باشه».» | Added after Wave A QA (26 Oct); FA: copywriter; Flag: "Teach me something" makes the agent sound like a trainee; the Persian keeps it confident: "My book is still blank. Tell me about your team's work, then say «یادت باشه»". «یادت باشه» is a supported trigger |
+
+## Added in Wave C
+
+Client strings from `src/app/studio/pet/_ui/strings/extra.ts` that still fell back to English. English is copied from that file; FA is written by the copywriter. The Guess chips are the **person's** own words, sent to the pet as talk, so they are light spoken Persian with «تو».
+
+| Key | Surface | Voice | English | Limit | Intent | FA | Variants and notes |
+|---|---|---|---|---|---|---|---|
+| `play.guess.start` | chip (sent as talk) | person | Think of a word, and I’ll guess it with yes-or-no questions! | Peek 2 lines | The person opens Guess; sent to the pet as their own message | «یه کلمه تو دلت نگه دار، من با سؤال‌های آره و نه حدسش می‌زنم!» | Added in Wave C (26 Oct); FA: copywriter; Most urgent: today a Persian opener goes out in English. «تو دلت نگه دار» = keep it secret |
+| `play.guess.hint` | chip (sent as talk) | person | A hint, please? | ≤ 20 chars | Asking for a hint | «یه راهنمایی می‌کنی؟» | Added in Wave C (26 Oct); FA: copywriter |
+| `play.guess.giveUp` | chip (sent as talk) | person | I give up. What was it? | ≤ 24 chars | Giving up, laughing | «تسلیم! کلمه‌ات چی بود؟» | Added in Wave C (26 Oct); FA: copywriter; «تسلیم» mirrors the pet’s own laughing surrender |
+| `play.guess.note` | game | system | Guesses are talk: they go to our chat. | ≤ 2 lines | Honesty line on the card: Guess turns are ordinary talk turns | «حدس‌ها هم بخشی از گفتگوست و در چت شما با این همکار می‌ماند.» | Added in Wave C (26 Oct); FA: copywriter; «our chat» becomes «چت شما با این همکار»: system voice has no "we" |
+| `play.guess.ask` | chip | system | Ask or guess | ≤ 16 chars | Chip that opens the keyboard | «بپرسید یا حدس بزنید» | Added in Wave C (26 Oct); FA: copywriter |
+| `garden.seed.flower` | toy label | system | Flower | ≤ 10 chars | Seed choice | «گل» | Added in Wave C (26 Oct); FA: copywriter |
+| `garden.seed.sabzeh` | toy label | system | Sabzeh | ≤ 10 chars | Seed choice | «سبزه» | Added in Wave C (26 Oct); FA: copywriter; Same word as `season.haftsin.*` |
+| `garden.planted` | bubble | pet | Tucked in. It grows while you’re away. | Peek 2 lines | After planting; reassuring, nothing to tend | «خوابوندیمش تو خاک. وقتی نیستی هم قد می‌کشه.» | Added in Wave C (26 Oct); FA: copywriter; "Tucked in" kept as an image: «خوابوندیمش تو خاک» |
+| `garden.breathe.on` | bubble | pet | Breathe with me. In… and out. | Peek 1 line | Breathe toy starts; slow, calm | «با هم نفس بکشیم. دم… و بازدم…» | Added in Wave C (26 Oct); FA: copywriter |
+| `item.glasses` | closet | system | Glasses | ≤ 14 chars | Accessory name (Studio look vocabulary) | «عینک» | Added in Wave C (26 Oct); FA: copywriter |
+| `item.specs` | closet | system | Specs | ≤ 14 chars | Accessory name | «عینک مطالعه» | Added in Wave C (26 Oct); FA: copywriter; Distinguishes it from «عینک»; check against the drawing |
+| `item.beret` | closet | system | Beret | ≤ 14 chars | Accessory name | «کلاه بره» | Added in Wave C (26 Oct); FA: copywriter |
+| `item.cap` | closet | system | Cap | ≤ 14 chars | Accessory name | «کلاه کپ» | Added in Wave C (26 Oct); FA: copywriter |
+| `item.beanie` | closet | system | Beanie | ≤ 14 chars | Accessory name | «کلاه بافتنی» | Added in Wave C (26 Oct); FA: copywriter |
+| `item.headphones` | closet | system | Headphones | ≤ 14 chars | Accessory name | «هدفون» | Added in Wave C (26 Oct); FA: copywriter |
+| `item.headset` | closet | system | Headset | ≤ 14 chars | Accessory name | «هدست» | Added in Wave C (26 Oct); FA: copywriter |
+| `item.bow` | closet | system | Bow | ≤ 14 chars | Accessory name (hair bow) | «روبان» | Added in Wave C (26 Oct); FA: copywriter; A hair bow; «پاپیون» is the bow tie |
+| `item.flower` | closet | system | Flower | ≤ 14 chars | Accessory name | «گل» | Added in Wave C (26 Oct); FA: copywriter |
+| `item.star` | closet | system | Star | ≤ 14 chars | Accessory name | «ستاره» | Added in Wave C (26 Oct); FA: copywriter |
+| `item.bowtie` | closet | system | Bow tie | ≤ 14 chars | Accessory name | «پاپیون» | Added in Wave C (26 Oct); FA: copywriter |
+| `item.none` | closet | system | None | ≤ 14 chars | No accessory | «هیچ‌کدام» | Added in Wave C (26 Oct); FA: copywriter |
+| `closet.lookElsewhere` | closet | system | Change {name}’s look in Vox Studio. | ≤ 2 lines | The Studio look route refused this sign-in; neutral pointer | «ظاهر ⁨{name}⁩ را در Vox Studio عوض کنید.» | Added in Wave C (26 Oct); FA: copywriter |
+| `share.copied` | toast | system | Copied. Paste it anywhere. | ≤ 1 line | Copy-the-line fallback for the share card | «کپی شد؛ هر جا خواستید بچسبانید.» | Added in Wave C (26 Oct); FA: copywriter |
+| `visits.later` | sheet | system | Visits arrive in a later update. Until then nobody visits {name}, and you visit friends’ pets only where they allow it. | ≤ 3 lines | One-way explanation; "comes later", no pressure | «دیدوبازدید در به‌روزرسانی بعدی می‌آید. تا آن موقع کسی به ⁨{name}⁩ سر نمی‌زند، و شما هم فقط جایی به ابرک دوستانتان سر می‌زنید که خودشان اجازه داده باشند.» | Added in Wave C (26 Oct); FA: copywriter; extra.ts marks it system (the brief said pet); system fits, since it explains a rule about {name}. No date promised |
+| `visits.group` | sheet | system | your groups | ≤ 16 chars | Stands in for {group} in `perm.P10.body` | «گروه‌هایتان» | Added in Wave C (26 Oct); FA: copywriter; Reads correctly in «کسانی که در گروه‌هایتان با شما هستند…» |
 
 ## Lint
 

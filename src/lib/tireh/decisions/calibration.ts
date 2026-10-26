@@ -173,3 +173,23 @@ export function formatCalibrationReport(blocks: readonly CalibrationBlock[]): st
   }
   return `${lines.join('\n')}\n`;
 }
+
+/**
+ * The calibration gate for consuming live answers (care game design §8.7 rule 6): a question passes for a language
+ * when the report has at least one block for it there and every such block (each choice value, one-vs-rest) has at
+ * least CALIBRATION_MIN_EXAMPLES labelled examples. Anything else (no labels, a smaller block, another language) fails.
+ */
+export function petCalibrationPasses(blocks: readonly CalibrationBlock[], question: string, language: CalibrationLanguage): boolean {
+  const mine = blocks.filter((b) => b.question === question && b.language === language);
+  return mine.length > 0 && mine.every((b) => !b.insufficient && b.n >= CALIBRATION_MIN_EXAMPLES);
+}
+
+/**
+ * Every `question:language` pair (fa and en only) that passes the gate: the value an operator copies into
+ * STUDIO_PET_DECISIONS_CALIBRATED after reviewing the report (tireh/pet-flags.ts), sorted.
+ */
+export function petCalibratedPairs(blocks: readonly CalibrationBlock[]): string[] {
+  const pairs = new Set<string>();
+  for (const b of blocks) if ((b.language === 'fa' || b.language === 'en') && petCalibrationPasses(blocks, b.question, b.language)) pairs.add(`${b.question}:${b.language}`);
+  return [...pairs].sort();
+}

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { backButton } from './telegram';
 
 export interface SheetProps {
@@ -10,6 +10,8 @@ export interface SheetProps {
   no: string;
   onYes: () => void;
   onNo: () => void;
+  /** a link row under the body (P1's "Choose moments" and its switches) */
+  children?: ReactNode;
 }
 
 /**
@@ -17,7 +19,7 @@ export interface SheetProps {
  * of at most four, and two buttons of the same size (decline is never smaller, never hidden). Telegram's BackButton and
  * Escape decline. Nothing in it scrolls; its first sentence is the reason.
  */
-export function Sheet({ title, body, yes, no, onYes, onNo }: SheetProps) {
+export function Sheet({ title, body, yes, no, onYes, onNo, children }: SheetProps) {
   const first = useRef<HTMLButtonElement>(null);
   const noRef = useRef(onNo);
   noRef.current = onNo;
@@ -29,6 +31,7 @@ export function Sheet({ title, body, yes, no, onYes, onNo }: SheetProps) {
     <div className="pet-sheet" role="dialog" aria-modal="true" aria-labelledby="pet-sheet-t" onKeyDown={(e) => { if (e.key === 'Escape') onNo(); }}>
       <b id="pet-sheet-t">{title}</b>
       {body && <p>{body}</p>}
+      {children}
       <div className="pet-sheet-row">
         <button ref={first} type="button" className="pet-sheet-yes" onClick={onYes}>{yes}</button>
         <button type="button" onClick={onNo}>{no}</button>

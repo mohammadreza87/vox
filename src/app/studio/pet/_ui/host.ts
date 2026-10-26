@@ -5,7 +5,7 @@
 
 import type { PetAction, PetCare } from '@/lib/pet/types';
 import type { MotionCue } from '../_engine/types';
-import type { PetApi, PetEngine, PetViewB, PlayRequest, PlayResponse, TalkState, ToyEvent, ToyKind } from './contract';
+import type { PetApi, PetEngine, PetViewB, PlayRequest, PlayResponse, TalkAction, TalkState, ToyEvent, ToyKind } from './contract';
 import type { RoomId } from './rooms';
 import type { CharacterBox } from './scene';
 import type { PetLang } from './strings';
@@ -22,9 +22,11 @@ export type HostSignal =
   /** a fresh view or play record was adopted */
   | { type: 'view' }
   /** a talk reply landed; `saved`: the server said an explicit "remember this" save happened */
-  | { type: 'reply'; saved: boolean; said: string; moment?: string }
+  | { type: 'reply'; saved: boolean; said: string; moment?: string; action?: TalkAction }
+  /** a moment worth sharing happened on screen (P7): a stage-up, a bloom, a festival */
+  | { type: 'moment'; kind: 'stage' | 'bloom' | 'season'; id?: string }
   /** a game round ended after `ms` */
-  | { type: 'round'; ms: number; zen: boolean }
+  | { type: 'round'; ms: number; zen: boolean; game?: 'bop' | 'starfall' | 'guess' | 'hum' }
   | { type: 'motion'; cue: MotionCue }
   /** the mic was pressed before the UX-02 sheet was answered, or the hands-free switch was tapped */
   | { type: 'micAsk' }
@@ -59,6 +61,10 @@ export interface PetHost {
   /** adopt a new growth block (confirm, a refresh) */
   adoptGrowth(g: NonNullable<PetViewB['growth']>): void;
   focusTalk(): void;
+  /** send a talk turn as the person's own words (Guess's chips); resolves false when it failed. Optional: Wave C glue. */
+  send?(text: string): Promise<boolean>;
+  /** adopt part of the view (a look the creator saved, §4.3). Optional: Wave C glue. */
+  patch?(part: Partial<PetViewB>): void;
   /** a sheet or game owns the moment: no tip, no ask meanwhile (§6.1, §7.1) */
   busy(key: string, on: boolean): void;
   isBusy(): boolean;

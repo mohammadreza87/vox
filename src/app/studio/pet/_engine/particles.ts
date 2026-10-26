@@ -61,18 +61,18 @@ export class Particles {
     for (const el of this.els) park(el);
   }
 
-  /** Spawn n of a kind at a stage point (k = px per unit). Respects the tier's live cap. */
-  burst(kind: ParticleKind, n: number, at: Point, k: number, tier: Tier): void {
+  /** Spawn n of a kind at a stage point (k = px per unit), spread ± w units (default the kind's). Respects the tier's live cap. */
+  burst(kind: ParticleKind, n: number, at: Point, k: number, tier: Tier, w?: number): void {
     const cap = TIER_BUDGET[tier].particles;
     let live = this.live, slot = 0;
-    const d = KIND[kind];
+    const d = KIND[kind], sw = w ?? d.w ?? 6;
     for (let i = 0; i < n && live < cap; i++) {
       // reuse the first dead slot; when all are live the burst is trimmed (never steals a live one)
       while (slot < this.pool.length && this.pool[slot].live) slot++;
       if (slot >= this.pool.length) break;
       const p = this.pool[slot];
       const [vx, vy] = d.launch(this.rng);
-      p.kind = kind; p.x = at.x + range(this.rng, -(d.w ?? 6), d.w ?? 6) * k; p.y = at.y; p.vx = vx * k; p.vy = vy * k; p.age = 0;
+      p.kind = kind; p.x = at.x + range(this.rng, -sw, sw) * k; p.y = at.y; p.vx = vx * k; p.vy = vy * k; p.age = 0;
       p.ttl = d.ttl * range(this.rng, 0.9, 1.1); p.s = range(this.rng, d.s[0], d.s[1]);
       p.rot = d.w ? 0 : range(this.rng, -20, 20); p.spin = d.w ? 0 : range(this.rng, -180, 180); p.phase = range(this.rng, 0, Math.PI * 2); p.live = true;
       live++;

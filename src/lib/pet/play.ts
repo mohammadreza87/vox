@@ -58,9 +58,9 @@ export const WEARABLE_IDS: readonly WearableId[] = [...KEEPSAKE_IDS, ...Object.k
 export type SeedKind = 'flower' | 'sabzeh';
 export const SEED_KINDS: readonly SeedKind[] = ['flower', 'sabzeh'];
 
-/** Mini-games that report a round outcome (§4.2). Guess is talk, so it has no outcome here. */
-export type GameId = 'bop' | 'starfall' | 'hum';
-export const GAME_IDS: readonly GameId[] = ['bop', 'starfall', 'hum'];
+/** Mini-games that report a round outcome (§4.2), Guess included (its words stay on the page; only the outcome is recorded). */
+export type GameId = 'bop' | 'starfall' | 'hum' | 'guess';
+export const GAME_IDS: readonly GameId[] = ['bop', 'starfall', 'hum', 'guess'];
 /** The only thing the server records about a round (§4.2): finished, finished in zen, or a new personal best. */
 export type RoundOutcome = 'finished' | 'zen' | 'best';
 export const ROUND_OUTCOMES: readonly RoundOutcome[] = ['finished', 'zen', 'best'];
@@ -72,6 +72,11 @@ export const TIP_IDS: readonly TipId[] = ['T1', 'T2', 'T3', 'T4', 'T5', 'T6', 'T
 /** Permission moments P1-P10 and P3b (§6.2, §8A.2). `asks` keeps only the re-ask timing; grants live with their purpose. */
 export type AskId = 'P1' | 'P2' | 'P3' | 'P3b' | 'P4' | 'P5' | 'P6' | 'P7' | 'P8' | 'P9' | 'P10';
 export const ASK_IDS: readonly AskId[] = ['P1', 'P2', 'P3', 'P3b', 'P4', 'P5', 'P6', 'P7', 'P8', 'P9', 'P10'];
+/**
+ * The asks that are real access grants (§4.11 `access` moments): check-ins, Telegram write access, the microphone (and
+ * hands-free) and saving a memory. A share card, a home-screen shortcut, personalization or visits light nothing.
+ */
+export const ACCESS_ASKS: readonly AskId[] = ['P1', 'P2', 'P3', 'P3b', 'P5'];
 
 /** Festivals (§4.10), keyed like `season.*`. */
 export type SeasonId = 'yalda' | 'suri' | 'nowruz';
@@ -81,10 +86,10 @@ const SEASON_KEEPSAKE: Readonly<Record<SeasonId, KeepsakeId>> = { yalda: 'pomegr
 /** Life Book pages (§4.7): first day, each stage-up, the day it formed, each Bond milestone, first bloom, festivals, best moments. */
 export type BookMomentId = 'met' | 'stage2' | 'stage3' | 'stage4' | 'formed'
   | 'bond1' | 'bond2' | 'bond3' | 'bond4' | 'bond5' | 'bond6'
-  | 'bloom' | 'yalda' | 'suri' | 'nowruz' | 'bestBop' | 'bestStarfall' | 'bestHum';
+  | 'bloom' | 'yalda' | 'suri' | 'nowruz' | 'bestBop' | 'bestStarfall' | 'bestHum' | 'bestGuess';
 export const BOOK_MOMENT_IDS: readonly BookMomentId[] = ['met', 'stage2', 'stage3', 'stage4', 'formed',
-  'bond1', 'bond2', 'bond3', 'bond4', 'bond5', 'bond6', 'bloom', 'yalda', 'suri', 'nowruz', 'bestBop', 'bestStarfall', 'bestHum'];
-const BEST_PAGE: Readonly<Record<GameId, BookMomentId>> = { bop: 'bestBop', starfall: 'bestStarfall', hum: 'bestHum' };
+  'bond1', 'bond2', 'bond3', 'bond4', 'bond5', 'bond6', 'bloom', 'yalda', 'suri', 'nowruz', 'bestBop', 'bestStarfall', 'bestHum', 'bestGuess'];
+const BEST_PAGE: Readonly<Record<GameId, BookMomentId>> = { bop: 'bestBop', starfall: 'bestStarfall', hum: 'bestHum', guess: 'bestGuess' };
 
 /** Rooms whose first visit lights a personal `room` growth moment (§4.11). Home is where the pet starts, so it lights nothing. */
 export type PlayRoom = 'play' | 'garden' | 'closet' | 'bedroom' | 'book';
@@ -169,6 +174,8 @@ export interface PetPlay {
    * (studio/growth.ts noteRef), so erasing that note takes the moment back; never shown in the view.
    */
   litMine: { id: string; litAt: number; ref?: string }[];
+  /** P10 (§4.8, §6.2): friends may visit this pet. Absent or false: visits stay one-way. A flag only. */
+  visitsOpen?: boolean;
 }
 
 export function newPlay(agentId: string, userId: number, now: number): PetPlay {
@@ -264,6 +271,8 @@ export interface PetPlayView {
   asks: Partial<Record<AskId, { lastAskedAt: number; declined: number; accepted?: true }>>;
   seasons: Partial<Record<SeasonId, number>>;
   litMine: { id: string; litAt: number }[];
+  /** P10: friends may visit (present only when true) */
+  visitsOpen?: true;
   /** the festival on now in the person's zone, if any */
   season?: SeasonId;
   /** tips already shown today (the page offers none once this reaches PLAY_LIMITS.tipsPerDay) */
@@ -284,7 +293,7 @@ export function playView(play: PetPlay, now: number, tz: string): PetPlayView {
     ...(g.bloomedAt !== undefined ? { bloomedAt: g.bloomedAt } : {}), state: gardenState(g, now, tz) } : null;
   return {
     items: play.items.map((i) => ({ ...i })), wearing: { ...play.wearing }, garden, book: play.book.map((b) => ({ ...b })),
-    games, tips, asks, seasons: { ...play.seasons }, litMine: play.litMine.map((m) => ({ id: m.id, litAt: m.litAt })),
+    games, tips, asks, seasons: { ...play.seasons }, litMine: play.litMine.map((m) => ({ id: m.id, litAt: m.litAt })), ...(play.visitsOpen ? { visitsOpen: true as const } : {}),
     ...(season ? { season } : {}), tipsToday: tipsShownOn(play, today),
   };
 }
@@ -324,10 +333,12 @@ export type PlayMutation =
   /** the person said yes to this permission moment in context: lights the agent's next personal `access` growth moment */
   | { op: 'askAccepted'; ask: AskId }
   | { op: 'seasonCelebrated'; season: SeasonId }
-  | { op: 'roomVisited'; room: PlayRoom };
+  | { op: 'roomVisited'; room: PlayRoom }
+  /** P10 "Let friends visit": the person's yes (open) or a later change of mind */
+  | { op: 'setVisits'; open: boolean };
 export type PlayOp = PlayMutation['op'];
 export const PLAY_OPS: readonly PlayOp[] = ['lightItem', 'wear', 'plantSeed', 'waterSeed', 'bookMoment', 'gameRound', 'tipSeen', 'tipDismissed',
-  'askSeen', 'askDeclined', 'askAccepted', 'seasonCelebrated', 'roomVisited'];
+  'askSeen', 'askDeclined', 'askAccepted', 'seasonCelebrated', 'roomVisited', 'setVisits'];
 
 /**
  * Why a mutation did less than asked. Never an error: the page plays a cute reaction or nothing.
@@ -385,6 +396,7 @@ function pageReached(play: PetPlay, id: BookMomentId, ctx: PlayContext): boolean
     case 'bestBop': return !!play.games.bop?.best;
     case 'bestStarfall': return !!play.games.starfall?.best;
     case 'bestHum': return !!play.games.hum?.best;
+    case 'bestGuess': return !!play.games.guess?.best;
     default: return ctx.bond >= 25 * Number(id.slice(4));
   }
 }
@@ -502,6 +514,8 @@ export function applyPlay(current: PetPlay, m: PlayMutation, ctx: PlayContext): 
       if (a?.acceptedAt !== undefined) return done('noop');
       play.asks[m.ask] = { ...(a ?? { lastAskedAt: now, declined: 0 }), acceptedAt: now };
       // A personal grant lights a personal moment (§4.11 "personal grants: that person"), never inferred from usage.
+      // Only real access grants do: P7 share, P8 home screen, P9 personalization and P10 visits light nothing.
+      if (!ACCESS_ASKS.includes(m.ask)) return done();
       const next = (ctx.accessMoments ?? []).find((id) => MOMENT_ID.test(id) && !play.litMine.some((l) => l.id === id));
       if (next && play.litMine.length < PLAY_LIMITS.litMine) play.litMine.push({ id: next, litAt: now });
       return done();
@@ -514,6 +528,11 @@ export function applyPlay(current: PetPlay, m: PlayMutation, ctx: PlayContext): 
       play.seasons[m.season] = on.year;
       addItem(play, SEASON_KEEPSAKE[m.season], now);
       addPage(play, m.season, now);
+      return done();
+    }
+    case 'setVisits': {
+      if (!!play.visitsOpen === m.open) return done('noop');
+      if (m.open) play.visitsOpen = true; else delete play.visitsOpen;
       return done();
     }
     case 'roomVisited': {
@@ -607,6 +626,7 @@ export function sanitizePlay(raw: unknown, agentId: string, userId: number): Pet
       play.litMine.push({ id: o.id, litAt: num(o.litAt, createdAt), ...(typeof o.ref === 'string' && NOTE_REF.test(o.ref) ? { ref: o.ref } : {}) });
     }
   }
+  if (r.visitsOpen === true) play.visitsOpen = true;
   return play;
 }
 

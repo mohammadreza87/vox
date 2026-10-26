@@ -229,8 +229,9 @@ describe('rooms on the page', () => {
     expect(container.querySelector('[data-toy="cookie"]')).toBeTruthy();
     const char = container.querySelector('.pet-char');
     fireEvent.click(screen.getByRole('tab', { name: 'Garden' }));
-    expect(await screen.findByText('Seed · Rain · Breathe')).toBeInTheDocument();
-    expect(screen.getByRole('tabpanel')).toHaveTextContent('Garden');
+    // Wave C: the Garden has its own verbs (rooms/garden.test.tsx tests them)
+    expect(await screen.findByRole('button', { name: 'Seed' })).toBeInTheDocument();
+    expect(screen.getByRole('tabpanel')).toHaveTextContent('SeedRainBreathe');
     expect(root(container)).toHaveAttribute('data-room', 'garden');
     expect(container.querySelector('[data-toy="cookie"]')).toBeNull();
     expect(container.querySelector('.pet-char')).toBe(char);
@@ -242,21 +243,16 @@ describe('rooms on the page', () => {
     expect(container.querySelector('[data-toy="cookie"]')).toBeTruthy();
   });
 
-  it('every placeholder room names the room and its three verbs; the Wave B rooms show their verbs; no digits anywhere', async () => {
+  it('every room shows its own verbs (no placeholder left), and no digits anywhere', async () => {
     telegram({ stable: 844 });
     const { container } = render(<PetApp agentId="x" api={api()} />);
     await open(container);
-    for (const name of ['Garden', 'Closet']) {
-      fireEvent.click(screen.getByRole('tab', { name }));
-      await waitFor(() => expect(container.querySelector('.pet-soon b')?.textContent).toBe(name));
-      expect(container.querySelector('.pet-soon span')!.textContent!.split(' · ')).toHaveLength(3);
-      expect(container.querySelector('.pet-rail')!.textContent + container.querySelector('.pet-soon')!.textContent).not.toMatch(/\d/);
-    }
-    // Wave B: Play, Bedroom and Life Book have their own verbs (rooms/*.test.tsx test them)
-    for (const [name, room] of [['Play', 'play'], ['Bedroom', 'bedroom'], ['Life Book', 'book']] as const) {
+    // Wave B and C: every room has its own verbs now (rooms/*.test.tsx test them); none is a placeholder
+    for (const [name, room] of [['Play', 'play'], ['Garden', 'garden'], ['Closet', 'closet'], ['Bedroom', 'bedroom'], ['Life Book', 'book']] as const) {
       fireEvent.click(screen.getByRole('tab', { name }));
       await waitFor(() => expect(container.querySelector(`#pet-room [data-room="${room}"]`)).toBeTruthy());
       expect(container.querySelector('#pet-room')!.textContent).not.toMatch(/\d/);
+      expect(container.querySelector('.pet-soon b')).toBeNull();
     }
   });
 

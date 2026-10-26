@@ -42,7 +42,7 @@ it('keeps FILE Pet authority available when instrumentation and routes use diffe
   expect(network).not.toHaveBeenCalled();
 });
 
-it('wires the play and growth stores and the speech seam explicitly, so route bundles never derive them by instanceof', async () => {
+it('wires the play, growth and check-in stores and the speech seam explicitly, so route bundles never derive them by instanceof', async () => {
   dir = mkdtempSync(join(tmpdir(), 'vox-pet-runtime-'));
   const env = {
     NODE_ENV: 'test', STUDIO_STORAGE: 'file', STUDIO_DATA_DIR: dir,
@@ -69,6 +69,9 @@ it('wires the play and growth stores and the speech seam explicitly, so route bu
   const { petGrowthStoreFor } = await import('../pet-growth-store');
   expect(await petGrowthStoreFor(studio)).toBe(studio.deps.petGrowth);
   expect(studio.deps.petGrowth).toBeDefined();
+  const { petCheckinStoreFor } = await import('../pet-checkins/store');
+  expect(studio.deps.petCheckins).toBeDefined();
+  expect(await petCheckinStoreFor(studio)).toBe(studio.deps.petCheckins);
   expect(studio.deps.tts).toMatchObject({ provider: 'gemini', canSynthesize: false });
   expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('STUDIO_TTS_PROVIDER=gemini'));
 });

@@ -39,3 +39,39 @@
 .pet-root[data-h=peek] .pet-book small { display: none; }
 .pet-root[data-tier="reduced"] :is(.pet-verbs, .pet-book) { animation-duration: .15s; }
 .pet-verbs > .pet-hint { position: static; transform: none; white-space: normal; }
+/* Wave C rooms (Garden, Closet, Guess): the pot and rain over the stage, a two-by-three closet grid, Guess's chips. */
+.pet-chip { position: absolute; left: 50%; bottom: calc(100% + 6px); transform: translateX(-50%); padding: 5px 12px; border-radius: 999px; background: #ffffff1f; font-size: 13px; white-space: nowrap; animation: petFade .3s var(--ease-out); pointer-events: none; }
+.pet-verbs, .pet-closet { position: relative; }
+.pet-garden { position: absolute; z-index: 2; width: 64px; height: 72px; margin-left: -32px; pointer-events: none; }
+.pet-pot { position: absolute; left: 12px; right: 12px; bottom: 0; height: 26px; border-radius: 4px 4px 12px 12px; background: #B5674A; box-shadow: inset 0 4px 0 #0002; }
+.pet-pot i { position: absolute; left: 50%; bottom: 100%; width: 4px; height: 0; margin-left: -2px; border-radius: 2px; background: #7BC67E; transition: height .8s var(--ease-out); }
+.pet-pot[data-state=seeded] i { height: 4px; background: #8A5A3C; width: 8px; margin-left: -4px; border-radius: 50%; }
+.pet-pot:is([data-state=sprouting],[data-state=ready],[data-state=watered]) i { height: 18px; }
+.pet-pot:is([data-state=blooming],[data-state=bloomed]) i { height: 26px; }
+.pet-pot:is([data-state=blooming],[data-state=bloomed]) i::after { content: ''; position: absolute; left: 50%; top: -10px; width: 16px; height: 16px; margin-left: -8px; border-radius: 50%; background: radial-gradient(#FFE27A 30%, #FF8FB1 32%); }
+.pet-pot[data-seed=sabzeh] i { width: 24px; margin-left: -12px; background: repeating-linear-gradient(90deg, #7BC67E 0 2px, transparent 2px 5px); }
+.pet-pot[data-seed=sabzeh] i::after { display: none; }
+.pet-rain { position: absolute; inset: -60px 0 20px; }
+.pet-rain i { position: absolute; top: 0; width: 3px; height: 10px; border-radius: 2px; background: #9FD3FF; animation: petDrop .6s linear infinite; }
+@keyframes petDrop { from { transform: translateY(0); opacity: 0; } 30% { opacity: 1; } to { transform: translateY(70px); opacity: 0; } }
+.pet-breath-verb[aria-pressed="true"] > i { animation: petBreathVerb 6s var(--ease-sine) infinite; }
+@keyframes petBreathVerb { 50% { transform: scale(1.18); } }
+.pet-closet { display: flex; flex-direction: column; gap: 6px; width: 100%; max-width: 420px; animation: petFade .3s var(--ease-sine); }
+.pet-closet .pet-tabs { flex-wrap: nowrap; }
+.pet-slot { min-height: 32px; padding: 4px 8px; border: 0; border-radius: 999px; background: none; color: var(--text-2); font-size: 12px; }
+.pet-slot[aria-pressed="true"] { color: var(--text); box-shadow: inset 0 -2px 0 var(--volt); }
+.pet-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.pet-item { min-height: 40px; padding: 4px 6px; border: 1px solid #ffffff1a; border-radius: 14px; background: #ffffff0d; font-size: 13px; line-height: 16px; }
+.pet-item[aria-pressed="true"] { border-color: var(--volt); background: #d6ff5c1f; }
+.pet-item[data-locked] { border-style: dashed; background: none; color: var(--text-2); }
+.pet-item small { font-size: 11px; line-height: 14px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.pet-closet .pet-dots { display: flex; gap: 5px; justify-content: center; }
+.pet-closet .pet-dots i { width: 6px; height: 6px; border-radius: 50%; background: #ffffff33; }
+.pet-closet .pet-dots i[data-on] { background: var(--text); }
+.pet-guess { display: flex; flex-direction: column; align-items: center; gap: 2px; animation: petFade .3s var(--ease-sine); }
+.pet-guess .pet-verbs { gap: 4px; flex-wrap: wrap; }
+.pet-pips[data-inline] { position: static; transform: none; padding: 4px 10px; }
+.pet-guess-note { color: var(--text-2); font-size: 11px; line-height: 14px; }
+.pet-root[data-h=peek] :is(.pet-guess-note, .pet-closet .pet-dots) { display: none; }
+.pet-root[data-tier="reduced"] :is(.pet-rain i, .pet-breath-verb > i) { animation: none; }
+.pet-page .pet-link { display: block; margin: 0 auto; padding: 4px; }

@@ -209,11 +209,15 @@ describe('PetView.growth and the lighting triggers', () => {
 
   it('access: an accepted ask lights the next access moment for that person only, once', async () => {
     const { play, view } = await setup();
-    await play({ op: 'askSeen', ask: 'P4' });
-    const accepted = await play({ op: 'askAccepted', ask: 'P4' });
-    expect(accepted.play.asks.P4).toMatchObject({ accepted: true });
+    // P4 (speak out loud) is a convenience, not an access grant: accepted, but nothing lights (ACCESS_ASKS)
+    const convenience = await play({ op: 'askAccepted', ask: 'P4' });
+    expect(convenience.play.asks.P4).toMatchObject({ accepted: true });
+    expect(convenience.growth!.mine ?? []).toEqual([]);
+    await play({ op: 'askSeen', ask: 'P3' });
+    const accepted = await play({ op: 'askAccepted', ask: 'P3' });
+    expect(accepted.play.asks.P3).toMatchObject({ accepted: true });
     expect(accepted.growth!.mine).toEqual(['access-calendar']);
-    expect((await play({ op: 'askAccepted', ask: 'P4' })).guard).toBe('noop');
+    expect((await play({ op: 'askAccepted', ask: 'P3' })).guard).toBe('noop');
     const second = await play({ op: 'askAccepted', ask: 'P3b' });
     expect(second.growth!.mine).toEqual(['access-calendar', 'access-checkins']);
     expect((await view(ID.bob)).mine).toBeUndefined();

@@ -7,11 +7,12 @@
 import type { MotionStyle, MotionValue } from 'framer-motion';
 import type { Expression } from '@/lib/studio/character';
 import type {
-  CareRequest, CareResponse, CharacterLook, GrowthConfirmResponse, Mood, NeedKey, PetAction, PetErrorBody, PetErrorCode, PetPrivateView, PetView,
-  Stage, TalkRequest, TalkResponse, TalkVoiceResponse, TalkVoiceStreamEvent,
+  CareRequest, CareResponse, CharacterLook, GrowthConfirmResponse, LookRequest, LookResponse, Mood, NeedKey, PetAction, PetErrorBody, PetErrorCode, PetPrivateView, PetView,
+  Stage, TalkAction, TalkRequest, TalkResponse, TalkVoiceResponse, TalkVoiceStreamEvent,
 } from '@/lib/pet/types';
 import type { PetGrowthView } from '@/lib/pet/growth';
-import type { AskId, PetPlayView, PlayRequest as PlayMutationRequest, PlayResponse } from '@/lib/pet/play';
+import type { PetCheckinsRequest, PetCheckinsView } from '@/lib/pet/checkins';
+import type { AskId, GardenState, PetPlayView, PlayRequest as PlayMutationRequest, PlayResponse, SeedKind, WearableId, WearSlot } from '@/lib/pet/play';
 import type { RigBindings } from '../../_components/character/CharacterView';
 import type { MotionCue, Point, ReactionEvent, Room, RoomReaction, SayLine, Side, Tier, Zone } from '../_engine/types';
 
@@ -38,10 +39,19 @@ export type PetGrowthMoment = PetGrowthView['moments'][number];
 export type PetVoiceNotice = NonNullable<PetView['voiceNotice']> & { retentionFa?: string; providersFa?: string; locationsFa?: string };
 /** What lit moments add to the character (_engine/details.ts `Details`): taught a glint, task a pin, access a charm. */
 export interface LitDetails { glint?: boolean; pin?: boolean; charm?: boolean; keepsakes?: string[]; seasonal?: string | null }
+/* ---------- Wave C (design §5, §6.2, §8.4): the server's shapes (pet/checkins.ts, pet/types.ts) ---------- */
+
+/** The check-in moment types (§5.2) and GET/POST …/checkins: the view answered, the requests (P1 yes with consent, resume, stop). */
+export type { CheckinTypes, PetCheckinReplay } from '@/lib/pet/checkins';
+export type CheckinPrefs = PetCheckinsView;
+export type CheckinsRequest = PetCheckinsRequest;
+/** pet_action (§8.4): the page acts only at confidence ≥ 0.75 (petAction.ts), after the reply. */
+export type { PetActionKind, TalkAction } from '@/lib/pet/types';
+
 /** PetView plus the Persian spellings of UX-02's facts (the server sends the providers; locations and retention are a legal to-do). */
 export type PetViewB = PetView & { voiceNotice?: PetVoiceNotice };
 /** A talk reply may say an explicit "remember this" save happened (UX-06), the cue for the growth confirm step. */
-export type TalkReplyB = (TalkResponse | TalkVoiceResponse) & { savedNote?: boolean; memorySaved?: boolean; growthMoment?: string };
+export type TalkReplyB = (TalkResponse | TalkVoiceResponse) & { savedNote?: boolean; memorySaved?: boolean; growthMoment?: string; action?: TalkAction };
 
 /** talk-voice?stream=1 (§8A.3): NDJSON, one event per line: transcript, reply, sentences, then done (or a final error). */
 export type VoiceStreamEvent = TalkVoiceStreamEvent;
@@ -70,6 +80,10 @@ export interface PetApi {
   talkVoiceStream?(agentId: string, audio: Blob, onEvent: (e: VoiceStreamEvent) => void, o?: VoiceOpts): Promise<TalkVoiceResponse | null>;
   /** POST …/growth/confirm `{ momentId }` (§4.11): the person said yes to "Shall I keep this as …?" */
   growthConfirm?(agentId: string, momentId: string, o?: PetRequestOpts): Promise<GrowthConfirmResponse>;
+  /** GET …/checkins (no request) or POST it (§5.2). Refusals come as `checkins_unavailable` / `consent_*` (never `pet_unavailable`: a server without the route is renamed). */
+  checkins?(agentId: string, req?: CheckinsRequest, o?: PetRequestOpts): Promise<CheckinPrefs>;
+  /** POST …/look (§4.3): the real look, pet-signed, for `view.canEditLook` only; 403 `look_forbidden` otherwise */
+  look?(agentId: string, req: LookRequest, o?: PetRequestOpts): Promise<LookResponse>;
   /** Circles S4: GET circle | notes, POST circle/decision | circle/leave, DELETE notes/:copyId (no care epoch) */
   send?<T>(agentId: string, method: 'GET' | 'POST' | 'DELETE', action: string, body?: unknown, o?: PetRequestOpts): Promise<T>;
 }
@@ -267,6 +281,14 @@ export interface PetEngine {
   setDetails?(d: LitDetails): void;
   /** hold (or let go of) the listening pose for hands-free (motion engineer, Wave B) */
   setListening?(on: boolean): void;
+  /** the person's closet overlay on the character (§4.3), this screen only (motion engineer, Wave C) */
+  setWearing?(w: Partial<Record<WearSlot, WearableId>>): void;
+  /** the Garden pot's floor state (§4.5); null clears it (motion engineer, Wave C) */
+  setGarden?(g: { state: GardenState; seed: SeedKind } | null): void;
+  /** Guess my word (§4.2): it has a word, a question heard, a right or wrong guess, the word told; Zen one preset softer (motion engineer, Wave C) */
+  guessReact?(k: 'think' | 'heard' | 'right' | 'wrong' | 'reveal', o?: { zen?: boolean }): void;
+  /** the Closet mirror (§4.3): a glance at the item, a turn to the mirror (same as roomReact('tryOn', { id })) */
+  tryOn?(id: string): void;
 }
 
 /* ---------- PetRig ---------- */

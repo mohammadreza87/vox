@@ -8,6 +8,8 @@ import { BallIcon } from '../Particles';
 import { t } from '../strings';
 import type { RoomProps } from '.';
 import { STARFALL, StarfallRound, roundId } from './starfall';
+import { Guess, guessUnfinished } from './Guess';
+import { roomIntent } from './intent';
 import './rooms.css';
 
 /** The pips (§4.2): progress as lit dots, never a digit; the screen reader hears "Round progress". */
@@ -20,9 +22,10 @@ export function Pips({ on, of = STARFALL.pips }: { on: number; of?: number }) {
 }
 
 const StarIcon = () => <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l2.6 5.6 6.1.7-4.5 4.2 1.2 6L12 16.6 6.6 19.5l1.2-6L3.3 9.3l6.1-.7z" fill="#FFE27A" /></svg>;
+const GuessIcon = () => <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.2 9a2.9 2.9 0 1 1 4 2.7c-.8.4-1.2 1-1.2 1.8v.6M12 17.6v.1" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>;
 const ZenIcon = () => <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 16a4 4 0 0 1 .6-8 5 5 0 0 1 9.6 1.4A3.3 3.3 0 0 1 17 16z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" /></svg>;
 
-type Phase = 'pick' | 'play' | 'end';
+type Phase = 'pick' | 'play' | 'end' | 'guess';
 
 /**
  * Play (design §4.2, S8, S9): a picker (Bop, Starfall, the Zen switch), then Starfall over the stage. Finishing a round
@@ -36,6 +39,9 @@ export default function PlayRoom({ host }: RoomProps) {
   const [phase, setPhase] = useState<Phase>('pick');
   const [pips, setPips] = useState(0);
   const [best, setBest] = useState(false);
+  /** the game the end card's Again replays */
+  const [last, setLast] = useState<'starfall' | 'guess'>('starfall');
+  const [resume, setResume] = useState(false);
   const round = useRef<StarfallRound | null>(null);
   const stars = useRef<(HTMLDivElement | null)[]>([]);
   const stop = useRef<(() => void) | null>(null);
@@ -44,7 +50,13 @@ export default function PlayRoom({ host }: RoomProps) {
   const tired = !!care && care.energy < TIRED_BELOW;
 
   useEffect(() => () => { stop.current?.(); }, []);
-  useEffect(() => { host?.busy('game', phase === 'play'); return () => host?.busy('game', false); }, [host, phase]);
+  useEffect(() => { host?.busy('game', phase === 'play' || phase === 'guess'); return () => host?.busy('game', false); }, [host, phase]);
+  // Guess asked for from elsewhere (a talk turn's start_guess, a check-in's "keep guessing"): on arrival, or while here
+  useEffect(() => {
+    const take = () => { const g = roomIntent.guess; if (!g || !host?.send) return; roomIntent.guess = undefined; setResume(g === 'resume'); setPhase('guess'); };
+    take();
+    return host?.on((s) => { if (s.type === 'room' && s.room === 'play') take(); });
+  }, [host]);
   if (!host) return null;
   const stageEl = host.root()?.querySelector<HTMLElement>('.pet-stage') ?? null;
   const charEl = () => host.root()?.querySelector<HTMLElement>('.pet-char') ?? null;
@@ -64,8 +76,9 @@ export default function PlayRoom({ host }: RoomProps) {
     e()?.setGaze?.(null);
     e()?.roomReact?.('roundEnd', { won: isZen || r.won, zen: isZen });
     host.say(t(isZen ? 'play.starfall.zenEnd' : r.won ? 'play.starfall.good' : 'play.starfall.nearMiss'));
-    host.emit({ type: 'round', ms, zen: isZen });
+    host.emit({ type: 'round', ms, zen: isZen, game: 'starfall' });
     setBest(isBest);
+    setLast('starfall');
     setPhase(isZen ? 'pick' : 'end');
   };
 
@@ -130,6 +143,10 @@ export default function PlayRoom({ host }: RoomProps) {
   };
 
   const toggleZen = () => setZen((z) => !z);
+  const startGuess = () => { setResume(guessUnfinished(host.agentId)); setPhase('guess'); };
+
+  // a best Guess round ends on the same "a new page" line as Starfall's (the page itself is the server's `bestGuess`)
+  if (phase === 'guess') return <Guess host={host} zen={zen} resume={resume} onDone={(b) => { setBest(!!b); setLast('guess'); setPhase(b ? 'end' : 'pick'); }} />;
 
   if (phase === 'play') {
     return (
@@ -150,7 +167,7 @@ export default function PlayRoom({ host }: RoomProps) {
     return (
       <div className="pet-verbs">
         {best && <span className="pet-hint" role="status">{t('play.bestPage')}</span>}
-        <button type="button" className="pet-link" onClick={start}>{t('play.again')}</button>
+        <button type="button" className="pet-link" onClick={last === 'guess' ? startGuess : start}>{t('play.again')}</button>
         <button type="button" className="pet-link" onClick={() => setPhase('pick')}>{t('play.done')}</button>
       </div>
     );
@@ -163,6 +180,7 @@ export default function PlayRoom({ host }: RoomProps) {
       <button type="button" className="pet-verb" data-tired={tired ? '' : undefined} onClick={start}>
         <i><StarIcon /></i><span>{t('play.starfall.title')}</span>
       </button>
+      {host.send && <button type="button" className="pet-verb" onClick={startGuess}><i><GuessIcon /></i><span>{t('play.guessCard')}</span></button>}
       <button type="button" className="pet-verb" aria-pressed={zen} title={t('play.starfall.zenOn')} onClick={toggleZen}>
         <i><ZenIcon /></i><span>{t('play.zen')}</span>
       </button>

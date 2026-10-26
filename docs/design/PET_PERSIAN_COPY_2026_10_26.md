@@ -899,3 +899,43 @@ Room and season rows below show the isolates removed; in code the room and festi
 | `task-first-list` | «اولین فهرستمون رو با هم مرتب کردیم» | «ازم بخواه یه فهرست رو با هم مرتب کنیم» |
 
 **Note for the keys file:** `growth.example.title.1` there is «یاد گرفتم برنامهٔ انتشار نسخه رو چطور می‌چینید» (first person singular, as its English was). The code's lint requires "we" in titles, so the drafter now sees «یاد گرفتیم نسخه‌ها رو چطور منتشر می‌کنیم». If the keys file is meant to match the code, its exemplar should change to this line.
+
+---
+
+## J. Wave C strings from `strings/extra.ts`
+
+Added as rows under "Added in Wave C" in [`PET_COPY_KEYS_2026_10_26.md`](./PET_COPY_KEYS_2026_10_26.md) on 26 October 2026; isolates around `{name}` are in the keys file and omitted here.
+
+| Key | Voice | FA | Note |
+|---|---|---|---|
+| `play.guess.start` | person | «یه کلمه تو دلت نگه دار، من با سؤال‌های آره و نه حدسش می‌زنم!» | Most urgent: today a Persian opener goes out in English. «تو دلت نگه دار» = keep it secret |
+| `play.guess.hint` | person | «یه راهنمایی می‌کنی؟» |  |
+| `play.guess.giveUp` | person | «تسلیم! کلمه‌ات چی بود؟» | «تسلیم» mirrors the pet’s own laughing surrender |
+| `play.guess.note` | system | «حدس‌ها هم بخشی از گفتگوست و در چت شما با این همکار می‌ماند.» | «our chat» becomes «چت شما با این همکار»: system voice has no "we" |
+| `play.guess.ask` | system | «بپرسید یا حدس بزنید» |  |
+| `garden.seed.flower` | system | «گل» |  |
+| `garden.seed.sabzeh` | system | «سبزه» | Same word as `season.haftsin.*` |
+| `garden.planted` | pet | «خوابوندیمش تو خاک. وقتی نیستی هم قد می‌کشه.» | "Tucked in" kept as an image: «خوابوندیمش تو خاک» |
+| `garden.breathe.on` | pet | «با هم نفس بکشیم. دم… و بازدم…» |  |
+| `item.glasses` | system | «عینک» |  |
+| `item.specs` | system | «عینک مطالعه» | Distinguishes it from «عینک»; check against the drawing |
+| `item.beret` | system | «کلاه بره» |  |
+| `item.cap` | system | «کلاه کپ» |  |
+| `item.beanie` | system | «کلاه بافتنی» |  |
+| `item.headphones` | system | «هدفون» |  |
+| `item.headset` | system | «هدست» |  |
+| `item.bow` | system | «روبان» | A hair bow; «پاپیون» is the bow tie |
+| `item.flower` | system | «گل» |  |
+| `item.star` | system | «ستاره» |  |
+| `item.bowtie` | system | «پاپیون» |  |
+| `item.none` | system | «هیچ‌کدام» |  |
+| `closet.lookElsewhere` | system | «ظاهر {name} را در Vox Studio عوض کنید.» |  |
+| `share.copied` | system | «کپی شد؛ هر جا خواستید بچسبانید.» |  |
+| `visits.later` | system | «دیدوبازدید در به‌روزرسانی بعدی می‌آید. تا آن موقع کسی به {name} سر نمی‌زند، و شما هم فقط جایی به ابرک دوستانتان سر می‌زنید که خودشان اجازه داده باشند.» | extra.ts marks it system (the brief said pet); system fits, since it explains a rule about {name}. No date promised |
+| `visits.group` | system | «گروه‌هایتان» | Reads correctly in «کسانی که در گروه‌هایتان با شما هستند…» |
+
+Variants for the Guess chips (person voice), if the chip rotates:
+- `play.guess.start`: v2 «یه کلمه انتخاب کن، بذار من حدس بزنم!» («بیست سؤالی» is the native name of the game, but it puts a number word in the opener)
+- `play.guess.hint`: v2 «یه کم کمکم کن؟»
+- `play.guess.giveUp`: v2 «تو بردی! بگو چی بود؟»
+

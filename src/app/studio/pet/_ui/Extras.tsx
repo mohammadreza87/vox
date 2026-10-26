@@ -15,7 +15,8 @@ import type { HandsFree, HandsFreeOff } from './handsFree';
 import type { HostSignal, PetHost } from './host';
 import { Sheet } from './Sheet';
 import { t, type PetLang } from './strings';
-import { readSignals, rankTips, writeSignals, type TipDef, type TipMoment, type TipSignals } from './tips';
+import { countDay, countGame, readSignals, rankTips, writeSignals, type TipDef, type TipMoment, type TipSignals } from './tips';
+import { Asks } from './Asks';
 import './extras.css';
 
 /** a tip waits this long after anything happened, and never in the first seconds of a session (§7.1, §6.1) */
@@ -87,8 +88,26 @@ export default function Extras({ host }: { host: PetHost }) {
     const openedAsleep = !!v0?.care.asleep;
     sig.sessions = Math.min(99, sig.sessions + 1);
     if (openedAsleep) sig.quietOpens = Math.min(99, sig.quietOpens + 1);
+    countDay(sig);
     writeSignals(id, sig);
-    const moment: TipMoment = { care: null, hour: new Date().getHours(), micAvailable: v0?.listen !== false, openedAsleep, grown: false, settled: false, quickRounds: 0 };
+    const moment: TipMoment = { care: null, hour: new Date().getHours(), micAvailable: v0?.listen !== false, openedAsleep, grown: false, settled: false, quickRounds: 0,
+      checkinOpened: !!v0?.checkin };
+    // T13 and T14 read the record: a seed ever planted (a bloom page counts), a keepsake in the closet
+    const fromPlay = () => { const p = host.view()?.play; if (p) { moment.planted = !!p.garden || p.book.some((b) => b.id === 'bloom'); moment.keepsake = p.items.length > 0; } };
+    fromPlay();
+    // the person's closet overlay and garden seed on the character, in every room (motion engineer's floor and outfit layers)
+    let worn: unknown = null, sown: unknown = null;
+    const dress = () => {
+      const p = host.view()?.play, e = host.engine();
+      if (!p || !e) return;
+      if (p.wearing !== worn) { worn = p.wearing; e.setWearing?.(p.wearing); }
+      if (p.garden !== sown) { sown = p.garden; e.setGarden?.(p.garden && p.garden.state !== 'empty' ? { state: p.garden.state, seed: p.garden.seed } : null); }
+    };
+    dress();
+    // ?mock=1&room=garden: a demo opens in that room (mock mode only; a real open starts at Home)
+    const q = new URLSearchParams(location.search);
+    const startRoom = q.get('mock') === '1' ? q.get('room') : null;
+    if (startRoom && ['play', 'garden', 'closet', 'bedroom', 'book'].includes(startRoom)) host.setRoom(startRoom as never);
     let tipShown = false;
     let bubbleTip: { tip: TipDef; until: number } | null = null;
     const timers = new Set<ReturnType<typeof setTimeout>>();
@@ -133,7 +152,7 @@ export default function Extras({ host }: { host: PetHost }) {
     const target = (d: TipDef): HTMLElement | null => {
       if (d.place.kind !== 'coach') return null;
       const root = host.root();
-      const sel = d.place.target === 'mic' ? '.pet-mic' : `.pet-room[data-room="${d.place.target === 'rail-play' ? 'play' : 'book'}"]`;
+      const sel = d.place.target === 'mic' ? '.pet-mic' : `.pet-room[data-room="${d.place.target.slice(5)}"]`;
       const el = root?.querySelector<HTMLElement>(sel) ?? null;
       const r = el?.getBoundingClientRect();
       return r && r.width > 0 ? el : null;
@@ -171,7 +190,8 @@ export default function Extras({ host }: { host: PetHost }) {
     const tryTip = () => {
       if (tipShown || !calm()) return;
       moment.care = host.care();
-      const d = rankTips(host.view()?.play, sig, moment, tipShown);
+      const v = host.view();
+      const d = rankTips(v?.play, sig, moment, tipShown, undefined, v?.suggest?.tip);
       if (d && show(d)) tipShown = true;
     };
     const tick = setInterval(tryTip, 2000);
@@ -206,13 +226,19 @@ export default function Extras({ host }: { host: PetHost }) {
           if (s.e.type === 'cookieTap') bump('cookieTaps');
           if (s.e.type === 'cookieLift') bump('drags');
           if (s.e.type === 'moonTap') bump('moonUsed');
+          if (s.e.type === 'ballTap' && !s.e.at) { countGame(sig, 'bop'); writeSignals(id, sig); }
           break;
         case 'body': if (!sig.touched) bump('touched'); bump('pokes'); break;
         case 'care': if (s.action === 'pet') bump('strokes'); break;
         case 'typed': bump('typed'); break;
         case 'held': bump('held'); break;
-        case 'room': if (s.room === 'play' && !sig.playOpened) bump('playOpened'); break;
-        case 'round': moment.quickRounds = !s.zen && s.ms < QUICK_ROUND_MS ? moment.quickRounds + 1 : 0; tryTip(); break;
+        case 'room':
+          if (s.room === 'play' && !sig.playOpened) bump('playOpened');
+          if (s.room === 'closet' && !sig.closetOpened) bump('closetOpened');
+          break;
+        case 'round':
+          if (s.game) { countGame(sig, s.game); writeSignals(id, sig); }
+          moment.quickRounds = !s.zen && s.ms < QUICK_ROUND_MS ? moment.quickRounds + 1 : 0; tryTip(); break;
         case 'motion':
           if (s.cue.type === 'settle') { moment.settled = true; tryTip(); }
           if (s.cue.type === 'litPeak' && peak) peak();
@@ -223,6 +249,8 @@ export default function Extras({ host }: { host: PetHost }) {
         case 'view': {
           const v = host.view();
           if (v?.stageUp || v?.play?.book.some((b) => b.id.startsWith('stage'))) moment.grown = true;
+          fromPlay();
+          dress();
           const next = v?.growth;
           const fresh = newlyLit(growth, next);
           growth = next ?? growth;
@@ -333,6 +361,7 @@ export default function Extras({ host }: { host: PetHost }) {
         </div>
       )}
       {lit && <div className="pet-lit" role="status">{t('growth.lit.chip', undefined, lang)}</div>}
+      <Asks host={host} />
     </>
   );
 }

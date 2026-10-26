@@ -242,3 +242,19 @@ describe('tips v1 in the page (§7)', () => {
     root.remove();
   });
 });
+
+describe('Wave C on the character', () => {
+  it('the closet overlay and the garden seed follow the play record in every room (a missing slot wears nothing; an empty pot is none)', () => {
+    const h = fakeHost({ play: emptyPlay({ wearing: { head: 'beret' }, garden: { seed: 'flower', plantedAt: 0, waterings: 0, state: 'seeded' } }) });
+    const setWearing = vi.fn(), setGarden = vi.fn();
+    Object.assign(h.engineFake, { setWearing, setGarden });
+    render(<Extras host={h} />);
+    expect(setWearing).toHaveBeenLastCalledWith({ head: 'beret' });
+    expect(setGarden).toHaveBeenLastCalledWith({ state: 'seeded', seed: 'flower' });
+    h.state.view = { ...h.state.view!, play: emptyPlay({ wearing: {}, garden: null }) };
+    act(() => h.fire({ type: 'view' }));
+    expect(setWearing).toHaveBeenLastCalledWith({});
+    expect(setGarden).toHaveBeenLastCalledWith(null);
+  });
+});
+

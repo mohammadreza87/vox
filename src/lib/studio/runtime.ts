@@ -35,6 +35,9 @@ import { StudioExperimentRuntime } from '../adaptive/experiments/runtime';
  *                            STUDIO_BOTS=1 and a persistent polling process
  *   STUDIO_REMINDER_DELIVERY=1  optional Telegram reminders; requires maintenance
  *                            and each person's separate channel confirmation
+ *   STUDIO_PET_CHECKINS=on   pet check-ins (default off: nothing is ever sent); run by the
+ *                            maintenance loop, or POST /api/studio/pet/checkins/run with
+ *                            STUDIO_PET_CHECKINS_TRIGGER_SECRET on webhook deployments
  *
  * Serverless production (Firebase):
  *   STUDIO_STORAGE=firestore  state in Firestore, media in Cloud Storage,
@@ -88,6 +91,7 @@ import { Studio, type StudioDeps } from './service';
 import { FilePetStore, FirestorePetStore } from './pet-store';
 import { FilePetPlayStore, FirestorePetPlayStore } from './pet-play-store';
 import { FilePetGrowthStore, FirestorePetGrowthStore } from './pet-growth-store';
+import { FilePetCheckinStore, FirestorePetCheckinStore } from './pet-checkins/store';
 import { StudioStore, type StudioStorage } from './store';
 import { RelationshipLoop, FileRelationshipStore, FirestoreRelationshipStore, FileObservationStore, FirestoreObservationStore, SafeRelationshipObserver, OpenAIFollowUpReview, OpenAIRelationshipFeedback } from '../relationships';
 import { StudioRelationshipAssessor } from './relationship-assessor';
@@ -276,11 +280,11 @@ export function stopStudioPreferenceLearning(): Promise<{ pending: number }> {
   return g.__voxPreferenceStop = g.__voxPreferenceTasks?.tasks.close() ?? Promise.resolve({ pending: 0 });
 }
 
-type RuntimeStorage = Pick<StudioDeps, 'store' | 'pets' | 'petPlay' | 'petGrowth' | 'choices' | 'circleLedger' | 'notesLedger' | 'channelDrafts' | 'memory' | 'rateLimiter' | 'adaptive' | 'relationshipStore' | 'observations' | 'revisions'> & { sharedStorage: AdaptiveStorage; voiceIdentityStorage: AdaptiveStorage; maintenanceStorage: AdaptiveStorage; closeAdaptive?: () => void };
+type RuntimeStorage = Pick<StudioDeps, 'store' | 'pets' | 'petPlay' | 'petGrowth' | 'petCheckins' | 'choices' | 'circleLedger' | 'notesLedger' | 'channelDrafts' | 'memory' | 'rateLimiter' | 'adaptive' | 'relationshipStore' | 'observations' | 'revisions'> & { sharedStorage: AdaptiveStorage; voiceIdentityStorage: AdaptiveStorage; maintenanceStorage: AdaptiveStorage; closeAdaptive?: () => void };
 function fileStorage(dir: string, scopedRelationshipsEnabled: boolean, format: AdaptiveStorageFormat): RuntimeStorage {
   const managed = openLocalAdaptiveStorage(join(dir, 'adaptive'), format);
   try { const store = new StudioStore(dir);
-    return { store, pets: new FilePetStore(join(dir, 'pets')), petPlay: new FilePetPlayStore(join(dir, 'pets')), petGrowth: new FilePetGrowthStore(join(dir, 'pets')), choices: new FileAgentChoiceStore(join(dir, 'circles')),
+    return { store, pets: new FilePetStore(join(dir, 'pets')), petPlay: new FilePetPlayStore(join(dir, 'pets')), petGrowth: new FilePetGrowthStore(join(dir, 'pets')), petCheckins: new FilePetCheckinStore(join(dir, 'pets')), choices: new FileAgentChoiceStore(join(dir, 'circles')),
     circleLedger: new CircleService(new CircleRepository(new FileAdaptiveStorage(join(dir, 'circles', 'ledger')))),
     notesLedger: new CircleNotes(new NotesRepository(new FileAdaptiveStorage(join(dir, 'circles', 'notes')))),
     channelDrafts: new ChannelDrafts(new FileAdaptiveStorage(join(dir, 'circles', 'channel-drafts'))), memory: createFileStores(join(dir, 'memory.json')),
@@ -304,6 +308,7 @@ async function firestoreStorage(bucketName: string, scopedRelationshipsEnabled: 
     pets: new FirestorePetStore(db),
     petPlay: new FirestorePetPlayStore(db),
     petGrowth: new FirestorePetGrowthStore(db),
+    petCheckins: new FirestorePetCheckinStore(db),
     choices: new FirestoreAgentChoiceStore(db),
     circleLedger: new CircleService(new CircleRepository(new FirestoreAdaptiveStorage(db, CIRCLE_COLLECTION))),
     notesLedger: new CircleNotes(new NotesRepository(new FirestoreAdaptiveStorage(db, NOTES_COLLECTION))),
@@ -366,6 +371,7 @@ async function create(): Promise<Studio> {
       pets: storage.pets,
       petPlay: storage.petPlay,
       petGrowth: storage.petGrowth,
+      petCheckins: storage.petCheckins,
       choices: storage.choices,
       circleLedger: storage.circleLedger,
       notesLedger: storage.notesLedger,

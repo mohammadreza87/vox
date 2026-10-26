@@ -14,6 +14,7 @@ import { GROUND, hasPart, modelEye, type CharacterModel, type SvgNode } from '@/
 import { EYE } from '@/lib/studio/character/face';
 import { HIGHLIGHT } from '@/lib/studio/character/palette';
 import type { Stage } from '@/lib/studio/types';
+import { fitGarden, GARDEN_K, gardenArt, gardenKey, type GardenDraw, type GardenShown } from './garden';
 
 /** What the person's view has lit (the page passes it; never stored in PetCare). */
 export interface Details {
@@ -27,12 +28,14 @@ export interface Details {
   keepsakes?: string[];
   /** the seasonal keepsake ('yalda' | 'suri' | 'nowruz' | another id), or none */
   seasonal?: string | null;
+  /** the Garden's seed (§4.5), right of the pet (between it and the seasonal keepsake), or none */
+  garden?: GardenShown | null;
 }
 /** A detail a lit moment can fade in (`keepsake` and `seasonal` name theirs by `id`). */
 export type DetailName = 'glint' | 'pin' | 'charm' | 'keepsake' | 'seasonal';
 
 /** The details this stage can show (the rest wait for their part). */
-export interface ShownDetails { glint: boolean; pin: boolean; charm: boolean; keepsakes: string[]; seasonal: string | null }
+export interface ShownDetails { glint: boolean; pin: boolean; charm: boolean; keepsakes: string[]; seasonal: string | null; garden?: GardenShown | null }
 
 /** Which STAGE_PARTS part each worn detail needs. */
 export const DETAIL_PART = { glint: 'highlight2', pin: 'accessory', charm: 'accessory' } as const;
@@ -46,6 +49,8 @@ export function fitDetails(d: Details, stage: Stage): ShownDetails {
     charm: !!d.charm && hasPart(stage, DETAIL_PART.charm),
     keepsakes: [...new Set(d.keepsakes ?? [])].slice(-KEEPSAKES_SHOWN),
     seasonal: d.seasonal ?? null,
+    // the garden stands on the floor at every stage (it is not worn)
+    ...(fitGarden(d.garden) ? { garden: fitGarden(d.garden) } : {}),
   };
 }
 
@@ -201,7 +206,7 @@ function seasonalArt(id: string): SvgNode[] {
  */
 export interface DetailLayers { lids: SvgNode[]; body: SvgNode[]; floor: SvgNode[] }
 
-export interface DetailDraw {
+export interface DetailDraw extends GardenDraw {
   /** the detail fading in (its key) and where it is (detailFade) */
   fade?: { key: string; o: number; s: number } | null;
   /** the charm's swing (deg), the soft parts' rotation lag */
@@ -233,17 +238,30 @@ export function detailLayers(m: CharacterModel, d: ShownDetails, o: DetailDraw =
   // its stage size; a soft contact shadow under each
   const grow = m.growth, cx = m.pivots.body[0];
   const [l, rgt] = edgesAt(m, GROUND - 6).map((x) => cx + (x - cx) * grow);
-  const shade = (x: number): SvgNode => ({ tag: 'ellipse', attrs: { cx: r1(x), cy: GROUND + 0.6, rx: 6.6, ry: 1.6, fill: '#000000', opacity: 0.14 } });
+  const shade = (x: number, k = 1): SvgNode => ({ tag: 'ellipse', attrs: { cx: r1(x), cy: GROUND + 0.6, rx: r1(6.6 * k), ry: 1.6, fill: '#000000', opacity: 0.14 } });
   const ks = [...d.keepsakes].reverse();
   ks.forEach((id, i) => {
     const x = Math.max(8, l - 12 - i * 18);
     out.floor.push(g(fade(detailKey('keepsake', id), x, GROUND), [shade(x), g({ transform: `translate(${r1(x)} ${GROUND}) scale(${FLOOR_K})` }, keepsakeArt(id))]));
   });
+  // the garden's vessel right of the body; the seasonal keepsake steps further out to make room
+  const gx = gardenX(m);
+  if (d.garden) {
+    out.floor.push(g(fade(gardenKey(d.garden), gx, GROUND), [shade(gx, 1.5), g({ transform: `translate(${gx} ${GROUND}) scale(${GARDEN_K})` }, gardenArt(d.garden, o))]));
+  }
   if (d.seasonal) {
-    const x = Math.min(191, rgt + 18);
+    const x = d.garden ? Math.min(206, gx + 24) : Math.min(191, rgt + 18);
     out.floor.push(g(fade('seasonal', x, GROUND), [shade(x), g({ transform: `translate(${r1(x)} ${GROUND}) scale(${FLOOR_K})` }, seasonalArt(d.seasonal))]));
   }
   return out;
+}
+
+/** Where the garden's vessel stands (view units, its base centre on the floor): clear of the body at its stage size. */
+export function gardenX(m: CharacterModel): number {
+  const cx = m.pivots.body[0];
+  // the plant rises beside the body's widest point (it bulges well past its base), measured up to a bloom's height
+  const widest = Math.max(...[12, 22, 32, 42, 52].map((d) => edgesAt(m, GROUND - d / m.growth)[1]));
+  return r1(Math.min(184, cx + (widest - cx) * m.growth + 6));
 }
 
 export const NO_DETAILS: ShownDetails = { glint: false, pin: false, charm: false, keepsakes: [], seasonal: null };

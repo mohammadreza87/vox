@@ -60,6 +60,7 @@ export const NOT_SYSTEM: Partial<Record<PetStringKey, Exclude<PetVoice, 'system'
   'book.page.bestBop': 'pet',
   'book.page.bestStarfall': 'pet',
   'book.page.bestHum': 'pet',
+  'book.page.bestGuess': 'pet',
   'book.about': 'pet',
   'season.yalda.ask': 'pet',
   'season.yalda.reading': 'pet',
@@ -172,6 +173,11 @@ export const NOT_SYSTEM: Partial<Record<PetStringKey, Exclude<PetVoice, 'system'
   'bed.lamp.dim': 'pet',
   'bed.tuck.notSleepy': 'pet',
   'book.learned.empty': 'pet',
+  'play.guess.start': 'person',
+  'play.guess.hint': 'person',
+  'play.guess.giveUp': 'person',
+  'garden.planted': 'pet',
+  'garden.breathe.on': 'pet',
 };
 
 export const voiceOf = (key: PetStringKey): PetVoice => NOT_SYSTEM[key] ?? 'system';
