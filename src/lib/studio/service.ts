@@ -15,7 +15,7 @@ import { composeFollowUp } from '../relationships/compose';
 import type { RelationshipConfig } from './relationship-config';
 import { ownerSharePatch, ownerRevokePatch, validateShareRecipients, isSuccessorTransferable, successorCopy, resnapshotPatch, type TombstoneCarrier } from '../tireh/memory/sharing';
 import { tirehFlags } from '../tireh/flags';
-import { MAX_AUDIT_IDS, type AuditStore, type SupersededNoticeEraser, type SupersededNoticeStore } from '../tireh/audit';
+import { MAX_AUDIT_IDS, MAX_NOTICE_LIST, type AuditStore, type SupersededNoticeEraser, type SupersededNoticeStore } from '../tireh/audit';
 import { historyMessageForChat } from '../tireh/memory/visibility';
 import { logTelegramDiagnostic, profileStepDiagnostic, type TelegramDiagnostic } from '../tireh/telegram/diagnostics';
 import type { DirectAuthorityEvaluator } from '../adaptive/persistence/authority';
@@ -87,8 +87,23 @@ import type { ChannelDrafts } from '../circles/channels';
 import type { NoteSelectorKind } from '../circles/note-selector';
 import {
   FORMING_DAYS, type Agent, type AgentJoin, type AgentLook, type JoinChoice, type JoinNotice, type JoinReceipt, type JoinSurface, type AgentVisibility, type CharacterLook, type GroupBehavior, type StudioState, type Member, type MemoryPolicy, type PersonaSpec,
-  type ProfileStep, type Role, type SpawnBrief, type Stage,
+  type ProfileStep, type Role, type SpawnBrief, type Stage, type StudioGroup,
 } from './types';
+
+/** S08: the two known group history policies (types.ts StudioGroup.historyPolicy). */
+export type GroupHistoryPolicy = NonNullable<StudioGroup['historyPolicy']>;
+const GROUP_HISTORY_POLICIES: readonly GroupHistoryPolicy[] = ['since_membership', 'all_authorized_history'];
+const isGroupHistoryPolicy = (value: unknown): value is GroupHistoryPolicy => typeof value === 'string' && (GROUP_HISTORY_POLICIES as readonly string[]).includes(value);
+
+/** S08 re-snapshot result. Preview adds the target ids and per-agent counts (ids only, never content). */
+export interface ResnapshotResult { count: number; applied: boolean; byAgent?: Record<string, number>; memoryIds?: string[] }
+
+/** S08 content-free supersede notice as returned to a recipient. */
+export interface MemoryNotice { id: string; oldMemoryId: string; newMemoryId: string; from: string; at: string; replacementVisible: boolean }
+/** At most this many notices are returned per request, after filtering. */
+const MAX_NOTICES_RETURNED = 50;
+/** Notices whose old and replacement records are read concurrently. */
+const NOTICE_READ_CHUNK = 10;
 
 export class StudioError extends Error {
   override readonly name = 'StudioError';
@@ -453,6 +468,13 @@ export class Studio {
       return { ...target };
     });
     this.deps.preferenceLearning?.tasks.cancel(targetId);
+    // S11L (STUDIO_VOICE_RECOGNITION): a person demoted below member loses their sealed voiceprint templates now,
+    // in both spaces, instead of at the next startup sweep. Verification already refuses them (eligiblePerson);
+    // this closes the retention gap. A failure never fails the role change; the startup sweep still removes the row.
+    const voiceprints = this.deps.voiceprints;
+    if (role === 'pending' && tirehFlags().voiceRecognition && voiceprints) {
+      await Promise.resolve().then(() => voiceprints.invalidate(targetId)).catch(() => { this.log.warn('[vox] voiceprint invalidate_failed'); });
+    }
     return changed;
   }
 
@@ -1433,18 +1455,32 @@ export class Studio {
   /**
    * S08 (TIREH_SHARING_V2): an admin re-snapshots one group's existing
    * normal-sensitivity group records for one named member, so they can see
-   * group memory from before they joined. Preview (apply false) returns only
-   * a count; apply adds exactly that member through updateIfShareVersion and
-   * is audited. Never removes anyone, never returns content and never replays
-   * old group history (its stamps still exclude the new member).
+   * group memory from before they joined. Preview (apply false) returns the
+   * count and, with { detail: true }, the target record ids and a per-agent
+   * count (ids only, never content, topic or type); apply adds exactly that
+   * member through updateIfShareVersion and is audited. Never removes anyone,
+   * never returns content and never replays old group history (its stamps
+   * still exclude the new member).
+   *
+   * The group's historyPolicy decides whether a re-snapshot is allowed at all:
+   * 'since_membership' refuses (409, with a content-free refused audit row,
+   * before any memory read), 'all_authorized_history' allows. A group with no
+   * historyPolicy keeps today's behaviour (allowed) until product decision (j)
+   * settles the default; the S08 policy oracle (tireh/policy/snapshot.ts)
+   * already reads an absent value as since_membership.
    */
-  async resnapshotGroupMemory(actor: Member, chatId: number, telegramId: number, apply: boolean): Promise<{ count: number; applied: boolean }> {
+  async resnapshotGroupMemory(actor: Member, chatId: number, telegramId: number, apply: boolean, options: { detail?: boolean } = {}): Promise<ResnapshotResult> {
     if (!tirehFlags().sharingV2) throw new StudioError(404, 'Not found');
     if (!atLeast(actor, 'admin')) throw forbidden('Only admins can change who sees group memory.');
     if (!Number.isSafeInteger(chatId) || !Number.isSafeInteger(telegramId) || telegramId <= 0) throw bad('Choose a group member.');
     const s = await this.deps.store.read();
     const group = s.groups.find((g) => g.chatId === chatId);
     if (!group) throw notFound('Group not found');
+    // Pending decision (j): an absent historyPolicy is treated as allowing the re-snapshot (today's behaviour).
+    if (group.historyPolicy === 'since_membership') {
+      await this.deps.store.audit({ actor: actor.telegramId, action: 'memory.resnapshot', target: String(chatId), detail: `${telegramId}:refused` });
+      throw new StudioError(409, 'This group shows members only memories from after they joined. An admin can change that in the group settings.');
+    }
     const gid = groupId(chatId);
     const person = personId(telegramId);
     const member = s.members.find((m) => m.telegramId === telegramId);
@@ -1476,7 +1512,14 @@ export class Studio {
     };
     if (!apply) {
       await rows('previewed', targets.map((t) => ({ agentId: t.agentId, id: t.memory.id })));
-      return { count: targets.length, applied: false };
+      // Ids and per-agent counts only: no content, topic or type leaves here, and the route is admin only.
+      // TODO(H9/integrator): the detail is opt-in ({ detail: true }) only because sharing-v2.test.ts (a) and
+      // invariants.test.ts pin the preview body with toEqual({ count, applied }); make it the default once those
+      // assertions use toMatchObject (files outside H6).
+      if (!options.detail) return { count: targets.length, applied: false };
+      const byAgent: Record<string, number> = {};
+      for (const t of targets) byAgent[t.agentId] = (byAgent[t.agentId] ?? 0) + 1;
+      return { count: targets.length, applied: false, byAgent, memoryIds: targets.map((t) => t.memory.id) };
     }
     const done: Array<{ agentId: string; id: string }> = [];
     for (const t of targets) {
@@ -1488,8 +1531,28 @@ export class Studio {
     return { count, applied: true };
   }
 
+  /**
+   * S08 (TIREH_SHARING_V2): an admin sets a group's historyPolicy. Admin only,
+   * the two known values only, recorded in the Studio audit log. It changes
+   * only whether resnapshotGroupMemory is allowed for the group; it never
+   * widens or narrows any record by itself.
+   */
+  async setGroupHistoryPolicy(actor: Member, chatId: number, policy: unknown): Promise<{ chatId: number; historyPolicy: GroupHistoryPolicy }> {
+    if (!tirehFlags().sharingV2) throw new StudioError(404, 'Not found');
+    if (!atLeast(actor, 'admin')) throw forbidden('Only admins can change who sees group memory.');
+    if (!Number.isSafeInteger(chatId)) throw notFound('Group not found');
+    if (!isGroupHistoryPolicy(policy)) throw bad('Choose since_membership or all_authorized_history.');
+    return this.deps.store.update((s) => {
+      const group = s.groups.find((g) => g.chatId === chatId && g.kind !== 'channel');
+      if (!group) throw notFound('Group not found');
+      group.historyPolicy = policy;
+      s.audit.push({ at: this.now().toISOString(), actor: actor.telegramId, action: 'group.history_policy', target: String(chatId), detail: policy });
+      return { chatId, historyPolicy: policy };
+    });
+  }
+
   /** S08 (TIREH_SHARING_V2): content-free "updated" notices for shared records the actor could see. */
-  async memoryNoticesFor(actor: Member, agentId: string): Promise<Array<{ id: string; oldMemoryId: string; newMemoryId: string; from: string; at: string; replacementVisible: boolean }>> {
+  async memoryNoticesFor(actor: Member, agentId: string): Promise<MemoryNotice[]> {
     const s = await this.deps.store.read();
     const agent = s.agents.find((a) => a.id === agentId);
     if (!agent || !canUseAgent(actor, agent)) throw notFound('Agent not found');
@@ -1497,16 +1560,26 @@ export class Studio {
     if (!tirehFlags().sharingV2 || !notices) return [];
     const org = studioToOrg(s, this.deps.orgName, this.orgOptions());
     const me = personId(actor.telegramId);
-    const out: Array<{ id: string; oldMemoryId: string; newMemoryId: string; from: string; at: string; replacementVisible: boolean }> = [];
-    for (const notice of (await notices.listFor(agentId, me)).slice(0, 50)) {
-      // Once the old record is forgotten, or the actor was never among its readers, the notice disappears.
-      const old = await this.deps.memory.memories.get(notice.oldMemoryId);
-      const readers = old?.authorizedPersonIds ?? (old?.scope.kind === 'people' ? old.scope.personIds : []);
-      if (!old || old.personaId !== agentId || !readers.includes(me)) continue;
-      const replacement = await this.deps.memory.memories.get(notice.newMemoryId);
-      out.push({ id: notice.id, oldMemoryId: notice.oldMemoryId, newMemoryId: notice.newMemoryId,
-        from: org.getPerson(notice.ownerPersonId)?.name ?? 'Someone', at: notice.at.toISOString(),
-        replacementVisible: !!replacement && replacement.personaId === agentId && isVisibleToAudience(org, replacement, [me]) });
+    const memories = this.deps.memory.memories;
+    // Filter first, then cap: every listed notice (at most MAX_NOTICE_LIST, newest first) is considered, so valid
+    // older notices are not hidden behind newer ones that no longer apply.
+    const listed = (await notices.listFor(agentId, me)).slice(0, MAX_NOTICE_LIST);
+    const out: MemoryNotice[] = [];
+    for (let i = 0; i < listed.length && out.length < MAX_NOTICES_RETURNED; i += NOTICE_READ_CHUNK) {
+      const chunk = await Promise.all(listed.slice(i, i + NOTICE_READ_CHUNK).map(async (notice) => {
+        const [old, replacement] = await Promise.all([memories.get(notice.oldMemoryId), memories.get(notice.newMemoryId)]);
+        return { notice, old, replacement };
+      }));
+      for (const { notice, old, replacement } of chunk) {
+        if (out.length >= MAX_NOTICES_RETURNED) break;
+        // Once the old record is forgotten, or the actor was never among its readers, the notice disappears.
+        const readers = old?.authorizedPersonIds ?? (old?.scope.kind === 'people' ? old.scope.personIds : []);
+        if (!old || old.personaId !== agentId || !readers.includes(me)) continue;
+        // newMemoryId is returned even when the replacement is not visible: product decision (e).
+        out.push({ id: notice.id, oldMemoryId: notice.oldMemoryId, newMemoryId: notice.newMemoryId,
+          from: org.getPerson(notice.ownerPersonId)?.name ?? 'Someone', at: notice.at.toISOString(),
+          replacementVisible: !!replacement && replacement.personaId === agentId && isVisibleToAudience(org, replacement, [me]) });
+      }
     }
     return out;
   }
