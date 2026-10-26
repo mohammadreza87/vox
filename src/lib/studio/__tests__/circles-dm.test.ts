@@ -415,14 +415,33 @@ describe('kill switch and members', () => {
         const id = updateId++;
         return { update_id: id, message: { message_id: id, date: 0, caption: 'what is this?', photo: [{ file_id: `p-${id}`, width: 640, height: 480, file_size: 20_000 }], from: { id: from, is_bot: false, first_name: 'X' }, chat: { id: from, type: 'private' } } };
       };
+      // F144: record what the Studio privacy adapter's validatePublicAudience answers on each gateway the
+      // updates build, so the outsider's turn is shown to run as a public-only audience (the boundary's
+      // publicOnly guard), not to stop at an earlier refusal. ingestTelegramImage's own guest gate would also
+      // refuse this speaker (defence in depth); the publicOnly guard alone is pinned in images-gateway.test.ts
+      // ('never downloads for a public-only audience').
+      type PublicAudienceCheck = (personaId: string, chat: unknown) => Promise<boolean>;
+      const publicAudience: boolean[] = [];
+      const buildGateway = h.studio.gateway.bind(h.studio);
+      vi.spyOn(h.studio, 'gateway').mockImplementation(async (...args) => {
+        const built = await buildGateway(...args);
+        const privacy = (built.gateway as unknown as { deps: { runtimePrivacy?: { validatePublicAudience?: PublicAudienceCheck } } }).deps.runtimePrivacy;
+        const check = privacy?.validatePublicAudience;
+        if (privacy && check) privacy.validatePublicAudience = async (personaId, chat) => { const answer = await check(personaId, chat); publicAudience.push(answer); return answer; };
+        return built;
+      });
       const [, , options] = await card();
       later(h);
       await send(tap(ID.stranger, data(options, 'cj')));
+      publicAudience.length = 0;
       await send(photo(ID.stranger));
+      expect(publicAudience).toContain(true);
       expect(downloadImage).not.toHaveBeenCalled();
       expect(decideParts).not.toHaveBeenCalled();
+      publicAudience.length = 0;
       await send(photo(org.bob.telegramId));
       expect(downloadImage).toHaveBeenCalled();
+      expect(publicAudience).toEqual([]); // a member's audience is valid: no public-only fallback
     } finally {
       vi.unstubAllEnvs();
     }

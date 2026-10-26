@@ -103,8 +103,12 @@ function isConnectTimeout(error: unknown): boolean {
 }
 
 export class TelegramApiError extends Error {
-  constructor(readonly method: string, readonly description: string) {
+  /** A stable, structural classification (read without instanceof): set only for an oversize image download. */
+  declare readonly code?: 'file_too_large';
+
+  constructor(readonly method: string, readonly description: string, code?: 'file_too_large') {
     super(`Telegram ${method} failed: ${description}`);
+    if (code) this.code = code;
   }
 }
 
@@ -118,7 +122,12 @@ export class TelegramBotClient {
     this.fileBase = `https://api.telegram.org/file/bot${token}`;
   }
 
-  private async call<T>(method: string, body: Record<string, unknown> | FormData, signal?: AbortSignal, authorizeNow?: () => boolean): Promise<T> {
+  /**
+   * `rethrowAbort` is set only by downloadImage: when its deadline fires while the JSON body is read, the
+   * signal's reason (a TimeoutError) is rethrown instead of reading as an empty body. Other callers pass
+   * signals too (relationship drain, follow-up sends), so their behaviour is left exactly as it was.
+   */
+  private async call<T>(method: string, body: Record<string, unknown> | FormData, signal?: AbortSignal, authorizeNow?: () => boolean, rethrowAbort = false): Promise<T> {
     const isForm = body instanceof FormData;
     const options: RequestInit = {
       method: 'POST',
@@ -142,7 +151,10 @@ export class TelegramBotClient {
       }
     }
     // Response/body errors must not replay a potentially accepted POST.
-    const json = (await response.json().catch(() => ({}))) as { ok?: boolean; result?: T; description?: string };
+    const json = (await response.json().catch((error: unknown) => {
+      if (rethrowAbort && signal?.aborted) throw signal.reason ?? error;
+      return {};
+    })) as { ok?: boolean; result?: T; description?: string };
     if (!json.ok) throw new TelegramApiError(method, json.description ?? `HTTP ${response.status}`);
     return json.result as T;
   }
@@ -210,17 +222,19 @@ export class TelegramBotClient {
    */
   async downloadImage(fileId: string, options: { maxBytes: number; signal?: AbortSignal }): Promise<Uint8Array> {
     const { maxBytes, signal } = options;
-    const file = await this.call<{ file_path?: string; file_size?: number }>('getFile', { file_id: fileId }, signal);
+    const file = await this.call<{ file_path?: string; file_size?: number }>('getFile', { file_id: fileId }, signal, undefined, true);
     if (!file.file_path) throw new TelegramApiError('getFile', 'no file_path');
-    if (file.file_size && file.file_size > maxBytes) throw new TelegramApiError('getFile', 'file too large');
+    if (file.file_size && file.file_size > maxBytes) throw new TelegramApiError('getFile', 'file too large', 'file_too_large');
     const response = await this.fetchFn(`${this.fileBase}/${file.file_path}`, { signal });
-    if (!response.ok) throw new TelegramApiError('downloadFile', `HTTP ${response.status}`);
+    // An unread body holds its connection until garbage collection: cancel it before each early throw.
+    const discard = async () => { await response.body?.cancel().catch(() => undefined); };
+    if (!response.ok) { await discard(); throw new TelegramApiError('downloadFile', `HTTP ${response.status}`); }
     const length = Number(response.headers?.get?.('content-length') ?? NaN);
-    if (Number.isFinite(length) && length > maxBytes) throw new TelegramApiError('downloadFile', 'file too large');
+    if (Number.isFinite(length) && length > maxBytes) { await discard(); throw new TelegramApiError('downloadFile', 'file too large', 'file_too_large'); }
     const reader = typeof response.body?.getReader === 'function' ? response.body.getReader() : undefined;
     if (!reader) {
       const buffer = await response.arrayBuffer();
-      if (buffer.byteLength > maxBytes) throw new TelegramApiError('downloadFile', 'file too large');
+      if (buffer.byteLength > maxBytes) throw new TelegramApiError('downloadFile', 'file too large', 'file_too_large');
       return new Uint8Array(buffer);
     }
     // Streamed: stop reading, and cancel the body, as soon as the running total passes the cap.
@@ -232,7 +246,7 @@ export class TelegramBotClient {
       total += value.byteLength;
       if (total > maxBytes) {
         await reader.cancel().catch(() => undefined);
-        throw new TelegramApiError('downloadFile', 'file too large');
+        throw new TelegramApiError('downloadFile', 'file too large', 'file_too_large');
       }
       chunks.push(value);
     }

@@ -62,7 +62,7 @@ function stripJpeg(bytes: Uint8Array): Uint8Array {
   if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) invalid();
   if (bytes[bytes.length - 2] !== 0xff || bytes[bytes.length - 1] !== 0xd9) invalid();
   const kept: Uint8Array[] = [bytes.subarray(0, 2)];
-  let offset = 2, scanned = false;
+  let offset = 2, scanned = false, jfifKept = false;
   while (offset < bytes.length) {
     if (bytes[offset] !== 0xff) invalid();
     const marker = bytes[offset + 1];
@@ -97,12 +97,43 @@ function stripJpeg(bytes: Uint8Array): Uint8Array {
       offset = end;
       continue;
     }
-    // APP1-APP13, APP15 and COM carry EXIF, GPS, XMP, ICC, comments and vendor data.
+    if (marker === 0xe0) {
+      // APP0: only the first JFIF header is kept, and without its thumbnail (an uncropped copy of a document's
+      // original can sit there). JFXX (a thumbnail extension) and every other APP0 are dropped.
+      if (!jfifKept && length >= JFIF_HEADER_LENGTH && isJfifIdentifier(bytes, offset + 4)) {
+        kept.push(jfifWithoutThumbnail(bytes, offset));
+        jfifKept = true;
+      }
+      offset = finish;
+      continue;
+    }
+    // APP1-APP13, APP15 and COM carry EXIF, GPS, XMP, ICC, comments and vendor data. APP14 (Adobe) is kept: it
+    // holds only the colour transform flag the decoder needs, no personal data.
     const metadata = (marker >= 0xe1 && marker <= 0xed) || marker === 0xef || marker === 0xfe;
     if (!metadata) kept.push(bytes.subarray(offset, finish));
     offset = finish;
   }
   return invalid();
+}
+
+/** JFIF APP0 length field without a thumbnail: 2 (length) + 5 ('JFIF\0') + 2 (version) + 1 (units) + 4 (densities) + 2 (thumbnail size). */
+const JFIF_HEADER_LENGTH = 16;
+const JFIF_IDENTIFIER = [0x4a, 0x46, 0x49, 0x46, 0x00];
+
+function isJfifIdentifier(bytes: Uint8Array, at: number): boolean {
+  return JFIF_IDENTIFIER.every((value, i) => bytes[at + i] === value);
+}
+
+/** The APP0 JFIF segment at `offset` with Xthumbnail and Ythumbnail set to 0 and the thumbnail bytes dropped. */
+function jfifWithoutThumbnail(bytes: Uint8Array, offset: number): Uint8Array {
+  const segment = new Uint8Array(2 + JFIF_HEADER_LENGTH);
+  // Marker (2), length (2), identifier, version, units and densities: the first 16 bytes; the thumbnail size is zeroed.
+  segment.set(bytes.subarray(offset, offset + 16));
+  segment[2] = 0;
+  segment[3] = JFIF_HEADER_LENGTH;
+  segment[16] = 0;
+  segment[17] = 0;
+  return segment;
 }
 
 function stripPng(bytes: Uint8Array): Uint8Array {
