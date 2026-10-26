@@ -17,7 +17,7 @@ page is implemented: each item is waiting for a decision.
 - The final verification at that commit is clean: both TypeScript checks and ESLint pass, the full suite has 8277
   passing tests and 94 failures that are all sandbox or load-timeout failures, and every flag-matrix row is at its
   recorded result or better (WAVE_A_ON_MAIN.md section 6).
-- 17 decisions are open (section 2). Five of them block the merge: (a), (i), (o), (p) and (q). The others block a
+- 17 decisions are open (section 2). Five of them blocked the merge: (a), (i), (o), (p) and (q); all five were settled on 26 Oct 2026 (see section 1). The others block a
   specific flag or a later wiring step.
 - No critical, high or medium finding is open. The last QA round left 25 low findings: 5 are folded into decisions
   here ((f), (g), (j), (p), (q)), 3 were record corrections made with this page, and 17 are engineering follow-ups
@@ -25,16 +25,19 @@ page is implemented: each item is waiting for a decision.
 
 ## 1. Base-behaviour changes that need sign-off before the merge
 
+**Sign-off, 26 Oct 2026.** Reza signed off B1 to B5 as recommended (decisions (a), (p), (i), (q) accepted; B5 acknowledged). Decision (o) is settled for future commits: they carry `Co-Authored-By: Claude Fable 5.1`; merged history stays mixed. With that, nothing in this section blocks the pull request to `main`; the remaining decisions block individual flags or wiring steps only.
+
+
 "Base behaviour" is what the runtime does with every wave A flag unset. The rule for this branch is that it matches
 `main` `7224f40` exactly. These changes break that rule. Each is either signed off or reverted before the merge.
 
 | # | Change with every flag unset | Why it was made | Decision |
 |---|---|---|---|
-| B1 | `PUT /api/telegram/payments` is deleted, and `POST` needs a Firebase ID token. Seven of main's tests were removed for it. `POST` also rejects a price id that is not an own property of the Telegram price table (H3). | `PUT` was an unauthenticated writer of paid entitlements. Telegram never calls `PUT`. | (a) |
-| B2 | The legacy Telegram webhook (`/api/telegram/webhook`, a different route from B1) declines pre-checkout queries that do not match the price table. It grants an entitlement only for a known price id at its exact USD amount, with tier and duration from the table. It logs fixed codes instead of update bodies. Every Bot API call has an 8 s deadline. | A forged or under-priced `successful_payment` could grant Max for 365 days. Update bodies held personal data. A hung Bot API call held the request open. | (p), new |
-| B3 | The gateway's group-memory and relationship-observation gate (`NO_MEMORY`) uses the shared negation rule `negatedMemoryRequest`. It is a strict superset of main's `do not / don't` + `remember / save / store` rule. Since H4 it also matches Persian text after folding tatweel, U+0649, presentation forms and Arabic yeh/kaf. | Main's rule missed real refusals such as "I don't want you to remember this", "never save this" and the Persian forms. The change only ever withholds memory. | (i) |
-| B4 | With only `VOICEPRINT_KEY` set (no flag), a voiceprint sweep runs at boot and daily. It deletes templates older than 365 days and those of people who left the org. Main wired only status and delete for that case. | It matches plan 4.3 (delete on leaving, 12 months), and it keeps a rollback of `STUDIO_VOICE_RECOGNITION` from stranding biometric templates. | (q), new |
-| B5 | Erasure and retention sweeps run whatever the flags are: a deleted memory erases the supersede notices that name it; a rights erasure erases the person's notices; the `vox_audit` 12-month sweep and the decision-log 90-day sweep run at startup and daily. None of them creates a file or collection, so on a deployment that never turned a flag on they do nothing. | A flag rollback must not strand rows written while the flag was on. | Acknowledge with (f) |
+| B1 | `PUT /api/telegram/payments` is deleted, and `POST` needs a Firebase ID token. Seven of main's tests were removed for it. `POST` also rejects a price id that is not an own property of the Telegram price table (H3). | `PUT` was an unauthenticated writer of paid entitlements. Telegram never calls `PUT`. | (a): **signed off by Reza, 26 Oct 2026** |
+| B2 | The legacy Telegram webhook (`/api/telegram/webhook`, a different route from B1) declines pre-checkout queries that do not match the price table. It grants an entitlement only for a known price id at its exact USD amount, with tier and duration from the table. It logs fixed codes instead of update bodies. Every Bot API call has an 8 s deadline. | A forged or under-priced `successful_payment` could grant Max for 365 days. Update bodies held personal data. A hung Bot API call held the request open. | (p): **signed off by Reza, 26 Oct 2026** |
+| B3 | The gateway's group-memory and relationship-observation gate (`NO_MEMORY`) uses the shared negation rule `negatedMemoryRequest`. It is a strict superset of main's `do not / don't` + `remember / save / store` rule. Since H4 it also matches Persian text after folding tatweel, U+0649, presentation forms and Arabic yeh/kaf. | Main's rule missed real refusals such as "I don't want you to remember this", "never save this" and the Persian forms. The change only ever withholds memory. | (i): **signed off by Reza, 26 Oct 2026** |
+| B4 | With only `VOICEPRINT_KEY` set (no flag), a voiceprint sweep runs at boot and daily. It deletes templates older than 365 days and those of people who left the org. Main wired only status and delete for that case. | It matches plan 4.3 (delete on leaving, 12 months), and it keeps a rollback of `STUDIO_VOICE_RECOGNITION` from stranding biometric templates. | (q): **signed off by Reza, 26 Oct 2026** |
+| B5 | Erasure and retention sweeps run whatever the flags are: a deleted memory erases the supersede notices that name it; a rights erasure erases the person's notices; the `vox_audit` 12-month sweep and the decision-log 90-day sweep run at startup and daily. None of them creates a file or collection, so on a deployment that never turned a flag on they do nothing. | A flag rollback must not strand rows written while the flag was on. | **acknowledged by Reza, 26 Oct 2026**; the retention periods stay under (f) |
 
 Not exceptions, recorded so that nobody looks for them:
 
