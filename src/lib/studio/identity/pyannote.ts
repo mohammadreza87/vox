@@ -23,6 +23,31 @@ const POLL_INTERVAL_MS = 300;
 const UPLOAD_CACHE_MS = 10 * 60_000;
 const MAX_VOICEPRINT_CHARS = 20_000;
 const MAX_CANDIDATES = 50;
+/** Deadline of one shared upload (media/input plus the PUT), independent of any caller's signal. */
+export const UPLOAD_TIMEOUT_MS = 30_000;
+
+/**
+ * Settles with `shared` unless `signal` aborts first; then rejects only this caller with
+ * VoiceprintProviderError('aborted'). `shared` itself is never cancelled here.
+ */
+export function raceSignal<T>(shared: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(new VoiceprintProviderError('aborted'));
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(new VoiceprintProviderError('aborted'));
+    signal.addEventListener('abort', onAbort, { once: true });
+    shared.then(value => { signal.removeEventListener('abort', onAbort); resolve(value); },
+      error => { signal.removeEventListener('abort', onAbort); reject(error); });
+  });
+}
+
+interface SharedUpload {
+  key: Promise<string>;
+  expiresAt: number;
+  /** Aborted when every caller waiting on an unsettled upload has gone, so a withdrawal still stops the bytes. */
+  controller: AbortController;
+  waiters: number;
+  settled: boolean;
+}
 
 type Json = Record<string, unknown>;
 const isObject = (value: unknown): value is Json => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -41,7 +66,7 @@ export class PyannoteVoiceprintProvider implements VoiceprintProvider {
   private readonly base: string;
   private readonly fetchImpl: typeof fetch;
   /** sha256(bytes) -> media key. Only the key and digest are cached, never the bytes. */
-  private readonly uploads = new Map<string, { key: Promise<string>; expiresAt: number }>();
+  private readonly uploads = new Map<string, SharedUpload>();
 
   constructor(o: { apiKey: string; baseUrl?: string; fetch?: typeof fetch }) {
     if (!o.apiKey?.trim()) throw new Error('PYANNOTE_API_KEY is required');
@@ -86,13 +111,42 @@ export class PyannoteVoiceprintProvider implements VoiceprintProvider {
     return this.api(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, signal);
   }
 
-  /** One upload per distinct audio for 10 minutes, so diarize and identify on the same note share it. */
+  /**
+   * One upload per distinct audio for 10 minutes, so diarize and identify on the same note share it. The shared
+   * upload runs on its own signal (UPLOAD_TIMEOUT_MS, plus an abort once no caller is left waiting), never on the
+   * first caller's: each caller awaits it through raceSignal, so one caller's abort rejects only that caller. A
+   * rejected upload is evicted, so the next caller starts a fresh one.
+   */
   private upload(bytes: Uint8Array, signal: AbortSignal): Promise<string> {
+    if (signal.aborted) return Promise.reject(new VoiceprintProviderError('aborted'));
     const digest = createHash('sha256').update(bytes).digest('hex');
     const now = Date.now();
     for (const [k, v] of this.uploads) if (v.expiresAt <= now) this.uploads.delete(k);
-    const hit = this.uploads.get(digest);
-    if (hit) return hit.key;
+    let entry = this.uploads.get(digest);
+    // An unsettled upload whose callers all left is already cancelled: never join it.
+    if (!entry || (!entry.settled && entry.controller.signal.aborted)) entry = this.startUpload(digest, bytes, now);
+    const shared = entry;
+    if (shared.settled) return raceSignal(shared.key, signal);
+    shared.waiters++;
+    let left = false;
+    const leave = () => {
+      if (left) return;
+      left = true;
+      signal.removeEventListener('abort', leave);
+      shared.waiters--;
+      if (!shared.settled && shared.waiters <= 0) shared.controller.abort();
+    };
+    signal.addEventListener('abort', leave, { once: true });
+    const raced = raceSignal(shared.key, signal);
+    // A caller that got its answer is no longer waiting: a later abort of its signal must not count again.
+    const answered = () => { if (!left) { left = true; signal.removeEventListener('abort', leave); } };
+    raced.then(answered, answered);
+    return raced;
+  }
+
+  private startUpload(digest: string, bytes: Uint8Array, now: number): SharedUpload {
+    const controller = new AbortController();
+    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(UPLOAD_TIMEOUT_MS)]);
     const body = new Uint8Array(bytes.byteLength);
     body.set(bytes);
     const key = (async () => {
@@ -110,9 +164,13 @@ export class PyannoteVoiceprintProvider implements VoiceprintProvider {
         body.fill(0);
       }
     })();
-    this.uploads.set(digest, { key, expiresAt: now + UPLOAD_CACHE_MS });
-    key.catch(() => { if (this.uploads.get(digest)?.key === key) this.uploads.delete(digest); });
-    return key;
+    const entry: SharedUpload = { key, expiresAt: now + UPLOAD_CACHE_MS, controller, waiters: 0, settled: false };
+    this.uploads.set(digest, entry);
+    key.then(() => { entry.settled = true; }, () => {
+      entry.settled = true;
+      if (this.uploads.get(digest) === entry) this.uploads.delete(digest);
+    });
+    return entry;
   }
 
   private async job(path: string, body: Json, signal: AbortSignal): Promise<unknown> {

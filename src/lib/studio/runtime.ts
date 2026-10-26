@@ -529,18 +529,20 @@ async function create(): Promise<Studio> {
       // S11L: with VOICEPRINT_KEY unset nothing is wired (base behaviour). When the local voice
       // engine (c2c0bee) is selected the voiceprints see STUDIO_VOICE_RECOGNITION='0' and a
       // constant-off flag, so two biometric engines never run at once.
-      const { createStudioVoiceprints } = await import('./identity');
-      const voiceprints = await createStudioVoiceprints({ env: localVoice.selected ? { ...env, STUDIO_VOICE_RECOGNITION: '0' } : env,
+      const voiceprintsModule = await import('./identity');
+      const voiceprints = await voiceprintsModule.createStudioVoiceprints({ env: localVoice.selected ? { ...env, STUDIO_VOICE_RECOGNITION: '0' } : env,
         ...(localVoice.selected ? { flags: () => ({ voiceRecognition: false }) } : {}),
         storage: config.storage === 'firestore' ? 'firestore' : 'file', production: config.production, dataDir: config.dataDir, orgKey: studio.deps.orgName, adaptive: storage.adaptive!, readState: () => storage.store.read(), eleven: studio.deps.eleven, logger: console });
       if (voiceprints) {
         studio.deps.voiceprints = voiceprints;
-        // Keeps the existing VoiceIdentityService invalidation and adds voiceprint deletion.
-        storage.adaptive!.setVoiceIdentityInvalidator(async (input) => {
-          await Promise.all([studio.deps.voiceIdentity!.invalidate(input.telegramId, input.space), voiceprints.invalidate(input.telegramId, input.space)]);
-        });
-        void voiceprints.sweep().catch(() => undefined);
-        if (!localVoice.selected && (await import('../tireh/flags')).tirehFlags().voiceRecognition) void voiceprints.warmSelfEcho().catch(() => undefined);
+        // Keeps the existing VoiceIdentityService invalidation and adds voiceprint deletion; every handler runs even
+        // when the other rejects, then the first rejection is rethrown (main's allSettled semantics).
+        storage.adaptive!.setVoiceIdentityInvalidator(voiceprintsModule.chainVoiceInvalidators(studio.deps.voiceIdentity!, voiceprints));
+        // Now and daily: expired templates and those of people who left are deleted without a restart.
+        voiceprintsModule.startVoiceprintSweep(voiceprints, { onError: c => console.warn(`[vox] voiceprint ${c}`) });
+        if (!localVoice.selected && tirehFlags().voiceRecognition) {
+          void voiceprints.warmSelfEcho().catch(() => console.warn('[vox] voiceprint warm_failed'));
+        }
       }
     }
     studio.deps.observer = new AdaptiveObserverService(storage.adaptive!);
