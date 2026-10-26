@@ -47,7 +47,7 @@ and count. Every `selectMemories` call in `gateway.ts` dispatches on it:
 
 | Path | Change |
 |---|---|
-| `src/lib/tireh/flags.ts` | NEW, byte-identical to the shared contract (sha256 `6b8edcd4…66630`). Not edited by S06. Note (QA F248): changed on `agent-intelligence-wave-a-main` by `97bf549` and `ebc18d9` (`voiceShadow`, `webhookFailClosed`); now sha256 `e398a121…d09`, pinned in `llm-blocks.test.ts` and `llm-blocks.main-lineage.test.ts`. A later hardening change to `flags.ts` moves those pins again; the hash above stays the contract S06 was built against. |
+| `src/lib/tireh/flags.ts` | NEW, byte-identical to the shared contract (sha256 `6b8edcd4…66630`). Not edited by S06. Note (QA F248): changed on `agent-intelligence-wave-a-main` by `97bf549` and `ebc18d9` (`voiceShadow`, `webhookFailClosed`); then sha256 `e398a121…d09`, and since hardening H3 `e94ca83` (`voiceShadow` composed with `voiceRecognition`) `7adeaa35…806740`, pinned in `llm-blocks.test.ts` and `llm-blocks.main-lineage.test.ts`; the hash above stays the contract S06 was built against. |
 | `src/lib/tireh/text/persian.ts` | NEW in H4 hardening: `foldPersian`, `isArabicScriptLetter`, `isLatinLetter`, `clipGraphemes` (see Tokenizer). |
 | `src/lib/tireh/types.ts` | MEMORY section only: `MemorySpace`, `MemoryStatus` after `MemorySensitivity`; the 15 optional v2 fields inside `MemoryRecord` after `confidence`. |
 | `src/lib/tireh/memory/record-v2.ts` | NEW pure helpers: `memoryV2()` defaults view, `contentHash()`, `stripEmbeddingUnlessNormal()`, `DEFAULT_IMPORTANCE`. |

@@ -28,7 +28,7 @@ Nothing is unshifted as a first user message any more.
 ## Files
 
 - `src/lib/tireh/flags.ts`, `src/lib/tireh/llm-content.ts`: shared contract files, byte-identical (sha256 `6b8edcd4…` and `4c83fe24…`).
-  - Note for `flags.ts`: changed on `agent-intelligence-wave-a-main` by `97bf549` and `ebc18d9` (`voiceShadow`, `webhookFailClosed`), so it is now `e398a121…d09`; the pins live in `llm-blocks.test.ts` and `llm-blocks.main-lineage.test.ts`. `6b8edcd4…` stays the contract this step was built against. `llm-content.ts` is unchanged.
+  - Note for `flags.ts`: changed on `agent-intelligence-wave-a-main` by `97bf549` and `ebc18d9` (`voiceShadow`, `webhookFailClosed`), then `e398a121…d09`, and by hardening H3 `e94ca83` (`voiceShadow` composed with `voiceRecognition`), so it is now `7adeaa35…806740`; the pins live in `llm-blocks.test.ts` and `llm-blocks.main-lineage.test.ts`. `6b8edcd4…` stays the contract this step was built against. `llm-content.ts` is unchanged.
 - `src/lib/tireh/llm.ts`:
   - `LLMRequest.system: LLMSystem`, plus `systemTail` and `onMeta`. `LLMMessage extends LLMMessageExtras`.
   - `normalizeTurns` keeps a user turn that only has trailing text, concatenates user `trailingText` on merge and keeps the last `cacheControl`.

@@ -22,8 +22,6 @@ describe('tirehFlags voiceShadow (S11L STUDIO_VOICE_SHADOW)', () => {
   });
 
   // F207, F260: composed with its parent like promptSystemTail and vectorRetrieval.
-  // TODO(H3, integrator): src/lib/studio/__tests__/voiceprint-guests.test.ts stubs only STUDIO_VOICE_SHADOW=1
-  // in three shadow cases; they need STUDIO_VOICE_RECOGNITION=1 as well (not an H3-owned file).
   it('is off without STUDIO_VOICE_RECOGNITION, whatever STUDIO_VOICE_SHADOW says', () => {
     for (const recognition of [undefined, '', '0', 'true']) {
       expect(tirehFlags({ STUDIO_VOICE_RECOGNITION: recognition, STUDIO_VOICE_SHADOW: '1' }).voiceShadow).toBe(false);
