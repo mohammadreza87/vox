@@ -125,6 +125,9 @@ function checkAdaptiveDocument(draft: AdaptiveDocument, accountId: string, now: 
   for (const row of draft.telegramArchives ?? []) {
     const scope = row.state?.scope;
     if (scope && (scope.accountId !== accountId || scope.personId !== draft.personId || scope.agentId !== row.agentId || scope.space !== row.space || scope.containerId !== containerIdFor(accountId, row.space))) throw new Error('Invalid Telegram archive partition');
+    const retired = row.retiredOperation?.scope;
+    if (retired && (retired.accountId !== accountId || retired.personId !== draft.personId || retired.agentId !== row.agentId || retired.space !== row.space || retired.containerId !== containerIdFor(accountId, row.space))) throw new Error('Invalid retired Telegram archive partition');
+    if (row.state && row.retiredOperation && row.state.botId !== row.retiredOperation.botId) throw new Error('Invalid retired Telegram archive bot');
   }
   if (draft.schemaVersion >= 2) {
     if (draft.productPause!.scopes.some(s => s.latest && s.latest.recordedAt > now)) throw new Error('Invalid pause receipt time');

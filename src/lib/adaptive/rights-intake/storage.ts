@@ -88,7 +88,10 @@ export class RightsFileStorage implements AdaptiveStorage {
       catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
         const held = stat(lock);
-        if (!held?.isDirectory() || held.isSymbolicLink()) return unavailable();
+        // The holder may release its lease after mkdir observed EEXIST but
+        // before lstat. Retry acquisition within the same bound; only a
+        // present malformed lock is an integrity failure. Never reclaim it.
+        if (held && (!held.isDirectory() || held.isSymbolicLink())) return unavailable();
         if (Date.now() >= waitUntil) return fail(503, 'rights_storage_busy');
         await new Promise(resolve => setTimeout(resolve, 10));
       }

@@ -13,7 +13,7 @@ export function stripTelegramArchiveForRollback(value: unknown, accountId: strin
   const document = structuredClone(value) as Record<string, unknown>;
   const rows = document.telegramArchives === undefined ? [] : telegramArchivesSchema.parse(document.telegramArchives);
   // A downgrade must not silently discard an accepted event or an uncertain send.
-  if (rows.some(row => row.state && (row.state.pending.length || row.state.operation))) {
+  if (rows.some(row => row.retiredOperation || row.state && (row.state.pending.length || row.state.operation || row.state.publication))) {
     throw new Error('archive_rollback_pending_work');
   }
   const changed = Object.hasOwn(document, 'telegramArchives');

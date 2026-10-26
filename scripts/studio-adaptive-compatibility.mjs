@@ -22,6 +22,7 @@ export const ADAPTIVE_RELEASE_CAPABILITIES = Object.freeze({
   supportedProviderTemplateSchemas: Object.freeze([1]),
   supportedTelegramArchiveSchemas: Object.freeze([1]),
   supportedTelegramArchiveSourceSuppressionVersions: Object.freeze([1]),
+  supportedTelegramArchiveSnapshotPublicationVersions: Object.freeze([1]),
 });
 const fail = () => { throw new Error('Adaptive storage is incompatible with this release; current personalization controls must be preserved.'); };
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -330,6 +331,71 @@ function scanObserver(observer, required, canonicalVersion) {
     }
   }
 }
+const archiveId = value => typeof value === 'string' && value.length > 0 && value.length <= 200;
+function scanArchiveFile(value, head = false) {
+  if (!keys(value, ['fileId', 'digest', 'messageId', ...(head ? ['sequence'] : [])]) || !archiveId(value.fileId) ||
+      !digest(value.digest) || !positive(value.messageId) || head && (!positive(value.sequence) || value.sequence > 128)) fail();
+}
+function scanArchiveScope(value, doc, row) {
+  if (!keys(value, ['accountId', 'personId', 'agentId', 'space', 'containerId']) || value.accountId !== doc.accountId ||
+      value.personId !== doc.personId || value.agentId !== row.agentId || value.space !== row.space ||
+      value.containerId !== `private-tenant:${hashValue(doc.accountId).slice(0, 24)}:${row.space}:private`) fail();
+}
+/** Read only strict control metadata. Source text/chunks are never opened by
+ * release admission, and an omitted marker cannot hide a new nested format. */
+function scanArchivePublication(row, doc, required) {
+  const marked = Object.hasOwn(row, 'snapshotPublicationVersion');
+  const hasSnapshot = object(row.state) && Object.hasOwn(row.state, 'snapshot');
+  const hasPublication = object(row.state) && Object.hasOwn(row.state, 'publication');
+  const hasRetired = Object.hasOwn(row, 'retiredOperation');
+  if ((marked && row.snapshotPublicationVersion !== 1) || ((hasSnapshot || hasPublication || hasRetired) && !marked)) fail();
+  if (!marked) return;
+  required.telegramArchiveSnapshotPublicationVersion = 1;
+  if (hasSnapshot || hasPublication) {
+    scanArchiveScope(row.state.scope, doc, row);
+    if (!positive(row.state.botId)) fail();
+  }
+  if (hasSnapshot) {
+    const s = row.state.snapshot;
+    if (!keys(s, ['version', 'manifest', 'baseHead', 'receiptCount', 'receiptDigest', 'sourceStateDigest', 'planDigest', 'chunks']) || s.version !== 1 ||
+        !positive(s.receiptCount) || s.receiptCount > 1024 || !positive(s.chunks) || s.chunks > 16 ||
+        !digest(s.receiptDigest) || !digest(s.sourceStateDigest) || !digest(s.planDigest)) fail();
+    scanArchiveFile(s.manifest); scanArchiveFile(s.baseHead, true);
+  }
+  if (hasPublication) {
+    const p = row.state.publication;
+    if (!object(p)) fail();
+    if (hasSnapshot || row.state.operation || !keys(p, ['id', 'stage', 'authorityRevision', 'authorityDigest', 'sourceRevision', 'sourceStateDigest', 'sourceHead',
+      'receiptCount', 'receiptDigest', 'createdAt', 'validUntil', 'planJson', 'planDigest', 'chunkRefs', 'ordinal', 'budgetBytes', 'reservation', ...(Object.hasOwn(p, 'manifest') ? ['manifest'] : [])]) ||
+      !archiveId(p.id) || !['prepared', 'chunk_sending', 'chunk_uploaded', 'manifest_sending', 'manifest_uploaded', 'ready', 'unknown'].includes(p.stage) ||
+      !archiveId(p.authorityRevision) || !digest(p.authorityDigest) || !integer(p.sourceRevision) || !digest(p.sourceStateDigest) ||
+      !positive(p.receiptCount) || p.receiptCount > 1024 || !digest(p.receiptDigest) || !integer(p.createdAt) || !integer(p.validUntil) || p.validUntil <= p.createdAt ||
+      typeof p.planJson !== 'string' || !p.planJson.length || Buffer.byteLength(p.planJson) > 128 * 1024 || !digest(p.planDigest) ||
+      !Array.isArray(p.chunkRefs) || p.chunkRefs.length > 16 || !integer(p.ordinal) || p.ordinal > 16 ||
+      !positive(p.budgetBytes) || p.budgetBytes > 192 * 1024 || typeof p.reservation !== 'string' || Buffer.byteLength(p.reservation) > 192 * 1024 || !/^[\x20-\x7e]*$/.test(p.reservation)) fail();
+    scanArchiveFile(p.sourceHead, true); p.chunkRefs.forEach(ref => scanArchiveFile(ref));
+    if (p.manifest) scanArchiveFile(p.manifest);
+    let plan; try { plan = JSON.parse(p.planJson); } catch { fail(); }
+    if (!keys(plan, ['schemaVersion', 'kind', 'scope', 'botId', 'createdAt', 'sourceRevision', 'authorityRevision', 'authorityExpiresAt', 'suppressedEventIds',
+      'sourceHead', 'stateDigest', 'authorityDigest', 'receiptCount', 'sourceFiles', 'sourceBytes', 'chunks']) || plan.schemaVersion !== 1 || plan.kind !== 'snapshot-plan' ||
+      !positive(plan.botId) || !integer(plan.createdAt) || !integer(plan.sourceRevision) || !archiveId(plan.authorityRevision) || !integer(plan.authorityExpiresAt) ||
+      !Array.isArray(plan.suppressedEventIds) || plan.suppressedEventIds.length > 1024 || !plan.suppressedEventIds.every(archiveId) ||
+      !digest(plan.stateDigest) || !digest(plan.authorityDigest) || !positive(plan.receiptCount) || plan.receiptCount > 1024 ||
+      !integer(plan.sourceFiles) || plan.sourceFiles > 256 || !integer(plan.sourceBytes) || plan.sourceBytes > 32 * 1024 * 1024 ||
+      !Array.isArray(plan.chunks) || !plan.chunks.length || plan.chunks.length > 16) fail();
+    scanArchiveScope(plan.scope, doc, row); scanArchiveFile(plan.sourceHead, true);
+    for (const ref of plan.chunks) if (!keys(ref, ['ordinal', 'digest', 'bytes', 'entries']) || !integer(ref.ordinal) || ref.ordinal > 15 ||
+      !digest(ref.digest) || !positive(ref.bytes) || ref.bytes > 128 * 1024 || !positive(ref.entries) || ref.entries > 1024) fail();
+  }
+  if (hasRetired) {
+    const r = row.retiredOperation;
+    if (!keys(r, ['kind', 'id', 'scope', 'botId', 'createdAt', 'stage', 'files']) || !['checkpoint', 'snapshot'].includes(r.kind) ||
+        !archiveId(r.id) || !positive(r.botId) || !integer(r.createdAt) || r.stage !== 'unknown' || !Array.isArray(r.files) || r.files.length > (r.kind === 'checkpoint' ? 1 : 17)) fail();
+    scanArchiveScope(r.scope, doc, row); r.files.forEach(ref => scanArchiveFile(ref));
+    if (row.state?.operation || hasPublication) fail();
+    if (row.state && row.state.botId !== r.botId) fail();
+  }
+}
 function scanCanonical(doc, key, version, required) {
   if (!object(doc) || doc.schemaVersion !== version || !account(doc.accountId) || hash(doc.accountId) !== key ||
       doc.personId !== `account-profile:${hashValue(doc.accountId).slice(0, 32)}` || !positive(doc.revision) || !integer(doc.createdAt) || !integer(doc.updatedAt) || doc.updatedAt < doc.createdAt) fail();
@@ -340,7 +406,7 @@ function scanCanonical(doc, key, version, required) {
     if (!Array.isArray(doc.telegramArchives) || doc.telegramArchives.length > 4) fail();
     const seen = new Set();
     for (const row of doc.telegramArchives) {
-      if (!keys(row, ['agentId', 'space', 'enabled', 'generation', 'clearedAt', 'index', ...(Object.hasOwn(row, 'state') ? ['state'] : []), ...(Object.hasOwn(row, 'authorityStamp') ? ['authorityStamp'] : []), ...(Object.hasOwn(row, 'sourceSuppressionVersion') ? ['sourceSuppressionVersion'] : [])]) ||
+      if (!keys(row, ['agentId', 'space', 'enabled', 'generation', 'clearedAt', 'index', ...(Object.hasOwn(row, 'state') ? ['state'] : []), ...(Object.hasOwn(row, 'authorityStamp') ? ['authorityStamp'] : []), ...(Object.hasOwn(row, 'sourceSuppressionVersion') ? ['sourceSuppressionVersion'] : []), ...(Object.hasOwn(row, 'snapshotPublicationVersion') ? ['snapshotPublicationVersion'] : []), ...(Object.hasOwn(row, 'retiredOperation') ? ['retiredOperation'] : [])]) ||
           typeof row.agentId !== 'string' || !row.agentId.length || row.agentId.length > 200 || !['personal', 'work'].includes(row.space) ||
           typeof row.enabled !== 'boolean' || !integer(row.generation) || !integer(row.clearedAt) || !Array.isArray(row.index) || row.index.length > 32 ||
           Object.hasOwn(row, 'authorityStamp') && !digest(row.authorityStamp) ||
@@ -355,6 +421,7 @@ function scanCanonical(doc, key, version, required) {
         }
       }
       if (suppressionVersion) required.telegramArchiveSourceSuppressionVersion = 1;
+      scanArchivePublication(row, doc, required);
       const scope = JSON.stringify([row.agentId, row.space]); if (seen.has(scope)) fail(); seen.add(scope);
     }
     required.telegramArchiveSchema = 1;
@@ -717,6 +784,7 @@ export function assertReleaseAdaptiveCompatibility(env, manifest) {
     ['supportedProviderTemplateSchemas', 'providerTemplateSchema', [1]],
     ['supportedTelegramArchiveSchemas', 'telegramArchiveSchema', [1]],
     ['supportedTelegramArchiveSourceSuppressionVersions', 'telegramArchiveSourceSuppressionVersion', [1]],
+    ['supportedTelegramArchiveSnapshotPublicationVersions', 'telegramArchiveSnapshotPublicationVersion', [1]],
   ]) {
     const versions = Object.hasOwn(supported, field) ? supported[field] : ['supportedRightsLedgerVersions', 'supportedImprovementWorkflowSchemas'].includes(field) ? [1] : [];
     if (!Array.isArray(versions) || versions.length > allowed.length || new Set(versions).size !== versions.length || versions.some(v => !allowed.includes(v)) || required[requiredKey] !== undefined && !versions.includes(required[requiredKey])) fail();

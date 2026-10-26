@@ -97,12 +97,16 @@ export const newCardId = () => `g${randomBytes(9).toString('base64url').replace(
  * agent in that group and re-checks the person's membership with getChatMember.
  */
 const LAUNCH = /^p_([A-Za-z0-9_-]{8})_([A-Za-z0-9_-]{16,53})$/;
+const AGENT_SHORT = /^[A-Za-z0-9_-]{8}$/;
 /** A group's join code as the DM web_app button carries it (`?j=`). */
 export const JOIN_CODE = /^[A-Za-z0-9_-]{16,53}$/;
 export const agentShortCode = (secret: string, agentId: string) => createHmac('sha256', secret).update(`pet-launch:${agentId}`).digest('base64url').slice(0, 8);
 export const sameShort = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 
 export function petLaunchCode(short: string, joinCode: string): string {
+  // Validate the supplied boundary before serialization: an underscore inside
+  // either component must never shift characters into the other component.
+  if (!AGENT_SHORT.test(short) || !JOIN_CODE.test(joinCode)) throw new Error('invalid_launch_code');
   const code = `p_${short}_${joinCode}`;
   if (code.length > 64 || !LAUNCH.test(code)) throw new Error('invalid_launch_code');
   return code;
