@@ -144,13 +144,25 @@ describe('FILE Telegram user-message archive runtime',()=>{
       }
       expect(Buffer.byteLength(JSON.stringify(state))).toBeGreaterThan(MAX_ARCHIVE_STATE_BYTES-500);d.revision++;
     });
+    const before=await x.adaptive.withAccountView(ID.alice,d=>structuredClone(d.telegramArchives![0]));
     await x.archive.invalidateEditedMessage(x.hired.agent.id,x.message('edit',10));x.restart();
     const row=await x.adaptive.withAccountView(ID.alice,d=>d.telegramArchives![0]);
-    expect(row.state).toMatchObject({pending:[],receipts:[],operation:{id:'unknown-at-capacity',stage:'unknown'}});
-    expect(row.state!.head).toBeUndefined();expect(row.sourceSuppressionVersion).toBeUndefined();expect(row.index).toEqual([]);
+    expect(row.state).toBeUndefined();
+    expect(row.retiredOperation).toEqual({kind:'checkpoint',id:'unknown-at-capacity',stage:'unknown',scope,
+      botId:before.state!.botId,createdAt:x.h.clock.now.getTime(),files:[]});
+    expect(row.snapshotPublicationVersion).toBe(1);
+    expect(row.sourceSuppressionVersion).toBeUndefined();expect(row.index).toEqual([]);
+    expect(JSON.stringify(row)).not.toContain('FULL_LEDGER_SOURCE');
+    expect(JSON.stringify(row)).not.toContain('UNRELATED_BEFORE_CAPACITY_RESET');
     expect(row.clearedAt).toBe(x.h.clock.now.getTime());
     expect(await x.adaptive.withAccountView(ID.alice,d=>d.events.some(e=>e.kind==='archive_source_reset'&&e.resultId==='source_suppression_capacity'))).toBe(true);
-    expect(await x.archive.archive(scope).checkpoint(scope,{force:true})).toEqual({status:'unknown'});
+    const sent=vi.mocked(x.transport.upload).mock.calls.length;
+    expect((await x.archive.archive(scope).checkpoint(scope,{force:true})).status).not.toBe('recoverable');
+    expect(x.transport.upload).toHaveBeenCalledTimes(sent);
+    expect((await x.adaptive.withAccountView(ID.alice,d=>d.telegramArchives![0])).retiredOperation).toEqual(row.retiredOperation);
+    await x.command('status');
+    const token=x.h.studio.botToken(x.hired.agent);expect(token).toBeTruthy();
+    expect(x.h.botFor(token!).sendMessage.mock.calls.some(([,text])=>text.includes('uncertain'))).toBe(true);
     await x.command('retry-unknown confirm-duplicate-copies');
     x.h.clock.now=new Date(x.h.clock.now.getTime()+2000);await x.archive.capture(x.hired.agent.id,x.message('NEW_AFTER_CAPACITY_RESET',12),12);
     await x.archive.archive(scope).checkpoint(scope,{force:true});
