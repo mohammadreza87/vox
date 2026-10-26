@@ -9,6 +9,12 @@ import {
 import { paidPlan } from '@/lib/telegram/prices';
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+/**
+ * Deadline for each Telegram Bot API call. Telegram needs the pre-checkout answer within 10 seconds, so a hung
+ * call is abandoned before then; the rejection reaches the existing content-free error path and the route still
+ * answers 200.
+ */
+const TELEGRAM_API_TIMEOUT_MS = 8_000;
 
 /** Content-free diagnostics: a fixed code and the update kind, never the update body. */
 function updateKind(body: Record<string, unknown> | null): string {
@@ -61,6 +67,7 @@ export async function POST(request: NextRequest) {
           body: JSON.stringify(valid
             ? { pre_checkout_query_id: query.id, ok: true }
             : { pre_checkout_query_id: query.id, ok: false, error_message: 'This invoice is no longer valid. Please start the purchase again.' }),
+          signal: AbortSignal.timeout(TELEGRAM_API_TIMEOUT_MS),
         }
       );
 
@@ -120,6 +127,7 @@ export async function POST(request: NextRequest) {
             text: `🎉 Thank you for subscribing to Vox ${tier.charAt(0).toUpperCase() + tier.slice(1)}!\n\nYour subscription is now active and will expire on ${expiresAt.toLocaleDateString()}.\n\nEnjoy your premium features!`,
             parse_mode: 'HTML',
           }),
+          signal: AbortSignal.timeout(TELEGRAM_API_TIMEOUT_MS),
         }
       );
 
@@ -152,6 +160,7 @@ export async function POST(request: NextRequest) {
                 ]]
               }
             }),
+            signal: AbortSignal.timeout(TELEGRAM_API_TIMEOUT_MS),
           }
         );
       }
