@@ -16,7 +16,7 @@ import { wireSharingAudit } from '../runtime';
 import type { Studio } from '../service';
 
 type Doc = Record<string, unknown>;
-type Op = '==' | '<' | '>=' | 'array-contains';
+type Op = '==' | '<' | '>=' | 'array-contains' | 'in';
 
 /** Just the Firestore surface the audit and notice stores use. */
 function fakeFirestore(options: { failNoticeReads?: boolean } = {}) {
@@ -29,6 +29,10 @@ function fakeFirestore(options: { failNoticeReads?: boolean } = {}) {
       case '<': return at(doc[field]) < at(value);
       case '>=': return at(doc[field]) >= at(value);
       case 'array-contains': return Array.isArray(doc[field]) && (doc[field] as unknown[]).includes(value);
+      // The notice erasure queries `in` with at most 30 ids (Firestore's limit).
+      case 'in':
+        if (!Array.isArray(value) || value.length === 0 || value.length > 30) throw new Error('invalid in filter');
+        return (value as unknown[]).includes(doc[field]);
     }
   };
   const ref = (path: string) => ({
