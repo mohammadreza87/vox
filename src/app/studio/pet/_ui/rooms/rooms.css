@@ -2,16 +2,24 @@
 .pet-soon{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;height:var(--pet-toy);text-align:center;animation:petFade .3s var(--ease-sine)}
 .pet-soon b{font:600 var(--pet-fs)/var(--pet-lh) var(--f-display)}
 .pet-soon span{font-size:13px;line-height:18px;color:var(--text-2)}
-/* Wave B rooms (Play, Bedroom, Life Book): the verbs sit in the dock zone, a game plays over the stage. */
-.pet-verbs { display: flex; gap: var(--pet-gap); justify-content: center; align-items: center; animation: petFade .3s var(--ease-sine); }
-.pet-verb { position: relative; display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: var(--pet-toy); padding: 0; border: 0; background: none; font-size: 12px; line-height: 16px; color: var(--text-2); }
+/* The dock slot (P-05): a room's verbs always fill exactly the slot under the rail (--pet-toy tall: a toy-sized circle
+   and one 16 px label line), one column per verb on the Home toys' pitch, centred inside the 16 px gutters (P-06), so
+   the rail sits at the same height in every room. Anything taller is a tray: it opens upward above the rail, out of
+   the flow (the Closet's grid, the Life Book's spread, a round's pips). A game plays over the stage. */
+.pet-verbs { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, calc(var(--pet-toy) + var(--pet-gap))); justify-content: center; align-items: center; height: var(--pet-toy); animation: petFade .3s var(--ease-sine); }
+.pet-verb { position: relative; display: flex; flex-direction: column; align-items: center; min-width: 0; padding: 0; border: 0; background: none; font-size: 12px; line-height: 16px; color: var(--text-2); }
+.pet-verb > span { max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.pet-verb:is([aria-pressed="true"], [aria-selected="true"]) > span { color: var(--text); }
 .pet-verb > i { display: grid; place-items: center; width: calc(var(--pet-toy) - 16px); height: calc(var(--pet-toy) - 16px); border-radius: 50%; background: #ffffff12; box-shadow: inset 0 -3px 0 #0003, inset 0 1px 0 #ffffff1a; font-style: normal; transition: transform .18s var(--ease-over); }
 .pet-verb:active > i { transform: scale(.9); }
 .pet-verb svg { width: 26px; height: 26px; }
-.pet-verb[aria-pressed="true"] > i { background: var(--volt); color: var(--on-volt); }
+.pet-verb:is([aria-pressed="true"], [aria-selected="true"]) > i { background: var(--volt); color: var(--on-volt); }
 .pet-verb:disabled, .pet-verb[data-tired] { opacity: .5; }
 .pet-root[data-h=peek] .pet-verb > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
-.pet-link { border: 0; background: none; color: var(--volt); font-size: 13px; padding: 10px 4px; }
+.pet-link { border: 0; background: none; color: var(--volt); font-size: 13px; padding: 10px 4px; white-space: nowrap; }
+/* Guess's talk chips: at most two short rows inside the slot */
+.pet-links { display: flex; flex-wrap: wrap; justify-content: center; align-content: center; gap: 0 14px; height: var(--pet-toy); animation: petFade .3s var(--ease-sine); }
+.pet-links .pet-link { padding: 7px 4px; }
 .pet-field { position: absolute; inset: 0; z-index: 3; touch-action: none; }
 .pet-star { position: absolute; left: 0; top: 0; width: 26px; height: 26px; margin: -13px 0 0 -13px; background: #FFE27A; will-change: transform;
   clip-path: polygon(50% 0, 62% 35%, 100% 38%, 70% 60%, 80% 100%, 50% 77%, 20% 100%, 30% 60%, 0 38%, 38% 35%); }
@@ -21,27 +29,10 @@
 .pet-pips i[data-on] { background: var(--volt); transform: scale(1.15); }
 .pet-lamp { position: absolute; inset: 0; z-index: 1; background: #04060A; opacity: 0; pointer-events: none; transition: opacity .9s var(--ease-sine); }
 .pet-lamp[data-on] { opacity: .38; }
-.pet-book { display: flex; flex-direction: column; align-items: stretch; gap: 6px; width: 100%; max-width: 420px; animation: petFade .3s var(--ease-sine); }
-.pet-tabs { display: flex; gap: 4px; justify-content: center; }
-.pet-tabs button { min-height: 32px; padding: 4px 10px; border: 0; border-radius: 999px; background: none; color: var(--text-2); font-size: 13px; }
-.pet-tabs button[aria-selected="true"] { background: #ffffff1a; color: var(--text); }
-.pet-page { display: flex; align-items: center; gap: 4px; min-height: 76px; padding: 8px 6px; border-radius: 18px; background: #ffffff0d; }
-.pet-page > div { flex: 1; text-align: center; }
-.pet-page b { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-weight: 600; }
-.pet-page small { display: block; margin-top: 2px; color: var(--text-2); font-size: 12px; line-height: 16px; }
-.pet-page[data-unlit] b { font-weight: 500; color: var(--text-2); }
-.pet-page > button { width: 36px; height: 44px; border: 0; background: none; color: var(--text-2); font-size: 20px; }
-.pet-page > button:disabled { visibility: hidden; }
-.pet-root[dir=rtl] .pet-page > button { transform: scaleX(-1); }
-.pet-book .pet-dots { display: flex; gap: 5px; justify-content: center; }
-.pet-book .pet-dots i { width: 6px; height: 6px; border-radius: 50%; background: #ffffff33; }
-.pet-book .pet-dots i[data-on] { background: var(--text); }
-.pet-root[data-h=peek] .pet-book small { display: none; }
-.pet-root[data-tier="reduced"] :is(.pet-verbs, .pet-book) { animation-duration: .15s; }
-.pet-verbs > .pet-hint { position: static; transform: none; white-space: normal; }
+.pet-root[data-tier="reduced"] :is(.pet-verbs, .pet-links, .pet-tray, .pet-zen) { animation-duration: .15s; }
 /* Wave C rooms (Garden, Closet, Guess): the pot and rain over the stage, a two-by-three closet grid, Guess's chips. */
 .pet-chip { position: absolute; left: 50%; bottom: calc(100% + 6px); transform: translateX(-50%); padding: 5px 12px; border-radius: 999px; background: #ffffff1f; font-size: 13px; white-space: nowrap; animation: petFade .3s var(--ease-out); pointer-events: none; }
-.pet-verbs, .pet-closet { position: relative; }
+.pet-verbs { position: relative; }
 .pet-garden { position: absolute; z-index: 2; width: 64px; height: 72px; margin-left: -32px; pointer-events: none; }
 .pet-pot { position: absolute; left: 12px; right: 12px; bottom: 0; height: 26px; border-radius: 4px 4px 12px 12px; background: #B5674A; box-shadow: inset 0 4px 0 #0002; }
 .pet-pot i { position: absolute; left: 50%; bottom: 100%; width: 4px; height: 0; margin-left: -2px; border-radius: 2px; background: #7BC67E; transition: height .8s var(--ease-out); }
@@ -56,22 +47,55 @@
 @keyframes petDrop { from { transform: translateY(0); opacity: 0; } 30% { opacity: 1; } to { transform: translateY(70px); opacity: 0; } }
 .pet-breath-verb[aria-pressed="true"] > i { animation: petBreathVerb 6s var(--ease-sine) infinite; }
 @keyframes petBreathVerb { 50% { transform: scale(1.18); } }
-.pet-closet { display: flex; flex-direction: column; gap: 6px; width: 100%; max-width: 420px; animation: petFade .3s var(--ease-sine); }
-.pet-closet .pet-tabs { flex-wrap: nowrap; }
-.pet-slot { min-height: 32px; padding: 4px 8px; border: 0; border-radius: 999px; background: none; color: var(--text-2); font-size: 12px; }
-.pet-slot[aria-pressed="true"] { color: var(--text); box-shadow: inset 0 -2px 0 var(--volt); }
-.pet-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
-.pet-item { min-height: 40px; padding: 4px 6px; border: 1px solid #ffffff1a; border-radius: 14px; background: #ffffff0d; font-size: 13px; line-height: 16px; }
-.pet-item[aria-pressed="true"] { border-color: var(--volt); background: #d6ff5c1f; }
-.pet-item[data-locked] { border-style: dashed; background: none; color: var(--text-2); }
-.pet-item small { font-size: 11px; line-height: 14px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.pet-closet .pet-dots { display: flex; gap: 5px; justify-content: center; }
-.pet-closet .pet-dots i { width: 6px; height: 6px; border-radius: 50%; background: #ffffff33; }
-.pet-closet .pet-dots i[data-on] { background: var(--text); }
-.pet-guess { display: flex; flex-direction: column; align-items: center; gap: 2px; animation: petFade .3s var(--ease-sine); }
-.pet-guess .pet-verbs { gap: 4px; flex-wrap: wrap; }
 .pet-pips[data-inline] { position: static; transform: none; padding: 4px 10px; }
 .pet-guess-note { color: var(--text-2); font-size: 11px; line-height: 14px; }
-.pet-root[data-h=peek] :is(.pet-guess-note, .pet-closet .pet-dots) { display: none; }
 .pet-root[data-tier="reduced"] :is(.pet-rain i, .pet-breath-verb > i) { animation: none; }
-.pet-page .pet-link { display: block; margin: 0 auto; padding: 4px; }
+/* The tray (P-05): above the rail, anchored to the bottom stack, never in its flow. data-s: a small centred pill. */
+.pet-tray { position: absolute; z-index: 5; left: 16px; right: 16px; bottom: calc(100% + 12px); max-width: 420px; margin: 0 auto; display: flex; flex-direction: column; gap: 6px;
+  padding: 8px; border-radius: 22px; background: #16191Ee8; border: 1px solid #ffffff14; box-shadow: 0 8px 28px #0006; animation: petTray .3s var(--ease-out); }
+.pet-tray[data-s] { left: 50%; right: auto; width: max-content; max-width: calc(100% - 32px); align-items: center; gap: 2px; padding: 6px 16px; border-radius: 999px; text-align: center; transform: translateX(-50%); }
+.pet-tray[data-s] .pet-link { padding: 4px; }
+.pet-tray .pet-hint { position: static; transform: none; white-space: normal; }
+@keyframes petTray { from { opacity: 0; translate: 0 10px; } }
+.pet-tray .pet-dots { display: flex; gap: 5px; justify-content: center; }
+.pet-tray .pet-dots i { width: 6px; height: 6px; border-radius: 50%; background: #ffffff33; }
+.pet-tray .pet-dots i[data-on] { background: var(--text); }
+/* Closet (P-10): the segmented control on its own row, then two rows of three illustrated cells, then the dots */
+.pet-seg { display: flex; padding: 2px; border-radius: 999px; background: #ffffff0d; }
+.pet-seg button { flex: 1; min-width: 0; min-height: 30px; padding: 0 10px; border: 0; border-radius: 999px; background: none; color: var(--text-2); font-size: var(--pet-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pet-seg button[aria-selected="true"] { background: #ffffff1f; color: var(--text); }
+.pet-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: repeat(2, 54px); gap: 6px; }
+.pet-item { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; min-width: 0; padding: 4px; border: 1px solid #ffffff14; border-radius: 16px; background: #ffffff0a; font-size: 12px; line-height: 15px; }
+.pet-item svg { flex: none; width: 28px; height: 28px; }
+.pet-item > span { max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.pet-item[aria-pressed="true"] { border-color: var(--volt); background: #d6ff5c1f; }
+.pet-item[data-locked] { border-style: dashed; background: none; color: var(--text-2); }
+/* a locked keepsake is a soft silhouette (one flat tone, no filter) over how it is earned */
+.pet-item[data-locked] svg { width: 16px; height: 16px; }
+.pet-item[data-locked] svg [fill]:not([fill=none]) { fill: #3A3F47; }
+.pet-item[data-locked] svg [stroke] { stroke: #3A3F47; }
+.pet-item small { max-width: 100%; font-size: 11px; line-height: 12px; text-align: center; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+/* Life Book (P-11): a cream spread, the drawing on the first page and the line on the second, then ‹ dots › */
+.pet-spread { display: flex; align-items: center; gap: 12px; min-height: 88px; padding: 10px 14px; border-radius: 14px; background: #F4EBD9; color: var(--ink); box-shadow: inset 0 0 0 1px #14202c14, 0 3px 0 #D9C9A8; }
+.pet-doodle { flex: none; width: 72px; height: 60px; padding-inline-end: 12px; border-inline-end: 1px solid #14202c26; }
+span.pet-doodle { display: grid; place-items: center; }
+span.pet-doodle svg { width: 40px; height: 40px; }
+.pet-spread > div { flex: 1; min-width: 0; }
+.pet-spread b { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; font: 600 15px/20px var(--f-body); }
+.pet-spread small { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; margin-top: 3px; color: #14202cb3; font-size: 12px; line-height: 16px; }
+.pet-spread[data-unlit] b { font-weight: 500; color: #14202cb3; }
+.pet-nav { display: flex; align-items: center; justify-content: space-between; height: 32px; }
+.pet-nav > button:not(.pet-link) { width: 44px; height: 32px; border: 0; background: none; color: var(--text-2); font-size: 22px; }
+.pet-nav > button:disabled { visibility: hidden; }
+.pet-root[dir=rtl] .pet-nav > button:not(.pet-link) { transform: scaleX(-1); }
+.pet-root[data-h=peek] :is(.pet-spread small, .pet-doodle) { display: none; }
+/* Guess: the pips and the honesty note in the small tray */
+.pet-pips[data-inline] { position: static; transform: none; padding: 4px 0; background: none; }
+.pet-guess-note { color: var(--text-2); font-size: 11px; line-height: 14px; }
+.pet-root[data-h=peek] .pet-guess-note { display: none; }
+/* Play's Zen switch (§4.2, P-06): a top-corner toggle in the Close button's row, on the other side from it (Close is
+   inline-end), so it never meets Close, Starfall's pips or the lit chip under them; mirrored in Persian. 44 px hit. */
+.pet-zen { position: absolute; z-index: 5; top: calc(var(--pet-safe-top,env(safe-area-inset-top,0px)) + 8px); inset-inline-start: max(6px, 50% - 234px); display: flex; align-items: center; gap: 6px; height: 44px; padding: 0 12px;
+  border: 6px solid transparent; border-radius: 22px; background: #ffffff14 padding-box; color: var(--text-2); font-size: 13px; animation: petFade .3s var(--ease-sine); }
+.pet-zen svg { width: 18px; height: 18px; }
+.pet-zen[aria-pressed="true"] { background-color: var(--volt); color: var(--on-volt); }

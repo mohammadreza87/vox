@@ -7,7 +7,9 @@
 import { PRESET_LOOKS } from '@/lib/studio/character';
 import { PetError } from './errors';
 import { applyLocal, openLocal, talkLocal } from './care-local';
-import { applyPlay, newPlay, playView, roomMoment, type PetPlay } from '@/lib/pet/play';
+import { applyPlay, newPlay, playView, type PetPlay } from '@/lib/pet/play';
+import { templateMoments } from '@/lib/pet/growth';
+import { petLang, type PetLang } from './strings';
 import type { CheckinPrefs, PetActionKind, PetApi, PetGrowthView, TalkAction } from './contract';
 import type { CharacterLook, CircleDecisionRequest, PetCare, PetCircle, PetNote, PetPrivateView, PetView, Stage, TalkResponse } from '@/lib/pet/types';
 
@@ -36,19 +38,45 @@ export interface MockOptions {
   /** latency per call in ms (default 260 for care, 1400 for talk) */
   latency?: { care?: number; talk?: number };
   now?: () => number;
+  /** the demo's language (default: the page's, `petLang()`): the name, replies, moments and souvenir follow it */
+  lang?: PetLang;
 }
 
 const DAY = 24 * 60 * 60 * 1000;
-const NAME = 'Mochi';
+/** The demo pet's name per language (P-12): a real agent's name comes from the server and stays bidi-isolated. */
+export const MOCK_NAME: Record<PetLang, string> = { en: 'Mochi', fa: 'موچی' };
 
-const REPLIES = [
-  'That sounds lovely. Tell me more?',
-  'Ooh, I like that idea!',
-  'Hmm, let me think… yes, I think you’re right.',
-  'You always make the clouds feel lighter.',
-  'Ha! That made my day.',
+/**
+ * Canned talk (P-13, P-30): the common openers get an answer that fits them, anything else a light reaction. Persian is
+ * the pet voice (spoken Tehrani, «تو», no digits, no emoji, one «!» at most). Mock only: production replies are the model's.
+ */
+type Canned = { fits: RegExp; en: string; fa: string };
+const OPENERS: Canned[] = [
+  { fits: /how (was|is) your day|how are you|how('s| is) it going|روزت|چطوری|خوبی|حالت/i,
+    en: 'Pretty good! I practised my hop and watched the clouds. How was yours?', fa: 'خوب بود! پرش تمرین کردم و ابرها رو تماشا کردم. روز تو چطور بود؟' },
+  { fits: /what are you (doing|up to)|what's up|چی ?کار می‌?کنی|چه ?کار می‌?کنی/i,
+    en: 'Just floating about and humming a little tune.', fa: 'دارم این‌ور اون‌ور می‌چرخم و یه آهنگ کوچولو زیر لب می‌خونم.' },
+  { fits: /\b(thanks|thank you)\b|مرسی|ممنون|متشکر/i, en: 'Anytime! That made me happy.', fa: 'قابلی نداشت! حسابی خوشحالم کردی.' },
+  { fits: /^\s*(hi|hello|hey|salam)\b|^\s*(سلام|درود)/i, en: 'Hi! I’m so glad you’re here.', fa: 'سلام! چه خوب که اومدی.' },
+  { fits: /[?؟]\s*$/, en: 'Good question! Let’s think about it together.', fa: 'سؤال خوبیه! بیا با هم بهش فکر کنیم.' },
 ];
-const BYE = /\b(bye|goodbye|good night|goodnight|see you|later)\b/i;
+const REPLIES: Record<PetLang, string[]> = {
+  en: ['Ooh, I like that!', 'Tell me more?', 'Ha! That made me smile.', 'Hmm, I think you’re right.'],
+  fa: ['وای، چه فکر خوبی!', 'بیشتر برام تعریف کن؟', 'خنده‌م گرفت!', 'آره، فکر کنم حق با توئه.'],
+};
+const BYE = /\b(bye|goodbye|good night|goodnight|see you|later)\b|خداحافظ|شب[ \u200c]?بخیر/i;
+const SAID: Record<PetLang, { bye: string; saved: string; souvenir: string }> = {
+  en: { bye: 'Bye for now! Come say hi whenever you like.', saved: 'Okay, I saved that note.', souvenir: 'Hi again! I practised my best hop.' },
+  // the souvenir is `say.welcomeBack.3` in the copywriter's words: the pet's own world, never a memory (P-21)
+  fa: { bye: 'فعلاً خداحافظ! هر وقت دلت خواست سر بزن.', saved: 'باشه، یادداشتش کردم.', souvenir: 'سلام! یه پرش حسابی تمرین کردم، ببین!' },
+};
+/** the demo's own growth moments: titles and the first hint are the copywriter's `growth.example.*` in Persian */
+const DEMO_MOMENTS: Record<PetLang, [string, string][]> = {
+  en: [['I learned how you plan a release', 'Tell me how your team plans a release, then say “remember this”'],
+    ['I wrote our first weekly report together', 'Ask me for a weekly report'], ['I got the access I need to read the team calendar', 'Let me read the team calendar']],
+  fa: [['یاد گرفتیم نسخه‌ها رو چطور منتشر می‌کنیم', 'بهم بگو تیمت برنامهٔ انتشار نسخه رو چطور می‌چینه، بعد بگو «یادت باشه».'],
+    ['اولین گزارش هفتگی‌مون رو با هم نوشتیم', 'ازم بخواه یه گزارش هفتگی با هم بنویسیم'], ['دسترسی تقویم تیم رو گرفتم؛ حالا برنامه‌ها دستمه', 'هر وقت خواستی، بذار تقویم تیم رو ببینم']],
+};
 
 const sleep = (ms: number, signal?: AbortSignal) => new Promise<void>((resolve, reject) => {
   const t = setTimeout(resolve, ms);
@@ -56,8 +84,8 @@ const sleep = (ms: number, signal?: AbortSignal) => new Promise<void>((resolve, 
 });
 
 /** pet_action demo (§8.4): a few plain requests the triage pre-pass would classify. */
-const ACTIONS: [RegExp, PetActionKind][] = [[/\b(bed|sleep|nap)\b/i, 'sleep'], [/\b(cookie|snack|eat)\b/i, 'feed'], [/\bball\b/i, 'play_ball'],
-  [/\bgarden\b/i, 'open_garden'], [/\bcloset\b/i, 'open_closet'], [/\b(guess|word game)\b/i, 'start_guess']];
+const ACTIONS: [RegExp, PetActionKind][] = [[/\b(bed|sleep|nap)\b|بخواب|چرت/i, 'sleep'], [/\b(cookie|snack|eat)\b|کلوچه|بخور/i, 'feed'], [/\bball\b|توپ/i, 'play_ball'],
+  [/\bgarden\b|باغچه/i, 'open_garden'], [/\bcloset\b|کمد/i, 'open_closet'], [/\b(guess|word game)\b|حدس/i, 'start_guess']];
 function actionOf(text: string): { action?: TalkAction } {
   const hit = ACTIONS.find(([re]) => re.test(text));
   return hit ? { action: { kind: hit[1], confidence: 0.9 } } : {};
@@ -67,6 +95,8 @@ const clampStage = (n: number | undefined): Stage => (n === 1 || n === 2 || n ==
 
 export function createMockApi(o: MockOptions = {}): PetApi {
   const now = o.now ?? (() => Date.now());
+  const lang: PetLang = o.lang ?? petLang();
+  const NAME = MOCK_NAME[lang];
   let look: CharacterLook = PRESET_LOOKS[Math.abs(o.look ?? 0) % PRESET_LOOKS.length];
   const stage = clampStage(o.stage);
   const tz = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch { return 'UTC'; } })();
@@ -94,11 +124,14 @@ export function createMockApi(o: MockOptions = {}): PetApi {
     sound: false, sentThisWeek: 0, live: true, ...(o.checkins === 'paused' ? { pausedAt: t0 - DAY, pausedNote: true as const } : {}) };
   /** the paused note shows once per pause: the first read carries it, then it is marked shown (like the server) */
   const readPrefs = (): CheckinPrefs => { const p = { ...prefs, types: { ...prefs.types } }; if (prefs.pausedNote) { const { pausedNote: _n, ...rest } = prefs; void _n; prefs = rest; } return p; };
+  const [release, report, calendar] = DEMO_MOMENTS[lang];
   let growth: PetGrowthView = { mine: [], moments: [
-    { id: 'release', kind: 'taught', title: 'I learned how you plan a release', hint: 'Tell me how your team plans a release, then say “remember this”' },
-    { id: 'report', kind: 'task', title: 'I wrote our first weekly report together', hint: 'Ask me for a weekly report' },
-    { id: 'calendar', kind: 'access', title: 'I got the access I need to read the team calendar', hint: 'Let me read the team calendar', lit: { at: new Date(t0 - DAY).toISOString() } },
-    ...(['play', 'garden', 'closet', 'bedroom', 'book'] as const).map((r) => ({ id: roomMoment(r), kind: 'room' as const, title: `We found the ${r} together`, hint: `Peek into the ${r} with me sometime` })),
+    { id: 'release', kind: 'taught', title: release[0], hint: release[1] },
+    { id: 'report', kind: 'task', title: report[0], hint: report[1] },
+    { id: 'calendar', kind: 'access', title: calendar[0], hint: calendar[1], lit: { at: new Date(t0 - DAY).toISOString() } },
+    // the shared room moments exactly as production words them ("We found the Play room together", P-09, P-14); the
+    // season ones stay out of the demo (a lit-able season moment would bring its own sheet into every demo)
+    ...templateMoments(lang).filter((m) => m.kind === 'room').map((m) => ({ id: m.id, kind: m.kind, title: m.title, hint: m.hint })),
   ] };
   // personal moments (first room visits, own grants) show in `mine`, never as an agent-wide `lit`
   const litMine = () => { growth = { ...growth, mine: play.litMine.map((l) => l.id) }; };
@@ -132,7 +165,8 @@ export function createMockApi(o: MockOptions = {}): PetApi {
     return {
       agentId: 'mock', name: NAME, look, stage, formingDay: 5, botUsername: 'vox_mochi_bot', voice: false, listen: o.role !== 'guest',
       role: o.role === 'guest' ? 'guest' : 'owner', care, now: t, play: playView(play, t, tz), growth, canEditLook: o.role !== 'guest',
-      ...(opened.welcome ? { welcome: { souvenir: 'I kept thinking about your trip to Shiraz.', awayMs: opened.welcome.awayMs } } : {}),
+      // the welcome souvenir is about the pet's own world, never a memory or a note (P-21)
+      ...(opened.welcome ? { welcome: { souvenir: SAID[lang].souvenir, awayMs: opened.welcome.awayMs } } : {}),
       ...(opened.stageUp ? { stageUp: opened.stageUp } : {}),
       ...(opened.bondMilestone === undefined ? {} : { bondMilestone: opened.bondMilestone }),
       ...(checkin ? { checkin } : {}),
@@ -143,10 +177,11 @@ export function createMockApi(o: MockOptions = {}): PetApi {
   const talkReply = (text: string): TalkResponse => {
     const goodbye = BYE.test(text);
     care = talkLocal(care, now());
+    const opener = OPENERS.find((c) => c.fits.test(text));
     return goodbye
-      ? { reply: 'Bye for now! Come say hi whenever you like.', goodbye: true, care, turnId: `mock-${++turn}` }
-      : /remember/i.test(text) ? { reply: 'Okay, I saved that note.', care, turnId: `mock-${++turn}`, savedNote: true } as TalkResponse
-      : { reply: REPLIES[turn++ % REPLIES.length], care, turnId: `mock-${turn}`, ...actionOf(text) };
+      ? { reply: SAID[lang].bye, goodbye: true, care, turnId: `mock-${++turn}` }
+      : /remember|یادت باشه|یادت بمونه/i.test(text) ? { reply: SAID[lang].saved, care, turnId: `mock-${++turn}`, savedNote: true } as TalkResponse
+      : { reply: opener ? opener[lang] : REPLIES[lang][turn % REPLIES[lang].length], care, turnId: `mock-${++turn}`, ...actionOf(text) };
   };
 
   return {

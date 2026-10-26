@@ -40,6 +40,8 @@ export interface PetTelegram {
   /** Bot API 7.8: an HTTPS media URL into the story editor */
   shareToStory?(mediaUrl: string, params?: { text?: string; widget_link?: { url: string; name?: string } }): void;
   openTelegramLink?(url: string): void;
+  /** Bot API 6.0: an https page in Telegram's in-app browser (the sheet's privacy link) */
+  openLink?(url: string): void;
   onEvent?(event: string, cb: Handler): void;
   offEvent?(event: string, cb: Handler): void;
   safeAreaInset?: Insets;

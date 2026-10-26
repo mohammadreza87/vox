@@ -371,4 +371,7 @@ export type PetStringKey =
   | 'closet.lookElsewhere'
   | 'share.copied'
   | 'visits.later'
-  | 'visits.group';
+  | 'visits.group'
+  | 'toy.play.guess'
+  | 'book.tab.learned'
+  | 'growth.confirm.title';

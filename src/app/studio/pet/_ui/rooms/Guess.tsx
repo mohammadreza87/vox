@@ -74,21 +74,25 @@ export function Guess({ host, zen, resume, onDone }: { host: PetHost; zen: boole
   };
   const hint = () => { void host.send?.(t('play.guess.hint', undefined, lang)); };
 
+  // the round's pips and the honesty note sit in a small tray above the rail; the three talk chips fill the dock slot
+  // (two short rows at most), so the rail never moves (P-05)
   return (
-    <div className="pet-guess" data-room="play">
-      {!zen && (
-        <div className="pet-pips" data-inline="" role="img" aria-label={t('play.starfall.pips', undefined, lang)}>
-          {Array.from({ length: GUESS_PIPS }, (_, i) => <i key={i} data-on={i < heard ? '' : undefined} />)}
-        </div>
-      )}
-      <div className="pet-verbs">
+    <>
+      <div className="pet-tray pet-guess" data-s="">
+        {!zen && (
+          <div className="pet-pips" data-inline="" role="img" aria-label={t('play.starfall.pips', undefined, lang)}>
+            {Array.from({ length: GUESS_PIPS }, (_, i) => <i key={i} data-on={i < heard ? '' : undefined} />)}
+          </div>
+        )}
+        <small className="pet-guess-note">{t('play.guess.note', undefined, lang)}</small>
+      </div>
+      <div className="pet-links" data-room="play">
         <button type="button" className="pet-link" onClick={() => host.focusTalk()}>{t('play.guess.ask', undefined, lang)}</button>
         {zen
           ? <button type="button" className="pet-link" onClick={hint}>{t('play.guess.hint', undefined, lang)}</button>
           : <button type="button" className="pet-link" disabled={giving} onClick={() => void giveUp()}>{t('play.guess.giveUp', undefined, lang)}</button>}
         <button type="button" className="pet-link" onClick={finish}>{t('play.done', undefined, lang)}</button>
       </div>
-      <small className="pet-guess-note">{t('play.guess.note', undefined, lang)}</small>
-    </div>
+    </>
   );
 }

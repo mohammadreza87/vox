@@ -214,7 +214,7 @@ describe('the paused note (§5.4)', () => {
     const h = fakeHost({}, { api: { checkins } });
     const { unmount } = render(<Asks host={h} />);
     await tick(2000);
-    const sheet = screen.getByRole('dialog', { name: 'I paused my messages since they weren’t landing. Want them back?' });
+    const sheet = screen.getByRole('dialog', { name: 'I paused my messages; they weren’t landing. Want them back?' });
     expect(within(sheet).getAllByRole('button').map((b) => b.textContent)).toEqual(['Yes, send them', 'Keep paused']);
     expect(localStorage.getItem(PAUSED_KEY('a'))).toBe('1234');
     await act(async () => { fireEvent.click(within(sheet).getByRole('button', { name: 'Yes, send them' })); });

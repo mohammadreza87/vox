@@ -20,7 +20,7 @@
 .pet-root[lang=fa] { --pet-fs: 16px; --pet-lh: 24px; --pet-sm: 14px; }
 .pet-root *, .pet-root *::before, .pet-root *::after { box-sizing: border-box; }
 .pet-root :where(button) { font: inherit; color: inherit; cursor: pointer; }
-.pet-root :focus-visible, .pet-close:focus-visible { outline: 2px solid var(--volt,#D6FF5C); outline-offset: 3px; }
+.pet-root :not(input):focus-visible, .pet-close:focus-visible { outline: 2px solid var(--volt,#D6FF5C); outline-offset: 3px; }
 .pet-close { min-height: 44px; padding: 8px 14px; border: 1px solid #fff6; border-radius: 24px; background: #14202C; color: #F2F1EC; font: inherit; cursor: pointer; }
 /* screen-reader only: also rail labels (Short: all, Regular: all but the current) */
 .pet-sr, .pet-root:not([data-layout=wide])[data-h=short] .pet-room-label, .pet-root:not([data-layout=wide])[data-h=regular] .pet-room:not([aria-selected=true]) .pet-room-label {
@@ -66,11 +66,11 @@
 .pet-more { margin: -11px 0; padding: 11px 4px; border: 0; background: none; font-weight: 700; color: var(--ink); }
 @keyframes petBubbleIn { from { opacity: 0; transform: translate(-50%, calc(-100% - 4px)) scale(.82); } }
 
-.pet-days { position: absolute; left: 50%; transform: translateX(-50%); font: 500 12px/16px var(--f-body); letter-spacing: .02em; color: var(--text-2); white-space: nowrap; pointer-events: none; animation: petDays 2.6s var(--ease-sine) forwards; }
+.pet-days { position: absolute; left: 50%; transform: translateX(-50%); font: 500 12px/16px var(--f-body); color: var(--text-2); white-space: nowrap; pointer-events: none; animation: petDays 2.6s var(--ease-sine) forwards; }
 @keyframes petDays { 0% { opacity: 0; } 15%, 77% { opacity: 1; } 100% { opacity: 0; } }
 
 /* rail → dock row → pill, centred column */
-.pet-bottom { position: absolute; left: 0; right: 0; bottom: 0; z-index: 4; display: flex; flex-direction: column; align-items: center; gap: 16px; max-width: var(--pet-col); margin: 0 auto; padding: 0 16px calc(var(--pet-safe-bottom,env(safe-area-inset-bottom,0px)) + 14px); pointer-events: none; }
+.pet-bottom { position: absolute; left: 0; right: 0; bottom: 0; z-index: 4; display: flex; flex-direction: column; gap: 16px; max-width: var(--pet-col); margin: 0 auto; padding: 0 16px calc(var(--pet-safe-bottom,env(safe-area-inset-bottom,0px)) + 14px); pointer-events: none; }
 .pet-bottom > * { pointer-events: auto; }
 .pet-root:is([data-kb], [data-talkopen]) :is(.pet-rail, .pet-row) { display: none; }
 
@@ -82,9 +82,11 @@
 .pet-root[data-h=peek] .pet-room:not([aria-selected=true]), .pet-root[data-h=peek] .pet-room svg { display: none; }
 .pet-root[data-h=tall]:not([data-layout=wide]) .pet-room { flex-direction: column; gap: 0; padding: 0 6px; border: 0; font-size: 11px; line-height: 13px; }
 .pet-root[data-h=tall] .pet-rail { height: 44px; }
-.pet-root[data-layout=wide] .pet-rail { position: fixed; top: 50%; inset-inline-start: 16px; height: auto; flex-direction: column; align-items: stretch; transform: translateY(-50%); }
+.pet-root[data-layout=wide] .pet-rail { --pet-sm: 14px; position: fixed; top: 50%; inset-inline-start: max(16px, 50% - 376px); height: auto; flex-direction: column; align-items: stretch; transform: translateY(-50%); }
 
-.pet-row, .pet-dock { display: flex; gap: var(--pet-gap); justify-content: center; align-items: center; }
+/* the dock slot is one toy tall in every room (§9.3, P-05): the rail above it never moves */
+.pet-row, .pet-dock { display: flex; gap: var(--pet-gap); justify-content: center; align-items: center; height: var(--pet-toy); }
+.pet-panel[data-stale] { opacity: .5; pointer-events: none; }
 .pet-dock { transition: opacity .6s var(--ease-sine); }
 .pet-root[data-asleep] .pet-dock { opacity: .55; }
 .pet-toy { position: relative; width: var(--pet-toy); height: var(--pet-toy); padding: 0; border: 0; border-radius: 50%; background: none; display: grid; place-items: center; touch-action: none; transition: transform .18s var(--ease-over); }
@@ -98,10 +100,10 @@
 .pet-ring-fill { stroke: var(--volt); stroke-linecap: round; transition: stroke-dashoffset .6s var(--ease-sine); }
 @keyframes petWiggle { 0%, 86%, 100% { transform: rotate(0); } 89% { transform: rotate(-2deg); } 93% { transform: rotate(2deg); } 96% { transform: rotate(-1deg); } }
 
-.pet-talk { position: relative; width: 100%; max-width: 420px; }
-.pet-pill { display: flex; align-items: center; gap: 6px; width: 100%; height: var(--pet-pill); padding: 0 6px; padding-inline-start: 20px; border-radius: 999px; background: #16191ee0; border: 1px solid #ffffff14; transition: border-color .18s var(--ease-sine); }
-.pet-pill[data-recording] { border-color: var(--volt); }
-.pet-input { flex: 1; min-width: 0; height: 100%; padding: 0; border: 0; outline: none; background: none; color: var(--text); font: 500 16px/1 var(--f-body); -webkit-user-select: text; user-select: text; touch-action: manipulation; }
+.pet-talk { position: relative; max-width: 420px; margin: 0 auto; }
+.pet-pill { display: flex; align-items: center; gap: 6px; width: 100%; height: var(--pet-pill); padding: 0 6px; padding-inline-start: 12px; border-radius: 999px; background: #16191ee0; border: 1px solid #ffffff14; transition: border-color .18s var(--ease-sine); }
+.pet-pill[data-recording], .pet-pill:focus-within { border-color: var(--volt); }
+.pet-input { flex: 1; min-width: 0; height: 100%; padding: 0 6px; border: 0; outline: none; background: none; color: var(--text); font: 500 16px/1 var(--f-body); -webkit-user-select: text; user-select: text; touch-action: manipulation; }
 .pet-input::placeholder { color: var(--text-2); }
 .pet-send, .pet-mic { flex-shrink: 0; width: 40px; height: 40px; border: 0; border-radius: 50%; display: grid; place-items: center; touch-action: none; transition: transform .18s var(--ease-over), background-color .18s; }
 .pet-send { background: var(--volt); color: var(--on-volt); }

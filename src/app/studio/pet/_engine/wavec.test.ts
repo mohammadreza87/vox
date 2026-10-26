@@ -3,7 +3,7 @@ import { FREE_ACCESSORIES, KEEPSAKES, WEARABLE_IDS, type GardenState as PlayGard
 import { characterModel, GROUND, PRESET_LOOKS, STAGE_PARTS } from '@/lib/studio/character';
 import type { CharacterLook, Stage } from '@/lib/studio/types';
 import { prepareBeats, timelineEnd } from './beats';
-import { detailLayers, edgesAt, fitDetails, gardenX, NO_DETAILS } from './details';
+import { detailLayers, edgesAt, fitDetails, gardenAt, gardenX, NO_DETAILS } from './details';
 import { MOTION_PRIORITY, wearingState } from './extras';
 import { fitGarden, FROM_PLAY, gardenArt } from './garden';
 import { harness, SCENE } from './harness.fixture';
@@ -130,6 +130,14 @@ describe('the garden on the floor (§4.5)', () => {
     expect(FROM_PLAY.watered).toEqual({ state: 'sprouted', wet: true });
     expect(fitGarden({ kind: 'sabzeh', state: 'bloomed' })).toEqual({ kind: 'sabzeh', state: 'bloomed' });
     expect(fitGarden({ kind: 'rose' as never, state: 'bloomed' })).toBeNull();
+    for (const kind of ['flower', 'sabzeh'] as const) {
+      // seed → sprout → bloom read apart: each stage draws different art, and each taller than the last
+      const arts = (['planted', 'sprouted', 'bloomed'] as const).map((state) => JSON.stringify(gardenArt({ kind, state })));
+      expect(new Set(arts).size).toBe(3);
+      const top = (a: string) => Math.min(...[...a.matchAll(/-?\d+(?:\.\d+)?/g)].map((x) => Number(x[0])).filter((n) => n < 0));
+      expect(top(arts[1])).toBeLessThan(top(arts[0]));
+      expect(top(arts[2])).toBeLessThan(top(arts[1]));
+    }
     for (const kind of ['flower', 'sabzeh'] as const) for (const state of ['planted', 'sprouted', 'bloomed'] as const) {
       const art = JSON.stringify(gardenArt({ kind, state }));
       expect(art.includes('"data-anim":"sway"'), `${kind} ${state}`).toBe(state !== 'planted');
@@ -143,11 +151,18 @@ describe('the garden on the floor (§4.5)', () => {
       const widest = Math.max(...[12, 22, 32, 42, 52].map((d) => edgesAt(m, GROUND - d / m.growth)[1]));
       expect(gardenX(m)).toBeGreaterThan(cx + (widest - cx) * m.growth);
       const l = detailLayers(m, fitDetails({ garden: { kind: 'flower', state: 'bloomed' }, seasonal: 'yalda', keepsakes: ['play'] }, st));
-      const xs = l.floor.map((g) => [g.attrs['data-detail'], Number(/translate\(([-\d.]+)/.exec(JSON.stringify(g))![1])] as const);
+      const xs = [...l.floor, ...l.back].map((g) => [g.attrs['data-detail'], Number(/translate\(([-\d.]+)/.exec(JSON.stringify(g))![1])] as const);
       const pot = xs.find(([k]) => k === 'garden:flower:bloomed')![1], season = xs.find(([k]) => k === 'seasonal')![1], keep = xs.find(([k]) => k === 'keepsake:play')![1];
       expect(keep).toBeLessThan(cx);
       expect(pot).toBeGreaterThan(cx);
-      expect(season).toBeGreaterThan(pot);
+      expect(season).toBeGreaterThan(cx);
+      // the pot stands in front (the floor layer, drawn over the body); the keepsakes in the room behind it
+      expect(l.floor.map((g) => g.attrs['data-detail'])).toEqual(['garden:flower:bloomed']);
+      // the Garden room's hero: bigger and a step in front of the pet
+      const hero = gardenAt(m, true), side = gardenAt(m);
+      expect(hero.k).toBeGreaterThan(side.k * 1.3);
+      expect(hero.y).toBeGreaterThan(GROUND);
+      expect(JSON.stringify(detailLayers(m, fitDetails({ garden: { kind: 'flower', state: 'bloomed' } }, st), { hero: true }).floor)).toContain(`scale(${hero.k})`);
     }
     const h = harness();
     h.run(300);
@@ -179,7 +194,8 @@ describe('the garden on the floor (§4.5)', () => {
   };
   it('rain aims at the pot: the body drifts over and the drops fall on its soil (deterministic)', () => {
     const plain = rainXs(false), aimed = rainXs(true);
-    const potX = SCENE.character.x + gardenX(model(bunny)) * (SCENE.character.size / 200);
+    // in the Garden room the pot is the hero (gardenAt): the rain aims where it is drawn
+    const potX = SCENE.character.x + gardenAt(model(bunny), true).x * (SCENE.character.size / 200);
     const mean = (a: number[]) => a.reduce((s, x) => s + x, 0) / a.length;
     expect(aimed.xs.length).toBeGreaterThan(4);
     expect(Math.abs(mean(aimed.xs) - potX)).toBeLessThan(12);

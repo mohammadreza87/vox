@@ -1,6 +1,10 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { motionValue } from 'framer-motion';
 import { Bubble, clip, holdMs, pageBudget, paginate } from './Bubble';
+
+/** What the bubble has said so far: its text less the laid-out part not said yet. */
+const saidIn = (c: HTMLElement) => { const t = c.querySelector('.pet-bubble-text')!; return (t.textContent ?? '').slice(0, (t.textContent ?? '').length - (t.querySelector('.pet-bubble-rest')?.textContent?.length ?? 0)); };
 import { loadStrings } from './strings';
 
 describe('Bubble', () => {
@@ -18,10 +22,50 @@ describe('Bubble', () => {
     expect(holdMs(90)).toBe(5000);
   });
 
+  it('lays the whole page out from the first frame (the box never grows as it types), revealing inside it (P-28)', () => {
+    const { container } = render(<Bubble msg={{ id: 7, text: 'We found the play room together' }} top={100} />);
+    const node = container.querySelector('.pet-bubble-text')!;
+    // the full line is in the box at once; the part not said yet is there but hidden
+    expect(node.textContent).toBe('We found the play room together');
+    expect((node.querySelector('.pet-bubble-rest') as HTMLElement).style.visibility).toBe('hidden');
+    act(() => { vi.advanceTimersByTime(Math.ceil(1000 / 28) * 7 + 1); });
+    expect(saidIn(container)).toBe('We foun');
+    expect(node.textContent).toBe('We found the play room together');
+  });
+
+  it('never draws an empty or blank bubble, and lets its slot go at once (P-14)', () => {
+    for (const text of ['', '   ']) {
+      const onGone = vi.fn();
+      const { container, unmount } = render(<Bubble msg={{ id: 9, text }} top={100} onGone={onGone} />);
+      expect(container.querySelector('.pet-bubble')).toBeNull();
+      expect(onGone).toHaveBeenCalledWith(9);
+      unmount();
+    }
+  });
+
+  it('follows the head while the pet travels, kept inside the stage (P-18)', () => {
+    const x = motionValue(0);
+    const stage = document.createElement('div');
+    document.body.appendChild(stage);
+    Object.defineProperty(stage, 'clientWidth', { value: 390 });
+    const was = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetWidth')!;
+    Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, get() { return (this as HTMLElement).classList.contains('pet-bubble') ? 80 : 0; } });
+    const { container } = render(<Bubble msg={{ id: 4, text: 'Yum!' }} top={200} x={195} follow={x} />, { container: stage });
+    const at = container.querySelector('.pet-bubble-at') as HTMLElement;
+    Object.defineProperty(HTMLElement.prototype, 'offsetWidth', was);
+    expect(at.style.transform).toBe('');
+    act(() => { x.set(60); });
+    expect(at.style.transform).toBe('translate3d(60.0px,0,0)');
+    // never past the stage's edge (half the bubble plus 8 px)
+    act(() => { x.set(400); });
+    expect(at.style.transform).toBe(`translate3d(${(390 - 40 - 8 - 195).toFixed(1)}px,0,0)`);
+    stage.remove();
+  });
+
   it('reveals at 28 chars/s, holds, then fades and reports gone', () => {
     const onGone = vi.fn();
     const { container } = render(<Bubble msg={{ id: 1, text: 'Hello there!' }} top={100} onGone={onGone} />);
-    const text = () => container.querySelector('.pet-bubble-text')!.textContent;
+    const text = () => saidIn(container);
     expect(text()).toBe('');
     act(() => { vi.advanceTimersByTime(Math.ceil(1000 / 28) * 5 + 1); });
     expect(text()).toBe('Hello');
@@ -45,7 +89,7 @@ describe('Bubble', () => {
     const { container } = render(<Bubble msg={{ id: 2, text: long }} top={300} lines={2} width={290} onGone={onGone} />);
     const pages = paginate(long, pageBudget(2, 290, 'en'));
     expect(pages.length).toBeGreaterThan(2);
-    const shown = () => container.querySelector('.pet-bubble-text')!.textContent;
+    const shown = () => saidIn(container);
     const dots = () => [...container.querySelectorAll('.pet-dots i')].map((d) => d.hasAttribute('data-on'));
     act(() => { vi.advanceTimersByTime(Math.ceil(1000 / 28) * (pages[0].length + 1)); });
     expect(shown()).toBe(pages[0]);

@@ -285,7 +285,8 @@ describe('rooms on the page', () => {
     expect(r).toHaveAttribute('lang', 'fa');
     expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['خانه', 'بازی', 'باغچه', 'کمد', 'اتاق خواب', 'دفتر خاطرات']);
     expect(screen.getByRole('button', { name: 'غذا دادن' })).toBeInTheDocument();
-    expect(screen.getByRole('textbox')).toHaveAttribute('placeholder', 'با ⁨Mochi⁩ حرف بزنید…');
+    // the demo pet is «موچی» in Persian (P-12), still bidi-isolated like any agent's name
+    expect(screen.getByRole('textbox')).toHaveAttribute('placeholder', 'با ⁨موچی⁩ حرف بزنید…');
     const stage = container.querySelector('.pet-stage')!;
     const now = vi.spyOn(performance, 'now').mockReturnValue(1000);
     fireEvent.pointerDown(stage, { pointerId: 8, clientX: 100, clientY: 300 });

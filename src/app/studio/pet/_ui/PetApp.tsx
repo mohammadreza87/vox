@@ -1,8 +1,8 @@
 'use client';
 
 import { flushSync } from 'react-dom';
-import { domMin, LazyMotion } from 'framer-motion';
-import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { domMin, LazyMotion, type MotionValue } from 'framer-motion';
+import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Expression } from '@/lib/studio/character';
 import { FULL_AT, TIRED_BELOW, type Mood, type NeedKey, type PetCare, type PetView, type Stage as StageN, type TalkVoiceResponse } from '@/lib/pet/types';
 import { detectTier } from '../../_lib/motion';
@@ -28,8 +28,9 @@ import { Stage } from './Stage';
 import { TalkPill } from './TalkPill';
 import { ROOM_IDS, ROOM_VIEW, stepToward, type RoomId } from './rooms';
 import { ROOM_PANEL_ID, RoomRail, roomTabId } from './rooms/RoomRail';
-import { backdrop, characterBox, daysTogether, PET_GROUND, sceneAnchors, type CharacterBox } from './scene';
-import { dir, petLang, t, useStrings } from './strings';
+import { backdrop, characterBox, daysTogether, groundPoint, PET_GROUND, sceneAnchors, type AwayBackdrop, type CharacterBox } from './scene';
+import { cleanFirst, dir, petLang, t, useStrings, type PetStringKey } from './strings';
+import { openOver, TIP_OPEN_MS } from './tipOpen';
 import {
   bootTelegram, circleCode, closeApp, firstName, hideKeyboard, holdClosing, LAYOUT_EVENTS, openDm, openTelegram, paintChrome, clearLegacyPetSnapshots,
   readyAfterPaint, settingsButton, startAccelerometer, startIntent, syncSafeAreas, tg, viewport,
@@ -85,6 +86,26 @@ const OPTS_AT = { get: 1, care: 2, talk: 2, talkVoice: 2, play: 2, growthConfirm
 
 /** A talk turn that hears nothing back in this long fails like any other (the pet never thinks forever). */
 const TALK_TIMEOUT_MS = 45_000;
+
+/**
+ * The hello (S2): "Hi Sara!", by the person's local hour (morning, midday, afternoon, the moon's out; never «شب بخیر»,
+ * which is a goodbye). Late at night it is the plain hello.
+ */
+export function helloText(name: string | undefined, hour = new Date().getHours()): string {
+  const part = hour >= 5 && hour < 11 ? 'morning' : hour >= 11 && hour < 15 ? 'noon' : hour >= 15 && hour < 19 ? 'afternoon' : hour >= 19 && hour < 22 ? 'evening' : '';
+  const first = cleanFirst(name);
+  if (!part) return first ? t('say.hiName', { first }) : t('say.hi');
+  return t(`say.hi.${part}${first ? '.name' : ''}` as PetStringKey, first ? { first } : undefined);
+}
+
+/** The stage-up line (growth §4.11): what it has learned so far when a moment is lit, else that it is getting ready. */
+const stageLine = (v: PetViewB | null) => t(v?.growth?.moments.some((m) => m.lit || v.growth?.mine?.includes(m.id)) ? 'growth.stage.learned' : 'growth.stage.ready');
+
+/** The welcome-back line (P-21): the pet's own small news, in the person's language; never the server's free text. */
+const welcomeLine = (now = Date.now()) => t(`say.welcomeBack.${1 + (Math.floor(now / 86_400_000) % 5)}` as PetStringKey);
+
+/** A check-in replay's line holds the bubble this long before a first room visit may light its own moment. */
+const REPLAY_HOLD_MS = 6000;
 
 interface Fatal { kind: SleeperKind; look?: PetView['look']; stage?: StageN; name?: string }
 
@@ -190,7 +211,7 @@ function PetSession({ agentId, injected, signed, onRetry }: { agentId: string; i
   const [talk, setTalk] = useState<TalkState>('idle');
   const [bubble, setBubble] = useState<BubbleMsg | null>(null);
   const [thought, setThought] = useState<NeedKey | null>(null);
-  const [score, setScore] = useState<{ bops: number; misses: number } | null>(null);
+  const [score, setScore] = useState<{ bops: number; misses: number; out?: boolean } | null>(null);
   const [days, setDays] = useState<number | null>(null);
   const [focusTalk, setFocusTalk] = useState(false);
   const [box, setBox] = useState<CharacterBox>({ x: 0, y: 0, size: 200 });
@@ -204,6 +225,8 @@ function PetSession({ agentId, injected, signed, onRetry }: { agentId: string; i
   const [layout, setLayout] = useState<Layout>(() => layoutOf(typeof window === 'undefined' ? 390 : window.innerWidth, typeof window === 'undefined' ? 700 : window.innerHeight));
   const [vw, setVw] = useState(390);
   const [room, setRoom] = useState<RoomId>('home');
+  /** the room the dock slot shows: the old dock stays (dimmed) until the new room's chunk is ready, never an empty band (P-19) */
+  const dockRoom = useDeferredValue(room);
   const [talkOpen, setTalkOpen] = useState(false);
   /* Wave B: the pill's voice extras, Extras mounted after hello */
   const [voice, setVoiceUi] = useState<VoiceUi>({ handsFree: false, open: false, hearing: false });
@@ -234,7 +257,27 @@ function PetSession({ agentId, injected, signed, onRetry }: { agentId: string; i
   const bus = useRef(new Set<(s: HostSignal) => void>());
   const emit = (sig: HostSignal) => { for (const f of bus.current) f(sig); };
   const active = useRef(0);
-  const busyKeys = useRef(new Set<string>());
+  /** `open`: the opening seconds are the hello's (tips.ts openOver): no tip or ask until it lets go */
+  const busyKeys = useRef(new Set<string>(['open']));
+  const opening = useRef({ hello: false, touched: false, at: 0 });
+  const openCheck = () => {
+    const o = opening.current;
+    if (openOver({ hello: o.hello, touched: o.touched, sinceHelloMs: performance.now() - o.at })) busyKeys.current.delete('open');
+  };
+  /** the hello has been said (or no hello is due: asleep, a check-in's replay, a conversation already started) */
+  const helloSaid = () => {
+    if (opening.current.hello) return;
+    opening.current = { ...opening.current, hello: true, at: performance.now() };
+    later(TIP_OPEN_MS, openCheck);
+    openCheck();
+  };
+  const touchedOnce = () => { opening.current.touched = true; openCheck(); };
+  /** the person started talking: the hello's moment has passed (a talk turn's pet_action is never held back) */
+  const conversed = () => { helloSaid(); touchedOnce(); };
+  /** a check-in replay's room change: its first-visit moment waits until the replay's line has been read */
+  const replayUntil = useRef(0);
+  /** bedtime cut the Bop round: its pips fade out at once */
+  const scoreCut = useRef(false);
   const micOk = useRef<boolean | null>(null);
   const boxRef = useRef(box);
   boxRef.current = box;
@@ -254,7 +297,19 @@ function PetSession({ agentId, injected, signed, onRetry }: { agentId: string; i
     timers.current.add(t);
   }, []);
 
-  const bd = useMemo(() => (view ? backdrop(view.look) : null), [view?.look]); // eslint-disable-line react-hooks/exhaustive-deps
+  // each room has its own backdrop and light (P-04), its floor drawn from the character's ground line
+  const groundY = Math.round(groundPoint(box).y);
+  // the away rooms' light is its own chunk, fetched once the page has said hello (Home never waits on it)
+  const [away, setAway] = useState<AwayBackdrop | undefined>(undefined);
+  const bd = useMemo(() => (view ? backdrop(view.look, room, groundY, away) : null), [view?.look, room, groundY, away]); // eslint-disable-line react-hooks/exhaustive-deps
+  const wantAway = extras || (room !== 'home' && room !== 'play');
+  useEffect(() => {
+    if (!wantAway || away) return;
+    void import('./roomLight').then((m) => { if (alive.current) setAway(() => m.awayBackdrop); }, () => { /* offline: the rooms keep Home's light */ });
+  }, [wantAway, away]);
+  // Telegram's header and bottom bar take the room's edge colour with it
+  const edgeColor = bd?.edge;
+  useEffect(() => { if (edgeColor && valid()) paintChrome(edgeColor); }, [edgeColor, valid]);
 
   /* ---------- care: optimistic, batched, eased to the server ---------- */
 
@@ -391,10 +446,12 @@ function PetSession({ agentId, injected, signed, onRetry }: { agentId: string; i
     const e = engineRef.current;
     if (!e) return;
     const steps: Array<[number, () => void]> = [];
-    if (v.welcome) { const souvenir = v.welcome.souvenir; steps.push([1400, () => e.fire({ type: 'welcomeBack', souvenir })]); }
+    // the pet's own small news in the person's language, never the server's text (it must never quote memory, P-21)
+    if (v.welcome) { const souvenir = welcomeLine(v.now); steps.push([1400, () => e.fire({ type: 'welcomeBack', souvenir })]); }
     if (v.stageUp) {
       const { from, to } = v.stageUp;
-      steps.push([1600, () => { setStage(to); e.setLook(v.look, to); e.fire({ type: 'stageUp', from, to }); }]);
+      // the stage-up says what it learned (growth.stage.*), on the celebration's beat, even if the engine's cue is lost
+      steps.push([1600, () => { setStage(to); e.setLook(v.look, to); e.fire({ type: 'stageUp', from, to }); later(900, () => sayOnce(stageLine(viewRef.current))); }]);
     }
     if (v.bondMilestone !== undefined) steps.push([0, () => e.fire({ type: 'celebrate', why: 'bond' })]);
     if (!steps.length) return;
@@ -431,8 +488,17 @@ function PetSession({ agentId, injected, signed, onRetry }: { agentId: string; i
       helloAt.current = performance.now();
       const care = careRef.current;
       // opened from a check-in (§5.1): its moment plays instead of the hello (Extras' Asks replays it)
-      if (!care?.asleep && !conversationStarted.current && !viewRef.current?.checkin) engine.fire({ type: 'hello', firstName: firstName() });
-      if (care) {
+      const v = viewRef.current;
+      if (!care?.asleep && !conversationStarted.current && !v?.checkin) {
+        engine.fire({ type: 'hello', firstName: firstName() });
+        // hello first, always (S2): if the engine's line has not landed on its beat (a starved frame loop), say it here
+        later(1200, () => { if (!opening.current.hello && !conversationStarted.current) sayOnce(helloText(firstName())); helloSaid(); });
+      } else {
+        if (v?.checkin) replayUntil.current = performance.now() + REPLAY_HOLD_MS;
+        helloSaid();
+      }
+      // the days chip is the owner's and members' relationship count: a guest never sees it (P-22)
+      if (care && v && v.role !== 'guest' && !v.talkInDm) {
         setDays(daysTogether(care.firstMetAt, sync.now()));
       }
       for (const fn of queued.current.splice(0)) afterHello(900, fn);
@@ -459,7 +525,8 @@ function PetSession({ agentId, injected, signed, onRetry }: { agentId: string; i
     const dockTop = bottomRef.current?.getBoundingClientRect().top ?? h - 180;
     // Wide: the character stands in the centred column
     const col = l.cls === 'wide' ? Math.min(w, COLUMN_MAX) : w;
-    const c = characterBox(col, h, top, dockTop);
+    // Regular and Tall: a bigger character on a floor line about two thirds down (the stage is never half empty, P-17)
+    const c = characterBox(col, h, top, dockTop, l.h);
     const b = { ...c, x: c.x + Math.round((w - col) / 2) };
     setBox((p) => (p.x === b.x && p.y === b.y && p.size === b.size ? p : b));
     const e = engineRef.current;
@@ -516,8 +583,14 @@ function PetSession({ agentId, injected, signed, onRetry }: { agentId: string; i
     // in Persian the rail runs right to left, so the slide (and the lean with it) is mirrored
     engine.setRoom?.(room, rtl ? { dir: forward ? -1 : 1 } : {});
     emit({ type: 'room', room });
-    // a first visit lights the person's own room moment (§4.11): the server answers noop after that
-    if (room !== 'home' && viewRef.current?.play) void host.play({ op: 'roomVisited', room });
+    // a first visit lights the person's own room moment (§4.11): the server answers noop after that. A check-in's
+    // replay (the C5 bloom) keeps the bubble for its own line first: the room moment never overrides it (P-08)
+    if (room !== 'home' && viewRef.current?.play) {
+      const wait = Math.max(0, replayUntil.current - performance.now());
+      replayUntil.current = 0;
+      if (wait) later(wait, () => { if (roomRef.current === room) void host.play({ op: 'roomVisited', room }); });
+      else void host.play({ op: 'roomVisited', room });
+    }
   }, [engine, room, rtl]); // eslint-disable-line react-hooks/exhaustive-deps
   // the motion layer's cues (settle, lit peak) reach the chunks that wait on them
   useEffect(() => engine?.onMotion?.((cue) => emit({ type: 'motion', cue })), [engine]);  
@@ -531,6 +604,7 @@ function PetSession({ agentId, injected, signed, onRetry }: { agentId: string; i
 
     const first = () => {
       active.current = performance.now();
+      touchedOnce();
       const ctx = audio();
       if (ctx?.state === 'suspended') void ctx.resume();
       if (!touched) { touched = true; stopAccel = startAccelerometer((a) => engine.accel(a)); }
@@ -564,6 +638,21 @@ function PetSession({ agentId, injected, signed, onRetry }: { agentId: string; i
 
   /* ---------- engine cues ---------- */
 
+  /** The line on screen now (set with the bubble, so two callers in one frame see it). */
+  const shownText = useRef('');
+  shownText.current = bubble?.text ?? shownText.current;
+  /**
+   * A pet line: never over the person's conversation, never blank (P-14), and not again while the same line is on
+   * screen (the engine's cue and the page's own call may both say it). True when it shows.
+   */
+  function sayOnce(text: string): boolean {
+    if (!valid() || talkRef.current !== 'idle' || !text.trim() || (bubbleRef.current && shownText.current === text)) return false;
+    shownText.current = text;
+    bubbleRef.current = true;
+    setBubble({ id: performance.now(), text });
+    return true;
+  }
+
   const finishSpeaking = useCallback((token: number) => {
     if (token !== speakToken.current || talkRef.current !== 'speaking') return;
     const e = engineRef.current;
@@ -584,13 +673,16 @@ function PetSession({ agentId, injected, signed, onRetry }: { agentId: string; i
       case 'expr': setExpr(c.expr); break;
       case 'say':
         // Ambient reactions cannot replace the person's current conversation or a late greeting.
-        if (talkRef.current === 'idle' && !(conversationStarted.current && c.line === 'hi'))
-          setBubble({ id: performance.now(), text: sayText(c.line, firstName()) });
+        if (c.line === 'hi') { if (!conversationStarted.current && sayOnce(helloText(firstName()))) helloSaid(); }
+        // a stage celebration names what it has learned (growth.stage.*), never a bare "I learned something new!"
+        else if (c.line === 'learned') sayOnce(stageLine(viewRef.current));
+        else sayOnce(sayText(c.line, firstName()));
         break;
       case 'thought': { const need = c.need; setThought(need); later(2400, () => setThought((n) => (n === need ? null : n))); break; }
       case 'care': sync.act(c.action, c.n); emit({ type: 'care', action: c.action }); break;
-      case 'score': setScore({ bops: c.bops, misses: c.misses }); break;
-      case 'playOver': later(1200, () => setScore(null)); break;
+      case 'score': scoreCut.current = false; setScore({ bops: c.bops, misses: c.misses }); break;
+      // a round cut by bedtime is already fading: it goes with the fade, not after the round-end beat
+      case 'playOver': later(scoreCut.current ? 220 : 1200, () => setScore(null)); break;
       case 'spoken': finishSpeaking(speakToken.current); break;
     }
   };
@@ -601,6 +693,9 @@ function PetSession({ agentId, injected, signed, onRetry }: { agentId: string; i
     const e = engineRef.current, care = careRef.current;
     if (!e || !valid()) return;
     emit({ type: 'toy', e: t });
+    touchedOnce();
+    // tucking in ends a Bop round (§4.4): the engine takes the ball away, its pips fade with it (P-02)
+    if (t.type === 'moonTap' && !care?.asleep) { scoreCut.current = true; setScore((s) => (s ? { ...s, out: true } : s)); }
     const full = !!care && care.tummy >= FULL_AT;
     if (full && t.type === 'cookieTap') { e.fire({ type: 'tooFull' }); return; }
     if (full && t.type === 'cookieDrop') {
@@ -624,6 +719,7 @@ function PetSession({ agentId, injected, signed, onRetry }: { agentId: string; i
     const e = engineRef.current;
     if (!valid() || !e || talkRef.current === 'thinking' || talkRef.current === 'speaking') return;
     conversationStarted.current = true;
+    conversed();
     talkRef.current = 'listening';
     // the engine plays the perk on entering listening (once; the mic gets its own variant)
     e.talk('listening', source);
@@ -728,6 +824,7 @@ function PetSession({ agentId, injected, signed, onRetry }: { agentId: string; i
   const onSend = async (text: string): Promise<boolean> => {
     if (!valid()) return false;
     conversationStarted.current = true;
+    conversed();
     startThinking();
     emit({ type: 'typed' });
     try {
@@ -745,6 +842,7 @@ function PetSession({ agentId, injected, signed, onRetry }: { agentId: string; i
   const onVoice = async (blob: Blob, handsFree = false) => {
     if (!valid()) return false;
     conversationStarted.current = true;
+    conversed();
     startThinking();
     try {
       // talk-voice?stream=1 (§8A.3, voiceStream.ts): the reply shows on its event, its sentences play in order
@@ -814,8 +912,8 @@ function PetSession({ agentId, injected, signed, onRetry }: { agentId: string; i
     view: () => viewRef.current, care: () => careRef.current, engine: () => engineRef.current, talk: () => talkRef.current,
     room: () => roomRef.current, setRoom, box: () => boxRef.current, root: () => rootRef.current,
     toy: (k) => toyEls.current[k] ?? null, audio,
-    // a pet line never replaces the person's conversation
-    say: (text) => { if (!valid() || talkRef.current !== 'idle') return false; setBubble({ id: performance.now(), text }); return true; },
+    // a pet line never replaces the person's conversation, and a blank one never draws a bubble (P-14)
+    say: (text) => sayOnce(text),
     bubbleShown: () => bubbleRef.current,
     act: (a) => sync.act(a),
     toyEvent: (e) => onToy(e),
@@ -844,8 +942,9 @@ function PetSession({ agentId, injected, signed, onRetry }: { agentId: string; i
   const onHandsFree = useCallback(() => emit({ type: 'handsFree' }), []);  
 
   const look = view?.look;
-  const detailsOn = useMemo(() => (extras && engine && look ? (['body', 'floor'] as const).map((part) =>
-    <Suspense key={part} fallback={null}><Details engine={engine} look={look} stage={stage} size={box.size} part={part} /></Suspense>) : []), [extras, engine, look, stage, box.size]);
+  // the body's details, the room keepsakes behind the pet, the garden's pot in front (the Garden room's hero)
+  const detailsOn = useMemo(() => (extras && engine && look ? (['body', 'back', 'floor'] as const).map((part) =>
+    <Suspense key={part} fallback={null}><Details engine={engine} look={look} stage={stage} size={box.size} part={part} room={part === 'floor' ? room : undefined} /></Suspense>) : []), [extras, engine, look, stage, box.size, room]);
 
   /* ---------- render ---------- */
 
@@ -861,30 +960,34 @@ function PetSession({ agentId, injected, signed, onRetry }: { agentId: string; i
   const headTop = box.y + box.size * 0.2;
   const peek = layout.h === 'peek';
   const guest = view.role === 'guest' || !!view.talkInDm;
-  const RoomView = room === 'home' ? null : ROOM_VIEW[room];
+  const RoomView = dockRoom === 'home' ? null : ROOM_VIEW[dockRoom];
   // m.* elements with the minimal feature set: the rig only binds MotionValues (no layout, drag or gestures)
   return (
     <LazyMotion features={domMin}>
     <main ref={rootRef} className="pet-root" data-pet-root="" data-tier={tier} data-stage={stage} data-tone={mood?.tone} data-asleep={mood?.asleep ? '' : undefined} data-talk={talk}
       data-layout={layout.cls} data-h={layout.h} data-kb={layout.kb ? '' : undefined} data-room={room} data-talkopen={peek && talkOpen ? '' : undefined} lang={lang} dir={dir(lang)}>
-      <Stage engine={engine} backdrop={bd} box={box} onSwipe={onSwipe} onBody={() => emit({ type: 'body' })}
+      <Stage engine={engine} backdrop={bd} box={box} reduced={tier === 'reduced'} onSwipe={onSwipe} onBody={() => emit({ type: 'body' })}
         over={<>
           <Particles engine={engine} />
-          <Thought need={thought} top={box.y + box.size * 0.02} left={box.x + box.size * 0.82} />
+          {/* two zones (P-16): the speech bubble above the head, the thought beside it at head height; when both would
+              show, the thought yields */}
+          <Thought need={bubble ? null : thought} top={headTop + box.size * 0.03} left={box.x + box.size * 0.84} />
           <Bubble msg={bubble} top={headTop} room={headTop - safeTop} lines={BUBBLE_LINES[layout.bubble]} width={bubbleWidth(vw)}
+            x={box.x + box.size / 2} follow={engine.body.x as MotionValue<number>}
             onGone={(id) => setBubble((b) => (b?.id === id ? null : b))} onHold={() => emit({ type: 'bubbleHold' })} />
-          {days !== null && <div className="pet-days" style={{ top: box.y + box.size * 0.9 }} onAnimationEnd={() => setDays(null)}>{daysTogetherText(days)}</div>}
-          {/* Bop's round as pips, never a digit (§4.2) */}
-          {score && <div className="pet-score" role="img" aria-label={t('play.starfall.pips', undefined, lang)}>{Array.from({ length: 10 }, (_, i) => <i key={i} data-on={i < score.bops ? '' : undefined} />)}</div>}
+          {days !== null && !guest && <div className="pet-days" style={{ top: box.y + box.size * 0.9 }} onAnimationEnd={() => setDays(null)}>{daysTogetherText(days)}</div>}
+          {/* Bop's round as pips, never a digit (§4.2); bedtime fades them out with the round */}
+          {score && <div className="pet-score" data-out={score.out ? '' : undefined} role="img" aria-label={t('play.starfall.pips', undefined, lang)}>{Array.from({ length: 10 }, (_, i) => <i key={i} data-on={i < score.bops ? '' : undefined} />)}</div>}
         </>}>
-        <PetRig engine={engine} look={view.look} stage={stage} size={box.size} label={view.name} expr={expr} overlay={detailsOn[0]} floor={detailsOn[1]} />
+        <PetRig engine={engine} look={view.look} stage={stage} size={box.size} label={view.name} expr={expr} overlay={detailsOn[0]} back={detailsOn[1]} floor={detailsOn[2]} />
       </Stage>
       <div className="pet-bottom" ref={bottomRef} onFocus={onFocusIn} onBlur={onFocusOut}>
         <RoomRail room={room} onRoom={setRoom} rtl={rtl} vertical={layout.cls === 'wide'} />
         <div className="pet-row">
-          <div className="pet-panel" role="tabpanel" id={ROOM_PANEL_ID} aria-labelledby={roomTabId(room)}>
-            {RoomView ? <Suspense fallback={<div className="pet-soon" />}><RoomView id={room as Exclude<RoomId, 'home'>} host={host} asleep={!!mood?.asleep} view={view} /></Suspense>
-              : <Dock needs={needs} onToy={onToy} toyRef={toyRef} />}
+          {/* one boundary, always mounted: a room chunk that is still loading keeps the shown dock (a deferred render) */}
+          <div className="pet-panel" role="tabpanel" id={ROOM_PANEL_ID} aria-labelledby={roomTabId(dockRoom)} data-stale={dockRoom !== room ? '' : undefined}>
+            <Suspense fallback={<div className="pet-soon" />}>{RoomView ? <RoomView id={dockRoom as Exclude<RoomId, 'home'>} host={host} asleep={!!mood?.asleep} view={view} />
+              : <Dock needs={needs} onToy={onToy} toyRef={toyRef} />}</Suspense>
           </div>
           {peek && <button type="button" className="pet-toy pet-talkbtn" aria-label={t('toy.talk', undefined, lang)} aria-expanded={talkOpen}
             onClick={() => (guest ? onOpenDm() : setTalkOpen(true))}><span className="pet-toy-face"><TalkIcon /></span></button>}

@@ -32,7 +32,7 @@ Companion to [`PET_CARE_GAME_DESIGN_2026_10_26.md`](./PET_CARE_GAME_DESIGN_2026_
 | `chip.daysTogether` | chip | system | {n} days together | ≤ 24 chars | Counts up, never down; quiet pride. (Digits allowed here: it exists today) | «{n} روز رفاقت» | Copywriter: `{n}` in Persian digits, noun singular: «۱۲ روز رفاقت». For n = 1 use `chip.firstDay` |
 | `say.welcomeBack.1` | bubble | pet | You're back! I saved you the comfiest spot. | Peek 2 lines | After more than a day away; warm, no mention of time, no guilt (existing line) | «به‌به، خوش اومدی! نرم‌ترین گوشه رو برات نگه داشتم.» | Copywriter: «خوش برگشتی» would be a calque |
 | `say.welcomeBack.2` | bubble | pet | I kept a little sunshine for you. | Peek 2 lines | Same moment; a small gift (existing) | «یه تیکه آفتاب برات کنار گذاشتم.» | Copywriter: «کنار گذاشتن» is the host setting something aside |
-| `say.welcomeBack.3` | bubble | pet | Hi again! I practised my best hop while you were out. | Peek 2 lines | Same moment; playful, shows growth (existing) | «سلام! یه پرش حسابی تمرین کردم، ببین!» | Copywriter: English "while you were out" dropped: it points at the absence |
+| `say.welcomeBack.3` | bubble | pet | Hi again! I practised my best hop. | Peek 2 lines | Same moment; playful, shows growth (existing) | «سلام! یه پرش حسابی تمرین کردم، ببین!» | Copywriter: English "while you were out" dropped: it points at the absence |
 | `say.welcomeBack.4` | bubble | pet | You're here! I collected some cloud fluff for you. | Peek 2 lines | Same moment; silly gift (existing) | «یه مشت پشمک ابری برات جمع کردم. قابلت رو نداره!» | Copywriter: پشمک is cloud fluff to every Iranian |
 | `say.welcomeBack.5` | bubble | pet | Welcome back! I learned a new wiggle. | Peek 2 lines | Same moment; pride in a tiny skill (existing) | «سلام! یه تکون بامزه یاد گرفتم، نگاه کن!» | Variants: reviewed alternative: «یه قر کوچولو یاد گرفتم!»; Copywriter: «قر» is livelier but some users find it cheeky |
 | `say.learned` | bubble | pet | I learned something new! | Peek 1 line | Stage-up celebration; proud, sparkly | «یه چیز تازه یاد گرفتم!» | Variants: v2 «ببین چی یاد گرفتم!», v3 «یه کم بزرگ‌تر شدم!» |
@@ -218,7 +218,7 @@ All DMs: one or two short sentences, pet voice, no private content, sent silentl
 | `ci.why.hellos` | DM | system | Why this: you turned on Now-and-then hellos. They stop after two unopened messages. | ≤ 200 chars | Same | «دلیل این پیام: «سلام‌های گاه‌به‌گاه» را روشن کرده‌اید. اگر دو پیام باز نشود، این پیام‌ها خودشان قطع می‌شوند.» |  |
 | `ci.why.care` | DM | system | Why this: you asked to hear when {name} gets sleepy. Evenings only. | ≤ 200 chars | Same | «دلیل این پیام: خواسته بودید وقتی {name} خوابش گرفت، خبرتان کند. فقط عصرها.» |  |
 | `ci.stopped` | DM | system | Okay, no more {category} messages from {name}. | ≤ 90 chars | Confirmation, edited in place; neutral, no sadness | «چشم. دیگر پیام «{category}» از {name} نمی‌آید.» | Copywriter: «چشم» is the respectful "will do", with no sadness |
-| `ci.paused.title` | sheet | pet | I paused my messages since they weren't landing. Want them back? | ≤ 2 lines | Shown once after three unopened; honest, unbothered | «انگار پیام‌هام وقت خوبی نمی‌رسید؛ فعلاً نگهشون داشتم. دوباره بفرستم؟» | Copywriter: Blames the timing, not the person |
+| `ci.paused.title` | sheet | pet | I paused my messages; they weren't landing. Want them back? | ≤ 3 lines at 320 px | Shown once after three unopened; honest, unbothered | «انگار پیام‌هام وقت خوبی نمی‌رسید؛ فعلاً نگهشون داشتم. دوباره بفرستم؟» | Copywriter: Blames the timing, not the person |
 | `ci.paused.yes` | sheet | person | Yes, send them | ≤ 20 chars |  | «آره، بفرست» | Copywriter: Person voice, echoes the verb |
 | `ci.paused.no` | sheet | system | Keep paused | ≤ 20 chars | Equal weight to yes | «فعلاً نه» |  |
 | `ci.cat.growing` | settings | system | Growing up | ≤ 20 chars | Category name | «بزرگ شدن» |  |
@@ -484,6 +484,16 @@ Client strings from `src/app/studio/pet/_ui/strings/extra.ts` that still fell ba
 | `share.copied` | toast | system | Copied. Paste it anywhere. | ≤ 1 line | Copy-the-line fallback for the share card | «کپی شد؛ هر جا خواستید بچسبانید.» | Added in Wave C (26 Oct); FA: copywriter |
 | `visits.later` | sheet | system | Visits arrive in a later update. Until then nobody visits {name}, and you visit friends’ pets only where they allow it. | ≤ 3 lines | One-way explanation; "comes later", no pressure | «دیدوبازدید در به‌روزرسانی بعدی می‌آید. تا آن موقع کسی به ⁨{name}⁩ سر نمی‌زند، و شما هم فقط جایی به ابرک دوستانتان سر می‌زنید که خودشان اجازه داده باشند.» | Added in Wave C (26 Oct); FA: copywriter; extra.ts marks it system (the brief said pet); system fits, since it explains a rule about {name}. No date promised |
 | `visits.group` | sheet | system | your groups | ≤ 16 chars | Stands in for {group} in `perm.P10.body` | «گروه‌هایتان» | Added in Wave C (26 Oct); FA: copywriter; Reads correctly in «کسانی که در گروه‌هایتان با شما هستند…» |
+
+## Added in visual QA polish
+
+Keys added by the 26 Oct visual QA pass (`PET_VISUAL_QA_2026_10_26.md`, P-01, P-06, P-11). English is the source of truth; **FA is for the Persian copywriter to review**: each line reuses the copywriter's own wording where one exists.
+
+| Key | Surface | Voice | English | Limit | Intent | FA | Variants and notes |
+|---|---|---|---|---|---|---|---|
+| `toy.play.guess` | toy label | system | Guess | ≤ 12 chars, one line | Play dock label for Guess my word; the full name stays `play.guessCard` | «کلمهٔ مخفی» | Added in visual QA polish (26 Oct); FA: the copywriter's `play.guessCard`, unchanged; "Guess my word" wrapped to two lines in the dock (P-06) |
+| `book.tab.learned` | book | system | Learned | ≤ 12 chars, one line | Life Book tab label for What I've learned; one line in both languages | «آموخته‌ها» | Added in visual QA polish (26 Oct); FA: copywriter to review; the word of `growth.lit.chip` («آموختهٔ تازه»); `growth.tab` stays the tab's heading where there is room (P-11) |
+| `growth.confirm.title` | sheet | pet | Shall I keep this in my book? | ≤ 2 lines | The confirm sheet's title; the moment's own title shows under it as the body, so a long title never truncates the ask | «اینو توی دفترم بنویسم؟» | Added in visual QA polish (26 Oct); FA: the copywriter's `growth.confirm.ask` without the quoted title (P-01) |
 
 ## Lint
 

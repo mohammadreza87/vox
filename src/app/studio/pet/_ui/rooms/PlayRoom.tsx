@@ -22,7 +22,8 @@ export function Pips({ on, of = STARFALL.pips }: { on: number; of?: number }) {
 }
 
 const StarIcon = () => <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l2.6 5.6 6.1.7-4.5 4.2 1.2 6L12 16.6 6.6 19.5l1.2-6L3.3 9.3l6.1-.7z" fill="#FFE27A" /></svg>;
-const GuessIcon = () => <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.2 9a2.9 2.9 0 1 1 4 2.7c-.8.4-1.2 1-1.2 1.8v.6M12 17.6v.1" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>;
+/** illustrated like Bop's ball and Starfall's star (one style across every dock, P-23): a word bubble holding a "?" */
+const GuessIcon = () => <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5v7a2.5 2.5 0 0 1-2.5 2.5H11l-4 3.5V16h-.5A2.5 2.5 0 0 1 4 13.5z" fill="#9FD3FF" /><path d="M10 8.4a2.1 2.1 0 1 1 2.9 1.9c-.6.3-.9.7-.9 1.3v.3M12 13.8v.1" stroke="#14202C" strokeWidth="1.8" strokeLinecap="round" fill="none" /></svg>;
 const ZenIcon = () => <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 16a4 4 0 0 1 .6-8 5 5 0 0 1 9.6 1.4A3.3 3.3 0 0 1 17 16z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" /></svg>;
 
 type Phase = 'pick' | 'play' | 'end' | 'guess';
@@ -144,6 +145,11 @@ export default function PlayRoom({ host }: RoomProps) {
 
   const toggleZen = () => setZen((z) => !z);
   const startGuess = () => { setResume(guessUnfinished(host.agentId)); setPhase('guess'); };
+  /** Zen (§4.2) is a switch, not a game (P-06): a toggle in the top corner, in the row of the page's Close button but
+   *  on the other side (top-right belongs to Close in Telegram), mirrored in Persian. It steps aside while a round plays. */
+  const rootEl = host.root();
+  const zenToggle = rootEl && (phase === 'pick' || phase === 'end') && createPortal(
+    <button type="button" className="pet-zen" aria-pressed={zen} title={t('play.starfall.zenOn')} onClick={toggleZen}><ZenIcon /><span>{t('play.zen')}</span></button>, rootEl);
 
   // a best Guess round ends on the same "a new page" line as Starfall's (the page itself is the server's `bestGuess`)
   if (phase === 'guess') return <Guess host={host} zen={zen} resume={resume} onDone={(b) => { setBest(!!b); setLast('guess'); setPhase(b ? 'end' : 'pick'); }} />;
@@ -157,7 +163,6 @@ export default function PlayRoom({ host }: RoomProps) {
             {!zen && <Pips on={pips} />}
           </div>, stageEl)}
         <div className="pet-verbs">
-          <button type="button" className="pet-verb" aria-pressed={zen} title={t('play.starfall.zenOn')} disabled><i><ZenIcon /></i><span>{t('play.zen')}</span></button>
           <button type="button" className="pet-link" onClick={() => { const r = round.current; if (r) end(r); }}>{t('play.done')}</button>
         </div>
       </>
@@ -165,26 +170,31 @@ export default function PlayRoom({ host }: RoomProps) {
   }
   if (phase === 'end') {
     return (
-      <div className="pet-verbs">
-        {best && <span className="pet-hint" role="status">{t('play.bestPage')}</span>}
-        <button type="button" className="pet-link" onClick={last === 'guess' ? startGuess : start}>{t('play.again')}</button>
-        <button type="button" className="pet-link" onClick={() => setPhase('pick')}>{t('play.done')}</button>
-      </div>
+      <>
+        {zenToggle}
+        {best && <div className="pet-tray" data-s=""><span className="pet-hint" role="status">{t('play.bestPage')}</span></div>}
+        <div className="pet-verbs">
+          <button type="button" className="pet-link" onClick={last === 'guess' ? startGuess : start}>{t('play.again')}</button>
+          <button type="button" className="pet-link" onClick={() => setPhase('pick')}>{t('play.done')}</button>
+        </div>
+      </>
     );
   }
+  // the picker (S8): three games, evenly spaced inside the gutters, one-line labels; the tired guard dims them and
+  // offers the Bedroom above the rail
   return (
-    <div className="pet-verbs" data-room="play">
-      <button type="button" className="pet-verb" data-tired={tired ? '' : undefined} onClick={() => host.toyEvent({ type: 'ballTap' })}>
-        <i><BallIcon /></i><span>{t('toy.play.bop')}</span>
-      </button>
-      <button type="button" className="pet-verb" data-tired={tired ? '' : undefined} onClick={start}>
-        <i><StarIcon /></i><span>{t('play.starfall.title')}</span>
-      </button>
-      {host.send && <button type="button" className="pet-verb" onClick={startGuess}><i><GuessIcon /></i><span>{t('play.guessCard')}</span></button>}
-      <button type="button" className="pet-verb" aria-pressed={zen} title={t('play.starfall.zenOn')} onClick={toggleZen}>
-        <i><ZenIcon /></i><span>{t('play.zen')}</span>
-      </button>
-      {tired && <button type="button" className="pet-link" onClick={() => host.setRoom('bedroom')}>{t('play.toBedroom')}</button>}
-    </div>
+    <>
+      {zenToggle}
+      {tired && <div className="pet-tray" data-s=""><button type="button" className="pet-link" onClick={() => host.setRoom('bedroom')}>{t('play.toBedroom')}</button></div>}
+      <div className="pet-verbs" data-room="play">
+        <button type="button" className="pet-verb" data-tired={tired ? '' : undefined} onClick={() => host.toyEvent({ type: 'ballTap' })}>
+          <i><BallIcon /></i><span>{t('toy.play.bop')}</span>
+        </button>
+        <button type="button" className="pet-verb" data-tired={tired ? '' : undefined} onClick={start}>
+          <i><StarIcon /></i><span>{t('play.starfall.title')}</span>
+        </button>
+        {host.send && <button type="button" className="pet-verb" onClick={startGuess}><i><GuessIcon /></i><span>{t('toy.play.guess')}</span></button>}
+      </div>
+    </>
   );
 }

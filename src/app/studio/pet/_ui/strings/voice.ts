@@ -178,6 +178,7 @@ export const NOT_SYSTEM: Partial<Record<PetStringKey, Exclude<PetVoice, 'system'
   'play.guess.giveUp': 'person',
   'garden.planted': 'pet',
   'garden.breathe.on': 'pet',
+  'growth.confirm.title': 'pet',
 };
 
 export const voiceOf = (key: PetStringKey): PetVoice => NOT_SYSTEM[key] ?? 'system';

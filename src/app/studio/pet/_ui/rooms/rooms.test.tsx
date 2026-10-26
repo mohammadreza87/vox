@@ -14,7 +14,7 @@ beforeEach(() => { stage = document.createElement('div'); stage.className = 'pet
 afterEach(() => { stage.remove(); localStorage.clear(); });
 
 describe('Play room (design §4.2, S8, S9)', () => {
-  it('the picker: Bop, Starfall and the Zen switch, no digits; Bop is the Home ball', () => {
+  it('the picker: Bop and Starfall in the dock, Zen as the switch in the top corner (P-06), no digits; Bop is the Home ball', () => {
     const h = fakeHost();
     const { container } = render(<PlayRoom id="play" host={h} />);
     expect(screen.getAllByRole('button').map((b) => b.textContent)).toEqual(['Bop', 'Starfall', 'Zen']);
@@ -42,7 +42,8 @@ describe('Play room (design §4.2, S8, S9)', () => {
     expect(h.said.at(-1)).toBe('So close! That one was shy.');
     expect(h.emit).toHaveBeenCalledWith(expect.objectContaining({ type: 'round', zen: false }));
     expect(stage.querySelector('.pet-field')).toBeNull();
-    expect(screen.getAllByRole('button').map((b) => b.textContent)).toEqual(['Again', 'Done']);
+    // the end card's Again and Done, and the Zen switch back at the top once the round is over
+    expect(screen.getAllByRole('button').map((b) => b.textContent)).toEqual(['Again', 'Done', 'Zen']);
   });
 
   it('Zen: no pips, no end screen; the first round says how to play', async () => {
@@ -72,9 +73,11 @@ describe('Play room (design §4.2, S8, S9)', () => {
   it('in Persian the cards and the pips are Persian, with no digits', () => {
     localStorage.setItem(LANG_KEY, 'fa');
     const h = fakeHost({}, { lang: 'fa' });
-    const { container } = render(<PlayRoom id="play" host={h} />);
-    expect(container.textContent).toContain('بی‌عجله');
-    expect(container.textContent).not.toMatch(DIGITS);
+    render(<PlayRoom id="play" host={h} />);
+    // the Zen switch sits at the top of the page (a portal), the games in the dock
+    expect(document.body.textContent).toContain('بی‌عجله');
+    expect(document.body.textContent).toContain('روپایی');
+    expect(document.body.textContent).not.toMatch(DIGITS);
   });
 });
 
@@ -140,7 +143,7 @@ describe('Life Book (design §4.7, §4.11, S13)', () => {
   it('What I\'ve learned: lit moments with their why line, unlit ones as hints only, never a count', () => {
     const h = fakeHost({ growth });
     const { container } = render(<BookRoom id="book" host={h} />);
-    fireEvent.click(screen.getByRole('tab', { name: 'What I’ve learned' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Learned' }));
     const seen: string[] = [];
     for (let i = 0; i < 3; i++) {
       seen.push(leafText()!);
@@ -158,7 +161,7 @@ describe('Life Book (design §4.7, §4.11, S13)', () => {
   it('empty Learned tab, keepsakes with how they were earned, and About me', () => {
     const h = fakeHost({ play: emptyPlay({ items: [{ id: 'bloomPin', earnedAt: 1 }] }) });
     render(<BookRoom id="book" host={h} />);
-    fireEvent.click(screen.getByRole('tab', { name: 'What I’ve learned' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Learned' }));
     expect(leafText()).toBe('Nothing here yet. Teach me something and say “remember this”.');
     fireEvent.click(screen.getByRole('tab', { name: 'Keepsakes' }));
     expect(leafText()).toBe('Bloom pinBloom a seed together');

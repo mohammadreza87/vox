@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { characterModel, PRESET_LOOKS, STAGE_PARTS } from '@/lib/studio/character';
+import { characterModel, GROUND, PRESET_LOOKS, STAGE_PARTS } from '@/lib/studio/character';
 import type { Stage } from '@/lib/studio/types';
-import { DETAIL_FADE_MS, DETAIL_PART, detailFade, detailLayers, fitDetails, NO_DETAILS, type Details } from './details';
+import { DETAIL_FADE_MS, DETAIL_PART, detailFade, detailLayers, edgesAt, fitDetails, NO_DETAILS, type Details } from './details';
 import { detailState } from './extras';
 import { harness } from './harness.fixture';
 import { poseToSvg } from './poseToSvg';
@@ -35,15 +35,16 @@ describe('growth details on the rig (§4.11)', () => {
     expect(poseToSvg(geom, f, { details: { shown: NO_DETAILS } })).toBe(plain);
     const svg = poseToSvg(geom, f, { details: { shown: fitDetails(ALL, 4) } });
     for (const k of ['glint', 'pin', 'charm', 'keepsake:book', 'seasonal']) expect(svg).toContain(`data-detail="${k}"`);
-    // the glint rides inside the lids (a blink closes it), the floor keepsakes outside the body's transform (they never hop)
+    // the glint rides inside the lids (a blink closes it); the room keepsakes stand behind the body, outside its transform (they never hop)
     const lids = svg.indexOf('data-part="lids"'), glint = svg.indexOf('data-detail="glint"'), body = svg.indexOf('<g transform="translate(');
     expect(glint).toBeGreaterThan(lids);
-    expect(svg.indexOf('data-details="floor"')).toBeLessThan(body);
+    expect(svg.indexOf('data-details="back"')).toBeLessThan(body);
     const wisp = characterModel(PRESET_LOOKS[3], { uid: 'pet', mode: 'live', stage: 1, expr: 'idle', size: 200 });
     const l1 = detailLayers(wisp, fitDetails(ALL, 1));
     expect(l1.lids).toHaveLength(0);
     expect(l1.body).toHaveLength(0);
-    expect(l1.floor).toHaveLength(4);
+    expect(l1.back).toHaveLength(4);
+    expect(l1.floor).toHaveLength(0);
   });
 
   it('places worn details on the body and floor ones clear of it, for every species', () => {
@@ -55,11 +56,37 @@ describe('growth details on the rig (§4.11)', () => {
       expect(px).toBeGreaterThan(30); expect(px).toBeLessThan(100); expect(py).toBeGreaterThan(m.face.cheeks.y); expect(py).toBeLessThan(166);
       const [cx] = String(charm.attrs['data-pivot']).split(' ').map(Number);
       expect(cx).toBeGreaterThan(100); expect(cx).toBeLessThan(178);
-      for (const g of l.floor) {
+      for (const g of l.back) {
         const x = Number(/translate\(([-\d.]+)/.exec(JSON.stringify(g))![1]);
         expect(x).toBeGreaterThan(0); expect(x).toBeLessThan(200);
       }
     }
+  });
+
+  it('places room keepsakes in the room behind the pet, never at its foot; the Closet bow sits on the head (P-24)', () => {
+    for (const look of PRESET_LOOKS.slice(0, 12)) {
+      const m = characterModel(look, { uid: 'pet', mode: 'live', stage: 3, expr: 'idle', size: 200 });
+      const l = detailLayers(m, fitDetails({ keepsakes: ['play', 'closet', 'book'], seasonal: 'yalda' }, 3));
+      // behind the ground line (further back on the floor), never in the front floor layer
+      expect(l.floor).toHaveLength(0);
+      for (const g of l.back) {
+        const [x, y] = /translate\(([-\d.]+) ([-\d.]+)\)/.exec(JSON.stringify(g))!.slice(1).map(Number);
+        expect(y).toBeLessThan(GROUND);
+        // clear of the body's side at its height (it stands in the room, it is not lying against the pet)
+        const [lo, hi] = edgesAt(m, GROUND + (y - 6 - GROUND) / m.growth).map((v) => 100 + (v - 100) * m.growth);
+        expect(x < lo - 6 || x > hi + 6, `${look.hue} ${x} ${lo} ${hi}`).toBe(true);
+      }
+      const free = !m.layers['acc-rigid'].length && !m.layers['acc-soft'].length;
+      expect(l.head.map((g) => g.attrs['data-detail'])).toEqual(free ? ['keepsake:closet'] : []);
+      expect(l.back.some((g) => g.attrs['data-detail'] === 'keepsake:closet')).toBe(!free);
+      if (free) {
+        const y = Number(/translate\([-\d.]+ ([-\d.]+)\)/.exec(JSON.stringify(l.head[0]))![1]);
+        expect(y).toBeLessThan(m.face.eyes[0].cy - 10);
+      }
+    }
+    // a closet head item takes the head: the bow goes back into the room
+    const m = characterModel(PRESET_LOOKS[0], { uid: 'pet', mode: 'live', stage: 3, expr: 'idle', size: 200 });
+    expect(detailLayers(m, fitDetails({ keepsakes: ['closet'] }, 3), { headWorn: true }).head).toHaveLength(0);
   });
 
   it('fades in with one overshoot (opacity only on reduced motion)', () => {

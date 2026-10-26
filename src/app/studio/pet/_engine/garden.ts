@@ -44,7 +44,7 @@ export function fitGarden(g: GardenInput | null | undefined): GardenShown | null
 /** The key of the garden's floor group (`data-detail`). */
 export const gardenKey = (g: GardenShown) => `garden:${g.kind}:${g.state}`;
 
-/** Drawn at this scale on the floor (the pot about 20 px tall, a bloom about 55 px: a third of the pet). */
+/** Drawn at this scale on the floor beside the pet (the Garden room draws it bigger: details.ts GARDEN_HERO). */
 export const GARDEN_K = 1.75;
 /** Where the soil is, over the vessel's base (unscaled): rain and the bloom's sparkle aim here. */
 export const soilY = (kind: SeedKind) => (kind === 'sabzeh' ? -5.3 : -11.2);
@@ -94,10 +94,13 @@ function dish(wet: boolean): SvgNode[] {
 function flowerPlant(state: GardenState): SvgNode[] {
   const y0 = -11.2;
   if (state === 'planted') return [
-    // a small soil mound with the seed just showing, and a tiny first shoot (it is alive, never a bare pot)
-    p(`M-3.6 ${y0}Q0 ${y0 - 3} 3.6 ${y0}Z`, { fill: SOIL_LIGHT }),
-    e(-0.6, y0 - 1.5, 1.4, 0.95, { fill: '#D7B07A' }),
-    p(`M0.6 ${y0 - 1.6}Q1.1 ${y0 - 3.6} 2.4 ${y0 - 4.2}`, line(STEM, 0.9)),
+    // a soil mound, the seed half showing, and its first hooked shoot with two seed leaves: alive, never a bare pot,
+    // and clearly smaller than a sprout (seed → sprout → bloom read apart at a glance)
+    p(`M-4 ${y0}Q0 ${y0 - 3} 4 ${y0}Z`, { fill: SOIL_LIGHT }),
+    e(-1.7, y0 - 1.4, 1.5, 1, { fill: '#D7B07A' }),
+    p(`M0.5 ${y0 - 1.5}Q0.1 ${y0 - 3.9} 1.1 ${y0 - 4.9}`, line(STEM, 1.1)),
+    p(leafD(1.1, y0 - 4.9, 2.6, 62), { fill: LEAF }),
+    p(leafD(1.1, y0 - 4.9, 2.3, -48), { fill: LEAF_DEEP }),
   ];
   if (state === 'sprouted') return [
     p(`M0 ${y0}Q-0.5 ${y0 - 3.6} 0 ${y0 - 7}`, line(STEM, 1.3)),

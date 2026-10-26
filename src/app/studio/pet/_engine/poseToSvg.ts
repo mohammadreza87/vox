@@ -32,7 +32,7 @@ export interface PoseSvgOpts {
   /** paint-server id prefix the model was built with (blush gradient), default 'pet' */
   uid?: string;
   /** growth details (§4.11) to draw, and the one fading in (details.ts detailFade); none: the output is unchanged */
-  details?: { shown: ShownDetails; fade?: { key: string; o: number; s: number } | null } & GardenDraw;
+  details?: { shown: ShownDetails; fade?: { key: string; o: number; s: number } | null; hero?: boolean; headWorn?: boolean } & GardenDraw;
   /** the closet outfit (outfits.ts) and the look its free accessories are drawn for; none: the output is unchanged */
   outfit?: { shown: ShownWearing; look: CharacterLook };
 }
@@ -49,9 +49,10 @@ export function poseToSvg(geom: Geom, f: RigFrame, o: PoseSvgOpts = {}): string 
   const sw = m.face.strokeW;
   const eyePaint = (i: 0 | 1) => ({ fill: INK, stroke: INK, 'stroke-width': r(f.eyeStroke[i] * sw), 'stroke-linecap': 'round', 'stroke-linejoin': 'round' });
   const pivot = (k: keyof CharacterModel['pivots']): Pt => m.pivots[k];
-  const dl: DetailLayers | null = o.details ? detailLayers(m, o.details.shown, { fade: o.details.fade, swing: f.accSoft.rot, glint: f.glint, sway: o.details.sway, shimmer: o.details.shimmer }) : null;
+  const dl: DetailLayers | null = o.details ? detailLayers(m, o.details.shown, { fade: o.details.fade, swing: f.accSoft.rot, glint: f.glint, sway: o.details.sway, shimmer: o.details.shimmer, hero: o.details.hero, headWorn: o.details.headWorn ?? !!o.outfit?.shown.head }) : null;
   const ol: OutfitLayers | null = o.outfit ? outfitLayers(m, o.outfit.shown, { look: o.outfit.look, swing: f.accSoft.rot }) : null;
-  const extra: Partial<Record<RigLayer, SvgNode[]>> = ol ? { face: ol.face, 'acc-rigid': ol.head } : {};
+  const head = [...(ol?.head ?? []), ...(dl?.head ?? [])];
+  const extra: Partial<Record<RigLayer, SvgNode[]>> = { ...(ol ? { face: ol.face } : {}), ...(head.length ? { 'acc-rigid': head } : {}) };
 
   const rewrite = (nodes: SvgNode[]): SvgNode[] => nodes.map((nd) => {
     const part = nd.attrs['data-part'], rig = nd.attrs['data-rig'];
@@ -123,9 +124,11 @@ export function poseToSvg(geom: Geom, f: RigFrame, o: PoseSvgOpts = {}): string 
   const b = o.breath ?? { sx: 1, sy: 1, rot: 0 };
   const body = about([100, GROUND], { x: f.body.x, y: f.body.y, rot: f.body.rot + b.rot, sx: f.body.sx * b.sx, sy: f.body.sy * b.sy });
   const layers = RIG_LAYERS.filter((l) => m.layers[l].length || extra[l]?.length).map(layer).join('');
-  // the worn details ride the body over the face; floor keepsakes stay on the floor (outside the body's transform)
+  // the worn details ride the body over the face; keepsakes stand in the room behind the pet and the garden's pot in
+  // front of it, both outside the body's transform (they never hop)
   const worn = (ol && ol.body.length + ol.hand.length ? `<g data-wear="body">${nodesToSvg([...ol.body, ...ol.hand])}</g>` : '')
     + (dl?.body.length ? `<g data-details="body">${nodesToSvg(dl.body)}</g>` : '');
+  const back = dl?.back.length ? `<g data-details="back">${nodesToSvg(dl.back)}</g>` : '';
   const floor = dl?.floor.length ? `<g data-details="floor">${nodesToSvg(dl.floor)}</g>` : '';
-  return `<defs>${nodesToSvg(ol ? [...m.defs, ...ol.defs] : m.defs)}</defs>${floor}<g transform="${body}"><g transform="${rootTransform(m)}">${layers}${worn}</g></g>`;
+  return `<defs>${nodesToSvg(ol ? [...m.defs, ...ol.defs] : m.defs)}</defs>${back}<g transform="${body}"><g transform="${rootTransform(m)}">${layers}${worn}</g></g>${floor}`;
 }

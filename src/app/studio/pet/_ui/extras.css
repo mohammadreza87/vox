@@ -1,11 +1,18 @@
 /* Wave B's living-page layer (Extras.tsx): sheets, coach chips, the lit chip, a tip's toy halo, hands-free. Loaded with
-   that chunk after hello, never with the route. No scroll: a sheet is a title, at most four lines and two buttons. */
+   that chunk after hello, never with the route. No scroll: a sheet is a title of at most three lines (the ask is never
+   cut, balanced so no word sits alone), at most four lines of body and two equal one-line buttons. */
 .pet-sheet { position: fixed; z-index: 30; left: 50%; bottom: calc(var(--pet-safe-bottom,env(safe-area-inset-bottom,0px)) + 12px); width: min(100% - 24px, 420px); transform: translateX(-50%);
-  display: flex; flex-direction: column; gap: 8px; padding: 18px 18px 14px; border-radius: 24px; background: #16191E; border: 1px solid #ffffff1a; box-shadow: 0 12px 40px #0009; animation: petSheet .32s var(--ease-out); }
-.pet-sheet b { font: 600 18px/24px var(--f-display); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  display: flex; flex-direction: column; gap: 8px; padding: 18px 18px 14px; border-radius: 24px; background: #16191E; border: 1px solid #ffffff1a; box-shadow: 0 12px 40px #0009; animation: petSheet .32s var(--ease-out); visibility: visible; }
+.pet-root .pet-sheet:focus { outline: 0; }
+.pet-sheet b { font: 600 18px/24px var(--f-display); text-wrap: balance; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .pet-sheet p { margin: 0; color: var(--text-2); font-size: var(--pet-sm); line-height: 1.45; }
+.pet-sheet p a { color: var(--volt); text-decoration: underline; text-underline-offset: 2px; }
 .pet-sheet-row { display: flex; gap: 10px; margin-top: 6px; }
-.pet-sheet-row button { flex: 1; min-height: 46px; padding: 8px 10px; border: 1px solid #ffffff24; border-radius: 999px; background: #ffffff10; font-weight: 600; }
+.pet-sheet-row button { flex: 1; min-width: 0; min-height: 46px; padding: 8px 6px; border: 1px solid #ffffff24; border-radius: 999px; background: #ffffff10; font-weight: 600; white-space: nowrap; }
+/* one line in every class: Persian's longer labels («استفاده از میکروفون») and Peek/Short take the small size */
+.pet-root:is([data-h=peek], [data-h=short], [lang=fa]) .pet-sheet-row button { font-size: 14px; }
+/* one rule for every sheet (P-29): it is modal, so the whole bottom stack (rail, dock, pill) steps back behind it */
+.pet-root[data-sheet] .pet-bottom { visibility: hidden; }
 .pet-sheet-row .pet-sheet-yes { background: var(--volt); color: var(--on-volt); border-color: transparent; }
 @keyframes petSheet { from { opacity: 0; transform: translate(-50%, 24px); } }
 .pet-coach { position: fixed; z-index: 25; display: flex; align-items: center; gap: 2px; max-width: min(86vw, 320px); padding: 6px 4px 6px 14px; padding-inline: 14px 4px; border-radius: 16px;

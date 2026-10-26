@@ -6,11 +6,13 @@ import { isLit, momentWhy, pageKeys } from '../growth';
 import { Sheet } from '../Sheet';
 import { t, type PetStringKey } from '../strings';
 import type { RoomProps } from '.';
+import { Doodle, ItemIcon, TabIcon, type BookTab } from './art';
 import './rooms.css';
 
-type Tab = 'pages' | 'keepsakes' | 'learned' | 'about';
-const TABS: readonly [Tab, PetStringKey][] = [['pages', 'book.tab.pages'], ['keepsakes', 'book.tab.keepsakes'], ['learned', 'growth.tab'], ['about', 'book.tab.about']];
-interface Leaf { key: string; title: string; why?: string; unlit?: boolean }
+type Tab = BookTab;
+/** One line each, in both languages (P-11): What I've learned is `book.tab.learned` here; `growth.tab` names it in full elsewhere. */
+const TABS: readonly [Tab, PetStringKey][] = [['pages', 'book.tab.pages'], ['keepsakes', 'book.tab.keepsakes'], ['learned', 'book.tab.learned'], ['about', 'book.tab.about']];
+interface Leaf { key: string; title: string; why?: string; unlit?: boolean; item?: KeepsakeId }
 
 const earnKey = (id: KeepsakeId): PetStringKey => {
   const e = KEEPSAKES[id].earn;
@@ -30,7 +32,7 @@ export function leaves(tab: Tab, host: NonNullable<RoomProps['host']>): Leaf[] {
   if (tab === 'keepsakes') {
     const items = v?.play?.items ?? [];
     if (!items.length) return [{ key: 'none', title: t('closet.empty') }];
-    return items.map((i) => ({ key: i.id, title: t(`item.${i.id}` as PetStringKey), why: t(earnKey(i.id)) }));
+    return items.map((i) => ({ key: i.id, title: t(`item.${i.id}` as PetStringKey), why: t(earnKey(i.id)), item: i.id }));
   }
   if (tab === 'learned') {
     const g = v?.growth;
@@ -86,25 +88,33 @@ export default function BookRoom({ host }: RoomProps) {
     host.say(t(yes ? 'perm.P10.after.yes' : 'perm.P10.after.no', undefined, host.lang));
   };
 
+  // a cream spread in the tray above the rail (the drawing on the first page, the line on the second), the four tabs as
+  // the room's verbs in the dock slot under it: the rail never moves (P-05, P-11)
   return (
-    <div className="pet-book" data-room="book">
-      <div className="pet-tabs" role="tablist">
-        {TABS.map(([id, k]) => <button key={id} type="button" role="tab" aria-selected={tab === id} onClick={() => pick(id)}>{t(k)}</button>)}
-      </div>
-      <div className="pet-page" role="tabpanel" data-unlit={leaf.unlit ? '' : undefined}
-        onPointerDown={(e) => { swipe.current = e.clientX; }}
-        onPointerUp={(e) => { const x = swipe.current; swipe.current = null; if (x === null || Math.abs(e.clientX - x) < 36) return; go((e.clientX < x) !== rtl ? 1 : -1); }}>
-        <button type="button" aria-label={t('book.prev')} disabled={i === 0} onClick={() => go(-1)}>‹</button>
-        <div aria-live="polite">
-          {visits ? <small>{t('visits.later', { name }, host.lang)}</small> : <><b>{leaf.title}</b>{leaf.why && <small>{leaf.why}</small>}</>}
+    <>
+      <div className="pet-tray pet-book" data-room="book">
+        <div className="pet-spread" role="tabpanel" data-unlit={leaf.unlit ? '' : undefined}
+          onPointerDown={(e) => { swipe.current = e.clientX; }}
+          onPointerUp={(e) => { const x = swipe.current; swipe.current = null; if (x === null || Math.abs(e.clientX - x) < 36) return; go((e.clientX < x) !== rtl ? 1 : -1); }}>
+          {leaf.item && !visits ? <span className="pet-doodle"><ItemIcon id={leaf.item} /></span> : <Doodle faint={leaf.unlit || leaf.key === 'none'} />}
+          <div aria-live="polite">
+            {visits ? <small>{t('visits.later', { name }, host.lang)}</small> : <><b>{leaf.title}</b>{leaf.why && <small>{leaf.why}</small>}</>}
+          </div>
         </div>
-        <button type="button" aria-label={t('ui.more')} disabled={i >= list.length - 1} onClick={() => go(1)}>›</button>
+        {/* one row under the spread, the same height on every tab: ‹, the dots (or About me's Visits link), › */}
+        <div className="pet-nav">
+          <button type="button" aria-label={t('book.prev')} disabled={i === 0} onClick={() => go(-1)}>‹</button>
+          {list.length > 1 && <div className="pet-dots" aria-hidden="true">{list.map((l, k) => <i key={l.key} data-on={k === i ? '' : undefined} />)}</div>}
+          {/* About me is one leaf (no dots): Visits opens from under it (§4: "Visits open from the Life Book") */}
+          {tab === 'about' && !visits && <button type="button" className="pet-link" onClick={openVisits}>{t('toy.book.visits')}</button>}
+          <button type="button" aria-label={t('ui.more')} disabled={i >= list.length - 1} onClick={() => go(1)}>›</button>
+        </div>
       </div>
-      {list.length > 1 && <div className="pet-dots" aria-hidden="true">{list.map((l, k) => <i key={l.key} data-on={k === i ? '' : undefined} />)}</div>}
-      {/* About me is one leaf (no dots): Visits opens from under it (§4: "Visits open from the Life Book") */}
-      {tab === 'about' && !visits && <button type="button" className="pet-link" onClick={openVisits}>{t('toy.book.visits')}</button>}
+      <div className="pet-verbs" role="tablist" aria-label={t('room.book')} data-room="book">
+        {TABS.map(([id, k]) => <button key={id} type="button" role="tab" className="pet-verb" aria-selected={tab === id} onClick={() => pick(id)}><i><TabIcon tab={id} /></i><span>{t(k)}</span></button>)}
+      </div>
       {visits === 'ask' && <Sheet title={t('perm.P10.title', { name })} body={t('perm.P10.body', { name, group: t('visits.group', undefined, host.lang) })}
         yes={t('perm.P10.yes')} no={t('perm.P1.no')} onYes={() => answerVisits(true)} onNo={() => answerVisits(false)} />}
-    </div>
+    </>
   );
 }
