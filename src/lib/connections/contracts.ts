@@ -187,3 +187,10 @@ export interface OperationReceipt {
 }
 export interface ConnectionsSnapshot { schemaVersion: 1; scope: ScopeBinding; connections: ConnectionView[];
   grants: ConnectionGrantRecord[]; operations: OperationReceipt[] }
+
+/**
+ * What the agent-bot surface answers (decision 8): who the page is for, and nothing about the person's connections.
+ * Its initData is signed with a token the agent's creator holds, so even a GET there must disclose nothing: no labels,
+ * providers, MCP URLs, grants or receipts. People see and manage their connections in Vox (VoxxBot-signed).
+ */
+export interface AgentConnectionsHandoff { agent: { id: string; name: string }; manageInVox: true }

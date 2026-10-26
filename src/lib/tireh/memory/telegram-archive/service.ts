@@ -4,11 +4,10 @@ import { archiveDigest, archiveEventSchema, archiveFileSchema, archiveHeadSchema
   archiveStateSchema, ArchiveUnavailableError, type ArchiveAuthority, type ArchiveAuthoritySource, type ArchiveEvent,
   type ArchiveHead, type ArchiveOptions, type ArchiveRepository, type ArchiveScope, type ArchiveState,
   type ArchiveTransport, type CaptureReceipt, type CheckpointReceipt } from './contracts';
+import { MAX_ARCHIVE_CHECKPOINTS, MAX_ARCHIVE_FILE_BYTES, MAX_ARCHIVE_PENDING_BYTES, MAX_ARCHIVE_STATE_BYTES } from './limits';
+import { padSnapshotPublicationReservation, publishArchiveSnapshot, readPublishedArchiveSnapshot } from './publication';
 
-export const MAX_ARCHIVE_FILE_BYTES = 128 * 1024;
-export const MAX_ARCHIVE_PENDING_BYTES = 64 * 1024;
-export const MAX_ARCHIVE_STATE_BYTES = 192 * 1024;
-export const MAX_ARCHIVE_CHECKPOINTS = 128;
+export { MAX_ARCHIVE_CHECKPOINTS, MAX_ARCHIVE_FILE_BYTES, MAX_ARCHIVE_PENDING_BYTES, MAX_ARCHIVE_STATE_BYTES } from './limits';
 const integer = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const common = { schemaVersion: z.literal(1), scope: archiveScopeSchema, botId: integer.min(1),
   sequence: integer.min(1), operationId: z.string().min(1).max(200) };
@@ -21,7 +20,8 @@ const encode = (value: unknown) => new TextEncoder().encode(JSON.stringify(value
 const eventFingerprint = (event: ArchiveEvent) => archiveDigest(encode([event.eventId, event.logicalId, event.revision,
   event.occurredAt, event.role, event.text, event.sourceMessageId ?? null]));
 export interface ArchiveRecovery { events: ArchiveEvent[]; status: 'recoverable' | 'captured'; pending: number }
-export interface ArchiveStatus { pending: number; oldestPendingAt?: number; head?: ArchiveHead; unknownDelivery: boolean; overdue: boolean; capacityReached: boolean }
+export interface ArchiveStatus { pending: number; oldestPendingAt?: number; head?: ArchiveHead; unknownDelivery: boolean; overdue: boolean; capacityReached: boolean;
+  publicationPending?: boolean; snapshot?: { sequence: number; receiptCount: number; chunks: number } }
 
 /** T1 protocol only. The repository is the existing canonical service ledger;
  * Telegram files supply content, never current grants or a deletion barrier. */
@@ -29,11 +29,13 @@ export class TelegramMemoryArchive {
   private readonly now: () => number;
   private readonly maxAgeMs: number;
   private readonly maxCheckpoints: number;
+  private readonly snapshotPublicationEnabled: () => boolean;
   constructor(private readonly repo: ArchiveRepository, private readonly authority: ArchiveAuthoritySource,
     private readonly transport: ArchiveTransport, options: ArchiveOptions = {}) {
     this.now = options.now ?? Date.now;
     this.maxAgeMs = options.maxAgeMs ?? 60_000;
     this.maxCheckpoints = options.maxRestoreCheckpoints ?? MAX_ARCHIVE_CHECKPOINTS;
+    this.snapshotPublicationEnabled = options.snapshotPublicationEnabled ?? (() => false);
     if (!Number.isSafeInteger(this.maxAgeMs) || this.maxAgeMs < 1 || this.maxAgeMs > 60_000 ||
       !Number.isSafeInteger(this.maxCheckpoints) || this.maxCheckpoints < 1 || this.maxCheckpoints > MAX_ARCHIVE_CHECKPOINTS) throw new ArchiveUnavailableError('capacity');
   }
@@ -59,6 +61,7 @@ export class TelegramMemoryArchive {
   private async mutate<T>(auth: ArchiveAuthority, apply: (state: ArchiveState) => T): Promise<T> {
     return this.repo.transact(auth.scope, raw => {
       const state = this.state(raw, auth), result = apply(state); state.revision++;
+      padSnapshotPublicationReservation(state);
       if (encode(state).byteLength > MAX_ARCHIVE_STATE_BYTES) throw new ArchiveUnavailableError('capacity');
       return { state: archiveStateSchema.parse(state), result };
     }, () => this.fence(auth));
@@ -67,6 +70,7 @@ export class TelegramMemoryArchive {
     const event = archiveEventSchema.parse(input), auth = await this.authorized(scope), now = this.now();
     if (event.receivedAt > now || event.expiresAt <= event.receivedAt || this.suppressed(event, auth)) throw new ArchiveUnavailableError('authority');
     return this.mutate(auth, state => {
+      if (state.publication) throw new ArchiveUnavailableError('unknown_delivery');
       const receipt = state.receipts.find(r => r.eventId === event.eventId);
       if (receipt) {
         if (receipt.fingerprint !== eventFingerprint(event)) throw new ArchiveUnavailableError('integrity');
@@ -86,7 +90,10 @@ export class TelegramMemoryArchive {
     const auth = await this.authorized(scope), state = this.state(await this.repo.read(scope), auth); this.fence(auth);
     const oldestPendingAt = state.pending.length ? Math.min(...state.pending.map(e => e.receivedAt)) : undefined;
     return { pending: state.pending.length, ...(oldestPendingAt === undefined ? {} : { oldestPendingAt }), ...(state.head ? { head: state.head } : {}),
-      unknownDelivery: !!state.operation && ['unknown', 'bundle_sending', 'manifest_sending'].includes(state.operation.stage),
+      unknownDelivery: (!!state.operation && ['unknown', 'bundle_sending', 'manifest_sending'].includes(state.operation.stage)) ||
+        (!!state.publication && ['unknown', 'chunk_sending', 'manifest_sending'].includes(state.publication.stage)),
+      ...(state.publication ? { publicationPending: true } : {}),
+      ...(state.snapshot ? { snapshot: { sequence: state.snapshot.baseHead.sequence, receiptCount: state.snapshot.receiptCount, chunks: state.snapshot.chunks } } : {}),
       overdue: oldestPendingAt !== undefined && this.now() - oldestPendingAt >= this.maxAgeMs,
       capacityReached: (state.head?.sequence ?? 0) >= this.maxCheckpoints || state.receipts.length >= 1024 || state.pending.length >= 16 || encode(state).byteLength >= MAX_ARCHIVE_STATE_BYTES - 4096 };
   }
@@ -110,6 +117,7 @@ export class TelegramMemoryArchive {
   async checkpoint(scope: ArchiveScope, options: { force?: boolean } = {}): Promise<CheckpointReceipt> {
     const auth = await this.authorized(scope);
     let state = this.state(await this.repo.read(scope), auth);
+    if (state.publication) throw new ArchiveUnavailableError('unknown_delivery');
     if (state.operation && ['unknown', 'bundle_sending', 'manifest_sending'].includes(state.operation.stage)) return { status: 'unknown' };
     if (!state.pending.length) return { status: 'empty' };
     if (!state.operation && !options.force && state.pending.length < 8 && this.now() - Math.min(...state.pending.map(e => e.receivedAt)) < this.maxAgeMs) return { status: 'pending' };
@@ -180,15 +188,34 @@ export class TelegramMemoryArchive {
   async abandonUnknown(scope: ArchiveScope): Promise<{ pending: number }> {
     const auth = await this.authorized(scope);
     return this.mutate(auth, state => {
+      if (state.publication) {
+        if (!['unknown', 'chunk_sending', 'manifest_sending'].includes(state.publication.stage)) throw new ArchiveUnavailableError('integrity');
+        delete state.publication;
+      }
       if (state.operation && !['unknown', 'bundle_sending', 'manifest_sending'].includes(state.operation.stage)) throw new ArchiveUnavailableError('integrity');
       delete state.operation; return { pending: state.pending.length };
     });
   }
+  /** Explicit owner command only; never called by checkpoint or drain. */
+  async compact(scope: ArchiveScope) {
+    const auth = await this.authorized(scope);
+    return publishArchiveSnapshot({ scope, auth, repo: this.repo, transport: this.transport, now: this.now,
+      fence: () => this.fence(auth), enabled: this.snapshotPublicationEnabled,
+      read: async () => this.state(await this.repo.read(scope), auth),
+      mutate: apply => this.mutate(auth, apply), download: file => this.checkedDownload(file, auth) });
+  }
   async recover(scope: ArchiveScope): Promise<ArchiveRecovery> {
     const auth = await this.authorized(scope), state = this.state(await this.repo.read(scope), auth);
     const events: ArchiveEvent[] = [], visited = new Set<string>();
+    const snapshotEntries = state.snapshot ? await readPublishedArchiveSnapshot(state, file => this.checkedDownload(file, auth), this.now) : [];
+    const accounted = new Set(snapshotEntries.map(entry => entry.receipt.eventId));
+    events.push(...snapshotEntries.flatMap(entry => entry.event ? [entry.event] : []));
     let head = state.head, count = 0;
     while (head) {
+      if (state.snapshot && head.sequence <= state.snapshot.baseHead.sequence) {
+        if (JSON.stringify(head) !== JSON.stringify(state.snapshot.baseHead)) throw new ArchiveUnavailableError('integrity');
+        break;
+      }
       if (++count > this.maxCheckpoints || visited.has(head.digest)) throw new ArchiveUnavailableError('capacity');
       visited.add(head.digest);
       const manifest = manifestSchema.parse(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(await this.checkedDownload(head, auth))));
@@ -196,7 +223,16 @@ export class TelegramMemoryArchive {
         (manifest.previous?.sequence ?? 0) !== manifest.sequence - 1) throw new ArchiveUnavailableError('integrity');
       const bundle = bundleSchema.parse(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(await this.checkedDownload(manifest.bundle, auth))));
       if (archiveScopeKey(bundle.scope) !== archiveScopeKey(scope) || bundle.botId !== auth.botId || bundle.sequence !== manifest.sequence || bundle.operationId !== manifest.operationId) throw new ArchiveUnavailableError('integrity');
+      if (state.snapshot) for (const event of bundle.events) {
+        if (accounted.has(event.eventId)) throw new ArchiveUnavailableError('integrity');
+        accounted.add(event.eventId);
+      }
       events.push(...bundle.events); head = manifest.previous ?? undefined;
+    }
+    if (state.snapshot && !head) throw new ArchiveUnavailableError('integrity');
+    if (state.snapshot) for (const event of state.pending) {
+      if (accounted.has(event.eventId)) throw new ArchiveUnavailableError('integrity');
+      accounted.add(event.eventId);
     }
     events.push(...state.pending);
     const latest = new Map<string, ArchiveEvent>(), ids = new Map<string, string>();
@@ -209,6 +245,30 @@ export class TelegramMemoryArchive {
     const current = this.state(await this.repo.read(scope), auth);
     if (current.revision !== state.revision) throw new ArchiveUnavailableError('authority');
     this.fence(auth);
+    if (state.snapshot) {
+      const receipts = new Map<string, ArchiveState['receipts'][number]>(), newest = new Map<string, ArchiveState['receipts'][number]>();
+      const versions = new Set<string>();
+      for (const receipt of state.receipts) {
+        const version = JSON.stringify([receipt.logicalId, receipt.sourceRevision]);
+        if (receipts.has(receipt.eventId) || versions.has(version) || !accounted.has(receipt.eventId) && !receipt.suppressed) throw new ArchiveUnavailableError('integrity');
+        receipts.set(receipt.eventId, receipt); versions.add(version);
+        if (!newest.has(receipt.logicalId) || newest.get(receipt.logicalId)!.sourceRevision < receipt.sourceRevision) newest.set(receipt.logicalId, receipt);
+      }
+      const byId = new Map<string, ArchiveEvent>();
+      for (const event of events) {
+        const receipt = receipts.get(event.eventId);
+        if (!receipt || byId.has(event.eventId) || receipt.logicalId !== event.logicalId || receipt.sourceRevision !== event.revision ||
+          receipt.fingerprint !== eventFingerprint(event) || event.receivedAt > this.now() || event.expiresAt <= event.receivedAt) throw new ArchiveUnavailableError('integrity');
+        byId.set(event.eventId, event);
+      }
+      const usable = [...newest.values()].flatMap(receipt => {
+        const event = byId.get(receipt.eventId);
+        return event && !receipt.suppressed && !this.suppressed(event, auth) ? [event] : [];
+      });
+      this.fence(auth);
+      return { events: usable.sort((a, b) => a.occurredAt - b.occurredAt || a.receivedAt - b.receivedAt || a.eventId.localeCompare(b.eventId)),
+        status: state.pending.length ? 'captured' : 'recoverable', pending: state.pending.length };
+    }
     return { events: [...latest.values()].filter(e => !this.suppressed(e, auth)).sort((a, b) => a.occurredAt - b.occurredAt || a.receivedAt - b.receivedAt || a.eventId.localeCompare(b.eventId)),
       status: state.pending.length ? 'captured' : 'recoverable', pending: state.pending.length };
   }

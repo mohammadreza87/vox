@@ -82,6 +82,8 @@ export function startBots(studio: Studio): { stop: () => void } {
   if (manager) {
     const webAppUrl = studio.deps.webAppUrl;
     if (webAppUrl) manager.setChatMenuButton('Open Studio', webAppUrl).catch(() => logTelegramDiagnostic(log, 'menu_failed'));
+    // Settings v2: the manager's /settings menu (nothing with the flag off).
+    void studio.settingsBot.syncManagerMenu();
     loops.set('manager', pollLoop(manager, MANAGER_UPDATES, (update) => handleManagerUpdate(studio, update), log, integrity('manager')));
   }
 

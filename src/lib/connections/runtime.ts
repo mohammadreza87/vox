@@ -15,8 +15,13 @@ import { ConnectionsError } from './errors';
 import { boundedStudioRequest } from '../studio/http';
 import { ConnectionsBudgetLedger } from './budgets';
 import { FileAdaptiveStorage, FirestoreAdaptiveStorage } from '../adaptive/persistence/storage';
+import { erasedAuthority, eraseConnections, exportConnections, type ConnectionsExport, type ConnectionsRightsPort } from './rights';
+import { botAuthenticationRevision } from './bot-principal';
+import { listProviderDefinitions } from './catalog';
+import { canUseAgent, visibilityOf } from '../studio/permissions';
+import { protectUsage, usageAudience } from '../studio/connector-usage';
 
-const PATHS = ['/v1/enrollments', '/v1/enrollments/claim', '/v1/enrollments/cancel', '/v1/execute', '/v1/revoke', '/v1/invalidate', '/v1/mcp/enrollments', '/v1/mcp/enrollments/preview', '/v1/mcp/enrollments/claim', '/v1/mcp/enrollments/cancel', '/v1/mcp/callback', '/v1/mcp/client-metadata'] as const;
+const PATHS = ['/v1/enrollments', '/v1/enrollments/claim', '/v1/enrollments/cancel', '/v1/execute', '/v1/revoke', '/v1/invalidate', '/v1/mcp/enrollments', '/v1/mcp/enrollments/preview', '/v1/mcp/enrollments/claim', '/v1/mcp/enrollments/cancel', '/v1/mcp/callback', '/v1/mcp/client-metadata', '/v1/erase'] as const;
 interface RuntimeState { storage: ConnectionsStorage; budgets: ConnectionsBudgetLedger; broker?: ConnectionsBrokerPort; authenticator?: BrokerAuthenticator;
   publicMcpRelay?: { callback(input: unknown): Promise<unknown>; metadata(): Promise<unknown> };
   apps: Map<string, { signature: string; application: ConnectionsApplication; touchedAt: number }> }
@@ -56,7 +61,7 @@ async function createRuntime(): Promise<RuntimeState> {
   state.broker = {
     begin: input => client.call(PATHS[0], input), claim: input => client.call(PATHS[1], input),
     cancel: input => client.call(PATHS[2], input), execute: input => client.call(PATHS[3], input), revoke: input => client.call(PATHS[4], input),
-    invalidate: input => client.call(PATHS[5], input),
+    invalidate: input => client.call(PATHS[5], input), erase: input => client.call(PATHS[12], input),
     mcpBegin: input => client.call(PATHS[6], input), mcpPreview: input => client.call(PATHS[7], input), mcpClaim: input => client.call(PATHS[8], input), mcpCancel: input => client.call(PATHS[9], input),
   };
   return state;
@@ -84,6 +89,62 @@ export async function getConnectionsApplication(studio: Studio, actor: Connectio
   return application;
 }
 
+/** Counts only: per provider, how many distinct people other than the viewer hold a live connection to this agent. No ids, labels, hosts or times. */
+export interface ConnectorUsage { providers: Array<{ id: string; name: string; people: number }> }
+const usageCache = new WeakMap<Studio, Map<string, { at: number; value: ConnectorUsage }>>();
+/**
+ * The viewer's own connections never count (no subtraction); an app shows only once USAGE_MIN_PEOPLE other people
+ * use it and, for a non-public agent, never when every other person who may use it does (studio/connector-usage.ts).
+ */
+export async function connectionUsageFor(studio: Studio, agentId: string, viewerTelegramId?: number): Promise<ConnectorUsage> {
+  let cache = usageCache.get(studio);
+  if (!cache) usageCache.set(studio, cache = new Map());
+  const cacheKey = `${agentId}:${viewerTelegramId ?? ''}`;
+  const hit = cache.get(cacheKey);
+  if (hit && Date.now() - hit.at < 60_000) return structuredClone(hit.value);
+  const runtime = await runtimeFor(studio);
+  const counts = await runtime.storage.countLivePeopleByAgent?.(agentId, viewerTelegramId === undefined ? undefined : `telegram-account:${viewerTelegramId}`) ?? {};
+  const state = await studio.deps.store.read();
+  const agent = state.agents.find(a => a.id === agentId);
+  // No agent: nothing to protect a count against, so nothing is shown (a hand-picked audience shows nothing either).
+  const audience = !agent ? 'chosen' as const : usageAudience(visibilityOf(agent),
+    () => state.members.filter(m => m.role !== 'pending' && m.telegramId !== viewerTelegramId && canUseAgent(m, agent) && !(agent.blocked ?? []).includes(m.telegramId)).length);
+  const names = new Map(listProviderDefinitions().map(p => [p.id, p.label]));
+  const value: ConnectorUsage = { providers: protectUsage(Object.entries(counts).map(([id, people]) => ({ id, name: id === 'remote_mcp' ? 'Custom MCP servers' : names.get(id) ?? id, people })), audience)
+    .sort((a, b) => b.people - a.people || a.name.localeCompare(b.name)) };
+  if (cache.size > 500) cache.clear();
+  cache.set(cacheKey, { at: Date.now(), value });
+  return structuredClone(value);
+}
+
+/** Erasure revokes through /v1/erase (no identity needed); a broker without it falls back to /v1/revoke with a server-minted
+ * actor it accepts at that moment: the member, else the agent bot that owns the connection. */
+function rightsPort(studio: Studio, runtime: RuntimeState): ConnectionsRightsPort {
+  return {
+    storage: runtime.storage, log: studio.deps.logger ?? console,
+    ...(runtime.broker?.erase ? { erase: runtime.broker.erase } : {}),
+    ...(runtime.broker ? { revoke: runtime.broker.revoke } : {}),
+    actorFor: async (accountId, connection) => {
+      const telegramId = Number(/^telegram-account:([1-9]\d{0,15})$/.exec(accountId)?.[1] ?? NaN);
+      const state = await studio.deps.store.read();
+      if (state.members.some(m => m.telegramId === telegramId && m.role !== 'pending')) return { accountId };
+      const agent = connection.schemaVersion === 2 ? state.agents.find(a => a.id === connection.agentId && a.status === 'active' && a.bot && a.tokenEnc) : undefined;
+      return agent ? { accountId, botAgentId: agent.id, botAuthenticationRevision: botAuthenticationRevision(agent) } : undefined;
+    },
+  };
+}
+/** Rights export and erasure of a person's connections (rights-http, pet forget). Throws only when the runtime cannot start. */
+export async function connectionsRightsFor(studio: Studio): Promise<{
+  export(telegramId: number, space: SpaceKind): Promise<ConnectionsExport | null>;
+  erase(telegramId: number, spaces: readonly SpaceKind[]): Promise<{ erased: number; pending: number }>;
+}> {
+  const port = rightsPort(studio, await runtimeFor(studio));
+  return {
+    export: (telegramId, space) => exportConnections(port, `telegram-account:${telegramId}`, space),
+    erase: (telegramId, spaces) => eraseConnections(port, `telegram-account:${telegramId}`, spaces),
+  };
+}
+
 /** Reverse broker control, separately authenticated from Telegram. The public
  * callback must be reverse-proxied only to the broker callback endpoint. */
 export async function handleStudioBrokerControl(studio: Studio, request: Request): Promise<Response> {
@@ -96,6 +157,8 @@ export async function handleStudioBrokerControl(studio: Studio, request: Request
     const raw = await bounded.text();
     state.authenticator.verify('POST', '/api/connections/broker', raw, request.headers);
     const input = brokerControlSchema.parse(JSON.parse(raw));
+    // Rights erasure: answered from the person's own records, before (and without) any identity resolution.
+    if (input.action === 'erasedContext') return Response.json(await erasedAuthority({ storage: state.storage }, input.actor, input.space, input.connectionId), { headers });
     const app = await getConnectionsApplication(studio, input.actor, input.space);
     let operationProviderId: string | undefined;
     const protectedActions = ['claim', 'markDispatched', 'assertUsable', 'assertDispatchable', 'registerResult', 'completeEnrollment', 'completeMcpEnrollment', 'drainWorkflows', 'registerSubscription', 'ingestVerifiedEvent'];

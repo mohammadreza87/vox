@@ -3,7 +3,9 @@
 import { AnimatePresence, MotionConfig, motion, PresenceContext, useIsPresent } from 'framer-motion';
 import { createContext, forwardRef, useCallback, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api, ApiError, haptic, initTelegram, tg, type AgentView, type Me } from '../_lib/client';
-import { dirOf, initialLocale, persistLocale, type Dir, type Locale } from '../_lib/i18n';
+import { syncCloudPrefs, writeCloudPref } from '../_lib/cloud-prefs';
+import { agentSettingsStack, settingsLinkOf } from '../_lib/settings/links';
+import { dirOf, initialLocale, LOCALE_KEY, LOCALES, persistLocale, type Dir, type Locale } from '../_lib/i18n';
 import { COVER_ROUTES, detectTier, kindFor, screenVariants, SPRING, TAB_ROUTES, type MotionTier, type NavCtx, type NavKind } from '../_lib/motion';
 import { Cloud } from './Cloud';
 import { ConfirmProvider, SheetHostContext, Spinner, UiLocaleProvider } from './ui';
@@ -50,7 +52,11 @@ export type Route =
   | { name: 'channels'; id: string }
   | { name: 'settings'; page: SettingsPage; params?: Record<string, string> };
 
-export type SettingsPage = 'preferences' | 'inbox' | 'reminders' | 'diagnostics' | 'requests' | 'connection' | 'voice-recognition' | 'agent-access';
+/**
+ * `agent` (Settings v2) is one agent's settings hub, params { agentId, section? }. `agent-connections` is that
+ * agent's connectors; `agent-access` is its old name, kept so existing links still land there.
+ */
+export type SettingsPage = 'preferences' | 'inbox' | 'reminders' | 'diagnostics' | 'requests' | 'connection' | 'voice-recognition' | 'agent-access' | 'agent-connections' | 'agent';
 export type { Locale };
 export type Space = 'work' | 'personal';
 
@@ -168,6 +174,13 @@ export function StudioApp() {
   const dir = dirOf(locale);
   const cache = useRef(new Map<string, AgentView>()).current;
   const notificationOpened = useRef(false);
+  /** Settings v2 Telegram links: consumed once per page load; a link never overrides navigation made since the first load. */
+  const settingsLinkOpened = useRef(false);
+  const notificationRouted = useRef(false);
+  const navGen = useRef(0);
+  /* ---- Settings v2: language and space also travel in Telegram CloudStorage ---- */
+  const cloudPrefs = useRef(false);
+  const [prefsReady, setPrefsReady] = useState(false);
 
   /* ---- unsaved-correction guard (Privacy owns the token) ---- */
   const correctionOwner = useRef<string | null>(null);
@@ -202,6 +215,26 @@ export function StudioApp() {
     initTelegram();
     void loadMe();
   }, [loadMe]);
+
+  // localStorage rendered the splash; with Settings v2 the travelling copy wins once, before the app shows,
+  // so a choice made on another device never flickers in. A choice made only on this device (before the
+  // flag, or offline) is copied up when the travelling copy has none. Flag off: CloudStorage is never
+  // touched and the app shows in the same render `me` arrives, as before.
+  const settingsV2 = me?.features?.settingsV2 === true;
+  const appReady = !!me && (!settingsV2 || prefsReady);
+  useEffect(() => {
+    if (!me || !settingsV2 || prefsReady) return;
+    let cancelled = false;
+    const local = { locale: stored<Locale>(LOCALE_KEY, LOCALES) ?? undefined, space: stored<Space>('vx:space', ['work', 'personal']) ?? undefined };
+    void syncCloudPrefs(local).then((prefs) => {
+      if (cancelled) return;
+      cloudPrefs.current = true;
+      if (prefs.locale) { setLocaleState(prefs.locale); persistLocale(prefs.locale); }
+      if (prefs.space) { setSpaceState(prefs.space); store('vx:space', prefs.space); }
+      setPrefsReady(true);
+    });
+    return () => { cancelled = true; };
+  }, [me, settingsV2, prefsReady]);
 
   /* ---- background pause (P8): CSS loops stop via .vx[data-paused], without re-rendering the app ---- */
   const rootRef = useRef<HTMLDivElement>(null);
@@ -262,6 +295,7 @@ export function StudioApp() {
     scrollMemory.set(routeKey(top(prev), prev.length), captureScroll(screen));
     if (screen?.contains(document.activeElement)) (document.activeElement as HTMLElement).blur?.();
     navCtx.current = k;
+    navGen.current += 1;
     stackRef.current = next;
     kinds.current = entered;
     const ms = reduced ? 170 : LOCK_MS[k.kind];
@@ -340,8 +374,8 @@ export function StudioApp() {
   }, [commit, currentScreen, heroReady, reduced, scrollMemory]);
   resetRef.current = reset;
 
-  const setLocale = useCallback((l: Locale) => { setLocaleState(l); persistLocale(l); }, []);
-  const setSpace = useCallback((s: Space) => { setSpaceState(s); store('vx:space', s); }, []);
+  const setLocale = useCallback((l: Locale) => { setLocaleState(l); persistLocale(l); if (cloudPrefs.current) writeCloudPref('locale', l); }, []);
+  const setSpace = useCallback((s: Space) => { setSpaceState(s); store('vx:space', s); if (cloudPrefs.current) writeCloudPref('space', s); }, []);
   const toast = useCallback((message: string, tone: 'info' | 'error' = 'info') => showSnack({ message, tone }), [showSnack]);
 
   const nav = useMemo<Nav | null>(() => me && {
@@ -350,20 +384,50 @@ export function StudioApp() {
   }, [me, loadMe, push, back, reset, toast, showSnack, locale, dir, setLocale, space, setSpace, cache, tier, guardBack, consumeBack]);
 
   useEffect(() => {
-    if (!me || me.member.role === 'pending' || notificationOpened.current) return;
+    if (!me || !appReady || me.member.role === 'pending' || notificationOpened.current) return;
     notificationOpened.current = true;
     const url = new URL(window.location.href);
     const notificationId = url.searchParams.get('notification');
     if (notificationId && /^[A-Za-z0-9_-]{1,128}$/.test(notificationId)) {
       // An opaque link chooses a screen only. The inbox reloads current account,
       // space, consent and agent authority before showing any notification.
+      notificationRouted.current = true;
       commit([{ name: 'home' }, { name: 'settings', page: 'reminders', params: { notificationId } }], { kind: 'replace', delta: 0 }, ['replace', 'push']);
     }
     if (notificationId !== null) {
       url.searchParams.delete('notification');
       window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
     }
-  }, [me, commit]);
+  }, [me, appReady, commit]);
+
+  // Settings v2: /settings and /start s_… in the manager bot (`?settings=`) or a `startapp` link (start_param) open the
+  // right settings page. The hub needs nothing; an agent code is resolved by the server now (unknown and forbidden
+  // codes alike land on the hub). Anything else (p_…, welcome) is ignored; a notification link wins; and navigation
+  // made before the answer arrives is never overridden. Flag off: never read.
+  useEffect(() => {
+    if (!me || !appReady || !settingsV2 || me.member.role === 'pending' || settingsLinkOpened.current) return;
+    settingsLinkOpened.current = true;
+    const opened = settingsLinkOf(window.location.href, tg()?.initDataUnsafe?.start_param);
+    const url = new URL(window.location.href);
+    if (url.searchParams.has('settings')) {
+      url.searchParams.delete('settings');
+      window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
+    }
+    if (!opened || notificationRouted.current) return;
+    const gen = navGen.current;
+    const hub = () => commit([{ name: 'privacy' }], { kind: 'replace', delta: 0 }, ['replace']);
+    if (opened.link.kind === 'hub') { hub(); return; }
+    void api.settingsLink(opened.raw).then((r) => r.target, () => null).then(async (target) => {
+      if (navGen.current !== gen) return;
+      if (!target) { hub(); return; }
+      // A section opens only when this viewer can see it on the agent (else its hub, once); the read also warms the cache.
+      const agent = target.section ? await api.agent(target.agentId).then((r) => r.agent, () => null) : null;
+      if (navGen.current !== gen) return;
+      if (agent) cache.set(agent.id, agent);
+      const next = agentSettingsStack(target.agentId, target.section, agent ? { me, agent, locale } : undefined);
+      commit(next, { kind: 'replace', delta: 0 }, next.map((_, i) => (i === 0 ? 'replace' : 'push')));
+    });
+  }, [me, appReady, settingsV2, commit, cache, locale]);
 
   // Telegram's native back button mirrors the in-app stack and pops with the same transition.
   useEffect(() => {
@@ -376,7 +440,7 @@ export function StudioApp() {
   }, [stack.length, syncBackButton]);
 
   // Telegram's ⋯ menu "Settings" opens You (D14).
-  const ready = !!me && me.member.role !== 'pending';
+  const ready = appReady && me.member.role !== 'pending';
   useEffect(() => {
     const settings = shell()?.SettingsButton;
     if (!ready || !settings) return;
@@ -409,7 +473,7 @@ export function StudioApp() {
       </div>
     );
   }
-  if (!me || !nav) {
+  if (!me || !nav || !appReady) {
     return (
       <div className="vx" {...shellProps} style={{ alignItems: 'center', justifyContent: 'center', padding: 24, gap: 14 }}>
         {/* layoutId face-vox-logo: the splash cloud flies into the Home header logo when the app arrives */}

@@ -67,6 +67,51 @@ describe('My data page', () => {
     expect(JSON.parse(post[1].body as string)).toEqual({ confirm: true });
   });
 
+  it('lists their connected apps with the agent and space, and reports connections erased and pending', async () => {
+    const apps = { ...DATA, connections: [{ space: 'work', connections: [{ id: 'c1', providerId: 'remote_mcp', agentId: 'ag1', displayLabel: 'My server', lifecycle: 'connected', health: 'healthy', createdAt: 1, updatedAt: 1 }],
+      providerAccounts: [], grants: [], operations: [], approvals: [], payloads: [], workflows: [], occurrences: [], subscriptions: [], audits: [] }] } as MyDataResponse;
+    fetchMock.mockImplementation(async (_url: string, init?: RequestInit) => init?.method === 'POST' ? json({ erased: 1, connectionsErased: 1, connectionsPending: 2 }) : json(apps));
+    render(<MyDataApp />);
+    expect(await screen.findByText('My server')).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Connected apps' })).toHaveTextContent('Mochi · Work');
+    expect(bridge.showConfirm).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Forget everything' }));
+    expect(bridge.showConfirm.mock.calls[0][0]).toContain('connected apps');
+    expect(await screen.findByText('Done. Erased pet care for 1 agent, 1 connected app. 2 more connected apps are stopped and will be gone shortly.')).toBeInTheDocument();
+  });
+
+  it('never lists a stopped or just-erased (revoked) app as connected; it stays in the JSON export', async () => {
+    const row = (id: string, displayLabel: string, lifecycle: string) => ({ id, providerId: 'gmail', agentId: 'ag1', displayLabel, lifecycle, health: 'healthy', createdAt: 1, updatedAt: 1 });
+    const rest = { providerAccounts: [], grants: [], operations: [], approvals: [], payloads: [], workflows: [], occurrences: [], subscriptions: [], audits: [] };
+    const before = { ...DATA, connections: [{ space: 'personal', connections: [row('c1', 'Live Gmail', 'connected'), row('c2', 'Stopped Gmail', 'revoked')], ...rest }] } as MyDataResponse;
+    // after Forget: the broker could not confirm, so the row is revoked and waiting to be purged
+    const after = { ...DATA, connections: [{ space: 'personal', connections: [row('c1', 'Live Gmail', 'revoked')], ...rest }] } as MyDataResponse;
+    let forgotten = false;
+    fetchMock.mockImplementation(async (_url: string, init?: RequestInit) => {
+      if (init?.method === 'POST') { forgotten = true; return json({ erased: 1, connectionsPending: 1 }); }
+      return json(forgotten ? after : before);
+    });
+    const { container } = render(<MyDataApp />);
+    expect(await screen.findByText('Live Gmail')).toBeInTheDocument();
+    const apps = screen.getByRole('region', { name: 'Connected apps' });
+    expect(apps).not.toHaveTextContent('Stopped Gmail');
+    expect(container.querySelector('pre')!.textContent).toContain('Stopped Gmail');
+    fireEvent.click(screen.getByRole('button', { name: 'Forget everything' }));
+    expect(await screen.findByText(/1 more connected app is stopped and will be gone shortly/)).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Connected apps' })).toBeNull());
+  });
+
+  it('says when connected apps could not be read, and shows no section when there are none', async () => {
+    fetchMock.mockImplementation(async () => json({ ...DATA, connectionsUnavailable: true }));
+    const { unmount } = render(<MyDataApp />);
+    expect(await screen.findByText('Your connected apps can’t be shown right now. Try again later.')).toBeInTheDocument();
+    unmount();
+    fetchMock.mockImplementation(async () => json(DATA));
+    render(<MyDataApp />);
+    await screen.findByText('Tea with cardamom');
+    expect(screen.queryByRole('region', { name: 'Connected apps' })).toBeNull();
+  });
+
   it('a refused session asks to reopen from Vox; outside Telegram it never calls the server', async () => {
     fetchMock.mockImplementation(async () => json({ error: 'authentication_required' }, 401));
     const { unmount } = render(<MyDataApp />);

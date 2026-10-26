@@ -11,6 +11,10 @@ import { ElevenLabsSpeechError } from './media';
 import { ROUTE_TEXT_CHARS } from './skills/route';
 import { logTelegramDiagnostic, type TelegramDiagnostic } from '../tireh/telegram/diagnostics';
 import { tirehFlags } from '../tireh/flags';
+import { settingsV2 } from './flags';
+import { MAX_AGENT_SKILLS } from './skills/types';
+import type { AgentView } from './service';
+import type { Agent } from './types';
 import type { AgentVisibility, Member, MemoryPolicy, Role, SpawnBrief } from './types';
 
 type Json = Record<string, unknown>;
@@ -119,6 +123,24 @@ async function authenticate(studio: Studio, req: Request, opts: RouterOptions, l
   return studio.ensureMember(user);
 }
 
+/** The verified initData's language (authenticate already checked the signature). */
+function localeOf(req: Request): 'en' | 'fa' {
+  try {
+    const user = JSON.parse(new URLSearchParams(req.headers.get('x-telegram-init-data') ?? '').get('user') ?? 'null') as { language_code?: unknown } | null;
+    return typeof user?.language_code === 'string' && user.language_code.toLowerCase().startsWith('fa') ? 'fa' : 'en';
+  } catch { return 'en'; }
+}
+
+/** Settings v2: the creator's quiet Telegram record when a voice or skills change committed (only they can make one). */
+function identityReceipts(studio: Studio, before: Agent | undefined, after: AgentView, locale: 'en' | 'fa'): void {
+  if (!before || !settingsV2() || after.status !== 'active') return;
+  const skills = (ids?: string[]) => [...(ids ?? [])].sort().join(',');
+  if ((before.voice?.label ?? '') !== (after.voice?.label ?? '') && after.voice?.label)
+    studio.receipts.queue({ agentId: after.id, telegramId: after.createdBy, locale, kind: 'voice', voice: after.voice.label });
+  if (skills(before.persona.skillIds) !== skills(after.persona.skillIds))
+    studio.receipts.queue({ agentId: after.id, telegramId: after.createdBy, locale, kind: 'skills', count: after.persona.skillIds?.length ?? 0, max: MAX_AGENT_SKILLS });
+}
+
 export async function handleStudioRequest(studio: Studio, req: Request, path: string[], opts: RouterOptions): Promise<Response> {
   const method = req.method.toUpperCase();
   try {
@@ -139,6 +161,8 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
       return json({ member: me, org: studio.deps.orgName, bot: studio.deps.managerUsername, features: {
         avatars: !!studio.deps.openai, voices: !!studio.deps.eleven, calls: !!studio.deps.openai || !!studio.deps.eleven, liveCalls: studio.liveCalls, legacyMemorySharing: !studio.deps.adaptive,
         skillRouting: studio.deps.decider ? 'decisions' : 'local',
+        // Settings v2 (agent settings hub, regrouped You tab, Telegram CloudStorage prefs); read per request, default off.
+        settingsV2: settingsV2(),
       } });
     }
     if (me.role === 'pending') throw new StudioError(403, 'Waiting for an admin to approve you.');
@@ -160,6 +184,11 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
         const b = await body(req);
         return json({ member: await studio.setRole(me, Number(id), str(b.role, 20) as Role) });
       }
+    }
+    // Settings v2 deep links (Telegram start_param / ?settings=): where an opaque code lands for this person, re-checked
+    // on every open. Unknown, forbidden and malformed codes answer alike ({target: null}, the hub); flag off: not found.
+    if (root === 'settings-link' && !id && method === 'GET' && settingsV2()) {
+      return json({ target: await studio.settingsBot.resolveTarget(me, new URL(req.url).searchParams.get('code')) });
     }
     if (root === 'groups' && method === 'GET') return json({ groups: await studio.listGroups(me) });
     if (root === 'groups' && id && action === 'resnapshot' && !path[3] && method === 'POST' && tirehFlags().sharingV2) { const b = await body(req); return json(await studio.resnapshotGroupMemory(me, Number(id), typeof b.telegramId === 'number' ? b.telegramId : NaN, b.apply === true)); }
@@ -220,8 +249,11 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
           const b = await body(req);
           // Growth moments (design §4.11) ride the persona edit: same lock, their own lint.
           if (b.growth !== undefined && b.persona === undefined) return json({ agent: await studio.updateGrowth(me, id, b.growth) });
+          const before = settingsV2() ? (await studio.deps.store.read()).agents.find((a) => a.id === id) : undefined;
           if (b.growth !== undefined) await studio.updateGrowth(me, id, b.growth);
-          return json({ agent: await studio.updatePersona(me, id, (b.persona ?? {}) as Json) });
+          const agent = await studio.updatePersona(me, id, (b.persona ?? {}) as Json);
+          identityReceipts(studio, before, agent, localeOf(req));
+          return json({ agent });
         }
         if (method === 'DELETE') { await studio.deleteDraft(me, id); return json({ ok: true }); }
       }
@@ -246,15 +278,21 @@ export async function handleStudioRequest(studio: Studio, req: Request, path: st
           case 'POST voice': {
             const b = await body(req);
             if (b.action === 'design') return json({ agent: await studio.designVoices(me, id, str(b.description, 1000)) });
-            if (b.action === 'choose-design') return json({ agent: await studio.chooseDesignedVoice(me, id, str(b.generatedVoiceId, 200) ?? '') });
-            if (b.action === 'choose-default') return json({ agent: await studio.chooseDefaultVoice(me, id, str(b.voiceId, 200) ?? '') });
-            if (b.action === 'choose-library') {
-              return json({ agent: await studio.chooseLibraryVoice(me, id, {
+            const before = settingsV2() ? (await studio.deps.store.read()).agents.find((a) => a.id === id) : undefined;
+            let agent: AgentView;
+            if (b.action === 'choose-design') agent = await studio.chooseDesignedVoice(me, id, str(b.generatedVoiceId, 200) ?? '');
+            else if (b.action === 'choose-default') agent = await studio.chooseDefaultVoice(me, id, str(b.voiceId, 200) ?? '');
+            else if (b.action === 'choose-library') {
+              agent = await studio.chooseLibraryVoice(me, id, {
                 publicOwnerId: str(b.publicOwnerId, 200) ?? '', voiceId: str(b.voiceId, 200) ?? '', name: str(b.name, 60) ?? 'Voice',
-              }) });
-            }
-            throw new StudioError(400, 'Unknown voice action');
+              });
+            } else throw new StudioError(400, 'Unknown voice action');
+            identityReceipts(studio, before, agent, localeOf(req));
+            return json({ agent });
           }
+          // Settings v2 (404 with the flag off): manager-only aggregates.
+          case 'GET connector-usage': return json(await studio.connectorUsage(me, id));
+          case 'GET history': return json(await studio.agentHistory(me, id));
           case 'POST speak': {
             const audio = await studio.previewSpeech(me, id, str((await body(req)).text, 300) ?? '');
             return new Response(new Uint8Array(audio), { headers: { 'Content-Type': 'audio/mpeg', 'Cache-Control': 'no-store' } });

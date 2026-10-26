@@ -444,6 +444,17 @@ describe('Persona step', () => {
     expect(state.nav.toast).not.toHaveBeenCalled();
   });
 
+  it('an editor who is not the creator (an admin on a member\'s draft) sees the skills read-only, with no Add', async () => {
+    const current = agent({ canShapeIdentity: false }, { roleId: 'mobile.ua-manager', skillIds: ['growth.paid-ua', 'growth.roas'] });
+    state.agent.mockResolvedValue({ agent: current });
+    await open({ draftId: current.id });
+    for (const name of ['Paid UA', 'ROAS modelling']) expect(screen.getByRole('button', { name })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: /^Add skills/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Paid UA' }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+    expect(state.updatePersona).not.toHaveBeenCalled();
+  });
+
   it('hides "How they talk" until the draft has voice examples, then shows them as an exchange', async () => {
     state.agent.mockResolvedValue({ agent: agent() });
     await open({ draftId: 'fixture-agent' });

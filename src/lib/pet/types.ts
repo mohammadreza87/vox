@@ -293,7 +293,7 @@ export interface GrowthConfirmResponse { lit: 'agent' | 'mine' | null; growth?: 
 export interface PetExportResponse { petCare: PetCare[]; agentChoices?: AgentJoin[]; circles?: CircleParticipationExport[]; notes?: NoteExport[]; petPlay?: PetPlay[]; petCheckins?: PetCheckinRecord }
 /** choicesErased / circlesErased / notesErased: agent-card choices, circle rows and own note copies removed alongside pet care, present only when any were. */
 /** playErased: play records removed with pet care, present only when any were. checkinsErased: the check-in record, when one was. */
-export interface PetForgetResponse { erased: number; choicesErased?: number; circlesErased?: number; notesErased?: number; playErased?: number; checkinsErased?: number }
+export interface PetForgetResponse { erased: number; choicesErased?: number; circlesErased?: number; notesErased?: number; connectionsErased?: number; connectionsPending?: number; playErased?: number; checkinsErased?: number }
 
 export type PetErrorCode =
   | 'authentication_required' // initData missing, stale, or signed by another bot

@@ -18,8 +18,11 @@ export const ADAPTIVE_RELEASE_CAPABILITIES = Object.freeze({
   supportedPetCareSchemas: Object.freeze([1]),
   supportedConnectionRecordSchemas: Object.freeze([1, 2]),
   supportedSelfServiceMcpSchemas: Object.freeze([1]),
+  supportedReplyUseSchemas: Object.freeze([1]),
+  supportedProviderTemplateSchemas: Object.freeze([1]),
   supportedTelegramArchiveSchemas: Object.freeze([1]),
   supportedTelegramArchiveSourceSuppressionVersions: Object.freeze([1]),
+  supportedTelegramArchiveSnapshotPublicationVersions: Object.freeze([1]),
 });
 const fail = () => { throw new Error('Adaptive storage is incompatible with this release; current personalization controls must be preserved.'); };
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -328,6 +331,71 @@ function scanObserver(observer, required, canonicalVersion) {
     }
   }
 }
+const archiveId = value => typeof value === 'string' && value.length > 0 && value.length <= 200;
+function scanArchiveFile(value, head = false) {
+  if (!keys(value, ['fileId', 'digest', 'messageId', ...(head ? ['sequence'] : [])]) || !archiveId(value.fileId) ||
+      !digest(value.digest) || !positive(value.messageId) || head && (!positive(value.sequence) || value.sequence > 128)) fail();
+}
+function scanArchiveScope(value, doc, row) {
+  if (!keys(value, ['accountId', 'personId', 'agentId', 'space', 'containerId']) || value.accountId !== doc.accountId ||
+      value.personId !== doc.personId || value.agentId !== row.agentId || value.space !== row.space ||
+      value.containerId !== `private-tenant:${hashValue(doc.accountId).slice(0, 24)}:${row.space}:private`) fail();
+}
+/** Read only strict control metadata. Source text/chunks are never opened by
+ * release admission, and an omitted marker cannot hide a new nested format. */
+function scanArchivePublication(row, doc, required) {
+  const marked = Object.hasOwn(row, 'snapshotPublicationVersion');
+  const hasSnapshot = object(row.state) && Object.hasOwn(row.state, 'snapshot');
+  const hasPublication = object(row.state) && Object.hasOwn(row.state, 'publication');
+  const hasRetired = Object.hasOwn(row, 'retiredOperation');
+  if ((marked && row.snapshotPublicationVersion !== 1) || ((hasSnapshot || hasPublication || hasRetired) && !marked)) fail();
+  if (!marked) return;
+  required.telegramArchiveSnapshotPublicationVersion = 1;
+  if (hasSnapshot || hasPublication) {
+    scanArchiveScope(row.state.scope, doc, row);
+    if (!positive(row.state.botId)) fail();
+  }
+  if (hasSnapshot) {
+    const s = row.state.snapshot;
+    if (!keys(s, ['version', 'manifest', 'baseHead', 'receiptCount', 'receiptDigest', 'sourceStateDigest', 'planDigest', 'chunks']) || s.version !== 1 ||
+        !positive(s.receiptCount) || s.receiptCount > 1024 || !positive(s.chunks) || s.chunks > 16 ||
+        !digest(s.receiptDigest) || !digest(s.sourceStateDigest) || !digest(s.planDigest)) fail();
+    scanArchiveFile(s.manifest); scanArchiveFile(s.baseHead, true);
+  }
+  if (hasPublication) {
+    const p = row.state.publication;
+    if (!object(p)) fail();
+    if (hasSnapshot || row.state.operation || !keys(p, ['id', 'stage', 'authorityRevision', 'authorityDigest', 'sourceRevision', 'sourceStateDigest', 'sourceHead',
+      'receiptCount', 'receiptDigest', 'createdAt', 'validUntil', 'planJson', 'planDigest', 'chunkRefs', 'ordinal', 'budgetBytes', 'reservation', ...(Object.hasOwn(p, 'manifest') ? ['manifest'] : [])]) ||
+      !archiveId(p.id) || !['prepared', 'chunk_sending', 'chunk_uploaded', 'manifest_sending', 'manifest_uploaded', 'ready', 'unknown'].includes(p.stage) ||
+      !archiveId(p.authorityRevision) || !digest(p.authorityDigest) || !integer(p.sourceRevision) || !digest(p.sourceStateDigest) ||
+      !positive(p.receiptCount) || p.receiptCount > 1024 || !digest(p.receiptDigest) || !integer(p.createdAt) || !integer(p.validUntil) || p.validUntil <= p.createdAt ||
+      typeof p.planJson !== 'string' || !p.planJson.length || Buffer.byteLength(p.planJson) > 128 * 1024 || !digest(p.planDigest) ||
+      !Array.isArray(p.chunkRefs) || p.chunkRefs.length > 16 || !integer(p.ordinal) || p.ordinal > 16 ||
+      !positive(p.budgetBytes) || p.budgetBytes > 192 * 1024 || typeof p.reservation !== 'string' || Buffer.byteLength(p.reservation) > 192 * 1024 || !/^[\x20-\x7e]*$/.test(p.reservation)) fail();
+    scanArchiveFile(p.sourceHead, true); p.chunkRefs.forEach(ref => scanArchiveFile(ref));
+    if (p.manifest) scanArchiveFile(p.manifest);
+    let plan; try { plan = JSON.parse(p.planJson); } catch { fail(); }
+    if (!keys(plan, ['schemaVersion', 'kind', 'scope', 'botId', 'createdAt', 'sourceRevision', 'authorityRevision', 'authorityExpiresAt', 'suppressedEventIds',
+      'sourceHead', 'stateDigest', 'authorityDigest', 'receiptCount', 'sourceFiles', 'sourceBytes', 'chunks']) || plan.schemaVersion !== 1 || plan.kind !== 'snapshot-plan' ||
+      !positive(plan.botId) || !integer(plan.createdAt) || !integer(plan.sourceRevision) || !archiveId(plan.authorityRevision) || !integer(plan.authorityExpiresAt) ||
+      !Array.isArray(plan.suppressedEventIds) || plan.suppressedEventIds.length > 1024 || !plan.suppressedEventIds.every(archiveId) ||
+      !digest(plan.stateDigest) || !digest(plan.authorityDigest) || !positive(plan.receiptCount) || plan.receiptCount > 1024 ||
+      !integer(plan.sourceFiles) || plan.sourceFiles > 256 || !integer(plan.sourceBytes) || plan.sourceBytes > 32 * 1024 * 1024 ||
+      !Array.isArray(plan.chunks) || !plan.chunks.length || plan.chunks.length > 16) fail();
+    scanArchiveScope(plan.scope, doc, row); scanArchiveFile(plan.sourceHead, true);
+    for (const ref of plan.chunks) if (!keys(ref, ['ordinal', 'digest', 'bytes', 'entries']) || !integer(ref.ordinal) || ref.ordinal > 15 ||
+      !digest(ref.digest) || !positive(ref.bytes) || ref.bytes > 128 * 1024 || !positive(ref.entries) || ref.entries > 1024) fail();
+  }
+  if (hasRetired) {
+    const r = row.retiredOperation;
+    if (!keys(r, ['kind', 'id', 'scope', 'botId', 'createdAt', 'stage', 'files']) || !['checkpoint', 'snapshot'].includes(r.kind) ||
+        !archiveId(r.id) || !positive(r.botId) || !integer(r.createdAt) || r.stage !== 'unknown' || !Array.isArray(r.files) || r.files.length > (r.kind === 'checkpoint' ? 1 : 17)) fail();
+    scanArchiveScope(r.scope, doc, row); r.files.forEach(ref => scanArchiveFile(ref));
+    if (row.state?.operation || hasPublication) fail();
+    if (row.state && row.state.botId !== r.botId) fail();
+  }
+}
 function scanCanonical(doc, key, version, required) {
   if (!object(doc) || doc.schemaVersion !== version || !account(doc.accountId) || hash(doc.accountId) !== key ||
       doc.personId !== `account-profile:${hashValue(doc.accountId).slice(0, 32)}` || !positive(doc.revision) || !integer(doc.createdAt) || !integer(doc.updatedAt) || doc.updatedAt < doc.createdAt) fail();
@@ -338,7 +406,7 @@ function scanCanonical(doc, key, version, required) {
     if (!Array.isArray(doc.telegramArchives) || doc.telegramArchives.length > 4) fail();
     const seen = new Set();
     for (const row of doc.telegramArchives) {
-      if (!keys(row, ['agentId', 'space', 'enabled', 'generation', 'clearedAt', 'index', ...(Object.hasOwn(row, 'state') ? ['state'] : []), ...(Object.hasOwn(row, 'authorityStamp') ? ['authorityStamp'] : []), ...(Object.hasOwn(row, 'sourceSuppressionVersion') ? ['sourceSuppressionVersion'] : [])]) ||
+      if (!keys(row, ['agentId', 'space', 'enabled', 'generation', 'clearedAt', 'index', ...(Object.hasOwn(row, 'state') ? ['state'] : []), ...(Object.hasOwn(row, 'authorityStamp') ? ['authorityStamp'] : []), ...(Object.hasOwn(row, 'sourceSuppressionVersion') ? ['sourceSuppressionVersion'] : []), ...(Object.hasOwn(row, 'snapshotPublicationVersion') ? ['snapshotPublicationVersion'] : []), ...(Object.hasOwn(row, 'retiredOperation') ? ['retiredOperation'] : [])]) ||
           typeof row.agentId !== 'string' || !row.agentId.length || row.agentId.length > 200 || !['personal', 'work'].includes(row.space) ||
           typeof row.enabled !== 'boolean' || !integer(row.generation) || !integer(row.clearedAt) || !Array.isArray(row.index) || row.index.length > 32 ||
           Object.hasOwn(row, 'authorityStamp') && !digest(row.authorityStamp) ||
@@ -353,6 +421,7 @@ function scanCanonical(doc, key, version, required) {
         }
       }
       if (suppressionVersion) required.telegramArchiveSourceSuppressionVersion = 1;
+      scanArchivePublication(row, doc, required);
       const scope = JSON.stringify([row.agentId, row.space]); if (seen.has(scope)) fail(); seen.add(scope);
     }
     required.telegramArchiveSchema = 1;
@@ -550,6 +619,9 @@ function scanPetCare(env, required, budget) {
   } finally { dir.closeSync(); }
 }
 
+/** Destinations that let a connected app's answer reach a chat (Settings Part 2b); they live on grants only. */
+const REPLY_DESTINATIONS = Object.freeze(['studio:chat_reply', 'telegram:agent_dm']);
+const REPLY_COLLECTIONS = Object.freeze(['replyUses', 'replyMessages']);
 /** Only the committed generation is authoritative. Never revive orphan records or
  * inspect broker credentials; the broker vault has its own deployment boundary. */
 function scanConnections(env, required, budget) {
@@ -568,6 +640,15 @@ function scanConnections(env, required, budget) {
     if (Object.hasOwn(config, 'selfServiceMcp')) {
       if (!object(config.selfServiceMcp)) fail();
       required.selfServiceMcpSchema = 1; // Old strict parsers reject even disabled setup.
+    }
+    // Old strict parsers reject these keys even when switched off.
+    if (Object.hasOwn(config, 'chatReplies')) {
+      if (!object(config.chatReplies)) fail();
+      required.replyUseSchema = 1;
+    }
+    if (Object.hasOwn(config, 'providerTemplates')) {
+      if (!object(config.providerTemplates) && !Array.isArray(config.providerTemplates)) fail();
+      required.providerTemplateSchema = 1;
     }
     for (const profile of config.profiles) {
       if (!object(profile)) fail();
@@ -613,7 +694,28 @@ function scanConnections(env, required, budget) {
             row.mcp.catalog !== null && (!object(row.mcp.catalog) || row.mcp.catalog.schemaVersion !== 1)) fail();
         required.selfServiceMcpSchema = 1;
       }
+      if (Object.hasOwn(row, 'template')) {
+        if (row.schemaVersion !== 2 || !object(row.template)) fail();
+        required.providerTemplateSchema = 1;
+      }
     }
+    // A reply destination on a grant, or any stored reply row, needs a reader that knows them,
+    // even with the feature flags off: an older release would drop or misread them.
+    const grants = safePath(join(directory, pointer.generation, 'grants'), 'directory', true);
+    const grantFiles = grants ? entries(grants, 2000).sort() : [];
+    for (const file of grantFiles) {
+      if (!/^[a-f0-9]{64}\.json$/.test(file)) fail();
+      const row = readPlainJson(join(grants, file), 300_000, budget);
+      if (!object(row) || !identifier(row.id) || file !== `${hash(row.id)}.json` || !Array.isArray(row.destinationIds) ||
+          !identifier(row.partitionId) || hash(row.partitionId) !== partition) fail();
+      if (row.destinationIds.some(id => REPLY_DESTINATIONS.includes(id)) || Object.hasOwn(row, 'replyDestinationIds')) required.replyUseSchema = 1;
+    }
+    const replies = REPLY_COLLECTIONS.map(name => {
+      const path = safePath(join(directory, pointer.generation, name), 'directory', true);
+      const files = path ? entries(path, 2000).sort() : [];
+      if (files.length) required.replyUseSchema = 1;
+      return { name, path, files };
+    });
     // An account record can outlive its connection. Its new unavailable-identity
     // disclosure must also block rollback to a strict historical parser.
     const accounts = safePath(join(directory, pointer.generation, 'providerAccounts'), 'directory', true);
@@ -636,7 +738,11 @@ function scanConnections(env, required, budget) {
         canonical(entries(directory, 100).sort()) !== canonical(names) ||
         canonical(entries(records, 2000).sort()) !== canonical(files) ||
         accounts && canonical(entries(accounts, 2000).sort()) !== canonical(accountFiles) ||
-        !accounts && safePath(join(directory, pointer.generation, 'providerAccounts'), 'directory', true)) fail();
+        !accounts && safePath(join(directory, pointer.generation, 'providerAccounts'), 'directory', true) ||
+        grants && canonical(entries(grants, 2000).sort()) !== canonical(grantFiles) ||
+        !grants && safePath(join(directory, pointer.generation, 'grants'), 'directory', true) ||
+        replies.some(({ name, path, files }) => path ? canonical(entries(path, 2000).sort()) !== canonical(files)
+          : safePath(join(directory, pointer.generation, name), 'directory', true))) fail();
   }
   if (canonical(entries(root).sort()) !== canonical(partitions)) fail();
   verifyConfig();
@@ -673,8 +779,12 @@ export function assertReleaseAdaptiveCompatibility(env, manifest) {
     ['supportedImprovementWorkflowSchemas', 'improvementWorkflowSchema', [1, 2]],
     ['supportedPetCareSchemas', 'petCareSchema', [1]],
     ['supportedSelfServiceMcpSchemas', 'selfServiceMcpSchema', [1]],
+    // Fail closed: a release that does not declare these cannot admit reply rows or template connections.
+    ['supportedReplyUseSchemas', 'replyUseSchema', [1]],
+    ['supportedProviderTemplateSchemas', 'providerTemplateSchema', [1]],
     ['supportedTelegramArchiveSchemas', 'telegramArchiveSchema', [1]],
     ['supportedTelegramArchiveSourceSuppressionVersions', 'telegramArchiveSourceSuppressionVersion', [1]],
+    ['supportedTelegramArchiveSnapshotPublicationVersions', 'telegramArchiveSnapshotPublicationVersion', [1]],
   ]) {
     const versions = Object.hasOwn(supported, field) ? supported[field] : ['supportedRightsLedgerVersions', 'supportedImprovementWorkflowSchemas'].includes(field) ? [1] : [];
     if (!Array.isArray(versions) || versions.length > allowed.length || new Set(versions).size !== versions.length || versions.some(v => !allowed.includes(v)) || required[requiredKey] !== undefined && !versions.includes(required[requiredKey])) fail();

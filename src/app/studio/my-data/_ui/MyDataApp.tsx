@@ -1,7 +1,7 @@
 'use client';
 
 /**
- * My data (VoxxBot's Mini App): the person's own pet care, choices, group participation and notes, each note erasable,
+ * My data (VoxxBot's Mini App): the person's own pet care, choices, group participation, notes and connected apps, each note erasable,
  * the whole export as JSON, and "Forget everything" behind a confirm. Every call carries the initData this page was
  * opened with; if Telegram's session changes (another account) the page stops and asks to be reopened.
  */
@@ -113,6 +113,9 @@ function MyDataSession({ signed, lang }: { signed: string; lang: MyDataLang }) {
   if (status === 'failed' && !data) return <div role="alert" className="vxd-alert">{t.failed} <button type="button" onClick={() => void load()}>{t.retry}</button></div>;
   if (!data) return <p role="status">{t.loading}</p>;
   const notes = data.notes ?? [];
+  // Only what still connects: a revoked row (stopped, or erased by Forget and waiting for the broker to confirm before it
+  // is purged) is in the JSON export, never listed as a connected app.
+  const apps = (data.connections ?? []).flatMap((e) => e.connections.filter((c) => c.lifecycle !== 'deleted' && c.lifecycle !== 'revoked').map((c) => ({ ...c, space: e.space })));
   return (
     <>
       {done && <p role="status" className="vxd-done">{done}</p>}
@@ -134,6 +137,11 @@ function MyDataSession({ signed, lang }: { signed: string; lang: MyDataLang }) {
             <button type="button" disabled={busy} onClick={() => void eraseNote(n.copyId)}>{t.erase}</button>
           </li>))}</ul> : <p className="vxd-muted">{t.notesEmpty}</p>}
       </section>
+      {(!!apps.length || data.connectionsUnavailable) && <section className="vxd-card" aria-label={t.apps}>
+        <h2>{t.apps}</h2>
+        {data.connectionsUnavailable && <p className="vxd-muted">{t.appsUnavailable}</p>}
+        {!!apps.length && <ul>{apps.map((c) => <li key={`${c.space}:${c.id}`} className="vxd-row"><bdi>{c.displayLabel}</bdi><span className="vxd-muted">{c.agentId ? <bdi>{name(c.agentId)}</bdi> : null} · {t.space[c.space]}</span></li>)}</ul>}
+      </section>}
       <details>
         <summary>{t.json}</summary>
         <button type="button" onClick={() => void copy()}>{copied ? t.copied : t.copy}</button>

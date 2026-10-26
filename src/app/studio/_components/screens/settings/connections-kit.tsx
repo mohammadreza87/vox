@@ -1,12 +1,13 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { ConnectionResourceView, ConnectionsDashboard, SetupReceipt } from '@/lib/connections/application';
+import type { ConnectionResourceView, ConnectionsDashboard, McpSetupPreview, SetupReceipt } from '@/lib/connections/application';
 import type { ConnectionView, OperationReceipt, SpaceKind } from '@/lib/connections/contracts';
 import type { ConnectionTaskResult } from '@/lib/connections/task-runtime';
 import { ApiError } from '../../../_lib/client';
 import { connectionsApi, openConnectionSignIn } from '../../../_lib/connections-client';
 import { connectionSkillTitle, connectionsCopy } from '../../../_lib/connections-copy';
+import { connectorsCopy } from '../../../_lib/connectors-copy';
 import { haptic } from '../../../_lib/haptics';
 import { useNav } from '../../StudioApp';
 import { Banner, Check, Composer, Icon, Picker, Row, Section, Seg, Sheet, SheetHead, SkeletonRows, useConfirm } from '../../ui';
@@ -306,6 +307,97 @@ export function TaskSheet({ x, connection, agentIds, open, onClose }: { x: Conne
       options={agentIds.map(id => ({ value: id, label: x.agentName(id), lead: <LetterTile text={x.agentName(id)} round /> }))} onChange={v => { setAgent(v); setResult(null); }} />
     <Picker open={picking === 'skill'} onClose={() => setPicking(null)} title={c.skill} value={skill}
       options={[{ value: '', label: c.general }, ...skills.map(s => ({ value: s.id, label: skillLabel(s.id) }))]} onChange={v => { setSkill(v); setResult(null); }} /></>;
+}
+
+/* ---------- custom MCP server (Settings v2, from the main app) ---------- */
+
+/**
+ * Adds one custom MCP server to one agent: URL and name, sign-in in the browser, then the server's own tool list to
+ * review and accept (its exact catalog digest is what gets claimed). `resume` finishes a server still waiting for
+ * sign-in. Connecting gives no tool access; the grant is chosen afterwards like any other connection.
+ */
+export function McpAddSheet({ x, agentId, agentName, open, resume, onClose }: { x: Connections; agentId: string; agentName: string; open: boolean; resume?: ConnectionView | null; onClose: () => void }) {
+  const k = connectorsCopy[x.nav.locale];
+  const [url, setUrl] = useState(''), [name, setName] = useState('');
+  const [flow, setFlow] = useState<SetupReceipt | null>(null);
+  const [preview, setPreview] = useState<McpSetupPreview | null>(null);
+  const [accepted, setAccepted] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState('');
+  const lock = useRef(false);
+  const step = async (task: () => Promise<void>) => {
+    if (lock.current) return;
+    lock.current = true; setBusy(true); setFailure('');
+    try { await task(); }
+    catch (cause) { haptic.error(); setFailure(cause instanceof ApiError ? k.mcpError[cause.message] ?? x.c.error : x.c.error); }
+    finally { lock.current = false; setBusy(false); }
+  };
+  const begin = (connectionId: string) => connectionsApi.setup(x.space, connectionId).then(setFlow);
+  useEffect(() => {
+    if (!open) return;
+    setUrl(''); setName(''); setFlow(null); setPreview(null); setAccepted(false); setFailure('');
+    if (resume) void step(() => begin(resume.id));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, resume?.id]);
+  const submit = () => step(async () => {
+    const before = new Set(x.data?.connections.map(c => c.id) ?? []);
+    const result = await connectionsApi.mcpEnroll(x.space, agentId, url.trim(), name.trim());
+    const created = result.connections.find(c => !before.has(c.id) && c.agentId === agentId);
+    await x.reload();
+    if (created) await begin(created.id);
+  });
+  const check = () => flow && step(async () => { setPreview(await connectionsApi.mcpPreview(x.space, flow.flowId)); setAccepted(false); });
+  const claim = () => flow && preview && step(async () => {
+    const result = await connectionsApi.mcpClaim(x.space, flow.flowId, preview.catalog.catalogDigest);
+    await x.reload();
+    if (result.status === 'connected') { haptic.success(); x.nav.snack({ message: x.c.zero, tone: 'success' }); onClose(); }
+    else setFlow(result);
+  });
+  const cancel = async () => {
+    if (flow?.status === 'pending') await step(async () => { await connectionsApi.mcpCancel(x.space, flow.flowId); await x.reload(); });
+    onClose();
+  };
+  useOnReturn(() => { if (flow?.status === 'pending' && !preview && !busy) void check(); }, open && flow?.status === 'pending' && !preview);
+  const ready = /^https:\/\/\S+$/i.test(url.trim()) && !!name.trim();
+  const dock = !flow ? <button type="button" className="vx-btn vx-btn-primary vx-btn-block" disabled={busy || !ready} onClick={() => void submit()}>{busy ? x.c.working : k.continue}</button>
+    : preview ? <button type="button" className="vx-btn vx-btn-primary vx-btn-block" disabled={busy || !accepted} onClick={() => void claim()}>{k.connectServer}</button>
+      : flow.status === 'pending' && <>
+        {flow.authorizationUrl && <button type="button" className="vx-btn vx-btn-primary vx-btn-block" disabled={busy} onClick={() => { haptic.tap(); openConnectionSignIn(flow.authorizationUrl!); }}>
+          <Icon name="external" size={18} />{x.c.browser}</button>}
+        <div className="vx-dock-row">
+          <button type="button" className="vx-btn vx-btn-ghost" disabled={busy} onClick={() => void cancel()}>{k.cancel}</button>
+          <button type="button" className="vx-btn vx-btn-secondary" disabled={busy} onClick={() => void check()}>{k.checkSignIn}</button>
+        </div>
+      </>;
+  return <Sheet open={open} onClose={() => { if (!busy) onClose(); }} label={k.addMcp} dock={dock}>
+    <div className="vx-sheet-stack">
+      {!flow && <>
+        <SheetHead title={k.addMcp} sub={k.mcpHint(agentName)} />
+        <label className="vx-field"><span className="vx-label">{k.mcpUrl}</span>
+          <input className="vx-input" type="url" required dir="ltr" inputMode="url" autoComplete="off" maxLength={2000} placeholder="https://example.com/mcp" disabled={busy}
+            value={url} onChange={e => setUrl(e.target.value)} /></label>
+        <label className="vx-field"><span className="vx-label">{k.mcpName}</span>
+          <input className="vx-input" required maxLength={160} autoComplete="off" dir="auto" disabled={busy} value={name} onChange={e => setName(e.target.value)} /></label>
+      </>}
+      {flow && !preview && <>
+        <div className="vx-conn-wait" aria-hidden="true"><span className={`vx-conn-wait-ring${flow.status === 'pending' ? '' : ' done'}`}><Icon name={flow.status === 'pending' ? 'plug' : 'check'} size={26} /></span></div>
+        <SheetHead title={flow.status === 'pending' ? k.waiting : x.c[flow.status === 'failed' ? 'failed' : flow.status]} sub={x.c.returnNote} />
+      </>}
+      {preview && <>
+        <SheetHead title={k.reviewServer} sub={<bdi dir="ltr">{preview.catalog.resource}</bdi>} />
+        <p className="vx-footnote">{k.reviewServerNote}</p>
+        <div className="vx-group">
+          {preview.catalog.tools.map(tool => <details key={tool.id} className="vx-disclosure"><summary>{tool.title}</summary>
+            {tool.description && <p className="vx-footnote" dir="auto">{tool.description}</p>}
+            <pre className="vx-code" dir="ltr">{JSON.stringify(tool.inputSchema, null, 2)}</pre></details>)}
+        </div>
+        <div className="vx-group">
+          <Row role="checkbox" aria-checked={accepted} disabled={busy} align="top" end={<Check />} title={k.acceptServer(agentName)} onClick={() => { haptic.select(); setAccepted(!accepted); }} />
+        </div>
+      </>}
+      {failure && <SheetError>{failure}</SheetError>}
+    </div>
+  </Sheet>;
 }
 
 /* ---------- activity ---------- */

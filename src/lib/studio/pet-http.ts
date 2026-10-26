@@ -11,6 +11,9 @@
  * the bot's menu, so nothing that erases or discloses a person's data across agents runs here at all: export and
  * forget answer 410 `moved_to_vox` and notes answer `circle_use_vox` for agent-signed requests; those live on the
  * VoxxBot-signed "My data" page (my-data-http.ts), which the pet's Settings button opens (PetView.dataUrl).
+ * Talk stays on agent-signed initData (D1, kept by the product owner on 2026-10-26) within its 1 h window; the circle
+ * routes (they name the group and its members, and record or withdraw consent) answer `circle_use_vox` and run only on
+ * a VoxxBot-signed launch.
  * The path's agentId is only a routing hint. One exception (S4, R2 decision 5): a launch through the manager bot's
  * Main Mini App is signed by the manager bot; it is accepted only for the launch routes, while that route is on, and
  * only when the signed start_param names this agent (and a group it is in), so the manager's signature proves who the
@@ -309,8 +312,9 @@ export async function handlePetRequest(studio: Studio, request: Request, agentId
       if (!token) return fail('pet_unavailable', 503);
       if (agentSigned({ ...gate, token, botId: agent.bot.id })?.id !== user.id) return fail('authentication_required', 401);
     }
-    // Note texts are readable and erasable only in Vox (My data), or through a VoxxBot-signed launch (S4).
-    if (route.startsWith('notes') && !launched) return fail('circle_use_vox', 403);
+    // Note texts are readable and erasable only in Vox (My data), or through a VoxxBot-signed launch (S4); the circle
+    // (the group, its members, a join or a leave) only through that launch (decision 8).
+    if ((route.startsWith('notes') || route.startsWith('circle')) && !launched) return fail('circle_use_vox', 403);
     void sweepPetCare(studio);
     void sweepPetPlay(studio);
     const pets = await petStoreFor(studio);
@@ -391,13 +395,15 @@ export async function handlePetRequest(studio: Studio, request: Request, agentId
       catch { (studio.deps.logger ?? console).warn('[studio] pet_growth_light_failed'); }
     };
 
+    // Talk runs on the agent's own bot (D1); a manager-signed launch never speaks to the agent.
+    const talkHere = !launched;
     if (route === 'view') {
       const dataUrl = studio.dataLink();
       const opened = await step((care, at) => { const o = open(care, at, stage); return { care: o.care, result: { ...o, at } }; });
       const play = await readPlay(opened.at, opened.care.tz);
       // Growth moments belong to the agent's circle (design §4.11): a guest of a public agent never sees them.
       const growth = role === 'guest' ? undefined : await readGrowth(play?.litMine ?? []);
-      const listen = role !== 'guest' && !launched && (!!studio.deps.openai || !!studio.deps.eleven);
+      const listen = role !== 'guest' && talkHere && (!!studio.deps.openai || !!studio.deps.eleven);
       // Check-ins (design §5): members only, never over a manager-signed launch. The ?ci= replay, the opened mark, the
       // zone the planner reads and the paused note; a broken check-in store never closes the pet.
       let opens: Awaited<ReturnType<typeof recordCheckinOpen>> = {};
@@ -428,7 +434,7 @@ export async function handlePetRequest(studio: Studio, request: Request, agentId
         canEditLook: role !== 'guest' && !launched && canEditLook(state.members.find((m) => m.telegramId === user.id), agent),
         // UX-02: who hears the audio is the transcription provider callTurn uses (OpenAI first); locations and retention are unresolved
         ...(listen ? { voiceNotice: { providers: studio.deps.openai ? 'OpenAI' : 'ElevenLabs' } } : {}),
-        ...(launched ? { talkInDm: true as const } : {}),
+        ...(talkHere ? {} : { talkInDm: true as const }),
         ...(dataUrl ? { dataUrl } : {}),
         ...(opened.welcome ? { welcome: { souvenir: souvenir(agent.id, user.id, opened.at), awayMs: opened.welcome.awayMs } } : {}),
         ...(opened.stageUp ? { stageUp: opened.stageUp } : {}),

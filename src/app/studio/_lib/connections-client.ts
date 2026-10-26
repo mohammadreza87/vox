@@ -1,5 +1,5 @@
 'use client';
-import type { ConnectionsDashboard, ConnectionResourceView, SetupReceipt, ConnectionExecutionResult } from '@/lib/connections/application';
+import type { ConnectionsDashboard, ConnectionResourceView, SetupReceipt, ConnectionExecutionResult, McpSetupPreview } from '@/lib/connections/application';
 import type { ConnectionsSnapshot, GrantInput, OperationReceipt, SpaceKind } from '@/lib/connections/contracts';
 import { request, tg } from './client';
 import type { ConnectionTaskInput, ConnectionTaskResult } from '@/lib/connections/task-runtime';
@@ -25,6 +25,11 @@ export const connectionsApi = {
   workflowChoices: (space: SpaceKind) => request<{ choices: WorkflowChoice[] }>('GET', `connections/workflow-choices?space=${space}`),
   createWorkflow: (input: unknown) => request<ConnectionWorkflow>('POST', 'connections/workflows/create', input),
   reviewWorkflow: (space: SpaceKind, workflow: ConnectionWorkflow) => request<ConnectionWorkflow>('POST', 'connections/workflows/review', { space, workflowId: workflow.id, expectedRevision: workflow.revision, reviewDigest: workflow.reviewDigest }),
+  /** Settings v2: a custom MCP server for one agent, from the Vox main app (the server checks the agent, the operator switch and the URL). */
+  mcpEnroll: (space: SpaceKind, agentId: string, endpointUrl: string, displayLabel: string) => request<ConnectionsSnapshot>('POST', 'connections/mcp/enroll', { space, agentId, endpointUrl, displayLabel }),
+  mcpPreview: (space: SpaceKind, flowId: string) => request<McpSetupPreview>('POST', 'connections/mcp/setup/preview', { space, flowId }),
+  mcpClaim: (space: SpaceKind, flowId: string, acceptedCatalogDigest: string) => request<SetupReceipt>('POST', 'connections/mcp/setup/claim', { space, flowId, acceptedCatalogDigest }),
+  mcpCancel: (space: SpaceKind, flowId: string) => request<SetupReceipt>('POST', 'connections/mcp/setup/cancel', { space, flowId }),
   pauseWorkflow: (space: SpaceKind, workflow: ConnectionWorkflow) => request<ConnectionWorkflow>('POST', 'connections/workflows/pause', { space, workflowId: workflow.id, expectedRevision: workflow.revision }),
 };
 

@@ -4,6 +4,7 @@ import { containerIdFor, digest, spaceIdFor, tenantIdFor } from '../adaptive/per
 import type { ConnectionActor, ConnectionContext, SpaceKind } from './contracts';
 import { deny } from './errors';
 import { assertCurrentBotPerson } from './bot-principal';
+import { settingsV2 } from '../studio/flags';
 
 /** Resolve again for each boundary. An administrator's role never selects another
  * person's account or establishes provider authority. Wider group audiences need
@@ -26,7 +27,9 @@ export function assertStudioConnectionAuthorityCurrent(studio: Studio, actor: Co
   const adaptive = studio.deps.adaptive;
   if (!adaptive) return deny('identity_unavailable', 503);
   const committed = adaptive.repository.readCommittedForEffect(actor.accountId, now);
-  if (committed.status !== 'ready') { if (actor.botAgentId) return deny('connection_authority_transport_unavailable', 503); return; }
+  // A bot always; with Settings v2 (custom MCP from the main app) a manager actor on the committed transport too, so no
+  // effect lands while an identity write holds the account. ('unsupported' keeps the main-app MCP path closed in studio-application.ts.)
+  if (committed.status !== 'ready') { if (actor.botAgentId || committed.status === 'busy' && current && settingsV2()) return deny('connection_authority_transport_unavailable', 503); return; }
   const document = committed.document, binding = document?.binding;
   if (!document || !binding || !adaptive.isProfileConfirmed(document, now) || binding.expiresAt <= now || document.personId !== context.personId ||
       binding.id !== context.bindingId || binding.revision !== context.bindingRevision || binding.expiresAt !== context.bindingExpiresAt ||

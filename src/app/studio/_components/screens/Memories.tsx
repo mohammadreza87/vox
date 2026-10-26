@@ -107,7 +107,7 @@ export function MemoriesScreen({ id }: { id: string }) {
           <h1 className="vx-title">{agent ? t(`What ${name} remembers`, `آنچه ${name} به خاطر دارد`) : t('Memories', 'حافظه‌ها')}</h1>
         </header>
 
-        {agent && <RelationshipPanel presentation="row" agentId={id} name={name} space={nav.space} locale={nav.locale} />}
+        {agent && <RelationshipPanel presentation="row" agentId={id} name={name} space={nav.space} locale={nav.locale} allAgentsNote={nav.me?.features?.settingsV2 === true} />}
 
         {!memories ? <SkeletonRows rows={4} lead={false} label={t('Loading memories', 'در حال دریافت حافظه‌ها')} /> : <>
           {memories.length > 0 && <FilterChips label={t('Filter memories', 'پالایش حافظه‌ها')} value={filter} onChange={setFilter}

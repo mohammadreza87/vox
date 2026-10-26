@@ -231,6 +231,14 @@ describe('separate per-agent setup and access', () => {
     expect(nav.push).toHaveBeenCalledWith({ name: 'settings', page: 'connection', params: { connectionId: 'qa-connection', agentId: 'qa-agent' } });
     expect(api.grant).not.toHaveBeenCalled();
   });
+  it('an agent\'s Activity view shows only that agent\'s recent activity, not the connections list again', async () => {
+    api.read.mockResolvedValue(dashboard({ operations: [operation('verified')] }));
+    render(<App view={() => <ConnectionsScreen agentId="qa-agent" view="activity" />} />);
+    expect(await screen.findByRole('heading', { name: 'Recent activity', level: 1 })).toBeInTheDocument();
+    expect(screen.getByText('Read selected page')).toBeInTheDocument();
+    expect(screen.queryByText('QA_WORK_PRIVATE')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Add/ })).not.toBeInTheDocument();
+  });
   it('passes the current agent explicitly when creating a separate provider connection', async () => {
     api.read.mockResolvedValue(dashboard({ connections: [] }));
     const created = { ...dashboard().connections[0], id: 'new-bound', agentId: 'qa-agent', lifecycle: 'pending' };

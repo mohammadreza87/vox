@@ -6,6 +6,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { middleware } from '../../../middleware';
 import { handleStudioBrokerControl } from '../runtime';
 import { signBrokerRequest } from '../broker/auth';
+import { emptyRecords, FileConnectionsStorage } from '../storage';
+import { partitionIdFor } from '../repository';
+import { eraseConnections } from '../rights';
+import type { ConnectionsRecords } from '../contracts';
 import { AdaptiveService } from '../../adaptive/persistence/service';
 import { AdaptiveRepository } from '../../adaptive/persistence/repository';
 import { MemoryAdaptiveStorage } from '../../adaptive/runtime/storage';
@@ -87,5 +91,39 @@ describe('independent exact broker middleware gate and real authenticated handle
     expect((await invoke(signed)).status).toBe(401);
     state.members[0].role = 'pending';
     expect((await invoke(signBrokerRequest(key, 'POST', '/api/connections/broker', body))).status).toBe(403);
+  });
+
+  it('erasedContext: answered over the authenticated control route without identity, only for a connection an erasure marked', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'vox-erased-control-')); directories.push(directory);
+    const key = Buffer.alloc(32, 74); const keyPath = join(directory, 'synthetic-auth.hex'); const configPath = join(directory, 'synthetic-config.json');
+    await writeFile(keyPath, key.toString('hex'), { mode: 0o600 });
+    await writeFile(configPath, JSON.stringify({ schemaVersion: 1, enabled: false, profiles: [] }), { mode: 0o600 });
+    vi.stubEnv('STUDIO_STORAGE', 'file'); vi.stubEnv('STUDIO_DATA_DIR', directory);
+    vi.stubEnv(featureKeys[0], configPath); vi.stubEnv(featureKeys[1], keyPath); vi.stubEnv(featureKeys[2], 'http://127.0.0.1:9');
+    const accountId = 'telegram-account:1002';
+    const row = (id: string) => ({ schemaVersion: 2, id, partitionId: partitionIdFor(accountId, 'personal'), revision: 1, createdAt: 1, updatedAt: 1, retentionUntil: 9e12, ownerAccountId: accountId,
+      ownerPersonId: 'person-1002', scope: { tenantId: 't', spaceId: 's', spaceKind: 'personal', containerId: 'c', audiencePersonIds: ['person-1002'], audienceRevision: 'r' },
+      providerId: 'github', displayLabel: 'SYNTHETIC', providerAccountId: null, adapterId: 'github', adapterVersion: '1', catalogDigest: 'd', endpointProfileId: 'p',
+      providerScopes: [], lifecycle: 'connected', revocationEpoch: 0, health: 'healthy', checkedAt: null, agentId: 'alpha' });
+    const storage = new FileConnectionsStorage(join(directory, 'connections'));
+    await storage.transact(partitionIdFor(accountId, 'personal'), () => ({ records: { ...emptyRecords(), connections: [row('erased-one')] } as unknown as ConnectionsRecords, result: undefined }));
+    // Erased while no broker answered: revoked and marked, waiting.
+    expect(await eraseConnections({ storage, actorFor: async () => undefined, log: { warn: () => undefined } }, accountId, ['personal'])).toEqual({ erased: 1, pending: 1 });
+    await storage.transact(partitionIdFor(accountId, 'personal'), raw => ({ records: { ...raw, connections: [...raw.connections, row('live-one')] } as unknown as ConnectionsRecords, result: undefined }));
+    // No member, no identity service: nothing about the person is current any more.
+    const studio = { deps: { store: { read: async () => ({ members: [], agents: [], groups: [], audit: [] }) } } } as unknown as Studio;
+    const invoke = (payload: Record<string, unknown>) => {
+      const raw = JSON.stringify(payload);
+      return handleStudioBrokerControl(studio, new NextRequest('http://127.0.0.1/api/connections/broker', { method: 'POST', body: raw,
+        headers: { 'content-type': 'application/json', ...signBrokerRequest(key, 'POST', '/api/connections/broker', raw) } }));
+    };
+    const ok = await invoke({ action: 'erasedContext', actor: { accountId }, space: 'personal', connectionId: 'erased-one' });
+    expect(ok.status).toBe(200);
+    expect(await ok.json()).toMatchObject({ context: { accountId, personId: 'person-1002', currentAgentIds: [] }, connection: { id: 'erased-one', lifecycle: 'revoked' } });
+    expect((await invoke({ action: 'erasedContext', actor: { accountId }, space: 'personal', connectionId: 'live-one' })).status).toBe(404);
+    expect((await invoke({ action: 'erasedContext', actor: { accountId, botAgentId: 'alpha', botAuthenticationRevision: 'r1' }, space: 'personal', connectionId: 'erased-one' })).status).toBe(404);
+    expect((await invoke({ action: 'erasedContext', actor: { accountId: 'telegram-account:1003' }, space: 'personal', connectionId: 'erased-one' })).status).toBe(404);
+    // The ordinary context for the same connection still needs a current identity.
+    expect((await invoke({ action: 'context', actor: { accountId }, space: 'personal', connectionId: 'erased-one' })).status).not.toBe(200);
   });
 });

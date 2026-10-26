@@ -8,12 +8,13 @@ import { Activity, AddServiceSheet, ErrorBanner, ReviewSheet, SetupSheet, lifecy
 
 /**
  * Connections (UI §4.13): one row per connected account, each pushing its detail page; actions waiting for your review;
- * scheduled checks; recent activity. Language and space are app-level (nav).
+ * scheduled checks; recent activity. Language and space are app-level (nav). `view: 'activity'` (an agent's
+ * Activity row) shows only the activity, so it doesn't open on the connections list.
  */
-export function ConnectionsScreen(props: { onBack?: () => void; agentId?: string }) {
-  return <AgentConnectionsScreen key={props.agentId ?? 'account'} {...props} />;
+export function ConnectionsScreen(props: { onBack?: () => void; agentId?: string; view?: 'activity' }) {
+  return <AgentConnectionsScreen key={`${props.agentId ?? 'account'}:${props.view ?? ''}`} {...props} />;
 }
-function AgentConnectionsScreen({ agentId }: { onBack?: () => void; agentId?: string }) {
+function AgentConnectionsScreen({ agentId, view }: { onBack?: () => void; agentId?: string; view?: 'activity' }) {
   const x = useConnections(agentId);
   const { c, data } = x;
   const setup = useSetup(x);
@@ -28,14 +29,15 @@ function AgentConnectionsScreen({ agentId }: { onBack?: () => void; agentId?: st
     const agents = new Set(grantsFor(id).map(g => g.agentId)).size;
     return agents ? (x.fa ? `${agents.toLocaleString('fa-IR')} عامل` : `${agents} agent${agents === 1 ? '' : 's'}`) : c.noAccess;
   };
-  return <SettingsPage title={c.title} back={agentId ? c.back : undefined} busy={x.busy} className="vx-conn">
-    <SpaceBar disabled={x.busy || setup.pending} label={c.title} />
+  const activityOnly = view === 'activity';
+  return <SettingsPage title={activityOnly ? c.recent : c.title} back={agentId ? c.back : undefined} busy={x.busy} className="vx-conn">
+    <SpaceBar disabled={x.busy || setup.pending} label={activityOnly ? c.recent : c.title} />
     <ErrorBanner x={x} />
     {!data && !x.error && <SkeletonRows rows={3} lead="tile" label={c.loading} />}
     {data && <>
       {!data.enabled && <Banner tone="info">{c.unavailable}</Banner>}
       {setup.pending && !setup.open && <Banner tone="info" icon="plug" action={<button type="button" className="vx-btn vx-btn-secondary vx-btn-xs" onClick={() => setup.setOpen(true)}>{c.finish}</button>}>{c.waiting}</Banner>}
-      <Enter i={0} first={first}>
+      {!activityOnly && <Enter i={0} first={first}>
         <Section title={agentId && data.agents.some(a => a.id === agentId) ? `${x.agentName(agentId)} · ${c.title}` : x.fa ? 'حساب‌های متصل' : 'Your connections'} foot={agentId ? (x.fa ? 'اتصال‌ها و منابع این عامل جداگانه انتخاب می‌شوند.' : 'Choose this agent’s accounts and resources separately.') : c.intro}>
           {!visible.length && <div className="vx-row"><span className="vx-row-sub">{c.empty}</span></div>}
           {visible.map(connection => {
@@ -49,13 +51,13 @@ function AgentConnectionsScreen({ agentId }: { onBack?: () => void; agentId?: st
           <Row plain lead={<span className="vx-tile icon vx-tile-add" aria-hidden="true"><Icon name="plus" size={20} /></span>} title={c.add}
             disabled={x.busy} onClick={() => setAdding(true)} />
         </Section>
-      </Enter>
+      </Enter>}
       <Enter i={1} first={first} className="vx-stack-s">
         <Activity x={x} agentId={agentId} onReview={setReview} />
       </Enter>
-      <Enter i={2} first={first}>
+      {!activityOnly && <Enter i={2} first={first}>
         <ConnectionWorkflows key={`${x.space}:${x.nav.locale}`} data={data} space={x.space} locale={x.nav.locale} agentId={agentId} />
-      </Enter>
+      </Enter>}
       <footer className="vx-you-foot">
         <p className="vx-footnote"><Icon name="lock" size={14} /> {c.audience}</p>
         {data.modelProcessor && <p className="vx-footnote">{c.processor} <bdi>{data.modelProcessor.provider} · {data.modelProcessor.model}</bdi>.</p>}

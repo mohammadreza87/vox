@@ -3,16 +3,18 @@
 import { motion } from 'framer-motion';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { agentCopy, fireReasonLabel, type AgentCopy } from '../../../_lib/agents-copy';
-import { api, haptic, type AgentView, type AgentVisibility, type GroupBehavior, type Member } from '../../../_lib/client';
+import { api, type AgentView } from '../../../_lib/client';
 import { T } from '../../../_lib/motion';
+import { settingsCopy } from '../../../_lib/settings-copy';
 import { useProfileSync } from '../../../_lib/useProfileSync';
 import { PALETTE } from '../../Cloud';
 import { errorMessage, useNav } from '../../StudioApp';
-import { Banner, hueVars, Icon, Meta, Metas, Spinner, TopBar, useConfirm } from '../../ui';
+import { Banner, hueVars, Icon, Meta, Metas, Spinner, TopBar } from '../../ui';
 import { languageCode, sampleLine, usePlayer } from '../spawn/shared';
 import { AgentHero } from './AgentHero';
 import { LookSheet } from './LookSheet';
 import { GroupBehaviorSheet, groupBehaviorOf, ManageSheet, participationLabel } from './ManageSheet';
+import { useAgentActions } from './useAgentActions';
 import { visibilityLabel, VisibilitySheet } from './VisibilitySheet';
 
 function timeLeft(t: AgentCopy['timeLeft'], lockAt?: string): string {
@@ -53,12 +55,9 @@ export function AgentScreen({ id, from }: { id: string; /** The route this profi
   const c = agentCopy[locale];
   // The back chevron names the tab underneath; from anywhere deeper it is a bare chevron (aria "Back")
   const backLabel = from ? c.backTo[from] : c.backTo.home;
-  const confirm = useConfirm();
   // Hero flights land on the cached agent at once (motion §3.4); the fetch refreshes it.
   const [agent, setAgent] = useState<AgentView | null>(() => nav.cache?.get(id) ?? null);
   const [sheet, setSheet] = useState<SheetName>(null);
-  const [people, setPeople] = useState<Member[] | null>(null);
-  const [busy, setBusy] = useState(false);
   const [stale, setStale] = useState<string | null>(null);
   const [inGroups, setInGroups] = useState<number | null>(null);
   const cachedAtMount = useRef(agent !== null);
@@ -81,6 +80,7 @@ export function AgentScreen({ id, from }: { id: string; /** The route this profi
 
   // Telegram profile status: polls while pending, backs off on errors, rereads on return (D's hook).
   useProfileSync(agent, update);
+  const { busy, people, loadPeople, chooseVisibility, updateGroupBehavior, toggleLiveWeb, toggleMainMiniApp, toggleAdmin: adminToggle, syncProfile: sync, toggleAllowed, unblock } = useAgentActions(agent, update);
 
   const active = agent?.status === 'active';
   useEffect(() => {
@@ -99,59 +99,13 @@ export function AgentScreen({ id, from }: { id: string; /** The route this profi
   const behavior = groupBehaviorOf(agent);
   const canLook = !!agent.canEditLook && !fired;
   const canManage = active && (agent.canFire || isSuper || agent.canManageAccess || canLook);
+  // Settings v2: a gear opens this agent's settings hub (only live agents have settings to change).
+  const settingsV2 = active && nav.me.features?.settingsV2 === true;
+  const openSettings = () => nav.push({ name: 'settings', page: 'agent', params: { agentId: agent.id } });
 
-  /** Run a write; the server's answer replaces the agent. */
-  const write = async (fn: () => Promise<{ agent: AgentView }>, after?: (a: AgentView) => void) => {
-    setBusy(true);
-    try {
-      const r = await fn();
-      update(r.agent);
-      haptic.success();
-      after?.(r.agent);
-    } catch (e) { nav.toast(errorMessage(e), 'error'); } finally { setBusy(false); }
-  };
-
-  const toggleAdmin = () => write(() => api.setAgentAdmin(agent.id, !agent.isAdmin), (a) => {
-    nav.toast(a.isAdmin ? c.nowAdmin(p.name) : c.noLongerAdmin(p.name));
-    setSheet(null);
-  });
-
-  const openVisibility = () => {
-    setSheet('visibility');
-    if (!people) api.members().then((r) => setPeople(r.people)).catch(() => setPeople([]));
-  };
-
-  const chooseVisibility = async (v: AgentVisibility) => {
-    if (v === agent.visibility || busy) return;
-    if (v === 'public' && !(await confirm({
-      title: c.publicTitle(p.name), confirmLabel: c.makePublic, tone: 'danger', look: agent.look, expr: 'listening',
-      body: c.publicBody(p.name, nav.me.org),
-    }))) return;
-    await write(() => api.setVisibility(agent.id, v));
-  };
-
-  const updateGroupBehavior = async (b: GroupBehavior) => { if (!busy) await write(() => api.setGroupBehavior(agent.id, b)); };
-
-  const syncProfile = async () => {
-    if (busy) return;
-    setBusy(true);
-    try {
-      const r = await api.syncProfile(agent.id);
-      update(r.agent);
-      if (r.failed.length) { haptic.error(); nav.toast(c.refused(r.failed.join(locale === 'fa' ? '، ' : ', ')), 'error'); }
-      else if (r.agent.profileSync?.status === 'synced') { haptic.success(); nav.toast(c.profileUpdated); }
-      setSheet(null);
-    } catch (e) { nav.toast(errorMessage(e), 'error'); } finally { setBusy(false); }
-  };
-
-  const allowList = Array.isArray(agent.access) ? agent.access : [];
-  const toggleAllowed = async (telegramId: number) => {
-    const next = allowList.includes(telegramId) ? allowList.filter((x) => x !== telegramId) : [...allowList, telegramId];
-    try { update((await api.setAccess(agent.id, next)).agent); haptic.select(); } catch (e) { nav.toast(errorMessage(e), 'error'); }
-  };
-  const unblock = async (telegramId: number) => {
-    try { update((await api.unblock(agent.id, telegramId)).agent); haptic.success(); } catch (e) { nav.toast(errorMessage(e), 'error'); }
-  };
+  const toggleAdmin = () => adminToggle(() => setSheet(null));
+  const openVisibility = () => { setSheet('visibility'); loadPeople(); };
+  const syncProfile = () => sync(() => setSheet(null));
 
   /** The voice row's play disc: one spoken line, fetched once per visit. */
   const playVoice = async () => {
@@ -179,7 +133,10 @@ export function AgentScreen({ id, from }: { id: string; /** The route this profi
   return (
     <>
       <TopBar lead="back" onLead={nav.back} leadLabel={backLabel}
-        end={canManage ? <button type="button" className="vx-icon-btn" aria-label={c.manage} onClick={() => setSheet('manage')}><Icon name="more" width={3} /></button> : undefined} />
+        end={settingsV2 || canManage ? <>
+          {settingsV2 && <button type="button" className="vx-icon-btn" aria-label={settingsCopy[locale].openSettings(p.name)} onClick={openSettings}><Icon name="settings" /></button>}
+          {canManage && <button type="button" className="vx-icon-btn" aria-label={c.manage} onClick={() => setSheet('manage')}><Icon name="more" width={3} /></button>}
+        </> : undefined} />
       <motion.div className={`vx-scroll vx-profile${stale ? ' stale' : ''}`} layoutScroll style={hueVars(pal)}>
         <AgentHero agent={agent} onUpdate={update} onRetryProfile={syncProfile} />
 
@@ -284,10 +241,10 @@ export function AgentScreen({ id, from }: { id: string; /** The route this profi
       )}
 
       <ManageSheet agent={agent} open={sheet === 'manage'} onClose={() => setSheet(null)} busy={busy} isSuper={isSuper}
-        onVisibility={openVisibility} onToggleLiveWeb={() => void write(() => api.setLiveWeb(agent.id, !agent.liveWeb))}
-        onToggleMainMiniApp={() => void write(() => api.setMainMiniApp(agent.id, !agent.mainMiniApp))}
-        onGroupBehavior={() => setSheet('group')} onSyncProfile={syncProfile} onToggleAdmin={toggleAdmin}
-        onLook={canLook ? () => setSheet('look') : undefined} />
+        onVisibility={openVisibility} onToggleLiveWeb={toggleLiveWeb}
+        onToggleMainMiniApp={toggleMainMiniApp}
+        onGroupBehavior={() => setSheet('group')} onSyncProfile={() => void syncProfile()} onToggleAdmin={toggleAdmin}
+        onLook={canLook ? () => setSheet('look') : undefined} onSettings={settingsV2 ? openSettings : undefined} />
       <GroupBehaviorSheet agent={agent} open={sheet === 'group'} onClose={() => setSheet(null)} busy={busy} onChange={updateGroupBehavior} />
       <VisibilitySheet agent={agent} open={sheet === 'visibility'} onClose={() => setSheet(null)} busy={busy} people={people}
         onChoose={(v) => void chooseVisibility(v)} onToggleAllowed={toggleAllowed} onUnblock={unblock} />

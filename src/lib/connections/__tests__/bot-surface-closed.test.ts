@@ -29,10 +29,11 @@ describe('agent-bot connect surface with connections unconfigured (production to
     expect(res.status).toBe(404);
     expect(confirm).not.toHaveBeenCalled();
     expect(factory).not.toHaveBeenCalled();
-    // the read-only dashboard still answers (here: no confirmed profile, so nothing to show)
+    // the one GET is a content-free handoff to Vox (decision 8): no dashboard, no profile state, the app is never built
     const dash = await handleAgentConnectionsRequest(h.studio, factory, new Request(`https://vox.example/api/agents/${a.agent.id}/connections?space=personal`,
       { headers: { 'x-telegram-init-data': init } }), a.agent.id, []);
-    expect(dash.status).toBe(403);
-    expect(await dash.json()).toEqual({ error: 'profile_confirmation_required' });
+    expect(dash.status).toBe(200);
+    expect(await dash.json()).toEqual({ agent: { id: a.agent.id, name: 'Mochi' }, manageInVox: true });
+    expect(factory).not.toHaveBeenCalled();
   });
 });

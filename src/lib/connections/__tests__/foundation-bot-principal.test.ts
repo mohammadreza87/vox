@@ -51,7 +51,7 @@ describe('agent-bot principal and own-account Connections surface', () => {
   it('admits a confirmed public-bot person without creating or requiring company membership', async () => {
     const f = await fixture();
     const res = await f.send(); expect(res.status).toBe(200);
-    expect((await res.json()).agents).toEqual([{ id: 'alpha', name: 'alpha' }]);
+    expect(await res.json()).toEqual({ agent: { id: 'alpha', name: 'alpha' }, manageInVox: true });
     expect(f.state.members).toEqual([]); expect(f.ensureMember).not.toHaveBeenCalled();
     expect(f.botToken).toHaveBeenCalledTimes(1); expect(f.botToken.mock.calls[0][0]).toMatchObject({ id: 'alpha' });
   });
@@ -69,11 +69,12 @@ describe('agent-bot principal and own-account Connections surface', () => {
   it('never confirms an identity on the agent-bot surface (its token holder could harvest the initData): 404, no binding', async () => {
     const f = await fixture(false);
     const confirmSpy = vi.spyOn(f.adaptive, 'confirm');
-    expect((await f.send()).status).toBe(403);
+    // the GET is a content-free handoff: it does not even say whether a profile is confirmed
+    expect(await (await f.send()).json()).toEqual({ agent: { id: 'alpha', name: 'alpha' }, manageInVox: true });
     const confirm = await f.send('alpha', ['profile', 'confirm'], { confirm: true });
     expect(confirm.status).toBe(404); expect(await confirm.json()).toEqual({ error: 'not_found' });
     expect(confirmSpy).not.toHaveBeenCalled();
-    expect((await f.send()).status).toBe(403); expect(f.ensureMember).not.toHaveBeenCalled();
+    expect(f.factory).not.toHaveBeenCalled(); expect(f.ensureMember).not.toHaveBeenCalled();
     const document = await f.adaptive.repository.transaction('telegram-account:123', Date.now(), d => d);
     expect(document.binding).toBeUndefined();
   });
@@ -122,7 +123,11 @@ describe('agent-bot principal and own-account Connections surface', () => {
     const a = (await alpha.enroll!(alphaActor, { space: 'personal', providerId: 'github', displayLabel: 'ALPHA_ONLY', agentId: 'alpha' })).connections[0];
     const b = (await beta.enroll!(betaActor, { space: 'personal', providerId: 'github', displayLabel: 'BETA_PRIVATE_CANARY', agentId: 'beta' })).connections[0];
     expect((await alpha.service.list(alphaActor, { space: 'personal' })).connections.map(c => c.id)).toEqual([a.id]);
-    const list = await f.send(); expect(JSON.stringify(await list.json())).not.toContain('BETA_PRIVATE_CANARY');
+    // decision 8: the agent-signed GET discloses none of the person's connections, not even this bot's own
+    f.factory.mockClear();
+    const list = JSON.stringify(await (await f.send()).json());
+    for (const leak of ['BETA_PRIVATE_CANARY', 'ALPHA_ONLY', 'github', a.id, 'connections', 'grants', 'operations']) expect(list).not.toContain(leak);
+    expect(f.factory).not.toHaveBeenCalled();
     for (const action of ['setup', 'revoke']) {
       const res = await f.send('alpha', [action], { space: 'personal', connectionId: b.id, ...(action === 'revoke' ? { expectedRevision: b.revision } : {}) });
       expect(res.status).toBe(404);

@@ -214,11 +214,26 @@ describe('AM-05 / AM-12 independent source-lineage acceptance', () => {
     });
     const before = await f.row(); expect(bytes(before.state)).toBeLessThanOrEqual(MAX_ARCHIVE_STATE_BYTES);
     await f.edit(10); const after = await f.row(); expect(after.index).toEqual([]);
-    if (operation === 'none') expect(after.state).toBeUndefined();
-    else { expect(after.state).toMatchObject({ pending: [], receipts: [], operation: { id: 'qa-capacity-operation', stage: 'unknown' } }); expect(after.state!.head).toBeUndefined(); }
+    expect(after.state).toBeUndefined();
+    if (operation === 'none') expect(after.retiredOperation).toBeUndefined();
+    else {
+      expect(after.retiredOperation).toEqual({ kind: 'checkpoint', id: 'qa-capacity-operation', stage: 'unknown',
+        scope: f.scope, botId: before.state!.botId, createdAt: f.h.clock.now.getTime(), files: [] });
+      expect(after.snapshotPublicationVersion).toBe(1);
+      expect(JSON.stringify(after)).not.toContain('QA_CAPACITY_REMOVE');
+      expect(JSON.stringify(after)).not.toContain('QA_CAPACITY_PENDING');
+    }
     expect(after.clearedAt).toBeGreaterThan(before.clearedAt); expect(bytes([after])).toBeLessThanOrEqual(256 * 1024);
     f.restart(); expect((await f.archive.archive(f.scope).recover(f.scope)).events).toEqual([]);
-    if (operation !== 'none') { expect(await f.archive.archive(f.scope).checkpoint(f.scope, { force: true })).toEqual({ status: 'unknown' }); expect(f.transport.upload).toHaveBeenCalledTimes(2); }
+    if (operation !== 'none') {
+      expect((await f.archive.archive(f.scope).checkpoint(f.scope, { force: true })).status).not.toBe('recoverable');
+      expect(f.transport.upload).toHaveBeenCalledTimes(2);
+      expect((await f.row()).retiredOperation).toEqual(after.retiredOperation);
+      await f.command('status');
+      const token = f.h.studio.botToken(f.agent); expect(token).toBeTruthy();
+      const notices = f.h.botFor(token!).sendMessage.mock.calls;
+      expect(notices.some(([, text]) => text.includes('uncertain') || text.includes('may exist in Telegram'))).toBe(true);
+    }
   });
 
   it.each(['archives', 'canonical'] as const)('commits a conservative deletion barrier at the aggregate %s capacity limit', async boundary => {

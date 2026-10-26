@@ -1,9 +1,10 @@
 'use client';
 
 import { motion } from 'framer-motion';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { api, haptic, mediaUrl, type AgentView, type LibraryVoice, type VoiceOptions } from '../../../_lib/client';
 import { listItem, T } from '../../../_lib/motion';
+import { firstName } from '../../../_lib/settings-copy';
 import { spawnCopy } from '../../../_lib/spawn-copy';
 import { ProgressPill } from '../../motion/ProgressPill';
 import { errorMessage, useNav } from '../../StudioApp';
@@ -14,6 +15,13 @@ import { Bars, Chips, Dock, languageCode, sampleLine, usePlayer, type StepProps 
 const VOICE_LANGUAGE_CODES = ['en', 'fa', 'vi'] as const;
 const GENDERS = ['female', 'male', 'neutral'] as const;
 type Tab = 'default' | 'design' | 'library';
+
+/**
+ * Settings v2 edit mode (the agent's Voice page while it forms): a tap picks a voice to try, and nothing
+ * changes for anyone until Save. `head` replaces the step title (banner and current voice).
+ */
+export interface VoiceEdit { head: ReactNode; saveLabel: string; savedLabel: string; note: string }
+type PendingChoice = { key: string; fn: () => Promise<{ agent: AgentView }>; after?: () => void };
 
 /** Play/pause disc: hue on option cards, s3 on library rows (board spawn-3). */
 function Play({ playing, onPlay, label, disabled, quiet }: { playing: boolean; onPlay: () => void; label: string; disabled?: boolean; quiet?: boolean }) {
@@ -29,7 +37,7 @@ function Play({ playing, onPlay, label, disabled, quiet }: { playing: boolean; o
  * with a hue play disc and a Choose → Chosen pill. Only the dock CTA is volt. Model and plan details
  * sit behind ⓘ.
  */
-export function VoiceStep({ agent, busy, run, onUpdate, onNext }: StepProps) {
+export function VoiceStep({ agent, busy, run, onUpdate, onNext, edit }: StepProps & { edit?: VoiceEdit }) {
   const nav = useNav();
   const all = spawnCopy[nav.locale ?? 'en'];
   const c = all.voice;
@@ -48,6 +56,7 @@ export function VoiceStep({ agent, busy, run, onUpdate, onNext }: StepProps) {
   const [details, setDetails] = useState(false);
   const [languagePicker, setLanguagePicker] = useState(false);
   const libraryRequest = useRef(0);
+  const [pending, setPending] = useState<PendingChoice | null>(null);
   const player = usePlayer();
   const voicesOn = nav.me.features.voices;
 
@@ -86,11 +95,24 @@ export function VoiceStep({ agent, busy, run, onUpdate, onNext }: StepProps) {
     if (blob) player.play('sample', URL.createObjectURL(blob));
   };
 
+  // Voice is the creator's to shape while the agent forms; anyone else sees the choices read-only.
+  // Older views without the flag keep the previous behaviour.
+  const readOnly = !edit && agent.canShapeIdentity === false;
   // One busy flag per option, so only the tapped card spins; every choice waits for the server.
-  const choose = async (key: string, fn: () => Promise<{ agent: AgentView }>, after?: () => void) => {
+  // In edit mode the tap only picks: Save sends it. Tapping the voice already in use drops the pick.
+  const choose = async (key: string, fn: () => Promise<{ agent: AgentView }>, after?: () => void, current = false) => {
+    if (readOnly) return;
+    if (edit) { haptic.select(); setPending(current ? null : { key, fn, after }); return; }
     const r = await run(`choose:${key}`, fn);
     if (r) { onUpdate(r.agent); haptic.success(); after?.(); }
   };
+  const save = async () => {
+    if (!pending || !edit) return;
+    const r = await run(`choose:${pending.key}`, pending.fn);
+    if (r) { onUpdate(r.agent); haptic.success(); pending.after?.(); setPending(null); nav.snack({ message: edit.savedLabel, tone: 'success' }); }
+  };
+  /** The picked (unsaved) voice shows as chosen in edit mode; otherwise the saved one does. */
+  const isChosen = (key: string, saved: boolean) => (edit && pending ? pending.key === key : saved);
   const design = async () => {
     const r = await run('design', () => api.designVoices(agent.id, brief));
     if (r) { onUpdate(r.agent); haptic.success(); }
@@ -98,6 +120,7 @@ export function VoiceStep({ agent, busy, run, onUpdate, onNext }: StepProps) {
   const voice = agent.voice;
   const previews = agent.voicePreviews ?? [];
 
+  if (!voicesOn && edit) return <div className="vx-scroll vx-form">{edit.head}<Banner tone="info">{c.off(p.name)}</Banner></div>;
   if (!voicesOn) {
     return (
       <>
@@ -113,13 +136,16 @@ export function VoiceStep({ agent, busy, run, onUpdate, onNext }: StepProps) {
   return (
     <>
       <div className="vx-scroll vx-form">
-        <div className="vx-step-head">
-          <h1 className="vx-title-l">{c.title(p.name)}</h1>
-          <p className="vx-2 vx-with-info">
-            {c.same(nav.me.org)}
-            <button type="button" className="vx-icon-btn vx-info-btn" aria-label={c.details} onClick={() => setDetails(true)}><Icon name="info" size={18} /></button>
-          </p>
-        </div>
+        {edit ? edit.head : (
+          <div className="vx-step-head">
+            <h1 className="vx-title-l">{c.title(p.name)}</h1>
+            <p className="vx-2 vx-with-info">
+              {nav.me.features.settingsV2 ? c.sameForming(nav.me.org) : c.same(nav.me.org)}
+              <button type="button" className="vx-icon-btn vx-info-btn" aria-label={c.details} onClick={() => setDetails(true)}><Icon name="info" size={18} /></button>
+            </p>
+          </div>
+        )}
+        {readOnly && <Banner tone="info" icon="lock">{c.onlyCreator(firstName(agent.creatorName), p.name)}</Banner>}
 
         {/* The chosen voice shows in the list (UI §4.4, no "Current voice" card); the sample plays it in the picked language */}
         <div className="vx-voice-langs">
@@ -152,14 +178,15 @@ export function VoiceStep({ agent, busy, run, onUpdate, onNext }: StepProps) {
             {options?.defaultVoices.length === 0 && <p className="vx-small vx-2">{c.noBuiltIn}</p>}
             {options?.defaultVoices.map((v, i) => {
               // AgentView carries only the voice's label and source; labels are `${name} · built-in` / `· voice library`
-              const chosen = voice?.source === 'default' && (voice.choiceId ? voice.choiceId === v.voiceId : voice.label === `${v.name} · built-in`);
+              const saved = voice?.source === 'default' && (voice.choiceId ? voice.choiceId === v.voiceId : voice.label === `${v.name} · built-in`);
+              const chosen = isChosen(v.voiceId, saved);
               const playing = player.playing === v.voiceId;
               return (
                 <motion.div key={v.voiceId} {...listItem} transition={T.listItem(i)}>
                   <Option selected={chosen} title={v.name} sub={[v.gender, v.accent].filter(Boolean).join(' · ') || c.everyLanguage}
                     lead={<Play playing={playing} label={c.play(v.name)} disabled={!v.previewUrl} onPlay={() => v.previewUrl && player.play(v.voiceId, v.previewUrl)} />}
-                    action={<Choose chosen={chosen} label={c.choose(v.name)} busy={busy === `choose:${v.voiceId}`} disabled={!!busy && !chosen}
-                      onClick={() => { if (!chosen) void choose(v.voiceId, () => api.chooseDefaultVoice(agent.id, v.voiceId)); }} />}>
+                    action={<Choose chosen={chosen} label={c.choose(v.name)} busy={busy === `choose:${v.voiceId}`} disabled={(!!busy || readOnly) && !chosen}
+                      onClick={() => { if (!chosen) void choose(v.voiceId, () => api.chooseDefaultVoice(agent.id, v.voiceId), undefined, saved); }} />}>
                     <Bars active={playing} />
                   </Option>
                 </motion.div>
@@ -171,32 +198,33 @@ export function VoiceStep({ agent, busy, run, onUpdate, onNext }: StepProps) {
             <label className="vx-panel vx-brief">
               <span className="vx-over">{c.briefOver}</span>
               <textarea className="vx-textarea bare" rows={3} value={brief} onChange={(e) => setBrief(e.target.value)} maxLength={1000} dir="auto"
-                aria-label={c.describe} placeholder={c.briefPlaceholder} />
+                aria-label={c.describe} placeholder={c.briefPlaceholder} readOnly={readOnly} />
             </label>
             {busy === 'design' ? (
               <ProgressPill active labels={c.designing} tau={3.5} slow={all.slow} />
             ) : previews.length === 0 ? (
-              <button type="button" className="vx-btn vx-btn-secondary vx-btn-sm vx-self-start" disabled={!!busy || brief.trim().length < 20} onClick={() => void design()}>
+              <button type="button" className="vx-btn vx-btn-secondary vx-btn-sm vx-self-start" disabled={!!busy || readOnly || brief.trim().length < 20} onClick={() => void design()}>
                 <Icon name="spark" size={18} />{c.designThree}
               </button>
             ) : null}
             {previews.map((v, i) => {
-              const chosen = voice?.source === 'design' && (designed ?? voice.choiceId) === v.generatedVoiceId;
+              const saved = voice?.source === 'design' && (designed ?? voice.choiceId) === v.generatedVoiceId;
+              const chosen = isChosen(v.generatedVoiceId, saved);
               const playing = player.playing === v.file;
               const letter = String.fromCharCode(65 + i);
               return (
                 <motion.div key={v.generatedVoiceId} {...listItem} transition={T.listItem(i)}>
                   <Option selected={chosen} title={c.take(letter)}
                     lead={<Play playing={playing} label={c.playTake(letter)} onPlay={() => player.play(v.file, mediaUrl(v.file))} />}
-                    action={<Choose chosen={chosen} label={c.chooseTake(letter)} busy={busy === `choose:${v.generatedVoiceId}`} disabled={!!busy && !chosen}
-                      onClick={() => { if (!chosen) void choose(v.generatedVoiceId, () => api.chooseDesignedVoice(agent.id, v.generatedVoiceId), () => setDesigned(v.generatedVoiceId)); }} />}>
+                    action={<Choose chosen={chosen} label={c.chooseTake(letter)} busy={busy === `choose:${v.generatedVoiceId}`} disabled={(!!busy || readOnly) && !chosen}
+                      onClick={() => { if (!chosen) void choose(v.generatedVoiceId, () => api.chooseDesignedVoice(agent.id, v.generatedVoiceId), () => setDesigned(v.generatedVoiceId), saved); }} />}>
                     <Bars active={playing} count={14} />
                   </Option>
                 </motion.div>
               );
             })}
             {previews.length > 0 && busy !== 'design' && (
-              <button type="button" className="vx-btn vx-btn-ghost vx-btn-sm vx-self-start" disabled={!!busy || brief.trim().length < 20} onClick={() => void design()}>{c.designMore}</button>
+              <button type="button" className="vx-btn vx-btn-ghost vx-btn-sm vx-self-start" disabled={!!busy || readOnly || brief.trim().length < 20} onClick={() => void design()}>{c.designMore}</button>
             )}
           </div>
         ) : (
@@ -228,7 +256,8 @@ export function VoiceStep({ agent, busy, run, onUpdate, onNext }: StepProps) {
               <div className="vx-group">
                 {results.map((v) => {
                   const key = `${v.publicOwnerId}-${v.voiceId}`;
-                  const chosen = voice?.source === 'library' && (voice.choiceId ? voice.choiceId === v.voiceId : voice.label === `${v.name} · voice library`);
+                  const saved = voice?.source === 'library' && (voice.choiceId ? voice.choiceId === v.voiceId : voice.label === `${v.name} · voice library`);
+                  const chosen = isChosen(key, saved);
                   const preview = v.verifiedLanguages?.find((l) => l.language === query.language && l.previewUrl)?.previewUrl ?? v.previewUrl;
                   return (
                     <Row key={key} align="top" lead={<Play quiet playing={player.playing === v.voiceId} label={c.play(v.name)} disabled={!preview} onPlay={() => preview && player.play(v.voiceId, preview)} />}
@@ -239,8 +268,8 @@ export function VoiceStep({ agent, busy, run, onUpdate, onNext }: StepProps) {
                         {v.description && <span className="vx-line vx-3" dir="auto">{v.description}</span>}
                         {typeof v.rate === 'number' && v.rate > 1 && <span className="vx-line">{c.costs(v.rate)}</span>}
                       </>}
-                      end={<Choose chosen={chosen} label={c.choose(v.name)} busy={busy === `choose:${key}`} disabled={(!!busy && !chosen) || !options?.libraryAllowed}
-                        onClick={() => { if (!chosen) void choose(key, () => api.chooseLibraryVoice(agent.id, v)); }} />} />
+                      end={<Choose chosen={chosen} label={c.choose(v.name)} busy={busy === `choose:${key}`} disabled={((!!busy || readOnly) && !chosen) || !options?.libraryAllowed}
+                        onClick={() => { if (!chosen) void choose(key, () => api.chooseLibraryVoice(agent.id, v), undefined, saved); }} />} />
                   );
                 })}
               </div>
@@ -248,9 +277,17 @@ export function VoiceStep({ agent, busy, run, onUpdate, onNext }: StepProps) {
           </div>
         )}
       </div>
-      <Dock>
-        <button type="button" className="vx-btn vx-btn-primary vx-btn-block" onClick={onNext} disabled={!!busy}>{voice ? c.use : c.skip}</button>
-      </Dock>
+      {edit ? (
+        <Dock stack>
+          <button type="button" className="vx-btn vx-btn-primary vx-btn-block" onClick={() => void save()} disabled={!pending || !!busy}
+            aria-busy={(!!pending && busy === `choose:${pending.key}`) || undefined}>{edit.saveLabel}</button>
+          <p className="vx-footnote">{edit.note}</p>
+        </Dock>
+      ) : (
+        <Dock>
+          <button type="button" className="vx-btn vx-btn-primary vx-btn-block" onClick={onNext} disabled={!!busy}>{voice ? c.use : c.skip}</button>
+        </Dock>
+      )}
 
       <Picker open={languagePicker} onClose={() => setLanguagePicker(false)} title={c.voiceLanguage} search
         value={query.language} onChange={(language) => filter({ language })}
