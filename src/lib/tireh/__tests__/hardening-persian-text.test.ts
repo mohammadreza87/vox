@@ -11,6 +11,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { clipGraphemes, foldPersian, isArabicScriptLetter, isLatinLetter } from '../text/persian';
 import { extractStyleFeatures, styleFeaturesSchema, zeroStyleFeatures, type StyleObservationInput } from '../identity/style-features';
+import { extractCandidates, IMAGE_PEOPLE_DESCRIPTION } from '../memory/extraction';
+import type { ChatContext, ChatMessage } from '../types';
+import { FakeLLM, testOrg } from './fixtures';
 
 const CORPUS: readonly string[] = [
   // English
@@ -250,5 +253,34 @@ describe('extractStyleFeatures hostile input (S10L verifier)', () => {
     expect(f.persianScriptRatio).toBe(0.8);
     expect(f.latinScriptRatio).toBe(0.2);
     expect(f).not.toEqual(zeroStyleFeatures('text'));
+  });
+});
+
+describe('extraction image people filter reads the fold (F176)', () => {
+  const org = testOrg();
+  const persona = org.getPersona('aria')!;
+  const chat: ChatContext = { kind: 'private', chatKey: 'private-reza', personId: 'reza' };
+  const transcript: ChatMessage[] = [{ role: 'user', personId: 'reza', text: 'remember this', at: new Date('2026-10-19T10:00:00Z'), telegramMessageId: 7 }];
+  const candidates = [
+    { content: 'رضا در عكس کت قرمز دارد', type: 'fact', kind: 'work', saidBy: 'reza' },
+    { content: 'رضا لبخن\u0640\u0640\u0640د می\u200Cزند', type: 'fact', kind: 'work', saidBy: 'reza' },
+    { content: 'رضا \uFEE9\uFEE4\uFEE8\uFBFE\uFEE6 \uFE97\uFEBC\uFEEE\uFEF3\uFEAE را فرستاد', type: 'fact', kind: 'work', saidBy: 'reza' },
+    { content: 'پرواز رضا به برلین جمعه است', type: 'event', kind: 'work', saidBy: 'reza' },
+  ];
+
+  it('drops descriptions written with Arabic kaf, tatweel or presentation forms under the rule', async () => {
+    const llm = new FakeLLM();
+    llm.nextExtraction = { memories: candidates };
+    const kept = await extractCandidates(llm, org, persona, chat, 'reza', transcript, [], { imagePeopleRule: true });
+    expect(kept.map((c) => c.content)).toEqual(['پرواز رضا به برلین جمعه است']);
+    // None of the three descriptions matches the raw regex: only the fold catches them.
+    for (const c of candidates.slice(0, 3)) expect(IMAGE_PEOPLE_DESCRIPTION.test(c.content)).toBe(false);
+  });
+
+  it('keeps every candidate without the rule', async () => {
+    const llm = new FakeLLM();
+    llm.nextExtraction = { memories: candidates };
+    const kept = await extractCandidates(llm, org, persona, chat, 'reza', transcript, []);
+    expect(kept).toHaveLength(candidates.length);
   });
 });
