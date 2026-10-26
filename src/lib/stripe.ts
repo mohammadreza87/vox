@@ -6,6 +6,9 @@ let _stripe: Stripe | null = null;
 export function getStripe(): Stripe {
   if (!_stripe) {
     _stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
+      // Preserve the existing wire API version; an SDK update is not an API migration.
+      // Stripe types only its latest version: https://github.com/stripe/stripe-node#using-old-api-versions-with-typescript
+      // @ts-expect-error stripe-version-2025-11-17.clover differs from this SDK's latest API type.
       apiVersion: '2025-11-17.clover',
       typescript: true,
     });

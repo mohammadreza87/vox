@@ -77,3 +77,9 @@ The next bounded AM-05/AM-12 increment is selective suppression of a known edite
 ## Lineage merge and live-release reconciliation
 
 PR 115 merged as `6b410cd` with independent local and hosted acceptance; its build passed. Installation was held when fresh checks found live `6df838f5`, containing authentication and UI fixes absent from main. New scoped PR 116 preserves the exact deployed release alongside memory lineage. Its integration review also requires a narrow fix and failure/retry test for edited-message writes before polling acknowledgement. Do not install the superseded standalone `6b410cd` artifact over the newer live release. See [the lineage receipt and boundaries](AGENT_MEMORY_SOURCE_LINEAGE.md) and external `LINEAGE_RELEASE.md` for current gates.
+
+## Snapshot contract prerequisite — current cycle
+
+The combined lineage release `5b360b9` was installed and verified with capture off; main CI 325 subsequently passed. The next bounded AM-05/AM-12 increment is the [pure snapshot planner/codec/verifier contract](AGENT_MEMORY_COMPACTION_CONTRACT.md) with synthetic qualification. It does not publish snapshots or raise archive capacity. A separate prerequisite repairs main `cd87918` dependency compatibility failures while preserving the existing Stripe wire API and UI behavior. Current source, dependency, independent QA and release reports remain separate evidence gates; preserve newer deployments before installation.
+
+Local fixed qualification passed 223 tests across eight suites plus TypeScript, scoped lint, Studio style and plan links; the independent reviewer owns acceptance of these exact bytes. Required hosted CI, merge and guarded installation remain pending at this source checkpoint. The interrupted compatibility run failed on temporary ENOSPC; the failure is retained and the bounded retry passed. No provider test was repeated.
