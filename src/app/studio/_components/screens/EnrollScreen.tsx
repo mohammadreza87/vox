@@ -43,22 +43,28 @@ export const UX07_COPY: Record<Locale, { body: string; statement: string; enroll
 };
 
 /** Screen strings outside UX-07; the FA lines await native-language review. */
-const UI: Record<Locale, { consentMissing: string; pending: string; keepTalking: string; recording: string; stop: string; cancel: string; remove: string; uploading: string }> = {
+const UI: Record<Locale, { consentMissing: string; pending: string; keepTalking: string; recording: string; seconds: string; stop: string; cancel: string; remove: string; uploading: string }> = {
   en: {
     consentMissing: 'Turn on Voice recognition in Privacy and memory first.',
     pending: 'Not available yet: launch details are pending review.',
     keepTalking: 'Keep talking a little longer',
-    recording: 'Recording', stop: 'Stop', cancel: 'Cancel', remove: 'Delete voiceprint', uploading: 'Checking your sample…',
+    recording: 'Recording', seconds: 's', stop: 'Stop', cancel: 'Cancel', remove: 'Delete voiceprint', uploading: 'Checking your sample…',
   },
   fa: {
     consentMissing: 'ابتدا «شناسایی صدا» را در «حریم خصوصی و حافظه» روشن کنید.',
     pending: 'هنوز در دسترس نیست: جزئیات راه‌اندازی در حال بررسی است.',
     keepTalking: 'کمی بیشتر صحبت کنید',
-    recording: 'در حال ضبط', stop: 'پایان', cancel: 'لغو', remove: 'حذف الگوی صدا', uploading: 'در حال بررسی نمونه…',
+    recording: 'در حال ضبط', seconds: 'ثانیه', stop: 'پایان', cancel: 'لغو', remove: 'حذف الگوی صدا', uploading: 'در حال بررسی نمونه…',
   },
 };
 
 const MIN_CLIP_MS = 10_000;
+
+/** Elapsed whole seconds in the locale's digits and unit: '12s' (en), '۱۲ ثانیه' (fa). */
+function secondsLabel(locale: Locale, ms: number): string {
+  const seconds = new Intl.NumberFormat(locale === 'fa' ? 'fa-IR' : 'en-US').format(Math.floor(ms / 1000));
+  return locale === 'fa' ? `${seconds} ${UI.fa.seconds}` : `${seconds}${UI.en.seconds}`;
+}
 const ACTION_CLASS = 'rounded-xl px-4 py-2 text-sm font-medium border border-current';
 
 /** Fills {variables} that have a non-blank fact; anything else stays literal and is reported missing. */
@@ -223,7 +229,7 @@ export function EnrollScreen({ space, locale, facts, onCancel }: { space: Space;
       </label>
       {phase === 'recording' ? (
         <div role="group" aria-label={ui.recording} className="flex gap-2 items-center">
-          <p role="timer">{ui.recording} · {Math.floor(elapsed / 1000)}s</p>
+          <p role="timer">{ui.recording} · <bdi>{secondsLabel(locale, elapsed)}</bdi></p>
           <button type="button" className={ACTION_CLASS} onClick={stop}>{ui.stop}</button>
           <button type="button" className={ACTION_CLASS} onClick={cancel}>{ui.cancel}</button>
         </div>

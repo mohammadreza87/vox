@@ -9,10 +9,23 @@
  * the standard orthography as typed: ZWNJ or a space between parts, and the
  * Arabic yeh/kaf code points (U+064A, U+0643) as well as the Persian ones.
  *
+ * negatedMemoryRequest and explicitMemoryRequest also test the text after the
+ * shared fold (text/persian.ts foldPersian: NFKC, so presentation forms;
+ * alef maksura U+0649 and the other Arabic letter variants; tatweel U+0640,
+ * harakat and the other combining marks; ZWJ, LRM, RLM, BOM). A match on the
+ * raw text still counts, so both are strict supersets of the raw rule, and the
+ * negation only ever fails closed (H4, F257).
+ *
+ * TODO(H4, not in H4's files): gateway.ts NO_MEMORY and images/retention.ts
+ * IMAGE_NO_MEMORY call NEGATED_MEMORY_REQUEST.test(text) on the raw text, so
+ * they do not see the fold yet. They should call negatedMemoryRequest(text).
+ *
  * With every flag unset the gateway's NO_MEMORY reads this rule too, which is
  * wider than the base `do not|don't` + verb rule (recorded as a base-behaviour
  * exception in WAVE_A_ON_MAIN.md section 3): it only ever withholds memory.
  */
+
+import { foldPersian } from '../text/persian';
 
 const GAP = String.raw`[\s‌]*`;
 const YEH = '[یي]';
@@ -59,12 +72,12 @@ export const MEMORY_REQUEST = new RegExp([
   `نگهش${GAP}دار`,
 ].join('|'), 'imu');
 
-/** True when the text asks not to keep it. */
+/** True when the text asks not to keep it, as typed or after the shared Persian fold. */
 export function negatedMemoryRequest(text: string): boolean {
-  return NEGATED_MEMORY_REQUEST.test(text);
+  return NEGATED_MEMORY_REQUEST.test(text) || NEGATED_MEMORY_REQUEST.test(foldPersian(text));
 }
 
-/** True when the text explicitly asks to keep it and no negation is present. */
+/** True when the text explicitly asks to keep it (as typed or folded) and no negation is present in either form. */
 export function explicitMemoryRequest(text: string): boolean {
-  return !NEGATED_MEMORY_REQUEST.test(text) && MEMORY_REQUEST.test(text);
+  return !negatedMemoryRequest(text) && (MEMORY_REQUEST.test(text) || MEMORY_REQUEST.test(foldPersian(text)));
 }

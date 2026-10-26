@@ -10,6 +10,8 @@ const HINT: IdentityHint = { source: 'voice_match', claimedPersonId: 'bob', spea
 // Resolved from this file's path (Vite rewrites `new URL(relative, import.meta.url)` into asset URLs).
 const HERE = dirname(fileURLToPath(import.meta.url));
 const source = (relative: string): string => readFileSync(resolve(HERE, relative), 'utf8');
+/** A module specifier in `from '…'` or a bare `import '…'`, in any quote style; group 2 is the specifier. */
+const SPECIFIER = /(?:from\s+|^\s*import\s+)(['"`])([^'"`]+)\1/m;
 
 function hinted(request: AccessRequest): AccessRequest[] {
   return [
@@ -67,13 +69,24 @@ describe('identity hints never reach the adaptive policy inputs', () => {
       expect(text, name).not.toMatch(/\b(AccessRequest|IdentityContext|PolicySnapshot|authorizeAccess|resolveVerifiedPerson)\b/);
       // Any module specifier: single-line or the closing line of a multi-line import/export, plus import('...') and require('...').
       expect(text, `${name}: dynamic import or require`).not.toMatch(/\b(import|require)\s*\(/);
-      for (const line of text.split('\n').filter(l => /\bfrom\s+'/.test(l) || /^\s*import\s+'/.test(l))) {
-        const specifier = /(?:from\s+|^\s*import\s+)'([^']+)'/.exec(line)?.[1] ?? '';
+      // Single, double and backtick specifiers alike (F056): the guard must not depend on the lint's quote style.
+      for (const line of text.split('\n').filter(l => SPECIFIER.test(l))) {
+        const specifier = SPECIFIER.exec(line)?.[2] ?? '';
         expect(specifier, `${name}: ${line}`).not.toMatch(/adaptive\/policy|adaptive\/persistence|gateway|studio|llm/);
         if (specifier.includes('adaptive')) adaptiveImports.push(`${name}: ${line.trim()}`);
       }
     }
     expect(adaptiveImports).toEqual(["types.ts: import type { IdentityHint } from '../../adaptive/types';"]);
+  });
+
+  it('(d2) reads single, double and backtick specifiers', () => {
+    const quotes = ["'", '"', '`'];
+    for (const q of quotes) {
+      expect(SPECIFIER.exec(`import { x } from ${q}../../adaptive/policy${q};`)?.[2]).toBe('../../adaptive/policy');
+      expect(SPECIFIER.exec(`import ${q}../gateway${q};`)?.[2]).toBe('../gateway');
+      expect(SPECIFIER.exec(`} from ${q}../../studio/runtime${q};`)?.[2]).toBe('../../studio/runtime');
+    }
+    expect(SPECIFIER.exec(`import { x } from '../gateway";`)).toBeNull();
   });
 
   it('(e) never copies a hint into the assessment', () => {

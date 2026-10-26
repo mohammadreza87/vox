@@ -14,6 +14,7 @@ import { createHash } from 'crypto';
 import type { ChatContext, MemoryRecord } from '../types';
 import type { OrgDirectory } from '../org/directory';
 import { tirehFlags } from '../flags';
+import { foldPersian } from '../text/persian';
 import { audienceOf, hasGuestAudience, isMemoryAllowedInChat, scopeKey } from './visibility';
 import { contentHash, memoryV2 } from './record-v2';
 import { cosine } from './embeddings';
@@ -101,16 +102,8 @@ function selectMemoriesV1(
 // v2: Persian-aware tokenisation
 // ============================================
 
-const ARABIC_LETTER_MAP: Readonly<Record<string, string>> = {
-  'ي': 'ی', 'ى': 'ی', 'ئ': 'ی',
-  'ك': 'ک',
-  'ة': 'ه',
-  'أ': 'ا', 'إ': 'ا', 'ٱ': 'ا', 'آ': 'ا',
-  'ؤ': 'و',
-};
-const ARABIC_LETTERS = /[يىئكةأإٱآؤ]/g;
-// Combining marks (harakat, hamza above U+0654), tatweel, ZWJ, LRM, RLM, BOM. ZWNJ is handled separately.
-const REMOVED = /[\p{M}ـ‍‎‏﻿]/gu;
+// The shared fold (text/persian.ts), lowercased: NFKC, Arabic letter variants, marks, tatweel, ZWJ, LRM, RLM, BOM,
+// digits. ZWNJ is kept for the affix handling below.
 const ZWNJ = '‌';
 const ZWNJ_PREFIX = /^(ن?می)‌/;
 const ZWNJ_SUFFIX = /‌(هایشان|هایمان|هایتان|هایی|های|ها|ترین|تر|ام|ات|اش|ای|اند)$/;
@@ -118,13 +111,7 @@ const ARABIC_SCRIPT = /\p{Script=Arabic}/u;
 const DIGITS = /^\p{N}+$/u;
 
 function normalizeText(text: string): string {
-  return text
-    .normalize('NFKC')
-    .toLowerCase()
-    .replace(ARABIC_LETTERS, (c) => ARABIC_LETTER_MAP[c] ?? c)
-    .replace(REMOVED, '')
-    .replace(/[۰-۹]/g, (d) => String(d.charCodeAt(0) - 0x06f0))
-    .replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x0660));
+  return foldPersian(text, { lowercase: true });
 }
 
 const EN_STOP = new Set([
@@ -147,13 +134,28 @@ function keepToken(token: string): boolean {
   return token.length >= 3;
 }
 
-/** Arabic-script stems for a token written without ZWNJ, e.g. کتابها → کتاب, میرود → رود. */
+/**
+ * Nouns that start with می but are not the verbal prefix: stripping it gives a false stem
+ * (میدان to دان). Kept small; matched against the whole folded token.
+ */
+const FA_MI_NOUNS: ReadonlySet<string> = new Set([
+  'میز', 'میدان', 'میوه', 'میهمان', 'میل', 'میراث', 'میلیون', 'میلیارد', 'میان', 'میانه', 'میانگین', 'میهن', 'میمون', 'میخ',
+]);
+
+/**
+ * Arabic-script stems for a token written without ZWNJ, e.g. کتابها → کتاب, میرود → رود.
+ * The plural suffix and the verbal prefix are never stacked: a token ending in ها/های gets only
+ * its plural stem (میزها → میز, never زها), and می/نمی is stripped only when at least 3 letters
+ * remain and the token is not one of FA_MI_NOUNS.
+ */
 function arabicStems(token: string): string[] {
   const stems: string[] = [];
+  const plural = token.endsWith('های') || token.endsWith('ها');
   if (token.length >= 5) {
     if (token.endsWith('های')) stems.push(token.slice(0, -3));
     else if (token.endsWith('ها')) stems.push(token.slice(0, -2));
   }
+  if (plural || FA_MI_NOUNS.has(token)) return stems;
   if (token.startsWith('نمی') && token.length - 3 >= 3) stems.push(token.slice(3));
   else if (token.startsWith('می') && token.length - 2 >= 3) stems.push(token.slice(2));
   return stems;

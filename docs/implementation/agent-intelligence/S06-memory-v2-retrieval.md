@@ -27,14 +27,28 @@ byte-identical to the base.
 
 No step in this run wires S06 into `gateway.ts`. `gateway.ts` keeps calling
 `selectMemories(org, all, chat, { query, now })` synchronously; reply call sites pass no
-limit and extraction passes `limit: 30`. The flag therefore changes reply ranking and count
-only; no query embedding or `findNearest` is used on the hot path yet.
+limit and extraction passes `limit: 30`. No query embedding or `findNearest` is used on the
+hot path yet.
+
+Correction (QA F031, recorded by H4; no code change): the flag changes more than reply ranking
+and count. Every `selectMemories` call in `gateway.ts` dispatches on it:
+
+- replies (`composeReply` and the live reply path) get v2 ranking and at most 8 memories;
+- `proactiveContext` (unsent private reconsiderations) also passes no limit, so it drops from
+  20 to at most 8 memories under v2;
+- extraction (`extractMemories`, `limit: 30`) gets v2's candidate suppression, so the
+  extractor's "Already remembered" (`known`) list loses superseded, invalidated and expired
+  records, exact `contentHash` duplicates and, once records carry embeddings, near-duplicates
+  (cosine > 0.92). The
+  extractor then sees one record of a near-identical pair and may propose a redundant record.
+  Write-time de-duplication belongs to Steps 5/7; until then this is a known effect of the flag.
 
 ## Files
 
 | Path | Change |
 |---|---|
-| `src/lib/tireh/flags.ts` | NEW, byte-identical to the shared contract (sha256 `6b8edcd4…66630`). Not edited afterwards. |
+| `src/lib/tireh/flags.ts` | NEW, byte-identical to the shared contract (sha256 `6b8edcd4…66630`). Not edited by S06. Note (QA F248): changed on `agent-intelligence-wave-a-main` by `97bf549` and `ebc18d9` (`voiceShadow`, `webhookFailClosed`); now sha256 `e398a121…d09`, pinned in `llm-blocks.test.ts` and `llm-blocks.main-lineage.test.ts`. A later hardening change to `flags.ts` moves those pins again; the hash above stays the contract S06 was built against. |
+| `src/lib/tireh/text/persian.ts` | NEW in H4 hardening: `foldPersian`, `isArabicScriptLetter`, `isLatinLetter`, `clipGraphemes` (see Tokenizer). |
 | `src/lib/tireh/types.ts` | MEMORY section only: `MemorySpace`, `MemoryStatus` after `MemorySensitivity`; the 15 optional v2 fields inside `MemoryRecord` after `confidence`. |
 | `src/lib/tireh/memory/record-v2.ts` | NEW pure helpers: `memoryV2()` defaults view, `contentHash()`, `stripEmbeddingUnlessNormal()`, `DEFAULT_IMPORTANCE`. |
 | `src/lib/tireh/memory/embeddings.ts` | NEW: `EMBEDDING_VERSION`, `EmbeddingProvider`, `EmbeddingError`, `OpenAIEmbeddingProvider` (injectable fetch, `maxRetries: 0`, `timeout: 10_000`, chunks of 256, max 2048 inputs, shape validation, content-free errors), `FakeEmbeddingProvider` (FNV-1a trigram hashing, L2-normalised, `calls` counter), `cosine`, `embedMemory` (normal sensitivity only). Not imported by gateway, Studio or runtime. |
@@ -70,6 +84,28 @@ NFKC + lowercase; Arabic-script letter unification (ي ى ئ→ی, ك→ک, ة�
 remove `\p{M}`, tatweel, ZWJ, LRM, RLM, BOM; Persian/Arabic-Indic digits → ASCII; ZWNJ-aware
 prefix/suffix stripping then ZWNJ join; split on `[^\p{L}\p{N}]+`; light stems (ها/های suffix,
 می/نمی prefix, English plural s); length floors; EN and FA stopwords.
+
+**Shared normaliser (H4).** The letter fold above now lives in `src/lib/tireh/text/persian.ts` as
+`foldPersian(text, { lowercase })`; `retrieval.ts` `normalizeText` is
+`foldPersian(text, { lowercase: true })`. The same fold is read by `memory/requests.ts`
+(`negatedMemoryRequest`, `explicitMemoryRequest`), the S12 extraction people filter and the S14
+follow-up classifier, so a Persian spelling recognised in one place is recognised in the others.
+The module also exports `isArabicScriptLetter`, `isLatinLetter` (used by
+`decisions/language.ts` and `identity/style-features.ts`) and `clipGraphemes`. The fold is
+byte-identical to the 718752e normaliser over a committed 60-string EN/FA/mixed corpus
+(`hardening-persian-text.test.ts`), with one deliberate addition: heh with yeh above (U+06C0)
+and ae (U+06D5) fold to heh (U+0647), so "خانۀ" and "خانهٔ" (heh plus hamza above, whose mark
+is stripped) give the same token (QA F139).
+
+**Stemmer (H4, QA F093).** The plural suffix and the verbal prefix are never stacked: a token
+ending in ها/های gets only its plural stem (میزها → میز, no longer also زها). می/نمی is
+stripped only when at least 3 letters remain, the token does not end in ها/های and the token is
+not in `FA_MI_NOUNS` (میز, میدان, میوه, میهمان, میل, میراث, میلیون, میلیارد, میان, میانه,
+میانگین, میهن, میمون, میخ), so میدان no longer yields دان, میلیون لیون or میراث راث. Verbal
+forms keep their stem (میروم → روم, نمیدانم → دانم). `hardening-tokenize-before-after.test.ts`
+pins `tokenize()` on the committed corpus: identical to 718752e except six stemmer entries and the
+two heh-variant words. The memory eval is unchanged by both changes: v2 lexical Recall@3 0.980,
+Recall@8 1.0, leakage 0 (v1 0.987, untouched).
 
 ### Cache
 
