@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { PersonaGateway, type GatewayDeps } from '../gateway';
+import type { LLMMessage } from '../llm';
 import { explicitReplyFormat, type DecisionAnswer } from '../triage';
 import type { TelegramBotClient } from '../telegram/client';
 import type { ChatMessage, Persona } from '../types';
@@ -431,6 +432,18 @@ describe('combined voice delivery and privacy epoch fences', () => {
   });
 });
 
+/**
+ * The newest model message as the person's turn. Under TIREH_CACHED_PROMPT=1 the
+ * server's per-turn block rides on it as trailingText; that block is not part of
+ * what the person said, so it is left out before the exact comparison.
+ */
+function withoutTurnBlock(message: LLMMessage | undefined): LLMMessage | undefined {
+  if (!message) return message;
+  const copy = { ...message };
+  delete copy.trailingText;
+  return copy;
+}
+
 describe('guest audiences never reach speech-to-text (PRIV-023)', () => {
   const voice = { file_id: 'synthetic-voice-file', duration: 3, mime_type: 'audio/ogg' };
   const addressedGroupVoice = (extra: Record<string, unknown> = {}) => groupText(GAMEEND_CHAT, TG.milad, '', {
@@ -443,7 +456,7 @@ describe('guest audiences never reach speech-to-text (PRIV-023)', () => {
     const ctx = setup();
     expect(await ctx.gateway.handleUpdate('aria', addressedGroupVoice())).toBe('replied');
     expect(ctx.bot.downloadFile).toHaveBeenCalledTimes(1);
-    expect(ctx.voice.transcribe).toHaveBeenCalledTimes(1);
+    expect(ctx.voice!.transcribe).toHaveBeenCalledTimes(1);
   });
 
   it('never downloads or transcribes an addressed voice note in a group flagged hasGuests', async () => {
@@ -452,7 +465,7 @@ describe('guest audiences never reach speech-to-text (PRIV-023)', () => {
     const update = addressedGroupVoice();
     expect(await ctx.gateway.handleUpdate('aria', update)).toBe('replied');
     expect(ctx.bot.downloadFile).not.toHaveBeenCalled();
-    expect(ctx.voice.transcribe).not.toHaveBeenCalled();
+    expect(ctx.voice!.transcribe).not.toHaveBeenCalled();
     expect(ctx.llm.replyPrompts).toEqual([]);
     expect(ctx.bot.sendMessage).toHaveBeenCalledExactlyOnceWith(GAMEEND_CHAT, expect.stringContaining('Could you type it instead?'), { replyTo: update.message!.message_id });
   });
@@ -462,8 +475,8 @@ describe('guest audiences never reach speech-to-text (PRIV-023)', () => {
     ctx.org.getGroupByChatId(GAMEEND_CHAT)!.hasGuests = true;
     expect(await ctx.gateway.handleUpdate('aria', addressedGroupVoice({ caption: 'Aria, when is the meeting?' }))).toBe('replied');
     expect(ctx.bot.downloadFile).not.toHaveBeenCalled();
-    expect(ctx.voice.transcribe).not.toHaveBeenCalled();
-    expect(ctx.llm.replyRequests.at(-1)?.messages.at(-1)).toEqual({ role: 'user', content: 'Milad: Aria, when is the meeting?' });
+    expect(ctx.voice!.transcribe).not.toHaveBeenCalled();
+    expect(withoutTurnBlock(ctx.llm.replyRequests.at(-1)?.messages.at(-1))).toEqual({ role: 'user', content: 'Milad: Aria, when is the meeting?' });
   });
 
   it('never downloads or transcribes a private voice note from a guest speaker', async () => {
@@ -471,7 +484,7 @@ describe('guest audiences never reach speech-to-text (PRIV-023)', () => {
     ctx.org.getPerson('sina')!.guest = true;
     expect(await ctx.gateway.handleUpdate('aria', privateVoice(TG.sina))).toBe('replied');
     expect(ctx.bot.downloadFile).not.toHaveBeenCalled();
-    expect(ctx.voice.transcribe).not.toHaveBeenCalled();
+    expect(ctx.voice!.transcribe).not.toHaveBeenCalled();
     expect(ctx.bot.sendMessage).toHaveBeenCalledExactlyOnceWith(TG.sina, expect.stringContaining('Could you type it instead?'), expect.anything());
   });
 });
