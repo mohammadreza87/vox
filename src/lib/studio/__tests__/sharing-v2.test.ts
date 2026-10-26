@@ -263,10 +263,12 @@ class TombstoneStore extends InMemoryMemoryStore {
   }
 }
 
-/** A store without S06's optional tombstone methods: inheritance must fail closed. */
+/**
+ * A store without S06's optional tombstone methods: inheritance must fail closed. The class keeps the base
+ * signatures (so it stays assignable to InMemoryMemoryStore, delete(): Promise<string[]> included); the
+ * methods are hidden at runtime only, by own properties set to undefined.
+ */
 class NoTombstoneStore extends InMemoryMemoryStore {
-  declare tombstonesOf: undefined;
-  declare addTombstones: undefined;
   constructor() {
     super();
     Object.defineProperty(this, 'tombstonesOf', { value: undefined });
@@ -584,7 +586,8 @@ describe('runtime wiring', () => {
     delete globalState.__voxStudio;
     for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
   });
-  const configure = (flags: NodeJS.ProcessEnv, existing?: string) => {
+  // Plain string pairs, not NodeJS.ProcessEnv: Next's global types (next-env.d.ts) make NODE_ENV required there.
+  const configure = (flags: Record<string, string>, existing?: string) => {
     const dir = existing ?? mkdtempSync(join(tmpdir(), 'vox-sharing-v2-runtime-'));
     if (!existing) dirs.push(dir);
     const env: NodeJS.ProcessEnv = {

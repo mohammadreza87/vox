@@ -131,7 +131,7 @@ describe('port of voice-call.test.ts live calls under TIREH_CACHED_PROMPT=1', ()
     const org = await seedOrg(h);
     h.studio.deps.webhookBase = 'https://vox.example/';
     const { agent } = await hire(h, org.alice, { name: 'Nova' }, undefined, 'org');
-    const voice = { complete: vi.fn(), stream: vi.fn(async function* () { yield 'Launch is '; yield 'on track.'; }) };
+    const voice = { complete: vi.fn(), stream: vi.fn<(request: LLMRequest) => AsyncIterable<string>>(async function* () { yield 'Launch is '; yield 'on track.'; }) };
     h.studio.deps.fastLLM = voice;
     const token = callToken(SECRET, agent.id, ID.bob, new Date());
     const turns = [{ role: 'assistant', content: "Hey Bob, it's Nova." }, { role: 'user', content: 'How is the launch?' }];
@@ -141,7 +141,7 @@ describe('port of voice-call.test.ts live calls under TIREH_CACHED_PROMPT=1', ()
     }));
     expect(response.headers.get('content-type')).toBe('text/event-stream');
     await response.text();
-    const request = voice.stream.mock.calls[0][0] as LLMRequest;
+    const request = voice.stream.mock.calls[0][0];
     expect(Array.isArray(request.system)).toBe(true);
     expect(systemText(request.system)).toContain('## Live voice call');
     expect(modelText(request)).not.toContain('## Live information');

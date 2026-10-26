@@ -3,12 +3,13 @@ import {PersonaGateway, type RuntimePrivacy} from '../gateway';
 import {InMemoryUpdateDeduper} from '../memory/store';
 import {makeGateway, memory} from './fixtures';
 import type {LLM} from '../llm';
+import type {TelegramBotClient} from '../telegram/client';
 
 function fixture(privacy: RuntimePrivacy, llm?: LLM, now = () => new Date('2026-10-19T10:00:00Z')) {
   const h = makeGateway();
   Object.defineProperty(llm ?? h.llm, 'committedExportFence', {value: true, configurable: true});
   const gateway = new PersonaGateway({org: h.org, llm: llm ?? h.llm, memories: h.memories, offers: h.offers, history: h.history,
-    deduper: new InMemoryUpdateDeduper(), voice: null, botFor: () => h.bot, runtimePrivacy: privacy, now});
+    deduper: new InMemoryUpdateDeduper(), voice: null, botFor: () => h.bot as unknown as TelegramBotClient, runtimePrivacy: privacy, now});
   return {...h, gateway};
 }
 function compact() {

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { PersonaGateway, type RuntimePrivacyState } from '../gateway';
 import type { LLM, LLMRequest } from '../llm';
 import { InMemoryUpdateDeduper } from '../memory/store';
+import type { TelegramBotClient } from '../telegram/client';
 import { makeGateway } from './fixtures';
 
 const SAVED = 'SYNTHETIC_ADAPTIVE_SAVED_NOTE';
@@ -14,7 +15,7 @@ function setup() {
   };
   let valid = true;
   const gatewayFor = (llm: LLM = h.llm) => new PersonaGateway({
-    ...h, llm, voice: null, botFor: () => h.bot, deduper: new InMemoryUpdateDeduper(),
+    ...h, llm, voice: null, botFor: () => h.bot as unknown as TelegramBotClient, deduper: new InMemoryUpdateDeduper(),
     runtimePrivacy: {
       read: async () => state,
       validateAudience: async () => valid,

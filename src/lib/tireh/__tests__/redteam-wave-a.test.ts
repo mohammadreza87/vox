@@ -131,7 +131,7 @@ describe('red team: negative-identity retrieval through the v2 path', () => {
   const org = testOrg();
   const reza: ChatContext = { kind: 'private', chatKey: 'private-reza', personId: 'reza' };
   const group = (): ChatContext => {
-    const g = org.getGroupByTelegramChatId?.(GAMEEND_CHAT) ?? org.config.groups.find((x) => x.id === 'gameend-team')!;
+    const g = org.getGroupByChatId(GAMEEND_CHAT)!;
     return { kind: 'group', chatKey: `group-${g.id}`, group: g };
   };
   const query = 'Reza launch review replacing Reza Sina plan salary Leads budget Parastoo health';

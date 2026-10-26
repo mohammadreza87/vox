@@ -15,7 +15,7 @@ const candidate: MemoryCandidate = { content: 'Reza prefers short answers', type
 
 describe('bounded memory and history audiences', () => {
   it('denies legacy shared records with no original audience and members added later', () => {
-    const m = memory({ scope: { kind: 'group', groupId: 'leads' }, authorizedPersonIds: ['reza', 'parastoo'] });
+    const m = memory({ content: 'Leads planning note', scope: { kind: 'group', groupId: 'leads' }, authorizedPersonIds: ['reza', 'parastoo'] });
     expect(isVisibleToAudience(org, { ...m, authorizedPersonIds: undefined }, ['reza'])).toBe(false);
     const changed = structuredClone(config);
     changed.groups.find((g) => g.id === 'leads')!.memberIds.push('milad');
@@ -27,7 +27,7 @@ describe('bounded memory and history audiences', () => {
   });
 
   it('only source owner can share with selected people and revoke; unrelated people remain excluded', () => {
-    const m = memory({ scope: { kind: 'private', personId: 'reza' } });
+    const m = memory({ content: 'Reza private note', scope: { kind: 'private', personId: 'reza' } });
     expect(() => ownerSharePatch(org, m, 'milad', ['parastoo'])).toThrow('source owner');
     const shared = { ...m, ...ownerSharePatch(org, m, 'reza', ['parastoo']) };
     expect(isVisibleToAudience(org, shared, ['parastoo'])).toBe(true);
@@ -45,7 +45,7 @@ describe('bounded memory and history audiences', () => {
     const withGuest = structuredClone(config);
     withGuest.people.push({ id: 'visitor', name: 'Visitor', role: 'Guest', telegramUserId: 9_999, companyIds: [], projectIds: [], guest: true });
     const directory = new OrgDirectory(withGuest);
-    const m = memory({ scope: { kind: 'private', personId: 'reza' } });
+    const m = memory({ content: 'Reza private note', scope: { kind: 'private', personId: 'reza' } });
     const refused = 'Choose people who can use this agent.';
     for (const recipients of [[], ['visitor'], ['unknown-person'], ['parastoo', 'visitor'], Array.from({ length: 31 }, () => 'parastoo'), [7] as unknown as string[]]) {
       expect(() => ownerSharePatch(directory, m, 'reza', recipients), JSON.stringify(recipients)).toThrow(refused);
