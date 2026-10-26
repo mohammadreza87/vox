@@ -112,6 +112,8 @@ describe('gateway.transcribe runs shadow verification beside STT', () => {
     const stranger = harness();
     await stranger.gateway.handleUpdate('aria', privateVoice(TG.stranger));
     expect(stranger.voice.transcribe).not.toHaveBeenCalled();
+    // F058: no audio bytes are fetched for a stranger; the download is the earliest leak point.
+    expect(stranger.bot.downloadFile).not.toHaveBeenCalled();
     expect(stranger.verifier!.verifyVoiceNote).not.toHaveBeenCalled();
   });
 
@@ -162,6 +164,14 @@ describe('shadow verification never sits on the reply path (QA round 2)', () => 
     vi.stubEnv('STUDIO_VOICE_SHADOW', '1');
     const verification = deferred<VoiceVerification>();
     const verifier = { verifyVoiceNote: vi.fn<VoiceNoteVerifier['verifyVoiceNote']>(() => verification.promise) };
+    // F100: the bound itself, not only "some signal": record the signal AbortSignal.timeout returns per deadline.
+    const originalTimeout = AbortSignal.timeout.bind(AbortSignal);
+    const timeouts = new Map<number, AbortSignal[]>();
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms: number) => {
+      const created = originalTimeout(ms);
+      timeouts.set(ms, [...(timeouts.get(ms) ?? []), created]);
+      return created;
+    });
     const h = harness({ verifier });
     // The verifier never settles during the turn: the reply must not wait for it.
     expect(await h.gateway.handleUpdate('aria', privateVoice(TG.reza))).toBe('replied');
@@ -171,6 +181,11 @@ describe('shadow verification never sits on the reply path (QA round 2)', () => 
     const signal = verifier.verifyVoiceNote.mock.calls[0][1];
     expect(signal).toBeInstanceOf(AbortSignal);
     expect(signal!.aborted).toBe(false);
+    // gateway.ts VOICE_SHADOW_DEADLINE_MS (not exported): 3 s, and the verifier gets exactly that timeout signal.
+    const VOICE_SHADOW_DEADLINE_MS = 3000;
+    expect(timeout).toHaveBeenCalledWith(VOICE_SHADOW_DEADLINE_MS);
+    expect(timeouts.get(VOICE_SHADOW_DEADLINE_MS)).toContain(signal);
+    timeout.mockRestore();
     verification.resolve({ band: 'MATCH', netSpeechMs: 4000, modelVersion: 'fake-1' });
   });
 

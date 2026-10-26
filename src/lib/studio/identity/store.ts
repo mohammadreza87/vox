@@ -8,7 +8,7 @@
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname } from 'node:path';
-import type { Firestore } from 'firebase-admin/firestore';
+import { FieldPath, type Firestore } from 'firebase-admin/firestore';
 import { z } from 'zod';
 
 export type VoiceSpace = 'work' | 'personal';
@@ -34,9 +34,24 @@ export interface VoiceprintStore {
   touch(personId: string, space: VoiceSpace, lastConfirmedAt: Date): Promise<void>;
   /** Deletes one space, or both when `space` is omitted. Returns the number of rows removed. */
   delete(personId: string, space?: VoiceSpace): Promise<number>;
-  /** Every row; used only by the retention sweep. */
+  /** Every row, sealed templates included. Kept for existing callers; the retention sweep uses listKeys(). */
   list(): Promise<VoiceprintRow[]>;
+  /**
+   * The key fields of every row (person, space, creation time), never the sealed template. Firestore reads them in
+   * pages of VOICEPRINT_KEY_PAGE with a field mask. Rows whose keys do not parse are skipped, never deleted.
+   */
+  listKeys(): AsyncIterable<VoiceprintKey>;
 }
+
+/** What the retention sweep needs from a row: no template, provider metadata or consent event id. */
+export interface VoiceprintKey {
+  personId: string;
+  space: VoiceSpace;
+  createdAt: Date;
+}
+
+/** Page size of FirestoreVoiceprintStore.listKeys(). */
+export const VOICEPRINT_KEY_PAGE = 200;
 
 const SPACES: readonly VoiceSpace[] = ['work', 'personal'];
 const id = z.string().min(1).max(200);
@@ -74,6 +89,12 @@ const required = (row: VoiceprintRow): VoiceprintRow => {
   return copy(parsed.data);
 };
 const same = (row: VoiceprintRow, personId: string, space?: VoiceSpace) => row.personId === personId && (!space || row.space === space);
+/** Only the three key fields are read; anything else on the row (the template above all) is stripped. */
+const voiceprintKeySchema = z.object({ personId: id, space: z.enum(['work', 'personal']), createdAt: validDate });
+const keyOf = (raw: unknown): VoiceprintKey | null => {
+  const parsed = voiceprintKeySchema.safeParse(raw);
+  return parsed.success ? { personId: parsed.data.personId, space: parsed.data.space, createdAt: new Date(parsed.data.createdAt.getTime()) } : null;
+};
 
 export class InMemoryVoiceprintStore implements VoiceprintStore {
   protected rows: VoiceprintRow[] = [];
@@ -96,6 +117,13 @@ export class InMemoryVoiceprintStore implements VoiceprintStore {
   }
   async list(): Promise<VoiceprintRow[]> {
     return this.rows.map(valid).filter((r): r is VoiceprintRow => !!r);
+  }
+  async *listKeys(): AsyncIterable<VoiceprintKey> {
+    // A snapshot of the rows: the sweep deletes while it iterates.
+    for (const row of [...this.rows]) {
+      const key = valid(row) ? keyOf(row) : null;
+      if (key) yield key;
+    }
   }
 }
 
@@ -176,6 +204,12 @@ export class FileVoiceprintStore implements VoiceprintStore {
     await this.queue;
     return this.load();
   }
+  async *listKeys(): AsyncIterable<VoiceprintKey> {
+    await this.queue;
+    // One read of the file; the sweep's deletes go through the write queue afterwards.
+    const keys = this.load().map(keyOf).filter((k): k is VoiceprintKey => !!k);
+    yield* keys;
+  }
 }
 
 const toDate = (value: unknown): unknown =>
@@ -241,5 +275,25 @@ export class FirestoreVoiceprintStore implements VoiceprintStore {
   async list(): Promise<VoiceprintRow[]> {
     const snap = await this.db.collection(this.collection).get();
     return snap.docs.map(doc => valid(fromDoc(doc.data()))).filter((r): r is VoiceprintRow => !!r);
+  }
+  /**
+   * Pages of VOICEPRINT_KEY_PAGE ordered by document id, with a field mask: the sealed template never leaves
+   * Firestore for the sweep. Deleting a row already yielded does not move the startAfter cursor.
+   */
+  async *listKeys(): AsyncIterable<VoiceprintKey> {
+    let last: string | undefined;
+    for (;;) {
+      let query = this.db.collection(this.collection).select('personId', 'space', 'createdAt')
+        .orderBy(FieldPath.documentId()).limit(VOICEPRINT_KEY_PAGE);
+      if (last !== undefined) query = query.startAfter(last);
+      const snap = await query.get();
+      for (const doc of snap.docs) {
+        const data = doc.data();
+        const key = keyOf({ personId: data.personId, space: data.space, createdAt: isoDate(toDate(data.createdAt)) });
+        if (key) yield key;
+      }
+      if (snap.docs.length < VOICEPRINT_KEY_PAGE) return;
+      last = snap.docs[snap.docs.length - 1].id;
+    }
   }
 }
