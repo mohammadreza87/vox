@@ -12,7 +12,7 @@ import type { SharedContainerView } from '../shared/contracts';
 import { SqliteAdaptiveStorage } from '../persistence/indexed/sqlite-storage';
 const roots: string[] = [];
 const sqliteStores: SqliteAdaptiveStorage[] = [];
-afterEach(async () => { for (const storage of sqliteStores.splice(0)) storage.close(); await Promise.all(roots.splice(0).map(p => rm(p, { recursive: true, force: true }))); });
+afterEach(async () => { vi.unstubAllEnvs(); for (const storage of sqliteStores.splice(0)) storage.close(); await Promise.all(roots.splice(0).map(p => rm(p, { recursive: true, force: true }))); });
 const START = 1_800_000_000_000;
 function deferred() {
   let resolve!: () => void;
@@ -109,6 +109,9 @@ describe('durable explicit shared memory boundaries', () => {
   });
 
   it('requires independent personalization and explicit per-container agent grants', async () => {
+    // Pins the base consent predicate (flag unset). TIREH_SHARING_V2=1 drops the optional.personalization requirement;
+    // that arm is covered by hardening-shared-memory-v2.test.ts and sharing-v2 (f). Product decision (k).
+    vi.stubEnv('TIREH_SHARING_V2', '');
     const ctx = await setup(); const { container } = await ctx.create();
     await ctx.personalize(101);
     expect((await ctx.service.readContext(101, 'work', 'aria', { audienceTelegramIds: [101] })).memories).toEqual([]);
@@ -147,6 +150,8 @@ describe('durable explicit shared memory boundaries', () => {
   });
 
   it('requires the exact live group audience and every recipient consent before group context', async () => {
+    // Pins the base consent predicate (flag unset); see the note above and product decision (k) for group audiences.
+    vi.stubEnv('TIREH_SHARING_V2', '');
     const ctx = await setup(); await ctx.create({ group: true, agents: ['aria'] }); await ctx.personalize(101);
     expect((await ctx.service.readContext(101, 'work', 'aria', { audienceTelegramIds: [101, 102], groupId: 'chat--100' })).memories).toEqual([]);
     await ctx.personalize(102);
